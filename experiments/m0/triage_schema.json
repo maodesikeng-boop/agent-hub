@@ -1,0 +1,7 @@
+{"type":"object","additionalProperties":false,
+ "required":["project","action","reason","confidence"],
+ "properties":{
+  "project":{"type":"string","enum":["blog","budget-app","none"]},
+  "action":{"type":"string","enum":["to_pm","small_task","answer","ask_user"]},
+  "reason":{"type":"string"},
+  "confidence":{"type":"string","enum":["high","medium","low"]}}}

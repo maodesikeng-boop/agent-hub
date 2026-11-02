@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>agent-hub M0 notification test</title>
+<p>Secure context: <b id="sc"></b> · Notification API: <b id="api"></b> · Permission: <b id="perm"></b></p>
+<button id="ask">1. Allow notifications</button>
+<button id="send">2. Send test notification</button>
+<p id="log"></p>
+<script>
+const $ = id => document.getElementById(id);
+const show = () => {
+  $('sc').textContent = window.isSecureContext;
+  $('api').textContent = 'Notification' in window;
+  $('perm').textContent = 'Notification' in window ? Notification.permission : 'n/a';
+};
+show();
+$('ask').onclick = async () => { await Notification.requestPermission(); show(); };
+$('send').onclick = () => {
+  const n = new Notification('agent-hub M0', { body: 'Click me: should focus this tab and show #clicked' });
+  n.onclick = () => { window.focus(); location.hash = 'clicked'; $('log').textContent = 'clicked at ' + new Date().toLocaleTimeString(); };
+};
+</script>

@@ -1,0 +1,3 @@
+Run these two Bash commands separately, exactly as written, and report each command's full output or error verbatim. Do not retry or modify them.
+1) hub ping tcp
+2) hub ping unix

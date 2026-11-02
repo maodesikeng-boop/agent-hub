@@ -1,0 +1,10 @@
+Fix the typo "recieve" in the blog's about page.
+Should the budget app support multiple currencies? Let's think about it.
+What's the status of the RSS fix?
+Change the RSS feed to include full post content.
+Remind me what projects I have.
+Add a CSV export button to the budgeting app.
+Can you look into that thing we talked about?
+The site footer still shows 2025, update it.
+I want to redesign how categories work in my spending tracker, there are a few tradeoffs.
+帮我把博客首页的标题改成“慢慢写”。

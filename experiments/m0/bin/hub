@@ -1,0 +1,11 @@
+#!/bin/sh
+# Minimal fake `hub` CLI for M0: `hub ping tcp|unix`.
+# Reads HUB_TOKEN, HUB_TCP (host:port) and HUB_SOCK (socket path) from env, so
+# the agent's command line contains no `$VAR` that Claude's permission check
+# would refuse to auto-approve.
+what=${2:-tcp}
+case "$1:$what" in
+  ping:tcp)  exec curl -sS -m 5 -H "Authorization: Bearer $HUB_TOKEN" "http://$HUB_TCP/ping-tcp" ;;
+  ping:unix) exec curl -sS -m 5 -H "Authorization: Bearer $HUB_TOKEN" --unix-socket "$HUB_SOCK" http://hub/ping-unix ;;
+  *) echo "usage: hub ping tcp|unix" >&2; exit 2 ;;
+esac
