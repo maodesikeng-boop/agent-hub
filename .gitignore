@@ -1,3 +1,6 @@
 # 私有：项目经理的交接和工作记录，含个人和机器信息，不公开
 HANDOVER.md
 .DS_Store
+node_modules/
+dist/
+coverage/
