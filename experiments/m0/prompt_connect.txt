@@ -1,0 +1,3 @@
+Run these two Bash commands separately, exactly as written, and report each command's full output or error verbatim. Do not retry or modify them.
+1) curl -sS -m 5 -H "Authorization: Bearer $HUB_TOKEN" http://127.0.0.1:47815/ping-tcp
+2) curl -sS -m 5 -H "Authorization: Bearer $HUB_TOKEN" --unix-socket HUBSOCK http://hub/ping-unix
