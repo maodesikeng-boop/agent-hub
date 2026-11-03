@@ -11,11 +11,15 @@ import {
   DriverError,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
+  KILL_WAIT_MS,
+  LAST_EVENT_WRITE_MS,
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
+  STALE_POLL_MS,
   START_TIMEOUT_MS,
+  STDIO_DRAIN_MS,
   type AgentSessionPatch,
   type AgentSessionRow,
   type Driver,
@@ -45,16 +49,8 @@ import {
   parseRateLimit,
 } from "./protocol.ts";
 
-/** lastEventAt 最多每秒写一次库。 */
-const LAST_EVENT_WRITE_MS = 1_000;
 /** 错误信息里带多少标准错误。 */
 const STDERR_TAIL = 2_000;
-/** 进程退出后最多等多久把标准输出、标准错误读完；孙进程占着管道时到点强制关掉。 */
-const STDIO_DRAIN_MS = 300;
-/** 发了 SIGKILL 之后最多再等多久。 */
-const KILL_WAIT_MS = 2_000;
-/** 清理残留进程时多久看一次它还在不在。 */
-const STALE_POLL_MS = 50;
 
 interface PendingEntry {
   messageIds: MessageId[];

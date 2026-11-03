@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DriverError,
+  QUEUED_RECHECK_MS,
   type ActionRow,
   type AgentSessionRow,
   type DriverSendResult,
@@ -8,7 +9,6 @@ import {
   type RateLimitInfo,
 } from "../shared/index.ts";
 import {
-  QUEUED_RECHECK_MS,
   createSessionEndHandler,
   createSessionSendHandler,
   createSessionStartHandler,

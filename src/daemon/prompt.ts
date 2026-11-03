@@ -142,6 +142,9 @@ export interface PmLaunchPreparerOptions {
 /**
  * M2 给驱动层的 prepareLaunch（W6 接到 DriverOptions.prepareLaunch）。每次都重写三份文件，内容没变 fingerprint 就不变；
  * 令牌只放 env，不进文件。可以反复调（驱动层两轮之间判断要不要重启时也调）。
+ * 每次启动 claude 要变的东西（提示词、设置文件、MCP 配置、HUB_TOKEN、HUB_SOCK、PATH）只在这里定；
+ * 驱动层只把它们原样变成参数（driver/protocol.ts 的 buildClaudeArgs：固定的 stream-json 参数、--resume 还是 --session-id、
+ * 会话那一行的 --model 和 --add-dir），环境变量是守护进程自己的去掉父会话那几个（buildChildEnv）再盖上这里的 env。
  */
 export function createPmLaunchPreparer(options: PmLaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;

@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   HUB_COMMANDS,
   HUB_MAX_BODY_BYTES,
+  HUB_REQUEST_TIMEOUT_MS,
+  HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
   MAX_HANDOFF_BYTES,
@@ -484,6 +486,16 @@ describe("startAgentApi on a unix socket", () => {
     });
     expect(await res).toEqual({ status: 401, body: { ok: false, code: "unauthorized", message: expect.any(String) } });
     expect(ledger.calls).toHaveLength(0);
+  });
+
+  it("half-sent request: Node really cuts it at HUB_REQUEST_TIMEOUT_MS (headersTimeout must not exceed requestTimeout)", () => {
+    // Node 的 ConnectionsList::Expired：headersTimeout > requestTimeout 时两个对调，请求头收完后的上限就成了 headersTimeout（默认 60 秒）。
+    // Fastify 只设 requestTimeout，所以 headersTimeout 要自己压到一样；检查间隔默认 30 秒，也要调小，才是“15 秒左右”。
+    const app = createAgentApi({ ledger, tokens });
+    expect(app.server.requestTimeout).toBe(HUB_REQUEST_TIMEOUT_MS);
+    expect(app.server.headersTimeout).toBe(HUB_REQUEST_TIMEOUT_MS);
+    expect((app.server as unknown as { connectionsCheckingInterval: number }).connectionsCheckingInterval).toBe(HUB_TIMEOUT_CHECK_MS);
+    void app.close();
   });
 
   it("close() returns promptly while a half-sent request is hanging", async () => {

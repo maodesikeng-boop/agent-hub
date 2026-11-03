@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { RELAUNCH_NOTE, SYSTEM_MESSAGE_PREFIX, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, SYSTEM_MESSAGE_PREFIX, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
@@ -502,10 +502,12 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     const t0 = Date.now();
     // 头发完、体只发一半
     socket.write(`POST /v1/status HTTP/1.1\r\nHost: hub\r\nAuthorization: Bearer ${token}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{`);
+    // 不读的话收不到 end，也就等不到 close
+    socket.resume();
     await new Promise<void>((resolve) => socket.once("close", () => resolve()));
     const elapsed = Date.now() - t0;
-    expect(elapsed).toBeGreaterThanOrEqual(14_000);
-    expect(elapsed).toBeLessThan(25_000);
+    expect(elapsed).toBeGreaterThanOrEqual(HUB_REQUEST_TIMEOUT_MS - 1_000);
+    expect(elapsed).toBeLessThan(HUB_REQUEST_TIMEOUT_MS + 5_000);
     await terminate(daemon);
   });
 });

@@ -6,6 +6,8 @@
 // session_ended（会话已经 end 过）不是故障，不抛给执行器（执行器就不会记 driver 的 health），怎么接见 Driver.end 的注释。
 import {
   DriverError,
+  QUEUED_RECHECK_MS,
+  RATE_LIMIT_RECHECK_MAX_MS,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -15,10 +17,6 @@ import {
   type SessionTokens,
 } from "../shared/index.ts";
 
-/** 会话正忙、消息在驱动层排队时，隔多久再问一次（这一轮结束后驱动层会自己写，再问只是为了把动作标完成）。 */
-export const QUEUED_RECHECK_MS = 1_000;
-/** 额度用完时最多推迟多久再看一次。 */
-export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;
 
 export interface HandlerDeps {
   driver: Pick<Driver, "start" | "send" | "end">;

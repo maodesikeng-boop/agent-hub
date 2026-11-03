@@ -1,11 +1,18 @@
 // 组装（m1-plan 第 3 节 W5，m2-plan 第 3 节接口约定第 6 条）：启动和关闭顺序、各块之间的接线。main.ts 只管命令行、信号和退出码。
+// 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
+// - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
+//   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
+// - 关机（启动到哪一步就关到哪一步）：执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+// 用到的超时都在 src/shared/limits.ts。
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_API_CLOSE_MS,
   DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
   ENV_DEFAULT_MODEL,
   ENV_PORT,
+  EXECUTOR_STOP_GRACE_MS,
   type ActionExecutor,
   type Driver,
   type Unsubscribe,
@@ -23,10 +30,6 @@ import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } fr
 
 /** 网页打包产物（pnpm build 的输出）。 */
 export const DEFAULT_STATIC_DIR = fileURLToPath(new URL("../../dist/web", import.meta.url));
-/** 关机时最多等执行器手上的动作多久；还没做完（比如在等 claude 启动）就先关驱动层，让它们结束。 */
-const EXECUTOR_STOP_GRACE_MS = 3_000;
-/** 关机时关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
-const AGENT_API_CLOSE_MS = 3_000;
 
 export interface DaemonOptions {
   env?: Record<string, string | undefined>;

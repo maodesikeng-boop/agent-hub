@@ -8,6 +8,9 @@ import {
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_MAX_BODY_BYTES,
+  HUB_REQUEST_TIMEOUT_MS,
+  HUB_SOCKET_PROBE_MS,
+  HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
   MAX_HANDOFF_BYTES,
@@ -38,10 +41,6 @@ export interface AgentApiOptions {
 const RUN_DIR_MODE = 0o700;
 const SOCKET_MODE = 0o600;
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
-/** 请求从连上到收完的上限：半截请求挂着不放，到点就断。 */
-const REQUEST_TIMEOUT_MS = 15_000;
-/** 试连旧 socket 的上限：连得上说明有活实例。 */
-const PROBE_TIMEOUT_MS = 1_000;
 
 // ---- 请求体的规格 ----
 
@@ -149,7 +148,10 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const app = Fastify({
     logger: opts.logger ?? false,
     bodyLimit: HUB_MAX_BODY_BYTES,
-    requestTimeout: REQUEST_TIMEOUT_MS,
+    requestTimeout: HUB_REQUEST_TIMEOUT_MS,
+    // Node 在 headersTimeout（默认 60 秒）大于 requestTimeout 时把两个对调，请求头收完后的上限就成了 60 秒；
+    // 检查间隔默认 30 秒。两个都压下来，半截请求才是 15 秒左右断开。
+    http: { headersTimeout: HUB_REQUEST_TIMEOUT_MS, connectionsCheckingInterval: HUB_TIMEOUT_CHECK_MS },
     // close() 不等还连着的请求，直接断开，保证关得掉。
     forceCloseConnections: true,
     // 多余参数要报错，不能悄悄删掉；类型不对也不替它转换。
@@ -239,7 +241,7 @@ function socketIsLive(socketPath: string): Promise<boolean> {
       if (result instanceof Error) fail(result);
       else done(result);
     };
-    socket.setTimeout(PROBE_TIMEOUT_MS, () => finish(true));
+    socket.setTimeout(HUB_SOCKET_PROBE_MS, () => finish(true));
     socket.once("connect", () => finish(true));
     socket.once("error", (err: NodeJS.ErrnoException) => {
       finish(err.code === "ECONNREFUSED" || err.code === "ENOENT" ? false : err);
