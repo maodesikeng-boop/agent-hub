@@ -106,6 +106,7 @@ describe("提示词：群", () => {
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_TOKEN");
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_SOCK");
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
+    expect(HUB_USAGE_PROMPT).toContain("不要在 `hub` 命令后面接 `echo $?`");
     for (const sub of [
       "hub status",
       "hub pm list",
