@@ -14,7 +14,7 @@ const LOAD_OLDER_DISTANCE_PX = 40;
 export function MessageList({
   messages,
   pending,
-  agent,
+  agentOf,
   hasMore,
   older,
   onLoadOlder,
@@ -23,7 +23,8 @@ export function MessageList({
 }: {
   messages: Message[];
   pending: PendingMessage[];
-  agent: { name: string; avatarKey: number };
+  /** 一条消息署谁的名字。 */
+  agentOf: (message: Message) => { name: string; avatarKey: number };
   hasMore: boolean;
   older: OlderState | undefined;
   onLoadOlder: () => void;
@@ -79,7 +80,8 @@ export function MessageList({
     if (hasMore && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
   };
 
-  let previous: "agent" | "other" | null = null;
+  /** 上一项是哪个 agent 说的（头像编号）；不是 agent 的消息是 null。换人也要重新署名。 */
+  let previous: number | null = null;
   return (
     <div className="relative h-full">
       <div className="messages flex h-full flex-col overflow-y-auto pt-4 pb-6" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
@@ -94,13 +96,15 @@ export function MessageList({
           </button>
         )}
         {items.map((item) => {
-          const head = previous !== "agent";
+          const message = item.kind === "tools" ? item.messages[0]! : item.message;
+          const identity = agentOf(message);
+          const head = previous !== identity.avatarKey;
           if (item.kind === "tools") {
-            previous = "agent";
-            return <ToolGroup key={item.key} messages={item.messages} identity={agent} head={head} />;
+            previous = identity.avatarKey;
+            return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} />;
           }
-          previous = item.message.sender === "agent" ? "agent" : "other";
-          return <MessageBubble key={item.message.id} message={item.message} identity={agent} head={head} actions={actions} />;
+          previous = item.message.sender === "agent" ? identity.avatarKey : null;
+          return <MessageBubble key={item.message.id} message={item.message} identity={identity} head={head} actions={actions} />;
         })}
         {pending.map((p) => (
           <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />

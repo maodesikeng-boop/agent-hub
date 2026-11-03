@@ -376,6 +376,92 @@ describe("群页", () => {
   });
 });
 
+describe("换项目经理后的消息署名", () => {
+  /** foo 群：第 1 代（小林，会话 10）说过话，已经交接给阿周（会话 11）。 */
+  function handedOver(extra: { lostSession?: boolean } = {}): StateSnapshot {
+    const base = twoAndTwo();
+    return {
+      ...base,
+      projects: base.projects.map((p) => (p.id === 1 ? { ...p, pmId: 2 } : p)),
+      conversations: base.conversations.map((c) =>
+        c.conversation.id === 3
+          ? makeConvSnapshot(
+              [
+                makeMessage({ id: 30, conversationId: 3, sessionId: 10, text: "小林说的话", createdAt: 1_000 }),
+                makeMessage({ id: 31, conversationId: 3, sessionId: 10, text: "小林又说一句", createdAt: 1_100 }),
+                makeSystemMessage({ id: 32, conversationId: 3, text: "项目经理由小林换成阿周，交接在这里：/h/1.md", createdAt: 2_000 }),
+                makeMessage({ id: 33, conversationId: 3, sessionId: extra.lostSession ? 99 : 11, text: "阿周说的话", createdAt: 3_000 }),
+              ],
+              { conversation: makeGroupConversation({ id: 3, pmId: 1, projectId: 1, title: "foo" }) },
+            )
+          : c,
+      ),
+      sessions: [
+        makeSession({ sessionId: 10, conversationId: 3, generation: 1, pmId: 1 }),
+        makeSession({ sessionId: 11, conversationId: 3, generation: 2, pmId: 2 }),
+      ],
+    };
+  }
+
+  /** 消息列表里每个 agent 署名（小林、阿周）和它头像旁边的话，按顺序。 */
+  function bylines(): string[] {
+    return within(log())
+      .getAllByRole("article")
+      .map((a) => a.textContent ?? "");
+  }
+
+  it("旧项目经理说过的话仍署旧名字，新项目经理说的署新名字", async () => {
+    const user = userEvent.setup();
+    await boot(handedOver());
+    await user.click(inNav(/foo/));
+    const lines = bylines();
+    expect(lines[0]).toContain("小林说的话");
+    expect(lines[0]).toContain("小林");
+    expect(lines[0]).not.toContain("阿周");
+    expect(lines.at(-1)).toContain("阿周说的话");
+    expect(lines.at(-1)).toContain("阿周");
+    expect(lines.at(-1)).not.toContain("小林");
+  });
+
+  it("同一个项目经理连着说的话只在第一条署名；换人后的第一条重新署名", async () => {
+    const user = userEvent.setup();
+    await boot(handedOver());
+    await user.click(inNav(/foo/));
+    // 小林：一次署名（两条话）；阿周：一次署名
+    expect(within(log()).getAllByText("小林")).toHaveLength(1);
+    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
+  });
+
+  it("消息的会话找不到（还没同步）：署群现在的项目经理，不崩", async () => {
+    const user = userEvent.setup();
+    await boot(handedOver({ lostSession: true }));
+    await user.click(inNav(/foo/));
+    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
+  });
+
+  it("推来换人后的新会话和新消息：新消息署新项目经理，已有的不变", async () => {
+    const user = userEvent.setup();
+    const base = twoAndTwo();
+    const ws = await boot({
+      ...base,
+      sessions: [makeSession({ sessionId: 10, conversationId: 3, generation: 1, pmId: 1 })],
+      conversations: base.conversations.map((c) =>
+        c.conversation.id === 3
+          ? makeConvSnapshot([makeMessage({ id: 30, conversationId: 3, sessionId: 10, text: "小林说的话" })], {
+              conversation: makeGroupConversation({ id: 3, pmId: 1, projectId: 1, title: "foo" }),
+            })
+          : c,
+      ),
+    });
+    await user.click(inNav(/foo/));
+    push(ws, changeOf(11, "project.updated", { project: makeProject({ id: 1, name: "foo", pmId: 2, conversationId: 3 }) }));
+    push(ws, sessionChange(12, makeSession({ sessionId: 11, conversationId: 3, generation: 2, pmId: 2 })));
+    push(ws, messageChange(13, "message.created", makeMessage({ id: 31, conversationId: 3, sessionId: 11, text: "阿周来了" })));
+    expect(within(log()).getAllByText("小林")).toHaveLength(1);
+    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
+  });
+});
+
 describe("系统消息", () => {
   it("居中显示，去掉【系统】前缀，不显示投递状态", async () => {
     const ws = await boot(makeSnapshot());

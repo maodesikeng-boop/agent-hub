@@ -458,6 +458,17 @@ describe("发消息 POST /api/conversations/:id/messages", () => {
     expect(ledger.posted).toEqual([]);
   });
 
+  it("整个请求体超过 1 MB：413，响应是 { error }，没有 code 字段；不调账本", async () => {
+    const res = await call("POST", "/api/conversations/1/messages", {
+      rawBody: JSON.stringify({ clientId: "c", text: "hi", pad: " ".repeat(1024 * 1024 + 1) }),
+    });
+    expect(res.statusCode).toBe(413);
+    const body = res.json();
+    expect(typeof body.error).toBe("string");
+    expect(body).not.toHaveProperty("code");
+    expect(ledger.posted).toEqual([]);
+  });
+
   it("body 不是合法 JSON：400，不调账本", async () => {
     const res = await call("POST", "/api/conversations/1/messages", { rawBody: "{not json" });
     expect(res.statusCode).toBe(400);
@@ -1049,7 +1060,7 @@ describe("WebSocket /api/ws", () => {
   function m2Changes(): Array<() => Change> {
     const created = ledger.createProject({ name: "foo", folder: "/code/foo", pmId: 7 }, { kind: "user" });
     const pm = ledger.createPm(NEW_PM as never).pm;
-    const session = { sessionId: 800, conversationId: 80, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null } as const;
+    const session = { sessionId: 800, conversationId: 80, pmId: 9, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null } as const;
     return [
       () => ledger.emitChange("pm.created", { pm }),
       () => ledger.emitChange("pm.updated", { pm: { ...pm, mode: "manage_only" } }),

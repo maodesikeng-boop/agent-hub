@@ -1,6 +1,6 @@
 // 账本（设计第 6.2 节）：业务表的唯一写者。每个命令一个事务，提交之后才推变化、通知新登记的动作。
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
@@ -278,6 +278,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     return {
       sessionId: row.id,
       conversationId: row.conversationId,
+      pmId: row.pmId,
       generation: row.generation,
       status: row.status,
       activity: l.activity,
@@ -805,24 +806,21 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       generation: old.generation + 1,
       model: to.default_model,
     });
-    let file = handoffFilePath(handoffsDir, project.id, t);
-    // 同一毫秒里同一个项目交接两次（几乎不会）：别覆盖前一份
-    if (existsSync(file)) file = file.replace(/\.md$/, `-${randomUUID().slice(0, 8)}.md`);
+    // 文件名要带交接编号，所以先插一行（file 先空着），拿到编号再定文件名、写文件、回填
+    const inserted = db.get<HandoffDbRow>(
+      `INSERT INTO handoffs (project_id, from_session_id, to_session_id, from_pm_id, to_pm_id, file, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, '', 'reassign', ?) RETURNING *`,
+      project.id,
+      old.id,
+      next.id,
+      from.id,
+      to.id,
+      t,
+    )!;
+    const file = handoffFilePath(handoffsDir, project.id, inserted.id, t);
     writeFile(file, handoffText);
     p.undo.push(() => rmSync(file, { force: true }));
-    const handoff = toHandoff(
-      db.get<HandoffDbRow>(
-        `INSERT INTO handoffs (project_id, from_session_id, to_session_id, from_pm_id, to_pm_id, file, reason, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'reassign', ?) RETURNING *`,
-        project.id,
-        old.id,
-        next.id,
-        from.id,
-        to.id,
-        file,
-        t,
-      )!,
-    );
+    const handoff = toHandoff(db.get<HandoffDbRow>("UPDATE handoffs SET file = ? WHERE id = ? RETURNING *", file, inserted.id)!);
     db.run("UPDATE projects SET pm_id = ?, updated_at = ? WHERE id = ?", to.id, t, project.id);
     const updated = toProject(projectRow(project.id));
     p.changes.push({ type: "project.updated", data: { project: updated } });
