@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -162,6 +163,43 @@ describe("agent api over inject", () => {
       expect(res.json()).toEqual({ ok: false, code, message: `账本说：${code}` });
     });
 
+    it("reports agent-api health: each 500 counts, one success clears", async () => {
+      ledger.failWith = new Error("database is locked");
+      for (let i = 0; i < 3; i++) expect((await call("status", {})).statusCode).toBe(500);
+      ledger.failWith = null;
+      expect((await call("status", {})).statusCode).toBe(200);
+      expect(ledger.healthReports).toEqual([
+        ["agent-api", "database is locked"],
+        ["agent-api", "database is locked"],
+        ["agent-api", "database is locked"],
+        ["agent-api", null],
+      ]);
+    });
+
+    it("400/401/403/404/409 neither count as failures nor clear the count", async () => {
+      await call("status", {}, null); // 401
+      await call("status", { x: 1 }); // 400
+      for (const code of ["invalid", "forbidden", "not_found", "conflict"] as const) {
+        ledger.failWith = new LedgerRequestError(code, code);
+        await call("status", {});
+      }
+      await app.inject({ method: "POST", url: "/v1/%", payload: {} });
+      expect(ledger.healthReports).toEqual([]);
+    });
+
+    it("a throwing reportHealth does not change the answer", async () => {
+      ledger.healthFailWith = new Error("health store broken");
+      ledger.failWith = new Error("database is locked");
+      const failed = await call("status", {});
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ ok: false, code: "internal", message: "database is locked" });
+      ledger.failWith = null;
+      const ok = await call("status", {});
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().ok).toBe(true);
+      expect(ledger.healthReports).toHaveLength(2);
+    });
+
     it("maps any other ledger error to 500 internal with the original message", async () => {
       ledger.failWith = new Error("database is locked");
       const res = await call("status", {});
@@ -232,8 +270,45 @@ describe("agent api over inject", () => {
     });
 
     it("a whole body over HUB_MAX_BODY_BYTES → 400 invalid, not 413", async () => {
-      const res = await call("persona.edit", { text: "x".repeat(HUB_MAX_BODY_BYTES) });
+      // 字段本身都合法，只在后面补空白把整个请求体撑过上限：挡住它的只能是 bodyLimit，不是字段的长度上限。
+      const payload = `${JSON.stringify({ mode: "hands_on" })}${" ".repeat(HUB_MAX_BODY_BYTES)}`;
+      const res = await call("persona.edit", payload, tokenA, { "content-type": "application/json" });
       await expectInvalid(res);
+      expect(res.json().message).toContain(`请求体不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
+      // 同样的请求体不补空白就能过
+      expect((await call("persona.edit", { mode: "hands_on" })).statusCode).toBe(200);
+    });
+
+    it("path fields must be absolute and free of NUL", async () => {
+      for (const folder of ["../../etc", "etc/passwd", "./x", "~/x", "/x\u0000y", "\u0000"]) {
+        await expectInvalid(await call("project.create", { name: "foo", folder }));
+        await expectInvalid(await call("project.attach", { project: "foo", folder }));
+        await expectInvalid(await call("project.detach", { project: "foo", folder }));
+      }
+    });
+
+    it("names, project and to must be free of NUL and control characters", async () => {
+      for (const bad of ["a\u0000b", "a\nb", "a\rb", "a\tb", "\u001b[31m红", "a\u007fb", "a\u0085b", "../../etc\u0000"]) {
+        await expectInvalid(await call("project.create", { name: bad, folder: "/x" }));
+        await expectInvalid(await call("project.attach", { project: bad, folder: "/x" }));
+        await expectInvalid(await call("project.detach", { project: bad, folder: "/x" }));
+        await expectInvalid(await call("project.assign", { project: bad, to: "阿周", handoff: "h" }));
+        await expectInvalid(await call("project.assign", { project: "foo", to: bad, handoff: "h" }));
+      }
+    });
+
+    it("multi-line free text (handoff, persona text) may still contain newlines and tabs", async () => {
+      expect((await call("project.assign", { project: "foo", to: "阿周", handoff: "第一行\n\t第二行\r\n" })).statusCode).toBe(200);
+      expect((await call("persona.edit", { text: "a\nb" })).statusCode).toBe(200);
+    });
+
+    it("a malformed URL without a token → 400 invalid in HubResponse shape", async () => {
+      for (const url of ["/v1/%", "/v1/%zz", "/%"]) {
+        const res = await app.inject({ method: "POST", url, payload: {} });
+        expect(res.statusCode, url).toBe(400);
+        expect(res.json(), url).toEqual({ ok: false, code: "invalid", message: expect.any(String) });
+      }
+      expect(ledger.calls).toHaveLength(0);
     });
 
     it("malformed JSON and non-JSON content types → invalid", async () => {
@@ -333,6 +408,93 @@ describe("startAgentApi on a unix socket", () => {
     await expect(startAgentApi({ ledger, tokens, runDir: deep, hubSock: join(deep, "hub.sock") })).rejects.toThrow(
       /AGENT_HUB_HOME/,
     );
+  });
+
+  it("refuses to start when a live process is already listening on hub.sock, and leaves it alone", async () => {
+    const first = await startAgentApi({ ledger, tokens, ...paths() });
+    running = first;
+    await expect(startAgentApi({ ledger, tokens, ...paths() })).rejects.toThrow(/已有守护进程在跑/);
+    // 第一个实例的 socket 还在、还能用
+    expect(lstatSync(first.socketPath).isSocket()).toBe(true);
+    expect((await post(first.socketPath, "status", {}, tokens.issue(3))).status).toBe(200);
+  });
+
+  it("refuses to start when another kind of server is listening on hub.sock", async () => {
+    mkdirSync(paths().runDir, { mode: 0o700 });
+    const other = createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => other.listen(paths().hubSock, resolve));
+    try {
+      await expect(startAgentApi({ ledger, tokens, ...paths() })).rejects.toThrow(/已有守护进程在跑/);
+      expect(lstatSync(paths().hubSock).isSocket()).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
+  });
+
+  it("a token revoked while the request body is still arriving → 401, ledger never called", async () => {
+    const app = createAgentApi({ ledger, tokens });
+    const token = tokens.issue(7);
+    let authed!: () => void;
+    const passedAuth = new Promise<void>((resolve) => (authed = resolve));
+    // 排在认人的钩子后面：走到这里说明令牌已经认过了
+    app.addHook("onRequest", async () => authed());
+    mkdirSync(paths().runDir, { mode: 0o700 });
+    await app.listen({ path: paths().hubSock });
+    running = { app, socketPath: paths().hubSock, close: () => app.close() };
+
+    const payload = JSON.stringify({ project: "foo", folder: "/x" });
+    const res = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const req = request(
+        {
+          socketPath: paths().hubSock,
+          method: "POST",
+          path: hubPath("project.attach"),
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "content-length": Buffer.byteLength(payload) },
+        },
+        (r) => {
+          let data = "";
+          r.setEncoding("utf8");
+          r.on("data", (chunk: string) => (data += chunk));
+          r.on("end", () => resolve({ status: r.statusCode ?? 0, body: JSON.parse(data) }));
+        },
+      );
+      req.on("error", reject);
+      req.flushHeaders();
+      req.write(payload.slice(0, 5));
+      void passedAuth.then(() => {
+        tokens.revoke(7);
+        req.end(payload.slice(5));
+      });
+    });
+    expect(await res).toEqual({ status: 401, body: { ok: false, code: "unauthorized", message: expect.any(String) } });
+    expect(ledger.calls).toHaveLength(0);
+  });
+
+  it("close() returns promptly while a half-sent request is hanging", async () => {
+    running = await startAgentApi({ ledger, tokens, ...paths() });
+    const token = tokens.issue(8);
+    const sockets: Socket[] = [];
+    // 一个请求头写完、请求体只写了一半；一个连请求头都没写完
+    for (const raw of [
+      `POST ${hubPath("status")} HTTP/1.1\r\nhost: x\r\nauthorization: Bearer ${token}\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{`,
+      `POST ${hubPath("status")} HTTP/1.1\r\nhost: x\r\n`,
+    ]) {
+      const socket = createConnection(running.socketPath);
+      socket.on("error", () => {});
+      await new Promise<void>((resolve) => socket.on("connect", resolve));
+      socket.write(raw);
+      sockets.push(socket);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const started = Date.now();
+    const closed = running.close().then(() => "closed" as const);
+    const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3_000).unref());
+    const result = await Promise.race([closed, timeout]);
+    for (const socket of sockets) socket.destroy();
+    expect(result).toBe("closed");
+    expect(Date.now() - started).toBeLessThan(3_000);
+    running = null;
+    expect(ledger.calls).toHaveLength(0);
   });
 
   it("removes the socket on close", async () => {

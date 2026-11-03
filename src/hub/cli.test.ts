@@ -1,4 +1,4 @@
-// hub 命令行（src/hub/）的测试。放在这里是因为 vitest 的 node 项目只收 src/daemon、src/shared、test 下的测试。
+// hub 命令行的测试：起一个真的 agent 接口（假账本），经 Unix socket 调。
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
@@ -6,14 +6,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../../shared/index.ts";
-import { runHub, type HubIo } from "../../hub/cli.ts";
-import { FakeHubLedger } from "./fake-ledger.ts";
-import { startAgentApi, type RunningAgentApi } from "./server.ts";
-import { installHubShim } from "./shim.ts";
-import { createSessionTokens } from "./tokens.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
+import { runHub, runHubSafely, type HubIo } from "./cli.ts";
+import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
+import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
+import { installHubShim } from "../daemon/agent-api/shim.ts";
+import { createSessionTokens } from "../daemon/agent-api/tokens.ts";
 
-const HUB_MAIN = fileURLToPath(new URL("../../hub/main.ts", import.meta.url));
+const HUB_MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
+const HUB_CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 /** 一个读了就让测试失败的标准输入：用来证明没写 --stdin 时 hub 不碰它。 */
 class TrapStdin extends Readable {
@@ -58,7 +59,10 @@ describe("hub cli", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function hub(argv: string[], opts: { stdin?: Readable; env?: Record<string, string | undefined>; timeoutMs?: number } = {}) {
+  async function hub(
+    argv: string[],
+    opts: { stdin?: Readable; env?: Record<string, string | undefined>; timeoutMs?: number; stdinIdleMs?: number } = {},
+  ) {
     let stdout = "";
     let stderr = "";
     const stdin = opts.stdin ?? new TrapStdin();
@@ -70,6 +74,7 @@ describe("hub cli", () => {
       stdout: { write: (s: string) => void (stdout += s) },
       stderr: { write: (s: string) => void (stderr += s) },
       timeoutMs: opts.timeoutMs,
+      stdinIdleMs: opts.stdinIdleMs,
     };
     const code = await runHub(io);
     if (opts.stdin === undefined) expect((stdin as TrapStdin).touched, "stdin must not be read without --stdin").toBe(false);
@@ -141,6 +146,65 @@ describe("hub cli", () => {
     it("strips exactly one trailing newline", async () => {
       await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("a\n\n") });
       expect(ledger.calls[0]?.args).toEqual({ text: "a\n" });
+    });
+
+    it("strips one trailing CRLF as well", async () => {
+      await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("a\r\n") });
+      await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("b\r\n\r\n") });
+      expect(ledger.calls.map((c) => c.args)).toEqual([{ text: "a" }, { text: "b\r\n" }]);
+    });
+
+    it("invalid UTF-8 on stdin exits 2 without calling the daemon", async () => {
+      const stdin = Readable.from([Buffer.from([0x61, 0xff, 0xfe, 0x62])]);
+      const r = await hub(["persona", "edit", "--stdin"], { stdin });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain("UTF-8");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("stdin that never sends anything exits 2 with a heredoc hint", async () => {
+      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: new TrapStdin(), stdinIdleMs: 100 });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain("标准输入一直没有结束，记得用 heredoc");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("slow but steady stdin is not cut off by the idle limit", async () => {
+      async function* slow() {
+        for (const part of ["一", "二", "三", "四"]) {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          yield Buffer.from(part, "utf8");
+        }
+      }
+      const r = await hub(["persona", "edit", "--stdin"], { stdin: Readable.from(slow()), stdinIdleMs: 150 });
+      expect(r.code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({ text: "一二三四" });
+    });
+
+    it("a real process whose stdin stays open and silent exits 2 instead of hanging", async () => {
+      const script = `import { runHub } from ${JSON.stringify(HUB_CLI)};
+process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env, cwd: process.cwd(), stdin: () => process.stdin,
+  stdout: process.stdout, stderr: process.stderr, stdinIdleMs: 200 });`;
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, "persona", "edit", "--stdin"], {
+        env: { ...process.env, ...env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (s: string) => (stderr += s));
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("hub hung on a silent stdin"));
+        }, 10_000);
+        child.on("exit", (c) => {
+          clearTimeout(timer);
+          resolve(c);
+        });
+      });
+      child.stdin.destroy();
+      expect(code).toBe(HUB_EXIT.usage);
+      expect(stderr).toContain("记得用 heredoc");
+      expect(ledger.calls).toHaveLength(0);
     });
 
     it("persona edit --stdin together with --mode and --reason", async () => {
@@ -227,6 +291,39 @@ describe("hub cli", () => {
       expect(r.stderr).toContain(ENV_HUB_TOKEN);
     });
 
+    it.each([["a\nb"], ["中文令牌"], ["a b"], ["a\u0001b"]])("HUB_TOKEN with illegal characters %j exits 2 without a stack", async (bad) => {
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_TOKEN]: bad } });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain(ENV_HUB_TOKEN);
+      expect(r.stderr).not.toMatch(/\n\s+at /);
+      expect(r.stderr).not.toContain(bad);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("a real hub process with an illegal HUB_TOKEN exits 2 with one line and no stack", async () => {
+      const r = await run(process.execPath, [HUB_MAIN, "status"], { ...env, [ENV_HUB_TOKEN]: "bad\ntoken" });
+      expect(r.status).toBe(HUB_EXIT.usage);
+      expect(r.stderr).not.toMatch(/\n\s+at /);
+      expect(r.stderr).not.toContain("bad\ntoken");
+    });
+
+    it("an unexpected exception becomes one line and exit 2, no stack", async () => {
+      let stderr = "";
+      const code = await runHubSafely({
+        argv: ["persona", "edit", "--stdin"],
+        env,
+        cwd,
+        stdin: () => {
+          throw new Error("stdin exploded");
+        },
+        stdout: { write: () => true },
+        stderr: { write: (s: string) => void (stderr += s) },
+      });
+      expect(code).toBe(HUB_EXIT.usage);
+      expect(stderr).toBe("hub：出了意外的错：stdin exploded\n");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("HUB_SOCK not set", async () => {
       const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: "" } });
       expect(r.code).toBe(HUB_EXIT.usage);
@@ -267,6 +364,7 @@ describe("hub cli", () => {
 
   describe("unreachable daemon (exit 3)", () => {
     const UNREACHABLE = /连不上 agent-hub/;
+    const MAYBE_EXECUTED = /请求可能已经执行，请先用 `hub status` 确认/;
 
     it("HUB_SOCK points at a missing file", async () => {
       const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: join(dir, "nope.sock") } });
@@ -291,7 +389,12 @@ describe("hub cli", () => {
       running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run2"), hubSock: join(dir, "run2", "hub.sock") });
     });
 
-    it("the daemon accepts but never answers (timeout)", async () => {
+    it("unreachable is not reported as maybe-executed", async () => {
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: join(dir, "nope.sock") } });
+      expect(r.stderr).not.toMatch(MAYBE_EXECUTED);
+    });
+
+    it("the daemon accepts but never answers (timeout): sent, maybe executed", async () => {
       const sock = join(dir, "silent.sock");
       const held: Socket[] = [];
       const silent: Server = createServer((socket) => void held.push(socket));
@@ -299,10 +402,25 @@ describe("hub cli", () => {
       try {
         const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock }, timeoutMs: 200 });
         expect(r.code).toBe(HUB_EXIT.unreachable);
-        expect(r.stderr).toMatch(UNREACHABLE);
+        expect(r.stderr).toMatch(MAYBE_EXECUTED);
+        expect(r.stderr).toContain("hub status");
+        expect(r.stderr).not.toMatch(UNREACHABLE);
       } finally {
         for (const socket of held) socket.destroy();
         await new Promise<void>((resolve) => silent.close(() => resolve()));
+      }
+    });
+
+    it("the daemon reads the request then drops the connection: sent, maybe executed", async () => {
+      const sock = join(dir, "drop.sock");
+      const dropper: Server = createServer((socket) => socket.once("data", () => socket.destroy()));
+      await new Promise<void>((resolve) => dropper.listen(sock, resolve));
+      try {
+        const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock } });
+        expect(r.code).toBe(HUB_EXIT.unreachable);
+        expect(r.stderr).toMatch(MAYBE_EXECUTED);
+      } finally {
+        await new Promise<void>((resolve) => dropper.close(() => resolve()));
       }
     });
   });

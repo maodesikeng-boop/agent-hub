@@ -1,7 +1,7 @@
 // hub 命令（设计第 8.1 节；规格见 shared/hub.ts 的注释）：agent 在自己的 shell 里敲，令牌和 socket 路径从环境变量读，
 // 经 Unix socket 请求守护进程的 agent 接口，把结果打印出来，按 HUB_EXIT 退出。
 // 只引 shared 里不依赖 node:path 以外东西的几个文件，启动快。
-import { request } from "node:http";
+import { request, type ClientRequest } from "node:http";
 import { resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
@@ -17,11 +17,16 @@ export interface HubIo {
   stdin: () => Readable;
   stdout: { write(text: string): unknown };
   stderr: { write(text: string): unknown };
-  /** 连上之后多久没动静算连不上，默认 DEFAULT_TIMEOUT_MS。 */
+  /** 连上之后多久没动静算没回应，默认 DEFAULT_TIMEOUT_MS。 */
   timeoutMs?: number;
+  /** --stdin 多久没收到数据就放弃，默认 DEFAULT_STDIN_IDLE_MS。 */
+  stdinIdleMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_STDIN_IDLE_MS = 60_000;
+/** 和守护进程认的令牌字符一样；别的字符放进请求头 Node 会直接抛错。 */
+const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
 export const HUB_USAGE = `用法：
   hub status                                              我是谁、在哪个对话、管哪些项目
@@ -41,6 +46,8 @@ export const HUB_USAGE = `用法：
 `;
 
 const UNREACHABLE_MESSAGE = "连不上 agent-hub，守护进程可能没在跑";
+const NO_ANSWER_MESSAGE = "请求已经发给 agent-hub，但没等到回应";
+const MAYBE_EXECUTED_HINT = "请求可能已经执行，请先用 `hub status` 确认，别直接重试";
 
 class UsageError extends Error {}
 
@@ -180,58 +187,107 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }
 
-/** 读到结束，去掉末尾一个换行。超过请求体上限就不再读，报用法错。 */
-async function readAllStdin(stream: Readable): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of stream) {
-    const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : (chunk as Buffer);
-    size += buf.length;
-    if (size > HUB_MAX_BODY_BYTES) {
-      stream.destroy();
-      throw new UsageError(`标准输入太长，不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
-    }
-    chunks.push(buf);
-  }
-  const text = new TextDecoder("utf-8").decode(Buffer.concat(chunks));
-  return text.endsWith("\n") ? text.slice(0, -1) : text;
+/**
+ * 读到结束，去掉末尾一个换行（\n 或 \r\n）。超过请求体上限、idleMs 没收到数据、不是合法 UTF-8，都报用法错；
+ * 前两种不再读，把流关掉。
+ */
+function readAllStdin(stream: Readable, idleMs: number): Promise<string> {
+  return new Promise((done, fail) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (result: { text: string } | Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.off("data", onData).off("end", onEnd).off("error", onError);
+      if (result instanceof Error) {
+        stream.destroy();
+        fail(result);
+      } else {
+        done(result.text);
+      }
+    };
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(new UsageError("标准输入一直没有结束，记得用 heredoc（<<'EOF' … EOF）把正文喂给 --stdin")), idleMs);
+    };
+    const onData = (chunk: Buffer | string) => {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+      size += buf.length;
+      if (size > HUB_MAX_BODY_BYTES) return finish(new UsageError(`标准输入太长，不能超过 ${HUB_MAX_BODY_BYTES} 字节`));
+      chunks.push(buf);
+      arm();
+    };
+    const onEnd = () => {
+      let text: string;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+      } catch {
+        return finish(new UsageError("标准输入不是合法的 UTF-8"));
+      }
+      if (text.endsWith("\r\n")) text = text.slice(0, -2);
+      else if (text.endsWith("\n")) text = text.slice(0, -1);
+      finish({ text });
+    };
+    const onError = (err: Error) => finish(new UsageError(`读标准输入出错：${err.message}`));
+    stream.on("data", onData).on("end", onEnd).on("error", onError);
+    arm();
+  });
 }
 
-type Outcome = { kind: "response"; status: number; body: string } | { kind: "unreachable"; reason: string };
+type Outcome =
+  | { kind: "response"; status: number; body: string }
+  /** 请求没发完就失败了：守护进程没收到。 */
+  | { kind: "unreachable"; reason: string }
+  /** 请求发完了，但没等到完整的回应：可能已经执行。 */
+  | { kind: "no-answer"; reason: string }
+  /** 本地就没发出去（request() 自己抛错）。 */
+  | { kind: "not-sent"; reason: string };
 
 function post(socketPath: string, path: string, token: string, payload: string, timeoutMs: number): Promise<Outcome> {
   return new Promise((done) => {
     let settled = false;
+    let sent = false;
     const finish = (outcome: Outcome) => {
       if (!settled) {
         settled = true;
         done(outcome);
       }
     };
-    const req = request(
-      {
-        socketPath,
-        method: "POST",
-        path,
-        timeout: timeoutMs,
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(payload, "utf8"),
-        },
+    const lost = (reason: string): Outcome => (sent ? { kind: "no-answer", reason } : { kind: "unreachable", reason });
+    const options = {
+      socketPath,
+      method: "POST",
+      path,
+      timeout: timeoutMs,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload, "utf8"),
       },
-      (res) => {
+    };
+    let req: ClientRequest;
+    try {
+      req = request(options, (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => finish({ kind: "response", status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
-        res.on("error", (err) => finish({ kind: "unreachable", reason: err.message }));
-      },
-    );
+        res.on("error", (err) => finish({ kind: "no-answer", reason: err.message }));
+      });
+    } catch (err) {
+      // 例如请求头里有非法字符：Node 同步抛错。错误信息不带请求头的值，不会漏令牌。
+      finish({ kind: "not-sent", reason: (err as Error).message });
+      return;
+    }
+    // 请求整个交给了内核才算“已发出”：之后再出错，守护进程可能已经收到并执行了。
+    req.on("finish", () => (sent = true));
     req.on("timeout", () => {
-      finish({ kind: "unreachable", reason: "超时" });
+      finish(lost("超时"));
       req.destroy();
     });
-    req.on("error", (err: NodeJS.ErrnoException) => finish({ kind: "unreachable", reason: err.code ?? err.message }));
+    req.on("error", (err: NodeJS.ErrnoException) => finish(lost(err.code ?? err.message)));
     req.end(payload);
   });
 }
@@ -263,13 +319,14 @@ export async function runHub(io: HubIo): Promise<number> {
   const token = io.env[ENV_HUB_TOKEN];
   const socketPath = io.env[ENV_HUB_SOCK];
   if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：hub 只能在 agent-hub 启动的会话里用`);
+  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 agent-hub 发的令牌`);
   if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：hub 只能在 agent-hub 启动的会话里用`);
 
   const body: Record<string, string> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {
     let text: string;
     try {
-      text = parsed.textSource.kind === "stdin" ? await readAllStdin(io.stdin()) : parsed.textSource.value;
+      text = parsed.textSource.kind === "stdin" ? await readAllStdin(io.stdin(), io.stdinIdleMs ?? DEFAULT_STDIN_IDLE_MS) : parsed.textSource.value;
     } catch (err) {
       if (err instanceof UsageError) return usage(err.message);
       throw err;
@@ -279,8 +336,13 @@ export async function runHub(io: HubIo): Promise<number> {
   }
 
   const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  if (outcome.kind === "not-sent") return usage(`请求没发出去：${outcome.reason}`);
   if (outcome.kind === "unreachable") {
     io.stderr.write(`${UNREACHABLE_MESSAGE}（${outcome.reason}）\n`);
+    return HUB_EXIT.unreachable;
+  }
+  if (outcome.kind === "no-answer") {
+    io.stderr.write(`${NO_ANSWER_MESSAGE}（${outcome.reason}）。${MAYBE_EXECUTED_HINT}\n`);
     return HUB_EXIT.unreachable;
   }
 
@@ -301,4 +363,15 @@ export async function runHub(io: HubIo): Promise<number> {
   }
   io.stderr.write(`agent-hub 的回答看不懂（HTTP ${outcome.status}）\n`);
   return HUB_EXIT.rejected;
+}
+
+/** 入口用：runHub 之外的意外异常也只打一句话、退出码 2，不打堆栈。 */
+export async function runHubSafely(io: HubIo): Promise<number> {
+  try {
+    return await runHub(io);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    io.stderr.write(`hub：出了意外的错：${message.split("\n", 1)[0]}\n`);
+    return HUB_EXIT.usage;
+  }
 }
