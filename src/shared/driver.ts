@@ -5,9 +5,16 @@ import type { SessionStore } from "./store.ts";
 export type MessageSource = "user" | "system";
 
 export interface DriverSendInput {
-  /** 这条文字对应的消息编号（驱动层把忙时连发的用户消息拼成一条时，会一起带上它们的编号）。 */
+  /**
+   * 这条文字对应的消息编号（驱动层把忙时连发的用户消息拼成一条时，会一起带上它们的编号）。
+   * 至少一个；空数组按 invalid_input 拒绝（返回 rejected）。
+   */
   messageIds: MessageId[];
   source: MessageSource;
+  /**
+   * 原样写进去的文字，驱动层不加来源标签。约定（设计第 7.3 节）：用户消息不加标签；系统消息由调用方
+   * 自己在开头带 `【…】` 标签（如“【工单 #12 汇报】”）；驱动层加的恢复说明、重发说明都以 `【系统】` 开头。
+   */
   text: string;
   /** 重启后重发（SessionSendParams.resend）：前面加 RESEND_NOTE。 */
   resend?: boolean;
@@ -16,6 +23,7 @@ export interface DriverSendInput {
 /**
  * send 的结果：
  * - written：写进标准输入成功（这一次，或者之前一次带同样 messageIds 的 send）。处理函数返回 done。
+ *   那一轮出错（turn.ended ok=false）或进程崩溃、启动失败之后，这些消息不再算写过，重发会真的再写一次。
  * - queued：会话正忙，消息在驱动层的待发队列里还没写。处理函数返回 { kind: "later" }，过一会儿再调 send；
  *   同样的 messageIds 再调不会重复排队，写进去之后再调返回 written。
  * - rejected：写入前校验没过，没写，也不会再写；驱动层已经出了 driver.error(invalid_input, messageIds)，
@@ -27,6 +35,8 @@ export type DriverSendResult = { kind: "written" } | { kind: "queued" } | { kind
 export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一轮被打断了。请先看一下工作区现在的状态，再接着做。";
 /** 重发（DriverSendInput.resend）时加在消息前面（设计第 12.1 节）。 */
 export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
+/** 进程上一轮没等到 result 就退出了（崩溃）：加在下一条写进去的消息前面。 */
+export const CRASH_RECOVERY_NOTE = "【系统】你的进程上一轮意外退出了，那一轮可能没做完。请先看一下工作区现在的状态，再接着做。";
 
 /**
  * 去重：
@@ -138,6 +148,7 @@ export const DRIVER_ERROR_CODES = [
   "invalid_input", // 写入前校验没过，没写
   "bad_output_line", // 输出了一行不是 JSON 的东西，已跳过
   "start_args_conflict", // --session-id / --resume 选错且重试一次也不行
+  "internal_error", // 驱动层自己出错（写库、写日志、监听者抛错、找不到会话那一行），不可重试
 ] as const;
 export type DriverErrorCode = (typeof DRIVER_ERROR_CODES)[number];
 
@@ -167,7 +178,7 @@ export class DriverError extends Error {
 /**
  * 不能重试、也不属于哪次 start、send 调用的错误，以事件交给账本：
  * - invalid_input：带 messageIds，账本把它们标 failed；
- * - bad_output_line 等：不带 messageIds，只记 health。
+ * - bad_output_line、internal_error 等：不带 messageIds，只记 health。
  * 可重试的错误（RETRYABLE_DRIVER_ERRORS）不出这个事件，messageIds 只给 invalid_input 这类用。
  */
 export interface DriverErrorEvent extends DriverEventBase {
@@ -201,7 +212,9 @@ export interface DriverStartOptions {
 export interface Driver {
   /**
    * “启动或恢复会话”：进程已经在跑就直接返回；第一次用 --session-id，之后 --resume。
-   * 等到 system/init 才 resolve；起不来抛 DriverError（可重试的那几种）。
+   * 没有要写的消息时，进程 spawn 成功就返回；有要写的消息（待发消息或恢复说明）时，等到 init 再返回，
+   * 起不来抛 DriverError（可重试的那几种）。启动后马上退出只通过 session.exited(startup_failed) 反映，
+   * start 不会因此抛错。
    */
   start(sessionId: SessionId, options?: DriverStartOptions): Promise<void>;
   /**
@@ -214,6 +227,12 @@ export interface Driver {
   interrupt(sessionId: SessionId): Promise<void>;
   /** 守护进程关机：给所有 claude 发 SIGINT，空闲的关掉标准输入，最多等 10 秒，剩下的强制结束。 */
   shutdown(): Promise<void>;
+  /**
+   * 清理上次守护进程留下的 claude（W5 启动时调）。对 SessionStore.listWithProcess() 的每一行：先用 ps 确认
+   * 那个 pid 的命令行确实是 claude、并且带着这个会话的 vendorSessionId（防 pid 被复用），确认了发 SIGINT，
+   * 等 interruptGraceMs 还没退就 SIGKILL；最后不管确认没确认，都把那一行 pid 置空、status 置 idle。
+   */
+  cleanupStale(): Promise<void>;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
