@@ -1,6 +1,6 @@
 // 假 claude 自己的行为（照 M0 实测），驱动层测试碰不到的那几条直接测。
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,14 +20,15 @@ function run(
   lines: string[],
   gapMs = 0,
   stateless = false,
+  extra: { env?: Record<string, string>; cwd?: string } = {},
 ): Promise<{ code: number | null; events: Array<Record<string, unknown>>; stderr: string }> {
   dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
-  const env: Record<string, string | undefined> = { ...process.env, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log") };
+  const env: Record<string, string | undefined> = { ...process.env, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log"), ...extra.env };
   if (stateless) {
     delete env.FAKE_CLAUDE_STATE;
     delete env.FAKE_CLAUDE_LOG;
   }
-  const child = spawn(FAKE, args, { env });
+  const child = spawn(FAKE, args, { env, cwd: extra.cwd });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (d) => (stdout += d));
@@ -195,5 +196,47 @@ describe("假 claude", () => {
     );
     expect(toolResults(r.events).map((t) => t.content)).toEqual(["end", "$HOME `x`"]);
   });
-});
 
+  // m3-plan 第 3 节 W3“假 claude 按会话选剧本”
+  const texts = (events: Array<Record<string, unknown>>) =>
+    events.flatMap((e) =>
+      e.type === "assistant" ? (e.message as { content: Array<{ type: string; text?: string }> }).content.flatMap((c) => (c.type === "text" ? [c.text!] : [])) : [],
+    );
+  const say = (text: string) => ({ defaultTurn: { steps: [{ text }] } });
+  const workerEnv = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
+
+  it("按角色选剧本：Worker（环境变量里关了自动记忆）用 Worker 的，项目经理用项目经理的", async () => {
+    const script = { ...say("顶层"), sessions: [{ role: "worker", script: say("我是 Worker") }, { role: "pm", script: say("我是项目经理") }] };
+    const worker = await withScript(script, () => run(["--session-id", "w1"], [userLine("x")], 0, false, { env: workerEnv }));
+    const pm = await withScript(script, () => run(["--session-id", "p1"], [userLine("x")]));
+    expect(texts(worker.events)).toEqual(["我是 Worker"]);
+    expect(texts(pm.events)).toEqual(["我是项目经理"]);
+  });
+
+  it("按工作目录选剧本：cwd 完全相等、cwdUnder 在下面；都对不上用顶层剧本", async () => {
+    dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
+    const worktrees = join(dir, "worktrees");
+    const wt = join(worktrees, "1", "5");
+    const main = join(dir, "main");
+    mkdirSync(wt, { recursive: true });
+    mkdirSync(main);
+    const script = { ...say("顶层"), sessions: [{ cwd: main, script: say("主文件夹") }, { cwdUnder: worktrees, script: say("worktree") }] };
+    const inWt = await withScript(script, () => run(["--session-id", "c1"], [userLine("x")], 0, false, { cwd: wt }));
+    const inMain = await withScript(script, () => run(["--session-id", "c2"], [userLine("x")], 0, false, { cwd: main }));
+    const elsewhere = await withScript(script, () => run(["--session-id", "c3"], [userLine("x")], 0, false, { cwd: dir }));
+    expect(texts(inWt.events)).toEqual(["worktree"]);
+    expect(texts(inMain.events)).toEqual(["主文件夹"]);
+    expect(texts(elsewhere.events)).toEqual(["顶层"]);
+  });
+
+  it("选中的剧本按会话分开数轮数：另一个会话从第 0 轮起，--resume 接着数", async () => {
+    const script = { sessions: [{ role: "worker", script: { turns: [{ steps: [{ text: "第 0 轮" }] }, { steps: [{ text: "第 1 轮" }] }] } }] };
+    const opts = { env: workerEnv };
+    const a = await withScript(script, () => run(["--session-id", "s-a"], [userLine("x")], 0, false, opts));
+    const b = await withScript(script, () => run(["--session-id", "s-b"], [userLine("x")], 0, false, opts));
+    const again = await withScript(script, () => run(["--resume", "s-a"], [userLine("x")], 0, false, opts));
+    expect(texts(a.events)).toEqual(["第 0 轮"]);
+    expect(texts(b.events)).toEqual(["第 0 轮"]);
+    expect(texts(again.events)).toEqual(["第 1 轮"]);
+  });
+});

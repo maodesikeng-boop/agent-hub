@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../src/shared/index.ts";
-import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
+import { AGENTS_NOTE, DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
 import {
   Client,
   agentTexts,
@@ -93,7 +93,7 @@ describe("W5 组装 + 端到端", () => {
     expect(prompt).toContain(HUB_USAGE_PROMPT);
     expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
     // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
-    expect(prompt).not.toContain("AGENTS.md");
+    expect(prompt).not.toContain(AGENTS_NOTE);
     expect(argv).toContain("--strict-mcp-config");
     expect(JSON.parse(readFileSync(argv[argv.indexOf("--mcp-config") + 1]!, "utf8"))).toEqual({ mcpServers: {} });
     // 用户的消息原样写进去，不加标签

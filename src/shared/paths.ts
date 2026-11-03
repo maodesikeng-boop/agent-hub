@@ -18,7 +18,7 @@ export interface HubPaths {
   /** run/：只有守护进程在跑时才有内容，权限 0700（设计第 6.1 节）。 */
   runDir: string;
   /**
-   * run/hub.sock：agent 接口，权限 0600。写进环境变量和设置文件前要 realpath（见 hub.ts 的 buildHubSettings）。
+   * run/hub.sock：agent 接口，权限 0600。写进环境变量和设置文件前要 realpath（见 policy.ts 的 buildSessionSettings）。
    * macOS 上 Unix socket 路径最多 MAX_UNIX_SOCKET_PATH_BYTES 字节：agent 接口 listen 之前用 assertSocketPathFits 查 realpath 后的路径。
    */
   hubSock: string;

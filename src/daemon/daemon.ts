@@ -4,7 +4,7 @@
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
 // - 关机（启动到哪一步就关到哪一步）：执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
@@ -23,7 +23,7 @@ import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import { createClaudeDriver } from "./driver/index.ts";
 import { createSessionEndHandler, createSessionSendHandler, createSessionStartHandler, endedOnRevokedTokens } from "./handlers.ts";
-import { createPmLaunchPreparer } from "./launch.ts";
+import { createLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
@@ -136,8 +136,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       claudePath: paths.claudePath,
       sessionLogsDir: paths.sessionLogsDir,
       store: sessions,
-      prepareLaunch: createPmLaunchPreparer({
+      prepareLaunch: createLaunchPreparer({
         launchDir: paths.launchDir,
+        // realpath 过的：Worker 的记忆规则（policy.ts 的 stateDirDenyRule）按真实路径匹配
+        stateDir: realpathSync.native(paths.stateDir),
+        worktreesDir: paths.worktreesDir,
         getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
         tokens: endedOnRevokedTokens(tokens),
         // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets

@@ -28,22 +28,6 @@ export const ENV_HUB_TOKEN = "HUB_TOKEN";
 /** hub.sock 的真实路径（realpath 过）。 */
 export const ENV_HUB_SOCK = "HUB_SOCK";
 
-/** 设置文件里放行 hub 的规则。 */
-export const HUB_ALLOW_RULE = "Bash(hub:*)";
-
-/**
- * 每个项目经理会话的 --settings 文件内容（设计第 7.2、8.2 节）。hubSockRealPath 必须是 realpath 过的
- * （macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。
- * @deprecated M3 起换成 policy.ts 的 buildSessionSettings（两种角色共用，带默认档和 Worker 的记忆规则）；
- * W3 把 launch.ts 换过去之后删掉。
- */
-export function buildHubSettings(hubSockRealPath: string) {
-  return {
-    permissions: { allow: [HUB_ALLOW_RULE] },
-    sandbox: { network: { allowUnixSockets: [hubSockRealPath] } },
-  };
-}
-
 /**
  * 分工（M3）：这里定命令、参数、返回和按角色放行的表；hub/cli.ts 的 `hub worker …` 命令行解析、agent-api 的请求体规格、
  * 账本 hubCall 里按 HUB_COMMAND_ROLES 放行和 worker.* 的实现都归 W2。

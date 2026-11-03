@@ -2,7 +2,10 @@
 // 以后想让 Worker 默认和项目经理不一样、加回某条拒绝规则、M4 加权限钩子，只改这个文件。
 // launch.ts 只调 buildSessionSettings 和 sessionEnv，两种角色走同一个函数。
 import type { AgentRole } from "./domain.ts";
-import { HUB_ALLOW_RULE } from "./hub.ts";
+import { HUB_COMMAND } from "./names.ts";
+
+/** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
+export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
 
 /**
  * 默认档（用户 11-03 定的）：auto，分类器替人审每一步，项目经理和 Worker 一样。不加拒绝规则：
@@ -71,7 +74,7 @@ export interface SessionSettings {
 }
 
 /**
- * 每个会话的 --settings 文件内容（取代 M2 的 hub.ts buildHubSettings）。用户全局 ~/.claude 的设置照常生效。
+ * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
  * - 两种角色都有：默认档（readonly 时换成只读档）、放行 hub、放行 hub.sock；
  * - Worker 再加记忆规则和 autoMemoryEnabled: false。最后无条件加，不管 readonly 怎么写。
  * 每次返回新对象。

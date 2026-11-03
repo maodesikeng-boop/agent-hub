@@ -3,7 +3,8 @@
 // --verbose --replay-user-messages` 行为回应，事件字段名照抄 M0 的记录。驱动层测试用它代替真 claude。
 //
 // 环境变量：
-// - FAKE_CLAUDE_SCRIPT：剧本（JSON 文件，见 FakeScript）。不给就每轮回一句 "ok"。
+// - FAKE_CLAUDE_SCRIPT：剧本（JSON 文件，见 FakeScript）。不给就每轮回一句 "ok"。剧本里的 sessions 按会话
+//   （角色、工作目录）另选剧本（M3：项目经理和 Worker 各写各的，见 FakeSessionScript）。
 // - FAKE_CLAUDE_LOG：把命令行参数、每一行标准输入、收到的信号、退出码记成 JSONL（见 FakeLogEntry）。
 // - FAKE_CLAUDE_STATE：状态目录，记哪些会话 ID 已经存在、一共跑了几轮（跨进程）。默认是日志所在目录；
 //   两个都没给就记在进程内存里（只在这一个进程里算数）。
@@ -22,8 +23,8 @@
 // - 标准输入关掉：跑完手上这一轮再退出，退出码 0。
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 /** 一轮里的一步。 */
@@ -85,7 +86,27 @@ export interface FakeScript {
   rejectSessionArgs?: boolean;
   /** 一起来就起一个子进程（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
   spawnChildOnStart?: number | ChildSpec;
+  /** 按会话另选剧本，只在顶层剧本里认（见 FakeSessionScript）。 */
+  sessions?: FakeSessionScript[];
 }
+
+/**
+ * 按会话选剧本（M3，端到端测试分别给项目经理和 Worker 写剧本）。写了的条件都要对上；sessions 里从前往后第一条对上的
+ * 整个代替顶层剧本（不合并），都对不上用顶层剧本。
+ * 选中的剧本按会话 ID 分开数轮数（每个会话从 turns[0] 起，--resume 接着数），几个 Worker 用同一份剧本互不干扰；
+ * 顶层剧本照旧跨进程一起数。
+ */
+export interface FakeSessionScript {
+  /** 角色：环境变量里有 Worker 才设的 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1（shared/policy.ts 的 WORKER_ENV）就是 worker，否则 pm。 */
+  role?: FakeRole;
+  /** 工作目录等于它（两边都 realpath 过再比）。 */
+  cwd?: string;
+  /** 工作目录是它或在它下面，比如 Worker 的 worktree 都在 <数据目录>/worktrees/ 下。 */
+  cwdUnder?: string;
+  script: FakeScript;
+}
+
+export type FakeRole = "pm" | "worker";
 
 export interface ChildSpec {
   sleepSec: number;
@@ -102,6 +123,8 @@ export type FakeLogEntry =
   | { kind: "child"; pid: number; childPid: number }
   /** 启动时记下的几个环境变量（只记 LOGGED_ENV 里的，没设的不出现）。 */
   | { kind: "env"; pid: number; env: Record<string, string> }
+  /** 用的是哪份剧本：顶层是 null，否则是 sessions 里的下标。role 是认出来的角色。 */
+  | { kind: "script"; pid: number; role: FakeRole; session: number | null }
   | { kind: "bash"; pid: number; command: string; exitCode: number; output: string };
 
 /** M0 实测的 rate_limit_event.rate_limit_info（额度正常时）。 */
@@ -122,9 +145,37 @@ export const INTERRUPT_TOOL_TEXT = "[Request interrupted by user for tool use]";
 
 const logFile = process.env.FAKE_CLAUDE_LOG;
 const stateDir = process.env.FAKE_CLAUDE_STATE || (logFile ? dirname(logFile) : undefined);
-const script: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
+const topScript: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
   ? (JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) as FakeScript)
   : {};
+/** Worker 的会话才有的环境变量（shared/policy.ts 的 WORKER_ENV），假 claude 靠它认角色。 */
+const role: FakeRole = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1" ? "worker" : "pm";
+
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function sessionScriptMatches(entry: FakeSessionScript): boolean {
+  const cwd = realOrSelf(process.cwd());
+  if (entry.role !== undefined && entry.role !== role) return false;
+  if (entry.cwd !== undefined && realOrSelf(entry.cwd) !== cwd) return false;
+  if (entry.cwdUnder !== undefined) {
+    const root = realOrSelf(entry.cwdUnder);
+    if (cwd !== root && !cwd.startsWith(root.endsWith(sep) ? root : root + sep)) return false;
+  }
+  return true;
+}
+
+/** sessions 里选中的下标；没选中是 null（用顶层剧本）。 */
+const sessionScriptIndex: number | null = (() => {
+  const i = (topScript.sessions ?? []).findIndex(sessionScriptMatches);
+  return i === -1 ? null : i;
+})();
+const script: FakeScript = sessionScriptIndex === null ? topScript : topScript.sessions![sessionScriptIndex]!.script;
 const model = script.model ?? "claude-haiku-5-5";
 const tools = script.tools ?? ["Bash", "Read", "Edit"];
 
@@ -171,7 +222,11 @@ function createSession(id: string): void {
 function nextTurnIndex(): number {
   if (!stateDir) return memoryTurns++;
   mkdirSync(stateDir, { recursive: true });
-  const file = join(stateDir, "fake-turns");
+  // 顶层剧本跨进程一起数；按会话选中的剧本按会话 ID 分开数（见 FakeSessionScript）
+  const file =
+    sessionScriptIndex === null
+      ? join(stateDir, "fake-turns")
+      : join(stateDir, `fake-turns-${sessionScriptIndex}-${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}`);
   const n = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
   writeFileSync(file, String(n + 1));
   return n;
@@ -182,13 +237,14 @@ function nextTurnIndex(): number {
 const argv = process.argv.slice(2);
 log({ kind: "argv", pid: process.pid, argv, cwd: process.cwd() });
 
-/** 测试关心的环境变量：每个会话自己的令牌、socket、PATH。 */
-const LOGGED_ENV = ["HUB_TOKEN", "HUB_SOCK", "PATH", "CLAUDE_CONFIG_DIR"] as const;
+/** 测试关心的环境变量：每个会话自己的令牌、socket、PATH，Worker 关自动记忆的那个。 */
+const LOGGED_ENV = ["HUB_TOKEN", "HUB_SOCK", "PATH", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"] as const;
 log({
   kind: "env",
   pid: process.pid,
   env: Object.fromEntries(LOGGED_ENV.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]!]]))),
 });
+log({ kind: "script", pid: process.pid, role, session: sessionScriptIndex });
 
 function argValue(name: string): string | undefined {
   const i = argv.indexOf(name);
