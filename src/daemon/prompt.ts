@@ -84,6 +84,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const mcpConfigFile = join(dir, "mcp.json");
     writeFileSync(promptFile, buildPmPrompt({ persona: readPersona(session), cwd: session.cwd }));
     writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: {} }) + "\n");
-    return { promptFile, mcpConfigFile };
+    // M2 W0 占位：每次启动的环境变量和指纹由 M2 W3、W6 填；指纹不变 = 和 M1 一样不在两轮之间重启
+    return { promptFile, mcpConfigFile, env: {}, fingerprint: "" };
   };
 }

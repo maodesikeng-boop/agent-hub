@@ -1,0 +1,172 @@
+// agent 接口（W2 实现，设计第 4.2、8.1、8.2 节）：agent 在自己的 shell 里敲 `hub ...`，hub 通过 Unix socket
+// 请求守护进程，守护进程按会话令牌认人，交给账本的 hubCall。
+//
+// 请求：POST <hubPath(命令)>，头 `Authorization: Bearer <令牌>`，体是这个命令的参数 JSON（HubArgsMap）。
+// 应答：HubResponse，HTTP 状态按 HUB_ERROR_HTTP_STATUS（成功 200）。
+// 校验分两层：agent 接口按 JSON Schema 查形状和长度（缺参数、多余参数、超长 → invalid，不调账本）；
+// 账本查业务（项目在不在、管不管得着、文件夹对不对）。
+import type {
+  Conversation,
+  Handoff,
+  PersonaChange,
+  PmId,
+  PmMode,
+  Project,
+  ProjectFolder,
+  ProjectId,
+  SessionId,
+} from "./domain.ts";
+// ledger.ts 只从这里引类型，没有运行时的循环引用
+import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
+import type { LedgerErrorCode } from "./ledger.ts";
+
+/** 会话令牌，hub 自己从环境变量读；agent 的命令里不能出现变量（M0 实测会被权限检查拒绝）。 */
+export const ENV_HUB_TOKEN = "HUB_TOKEN";
+/** hub.sock 的真实路径（realpath 过）。 */
+export const ENV_HUB_SOCK = "HUB_SOCK";
+
+/** 设置文件里放行 hub 的规则。 */
+export const HUB_ALLOW_RULE = "Bash(hub:*)";
+
+/**
+ * 每个项目经理会话的 --settings 文件内容（设计第 7.2、8.2 节）。hubSockRealPath 必须是 realpath 过的
+ * （macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。
+ */
+export function buildHubSettings(hubSockRealPath: string) {
+  return {
+    permissions: { allow: [HUB_ALLOW_RULE] },
+    sandbox: { network: { allowUnixSockets: [hubSockRealPath] } },
+  };
+}
+
+/**
+ * M2 的命令。命令行写法 → 命令名：
+ * - `hub status`                                         → status：我是谁、在哪个对话、管哪些项目
+ * - `hub pm list`                                        → pm.list：所有项目经理和各自管的项目（交接时找人）
+ * - `hub project create --name <名> --folder <路径> [--description <说明>]` → project.create
+ * - `hub project attach <项目> <文件夹>`                  → project.attach
+ * - `hub project detach <项目> <文件夹>`                  → project.detach
+ * - `hub project assign <项目> --to <项目经理名字>`        → project.assign，交接正文从标准输入或 --text，必填
+ * - `hub persona show`                                   → persona.show
+ * - `hub persona edit [--mode <模式>] [--reason <理由>]`  → persona.edit，新全文从标准输入或 --text；可以只改模式
+ *
+ * hub 命令行的约定：
+ * - <项目> 是项目名（进行中的项目名字唯一）；
+ * - 路径参数里开头的 `~` 由 hub 展开成 HOME，相对路径按 hub 的当前目录变成绝对路径，再发出去；账本还会 resolveFolder 一次；
+ * - 长文本：有 --text 用 --text；没有 --text 且标准输入不是终端，读标准输入到结束（去掉末尾一个换行）；
+ *   project.assign 两样都没有（或读到空的）→ 用法不对，退出码 2。persona.edit 没有正文也没有 --mode → 用法不对。
+ */
+export const HUB_COMMANDS = [
+  "status",
+  "pm.list",
+  "project.create",
+  "project.attach",
+  "project.detach",
+  "project.assign",
+  "persona.show",
+  "persona.edit",
+] as const;
+export type HubCommand = (typeof HUB_COMMANDS)[number];
+
+export function hubPath(command: HubCommand): string {
+  return `/v1/${command}`;
+}
+
+/** 各命令的请求体。字符串长度上限见 limits.ts；路径都是绝对路径。 */
+export interface HubArgsMap {
+  status: Record<string, never>;
+  "pm.list": Record<string, never>;
+  "project.create": { name: string; folder: string; description?: string };
+  "project.attach": { project: string; folder: string };
+  "project.detach": { project: string; folder: string };
+  /** to：接手的项目经理名字；handoff：交接正文（不超过 MAX_HANDOFF_BYTES，不能是空白）。 */
+  "project.assign": { project: string; to: string; handoff: string };
+  "persona.show": Record<string, never>;
+  /** text：新的完整性格设定（不超过 MAX_PERSONA_BYTES）。text、mode 至少给一个。 */
+  "persona.edit": { text?: string; mode?: PmMode; reason?: string };
+}
+
+export type HubArgs<C extends HubCommand> = HubArgsMap[C];
+
+/** 项目名片：私聊的提示词、hub status 里用。 */
+export interface ProjectCard {
+  id: ProjectId;
+  name: string;
+  description: string | null;
+  /** 主文件夹的真实路径。 */
+  mainFolder: string;
+  /** 其他没移除的文件夹。 */
+  otherFolders: string[];
+}
+
+/** 各命令成功时的 data。text 是给 agent 看的一两句中文，data 给程序用。 */
+export interface HubDataMap {
+  status: {
+    pm: { id: PmId; name: string; mode: PmMode };
+    sessionId: SessionId;
+    /** 这个会话所在的对话（私聊或某个群）。 */
+    conversation: Pick<Conversation, "id" | "kind" | "projectId">;
+    /** 它现在管的进行中的项目。 */
+    projects: ProjectCard[];
+  };
+  "pm.list": { pms: { id: PmId; name: string; mode: PmMode; projects: string[] }[] };
+  "project.create": { project: Project; mainFolder: ProjectFolder; conversation: Conversation };
+  "project.attach": { project: Project; folder: ProjectFolder };
+  "project.detach": { project: Project; folder: ProjectFolder };
+  /** sessionId：群里新一代会话（属于接手的项目经理）。 */
+  "project.assign": { project: Project; handoff: Handoff; sessionId: SessionId };
+  "persona.show": { text: string; mode: PmMode };
+  /** change 为 null：内容和模式都没变，什么也没记。 */
+  "persona.edit": { change: PersonaChange | null };
+}
+
+export type HubData<C extends HubCommand> = HubDataMap[C];
+
+export interface HubResult<C extends HubCommand> {
+  text: string;
+  data: HubData<C>;
+}
+
+/**
+ * 错误码：账本的四种（LedgerRequestError）加两种只有 agent 接口有的：
+ * - unauthorized：没带令牌、令牌不对或已作废（401），不调账本；
+ * - internal：守护进程自己出错（500），message 是错误原文。
+ * 请求体不对（未知命令、缺参数、超长）是 invalid（400）。
+ */
+export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal";
+
+export const HUB_ERROR_HTTP_STATUS: Readonly<Record<HubErrorCode, number>> = {
+  ...LEDGER_ERROR_HTTP_STATUS,
+  unauthorized: 401,
+  internal: 500,
+};
+
+/** 应答体。message 是给 agent 看的一句中文，hub 原样打印。 */
+export type HubResponse<C extends HubCommand = HubCommand> =
+  | { ok: true; text: string; data: HubData<C> }
+  | { ok: false; code: HubErrorCode; message: string };
+
+/**
+ * hub 的退出码：
+ * - ok：成功，打印 text；
+ * - rejected：系统拒绝（任何 ok: false 的应答，包括 unauthorized、internal），打印 message；
+ * - usage：用法不对（未知子命令、缺参数、没设 HUB_TOKEN 或 HUB_SOCK），打印用法；
+ * - unreachable：连不上守护进程（socket 不存在、拒绝连接、超时），打印“连不上 agent-hub，守护进程可能没在跑”。
+ */
+export const HUB_EXIT = { ok: 0, rejected: 1, usage: 2, unreachable: 3 } as const;
+
+/** 会话令牌：32 字节随机数，base64url。 */
+export const HUB_TOKEN_BYTES = 32;
+
+/**
+ * 会话令牌（W2 实现，只在内存里，盘上不落；守护进程重启后全部作废）。
+ * - issue：这个会话已经有有效令牌就返回同一个，没有才生成新的。prepareLaunch 会被反复调（见 driver.ts），
+ *   每次都换新令牌的话，正在跑的进程手里的令牌就失效了；
+ * - resolve：令牌 → 会话，不认识或已作废返回 null。用定长比较；
+ * - revoke：作废这个会话的令牌。组装代码在 session.end 处理完（会话 ended）时调；之后 issue 会给新的。
+ */
+export interface SessionTokens {
+  issue(sessionId: SessionId): string;
+  resolve(token: string): SessionId | null;
+  revoke(sessionId: SessionId): void;
+}

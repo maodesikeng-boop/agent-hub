@@ -28,8 +28,8 @@ beforeEach(() => {
   db = openTestDb();
   home = mkdtempSync(join(tmpdir(), "agent-hub-ledger-"));
   now = 1_000;
-  ledger = createLedger(db, { now: () => now, initialSeq: INITIAL_SEQ });
-  const created = ledger.createPm({ name: "项目经理", pmHomeRoot: home, personaFile: "personas/pm-1.md" });
+  ledger = createLedger(db, { now: () => now, initialSeq: INITIAL_SEQ, pmHomeRoot: home });
+  const created = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
   conversationId = created.conversation.id;
   sessionId = created.sessionId;
   changes = [];
@@ -72,9 +72,9 @@ describe("createPm", () => {
   it("建项目经理、它的私聊和一个会话，并建工作目录", () => {
     const db2 = openTestDb();
     try {
-      const l = createLedger(db2, { now: () => 42 });
-      const result = l.createPm({ name: "老王", pmHomeRoot: join(home, "pm-home"), defaultModel: "opus" });
-      expect(result.pm).toMatchObject({ name: "老王", mode: "default", defaultModel: "opus", personaFile: null, avatarFile: null, createdAt: 42 });
+      const l = createLedger(db2, { now: () => 42, pmHomeRoot: join(home, "pm-home") });
+      const result = l.createPm({ name: "老王", mode: "manage_only", persona: "", defaultModel: "opus" });
+      expect(result.pm).toMatchObject({ name: "老王", mode: "manage_only", defaultModel: "opus", personaFile: null, avatarFile: null, createdAt: 42 });
       expect(result.conversation).toMatchObject({ kind: "pm", pmId: result.pm.id, projectId: null, title: "老王", createdAt: 42 });
       const session = createSessionStore(db2).get(result.sessionId);
       const cwd = join(home, "pm-home", String(result.pm.id));
@@ -610,8 +610,8 @@ describe("changesSince", () => {
 it("pm-home 目录已存在时 createPm 不报错", () => {
   const db2 = openTestDb();
   try {
-    const l = createLedger(db2);
-    l.createPm({ name: "a", pmHomeRoot: home });
+    const l = createLedger(db2, { pmHomeRoot: home });
+    l.createPm({ name: "a", mode: "manage_only", persona: "" });
     expect(existsSync(join(home, "1"))).toBe(true);
   } finally {
     db2.close();

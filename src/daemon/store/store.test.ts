@@ -33,19 +33,19 @@ function schemaDump(db: Db): unknown[] {
 }
 
 describe("打开存储和迁移", () => {
-  it("首次建库：建出 state/hub.sqlite，WAL，user_version 是 1", () => {
+  it("首次建库：建出 state/hub.sqlite，WAL，user_version 是最新的迁移编号", () => {
     const store = openStore(paths);
     try {
       expect(existsSync(join(home, "state", "hub.sqlite"))).toBe(true);
-      expect(store.migration).toEqual({ from: 0, to: 1, applied: [1] });
+      expect(store.migration).toEqual({ from: 0, to: 2, applied: [1, 2] });
       expect(store.db.get<{ journal_mode: string }>("PRAGMA journal_mode")?.journal_mode).toBe("wal");
-      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(1);
+      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(2);
       expect(store.db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys).toBe(1);
       const tables = store.db
         .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .map((t) => t.name);
       expect(tables).toEqual(
-        expect.arrayContaining(["pms", "conversations", "agent_sessions", "messages", "actions", "health"]),
+        expect.arrayContaining(["pms", "conversations", "agent_sessions", "messages", "actions", "health", "projects", "project_folders"]),
       );
     } finally {
       store.db.close();
@@ -59,9 +59,9 @@ describe("打开存储和迁移", () => {
 
     const second = openStore(paths);
     try {
-      expect(second.migration).toEqual({ from: 1, to: 1, applied: [] });
+      expect(second.migration).toEqual({ from: 2, to: 2, applied: [] });
       expect(schemaDump(second.db)).toEqual(before);
-      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(1);
+      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(2);
     } finally {
       second.db.close();
     }

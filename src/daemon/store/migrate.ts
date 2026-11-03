@@ -1,5 +1,7 @@
 // 迁移：migrations/ 下 `<编号>_<名字>.sql`，按编号执行比 PRAGMA user_version 大的，
 // 每个文件一个事务，成功后把 user_version 设成它的编号。
+// 跑每个文件时关着外键检查（事务里改不了这个开关，只能在事务外关），提交前用 PRAGMA foreign_key_check 查一遍，
+// 有悬空引用就回滚。这样迁移可以按 SQLite 的标准做法重建被别的表引用的表（0002 重建 pms）。
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,13 +52,22 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR): Migration
   for (const { version, file } of migrations) {
     if (version <= from) continue;
     const sql = readFileSync(join(dir, file), "utf8");
+    const foreignKeys = db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys === 1;
+    if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.transaction(() => {
         db.exec(sql);
+        const dangling = db.all<{ table: string; parent: string }>("PRAGMA foreign_key_check");
+        if (dangling.length > 0) {
+          const first = dangling[0]!;
+          throw new Error(`foreign key check failed: ${dangling.length} row(s), e.g. ${first.table} → ${first.parent}`);
+        }
         db.exec(`PRAGMA user_version = ${version}`);
       });
     } catch (error) {
       throw new Error(`migration ${file} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    } finally {
+      if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
     }
     applied.push(version);
   }

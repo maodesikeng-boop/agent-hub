@@ -41,6 +41,8 @@ export interface LedgerOptions {
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
   initialSeq?: number;
   changeBufferSize?: number;
+  /** pm-home/ 的根目录；项目经理私聊的工作目录是 <pmHomeRoot>/<项目经理编号>/，createPm 负责建。 */
+  pmHomeRoot?: string;
 }
 
 type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
@@ -67,6 +69,13 @@ function exitFailureReason(event: SessionExitedEvent): string {
   if (event.signal !== null) return `${event.reason}: signal ${event.signal}`;
   if (event.exitCode !== null) return `${event.reason}: exit code ${event.exitCode}`;
   return event.reason;
+}
+
+/** M2 W0 占位：接口里有、还没实现的方法。 */
+function notImplemented(name: string): () => never {
+  return () => {
+    throw new Error(`ledger.${name}: not implemented yet (M2 W1)`);
+  };
 }
 
 export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger {
@@ -365,6 +374,9 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
       return {
         seq: log.seq,
         pms: db.all<PmDbRow>("SELECT * FROM pms ORDER BY id").map(toPm),
+        // M2 W0 占位：项目和文件夹由 M2 W1 填
+        projects: [],
+        folders: [],
         conversations,
         sessions: db.all<AgentSessionDbRow>("SELECT * FROM agent_sessions ORDER BY id").map((r) => sessionState(toAgentSessionRow(r))),
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
@@ -437,10 +449,11 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
       return write(() => {
         const t = now();
         const pmRow = db.get<PmDbRow>(
-          "INSERT INTO pms (name, default_model, persona_file, created_at) VALUES (?, ?, ?, ?) RETURNING *",
+          "INSERT INTO pms (name, mode, default_model, persona, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
           input.name,
+          input.mode,
           input.defaultModel ?? null,
-          input.personaFile ?? null,
+          input.persona,
           t,
         )!;
         const conversationRow = db.get<ConversationDbRow>(
@@ -449,12 +462,14 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
           input.name,
           t,
         )!;
-        const cwd = join(input.pmHomeRoot, String(pmRow.id));
+        if (options.pmHomeRoot === undefined) throw new Error("createPm needs LedgerOptions.pmHomeRoot");
+        const cwd = join(options.pmHomeRoot, String(pmRow.id));
         mkdirSync(cwd, { recursive: true });
         const sessionId = db.run(
-          `INSERT INTO agent_sessions (role, conversation_id, vendor_session_id, cwd, model, created_at, updated_at)
-           VALUES ('pm', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor_session_id, cwd, model, created_at, updated_at)
+           VALUES ('pm', ?, ?, ?, ?, ?, ?, ?)`,
           conversationRow.id,
+          pmRow.id,
           randomUUID(),
           cwd,
           input.defaultModel ?? null,
@@ -477,5 +492,15 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     reportHealth(module, error) {
       write((p) => reportHealthIn(p, module, error));
     },
+
+    // M2 W0 占位：下面这些由 M2 W1 实现
+    createProject: notImplemented("createProject"),
+    getPersona: notImplemented("getPersona"),
+    editPersona: notImplemented("editPersona"),
+    revertPersonaChange: notImplemented("revertPersonaChange"),
+    retryMessage: notImplemented("retryMessage"),
+    hubCall: notImplemented("hubCall"),
+    getLaunchContext: notImplemented("getLaunchContext"),
+    syncPersonaFiles: notImplemented("syncPersonaFiles"),
   };
 }

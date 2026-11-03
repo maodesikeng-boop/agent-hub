@@ -1,4 +1,4 @@
-// 驱动层（W2 实现）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
+// 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
 import type { AgentSessionRow, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -149,6 +149,7 @@ export const DRIVER_ERROR_CODES = [
   "bad_output_line", // 输出了一行不是 JSON 的东西，已跳过
   "start_args_conflict", // --session-id / --resume 选错且重试一次也不行
   "internal_error", // 驱动层自己出错（写库、写日志、监听者抛错、找不到会话那一行），不可重试
+  "session_ended", // 会话已经 end 过（M2），不会再起来，不可重试
 ] as const;
 export type DriverErrorCode = (typeof DRIVER_ERROR_CODES)[number];
 
@@ -208,6 +209,19 @@ export interface DriverStartOptions {
   recovery?: boolean;
 }
 
+/**
+ * 进程组（m2-plan 第 6 节第 4 条）：claude 用 detached 起在自己的进程组里。正常停止（打断、空闲关、关机先发的那一下）
+ * 仍然只给 claude 本身发 SIGINT；强制结束（关机超时、启动超时、cleanupStale）给整个进程组发 SIGKILL，
+ * 把它起的 pnpm test、开发服务器之类一起结束。
+ *
+ * 两轮之间自动重启（m2-plan 第 6 节第 3 条）：每次要往一个已经在跑、空闲的进程写下一条之前，驱动层先调一次 prepareLaunch，
+ * 下面任何一样和这个进程启动时不一样，就关标准输入、等它退出，再用 --resume 起一个新的，然后才写这条：
+ * - LaunchFiles.fingerprint；
+ * - 会话那一行的 cwd、addDirs、model。
+ * env 不参与比较。正在跑的这一轮不打断，等它结束再比。消息不丢、不重复（还是同一次 send，只是先重启）。
+ * 重启时用的是重启前调的那次 prepareLaunch 的结果，不再调第二次。
+ */
+
 /** 执行器 ↔ 驱动层。 */
 export interface Driver {
   /**
@@ -225,23 +239,48 @@ export interface Driver {
   send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult>;
   /** 先写 interrupt 控制消息，5 秒没回应发 SIGINT。 */
   interrupt(sessionId: SessionId): Promise<void>;
-  /** 守护进程关机：给所有 claude 发 SIGINT，空闲的关掉标准输入，最多等 10 秒，剩下的强制结束。 */
+  /**
+   * 结束会话（M2，session.end 动作调）：
+   * - 正在跑一轮：不打断，等这一轮的 result，然后关标准输入、等进程退出；
+   * - 空闲或没有进程：不启动进程，直接结束。
+   * 驱动层自己的待发队列里还没写的消息丢掉，不再写。最后把那一行 status 写成 ended、pid 置空，然后 resolve。
+   * 已经 ended 的再调直接 resolve（动作重试无害）。之后对这个会话的 start、send 都抛 DriverError("session_ended")。
+   * 进程退出照常出 session.exited（reason: idle）。
+   */
+  end(sessionId: SessionId): Promise<void>;
+  /** 守护进程关机：给所有 claude 发 SIGINT，空闲的关掉标准输入，最多等 10 秒，剩下的按进程组强制结束。 */
   shutdown(): Promise<void>;
   /**
    * 清理上次守护进程留下的 claude（W5 启动时调）。对 SessionStore.listWithProcess() 的每一行：先用 ps 确认
    * 那个 pid 的命令行确实是 claude、并且带着这个会话的 vendorSessionId（防 pid 被复用），确认了发 SIGINT，
-   * 等 interruptGraceMs 还没退就 SIGKILL；最后不管确认没确认，都把那一行 pid 置空、status 置 idle。
+   * 等 interruptGraceMs 还没退就给它的进程组发 SIGKILL；最后不管确认没确认，都把那一行 pid 置空、
+   * status 置 idle（已经是 ended 的保持 ended）。
    */
   cleanupStale(): Promise<void>;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
-/** 每次启动前由 W5 生成的文件（设计第 7.2 节）。 */
+/** 每次启动前由组装代码（prepareLaunch）生成的文件和环境变量（设计第 7.2 节）。 */
 export interface LaunchFiles {
   promptFile: string;
+  /**
+   * --settings 的文件。M2 起项目经理的会话都有：放行 `Bash(hub:*)` 和 hub.sock 的真实路径
+   * （内容见 hub.ts 的 buildHubSettings）。
+   */
   settingsFile?: string;
   /** 空的 MCP 配置，配合 --strict-mcp-config。 */
   mcpConfigFile: string;
+  /**
+   * 这一次启动额外的环境变量（M2）：ENV_HUB_TOKEN、ENV_HUB_SOCK、PATH（hub 外壳所在的 run/bin 放最前面，后面接守护进程自己的 PATH）。
+   * 合并顺序：守护进程的 process.env < DriverOptions.env < 这里，同名的后者覆盖前者（PATH 整个替换）。
+   * 不参与是否重启的判断（见上面“两轮之间自动重启”）。
+   */
+  env: Record<string, string>;
+  /**
+   * 提示词、设置文件、MCP 配置内容的摘要（比如 sha256 十六进制）。内容一样就一样，变了就不一样。
+   * 驱动层只比较它是否相等，不关心怎么算。
+   */
+  fingerprint: string;
 }
 
 export interface DriverOptions {
@@ -250,9 +289,12 @@ export interface DriverOptions {
   /** logs/sessions/ 所在目录。 */
   sessionLogsDir: string;
   store: SessionStore;
-  /** 每次启动前调用，生成提示词和设置文件。 */
+  /**
+   * 每次启动前调用，生成提示词和设置文件；两轮之间判断要不要重启时也调（见上面“两轮之间自动重启”）。
+   * 所以它要能反复调：同一个会话每次给的令牌一样（SessionTokens.issue 的约定），文件内容没变就给一样的 fingerprint。
+   */
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
-  /** 额外的环境变量（如 CLAUDE_CONFIG_DIR）。 */
+  /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
   env?: Record<string, string>;
   /** 以下都有默认值，见 limits.ts；测试可以改小。 */
   idleCloseMs?: number;

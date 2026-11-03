@@ -114,6 +114,9 @@ export function applyChange(state: HubState, change: Change): HubState {
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
     case "health.updated":
       return { ...next, health: upsertBy(state.health, change.data.health, (a, b) => a.module === b.module) };
+    default:
+      // M2 W0 占位：项目、项目经理等新变化由 M2 W5 处理
+      return next;
   }
 }
 

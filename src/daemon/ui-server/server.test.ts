@@ -304,7 +304,9 @@ describe("GET /api/state 和 /messages?before=", () => {
   it("/api/state 返回账本的快照", async () => {
     ledger.snapshotValue = {
       seq: 0,
-      pms: [{ id: 1, name: "项目经理", avatarFile: null, mode: "chat", defaultModel: null, personaFile: null, createdAt: 1 }],
+      pms: [{ id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", defaultModel: null, personaFile: null, createdAt: 1 }],
+      projects: [],
+      folders: [],
       conversations: [],
       sessions: [],
       health: [],

@@ -869,7 +869,7 @@ describe("重发不被吞", () => {
           mkdirSync(launch, { recursive: true });
           writeFileSync(join(launch, "prompt.md"), "p");
           writeFileSync(join(launch, "mcp.json"), "{}");
-          return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json") };
+          return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json"), env: {}, fingerprint: "" };
         },
       },
     });

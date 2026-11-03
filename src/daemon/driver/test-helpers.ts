@@ -87,7 +87,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       mkdirSync(launch, { recursive: true });
       writeFileSync(join(launch, "prompt.md"), "你是项目经理。");
       writeFileSync(join(launch, "mcp.json"), JSON.stringify({ mcpServers: {} }));
-      return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json") };
+      return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json"), env: {}, fingerprint: "" };
     },
     env: { FAKE_CLAUDE_LOG: logFile, FAKE_CLAUDE_SCRIPT: scriptFile, FAKE_CLAUDE_STATE: dir },
     ...options.driver,
@@ -135,6 +135,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       id,
       role: "pm",
       conversationId: id,
+      pmId: null,
       ticketId: null,
       vendor: "claude",
       vendorSessionId: randomUUID(),

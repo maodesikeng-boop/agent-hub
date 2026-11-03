@@ -1,5 +1,5 @@
 // 数据库行 ↔ src/shared 的形状（驼峰 ↔ 下划线、JSON、布尔）。
-import type { Conversation, ConversationKind, HealthEntry, HealthModule, Message, MessageKind, MessageSender, MessageStatus, Pm } from "../../shared/domain.ts";
+import type { Conversation, ConversationKind, HealthEntry, HealthModule, Message, MessageKind, MessageSender, MessageStatus, Pm, PmMode } from "../../shared/domain.ts";
 
 export interface PmDbRow {
   id: number;
@@ -49,7 +49,7 @@ export function toPm(row: PmDbRow): Pm {
     id: row.id,
     name: row.name,
     avatarFile: row.avatar_file,
-    mode: row.mode,
+    mode: row.mode as PmMode,
     defaultModel: row.default_model,
     personaFile: row.persona_file,
     createdAt: row.created_at,

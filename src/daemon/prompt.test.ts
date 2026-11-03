@@ -59,7 +59,7 @@ describe("prepareLaunch", () => {
   let personas: string;
   beforeEach(() => {
     db = openStore({ stateDir: join(dir, "state"), dbFile: join(dir, "state", "hub.sqlite") }).db;
-    const { pm, sessionId } = createLedger(db).createPm({ name: "项目经理", pmHomeRoot: join(dir, "pm-home") });
+    const { pm, sessionId } = createLedger(db, { pmHomeRoot: join(dir, "pm-home") }).createPm({ name: "项目经理", mode: "manage_only", persona: "" });
     session = getAgentSession(db, sessionId)!;
     personas = join(dir, "state", "personas");
     writeDefaultPersona(personas, pm.id);
@@ -72,6 +72,8 @@ describe("prepareLaunch", () => {
     expect(files).toEqual({
       promptFile: join(dir, "state", "launch", String(session.id), "prompt.md"),
       mcpConfigFile: join(dir, "state", "launch", String(session.id), "mcp.json"),
+      env: {},
+      fingerprint: "",
     });
     expect(readFileSync(files.promptFile, "utf8")).toBe(buildPmPrompt({ persona: DEFAULT_PM_PERSONA, cwd: session.cwd }));
     expect(JSON.parse(readFileSync(files.mcpConfigFile, "utf8"))).toEqual({ mcpServers: {} });
