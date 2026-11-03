@@ -15,9 +15,19 @@ afterEach(() => {
 });
 
 /** 起一个假 claude，按顺序写这些行（每行之间隔 gapMs），关掉标准输入，收集输出。 */
-function run(args: string[], lines: string[], gapMs = 0): Promise<{ code: number | null; events: Array<Record<string, unknown>>; stderr: string }> {
+function run(
+  args: string[],
+  lines: string[],
+  gapMs = 0,
+  stateless = false,
+): Promise<{ code: number | null; events: Array<Record<string, unknown>>; stderr: string }> {
   dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
-  const child = spawn(FAKE, args, { env: { ...process.env, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log") } });
+  const env: Record<string, string | undefined> = { ...process.env, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log") };
+  if (stateless) {
+    delete env.FAKE_CLAUDE_STATE;
+    delete env.FAKE_CLAUDE_LOG;
+  }
+  const child = spawn(FAKE, args, { env });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (d) => (stdout += d));
@@ -88,4 +98,46 @@ describe("假 claude", () => {
       delete process.env.FAKE_CLAUDE_SCRIPT;
     }
   });
+
+  it("没有状态目录：会话记在进程内存里，一个进程里跑两轮照常", async () => {
+    const r = await run(["--session-id", "f"], [userLine("one"), userLine("two")], 200, true);
+    expect(r.code).toBe(0);
+    expect(r.events.filter((e) => e.type === "result")).toHaveLength(2);
+    expect(r.stderr).toBe("");
+  });
+
+  const withScript = async <T>(script: unknown, body: () => Promise<T>): Promise<T> => {
+    const file = join((dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"))), "script.json");
+    writeFileSync(file, JSON.stringify(script));
+    process.env.FAKE_CLAUDE_SCRIPT = file;
+    try {
+      return await body();
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCRIPT;
+    }
+  };
+
+  it("lateReplay：回显推迟到第一个不是 sleepMs 的步骤之前", async () => {
+    const r = await withScript({ lateReplay: true, defaultTurn: { steps: [{ sleepMs: 50 }, { text: "hi" }] } }, () =>
+      run(["--session-id", "g"], [userLine("x")]),
+    );
+    expect(r.events.map((e) => e.type)).toEqual(["system", "user", "assistant", "rate_limit_event", "result"]);
+  });
+
+  it("api_retry 步骤：发一条 system/api_retry", async () => {
+    const r = await withScript({ defaultTurn: { steps: [{ apiRetry: { attempt: 2 } }, { text: "ok" }] } }, () =>
+      run(["--session-id", "h"], [userLine("x")]),
+    );
+    expect(r.events.find((e) => e.subtype === "api_retry")).toMatchObject({ type: "system", attempt: 2 });
+  });
+
+  it("工具调用中被打断：标记是 “for tool use” 那种", async () => {
+    const interrupt = JSON.stringify({ type: "control_request", request_id: "i1", request: { subtype: "interrupt" } });
+    const r = await withScript({ defaultTurn: { steps: [{ tool: { name: "Bash", input: {}, durationMs: 1_000 } }] } }, () =>
+      run(["--session-id", "i"], [userLine("x"), interrupt], 200),
+    );
+    const markers = r.events.filter((e) => e.type === "user" && e.isReplay !== true) as Array<{ message: { content: Array<{ text?: string }> } }>;
+    expect(markers.map((e) => e.message.content[0]!.text)).toContain("[Request interrupted by user for tool use]");
+  });
 });
+

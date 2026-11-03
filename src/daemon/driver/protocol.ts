@@ -2,9 +2,16 @@
 import { createHash } from "node:crypto";
 import type { AgentSessionRow, AgentTextEvent, AgentToolEvent, LaunchFiles, RateLimitInfo, RateLimitWindow } from "../../shared/index.ts";
 
-/** 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证是一行。 */
+/**
+ * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
+ * 但按 JS 行终止符切行的读法（如 node:readline）会在这里断开，所以再转义成 \u2028、\u2029。
+ */
 export function buildUserLine(text: string): string {
-  return JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }));
+}
+
+function escapeLineSeparators(json: string): string {
+  return json.replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
 /**
@@ -13,6 +20,7 @@ export function buildUserLine(text: string): string {
  */
 export function checkUserLine(line: string): string | null {
   if (line.includes("\n") || line.includes("\r")) return "这一行带换行";
+  if (line.includes("\u2028") || line.includes("\u2029")) return "这一行带没转义的 U+2028 / U+2029";
   let obj: unknown;
   try {
     obj = JSON.parse(line);
@@ -83,14 +91,19 @@ export function userTexts(obj: Record<string, unknown>): string[] {
   return (content as Array<Record<string, unknown>>).flatMap((p) => (p?.type === "text" && typeof p.text === "string" ? [p.text] : []));
 }
 
-/** `[Request interrupted by user]`（工具调用中被打断时是 `[Request interrupted by user for tool use]`）。 */
+/**
+ * `[Request interrupted by user]`（工具调用中被打断时是 `[Request interrupted by user for tool use]`）。
+ * 回显（isReplay）不算：那是我们自己写进去的文字。
+ */
 export function isInterruptMarker(obj: Record<string, unknown>): boolean {
-  return userTexts(obj).some((t) => t.startsWith("[Request interrupted by user"));
+  return obj.isReplay !== true && userTexts(obj).some((t) => t.startsWith("[Request interrupted by user"));
 }
 
-/** rate_limit_event.rate_limit_info → RateLimitInfo。 */
-export function parseRateLimit(info: unknown): RateLimitInfo {
-  const i = (typeof info === "object" && info !== null ? info : {}) as Record<string, unknown>;
+/** rate_limit_event.rate_limit_info → RateLimitInfo；残缺的（不是对象、没有 status）返回 null，调用方跳过。 */
+export function parseRateLimit(info: unknown): RateLimitInfo | null {
+  if (typeof info !== "object" || info === null || Array.isArray(info)) return null;
+  const i = info as Record<string, unknown>;
+  if (typeof i.status !== "string") return null;
   const windows: Record<string, RateLimitWindow> = {};
   const unified = i.unifiedWindows;
   if (typeof unified === "object" && unified !== null) {
@@ -102,7 +115,7 @@ export function parseRateLimit(info: unknown): RateLimitInfo {
     }
   }
   return {
-    status: typeof i.status === "string" ? i.status : "unknown",
+    status: i.status,
     resetsAt: typeof i.resetsAt === "number" ? i.resetsAt : null,
     windows,
   };
@@ -161,7 +174,7 @@ export function buildChildEnv(
 
 /** 标准错误里认出“参数选错”的两种报错（M0 实测）。 */
 export function detectArgsConflict(stderr: string): "session_in_use" | "no_conversation" | null {
-  if (/already in use/i.test(stderr)) return "session_in_use";
+  if (/Session ID \S+ is already in use/i.test(stderr)) return "session_in_use";
   if (/No conversation found/i.test(stderr)) return "no_conversation";
   return null;
 }

@@ -170,7 +170,7 @@ W0 骨架和接口 ──┬── W1 存储 + 账本 + 动作队列 ──┐
 | 打断，控制消息管用 | 一轮中调 `interrupt` | 标准输入多一行 `control_request`；`turn.ended(interrupted)`；进程还在，下一条照常 |
 | 打断，控制消息没回应 | 剧本不理控制消息 | 5 秒后收到 `SIGINT`；`session.exited`；下一条用 `--resume` |
 | 崩溃 | 剧本一轮中途退出码 1 | `session.exited(hadResult: false)`；下一条用 `--resume`，开头带恢复说明 |
-| 启动卡住 | 剧本不发 `init` | 60 秒后结束进程，出 `driver.error(start_timeout)` |
+| 启动卡住 | 剧本不发 `init` | 60 秒后结束进程，抛 `DriverError(start_timeout)`；`session.exited(startup_failed)` 的 `messageIds` 为空 |
 | 参数选错 | 剧本对 `--session-id` 报 “already in use” | 自动改用 `--resume` 重试一次并成功；反过来 “No conversation found” 也一样 |
 | 空闲关闭 | 一轮结束后用假计时器拨 10 分钟 | 关掉标准输入，进程正常退出，会话状态“空闲” |
 | 额度信息 | 剧本发 `rate_limit_event` | 出 `rate_limit`，带 `utilization`、`resetsAt` |

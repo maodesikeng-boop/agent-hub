@@ -5,18 +5,22 @@
 // 环境变量：
 // - FAKE_CLAUDE_SCRIPT：剧本（JSON 文件，见 FakeScript）。不给就每轮回一句 "ok"。
 // - FAKE_CLAUDE_LOG：把命令行参数、每一行标准输入、收到的信号、退出码记成 JSONL（见 FakeLogEntry）。
-// - FAKE_CLAUDE_STATE：状态目录，记哪些会话 ID 已经存在、一共跑了几轮（跨进程）。默认是日志所在目录。
+// - FAKE_CLAUDE_STATE：状态目录，记哪些会话 ID 已经存在、一共跑了几轮（跨进程）。默认是日志所在目录；
+//   两个都没给就记在进程内存里（只在这一个进程里算数）。
 //
 // 默认行为：
 // - --session-id 一个已经存在的 ID（剧本 rejectSessionArgs 时一律当已存在 / 不存在）：标准错误 “Error: Session ID … is already in use.”，退出码 1；
 //   --resume 一个不存在的 ID：标准错误 “No conversation found with session ID: …”，再输出一条
 //   error_during_execution 的 result，退出码 1。
 // - 每轮开头发 system/init；先回显收到的消息（isReplay），再按剧本发 assistant、rate_limit_event、result。
+//   剧本 lateReplay 时回显推迟到第一个不是 sleepMs 的步骤之前（更像真 claude：开始处理时才回显）。
 // - 忙时收到的几条合并成下一轮的一条（回显里是几段 text）。
 // - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
-// - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]` 和一条 result，进程不退出。
+// - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]`（工具调用中是
+//   `[Request interrupted by user for tool use]`）和一条 result，进程不退出。
 // - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
 // - 标准输入关掉：跑完手上这一轮再退出，退出码 0。
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -25,11 +29,16 @@ import { createInterface } from "node:readline";
 /** 一轮里的一步。 */
 export type FakeStep =
   | { text: string; noUuid?: boolean }
-  | { tool: { name: string; input: unknown; result?: string } }
+  /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）。 */
+  | { tool: { name: string; input: unknown; result?: string; durationMs?: number } }
   | { rateLimit: Record<string, unknown> }
   | { raw: string }
   | { sleepMs: number }
-  | { exit: number };
+  | { exit: number }
+  /** 发一条 system/api_retry（M0 记录的字段）。 */
+  | { apiRetry: { attempt?: number; error?: string } }
+  /** 起一个脱离的孙进程，继承标准输出和标准错误，活 sleepSec 秒（测孙进程占着 stdio）。进程号记进日志。 */
+  | { spawnOrphan: { sleepSec: number } };
 
 export interface FakeTurn {
   steps?: FakeStep[];
@@ -49,6 +58,14 @@ export interface FakeScript {
   noInit?: boolean;
   /** 不理 interrupt 控制消息。 */
   ignoreControl?: boolean;
+  /** 控制消息怎么回：ack_only 回 success 但不打断；error 回 error。不给就照常打断。 */
+  control?: "ack_only" | "error";
+  /** 收到控制消息后过这么久再处理。 */
+  controlDelayMs?: number;
+  /** 标准输入关掉也不退出（测空闲关闭的升级）。 */
+  ignoreStdinEnd?: boolean;
+  /** 回显推迟到第一个不是 sleepMs 的步骤之前。 */
+  lateReplay?: boolean;
   /** 收到 SIGINT 只记下来，不退出（测关机时的强制结束）。 */
   ignoreSigint?: boolean;
   /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
@@ -60,7 +77,8 @@ export type FakeLogEntry =
   | { kind: "stdin"; pid: number; line: string }
   | { kind: "signal"; pid: number; signal: string }
   | { kind: "stdin_closed"; pid: number }
-  | { kind: "exit"; pid: number; code: number };
+  | { kind: "exit"; pid: number; code: number }
+  | { kind: "orphan"; pid: number; orphanPid: number };
 
 /** M0 实测的 rate_limit_event.rate_limit_info（额度正常时）。 */
 export const M0_RATE_LIMIT_INFO = {
@@ -76,6 +94,7 @@ export const M0_RATE_LIMIT_INFO = {
 };
 
 export const INTERRUPT_TEXT = "[Request interrupted by user]";
+export const INTERRUPT_TOOL_TEXT = "[Request interrupted by user for tool use]";
 
 const logFile = process.env.FAKE_CLAUDE_LOG;
 const stateDir = process.env.FAKE_CLAUDE_STATE || (logFile ? dirname(logFile) : undefined);
@@ -106,20 +125,27 @@ function sessionFile(id: string): string | undefined {
   return join(stateDir, `fake-session-${hash}`);
 }
 
+/** 没有状态目录时记在内存里。 */
+const memorySessions = new Set<string>();
+let memoryTurns = 0;
+
 function sessionExists(id: string): boolean {
   const file = sessionFile(id);
-  return file !== undefined && existsSync(file);
+  return file === undefined ? memorySessions.has(id) : existsSync(file);
 }
 
 function createSession(id: string): void {
   const file = sessionFile(id);
-  if (!file) return;
+  if (!file) {
+    memorySessions.add(id);
+    return;
+  }
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, id);
 }
 
 function nextTurnIndex(): number {
-  if (!stateDir) return 0;
+  if (!stateDir) return memoryTurns++;
   mkdirSync(stateDir, { recursive: true });
   const file = join(stateDir, "fake-turns");
   const n = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
@@ -192,10 +218,13 @@ function result(subtype: string, isError: boolean, text: string, startedAt: numb
   });
 }
 
+/** 正在跑的工具调用（被打断时用 “for tool use” 的标记）。 */
+let inTool = false;
+
 function interruptedMarker(): void {
   emit({
     type: "user",
-    message: { role: "user", content: [{ type: "text", text: INTERRUPT_TEXT }] },
+    message: { role: "user", content: [{ type: "text", text: inTool ? INTERRUPT_TOOL_TEXT : INTERRUPT_TEXT }] },
     parent_tool_use_id: null,
     session_id: sessionId,
     uuid: randomUUID(),
@@ -243,17 +272,24 @@ async function runTurn(content: UserContent[]): Promise<void> {
     apiKeySource: "none",
     uuid: randomUUID(),
   });
-  emit({
-    type: "user",
-    message: { role: "user", content },
-    parent_tool_use_id: null,
-    session_id: sessionId,
-    uuid: randomUUID(),
-    isReplay: true,
-  });
+  let replayed = false;
+  const replay = () => {
+    if (replayed) return;
+    replayed = true;
+    emit({
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+      session_id: sessionId,
+      uuid: randomUUID(),
+      isReplay: true,
+    });
+  };
+  if (!script.lateReplay) replay();
   let lastText = "";
   for (const step of turn.steps ?? []) {
     if (aborted()) break;
+    if (!("sleepMs" in step)) replay();
     if ("sleepMs" in step) {
       await sleep(step.sleepMs);
     } else if ("text" in step) {
@@ -262,6 +298,12 @@ async function runTurn(content: UserContent[]): Promise<void> {
     } else if ("tool" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }]);
+      if (step.tool.durationMs) {
+        inTool = true;
+        await sleep(step.tool.durationMs);
+        inTool = false;
+        if (aborted()) break;
+      }
       emit({
         type: "user",
         message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content: step.tool.result ?? "" }] },
@@ -275,9 +317,26 @@ async function runTurn(content: UserContent[]): Promise<void> {
       process.stdout.write(step.raw + "\n");
     } else if ("exit" in step) {
       exit(step.exit);
+    } else if ("apiRetry" in step) {
+      emit({
+        type: "system",
+        subtype: "api_retry",
+        attempt: step.apiRetry.attempt ?? 1,
+        max_retries: 10,
+        retry_delay_ms: 500,
+        error_status: 529,
+        error: step.apiRetry.error ?? "overloaded",
+        session_id: sessionId,
+        uuid: randomUUID(),
+      });
+    } else if ("spawnOrphan" in step) {
+      const orphan = spawn("sleep", [String(step.spawnOrphan.sleepSec)], { stdio: ["ignore", "inherit", "inherit"], detached: true });
+      orphan.unref();
+      log({ kind: "orphan", pid: process.pid, orphanPid: orphan.pid ?? -1 });
     }
   }
   if (aborted()) return; // 打断的那条 result 已经由打断的地方发了
+  replay();
   if (turn.rateLimit !== false) {
     emit({
       type: "rate_limit_event",
@@ -317,13 +376,22 @@ function onLine(line: string): void {
   const msg = obj as { type?: unknown; request_id?: unknown; request?: { subtype?: unknown }; message?: { role?: unknown; content?: unknown } };
   if (msg.type === "control_request") {
     if (script.ignoreControl) return;
-    emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
-    if (msg.request?.subtype === "interrupt" && busy) {
-      turnSeq++;
-      interruptedMarker();
-      result("success", false, "", currentTurnStartedAt);
-      finishTurn();
-    }
+    const handle = () => {
+      if (script.control === "error") {
+        emit({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "cannot interrupt now" } });
+        return;
+      }
+      emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
+      if (script.control !== "ack_only" && msg.request?.subtype === "interrupt" && busy) {
+        turnSeq++;
+        interruptedMarker();
+        inTool = false;
+        result("success", false, "", currentTurnStartedAt);
+        finishTurn();
+      }
+    };
+    if (script.controlDelayMs) setTimeout(handle, script.controlDelayMs);
+    else handle();
     return;
   }
   if (msg.message?.role !== "user") badInput(`Error: Expected message role 'user', got '${String(msg.message?.role)}'`);
@@ -350,6 +418,10 @@ const rl = createInterface({ input: process.stdin });
 rl.on("line", onLine);
 rl.on("close", () => {
   log({ kind: "stdin_closed", pid: process.pid });
+  if (script.ignoreStdinEnd) {
+    setInterval(() => {}, 60_000); // 标准输入关了事件循环也不空，一直活着
+    return;
+  }
   stdinClosed = true;
   if (!busy) exit(0);
 });

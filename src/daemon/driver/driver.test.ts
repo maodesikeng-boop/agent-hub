@@ -1,9 +1,11 @@
 // 驱动层 + 假 claude：m1-plan 第 4 节“W2 驱动层 + 假 claude”测试表，每条一个 describe。
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CRASH_RECOVERY_NOTE,
   DriverError,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
@@ -11,8 +13,10 @@ import {
   RESTART_RECOVERY_NOTE,
   START_TIMEOUT_MS,
 } from "../../shared/index.ts";
-import { CRASH_RECOVERY_NOTE } from "./index.ts";
-import { makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
+import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
+
+// 这些测试起真进程，机器忙时一条可能要好几秒
+vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -215,6 +219,22 @@ describe("用户在系统前", () => {
     await t.waitFor("turn.ended", undefined, 3);
     expect(t.stdinTexts()).toEqual(["第一条", "用户补充", "【工单 #1 汇报】做完了"]);
     expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [3], [2]]);
+  });
+
+  it("系统、用户交错排队：用户的全部拼成一条先写，系统的按到达顺序一条一轮", async () => {
+    const t = harness({ script: { turns: [slowTurn(500)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一条"));
+    await t.driver.send(s.id, system(2, "系统甲"));
+    await t.driver.send(s.id, user(3, "用户一"));
+    await t.driver.send(s.id, system(4, "系统乙"));
+    await t.driver.send(s.id, user(5, "用户二"));
+    await t.waitFor("turn.ended", undefined, 4);
+    const texts = t.stdinTexts();
+    expect(texts[0]).toBe("第一条");
+    expect(texts[1]).toBe("【用户连发了 2 条】\n1. 用户一\n2. 用户二");
+    expect(texts.slice(2)).toEqual(["系统甲", "系统乙"]);
+    expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [3, 5], [2], [4]]);
   });
 
   it("忙时连发两条系统消息：一条一轮，不拼", async () => {
@@ -422,10 +442,11 @@ describe("参数选错", () => {
   });
 
   it("反过来：以为跑完过、用了 --resume，报 No conversation found，自动改用 --session-id 并成功", async () => {
-    const t = harness();
+    const t = harness({ driver: { idleCloseMs: 50 } });
     const s = t.addSession({ hasCompletedTurn: true });
     await expect(t.driver.send(s.id, user(1, "hi"))).resolves.toEqual({ kind: "written" });
-    await t.waitFor("turn.ended");
+    // 等重试的那个进程跑完一轮、空闲退出，再看一共出了几个 turn.ended
+    await t.waitFor("session.exited", (e) => e.reason === "idle");
     const argvs = t.argvs();
     expect(argvs).toHaveLength(2);
     expect(argvs[0]).toContain("--resume");
@@ -606,5 +627,505 @@ describe("关机", () => {
     expect(t.store.get(s.id)).toMatchObject({ pid: null });
     expect(t.log().filter((e) => e.kind === "signal")).toHaveLength(1);
     expect(t.of("session.exited")[0]).toMatchObject({ reason: "shutdown", signal: "SIGKILL" });
+  });
+});
+
+// --- 审查之后补的 ---
+
+const signals = (t: Harness) => t.log().flatMap((e) => (e.kind === "signal" ? [e.signal] : []));
+const controlLines = (t: Harness) =>
+  t
+    .log()
+    .flatMap((e) => (e.kind === "stdin" ? [JSON.parse(e.line) as Record<string, unknown>] : []))
+    .filter((o) => o.type === "control_request");
+const waitStdin = async (t: Harness, count = 1) => {
+  for (let i = 0; i < 100 && t.log().filter((e) => e.kind === "stdin").length < count; i++) await realSleep(50);
+};
+
+describe("U+2028 / U+2029", () => {
+  it("回复里带这两个字符：只按 \\n 切行，这一轮照常结束", async () => {
+    const text = "第一段\u2028第二段\u2029第三段";
+    const t = harness({ script: { defaultTurn: { steps: [{ text }] } } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: true, messageIds: [1] });
+    expect(t.of("agent.text").map((e) => e.text)).toEqual([text]);
+    expect(t.of("driver.error")).toEqual([]);
+  });
+
+  it("用户消息里带这两个字符：写进去时转义，对方收到的是一行、文字不变", async () => {
+    const text = "上\u2028下\u2029完";
+    const t = harness();
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, user(1, text))).resolves.toEqual({ kind: "written" });
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: true, messageIds: [1] });
+    const raw = t.log().flatMap((e) => (e.kind === "stdin" ? [e.line] : []));
+    expect(raw).toHaveLength(1);
+    expect(raw[0]).not.toMatch(/[\u2028\u2029]/);
+    expect(t.stdinTexts()).toEqual([text]);
+    expect(t.of("session.exited")).toEqual([]);
+  });
+});
+
+describe("抛错不弄垮驱动层", () => {
+  it("监听者抛错：驱动层照常跑完，留下一条 driver.error(internal_error)", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const t = harness({ driver: { idleCloseMs: 50 } });
+      t.driver.onEvent((_id, e) => {
+        if (e.type === "turn.ended") throw new Error("listener boom");
+      });
+      const s = t.addSession();
+      await t.driver.send(s.id, user(1, "hi"));
+      await t.waitFor("session.exited");
+      const errors = t.of("driver.error");
+      expect(errors.some((e) => e.code === "internal_error" && e.message.includes("listener boom"))).toBe(true);
+      expect(t.store.get(s.id)).toMatchObject({ status: "idle", pid: null });
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it("写库出错：不往上冒，出 driver.error(internal_error)，这一轮照常结束", async () => {
+    const t = harness();
+    const s = t.addSession();
+    const update = t.store.update.bind(t.store);
+    t.store.update = (id, patch) => {
+      if (patch.rateLimit !== undefined) throw new Error("disk I/O error");
+      return update(id, patch);
+    };
+    await t.driver.send(s.id, user(1, "hi"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended.ok).toBe(true);
+    expect(t.of("driver.error").find((e) => e.code === "internal_error")!.message).toContain("disk I/O error");
+  });
+
+  it("日志目录写不了：出一条 driver.error(internal_error)，这一轮照常结束", async () => {
+    const t = harness();
+    const blocker = join(t.dir, "not-a-dir");
+    writeFileSync(blocker, "");
+    const t2 = makeHarness({ dir: t.dir, driver: { sessionLogsDir: join(blocker, "sessions") } });
+    try {
+      const s = t2.addSession();
+      await t2.driver.send(s.id, user(1, "hi"));
+      const ended = await t2.waitFor("turn.ended");
+      expect(ended.ok).toBe(true);
+      expect(t2.of("driver.error").filter((e) => e.code === "internal_error")).toHaveLength(1);
+    } finally {
+      await t2.driver.shutdown();
+    }
+  });
+
+  it("会话那一行没了：退出时写库失败也照样收尾，exited 会 resolve；再 send 抛不可重试的错", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    t.store.rows.delete(s.id);
+    await t.driver.shutdown();
+    expect(t.of("session.exited")).toHaveLength(1);
+    const t2 = harness();
+    const err = await t2.driver.send(999_999, user(2, "hi")).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DriverError);
+    expect((err as DriverError).retryable).toBe(false);
+  });
+});
+
+describe("打断的回应出错", () => {
+  it("control_response 是 error：马上发 SIGINT，不等 5 秒", async () => {
+    const t = harness({ script: { control: "error", turns: [slowTurn(30_000)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写很久"));
+    await t.waitFor("message.processing");
+    const started = Date.now();
+    await t.driver.interrupt(s.id);
+    const exited = await t.waitFor("session.exited");
+    expect(Date.now() - started).toBeLessThan(INTERRUPT_GRACE_MS - 1_000);
+    expect(exited).toMatchObject({ reason: "interrupt" });
+    expect(signals(t)).toEqual(["SIGINT"]);
+  });
+
+  it("control_response 是 success：清掉定时器，过了宽限期也不发 SIGINT", async () => {
+    const t = harness({ driver: { interruptGraceMs: 300 }, script: { control: "ack_only", turns: [slowTurn(1_500)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写一会儿"));
+    await t.waitFor("message.processing");
+    await t.driver.interrupt(s.id);
+    await realSleep(800);
+    expect(signals(t)).toEqual([]);
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: true, interrupted: false });
+    expect(t.of("session.exited")).toEqual([]);
+  });
+
+  it("result 比回应先到：清掉定时器，不发 SIGINT", async () => {
+    const t = harness({ driver: { interruptGraceMs: 600 }, script: { ignoreControl: true, turns: [slowTurn(300)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("message.processing");
+    const interrupting = t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    await interrupting;
+    await realSleep(900);
+    expect(signals(t)).toEqual([]);
+    expect(t.of("session.exited")).toEqual([]);
+  });
+
+  it("打断撞上自然结束：这一轮算正常结束，晚到的回应不影响下一轮", async () => {
+    const t = harness({ driver: { interruptGraceMs: 300 }, script: { controlDelayMs: 400, turns: [slowTurn(100)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("message.processing");
+    await t.driver.interrupt(s.id);
+    const first = await t.waitFor("turn.ended");
+    expect(first).toMatchObject({ ok: true, interrupted: false, messageIds: [1] });
+    await realSleep(600); // 回应到了，宽限期也过了
+    await t.driver.send(s.id, user(2, "下一条"));
+    const second = await t.waitFor("turn.ended", undefined, 2);
+    expect(second).toMatchObject({ ok: true, interrupted: false, messageIds: [2] });
+    expect(signals(t)).toEqual([]);
+  });
+
+  it("重复调 interrupt：只写一条控制消息", async () => {
+    const t = harness({ script: { ignoreControl: true, turns: [slowTurn(1_000)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("message.processing");
+    const a = t.driver.interrupt(s.id);
+    const b = t.driver.interrupt(s.id);
+    await Promise.all([a, b]);
+    expect(controlLines(t)).toHaveLength(1);
+  });
+
+  it("工具调用中被打断：`for tool use` 的标记也算打断", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ tool: { name: "Bash", input: { command: "sleep 9" }, durationMs: 3_000 } }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑命令"));
+    await t.waitFor("agent.tool");
+    await t.driver.interrupt(s.id);
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ interrupted: true, messageIds: [1] });
+  });
+
+  it("写进去了、还没回显就被打断：先补一个 message.processing，再 turn.ended", async () => {
+    const t = harness({ script: { lateReplay: true, turns: [slowTurn(3_000)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("message.delivered");
+    expect(t.of("message.processing")).toEqual([]);
+    await t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    const types = t.events.map((e) => e.event.type).filter((x) => x === "message.processing" || x === "turn.ended");
+    expect(types).toEqual(["message.processing", "turn.ended"]);
+    expect(t.of("message.processing")[0]!.messageIds).toEqual([1]);
+    expect(t.of("turn.ended")[0]).toMatchObject({ interrupted: true, messageIds: [1] });
+  });
+
+  it("启动阶段打断：进程退出算 interrupt，在途消息带上；send 不抛 spawn_failed", async () => {
+    const t = harness({ driver: { interruptGraceMs: 200 }, script: { noInit: true, ignoreControl: true } });
+    const s = t.addSession();
+    const sending = t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
+    await waitStdin(t);
+    await t.driver.interrupt(s.id);
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "interrupt", messageIds: [1] });
+    await expect(sending).resolves.toEqual({ kind: "written" });
+    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+  });
+});
+
+describe("重发不被吞", () => {
+  it("崩溃后同样的 messageIds 重发：真的再写一次", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ text: "写了一半" }, { exit: 1 }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("session.exited");
+    await expect(t.driver.send(s.id, { ...user(1, "hi"), resend: true })).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended");
+    expect(t.stdinTexts()).toEqual(["hi", `${CRASH_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\nhi`]);
+  });
+
+  it("这一轮出错（ok=false）后重发：真的再写一次", async () => {
+    const t = harness({ script: { turns: [{ result: { subtype: "error_during_execution", isError: true } }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    await expect(t.driver.send(s.id, { ...user(1, "hi"), resend: true })).resolves.toEqual({ kind: "written" });
+    const second = await t.waitFor("turn.ended", undefined, 2);
+    expect(second).toMatchObject({ ok: true, messageIds: [1] });
+    expect(t.stdinTexts()).toEqual(["hi", `${RESEND_NOTE}\n\nhi`]);
+  });
+
+  it("启动中又调一次同样的 send：不重复排队", async () => {
+    const t = harness();
+    const slow = makeHarness({
+      dir: t.dir,
+      driver: {
+        prepareLaunch: async (session) => {
+          await realSleep(300);
+          const launch = join(t.dir, "launch-slow", String(session.id));
+          mkdirSync(launch, { recursive: true });
+          writeFileSync(join(launch, "prompt.md"), "p");
+          writeFileSync(join(launch, "mcp.json"), "{}");
+          return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json") };
+        },
+      },
+    });
+    try {
+      const s = slow.addSession();
+      const first = slow.driver.send(s.id, user(1, "hi"));
+      await realSleep(50);
+      await expect(slow.driver.send(s.id, user(1, "hi"))).resolves.toEqual({ kind: "queued" });
+      await expect(first).resolves.toEqual({ kind: "written" });
+      await slow.waitFor("turn.ended");
+      await realSleep(300);
+      expect(slow.stdinTexts()).toEqual(["hi"]);
+    } finally {
+      await slow.driver.shutdown();
+    }
+  });
+});
+
+describe("参数冲突后的持久化", () => {
+  it("两次都失败：hasCompletedTurn 不改", async () => {
+    const t = harness({ script: { rejectSessionArgs: true } });
+    const s = t.addSession({ hasCompletedTurn: false });
+    await expect(t.driver.send(s.id, user(1, "hi"))).rejects.toMatchObject({ code: "start_args_conflict" });
+    expect(t.store.get(s.id)!.hasCompletedTurn).toBe(false);
+    expect(t.store.patches.some((p) => p.patch.hasCompletedTurn !== undefined)).toBe(false);
+  });
+
+  it("第二次启动成功后才写：改用 --resume 成功 → true", async () => {
+    const t = harness({ driver: { idleCloseMs: 50 } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一轮"));
+    await t.waitFor("session.exited");
+    t.store.update(s.id, { hasCompletedTurn: false });
+    const before = t.store.patches.length;
+    let atStarted: boolean | undefined;
+    t.driver.onEvent((_id, e) => {
+      if (e.type === "session.started" && e.resumed) atStarted = t.store.get(s.id)!.hasCompletedTurn;
+    });
+    await t.driver.send(s.id, user(2, "第二轮"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(atStarted).toBe(true);
+    // 失败的那次启动没有写 hasCompletedTurn
+    const writes = t.store.patches.slice(before).filter((p) => p.patch.hasCompletedTurn !== undefined);
+    expect(writes.map((p) => p.patch.hasCompletedTurn)).toEqual([true]);
+  });
+
+  it("只认 “Session ID … is already in use”，别的 already in use 不算参数选错", async () => {
+    const t = harness();
+    const bin = join(t.dir, "port-claude");
+    writeFileSync(bin, "#!/bin/sh\necho 'Error: port 8080 is already in use' >&2\nexit 1\n");
+    chmodSync(bin, 0o755);
+    const t2 = makeHarness({ dir: t.dir, driver: { claudePath: bin } });
+    try {
+      const s = t2.addSession();
+      await expect(t2.driver.send(s.id, user(1, "hi"))).rejects.toMatchObject({ code: "spawn_failed" });
+      expect(t2.argvs()).toEqual([]);
+    } finally {
+      await t2.driver.shutdown();
+    }
+  });
+});
+
+describe("启动和关闭的边角", () => {
+  it("start 没有消息、一直空闲：空闲关闭算 idle，不算 startup_failed", async () => {
+    const t = harness({ driver: { idleCloseMs: 100 } });
+    const s = t.addSession();
+    await t.driver.start(s.id);
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "idle", exitCode: 0, messageIds: [] });
+  });
+
+  it("并发调 start：只起一个进程", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await Promise.all([t.driver.start(s.id), t.driver.start(s.id), t.driver.start(s.id)]);
+    for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(50);
+    await realSleep(300);
+    expect(t.argvs()).toHaveLength(1);
+    expect(t.of("session.exited")).toEqual([]);
+  });
+
+  it("start(recovery) 启动失败：恢复说明还回去，下一条写进去时带上", async () => {
+    const t = harness({ script: { rejectSessionArgs: true } });
+    const s = t.addSession();
+    await expect(t.driver.start(s.id, { recovery: true })).rejects.toMatchObject({ code: "start_args_conflict" });
+    writeFileSync(join(t.dir, "script.json"), "{}");
+    await expect(t.driver.send(s.id, user(1, "hi"))).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended");
+    expect(t.stdinTexts().at(-1)).toBe(`${RESTART_RECOVERY_NOTE}\n\nhi`);
+  });
+
+  it("进程正在退出时 send：等它退完，再用 --resume 起新的写进去", async () => {
+    const t = harness({ driver: { idleCloseMs: 50, interruptGraceMs: 300, shutdownGraceMs: 500 }, script: { ignoreStdinEnd: true } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    for (let i = 0; i < 100 && !t.log().some((e) => e.kind === "stdin_closed"); i++) await realSleep(20);
+    await expect(t.driver.send(s.id, user(2, "二"))).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "idle" });
+    const argvs = t.argvs();
+    expect(argvs).toHaveLength(2);
+    expect(argvs[1]).toContain("--resume");
+    expect(t.stdinTexts()).toEqual(["一", "二"]);
+  });
+
+  it("空闲关闭不理标准输入：先 SIGINT，再 SIGKILL", async () => {
+    const t = harness({ driver: { idleCloseMs: 50, interruptGraceMs: 200 }, script: { ignoreStdinEnd: true, ignoreSigint: true } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "idle", signal: "SIGKILL", messageIds: [] });
+    expect(signals(t)).toEqual(["SIGINT"]);
+  });
+
+  it("孙进程占着标准输出：进程退出后不被拖住", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ spawnOrphan: { sleepSec: 30 } }, { exit: 1 }] }] } });
+    const s = t.addSession();
+    try {
+      const started = Date.now();
+      await t.driver.send(s.id, user(1, "hi"));
+      const exited = await t.waitFor("session.exited");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(exited).toMatchObject({ reason: "crash", exitCode: 1, messageIds: [1] });
+    } finally {
+      for (const e of t.log()) if (e.kind === "orphan") process.kill(e.orphanPid, "SIGKILL");
+    }
+  });
+
+  it("关机时队列里还有消息：在途的这一轮按打断收尾，排队的没写、不在任何事件里", async () => {
+    const t = harness({ script: { turns: [slowTurn(30_000)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写很久"));
+    await expect(t.driver.send(s.id, user(2, "排队的"))).resolves.toEqual({ kind: "queued" });
+    await t.waitFor("message.processing");
+    await t.driver.shutdown();
+    // SIGINT 时（和真 claude 一样）先出打断标记和 result，所以在途的那条由 turn.ended 带着
+    expect(t.of("turn.ended")).toEqual([expect.objectContaining({ interrupted: true, messageIds: [1] })]);
+    expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "shutdown", messageIds: [] })]);
+    expect(t.stdinTexts()).toEqual(["写很久"]);
+    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+  });
+});
+
+describe("其他输入输出", () => {
+  it("messageIds 是空数组：按 invalid_input 拒绝", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, { messageIds: [], source: "user", text: "hi" })).resolves.toEqual({ kind: "rejected" });
+    expect(t.of("driver.error")[0]).toMatchObject({ code: "invalid_input", messageIds: [] });
+    expect(t.argvs()).toEqual([]);
+  });
+
+  it("is_error:true 配 subtype:success：算出错", async () => {
+    const t = harness({ script: { defaultTurn: { result: { subtype: "success", isError: true, result: "API Error" } } } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: false, error: { subtype: "success", message: "API Error" } });
+  });
+
+  it("残缺的 rate_limit_event：跳过，不出 rate_limit、不写库", async () => {
+    const t = harness({
+      script: { defaultTurn: { rateLimit: false, steps: [{ raw: JSON.stringify({ type: "rate_limit_event", rate_limit_info: null }) }, { text: "ok" }] } },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(t.of("rate_limit")).toEqual([]);
+    expect(t.store.get(s.id)!.rateLimit).toBeNull();
+  });
+
+  it("system/api_retry：不出事件也不报错，这一轮照常", async () => {
+    const t = harness({ script: { defaultTurn: { steps: [{ apiRetry: { attempt: 1 } }, { text: "好了" }] } } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended.ok).toBe(true);
+    expect(t.of("driver.error")).toEqual([]);
+    expect(t.of("agent.text").map((e) => e.text)).toEqual(["好了"]);
+  });
+
+  it("先写库再发事件：监听者读到的那一行已经是新的", async () => {
+    const t = harness({ driver: { idleCloseMs: 50 } });
+    const s = t.addSession();
+    const seen: Record<string, unknown> = {};
+    t.driver.onEvent((_id, e) => {
+      const row = t.store.get(s.id)!;
+      if (e.type === "session.started") seen.started = { status: row.status, hasPid: row.pid !== null, model: row.model };
+      if (e.type === "rate_limit") seen.rateLimit = row.rateLimit === null ? null : row.rateLimit.status;
+      if (e.type === "turn.ended") seen.turn = row.hasCompletedTurn;
+      if (e.type === "session.exited") seen.exited = { status: row.status, pid: row.pid };
+    });
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("session.exited");
+    expect(seen).toEqual({
+      started: { status: "running", hasPid: true, model: "claude-haiku-5-5" },
+      rateLimit: "allowed",
+      turn: true,
+      exited: { status: "idle", pid: null },
+    });
+  });
+});
+
+describe("清理残留进程", () => {
+  const strayClaude = (t: Harness, sessionId: string) =>
+    spawn(FAKE_CLAUDE, ["-p", "--session-id", sessionId], {
+      env: { ...process.env, FAKE_CLAUDE_LOG: join(t.dir, "fake-claude.log"), FAKE_CLAUDE_SCRIPT: join(t.dir, "script.json"), FAKE_CLAUDE_STATE: t.dir },
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+  const gone = async (child: ChildProcess) => {
+    for (let i = 0; i < 100 && child.exitCode === null && child.signalCode === null; i++) await realSleep(50);
+    return child.exitCode !== null || child.signalCode !== null;
+  };
+  const waitArgv = async (t: Harness) => {
+    for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(50);
+  };
+
+  it("命令行是 claude 且带着会话 ID：SIGINT 结束，那一行 pid 置空、状态空闲", async () => {
+    const t = harness();
+    const s = t.addSession({ status: "running" });
+    const stray = strayClaude(t, s.vendorSessionId);
+    await waitArgv(t);
+    t.store.update(s.id, { pid: stray.pid! });
+    await t.driver.cleanupStale();
+    expect(await gone(stray)).toBe(true);
+    expect(signals(t)).toEqual(["SIGINT"]);
+    expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
+  });
+
+  it("不理 SIGINT：等一会儿再 SIGKILL", async () => {
+    const t = harness({ driver: { interruptGraceMs: 300 }, script: { ignoreSigint: true } });
+    const s = t.addSession({ status: "running" });
+    const stray = strayClaude(t, s.vendorSessionId);
+    await waitArgv(t);
+    t.store.update(s.id, { pid: stray.pid! });
+    await t.driver.cleanupStale();
+    expect(await gone(stray)).toBe(true);
+    expect(stray.signalCode).toBe("SIGKILL");
+    expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
+  });
+
+  it("pid 已经被别的进程用了、或者进程不在了：不动它，只把那一行清掉", async () => {
+    const t = harness();
+    const other = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const a = t.addSession({ status: "running", pid: other.pid! });
+      const b = t.addSession({ status: "running", pid: 999_999 });
+      await t.driver.cleanupStale();
+      await realSleep(100);
+      expect(other.exitCode).toBeNull();
+      expect(other.signalCode).toBeNull();
+      expect(t.store.get(a.id)).toMatchObject({ pid: null, status: "idle" });
+      expect(t.store.get(b.id)).toMatchObject({ pid: null, status: "idle" });
+    } finally {
+      other.kill("SIGKILL");
+    }
   });
 });

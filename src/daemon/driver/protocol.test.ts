@@ -8,6 +8,8 @@ import {
   buildInterruptLine,
   buildUserLine,
   checkUserLine,
+  detectArgsConflict,
+  isInterruptMarker,
   lineUuid,
   mergeUserTexts,
   parseAssistant,
@@ -30,6 +32,18 @@ describe("写进标准输入的一行", () => {
     expect(checkUserLine(buildUserLine(""))).toMatch(/空/);
     expect(checkUserLine(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "image" }] } }))).toMatch(/text/);
     expect(checkUserLine(`${buildUserLine("a")}\n${buildUserLine("b")}`)).toMatch(/换行/);
+  });
+
+  it("U+2028、U+2029 转义成 \\u2028、\\u2029：按这两个字符切行的读法也只看到一行", () => {
+    const line = buildUserLine("上\u2028下\u2029完");
+    expect(line).not.toMatch(/[\u2028\u2029]/);
+    expect(line).toContain("\\u2028");
+    expect(line).toContain("\\u2029");
+    expect(JSON.parse(line).message.content[0].text).toBe("上\u2028下\u2029完");
+    expect(checkUserLine(line)).toBeNull();
+    // 没转义的直接不合格
+    const raw = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "a\u2028b" }] } });
+    expect(checkUserLine(raw)).toMatch(/U\+2028/);
   });
 
   it("打断控制消息照抄 M0", () => {
@@ -96,8 +110,12 @@ describe("额度", () => {
       }),
     ).toEqual({ status: "allowed", resetsAt: 1, windows: { five_hour: { utilization: 0.5, resetsAt: 2, status: "allowed" } } });
   });
-  it("缺字段也不崩", () => {
-    expect(parseRateLimit(undefined)).toEqual({ status: "unknown", resetsAt: null, windows: {} });
+  it("残缺的（不是对象、没有 status）返回 null，由调用方跳过", () => {
+    expect(parseRateLimit(undefined)).toBeNull();
+    expect(parseRateLimit(null)).toBeNull();
+    expect(parseRateLimit("x")).toBeNull();
+    expect(parseRateLimit({ resetsAt: 1 })).toBeNull();
+    expect(parseRateLimit({ status: "allowed" })).toEqual({ status: "allowed", resetsAt: null, windows: {} });
   });
 });
 
@@ -162,5 +180,24 @@ describe("子进程环境", () => {
       { CLAUDE_CONFIG_DIR: "/c" },
     );
     expect(env).toEqual({ PATH: "/bin", HOME: "/h", CLAUDE_CONFIG_DIR: "/c" });
+  });
+});
+
+describe("打断标记", () => {
+  const user = (text: string, extra: Record<string, unknown> = {}) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] }, ...extra });
+  it("两种打断标记都认；回显（isReplay）里的同样文字不算", () => {
+    expect(isInterruptMarker(user("[Request interrupted by user]"))).toBe(true);
+    expect(isInterruptMarker(user("[Request interrupted by user for tool use]"))).toBe(true);
+    expect(isInterruptMarker(user("[Request interrupted by user]", { isReplay: true }))).toBe(false);
+    expect(isInterruptMarker(user("hi"))).toBe(false);
+  });
+});
+
+describe("参数选错的报错", () => {
+  it("只认 “Session ID … is already in use” 和 “No conversation found”", () => {
+    expect(detectArgsConflict("Error: Session ID 1234-abcd is already in use.\n")).toBe("session_in_use");
+    expect(detectArgsConflict("No conversation found with session ID: x")).toBe("no_conversation");
+    expect(detectArgsConflict("Error: port 8080 is already in use")).toBeNull();
+    expect(detectArgsConflict("address already in use")).toBeNull();
   });
 });
