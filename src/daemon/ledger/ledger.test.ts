@@ -391,7 +391,7 @@ describe("requestStop", () => {
 });
 
 describe("recoverAfterRestart", () => {
-  it("留一条处理中、没有活动动作的消息：登记带 resend 的发消息和带 recovery 的启动，监听者收到两次", () => {
+  it("留一条处理中、没有活动动作的消息：登记带 resend 和 recovery 的发消息，不另登记启动，监听者收到一次", () => {
     const id = post();
     const sendRow = listActions(db)[0]!;
     setActionStatus(db, sendRow.id, { status: "done" }, now);
@@ -401,11 +401,15 @@ describe("recoverAfterRestart", () => {
 
     const result = ledger.recoverAfterRestart();
     expect(result).toEqual({ resentMessageIds: [id], requeuedMessageIds: [], recoveredSessionIds: [sessionId] });
-    expect(enqueued).toHaveLength(2);
-    expect(getAction(db, sendRow.id)).toMatchObject({ status: "pending", attempts: 0, params: { sessionId, messageId: id, source: "user", resend: true }, nextAttemptAt: 9_000 });
-    const start = listActions(db).find((a) => a.type === "session.start");
-    expect(start).toMatchObject({ status: "pending", params: { sessionId, generation: 1, recovery: true } });
-    expect(enqueued.map((a) => a.type).sort()).toEqual(["session.send", "session.start"]);
+    expect(enqueued).toHaveLength(1);
+    expect(getAction(db, sendRow.id)).toMatchObject({
+      status: "pending",
+      attempts: 0,
+      params: { sessionId, messageId: id, source: "user", resend: true, recovery: true },
+      nextAttemptAt: 9_000,
+    });
+    // 恢复说明跟着这一条走（驱动层写在同一行），不单独登记 session.start
+    expect(listActions(db).filter((a) => a.type === "session.start")).toEqual([]);
   });
 
   it("各种状态混在一起：只管没有活动动作的排队中 / 已送达 / 处理中", () => {
@@ -429,9 +433,10 @@ describe("recoverAfterRestart", () => {
     });
     const send = (m: MessageId) => listActions(db).find((a) => a.type === "session.send" && a.params.messageId === m);
     expect(send(queuedNoAction)?.params).toEqual({ sessionId, messageId: queuedNoAction, source: "user" });
-    expect(send(deliveredFailedAction)).toMatchObject({ status: "pending", attempts: 0, params: { resend: true } });
+    expect(send(deliveredFailedAction)).toMatchObject({ status: "pending", attempts: 0, params: { resend: true, recovery: true } });
     expect(send(queuedPending)?.status).toBe("pending");
-    expect(enqueued).toHaveLength(3);
+    expect(send(queuedPending)?.params).not.toHaveProperty("recovery");
+    expect(enqueued).toHaveLength(2);
 
     // 再调一次：排队中的已有活动动作跳过；已送达的照样登记（动作都在待执行，只更新参数，不通知）
     enqueued = [];
@@ -439,7 +444,7 @@ describe("recoverAfterRestart", () => {
     expect(enqueued).toEqual([]);
   });
 
-  it("处理中的消息已有待执行 / 执行中的发消息动作：参数改成 resend，并登记带 recovery 的启动", () => {
+  it("处理中的消息已有待执行 / 执行中的发消息动作：参数改成 resend；只有这个会话第一条带 recovery", () => {
     const a = post("a");
     const b = post("b");
     const rows = new Map(listActions(db).map((x) => [x.type === "session.send" ? x.params.messageId : -1, x.id]));
@@ -450,27 +455,18 @@ describe("recoverAfterRestart", () => {
 
     const result = ledger.recoverAfterRestart();
     expect(result).toEqual({ resentMessageIds: [a, b], requeuedMessageIds: [], recoveredSessionIds: [sessionId] });
-    expect(getAction(db, rows.get(a)!)).toMatchObject({ status: "pending", params: { messageId: a, resend: true } });
+    expect(getAction(db, rows.get(a)!)).toMatchObject({ status: "pending", params: { messageId: a, resend: true, recovery: true } });
     expect(getAction(db, rows.get(b)!)).toMatchObject({ status: "running", params: { messageId: b, resend: true } });
-    expect(listActions(db).find((x) => x.type === "session.start")).toMatchObject({ status: "pending", params: { sessionId, recovery: true } });
-    expect(enqueued.map((x) => x.type)).toEqual(["session.start"]);
+    expect(getAction(db, rows.get(b)!)!.params).not.toHaveProperty("recovery");
+    expect(listActions(db).filter((x) => x.type === "session.start")).toEqual([]);
+    expect(enqueued).toEqual([]);
   });
 
-  it("只有排队中的消息：不登记启动动作", () => {
+  it("只有排队中的消息：不带 recovery（没有被打断的一轮）", () => {
     const id = post();
     db.exec("DELETE FROM actions");
     expect(ledger.recoverAfterRestart()).toEqual({ resentMessageIds: [], requeuedMessageIds: [id], recoveredSessionIds: [] });
-  });
-
-  it("启动动作用当前这一代；已有的同代启动动作被重置", () => {
-    db.run("UPDATE agent_sessions SET generation = 3 WHERE id = ?", sessionId);
-    const old = enqueueAction(db, { type: "session.start", params: { sessionId, generation: 3 } }, now).row;
-    setActionStatus(db, old.id, { status: "done" }, now);
-    const id = post();
-    setStatus(id, "processing");
-    db.run("DELETE FROM actions WHERE type = 'session.send'");
-    ledger.recoverAfterRestart();
-    expect(getAction(db, old.id)).toMatchObject({ status: "pending", params: { sessionId, generation: 3, recovery: true } });
+    expect(listActions(db).map((a) => a.params)).toEqual([{ sessionId, messageId: id, source: "user" }]);
   });
 });
 

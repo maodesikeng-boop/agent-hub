@@ -260,7 +260,8 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(workerRows()[0]!.status).toBe("ended");
     // worktree 和分支还在（由项目经理合并后自己删）
     expect(existsSync(worktree)).toBe(true);
-    expect(query<{ type: string; status: string }>("SELECT type, status FROM actions WHERE status != 'done'")).toEqual([]);
+    // 收工之后动作都做完（机器忙时有的还在 1 秒的复查等待里，等一下再看）
+    await waitUntil("all actions done", () => (query("SELECT 1 FROM actions WHERE status != 'done'").length === 0 ? true : undefined));
     await terminate(daemon);
   });
 
@@ -413,9 +414,9 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(procs).toHaveLength(2);
     expect(argValue(procs[1]!.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     expect(procs[1]!.cwd).toBe(worker.worktree_path);
-    const resent = env.stdinTextsOf(procs[1]!.pid).join("\n");
-    expect(resent).toContain(RESTART_RECOVERY_NOTE);
-    expect(resent).toContain(`${RESEND_NOTE}\n\n慢慢做`);
+    // 恢复说明、重发说明和任务原文写在同一行：这一轮对应任务说明，汇报才回得来（不单独占一轮）
+    expect(env.stdinTextsOf(procs[0]!.pid)).toEqual(["慢慢做"]);
+    expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n慢慢做`]);
     expect(existsSync(join(worker.worktree_path!, "half.txt"))).toBe(true);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", task.id)).toEqual([{ status: "replied" }]);
     await terminate(daemon);
@@ -451,9 +452,10 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const procs = procsOf(pmSessionId);
     const last = procs.at(-1)!;
     expect(argValue(last.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
-    const resent = env.stdinTextsOf(last.pid).join("\n");
-    expect(resent).toContain(RESTART_RECOVERY_NOTE);
-    expect(resent).toContain(`${RESEND_NOTE}\n\n【Worker #1 · 快活 的汇报】`);
+    // 汇报原文前面是恢复说明和重发说明，同一行
+    const reportText = query<{ text: string }>("SELECT text FROM messages WHERE id = ?", reportId)[0]!.text;
+    expect(reportText.startsWith("【Worker #1 · 快活 的汇报】")).toBe(true);
+    expect(env.stdinTextsOf(last.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${reportText}`]);
     const s = await client.state();
     expect(messagesOf(s, pm.conversationId).filter((m) => m.sender === "agent" && m.kind === "text").map((m) => m.text)).toContain("汇报收到，验收通过");
     // 只有一行汇报，没有多出 turn_failed

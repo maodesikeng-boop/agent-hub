@@ -309,7 +309,7 @@ W1 建 worktree（不依赖别的） ──────────────�
   - 带附加文件夹：项目挂一个附加文件夹（里面放 `AGENTS.md` 和 `CLAUDE.md`），派一个在主文件夹里干活的 Worker（带 `--add-dir`），让它改附加文件夹里这两个文件。期望：都在 `permission_denials` 里，文件没变；同一个附加文件夹里的普通文件能写。
 - **S13 整条路**：项目经理一句话派一个 haiku Worker，改一行、提交；Worker 的汇报回到项目经理会话；用户说“合并吧”，主文件夹里有这次改动，worktree 删了。
 
-实现在 `test/smoke/m3.ts`。2026-11-03 用 `claude` 2.1.314 + haiku 各跑一次，S11、S12、S13 都通过；顺带看了额度：`rate_limit_event` 里各窗口的 `utilization` 是 0～1 的小数（这次是 0.4、0.19），W4 按这个显示是对的。为了稳，S12 让项目经理原样跑一条现成的命令（任务说明放在文件里，`--stdin < 文件`），不靠它转述。
+实现在 `test/smoke/m3.ts`，后来又加了 S14（Worker 干到一半关机，再启动后接着做完、汇报回来；重启后只写一行）。2026-11-03 用 `claude` 2.1.314 + haiku 各跑一次，S11、S12、S13 都通过；顺带看了额度：`rate_limit_event` 里各窗口的 `utilization` 是 0～1 的小数（这次是 0.4、0.19），W4 按这个显示是对的。为了稳，S12 让项目经理原样跑一条现成的命令（任务说明放在文件里，`--stdin < 文件`），不靠它转述。
 
 ## 4. 要用户拍板的问题
 
@@ -369,10 +369,12 @@ M3 所有 PR 合并后，用户在本机：
 1. `worktree.create` 的处理函数在 `handlers.ts`：先 `getWorktreeTask`（null 或已收工 → 做完），再 `addWorktree`，再 `onWorktreeCreated`；git 出错抛给执行器重试，次数用完执行器调 `onActionFailed`。
 2. `worktrees/` 启动时先 `mkdir -p` 再 realpath，账本和启动准备用同一个真实路径（`state/` 也是）。这样 Worker 的 cwd、项目经理的 `--add-dir` 和主文件夹、附加文件夹一样都是真实路径（macOS 上 `/var` 是 `/private/var`）。
 3. **修了一个 bug：关机打断的一轮。** 关机时驱动层给忙着的 `claude` 发 SIGINT，`claude` 回一条被打断的 `result`。原来账本把它当成“用户点了停止”：Worker 的消息标“已停止”，项目经理收到“这一轮没做完：被停止了”，重启后也不会接着做，和接口约定、验收第 11 条对不上。现在：
-   - 驱动层：关机时结束的那一轮，`turn.ended` 带 `shutdown: true`（`shared/driver.ts` 的 `TurnEndedEvent`）；
+   - 驱动层：关机时被 SIGINT 结束的那一轮（`!ok` 或 `interrupted`），`turn.ended` 带 `shutdown: true`（`shared/driver.ts` 的 `TurnEndedEvent`）；关机中 `claude` 没理 SIGINT、正常做完的一轮不带，照常算回复、汇报（PR #35 审查第 2 条）；
    - 账本：Worker 的会话遇到它（或者 `session.exited` 的 `shutdown`），消息不改状态，还是已送达、处理中，重启恢复把它重发给同一个会话；也不发那一行（`ledger/messages.ts` 的 `resumesAfterShutdown`、`ledger/workers.ts` 的 `turnOutcome`）；
    - 项目经理的会话按消息分：系统交给它的（sender `system`：Worker 的汇报、`turn_failed` 那几行）同样不改状态，重启后重发给它，不用等用户提醒；用户自己发的照 M2 标“已停止”，用户自己再发。
-4. **名字收拢**：命令名、产品名只在 `src/shared/names.ts` 定（`HUB_COMMAND`、`PRODUCT_NAME`，加上由它们拼出来的 `LOG_PREFIX`、`DATA_DIR_NAME`、`WORKER_BRANCH_PREFIX`）。用到的地方：提示词、放行规则、`hub` 外壳的文件名、`hub/cli.ts` 的用法和报错、账本回给 agent 的话、Worker 的分支名、数据目录的默认名、日志开头、网页标题（`vite.config.ts` 把 `index.html` 里的 `%PRODUCT_NAME%` 换掉）和左上角。测试里的断言和假 `claude` 的剧本也用这些常量：把 `names.ts` 里的两个值改掉再跑 `pnpm check`，全部通过（W5 实测过）。
+4. **恢复说明不再单独占一轮**（PR #35 审查第 1 条）。原来重启恢复先登记一个 `session.start recovery`，驱动层把 `RESTART_RECOVERY_NOTE` 单独写成一行；真 `claude` 在那一轮就把活干完、写了汇报，可那一轮不对应任何消息，汇报丢了，项目经理收到的是下一轮“这条我已经做过了”。现在不登记 `session.start`，每个被打断的会话第一条重发的消息带 `SessionSendParams.recovery`，驱动层把恢复说明、重发说明和原文写在同一行。M1、M2 的项目经理恢复走的是同一段代码，一起改了；`DriverStartOptions` 删了。冒烟 S14 用真 `claude` 验过。
+5. **建 worktree 时 git 被强杀留下的半成品**（PR #35 审查第 3 条）：`git worktree list` 里还锁着 `initializing` 的，`addWorktree` 不当成已经建好，先 `git worktree remove -f -f`、`git branch -D` 清掉再重建；`worktree add` 用 `LC_ALL=C` 跑，锁的理由不会被翻译。
+6. **名字收拢**：命令名、产品名只在 `src/shared/names.ts` 定（`HUB_COMMAND`、`PRODUCT_NAME`，加上由它们拼出来的 `LOG_PREFIX`、`DATA_DIR_NAME`、`WORKER_BRANCH_PREFIX`）。用到的地方：提示词、放行规则、`hub` 外壳的文件名、`hub/cli.ts` 的用法和报错、账本回给 agent 的话、Worker 的分支名、数据目录的默认名、日志开头、网页标题（`vite.config.ts` 把 `index.html` 里的 `%PRODUCT_NAME%` 换掉）和左上角。测试里的断言和假 `claude` 的剧本也用这些常量：把 `names.ts` 里的两个值改掉再跑 `pnpm check`，全部通过（W5 实测过）。
    - 没跟着变的：环境变量名（`AGENT_HUB_HOME` 这些，在 `limits.ts`），用户可能已经在 shell 里设了；`hub.sock`、`hub.sqlite` 这些内部文件名。
    - 还没做的：改了 `PRODUCT_NAME` 以后默认数据目录跟着变，已经有 `~/.agent-hub` 的用户要自己搬，或者用 `AGENT_HUB_HOME` 指过去。
 

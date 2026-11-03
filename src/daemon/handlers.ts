@@ -1,5 +1,5 @@
 // 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
-// - session.start → driver.start(sessionId, { recovery })；
+// - session.start → driver.start(sessionId)；
 // - session.send → 读出消息，调 driver.send：written / rejected → done；queued（会话正忙）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
@@ -35,9 +35,9 @@ const isSessionEnded = (error: unknown): error is DriverError => error instanceo
 
 export function createSessionStartHandler(deps: Pick<HandlerDeps, "driver">): ActionHandler<"session.start"> {
   return async (action) => {
-    const { sessionId, recovery } = action.params;
+    const { sessionId } = action.params;
     try {
-      await deps.driver.start(sessionId, recovery ? { recovery: true } : {});
+      await deps.driver.start(sessionId);
     } catch (error) {
       // 会话已经结束：没什么可起的
       if (isSessionEnded(error)) return { kind: "done" };
@@ -57,7 +57,7 @@ export function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, ses
 
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
-    const { sessionId, messageId, source, resend } = action.params;
+    const { sessionId, messageId, source, resend, recovery } = action.params;
     const message = deps.ledger.getMessage(messageId);
     // 消息没了，或者已经有结果（已回复、已停止）：没什么可发的
     if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
@@ -70,6 +70,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
         source,
         text: message.text,
         ...(resend ? { resend: true } : {}),
+        ...(recovery ? { recovery: true } : {}),
       });
     } catch (error) {
       if (!isSessionEnded(error)) throw error;

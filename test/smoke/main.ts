@@ -1,5 +1,5 @@
 // pnpm smoke：用真 claude 跑冒烟场景（m1-plan 第 4 节的 S1～S4、m2-plan 第 4 节的 S5、S6、S8、S9（S7 交接 11-03 拿掉了），外加强制结束 S10、
-// m3-plan 第 3 节的 S11～S13（Worker））。
+// m3-plan 第 3 节的 S11～S13、PR #35 审查后加的 S14（Worker））。
 // 不进 pnpm check 和 CI；验收时和每次升级 claude 后手动跑。真 claude 用的是订阅额度，每个场景跑通一次就够，失败了先看日志。
 // 只跑一部分：pnpm smoke S5 S6，或 pnpm smoke S10（匹配 S10a、S10b）。S1～S4 是一串（S2 靠 S1 记下的暗号），选其中一个就整串都跑。
 // 场景失败时数据目录留着（路径会打印），日志在 <目录>/home/state/logs/sessions/。

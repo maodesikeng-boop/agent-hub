@@ -1,7 +1,7 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path，只给守护进程和测试用，不要从网页里引。
 import { join } from "node:path";
 import { ENV_CLAUDE, ENV_HOME } from "./limits.ts";
-import { DATA_DIR_NAME, HUB_COMMAND } from "./names.ts";
+import { DATA_DIR_NAME } from "./names.ts";
 
 export interface HubPaths {
   home: string;

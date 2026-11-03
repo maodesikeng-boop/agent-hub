@@ -112,8 +112,8 @@ describe("动作", () => {
 
   it("恢复和重发的标记不进去重键：同一个动作重新登记会重置那一行", () => {
     expect(
-      actionDedupeKey({ type: "session.start", params: { sessionId: 7, generation: 2, recovery: true } }),
-    ).toBe("7:2");
+      actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true, recovery: true } }),
+    ).toBe("42");
     expect(
       actionDedupeKey({ type: "session.send", params: { sessionId: 7, messageId: 42, source: "user", resend: true } }),
     ).toBe("42");

@@ -33,10 +33,10 @@ describe("登记动作", () => {
 
   it("重复登记已结束的动作：同一行改回待执行，次数清零，参数是新的", () => {
     for (const ended of ["failed", "done", "abandoned"] as const) {
-      const first = enqueueAction(db, { type: "session.start", params: { sessionId: 3, generation: 1 } }, 1_000).row;
+      const first = enqueueAction(db, { type: "session.send", params: { sessionId: 3, messageId: 1, source: "user" } }, 1_000).row;
       setActionStatus(db, first.id, { status: ended, attempts: 3, lastError: "boom", nextAttemptAt: 9_000 }, 2_000);
 
-      const again = enqueueAction(db, { type: "session.start", params: { sessionId: 3, generation: 1, recovery: true } }, 5_000);
+      const again = enqueueAction(db, { type: "session.send", params: { sessionId: 3, messageId: 1, source: "user", resend: true } }, 5_000);
       expect(again.enqueued).toBe(true);
       expect(again.row).toMatchObject({
         id: first.id,
@@ -44,7 +44,7 @@ describe("登记动作", () => {
         attempts: 0,
         lastError: null,
         nextAttemptAt: 5_000,
-        params: { sessionId: 3, generation: 1, recovery: true },
+        params: { sessionId: 3, messageId: 1, source: "user", resend: true },
         createdAt: 1_000,
         updatedAt: 5_000,
       });

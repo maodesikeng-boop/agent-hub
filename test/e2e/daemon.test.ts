@@ -209,10 +209,8 @@ describe("W5 组装 + 端到端", () => {
     const client = first.client.withPort(daemon.port);
     await waitUntil("stale claude killed", () => (isAlive(orphan!) ? undefined : true));
     await waitForStatus(client, id, "replied");
-    const texts = env.stdinTexts();
-    expect(texts[0]).toBe("做一件长的事");
-    expect(texts.slice(1).join("\n")).toContain(RESTART_RECOVERY_NOTE);
-    expect(texts.slice(1).some((t) => t.includes(`${RESEND_NOTE}\n\n做一件长的事`))).toBe(true);
+    // 按行：重启后只写了一行，恢复说明、重发说明和原文在同一行
+    expect(env.stdinTexts()).toEqual(["做一件长的事", `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n做一件长的事`]);
     const users = messagesOf(await client.state(), first.conversationId).filter((m) => m.sender === "user");
     expect(users.map((m) => m.id)).toEqual([id]);
     // 留下的进程被结束，之后起的进程用 --resume
@@ -232,7 +230,8 @@ describe("W5 组装 + 端到端", () => {
     expect(failed.failureReason).toMatch(/^crash/);
     const next = await client.post(conversationId, "第二条");
     await waitForStatus(client, next, "replied");
-    expect(env.stdinTexts().at(-1)).toBe(`${CRASH_RECOVERY_NOTE}\n\n第二条`);
+    // 按行：崩溃说明和下一条写在同一行；崩溃那一轮的消息标了失败，不再重发
+    expect(env.stdinTexts()).toEqual(["第一条", `${CRASH_RECOVERY_NOTE}\n\n第二条`]);
     expect(isAlive(daemon.child.pid!)).toBe(true);
     await terminate(daemon);
   });

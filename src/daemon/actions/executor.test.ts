@@ -262,7 +262,7 @@ describe("执行器", () => {
   it("到点时间不同也是启动排在发消息前面：先按类型，再按到点时间、编号", async () => {
     enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 10, source: "user" } }, T0 - 3_000);
     enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 11, source: "user" } }, T0 - 2_000);
-    enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1, recovery: true } }, T0 - 1_000);
+    enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1 } }, T0 - 1_000);
     const log: string[] = [];
     const executor = createActionExecutor(db, deps);
     executor.register("session.start", (a) => {

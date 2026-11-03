@@ -4,11 +4,13 @@
 // S12 Worker 写不了记忆：约定文件（工作目录里、附加文件夹里）、~/.claude/ 下的探针、自动记忆都写不了，普通文件照样能写；
 //     只读的 Worker（dontAsk 档）能读、写不了。
 // S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户说“合并吧”，项目经理在本地合并、删 worktree、收工。
+// S14 Worker 干到一半关机再启动（验收第 11 条，PR #35 审查第 1、2 条）：不发“这一轮没做完”；重启后恢复说明、重发说明和
+//     任务原文写在同一行，Worker 接着做完，汇报回到项目经理。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { HUB_COMMAND, PRODUCT_NAME, workerEventOf, type WorkerMessageMeta } from "../../src/shared/index.ts";
+import { HUB_COMMAND, PRODUCT_NAME, RESEND_NOTE, RESTART_RECOVERY_NOTE, workerEventOf, type WorkerMessageMeta } from "../../src/shared/index.ts";
 import { messagesOf, waitUntil } from "../e2e/harness.ts";
 import { MODEL, Smoke, TURN_MS, expect, scenario, type Outcome } from "./kit.ts";
 
@@ -228,6 +230,40 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       expect(lines.some((l) => l.event === "ended"), `没有“已收工”那一行：${JSON.stringify(lines.map((l) => l.event))}`);
       const denials = smoke.permissionDenials(sessionIdOf(smoke, chat));
       return `合并提交“${merges.split("\n")[0]}”，worktree 已删、分支留着，Worker 已收工；项目经理被拒 ${denials.length} 次`;
+    });
+  }
+
+  if (only("S14")) {
+    await inFreshSmoke(outcomes, "S14 Worker 干到一半关机，再启动后接着做完、汇报回来", async (smoke) => {
+      const dir = repo(smoke, "s14", { "README.md": "# s14\n" });
+      const tasks = smoke.folder("tasks", {
+        "slow.txt": "先用 Bash 前台运行 `sleep 15`（等它跑完），然后在 README.md 末尾加一行 hello，git add 并 git commit -m hello，最后按汇报格式汇报。",
+      });
+      const chat = await pmWithFolder(smoke, "小林", dir);
+      await smoke.ask(chat, `用 Bash 原样运行这一条命令，运行完只回复“派了”：\n\n${hub} worker start --title 慢活 --stdin < ${tasks}/slow.txt`);
+      const [worker] = workers(smoke);
+      expect(worker?.workspace === "worktree", `没派出在 worktree 里干活的 Worker：${JSON.stringify(workers(smoke))}`);
+      const sessionId = await waitUntil("Worker 会话起来了", () => smoke.query<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ?", worker!.worker_conversation_id)[0]?.id, TURN_MS);
+      // 等它在跑 sleep 时关机
+      await waitUntil("Worker 开始 sleep", () => (smoke.bashCommands(sessionId).some((c) => c.includes("sleep")) ? true : undefined), TURN_MS);
+      const exit = await smoke.terminate();
+      expect(exit.code === 0, `关机退出码 ${exit.code}`);
+      const task = smoke.query<{ id: number; text: string; status: string }>("SELECT id, text, status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker!.worker_conversation_id)[0]!;
+      expect(task.status === "processing" || task.status === "delivered", `关机后任务说明是 ${task.status}，应该还是处理中`);
+      const before = smoke.writtenTexts(sessionId).length;
+
+      await smoke.start();
+      const results = await waitResults(smoke, chat, 1);
+      expect(!results.some((r) => r.event === "turn_failed"), `项目经理收到了“这一轮没做完”：${JSON.stringify(results)}`);
+      const report = results.find((r) => r.event === "report");
+      expect(report, `Worker 没有汇报：${JSON.stringify(results)}`);
+      // 重启后只写了一行：恢复说明、重发说明、任务原文
+      const after = smoke.writtenTexts(sessionId).slice(before);
+      const expected = `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${task.text}`;
+      expect(after.length === 1 && after[0] === expected, `重启后写进去的不是一行：${JSON.stringify(after)}`);
+      expect(git(dir, "log", "--format=%s", worker!.branch!).split("\n")[0] === "hello", `分支上没有 hello 提交：${git(dir, "log", "--oneline", worker!.branch!)}`);
+      await waitSettled(smoke, chat);
+      return `关机时没发“这一轮没做完”，重启后一行写进去（恢复说明 + 重发说明 + 任务），汇报“${report!.status}：${report!.summary}”回到项目经理`;
     });
   }
 }

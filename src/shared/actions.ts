@@ -9,12 +9,10 @@ export type ActionType = (typeof ACTION_TYPES)[number];
 export const ACTION_STATUSES = ["pending", "running", "done", "failed", "abandoned"] as const;
 export type ActionStatus = (typeof ACTION_STATUSES)[number];
 
-/** 启动或恢复会话。处理函数调 driver.start(sessionId, { recovery })。 */
+/** 启动会话。处理函数调 driver.start(sessionId)。重启恢复不再登记它：恢复说明跟着第一条重发的消息走（SessionSendParams.recovery）。 */
 export interface SessionStartParams {
   sessionId: SessionId;
   generation: number;
-  /** 守护进程重启后恢复被打断的会话（设计第 5.4 节第 4 步）：驱动层在下一条写进去的消息前加恢复说明。 */
-  recovery?: boolean;
 }
 
 /** 给会话发消息。文字执行时再从 messages 里读，不存两份。处理函数调 driver.send。 */
@@ -28,6 +26,11 @@ export interface SessionSendParams {
    * 驱动层在前面加“如果你已经处理过这条，忽略它”。
    */
   resend?: boolean;
+  /**
+   * 守护进程重启后，这个会话第一条重发的消息（设计第 5.4 节第 4 步）：驱动层在它那一行最前面加恢复说明。
+   * 不单独登记 session.start 去写恢复说明：单独一行会自己占一轮，那一轮的回复（比如 Worker 的汇报）对不上任何消息。
+   */
+  recovery?: boolean;
 }
 
 /**

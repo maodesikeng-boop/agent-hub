@@ -604,10 +604,7 @@ describe("出错、停止", () => {
     db.run("DELETE FROM actions");
     const recovered = ledger.recoverAfterRestart();
     expect(recovered.resentMessageIds).toEqual([id]);
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual([
-      ["session.start", { sessionId, generation: 1, recovery: true }],
-      ["session.send", { sessionId, messageId: id, source: "user", resend: true }],
-    ]);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: id, source: "user", resend: true, recovery: true }]]);
     // 重启后接着做完：照常一行汇报
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
     ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
@@ -634,8 +631,7 @@ describe("出错、停止", () => {
     enqueued = [];
     expect(ledger.recoverAfterRestart().resentMessageIds).toEqual([delivered]);
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([
-      ["session.start", { sessionId: lin.sessionId, generation: 1, recovery: true }],
-      ["session.send", { sessionId: lin.sessionId, messageId: delivered, source: "system", resend: true }],
+      ["session.send", { sessionId: lin.sessionId, messageId: delivered, source: "system", resend: true, recovery: true }],
     ]);
   });
 

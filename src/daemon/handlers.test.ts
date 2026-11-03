@@ -71,12 +71,10 @@ const sendAction = (extra: { resend?: boolean } = {}) =>
   action("session.send", { sessionId: 1, messageId: 7, source: "user", ...extra });
 
 describe("session.start 处理函数", () => {
-  it("调 driver.start，recovery 原样传过去", async () => {
+  it("调 driver.start", async () => {
     const { d, start } = deps();
-    expect(await createSessionStartHandler(d)(action("session.start", { sessionId: 3, generation: 1, recovery: true }))).toEqual({ kind: "done" });
-    expect(start).toHaveBeenCalledWith(3, { recovery: true });
-    await createSessionStartHandler(d)(action("session.start", { sessionId: 3, generation: 1 }));
-    expect(start).toHaveBeenLastCalledWith(3, {});
+    expect(await createSessionStartHandler(d)(action("session.start", { sessionId: 3, generation: 1 }))).toEqual({ kind: "done" });
+    expect(start).toHaveBeenCalledWith(3);
   });
 
   it("会话已经结束（session_ended）→ done，不抛给执行器（不计入 driver 的 health）", async () => {
@@ -103,6 +101,12 @@ describe("session.send 处理函数", () => {
     const { d, send } = deps({ message: message({ status: "processing" }) });
     await createSessionSendHandler(d)(sendAction({ resend: true }));
     expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text: "你好", resend: true });
+  });
+
+  it("重启恢复的第一条：recovery 传过去（恢复说明由驱动层和这条写在同一行）", async () => {
+    const { d, send } = deps();
+    await createSessionSendHandler(d)(action("session.send", { sessionId: 1, messageId: 7, source: "user", resend: true, recovery: true }));
+    expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text: "你好", resend: true, recovery: true });
   });
 
   it("会话正忙、在驱动层排队 → later，过一会儿再问", async () => {
