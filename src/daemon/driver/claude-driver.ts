@@ -1,6 +1,6 @@
 // Claude 驱动层（设计第 7.2～7.4 节，按 M0 改过的做法）：每个会话一个官方 claude 进程，
 // 我们这边管待发队列（一轮一条、忙时用户连发拼成一条、写入前校验）、打断、空闲关闭、--session-id / --resume。
-// M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束按进程组。
+// M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束连同它所有后代所在的进程组（process.ts 的 forceKill）。
 // 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
@@ -47,7 +47,7 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
-import { claudeOfSession, killGroup, signalPid, streamClosed, waitForExit } from "./process.ts";
+import { claudeOfSession, forceKill, forceKillTree, signalPid, streamClosed, waitForExit } from "./process.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -323,7 +323,7 @@ export class ClaudeDriver implements Driver {
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
       if ((await within(all, this.#opts.shutdownGraceMs)) === "timeout") {
-        for (const p of procs) if (p.child.exitCode === null && p.child.signalCode === null) killGroup(p.child, "SIGKILL");
+        await Promise.all(procs.map((p) => forceKill(p.child)));
         await within(all, KILL_WAIT_MS);
       }
     }
@@ -350,7 +350,7 @@ export class ClaudeDriver implements Driver {
       signalPid(pid, "SIGINT");
       if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
         // 只有它自己是进程组长（我们 detached 起的）才按组杀；不是的话按组杀会连累同组的别的进程
-        signalPid(pgid === pid ? -pid : pid, "SIGKILL");
+        await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
       }
     }
@@ -552,7 +552,7 @@ export class ClaudeDriver implements Driver {
     }, this.#opts.idleCloseMs);
   }
 
-  /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再给整个进程组 SIGKILL。 */
+  /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
   #closeStdin(proc: Proc, reason: ClosingReason): void {
     proc.closing = reason;
     proc.child.stdin.end();
@@ -562,7 +562,7 @@ export class ClaudeDriver implements Driver {
       proc.child.kill("SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
-        killGroup(proc.child, "SIGKILL");
+        void forceKill(proc.child);
       }, grace);
     }, grace);
   }
@@ -648,7 +648,7 @@ export class ClaudeDriver implements Driver {
       st.startTimer = null;
       if (st.proc !== proc || proc.initSeen) return;
       proc.startTimedOut = true;
-      killGroup(proc.child, "SIGKILL");
+      void forceKill(proc.child);
     }, this.#opts.startTimeoutMs);
   }
 
@@ -688,7 +688,7 @@ export class ClaudeDriver implements Driver {
     }
     // 等 spawn 的这一会儿可能已经开始关机：shutdown 看不到这个进程，自己结束它
     if (this.#shuttingDown) {
-      killGroup(child, "SIGKILL");
+      await forceKill(child);
       this.#assertRunning();
     }
     let resolveReady!: (o: StartupOutcome) => void;
