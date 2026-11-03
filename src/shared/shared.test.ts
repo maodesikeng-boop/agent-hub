@@ -42,6 +42,11 @@ import {
   agentMessageDedupeKey,
   canTransitionMessage,
   isOneOf,
+  HEALTH_MODULES,
+  HUB_CALL_FIELD_MAX_BYTES,
+  RELAUNCH_NOTE,
+  personaOrTemplate,
+  systemMessageDedupeKey,
   retryDelayMs,
   userMessageDedupeKey,
 } from "./index.ts";
@@ -63,8 +68,12 @@ import type {
   SessionEndParams,
   SessionSendParams,
   SessionStartParams,
+  SessionState,
+  SessionTokens,
+  PersonaView,
 } from "./index.ts";
-import { handoffFilePath, personaFilePath, resolveHubPaths } from "./paths.ts";
+import { launchFingerprint } from "./launch.ts";
+import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, handoffFilePath, personaFilePath, resolveHubPaths } from "./paths.ts";
 
 describe("动作", () => {
   it("去重键：启动按（会话，第几代），发消息按消息编号", () => {
@@ -120,7 +129,7 @@ describe("消息", () => {
     expect(agentMessageDedupeKey(7, "u-1", "toolu_1")).toBe("session:7:u-1:toolu_1");
   });
 
-  it("状态只能按规定的方向走，只有 failed 能回到 delivered", () => {
+  it("状态只能按规定的方向走；failed 能回到 queued（用户点重试）或 delivered（重启后重发写进去了）", () => {
     const ok: [string, string][] = [
       ["queued", "delivered"],
       ["delivered", "processing"],
@@ -131,6 +140,7 @@ describe("消息", () => {
       ["delivered", "stopped"],
       ["delivered", "failed"],
       ["failed", "delivered"],
+      ["failed", "queued"],
     ];
     for (const [from, to] of ok) expect(canTransitionMessage(from as never, to as never), `${from}→${to}`).toBe(true);
     const bad: [string, string][] = [
@@ -140,7 +150,8 @@ describe("消息", () => {
       ["stopped", "delivered"],
       ["replied", "failed"],
       ["queued", "replied"],
-      ["failed", "queued"],
+      ["replied", "queued"],
+      ["stopped", "queued"],
       ["processing", "processing"],
     ];
     for (const [from, to] of bad) expect(canTransitionMessage(from as never, to as never), `${from}→${to}`).toBe(false);
@@ -263,6 +274,12 @@ describe("M2：名字", () => {
     expect(normalizeName("   ")).toBeNull();
     expect(normalizeName("a\nb")).toBeNull();
     expect(normalizeName("a\u0007b")).toBeNull();
+    // 行分隔符、段分隔符、C1 控制字符也不行（会把提示词、日志里的一行拆开）
+    expect(normalizeName("a\u2028b")).toBeNull();
+    expect(normalizeName("a\u2029b")).toBeNull();
+    expect(normalizeName("a\u0085b")).toBeNull();
+    expect(normalizeName("a\u009fb")).toBeNull();
+    expect(normalizeName("a\u00a0b")).toBe("a\u00a0b");
     expect(normalizeName("x".repeat(MAX_NAME_CHARS))).toBe("x".repeat(MAX_NAME_CHARS));
     expect(normalizeName("x".repeat(MAX_NAME_CHARS + 1))).toBeNull();
     // 按字符数算，不按 UTF-16 单元
@@ -440,5 +457,87 @@ describe("M2：数据目录", () => {
   it("性格设定和交接文件的位置", () => {
     expect(personaFilePath("/s/personas", 3)).toBe("/s/personas/pm-3.md");
     expect(handoffFilePath("/s/handoffs", 5, Date.UTC(2026, 10, 3, 9, 8, 7, 6))).toBe("/s/handoffs/5/2026-11-03T09-08-07-006Z.md");
+  });
+});
+
+// ---- M2 W0 审查后补的 ----
+
+describe("M2：会话状态带第几代", () => {
+  it("SessionState 有 generation；网页、账本要“当前会话”时取最大的那一代", () => {
+    expectTypeOf<SessionState["generation"]>().toEqualTypeOf<number>();
+  });
+});
+
+describe("M2：令牌和性格设定的接口形状", () => {
+  it("SessionTokens：issue、resolve、revoke", () => {
+    expectTypeOf<SessionTokens["issue"]>().toEqualTypeOf<(sessionId: SessionId) => string>();
+    expectTypeOf<SessionTokens["resolve"]>().toEqualTypeOf<(token: string) => SessionId | null>();
+    expectTypeOf<SessionTokens["revoke"]>().toEqualTypeOf<(sessionId: SessionId) => void>();
+  });
+
+  it("PersonaView 带能撤销的那一条的编号", () => {
+    expectTypeOf<PersonaView["revertableChangeId"]>().toEqualTypeOf<number | null>();
+  });
+
+  it("性格设定正文是 NULL（M1 升上来还没同步）时用模板兜底", () => {
+    expect(personaOrTemplate(null)).toBe(PM_PERSONA_TEMPLATE);
+    expect(personaOrTemplate("")).toBe("");
+    expect(personaOrTemplate("我的习惯")).toBe("我的习惯");
+  });
+});
+
+describe("M2：健康状态", () => {
+  it("agent 接口有自己的一行", () => {
+    expect(HEALTH_MODULES).toContain("agent-api");
+  });
+});
+
+describe("M2：系统消息的去重键", () => {
+  it("按（对话，事件，相关编号）；同一份交接在群和私聊各一条，键不同", () => {
+    expect(systemMessageDedupeKey(2, { event: "project.created", projectId: 1 })).toBe("system:2:project.created:1");
+    expect(systemMessageDedupeKey(2, { event: "folder.attached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.attached:5");
+    expect(systemMessageDedupeKey(2, { event: "folder.detached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.detached:5");
+    const reassigned = { event: "project.reassigned", projectId: 1, handoffId: 3, fromPmId: 1, toPmId: 2 } as const;
+    expect(systemMessageDedupeKey(2, reassigned)).toBe("system:2:project.reassigned:3");
+    expect(systemMessageDedupeKey(7, reassigned)).not.toBe(systemMessageDedupeKey(2, reassigned));
+    expect(systemMessageDedupeKey(1, { event: "persona.changed", pmId: 1, personaChangeId: 9, revertOf: null })).toBe(
+      "system:1:persona.changed:9",
+    );
+  });
+});
+
+describe("M2：两轮之间自动重启", () => {
+  it("重启后下一条消息前加的说明以【系统】开头", () => {
+    expect(RELAUNCH_NOTE.startsWith(SYSTEM_MESSAGE_PREFIX)).toBe(true);
+  });
+
+  it("指纹只看内容：同样的输入两次算出来一样，任何一样变了就不一样", () => {
+    const input = { prompt: "你是项目经理", settings: '{"a":1}', mcpConfig: "{}" };
+    expect(launchFingerprint(input)).toBe(launchFingerprint({ ...input }));
+    expect(launchFingerprint(input)).toMatch(/^[0-9a-f]{64}$/);
+    expect(launchFingerprint({ ...input, prompt: "你是项目经理。" })).not.toBe(launchFingerprint(input));
+    expect(launchFingerprint({ ...input, settings: null })).not.toBe(launchFingerprint(input));
+    expect(launchFingerprint({ ...input, mcpConfig: "{ }" })).not.toBe(launchFingerprint(input));
+    // 拼接边界不会撞：内容挪到另一段算不一样
+    expect(launchFingerprint({ prompt: "ab", settings: "c", mcpConfig: "" })).not.toBe(
+      launchFingerprint({ prompt: "a", settings: "bc", mcpConfig: "" }),
+    );
+  });
+});
+
+describe("M2：hub 调用记录", () => {
+  it("args、result 里的长字段超过 2 KB 截断", () => {
+    expect(HUB_CALL_FIELD_MAX_BYTES).toBe(2 * 1024);
+  });
+});
+
+describe("M2：socket 路径长度", () => {
+  it("macOS 上 Unix socket 路径最多 103 字节，超了报清楚的错", () => {
+    expect(MAX_UNIX_SOCKET_PATH_BYTES).toBe(103);
+    expect(() => assertSocketPathFits("/tmp/x/run/hub.sock")).not.toThrow();
+    expect(() => assertSocketPathFits("/" + "a".repeat(102))).not.toThrow();
+    expect(() => assertSocketPathFits("/" + "a".repeat(103))).toThrow(/104 字节.*103.*AGENT_HUB_HOME/);
+    // 按 UTF-8 字节算
+    expect(() => assertSocketPathFits("/" + "交".repeat(35))).toThrow(/106 字节/);
   });
 });

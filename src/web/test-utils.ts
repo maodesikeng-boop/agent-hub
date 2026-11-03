@@ -77,6 +77,7 @@ export function makeSession(over: Partial<SessionState> = {}): SessionState {
   return {
     sessionId: 1,
     conversationId: 1,
+    generation: 1,
     status: "idle",
     activity: "idle",
     currentTool: null,

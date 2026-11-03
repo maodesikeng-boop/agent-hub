@@ -139,14 +139,16 @@ export interface CreateProjectResult {
 
 /**
  * 把用户或 agent 给的路径变成真实路径：展开开头的 ~、realpath、必须是已有目录、不能在数据目录（~/.agent-hub）里面。
- * 不对就抛 LedgerRequestError("invalid", 原因)。W1 给默认实现（用 node:fs），作为账本的构造参数注入，测试换假的。
+ * 不对就抛 LedgerRequestError("invalid", 原因)。W1 给默认实现，作为账本的构造参数注入，测试换假的。
+ * 默认实现用 fs.realpathSync.native（走系统的 realpath(3)：macOS 上大小写不敏感的盘会给出磁盘上真实的大小写，
+ * /tmp、/var 解析成 /private/...），数据目录也按同样的方法 realpath 之后再比。
  */
 export type ResolveFolder = (path: string) => string;
 
 /** 资料页、hub persona show 看到的性格设定。 */
 export interface PersonaView {
   pmId: PmId;
-  /** 正文，以数据库 pms.persona 为准。 */
+  /** 正文，以数据库 pms.persona 为准；是 NULL 时用 personaOrTemplate 兜底成模板。 */
   text: string;
   mode: PmMode;
   /** 修改记录，新的在前，最多 PERSONA_CHANGES_LIMIT 条。 */
@@ -165,8 +167,10 @@ export interface EditPersonaInput {
 /**
  * 改性格设定、撤销的结果。change 为 null：正文和模式都和现在一样，什么也没写、没推。
  * 改了的话，同一个事务里：pms.persona、pms.mode、persona_changes 一行、一条 persona.changed 系统消息（发在哪见 domain.ts 的
- * SystemMessageMeta）；推 pm.updated、message.created。提交后写 personas/pm-<编号>.md（临时文件 + 改名）；
- * 写文件失败不影响结果（数据库已提交），下次启动 syncPersonaFiles 按数据库重写。
+ * SystemMessageMeta）；推 pm.updated、message.created。
+ * 提交后写 personas/pm-<编号>.md（临时文件 + 改名），写成功了再把 pms.persona_file_hash 设成这份内容的哈希。
+ * 写文件失败不影响结果（数据库已提交），persona_file_hash 不更新；下次启动 syncPersonaFiles 看到文件哈希仍等于
+ * persona_file_hash，知道文件没人动过、只是没写成，按数据库重写（不会误记成用户手改，见 syncPersonaFiles 第 3 条）。
  * 这个项目经理的所有会话在下一条消息前自动重启（驱动层比 fingerprint，账本不用管）。
  */
 export interface EditPersonaResult {
@@ -176,9 +180,9 @@ export interface EditPersonaResult {
 
 /** 启动时 syncPersonaFiles 的结果。 */
 export interface SyncPersonaFilesResult {
-  /** 文件和数据库不一样、按文件记了一条 actor: "file" 修改的项目经理。 */
+  /** 用户手改过文件、按文件记了一条 actor: "file" 修改的项目经理。 */
   recordedPmIds: PmId[];
-  /** 文件不存在或读不了、按数据库重写了文件的项目经理。 */
+  /** 按数据库重写了文件的项目经理（文件不存在、读不了，或上次写文件失败了）。 */
   rewrittenPmIds: PmId[];
 }
 
@@ -186,9 +190,10 @@ export interface SyncPersonaFilesResult {
  * 给 W3 生成提示词用（驱动层的 prepareLaunch 里调）。只读。
  * - 私聊会话：project、handoff 是 null；managedProjects 是它现在管的进行中项目的名片。
  * - 群会话：project 是这个群的项目（文件夹按现在的，不按会话那一行）；handoff 是这个项目最近一份交接
- *   （没有就是 null）；managedProjects 同样给（提示词里可以不用）。
+ *   （没有就是 null）；managedProjects 同样给，但群的提示词里不能用（W3）：提示词变了 fingerprint 就变，
+ *   这个项目经理在别处建、交出一个项目，它所有的群会话都会跟着重启。
  * pm 是这个会话所属的项目经理（AgentSessionRow.pmId），不是项目现在的项目经理：换人后旧一代会话还在回最后一轮时，
- * 提示词仍是原项目经理的。
+ * 提示词仍是原项目经理的。pm.persona 已经兜过底：pms.persona 是 NULL 时给 PM_PERSONA_TEMPLATE（personaOrTemplate）。
  * 错误：会话不存在、不是项目经理的会话 → not_found。
  */
 export interface LaunchContext {
@@ -209,7 +214,8 @@ export interface Ledger {
    */
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   /**
-   * 用户点“停止”。账本记下，并通知 onStopRequested 的监听者；对话没有在跑的会话时什么也不做。
+   * 用户点“停止”。只停这个对话最新的一代（generation 最大的那个会话）：通知 onStopRequested 的监听者；
+   * 最新一代没在跑时什么也不做。换项目经理后旧一代还在回最后一轮的，不停（它回完就会被 session.end 关掉）。
    * 对话不存在抛 ConversationNotFoundError。
    */
   requestStop(conversationId: ConversationId): void;
@@ -237,9 +243,10 @@ export interface Ledger {
    */
   revertPersonaChange(changeId: PersonaChangeId): EditPersonaResult;
   /**
-   * 重试一条失败的用户消息（m2-plan 第 6 节第 5 条，POST /api/messages/:id/retry）：重新登记它的 session.send
-   * （同一个去重键，已结束的那一行重置成 pending；sessionId 换成这个对话现在最新一代的会话），消息状态不动，
-   * 驱动层写进去之后照“failed → delivered”走，不新增消息。
+   * 重试一条失败的用户消息（m2-plan 第 6 节第 5 条，POST /api/messages/:id/retry）。同一个事务里：
+   * 消息状态 failed → queued（MESSAGE_STATUS_TRANSITIONS 里的那一条）、failureReason 清空；重新登记它的 session.send
+   * （同一个去重键，已结束的那一行重置成 pending；sessionId 换成这个对话现在最新一代的会话）；推一条 message.updated。
+   * 之后照 queued → delivered → … 正常走，不新增消息。
    * 错误：没有这条消息 → not_found；不是用户发的、不是 failed → conflict。
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
@@ -248,38 +255,54 @@ export interface Ledger {
   /**
    * agent 敲的 hub 命令。sessionId 是 agent 接口按令牌认出来的会话（请求体里自称是谁不算数）；args 已经按形状和长度校验过。
    * 账本按会话认人：这个会话属于哪个项目经理（AgentSessionRow.pmId）、在哪个对话；只能动这个项目经理现在管的项目，否则 forbidden。
+   * - status：只读。这个会话的项目经理、会话编号、所在对话（私聊或哪个群）、它现在管的进行中项目的名片；text 是一两句
+   *   “你是谁、在哪、管着哪些项目”。旧一代会话（换人后还在回最后一轮）调也照实回答，pm 是会话所属的那个；
+   * - pm.list：只读。所有项目经理（名字、模式）和各自现在管的进行中项目名，按编号排；交接时找人用。不需要管着什么项目；
    * - project.create：同 createProject，pmId 是这个会话的项目经理；
-   * - project.attach / detach：同一个事务里改 project_folders、改这个群最新一代会话的 addDirs、发一条系统消息并登记给 agent 的
-   *   session.send、推 folders.updated、message.created。detach 主文件夹 → invalid；没挂着 → not_found；已经挂着 → conflict；
+   * - project.attach / detach：同一个事务里改 project_folders、改这个群最新一代会话的 addDirs、发一条系统消息、推 folders.updated、
+   *   message.created。系统消息要不要也登记给 agent 的 session.send，看调用的是不是这个群最新一代的会话自己（见 SystemMessageMeta）。
+   *   detach 主文件夹 → invalid；没挂着 → not_found；已经挂着 → conflict。
+   *   detach 找“哪一行”：先 realpath 传进来的路径；realpath 失败（目录已经被删了、改名了）就用 path.resolve 之后的字面路径；
+   *   拿结果和库里没移除的 project_folders.path 逐字比。所以磁盘上已经没了的文件夹也能移除。attach 不这样，目录必须在；
    * - project.assign：见 m2-plan 第 3 节“交接怎么走”。交给自己、正文空白或太长 → invalid；没有这个项目经理 → not_found；
    *   同一个事务里：交接文件（提交前写好）和 handoffs 一行；projects.pm_id；群的下一代会话（属于接手的人，cwd、addDirs 照旧，
    *   新的 vendorSessionId）；旧会话的 session.end；把这个群里还是 queued 的消息的 session.send 改指新一代；两条
-   *   project.reassigned 系统消息（见 SystemMessageMeta）；推 project.updated、session.created、message.created；
+   *   project.reassigned 系统消息（见 SystemMessageMeta）；推 project.updated、session.created、message.created。
+   *   会话归属：Handoff.fromSessionId 是群里被结束的那一代（交接前群里 generation 最大的会话），不一定是调用者
+   *   （调用者可能在私聊里）；hub_calls.session_id 一律是调用者的会话；
    * - persona.show / edit：同 getPersona / editPersona（actor 是这个会话）。
-   * 每次调用都记一行 hub_calls（成功的在同一个事务里，失败的回滚后另记）。成功返回 { text, data }，失败抛 LedgerRequestError。
+   * 每次调用都记一行 hub_calls（成功的在同一个事务里，失败的回滚后另记）。args 和 result 里的长字段按 HUB_CALL_FIELD_MAX_BYTES
+   * 截断（见 domain.ts 的 HubCall），完整正文以 handoffs、persona_changes 为准。成功返回 { text, data }，失败抛 LedgerRequestError。
    * 会话不存在或不是项目经理的会话 → forbidden。
    */
   hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>): HubResult<C>;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
 
-  // ---- 组装代码用（W5 接线）----
+  // ---- 组装代码用（M1 W5 接线，M2 起归 W6）----
   /**
-   * 守护进程启动时调一次（M2，在 recoverAfterRestart 之后）：对每个项目经理比较 personas/pm-<编号>.md 和数据库的正文：
-   * - 文件和数据库不一样（用户手改过）→ 按文件记一条 actor: "file" 的修改（同 editPersona，模式不变）；
-   * - 数据库里正文还是 null（M1 升上来的）→ 文件在就直接用文件内容填上，不记修改；文件也没有就用 PM_PERSONA_TEMPLATE；
-   * - 文件不存在或读不了 → 按数据库重写文件。
+   * 守护进程启动时调一次（M2，在 recoverAfterRestart 之后）。对每个项目经理读 personas/pm-<编号>.md（路径用 paths.ts 的
+   * personaFilePath），算文件内容的哈希（sha256 十六进制），和 pms.persona_file_hash（上次成功写入文件的内容哈希）比：
+   * 1. 数据库正文是 NULL（M1 升上来的）：文件在就用文件内容填上，没有就用 PM_PERSONA_TEMPLATE 并写文件；不记修改。
+   * 2. 文件不存在或读不了：按数据库重写文件。
+   * 3. 文件哈希等于 persona_file_hash：没人动过文件。文件内容和数据库正文一样就什么也不做；不一样说明上次写文件失败了
+   *    （数据库已经改了），按数据库重写文件。不记修改。
+   * 4. 文件哈希不等于 persona_file_hash：才算用户手改过。文件内容和数据库正文一样就不记修改；不一样就按文件记一条
+   *    actor: "file" 的修改（同 editPersona，模式不变）。例外：persona_file_hash 是 NULL（从来没写成功过，分不清是谁改的）
+   *    时按数据库重写文件，不记修改。
+   * 写文件一律临时文件 + 改名；写成功（或确认文件内容就是要的那份）之后才把 persona_file_hash 更新成那份内容的哈希，
+   * 写失败不更新，下次启动按第 3 条重写。
    */
   syncPersonaFiles(): SyncPersonaFilesResult;
-  /** W5 把它接到 driver.interrupt。 */
+  /** 组装代码（M2 W6）把它接到 driver.interrupt。 */
   onStopRequested(listener: (event: { conversationId: ConversationId; sessionId: SessionId }) => void): Unsubscribe;
   /**
    * 有新动作登记（包括重复登记把已结束的动作重置成 pending）时调用，在事务提交之后。
-   * W5 把它接到 executor.wake()。
+   * 组装代码（M2 W6）把它接到 executor.wake()。
    */
   onActionEnqueued(listener: (action: AnyActionRow) => void): Unsubscribe;
   /**
-   * 驱动层 → 账本：W5 把 driver.onEvent 接到这里。agent 输出按 agentMessageDedupeKey 去重；
+   * 驱动层 → 账本：组装代码（M2 W6）把 driver.onEvent 接到这里。agent 输出按 agentMessageDedupeKey 去重；
    * 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改，不合法的忽略。各事件怎么标见 driver.ts 的注释。
    */
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;

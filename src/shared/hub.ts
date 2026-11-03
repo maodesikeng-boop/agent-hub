@@ -46,15 +46,18 @@ export function buildHubSettings(hubSockRealPath: string) {
  * - `hub project create --name <名> --folder <路径> [--description <说明>]` → project.create
  * - `hub project attach <项目> <文件夹>`                  → project.attach
  * - `hub project detach <项目> <文件夹>`                  → project.detach
- * - `hub project assign <项目> --to <项目经理名字>`        → project.assign，交接正文从标准输入或 --text，必填
+ * - `hub project assign <项目> --to <项目经理名字> (--stdin | --text <正文>)` → project.assign，交接正文必填
  * - `hub persona show`                                   → persona.show
- * - `hub persona edit [--mode <模式>] [--reason <理由>]`  → persona.edit，新全文从标准输入或 --text；可以只改模式
+ * - `hub persona edit [--mode <模式>] [--reason <理由>] [--stdin | --text <正文>]` → persona.edit，新全文；可以只改模式
  *
  * hub 命令行的约定：
  * - <项目> 是项目名（进行中的项目名字唯一）；
  * - 路径参数里开头的 `~` 由 hub 展开成 HOME，相对路径按 hub 的当前目录变成绝对路径，再发出去；账本还会 resolveFolder 一次；
- * - 长文本：有 --text 用 --text；没有 --text 且标准输入不是终端，读标准输入到结束（去掉末尾一个换行）；
- *   project.assign 两样都没有（或读到空的）→ 用法不对，退出码 2。persona.edit 没有正文也没有 --mode → 用法不对。
+ * - 长文本：只有显式写了 `--stdin` 才读标准输入（读到结束，去掉末尾一个换行），没写就绝不碰标准输入
+ *   （agent 的 shell 里标准输入可能一直开着，“没带正文就去读”会卡住）。不用 `--text -` 这种写法。
+ *   提示词里教 `hub project assign foo --to 阿周 --stdin <<'EOF'`。
+ *   --stdin 和 --text 同时给 → 用法不对，退出码 2；project.assign 两样都没有（或读到空的）→ 用法不对；
+ *   persona.edit 没有正文也没有 --mode → 用法不对。
  */
 export const HUB_COMMANDS = [
   "status",
@@ -131,7 +134,8 @@ export interface HubResult<C extends HubCommand> {
  * 错误码：账本的四种（LedgerRequestError）加两种只有 agent 接口有的：
  * - unauthorized：没带令牌、令牌不对或已作废（401），不调账本；
  * - internal：守护进程自己出错（500），message 是错误原文。
- * 请求体不对（未知命令、缺参数、超长）是 invalid（400）。
+ * 请求体不对（未知命令、缺参数、超长）是 invalid（400）。整个请求体超过 HUB_MAX_BODY_BYTES 也是 invalid、400
+ * （W2 把 Fastify 的 FST_ERR_CTP_BODY_TOO_LARGE 改写成 { ok: false, code: "invalid" }），不用 413，hub 只认这张表里的状态。
  */
 export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal";
 
@@ -161,9 +165,10 @@ export const HUB_TOKEN_BYTES = 32;
 /**
  * 会话令牌（W2 实现，只在内存里，盘上不落；守护进程重启后全部作废）。
  * - issue：这个会话已经有有效令牌就返回同一个，没有才生成新的。prepareLaunch 会被反复调（见 driver.ts），
- *   每次都换新令牌的话，正在跑的进程手里的令牌就失效了；
+ *   每次都换新令牌的话，正在跑的进程手里的令牌就失效了。revoke 过的会话再调 issue 直接抛错（不再发新令牌）；
+ *   已结束（status ended）的会话不会走到 issue：驱动层对它的 start、send 先抛 session_ended，prepareLaunch 不会被调；
  * - resolve：令牌 → 会话，不认识或已作废返回 null。用定长比较；
- * - revoke：作废这个会话的令牌。组装代码在 session.end 处理完（会话 ended）时调；之后 issue 会给新的。
+ * - revoke：作废这个会话的令牌，并记住这个会话已作废。组装代码在 session.end 处理完（会话 ended）时调。
  */
 export interface SessionTokens {
   issue(sessionId: SessionId): string;

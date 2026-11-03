@@ -2,24 +2,31 @@
 -- 约定同 0001。迁移器跑每个文件时关着外键检查，提交前用 PRAGMA foreign_key_check 查一遍（见 src/daemon/store/migrate.ts），
 -- 所以这里可以按 SQLite 的标准做法重建被引用的表（https://www.sqlite.org/lang_altertable.html 第 7 节）。
 
--- ---- pms：重建，mode 改成两种模式并加 CHECK，名字唯一，加 persona ----
+-- ---- pms：重建，mode 改成两种模式并加 CHECK，名字唯一，加 persona、persona_file_hash ----
 -- M1 的 'default' 一律变成 'manage_only'。persona 是性格设定正文，以它为准（personas/pm-<编号>.md 只是副本）；
 -- M1 升上来的是 NULL，守护进程启动时 syncPersonaFiles 按文件填上。
+-- persona_file_hash：上次成功写入性格设定文件的内容哈希（sha256 十六进制）。启动时文件哈希和它不一样才算用户手改过；
+-- 写文件失败时不更新，下次启动按数据库重写（规则见 src/shared/ledger.ts 的 syncPersonaFiles）。
+-- M1 没有名字唯一：重名的项目经理，编号最小的那个留原名，其他的改成“名字-编号”。
 CREATE TABLE pms_new (
-  id            INTEGER PRIMARY KEY,
-  name          TEXT    NOT NULL UNIQUE,
-  avatar_file   TEXT,
-  mode          TEXT    NOT NULL DEFAULT 'manage_only' CHECK (mode IN ('manage_only', 'hands_on')),
-  default_model TEXT,
-  persona_file  TEXT,
-  persona       TEXT,
-  created_at    INTEGER NOT NULL
+  id                INTEGER PRIMARY KEY,
+  name              TEXT    NOT NULL UNIQUE,
+  avatar_file       TEXT,
+  mode              TEXT    NOT NULL DEFAULT 'manage_only' CHECK (mode IN ('manage_only', 'hands_on')),
+  default_model     TEXT,
+  persona_file      TEXT,
+  persona           TEXT,
+  persona_file_hash TEXT,
+  created_at        INTEGER NOT NULL
 ) STRICT;
 
-INSERT INTO pms_new (id, name, avatar_file, mode, default_model, persona_file, persona, created_at)
-  SELECT id, name, avatar_file,
+INSERT INTO pms_new (id, name, avatar_file, mode, default_model, persona_file, persona, persona_file_hash, created_at)
+  SELECT id,
+         CASE WHEN EXISTS (SELECT 1 FROM pms AS older WHERE older.name = pms.name AND older.id < pms.id)
+              THEN name || '-' || id ELSE name END,
+         avatar_file,
          CASE WHEN mode IN ('manage_only', 'hands_on') THEN mode ELSE 'manage_only' END,
-         default_model, persona_file, NULL, created_at
+         default_model, persona_file, NULL, NULL, created_at
   FROM pms;
 
 DROP TABLE pms;
@@ -111,6 +118,7 @@ CREATE INDEX handoffs_project ON handoffs (project_id, id);
 
 -- ---- hub_calls：hub 调用记录（设计里没有，m2-plan 第 7 节第 9 条）----
 -- 令牌不对、参数校验没过的请求到不了账本，不记。args 是请求体 JSON；result 成功时是返回的 text，失败时是 message。
+-- 只是审计摘要：args 里的每个字符串字段、result 超过 2 KB 截断（HUB_CALL_FIELD_MAX_BYTES）；完整正文以 handoffs、persona_changes 为准。
 CREATE TABLE hub_calls (
   id         INTEGER PRIMARY KEY,
   session_id INTEGER NOT NULL REFERENCES agent_sessions (id),

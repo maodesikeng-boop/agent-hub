@@ -38,7 +38,10 @@ export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 /**
  * 合法的状态转换：queued → delivered → processing → replied / stopped / failed。
  * - 还没到 processing 也可能直接 failed（起不来、写入校验没过）或 stopped（写进去了、还没回显就被打断）；
- * - replied、stopped 是终点；只有 failed 能回到 delivered（重试写进去了）。
+ * - replied、stopped 是终点；只有 failed 能往回走：
+ *   - failed → queued：用户点“重试”（ledger.retryMessage，M2）。账本在同一个事务里把状态改回 queued、清空 failureReason、
+ *     重新登记 session.send，推一条 message.updated；之后照 queued → delivered → … 正常走；
+ *   - failed → delivered：重启后重发、或执行器自己重试时写进去了（M1 就有）。
  * 账本只按这张表改状态；不合法的转换（包括同状态）一律忽略，不报错——
  * 比如重启后重发一条 processing 的消息，驱动层再出 message.delivered，它仍然是 processing。
  */
@@ -48,7 +51,7 @@ export const MESSAGE_STATUS_TRANSITIONS: Readonly<Record<MessageStatus, readonly
   processing: ["replied", "stopped", "failed"],
   replied: [],
   stopped: [],
-  failed: ["delivered"],
+  failed: ["queued", "delivered"],
 };
 
 export function canTransitionMessage(from: MessageStatus, to: MessageStatus): boolean {
@@ -98,8 +101,8 @@ export const PM_MODE_DESCRIPTIONS: Readonly<Record<PmMode, string>> = {
 };
 
 /**
- * 新建项目经理时性格设定的模板（界面预填，用户可改）。M1 第一次启动建的项目经理也用这一份。
- * 安全红线不在这里（设计第 11 章），项目经理改不了。
+ * 新建项目经理时性格设定的模板（界面预填，用户可改）。第一次启动建的项目经理也用这一份；
+ * 只有这一份，daemon/prompt.ts 引用它，不另写。安全红线不在这里（设计第 11 章），项目经理改不了。
  */
 export const PM_PERSONA_TEMPLATE = `# 性格设定
 
@@ -108,6 +111,14 @@ export const PM_PERSONA_TEMPLATE = `# 性格设定
 - 说大白话，少用术语；不确定的事直说不确定，不编。
 - 用户让你自己动手就动手；改动大、拿不准的，先问一句。
 `;
+
+/**
+ * 读性格设定正文的兜底：pms.persona 是 NULL（M1 升上来、syncPersonaFiles 还没填）时用 PM_PERSONA_TEMPLATE。
+ * 空串是用户自己清空的，原样返回。getLaunchContext、getPersona 都用它。
+ */
+export function personaOrTemplate(persona: string | null): string {
+  return persona ?? PM_PERSONA_TEMPLATE;
+}
 
 /**
  * 项目经理。性格设定的正文不在这里（可能有几十 KB），用 GET /api/pms/:id/persona 读。
@@ -120,8 +131,9 @@ export interface Pm {
   mode: PmMode;
   defaultModel: string | null;
   /**
-   * 性格设定文件 personas/pm-<编号>.md（见 paths.ts 的 personaFilePath）。只是给人看、给人手改的副本：
-   * 正文以数据库 pms.persona 为准（见 ledger.ts 的 getPersona）。
+   * 性格设定文件 personas/pm-<编号>.md（位置一律用 paths.ts 的 personaFilePath 算）。只是给人看、给人手改的副本：
+   * 正文以数据库 pms.persona 为准（见 ledger.ts 的 getPersona）。同步规则见 Ledger.syncPersonaFiles。
+   * 数据库里还有一列 pms.persona_file_hash（上次成功写入文件的内容哈希），只有账本用，不在这个形状里。
    */
   personaFile: string | null;
   createdAt: number;
@@ -162,7 +174,7 @@ export interface Project {
 }
 
 /**
- * 项目挂的文件夹。path 是 resolveFolder 之后的真实路径（展开 ~、realpath）。
+ * 项目挂的文件夹。path 是 resolveFolder 之后的真实路径（展开 ~、realpathSync.native）。
  * - 一个项目同一时间只有一个主文件夹，主文件夹不能标移除（数据库有约束；换主文件夹 M2 不做）；
  * - 同一个真实路径只能当一个项目的主文件夹（removedAt 为空的那些里），当别的项目的附加文件夹可以；
  * - 同一个项目同一个路径同一时间只挂一次；移除只标 removedAt，不删行、不碰磁盘，之后可以再挂（新的一行）。
@@ -225,6 +237,9 @@ export interface Handoff {
 /**
  * 一次 hub 调用的记录（m2-plan 第 7 节第 9 条）。令牌不对、参数校验没过的请求到不了账本，不记。
  * 成功的和业务改动在同一个事务里写；失败的在回滚之后另起一个事务写。
+ * 这里只是审计用的摘要：args 里每个字符串字段、以及 result，超过 HUB_CALL_FIELD_MAX_BYTES 就截断
+ * （按 UTF-8 字节截在字符边界上，末尾加“…（截断，原长 N 字节）”）。完整正文以 handoffs（交接文件）、
+ * persona_changes 为准。
  */
 export interface HubCall {
   id: HubCallId;
@@ -263,7 +278,7 @@ export interface Message {
   status: MessageStatus | null;
   /**
    * status 是 failed 时的原因，界面直接显示（如“claude_not_found: …”）；其他时候 null。
-   * failed 回到 delivered 时清空。
+   * failed 回到 queued（重试）或 delivered 时清空。
    */
   failureReason: string | null;
   createdAt: number;
@@ -284,6 +299,28 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
   return toolUseId === undefined ? `session:${sessionId}:${uuid}` : `session:${sessionId}:${uuid}:${toolUseId}`;
 }
 
+/**
+ * 系统消息的去重键：`system:<对话>:<事件>:<相关编号>`。相关编号：project.created → projectId；
+ * folder.attached / detached → folderId；project.reassigned → handoffId；persona.changed → personaChangeId。
+ * 带上对话编号，因为同一份交接在群和接手人的私聊各发一条。
+ */
+export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
+  const ref = ((): number => {
+    switch (meta.event) {
+      case "project.created":
+        return meta.projectId;
+      case "folder.attached":
+      case "folder.detached":
+        return meta.folderId;
+      case "project.reassigned":
+        return meta.handoffId;
+      case "persona.changed":
+        return meta.personaChangeId;
+    }
+  })();
+  return `system:${conversationId}:${meta.event}:${ref}`;
+}
+
 /** 系统消息的事件（Message.meta.event）。会扩展。 */
 export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "project.reassigned", "persona.changed"] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
@@ -291,7 +328,10 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 /**
  * 系统消息的 meta（sender 是 system、kind 是 text）。哪条发在哪个对话、要不要也发给 agent：
  * - project.created：发在新项目的群（“项目已建好”）。只给人看。
- * - folder.attached / folder.detached：发在项目的群，同时发给 agent（下一条消息前自动重启生效）。
+ * - folder.attached / folder.detached：发在项目的群（下一条消息前自动重启生效）。要不要也发给群里的 agent，看是谁调的 hub：
+ *   - 就是这个群最新一代的会话自己调的：只给人看（status null）。它自己刚做的事不用再告诉它；不单独发【系统】消息，
+ *     免得白白多跑一轮。重启后驱动层在下一条写进去的消息前面拼 RELAUNCH_NOTE（见 driver.ts），说明从那里来；
+ *   - 别的会话调的（比如在私聊里挂文件夹）：同时发给群里的 agent。
  * - project.reassigned：发在项目的群（“项目经理由小林换成阿周，交接在这里”，只给人看，新一代会话的提示词里已经有交接）；
  *   在接手的项目经理的私聊再发一条（“小林把 foo 交给了你”），同时发给 agent。两条 meta 一样。
  * - persona.changed：发在发起修改的对话（项目经理自己改的：那个会话的对话；用户在界面改、撤销的，以及启动时发现文件被手改的：
@@ -323,13 +363,15 @@ export function stripSystemPrefix(text: string): string {
 }
 
 /**
- * 规整项目名、项目经理名：去掉首尾空白；空的、超过 MAX_NAME_CHARS 个字符的、带换行等控制字符的返回 null。
+ * 规整项目名、项目经理名：去掉首尾空白；空的、超过 MAX_NAME_CHARS 个字符的返回 null；
+ * 带控制字符的也返回 null：C0（含换行）、DEL、C1（U+0080～U+009F，含 U+0085 换行）、行分隔符 U+2028、段分隔符 U+2029
+ * （名字会进提示词、日志、hub 的输出，这些字符会把一行拆开）。
  * 界面服务、agent 接口校验请求体用它判断，账本存之前再用它规整一遍（存的是规整后的）。
  */
 export function normalizeName(raw: string): string | null {
   const name = raw.trim();
   if (name === "" || [...name].length > MAX_NAME_CHARS) return null;
-  if (/[\u0000-\u001f\u007f]/.test(name)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return null;
   return name;
 }
 
@@ -345,7 +387,10 @@ export interface RateLimitWindow {
   status: string;
 }
 
-/** 照抄 Claude 的 rate_limit_event.rate_limit_info：status 不是 "allowed" 就是“等额度”。 */
+/**
+ * 照抄 Claude 的 rate_limit_event.rate_limit_info。是不是“等额度”一律用 isQuotaExhausted 判断：
+ * 只有 status 是 "rejected" 算；"allowed_warning" 只是快到了，照常干活，不算等额度。
+ */
 export interface RateLimitInfo {
   status: string;
   resetsAt: number | null;
@@ -402,10 +447,17 @@ export interface AgentSessionRow {
 /** 空闲 / 在干活 / 正在停。 */
 export type SessionActivity = "idle" | "working" | "stopping";
 
-/** 网页要显示的会话状态（状态行、停止按钮、等额度）。WebSocket 的 session.status 推的就是它。 */
+/**
+ * 网页要显示的会话状态（状态行、停止按钮、等额度）。WebSocket 的 session.status、session.created 推的就是它。
+ * 一个对话可能有好几代会话（换项目经理后旧一代还会回完最后一轮）：网页和账本凡是要“这个对话的当前会话”的地方
+ * （状态行、停止按钮、等额度、发消息、requestStop），一律取这个对话里 generation 最大的那一个，不按 sessionId 大小、
+ * 不按推送先后。旧一代的状态照常推，网页收着但不拿来显示。
+ */
 export interface SessionState {
   sessionId: SessionId;
   conversationId: ConversationId | null;
+  /** 同 AgentSessionRow.generation。 */
+  generation: number;
   status: SessionStatus;
   activity: SessionActivity;
   /** 正在用的工具名，状态行显示“正在做什么”；没有就是 null。 */
@@ -415,7 +467,7 @@ export interface SessionState {
 }
 
 /** 各模块各写自己那一行；连续失败 3 次在界面标红。每次改动推一条 health.updated。 */
-export const HEALTH_MODULES = ["store", "actions", "driver", "ui-server"] as const;
+export const HEALTH_MODULES = ["store", "actions", "driver", "ui-server", "agent-api"] as const;
 export type HealthModule = (typeof HEALTH_MODULES)[number];
 
 export interface HealthEntry {

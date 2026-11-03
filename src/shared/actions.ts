@@ -122,13 +122,13 @@ export function retryDelayMs(policy: RetryPolicy, attempt: number): number {
   return Math.min(policy.baseMs * 2 ** (attempt - 1), policy.maxMs);
 }
 
-/** 执行器（W1 实现，W5 组装）。 */
+/** 执行器（M1 W1 实现，组装代码接线）。 */
 export interface ActionExecutor {
   /** 每个类型注册一个处理函数；要在 start 之前注册。 */
   register<T extends ActionType>(type: T, handler: ActionHandler<T>): void;
   /** 启动：把上次留下的“执行中”改回“待执行”，开始取到点的动作。 */
   start(): void;
-  /** 有新动作登记了，别等下一次轮询。W5 把 ledger.onActionEnqueued 接到这里。 */
+  /** 有新动作登记了，别等下一次轮询。组装代码（M2 W6）把 ledger.onActionEnqueued 接到这里。 */
   wake(): void;
   /** 停止接新动作，等正在执行的做完。 */
   stop(): Promise<void>;

@@ -23,8 +23,13 @@ export const MAX_REASON_CHARS = 500;
 export const MAX_PATH_BYTES = 4096;
 /** 模型名最多几个字符。 */
 export const MAX_MODEL_CHARS = 100;
-/** agent 接口一个请求体最多多大（Fastify 的 bodyLimit）；比最长的字段大，字段超长由校验报 invalid。 */
+/**
+ * agent 接口一个请求体最多多大（Fastify 的 bodyLimit）；比最长的字段大，字段超长由校验报 invalid。
+ * 整个请求体超过它（Fastify 抛 FST_ERR_CTP_BODY_TOO_LARGE）也映射成 invalid、HTTP 400，不另开 413（见 hub.ts）。
+ */
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
+/** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
+export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 

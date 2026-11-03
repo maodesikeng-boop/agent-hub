@@ -148,7 +148,7 @@ describe("执行器", () => {
 
     const second = openStore(paths);
     try {
-      const secondLedger = createLedger(second.db);
+      const secondLedger = createLedger(second.db, { pmHomeRoot: home });
       const executor = createActionExecutor(second.db, {
         reportHealth: (m, e) => secondLedger.reportHealth(m, e),
         onActionFailed: (a, e) => secondLedger.onActionFailed(a, e),

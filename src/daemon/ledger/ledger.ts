@@ -41,8 +41,8 @@ export interface LedgerOptions {
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
   initialSeq?: number;
   changeBufferSize?: number;
-  /** pm-home/ 的根目录；项目经理私聊的工作目录是 <pmHomeRoot>/<项目经理编号>/，createPm 负责建。 */
-  pmHomeRoot?: string;
+  /** pm-home/ 的根目录；项目经理私聊的工作目录是 <pmHomeRoot>/<项目经理编号>/，createPm 负责建。必填。 */
+  pmHomeRoot: string;
 }
 
 type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
@@ -78,7 +78,7 @@ function notImplemented(name: string): () => never {
   };
 }
 
-export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger {
+export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const now = options.now ?? Date.now;
   const log = createChangeLog(options.initialSeq ?? Date.now(), options.changeBufferSize ?? CHANGE_BUFFER_SIZE);
   const changeListeners = new Set<(change: Change) => void>();
@@ -149,6 +149,7 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     return {
       sessionId: row.id,
       conversationId: row.conversationId,
+      generation: row.generation,
       status: row.status,
       activity: l.activity,
       currentTool: l.currentTool,
@@ -462,7 +463,6 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
           input.name,
           t,
         )!;
-        if (options.pmHomeRoot === undefined) throw new Error("createPm needs LedgerOptions.pmHomeRoot");
         const cwd = join(options.pmHomeRoot, String(pmRow.id));
         mkdirSync(cwd, { recursive: true });
         const sessionId = db.run(
