@@ -40,18 +40,23 @@ describe("buildSessionSettings：Worker", () => {
     });
   });
 
-  it("记忆规则：约定文件（任何深度）、.claude/、用户级 ~/.claude/、数据目录的 state/", () => {
+  it("记忆规则：整台机器上任何位置的约定文件和 .claude/（工作目录、附加文件夹都算）、用户级 ~/.claude/、数据目录的 state/", () => {
+    // 相对写法（Edit(AGENTS.md)）只锚在当前目录，附加文件夹里的拦不住（审查实测），所以一律用 // 开头的绝对通配
     expect(WORKER_MEMORY_DENY_RULES).toEqual([
-      "Edit(AGENTS.md)",
-      "Edit(CLAUDE.md)",
-      "Edit(CLAUDE.local.md)",
-      "Edit(.claude/**)",
+      "Edit(//**/AGENTS.md)",
+      "Edit(//**/CLAUDE.md)",
+      "Edit(//**/CLAUDE.local.md)",
+      "Edit(//**/.claude/**)",
       "Edit(~/.claude/**)",
     ]);
     // 绝对路径的写法是 // 开头
     expect(stateDirDenyRule("/Users/u/.agent-hub/state")).toBe("Edit(//Users/u/.agent-hub/state/**)");
     expect(stateDirDenyRule("/Users/u/.agent-hub/state/")).toBe("Edit(//Users/u/.agent-hub/state/**)");
     expect(workerMemoryDenyRules(base.stateDir)).toEqual([...WORKER_MEMORY_DENY_RULES, "Edit(//Users/u/.agent-hub/state/**)"]);
+  });
+
+  it("数据目录路径里有 gitignore 的特殊字符要转义", () => {
+    expect(stateDirDenyRule("/Users/u/a[1]/b*c?d\\e/state")).toBe("Edit(//Users/u/a\\[1\\]/b\\*c\\?d\\\\e/state/**)");
   });
 
   it("关掉自动记忆的环境变量", () => {

@@ -19,7 +19,6 @@ import {
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
-  MAX_TICKET_TITLE_CHARS,
   PM_MODES,
   hubPath,
   type HubCommand,
@@ -86,7 +85,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["title", "task"],
     properties: {
-      title: { type: "string", minLength: 1, maxLength: MAX_TICKET_TITLE_CHARS },
+      // 太长不拒，账本用 normalizeTicketTitle 截断到 MAX_TICKET_TITLE_CHARS
+      title: { type: "string", minLength: 1 },
       task: taskField,
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       readonly: { type: "boolean" },

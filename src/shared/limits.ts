@@ -33,10 +33,12 @@ export const PERSONA_CHANGES_LIMIT = 50;
 
 // ---- M3：Worker ----
 
-/** 工单标题（hub worker start --title）最多几个字符（按 Unicode 字符算，见 normalizeTicketTitle）。 */
+/** 工单标题（hub worker start --title）最多几个字符（按 Unicode 字符算）：超了不报错，normalizeTicketTitle 截断。 */
 export const MAX_TICKET_TITLE_CHARS = 80;
 /** 任务说明（hub worker start --stdin）、hub worker send 的正文最多多大：它们就是发给 Worker 的消息，和用户消息一样。 */
 export const MAX_TASK_BYTES = MAX_MESSAGE_BYTES;
+/** 项目经理对话里那一行 Worker 汇报的摘要最多显示几个字符，超了截断（见 worker.ts 的 workerLineText）。完整原文照样交给项目经理。 */
+export const WORKER_LINE_SUMMARY_CHARS = 120;
 /** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
 export const WORKER_BRANCH_SLUG_CHARS = 30;
 

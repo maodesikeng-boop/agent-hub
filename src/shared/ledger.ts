@@ -175,6 +175,11 @@ export interface SyncPersonaFilesResult {
  * - Worker 的会话（role worker，M3）：ticket 是它的工单（标题、任务、只读、在哪干活、分支）；pm 是派它的项目经理
  *   （Worker 的提示词不放性格设定，W3 只用名字）；project 是工单的项目，不会是 null；conversationId 是 Worker 自己的对话。
  * 错误：会话不存在、不是项目经理或 Worker 的会话 → not_found。
+ *
+ * worktree 目录（M3）：有项目的项目经理，会话的 addDirs 里有 <数据目录>/worktrees/<项目编号>/（paths.ts 的 projectWorktreesDir，
+ * 根目录是账本的构造参数 LedgerOptions.worktreesDir），验收时能看 Worker 的改动。这一层目录由 W3 的启动准备（launch.ts）
+ * 在启动前 mkdir -p（还没派过 Worker 时它不存在，claude 的 --add-dir 要求目录在）；账本、驱动层都不建。
+ * 每张工单自己那一层由 git worktree add 建（worktree.create）。
  */
 export interface LaunchContext {
   sessionId: SessionId;
@@ -262,6 +267,7 @@ export interface Ledger {
    *   拿结果和库里没移除的 project_folders.path 逐字比。所以磁盘上已经没了的文件夹也能移除。attach 不这样，目录必须在；
    * - persona.show / edit：同 getPersona / editPersona（actor 是这个会话）。
    * M3：先按会话的 role 查 HUB_COMMAND_ROLES（hubCommandAllowed），不放行 → forbidden（Worker 只能用 status）。
+   *   这一步接进 hubCall 归 W2（W0 时 hubCall 还是“不是项目经理的会话 → forbidden”）。
    * - status（Worker）：WorkerHubStatus，text 是一两句“你在做哪张工单、在哪干活”；
    * - worker.start：还没有项目 → invalid；title、task 不对 → invalid。同一个事务里：工单、Worker 的对话（kind worker）和会话
    *   （role worker，ticket_id、model = args.model ?? 项目经理的模型；cwd 是 worktree 目录，或者主文件夹 + 和项目经理一样的 addDirs）、
@@ -314,11 +320,19 @@ export interface Ledger {
   /**
    * 驱动层 → 账本：组装代码（M2 W6）把 driver.onEvent 接到这里。agent 输出按 agentMessageDedupeKey 去重；
    * 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改，不合法的忽略。各事件怎么标见 driver.ts 的注释。
+   *
+   * M3：Worker 的会话这一轮结束时，在同一个事务里给项目经理的对话发那一行（kind worker），并登记 session.send
+   * （source system）把全文交给项目经理（见 WorkerMessageMeta）。“这一轮”用它处理的消息里编号最大的那条认，去重键见
+   * workerMessageDedupeKey：
+   * - turn.ended 且 ok、不是打断 → report：按 worker.ts 的 parseWorkerReport 解析这一轮最后一段 agent 文字；
+   * - turn.ended 且打断（用户点停止）或 ok=false → turn_failed，summary 写原因（“被停止了”、错误信息）；
+   * - session.exited 且这一轮没有 result：reason 是 interrupt、crash、startup_failed → turn_failed（原因写退出码或信号）；
+   *   reason 是 shutdown（守护进程关机）→ 不发这一行，也不交给项目经理：重启后 recoverAfterRestart 照 M2 重发这条消息、
+   *   --resume 接着做（m3-plan 验收第 11 条），做完的那一轮照常出 report；idle 没有在途的消息，什么也不发；
+   * - 同一条消息先 turn_failed、之后又被重发并跑出结果：两行都有（事件类型在去重键里），后来的 report 不会被吞掉；
+   *   同一个事件重放（同一个 result 再来一遍）只有一行。
    */
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
-  // M3：Worker 的会话这一轮结束时（turn.ended；或者没有 result 就退出的 session.exited：crash、interrupt……），
-  // applyDriverEvent 在同一个事务里给项目经理发那一行（report：按 worker.ts 的 parseWorkerReport 解析这一轮最后一段 agent 文字；
-  // turn_failed：原因）、登记 session.send（source system）把原文交给项目经理。去重键见 workerMessageDedupeKey。
   /**
    * 驱动层不经事件直接改了会话那一行（M2：end 把 status 写成 ended）之后，组装代码（session.end 处理函数）调：
    * 按那一行重算网页看到的会话状态（activity 当作空闲），和上次推的不一样就推一条 session.status。会话不存在什么也不做。

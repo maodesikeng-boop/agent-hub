@@ -431,7 +431,10 @@ export type WorkerMessageMeta = {
   readonly: boolean;
   event: WorkerEvent;
   status: WorkerLineStatus | null;
-  /** report：摘要（没按格式是 null）；turn_failed、worktree_failed：原因；started、ended：null。 */
+  /**
+   * report：解析出的摘要；没按格式是原文第一行（parseWorkerReport 给的，已截断）；turn_failed、worktree_failed：原因；
+   * started、ended：null。存完整的，显示时 workerLineText 压空白、按 WORKER_LINE_SUMMARY_CHARS 截断。
+   */
   summary: string | null;
 };
 
@@ -444,13 +447,14 @@ export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMe
 /**
  * 那一行的去重键：
  * - started、ended、worktree_failed：每张工单一条，`worker:<工单>:<事件>`，turnMessageId 给 null；
- * - report、turn_failed：每一轮一条，`worker:<工单>:turn:<这一轮处理的消息里编号最大的那条>`。两个事件共用一个键，
- *   同一轮不会既有汇报又有出错，重放同一个 result 也不会出两行。
+ * - report、turn_failed：`worker:<工单>:<事件>:<这一轮处理的消息里编号最大的那条>`。重放同一个 result（或同一次退出）不会出两行。
+ *   事件类型在键里：同一条消息这一轮失败了（turn_failed），之后被重发又跑出结果（report），两行都有，后来的汇报不会被吞掉。
+ * 什么时候发哪一行见 ledger.ts 的 applyDriverEvent。
  */
 export function workerMessageDedupeKey(ticketId: TicketId, event: WorkerEvent, turnMessageId: MessageId | null): string {
   if (event === "report" || event === "turn_failed") {
     if (turnMessageId === null) throw new Error(`workerMessageDedupeKey: ${event} needs the turn's message id`);
-    return `worker:${ticketId}:turn:${turnMessageId}`;
+    return `worker:${ticketId}:${event}:${turnMessageId}`;
   }
   return `worker:${ticketId}:${event}`;
 }
@@ -468,9 +472,20 @@ export function normalizeName(raw: string, maxChars: number = MAX_NAME_CHARS): s
   return name;
 }
 
-/** 工单标题（hub worker start --title）：规则同 normalizeName，最多 MAX_TICKET_TITLE_CHARS 个字符。 */
+/**
+ * 工单标题（hub worker start --title）：去首尾空白；空的、带控制字符（同 normalizeName）的返回 null；
+ * 超过 MAX_TICKET_TITLE_CHARS 个字符不报错，用 truncateChars 截断。
+ */
 export function normalizeTicketTitle(raw: string): string | null {
-  return normalizeName(raw, MAX_TICKET_TITLE_CHARS);
+  const title = raw.trim();
+  if (title === "") return null;
+  return normalizeName(truncateChars(title, MAX_TICKET_TITLE_CHARS), MAX_TICKET_TITLE_CHARS);
+}
+
+/** 按 Unicode 字符截断：超过 maxChars 个字符就留前 maxChars - 1 个，末尾加“…”（结果正好 maxChars 个字符）。 */
+export function truncateChars(text: string, maxChars: number): string {
+  const chars = [...text];
+  return chars.length <= maxChars ? text : `${chars.slice(0, maxChars - 1).join("")}…`;
 }
 
 /** UTF-8 字节数（各种“不超过多少 KB”的限制都按它算）。 */

@@ -43,6 +43,12 @@ export interface LedgerOptions {
   personasDir?: string;
   /** 数据目录（HubPaths.home），默认 resolveFolder 用它拒绝数据目录里的文件夹。默认 pmHomeRoot 的上一级（同 HubPaths 的布局）。 */
   dataHome?: string;
+  /**
+   * worktrees/ 的根目录（HubPaths.worktreesDir，M3）：工单的 worktree 是 <worktreesDir>/<项目编号>/<工单编号>/，
+   * 有项目的项目经理的会话 addDirs 带上 <worktreesDir>/<项目编号>/（见 shared/ledger.ts 的 LaunchContext）。
+   * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。W2 开始用。
+   */
+  worktreesDir?: string;
   /** 展开 `~` 用（默认 resolveFolder、detach 退回字面路径时），默认 os.homedir()。 */
   userHome?: string;
   /** 文件夹校验，默认 createResolveFolder({ dataHome, userHome })。 */

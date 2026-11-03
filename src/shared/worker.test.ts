@@ -11,6 +11,7 @@ import {
   workerLineText,
   workerReportHeader,
 } from "./worker.ts";
+import { WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 
 const report = (body: string) => `${REPORT_START}\n${body}\n${REPORT_END}`;
 
@@ -61,19 +62,42 @@ describe("parseWorkerReport", () => {
     expect(parsed).toMatchObject({ kind: "ok", report: { status: "done" } });
   });
 
-  it("没有格式", () => {
-    expect(parseWorkerReport("改好了，你看看。")).toEqual({ kind: "unformatted" });
-    expect(parseWorkerReport("")).toEqual({ kind: "unformatted" });
-    expect(parseWorkerReport(`${REPORT_START}\n状态: 做完了\n摘要: 好了`)).toEqual({ kind: "unformatted" });
+  it("没有格式：summary 是原文第一行（不是空的那行），空白压成一个、太长截断", () => {
+    expect(parseWorkerReport("改好了，你看看。")).toEqual({ kind: "unformatted", summary: "改好了，你看看。" });
+    expect(parseWorkerReport("")).toEqual({ kind: "unformatted", summary: "" });
+    expect(parseWorkerReport(`\n\n  第一行   有  空白\n第二行`)).toEqual({ kind: "unformatted", summary: "第一行 有 空白" });
+    expect(parseWorkerReport(`${REPORT_START}\n状态: 做完了\n摘要: 好了`)).toEqual({ kind: "unformatted", summary: REPORT_START });
+    const long = parseWorkerReport("字".repeat(WORKER_LINE_SUMMARY_CHARS + 10));
+    expect(long).toEqual({ kind: "unformatted", summary: `${"字".repeat(WORKER_LINE_SUMMARY_CHARS - 1)}…` });
   });
 
   it("状态写错", () => {
-    expect(parseWorkerReport(report("状态: 完成\n摘要: 好了"))).toEqual({ kind: "unformatted" });
-    expect(parseWorkerReport(report("摘要: 好了"))).toEqual({ kind: "unformatted" });
+    expect(parseWorkerReport(report("状态: 完成\n摘要: 好了"))).toMatchObject({ kind: "unformatted" });
+    expect(parseWorkerReport(report("摘要: 好了"))).toMatchObject({ kind: "unformatted" });
   });
 
   it("没写摘要也算没按格式", () => {
-    expect(parseWorkerReport(report("状态: 做完了\n摘要:\n提交: 无"))).toEqual({ kind: "unformatted" });
+    expect(parseWorkerReport(report("状态: 做完了\n摘要:\n提交: 无"))).toMatchObject({ kind: "unformatted" });
+  });
+
+  it("Markdown 写法也认：列表符号、引用、加粗；状态后面带标点", () => {
+    for (const body of [
+      "- 状态: 做完了\n- 摘要: 好了",
+      "* 状态: 做完了\n* 摘要: 好了",
+      "> 状态: 做完了\n> 摘要: 好了",
+      "**状态**: 做完了\n**摘要**: 好了",
+      "**状态:** 做完了\n**摘要：** 好了",
+      "- **状态**：做完了。\n- **摘要**：好了",
+      "状态: 「做完了」\n摘要: 好了",
+    ]) {
+      expect(parseWorkerReport(report(body)), body).toMatchObject({ kind: "ok", report: { status: "done", summary: "好了" } });
+    }
+  });
+
+  it("提交写“无（没提交）”这类也当没有提交", () => {
+    for (const commit of ["无", "无（没提交）", "无，只读调查", "无。"]) {
+      expect(parseWorkerReport(report(`状态: 做完了\n摘要: 好了\n提交: ${commit}`)), commit).toMatchObject({ report: { commit: null } });
+    }
   });
 
   it("全角冒号、首尾空白、提交写“无”、缺了的项是空串", () => {
@@ -91,6 +115,11 @@ describe("parseWorkerReport", () => {
   it("Windows 换行也行", () => {
     expect(parseWorkerReport(standard.replaceAll("\n", "\r\n"))).toMatchObject({ kind: "ok", report: { status: "done", commit: "a1b2c3d" } });
   });
+
+  it("解析出的摘要不截断（完整的留给项目经理），截断只在那一行里", () => {
+    const summary = "长".repeat(WORKER_LINE_SUMMARY_CHARS + 5);
+    expect(parseWorkerReport(report(`状态: 做完了\n摘要: ${summary}`))).toMatchObject({ report: { summary } });
+  });
 });
 
 describe("回到项目经理那一行", () => {
@@ -105,6 +134,9 @@ describe("回到项目经理那一行", () => {
     expect(workerLineText({ title: "修 X", event: "report", status: "unformatted", summary: null, readonly: false })).toBe(
       "Worker · 修 X · 没按格式",
     );
+    expect(workerLineText({ title: "修 X", event: "report", status: "unformatted", summary: "改好了", readonly: false })).toBe(
+      "Worker · 修 X · 没按格式：改好了",
+    );
     expect(workerLineText({ title: "修 X", event: "turn_failed", status: null, summary: "被停止了", readonly: false })).toBe(
       "Worker · 修 X · 这一轮没做完：被停止了",
     );
@@ -113,6 +145,14 @@ describe("回到项目经理那一行", () => {
     );
     expect(workerLineText({ title: "修 X", event: "ended", status: null, summary: null, readonly: false })).toBe("Worker · 修 X · 已收工");
   });
+
+  it("摘要的空白压成一个空格，太长按字数截断", () => {
+    const line = (summary: string) => workerLineText({ title: "修 X", event: "report", status: "done", summary, readonly: false });
+    expect(line("第一行\n\n  第二行\t结尾  ")).toBe("Worker · 修 X · 做完了：第一行 第二行 结尾");
+    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS))).toBe(`Worker · 修 X · 做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS)}`);
+    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS + 1))).toBe(`Worker · 修 X · 做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS - 1)}…`);
+    expect(WORKER_LINE_SUMMARY_CHARS).toBe(120);
+  });
 });
 
 describe("workerBranchName", () => {
@@ -120,6 +160,12 @@ describe("workerBranchName", () => {
     expect(workerBranchName(3, "Fix README typo")).toBe("hub/3-fix-readme-typo");
     expect(workerBranchName(12, "修 X 的 bug!")).toBe("hub/12-修-x-的-bug");
     expect(workerBranchName(4, "a/b..c~d^e:f?g*h[i]\\j@{k}")).toBe("hub/4-a-b-c-d-e-f-g-h-i-j-k");
+  });
+
+  it("带重音的字母不拆开：先 NFC，组合用的附加符号也算字母的一部分", () => {
+    expect(workerBranchName(7, "éclair")).toBe("hub/7-éclair");
+    expect(workerBranchName(7, "e\u0301clair")).toBe("hub/7-éclair");
+    expect(workerBranchName(8, "नमस्ते")).toBe("hub/8-नमस्ते");
   });
 
   it("短名太长截断；整个是符号就只有编号", () => {

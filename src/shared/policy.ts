@@ -16,24 +16,28 @@ export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof READONLY_PE
 
 /**
  * Worker 不能写记忆（唯一的硬限制，m3-plan 第 2.2 节），路径固定的那几条：
- * 工作目录里任何一层的约定文件（只写文件名就是任何深度）、项目的 .claude/、用户级的 ~/.claude/。
+ * 整台机器上任何位置的约定文件（AGENTS.md、CLAUDE.md、CLAUDE.local.md）和 .claude/，加上用户级的 ~/.claude/。
+ * 用 // 开头的绝对通配，不用 Edit(AGENTS.md) 这种相对写法：相对写法锚在当前目录，只管到工作目录之下，
+ * --add-dir 带进来的附加文件夹里的拦不住（PR #31 审查用真 claude 实测过；绝对通配下全部被拒，普通文件照样能写）。
  * Edit 规则也管 Write 工具和 Bash 里认得出的 sed、tee、重定向；拒绝规则在所有档下都先于别的规则。
  * 数据目录的 state/ 跟着数据目录走，见 stateDirDenyRule。
  */
 export const WORKER_MEMORY_DENY_RULES = [
-  "Edit(AGENTS.md)",
-  "Edit(CLAUDE.md)",
-  "Edit(CLAUDE.local.md)",
-  "Edit(.claude/**)",
+  "Edit(//**/AGENTS.md)",
+  "Edit(//**/CLAUDE.md)",
+  "Edit(//**/CLAUDE.local.md)",
+  "Edit(//**/.claude/**)",
   "Edit(~/.claude/**)",
 ] as const;
 
 /**
  * 数据目录的 state/（性格设定文件 personas/、数据库、令牌）：stateDir 要 realpath 过（paths.ts 的 stateDir）。
  * 绝对路径的写法是 // 开头：/Users/u/.agent-hub/state → Edit(//Users/u/.agent-hub/state/**)。
+ * 规则按 gitignore 的写法匹配，路径里的 \ [ ] * ? 前面加 \ 转义，当普通字符。
  */
 export function stateDirDenyRule(stateDir: string): string {
-  return `Edit(/${stateDir.replace(/\/+$/, "")}/**)`;
+  const escaped = stateDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&");
+  return `Edit(/${escaped}/**)`;
 }
 
 /** Worker 的全部记忆规则。 */

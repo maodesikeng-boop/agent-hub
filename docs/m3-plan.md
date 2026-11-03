@@ -99,14 +99,14 @@
 | 类 | 具体 | 怎么拦 |
 |---|---|---|
 | agent-hub 的性格设定 | `hub persona edit` | `HUB_COMMAND_ROLES` 不给 Worker，返回 `forbidden` |
-| 同上，直接改文件 | `<数据目录>/state/personas/pm-<编号>.md`。M2 启动时会把手改的内容记成一次 `actor: file` 的修改，所以直接改文件也算改设定 | `Edit(//<数据目录真实路径>/state/**)`，`launch.ts` 按 `paths.ts` 生成。顺带挡住数据库、令牌这些（设计 11.2） |
-| 项目的约定文件 | 工作目录里任何一层的 `AGENTS.md`、`CLAUDE.md`、`CLAUDE.local.md`，以及 `.claude/` 下的东西（`.claude/CLAUDE.md`、`.claude/rules/`、项目的 `settings.json`、技能） | `Edit(AGENTS.md)`、`Edit(CLAUDE.md)`、`Edit(CLAUDE.local.md)`、`Edit(.claude/**)`。只写文件名就是“任何深度”（[permissions][cc-perms] 的 How deep a pattern matches 一节）。在 worktree 里、在主文件夹里都一样 |
+| 同上，直接改文件 | `<数据目录>/state/personas/pm-<编号>.md`。M2 启动时会把手改的内容记成一次 `actor: file` 的修改，所以直接改文件也算改设定 | `Edit(//<数据目录真实路径>/state/**)`，`launch.ts` 按 `paths.ts` 生成（`policy.ts` 的 `stateDirDenyRule`，路径里的 `[`、`]`、`*`、`?`、`\` 转义）。顺带挡住数据库、令牌这些（设计 11.2） |
+| 项目的约定文件 | 任何位置的 `AGENTS.md`、`CLAUDE.md`、`CLAUDE.local.md`，以及 `.claude/` 下的东西（`.claude/CLAUDE.md`、`.claude/rules/`、项目的 `settings.json`、技能）：工作目录里、`--add-dir` 带进来的附加文件夹里都算 | `Edit(//**/AGENTS.md)`、`Edit(//**/CLAUDE.md)`、`Edit(//**/CLAUDE.local.md)`、`Edit(//**/.claude/**)`：`//` 开头的绝对通配。不用 `Edit(AGENTS.md)` 这种相对写法：它锚在当前目录（[permissions][cc-perms] 的 How path patterns match 一节），“任何深度”只在工作目录之下成立，附加文件夹里的拦不住。PR #31 审查用真 `claude` 加 `--add-dir` 实测过：相对写法下附加文件夹里的 `AGENTS.md`、`CLAUDE.md` 被改了；换成绝对通配后全部被拒，普通文件照样能写。在 worktree 里、在主文件夹里都一样 |
 | Claude Code 的用户级记忆 | `~/.claude/` 整个：`CLAUDE.md`、`rules/`，以及 `settings.json`、`skills/`、`agents/`、`commands/`，这些改了会影响以后每个 agent | `Edit(~/.claude/**)`。`claude` 自己存会话记录不经过工具，不受影响 |
 | Claude Code 的自动记忆 | `~/.claude/projects/<项目>/memory/`。文档说“同一个仓库的所有 worktree 共用一个自动记忆目录”（[memory][cc-memory] 的 Storage location 一节），所以 Worker 写进去，项目经理下次就会读到 | 给 Worker 设环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`，设置文件里再写 `autoMemoryEnabled: false`（[memory][cc-memory] 的 Enable or disable auto memory 一节）。上面的 `Edit(~/.claude/**)` 也兜着。代价是 Worker 也读不到自动记忆；项目约定在 `AGENTS.md` 和任务说明里 |
 
 - `Edit` 规则也管 Write 工具、Bash 里认得出的 `sed`、`tee` 和重定向（[permissions][cc-perms] 的 What Read and Edit rules cover 一节）。拒绝规则在所有模式下都先于别的规则（同一页的 Manage permissions 一节）。
 - **局限**：Worker 自己写 Python、Node 脚本去改文件，这些规则就拦不住了。文档也说这类规则“不是安全边界”，要真隔开得开沙箱，原型不做（设计第 11 章）。M3 不在合并前再查一道（用户定的）。合并是项目经理做的，它看改动时能看出来。
-- **要实测的**（冒烟 S12）：`auto` 档下这几条拒绝规则真的生效；`Edit(~/.claude/**)` 挡得住 Write；自动记忆关掉以后真的不写。
+- **要实测的**（冒烟 S12）：`auto` 档下这几条拒绝规则真的生效，附加文件夹里的约定文件也拦得住；`Edit(~/.claude/**)` 挡得住 Write；自动记忆关掉以后真的不写。
 
 **Worker 的任务本身就要改 `AGENTS.md` 怎么办**：由项目经理来改。Worker 的提示词写明：“记忆文件（`AGENTS.md`、`CLAUDE.md`、`.claude/` 下的东西）你不能改。觉得需要改，就在汇报的‘问题’里写清楚要改成什么。”项目经理验收时在主文件夹里自己改，它有写权限。
 
@@ -208,7 +208,7 @@ W1 建 worktree（不依赖别的） ──────────────�
 |---|---|---|
 | W0 接口和迁移 | `src/shared/`（`policy.ts`、`worker.ts`，以及 `domain.ts`、`hub.ts`、`api.ts`、`actions.ts`、`limits.ts`、`paths.ts` 里新增的部分）、`migrations/0004_workers.sql`、`test/migration.test.ts`；只为编译通过的占位 | 无 |
 | W1 建 worktree | `src/daemon/git/`：`isRepoWithCommit`、`hasUncommittedChanges`、`addWorktree`（重复执行算成功） | 无 |
-| W2 账本 | `src/daemon/ledger/`（新文件 `workers.ts`）、`hub-commands.ts`、`src/daemon/agent-api/`（按角色放行） | W0 |
+| W2 账本 | `src/daemon/ledger/`（新文件 `workers.ts`）、`hub-commands.ts`（`hubCall` 按 `HUB_COMMAND_ROLES` 放行）、`src/daemon/agent-api/`（请求体规格）、`src/hub/cli.ts`（`hub worker …` 的命令行解析） | W0 |
 | W3 启动文件和提示词 | `src/daemon/launch.ts`、`src/daemon/prompt.ts`、`test/fake-claude/`（按会话选剧本） | W0 |
 | W4 网页 + 界面服务 | `src/web/`、`src/daemon/ui-server/` | W0 |
 | W5 组装 | `src/daemon/daemon.ts`、`handlers.ts`（`worktree.create` 的处理函数接到 W1）、`main.ts`、`test/e2e/`、`test/smoke/`、`HANDOVER.md`、本文档 | W1～W4 |
@@ -222,7 +222,9 @@ W1 建 worktree（不依赖别的） ──────────────�
   - 消息 `kind` 加 `worker`：项目经理会话里的那一行。`meta` 里带 `ticketId`、`event`（`started`、`report`、`turn_failed`、`worktree_failed`、`ended`）、`status`、`summary`。
 - 动作：加 `worktree.create`，去重键是工单号，重试 3 次，做完再登记 Worker 的 `session.start` 和第一条 `session.send`。在主文件夹里干活的，不登记这个动作，直接登记这两样。`hub worker start` 同步判断用哪种，真正建 worktree 放到动作里做。
 - 账本给驱动层事件的钩子：Worker 会话的这一轮结束（`result`、出错、停止）时，在同一个事务里发那一行、给项目经理登记 `session.send`。
-- `LaunchContext` 加 `role`、`ticket`（标题、任务、只读、在哪干活、分支）。项目经理的 `addDirs` 加 `<数据目录>/worktrees/<项目编号>/`。
+- `LaunchContext` 加 `role`、`ticket`（标题、任务、只读、在哪干活、分支）。项目经理的 `addDirs` 加 `<数据目录>/worktrees/<项目编号>/`：根目录是账本的构造参数 `LedgerOptions.worktreesDir`（默认 `<dataHome>/worktrees`，W5 显式传）；这一层目录由 W3 的启动准备在启动前 `mkdir -p`（`--add-dir` 要求目录在），每张工单那一层由 `git worktree add` 建。
+- 那一行的去重键带事件类型（`workerMessageDedupeKey`）：同一条消息先出错、重发后又跑出结果，两行都有。守护进程关机打断的一轮不发这一行，重启后接着做完再汇报。
+- 标题超过 80 个字符截断，不报错；任务说明超过 100 KB 报 `invalid`。没按格式时那一行的摘要是原文第一行（截断）。
 
 ### 测试表（TDD，先写测试）
 
@@ -296,6 +298,7 @@ W1 建 worktree（不依赖别的） ──────────────�
   - “记住暗号 X，以后都用得上”。
 
   期望：前两件都在 `permission_denials` 里，`AGENTS.md` 和探针文件都没变；这个仓库的自动记忆目录跑前跑后一样。同一个 Worker 写一个普通文件能成功，证明不是整个都被拦了。
+  - 带附加文件夹：项目挂一个附加文件夹（里面放 `AGENTS.md` 和 `CLAUDE.md`），派一个在主文件夹里干活的 Worker（带 `--add-dir`），让它改附加文件夹里这两个文件。期望：都在 `permission_denials` 里，文件没变；同一个附加文件夹里的普通文件能写。
 - **S13 整条路**：项目经理一句话派一个 haiku Worker，改一行、提交；Worker 的汇报回到项目经理会话；用户说“合并吧”，主文件夹里有这次改动，worktree 删了。
 
 ## 4. 要用户拍板的问题

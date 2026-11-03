@@ -90,6 +90,7 @@ import {
   MAX_MESSAGE_BYTES,
   hubCommandAllowed,
   normalizeTicketTitle,
+  truncateChars,
   workerEventOf,
   workerMessageDedupeKey,
 } from "./index.ts";
@@ -619,12 +620,14 @@ describe("M3：对话和消息", () => {
     expect(workerEventOf({ kind: "worker", meta: { ...meta, event: "merged" } })).toBeNull();
   });
 
-  it("那一行的去重键：派出、收工、建 worktree 失败每张工单一条；汇报和出错按这一轮，同一轮只有一条", () => {
+  it("那一行的去重键：派出、收工、建 worktree 失败每张工单一条；汇报和出错按（事件，这一轮的消息）", () => {
     expect(workerMessageDedupeKey(3, "started", null)).toBe("worker:3:started");
     expect(workerMessageDedupeKey(3, "ended", null)).toBe("worker:3:ended");
     expect(workerMessageDedupeKey(3, "worktree_failed", null)).toBe("worker:3:worktree_failed");
-    expect(workerMessageDedupeKey(3, "report", 41)).toBe("worker:3:turn:41");
-    expect(workerMessageDedupeKey(3, "turn_failed", 41)).toBe("worker:3:turn:41");
+    expect(workerMessageDedupeKey(3, "report", 41)).toBe("worker:3:report:41");
+    expect(workerMessageDedupeKey(3, "turn_failed", 41)).toBe("worker:3:turn_failed:41");
+    // 同一条消息先失败、重发后又跑出结果：后来的汇报不会因为键重复被吞掉
+    expect(workerMessageDedupeKey(3, "report", 41)).not.toBe(workerMessageDedupeKey(3, "turn_failed", 41));
     expect(workerMessageDedupeKey(3, "report", 42)).not.toBe(workerMessageDedupeKey(3, "report", 41));
     expect(() => workerMessageDedupeKey(3, "report", null)).toThrow();
   });
@@ -659,12 +662,21 @@ describe("M3：工单", () => {
     expectTypeOf<Ticket["branch"]>().toEqualTypeOf<string | null>();
   });
 
-  it("标题：同名字的规整，但最多 MAX_TICKET_TITLE_CHARS 个字符", () => {
+  it("标题：去首尾空白，空的、带控制字符的不行；太长不报错，截断到 MAX_TICKET_TITLE_CHARS 个字符", () => {
     expect(normalizeTicketTitle("  修 X  ")).toBe("修 X");
     expect(normalizeTicketTitle("")).toBeNull();
+    expect(normalizeTicketTitle("   ")).toBeNull();
     expect(normalizeTicketTitle("a\nb")).toBeNull();
     expect(normalizeTicketTitle("字".repeat(MAX_TICKET_TITLE_CHARS))).toBe("字".repeat(MAX_TICKET_TITLE_CHARS));
-    expect(normalizeTicketTitle("字".repeat(MAX_TICKET_TITLE_CHARS + 1))).toBeNull();
+    expect(normalizeTicketTitle("字".repeat(MAX_TICKET_TITLE_CHARS + 1))).toBe(`${"字".repeat(MAX_TICKET_TITLE_CHARS - 1)}…`);
+    // 按 Unicode 字符截，不切开代理对
+    expect([...normalizeTicketTitle("😀".repeat(MAX_TICKET_TITLE_CHARS + 5))!]).toHaveLength(MAX_TICKET_TITLE_CHARS);
+  });
+
+  it("truncateChars：按字符截断，超了末尾换成…", () => {
+    expect(truncateChars("abc", 3)).toBe("abc");
+    expect(truncateChars("abcd", 3)).toBe("ab…");
+    expect(truncateChars("😀😀😀😀", 2)).toBe("😀…");
   });
 
   it("可调的数", () => {

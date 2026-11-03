@@ -45,6 +45,9 @@ export function buildHubSettings(hubSockRealPath: string) {
 }
 
 /**
+ * 分工（M3）：这里定命令、参数、返回和按角色放行的表；hub/cli.ts 的 `hub worker …` 命令行解析、agent-api 的请求体规格、
+ * 账本 hubCall 里按 HUB_COMMAND_ROLES 放行和 worker.* 的实现都归 W2。
+ *
  * 命令（11-03 起一个项目经理只管一个项目，不再有项目群、交接）。命令行写法 → 命令名：
  * - `hub status`                                         → status：我是谁、我的项目和文件夹；Worker 调是我的工单
  *   （任务、在哪干活）
@@ -113,7 +116,7 @@ export interface HubArgsMap {
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   /**
    * `hub worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
-   * title 按 normalizeTicketTitle；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
+   * title 按 normalizeTicketTitle（空的、带控制字符 → invalid；太长不报错，截断）；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
    * model 不超过 MAX_MODEL_CHARS，不给 = 用项目经理自己的模型。
    * 账本同步判断在哪干活：主文件夹是有提交的 git 仓库、又没给 noWorktree → worktree，登记 worktree.create；
    * 否则 main，直接登记 Worker 的 session.start 和第一条 session.send。
