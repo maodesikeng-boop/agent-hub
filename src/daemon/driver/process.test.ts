@@ -2,9 +2,12 @@
 // 只按 claude 的进程组杀会把命令留成孤儿。这里先单测“给一张进程表，算出要杀什么”，再用假 claude 起一个
 // 放在新进程组里的子进程，走一遍驱动层每条 SIGKILL 的路径。
 import { spawn, type ChildProcess } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { killTargets, parsePs, type PsRow } from "./process.ts";
+import { PS_TIMEOUT_MS } from "../../shared/index.ts";
+import { forceKill, forceKillTree, killTargets, parsePs, type PsRow } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
@@ -191,5 +194,108 @@ describe("强制结束：claude 起在新进程组里的子进程也要没了", 
     await t.driver.cleanupStale();
     expect(await goneWithin(stray.pid!)).toBe(true);
     expect(await goneWithin(child)).toBe(true);
+  });
+});
+
+// --- ps 出毛病、守护进程中途退出：停住的进程最后一定被 SIGKILL ---
+
+/** 起一个放在自己新进程组里的 sleep（像被 SIGSTOP 住之后等着挨杀的那种），返回它的进程号。 */
+function detachedSleep120(): number {
+  const child = spawn("sleep", ["120"], { stdio: "ignore", detached: true });
+  child.unref();
+  leftovers.push(child.pid!);
+  return child.pid!;
+}
+
+/** 进程状态（ps 的 stat 列，比如 S、T）；不在了返回空串。 */
+function statOf(pid: number): Promise<string> {
+  return new Promise((resolve) => {
+    const ps = spawn("/bin/ps", ["-o", "stat=", "-p", String(pid)]);
+    let out = "";
+    ps.stdout.on("data", (d) => (out += d));
+    ps.on("close", () => resolve(out.trim()));
+  });
+}
+
+/** 临时把 PATH 换成只有一个假 ps 的目录（body 是 sh 脚本）。 */
+function fakePs(body: string): () => void {
+  const dir = mkdtempSync(join(tmpdir(), "fake-ps-"));
+  writeFileSync(join(dir, "ps"), `#!/bin/sh\n${body}\n`);
+  chmodSync(join(dir, "ps"), 0o755);
+  const saved = process.env.PATH;
+  process.env.PATH = `${dir}:${saved}`;
+  return () => {
+    process.env.PATH = saved;
+    rmSync(dir, { recursive: true, force: true });
+  };
+}
+
+describe("forceKillTree 的兜底", () => {
+  it("ps 跑不了（退出码 1）：退回只杀它的组，组里的进程都没了", async () => {
+    const pid = detachedSleep120();
+    const restore = fakePs("exit 1");
+    try {
+      await forceKillTree(pid, true);
+    } finally {
+      restore();
+    }
+    expect(await goneWithin(pid)).toBe(true);
+  });
+
+  it("ps 卡住不返回：超时之内发了 SIGKILL，不留停住的进程", async () => {
+    const pid = detachedSleep120();
+    const restore = fakePs("exec sleep 60");
+    const t0 = Date.now();
+    try {
+      await forceKillTree(pid, true);
+    } finally {
+      restore();
+    }
+    expect(Date.now() - t0).toBeLessThan(PS_TIMEOUT_MS * 3);
+    expect(await goneWithin(pid)).toBe(true);
+    expect(await statOf(pid)).toBe("");
+  });
+
+  it("等 ps 的时候守护进程 process.exit：退出时同步补 SIGKILL，不留停住的进程", async () => {
+    const pid = detachedSleep120();
+    const dir = mkdtempSync(join(tmpdir(), "fake-ps-"));
+    writeFileSync(join(dir, "ps"), "#!/bin/sh\nexec sleep 60\n");
+    chmodSync(join(dir, "ps"), 0o755);
+    const processTs = new URL("./process.ts", import.meta.url).pathname;
+    const script = `import { forceKillTree } from ${JSON.stringify(processTs)};
+void forceKillTree(${pid}, true);
+setTimeout(() => process.exit(0), 200);`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const node = spawn(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, stdio: "inherit" });
+        node.on("error", reject);
+        node.on("exit", () => resolve());
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(await goneWithin(pid)).toBe(true);
+  });
+
+  it("进程号 ≤ 1：什么信号都不发", async () => {
+    const spy = vi.spyOn(process, "kill");
+    try {
+      await forceKillTree(0, true);
+      await forceKillTree(1, true);
+      await forceKillTree(-1, false);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("同一个 child 并发调两次 forceKill：第二次复用进行中的那一次", async () => {
+    const child = spawn("sleep", ["120"], { stdio: ["pipe", "pipe", "pipe"], detached: true });
+    leftovers.push(child.pid!);
+    await new Promise((resolve) => child.once("spawn", resolve));
+    const first = forceKill(child);
+    expect(forceKill(child)).toBe(first);
+    await first;
+    expect(await goneWithin(child.pid!)).toBe(true);
   });
 });

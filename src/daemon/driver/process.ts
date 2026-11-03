@@ -1,7 +1,10 @@
 // 管 claude 进程的小函数：强制结束（连同所有后代的进程组）、看进程在不在、等它退出、用 ps 认残留的 claude。
 import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Readable } from "node:stream";
-import { STALE_POLL_MS } from "../../shared/index.ts";
+import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
+
+/** ps 卡住时不能一直等：超时直接 SIGKILL 掉 ps，当它跑不了。 */
+const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
 export function streamClosed(stream: Readable): Promise<void> {
   return new Promise((resolve) => {
@@ -16,7 +19,7 @@ export function streamClosed(stream: Readable): Promise<void> {
  */
 export function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], (error, stdout) => {
+    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], PS_OPTIONS, (error, stdout) => {
       if (error) return resolve(null); // 进程不在了：ps 退出码 1
       const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
       if (!match) return resolve(null);
@@ -26,46 +29,97 @@ export function claudeOfSession(pid: number, vendorSessionId: string): Promise<n
   });
 }
 
+/** 同一个 child 正在进行的强制结束（关机和空闲关闭、启动超时撞在一起时复用）。 */
+const killing = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
+
 /**
  * 强制结束驱动层自己起的 claude（detached，进程组号就是它的 pid）：连同它所有后代所在的进程组一起 SIGKILL。
- * 已经退出了就什么都不做（进程号可能被复用）。
+ * 已经退出了就什么都不做（进程号可能被复用）。同一个 child 并发调，第二次复用第一次的。
  */
 export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> {
+  const running = killing.get(child);
+  if (running) return running;
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   if (child.pid === undefined) {
     child.kill("SIGKILL");
     return Promise.resolve();
   }
-  return forceKillTree(child.pid, true);
+  const done = forceKillTree(child.pid, true);
+  killing.set(child, done);
+  return done;
+}
+
+/**
+ * 刚 spawn、还没写过任何输入的 claude（不会有后代）：同步按组 SIGKILL，不用找后代。
+ * 按组发不了（组已经没了）就只发给它本身；已经退出了不发。
+ */
+export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.pid !== undefined && child.pid > 1 && signalOk(-child.pid, "SIGKILL")) return;
+  child.kill("SIGKILL");
+}
+
+/**
+ * claude 自己正常退出的这一刻，给它原来的进程组补一个 SIGTERM，清掉同组留下的子进程。
+ * 只在确认退出时发这一次，不延迟再发，免得进程号被复用后误杀。
+ */
+export function termGroupAfterExit(child: ChildProcessWithoutNullStreams): void {
+  if (child.pid !== undefined && child.pid > 1) signalPid(-child.pid, "SIGTERM");
 }
 
 /** 找后代最多看几轮：每轮把新找到的组先 SIGSTOP 住，直到没有新的。 */
 const MAX_SCAN_ROUNDS = 5;
+
+/** 已经 SIGSTOP 住、还没 SIGKILL 的目标（负数是进程组）。守护进程中途退出时在 exit 里同步补刀。 */
+const stopped = new Set<number>();
+let exitHookInstalled = false;
+
+function stop(target: number): boolean {
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.on("exit", () => {
+      for (const t of stopped) signalPid(t, "SIGKILL");
+    });
+  }
+  stopped.add(target);
+  if (signalOk(target, "SIGSTOP")) return true;
+  stopped.delete(target);
+  return false;
+}
 
 /**
  * 强制结束 pid 和它所有的后代。真 claude 的 Bash 工具把命令放进它自己的新进程组（冒烟 S10c），
  * 只按 claude 的组杀，命令就成了孤儿；所以趁 claude 还活着用 ps 找出所有后代，按它们所在的组一起杀。
  * - 先 SIGSTOP：claude 停住就不会再起新命令；每轮新找到的组也先停住（停住的进程不能再 fork、也不会退出，
  *   组号就不会被复用），再看一轮，直到没有新的组，最后统一 SIGKILL（SIGKILL 对停住的进程照样有效）。
+ * - 停住的目标一定会被 SIGKILL：找后代出什么错都在 finally 里杀；守护进程等 ps 时退出，exit 里同步杀。
  * - ownsGroup：pid 是不是自己那个组的组长（我们 detached 起的）。不是的话它的组里可能有别的进程，只杀它本身。
- * - ps 跑不了：退回只杀 pid（或它的组）。
+ * - ps 跑不了或超时（PS_TIMEOUT_MS）：退回只杀 pid（或它的组）。
+ * - pid ≤ 1：什么都不做（-1、0、1 会打到所有进程、自己的组或 launchd）。
  */
 export async function forceKillTree(pid: number, ownsGroup: boolean): Promise<void> {
-  const root = ownsGroup && signalOk(-pid, "SIGSTOP") ? -pid : pid;
-  if (root === pid) signalPid(pid, "SIGSTOP");
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  const root = ownsGroup && stop(-pid) ? -pid : pid;
+  if (root === pid) stop(pid);
   const targets = new Set<number>([root]);
-  for (let round = 0; round < MAX_SCAN_ROUNDS; round++) {
-    const rows = await psTable();
-    if (!rows) break;
-    const own = rows.find((r) => r.pid === process.pid)?.pgid ?? null;
-    const fresh = killTargets(rows, pid, own).filter((t) => !targets.has(t));
-    if (fresh.length === 0) break;
-    for (const t of fresh) {
-      targets.add(t);
-      signalPid(t, "SIGSTOP");
+  try {
+    for (let round = 0; round < MAX_SCAN_ROUNDS; round++) {
+      const rows = await psTable();
+      if (!rows) break;
+      const own = rows.find((r) => r.pid === process.pid)?.pgid ?? null;
+      const fresh = killTargets(rows, pid, own).filter((t) => !targets.has(t));
+      if (fresh.length === 0) break;
+      for (const t of fresh) {
+        targets.add(t);
+        stop(t);
+      }
+    }
+  } finally {
+    for (const t of targets) {
+      signalPid(t, "SIGKILL");
+      stopped.delete(t);
     }
   }
-  for (const t of targets) signalPid(t, "SIGKILL");
 }
 
 export interface PsRow {
@@ -120,7 +174,7 @@ export function killTargets(rows: PsRow[], rootPid: number, ownPgid: number | nu
 
 function psTable(): Promise<PsRow[] | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid="], (error, stdout) => resolve(error ? null : parsePs(stdout)));
+    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid="], PS_OPTIONS, (error, stdout) => resolve(error ? null : parsePs(stdout)));
   });
 }
 

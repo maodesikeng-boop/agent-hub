@@ -47,7 +47,7 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
-import { claudeOfSession, forceKill, forceKillTree, signalPid, streamClosed, waitForExit } from "./process.ts";
+import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -280,7 +280,7 @@ export class ClaudeDriver implements Driver {
     const proc = st.proc;
     if (proc) {
       this.#clearTimer(st, "idleTimer");
-      if (!proc.closing) this.#closeStdin(proc, "idle");
+      if (!proc.closing) this.#closeStdin(st, proc, "idle");
       await proc.exited;
     }
     this.#update(st, { status: "ended", pid: null });
@@ -479,7 +479,7 @@ export class ClaudeDriver implements Driver {
       if (st.ended || st.proc !== proc || proc.closing) return;
       const row = files ? this.#row(st) : null;
       if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
-        this.#closeStdin(proc, "idle");
+        this.#closeStdin(st, proc, "idle");
         await proc.exited;
         this.#assertRunning();
         if (st.ended) return;
@@ -548,12 +548,12 @@ export class ClaudeDriver implements Driver {
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
       if (st.proc !== proc || proc.closing || st.inFlight || st.pending.length > 0 || st.starting || st.ended) return;
-      this.#closeStdin(proc, "idle");
+      this.#closeStdin(st, proc, "idle");
     }, this.#opts.idleCloseMs);
   }
 
   /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
-  #closeStdin(proc: Proc, reason: ClosingReason): void {
+  #closeStdin(st: SessionState, proc: Proc, reason: ClosingReason): void {
     proc.closing = reason;
     proc.child.stdin.end();
     const grace = this.#opts.interruptGraceMs;
@@ -562,7 +562,7 @@ export class ClaudeDriver implements Driver {
       proc.child.kill("SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
-        void forceKill(proc.child);
+        this.#forceKill(st, proc);
       }, grace);
     }, grace);
   }
@@ -638,7 +638,7 @@ export class ClaudeDriver implements Driver {
   #abortIfStopped(st: SessionState, proc: Proc): void {
     this.#assertRunning();
     if (!st.ended) return;
-    if (!proc.closing) this.#closeStdin(proc, "idle");
+    if (!proc.closing) this.#closeStdin(st, proc, "idle");
     throw new DriverError("session_ended", `session ${st.id} has been ended`);
   }
 
@@ -648,7 +648,7 @@ export class ClaudeDriver implements Driver {
       st.startTimer = null;
       if (st.proc !== proc || proc.initSeen) return;
       proc.startTimedOut = true;
-      void forceKill(proc.child);
+      this.#forceKill(st, proc);
     }, this.#opts.startTimeoutMs);
   }
 
@@ -688,7 +688,7 @@ export class ClaudeDriver implements Driver {
     }
     // 等 spawn 的这一会儿可能已经开始关机：shutdown 看不到这个进程，自己结束它
     if (this.#shuttingDown) {
-      await forceKill(child);
+      killFreshGroup(child);
       this.#assertRunning();
     }
     let resolveReady!: (o: StartupOutcome) => void;
@@ -729,9 +729,8 @@ export class ClaudeDriver implements Driver {
     // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
-      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：确认退出的这一刻给它原来的进程组补一个 SIGTERM，
-      // 清掉它留下的子进程。只这一次，不延迟再发，免得进程号被复用后误杀。
-      if (proc.closing === "idle" && child.pid !== undefined) signalPid(-child.pid, "SIGTERM");
+      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：给它原来的进程组补一个 SIGTERM，清掉它留下的子进程
+      if (proc.closing === "idle") termGroupAfterExit(child);
       const timer = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();
@@ -916,6 +915,11 @@ export class ClaudeDriver implements Driver {
 
   #invalidInput(st: SessionState, problem: string, messageIds: MessageId[]): void {
     this.#emit(st.id, { type: "driver.error", code: "invalid_input", message: `invalid_input: ${problem}`, messageIds, at: Date.now() });
+  }
+
+  /** 不等结果的强制结束：出错不往上冒（免得成了没人接的 Promise 拒绝），记一条 internal_error。 */
+  #forceKill(st: SessionState, proc: Proc): void {
+    forceKill(proc.child).catch((error: unknown) => this.#internalError(st.id, `force kill failed: ${errorMessage(error)}`));
   }
 
   #internalError(sessionId: SessionId, detail: string): void {
