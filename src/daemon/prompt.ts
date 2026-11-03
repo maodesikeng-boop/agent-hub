@@ -32,7 +32,7 @@ export function needsAgentsNote(cwd: string): boolean {
 
 /**
  * 两种模式的默认做法（设计第 2.2 节）。只是提示词，程序不硬拦。M2 还没有 Worker（M3），
- * “只管理”先写成“要动手先问用户，用户让你做就自己做”（m2-plan 第 7 节第 10 条），M3 再改成派工单。
+ * “只管理”先写成“要动手先问用户，用户让你做就自己做”（m2-plan 第 7 节第 10 条），M3 再改成派 Worker。
  */
 export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
   manage_only: `# 你的默认做法：只管理

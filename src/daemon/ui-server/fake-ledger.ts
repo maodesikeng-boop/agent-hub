@@ -32,7 +32,7 @@ export function makeMessage(id: number, conversationId: number, text = `m${id}`)
     id,
     conversationId,
     sessionId: null,
-    ticketId: null,
+    workerId: null,
     sender: "user",
     kind: "text",
     text,

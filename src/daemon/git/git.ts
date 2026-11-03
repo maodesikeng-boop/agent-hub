@@ -98,7 +98,7 @@ export async function hasUncommittedChanges(folder: string, options: GitOptions 
 /**
  * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`。
  * 重复执行算成功：worktree 已经在这个目录、分支也对得上，就直接返回 `created: false`，不动里面的东西。
- * 分支名已经有了（比如别的工单占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
+ * 分支名已经有了（比如别的 Worker 占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
  */
 export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorktreeResult> {
   const { repoFolder, worktreePath, branch, base = "HEAD" } = options;
@@ -122,7 +122,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
   }
 
   const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的工单占着），没法再建。`);
+  if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
 
   const addRun = await git(["worktree", "add", "-b", branch, worktreePath, baseCommit]);
   if (addRun.code !== 0) throw failed("git worktree add", addRun);

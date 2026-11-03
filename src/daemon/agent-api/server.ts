@@ -56,7 +56,7 @@ const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
 // M3 W0 先给出形状，W2 按需要调整
-const ticketIdField = { type: "integer", minimum: 1 };
+const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
 
 const BODY_SCHEMAS: Record<HubCommand, object> = {
@@ -85,7 +85,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["title", "task"],
     properties: {
-      // 太长不拒，账本用 normalizeTicketTitle 截断到 MAX_TICKET_TITLE_CHARS
+      // 太长不拒，账本用 normalizeWorkerTitle 截断到 MAX_WORKER_TITLE_CHARS
       title: { type: "string", minLength: 1 },
       task: taskField,
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
@@ -96,10 +96,10 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "worker.send": {
     type: "object",
     additionalProperties: false,
-    required: ["ticketId", "text"],
-    properties: { ticketId: ticketIdField, text: taskField },
+    required: ["workerId", "text"],
+    properties: { workerId: workerIdField, text: taskField },
   },
-  "worker.end": { type: "object", additionalProperties: false, required: ["ticketId"], properties: { ticketId: ticketIdField } },
+  "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
 };
 

@@ -734,11 +734,11 @@ function m2Db(): Db {
   return db;
 }
 
-/** 0004 之后：项目经理 1 在项目 2 上派一个 Worker（对话 10、会话 10、工单 1）。 */
-function insertTicket(db: Db, over: Record<string, unknown> = {}): void {
+/** 0004 之后：项目经理 1 在项目 2 上派一个 Worker（对话 10、会话 10、Worker 1）。 */
+function insertWorker(db: Db, over: Record<string, unknown> = {}): void {
   db.exec(`
     INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (10, 'worker', 1, 2, '修 X', 50);
-    INSERT INTO agent_sessions (id, role, conversation_id, ticket_id, vendor_session_id, cwd, created_at, updated_at)
+    INSERT INTO agent_sessions (id, role, conversation_id, worker_id, vendor_session_id, cwd, created_at, updated_at)
       VALUES (10, 'worker', 10, 1, 'v-10', '/h/worktrees/2/1', 50, 50);
   `);
   const row: Record<string, unknown> = {
@@ -761,11 +761,11 @@ function insertTicket(db: Db, over: Record<string, unknown> = {}): void {
     ...over,
   };
   const cols = Object.keys(row);
-  db.run(`INSERT INTO tickets (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...(Object.values(row) as never[]));
+  db.run(`INSERT INTO workers (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...(Object.values(row) as never[]));
 }
 
 describe("0004_workers：从 M2 的库升级", () => {
-  it("user_version 升到 4，老数据一行不少、一个字不变；多了空的 tickets 表", () => {
+  it("user_version 升到 4，老数据一行不少、一个字不变；多了空的 workers 表", () => {
     const db = m2Db();
     const before = rowCounts(db);
     const dump = Object.fromEntries(tableNames(db).map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY rowid`)]));
@@ -773,8 +773,17 @@ describe("0004_workers：从 M2 的库升级", () => {
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 3, to: 4, applied: [4] });
 
     expect(userVersion(db)).toBe(4);
-    expect(rowCounts(db)).toEqual({ ...before, tickets: 0 });
-    for (const [table, rows] of Object.entries(dump)) expect(db.all(`SELECT * FROM ${table} ORDER BY rowid`)).toEqual(rows);
+    expect(rowCounts(db)).toEqual({ ...before, workers: 0 });
+    // 值一个不变；只有 agent_sessions、messages 的 ticket_id 改名 worker_id（位置不变）
+    const renamed = (rows: unknown[]) =>
+      rows.map((r) => Object.fromEntries(Object.entries(r as Record<string, unknown>).map(([k, v]) => [k === "ticket_id" ? "worker_id" : k, v])));
+    for (const [table, rows] of Object.entries(dump)) expect(db.all(`SELECT * FROM ${table} ORDER BY rowid`)).toEqual(renamed(rows));
+    const columns = (table: string) => db.all<{ name: string }>(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`).map((c) => c.name);
+    for (const table of ["agent_sessions", "messages"]) {
+      expect(columns(table)).toContain("worker_id");
+      expect(columns(table)).not.toContain("ticket_id");
+    }
+    expect(Object.keys(dump.agent_sessions![0] as object)).toContain("ticket_id");
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     expect(db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys).toBe(1);
   });
@@ -786,7 +795,7 @@ describe("0004_workers：从 M2 的库升级", () => {
     const backup = openDatabase(join(dir!, "hub.sqlite.bak-3-20261104T080000Z"));
     try {
       expect(userVersion(backup)).toBe(3);
-      expect(tableNames(backup)).not.toContain("tickets");
+      expect(tableNames(backup)).not.toContain("workers");
       expect(backup.get("SELECT count(*) AS n FROM messages")).toEqual({ n: 5 });
     } finally {
       backup.close();
@@ -796,11 +805,11 @@ describe("0004_workers：从 M2 的库升级", () => {
   it("重复执行什么也不做，不再备份", () => {
     const db = m2Db();
     migrate(db, migrationsDir);
-    insertTicket(db);
+    insertWorker(db);
     const backups = readdirSync(dir!).filter((f) => f.includes(".bak-"));
     expect(migrate(db, migrationsDir)).toEqual({ from: 4, to: 4, applied: [] });
     expect(readdirSync(dir!).filter((f) => f.includes(".bak-"))).toEqual(backups);
-    expect(db.get("SELECT count(*) AS n FROM tickets")).toEqual({ n: 1 });
+    expect(db.get("SELECT count(*) AS n FROM workers")).toEqual({ n: 1 });
   });
 
   it("重建 conversations 后索引还在：一个项目经理只有一个私聊，一个项目只有一个群；别的表指向它的外键照常生效", () => {
@@ -849,10 +858,10 @@ describe("0004_workers：约束", () => {
     expect(() => db.run("INSERT INTO conversations (kind, title, created_at) VALUES ('ticket', 'x', 0)")).toThrow(/CHECK/);
   });
 
-  it("工单：所有列都在，默认 open、不只读；读回来和写进去一样", () => {
+  it("workers 表：所有列都在，默认 open、不只读；读回来和写进去一样", () => {
     const db = migratedM2();
-    insertTicket(db);
-    expect(db.get("SELECT * FROM tickets WHERE id = 1")).toEqual({
+    insertWorker(db);
+    expect(db.get("SELECT * FROM workers WHERE id = 1")).toEqual({
       id: 1,
       project_id: 2,
       pm_id: 1,
@@ -870,12 +879,12 @@ describe("0004_workers：约束", () => {
       created_at: 50,
       updated_at: 50,
     });
-    db.run("UPDATE tickets SET base_commit = 'abc123', status = 'ended' WHERE id = 1");
+    db.run("UPDATE workers SET base_commit = 'abc123', status = 'ended' WHERE id = 1");
     db.run("INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (11, 'worker', 1, 2, '查 Y', 0)");
     db.run(
-      "INSERT INTO tickets (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 11, '查 Y', '看看 Y', 'main', 0, 0)",
+      "INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 11, '查 Y', '看看 Y', 'main', 0, 0)",
     );
-    expect(db.get("SELECT status, readonly, branch, worktree_path, base_commit FROM tickets WHERE id = 2")).toEqual({
+    expect(db.get("SELECT status, readonly, branch, worktree_path, base_commit FROM workers WHERE id = 2")).toEqual({
       status: "open",
       readonly: 0,
       branch: null,
@@ -884,34 +893,34 @@ describe("0004_workers：约束", () => {
     });
   });
 
-  it("工单的状态、在哪干活、只读只能是规定的值", () => {
+  it("Worker 的状态、在哪干活、只读只能是规定的值", () => {
     const db = migratedM2();
-    expect(() => insertTicket(db, { status: "done" })).toThrow(/CHECK/);
+    expect(() => insertWorker(db, { status: "done" })).toThrow(/CHECK/);
     db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
-    expect(() => insertTicket(db, { workspace: "elsewhere" })).toThrow(/CHECK/);
+    expect(() => insertWorker(db, { workspace: "elsewhere" })).toThrow(/CHECK/);
     db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
-    expect(() => insertTicket(db, { readonly: 2 })).toThrow(/CHECK/);
+    expect(() => insertWorker(db, { readonly: 2 })).toThrow(/CHECK/);
   });
 
-  it("在主文件夹里干活的工单没有分支、worktree、起点提交", () => {
+  it("在主文件夹里干活的 Worker 没有分支、worktree、起点提交", () => {
     const db = migratedM2();
-    expect(() => insertTicket(db, { workspace: "main" })).toThrow(/CHECK/);
+    expect(() => insertWorker(db, { workspace: "main" })).toThrow(/CHECK/);
     db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
-    insertTicket(db, { workspace: "main", branch: null, worktree_path: null });
-    expect(db.get("SELECT workspace FROM tickets WHERE id = 1")).toEqual({ workspace: "main" });
+    insertWorker(db, { workspace: "main", branch: null, worktree_path: null });
+    expect(db.get("SELECT workspace FROM workers WHERE id = 1")).toEqual({ workspace: "main" });
   });
 
-  it("一个 Worker 对话只属于一张工单；项目、项目经理、对话都得是真的", () => {
+  it("一个 Worker 对话只属于一个 Worker；项目、项目经理、对话都得是真的", () => {
     const db = migratedM2();
-    insertTicket(db);
+    insertWorker(db);
     expect(() =>
       db.run(
-        "INSERT INTO tickets (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 10, 'x', 'y', 'main', 0, 0)",
+        "INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 10, 'x', 'y', 'main', 0, 0)",
       ),
     ).toThrow(/UNIQUE/);
     const bad = (cols: string) =>
       db.run(
-        `INSERT INTO tickets (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (${cols}, 'x', 'y', 'main', 0, 0)`,
+        `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (${cols}, 'x', 'y', 'main', 0, 0)`,
       );
     db.run("INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (12, 'worker', 1, 2, 'z', 0)");
     expect(() => bad("99, 1, 1, 12")).toThrow(/FOREIGN KEY/);

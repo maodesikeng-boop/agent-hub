@@ -78,7 +78,7 @@ export interface MessageDbRow {
   id: number;
   conversation_id: number;
   session_id: number | null;
-  ticket_id: number | null;
+  worker_id: number | null;
   sender: string;
   kind: string;
   text: string;
@@ -126,7 +126,7 @@ export function toMessage(row: MessageDbRow): Message {
     id: row.id,
     conversationId: row.conversation_id,
     sessionId: row.session_id,
-    ticketId: row.ticket_id,
+    workerId: row.worker_id,
     sender: row.sender as MessageSender,
     kind: row.kind as MessageKind,
     text: row.text,

@@ -16,8 +16,8 @@ import type {
   ProjectFolder,
   ProjectId,
   SessionId,
-  Ticket,
-  TicketId,
+  WorkerRecord,
+  WorkerId,
 } from "./domain.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -49,7 +49,7 @@ export function buildHubSettings(hubSockRealPath: string) {
  * 账本 hubCall 里按 HUB_COMMAND_ROLES 放行和 worker.* 的实现都归 W2。
  *
  * 命令（11-03 起一个项目经理只管一个项目，不再有项目群、交接）。命令行写法 → 命令名：
- * - `hub status`                                         → status：我是谁、我的项目和文件夹；Worker 调是我的工单
+ * - `hub status`                                         → status：我是谁、我的项目和文件夹；Worker 调是我在做什么
  *   （任务、在哪干活）
  * - `hub project create --folder <路径> [--name <名>] [--description <说明>]` → project.create：给自己建项目（只能有一个）
  * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
@@ -116,17 +116,17 @@ export interface HubArgsMap {
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   /**
    * `hub worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
-   * title 按 normalizeTicketTitle（空的、带控制字符 → invalid；太长不报错，截断）；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
+   * title 按 normalizeWorkerTitle（空的、带控制字符 → invalid；太长不报错，截断）；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
    * model 不超过 MAX_MODEL_CHARS，不给 = 用项目经理自己的模型。
    * 账本同步判断在哪干活：主文件夹是有提交的 git 仓库、又没给 noWorktree → worktree，登记 worktree.create；
    * 否则 main，直接登记 Worker 的 session.start 和第一条 session.send。
    */
   "worker.start": { title: string; task: string; model?: string; readonly?: boolean; noWorktree?: boolean };
   /** `hub worker send <编号> --stdin`：打回或回答问题，发给同一个 Worker 会话。text 不超过 MAX_TASK_BYTES。 */
-  "worker.send": { ticketId: TicketId; text: string };
-  /** `hub worker end <编号>`：结束 Worker 会话（登记 session.end），工单标 ended。worktree 由项目经理自己删。 */
-  "worker.end": { ticketId: TicketId };
-  /** `hub worker list`：我派出去的工单。 */
+  "worker.send": { workerId: WorkerId; text: string };
+  /** `hub worker end <编号>`：结束 Worker 会话（登记 session.end），Worker 标 ended。worktree 由项目经理自己删。 */
+  "worker.end": { workerId: WorkerId };
+  /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
 }
 
@@ -154,7 +154,7 @@ export interface PmHubStatus {
   project: ProjectCard | null;
 }
 
-/** Worker 调 hub status（M3）：我是哪张工单、任务是什么、在哪干活。 */
+/** Worker 调 hub status（M3）：我是哪个 Worker、任务是什么、在哪干活。 */
 export interface WorkerHubStatus {
   role: "worker";
   /** 派它的项目经理。 */
@@ -162,7 +162,7 @@ export interface WorkerHubStatus {
   sessionId: SessionId;
   /** Worker 自己的对话。 */
   conversationId: ConversationId;
-  ticket: Ticket;
+  worker: WorkerRecord;
   project: ProjectCard;
 }
 
@@ -177,12 +177,12 @@ export interface HubDataMap {
   /** change 为 null：内容和模式都没变，什么也没记。 */
   "persona.edit": { change: PersonaChange | null };
   /** text 里说清楚在哪干活；用 worktree、主文件夹又有没提交的改动时提醒“Worker 是从最后一次提交开始的，看不到这些改动”。 */
-  "worker.start": { ticket: Ticket };
+  "worker.start": { worker: WorkerRecord };
   /** messageId：Worker 对话里这条项目经理的话。 */
-  "worker.send": { ticket: Ticket; messageId: MessageId };
-  "worker.end": { ticket: Ticket };
+  "worker.send": { worker: WorkerRecord; messageId: MessageId };
+  "worker.end": { worker: WorkerRecord };
   /** 按编号从小到大，含已收工的。 */
-  "worker.list": { tickets: Ticket[] };
+  "worker.list": { workers: WorkerRecord[] };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

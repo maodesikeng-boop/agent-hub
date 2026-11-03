@@ -13,7 +13,7 @@ export interface DriverSendInput {
   source: MessageSource;
   /**
    * 原样写进去的文字，驱动层不加来源标签。约定（设计第 7.3 节）：用户消息不加标签；系统消息由调用方
-   * 自己在开头带 `【…】` 标签（如“【工单 #12 汇报】”）；驱动层加的恢复说明、重发说明都以 `【系统】` 开头。
+   * 自己在开头带 `【…】` 标签（如“【Worker #12 · 修 X 的汇报】”）；驱动层加的恢复说明、重发说明都以 `【系统】` 开头。
    */
   text: string;
   /** 重启后重发（SessionSendParams.resend）：前面加 RESEND_NOTE。 */

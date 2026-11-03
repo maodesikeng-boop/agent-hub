@@ -574,7 +574,7 @@ describe("getLaunchContext", () => {
       conversationId: lin.conversationId,
       pm: { id: lin.pmId, name: "小林", mode: "manage_only", persona: "小林的习惯" },
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
-      ticket: null,
+      worker: null,
     });
     expect(ledger.getLaunchContext(zhou.sessionId)).toMatchObject({ pm: { name: "阿周", mode: "hands_on" }, project: null });
     db.run("UPDATE pms SET persona = NULL WHERE id = ?", lin.pmId);

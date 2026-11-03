@@ -1,5 +1,5 @@
 // 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话，M3 加建 worktree。
-import type { ActionId, MessageId, SessionId, TicketId } from "./domain.ts";
+import type { ActionId, MessageId, SessionId, WorkerId } from "./domain.ts";
 
 /** 会扩展，数据库不加 CHECK，用 isOneOf 校验。 */
 export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create"] as const;
@@ -41,16 +41,16 @@ export interface SessionEndParams {
 }
 
 /**
- * 给工单建 git worktree（M3，m3-plan 第 3 节接口约定）。hub worker start 判断要在 worktree 里干活时登记，去重键是工单号。
+ * 给 Worker 建 git worktree（M3，m3-plan 第 3 节接口约定）。hub worker start 判断要在 worktree 里干活时登记，去重键是 Worker 编号。
  * 处理函数（W5 接到 W1 的 addWorktree）：
- * 1. ledger.getWorktreeTask(ticketId) 取主文件夹、分支、目录；null 或工单已 ended → done，什么也不做；
+ * 1. ledger.getWorktreeTask(workerId) 取主文件夹、分支、目录；null 或 Worker 已 ended → done，什么也不做；
  * 2. 在主文件夹里 git worktree add -b <分支> <目录> HEAD（重复执行算成功），拿到 HEAD 的提交；
- * 3. ledger.onWorktreeCreated(ticketId, 提交)：账本记下起点提交，同一个事务里登记 Worker 的 session.start 和第一条 session.send。
- * 抛错按 ACTION_RETRY 重试；次数用完 ledger.onActionFailed 在项目经理的对话里发一行 worktree_failed（原因交给它），工单标 ended。
- * 在主文件夹里干活的工单不登记这个动作，hub worker start 直接登记那两样。
+ * 3. ledger.onWorktreeCreated(workerId, 提交)：账本记下起点提交，同一个事务里登记 Worker 的 session.start 和第一条 session.send。
+ * 抛错按 ACTION_RETRY 重试；次数用完 ledger.onActionFailed 在项目经理的对话里发一行 worktree_failed（原因交给它），Worker 标 ended。
+ * 在主文件夹里干活的 Worker 不登记这个动作，hub worker start 直接登记那两样。
  */
 export interface WorktreeCreateParams {
-  ticketId: TicketId;
+  workerId: WorkerId;
 }
 
 export interface ActionParamsMap {
@@ -99,7 +99,7 @@ export function actionDedupeKey(action: NewAction): string {
     case "session.end":
       return `${action.params.sessionId}:${action.params.generation}`;
     case "worktree.create":
-      return String(action.params.ticketId);
+      return String(action.params.workerId);
   }
 }
 

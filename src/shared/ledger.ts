@@ -18,9 +18,9 @@ import type {
   PmMode,
   Project,
   SessionId,
-  Ticket,
-  TicketId,
-  TicketStatus,
+  WorkerRecord,
+  WorkerId,
+  WorkerStatus,
   Unsubscribe,
 } from "./domain.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "./hub.ts";
@@ -171,15 +171,15 @@ export interface SyncPersonaFilesResult {
 /**
  * 给生成提示词和设置文件用（驱动层的 prepareLaunch 里调）。只读。
  * - 项目经理的会话（role pm）：pm 是这个会话所属的项目经理（AgentSessionRow.pmId）；pm.persona 已经兜过底：pms.persona 是 NULL 时给
- *   PM_PERSONA_TEMPLATE（personaOrTemplate）。project 是它的项目（文件夹按现在的），还没有是 null。ticket 是 null；
- * - Worker 的会话（role worker，M3）：ticket 是它的工单（标题、任务、只读、在哪干活、分支）；pm 是派它的项目经理
- *   （Worker 的提示词不放性格设定，W3 只用名字）；project 是工单的项目，不会是 null；conversationId 是 Worker 自己的对话。
+ *   PM_PERSONA_TEMPLATE（personaOrTemplate）。project 是它的项目（文件夹按现在的），还没有是 null。worker 是 null；
+ * - Worker 的会话（role worker，M3）：worker 是它的记录（标题、任务、只读、在哪干活、分支）；pm 是派它的项目经理
+ *   （Worker 的提示词不放性格设定，W3 只用名字）；project 是 Worker 所在的项目，不会是 null；conversationId 是 Worker 自己的对话。
  * 错误：会话不存在、不是项目经理或 Worker 的会话 → not_found。
  *
  * worktree 目录（M3）：有项目的项目经理，会话的 addDirs 里有 <数据目录>/worktrees/<项目编号>/（paths.ts 的 projectWorktreesDir，
  * 根目录是账本的构造参数 LedgerOptions.worktreesDir），验收时能看 Worker 的改动。这一层目录由 W3 的启动准备（launch.ts）
  * 在启动前 mkdir -p（还没派过 Worker 时它不存在，claude 的 --add-dir 要求目录在）；账本、驱动层都不建。
- * 每张工单自己那一层由 git worktree add 建（worktree.create）。
+ * 每个 Worker 自己那一层由 git worktree add 建（worktree.create）。
  */
 export interface LaunchContext {
   sessionId: SessionId;
@@ -187,19 +187,19 @@ export interface LaunchContext {
   conversationId: ConversationId;
   pm: { id: PmId; name: string; mode: PmMode; persona: string };
   project: ProjectCard | null;
-  ticket: Ticket | null;
+  worker: WorkerRecord | null;
 }
 
 /**
  * worktree.create 处理函数要建什么（见 actions.ts 的 WorktreeCreateParams）。
- * repo 是项目主文件夹的真实路径；branch、worktreePath 抄自工单。
+ * repo 是项目主文件夹的真实路径；branch、worktreePath 抄自 WorkerRecord。
  */
 export interface WorktreeTask {
-  ticketId: TicketId;
+  workerId: WorkerId;
   repo: string;
   branch: string;
   worktreePath: string;
-  status: TicketStatus;
+  status: WorkerStatus;
 }
 
 export interface Ledger {
@@ -268,16 +268,16 @@ export interface Ledger {
    * - persona.show / edit：同 getPersona / editPersona（actor 是这个会话）。
    * M3：先按会话的 role 查 HUB_COMMAND_ROLES（hubCommandAllowed），不放行 → forbidden（Worker 只能用 status）。
    *   这一步接进 hubCall 归 W2（W0 时 hubCall 还是“不是项目经理的会话 → forbidden”）。
-   * - status（Worker）：WorkerHubStatus，text 是一两句“你在做哪张工单、在哪干活”；
-   * - worker.start：还没有项目 → invalid；title、task 不对 → invalid。同一个事务里：工单、Worker 的对话（kind worker）和会话
-   *   （role worker，ticket_id、model = args.model ?? 项目经理的模型；cwd 是 worktree 目录，或者主文件夹 + 和项目经理一样的 addDirs）、
+   * - status（Worker）：WorkerHubStatus，text 是一两句“你是哪个 Worker、在做什么、在哪干活”；
+   * - worker.start：还没有项目 → invalid；title、task 不对 → invalid。同一个事务里：workers 一行、Worker 的对话（kind worker）和会话
+   *   （role worker，worker_id、model = args.model ?? 项目经理的模型；cwd 是 worktree 目录，或者主文件夹 + 和项目经理一样的 addDirs）、
    *   Worker 对话里第一条消息（sender pm，任务说明，queued）、项目经理对话里一行 started（WorkerMessageMeta）；
    *   worktree → 登记 worktree.create；main → 直接登记 Worker 的 session.start 和这条消息的 session.send。
    *   推 conversation.created、session.created、message.created。数量不限；
-   * - worker.send：工单不存在 → not_found；不是这个项目经理派的 → forbidden；已经 ended → conflict。
+   * - worker.send：Worker 不存在 → not_found；不是这个项目经理派的 → forbidden；已经 ended → conflict。
    *   同一个事务里在 Worker 对话里写一条 sender pm 的消息、登记 session.send（同一个 Worker 会话，--resume 接着做）；
-   * - worker.end：同上的检查；登记 session.end、工单标 ended、项目经理对话里一行 ended。再调一次什么也不做；
-   * - worker.list：这个项目经理的工单。
+   * - worker.end：同上的检查；登记 session.end、Worker 标 ended、项目经理对话里一行 ended。再调一次什么也不做；
+   * - worker.list：这个项目经理派的 Worker。
    * 每次调用都记一行 hub_calls（成功的在同一个事务里，失败的回滚后另记）。args 和 result 里的长字段按 HUB_CALL_FIELD_MAX_BYTES
    * 截断（见 domain.ts 的 HubCall），完整正文以 persona_changes 为准。成功返回 { text, data }，失败抛 LedgerRequestError。
    * 会话不存在或不是项目经理的会话 → forbidden。
@@ -287,13 +287,13 @@ export interface Ledger {
   getLaunchContext(sessionId: SessionId): LaunchContext;
 
   // ---- worktree.create 处理函数用（M3）----
-  /** 工单不存在、不是 worktree 的工单 → null。 */
-  getWorktreeTask(ticketId: TicketId): WorktreeTask | null;
+  /** Worker 不存在、不在 worktree 里干活 → null。 */
+  getWorktreeTask(workerId: WorkerId): WorktreeTask | null;
   /**
    * worktree 建好了（或者早就建好了）：同一个事务里记下 base_commit（已经有就不改），登记 Worker 的 session.start 和
-   * 它对话里第一条消息的 session.send（按去重键，重复调用无害）。工单已经 ended 什么也不做。
+   * 它对话里第一条消息的 session.send（按去重键，重复调用无害）。Worker 已经 ended 什么也不做。
    */
-  onWorktreeCreated(ticketId: TicketId, baseCommit: string): void;
+  onWorktreeCreated(workerId: WorkerId, baseCommit: string): void;
 
   // ---- 组装代码用（M1 W5 接线，M2 起归 W6）----
   /**
@@ -357,7 +357,7 @@ export interface Ledger {
    * session.send → 那条消息标 failed，failureReason = error；
    * session.start、session.end → 什么也不做：不碰消息（每条消息由它自己的 session.send 失败时标），
    * 也不记 health（执行器每次失败都已经记过）。
-   * worktree.create（M3）→ 工单标 ended；项目经理对话里一行 worktree_failed（summary 是 error），原因交给项目经理（session.send）；
+   * worktree.create（M3）→ Worker 标 ended；项目经理对话里一行 worktree_failed（summary 是 error），原因交给项目经理（session.send）；
    * Worker 对话里那条没发出去的任务说明标 failed。
    */
   onActionFailed(action: AnyActionRow, error: string): void;

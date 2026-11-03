@@ -22,7 +22,7 @@ export function createLedgerLaunchContext(persona: LedgerPersona, projects: Ledg
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: personaOrTemplate(pm.persona) },
       project: project === null ? null : projectCard(project),
       // M3 W0 的占位：Worker 的会话 W2 实现
-      ticket: null,
+      worker: null,
     };
   };
 

@@ -43,7 +43,7 @@ describe("prepareLaunch（M2）", () => {
     role: "pm",
     conversationId: id,
     pmId: 1,
-    ticketId: null,
+    workerId: null,
     vendor: "claude",
     vendorSessionId: `vendor-${id}`,
     cwd,

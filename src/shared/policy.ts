@@ -55,7 +55,7 @@ export type SessionRole = Extract<AgentRole, "pm" | "worker">;
 
 export interface SessionSettingsInput {
   role: SessionRole;
-  /** 工单的 readonly；项目经理一律 false。 */
+  /** WorkerRecord 的 readonly；项目经理一律 false。 */
   readonly: boolean;
   /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
   hubSock: string;

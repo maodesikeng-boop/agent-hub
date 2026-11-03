@@ -40,8 +40,8 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
   "worker.start": { title: "修 X", task: "把 X 修好，测试要过", model: "claude-haiku-5-5", readonly: true, noWorktree: true },
-  "worker.send": { ticketId: 3, text: "再改一下" },
-  "worker.end": { ticketId: 3 },
+  "worker.send": { workerId: 3, text: "再改一下" },
+  "worker.end": { workerId: 3 },
   "worker.list": {},
 };
 
@@ -234,7 +234,7 @@ describe("agent api over inject", () => {
 
     it("unknown command → invalid（含 11-03 拿掉的 pm.list、project.assign）", async () => {
       await expectInvalid(await call("project.archive", {}));
-      await expectInvalid(await call("ticket.create", {}));
+      await expectInvalid(await call("worker.create", {}));
       await expectInvalid(await call("pm.list", {}));
       await expectInvalid(await call("project.assign", { project: "foo", to: "阿周", handoff: "交接" }));
     });

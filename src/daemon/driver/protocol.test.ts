@@ -124,7 +124,7 @@ const row: AgentSessionRow = {
   role: "pm",
   conversationId: 1,
   pmId: 1,
-  ticketId: null,
+  workerId: null,
   vendor: "claude",
   vendorSessionId: "11111111-1111-4111-8111-111111111111",
   cwd: "/tmp/pm",

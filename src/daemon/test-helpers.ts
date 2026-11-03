@@ -18,7 +18,7 @@ export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext
     conversationId: 3,
     pm: { id: 1, name: "小林", mode: "manage_only", persona: "# 性格设定\n\n- 说话直接。\n" },
     project: card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具"),
-    ticket: null,
+    worker: null,
     ...over,
   };
 }
@@ -31,7 +31,7 @@ export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchConte
     conversationId: 2,
     pm: { id: 2, name: "阿周", mode: "hands_on", persona: PM_PERSONA_TEMPLATE },
     project: null,
-    ticket: null,
+    worker: null,
     ...over,
   };
 }

@@ -67,12 +67,12 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
     if (session.conversationId === null) return;
     const t = now();
     const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, ticket_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
+      `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
        VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, NULL, ?, ?)
        ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
       session.conversationId,
       session.id,
-      session.ticketId,
+      session.workerId,
       fields.kind,
       fields.text,
       fields.meta === null ? null : JSON.stringify(fields.meta),

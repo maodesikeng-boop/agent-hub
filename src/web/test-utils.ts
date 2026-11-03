@@ -45,7 +45,7 @@ export function makeMessage(over: Partial<Message> & Pick<Message, "id">): Messa
   return {
     conversationId,
     sessionId: 1,
-    ticketId: null,
+    workerId: null,
     sender: "agent",
     kind: "text",
     text: `消息 ${over.id}`,

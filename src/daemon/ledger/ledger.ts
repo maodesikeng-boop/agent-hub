@@ -44,7 +44,7 @@ export interface LedgerOptions {
   /** 数据目录（HubPaths.home），默认 resolveFolder 用它拒绝数据目录里的文件夹。默认 pmHomeRoot 的上一级（同 HubPaths 的布局）。 */
   dataHome?: string;
   /**
-   * worktrees/ 的根目录（HubPaths.worktreesDir，M3）：工单的 worktree 是 <worktreesDir>/<项目编号>/<工单编号>/，
+   * worktrees/ 的根目录（HubPaths.worktreesDir，M3）：Worker 的 worktree 是 <worktreesDir>/<项目编号>/<Worker 编号>/，
    * 有项目的项目经理的会话 addDirs 带上 <worktreesDir>/<项目编号>/（见 shared/ledger.ts 的 LaunchContext）。
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。W2 开始用。
    */
@@ -152,10 +152,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     hubCall: hub.hubCall,
 
     getLaunchContext: launch.getLaunchContext,
-    // M3 W0 的占位，W2 实现：还没有地方建工单，所以一律没有
+    // M3 W0 的占位，W2 实现：还没有地方建 Worker，所以一律没有
     getWorktreeTask: () => null,
-    onWorktreeCreated: (ticketId) => {
-      throw new Error(`onWorktreeCreated(${ticketId}): workers are not implemented yet`);
+    onWorktreeCreated: (workerId) => {
+      throw new Error(`onWorktreeCreated(${workerId}): workers are not implemented yet`);
     },
 
     syncPersonaFiles: persona.syncPersonaFiles,

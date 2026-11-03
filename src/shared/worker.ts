@@ -1,7 +1,7 @@
 // Worker 的汇报（m3-plan 第 2.5 节）：格式说明、解析、回到项目经理那一行的写法、分支名。
 // 格式说明（给 Worker 的提示词用）和解析函数放在一起，改格式只改这里。
 import { truncateChars } from "./domain.ts";
-import type { TicketId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
+import type { WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 
 export const REPORT_START = "=== 汇报 ===";
@@ -117,8 +117,8 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
 }
 
 /** 交给项目经理的汇报的开头（设计第 7.3 节的来源标签）：“【Worker #3 · 修 X 的汇报】”。 */
-export function workerReportHeader(ticketId: TicketId, title: string): string {
-  return `【Worker #${ticketId} · ${title} 的汇报】`;
+export function workerReportHeader(workerId: WorkerId, title: string): string {
+  return `【Worker #${workerId} · ${title} 的汇报】`;
 }
 
 const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
@@ -157,10 +157,10 @@ export function workerLineText(line: {
  * 去掉首尾的 -，最多 WORKER_BRANCH_SLUG_CHARS 个字符；什么都不剩就只有 hub/<编号>。
  * 结果一定是合法的 git 分支名（不含空白、~^:?*[\ 、..、@{）。
  */
-export function workerBranchName(ticketId: TicketId, title: string): string {
+export function workerBranchName(workerId: WorkerId, title: string): string {
   const slug = [...title.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "")]
     .slice(0, WORKER_BRANCH_SLUG_CHARS)
     .join("")
     .replace(/-+$/, "");
-  return slug === "" ? `hub/${ticketId}` : `hub/${ticketId}-${slug}`;
+  return slug === "" ? `hub/${workerId}` : `hub/${workerId}-${slug}`;
 }
