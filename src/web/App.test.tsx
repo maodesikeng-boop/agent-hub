@@ -483,6 +483,9 @@ describe("状态行和停止", () => {
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/1/stop");
+    // 真界面服务对“声明 JSON 却没有请求体”回 400，假后端照着做；停止请求要被接受
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeDisabled());
+    expect(screen.queryByText("停止失败")).not.toBeInTheDocument();
   });
 
   it("没有当前工具时只写“正在处理”", async () => {
