@@ -110,7 +110,7 @@ export function App() {
             key={openWorker}
             title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
             readonly={workerLine?.readonly ?? false}
-            pmName={workerPmEntry?.name ?? "项目经理"}
+            pm={{ name: workerPmEntry?.name ?? "项目经理", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
             view={workerView}
             session={sessionOf(state, openWorker)}
             older={state.older[openWorker]}

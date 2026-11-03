@@ -176,8 +176,7 @@ export function MessageBubble({
   const workerLine = workerEventOf(message);
   if (workerLine) return <WorkerLine line={workerLine} onOpen={actions.onOpenWorker} />;
   if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
-  // Worker 对话里项目经理的话（任务、打回）对 Worker 来说就是“用户”：靠右显示，也不能重试
-  if (message.sender === "user" || message.sender === "pm") {
+  if (message.sender === "user") {
     return (
       <article className="mt-5 flex flex-col items-end" data-side="right" data-status={message.status ?? undefined} title={time}>
         <div className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
@@ -187,7 +186,7 @@ export function MessageBubble({
           <DeliveryStatus
             status={message.status}
             reason={message.failureReason}
-            retry={message.status === "failed" && message.sender === "user" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
+            retry={message.status === "failed" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
           />
         )}
       </article>

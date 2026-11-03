@@ -12,7 +12,7 @@ import { StatusLine, type StopPhase } from "./StatusLine.tsx";
 export function WorkerConversation({
   title,
   readonly,
-  pmName,
+  pm,
   view,
   session,
   older,
@@ -25,7 +25,8 @@ export function WorkerConversation({
 }: {
   title: string;
   readonly: boolean;
-  pmName: string;
+  /** 派它的项目经理：返回按钮上的名字，也是 Worker 对话里项目经理那些话（任务、打回）的署名。 */
+  pm: { name: string; avatarKey: number };
   /** 找不到（还没同步过来）是 undefined。 */
   view: ConversationView | undefined;
   session: SessionState | null;
@@ -59,7 +60,7 @@ export function WorkerConversation({
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={`Worker · ${title}`}>
       <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
-        <Button variant="ghost" size="icon" aria-label={`返回 ${pmName}`} onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
         <Avatar colorKey={identity.avatarKey} size={34} />
@@ -79,7 +80,7 @@ export function WorkerConversation({
             <MessageList
               messages={view.messages}
               pending={[]}
-              agentOf={() => identity}
+              agentOf={(message) => (message.sender === "pm" ? pm : identity)}
               hasMore={view.hasMore}
               older={older}
               onLoadOlder={() => onLoadOlder(view.conversation.id)}

@@ -187,22 +187,57 @@ describe("点开 Worker", () => {
     expect(within(nav()).getByRole("button", { name: /小林/ })).toHaveAttribute("aria-current", "true");
   });
 
-  it("项目经理发的任务靠右，和它自己的话一样显示，没有重试按钮", async () => {
+  it("项目经理在 Worker 对话里说的话：靠左，带项目经理的头像和名字，不带只有用户消息才有的投递状态，也没有重试", async () => {
     const user = userEvent.setup();
     await boot(
       withWorker({
         conversations: [
           makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
           makeConvSnapshot(
-            [makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "failed", failureReason: "claude_not_found: x", text: "任务：修 X" })],
+            [
+              makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "replied", text: "任务：修 X" }),
+              makeMessage({ id: 11, conversationId: 30, workerId: 3, text: "收到" }),
+              makeMessage({ id: 12, conversationId: 30, sender: "pm", sessionId: null, status: "failed", failureReason: "claude_not_found: x", text: "再改一下" }),
+            ],
             { conversation: makeWorkerConversation() },
           ),
         ],
       }),
     );
     await user.click(within(log()).getByRole("button", { name: /已派出/ }));
-    expect(screen.getByText("任务：修 X").closest("article")).toHaveAttribute("data-side", "right");
-    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Worker · 修 X" });
+    const task = within(section).getByText("任务：修 X").closest("article")!;
+    expect(task).toHaveAttribute("data-side", "left");
+    expect(task).toHaveAttribute("data-head", "true");
+    expect(within(task).getByText("小林")).toBeInTheDocument();
+    // Worker 自己的话署 Worker 的标题，两边不会混
+    const reply = within(section).getByText("收到").closest("article")!;
+    expect(within(reply).getByText("修 X")).toBeInTheDocument();
+    expect(within(section).getByText("再改一下").closest("article")).toHaveAttribute("data-head", "true");
+    expect(within(section).queryByText("已回复")).not.toBeInTheDocument();
+    expect(within(section).queryByText("发送失败")).not.toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(within(section).queryByText(/^(已送达|处理中|排队中|失败)/)).not.toBeInTheDocument();
+  });
+
+  it("项目经理连着说两句：第二句不重复头像和名字", async () => {
+    const user = userEvent.setup();
+    await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot(
+            [
+              makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, text: "第一句" }),
+              makeMessage({ id: 11, conversationId: 30, sender: "pm", sessionId: null, text: "第二句" }),
+            ],
+            { conversation: makeWorkerConversation() },
+          ),
+        ],
+      }),
+    );
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    expect(screen.getByText("第二句").closest("article")).toHaveAttribute("data-head", "false");
   });
 
   it("Worker 在干活：状态行显示它在做什么，“停止”停的是 Worker 的对话", async () => {
