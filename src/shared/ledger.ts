@@ -307,6 +307,11 @@ export interface Ledger {
    */
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
   /**
+   * 驱动层不经事件直接改了会话那一行（M2：end 把 status 写成 ended）之后，组装代码（session.end 处理函数）调：
+   * 按那一行重算网页看到的会话状态（activity 当作空闲），和上次推的不一样就推一条 session.status。会话不存在什么也不做。
+   */
+  refreshSessionState(sessionId: SessionId): void;
+  /**
    * 守护进程启动时调一次，在 executor.start() 之前（设计第 5.4 节第 3、4 步的账本部分）。
    * 重新登记这些消息的 session.send：
    * - delivered、processing 的：不管有没有 pending、running 的动作都登记，带 resend: true

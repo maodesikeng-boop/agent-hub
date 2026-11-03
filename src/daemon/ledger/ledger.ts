@@ -1078,6 +1078,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => applyEvent(p, session, event));
     },
 
+    refreshSessionState(sessionId) {
+      write((p) => updateLive(p, sessionId, idle));
+    },
+
     recoverAfterRestart() {
       return write((p) => {
         const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(

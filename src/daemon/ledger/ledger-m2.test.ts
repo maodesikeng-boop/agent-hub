@@ -414,6 +414,22 @@ describe("交接", () => {
     expect(tableCounts()).toEqual(before);
   });
 
+  it("旧一代被驱动层写成 ended 之后 refreshSessionState：推一条 session.status（ended）；没再变就不重复推", () => {
+    const foo = createFoo();
+    assignFoo();
+    createSessionStore(db).update(foo.groupSessionId, { status: "ended", pid: null });
+    changes = [];
+    ledger.refreshSessionState(foo.groupSessionId);
+    expect(changes).toEqual([
+      expect.objectContaining({ type: "session.status", data: { session: expect.objectContaining({ sessionId: foo.groupSessionId, status: "ended", activity: "idle" }) } }),
+    ]);
+    ledger.refreshSessionState(foo.groupSessionId);
+    expect(changes).toHaveLength(1);
+    // 不存在的会话：什么也不做
+    ledger.refreshSessionState(99_999);
+    expect(changes).toHaveLength(1);
+  });
+
   it("换人后发消息：用户在群里发一条，session.send 指向新一代会话", () => {
     const foo = createFoo();
     const { sessionId: newSession } = assignFoo().data;

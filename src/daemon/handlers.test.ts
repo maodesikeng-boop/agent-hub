@@ -7,7 +7,14 @@ import {
   type Message,
   type RateLimitInfo,
 } from "../shared/index.ts";
-import { QUEUED_RECHECK_MS, createSessionSendHandler, createSessionStartHandler, type HandlerDeps } from "./handlers.ts";
+import {
+  QUEUED_RECHECK_MS,
+  createSessionEndHandler,
+  createSessionSendHandler,
+  createSessionStartHandler,
+  endedOnRevokedTokens,
+  type HandlerDeps,
+} from "./handlers.ts";
 
 const NOW = 1_800_000_000_000;
 
@@ -31,7 +38,7 @@ function message(patch: Partial<Message> = {}): Message {
   };
 }
 
-function action<T extends "session.start" | "session.send">(type: T, params: ActionRow<T>["params"]): ActionRow<T> {
+function action<T extends "session.start" | "session.send" | "session.end">(type: T, params: ActionRow<T>["params"]): ActionRow<T> {
   return { id: 1, type, dedupeKey: "k", params, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 };
 }
 
@@ -41,13 +48,19 @@ function deps(options: { message?: Message | null; send?: DriverSendResult | Err
     return options.send ?? { kind: "written" as const };
   });
   const start = vi.fn(async () => {});
+  const end = vi.fn(async () => {});
+  const getMessage = vi.fn(() => (options.message === undefined ? message() : options.message));
+  const onActionFailed = vi.fn();
+  const refreshSessionState = vi.fn();
+  const revoke = vi.fn();
   const d: HandlerDeps = {
-    driver: { start, send },
-    ledger: { getMessage: () => (options.message === undefined ? message() : options.message) },
+    driver: { start, send, end },
+    ledger: { getMessage, onActionFailed, refreshSessionState },
     sessions: { get: () => ({ rateLimit: options.rateLimit ?? null }) as AgentSessionRow },
+    tokens: { revoke },
     now: () => NOW,
   };
-  return { d, send, start };
+  return { d, send, start, end, getMessage, onActionFailed, refreshSessionState, revoke };
 }
 
 const sendAction = (extra: { resend?: boolean } = {}) =>
@@ -60,6 +73,12 @@ describe("session.start 处理函数", () => {
     expect(start).toHaveBeenCalledWith(3, { recovery: true });
     await createSessionStartHandler(d)(action("session.start", { sessionId: 3, generation: 1 }));
     expect(start).toHaveBeenLastCalledWith(3, {});
+  });
+
+  it("会话已经结束（session_ended）→ done，不抛给执行器（不计入 driver 的 health）", async () => {
+    const { d, start } = deps();
+    start.mockRejectedValueOnce(new DriverError("session_ended", "session 3 has been ended"));
+    expect(await createSessionStartHandler(d)(action("session.start", { sessionId: 3, generation: 1 }))).toEqual({ kind: "done" });
   });
 
   it("起不来的 DriverError 抛给执行器退避", async () => {
@@ -133,5 +152,79 @@ describe("session.send 处理函数", () => {
     const { d, send } = deps({ message: message({ status: "failed", failureReason: "crash" }) });
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("session.send 处理函数：撞上 session_ended（交接后旧一代已结束）", () => {
+  it("消息已经改指新一代（交接的事务里改的）→ later，不加失败次数、不标失败；下次执行用新参数", async () => {
+    const { d, onActionFailed } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 2 }) });
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_ended" });
+    expect(onActionFailed).not.toHaveBeenCalled();
+  });
+
+  it("消息仍然指着这个已结束的会话（不该发生）→ 标失败，done，不无限重试", async () => {
+    const { d, onActionFailed } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 1 }) });
+    const row = sendAction();
+    expect(await createSessionSendHandler(d)(row)).toEqual({ kind: "done" });
+    expect(onActionFailed).toHaveBeenCalledTimes(1);
+    expect(onActionFailed).toHaveBeenCalledWith(row, expect.stringMatching(/^session_ended/));
+  });
+
+  it("重读时消息没了 → done", async () => {
+    const { d, getMessage, onActionFailed } = deps({ send: new DriverError("session_ended", "x") });
+    getMessage.mockReturnValueOnce(message()).mockReturnValueOnce(null);
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
+    expect(onActionFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe("session.end 处理函数", () => {
+  const endAction = () => action("session.end", { sessionId: 4, generation: 1 });
+
+  it("调 driver.end，等它结束后作废令牌、推一次会话状态，done", async () => {
+    const { d, end, revoke, refreshSessionState } = deps();
+    let finish!: () => void;
+    end.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+    const pending = createSessionEndHandler(d)(endAction());
+    await Promise.resolve();
+    expect(end).toHaveBeenCalledWith(4);
+    // 还在等这一轮回完：令牌不能先作废（agent 这一轮里可能还要用 hub）
+    expect(revoke).not.toHaveBeenCalled();
+    finish();
+    expect(await pending).toEqual({ kind: "done" });
+    expect(revoke).toHaveBeenCalledWith(4);
+    expect(refreshSessionState).toHaveBeenCalledWith(4);
+  });
+
+  it("driver.end 出错：抛给执行器重试，令牌不作废", async () => {
+    const { d, end, revoke } = deps();
+    end.mockRejectedValueOnce(new DriverError("internal_error", "boom"));
+    await expect(createSessionEndHandler(d)(endAction())).rejects.toThrow(/^internal_error/);
+    expect(revoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("endedOnRevokedTokens：给 prepareLaunch 的令牌", () => {
+  it("同一个会话照常拿令牌；revoke 过的会话 issue 抛 DriverError(session_ended)，不是可重试的错", () => {
+    const issued = new Set<number>();
+    const revoked = new Set<number>();
+    const tokens = endedOnRevokedTokens({
+      issue: (id) => {
+        if (revoked.has(id)) throw new Error(`session ${id} token was revoked`);
+        issued.add(id);
+        return `t${id}`;
+      },
+    });
+    expect(tokens.issue(1)).toBe("t1");
+    revoked.add(1);
+    let caught: unknown;
+    try {
+      tokens.issue(1);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(DriverError);
+    expect((caught as DriverError).code).toBe("session_ended");
+    expect((caught as DriverError).retryable).toBe(false);
   });
 });

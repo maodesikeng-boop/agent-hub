@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../src/shared/index.ts";
-import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, PM_ROLE_PROMPT } from "../../src/daemon/prompt.ts";
+import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
 import {
   Client,
   agentTexts,
@@ -62,7 +62,7 @@ describe("W5 组装 + 端到端", () => {
     await terminate(again);
   });
 
-  it("聊一轮：WebSocket 收到回复；假 claude 的工作目录是 pm-home/<编号>/；提示词有角色说明和性格设定、没有 hub 用法", async () => {
+  it("聊一轮：WebSocket 收到回复；假 claude 的工作目录是 pm-home/<编号>/；提示词有角色说明、模式、hub 用法和性格设定", async () => {
     env = makeEnv();
     env.setScript({ defaultTurn: quick("你好，我是项目经理") });
     const { daemon, client, state, conversationId } = await boot();
@@ -88,9 +88,10 @@ describe("W5 组装 + 端到端", () => {
     const promptFile = argv[argv.indexOf("--append-system-prompt-file") + 1]!;
     expect(promptFile).toBe(join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "prompt.md"));
     const prompt = readFileSync(promptFile, "utf8");
-    expect(prompt).toContain(PM_ROLE_PROMPT);
+    expect(prompt).toContain(`名字叫“${DEFAULT_PM_NAME}”`);
+    expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
+    expect(prompt).toContain(HUB_USAGE_PROMPT);
     expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
-    expect(prompt).not.toMatch(/\bhub\b/);
     // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
     expect(prompt).not.toContain("AGENTS.md");
     expect(argv).toContain("--strict-mcp-config");

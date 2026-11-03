@@ -242,6 +242,7 @@ export class FakeLedger {
       onStopRequested: unused("onStopRequested"),
       onActionEnqueued: unused("onActionEnqueued"),
       applyDriverEvent: unused("applyDriverEvent"),
+      refreshSessionState: unused("refreshSessionState"),
       recoverAfterRestart: unused("recoverAfterRestart"),
       createPm: (i) => this.createPm(i),
       getMessage: unused("getMessage"),

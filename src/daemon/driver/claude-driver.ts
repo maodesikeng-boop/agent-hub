@@ -667,6 +667,8 @@ export class ClaudeDriver implements Driver {
       try {
         files = await this.#opts.prepareLaunch(row);
       } catch (error) {
+        // session_ended（组装代码的令牌已作废）原样抛：不可重试，处理函数按“会话已结束”接
+        if (error instanceof DriverError && error.code === "session_ended") throw error;
         throw new DriverError("spawn_failed", `prepareLaunch failed: ${errorMessage(error)}`);
       }
       row = this.#store(st);

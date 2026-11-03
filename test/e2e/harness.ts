@@ -9,8 +9,14 @@ import {
   API_PATHS,
   ENV_CLAUDE,
   ENV_HOME,
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
   ENV_PORT,
   type Change,
+  type CreatePmRequest,
+  type CreatePmResponse,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
   type Message,
   type StateSnapshot,
   type WsServerMessage,
@@ -72,11 +78,19 @@ export interface E2eEnv {
   /** 假 claude 收到的用户消息的文字。 */
   stdinTexts(): string[];
   argvs(): Array<{ pid: number; argv: string[]; cwd: string }>;
+  /** 假 claude 启动时记下的环境变量（HUB_TOKEN、HUB_SOCK、PATH……），按进程。 */
+  envs(): Array<{ pid: number; env: Record<string, string> }>;
+  /** 假 claude 的 bash 步骤跑过的命令和结果。 */
+  bashRuns(): Array<{ pid: number; command: string; exitCode: number; output: string }>;
+  /** 某个假 claude 进程收到的用户消息的文字。 */
+  stdinTextsOf(pid: number): string[];
+  /** 用某个假 claude 进程拿到的 HUB_TOKEN、HUB_SOCK 跑一次 run/bin/hub（就像 agent 自己敲的）。 */
+  runHub(pid: number, args: string[], options?: { stdin?: string }): Promise<{ code: number | null; stdout: string; stderr: string }>;
   cleanup(): Promise<void>;
 }
 
 export function makeEnv(): E2eEnv {
-  const dir = mkdtempSync(join(tmpdir(), "agent-hub-e2e-"));
+  const dir = mkdtempSync(join(shortTmp(), "ah-e2e-"));
   const home = join(dir, "home");
   const fakeDir = join(dir, "fake");
   mkdirSync(fakeDir, { recursive: true });
@@ -141,13 +155,25 @@ export function makeEnv(): E2eEnv {
       return { code, stdout: d.out(), stderr: d.err() };
     },
     log,
-    stdinTexts: () =>
-      log().flatMap((e) => {
-        if (e.kind !== "stdin") return [];
-        const obj = JSON.parse(e.line) as { type: string; message?: { content: Array<{ text: string }> } };
-        return obj.type === "user" ? [obj.message!.content.map((c) => c.text).join("")] : [];
-      }),
+    stdinTexts: () => userTexts(log()),
+    stdinTextsOf: (pid) => userTexts(log().filter((e) => e.pid === pid)),
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [{ pid: e.pid, argv: e.argv, cwd: e.cwd }] : [])),
+    envs: () => log().flatMap((e) => (e.kind === "env" ? [{ pid: e.pid, env: e.env }] : [])),
+    bashRuns: () => log().flatMap((e) => (e.kind === "bash" ? [{ pid: e.pid, command: e.command, exitCode: e.exitCode, output: e.output }] : [])),
+    runHub(pid, args, options = {}) {
+      const entry = log().find((e) => e.kind === "env" && e.pid === pid);
+      if (entry?.kind !== "env") throw new Error(`no env logged for fake claude ${pid}`);
+      const child = spawn(join(home, "run", "bin", "hub"), args, {
+        env: { PATH: process.env.PATH, [ENV_HUB_TOKEN]: entry.env[ENV_HUB_TOKEN], [ENV_HUB_SOCK]: entry.env[ENV_HUB_SOCK] },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (c: string) => (stdout += c));
+      child.stderr.setEncoding("utf8").on("data", (c: string) => (stderr += c));
+      child.stdin.end(options.stdin ?? "");
+      return new Promise((resolve) => child.once("close", (code) => resolve({ code, stdout, stderr })));
+    },
     async cleanup() {
       for (const child of running) child.kill("SIGKILL");
       await sleep(50);
@@ -156,6 +182,14 @@ export function makeEnv(): E2eEnv {
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+function userTexts(entries: FakeLogEntry[]): string[] {
+  return entries.flatMap((e) => {
+    if (e.kind !== "stdin") return [];
+    const obj = JSON.parse(e.line) as { type: string; message?: { content: Array<{ text: string }> } };
+    return obj.type === "user" ? [obj.message!.content.map((c) => c.text).join("")] : [];
+  });
 }
 
 /** 登录后的界面客户端：带 cookie 和同源的 Origin，跟浏览器一样。 */
@@ -201,6 +235,30 @@ export class Client {
     });
     if (res.status !== 200) throw new Error(`POST message: ${res.status} ${await res.text()}`);
     return ((await res.json()) as { messageId: number }).messageId;
+  }
+
+  async postJson(path: string, body: unknown): Promise<Response> {
+    return fetch(this.base + path, {
+      method: "POST",
+      headers: this.headers(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  async createPm(input: CreatePmRequest): Promise<CreatePmResponse> {
+    const res = await this.postJson(API_PATHS.pms, input);
+    if (res.status !== 201) throw new Error(`POST /api/pms: ${res.status} ${await res.text()}`);
+    return (await res.json()) as CreatePmResponse;
+  }
+
+  async createProject(input: CreateProjectRequest): Promise<CreateProjectResponse> {
+    const res = await this.postJson(API_PATHS.projects, input);
+    if (res.status !== 201) throw new Error(`POST /api/projects: ${res.status} ${await res.text()}`);
+    return (await res.json()) as CreateProjectResponse;
+  }
+
+  async retry(messageId: number): Promise<number> {
+    return (await this.postJson(API_PATHS.retryMessage(messageId), undefined)).status;
   }
 
   async stop(conversationId: number): Promise<number> {
@@ -249,3 +307,9 @@ export function agentTexts(state: StateSnapshot, conversationId: number): string
 }
 
 export type { Change };
+
+/** unix socket 路径有长度上限（macOS 103 字节）：系统临时目录太长时（macOS 的 $TMPDIR 经常很长）改用 /tmp。 */
+function shortTmp(): string {
+  const base = tmpdir();
+  return base.length <= 40 || !existsSync("/tmp") ? base : "/tmp";
+}

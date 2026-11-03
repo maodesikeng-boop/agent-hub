@@ -31,6 +31,8 @@ export interface AgentApiOptions {
   ledger: Pick<Ledger, "hubCall" | "reportHealth">;
   tokens: SessionTokens;
   logger?: boolean;
+  /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
+  log?: (line: string) => void;
 }
 
 const RUN_DIR_MODE = 0o700;
@@ -165,6 +167,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       ledger.reportHealth("agent-api", error);
     } catch (err) {
       app.log.error({ err }, "agent-api reportHealth failed");
+      opts.log?.(`agent-hub: agent 接口记健康状态失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -187,6 +190,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。
     if (status !== undefined && status >= 400 && status < 500) return fail(reply, "invalid", `参数不对：${err.message}`);
     req.log.error({ err }, "agent-api request failed");
+    opts.log?.(`agent-hub: hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
     reportHealth(err.message);
     return fail(reply, "internal", err.message);
   });

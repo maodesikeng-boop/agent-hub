@@ -650,6 +650,20 @@ describe("结束没在跑的", () => {
     expect(t.argvs()).toEqual([]);
   });
 
+  it("prepareLaunch 抛 DriverError(session_ended)（令牌已作废）：原样抛出，不包成可重试的 spawn_failed；不起进程", async () => {
+    const t = harness({
+      driver: {
+        prepareLaunch: async (session) => {
+          throw new DriverError("session_ended", `session ${session.id} token was revoked`);
+        },
+      },
+    });
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, user(1, "hi"))).rejects.toMatchObject({ code: "session_ended", retryable: false });
+    await expect(t.driver.start(s.id)).rejects.toMatchObject({ code: "session_ended", retryable: false });
+    expect(t.argvs()).toEqual([]);
+  });
+
   it("空闲关闭的定时器不会在 ended 之后把状态改回 idle", async () => {
     const t = harness({ driver: { idleCloseMs: 50 } });
     const s = t.addSession();

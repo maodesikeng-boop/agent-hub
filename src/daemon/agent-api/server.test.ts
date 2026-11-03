@@ -200,6 +200,22 @@ describe("agent api over inject", () => {
       expect(ledger.healthReports).toHaveLength(2);
     });
 
+    it("500s and a throwing reportHealth go to the log option (the daemon's log)", async () => {
+      const lines: string[] = [];
+      const logged = createAgentApi({ ledger, tokens, log: (line) => lines.push(line) });
+      ledger.healthFailWith = new Error("health store broken");
+      ledger.failWith = new Error("database is locked");
+      const res = await logged.inject({
+        method: "POST",
+        url: "/v1/status",
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(500);
+      expect(lines).toEqual([expect.stringMatching(/status.*database is locked/), expect.stringContaining("health store broken")]);
+      await logged.close();
+    });
+
     it("maps any other ledger error to 500 internal with the original message", async () => {
       ledger.failWith = new Error("database is locked");
       const res = await call("status", {});
