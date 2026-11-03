@@ -16,12 +16,20 @@ export const IDLE_CLOSE_MS = 10 * 60_000;
 /** 关机时最多等 10 秒，剩下的强制结束。 */
 export const SHUTDOWN_GRACE_MS = 10_000;
 
-/** 界面登录后设的 cookie（HttpOnly、SameSite=Strict）。 */
+/**
+ * 界面登录后设的 cookie（HttpOnly、SameSite=Strict）。值就是界面用户令牌：
+ * 令牌第一次启动时随机生成，存在数据目录的 state/ui-token（权限 UI_TOKEN_FILE_MODE），之后每次启动读同一个，
+ * 所以守护进程重启后旧 cookie 仍然有效。删掉这个文件再启动就换新令牌，旧 cookie 全部失效。
+ */
 export const UI_COOKIE_NAME = "agent_hub_ui";
+/** state/ui-token 的权限：只有自己能读写。启动时发现权限更宽要改回来。 */
+export const UI_TOKEN_FILE_MODE = 0o600;
 
 /** 环境变量。 */
 export const ENV_HOME = "AGENT_HUB_HOME";
 export const ENV_CLAUDE = "AGENT_HUB_CLAUDE";
+/** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
+export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 
 /** 同一个模块连续失败几次就算“坏了”（界面标红）。 */
 export const HEALTH_FAILURE_THRESHOLD = 3;

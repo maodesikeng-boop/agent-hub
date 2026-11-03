@@ -9,10 +9,31 @@ export interface DriverSendInput {
   messageIds: MessageId[];
   source: MessageSource;
   text: string;
+  /** 重启后重发（SessionSendParams.resend）：前面加 RESEND_NOTE。 */
+  resend?: boolean;
 }
 
 /**
- * 每个事件都带 Claude 原始的 uuid（有的话）；账本按（会话，uuid）去重。
+ * send 的结果：
+ * - written：写进标准输入成功（这一次，或者之前一次带同样 messageIds 的 send）。处理函数返回 done。
+ * - queued：会话正忙，消息在驱动层的待发队列里还没写。处理函数返回 { kind: "later" }，过一会儿再调 send；
+ *   同样的 messageIds 再调不会重复排队，写进去之后再调返回 written。
+ * - rejected：写入前校验没过，没写，也不会再写；驱动层已经出了 driver.error(invalid_input, messageIds)，
+ *   账本据此标 failed。处理函数返回 done。
+ */
+export type DriverSendResult = { kind: "written" } | { kind: "queued" } | { kind: "rejected" };
+
+/** 重启后恢复会话（start 的 recovery）时，加在下一条写进去的消息前面（设计第 5.4 节第 4 步）。 */
+export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一轮被打断了。请先看一下工作区现在的状态，再接着做。";
+/** 重发（DriverSendInput.resend）时加在消息前面（设计第 12.1 节）。 */
+export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
+
+/**
+ * 去重：
+ * - agent.text、agent.tool 一定带 uuid，账本按 agentMessageDedupeKey 去重（工具再带 toolUseId）。
+ *   Claude 原始事件有 uuid 就照抄；没有的话驱动层用 `line:<原始那一行的 sha256 十六进制前 32 位>`，
+ *   这样重放日志得到的键不变。同一个 assistant 事件里的几段文字拼成一个 agent.text。
+ * - 其他事件 uuid 可有可无，账本不靠它去重，靠消息状态只按 MESSAGE_STATUS_TRANSITIONS 走来保证重复无害。
  * `at` 是驱动层收到它的毫秒时间。
  */
 export interface DriverEventBase {
@@ -43,22 +64,24 @@ export interface MessageProcessingEvent extends DriverEventBase {
 /** assistant 的一段文字。 */
 export interface AgentTextEvent extends DriverEventBase {
   type: "agent.text";
+  uuid: string;
   text: string;
 }
 
-/** 一次工具调用（调用开始时出一个）。 */
+/** 一次工具调用（调用开始时出一个）。Message.text 的一行摘要由账本生成。 */
 export interface AgentToolEvent extends DriverEventBase {
   type: "agent.tool";
+  uuid: string;
   toolUseId: string;
   name: string;
   input: unknown;
 }
 
 /**
- * 一轮结束（result）。
- * - interrupted：这一轮里出现过 `[Request interrupted by user]`，算“已停止”，不算正常结束；
- * - ok：result 成功且没被打断。
- * messageIds：这一轮处理的用户消息，账本据此标“已回复”或“已停止”。
+ * 一轮结束（result）。messageIds：这一轮处理的用户消息。账本这样标：
+ * - interrupted（这一轮里出现过 `[Request interrupted by user]`）→ stopped；
+ * - 否则 ok → replied；
+ * - 否则（ok=false 且不是打断）→ failed，failureReason 取 error。
  */
 export interface TurnEndedEvent extends DriverEventBase {
   type: "turn.ended";
@@ -66,6 +89,8 @@ export interface TurnEndedEvent extends DriverEventBase {
   interrupted: boolean;
   messageIds: MessageId[];
   durationMs: number | null;
+  /** ok=false 时 result 里的错误：subtype 照抄（如 "error_during_execution"），message 是能给人看的一句。 */
+  error?: { subtype: string; message: string };
 }
 
 export interface RateLimitEvent extends DriverEventBase {
@@ -73,12 +98,30 @@ export interface RateLimitEvent extends DriverEventBase {
   info: RateLimitInfo;
 }
 
-/** 进程退出。hadResult 为 false 表示这一轮没有 result，按崩溃处理。 */
+/**
+ * 进程为什么退出：
+ * - idle：空闲关掉标准输入后正常退出；
+ * - interrupt：打断时控制消息没回应，发了 SIGINT；
+ * - shutdown：守护进程关机；
+ * - crash：其他意外退出（这一轮没有 result）；
+ * - startup_failed：没等到 init 就退出了（或者启动超时被结束）。
+ */
+export const SESSION_EXIT_REASONS = ["idle", "interrupt", "shutdown", "crash", "startup_failed"] as const;
+export type SessionExitReason = (typeof SESSION_EXIT_REASONS)[number];
+
+/**
+ * 进程退出。hadResult 为 false 表示这一轮没有 result。
+ * messageIds：退出时在途的消息（已经写进去、还没等到 result），账本据 reason 标：
+ * interrupt、shutdown → stopped；crash、startup_failed → failed（failureReason 写退出码或信号）；idle 时应为空。
+ * 还在驱动层待发队列里没写的消息不算在途，不在这里；它们的 send 动作还是 later，下次会话起来照常写。
+ */
 export interface SessionExitedEvent extends DriverEventBase {
   type: "session.exited";
+  reason: SessionExitReason;
   exitCode: number | null;
   signal: string | null;
   hadResult: boolean;
+  messageIds: MessageId[];
 }
 
 export const DRIVER_ERROR_CODES = [
@@ -91,11 +134,39 @@ export const DRIVER_ERROR_CODES = [
 ] as const;
 export type DriverErrorCode = (typeof DRIVER_ERROR_CODES)[number];
 
+/**
+ * 这些错误由 start、send 抛 DriverError 交给执行器：按退避重试，次数用完执行器调 ledger.onActionFailed，
+ * 账本把消息标 failed、failureReason 写 error.message。期间每次失败都记 health，界面实时显示原因。
+ */
+export const RETRYABLE_DRIVER_ERRORS: readonly DriverErrorCode[] = [
+  "start_timeout",
+  "claude_not_found",
+  "spawn_failed",
+  "start_args_conflict",
+];
+
+/** start、send 抛的错误。message 以错误码开头，账本和 health 可以原样显示。 */
+export class DriverError extends Error {
+  readonly code: DriverErrorCode;
+  readonly retryable: boolean;
+  constructor(code: DriverErrorCode, detail: string) {
+    super(`${code}: ${detail}`);
+    this.name = "DriverError";
+    this.code = code;
+    this.retryable = RETRYABLE_DRIVER_ERRORS.includes(code);
+  }
+}
+
+/**
+ * 不能重试、也不属于哪次 start、send 调用的错误，以事件交给账本：
+ * - invalid_input：带 messageIds，账本把它们标 failed；
+ * - bad_output_line 等：不带 messageIds，只记 health。
+ * 可重试的错误（RETRYABLE_DRIVER_ERRORS）不出这个事件，messageIds 只给 invalid_input 这类用。
+ */
 export interface DriverErrorEvent extends DriverEventBase {
   type: "driver.error";
   code: DriverErrorCode;
   message: string;
-  /** 受影响的消息（起不来、写不进去时）；账本据此标“失败”。 */
   messageIds?: MessageId[];
 }
 
@@ -114,12 +185,24 @@ export type DriverEventType = DriverEvent["type"];
 
 export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => void;
 
+export interface DriverStartOptions {
+  /** 守护进程重启后恢复被打断的会话：下一条写进去的消息前加 RESTART_RECOVERY_NOTE；没有待发消息就单独写一条。 */
+  recovery?: boolean;
+}
+
 /** 执行器 ↔ 驱动层。 */
 export interface Driver {
-  /** “启动或恢复会话”：进程已经在跑就直接返回；第一次用 --session-id，之后 --resume。 */
-  start(sessionId: SessionId): Promise<void>;
-  /** 进驱动层自己的待发队列；会话没起来会先起。忙时用户消息排在系统消息前面，用户连发的拼成一条。 */
-  send(sessionId: SessionId, input: DriverSendInput): Promise<void>;
+  /**
+   * “启动或恢复会话”：进程已经在跑就直接返回；第一次用 --session-id，之后 --resume。
+   * 等到 system/init 才 resolve；起不来抛 DriverError（可重试的那几种）。
+   */
+  start(sessionId: SessionId, options?: DriverStartOptions): Promise<void>;
+  /**
+   * 会话没起来会先起（起不来抛 DriverError）。只有写进标准输入成功才 resolve 成 written；
+   * 会话正忙就放进驱动层自己的待发队列，resolve 成 queued（见 DriverSendResult）。
+   * 忙时用户消息排在系统消息前面，用户连发的拼成一条。
+   */
+  send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult>;
   /** 先写 interrupt 控制消息，5 秒没回应发 SIGINT。 */
   interrupt(sessionId: SessionId): Promise<void>;
   /** 守护进程关机：给所有 claude 发 SIGINT，空闲的关掉标准输入，最多等 10 秒，剩下的强制结束。 */

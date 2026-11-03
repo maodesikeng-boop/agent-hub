@@ -10,7 +10,7 @@ import type {
 } from "./domain.ts";
 
 export const API_PATHS = {
-  /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。 */
+  /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
   auth: "/auth",
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
@@ -52,20 +52,22 @@ export interface PostMessageResponse {
   messageId: MessageId;
 }
 
-/** 4xx / 5xx 的响应体。 */
+/** 4xx / 5xx 的响应体。对话不存在（账本抛 ConversationNotFoundError）→ 404。 */
 export interface ApiErrorBody {
   error: string;
 }
 
 // ---- WebSocket：服务端 → 网页 ----
 
-export const CHANGE_TYPES = ["message.created", "message.updated", "session.status"] as const;
+export const CHANGE_TYPES = ["message.created", "message.updated", "session.status", "health.updated"] as const;
 export type ChangeType = (typeof CHANGE_TYPES)[number];
 
 export interface ChangeDataMap {
   "message.created": { message: Message };
   "message.updated": { message: Message };
   "session.status": { session: SessionState };
+  /** 某个模块的健康状态变了（比如“找不到 claude”），界面实时显示。 */
+  "health.updated": { health: HealthEntry };
 }
 
 /** 服务端推的一条变化：{ seq, type, data }。 */

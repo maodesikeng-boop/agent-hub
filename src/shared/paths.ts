@@ -7,6 +7,7 @@ export interface HubPaths {
   stateDir: string;
   dbFile: string;
   lockFile: string;
+  /** 界面用户令牌，权限 0600，重启后沿用（见 limits.ts 的 UI_COOKIE_NAME）。 */
   uiTokenFile: string;
   launchDir: string;
   logsDir: string;
