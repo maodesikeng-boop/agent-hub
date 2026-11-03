@@ -48,11 +48,12 @@ export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
  *   - failed → queued：用户点“重试”（ledger.retryMessage，M2）。账本在同一个事务里把状态改回 queued、清空 failureReason、
  *     重新登记 session.send，推一条 message.updated；之后照 queued → delivered → … 正常走；
  *   - failed → delivered：重启后重发、或执行器自己重试时写进去了（M1 就有）。
+ * - queued → stopped（M3）：Worker 收工时还没发给它的话（比如 worktree 还没建好就收工了的任务说明），不会再发了。
  * 账本只按这张表改状态；不合法的转换（包括同状态）一律忽略，不报错——
  * 比如重启后重发一条 processing 的消息，驱动层再出 message.delivered，它仍然是 processing。
  */
 export const MESSAGE_STATUS_TRANSITIONS: Readonly<Record<MessageStatus, readonly MessageStatus[]>> = {
-  queued: ["delivered", "failed"],
+  queued: ["delivered", "failed", "stopped"],
   delivered: ["processing", "stopped", "failed"],
   processing: ["replied", "stopped", "failed"],
   replied: [],

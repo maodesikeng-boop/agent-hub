@@ -170,6 +170,7 @@ describe("消息", () => {
       ["processing", "stopped"],
       ["processing", "failed"],
       ["queued", "failed"],
+      ["queued", "stopped"],
       ["delivered", "stopped"],
       ["delivered", "failed"],
       ["failed", "delivered"],

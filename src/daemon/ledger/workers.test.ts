@@ -1,6 +1,5 @@
 // M3 账本里的 Worker（m3-plan 第 3 节测试表 W2）：派活、在哪干活、按角色放行、汇报回到项目经理、出错、打回、收工、建 worktree。
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,7 +10,7 @@ import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, Wor
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import type { LedgerErrorCode } from "../../shared/ledger.ts";
+import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
@@ -22,7 +21,6 @@ import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
-import type { WorkerGit } from "./workers.ts";
 
 let db: Db;
 let root: string;
@@ -42,10 +40,12 @@ let zhou: { pmId: PmId; conversationId: ConversationId; sessionId: SessionId };
 let main: string;
 let projectId: number;
 
-const fakeGit: WorkerGit = {
-  isRepoWithCommit: (folder) => repos.has(folder),
-  hasUncommittedChanges: (folder) => dirty.has(folder),
-};
+/** agent 接口探 git 的结果（这里按 repos、dirty 假装）。gitFails 不是 null 就是 git 没跑成。 */
+let gitFails: string | null;
+function probeOf(folder: string): WorkspaceProbe {
+  if (gitFails !== null) return { kind: "failed", error: gitFails };
+  return { kind: "ok", isRepoWithCommit: repos.has(folder), hasUncommittedChanges: dirty.has(folder) };
+}
 
 function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
   return {
@@ -55,7 +55,6 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     dataHome,
     worktreesDir,
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
-    git: fakeGit,
     ...extra,
   };
 }
@@ -75,6 +74,7 @@ beforeEach(() => {
   mkdirSync(work, { recursive: true });
   repos = new Set();
   dirty = new Set();
+  gitFails = null;
   now = 1_000;
   ledger = createLedger(db, options());
   const a = ledger.createPm({ name: "小林", mode: "manage_only", persona: "", defaultModel: "claude-sonnet-5-5" });
@@ -141,8 +141,12 @@ function actionsOf(type: AnyActionRow["type"]) {
   return listActions(db).filter((a) => a.type === type);
 }
 
+/** 像 agent 接口那样：没带 noWorktree 就先探主文件夹（workerStartFolder），把结果交给 hubCall。 */
 function start(args: Partial<HubArgs<"worker.start">> = {}, caller: SessionId = lin.sessionId) {
-  return hub(caller, "worker.start", { title: "修 X", task: "把 X 修好，测试要过", ...args });
+  const full = { title: "修 X", task: "把 X 修好，测试要过", ...args };
+  const folder = full.noWorktree === true ? null : ledger.workerStartFolder(caller);
+  const context: HubCallContext = folder === null ? {} : { workspace: probeOf(folder) };
+  return ledger.hubCall(caller, "worker.start", full, context);
 }
 
 /** Worker 对话里第一条消息（任务说明）。 */
@@ -300,25 +304,39 @@ describe("派活：在主文件夹里干", () => {
     expect(sessionRow(workerSessionId(worker.id)).addDirs).toEqual([extra]);
   });
 
-  it("用真 git 判断（默认实现）：有提交的仓库用 worktree，普通文件夹用主文件夹", () => {
-    const real = createLedger(db, options({ git: undefined }));
-    const repo = folder("repo");
-    // 身份写死，不读用户的全局配置（本机开了签名也不会卡住）
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
-        cwd: repo,
-        env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
-      });
-    git("init", "-q");
-    writeFileSync(join(repo, "a.txt"), "a");
-    git("add", ".");
-    git("commit", "-qm", "init");
-    const a = real.createPm({ name: "老王", mode: "manage_only", persona: "", folder: repo });
-    expect(real.hubCall(a.sessionId, "worker.start", { title: "a", task: "t" }).data.worker.workspace).toBe("worktree");
-    writeFileSync(join(repo, "b.txt"), "b");
-    expect(real.hubCall(a.sessionId, "worker.start", { title: "b", task: "t" }).text).toContain("看不到这些改动");
-    const b = real.createPm({ name: "老李", mode: "manage_only", persona: "", folder: folder("plain") });
-    expect(real.hubCall(b.sessionId, "worker.start", { title: "c", task: "t" }).data.worker.workspace).toBe("main");
+  it("git 没跑成（超时、找不到 git、Xcode 许可证……）：报错说清楚原因和 --no-worktree，不默默改成在主文件夹里干，什么都没写", () => {
+    repos.add(main);
+    gitFails = "git 超过 5 秒没有结束，已中止（git rev-parse --verify --quiet HEAD）。";
+    const before = tableCounts();
+    let caught: unknown;
+    try {
+      start();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(LedgerRequestError);
+    expect((caught as Error).message).toContain("git 没跑成");
+    expect((caught as Error).message).toContain("超过 5 秒");
+    expect((caught as Error).message).toContain("--no-worktree");
+    expect(tableCounts()).toEqual(before);
+    expect(db.get("SELECT ok, error_code FROM hub_calls ORDER BY id DESC LIMIT 1")).toEqual({ ok: 0, error_code: "internal" });
+    // 明确选主文件夹就不看 git
+    expect(start({ noWorktree: true }).data.worker.workspace).toBe("main");
+  });
+
+  it("没带 noWorktree 又没给探的结果：是调用方的错，抛错，什么都没写", () => {
+    const before = tableCounts();
+    expect(() => hub(lin.sessionId, "worker.start", { title: "修 X", task: "t" })).toThrow(/workspace/);
+    expect(tableCounts()).toEqual(before);
+  });
+
+  it("workerStartFolder：项目经理的项目主文件夹；还没有项目、Worker 的会话、不存在的会话 → null", () => {
+    expect(ledger.workerStartFolder(lin.sessionId)).toBe(main);
+    expect(ledger.workerStartFolder(zhou.sessionId)).toBeNull();
+    expect(ledger.workerStartFolder(999)).toBeNull();
+    const worker = start({ noWorktree: true }).data.worker;
+    expect(ledger.workerStartFolder(workerSessionId(worker.id))).toBeNull();
   });
 });
 
@@ -455,7 +473,10 @@ describe("建 worktree（worktree.create 处理函数用）", () => {
     expect(line).toMatchObject({ status: "queued", sessionId: lin.sessionId });
     expect(line.text.startsWith("【Worker #1 · 修 X 的汇报】")).toBe(true);
     expect(line.text).toContain("磁盘满了");
-    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system" }]]);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([
+      ["session.end", { sessionId: workerSessionId(worker.id), generation: 1 }],
+      ["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system" }],
+    ]);
     expect(taskMessage(worker)).toMatchObject({ status: "failed", failureReason: "git worktree add 失败：磁盘满了" });
     // 重复调用不出第二行
     ledger.onActionFailed(action, "git worktree add 失败：磁盘满了");
@@ -654,5 +675,125 @@ describe("收工", () => {
     expect(result.text).toContain("甲");
     expect(result.text).toContain("乙");
     expect(hub(zhou.sessionId, "worker.list", {}).data.workers.map((w) => w.title)).toEqual(["丙"]);
+  });
+});
+
+describe("审查后补的（PR #34）", () => {
+  it("重启恢复：worktree 还没建好的 Worker，任务说明不提前登记；建好之后才登记", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    enqueued = [];
+    const recovered = ledger.recoverAfterRestart();
+    expect(recovered.requeuedMessageIds).not.toContain(taskMessage(worker).id);
+    expect(enqueued).toEqual([]);
+    ledger.onWorktreeCreated(worker.id, "c0ffee");
+    expect(enqueued.map((a) => a.type)).toEqual(["session.start", "session.send"]);
+  });
+
+  it("重启恢复：已收工的 Worker 的消息不再发；在主文件夹里干的照常恢复", () => {
+    const ended = start({ noWorktree: true }).data.worker;
+    const open = start({ noWorktree: true, title: "另一个" }).data.worker;
+    const endedMessage = hub(lin.sessionId, "worker.send", { workerId: ended.id, text: "再看看" }).data.messageId;
+    const sessionId = workerSessionId(ended.id);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [endedMessage], at: now });
+    hub(lin.sessionId, "worker.end", { workerId: ended.id });
+    // 动作表清空，模拟上次运行留下的消息都没有活动动作
+    db.run("DELETE FROM actions");
+    const recovered = ledger.recoverAfterRestart();
+    expect([...recovered.resentMessageIds, ...recovered.requeuedMessageIds]).not.toContain(endedMessage);
+    expect(recovered.recoveredSessionIds).not.toContain(sessionId);
+    expect(recovered.requeuedMessageIds).toContain(taskMessage(open).id);
+  });
+
+  it("worktree 建好之前就收工：任务说明标已停止，不会一直排队", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    expect(taskMessage(worker).status).toBe("stopped");
+  });
+
+  it("Worker 的消息发不出去（session.send 次数用完）：项目经理收到一行 turn_failed，去重键是那条消息", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === taskMessage(worker).id)!;
+    enqueued = [];
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    expect(taskMessage(worker)).toMatchObject({ status: "failed", failureReason: "claude_not_found: 找不到 claude" });
+    const line = workerLines().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "turn_failed", summary: "claude_not_found: 找不到 claude" });
+    expect(line.dedupeKey).toBe(`worker:${worker.id}:turn_failed:${taskMessage(worker).id}`);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system" }]]);
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    expect(workerLines().filter((m) => workerEventOf(m)?.event === "turn_failed")).toHaveLength(1);
+  });
+
+  it("已收工的 Worker 的消息发不出去：不再给项目经理发一行", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const messageId = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再看看" }).data.messageId;
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === messageId)!;
+    ledger.onActionFailed(send, "这个会话已经结束，发不出去了");
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended"]);
+  });
+
+  it("项目经理自己的消息发不出去：不发 Worker 那一行", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "好了"));
+    const line = workerLines().at(-1)!;
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === line.id)!;
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    expect(ledger.getMessage(line.id)!.status).toBe("failed");
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "report"]);
+  });
+
+  it("驱动层报了带消息编号的错（driver.error）：一行 turn_failed 交给项目经理", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const id = taskMessage(worker).id;
+    ledger.applyDriverEvent(workerSessionId(worker.id), {
+      type: "driver.error",
+      code: "invalid_input",
+      message: "invalid_input: 写不进去",
+      messageIds: [id],
+      at: now,
+    });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "turn_failed", summary: "invalid_input: 写不进去" });
+  });
+
+  it("这一轮没有自己的文字：按“没有文字回复”处理，不拿上一轮的旧文字", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
+    // 第一轮还在跑时项目经理又发了一句（编号比第一轮的文字小）
+    const second = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.messageId;
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "first", text: "第一轮的结论", at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 1, at: now });
+    runTurn(worker, [second], null);
+    const line = workerLines().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status: "unformatted", summary: "" });
+    expect(line.text).not.toContain("第一轮的结论");
+    expect(line.text).toContain("没有文字回复");
+  });
+
+  it("建 worktree 彻底失败：也登记 Worker 会话的 session.end", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    const action = actionsOf("worktree.create")[0]!;
+    enqueued = [];
+    ledger.onActionFailed(action, "git worktree add 失败");
+    expect(enqueued.map((a) => [a.type, a.params])).toContainEqual(["session.end", { sessionId: workerSessionId(worker.id), generation: 1 }]);
+  });
+
+  it("收工后正在跑的那一轮照样汇报给项目经理", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const id = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "late", text: report("做完了", "收工前做完的"), at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended", "report"]);
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ summary: "收工前做完的" });
   });
 });

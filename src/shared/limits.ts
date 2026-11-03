@@ -83,6 +83,11 @@ export const HUB_REQUEST_TIMEOUT_MS = 15_000;
 export const HUB_TIMEOUT_CHECK_MS = 1_000;
 /** agent 接口：启动时试连旧 socket 的上限，连得上说明有活实例。 */
 export const HUB_SOCKET_PROBE_MS = 1_000;
+/**
+ * agent 接口：hub worker start 之前探主文件夹的 git（是不是有提交的仓库、有没有没提交的改动），每次 git 调用最多等多久。
+ * 要比 HUB_CLI_TIMEOUT_MS 短得多：git 卡住时这一次派活报错，不能拖到 hub 那边报“可能已执行”。
+ */
+export const GIT_PROBE_TIMEOUT_MS = 5_000;
 /** hub 命令：连上之后多久没动静算守护进程没回应。 */
 export const HUB_CLI_TIMEOUT_MS = 30_000;
 /** hub 命令：--stdin 多久没收到数据就放弃。 */

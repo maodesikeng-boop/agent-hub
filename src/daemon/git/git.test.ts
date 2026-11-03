@@ -1,10 +1,10 @@
 // 真 git、临时目录：判断仓库、没提交的改动、建 worktree（M3 W1，计划的测试表）。
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addWorktree, GitError, hasUncommittedChanges, hasUncommittedChangesSync, isRepoWithCommit, isRepoWithCommitSync } from "./index.ts";
+import { addWorktree, GitError, hasUncommittedChanges, isRepoWithCommit, probeWorkspace } from "./index.ts";
 
 /** 测试里自己用的 git：身份写死，不读用户的全局配置（也不会因为本机开了签名而卡住）。 */
 function git(cwd: string, ...args: string[]): string {
@@ -34,6 +34,22 @@ function makeRepo(name: string, { commit = true } = {}): string {
   return dir;
 }
 
+/** 换一个假 git：PATH 里只有它，内容是一段 sh。 */
+function fakeGit(script: string): void {
+  const bin = join(root, "fake-bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "git"), `#!/bin/sh\n${script}\n`);
+  chmodSync(join(bin, "git"), 0o755);
+  vi.stubEnv("PATH", `${bin}:/bin:/usr/bin`);
+}
+
+/** 假 git 时用的普通文件夹（不用真 git 建仓库）。 */
+function makeRepoLater(): string {
+  const dir = join(root, "any");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 describe("isRepoWithCommit", () => {
   it("有提交的仓库 → 是", async () => {
     expect(await isRepoWithCommit(makeRepo("项目 一"))).toBe(true);
@@ -46,8 +62,20 @@ describe("isRepoWithCommit", () => {
     mkdirSync(dir);
     expect(await isRepoWithCommit(dir)).toBe(false);
   });
-  it("文件夹不存在 → 否", async () => {
-    expect(await isRepoWithCommit(join(root, "没有这个目录"))).toBe(false);
+  it("文件夹不存在 → 报清楚的错（不当成“不是仓库”）", async () => {
+    const error = await isRepoWithCommit(join(root, "没有这个目录")).catch((e) => e);
+    expect(error).toBeInstanceOf(GitError);
+    expect(error.message).toContain("没有这个目录");
+  });
+  it("git 别的非零退出（比如 Xcode 许可证没同意）→ 报错，不当成“不是仓库”", async () => {
+    fakeGit("echo 'You have not agreed to the Xcode license agreements.' >&2; exit 69");
+    try {
+      const error = await isRepoWithCommit(makeRepoLater()).catch((e) => e);
+      expect(error).toBeInstanceOf(GitError);
+      expect(error.message).toContain("Xcode license");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -76,26 +104,6 @@ describe("hasUncommittedChanges", () => {
     mkdirSync(dir);
     await expect(hasUncommittedChanges(dir)).rejects.toThrow(GitError);
     await expect(hasUncommittedChanges(dir)).rejects.toThrow(/git status/);
-  });
-});
-
-describe("同步版（账本的 hub worker start 用）", () => {
-  it("isRepoWithCommitSync 和异步版一样判断", () => {
-    const plain = join(root, "plain");
-    mkdirSync(plain);
-    expect(isRepoWithCommitSync(makeRepo("项目 一"))).toBe(true);
-    expect(isRepoWithCommitSync(makeRepo("空仓库", { commit: false }))).toBe(false);
-    expect(isRepoWithCommitSync(plain)).toBe(false);
-    expect(isRepoWithCommitSync(join(root, "没有这个目录"))).toBe(false);
-  });
-  it("hasUncommittedChangesSync：干净 → 否；有没跟踪的文件 → 是；不是仓库 → 否（不抛）", () => {
-    const dir = makeRepo("clean");
-    expect(hasUncommittedChangesSync(dir)).toBe(false);
-    writeFileSync(join(dir, "新 文件.txt"), "x\n");
-    expect(hasUncommittedChangesSync(dir)).toBe(true);
-    const plain = join(root, "plain");
-    mkdirSync(plain);
-    expect(hasUncommittedChangesSync(plain)).toBe(false);
   });
 });
 
@@ -159,7 +167,7 @@ describe("addWorktree", () => {
     expect(error).toBeInstanceOf(GitError);
     expect(error.kind).toBe("branch_taken");
     expect(error.message).toContain("hub/5-x");
-    expect(await isRepoWithCommit(path)).toBe(false);
+    expect(existsSync(path)).toBe(false);
   });
 
   it("分支在别的 worktree 里 → 同样报分支被占", async () => {
@@ -216,6 +224,43 @@ describe("拿不到的错误", () => {
       expect(error).toBeInstanceOf(GitError);
       expect(error.kind).toBe("git_missing");
       expect(error.message).toContain("找不到 git");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("probeWorkspace（agent 接口在 hub worker start 之前探主文件夹）", () => {
+  it("有提交的仓库：ok，带有没有没提交的改动", async () => {
+    const repo = makeRepo("项目 一");
+    expect(await probeWorkspace(repo)).toEqual({ kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false });
+    writeFileSync(join(repo, "新 文件.txt"), "x\n");
+    expect(await probeWorkspace(repo)).toEqual({ kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: true });
+  });
+
+  it("普通文件夹、还没提交的仓库：ok，不是仓库", async () => {
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    expect(await probeWorkspace(plain)).toEqual({ kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false });
+    expect(await probeWorkspace(makeRepo("空仓库", { commit: false }))).toEqual({ kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false });
+  });
+
+  it("git 卡住：到点就报 failed，写明超时，不当成“不是仓库”", async () => {
+    fakeGit("exec sleep 30");
+    try {
+      const started = Date.now();
+      const result = await probeWorkspace(makeRepoLater(), { timeoutMs: 300 });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(result).toEqual({ kind: "failed", error: expect.stringMatching(/超过.*没有结束/) });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("找不到 git：failed，写明找不到 git", async () => {
+    vi.stubEnv("PATH", join(root, "empty-bin"));
+    try {
+      expect(await probeWorkspace(makeRepoLater())).toEqual({ kind: "failed", error: expect.stringContaining("找不到 git") });
     } finally {
       vi.unstubAllEnvs();
     }

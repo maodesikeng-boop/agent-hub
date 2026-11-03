@@ -27,8 +27,7 @@ import { createLedgerProjects } from "./projects.ts";
 import { toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerSessions } from "./sessions.ts";
-import { createLedgerWorkers, defaultWorkerGit } from "./workers.ts";
-import type { WorkerGit } from "./workers.ts";
+import { createLedgerWorkers } from "./workers.ts";
 
 export type SqliteLedger = Ledger;
 
@@ -52,8 +51,6 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
-  /** hub worker start 判断在哪干活用的 git（同步），默认 daemon/git 的同步版。测试换假的。 */
-  git?: WorkerGit;
   /** 展开 `~` 用（默认 resolveFolder、detach 退回字面路径时），默认 os.homedir()。 */
   userHome?: string;
   /** 文件夹校验，默认 createResolveFolder({ dataHome, userHome })。 */
@@ -81,10 +78,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
-  const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
-    worktreesDir: files.worktreesDir,
-    git: options.git ?? defaultWorkerGit,
-  });
+  const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
   const hub = createLedgerHubCommands(ctx, persona, projects, workers);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
@@ -152,9 +146,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     createPm,
 
     getMessage: messages.getMessage,
+    // 消息标 failed（messages.ts），Worker 的再给项目经理发一行（workers.ts），同一个事务
     onActionFailed(action, error) {
-      if (action.type === "worktree.create") workers.onWorktreeFailed(action, error);
-      else messages.onActionFailed(action, error);
+      write((p) => {
+        messages.actionFailedIn(p, action, error);
+        workers.actionFailedIn(p, action, error);
+      });
     },
     stopMessage: messages.stopMessage,
 
@@ -171,6 +168,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     retryMessage: messages.retryMessage,
 
     hubCall: hub.hubCall,
+    workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
 
     getLaunchContext: launch.getLaunchContext,
     getWorktreeTask: workers.getWorktreeTask,

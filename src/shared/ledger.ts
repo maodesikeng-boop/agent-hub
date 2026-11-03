@@ -202,6 +202,23 @@ export interface WorktreeTask {
   status: WorkerStatus;
 }
 
+/**
+ * hub worker start 之前，agent 接口异步探好的主文件夹 git 状态（m3-plan 第 2.6 节）。探 git 不放进 hubCall：hubCall 同步、
+ * 在数据库事务里，git 一卡住整个守护进程就停住。
+ * - ok：git 正常跑完了。isRepoWithCommit 为 false 只表示 git 明确答了“不是仓库”或“还没有提交”；
+ * - failed：git 没跑成（超时、找不到 git、别的非零退出，比如 Xcode 许可证没同意）。error 是给人看的原因。
+ *   账本据此拒绝这次派活，不会默默改成在主文件夹里干。
+ */
+export type WorkspaceProbe =
+  | { kind: "ok"; isRepoWithCommit: boolean; hasUncommittedChanges: boolean }
+  | { kind: "failed"; error: string };
+
+/** hubCall 的第 4 个参数：agent 接口在调 hubCall 之前异步准备好的东西（事务里不做 I/O）。 */
+export interface HubCallContext {
+  /** worker.start 没带 noWorktree 时必须有（主文件夹是 workerStartFolder 给的那个），否则不用。 */
+  workspace?: WorkspaceProbe;
+}
+
 export interface Ledger {
   // ---- 界面服务用 ----
   /**
@@ -269,7 +286,8 @@ export interface Ledger {
    * M3：先按会话的 role 查 HUB_COMMAND_ROLES（hubCommandAllowed），不放行 → forbidden（Worker 只能用 status）。
    *   这一步接进 hubCall 归 W2（W0 时 hubCall 还是“不是项目经理的会话 → forbidden”）。
    * - status（Worker）：WorkerHubStatus，text 是一两句“你是哪个 Worker、在做什么、在哪干活”；
-   * - worker.start：还没有项目 → invalid；title、task 不对 → invalid。同一个事务里：workers 一行、Worker 的对话（kind worker）和会话
+   * - worker.start：还没有项目 → invalid；title、task 不对 → invalid；没带 noWorktree 时按 context.workspace 定在哪干活，
+   *   它是 failed → 抛普通 Error（agent 接口回 internal，message 说清楚 git 怎么了、可以加 --no-worktree）。同一个事务里：workers 一行、Worker 的对话（kind worker）和会话
    *   （role worker，worker_id、model = args.model ?? 项目经理的模型；cwd 是 worktree 目录，或者主文件夹 + 和项目经理一样的 addDirs）、
    *   Worker 对话里第一条消息（sender pm，任务说明，queued）、项目经理对话里一行 started（WorkerMessageMeta）；
    *   worktree → 登记 worktree.create；main → 直接登记 Worker 的 session.start 和这条消息的 session.send。
@@ -282,7 +300,12 @@ export interface Ledger {
    * 截断（见 domain.ts 的 HubCall），完整正文以 persona_changes 为准。成功返回 { text, data }，失败抛 LedgerRequestError。
    * 会话不存在或不是项目经理的会话 → forbidden。
    */
-  hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>): HubResult<C>;
+  hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>, context?: HubCallContext): HubResult<C>;
+  /**
+   * agent 接口在 worker.start 之前调（只读）：要探 git 的那个文件夹，就是这个会话所属项目经理的项目主文件夹。
+   * 不是项目经理的会话、还没有项目 → null（不用探，hubCall 自己会报 forbidden、invalid）。
+   */
+  workerStartFolder(sessionId: SessionId): string | null;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
 

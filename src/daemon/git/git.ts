@@ -1,8 +1,10 @@
 // git 操作（M3 W1）：判断主文件夹是不是有提交的仓库、有没有没提交的改动、给 Worker 建 worktree。
 // 用 execFile 直接调 git，不经过 shell；每次调用都有超时；拿不到的错误转成 GitError（中文信息 + kind）。
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import type { WorkspaceProbe } from "../../shared/ledger.ts";
+import { GIT_PROBE_TIMEOUT_MS } from "../../shared/limits.ts";
 
 /** 一次 git 调用最多等多久（毫秒）；超了就 SIGKILL 掉 git。调用时可以用 timeoutMs 改。 */
 export const GIT_TIMEOUT_MS = 30_000;
@@ -58,12 +60,12 @@ interface GitRun {
  * 跑一次 git。退出码非 0 不抛，交给调用方判断；找不到 git、超时才抛 GitError。
  * 一律 `git -C <folder>`：文件夹不存在也只是退出码 128，不会和“找不到 git”混在一起。
  */
-function runGit(folder: string, args: string[], timeoutMs: number): Promise<GitRun> {
+function runGit(folder: string, args: string[], timeoutMs: number, extraEnv: Record<string, string> = {}): Promise<GitRun> {
   return new Promise((resolvePromise, reject) => {
     execFile(
       "git",
       ["-C", folder, ...args],
-      { timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: GIT_MAX_BUFFER_BYTES, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      { timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: GIT_MAX_BUFFER_BYTES, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv } },
       (error, stdout, stderr) => {
         if (!error) return resolvePromise({ code: 0, stdout, stderr });
         const err = error as NodeJS.ErrnoException & { killed?: boolean };
@@ -82,47 +84,41 @@ function failed(what: string, run: GitRun): GitError {
   return new GitError("git_failed", `${what} 失败：${detail}`);
 }
 
-/** 两个判断的参数，异步、同步两个版本共用。 */
-const IS_REPO_WITH_COMMIT_ARGS = ["rev-parse", "--verify", "--quiet", "HEAD"];
-const STATUS_ARGS = ["--no-optional-locks", "status", "--porcelain"];
-
 /**
- * 同步跑一次 git（给同步的账本 hub worker start 用，见 isRepoWithCommitSync）。找不到 git、超时也不抛，
- * 返回 code -1，调用方当“不是”处理。
+ * 是 git 仓库，而且至少有一次提交（`git rev-parse --verify --quiet HEAD` 成功）。
+ * 只有 git 正常跑完、明确答了“否”才返回 false：不是仓库（退出码 128，“not a git repository”）、还没有提交（退出码 1、不出声）。
+ * 别的情况一律抛 GitError，不当成“不是仓库”：超时、找不到 git、文件夹不存在、别的非零退出（比如 Xcode 许可证没同意）。
+ * 认“not a git repository”要英文的提示，所以这一次用 LC_ALL=C 跑。
  */
-function runGitSync(folder: string, args: string[], timeoutMs: number): GitRun {
-  const run = spawnSync("git", ["-C", folder, ...args], {
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-    maxBuffer: GIT_MAX_BUFFER_BYTES,
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-  });
-  return { code: run.error !== undefined || run.status === null ? -1 : run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
-}
-
-/** isRepoWithCommit 的同步版：账本的 hub worker start 是同步的（m3-plan 第 2.6 节“同步判断”）。git 跑不了也是 false。 */
-export function isRepoWithCommitSync(folder: string, options: GitOptions = {}): boolean {
-  return runGitSync(folder, IS_REPO_WITH_COMMIT_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS).code === 0;
-}
-
-/** hasUncommittedChanges 的同步版。不是仓库、git 跑不了不抛，返回 false（只用来决定要不要多一句提醒）。 */
-export function hasUncommittedChangesSync(folder: string, options: GitOptions = {}): boolean {
-  const run = runGitSync(folder, STATUS_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
-  return run.code === 0 && run.stdout.trim().length > 0;
-}
-
-/** 是 git 仓库，而且至少有一次提交（`git rev-parse --verify HEAD` 成功）。文件夹不存在、不是仓库、还没提交都是 false。 */
 export async function isRepoWithCommit(folder: string, options: GitOptions = {}): Promise<boolean> {
-  const run = await runGit(folder, IS_REPO_WITH_COMMIT_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
-  return run.code === 0;
+  const run = await runGit(folder, ["rev-parse", "--verify", "--quiet", "HEAD"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
+  if (run.code === 0) return true;
+  if (run.code === 1 && run.stderr.trim() === "") return false;
+  if (run.code === 128 && /not a git repository/i.test(run.stderr)) return false;
+  throw failed("git rev-parse", run);
 }
 
 /** 有没提交的改动：已跟踪的文件改了、已暂存、有没跟踪的文件，任何一种都算。不是仓库会抛 GitError。 */
 export async function hasUncommittedChanges(folder: string, options: GitOptions = {}): Promise<boolean> {
-  const run = await runGit(folder, STATUS_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
+  const run = await runGit(folder, ["--no-optional-locks", "status", "--porcelain"], options.timeoutMs ?? GIT_TIMEOUT_MS);
   if (run.code !== 0) throw failed("git status", run);
   return run.stdout.trim().length > 0;
+}
+
+/**
+ * hub worker start 之前探主文件夹（agent 接口调，结果交给账本的 hubCall，m3-plan 第 2.6 节）：是不是有提交的仓库，
+ * 是的话再看有没有没提交的改动。每次 git 调用最多 timeoutMs（默认 GIT_PROBE_TIMEOUT_MS）。
+ * 不抛错：git 没跑成（见 isRepoWithCommit）返回 failed，原因写在 error 里。
+ */
+export async function probeWorkspace(folder: string, options: GitOptions = {}): Promise<WorkspaceProbe> {
+  const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
+  try {
+    const isRepo = await isRepoWithCommit(folder, { timeoutMs });
+    const dirty = isRepo ? await hasUncommittedChanges(folder, { timeoutMs }) : false;
+    return { kind: "ok", isRepoWithCommit: isRepo, hasUncommittedChanges: dirty };
+  } catch (error) {
+    return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**
