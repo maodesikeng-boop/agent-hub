@@ -23,8 +23,9 @@ import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import { createClaudeDriver } from "./driver/index.ts";
 import { createSessionEndHandler, createSessionSendHandler, createSessionStartHandler, endedOnRevokedTokens } from "./handlers.ts";
+import { createPmLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
-import { createPmLaunchPreparer, DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
+import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 

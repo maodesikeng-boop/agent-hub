@@ -26,6 +26,7 @@ export interface HubIo {
 /** 和守护进程认的令牌字符一样；别的字符放进请求头 Node 会直接抛错。 */
 const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
+/** hub 用法，给人看（hub help、用法不对时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
 export const HUB_USAGE = `用法：
   hub status                                              我是谁、在哪个对话、管哪些项目
   hub pm list                                             所有项目经理和各自管的项目

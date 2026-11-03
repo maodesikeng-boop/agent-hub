@@ -1,12 +1,16 @@
-// 提示词和启动文件（设计第 7.2 节）：每次启动 claude 前生成 launch/<会话>/ 下的 prompt.md、settings.json 和空的 MCP 配置。
-// createPmLaunchPreparer、buildLaunchPrompt：prompt.md = 角色说明、默认做法（模式）、hub 用法（软件定的，agent 改不了）
+// 提示词（设计第 7.2 节）：buildLaunchPrompt 拼 prompt.md = 角色说明、默认做法（模式）、hub 用法（软件定的，agent 改不了）
 // + 性格设定 + 项目信息和最近一份交接（群）或管着的项目名片（私聊）+（按情况）“先读 AGENTS.md”。
-// settings.json 只放行 hub 和 hub.sock（hub.ts 的 buildHubSettings）；用户全局 ~/.claude 的设置照常生效。
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createPmLaunchPreparer。
+//
+// 给 agent 看的话不止这里，改口径时一起看：
+// - shared/driver.ts 的 *_NOTE：驱动层在消息前面拼的【系统】说明（重启恢复、重发、设置更新后重启、进程意外退出）；
+// - shared/domain.ts 的 PM_PERSONA_TEMPLATE：性格设定模板（新项目经理的默认性格设定）；
+// - ledger/hub-commands.ts：hub 命令回给 agent 的话；
+// - ledger/messages.ts 的 insertSystemMessage：系统消息（带【系统】发给 agent 的那些），具体文字在调用它的 persona.ts、projects.ts 里。
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, PM_PERSONA_TEMPLATE, buildHubSettings } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, PmMode, ProjectCard, SessionId, SessionTokens } from "../shared/index.ts";
-import { launchFingerprint } from "../shared/launch.ts";
+import { PM_PERSONA_TEMPLATE } from "../shared/index.ts";
+import type { LaunchContext, PmMode, ProjectCard } from "../shared/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
 
@@ -43,7 +47,10 @@ export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
 - 这只是默认做法，用户说了算。用户希望你以后先商量再动手，可以用 \`hub persona edit --mode manage_only\` 改成“只管理”。`,
 };
 
-/** hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条）。 */
+/**
+ * hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条），给 agent 看。
+ * 给人看的另有一份：hub/cli.ts 的 HUB_USAGE。改一份，记得改另一份。
+ */
 export const HUB_USAGE_PROMPT = `# 系统命令 hub
 
 agent-hub 的事（建项目、挂文件夹、交接、改自己的习惯）都通过 \`hub\` 命令做。
@@ -124,55 +131,4 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   }
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
   return parts.join("\n\n") + "\n";
-}
-
-export interface PmLaunchPreparerOptions {
-  launchDir: string;
-  /** 账本的 getLaunchContext。 */
-  getLaunchContext: (sessionId: SessionId) => LaunchContext;
-  /** 同一个会话每次给同一个令牌（SessionTokens.issue 的约定）。 */
-  tokens: Pick<SessionTokens, "issue">;
-  /** hub.sock 的真实路径（realpath 过，见 buildHubSettings）。 */
-  hubSock: string;
-  /** hub 外壳所在目录（paths.ts 的 hubBinDir），放在 PATH 最前面。 */
-  hubBinDir: string;
-  /** 接在 hubBinDir 后面的 PATH，默认守护进程自己的 process.env.PATH。 */
-  basePath?: string;
-}
-
-/**
- * M2 给驱动层的 prepareLaunch（W6 接到 DriverOptions.prepareLaunch）。每次都重写三份文件，内容没变 fingerprint 就不变；
- * 令牌只放 env，不进文件。可以反复调（驱动层两轮之间判断要不要重启时也调）。
- * 每次启动 claude 要变的东西（提示词、设置文件、MCP 配置、HUB_TOKEN、HUB_SOCK、PATH）只在这里定；
- * 驱动层只把它们原样变成参数（driver/protocol.ts 的 buildClaudeArgs：固定的 stream-json 参数、--resume 还是 --session-id、
- * 会话那一行的 --model 和 --add-dir），环境变量是守护进程自己的去掉父会话那几个（buildChildEnv）再盖上这里的 env。
- */
-export function createPmLaunchPreparer(options: PmLaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
-  const { launchDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
-  const basePath = options.basePath ?? process.env.PATH ?? "";
-  return async (session) => {
-    const ctx = getLaunchContext(session.id);
-    const prompt = buildLaunchPrompt(ctx, session.cwd);
-    const settings = JSON.stringify(buildHubSettings(hubSock), null, 2) + "\n";
-    const mcpConfig = JSON.stringify({ mcpServers: {} }) + "\n";
-    const dir = join(launchDir, String(session.id));
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const promptFile = join(dir, "prompt.md");
-    const settingsFile = join(dir, "settings.json");
-    const mcpConfigFile = join(dir, "mcp.json");
-    writeFileSync(promptFile, prompt, { mode: 0o600 });
-    writeFileSync(settingsFile, settings, { mode: 0o600 });
-    writeFileSync(mcpConfigFile, mcpConfig, { mode: 0o600 });
-    return {
-      promptFile,
-      settingsFile,
-      mcpConfigFile,
-      env: {
-        [ENV_HUB_TOKEN]: tokens.issue(session.id),
-        [ENV_HUB_SOCK]: hubSock,
-        PATH: basePath === "" ? hubBinDir : `${hubBinDir}:${basePath}`,
-      },
-      fingerprint: launchFingerprint({ prompt, settings, mcpConfig }),
-    };
-  };
 }
