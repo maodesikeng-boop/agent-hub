@@ -1,5 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import type { ProxyOptions, UserConfig } from "vite";
+import { describe, expect, it, vi } from "vitest";
+import { ENV_DEV_DAEMON_PORT } from "../src/shared/limits.ts";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const readJson = (path: string) => JSON.parse(read(path));
@@ -34,12 +37,34 @@ describe("骨架", () => {
     expect(setup).toMatch(/afterEach\(\s*cleanup\s*\)/);
   });
 
-  it("vite 开发服务器把 /api、/auth 和 WebSocket 代理到守护进程端口", () => {
-    const config = read("vite.config.ts");
-    expect(config).toContain("ENV_DEV_DAEMON_PORT");
-    expect(config).toContain('"/api"');
-    expect(config).toContain('"/auth"');
-    expect(config).toMatch(/ws:\s*true/);
+  it("vite 开发服务器把 /api/、/auth 和 WebSocket 代理到守护进程端口，只改 vite 自己页面发的 Origin", async () => {
+    vi.stubEnv(ENV_DEV_DAEMON_PORT, "4000");
+    try {
+      vi.resetModules();
+      const config = (await import("../vite.config.ts")).default as UserConfig;
+      const proxy = config.server!.proxy as Record<string, ProxyOptions>;
+      expect(Object.keys(proxy).sort()).toEqual(["/api/", "/auth"]);
+      const target = "http://127.0.0.1:4000";
+      expect(proxy["/api/"]).toMatchObject({ target, changeOrigin: true, ws: true });
+      expect(proxy["/auth"]).toMatchObject({ target, changeOrigin: true });
+
+      for (const event of ["proxyReq", "proxyReqWs"]) {
+        const emitter = new EventEmitter();
+        proxy["/api/"]!.configure!(emitter as never, proxy["/api/"]!);
+        const rewrite = (origin: string | undefined) => {
+          const headers: Record<string, string> = {};
+          const req = { headers: { host: "localhost:5173", ...(origin ? { origin } : {}) } };
+          emitter.emit(event, { setHeader: (k: string, v: string) => (headers[k] = v) }, req);
+          return headers.origin;
+        };
+        expect(rewrite("http://localhost:5173")).toBe(target);
+        // 别的来源（别的本机端口上的网页）原样转过去，守护进程照样回 403
+        expect(rewrite("http://localhost:6666")).toBeUndefined();
+        expect(rewrite(undefined)).toBeUndefined();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

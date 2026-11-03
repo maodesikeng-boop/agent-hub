@@ -41,10 +41,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function postJson<T>(path: string, body?: unknown): Promise<T> {
+  // 没有请求体就不声明 JSON：界面服务（Fastify）对“声明了 JSON 却是空的”回 400
+  if (body === undefined) return request<T>(path, { method: "POST" });
   return request<T>(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: JSON.stringify(body),
   });
 }
 

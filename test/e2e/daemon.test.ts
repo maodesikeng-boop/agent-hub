@@ -1,0 +1,264 @@
+// W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../src/shared/index.ts";
+import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, PM_ROLE_PROMPT } from "../../src/daemon/prompt.ts";
+import {
+  Client,
+  agentTexts,
+  isAlive,
+  makeEnv,
+  messageById,
+  messagesOf,
+  sleep,
+  waitForStatus,
+  waitUntil,
+  type E2eEnv,
+  type RunningDaemon,
+} from "./harness.ts";
+
+const slow = (ms: number, text = "慢慢写完了") => ({ steps: [{ sleepMs: ms }, { text }] });
+const quick = (text = "好的") => ({ steps: [{ text }] });
+
+let env: E2eEnv;
+afterEach(async () => {
+  await env?.cleanup();
+});
+
+async function boot(options?: Parameters<E2eEnv["start"]>[0]) {
+  const daemon = await env.start(options);
+  const client = await Client.login(daemon);
+  const state = await client.state();
+  const conversationId = state.conversations[0]!.conversation.id;
+  return { daemon, client, state, conversationId };
+}
+
+async function terminate(daemon: RunningDaemon) {
+  daemon.child.kill("SIGTERM");
+  return daemon.exited;
+}
+
+const fakePids = () => env.argvs().map((a) => a.pid);
+
+describe("W5 组装 + 端到端", () => {
+  it("首次启动：打印登录链接，自动建一个项目经理和它的私聊；再启动不重复建", async () => {
+    env = makeEnv();
+    const { daemon, client, state } = await boot();
+    expect(daemon.stdout()).toMatch(/http:\/\/127\.0\.0\.1:\d+\/auth\?token=/);
+    expect(state.pms.map((p) => p.name)).toEqual([DEFAULT_PM_NAME]);
+    expect(state.conversations).toHaveLength(1);
+    expect(state.conversations[0]!.conversation).toMatchObject({ kind: "pm", pmId: state.pms[0]!.id });
+    expect(state.conversations[0]!.messages).toEqual([]);
+    expect(state.sessions).toHaveLength(1);
+    // 性格设定写成文件，以后可以改
+    expect(readFileSync(join(env.home, "state", "personas", `pm-${state.pms[0]!.id}.md`), "utf8")).toBe(DEFAULT_PM_PERSONA);
+
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+    const again = await env.start();
+    const s2 = await client.withPort(again.port).state();
+    expect(s2.pms).toHaveLength(1);
+    expect(s2.conversations).toHaveLength(1);
+    await terminate(again);
+  });
+
+  it("聊一轮：WebSocket 收到回复；假 claude 的工作目录是 pm-home/<编号>/；提示词有角色说明和性格设定、没有 hub 用法", async () => {
+    env = makeEnv();
+    env.setScript({ defaultTurn: quick("你好，我是项目经理") });
+    const { daemon, client, state, conversationId } = await boot();
+    const ws = await client.ws(state.seq);
+    const id = await client.post(conversationId, "你好");
+    await waitForStatus(client, id, "replied");
+    await waitUntil("agent text over ws", () =>
+      ws.messages.some((m) => m.type === "message.created" && m.data.message.text === "你好，我是项目经理")
+        ? true
+        : undefined,
+    );
+    // 状态按顺序走过已送达、处理中、已回复
+    const statuses = ws.messages.flatMap((m) =>
+      m.type === "message.updated" && m.data.message.id === id ? [m.data.message.status] : [],
+    );
+    expect(statuses).toEqual(["delivered", "processing", "replied"]);
+    ws.close();
+
+    const pmId = state.pms[0]!.id;
+    const [launch] = env.argvs();
+    expect(launch!.cwd).toBe(realpathSync(join(env.home, "pm-home", String(pmId))));
+    const argv = launch!.argv;
+    const promptFile = argv[argv.indexOf("--append-system-prompt-file") + 1]!;
+    expect(promptFile).toBe(join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "prompt.md"));
+    const prompt = readFileSync(promptFile, "utf8");
+    expect(prompt).toContain(PM_ROLE_PROMPT);
+    expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
+    expect(prompt).not.toMatch(/\bhub\b/);
+    // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
+    expect(prompt).not.toContain("AGENTS.md");
+    expect(argv).toContain("--strict-mcp-config");
+    expect(JSON.parse(readFileSync(argv[argv.indexOf("--mcp-config") + 1]!, "utf8"))).toEqual({ mcpServers: {} });
+    // 用户的消息原样写进去，不加标签
+    expect(env.stdinTexts()).toEqual(["你好"]);
+    await terminate(daemon);
+  });
+
+  it("停止：控制消息打断这一轮，消息标已停止，进程还在，再发照常回复", async () => {
+    env = makeEnv();
+    env.setScript({ turns: [slow(20_000)], defaultTurn: quick("你好呀") });
+    const { daemon, client, conversationId } = await boot();
+    const id = await client.post(conversationId, "写一篇 1500 字的文章");
+    await waitForStatus(client, id, "processing");
+    expect(await client.stop(conversationId)).toBe(202);
+    await waitForStatus(client, id, "stopped");
+    const next = await client.post(conversationId, "你好");
+    await waitForStatus(client, next, "replied");
+    expect(agentTexts(await client.state(), conversationId)).toContain("你好呀");
+    // 同一个进程：只起过一次，没收到 SIGINT，标准输入里有 interrupt 控制消息
+    expect(env.argvs()).toHaveLength(1);
+    expect(env.log().some((e) => e.kind === "signal")).toBe(false);
+    expect(env.log().some((e) => e.kind === "stdin" && e.line.includes('"interrupt"'))).toBe(true);
+    await terminate(daemon);
+  });
+
+  it("停止：没有在跑的会话时什么也不做，仍回 202；对话不存在回 404", async () => {
+    env = makeEnv();
+    const { daemon, client, conversationId } = await boot();
+    expect(await client.stop(conversationId)).toBe(202);
+    expect(await client.stop(9999)).toBe(404);
+    expect(env.argvs()).toHaveLength(0);
+    await terminate(daemon);
+  });
+
+  it("忙时连发：一轮还没完时发的两条，下一轮拼成一条写进去，两条都标已回复", async () => {
+    env = makeEnv();
+    env.setScript({ turns: [slow(1_500, "第一轮"), quick("两条补充都收到")] });
+    const { daemon, client, conversationId } = await boot();
+    const first = await client.post(conversationId, "写一个很长的东西");
+    await waitForStatus(client, first, "processing");
+    const a = await client.post(conversationId, "补充一");
+    const b = await client.post(conversationId, "补充二");
+    await waitForStatus(client, first, "replied");
+    await waitForStatus(client, a, "replied");
+    await waitForStatus(client, b, "replied");
+    expect(env.stdinTexts()).toEqual(["写一个很长的东西", "【用户连发了 2 条】\n1. 补充一\n2. 补充二"]);
+    expect(agentTexts(await client.state(), conversationId)).toEqual(["第一轮", "两条补充都收到"]);
+    await terminate(daemon);
+  });
+
+  it("正常重启：SIGTERM 退出码 0、不留进程；再启动令牌和 cookie 仍然有效，历史都在，用 --resume 同一个会话", async () => {
+    env = makeEnv();
+    env.setScript({ defaultTurn: quick("记住了") });
+    const first = await boot();
+    const id = await first.client.post(first.conversationId, "记住暗号：蓝鲸");
+    await waitForStatus(first.client, id, "replied");
+    expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
+    expect(fakePids().filter(isAlive)).toEqual([]);
+    expect(existsSync(join(env.home, "state", "lock"))).toBe(false);
+
+    const daemon = await env.start();
+    expect(daemon.token).toBe(first.daemon.token);
+    const client = first.client.withPort(daemon.port);
+    const before = await client.state();
+    expect(messagesOf(before, first.conversationId).map((m) => m.text)).toEqual(["记住暗号：蓝鲸", "记住了"]);
+    const next = await client.post(first.conversationId, "暗号是什么");
+    await waitForStatus(client, next, "replied");
+    const [a, b] = env.argvs().map((x) => x.argv);
+    const sessionId = a![a!.indexOf("--session-id") + 1];
+    expect(b![b!.indexOf("--resume") + 1]).toBe(sessionId);
+    // 正常重启不补发：没有恢复说明、重发说明
+    expect(env.stdinTexts()).toEqual(["记住暗号：蓝鲸", "暗号是什么"]);
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+    expect(fakePids().filter(isAlive)).toEqual([]);
+  });
+
+  it("关机：一轮中 SIGTERM，假 claude 收到 SIGINT，10 秒内全部退出，消息标已停止", async () => {
+    env = makeEnv();
+    env.setScript({ turns: [slow(30_000)] });
+    const { daemon, client, conversationId } = await boot();
+    const id = await client.post(conversationId, "写很久");
+    await waitForStatus(client, id, "processing");
+    const t0 = Date.now();
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(env.log().filter((e) => e.kind === "signal").map((e) => (e as { signal: string }).signal)).toEqual(["SIGINT"]);
+    expect(fakePids().filter(isAlive)).toEqual([]);
+
+    const again = await env.start();
+    const state = await client.withPort(again.port).state();
+    expect(messageById(state, id)?.status).toBe("stopped");
+    // 已停止的不补发
+    await sleep(300);
+    expect(env.argvs()).toHaveLength(1);
+    await terminate(again);
+  });
+
+  it("守护进程崩溃：一轮中 SIGKILL，再启动结束留下的假 claude，带恢复说明重发，消息不重复、不丢", async () => {
+    env = makeEnv();
+    env.setScript({ turns: [slow(30_000)], defaultTurn: quick("接着做完了") });
+    const first = await boot();
+    const id = await first.client.post(first.conversationId, "做一件长的事");
+    await waitForStatus(first.client, id, "processing");
+    first.daemon.child.kill("SIGKILL");
+    await first.daemon.exited;
+    const [orphan] = fakePids();
+    expect(isAlive(orphan!)).toBe(true);
+
+    const daemon = await env.start();
+    const client = first.client.withPort(daemon.port);
+    await waitUntil("stale claude killed", () => (isAlive(orphan!) ? undefined : true));
+    await waitForStatus(client, id, "replied");
+    const texts = env.stdinTexts();
+    expect(texts[0]).toBe("做一件长的事");
+    expect(texts.slice(1).join("\n")).toContain(RESTART_RECOVERY_NOTE);
+    expect(texts.slice(1).some((t) => t.includes(`${RESEND_NOTE}\n\n做一件长的事`))).toBe(true);
+    const users = messagesOf(await client.state(), first.conversationId).filter((m) => m.sender === "user");
+    expect(users.map((m) => m.id)).toEqual([id]);
+    // 留下的进程被结束，之后起的进程用 --resume
+    const argvs = env.argvs();
+    expect(argvs.length).toBeGreaterThanOrEqual(2);
+    expect(argvs.at(-1)!.argv).toContain("--resume");
+    await terminate(daemon);
+    expect(fakePids().filter(isAlive)).toEqual([]);
+  });
+
+  it("claude 崩溃：这一轮的消息标失败带原因；下一条带崩溃说明，照常回复", async () => {
+    env = makeEnv();
+    env.setScript({ turns: [{ steps: [{ exit: 1 }] }], defaultTurn: quick("我回来了") });
+    const { daemon, client, conversationId } = await boot();
+    const id = await client.post(conversationId, "第一条");
+    const failed = await waitForStatus(client, id, "failed");
+    expect(failed.failureReason).toMatch(/^crash/);
+    const next = await client.post(conversationId, "第二条");
+    await waitForStatus(client, next, "replied");
+    expect(env.stdinTexts().at(-1)).toBe(`${CRASH_RECOVERY_NOTE}\n\n第二条`);
+    expect(isAlive(daemon.child.pid!)).toBe(true);
+    await terminate(daemon);
+  });
+
+  it("找不到 claude：守护进程不崩，界面实时看到“找不到 claude”，重试用完消息标失败", { timeout: 40_000 }, async () => {
+    env = makeEnv();
+    const { daemon, client, state, conversationId } = await boot({ claudePath: join(env.dir, "no-such-claude") });
+    const ws = await client.ws(state.seq);
+    const id = await client.post(conversationId, "你好");
+    const health = await waitUntil("health.updated over ws", () =>
+      ws.messages.flatMap((m) => (m.type === "health.updated" ? [m.data.health] : [])).find((h) => h.module === "driver"),
+    );
+    expect(health.lastError).toMatch(/^claude_not_found: /);
+    ws.close();
+    const failed = await waitForStatus(client, id, "failed", 30_000);
+    expect(failed.failureReason).toMatch(/^claude_not_found: /);
+    const s = await client.state();
+    expect(s.health.find((h) => h.module === "driver")).toMatchObject({ consecutiveFailures: 3 });
+    expect(isAlive(daemon.child.pid!)).toBe(true);
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+  });
+
+  it("开两个：已有一个在跑时再启动，第二个报“已有守护进程在跑”并退出，第一个不受影响", async () => {
+    env = makeEnv();
+    const { daemon, client } = await boot();
+    const second = await env.runToExit();
+    expect(second.code).toBe(1);
+    expect(second.stderr).toContain("已有守护进程在跑");
+    expect(second.stdout).not.toMatch(/auth\?token=/);
+    expect((await client.state()).pms).toHaveLength(1);
+    expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+  });
+});

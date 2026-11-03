@@ -141,6 +141,12 @@ export class FakeApi {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    // 跟真的界面服务（Fastify）一样：声明了 JSON 却没有请求体，回 400
+    const contentType = new Headers(init?.headers).get("content-type");
+    if (contentType?.startsWith("application/json") && (init?.body === undefined || init.body === "")) {
+      this.calls.push({ method, path: url.pathname, query: url.searchParams, body });
+      return jsonResponse({ status: 400, body: { error: "Body cannot be empty when content-type is set to 'application/json'" } });
+    }
     this.calls.push({ method, path: url.pathname, query: url.searchParams, body });
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
     const m = /^\/api\/conversations\/(\d+)\/(messages|stop)$/.exec(url.pathname);
