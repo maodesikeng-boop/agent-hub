@@ -14,13 +14,13 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
-  MAX_UNIX_SOCKET_PATH_BYTES,
   hubPath,
   type HubArgsMap,
   type HubCommand,
   type HubResponse,
   type SessionTokens,
 } from "../../shared/index.ts";
+import { MAX_UNIX_SOCKET_PATH_BYTES } from "../../shared/paths.ts";
 import { FakeHubLedger } from "./fake-ledger.ts";
 import { createAgentApi, startAgentApi, type RunningAgentApi } from "./server.ts";
 import { createSessionTokens } from "./tokens.ts";
@@ -227,7 +227,7 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("project.assign", { project: "foo", to: "阿周", handoff }));
       const text = "性".repeat(Math.floor(MAX_PERSONA_BYTES / 3) + 1);
       await expectInvalid(await call("persona.edit", { text }));
-      const folder = `/${"路".repeat(Math.floor(MAX_PATH_BYTES / 3))}`;
+      const folder = `/${"路".repeat(Math.floor(MAX_PATH_BYTES / 3) + 1)}`;
       await expectInvalid(await call("project.create", { name: "foo", folder }));
     });
 

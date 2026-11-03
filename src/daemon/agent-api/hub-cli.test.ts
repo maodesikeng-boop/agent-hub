@@ -1,7 +1,7 @@
 // hub 命令行（src/hub/）的测试。放在这里是因为 vitest 的 node 项目只收 src/daemon、src/shared、test 下的测试。
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -66,7 +66,7 @@ describe("hub cli", () => {
       argv,
       env: opts.env ?? env,
       cwd,
-      stdin,
+      stdin: () => stdin,
       stdout: { write: (s: string) => void (stdout += s) },
       stderr: { write: (s: string) => void (stderr += s) },
       timeoutMs: opts.timeoutMs,
@@ -75,6 +75,18 @@ describe("hub cli", () => {
     if (opts.stdin === undefined) expect((stdin as TrapStdin).touched, "stdin must not be read without --stdin").toBe(false);
     return { code, stdout, stderr } satisfies Captured;
   }
+
+  /** 异步跑一个子进程，标准输入马上关掉。 */
+  const run = (file: string, args: string[], childEnv: Record<string, string | undefined>) =>
+    new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(file, args, { env: childEnv, cwd, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (s: string) => (stdout += s));
+      child.stderr.setEncoding("utf8").on("data", (s: string) => (stderr += s));
+      child.on("error", reject);
+      child.on("close", (status) => resolve({ status, stdout, stderr }));
+    });
 
   const stdinOf = (text: string) => Readable.from([Buffer.from(text, "utf8")]);
 
@@ -281,14 +293,15 @@ describe("hub cli", () => {
 
     it("the daemon accepts but never answers (timeout)", async () => {
       const sock = join(dir, "silent.sock");
-      const silent: Server = createServer(() => {});
+      const held: Socket[] = [];
+      const silent: Server = createServer((socket) => void held.push(socket));
       await new Promise<void>((resolve) => silent.listen(sock, resolve));
       try {
         const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock }, timeoutMs: 200 });
         expect(r.code).toBe(HUB_EXIT.unreachable);
         expect(r.stderr).toMatch(UNREACHABLE);
       } finally {
-        silent.closeAllConnections?.();
+        for (const socket of held) socket.destroy();
         await new Promise<void>((resolve) => silent.close(() => resolve()));
       }
     });
@@ -341,12 +354,8 @@ describe("hub cli", () => {
       expect(content.startsWith("#!/bin/sh\n")).toBe(true);
       expect(content).toContain(process.execPath);
 
-      const r = spawnSync(shim, ["project", "create", "--name", "foo", "--folder", "~/p"], {
-        env: { PATH: "/usr/bin:/bin", ...env },
-        cwd,
-        encoding: "utf8",
-        input: "",
-      });
+      // 服务在本进程里，不能用 spawnSync（会卡住事件循环）
+      const r = await run(shim, ["project", "create", "--name", "foo", "--folder", "~/p"], { PATH: "/usr/bin:/bin", ...env });
       expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
       expect(r.stdout).toBe("已执行 project.create（会话 42）\n");
