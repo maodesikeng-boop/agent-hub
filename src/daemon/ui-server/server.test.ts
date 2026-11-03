@@ -10,6 +10,7 @@ import { createUiServer, startUiServer } from "./server.ts";
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
 const HOST = `127.0.0.1:${PORT}`;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
 const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
 const INDEX_HTML = "<!doctype html><title>agent-hub</title>";
 
@@ -33,6 +34,8 @@ afterEach(async () => {
 interface ReqOpts {
   cookie?: string | null;
   host?: string;
+  /** undefined：POST 带同源的 Origin、GET 不带（浏览器就是这样）；null：不带；字符串：原样带。 */
+  origin?: string | null;
   body?: unknown;
   rawBody?: string;
 }
@@ -41,6 +44,8 @@ async function call(method: "GET" | "POST", url: string, opts: ReqOpts = {}) {
   const headers: Record<string, string> = { host: opts.host ?? HOST };
   const cookie = opts.cookie === undefined ? COOKIE : opts.cookie;
   if (cookie !== null) headers.cookie = cookie;
+  const origin = opts.origin === undefined ? (method === "POST" ? ORIGIN : null) : opts.origin;
+  if (origin !== null) headers.origin = origin;
   if (opts.body !== undefined || opts.rawBody !== undefined) headers["content-type"] = "application/json";
   return app.inject({
     method,
@@ -118,7 +123,7 @@ describe("没登录", () => {
   ];
 
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
-    const res = await call(method, url, { cookie: null, body });
+    const res = await call(method, url, { cookie: null, body, origin: ORIGIN });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual({ error: "unauthorized" });
     expect(ledger.posted).toEqual([]);
@@ -139,13 +144,13 @@ describe("没登录", () => {
   });
 
   it("WebSocket 没 cookie 连不上", async () => {
-    await expect(app.injectWS("/api/ws?since=100", { headers: { host: HOST } })).rejects.toThrow(/401/);
+    await expect(app.injectWS("/api/ws?since=100", { headers: { host: HOST, origin: ORIGIN } })).rejects.toThrow(/401/);
     expect(ledger.listenerCount).toBe(0);
   });
 
   it("WebSocket cookie 不对连不上", async () => {
     await expect(
-      app.injectWS("/api/ws", { headers: { host: HOST, cookie: `${UI_COOKIE_NAME}=wrong-token-0123456789abc` } }),
+      app.injectWS("/api/ws", { headers: { host: HOST, origin: ORIGIN, cookie: `${UI_COOKIE_NAME}=wrong-token-0123456789abc` } }),
     ).rejects.toThrow(/401/);
   });
 });
@@ -185,7 +190,113 @@ describe("防 DNS 重绑定", () => {
   });
 
   it("WebSocket 握手也要查 Host", async () => {
-    await expect(app.injectWS("/api/ws", { headers: { host: "evil.com:4000", cookie: COOKIE } })).rejects.toThrow(/403/);
+    await expect(app.injectWS("/api/ws", { headers: { host: "evil.com:4000", origin: ORIGIN, cookie: COOKIE } })).rejects.toThrow(/403/);
+  });
+});
+
+describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住）", () => {
+  const post = (origin?: string | null) =>
+    call("POST", "/api/conversations/1/messages", { origin, body: { clientId: "c", text: "hi" } });
+  const ws = (origin: string | null, query = "") => {
+    const headers: Record<string, string> = { host: HOST, cookie: COOKIE };
+    if (origin !== null) headers.origin = origin;
+    return app.injectWS(`/api/ws${query}`, { headers });
+  };
+
+  it.each(["http://127.0.0.1:4000", "http://localhost:4000", "http://LOCALHOST:4000", "HTTP://127.0.0.1:4000"])("POST 带 Origin %s 放行", async (origin) => {
+    expect((await post(origin)).statusCode).toBe(200);
+    expect(ledger.posted).toHaveLength(1);
+  });
+
+  it.each(["http://127.0.0.1:4000", "http://localhost:4000", "http://LOCALHOST:4000"])("WebSocket 带 Origin %s 放行", async (origin) => {
+    const socket = await ws(origin);
+    expect(ledger.listenerCount).toBe(1);
+    socket.terminate();
+  });
+
+  const badOrigins: Array<[string, string]> = [
+    ["本机别的端口", "http://127.0.0.1:4001"],
+    ["localhost 别的端口", "http://localhost:3000"],
+    ["没写端口", "http://127.0.0.1"],
+    ["别的域名", "http://evil.example.com"],
+    ["别的域名同端口", "http://evil.example.com:4000"],
+    ["域名里藏着 127.0.0.1", "http://127.0.0.1.evil.com:4000"],
+    ["域名后缀是 localhost", "http://evil-localhost:4000"],
+    ["https", "https://127.0.0.1:4000"],
+    ["null（沙盒 iframe、file:// 页面）", "null"],
+    ["空串", ""],
+    ["末尾斜杠", "http://127.0.0.1:4000/"],
+    ["带路径", "http://127.0.0.1:4000/x"],
+    ["带用户名", "http://user@127.0.0.1:4000"],
+    ["端口前补零", "http://127.0.0.1:04000"],
+    ["前后有空白", " http://127.0.0.1:4000"],
+    ["IPv6", "http://[::1]:4000"],
+    ["只有主机名", "127.0.0.1:4000"],
+    ["扩展来源", "chrome-extension://abcdef"],
+  ];
+
+  it.each(badOrigins)("POST 发消息：Origin 是%s → 403，不碰账本", async (_name, origin) => {
+    const res = await post(origin);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: "forbidden_origin" });
+    expect(ledger.posted).toEqual([]);
+  });
+
+  it.each(badOrigins)("POST 停止：Origin 是%s → 403，不碰账本", async (_name, origin) => {
+    const res = await call("POST", "/api/conversations/1/stop", { origin });
+    expect(res.statusCode).toBe(403);
+    expect(ledger.stopped).toEqual([]);
+  });
+
+  it.each(badOrigins)("WebSocket：Origin 是%s → 拒绝握手，不留监听者", async (_name, origin) => {
+    await expect(ws(origin)).rejects.toThrow(/403/);
+    expect(ledger.listenerCount).toBe(0);
+  });
+
+  it("POST 没带 Origin：403（浏览器发同源 POST 一定带）", async () => {
+    const res = await post(null);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: "forbidden_origin" });
+    expect(ledger.posted).toEqual([]);
+    const stop = await call("POST", "/api/conversations/1/stop", { origin: null });
+    expect(stop.statusCode).toBe(403);
+    expect(ledger.stopped).toEqual([]);
+  });
+
+  it("WebSocket 没带 Origin：拒绝握手，不留监听者", async () => {
+    await expect(ws(null, `?since=${ledger.currentSeq}`)).rejects.toThrow(/403/);
+    expect(ledger.listenerCount).toBe(0);
+  });
+
+  it("GET 不查 Origin：带别的 Origin 或不带都能读", async () => {
+    expect((await call("GET", "/api/state", { origin: "http://evil.example.com" })).statusCode).toBe(200);
+    expect((await call("GET", "/api/state", { origin: "null" })).statusCode).toBe(200);
+    expect((await call("GET", "/api/state", { origin: null })).statusCode).toBe(200);
+    expect((await call("GET", "/api/conversations/1/messages?before=3", { origin: "http://evil.example.com" })).statusCode).toBe(200);
+  });
+
+  it("Origin 对但没登录：401（Origin 不能代替 cookie）", async () => {
+    expect((await call("POST", "/api/conversations/1/stop", { cookie: null })).statusCode).toBe(401);
+    await expect(app.injectWS("/api/ws", { headers: { host: HOST, origin: ORIGIN } })).rejects.toThrow(/401/);
+  });
+
+  it("Origin 错又没登录：先 403（Origin 在认证前查）", async () => {
+    const res = await call("POST", "/api/conversations/1/stop", { cookie: null, origin: "http://evil.example.com" });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("端口跟着实际监听的走：真起服务，同源 Origin 放行，别的端口拒绝", async () => {
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, port: 0 });
+    try {
+      const url = `http://127.0.0.1:${running.port}/api/conversations/1/stop`;
+      const send = (origin: string) => fetch(url, { method: "POST", headers: { cookie: COOKIE, origin } });
+      expect((await send(`http://127.0.0.1:${running.port}`)).status).toBe(202);
+      expect((await send(`http://localhost:${running.port}`)).status).toBe(202);
+      expect((await send(`http://127.0.0.1:${running.port + 1}`)).status).toBe(403);
+      expect((await send(`http://127.0.0.1:${PORT}`)).status).toBe(403);
+    } finally {
+      await running.close();
+    }
   });
 });
 
@@ -400,7 +511,7 @@ describe("WebSocket /api/ws", () => {
     const waiters: Array<() => void> = [];
     const ws = await app.injectWS(
       url,
-      { headers: { host: HOST, cookie: COOKIE } },
+      { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } },
       {
         onInit: (socket) =>
           socket.on("message", (data: unknown) => {
@@ -532,7 +643,7 @@ describe("WebSocket /api/ws", () => {
   it("补齐时账本出错：服务端关掉连接（1011）并取消订阅，不崩", async () => {
     ledger.failWith = new Error("boom");
     const closed = new Promise<number>((resolve) => {
-      void app.injectWS("/api/ws?since=100", { headers: { host: HOST, cookie: COOKIE } }, { onInit: (socket) => socket.on("close", resolve) });
+      void app.injectWS("/api/ws?since=100", { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, { onInit: (socket) => socket.on("close", resolve) });
     });
     expect(await closed).toBe(1011);
     expect(ledger.listenerCount).toBe(0);

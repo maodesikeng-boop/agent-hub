@@ -37,6 +37,9 @@ const MAX_CLIENT_ID_LENGTH = 200;
 const POSITIVE_INT = /^[1-9]\d*$/;
 const NON_NEGATIVE_INT = /^(0|[1-9]\d*)$/;
 const HOST_HEADER = /^(?:127\.0\.0\.1|localhost):(\d+)$/i;
+/** 浏览器发的 Origin 是 scheme://host:port，没有路径和末尾斜杠；主机名那三种跟 Host 检查一致。 */
+const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -107,6 +110,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     const match = HOST_HEADER.exec(req.headers.host ?? "");
     const port = listeningPort();
     if (match === null || port === undefined || Number(match[1]) !== port) return fail(reply, 403, "forbidden_host");
+  });
+
+  // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
+  // 会改状态的请求和 WebSocket 握手必须带同源的 Origin（http://<host>:<实际端口>），没带也拒绝；GET 不查。
+  app.addHook("onRequest", async (req, reply) => {
+    const path = req.url.split("?", 1)[0] ?? "";
+    if (SAFE_METHODS.has(req.method) && path !== API_PATHS.ws) return;
+    const match = ORIGIN_HEADER.exec(req.headers.origin ?? "");
+    const port = listeningPort();
+    // 端口要和实际端口逐字相同：不接受 04000 这种写法。
+    if (match === null || port === undefined || match[1] !== String(port)) return fail(reply, 403, "forbidden_origin");
   });
 
   // /api/ 下（含 WebSocket 握手）一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
