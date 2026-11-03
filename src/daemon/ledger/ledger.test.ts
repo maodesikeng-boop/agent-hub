@@ -28,8 +28,9 @@ beforeEach(() => {
   db = openTestDb();
   home = mkdtempSync(join(tmpdir(), "agent-hub-ledger-"));
   now = 1_000;
+  // createPm 会推 pm.created 等变化：用另一个账本实例建，下面的 seq 从 INITIAL_SEQ 算起
+  const created = createLedger(db, { now: () => now, pmHomeRoot: home }).createPm({ name: "项目经理", mode: "manage_only", persona: "" });
   ledger = createLedger(db, { now: () => now, initialSeq: INITIAL_SEQ, pmHomeRoot: home });
-  const created = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
   conversationId = created.conversation.id;
   sessionId = created.sessionId;
   changes = [];
