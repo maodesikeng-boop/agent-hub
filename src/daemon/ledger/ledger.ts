@@ -146,6 +146,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     hubCall: hub.hubCall,
 
     getLaunchContext: launch.getLaunchContext,
+    // M3 W0 的占位，W2 实现：还没有地方建工单，所以一律没有
+    getWorktreeTask: () => null,
+    onWorktreeCreated: (ticketId) => {
+      throw new Error(`onWorktreeCreated(${ticketId}): workers are not implemented yet`);
+    },
 
     syncPersonaFiles: persona.syncPersonaFiles,
   };

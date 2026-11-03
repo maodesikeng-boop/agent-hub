@@ -16,7 +16,10 @@ import {
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
+  MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
+  MAX_TASK_BYTES,
+  MAX_TICKET_TITLE_CHARS,
   PM_MODES,
   hubPath,
   type HubCommand,
@@ -53,6 +56,9 @@ const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
+// M3 W0 先给出形状，W2 按需要调整
+const ticketIdField = { type: "integer", minimum: 1 };
+const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
 
 const BODY_SCHEMAS: Record<HubCommand, object> = {
   status: noArgs,
@@ -75,6 +81,26 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       reason: { type: "string", maxLength: MAX_REASON_CHARS },
     },
   },
+  "worker.start": {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "task"],
+    properties: {
+      title: { type: "string", minLength: 1, maxLength: MAX_TICKET_TITLE_CHARS },
+      task: taskField,
+      model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      readonly: { type: "boolean" },
+      noWorktree: { type: "boolean" },
+    },
+  },
+  "worker.send": {
+    type: "object",
+    additionalProperties: false,
+    required: ["ticketId", "text"],
+    properties: { ticketId: ticketIdField, text: taskField },
+  },
+  "worker.end": { type: "object", additionalProperties: false, required: ["ticketId"], properties: { ticketId: ticketIdField } },
+  "worker.list": noArgs,
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -82,6 +108,7 @@ const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> 
   "project.create": { name: "name", folder: "path" },
   "project.attach": { folder: "path" },
   "project.detach": { folder: "path" },
+  "worker.start": { title: "name" },
 };
 /** C0、DEL、C1 控制字符（含 NUL、换行、制表符）。 */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -92,6 +119,8 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.attach": { folder: MAX_PATH_BYTES },
   "project.detach": { folder: MAX_PATH_BYTES },
   "persona.edit": { text: MAX_PERSONA_BYTES },
+  "worker.start": { task: MAX_TASK_BYTES },
+  "worker.send": { text: MAX_TASK_BYTES },
 };
 
 class HubError extends Error {

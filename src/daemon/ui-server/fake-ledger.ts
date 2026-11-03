@@ -244,6 +244,8 @@ export class FakeLedger {
       retryMessage: (m) => this.retryMessage(m),
       hubCall: unused("hubCall"),
       getLaunchContext: unused("getLaunchContext"),
+      getWorktreeTask: unused("getWorktreeTask"),
+      onWorktreeCreated: unused("onWorktreeCreated"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

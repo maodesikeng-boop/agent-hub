@@ -1,7 +1,8 @@
 // 前后端、各块共用的数据形状。字段名和 migrations/ 里的列一一对应（驼峰 ↔ 下划线），例外在字段注释里写明。
 // 不用 enum（erasableSyntaxOnly）：取值用 `as const` 数组，类型从数组推出来。
 
-import { MAX_NAME_CHARS } from "./limits.ts";
+import { MAX_NAME_CHARS, MAX_TICKET_TITLE_CHARS } from "./limits.ts";
+import type { WorkerReportStatus } from "./worker.ts";
 
 export type PmId = number;
 export type ConversationId = number;
@@ -13,6 +14,7 @@ export type ProjectId = number;
 export type ProjectFolderId = number;
 export type PersonaChangeId = number;
 export type HubCallId = number;
+export type TicketId = number;
 
 export type Unsubscribe = () => void;
 
@@ -27,8 +29,9 @@ export function isOneOf<const T extends readonly unknown[]>(values: T, value: un
 /**
  * project_group：项目群，2026-11-03 拿掉了（一个项目经理就是一个会话）。只剩 M2 开发时留下的老数据：
  * 迁移 0003 把它们的项目标归档、会话标已结束，账本不再建，快照里不给，网页上看不到。数据库的 CHECK 里还有它。
+ * worker（M3）：一张工单的 Worker 自己的对话，见 Conversation。数据库有 CHECK。
  */
-export const CONVERSATION_KINDS = ["assistant", "pm", "project_group"] as const;
+export const CONVERSATION_KINDS = ["assistant", "pm", "project_group", "worker"] as const;
 export type ConversationKind = (typeof CONVERSATION_KINDS)[number];
 
 /**
@@ -62,18 +65,23 @@ export function canTransitionMessage(from: MessageStatus, to: MessageStatus): bo
 }
 
 /**
- * 会扩展（M3 起有 Worker 汇报等），数据库不加 CHECK，用 isOneOf 校验。
- * system：系统消息（M2 起），kind 一律是 text，meta 是 SystemMessageMeta，网页居中显示。
+ * 会扩展，数据库不加 CHECK，用 isOneOf 校验。
+ * system：系统消息（M2 起），kind 是 text 时 meta 是 SystemMessageMeta，网页居中显示；
+ * kind 是 worker 时是项目经理对话里那一行 Worker 汇报（M3，见 WorkerMessageMeta）。
+ * pm（M3）：Worker 对话里项目经理的话：派活时的任务说明、hub worker send 打回或回答。和用户消息一样有投递状态，
+ * 登记 session.send 时 source 是 "user"（对 Worker 来说项目经理就是“用户”，忙时连发的会拼成一条）。
  */
-export const MESSAGE_SENDERS = ["user", "agent", "system"] as const;
+export const MESSAGE_SENDERS = ["user", "agent", "system", "pm"] as const;
 export type MessageSender = (typeof MESSAGE_SENDERS)[number];
 
 /**
- * text：正常的文字；tool：一次工具调用（collapsed 为 true，界面折叠成“执行了 N 个操作”）。
- * 会扩展（M3 起有工单卡片等），数据库不加 CHECK，用 isOneOf 校验。
+ * text：正常的文字；tool：一次工具调用（collapsed 为 true，界面折叠成“执行了 N 个操作”）；
+ * worker（M3）：项目经理对话里那一行 Worker 汇报，见 WorkerMessageMeta。
+ * 会扩展，数据库不加 CHECK，用 isOneOf 校验。
  */
-export const MESSAGE_KINDS = ["text", "tool"] as const;
+export const MESSAGE_KINDS = ["text", "tool", "worker"] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
+export const WORKER_MESSAGE_KIND = "worker" satisfies MessageKind;
 
 export const AGENT_ROLES = ["assistant", "pm", "worker"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
@@ -146,6 +154,8 @@ export interface Pm {
  * kind 是 pm：项目经理唯一的那个对话（左栏一行），pmId 是它，title 是建的时候的名字。它的项目（如果有）是
  * Project.conversationId 指向它的那个，projectId 一直是 null。
  * kind 是 project_group：老的项目群（见 CONVERSATION_KINDS），projectId 是老项目。
+ * kind 是 worker（M3）：一张工单的 Worker 自己的对话（Ticket.workerConversationId），pmId 是派它的项目经理，
+ * projectId 是工单的项目，title 是工单标题。左栏不显示，点项目经理对话里那一行打开。
  */
 export interface Conversation {
   id: ConversationId;
@@ -196,6 +206,50 @@ export interface ProjectFolder {
   isMain: boolean;
   addedAt: number;
   removedAt: number | null;
+}
+
+/** 工单的状态（数据库有 CHECK）：open 派出去了（Worker 在干活或者等项目经理的话）；ended 收工了，或者建 worktree 彻底失败。 */
+export const TICKET_STATUSES = ["open", "ended"] as const;
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
+
+/**
+ * Worker 在哪干活（数据库有 CHECK，m3-plan 第 2.6 节）：
+ * - worktree：守护进程用 git worktree 给它建的单独目录和分支（主文件夹是有提交的 git 仓库时默认这个）；
+ * - main：直接在项目的主文件夹里干（不是 git 仓库、还没有提交，或者项目经理派活时给了 --no-worktree）。
+ */
+export const TICKET_WORKSPACES = ["worktree", "main"] as const;
+export type TicketWorkspace = (typeof TICKET_WORKSPACES)[number];
+
+/**
+ * 工单（m3-plan 第 2 节）：项目经理 hub worker start 派一次活就是一张。字段和 tickets 表的列一一对应。
+ * 一张工单一个 Worker：它的对话（workerConversationId，kind worker）和会话（agent_sessions.ticket_id 指向这里）。
+ */
+export interface Ticket {
+  id: TicketId;
+  projectId: ProjectId;
+  /** 派活的项目经理。只有它能 send、end 这张工单。 */
+  pmId: PmId;
+  /** 项目经理的对话：那一行汇报发在这里，汇报原文也从这里交给项目经理。 */
+  pmConversationId: ConversationId;
+  workerConversationId: ConversationId;
+  /** normalizeTicketTitle 规整过。 */
+  title: string;
+  /** 任务说明（hub worker start --stdin 读的），就是 Worker 对话里的第一条消息。不超过 MAX_TASK_BYTES。 */
+  task: string;
+  /** --model 给的；null = 用项目经理自己的模型。 */
+  model: string | null;
+  /** --readonly：Worker 只看不改（policy.ts 的 READONLY_PERMISSION_MODE）。打回、重启都沿用。 */
+  readonly: boolean;
+  workspace: TicketWorkspace;
+  /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；main：null。 */
+  branch: string | null;
+  /** worktree：<数据目录>/worktrees/<项目编号>/<编号>（paths.ts 的 workerWorktreePath），派活时就定好；main：null。 */
+  worktreePath: string | null;
+  /** worktree：建 worktree 时 HEAD 的提交，建好之前是 null；main：null。 */
+  baseCommit: string | null;
+  status: TicketStatus;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** 谁改的性格设定：用户（界面）/ 项目经理自己（hub persona edit）/ 启动时发现文件被手改过。会扩展，数据库不加 CHECK。 */
@@ -250,7 +304,8 @@ export interface Message {
   id: MessageId;
   conversationId: ConversationId;
   sessionId: SessionId | null;
-  ticketId: number | null;
+  /** Worker 对话里的消息、项目经理对话里那一行汇报：工单号；其他 null。 */
+  ticketId: TicketId | null;
   sender: MessageSender;
   kind: MessageKind;
   /**
@@ -259,7 +314,10 @@ export interface Message {
    * 不超过 200 个字符、不含换行；完整参数在 meta.input。网页直接显示它，不自己拼。
    */
   text: string;
-  /** 工具调用：{ toolUseId, name, input }；系统消息：SystemMessageMeta（用 systemEventOf 读）；其他消息是 null。 */
+  /**
+   * 工具调用：{ toolUseId, name, input }；系统消息：SystemMessageMeta（用 systemEventOf 读）；
+   * Worker 汇报那一行（kind worker）：WorkerMessageMeta（用 workerEventOf 读）；其他消息是 null。
+   */
   meta: Record<string, unknown> | null;
   collapsed: boolean;
   /** 见 userMessageDedupeKey / agentMessageDedupeKey。数据库里唯一。 */
@@ -344,16 +402,75 @@ export function stripSystemPrefix(text: string): string {
 }
 
 /**
+ * 项目经理对话里那一行 Worker 汇报的事件（m3-plan 第 1 节“回到项目经理”）：
+ * - started：派出去了（hub worker start）；
+ * - report：Worker 这一轮正常结束（result），按 worker.ts 的 parseWorkerReport 取状态和摘要；
+ * - turn_failed：这一轮出错、崩溃、被停止；
+ * - worktree_failed：建 worktree 重试完了还是失败，工单标 ended；
+ * - ended：收工了（hub worker end）。
+ */
+export const WORKER_EVENTS = ["started", "report", "turn_failed", "worktree_failed", "ended"] as const;
+export type WorkerEvent = (typeof WORKER_EVENTS)[number];
+
+/** 那一行的状态：report 时是 Worker 汇报里写的状态，没按格式是 "unformatted"；别的事件是 null。 */
+export type WorkerLineStatus = WorkerReportStatus | "unformatted";
+
+/**
+ * 项目经理对话里那一行 Worker 汇报（sender system、kind worker、ticketId 是工单号）的 meta。
+ * 网页用 worker.ts 的 workerLineText 显示成“Worker · 标题 · 状态：摘要”，点开 workerConversationId。
+ * 消息的 text 是交给项目经理的全文：
+ * - report、turn_failed、worktree_failed：要交给项目经理，text 以 workerReportHeader（“【Worker #3 · 修 X 的汇报】”）开头，
+ *   后面是汇报原文或原因；status 从 queued 起照常走，登记 session.send（source system）发给项目经理；
+ * - started、ended：项目经理自己敲的 hub，只给人看，status 是 null，不发给它。
+ * title、readonly、workerConversationId 抄自工单，网页不用另查。
+ */
+export type WorkerMessageMeta = {
+  ticketId: TicketId;
+  workerConversationId: ConversationId;
+  title: string;
+  readonly: boolean;
+  event: WorkerEvent;
+  status: WorkerLineStatus | null;
+  /** report：摘要（没按格式是 null）；turn_failed、worktree_failed：原因；started、ended：null。 */
+  summary: string | null;
+};
+
+/** kind 是 worker、meta.event 认识就返回 meta（不逐个字段校验，账本写的就是这个形状），否则 null。 */
+export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMessageMeta | null {
+  if (message.kind !== WORKER_MESSAGE_KIND || message.meta === null) return null;
+  return isOneOf(WORKER_EVENTS, message.meta.event) ? (message.meta as WorkerMessageMeta) : null;
+}
+
+/**
+ * 那一行的去重键：
+ * - started、ended、worktree_failed：每张工单一条，`worker:<工单>:<事件>`，turnMessageId 给 null；
+ * - report、turn_failed：每一轮一条，`worker:<工单>:turn:<这一轮处理的消息里编号最大的那条>`。两个事件共用一个键，
+ *   同一轮不会既有汇报又有出错，重放同一个 result 也不会出两行。
+ */
+export function workerMessageDedupeKey(ticketId: TicketId, event: WorkerEvent, turnMessageId: MessageId | null): string {
+  if (event === "report" || event === "turn_failed") {
+    if (turnMessageId === null) throw new Error(`workerMessageDedupeKey: ${event} needs the turn's message id`);
+    return `worker:${ticketId}:turn:${turnMessageId}`;
+  }
+  return `worker:${ticketId}:${event}`;
+}
+
+/**
  * 规整项目名、项目经理名：去掉首尾空白；空的、超过 MAX_NAME_CHARS 个字符的返回 null；
  * 带控制字符的也返回 null：C0（含换行）、DEL、C1（U+0080～U+009F，含 U+0085 换行）、行分隔符 U+2028、段分隔符 U+2029
  * （名字会进提示词、日志、hub 的输出，这些字符会把一行拆开）。
  * 界面服务、agent 接口校验请求体用它判断，账本存之前再用它规整一遍（存的是规整后的）。
  */
-export function normalizeName(raw: string): string | null {
+export function normalizeName(raw: string, maxChars: number = MAX_NAME_CHARS): string | null {
   const name = raw.trim();
-  if (name === "" || [...name].length > MAX_NAME_CHARS) return null;
+  if (name === "" || [...name].length > maxChars) return null;
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return null;
   return name;
+}
+
+/** 工单标题（hub worker start --title）：规则同 normalizeName，最多 MAX_TICKET_TITLE_CHARS 个字符。 */
+export function normalizeTicketTitle(raw: string): string | null {
+  return normalizeName(raw, MAX_TICKET_TITLE_CHARS);
 }
 
 /** UTF-8 字节数（各种“不超过多少 KB”的限制都按它算）。 */
@@ -393,6 +510,8 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined): boolea
 
 /**
  * 会话。项目经理的会话（role = pm）：conversationId 是项目经理的那个对话。
+ * Worker 的会话（role = worker，M3）：conversationId 是 Worker 的对话，ticketId 是工单，pmId 是 null；
+ * cwd 是 worktree（不带附加文件夹）或主文件夹（addDirs 和项目经理的一样）。
  * - 还没有项目：cwd 是 pm-home/<编号>/（它自己的空目录），addDirs 空；
  * - 有项目：cwd 是主文件夹的真实路径，addDirs 是其他没移除的文件夹。建项目、挂和移除文件夹时账本改这两列，
  *   驱动层在下一条消息前按新的值 --resume 重启（--resume 换了工作目录也接得上，m0-report 实验 2）。
@@ -407,7 +526,8 @@ export interface AgentSessionRow {
    * 总助、Worker 的会话是 null。M1 留下的会话迁移时按对话补上。
    */
   pmId: PmId | null;
-  ticketId: number | null;
+  /** Worker 的会话：工单号；其他 null。 */
+  ticketId: TicketId | null;
   vendor: string;
   /** 我们预先生成的 UUID，第一次用 --session-id，之后一律 --resume。 */
   vendorSessionId: string;

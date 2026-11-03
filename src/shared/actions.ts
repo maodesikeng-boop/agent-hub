@@ -1,8 +1,8 @@
-// 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话。
-import type { ActionId, MessageId, SessionId } from "./domain.ts";
+// 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话，M3 加建 worktree。
+import type { ActionId, MessageId, SessionId, TicketId } from "./domain.ts";
 
-/** 会扩展（M3 起有建 worktree 等），数据库不加 CHECK，用 isOneOf 校验。 */
-export const ACTION_TYPES = ["session.start", "session.send", "session.end"] as const;
+/** 会扩展，数据库不加 CHECK，用 isOneOf 校验。 */
+export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /** 待执行 / 执行中 / 完成 / 失败 / 放弃。 */
@@ -40,10 +40,24 @@ export interface SessionEndParams {
   generation: number;
 }
 
+/**
+ * 给工单建 git worktree（M3，m3-plan 第 3 节接口约定）。hub worker start 判断要在 worktree 里干活时登记，去重键是工单号。
+ * 处理函数（W5 接到 W1 的 addWorktree）：
+ * 1. ledger.getWorktreeTask(ticketId) 取主文件夹、分支、目录；null 或工单已 ended → done，什么也不做；
+ * 2. 在主文件夹里 git worktree add -b <分支> <目录> HEAD（重复执行算成功），拿到 HEAD 的提交；
+ * 3. ledger.onWorktreeCreated(ticketId, 提交)：账本记下起点提交，同一个事务里登记 Worker 的 session.start 和第一条 session.send。
+ * 抛错按 ACTION_RETRY 重试；次数用完 ledger.onActionFailed 在项目经理的对话里发一行 worktree_failed（原因交给它），工单标 ended。
+ * 在主文件夹里干活的工单不登记这个动作，hub worker start 直接登记那两样。
+ */
+export interface WorktreeCreateParams {
+  ticketId: TicketId;
+}
+
 export interface ActionParamsMap {
   "session.start": SessionStartParams;
   "session.send": SessionSendParams;
   "session.end": SessionEndParams;
+  "worktree.create": WorktreeCreateParams;
 }
 
 /** 动作表的一行。T 是单个类型时 params 跟着确定；要按 type 收窄请用 AnyActionRow。 */
@@ -84,6 +98,8 @@ export function actionDedupeKey(action: NewAction): string {
       return String(action.params.messageId);
     case "session.end":
       return `${action.params.sessionId}:${action.params.generation}`;
+    case "worktree.create":
+      return String(action.params.ticketId);
   }
 }
 
@@ -111,6 +127,8 @@ export const ACTION_RETRY: Record<ActionType, RetryPolicy> = {
   // 会话起不来时跟着上一条重试，节奏一样
   "session.send": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   "session.end": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
+  // git 偶尔失败（锁文件、磁盘忙），隔几秒再试；3 次还不行就告诉项目经理
+  "worktree.create": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
 };
 
 /** 第 attempt 次（从 1 起）失败后，隔多久再试：base × 2^(attempt-1)，不超过 maxMs。 */

@@ -343,7 +343,7 @@ describe("执行器", () => {
 
   it("启动动作次数用完：actions 的 health 只按每次失败记，不再多记一次", async () => {
     enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1 } }, T0);
-    const executor = createActionExecutor(db, deps, { retry: { "session.start": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.send": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.end": { maxAttempts: 1, baseMs: 1, maxMs: 1 } } });
+    const executor = createActionExecutor(db, deps, { retry: { "session.start": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.send": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.end": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "worktree.create": { maxAttempts: 1, baseMs: 1, maxMs: 1 } } });
     executor.register("session.start", () => {
       throw new Error("boom");
     });
