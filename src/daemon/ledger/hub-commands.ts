@@ -31,7 +31,13 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
         const project = row === null ? null : projectCard(row);
         return {
           text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}`,
-          data: { pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode }, sessionId: caller.id, conversationId: caller.conversationId ?? -1, project },
+          data: {
+            role: "pm",
+            pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
+            sessionId: caller.id,
+            conversationId: caller.conversationId ?? -1,
+            project,
+          },
         };
       }
       case "project.create": {
@@ -61,6 +67,12 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
           change === null ? "性格设定和模式都和现在一样，没有改动。" : "已改好自己的做事习惯，下一条消息起生效；用户可以在资料页撤销。";
         return { text, data: { change } };
       }
+      // M3 W0 的占位，W2 实现
+      case "worker.start":
+      case "worker.send":
+      case "worker.end":
+      case "worker.list":
+        throw fail("invalid", "hub worker 还没做好");
     }
   };
 

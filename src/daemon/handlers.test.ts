@@ -24,7 +24,7 @@ function message(patch: Partial<Message> = {}): Message {
     id: 7,
     conversationId: 1,
     sessionId: 1,
-    ticketId: null,
+    workerId: null,
     sender: "user",
     kind: "text",
     text: "你好",

@@ -8,7 +8,7 @@ export interface AgentSessionDbRow {
   role: string;
   conversation_id: number | null;
   pm_id: number | null;
-  ticket_id: number | null;
+  worker_id: number | null;
   vendor: string;
   vendor_session_id: string;
   cwd: string;
@@ -30,7 +30,7 @@ export function toAgentSessionRow(row: AgentSessionDbRow): AgentSessionRow {
     role: row.role as AgentRole,
     conversationId: row.conversation_id,
     pmId: row.pm_id,
-    ticketId: row.ticket_id,
+    workerId: row.worker_id,
     vendor: row.vendor,
     vendorSessionId: row.vendor_session_id,
     cwd: row.cwd,

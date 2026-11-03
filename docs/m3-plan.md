@@ -20,7 +20,7 @@
 
 | 步骤 | 怎么做 |
 |---|---|
-| 派活 | 项目经理在 shell 里敲 `hub worker start --title "修 X" --stdin <<'EOF' …任务说明… EOF`（第 2.4 节）。账本建一张工单，在项目经理的会话里发一行“Worker · 修 X · 已派出” |
+| 派活 | 项目经理在 shell 里敲 `hub worker start --title "修 X" --stdin <<'EOF' …任务说明… EOF`（第 2.4 节）。账本在 `workers` 表里记一行，在项目经理的会话里发一行“Worker · 修 X · 已派出” |
 | 定在哪干活 | 主文件夹是 git 仓库（而且至少有一次提交）：默认由守护进程建 worktree，命令是 `git worktree add -b hub/<编号>-<短名> <数据目录>/worktrees/<项目编号>/<编号> HEAD`（设计 7.7）。不是 git 仓库：Worker 直接在主文件夹里干活。项目经理也可以用 `--no-worktree` 自己选在主文件夹里干（第 2.6 节） |
 | 起 Worker | Worker 有自己的对话（kind `worker`，左栏不显示）和会话（role `worker`，cwd 是 worktree 或主文件夹）。第一条消息就是任务说明。驱动层不用改：会话照常启动、恢复、停止、结束 |
 | 回到项目经理 | Worker 每一轮结束（`result`），账本取这一轮最后一段文字当汇报。在项目经理的会话里发一行“Worker · 标题 · <状态>：<摘要>”，再把汇报原文用 `session.send`（`source: system`）交给项目经理，开头带“【Worker #3 · 修 X 的汇报】”。这一轮出错、被停止，也发一行，说明原因 |
@@ -30,17 +30,17 @@
 
 **M3 不做**（括号里是哪个里程碑做，或者为什么不做）
 
-- 工单卡片的多种状态、原地更新：一行一行的汇报就够看了，状态只在账本里留一列。
+- 工单卡片（设计里的，M3 不做）的多种状态、原地更新：一行一行的汇报就够看了，状态只在 `workers` 表里留一列。M3 也不另立“工单”这个叫法，每个 Worker 一条记录就叫 Worker（2026-11-03 定，见第 3 节接口约定）。
 - 收件箱、“待你验收”分组、通知、权限钩子、审批卡片（M4）：M3 没人能中途批准，所以默认档用 `auto`（第 2.1 节）。
 - `@Worker`、用户直接跟 Worker 说话：用户的话都经过项目经理，少一条路要测。用户想纠正 Worker，跟项目经理说就行。
 - 汇报格式不对时自动让它重写：每一轮结束都当成一份汇报交给项目经理，格式不对就标“没按格式”，由项目经理看原文判断。
-- 合并按钮、“通过”“打回”按钮、工单详情页、改动预览：合并由用户在会话里说一句，项目经理用 git 做。
+- 合并按钮、“通过”“打回”按钮、Worker 详情页（设计里的工单详情页）、改动预览：合并由用户在会话里说一句，项目经理用 git 做。
 - 守护进程替 agent 合并、删 worktree、合并前检查：都交给项目经理用 git 做，少一套要测的代码。
 - Worker 的数量上限：不限，额度让用户自己看（第 2.7 节）。
 - 看门狗：卡住、原地打转、总时长上限（M7）。M3 靠用户看得见、能点停止（第 2.4 节）。
 - 合并队列、自动变基：项目经理一次合一个，冲突它自己处理或者让 Worker 先更新。
 - 过期的 worktree 自动删、启动时 `git worktree prune`（M7）：M3 由项目经理收拾。
-- Worker 读原始消息（设计 2.3 的“按工单号读原始消息”）：任务说明里写够就行。
+- Worker 读原始消息（设计 2.3 的“按工单号读原始消息”，M3 里就是按 Worker 编号）：任务说明里写够就行。
 
 ## 2. 关键决定
 
@@ -70,7 +70,7 @@
 | 哪里 | Worker | 理由 |
 |---|---|---|
 | 提示词 | 角色、任务说明、汇报格式、“不能改记忆文件”，没有性格设定和模式 | Worker 没有名字和性格，做完就散（设计 2.3） |
-| `hub` 命令 | 只能用 `hub status`（我是哪张工单、任务是什么、在哪干活）。`project.*`、`persona.*`、`worker.*` 都返回 `forbidden` | 这是分工：Worker 不建项目、不挂文件夹、不改性格设定、不再派 Worker。Worker 用 Claude 自带的子 agent 不受影响。按角色放行的表只有一张：`src/shared/hub.ts` 的 `HUB_COMMAND_ROLES`，账本 `hubCall` 按会话的 role 查 |
+| `hub` 命令 | 只能用 `hub status`（我是哪个 Worker、任务是什么、在哪干活）。`project.*`、`persona.*`、`worker.*` 都返回 `forbidden` | 这是分工：Worker 不建项目、不挂文件夹、不改性格设定、不再派 Worker。Worker 用 Claude 自带的子 agent 不受影响。按角色放行的表只有一张：`src/shared/hub.ts` 的 `HUB_COMMAND_ROLES`，账本 `hubCall` 按会话的 role 查 |
 | 记忆 | 不能写（第 2.2 节） | 用户定的，唯一的硬限制 |
 | 派活时的开关 | 可以只读、选模型（下面） | 用户定的 |
 
@@ -88,7 +88,7 @@
 - `--readonly`：Worker 只看不改，比如做调查、写方案。用 `dontAsk` 档：要批准的一律拒绝，读文件和只读命令照常能用（[permission-modes][cc-modes]）。
 - `--model <模型>`：见第 2.4 节。
 
-开关记在工单上，Worker 被打回、重启都沿用。开过只读的，“已派出”那一行上会写明。不管开关怎么写，记忆规则都不去掉：`buildSessionSettings` 最后无条件加上，有一条单元测试专门测这个。
+开关记在 Worker 的记录上，Worker 被打回、重启都沿用。开过只读的，“已派出”那一行上会写明。不管开关怎么写，记忆规则都不去掉：`buildSessionSettings` 最后无条件加上，有一条单元测试专门测这个。
 
 ### 2.2 Worker 不能写记忆（唯一的硬限制）
 
@@ -99,14 +99,14 @@
 | 类 | 具体 | 怎么拦 |
 |---|---|---|
 | agent-hub 的性格设定 | `hub persona edit` | `HUB_COMMAND_ROLES` 不给 Worker，返回 `forbidden` |
-| 同上，直接改文件 | `<数据目录>/state/personas/pm-<编号>.md`。M2 启动时会把手改的内容记成一次 `actor: file` 的修改，所以直接改文件也算改设定 | `Edit(//<数据目录真实路径>/state/**)`，`launch.ts` 按 `paths.ts` 生成。顺带挡住数据库、令牌这些（设计 11.2） |
-| 项目的约定文件 | 工作目录里任何一层的 `AGENTS.md`、`CLAUDE.md`、`CLAUDE.local.md`，以及 `.claude/` 下的东西（`.claude/CLAUDE.md`、`.claude/rules/`、项目的 `settings.json`、技能） | `Edit(AGENTS.md)`、`Edit(CLAUDE.md)`、`Edit(CLAUDE.local.md)`、`Edit(.claude/**)`。只写文件名就是“任何深度”（[permissions][cc-perms] 的 How deep a pattern matches 一节）。在 worktree 里、在主文件夹里都一样 |
+| 同上，直接改文件 | `<数据目录>/state/personas/pm-<编号>.md`。M2 启动时会把手改的内容记成一次 `actor: file` 的修改，所以直接改文件也算改设定 | `Edit(//<数据目录真实路径>/state/**)`，`launch.ts` 按 `paths.ts` 生成（`policy.ts` 的 `stateDirDenyRule`，路径里的 `[`、`]`、`*`、`?`、`\` 转义）。顺带挡住数据库、令牌这些（设计 11.2） |
+| 项目的约定文件 | 任何位置的 `AGENTS.md`、`CLAUDE.md`、`CLAUDE.local.md`，以及 `.claude/` 下的东西（`.claude/CLAUDE.md`、`.claude/rules/`、项目的 `settings.json`、技能）：工作目录里、`--add-dir` 带进来的附加文件夹里都算 | `Edit(//**/AGENTS.md)`、`Edit(//**/CLAUDE.md)`、`Edit(//**/CLAUDE.local.md)`、`Edit(//**/.claude/**)`：`//` 开头的绝对通配。不用 `Edit(AGENTS.md)` 这种相对写法：它锚在当前目录（[permissions][cc-perms] 的 How path patterns match 一节），“任何深度”只在工作目录之下成立，附加文件夹里的拦不住。PR #31 审查用真 `claude` 加 `--add-dir` 实测过：相对写法下附加文件夹里的 `AGENTS.md`、`CLAUDE.md` 被改了；换成绝对通配后全部被拒，普通文件照样能写。在 worktree 里、在主文件夹里都一样 |
 | Claude Code 的用户级记忆 | `~/.claude/` 整个：`CLAUDE.md`、`rules/`，以及 `settings.json`、`skills/`、`agents/`、`commands/`，这些改了会影响以后每个 agent | `Edit(~/.claude/**)`。`claude` 自己存会话记录不经过工具，不受影响 |
 | Claude Code 的自动记忆 | `~/.claude/projects/<项目>/memory/`。文档说“同一个仓库的所有 worktree 共用一个自动记忆目录”（[memory][cc-memory] 的 Storage location 一节），所以 Worker 写进去，项目经理下次就会读到 | 给 Worker 设环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`，设置文件里再写 `autoMemoryEnabled: false`（[memory][cc-memory] 的 Enable or disable auto memory 一节）。上面的 `Edit(~/.claude/**)` 也兜着。代价是 Worker 也读不到自动记忆；项目约定在 `AGENTS.md` 和任务说明里 |
 
 - `Edit` 规则也管 Write 工具、Bash 里认得出的 `sed`、`tee` 和重定向（[permissions][cc-perms] 的 What Read and Edit rules cover 一节）。拒绝规则在所有模式下都先于别的规则（同一页的 Manage permissions 一节）。
 - **局限**：Worker 自己写 Python、Node 脚本去改文件，这些规则就拦不住了。文档也说这类规则“不是安全边界”，要真隔开得开沙箱，原型不做（设计第 11 章）。M3 不在合并前再查一道（用户定的）。合并是项目经理做的，它看改动时能看出来。
-- **要实测的**（冒烟 S12）：`auto` 档下这几条拒绝规则真的生效；`Edit(~/.claude/**)` 挡得住 Write；自动记忆关掉以后真的不写。
+- **要实测的**（冒烟 S12）：`auto` 档下这几条拒绝规则真的生效，附加文件夹里的约定文件也拦得住；`Edit(~/.claude/**)` 挡得住 Write；自动记忆关掉以后真的不写。
 
 **Worker 的任务本身就要改 `AGENTS.md` 怎么办**：由项目经理来改。Worker 的提示词写明：“记忆文件（`AGENTS.md`、`CLAUDE.md`、`.claude/` 下的东西）你不能改。觉得需要改，就在汇报的‘问题’里写清楚要改成什么。”项目经理验收时在主文件夹里自己改，它有写权限。
 
@@ -134,7 +134,7 @@
 - **卡住、失败**：M3 不做看门狗。
   - Worker 的对话和项目经理的一样有“正在运行 `xxx`”和停止按钮，用户看得见、点得停。
   - 这一轮出错、崩溃、被停止，项目经理都会收到一行，写明原因，由它决定 `send` 让 Worker 接着做，还是 `end` 收工。
-  - 建 worktree 失败（重试 3 次后），项目经理的会话里发一行，写明原因，工单标 `ended`。
+  - 建 worktree 失败（重试 3 次后），项目经理的会话里发一行，写明原因，这个 Worker 标 `ended`。
   - 守护进程重启后照 M2 的做法用 `--resume` 恢复。
 
 ### 2.5 汇报格式和“做完了”
@@ -177,14 +177,14 @@
 - 会话顶栏显示“5 小时额度已用 N% · 7 天 N%”。数据是现成的，每个会话每一轮都有 `rate_limit_event`，取最近一次的。
 - 顶栏同时显示“N 个 Worker 在跑”。
 - 项目经理的提示词里写：能自己几句话做完的就不派；简单的活派便宜的模型。
-- 不做按工单统计花了多少：`total_cost_usd` 是本地估算，订阅账号不按钱算，意义不大。
+- 不做按 Worker 统计花了多少：`total_cost_usd` 是本地估算，订阅账号不按钱算，意义不大。
 
 ## 3. 拆分
 
 6 块，每块一个 Worker、一个 PR。W0 和 W1 同时开工；W0 合并后 W2、W3、W4 同时开工；W5 等所有块合并后做。
 
 ```
-W0 接口、迁移、policy ──┬── W2 账本：工单、hub 命令、汇报 ──┐
+W0 接口、迁移、policy ──┬── W2 账本：Worker、hub 命令、汇报 ┐
                         ├── W3 启动文件和提示词 ────────────┼── W5 组装 + 端到端 + 冒烟
                         └── W4 网页 + 界面服务 ──────────────┤
 W1 建 worktree（不依赖别的） ──────────────────────────────────┘
@@ -208,7 +208,7 @@ W1 建 worktree（不依赖别的） ──────────────�
 |---|---|---|
 | W0 接口和迁移 | `src/shared/`（`policy.ts`、`worker.ts`，以及 `domain.ts`、`hub.ts`、`api.ts`、`actions.ts`、`limits.ts`、`paths.ts` 里新增的部分）、`migrations/0004_workers.sql`、`test/migration.test.ts`；只为编译通过的占位 | 无 |
 | W1 建 worktree | `src/daemon/git/`：`isRepoWithCommit`、`hasUncommittedChanges`、`addWorktree`（重复执行算成功） | 无 |
-| W2 账本 | `src/daemon/ledger/`（新文件 `workers.ts`）、`hub-commands.ts`、`src/daemon/agent-api/`（按角色放行） | W0 |
+| W2 账本 | `src/daemon/ledger/`（新文件 `workers.ts`）、`hub-commands.ts`（`hubCall` 按 `HUB_COMMAND_ROLES` 放行）、`src/daemon/agent-api/`（请求体规格）、`src/hub/cli.ts`（`hub worker …` 的命令行解析） | W0 |
 | W3 启动文件和提示词 | `src/daemon/launch.ts`、`src/daemon/prompt.ts`、`test/fake-claude/`（按会话选剧本） | W0 |
 | W4 网页 + 界面服务 | `src/web/`、`src/daemon/ui-server/` | W0 |
 | W5 组装 | `src/daemon/daemon.ts`、`handlers.ts`（`worktree.create` 的处理函数接到 W1）、`main.ts`、`test/e2e/`、`test/smoke/`、`HANDOVER.md`、本文档 | W1～W4 |
@@ -216,13 +216,15 @@ W1 建 worktree（不依赖别的） ──────────────�
 **接口约定**（W0 写进 `src/shared/`，之后要改得在 PR 里说明）：
 
 - 数据（迁移 `0004`）：
-  - 新表 `tickets`：`id, project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, readonly, workspace(worktree|main), branch, worktree_path, base_commit, status(open|ended), created_at, updated_at`。用主文件夹时，`branch`、`worktree_path`、`base_commit` 是空的；
+  - 新表 `workers`（每个 Worker 一行；类型叫 `WorkerRecord`、`WorkerId`，不叫 `Worker`：网页的 DOM 库里有全局的 `Worker`）：`id, project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, readonly, workspace(worktree|main), branch, worktree_path, base_commit, status(open|ended), created_at, updated_at`。用主文件夹时，`branch`、`worktree_path`、`base_commit` 是空的；
   - `conversations.kind` 加 `worker`（要重建表，迁移器 M2 就支持）；
-  - `agent_sessions.ticket_id`、`messages.ticket_id` 已经有了；
-  - 消息 `kind` 加 `worker`：项目经理会话里的那一行。`meta` 里带 `ticketId`、`event`（`started`、`report`、`turn_failed`、`worktree_failed`、`ended`）、`status`、`summary`。
-- 动作：加 `worktree.create`，去重键是工单号，重试 3 次，做完再登记 Worker 的 `session.start` 和第一条 `session.send`。在主文件夹里干活的，不登记这个动作，直接登记这两样。`hub worker start` 同步判断用哪种，真正建 worktree 放到动作里做。
+  - `agent_sessions.ticket_id`、`messages.ticket_id`（0001 就留好的）改名 `worker_id`，在 `0004` 里用 `ALTER TABLE … RENAME COLUMN`；
+  - 消息 `kind` 加 `worker`：项目经理会话里的那一行。`meta` 里带 `workerId`、`event`（`started`、`report`、`turn_failed`、`worktree_failed`、`ended`）、`status`、`summary`。
+- 动作：加 `worktree.create`，去重键是 Worker 编号（`{ workerId }`），重试 3 次，做完再登记 Worker 的 `session.start` 和第一条 `session.send`。在主文件夹里干活的，不登记这个动作，直接登记这两样。`hub worker start` 同步判断用哪种，真正建 worktree 放到动作里做。
 - 账本给驱动层事件的钩子：Worker 会话的这一轮结束（`result`、出错、停止）时，在同一个事务里发那一行、给项目经理登记 `session.send`。
-- `LaunchContext` 加 `role`、`ticket`（标题、任务、只读、在哪干活、分支）。项目经理的 `addDirs` 加 `<数据目录>/worktrees/<项目编号>/`。
+- `LaunchContext` 加 `role`、`worker`（`WorkerRecord`：标题、任务、只读、在哪干活、分支）。项目经理的 `addDirs` 加 `<数据目录>/worktrees/<项目编号>/`：根目录是账本的构造参数 `LedgerOptions.worktreesDir`（默认 `<dataHome>/worktrees`，W5 显式传）；这一层目录由 W3 的启动准备在启动前 `mkdir -p`（`--add-dir` 要求目录在），每个 Worker 那一层由 `git worktree add` 建。
+- 那一行的去重键带事件类型（`workerMessageDedupeKey`）：同一条消息先出错、重发后又跑出结果，两行都有。守护进程关机打断的一轮不发这一行，重启后接着做完再汇报。
+- 标题超过 80 个字符截断，不报错；任务说明超过 100 KB 报 `invalid`。没按格式时那一行的摘要是原文第一行（截断）。
 
 ### 测试表（TDD，先写测试）
 
@@ -248,15 +250,15 @@ W1 建 worktree（不依赖别的） ──────────────�
 
 | 测什么 | 怎么触发 | 期望 |
 |---|---|---|
-| 派活（worktree） | 主文件夹是仓库，项目经理调 `worker.start` | 一张工单（`workspace: worktree`）、Worker 的对话和会话、会话里一行“已派出”、登记 `worktree.create`、`hub_calls` 一行 |
-| 派活（主文件夹） | 主文件夹不是仓库；或者是仓库但带 `noWorktree` | 工单 `workspace: main`；会话 cwd 是主文件夹，`add_dirs` 和项目经理的一样；不登记 `worktree.create`，直接登记 `session.start` |
+| 派活（worktree） | 主文件夹是仓库，项目经理调 `worker.start` | `workers` 一行（`workspace: worktree`）、Worker 的对话和会话、会话里一行“已派出”、登记 `worktree.create`、`hub_calls` 一行 |
+| 派活（主文件夹） | 主文件夹不是仓库；或者是仓库但带 `noWorktree` | `workers` 一行 `workspace: main`；会话 cwd 是主文件夹，`add_dirs` 和项目经理的一样；不登记 `worktree.create`，直接登记 `session.start` |
 | 边界 | 没有项目、任务说明是空的或太长 | `invalid`，什么都没写 |
 | 不限数量 | 连派 10 个 | 都成功 |
-| 按角色放行 | Worker 调 `persona.edit`、`project.create`、`worker.start` | `forbidden`；`status` 能用，返回自己的工单 |
+| 按角色放行 | Worker 调 `persona.edit`、`project.create`、`worker.start` | `forbidden`；`status` 能用，返回自己的记录 |
 | 汇报回来 | Worker 这一轮 `result` | 项目经理会话里一行（状态、摘要）；给项目经理的 `session.send`，开头是“【Worker #N”；重放同一个 `result` 不会出两行 |
-| 出错、停止 | Worker 这一轮失败、被停；建 worktree 失败 | 一行写明原因，同样交给项目经理；后一种工单标 `ended` |
-| 打回 | `worker.send 3` | 发给同一个 Worker 会话；别的项目经理的工单 → `forbidden` |
-| 收工 | `worker.end 3` | 登记 `session.end`；工单 `ended`；会话里一行“已收工” |
+| 出错、停止 | Worker 这一轮失败、被停；建 worktree 失败 | 一行写明原因，同样交给项目经理；后一种这个 Worker 标 `ended` |
+| 打回 | `worker.send 3` | 发给同一个 Worker 会话；别的项目经理派的 Worker → `forbidden` |
+| 收工 | `worker.end 3` | 登记 `session.end`；Worker 标 `ended`；会话里一行“已收工” |
 
 **W3**
 
@@ -296,6 +298,7 @@ W1 建 worktree（不依赖别的） ──────────────�
   - “记住暗号 X，以后都用得上”。
 
   期望：前两件都在 `permission_denials` 里，`AGENTS.md` 和探针文件都没变；这个仓库的自动记忆目录跑前跑后一样。同一个 Worker 写一个普通文件能成功，证明不是整个都被拦了。
+  - 带附加文件夹：项目挂一个附加文件夹（里面放 `AGENTS.md` 和 `CLAUDE.md`），派一个在主文件夹里干活的 Worker（带 `--add-dir`），让它改附加文件夹里这两个文件。期望：都在 `permission_denials` 里，文件没变；同一个附加文件夹里的普通文件能写。
 - **S13 整条路**：项目经理一句话派一个 haiku Worker，改一行、提交；Worker 的汇报回到项目经理会话；用户说“合并吧”，主文件夹里有这次改动，worktree 删了。
 
 ## 4. 要用户拍板的问题

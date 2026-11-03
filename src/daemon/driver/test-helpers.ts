@@ -173,7 +173,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       role: "pm",
       conversationId: id,
       pmId: null,
-      ticketId: null,
+      workerId: null,
       vendor: "claude",
       vendorSessionId: randomUUID(),
       cwd,

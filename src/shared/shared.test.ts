@@ -71,9 +71,38 @@ import type {
   SessionState,
   SessionTokens,
   PersonaView,
+  LaunchContext,
+  WorkerRecord,
+  WorkerMessageMeta,
+  WorktreeCreateParams,
+  WorktreeTask,
+} from "./index.ts";
+import {
+  CONVERSATION_KINDS,
+  HUB_COMMAND_ROLES,
+  MAX_TASK_BYTES,
+  MAX_WORKER_TITLE_CHARS,
+  WORKER_STATUSES,
+  WORKER_WORKSPACES,
+  WORKER_BRANCH_SLUG_CHARS,
+  WORKER_EVENTS,
+  WORKER_MESSAGE_KIND,
+  MAX_MESSAGE_BYTES,
+  hubCommandAllowed,
+  normalizeWorkerTitle,
+  truncateChars,
+  workerEventOf,
+  workerMessageDedupeKey,
 } from "./index.ts";
 import { launchFingerprint } from "./launch.ts";
-import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, personaFilePath, resolveHubPaths } from "./paths.ts";
+import {
+  MAX_UNIX_SOCKET_PATH_BYTES,
+  assertSocketPathFits,
+  personaFilePath,
+  projectWorktreesDir,
+  resolveHubPaths,
+  workerWorktreePath,
+} from "./paths.ts";
 
 describe("动作", () => {
   it("去重键：启动按（会话，第几代），发消息按消息编号", () => {
@@ -108,6 +137,10 @@ describe("动作", () => {
         expectTypeOf(row.params).toEqualTypeOf<SessionEndParams>();
         return -row.params.generation;
       }
+      if (row.type === "worktree.create") {
+        expectTypeOf(row.params).toEqualTypeOf<WorktreeCreateParams>();
+        return row.params.workerId * 100;
+      }
       expectTypeOf(row.params).toEqualTypeOf<SessionSendParams>();
       return row.params.messageId;
     };
@@ -115,6 +148,7 @@ describe("动作", () => {
     expect(narrow({ ...base, type: "session.start", params: { sessionId: 1, generation: 4 } })).toBe(4);
     expect(narrow({ ...base, type: "session.end", params: { sessionId: 1, generation: 2 } })).toBe(-2);
     expect(narrow({ ...base, type: "session.send", params: { sessionId: 1, messageId: 9, source: "user" } })).toBe(9);
+    expect(narrow({ ...base, type: "worktree.create", params: { workerId: 3 } })).toBe(300);
     // @ts-expect-error 类型和参数对不上
     const bad: AnyActionRow = { ...base, type: "session.start", params: { sessionId: 1, messageId: 9, source: "user" } };
     expect(bad).toBeDefined();
@@ -162,7 +196,7 @@ describe("消息", () => {
     expect(isOneOf(MESSAGE_KINDS, "card")).toBe(false);
     expect(isOneOf(MESSAGE_SENDERS, "agent")).toBe(true);
     expect(isOneOf(ACTION_TYPES, "session.send")).toBe(true);
-    expect(isOneOf(ACTION_TYPES, "worktree.create")).toBe(false);
+    expect(isOneOf(ACTION_TYPES, "worktree.remove")).toBe(false);
     expect(isOneOf(ACTION_TYPES, 42)).toBe(false);
   });
 });
@@ -301,7 +335,7 @@ describe("M2：系统消息", () => {
     id: 1,
     conversationId: 1,
     sessionId: null,
-    ticketId: null,
+    workerId: null,
     kind: "text",
     collapsed: false,
     dedupeKey: "k",
@@ -419,6 +453,10 @@ describe("M2：agent 接口", () => {
       "project.detach",
       "persona.show",
       "persona.edit",
+      "worker.start",
+      "worker.send",
+      "worker.end",
+      "worker.list",
     ]);
     expect(hubPath("project.create")).toBe("/v1/project.create");
     expect(ENV_HUB_TOKEN).toBe("HUB_TOKEN");
@@ -442,6 +480,7 @@ describe("M2：agent 接口", () => {
 
   it("应答按 ok 收窄", () => {
     const read = (r: HubResponse<"status">) => (r.ok ? r.data.pm.name : r.code);
+    expect(read({ ok: true, text: "", data: { role: "worker", pm: { id: 1, name: "小林" }, sessionId: 9, conversationId: 10, worker: {} as never, project: {} as never } })).toBe("小林");
     expect(read({ ok: false, code: "unauthorized", message: "令牌无效" })).toBe("unauthorized");
   });
 });
@@ -548,5 +587,164 @@ describe("M2：socket 路径长度", () => {
     expect(() => assertSocketPathFits("/" + "a".repeat(103))).toThrow(/104 字节.*103.*AGENT_HUB_HOME/);
     // 按 UTF-8 字节算
     expect(() => assertSocketPathFits("/" + "交".repeat(35))).toThrow(/106 字节/);
+  });
+});
+
+// ---- M3 W0：Worker ----
+
+describe("M3：对话和消息", () => {
+  it("对话多一种 worker；消息多一种 kind worker、发送方多一种 pm", () => {
+    expect(CONVERSATION_KINDS).toEqual(["assistant", "pm", "project_group", "worker"]);
+    expect(MESSAGE_KINDS).toEqual(["text", "tool", "worker"]);
+    expect(WORKER_MESSAGE_KIND).toBe("worker");
+    expect(MESSAGE_SENDERS).toEqual(["user", "agent", "system", "pm"]);
+  });
+
+  it("那一行的事件", () => {
+    expect(WORKER_EVENTS).toEqual(["started", "report", "turn_failed", "worktree_failed", "ended"]);
+  });
+
+  it("workerEventOf：只认 kind worker 的消息", () => {
+    const meta: WorkerMessageMeta = {
+      workerId: 3,
+      workerConversationId: 10,
+      title: "修 X",
+      readonly: false,
+      event: "report",
+      status: "done",
+      summary: "好了",
+    };
+    expect(workerEventOf({ kind: "worker", meta })).toEqual(meta);
+    expect(workerEventOf({ kind: "text", meta })).toBeNull();
+    expect(workerEventOf({ kind: "worker", meta: null })).toBeNull();
+    expect(workerEventOf({ kind: "worker", meta: { ...meta, event: "merged" } })).toBeNull();
+  });
+
+  it("那一行的去重键：派出、收工、建 worktree 失败每个 Worker 一条；汇报和出错按（事件，这一轮的消息）", () => {
+    expect(workerMessageDedupeKey(3, "started", null)).toBe("worker:3:started");
+    expect(workerMessageDedupeKey(3, "ended", null)).toBe("worker:3:ended");
+    expect(workerMessageDedupeKey(3, "worktree_failed", null)).toBe("worker:3:worktree_failed");
+    expect(workerMessageDedupeKey(3, "report", 41)).toBe("worker:3:report:41");
+    expect(workerMessageDedupeKey(3, "turn_failed", 41)).toBe("worker:3:turn_failed:41");
+    // 同一条消息先失败、重发后又跑出结果：后来的汇报不会因为键重复被吞掉
+    expect(workerMessageDedupeKey(3, "report", 41)).not.toBe(workerMessageDedupeKey(3, "turn_failed", 41));
+    expect(workerMessageDedupeKey(3, "report", 42)).not.toBe(workerMessageDedupeKey(3, "report", 41));
+    expect(() => workerMessageDedupeKey(3, "report", null)).toThrow();
+  });
+});
+
+describe("M3：Worker 的记录", () => {
+  it("状态、在哪干活", () => {
+    expect(WORKER_STATUSES).toEqual(["open", "ended"]);
+    expect(WORKER_WORKSPACES).toEqual(["worktree", "main"]);
+  });
+
+  it("形状和 workers 表的列一一对应", () => {
+    expectTypeOf<keyof WorkerRecord>().toEqualTypeOf<
+      | "id"
+      | "projectId"
+      | "pmId"
+      | "pmConversationId"
+      | "workerConversationId"
+      | "title"
+      | "task"
+      | "model"
+      | "readonly"
+      | "workspace"
+      | "branch"
+      | "worktreePath"
+      | "baseCommit"
+      | "status"
+      | "createdAt"
+      | "updatedAt"
+    >();
+    expectTypeOf<WorkerRecord["readonly"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<WorkerRecord["branch"]>().toEqualTypeOf<string | null>();
+  });
+
+  it("标题：去首尾空白，空的、带控制字符的不行；太长不报错，截断到 MAX_WORKER_TITLE_CHARS 个字符", () => {
+    expect(normalizeWorkerTitle("  修 X  ")).toBe("修 X");
+    expect(normalizeWorkerTitle("")).toBeNull();
+    expect(normalizeWorkerTitle("   ")).toBeNull();
+    expect(normalizeWorkerTitle("a\nb")).toBeNull();
+    expect(normalizeWorkerTitle("字".repeat(MAX_WORKER_TITLE_CHARS))).toBe("字".repeat(MAX_WORKER_TITLE_CHARS));
+    expect(normalizeWorkerTitle("字".repeat(MAX_WORKER_TITLE_CHARS + 1))).toBe(`${"字".repeat(MAX_WORKER_TITLE_CHARS - 1)}…`);
+    // 按 Unicode 字符截，不切开代理对
+    expect([...normalizeWorkerTitle("😀".repeat(MAX_WORKER_TITLE_CHARS + 5))!]).toHaveLength(MAX_WORKER_TITLE_CHARS);
+  });
+
+  it("truncateChars：按字符截断，超了末尾换成…", () => {
+    expect(truncateChars("abc", 3)).toBe("abc");
+    expect(truncateChars("abcd", 3)).toBe("ab…");
+    expect(truncateChars("😀😀😀😀", 2)).toBe("😀…");
+  });
+
+  it("可调的数", () => {
+    expect(MAX_WORKER_TITLE_CHARS).toBe(80);
+    expect(MAX_TASK_BYTES).toBe(MAX_MESSAGE_BYTES);
+    expect(WORKER_BRANCH_SLUG_CHARS).toBe(30);
+  });
+});
+
+describe("M3：动作", () => {
+  it("建 worktree：按 Worker 编号去重，重试 3 次", () => {
+    expect(ACTION_TYPES).toContain("worktree.create");
+    expect(actionDedupeKey({ type: "worktree.create", params: { workerId: 3 } })).toBe("3");
+    expect(ACTION_RETRY["worktree.create"].maxAttempts).toBe(3);
+    expectTypeOf<WorktreeCreateParams>().toEqualTypeOf<{ workerId: number }>();
+  });
+
+  it("账本给处理函数的“要建什么”", () => {
+    expectTypeOf<WorktreeTask>().toEqualTypeOf<{
+      workerId: number;
+      repo: string;
+      branch: string;
+      worktreePath: string;
+      status: "open" | "ended";
+    }>();
+    expectTypeOf<Ledger["getWorktreeTask"]>().toEqualTypeOf<(workerId: number) => WorktreeTask | null>();
+    expectTypeOf<Ledger["onWorktreeCreated"]>().toEqualTypeOf<(workerId: number, baseCommit: string) => void>();
+  });
+});
+
+describe("M3：hub 命令按角色放行", () => {
+  it("Worker 只能用 status；其他全是项目经理的", () => {
+    expect(HUB_COMMAND_ROLES).toEqual({
+      status: ["pm", "worker"],
+      "project.create": ["pm"],
+      "project.attach": ["pm"],
+      "project.detach": ["pm"],
+      "persona.show": ["pm"],
+      "persona.edit": ["pm"],
+      "worker.start": ["pm"],
+      "worker.send": ["pm"],
+      "worker.end": ["pm"],
+      "worker.list": ["pm"],
+    });
+    expect(hubCommandAllowed("worker", "status")).toBe(true);
+    expect(hubCommandAllowed("worker", "persona.edit")).toBe(false);
+    expect(hubCommandAllowed("worker", "worker.start")).toBe(false);
+    expect(hubCommandAllowed("pm", "worker.start")).toBe(true);
+    expect(hubCommandAllowed("assistant", "status")).toBe(false);
+  });
+
+  it("worker.* 的参数", () => {
+    expectTypeOf<HubData<"worker.start">>().toEqualTypeOf<{ worker: WorkerRecord }>();
+    expectTypeOf<HubData<"worker.list">>().toEqualTypeOf<{ workers: WorkerRecord[] }>();
+  });
+});
+
+describe("M3：启动上下文", () => {
+  it("带 worker：项目经理是 null，Worker 是它的记录", () => {
+    expectTypeOf<LaunchContext["worker"]>().toEqualTypeOf<WorkerRecord | null>();
+  });
+});
+
+describe("M3：数据目录", () => {
+  it("worktrees/<项目编号>/<Worker 编号>", () => {
+    const paths = resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u");
+    expect(paths.worktreesDir).toBe("/tmp/x/worktrees");
+    expect(projectWorktreesDir(paths.worktreesDir, 2)).toBe("/tmp/x/worktrees/2");
+    expect(workerWorktreePath(paths.worktreesDir, 2, 7)).toBe("/tmp/x/worktrees/2/7");
   });
 });

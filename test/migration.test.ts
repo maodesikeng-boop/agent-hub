@@ -369,7 +369,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     const memory = openDatabase(":memory:");
     try {
       migrate(memory, m1MigrationsDir());
-      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3] });
+      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3, 4] });
     } finally {
       memory.close();
     }
@@ -397,7 +397,7 @@ describe("0002_projects：从 M1 的库升级", () => {
 
   it("空库连跑全部迁移没有报错", () => {
     const db = open();
-    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 3, applied: [1, 2, 3] });
+    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 4, applied: [1, 2, 3, 4] });
   });
 
   it("新建的项目经理默认只管理", () => {
@@ -612,7 +612,7 @@ describe("0003_pm_conversation：从 M2 开发时的库升级", () => {
     const before = rowCounts(db);
     const messagesBefore = db.all("SELECT * FROM messages ORDER BY id");
 
-    expect(migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 3, 12, 0, 0) })).toMatchObject({ from: 2, to: 3, applied: [3] });
+    expect(migrate(db, migrationsUpTo(3), { now: () => Date.UTC(2026, 10, 3, 12, 0, 0) })).toMatchObject({ from: 2, to: 3, applied: [3] });
 
     expect(rowCounts(db)).toEqual(before);
     expect(db.all("SELECT * FROM messages ORDER BY id")).toEqual(messagesBefore);
@@ -711,6 +711,222 @@ describe("0003_pm_conversation：约束", () => {
       INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/app', 1, 0);
     `);
     expect(db.get("SELECT count(*) AS n FROM project_folders WHERE path = '/code/app'")).toEqual({ n: 2 });
+  });
+});
+
+// ---- 0004_workers ----
+
+/**
+ * M2 发布时的库（user_version 3）：m2DevDb 升到 3，再给项目经理 1 建一个进行中的项目 2（挂在它的私聊 1 上，主文件夹 /code/bar），
+ * 私聊里一条项目已建好的系统消息、一个 hub 调用。
+ */
+function m2Db(): Db {
+  const db = m2DevDb();
+  migrate(db, migrationsUpTo(3));
+  db.exec(`
+    INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (2, 'bar', 1, 1, 40, 40);
+    INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/bar', 1, 40);
+    UPDATE agent_sessions SET cwd = '/code/bar' WHERE id = 1;
+    INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+      VALUES (1, 'system', 'text', '项目已建好', '{"event":"project.created","projectId":2}', 'system:1:project.created:2', 40, 40);
+    INSERT INTO hub_calls (session_id, command, args, ok, result, created_at) VALUES (1, 'project.create', '{"folder":"/code/bar"}', 1, '已建好', 40);
+  `);
+  return db;
+}
+
+/** 0004 之后：项目经理 1 在项目 2 上派一个 Worker（对话 10、会话 10、Worker 1）。 */
+function insertWorker(db: Db, over: Record<string, unknown> = {}): void {
+  db.exec(`
+    INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (10, 'worker', 1, 2, '修 X', 50);
+    INSERT INTO agent_sessions (id, role, conversation_id, worker_id, vendor_session_id, cwd, created_at, updated_at)
+      VALUES (10, 'worker', 10, 1, 'v-10', '/h/worktrees/2/1', 50, 50);
+  `);
+  const row: Record<string, unknown> = {
+    id: 1,
+    project_id: 2,
+    pm_id: 1,
+    pm_conversation_id: 1,
+    worker_conversation_id: 10,
+    title: "修 X",
+    task: "把 X 修好",
+    model: null,
+    readonly: 0,
+    workspace: "worktree",
+    branch: "hub/1-修-x",
+    worktree_path: "/h/worktrees/2/1",
+    base_commit: null,
+    status: "open",
+    created_at: 50,
+    updated_at: 50,
+    ...over,
+  };
+  const cols = Object.keys(row);
+  db.run(`INSERT INTO workers (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...(Object.values(row) as never[]));
+}
+
+describe("0004_workers：从 M2 的库升级", () => {
+  it("user_version 升到 4，老数据一行不少、一个字不变；多了空的 workers 表", () => {
+    const db = m2Db();
+    const before = rowCounts(db);
+    const dump = Object.fromEntries(tableNames(db).map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY rowid`)]));
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 3, to: 4, applied: [4] });
+
+    expect(userVersion(db)).toBe(4);
+    expect(rowCounts(db)).toEqual({ ...before, workers: 0 });
+    // 值一个不变；只有 agent_sessions、messages 的 ticket_id 改名 worker_id（位置不变）
+    const renamed = (rows: unknown[]) =>
+      rows.map((r) => Object.fromEntries(Object.entries(r as Record<string, unknown>).map(([k, v]) => [k === "ticket_id" ? "worker_id" : k, v])));
+    for (const [table, rows] of Object.entries(dump)) expect(db.all(`SELECT * FROM ${table} ORDER BY rowid`)).toEqual(renamed(rows));
+    const columns = (table: string) => db.all<{ name: string }>(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`).map((c) => c.name);
+    for (const table of ["agent_sessions", "messages"]) {
+      expect(columns(table)).toContain("worker_id");
+      expect(columns(table)).not.toContain("ticket_id");
+    }
+    expect(Object.keys(dump.agent_sessions![0] as object)).toContain("ticket_id");
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys).toBe(1);
+  });
+
+  it("升级前把库备份成 hub.sqlite.bak-3-<时间>，里面还是升级前的样子", () => {
+    const db = m2Db();
+    migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 4, 8, 0, 0) });
+    expect(readdirSync(dir!).filter((f) => f.startsWith("hub.sqlite.bak-3-"))).toEqual(["hub.sqlite.bak-3-20261104T080000Z"]);
+    const backup = openDatabase(join(dir!, "hub.sqlite.bak-3-20261104T080000Z"));
+    try {
+      expect(userVersion(backup)).toBe(3);
+      expect(tableNames(backup)).not.toContain("workers");
+      expect(backup.get("SELECT count(*) AS n FROM messages")).toEqual({ n: 5 });
+    } finally {
+      backup.close();
+    }
+  });
+
+  it("重复执行什么也不做，不再备份", () => {
+    const db = m2Db();
+    migrate(db, migrationsDir);
+    insertWorker(db);
+    const backups = readdirSync(dir!).filter((f) => f.includes(".bak-"));
+    expect(migrate(db, migrationsDir)).toEqual({ from: 4, to: 4, applied: [] });
+    expect(readdirSync(dir!).filter((f) => f.includes(".bak-"))).toEqual(backups);
+    expect(db.get("SELECT count(*) AS n FROM workers")).toEqual({ n: 1 });
+  });
+
+  it("重建 conversations 后索引还在：一个项目经理只有一个私聊，一个项目只有一个群；别的表指向它的外键照常生效", () => {
+    const db = m2Db();
+    migrate(db, migrationsDir);
+    const indexes = db
+      .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'conversations' AND sql IS NOT NULL ORDER BY name")
+      .map((r) => r.name);
+    expect(indexes).toEqual(["conversations_pm_private", "conversations_project_group"]);
+    expect(() => db.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', 1, 'x', 0)")).toThrow(/UNIQUE/);
+    expect(() => db.run("INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('project_group', 1, 1, 'x', 0)")).toThrow(
+      /UNIQUE/,
+    );
+    expect(() => db.run("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', 99, 'x', 0)")).toThrow(/FOREIGN KEY/);
+    expect(() => db.run("DELETE FROM conversations WHERE id = 1")).toThrow(/FOREIGN KEY/);
+    expect(() =>
+      db.run("INSERT INTO messages (conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (99, 'user', 'text', 'x', 'k', 0, 0)"),
+    ).toThrow(/FOREIGN KEY/);
+  });
+
+  it("升级后账本照常：快照、发消息、项目经理的会话都在", () => {
+    const db = m2Db();
+    migrate(db, migrationsDir);
+    const root = mkdtempSync(join(tmpdir(), "agent-hub-m4-ledger-"));
+    extraDirs.push(root);
+    const ledger = createLedger(db, { pmHomeRoot: join(root, "pm-home"), resolveFolder: (p) => p });
+    expect(ledger.snapshot().conversations.map((c) => c.conversation.id)).toEqual([1, 3]);
+    expect(ledger.snapshot().projects.map((p) => p.id)).toEqual([2]);
+    const { messageId } = ledger.postUserMessage({ conversationId: 1, clientId: "c1", text: "在吗" });
+    expect(db.get("SELECT session_id, status FROM messages WHERE id = ?", messageId)).toEqual({ session_id: 1, status: "queued" });
+  });
+});
+
+describe("0004_workers：约束", () => {
+  function migratedM2(): Db {
+    const db = m2Db();
+    migrate(db, migrationsDir);
+    return db;
+  }
+
+  it("对话可以是 worker；别的新取值仍然被拒", () => {
+    const db = migratedM2();
+    db.run("INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', 1, 2, '修 X', 0)");
+    // Worker 的对话一个项目经理可以有好几个
+    db.run("INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', 1, 2, '修 Y', 0)");
+    expect(() => db.run("INSERT INTO conversations (kind, title, created_at) VALUES ('ticket', 'x', 0)")).toThrow(/CHECK/);
+  });
+
+  it("workers 表：所有列都在，默认 open、不只读；读回来和写进去一样", () => {
+    const db = migratedM2();
+    insertWorker(db);
+    expect(db.get("SELECT * FROM workers WHERE id = 1")).toEqual({
+      id: 1,
+      project_id: 2,
+      pm_id: 1,
+      pm_conversation_id: 1,
+      worker_conversation_id: 10,
+      title: "修 X",
+      task: "把 X 修好",
+      model: null,
+      readonly: 0,
+      workspace: "worktree",
+      branch: "hub/1-修-x",
+      worktree_path: "/h/worktrees/2/1",
+      base_commit: null,
+      status: "open",
+      created_at: 50,
+      updated_at: 50,
+    });
+    db.run("UPDATE workers SET base_commit = 'abc123', status = 'ended' WHERE id = 1");
+    db.run("INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (11, 'worker', 1, 2, '查 Y', 0)");
+    db.run(
+      "INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 11, '查 Y', '看看 Y', 'main', 0, 0)",
+    );
+    expect(db.get("SELECT status, readonly, branch, worktree_path, base_commit FROM workers WHERE id = 2")).toEqual({
+      status: "open",
+      readonly: 0,
+      branch: null,
+      worktree_path: null,
+      base_commit: null,
+    });
+  });
+
+  it("Worker 的状态、在哪干活、只读只能是规定的值", () => {
+    const db = migratedM2();
+    expect(() => insertWorker(db, { status: "done" })).toThrow(/CHECK/);
+    db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
+    expect(() => insertWorker(db, { workspace: "elsewhere" })).toThrow(/CHECK/);
+    db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
+    expect(() => insertWorker(db, { readonly: 2 })).toThrow(/CHECK/);
+  });
+
+  it("在主文件夹里干活的 Worker 没有分支、worktree、起点提交", () => {
+    const db = migratedM2();
+    expect(() => insertWorker(db, { workspace: "main" })).toThrow(/CHECK/);
+    db.exec("DELETE FROM agent_sessions WHERE id = 10; DELETE FROM conversations WHERE id = 10;");
+    insertWorker(db, { workspace: "main", branch: null, worktree_path: null });
+    expect(db.get("SELECT workspace FROM workers WHERE id = 1")).toEqual({ workspace: "main" });
+  });
+
+  it("一个 Worker 对话只属于一个 Worker；项目、项目经理、对话都得是真的", () => {
+    const db = migratedM2();
+    insertWorker(db);
+    expect(() =>
+      db.run(
+        "INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (2, 1, 1, 10, 'x', 'y', 'main', 0, 0)",
+      ),
+    ).toThrow(/UNIQUE/);
+    const bad = (cols: string) =>
+      db.run(
+        `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, created_at, updated_at) VALUES (${cols}, 'x', 'y', 'main', 0, 0)`,
+      );
+    db.run("INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (12, 'worker', 1, 2, 'z', 0)");
+    expect(() => bad("99, 1, 1, 12")).toThrow(/FOREIGN KEY/);
+    expect(() => bad("2, 99, 1, 12")).toThrow(/FOREIGN KEY/);
+    expect(() => bad("2, 1, 99, 12")).toThrow(/FOREIGN KEY/);
+    expect(() => bad("2, 1, 1, 99")).toThrow(/FOREIGN KEY/);
   });
 });
 

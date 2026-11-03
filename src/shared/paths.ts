@@ -24,6 +24,11 @@ export interface HubPaths {
   hubSock: string;
   /** run/bin/：守护进程生成的 hub 外壳所在目录，放在 claude 的 PATH 最前面。 */
   hubBinDir: string;
+  /**
+   * worktrees/（M3）：守护进程给 Worker 建的 git worktree，<项目编号>/<Worker 编号>（见 workerWorktreePath）。
+   * 项目经理的会话把它自己项目那一层（projectWorktreesDir）用 --add-dir 带上，验收时能看、能跑测试。
+   */
+  worktreesDir: string;
   /** claude 程序：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。 */
   claudePath: string;
 }
@@ -46,6 +51,7 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
     hubBinDir: join(home, "run", "bin"),
+    worktreesDir: join(home, "worktrees"),
     claudePath: env[ENV_CLAUDE] || "claude",
   };
 }
@@ -53,6 +59,16 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {
   return join(personasDir, `pm-${pmId}.md`);
+}
+
+/** 一个项目的 Worker worktree 都在这一层：项目经理的 addDirs 加它。 */
+export function projectWorktreesDir(worktreesDir: string, projectId: number): string {
+  return join(worktreesDir, String(projectId));
+}
+
+/** 一个 Worker 的 worktree 目录（WorkerRecord.worktreePath）。 */
+export function workerWorktreePath(worktreesDir: string, projectId: number, workerId: number): string {
+  return join(projectWorktreesDir(worktreesDir, projectId), String(workerId));
 }
 
 /**

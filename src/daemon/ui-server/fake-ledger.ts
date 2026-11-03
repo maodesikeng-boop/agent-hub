@@ -32,7 +32,7 @@ export function makeMessage(id: number, conversationId: number, text = `m${id}`)
     id,
     conversationId,
     sessionId: null,
-    ticketId: null,
+    workerId: null,
     sender: "user",
     kind: "text",
     text,
@@ -244,6 +244,8 @@ export class FakeLedger {
       retryMessage: (m) => this.retryMessage(m),
       hubCall: unused("hubCall"),
       getLaunchContext: unused("getLaunchContext"),
+      getWorktreeTask: unused("getWorktreeTask"),
+      onWorktreeCreated: unused("onWorktreeCreated"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

@@ -45,6 +45,8 @@ export interface ConversationSnapshot {
 /**
  * GET /api/state。seq 是拍照那一刻的事件序号，WebSocket 从它之后接着推。
  * 不含老的项目群和归档的项目（11-03 拿掉了项目群，见 CONVERSATION_KINDS）。
+ * M3：conversations、sessions 里含 Worker 的（kind worker），左栏不显示；“N 个 Worker 在跑”按 Conversation.pmId 是这个项目经理、
+ * kind worker 的对话里最新一代会话 activity 不是 idle 的数。项目经理对话里那一行汇报是 kind worker 的消息（WorkerMessageMeta）。
  */
 export interface StateSnapshot {
   seq: number;
@@ -158,9 +160,9 @@ export interface ChangeDataMap {
   "project.created": { project: Project };
   /** 某个项目没移除的文件夹整个换成这一份（挂、移除、建项目时）。 */
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };
-  /** 新对话（新项目经理的那个对话），消息是空的。 */
+  /** 新对话（新项目经理的那个对话；M3 起还有派活时 Worker 的对话），消息是空的。 */
   "conversation.created": { conversation: Conversation };
-  /** 新会话（建项目经理时）。 */
+  /** 新会话（建项目经理时；M3 起还有派活时 Worker 的会话）。 */
   "session.created": { session: SessionState };
 }
 

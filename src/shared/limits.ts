@@ -31,6 +31,17 @@ export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 
+// ---- M3：Worker ----
+
+/** Worker 的标题（hub worker start --title）最多几个字符（按 Unicode 字符算）：超了不报错，normalizeWorkerTitle 截断。 */
+export const MAX_WORKER_TITLE_CHARS = 80;
+/** 任务说明（hub worker start --stdin）、hub worker send 的正文最多多大：它们就是发给 Worker 的消息，和用户消息一样。 */
+export const MAX_TASK_BYTES = MAX_MESSAGE_BYTES;
+/** 项目经理对话里那一行 Worker 汇报的摘要最多显示几个字符，超了截断（见 worker.ts 的 workerLineText）。完整原文照样交给项目经理。 */
+export const WORKER_LINE_SUMMARY_CHARS = 120;
+/** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
+export const WORKER_BRANCH_SLUG_CHARS = 30;
+
 /** 打断：控制消息 5 秒没回应就发 SIGINT。 */
 export const INTERRUPT_GRACE_MS = 5_000;
 /** 启动后 60 秒没有 system/init，结束进程。 */
