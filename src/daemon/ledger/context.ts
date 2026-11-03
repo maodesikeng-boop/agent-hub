@@ -4,7 +4,7 @@ import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
 import type { Change, ChangeType } from "../../shared/api.ts";
 import type { ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import type { LedgerErrorCode } from "../../shared/ledger.ts";
+import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
 import { enqueueAction } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
@@ -59,6 +59,16 @@ export interface LedgerContext {
   write<T>(fn: (p: Pending) => T): T;
   enqueue(p: Pending, action: NewAction): void;
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
+}
+
+/** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts 用。 */
+export interface LedgerFiles {
+  pmHomeRoot: string;
+  personasDir: string | undefined;
+  handoffsDir: string | undefined;
+  userHome: string;
+  resolveFolder: ResolveFolder;
+  writeFile: (file: string, content: string) => void;
 }
 
 export interface LedgerContextOptions {
