@@ -24,6 +24,15 @@ export function exitFailureReason(event: SessionExitedEvent): string {
   return event.reason;
 }
 
+/**
+ * 守护进程关机打断的一轮（M3，m3-plan 第 3 节接口约定、验收第 11 条）：Worker 的消息不标已停止，还是已送达、处理中，
+ * 重启恢复（sessions.ts 的 recoverAfterRestart）把它重发给同一个会话，Worker 接着做完再汇报；也不发“这一轮没做完”
+ * （workers.ts）。项目经理的照 M1 标已停止，用户自己再发。
+ */
+export function resumesAfterShutdown(session: AgentSessionRow): boolean {
+  return session.role === "worker";
+}
+
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
 
 export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSessions) {
@@ -136,6 +145,10 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         updateLive(p, sessionId, working(event.name));
         return;
       case "turn.ended": {
+        if (event.shutdown === true && resumesAfterShutdown(session)) {
+          updateLive(p, sessionId, idle);
+          return;
+        }
         const reason = event.error === undefined ? "turn_failed" : `${event.error.subtype}: ${event.error.message}`;
         for (const id of event.messageIds) {
           if (event.interrupted) transition(p, id, "stopped");
@@ -151,7 +164,8 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         });
         return;
       case "session.exited": {
-        for (const id of event.messageIds) {
+        const keep = event.reason === "shutdown" && resumesAfterShutdown(session);
+        for (const id of keep ? [] : event.messageIds) {
           if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
           else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
         }

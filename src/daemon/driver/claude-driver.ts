@@ -845,6 +845,7 @@ export class ClaudeDriver implements Driver {
       durationMs: typeof obj.duration_ms === "number" ? obj.duration_ms : null,
       at,
     };
+    if (proc.closing === "shutdown") event.shutdown = true;
     if (!ok) {
       event.error = { subtype, message: resultMessage(obj, subtype) };
       this.#forgetWritten(st, batch);

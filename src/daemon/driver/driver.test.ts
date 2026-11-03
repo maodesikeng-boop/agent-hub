@@ -613,6 +613,24 @@ describe("关机", () => {
     await expect(t.driver.send(idle.id, user(3, "hi"))).rejects.toMatchObject({ code: "spawn_failed" });
   });
 
+  it("关机时 SIGINT 结束的那一轮：turn.ended 带 shutdown（账本据此让 Worker 重启后接着做）；用户点停止的不带", async () => {
+    const t = harness({ script: { turns: [slowTurn(30_000), slowTurn(30_000)] } });
+    const stopped = t.addSession();
+    const busy = t.addSession();
+    await t.driver.send(stopped.id, user(1, "写很久"));
+    await t.waitFor("message.processing", (e) => e.messageIds[0] === 1);
+    await t.driver.interrupt(stopped.id);
+    await t.driver.send(busy.id, user(2, "写很久"));
+    await t.waitFor("message.processing", (e) => e.messageIds[0] === 2);
+    await t.driver.shutdown();
+    const ended = t.events.filter((e) => e.event.type === "turn.ended");
+    const byUser = ended.find((e) => e.sessionId === stopped.id)!.event;
+    const byShutdown = ended.find((e) => e.sessionId === busy.id)!.event;
+    expect(byUser).toMatchObject({ interrupted: true, messageIds: [1] });
+    expect(byUser).not.toHaveProperty("shutdown");
+    expect(byShutdown).toMatchObject({ interrupted: true, shutdown: true, messageIds: [2] });
+  });
+
   it("不理 SIGINT 的进程：最多等 shutdownGraceMs，然后强制结束", async () => {
     const t = harness({ driver: { shutdownGraceMs: 200 }, script: { noInit: true, ignoreSigint: true } });
     const s = t.addSession();

@@ -1,8 +1,9 @@
-// 三类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条）。
+// 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
 // - session.start → driver.start(sessionId, { recovery })；
 // - session.send → 读出消息，调 driver.send：written / rejected → done；queued（会话正忙）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
-// - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态。
+// - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
+// - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）。
 // session_ended（会话已经 end 过）不是故障，不抛给执行器（执行器就不会记 driver 的 health），怎么接见 Driver.end 的注释。
 import {
   DriverError,
@@ -18,6 +19,7 @@ import {
   type SessionStore,
   type SessionTokens,
 } from "../shared/index.ts";
+import type { AddWorktreeOptions, AddWorktreeResult } from "./git/index.ts";
 
 
 export interface HandlerDeps {
@@ -93,6 +95,27 @@ export function createSessionEndHandler(deps: Pick<HandlerDeps, "driver" | "ledg
     deps.tokens.revoke(sessionId);
     // 驱动层直接把那一行写成 ended，没有对应的事件：推一次，网页才看得到
     deps.ledger.refreshSessionState(sessionId);
+    return { kind: "done" };
+  };
+}
+
+export interface WorktreeHandlerDeps {
+  ledger: Pick<Ledger, "getWorktreeTask" | "onWorktreeCreated">;
+  /** daemon/git 的 addWorktree（重复执行算成功）；测试换成假的。 */
+  addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
+}
+
+/**
+ * 给 Worker 建 worktree（shared/actions.ts 的 WorktreeCreateParams）。Worker 不在了、不用 worktree、已经收工：什么也不做。
+ * git 出错原样抛给执行器，按 ACTION_RETRY 重试；次数用完执行器调 onActionFailed（项目经理收到一行 worktree_failed）。
+ */
+export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHandler<"worktree.create"> {
+  return async (action) => {
+    const { workerId } = action.params;
+    const task = deps.ledger.getWorktreeTask(workerId);
+    if (task === null || task.status === "ended") return { kind: "done" };
+    const { baseCommit } = await deps.addWorktree({ repoFolder: task.repo, worktreePath: task.worktreePath, branch: task.branch });
+    deps.ledger.onWorktreeCreated(workerId, baseCommit);
     return { kind: "done" };
   };
 }

@@ -105,11 +105,14 @@ export interface AgentToolEvent extends DriverEventBase {
  * - interrupted（这一轮里出现过 `[Request interrupted by user]`）→ stopped；
  * - 否则 ok → replied；
  * - 否则（ok=false 且不是打断）→ failed，failureReason 取 error。
+ * shutdown 的一轮（M3）：Worker 的消息不标，留着重启后接着做（见 ledger/messages.ts 的 applyEvent）。
  */
 export interface TurnEndedEvent extends DriverEventBase {
   type: "turn.ended";
   ok: boolean;
   interrupted: boolean;
+  /** 这一轮是守护进程关机时发 SIGINT 结束的（不是用户点停止）。只在是的时候出现。 */
+  shutdown?: true;
   messageIds: MessageId[];
   durationMs: number | null;
   /** ok=false 时 result 里的错误：subtype 照抄（如 "error_during_execution"），message 是能给人看的一句。 */

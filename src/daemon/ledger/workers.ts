@@ -68,6 +68,8 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
   if (event.messageIds.length === 0) return null;
   const turnMessageId = Math.max(...event.messageIds);
   if (event.type === "turn.ended") {
+    // 关机时 SIGINT 结束的一轮：重启后接着做完再汇报（messages.ts 的 resumesAfterShutdown）
+    if (event.shutdown === true) return null;
     if (event.interrupted) return { event: "turn_failed", turnMessageId, reason: TURN_STOPPED };
     if (!event.ok) {
       const reason = event.error === undefined ? TURN_FAILED : `${event.error.subtype}: ${event.error.message}`;
