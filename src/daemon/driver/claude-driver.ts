@@ -222,6 +222,11 @@ export class ClaudeDriver implements Driver {
     return { kind: "written" };
   }
 
+  // M2 W0 占位：由 M2 W3 实现
+  async end(sessionId: SessionId): Promise<void> {
+    throw new DriverError("internal_error", `end(${sessionId}): not implemented yet (M2 W3)`);
+  }
+
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.#sessions.get(sessionId);
     const proc = st?.proc;

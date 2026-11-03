@@ -28,8 +28,8 @@ beforeEach(() => {
   db = openTestDb();
   home = mkdtempSync(join(tmpdir(), "agent-hub-ledger-"));
   now = 1_000;
-  ledger = createLedger(db, { now: () => now, initialSeq: INITIAL_SEQ });
-  const created = ledger.createPm({ name: "项目经理", pmHomeRoot: home, personaFile: "personas/pm-1.md" });
+  ledger = createLedger(db, { now: () => now, initialSeq: INITIAL_SEQ, pmHomeRoot: home });
+  const created = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
   conversationId = created.conversation.id;
   sessionId = created.sessionId;
   changes = [];
@@ -72,12 +72,14 @@ describe("createPm", () => {
   it("建项目经理、它的私聊和一个会话，并建工作目录", () => {
     const db2 = openTestDb();
     try {
-      const l = createLedger(db2, { now: () => 42 });
-      const result = l.createPm({ name: "老王", pmHomeRoot: join(home, "pm-home"), defaultModel: "opus" });
-      expect(result.pm).toMatchObject({ name: "老王", mode: "default", defaultModel: "opus", personaFile: null, avatarFile: null, createdAt: 42 });
+      const l = createLedger(db2, { now: () => 42, pmHomeRoot: join(home, "pm-home") });
+      const result = l.createPm({ name: "老王", mode: "manage_only", persona: "", defaultModel: "opus" });
+      expect(result.pm).toMatchObject({ name: "老王", mode: "manage_only", defaultModel: "opus", personaFile: null, avatarFile: null, createdAt: 42 });
       expect(result.conversation).toMatchObject({ kind: "pm", pmId: result.pm.id, projectId: null, title: "老王", createdAt: 42 });
       const session = createSessionStore(db2).get(result.sessionId);
       const cwd = join(home, "pm-home", String(result.pm.id));
+      // 项目经理的会话一定带 pm_id
+      expect(session?.pmId).toBe(result.pm.id);
       expect(session).toMatchObject({ role: "pm", conversationId: result.conversation.id, generation: 1, status: "idle", cwd, model: "opus", hasCompletedTurn: false });
       expect(session?.vendorSessionId).toMatch(/^[0-9a-f-]{36}$/);
       expect(statSync(cwd).isDirectory()).toBe(true);
@@ -360,7 +362,7 @@ describe("requestStop", () => {
   it("重启后内存里没有活动状态，但有处理中的消息：也算在跑", () => {
     const id = post();
     setStatus(id, "processing");
-    const fresh = createLedger(db);
+    const fresh = createLedger(db, { pmHomeRoot: home });
     const stops = vi.fn();
     const freshChanges: Change[] = [];
     fresh.onStopRequested(stops);
@@ -525,7 +527,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null },
+      { sessionId, conversationId, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);
@@ -564,7 +566,7 @@ describe("changesSince", () => {
   it("缓冲区挤掉了中间的变化：resync；刚好接得上：ok", () => {
     const db2 = openTestDb();
     try {
-      const small = createLedger(db2, { initialSeq: 100, changeBufferSize: 3 });
+      const small = createLedger(db2, { initialSeq: 100, changeBufferSize: 3, pmHomeRoot: home });
       for (let i = 0; i < 5; i++) small.reportHealth("driver", `e${i}`);
       // 缓冲区里是 103、104、105
       expect(small.changesSince(101)).toEqual({ kind: "resync" });
@@ -579,7 +581,7 @@ describe("changesSince", () => {
     const db2 = openTestDb();
     try {
       const t = Date.now();
-      const l = createLedger(db2);
+      const l = createLedger(db2, { pmHomeRoot: home });
       expect(l.snapshot().seq).toBeGreaterThanOrEqual(t);
     } finally {
       db2.close();
@@ -610,8 +612,8 @@ describe("changesSince", () => {
 it("pm-home 目录已存在时 createPm 不报错", () => {
   const db2 = openTestDb();
   try {
-    const l = createLedger(db2);
-    l.createPm({ name: "a", pmHomeRoot: home });
+    const l = createLedger(db2, { pmHomeRoot: home });
+    l.createPm({ name: "a", mode: "manage_only", persona: "" });
     expect(existsSync(join(home, "1"))).toBe(true);
   } finally {
     db2.close();

@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.setSystemTime(T0);
   db = openTestDb();
   home = mkdtempSync(join(tmpdir(), "agent-hub-exec-"));
-  ledger = createLedger(db);
+  ledger = createLedger(db, { pmHomeRoot: home });
   deps = {
     reportHealth: vi.fn((m, e) => ledger.reportHealth(m, e)),
     onActionFailed: vi.fn((a, e) => ledger.onActionFailed(a, e)),
@@ -58,7 +58,7 @@ describe("执行器", () => {
   });
 
   it("退避重试：一直抛错，5 秒、10 秒后各重试一次，第 3 次失败后状态失败，health 记下错误", async () => {
-    const { conversation } = ledger.createPm({ name: "项目经理", pmHomeRoot: home });
+    const { conversation } = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
     const { messageId } = ledger.postUserMessage({ conversationId: conversation.id, clientId: "c1", text: "hi" });
     const handler = vi.fn(() => {
       throw new DriverError("claude_not_found", "no such file");
@@ -148,7 +148,7 @@ describe("执行器", () => {
 
     const second = openStore(paths);
     try {
-      const secondLedger = createLedger(second.db);
+      const secondLedger = createLedger(second.db, { pmHomeRoot: home });
       const executor = createActionExecutor(second.db, {
         reportHealth: (m, e) => secondLedger.reportHealth(m, e),
         onActionFailed: (a, e) => secondLedger.onActionFailed(a, e),
@@ -196,7 +196,7 @@ describe("执行器", () => {
   });
 
   it("没注册处理函数的类型：标放弃，记 health；发消息动作调 onActionFailed，消息标失败", async () => {
-    const { conversation } = ledger.createPm({ name: "项目经理", pmHomeRoot: home });
+    const { conversation } = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
     const { messageId } = ledger.postUserMessage({ conversationId: conversation.id, clientId: "c1", text: "hi" });
     const [action] = db.all<{ id: number }>("SELECT id FROM actions");
     const executor = createActionExecutor(db, deps);
@@ -326,7 +326,7 @@ describe("执行器", () => {
   });
 
   it("health 清零不靠内存：库里留着 driver（来自 driver.error）和 actions 的错误，任何一个动作成功都清掉", async () => {
-    const { sessionId } = ledger.createPm({ name: "项目经理", pmHomeRoot: home });
+    const { sessionId } = ledger.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
     ledger.applyDriverEvent(sessionId, { type: "driver.error", at: 1, code: "bad_output_line", message: "bad_output_line: x" });
     ledger.reportHealth("actions", "old");
     sendAction();
@@ -343,7 +343,7 @@ describe("执行器", () => {
 
   it("启动动作次数用完：actions 的 health 只按每次失败记，不再多记一次", async () => {
     enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1 } }, T0);
-    const executor = createActionExecutor(db, deps, { retry: { "session.start": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.send": { maxAttempts: 1, baseMs: 1, maxMs: 1 } } });
+    const executor = createActionExecutor(db, deps, { retry: { "session.start": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.send": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.end": { maxAttempts: 1, baseMs: 1, maxMs: 1 } } });
     executor.register("session.start", () => {
       throw new Error("boom");
     });

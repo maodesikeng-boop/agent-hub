@@ -44,7 +44,7 @@ export class FakeLedger {
   readonly stopped: ConversationId[] = [];
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly changesSinceCalls: number[] = [];
-  snapshotValue: StateSnapshot = { seq: 0, pms: [], conversations: [], sessions: [], health: [] };
+  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
   /** 抛出它来模拟账本内部出错。 */
   failWith: Error | null = null;
 
@@ -157,6 +157,15 @@ export class FakeLedger {
       getMessage: unused("getMessage"),
       onActionFailed: unused("onActionFailed"),
       reportHealth: unused("reportHealth"),
+      // M2 W0 占位：界面服务的新接口由 M2 W4 接上
+      createProject: unused("createProject"),
+      getPersona: unused("getPersona"),
+      editPersona: unused("editPersona"),
+      revertPersonaChange: unused("revertPersonaChange"),
+      retryMessage: unused("retryMessage"),
+      hubCall: unused("hubCall"),
+      getLaunchContext: unused("getLaunchContext"),
+      syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }
 }

@@ -7,6 +7,32 @@ export const MAX_MESSAGE_BYTES = 100 * 1024;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 
+// ---- M2：请求体的长度上限（界面服务、agent 接口校验请求体用，账本再查一遍）----
+
+/** 项目名、项目经理名最多几个字符（按 Unicode 字符算，见 normalizeName）。 */
+export const MAX_NAME_CHARS = 40;
+/** 项目的一句话说明最多几个字符。 */
+export const MAX_DESCRIPTION_CHARS = 200;
+/** 性格设定正文最多 32 KB（UTF-8 字节）。 */
+export const MAX_PERSONA_BYTES = 32 * 1024;
+/** 交接正文最多 64 KB（UTF-8 字节）。 */
+export const MAX_HANDOFF_BYTES = 64 * 1024;
+/** 改性格设定的理由最多几个字符。 */
+export const MAX_REASON_CHARS = 500;
+/** 文件夹路径最多 4096 字节（macOS 的 PATH_MAX 是 1024，留余量）。 */
+export const MAX_PATH_BYTES = 4096;
+/** 模型名最多几个字符。 */
+export const MAX_MODEL_CHARS = 100;
+/**
+ * agent 接口一个请求体最多多大（Fastify 的 bodyLimit）；比最长的字段大，字段超长由校验报 invalid。
+ * 整个请求体超过它（Fastify 抛 FST_ERR_CTP_BODY_TOO_LARGE）也映射成 invalid、HTTP 400，不另开 413（见 hub.ts）。
+ */
+export const HUB_MAX_BODY_BYTES = 256 * 1024;
+/** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
+export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
+/** PersonaView 里最多带几条修改记录。 */
+export const PERSONA_CHANGES_LIMIT = 50;
+
 /** 打断：控制消息 5 秒没回应就发 SIGINT。 */
 export const INTERRUPT_GRACE_MS = 5_000;
 /** 启动后 60 秒没有 system/init，结束进程。 */

@@ -3,19 +3,15 @@
 // 不生成 --settings 文件：M1 没有权限钩子，用户全局 ~/.claude 的设置照常生效（m1-plan 第 6 节第 1 条）。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PM_PERSONA_TEMPLATE } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchFiles } from "../shared/index.ts";
+import { personaFilePath } from "../shared/paths.ts";
 import type { Db } from "./store/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
 
-/** 第一次启动自动建的项目经理的性格设定，写进 state/personas/pm-<编号>.md，以后改这个文件就行。 */
-export const DEFAULT_PM_PERSONA = `# 性格设定
-
-- 像一个靠谱的同事：先弄清楚用户要什么，再动手或给建议。
-- 有推荐就直说推荐哪个、为什么，不罗列一堆选项让用户自己挑。
-- 说大白话，少用术语；不确定的事直说不确定，不编。
-- 用户让你自己动手就动手；改动大、拿不准的，先问一句。
-`;
+/** 第一次启动自动建的项目经理的性格设定：就是 src/shared 里的 PM_PERSONA_TEMPLATE，只有那一份。 */
+export const DEFAULT_PM_PERSONA = PM_PERSONA_TEMPLATE;
 
 export const PM_ROLE_PROMPT = `# 你的角色
 
@@ -43,13 +39,9 @@ export function buildPmPrompt(input: { persona: string; cwd: string }): string {
   return parts.join("\n\n") + "\n";
 }
 
-export function personaFileOf(personasDir: string, pmId: number): string {
-  return join(personasDir, `pm-${pmId}.md`);
-}
-
 /** 写默认性格设定；文件已经有了就不动（用户可能改过）。 */
 export function writeDefaultPersona(personasDir: string, pmId: number): string {
-  const file = personaFileOf(personasDir, pmId);
+  const file = personaFilePath(personasDir, pmId);
   mkdirSync(personasDir, { recursive: true, mode: 0o700 });
   if (!existsSync(file)) writeFileSync(file, DEFAULT_PM_PERSONA, { mode: 0o600 });
   return file;
@@ -74,7 +66,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       session.conversationId,
     );
     if (pm === undefined) return DEFAULT_PM_PERSONA;
-    const file = pm.persona_file ?? personaFileOf(personasDir, pm.id);
+    const file = pm.persona_file ?? personaFilePath(personasDir, pm.id);
     return existsSync(file) ? readFileSync(file, "utf8") : DEFAULT_PM_PERSONA;
   };
   return async (session) => {
@@ -84,6 +76,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const mcpConfigFile = join(dir, "mcp.json");
     writeFileSync(promptFile, buildPmPrompt({ persona: readPersona(session), cwd: session.cwd }));
     writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: {} }) + "\n");
-    return { promptFile, mcpConfigFile };
+    // M2 W0 占位：每次启动的环境变量和指纹由 M2 W3、W6 填；指纹不变 = 和 M1 一样不在两轮之间重启
+    return { promptFile, mcpConfigFile, env: {}, fingerprint: "" };
   };
 }

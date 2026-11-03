@@ -21,7 +21,7 @@ export function makePm(over: Partial<Pm> = {}): Pm {
     id: 1,
     name: "项目经理",
     avatarFile: null,
-    mode: "manager",
+    mode: "manage_only",
     defaultModel: null,
     personaFile: null,
     createdAt: 1_000,
@@ -77,6 +77,7 @@ export function makeSession(over: Partial<SessionState> = {}): SessionState {
   return {
     sessionId: 1,
     conversationId: 1,
+    generation: 1,
     status: "idle",
     activity: "idle",
     currentTool: null,
@@ -101,6 +102,8 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
     seq: 10,
     pms: [makePm()],
+    projects: [],
+    folders: [],
     conversations: [makeConvSnapshot([])],
     sessions: [],
     health: [],

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
   ENV_DEFAULT_MODEL,
   ENV_PORT,
@@ -16,7 +17,7 @@ import { createActionExecutor } from "./actions/index.ts";
 import { createClaudeDriver } from "./driver/index.ts";
 import { createSessionSendHandler, createSessionStartHandler } from "./handlers.ts";
 import { createLedger } from "./ledger/index.ts";
-import { createLaunchPreparer, DEFAULT_PM_NAME, writeDefaultPersona } from "./prompt.ts";
+import { createLaunchPreparer, DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, writeDefaultPersona } from "./prompt.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 
@@ -106,7 +107,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 2. 开库并迁移
     const { db } = openStore(paths);
     parts.db = db;
-    const ledger = createLedger(db);
+    const ledger = createLedger(db, { pmHomeRoot: paths.pmHomeDir });
     const sessions = createSessionStore(db);
     const personasDir = join(paths.stateDir, "personas");
     const driver = createClaudeDriver({
@@ -128,7 +129,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 5. 第一次启动建一个项目经理
     if (ledger.snapshot().pms.length === 0) {
       const defaultModel = env[ENV_DEFAULT_MODEL] || undefined;
-      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, pmHomeRoot: paths.pmHomeDir, ...(defaultModel ? { defaultModel } : {}) });
+      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: DEFAULT_PM_PERSONA, ...(defaultModel ? { defaultModel } : {}) });
       writeDefaultPersona(personasDir, pm.id);
       log(`agent-hub: 第一次启动，建了项目经理“${pm.name}”`);
     }

@@ -1,8 +1,8 @@
-// 动作队列（设计第 12.2 节）。M1 只有两类动作。
+// 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话。
 import type { ActionId, MessageId, SessionId } from "./domain.ts";
 
 /** 会扩展（M3 起有建 worktree 等），数据库不加 CHECK，用 isOneOf 校验。 */
-export const ACTION_TYPES = ["session.start", "session.send"] as const;
+export const ACTION_TYPES = ["session.start", "session.send", "session.end"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /** 待执行 / 执行中 / 完成 / 失败 / 放弃。 */
@@ -19,6 +19,11 @@ export interface SessionStartParams {
 
 /** 给会话发消息。文字执行时再从 messages 里读，不存两份。处理函数调 driver.send。 */
 export interface SessionSendParams {
+  /**
+   * 登记时这个对话最新一代的会话。换项目经理时，账本把这个群里还是 queued 的消息的 session.send 改指新一代
+   * （同一个去重键，UPSERT 只改参数）；正在执行的那一次撞上 session_ended 算一次失败，下一次重试就用新参数。
+   * retryMessage 重新登记时也取最新一代。
+   */
   sessionId: SessionId;
   messageId: MessageId;
   source: "user" | "system";
@@ -29,9 +34,20 @@ export interface SessionSendParams {
   resend?: boolean;
 }
 
+/**
+ * 结束会话（M2，换项目经理后关掉旧一代）。处理函数调 driver.end(sessionId)：正在跑就等这一轮回完再关。
+ * 账本在交接的同一个事务里登记。
+ */
+export interface SessionEndParams {
+  sessionId: SessionId;
+  /** 要结束的那个会话的第几代（agent_sessions.generation），只用来做去重键。 */
+  generation: number;
+}
+
 export interface ActionParamsMap {
   "session.start": SessionStartParams;
   "session.send": SessionSendParams;
+  "session.end": SessionEndParams;
 }
 
 /** 动作表的一行。T 是单个类型时 params 跟着确定；要按 type 收窄请用 AnyActionRow。 */
@@ -70,6 +86,8 @@ export function actionDedupeKey(action: NewAction): string {
       return `${action.params.sessionId}:${action.params.generation}`;
     case "session.send":
       return String(action.params.messageId);
+    case "session.end":
+      return `${action.params.sessionId}:${action.params.generation}`;
   }
 }
 
@@ -96,6 +114,7 @@ export const ACTION_RETRY: Record<ActionType, RetryPolicy> = {
   "session.start": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   // 会话起不来时跟着上一条重试，节奏一样
   "session.send": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
+  "session.end": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
 };
 
 /** 第 attempt 次（从 1 起）失败后，隔多久再试：base × 2^(attempt-1)，不超过 maxMs。 */
@@ -103,13 +122,13 @@ export function retryDelayMs(policy: RetryPolicy, attempt: number): number {
   return Math.min(policy.baseMs * 2 ** (attempt - 1), policy.maxMs);
 }
 
-/** 执行器（W1 实现，W5 组装）。 */
+/** 执行器（M1 W1 实现，组装代码接线）。 */
 export interface ActionExecutor {
   /** 每个类型注册一个处理函数；要在 start 之前注册。 */
   register<T extends ActionType>(type: T, handler: ActionHandler<T>): void;
   /** 启动：把上次留下的“执行中”改回“待执行”，开始取到点的动作。 */
   start(): void;
-  /** 有新动作登记了，别等下一次轮询。W5 把 ledger.onActionEnqueued 接到这里。 */
+  /** 有新动作登记了，别等下一次轮询。组装代码（M2 W6）把 ledger.onActionEnqueued 接到这里。 */
   wake(): void;
   /** 停止接新动作，等正在执行的做完。 */
   stop(): Promise<void>;
