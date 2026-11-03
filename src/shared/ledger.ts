@@ -8,8 +8,6 @@ import type {
   AgentRole,
   Conversation,
   ConversationId,
-  ConversationKind,
-  HandoffId,
   HealthModule,
   Message,
   MessageId,
@@ -19,7 +17,6 @@ import type {
   PmId,
   PmMode,
   Project,
-  ProjectFolder,
   SessionId,
   Unsubscribe,
 } from "./domain.ts";
@@ -27,10 +24,10 @@ import type { HubArgs, HubCommand, HubResult, ProjectCard } from "./hub.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
- * - invalid：参数不对（名字空、文件夹不存在、主文件夹不能移除、交给自己……）；
+ * - invalid：参数不对（名字空、文件夹不存在、主文件夹不能移除……）；
  * - not_found：要找的东西没有（项目、项目经理、消息、修改记录）；
- * - forbidden：管不着（不是自己管的项目）；
- * - conflict：和现在的状态冲突（重名、路径已经是别的项目的主文件夹、不是最近一次修改、消息不是失败状态）。
+ * - forbidden：管不着（不是项目经理的会话、改别人的性格设定）；
+ * - conflict：和现在的状态冲突（重名、已经有项目了、路径已经是别的项目的主文件夹、不是最近一次修改、消息不是失败状态）。
  * message 是给人看的一句中文，agent 也看得懂，界面和 hub 原样显示。
  */
 export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict"] as const;
@@ -94,47 +91,29 @@ export type LedgerActor = { kind: "user" } | { kind: "session"; sessionId: Sessi
 /**
  * 新建项目经理（界面的表单、第一次启动）。pm-home/、personas/ 的位置是账本的构造参数，不在这里。
  * name 用 normalizeName 规整；persona 不超过 MAX_PERSONA_BYTES；defaultModel 不超过 MAX_MODEL_CHARS，空串当没给。
+ * folder：主文件夹（用户填的路径，可以带 ~），给了就在同一个事务里给它建项目（同 hub project create），不给就没有项目。
  */
 export interface CreatePmInput {
   name: string;
   mode: PmMode;
   defaultModel?: string | null;
   persona: string;
+  folder?: string;
 }
 
 /**
- * 同一个事务里：pms 一行（persona 存正文）、私聊、私聊的会话（pm_id 是它，cwd 是 pm-home/<编号>/，账本负责建这个目录）。
- * 提交后写 personas/pm-<编号>.md，推 pm.created、conversation.created、session.created。不记 persona_changes（建的时候不算修改）。
- * 错误：名字不对、正文太长 → invalid；同名 → conflict。
+ * 同一个事务里：pms 一行（persona 存正文）、它唯一的对话（kind pm）、对话的会话（pm_id 是它，cwd 是 pm-home/<编号>/，
+ * 账本负责建这个目录）；给了 folder 的再建项目（见 hub project create：会话的 cwd 换成主文件夹，对话里一条“项目已建好”）。
+ * 提交后写 personas/pm-<编号>.md，推 pm.created、conversation.created、session.created（有项目再加 project.created、
+ * folders.updated、message.created）。不记 persona_changes（建的时候不算修改）。
+ * 错误：名字不对、正文太长、文件夹不对 → invalid；同名、文件夹已是别的项目的主文件夹 → conflict。任何错误都什么也不写。
  */
 export interface CreatePmResult {
   pm: Pm;
   conversation: Conversation;
   sessionId: SessionId;
-}
-
-/** 新建项目（界面的表单；hub project create 也走同一套逻辑，pmId 是这个会话的项目经理）。 */
-export interface CreateProjectInput {
-  name: string;
-  /** 用户填的路径，可以带 ~；账本用 resolveFolder 变成真实路径。 */
-  folder: string;
-  pmId: PmId;
-  description?: string;
-}
-
-/**
- * 同一个事务里：项目、主文件夹、群（title 是项目名）、群会话（第 1 代，属于 pmId，cwd 是主文件夹真实路径，addDirs 空）、
- * 群里一条 project.created 系统消息（“项目已建好”）。不登记 session.start：第一条消息来了再起。
- * 推 project.created、conversation.created、session.created、folders.updated、message.created。
- * 错误：名字、说明不对 → invalid；项目经理不存在 → not_found；文件夹不对（不存在、不是目录、在数据目录里）→ invalid，
- * message 写清楚原因，不存在时是“文件夹不存在，请先建好：<路径>”（m2-plan 第 6 节第 1 条：M2 不替用户建）；
- * 重名、路径已经是别的项目的主文件夹 → conflict。任何错误都什么也不写。
- */
-export interface CreateProjectResult {
-  project: Project;
-  mainFolder: ProjectFolder;
-  conversation: Conversation;
-  sessionId: SessionId;
+  /** 给了 folder 才有。 */
+  project: Project | null;
 }
 
 /**
@@ -187,23 +166,17 @@ export interface SyncPersonaFilesResult {
 }
 
 /**
- * 给 W3 生成提示词用（驱动层的 prepareLaunch 里调）。只读。
- * - 私聊会话：project、handoff 是 null；managedProjects 是它现在管的进行中项目的名片。
- * - 群会话：project 是这个群的项目（文件夹按现在的，不按会话那一行）；handoff 是这个项目最近一份交接
- *   （没有就是 null）；managedProjects 同样给，但群的提示词里不能用（W3）：提示词变了 fingerprint 就变，
- *   这个项目经理在别处建、交出一个项目，它所有的群会话都会跟着重启。
- * pm 是这个会话所属的项目经理（AgentSessionRow.pmId），不是项目现在的项目经理：换人后旧一代会话还在回最后一轮时，
- * 提示词仍是原项目经理的。pm.persona 已经兜过底：pms.persona 是 NULL 时给 PM_PERSONA_TEMPLATE（personaOrTemplate）。
+ * 给生成提示词用（驱动层的 prepareLaunch 里调）。只读。
+ * pm 是这个会话所属的项目经理（AgentSessionRow.pmId）；pm.persona 已经兜过底：pms.persona 是 NULL 时给
+ * PM_PERSONA_TEMPLATE（personaOrTemplate）。project 是它的项目（文件夹按现在的），还没有是 null。
  * 错误：会话不存在、不是项目经理的会话 → not_found。
  */
 export interface LaunchContext {
   sessionId: SessionId;
   role: AgentRole;
-  conversation: { id: ConversationId; kind: ConversationKind };
+  conversationId: ConversationId;
   pm: { id: PmId; name: string; mode: PmMode; persona: string };
-  managedProjects: ProjectCard[];
   project: ProjectCard | null;
-  handoff: { id: HandoffId; fromPmName: string; text: string; createdAt: number } | null;
 }
 
 export interface Ledger {
@@ -215,10 +188,11 @@ export interface Ledger {
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   /**
    * 用户点“停止”。只停这个对话最新的一代（generation 最大的那个会话）：通知 onStopRequested 的监听者；
-   * 最新一代没在跑时什么也不做。换项目经理后旧一代还在回最后一轮的，不停（它回完就会被 session.end 关掉）。
-   * 对话不存在抛 ConversationNotFoundError。
+   * 最新一代没在跑时什么也不做。对话不存在抛 ConversationNotFoundError。
+   * 老的项目群（kind project_group）当作不存在：postUserMessage、requestStop 都抛 ConversationNotFoundError。
    */
   requestStop(conversationId: ConversationId): void;
+  /** 网页看得到的东西：不含老的项目群（对话、它们的会话）和归档的项目（见 CONVERSATION_KINDS）。 */
   snapshot(): StateSnapshot;
   /** 更早的 100 条（before 之前，从小到大）。 */
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
@@ -227,8 +201,6 @@ export interface Ledger {
   onChange(listener: (change: Change) => void): Unsubscribe;
 
   // ---- 界面服务用（M2）----
-  /** 见 CreateProjectResult。界面传 { kind: "user" }；actor 是会话时 input.pmId 必须是这个会话的项目经理，否则 forbidden。 */
-  createProject(input: CreateProjectInput, actor: LedgerActor): CreateProjectResult;
   /** 项目经理不存在 → not_found。 */
   getPersona(pmId: PmId): PersonaView;
   /**
@@ -254,25 +226,21 @@ export interface Ledger {
   // ---- agent 接口用（M2）----
   /**
    * agent 敲的 hub 命令。sessionId 是 agent 接口按令牌认出来的会话（请求体里自称是谁不算数）；args 已经按形状和长度校验过。
-   * 账本按会话认人：这个会话属于哪个项目经理（AgentSessionRow.pmId）、在哪个对话；只能动这个项目经理现在管的项目，否则 forbidden。
-   * - status：只读。这个会话的项目经理、会话编号、所在对话（私聊或哪个群）、它现在管的进行中项目的名片；text 是一两句
-   *   “你是谁、在哪、管着哪些项目”。旧一代会话（换人后还在回最后一轮）调也照实回答，pm 是会话所属的那个；
-   * - pm.list：只读。所有项目经理（名字、模式）和各自现在管的进行中项目名，按编号排；交接时找人用。不需要管着什么项目；
-   * - project.create：同 createProject，pmId 是这个会话的项目经理；
-   * - project.attach / detach：同一个事务里改 project_folders、改这个群最新一代会话的 addDirs、发一条系统消息、推 folders.updated、
-   *   message.created。系统消息要不要也登记给 agent 的 session.send，看调用的是不是这个群最新一代的会话自己（见 SystemMessageMeta）。
-   *   detach 主文件夹 → invalid；没挂着 → not_found；已经挂着 → conflict。
+   * 账本按会话认人：这个会话属于哪个项目经理（AgentSessionRow.pmId）；项目就是这个项目经理的那一个，不用点名。
+   * - status：只读。这个会话的项目经理、会话编号、对话、它的项目的名片（没有是 null）；text 是一两句“你是谁、项目和文件夹”；
+   * - project.create：给这个项目经理建项目。同一个事务里：项目（挂在它的对话上，name 不给就用主文件夹的名字）、主文件夹、
+   *   会话的 cwd 换成主文件夹的真实路径（addDirs 清空）、对话里一条 project.created 系统消息（“项目已建好”）；
+   *   推 project.created、folders.updated、message.created。不登记 session.start：下一条消息前驱动层按新的 cwd 自动重启。
+   *   已经有进行中的项目 → conflict（“一个项目经理只管一个项目，请新建一个项目经理”）；文件夹不对（不存在、不是目录、
+   *   在数据目录里）→ invalid，不存在时是“文件夹不存在，请先建好：<路径>”（m2-plan 第 6 节第 1 条：不替用户建）；
+   *   路径已经是别的进行中项目的主文件夹 → conflict；名字、说明不对 → invalid；
+   * - project.attach / detach：同一个事务里改 project_folders、改会话的 addDirs、发一条系统消息（只给人看）、推 folders.updated、
+   *   message.created。还没有项目 → not_found；detach 主文件夹 → invalid；没挂着 → not_found；已经挂着 → conflict。
    *   detach 找“哪一行”：先 realpath 传进来的路径；realpath 失败（目录已经被删了、改名了）就用 path.resolve 之后的字面路径；
    *   拿结果和库里没移除的 project_folders.path 逐字比。所以磁盘上已经没了的文件夹也能移除。attach 不这样，目录必须在；
-   * - project.assign：见 m2-plan 第 3 节“交接怎么走”。交给自己、正文空白或太长 → invalid；没有这个项目经理 → not_found；
-   *   同一个事务里：交接文件（提交前写好）和 handoffs 一行；projects.pm_id；群的下一代会话（属于接手的人，cwd、addDirs 照旧，
-   *   新的 vendorSessionId）；旧会话的 session.end；把这个群里还是 queued 的消息的 session.send 改指新一代；两条
-   *   project.reassigned 系统消息（见 SystemMessageMeta）；推 project.updated、session.created、message.created。
-   *   会话归属：Handoff.fromSessionId 是群里被结束的那一代（交接前群里 generation 最大的会话），不一定是调用者
-   *   （调用者可能在私聊里）；hub_calls.session_id 一律是调用者的会话；
    * - persona.show / edit：同 getPersona / editPersona（actor 是这个会话）。
    * 每次调用都记一行 hub_calls（成功的在同一个事务里，失败的回滚后另记）。args 和 result 里的长字段按 HUB_CALL_FIELD_MAX_BYTES
-   * 截断（见 domain.ts 的 HubCall），完整正文以 handoffs、persona_changes 为准。成功返回 { text, data }，失败抛 LedgerRequestError。
+   * 截断（见 domain.ts 的 HubCall），完整正文以 persona_changes 为准。成功返回 { text, data }，失败抛 LedgerRequestError。
    * 会话不存在或不是项目经理的会话 → forbidden。
    */
   hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>): HubResult<C>;

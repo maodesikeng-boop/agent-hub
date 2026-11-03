@@ -15,8 +15,6 @@ export const MAX_NAME_CHARS = 40;
 export const MAX_DESCRIPTION_CHARS = 200;
 /** 性格设定正文最多 32 KB（UTF-8 字节）。 */
 export const MAX_PERSONA_BYTES = 32 * 1024;
-/** 交接正文最多 64 KB（UTF-8 字节）。 */
-export const MAX_HANDOFF_BYTES = 64 * 1024;
 /** 改性格设定的理由最多几个字符。 */
 export const MAX_REASON_CHARS = 500;
 /** 文件夹路径最多 4096 字节（macOS 的 PATH_MAX 是 1024，留余量）。 */
@@ -54,7 +52,7 @@ export const KILL_WAIT_MS = 2_000;
 export const PS_TIMEOUT_MS = 2_000;
 /** 驱动层：清理残留进程时多久看一次它还在不在。 */
 export const STALE_POLL_MS = 50;
-/** 处理函数：会话正忙、消息在驱动层排队（或交接后改指了新一代）时，隔多久再问一次。 */
+/** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */
 export const QUEUED_RECHECK_MS = 1_000;
 /** 处理函数：额度用完时最多推迟多久再看一次。 */
 export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;

@@ -13,7 +13,6 @@ import {
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
-  MAX_HANDOFF_BYTES,
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
@@ -53,33 +52,18 @@ const nameField = { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS };
 const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
+const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
+
 const BODY_SCHEMAS: Record<HubCommand, object> = {
   status: noArgs,
-  "pm.list": noArgs,
   "project.create": {
     type: "object",
     additionalProperties: false,
-    required: ["name", "folder"],
-    properties: { name: nameField, folder: pathField, description: { type: "string", maxLength: MAX_DESCRIPTION_CHARS } },
+    required: ["folder"],
+    properties: { folder: pathField, name: nameField, description: { type: "string", maxLength: MAX_DESCRIPTION_CHARS } },
   },
-  "project.attach": {
-    type: "object",
-    additionalProperties: false,
-    required: ["project", "folder"],
-    properties: { project: nameField, folder: pathField },
-  },
-  "project.detach": {
-    type: "object",
-    additionalProperties: false,
-    required: ["project", "folder"],
-    properties: { project: nameField, folder: pathField },
-  },
-  "project.assign": {
-    type: "object",
-    additionalProperties: false,
-    required: ["project", "to", "handoff"],
-    properties: { project: nameField, to: nameField, handoff: { type: "string", minLength: 1, maxLength: MAX_HANDOFF_BYTES } },
-  },
+  "project.attach": folderOnly,
+  "project.detach": folderOnly,
   "persona.show": noArgs,
   "persona.edit": {
     type: "object",
@@ -96,9 +80,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
 const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> = {
   "project.create": { name: "name", folder: "path" },
-  "project.attach": { project: "name", folder: "path" },
-  "project.detach": { project: "name", folder: "path" },
-  "project.assign": { project: "name", to: "name" },
+  "project.attach": { folder: "path" },
+  "project.detach": { folder: "path" },
 };
 /** C0、DEL、C1 控制字符（含 NUL、换行、制表符）。 */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -108,7 +91,6 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.create": { folder: MAX_PATH_BYTES },
   "project.attach": { folder: MAX_PATH_BYTES },
   "project.detach": { folder: MAX_PATH_BYTES },
-  "project.assign": { handoff: MAX_HANDOFF_BYTES },
   "persona.edit": { text: MAX_PERSONA_BYTES },
 };
 

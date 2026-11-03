@@ -1,16 +1,16 @@
-// M2 W1：项目经理、项目、文件夹、交接、性格设定、重试、hub 调用、启动上下文（m2-plan 第 4 节“W1 账本”的测试表）。
+// 项目经理、项目（11-03 起一个项目经理就是一个会话，最多一个项目）、文件夹、性格设定、重试、hub 调用、启动上下文。
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { PM_PERSONA_TEMPLATE, SYSTEM_MESSAGE_PREFIX } from "../../shared/domain.ts";
+import { PM_PERSONA_TEMPLATE } from "../../shared/domain.ts";
 import type { ConversationId, Message, PmId, SessionId } from "../../shared/domain.ts";
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
-import { HUB_CALL_FIELD_MAX_BYTES, MAX_HANDOFF_BYTES, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
+import { HUB_CALL_FIELD_MAX_BYTES, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -25,7 +25,6 @@ let db: Db;
 let root: string;
 let dataHome: string;
 let personasDir: string;
-let handoffsDir: string;
 let work: string;
 let now: number;
 let ledger: SqliteLedger;
@@ -41,7 +40,6 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     initialSeq: INITIAL_SEQ,
     pmHomeRoot: join(dataHome, "pm-home"),
     personasDir,
-    handoffsDir,
     dataHome,
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     ...extra,
@@ -59,7 +57,6 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agent-hub-ledger-m2-"));
   dataHome = join(root, ".agent-hub");
   personasDir = join(dataHome, "state", "personas");
-  handoffsDir = join(dataHome, "state", "handoffs");
   work = join(root, "work");
   mkdirSync(work, { recursive: true });
   now = 1_000;
@@ -120,13 +117,10 @@ function sessionRow(id: SessionId) {
   return createSessionStore(db).get(id)!;
 }
 
-function createFoo(name = "foo", dir = folder(name)) {
-  const result = hub(lin.sessionId, "project.create", { name, folder: dir });
-  return { ...result.data, groupSessionId: currentGroupSession(result.data.conversation.id), dir };
-}
-
-function currentGroupSession(conversationId: ConversationId): SessionId {
-  return db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation DESC LIMIT 1", conversationId)!.id;
+/** 小林在自己的会话里建项目 foo（主文件夹 work/foo）。 */
+function createFoo(dir = folder("foo"), caller: SessionId = lin.sessionId) {
+  const result = hub(caller, "project.create", { folder: dir });
+  return { ...result.data, dir };
 }
 
 describe("createPm（M2）", () => {
@@ -162,70 +156,109 @@ describe("createPm（M2）", () => {
     expectLedgerError(() => ledger.createPm({ name: "x", mode: "manage_only", persona: "", defaultModel: "m".repeat(101) }), "invalid");
     expect(tableCounts()).toEqual(before);
   });
+
+  it("建的时候选了主文件夹：同一个事务里建好项目，会话在主文件夹里跑，对话里一条“项目已建好”", () => {
+    const dir = folder("wang");
+    now = 2_500;
+    const result = ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: join(work, "wang", "..", "wang") });
+    expect(result.project).toMatchObject({ name: "wang", status: "active", pmId: result.pm.id, conversationId: result.conversation.id });
+    expect(sessionRow(result.sessionId)).toMatchObject({ cwd: dir, addDirs: [] });
+    expect(messagesIn(result.conversation.id)).toEqual([
+      expect.objectContaining({ sender: "system", status: null, meta: { event: "project.created", projectId: result.project!.id } }),
+    ]);
+    expect(changes.map((c) => c.type)).toEqual([
+      "pm.created",
+      "project.created",
+      "conversation.created",
+      "session.created",
+      "folders.updated",
+      "message.created",
+    ]);
+    // 不选就没有项目，会话在自己的空目录里
+    const plain = ledger.createPm({ name: "老李", mode: "manage_only", persona: "" });
+    expect(plain.project).toBeNull();
+    expect(sessionRow(plain.sessionId).cwd).toBe(join(dataHome, "pm-home", String(plain.pm.id)));
+  });
+
+  it("选的文件夹不对（不存在、已是别人项目的主文件夹）：invalid / conflict，项目经理也没建", () => {
+    createFoo();
+    changes = [];
+    const before = tableCounts();
+    expectLedgerError(() => ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: join(work, "nope") }), "invalid", /文件夹不存在/);
+    expectLedgerError(() => ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: join(work, "foo") }), "conflict", /小林.*foo/);
+    expect(tableCounts()).toEqual(before);
+    expect(changes).toEqual([]);
+  });
 });
 
-describe("建项目", () => {
-  it("一句话建项目：项目、主文件夹、群、群会话（cwd 是真实路径）、“项目已建好”、hub_calls 一行，返回文字里有群名", () => {
+describe("建项目（在项目经理的会话里一句话）", () => {
+  it("项目挂在项目经理唯一的对话上；会话的工作目录换成主文件夹；对话里“项目已建好”；hub_calls 一行；名字默认是文件夹名", () => {
     const dir = folder("foo");
     now = 3_000;
+    const conversationsBefore = count("conversations");
+    const sessionsBefore = count("agent_sessions");
     // 路径里绕一下，存的是真实路径
-    const result = hub(lin.sessionId, "project.create", { name: "foo", folder: join(work, "foo", "..", "foo"), description: "一个项目" });
-    const { project, mainFolder, conversation } = result.data;
-    expect(project).toMatchObject({ name: "foo", description: "一个项目", status: "active", pmId: lin.pmId, conversationId: conversation.id, createdAt: 3_000 });
+    const result = hub(lin.sessionId, "project.create", { folder: join(work, "foo", "..", "foo"), description: "一个项目" });
+    const { project, mainFolder } = result.data;
+    expect(project).toMatchObject({ name: "foo", description: "一个项目", status: "active", pmId: lin.pmId, conversationId: lin.conversationId, createdAt: 3_000 });
     expect(mainFolder).toMatchObject({ projectId: project.id, path: dir, isMain: true, removedAt: null });
-    expect(conversation).toMatchObject({ kind: "project_group", pmId: lin.pmId, projectId: project.id, title: "foo" });
-    const groupSession = currentGroupSession(conversation.id);
-    expect(sessionRow(groupSession)).toMatchObject({ role: "pm", pmId: lin.pmId, cwd: dir, addDirs: [], generation: 1, status: "idle" });
-    const [message] = messagesIn(conversation.id);
-    expect(message).toMatchObject({ sender: "system", kind: "text", status: null, meta: { event: "project.created", projectId: project.id } });
-    expect(message!.text).toContain("项目已建好");
+    // 不另开对话、不另开会话
+    expect(count("conversations")).toBe(conversationsBefore);
+    expect(count("agent_sessions")).toBe(sessionsBefore);
+    expect(sessionRow(lin.sessionId)).toMatchObject({ cwd: dir, addDirs: [], generation: 1, status: "idle" });
+    const message = messagesIn(lin.conversationId).at(-1)!;
+    expect(message).toMatchObject({ sender: "system", kind: "text", status: null, sessionId: null, meta: { event: "project.created", projectId: project.id } });
+    expect(message.text).toContain("项目已建好");
     expect(result.text).toContain("foo");
     expect(hubCalls()).toEqual([
       expect.objectContaining({ session_id: lin.sessionId, command: "project.create", ok: 1, error_code: null, result: result.text }),
     ]);
-    expect(changes.map((c) => c.type)).toEqual(["project.created", "conversation.created", "session.created", "folders.updated", "message.created"]);
-    // 不登记 session.start：第一条消息来了再起
+    expect(changes.map((c) => c.type)).toEqual(["project.created", "folders.updated", "message.created"]);
+    // 不登记 session.start：下一条消息前驱动层按新的工作目录重启
     expect(listActions(db)).toEqual([]);
     const snap = ledger.snapshot();
     expect(snap.projects).toEqual([project]);
     expect(snap.folders).toEqual([mainFolder]);
   });
 
-  it("界面建项目（actor user）；会话替别的项目经理建 → forbidden；项目经理不存在 → not_found", () => {
-    const result = ledger.createProject({ name: "bar", folder: folder("bar"), pmId: zhou.pmId }, { kind: "user" });
-    expect(result.project.pmId).toBe(zhou.pmId);
-    expect(sessionRow(result.sessionId)).toMatchObject({ pmId: zhou.pmId, conversationId: result.conversation.id });
-    expectLedgerError(
-      () => ledger.createProject({ name: "baz", folder: folder("baz"), pmId: zhou.pmId }, { kind: "session", sessionId: lin.sessionId }),
-      "forbidden",
-    );
-    expectLedgerError(() => ledger.createProject({ name: "baz", folder: folder("baz"), pmId: 999 }, { kind: "user" }), "not_found");
+  it("给了 --name 就用它", () => {
+    const result = hub(zhou.sessionId, "project.create", { folder: folder("bar"), name: "记账小工具" });
+    expect(result.data.project).toMatchObject({ name: "记账小工具", pmId: zhou.pmId, conversationId: zhou.conversationId });
   });
 
-  it("文件夹不对：不存在、是文件、在数据目录里 → invalid；已是别的项目的主文件夹、重名 → conflict；都什么也没写", () => {
+  it("已经有项目了又要建：conflict，“一个项目经理只管一个项目，请新建一个项目经理”，什么都没写", () => {
+    createFoo();
+    changes = [];
+    const before = tableCounts();
+    expectLedgerError(
+      () => hub(lin.sessionId, "project.create", { folder: folder("bar") }),
+      "conflict",
+      /^一个项目经理只管一个项目，请新建一个项目经理。小林现在管的是“foo”/,
+    );
+    expect(tableCounts()).toEqual(before);
+    expect(changes).toEqual([]);
+  });
+
+  it("文件夹不对：不存在、是文件、在数据目录里 → invalid；已是别人项目的主文件夹 → conflict；名字不对 → invalid；都什么也没写", () => {
     createFoo();
     writeFileSync(join(work, "a-file"), "x");
     mkdirSync(join(dataHome, "inside"), { recursive: true });
     changes = [];
     const before = tableCounts();
     const callsBefore = hubCalls().length;
-    const cases: [string, string, LedgerErrorCode, RegExp][] = [
-      ["n1", join(work, "nope"), "invalid", /文件夹不存在，请先建好：.*nope/],
-      ["n2", join(work, "a-file"), "invalid", /不是文件夹/],
-      ["n3", join(dataHome, "inside"), "invalid", /数据目录/],
-      ["n4", dataHome, "invalid", /数据目录/],
-      ["n5", join(work, "foo"), "conflict", /主文件夹/],
-      ["foo", folder("other"), "conflict", /foo/],
-      ["", folder("other"), "invalid", /名字/],
+    const cases: [HubArgs<"project.create">, LedgerErrorCode, RegExp][] = [
+      [{ folder: join(work, "nope") }, "invalid", /文件夹不存在，请先建好：.*nope/],
+      [{ folder: join(work, "a-file") }, "invalid", /不是文件夹/],
+      [{ folder: join(dataHome, "inside") }, "invalid", /数据目录/],
+      [{ folder: dataHome }, "invalid", /数据目录/],
+      [{ folder: join(work, "foo") }, "conflict", /小林的项目“foo”的主文件夹/],
+      [{ folder: folder("other"), name: "a\nb" }, "invalid", /名字/],
     ];
-    for (const [name, dir, code, message] of cases) {
-      expectLedgerError(() => hub(lin.sessionId, "project.create", { name, folder: dir }), code, message);
-    }
+    for (const [args, code, message] of cases) expectLedgerError(() => hub(zhou.sessionId, "project.create", args), code, message);
     expect(tableCounts()).toEqual(before);
     expect(changes).toEqual([]);
     // 失败的调用也记一行
-    const failed = hubCalls().slice(callsBefore);
-    expect(failed.map((c) => [c.ok, c.error_code])).toEqual(cases.map(([, , code]) => [0, code]));
+    expect(hubCalls().slice(callsBefore).map((c) => [c.ok, c.error_code])).toEqual(cases.map(([, code]) => [0, code]));
   });
 
   it("默认的 resolveFolder：展开 ~，相对路径拒绝", () => {
@@ -237,232 +270,95 @@ describe("建项目", () => {
 });
 
 describe("文件夹", () => {
-  it("挂文件夹（在私聊里调）：多一行、群会话 add_dirs 有它、群里一条系统消息，同时登记给群里 agent 的 session.send", () => {
+  it("挂文件夹：多一行、会话的 add_dirs 有它、对话里一条只给人看的系统消息，不另发给 agent", () => {
     const foo = createFoo();
     const extra = folder("extra");
     changes = [];
     enqueued = [];
-    const result = hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
+    const result = hub(lin.sessionId, "project.attach", { folder: extra });
     expect(result.data.folder).toMatchObject({ projectId: foo.project.id, path: extra, isMain: false, removedAt: null });
     expect(count("project_folders", "project_id = ? AND removed_at IS NULL", foo.project.id)).toBe(2);
-    expect(sessionRow(foo.groupSessionId).addDirs).toEqual([extra]);
-    const message = messagesIn(foo.conversation.id).at(-1)!;
+    expect(sessionRow(lin.sessionId)).toMatchObject({ cwd: foo.dir, addDirs: [extra] });
+    const message = messagesIn(lin.conversationId).at(-1)!;
     expect(message).toMatchObject({
       sender: "system",
-      status: "queued",
-      sessionId: foo.groupSessionId,
+      status: null,
+      sessionId: null,
       meta: { event: "folder.attached", projectId: foo.project.id, folderId: result.data.folder.id, path: extra },
     });
-    expect(message.text.startsWith(SYSTEM_MESSAGE_PREFIX)).toBe(true);
-    expect(enqueued).toEqual([
-      expect.objectContaining({ type: "session.send", params: { sessionId: foo.groupSessionId, messageId: message.id, source: "system" } }),
-    ]);
+    expect(enqueued).toEqual([]);
     expect(changes.map((c) => c.type)).toEqual(["folders.updated", "message.created"]);
     const updated = changes[0]!;
     expect(updated.type === "folders.updated" && updated.data.folders.map((f) => f.path)).toEqual([foo.dir, extra]);
   });
 
-  it("群里最新一代自己挂：系统消息只给人看，不登记发送；已经挂着 → conflict；项目不存在 → not_found；目录不存在 → invalid", () => {
+  it("已经挂着、挂主文件夹 → conflict；还没有项目 → not_found；目录不存在 → invalid", () => {
     const foo = createFoo();
     const extra = folder("extra");
-    enqueued = [];
-    hub(foo.groupSessionId, "project.attach", { project: "foo", folder: extra });
-    const message = messagesIn(foo.conversation.id).at(-1)!;
-    expect(message).toMatchObject({ status: null, sessionId: null });
-    expect(message.text.startsWith(SYSTEM_MESSAGE_PREFIX)).toBe(false);
-    expect(enqueued).toEqual([]);
-    expectLedgerError(() => hub(lin.sessionId, "project.attach", { project: "foo", folder: extra }), "conflict");
-    expectLedgerError(() => hub(lin.sessionId, "project.attach", { project: "foo", folder: foo.dir }), "conflict");
-    expectLedgerError(() => hub(lin.sessionId, "project.attach", { project: "nope", folder: extra }), "not_found");
-    expectLedgerError(() => hub(lin.sessionId, "project.attach", { project: "foo", folder: join(work, "gone") }), "invalid", /不存在/);
+    hub(lin.sessionId, "project.attach", { folder: extra });
+    expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: extra }), "conflict");
+    expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: foo.dir }), "conflict");
+    expectLedgerError(() => hub(zhou.sessionId, "project.attach", { folder: extra }), "not_found", /还没有项目.*hub project create/);
+    expectLedgerError(() => hub(zhou.sessionId, "project.detach", { folder: extra }), "not_found", /还没有项目/);
+    expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: join(work, "gone") }), "invalid", /不存在/);
   });
 
-  it("移除文件夹：挂着的标移除时间；主文件夹 invalid；没挂过的 not_found", () => {
+  it("移除文件夹：挂着的标移除时间；主文件夹 invalid；没挂过的 not_found；移除后可以再挂", () => {
     const foo = createFoo();
     const extra = folder("extra");
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
+    hub(lin.sessionId, "project.attach", { folder: extra });
     now = 5_000;
     changes = [];
-    const result = hub(lin.sessionId, "project.detach", { project: "foo", folder: extra });
+    const result = hub(lin.sessionId, "project.detach", { folder: extra });
     expect(result.data.folder).toMatchObject({ path: extra, removedAt: 5_000 });
-    expect(sessionRow(foo.groupSessionId).addDirs).toEqual([]);
-    expect(messagesIn(foo.conversation.id).at(-1)!.meta).toMatchObject({ event: "folder.detached", folderId: result.data.folder.id });
+    expect(sessionRow(lin.sessionId).addDirs).toEqual([]);
+    expect(messagesIn(lin.conversationId).at(-1)!.meta).toMatchObject({ event: "folder.detached", folderId: result.data.folder.id });
     expect(changes.map((c) => c.type)).toEqual(["folders.updated", "message.created"]);
     expect(ledger.snapshot().folders.map((f) => f.path)).toEqual([foo.dir]);
-    expectLedgerError(() => hub(lin.sessionId, "project.detach", { project: "foo", folder: foo.dir }), "invalid", /主文件夹/);
-    expectLedgerError(() => hub(lin.sessionId, "project.detach", { project: "foo", folder: extra }), "not_found");
-    expectLedgerError(() => hub(lin.sessionId, "project.detach", { project: "foo", folder: folder("never") }), "not_found");
-    // 移除后可以再挂
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
-    expect(sessionRow(foo.groupSessionId).addDirs).toEqual([extra]);
+    expectLedgerError(() => hub(lin.sessionId, "project.detach", { folder: foo.dir }), "invalid", /主文件夹/);
+    expectLedgerError(() => hub(lin.sessionId, "project.detach", { folder: extra }), "not_found");
+    expectLedgerError(() => hub(lin.sessionId, "project.detach", { folder: folder("never") }), "not_found");
+    hub(lin.sessionId, "project.attach", { folder: extra });
+    expect(sessionRow(lin.sessionId).addDirs).toEqual([extra]);
   });
 
   it("移除已经从磁盘上删掉的文件夹：按字面路径找到那一行，标移除", () => {
     createFoo();
     const extra = folder("extra");
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
+    hub(lin.sessionId, "project.attach", { folder: extra });
     rmSync(extra, { recursive: true });
-    const result = hub(lin.sessionId, "project.detach", { project: "foo", folder: extra });
+    const result = hub(lin.sessionId, "project.detach", { folder: extra });
     expect(result.data.folder).toMatchObject({ path: extra });
     expect(result.data.folder.removedAt).not.toBeNull();
   });
-
-  it("管不着：阿周的会话挂小林的项目 → forbidden，记一行失败的 hub_calls", () => {
-    createFoo();
-    const before = tableCounts();
-    expectLedgerError(() => hub(zhou.sessionId, "project.attach", { project: "foo", folder: folder("extra") }), "forbidden");
-    expect(tableCounts()).toEqual(before);
-    expect(hubCalls().at(-1)).toMatchObject({ session_id: zhou.sessionId, command: "project.attach", ok: 0, error_code: "forbidden" });
-  });
 });
 
-describe("交接", () => {
-  function assignFoo(caller: SessionId = lin.sessionId, handoff = "发布日期定在周五。") {
-    return hub(caller, "project.assign", { project: "foo", to: "阿周", handoff });
-  }
-
-  it("交接：交接文件和记录、项目经理换了、群的新一代属于阿周、旧会话 session.end、群里和阿周私聊各一条系统消息", () => {
-    const foo = createFoo();
-    const extra = folder("extra");
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
-    now = 7_000;
+describe("会话状态", () => {
+  it("驱动层把会话写成 ended 之后 refreshSessionState：推一条 session.status（ended）；没再变就不重复推", () => {
+    createSessionStore(db).update(lin.sessionId, { status: "ended", pid: null });
     changes = [];
-    enqueued = [];
-    const result = assignFoo(lin.sessionId, "发布日期定在周五。$HOME `x` \"q\"");
-    const { project, handoff, sessionId: newSession } = result.data;
-    expect(project).toMatchObject({ pmId: zhou.pmId, updatedAt: 7_000 });
-    expect(handoff).toMatchObject({
-      projectId: foo.project.id,
-      fromSessionId: foo.groupSessionId,
-      toSessionId: newSession,
-      fromPmId: lin.pmId,
-      toPmId: zhou.pmId,
-      reason: "reassign",
-      createdAt: 7_000,
-    });
-    expect(handoff.file.startsWith(join(handoffsDir, String(foo.project.id)))).toBe(true);
-    expect(readFileSync(handoff.file, "utf8")).toBe("发布日期定在周五。$HOME `x` \"q\"");
-    const old = sessionRow(foo.groupSessionId);
-    const next = sessionRow(newSession);
-    expect(next).toMatchObject({ pmId: zhou.pmId, conversationId: foo.conversation.id, generation: 2, cwd: foo.dir, addDirs: [extra], status: "idle" });
-    expect(next.vendorSessionId).not.toBe(old.vendorSessionId);
-    expect(enqueued).toContainEqual(expect.objectContaining({ type: "session.end", params: { sessionId: foo.groupSessionId, generation: 1 } }));
-    const groupMessage = messagesIn(foo.conversation.id).at(-1)!;
-    expect(groupMessage).toMatchObject({
-      sender: "system",
-      status: null,
-      meta: { event: "project.reassigned", projectId: foo.project.id, handoffId: handoff.id, fromPmId: lin.pmId, toPmId: zhou.pmId },
-    });
-    expect(groupMessage.text).toMatch(/小林.*阿周/);
-    const privateMessage = messagesIn(zhou.conversationId).at(-1)!;
-    expect(privateMessage).toMatchObject({ sender: "system", status: "queued", sessionId: zhou.sessionId, meta: groupMessage.meta });
-    expect(privateMessage.text.startsWith(SYSTEM_MESSAGE_PREFIX)).toBe(true);
-    expect(privateMessage.text).toMatch(/小林把 foo 交给了你/);
-    expect(enqueued).toContainEqual(
-      expect.objectContaining({ type: "session.send", params: { sessionId: zhou.sessionId, messageId: privateMessage.id, source: "system" } }),
-    );
-    expect(changes.map((c) => c.type)).toEqual(["project.updated", "session.created", "message.created", "message.created"]);
-    // 旧会话和新一代的会话状态各带自己的项目经理，网页靠它给消息署名
-    const snapshotSessions = ledger.snapshot().sessions;
-    expect(snapshotSessions.find((s) => s.sessionId === foo.groupSessionId)).toMatchObject({ pmId: lin.pmId });
-    expect(snapshotSessions.find((s) => s.sessionId === newSession)).toMatchObject({ pmId: zhou.pmId });
-    // hub_calls 记的是调用者（私聊）
-    expect(hubCalls().at(-1)).toMatchObject({ session_id: lin.sessionId, command: "project.assign", ok: 1 });
-    // 之后阿周管它，小林管不着了
-    expectLedgerError(() => hub(lin.sessionId, "project.attach", { project: "foo", folder: folder("x") }), "forbidden");
-  });
-
-  it("同一毫秒里交接两次：两份交接文件都在，不互相覆盖", () => {
-    createFoo();
-    const first = assignFoo().data.handoff;
-    const second = hub(zhou.sessionId, "project.assign", { project: "foo", to: "小林", handoff: "第二份" }).data.handoff;
-    expect(second.file).not.toBe(first.file);
-    // 文件名带交接编号，靠它保证不撞名，不靠“先看文件在不在”
-    expect(basename(first.file)).toMatch(new RegExp(`^${first.id}-`));
-    expect(basename(second.file)).toMatch(new RegExp(`^${second.id}-`));
-    expect(readFileSync(first.file, "utf8")).toBe("发布日期定在周五。");
-    expect(readFileSync(second.file, "utf8")).toBe("第二份");
-  });
-
-  it("写交接文件失败：整个命令失败，什么都没写", () => {
-    createFoo();
-    const before = tableCounts();
-    const failing = createLedger(db, options({ writeFileAtomic: () => { throw new Error("disk full"); } }));
-    expect(() => failing.hubCall(lin.sessionId, "project.assign", { project: "foo", to: "阿周", handoff: "x" })).toThrow(/disk full/);
-    expect(tableCounts()).toEqual(before);
-    expect(hubCalls().at(-1)).toMatchObject({ ok: 0, error_code: "internal" });
-  });
-
-  it("交接时群里还在排队的消息：改指新一代会话", () => {
-    const foo = createFoo();
-    const queued = ledger.postUserMessage({ conversationId: foo.conversation.id, clientId: "q", text: "还在排队" }).messageId;
-    const { sessionId: newSession } = assignFoo().data;
-    expect(ledger.getMessage(queued)!.sessionId).toBe(newSession);
-    const action = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === queued)!;
-    expect(action.params).toEqual({ sessionId: newSession, messageId: queued, source: "user" });
-  });
-
-  it("交接边界：没有正文、交给自己 → invalid；交给不存在的人 → not_found；正文超过 64 KB → invalid；都什么也没写", () => {
-    createFoo();
-    const before = tableCounts();
-    expectLedgerError(() => assignFoo(lin.sessionId, "  \n "), "invalid");
-    expectLedgerError(() => hub(lin.sessionId, "project.assign", { project: "foo", to: "小林", handoff: "x" }), "invalid", /自己/);
-    expectLedgerError(() => hub(lin.sessionId, "project.assign", { project: "foo", to: "老王", handoff: "x" }), "not_found", /老王/);
-    expectLedgerError(() => assignFoo(lin.sessionId, "a".repeat(MAX_HANDOFF_BYTES + 1)), "invalid");
-    expectLedgerError(() => hub(lin.sessionId, "project.assign", { project: "nope", to: "阿周", handoff: "x" }), "not_found");
-    expectLedgerError(() => assignFoo(zhou.sessionId), "forbidden");
-    expect(tableCounts()).toEqual(before);
-  });
-
-  it("旧一代被驱动层写成 ended 之后 refreshSessionState：推一条 session.status（ended）；没再变就不重复推", () => {
-    const foo = createFoo();
-    assignFoo();
-    createSessionStore(db).update(foo.groupSessionId, { status: "ended", pid: null });
-    changes = [];
-    ledger.refreshSessionState(foo.groupSessionId);
+    ledger.refreshSessionState(lin.sessionId);
     expect(changes).toEqual([
-      expect.objectContaining({ type: "session.status", data: { session: expect.objectContaining({ sessionId: foo.groupSessionId, status: "ended", activity: "idle" }) } }),
+      expect.objectContaining({ type: "session.status", data: { session: expect.objectContaining({ sessionId: lin.sessionId, status: "ended", activity: "idle" }) } }),
     ]);
-    ledger.refreshSessionState(foo.groupSessionId);
+    ledger.refreshSessionState(lin.sessionId);
     expect(changes).toHaveLength(1);
     // 不存在的会话：什么也不做
     ledger.refreshSessionState(99_999);
     expect(changes).toHaveLength(1);
   });
-
-  it("换人后发消息：用户在群里发一条，session.send 指向新一代会话", () => {
-    const foo = createFoo();
-    const { sessionId: newSession } = assignFoo().data;
-    const id = ledger.postUserMessage({ conversationId: foo.conversation.id, clientId: "after", text: "发布日期是哪天" }).messageId;
-    const action = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === id)!;
-    expect(action.params.sessionId).toBe(newSession);
-  });
-
-  it("停止只停最新一代：旧一代还在跑时用户点停止，只通知新一代；只有旧一代在跑时什么也不做", () => {
-    const foo = createFoo();
-    const { sessionId: newSession } = assignFoo().data;
-    const stops: SessionId[] = [];
-    ledger.onStopRequested((e) => stops.push(e.sessionId));
-    ledger.applyDriverEvent(foo.groupSessionId, { type: "agent.text", at: 1, uuid: "u1", text: "还在回" });
-    ledger.requestStop(foo.conversation.id);
-    expect(stops).toEqual([]);
-    ledger.applyDriverEvent(newSession, { type: "agent.text", at: 1, uuid: "u2", text: "新一代也在回" });
-    ledger.requestStop(foo.conversation.id);
-    expect(stops).toEqual([newSession]);
-  });
 });
 
 describe("性格设定", () => {
-  it("改习惯：会话调 persona.edit（新正文、hands_on）→ 文件和模式变了、persona_changes 一行（actor pm）、发起的对话里一条系统消息、推 pm.updated", () => {
-    const foo = createFoo();
+  it("改习惯：会话调 persona.edit（新正文、hands_on）→ 文件和模式变了、persona_changes 一行（actor pm）、对话里一条系统消息、推 pm.updated", () => {
     now = 8_000;
     changes = [];
-    const result = hub(foo.groupSessionId, "persona.edit", { text: "以后回复都用列表", mode: "hands_on", reason: "用户要求" });
+    const result = hub(lin.sessionId, "persona.edit", { text: "以后回复都用列表", mode: "hands_on", reason: "用户要求" });
     const change = result.data.change!;
     expect(change).toMatchObject({
       pmId: lin.pmId,
       actor: "pm",
-      sessionId: foo.groupSessionId,
+      sessionId: lin.sessionId,
       textBefore: "小林的习惯",
       textAfter: "以后回复都用列表",
       modeBefore: "manage_only",
@@ -477,7 +373,7 @@ describe("性格设定", () => {
       mode: "hands_on",
       persona_file_hash: contentHash("以后回复都用列表"),
     });
-    const message = messagesIn(foo.conversation.id).at(-1)!;
+    const message = messagesIn(lin.conversationId).at(-1)!;
     expect(message).toMatchObject({ sender: "system", status: null, meta: { event: "persona.changed", pmId: lin.pmId, personaChangeId: change.id, revertOf: null } });
     expect(message.text).toContain("改了自己的做事习惯");
     expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created"]);
@@ -490,7 +386,7 @@ describe("性格设定", () => {
     expect(hub(lin.sessionId, "persona.show", {} as never).data).toEqual({ text: "以后回复都用列表", mode: "hands_on" });
   });
 
-  it("界面改性格设定：系统消息发在私聊；text、mode 都没给、太长 → invalid；不存在 → not_found；会话改别人的 → forbidden", () => {
+  it("界面改性格设定：系统消息发在项目经理的对话里；text、mode 都没给、太长 → invalid；不存在 → not_found；会话改别人的 → forbidden", () => {
     const result = ledger.editPersona(lin.pmId, { text: "新的" }, { kind: "user" });
     expect(result.change).toMatchObject({ actor: "user", sessionId: null, modeBefore: "manage_only", modeAfter: "manage_only" });
     expect(result.persona).toMatchObject({ pmId: lin.pmId, text: "新的", mode: "manage_only", revertableChangeId: result.change!.id });
@@ -603,40 +499,32 @@ describe("retryMessage", () => {
     expectLedgerError(() => ledger.retryMessage(9999), "not_found");
   });
 
-  it("重试发给这个对话现在最新一代的会话；不是用户发的消息 → conflict", () => {
-    const foo = createFoo();
-    const failed = ledger.postUserMessage({ conversationId: foo.conversation.id, clientId: "f", text: "失败的" }).messageId;
-    db.run("UPDATE messages SET status = 'failed' WHERE id = ?", failed);
-    const { sessionId: newSession } = hub(lin.sessionId, "project.assign", { project: "foo", to: "阿周", handoff: "交接" }).data;
-    ledger.retryMessage(failed);
-    expect(ledger.getMessage(failed)!.sessionId).toBe(newSession);
-    const action = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === failed)!;
-    expect(action.params.sessionId).toBe(newSession);
-    const system = messagesIn(foo.conversation.id).find((m) => m.sender === "system")!;
+  it("不是用户发的消息（比如“项目已建好”）→ conflict", () => {
+    createFoo();
+    const system = messagesIn(lin.conversationId).find((m) => m.sender === "system")!;
     db.run("UPDATE messages SET status = 'failed' WHERE id = ?", system.id);
     expectLedgerError(() => ledger.retryMessage(system.id), "conflict");
   });
 });
 
 describe("hubCall 其他命令", () => {
-  it("status、pm.list：我是谁、在哪、管哪些项目；所有项目经理和各自的项目", () => {
+  it("status：我是谁、项目和文件夹；还没有项目时说怎么建", () => {
     const foo = createFoo();
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: folder("extra") });
-    const status = hub(foo.groupSessionId, "status", {} as never);
-    expect(status.data).toMatchObject({
+    const extra = folder("extra");
+    hub(lin.sessionId, "project.attach", { folder: extra });
+    const status = hub(lin.sessionId, "status", {} as never);
+    expect(status.data).toEqual({
       pm: { id: lin.pmId, name: "小林", mode: "manage_only" },
-      sessionId: foo.groupSessionId,
-      conversation: { id: foo.conversation.id, kind: "project_group", projectId: foo.project.id },
-      projects: [{ id: foo.project.id, name: "foo", mainFolder: foo.dir, otherFolders: [join(work, "extra")].map((p) => realpathSync.native(p)) }],
+      sessionId: lin.sessionId,
+      conversationId: lin.conversationId,
+      project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
     });
     expect(status.text).toContain("小林");
-    expect(status.text).toContain("foo");
-    const list = hub(zhou.sessionId, "pm.list", {} as never);
-    expect(list.data.pms).toEqual([
-      { id: lin.pmId, name: "小林", mode: "manage_only", projects: ["foo"] },
-      { id: zhou.pmId, name: "阿周", mode: "hands_on", projects: [] },
-    ]);
-    expect(list.text).toContain("阿周");
+    expect(status.text).toContain(foo.dir);
+    expect(status.text).toContain(extra);
+    const none = hub(zhou.sessionId, "status", {} as never);
+    expect(none.data.project).toBeNull();
+    expect(none.text).toMatch(/还没有项目.*hub project create/);
   });
 
   it("会话不存在、不是项目经理的会话 → forbidden；长字段在 hub_calls 里截断", () => {
@@ -645,61 +533,42 @@ describe("hubCall 其他命令", () => {
       "INSERT INTO agent_sessions (role, vendor_session_id, cwd, created_at, updated_at) VALUES ('worker', 'w-1', '/tmp', 0, 0)",
     ).lastInsertRowid;
     expectLedgerError(() => hub(worker, "status", {} as never), "forbidden");
-    createFoo();
-    const long = "交".repeat(HUB_CALL_FIELD_MAX_BYTES);
-    hub(lin.sessionId, "project.assign", { project: "foo", to: "阿周", handoff: long });
-    const args = JSON.parse(hubCalls().at(-1)!.args) as { handoff: string; to: string };
-    expect(args.to).toBe("阿周");
-    expect(args.handoff).toBe(truncateField(long));
-    expect(args.handoff).toMatch(/截断，原长 6144 字节/);
-    expect(new TextEncoder().encode(args.handoff.split("…")[0]!).length).toBeLessThanOrEqual(HUB_CALL_FIELD_MAX_BYTES);
+    const long = "习".repeat(HUB_CALL_FIELD_MAX_BYTES);
+    hub(lin.sessionId, "persona.edit", { text: long, reason: "用户要求" });
+    const args = JSON.parse(hubCalls().at(-1)!.args) as { text: string; reason: string };
+    expect(args.reason).toBe("用户要求");
+    expect(args.text).toBe(truncateField(long));
+    expect(args.text).toMatch(/截断，原长 6144 字节/);
+    expect(new TextEncoder().encode(args.text.split("…")[0]!).length).toBeLessThanOrEqual(HUB_CALL_FIELD_MAX_BYTES);
   });
 });
 
 describe("getLaunchContext", () => {
-  it("群会话：项目信息、其他文件夹、最近一份交接；私聊会话：管着的项目名片，没有项目信息", () => {
+  it("有项目：项目信息和文件夹；还没有项目：project 是 null；persona 是 NULL 时兜底成模板；会话不存在 → not_found", () => {
     const foo = createFoo();
     const extra = folder("extra");
-    hub(lin.sessionId, "project.attach", { project: "foo", folder: extra });
-    createFoo("bar");
-    now = 6_000;
-    const { sessionId: newSession, handoff } = hub(lin.sessionId, "project.assign", { project: "foo", to: "阿周", handoff: "周五发布" }).data;
-    const group = ledger.getLaunchContext(newSession);
-    expect(group).toMatchObject({
-      sessionId: newSession,
+    hub(lin.sessionId, "project.attach", { folder: extra });
+    expect(ledger.getLaunchContext(lin.sessionId)).toEqual({
+      sessionId: lin.sessionId,
       role: "pm",
-      conversation: { id: foo.conversation.id, kind: "project_group" },
-      pm: { id: zhou.pmId, name: "阿周", mode: "hands_on", persona: "阿周的习惯" },
+      conversationId: lin.conversationId,
+      pm: { id: lin.pmId, name: "小林", mode: "manage_only", persona: "小林的习惯" },
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
-      handoff: { id: handoff.id, fromPmName: "小林", text: "周五发布", createdAt: 6_000 },
     });
-    // 旧一代还是小林的
-    expect(ledger.getLaunchContext(foo.groupSessionId).pm.name).toBe("小林");
-    const priv = ledger.getLaunchContext(lin.sessionId);
-    expect(priv).toMatchObject({ conversation: { id: lin.conversationId, kind: "pm" }, project: null, handoff: null });
-    expect(priv.managedProjects.map((p) => p.name)).toEqual(["bar"]);
-    expect(ledger.getLaunchContext(zhou.sessionId).managedProjects.map((p) => p.name)).toEqual(["foo"]);
-    // 没交接过的群：handoff null
-    const bar = currentGroupSession(db.get<{ conversation_id: number }>("SELECT conversation_id FROM projects WHERE name = 'bar'")!.conversation_id);
-    expect(ledger.getLaunchContext(bar).handoff).toBeNull();
-    // persona 是 NULL 时兜底成模板
+    expect(ledger.getLaunchContext(zhou.sessionId)).toMatchObject({ pm: { name: "阿周", mode: "hands_on" }, project: null });
     db.run("UPDATE pms SET persona = NULL WHERE id = ?", lin.pmId);
     expect(ledger.getLaunchContext(lin.sessionId).pm.persona).toBe(PM_PERSONA_TEMPLATE);
     expectLedgerError(() => ledger.getLaunchContext(999), "not_found");
   });
 
-  it("其他文件夹、管着的项目按编号排，顺序固定（不按路径、名字），免得无端触发重启", () => {
-    hub(zhou.sessionId, "project.create", { name: "mm", folder: folder("mm") });
-    createFoo("zz");
-    createFoo("aa");
+  it("附加文件夹按编号排，顺序固定（不按路径），免得无端触发重启", () => {
+    createFoo();
     const z = folder("z-extra");
     const a = folder("a-extra");
-    hub(lin.sessionId, "project.attach", { project: "zz", folder: z });
-    hub(lin.sessionId, "project.attach", { project: "zz", folder: a });
-    hub(zhou.sessionId, "project.assign", { project: "mm", to: "小林", handoff: "给你了" });
+    hub(lin.sessionId, "project.attach", { folder: z });
+    hub(lin.sessionId, "project.attach", { folder: a });
     const first = ledger.getLaunchContext(lin.sessionId);
-    expect(first.managedProjects.map((p) => p.name)).toEqual(["mm", "zz", "aa"]);
-    expect(first.managedProjects.find((p) => p.name === "zz")!.otherFolders).toEqual([z, a]);
+    expect(first.project!.otherFolders).toEqual([z, a]);
     expect(ledger.getLaunchContext(lin.sessionId)).toEqual(first);
   });
 });

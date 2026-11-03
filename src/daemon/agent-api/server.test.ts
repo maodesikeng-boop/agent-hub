@@ -12,7 +12,6 @@ import {
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
-  MAX_HANDOFF_BYTES,
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
@@ -35,11 +34,9 @@ function shortTempDir(): string {
 
 const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   status: {},
-  "pm.list": {},
-  "project.create": { name: "foo", folder: "/x", description: "一个项目" },
-  "project.attach": { project: "foo", folder: "/y" },
-  "project.detach": { project: "foo", folder: "/y" },
-  "project.assign": { project: "foo", to: "阿周", handoff: "交接正文" },
+  "project.create": { folder: "/x", name: "foo", description: "一个项目" },
+  "project.attach": { folder: "/y" },
+  "project.detach": { folder: "/y" },
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
 };
@@ -138,15 +135,13 @@ describe("agent api over inject", () => {
     });
 
     it("accepts optional fields being absent", async () => {
-      expect((await call("project.create", { name: "foo", folder: "/x" })).statusCode).toBe(200);
+      expect((await call("project.create", { folder: "/x" })).statusCode).toBe(200);
       expect((await call("persona.edit", { mode: "manage_only" })).statusCode).toBe(200);
       expect((await call("persona.edit", { text: "只改正文" })).statusCode).toBe(200);
       expect(ledger.calls).toHaveLength(3);
     });
 
     it("accepts a field exactly at its byte limit", async () => {
-      const handoff = "中".repeat(Math.floor(MAX_HANDOFF_BYTES / 3)); // 每个 3 字节
-      expect((await call("project.assign", { project: "foo", to: "阿周", handoff })).statusCode).toBe(200);
       const text = "a".repeat(MAX_PERSONA_BYTES);
       expect((await call("persona.edit", { text })).statusCode).toBe(200);
     });
@@ -233,9 +228,11 @@ describe("agent api over inject", () => {
       expect(ledger.calls).toHaveLength(0);
     };
 
-    it("unknown command → invalid", async () => {
+    it("unknown command → invalid（含 11-03 拿掉的 pm.list、project.assign）", async () => {
       await expectInvalid(await call("project.archive", {}));
       await expectInvalid(await call("ticket.create", {}));
+      await expectInvalid(await call("pm.list", {}));
+      await expectInvalid(await call("project.assign", { project: "foo", to: "阿周", handoff: "交接" }));
     });
 
     it("wrong method → invalid", async () => {
@@ -244,15 +241,16 @@ describe("agent api over inject", () => {
 
     it("missing required parameters → invalid", async () => {
       await expectInvalid(await call("project.create", { name: "foo" }));
-      await expectInvalid(await call("project.attach", { project: "foo" }));
-      await expectInvalid(await call("project.assign", { project: "foo", to: "阿周" }));
+      await expectInvalid(await call("project.attach", {}));
+      await expectInvalid(await call("project.detach", {}));
       await expectInvalid(await call("persona.edit", {}));
       await expectInvalid(await call("persona.edit", { reason: "只有理由" }));
     });
 
     it("extra parameters → invalid (not silently dropped)", async () => {
       await expectInvalid(await call("project.create", { name: "foo", folder: "/x", extra: 1 }));
-      await expectInvalid(await call("pm.list", { verbose: true }));
+      await expectInvalid(await call("project.attach", { project: "foo", folder: "/x" }));
+      await expectInvalid(await call("status", { verbose: true }));
     });
 
     it("wrong types are not coerced → invalid", async () => {
@@ -264,7 +262,7 @@ describe("agent api over inject", () => {
 
     it("empty required strings → invalid", async () => {
       await expectInvalid(await call("project.create", { name: "", folder: "/x" }));
-      await expectInvalid(await call("project.assign", { project: "foo", to: "阿周", handoff: "" }));
+      await expectInvalid(await call("project.create", { folder: "" }));
     });
 
     it("fields over their limits → invalid", async () => {
@@ -272,19 +270,17 @@ describe("agent api over inject", () => {
       await expectInvalid(
         await call("project.create", { name: "foo", folder: "/x", description: "d".repeat(MAX_DESCRIPTION_CHARS + 1) }),
       );
-      await expectInvalid(await call("project.attach", { project: "foo", folder: `/${"p".repeat(MAX_PATH_BYTES)}` }));
+      await expectInvalid(await call("project.attach", { folder: `/${"p".repeat(MAX_PATH_BYTES)}` }));
       await expectInvalid(await call("persona.edit", { mode: "hands_on", reason: "r".repeat(MAX_REASON_CHARS + 1) }));
     });
 
     it("byte limits count UTF-8 bytes, not characters", async () => {
       // 字符数没超、字节数超了
-      const handoff = "中".repeat(Math.floor(MAX_HANDOFF_BYTES / 3) + 1);
-      expect(handoff.length).toBeLessThan(MAX_HANDOFF_BYTES);
-      await expectInvalid(await call("project.assign", { project: "foo", to: "阿周", handoff }));
       const text = "性".repeat(Math.floor(MAX_PERSONA_BYTES / 3) + 1);
+      expect(text.length).toBeLessThan(MAX_PERSONA_BYTES);
       await expectInvalid(await call("persona.edit", { text }));
       const folder = `/${"路".repeat(Math.floor(MAX_PATH_BYTES / 3) + 1)}`;
-      await expectInvalid(await call("project.create", { name: "foo", folder }));
+      await expectInvalid(await call("project.create", { folder }));
     });
 
     it("a whole body over HUB_MAX_BODY_BYTES → 400 invalid, not 413", async () => {
@@ -299,25 +295,20 @@ describe("agent api over inject", () => {
 
     it("path fields must be absolute and free of NUL", async () => {
       for (const folder of ["../../etc", "etc/passwd", "./x", "~/x", "/x\u0000y", "\u0000"]) {
-        await expectInvalid(await call("project.create", { name: "foo", folder }));
-        await expectInvalid(await call("project.attach", { project: "foo", folder }));
-        await expectInvalid(await call("project.detach", { project: "foo", folder }));
+        await expectInvalid(await call("project.create", { folder }));
+        await expectInvalid(await call("project.attach", { folder }));
+        await expectInvalid(await call("project.detach", { folder }));
       }
     });
 
-    it("names, project and to must be free of NUL and control characters", async () => {
+    it("project names must be free of NUL and control characters", async () => {
       for (const bad of ["a\u0000b", "a\nb", "a\rb", "a\tb", "\u001b[31m红", "a\u007fb", "a\u0085b", "../../etc\u0000"]) {
         await expectInvalid(await call("project.create", { name: bad, folder: "/x" }));
-        await expectInvalid(await call("project.attach", { project: bad, folder: "/x" }));
-        await expectInvalid(await call("project.detach", { project: bad, folder: "/x" }));
-        await expectInvalid(await call("project.assign", { project: bad, to: "阿周", handoff: "h" }));
-        await expectInvalid(await call("project.assign", { project: "foo", to: bad, handoff: "h" }));
       }
     });
 
-    it("multi-line free text (handoff, persona text) may still contain newlines and tabs", async () => {
-      expect((await call("project.assign", { project: "foo", to: "阿周", handoff: "第一行\n\t第二行\r\n" })).statusCode).toBe(200);
-      expect((await call("persona.edit", { text: "a\nb" })).statusCode).toBe(200);
+    it("multi-line free text (persona text) may still contain newlines and tabs", async () => {
+      expect((await call("persona.edit", { text: "第一行\n\t第二行\r\n" })).statusCode).toBe(200);
     });
 
     it("a malformed URL without a token → 400 invalid in HubResponse shape", async () => {
@@ -410,7 +401,7 @@ describe("startAgentApi on a unix socket", () => {
     expect(lstatSync(paths().hubSock).isSocket()).toBe(true);
 
     running = await startAgentApi({ ledger, tokens, ...paths() });
-    const res = await post(running.socketPath, "pm.list", {}, tokens.issue(1));
+    const res = await post(running.socketPath, "status", {}, tokens.issue(1));
     expect(res.status).toBe(200);
   });
 
@@ -460,7 +451,7 @@ describe("startAgentApi on a unix socket", () => {
     await app.listen({ path: paths().hubSock });
     running = { app, socketPath: paths().hubSock, close: () => app.close() };
 
-    const payload = JSON.stringify({ project: "foo", folder: "/x" });
+    const payload = JSON.stringify({ folder: "/x" });
     const res = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
       const req = request(
         {

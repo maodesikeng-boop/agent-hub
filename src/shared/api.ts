@@ -22,10 +22,8 @@ export const API_PATHS = {
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
-  /** POST：新建项目经理（CreatePmRequest → 201 CreatePmResponse）。 */
+  /** POST：新建项目经理（CreatePmRequest → 201 CreatePmResponse）。没有单独建项目的入口：建项目经理时选主文件夹，或者在会话里说。 */
   pms: "/api/pms",
-  /** POST：新建项目（CreateProjectRequest → 201 CreateProjectResponse）。 */
-  projects: "/api/projects",
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   /** POST，没有请求体 → EditPersonaResponse。 */
@@ -44,11 +42,14 @@ export interface ConversationSnapshot {
   hasMore: boolean;
 }
 
-/** GET /api/state。seq 是拍照那一刻的事件序号，WebSocket 从它之后接着推。 */
+/**
+ * GET /api/state。seq 是拍照那一刻的事件序号，WebSocket 从它之后接着推。
+ * 不含老的项目群和归档的项目（11-03 拿掉了项目群，见 CONVERSATION_KINDS）。
+ */
 export interface StateSnapshot {
   seq: number;
   pms: Pm[];
-  /** 没删除的项目（M2 只有进行中的），按编号从小到大。 */
+  /** 进行中的项目（每个项目经理最多一个，Project.conversationId 是它的对话），按编号从小到大。 */
   projects: Project[];
   /** 这些项目没移除的文件夹，按编号从小到大。 */
   folders: ProjectFolder[];
@@ -83,34 +84,24 @@ export interface ApiErrorBody {
   code?: LedgerErrorCode;
 }
 
-// ---- M2：项目经理、项目、性格设定、重试 ----
+// ---- M2：项目经理、性格设定、重试 ----
 // 请求体由界面服务按 JSON Schema 校验（多余字段拒绝），长度上限见 limits.ts；业务校验在账本。
 
-/** POST /api/pms。name 按 normalizeName；persona 不超过 MAX_PERSONA_BYTES；defaultModel 空串或不给 = 用 claude 自己的默认。 */
+/**
+ * POST /api/pms。name 按 normalizeName；persona 不超过 MAX_PERSONA_BYTES；defaultModel 空串或不给 = 用 claude 自己的默认。
+ * folder：主文件夹（用户填的路径，可以带 ~，服务端解析成真实路径），可选；给了就同时建好项目，不存在等不对 → 400 带原因。
+ */
 export interface CreatePmRequest {
   name: string;
   mode: PmMode;
   defaultModel?: string | null;
   persona: string;
+  folder?: string;
 }
 
 export interface CreatePmResponse {
   pmId: PmId;
-  /** 它的私聊，网页建好后跳过去。 */
-  conversationId: ConversationId;
-}
-
-/** POST /api/projects。folder 是用户填的路径（可以带 ~），服务端解析成真实路径。 */
-export interface CreateProjectRequest {
-  name: string;
-  folder: string;
-  pmId: PmId;
-  description?: string;
-}
-
-export interface CreateProjectResponse {
-  projectId: ProjectId;
-  /** 它的群，网页建好后跳过去。 */
+  /** 它的对话，网页建好后跳过去。 */
   conversationId: ConversationId;
 }
 
@@ -149,7 +140,6 @@ export const CHANGE_TYPES = [
   "pm.created",
   "pm.updated",
   "project.created",
-  "project.updated",
   "folders.updated",
   "conversation.created",
   "session.created",
@@ -166,13 +156,11 @@ export interface ChangeDataMap {
   /** 模式、名字等变了（改性格设定只改了正文也推，资料页据此重新拉 persona）。 */
   "pm.updated": { pm: Pm };
   "project.created": { project: Project };
-  /** 换项目经理等。 */
-  "project.updated": { project: Project };
   /** 某个项目没移除的文件夹整个换成这一份（挂、移除、建项目时）。 */
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };
-  /** 新对话（新项目经理的私聊、新项目的群），消息是空的。 */
+  /** 新对话（新项目经理的那个对话），消息是空的。 */
   "conversation.created": { conversation: Conversation };
-  /** 新会话（建项目经理、建项目、换项目经理开的下一代）。 */
+  /** 新会话（建项目经理时）。 */
   "session.created": { session: SessionState };
 }
 

@@ -24,8 +24,6 @@ export interface Pending {
   pushed: Map<SessionId, string>;
   /** 提交之后要做的事（写性格设定文件），在推变化之前做；出错只记日志。 */
   after: (() => void)[];
-  /** 回滚时要撤掉的东西（事务里已经写好的交接文件）。 */
-  undo: (() => void)[];
 }
 
 /** 一个事务里几条变化的推送顺序（见 api.ts 的 CHANGE_TYPES）。 */
@@ -33,7 +31,6 @@ const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "pm.created": 0,
   "pm.updated": 0,
   "project.created": 1,
-  "project.updated": 1,
   "conversation.created": 2,
   "session.created": 3,
   "folders.updated": 4,
@@ -65,7 +62,6 @@ export interface LedgerContext {
 export interface LedgerFiles {
   pmHomeRoot: string;
   personasDir: string | undefined;
-  handoffsDir: string | undefined;
   userHome: string;
   resolveFolder: ResolveFolder;
   writeFile: (file: string, content: string) => void;
@@ -105,20 +101,8 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   const write = <T>(fn: (p: Pending) => T): T => {
     // 并进外层事务的话，下面的通知会在外层提交前发出去，外层回滚就推了不存在的变化
     if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
-    const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [], undo: [] };
-    let result: T;
-    try {
-      result = db.transaction(() => fn(pending));
-    } catch (error) {
-      for (const undo of pending.undo) {
-        try {
-          undo();
-        } catch (undoError) {
-          console.error("agent-hub ledger undo:", undoError);
-        }
-      }
-      throw error;
-    }
+    const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
+    const result = db.transaction(() => fn(pending));
     for (const after of pending.after) {
       try {
         after();

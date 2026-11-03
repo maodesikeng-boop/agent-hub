@@ -2,7 +2,7 @@
 // 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改（transition）。
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
-import { SYSTEM_MESSAGE_PREFIX, agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
+import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -31,8 +31,9 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
+  /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
-    db.get("SELECT 1 AS x FROM conversations WHERE id = ?", id) !== undefined;
+    db.get("SELECT 1 AS x FROM conversations WHERE id = ? AND kind != 'project_group'", id) !== undefined;
 
   const getMessage = (id: MessageId): Message | null => {
     const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
@@ -83,31 +84,19 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
     if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
-  /**
-   * 写一条系统消息（规则见 domain.ts 的 SystemMessageMeta）。toAgent 不是 null 时同时发给这个会话：
-   * 文字带【系统】、状态 queued、登记 session.send（source: system）。
-   */
-  const insertSystemMessage = (
-    p: Pending,
-    conversationId: ConversationId,
-    meta: SystemMessageMeta,
-    text: string,
-    toAgent: SessionId | null = null,
-  ): Message => {
+  /** 写一条只给人看的系统消息（规则见 domain.ts 的 SystemMessageMeta）：没有会话、没有状态。 */
+  const insertSystemMessage = (p: Pending, conversationId: ConversationId, meta: SystemMessageMeta, text: string): Message => {
     const t = now();
     const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, 'system', 'text', ?, ?, ?, ?, ?, ?) RETURNING *`,
+      `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (?, 'system', 'text', ?, ?, ?, ?, ?) RETURNING *`,
       conversationId,
-      toAgent,
-      toAgent === null ? text : SYSTEM_MESSAGE_PREFIX + text,
+      text,
       JSON.stringify(meta),
       systemMessageDedupeKey(conversationId, meta),
-      toAgent === null ? null : "queued",
       t,
       t,
     )!;
-    if (toAgent !== null) enqueue(p, { type: "session.send", params: { sessionId: toAgent, messageId: row.id, source: "system" } });
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
     return message;

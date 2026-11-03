@@ -97,25 +97,23 @@ describe("hub cli", () => {
 
   describe("success", () => {
     it("project create prints text, exits 0 and sends the right body", async () => {
-      const r = await hub(["project", "create", "--name", "foo", "--folder", "/x"]);
+      const r = await hub(["project", "create", "--folder", "/x"]);
       expect(r.code).toBe(HUB_EXIT.ok);
       expect(r.stdout).toBe("已执行 project.create（会话 42）\n");
       expect(r.stderr).toBe("");
-      expect(ledger.calls).toEqual([{ sessionId: 42, command: "project.create", args: { name: "foo", folder: "/x" } }]);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "project.create", args: { folder: "/x" } }]);
     });
 
-    it("project create passes --description", async () => {
-      expect((await hub(["project", "create", "--name", "foo", "--folder", "/x", "--description", "说明"])).code).toBe(0);
-      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: "/x", description: "说明" });
+    it("project create passes --name and --description", async () => {
+      expect((await hub(["project", "create", "--folder", "/x", "--name", "foo", "--description", "说明"])).code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({ folder: "/x", name: "foo", description: "说明" });
     });
 
     it.each([
       [["status"], "status", {}],
-      [["pm", "list"], "pm.list", {}],
       [["persona", "show"], "persona.show", {}],
-      [["project", "attach", "foo", "/a/b"], "project.attach", { project: "foo", folder: "/a/b" }],
-      [["project", "detach", "foo", "/a/b"], "project.detach", { project: "foo", folder: "/a/b" }],
-      [["project", "assign", "foo", "--to", "阿周", "--text", "交接"], "project.assign", { project: "foo", to: "阿周", handoff: "交接" }],
+      [["project", "attach", "/a/b"], "project.attach", { folder: "/a/b" }],
+      [["project", "detach", "/a/b"], "project.detach", { folder: "/a/b" }],
       [["persona", "edit", "--mode", "hands_on"], "persona.edit", { mode: "hands_on" }],
       [["persona", "edit", "--text", "新设定", "--reason", "用户说的"], "persona.edit", { text: "新设定", reason: "用户说的" }],
     ] as const)("hub %j → %s", async (argv, command, args) => {
@@ -127,20 +125,21 @@ describe("hub cli", () => {
     it("prints help with exit 0 and does not call the daemon", async () => {
       const r = await hub(["--help"]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("hub project assign");
+      expect(r.stdout).toContain("hub project create --folder");
+      expect(r.stdout).not.toContain("assign");
       expect(ledger.calls).toHaveLength(0);
     });
   });
 
   describe("long text via --stdin", () => {
-    it("delivers a 3 KB handoff with $, backticks and quotes unchanged", async () => {
+    it("delivers a 3 KB persona text with $, backticks and quotes unchanged", async () => {
       const line = "价格 $HUB_TOKEN `rm -rf /` \"双引号\" 'single' \\ $(whoami) ${x}\n";
-      let handoff = "";
-      while (Buffer.byteLength(handoff) < 3 * 1024) handoff += line;
-      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf(`${handoff}\n`) });
+      let text = "";
+      while (Buffer.byteLength(text) < 3 * 1024) text += line;
+      const r = await hub(["persona", "edit", "--stdin"], { stdin: stdinOf(`${text}\n`) });
       expect(r.code).toBe(0);
       // 去掉末尾一个换行，其余原样
-      expect(ledger.calls[0]?.args).toEqual({ project: "foo", to: "阿周", handoff });
+      expect(ledger.calls[0]?.args).toEqual({ text });
     });
 
     it("strips exactly one trailing newline", async () => {
@@ -163,7 +162,7 @@ describe("hub cli", () => {
     });
 
     it("stdin that never sends anything exits 2 with a heredoc hint", async () => {
-      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: new TrapStdin(), stdinIdleMs: 100 });
+      const r = await hub(["persona", "edit", "--stdin"], { stdin: new TrapStdin(), stdinIdleMs: 100 });
       expect(r.code).toBe(HUB_EXIT.usage);
       expect(r.stderr).toContain("标准输入一直没有结束，记得用 heredoc");
       expect(ledger.calls).toHaveLength(0);
@@ -214,15 +213,15 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
   });
 
   describe("does not read stdin without --stdin", () => {
-    it("project assign with neither --stdin nor --text exits 2 at once (in-process)", async () => {
-      const r = await hub(["project", "assign", "foo", "--to", "阿周"]);
+    it("persona edit with neither --stdin, --text nor --mode exits 2 at once (in-process)", async () => {
+      const r = await hub(["persona", "edit", "--reason", "r"]);
       expect(r.code).toBe(HUB_EXIT.usage);
       expect(r.stderr).toMatch(/--stdin|--text/);
       expect(ledger.calls).toHaveLength(0);
     });
 
     it("a real hub process with stdin held open exits 2 without hanging", async () => {
-      const child = spawn(process.execPath, [HUB_MAIN, "project", "assign", "foo", "--to", "阿周"], {
+      const child = spawn(process.execPath, [HUB_MAIN, "persona", "edit", "--reason", "r"], {
         env: { ...process.env, ...env },
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -255,12 +254,12 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       [["persona"]],
       [["status", "extra"]],
       [["project", "create", "--name", "foo"]],
-      [["project", "create", "--folder", "/x"]],
-      [["project", "create", "--name", "foo", "--folder", "/x", "--bogus", "1"]],
-      [["project", "attach", "foo"]],
-      [["project", "detach", "foo", "/a", "/b"]],
-      [["project", "assign", "foo", "--text", "交接"]],
-      [["project", "assign", "--to", "阿周", "--text", "交接"]],
+      [["project", "create", "--folder", "/x", "--bogus", "1"]],
+      [["project", "attach"]],
+      [["project", "detach", "/a", "/b"]],
+      // 11-03 拿掉的命令
+      [["pm", "list"]],
+      [["project", "assign", "foo", "--to", "阿周", "--text", "交接"]],
       [["persona", "edit"]],
       [["persona", "edit", "--reason", "只有理由"]],
       [["persona", "edit", "--mode", "boss"]],
@@ -273,15 +272,15 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
 
     it("--stdin and --text together", async () => {
-      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin", "--text", "x"], { stdin: stdinOf("y") });
+      const r = await hub(["persona", "edit", "--stdin", "--text", "x"], { stdin: stdinOf("y") });
       expect(r.code).toBe(HUB_EXIT.usage);
       expect(ledger.calls).toHaveLength(0);
     });
 
-    it("an empty handoff from --stdin or --text", async () => {
-      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
-      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf("") })).code).toBe(2);
-      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--text", ""])).code).toBe(2);
+    it("an empty persona text from --stdin or --text", async () => {
+      expect((await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect((await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("") })).code).toBe(2);
+      expect((await hub(["persona", "edit", "--text", ""])).code).toBe(2);
       expect(ledger.calls).toHaveLength(0);
     });
 
@@ -333,10 +332,10 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
 
   describe("rejected by the daemon (exit 1)", () => {
     it("prints the ledger's message", async () => {
-      ledger.failWith = new LedgerRequestError("forbidden", "foo 不是你管的项目");
-      const r = await hub(["project", "attach", "foo", "/a"]);
+      ledger.failWith = new LedgerRequestError("conflict", "一个项目经理只管一个项目，请新建一个项目经理");
+      const r = await hub(["project", "create", "--folder", "/a"]);
       expect(r.code).toBe(HUB_EXIT.rejected);
-      expect(r.stderr).toBe("foo 不是你管的项目\n");
+      expect(r.stderr).toBe("一个项目经理只管一个项目，请新建一个项目经理\n");
       expect(r.stdout).toBe("");
     });
 
@@ -348,7 +347,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
 
     it("an over-long field is rejected by the daemon", async () => {
-      const r = await hub(["project", "create", "--name", "n".repeat(100), "--folder", "/x"]);
+      const r = await hub(["project", "create", "--folder", "/x", "--name", "n".repeat(100)]);
       expect(r.code).toBe(HUB_EXIT.rejected);
       expect(ledger.calls).toHaveLength(0);
     });
@@ -427,35 +426,29 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
 
   describe("path arguments", () => {
     it("expands a leading ~ to HOME", async () => {
-      await hub(["project", "create", "--name", "foo", "--folder", "~/code/foo"]);
-      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: join(home, "code", "foo") });
+      await hub(["project", "create", "--folder", "~/code/foo"]);
+      expect(ledger.calls[0]?.args).toEqual({ folder: join(home, "code", "foo") });
     });
 
     it("expands a bare ~ and ~ in attach/detach", async () => {
-      await hub(["project", "attach", "foo", "~"]);
-      await hub(["project", "detach", "foo", "~/x"]);
-      expect(ledger.calls.map((c) => c.args)).toEqual([
-        { project: "foo", folder: home },
-        { project: "foo", folder: join(home, "x") },
-      ]);
+      await hub(["project", "attach", "~"]);
+      await hub(["project", "detach", "~/x"]);
+      expect(ledger.calls.map((c) => c.args)).toEqual([{ folder: home }, { folder: join(home, "x") }]);
     });
 
     it("resolves relative paths against the current directory", async () => {
-      await hub(["project", "create", "--name", "foo", "--folder", "sub/dir"]);
-      await hub(["project", "attach", "foo", "."]);
-      expect(ledger.calls.map((c) => c.args)).toEqual([
-        { name: "foo", folder: join(cwd, "sub", "dir") },
-        { project: "foo", folder: cwd },
-      ]);
+      await hub(["project", "create", "--folder", "sub/dir"]);
+      await hub(["project", "attach", "."]);
+      expect(ledger.calls.map((c) => c.args)).toEqual([{ folder: join(cwd, "sub", "dir") }, { folder: cwd }]);
     });
 
     it("does not treat ~user or a ~ in the middle as HOME", async () => {
-      await hub(["project", "attach", "foo", "/a/~/b"]);
-      expect(ledger.calls[0]?.args).toEqual({ project: "foo", folder: "/a/~/b" });
+      await hub(["project", "attach", "/a/~/b"]);
+      expect(ledger.calls[0]?.args).toEqual({ folder: "/a/~/b" });
     });
 
     it("~ without HOME is a usage error", async () => {
-      const r = await hub(["project", "attach", "foo", "~/x"], { env: { ...env, HOME: undefined } });
+      const r = await hub(["project", "attach", "~/x"], { env: { ...env, HOME: undefined } });
       expect(r.code).toBe(HUB_EXIT.usage);
       expect(ledger.calls).toHaveLength(0);
     });
@@ -473,11 +466,11 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(content).toContain(process.execPath);
 
       // 服务在本进程里，不能用 spawnSync（会卡住事件循环）
-      const r = await run(shim, ["project", "create", "--name", "foo", "--folder", "~/p"], { PATH: "/usr/bin:/bin", ...env });
+      const r = await run(shim, ["project", "create", "--folder", "~/p"], { PATH: "/usr/bin:/bin", ...env });
       expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
       expect(r.stdout).toBe("已执行 project.create（会话 42）\n");
-      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: join(home, "p") });
+      expect(ledger.calls[0]?.args).toEqual({ folder: join(home, "p") });
     });
 
     it("exit codes pass through the shim", () => {

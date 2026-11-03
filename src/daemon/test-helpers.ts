@@ -10,29 +10,26 @@ export const card = (id: number, name: string, mainFolder: string, otherFolders:
   otherFolders,
 });
 
-export function groupContext(over: Partial<LaunchContext> = {}): LaunchContext {
-  const foo = card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具");
+/** 有项目的项目经理：manage_only，项目 foo（主文件夹 /work/foo，附加 /work/foo-docs）。 */
+export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
     sessionId: 7,
     role: "pm",
-    conversation: { id: 3, kind: "project_group" },
+    conversationId: 3,
     pm: { id: 1, name: "小林", mode: "manage_only", persona: "# 性格设定\n\n- 说话直接。\n" },
-    managedProjects: [foo, card(2, "bar", "/work/bar")],
-    project: foo,
-    handoff: { id: 5, fromPmName: "阿周", text: "发布日期定在周五。还差登录页。", createdAt: 1_700_000_000_000 },
+    project: card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具"),
     ...over,
   };
 }
 
-export function privateContext(over: Partial<LaunchContext> = {}): LaunchContext {
+/** 还没有项目的项目经理：hands_on。 */
+export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
     sessionId: 8,
     role: "pm",
-    conversation: { id: 2, kind: "pm" },
-    pm: { id: 1, name: "小林", mode: "hands_on", persona: PM_PERSONA_TEMPLATE },
-    managedProjects: [card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具"), card(2, "bar", "/work/bar")],
+    conversationId: 2,
+    pm: { id: 2, name: "阿周", mode: "hands_on", persona: PM_PERSONA_TEMPLATE },
     project: null,
-    handoff: null,
     ...over,
   };
 }

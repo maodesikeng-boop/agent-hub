@@ -152,7 +152,6 @@ export function applyChange(state: HubState, change: Change): HubState {
       };
     }
     case "project.created":
-    case "project.updated":
       return { ...next, projects: upsertBy(state.projects, change.data.project, (a, b) => a.id === b.id) };
     case "folders.updated": {
       const { projectId, folders } = change.data;

@@ -2,8 +2,6 @@
 import type {
   Conversation,
   ConversationKind,
-  Handoff,
-  HandoffReason,
   HealthEntry,
   HealthModule,
   Message,
@@ -64,18 +62,6 @@ export interface PersonaChangeDbRow {
   mode_after: string;
   reason: string | null;
   revert_of: number | null;
-  created_at: number;
-}
-
-export interface HandoffDbRow {
-  id: number;
-  project_id: number;
-  from_session_id: number;
-  to_session_id: number;
-  from_pm_id: number;
-  to_pm_id: number;
-  file: string;
-  reason: string;
   created_at: number;
 }
 
@@ -199,20 +185,6 @@ export function toPersonaChange(row: PersonaChangeDbRow): PersonaChange {
     modeAfter: row.mode_after as PmMode,
     reason: row.reason,
     revertOf: row.revert_of,
-    createdAt: row.created_at,
-  };
-}
-
-export function toHandoff(row: HandoffDbRow): Handoff {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    fromSessionId: row.from_session_id,
-    toSessionId: row.to_session_id,
-    fromPmId: row.from_pm_id,
-    toPmId: row.to_pm_id,
-    file: row.file,
-    reason: row.reason as HandoffReason,
     createdAt: row.created_at,
   };
 }

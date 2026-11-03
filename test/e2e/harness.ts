@@ -15,8 +15,6 @@ import {
   type Change,
   type CreatePmRequest,
   type CreatePmResponse,
-  type CreateProjectRequest,
-  type CreateProjectResponse,
   type Message,
   type StateSnapshot,
   type WsServerMessage,
@@ -249,12 +247,6 @@ export class Client {
     const res = await this.postJson(API_PATHS.pms, input);
     if (res.status !== 201) throw new Error(`POST /api/pms: ${res.status} ${await res.text()}`);
     return (await res.json()) as CreatePmResponse;
-  }
-
-  async createProject(input: CreateProjectRequest): Promise<CreateProjectResponse> {
-    const res = await this.postJson(API_PATHS.projects, input);
-    if (res.status !== 201) throw new Error(`POST /api/projects: ${res.status} ${await res.text()}`);
-    return (await res.json()) as CreateProjectResponse;
   }
 
   async retry(messageId: number): Promise<number> {

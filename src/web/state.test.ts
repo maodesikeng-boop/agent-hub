@@ -8,7 +8,6 @@ import {
   changeOf,
   makeConvSnapshot,
   makeFolder,
-  makeGroupConversation,
   makeMessage,
   makePm,
   makeProject,
@@ -186,13 +185,12 @@ describe("M2 新的变化类型", () => {
     expect(s2.personaRev[2]).toBeUndefined();
   });
 
-  it("project.created / project.updated：按编号加入或替换项目", () => {
+  it("project.created：按编号加入项目；重复推不重复加", () => {
     const s0 = loaded();
     const s1 = applyChange(s0, changeOf(11, "project.created", { project: makeProject({ id: 1, name: "foo", pmId: 1 }) }));
     expect(s1.projects.map((p) => p.name)).toEqual(["foo"]);
-    const s2 = applyChange(s1, changeOf(12, "project.updated", { project: makeProject({ id: 1, name: "foo", pmId: 2 }) }));
+    const s2 = applyChange(s1, changeOf(12, "project.created", { project: makeProject({ id: 1, name: "foo", pmId: 1 }) }));
     expect(s2.projects).toHaveLength(1);
-    expect(s2.projects[0]?.pmId).toBe(2);
   });
 
   it("folders.updated：只换这个项目的文件夹，别的项目的不动；空列表表示全移除", () => {
@@ -207,7 +205,7 @@ describe("M2 新的变化类型", () => {
 
   it("conversation.created：加一个空对话；已经有的对话（补发）不被清空", () => {
     const s0 = loaded({ conversations: [makeConvSnapshot([makeMessage({ id: 1 })])] });
-    const group = makeGroupConversation({ id: 2 });
+    const group = { ...makeConvSnapshot([]).conversation, id: 2, pmId: 2, title: "阿周" };
     const s1 = applyChange(s0, changeOf(11, "conversation.created", { conversation: group }));
     expect(s1.conversations[2]).toEqual({ conversation: group, messages: [], hasMore: false });
     const s2 = applyChange(
@@ -227,7 +225,7 @@ describe("M2 新的变化类型", () => {
   });
 
   it("每种新类型都推进 seq；过期的忽略", () => {
-    for (const type of ["pm.created", "pm.updated", "project.created", "project.updated", "folders.updated", "conversation.created", "session.created"] as const) {
+    for (const type of ["pm.created", "pm.updated", "project.created", "folders.updated", "conversation.created", "session.created"] as const) {
       expect(CHANGE_TYPES).toContain(type);
     }
     const s0 = loaded({ seq: 10 });
@@ -305,23 +303,20 @@ describe("selectors", () => {
     expect(isWaitingForQuota(null)).toBe(false);
   });
 
-  it("listConversations：群用项目名、项目经理取项目现在的；按最后一条消息排序", () => {
+  it("listConversations：每个项目经理一行，用它的名字；项目按对话找，文件夹主文件夹在前；按最后一条消息排序", () => {
     const s = loaded({
       pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],
       projects: [makeProject({ id: 1, name: "foo", pmId: 2, conversationId: 2 })],
-      folders: [makeFolder({ projectId: 1, path: "/work/foo" })],
+      folders: [makeFolder({ id: 2, projectId: 1, path: "/work/docs", isMain: false }), makeFolder({ id: 1, projectId: 1, path: "/work/foo" })],
       conversations: [
         makeConvSnapshot([makeMessage({ id: 1, createdAt: 5_000 })], { conversation: { id: 1, pmId: 1 } }),
-        makeConvSnapshot([makeMessage({ id: 2, conversationId: 2, createdAt: 9_000 })], {
-          conversation: makeGroupConversation({ id: 2, pmId: 1, projectId: 1, title: "旧标题" }),
-        }),
+        makeConvSnapshot([makeMessage({ id: 2, conversationId: 2, createdAt: 9_000 })], { conversation: { id: 2, pmId: 2, title: "旧标题" } }),
       ],
     });
-    const [group, direct] = listConversations(s);
-    expect(group).toMatchObject({ id: 2, kind: "project_group", name: "foo" });
-    expect(group?.pm?.name).toBe("阿周");
-    expect(group?.folders.map((f) => f.path)).toEqual(["/work/foo"]);
-    expect(direct).toMatchObject({ id: 1, kind: "pm", name: "小林" });
-    expect(direct?.folders).toEqual([]);
+    const [zhou, lin] = listConversations(s);
+    expect(zhou).toMatchObject({ id: 2, name: "阿周", project: { name: "foo" } });
+    expect(zhou?.folders.map((f) => f.path)).toEqual(["/work/foo", "/work/docs"]);
+    expect(lin).toMatchObject({ id: 1, name: "小林", project: null });
+    expect(lin?.folders).toEqual([]);
   });
 });

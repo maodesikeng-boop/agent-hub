@@ -2,31 +2,28 @@
 import {
   isQuotaExhausted,
   type ConversationId,
-  type ConversationKind,
   type HealthEntry,
   type Message,
   type Pm,
-  type PmId,
   type Project,
   type ProjectFolder,
   type SessionState,
 } from "../shared/index.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 
+/** 左栏的一行：一个项目经理和它唯一的那个对话（11-03 起不再有项目群）。 */
 export interface ConversationEntry {
   id: ConversationId;
-  kind: ConversationKind;
-  /** 私聊是项目经理的名字，群是项目名。 */
+  /** 项目经理的名字；找不到项目经理（还没同步）用对话标题。 */
   name: string;
   /** 头像的颜色取自它。 */
   avatarKey: number;
   lastMessage: Message | null;
   lastAt: number;
-  /** 私聊是对方；群是项目现在的项目经理（换过人就是新的）。找不到是 null。 */
   pm: Pm | null;
-  /** 只有群有。 */
+  /** 它的项目；还没有是 null。 */
   project: Project | null;
-  /** 群里项目没移除的文件夹，主文件夹在前。私聊是空的。 */
+  /** 项目没移除的文件夹，主文件夹在前。没有项目是空的。 */
   folders: ProjectFolder[];
 }
 
@@ -41,17 +38,12 @@ export function listConversations(state: HubState): ConversationEntry[] {
     .map((view): ConversationEntry => {
       const { conversation } = view;
       const last = view.messages.at(-1);
-      const project =
-        conversation.kind === "project_group"
-          ? (state.projects.find((p) => p.id === conversation.projectId) ?? null)
-          : null;
-      const pm = findPm(state.pms, project?.pmId ?? conversation.pmId);
-      const isGroup = conversation.kind === "project_group";
+      const pm = conversation.pmId === null ? null : (state.pms.find((p) => p.id === conversation.pmId) ?? null);
+      const project = state.projects.find((p) => p.conversationId === conversation.id) ?? null;
       return {
         id: conversation.id,
-        kind: conversation.kind,
-        name: isGroup ? (project?.name ?? conversation.title) : (pm?.name ?? conversation.title),
-        avatarKey: isGroup ? (project?.id ?? conversation.id) : (pm?.id ?? conversation.id),
+        name: pm?.name ?? conversation.title,
+        avatarKey: pm?.id ?? conversation.id,
         lastMessage: previewMessage(view.messages),
         lastAt: last?.createdAt ?? conversation.createdAt,
         pm,
@@ -64,29 +56,7 @@ export function listConversations(state: HubState): ConversationEntry[] {
     .toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id);
 }
 
-function findPm(pms: Pm[], id: PmId | null): Pm | null {
-  return id === null ? null : (pms.find((p) => p.id === id) ?? null);
-}
-
-/**
- * 一条消息是哪个项目经理说的：按消息所属会话的 pmId（换项目经理后旧一代会话的话仍是原来那位）。
- * 没有会话、会话还没同步、会话不属于项目经理（总助、Worker）就返回 null，调用方用对话现在的项目经理兜底。
- */
-export function pmOfMessage(state: HubState, message: Message): Pm | null {
-  if (message.sessionId === null) return null;
-  const session = state.sessions.find((s) => s.sessionId === message.sessionId);
-  return findPm(state.pms, session?.pmId ?? null);
-}
-
-/** 一个项目经理现在管着的项目。 */
-export function projectsOf(state: HubState, pmId: PmId): Project[] {
-  return state.projects.filter((p) => p.pmId === pmId);
-}
-
-/**
- * 这个对话的当前会话：generation 最大的那一代（换项目经理后旧一代还会回完最后一轮，不拿它显示）。
- * 不按会话编号、不按推送先后。
- */
+/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。 */
 export function sessionOf(state: HubState, conversationId: ConversationId): SessionState | null {
   let current: SessionState | null = null;
   for (const s of state.sessions) {

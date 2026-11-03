@@ -19,11 +19,7 @@ export interface SessionStartParams {
 
 /** 给会话发消息。文字执行时再从 messages 里读，不存两份。处理函数调 driver.send。 */
 export interface SessionSendParams {
-  /**
-   * 登记时这个对话最新一代的会话。换项目经理时，账本把这个群里还是 queued 的消息的 session.send 改指新一代
-   * （同一个去重键，UPSERT 只改参数）；正在执行的那一次撞上 session_ended 算一次失败，下一次重试就用新参数。
-   * retryMessage 重新登记时也取最新一代。
-   */
+  /** 登记时这个对话最新一代的会话。retryMessage 重新登记时也取最新一代（同一个去重键，UPSERT 只改参数）。 */
   sessionId: SessionId;
   messageId: MessageId;
   source: "user" | "system";
@@ -35,8 +31,8 @@ export interface SessionSendParams {
 }
 
 /**
- * 结束会话（M2，换项目经理后关掉旧一代）。处理函数调 driver.end(sessionId)：正在跑就等这一轮回完再关。
- * 账本在交接的同一个事务里登记。
+ * 结束会话。处理函数调 driver.end(sessionId)：正在跑就等这一轮回完再关，然后作废令牌。
+ * M2 原来是交接后关掉旧一代用的；11-03 拿掉交接后账本里暂时没有登记它的地方，留给 M3 结束 Worker 会话。
  */
 export interface SessionEndParams {
   sessionId: SessionId;

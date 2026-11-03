@@ -9,7 +9,6 @@ import {
   ConversationNotFoundError,
   LEDGER_ERROR_HTTP_STATUS,
   LedgerRequestError,
-  MAX_DESCRIPTION_CHARS,
   MAX_MESSAGE_BYTES,
   MAX_MODEL_CHARS,
   MAX_NAME_CHARS,
@@ -23,8 +22,6 @@ import {
   type ApiErrorBody,
   type CreatePmRequest,
   type CreatePmResponse,
-  type CreateProjectRequest,
-  type CreateProjectResponse,
   type EditPersonaRequest,
   type EditPersonaResponse,
   type Ledger,
@@ -131,7 +128,7 @@ function requireBoundedChars(value: unknown, what: string, maxChars: number): st
 }
 
 function parseCreatePmBody(body: unknown): CreatePmRequest {
-  const raw = parseObjectBody(body, ["name", "mode", "defaultModel", "persona"]);
+  const raw = parseObjectBody(body, ["name", "mode", "defaultModel", "persona", "folder"]);
   const input: CreatePmRequest = {
     name: requireName(raw.name, "name"),
     mode: requireMode(raw.mode),
@@ -140,18 +137,12 @@ function parseCreatePmBody(body: unknown): CreatePmRequest {
   if (raw.defaultModel !== undefined) {
     input.defaultModel = raw.defaultModel === null ? null : requireBoundedChars(raw.defaultModel, "defaultModel", MAX_MODEL_CHARS);
   }
-  return input;
-}
-
-function parseCreateProjectBody(body: unknown): CreateProjectRequest {
-  const raw = parseObjectBody(body, ["name", "folder", "pmId", "description"]);
-  const folder = requireBoundedBytes(raw.folder, "folder", MAX_PATH_BYTES);
-  if (folder.trim() === "" || folder.includes("\u0000")) throw new HttpError(400, "folder must be a non-empty path");
-  if (typeof raw.pmId !== "number" || !Number.isSafeInteger(raw.pmId) || raw.pmId <= 0) {
-    throw new HttpError(400, "pmId must be a positive integer");
+  // 主文件夹可选；给了就必须是个非空路径（存不存在、是不是目录由账本查）
+  if (raw.folder !== undefined) {
+    const folder = requireBoundedBytes(raw.folder, "folder", MAX_PATH_BYTES);
+    if (folder.trim() === "" || folder.includes("\u0000")) throw new HttpError(400, "folder must be a non-empty path");
+    input.folder = folder;
   }
-  const input: CreateProjectRequest = { name: requireName(raw.name, "name"), folder, pmId: raw.pmId };
-  if (raw.description !== undefined) input.description = requireBoundedChars(raw.description, "description", MAX_DESCRIPTION_CHARS);
   return input;
 }
 
@@ -272,13 +263,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post(API_PATHS.pms, async (req, reply) => {
       const result = ledger.createPm(parseCreatePmBody(req.body));
       return reply.code(201).send({ pmId: result.pm.id, conversationId: result.conversation.id } satisfies CreatePmResponse);
-    });
-
-    routes.post(API_PATHS.projects, async (req, reply) => {
-      const result = ledger.createProject(parseCreateProjectBody(req.body), { kind: "user" });
-      return reply
-        .code(201)
-        .send({ projectId: result.project.id, conversationId: result.conversation.id } satisfies CreateProjectResponse);
     });
 
     routes.get("/api/pms/:id/persona", async (req): Promise<PersonaResponse> => {

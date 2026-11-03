@@ -15,8 +15,6 @@ export interface HubPaths {
   pmHomeDir: string;
   /** state/personas/：性格设定的副本 pm-<编号>.md（见 personaFilePath）。 */
   personasDir: string;
-  /** state/handoffs/：交接正文 <项目编号>/<交接编号>-<时间>.md（见 handoffFilePath）。 */
-  handoffsDir: string;
   /** run/：只有守护进程在跑时才有内容，权限 0700（设计第 6.1 节）。 */
   runDir: string;
   /**
@@ -45,7 +43,6 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     sessionLogsDir: join(logsDir, "sessions"),
     pmHomeDir: join(home, "pm-home"),
     personasDir: join(stateDir, "personas"),
-    handoffsDir: join(stateDir, "handoffs"),
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
     hubBinDir: join(home, "run", "bin"),
@@ -56,11 +53,6 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {
   return join(personasDir, `pm-${pmId}.md`);
-}
-
-/** 一份交接的正文文件：<handoffsDir>/<项目编号>/<交接编号>-<UTC 时间，冒号和点换成 ->.md。交接编号唯一，同一毫秒的两次交接也不撞名。 */
-export function handoffFilePath(handoffsDir: string, projectId: number, handoffId: number, createdAt: number): string {
-  return join(handoffsDir, String(projectId), `${handoffId}-${new Date(createdAt).toISOString().replace(/[:.]/g, "-")}.md`);
 }
 
 /**

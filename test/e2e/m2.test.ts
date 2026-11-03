@@ -1,13 +1,14 @@
-// M2 W6 端到端（m2-plan 第 4 节“W6 组装 + 端到端”的测试表，外加交接后旧令牌 401、重启后旧 hub.sock 被替换、hub 请求 15 秒超时）：
+// M2 端到端（11-03 起一个项目经理就是一个会话；外加重启后旧 hub.sock 被替换、老库升级、hub 请求 15 秒超时）：
 // 真守护进程 + 假 claude（剧本里的 bash 步骤真的跑 run/bin/hub），临时数据目录。
 // 慢测（hub 请求 15 秒超时，要等 15 秒以上）默认不跑：AGENT_HUB_SLOW_TESTS=1 pnpm vitest run test/e2e/m2.test.ts
 import { request } from "node:http";
 import { connect } from "node:net";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, SYSTEM_MESSAGE_PREFIX, type Message, type StateSnapshot } from "../../src/shared/index.ts";
-import { openDatabase } from "../../src/daemon/store/index.ts";
+import { HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
   agentTexts,
@@ -33,6 +34,7 @@ async function boot(options?: Parameters<E2eEnv["start"]>[0]) {
   const daemon = await env.start(options);
   const client = await Client.login(daemon);
   const state = await client.state();
+  // 第一次启动自动建的项目经理（还没有项目）和它唯一的对话
   const privateId = state.conversations[0]!.conversation.id;
   const pmId = state.pms[0]!.id;
   return { daemon, client, state, privateId, pmId };
@@ -52,12 +54,6 @@ function folder(name: string): string {
 
 const real = (path: string) => realpathSync.native(path);
 const hubSock = () => join(env.home, "run", "hub.sock");
-
-function groupOf(state: StateSnapshot, projectName: string): number {
-  const project = state.projects.find((p) => p.name === projectName);
-  if (!project) throw new Error(`no project ${projectName}`);
-  return project.conversationId;
-}
 
 /** 这个对话的会话，按代从小到大。 */
 function sessionsOf(state: StateSnapshot, conversationId: number) {
@@ -120,108 +116,166 @@ function rawHub(token: string, command: string, body: unknown): Promise<{ status
 
 const tokenOf = (pid: number) => env.envs().find((e) => e.pid === pid)!.env.HUB_TOKEN!;
 
-/** 交接（小林 → 阿周）前后的场景：foo 群里一轮里跑 hub project assign，交接正文从 heredoc 进来。 */
-async function handoffScene(extraTurns: object[] = [], leadingTurns: object[] = []) {
-  env = makeEnv();
-  const foo = folder("foo");
-  env.setScript({
-    turns: [
-      ...leadingTurns,
-      {
-        steps: [{ bash: "hub project assign foo --to 阿周 --stdin <<'EOF'\n发布日期定在周五。$HOME `x`\nEOF" }, { sleepMs: 300 }, { text: "交接好了" }],
-      },
-      ...extraTurns,
-    ],
-    defaultTurn: quick("发布日期是周五"),
-  });
-  const booted = await boot();
-  const { client, pmId } = booted;
-  const zhou = await client.createPm({ name: "阿周", mode: "hands_on", persona: "阿周的习惯" });
-  const created = await client.createProject({ name: "foo", folder: foo, pmId });
-  const before = await client.state();
-  const [oldSession] = sessionsOf(before, created.conversationId);
-  const ws = await client.ws(before.seq);
-  return { ...booted, foo, zhou, groupId: created.conversationId, oldSessionId: oldSession!.sessionId, ws };
+/** 建一个带主文件夹的项目经理，返回它的编号、对话、会话。 */
+async function pmWithProject(client: Client, name: string, dir: string) {
+  const { pmId, conversationId } = await client.createPm({ name, mode: "hands_on", persona: `${name}的习惯`, folder: dir });
+  const sessionId = sessionsOf(await client.state(), conversationId)[0]!.sessionId;
+  return { pmId, conversationId, sessionId };
+}
+
+/**
+ * 在数据目录里放一个 M2 开发时的库（user_version 2）：默认项目经理（对话 1、会话 1，cwd 是它的空目录），
+ * 一个项目群 foo（对话 2、会话 2，cwd 是 foo）和群里的两条消息：一条已回复，一条还在排队（动作没执行）。
+ */
+function seedM2DevDatabase(foo: string): void {
+  const stateDir = join(env.home, "state");
+  mkdirSync(stateDir, { recursive: true });
+  const pmHome = join(env.home, "pm-home", "1");
+  mkdirSync(pmHome, { recursive: true });
+  const upTo2 = mkdtempSync(join(tmpdir(), "agent-hub-m2-migrations-"));
+  for (const name of readdirSync(DEFAULT_MIGRATIONS_DIR)) {
+    if (/^000[12]_.*\.sql$/.test(name)) copyFileSync(join(DEFAULT_MIGRATIONS_DIR, name), join(upTo2, name));
+  }
+  const db = openDatabase(join(stateDir, "hub.sqlite"));
+  try {
+    migrate(db, upTo2);
+    db.exec(`
+      INSERT INTO pms (id, name, mode, created_at) VALUES (1, '项目经理', 'manage_only', 10);
+      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (1, 'pm', 1, '项目经理', 10);
+      INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor_session_id, cwd, created_at, updated_at)
+        VALUES (1, 'pm', 1, 1, 'aaaaaaaa-0000-4000-8000-000000000001', '${pmHome}', 10, 10);
+      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (2, 'project_group', 1, 'foo', 20);
+      INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (1, 'foo', 1, 2, 20, 20);
+      UPDATE conversations SET project_id = 1 WHERE id = 2;
+      INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (1, '${foo}', 1, 20);
+      INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor_session_id, cwd, created_at, updated_at)
+        VALUES (2, 'pm', 2, 1, 'aaaaaaaa-0000-4000-8000-000000000002', '${foo}', 20, 20);
+      INSERT INTO messages (id, conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
+        VALUES (1, 2, 2, 'user', 'text', '群里说过的话', 'client:2:a', 'replied', 21, 21);
+      INSERT INTO messages (id, conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
+        VALUES (2, 2, 2, 'user', 'text', '群里还没发的', 'client:2:b', 'queued', 22, 22);
+      INSERT INTO actions (type, dedupe_key, params, status, next_attempt_at, created_at, updated_at)
+        VALUES ('session.send', '2', '{"sessionId":2,"messageId":2,"source":"user"}', 'pending', 22, 22, 22);
+    `);
+  } finally {
+    db.close();
+  }
 }
 
 // 每条要起一两次真守护进程，CI 上比本地慢：默认的 5 秒不够
-describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
-  it("一句话建项目：私聊里剧本跑 hub project create，WebSocket 收到 project.created，群里“项目已建好”，hub_calls 一行", async () => {
+describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20_000 }, () => {
+  it("一句话建项目：会话里剧本跑 hub project create，推 project.created，对话里“项目已建好”，hub_calls 一行；下一条消息前按主文件夹重启", async () => {
     env = makeEnv();
     const foo = folder("foo");
-    env.setScript({ turns: [{ steps: [{ bash: `hub project create --name foo --folder ${foo}` }, { text: "建好了" }] }] });
+    env.setScript({ turns: [{ steps: [{ bash: `hub project create --folder ${foo}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
     const { daemon, client, state, privateId, pmId } = await boot();
     const ws = await client.ws(state.seq);
-    const id = await client.post(privateId, `在 ${foo} 建一个叫 foo 的项目`);
+    const id = await client.post(privateId, `在 ${foo} 建项目`);
     await waitForStatus(client, id, "replied");
 
     const [run] = env.bashRuns();
     expect(run).toMatchObject({ exitCode: 0 });
-    expect(run!.output).toContain("foo");
+    expect(run!.output).toContain("已建好项目“foo”");
     const created = await waitUntil("project.created over ws", () =>
       ws.messages.flatMap((m) => (m.type === "project.created" ? [m.data.project] : [])).at(0),
     );
-    expect(created).toMatchObject({ name: "foo", pmId });
+    expect(created).toMatchObject({ name: "foo", pmId, conversationId: privateId });
+    // 不另开对话、不另开会话
+    expect(ws.messages.some((m) => m.type === "conversation.created" || m.type === "session.created")).toBe(false);
     ws.close();
     const s = await client.state();
-    const group = s.conversations.find((c) => c.conversation.projectId === created.id)!;
-    expect(group.conversation.kind).toBe("project_group");
-    expect(group.messages).toEqual([
-      expect.objectContaining({ sender: "system", status: null, meta: expect.objectContaining({ event: "project.created", projectId: created.id }) }),
-    ]);
-    expect(group.messages[0]!.text).toMatch(/^项目已建好/);
+    expect(s.conversations.map((c) => c.conversation.id)).toEqual([privateId]);
+    const notice = messagesOf(s, privateId).find((m) => m.sender === "system")!;
+    expect(notice).toMatchObject({ status: null, meta: expect.objectContaining({ event: "project.created", projectId: created.id }) });
+    expect(notice.text).toMatch(/^项目已建好/);
     expect(s.folders).toEqual([expect.objectContaining({ projectId: created.id, path: real(foo), isMain: true })]);
-    // hub_calls：调用者是私聊的会话
-    const privateSession = sessionsOf(s, privateId)[0]!.sessionId;
+    const sessionId = sessionsOf(s, privateId)[0]!.sessionId;
     expect(query<{ session_id: number; command: string; ok: number }>("SELECT session_id, command, ok FROM hub_calls")).toEqual([
-      { session_id: privateSession, command: "project.create", ok: 1 },
+      { session_id: sessionId, command: "project.create", ok: 1 },
     ]);
+
+    const ask = await client.post(privateId, "这个文件夹里有什么");
+    await waitForStatus(client, ask, "replied");
+    const procs = procsOf(sessionId);
+    expect(procs).toHaveLength(2);
+    expect(procs[0]!.cwd).toBe(real(join(env.home, "pm-home", String(pmId))));
+    expect(procs[1]!.cwd).toBe(real(foo));
+    expect(procs[1]!.argv).toContain("--resume");
+    expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RELAUNCH_NOTE}\n\n这个文件夹里有什么`]);
+    // 提示词文件每次启动都重写（launch/<会话>/prompt.md），现在是有项目的那一份
+    expect(promptOf(procs[1]!.argv)).toContain(`主文件夹（工作目录）：${real(foo)}`);
     await terminate(daemon);
   });
 
-  it("群里聊：起的假 claude 工作目录是主文件夹的真实路径，提示词里有 foo；HUB_SOCK、设置文件、PATH 都对", async () => {
+  it("建项目经理时选主文件夹：第一条消息起就在主文件夹里跑，提示词里有项目；HUB_SOCK、设置文件、PATH 都对", async () => {
     env = makeEnv();
     const foo = folder("foo");
     env.setScript({ defaultTurn: quick("foo 里有一个 README") });
-    const { daemon, client, pmId } = await boot();
-    const { conversationId: groupId } = await client.createProject({ name: "foo", folder: foo, pmId, description: "记账小工具" });
-    const id = await client.post(groupId, "这个文件夹里有什么");
+    const { daemon, client } = await boot();
+    const zhou = await pmWithProject(client, "阿周", foo);
+    const s0 = await client.state();
+    expect(s0.projects).toEqual([expect.objectContaining({ name: "foo", pmId: zhou.pmId, conversationId: zhou.conversationId })]);
+    expect(messagesOf(s0, zhou.conversationId).map((m) => m.text)).toEqual([expect.stringMatching(/^项目已建好/)]);
+    const id = await client.post(zhou.conversationId, "这个文件夹里有什么");
     await waitForStatus(client, id, "replied");
-    expect(agentTexts(await client.state(), groupId)).toEqual(["foo 里有一个 README"]);
+    expect(agentTexts(await client.state(), zhou.conversationId)).toEqual(["foo 里有一个 README"]);
 
-    const [proc] = env.argvs();
+    const [proc] = procsOf(zhou.sessionId);
     expect(proc!.cwd).toBe(real(foo));
+    expect(proc!.argv).toContain("--session-id");
     const prompt = promptOf(proc!.argv);
-    expect(prompt).toContain("项目“foo”的项目群");
+    expect(prompt).toContain("名字叫“阿周”");
+    expect(prompt).toContain("- 项目：foo");
     expect(prompt).toContain(`主文件夹（工作目录）：${real(foo)}`);
-    expect(prompt).toContain("记账小工具");
     // agent 接口：HUB_SOCK 是真实路径；设置文件放行 hub 和这个 socket；run/bin 在 PATH 最前面
     const sock = real(hubSock());
-    const childEnv = env.envs()[0]!.env;
-    expect(childEnv!.HUB_SOCK).toBe(sock);
-    expect(childEnv!.HUB_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-    expect(childEnv!.PATH!.split(":")[0]).toBe(join(env.home, "run", "bin"));
+    const childEnv = env.envs().find((e) => e.pid === proc!.pid)!.env;
+    expect(childEnv.HUB_SOCK).toBe(sock);
+    expect(childEnv.HUB_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(childEnv.PATH!.split(":")[0]).toBe(join(env.home, "run", "bin"));
     const settings = JSON.parse(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")) as Record<string, unknown>;
     expect(JSON.stringify(settings)).toContain("Bash(hub:*)");
     expect(JSON.stringify(settings)).toContain(JSON.stringify(sock));
     // 令牌只在环境变量里，不落盘
-    expect(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")).not.toContain(childEnv!.HUB_TOKEN!);
+    expect(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")).not.toContain(childEnv.HUB_TOKEN!);
     expect(statSync(join(env.home, "run")).mode & 0o777).toBe(0o700);
     expect(statSync(hubSock()).mode & 0o777).toBe(0o600);
     await terminate(daemon);
   });
 
-  it("同时跑：同一个项目经理的两个群同时发，两个进程同时在跑，回复各进各的群", async () => {
+  it("已经有项目又要建：hub 退出码 1，“一个项目经理只管一个项目，请新建一个项目经理”；文件夹不存在：退出码 1，什么也没建", async () => {
+    env = makeEnv();
+    const foo = folder("foo");
+    env.setScript({ defaultTurn: quick("在") });
+    const { daemon, client, privateId } = await boot();
+    const zhou = await pmWithProject(client, "阿周", foo);
+    await warmUp(client, zhou.conversationId);
+    await warmUp(client, privateId);
+    const before = await client.state();
+
+    const again = await env.runHub(lastProcOf(zhou.sessionId).pid, ["project", "create", "--folder", folder("bar")]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain("一个项目经理只管一个项目，请新建一个项目经理");
+    const missing = await env.runHub(lastProcOf(sessionsOf(before, privateId)[0]!.sessionId).pid, ["project", "create", "--folder", join(env.dir, "nope")]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("文件夹不存在，请先建好");
+    const after = await client.state();
+    expect(after.projects).toEqual(before.projects);
+    expect(after.folders).toEqual(before.folders);
+    await terminate(daemon);
+  });
+
+  it("同时跑：两个项目经理各自的会话同时回答，两个进程同时在跑，回复各进各的对话", async () => {
     env = makeEnv();
     const foo = folder("foo");
     const bar = folder("bar");
     // 两个进程都卡在这一步，直到下面确认两条都在处理、再放行（不用睡固定时间：机器忙时第二个进程晚起几秒也错不过窗口）
     const gate = join(env.dir, "gate");
     env.setScript({ defaultTurn: { steps: [{ waitFile: gate }, { text: "看完了" }] } });
-    const { daemon, client, pmId } = await boot();
-    const fooGroup = (await client.createProject({ name: "foo", folder: foo, pmId })).conversationId;
-    const barGroup = (await client.createProject({ name: "bar", folder: bar, pmId })).conversationId;
-    const [a, b] = await Promise.all([client.post(fooGroup, "这个文件夹里有什么"), client.post(barGroup, "这个文件夹里有什么")]);
+    const { daemon, client } = await boot();
+    const lin = await pmWithProject(client, "小林", foo);
+    const zhou = await pmWithProject(client, "阿周", bar);
+    const [a, b] = await Promise.all([client.post(lin.conversationId, "这个文件夹里有什么"), client.post(zhou.conversationId, "这个文件夹里有什么")]);
     // 两条同时在处理
     await waitUntil("both processing", async () => {
       const s = await client.state();
@@ -231,166 +285,108 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     await waitForStatus(client, a, "replied");
     await waitForStatus(client, b, "replied");
     const s = await client.state();
-    expect(agentTexts(s, fooGroup)).toEqual(["看完了"]);
-    expect(agentTexts(s, barGroup)).toEqual(["看完了"]);
-    const fooSession = sessionsOf(s, fooGroup)[0]!.sessionId;
-    const barSession = sessionsOf(s, barGroup)[0]!.sessionId;
-    expect(procsOf(fooSession).map((p) => p.cwd)).toEqual([real(foo)]);
-    expect(procsOf(barSession).map((p) => p.cwd)).toEqual([real(bar)]);
+    expect(agentTexts(s, lin.conversationId)).toEqual(["看完了"]);
+    expect(agentTexts(s, zhou.conversationId)).toEqual(["看完了"]);
+    expect(procsOf(lin.sessionId).map((p) => p.cwd)).toEqual([real(foo)]);
+    expect(procsOf(zhou.sessionId).map((p) => p.cwd)).toEqual([real(bar)]);
     // 各自的消息进各自的进程
-    expect(env.stdinTextsOf(procsOf(fooSession)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
-    expect(env.stdinTextsOf(procsOf(barSession)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
+    expect(env.stdinTextsOf(procsOf(lin.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
+    expect(env.stdinTextsOf(procsOf(zhou.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
     await terminate(daemon);
   });
 
-  it("挂文件夹（群里自己挂）：剧本跑 hub project attach，再发一条：先按新参数重启（多一个 --add-dir），这条前面带 RELAUNCH_NOTE", async () => {
+  it("挂文件夹：剧本跑 hub project attach，再发一条：先按新参数重启（多一个 --add-dir），这条前面带 RELAUNCH_NOTE", async () => {
     env = makeEnv();
     const foo = folder("foo");
     const extra = folder("foo-docs");
-    env.setScript({ turns: [{ steps: [{ bash: `hub project attach foo ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
-    const { daemon, client, pmId } = await boot();
-    const groupId = (await client.createProject({ name: "foo", folder: foo, pmId })).conversationId;
-    const first = await client.post(groupId, `把 ${extra} 也挂上`);
+    env.setScript({ turns: [{ steps: [{ bash: `hub project attach ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
+    const { daemon, client } = await boot();
+    const zhou = await pmWithProject(client, "阿周", foo);
+    const first = await client.post(zhou.conversationId, `把 ${extra} 也挂上`);
     await waitForStatus(client, first, "replied");
     expect(env.bashRuns()).toEqual([expect.objectContaining({ exitCode: 0 })]);
     const s1 = await client.state();
-    expect(messagesOf(s1, groupId).find((m) => m.sender === "system" && m.meta?.event === "folder.attached")?.text).toContain(real(extra));
-    const second = await client.post(groupId, "看看里面有什么");
+    expect(messagesOf(s1, zhou.conversationId).find((m) => m.sender === "system" && m.meta?.event === "folder.attached")?.text).toContain(real(extra));
+    const second = await client.post(zhou.conversationId, "看看里面有什么");
     await waitForStatus(client, second, "replied");
 
-    const sessionId = sessionsOf(await client.state(), groupId)[0]!.sessionId;
-    const procs = procsOf(sessionId);
+    const procs = procsOf(zhou.sessionId);
     expect(procs).toHaveLength(2);
     expect(addDirsOf(procs[0]!.argv)).toEqual([]);
     expect(addDirsOf(procs[1]!.argv)).toEqual([real(extra)]);
     expect(procs[1]!.argv).toContain("--resume");
+    expect(procs[1]!.cwd).toBe(real(foo));
     expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RELAUNCH_NOTE}\n\n看看里面有什么`]);
-    // 自己挂的：不再单独给它发一条【系统】消息
+    // 是它自己挂的：不再单独给它发一条【系统】消息
     expect(env.stdinTexts().some((t) => t.includes("已挂上文件夹"))).toBe(false);
     await terminate(daemon);
   });
 
-  it("挂文件夹（在私聊里挂）：群里的 agent 收到“【系统】…文件夹…”，收之前按新参数重启；再发一条不再重启", async () => {
+  it("重启不丢：SIGTERM 再启动，项目、文件夹、聊天记录都在；会话用 --resume 在主文件夹里跑；旧 hub.sock 被替换，旧令牌作废", { timeout: 30_000 }, async () => {
     env = makeEnv();
     const foo = folder("foo");
     const extra = folder("foo-docs");
-    env.setScript({ turns: [quick("在"), { steps: [{ bash: `hub project attach foo ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("收到") });
-    const { daemon, client, pmId, privateId } = await boot();
-    const groupId = (await client.createProject({ name: "foo", folder: foo, pmId })).conversationId;
-    await warmUp(client, groupId);
-    await warmUp(client, privateId, `给 foo 挂上 ${extra}`);
-    const sessionId = sessionsOf(await client.state(), groupId)[0]!.sessionId;
-    await waitUntil("group relaunched with the system message", () =>
-      procsOf(sessionId).length === 2 && env.stdinTextsOf(procsOf(sessionId)[1]!.pid).length === 1 ? true : undefined,
-    );
-    const [, relaunched] = procsOf(sessionId);
-    expect(addDirsOf(relaunched!.argv)).toEqual([real(extra)]);
-    const [systemText] = env.stdinTextsOf(relaunched!.pid);
-    expect(systemText).toContain(SYSTEM_MESSAGE_PREFIX);
-    expect(systemText).toContain(real(extra));
-    const next = await client.post(groupId, "看看里面有什么");
-    await waitForStatus(client, next, "replied");
-    expect(procsOf(sessionId)).toHaveLength(2);
-    await terminate(daemon);
-  });
-
-  it("交接：旧进程这一轮回完后退出、会话 ended（推给网页）；群里再发起的是新一代，提示词里有交接正文；阿周私聊里有一条", async () => {
-    const { daemon, client, ws, groupId, oldSessionId, zhou } = await handoffScene();
-    const id = await client.post(groupId, "记住发布日期定在周五，然后把 foo 交给阿周");
-    await waitForStatus(client, id, "replied");
-    expect(env.bashRuns()).toEqual([expect.objectContaining({ exitCode: 0 })]);
-    const oldPid = lastProcOf(oldSessionId).pid;
-    // session.end：这一轮回完才关，状态 ended 推到网页
-    await waitUntil("old session ended over ws", () =>
-      ws.messages.some((m) => m.type === "session.status" && m.data.session.sessionId === oldSessionId && m.data.session.status === "ended")
-        ? true
-        : undefined,
-    );
-    await waitUntil("old claude exited", () => (isAlive(oldPid) ? undefined : true));
-    expect(env.log().filter((e) => e.pid === oldPid).map((e) => e.kind)).toContain("stdin_closed");
-    ws.close();
-
-    const s = await client.state();
-    const [old, next] = sessionsOf(s, groupId);
-    expect(old).toMatchObject({ status: "ended" });
-    expect(next).toMatchObject({ generation: 2 });
-    expect(s.projects.find((p) => p.name === "foo")!.pmId).toBe(zhou.pmId);
-    expect(messagesOf(s, groupId).find((m) => m.meta?.event === "project.reassigned")?.text).toMatch(/项目经理由项目经理换成阿周/);
-    expect(messagesOf(s, zhou.conversationId).find((m) => m.meta?.event === "project.reassigned")?.text).toMatch(/把 foo 交给了你/);
-
-    const ask = await client.post(groupId, "发布日期是哪天");
-    await waitForStatus(client, ask, "replied");
-    const proc = lastProcOf(next!.sessionId);
-    expect(proc.argv).toContain("--session-id");
-    expect(env.stdinTextsOf(proc.pid)).toEqual(["发布日期是哪天"]);
-    const prompt = promptOf(proc.argv);
-    expect(prompt).toContain("名字叫“阿周”");
-    expect(prompt).toContain("发布日期定在周五。$HOME `x`");
-    await terminate(daemon);
-  });
-
-  it("令牌作废：交接后用旧会话的令牌跑 hub status，退出码 1，HTTP 401；新一代的令牌照常能用", async () => {
-    const { daemon, client, groupId, oldSessionId } = await handoffScene();
-    const id = await client.post(groupId, "把 foo 交给阿周");
-    await waitForStatus(client, id, "replied");
-    await waitUntil("old session ended", async () =>
-      sessionsOf(await client.state(), groupId)[0]!.status === "ended" ? true : undefined,
-    );
-    const oldPid = lastProcOf(oldSessionId).pid;
-    const denied = await env.runHub(oldPid, ["status"]);
-    expect(denied.code).toBe(1);
-    expect(denied.stderr).toContain("令牌");
-    expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
-
-    const ask = await client.post(groupId, "你是谁");
-    await waitForStatus(client, ask, "replied");
-    const newSession = sessionsOf(await client.state(), groupId)[1]!.sessionId;
-    const ok = await env.runHub(lastProcOf(newSession).pid, ["status"]);
-    expect(ok.code).toBe(0);
-    expect(ok.stdout).toContain("阿周");
-    await terminate(daemon);
-  });
-
-  it("重启不丢：SIGTERM 再启动，项目、群、文件夹、交接都在；群会话用 --resume；旧 hub.sock 被替换，旧令牌作废", { timeout: 30_000 }, async () => {
-    // 剧本按顺序给各进程派回合：第一个回合留给私聊里的 warmUp，交接那个回合给群里
-    const scene = await handoffScene([], [quick("在")]);
-    const { client, groupId, privateId } = scene;
-    const extra = folder("foo-docs");
-    // 私聊里挂一个文件夹（替私聊的 agent 敲 hub）
-    await warmUp(client, privateId);
-    const privatePid = lastProcOf(sessionsOf(await client.state(), privateId)[0]!.sessionId).pid;
-    const attached = await env.runHub(privatePid, ["project", "attach", "foo", extra]);
-    expect(attached).toMatchObject({ code: 0, stderr: "" });
-    const assign = await client.post(groupId, "把 foo 交给阿周");
-    await waitForStatus(client, assign, "replied");
-    const ask = await client.post(groupId, "发布日期是哪天");
-    await waitForStatus(client, ask, "replied");
+    env.setScript({ defaultTurn: quick("在") });
+    const { daemon: first, client } = await boot();
+    const zhou = await pmWithProject(client, "阿周", foo);
+    await warmUp(client, zhou.conversationId);
+    const oldPid = lastProcOf(zhou.sessionId).pid;
+    expect(await env.runHub(oldPid, ["project", "attach", extra])).toMatchObject({ code: 0, stderr: "" });
     const before = await client.state();
-    const newSession = sessionsOf(before, groupId)[1]!;
-    const vendorBefore = argValue(lastProcOf(newSession.sessionId).argv, "--session-id");
+    const vendor = argValue(lastProcOf(zhou.sessionId).argv, "--session-id");
     const sockIno = statSync(hubSock()).ino;
 
-    expect(await terminate(scene.daemon)).toEqual({ code: 0, signal: null });
+    expect(await terminate(first)).toEqual({ code: 0, signal: null });
     expect(existsSync(hubSock())).toBe(false);
     const daemon = await env.start();
     const c2 = client.withPort(daemon.port);
     const after = await c2.state();
     expect(after.projects).toEqual(before.projects);
     expect(after.folders).toEqual(before.folders);
-    expect(after.folders.map((f) => f.path)).toEqual([real(scene.foo), real(extra)]);
-    expect(messagesOf(after, groupId).map((m: Message) => m.id)).toEqual(messagesOf(before, groupId).map((m) => m.id));
-    expect(query<{ n: number }>("SELECT COUNT(*) AS n FROM handoffs")).toEqual([{ n: 1 }]);
+    expect(after.folders.map((f) => f.path)).toEqual([real(foo), real(extra)]);
+    expect(messagesOf(after, zhou.conversationId).map((m: Message) => m.id)).toEqual(messagesOf(before, zhou.conversationId).map((m) => m.id));
     expect(statSync(hubSock()).ino).not.toBe(sockIno);
     // 上次的令牌全部作废
-    expect((await env.runHub(privatePid, ["status"])).code).toBe(1);
+    expect((await env.runHub(oldPid, ["status"])).code).toBe(1);
+    expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
 
-    const again = await c2.post(groupId, "接着聊");
+    const again = await c2.post(zhou.conversationId, "接着聊");
     await waitForStatus(c2, again, "replied");
-    const proc = lastProcOf(newSession.sessionId);
-    expect(argValue(proc.argv, "--resume")).toBe(vendorBefore);
+    const proc = lastProcOf(zhou.sessionId);
+    expect(argValue(proc.argv, "--resume")).toBe(vendor);
+    expect(proc.cwd).toBe(real(foo));
     expect(addDirsOf(proc.argv)).toEqual([real(extra)]);
-    expect(promptOf(proc.argv)).toContain("发布日期定在周五");
-    expect((await env.runHub(proc.pid, ["status"])).code).toBe(0);
+    const status = await env.runHub(proc.pid, ["status"]);
+    expect(status.code).toBe(0);
+    expect(status.stdout).toContain(real(extra));
+    await terminate(daemon);
+  });
+
+  it("老库升级：M2 开发时建过项目群的库，启动后自动备份、迁移；网页上没有群，数据还在；项目经理的会话照常能聊，群里排队的那条不会再发", async () => {
+    env = makeEnv();
+    const foo = real(folder("foo"));
+    seedM2DevDatabase(foo);
+    env.setScript({ defaultTurn: quick("我在") });
+    const { daemon, client, state } = await boot();
+    expect(readdirSync(join(env.home, "state")).filter((f) => f.startsWith("hub.sqlite.bak-2-"))).toHaveLength(1);
+    expect(state.conversations.map((c) => c.conversation.id)).toEqual([1]);
+    expect(state.projects).toEqual([]);
+    expect(state.sessions.map((s) => s.sessionId)).toEqual([1]);
+    expect(query<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = 2")).toEqual([{ n: 2 }]);
+    expect(query<{ status: string }>("SELECT status FROM projects")).toEqual([{ status: "archived" }]);
+
+    const id = await client.post(1, "你好");
+    await waitForStatus(client, id, "replied");
+    expect(agentTexts(await client.state(), 1)).toEqual(["我在"]);
+    // 群里那条：会话已结束，标失败，没有为它起 claude
+    await waitUntil("queued group message settled", () =>
+      query<{ status: string }>("SELECT status FROM messages WHERE id = 2")[0]?.status === "failed" ? true : undefined,
+    );
+    expect(procsOf(2)).toEqual([]);
+    expect(env.stdinTexts()).toEqual(["你好"]);
+    // 同一个文件夹能在项目经理的会话里拿来建项目（老群的主文件夹不占路径）
+    const created = await env.runHub(lastProcOf(1).pid, ["project", "create", "--folder", foo]);
+    expect(created.code).toBe(0);
     await terminate(daemon);
   });
 
@@ -428,86 +424,6 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     expect(env.stdinTexts()).toEqual(["你好"]);
     // 不能重试的：已回复的 409
     expect(await client.retry(id)).toBe(409);
-    await terminate(daemon);
-  });
-
-  it("交接时排队的消息改指新一代：群里排队的那条发给新一代，不进旧进程；driver 的 health 没记 session_ended", async () => {
-    env = makeEnv();
-    const foo = folder("foo");
-    // 旧一代卡在 gate 上，等下面确认那条消息排在它后面了再放行去交接（不用睡固定时间：机器忙时发第二条可能晚过睡的时间）
-    const gate = join(env.dir, "gate");
-    env.setScript({
-      turns: [
-        {
-          steps: [
-            { waitFile: gate },
-            { bash: "hub project assign foo --to 阿周 --text '交接：发布日期定在周五'" },
-            { sleepMs: 1_000 },
-            { text: "交接好了" },
-          ],
-        },
-      ],
-      defaultTurn: quick("我是阿周，收到"),
-    });
-    const { daemon, client, pmId } = await boot();
-    await client.createPm({ name: "阿周", mode: "hands_on", persona: "阿周的习惯" });
-    const groupId = (await client.createProject({ name: "foo", folder: foo, pmId })).conversationId;
-    const oldSessionId = sessionsOf(await client.state(), groupId)[0]!.sessionId;
-    const first = await client.post(groupId, "把 foo 交给阿周");
-    await waitForStatus(client, first, "processing");
-    // 旧一代正忙：这条在排队，交接时改指新一代
-    const queued = await client.post(groupId, "顺便看看 README");
-    // 确实排在旧一代上（交接还没发生）：没排上，这条用例就没测到它说的东西，让它失败
-    expect(messageById(await client.state(), queued)!.sessionId).toBe(oldSessionId);
-    writeFileSync(gate, "");
-    await waitForStatus(client, first, "replied");
-    await waitForStatus(client, queued, "replied");
-    // 旧一代是在交接那一轮收尾时结束的，不一定赶在两条回复之前
-    await waitUntil("old session ended", async () => (sessionsOf(await client.state(), groupId)[0]?.status === "ended" ? true : undefined));
-
-    const s = await client.state();
-    const [old, next] = sessionsOf(s, groupId);
-    expect(old!.status).toBe("ended");
-    expect(messageById(s, queued)!.sessionId).toBe(next!.sessionId);
-    expect(env.stdinTextsOf(lastProcOf(oldSessionId).pid)).toEqual(["把 foo 交给阿周"]);
-    expect(env.stdinTextsOf(lastProcOf(next!.sessionId).pid)).toEqual(["顺便看看 README"]);
-    // 新一代不等旧一代把这一轮说完：两条回复谁先谁后不定
-    expect([...agentTexts(s, groupId)].sort()).toEqual(["交接好了", "我是阿周，收到"].sort());
-    for (const h of s.health) expect(h.lastError ?? "").not.toMatch(/session_ended/);
-    const actions = query<{ type: string; status: string; last_error: string | null }>("SELECT type, status, last_error FROM actions");
-    expect(actions.filter((a) => a.status !== "done")).toEqual([]);
-    expect(actions.some((a) => (a.last_error ?? "").includes("session_ended"))).toBe(false);
-    await terminate(daemon);
-  });
-
-  it("重启恰好打断交接那一轮：旧会话先结束，恢复登记的 session.send 撞上 session_ended，消息标已停止，不标失败", async () => {
-    env = makeEnv();
-    const foo = folder("foo");
-    env.setScript({
-      turns: [{ steps: [{ bash: "hub project assign foo --to 阿周 --text '交接：发布日期定在周五'" }, { sleepMs: 30_000 }, { text: "交接好了" }] }],
-      defaultTurn: quick("我是阿周，收到"),
-    });
-    const first = await boot();
-    await first.client.createPm({ name: "阿周", mode: "hands_on", persona: "阿周的习惯" });
-    const groupId = (await first.client.createProject({ name: "foo", folder: foo, pmId: first.pmId })).conversationId;
-    const oldSessionId = sessionsOf(await first.client.state(), groupId)[0]!.sessionId;
-    const id = await first.client.post(groupId, "把 foo 交给阿周");
-    // 交接已经做了（新一代建好），旧一代这一轮还没结束
-    await waitUntil("handoff done", async () => (sessionsOf(await first.client.state(), groupId).length === 2 ? true : undefined));
-    expect(messageById(await first.client.state(), id)!.status).toBe("processing");
-    first.daemon.child.kill("SIGKILL");
-    await first.daemon.exited;
-
-    const daemon = await env.start();
-    const client = first.client.withPort(daemon.port);
-    const stopped = await waitForStatus(client, id, "stopped");
-    expect(stopped.failureReason).toBeNull();
-    expect(stopped.sessionId).toBe(oldSessionId);
-    await waitUntil("actions settled", () => (query<{ status: string }>("SELECT status FROM actions").every((a) => a.status === "done") ? true : undefined));
-    const s = await client.state();
-    expect(sessionsOf(s, groupId).map((x) => x.status)).toEqual(["ended", expect.not.stringMatching(/^ended$/)]);
-    expect(messagesOf(s, groupId).filter((m) => m.status === "failed")).toEqual([]);
-    for (const h of s.health) expect(h.lastError ?? "").not.toMatch(/session_ended/);
     await terminate(daemon);
   });
 

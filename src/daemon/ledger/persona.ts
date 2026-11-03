@@ -1,5 +1,5 @@
-// 账本里的项目经理和性格设定：建项目经理、看和改性格设定、撤销、启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。
-// 也放按编号找项目经理、项目经理的会话这些别处要用的读法。
+// 账本里的项目经理和性格设定：建项目经理（不含项目，见 ledger.ts 的 createPm）、看和改性格设定、撤销、
+// 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, personaOrTemplate, utf8Bytes } from "../../shared/domain.ts";
@@ -52,6 +52,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     return row !== null && row.role === "pm" && row.pmId !== null ? (row as AgentSessionRow & { pmId: PmId }) : null;
   };
 
+  /** 项目经理唯一的那个对话（kind pm）。 */
   const privateConversation = (pmId: PmId): ConversationDbRow | null =>
     db.get<ConversationDbRow>("SELECT * FROM conversations WHERE kind = 'pm' AND pm_id = ? ORDER BY id LIMIT 1", pmId) ?? null;
 
@@ -137,8 +138,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     else if (editor.actor === "pm") text = `${pm.name}改了自己的做事习惯${modeNote}${reasonNote}`;
     else if (editor.actor === "file") text = `发现${pm.name}的性格设定文件被手改过，已按文件更新`;
     else text = `你改了${pm.name}的性格设定${modeNote}${reasonNote}`;
-    const conversationId =
-      editor.actor === "pm" && editor.session.conversationId !== null ? editor.session.conversationId : privateConversation(pm.id)?.id;
+    const conversationId = privateConversation(pm.id)?.id;
     if (conversationId !== undefined) {
       insertSystemMessage(p, conversationId, { event: "persona.changed", pmId: pm.id, personaChangeId: change.id, revertOf }, text);
     }
@@ -217,43 +217,41 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     return "recorded";
   };
 
-  const createPm = (input: CreatePmInput): CreatePmResult => {
+  /** 建项目经理、它唯一的对话和会话（cwd 是 pm-home/<编号>/），在调用方的事务里。项目另建（见 ledger.ts 的 createPm）。 */
+  const createPmIn = (p: Pending, input: CreatePmInput): Omit<CreatePmResult, "project"> => {
     const name = validName(input.name, "项目经理");
     const mode = validMode(input.mode);
     validPersonaText(input.persona);
     const defaultModel = input.defaultModel?.trim() || null;
     if (defaultModel !== null && [...defaultModel].length > MAX_MODEL_CHARS) throw fail("invalid", `模型名最多 ${MAX_MODEL_CHARS} 个字`);
-    const result = write((p) => {
-      if (db.get("SELECT 1 AS x FROM pms WHERE name = ?", name) !== undefined) {
-        throw fail("conflict", `已经有一个叫“${name}”的项目经理了，换个名字`);
-      }
-      const t = now();
-      const pmId = db.run(
-        "INSERT INTO pms (name, mode, default_model, persona, created_at) VALUES (?, ?, ?, ?, ?)",
-        name,
-        mode,
-        defaultModel,
-        input.persona,
-        t,
-      ).lastInsertRowid;
-      if (personasDir !== undefined) db.run("UPDATE pms SET persona_file = ? WHERE id = ?", personaFilePath(personasDir, pmId), pmId);
-      const pm = toPm(pmRow(pmId)!);
-      const conversationRow = db.get<ConversationDbRow>(
-        "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', ?, ?, ?) RETURNING *",
-        pmId,
-        name,
-        t,
-      )!;
-      const cwd = join(pmHomeRoot, String(pmId));
-      mkdirSync(cwd, { recursive: true });
-      p.changes.push({ type: "pm.created", data: { pm } });
-      const conversation = toConversation(conversationRow);
-      p.changes.push({ type: "conversation.created", data: { conversation } });
-      const session = insertSession(p, { conversationId: conversation.id, pmId, cwd, addDirs: [], generation: 1, model: defaultModel });
-      p.after.push(() => persistPersonaFile(pmId, input.persona));
-      return { pm, conversation, sessionId: session.id };
-    });
-    return result;
+    if (db.get("SELECT 1 AS x FROM pms WHERE name = ?", name) !== undefined) {
+      throw fail("conflict", `已经有一个叫“${name}”的项目经理了，换个名字`);
+    }
+    const t = now();
+    const pmId = db.run(
+      "INSERT INTO pms (name, mode, default_model, persona, created_at) VALUES (?, ?, ?, ?, ?)",
+      name,
+      mode,
+      defaultModel,
+      input.persona,
+      t,
+    ).lastInsertRowid;
+    if (personasDir !== undefined) db.run("UPDATE pms SET persona_file = ? WHERE id = ?", personaFilePath(personasDir, pmId), pmId);
+    const pm = toPm(pmRow(pmId)!);
+    const conversationRow = db.get<ConversationDbRow>(
+      "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', ?, ?, ?) RETURNING *",
+      pmId,
+      name,
+      t,
+    )!;
+    const cwd = join(pmHomeRoot, String(pmId));
+    mkdirSync(cwd, { recursive: true });
+    p.changes.push({ type: "pm.created", data: { pm } });
+    const conversation = toConversation(conversationRow);
+    p.changes.push({ type: "conversation.created", data: { conversation } });
+    const session = insertSession(p, { conversationId: conversation.id, pmId, cwd, addDirs: [], generation: 1, model: defaultModel });
+    p.after.push(() => persistPersonaFile(pmId, input.persona));
+    return { pm, conversation, sessionId: session.id };
   };
 
   const revertPersonaChange = (changeId: PersonaChangeId): EditPersonaResult => {
@@ -293,7 +291,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     getPersona,
     editPersonaChecked,
     editPersona,
-    createPm,
+    createPmIn,
     revertPersonaChange,
     syncPersonaFiles,
   };

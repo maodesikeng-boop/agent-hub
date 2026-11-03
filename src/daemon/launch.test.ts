@@ -6,7 +6,7 @@ import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildHubSettings, type AgentSessionRow, ty
 import { launchFingerprint } from "../shared/launch.ts";
 import { createPmLaunchPreparer } from "./launch.ts";
 import { buildLaunchPrompt } from "./prompt.ts";
-import { card, groupContext, privateContext } from "./test-helpers.ts";
+import { noProjectContext, projectContext } from "./test-helpers.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -61,8 +61,8 @@ describe("prepareLaunch（M2）", () => {
 
   beforeEach(() => {
     contexts = new Map([
-      [7, groupContext()],
-      [8, privateContext()],
+      [7, projectContext()],
+      [8, noProjectContext()],
     ]);
     issued = [];
     launchDir = join(dir, "launch");
@@ -80,7 +80,7 @@ describe("prepareLaunch（M2）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
     const mcpConfig = readFileSync(files.mcpConfigFile, "utf8");
-    expect(prompt).toBe(buildLaunchPrompt(groupContext(), dir));
+    expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
     expect(JSON.parse(settings)).toEqual(buildHubSettings(hubSock));
     expect(JSON.parse(mcpConfig)).toEqual({ mcpServers: {} });
     expect(files.fingerprint).toBe(launchFingerprint({ prompt, settings, mcpConfig }));
@@ -97,31 +97,22 @@ describe("prepareLaunch（M2）", () => {
     expect(issued).toEqual([7, 7]);
   });
 
-  it("群不随别的项目变：同一个项目经理又建了一个项目（managedProjects 多一个），群会话的 fingerprint 不变", async () => {
-    const prepare = make();
-    const before = await prepare(row(7));
-    const ctx = groupContext();
-    contexts.set(7, { ...ctx, managedProjects: [...ctx.managedProjects, card(9, "baz", "/work/baz")] });
-    expect((await prepare(row(7))).fingerprint).toBe(before.fingerprint);
-  });
-
-  it("私聊会跟着变：多管一个项目，私聊会话的 fingerprint 变了", async () => {
+  it("建了项目：还没有项目的会话 fingerprint 变了（下一条消息前按新提示词重启）", async () => {
     const prepare = make();
     const before = await prepare(row(8));
-    const ctx = privateContext();
-    contexts.set(8, { ...ctx, managedProjects: [...ctx.managedProjects, card(9, "baz", "/work/baz")] });
+    contexts.set(8, noProjectContext({ project: projectContext().project }));
     expect((await prepare(row(8))).fingerprint).not.toBe(before.fingerprint);
   });
 
-  it("性格设定、模式、文件夹、交接变了：fingerprint 都跟着变", async () => {
+  it("性格设定、模式、文件夹变了：fingerprint 都跟着变", async () => {
     const prepare = make();
     const base = (await prepare(row(7))).fingerprint;
-    const ctx = groupContext();
+    const ctx = projectContext();
     const variants: LaunchContext[] = [
       { ...ctx, pm: { ...ctx.pm, persona: "以后回复都用列表。" } },
       { ...ctx, pm: { ...ctx.pm, mode: "hands_on" } },
       { ...ctx, project: { ...ctx.project!, otherFolders: ["/work/foo-docs", "/work/more"] } },
-      { ...ctx, handoff: null },
+      { ...ctx, project: { ...ctx.project!, mainFolder: "/work/foo2" } },
     ];
     for (const v of variants) {
       contexts.set(7, v);

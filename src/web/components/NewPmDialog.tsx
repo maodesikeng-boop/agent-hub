@@ -21,6 +21,7 @@ import { ModeField } from "./ModeField.tsx";
 
 function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) => void }) {
   const [name, setName] = useState("");
+  const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
   const [model, setModel] = useState("");
   const [persona, setPersona] = useState(PM_PERSONA_TEMPLATE);
@@ -39,7 +40,14 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     setError(null);
     try {
       const defaultModel = model.trim();
-      const res = await postCreatePm({ name: cleanName, mode, ...(defaultModel ? { defaultModel } : {}), persona });
+      const mainFolder = folder.trim();
+      const res = await postCreatePm({
+        name: cleanName,
+        mode,
+        ...(defaultModel ? { defaultModel } : {}),
+        persona,
+        ...(mainFolder ? { folder: mainFolder } : {}),
+      });
       onCreated(res.conversationId);
     } catch (err) {
       setError(errorText(err));
@@ -51,6 +59,18 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     <form className="grid gap-5" onSubmit={(e) => void submit(e)}>
       <Field label="名字">
         {(id) => <Input id={id} value={name} autoFocus autoComplete="off" onChange={(e) => setName(e.target.value)} />}
+      </Field>
+      <Field label="主文件夹（可选）">
+        {(id) => (
+          <Input
+            id={id}
+            value={folder}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="~/code/my-project"
+            onChange={(e) => setFolder(e.target.value)}
+          />
+        )}
       </Field>
       <ModeField label="模式" value={mode} onChange={setMode} disabled={busy} />
       <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
@@ -71,7 +91,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
         </CollapsibleContent>
       </Collapsible>
       {error && (
-        <p role="alert" className="text-[13.5px] text-danger">
+        <p role="alert" className="text-[13.5px] text-danger [overflow-wrap:anywhere]">
           {error}
         </p>
       )}

@@ -1,4 +1,4 @@
-// M2 W5 网页：按 m2-plan 第 4 节“W5 网页”的测试表写，接口和 WebSocket 都是假的。
+// M2 网页（11-03 起一个项目经理就是一个会话）：接口和 WebSocket 都是假的。
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,6 @@ import {
   installFakeWebSocket,
   makeConvSnapshot,
   makeFolder,
-  makeGroupConversation,
   makeMessage,
   makePersonaChange,
   makePersonaView,
@@ -27,7 +26,7 @@ import {
 
 let api: FakeApi;
 
-async function boot(snapshot: StateSnapshot = twoAndTwo()) {
+async function boot(snapshot: StateSnapshot = twoPms()) {
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();
@@ -41,18 +40,14 @@ function push(ws: FakeWebSocket, msg: WsServerMessage) {
   act(() => ws.push(msg));
 }
 
-/** 两个项目经理、两个项目（foo 归小林，bar 归阿周）；各对话的最后一条消息时间：阿周私聊 > bar 群 > 小林私聊 > foo 群。 */
-function twoAndTwo(): StateSnapshot {
+/** 两个项目经理：小林（对话 1，项目 foo，文件夹 /work/foo、/work/docs），阿周（对话 2，还没有项目）。阿周最后一条消息更新。 */
+function twoPms(): StateSnapshot {
   return makeSnapshot({
     pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],
-    projects: [
-      makeProject({ id: 1, name: "foo", pmId: 1, conversationId: 3 }),
-      makeProject({ id: 2, name: "bar", pmId: 2, conversationId: 4 }),
-    ],
+    projects: [makeProject({ id: 1, name: "foo", pmId: 1, conversationId: 1 })],
     folders: [
-      makeFolder({ id: 1, projectId: 1, path: "/work/foo", isMain: true }),
       makeFolder({ id: 2, projectId: 1, path: "/work/docs", isMain: false }),
-      makeFolder({ id: 3, projectId: 2, path: "/work/bar", isMain: true }),
+      makeFolder({ id: 1, projectId: 1, path: "/work/foo", isMain: true }),
     ],
     conversations: [
       makeConvSnapshot([makeMessage({ id: 1, conversationId: 1, text: "小林在", createdAt: 5_000 })], {
@@ -60,12 +55,6 @@ function twoAndTwo(): StateSnapshot {
       }),
       makeConvSnapshot([makeMessage({ id: 2, conversationId: 2, text: "阿周在", createdAt: 9_000 })], {
         conversation: { id: 2, pmId: 2, title: "阿周" },
-      }),
-      makeConvSnapshot([makeMessage({ id: 3, conversationId: 3, text: "foo 群的话", createdAt: 3_000 })], {
-        conversation: makeGroupConversation({ id: 3, pmId: 1, projectId: 1, title: "foo" }),
-      }),
-      makeConvSnapshot([makeMessage({ id: 4, conversationId: 4, text: "bar 群的话", createdAt: 7_000 })], {
-        conversation: makeGroupConversation({ id: 4, pmId: 2, projectId: 2, title: "bar" }),
       }),
     ],
   });
@@ -91,50 +80,14 @@ afterEach(() => {
 });
 
 describe("左栏", () => {
-  it("项目经理和项目群分两组；群头像是项目名首字；各组按最后一条消息时间从新到旧", async () => {
+  it("只列项目经理，每人一行：头像、名字、最后一条消息；按最后一条消息时间从新到旧；没有分组，也没有“新建项目”", async () => {
     await boot();
-    const pms = within(nav()).getByRole("region", { name: "项目经理" });
-    const groups = within(nav()).getByRole("region", { name: "项目群" });
-    const pmItems = within(pms).getAllByRole("button");
-    const groupItems = within(groups).getAllByRole("button");
-    expect(pmItems.map((b) => b.textContent)).toEqual([expect.stringContaining("阿周"), expect.stringContaining("小林")]);
-    expect(groupItems.map((b) => b.textContent)).toEqual([expect.stringContaining("bar"), expect.stringContaining("foo")]);
-    const avatar = groupItems[0]?.querySelector("[data-slot='group-avatar']");
-    expect(avatar).toHaveTextContent("b");
-    expect(groupItems[1]?.querySelector("[data-slot='group-avatar']")).toHaveTextContent("f");
-    // 项目经理私聊没有群头像
-    expect(pmItems[0]?.querySelector("[data-slot='group-avatar']")).toBeNull();
-  });
-
-  it("项目群显示项目名（不用对话标题）和群里最后一条消息", async () => {
-    const snap = twoAndTwo();
-    snap.projects = [makeProject({ id: 1, name: "新名字", pmId: 1, conversationId: 3 }), ...snap.projects.slice(1)];
-    await boot(snap);
-    expect(inNav(/新名字/)).toHaveTextContent("foo 群的话");
-  });
-
-  it("没有项目：不显示“项目群”一组", async () => {
-    await boot(makeSnapshot());
-    expect(within(nav()).queryByRole("region", { name: "项目群" })).not.toBeInTheDocument();
-  });
-
-  it("项目群找不到项目（还没同步）：用对话标题", async () => {
-    await boot(
-      makeSnapshot({
-        projects: [],
-        conversations: [makeConvSnapshot([], { conversation: makeGroupConversation({ id: 3, title: "孤儿群" }) })],
-      }),
-    );
-    expect(inNav(/孤儿群/)).toBeInTheDocument();
-  });
-
-  it("新项目：推 project.created 和 conversation.created，左栏马上多一个群", async () => {
-    const ws = await boot();
-    const project = makeProject({ id: 9, name: "baz", pmId: 1, conversationId: 9 });
-    push(ws, changeOf(11, "project.created", { project }));
-    push(ws, changeOf(12, "conversation.created", { conversation: makeGroupConversation({ id: 9, projectId: 9, title: "baz" }) }));
-    expect(inNav(/baz/)).toBeInTheDocument();
-    expect(within(within(nav()).getByRole("region", { name: "项目群" })).getAllByRole("button")).toHaveLength(3);
+    const items = within(nav()).getAllByRole("button");
+    expect(items.map((b) => b.textContent)).toEqual([expect.stringContaining("阿周在"), expect.stringContaining("小林在")]);
+    expect(items[0]).toHaveTextContent("阿周");
+    expect(within(nav()).queryByRole("region")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建项目" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建项目经理" })).toBeInTheDocument();
   });
 
   it("新项目经理：推 pm.created 和 conversation.created，左栏多一行", async () => {
@@ -197,6 +150,33 @@ describe("新建项目经理", () => {
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "hands_on", defaultModel: "opus", persona: "话少" });
   });
 
+  it("填了主文件夹：请求体带 folder（去掉首尾空白）；没填就不带", async () => {
+    const user = userEvent.setup();
+    await boot();
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+    await user.type(within(dialog).getByRole("textbox", { name: "主文件夹（可选）" }), "  ~/code/foo ");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", persona: PM_PERSONA_TEMPLATE, folder: "~/code/foo" });
+  });
+
+  it("主文件夹不存在（400）：表单里显示原因，不关表单，左栏不多", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.createPm = () => ({ status: 400, body: { error: "文件夹不存在，请先建好：/nope", code: "invalid" } });
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    await user.type(screen.getByRole("textbox", { name: "名字" }), "阿明");
+    await user.type(screen.getByRole("textbox", { name: "主文件夹（可选）" }), "/nope");
+    await user.click(screen.getByRole("button", { name: "创建" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("文件夹不存在，请先建好：/nope");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(within(nav()).getAllByRole("button")).toHaveLength(2);
+  });
+
   it("名字重复等失败（409）：表单里显示原因，不关，可以改了再交", async () => {
     const user = userEvent.setup();
     await boot();
@@ -234,231 +214,43 @@ describe("新建项目经理", () => {
   });
 });
 
-describe("新建项目", () => {
-  async function open(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: "新建项目" }));
-    return screen.getByRole("dialog", { name: "新建项目" });
-  }
-
-  it("填名字、路径，选项目经理，提交发 POST /api/projects；成功后跳到它的群", async () => {
-    const user = userEvent.setup();
-    const ws = await boot();
-    const dialog = await open(user);
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "~/code/baz");
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "项目经理" }), "阿周");
-    await user.click(within(dialog).getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(api.callsTo("POST", /^\/api\/projects$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/projects$/)[0]?.body).toEqual({ name: "baz", folder: "~/code/baz", pmId: 2 });
-    push(ws, changeOf(11, "project.created", { project: makeProject({ id: 60, name: "baz", pmId: 2, conversationId: 60 }) }));
-    push(ws, changeOf(12, "conversation.created", { conversation: makeGroupConversation({ id: 60, pmId: 2, projectId: 60, title: "baz" }) }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByRole("region", { name: "baz" })).toBeInTheDocument();
-  });
-
-  it("默认选中第一个项目经理；说明填了就一起发", async () => {
+describe("对话顶栏", () => {
+  it("有项目：顶栏有项目经理的名字和文件夹（主文件夹在前）；点头像打开资料页", async () => {
     const user = userEvent.setup();
     await boot();
-    const dialog = await open(user);
-    expect(within(dialog).getByRole("combobox", { name: "项目经理" })).toHaveValue("1");
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "/x");
-    await user.type(within(dialog).getByRole("textbox", { name: "说明（可选）" }), "做网站");
-    await user.click(within(dialog).getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(api.callsTo("POST", /^\/api\/projects$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/projects$/)[0]?.body).toEqual({ name: "baz", folder: "/x", pmId: 1, description: "做网站" });
-  });
-
-  it("名字或路径没填：不能提交", async () => {
-    const user = userEvent.setup();
-    await boot();
-    const dialog = await open(user);
-    const submit = within(dialog).getByRole("button", { name: "创建" });
-    expect(submit).toBeDisabled();
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    expect(submit).toBeDisabled();
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "/x");
-    expect(submit).toBeEnabled();
-  });
-
-  it("文件夹不存在等失败（400）：在表单里显示原因，不关表单，不新增群", async () => {
-    const user = userEvent.setup();
-    await boot();
-    api.createProject = () => ({ status: 400, body: { error: "文件夹不存在，请先建好：/nope", code: "invalid" } });
-    const dialog = await open(user);
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "/nope");
-    await user.click(within(dialog).getByRole("button", { name: "创建" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("文件夹不存在，请先建好：/nope");
-    expect(screen.getByRole("dialog", { name: "新建项目" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("textbox", { name: "文件夹" })).toHaveValue("/nope");
-    // 弹窗开着时背后的内容对读屏是隐藏的，所以带 hidden 去找
-    const sidebar = screen.getByRole("navigation", { name: "对话列表", hidden: true });
-    expect(within(sidebar).getAllByRole("button", { hidden: true })).toHaveLength(4);
-  });
-
-  it("还没有项目经理：不能提交", async () => {
-    const user = userEvent.setup();
-    await boot(makeSnapshot({ pms: [], conversations: [] }));
-    const dialog = await open(user);
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "/x");
-    expect(within(dialog).getByRole("button", { name: "创建" })).toBeDisabled();
-  });
-
-  it("提交中不能重复提交", async () => {
-    const user = userEvent.setup();
-    await boot();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    api.createProject = async () => {
-      await gate;
-      return { status: 201, body: { projectId: 60, conversationId: 60 } };
-    };
-    const dialog = await open(user);
-    await user.type(within(dialog).getByRole("textbox", { name: "项目名" }), "baz");
-    await user.type(within(dialog).getByRole("textbox", { name: "文件夹" }), "/x");
-    await user.click(within(dialog).getByRole("button", { name: "创建" }));
-    expect(within(dialog).getByRole("button", { name: "创建中" })).toBeDisabled();
-    release();
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(api.callsTo("POST", /^\/api\/projects$/)).toHaveLength(1);
-  });
-});
-
-describe("群页", () => {
-  it("顶栏有项目名、项目经理、文件夹列表", async () => {
-    const user = userEvent.setup();
-    await boot();
-    await user.click(inNav(/foo/));
-    expect(screen.getByRole("heading", { level: 1, name: "foo" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "查看 小林 的资料" })).toHaveTextContent("小林");
+    await user.click(inNav(/小林/));
+    expect(screen.getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
     const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
     expect(folders.map((f) => f.textContent)).toEqual(["/work/foo", "/work/docs"]);
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    expect(screen.getByRole("region", { name: "小林 的资料" })).toBeInTheDocument();
   });
 
-  it("私聊顶栏没有文件夹列表", async () => {
+  it("还没有项目：顶栏没有文件夹列表", async () => {
     await boot();
+    expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
   });
 
-  it("folders.updated：挂上、移除文件夹后顶栏马上跟着变", async () => {
-    const user = userEvent.setup();
+  it("在会话里建项目、挂上和移除文件夹：推 project.created、folders.updated，顶栏马上跟着变", async () => {
     const ws = await boot();
-    await user.click(inNav(/foo/));
-    push(ws, changeOf(11, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 1, projectId: 1, path: "/work/foo" }), makeFolder({ id: 9, projectId: 1, path: "/work/new", isMain: false })] }));
-    const list = () => within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
-    expect(list().map((f) => f.textContent)).toEqual(["/work/foo", "/work/new"]);
+    push(ws, changeOf(11, "project.created", { project: makeProject({ id: 2, name: "bar", pmId: 2, conversationId: 2 }) }));
+    push(ws, changeOf(12, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" })] }));
+    const list = () => within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem").map((f) => f.textContent);
+    expect(list()).toEqual(["/work/bar"]);
+    push(ws, changeOf(13, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" }), makeFolder({ id: 6, projectId: 2, path: "/work/more", isMain: false })] }));
+    expect(list()).toEqual(["/work/bar", "/work/more"]);
     // 别的项目的文件夹不动
-    push(ws, changeOf(12, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 1, projectId: 1, path: "/work/foo" })] }));
-    expect(list().map((f) => f.textContent)).toEqual(["/work/foo"]);
-    await user.click(inNav(/bar/));
-    expect(within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem").map((f) => f.textContent)).toEqual(["/work/bar"]);
+    push(ws, changeOf(14, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 1, projectId: 1, path: "/work/foo" })] }));
+    expect(list()).toEqual(["/work/bar", "/work/more"]);
   });
 
-  it("project.updated 换了项目经理：顶栏显示新的项目经理", async () => {
-    const user = userEvent.setup();
-    const ws = await boot();
-    await user.click(inNav(/foo/));
-    push(ws, changeOf(11, "project.updated", { project: makeProject({ id: 1, name: "foo", pmId: 2, conversationId: 3 }) }));
-    expect(screen.getByRole("button", { name: "查看 阿周 的资料" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "查看 小林 的资料" })).not.toBeInTheDocument();
-  });
-
-  it("群里 agent 的消息署项目经理的名字；输入框提示发给这个群", async () => {
+  it("agent 的消息署项目经理的名字；输入框提示发给它", async () => {
     const user = userEvent.setup();
     await boot();
-    await user.click(inNav(/foo/));
+    await user.click(inNav(/小林/));
     expect(within(log()).getByText("小林")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "输入消息" })).toHaveAttribute("placeholder", "给 foo 发消息");
-  });
-});
-
-describe("换项目经理后的消息署名", () => {
-  /** foo 群：第 1 代（小林，会话 10）说过话，已经交接给阿周（会话 11）。 */
-  function handedOver(extra: { lostSession?: boolean } = {}): StateSnapshot {
-    const base = twoAndTwo();
-    return {
-      ...base,
-      projects: base.projects.map((p) => (p.id === 1 ? { ...p, pmId: 2 } : p)),
-      conversations: base.conversations.map((c) =>
-        c.conversation.id === 3
-          ? makeConvSnapshot(
-              [
-                makeMessage({ id: 30, conversationId: 3, sessionId: 10, text: "小林说的话", createdAt: 1_000 }),
-                makeMessage({ id: 31, conversationId: 3, sessionId: 10, text: "小林又说一句", createdAt: 1_100 }),
-                makeSystemMessage({ id: 32, conversationId: 3, text: "项目经理由小林换成阿周，交接在这里：/h/1.md", createdAt: 2_000 }),
-                makeMessage({ id: 33, conversationId: 3, sessionId: extra.lostSession ? 99 : 11, text: "阿周说的话", createdAt: 3_000 }),
-              ],
-              { conversation: makeGroupConversation({ id: 3, pmId: 1, projectId: 1, title: "foo" }) },
-            )
-          : c,
-      ),
-      sessions: [
-        makeSession({ sessionId: 10, conversationId: 3, generation: 1, pmId: 1 }),
-        makeSession({ sessionId: 11, conversationId: 3, generation: 2, pmId: 2 }),
-      ],
-    };
-  }
-
-  /** 消息列表里每个 agent 署名（小林、阿周）和它头像旁边的话，按顺序。 */
-  function bylines(): string[] {
-    return within(log())
-      .getAllByRole("article")
-      .map((a) => a.textContent ?? "");
-  }
-
-  it("旧项目经理说过的话仍署旧名字，新项目经理说的署新名字", async () => {
-    const user = userEvent.setup();
-    await boot(handedOver());
-    await user.click(inNav(/foo/));
-    const lines = bylines();
-    expect(lines[0]).toContain("小林说的话");
-    expect(lines[0]).toContain("小林");
-    expect(lines[0]).not.toContain("阿周");
-    expect(lines.at(-1)).toContain("阿周说的话");
-    expect(lines.at(-1)).toContain("阿周");
-    expect(lines.at(-1)).not.toContain("小林");
-  });
-
-  it("同一个项目经理连着说的话只在第一条署名；换人后的第一条重新署名", async () => {
-    const user = userEvent.setup();
-    await boot(handedOver());
-    await user.click(inNav(/foo/));
-    // 小林：一次署名（两条话）；阿周：一次署名
-    expect(within(log()).getAllByText("小林")).toHaveLength(1);
-    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
-  });
-
-  it("消息的会话找不到（还没同步）：署群现在的项目经理，不崩", async () => {
-    const user = userEvent.setup();
-    await boot(handedOver({ lostSession: true }));
-    await user.click(inNav(/foo/));
-    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
-  });
-
-  it("推来换人后的新会话和新消息：新消息署新项目经理，已有的不变", async () => {
-    const user = userEvent.setup();
-    const base = twoAndTwo();
-    const ws = await boot({
-      ...base,
-      sessions: [makeSession({ sessionId: 10, conversationId: 3, generation: 1, pmId: 1 })],
-      conversations: base.conversations.map((c) =>
-        c.conversation.id === 3
-          ? makeConvSnapshot([makeMessage({ id: 30, conversationId: 3, sessionId: 10, text: "小林说的话" })], {
-              conversation: makeGroupConversation({ id: 3, pmId: 1, projectId: 1, title: "foo" }),
-            })
-          : c,
-      ),
-    });
-    await user.click(inNav(/foo/));
-    push(ws, changeOf(11, "project.updated", { project: makeProject({ id: 1, name: "foo", pmId: 2, conversationId: 3 }) }));
-    push(ws, sessionChange(12, makeSession({ sessionId: 11, conversationId: 3, generation: 2, pmId: 2 })));
-    push(ws, messageChange(13, "message.created", makeMessage({ id: 31, conversationId: 3, sessionId: 11, text: "阿周来了" })));
-    expect(within(log()).getAllByText("小林")).toHaveLength(1);
-    expect(within(log()).getAllByText("阿周")).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "输入消息" })).toHaveAttribute("placeholder", "给 小林 发消息");
   });
 });
 
@@ -467,9 +259,9 @@ describe("系统消息", () => {
     const ws = await boot(makeSnapshot());
     push(
       ws,
-      messageChange(11, "message.created", makeSystemMessage({ id: 3, text: "【系统】小林把 foo 交给了你", status: "queued" })),
+      messageChange(11, "message.created", makeSystemMessage({ id: 3, text: "【系统】已挂上文件夹 /x", status: "queued" })),
     );
-    const text = within(log()).getByText("小林把 foo 交给了你");
+    const text = within(log()).getByText("已挂上文件夹 /x");
     expect(text.closest("[data-side]")).toHaveAttribute("data-side", "center");
     expect(within(log()).queryByText(/【系统】/)).not.toBeInTheDocument();
     expect(within(log()).queryByText("排队中")).not.toBeInTheDocument();
@@ -556,7 +348,7 @@ describe("资料页", () => {
   };
   const oneChange = makePersonaChange({ id: 5, actor: "pm", textBefore: "旧", textAfter: "新", reason: "用户要列表" });
 
-  it("点头像打开：显示模式、性格设定正文、管着的项目、修改记录", async () => {
+  it("点头像打开：显示模式、性格设定正文、项目和文件夹、修改记录", async () => {
     const user = userEvent.setup();
     await boot();
     api.getPersona = () => ({
@@ -567,6 +359,10 @@ describe("资料页", () => {
     await waitFor(() => expect(within(page).getByRole("textbox", { name: "性格设定" })).toHaveValue("说大白话"));
     expect(within(page).getByRole("radio", { name: "自己也干活" })).toBeChecked();
     expect(within(page).getByText("foo")).toBeInTheDocument();
+    expect(within(within(page).getByRole("list", { name: "文件夹" })).getAllByRole("listitem").map((f) => f.textContent)).toEqual([
+      "/work/foo",
+      "/work/docs",
+    ]);
     const rows = within(within(page).getByRole("list", { name: "修改记录" })).getAllByRole("listitem");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("项目经理");
@@ -699,23 +495,24 @@ describe("资料页", () => {
     await waitFor(() => expect(within(page).getByRole("textbox", { name: "性格设定" })).toHaveValue("好了"));
   });
 
-  it("从群顶栏点项目经理名字也能打开；返回回到原来的对话", async () => {
+  it("还没有项目：项目一栏写“还没有”，没有文件夹；返回回到原来的对话", async () => {
     const user = userEvent.setup();
     await boot();
-    await user.click(inNav(/foo/));
-    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
-    expect(screen.getByRole("region", { name: "小林 的资料" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看 阿周 的资料" }));
+    const page = screen.getByRole("region", { name: "阿周 的资料" });
+    expect(within(page).getByText("还没有")).toBeInTheDocument();
+    expect(within(page).queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "返回" }));
-    expect(screen.getByRole("heading", { level: 1, name: "foo" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
   });
 
   it("打开资料页后点左栏的对话：回到对话", async () => {
     const user = userEvent.setup();
     await boot();
     await pmChat(user);
-    await user.click(inNav(/bar/));
+    await user.click(inNav(/阿周/));
     expect(screen.queryByRole("region", { name: "小林 的资料" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 1, name: "bar" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
   });
 });
 
@@ -789,18 +586,18 @@ describe("重试失败的消息", () => {
 });
 
 describe("当前会话取 generation 最大的一代", () => {
-  const groupSnapshot = (sessions: ReturnType<typeof makeSession>[]) =>
+  const generations = (sessions: ReturnType<typeof makeSession>[]) =>
     makeSnapshot({
       projects: [makeProject({ id: 1, name: "foo", pmId: 1, conversationId: 2 })],
       folders: [makeFolder()],
-      conversations: [makeConvSnapshot([], { conversation: makeGroupConversation({ id: 2 }) })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 2, pmId: 1 } })],
       sessions,
     });
 
   it("旧一代在跑、新一代空闲：不显示状态行和停止按钮", async () => {
     // 旧一代的会话编号反而更大，确认不是按编号取
     await boot(
-      groupSnapshot([
+      generations([
         makeSession({ sessionId: 9, conversationId: 2, generation: 1, status: "running", activity: "working", currentTool: "Bash" }),
         makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "idle", activity: "idle" }),
       ]),
@@ -811,7 +608,7 @@ describe("当前会话取 generation 最大的一代", () => {
 
   it("新一代在跑、旧一代空闲：显示新一代的状态；不管推送先后", async () => {
     const ws = await boot(
-      groupSnapshot([makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "running", activity: "working", currentTool: "Read" })]),
+      generations([makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "running", activity: "working", currentTool: "Read" })]),
     );
     expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Read");
     // 旧一代后推来“在跑”，不抢新一代的位置
@@ -823,9 +620,9 @@ describe("当前会话取 generation 最大的一代", () => {
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
   });
 
-  it("session.created：换项目经理后新一代出现，状态行跟着它", async () => {
+  it("session.created：新一代出现，状态行跟着它", async () => {
     const ws = await boot(
-      groupSnapshot([makeSession({ sessionId: 3, conversationId: 2, generation: 1, status: "running", activity: "working", currentTool: "Bash" })]),
+      generations([makeSession({ sessionId: 3, conversationId: 2, generation: 1, status: "running", activity: "working", currentTool: "Bash" })]),
     );
     expect(screen.getByRole("status", { name: "状态" })).toBeInTheDocument();
     push(ws, changeOf(11, "session.created", { session: makeSession({ sessionId: 4, conversationId: 2, generation: 2, status: "idle", activity: "idle" }) }));
@@ -865,7 +662,7 @@ describe("等额度", () => {
     await boot(
       makeSnapshot({
         projects: [makeProject({ id: 1, name: "foo", pmId: 1, conversationId: 2 })],
-        conversations: [makeConvSnapshot([], { conversation: makeGroupConversation({ id: 2 }) })],
+        conversations: [makeConvSnapshot([], { conversation: { id: 2, pmId: 1 } })],
         sessions: [
           makeSession({ sessionId: 9, conversationId: 2, generation: 1, rateLimit: { status: "rejected", resetsAt: null, windows: {} } }),
           makeSession({ sessionId: 3, conversationId: 2, generation: 2, rateLimit: { status: "allowed", resetsAt: null, windows: {} } }),

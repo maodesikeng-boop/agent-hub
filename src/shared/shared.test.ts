@@ -5,7 +5,6 @@ import {
   DRIVER_ERROR_CODES,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
-  HANDOFF_REASONS,
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_EXIT,
@@ -74,7 +73,7 @@ import type {
   PersonaView,
 } from "./index.ts";
 import { launchFingerprint } from "./launch.ts";
-import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, handoffFilePath, personaFilePath, resolveHubPaths } from "./paths.ts";
+import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, personaFilePath, resolveHubPaths } from "./paths.ts";
 
 describe("动作", () => {
   it("去重键：启动按（会话，第几代），发消息按消息编号", () => {
@@ -234,7 +233,7 @@ describe("数据目录", () => {
   });
 });
 
-// ---- M2：项目经理、项目、交接、性格设定、agent 接口 ----
+// ---- M2：项目经理、项目、性格设定、agent 接口 ----
 
 describe("M2：额度", () => {
   it("只有 rejected 算用完；allowed_warning 只是快到了", () => {
@@ -256,9 +255,8 @@ describe("M2：枚举", () => {
     expect(isOneOf(PM_MODES, "default")).toBe(false);
   });
 
-  it("项目状态、交接原因、改性格设定的人", () => {
+  it("项目状态、改性格设定的人", () => {
     expect(PROJECT_STATUSES).toEqual(["active", "archived", "deleted"]);
-    expect(HANDOFF_REASONS).toEqual(["reassign"]);
     expect(PERSONA_ACTORS).toEqual(["user", "pm", "file"]);
   });
 
@@ -327,8 +325,9 @@ describe("M2：系统消息", () => {
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "nope" } }))).toBeNull();
   });
 
-  it("所有系统消息事件都列出来了", () => {
-    expect(SYSTEM_EVENTS).toEqual(["project.created", "folder.attached", "folder.detached", "project.reassigned", "persona.changed"]);
+  it("所有系统消息事件都列出来了；11-03 拿掉的 project.reassigned 认不出（老数据当普通系统消息显示）", () => {
+    expect(SYSTEM_EVENTS).toEqual(["project.created", "folder.attached", "folder.detached", "persona.changed"]);
+    expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
 
   it("给 agent 看的系统消息以【系统】开头，网页显示时去掉", () => {
@@ -372,10 +371,10 @@ describe("M2：账本错误", () => {
     type Call = Ledger["hubCall"];
     expectTypeOf<Parameters<Call>[0]>().toEqualTypeOf<SessionId>();
     const typed = (ledger: Ledger) => {
-      const r = ledger.hubCall(1, "project.create", { name: "foo", folder: "/x" });
+      const r = ledger.hubCall(1, "project.create", { folder: "/x" });
       expectTypeOf(r.data).toEqualTypeOf<HubData<"project.create">>();
-      // @ts-expect-error project.assign 必须带交接正文
-      ledger.hubCall(1, "project.assign", { project: "foo", to: "阿周" });
+      // @ts-expect-error 11-03 拿掉了交接
+      ledger.hubCall(1, "project.assign", { project: "foo", to: "阿周", handoff: "x" });
     };
     expect(typed).toBeTypeOf("function");
   });
@@ -384,7 +383,7 @@ describe("M2：账本错误", () => {
 describe("M2：界面接口", () => {
   it("新路径", () => {
     expect(API_PATHS.pms).toBe("/api/pms");
-    expect(API_PATHS.projects).toBe("/api/projects");
+    expect("projects" in API_PATHS).toBe(false);
     expect(API_PATHS.persona(3)).toBe("/api/pms/3/persona");
     expect(API_PATHS.revertPersonaChange(9)).toBe("/api/persona-changes/9/revert");
     expect(API_PATHS.retryMessage(42)).toBe("/api/messages/42/retry");
@@ -399,7 +398,6 @@ describe("M2：界面接口", () => {
       "pm.created",
       "pm.updated",
       "project.created",
-      "project.updated",
       "folders.updated",
       "conversation.created",
       "session.created",
@@ -416,11 +414,9 @@ describe("M2：agent 接口", () => {
   it("命令、路径、环境变量", () => {
     expect(HUB_COMMANDS).toEqual([
       "status",
-      "pm.list",
       "project.create",
       "project.attach",
       "project.detach",
-      "project.assign",
       "persona.show",
       "persona.edit",
     ]);
@@ -451,23 +447,17 @@ describe("M2：agent 接口", () => {
 });
 
 describe("M2：数据目录", () => {
-  it("run/、hub.sock、hub 外壳目录、性格设定、交接", () => {
+  it("run/、hub.sock、hub 外壳目录、性格设定", () => {
     const paths = resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u");
     expect(paths.runDir).toBe("/tmp/x/run");
     expect(paths.hubSock).toBe("/tmp/x/run/hub.sock");
     expect(paths.hubBinDir).toBe("/tmp/x/run/bin");
     expect(paths.personasDir).toBe("/tmp/x/state/personas");
-    expect(paths.handoffsDir).toBe("/tmp/x/state/handoffs");
+    expect("handoffsDir" in paths).toBe(false);
   });
 
-  it("性格设定和交接文件的位置", () => {
+  it("性格设定文件的位置", () => {
     expect(personaFilePath("/s/personas", 3)).toBe("/s/personas/pm-3.md");
-    expect(handoffFilePath("/s/handoffs", 5, 12, Date.UTC(2026, 10, 3, 9, 8, 7, 6))).toBe("/s/handoffs/5/12-2026-11-03T09-08-07-006Z.md");
-  });
-
-  it("交接文件名带交接编号：同一个项目、同一毫秒的两次交接不会撞名", () => {
-    const at = Date.UTC(2026, 10, 3, 9, 8, 7, 6);
-    expect(handoffFilePath("/s/handoffs", 5, 1, at)).not.toBe(handoffFilePath("/s/handoffs", 5, 2, at));
   });
 });
 
@@ -478,7 +468,7 @@ describe("M2：会话状态带第几代", () => {
     expectTypeOf<SessionState["generation"]>().toEqualTypeOf<number>();
   });
 
-  it("SessionState 带 pmId：网页按消息的 sessionId 找到当时是哪个项目经理（总助、Worker 是 null）", () => {
+  it("SessionState 带 pmId（总助、Worker 是 null）", () => {
     expectTypeOf<SessionState["pmId"]>().toEqualTypeOf<PmId | null>();
   });
 });
@@ -508,13 +498,11 @@ describe("M2：健康状态", () => {
 });
 
 describe("M2：系统消息的去重键", () => {
-  it("按（对话，事件，相关编号）；同一份交接在群和私聊各一条，键不同", () => {
+  it("按（对话，事件，相关编号）", () => {
     expect(systemMessageDedupeKey(2, { event: "project.created", projectId: 1 })).toBe("system:2:project.created:1");
     expect(systemMessageDedupeKey(2, { event: "folder.attached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.attached:5");
     expect(systemMessageDedupeKey(2, { event: "folder.detached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.detached:5");
-    const reassigned = { event: "project.reassigned", projectId: 1, handoffId: 3, fromPmId: 1, toPmId: 2 } as const;
-    expect(systemMessageDedupeKey(2, reassigned)).toBe("system:2:project.reassigned:3");
-    expect(systemMessageDedupeKey(7, reassigned)).not.toBe(systemMessageDedupeKey(2, reassigned));
+    expect(systemMessageDedupeKey(7, { event: "project.created", projectId: 1 })).not.toBe(systemMessageDedupeKey(2, { event: "project.created", projectId: 1 }));
     expect(systemMessageDedupeKey(1, { event: "persona.changed", pmId: 1, personaChangeId: 9, revertOf: null })).toBe(
       "system:1:persona.changed:9",
     );
