@@ -18,6 +18,7 @@ import {
   type Unsubscribe,
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
+import { LOG_PREFIX } from "../shared/names.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
@@ -93,7 +94,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     try {
       await fn();
     } catch (error) {
-      log(`agent-hub: 关闭${what}时出错：${error instanceof Error ? error.message : String(error)}`);
+      log(`${LOG_PREFIX} 关闭${what}时出错：${error instanceof Error ? error.message : String(error)}`);
     }
   };
   const shutdown = async () => {
@@ -170,15 +171,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 5. 重启恢复（账本那部分；执行器启动时再把“执行中”改回“待执行”），然后按数据库同步性格设定文件
     const recovered = ledger.recoverAfterRestart();
     if (recovered.resentMessageIds.length + recovered.requeuedMessageIds.length > 0) {
-      log(`agent-hub: 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
+      log(`${LOG_PREFIX} 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
     }
     const synced = ledger.syncPersonaFiles();
-    if (synced.recordedPmIds.length > 0) log(`agent-hub: 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
+    if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
     // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件）
     if (ledger.snapshot().pms.length === 0) {
       const defaultModel = env[ENV_DEFAULT_MODEL] || undefined;
       const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: DEFAULT_PM_PERSONA, ...(defaultModel ? { defaultModel } : {}) });
-      log(`agent-hub: 第一次启动，建了项目经理“${pm.name}”`);
+      log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
     }
 
     // 7. 处理函数、接线、启动执行器
@@ -192,7 +193,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.unsubscribe.push(
       ledger.onActionEnqueued(() => executor.wake()),
       ledger.onStopRequested(({ sessionId }) => {
-        driver.interrupt(sessionId).catch((error: unknown) => log(`agent-hub: 停止失败：${String(error)}`));
+        driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
       }),
     );
     parts.executor = executor;
@@ -201,7 +202,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
-    if (!existsSync(staticDir)) log(`agent-hub: 没找到网页文件 ${staticDir}，先跑 pnpm build`);
+    if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     parts.ui = await startUiServer({ ledger, token, port, staticDir });
 
     let stopping: Promise<void> | undefined;

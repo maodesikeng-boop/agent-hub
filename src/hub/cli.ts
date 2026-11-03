@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
 import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
+import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 
 export interface HubIo {
   argv: string[];
@@ -26,34 +27,37 @@ export interface HubIo {
 /** 和守护进程认的令牌字符一样；别的字符放进请求头 Node 会直接抛错。 */
 const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
+/** 命令名（names.ts 的 HUB_COMMAND），下面的用法和报错里用。 */
+const hub = HUB_COMMAND;
+
 /** hub 用法，给人看（hub help、用法不对时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
 export const HUB_USAGE = `用法：
-  hub status                                              我是谁、我的项目和文件夹
-  hub project create --folder <主文件夹> [--name <名>] [--description <说明>]
+  ${hub} status                                              我是谁、我的项目和文件夹
+  ${hub} project create --folder <主文件夹> [--name <名>] [--description <说明>]
                                                           建项目（一个项目经理只管一个项目）
-  hub project attach <文件夹>                             给项目挂上附加文件夹
-  hub project detach <文件夹>                             从项目上移除附加文件夹
-  hub persona show
-  hub persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
-  hub worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin
+  ${hub} project attach <文件夹>                             给项目挂上附加文件夹
+  ${hub} project detach <文件夹>                             从项目上移除附加文件夹
+  ${hub} persona show
+  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
+  ${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin
                                                           派一个 Worker，任务说明从标准输入读
-  hub worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
-  hub worker end <编号>                                    收工：结束这个 Worker 的会话
-  hub worker list                                         我派出去的 Worker
+  ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
+  ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
+  ${hub} worker list                                         我派出去的 Worker
 
 长文本用 --stdin 从标准输入读，例如：
-  hub persona edit --stdin <<'EOF'
+  ${hub} persona edit --stdin <<'EOF'
   新的完整性格设定
   EOF
-  hub worker start --title "修 X" --stdin <<'EOF'
+  ${hub} worker start --title "修 X" --stdin <<'EOF'
   任务说明：目标、验收标准
   EOF
-令牌和 socket 路径由 hub 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
+令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
 
-const UNREACHABLE_MESSAGE = "连不上 agent-hub，守护进程可能没在跑";
-const NO_ANSWER_MESSAGE = "请求已经发给 agent-hub，但没等到回应";
-const MAYBE_EXECUTED_HINT = "请求可能已经执行，请先用 `hub status` 确认，别直接重试";
+const UNREACHABLE_MESSAGE = `连不上 ${PRODUCT_NAME}，守护进程可能没在跑`;
+const NO_ANSWER_MESSAGE = `请求已经发给 ${PRODUCT_NAME}，但没等到回应`;
+const MAYBE_EXECUTED_HINT = `请求可能已经执行，请先用 \`${hub} status\` 确认，别直接重试`;
 
 class UsageError extends Error {}
 
@@ -94,25 +98,25 @@ function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
 
 function allowOnly(values: Options, allowed: (keyof Options)[], what: string): void {
   for (const key of Object.keys(values) as (keyof Options)[]) {
-    if (values[key] !== undefined && !allowed.includes(key)) throw new UsageError(`hub ${what} 不认 --${key}`);
+    if (values[key] !== undefined && !allowed.includes(key)) throw new UsageError(`${hub} ${what} 不认 --${key}`);
   }
 }
 
 function expectPositionals(positionals: string[], count: number, what: string): void {
-  if (positionals.length !== count) throw new UsageError(`hub ${what} 的参数个数不对`);
+  if (positionals.length !== count) throw new UsageError(`${hub} ${what} 的参数个数不对`);
 }
 
 /** Worker 编号：正整数。 */
 function workerIdOf(raw: string | undefined, what: string): number {
   if (raw === undefined || !/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
-    throw new UsageError(`hub ${what} 要一个 Worker 编号（正整数）`);
+    throw new UsageError(`${hub} ${what} 要一个 Worker 编号（正整数）`);
   }
   return Number(raw);
 }
 
 /** hub worker start、send 的正文只从标准输入读。 */
 function requireStdin(values: Options, what: string): Parsed["textSource"] {
-  if (values.stdin !== true) throw new UsageError(`hub ${what} 要 --stdin，正文从标准输入读`);
+  if (values.stdin !== true) throw new UsageError(`${hub} ${what} 要 --stdin，正文从标准输入读`);
   return { kind: "stdin" };
 }
 
@@ -161,7 +165,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   if (group === "project" && action === "create") {
     allowOnly(values, ["name", "folder", "description"], "project create");
     expectPositionals(rest, 0, "project create");
-    if (values.folder === undefined) throw new UsageError("hub project create 要 --folder <主文件夹>");
+    if (values.folder === undefined) throw new UsageError(`${hub} project create 要 --folder <主文件夹>`);
     const body: Record<string, unknown> = { folder: expandPath(values.folder, env, cwd) };
     if (values.name !== undefined) body.name = values.name;
     if (values.description !== undefined) body.description = values.description;
@@ -185,7 +189,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     }
     const textSource = textSourceOf(values);
     if (textSource === null && values.mode === undefined) {
-      throw new UsageError("hub persona edit 要新的性格设定（--stdin 或 --text）或者 --mode，至少一样");
+      throw new UsageError(`${hub} persona edit 要新的性格设定（--stdin 或 --text）或者 --mode，至少一样`);
     }
     const body: Record<string, unknown> = {};
     if (values.mode !== undefined) body.mode = values.mode as PmMode;
@@ -195,7 +199,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   if (group === "worker" && action === "start") {
     allowOnly(values, ["title", "model", "readonly", "no-worktree", "stdin"], "worker start");
     expectPositionals(rest, 0, "worker start");
-    if (values.title === undefined) throw new UsageError("hub worker start 要 --title <标题>");
+    if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
     const textSource = requireStdin(values, "worker start");
     const body: Record<string, unknown> = { title: values.title };
     if (values.model !== undefined) body.model = values.model;
@@ -333,7 +337,7 @@ function line(text: string): string {
 
 export async function runHub(io: HubIo): Promise<number> {
   const usage = (reason: string) => {
-    io.stderr.write(line(`hub：${reason}`));
+    io.stderr.write(line(`${hub}：${reason}`));
     io.stderr.write(HUB_USAGE);
     return HUB_EXIT.usage;
   };
@@ -353,9 +357,9 @@ export async function runHub(io: HubIo): Promise<number> {
 
   const token = io.env[ENV_HUB_TOKEN];
   const socketPath = io.env[ENV_HUB_SOCK];
-  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：hub 只能在 agent-hub 启动的会话里用`);
-  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 agent-hub 发的令牌`);
-  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：hub 只能在 agent-hub 启动的会话里用`);
+  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`);
+  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_NAME} 发的令牌`);
+  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`);
 
   const body: Record<string, unknown> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {
@@ -396,7 +400,7 @@ export async function runHub(io: HubIo): Promise<number> {
     io.stderr.write(line(r.message));
     return HUB_EXIT.rejected;
   }
-  io.stderr.write(`agent-hub 的回答看不懂（HTTP ${outcome.status}）\n`);
+  io.stderr.write(`${PRODUCT_NAME} 的回答看不懂（HTTP ${outcome.status}）\n`);
   return HUB_EXIT.rejected;
 }
 
@@ -406,7 +410,7 @@ export async function runHubSafely(io: HubIo): Promise<number> {
     return await runHub(io);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    io.stderr.write(`hub：出了意外的错：${message.split("\n", 1)[0]}\n`);
+    io.stderr.write(`${hub}：出了意外的错：${message.split("\n", 1)[0]}\n`);
     return HUB_EXIT.usage;
   }
 }

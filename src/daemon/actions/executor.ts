@@ -18,6 +18,7 @@ import type {
 import { DriverError } from "../../shared/driver.ts";
 import type { ActionId, HealthModule } from "../../shared/domain.ts";
 import type { Ledger } from "../../shared/ledger.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import type { Db } from "../store/index.ts";
 import { setActionStatus, toActionRow } from "./queue.ts";
 import type { ActionDbRow } from "./queue.ts";
@@ -91,7 +92,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     try {
       deps.reportHealth(module, error);
     } catch (e) {
-      console.error("agent-hub executor: reportHealth failed:", e);
+      console.error(`${LOG_PREFIX} executor: reportHealth failed:`, e);
     }
   };
 
@@ -100,7 +101,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     try {
       fn();
     } catch (error) {
-      console.error("agent-hub executor:", error);
+      console.error(`${LOG_PREFIX} executor:`, error);
       report("store", errorMessage(error));
     }
   };

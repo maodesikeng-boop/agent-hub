@@ -3,6 +3,7 @@
 import { truncateChars } from "./domain.ts";
 import type { WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
+import { WORKER_BRANCH_PREFIX } from "./names.ts";
 
 export const REPORT_START = "=== 汇报 ===";
 export const REPORT_END = "=== 汇报结束 ===";
@@ -162,5 +163,5 @@ export function workerBranchName(workerId: WorkerId, title: string): string {
     .slice(0, WORKER_BRANCH_SLUG_CHARS)
     .join("")
     .replace(/-+$/, "");
-  return slug === "" ? `hub/${workerId}` : `hub/${workerId}-${slug}`;
+  return slug === "" ? `${WORKER_BRANCH_PREFIX}${workerId}` : `${WORKER_BRANCH_PREFIX}${workerId}-${slug}`;
 }

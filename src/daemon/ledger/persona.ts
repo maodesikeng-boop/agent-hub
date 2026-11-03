@@ -15,6 +15,7 @@ import type {
 } from "../../shared/ledger.ts";
 import { MAX_MODEL_CHARS, MAX_NAME_CHARS, MAX_PERSONA_BYTES, MAX_REASON_CHARS, PERSONA_CHANGES_LIMIT } from "../../shared/limits.ts";
 import { personaFilePath } from "../../shared/paths.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
@@ -66,7 +67,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     try {
       writeFile(file, text);
     } catch (error) {
-      console.error(`agent-hub: 写性格设定文件失败 ${file}:`, error);
+      console.error(`${LOG_PREFIX} 写性格设定文件失败 ${file}:`, error);
       return false;
     }
     db.run("UPDATE pms SET persona_file = ?, persona_file_hash = ? WHERE id = ?", file, contentHash(text), pmId);
@@ -209,7 +210,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
       return "rewritten";
     }
     if (utf8Bytes(content) > MAX_PERSONA_BYTES) {
-      console.error(`agent-hub: 手改的性格设定文件超过 ${MAX_PERSONA_BYTES} 字节，按数据库重写：${file}`);
+      console.error(`${LOG_PREFIX} 手改的性格设定文件超过 ${MAX_PERSONA_BYTES} 字节，按数据库重写：${file}`);
       persistPersonaFile(pm.id, pm.persona);
       return "rewritten";
     }

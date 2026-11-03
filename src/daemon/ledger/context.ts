@@ -6,6 +6,7 @@ import type { ConversationId, HealthModule, SessionId } from "../../shared/domai
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import { enqueueAction } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
 import { createChangeLog } from "./change-log.ts";
@@ -88,7 +89,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
       try {
         listener(value);
       } catch (error) {
-        console.error("agent-hub ledger listener:", error);
+        console.error(`${LOG_PREFIX} ledger listener:`, error);
       }
     }
   };
@@ -109,7 +110,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
       try {
         after();
       } catch (error) {
-        console.error("agent-hub ledger after commit:", error);
+        console.error(`${LOG_PREFIX} ledger after commit:`, error);
       }
     }
     for (const [id, key] of pending.pushed) pushed.set(id, key);

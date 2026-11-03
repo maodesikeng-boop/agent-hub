@@ -94,6 +94,7 @@ import {
   workerMessageDedupeKey,
 } from "./index.ts";
 import { launchFingerprint } from "./launch.ts";
+import { DATA_DIR_NAME } from "./names.ts";
 import {
   MAX_UNIX_SOCKET_PATH_BYTES,
   assertSocketPathFits,
@@ -250,7 +251,7 @@ describe("约定好的名字", () => {
 
 describe("数据目录", () => {
   it("默认在用户目录下的 .agent-hub，AGENT_HUB_HOME 可改", () => {
-    expect(resolveHubPaths({}, "/home/u").home).toBe("/home/u/.agent-hub");
+    expect(resolveHubPaths({}, "/home/u").home).toBe(`/home/u/${DATA_DIR_NAME}`);
     const paths = resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u");
     expect(paths.home).toBe("/tmp/x");
     expect(paths.dbFile).toBe("/tmp/x/state/hub.sqlite");

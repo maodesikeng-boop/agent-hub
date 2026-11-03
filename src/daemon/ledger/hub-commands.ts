@@ -6,6 +6,7 @@ import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/doma
 import { hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
+import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
@@ -17,13 +18,13 @@ import type { LedgerWorkers } from "./workers.ts";
 
 /** status 里的一句“项目和文件夹”。 */
 function describeProject(card: ProjectCard | null): string {
-  if (card === null) return "还没有项目。用户让你建项目时，用 hub project create --folder <主文件夹> 建。";
+  if (card === null) return `还没有项目。用户让你建项目时，用 ${HUB_COMMAND} project create --folder <主文件夹> 建。`;
   const others = card.otherFolders.length === 0 ? "没有附加文件夹" : `附加文件夹 ${card.otherFolders.join("、")}`;
   return `管着项目“${card.name}”：主文件夹 ${card.mainFolder}，${others}。`;
 }
 
 /** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
-const commandLine = (command: HubCommand) => `hub ${command.replace(".", " ")}`;
+const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
 export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
   const { db, now, write } = ctx;
@@ -106,7 +107,7 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
       throw fail("forbidden", "这个会话不是项目经理或 Worker 的会话，不能用 hub");
     }
     if (!hubCommandAllowed(session.role, command)) {
-      throw fail("forbidden", `Worker 只能用 hub status，不能用 ${commandLine(command)}：要做的事写进汇报，交给项目经理`);
+      throw fail("forbidden", `Worker 只能用 ${commandLine("status")}，不能用 ${commandLine(command)}：要做的事写进汇报，交给项目经理`);
     }
     if (session.role === "worker") {
       if (session.workerId === null) throw fail("forbidden", "这个 Worker 会话没有对应的 Worker，不能用 hub");
@@ -145,7 +146,7 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
         try {
           write(() => recordHubCall(sessionId, command, args, false, code, message));
         } catch (recordError) {
-          console.error("agent-hub: 记 hub_calls 失败:", recordError);
+          console.error(`${LOG_PREFIX} 记 hub_calls 失败:`, recordError);
         }
       }
       throw error;

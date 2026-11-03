@@ -12,6 +12,7 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_PORT,
+  HUB_COMMAND,
   type Change,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -161,7 +162,7 @@ export function makeEnv(): E2eEnv {
     runHub(pid, args, options = {}) {
       const entry = log().find((e) => e.kind === "env" && e.pid === pid);
       if (entry?.kind !== "env") throw new Error(`no env logged for fake claude ${pid}`);
-      const child = spawn(join(home, "run", "bin", "hub"), args, {
+      const child = spawn(join(home, "run", "bin", HUB_COMMAND), args, {
         env: { PATH: process.env.PATH, [ENV_HUB_TOKEN]: entry.env[ENV_HUB_TOKEN], [ENV_HUB_SOCK]: entry.env[ENV_HUB_SOCK] },
         stdio: ["pipe", "pipe", "pipe"],
       });

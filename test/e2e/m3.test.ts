@@ -9,6 +9,7 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   API_PATHS,
+  HUB_COMMAND,
   REPORT_END,
   REPORT_START,
   RESEND_NOTE,
@@ -23,6 +24,9 @@ import { openDatabase } from "../../src/daemon/store/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, isAlive, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
+/** 命令名（names.ts）：改名只改那一处，剧本和断言跟着变。 */
+const hub = HUB_COMMAND;
+
 let env: E2eEnv;
 afterEach(async () => {
   await env?.cleanup();
@@ -34,7 +38,7 @@ const say = (text: string): FakeTurn => ({ steps: [{ text }] });
 const report = (summary: string, status = "做完了") =>
   `${summary}。\n\n${REPORT_START}\n状态: ${status}\n摘要: ${summary}\n提交: 无\n测试: 无\n问题: 无\n${REPORT_END}`;
 /** 项目经理在 shell 里派活（任务说明走 heredoc，和提示词里教的写法一样）。 */
-const startCmd = (title: string, task: string, flags = "") => `hub worker start --title "${title}"${flags} --stdin <<'EOF'\n${task}\nEOF`;
+const startCmd = (title: string, task: string, flags = "") => `${hub} worker start --title "${title}"${flags} --stdin <<'EOF'\n${task}\nEOF`;
 /** 在 worktree 里提交（不依赖机器上的 git 用户配置）。 */
 const commit = (message: string) => `git -c user.name=worker -c user.email=worker@example.com commit -qam "${message}"`;
 
@@ -160,9 +164,9 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
         {
           turns: [
             { steps: [{ bash: startCmd("加 hello", "在 README.md 末尾加一行 hello，提交") }, { text: "派出去了" }] },
-            { steps: [{ bash: "hub worker send 1 --stdin <<'EOF'\n把 hello 改成 hi\nEOF" }, { text: "打回了" }] },
+            { steps: [{ bash: `${hub} worker send 1 --stdin <<'EOF'\n把 hello 改成 hi\nEOF` }, { text: "打回了" }] },
             // 先等测试看完 Worker 还活着，再收工
-            { steps: [{ waitFile: gate }, { bash: "hub worker end 1" }, { text: "收工了" }] },
+            { steps: [{ waitFile: gate }, { bash: `${hub} worker end 1` }, { text: "收工了" }] },
           ],
           defaultTurn: say("收到"),
         },
@@ -170,8 +174,8 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
           turns: [
             {
               steps: [
-                { bash: "hub persona edit --reason 试试 --stdin <<'EOF'\n我想改\nEOF" },
-                { bash: "hub status" },
+                { bash: `${hub} persona edit --reason 试试 --stdin <<'EOF'\n我想改\nEOF` },
+                { bash: `${hub} status` },
                 { bash: `printf 'hello\\n' >> README.md && ${commit("hello")}` },
                 { text: report("加好了") },
               ],
@@ -198,7 +202,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     // 越权：退出码 1、forbidden；hub status 能用
     const runs = env.bashRuns().filter((r) => r.pid === proc!.pid);
     expect(runs[0]).toMatchObject({ exitCode: 1 });
-    expect(runs[0]!.output).toContain("Worker 只能用 hub status");
+    expect(runs[0]!.output).toContain(`Worker 只能用 ${hub} status`);
     expect(runs[1]).toMatchObject({ exitCode: 0 });
     expect(runs[1]!.output).toContain("你是 Worker #1“加 hello”");
     expect(runs[2]).toMatchObject({ exitCode: 0 });
@@ -303,7 +307,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
   it("连派 10 个：都成功，各在各的 worktree 里，10 行汇报", { timeout: 60_000 }, async () => {
     env = makeEnv();
     const dir = repo("many");
-    const loop = `for i in 1 2 3 4 5 6 7 8 9 10; do\nhub worker start --title "活 $i" --stdin <<EOF || exit 1\n做第 $i 件事\nEOF\ndone`;
+    const loop = `for i in 1 2 3 4 5 6 7 8 9 10; do\n${hub} worker start --title "活 $i" --stdin <<EOF || exit 1\n做第 $i 件事\nEOF\ndone`;
     env.setScript(scripts({ turns: [{ steps: [{ bash: loop }, { text: "十个都派了" }] }], defaultTurn: say("收到") }, { defaultTurn: say(report("做好了")) }));
     const { daemon, client } = await boot();
     const pm = await pmWithProject(client, dir);
