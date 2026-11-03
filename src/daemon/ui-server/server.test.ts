@@ -507,6 +507,27 @@ describe("发消息 POST /api/conversations/:id/messages", () => {
   });
 });
 
+describe("Worker 的对话（M3，kind worker）：界面服务不另设接口，和别的对话走同样的几个", () => {
+  it("/api/state 把 Worker 的对话、消息、会话原样转给网页", async () => {
+    const workerConversation = { id: 30, kind: "worker", pmId: 1, projectId: 1, title: "修 X", createdAt: 1 } as const;
+    const line = { ...makeMessage(5, 1), sender: "system", kind: "worker", workerId: 3, meta: { workerId: 3, event: "started" } } as const;
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      conversations: [{ conversation: workerConversation, messages: [{ ...makeMessage(6, 30), sender: "pm", workerId: 3 }, line], hasMore: false }],
+    };
+    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
+  });
+
+  it("按会话翻页、点停止：和项目经理的对话一样", async () => {
+    ledger.conversations.add(30);
+    ledger.messages = [makeMessage(1, 30), makeMessage(2, 30), makeMessage(3, 30)];
+    const page = await call("GET", "/api/conversations/30/messages?before=3");
+    expect(page.json()).toEqual({ messages: [ledger.messages[0], ledger.messages[1]], hasMore: false });
+    expect((await call("POST", "/api/conversations/30/stop")).statusCode).toBe(202);
+    expect(ledger.stopped).toEqual([30]);
+  });
+});
+
 describe("停止 POST /api/conversations/:id/stop", () => {
   it("调用 ledger.requestStop，返回 202", async () => {
     const res = await call("POST", "/api/conversations/1/stop");

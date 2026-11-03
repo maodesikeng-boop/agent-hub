@@ -103,7 +103,7 @@ export function MessageList({
             previous = identity.avatarKey;
             return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} />;
           }
-          previous = item.message.sender === "agent" ? identity.avatarKey : null;
+          previous = item.message.sender === "agent" || item.message.sender === "pm" ? identity.avatarKey : null;
           return <MessageBubble key={item.message.id} message={item.message} identity={identity} head={head} actions={actions} />;
         })}
         {pending.map((p) => (

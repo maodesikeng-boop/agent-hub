@@ -18,6 +18,7 @@ import type {
   SessionState,
   StateSnapshot,
   SystemMessageMeta,
+  WorkerMessageMeta,
   WsServerMessage,
 } from "../shared/index.ts";
 
@@ -107,6 +108,38 @@ export function makeSystemMessage(over: Partial<Message> & Pick<Message, "id"> &
     dedupeKey: `system:${rest.conversationId ?? 1}:test:${rest.id}`,
     ...rest,
   });
+}
+
+/** 项目经理对话里那一行 Worker 汇报（M3）。 */
+export function makeWorkerLine(
+  over: Partial<Message> & Pick<Message, "id"> & { line?: Partial<WorkerMessageMeta> },
+): Message {
+  const { line, ...rest } = over;
+  const meta: WorkerMessageMeta = {
+    workerId: 3,
+    workerConversationId: 30,
+    title: "修 X",
+    readonly: false,
+    event: "started",
+    status: null,
+    summary: null,
+    ...line,
+  };
+  return makeMessage({
+    sender: "system",
+    sessionId: null,
+    kind: "worker",
+    workerId: meta.workerId,
+    text: `【Worker #${meta.workerId} · ${meta.title} 的汇报】`,
+    meta,
+    dedupeKey: `worker:${meta.workerId}:${meta.event}:${rest.id}`,
+    ...rest,
+  });
+}
+
+/** Worker 自己的对话（M3）：左栏不显示，点项目经理对话里那一行打开。 */
+export function makeWorkerConversation(over: Partial<Conversation> = {}): Conversation {
+  return { id: 30, kind: "worker", pmId: 1, projectId: 1, title: "修 X", createdAt: 1_000, ...over };
 }
 
 export function makePersonaChange(over: Partial<PersonaChange> = {}): PersonaChange {
