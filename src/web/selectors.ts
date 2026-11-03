@@ -1,13 +1,16 @@
 // 从 HubState 算出界面要用的东西。
 import {
   isQuotaExhausted,
+  workerEventOf,
   type ConversationId,
   type HealthEntry,
   type Message,
   type Pm,
+  type PmId,
   type Project,
   type ProjectFolder,
   type SessionState,
+  type WorkerMessageMeta,
 } from "../shared/index.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 
@@ -32,9 +35,10 @@ function previewMessage(messages: Message[]): Message | null {
   return messages.findLast((m) => m.kind === "text") ?? messages.at(-1) ?? null;
 }
 
-/** 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。 */
+/** 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。 */
 export function listConversations(state: HubState): ConversationEntry[] {
   return Object.values(state.conversations)
+    .filter((view) => view.conversation.kind !== "worker")
     .map((view): ConversationEntry => {
       const { conversation } = view;
       const last = view.messages.at(-1);
@@ -68,6 +72,53 @@ export function sessionOf(state: HubState, conversationId: ConversationId): Sess
 /** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）。 */
 export function isWaitingForQuota(session: SessionState | null): boolean {
   return isQuotaExhausted(session?.rateLimit);
+}
+
+/** 额度窗口在 RateLimitInfo.windows 里的键（Claude 的 rate_limit_event）。 */
+const FIVE_HOUR_WINDOW = "five_hour";
+const SEVEN_DAY_WINDOW = "seven_day";
+
+/** 5 小时、7 天额度已用的百分比（四舍五入的整数）；还没有数据是 null。 */
+export interface QuotaUsage {
+  fiveHour: number | null;
+  sevenDay: number | null;
+}
+
+/** m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最近一次事件（lastEventAt 最大，同时间取会话编号大的）那个会话的值。 */
+export function quotaUsage(state: HubState): QuotaUsage {
+  const latest = (key: string): number | null => {
+    let best: SessionState | null = null;
+    for (const s of state.sessions) {
+      if (s.rateLimit?.windows[key] === undefined) continue;
+      const at = s.lastEventAt ?? -1;
+      const bestAt = best?.lastEventAt ?? -1;
+      if (best === null || at > bestAt || (at === bestAt && s.sessionId > best.sessionId)) best = s;
+    }
+    const window = best?.rateLimit?.windows[key];
+    return window === undefined ? null : Math.round(window.utilization * 100);
+  };
+  return { fiveHour: latest(FIVE_HOUR_WINDOW), sevenDay: latest(SEVEN_DAY_WINDOW) };
+}
+
+/** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
+export function runningWorkerCount(state: HubState, pmId: PmId): number {
+  return Object.values(state.conversations).filter(
+    ({ conversation }) =>
+      conversation.kind === "worker" && conversation.pmId === pmId && (sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle",
+  ).length;
+}
+
+/** 项目经理会话里指向这个 Worker 对话的那几行里最新的一行的内容（标题、只读）；翻页翻掉了、找不到是 null。 */
+export function workerLineOf(state: HubState, workerConversationId: ConversationId): WorkerMessageMeta | null {
+  const pmId = state.conversations[workerConversationId]?.conversation.pmId;
+  for (const view of Object.values(state.conversations)) {
+    if (view.conversation.kind === "worker" || (pmId != null && view.conversation.pmId !== pmId)) continue;
+    for (const message of view.messages.toReversed()) {
+      const meta = workerEventOf(message);
+      if (meta?.workerConversationId === workerConversationId) return meta;
+    }
+  }
+  return null;
 }
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {

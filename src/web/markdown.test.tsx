@@ -8,7 +8,7 @@ import { makeMessage, makeUserMessage } from "./test-utils.ts";
 import { stripMarkdown } from "./plainText.ts";
 
 const identity = { name: "小林", avatarKey: 1 };
-const actions: MessageActions = { retry: {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
+const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 const sidebarProps = { onNewPm: () => {} };
 
 function agentSays(text: string) {

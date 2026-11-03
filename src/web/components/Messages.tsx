@@ -1,6 +1,30 @@
-import { Check, ChevronRight, Clock, Loader2, Square, TerminalSquare, X } from "lucide-react";
+import {
+  Archive,
+  Check,
+  CircleCheck,
+  CircleHelp,
+  CirclePlay,
+  CircleX,
+  ChevronRight,
+  Clock,
+  Loader2,
+  Square,
+  TerminalSquare,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { useState } from "react";
-import { stripSystemPrefix, systemEventOf, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
+import {
+  stripSystemPrefix,
+  systemEventOf,
+  workerEventOf,
+  workerLineText,
+  type ConversationId,
+  type Message,
+  type MessageId,
+  type PersonaChangeId,
+  type WorkerMessageMeta,
+} from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { describeError, formatTime, STATUS_LABELS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -14,8 +38,10 @@ interface AgentIdentity {
   avatarKey: number;
 }
 
-/** 消息上能点的操作：重试服务端标了失败的用户消息、撤销项目经理对自己性格设定的修改。 */
+/** 消息上能点的操作：重试服务端标了失败的用户消息、撤销项目经理对自己性格设定的修改、点开 Worker。 */
 export interface MessageActions {
+  /** 点项目经理会话里的 Worker 那一行：打开这个 Worker 自己的对话。 */
+  onOpenWorker: (workerConversationId: ConversationId) => void;
   /** 点过“重试”的消息的状态。 */
   retry: Record<MessageId, RetryPhase | undefined>;
   onRetryMessage: (messageId: MessageId) => void;
@@ -92,6 +118,49 @@ function SystemNotice({ message, actions }: { message: Message; actions: Message
   );
 }
 
+const WORKER_LINE_ICON_CLASS = "size-4 shrink-0";
+
+/** 那一行前面的图标：派出、做完了、有问题、出错或放弃、没按格式、收工。 */
+function WorkerLineIcon({ line }: { line: WorkerMessageMeta }) {
+  switch (line.event) {
+    case "started":
+      return <CirclePlay className={cn(WORKER_LINE_ICON_CLASS, "text-primary")} aria-hidden="true" />;
+    case "ended":
+      return <Archive className={WORKER_LINE_ICON_CLASS} aria-hidden="true" />;
+    case "turn_failed":
+    case "worktree_failed":
+      return <CircleX className={cn(WORKER_LINE_ICON_CLASS, "text-danger")} aria-hidden="true" />;
+    case "report":
+      switch (line.status) {
+        case "done":
+          return <CircleCheck className={cn(WORKER_LINE_ICON_CLASS, "text-success")} aria-hidden="true" />;
+        case "problem":
+          return <TriangleAlert className={cn(WORKER_LINE_ICON_CLASS, "text-warn-foreground")} aria-hidden="true" />;
+        case "gave_up":
+          return <CircleX className={cn(WORKER_LINE_ICON_CLASS, "text-danger")} aria-hidden="true" />;
+        default:
+          return <CircleHelp className={WORKER_LINE_ICON_CLASS} aria-hidden="true" />;
+      }
+  }
+}
+
+/** 项目经理会话里的 Worker 汇报：居中的一行，点开看这个 Worker 干了什么。给项目经理的汇报原文不显示。 */
+function WorkerLine({ line, onOpen }: { line: WorkerMessageMeta; onOpen: (workerConversationId: ConversationId) => void }) {
+  return (
+    <div className="mt-5 flex justify-center px-6" data-side="center">
+      <button
+        type="button"
+        className="group flex max-w-[85%] cursor-pointer items-center gap-2 rounded-2xl bg-muted px-3.5 py-2 text-left text-[13.5px] transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={() => onOpen(line.workerConversationId)}
+      >
+        <WorkerLineIcon line={line} />
+        <span className="min-w-0 [overflow-wrap:anywhere]">{workerLineText(line)}</span>
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   identity,
@@ -104,8 +173,11 @@ export function MessageBubble({
   actions: MessageActions;
 }) {
   const time = formatTime(message.createdAt);
+  const workerLine = workerEventOf(message);
+  if (workerLine) return <WorkerLine line={workerLine} onOpen={actions.onOpenWorker} />;
   if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
-  if (message.sender === "user") {
+  // Worker 对话里项目经理的话（任务、打回）对 Worker 来说就是“用户”：靠右显示，也不能重试
+  if (message.sender === "user" || message.sender === "pm") {
     return (
       <article className="mt-5 flex flex-col items-end" data-side="right" data-status={message.status ?? undefined} title={time}>
         <div className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
@@ -115,7 +187,7 @@ export function MessageBubble({
           <DeliveryStatus
             status={message.status}
             reason={message.failureReason}
-            retry={message.status === "failed" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
+            retry={message.status === "failed" && message.sender === "user" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
           />
         )}
       </article>

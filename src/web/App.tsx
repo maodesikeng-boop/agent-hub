@@ -5,9 +5,11 @@ import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
+import { TopBarStats } from "./components/TopBarStats.tsx";
+import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, sessionOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, quotaUsage, runningWorkerCount, sessionOf, workerLineOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useHub } from "./useHub.ts";
 
@@ -21,6 +23,8 @@ export function App() {
   /** 打开着的项目经理资料页；选了左栏的对话就回到对话。 */
   const [profilePm, setProfilePm] = useState<PmId | null>(null);
   const [creating, setCreating] = useState(false);
+  /** 打开着的 Worker 的对话；选了左栏的对话或点“返回”就回到项目经理的会话。 */
+  const [openWorker, setOpenWorker] = useState<ConversationId | null>(null);
 
   if (state.phase === "loading") {
     return (
@@ -57,6 +61,7 @@ export function App() {
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
   const select = (id: ConversationId) => {
     setProfilePm(null);
+    setOpenWorker(null);
     setSelected(id);
   };
   const created = (conversationId: ConversationId) => {
@@ -66,16 +71,26 @@ export function App() {
   const actions = {
     retry: state.retry,
     onRetryMessage: (messageId: number) => void hub.retryMessage(messageId),
+    onOpenWorker: setOpenWorker,
     onRevertPersona: async (changeId: PersonaChangeId) => {
       await postRevertPersonaChange(changeId);
     },
   };
 
+  const workerView = openWorker === null ? undefined : state.conversations[openWorker];
+  const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
+  // Worker 的对话归派它的项目经理；对话还没同步过来就用打开它的那个会话
+  const workerPm = workerView?.conversation.pmId ?? active?.pm?.id ?? null;
+  const workerPmEntry = entries.find((e) => e.pm?.id === workerPm) ?? active;
+  const stats = (pmId: number | null | undefined) => (
+    <TopBarStats quota={quotaUsage(state)} running={pmId == null ? 0 : runningWorkerCount(state, pmId)} />
+  );
+
   return (
     <div className="flex h-full">
       <Sidebar
         entries={entries}
-        activeId={profile ? null : (active?.id ?? null)}
+        activeId={profile ? null : ((openWorker !== null ? workerPmEntry?.id : active?.id) ?? null)}
         onSelect={select}
         onNewPm={() => setCreating(true)}
       />
@@ -90,6 +105,22 @@ export function App() {
             rev={state.personaRev[profile.id] ?? 0}
             onBack={() => setProfilePm(null)}
           />
+        ) : openWorker !== null ? (
+          <WorkerConversation
+            key={openWorker}
+            title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
+            readonly={workerLine?.readonly ?? false}
+            pmName={workerPmEntry?.name ?? "项目经理"}
+            view={workerView}
+            session={sessionOf(state, openWorker)}
+            older={state.older[openWorker]}
+            stats={stats(workerPm)}
+            notices={notices}
+            onBack={() => setOpenWorker(null)}
+            onStop={hub.stop}
+            onLoadOlder={(id) => void hub.loadOlder(id)}
+            actions={actions}
+          />
         ) : active && view ? (
           <Conversation
             key={active.id}
@@ -99,6 +130,7 @@ export function App() {
             session={sessionOf(state, active.id)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
+            stats={stats(active.pm?.id)}
             notices={notices}
             onDraftChange={(id, value) => setDrafts((d) => ({ ...d, [id]: value }))}
             onSend={(id, text) => {

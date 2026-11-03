@@ -17,6 +17,7 @@ export function Conversation({
   session,
   older,
   draft,
+  stats,
   notices,
   onDraftChange,
   onSend,
@@ -32,6 +33,8 @@ export function Conversation({
   session: SessionState | null;
   older: OlderState | undefined;
   draft: string;
+  /** 标题栏右边的额度和在跑的 Worker 数。 */
+  stats: React.ReactNode;
   /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
@@ -60,7 +63,7 @@ export function Conversation({
   };
 
   const empty = view.messages.length === 0 && pending.length === 0;
-  // agent 的消息都是这个项目经理说的（M3 起 Worker 的汇报也进这个对话，到时按会话分开署名）
+  // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={entry.name}>
@@ -90,6 +93,7 @@ export function Conversation({
             </ul>
           )}
         </div>
+        {stats}
       </header>
       {notices}
       <div className="relative min-h-0 flex-1">
