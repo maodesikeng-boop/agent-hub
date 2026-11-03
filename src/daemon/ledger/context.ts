@@ -58,10 +58,12 @@ export interface LedgerContext {
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
 }
 
-/** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts 用。 */
+/** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
 export interface LedgerFiles {
   pmHomeRoot: string;
   personasDir: string | undefined;
+  /** worktrees/ 的根目录（LedgerOptions.worktreesDir 补上默认值）。 */
+  worktreesDir: string;
   userHome: string;
   resolveFolder: ResolveFolder;
   writeFile: (file: string, content: string) => void;

@@ -5,6 +5,7 @@ import { normalizeName } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
 import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS } from "../../shared/limits.ts";
+import { projectWorktreesDir } from "../../shared/paths.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 import { realpathOrLiteral } from "./files.ts";
@@ -50,7 +51,7 @@ export function createLedgerProjects(
   const { currentSession } = sessions;
   const { insertSystemMessage } = messages;
   const { requirePm, privateConversation, validName } = persona;
-  const { userHome, resolveFolder } = files;
+  const { userHome, resolveFolder, worktreesDir } = files;
 
   /** 这个项目经理进行中的项目（最多一个，数据库有部分唯一索引）。 */
   const activeProjectOf = (pmId: PmId): ProjectDbRow | null =>
@@ -80,22 +81,37 @@ export function createLedgerProjects(
   };
 
   /**
-   * 项目的文件夹变了：对话当前会话的 cwd 换成主文件夹、addDirs 换成其他没移除的文件夹，推 folders.updated。
-   * 正在跑的这一轮不打断，下一条消息前驱动层发现 cwd、addDirs 和启动时不一样，就 --resume 重启（m2-plan 第 6 节第 3 条）。
+   * 按项目现在的文件夹改会话的 cwd、addDirs。正在跑的这一轮不打断，下一条消息前驱动层发现 cwd、addDirs 和启动时不一样，
+   * 就 --resume 重启（m2-plan 第 6 节第 3 条）。
+   * - 项目经理的会话：cwd 是主文件夹，addDirs 是其他没移除的文件夹；派过在 worktree 里干活的 Worker（M3）的，再带上
+   *   <worktreesDir>/<项目编号>/，验收时能看 Worker 的改动。没派过的不带：没用上 Worker 的项目经理不因此重启，
+   *   这一层目录也是第一个 worktree 建出来之后才有；
+   * - 在主文件夹里干活、还没收工的 Worker 的会话（M3）：addDirs 和项目经理的附加文件夹一样（不带 worktrees 目录）。
    */
-  const foldersChanged = (p: Pending, project: ProjectDbRow): ProjectFolder[] => {
+  const syncSessionFolders = (project: ProjectDbRow): ProjectFolder[] => {
     const folders = foldersOf(project.id);
-    const session = currentSession(project.conversation_id);
     const main = folders.find((f) => f.isMain);
+    const others = folders.filter((f) => !f.isMain).map((f) => f.path);
+    const t = now();
+    const session = currentSession(project.conversation_id);
     if (session !== null && main !== undefined) {
-      db.run(
-        "UPDATE agent_sessions SET cwd = ?, add_dirs = ?, updated_at = ? WHERE id = ?",
-        main.path,
-        JSON.stringify(folders.filter((f) => !f.isMain).map((f) => f.path)),
-        now(),
-        session.id,
-      );
+      const usesWorktrees = db.get("SELECT 1 AS x FROM workers WHERE project_id = ? AND workspace = 'worktree' LIMIT 1", project.id) !== undefined;
+      const addDirs = usesWorktrees ? [...others, projectWorktreesDir(worktreesDir, project.id)] : others;
+      db.run("UPDATE agent_sessions SET cwd = ?, add_dirs = ?, updated_at = ? WHERE id = ?", main.path, JSON.stringify(addDirs), t, session.id);
     }
+    db.run(
+      `UPDATE agent_sessions SET add_dirs = ?, updated_at = ?
+       WHERE worker_id IN (SELECT id FROM workers WHERE project_id = ? AND workspace = 'main' AND status = 'open')`,
+      JSON.stringify(others),
+      t,
+      project.id,
+    );
+    return folders;
+  };
+
+  /** 项目的文件夹变了：改会话（syncSessionFolders），推 folders.updated。 */
+  const foldersChanged = (p: Pending, project: ProjectDbRow): ProjectFolder[] => {
+    const folders = syncSessionFolders(project);
     p.changes.push({ type: "folders.updated", data: { projectId: project.id, folders } });
     return folders;
   };
@@ -194,5 +210,5 @@ export function createLedgerProjects(
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
-  return { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn };
+  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn };
 }

@@ -1,15 +1,19 @@
-// 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、分派到各命令、回给 agent 的话、记 hub_calls。
-// 整条链：shared/hub.ts（命令表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
+// 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
+// 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
+// worker.* 和 Worker 调的 status 在 workers.ts。
 import { PM_MODE_LABELS } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
+import { hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
+import type { HubCallContext } from "../../shared/ledger.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
+import type { LedgerWorkers } from "./workers.ts";
 
 /** status 里的一句“项目和文件夹”。 */
 function describeProject(card: ProjectCard | null): string {
@@ -18,12 +22,21 @@ function describeProject(card: ProjectCard | null): string {
   return `管着项目“${card.name}”：主文件夹 ${card.mainFolder}，${others}。`;
 }
 
-export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects) {
+/** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
+const commandLine = (command: HubCommand) => `hub ${command.replace(".", " ")}`;
+
+export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
   const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn } = projects;
 
-  const runHub = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, command: HubCommand, args: unknown): HubResult<HubCommand> => {
+  const runHub = (
+    p: Pending,
+    caller: AgentSessionRow & { pmId: PmId },
+    command: HubCommand,
+    args: unknown,
+    context: HubCallContext,
+  ): HubResult<HubCommand> => {
     switch (command) {
       case "status": {
         const pm = pmRow(caller.pmId)!;
@@ -67,13 +80,41 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
           change === null ? "性格设定和模式都和现在一样，没有改动。" : "已改好自己的做事习惯，下一条消息起生效；用户可以在资料页撤销。";
         return { text, data: { change } };
       }
-      // M3 W0 的占位，W2 实现
       case "worker.start":
+        return workers.startIn(p, caller, args as HubArgs<"worker.start">, context);
       case "worker.send":
+        return workers.sendIn(p, caller, args as HubArgs<"worker.send">);
       case "worker.end":
+        return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":
-        throw fail("invalid", "hub worker 还没做好");
+        return workers.list(caller);
     }
+  };
+
+  /**
+   * 认人、按角色放行（HUB_COMMAND_ROLES），再分派。项目经理的会话要有 pm_id；Worker 的会话要有 worker_id，
+   * 而且只能用 status（m3-plan 第 2.1 节）。别的会话（总助、数据不一致的）一律 forbidden。
+   */
+  const dispatch = (
+    p: Pending,
+    session: AgentSessionRow | null,
+    command: HubCommand,
+    args: unknown,
+    context: HubCallContext,
+  ): HubResult<HubCommand> => {
+    if (session === null || (session.role !== "pm" && session.role !== "worker")) {
+      throw fail("forbidden", "这个会话不是项目经理或 Worker 的会话，不能用 hub");
+    }
+    if (!hubCommandAllowed(session.role, command)) {
+      throw fail("forbidden", `Worker 只能用 hub status，不能用 ${commandLine(command)}：要做的事写进汇报，交给项目经理`);
+    }
+    if (session.role === "worker") {
+      if (session.workerId === null) throw fail("forbidden", "这个 Worker 会话没有对应的 Worker，不能用 hub");
+      return workers.status(session);
+    }
+    const caller = pmSession(session.id);
+    if (caller === null) throw fail("forbidden", "这个会话不是项目经理的会话，不能用 hub");
+    return runHub(p, caller, command, args, context);
   };
 
   const recordHubCall = (sessionId: SessionId, command: string, args: unknown, ok: boolean, errorCode: string | null, result: string) => {
@@ -89,13 +130,11 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
     );
   };
 
-  const hubCall = <C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>): HubResult<C> => {
+  const hubCall = <C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>, context: HubCallContext = {}): HubResult<C> => {
     const session = getAgentSession(db, sessionId);
-    const caller = pmSession(sessionId);
     try {
-      if (caller === null) throw fail("forbidden", "这个会话不是项目经理的会话，不能用 hub");
       return write((p) => {
-        const result = runHub(p, caller, command, args);
+        const result = dispatch(p, session, command, args, context);
         recordHubCall(sessionId, command, args, true, null, result.text);
         return result as HubResult<C>;
       });

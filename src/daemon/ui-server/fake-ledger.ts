@@ -243,6 +243,7 @@ export class FakeLedger {
       revertPersonaChange: (c) => this.revertPersonaChange(c),
       retryMessage: (m) => this.retryMessage(m),
       hubCall: unused("hubCall"),
+      workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),
       getWorktreeTask: unused("getWorktreeTask"),
       onWorktreeCreated: unused("onWorktreeCreated"),

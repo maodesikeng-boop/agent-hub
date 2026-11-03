@@ -131,6 +131,78 @@ describe("hub cli", () => {
     });
   });
 
+  describe("hub worker", () => {
+    it("worker start reads the task from --stdin and sends title, flags and task", async () => {
+      const task = "把 X 修好\n验收：pnpm test 全绿，$HOME 和 `反引号` 原样\n";
+      const r = await hub(["worker", "start", "--title", "修 X", "--model", "claude-haiku-5-5", "--readonly", "--no-worktree", "--stdin"], {
+        stdin: stdinOf(task),
+      });
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([
+        {
+          sessionId: 42,
+          command: "worker.start",
+          args: { title: "修 X", model: "claude-haiku-5-5", readonly: true, noWorktree: true, task: task.slice(0, -1) },
+        },
+      ]);
+    });
+
+    it("worker start without the optional flags sends only title and task", async () => {
+      expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({ title: "修 X", task: "任务" });
+    });
+
+    it("worker send <编号> --stdin sends a numeric workerId and the text", async () => {
+      expect((await hub(["worker", "send", "3", "--stdin"], { stdin: stdinOf("再改一下\n") })).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.send", args: { workerId: 3, text: "再改一下" } }]);
+    });
+
+    it.each([
+      [["worker", "end", "3"], "worker.end", { workerId: 3 }],
+      [["worker", "list"], "worker.list", {}],
+    ] as const)("hub %j → %s", async (argv, command, args) => {
+      expect((await hub([...argv])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
+    });
+
+    it.each([
+      [["worker"]],
+      [["worker", "fire", "3"]],
+      [["worker", "start", "--stdin"]],
+      [["worker", "start", "--title", "修 X"]],
+      [["worker", "start", "--title", "修 X", "--text", "任务"]],
+      [["worker", "start", "--title", "修 X", "--stdin", "extra"]],
+      [["worker", "send", "3"]],
+      [["worker", "send", "--stdin"]],
+      [["worker", "send", "abc", "--stdin"]],
+      [["worker", "send", "0", "--stdin"]],
+      [["worker", "send", "3", "--title", "x", "--stdin"]],
+      [["worker", "end"]],
+      [["worker", "end", "1.5"]],
+      [["worker", "end", "-1"]],
+      [["worker", "end", "3", "4"]],
+      [["worker", "list", "--readonly"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv], { stdin: stdinOf("任务") });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).not.toBe("");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("an empty task from --stdin is a usage error", async () => {
+      expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect((await hub(["worker", "send", "3", "--stdin"], { stdin: stdinOf("  ") })).code).toBe(2);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("the usage text lists the worker commands", async () => {
+      const r = await hub(["--help"]);
+      for (const usage of ["hub worker start --title", "--readonly", "--no-worktree", "hub worker send <编号> --stdin", "hub worker end <编号>", "hub worker list"]) {
+        expect(r.stdout).toContain(usage);
+      }
+    });
+  });
+
   describe("long text via --stdin", () => {
     it("delivers a 3 KB persona text with $, backticks and quotes unchanged", async () => {
       const line = "价格 $HUB_TOKEN `rm -rf /` \"双引号\" 'single' \\ $(whoami) ${x}\n";

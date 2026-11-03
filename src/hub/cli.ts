@@ -35,10 +35,18 @@ export const HUB_USAGE = `用法：
   hub project detach <文件夹>                             从项目上移除附加文件夹
   hub persona show
   hub persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
+  hub worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin
+                                                          派一个 Worker，任务说明从标准输入读
+  hub worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
+  hub worker end <编号>                                    收工：结束这个 Worker 的会话
+  hub worker list                                         我派出去的 Worker
 
 长文本用 --stdin 从标准输入读，例如：
   hub persona edit --stdin <<'EOF'
   新的完整性格设定
+  EOF
+  hub worker start --title "修 X" --stdin <<'EOF'
+  任务说明：目标、验收标准
   EOF
 令牌和 socket 路径由 hub 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
@@ -57,17 +65,21 @@ type Options = {
   stdin?: boolean;
   mode?: string;
   reason?: string;
+  title?: string;
+  model?: string;
+  readonly?: boolean;
+  "no-worktree"?: boolean;
   help?: boolean;
 };
 
 /** 解析好的一条命令：body 里的 text 字段留到读完标准输入再填。 */
 interface Parsed {
   command: HubCommand;
-  body: Record<string, string>;
+  body: Record<string, unknown>;
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "text";
+  textField?: "text" | "task";
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
@@ -88,6 +100,20 @@ function allowOnly(values: Options, allowed: (keyof Options)[], what: string): v
 
 function expectPositionals(positionals: string[], count: number, what: string): void {
   if (positionals.length !== count) throw new UsageError(`hub ${what} 的参数个数不对`);
+}
+
+/** Worker 编号：正整数。 */
+function workerIdOf(raw: string | undefined, what: string): number {
+  if (raw === undefined || !/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new UsageError(`hub ${what} 要一个 Worker 编号（正整数）`);
+  }
+  return Number(raw);
+}
+
+/** hub worker start、send 的正文只从标准输入读。 */
+function requireStdin(values: Options, what: string): Parsed["textSource"] {
+  if (values.stdin !== true) throw new UsageError(`hub ${what} 要 --stdin，正文从标准输入读`);
+  return { kind: "stdin" };
 }
 
 function textSourceOf(values: Options): Parsed["textSource"] {
@@ -112,6 +138,10 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         stdin: { type: "boolean" },
         mode: { type: "string" },
         reason: { type: "string" },
+        title: { type: "string" },
+        model: { type: "string" },
+        readonly: { type: "boolean" },
+        "no-worktree": { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -132,7 +162,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, ["name", "folder", "description"], "project create");
     expectPositionals(rest, 0, "project create");
     if (values.folder === undefined) throw new UsageError("hub project create 要 --folder <主文件夹>");
-    const body: Record<string, string> = { folder: expandPath(values.folder, env, cwd) };
+    const body: Record<string, unknown> = { folder: expandPath(values.folder, env, cwd) };
     if (values.name !== undefined) body.name = values.name;
     if (values.description !== undefined) body.description = values.description;
     return { command: "project.create", body, textSource: null };
@@ -157,10 +187,37 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (textSource === null && values.mode === undefined) {
       throw new UsageError("hub persona edit 要新的性格设定（--stdin 或 --text）或者 --mode，至少一样");
     }
-    const body: Record<string, string> = {};
+    const body: Record<string, unknown> = {};
     if (values.mode !== undefined) body.mode = values.mode as PmMode;
     if (values.reason !== undefined) body.reason = values.reason;
     return { command: "persona.edit", body, textSource, textField: "text" };
+  }
+  if (group === "worker" && action === "start") {
+    allowOnly(values, ["title", "model", "readonly", "no-worktree", "stdin"], "worker start");
+    expectPositionals(rest, 0, "worker start");
+    if (values.title === undefined) throw new UsageError("hub worker start 要 --title <标题>");
+    const textSource = requireStdin(values, "worker start");
+    const body: Record<string, unknown> = { title: values.title };
+    if (values.model !== undefined) body.model = values.model;
+    if (values.readonly === true) body.readonly = true;
+    if (values["no-worktree"] === true) body.noWorktree = true;
+    return { command: "worker.start", body, textSource, textField: "task" };
+  }
+  if (group === "worker" && action === "send") {
+    allowOnly(values, ["stdin"], "worker send");
+    expectPositionals(rest, 1, "worker send");
+    const workerId = workerIdOf(rest[0], "worker send");
+    return { command: "worker.send", body: { workerId }, textSource: requireStdin(values, "worker send"), textField: "text" };
+  }
+  if (group === "worker" && action === "end") {
+    allowOnly(values, [], "worker end");
+    expectPositionals(rest, 1, "worker end");
+    return { command: "worker.end", body: { workerId: workerIdOf(rest[0], "worker end") }, textSource: null };
+  }
+  if (group === "worker" && action === "list") {
+    allowOnly(values, [], "worker list");
+    expectPositionals(rest, 0, "worker list");
+    return { command: "worker.list", body: {}, textSource: null };
   }
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }
@@ -300,7 +357,7 @@ export async function runHub(io: HubIo): Promise<number> {
   if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 agent-hub 发的令牌`);
   if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：hub 只能在 agent-hub 启动的会话里用`);
 
-  const body: Record<string, string> = { ...parsed.body };
+  const body: Record<string, unknown> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {
     let text: string;
     try {

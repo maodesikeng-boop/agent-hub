@@ -16,11 +16,14 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
+  MAX_TASK_BYTES,
+  MAX_WORKER_TITLE_CHARS,
   hubPath,
   type HubArgsMap,
   type HubCommand,
   type HubResponse,
   type SessionTokens,
+  type WorkspaceProbe,
 } from "../../shared/index.ts";
 import { MAX_UNIX_SOCKET_PATH_BYTES } from "../../shared/paths.ts";
 import { FakeHubLedger } from "./fake-ledger.ts";
@@ -225,6 +228,60 @@ describe("agent api over inject", () => {
     });
   });
 
+  describe("hub worker start：调 hubCall 之前先异步探主文件夹的 git", () => {
+    const ok = { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } as const;
+    const withProbe = async (probe: (folder: string) => Promise<WorkspaceProbe>) => {
+      await app.close();
+      app = createAgentApi({ ledger, tokens, probeWorkspace: probe });
+      await app.ready();
+    };
+
+    it("探的是账本给的主文件夹，结果作为 context 交给 hubCall", async () => {
+      ledger.startFolder = "/code/foo";
+      const probed: string[] = [];
+      await withProbe(async (folder) => {
+        probed.push(folder);
+        return ok;
+      });
+      expect((await call("worker.start", { title: "修 X", task: "任务" })).statusCode).toBe(200);
+      expect(probed).toEqual(["/code/foo"]);
+      expect(ledger.contexts).toEqual([{ workspace: ok }]);
+    });
+
+    it("探失败也交给账本（由账本拒绝、记 hub_calls）", async () => {
+      ledger.startFolder = "/code/foo";
+      await withProbe(async () => ({ kind: "failed", error: "找不到 git 程序" }));
+      await call("worker.start", { title: "修 X", task: "任务" });
+      expect(ledger.contexts).toEqual([{ workspace: { kind: "failed", error: "找不到 git 程序" } }]);
+    });
+
+    it("带 noWorktree、没有项目（账本给 null）、别的命令：不探", async () => {
+      ledger.startFolder = "/code/foo";
+      let probes = 0;
+      await withProbe(async () => {
+        probes += 1;
+        return ok;
+      });
+      await call("worker.start", { title: "修 X", task: "任务", noWorktree: true });
+      await call("worker.list", {});
+      ledger.startFolder = null;
+      await call("worker.start", { title: "修 X", task: "任务" });
+      expect(probes).toBe(0);
+      expect(ledger.contexts).toEqual([{}, {}, {}]);
+    });
+
+    it("探的时候令牌作废了：401，不调账本", async () => {
+      ledger.startFolder = "/code/foo";
+      await withProbe(async () => {
+        tokens.revoke(11);
+        return ok;
+      });
+      const res = await call("worker.start", { title: "修 X", task: "任务" });
+      expect(res.statusCode).toBe(401);
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
   describe("request body", () => {
     const expectInvalid = async (res: Awaited<ReturnType<typeof call>>) => {
       expect(res.statusCode).toBe(400);
@@ -309,6 +366,30 @@ describe("agent api over inject", () => {
       for (const bad of ["a\u0000b", "a\nb", "a\rb", "a\tb", "\u001b[31m红", "a\u007fb", "a\u0085b", "../../etc\u0000"]) {
         await expectInvalid(await call("project.create", { name: bad, folder: "/x" }));
       }
+    });
+
+    it("hub worker：缺参数、类型不对、编号不是正整数、标题带控制字符、正文超字节 → invalid", async () => {
+      await expectInvalid(await call("worker.start", { title: "修 X" }));
+      await expectInvalid(await call("worker.start", { task: "任务" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "" }));
+      await expectInvalid(await call("worker.start", { title: "a\nb", task: "任务" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", readonly: "yes" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", model: "" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任".repeat(Math.floor(MAX_TASK_BYTES / 3) + 1) }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", worktree: false }));
+      for (const workerId of ["3", 0, -1, 1.5, null]) {
+        await expectInvalid(await call("worker.send", { workerId, text: "再改" }));
+        await expectInvalid(await call("worker.end", { workerId }));
+      }
+      await expectInvalid(await call("worker.send", { workerId: 3, text: "" }));
+      await expectInvalid(await call("worker.end", {}));
+      await expectInvalid(await call("worker.list", { all: true }));
+    });
+
+    it("hub worker：标题太长不拒（账本截断），任务说明可以多行", async () => {
+      const title = "长".repeat(MAX_WORKER_TITLE_CHARS + 10);
+      expect((await call("worker.start", { title, task: "第一行\n\t第二行" })).statusCode).toBe(200);
+      expect(ledger.calls.at(-1)).toEqual({ sessionId: 11, command: "worker.start", args: { title, task: "第一行\n\t第二行" } });
     });
 
     it("multi-line free text (persona text) may still contain newlines and tabs", async () => {

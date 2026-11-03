@@ -29,10 +29,17 @@ import {
   type SessionTokens,
 } from "../../shared/index.ts";
 import { assertSocketPathFits } from "../../shared/paths.ts";
+import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
+import { probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "reportHealth">;
+  ledger: Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder">;
+  /**
+   * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
+   * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
+   */
+  probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -55,7 +62,7 @@ const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
-// M3 W0 先给出形状，W2 按需要调整
+// hub worker …（M3）：编号是正整数；任务说明、打回的话按字节另查（BYTE_LIMITS）
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
 
@@ -160,6 +167,14 @@ const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再�
 
 export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
+  const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
+
+  /** hubCall 之前要异步准备的东西：只有 worker.start（没带 noWorktree、有项目）要探 git。 */
+  const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
+    if (command !== "worker.start" || body.noWorktree === true) return {};
+    const folder = ledger.workerStartFolder(sessionId);
+    return folder === null ? {} : { workspace: await probeWorkspace(folder) };
+  };
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,
@@ -221,10 +236,11 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       if (auth === undefined) throw new Error("agent-api: request reached a route without a session");
       const body = req.body as Record<string, unknown>;
       checkFields(command, body);
-      // 收请求体期间令牌可能已经作废（会话结束了）：调账本前再认一次。
+      const context = await prepare(auth.sessionId, command, body);
+      // 收请求体、探 git 期间令牌可能已经作废（会话结束了）：调账本前再认一次。
       if (tokens.resolve(auth.token) !== auth.sessionId) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
       // 请求体的形状已经按 BODY_SCHEMAS 查过，就是这个命令的 HubArgs。
-      const result = ledger.hubCall(auth.sessionId, command, body as never);
+      const result = ledger.hubCall(auth.sessionId, command, body as never, context);
       reportHealth(null);
       return send(reply, { ok: true, text: result.text, data: result.data });
     });
