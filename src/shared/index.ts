@@ -6,6 +6,7 @@ export * from "./driver.ts";
 export * from "./hub.ts";
 export * from "./ledger.ts";
 export * from "./limits.ts";
+export * from "./names.ts";
 export * from "./policy.ts";
 export * from "./store.ts";
 export * from "./worker.ts";

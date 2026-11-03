@@ -279,8 +279,8 @@ export interface Driver {
 export interface LaunchFiles {
   promptFile: string;
   /**
-   * --settings 的文件。M2 起项目经理的会话都有：放行 `Bash(hub:*)` 和 hub.sock 的真实路径
-   * （内容见 hub.ts 的 buildHubSettings）。
+   * --settings 的文件。M2 起项目经理的会话都有（M3 起 Worker 也有）：默认档、放行 `Bash(hub:*)` 和 hub.sock 的真实路径
+   * （内容见 policy.ts 的 buildSessionSettings）。
    */
   settingsFile?: string;
   /** 空的 MCP 配置，配合 --strict-mcp-config。 */

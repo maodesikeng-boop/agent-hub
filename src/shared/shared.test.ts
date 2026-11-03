@@ -20,7 +20,6 @@ import {
   PROJECT_STATUSES,
   SYSTEM_EVENTS,
   SYSTEM_MESSAGE_PREFIX,
-  buildHubSettings,
   hubPath,
   isQuotaExhausted,
   normalizeName,
@@ -469,13 +468,6 @@ describe("M2：agent 接口", () => {
 
   it("错误码到 HTTP 状态：账本的四种 + 令牌不对 + 守护进程自己出错", () => {
     expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, unauthorized: 401, internal: 500 });
-  });
-
-  it("设置文件：放行 hub 命令和 socket 的真实路径", () => {
-    expect(buildHubSettings("/private/tmp/x/run/hub.sock")).toEqual({
-      permissions: { allow: ["Bash(hub:*)"] },
-      sandbox: { network: { allowUnixSockets: ["/private/tmp/x/run/hub.sock"] } },
-    });
   });
 
   it("应答按 ok 收窄", () => {
