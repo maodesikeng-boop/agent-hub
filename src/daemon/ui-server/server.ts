@@ -7,11 +7,32 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, ty
 import {
   API_PATHS,
   ConversationNotFoundError,
+  LEDGER_ERROR_HTTP_STATUS,
+  LedgerRequestError,
+  MAX_DESCRIPTION_CHARS,
   MAX_MESSAGE_BYTES,
+  MAX_MODEL_CHARS,
+  MAX_NAME_CHARS,
+  MAX_PATH_BYTES,
+  MAX_PERSONA_BYTES,
+  MAX_REASON_CHARS,
+  PM_MODES,
   UI_COOKIE_NAME,
+  normalizeName,
+  utf8Bytes,
   type ApiErrorBody,
+  type CreatePmRequest,
+  type CreatePmResponse,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
+  type EditPersonaRequest,
+  type EditPersonaResponse,
   type Ledger,
+  type LedgerErrorCode,
+  type PersonaResponse,
+  type PmMode,
   type PostMessageResponse,
+  type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
@@ -75,6 +96,75 @@ function parseId(raw: unknown, what: string): number {
   return Number(raw);
 }
 
+/** 新接口的请求体：必须是 JSON 对象，只许出现 allowed 里的字段（多余字段拒绝）。 */
+function parseObjectBody(body: unknown, allowed: readonly string[]): Record<string, unknown> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "body must be a JSON object");
+  const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) throw new HttpError(400, `unknown field: ${extra[0]}`);
+  return body as Record<string, unknown>;
+}
+
+function requireName(value: unknown, what: string): string {
+  if (typeof value !== "string" || normalizeName(value) === null) {
+    throw new HttpError(400, `${what} must be a non-empty string of at most ${MAX_NAME_CHARS} characters without control characters`);
+  }
+  return value;
+}
+
+function requireMode(value: unknown): PmMode {
+  if (typeof value !== "string" || !(PM_MODES as readonly string[]).includes(value)) {
+    throw new HttpError(400, `mode must be one of ${PM_MODES.join(", ")}`);
+  }
+  return value as PmMode;
+}
+
+function requireBoundedBytes(value: unknown, what: string, maxBytes: number): string {
+  if (typeof value !== "string") throw new HttpError(400, `${what} must be a string`);
+  if (utf8Bytes(value) > maxBytes) throw new HttpError(400, `${what} must be at most ${maxBytes} bytes`);
+  return value;
+}
+
+function requireBoundedChars(value: unknown, what: string, maxChars: number): string {
+  if (typeof value !== "string") throw new HttpError(400, `${what} must be a string`);
+  if ([...value].length > maxChars) throw new HttpError(400, `${what} must be at most ${maxChars} characters`);
+  return value;
+}
+
+function parseCreatePmBody(body: unknown): CreatePmRequest {
+  const raw = parseObjectBody(body, ["name", "mode", "defaultModel", "persona"]);
+  const input: CreatePmRequest = {
+    name: requireName(raw.name, "name"),
+    mode: requireMode(raw.mode),
+    persona: requireBoundedBytes(raw.persona, "persona", MAX_PERSONA_BYTES),
+  };
+  if (raw.defaultModel !== undefined) {
+    input.defaultModel = raw.defaultModel === null ? null : requireBoundedChars(raw.defaultModel, "defaultModel", MAX_MODEL_CHARS);
+  }
+  return input;
+}
+
+function parseCreateProjectBody(body: unknown): CreateProjectRequest {
+  const raw = parseObjectBody(body, ["name", "folder", "pmId", "description"]);
+  const folder = requireBoundedBytes(raw.folder, "folder", MAX_PATH_BYTES);
+  if (folder.trim() === "" || folder.includes("\u0000")) throw new HttpError(400, "folder must be a non-empty path");
+  if (typeof raw.pmId !== "number" || !Number.isSafeInteger(raw.pmId) || raw.pmId <= 0) {
+    throw new HttpError(400, "pmId must be a positive integer");
+  }
+  const input: CreateProjectRequest = { name: requireName(raw.name, "name"), folder, pmId: raw.pmId };
+  if (raw.description !== undefined) input.description = requireBoundedChars(raw.description, "description", MAX_DESCRIPTION_CHARS);
+  return input;
+}
+
+function parseEditPersonaBody(body: unknown): EditPersonaRequest {
+  const raw = parseObjectBody(body, ["text", "mode", "reason"]);
+  if (raw.text === undefined && raw.mode === undefined) throw new HttpError(400, "text or mode is required");
+  const input: EditPersonaRequest = {};
+  if (raw.text !== undefined) input.text = requireBoundedBytes(raw.text, "text", MAX_PERSONA_BYTES);
+  if (raw.mode !== undefined) input.mode = requireMode(raw.mode);
+  if (raw.reason !== undefined) input.reason = requireBoundedChars(raw.reason, "reason", MAX_REASON_CHARS);
+  return input;
+}
+
 function parsePostBody(body: unknown): { clientId: string; text: string } {
   if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "body must be a JSON object");
   const { clientId, text } = body as Record<string, unknown>;
@@ -102,8 +192,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const isAuthenticated = (req: FastifyRequest): boolean =>
     tokenEquals(expectedToken, readCookie(req.headers.cookie, UI_COOKIE_NAME));
 
-  const fail = (reply: FastifyReply, statusCode: number, error: string) =>
-    reply.code(statusCode).send({ error } satisfies ApiErrorBody);
+  const fail = (reply: FastifyReply, statusCode: number, error: string, code?: LedgerErrorCode) =>
+    reply.code(statusCode).send((code === undefined ? { error } : { error, code }) satisfies ApiErrorBody);
 
   // 防 DNS 重绑定：Host 必须是 127.0.0.1:<端口> 或 localhost:<端口>。所有路径都查，包括静态文件和 /auth。
   app.addHook("onRequest", async (req, reply) => {
@@ -130,9 +220,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (path.startsWith("/api/") && !isAuthenticated(req)) return fail(reply, 401, "unauthorized");
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError, req, reply) => {
     if (err instanceof ConversationNotFoundError) return fail(reply, 404, err.code);
+    if (err instanceof LedgerRequestError) return fail(reply, LEDGER_ERROR_HTTP_STATUS[err.code], err.message, err.code);
     const status = (err as FastifyError).statusCode;
+    // 请求体校验没过（含 JSON 解析失败）一律 400 + code "invalid"，和账本拒绝的 invalid 同形，网页统一处理。
+    if (status === 400) return fail(reply, 400, err.message, "invalid");
     if (status !== undefined && status >= 400 && status < 500) return fail(reply, status, err.message);
     req.log.error({ err }, "ui-server request failed");
     return fail(reply, 500, "internal_error");
@@ -174,6 +267,38 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/conversations/:id/stop", async (req, reply) => {
       ledger.requestStop(parseId((req.params as { id?: unknown }).id, "conversation id"));
       return reply.code(202).send();
+    });
+
+    routes.post(API_PATHS.pms, async (req, reply) => {
+      const result = ledger.createPm(parseCreatePmBody(req.body));
+      return reply.code(201).send({ pmId: result.pm.id, conversationId: result.conversation.id } satisfies CreatePmResponse);
+    });
+
+    routes.post(API_PATHS.projects, async (req, reply) => {
+      const result = ledger.createProject(parseCreateProjectBody(req.body), { kind: "user" });
+      return reply
+        .code(201)
+        .send({ projectId: result.project.id, conversationId: result.conversation.id } satisfies CreateProjectResponse);
+    });
+
+    routes.get("/api/pms/:id/persona", async (req): Promise<PersonaResponse> => {
+      return ledger.getPersona(parseId((req.params as { id?: unknown }).id, "pm id"));
+    });
+
+    routes.put("/api/pms/:id/persona", async (req): Promise<EditPersonaResponse> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      const result = ledger.editPersona(pmId, parseEditPersonaBody(req.body), { kind: "user" });
+      return { changed: result.change !== null, persona: result.persona };
+    });
+
+    routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {
+      const result = ledger.revertPersonaChange(parseId((req.params as { id?: unknown }).id, "persona change id"));
+      return { changed: result.change !== null, persona: result.persona };
+    });
+
+    routes.post("/api/messages/:id/retry", async (req, reply) => {
+      const result = ledger.retryMessage(parseId((req.params as { id?: unknown }).id, "message id"));
+      return reply.code(202).send({ messageId: result.messageId } satisfies RetryMessageResponse);
     });
 
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {

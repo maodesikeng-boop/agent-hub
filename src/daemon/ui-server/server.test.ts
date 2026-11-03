@@ -3,7 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_MESSAGE_BYTES, UI_COOKIE_NAME, type Change, type WsServerMessage } from "../../shared/index.ts";
+import {
+  LEDGER_ERROR_CODES,
+  LedgerRequestError,
+  MAX_DESCRIPTION_CHARS,
+  MAX_MESSAGE_BYTES,
+  MAX_MODEL_CHARS,
+  MAX_NAME_CHARS,
+  MAX_PATH_BYTES,
+  MAX_PERSONA_BYTES,
+  MAX_REASON_CHARS,
+  UI_COOKIE_NAME,
+  type Change,
+  type LedgerErrorCode,
+  type WsServerMessage,
+} from "../../shared/index.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
 import { createUiServer, startUiServer } from "./server.ts";
 
@@ -13,6 +27,9 @@ const HOST = `127.0.0.1:${PORT}`;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
 const INDEX_HTML = "<!doctype html><title>agent-hub</title>";
+
+const NEW_PM = { name: "阿周", mode: "hands_on", defaultModel: "claude-haiku-5-5", persona: "# 性格\n- 简短" };
+const NEW_PROJECT = { name: "foo", folder: "~/code/foo", pmId: 1, description: "一个项目" };
 
 let staticDir: string;
 let ledger: FakeLedger;
@@ -38,13 +55,16 @@ interface ReqOpts {
   origin?: string | null;
   body?: unknown;
   rawBody?: string;
+  headers?: Record<string, string>;
 }
 
-async function call(method: "GET" | "POST", url: string, opts: ReqOpts = {}) {
-  const headers: Record<string, string> = { host: opts.host ?? HOST };
+type Method = "GET" | "POST" | "PUT";
+
+async function call(method: Method, url: string, opts: ReqOpts = {}) {
+  const headers: Record<string, string> = { host: opts.host ?? HOST, ...opts.headers };
   const cookie = opts.cookie === undefined ? COOKIE : opts.cookie;
   if (cookie !== null) headers.cookie = cookie;
-  const origin = opts.origin === undefined ? (method === "POST" ? ORIGIN : null) : opts.origin;
+  const origin = opts.origin === undefined ? (method !== "GET" ? ORIGIN : null) : opts.origin;
   if (origin !== null) headers.origin = origin;
   if (opts.body !== undefined || opts.rawBody !== undefined) headers["content-type"] = "application/json";
   return app.inject({
@@ -112,14 +132,29 @@ describe("登录 /auth", () => {
   });
 });
 
+/** M2 新接口记下的调用总数。 */
+const ledgerCalls = () =>
+  ledger.createdPms.length +
+  ledger.createdProjects.length +
+  ledger.personaReads.length +
+  ledger.personaEdits.length +
+  ledger.reverted.length +
+  ledger.retried.length;
+
 describe("没登录", () => {
-  const apiRequests: Array<["GET" | "POST", string, unknown?]> = [
+  const apiRequests: Array<[Method, string, unknown?]> = [
     ["GET", "/api/state"],
     ["GET", "/api/conversations/1/messages?before=5"],
     ["POST", "/api/conversations/1/messages", { clientId: "c", text: "hi" }],
     ["POST", "/api/conversations/1/stop"],
     ["GET", "/api/ws"],
     ["GET", "/api/no-such-thing"],
+    ["POST", "/api/pms", NEW_PM],
+    ["POST", "/api/projects", NEW_PROJECT],
+    ["GET", "/api/pms/1/persona"],
+    ["PUT", "/api/pms/1/persona", { text: "x" }],
+    ["POST", "/api/persona-changes/1/revert"],
+    ["POST", "/api/messages/1/retry"],
   ];
 
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
@@ -128,6 +163,7 @@ describe("没登录", () => {
     expect(res.json()).toEqual({ error: "unauthorized" });
     expect(ledger.posted).toEqual([]);
     expect(ledger.stopped).toEqual([]);
+    expect(ledgerCalls()).toEqual(0);
   });
 
   it.each([
@@ -317,6 +353,20 @@ describe("GET /api/state 和 /messages?before=", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
   });
 
+  it("/api/state 带着 projects 和 folders（M2），原样转给网页", async () => {
+    const project = ledger.createProject({ name: "foo", folder: "/code/foo", pmId: 1 }, { kind: "user" });
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      projects: [project.project],
+      folders: [project.mainFolder, { ...project.mainFolder, id: 2, path: "/code/shared", isMain: false }],
+      conversations: [{ conversation: project.conversation, messages: [], hasMore: false }],
+    };
+    const body = (await call("GET", "/api/state")).json();
+    expect(body.projects).toEqual([project.project]);
+    expect(body.folders).toHaveLength(2);
+    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
+  });
+
   it("?before= 把对话编号和消息编号原样交给账本，返回它给的页", async () => {
     ledger.messages = [makeMessage(1, 1), makeMessage(2, 1), makeMessage(3, 1), makeMessage(4, 2)];
     const res = await call("GET", "/api/conversations/1/messages?before=3");
@@ -463,6 +513,350 @@ describe("停止 POST /api/conversations/:id/stop", () => {
   it("账本出错：500", async () => {
     ledger.failWith = new Error("boom");
     expect((await call("POST", "/api/conversations/1/stop")).statusCode).toBe(500);
+  });
+});
+
+// ---- M2 新接口 ----
+
+const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
+  ["POST /api/pms", "POST", "/api/pms", NEW_PM],
+  ["POST /api/projects", "POST", "/api/projects", NEW_PROJECT],
+  ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
+  ["POST revert", "POST", "/api/persona-changes/1/revert"],
+  ["POST retry", "POST", "/api/messages/1/retry"],
+];
+
+/** 每个新接口都被这三道检查拦：Host、Origin（会改状态的请求都查，包括 PUT）、cookie。 */
+describe("新接口的 Host、Origin、cookie 检查", () => {
+  it.each(NEW_ENDPOINTS)("%s：Origin 不对、没带、别的端口都是 403，不碰账本", async (_name, method, url, body) => {
+    for (const origin of ["http://evil.example.com", "http://127.0.0.1:4001", "null", "", null]) {
+      const res = await call(method, url, { origin, body });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: "forbidden_origin" });
+    }
+    expect(ledgerCalls()).toBe(0);
+  });
+
+  it.each(NEW_ENDPOINTS)("%s：Host 不对 403，没 cookie 401，Origin 对了也不能代替 cookie", async (_name, method, url, body) => {
+    expect((await call(method, url, { host: "evil.com:4000", body })).statusCode).toBe(403);
+    const res = await call(method, url, { cookie: null, body });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: "unauthorized" });
+    expect(ledgerCalls()).toBe(0);
+  });
+
+  it("GET persona：没 cookie 401、Host 不对 403；GET 不查 Origin", async () => {
+    expect((await call("GET", "/api/pms/1/persona", { cookie: null })).statusCode).toBe(401);
+    expect((await call("GET", "/api/pms/1/persona", { host: "evil.com:4000" })).statusCode).toBe(403);
+    expect((await call("GET", "/api/pms/1/persona", { origin: "http://evil.example.com" })).statusCode).toBe(200);
+  });
+
+  it.each([
+    ["会话令牌当 Bearer", { authorization: "Bearer session-token-0123456789abcdef" }],
+    ["界面令牌当 Bearer", { authorization: `Bearer ${TOKEN}` }],
+  ])("%s：没有 cookie 时一律 401（会话令牌进不了界面接口）", async (_name, headers) => {
+    for (const [, method, url, body] of NEW_ENDPOINTS) {
+      expect((await call(method, url, { cookie: null, headers, body })).statusCode).toBe(401);
+    }
+    expect((await call("GET", "/api/pms/1/persona", { cookie: null, headers })).statusCode).toBe(401);
+    expect((await call("GET", "/api/state", { cookie: null, headers })).statusCode).toBe(401);
+    expect(ledgerCalls()).toBe(0);
+  });
+});
+
+/** 账本抛 LedgerRequestError：按 LEDGER_ERROR_HTTP_STATUS 映射，error 是它的 message，code 是它的 code。 */
+describe("账本拒绝请求时的 HTTP 状态", () => {
+  const STATUS: Record<LedgerErrorCode, number> = { invalid: 400, not_found: 404, forbidden: 403, conflict: 409 };
+  const CASES = NEW_ENDPOINTS.flatMap(([name, method, url, body]) =>
+    LEDGER_ERROR_CODES.map((code) => [name, code, method, url, body] as const),
+  );
+
+  it.each(CASES)("%s：账本抛 %s", async (_name, code, method, url, body) => {
+    ledger.failWith = new LedgerRequestError(code, `原因：${code}`);
+    const res = await call(method, url, { body });
+    expect(res.statusCode).toBe(STATUS[code]);
+    expect(res.json()).toEqual({ error: `原因：${code}`, code });
+  });
+
+  it("GET persona：四种错误码也一样映射", async () => {
+    for (const code of LEDGER_ERROR_CODES) {
+      ledger.failWith = new LedgerRequestError(code, `原因：${code}`);
+      const res = await call("GET", "/api/pms/1/persona");
+      expect(res.statusCode).toBe(STATUS[code]);
+      expect(res.json()).toEqual({ error: `原因：${code}`, code });
+    }
+  });
+
+  it("账本别的错误：500，不泄露内部信息", async () => {
+    ledger.failWith = new Error("SQLITE_BUSY: /secret/path");
+    for (const [, method, url, body] of NEW_ENDPOINTS) {
+      const res = await call(method, url, { body });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: "internal_error" });
+    }
+  });
+
+  it("老接口抛 LedgerRequestError 也照样映射", async () => {
+    ledger.failWith = new LedgerRequestError("conflict", "冲突");
+    const res = await call("POST", "/api/conversations/1/messages", { body: { clientId: "c", text: "hi" } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "冲突", code: "conflict" });
+  });
+});
+
+describe("POST /api/pms 建项目经理", () => {
+  it("四个字段都对：调 ledger.createPm，201 返回项目经理编号和私聊编号", async () => {
+    const res = await call("POST", "/api/pms", { body: NEW_PM });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ pmId: 7, conversationId: 70 });
+    expect(ledger.createdPms).toEqual([NEW_PM]);
+  });
+
+  it("defaultModel 不给、给 null、给空串都放行，原样交给账本", async () => {
+    const { defaultModel: _omit, ...withoutModel } = NEW_PM;
+    for (const body of [withoutModel, { ...NEW_PM, defaultModel: null }, { ...NEW_PM, defaultModel: "" }]) {
+      expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
+    }
+    expect(ledger.createdPms).toEqual([withoutModel, { ...NEW_PM, defaultModel: null }, { ...NEW_PM, defaultModel: "" }]);
+  });
+
+  it("边界刚好放行：名字 40 个字符、性格设定 32 KB（按字节）、模型名 100 个字符", async () => {
+    const body = {
+      name: "名".repeat(MAX_NAME_CHARS),
+      mode: "manage_only",
+      defaultModel: "m".repeat(MAX_MODEL_CHARS),
+      persona: "a".repeat(MAX_PERSONA_BYTES),
+    };
+    expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
+    expect(ledger.createdPms).toHaveLength(1);
+  });
+
+  const persona = "a".repeat(MAX_PERSONA_BYTES);
+  const badBodies: Array<[string, unknown]> = [
+    ["名字是空串", { ...NEW_PM, name: "" }],
+    ["名字全是空白", { ...NEW_PM, name: "   " }],
+    ["名字超过 40 个字符", { ...NEW_PM, name: "名".repeat(MAX_NAME_CHARS + 1) }],
+    ["名字带换行", { ...NEW_PM, name: "阿\n周" }],
+    ["名字带 U+2028", { ...NEW_PM, name: "阿 周" }],
+    ["名字不是字符串", { ...NEW_PM, name: 5 }],
+    ["没给名字", { mode: "hands_on", persona: "x" }],
+    ["mode 不是两种之一", { ...NEW_PM, mode: "default" }],
+    ["mode 是空串", { ...NEW_PM, mode: "" }],
+    ["没给 mode", { name: "阿周", persona: "x" }],
+    ["性格设定超过 32 KB（多 1 字节）", { ...NEW_PM, persona: `${persona}a` }],
+    ["性格设定按字节算：中文 10923 个字（32769 字节）", { ...NEW_PM, persona: "字".repeat(10923) }],
+    ["性格设定不是字符串", { ...NEW_PM, persona: ["x"] }],
+    ["没给性格设定", { name: "阿周", mode: "hands_on" }],
+    ["模型名超过 100 个字符", { ...NEW_PM, defaultModel: "m".repeat(MAX_MODEL_CHARS + 1) }],
+    ["模型名不是字符串", { ...NEW_PM, defaultModel: 3 }],
+    ["多余字段", { ...NEW_PM, avatarFile: "x.png" }],
+    ["body 是数组", [NEW_PM]],
+    ["body 是 null", null],
+    ["body 是字符串", "hi"],
+  ];
+
+  it.each(badBodies)("请求体不对：%s → 400，code 是 invalid，不调账本", async (_name, body) => {
+    const res = await call("POST", "/api/pms", { rawBody: JSON.stringify(body) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: "invalid" });
+    expect(typeof res.json().error).toBe("string");
+    expect(ledger.createdPms).toEqual([]);
+  });
+
+  it("body 不是合法 JSON、没有 body：400，不调账本", async () => {
+    expect((await call("POST", "/api/pms", { rawBody: "{oops" })).statusCode).toBe(400);
+    expect((await call("POST", "/api/pms")).statusCode).toBe(400);
+    expect(ledger.createdPms).toEqual([]);
+  });
+});
+
+describe("POST /api/projects 建项目", () => {
+  it("调 ledger.createProject（actor 是用户），201 返回项目编号和群编号", async () => {
+    const res = await call("POST", "/api/projects", { body: NEW_PROJECT });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ projectId: 8, conversationId: 80 });
+    expect(ledger.createdProjects).toEqual([{ input: NEW_PROJECT, actor: { kind: "user" } }]);
+  });
+
+  it("description 可以不给；路径带 ~ 原样交给账本，界面服务不展开", async () => {
+    const { description: _omit, ...body } = NEW_PROJECT;
+    expect((await call("POST", "/api/projects", { body })).statusCode).toBe(201);
+    expect(ledger.createdProjects[0]?.input).toEqual(body);
+    expect(ledger.createdProjects[0]?.input.folder).toBe("~/code/foo");
+  });
+
+  it("边界刚好放行：名字 40 个字符、说明 200 个字符、路径 4096 字节", async () => {
+    const body = {
+      name: "名".repeat(MAX_NAME_CHARS),
+      folder: "/".padEnd(MAX_PATH_BYTES, "a"),
+      pmId: 1,
+      description: "说".repeat(MAX_DESCRIPTION_CHARS),
+    };
+    expect((await call("POST", "/api/projects", { body })).statusCode).toBe(201);
+  });
+
+  it("账本抛 invalid（比如文件夹不存在）：400，带原因，原样给用户看", async () => {
+    ledger.failWith = new LedgerRequestError("invalid", "文件夹不存在，请先建好：/x");
+    const res = await call("POST", "/api/projects", { body: NEW_PROJECT });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "文件夹不存在，请先建好：/x", code: "invalid" });
+  });
+
+  const badBodies: Array<[string, unknown]> = [
+    ["名字是空串", { ...NEW_PROJECT, name: "" }],
+    ["名字超过 40 个字符", { ...NEW_PROJECT, name: "名".repeat(MAX_NAME_CHARS + 1) }],
+    ["名字带控制字符", { ...NEW_PROJECT, name: "a\u0085b" }],
+    ["没给名字", { folder: "/x", pmId: 1 }],
+    ["路径是空串", { ...NEW_PROJECT, folder: "" }],
+    ["路径全是空白", { ...NEW_PROJECT, folder: "  " }],
+    ["路径超过 4096 字节", { ...NEW_PROJECT, folder: "/".padEnd(MAX_PATH_BYTES + 1, "a") }],
+    ["路径按字节算：中文 1366 个字（4098 字节）", { ...NEW_PROJECT, folder: "字".repeat(1366) }],
+    ["路径带 NUL", { ...NEW_PROJECT, folder: "/x\u0000y" }],
+    ["路径不是字符串", { ...NEW_PROJECT, folder: 1 }],
+    ["没给路径", { name: "foo", pmId: 1 }],
+    ["pmId 是字符串", { ...NEW_PROJECT, pmId: "1" }],
+    ["pmId 是 0", { ...NEW_PROJECT, pmId: 0 }],
+    ["pmId 是负数", { ...NEW_PROJECT, pmId: -1 }],
+    ["pmId 是小数", { ...NEW_PROJECT, pmId: 1.5 }],
+    ["pmId 超出安全整数", { ...NEW_PROJECT, pmId: 2 ** 53 }],
+    ["没给 pmId", { name: "foo", folder: "/x" }],
+    ["说明超过 200 个字符", { ...NEW_PROJECT, description: "说".repeat(MAX_DESCRIPTION_CHARS + 1) }],
+    ["说明不是字符串", { ...NEW_PROJECT, description: 1 }],
+    ["多余字段", { ...NEW_PROJECT, status: "archived" }],
+    ["body 是数组", []],
+  ];
+
+  it.each(badBodies)("请求体不对：%s → 400，code 是 invalid，不调账本", async (_name, body) => {
+    const res = await call("POST", "/api/projects", { rawBody: JSON.stringify(body) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: "invalid" });
+    expect(ledger.createdProjects).toEqual([]);
+  });
+
+  it("body 不是合法 JSON、没有 body：400，不调账本", async () => {
+    expect((await call("POST", "/api/projects", { rawBody: "nope" })).statusCode).toBe(400);
+    expect((await call("POST", "/api/projects")).statusCode).toBe(400);
+    expect(ledger.createdProjects).toEqual([]);
+  });
+});
+
+describe("性格设定 GET、PUT /api/pms/:id/persona 和 POST /api/persona-changes/:id/revert", () => {
+  it("GET：把项目经理编号交给账本，原样返回 PersonaView", async () => {
+    const res = await call("GET", "/api/pms/3/persona");
+    expect(res.statusCode).toBe(200);
+    expect(ledger.personaReads).toEqual([3]);
+    expect(res.json()).toMatchObject({ pmId: 3, text: "性格设定正文", mode: "manage_only", revertableChangeId: 1 });
+    expect(res.json().changes).toHaveLength(1);
+  });
+
+  it.each(["abc", "0", "-1", "1.5", "01"])("GET：项目经理编号 %s 不是正整数 → 400", async (id) => {
+    expect((await call("GET", `/api/pms/${id}/persona`)).statusCode).toBe(400);
+    expect(ledger.personaReads).toEqual([]);
+  });
+
+  it("PUT：text、mode、reason 原样交给账本（actor 是用户），返回 { changed: true, persona }", async () => {
+    const body = { text: "# 新\n- 用列表", mode: "hands_on", reason: "用户要求" };
+    const res = await call("PUT", "/api/pms/3/persona", { body });
+    expect(res.statusCode).toBe(200);
+    expect(ledger.personaEdits).toEqual([{ pmId: 3, input: body, actor: { kind: "user" } }]);
+    expect(res.json()).toMatchObject({ changed: true, persona: { pmId: 3 } });
+  });
+
+  it("PUT：只给 text、只给 mode 都行；text 给空串（清空性格设定）也行", async () => {
+    for (const body of [{ text: "x" }, { mode: "hands_on" }, { text: "" }]) {
+      expect((await call("PUT", "/api/pms/3/persona", { body })).statusCode).toBe(200);
+    }
+    expect(ledger.personaEdits.map((e) => e.input)).toEqual([{ text: "x" }, { mode: "hands_on" }, { text: "" }]);
+  });
+
+  it("PUT：账本说没改动（change 为 null）→ changed 是 false", async () => {
+    ledger.personaChange = null;
+    const res = await call("PUT", "/api/pms/3/persona", { body: { text: "一样的" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ changed: false, persona: { pmId: 3, changes: [], revertableChangeId: null } });
+  });
+
+  it("PUT：边界刚好放行：32 KB、理由 500 个字符", async () => {
+    const body = { text: "a".repeat(MAX_PERSONA_BYTES), reason: "理".repeat(MAX_REASON_CHARS) };
+    expect((await call("PUT", "/api/pms/3/persona", { body })).statusCode).toBe(200);
+  });
+
+  const badPuts: Array<[string, unknown]> = [
+    ["什么都没给", {}],
+    ["只给了 reason", { reason: "x" }],
+    ["text 超过 32 KB", { text: "a".repeat(MAX_PERSONA_BYTES + 1) }],
+    ["text 不是字符串", { text: 1 }],
+    ["text 是 null", { text: null }],
+    ["mode 不对", { mode: "foo" }],
+    ["mode 不是字符串", { mode: 1 }],
+    ["reason 超过 500 个字符", { text: "x", reason: "理".repeat(MAX_REASON_CHARS + 1) }],
+    ["reason 不是字符串", { text: "x", reason: 1 }],
+    ["多余字段", { text: "x", pmId: 2 }],
+    ["body 是数组", ["x"]],
+  ];
+
+  it.each(badPuts)("PUT 请求体不对：%s → 400，code 是 invalid，不调账本", async (_name, body) => {
+    const res = await call("PUT", "/api/pms/3/persona", { rawBody: JSON.stringify(body) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: "invalid" });
+    expect(ledger.personaEdits).toEqual([]);
+  });
+
+  it("PUT：没有 body、不是合法 JSON、编号不对 → 400，不调账本", async () => {
+    expect((await call("PUT", "/api/pms/3/persona")).statusCode).toBe(400);
+    expect((await call("PUT", "/api/pms/3/persona", { rawBody: "{" })).statusCode).toBe(400);
+    expect((await call("PUT", "/api/pms/abc/persona", { body: { text: "x" } })).statusCode).toBe(400);
+    expect(ledger.personaEdits).toEqual([]);
+  });
+
+  it("revert：把修改记录编号交给账本，返回 { changed: true, persona }", async () => {
+    const res = await call("POST", "/api/persona-changes/5/revert");
+    expect(res.statusCode).toBe(200);
+    expect(ledger.reverted).toEqual([5]);
+    expect(res.json()).toMatchObject({ changed: true, persona: { revertableChangeId: 1 } });
+  });
+
+  it("revert：账本说没改动 → changed 是 false", async () => {
+    ledger.personaChange = null;
+    expect((await call("POST", "/api/persona-changes/5/revert")).json()).toMatchObject({ changed: false });
+  });
+
+  it.each(["abc", "0", "-3", "2.5"])("revert：编号 %s 不是正整数 → 400，不调账本", async (id) => {
+    expect((await call("POST", `/api/persona-changes/${id}/revert`)).statusCode).toBe(400);
+    expect(ledger.reverted).toEqual([]);
+  });
+
+  it("账本说不存在 → 404；不是最近一次 → 409（带原因，界面提示“只能撤销最近一次”）", async () => {
+    ledger.failWith = new LedgerRequestError("not_found", "没有这条修改记录");
+    expect((await call("POST", "/api/persona-changes/5/revert")).statusCode).toBe(404);
+    ledger.failWith = new LedgerRequestError("conflict", "只能撤销最近一次修改");
+    const res = await call("POST", "/api/persona-changes/5/revert");
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "只能撤销最近一次修改", code: "conflict" });
+  });
+});
+
+describe("POST /api/messages/:id/retry 重试失败的消息", () => {
+  it("调 ledger.retryMessage，202 返回消息编号", async () => {
+    const res = await call("POST", "/api/messages/12/retry");
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ messageId: 12 });
+    expect(ledger.retried).toEqual([12]);
+  });
+
+  it.each(["abc", "0", "-1", "1.5", "007"])("消息编号 %s 不是正整数 → 400，不调账本", async (id) => {
+    const res = await call("POST", `/api/messages/${id}/retry`);
+    expect(res.statusCode).toBe(400);
+    expect(ledger.retried).toEqual([]);
+  });
+
+  it("消息不存在 → 404，不是失败状态 → 409，都带账本的原因", async () => {
+    ledger.failWith = new LedgerRequestError("not_found", "没有这条消息");
+    expect((await call("POST", "/api/messages/12/retry")).json()).toEqual({ error: "没有这条消息", code: "not_found" });
+    ledger.failWith = new LedgerRequestError("conflict", "只有失败的消息能重试");
+    const res = await call("POST", "/api/messages/12/retry");
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "只有失败的消息能重试", code: "conflict" });
   });
 });
 
@@ -649,5 +1043,49 @@ describe("WebSocket /api/ws", () => {
     });
     expect(await closed).toBe(1011);
     expect(ledger.listenerCount).toBe(0);
+  });
+
+  /** M2 新增的 7 种变化，各造一条。 */
+  function m2Changes(): Array<() => Change> {
+    const created = ledger.createProject({ name: "foo", folder: "/code/foo", pmId: 7 }, { kind: "user" });
+    const pm = ledger.createPm(NEW_PM as never).pm;
+    const session = { sessionId: 800, conversationId: 80, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null } as const;
+    return [
+      () => ledger.emitChange("pm.created", { pm }),
+      () => ledger.emitChange("pm.updated", { pm: { ...pm, mode: "manage_only" } }),
+      () => ledger.emitChange("project.created", { project: created.project }),
+      () => ledger.emitChange("project.updated", { project: { ...created.project, pmId: 9 } }),
+      () => ledger.emitChange("folders.updated", { projectId: 8, folders: [created.mainFolder] }),
+      () => ledger.emitChange("conversation.created", { conversation: created.conversation }),
+      () => ledger.emitChange("session.created", { session }),
+    ];
+  }
+
+  it("M2 的 7 种新变化：实时推给网页，原样 { seq, type, data }", async () => {
+    const client = await connect(ledger.currentSeq);
+    const emitted = m2Changes().map((emit) => emit());
+    await client.waitFor(7);
+    await client.settle();
+    expect(client.received).toEqual(emitted);
+    expect(emitted.map((c) => c.type)).toEqual([
+      "pm.created",
+      "pm.updated",
+      "project.created",
+      "project.updated",
+      "folders.updated",
+      "conversation.created",
+      "session.created",
+    ]);
+    client.ws.terminate();
+  });
+
+  it("M2 的新变化断线补齐里也有：带 since 重连，不多不少", async () => {
+    const since = ledger.currentSeq;
+    const emitted = m2Changes().map((emit) => emit());
+    const client = await connect(since);
+    await client.waitFor(7);
+    await client.settle();
+    expect(client.received).toEqual(emitted);
+    client.ws.terminate();
   });
 });
