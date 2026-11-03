@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/daemon/store/db.ts";
 import type { Db } from "../src/daemon/store/db.ts";
 import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
+import { createLedger } from "../src/daemon/ledger/index.ts";
+import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
 
 const migration = new URL("../migrations/0001_init.sql", import.meta.url).pathname;
 
@@ -184,12 +186,20 @@ describe("0001_init.sql：唯一约束", () => {
 
 const migrationsDir = new URL("../migrations/", import.meta.url).pathname;
 
+/** 只有编号不超过 version 的迁移的目录：模拟老版本的守护进程建出来的库。 */
+function migrationsUpTo(version: number): string {
+  const old = mkdtempSync(join(tmpdir(), `agent-hub-m${version}-`));
+  for (const name of readdirSync(migrationsDir)) {
+    const match = /^(\d+)_.*\.sql$/.exec(name);
+    if (match !== null && Number(match[1]) <= version) copyFileSync(join(migrationsDir, name), join(old, name));
+  }
+  extraDirs.push(old);
+  return old;
+}
+
 /** 只有 0001 的迁移目录：模拟 M1 的守护进程建出来的库。 */
 function m1MigrationsDir(): string {
-  const m1 = mkdtempSync(join(tmpdir(), "agent-hub-m1-"));
-  copyFileSync(join(migrationsDir, "0001_init.sql"), join(m1, "0001_init.sql"));
-  extraDirs.push(m1);
-  return m1;
+  return migrationsUpTo(1);
 }
 
 const extraDirs: string[] = [];
@@ -261,7 +271,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     expect(migrate(db, m1MigrationsDir())).toMatchObject({ to: 1, applied: [1] });
     seedM1(db);
 
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 1, to: 2, applied: [2] });
+    expect(migrate(db, migrationsUpTo(2))).toMatchObject({ from: 1, to: 2, applied: [2] });
     expect(userVersion(db)).toBe(2);
     expect(tableNames(db)).toEqual([
       "actions",
@@ -339,7 +349,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     const db = open();
     migrate(db, m1MigrationsDir());
     seedM1(db);
-    migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 3, 9, 8, 7) });
+    migrate(db, migrationsUpTo(2), { now: () => Date.UTC(2026, 10, 3, 9, 8, 7) });
     const backups = readdirSync(dir!).filter((f) => f.includes(".bak-"));
     expect(backups).toEqual(["hub.sqlite.bak-1-20261103T090807Z"]);
     const backup = openDatabase(join(dir!, backups[0]!));
@@ -359,7 +369,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     const memory = openDatabase(":memory:");
     try {
       migrate(memory, m1MigrationsDir());
-      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2] });
+      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3] });
     } finally {
       memory.close();
     }
@@ -380,14 +390,14 @@ describe("0002_projects：从 M1 的库升级", () => {
     const db = open();
     migrate(db, m1MigrationsDir());
     seedM1(db);
-    migrate(db, migrationsDir);
-    expect(migrate(db, migrationsDir)).toEqual({ from: 2, to: 2, applied: [] });
+    migrate(db, migrationsUpTo(2));
+    expect(migrate(db, migrationsUpTo(2))).toEqual({ from: 2, to: 2, applied: [] });
     expect(db.get("SELECT count(*) AS n FROM pms")).toEqual({ n: 2 });
   });
 
-  it("空库连跑 0001、0002 没有报错", () => {
+  it("空库连跑全部迁移没有报错", () => {
     const db = open();
-    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 2, applied: [1, 2] });
+    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 3, applied: [1, 2, 3] });
   });
 
   it("新建的项目经理默认只管理", () => {
@@ -409,18 +419,6 @@ describe("0002_projects：约束", () => {
     expect(() => db.run("INSERT INTO pms (name, created_at) VALUES ('小林', 0)")).toThrow(/UNIQUE/);
   });
 
-  it("进行中的项目名字唯一；归档了的不占名字", () => {
-    const db = migratedWithPm();
-    seedProject(db);
-    db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (3, 'project_group', 1, 'foo', 0)");
-    expect(() =>
-      db.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('foo', 1, 3, 0, 0)"),
-    ).toThrow(/UNIQUE/);
-    db.run("UPDATE projects SET status = 'archived' WHERE id = 1");
-    db.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('foo', 1, 3, 0, 0)");
-    expect(() => db.run("UPDATE projects SET status = 'paused' WHERE id = 1")).toThrow(/CHECK/);
-  });
-
   it("一个项目只有一个群；一个群只属于一个项目", () => {
     const db = migratedWithPm();
     seedProject(db);
@@ -430,19 +428,6 @@ describe("0002_projects：约束", () => {
     expect(() =>
       db.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('bar', 1, 2, 0, 0)"),
     ).toThrow(/UNIQUE/);
-  });
-
-  it("同一个真实路径只能当一个项目的主文件夹；当别的项目的附加文件夹可以", () => {
-    const db = migratedWithPm();
-    seedProject(db);
-    db.exec(`
-      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (3, 'project_group', 1, 'bar', 0);
-      INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (2, 'bar', 1, 3, 0, 0);
-    `);
-    expect(() => db.run("INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/foo', 1, 0)")).toThrow(
-      /UNIQUE/,
-    );
-    db.run("INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/foo', 0, 0)");
   });
 
   it("一个项目只有一个主文件夹；主文件夹不能标移除；同一个文件夹不能重复挂，移除后可以再挂", () => {
@@ -535,7 +520,11 @@ describe("0002_projects：审查补的约束", () => {
     db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (9, 'project_group', 1, 'bar', 0)");
     const cases: [string, string][] = [
       ["projects.pm_id", "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('bar', 99, 9, 0, 0)"],
-      ["projects.conversation_id", "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('bar', 1, 99, 0, 0)"],
+      // 项目经理 1 已经有一个进行中的项目（0003 起只能有一个），这条用归档的
+      [
+        "projects.conversation_id",
+        "INSERT INTO projects (name, status, pm_id, conversation_id, created_at, updated_at) VALUES ('bar', 'archived', 1, 99, 0, 0)",
+      ],
       ["project_folders.project_id", "INSERT INTO project_folders (project_id, path, added_at) VALUES (99, '/x', 0)"],
       [
         "persona_changes.pm_id",
@@ -565,24 +554,163 @@ describe("0002_projects：审查补的约束", () => {
     for (const [name, sql] of cases) expect(() => db.run(sql), name).toThrow(/FOREIGN KEY/);
   });
 
-  it("主文件夹路径唯一只算没移除的：换下来、标了移除的旧主文件夹不占路径", () => {
-    const db = migratedWithPm();
-    seedProject(db);
-    db.exec(`
-      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (3, 'project_group', 1, 'bar', 0);
-      INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (2, 'bar', 1, 3, 0, 0);
-    `);
-    // 以后换主文件夹的做法：先把 is_main 改成 0 再标移除（主文件夹本身不能标移除）
-    db.run("UPDATE project_folders SET is_main = 0, removed_at = 5 WHERE project_id = 1 AND path = '/code/foo'");
-    db.run("INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (1, '/code/foo-new', 1, 5)");
-    db.run("INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/foo', 1, 6)");
-    expect(db.get("SELECT count(*) AS n FROM project_folders WHERE path = '/code/foo'")).toEqual({ n: 2 });
-  });
-
   it("pms 有 persona_file_hash 列：上次成功写入文件的内容哈希，新建的是 NULL", () => {
     const db = migratedWithPm();
     expect(db.get("SELECT persona_file_hash FROM pms WHERE id = 1")).toEqual({ persona_file_hash: null });
     db.run("UPDATE pms SET persona_file_hash = 'abc' WHERE id = 1");
+  });
+});
+
+// ---- 0003_pm_conversation：一个项目经理就是一个会话（11-03）----
+
+/**
+ * M2 开发时的库（user_version 2）：seedM1 的两个项目经理和私聊，再加一个项目群 foo（项目 1，群 2），
+ * 交接过一次（群会话 2 属于项目经理 1，第 2 代会话 4 属于阿周），群里一条已回复、一条还在排队的消息（动作还没执行），
+ * 阿周私聊里一条“交给了你”的系统消息，一条交接文件记录、一条 hub 调用、一条性格设定修改。
+ */
+function m2DevDb(): Db {
+  const db = open();
+  migrate(db, m1MigrationsDir());
+  seedM1(db);
+  migrate(db, migrationsUpTo(2));
+  db.exec(`
+    INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (2, 'project_group', 1, 'foo', 20);
+    INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (1, 'foo', 2, 2, 20, 30);
+    UPDATE conversations SET project_id = 1 WHERE id = 2;
+    INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (1, '/code/foo', 1, 20);
+    INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (1, '/code/docs', 0, 21);
+    INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+      VALUES (2, 'pm', 2, 1, 'v-2', '/code/foo', '["/code/docs"]', 1, 'ended', 20, 30);
+    INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor_session_id, cwd, add_dirs, generation, status, created_at, updated_at)
+      VALUES (4, 'pm', 2, 2, 'v-4', '/code/foo', '["/code/docs"]', 2, 'idle', 30, 30);
+    INSERT INTO handoffs (project_id, from_session_id, to_session_id, from_pm_id, to_pm_id, file, reason, created_at)
+      VALUES (1, 2, 4, 1, 2, '/s/handoffs/1/1-x.md', 'reassign', 30);
+    INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
+      VALUES (2, 2, 'user', 'text', '这个文件夹里有什么', 'client:2:a', 'replied', 22, 23);
+    INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
+      VALUES (2, 4, 'user', 'text', '发布日期是哪天', 'client:2:b', 'queued', 31, 31);
+    INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+      VALUES (3, 3, 'system', 'text', '【系统】项目经理把 foo 交给了你',
+              '{"event":"project.reassigned","projectId":1,"handoffId":1,"fromPmId":1,"toPmId":2}', 'system:3:project.reassigned:1', 'replied', 30, 32);
+    INSERT INTO actions (type, dedupe_key, params, status, next_attempt_at, created_at, updated_at)
+      VALUES ('session.send', '3', '{"sessionId":4,"messageId":3,"source":"user"}', 'pending', 31, 31, 31);
+    INSERT INTO hub_calls (session_id, command, args, ok, result, created_at)
+      VALUES (2, 'project.assign', '{"project":"foo","to":"阿周"}', 1, '已交给阿周', 30);
+    INSERT INTO persona_changes (pm_id, actor, session_id, text_before, text_after, mode_before, mode_after, created_at)
+      VALUES (1, 'pm', 2, 'a', 'b', 'manage_only', 'manage_only', 25);
+  `);
+  return db;
+}
+
+function rowCounts(db: Db): Record<string, number> {
+  return Object.fromEntries(tableNames(db).map((t) => [t, db.get<{ n: number }>(`SELECT count(*) AS n FROM ${t}`)!.n]));
+}
+
+describe("0003_pm_conversation：从 M2 开发时的库升级", () => {
+  it("一行不删：老群、群里的消息、交接、hub 调用都还在；老群的项目标归档，群里的会话标已结束，私聊不动", () => {
+    const db = m2DevDb();
+    const before = rowCounts(db);
+    const messagesBefore = db.all("SELECT * FROM messages ORDER BY id");
+
+    expect(migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 3, 12, 0, 0) })).toMatchObject({ from: 2, to: 3, applied: [3] });
+
+    expect(rowCounts(db)).toEqual(before);
+    expect(db.all("SELECT * FROM messages ORDER BY id")).toEqual(messagesBefore);
+    expect(db.get("SELECT status FROM projects WHERE id = 1")).toEqual({ status: "archived" });
+    expect(db.all("SELECT id, status FROM agent_sessions ORDER BY id")).toEqual([
+      { id: 1, status: "idle" },
+      { id: 2, status: "ended" },
+      { id: 3, status: "idle" },
+      { id: 4, status: "ended" },
+    ]);
+    expect(db.all("SELECT path, is_main, removed_at FROM project_folders ORDER BY id")).toEqual([
+      { path: "/code/foo", is_main: 1, removed_at: null },
+      { path: "/code/docs", is_main: 0, removed_at: null },
+    ]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("升级前把库备份成 hub.sqlite.bak-2-<时间>，里面还是升级前的样子", () => {
+    const db = m2DevDb();
+    migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 3, 12, 0, 0) });
+    const backups = readdirSync(dir!).filter((f) => f.startsWith("hub.sqlite.bak-2-"));
+    expect(backups).toEqual(["hub.sqlite.bak-2-20261103T120000Z"]);
+    const backup = openDatabase(join(dir!, backups[0]!));
+    try {
+      expect(userVersion(backup)).toBe(2);
+      expect(backup.get("SELECT status FROM projects WHERE id = 1")).toEqual({ status: "active" });
+    } finally {
+      backup.close();
+    }
+  });
+
+  it("升级后账本：网页上看不到老群和归档的项目；项目经理的会话照常能聊；老群的主文件夹能在私聊里拿来建项目", () => {
+    const db = m2DevDb();
+    migrate(db, migrationsDir);
+    const root = mkdtempSync(join(tmpdir(), "agent-hub-m3-ledger-"));
+    extraDirs.push(root);
+    const ledger = createLedger(db, { pmHomeRoot: join(root, "pm-home"), resolveFolder: (p) => p });
+
+    const snapshot = ledger.snapshot();
+    expect(snapshot.conversations.map((c) => c.conversation.id)).toEqual([1, 3]);
+    expect(snapshot.projects).toEqual([]);
+    expect(snapshot.folders).toEqual([]);
+    expect(snapshot.sessions.map((s) => s.sessionId)).toEqual([1, 3]);
+    // 阿周私聊里那条老的“交给了你”系统消息照常显示
+    expect(snapshot.conversations.find((c) => c.conversation.id === 3)!.messages.map((m) => m.sender)).toEqual(["system"]);
+    expect(() => ledger.postUserMessage({ conversationId: 2, clientId: "c", text: "还在吗" })).toThrow(ConversationNotFoundError);
+    expect(() => ledger.requestStop(2)).toThrow(ConversationNotFoundError);
+    // 翻老群的更早消息、重试老群里失败的消息：也当老群不存在，什么也不登记
+    expect(() => ledger.messagesBefore(2, 99)).toThrow(ConversationNotFoundError);
+    db.run("UPDATE messages SET status = 'failed' WHERE id = 3");
+    const actionsBefore = db.all("SELECT * FROM actions ORDER BY id");
+    expect(() => ledger.retryMessage(3)).toThrow(LedgerRequestError);
+    expect(() => ledger.retryMessage(3)).toThrow(/没有编号 3 的消息/);
+    expect(db.all("SELECT * FROM actions ORDER BY id")).toEqual(actionsBefore);
+    expect(db.get("SELECT status FROM messages WHERE id = 3")).toEqual({ status: "failed" });
+
+    const { messageId } = ledger.postUserMessage({ conversationId: 1, clientId: "c1", text: "在吗" });
+    expect(db.get("SELECT session_id, status FROM messages WHERE id = ?", messageId)).toEqual({ session_id: 1, status: "queued" });
+    expect(db.get("SELECT params FROM actions WHERE type = 'session.send' AND dedupe_key = ?", String(messageId))).toEqual({
+      params: JSON.stringify({ sessionId: 1, messageId, source: "user" }),
+    });
+
+    const created = ledger.hubCall(1, "project.create", { folder: "/code/foo" });
+    expect(created.data.project).toMatchObject({ name: "foo", pmId: 1, conversationId: 1, status: "active" });
+    expect(db.get("SELECT cwd, add_dirs FROM agent_sessions WHERE id = 1")).toEqual({ cwd: "/code/foo", add_dirs: "[]" });
+  });
+});
+
+describe("0003_pm_conversation：约束", () => {
+  it("一个项目经理同时只有一个进行中的项目；归档的不算", () => {
+    const db = migratedWithPm();
+    db.exec(`
+      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (2, 'project_group', 1, 'old', 0);
+      INSERT INTO projects (id, name, status, pm_id, conversation_id, created_at, updated_at) VALUES (1, 'old', 'archived', 1, 2, 0, 0);
+    `);
+    db.run("INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (2, 'foo', 1, 1, 0, 0)");
+    db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (3, 'project_group', 1, 'bar', 0)");
+    expect(() => db.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('bar', 1, 3, 0, 0)")).toThrow(
+      /UNIQUE/,
+    );
+    // 一个对话也只挂一个项目
+    db.run("INSERT INTO pms (id, name, created_at) VALUES (2, '阿周', 0)");
+    expect(() => db.run("INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('baz', 2, 1, 0, 0)")).toThrow(
+      /UNIQUE/,
+    );
+  });
+
+  it("项目名可以重复；主文件夹路径的唯一不在库里限制（账本只拦进行中的项目）", () => {
+    const db = migratedWithPm();
+    db.exec(`
+      INSERT INTO pms (id, name, created_at) VALUES (2, '阿周', 0);
+      INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (2, 'pm', 2, '阿周', 0);
+      INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (1, 'app', 1, 1, 0, 0);
+      INSERT INTO projects (id, name, pm_id, conversation_id, created_at, updated_at) VALUES (2, 'app', 2, 2, 0, 0);
+      INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (1, '/code/app', 1, 0);
+      INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/app', 1, 0);
+    `);
+    expect(db.get("SELECT count(*) AS n FROM project_folders WHERE path = '/code/app'")).toEqual({ n: 2 });
   });
 });
 

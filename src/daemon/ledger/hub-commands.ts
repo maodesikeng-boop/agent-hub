@@ -1,8 +1,8 @@
-// 账本里的 hub 命令（m2-plan 第 3 节第 4 条）：按会话认人、分派到各命令、回给 agent 的话、记 hub_calls。
+// 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、分派到各命令、回给 agent 的话、记 hub_calls。
 // 整条链：shared/hub.ts（命令表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
 import { PM_MODE_LABELS } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
-import type { HubArgs, HubCommand, HubData, HubResult } from "../../shared/hub.ts";
+import type { HubArgs, HubCommand, HubResult, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
@@ -10,64 +10,47 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
-import type { ConversationDbRow, PmDbRow } from "./rows.ts";
 
+/** status 里的一句“项目和文件夹”。 */
+function describeProject(card: ProjectCard | null): string {
+  if (card === null) return "还没有项目。用户让你建项目时，用 hub project create --folder <主文件夹> 建。";
+  const others = card.otherFolders.length === 0 ? "没有附加文件夹" : `附加文件夹 ${card.otherFolders.join("、")}`;
+  return `管着项目“${card.name}”：主文件夹 ${card.mainFolder}，${others}。`;
+}
 
 export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
-  const { projectRow, managedProjects, projectCard, createProjectIn, attachIn, detachIn, assignIn } = projects;
+  const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn } = projects;
 
   const runHub = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, command: HubCommand, args: unknown): HubResult<HubCommand> => {
     switch (command) {
       case "status": {
         const pm = pmRow(caller.pmId)!;
-        const conversation = db.get<ConversationDbRow>("SELECT * FROM conversations WHERE id = ?", caller.conversationId ?? -1);
-        const projects = managedProjects(pm.id).map(projectCard);
-        const where =
-          conversation === undefined
-            ? "不在任何对话里"
-            : conversation.kind === "project_group"
-              ? `在项目“${projectRow(conversation.project_id!).name}”的群里`
-              : "在和用户的私聊里";
-        const list = projects.length === 0 ? "现在没有管着项目。" : `管着 ${projects.length} 个项目：${projects.map((x) => x.name).join("、")}。`;
-        const data: HubData<"status"> = {
-          pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
-          sessionId: caller.id,
-          conversation: {
-            id: conversation?.id ?? -1,
-            kind: (conversation?.kind ?? "pm") as HubData<"status">["conversation"]["kind"],
-            projectId: conversation?.project_id ?? null,
-          },
-          projects,
+        const row = activeProjectOf(pm.id);
+        const project = row === null ? null : projectCard(row);
+        return {
+          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}`,
+          data: { pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode }, sessionId: caller.id, conversationId: caller.conversationId ?? -1, project },
         };
-        return { text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），现在${where}，${list}`, data };
-      }
-      case "pm.list": {
-        const pms = db.all<PmDbRow>("SELECT * FROM pms ORDER BY id").map((pm) => ({
-          id: pm.id,
-          name: pm.name,
-          mode: pm.mode as PmMode,
-          projects: managedProjects(pm.id).map((x) => x.name),
-        }));
-        const lines = pms.map((pm) => `- ${pm.name}（${PM_MODE_LABELS[pm.mode]}）：${pm.projects.length === 0 ? "没有项目" : pm.projects.join("、")}`);
-        return { text: `所有项目经理：\n${lines.join("\n")}`, data: { pms } };
       }
       case "project.create": {
         const a = args as HubArgs<"project.create">;
-        const result = createProjectIn(p, { name: a.name, folder: a.folder, pmId: caller.pmId, ...(a.description !== undefined ? { description: a.description } : {}) });
-        const { project, mainFolder, conversation } = result;
+        const { project, mainFolder } = createProjectIn(p, {
+          pmId: caller.pmId,
+          folder: a.folder,
+          ...(a.name !== undefined ? { name: a.name } : {}),
+          ...(a.description !== undefined ? { description: a.description } : {}),
+        });
         return {
-          text: `已建好项目“${project.name}”，主文件夹 ${mainFolder.path}；左栏多了群“${conversation.title}”，以后这个项目的事在群里聊。`,
-          data: { project, mainFolder, conversation },
+          text: `已建好项目“${project.name}”，主文件夹 ${mainFolder.path}。下一条消息起你就在这个文件夹里工作（会自动按新设置重启，聊过的都在）。`,
+          data: { project, mainFolder },
         };
       }
       case "project.attach":
         return attachIn(p, caller, args as HubArgs<"project.attach">);
       case "project.detach":
         return detachIn(p, caller, args as HubArgs<"project.detach">);
-      case "project.assign":
-        return assignIn(p, caller, args as HubArgs<"project.assign">);
       case "persona.show": {
         const view = getPersona(caller.pmId);
         return { text: `模式：${PM_MODE_LABELS[view.mode]}\n\n${view.text}`, data: { text: view.text, mode: view.mode } };

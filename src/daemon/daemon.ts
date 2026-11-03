@@ -123,7 +123,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const ledger = createLedger(db, {
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
-      handoffsDir: paths.handoffsDir,
       dataHome: paths.home,
     });
     const sessions = createSessionStore(db);

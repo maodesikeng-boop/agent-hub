@@ -5,7 +5,6 @@ import type {
   Conversation,
   ConversationSnapshot,
   CreatePmRequest,
-  CreateProjectRequest,
   EditPersonaRequest,
   HealthEntry,
   Message,
@@ -97,11 +96,6 @@ export function makeProject(over: Partial<Project> = {}): Project {
 
 export function makeFolder(over: Partial<ProjectFolder> = {}): ProjectFolder {
   return { id: 1, projectId: 1, path: "/work/foo", isMain: true, addedAt: 1_000, removedAt: null, ...over };
-}
-
-/** 项目群的对话（kind project_group）。 */
-export function makeGroupConversation(over: Partial<Conversation> = {}): Conversation {
-  return { id: 2, kind: "project_group", pmId: 1, projectId: 1, title: "foo", createdAt: 1_000, ...over };
 }
 
 export function makeSystemMessage(over: Partial<Message> & Pick<Message, "id"> & { event?: SystemMessageMeta }): Message {
@@ -208,10 +202,6 @@ export class FakeApi {
     status: 201,
     body: { pmId: 50, conversationId: 50 },
   });
-  createProject: (body: CreateProjectRequest) => Reply | Promise<Reply> = () => ({
-    status: 201,
-    body: { projectId: 60, conversationId: 60 },
-  });
   getPersona: (pmId: number) => Reply | Promise<Reply> = (pmId) => ({ status: 200, body: makePersonaView({ pmId }) });
   putPersona: (pmId: number, body: EditPersonaRequest) => Reply | Promise<Reply> = (pmId) => ({
     status: 200,
@@ -244,7 +234,6 @@ export class FakeApi {
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
     }
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
-    if (method === "POST" && url.pathname === "/api/projects") return jsonResponse(await this.createProject(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
     if (persona && method === "GET") return jsonResponse(await this.getPersona(Number(persona[1])));
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));

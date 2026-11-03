@@ -21,27 +21,3 @@ export function Avatar({ colorKey, size = 44 }: { colorKey: number; size?: numbe
     </AvatarRoot>
   );
 }
-
-/** 项目群的头像：项目名首字，底色和团子同一组。 */
-export function GroupAvatar({ name, colorKey, size = 44 }: { name: string; colorKey: number; size?: number }) {
-  const color = BLOB_COLORS[Math.abs(colorKey) % BLOB_COLORS.length];
-  return (
-    <span
-      data-slot="group-avatar"
-      aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-2xl font-semibold text-white uppercase"
-      style={{ width: size, height: size, backgroundColor: color, fontSize: size * 0.42 }}
-    >
-      {[...name][0] ?? "?"}
-    </span>
-  );
-}
-
-/** 对话的头像：群用首字，私聊用团子。 */
-export function EntryAvatar({ kind, name, colorKey, size }: { kind: string; name: string; colorKey: number; size?: number }) {
-  return kind === "project_group" ? (
-    <GroupAvatar name={name} colorKey={colorKey} size={size} />
-  ) : (
-    <Avatar colorKey={colorKey} size={size} />
-  );
-}

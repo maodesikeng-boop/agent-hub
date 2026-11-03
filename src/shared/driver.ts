@@ -259,8 +259,8 @@ export interface Driver {
    * session_ended 不是故障，处理函数（W6，handlers.ts）这样接：
    * - 不计入 driver 的 health（不抛给执行器，执行器就不会记）；
    * - session.start 遇到 session_ended → 返回 done；
-   * - session.send 遇到 session_ended → 返回 later（不加失败次数）：交接的事务里账本已经把它改指新一代，下次执行用新参数；
-   *   如果参数里的会话仍是已结束的那一个（不该发生），调 ledger.onActionFailed 把消息标 failed，返回 done。
+   * - session.send 遇到 session_ended → 返回 done：这条消息发不出去了。已经写进去一半（已送达、处理中，重启恢复时会遇到）的
+   *   按“这一轮被打断”标已停止；还在排队的调 ledger.onActionFailed 标失败（老的项目群升级后会遇到：迁移 0003 把群里的会话标了 ended）。
    */
   end(sessionId: SessionId): Promise<void>;
   /** 守护进程关机：给所有 claude 发 SIGINT，空闲的关掉标准输入，最多等 10 秒，剩下的按进程组强制结束。 */
@@ -293,7 +293,7 @@ export interface LaunchFiles {
   env: Record<string, string>;
   /**
    * 提示词、设置文件、MCP 配置内容的摘要：用 src/shared/launch.ts 的 launchFingerprint 算。内容一样就一样，变了就不一样。
-   * 只算实际写进文件的内容，不含时间、随机数、令牌；群的提示词里不放 managedProjects。驱动层只比较它是否相等。
+   * 只算实际写进文件的内容，不含时间、随机数、令牌。驱动层只比较它是否相等。
    */
   fingerprint: string;
 }

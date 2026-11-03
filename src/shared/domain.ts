@@ -12,7 +12,6 @@ export type ActionId = number;
 export type ProjectId = number;
 export type ProjectFolderId = number;
 export type PersonaChangeId = number;
-export type HandoffId = number;
 export type HubCallId = number;
 
 export type Unsubscribe = () => void;
@@ -25,6 +24,10 @@ export function isOneOf<const T extends readonly unknown[]>(values: T, value: un
   return values.includes(value);
 }
 
+/**
+ * project_group：项目群，2026-11-03 拿掉了（一个项目经理就是一个会话）。只剩 M2 开发时留下的老数据：
+ * 迁移 0003 把它们的项目标归档、会话标已结束，账本不再建，快照里不给，网页上看不到。数据库的 CHECK 里还有它。
+ */
 export const CONVERSATION_KINDS = ["assistant", "pm", "project_group"] as const;
 export type ConversationKind = (typeof CONVERSATION_KINDS)[number];
 
@@ -140,8 +143,9 @@ export interface Pm {
 }
 
 /**
- * kind 是 project_group 时：projectId 一定有（数据库里按 project_id 唯一，一个项目一个群），
- * pmId 是建群时的项目经理，之后换人不改（现在归谁管看 Project.pmId）；title 是建群时的项目名。
+ * kind 是 pm：项目经理唯一的那个对话（左栏一行），pmId 是它，title 是建的时候的名字。它的项目（如果有）是
+ * Project.conversationId 指向它的那个，projectId 一直是 null。
+ * kind 是 project_group：老的项目群（见 CONVERSATION_KINDS），projectId 是老项目。
  */
 export interface Conversation {
   id: ConversationId;
@@ -152,13 +156,18 @@ export interface Conversation {
   createdAt: number;
 }
 
-/** 进行中 / 已归档 / 已删除。M2 只用 active（归档、删除要审批，M4）。数据库里有 CHECK。 */
+/**
+ * 进行中 / 已归档 / 已删除。数据库里有 CHECK。账本只建 active 的；archived 现在只有迁移 0003 归档的老项目群
+ * （归档、删除要审批，M4）。快照里只给 active 的。
+ */
 export const PROJECT_STATUSES = ["active", "archived", "deleted"] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 /**
- * 项目（设计第 9 章）。进行中的项目名字唯一（数据库部分唯一索引），用 normalizeName 规整过。
- * conversationId 是它的群，建项目时在同一个事务里建好，之后不变。
+ * 项目（设计第 9 章，11-03 改过）：一个项目经理管的那一套文件夹（一个主文件夹 + 可选的附加文件夹）。
+ * 每个项目经理同时只有一个进行中的项目（数据库部分唯一索引），挂在它唯一的那个对话上：
+ * 那个对话的会话在主文件夹里跑，附加文件夹用 --add-dir 带进去。不能交给别的项目经理。
+ * 名字只给人看（不唯一），用 normalizeName 规整过，默认是主文件夹的名字。
  */
 export interface Project {
   id: ProjectId;
@@ -166,8 +175,9 @@ export interface Project {
   /** 一句话说明，没有就是 null。不超过 MAX_DESCRIPTION_CHARS 个字符。 */
   description: string | null;
   status: ProjectStatus;
-  /** 现在归谁管；换项目经理时改。 */
+  /** 管这个项目的项目经理，建好后不变。 */
   pmId: PmId;
+  /** 这个项目经理的对话（kind pm）；老项目群的项目是那个群。 */
   conversationId: ConversationId;
   createdAt: number;
   updatedAt: number;
@@ -176,7 +186,7 @@ export interface Project {
 /**
  * 项目挂的文件夹。path 是 resolveFolder 之后的真实路径（展开 ~、realpathSync.native）。
  * - 一个项目同一时间只有一个主文件夹，主文件夹不能标移除（数据库有约束；换主文件夹 M2 不做）；
- * - 同一个真实路径只能当一个项目的主文件夹（removedAt 为空的那些里），当别的项目的附加文件夹可以；
+ * - 同一个真实路径只能当一个进行中项目的主文件夹（removedAt 为空的那些里；账本查，数据库不限），当别的项目的附加文件夹可以；
  * - 同一个项目同一个路径同一时间只挂一次；移除只标 removedAt，不删行、不碰磁盘，之后可以再挂（新的一行）。
  */
 export interface ProjectFolder {
@@ -214,32 +224,11 @@ export interface PersonaChange {
   createdAt: number;
 }
 
-/** 交接原因。M2 只有换项目经理；以后有“会话太长”“换主文件夹”。会扩展，数据库不加 CHECK。 */
-export const HANDOFF_REASONS = ["reassign"] as const;
-export type HandoffReason = (typeof HANDOFF_REASONS)[number];
-
-/**
- * 一份交接（设计第 9 章）。正文在 file（state/handoffs/<项目编号>/<交接编号>-<时间>.md，见 paths.ts 的 handoffFilePath），
- * 账本在事务提交前写好（临时文件 + 改名），写不了整个命令失败。
- */
-export interface Handoff {
-  id: HandoffId;
-  projectId: ProjectId;
-  fromSessionId: SessionId;
-  toSessionId: SessionId;
-  fromPmId: PmId;
-  toPmId: PmId;
-  file: string;
-  reason: HandoffReason;
-  createdAt: number;
-}
-
 /**
  * 一次 hub 调用的记录（m2-plan 第 7 节第 9 条）。令牌不对、参数校验没过的请求到不了账本，不记。
  * 成功的和业务改动在同一个事务里写；失败的在回滚之后另起一个事务写。
  * 这里只是审计用的摘要：args 里每个字符串字段、以及 result，超过 HUB_CALL_FIELD_MAX_BYTES 就截断
- * （按 UTF-8 字节截在字符边界上，末尾加“…（截断，原长 N 字节）”）。完整正文以 handoffs（交接文件）、
- * persona_changes 为准。
+ * （按 UTF-8 字节截在字符边界上，末尾加“…（截断，原长 N 字节）”）。性格设定的完整正文以 persona_changes 为准。
  */
 export interface HubCall {
   id: HubCallId;
@@ -301,8 +290,7 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
 
 /**
  * 系统消息的去重键：`system:<对话>:<事件>:<相关编号>`。相关编号：project.created → projectId；
- * folder.attached / detached → folderId；project.reassigned → handoffId；persona.changed → personaChangeId。
- * 带上对话编号，因为同一份交接在群和接手人的私聊各发一条。
+ * folder.attached / detached → folderId；persona.changed → personaChangeId。
  */
 export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
   const ref = ((): number => {
@@ -312,8 +300,6 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
       case "folder.attached":
       case "folder.detached":
         return meta.folderId;
-      case "project.reassigned":
-        return meta.handoffId;
       case "persona.changed":
         return meta.personaChangeId;
     }
@@ -321,31 +307,26 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
   return `system:${conversationId}:${meta.event}:${ref}`;
 }
 
-/** 系统消息的事件（Message.meta.event）。会扩展。 */
-export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "project.reassigned", "persona.changed"] as const;
+/**
+ * 系统消息的事件（Message.meta.event）。会扩展。
+ * 11-03 拿掉了 project.reassigned（交接）：老数据里还有，systemEventOf 认不出就当普通系统消息，照样居中显示文字。
+ */
+export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed"] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
 /**
- * 系统消息的 meta（sender 是 system、kind 是 text）。哪条发在哪个对话、要不要也发给 agent：
- * - project.created：发在新项目的群（“项目已建好”）。只给人看。
- * - folder.attached / folder.detached：发在项目的群（下一条消息前自动重启生效）。要不要也发给群里的 agent，看是谁调的 hub：
- *   - 就是这个群最新一代的会话自己调的：只给人看（status null）。它自己刚做的事不用再告诉它；不单独发【系统】消息，
- *     免得白白多跑一轮。重启后驱动层在下一条写进去的消息前面拼 RELAUNCH_NOTE（见 driver.ts），说明从那里来；
- *   - 别的会话调的（比如在私聊里挂文件夹）：同时发给群里的 agent。
- * - project.reassigned：发在项目的群（“项目经理由小林换成阿周，交接在这里”，只给人看，新一代会话的提示词里已经有交接）；
- *   在接手的项目经理的私聊再发一条（“小林把 foo 交给了你”），同时发给 agent。两条 meta 一样。
- * - persona.changed：发在发起修改的对话（项目经理自己改的：那个会话的对话；用户在界面改、撤销的，以及启动时发现文件被手改的：
- *   这个项目经理的私聊）。只给人看，界面上带“撤销”按钮（personaChangeId；只有最近一条能撤销）。
- *
- * “同时发给 agent”的：账本在同一个事务里写这条消息（status = queued）并登记 session.send（source: "system"），
- * 文字以 SYSTEM_MESSAGE_PREFIX 开头，原样写给 agent。只给人看的 status 是 null，文字不带前缀。
- * 网页显示时一律过一遍 stripSystemPrefix，不显示投递状态。
+ * 系统消息的 meta（sender 是 system、kind 是 text）。都发在项目经理的那个对话里，只给人看（status null，文字不带前缀）：
+ * - project.created：“项目已建好”；
+ * - folder.attached / folder.detached：挂上、移除了文件夹。下一条消息前自动重启生效；不单独给 agent 发【系统】消息
+ *   （hub 是它自己调的，白白多跑一轮），重启后驱动层在下一条写进去的消息前面拼 RELAUNCH_NOTE（见 driver.ts）；
+ * - persona.changed：改了性格设定（项目经理自己、用户在界面改、撤销、启动时发现文件被手改）。界面上带“撤销”按钮
+ *   （personaChangeId；只有最近一条能撤销）。
+ * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
  */
 export type SystemMessageMeta =
   | { event: "project.created"; projectId: ProjectId }
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
-  | { event: "project.reassigned"; projectId: ProjectId; handoffId: HandoffId; fromPmId: PmId; toPmId: PmId }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null };
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
@@ -411,18 +392,19 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined): boolea
 }
 
 /**
- * 会话。项目经理的会话（role = pm）：
- * - 私聊：conversationId 是它的私聊，cwd 是 pm-home/<编号>/，addDirs 空；
- * - 项目群：conversationId 是群，cwd 是项目主文件夹的真实路径，addDirs 是其他没移除的文件夹（挂、移除时账本改这一列）。
- *   换项目经理时开下一代（generation + 1，属于新项目经理）；发消息一律找这个对话 generation 最大的那个会话。
+ * 会话。项目经理的会话（role = pm）：conversationId 是项目经理的那个对话。
+ * - 还没有项目：cwd 是 pm-home/<编号>/（它自己的空目录），addDirs 空；
+ * - 有项目：cwd 是主文件夹的真实路径，addDirs 是其他没移除的文件夹。建项目、挂和移除文件夹时账本改这两列，
+ *   驱动层在下一条消息前按新的值 --resume 重启（--resume 换了工作目录也接得上，m0-report 实验 2）。
+ * 发消息一律找这个对话 generation 最大的那个会话（现在每个对话只有一代；以后自动换代时加一）。
  */
 export interface AgentSessionRow {
   id: SessionId;
   role: AgentRole;
   conversationId: ConversationId | null;
   /**
-   * 这个会话属于哪个项目经理（M2 起）。项目经理的会话一定有：同一个群换人后，旧一代仍属于原项目经理，
-   * 提示词、hub 认人都按它。总助、Worker 的会话是 null。M1 留下的会话迁移时按对话补上。
+   * 这个会话属于哪个项目经理（M2 起）。项目经理的会话一定有，提示词、hub 认人都按它。
+   * 总助、Worker 的会话是 null。M1 留下的会话迁移时按对话补上。
    */
   pmId: PmId | null;
   ticketId: number | null;
@@ -449,17 +431,13 @@ export type SessionActivity = "idle" | "working" | "stopping";
 
 /**
  * 网页要显示的会话状态（状态行、停止按钮、等额度）。WebSocket 的 session.status、session.created 推的就是它。
- * 一个对话可能有好几代会话（换项目经理后旧一代还会回完最后一轮）：网页和账本凡是要“这个对话的当前会话”的地方
- * （状态行、停止按钮、等额度、发消息、requestStop），一律取这个对话里 generation 最大的那一个，不按 sessionId 大小、
- * 不按推送先后。旧一代的状态照常推，网页收着但不拿来显示。
+ * 网页和账本凡是要“这个对话的当前会话”的地方（状态行、停止按钮、等额度、发消息、requestStop），一律取这个对话里
+ * generation 最大的那一个，不按 sessionId 大小、不按推送先后。
  */
 export interface SessionState {
   sessionId: SessionId;
   conversationId: ConversationId | null;
-  /**
-   * 同 AgentSessionRow.pmId。网页按消息的 sessionId 找到会话，再用它给消息署名：
-   * 换项目经理后旧一代会话的消息仍署原来的项目经理。总助、Worker 的会话是 null。
-   */
+  /** 同 AgentSessionRow.pmId。总助、Worker 的会话是 null。 */
   pmId: PmId | null;
   /** 同 AgentSessionRow.generation。 */
   generation: number;

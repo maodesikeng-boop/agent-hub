@@ -10,8 +10,6 @@ import {
   type ConversationId,
   type CreatePmInput,
   type CreatePmResult,
-  type CreateProjectInput,
-  type CreateProjectResult,
   type EditPersonaInput,
   type EditPersonaResult,
   type Ledger,
@@ -77,7 +75,6 @@ export class FakeLedger {
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly changesSinceCalls: number[] = [];
   readonly createdPms: CreatePmInput[] = [];
-  readonly createdProjects: Array<{ input: CreateProjectInput; actor: LedgerActor }> = [];
   readonly personaReads: PmId[] = [];
   readonly personaEdits: Array<{ pmId: PmId; input: EditPersonaInput; actor: LedgerActor }> = [];
   readonly reverted: PersonaChangeId[] = [];
@@ -159,18 +156,10 @@ export class FakeLedger {
       pm: { id: 7, name: input.name, avatarFile: null, mode: input.mode, defaultModel: input.defaultModel ?? null, personaFile: null, createdAt: 1 },
       conversation: { id: 70, kind: "pm", pmId: 7, projectId: null, title: input.name, createdAt: 1 },
       sessionId: 700,
-    };
-  }
-
-  createProject(input: CreateProjectInput, actor: LedgerActor): CreateProjectResult {
-    this.check();
-    this.createdProjects.push({ input, actor });
-    const conversation = { id: 80, kind: "project_group" as const, pmId: input.pmId, projectId: 8, title: input.name, createdAt: 1 };
-    return {
-      project: { id: 8, name: input.name, description: input.description ?? null, status: "active", pmId: input.pmId, conversationId: 80, createdAt: 1, updatedAt: 1 },
-      mainFolder: { id: 1, projectId: 8, path: input.folder, isMain: true, addedAt: 1, removedAt: null },
-      conversation,
-      sessionId: 800,
+      project:
+        input.folder === undefined
+          ? null
+          : { id: 8, name: "foo", description: null, status: "active", pmId: 7, conversationId: 70, createdAt: 1, updatedAt: 1 },
     };
   }
 
@@ -249,7 +238,6 @@ export class FakeLedger {
       onActionFailed: unused("onActionFailed"),
       stopMessage: unused("stopMessage"),
       reportHealth: unused("reportHealth"),
-      createProject: (i, a) => this.createProject(i, a),
       getPersona: (p) => this.getPersona(p),
       editPersona: (p, i, a) => this.editPersona(p, i, a),
       revertPersonaChange: (c) => this.revertPersonaChange(c),

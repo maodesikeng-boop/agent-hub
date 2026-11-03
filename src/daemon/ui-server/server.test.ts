@@ -29,7 +29,6 @@ const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
 const INDEX_HTML = "<!doctype html><title>agent-hub</title>";
 
 const NEW_PM = { name: "阿周", mode: "hands_on", defaultModel: "claude-haiku-5-5", persona: "# 性格\n- 简短" };
-const NEW_PROJECT = { name: "foo", folder: "~/code/foo", pmId: 1, description: "一个项目" };
 
 let staticDir: string;
 let ledger: FakeLedger;
@@ -135,7 +134,6 @@ describe("登录 /auth", () => {
 /** M2 新接口记下的调用总数。 */
 const ledgerCalls = () =>
   ledger.createdPms.length +
-  ledger.createdProjects.length +
   ledger.personaReads.length +
   ledger.personaEdits.length +
   ledger.reverted.length +
@@ -150,7 +148,6 @@ describe("没登录", () => {
     ["GET", "/api/ws"],
     ["GET", "/api/no-such-thing"],
     ["POST", "/api/pms", NEW_PM],
-    ["POST", "/api/projects", NEW_PROJECT],
     ["GET", "/api/pms/1/persona"],
     ["PUT", "/api/pms/1/persona", { text: "x" }],
     ["POST", "/api/persona-changes/1/revert"],
@@ -354,15 +351,17 @@ describe("GET /api/state 和 /messages?before=", () => {
   });
 
   it("/api/state 带着 projects 和 folders（M2），原样转给网页", async () => {
-    const project = ledger.createProject({ name: "foo", folder: "/code/foo", pmId: 1 }, { kind: "user" });
+    const created = ledger.createPm({ ...NEW_PM, mode: "hands_on", folder: "/code/foo" });
+    const project = created.project!;
+    const mainFolder = { id: 1, projectId: project.id, path: "/code/foo", isMain: true, addedAt: 1, removedAt: null };
     ledger.snapshotValue = {
       ...ledger.snapshotValue,
-      projects: [project.project],
-      folders: [project.mainFolder, { ...project.mainFolder, id: 2, path: "/code/shared", isMain: false }],
-      conversations: [{ conversation: project.conversation, messages: [], hasMore: false }],
+      projects: [project],
+      folders: [mainFolder, { ...mainFolder, id: 2, path: "/code/shared", isMain: false }],
+      conversations: [{ conversation: created.conversation, messages: [], hasMore: false }],
     };
     const body = (await call("GET", "/api/state")).json();
-    expect(body.projects).toEqual([project.project]);
+    expect(body.projects).toEqual([project]);
     expect(body.folders).toHaveLength(2);
     expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
   });
@@ -392,6 +391,12 @@ describe("GET /api/state 和 /messages?before=", () => {
 
   it("对话不存在：404", async () => {
     const res = await call("GET", "/api/conversations/99/messages?before=3");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "conversation_not_found" });
+  });
+
+  it("翻页时对话不存在（包括老的项目群）：404", async () => {
+    const res = await call("GET", "/api/conversations/99/messages?before=5");
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "conversation_not_found" });
   });
@@ -531,7 +536,6 @@ describe("停止 POST /api/conversations/:id/stop", () => {
 
 const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["POST /api/pms", "POST", "/api/pms", NEW_PM],
-  ["POST /api/projects", "POST", "/api/projects", NEW_PROJECT],
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST retry", "POST", "/api/messages/1/retry"],
@@ -623,6 +627,19 @@ describe("POST /api/pms 建项目经理", () => {
     expect(ledger.createdPms).toEqual([NEW_PM]);
   });
 
+  it("主文件夹可选：给了原样交给账本（带 ~ 也不展开，账本解析）", async () => {
+    const body = { ...NEW_PM, folder: "~/code/foo" };
+    expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
+    expect(ledger.createdPms).toEqual([body]);
+  });
+
+  it("账本抛 invalid（比如文件夹不存在）：400，带原因，原样给用户看", async () => {
+    ledger.failWith = new LedgerRequestError("invalid", "文件夹不存在，请先建好：/x");
+    const res = await call("POST", "/api/pms", { body: { ...NEW_PM, folder: "/x" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "文件夹不存在，请先建好：/x", code: "invalid" });
+  });
+
   it("defaultModel 不给、给 null、给空串都放行，原样交给账本", async () => {
     const { defaultModel: _omit, ...withoutModel } = NEW_PM;
     for (const body of [withoutModel, { ...NEW_PM, defaultModel: null }, { ...NEW_PM, defaultModel: "" }]) {
@@ -631,12 +648,13 @@ describe("POST /api/pms 建项目经理", () => {
     expect(ledger.createdPms).toEqual([withoutModel, { ...NEW_PM, defaultModel: null }, { ...NEW_PM, defaultModel: "" }]);
   });
 
-  it("边界刚好放行：名字 40 个字符、性格设定 32 KB（按字节）、模型名 100 个字符", async () => {
+  it("边界刚好放行：名字 40 个字符、性格设定 32 KB（按字节）、模型名 100 个字符、路径 4096 字节", async () => {
     const body = {
       name: "名".repeat(MAX_NAME_CHARS),
       mode: "manage_only",
       defaultModel: "m".repeat(MAX_MODEL_CHARS),
       persona: "a".repeat(MAX_PERSONA_BYTES),
+      folder: "/".padEnd(MAX_PATH_BYTES, "a"),
     };
     expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
     expect(ledger.createdPms).toHaveLength(1);
@@ -660,6 +678,12 @@ describe("POST /api/pms 建项目经理", () => {
     ["没给性格设定", { name: "阿周", mode: "hands_on" }],
     ["模型名超过 100 个字符", { ...NEW_PM, defaultModel: "m".repeat(MAX_MODEL_CHARS + 1) }],
     ["模型名不是字符串", { ...NEW_PM, defaultModel: 3 }],
+    ["路径是空串", { ...NEW_PM, folder: "" }],
+    ["路径全是空白", { ...NEW_PM, folder: "  " }],
+    ["路径超过 4096 字节", { ...NEW_PM, folder: "/".padEnd(MAX_PATH_BYTES + 1, "a") }],
+    ["路径按字节算：中文 1366 个字（4098 字节）", { ...NEW_PM, folder: "字".repeat(1366) }],
+    ["路径带 NUL", { ...NEW_PM, folder: "/x\u0000y" }],
+    ["路径不是字符串", { ...NEW_PM, folder: 1 }],
     ["多余字段", { ...NEW_PM, avatarFile: "x.png" }],
     ["body 是数组", [NEW_PM]],
     ["body 是 null", null],
@@ -681,73 +705,11 @@ describe("POST /api/pms 建项目经理", () => {
   });
 });
 
-describe("POST /api/projects 建项目", () => {
-  it("调 ledger.createProject（actor 是用户），201 返回项目编号和群编号", async () => {
-    const res = await call("POST", "/api/projects", { body: NEW_PROJECT });
-    expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ projectId: 8, conversationId: 80 });
-    expect(ledger.createdProjects).toEqual([{ input: NEW_PROJECT, actor: { kind: "user" } }]);
-  });
-
-  it("description 可以不给；路径带 ~ 原样交给账本，界面服务不展开", async () => {
-    const { description: _omit, ...body } = NEW_PROJECT;
-    expect((await call("POST", "/api/projects", { body })).statusCode).toBe(201);
-    expect(ledger.createdProjects[0]?.input).toEqual(body);
-    expect(ledger.createdProjects[0]?.input.folder).toBe("~/code/foo");
-  });
-
-  it("边界刚好放行：名字 40 个字符、说明 200 个字符、路径 4096 字节", async () => {
-    const body = {
-      name: "名".repeat(MAX_NAME_CHARS),
-      folder: "/".padEnd(MAX_PATH_BYTES, "a"),
-      pmId: 1,
-      description: "说".repeat(MAX_DESCRIPTION_CHARS),
-    };
-    expect((await call("POST", "/api/projects", { body })).statusCode).toBe(201);
-  });
-
-  it("账本抛 invalid（比如文件夹不存在）：400，带原因，原样给用户看", async () => {
-    ledger.failWith = new LedgerRequestError("invalid", "文件夹不存在，请先建好：/x");
-    const res = await call("POST", "/api/projects", { body: NEW_PROJECT });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ error: "文件夹不存在，请先建好：/x", code: "invalid" });
-  });
-
-  const badBodies: Array<[string, unknown]> = [
-    ["名字是空串", { ...NEW_PROJECT, name: "" }],
-    ["名字超过 40 个字符", { ...NEW_PROJECT, name: "名".repeat(MAX_NAME_CHARS + 1) }],
-    ["名字带控制字符", { ...NEW_PROJECT, name: "a\u0085b" }],
-    ["没给名字", { folder: "/x", pmId: 1 }],
-    ["路径是空串", { ...NEW_PROJECT, folder: "" }],
-    ["路径全是空白", { ...NEW_PROJECT, folder: "  " }],
-    ["路径超过 4096 字节", { ...NEW_PROJECT, folder: "/".padEnd(MAX_PATH_BYTES + 1, "a") }],
-    ["路径按字节算：中文 1366 个字（4098 字节）", { ...NEW_PROJECT, folder: "字".repeat(1366) }],
-    ["路径带 NUL", { ...NEW_PROJECT, folder: "/x\u0000y" }],
-    ["路径不是字符串", { ...NEW_PROJECT, folder: 1 }],
-    ["没给路径", { name: "foo", pmId: 1 }],
-    ["pmId 是字符串", { ...NEW_PROJECT, pmId: "1" }],
-    ["pmId 是 0", { ...NEW_PROJECT, pmId: 0 }],
-    ["pmId 是负数", { ...NEW_PROJECT, pmId: -1 }],
-    ["pmId 是小数", { ...NEW_PROJECT, pmId: 1.5 }],
-    ["pmId 超出安全整数", { ...NEW_PROJECT, pmId: 2 ** 53 }],
-    ["没给 pmId", { name: "foo", folder: "/x" }],
-    ["说明超过 200 个字符", { ...NEW_PROJECT, description: "说".repeat(MAX_DESCRIPTION_CHARS + 1) }],
-    ["说明不是字符串", { ...NEW_PROJECT, description: 1 }],
-    ["多余字段", { ...NEW_PROJECT, status: "archived" }],
-    ["body 是数组", []],
-  ];
-
-  it.each(badBodies)("请求体不对：%s → 400，code 是 invalid，不调账本", async (_name, body) => {
-    const res = await call("POST", "/api/projects", { rawBody: JSON.stringify(body) });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ code: "invalid" });
-    expect(ledger.createdProjects).toEqual([]);
-  });
-
-  it("body 不是合法 JSON、没有 body：400，不调账本", async () => {
-    expect((await call("POST", "/api/projects", { rawBody: "nope" })).statusCode).toBe(400);
-    expect((await call("POST", "/api/projects")).statusCode).toBe(400);
-    expect(ledger.createdProjects).toEqual([]);
+describe("POST /api/projects（11-03 拿掉了单独建项目的入口）", () => {
+  it("登录了也是 404，不调账本", async () => {
+    const res = await call("POST", "/api/projects", { body: { name: "foo", folder: "/x", pmId: 1 } });
+    expect(res.statusCode).toBe(404);
+    expect(ledgerCalls()).toBe(0);
   });
 });
 
@@ -1056,33 +1018,33 @@ describe("WebSocket /api/ws", () => {
     expect(ledger.listenerCount).toBe(0);
   });
 
-  /** M2 新增的 7 种变化，各造一条。 */
+  /** M2 新增的 6 种变化，各造一条。 */
   function m2Changes(): Array<() => Change> {
-    const created = ledger.createProject({ name: "foo", folder: "/code/foo", pmId: 7 }, { kind: "user" });
-    const pm = ledger.createPm(NEW_PM as never).pm;
-    const session = { sessionId: 800, conversationId: 80, pmId: 9, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null } as const;
+    const created = ledger.createPm({ ...NEW_PM, mode: "hands_on", folder: "/code/foo" });
+    const { pm } = created;
+    const project = created.project!;
+    const mainFolder = { id: 1, projectId: project.id, path: "/code/foo", isMain: true, addedAt: 1, removedAt: null };
+    const session = { sessionId: 700, conversationId: 70, pmId: 7, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null } as const;
     return [
       () => ledger.emitChange("pm.created", { pm }),
       () => ledger.emitChange("pm.updated", { pm: { ...pm, mode: "manage_only" } }),
-      () => ledger.emitChange("project.created", { project: created.project }),
-      () => ledger.emitChange("project.updated", { project: { ...created.project, pmId: 9 } }),
-      () => ledger.emitChange("folders.updated", { projectId: 8, folders: [created.mainFolder] }),
+      () => ledger.emitChange("project.created", { project }),
+      () => ledger.emitChange("folders.updated", { projectId: project.id, folders: [mainFolder] }),
       () => ledger.emitChange("conversation.created", { conversation: created.conversation }),
       () => ledger.emitChange("session.created", { session }),
     ];
   }
 
-  it("M2 的 7 种新变化：实时推给网页，原样 { seq, type, data }", async () => {
+  it("M2 的 6 种新变化：实时推给网页，原样 { seq, type, data }", async () => {
     const client = await connect(ledger.currentSeq);
     const emitted = m2Changes().map((emit) => emit());
-    await client.waitFor(7);
+    await client.waitFor(6);
     await client.settle();
     expect(client.received).toEqual(emitted);
     expect(emitted.map((c) => c.type)).toEqual([
       "pm.created",
       "pm.updated",
       "project.created",
-      "project.updated",
       "folders.updated",
       "conversation.created",
       "session.created",
@@ -1094,7 +1056,7 @@ describe("WebSocket /api/ws", () => {
     const since = ledger.currentSeq;
     const emitted = m2Changes().map((emit) => emit());
     const client = await connect(since);
-    await client.waitFor(7);
+    await client.waitFor(6);
     await client.settle();
     expect(client.received).toEqual(emitted);
     client.ws.terminate();

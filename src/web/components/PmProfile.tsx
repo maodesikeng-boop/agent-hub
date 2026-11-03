@@ -10,6 +10,7 @@ import {
   type Pm,
   type PmMode,
   type Project,
+  type ProjectFolder,
 } from "../../shared/index.ts";
 import { ApiError, fetchPersona, postRevertPersonaChange, putPersona } from "../client.ts";
 import { ACTOR_LABELS, errorText, formatTime } from "../format.ts";
@@ -192,15 +193,18 @@ function PersonaEditor({ pm, persona, onUpdate }: { pm: Pm; persona: PersonaView
   );
 }
 
-/** 项目经理资料页（设计第 3.6 节）：模式、模型、性格设定可改，修改记录，管着哪些项目。 */
+/** 项目经理资料页（设计第 3.6 节）：模式、模型、性格设定可改，修改记录，它的项目和文件夹。 */
 export function PmProfile({
   pm,
-  projects,
+  project,
+  folders,
   rev,
   onBack,
 }: {
   pm: Pm;
-  projects: Project[];
+  project: Project | null;
+  /** 项目没移除的文件夹，主文件夹在前。 */
+  folders: ProjectFolder[];
   /** pm.updated 的次数，变了就重新拉。 */
   rev: number;
   onBack: () => void;
@@ -221,18 +225,22 @@ export function PmProfile({
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[15px]">
             <dt className="text-muted-foreground">模型</dt>
             <dd>{pm.defaultModel ?? "默认"}</dd>
-            <dt className="text-muted-foreground">管着的项目</dt>
-            <dd>
-              {projects.length === 0 ? (
-                "还没有"
-              ) : (
-                <ul className="flex flex-wrap gap-x-4">
-                  {projects.map((p) => (
-                    <li key={p.id}>{p.name}</li>
-                  ))}
-                </ul>
-              )}
-            </dd>
+            <dt className="text-muted-foreground">项目</dt>
+            <dd>{project ? project.name : "还没有"}</dd>
+            {folders.length > 0 && (
+              <>
+                <dt className="text-muted-foreground">文件夹</dt>
+                <dd className="min-w-0">
+                  <ul aria-label="文件夹" className="grid gap-0.5">
+                    {folders.map((f) => (
+                      <li key={f.id} className="truncate" title={f.path}>
+                        {f.path}
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </>
+            )}
           </dl>
           {load.phase === "loading" && (
             <div className="flex items-center gap-2 text-muted-foreground">

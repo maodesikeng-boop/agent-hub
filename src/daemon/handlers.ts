@@ -37,7 +37,7 @@ export function createSessionStartHandler(deps: Pick<HandlerDeps, "driver">): Ac
     try {
       await deps.driver.start(sessionId, recovery ? { recovery: true } : {});
     } catch (error) {
-      // 会话已经结束（交接后的旧一代）：没什么可起的
+      // 会话已经结束：没什么可起的
       if (isSessionEnded(error)) return { kind: "done" };
       throw error;
     }
@@ -71,15 +71,12 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       });
     } catch (error) {
       if (!isSessionEnded(error)) throw error;
-      // 交接的事务里账本把排队的消息（messages.session_id 和这个动作的参数）一起改指了新一代：later，下次执行用新参数
+      // 会话已经结束（迁移 0003 结束了老项目群的会话；以后 M3 结束 Worker 会话），这条消息发不出去了。
+      // 已经写进去一半的（已送达、处理中：重启恢复时会遇到）按“这一轮被重启打断”处理，标已停止（和关机打断一轮一样）；
+      // 还在排队的没有这一轮可停，标失败。
       const now = deps.ledger.getMessage(messageId);
       if (now === null) return { kind: "done" };
-      if (now.sessionId !== sessionId) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_ended" };
-      // 还指着这个已结束的会话：重启恢复时会发生——交接那一轮（旧项目经理跑了 hub project assign，这一轮还没结束）被重启打断，
-      // 重启后 session.end 先结束旧会话，恢复登记的 session.send 随后撞上 session_ended。交接已经做过了，按“这一轮被重启打断”处理，
-      // 标已停止（和关机打断一轮一样），不标失败：失败的话用户点重试会把同一句话再发给新项目经理。
-      // 排队中的消息没有这一轮可停（不该走到这里）：标失败，用户点重试会发给现在的项目经理。
-      if (now.status === "queued") deps.ledger.onActionFailed(action, "这条消息发给的项目经理已经换人，请重发");
+      if (now.status === "queued") deps.ledger.onActionFailed(action, "这个会话已经结束，发不出去了");
       else deps.ledger.stopMessage(messageId);
       return { kind: "done" };
     }

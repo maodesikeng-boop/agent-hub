@@ -5,8 +5,6 @@ import {
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
-  type CreateProjectRequest,
-  type CreateProjectResponse,
   type EditPersonaRequest,
   type EditPersonaResponse,
   type MessageId,
@@ -94,10 +92,6 @@ export function postStop(conversationId: ConversationId): Promise<void> {
 
 export function postCreatePm(body: CreatePmRequest): Promise<CreatePmResponse> {
   return postJson<CreatePmResponse>(API_PATHS.pms, body);
-}
-
-export function postCreateProject(body: CreateProjectRequest): Promise<CreateProjectResponse> {
-  return postJson<CreateProjectResponse>(API_PATHS.projects, body);
 }
 
 export function fetchPersona(pmId: PmId): Promise<PersonaResponse> {

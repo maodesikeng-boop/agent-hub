@@ -4,11 +4,10 @@ import type { ConversationId, PersonaChangeId, PmId } from "../shared/index.ts";
 import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
-import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, pmOfMessage, projectsOf, sessionOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, sessionOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useHub } from "./useHub.ts";
 
@@ -21,7 +20,7 @@ export function App() {
   const [drafts, setDrafts] = useState<Record<ConversationId, string>>({});
   /** 打开着的项目经理资料页；选了左栏的对话就回到对话。 */
   const [profilePm, setProfilePm] = useState<PmId | null>(null);
-  const [creating, setCreating] = useState<"pm" | "project" | null>(null);
+  const [creating, setCreating] = useState(false);
 
   if (state.phase === "loading") {
     return (
@@ -55,12 +54,13 @@ export function App() {
   const view = active ? state.conversations[active.id] : undefined;
   const notices = <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
+  const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
   const select = (id: ConversationId) => {
     setProfilePm(null);
     setSelected(id);
   };
   const created = (conversationId: ConversationId) => {
-    setCreating(null);
+    setCreating(false);
     select(conversationId);
   };
   const actions = {
@@ -77,17 +77,16 @@ export function App() {
         entries={entries}
         activeId={profile ? null : (active?.id ?? null)}
         onSelect={select}
-        onNewPm={() => setCreating("pm")}
-        onNewProject={() => setCreating("project")}
+        onNewPm={() => setCreating(true)}
       />
-      <NewPmDialog open={creating === "pm"} onOpenChange={(open) => !open && setCreating(null)} onCreated={created} />
-      <NewProjectDialog open={creating === "project"} onOpenChange={(open) => !open && setCreating(null)} pms={state.pms} onCreated={created} />
+      <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {profile ? (
           <PmProfile
             key={profile.id}
             pm={profile}
-            projects={projectsOf(state, profile.id)}
+            project={profileEntry?.project ?? null}
+            folders={profileEntry?.folders ?? []}
             rev={state.personaRev[profile.id] ?? 0}
             onBack={() => setProfilePm(null)}
           />
@@ -98,7 +97,6 @@ export function App() {
             view={view}
             pending={pendingOf(state, active.id)}
             session={sessionOf(state, active.id)}
-            pmOf={(message) => pmOfMessage(state, message)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             notices={notices}

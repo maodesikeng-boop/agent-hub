@@ -1,6 +1,6 @@
-// pnpm smoke：用真 claude 跑冒烟场景（m1-plan 第 4 节的 S1～S4、m2-plan 第 4 节的 S5～S9，外加强制结束 S10）。
+// pnpm smoke：用真 claude 跑冒烟场景（m1-plan 第 4 节的 S1～S4、m2-plan 第 4 节的 S5、S6、S8、S9（S7 交接 11-03 拿掉了），外加强制结束 S10）。
 // 不进 pnpm check 和 CI；验收时和每次升级 claude 后手动跑。真 claude 用的是订阅额度，每个场景跑通一次就够，失败了先看日志。
-// 只跑一部分：pnpm smoke S5 S7，或 pnpm smoke S10（匹配 S10a、S10b）。S1～S4 是一串（S2 靠 S1 记下的暗号），选其中一个就整串都跑。
+// 只跑一部分：pnpm smoke S5 S6，或 pnpm smoke S10（匹配 S10a、S10b）。S1～S4 是一串（S2 靠 S1 记下的暗号），选其中一个就整串都跑。
 // 场景失败时数据目录留着（路径会打印），日志在 <目录>/home/state/logs/sessions/。
 // 文件分工：kit.ts 是共用的零件（起守护进程、发消息等回复、读库读日志、查进程）；m1.ts、m2.ts、force-kill.ts 是各组场景。
 import { Smoke, CLAUDE, MODEL, type Outcome } from "./kit.ts";

@@ -157,14 +157,8 @@ describe("session.send 处理函数", () => {
   });
 });
 
-describe("session.send 处理函数：撞上 session_ended（交接后旧一代已结束）", () => {
-  it("消息已经改指新一代（交接的事务里改的）→ later，不加失败次数、不标失败；下次执行用新参数", async () => {
-    const { d, onActionFailed } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 2 }) });
-    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_ended" });
-    expect(onActionFailed).not.toHaveBeenCalled();
-  });
-
-  it("消息仍然指着这个已结束的会话（重启恢复时会发生：交接那一轮被打断）→ 按这一轮被打断处理，标已停止，不标失败，done", async () => {
+describe("session.send 处理函数：撞上 session_ended（会话已经结束，比如迁移 0003 结束了老项目群的会话）", () => {
+  it("已经写进去一半（已送达、处理中，重启恢复时会遇到）→ 按这一轮被打断处理，标已停止，不标失败，done", async () => {
     for (const status of ["delivered", "processing"] as const) {
       const { d, onActionFailed, stopMessage } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 1, status }) });
       expect(await createSessionSendHandler(d)(sendAction({ resend: true }))).toEqual({ kind: "done" });
@@ -173,12 +167,12 @@ describe("session.send 处理函数：撞上 session_ended（交接后旧一代�
     }
   });
 
-  it("还在排队（queued）却指着已结束的会话：停不了（排队中没有这一轮）→ 标失败，写中文原因，用户点重试发给现在的项目经理", async () => {
+  it("还在排队（queued）：停不了（排队中没有这一轮）→ 标失败，写中文原因", async () => {
     const { d, onActionFailed, stopMessage } = deps({ send: new DriverError("session_ended", "session 1 has been ended"), message: message({ sessionId: 1, status: "queued" }) });
     const row = sendAction();
     expect(await createSessionSendHandler(d)(row)).toEqual({ kind: "done" });
     expect(stopMessage).not.toHaveBeenCalled();
-    expect(onActionFailed).toHaveBeenCalledWith(row, "这条消息发给的项目经理已经换人，请重发");
+    expect(onActionFailed).toHaveBeenCalledWith(row, "这个会话已经结束，发不出去了");
   });
 
   it("重读时消息没了 → done", async () => {

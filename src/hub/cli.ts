@@ -28,18 +28,17 @@ const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
 /** hub 用法，给人看（hub help、用法不对时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
 export const HUB_USAGE = `用法：
-  hub status                                              我是谁、在哪个对话、管哪些项目
-  hub pm list                                             所有项目经理和各自管的项目
-  hub project create --name <名> --folder <路径> [--description <说明>]
-  hub project attach <项目> <文件夹>
-  hub project detach <项目> <文件夹>
-  hub project assign <项目> --to <项目经理名字> (--stdin | --text <交接正文>)
+  hub status                                              我是谁、我的项目和文件夹
+  hub project create --folder <主文件夹> [--name <名>] [--description <说明>]
+                                                          建项目（一个项目经理只管一个项目）
+  hub project attach <文件夹>                             给项目挂上附加文件夹
+  hub project detach <文件夹>                             从项目上移除附加文件夹
   hub persona show
   hub persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
 
 长文本用 --stdin 从标准输入读，例如：
-  hub project assign foo --to 阿周 --stdin <<'EOF'
-  交接正文
+  hub persona edit --stdin <<'EOF'
+  新的完整性格设定
   EOF
 令牌和 socket 路径由 hub 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
@@ -54,7 +53,6 @@ type Options = {
   name?: string;
   folder?: string;
   description?: string;
-  to?: string;
   text?: string;
   stdin?: boolean;
   mode?: string;
@@ -69,7 +67,7 @@ interface Parsed {
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "handoff" | "text";
+  textField?: "text";
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
@@ -110,7 +108,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         name: { type: "string" },
         folder: { type: "string" },
         description: { type: "string" },
-        to: { type: "string" },
         text: { type: "string" },
         stdin: { type: "boolean" },
         mode: { type: "string" },
@@ -131,37 +128,19 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     expectPositionals(parsed.positionals.slice(1), 0, "status");
     return { command: "status", body: {}, textSource: null };
   }
-  if (group === "pm" && action === "list") {
-    allowOnly(values, [], "pm list");
-    expectPositionals(rest, 0, "pm list");
-    return { command: "pm.list", body: {}, textSource: null };
-  }
   if (group === "project" && action === "create") {
     allowOnly(values, ["name", "folder", "description"], "project create");
     expectPositionals(rest, 0, "project create");
-    if (values.name === undefined || values.folder === undefined) throw new UsageError("hub project create 要 --name 和 --folder");
-    const body: Record<string, string> = { name: values.name, folder: expandPath(values.folder, env, cwd) };
+    if (values.folder === undefined) throw new UsageError("hub project create 要 --folder <主文件夹>");
+    const body: Record<string, string> = { folder: expandPath(values.folder, env, cwd) };
+    if (values.name !== undefined) body.name = values.name;
     if (values.description !== undefined) body.description = values.description;
     return { command: "project.create", body, textSource: null };
   }
   if (group === "project" && (action === "attach" || action === "detach")) {
     allowOnly(values, [], `project ${action}`);
-    expectPositionals(rest, 2, `project ${action}`);
-    const [project, folder] = rest as [string, string];
-    return { command: `project.${action}`, body: { project, folder: expandPath(folder, env, cwd) }, textSource: null };
-  }
-  if (group === "project" && action === "assign") {
-    allowOnly(values, ["to", "text", "stdin"], "project assign");
-    expectPositionals(rest, 1, "project assign");
-    if (values.to === undefined) throw new UsageError("hub project assign 要 --to <项目经理名字>");
-    const textSource = textSourceOf(values);
-    if (textSource === null) throw new UsageError("hub project assign 要交接正文：用 --stdin 从标准输入读，或者 --text <正文>");
-    return {
-      command: "project.assign",
-      body: { project: rest[0] as string, to: values.to },
-      textSource,
-      textField: "handoff",
-    };
+    expectPositionals(rest, 1, `project ${action}`);
+    return { command: `project.${action}`, body: { folder: expandPath(rest[0] as string, env, cwd) }, textSource: null };
   }
   if (group === "persona" && action === "show") {
     allowOnly(values, [], "persona show");

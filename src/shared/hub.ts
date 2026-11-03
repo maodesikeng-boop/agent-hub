@@ -5,17 +5,7 @@
 // 应答：HubResponse，HTTP 状态按 HUB_ERROR_HTTP_STATUS（成功 200）。
 // 校验分两层：agent 接口按 JSON Schema 查形状和长度（缺参数、多余参数、超长 → invalid，不调账本）；
 // 账本查业务（项目在不在、管不管得着、文件夹对不对）。
-import type {
-  Conversation,
-  Handoff,
-  PersonaChange,
-  PmId,
-  PmMode,
-  Project,
-  ProjectFolder,
-  ProjectId,
-  SessionId,
-} from "./domain.ts";
+import type { ConversationId, PersonaChange, PmId, PmMode, Project, ProjectFolder, ProjectId, SessionId } from "./domain.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
@@ -40,35 +30,23 @@ export function buildHubSettings(hubSockRealPath: string) {
 }
 
 /**
- * M2 的命令。命令行写法 → 命令名：
- * - `hub status`                                         → status：我是谁、在哪个对话、管哪些项目
- * - `hub pm list`                                        → pm.list：所有项目经理和各自管的项目（交接时找人）
- * - `hub project create --name <名> --folder <路径> [--description <说明>]` → project.create
- * - `hub project attach <项目> <文件夹>`                  → project.attach
- * - `hub project detach <项目> <文件夹>`                  → project.detach
- * - `hub project assign <项目> --to <项目经理名字> (--stdin | --text <正文>)` → project.assign，交接正文必填
+ * 命令（11-03 起一个项目经理只管一个项目，不再有项目群、交接）。命令行写法 → 命令名：
+ * - `hub status`                                         → status：我是谁、我的项目和文件夹
+ * - `hub project create --folder <路径> [--name <名>] [--description <说明>]` → project.create：给自己建项目（只能有一个）
+ * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
+ * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
  * - `hub persona show`                                   → persona.show
  * - `hub persona edit [--mode <模式>] [--reason <理由>] [--stdin | --text <正文>]` → persona.edit，新全文；可以只改模式
  *
  * hub 命令行的约定：
- * - <项目> 是项目名（进行中的项目名字唯一）；
+ * - 项目不用点名：每个项目经理只有一个，账本按会话找；
  * - 路径参数里开头的 `~` 由 hub 展开成 HOME，相对路径按 hub 的当前目录变成绝对路径，再发出去；账本还会 resolveFolder 一次；
  * - 长文本：只有显式写了 `--stdin` 才读标准输入（读到结束，去掉末尾一个换行），没写就绝不碰标准输入
  *   （agent 的 shell 里标准输入可能一直开着，“没带正文就去读”会卡住）。不用 `--text -` 这种写法。
- *   提示词里教 `hub project assign foo --to 阿周 --stdin <<'EOF'`。
- *   --stdin 和 --text 同时给 → 用法不对，退出码 2；project.assign 两样都没有（或读到空的）→ 用法不对；
- *   persona.edit 没有正文也没有 --mode → 用法不对。
+ *   提示词里教 `hub persona edit --stdin <<'EOF'`。
+ *   --stdin 和 --text 同时给 → 用法不对，退出码 2；persona.edit 没有正文也没有 --mode（或读到空的）→ 用法不对。
  */
-export const HUB_COMMANDS = [
-  "status",
-  "pm.list",
-  "project.create",
-  "project.attach",
-  "project.detach",
-  "project.assign",
-  "persona.show",
-  "persona.edit",
-] as const;
+export const HUB_COMMANDS = ["status", "project.create", "project.attach", "project.detach", "persona.show", "persona.edit"] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
 export function hubPath(command: HubCommand): string {
@@ -78,12 +56,10 @@ export function hubPath(command: HubCommand): string {
 /** 各命令的请求体。字符串长度上限见 limits.ts；路径都是绝对路径。 */
 export interface HubArgsMap {
   status: Record<string, never>;
-  "pm.list": Record<string, never>;
-  "project.create": { name: string; folder: string; description?: string };
-  "project.attach": { project: string; folder: string };
-  "project.detach": { project: string; folder: string };
-  /** to：接手的项目经理名字；handoff：交接正文（不超过 MAX_HANDOFF_BYTES，不能是空白）。 */
-  "project.assign": { project: string; to: string; handoff: string };
+  /** name 不给就用主文件夹的名字。 */
+  "project.create": { folder: string; name?: string; description?: string };
+  "project.attach": { folder: string };
+  "project.detach": { folder: string };
   "persona.show": Record<string, never>;
   /** text：新的完整性格设定（不超过 MAX_PERSONA_BYTES）。text、mode 至少给一个。 */
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
@@ -91,7 +67,7 @@ export interface HubArgsMap {
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 
-/** 项目名片：私聊的提示词、hub status 里用。 */
+/** 项目名片：提示词、hub status 里用。 */
 export interface ProjectCard {
   id: ProjectId;
   name: string;
@@ -107,17 +83,14 @@ export interface HubDataMap {
   status: {
     pm: { id: PmId; name: string; mode: PmMode };
     sessionId: SessionId;
-    /** 这个会话所在的对话（私聊或某个群）。 */
-    conversation: Pick<Conversation, "id" | "kind" | "projectId">;
-    /** 它现在管的进行中的项目。 */
-    projects: ProjectCard[];
+    /** 项目经理的那个对话。 */
+    conversationId: ConversationId;
+    /** 它的项目；还没有是 null。 */
+    project: ProjectCard | null;
   };
-  "pm.list": { pms: { id: PmId; name: string; mode: PmMode; projects: string[] }[] };
-  "project.create": { project: Project; mainFolder: ProjectFolder; conversation: Conversation };
+  "project.create": { project: Project; mainFolder: ProjectFolder };
   "project.attach": { project: Project; folder: ProjectFolder };
   "project.detach": { project: Project; folder: ProjectFolder };
-  /** sessionId：群里新一代会话（属于接手的项目经理）。 */
-  "project.assign": { project: Project; handoff: Handoff; sessionId: SessionId };
   "persona.show": { text: string; mode: PmMode };
   /** change 为 null：内容和模式都没变，什么也没记。 */
   "persona.edit": { change: PersonaChange | null };
