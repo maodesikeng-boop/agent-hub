@@ -1,2 +1,355 @@
-// 假 claude 的入口占位，W2 填（开头那行 shebang 到时候加上）。
-export {};
+#!/usr/bin/env node
+// 假 claude：照 M0 实测（docs/m0-report.md）的 `claude -p --input-format stream-json --output-format stream-json
+// --verbose --replay-user-messages` 行为回应，事件字段名照抄 M0 的记录。驱动层测试用它代替真 claude。
+//
+// 环境变量：
+// - FAKE_CLAUDE_SCRIPT：剧本（JSON 文件，见 FakeScript）。不给就每轮回一句 "ok"。
+// - FAKE_CLAUDE_LOG：把命令行参数、每一行标准输入、收到的信号、退出码记成 JSONL（见 FakeLogEntry）。
+// - FAKE_CLAUDE_STATE：状态目录，记哪些会话 ID 已经存在、一共跑了几轮（跨进程）。默认是日志所在目录。
+//
+// 默认行为：
+// - --session-id 一个已经存在的 ID（剧本 rejectSessionArgs 时一律当已存在 / 不存在）：标准错误 “Error: Session ID … is already in use.”，退出码 1；
+//   --resume 一个不存在的 ID：标准错误 “No conversation found with session ID: …”，再输出一条
+//   error_during_execution 的 result，退出码 1。
+// - 每轮开头发 system/init；先回显收到的消息（isReplay），再按剧本发 assistant、rate_limit_event、result。
+// - 忙时收到的几条合并成下一轮的一条（回显里是几段 text）。
+// - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
+// - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]` 和一条 result，进程不退出。
+// - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
+// - 标准输入关掉：跑完手上这一轮再退出，退出码 0。
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
+
+/** 一轮里的一步。 */
+export type FakeStep =
+  | { text: string; noUuid?: boolean }
+  | { tool: { name: string; input: unknown; result?: string } }
+  | { rateLimit: Record<string, unknown> }
+  | { raw: string }
+  | { sleepMs: number }
+  | { exit: number };
+
+export interface FakeTurn {
+  steps?: FakeStep[];
+  /** 不给就是 success。 */
+  result?: { subtype?: string; isError?: boolean; result?: string };
+  /** 默认每轮在 result 前发一条 M0 记录里的 rate_limit_event；false 不发。 */
+  rateLimit?: Record<string, unknown> | false;
+}
+
+export interface FakeScript {
+  model?: string;
+  tools?: string[];
+  /** 按跨进程的总轮数取（第 0 轮是 turns[0]）；超出就用 defaultTurn。 */
+  turns?: FakeTurn[];
+  defaultTurn?: FakeTurn;
+  /** 永远不发 init，收到消息也不回应（启动卡住）。 */
+  noInit?: boolean;
+  /** 不理 interrupt 控制消息。 */
+  ignoreControl?: boolean;
+  /** 收到 SIGINT 只记下来，不退出（测关机时的强制结束）。 */
+  ignoreSigint?: boolean;
+  /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
+  rejectSessionArgs?: boolean;
+}
+
+export type FakeLogEntry =
+  | { kind: "argv"; pid: number; argv: string[]; cwd: string }
+  | { kind: "stdin"; pid: number; line: string }
+  | { kind: "signal"; pid: number; signal: string }
+  | { kind: "stdin_closed"; pid: number }
+  | { kind: "exit"; pid: number; code: number };
+
+/** M0 实测的 rate_limit_event.rate_limit_info（额度正常时）。 */
+export const M0_RATE_LIMIT_INFO = {
+  status: "allowed",
+  resetsAt: 1793619600,
+  rateLimitType: "five_hour",
+  overageStatus: "rejected",
+  isUsingOverage: false,
+  unifiedWindows: {
+    five_hour: { utilization: 0.37, resetsAt: 1793619600, status: "allowed" },
+    seven_day: { utilization: 0.59, resetsAt: 1793646000, status: "allowed" },
+  },
+};
+
+export const INTERRUPT_TEXT = "[Request interrupted by user]";
+
+const logFile = process.env.FAKE_CLAUDE_LOG;
+const stateDir = process.env.FAKE_CLAUDE_STATE || (logFile ? dirname(logFile) : undefined);
+const script: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
+  ? (JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) as FakeScript)
+  : {};
+const model = script.model ?? "claude-haiku-5-5";
+const tools = script.tools ?? ["Bash", "Read", "Edit"];
+
+function log(entry: FakeLogEntry): void {
+  if (logFile) appendFileSync(logFile, JSON.stringify(entry) + "\n");
+}
+
+function emit(event: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+function exit(code: number): never {
+  log({ kind: "exit", pid: process.pid, code });
+  process.exit(code);
+}
+
+// --- 会话存不存在（跨进程） ---
+
+function sessionFile(id: string): string | undefined {
+  if (!stateDir) return undefined;
+  const hash = createHash("sha256").update(id).digest("hex").slice(0, 16);
+  return join(stateDir, `fake-session-${hash}`);
+}
+
+function sessionExists(id: string): boolean {
+  const file = sessionFile(id);
+  return file !== undefined && existsSync(file);
+}
+
+function createSession(id: string): void {
+  const file = sessionFile(id);
+  if (!file) return;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, id);
+}
+
+function nextTurnIndex(): number {
+  if (!stateDir) return 0;
+  mkdirSync(stateDir, { recursive: true });
+  const file = join(stateDir, "fake-turns");
+  const n = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
+  writeFileSync(file, String(n + 1));
+  return n;
+}
+
+// --- 参数 ---
+
+const argv = process.argv.slice(2);
+log({ kind: "argv", pid: process.pid, argv, cwd: process.cwd() });
+
+function argValue(name: string): string | undefined {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+
+const newSessionId = argValue("--session-id");
+const resumeId = argValue("--resume");
+const sessionId = newSessionId ?? resumeId ?? randomUUID();
+
+if (newSessionId !== undefined && (script.rejectSessionArgs || sessionExists(newSessionId))) {
+  process.stderr.write(`Error: Session ID ${newSessionId} is already in use.\n`);
+  exit(1);
+}
+if (resumeId !== undefined && (script.rejectSessionArgs || !sessionExists(resumeId))) {
+  process.stderr.write(`No conversation found with session ID: ${resumeId}\n`);
+  emit({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    duration_ms: 0,
+    duration_api_ms: 0,
+    num_turns: 0,
+    session_id: resumeId,
+    total_cost_usd: 0,
+    usage: {},
+    permission_denials: [],
+    uuid: randomUUID(),
+  });
+  exit(1);
+}
+
+// --- 一轮一轮跑 ---
+
+type UserContent = { type: "text"; text: string };
+
+const inbox: UserContent[][] = [];
+let busy = false;
+let stdinClosed = false;
+/** 当前这一轮的编号；打断时加一，旧的那一轮看到编号变了就不再往下做。 */
+let turnSeq = 0;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function result(subtype: string, isError: boolean, text: string, startedAt: number): void {
+  emit({
+    type: "result",
+    subtype,
+    is_error: isError,
+    duration_ms: Date.now() - startedAt,
+    duration_api_ms: Date.now() - startedAt,
+    num_turns: 1,
+    result: text,
+    session_id: sessionId,
+    total_cost_usd: 0.0011,
+    usage: { input_tokens: 10, output_tokens: 5 },
+    permission_denials: [],
+    uuid: randomUUID(),
+  });
+}
+
+function interruptedMarker(): void {
+  emit({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: INTERRUPT_TEXT }] },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+    uuid: randomUUID(),
+  });
+}
+
+function assistant(content: unknown[], withUuid = true): void {
+  const event: Record<string, unknown> = {
+    type: "assistant",
+    message: {
+      id: `msg_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      type: "message",
+      role: "assistant",
+      model,
+      content,
+      stop_reason: null,
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  };
+  if (withUuid) event.uuid = randomUUID();
+  emit(event);
+}
+
+let currentTurnStartedAt = 0;
+
+async function runTurn(content: UserContent[]): Promise<void> {
+  busy = true;
+  const seq = ++turnSeq;
+  const aborted = () => seq !== turnSeq;
+  const startedAt = (currentTurnStartedAt = Date.now());
+  const turnIndex = nextTurnIndex();
+  const turn: FakeTurn = script.turns?.[turnIndex] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
+  if (newSessionId !== undefined) createSession(newSessionId);
+  emit({
+    type: "system",
+    subtype: "init",
+    cwd: process.cwd(),
+    session_id: sessionId,
+    tools,
+    mcp_servers: [],
+    model,
+    permissionMode: "default",
+    apiKeySource: "none",
+    uuid: randomUUID(),
+  });
+  emit({
+    type: "user",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+    uuid: randomUUID(),
+    isReplay: true,
+  });
+  let lastText = "";
+  for (const step of turn.steps ?? []) {
+    if (aborted()) break;
+    if ("sleepMs" in step) {
+      await sleep(step.sleepMs);
+    } else if ("text" in step) {
+      lastText = step.text;
+      assistant([{ type: "text", text: step.text }], !step.noUuid);
+    } else if ("tool" in step) {
+      const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+      assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }]);
+      emit({
+        type: "user",
+        message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content: step.tool.result ?? "" }] },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+        uuid: randomUUID(),
+      });
+    } else if ("rateLimit" in step) {
+      emit({ type: "rate_limit_event", rate_limit_info: step.rateLimit, uuid: randomUUID(), session_id: sessionId });
+    } else if ("raw" in step) {
+      process.stdout.write(step.raw + "\n");
+    } else if ("exit" in step) {
+      exit(step.exit);
+    }
+  }
+  if (aborted()) return; // 打断的那条 result 已经由打断的地方发了
+  if (turn.rateLimit !== false) {
+    emit({
+      type: "rate_limit_event",
+      rate_limit_info: turn.rateLimit ?? M0_RATE_LIMIT_INFO,
+      uuid: randomUUID(),
+      session_id: sessionId,
+    });
+  }
+  const r = turn.result ?? {};
+  result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt);
+  finishTurn();
+}
+
+function finishTurn(): void {
+  busy = false;
+  const next = inbox.splice(0);
+  if (next.length > 0) {
+    void runTurn(next.flat());
+  } else if (stdinClosed) {
+    exit(0);
+  }
+}
+
+function badInput(message: string): never {
+  process.stderr.write(message + "\n");
+  exit(1);
+}
+
+function onLine(line: string): void {
+  log({ kind: "stdin", pid: process.pid, line });
+  let obj: unknown;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    badInput(`Error parsing streaming input line (type=unknown, ${line.length} chars): SyntaxError`);
+  }
+  const msg = obj as { type?: unknown; request_id?: unknown; request?: { subtype?: unknown }; message?: { role?: unknown; content?: unknown } };
+  if (msg.type === "control_request") {
+    if (script.ignoreControl) return;
+    emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
+    if (msg.request?.subtype === "interrupt" && busy) {
+      turnSeq++;
+      interruptedMarker();
+      result("success", false, "", currentTurnStartedAt);
+      finishTurn();
+    }
+    return;
+  }
+  if (msg.message?.role !== "user") badInput(`Error: Expected message role 'user', got '${String(msg.message?.role)}'`);
+  const raw = msg.message.content;
+  const content: UserContent[] =
+    typeof raw === "string" ? [{ type: "text", text: raw }] : Array.isArray(raw) ? (raw as UserContent[]) : [];
+  if (script.noInit) return;
+  if (busy) inbox.push(content);
+  else void runTurn(content);
+}
+
+process.on("SIGINT", () => {
+  log({ kind: "signal", pid: process.pid, signal: "SIGINT" });
+  if (script.ignoreSigint) return;
+  if (busy) {
+    turnSeq++;
+    interruptedMarker();
+    result("error_during_execution", true, "", currentTurnStartedAt);
+  }
+  exit(0);
+});
+
+const rl = createInterface({ input: process.stdin });
+rl.on("line", onLine);
+rl.on("close", () => {
+  log({ kind: "stdin_closed", pid: process.pid });
+  stdinClosed = true;
+  if (!busy) exit(0);
+});
