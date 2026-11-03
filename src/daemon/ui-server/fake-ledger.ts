@@ -5,12 +5,24 @@ import {
   MESSAGE_PAGE_SIZE,
   userMessageDedupeKey,
   type Change,
+  type ChangeDataMap,
   type ChangesSince,
   type ConversationId,
+  type CreatePmInput,
+  type CreatePmResult,
+  type CreateProjectInput,
+  type CreateProjectResult,
+  type EditPersonaInput,
+  type EditPersonaResult,
   type Ledger,
+  type LedgerActor,
   type Message,
   type MessageId,
   type MessagesPage,
+  type PersonaChange,
+  type PersonaChangeId,
+  type PersonaView,
+  type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
   type StateSnapshot,
@@ -36,6 +48,26 @@ export function makeMessage(id: number, conversationId: number, text = `m${id}`)
   };
 }
 
+export function makePersonaChange(id = 1, pmId = 1): PersonaChange {
+  return {
+    id,
+    pmId,
+    actor: "user",
+    sessionId: null,
+    textBefore: "旧",
+    textAfter: "新",
+    modeBefore: "manage_only",
+    modeAfter: "manage_only",
+    reason: null,
+    revertOf: null,
+    createdAt: 1,
+  };
+}
+
+export function makePersonaView(pmId: PmId, changes: PersonaChange[] = []): PersonaView {
+  return { pmId, text: "性格设定正文", mode: "manage_only", changes, revertableChangeId: changes[0]?.id ?? null };
+}
+
 export class FakeLedger {
   /** 存在的对话编号；别的编号抛 ConversationNotFoundError。 */
   conversations = new Set<ConversationId>([1]);
@@ -44,8 +76,16 @@ export class FakeLedger {
   readonly stopped: ConversationId[] = [];
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly changesSinceCalls: number[] = [];
+  readonly createdPms: CreatePmInput[] = [];
+  readonly createdProjects: Array<{ input: CreateProjectInput; actor: LedgerActor }> = [];
+  readonly personaReads: PmId[] = [];
+  readonly personaEdits: Array<{ pmId: PmId; input: EditPersonaInput; actor: LedgerActor }> = [];
+  readonly reverted: PersonaChangeId[] = [];
+  readonly retried: MessageId[] = [];
+  /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
+  personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
-  /** 抛出它来模拟账本内部出错。 */
+  /** 抛出它来模拟账本出错（普通 Error 是内部出错，LedgerRequestError 是被拒绝）；所有方法都抛。 */
   failWith: Error | null = null;
 
   // 变化缓冲区：按 ChangesSince 的注释规则补齐。
@@ -71,11 +111,14 @@ export class FakeLedger {
 
   /** 产生一条变化：seq 加一，进缓冲区，通知监听者。 */
   emitHealthChange(lastError: string | null = null): Change {
-    const change: Change = {
-      seq: ++this.seq,
-      type: "health.updated",
-      data: { health: { module: "driver", consecutiveFailures: lastError === null ? 0 : 1, lastError, updatedAt: this.seq } },
-    };
+    const seq = this.seq + 1;
+    return this.emitChange("health.updated", {
+      health: { module: "driver", consecutiveFailures: lastError === null ? 0 : 1, lastError, updatedAt: seq },
+    });
+  }
+
+  emitChange<T extends Change["type"]>(type: T, data: ChangeDataMap[T]): Change {
+    const change = { seq: ++this.seq, type, data } as Change;
     this.buffer.push(change);
     if (this.buffer.length > CHANGE_BUFFER_SIZE) this.buffer.shift();
     for (const listener of [...this.listeners]) listener(change);
@@ -107,6 +150,53 @@ export class FakeLedger {
     this.check();
     this.requireConversation(conversationId);
     this.stopped.push(conversationId);
+  }
+
+  createPm(input: CreatePmInput): CreatePmResult {
+    this.check();
+    this.createdPms.push(input);
+    return {
+      pm: { id: 7, name: input.name, avatarFile: null, mode: input.mode, defaultModel: input.defaultModel ?? null, personaFile: null, createdAt: 1 },
+      conversation: { id: 70, kind: "pm", pmId: 7, projectId: null, title: input.name, createdAt: 1 },
+      sessionId: 700,
+    };
+  }
+
+  createProject(input: CreateProjectInput, actor: LedgerActor): CreateProjectResult {
+    this.check();
+    this.createdProjects.push({ input, actor });
+    const conversation = { id: 80, kind: "project_group" as const, pmId: input.pmId, projectId: 8, title: input.name, createdAt: 1 };
+    return {
+      project: { id: 8, name: input.name, description: input.description ?? null, status: "active", pmId: input.pmId, conversationId: 80, createdAt: 1, updatedAt: 1 },
+      mainFolder: { id: 1, projectId: 8, path: input.folder, isMain: true, addedAt: 1, removedAt: null },
+      conversation,
+      sessionId: 800,
+    };
+  }
+
+  getPersona(pmId: PmId): PersonaView {
+    this.check();
+    this.personaReads.push(pmId);
+    return makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]);
+  }
+
+  editPersona(pmId: PmId, input: EditPersonaInput, actor: LedgerActor): EditPersonaResult {
+    this.check();
+    this.personaEdits.push({ pmId, input, actor });
+    return { change: this.personaChange, persona: makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]) };
+  }
+
+  revertPersonaChange(changeId: PersonaChangeId): EditPersonaResult {
+    this.check();
+    this.reverted.push(changeId);
+    const pmId = this.personaChange?.pmId ?? 1;
+    return { change: this.personaChange, persona: makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]) };
+  }
+
+  retryMessage(messageId: MessageId): { messageId: MessageId } {
+    this.check();
+    this.retried.push(messageId);
+    return { messageId };
   }
 
   snapshot(): StateSnapshot {
@@ -153,16 +243,15 @@ export class FakeLedger {
       onActionEnqueued: unused("onActionEnqueued"),
       applyDriverEvent: unused("applyDriverEvent"),
       recoverAfterRestart: unused("recoverAfterRestart"),
-      createPm: unused("createPm"),
+      createPm: (i) => this.createPm(i),
       getMessage: unused("getMessage"),
       onActionFailed: unused("onActionFailed"),
       reportHealth: unused("reportHealth"),
-      // M2 W0 占位：界面服务的新接口由 M2 W4 接上
-      createProject: unused("createProject"),
-      getPersona: unused("getPersona"),
-      editPersona: unused("editPersona"),
-      revertPersonaChange: unused("revertPersonaChange"),
-      retryMessage: unused("retryMessage"),
+      createProject: (i, a) => this.createProject(i, a),
+      getPersona: (p) => this.getPersona(p),
+      editPersona: (p, i, a) => this.editPersona(p, i, a),
+      revertPersonaChange: (c) => this.revertPersonaChange(c),
+      retryMessage: (m) => this.retryMessage(m),
       hubCall: unused("hubCall"),
       getLaunchContext: unused("getLaunchContext"),
       syncPersonaFiles: unused("syncPersonaFiles"),

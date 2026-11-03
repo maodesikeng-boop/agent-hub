@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
 import { describeError, formatTime } from "./format.ts";
-import { groupMessages } from "./selectors.ts";
+import { CHANGE_TYPES } from "../shared/index.ts";
+import { groupMessages, isWaitingForQuota, listConversations, sessionOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
+  changeOf,
   makeConvSnapshot,
+  makeFolder,
+  makeGroupConversation,
   makeMessage,
+  makePm,
+  makeProject,
+  makeSession,
   makeSnapshot,
   makeToolMessage,
   makeUserMessage,
@@ -153,5 +160,168 @@ describe("formatTime", () => {
     expect(formatTime(new Date(2026, 10, 3, 9, 5).getTime(), now)).toBe("09:05");
     expect(formatTime(new Date(2026, 9, 20, 9, 5).getTime(), now)).toBe("10/20");
     expect(formatTime(new Date(2025, 0, 2, 9, 5).getTime(), now)).toBe("2025/1/2");
+  });
+});
+
+describe("M2 新的变化类型", () => {
+  it("pm.created / pm.updated：按编号加入或替换项目经理", () => {
+    const s0 = loaded({ pms: [makePm({ id: 1, name: "小林" })] });
+    const s1 = applyChange(s0, changeOf(11, "pm.created", { pm: makePm({ id: 2, name: "阿周" }) }));
+    expect(s1.pms.map((p) => p.name)).toEqual(["小林", "阿周"]);
+    const s2 = applyChange(s1, changeOf(12, "pm.updated", { pm: makePm({ id: 2, name: "阿周", mode: "hands_on" }) }));
+    expect(s2.pms).toHaveLength(2);
+    expect(s2.pms[1]?.mode).toBe("hands_on");
+    // 推两次（补发）不会重复
+    expect(applyChange(s2, changeOf(11, "pm.created", { pm: makePm({ id: 2 }) }))).toBe(s2);
+    expect(applyChange(s1, changeOf(13, "pm.created", { pm: makePm({ id: 2, name: "阿周" }) })).pms).toHaveLength(2);
+  });
+
+  it("pm.updated：记一次修订号，资料页据此重新拉性格设定；别的项目经理不受影响", () => {
+    const s0 = loaded();
+    const s1 = applyChange(s0, changeOf(11, "pm.updated", { pm: makePm({ id: 1 }) }));
+    const s2 = applyChange(s1, changeOf(12, "pm.updated", { pm: makePm({ id: 1 }) }));
+    expect(s0.personaRev[1] ?? 0).toBe(0);
+    expect(s1.personaRev[1]).toBe(1);
+    expect(s2.personaRev[1]).toBe(2);
+    expect(s2.personaRev[2]).toBeUndefined();
+  });
+
+  it("project.created / project.updated：按编号加入或替换项目", () => {
+    const s0 = loaded();
+    const s1 = applyChange(s0, changeOf(11, "project.created", { project: makeProject({ id: 1, name: "foo", pmId: 1 }) }));
+    expect(s1.projects.map((p) => p.name)).toEqual(["foo"]);
+    const s2 = applyChange(s1, changeOf(12, "project.updated", { project: makeProject({ id: 1, name: "foo", pmId: 2 }) }));
+    expect(s2.projects).toHaveLength(1);
+    expect(s2.projects[0]?.pmId).toBe(2);
+  });
+
+  it("folders.updated：只换这个项目的文件夹，别的项目的不动；空列表表示全移除", () => {
+    const s0 = loaded({
+      folders: [makeFolder({ id: 1, projectId: 1, path: "/a" }), makeFolder({ id: 2, projectId: 2, path: "/b" })],
+    });
+    const s1 = applyChange(s0, changeOf(11, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 3, projectId: 1, path: "/c" })] }));
+    expect(s1.folders.map((f) => f.path).toSorted()).toEqual(["/b", "/c"]);
+    const s2 = applyChange(s1, changeOf(12, "folders.updated", { projectId: 1, folders: [] }));
+    expect(s2.folders.map((f) => f.path)).toEqual(["/b"]);
+  });
+
+  it("conversation.created：加一个空对话；已经有的对话（补发）不被清空", () => {
+    const s0 = loaded({ conversations: [makeConvSnapshot([makeMessage({ id: 1 })])] });
+    const group = makeGroupConversation({ id: 2 });
+    const s1 = applyChange(s0, changeOf(11, "conversation.created", { conversation: group }));
+    expect(s1.conversations[2]).toEqual({ conversation: group, messages: [], hasMore: false });
+    const s2 = applyChange(
+      applyChange(s1, messageChange(12, "message.created", makeMessage({ id: 9, conversationId: 2 }))),
+      changeOf(13, "conversation.created", { conversation: group }),
+    );
+    expect(s2.conversations[2]?.messages).toHaveLength(1);
+  });
+
+  it("session.created：加入会话；同一个会话编号替换", () => {
+    const s0 = loaded();
+    const s1 = applyChange(s0, changeOf(11, "session.created", { session: makeSession({ sessionId: 5, conversationId: 1 }) }));
+    expect(s1.sessions.map((x) => x.sessionId)).toEqual([5]);
+    const s2 = applyChange(s1, changeOf(12, "session.created", { session: makeSession({ sessionId: 5, conversationId: 1, activity: "working" }) }));
+    expect(s2.sessions).toHaveLength(1);
+    expect(s2.sessions[0]?.activity).toBe("working");
+  });
+
+  it("每种新类型都推进 seq；过期的忽略", () => {
+    for (const type of ["pm.created", "pm.updated", "project.created", "project.updated", "folders.updated", "conversation.created", "session.created"] as const) {
+      expect(CHANGE_TYPES).toContain(type);
+    }
+    const s0 = loaded({ seq: 10 });
+    const s1 = applyChange(s0, changeOf(11, "project.created", { project: makeProject() }));
+    expect(s1.seq).toBe(11);
+    expect(applyChange(s1, changeOf(11, "project.created", { project: makeProject({ id: 9 }) }))).toBe(s1);
+  });
+
+  it("parseServerMessage 认识新的变化类型", () => {
+    for (const type of CHANGE_TYPES) expect(parseServerMessage(JSON.stringify({ seq: 1, type, data: {} }))).not.toBeNull();
+  });
+
+  it("快照带着 projects、folders", () => {
+    const s = loaded({ projects: [makeProject()], folders: [makeFolder()] });
+    expect(s.projects).toHaveLength(1);
+    expect(s.folders).toHaveLength(1);
+    // 重新拉快照整个换掉
+    expect(reducer(s, { type: "loaded", snapshot: makeSnapshot({ seq: 30 }) }).projects).toEqual([]);
+  });
+});
+
+describe("重试失败的消息的状态", () => {
+  it("retryStart 标“重试中”，retryFailed 标出错，收到不再是 failed 的更新就清掉", () => {
+    let s = loaded({ conversations: [makeConvSnapshot([makeUserMessage({ id: 5, status: "failed", failureReason: "x" })])] });
+    s = reducer(s, { type: "retryStart", messageId: 5 });
+    expect(s.retry[5]).toBe("retrying");
+    s = reducer(s, { type: "retryFailed", messageId: 5 });
+    expect(s.retry[5]).toBe("error");
+    s = reducer(s, { type: "retryStart", messageId: 5 });
+    // 仍是 failed 的更新（比如别的字段变了）不清
+    s = applyChange(s, messageChange(11, "message.updated", makeUserMessage({ id: 5, status: "failed", failureReason: "x" })));
+    expect(s.retry[5]).toBe("retrying");
+    s = applyChange(s, messageChange(12, "message.updated", makeUserMessage({ id: 5, status: "queued" })));
+    expect(s.retry[5]).toBeUndefined();
+  });
+
+  it("重新拉快照：只留下仍然 failed 的消息的状态", () => {
+    let s = loaded();
+    s = reducer(s, { type: "retryStart", messageId: 5 });
+    s = reducer(s, { type: "retryStart", messageId: 6 });
+    s = reducer(s, {
+      type: "loaded",
+      snapshot: makeSnapshot({
+        seq: 30,
+        conversations: [
+          makeConvSnapshot([makeUserMessage({ id: 5, status: "failed" }), makeUserMessage({ id: 6, status: "queued" })]),
+        ],
+      }),
+    });
+    expect(s.retry).toEqual({ 5: "retrying" });
+  });
+});
+
+describe("selectors", () => {
+  it("sessionOf：一个对话有几代会话时取 generation 最大的，不看会话编号和先后", () => {
+    const s = loaded({
+      sessions: [
+        makeSession({ sessionId: 9, conversationId: 1, generation: 1 }),
+        makeSession({ sessionId: 3, conversationId: 1, generation: 3 }),
+        makeSession({ sessionId: 7, conversationId: 1, generation: 2 }),
+        makeSession({ sessionId: 20, conversationId: 2, generation: 1 }),
+      ],
+    });
+    expect(sessionOf(s, 1)?.sessionId).toBe(3);
+    expect(sessionOf(s, 2)?.sessionId).toBe(20);
+    expect(sessionOf(s, 99)).toBeNull();
+  });
+
+  it("isWaitingForQuota：只有 rejected 算；allowed_warning、allowed、没有额度信息都不算", () => {
+    const rl = (status: string) => makeSession({ rateLimit: { status, resetsAt: null, windows: {} } });
+    expect(isWaitingForQuota(rl("rejected"))).toBe(true);
+    expect(isWaitingForQuota(rl("allowed_warning"))).toBe(false);
+    expect(isWaitingForQuota(rl("allowed"))).toBe(false);
+    expect(isWaitingForQuota(makeSession())).toBe(false);
+    expect(isWaitingForQuota(null)).toBe(false);
+  });
+
+  it("listConversations：群用项目名、项目经理取项目现在的；按最后一条消息排序", () => {
+    const s = loaded({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],
+      projects: [makeProject({ id: 1, name: "foo", pmId: 2, conversationId: 2 })],
+      folders: [makeFolder({ projectId: 1, path: "/work/foo" })],
+      conversations: [
+        makeConvSnapshot([makeMessage({ id: 1, createdAt: 5_000 })], { conversation: { id: 1, pmId: 1 } }),
+        makeConvSnapshot([makeMessage({ id: 2, conversationId: 2, createdAt: 9_000 })], {
+          conversation: makeGroupConversation({ id: 2, pmId: 1, projectId: 1, title: "旧标题" }),
+        }),
+      ],
+    });
+    const [group, direct] = listConversations(s);
+    expect(group).toMatchObject({ id: 2, kind: "project_group", name: "foo" });
+    expect(group?.pm?.name).toBe("阿周");
+    expect(group?.folders.map((f) => f.path)).toEqual(["/work/foo"]);
+    expect(direct).toMatchObject({ id: 1, kind: "pm", name: "小林" });
+    expect(direct?.folders).toEqual([]);
   });
 });

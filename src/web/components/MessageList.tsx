@@ -4,7 +4,7 @@ import type { Message } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
-import { MessageBubble, PendingBubble, ToolGroup } from "./Messages.tsx";
+import { MessageBubble, PendingBubble, ToolGroup, type MessageActions } from "./Messages.tsx";
 
 /** 离底部不到这么多像素算“在底部”，新消息来了跟着滚。 */
 const STICK_DISTANCE_PX = 80;
@@ -19,6 +19,7 @@ export function MessageList({
   older,
   onLoadOlder,
   onRetry,
+  actions,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -27,6 +28,7 @@ export function MessageList({
   older: OlderState | undefined;
   onLoadOlder: () => void;
   onRetry: (clientId: string) => void;
+  actions: MessageActions;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -98,7 +100,7 @@ export function MessageList({
             return <ToolGroup key={item.key} messages={item.messages} identity={agent} head={head} />;
           }
           previous = item.message.sender === "agent" ? "agent" : "other";
-          return <MessageBubble key={item.message.id} message={item.message} identity={agent} head={head} />;
+          return <MessageBubble key={item.message.id} message={item.message} identity={agent} head={head} actions={actions} />;
         })}
         {pending.map((p) => (
           <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />

@@ -1,5 +1,6 @@
 // 界面上的文字：状态名、错误、时间。
-import type { MessageStatus } from "../shared/index.ts";
+import type { MessageStatus, PersonaChange, PmMode } from "../shared/index.ts";
+import { ApiError } from "./client.ts";
 
 export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
   queued: "排队中",
@@ -53,3 +54,27 @@ export function newClientId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
+
+/** 单选的标签：“只管理”标推荐。 */
+export const MODE_OPTION_LABELS: Readonly<Record<PmMode, string>> = {
+  manage_only: "只管理（推荐用于复杂项目）",
+  hands_on: "自己也干活",
+};
+
+/** 单选下面的一句说明。 */
+export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
+  manage_only: "只讨论、拆任务，要动手先问你",
+  hands_on: "直接在项目文件夹里改，适合不复杂的项目",
+};
+
+/** 接口出错给用户看的话：服务端的原因原样显示，连不上就说连不上。 */
+export function errorText(err: unknown): string {
+  if (err instanceof ApiError) return err.status === 0 ? "连不上守护进程" : err.message;
+  return "出错了";
+}
+
+export const ACTOR_LABELS: Readonly<Record<PersonaChange["actor"], string>> = {
+  user: "你",
+  pm: "项目经理",
+  file: "手改文件",
+};

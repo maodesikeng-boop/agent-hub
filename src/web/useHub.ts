@@ -1,7 +1,7 @@
 // 把接口、WebSocket 和 state.ts 接起来：先拉快照，再按 seq 接着收变化；收到 resync 重新拉。
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import type { Change, ConversationId } from "../shared/index.ts";
-import { ApiError, fetchOlderMessages, fetchState, postMessage, postStop } from "./client.ts";
+import type { Change, ConversationId, MessageId } from "../shared/index.ts";
+import { ApiError, fetchOlderMessages, fetchState, postMessage, postRetryMessage, postStop } from "./client.ts";
 import { openChangeStream, type ConnectionStatus } from "./connection.ts";
 import { newClientId } from "./format.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer } from "./state.ts";
@@ -138,6 +138,16 @@ export function useHub() {
     [submit],
   );
 
+  /** 服务端标了失败的用户消息：请求重试。排进队之后的变化从 WebSocket 来（message.updated），这里只管请求本身。 */
+  const retryMessage = useCallback(async (messageId: MessageId) => {
+    dispatch({ type: "retryStart", messageId });
+    try {
+      await postRetryMessage(messageId);
+    } catch {
+      if (alive.current) dispatch({ type: "retryFailed", messageId });
+    }
+  }, []);
+
   const stop = useCallback((conversationId: ConversationId) => postStop(conversationId), []);
 
   const loadOlder = useCallback(async (conversationId: ConversationId) => {
@@ -157,5 +167,5 @@ export function useHub() {
     }
   }, []);
 
-  return { state, reload: loadState, send, retrySend, stop, loadOlder };
+  return { state, reload: loadState, send, retrySend, retryMessage, stop, loadOlder };
 }

@@ -9,6 +9,9 @@ import {
   type Message,
   type MessageId,
   type Pm,
+  type PmId,
+  type Project,
+  type ProjectFolder,
   type SessionState,
   type StateSnapshot,
 } from "../shared/index.ts";
@@ -26,6 +29,9 @@ export interface PendingMessage {
 
 export type OlderState = "loading" | "error";
 
+/** 服务端标了失败的用户消息点“重试”之后：请求在路上 / 请求失败。 */
+export type RetryPhase = "retrying" | "error";
+
 export interface ConversationView {
   conversation: ConversationSnapshot["conversation"];
   /** 按编号从小到大。 */
@@ -41,11 +47,18 @@ export interface HubState {
   /** 已经处理到的最后一个 seq。 */
   seq: number;
   pms: Pm[];
+  projects: Project[];
+  /** 所有项目没移除的文件夹。 */
+  folders: ProjectFolder[];
+  /** 项目经理收到 pm.updated 的次数；资料页据此重新拉性格设定。 */
+  personaRev: Record<PmId, number | undefined>;
   conversations: Record<ConversationId, ConversationView>;
   sessions: SessionState[];
   health: HealthEntry[];
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
+  /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
+  retry: Record<MessageId, RetryPhase | undefined>;
 }
 
 export const initialState: HubState = {
@@ -53,11 +66,15 @@ export const initialState: HubState = {
   connection: "connecting",
   seq: 0,
   pms: [],
+  projects: [],
+  folders: [],
+  personaRev: {},
   conversations: {},
   sessions: [],
   health: [],
   pending: [],
   older: {},
+  retry: {},
 };
 
 export type HubAction =
@@ -70,7 +87,9 @@ export type HubAction =
   | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean }
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
-  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"] };
+  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"] }
+  | { type: "retryStart"; messageId: MessageId }
+  | { type: "retryFailed"; messageId: MessageId };
 
 /** 按编号插入或替换一条消息，保持从小到大。 */
 export function upsertMessage(messages: Message[], message: Message): Message[] {
@@ -92,6 +111,13 @@ function upsertBy<T>(list: T[], item: T, same: (a: T, b: T) => boolean): T[] {
   return index === -1 ? [...list, item] : list.with(index, item);
 }
 
+/** 消息不再是失败了（重试成功排进队了），就不用再记它的重试状态。 */
+function dropRetryIfSettled(retry: HubState["retry"], message: Message): HubState["retry"] {
+  if (message.status === "failed" || retry[message.id] === undefined) return retry;
+  const { [message.id]: _settled, ...rest } = retry;
+  return rest;
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -108,21 +134,40 @@ export function applyChange(state: HubState, change: Change): HubState {
           [message.conversationId]: { ...view, messages: upsertMessage(view.messages, message) },
         },
         pending: dropConfirmed(state.pending, [message]),
+        retry: dropRetryIfSettled(state.retry, message),
       };
     }
     case "session.status":
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
     case "health.updated":
       return { ...next, health: upsertBy(state.health, change.data.health, (a, b) => a.module === b.module) };
-    // M2 W0 占位：下面这些新变化由 M2 W5 处理。每种都写成显式的 case、不用 default，以后加了新类型漏处理时编译器会报错
     case "pm.created":
-    case "pm.updated":
+      return { ...next, pms: upsertBy(state.pms, change.data.pm, (a, b) => a.id === b.id) };
+    case "pm.updated": {
+      const { pm } = change.data;
+      return {
+        ...next,
+        pms: upsertBy(state.pms, pm, (a, b) => a.id === b.id),
+        personaRev: { ...state.personaRev, [pm.id]: (state.personaRev[pm.id] ?? 0) + 1 },
+      };
+    }
     case "project.created":
     case "project.updated":
-    case "folders.updated":
-    case "conversation.created":
+      return { ...next, projects: upsertBy(state.projects, change.data.project, (a, b) => a.id === b.id) };
+    case "folders.updated": {
+      const { projectId, folders } = change.data;
+      return { ...next, folders: [...state.folders.filter((f) => f.projectId !== projectId), ...folders] };
+    }
+    case "conversation.created": {
+      const { conversation } = change.data;
+      if (state.conversations[conversation.id]) return next;
+      return {
+        ...next,
+        conversations: { ...state.conversations, [conversation.id]: { conversation, messages: [], hasMore: false } },
+      };
+    }
     case "session.created":
-      return next;
+      return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
   }
 }
 
@@ -132,6 +177,11 @@ export function referencesUnknownConversation(state: HubState, change: Change): 
     (change.type === "message.created" || change.type === "message.updated") &&
     !state.conversations[change.data.message.conversationId]
   );
+}
+
+function keepStillFailed(retry: HubState["retry"], messages: Message[]): HubState["retry"] {
+  const failed = new Set(messages.filter((m) => m.status === "failed").map((m) => m.id));
+  return Object.fromEntries(Object.entries(retry).filter(([id]) => failed.has(Number(id))));
 }
 
 function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
@@ -145,11 +195,14 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     phase: "ready",
     seq: snapshot.seq,
     pms: snapshot.pms,
+    projects: snapshot.projects,
+    folders: snapshot.folders,
     conversations,
     sessions: snapshot.sessions,
     health: snapshot.health,
     pending: dropConfirmed(state.pending, all),
     older: {},
+    retry: keepStillFailed(state.retry, all),
   };
 }
 
@@ -189,6 +242,10 @@ export function reducer(state: HubState, action: HubAction): HubState {
     }
     case "pendingAdd":
       return { ...state, pending: [...state.pending, action.pending] };
+    case "retryStart":
+      return { ...state, retry: { ...state.retry, [action.messageId]: "retrying" } };
+    case "retryFailed":
+      return { ...state, retry: { ...state.retry, [action.messageId]: "error" } };
     case "pendingPhase":
       return {
         ...state,

@@ -4,13 +4,21 @@ import type {
   Change,
   Conversation,
   ConversationSnapshot,
+  CreatePmRequest,
+  CreateProjectRequest,
+  EditPersonaRequest,
   HealthEntry,
   Message,
   MessagesPage,
+  PersonaChange,
+  PersonaView,
   Pm,
   PostMessageRequest,
+  Project,
+  ProjectFolder,
   SessionState,
   StateSnapshot,
+  SystemMessageMeta,
   WsServerMessage,
 } from "../shared/index.ts";
 
@@ -71,6 +79,61 @@ export function makeToolMessage(over: Partial<Message> & Pick<Message, "id">): M
     meta: { toolUseId: `t${over.id}`, name: "Bash", input: {} },
     ...over,
   });
+}
+
+export function makeProject(over: Partial<Project> = {}): Project {
+  return {
+    id: 1,
+    name: "foo",
+    description: null,
+    status: "active",
+    pmId: 1,
+    conversationId: 2,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    ...over,
+  };
+}
+
+export function makeFolder(over: Partial<ProjectFolder> = {}): ProjectFolder {
+  return { id: 1, projectId: 1, path: "/work/foo", isMain: true, addedAt: 1_000, removedAt: null, ...over };
+}
+
+/** 项目群的对话（kind project_group）。 */
+export function makeGroupConversation(over: Partial<Conversation> = {}): Conversation {
+  return { id: 2, kind: "project_group", pmId: 1, projectId: 1, title: "foo", createdAt: 1_000, ...over };
+}
+
+export function makeSystemMessage(over: Partial<Message> & Pick<Message, "id"> & { event?: SystemMessageMeta }): Message {
+  const { event, ...rest } = over;
+  return makeMessage({
+    sender: "system",
+    sessionId: null,
+    meta: event ?? { event: "project.created", projectId: 1 },
+    dedupeKey: `system:${rest.conversationId ?? 1}:test:${rest.id}`,
+    ...rest,
+  });
+}
+
+export function makePersonaChange(over: Partial<PersonaChange> = {}): PersonaChange {
+  return {
+    id: 1,
+    pmId: 1,
+    actor: "user",
+    sessionId: null,
+    textBefore: "旧设定",
+    textAfter: "新设定",
+    modeBefore: "manage_only",
+    modeAfter: "manage_only",
+    reason: null,
+    revertOf: null,
+    createdAt: 20_000,
+    ...over,
+  };
+}
+
+export function makePersonaView(over: Partial<PersonaView> = {}): PersonaView {
+  return { pmId: 1, text: "# 性格设定\n\n说大白话", mode: "manage_only", changes: [], revertableChangeId: null, ...over };
 }
 
 export function makeSession(over: Partial<SessionState> = {}): SessionState {
@@ -140,6 +203,24 @@ export class FakeApi {
     status: 200,
     body: { messages: [], hasMore: false } satisfies MessagesPage,
   });
+  createPm: (body: CreatePmRequest) => Reply | Promise<Reply> = () => ({
+    status: 201,
+    body: { pmId: 50, conversationId: 50 },
+  });
+  createProject: (body: CreateProjectRequest) => Reply | Promise<Reply> = () => ({
+    status: 201,
+    body: { projectId: 60, conversationId: 60 },
+  });
+  getPersona: (pmId: number) => Reply | Promise<Reply> = (pmId) => ({ status: 200, body: makePersonaView({ pmId }) });
+  putPersona: (pmId: number, body: EditPersonaRequest) => Reply | Promise<Reply> = (pmId) => ({
+    status: 200,
+    body: { changed: true, persona: makePersonaView({ pmId }) },
+  });
+  revertPersona: (changeId: number) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { changed: true, persona: makePersonaView() },
+  });
+  retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
   fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
@@ -161,6 +242,15 @@ export class FakeApi {
       }
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
     }
+    if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
+    if (method === "POST" && url.pathname === "/api/projects") return jsonResponse(await this.createProject(body));
+    const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
+    if (persona && method === "GET") return jsonResponse(await this.getPersona(Number(persona[1])));
+    if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
+    const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
+    if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
+    const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);
+    if (retry && method === "POST") return jsonResponse(await this.retryMessage(Number(retry[1])));
     return jsonResponse({ status: 404, body: { error: "not found" } });
   });
 
@@ -253,4 +343,8 @@ export function sessionChange(seq: number, session: SessionState): Change {
 
 export function healthChange(seq: number, health: HealthEntry): Change {
   return { seq, type: "health.updated", data: { health } };
+}
+
+export function changeOf<T extends Change["type"]>(seq: number, type: T, data: Extract<Change, { type: T }>["data"]): Change {
+  return { seq, type, data } as Change;
 }
