@@ -3,10 +3,20 @@ import {
   API_PATHS,
   type ApiErrorBody,
   type ConversationId,
+  type CreatePmRequest,
+  type CreatePmResponse,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
+  type EditPersonaRequest,
+  type EditPersonaResponse,
   type MessageId,
   type MessagesPage,
   type PostMessageRequest,
+  type PersonaChangeId,
+  type PersonaResponse,
+  type PmId,
   type PostMessageResponse,
+  type RetryMessageResponse,
   type StateSnapshot,
 } from "../shared/index.ts";
 
@@ -50,6 +60,14 @@ function postJson<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+function putJson<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export function fetchState(): Promise<StateSnapshot> {
   return request<StateSnapshot>(API_PATHS.state);
 }
@@ -64,6 +82,30 @@ export function postMessage(conversationId: ConversationId, body: PostMessageReq
 
 export function postStop(conversationId: ConversationId): Promise<void> {
   return postJson<void>(API_PATHS.stop(conversationId));
+}
+
+export function postCreatePm(body: CreatePmRequest): Promise<CreatePmResponse> {
+  return postJson<CreatePmResponse>(API_PATHS.pms, body);
+}
+
+export function postCreateProject(body: CreateProjectRequest): Promise<CreateProjectResponse> {
+  return postJson<CreateProjectResponse>(API_PATHS.projects, body);
+}
+
+export function fetchPersona(pmId: PmId): Promise<PersonaResponse> {
+  return request<PersonaResponse>(API_PATHS.persona(pmId));
+}
+
+export function putPersona(pmId: PmId, body: EditPersonaRequest): Promise<EditPersonaResponse> {
+  return putJson<EditPersonaResponse>(API_PATHS.persona(pmId), body);
+}
+
+export function postRevertPersonaChange(changeId: PersonaChangeId): Promise<EditPersonaResponse> {
+  return postJson<EditPersonaResponse>(API_PATHS.revertPersonaChange(changeId));
+}
+
+export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {
+  return postJson<RetryMessageResponse>(API_PATHS.retryMessage(messageId));
 }
 
 /** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */

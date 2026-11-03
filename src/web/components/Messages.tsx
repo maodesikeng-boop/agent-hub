@@ -1,9 +1,10 @@
 import { Check, ChevronRight, Clock, Loader2, Square, TerminalSquare, X } from "lucide-react";
 import { useState } from "react";
-import type { Message } from "../../shared/index.ts";
+import { stripSystemPrefix, systemEventOf, type Message, type MessageId, type PersonaChangeId } from "../../shared/index.ts";
+import { ApiError } from "../client.ts";
 import { describeError, formatTime, STATUS_LABELS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import type { PendingMessage } from "../state.ts";
+import type { PendingMessage, RetryPhase } from "../state.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -11,6 +12,15 @@ import { Markdown } from "./Markdown.tsx";
 interface AgentIdentity {
   name: string;
   avatarKey: number;
+}
+
+/** 消息上能点的操作：重试服务端标了失败的用户消息、撤销项目经理对自己性格设定的修改。 */
+export interface MessageActions {
+  /** 点过“重试”的消息的状态。 */
+  retry: Record<MessageId, RetryPhase | undefined>;
+  onRetryMessage: (messageId: MessageId) => void;
+  /** 撤销失败就 reject（ApiError，409 是“不是最近一次”）。 */
+  onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
 }
 
 const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
@@ -40,30 +50,74 @@ function AgentRow({
   );
 }
 
+type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
+
+/** 撤销按钮：只有项目经理改了性格设定的系统消息有。只有最近一次能撤销，别的服务端回 409。 */
+function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRevert: MessageActions["onRevertPersona"] }) {
+  const [phase, setPhase] = useState<RevertPhase>("idle");
+  if (phase === "done") return <span>已撤销</span>;
+  const revert = () => {
+    setPhase("busy");
+    onRevert(changeId).then(
+      () => setPhase("done"),
+      (err: unknown) => setPhase(err instanceof ApiError && err.status === 409 ? "conflict" : "error"),
+    );
+  };
+  return (
+    <>
+      {phase === "conflict" && <span className="text-danger">只能撤销最近一次</span>}
+      {phase === "error" && <span className="text-danger">撤销失败</span>}
+      <button
+        type="button"
+        className="cursor-pointer font-medium text-primary underline underline-offset-2 disabled:cursor-default disabled:no-underline disabled:opacity-60"
+        disabled={phase === "busy"}
+        onClick={revert}
+      >
+        {phase === "busy" ? "撤销中" : "撤销"}
+      </button>
+    </>
+  );
+}
+
+/** 系统消息：居中的一条，去掉发给 agent 时加的【系统】，不显示投递状态。 */
+function SystemNotice({ message, actions }: { message: Message; actions: MessageActions }) {
+  const event = systemEventOf(message);
+  return (
+    <div className="mt-5 flex justify-center" data-side="center">
+      <div className="flex max-w-[85%] flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 rounded-2xl bg-muted px-3.5 py-1.5 text-center text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+        <span>{stripSystemPrefix(message.text)}</span>
+        {event?.event === "persona.changed" && <RevertButton changeId={event.personaChangeId} onRevert={actions.onRevertPersona} />}
+      </div>
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   identity,
   head,
+  actions,
 }: {
   message: Message;
   identity: AgentIdentity;
   head: boolean;
+  actions: MessageActions;
 }) {
   const time = formatTime(message.createdAt);
-  if (message.sender === "system") {
-    return (
-      <div className="mt-5 flex justify-center" data-side="center">
-        <div className="rounded-full bg-muted px-3 py-1 text-[12.5px] text-muted-foreground">{message.text}</div>
-      </div>
-    );
-  }
+  if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
   if (message.sender === "user") {
     return (
       <article className="mt-5 flex flex-col items-end" data-side="right" data-status={message.status ?? undefined} title={time}>
         <div className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
           {message.text}
         </div>
-        {message.status && <DeliveryStatus status={message.status} reason={message.failureReason} />}
+        {message.status && (
+          <DeliveryStatus
+            status={message.status}
+            reason={message.failureReason}
+            retry={message.status === "failed" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
+          />
+        )}
       </article>
     );
   }
@@ -94,7 +148,16 @@ function StatusIcon({ status }: { status: NonNullable<Message["status"]> }) {
   }
 }
 
-function DeliveryStatus({ status, reason }: { status: NonNullable<Message["status"]>; reason: string | null }) {
+function DeliveryStatus({
+  status,
+  reason,
+  retry,
+}: {
+  status: NonNullable<Message["status"]>;
+  reason: string | null;
+  /** 服务端标了失败的用户消息才有“重试”。 */
+  retry?: { phase: RetryPhase | undefined; onRetry: () => void };
+}) {
   const failure = status === "failed" && reason ? describeError(reason) : null;
   return (
     <div
@@ -109,6 +172,19 @@ function DeliveryStatus({ status, reason }: { status: NonNullable<Message["statu
             ·
           </span>
           <span title={reason ?? undefined}>{failure.label}</span>
+        </>
+      )}
+      {retry && (
+        <>
+          {retry.phase === "error" && <span className="ml-1">重试失败</span>}
+          <button
+            type="button"
+            className="ml-1 cursor-pointer font-medium text-primary underline underline-offset-2 disabled:cursor-default disabled:no-underline disabled:opacity-60"
+            disabled={retry.phase === "retrying"}
+            onClick={retry.onRetry}
+          >
+            {retry.phase === "retrying" ? "重试中" : "重试"}
+          </button>
         </>
       )}
     </div>
