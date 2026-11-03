@@ -1,8 +1,18 @@
 // M1 的 S1～S4（m1-plan 第 4 节），共用一个守护进程、一个私聊串起来跑。
 // S1 连续聊两轮；S2 重启守护进程后接着聊，记得之前说的；S3 停止：控制消息管用、进程还在；S4 忙时连发两条，下一轮两条都回应到。
+// S3、S4 的“正忙”靠前台跑一个固定时长的命令（见 BUSY_PROMPT），不靠写长文。
 // M2 起 spawn 加了 detached（claude 在自己的进程组），S2（关机、不留进程）和 S3（停止、进程不换）顺带验这个改动没伤到它们。
 import { isAlive, messageById, waitForStatus, waitUntil } from "../e2e/harness.ts";
-import { Smoke, TURN_MS, expect, scenario, sleep, type Outcome } from "./kit.ts";
+import { Smoke, TURN_MS, expect, scenario, type Outcome } from "./kit.ts";
+
+/**
+ * S3、S4 要一段稳定的“正忙”：让 agent 在前台跑一个固定时长的命令，等这个工具调用出现了再停止、再连发。
+ * 不靠“写长文”：模型写多快、回显什么时候出来都不稳（回显和第一条 assistant 一起出，不思考直接写的话要等整篇写完）。
+ * 不用 `sleep N`：claude 的 Bash 工具会拦前台的长 sleep；放到后台的话这一轮马上就结束了。
+ */
+const BUSY_SECONDS = 30;
+const BUSY_COMMAND = `perl -e 'sleep ${BUSY_SECONDS}'`;
+const BUSY_PROMPT = `用 Bash 工具运行这条命令：${BUSY_COMMAND}。在前台运行（不要设 run_in_background），等它跑完，然后只回复“好了”两个字。`;
 
 export async function runM1(outcomes: Outcome[], smoke: Smoke): Promise<void> {
   const chat = smoke.privateId;
@@ -31,11 +41,11 @@ export async function runM1(outcomes: Outcome[], smoke: Smoke): Promise<void> {
   });
 
   await scenario(outcomes, "S3 停止：控制消息管用、进程还在", async () => {
-    const a = await post("写一篇 4000 字的中文长文，题目是《海边的一天》，分十节。不要用任何工具。");
-    await waitForStatus(smoke.client, a, "processing", TURN_MS);
+    const a = await post(BUSY_PROMPT);
+    // 等工具真的跑起来再停：从这时起这一轮至少还要忙 BUSY_SECONDS 秒
+    await smoke.waitForTool(chat, a, `sleep ${BUSY_SECONDS}`);
     const pidBefore = smoke.sessionRow().pid;
-    // 小模型写得快：开始处理后很快就停
-    await sleep(500);
+    const t0 = Date.now();
     const status = await smoke.client.stop(chat);
     expect(status === 202, `POST stop 返回 ${status}`);
     const stopped = await waitUntil(
@@ -44,20 +54,21 @@ export async function runM1(outcomes: Outcome[], smoke: Smoke): Promise<void> {
         const m = messageById(await smoke.client.state(), a);
         return m?.status === "stopped" || m?.status === "replied" || m?.status === "failed" ? m : undefined;
       },
-      30_000,
+      (BUSY_SECONDS + 30) * 1000,
     );
-    expect(stopped.status === "stopped", `消息标的是 ${stopped.status}，不是已停止（可能停止前就写完了）`);
+    const took = ((Date.now() - t0) / 1000).toFixed(1);
+    expect(stopped.status === "stopped", `消息标的是 ${stopped.status}，不是已停止（停止后 ${took} 秒）`);
     const pidAfter = smoke.sessionRow().pid;
     expect(pidBefore !== null && pidAfter === pidBefore && isAlive(pidBefore), `进程变了或不在了（停止前 ${pidBefore}，停止后 ${pidAfter}）：控制消息可能没管用，退回了 SIGINT`);
     await waitForStatus(smoke.client, await post("只回复一个字：在"), "replied", TURN_MS);
     expect(smoke.sessionRow().pid === pidBefore, "再发一条时换了进程");
-    return `已停止，进程 ${pidBefore} 没换，再发一条照常回复`;
+    return `停止后 ${took} 秒标已停止，进程 ${pidBefore} 没换，再发一条照常回复`;
   });
 
   await scenario(outcomes, "S4 忙时连发两条，下一轮都回应到", async () => {
-    const a = await post("写一篇 800 字的中文文章，题目随意。不要用任何工具。");
-    await waitForStatus(smoke.client, a, "processing", TURN_MS);
-    const b = await post("补充一：等你写完，下一条回复里要提到“苹果”。");
+    const a = await post(BUSY_PROMPT);
+    await smoke.waitForTool(chat, a, `sleep ${BUSY_SECONDS}`);
+    const b = await post("补充一：等你跑完，下一条回复里要提到“苹果”。");
     const c = await post("补充二：下一条回复里还要提到“香蕉”。");
     for (const id of [a, b, c]) await waitForStatus(smoke.client, id, "replied", TURN_MS);
     const reply = (await smoke.repliesAfter(chat, c)).join("\n");

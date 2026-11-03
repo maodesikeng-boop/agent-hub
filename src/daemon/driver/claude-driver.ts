@@ -112,6 +112,8 @@ interface SessionState {
   proc: Proc | null;
   inFlight: Batch | null;
   turnInterrupted: boolean;
+  /** 这一轮用户点过停止（interrupt 调过、这一轮还没收尾）：关机碰上它，仍按停止收尾，不当关机打断。 */
+  stopRequested: boolean;
   pending: PendingEntry[];
   /** 已经写进去（已送达）、还没失败的消息；这一轮出错或进程崩溃时删掉，好让重发真的再写一次。 */
   written: Set<MessageId>;
@@ -293,6 +295,7 @@ export class ClaudeDriver implements Driver {
     const st = this.#sessions.get(sessionId);
     const proc = st?.proc;
     if (!st || !proc || !st.inFlight || proc.closing) return;
+    st.stopRequested = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
       const requestId = `interrupt-${++this.#requestSeq}`;
@@ -316,7 +319,13 @@ export class ClaudeDriver implements Driver {
       if (!proc) continue;
       procs.push(proc);
       clearKillTimer(proc);
-      if (proc.closing === "shutdown") continue;
+      if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
+      // 用户的停止还没收尾（控制消息没回应、或者回了还没等到 result）：照停止处理，消息标已停止，不当关机打断留着重发
+      if (st.stopRequested && st.inFlight) {
+        proc.closing = "interrupt";
+        proc.child.kill("SIGINT");
+        continue;
+      }
       const wasIdle = proc.closing === "idle" || (!st.inFlight && proc.initSeen);
       proc.closing = "shutdown";
       if (wasIdle) proc.child.stdin.end();
@@ -369,6 +378,7 @@ export class ClaudeDriver implements Driver {
         proc: null,
         inFlight: null,
         turnInterrupted: false,
+        stopRequested: false,
         pending: [],
         written: new Set(),
         recoveryNote: false,
@@ -512,6 +522,7 @@ export class ClaudeDriver implements Driver {
     this.#clearTimer(st, "idleTimer");
     st.inFlight = batch;
     st.turnInterrupted = false;
+    st.stopRequested = false;
     await new Promise<void>((resolve) => {
       proc.child.stdin.write(batch.line + "\n", (err) => {
         if (!err) this.#markDelivered(st, batch);
@@ -595,6 +606,7 @@ export class ClaudeDriver implements Driver {
   #startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = batch;
     st.turnInterrupted = false;
+    st.stopRequested = false;
     const run = async () => {
       let proc = existing;
       try {
@@ -853,6 +865,7 @@ export class ClaudeDriver implements Driver {
       this.#forgetWritten(st, batch);
     }
     st.turnInterrupted = false;
+    st.stopRequested = false;
     if (this.#row(st)?.hasCompletedTurn === false) this.#update(st, { hasCompletedTurn: true });
     this.#clearTimer(st, "interruptTimer");
     this.#emit(st.id, event);
@@ -893,6 +906,7 @@ export class ClaudeDriver implements Driver {
         this.#forgetWritten(st, batch);
       }
       st.interruptRequestId = null;
+      st.stopRequested = false;
       this.#emit(st.id, {
         type: "session.exited",
         reason,

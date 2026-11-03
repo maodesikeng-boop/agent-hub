@@ -86,6 +86,18 @@ export class Smoke {
       .map((m) => m.text);
   }
 
+  /** 等这条消息之后出现 agent 的工具调用（摘要里带 includes），返回它。 */
+  async waitForTool(conversationId: number, afterId: number, includes: string, timeoutMs = TURN_MS): Promise<Message> {
+    return waitUntil(
+      `tool call with ${includes}`,
+      async () =>
+        messagesOf(await this.client.state(), conversationId).find(
+          (m: Message) => m.id > afterId && m.sender === "agent" && m.kind === "tool" && m.text.includes(includes),
+        ),
+      timeoutMs,
+    );
+  }
+
   async lastReply(conversationId: number): Promise<string> {
     return agentTexts(await this.client.state(), conversationId).at(-1) ?? "";
   }

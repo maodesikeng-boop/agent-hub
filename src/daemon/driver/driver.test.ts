@@ -638,6 +638,37 @@ describe("关机", () => {
     expect(ended).not.toHaveProperty("shutdown");
   });
 
+  it("用户点了停止、控制消息还没回应就关机：仍按停止收尾（turn.ended 不带 shutdown，session.exited(interrupt)）", async () => {
+    const t = harness({ script: { ignoreControl: true, turns: [slowTurn(30_000)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写很久"));
+    await t.waitFor("message.processing");
+    const interrupting = t.driver.interrupt(s.id);
+    await waitStdin(t, 2);
+    await t.driver.shutdown();
+    await interrupting;
+    const [ended] = t.of("turn.ended");
+    expect(ended).toMatchObject({ interrupted: true, messageIds: [1] });
+    expect(ended).not.toHaveProperty("shutdown");
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "interrupt" });
+    expect(signals(t)).toEqual(["SIGINT"]);
+  });
+
+  it("停止已经退回 SIGINT、进程还没退就关机：session.exited 仍是 interrupt，不改成 shutdown", async () => {
+    const t = harness({
+      driver: { interruptGraceMs: 100, shutdownGraceMs: 300 },
+      script: { ignoreControl: true, ignoreSigint: true, turns: [slowTurn(30_000)] },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写很久"));
+    await t.waitFor("message.processing");
+    void t.driver.interrupt(s.id);
+    for (let i = 0; i < 50 && signals(t).length === 0; i++) await realSleep(50);
+    expect(signals(t)).toEqual(["SIGINT"]);
+    await t.driver.shutdown();
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "interrupt", messageIds: [1] });
+  });
+
   it("不理 SIGINT 的进程：最多等 shutdownGraceMs，然后强制结束", async () => {
     const t = harness({ driver: { shutdownGraceMs: 200 }, script: { noInit: true, ignoreSigint: true } });
     const s = t.addSession();
