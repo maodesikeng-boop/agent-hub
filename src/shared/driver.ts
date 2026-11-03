@@ -41,6 +41,12 @@ export interface DriverEventBase {
   at: number;
 }
 
+/**
+ * 会话状态（agent_sessions.status：running、idle……）由驱动层通过 SessionStore 写进那一行，事件里不带。
+ * 账本不依赖“写库”和“发事件”这两步的先后顺序：每处理一个事件都按那一行重新算出会话状态，
+ * 和上次推给网页的比，变了就推，不会漏推。先发事件后写库时，新状态在下一个事件时推出去。
+ */
+
 /** 进程起来、收到第一个 system/init。resumed：这次是 --resume。 */
 export interface SessionStartedEvent extends DriverEventBase {
   type: "session.started";
@@ -78,7 +84,8 @@ export interface AgentToolEvent extends DriverEventBase {
 }
 
 /**
- * 一轮结束（result）。messageIds：这一轮处理的用户消息。账本这样标：
+ * 一轮结束（result）。messageIds：这一轮处理的用户消息。ok 的 turn.ended 之前一定先出过这些消息的
+ * message.processing（delivered → replied 不是合法的状态变化，账本会忽略）。账本这样标：
  * - interrupted（这一轮里出现过 `[Request interrupted by user]`）→ stopped；
  * - 否则 ok → replied；
  * - 否则（ok=false 且不是打断）→ failed，failureReason 取 error。
