@@ -139,5 +139,46 @@ describe("假 claude", () => {
     const markers = r.events.filter((e) => e.type === "user" && e.isReplay !== true) as Array<{ message: { content: Array<{ text?: string }> } }>;
     expect(markers.map((e) => e.message.content[0]!.text)).toContain("[Request interrupted by user for tool use]");
   });
+  // m2-plan 第 4 节 W3“假 claude 跑命令”
+  type ToolResult = { tool_use_id: string; type: string; content: string; is_error: boolean };
+  const toolUses = (events: Array<Record<string, unknown>>) =>
+    events.flatMap((e) =>
+      e.type === "assistant" ? (e.message as { content: Array<Record<string, unknown>> }).content.filter((c) => c.type === "tool_use") : [],
+    );
+  const toolResults = (events: Array<Record<string, unknown>>) =>
+    events.flatMap((e) =>
+      e.type === "user" && e.isReplay !== true
+        ? (e.message as { content: Array<Record<string, unknown>> }).content.filter((c) => c.type === "tool_result")
+        : [],
+    ) as ToolResult[];
+
+  it("bash 步骤：出一个 Bash 的 tool_use，再出带命令输出的 tool_result", async () => {
+    const r = await withScript({ defaultTurn: { steps: [{ bash: "echo hi" }] } }, () => run(["--session-id", "j"], [userLine("x")]));
+    const [use] = toolUses(r.events);
+    expect(use).toMatchObject({ name: "Bash", input: { command: "echo hi" } });
+    expect(toolResults(r.events)).toEqual([{ tool_use_id: use!.id, type: "tool_result", content: "hi", is_error: false }]);
+    expect(r.events.at(-1)).toMatchObject({ type: "result", subtype: "success" });
+  });
+
+  it("bash 用自己拿到的环境变量跑；退出码不是 0：is_error，内容开头 Exit code，带上标准错误", async () => {
+    process.env.HUB_TOKEN = "fake-token-for-test";
+    try {
+      const r = await withScript({ defaultTurn: { steps: [{ bash: 'echo "t=$HUB_TOKEN"' }, { bash: "echo oops >&2; exit 3" }] } }, () =>
+        run(["--session-id", "k"], [userLine("x")]),
+      );
+      const [ok, bad] = toolResults(r.events);
+      expect(ok).toMatchObject({ content: "t=fake-token-for-test", is_error: false });
+      expect(bad).toMatchObject({ content: "Exit code 3\noops", is_error: true });
+    } finally {
+      delete process.env.HUB_TOKEN;
+    }
+  });
+
+  it("bash 里读标准输入：读到的是空（不会卡住）；heredoc 照常", async () => {
+    const r = await withScript({ defaultTurn: { steps: [{ bash: "cat; echo end" }, { bash: "cat <<'EOF'\n$HOME `x`\nEOF" }] } }, () =>
+      run(["--session-id", "l"], [userLine("x")]),
+    );
+    expect(toolResults(r.events).map((t) => t.content)).toEqual(["end", "$HOME `x`"]);
+  });
 });
 

@@ -20,7 +20,7 @@
 //   `[Request interrupted by user for tool use]`）和一条 result，进程不退出。
 // - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
 // - 标准输入关掉：跑完手上这一轮再退出，退出码 0。
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -38,7 +38,15 @@ export type FakeStep =
   /** 发一条 system/api_retry（M0 记录的字段）。 */
   | { apiRetry: { attempt?: number; error?: string } }
   /** 起一个脱离的孙进程，继承标准输出和标准错误，活 sleepSec 秒（测孙进程占着 stdio）。进程号记进日志。 */
-  | { spawnOrphan: { sleepSec: number } };
+  | { spawnOrphan: { sleepSec: number } }
+  /** 起一个普通子进程（不脱离，和 claude 同一个进程组）睡 sleepSec 秒，标准输入输出都不接。进程号记进日志（测按进程组强制结束）。 */
+  | { spawnChild: { sleepSec: number } }
+  /**
+   * 像真 claude 的 Bash 工具那样跑一条命令（M2，端到端测 agent 敲 hub）：用自己拿到的环境变量和工作目录 `sh -c`，
+   * 先出一个 name 为 "Bash" 的 tool_use，跑完再出 tool_result（内容是标准输出 + 标准错误；退出码不是 0 时
+   * 开头加 “Exit code N”，is_error: true）。
+   */
+  | { bash: string };
 
 export interface FakeTurn {
   steps?: FakeStep[];
@@ -70,6 +78,8 @@ export interface FakeScript {
   ignoreSigint?: boolean;
   /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
   rejectSessionArgs?: boolean;
+  /** 一起来就起一个普通子进程睡这么多秒（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
+  spawnChildOnStart?: number;
 }
 
 export type FakeLogEntry =
@@ -78,7 +88,11 @@ export type FakeLogEntry =
   | { kind: "signal"; pid: number; signal: string }
   | { kind: "stdin_closed"; pid: number }
   | { kind: "exit"; pid: number; code: number }
-  | { kind: "orphan"; pid: number; orphanPid: number };
+  | { kind: "orphan"; pid: number; orphanPid: number }
+  | { kind: "child"; pid: number; childPid: number }
+  /** 启动时记下的几个环境变量（只记 LOGGED_ENV 里的，没设的不出现）。 */
+  | { kind: "env"; pid: number; env: Record<string, string> }
+  | { kind: "bash"; pid: number; command: string; exitCode: number; output: string };
 
 /** M0 实测的 rate_limit_event.rate_limit_info（额度正常时）。 */
 export const M0_RATE_LIMIT_INFO = {
@@ -158,6 +172,14 @@ function nextTurnIndex(): number {
 const argv = process.argv.slice(2);
 log({ kind: "argv", pid: process.pid, argv, cwd: process.cwd() });
 
+/** 测试关心的环境变量：每个会话自己的令牌、socket、PATH。 */
+const LOGGED_ENV = ["HUB_TOKEN", "HUB_SOCK", "PATH", "CLAUDE_CONFIG_DIR"] as const;
+log({
+  kind: "env",
+  pid: process.pid,
+  env: Object.fromEntries(LOGGED_ENV.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]!]]))),
+});
+
 function argValue(name: string): string | undefined {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -188,6 +210,14 @@ if (resumeId !== undefined && (script.rejectSessionArgs || !sessionExists(resume
   });
   exit(1);
 }
+
+function spawnChild(sleepSec: number): void {
+  const child = spawn("sleep", [String(sleepSec)], { stdio: "ignore" });
+  child.unref();
+  log({ kind: "child", pid: process.pid, childPid: child.pid ?? -1 });
+}
+
+if (script.spawnChildOnStart !== undefined) spawnChild(script.spawnChildOnStart);
 
 // --- 一轮一轮跑 ---
 
@@ -333,6 +363,31 @@ async function runTurn(content: UserContent[]): Promise<void> {
       const orphan = spawn("sleep", [String(step.spawnOrphan.sleepSec)], { stdio: ["ignore", "inherit", "inherit"], detached: true });
       orphan.unref();
       log({ kind: "orphan", pid: process.pid, orphanPid: orphan.pid ?? -1 });
+    } else if ("spawnChild" in step) {
+      spawnChild(step.spawnChild.sleepSec);
+    } else if ("bash" in step) {
+      const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+      assistant([{ type: "tool_use", id, name: "Bash", input: { command: step.bash } }]);
+      const { exitCode, output } = await runShell(step.bash);
+      log({ kind: "bash", pid: process.pid, command: step.bash, exitCode, output });
+      if (aborted()) break;
+      emit({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              tool_use_id: id,
+              type: "tool_result",
+              content: exitCode === 0 ? output : `Exit code ${exitCode}\n${output}`,
+              is_error: exitCode !== 0,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+        uuid: randomUUID(),
+      });
     }
   }
   if (aborted()) return; // 打断的那条 result 已经由打断的地方发了
@@ -348,6 +403,17 @@ async function runTurn(content: UserContent[]): Promise<void> {
   const r = turn.result ?? {};
   result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt);
   finishTurn();
+}
+
+/** sh -c 跑一条命令：环境变量、工作目录都是自己的；标准输入不接（/dev/null）。 */
+function runShell(command: string): Promise<{ exitCode: number; output: string }> {
+  return new Promise((resolve) => {
+    const child = execFile("sh", ["-c", command], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
+      resolve({ exitCode: code, output: `${stdout}${stderr}`.replace(/\n$/, "") });
+    });
+    child.stdin?.end();
+  });
 }
 
 function finishTurn(): void {
