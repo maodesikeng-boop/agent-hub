@@ -488,14 +488,37 @@ describe("startAgentApi on a unix socket", () => {
     expect(ledger.calls).toHaveLength(0);
   });
 
-  it("half-sent request: Node really cuts it at HUB_REQUEST_TIMEOUT_MS (headersTimeout must not exceed requestTimeout)", () => {
-    // Node 的 ConnectionsList::Expired：headersTimeout > requestTimeout 时两个对调，请求头收完后的上限就成了 headersTimeout（默认 60 秒）。
-    // Fastify 只设 requestTimeout，所以 headersTimeout 要自己压到一样；检查间隔默认 30 秒，也要调小，才是“15 秒左右”。
+  it("defaults the request timeout and its check interval to limits.ts", () => {
     const app = createAgentApi({ ledger, tokens });
     expect(app.server.requestTimeout).toBe(HUB_REQUEST_TIMEOUT_MS);
     expect(app.server.headersTimeout).toBe(HUB_REQUEST_TIMEOUT_MS);
     expect((app.server as unknown as { connectionsCheckingInterval: number }).connectionsCheckingInterval).toBe(HUB_TIMEOUT_CHECK_MS);
     void app.close();
+  });
+
+  it("half-sent request: the server really drops the connection at requestTimeoutMs (headersTimeout must not exceed requestTimeout)", async () => {
+    // Node 的 ConnectionsList::Expired：headersTimeout > requestTimeout 时两个对调，请求头收完后的上限就成了 headersTimeout（默认 60 秒）。
+    // Fastify 只设 requestTimeout，所以 headersTimeout 要自己压到一样；检查间隔默认 30 秒，也要调小。
+    // 这里用 2 秒和 100 毫秒，几秒内跑完；默认值（15 秒、1 秒）上一条测。
+    running = await startAgentApi({ ledger, tokens, ...paths(), requestTimeoutMs: 2_000, timeoutCheckMs: 100 });
+    const token = tokens.issue(9);
+    const socket = createConnection(running.socketPath);
+    socket.on("error", () => {});
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    const t0 = Date.now();
+    // 请求头发完、请求体只发一半
+    socket.write(`POST ${hubPath("status")} HTTP/1.1\r\nhost: x\r\nauthorization: Bearer ${token}\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{`);
+    // 不读的话收不到 end，也就等不到 close
+    socket.resume();
+    const closed = new Promise<"closed">((resolve) => socket.once("close", () => resolve("closed")));
+    const guard = new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 8_000).unref());
+    const result = await Promise.race([closed, guard]);
+    socket.destroy();
+    expect(result).toBe("closed");
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeGreaterThanOrEqual(1_900);
+    expect(elapsed).toBeLessThan(4_000);
+    expect(ledger.calls).toHaveLength(0);
   });
 
   it("close() returns promptly while a half-sent request is hanging", async () => {

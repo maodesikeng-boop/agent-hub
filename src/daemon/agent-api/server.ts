@@ -36,6 +36,10 @@ export interface AgentApiOptions {
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
   log?: (line: string) => void;
+  /** 一个请求从连上到收完的上限，默认 HUB_REQUEST_TIMEOUT_MS；测试里调小，几秒就能看到半截请求被断开。 */
+  requestTimeoutMs?: number;
+  /** 多久查一次有没有超时的请求，默认 HUB_TIMEOUT_CHECK_MS。 */
+  timeoutCheckMs?: number;
 }
 
 const RUN_DIR_MODE = 0o700;
@@ -145,13 +149,14 @@ const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再�
 
 export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
+  const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,
     bodyLimit: HUB_MAX_BODY_BYTES,
-    requestTimeout: HUB_REQUEST_TIMEOUT_MS,
+    requestTimeout: requestTimeoutMs,
     // Node 在 headersTimeout（默认 60 秒）大于 requestTimeout 时把两个对调，请求头收完后的上限就成了 60 秒；
     // 检查间隔默认 30 秒。两个都压下来，半截请求才是 15 秒左右断开。
-    http: { headersTimeout: HUB_REQUEST_TIMEOUT_MS, connectionsCheckingInterval: HUB_TIMEOUT_CHECK_MS },
+    http: { headersTimeout: requestTimeoutMs, connectionsCheckingInterval: opts.timeoutCheckMs ?? HUB_TIMEOUT_CHECK_MS },
     // close() 不等还连着的请求，直接断开，保证关得掉。
     forceCloseConnections: true,
     // 多余参数要报错，不能悄悄删掉；类型不对也不替它转换。

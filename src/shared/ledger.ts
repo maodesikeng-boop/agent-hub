@@ -333,6 +333,11 @@ export interface Ledger {
    */
   onActionFailed(action: AnyActionRow, error: string): void;
   /**
+   * 处理函数：这条消息所在的一轮被打断了，而且不会再发（重启恢复时它的会话已经结束，见 handlers.ts）：
+   * delivered、processing → stopped（和关机打断一轮一样），推 message.updated。别的状态（包括已经有结果的）什么也不做。
+   */
+  stopMessage(messageId: MessageId): void;
+  /**
    * 各模块报健康状态：error 为 null 表示成功一次（连续失败次数清零），否则次数加一、记下错误。
    * 有变化就推一条 health.updated。执行器每次处理函数抛错都调它（模块按错误来源：DriverError → "driver"）。
    * 清零规则：任何一个动作成功，执行器都对 "driver" 和 "actions" 各调一次 reportHealth(m, null)，

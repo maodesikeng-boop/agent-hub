@@ -247,6 +247,7 @@ export class FakeLedger {
       createPm: (i) => this.createPm(i),
       getMessage: unused("getMessage"),
       onActionFailed: unused("onActionFailed"),
+      stopMessage: unused("stopMessage"),
       reportHealth: unused("reportHealth"),
       createProject: (i, a) => this.createProject(i, a),
       getPersona: (p) => this.getPersona(p),

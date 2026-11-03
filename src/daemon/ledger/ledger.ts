@@ -1179,6 +1179,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       }
     },
 
+    stopMessage(messageId) {
+      write((p) => transition(p, messageId, "stopped"));
+    },
+
     reportHealth(module, error) {
       write((p) => reportHealthIn(p, module, error));
     },

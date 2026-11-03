@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HUB_TOKEN_BYTES } from "../../shared/index.ts";
+import { HUB_TOKEN_BYTES, SessionTokenRevokedError } from "../../shared/index.ts";
 import { createSessionTokens } from "./tokens.ts";
 
 describe("SessionTokens", () => {
@@ -49,7 +49,7 @@ describe("SessionTokens", () => {
     const tokens = createSessionTokens();
     tokens.issue(1);
     tokens.revoke(1);
-    expect(() => tokens.issue(1)).toThrow(/revoked|作废/);
+    expect(() => tokens.issue(1)).toThrow(SessionTokenRevokedError);
   });
 
   it("remembers a revoke even if the session never had a token", () => {

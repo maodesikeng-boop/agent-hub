@@ -18,6 +18,7 @@ import {
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
   STALE_POLL_MS,
+  STDERR_TAIL_CHARS,
   START_TIMEOUT_MS,
   STDIO_DRAIN_MS,
   type AgentSessionPatch,
@@ -48,9 +49,6 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
-
-/** 错误信息里带多少标准错误。 */
-const STDERR_TAIL = 2_000;
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -716,7 +714,7 @@ export class ClaudeDriver implements Driver {
     child.stdin.on("error", () => {}); // 进程退了还在写：EPIPE，交给 exit 处理
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL);
+      proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     // 自己按 \n 切行：node:readline 还会在 U+2028 / U+2029 处断开，而 JSON 字符串里可以有这两个字符
     let buffered = "";

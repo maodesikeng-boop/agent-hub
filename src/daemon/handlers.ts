@@ -8,6 +8,8 @@ import {
   DriverError,
   QUEUED_RECHECK_MS,
   RATE_LIMIT_RECHECK_MAX_MS,
+  RATE_LIMIT_RECHECK_PAD_MS,
+  SessionTokenRevokedError,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -20,7 +22,7 @@ import {
 
 export interface HandlerDeps {
   driver: Pick<Driver, "start" | "send" | "end">;
-  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState">;
+  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage">;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
   tokens: Pick<SessionTokens, "revoke">;
@@ -58,7 +60,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     // 消息没了，或者已经有结果（已回复、已停止）：没什么可发的
     if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
     const wait = rateLimitWaitMs(deps, sessionId);
-    if (wait !== null) return { kind: "later", delayMs: Math.min(wait + 1_000, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
+    if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
     let result;
     try {
       result = await deps.driver.send(sessionId, {
@@ -73,8 +75,12 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       const now = deps.ledger.getMessage(messageId);
       if (now === null) return { kind: "done" };
       if (now.sessionId !== sessionId) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_ended" };
-      // 还指着这个已结束的会话（不该发生）：标失败，别一直重试
-      deps.ledger.onActionFailed(action, error.message);
+      // 还指着这个已结束的会话：重启恢复时会发生——交接那一轮（旧项目经理跑了 hub project assign，这一轮还没结束）被重启打断，
+      // 重启后 session.end 先结束旧会话，恢复登记的 session.send 随后撞上 session_ended。交接已经做过了，按“这一轮被重启打断”处理，
+      // 标已停止（和关机打断一轮一样），不标失败：失败的话用户点重试会把同一句话再发给新项目经理。
+      // 排队中的消息没有这一轮可停（不该走到这里）：标失败，用户点重试会发给现在的项目经理。
+      if (now.status === "queued") deps.ledger.onActionFailed(action, "这条消息发给的项目经理已经换人，请重发");
+      else deps.ledger.stopMessage(messageId);
       return { kind: "done" };
     }
     if (result.kind === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" };
@@ -95,8 +101,8 @@ export function createSessionEndHandler(deps: Pick<HandlerDeps, "driver" | "ledg
 }
 
 /**
- * 给 prepareLaunch 的令牌：revoke 过的会话 issue 会抛普通 Error，驱动层会把它当可重试的 spawn_failed 一直重试。
- * 换成 DriverError("session_ended")：驱动层原样抛出，处理函数按 session_ended 接。
+ * 给 prepareLaunch 的令牌：revoke 过的会话 issue 抛 SessionTokenRevokedError，驱动层会把它当可重试的 spawn_failed 一直重试。
+ * 只把这一种换成 DriverError("session_ended")：驱动层原样抛出，处理函数按 session_ended 接；issue 的其他错照常抛出。
  */
 export function endedOnRevokedTokens(tokens: Pick<SessionTokens, "issue">): Pick<SessionTokens, "issue"> {
   return {
@@ -104,7 +110,8 @@ export function endedOnRevokedTokens(tokens: Pick<SessionTokens, "issue">): Pick
       try {
         return tokens.issue(sessionId);
       } catch (error) {
-        throw new DriverError("session_ended", `session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof SessionTokenRevokedError) throw new DriverError("session_ended", `session ${sessionId}: ${error.message}`);
+        throw error;
       }
     },
   };

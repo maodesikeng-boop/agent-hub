@@ -2,6 +2,7 @@
 // 接口真变了，换成 better-sqlite3 只改这里。其他代码只用下面的 Db。
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
+import { DB_BUSY_TIMEOUT_MS } from "../../shared/limits.ts";
 
 export type SqlValue = null | number | bigint | string | Uint8Array;
 
@@ -25,9 +26,9 @@ export interface Db {
   close(): void;
 }
 
-/** 打开数据库：WAL、外键检查、忙等 5 秒。file 可以是 ":memory:"（测试用）。 */
+/** 打开数据库：WAL、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。 */
 export function openDatabase(file: string): Db {
-  const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: 5_000 });
+  const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: DB_BUSY_TIMEOUT_MS });
   raw.exec("PRAGMA journal_mode = WAL");
   // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
   raw.exec("PRAGMA synchronous = NORMAL");

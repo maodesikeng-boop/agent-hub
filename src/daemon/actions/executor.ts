@@ -6,6 +6,7 @@
 // - 改动作状态写库失败记 "store"；没跑完却停在 running 的行（结果没写进去），下一轮改回 pending 重做；
 // - 放弃的动作（坏行、没有处理函数）能认出是 session.send 的，也调 onActionFailed，原因前加“放弃：”。
 import { ACTION_RETRY, retryDelayMs } from "../../shared/actions.ts";
+import { ACTION_CONCURRENCY, ACTION_POLL_INTERVAL_MS } from "../../shared/limits.ts";
 import type {
   ActionExecutor,
   ActionHandler,
@@ -25,9 +26,9 @@ export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed">
 
 export interface ActionExecutorOptions {
   now?: () => number;
-  /** 没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。默认 30 秒。 */
+  /** 没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。默认 ACTION_POLL_INTERVAL_MS。 */
   pollIntervalMs?: number;
-  /** 同时最多跑几个动作。默认 4。 */
+  /** 同时最多跑几个动作。默认 ACTION_CONCURRENCY。 */
   concurrency?: number;
   retry?: Record<ActionType, RetryPolicy>;
 }
@@ -73,8 +74,8 @@ function sessionKey(row: AnyActionRow): number | null {
 
 export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: ActionExecutorOptions = {}): ActionExecutor {
   const now = options.now ?? Date.now;
-  const pollIntervalMs = options.pollIntervalMs ?? 30_000;
-  const concurrency = options.concurrency ?? 4;
+  const pollIntervalMs = options.pollIntervalMs ?? ACTION_POLL_INTERVAL_MS;
+  const concurrency = options.concurrency ?? ACTION_CONCURRENCY;
   const retry = options.retry ?? ACTION_RETRY;
 
   const handlers = new Map<ActionType, ActionHandler>();

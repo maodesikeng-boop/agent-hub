@@ -428,7 +428,7 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     await terminate(daemon);
   });
 
-  it("交接时撞上 session_ended：群里排队的那条发给新一代，不进旧进程；driver 的 health 没记 session_ended", async () => {
+  it("交接时排队的消息改指新一代：群里排队的那条发给新一代，不进旧进程；driver 的 health 没记 session_ended", async () => {
     env = makeEnv();
     const foo = folder("foo");
     env.setScript({
@@ -452,6 +452,8 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     await waitForStatus(client, first, "processing");
     // 旧一代正忙：这条在排队，交接时改指新一代
     const queued = await client.post(groupId, "顺便看看 README");
+    // 确实排在旧一代上（交接还没发生）：没排上，这条用例就没测到它说的东西，让它失败
+    expect(messageById(await client.state(), queued)!.sessionId).toBe(oldSessionId);
     await waitForStatus(client, first, "replied");
     await waitForStatus(client, queued, "replied");
 
@@ -467,6 +469,37 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     const actions = query<{ type: string; status: string; last_error: string | null }>("SELECT type, status, last_error FROM actions");
     expect(actions.filter((a) => a.status !== "done")).toEqual([]);
     expect(actions.some((a) => (a.last_error ?? "").includes("session_ended"))).toBe(false);
+    await terminate(daemon);
+  });
+
+  it("重启恰好打断交接那一轮：旧会话先结束，恢复登记的 session.send 撞上 session_ended，消息标已停止，不标失败", async () => {
+    env = makeEnv();
+    const foo = folder("foo");
+    env.setScript({
+      turns: [{ steps: [{ bash: "hub project assign foo --to 阿周 --text '交接：发布日期定在周五'" }, { sleepMs: 30_000 }, { text: "交接好了" }] }],
+      defaultTurn: quick("我是阿周，收到"),
+    });
+    const first = await boot();
+    await first.client.createPm({ name: "阿周", mode: "hands_on", persona: "阿周的习惯" });
+    const groupId = (await first.client.createProject({ name: "foo", folder: foo, pmId: first.pmId })).conversationId;
+    const oldSessionId = sessionsOf(await first.client.state(), groupId)[0]!.sessionId;
+    const id = await first.client.post(groupId, "把 foo 交给阿周");
+    // 交接已经做了（新一代建好），旧一代这一轮还没结束
+    await waitUntil("handoff done", async () => (sessionsOf(await first.client.state(), groupId).length === 2 ? true : undefined));
+    expect(messageById(await first.client.state(), id)!.status).toBe("processing");
+    first.daemon.child.kill("SIGKILL");
+    await first.daemon.exited;
+
+    const daemon = await env.start();
+    const client = first.client.withPort(daemon.port);
+    const stopped = await waitForStatus(client, id, "stopped");
+    expect(stopped.failureReason).toBeNull();
+    expect(stopped.sessionId).toBe(oldSessionId);
+    await waitUntil("actions settled", () => (query<{ status: string }>("SELECT status FROM actions").every((a) => a.status === "done") ? true : undefined));
+    const s = await client.state();
+    expect(sessionsOf(s, groupId).map((x) => x.status)).toEqual(["ended", expect.not.stringMatching(/^ended$/)]);
+    expect(messagesOf(s, groupId).filter((m) => m.status === "failed")).toEqual([]);
+    for (const h of s.health) expect(h.lastError ?? "").not.toMatch(/session_ended/);
     await terminate(daemon);
   });
 
