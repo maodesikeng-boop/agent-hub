@@ -1,0 +1,380 @@
+// hub 命令行（src/hub/）的测试。放在这里是因为 vitest 的 node 项目只收 src/daemon、src/shared、test 下的测试。
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../../shared/index.ts";
+import { runHub, type HubIo } from "../../hub/cli.ts";
+import { FakeHubLedger } from "./fake-ledger.ts";
+import { startAgentApi, type RunningAgentApi } from "./server.ts";
+import { installHubShim } from "./shim.ts";
+import { createSessionTokens } from "./tokens.ts";
+
+const HUB_MAIN = fileURLToPath(new URL("../../hub/main.ts", import.meta.url));
+
+/** 一个读了就让测试失败的标准输入：用来证明没写 --stdin 时 hub 不碰它。 */
+class TrapStdin extends Readable {
+  touched = false;
+  override _read(): void {
+    this.touched = true;
+    // 永远不给数据也不结束：真被读了就会卡住
+  }
+}
+
+interface Captured {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+describe("hub cli", () => {
+  let dir: string;
+  let home: string;
+  let cwd: string;
+  let running: RunningAgentApi;
+  let ledger: FakeHubLedger;
+  let tokens: SessionTokens;
+  let token: string;
+  let env: Record<string, string | undefined>;
+
+  beforeEach(async () => {
+    dir = mkdtempSync("/tmp/ah-");
+    home = join(dir, "home");
+    cwd = join(dir, "work");
+    mkdirSync(home);
+    mkdirSync(cwd);
+    ledger = new FakeHubLedger();
+    tokens = createSessionTokens();
+    running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run"), hubSock: join(dir, "run", "hub.sock") });
+    token = tokens.issue(42);
+    env = { [ENV_HUB_TOKEN]: token, [ENV_HUB_SOCK]: running.socketPath, HOME: home };
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function hub(argv: string[], opts: { stdin?: Readable; env?: Record<string, string | undefined>; timeoutMs?: number } = {}) {
+    let stdout = "";
+    let stderr = "";
+    const stdin = opts.stdin ?? new TrapStdin();
+    const io: HubIo = {
+      argv,
+      env: opts.env ?? env,
+      cwd,
+      stdin,
+      stdout: { write: (s: string) => void (stdout += s) },
+      stderr: { write: (s: string) => void (stderr += s) },
+      timeoutMs: opts.timeoutMs,
+    };
+    const code = await runHub(io);
+    if (opts.stdin === undefined) expect((stdin as TrapStdin).touched, "stdin must not be read without --stdin").toBe(false);
+    return { code, stdout, stderr } satisfies Captured;
+  }
+
+  const stdinOf = (text: string) => Readable.from([Buffer.from(text, "utf8")]);
+
+  describe("success", () => {
+    it("project create prints text, exits 0 and sends the right body", async () => {
+      const r = await hub(["project", "create", "--name", "foo", "--folder", "/x"]);
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(r.stdout).toBe("已执行 project.create（会话 42）\n");
+      expect(r.stderr).toBe("");
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "project.create", args: { name: "foo", folder: "/x" } }]);
+    });
+
+    it("project create passes --description", async () => {
+      expect((await hub(["project", "create", "--name", "foo", "--folder", "/x", "--description", "说明"])).code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: "/x", description: "说明" });
+    });
+
+    it.each([
+      [["status"], "status", {}],
+      [["pm", "list"], "pm.list", {}],
+      [["persona", "show"], "persona.show", {}],
+      [["project", "attach", "foo", "/a/b"], "project.attach", { project: "foo", folder: "/a/b" }],
+      [["project", "detach", "foo", "/a/b"], "project.detach", { project: "foo", folder: "/a/b" }],
+      [["project", "assign", "foo", "--to", "阿周", "--text", "交接"], "project.assign", { project: "foo", to: "阿周", handoff: "交接" }],
+      [["persona", "edit", "--mode", "hands_on"], "persona.edit", { mode: "hands_on" }],
+      [["persona", "edit", "--text", "新设定", "--reason", "用户说的"], "persona.edit", { text: "新设定", reason: "用户说的" }],
+    ] as const)("hub %j → %s", async (argv, command, args) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
+    });
+
+    it("prints help with exit 0 and does not call the daemon", async () => {
+      const r = await hub(["--help"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("hub project assign");
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
+  describe("long text via --stdin", () => {
+    it("delivers a 3 KB handoff with $, backticks and quotes unchanged", async () => {
+      const line = "价格 $HUB_TOKEN `rm -rf /` \"双引号\" 'single' \\ $(whoami) ${x}\n";
+      let handoff = "";
+      while (Buffer.byteLength(handoff) < 3 * 1024) handoff += line;
+      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf(`${handoff}\n`) });
+      expect(r.code).toBe(0);
+      // 去掉末尾一个换行，其余原样
+      expect(ledger.calls[0]?.args).toEqual({ project: "foo", to: "阿周", handoff });
+    });
+
+    it("strips exactly one trailing newline", async () => {
+      await hub(["persona", "edit", "--stdin"], { stdin: stdinOf("a\n\n") });
+      expect(ledger.calls[0]?.args).toEqual({ text: "a\n" });
+    });
+
+    it("persona edit --stdin together with --mode and --reason", async () => {
+      await hub(["persona", "edit", "--stdin", "--mode", "manage_only", "--reason", "r"], { stdin: stdinOf("全文") });
+      expect(ledger.calls[0]?.args).toEqual({ text: "全文", mode: "manage_only", reason: "r" });
+    });
+  });
+
+  describe("does not read stdin without --stdin", () => {
+    it("project assign with neither --stdin nor --text exits 2 at once (in-process)", async () => {
+      const r = await hub(["project", "assign", "foo", "--to", "阿周"]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toMatch(/--stdin|--text/);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("a real hub process with stdin held open exits 2 without hanging", async () => {
+      const child = spawn(process.execPath, [HUB_MAIN, "project", "assign", "foo", "--to", "阿周"], {
+        env: { ...process.env, ...env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (s: string) => (stderr += s));
+      // 标准输入一直开着，不写也不关
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("hub hung waiting on stdin"));
+        }, 10_000);
+        child.on("exit", (c) => {
+          clearTimeout(timer);
+          resolve(c);
+        });
+      });
+      child.stdin.destroy();
+      expect(code).toBe(HUB_EXIT.usage);
+      expect(stderr).toMatch(/--stdin|--text/);
+    });
+  });
+
+  describe("usage errors (exit 2)", () => {
+    it.each([
+      [[]],
+      [["frobnicate"]],
+      [["project"]],
+      [["project", "archive", "foo"]],
+      [["pm"]],
+      [["persona"]],
+      [["status", "extra"]],
+      [["project", "create", "--name", "foo"]],
+      [["project", "create", "--folder", "/x"]],
+      [["project", "create", "--name", "foo", "--folder", "/x", "--bogus", "1"]],
+      [["project", "attach", "foo"]],
+      [["project", "detach", "foo", "/a", "/b"]],
+      [["project", "assign", "foo", "--text", "交接"]],
+      [["project", "assign", "--to", "阿周", "--text", "交接"]],
+      [["persona", "edit"]],
+      [["persona", "edit", "--reason", "只有理由"]],
+      [["persona", "edit", "--mode", "boss"]],
+      [["project", "create", "--name", "--folder", "/x"]],
+    ])("hub %j", async (argv) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).not.toBe("");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("--stdin and --text together", async () => {
+      const r = await hub(["project", "assign", "foo", "--to", "阿周", "--stdin", "--text", "x"], { stdin: stdinOf("y") });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("an empty handoff from --stdin or --text", async () => {
+      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--stdin"], { stdin: stdinOf("") })).code).toBe(2);
+      expect((await hub(["project", "assign", "foo", "--to", "阿周", "--text", ""])).code).toBe(2);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("HUB_TOKEN not set", async () => {
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_TOKEN]: undefined } });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain(ENV_HUB_TOKEN);
+    });
+
+    it("HUB_SOCK not set", async () => {
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: "" } });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain(ENV_HUB_SOCK);
+    });
+  });
+
+  describe("rejected by the daemon (exit 1)", () => {
+    it("prints the ledger's message", async () => {
+      ledger.failWith = new LedgerRequestError("forbidden", "foo 不是你管的项目");
+      const r = await hub(["project", "attach", "foo", "/a"]);
+      expect(r.code).toBe(HUB_EXIT.rejected);
+      expect(r.stderr).toBe("foo 不是你管的项目\n");
+      expect(r.stdout).toBe("");
+    });
+
+    it("a revoked token is a rejection, not a usage error", async () => {
+      tokens.revoke(42);
+      const r = await hub(["status"]);
+      expect(r.code).toBe(HUB_EXIT.rejected);
+      expect(r.stderr).not.toBe("");
+    });
+
+    it("an over-long field is rejected by the daemon", async () => {
+      const r = await hub(["project", "create", "--name", "n".repeat(100), "--folder", "/x"]);
+      expect(r.code).toBe(HUB_EXIT.rejected);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("stdin larger than the body limit is refused without reading it all", async () => {
+      const huge = "x".repeat(2 * 1024 * 1024);
+      const r = await hub(["persona", "edit", "--stdin"], { stdin: stdinOf(huge) });
+      expect([HUB_EXIT.usage, HUB_EXIT.rejected]).toContain(r.code);
+      expect(r.stderr).not.toBe("");
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
+  describe("unreachable daemon (exit 3)", () => {
+    const UNREACHABLE = /连不上 agent-hub/;
+
+    it("HUB_SOCK points at a missing file", async () => {
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: join(dir, "nope.sock") } });
+      expect(r.code).toBe(HUB_EXIT.unreachable);
+      expect(r.stderr).toMatch(UNREACHABLE);
+    });
+
+    it("HUB_SOCK points at a regular file", async () => {
+      const file = join(dir, "plain");
+      writeFileSync(file, "");
+      const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: file } });
+      expect(r.code).toBe(HUB_EXIT.unreachable);
+      expect(r.stderr).toMatch(UNREACHABLE);
+    });
+
+    it("the daemon has stopped (socket closed)", async () => {
+      await running.close();
+      const r = await hub(["status"]);
+      expect(r.code).toBe(HUB_EXIT.unreachable);
+      expect(r.stderr).toMatch(UNREACHABLE);
+      // afterEach 会再关一次，换一个能关的
+      running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run2"), hubSock: join(dir, "run2", "hub.sock") });
+    });
+
+    it("the daemon accepts but never answers (timeout)", async () => {
+      const sock = join(dir, "silent.sock");
+      const silent: Server = createServer(() => {});
+      await new Promise<void>((resolve) => silent.listen(sock, resolve));
+      try {
+        const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock }, timeoutMs: 200 });
+        expect(r.code).toBe(HUB_EXIT.unreachable);
+        expect(r.stderr).toMatch(UNREACHABLE);
+      } finally {
+        silent.closeAllConnections?.();
+        await new Promise<void>((resolve) => silent.close(() => resolve()));
+      }
+    });
+  });
+
+  describe("path arguments", () => {
+    it("expands a leading ~ to HOME", async () => {
+      await hub(["project", "create", "--name", "foo", "--folder", "~/code/foo"]);
+      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: join(home, "code", "foo") });
+    });
+
+    it("expands a bare ~ and ~ in attach/detach", async () => {
+      await hub(["project", "attach", "foo", "~"]);
+      await hub(["project", "detach", "foo", "~/x"]);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        { project: "foo", folder: home },
+        { project: "foo", folder: join(home, "x") },
+      ]);
+    });
+
+    it("resolves relative paths against the current directory", async () => {
+      await hub(["project", "create", "--name", "foo", "--folder", "sub/dir"]);
+      await hub(["project", "attach", "foo", "."]);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        { name: "foo", folder: join(cwd, "sub", "dir") },
+        { project: "foo", folder: cwd },
+      ]);
+    });
+
+    it("does not treat ~user or a ~ in the middle as HOME", async () => {
+      await hub(["project", "attach", "foo", "/a/~/b"]);
+      expect(ledger.calls[0]?.args).toEqual({ project: "foo", folder: "/a/~/b" });
+    });
+
+    it("~ without HOME is a usage error", async () => {
+      const r = await hub(["project", "attach", "foo", "~/x"], { env: { ...env, HOME: undefined } });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
+  describe("run/bin/hub shim", () => {
+    it("writes an executable 0700 wrapper that runs hub with the given node", async () => {
+      const binDir = join(dir, "run", "bin");
+      const shim = installHubShim({ binDir });
+      expect(shim).toBe(join(binDir, "hub"));
+      expect(statSync(shim).mode & 0o777).toBe(0o700);
+      expect(statSync(binDir).mode & 0o777).toBe(0o700);
+      const content = readFileSync(shim, "utf8");
+      expect(content.startsWith("#!/bin/sh\n")).toBe(true);
+      expect(content).toContain(process.execPath);
+
+      const r = spawnSync(shim, ["project", "create", "--name", "foo", "--folder", "~/p"], {
+        env: { PATH: "/usr/bin:/bin", ...env },
+        cwd,
+        encoding: "utf8",
+        input: "",
+      });
+      expect(r.stderr).toBe("");
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe("已执行 project.create（会话 42）\n");
+      expect(ledger.calls[0]?.args).toEqual({ name: "foo", folder: join(home, "p") });
+    });
+
+    it("exit codes pass through the shim", () => {
+      const shim = installHubShim({ binDir: join(dir, "run", "bin") });
+      const r = spawnSync(shim, ["status"], { env: { PATH: "/usr/bin:/bin", [ENV_HUB_SOCK]: running.socketPath }, encoding: "utf8" });
+      expect(r.status).toBe(HUB_EXIT.usage);
+    });
+
+    it("quotes paths with spaces and single quotes", () => {
+      const odd = join(dir, "it's here");
+      mkdirSync(odd);
+      const fakeNode = join(odd, "my node");
+      writeFileSync(fakeNode, '#!/bin/sh\necho "args:$#:$1:$2:$3"\n', { mode: 0o755 });
+      const shim = installHubShim({ binDir: join(dir, "bin2"), nodePath: fakeNode, mainScript: join(odd, "main $x.ts") });
+      const r = spawnSync(shim, ["a b", "$HOME"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+      expect(r.stdout).toBe(`args:3:${join(odd, "main $x.ts")}:a b:$HOME\n`);
+    });
+
+    it("rewrites an existing shim (e.g. node moved) and keeps it 0700", () => {
+      const binDir = join(dir, "run", "bin");
+      installHubShim({ binDir, nodePath: "/old/node" });
+      const shim = installHubShim({ binDir });
+      expect(readFileSync(shim, "utf8")).not.toContain("/old/node");
+      expect(statSync(shim).mode & 0o777).toBe(0o700);
+    });
+  });
+});
