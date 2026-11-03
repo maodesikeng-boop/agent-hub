@@ -20,7 +20,6 @@ import type {
   SessionActivity,
   SessionId,
   SessionState,
-  SessionStatus,
 } from "../../shared/domain.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -51,14 +50,14 @@ interface Pending {
   changes: ChangeInput[];
   actions: AnyActionRow[];
   stops: StopEvent[];
+  /** 这个事务里推出去的会话状态（比较用的键），提交后才记进 pushed。 */
+  pushed: Map<SessionId, string>;
 }
 
-/** 只在内存里的会话状态（守护进程重启后从数据库那一行重新开始）。 */
+/** 只在内存里的会话状态（守护进程重启后从头开始）。status 不在这里，只从 agent_sessions 那一行读。 */
 interface LiveSession {
   activity: SessionActivity;
   currentTool: string | null;
-  /** 驱动层事件推出来的状态；没有时用 agent_sessions 那一行的。 */
-  status?: SessionStatus;
   rateLimit?: RateLimitInfo | null;
 }
 
@@ -77,6 +76,8 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
   const actionListeners = new Set<(action: AnyActionRow) => void>();
   const stopListeners = new Set<(event: StopEvent) => void>();
   const live = new Map<SessionId, LiveSession>();
+  /** 上次推给网页的会话状态（不含 lastEventAt）；没推过的会话第一次一定推。 */
+  const pushed = new Map<SessionId, string>();
 
   const notify = <T>(listeners: Set<(value: T) => void>, value: T) => {
     for (const listener of [...listeners]) {
@@ -97,8 +98,11 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
 
   /** 在一个事务里做 fn，提交后按顺序发变化、动作登记、停止请求。 */
   const write = <T>(fn: (p: Pending) => T): T => {
-    const pending: Pending = { changes: [], actions: [], stops: [] };
+    // 并进外层事务的话，下面的通知会在外层提交前发出去，外层回滚就推了不存在的变化
+    if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
+    const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map() };
     const result = db.transaction(() => fn(pending));
+    for (const [id, key] of pending.pushed) pushed.set(id, key);
     for (const input of pending.changes) notify(changeListeners, log.append(input));
     for (const action of pending.actions) notify(actionListeners, action);
     for (const stop of pending.stops) notify(stopListeners, stop);
@@ -136,7 +140,7 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     return {
       sessionId: row.id,
       conversationId: row.conversationId,
-      status: l.status ?? row.status,
+      status: row.status,
       activity: l.activity,
       currentTool: l.currentTool,
       rateLimit: l.rateLimit !== undefined ? l.rateLimit : row.rateLimit,
@@ -144,16 +148,21 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     };
   };
 
-  /** 改内存里的会话状态；网页看得到的部分变了就推一条 session.status。 */
+  /**
+   * 改内存里的会话状态，再按 agent_sessions 那一行算出网页看到的状态，和上次推出去的比，变了就推一条 session.status。
+   * 和上次推的比、不和“改之前按行算的”比：驱动层先写库再发事件也不会漏推。lastEventAt 不参与比较。
+   */
   const updateLive = (p: Pending, sessionId: SessionId, mutate: (l: LiveSession) => void) => {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
-    const before = sessionState(row);
     const next = { ...liveOf(sessionId) };
     mutate(next);
     live.set(sessionId, next);
     const after = sessionState(row);
-    if (JSON.stringify(before) !== JSON.stringify(after)) p.changes.push({ type: "session.status", data: { session: after } });
+    const key = JSON.stringify({ ...after, lastEventAt: null });
+    if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
+    p.pushed.set(sessionId, key);
+    p.changes.push({ type: "session.status", data: { session: after } });
   };
 
   const working = (currentTool: string | null) => (l: LiveSession) => {
@@ -235,8 +244,9 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":
+        // 状态（running）由驱动层写进那一行；这里只清掉上一次没等到退出的“正在停”
         updateLive(p, sessionId, (l) => {
-          l.status = "running";
+          if (l.activity === "stopping") idle(l);
         });
         return;
       case "message.delivered":
@@ -284,10 +294,7 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
           if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
           else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
         }
-        updateLive(p, sessionId, (l) => {
-          idle(l);
-          l.status = "idle";
-        });
+        updateLive(p, sessionId, idle);
         return;
       }
       case "driver.error":
@@ -327,17 +334,21 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
       if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
       const session = currentSession(conversationId);
       if (session === null) return;
-      const inTurn =
-        liveOf(session.id).activity !== "idle" ||
+      const working = liveOf(session.id).activity !== "idle";
+      // 重启后内存里是空闲、库里还有处理中的消息：进程不在，只记下停止请求，不标“正在停”（不会有事件把它清掉）
+      const leftover =
+        !working &&
         db.get(
           `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
           session.id,
         ) !== undefined;
-      if (!inTurn) return;
+      if (!working && !leftover) return;
       write((p) => {
-        updateLive(p, session.id, (l) => {
-          l.activity = "stopping";
-        });
+        if (working) {
+          updateLive(p, session.id, (l) => {
+            l.activity = "stopping";
+          });
+        }
         p.stops.push({ conversationId, sessionId: session.id });
       });
     },
@@ -386,10 +397,14 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
       return write((p) => {
         const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
           `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
-           WHERE m.status IN ('queued', 'delivered', 'processing') AND m.session_id IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM actions a
-               WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
+           WHERE m.session_id IS NOT NULL
+             AND (
+               m.status IN ('delivered', 'processing')
+               -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend
+               OR (m.status = 'queued' AND NOT EXISTS (
+                 SELECT 1 FROM actions a
+                 WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
+               ))
              )
            ORDER BY m.id`,
         );
@@ -453,10 +468,9 @@ export function createLedger(db: Db, options: LedgerOptions = {}): SqliteLedger 
     getMessage,
 
     onActionFailed(action, error) {
+      // session.start 失败时执行器每次都已经记过 health，这里不再记
       if (action.type === "session.send") {
         write((p) => transition(p, action.params.messageId, "failed", error));
-      } else {
-        write((p) => reportHealthIn(p, "actions", error));
       }
     },
 

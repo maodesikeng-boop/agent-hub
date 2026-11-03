@@ -29,6 +29,7 @@ export interface Db {
 export function openDatabase(file: string): Db {
   const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: 5_000 });
   raw.exec("PRAGMA journal_mode = WAL");
+  // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
   raw.exec("PRAGMA synchronous = NORMAL");
   const statements = new Map<string, StatementSync>();
   let depth = 0;

@@ -195,14 +195,18 @@ describe("执行器", () => {
     await executor.stop();
   });
 
-  it("没注册处理函数的类型：标放弃，记 health，不调 onActionFailed", async () => {
-    const action = sendAction();
+  it("没注册处理函数的类型：标放弃，记 health；发消息动作调 onActionFailed，消息标失败", async () => {
+    const { conversation } = ledger.createPm({ name: "项目经理", pmHomeRoot: home });
+    const { messageId } = ledger.postUserMessage({ conversationId: conversation.id, clientId: "c1", text: "hi" });
+    const [action] = db.all<{ id: number }>("SELECT id FROM actions");
     const executor = createActionExecutor(db, deps);
     executor.start();
     await flush();
-    expect(getAction(db, action.id)).toMatchObject({ status: "abandoned", lastError: "no handler registered for session.send" });
+    expect(getAction(db, action!.id)).toMatchObject({ status: "abandoned", lastError: "no handler registered for session.send" });
     expect(deps.reportHealth).toHaveBeenCalledWith("actions", "no handler registered for session.send");
-    expect(deps.onActionFailed).not.toHaveBeenCalled();
+    expect(deps.onActionFailed).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.onActionFailed).mock.calls[0]?.[0]).toMatchObject({ id: action!.id, status: "abandoned" });
+    expect(ledger.getMessage(messageId)).toMatchObject({ status: "failed", failureReason: "放弃：no handler registered for session.send" });
     await executor.stop();
   });
 
@@ -255,6 +259,124 @@ describe("执行器", () => {
     await executor.stop();
   });
 
+  it("到点时间不同也是启动排在发消息前面：先按类型，再按到点时间、编号", async () => {
+    enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 10, source: "user" } }, T0 - 3_000);
+    enqueueAction(db, { type: "session.send", params: { sessionId: 1, messageId: 11, source: "user" } }, T0 - 2_000);
+    enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1, recovery: true } }, T0 - 1_000);
+    const log: string[] = [];
+    const executor = createActionExecutor(db, deps);
+    executor.register("session.start", (a) => {
+      log.push(`start s${a.params.sessionId}`);
+      return { kind: "done" };
+    });
+    executor.register("session.send", (a) => {
+      log.push(`send m${a.params.messageId}`);
+      return { kind: "done" };
+    });
+    executor.start();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(log).toEqual(["start s1", "send m10", "send m11"]);
+    await executor.stop();
+  });
+
+  it("结果写库失败：记 store 的 health，动作不会卡在执行中，下一轮改回待执行再做", async () => {
+    const action = sendAction();
+    db.exec("CREATE TRIGGER fail_done BEFORE UPDATE ON actions WHEN NEW.status = 'done' BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    const executor = createActionExecutor(db, deps);
+    executor.register("session.send", () => {
+      calls += 1;
+      if (calls === 2) db.exec("DROP TRIGGER fail_done");
+      return { kind: "done" };
+    });
+    executor.start();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(deps.reportHealth).toHaveBeenCalledWith("store", expect.stringContaining("disk full"));
+    expect(calls).toBe(2);
+    expect(getAction(db, action.id)?.status).toBe("done");
+    await executor.stop();
+    spy.mockRestore();
+  });
+
+  it("推迟时间不合法：小数向上取整，NaN、Infinity 不会让动作卡住", async () => {
+    const action = sendAction();
+    const handler = vi
+      .fn<(a: AnyActionRow) => ActionResult>()
+      .mockReturnValueOnce({ kind: "later", delayMs: 1.5 })
+      .mockReturnValueOnce({ kind: "later", delayMs: Number.NaN })
+      .mockReturnValueOnce({ kind: "later", delayMs: Number.POSITIVE_INFINITY })
+      .mockReturnValue({ kind: "done" });
+    const executor = createActionExecutor(db, deps, { pollIntervalMs: 1_000 });
+    executor.register("session.send", handler);
+    executor.start();
+    await flush();
+    expect(getAction(db, action.id)).toMatchObject({ status: "pending", nextAttemptAt: T0 + 2 });
+    await vi.advanceTimersByTimeAsync(2);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(getAction(db, action.id)?.status).toBe("pending");
+    // NaN、Infinity 按轮询间隔（1 秒）再试
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(getAction(db, action.id)).toMatchObject({ status: "pending", nextAttemptAt: T0 + 2 + 2_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(handler).toHaveBeenCalledTimes(4);
+    expect(getAction(db, action.id)?.status).toBe("done");
+    await executor.stop();
+  });
+
+  it("health 清零不靠内存：库里留着 driver（来自 driver.error）和 actions 的错误，任何一个动作成功都清掉", async () => {
+    const { sessionId } = ledger.createPm({ name: "项目经理", pmHomeRoot: home });
+    ledger.applyDriverEvent(sessionId, { type: "driver.error", at: 1, code: "bad_output_line", message: "bad_output_line: x" });
+    ledger.reportHealth("actions", "old");
+    sendAction();
+    const executor = createActionExecutor(db, deps);
+    executor.register("session.send", () => ({ kind: "done" }));
+    executor.start();
+    await flush();
+    expect(ledger.snapshot().health).toEqual([
+      expect.objectContaining({ module: "actions", consecutiveFailures: 0, lastError: null }),
+      expect.objectContaining({ module: "driver", consecutiveFailures: 0, lastError: null }),
+    ]);
+    await executor.stop();
+  });
+
+  it("启动动作次数用完：actions 的 health 只按每次失败记，不再多记一次", async () => {
+    enqueueAction(db, { type: "session.start", params: { sessionId: 1, generation: 1 } }, T0);
+    const executor = createActionExecutor(db, deps, { retry: { "session.start": { maxAttempts: 1, baseMs: 1, maxMs: 1 }, "session.send": { maxAttempts: 1, baseMs: 1, maxMs: 1 } } });
+    executor.register("session.start", () => {
+      throw new Error("boom");
+    });
+    executor.start();
+    await flush();
+    expect(deps.onActionFailed).toHaveBeenCalledTimes(1);
+    expect(ledger.snapshot().health).toEqual([expect.objectContaining({ module: "actions", consecutiveFailures: 1, lastError: "boom" })]);
+    await executor.stop();
+  });
+
+  it("处理函数里调 wake：不会被这一轮末尾的定时盖掉", async () => {
+    sendAction(1, 1);
+    const executor = createActionExecutor(db, deps, { pollIntervalMs: 60_000 });
+    let release!: () => void;
+    const handler = vi.fn((a: AnyActionRow): ActionResult | Promise<ActionResult> => {
+      if (a.type === "session.send" && a.params.messageId === 1) {
+        sendAction(2, 2);
+        executor.wake();
+        // 第一个动作一直没做完，靠不上它结束时的那次 schedule
+        return new Promise((resolve) => {
+          release = () => resolve({ kind: "done" });
+        });
+      }
+      return { kind: "done" };
+    });
+    executor.register("session.send", handler);
+    executor.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(handler).toHaveBeenCalledTimes(2);
+    release();
+    await executor.stop();
+  });
+
   it("stop：不再取新动作，等正在执行的做完并记下结果", async () => {
     const first = sendAction(1, 1);
     let release!: () => void;
@@ -299,6 +421,8 @@ describe("执行器", () => {
     executor.start();
     await flush();
     expect(db.get<{ status: string }>("SELECT status FROM actions WHERE dedupe_key = 'x'")?.status).toBe("abandoned");
+    // 参数解析不出来：认不出是哪条消息，不调 onActionFailed
+    expect(deps.onActionFailed).not.toHaveBeenCalled();
     await executor.stop();
   });
 });

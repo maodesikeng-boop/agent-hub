@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -130,9 +131,11 @@ describe("数据库封装", () => {
   });
 });
 
+const lockPid = (file: string) => readFileSync(file, "utf8").split("\n")[0];
+const startTimeOf = (pid: number) => execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
+
 describe("目录锁", () => {
   it("开两个：已拿锁时再拿一次，报“已有守护进程在跑”", () => {
-    mkdirSync(paths.stateDir, { recursive: true });
     const lock = acquireLock(paths.lockFile);
     try {
       expect(() => acquireLock(paths.lockFile)).toThrow(DaemonAlreadyRunningError);
@@ -142,17 +145,39 @@ describe("目录锁", () => {
     }
     // 放掉以后能再拿
     const again = acquireLock(paths.lockFile);
-    expect(readFileSync(paths.lockFile, "utf8").trim()).toBe(String(process.pid));
+    expect(lockPid(paths.lockFile)).toBe(String(process.pid));
     again.release();
     expect(existsSync(paths.lockFile)).toBe(false);
   });
 
-  it("上次留下的锁对应的进程已经不在了：接管", () => {
+  it("自己建 state/ 目录，权限 0700；锁文件里有进程号和进程启动时间，不留临时文件", () => {
+    expect(existsSync(paths.stateDir)).toBe(false);
+    const lock = acquireLock(paths.lockFile);
+    try {
+      expect(statSync(paths.stateDir).mode & 0o777).toBe(0o700);
+      expect(readFileSync(paths.lockFile, "utf8")).toBe(`${process.pid}\n${startTimeOf(process.pid)}\n`);
+      expect(() => acquireLock(paths.lockFile)).toThrow(DaemonAlreadyRunningError);
+      expect(readdirSync(paths.stateDir)).toEqual(["lock"]);
+    } finally {
+      lock.release();
+    }
+  });
+
+  it("上次留下的锁对应的进程已经不在了：接管，不留改名后的旧锁", () => {
     mkdirSync(paths.stateDir, { recursive: true });
     // 2^22 以上的进程号在 macOS / Linux 上都不会存在
     writeFileSync(paths.lockFile, "99999999\n");
     const lock = acquireLock(paths.lockFile);
-    expect(readFileSync(paths.lockFile, "utf8").trim()).toBe(String(process.pid));
+    expect(lockPid(paths.lockFile)).toBe(String(process.pid));
+    expect(readdirSync(paths.stateDir)).toEqual(["lock"]);
+    lock.release();
+  });
+
+  it("进程号被别的进程复用了（启动时间对不上）：当作过期，接管", () => {
+    mkdirSync(paths.stateDir, { recursive: true });
+    writeFileSync(paths.lockFile, `${process.pid}\nMon Jan  1 00:00:00 2001\n`);
+    const lock = acquireLock(paths.lockFile);
+    expect(readFileSync(paths.lockFile, "utf8")).toBe(`${process.pid}\n${startTimeOf(process.pid)}\n`);
     lock.release();
   });
 
@@ -161,6 +186,13 @@ describe("目录锁", () => {
     writeFileSync(paths.lockFile, "garbage");
     const lock = acquireLock(paths.lockFile);
     lock.release();
+  });
+
+  it("release 不删别人的锁", () => {
+    const lock = acquireLock(paths.lockFile);
+    writeFileSync(paths.lockFile, `${process.pid}\nsomeone else\n`);
+    lock.release();
+    expect(existsSync(paths.lockFile)).toBe(true);
   });
 });
 

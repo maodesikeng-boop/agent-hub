@@ -51,6 +51,15 @@ function ev(event: DriverEvent) {
   ledger.applyDriverEvent(sessionId, event);
 }
 
+/** 模拟驱动层改 agent_sessions 那一行。 */
+function setSession(patch: Parameters<ReturnType<typeof createSessionStore>["update"]>[1]) {
+  createSessionStore(db, { now: () => now }).update(sessionId, patch);
+}
+
+function sessionStates() {
+  return changes.flatMap((c) => (c.type === "session.status" ? [c.data.session] : []));
+}
+
 function setStatus(id: MessageId, status: MessageStatus) {
   db.run("UPDATE messages SET status = ? WHERE id = ?", status, id);
 }
@@ -118,6 +127,24 @@ describe("postUserMessage", () => {
     expect(post("other")).not.toBe(a);
   });
 
+  it("事务回滚：前面已经攒了变化、后一步才失败，一条也不推", () => {
+    const a = post("a");
+    const b = post("b");
+    for (const id of [a, b]) setStatus(id, "processing");
+    changes = [];
+    db.exec(`CREATE TRIGGER fail_b BEFORE UPDATE ON messages WHEN NEW.id = ${b} BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    expect(() => ev({ type: "turn.ended", at: 1, ok: true, interrupted: false, messageIds: [a, b], durationMs: null })).toThrow(/boom/);
+    expect(ledger.getMessage(a)?.status).toBe("processing");
+    expect(changes).toEqual([]);
+    expect(ledger.changesSince(ledger.snapshot().seq)).toEqual({ kind: "ok", changes: [] });
+  });
+
+  it("已经在外层事务里时拒绝写，免得提交前就发通知", () => {
+    expect(() => db.transaction(() => ledger.reportHealth("driver", "x"))).toThrow(/transaction/);
+    expect(changes).toEqual([]);
+    expect(ledger.snapshot().health).toEqual([]);
+  });
+
   it("事务回滚：登记动作那一步抛错，消息和动作都没写进去，不推变化", () => {
     db.exec("CREATE TRIGGER fail_actions BEFORE INSERT ON actions BEGIN SELECT RAISE(ABORT, 'boom'); END");
     expect(() => post()).toThrow(/boom/);
@@ -137,6 +164,7 @@ describe("postUserMessage", () => {
 describe("applyDriverEvent", () => {
   it("一轮正常：已送达 → 处理中 → 文字 → 已回复", () => {
     const id = post();
+    setSession({ status: "running", pid: 1234 });
     ev({ type: "session.started", at: 1, resumed: false, model: "opus", tools: [] });
     ev({ type: "message.delivered", at: 2, messageIds: [id] });
     expect(ledger.getMessage(id)?.status).toBe("delivered");
@@ -242,12 +270,14 @@ describe("applyDriverEvent", () => {
   });
 
   it("会话状态：工具调用显示当前工具，额度信息推给网页，退出后回到空闲", () => {
+    setSession({ status: "running" });
     ev({ type: "session.started", at: 1, resumed: true, model: null, tools: [] });
     ev({ type: "agent.tool", at: 2, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "ls" } });
     const info = { status: "rejected", resetsAt: 99, windows: {} };
     ev({ type: "rate_limit", at: 3, info });
+    setSession({ status: "idle", pid: null });
     ev({ type: "session.exited", at: 4, reason: "idle", exitCode: 0, signal: null, hadResult: true, messageIds: [] });
-    const states = changes.flatMap((c) => (c.type === "session.status" ? [c.data.session] : []));
+    const states = sessionStates();
     expect(states.map((s) => [s.status, s.activity, s.currentTool, s.rateLimit?.status ?? null])).toEqual([
       ["running", "idle", null, null],
       ["running", "working", "Bash", null],
@@ -255,6 +285,34 @@ describe("applyDriverEvent", () => {
       ["idle", "idle", null, "rejected"],
     ]);
     expect(ledger.snapshot().sessions).toEqual([states[3]]);
+  });
+
+  it("会话状态只从那一行读：驱动层先写库再发事件，状态变化照样推出去", () => {
+    ev({ type: "rate_limit", at: 1, info: { status: "allowed", resetsAt: 1, windows: {} } });
+    expect(sessionStates().at(-1)?.status).toBe("idle");
+    setSession({ status: "running" });
+    ev({ type: "session.started", at: 2, resumed: false, model: null, tools: [] });
+    expect(sessionStates().at(-1)?.status).toBe("running");
+    setSession({ status: "idle" });
+    ev({ type: "session.exited", at: 3, reason: "idle", exitCode: 0, signal: null, hadResult: true, messageIds: [] });
+    expect(sessionStates().at(-1)?.status).toBe("idle");
+  });
+
+  it("驱动层先发事件再写库：下一次推送带上库里的新状态", () => {
+    const id = post();
+    ev({ type: "session.started", at: 1, resumed: false, model: null, tools: [] });
+    setSession({ status: "running" });
+    ev({ type: "message.delivered", at: 2, messageIds: [id] });
+    expect(sessionStates().at(-1)).toMatchObject({ status: "running", activity: "working" });
+    expect(ledger.snapshot().sessions[0]?.status).toBe("running");
+  });
+
+  it("只有 lastEventAt 变了不推", () => {
+    ev({ type: "agent.text", at: 1, uuid: "u1", text: "a" });
+    const n = sessionStates().length;
+    setSession({ lastEventAt: 12_345 });
+    ev({ type: "agent.text", at: 2, uuid: "u2", text: "b" });
+    expect(sessionStates()).toHaveLength(n);
   });
 
   it("不认识的会话：忽略，不报错", () => {
@@ -304,9 +362,24 @@ describe("requestStop", () => {
     setStatus(id, "processing");
     const fresh = createLedger(db);
     const stops = vi.fn();
+    const freshChanges: Change[] = [];
     fresh.onStopRequested(stops);
+    fresh.onChange((c) => freshChanges.push(c));
     fresh.requestStop(conversationId);
     expect(stops).toHaveBeenCalledTimes(1);
+    // 进程不在：只记下停止请求，不把活动状态标成正在停
+    expect(freshChanges).toEqual([]);
+    expect(fresh.snapshot().sessions[0]?.activity).toBe("idle");
+  });
+
+  it("会话重新起来时清掉残留的正在停", () => {
+    const id = post();
+    ev({ type: "message.delivered", at: 1, messageIds: [id] });
+    ledger.requestStop(conversationId);
+    expect(ledger.snapshot().sessions[0]?.activity).toBe("stopping");
+    // 没等到退出事件，会话就重新起来了
+    ev({ type: "session.started", at: 3, resumed: true, model: null, tools: [] });
+    expect(ledger.snapshot().sessions[0]?.activity).toBe("idle");
   });
 
   it("对话不存在抛 ConversationNotFoundError", () => {
@@ -357,10 +430,27 @@ describe("recoverAfterRestart", () => {
     expect(send(queuedPending)?.status).toBe("pending");
     expect(enqueued).toHaveLength(3);
 
-    // 再调一次：动作都在待执行，什么也不登记
+    // 再调一次：排队中的已有活动动作跳过；已送达的照样登记（动作都在待执行，只更新参数，不通知）
     enqueued = [];
-    expect(ledger.recoverAfterRestart()).toEqual({ resentMessageIds: [], requeuedMessageIds: [], recoveredSessionIds: [] });
+    expect(ledger.recoverAfterRestart()).toEqual({ resentMessageIds: [deliveredFailedAction], requeuedMessageIds: [], recoveredSessionIds: [sessionId] });
     expect(enqueued).toEqual([]);
+  });
+
+  it("处理中的消息已有待执行 / 执行中的发消息动作：参数改成 resend，并登记带 recovery 的启动", () => {
+    const a = post("a");
+    const b = post("b");
+    const rows = new Map(listActions(db).map((x) => [x.type === "session.send" ? x.params.messageId : -1, x.id]));
+    setStatus(a, "processing");
+    setStatus(b, "delivered");
+    setActionStatus(db, rows.get(b)!, { status: "running" }, now);
+    enqueued = [];
+
+    const result = ledger.recoverAfterRestart();
+    expect(result).toEqual({ resentMessageIds: [a, b], requeuedMessageIds: [], recoveredSessionIds: [sessionId] });
+    expect(getAction(db, rows.get(a)!)).toMatchObject({ status: "pending", params: { messageId: a, resend: true } });
+    expect(getAction(db, rows.get(b)!)).toMatchObject({ status: "running", params: { messageId: b, resend: true } });
+    expect(listActions(db).find((x) => x.type === "session.start")).toMatchObject({ status: "pending", params: { sessionId, recovery: true } });
+    expect(enqueued.map((x) => x.type)).toEqual(["session.start"]);
   });
 
   it("只有排队中的消息：不登记启动动作", () => {
@@ -382,7 +472,7 @@ describe("recoverAfterRestart", () => {
 });
 
 describe("onActionFailed", () => {
-  it("session.send：消息标失败，原因是错误；session.start：不碰消息，只记 health", () => {
+  it("session.send：消息标失败，原因是错误；session.start：不碰消息，也不记 health（执行器每次失败已经记过）", () => {
     const id = post();
     const send = listActions(db)[0]!;
     ledger.onActionFailed(send, "claude_not_found: nope");
@@ -392,7 +482,7 @@ describe("onActionFailed", () => {
     const start = enqueueAction(db, { type: "session.start", params: { sessionId, generation: 1 } }, now).row;
     ledger.onActionFailed(start, "start_timeout: 60s");
     expect(ledger.getMessage(id2)?.status).toBe("queued");
-    expect(ledger.snapshot().health).toEqual([expect.objectContaining({ module: "actions", consecutiveFailures: 1, lastError: "start_timeout: 60s" })]);
+    expect(ledger.snapshot().health).toEqual([]);
   });
 
   it("消息已经回复过：不改", () => {

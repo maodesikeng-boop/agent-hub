@@ -65,7 +65,7 @@ export interface Ledger {
   // ---- 界面服务用 ----
   /**
    * 同一个事务里：写一条“排队中”的用户消息 + 登记一个 session.send 动作。clientId 重复时返回已有的编号。
-   * 对话不存在抛 ConversationNotFoundError。
+   * 对话不存在抛 ConversationNotFoundError。对话存在但没有会话（数据不一致）抛普通 Error，界面服务按 500 处理。
    */
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   /**
@@ -95,10 +95,11 @@ export interface Ledger {
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
   /**
    * 守护进程启动时调一次，在 executor.start() 之前（设计第 5.4 节第 3、4 步的账本部分）。
-   * 找出状态是 queued、delivered、processing 而且没有 pending、running 的 session.send 动作的用户消息，
-   * 重新登记 session.send：delivered、processing 的带 resend: true，queued 的不带。
-   * 这些消息所在的会话里，有 delivered、processing 消息的（上次一轮被打断了），
-   * 再登记一个 session.start（当前这一代，recovery: true）。
+   * 重新登记这些消息的 session.send：
+   * - delivered、processing 的：不管有没有 pending、running 的动作都登记，带 resend: true
+   *   （已有活动动作时 UPSERT 只把参数改成 resend: true，不重置、不通知）；
+   * - queued 的：只在没有 pending、running 的 session.send 动作时登记，不带 resend。
+   * 有 delivered、processing 消息的会话（上次一轮被打断了），再登记一个 session.start（当前这一代，recovery: true）。
    * 重复登记按 NewAction 的规则重置已结束的动作。返回登记了什么，方便日志和测试。
    */
   recoverAfterRestart(): { resentMessageIds: MessageId[]; requeuedMessageIds: MessageId[]; recoveredSessionIds: SessionId[] };
@@ -107,13 +108,18 @@ export interface Ledger {
   /** 给执行器处理函数用：读动作要发的消息。找不到返回 null。 */
   getMessage(id: MessageId): Message | null;
   /**
-   * 执行器：动作彻底失败（次数用完）时调用。session.send → 那条消息标 failed，failureReason = error；
-   * session.start → 不碰消息（每条消息由它自己的 session.send 失败时标），只记 health。
+   * 执行器：动作彻底失败（次数用完）或被放弃（坏行、没有处理函数，error 以“放弃：”开头）时调用。
+   * session.send → 那条消息标 failed，failureReason = error；
+   * session.start → 什么也不做：不碰消息（每条消息由它自己的 session.send 失败时标），
+   * 也不记 health（执行器每次失败都已经记过）。
    */
   onActionFailed(action: AnyActionRow, error: string): void;
   /**
    * 各模块报健康状态：error 为 null 表示成功一次（连续失败次数清零），否则次数加一、记下错误。
    * 有变化就推一条 health.updated。执行器每次处理函数抛错都调它（模块按错误来源：DriverError → "driver"）。
+   * 清零规则：任何一个动作成功，执行器都对 "driver" 和 "actions" 各调一次 reportHealth(m, null)，
+   * 不管错误是谁记的（执行器自己、driver.error 事件、上次运行留下的），所以这两个模块的错误总能被后面的成功清掉。
+   * 执行器改动作状态写库失败时记 "store"。
    */
   reportHealth(module: HealthModule, error: string | null): void;
 }
