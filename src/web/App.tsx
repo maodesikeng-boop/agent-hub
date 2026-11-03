@@ -1,10 +1,14 @@
+import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import type { ConversationId } from "../shared/index.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { failingHealth, listConversations, pendingOf, sessionOf } from "./selectors.ts";
+import { Button } from "./ui/button.tsx";
 import { useHub } from "./useHub.ts";
+
+const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
 
 export function App() {
   const hub = useHub();
@@ -14,26 +18,24 @@ export function App() {
 
   if (state.phase === "loading") {
     return (
-      <div className="fullpage">
-        <span className="spinner" aria-hidden="true" />
+      <div className={FULLPAGE}>
+        <Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
         <p>加载中</p>
       </div>
     );
   }
   if (state.phase === "unauthorized") {
     return (
-      <div className="fullpage">
+      <div className={FULLPAGE}>
         <p>请用守护进程在终端里打印的链接打开</p>
       </div>
     );
   }
   if (state.phase === "error") {
     return (
-      <div className="fullpage">
+      <div className={FULLPAGE}>
         <p>连不上守护进程</p>
-        <button type="button" className="primary-button" onClick={() => void hub.reload()}>
-          重试
-        </button>
+        <Button onClick={() => void hub.reload()}>重试</Button>
       </div>
     );
   }
@@ -43,12 +45,12 @@ export function App() {
   // 默认选中的那个固定下来，之后别的对话来了新消息排到前面也不会跳走
   if (active && selected !== active.id) setSelected(active.id);
   const view = active ? state.conversations[active.id] : undefined;
+  const notices = <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />;
 
   return (
-    <div className="app">
+    <div className="flex h-full">
       <Sidebar entries={entries} activeId={active?.id ?? null} onSelect={setSelected} />
-      <main className="main">
-        <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {active && view ? (
           <Conversation
             key={active.id}
@@ -58,6 +60,7 @@ export function App() {
             session={sessionOf(state, active.id)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
+            notices={notices}
             onDraftChange={(id, value) => setDrafts((d) => ({ ...d, [id]: value }))}
             onSend={(id, text) => {
               setDrafts((d) => ({ ...d, [id]: "" }));
@@ -68,7 +71,10 @@ export function App() {
             onLoadOlder={(id) => void hub.loadOlder(id)}
           />
         ) : (
-          <div className="empty">还没有对话</div>
+          <>
+            {notices}
+            <div className="flex flex-1 items-center justify-center text-muted-foreground">还没有对话</div>
+          </>
         )}
       </main>
     </div>
