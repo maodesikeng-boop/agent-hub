@@ -10,6 +10,7 @@ import type {
   SessionActivity,
   SessionId,
   SessionState,
+  WorkerId,
 } from "../../shared/domain.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
@@ -81,16 +82,28 @@ export function createLedgerSessions(ctx: LedgerContext) {
     p.changes.push({ type: "session.status", data: { session: after } });
   };
 
+  /** 项目经理的会话：pmId 是它；Worker 的会话（M3）：role worker、workerId 是它的记录，pmId 是 null。 */
   const insertSession = (
     p: Pending,
-    fields: { conversationId: ConversationId; pmId: PmId; cwd: string; addDirs: string[]; generation: number; model: string | null },
+    fields: {
+      role?: "pm" | "worker";
+      conversationId: ConversationId;
+      pmId: PmId | null;
+      workerId?: WorkerId;
+      cwd: string;
+      addDirs: string[];
+      generation: number;
+      model: string | null;
+    },
   ): AgentSessionRow => {
     const t = now();
     const id = db.run(
-      `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor_session_id, cwd, add_dirs, generation, model, created_at, updated_at)
-       VALUES ('pm', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_sessions (role, conversation_id, pm_id, worker_id, vendor_session_id, cwd, add_dirs, generation, model, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      fields.role ?? "pm",
       fields.conversationId,
       fields.pmId,
+      fields.workerId ?? null,
       randomUUID(),
       fields.cwd,
       JSON.stringify(fields.addDirs),

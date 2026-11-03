@@ -15,6 +15,9 @@ import type {
   Project,
   ProjectFolder,
   ProjectStatus,
+  WorkerRecord,
+  WorkerStatus,
+  WorkerWorkspace,
 } from "../../shared/domain.ts";
 
 export interface PmDbRow {
@@ -87,6 +90,25 @@ export interface MessageDbRow {
   dedupe_key: string;
   status: string | null;
   failure_reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkerDbRow {
+  id: number;
+  project_id: number;
+  pm_id: number;
+  pm_conversation_id: number;
+  worker_conversation_id: number;
+  title: string;
+  task: string;
+  model: string | null;
+  readonly: number;
+  workspace: string;
+  branch: string | null;
+  worktree_path: string | null;
+  base_commit: string | null;
+  status: string;
   created_at: number;
   updated_at: number;
 }
@@ -186,5 +208,26 @@ export function toPersonaChange(row: PersonaChangeDbRow): PersonaChange {
     reason: row.reason,
     revertOf: row.revert_of,
     createdAt: row.created_at,
+  };
+}
+
+export function toWorkerRecord(row: WorkerDbRow): WorkerRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    pmId: row.pm_id,
+    pmConversationId: row.pm_conversation_id,
+    workerConversationId: row.worker_conversation_id,
+    title: row.title,
+    task: row.task,
+    model: row.model,
+    readonly: row.readonly === 1,
+    workspace: row.workspace as WorkerWorkspace,
+    branch: row.branch,
+    worktreePath: row.worktree_path,
+    baseCommit: row.base_commit,
+    status: row.status as WorkerStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }

@@ -16,6 +16,8 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
+  MAX_TASK_BYTES,
+  MAX_WORKER_TITLE_CHARS,
   hubPath,
   type HubArgsMap,
   type HubCommand,
@@ -309,6 +311,30 @@ describe("agent api over inject", () => {
       for (const bad of ["a\u0000b", "a\nb", "a\rb", "a\tb", "\u001b[31m红", "a\u007fb", "a\u0085b", "../../etc\u0000"]) {
         await expectInvalid(await call("project.create", { name: bad, folder: "/x" }));
       }
+    });
+
+    it("hub worker：缺参数、类型不对、编号不是正整数、标题带控制字符、正文超字节 → invalid", async () => {
+      await expectInvalid(await call("worker.start", { title: "修 X" }));
+      await expectInvalid(await call("worker.start", { task: "任务" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "" }));
+      await expectInvalid(await call("worker.start", { title: "a\nb", task: "任务" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", readonly: "yes" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", model: "" }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任".repeat(Math.floor(MAX_TASK_BYTES / 3) + 1) }));
+      await expectInvalid(await call("worker.start", { title: "修 X", task: "任务", worktree: false }));
+      for (const workerId of ["3", 0, -1, 1.5, null]) {
+        await expectInvalid(await call("worker.send", { workerId, text: "再改" }));
+        await expectInvalid(await call("worker.end", { workerId }));
+      }
+      await expectInvalid(await call("worker.send", { workerId: 3, text: "" }));
+      await expectInvalid(await call("worker.end", {}));
+      await expectInvalid(await call("worker.list", { all: true }));
+    });
+
+    it("hub worker：标题太长不拒（账本截断），任务说明可以多行", async () => {
+      const title = "长".repeat(MAX_WORKER_TITLE_CHARS + 10);
+      expect((await call("worker.start", { title, task: "第一行\n\t第二行" })).statusCode).toBe(200);
+      expect(ledger.calls.at(-1)).toEqual({ sessionId: 11, command: "worker.start", args: { title, task: "第一行\n\t第二行" } });
     });
 
     it("multi-line free text (persona text) may still contain newlines and tabs", async () => {

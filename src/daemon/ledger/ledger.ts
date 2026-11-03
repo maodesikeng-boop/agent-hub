@@ -6,14 +6,15 @@
 // - persona.ts：项目经理、性格设定和性格设定文件；
 // - projects.ts：项目（每个项目经理最多一个，挂在它唯一的对话上）、文件夹；
 // - hub-commands.ts：hub 命令；
+// - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
 // - launch-context.ts：启动 claude 前给提示词用的上下文。
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { ConversationSnapshot, StateSnapshot } from "../../shared/api.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
-import { toAgentSessionRow } from "../store/index.ts";
+import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
 import type { LedgerFiles } from "./context.ts";
@@ -26,6 +27,8 @@ import { createLedgerProjects } from "./projects.ts";
 import { toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerSessions } from "./sessions.ts";
+import { createLedgerWorkers, defaultWorkerGit } from "./workers.ts";
+import type { WorkerGit } from "./workers.ts";
 
 export type SqliteLedger = Ledger;
 
@@ -46,9 +49,11 @@ export interface LedgerOptions {
   /**
    * worktrees/ 的根目录（HubPaths.worktreesDir，M3）：Worker 的 worktree 是 <worktreesDir>/<项目编号>/<Worker 编号>/，
    * 有项目的项目经理的会话 addDirs 带上 <worktreesDir>/<项目编号>/（见 shared/ledger.ts 的 LaunchContext）。
-   * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。W2 开始用。
+   * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
+  /** hub worker start 判断在哪干活用的 git（同步），默认 daemon/git 的同步版。测试换假的。 */
+  git?: WorkerGit;
   /** 展开 `~` 用（默认 resolveFolder、detach 退回字面路径时），默认 os.homedir()。 */
   userHome?: string;
   /** 文件夹校验，默认 createResolveFolder({ dataHome, userHome })。 */
@@ -65,6 +70,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const files: LedgerFiles = {
     pmHomeRoot: options.pmHomeRoot,
     personasDir: options.personasDir,
+    worktreesDir: options.worktreesDir ?? join(dataHome, "worktrees"),
     userHome,
     resolveFolder: options.resolveFolder ?? createResolveFolder({ dataHome, userHome }),
     writeFile: options.writeFileAtomic ?? defaultWriteFileAtomic,
@@ -75,8 +81,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
-  const hub = createLedgerHubCommands(ctx, persona, projects);
-  const launch = createLedgerLaunchContext(persona, projects);
+  const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
+    worktreesDir: files.worktreesDir,
+    git: options.git ?? defaultWorkerGit,
+  });
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers);
+  const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
   const createPm = (input: CreatePmInput): CreatePmResult =>
@@ -127,14 +137,25 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onStopRequested: (listener) => subscribe(stopListeners, listener),
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
-    applyDriverEvent: messages.applyDriverEvent,
+    // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）
+    applyDriverEvent(sessionId, event) {
+      const session = getAgentSession(db, sessionId);
+      if (session === null) return;
+      write((p) => {
+        messages.applyEvent(p, session, event);
+        workers.afterDriverEvent(p, session, event);
+      });
+    },
     refreshSessionState: sessions.refreshSessionState,
     recoverAfterRestart: sessions.recoverAfterRestart,
 
     createPm,
 
     getMessage: messages.getMessage,
-    onActionFailed: messages.onActionFailed,
+    onActionFailed(action, error) {
+      if (action.type === "worktree.create") workers.onWorktreeFailed(action, error);
+      else messages.onActionFailed(action, error);
+    },
     stopMessage: messages.stopMessage,
 
     reportHealth(module, error) {
@@ -152,11 +173,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     hubCall: hub.hubCall,
 
     getLaunchContext: launch.getLaunchContext,
-    // M3 W0 的占位，W2 实现：还没有地方建 Worker，所以一律没有
-    getWorktreeTask: () => null,
-    onWorktreeCreated: (workerId) => {
-      throw new Error(`onWorktreeCreated(${workerId}): workers are not implemented yet`);
-    },
+    getWorktreeTask: workers.getWorktreeTask,
+    onWorktreeCreated: workers.onWorktreeCreated,
 
     syncPersonaFiles: persona.syncPersonaFiles,
   };

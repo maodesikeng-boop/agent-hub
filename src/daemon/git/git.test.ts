@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addWorktree, GitError, hasUncommittedChanges, isRepoWithCommit } from "./index.ts";
+import { addWorktree, GitError, hasUncommittedChanges, hasUncommittedChangesSync, isRepoWithCommit, isRepoWithCommitSync } from "./index.ts";
 
 /** 测试里自己用的 git：身份写死，不读用户的全局配置（也不会因为本机开了签名而卡住）。 */
 function git(cwd: string, ...args: string[]): string {
@@ -76,6 +76,26 @@ describe("hasUncommittedChanges", () => {
     mkdirSync(dir);
     await expect(hasUncommittedChanges(dir)).rejects.toThrow(GitError);
     await expect(hasUncommittedChanges(dir)).rejects.toThrow(/git status/);
+  });
+});
+
+describe("同步版（账本的 hub worker start 用）", () => {
+  it("isRepoWithCommitSync 和异步版一样判断", () => {
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    expect(isRepoWithCommitSync(makeRepo("项目 一"))).toBe(true);
+    expect(isRepoWithCommitSync(makeRepo("空仓库", { commit: false }))).toBe(false);
+    expect(isRepoWithCommitSync(plain)).toBe(false);
+    expect(isRepoWithCommitSync(join(root, "没有这个目录"))).toBe(false);
+  });
+  it("hasUncommittedChangesSync：干净 → 否；有没跟踪的文件 → 是；不是仓库 → 否（不抛）", () => {
+    const dir = makeRepo("clean");
+    expect(hasUncommittedChangesSync(dir)).toBe(false);
+    writeFileSync(join(dir, "新 文件.txt"), "x\n");
+    expect(hasUncommittedChangesSync(dir)).toBe(true);
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    expect(hasUncommittedChangesSync(plain)).toBe(false);
   });
 });
 

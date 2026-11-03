@@ -8,7 +8,6 @@ import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
-import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
@@ -19,7 +18,7 @@ import { summarizeToolCall } from "./tool-summary.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 
-function exitFailureReason(event: SessionExitedEvent): string {
+export function exitFailureReason(event: SessionExitedEvent): string {
   if (event.signal !== null) return `${event.reason}: signal ${event.signal}`;
   if (event.exitCode !== null) return `${event.reason}: exit code ${event.exitCode}`;
   return event.reason;
@@ -226,12 +225,6 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
     );
   };
 
-  const applyDriverEvent = (sessionId: SessionId, event: DriverEvent) => {
-    const session = getAgentSession(db, sessionId);
-    if (session === null) return;
-    write((p) => applyEvent(p, session, event));
-  };
-
   const onActionFailed = (action: AnyActionRow, error: string) => {
     // session.start 失败时执行器每次都已经记过 health，这里不再记
     if (action.type === "session.send") {
@@ -267,11 +260,12 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
   return {
     getMessage,
     page,
+    transition,
+    applyEvent,
     insertSystemMessage,
     postUserMessage,
     requestStop,
     messagesBefore,
-    applyDriverEvent,
     onActionFailed,
     stopMessage,
     retryMessage,

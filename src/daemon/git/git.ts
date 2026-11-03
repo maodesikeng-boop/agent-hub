@@ -1,6 +1,6 @@
 // git 操作（M3 W1）：判断主文件夹是不是有提交的仓库、有没有没提交的改动、给 Worker 建 worktree。
 // 用 execFile 直接调 git，不经过 shell；每次调用都有超时；拿不到的错误转成 GitError（中文信息 + kind）。
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -82,15 +82,45 @@ function failed(what: string, run: GitRun): GitError {
   return new GitError("git_failed", `${what} 失败：${detail}`);
 }
 
+/** 两个判断的参数，异步、同步两个版本共用。 */
+const IS_REPO_WITH_COMMIT_ARGS = ["rev-parse", "--verify", "--quiet", "HEAD"];
+const STATUS_ARGS = ["--no-optional-locks", "status", "--porcelain"];
+
+/**
+ * 同步跑一次 git（给同步的账本 hub worker start 用，见 isRepoWithCommitSync）。找不到 git、超时也不抛，
+ * 返回 code -1，调用方当“不是”处理。
+ */
+function runGitSync(folder: string, args: string[], timeoutMs: number): GitRun {
+  const run = spawnSync("git", ["-C", folder, ...args], {
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    encoding: "utf8",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  return { code: run.error !== undefined || run.status === null ? -1 : run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
+}
+
+/** isRepoWithCommit 的同步版：账本的 hub worker start 是同步的（m3-plan 第 2.6 节“同步判断”）。git 跑不了也是 false。 */
+export function isRepoWithCommitSync(folder: string, options: GitOptions = {}): boolean {
+  return runGitSync(folder, IS_REPO_WITH_COMMIT_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS).code === 0;
+}
+
+/** hasUncommittedChanges 的同步版。不是仓库、git 跑不了不抛，返回 false（只用来决定要不要多一句提醒）。 */
+export function hasUncommittedChangesSync(folder: string, options: GitOptions = {}): boolean {
+  const run = runGitSync(folder, STATUS_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
+  return run.code === 0 && run.stdout.trim().length > 0;
+}
+
 /** 是 git 仓库，而且至少有一次提交（`git rev-parse --verify HEAD` 成功）。文件夹不存在、不是仓库、还没提交都是 false。 */
 export async function isRepoWithCommit(folder: string, options: GitOptions = {}): Promise<boolean> {
-  const run = await runGit(folder, ["rev-parse", "--verify", "--quiet", "HEAD"], options.timeoutMs ?? GIT_TIMEOUT_MS);
+  const run = await runGit(folder, IS_REPO_WITH_COMMIT_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
   return run.code === 0;
 }
 
 /** 有没提交的改动：已跟踪的文件改了、已暂存、有没跟踪的文件，任何一种都算。不是仓库会抛 GitError。 */
 export async function hasUncommittedChanges(folder: string, options: GitOptions = {}): Promise<boolean> {
-  const run = await runGit(folder, ["--no-optional-locks", "status", "--porcelain"], options.timeoutMs ?? GIT_TIMEOUT_MS);
+  const run = await runGit(folder, STATUS_ARGS, options.timeoutMs ?? GIT_TIMEOUT_MS);
   if (run.code !== 0) throw failed("git status", run);
   return run.stdout.trim().length > 0;
 }

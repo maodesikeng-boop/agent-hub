@@ -55,7 +55,7 @@ const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
-// M3 W0 先给出形状，W2 按需要调整
+// hub worker …（M3）：编号是正整数；任务说明、打回的话按字节另查（BYTE_LIMITS）
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
 
