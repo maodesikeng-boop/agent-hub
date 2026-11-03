@@ -215,6 +215,7 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
   };
 
   const messagesBefore = (conversationId: ConversationId, before: MessageId): MessagesPage => {
+    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return page(
       db.all<MessageDbRow>(
         "SELECT * FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
@@ -245,7 +246,8 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
   const retryMessage = (messageId: MessageId): { messageId: MessageId } => {
     return write((p) => {
       const message = getMessage(messageId);
-      if (message === null) throw fail("not_found", `没有编号 ${messageId} 的消息`);
+      // 老项目群里的消息也当作没有（群对外不存在）
+      if (message === null || !conversationExists(message.conversationId)) throw fail("not_found", `没有编号 ${messageId} 的消息`);
       if (message.sender !== "user") throw fail("conflict", "只能重试自己发的消息");
       if (message.status !== "failed") throw fail("conflict", "只有发送失败的消息能重试");
       const session = currentSession(message.conversationId);

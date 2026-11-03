@@ -561,10 +561,10 @@ describe("snapshot 和翻页", () => {
     expect(page.hasMore).toBe(false);
   });
 
-  it("消息不满 100 条时 hasMore 是 false；不存在的对话翻页返回空", () => {
+  it("消息不满 100 条时 hasMore 是 false；不存在的对话翻页抛 ConversationNotFoundError（同 postUserMessage）", () => {
     post();
     expect(ledger.snapshot().conversations[0]?.hasMore).toBe(false);
-    expect(ledger.messagesBefore(999, 10)).toEqual({ messages: [], hasMore: false });
+    expect(() => ledger.messagesBefore(999, 10)).toThrow(ConversationNotFoundError);
   });
 });
 

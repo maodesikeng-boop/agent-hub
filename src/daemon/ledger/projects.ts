@@ -1,9 +1,10 @@
 // 账本里的项目（11-03 起一个项目经理就是一个会话）：每个项目经理最多一个进行中的项目，挂在它唯一的那个对话上。
 // 建项目、挂和移除文件夹；那个对话的会话的 cwd、addDirs 跟着项目的文件夹走（foldersChanged），下一条消息前驱动层按新值重启。
 import { basename } from "node:path";
+import { normalizeName } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
-import { MAX_DESCRIPTION_CHARS } from "../../shared/limits.ts";
+import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS } from "../../shared/limits.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 import { realpathOrLiteral } from "./files.ts";
@@ -26,6 +27,17 @@ export interface CreateProjectInput {
 
 /** 已经有项目时的回答（用户 11-03 定的说法）。 */
 export const ONE_PROJECT_PER_PM = "一个项目经理只管一个项目，请新建一个项目经理";
+
+/** 没给项目名、主文件夹的名字又用不了（主文件夹是 /、带换行等控制字符）时的项目名。 */
+export const DEFAULT_PROJECT_NAME = "未命名项目";
+
+/**
+ * 没给项目名时的默认名：主文件夹的名字，超过 MAX_NAME_CHARS 个字截掉后面的；用不了就用 DEFAULT_PROJECT_NAME。
+ * 用户没填过名字，所以这里不报“项目名字不对”。
+ */
+function defaultProjectName(path: string): string {
+  return normalizeName([...basename(path).trim()].slice(0, MAX_NAME_CHARS).join("")) ?? DEFAULT_PROJECT_NAME;
+}
 
 export function createLedgerProjects(
   ctx: LedgerContext,
@@ -101,7 +113,8 @@ export function createLedgerProjects(
       throw fail("invalid", `项目说明最多 ${MAX_DESCRIPTION_CHARS} 个字`);
     }
     const path = resolveFolder(input.folder);
-    const name = validName(input.name ?? basename(path), "项目");
+    // 只有自己给的名字不对才报错；默认名一定能用
+    const name = input.name === undefined ? defaultProjectName(path) : validName(input.name, "项目");
     const owner = db.get<{ name: string; pm_name: string }>(
       `SELECT p.name, pm.name AS pm_name FROM project_folders f
        JOIN projects p ON p.id = f.project_id JOIN pms pm ON pm.id = p.pm_id

@@ -62,7 +62,6 @@ export function Conversation({
   const empty = view.messages.length === 0 && pending.length === 0;
   // agent 的消息都是这个项目经理说的（M3 起 Worker 的汇报也进这个对话，到时按会话分开署名）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
-  const agentOf = () => agent;
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={entry.name}>
       <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
@@ -98,7 +97,7 @@ export function Conversation({
         <MessageList
           messages={view.messages}
           pending={pending}
-          agentOf={agentOf}
+          agentOf={() => agent}
           hasMore={view.hasMore}
           older={older}
           onLoadOlder={() => onLoadOlder(id)}

@@ -7,7 +7,7 @@ import { openDatabase } from "../src/daemon/store/db.ts";
 import type { Db } from "../src/daemon/store/db.ts";
 import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
 import { createLedger } from "../src/daemon/ledger/index.ts";
-import { ConversationNotFoundError } from "../src/shared/ledger.ts";
+import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
 
 const migration = new URL("../migrations/0001_init.sql", import.meta.url).pathname;
 
@@ -659,6 +659,15 @@ describe("0003_pm_conversation：从 M2 开发时的库升级", () => {
     // 阿周私聊里那条老的“交给了你”系统消息照常显示
     expect(snapshot.conversations.find((c) => c.conversation.id === 3)!.messages.map((m) => m.sender)).toEqual(["system"]);
     expect(() => ledger.postUserMessage({ conversationId: 2, clientId: "c", text: "还在吗" })).toThrow(ConversationNotFoundError);
+    expect(() => ledger.requestStop(2)).toThrow(ConversationNotFoundError);
+    // 翻老群的更早消息、重试老群里失败的消息：也当老群不存在，什么也不登记
+    expect(() => ledger.messagesBefore(2, 99)).toThrow(ConversationNotFoundError);
+    db.run("UPDATE messages SET status = 'failed' WHERE id = 3");
+    const actionsBefore = db.all("SELECT * FROM actions ORDER BY id");
+    expect(() => ledger.retryMessage(3)).toThrow(LedgerRequestError);
+    expect(() => ledger.retryMessage(3)).toThrow(/没有编号 3 的消息/);
+    expect(db.all("SELECT * FROM actions ORDER BY id")).toEqual(actionsBefore);
+    expect(db.get("SELECT status FROM messages WHERE id = 3")).toEqual({ status: "failed" });
 
     const { messageId } = ledger.postUserMessage({ conversationId: 1, clientId: "c1", text: "在吗" });
     expect(db.get("SELECT session_id, status FROM messages WHERE id = ?", messageId)).toEqual({ session_id: 1, status: "queued" });

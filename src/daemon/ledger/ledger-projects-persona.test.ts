@@ -10,7 +10,7 @@ import type { ConversationId, Message, PmId, SessionId } from "../../shared/doma
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
-import { HUB_CALL_FIELD_MAX_BYTES, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
+import { HUB_CALL_FIELD_MAX_BYTES, MAX_NAME_CHARS, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -18,6 +18,7 @@ import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { contentHash, createResolveFolder, truncateField, writeFileAtomic } from "./files.ts";
 import { createLedger } from "./index.ts";
+import { DEFAULT_PROJECT_NAME } from "./projects.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 
 const INITIAL_SEQ = 9_000;
@@ -224,6 +225,24 @@ describe("建项目（在项目经理的会话里一句话）", () => {
   it("给了 --name 就用它", () => {
     const result = hub(zhou.sessionId, "project.create", { folder: folder("bar"), name: "记账小工具" });
     expect(result.data.project).toMatchObject({ name: "记账小工具", pmId: zhou.pmId, conversationId: zhou.conversationId });
+  });
+
+  it("没给名字：默认用文件夹名，超过 40 个字截到 40 个字；文件夹名用不了（主文件夹是 /、带换行）就用固定的名字", () => {
+    const long = folder("长".repeat(MAX_NAME_CHARS + 10));
+    expect(hub(lin.sessionId, "project.create", { folder: long }).data.project.name).toBe("长".repeat(MAX_NAME_CHARS));
+    expect(hub(zhou.sessionId, "project.create", { folder: "/" }).data.project.name).toBe(DEFAULT_PROJECT_NAME);
+    const wang = ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: folder("a\nb") });
+    expect(wang.project!.name).toBe(DEFAULT_PROJECT_NAME);
+    // 建项目经理时选的主文件夹走同一条路
+    const li = ledger.createPm({ name: "老李", mode: "manage_only", persona: "", folder: folder("名".repeat(MAX_NAME_CHARS + 1)) });
+    expect(li.project!.name).toBe("名".repeat(MAX_NAME_CHARS));
+  });
+
+  it("只有自己给的名字不对才报“项目名字不对”", () => {
+    const before = tableCounts();
+    expectLedgerError(() => hub(lin.sessionId, "project.create", { folder: folder("ok"), name: "名".repeat(MAX_NAME_CHARS + 1) }), "invalid", /项目名字不对/);
+    expectLedgerError(() => hub(lin.sessionId, "project.create", { folder: folder("ok"), name: "  " }), "invalid", /项目名字不对/);
+    expect(tableCounts()).toEqual(before);
   });
 
   it("已经有项目了又要建：conflict，“一个项目经理只管一个项目，请新建一个项目经理”，什么都没写", () => {

@@ -7,7 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
@@ -374,6 +374,10 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(state.sessions.map((s) => s.sessionId)).toEqual([1]);
     expect(query<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = 2")).toEqual([{ n: 2 }]);
     expect(query<{ status: string }>("SELECT status FROM projects")).toEqual([{ status: "archived" }]);
+    // 对外一律当老群不存在：翻更早的消息、发消息、停止都是 404
+    expect((await client.get(`${API_PATHS.messages(2)}?before=99`)).status).toBe(404);
+    expect((await client.postJson(API_PATHS.messages(2), { clientId: "c", text: "还在吗" })).status).toBe(404);
+    expect(await client.stop(2)).toBe(404);
 
     const id = await client.post(1, "你好");
     await waitForStatus(client, id, "replied");
@@ -387,6 +391,55 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     // 同一个文件夹能在项目经理的会话里拿来建项目（老群的主文件夹不占路径）
     const created = await env.runHub(lastProcOf(1).pid, ["project", "create", "--folder", foo]);
     expect(created.code).toBe(0);
+    await terminate(daemon);
+  });
+
+  it("结束会话（session.end，留给 M3 结束 Worker 会话）：这一轮回完才退出，令牌作废成 401，health 里没有 session_ended", async () => {
+    env = makeEnv();
+    // 第一个回合（默认项目经理的）卡在 gate 上；之后的回合（阿周的）马上回
+    const gate = join(env.dir, "gate");
+    env.setScript({ turns: [{ steps: [{ waitFile: gate }, { text: "这一轮说完了" }] }], defaultTurn: quick("在") });
+    const { daemon, client, privateId } = await boot();
+    const zhou = await client.createPm({ name: "阿周", mode: "hands_on", persona: "阿周的习惯" });
+    const id = await client.post(privateId, "说一段长的");
+    await waitForStatus(client, id, "processing");
+    const session = sessionsOf(await client.state(), privateId)[0]!;
+    const pid = lastProcOf(session.sessionId).pid;
+    const token = tokenOf(pid);
+    // 账本现在没有登记 session.end 的地方：直接写进动作表，再让阿周那边的一条消息把执行器叫醒
+    const db = openDatabase(join(env.home, "state", "hub.sqlite"));
+    try {
+      const t = Date.now();
+      db.run(
+        "INSERT INTO actions (type, dedupe_key, params, next_attempt_at, created_at, updated_at) VALUES ('session.end', ?, ?, ?, ?, ?)",
+        `${session.sessionId}:${session.generation}`,
+        JSON.stringify({ sessionId: session.sessionId, generation: session.generation }),
+        t,
+        t,
+        t,
+      );
+    } finally {
+      db.close();
+    }
+    await waitForStatus(client, await client.post(zhou.conversationId, "在吗"), "replied");
+    await waitUntil("session.end running", () =>
+      query<{ status: string }>("SELECT status FROM actions WHERE type = 'session.end'")[0]?.status === "running" ? true : undefined,
+    );
+    // 不打断这一轮：进程还在、消息还在处理中，令牌还能用
+    expect(isAlive(pid)).toBe(true);
+    expect(messageById(await client.state(), id)!.status).toBe("processing");
+    expect((await rawHub(token, "status", {})).status).toBe(200);
+
+    writeFileSync(gate, "");
+    await waitForStatus(client, id, "replied");
+    await waitUntil("session ended", async () => (sessionsOf(await client.state(), privateId)[0]!.status === "ended" ? true : undefined));
+    await waitUntil("claude exited", () => (isAlive(pid) ? undefined : true));
+    expect(env.log().filter((e) => e.pid === pid).map((e) => e.kind)).toContain("stdin_closed");
+    expect(agentTexts(await client.state(), privateId)).toEqual(["这一轮说完了"]);
+    expect(await rawHub(token, "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
+    expect((await env.runHub(pid, ["status"])).code).toBe(1);
+    for (const h of (await client.state()).health) expect(h.lastError ?? "").not.toMatch(/session_ended/);
+    expect(query<{ type: string; status: string }>("SELECT type, status FROM actions").filter((a) => a.status !== "done")).toEqual([]);
     await terminate(daemon);
   });
 

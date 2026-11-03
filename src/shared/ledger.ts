@@ -189,12 +189,13 @@ export interface Ledger {
   /**
    * 用户点“停止”。只停这个对话最新的一代（generation 最大的那个会话）：通知 onStopRequested 的监听者；
    * 最新一代没在跑时什么也不做。对话不存在抛 ConversationNotFoundError。
-   * 老的项目群（kind project_group）当作不存在：postUserMessage、requestStop 都抛 ConversationNotFoundError。
+   * 老的项目群（kind project_group）当作不存在：postUserMessage、requestStop、messagesBefore 都抛 ConversationNotFoundError，
+   * retryMessage 群里的消息 → not_found。
    */
   requestStop(conversationId: ConversationId): void;
   /** 网页看得到的东西：不含老的项目群（对话、它们的会话）和归档的项目（见 CONVERSATION_KINDS）。 */
   snapshot(): StateSnapshot;
-  /** 更早的 100 条（before 之前，从小到大）。 */
+  /** 更早的 100 条（before 之前，从小到大）。对话不存在（包括老的项目群）抛 ConversationNotFoundError。 */
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   changesSince(seq: number): ChangesSince;
   /** 每产生一条变化调用一次监听者。 */
@@ -219,7 +220,7 @@ export interface Ledger {
    * 消息状态 failed → queued（MESSAGE_STATUS_TRANSITIONS 里的那一条）、failureReason 清空；重新登记它的 session.send
    * （同一个去重键，已结束的那一行重置成 pending；sessionId 换成这个对话现在最新一代的会话）；推一条 message.updated。
    * 之后照 queued → delivered → … 正常走，不新增消息。
-   * 错误：没有这条消息 → not_found；不是用户发的、不是 failed → conflict。
+   * 错误：没有这条消息（包括老项目群里的）→ not_found；不是用户发的、不是 failed → conflict。
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
 

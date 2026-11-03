@@ -394,6 +394,12 @@ describe("GET /api/state 和 /messages?before=", () => {
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "conversation_not_found" });
   });
+
+  it("翻页时对话不存在（包括老的项目群）：404", async () => {
+    const res = await call("GET", "/api/conversations/99/messages?before=5");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "conversation_not_found" });
+  });
 });
 
 describe("发消息 POST /api/conversations/:id/messages", () => {
