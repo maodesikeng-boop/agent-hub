@@ -124,6 +124,21 @@ describe("假 claude", () => {
     expect(r.events.map((e) => e.type)).toEqual(["system", "user", "assistant", "rate_limit_event", "result"]);
   });
 
+  it("waitFile 步骤：文件没出现这一轮就停着，出现之后接着往下走", async () => {
+    dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
+    const gate = join(dir, "gate");
+    let finished = false;
+    const running = withScript({ defaultTurn: { steps: [{ waitFile: gate }, { text: "放行了" }] } }, () =>
+      run(["--session-id", "gate"], [userLine("x")]),
+    ).finally(() => (finished = true));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(finished).toBe(false);
+    writeFileSync(gate, "");
+    const r = await running;
+    expect(r.code).toBe(0);
+    expect(r.events.map((e) => e.type)).toEqual(["system", "user", "assistant", "rate_limit_event", "result"]);
+  });
+
   it("api_retry 步骤：发一条 system/api_retry", async () => {
     const r = await withScript({ defaultTurn: { steps: [{ apiRetry: { attempt: 2 } }, { text: "ok" }] } }, () =>
       run(["--session-id", "h"], [userLine("x")]),

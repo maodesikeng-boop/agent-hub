@@ -109,3 +109,12 @@ export const DEFAULT_UI_PORT = 4317;
 
 /** 同一个模块连续失败几次就算“坏了”（界面标红）。 */
 export const HEALTH_FAILURE_THRESHOLD = 3;
+
+// ---- 测试 ----
+
+/**
+ * 测试：单条用例和 beforeAll/afterEach 等钩子的超时（vitest 默认 5 秒）。很多用例起真进程（假 claude、真守护进程），
+ * 好几个工作树同时跑测试、机器忙的时候，起一个进程就要好几秒；超时只用来拦真正卡死的用例，所以放宽。
+ * 个别用例要更久的（重启、重试）在用例上单独写。
+ */
+export const TEST_TIMEOUT_MS = 20_000;

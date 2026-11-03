@@ -3,7 +3,7 @@
 // 慢测（hub 请求 15 秒超时，要等 15 秒以上）默认不跑：AGENT_HUB_SLOW_TESTS=1 pnpm vitest run test/e2e/m2.test.ts
 import { request } from "node:http";
 import { connect } from "node:net";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, SYSTEM_MESSAGE_PREFIX, type Message, type StateSnapshot } from "../../src/shared/index.ts";
@@ -215,7 +215,9 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     env = makeEnv();
     const foo = folder("foo");
     const bar = folder("bar");
-    env.setScript({ defaultTurn: { steps: [{ sleepMs: 1_500 }, { text: "看完了" }] } });
+    // 两个进程都卡在这一步，直到下面确认两条都在处理、再放行（不用睡固定时间：机器忙时第二个进程晚起几秒也错不过窗口）
+    const gate = join(env.dir, "gate");
+    env.setScript({ defaultTurn: { steps: [{ waitFile: gate }, { text: "看完了" }] } });
     const { daemon, client, pmId } = await boot();
     const fooGroup = (await client.createProject({ name: "foo", folder: foo, pmId })).conversationId;
     const barGroup = (await client.createProject({ name: "bar", folder: bar, pmId })).conversationId;
@@ -225,6 +227,7 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
       const s = await client.state();
       return messageById(s, a)?.status === "processing" && messageById(s, b)?.status === "processing" ? true : undefined;
     });
+    writeFileSync(gate, "");
     await waitForStatus(client, a, "replied");
     await waitForStatus(client, b, "replied");
     const s = await client.state();
@@ -431,11 +434,13 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
   it("交接时排队的消息改指新一代：群里排队的那条发给新一代，不进旧进程；driver 的 health 没记 session_ended", async () => {
     env = makeEnv();
     const foo = folder("foo");
+    // 旧一代卡在 gate 上，等下面确认那条消息排在它后面了再放行去交接（不用睡固定时间：机器忙时发第二条可能晚过睡的时间）
+    const gate = join(env.dir, "gate");
     env.setScript({
       turns: [
         {
           steps: [
-            { sleepMs: 1_500 },
+            { waitFile: gate },
             { bash: "hub project assign foo --to 阿周 --text '交接：发布日期定在周五'" },
             { sleepMs: 1_000 },
             { text: "交接好了" },
@@ -454,8 +459,11 @@ describe("M2 W6 组装 + 端到端", { timeout: 20_000 }, () => {
     const queued = await client.post(groupId, "顺便看看 README");
     // 确实排在旧一代上（交接还没发生）：没排上，这条用例就没测到它说的东西，让它失败
     expect(messageById(await client.state(), queued)!.sessionId).toBe(oldSessionId);
+    writeFileSync(gate, "");
     await waitForStatus(client, first, "replied");
     await waitForStatus(client, queued, "replied");
+    // 旧一代是在交接那一轮收尾时结束的，不一定赶在两条回复之前
+    await waitUntil("old session ended", async () => (sessionsOf(await client.state(), groupId)[0]?.status === "ended" ? true : undefined));
 
     const s = await client.state();
     const [old, next] = sessionsOf(s, groupId);

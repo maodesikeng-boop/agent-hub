@@ -1,5 +1,5 @@
 // W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../src/shared/index.ts";
@@ -130,12 +130,15 @@ describe("W5 组装 + 端到端", () => {
 
   it("忙时连发：一轮还没完时发的两条，下一轮拼成一条写进去，两条都标已回复", async () => {
     env = makeEnv();
-    env.setScript({ turns: [slow(1_500, "第一轮"), quick("两条补充都收到")] });
+    // 第一轮卡在 gate 上，两条补充都发出去了再放行（不用睡固定时间：机器忙时补充发得慢，一轮可能已经跑完）
+    const gate = join(env.dir, "gate");
+    env.setScript({ turns: [{ steps: [{ waitFile: gate }, { text: "第一轮" }] }, quick("两条补充都收到")] });
     const { daemon, client, conversationId } = await boot();
     const first = await client.post(conversationId, "写一个很长的东西");
     await waitForStatus(client, first, "processing");
     const a = await client.post(conversationId, "补充一");
     const b = await client.post(conversationId, "补充二");
+    writeFileSync(gate, "");
     await waitForStatus(client, first, "replied");
     await waitForStatus(client, a, "replied");
     await waitForStatus(client, b, "replied");

@@ -13,7 +13,7 @@
 //   --resume 一个不存在的 ID：标准错误 “No conversation found with session ID: …”，再输出一条
 //   error_during_execution 的 result，退出码 1。
 // - 每轮开头发 system/init；先回显收到的消息（isReplay），再按剧本发 assistant、rate_limit_event、result。
-//   剧本 lateReplay 时回显推迟到第一个不是 sleepMs 的步骤之前（更像真 claude：开始处理时才回显）。
+//   剧本 lateReplay 时回显推迟到第一个不是 sleepMs、waitFile 的步骤之前（更像真 claude：开始处理时才回显）。
 // - 忙时收到的几条合并成下一轮的一条（回显里是几段 text）。
 // - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
 // - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]`（工具调用中是
@@ -34,6 +34,8 @@ export type FakeStep =
   | { rateLimit: Record<string, unknown> }
   | { raw: string }
   | { sleepMs: number }
+  /** 等这个文件出现再往下走（测试用它卡住一轮，想放行时自己建文件；比睡固定时间稳，机器忙也不会错过窗口）。 */
+  | { waitFile: string }
   | { exit: number }
   /** 发一条 system/api_retry（M0 记录的字段）。 */
   | { apiRetry: { attempt?: number; error?: string } }
@@ -75,7 +77,7 @@ export interface FakeScript {
   controlDelayMs?: number;
   /** 标准输入关掉也不退出（测空闲关闭的升级）。 */
   ignoreStdinEnd?: boolean;
-  /** 回显推迟到第一个不是 sleepMs 的步骤之前。 */
+  /** 回显推迟到第一个不是 sleepMs、waitFile 的步骤之前。 */
   lateReplay?: boolean;
   /** 收到 SIGINT 只记下来，不退出（测关机时的强制结束）。 */
   ignoreSigint?: boolean;
@@ -329,9 +331,11 @@ async function runTurn(content: UserContent[]): Promise<void> {
   let lastText = "";
   for (const step of turn.steps ?? []) {
     if (aborted()) break;
-    if (!("sleepMs" in step)) replay();
+    if (!("sleepMs" in step) && !("waitFile" in step)) replay();
     if ("sleepMs" in step) {
       await sleep(step.sleepMs);
+    } else if ("waitFile" in step) {
+      while (!existsSync(step.waitFile) && !aborted()) await sleep(20);
     } else if ("text" in step) {
       lastText = step.text;
       assistant([{ type: "text", text: step.text }], !step.noUuid);

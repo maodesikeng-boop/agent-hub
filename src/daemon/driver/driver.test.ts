@@ -15,9 +15,6 @@ import {
 } from "../../shared/index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
 
-// 这些测试起真进程，机器忙时一条可能要好几秒
-vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
-
 let h: Harness | undefined;
 afterEach(async () => {
   vi.useRealTimers();

@@ -1,4 +1,7 @@
 import { defineConfig } from "vitest/config";
+import { TEST_TIMEOUT_MS } from "./src/shared/limits.ts";
+
+const timeouts = { testTimeout: TEST_TIMEOUT_MS, hookTimeout: TEST_TIMEOUT_MS };
 
 export default defineConfig({
   test: {
@@ -6,6 +9,7 @@ export default defineConfig({
       {
         test: {
           name: "node",
+          ...timeouts,
           environment: "node",
           include: ["src/shared/**/*.test.ts", "src/daemon/**/*.test.ts", "src/hub/**/*.test.ts", "test/**/*.test.ts"],
         },
@@ -13,6 +17,7 @@ export default defineConfig({
       {
         test: {
           name: "web",
+          ...timeouts,
           environment: "jsdom",
           include: ["src/web/**/*.test.{ts,tsx}"],
           setupFiles: ["src/web/test-setup.ts"],
