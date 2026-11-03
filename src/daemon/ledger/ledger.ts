@@ -1,46 +1,24 @@
 // 账本（设计第 6.2 节）：业务表的唯一写者。每个命令一个事务，提交之后才推变化、通知新登记的动作。
-import { randomUUID } from "node:crypto";
+// 拆成几个文件：context.ts（事务、动作登记、健康状态等共用的东西）、sessions.ts（会话状态、建会话、换代、重启恢复）、
+// messages.ts（消息、驱动层事件、系统消息）；这里是项目经理、项目、性格设定、hub，以及把各部分拼成 Ledger。
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
-import type { Change, ChangeType, ConversationSnapshot, MessagesPage, StateSnapshot } from "../../shared/api.ts";
-import {
-  PM_MODES,
-  PM_MODE_LABELS,
-  SYSTEM_MESSAGE_PREFIX,
-  agentMessageDedupeKey,
-  canTransitionMessage,
-  isOneOf,
-  normalizeName,
-  personaOrTemplate,
-  systemMessageDedupeKey,
-  userMessageDedupeKey,
-  utf8Bytes,
-} from "../../shared/domain.ts";
+import type { ConversationSnapshot, StateSnapshot } from "../../shared/api.ts";
+import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, personaOrTemplate, utf8Bytes } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
-  ConversationId,
-  HealthModule,
-  Message,
-  MessageId,
-  MessageStatus,
   PersonaChange,
   PersonaChangeId,
   PmId,
   PmMode,
-  Project,
   ProjectFolder,
   ProjectId,
-  RateLimitInfo,
-  SessionActivity,
   SessionId,
-  SessionState,
   SystemMessageMeta,
 } from "../../shared/domain.ts";
-import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, HubData, HubResult, ProjectCard } from "../../shared/hub.ts";
-import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
+import { LedgerRequestError } from "../../shared/ledger.ts";
 import type {
   CreatePmInput,
   CreatePmResult,
@@ -51,14 +29,11 @@ import type {
   LaunchContext,
   Ledger,
   LedgerActor,
-  LedgerErrorCode,
   PersonaView,
-  PostUserMessageInput,
   ResolveFolder,
   SyncPersonaFilesResult,
 } from "../../shared/ledger.ts";
 import {
-  CHANGE_BUFFER_SIZE,
   MAX_DESCRIPTION_CHARS,
   MAX_HANDOFF_BYTES,
   MAX_MODEL_CHARS,
@@ -69,11 +44,10 @@ import {
   PERSONA_CHANGES_LIMIT,
 } from "../../shared/limits.ts";
 import { handoffFilePath, personaFilePath } from "../../shared/paths.ts";
-import { enqueueAction } from "../actions/index.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
-import { createChangeLog } from "./change-log.ts";
-import type { ChangeInput } from "./change-log.ts";
+import { createLedgerContext, fail } from "./context.ts";
+import type { Pending } from "./context.ts";
 import {
   contentHash,
   createResolveFolder,
@@ -82,11 +56,11 @@ import {
   truncateField,
   writeFileAtomic as defaultWriteFileAtomic,
 } from "./files.ts";
+import { createLedgerMessages } from "./messages.ts";
 import {
   toConversation,
   toHandoff,
   toHealth,
-  toMessage,
   toPersonaChange,
   toPm,
   toProject,
@@ -102,7 +76,7 @@ import type {
   ProjectDbRow,
   ProjectFolderDbRow,
 } from "./rows.ts";
-import { summarizeToolCall } from "./tool-summary.ts";
+import { createLedgerSessions } from "./sessions.ts";
 
 export type SqliteLedger = Ledger;
 
@@ -130,319 +104,23 @@ export interface LedgerOptions {
   writeFileAtomic?: (file: string, content: string) => void;
 }
 
-type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
-
-/** 一个事务里攒下的、提交后才发出去的东西；回滚就整个丢掉。 */
-interface Pending {
-  changes: ChangeInput[];
-  actions: AnyActionRow[];
-  stops: StopEvent[];
-  /** 这个事务里推出去的会话状态（比较用的键），提交后才记进 pushed。 */
-  pushed: Map<SessionId, string>;
-  /** 提交之后要做的事（写性格设定文件），在推变化之前做；出错只记日志。 */
-  after: (() => void)[];
-  /** 回滚时要撤掉的东西（事务里已经写好的交接文件）。 */
-  undo: (() => void)[];
-}
-
-/** 一个事务里几条变化的推送顺序（见 api.ts 的 CHANGE_TYPES）。 */
-const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
-  "pm.created": 0,
-  "pm.updated": 0,
-  "project.created": 1,
-  "project.updated": 1,
-  "conversation.created": 2,
-  "session.created": 3,
-  "folders.updated": 4,
-  "message.created": 5,
-  "message.updated": 5,
-  "session.status": 6,
-  "health.updated": 7,
-};
-
 /** 性格设定的这次修改是谁做的（账本内部用）。 */
 type PersonaEditor = { actor: "user" } | { actor: "file" } | { actor: "pm"; session: AgentSessionRow };
 
-const fail = (code: LedgerErrorCode, message: string) => new LedgerRequestError(code, message);
-
 const BAD_NAME = `不能是空的、超过 ${MAX_NAME_CHARS} 个字，或带换行等控制字符`;
 
-/** 只在内存里的会话状态（守护进程重启后从头开始）。status 不在这里，只从 agent_sessions 那一行读。 */
-interface LiveSession {
-  activity: SessionActivity;
-  currentTool: string | null;
-  rateLimit?: RateLimitInfo | null;
-}
-
-const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
-
-function exitFailureReason(event: SessionExitedEvent): string {
-  if (event.signal !== null) return `${event.reason}: signal ${event.signal}`;
-  if (event.exitCode !== null) return `${event.reason}: exit code ${event.exitCode}`;
-  return event.reason;
-}
-
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
-  const now = options.now ?? Date.now;
+  const ctx = createLedgerContext(db, options);
+  const { now, log, write, subscribe, reportHealthIn, changeListeners, actionListeners, stopListeners } = ctx;
   const userHome = options.userHome ?? homedir();
   const dataHome = options.dataHome ?? dirname(options.pmHomeRoot);
   const resolveFolder = options.resolveFolder ?? createResolveFolder({ dataHome, userHome });
   const writeFile = options.writeFileAtomic ?? defaultWriteFileAtomic;
   const { personasDir, handoffsDir } = options;
-  const log = createChangeLog(options.initialSeq ?? Date.now(), options.changeBufferSize ?? CHANGE_BUFFER_SIZE);
-  const changeListeners = new Set<(change: Change) => void>();
-  const actionListeners = new Set<(action: AnyActionRow) => void>();
-  const stopListeners = new Set<(event: StopEvent) => void>();
-  const live = new Map<SessionId, LiveSession>();
-  /** 上次推给网页的会话状态（不含 lastEventAt）；没推过的会话第一次一定推。 */
-  const pushed = new Map<SessionId, string>();
-
-  const notify = <T>(listeners: Set<(value: T) => void>, value: T) => {
-    for (const listener of [...listeners]) {
-      try {
-        listener(value);
-      } catch (error) {
-        console.error("agent-hub ledger listener:", error);
-      }
-    }
-  };
-
-  const subscribe = <T>(listeners: Set<T>, listener: T) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
-
-  /** 在一个事务里做 fn，提交后按顺序发变化、动作登记、停止请求。 */
-  const write = <T>(fn: (p: Pending) => T): T => {
-    // 并进外层事务的话，下面的通知会在外层提交前发出去，外层回滚就推了不存在的变化
-    if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
-    const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [], undo: [] };
-    let result: T;
-    try {
-      result = db.transaction(() => fn(pending));
-    } catch (error) {
-      for (const undo of pending.undo) {
-        try {
-          undo();
-        } catch (undoError) {
-          console.error("agent-hub ledger undo:", undoError);
-        }
-      }
-      throw error;
-    }
-    for (const after of pending.after) {
-      try {
-        after();
-      } catch (error) {
-        console.error("agent-hub ledger after commit:", error);
-      }
-    }
-    for (const [id, key] of pending.pushed) pushed.set(id, key);
-    pending.changes.sort((a, b) => CHANGE_RANK[a.type] - CHANGE_RANK[b.type]);
-    for (const input of pending.changes) notify(changeListeners, log.append(input));
-    for (const action of pending.actions) notify(actionListeners, action);
-    for (const stop of pending.stops) notify(stopListeners, stop);
-    return result;
-  };
-
-  const enqueue = (p: Pending, action: NewAction) => {
-    const { row, enqueued } = enqueueAction(db, action, now());
-    if (enqueued) p.actions.push(row);
-  };
-
-  // ---- 读 ----
-
-  const conversationExists = (id: ConversationId) =>
-    db.get("SELECT 1 AS x FROM conversations WHERE id = ?", id) !== undefined;
-
-  const getMessage = (id: MessageId): Message | null => {
-    const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
-    return row === undefined ? null : toMessage(row);
-  };
-
-  /** 对话当前这一代的会话。 */
-  const currentSession = (conversationId: ConversationId): AgentSessionRow | null => {
-    const row = db.get<AgentSessionDbRow>(
-      "SELECT * FROM agent_sessions WHERE conversation_id = ? ORDER BY generation DESC LIMIT 1",
-      conversationId,
-    );
-    return row === undefined ? null : toAgentSessionRow(row);
-  };
-
-  const liveOf = (id: SessionId): LiveSession => live.get(id) ?? { activity: "idle", currentTool: null };
-
-  const sessionState = (row: AgentSessionRow): SessionState => {
-    const l = liveOf(row.id);
-    return {
-      sessionId: row.id,
-      conversationId: row.conversationId,
-      pmId: row.pmId,
-      generation: row.generation,
-      status: row.status,
-      activity: l.activity,
-      currentTool: l.currentTool,
-      rateLimit: l.rateLimit !== undefined ? l.rateLimit : row.rateLimit,
-      lastEventAt: row.lastEventAt,
-    };
-  };
-
-  /**
-   * 改内存里的会话状态，再按 agent_sessions 那一行算出网页看到的状态，和上次推出去的比，变了就推一条 session.status。
-   * 和上次推的比、不和“改之前按行算的”比：驱动层先写库再发事件也不会漏推。lastEventAt 不参与比较。
-   */
-  const updateLive = (p: Pending, sessionId: SessionId, mutate: (l: LiveSession) => void) => {
-    const row = getAgentSession(db, sessionId);
-    if (row === null) return;
-    const next = { ...liveOf(sessionId) };
-    mutate(next);
-    live.set(sessionId, next);
-    const after = sessionState(row);
-    const key = JSON.stringify({ ...after, lastEventAt: null });
-    if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
-    p.pushed.set(sessionId, key);
-    p.changes.push({ type: "session.status", data: { session: after } });
-  };
-
-  const working = (currentTool: string | null) => (l: LiveSession) => {
-    if (l.activity !== "stopping") l.activity = "working";
-    l.currentTool = currentTool;
-  };
-
-  const idle = (l: LiveSession) => {
-    l.activity = "idle";
-    l.currentTool = null;
-  };
-
-  const page = (rows: MessageDbRow[]): MessagesPage => {
-    const hasMore = rows.length > MESSAGE_PAGE_SIZE;
-    return { messages: rows.slice(0, MESSAGE_PAGE_SIZE).reverse().map(toMessage), hasMore };
-  };
-
-  // ---- 写 ----
-
-  /** 按 MESSAGE_STATUS_TRANSITIONS 改状态；不合法（包括同状态）、找不到、没有状态的消息忽略。 */
-  const transition = (p: Pending, id: MessageId, to: MessageStatus, reason: string | null = null) => {
-    const message = getMessage(id);
-    if (message === null || message.status === null || !canTransitionMessage(message.status, to)) return;
-    db.run(
-      "UPDATE messages SET status = ?, failure_reason = ?, updated_at = ? WHERE id = ?",
-      to,
-      to === "failed" ? reason : null,
-      now(),
-      id,
-    );
-    p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
-  };
-
-  const insertAgentMessage = (
-    p: Pending,
-    session: AgentSessionRow,
-    fields: { kind: "text" | "tool"; text: string; meta: Record<string, unknown> | null; dedupeKey: string },
-  ) => {
-    if (session.conversationId === null) return;
-    const t = now();
-    const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, ticket_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, NULL, ?, ?)
-       ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
-      session.conversationId,
-      session.id,
-      session.ticketId,
-      fields.kind,
-      fields.text,
-      fields.meta === null ? null : JSON.stringify(fields.meta),
-      fields.kind === "tool" ? 1 : 0,
-      fields.dedupeKey,
-      t,
-      t,
-    );
-    if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
-  };
-
-  const reportHealthIn = (p: Pending, module: HealthModule, error: string | null) => {
-    const row = db.get<HealthDbRow>("SELECT * FROM health WHERE module = ?", module);
-    const t = now();
-    if (error === null) {
-      if (row === undefined || (row.consecutive_failures === 0 && row.last_error === null)) return;
-      db.run("UPDATE health SET consecutive_failures = 0, last_error = NULL, updated_at = ? WHERE module = ?", t, module);
-    } else {
-      db.run(
-        `INSERT INTO health (module, consecutive_failures, last_error, updated_at) VALUES (?, 1, ?, ?)
-         ON CONFLICT (module) DO UPDATE SET consecutive_failures = consecutive_failures + 1, last_error = excluded.last_error, updated_at = excluded.updated_at`,
-        module,
-        error,
-        t,
-      );
-    }
-    const updated = db.get<HealthDbRow>("SELECT * FROM health WHERE module = ?", module)!;
-    p.changes.push({ type: "health.updated", data: { health: toHealth(updated) } });
-  };
-
-  const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
-    const sessionId = session.id;
-    switch (event.type) {
-      case "session.started":
-        // 状态（running）由驱动层写进那一行；这里只清掉上一次没等到退出的“正在停”
-        updateLive(p, sessionId, (l) => {
-          if (l.activity === "stopping") idle(l);
-        });
-        return;
-      case "message.delivered":
-      case "message.processing": {
-        const to = event.type === "message.delivered" ? "delivered" : "processing";
-        for (const id of event.messageIds) transition(p, id, to);
-        updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
-        return;
-      }
-      case "agent.text":
-        insertAgentMessage(p, session, {
-          kind: "text",
-          text: event.text,
-          meta: null,
-          dedupeKey: agentMessageDedupeKey(sessionId, event.uuid),
-        });
-        updateLive(p, sessionId, working(null));
-        return;
-      case "agent.tool":
-        insertAgentMessage(p, session, {
-          kind: "tool",
-          text: summarizeToolCall(event.name, event.input),
-          meta: { toolUseId: event.toolUseId, name: event.name, input: event.input },
-          dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
-        });
-        updateLive(p, sessionId, working(event.name));
-        return;
-      case "turn.ended": {
-        const reason = event.error === undefined ? "turn_failed" : `${event.error.subtype}: ${event.error.message}`;
-        for (const id of event.messageIds) {
-          if (event.interrupted) transition(p, id, "stopped");
-          else if (event.ok) transition(p, id, "replied");
-          else transition(p, id, "failed", reason);
-        }
-        updateLive(p, sessionId, idle);
-        return;
-      }
-      case "rate_limit":
-        updateLive(p, sessionId, (l) => {
-          l.rateLimit = event.info;
-        });
-        return;
-      case "session.exited": {
-        for (const id of event.messageIds) {
-          if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
-          else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
-        }
-        updateLive(p, sessionId, idle);
-        return;
-      }
-      case "driver.error":
-        for (const id of event.messageIds ?? []) transition(p, id, "failed", event.message);
-        reportHealthIn(p, "driver", event.message);
-        return;
-    }
-  };
+  const sessions = createLedgerSessions(ctx);
+  const { currentSession, sessionState, insertSession, nextGeneration } = sessions;
+  const messages = createLedgerMessages(ctx, sessions);
+  const { page, insertSystemMessage } = messages;
 
   // ---- M2：项目经理、项目、文件夹、性格设定 ----
 
@@ -499,58 +177,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const privateConversation = (pmId: PmId): ConversationDbRow | null =>
     db.get<ConversationDbRow>("SELECT * FROM conversations WHERE kind = 'pm' AND pm_id = ? ORDER BY id LIMIT 1", pmId) ?? null;
 
-  const insertSession = (
-    p: Pending,
-    fields: { conversationId: ConversationId; pmId: PmId; cwd: string; addDirs: string[]; generation: number; model: string | null },
-  ): AgentSessionRow => {
-    const t = now();
-    const id = db.run(
-      `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor_session_id, cwd, add_dirs, generation, model, created_at, updated_at)
-       VALUES ('pm', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      fields.conversationId,
-      fields.pmId,
-      randomUUID(),
-      fields.cwd,
-      JSON.stringify(fields.addDirs),
-      fields.generation,
-      fields.model,
-      t,
-      t,
-    ).lastInsertRowid;
-    const row = getAgentSession(db, id)!;
-    p.changes.push({ type: "session.created", data: { session: sessionState(row) } });
-    return row;
-  };
-
-  /**
-   * 写一条系统消息（规则见 domain.ts 的 SystemMessageMeta）。toAgent 不是 null 时同时发给这个会话：
-   * 文字带【系统】、状态 queued、登记 session.send（source: system）。
-   */
-  const insertSystemMessage = (
-    p: Pending,
-    conversationId: ConversationId,
-    meta: SystemMessageMeta,
-    text: string,
-    toAgent: SessionId | null = null,
-  ): Message => {
-    const t = now();
-    const row = db.get<MessageDbRow>(
-      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, 'system', 'text', ?, ?, ?, ?, ?, ?) RETURNING *`,
-      conversationId,
-      toAgent,
-      toAgent === null ? text : SYSTEM_MESSAGE_PREFIX + text,
-      JSON.stringify(meta),
-      systemMessageDedupeKey(conversationId, meta),
-      toAgent === null ? null : "queued",
-      t,
-      t,
-    )!;
-    if (toAgent !== null) enqueue(p, { type: "session.send", params: { sessionId: toAgent, messageId: row.id, source: "system" } });
-    const message = toMessage(row);
-    p.changes.push({ type: "message.created", data: { message } });
-    return message;
-  };
 
   /** 群最新一代会话的 addDirs 跟着项目的附加文件夹走，推 folders.updated。 */
   const foldersChanged = (p: Pending, project: ProjectDbRow): ProjectFolder[] => {
@@ -785,36 +411,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
-  /**
-   * 会话换代的唯一入口：给这个对话开下一代会话（沿用上一代的 cwd、addDirs），登记上一代的 session.end，
-   * 把还在排队的消息改发给下一代。上一代这一轮回完再关、令牌在它 ended 之后作废，见 handlers.ts 的 session.end 处理函数。
-   * M2 只有交接用；以后自动换代也走这里。
-   */
-  const nextGeneration = (p: Pending, conversationId: ConversationId, owner: { pmId: PmId; model: string | null }) => {
-    const old = currentSession(conversationId)!;
-    const next = insertSession(p, {
-      conversationId,
-      pmId: owner.pmId,
-      cwd: old.cwd,
-      addDirs: old.addDirs,
-      generation: old.generation + 1,
-      model: owner.model,
-    });
-    enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
-    const queued = db.all<{ id: number; sender: string }>(
-      "SELECT id, sender FROM messages WHERE conversation_id = ? AND status = 'queued' AND session_id IS NOT NULL AND session_id != ? ORDER BY id",
-      conversationId,
-      next.id,
-    );
-    for (const message of queued) {
-      db.run("UPDATE messages SET session_id = ? WHERE id = ?", next.id, message.id);
-      enqueue(p, {
-        type: "session.send",
-        params: { sessionId: next.id, messageId: message.id, source: message.sender === "system" ? "system" : "user" },
-      });
-    }
-    return { old, next };
-  };
 
   const assignIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.assign">): HubResult<"project.assign"> => {
     const project = managedProject(caller.pmId, args.project);
@@ -992,53 +588,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   };
 
   return {
-    postUserMessage(input: PostUserMessageInput) {
-      return write((p) => {
-        if (!conversationExists(input.conversationId)) throw new ConversationNotFoundError(input.conversationId);
-        const dedupeKey = userMessageDedupeKey(input.conversationId, input.clientId);
-        const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
-        if (existing !== undefined) return { messageId: existing.id };
-        const session = currentSession(input.conversationId);
-        if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
-        const t = now();
-        const row = db.get<MessageDbRow>(
-          `INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
-           VALUES (?, ?, 'user', 'text', ?, ?, 'queued', ?, ?) RETURNING *`,
-          input.conversationId,
-          session.id,
-          input.text,
-          dedupeKey,
-          t,
-          t,
-        )!;
-        enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
-        p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
-        return { messageId: row.id };
-      });
-    },
-
-    requestStop(conversationId) {
-      if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
-      const session = currentSession(conversationId);
-      if (session === null) return;
-      const working = liveOf(session.id).activity !== "idle";
-      // 重启后内存里是空闲、库里还有处理中的消息：进程不在，只记下停止请求，不标“正在停”（不会有事件把它清掉）
-      const leftover =
-        !working &&
-        db.get(
-          `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
-          session.id,
-        ) !== undefined;
-      if (!working && !leftover) return;
-      write((p) => {
-        if (working) {
-          updateLive(p, session.id, (l) => {
-            l.activity = "stopping";
-          });
-        }
-        p.stops.push({ conversationId, sessionId: session.id });
-      });
-    },
+    postUserMessage: messages.postUserMessage,
+    requestStop: messages.requestStop,
 
     snapshot(): StateSnapshot {
       const conversations: ConversationSnapshot[] = db
@@ -1065,71 +616,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       };
     },
 
-    messagesBefore(conversationId, before) {
-      return page(
-        db.all<MessageDbRow>(
-          "SELECT * FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
-          conversationId,
-          before,
-          MESSAGE_PAGE_SIZE + 1,
-        ),
-      );
-    },
+    messagesBefore: messages.messagesBefore,
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),
     onStopRequested: (listener) => subscribe(stopListeners, listener),
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
-    applyDriverEvent(sessionId, event) {
-      const session = getAgentSession(db, sessionId);
-      if (session === null) return;
-      write((p) => applyEvent(p, session, event));
-    },
-
-    refreshSessionState(sessionId) {
-      write((p) => updateLive(p, sessionId, idle));
-    },
-
-    recoverAfterRestart() {
-      return write((p) => {
-        const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
-          `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
-           WHERE m.session_id IS NOT NULL
-             AND (
-               m.status IN ('delivered', 'processing')
-               -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend
-               OR (m.status = 'queued' AND NOT EXISTS (
-                 SELECT 1 FROM actions a
-                 WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
-               ))
-             )
-           ORDER BY m.id`,
-        );
-        const resentMessageIds: MessageId[] = [];
-        const requeuedMessageIds: MessageId[] = [];
-        // 按最早一条被打断的消息排，旧的先恢复
-        const recoveredSessionIds: SessionId[] = [];
-        for (const row of rows) {
-          const interrupted = row.status !== "queued";
-          (interrupted ? resentMessageIds : requeuedMessageIds).push(row.id);
-          if (interrupted && !recoveredSessionIds.includes(row.session_id)) recoveredSessionIds.push(row.session_id);
-        }
-        for (const sessionId of recoveredSessionIds) {
-          const session = getAgentSession(db, sessionId)!;
-          enqueue(p, { type: "session.start", params: { sessionId, generation: session.generation, recovery: true } });
-        }
-        for (const row of rows) {
-          const source = row.sender === "system" ? "system" : "user";
-          const resend = row.status !== "queued";
-          enqueue(p, {
-            type: "session.send",
-            params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}) },
-          });
-        }
-        return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };
-      });
-    },
+    applyDriverEvent: messages.applyDriverEvent,
+    refreshSessionState: sessions.refreshSessionState,
+    recoverAfterRestart: sessions.recoverAfterRestart,
 
     createPm(input: CreatePmInput): CreatePmResult {
       const name = validName(input.name, "项目经理");
@@ -1170,18 +666,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return result;
     },
 
-    getMessage,
-
-    onActionFailed(action, error) {
-      // session.start 失败时执行器每次都已经记过 health，这里不再记
-      if (action.type === "session.send") {
-        write((p) => transition(p, action.params.messageId, "failed", error));
-      }
-    },
-
-    stopMessage(messageId) {
-      write((p) => transition(p, messageId, "stopped"));
-    },
+    getMessage: messages.getMessage,
+    onActionFailed: messages.onActionFailed,
+    stopMessage: messages.stopMessage,
 
     reportHealth(module, error) {
       write((p) => reportHealthIn(p, module, error));
@@ -1216,25 +703,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return { change, persona: getPersona(row.pm_id) };
     },
 
-    retryMessage(messageId) {
-      return write((p) => {
-        const message = getMessage(messageId);
-        if (message === null) throw fail("not_found", `没有编号 ${messageId} 的消息`);
-        if (message.sender !== "user") throw fail("conflict", "只能重试自己发的消息");
-        if (message.status !== "failed") throw fail("conflict", "只有发送失败的消息能重试");
-        const session = currentSession(message.conversationId);
-        if (session === null) throw new Error(`conversation ${message.conversationId} has no agent session`);
-        db.run(
-          "UPDATE messages SET status = 'queued', failure_reason = NULL, session_id = ?, updated_at = ? WHERE id = ?",
-          session.id,
-          now(),
-          messageId,
-        );
-        enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId, source: "user" } });
-        p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
-        return { messageId };
-      });
-    },
+    retryMessage: messages.retryMessage,
 
     hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>): HubResult<C> {
       const session = getAgentSession(db, sessionId);
