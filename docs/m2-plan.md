@@ -73,9 +73,9 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
    - `Project { id, name, description, status, pmId, conversationId, createdAt, updatedAt }`，`PROJECT_STATUSES = ["active", "archived", "deleted"]`（M2 只用 `active`）；进行中的项目名字唯一，项目经理名字唯一。
    - `ProjectFolder { id, projectId, path(真实路径), isMain, addedAt, removedAt }`；同一个真实路径只能当一个进行中项目的主文件夹。
    - `PersonaChange { id, pmId, actor: "user" | "pm" | "file", sessionId, textBefore, textAfter, modeBefore, modeAfter, reason, revertOf, createdAt }`（列名 `text_before`、`text_after`：`before`、`after` 是 SQL 关键字）。
-   - `Handoff { id, projectId, fromSessionId, toSessionId, fromPmId, toPmId, file, reason: "reassign", createdAt }`，正文写在 `state/handoffs/<项目编号>/<时间>.md`。
+   - `Handoff { id, projectId, fromSessionId, toSessionId, fromPmId, toPmId, file, reason: "reassign", createdAt }`，正文写在 `state/handoffs/<项目编号>/<交接编号>-<时间>.md`。
    - `AgentSessionRow` 加 `pmId`（项目经理的会话一定有）。群会话：`conversation_id` = 群，换项目经理时开下一代；账本发消息一直找最新一代（M1 已经这样）。群对话按 `project_id` 唯一。
-   - `SessionState` 加 `generation`：网页和账本凡是要“这个对话的当前会话”（状态行、停止按钮、等额度、发消息、`requestStop`）都取 `generation` 最大的那一个；`requestStop` 只停最新一代。
+   - `SessionState` 加 `generation`：网页和账本凡是要“这个对话的当前会话”（状态行、停止按钮、等额度、发消息、`requestStop`）都取 `generation` 最大的那一个；`requestStop` 只停最新一代。`SessionState` 还带 `pmId`（W6b）：网页按消息的 `sessionId` 找会话、用它的 `pmId` 给消息署名，换项目经理后旧项目经理的话仍署旧名字（找不到会话就署对话现在的项目经理）。
    - 系统消息：`sender: "system"`、`kind: "text"`，`meta.event` 取 `project.created`、`folder.attached`、`folder.detached`、`project.reassigned`、`persona.changed`，`meta` 里带相关编号（撤销按钮用 `personaChangeId`），去重键用 `systemMessageDedupeKey`。要让 agent 也看到的系统消息走 `session.send`（`source: "system"`，文字开头带 `【系统】`），网页上不显示投递状态。项目经理自己调 `hub` 改的设置，不再单独给它发 `【系统】` 消息（白白多跑一轮），驱动层自动重启后在下一条消息前面拼 `RELAUNCH_NOTE`。
    - `isQuotaExhausted(info)`：`status === "rejected"`，处理函数和网页共用（第 7 节第 2 条）。网页的 `isWaitingForQuota`（`src/web/selectors.ts`）由 W5 改成用它，`handlers.ts` 里的本地常量 `RATE_LIMIT_REJECTED` 由 W6 删掉改用它。
 2. **账本（`ledger.ts`）**：所有改动都在一个事务里写业务表、发系统消息、登记动作，然后推变化。

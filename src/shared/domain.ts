@@ -219,7 +219,7 @@ export const HANDOFF_REASONS = ["reassign"] as const;
 export type HandoffReason = (typeof HANDOFF_REASONS)[number];
 
 /**
- * 一份交接（设计第 9 章）。正文在 file（state/handoffs/<项目编号>/<时间>.md，见 paths.ts 的 handoffFilePath），
+ * 一份交接（设计第 9 章）。正文在 file（state/handoffs/<项目编号>/<交接编号>-<时间>.md，见 paths.ts 的 handoffFilePath），
  * 账本在事务提交前写好（临时文件 + 改名），写不了整个命令失败。
  */
 export interface Handoff {
@@ -456,6 +456,11 @@ export type SessionActivity = "idle" | "working" | "stopping";
 export interface SessionState {
   sessionId: SessionId;
   conversationId: ConversationId | null;
+  /**
+   * 同 AgentSessionRow.pmId。网页按消息的 sessionId 找到会话，再用它给消息署名：
+   * 换项目经理后旧一代会话的消息仍署原来的项目经理。总助、Worker 的会话是 null。
+   */
+  pmId: PmId | null;
   /** 同 AgentSessionRow.generation。 */
   generation: number;
   status: SessionStatus;

@@ -1,7 +1,7 @@
 // M2 W1：项目经理、项目、文件夹、交接、性格设定、重试、hub 调用、启动上下文（m2-plan 第 4 节“W1 账本”的测试表）。
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
@@ -141,7 +141,7 @@ describe("createPm（M2）", () => {
     expect(row).toEqual({ persona: "老王的习惯", persona_file_hash: contentHash("老王的习惯") });
     expect(changes.map((c) => c.type)).toEqual(["pm.created", "conversation.created", "session.created"]);
     const created = changes[2]!;
-    expect(created.type === "session.created" && created.data.session).toMatchObject({ sessionId: result.sessionId, generation: 1, status: "idle" });
+    expect(created.type === "session.created" && created.data.session).toMatchObject({ sessionId: result.sessionId, pmId: result.pm.id, generation: 1, status: "idle" });
     // 建的时候不算修改
     expect(count("persona_changes")).toBe(0);
   });
@@ -362,6 +362,10 @@ describe("交接", () => {
       expect.objectContaining({ type: "session.send", params: { sessionId: zhou.sessionId, messageId: privateMessage.id, source: "system" } }),
     );
     expect(changes.map((c) => c.type)).toEqual(["project.updated", "session.created", "message.created", "message.created"]);
+    // 旧会话和新一代的会话状态各带自己的项目经理，网页靠它给消息署名
+    const snapshotSessions = ledger.snapshot().sessions;
+    expect(snapshotSessions.find((s) => s.sessionId === foo.groupSessionId)).toMatchObject({ pmId: lin.pmId });
+    expect(snapshotSessions.find((s) => s.sessionId === newSession)).toMatchObject({ pmId: zhou.pmId });
     // hub_calls 记的是调用者（私聊）
     expect(hubCalls().at(-1)).toMatchObject({ session_id: lin.sessionId, command: "project.assign", ok: 1 });
     // 之后阿周管它，小林管不着了
@@ -373,6 +377,9 @@ describe("交接", () => {
     const first = assignFoo().data.handoff;
     const second = hub(zhou.sessionId, "project.assign", { project: "foo", to: "小林", handoff: "第二份" }).data.handoff;
     expect(second.file).not.toBe(first.file);
+    // 文件名带交接编号，靠它保证不撞名，不靠“先看文件在不在”
+    expect(basename(first.file)).toMatch(new RegExp(`^${first.id}-`));
+    expect(basename(second.file)).toMatch(new RegExp(`^${second.id}-`));
     expect(readFileSync(first.file, "utf8")).toBe("发布日期定在周五。");
     expect(readFileSync(second.file, "utf8")).toBe("第二份");
   });

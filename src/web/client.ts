@@ -30,6 +30,22 @@ export class ApiError extends Error {
   }
 }
 
+/** 请求体超过界面服务的上限（1 MB）时 Fastify 回 413，响应里没有 code，原因是英文；统一换成中文。 */
+const TOO_LARGE_MESSAGE = "内容太大，发不出去（最多 1 MB）";
+
+/** 非 2xx 响应给用户看的原因：413 固定一句；有 { error } 就原样用；别的（空体、不是 JSON、error 不是字符串）说“请求失败（状态码）”。 */
+async function failureMessage(res: Response): Promise<string> {
+  if (res.status === 413) return TOO_LARGE_MESSAGE;
+  try {
+    const body = (await res.json()) as Partial<ApiErrorBody> | null;
+    const error = body?.error;
+    if (typeof error === "string" && error !== "") return error;
+  } catch {
+    // 响应体不是 JSON
+  }
+  return `请求失败（${res.status}）`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -37,15 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (err) {
     throw new ApiError(0, err instanceof Error ? err.message : "网络错误");
   }
-  if (!res.ok) {
-    let message = res.statusText;
-    try {
-      message = ((await res.json()) as ApiErrorBody).error ?? message;
-    } catch {
-      // 响应体不是 JSON，用状态文字
-    }
-    throw new ApiError(res.status, message);
-  }
+  if (!res.ok) throw new ApiError(res.status, await failureMessage(res));
   const text = await res.text();
   return (text === "" ? undefined : JSON.parse(text)) as T;
 }

@@ -1,6 +1,6 @@
 import { Folder } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ConversationId, PmId } from "../../shared/index.ts";
+import type { ConversationId, Message, Pm, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
@@ -15,6 +15,7 @@ export function Conversation({
   view,
   pending,
   session,
+  pmOf,
   older,
   draft,
   notices,
@@ -30,6 +31,8 @@ export function Conversation({
   view: ConversationView;
   pending: PendingMessage[];
   session: SessionState | null;
+  /** 这条消息是哪个项目经理说的（换过人的群里，旧项目经理的话仍署旧名字）；查不到是 null。 */
+  pmOf: (message: Message) => Pm | null;
   older: OlderState | undefined;
   draft: string;
   /** 顶部提醒，放在标题栏下面。 */
@@ -60,8 +63,12 @@ export function Conversation({
   };
 
   const empty = view.messages.length === 0 && pending.length === 0;
-  // 群里说话的是项目现在的项目经理
+  // 默认署对话现在的项目经理；群里换过人的话，每条消息按它当时的项目经理署名
   const agent = { name: entry.pm?.name ?? entry.name, avatarKey: entry.pm?.id ?? entry.avatarKey };
+  const agentOf = (message: Message) => {
+    const pm = pmOf(message);
+    return pm ? { name: pm.name, avatarKey: pm.id } : agent;
+  };
   const isGroup = entry.kind === "project_group";
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={entry.name}>
@@ -113,7 +120,7 @@ export function Conversation({
         <MessageList
           messages={view.messages}
           pending={pending}
-          agent={agent}
+          agentOf={agentOf}
           hasMore={view.hasMore}
           older={older}
           onLoadOlder={() => onLoadOlder(id)}

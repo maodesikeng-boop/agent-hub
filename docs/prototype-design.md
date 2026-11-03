@@ -406,7 +406,7 @@
 │   │   ├── assistant.md       # 总助
 │   │   └── pm-<编号>.md       # 每个项目经理一份
 │   ├── avatars/
-│   ├── handoffs/<项目>/<时间>.md   # 交接
+│   ├── handoffs/<项目>/<交接编号>-<时间>.md   # 交接
 │   ├── launch/<会话>/         # 每次启动 claude 时生成的提示词文件、设置文件
 │   ├── uploads/               # 用户拖进聊天的文件
 │   └── logs/

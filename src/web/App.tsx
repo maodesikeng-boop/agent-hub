@@ -8,7 +8,7 @@ import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, projectsOf, sessionOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, pmOfMessage, projectsOf, sessionOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useHub } from "./useHub.ts";
 
@@ -98,6 +98,7 @@ export function App() {
             view={view}
             pending={pendingOf(state, active.id)}
             session={sessionOf(state, active.id)}
+            pmOf={(message) => pmOfMessage(state, message)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             notices={notices}

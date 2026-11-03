@@ -65,6 +65,7 @@ import type {
   DriverSendResult,
   Ledger,
   Message,
+  PmId,
   SessionEndParams,
   SessionSendParams,
   SessionStartParams,
@@ -461,7 +462,12 @@ describe("M2：数据目录", () => {
 
   it("性格设定和交接文件的位置", () => {
     expect(personaFilePath("/s/personas", 3)).toBe("/s/personas/pm-3.md");
-    expect(handoffFilePath("/s/handoffs", 5, Date.UTC(2026, 10, 3, 9, 8, 7, 6))).toBe("/s/handoffs/5/2026-11-03T09-08-07-006Z.md");
+    expect(handoffFilePath("/s/handoffs", 5, 12, Date.UTC(2026, 10, 3, 9, 8, 7, 6))).toBe("/s/handoffs/5/12-2026-11-03T09-08-07-006Z.md");
+  });
+
+  it("交接文件名带交接编号：同一个项目、同一毫秒的两次交接不会撞名", () => {
+    const at = Date.UTC(2026, 10, 3, 9, 8, 7, 6);
+    expect(handoffFilePath("/s/handoffs", 5, 1, at)).not.toBe(handoffFilePath("/s/handoffs", 5, 2, at));
   });
 });
 
@@ -470,6 +476,10 @@ describe("M2：数据目录", () => {
 describe("M2：会话状态带第几代", () => {
   it("SessionState 有 generation；网页、账本要“当前会话”时取最大的那一代", () => {
     expectTypeOf<SessionState["generation"]>().toEqualTypeOf<number>();
+  });
+
+  it("SessionState 带 pmId：网页按消息的 sessionId 找到当时是哪个项目经理（总助、Worker 是 null）", () => {
+    expectTypeOf<SessionState["pmId"]>().toEqualTypeOf<PmId | null>();
   });
 });
 

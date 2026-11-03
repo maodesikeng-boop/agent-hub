@@ -68,6 +68,16 @@ function findPm(pms: Pm[], id: PmId | null): Pm | null {
   return id === null ? null : (pms.find((p) => p.id === id) ?? null);
 }
 
+/**
+ * 一条消息是哪个项目经理说的：按消息所属会话的 pmId（换项目经理后旧一代会话的话仍是原来那位）。
+ * 没有会话、会话还没同步、会话不属于项目经理（总助、Worker）就返回 null，调用方用对话现在的项目经理兜底。
+ */
+export function pmOfMessage(state: HubState, message: Message): Pm | null {
+  if (message.sessionId === null) return null;
+  const session = state.sessions.find((s) => s.sessionId === message.sessionId);
+  return findPm(state.pms, session?.pmId ?? null);
+}
+
 /** 一个项目经理现在管着的项目。 */
 export function projectsOf(state: HubState, pmId: PmId): Project[] {
   return state.projects.filter((p) => p.pmId === pmId);
