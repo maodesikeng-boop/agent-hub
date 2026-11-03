@@ -73,7 +73,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       });
     } catch (error) {
       if (!isSessionEnded(error)) throw error;
-      // 会话已经结束（迁移 0003 结束了老项目群的会话；以后 M3 结束 Worker 会话），这条消息发不出去了。
+      // 会话已经结束（迁移 0003 结束了老项目群的会话；Worker 收工了），这条消息发不出去了。
       // 已经写进去一半的（已送达、处理中：重启恢复时会遇到）按“这一轮被重启打断”处理，标已停止（和关机打断一轮一样）；
       // 还在排队的没有这一轮可停，标失败。
       const now = deps.ledger.getMessage(messageId);

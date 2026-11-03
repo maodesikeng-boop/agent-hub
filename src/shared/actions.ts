@@ -32,7 +32,7 @@ export interface SessionSendParams {
 
 /**
  * 结束会话。处理函数调 driver.end(sessionId)：正在跑就等这一轮回完再关，然后作废令牌。
- * M2 原来是交接后关掉旧一代用的；11-03 拿掉交接后账本里暂时没有登记它的地方，留给 M3 结束 Worker 会话。
+ * M2 原来是交接后关掉旧一代用的（11-03 拿掉了交接）；M3 起 hub worker end、建 worktree 彻底失败时给 Worker 的会话登记。
  */
 export interface SessionEndParams {
   sessionId: SessionId;
