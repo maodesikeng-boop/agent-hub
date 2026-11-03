@@ -116,6 +116,17 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
 - `HEALTH_MODULES` 加 `agent-api`；`normalizeName` 还拒绝 U+2028、U+2029 和 C1 控制字符。
 - 为了让 `pnpm check` 保持全绿，W0 在 daemon、web 里放了只为编译通过的占位（新方法抛“没实现”、新字段给空值），都标了 `M2 W0 占位`，由对应的块替换。
 
+**W6a 对上面约定的补全**（组装时碰到的，PR 正文逐条写了理由）：
+
+- 账本接口加 `refreshSessionState(sessionId)`：驱动层 `end` 直接把会话那一行写成 `ended`、没有事件，`session.end` 处理函数作废令牌后调它，网页才看得到 `ended`。
+- 会话换代只有一个入口：账本里的 `nextGeneration`（开下一代、登记上一代的 `session.end`、排队的消息改指下一代），交接用它，以后自动换代也用它；守护进程这边结束会话只走 `session.end` 处理函数（等这一轮回完 → 作废令牌 → 推状态）。
+- 作废过令牌的会话再 `prepareLaunch`：`tokens.issue` 抛 `SessionTokenRevokedError`，包成 `DriverError("session_ended")`，驱动层原样抛（不包成可重试的 `spawn_failed`），处理函数按 `session_ended` 接；`issue` 抛的别的错不包，照常抛出。
+- agent 接口：`AgentApiOptions` 加 `log`，500 和记健康状态失败写进守护进程的日志；Node 在 `headersTimeout`（默认 60 秒）大于 `requestTimeout` 时会把两个对调，所以 `headersTimeout` 也设成 15 秒、检查间隔从 30 秒调到 1 秒，半截请求才是 15 秒左右断开。`createAgentApi` 有可选的 `requestTimeoutMs`、`timeoutCheckMs`（默认取 `limits.ts`），测试里用 2 秒和 100 毫秒，几秒内测出连接真的被断开。
+- 可调的超时、间隔集中到 `src/shared/limits.ts`（原来散在 daemon、handlers、agent-api、driver、hub 里）；动作的重试次数仍在 `actions.ts` 的 `ACTION_RETRY`。执行器的轮询间隔和并发数、SQLite 忙等时间、额度恢复后多等的 1 秒、标准错误取多少字符也都在 `limits.ts`。
+- `session.send` 撞上 `session_ended`、消息还指着这个已结束的会话：重启恢复时会发生（交接那一轮被 SIGKILL 打断，重启后 `session.end` 先结束旧会话，恢复登记的 `session.send` 随后撞上）。按“这一轮被重启打断”处理，账本 `stopMessage` 把消息标 `stopped`（和关机打断一轮一样），不标 `failed`，免得用户点重试把同一句话再发给新项目经理；排队中（`queued`，不该出现）的标 `failed`，原因“这条消息发给的项目经理已经换人，请重发”。
+- 关机有总上限 `SHUTDOWN_TOTAL_MS`（`main.ts` 用 `shutdown.ts` 的 `stopWithinLimit` 包住 `daemon.stop()`），超了记一条日志、退出码 1。
+- M1 的 `createLaunchPreparer`、`buildPmPrompt`、`writeDefaultPersona` 删掉，默认性格设定文件由 `createPm` 和启动时的 `syncPersonaFiles` 写。
+
 **交接怎么走**（一句话“把 foo 交给阿周”）：原项目经理在 foo 群或私聊里先写好交接，调 `hub project assign foo --to 阿周 --stdin`。账本在一个事务里：存交接文件和 `handoffs`；`projects.pm_id` 改成阿周；给 foo 群建下一代会话（属于阿周，提示词带这份交接）；登记旧会话的 `session.end`；在 foo 群发“项目经理由小林换成阿周，交接在这里”，在阿周的私聊发一条系统消息（agent 也收到）“小林把 foo 交给了你”。`handoffs.from_session_id` 是群里被结束的那一代，`hub_calls.session_id` 是调用者的会话（可能在私聊里）。旧会话这一轮回完用户后就关掉；之后群里的消息都发给新一代。“你也管一下 bar”只能对 bar 现在的项目经理说（第 7 节第 8 条）。
 
 ## 4. 测试方案
@@ -234,7 +245,8 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
 | 重启不丢 | 建好项目后 `SIGTERM` 再启动 | 项目、群、文件夹、交接都在；群会话用 `--resume`；旧 `hub.sock` 被替换 |
 | 守护进程没开 | 关掉守护进程后直接跑 `hub status`（同样的环境变量） | 退出码 3，提示“连不上 agent-hub” |
 | 重试 | 让 `claude` 找不到导致消息失败，再修好路径，点重试 | 消息回到“排队中”→“已送达”→“已回复” |
-| 交接时撞上 `session_ended` | 交接时群里还有一条排队的消息 | 发给新一代；driver 的 health 没有记 `session_ended` |
+| 交接时排队的消息改指新一代 | 交接时群里还有一条排队的消息（用例先断言它确实排在旧一代上） | 发给新一代；driver 的 health 没有记 `session_ended`（`session_ended` 两个分支由 `handlers.test.ts` 覆盖） |
+| 重启恰好打断交接那一轮 | 旧项目经理一轮里跑 `hub project assign`，这一轮没结束就 SIGKILL 守护进程，再启动 | 那条用户消息 `stopped`、没有失败原因；动作都 `done`；health 没有 `session_ended` |
 
 ## 5. 验收
 

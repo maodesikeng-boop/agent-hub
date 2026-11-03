@@ -785,6 +785,37 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
+  /**
+   * 会话换代的唯一入口：给这个对话开下一代会话（沿用上一代的 cwd、addDirs），登记上一代的 session.end，
+   * 把还在排队的消息改发给下一代。上一代这一轮回完再关、令牌在它 ended 之后作废，见 handlers.ts 的 session.end 处理函数。
+   * M2 只有交接用；以后自动换代也走这里。
+   */
+  const nextGeneration = (p: Pending, conversationId: ConversationId, owner: { pmId: PmId; model: string | null }) => {
+    const old = currentSession(conversationId)!;
+    const next = insertSession(p, {
+      conversationId,
+      pmId: owner.pmId,
+      cwd: old.cwd,
+      addDirs: old.addDirs,
+      generation: old.generation + 1,
+      model: owner.model,
+    });
+    enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
+    const queued = db.all<{ id: number; sender: string }>(
+      "SELECT id, sender FROM messages WHERE conversation_id = ? AND status = 'queued' AND session_id IS NOT NULL AND session_id != ? ORDER BY id",
+      conversationId,
+      next.id,
+    );
+    for (const message of queued) {
+      db.run("UPDATE messages SET session_id = ? WHERE id = ?", next.id, message.id);
+      enqueue(p, {
+        type: "session.send",
+        params: { sessionId: next.id, messageId: message.id, source: message.sender === "system" ? "system" : "user" },
+      });
+    }
+    return { old, next };
+  };
+
   const assignIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.assign">): HubResult<"project.assign"> => {
     const project = managedProject(caller.pmId, args.project);
     const handoffText = typeof args.handoff === "string" ? args.handoff : "";
@@ -796,16 +827,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     const to = toName === null ? undefined : db.get<PmDbRow>("SELECT * FROM pms WHERE name = ?", toName);
     if (to === undefined) throw fail("not_found", `没有叫“${args.to}”的项目经理（hub pm list 可以看有哪些）`);
     if (handoffsDir === undefined) throw new Error("ledger: handoffsDir is not configured");
-    const old = currentSession(project.conversation_id)!;
     const t = now();
-    const next = insertSession(p, {
-      conversationId: project.conversation_id,
-      pmId: to.id,
-      cwd: old.cwd,
-      addDirs: old.addDirs,
-      generation: old.generation + 1,
-      model: to.default_model,
-    });
+    const { old, next } = nextGeneration(p, project.conversation_id, { pmId: to.id, model: to.default_model });
     // 文件名要带交接编号，所以先插一行（file 先空着），拿到编号再定文件名、写文件、回填
     const inserted = db.get<HandoffDbRow>(
       `INSERT INTO handoffs (project_id, from_session_id, to_session_id, from_pm_id, to_pm_id, file, reason, created_at)
@@ -824,20 +847,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     db.run("UPDATE projects SET pm_id = ?, updated_at = ? WHERE id = ?", to.id, t, project.id);
     const updated = toProject(projectRow(project.id));
     p.changes.push({ type: "project.updated", data: { project: updated } });
-    enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
-    // 群里还在排队的消息改发给新一代
-    const queued = db.all<{ id: number; sender: string }>(
-      "SELECT id, sender FROM messages WHERE conversation_id = ? AND status = 'queued' AND session_id IS NOT NULL AND session_id != ? ORDER BY id",
-      project.conversation_id,
-      next.id,
-    );
-    for (const message of queued) {
-      db.run("UPDATE messages SET session_id = ? WHERE id = ?", next.id, message.id);
-      enqueue(p, {
-        type: "session.send",
-        params: { sessionId: next.id, messageId: message.id, source: message.sender === "system" ? "system" : "user" },
-      });
-    }
     const meta: SystemMessageMeta = { event: "project.reassigned", projectId: project.id, handoffId: handoff.id, fromPmId: from.id, toPmId: to.id };
     insertSystemMessage(p, project.conversation_id, meta, `项目经理由${from.name}换成${to.name}，交接在这里：${file}`);
     const toPrivate = privateConversation(to.id);
@@ -1078,6 +1087,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => applyEvent(p, session, event));
     },
 
+    refreshSessionState(sessionId) {
+      write((p) => updateLive(p, sessionId, idle));
+    },
+
     recoverAfterRestart() {
       return write((p) => {
         const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
@@ -1164,6 +1177,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (action.type === "session.send") {
         write((p) => transition(p, action.params.messageId, "failed", error));
       }
+    },
+
+    stopMessage(messageId) {
+      write((p) => transition(p, messageId, "stopped"));
     },
 
     reportHealth(module, error) {

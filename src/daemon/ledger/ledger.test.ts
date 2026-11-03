@@ -496,6 +496,31 @@ describe("onActionFailed", () => {
   });
 });
 
+describe("stopMessage", () => {
+  it("delivered、processing → stopped，推 message.updated，不写失败原因", () => {
+    for (const status of ["delivered", "processing"] as const) {
+      const id = post(`stop-${status}`);
+      setStatus(id, status);
+      changes = [];
+      ledger.stopMessage(id);
+      expect(ledger.getMessage(id)).toMatchObject({ status: "stopped", failureReason: null });
+      expect(changes.map((c) => c.type)).toEqual(["message.updated"]);
+    }
+  });
+
+  it("排队中、已回复、已失败、不存在：不改", () => {
+    const queued = post("q");
+    const replied = post("r");
+    setStatus(replied, "replied");
+    const failed = post("f");
+    setStatus(failed, "failed");
+    for (const id of [queued, replied, failed, 9999]) ledger.stopMessage(id);
+    expect(ledger.getMessage(queued)?.status).toBe("queued");
+    expect(ledger.getMessage(replied)?.status).toBe("replied");
+    expect(ledger.getMessage(failed)?.status).toBe("failed");
+  });
+});
+
 describe("reportHealth", () => {
   it("健康推送：报错推 health.updated、次数加一；成功清零；没变化不推", () => {
     now = 2_000;

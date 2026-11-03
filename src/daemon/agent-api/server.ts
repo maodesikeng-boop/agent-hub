@@ -8,6 +8,9 @@ import {
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_MAX_BODY_BYTES,
+  HUB_REQUEST_TIMEOUT_MS,
+  HUB_SOCKET_PROBE_MS,
+  HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
   MAX_HANDOFF_BYTES,
@@ -31,15 +34,17 @@ export interface AgentApiOptions {
   ledger: Pick<Ledger, "hubCall" | "reportHealth">;
   tokens: SessionTokens;
   logger?: boolean;
+  /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
+  log?: (line: string) => void;
+  /** 一个请求从连上到收完的上限，默认 HUB_REQUEST_TIMEOUT_MS；测试里调小，几秒就能看到半截请求被断开。 */
+  requestTimeoutMs?: number;
+  /** 多久查一次有没有超时的请求，默认 HUB_TIMEOUT_CHECK_MS。 */
+  timeoutCheckMs?: number;
 }
 
 const RUN_DIR_MODE = 0o700;
 const SOCKET_MODE = 0o600;
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
-/** 请求从连上到收完的上限：半截请求挂着不放，到点就断。 */
-const REQUEST_TIMEOUT_MS = 15_000;
-/** 试连旧 socket 的上限：连得上说明有活实例。 */
-const PROBE_TIMEOUT_MS = 1_000;
 
 // ---- 请求体的规格 ----
 
@@ -144,10 +149,14 @@ const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再�
 
 export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
+  const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
     logger: opts.logger ?? false,
     bodyLimit: HUB_MAX_BODY_BYTES,
-    requestTimeout: REQUEST_TIMEOUT_MS,
+    requestTimeout: requestTimeoutMs,
+    // Node 在 headersTimeout（默认 60 秒）大于 requestTimeout 时把两个对调，请求头收完后的上限就成了 60 秒；
+    // 检查间隔默认 30 秒。两个都压下来，半截请求才是 15 秒左右断开。
+    http: { headersTimeout: requestTimeoutMs, connectionsCheckingInterval: opts.timeoutCheckMs ?? HUB_TIMEOUT_CHECK_MS },
     // close() 不等还连着的请求，直接断开，保证关得掉。
     forceCloseConnections: true,
     // 多余参数要报错，不能悄悄删掉；类型不对也不替它转换。
@@ -165,6 +174,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       ledger.reportHealth("agent-api", error);
     } catch (err) {
       app.log.error({ err }, "agent-api reportHealth failed");
+      opts.log?.(`agent-hub: agent 接口记健康状态失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -187,6 +197,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。
     if (status !== undefined && status >= 400 && status < 500) return fail(reply, "invalid", `参数不对：${err.message}`);
     req.log.error({ err }, "agent-api request failed");
+    opts.log?.(`agent-hub: hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
     reportHealth(err.message);
     return fail(reply, "internal", err.message);
   });
@@ -235,7 +246,7 @@ function socketIsLive(socketPath: string): Promise<boolean> {
       if (result instanceof Error) fail(result);
       else done(result);
     };
-    socket.setTimeout(PROBE_TIMEOUT_MS, () => finish(true));
+    socket.setTimeout(HUB_SOCKET_PROBE_MS, () => finish(true));
     socket.once("connect", () => finish(true));
     socket.once("error", (err: NodeJS.ErrnoException) => {
       finish(err.code === "ECONNREFUSED" || err.code === "ENOENT" ? false : err);

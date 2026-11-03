@@ -42,6 +42,47 @@ export const IDLE_CLOSE_MS = 10 * 60_000;
 /** 关机时最多等 10 秒，剩下的强制结束。 */
 export const SHUTDOWN_GRACE_MS = 10_000;
 
+// ---- 其他超时和间隔（可调的数都放这里；动作的重试次数和退避在 actions.ts 的 ACTION_RETRY，按动作类型和类型定义放一起）----
+
+/** 驱动层：lastEventAt 最多每秒写一次库。 */
+export const LAST_EVENT_WRITE_MS = 1_000;
+/** 驱动层：进程退出后最多等多久把标准输出、标准错误读完；孙进程占着管道时到点强制关掉。 */
+export const STDIO_DRAIN_MS = 300;
+/** 驱动层：发了 SIGKILL 之后最多再等多久。 */
+export const KILL_WAIT_MS = 2_000;
+/** 驱动层：清理残留进程时多久看一次它还在不在。 */
+export const STALE_POLL_MS = 50;
+/** 处理函数：会话正忙、消息在驱动层排队（或交接后改指了新一代）时，隔多久再问一次。 */
+export const QUEUED_RECHECK_MS = 1_000;
+/** 处理函数：额度用完时最多推迟多久再看一次。 */
+export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;
+/** 处理函数：额度用完、知道恢复时间时，在恢复时间之后多等一会儿再发，免得卡在边界上。 */
+export const RATE_LIMIT_RECHECK_PAD_MS = 1_000;
+/** 执行器：没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。 */
+export const ACTION_POLL_INTERVAL_MS = 30_000;
+/** 执行器：同时最多跑几个动作（同一个会话一次只跑一个）。 */
+export const ACTION_CONCURRENCY = 4;
+/** 数据库：别的连接占着写锁时，最多忙等多久再报错（SQLite 的 busy timeout）。 */
+export const DB_BUSY_TIMEOUT_MS = 5_000;
+/** 驱动层：错误信息里最多带多少个字符的标准错误（取最后这么多）。 */
+export const STDERR_TAIL_CHARS = 2_000;
+/** agent 接口：一个请求从连上到收完的上限，半截请求挂着不放，到点就断。 */
+export const HUB_REQUEST_TIMEOUT_MS = 15_000;
+/** agent 接口：多久查一次有没有超时的请求（Node 的 connectionsCheckingInterval，默认 30 秒，太粗）。 */
+export const HUB_TIMEOUT_CHECK_MS = 1_000;
+/** agent 接口：启动时试连旧 socket 的上限，连得上说明有活实例。 */
+export const HUB_SOCKET_PROBE_MS = 1_000;
+/** hub 命令：连上之后多久没动静算守护进程没回应。 */
+export const HUB_CLI_TIMEOUT_MS = 30_000;
+/** hub 命令：--stdin 多久没收到数据就放弃。 */
+export const HUB_CLI_STDIN_IDLE_MS = 60_000;
+/** 关机：最多等执行器手上的动作多久；还没做完（比如在等 claude 启动）就先关驱动层，让它们结束。 */
+export const EXECUTOR_STOP_GRACE_MS = 3_000;
+/** 关机：整个关机过程（执行器、claude、界面服务、agent 接口、关库）的总上限；超了记一条日志，以非 0 退出码退出。 */
+export const SHUTDOWN_TOTAL_MS = 30_000;
+/** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
+export const AGENT_API_CLOSE_MS = 3_000;
+
 /**
  * 界面登录后设的 cookie（HttpOnly、SameSite=Strict）。值就是界面用户令牌：
  * 令牌第一次启动时随机生成，存在数据目录的 state/ui-token（权限 UI_TOKEN_FILE_MODE），之后每次启动读同一个，

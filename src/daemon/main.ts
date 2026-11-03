@@ -1,7 +1,9 @@
-// 守护进程入口（pnpm start）：启动，打印登录链接；Ctrl+C 或 SIGTERM 按顺序关机，退出码 0。
+// 守护进程入口（pnpm start）：启动，打印登录链接；Ctrl+C 或 SIGTERM 按顺序关机，退出码 0（出错或超过总上限 SHUTDOWN_TOTAL_MS 是 1）。
 // 已有守护进程在跑时报错退出，退出码 1。启动和关闭顺序见 daemon.ts。
 import { homedir } from "node:os";
+import { SHUTDOWN_TOTAL_MS } from "../shared/index.ts";
 import { startDaemon } from "./daemon.ts";
+import { stopWithinLimit } from "./shutdown.ts";
 import { DaemonAlreadyRunningError } from "./store/index.ts";
 
 async function main(): Promise<void> {
@@ -28,16 +30,11 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     console.error(`agent-hub: 收到 ${signal}，正在关闭……`);
-    daemon.stop().then(
-      () => {
-        console.error("agent-hub: 已关闭。");
-        process.exit(0);
-      },
-      (error: unknown) => {
-        console.error("agent-hub: 关闭时出错：", error);
-        process.exit(1);
-      },
-    );
+    // 整个关机有总上限 SHUTDOWN_TOTAL_MS，超了记日志、退出码 1
+    void stopWithinLimit(() => daemon.stop(), SHUTDOWN_TOTAL_MS, (line) => console.error(line)).then((code) => {
+      if (code === 0) console.error("agent-hub: 已关闭。");
+      process.exit(code);
+    });
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);

@@ -1,6 +1,6 @@
 // 会话令牌（hub.ts 的 SessionTokens）：只在内存里，盘上不落；守护进程重启后全部作废。
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { HUB_TOKEN_BYTES, type SessionId, type SessionTokens } from "../../shared/index.ts";
+import { HUB_TOKEN_BYTES, SessionTokenRevokedError, type SessionId, type SessionTokens } from "../../shared/index.ts";
 
 function digest(token: string): Buffer {
   return createHash("sha256").update(token).digest();
@@ -14,7 +14,7 @@ export function createSessionTokens(): SessionTokens {
 
   return {
     issue(sessionId) {
-      if (revoked.has(sessionId)) throw new Error(`session ${sessionId} token was revoked; no new token is issued`);
+      if (revoked.has(sessionId)) throw new SessionTokenRevokedError(sessionId);
       const existing = live.get(sessionId);
       if (existing !== undefined) return existing.token;
       const token = randomBytes(HUB_TOKEN_BYTES).toString("base64url");

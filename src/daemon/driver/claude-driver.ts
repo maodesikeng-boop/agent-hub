@@ -11,11 +11,16 @@ import {
   DriverError,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
+  KILL_WAIT_MS,
+  LAST_EVENT_WRITE_MS,
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
+  STALE_POLL_MS,
+  STDERR_TAIL_CHARS,
   START_TIMEOUT_MS,
+  STDIO_DRAIN_MS,
   type AgentSessionPatch,
   type AgentSessionRow,
   type Driver,
@@ -44,17 +49,6 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
-
-/** lastEventAt 最多每秒写一次库。 */
-const LAST_EVENT_WRITE_MS = 1_000;
-/** 错误信息里带多少标准错误。 */
-const STDERR_TAIL = 2_000;
-/** 进程退出后最多等多久把标准输出、标准错误读完；孙进程占着管道时到点强制关掉。 */
-const STDIO_DRAIN_MS = 300;
-/** 发了 SIGKILL 之后最多再等多久。 */
-const KILL_WAIT_MS = 2_000;
-/** 清理残留进程时多久看一次它还在不在。 */
-const STALE_POLL_MS = 50;
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -667,6 +661,8 @@ export class ClaudeDriver implements Driver {
       try {
         files = await this.#opts.prepareLaunch(row);
       } catch (error) {
+        // session_ended（组装代码的令牌已作废）原样抛：不可重试，处理函数按“会话已结束”接
+        if (error instanceof DriverError && error.code === "session_ended") throw error;
         throw new DriverError("spawn_failed", `prepareLaunch failed: ${errorMessage(error)}`);
       }
       row = this.#store(st);
@@ -718,7 +714,7 @@ export class ClaudeDriver implements Driver {
     child.stdin.on("error", () => {}); // 进程退了还在写：EPIPE，交给 exit 处理
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL);
+      proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     // 自己按 \n 切行：node:readline 还会在 U+2028 / U+2029 处断开，而 JSON 字符串里可以有这两个字符
     let buffered = "";

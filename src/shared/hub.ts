@@ -175,3 +175,11 @@ export interface SessionTokens {
   resolve(token: string): SessionId | null;
   revoke(sessionId: SessionId): void;
 }
+
+/** revoke 过的会话再 issue 抛这个。组装代码只把它当“会话已结束”，issue 的其他错照常抛出。 */
+export class SessionTokenRevokedError extends Error {
+  constructor(sessionId: SessionId) {
+    super(`session ${sessionId} token was revoked; no new token is issued`);
+    this.name = "SessionTokenRevokedError";
+  }
+}

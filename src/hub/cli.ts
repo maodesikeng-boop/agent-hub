@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
-import { HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
+import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
 
 export interface HubIo {
   argv: string[];
@@ -17,14 +17,12 @@ export interface HubIo {
   stdin: () => Readable;
   stdout: { write(text: string): unknown };
   stderr: { write(text: string): unknown };
-  /** 连上之后多久没动静算没回应，默认 DEFAULT_TIMEOUT_MS。 */
+  /** 连上之后多久没动静算没回应，默认 HUB_CLI_TIMEOUT_MS。 */
   timeoutMs?: number;
-  /** --stdin 多久没收到数据就放弃，默认 DEFAULT_STDIN_IDLE_MS。 */
+  /** --stdin 多久没收到数据就放弃，默认 HUB_CLI_STDIN_IDLE_MS。 */
   stdinIdleMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_STDIN_IDLE_MS = 60_000;
 /** 和守护进程认的令牌字符一样；别的字符放进请求头 Node 会直接抛错。 */
 const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
@@ -326,7 +324,7 @@ export async function runHub(io: HubIo): Promise<number> {
   if (parsed.textSource !== null && parsed.textField !== undefined) {
     let text: string;
     try {
-      text = parsed.textSource.kind === "stdin" ? await readAllStdin(io.stdin(), io.stdinIdleMs ?? DEFAULT_STDIN_IDLE_MS) : parsed.textSource.value;
+      text = parsed.textSource.kind === "stdin" ? await readAllStdin(io.stdin(), io.stdinIdleMs ?? HUB_CLI_STDIN_IDLE_MS) : parsed.textSource.value;
     } catch (err) {
       if (err instanceof UsageError) return usage(err.message);
       throw err;
@@ -335,7 +333,7 @@ export async function runHub(io: HubIo): Promise<number> {
     body[parsed.textField] = text;
   }
 
-  const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
   if (outcome.kind === "not-sent") return usage(`请求没发出去：${outcome.reason}`);
   if (outcome.kind === "unreachable") {
     io.stderr.write(`${UNREACHABLE_MESSAGE}（${outcome.reason}）\n`);
