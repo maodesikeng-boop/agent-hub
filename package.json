@@ -1,0 +1,40 @@
+{
+  "name": "agent-hub",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node src/daemon/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json",
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && vitest run",
+    "smoke": "node test/smoke/main.ts"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "jsdom": "^30.1.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.8",
+    "@fastify/websocket": "^11.3.6",
+    "fastify": "^5.12.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

@@ -1,6 +1,6 @@
 # M1 计划：能聊
 
-> 状态：草稿，等用户拍板。依据是 [prototype-design.md](prototype-design.md)（下文简称“设计”）第 14 章的 M1，以及 [m0-report.md](m0-report.md)。
+> 状态：第 6 节的 5 个问题已于 2026-11-02 拍板（全部按推荐）。依据是 [prototype-design.md](prototype-design.md)（下文简称“设计”）第 14 章的 M1，以及 [m0-report.md](m0-report.md)。
 > 写于 2026-11-02。本机现有：Node 24.21、pnpm 10.34、npm 11.19、yarn 4.18、bun 1.4、sqlite3 3.51。只看了，没装东西。
 
 ## 1. 范围
@@ -48,7 +48,7 @@
 ```
 agent-hub/
 ├── package.json             # 脚本：dev / build / start / check / smoke
-├── tsconfig.json            # strict、erasableSyntaxOnly、noEmit
+├── tsconfig.json            # strict、erasableSyntaxOnly、noEmit；不带 DOM，不管 src/web
 ├── vite.config.ts           # 只管 src/web
 ├── vitest.config.ts
 ├── migrations/0001_init.sql
@@ -61,14 +61,14 @@ agent-hub/
 │   │   ├── actions/         # 动作队列和执行器
 │   │   ├── driver/          # Claude 驱动层
 │   │   └── ui-server/       # HTTP + WebSocket
-│   └── web/                 # React 页面
+│   └── web/                 # React 页面；自己的 tsconfig.json（带 DOM）和 test-setup.ts
 └── test/
     ├── fake-claude/         # 假 claude 和剧本
     ├── e2e/                 # 端到端
     └── smoke/               # 真 claude 冒烟脚本
 ```
 
-`pnpm check` = `tsc --noEmit` + `vitest run`，每个 PR 合并前必须全绿。数据目录可以用环境变量 `AGENT_HUB_HOME` 改（测试用临时目录），`claude` 的路径可以用 `AGENT_HUB_CLAUDE` 改（测试指向假 `claude`）。
+`pnpm check` = 两份 `tsc --noEmit`（`tsconfig.json` 管守护进程和测试，不带 DOM；`src/web/tsconfig.json` 管网页，带 DOM）+ `vitest run`，每个 PR 合并前必须全绿。数据目录可以用环境变量 `AGENT_HUB_HOME` 改（测试用临时目录），`claude` 的路径可以用 `AGENT_HUB_CLAUDE` 改（测试指向假 `claude`）。
 
 ## 3. 拆分
 
@@ -88,21 +88,34 @@ W0 骨架和接口 ──┬── W1 存储 + 账本 + 动作队列 ──┐
 | W2 驱动层 + 假 claude | `src/daemon/driver/`、`test/fake-claude/` | W0 |
 | W3 界面服务 | `src/daemon/ui-server/` | W0 |
 | W4 网页 | `src/web/` | W0 |
-| W5 组装 + 端到端 | `src/daemon/main.ts`、提示词生成、默认项目经理、`test/e2e/`、`test/smoke/`；接线时发现的小改动可以碰其他目录，PR 里写明 | W1～W4 |
+| W5 组装 + 端到端 | `src/daemon/main.ts`、提示词生成、默认项目经理、`test/e2e/`、`test/smoke/`；两类动作的处理函数、重启恢复的组装、`onStopRequested` → `driver.interrupt`、`driver.onEvent` → `ledger.applyDriverEvent`、`onActionEnqueued` → `executor.wake()` 的接线（见下面第 6 条）；接线时发现的小改动可以碰其他目录，PR 里写明 | W1～W4 |
 
 **接口约定**（W0 写成 `src/shared/` 里的类型，之后改它要在 PR 里说明，并通知用到它的块）：
 
 1. **网页 ↔ 界面服务**
-   - 登录：守护进程启动时打印 `http://127.0.0.1:<端口>/auth?token=<界面用户令牌>`。打开后设一个 `HttpOnly`、`SameSite=Strict` 的 cookie，跳到 `/`。之后所有请求和 WebSocket 都靠这个 cookie。
+   - 登录：守护进程启动时打印 `http://127.0.0.1:<端口>/auth?token=<界面用户令牌>`。打开后设一个 `HttpOnly`、`SameSite=Strict` 的 cookie，跳到 `/`。之后所有请求和 WebSocket 都靠这个 cookie。令牌第一次启动时生成，存在 `state/ui-token`（权限 0600），之后每次启动沿用，所以重启后旧 cookie 仍然有效（第 5 节第 7 步）。
+   - `POST` 消息、`POST /stop` 遇到对话不存在：账本抛 `ConversationNotFoundError`，界面服务回 404。
    - `GET /api/state` → 项目经理列表、对话列表、每个对话最近 100 条消息、会话状态、当前事件序号 `seq`。
    - `GET /api/conversations/:id/messages?before=<消息编号>` → 更早的 100 条。
    - `POST /api/conversations/:id/messages`，请求体 `{ clientId, text }` → `{ messageId }`。`clientId` 由网页生成，重发用同一个。
    - `POST /api/conversations/:id/stop` → `202`。
-   - WebSocket `/api/ws?since=<seq>`：服务端推 `{ seq, type, data }`，`type` 有 `message.created`、`message.updated`、`session.status`；`since` 太旧补不齐时推 `{ type: "resync" }`，网页重新拉 `/api/state`。
-2. **界面服务 ↔ 账本**：`ledger.postUserMessage({ conversationId, clientId, text })`、`ledger.requestStop(conversationId)`、`ledger.snapshot()`、`ledger.changesSince(seq)`、`ledger.onChange(listener)`。
-3. **执行器 ↔ 驱动层**：`driver.send(sessionId, { messageIds, source: "user" | "system", text })`、`driver.interrupt(sessionId)`、`driver.shutdown()`。驱动层自己管每个会话的待发队列（设计第 7.3 节）。
-4. **驱动层 → 账本**：`driver.onEvent((sessionId, event) => …)`。事件：`session.started`、`message.delivered`、`message.processing`、`agent.text`、`agent.tool`、`turn.ended`（带 `ok`、`interrupted`）、`rate_limit`、`session.exited`（带 `hadResult`）、`driver.error`。每个事件带 Claude 原始的 `uuid`（有的话），账本按它去重。
-5. **驱动层 ↔ 存储**：`SessionStore` 接口，读写 `agent_sessions` 的一行。W1 实现，只有驱动层调用；W2 测试时用内存假实现。
+   - WebSocket `/api/ws?since=<seq>`：服务端推 `{ seq, type, data }`，`type` 有 `message.created`、`message.updated`、`session.status`、`health.updated`（比如“找不到 claude”，界面实时显示）；`since` 补不齐时推 `{ type: "resync" }`，网页重新拉 `/api/state`。什么时候 resync 见 `ChangesSince` 的注释：`since` 小于本次启动的初始 seq、大于当前 seq，或者小于缓冲区最早的 seq 减 1。
+   - 消息带 `failureReason`（标“失败”时的原因，界面直接显示）；工具消息的 `text` 是账本生成的一行摘要。
+   - 开发时 `pnpm dev`：vite 按环境变量 `AGENT_HUB_DAEMON_PORT` 把 `/api`（含 WebSocket）和 `/auth` 代理到守护进程。
+2. **界面服务 ↔ 账本**：`ledger.postUserMessage({ conversationId, clientId, text })`、`ledger.requestStop(conversationId)`、`ledger.snapshot()`、`ledger.changesSince(seq)`、`ledger.onChange(listener)`。用户消息的去重键是 `client:<对话>:<clientId>`。
+3. **执行器 ↔ 驱动层**：`driver.start(sessionId, { recovery? })`、`driver.send(sessionId, { messageIds, source: "user" | "system", text, resend? })`、`driver.interrupt(sessionId)`、`driver.shutdown()`。驱动层自己管每个会话的待发队列（设计第 7.3 节）。
+   - `send` 只有写进标准输入成功才 resolve 成 `written`；会话正忙、还在驱动层排队时 resolve 成 `queued`，处理函数返回 `{ kind: "later" }`，过一会儿用同样的 `messageIds` 再调（不会重复排队）；写入前校验没过 resolve 成 `rejected`。
+   - 起不来（`spawn_failed`、`claude_not_found`、`start_timeout`、`start_args_conflict`）由 `start`、`send` 抛 `DriverError` 交给执行器按退避重试，每次失败记 `health`（推 `health.updated`），次数用完执行器调 `ledger.onActionFailed`，账本把消息标“失败”。
+   - 动作重复登记：同键的动作已经结束（完成 / 失败 / 放弃）就重置成待执行、次数清零、参数更新；没结束只更新参数。
+4. **驱动层 → 账本**：`driver.onEvent((sessionId, event) => …)`。事件：`session.started`、`message.delivered`、`message.processing`、`agent.text`、`agent.tool`、`turn.ended`（带 `ok`、`interrupted`、出错时的 `error`）、`rate_limit`、`session.exited`（带 `reason`、`hadResult`、在途的 `messageIds`）、`driver.error`（只有 `invalid_input` 这类不能重试的才带 `messageIds`）。
+   - 去重：`agent.text`、`agent.tool` 一定带 `uuid`（Claude 原始事件没有时驱动层用 `line:<原始行的 sha256 前 32 位>`），账本按 `session:<会话>:<uuid>` 去重，工具再带 `:<toolUseId>`。其他事件不靠 `uuid` 去重。
+   - 消息状态只按 `MESSAGE_STATUS_TRANSITIONS` 走：排队中 → 已送达 → 处理中 → 已回复 / 已停止 / 失败；只有“失败”能回到“已送达”；不合法的转换账本忽略。
+   - `turn.ended`：被打断 → 已停止；`ok` → 已回复；否则 → 失败。`session.exited`：`interrupt`、`shutdown` → 在途消息已停止；`crash`、`startup_failed` → 失败。
+5. **驱动层 ↔ 存储**：`SessionStore` 接口，读写 `agent_sessions` 的一行。W1 实现，只有驱动层调用；W2 测试时用内存假实现。驱动层不改 `generation`。
+6. **组装（W5）**：W1、W2 只提供零件，下面这些接线和处理函数都归 W5：
+   - 两类动作的处理函数：`session.start` → `driver.start(sessionId, { recovery })`；`session.send` → 用 `ledger.getMessage` 读文字，调 `driver.send`（带 `resend`），按结果返回 `done` 或 `later`。
+   - 重启恢复（设计第 5.4 节）：开库后、`executor.start()` 前调 `ledger.recoverAfterRestart()`：状态是排队中、已送达、处理中而且没有活动动作（待执行 / 执行中）的消息重新登记“发消息”（已送达、处理中的带 `resend`），被打断的会话登记“启动或恢复会话”（带 `recovery`）。执行器启动时把“执行中”改回“待执行”。
+   - `ledger.onStopRequested` → `driver.interrupt`；`driver.onEvent` → `ledger.applyDriverEvent`；`ledger.onActionEnqueued` → `executor.wake()`。
 
 ## 4. 测试方案
 
@@ -136,6 +149,10 @@ W0 骨架和接口 ──┬── W1 存储 + 账本 + 动作队列 ──┐
 | 退避重试 | 动作处理函数一直抛错，用假计时器拨时间 | 5 秒、10 秒后各重试一次；第 3 次失败后状态“失败”，`health` 记下错误 |
 | 推迟不算失败 | 处理函数返回“稍后再试” | 不加失败次数，按时间再试 |
 | 重启接着做 | 留一个“执行中”的动作，重新打开存储和执行器 | 改回“待执行”并执行一次 |
+| 重复登记已结束的动作 | 动作“失败”后用同一个键再登记 | 同一行改回“待执行”，次数清零，参数是新的 |
+| 重启恢复消息 | 留一条“处理中”、没有活动动作的消息，调 `recoverAfterRestart()` | 登记一个带 `resend` 的“发消息”和一个带 `recovery` 的“启动或恢复会话”；监听者收到两次 `onActionEnqueued` |
+| 状态只往前走 | 对“处理中”的消息再交一次 `message.delivered` | 状态不变，不推变化 |
+| 健康推送 | `reportHealth("driver", "claude_not_found: …")` | 推一条 `health.updated`，连续失败次数加一 |
 | 开两个 | 已拿锁时再拿一次 | 第二次报错“已有守护进程在跑” |
 | 变化推送 | 写一条消息后调 `changesSince(上一个 seq)` | 拿到这一条变化，`seq` 加一 |
 
@@ -219,28 +236,30 @@ M1 所有 PR 合并后，用户在本机：
 8. 守护进程开着时，在另一个终端再 `pnpm start`：提示已有守护进程在跑，退出。
 9. `pnpm smoke`（用真 `claude`）：S1～S4 全部通过。
 
-## 6. 风险和待拍板的问题
+## 6. 风险和已拍板的问题
+
+> 状态：已拍板（用户 2026-11-02 确认，5 条全部按推荐）。每条下面保留当时的理由和影响，方便以后回头看。
 
 **1. agent 会继承用户全局的 `~/.claude` 设置。** M0 实测，每个 agent 都会加载用户全局的 `CLAUDE.md`、全局钩子（包括 Orca 装的各类钩子，其中有一个 `PermissionRequest` 钩子）和插件（比如 slack）。
-- **推荐：沿用。** 这和用户定的“权限沿用 agent 自己的设置”一致：用户平时怎么用 Claude，agent 就怎么用，允许规则也不用重配。
+- **结论：沿用。** 这和用户定的“权限沿用 agent 自己的设置”一致：用户平时怎么用 Claude，agent 就怎么用，允许规则也不用重配。
 - **影响**：全局 `CLAUDE.md` 里给自己定的习惯（比如开工先读某个本地文件）每个 agent 都会照做，多花一点 token，也可能和我们给的角色说明打架；Orca 的钩子对每个 agent 会话都会触发，Orca 里可能多出很多记录；slack 插件让 agent 有发消息的能力，发不发由 agent 自己的权限设置决定，我们的收件箱只管得到它弹出来的权限请求；agent 的会话记录也存在 `~/.claude/projects/` 里，和用户自己的混在一起。M4 时守护进程会检查全局设置里的 `PermissionRequest` 钩子，在设置页提示。
-- **另一个选项**：给 agent 单独设 `CLAUDE_CONFIG_DIR`（指向一个干净的配置目录）。好处是 agent 的环境干净、可预期。代价：用户要在终端里用这个目录**再登录一次** `claude`（守护进程不能碰登录凭证）；用户自己的允许规则、技能、插件都不带过去，要用的得再配一份，两份设置要一起维护；agent 弹出的权限请求会变多；这也就不算“沿用 agent 自己的设置”了。设计第 7.1 节已经留了这个开关（按项目设置），以后哪个项目想要干净环境再单独开。
+- **没选的**：给 agent 单独设 `CLAUDE_CONFIG_DIR`（指向一个干净的配置目录）。代价是用户要再登录一次、允许规则和插件要再配一份、权限请求变多。设计第 7.1 节已经留了这个开关（按项目设置），以后哪个项目想要干净环境再单独开。
 
-**2. 忙时连发的消息：拼成一条，还是一条一条排队？** M0 实测，忙时写进去的消息会被 Claude 合并，模型常常只回应其中一条。
-- **推荐：我们自己拼成一条**，开头写“【用户连发了 N 条】”并编号。用户的补充下一轮就能被看到。
-- 另一个选项：一条一轮，严格排队。回复和消息一一对应，但用户连发 3 条要等 3 轮。
+**2. 忙时连发的消息：拼成一条。** M0 实测，忙时写进去的消息会被 Claude 合并，模型常常只回应其中一条。
+- **结论：我们自己拼成一条**，开头写“【用户连发了 N 条】”并编号。用户的补充下一轮就能被看到。
+- **没选的**：一条一轮，严格排队。回复和消息一一对应，但用户连发 3 条要等 3 轮。
 
-**3. “停止”依赖没写进文档的控制消息。** `interrupt` 控制消息能停下这一轮而不杀进程，但这是 `claude` 命令行内部的标准输入协议，升级后可能变。
-- **推荐：用**，5 秒没回应就退回 `SIGINT`（进程会退出，但会话保留，下次 `--resume`），功能上不会坏，只是慢一点。每次升级 `claude` 后跑 `pnpm smoke` 的 S3。
-- 另一个选项：只用 `SIGINT`。最稳，但每次停止都要重启进程，下一条消息多等几秒。
+**3. “停止”：先用打断控制消息，5 秒没反应就用 `SIGINT`。** `interrupt` 控制消息能停下这一轮而不杀进程，但这是 `claude` 命令行内部的标准输入协议，升级后可能变。
+- **结论：用**，5 秒没回应就退回 `SIGINT`（进程会退出，但会话保留，下次 `--resume`），功能上不会坏，只是慢一点。每次升级 `claude` 后跑 `pnpm smoke` 的 S3。
+- **没选的**：只用 `SIGINT`。最稳，但每次停止都要重启进程，下一条消息多等几秒。
 
-**4. `node:sqlite` 还不是稳定版。** 它在 Node 24.15 起是“候选发布”。
-- **推荐：用**，只在 `store/db.ts` 一个文件里碰它。接口真变了，换 `better-sqlite3` 只改这一个文件。
-- 另一个选项：一开始就用 `better-sqlite3`。最成熟，但它是原生模块，pnpm 10 要手动批准它的安装脚本，Node 升级后可能要重新编译。
+**4. 用 `node:sqlite`，只在一个文件里碰它。** 它在 Node 24.15 起是“候选发布”，还不是稳定版。
+- **结论：用**，只在 `store/db.ts` 一个文件里碰它。接口真变了，换 `better-sqlite3` 只改这一个文件。
+- **没选的**：一开始就用 `better-sqlite3`。最成熟，但它是原生模块，pnpm 10 要手动批准它的安装脚本，Node 升级后可能要重新编译。
 
-**5. M1 的项目经理怎么来。**
-- **推荐：第一次启动自动建一个**，名字“项目经理”，用默认性格设定。新建、改名、改性格设定的页面放到 M2 和项目一起做，M1 专心把“聊天 + 重启不丢”做稳。
-- 另一个选项：M1 就做“新建项目经理”页面。多一块界面和接口，W4、W5 会变大。
+**5. M1 的项目经理：第一次启动自动建一个。**
+- **结论：第一次启动自动建一个**，名字“项目经理”，用默认性格设定。新建、改名、改性格设定的页面放到 M2 和项目一起做，M1 专心把“聊天 + 重启不丢”做稳。
+- **没选的**：M1 就做“新建项目经理”页面。多一块界面和接口，W4、W5 会变大。
 
 [node-rel]: https://github.com/nodejs/Release
 [node-ts]: https://nodejs.org/api/typescript.html
