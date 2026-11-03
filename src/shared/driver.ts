@@ -40,7 +40,7 @@ export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发�
  * 项目经理自己调 hub 改了设置（挂、移除文件夹，改性格设定、模式）时，账本不再单独给它发【系统】消息，靠这一句告诉它
  * 新设置已经生效（见 domain.ts 的 SystemMessageMeta）。
  */
-export const RELAUNCH_NOTE = "【系统】你的设置（文件夹、性格设定或模式）有变化，已经按新设置重新启动，最新的设置见系统提示词。";
+export const RELAUNCH_NOTE = "【系统】你的设置（性格设定、模式、文件夹或管着的项目）刚更新过，已经按新设置重新启动，最新的设置见系统提示词。";
 /** 进程上一轮没等到 result 就退出了（崩溃）：加在下一条写进去的消息前面。 */
 export const CRASH_RECOVERY_NOTE = "【系统】你的进程上一轮意外退出了，那一轮可能没做完。请先看一下工作区现在的状态，再接着做。";
 
@@ -63,7 +63,7 @@ export interface DriverEventBase {
  * 和上次推给网页的比，变了就推，不会漏推。先发事件后写库时，新状态在下一个事件时推出去。
  */
 
-/** 进程起来、收到第一个 system/init。resumed：这次是 --resume。 */
+/** 进程起来、收到第一个 system/init。resumed：这次是 --resume。model：claude 实际报回来的模型（只在这里，不写会话那一行）。 */
 export interface SessionStartedEvent extends DriverEventBase {
   type: "session.started";
   resumed: boolean;
@@ -223,7 +223,7 @@ export interface DriverStartOptions {
  * 两轮之间自动重启（m2-plan 第 6 节第 3 条）：每次要往一个已经在跑、空闲的进程写下一条之前，驱动层先调一次 prepareLaunch，
  * 下面任何一样和这个进程启动时不一样，就关标准输入、等它退出，再用 --resume 起一个新的，然后才写这条：
  * - LaunchFiles.fingerprint；
- * - 会话那一行的 cwd、addDirs、model。
+ * - 会话那一行的 cwd、addDirs、model（model 是配置的模型，驱动层只读不写）。
  * env 不参与比较。正在跑的这一轮不打断，等它结束再比。消息不丢、不重复（还是同一次 send，只是先重启）。
  * 重启时用的是重启前调的那次 prepareLaunch 的结果，不再调第二次。重启后写进去的第一条消息前面加 RELAUNCH_NOTE。
  */

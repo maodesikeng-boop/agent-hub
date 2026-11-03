@@ -107,7 +107,7 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
 - 性格设定正文存在 `pms.persona`（“以数据库为准”要有地方存）；`PersonaChange` 的正文前后叫 `textBefore`、`textAfter`（`before`、`after` 是 SQL 关键字）。新增 `syncPersonaFiles()` 给 W6 在启动时调。
 - 项目经理名字唯一（`UNIQUE`）；`createPm` 的 `pmHomeRoot` 挪到账本的构造参数，`CreatePmInput` 是 `{ name, mode, defaultModel?, persona }`。
 - 令牌：`SessionTokens.issue` 对同一个会话返回同一个令牌，只在会话结束时作废；`revoke` 过的会话再 `issue` 抛错。因为驱动层每次写消息前都会调 `prepareLaunch`，每次换令牌会让正在跑的进程失效。
-- 重启判断：`fingerprint` 只管提示词和设置文件内容；`cwd`、`addDirs`、`model` 由驱动层自己和启动时比；`env` 不参与。
+- 重启判断：`fingerprint` 只管提示词和设置文件内容；`cwd`、`addDirs`、`model` 由驱动层自己和启动时比；`env` 不参与。`model` 那一列只表示配置的模型（账本和界面写，驱动层只读不写）；`claude` 实际报回来的模型只在 `session.started` 事件里。
 - `end`：一调用就拒绝新的 `send`；待发队列里没写的消息丢掉；交接时账本把群里还在排队的消息改指新一代会话，撞上 `session_ended` 的那次处理函数返回 `later`（不算失败、不记 health），下次用新参数。
 - 系统消息：哪条发在哪、要不要也发给 agent、`【系统】` 前缀和 `status` 的规矩，写在 `SystemMessageMeta` 的注释里。
 - `paths.ts` 的 `runDir`、`hubSock`、`hubBinDir`、`personasDir`、`handoffsDir` 在 W0 就加了（W1、W2 都要用），性格设定文件的路径一律用 `personaFilePath`；`PM_PERSONA_TEMPLATE` 只在 `src/shared` 有一份，`prompt.ts` 引用它。

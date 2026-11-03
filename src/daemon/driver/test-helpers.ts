@@ -8,6 +8,7 @@ import type {
   AgentSessionRow,
   DriverEvent,
   DriverOptions,
+  LaunchFiles,
   SessionId,
   SessionStore,
 } from "../../shared/index.ts";
@@ -38,6 +39,12 @@ export class MemorySessionStore implements SessionStore {
     this.rows.set(id, next);
     return next;
   }
+  /** 只给测试用：像账本那样改驱动层不写的列（cwd、addDirs……），不记进 patches。 */
+  set(id: SessionId, patch: Partial<AgentSessionRow>): void {
+    const row = this.rows.get(id);
+    if (!row) throw new Error(`no session ${id}`);
+    this.rows.set(id, { ...row, ...patch });
+  }
   listWithProcess(): AgentSessionRow[] {
     return [...this.rows.values()].filter((r) => r.pid !== null);
   }
@@ -60,6 +67,22 @@ export interface Harness {
   stdinTexts(): string[];
   argvs(): string[][];
   addSession(patch?: Partial<AgentSessionRow>): AgentSessionRow;
+  /**
+   * 默认的 prepareLaunch 每次返回什么（M2）：改这里就是“设置变了”。perSession 按会话覆盖。
+   * settings 为 true 时多写一个 settings.json 并给 settingsFile。
+   */
+  launch: {
+    fingerprint: string;
+    env: Record<string, string>;
+    settings: boolean;
+    /** true：prepareLaunch 抛错。 */
+    fail: boolean;
+    perSession: Map<SessionId, { fingerprint?: string; env?: Record<string, string> }>;
+  };
+  /** prepareLaunch 被调了几次（按会话）。 */
+  prepareCalls: Map<SessionId, number>;
+  /** 某个会话的进程启动时记下的环境变量（按启动先后）。 */
+  envs(sessionId?: SessionId): Array<Record<string, string>>;
   cleanup(): Promise<void>;
 }
 
@@ -78,16 +101,30 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
   const store = new MemorySessionStore();
+  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, perSession: new Map() };
+  const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
     sessionLogsDir: join(dir, "logs", "sessions"),
     store,
     prepareLaunch: async (session) => {
-      const launch = join(dir, "launch", String(session.id));
-      mkdirSync(launch, { recursive: true });
-      writeFileSync(join(launch, "prompt.md"), "你是项目经理。");
-      writeFileSync(join(launch, "mcp.json"), JSON.stringify({ mcpServers: {} }));
-      return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json"), env: {}, fingerprint: "" };
+      prepareCalls.set(session.id, (prepareCalls.get(session.id) ?? 0) + 1);
+      if (launch.fail) throw new Error("prepareLaunch 坏了");
+      const launchDir = join(dir, "launch", String(session.id));
+      mkdirSync(launchDir, { recursive: true });
+      writeFileSync(join(launchDir, "prompt.md"), "你是项目经理。");
+      writeFileSync(join(launchDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+      const files: LaunchFiles = {
+        promptFile: join(launchDir, "prompt.md"),
+        mcpConfigFile: join(launchDir, "mcp.json"),
+        env: { ...launch.env, ...launch.perSession.get(session.id)?.env },
+        fingerprint: launch.perSession.get(session.id)?.fingerprint ?? launch.fingerprint,
+      };
+      if (launch.settings) {
+        files.settingsFile = join(launchDir, "settings.json");
+        writeFileSync(files.settingsFile, "{}");
+      }
+      return files;
     },
     env: { FAKE_CLAUDE_LOG: logFile, FAKE_CLAUDE_SCRIPT: scriptFile, FAKE_CLAUDE_STATE: dir },
     ...options.driver,
@@ -167,6 +204,20 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     stdinTexts,
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [e.argv] : [])),
     addSession,
+    launch,
+    prepareCalls,
+    envs: (sessionId) => {
+      const entries = log();
+      return entries.flatMap((e) => {
+        if (e.kind !== "env") return [];
+        if (sessionId !== undefined) {
+          const argv = entries.find((a) => a.kind === "argv" && a.pid === e.pid);
+          const vendorId = store.get(sessionId)?.vendorSessionId;
+          if (!argv || argv.kind !== "argv" || vendorId === undefined || !argv.argv.includes(vendorId)) return [];
+        }
+        return [e.env];
+      });
+    },
     cleanup: async () => {
       await driver.shutdown();
       if (!options.dir) rmSync(dir, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 // Claude 驱动层（设计第 7.2～7.4 节，按 M0 改过的做法）：每个会话一个官方 claude 进程，
 // 我们这边管待发队列（一轮一条、忙时用户连发拼成一条、写入前校验）、打断、空闲关闭、--session-id / --resume。
+// M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束按进程组。
 // 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
@@ -10,6 +11,7 @@ import {
   DriverError,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
+  RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
@@ -23,6 +25,7 @@ import {
   type DriverSendInput,
   type DriverSendResult,
   type DriverStartOptions,
+  type LaunchFiles,
   type MessageId,
   type MessageSource,
   type SessionExitReason,
@@ -64,7 +67,7 @@ interface PendingEntry {
 interface Batch {
   messageIds: MessageId[];
   line: string;
-  notes: { recovery: boolean; crash: boolean };
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean };
   delivered: boolean;
   processing: boolean;
 }
@@ -85,9 +88,19 @@ type StartupOutcome =
   /** 没等到 init，是我们让它退的。 */
   | { kind: "closed"; reason: ClosingReason };
 
+/** 进程启动时的设置：两轮之间和现在的比，不一样就重启（driver.ts 的“两轮之间自动重启”）。 */
+interface LaunchSnapshot {
+  fingerprint: string;
+  cwd: string;
+  addDirs: string[];
+  /** 启动时会话那一行的 model（配置的模型，账本和界面写，驱动层只读）。 */
+  model: string | null;
+}
+
 interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
+  launched: LaunchSnapshot;
   initSeen: boolean;
   stderr: string;
   /** 我们自己让它退出的原因；null 表示没让它退。 */
@@ -112,6 +125,17 @@ interface SessionState {
   written: Set<MessageId>;
   recoveryNote: boolean;
   crashNote: boolean;
+  /**
+   * 两轮之间因为设置变了重启过：下一条写进去的前面加 RELAUNCH_NOTE。只有 #deliverNext 的重启会标；
+   * 空闲退出或崩溃之后重新起进程不标（崩溃有自己的 CRASH_RECOVERY_NOTE），那时用的本来就是最新设置。
+   */
+  relaunchNote: boolean;
+  /** end 调过了（同步标上）：之后的 start、send 抛 session_ended。 */
+  ended: boolean;
+  /** end 的那个 promise，再调 end 返回同一个。 */
+  ending: Promise<void> | null;
+  /** 等“这一轮结束或进程退出”的（end 用）。 */
+  settleWaiters: Array<() => void>;
   /** 只起进程那次参数选错，下次该用 --resume（true）还是 --session-id（false）；启动成功后才写库。 */
   resumeHint: boolean | null;
   starting: Promise<void> | null;
@@ -155,10 +179,11 @@ export class ClaudeDriver implements Driver {
   async start(sessionId: SessionId, options: DriverStartOptions = {}): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);
-    this.#store(st);
+    this.#assertNotEnded(st);
     if (options.recovery) st.recoveryNote = true;
     for (;;) {
       if (st.starting) return st.starting;
+      this.#assertNotEnded(st);
       const proc = st.proc;
       if (proc?.closing) {
         await proc.exited;
@@ -174,8 +199,11 @@ export class ClaudeDriver implements Driver {
       const batch = this.#takeBatch(st, true);
       if (batch) return this.#runStartup(st, batch, null);
       // 没有要写的：只把进程起起来（M0 实测 init 在每轮开头才出，没消息就等不到 init）
-      const promise: Promise<void> = this.#spawn(st, this.#resumeFor(st))
-        .then((p) => this.#armIdle(st, p))
+      const promise: Promise<void> = this.#spawn(st, this.#resumeFor(st), null)
+        .then((p) => {
+          this.#abortIfStopped(st, p);
+          this.#armIdle(st, p);
+        })
         .finally(() => {
           if (st.starting === promise) st.starting = null;
         });
@@ -187,7 +215,7 @@ export class ClaudeDriver implements Driver {
   async send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult> {
     this.#assertRunning();
     const st = this.#state(sessionId);
-    this.#store(st);
+    this.#assertNotEnded(st);
     const ids = input.messageIds;
     if (ids.length === 0) {
       this.#invalidInput(st, "messageIds 是空的", ids);
@@ -218,13 +246,52 @@ export class ClaudeDriver implements Driver {
     }
     const proc = st.proc;
     if (!proc || !proc.initSeen || proc.closing || st.inFlight) throw new Error(`session ${sessionId} is not idle`);
-    await this.#writeBatch(st, proc, { messageIds, line, notes: { recovery: false, crash: false }, delivered: false, processing: false });
+    await this.#writeBatch(st, proc, {
+      messageIds,
+      line,
+      notes: { recovery: false, crash: false, relaunch: false },
+      delivered: false,
+      processing: false,
+    });
     return { kind: "written" };
   }
 
-  // M2 W0 占位：由 M2 W3 实现
-  async end(sessionId: SessionId): Promise<void> {
-    throw new DriverError("internal_error", `end(${sessionId}): not implemented yet (M2 W3)`);
+  end(sessionId: SessionId): Promise<void> {
+    const st = this.#state(sessionId);
+    if (st.ending) return st.ending;
+    // 同步标上：从这一刻起 start、send 抛 session_ended；待发队列里没写的丢掉
+    st.ended = true;
+    st.pending = [];
+    st.recoveryNote = false;
+    st.crashNote = false;
+    st.relaunchNote = false;
+    this.#clearTimer(st, "idleTimer");
+    st.ending = this.#finishEnd(st);
+    return st.ending;
+  }
+
+  /** 正在跑一轮就等它回完（不打断），然后关标准输入、等进程退出，最后写 ended。 */
+  async #finishEnd(st: SessionState): Promise<void> {
+    for (;;) {
+      if (st.starting) {
+        await st.starting.catch(() => {});
+        continue;
+      }
+      const proc = st.proc;
+      if (proc && st.inFlight && !proc.closing) {
+        await new Promise<void>((resolve) => st.settleWaiters.push(resolve));
+        continue;
+      }
+      break;
+    }
+    const proc = st.proc;
+    if (proc) {
+      this.#clearTimer(st, "idleTimer");
+      if (!proc.closing) this.#closeStdin(proc, "idle");
+      await proc.exited;
+    }
+    this.#update(st, { status: "ended", pid: null });
+    this.#closeLog(st);
   }
 
   async interrupt(sessionId: SessionId): Promise<void> {
@@ -263,7 +330,7 @@ export class ClaudeDriver implements Driver {
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
       if ((await within(all, this.#opts.shutdownGraceMs)) === "timeout") {
-        for (const p of procs) if (p.child.exitCode === null && p.child.signalCode === null) p.child.kill("SIGKILL");
+        for (const p of procs) if (p.child.exitCode === null && p.child.signalCode === null) killGroup(p.child, "SIGKILL");
         await within(all, KILL_WAIT_MS);
       }
     }
@@ -285,14 +352,16 @@ export class ClaudeDriver implements Driver {
     if (pid === null) return;
     // 这一次自己起的进程不算残留
     if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
-    if (await isClaudeOfSession(pid, row.vendorSessionId)) {
+    const pgid = await claudeOfSession(pid, row.vendorSessionId);
+    if (pgid !== null) {
       signalPid(pid, "SIGINT");
       if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
-        signalPid(pid, "SIGKILL");
+        // 只有它自己是进程组长（我们 detached 起的）才按组杀；不是的话按组杀会连累同组的别的进程
+        signalPid(pgid === pid ? -pid : pid, "SIGKILL");
         await waitForExit(pid, KILL_WAIT_MS);
       }
     }
-    this.#update(this.#state(row.id), { pid: null, status: "idle" });
+    this.#update(this.#state(row.id), { pid: null, status: row.status === "ended" ? "ended" : "idle" });
   }
 
   // --- 队列 ---
@@ -309,6 +378,10 @@ export class ClaudeDriver implements Driver {
         written: new Set(),
         recoveryNote: false,
         crashNote: false,
+        relaunchNote: false,
+        ended: false,
+        ending: null,
+        settleWaiters: [],
         resumeHint: null,
         starting: null,
         startTimer: null,
@@ -349,13 +422,17 @@ export class ClaudeDriver implements Driver {
       body = entryText(entry);
       messageIds = entry.messageIds;
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote };
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     if (body === null && !(noteAlone && notes.recovery)) return null;
-    const parts = [notes.recovery ? RESTART_RECOVERY_NOTE : null, notes.crash ? CRASH_RECOVERY_NOTE : null, body].filter(
-      (p): p is string => p !== null,
-    );
+    const parts = [
+      notes.recovery ? RESTART_RECOVERY_NOTE : null,
+      notes.crash ? CRASH_RECOVERY_NOTE : null,
+      notes.relaunch ? RELAUNCH_NOTE : null,
+      body,
+    ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
+    st.relaunchNote = false;
     return { messageIds, line: buildUserLine(parts.join("\n\n")), notes, delivered: false, processing: false };
   }
 
@@ -364,11 +441,14 @@ export class ClaudeDriver implements Driver {
     if (st.inFlight === batch) st.inFlight = null;
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
+    if (batch.notes.relaunch) st.relaunchNote = true;
   }
 
   async #pump(st: SessionState): Promise<void> {
     for (;;) {
       this.#assertRunning();
+      // 等的这一会儿 end 了：这次 send 的消息已经随待发队列丢掉，不能再说“排着”
+      this.#assertNotEnded(st);
       if (st.starting) return;
       const proc = st.proc;
       if (proc?.closing) {
@@ -376,11 +456,55 @@ export class ClaudeDriver implements Driver {
         continue;
       }
       if (proc && st.inFlight) return;
+      if (st.pending.length === 0) return;
+      if (proc) {
+        // 往已经在跑、空闲的进程写之前先比设置；进程在这期间没了就再转一圈（重新起）
+        await this.#deliverNext(st, proc);
+        continue;
+      }
       const batch = this.#takeBatch(st, false);
       if (!batch) return;
-      if (proc && proc.initSeen) return this.#writeBatch(st, proc, batch);
-      return this.#runStartup(st, batch, proc);
+      return this.#runStartup(st, batch, null);
     }
+  }
+
+  /**
+   * 往一个已经在跑、空闲的进程写下一条（driver.ts 的“两轮之间自动重启”）：先调一次 prepareLaunch，设置和这个进程
+   * 启动时一样就直接写；不一样就关标准输入、等它退出，用这次的结果 --resume 起一个新的，前面加 RELAUNCH_NOTE 再写。
+   * 期间占着 st.starting：别的 send 只排队，start 等它。prepareLaunch 出错不重启，照旧写进现在的进程。
+   */
+  #deliverNext(st: SessionState, proc: Proc): Promise<void> {
+    const run = async () => {
+      this.#clearTimer(st, "idleTimer");
+      let files: LaunchFiles | null = null;
+      try {
+        files = await this.#opts.prepareLaunch(this.#store(st));
+      } catch (error) {
+        this.#internalError(st.id, `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`);
+      }
+      this.#assertRunning();
+      if (st.ended || st.proc !== proc || proc.closing) return;
+      const row = files ? this.#row(st) : null;
+      if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
+        this.#closeStdin(proc, "idle");
+        await proc.exited;
+        this.#assertRunning();
+        if (st.ended) return;
+        st.relaunchNote = true;
+        const batch = this.#takeBatch(st, false);
+        if (batch) await this.#startup(st, batch, null, files);
+        return;
+      }
+      const batch = this.#takeBatch(st, false);
+      if (!batch) return;
+      if (proc.initSeen) await this.#writeBatch(st, proc, batch);
+      else await this.#startup(st, batch, proc, null);
+    };
+    const promise: Promise<void> = run().finally(() => {
+      if (st.starting === promise) st.starting = null;
+    });
+    st.starting = promise;
+    return promise;
   }
 
   async #writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
@@ -415,29 +539,39 @@ export class ClaudeDriver implements Driver {
 
   /** 一轮结束（或一行没写成）之后：有排队的就写下一条，没有就开始算空闲。 */
   #afterTurn(st: SessionState, proc: Proc): void {
-    if (st.proc !== proc || proc.closing || this.#shuttingDown) return;
-    const next = this.#takeBatch(st, false);
-    if (next) void this.#writeBatch(st, proc, next);
+    if (st.proc !== proc || proc.closing || this.#shuttingDown || st.ended) return;
+    // 没人等这次写：出错的话消息不在队列里了，执行器下次 send 会重新排
+    if (st.pending.length > 0) void this.#deliverNext(st, proc).catch(() => {});
     else this.#armIdle(st, proc);
+  }
+
+  /** 这一轮结束或进程退出了：叫醒等着的 end。 */
+  #settled(st: SessionState): void {
+    for (const w of st.settleWaiters.splice(0)) w();
   }
 
   #armIdle(st: SessionState, proc: Proc): void {
     this.#clearTimer(st, "idleTimer");
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
-      if (st.proc !== proc || proc.closing || st.inFlight || st.pending.length > 0 || st.starting) return;
-      proc.closing = "idle";
-      proc.child.stdin.end();
-      // 关了标准输入还不退：先 SIGINT，再 SIGKILL
-      const grace = this.#opts.interruptGraceMs;
-      proc.killTimer = setTimeout(() => {
-        proc.child.kill("SIGINT");
-        proc.killTimer = setTimeout(() => {
-          proc.killTimer = null;
-          proc.child.kill("SIGKILL");
-        }, grace);
-      }, grace);
+      if (st.proc !== proc || proc.closing || st.inFlight || st.pending.length > 0 || st.starting || st.ended) return;
+      this.#closeStdin(proc, "idle");
     }, this.#opts.idleCloseMs);
+  }
+
+  /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再给整个进程组 SIGKILL。 */
+  #closeStdin(proc: Proc, reason: ClosingReason): void {
+    proc.closing = reason;
+    proc.child.stdin.end();
+    const grace = this.#opts.interruptGraceMs;
+    clearKillTimer(proc);
+    proc.killTimer = setTimeout(() => {
+      proc.child.kill("SIGINT");
+      proc.killTimer = setTimeout(() => {
+        proc.killTimer = null;
+        killGroup(proc.child, "SIGKILL");
+      }, grace);
+    }, grace);
   }
 
   #sigintForInterrupt(st: SessionState, proc: Proc): void {
@@ -456,6 +590,15 @@ export class ClaudeDriver implements Driver {
 
   /** 起进程（或用已经起来、还没 init 的进程）写第一行，等 init；参数选错换一个重试一次。 */
   #runStartup(st: SessionState, batch: Batch, existing: Proc | null): Promise<void> {
+    const promise: Promise<void> = this.#startup(st, batch, existing, null).finally(() => {
+      if (st.starting === promise) st.starting = null;
+    });
+    st.starting = promise;
+    return promise;
+  }
+
+  /** #runStartup 的本体，不碰 st.starting（#deliverNext 在自己占着的时候直接调）。files：已经调好的 prepareLaunch 结果。 */
+  #startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = batch;
     st.turnInterrupted = false;
     const run = async () => {
@@ -463,7 +606,10 @@ export class ClaudeDriver implements Driver {
       try {
         let resume = proc?.resume ?? this.#resumeFor(st);
         for (let attempt = 0; ; attempt++) {
-          if (!proc) proc = await this.#spawn(st, resume);
+          if (!proc) {
+            proc = await this.#spawn(st, resume, files);
+            this.#abortIfStopped(st, proc);
+          }
           this.#clearTimer(st, "idleTimer");
           st.inFlight = batch;
           proc.child.stdin.write(batch.line + "\n");
@@ -488,11 +634,19 @@ export class ClaudeDriver implements Driver {
         throw error;
       }
     };
-    const promise: Promise<void> = run().finally(() => {
-      if (st.starting === promise) st.starting = null;
-    });
-    st.starting = promise;
-    return promise;
+    return run();
+  }
+
+  /**
+   * 刚 spawn 好、还没往里写东西的这一刻，end 或关机可能已经发生（等 spawn 的时候、写库时）：
+   * end 了就关标准输入让它退出，抛 session_ended；关机了交给 shutdown（它已经看到这个进程），抛 spawn_failed。
+   * 抛出去由外层 dropBatch，那一行没写。
+   */
+  #abortIfStopped(st: SessionState, proc: Proc): void {
+    this.#assertRunning();
+    if (!st.ended) return;
+    if (!proc.closing) this.#closeStdin(proc, "idle");
+    throw new DriverError("session_ended", `session ${st.id} has been ended`);
   }
 
   #armStartTimer(st: SessionState, proc: Proc): void {
@@ -501,24 +655,31 @@ export class ClaudeDriver implements Driver {
       st.startTimer = null;
       if (st.proc !== proc || proc.initSeen) return;
       proc.startTimedOut = true;
-      proc.child.kill("SIGKILL");
+      killGroup(proc.child, "SIGKILL");
     }, this.#opts.startTimeoutMs);
   }
 
-  async #spawn(st: SessionState, resume: boolean): Promise<Proc> {
-    const row = this.#store(st);
-    let files;
-    try {
-      files = await this.#opts.prepareLaunch(row);
-    } catch (error) {
-      throw new DriverError("spawn_failed", `prepareLaunch failed: ${errorMessage(error)}`);
+  /** prepared：两轮之间重启时已经调好的 prepareLaunch 结果（不再调第二次）；null 就现调。 */
+  async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
+    let row = this.#store(st);
+    let files = prepared;
+    if (!files) {
+      try {
+        files = await this.#opts.prepareLaunch(row);
+      } catch (error) {
+        throw new DriverError("spawn_failed", `prepareLaunch failed: ${errorMessage(error)}`);
+      }
+      row = this.#store(st);
     }
     this.#assertRunning();
+    this.#assertNotEnded(st);
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
+    // detached：claude 在自己的进程组里（进程组号 = 它的 pid），强制结束时连它起的子进程一起结束
     const child = spawn(this.#opts.claudePath, buildClaudeArgs(row, files, resume), {
       cwd: row.cwd,
-      env: buildChildEnv(process.env, this.#opts.env),
+      env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
     try {
       await new Promise<void>((resolve, reject) => {
@@ -532,7 +693,7 @@ export class ClaudeDriver implements Driver {
     }
     // 等 spawn 的这一会儿可能已经开始关机：shutdown 看不到这个进程，自己结束它
     if (this.#shuttingDown) {
-      child.kill("SIGKILL");
+      killGroup(child, "SIGKILL");
       this.#assertRunning();
     }
     let resolveReady!: (o: StartupOutcome) => void;
@@ -540,6 +701,7 @@ export class ClaudeDriver implements Driver {
     const proc: Proc = {
       child,
       resume,
+      launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model },
       initSeen: false,
       stderr: "",
       closing: null,
@@ -572,6 +734,9 @@ export class ClaudeDriver implements Driver {
     // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
+      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：确认退出的这一刻给它原来的进程组补一个 SIGTERM，
+      // 清掉它留下的子进程。只这一次，不延迟再发，免得进程号被复用后误杀。
+      if (proc.closing === "idle" && child.pid !== undefined) signalPid(-child.pid, "SIGTERM");
       const timer = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();
@@ -657,7 +822,8 @@ export class ClaudeDriver implements Driver {
     this.#clearTimer(st, "startTimer");
     const model = typeof obj.model === "string" ? obj.model : null;
     const tools = Array.isArray(obj.tools) ? obj.tools.filter((t): t is string => typeof t === "string") : [];
-    const patch: AgentSessionPatch = { status: "running", model, lastEventAt: at };
+    // 报回来的模型只放进 session.started；会话那一行的 model 是配置的模型（可能是 opus 这种别名），驱动层不写
+    const patch: AgentSessionPatch = { status: "running", lastEventAt: at };
     // 参数选错后换了一个才起来：这时才把用哪个参数写进库
     const row = this.#row(st);
     if (row && row.hasCompletedTurn !== proc.resume) patch.hasCompletedTurn = proc.resume;
@@ -695,6 +861,7 @@ export class ClaudeDriver implements Driver {
     this.#emit(st.id, event);
     this.#resolveInterrupt(st);
     this.#afterTurn(st, proc);
+    this.#settled(st);
   }
 
   #onClose(st: SessionState, proc: Proc, code: number | null, signal: NodeJS.Signals | null, resolveExited: () => void): void {
@@ -741,6 +908,7 @@ export class ClaudeDriver implements Driver {
     } finally {
       this.#resolveInterrupt(st);
       resolveExited();
+      this.#settled(st);
     }
   }
 
@@ -804,8 +972,8 @@ export class ClaudeDriver implements Driver {
     if (st.logBroken) return;
     try {
       if (st.logFd === null) {
-        mkdirSync(this.#opts.sessionLogsDir, { recursive: true });
-        st.logFd = openSync(join(this.#opts.sessionLogsDir, `${st.id}.jsonl`), "a");
+        mkdirSync(this.#opts.sessionLogsDir, { recursive: true, mode: 0o700 });
+        st.logFd = openSync(join(this.#opts.sessionLogsDir, `${st.id}.jsonl`), "a", 0o600);
       }
       writeSync(st.logFd, line + "\n");
     } catch (error) {
@@ -852,6 +1020,13 @@ export class ClaudeDriver implements Driver {
 
   #assertRunning(): void {
     if (this.#shuttingDown) throw new DriverError("spawn_failed", "driver is shutting down");
+  }
+
+  /** end 调过了，或者库里已经是 ended（上次守护进程结束的）：抛 session_ended，不起进程、不调 prepareLaunch。 */
+  #assertNotEnded(st: SessionState): void {
+    if (st.ended || this.#store(st).status === "ended") {
+      throw new DriverError("session_ended", `session ${st.id} has been ended`);
+    }
   }
 }
 
@@ -908,15 +1083,47 @@ async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "
   }
 }
 
-/** 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。 */
-function isClaudeOfSession(pid: number, vendorSessionId: string): Promise<boolean> {
+/**
+ * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
+ * 是的话返回它的进程组号，不是（或者不在了）返回 null。
+ */
+function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-o", "command=", "-p", String(pid)], (error, stdout) => {
-      if (error) return resolve(false); // 进程不在了：ps 退出码 1
-      const command = stdout.trim();
-      resolve(/claude/i.test(command) && command.includes(vendorSessionId));
+    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], (error, stdout) => {
+      if (error) return resolve(null); // 进程不在了：ps 退出码 1
+      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+      if (!match) return resolve(null);
+      const command = match[2]!;
+      resolve(/claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null);
     });
   });
+}
+
+/** 会话那一行（cwd、addDirs、model）或 fingerprint 和进程启动时不一样。env 不算。 */
+function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
+  return (
+    launched.fingerprint !== fingerprint ||
+    launched.cwd !== row.cwd ||
+    launched.model !== row.model ||
+    launched.addDirs.length !== row.addDirs.length ||
+    launched.addDirs.some((d, i) => d !== row.addDirs[i])
+  );
+}
+
+/** 给 claude 所在的整个进程组发信号（它是 detached 起的，进程组号就是它的 pid）；发不了就只发给它本身。 */
+function killGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  // 已经退出了：进程号可能被复用，不再发
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const pid = child.pid;
+  if (pid !== undefined) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // 进程组已经没了，或者不是组长：退回只发给它本身
+    }
+  }
+  child.kill(signal);
 }
 
 function isAlive(pid: number): boolean {

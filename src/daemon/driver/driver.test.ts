@@ -121,7 +121,7 @@ describe("一轮正常", () => {
     expect(t.of("turn.ended")[0]!.error).toBeUndefined();
     expect(t.stdinTexts()).toEqual(["介绍一下你自己"]);
     const row = t.store.get(s.id)!;
-    expect(row).toMatchObject({ status: "running", hasCompletedTurn: true, model: "claude-haiku-5-5" });
+    expect(row).toMatchObject({ status: "running", hasCompletedTurn: true, model: null });
     expect(row.pid).toBeGreaterThan(0);
     expect(row.lastEventAt).not.toBeNull();
   });
@@ -1066,7 +1066,7 @@ describe("其他输入输出", () => {
     await t.driver.send(s.id, user(1, "hi"));
     await t.waitFor("session.exited");
     expect(seen).toEqual({
-      started: { status: "running", hasPid: true, model: "claude-haiku-5-5" },
+      started: { status: "running", hasPid: true, model: null },
       rateLimit: "allowed",
       turn: true,
       exited: { status: "idle", pid: null },
