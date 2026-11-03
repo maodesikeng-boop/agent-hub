@@ -1,16 +1,18 @@
 // agent 消息按 Markdown 渲染；用户和系统消息保持纯文本；左栏预览去掉 Markdown 符号。
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { MessageBubble } from "./components/Messages.tsx";
+import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import type { ConversationEntry } from "./selectors.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 import { stripMarkdown } from "./plainText.ts";
 
 const identity = { name: "小林", avatarKey: 1 };
+const actions: MessageActions = { retry: {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
+const sidebarProps = { onNewPm: () => {}, onNewProject: () => {} };
 
 function agentSays(text: string) {
-  return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head />);
+  return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head actions={actions} />);
 }
 
 describe("agent 消息的 Markdown", () => {
@@ -80,7 +82,7 @@ describe("agent 消息的 Markdown", () => {
 describe("用户消息和系统消息保持纯文本", () => {
   it("用户消息里的 ** 原样显示，不渲染", () => {
     const { container } = render(
-      <MessageBubble message={makeUserMessage({ id: 2, text: "**别渲染** `code` [a](https://x.y)" })} identity={identity} head />,
+      <MessageBubble message={makeUserMessage({ id: 2, text: "**别渲染** `code` [a](https://x.y)" })} identity={identity} head actions={actions} />,
     );
     expect(container).toHaveTextContent("**别渲染** `code` [a](https://x.y)");
     expect(container.querySelector("strong, code, a")).toBeNull();
@@ -88,7 +90,7 @@ describe("用户消息和系统消息保持纯文本", () => {
 
   it("系统消息原样显示", () => {
     const { container } = render(
-      <MessageBubble message={makeMessage({ id: 3, sender: "system", text: "**已建工单**" })} identity={identity} head />,
+      <MessageBubble message={makeMessage({ id: 3, sender: "system", text: "**已建工单**" })} identity={identity} head actions={actions} />,
     );
     expect(container).toHaveTextContent("**已建工单**");
     expect(container.querySelector("strong")).toBeNull();
@@ -114,11 +116,11 @@ describe("stripMarkdown", () => {
 
 describe("左栏预览", () => {
   function entry(text: string): ConversationEntry {
-    return { id: 1, name: "小林", avatarKey: 1, lastMessage: makeMessage({ id: 9, text }), lastAt: 1 };
+    return { id: 1, kind: "pm", name: "小林", avatarKey: 1, lastMessage: makeMessage({ id: 9, text }), lastAt: 1, pm: null, project: null, folders: [] };
   }
 
   it("agent 的最后一条消息去掉 Markdown 符号", () => {
-    render(<Sidebar entries={[entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)")]} activeId={1} onSelect={() => {}} />);
+    render(<Sidebar entries={[entry("原因找到了：**ack** 发早了，见 [文档](https://x.y)")]} activeId={1} onSelect={() => {}} {...sidebarProps} />);
     const button = screen.getByRole("button", { name: /小林/ });
     expect(button).toHaveTextContent("原因找到了：ack 发早了，见 文档");
     expect(button).not.toHaveTextContent("**");
@@ -128,7 +130,7 @@ describe("左栏预览", () => {
   it("用户发的最后一条消息也按原文显示（不是 Markdown）", () => {
     const e = entry("我写了 **两个** 星号");
     e.lastMessage = makeUserMessage({ id: 9, text: "我写了 **两个** 星号" });
-    render(<Sidebar entries={[e]} activeId={1} onSelect={() => {}} />);
+    render(<Sidebar entries={[e]} activeId={1} onSelect={() => {}} {...sidebarProps} />);
     expect(screen.getByRole("button", { name: /小林/ })).toHaveTextContent("我写了 **两个** 星号");
   });
 });
