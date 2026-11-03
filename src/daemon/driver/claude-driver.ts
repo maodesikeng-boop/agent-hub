@@ -2,10 +2,9 @@
 // 我们这边管待发队列（一轮一条、忙时用户连发拼成一条、写入前校验）、打断、空闲关闭、--session-id / --resume。
 // M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束按进程组。
 // 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import type { Readable } from "node:stream";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
@@ -17,7 +16,6 @@ import {
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
-  STALE_POLL_MS,
   STDERR_TAIL_CHARS,
   START_TIMEOUT_MS,
   STDIO_DRAIN_MS,
@@ -49,6 +47,7 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
+import { claudeOfSession, killGroup, signalPid, streamClosed, waitForExit } from "./process.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -1059,13 +1058,6 @@ function clearKillTimer(proc: Proc): void {
   proc.killTimer = null;
 }
 
-function streamClosed(stream: Readable): Promise<void> {
-  return new Promise((resolve) => {
-    if (stream.closed) resolve();
-    else stream.once("close", () => resolve());
-  });
-}
-
 /** 等 promise，最多 ms 毫秒。 */
 async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "timeout"> {
   let timer: NodeJS.Timeout | undefined;
@@ -1079,22 +1071,6 @@ async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "
   }
 }
 
-/**
- * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
- * 是的话返回它的进程组号，不是（或者不在了）返回 null。
- */
-function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], (error, stdout) => {
-      if (error) return resolve(null); // 进程不在了：ps 退出码 1
-      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-      if (!match) return resolve(null);
-      const command = match[2]!;
-      resolve(/claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null);
-    });
-  });
-}
-
 /** 会话那一行（cwd、addDirs、model）或 fingerprint 和进程启动时不一样。env 不算。 */
 function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
   return (
@@ -1104,46 +1080,4 @@ function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerpri
     launched.addDirs.length !== row.addDirs.length ||
     launched.addDirs.some((d, i) => d !== row.addDirs[i])
   );
-}
-
-/** 给 claude 所在的整个进程组发信号（它是 detached 起的，进程组号就是它的 pid）；发不了就只发给它本身。 */
-function killGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  // 已经退出了：进程号可能被复用，不再发
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const pid = child.pid;
-  if (pid !== undefined) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // 进程组已经没了，或者不是组长：退回只发给它本身
-    }
-  }
-  child.kill(signal);
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function signalPid(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // 已经不在了
-  }
-}
-
-async function waitForExit(pid: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (isAlive(pid)) {
-    if (Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, STALE_POLL_MS));
-  }
-  return true;
 }
