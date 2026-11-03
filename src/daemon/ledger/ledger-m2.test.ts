@@ -664,4 +664,19 @@ describe("getLaunchContext", () => {
     expect(ledger.getLaunchContext(lin.sessionId).pm.persona).toBe(PM_PERSONA_TEMPLATE);
     expectLedgerError(() => ledger.getLaunchContext(999), "not_found");
   });
+
+  it("其他文件夹、管着的项目按编号排，顺序固定（不按路径、名字），免得无端触发重启", () => {
+    hub(zhou.sessionId, "project.create", { name: "mm", folder: folder("mm") });
+    createFoo("zz");
+    createFoo("aa");
+    const z = folder("z-extra");
+    const a = folder("a-extra");
+    hub(lin.sessionId, "project.attach", { project: "zz", folder: z });
+    hub(lin.sessionId, "project.attach", { project: "zz", folder: a });
+    hub(zhou.sessionId, "project.assign", { project: "mm", to: "小林", handoff: "给你了" });
+    const first = ledger.getLaunchContext(lin.sessionId);
+    expect(first.managedProjects.map((p) => p.name)).toEqual(["mm", "zz", "aa"]);
+    expect(first.managedProjects.find((p) => p.name === "zz")!.otherFolders).toEqual([z, a]);
+    expect(ledger.getLaunchContext(lin.sessionId)).toEqual(first);
+  });
 });

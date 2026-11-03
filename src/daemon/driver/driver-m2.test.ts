@@ -1,11 +1,11 @@
 // 驱动层 M2：m2-plan 第 4 节“W3 驱动层 + 提示词 + 假 claude”测试表里驱动层的那几条，外加第 6 节第 4 条的进程组。
 // 提示词那几条在 src/daemon/prompt.test.ts，假 claude 自己的在 test/fake-claude/fake-claude.test.ts。
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { ChildProcess, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DriverError, RELAUNCH_NOTE } from "../../shared/index.ts";
+import { DriverError, RELAUNCH_NOTE, type AgentSessionPatch } from "../../shared/index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
 
 vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
@@ -64,6 +64,23 @@ async function childPid(t: Harness): Promise<number> {
   }
   throw new Error("fake claude never spawned its child");
 }
+
+/** 包住 store.update：第一个满足 pred 的 patch 写进去之后调一次 fn（只调一次）。 */
+function onPatch(t: Harness, pred: (p: AgentSessionPatch) => boolean, fn: () => void): void {
+  const update = t.store.update.bind(t.store);
+  let fired = false;
+  t.store.update = (id, patch) => {
+    const row = update(id, patch);
+    if (!fired && pred(patch)) {
+      fired = true;
+      fn();
+    }
+    return row;
+  };
+}
+
+/** 下一个带 pid（不是 null）的 patch 之后调 fn：进程刚 spawn 好，还没往里写东西。 */
+const onFirstPid = (t: Harness, fn: () => void) => onPatch(t, (p) => p.pid !== undefined && p.pid !== null, fn);
 
 const kinds = (t: Harness) => t.log().map((e) => `${e.kind}:${e.pid}`);
 const pids = (t: Harness) => [...new Set(t.log().flatMap((e) => (e.kind === "argv" ? [e.pid] : [])))];
@@ -277,15 +294,50 @@ describe("没变不重启", () => {
     expect(t.of("session.exited")).toEqual([]);
   });
 
-  it("会话那一行的 model 是 init 报回来写进去的：不算变了", async () => {
+  it("init 报回来的模型只放在 session.started 里，不写会话那一行：不算变了", async () => {
     const t = harness({ script: { model: "claude-test-model" } });
     const s = t.addSession({ model: null });
     await t.driver.send(s.id, user(1, "一"));
     await t.waitFor("turn.ended");
-    expect(t.store.get(s.id)?.model).toBe("claude-test-model");
+    expect(t.of("session.started")[0]).toMatchObject({ model: "claude-test-model" });
+    expect(t.store.get(s.id)?.model).toBeNull();
+    expect(t.store.patches.some((p) => "model" in p.patch)).toBe(false);
     await t.driver.send(s.id, user(2, "二"));
     await t.waitFor("turn.ended", undefined, 2);
     expect(pids(t)).toHaveLength(1);
+  });
+});
+
+describe("model 那一列只是配置的模型", () => {
+  it("配置成别名 opus：跑一轮后那一列还是 opus，重启时传的仍是 --model opus", async () => {
+    const t = harness({ script: { model: "claude-opus-5-5" } });
+    const s = t.addSession({ model: "opus" });
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    expect(t.of("session.started")[0]).toMatchObject({ model: "claude-opus-5-5" });
+    expect(t.store.get(s.id)?.model).toBe("opus");
+    t.launch.fingerprint = "v2";
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    const argvs = t.argvs();
+    expect(argvs).toHaveLength(2);
+    for (const argv of argvs) expect(argv[argv.indexOf("--model") + 1]).toBe("opus");
+    expect(t.store.get(s.id)?.model).toBe("opus");
+  });
+
+  it("spawn 到 init 之间改了模型：改动不丢，下一轮之前按新模型重启", async () => {
+    const t = harness({ script: { model: "claude-opus-5-5" } });
+    const s = t.addSession({ model: "opus" });
+    onFirstPid(t, () => t.store.set(s.id, { model: "sonnet" }));
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)?.model).toBe("sonnet");
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(pids(t)).toHaveLength(2);
+    const argv = t.argvs()[1]!;
+    expect(argv[argv.indexOf("--model") + 1]).toBe("sonnet");
+    expect(t.stdinTexts()).toEqual(["一", `${RELAUNCH_NOTE}\n\n二`]);
   });
 });
 
@@ -314,6 +366,11 @@ describe("结束会话", () => {
     await t.driver.send(s.id, user(1, "一"));
     await expect(t.driver.send(s.id, user(2, "排着的"))).resolves.toEqual({ kind: "queued" });
     await t.waitFor("message.processing");
+    // turn.ended 出来的那一刻，标准输入还没关
+    let closedBeforeTurnEnded: boolean | undefined;
+    t.driver.onEvent((_id, e) => {
+      if (e.type === "turn.ended") closedBeforeTurnEnded = t.log().some((x) => x.kind === "stdin_closed");
+    });
     let ended = false;
     const ending = t.driver.end(s.id).then(() => (ended = true));
     const error = await t.driver.send(s.id, user(3, "end 之后")).catch((e: unknown) => e);
@@ -326,6 +383,7 @@ describe("结束会话", () => {
     expect(t.of("turn.ended")).toEqual([expect.objectContaining({ messageIds: [1], ok: true, interrupted: false })]);
     expect(signals(t)).toEqual([]);
     expect(t.log().some((e) => e.kind === "stdin_closed")).toBe(true);
+    expect(closedBeforeTurnEnded).toBe(false);
     expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "idle", messageIds: [] })]);
     // 待发队列里的丢掉，没写
     expect(t.stdinTexts()).toEqual(["一"]);
@@ -356,6 +414,207 @@ describe("结束会话", () => {
     expect(t.argvs()).toEqual([]);
     expect(t.of("message.delivered")).toEqual([]);
     expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+  });
+});
+
+describe("end 撞上起进程、崩溃、重启", () => {
+  it("首次启动：spawn 之后、写消息之前 end：send 抛 session_ended，什么都没写进进程", async () => {
+    const t = harness();
+    const s = t.addSession();
+    let ending: Promise<void> | undefined;
+    onFirstPid(t, () => (ending = t.driver.end(s.id)));
+    await expect(t.driver.send(s.id, user(1, "一"))).rejects.toMatchObject({ code: "session_ended" });
+    await ending;
+    expect(t.argvs()).toHaveLength(1);
+    expect(t.stdinTexts()).toEqual([]);
+    expect(t.of("message.delivered")).toEqual([]);
+    expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+  });
+
+  it("两轮之间重启：新进程 spawn 之后、写消息之前 end：send 抛 session_ended，新进程什么都没收到", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    t.launch.fingerprint = "v2";
+    let ending: Promise<void> | undefined;
+    onFirstPid(t, () => (ending = t.driver.end(s.id)));
+    await expect(t.driver.send(s.id, user(2, "二"))).rejects.toMatchObject({ code: "session_ended" });
+    await ending;
+    expect(pids(t)).toHaveLength(2);
+    expect(t.stdinTexts()).toEqual(["一"]);
+    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+    expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+  });
+
+  it("两轮之间重启：旧进程刚退出就 end：send 抛 session_ended，不起新进程", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    t.launch.fingerprint = "v2";
+    let ending: Promise<void> | undefined;
+    onPatch(t, (p) => p.pid === null, () => (ending = t.driver.end(s.id)));
+    await expect(t.driver.send(s.id, user(2, "二"))).rejects.toMatchObject({ code: "session_ended" });
+    await ending;
+    expect(pids(t)).toHaveLength(1);
+    expect(t.stdinTexts()).toEqual(["一"]);
+    expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+  });
+
+  it("start() 只起进程、正在起的时候 end：start 抛 session_ended，进程被关掉，最后 ended", async () => {
+    const t = harness({ driver: { idleCloseMs: 50 } });
+    const s = t.addSession();
+    let ending: Promise<void> | undefined;
+    onFirstPid(t, () => (ending = t.driver.end(s.id)));
+    await expect(t.driver.start(s.id)).rejects.toMatchObject({ code: "session_ended" });
+    await ending;
+    expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "idle", messageIds: [] })]);
+    expect(t.stdinTexts()).toEqual([]);
+    await realSleep(150);
+    expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+    expect(t.of("session.exited")).toHaveLength(1);
+  });
+
+  it("一轮中 end，这一轮进程崩溃：end 照样完成（ended），不重启，崩溃那一轮的消息随 session.exited(crash) 带出", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ sleepMs: 300 }, { exit: 1 }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("message.processing");
+    await t.driver.end(s.id);
+    expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "crash", messageIds: [1], hadResult: false })]);
+    expect(t.of("turn.ended")).toEqual([]);
+    expect(pids(t)).toHaveLength(1);
+    expect(t.store.get(s.id)).toMatchObject({ status: "ended", pid: null });
+    await expect(t.driver.send(s.id, user(2, "二"))).rejects.toMatchObject({ code: "session_ended" });
+  });
+});
+
+describe("关机撞上起进程", () => {
+  it("两轮之间重启：新进程 spawn 之后、写消息之前关机：send 抛可重试的错，新进程什么都没收到", async () => {
+    // 关机先发的那一下 SIGINT 吞掉：新进程还活着，真写了东西它就会记下来；宽限期到了再按进程组 SIGKILL
+    const realKill = ChildProcess.prototype.kill;
+    const spy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(function (this: ChildProcess, sig?: NodeJS.Signals | number) {
+      return sig === "SIGINT" ? true : realKill.call(this, sig);
+    });
+    try {
+      const t = harness({ driver: { shutdownGraceMs: 500 } });
+      const s = t.addSession();
+      await t.driver.send(s.id, user(1, "一"));
+      await t.waitFor("turn.ended");
+      t.launch.fingerprint = "v2";
+      let stopping: Promise<void> | undefined;
+      onFirstPid(t, () => (stopping = t.driver.shutdown()));
+      await expect(t.driver.send(s.id, user(2, "二"))).rejects.toMatchObject({ code: "spawn_failed", retryable: true });
+      await stopping;
+      expect(pids(t)).toHaveLength(2);
+      expect(t.stdinTexts()).toEqual(["一"]);
+      expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+      expect(t.store.get(s.id)?.pid).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("#spawn 等 spawn 事件的这段时间里关机：按进程组 SIGKILL 刚起的进程", async () => {
+    const kills: Array<[number, string | number | undefined]> = [];
+    const realKill = process.kill.bind(process);
+    const spy = vi.spyOn(process, "kill").mockImplementation((pid: number, sig?: string | number) => {
+      kills.push([pid, sig]);
+      return realKill(pid, sig);
+    });
+    try {
+      let driverRef: Harness["driver"] | undefined;
+      const t = harness({
+        driver: {
+          prepareLaunch: async (session) => {
+            const dir = join(h!.dir, "launch", String(session.id));
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(join(dir, "prompt.md"), "你是项目经理。");
+            writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+            return {
+              promptFile: join(dir, "prompt.md"),
+              mcpConfigFile: join(dir, "mcp.json"),
+              fingerprint: "",
+              // 拼环境变量（spawn 之前）时排一个 nextTick 关机：它在 spawn 事件之前跑
+              get env() {
+                process.nextTick(() => void driverRef!.shutdown());
+                return {};
+              },
+            };
+          },
+        },
+      });
+      driverRef = t.driver;
+      const s = t.addSession();
+      await expect(t.driver.send(s.id, user(1, "一"))).rejects.toMatchObject({ code: "spawn_failed" });
+      expect(kills.some(([pid, sig]) => pid < 0 && sig === "SIGKILL")).toBe(true);
+      expect(t.store.get(s.id)?.pid ?? null).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("孤儿子进程", () => {
+  it("end 之后：剧本起的睡眠子进程也不在了（确认 claude 退出后给它原来的进程组补一个 SIGTERM）", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const child = await childPid(t);
+    await t.waitFor("turn.ended");
+    expect(alive(child)).toBe(true);
+    await t.driver.end(s.id);
+    expect(await goneWithin(child)).toBe(true);
+    expect(signals(t)).toEqual([]);
+  });
+
+  it("两轮之间重启之后：旧进程起的睡眠子进程也不在了", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    const child = await childPid(t);
+    await t.waitFor("turn.ended");
+    t.launch.fingerprint = "v2";
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(await goneWithin(child)).toBe(true);
+  });
+
+  it("空闲关闭之后：睡眠子进程也不在了", async () => {
+    const t = harness({ driver: { idleCloseMs: 50 }, script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const child = await childPid(t);
+    await t.waitFor("session.exited");
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "idle", signal: null });
+    expect(await goneWithin(child)).toBe(true);
+  });
+});
+
+describe("空闲退出、崩溃后重新起进程", () => {
+  it("空闲退出后设置变了再发：照常起新进程，不加 RELAUNCH_NOTE", async () => {
+    const t = harness({ driver: { idleCloseMs: 50 } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("session.exited");
+    t.launch.fingerprint = "v2";
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinTexts()).toEqual(["一", "二"]);
+  });
+});
+
+describe("会话日志的权限", () => {
+  it("logs/ 和 logs/sessions/ 是 0700，会话日志文件是 0600", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    const mode = (p: string) => statSync(p).mode & 0o777;
+    expect(mode(join(t.dir, "logs"))).toBe(0o700);
+    expect(mode(join(t.dir, "logs", "sessions"))).toBe(0o700);
+    expect(mode(join(t.dir, "logs", "sessions", `${s.id}.jsonl`))).toBe(0o600);
   });
 });
 

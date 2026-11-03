@@ -265,6 +265,11 @@ describe("M2：枚举", () => {
     expect(PM_PERSONA_TEMPLATE.trim().length).toBeGreaterThan(0);
     expect(new TextEncoder().encode(PM_PERSONA_TEMPLATE).length).toBeLessThan(MAX_PERSONA_BYTES);
   });
+
+  it("性格设定模板不替模式做主：不叫它“动手或给建议”，把怎么推进交给默认做法", () => {
+    expect(PM_PERSONA_TEMPLATE).not.toContain("再动手或给建议");
+    expect(PM_PERSONA_TEMPLATE).toContain("默认做法");
+  });
 });
 
 describe("M2：名字", () => {
@@ -509,6 +514,12 @@ describe("M2：系统消息的去重键", () => {
 describe("M2：两轮之间自动重启", () => {
   it("重启后下一条消息前加的说明以【系统】开头", () => {
     expect(RELAUNCH_NOTE.startsWith(SYSTEM_MESSAGE_PREFIX)).toBe(true);
+  });
+
+  it("重启说明说得通用：设置刚更新过、已经按新设置重新启动，不只列文件夹", () => {
+    expect(RELAUNCH_NOTE).toContain("刚更新过");
+    expect(RELAUNCH_NOTE).toContain("已经按新设置重新启动");
+    for (const what of ["性格设定", "模式", "文件夹", "管着的项目"]) expect(RELAUNCH_NOTE).toContain(what);
   });
 
   it("指纹只看内容：同样的输入两次算出来一样，任何一样变了就不一样", () => {

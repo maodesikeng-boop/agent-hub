@@ -221,8 +221,8 @@ describe("SessionStore", () => {
 
       t = 2_000;
       const rateLimit = { status: "allowed", resetsAt: 123, windows: { five_hour: { utilization: 0.5, resetsAt: 123, status: "allowed" } } };
-      const updated = store.update(id, { pid: 4321, status: "running", hasCompletedTurn: true, lastEventAt: 1_999, rateLimit, model: "opus" });
-      expect(updated).toMatchObject({ pid: 4321, status: "running", hasCompletedTurn: true, lastEventAt: 1_999, rateLimit, model: "opus", updatedAt: 2_000, generation: 1 });
+      const updated = store.update(id, { pid: 4321, status: "running", hasCompletedTurn: true, lastEventAt: 1_999, rateLimit });
+      expect(updated).toMatchObject({ pid: 4321, status: "running", hasCompletedTurn: true, lastEventAt: 1_999, rateLimit, updatedAt: 2_000, generation: 1 });
       expect(store.get(id)).toEqual(updated);
       expect(store.listWithProcess().map((r) => r.id)).toEqual([id]);
 

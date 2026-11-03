@@ -58,7 +58,6 @@ const PATCH_COLUMNS: { [K in keyof Required<AgentSessionPatch>]: (value: AgentSe
   hasCompletedTurn: (v) => ["has_completed_turn", v ? 1 : 0],
   lastEventAt: (v) => ["last_event_at", v ?? null],
   rateLimit: (v) => ["rate_limit", v == null ? null : JSON.stringify(v)],
-  model: (v) => ["model", v ?? null],
 };
 
 export interface SessionStoreOptions {

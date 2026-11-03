@@ -108,7 +108,7 @@ export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
 export const HUB_USAGE_PROMPT = `# 系统命令 hub
 
 agent-hub 的事（建项目、挂文件夹、交接、改自己的习惯）都通过 \`hub\` 命令做。
-- 直接在 shell 里敲 \`hub ...\`。**不要在命令里写 \`$HUB_TOKEN\`、\`$HUB_SOCK\` 之类的变量**，也不要自己设它们：hub 自己从环境变量里读，命令里出现变量会被权限检查拒绝。
+- 直接在 shell 里敲 \`hub ...\`。**不要在命令里写任何环境变量**，也不要自己设它们：hub 会自己读，命令里出现变量会被权限检查拒绝。
 - \`hub status\`：我是谁、在哪个对话、管哪些项目（含各项目的文件夹）。
 - \`hub pm list\`：所有项目经理和各自管的项目。
 - \`hub project create --name <项目名> --folder <文件夹路径> [--description <一句话说明>]\`：建项目，会多一个这个项目的群。文件夹必须已经存在；不存在时如实告诉用户，请用户先建好。

@@ -2,9 +2,11 @@
 import type { AgentSessionRow, SessionId } from "./domain.ts";
 
 /** 驱动层只改这些列。generation 不在里面：开新会话（第几代加一）是账本的事，M1 用不到。 */
-export type AgentSessionPatch = Partial<
-  Pick<AgentSessionRow, "pid" | "status" | "hasCompletedTurn" | "lastEventAt" | "rateLimit" | "model">
->;
+/**
+ * 驱动层能改的列。不含 model：那一列只表示配置的模型（账本和界面写，驱动层只读），
+ * claude 实际报回来的模型只在 session.started 事件里。
+ */
+export type AgentSessionPatch = Partial<Pick<AgentSessionRow, "pid" | "status" | "hasCompletedTurn" | "lastEventAt" | "rateLimit">>;
 
 export interface SessionStore {
   get(id: SessionId): AgentSessionRow | null;

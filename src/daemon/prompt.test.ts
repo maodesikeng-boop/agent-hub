@@ -169,7 +169,10 @@ describe("提示词：群", () => {
   });
 
   it("hub 用法写明直接敲 hub、不要在命令里写变量；长文本用 --stdin heredoc；列出 M2 的全部子命令", () => {
-    expect(HUB_USAGE_PROMPT).toMatch(/不要在命令里写.*\$HUB_TOKEN/);
+    expect(HUB_USAGE_PROMPT).toContain("不要在命令里写任何环境变量");
+    expect(HUB_USAGE_PROMPT).toContain("hub 会自己读");
+    expect(HUB_USAGE_PROMPT).not.toContain("$HUB_TOKEN");
+    expect(HUB_USAGE_PROMPT).not.toContain("$HUB_SOCK");
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
     for (const sub of [
       "hub status",
