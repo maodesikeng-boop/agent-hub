@@ -620,12 +620,33 @@ describe("出错、停止", () => {
     ]);
   });
 
-  it("项目经理自己的会话被关机打断：照 M1 标已停止，不重发", () => {
-    const id = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "c1", text: "在吗" }).messageId;
-    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [id], at: now });
-    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [id], at: now });
-    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [id], durationMs: 1, at: now });
-    expect(ledger.getMessage(id)!.status).toBe("stopped");
+  it("项目经理的会话被关机打断：用户自己发的照 M2 标已停止；交给它的汇报不改状态，重启后重发给同一个会话", () => {
+    const user = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "c1", text: "在吗" }).messageId;
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "好了"));
+    const delivered = workerLines().at(-1)!.id;
+    for (const [ids, type] of [[[user, delivered], "message.delivered"], [[user, delivered], "message.processing"]] as const) {
+      ledger.applyDriverEvent(lin.sessionId, { type, messageIds: [...ids], at: now });
+    }
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [user, delivered], durationMs: 1, at: now });
+    expect(ledger.getMessage(user)!.status).toBe("stopped");
+    expect(ledger.getMessage(delivered)!.status).toBe("processing");
+    db.run("DELETE FROM actions");
+    enqueued = [];
+    expect(ledger.recoverAfterRestart().resentMessageIds).toEqual([delivered]);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([
+      ["session.start", { sessionId: lin.sessionId, generation: 1, recovery: true }],
+      ["session.send", { sessionId: lin.sessionId, messageId: delivered, source: "system", resend: true }],
+    ]);
+  });
+
+  it("项目经理的会话关机时没等到 result 就退出（session.exited shutdown）：同样只留下交给它的汇报", () => {
+    const user = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "c2", text: "在吗" }).messageId;
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "好了"));
+    const delivered = workerLines().at(-1)!.id;
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [user, delivered], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "session.exited", reason: "shutdown", exitCode: null, signal: "SIGKILL", hadResult: false, messageIds: [user, delivered], at: now });
+    expect(ledger.getMessage(user)!.status).toBe("stopped");
+    expect(ledger.getMessage(delivered)!.status).toBe("delivered");
   });
 
   it("同一条消息先失败、重发后跑出结果：两行都有，后来的汇报不被吞掉", () => {

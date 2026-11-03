@@ -136,7 +136,7 @@
   - Worker 的对话和项目经理的一样有“正在运行 `xxx`”和停止按钮，用户看得见、点得停。
   - 这一轮出错、崩溃、被停止，项目经理都会收到一行，写明原因，由它决定 `send` 让 Worker 接着做，还是 `end` 收工。
   - 建 worktree 失败（重试 3 次后），项目经理的会话里发一行，写明原因，这个 Worker 标 `ended`。
-  - 守护进程重启后照 M2 的做法用 `--resume` 恢复。关机打断的那一轮和 M1 不一样：Worker 的消息不标“已停止”，也不发“这一轮没做完”，重启后接着做完再汇报（第 6 节 W5 第 3 条）。
+  - 守护进程重启后照 M2 的做法用 `--resume` 恢复。关机打断的那一轮和 M1 不一样：Worker 的消息不标“已停止”，也不发“这一轮没做完”，重启后接着做完再汇报；项目经理正在处理的汇报也一样，重启后重发给它（第 6 节 W5 第 3 条）。
 
 ### 2.5 汇报格式和“做完了”
 
@@ -289,12 +289,13 @@ W1 建 worktree（不依赖别的） ──────────────�
 | 不是仓库：主文件夹不是 git 仓库，派活 | 能派；Worker 的 cwd 是主文件夹 |
 | Worker 越权：剧本跑 `hub persona edit` | 退出码 1，`forbidden` |
 | 重启：Worker 跑到一半 SIGTERM，再启动 | Worker 用 `--resume` 接着做，worktree 还在；关机时不发“这一轮没做完”，重启后只有一行汇报（验收第 11 条） |
+| 重启：项目经理处理 Worker 的汇报时关机 | 汇报还是处理中，不标已停止；再启动后带着重发说明交给项目经理的同一个会话（`--resume`），它照常处理完 |
 | 重启：worktree 还没建好（第一次建失败、在等重试）就关机 | 再启动后接着建，Worker 照常开工、汇报 |
 | 连派 10 个（用 worktree） | 都成功，10 个不同的 worktree，10 行汇报 |
 | 建 worktree 失败：分支名已被占 | 重试 3 次后项目经理收到一行 `worktree_failed`，Worker 标 `ended`，没起 Worker 会话 |
 | Worker 的对话 | 快照里有（kind `worker`）；`GET …/messages?before=` 能往前翻；`POST …/stop` 停的是 Worker，项目经理收到“被停止了” |
 
-实现在 `test/e2e/m3.test.ts`（7 条）。
+实现在 `test/e2e/m3.test.ts`（8 条）。
 
 **真 `claude` 冒烟**（`pnpm smoke`，用 haiku，在一次性的小 git 仓库里跑，三次调用就够；M1、M2 的照跑）：
 
@@ -370,7 +371,7 @@ M3 所有 PR 合并后，用户在本机：
 3. **修了一个 bug：关机打断的一轮。** 关机时驱动层给忙着的 `claude` 发 SIGINT，`claude` 回一条被打断的 `result`。原来账本把它当成“用户点了停止”：Worker 的消息标“已停止”，项目经理收到“这一轮没做完：被停止了”，重启后也不会接着做，和接口约定、验收第 11 条对不上。现在：
    - 驱动层：关机时结束的那一轮，`turn.ended` 带 `shutdown: true`（`shared/driver.ts` 的 `TurnEndedEvent`）；
    - 账本：Worker 的会话遇到它（或者 `session.exited` 的 `shutdown`），消息不改状态，还是已送达、处理中，重启恢复把它重发给同一个会话；也不发那一行（`ledger/messages.ts` 的 `resumesAfterShutdown`、`ledger/workers.ts` 的 `turnOutcome`）；
-   - 项目经理的会话照 M1：关机打断的消息标“已停止”，用户自己再发。
+   - 项目经理的会话按消息分：系统交给它的（sender `system`：Worker 的汇报、`turn_failed` 那几行）同样不改状态，重启后重发给它，不用等用户提醒；用户自己发的照 M2 标“已停止”，用户自己再发。
 4. **名字收拢**：命令名、产品名只在 `src/shared/names.ts` 定（`HUB_COMMAND`、`PRODUCT_NAME`，加上由它们拼出来的 `LOG_PREFIX`、`DATA_DIR_NAME`、`WORKER_BRANCH_PREFIX`）。用到的地方：提示词、放行规则、`hub` 外壳的文件名、`hub/cli.ts` 的用法和报错、账本回给 agent 的话、Worker 的分支名、数据目录的默认名、日志开头、网页标题（`vite.config.ts` 把 `index.html` 里的 `%PRODUCT_NAME%` 换掉）和左上角。测试里的断言和假 `claude` 的剧本也用这些常量：把 `names.ts` 里的两个值改掉再跑 `pnpm check`，全部通过（W5 实测过）。
    - 没跟着变的：环境变量名（`AGENT_HUB_HOME` 这些，在 `limits.ts`），用户可能已经在 shell 里设了；`hub.sock`、`hub.sqlite` 这些内部文件名。
    - 还没做的：改了 `PRODUCT_NAME` 以后默认数据目录跟着变，已经有 `~/.agent-hub` 的用户要自己搬，或者用 `AGENT_HUB_HOME` 指过去。

@@ -25,12 +25,15 @@ export function exitFailureReason(event: SessionExitedEvent): string {
 }
 
 /**
- * 守护进程关机打断的一轮（M3，m3-plan 第 3 节接口约定、验收第 11 条）：Worker 的消息不标已停止，还是已送达、处理中，
- * 重启恢复（sessions.ts 的 recoverAfterRestart）把它重发给同一个会话，Worker 接着做完再汇报；也不发“这一轮没做完”
- * （workers.ts）。项目经理的照 M1 标已停止，用户自己再发。
+ * 守护进程关机打断的一轮（M3，m3-plan 第 3 节接口约定、验收第 11 条）：哪些消息不标已停止，还是已送达、处理中，
+ * 重启恢复（sessions.ts 的 recoverAfterRestart）把它重发给同一个会话，接着做完：
+ * - Worker 会话里的消息（任务说明、打回）：Worker 接着做完再汇报；也不发“这一轮没做完”（workers.ts）；
+ * - 系统交给 agent 的消息（sender system：Worker 的汇报、turn_failed 那几行，见 workers.ts 的 insertLine）：
+ *   项目经理重启后照样收到，不用等用户提醒。
+ * 用户自己发的照 M2 标已停止，用户自己再发。
  */
-export function resumesAfterShutdown(session: AgentSessionRow): boolean {
-  return session.role === "worker";
+export function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbRow, "sender">): boolean {
+  return session.role === "worker" || message.sender === "system";
 }
 
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
@@ -110,6 +113,12 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
     return message;
   };
 
+  /** 关机打断时这条消息留着重启后重发（resumesAfterShutdown）。 */
+  const keptAfterShutdown = (session: AgentSessionRow, id: MessageId) => {
+    const row = db.get<Pick<MessageDbRow, "sender">>("SELECT sender FROM messages WHERE id = ?", id);
+    return row !== undefined && resumesAfterShutdown(session, row);
+  };
+
   const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     const sessionId = session.id;
     switch (event.type) {
@@ -145,12 +154,9 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         updateLive(p, sessionId, working(event.name));
         return;
       case "turn.ended": {
-        if (event.shutdown === true && resumesAfterShutdown(session)) {
-          updateLive(p, sessionId, idle);
-          return;
-        }
         const reason = event.error === undefined ? "turn_failed" : `${event.error.subtype}: ${event.error.message}`;
         for (const id of event.messageIds) {
+          if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
           if (event.interrupted) transition(p, id, "stopped");
           else if (event.ok) transition(p, id, "replied");
           else transition(p, id, "failed", reason);
@@ -164,8 +170,8 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         });
         return;
       case "session.exited": {
-        const keep = event.reason === "shutdown" && resumesAfterShutdown(session);
-        for (const id of keep ? [] : event.messageIds) {
+        for (const id of event.messageIds) {
+          if (event.reason === "shutdown" && keptAfterShutdown(session, id)) continue;
           if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
           else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
         }

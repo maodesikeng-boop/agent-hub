@@ -421,6 +421,46 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await terminate(daemon);
   });
 
+  it("重启：项目经理处理 Worker 的汇报时关机，汇报不标已停止；再启动后重发给项目经理的同一个会话", { timeout: 60_000 }, async () => {
+    env = makeEnv();
+    const dir = repo("pm-slow");
+    const never = join(env.dir, "never");
+    env.setScript(
+      scripts(
+        // 第 0 轮派活；第 1 轮处理汇报时卡住（关机打断）；重启后的那一轮照常回
+        { turns: [{ steps: [{ bash: startCmd("快活", "做一件小事") }, { text: "派了" }] }, { steps: [{ text: "我看看汇报" }, { waitFile: never }, { text: "不该出现" }] }], defaultTurn: say("汇报收到，验收通过") },
+        { defaultTurn: say(report("做好了")) },
+      ),
+    );
+    const first = await boot();
+    const pm = await pmWithProject(first.client, dir);
+    await first.client.post(pm.conversationId, "派个 Worker");
+    const reportId = await waitUntil("pm processing the report", async () => {
+      const s = await first.client.state();
+      const line = messagesOf(s, pm.conversationId).find((m) => workerEventOf(m)?.event === "report");
+      return line?.status === "processing" && messagesOf(s, pm.conversationId).some((m) => m.text === "我看看汇报") ? line.id : undefined;
+    });
+    const pmSessionId = sessionOf(await first.client.state(), pm.conversationId).sessionId;
+    expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
+    // 关机打断的这一轮：系统交给它的汇报还是处理中，不标已停止
+    expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", reportId)).toEqual([{ status: "processing" }]);
+
+    const daemon = await env.start();
+    const client = first.client.withPort(daemon.port);
+    await waitForStatus(client, reportId, "replied", 20_000);
+    const procs = procsOf(pmSessionId);
+    const last = procs.at(-1)!;
+    expect(argValue(last.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
+    const resent = env.stdinTextsOf(last.pid).join("\n");
+    expect(resent).toContain(RESTART_RECOVERY_NOTE);
+    expect(resent).toContain(`${RESEND_NOTE}\n\n【Worker #1 · 快活 的汇报】`);
+    const s = await client.state();
+    expect(messagesOf(s, pm.conversationId).filter((m) => m.sender === "agent" && m.kind === "text").map((m) => m.text)).toContain("汇报收到，验收通过");
+    // 只有一行汇报，没有多出 turn_failed
+    expect(workerLines(s, pm.conversationId).map((l) => l.event)).toEqual(["started", "report"]);
+    await terminate(daemon);
+  });
+
   it("Worker 的对话：快照里有、能往前翻页、能点停止，项目经理收到“被停止了”", async () => {
     env = makeEnv();
     const dir = repo("stop");
