@@ -8,8 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DriverError, RELAUNCH_NOTE, type AgentSessionPatch } from "../../shared/index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
 
-vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
-
 let h: Harness | undefined;
 /** 测试里起的、要在最后确保结束的进程号。 */
 const leftovers: number[] = [];
@@ -498,7 +496,9 @@ describe("关机撞上起进程", () => {
       return sig === "SIGINT" ? true : realKill.call(this, sig);
     });
     try {
-      const t = harness({ driver: { shutdownGraceMs: 500 } });
+      // 宽限期要长过新进程启动（node 加载假 claude）的时间：到点按进程组 SIGKILL 时它得已经记下了命令行，下面才数得到第二个进程。
+      // 机器忙时启动要一两秒，所以不能是几百毫秒
+      const t = harness({ driver: { shutdownGraceMs: 4_000 } });
       const s = t.addSession();
       await t.driver.send(s.id, user(1, "一"));
       await t.waitFor("turn.ended");
@@ -728,7 +728,8 @@ describe("进程组", () => {
   });
 
   it("启动超时强制结束：也按进程组", async () => {
-    const t = harness({ driver: { startTimeoutMs: 3_000 }, script: { noInit: true, spawnChildOnStart: 30 } });
+    // 启动超时要长过假 claude 起子进程的时间，不然子进程还没起来就被超时杀了（机器忙时 node 加载假 claude 要一两秒）
+    const t = harness({ driver: { startTimeoutMs: 8_000 }, script: { noInit: true, spawnChildOnStart: 30 } });
     const s = t.addSession();
     const sending = t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     const child = await childPid(t);
@@ -810,6 +811,20 @@ describe("进程组", () => {
       expect(await goneWithin(stray.pid!)).toBe(true);
       // 测试进程自己（和它同组）还活着，能走到这一行就说明没被按组杀
       expect(stray.signalCode).toBe("SIGKILL");
+    });
+
+    it("pid 指到别的会话的 claude（比如别的数据目录的守护进程起的，或进程号被复用）：不碰它，只把这一行的 pid 置空", async () => {
+      const t = harness({ script: { ignoreSigint: true } });
+      const s = t.addSession({ status: "running" });
+      const other = strayClaude(t, "another-daemon-session", true);
+      other.stdin!.write(line("hi"));
+      for (let i = 0; i < 200 && t.argvs().length === 0; i++) await realSleep(25);
+      expect(t.argvs()).toHaveLength(1);
+      t.store.update(s.id, { pid: other.pid! });
+      await t.driver.cleanupStale();
+      expect(alive(other.pid!)).toBe(true);
+      expect(signals(t)).toEqual([]);
+      expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
     });
 
     it("已经 ended 的那一行：pid 置空，状态保持 ended", async () => {

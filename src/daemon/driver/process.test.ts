@@ -10,8 +10,6 @@ import { PS_TIMEOUT_MS } from "../../shared/index.ts";
 import { forceKill, forceKillTree, killTargets, parsePs, type PsRow } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
-vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
-
 describe("parsePs", () => {
   it("每行 pid ppid pgid，前面有空格对齐；空行和认不出的行跳过", () => {
     const out = "    1     0     1\n  200   100   200\n\n  abc\n 301   300   300  \n";
@@ -155,7 +153,8 @@ describe("强制结束：claude 起在新进程组里的子进程也要没了", 
   });
 
   it("启动超时", async () => {
-    const t = harness({ driver: { startTimeoutMs: 3_000 }, script: { noInit: true, spawnChildOnStart: { sleepSec: 30, detached: true } } });
+    // 启动超时要长过假 claude 起子进程的时间（node 加载假 claude，机器忙时要一两秒），不然子进程还没起来就被超时杀了
+    const t = harness({ driver: { startTimeoutMs: 8_000 }, script: { noInit: true, spawnChildOnStart: { sleepSec: 30, detached: true } } });
     const s = t.addSession();
     const sending = t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     const child = await detachedChild(t);
