@@ -159,6 +159,39 @@ describe("addWorktree", () => {
     expect(git(path, "log", "-1", "--format=%s")).toBe("worker commit");
   });
 
+  it("上次 git worktree add 被强杀、留下半成品（locked initializing、文件不全）：清掉重建，不当成已经建好", async () => {
+    const repo = makeRepo("half");
+    for (let i = 0; i < 20; i++) writeFileSync(join(repo, `f${i}.txt`), `${i}\n`);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "more files");
+    const base = git(repo, "rev-parse", "HEAD");
+    const path = join(root, "wt", "half");
+    const args = { repoFolder: repo, worktreePath: path, branch: "hub/8-half" };
+    // 照 git 被 SIGKILL 时的样子摆出来：worktree 登记了、还锁着 initializing，检出了一部分文件
+    await addWorktree(args);
+    git(repo, "worktree", "lock", "--reason", "initializing", path);
+    for (let i = 5; i < 20; i++) rmSync(join(path, `f${i}.txt`));
+    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+
+    expect(await addWorktree(args)).toEqual({ created: true, baseCommit: base });
+    const list = git(repo, "worktree", "list", "--porcelain");
+    expect(list).toContain(realpathSync(path));
+    expect(list).not.toContain("locked");
+    for (let i = 0; i < 20; i++) expect(existsSync(join(path, `f${i}.txt`))).toBe(true);
+    expect(git(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("hub/8-half");
+    expect(git(path, "status", "--porcelain")).toBe("");
+  });
+
+  it("别人自己锁的 worktree（理由不是 initializing）照旧算已经建好，不动它", async () => {
+    const repo = makeRepo("userlock");
+    const path = join(root, "wt", "userlock");
+    const args = { repoFolder: repo, worktreePath: path, branch: "hub/9-lock" };
+    await addWorktree(args);
+    git(repo, "worktree", "lock", "--reason", "external disk", path);
+    expect(await addWorktree(args)).toMatchObject({ created: false });
+    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked external disk");
+  });
+
   it("分支名已经被占了 → 报清楚的错，不建目录", async () => {
     const repo = makeRepo("taken");
     git(repo, "branch", "hub/5-x");

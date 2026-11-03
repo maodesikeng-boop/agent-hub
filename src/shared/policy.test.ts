@@ -9,6 +9,10 @@ import {
   stateDirDenyRule,
   workerMemoryDenyRules,
 } from "./policy.ts";
+import { HUB_COMMAND } from "./names.ts";
+
+/** 放行 hub 的那条规则（命令名来自 names.ts）。 */
+const allowHub = `Bash(${HUB_COMMAND}:*)`;
 
 const base = { hubSock: "/private/tmp/h/run/hub.sock", stateDir: "/Users/u/.agent-hub/state" };
 
@@ -16,7 +20,7 @@ describe("buildSessionSettings：项目经理", () => {
   it("auto 档；放行 hub 和 hub.sock；没有任何拒绝规则；不碰自动记忆", () => {
     const settings = buildSessionSettings({ role: "pm", readonly: false, ...base });
     expect(settings).toEqual({
-      permissions: { defaultMode: "auto", allow: ["Bash(hub:*)"] },
+      permissions: { defaultMode: "auto", allow: [allowHub] },
       sandbox: { network: { allowUnixSockets: ["/private/tmp/h/run/hub.sock"] } },
     });
     expect(DEFAULT_PERMISSION_MODE).toBe("auto");
@@ -70,14 +74,14 @@ describe("buildSessionSettings：只读", () => {
     const worker = buildSessionSettings({ role: "worker", readonly: true, ...base });
     expect(READONLY_PERMISSION_MODE).toBe("dontAsk");
     expect(worker.permissions.defaultMode).toBe("dontAsk");
-    expect(worker.permissions.allow).toEqual(["Bash(hub:*)"]);
+    expect(worker.permissions.allow).toEqual([allowHub]);
     expect(worker.permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
     expect(worker.autoMemoryEnabled).toBe(false);
   });
 
   it("项目经理开只读也只换档", () => {
     expect(buildSessionSettings({ role: "pm", readonly: true, ...base })).toEqual({
-      permissions: { defaultMode: "dontAsk", allow: ["Bash(hub:*)"] },
+      permissions: { defaultMode: "dontAsk", allow: [allowHub] },
       sandbox: { network: { allowUnixSockets: [base.hubSock] } },
     });
   });
@@ -88,6 +92,6 @@ describe("buildSessionSettings：只读", () => {
     a.permissions.allow.push("Bash(*)");
     const b = buildSessionSettings({ role: "worker", readonly: false, ...base });
     expect(b.permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
-    expect(b.permissions.allow).toEqual(["Bash(hub:*)"]);
+    expect(b.permissions.allow).toEqual([allowHub]);
   });
 });

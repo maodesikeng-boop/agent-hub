@@ -18,6 +18,11 @@ export interface DriverSendInput {
   text: string;
   /** 重启后重发（SessionSendParams.resend）：前面加 RESEND_NOTE。 */
   resend?: boolean;
+  /**
+   * 重启恢复这个会话的第一条（SessionSendParams.recovery）：之后写进去的第一行最前面加 RESTART_RECOVERY_NOTE，
+   * 顺序是“恢复说明、重发说明、原文”，同一行。同样的 messageIds 再调（还在待发队列里）不会再加一次。
+   */
+  recovery?: boolean;
 }
 
 /**
@@ -31,7 +36,10 @@ export interface DriverSendInput {
  */
 export type DriverSendResult = { kind: "written" } | { kind: "queued" } | { kind: "rejected" };
 
-/** 重启后恢复会话（start 的 recovery）时，加在下一条写进去的消息前面（设计第 5.4 节第 4 步）。 */
+/**
+ * 重启后恢复会话（DriverSendInput.recovery）时，加在之后写进去的第一行最前面，和那条消息在同一行（设计第 5.4 节第 4 步）。
+ * 不单独写一行：单独一行会自己占一轮，agent 在那一轮把活干完、写了汇报，这一轮却不对应任何消息，汇报就丢了。
+ */
 export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一轮被打断了。请先看一下工作区现在的状态，再接着做。";
 /** 重发（DriverSendInput.resend）时加在消息前面（设计第 12.1 节）。 */
 export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
@@ -105,11 +113,14 @@ export interface AgentToolEvent extends DriverEventBase {
  * - interrupted（这一轮里出现过 `[Request interrupted by user]`）→ stopped；
  * - 否则 ok → replied；
  * - 否则（ok=false 且不是打断）→ failed，failureReason 取 error。
+ * shutdown 的一轮（M3）：Worker 的消息不标，留着重启后接着做（见 ledger/messages.ts 的 applyEvent）。
  */
 export interface TurnEndedEvent extends DriverEventBase {
   type: "turn.ended";
   ok: boolean;
   interrupted: boolean;
+  /** 这一轮是守护进程关机时发 SIGINT 结束的（不是用户点停止）：只在关机中、而且这一轮 !ok 或 interrupted 时出现；关机中正常做完的一轮不带。 */
+  shutdown?: true;
   messageIds: MessageId[];
   durationMs: number | null;
   /** ok=false 时 result 里的错误：subtype 照抄（如 "error_during_execution"），message 是能给人看的一句。 */
@@ -210,11 +221,6 @@ export type DriverEventType = DriverEvent["type"];
 
 export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => void;
 
-export interface DriverStartOptions {
-  /** 守护进程重启后恢复被打断的会话：下一条写进去的消息前加 RESTART_RECOVERY_NOTE；没有待发消息就单独写一条。 */
-  recovery?: boolean;
-}
-
 /**
  * 进程组（m2-plan 第 6 节第 4 条）：claude 用 detached 起在自己的进程组里。正常停止（打断、空闲关、关机先发的那一下）
  * 仍然只给 claude 本身发 SIGINT；强制结束（关机超时、启动超时、cleanupStale）给整个进程组发 SIGKILL，
@@ -232,11 +238,11 @@ export interface DriverStartOptions {
 export interface Driver {
   /**
    * “启动或恢复会话”：进程已经在跑就直接返回；第一次用 --session-id，之后 --resume。
-   * 没有要写的消息时，进程 spawn 成功就返回；有要写的消息（待发消息或恢复说明）时，等到 init 再返回，
+   * 没有要写的消息时，进程 spawn 成功就返回；有待发消息时，等到 init 再返回，
    * 起不来抛 DriverError（可重试的那几种）。启动后马上退出只通过 session.exited(startup_failed) 反映，
    * start 不会因此抛错。
    */
-  start(sessionId: SessionId, options?: DriverStartOptions): Promise<void>;
+  start(sessionId: SessionId): Promise<void>;
   /**
    * 会话没起来会先起（起不来抛 DriverError）。只有写进标准输入成功才 resolve 成 written；
    * 会话正忙就放进驱动层自己的待发队列，resolve 成 queued（见 DriverSendResult）。

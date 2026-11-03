@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HUB_COMMANDS, PM_PERSONA_TEMPLATE, WORKER_REPORT_FORMAT } from "../shared/index.ts";
-import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
+import { HUB_COMMAND } from "../shared/names.ts";
 import {
   AGENTS_NOTE,
   ASK_FIRST_RULES,
@@ -18,6 +18,9 @@ import {
   needsAgentsNote,
 } from "./prompt.ts";
 import { card, noProjectContext, projectContext, workerContext } from "./test-helpers.ts";
+
+/** 命令名（names.ts）：改名只改那一处，这里的断言跟着变。 */
+const hub = HUB_COMMAND;
 
 let dir: string;
 beforeEach(() => {
@@ -62,15 +65,15 @@ describe("提示词：有项目", () => {
 
   it("hub 用法写明直接敲 hub、不要在命令里写变量；长文本用 --stdin heredoc；只列现在有的子命令", () => {
     expect(HUB_USAGE_PROMPT).toContain("不要在命令里写任何环境变量");
-    expect(HUB_USAGE_PROMPT).toContain("hub 会自己读");
+    expect(HUB_USAGE_PROMPT).toContain(`${hub} 会自己读`);
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_TOKEN");
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_SOCK");
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
-    expect(HUB_USAGE_PROMPT).toContain("不要在 `hub` 命令后面接 `echo $?`");
-    for (const sub of ["hub status", "hub project create --folder", "hub project attach <文件夹路径>", "hub project detach <文件夹路径>", "hub persona show", "hub persona edit"]) {
+    expect(HUB_USAGE_PROMPT).toContain(`不要在 \`${hub}\` 命令后面接 \`echo $?\``);
+    for (const sub of [`${hub} status`, `${hub} project create --folder`, `${hub} project attach <文件夹路径>`, `${hub} project detach <文件夹路径>`, `${hub} persona show`, `${hub} persona edit`]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
-    for (const gone of ["hub pm list", "hub project assign", "交接", "群"]) expect(HUB_USAGE_PROMPT).not.toContain(gone);
+    for (const gone of [`${hub} pm list`, `${hub} project assign`, "交接", "群"]) expect(HUB_USAGE_PROMPT).not.toContain(gone);
     expect(HUB_USAGE_PROMPT).toContain("一个项目经理只管一个项目");
   });
 
@@ -102,7 +105,7 @@ describe("提示词：还没有项目", () => {
     expect(prompt).not.toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).toContain(PM_PERSONA_TEMPLATE.trim());
     expect(prompt).toMatch(/还没有项目，工作目录是你自己的空文件夹/);
-    expect(prompt).toContain("hub project create --folder <文件夹>");
+    expect(prompt).toContain(`${hub} project create --folder <文件夹>`);
     expect(prompt).not.toContain("主文件夹（工作目录）");
   });
 });
@@ -111,7 +114,7 @@ describe("提示词：还没有项目", () => {
 
 describe("提示词：项目经理（M3）", () => {
   it("“只管理”写成派 Worker、验收；两种模式都有先问用户的规矩、派活和合并的说明、hub worker 用法", () => {
-    expect(PM_MODE_PROMPTS.manage_only).toContain("hub worker start");
+    expect(PM_MODE_PROMPTS.manage_only).toContain(`${hub} worker start`);
     expect(PM_MODE_PROMPTS.manage_only).toContain("验收");
     for (const ctx of [projectContext(), noProjectContext()]) {
       const prompt = buildLaunchPrompt(ctx, dir);
@@ -126,7 +129,7 @@ describe("提示词：项目经理（M3）", () => {
   });
 
   it("合并和收拾 worktree 的步骤：git status、merge --no-ff、冲突、worktree remove、hub worker end；只在本地、不推送", () => {
-    const steps = ["git status", "git merge --no-ff", "冲突", "git worktree remove", "hub worker end"];
+    const steps = ["git status", "git merge --no-ff", "冲突", "git worktree remove", `${hub} worker end`];
     let at = -1;
     for (const step of steps) {
       const i = PM_WORKER_PROMPT.indexOf(step, at + 1);
@@ -138,17 +141,17 @@ describe("提示词：项目经理（M3）", () => {
   });
 
   it("worktree 和主文件夹的利弊、--no-worktree、汇报怎么回来、打回用 hub worker send", () => {
-    for (const word of ["worktree", "主文件夹", "好处", "坏处", "适合", "互相覆盖", "pnpm install", "--no-worktree", "【Worker #", "hub worker send", "便宜的模型"]) {
+    for (const word of ["worktree", "主文件夹", "好处", "坏处", "适合", "互相覆盖", "pnpm install", "--no-worktree", "【Worker #", `${hub} worker send`, "便宜的模型"]) {
       expect(PM_WORKER_PROMPT).toContain(word);
     }
   });
 
   it("hub 用法有 hub worker 的四个命令，和 shared/hub.ts 的命令表对得上", () => {
     for (const sub of [
-      "hub worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin",
-      "hub worker send <编号> --stdin",
-      "hub worker end <编号>",
-      "hub worker list",
+      `${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin`,
+      `${hub} worker send <编号> --stdin`,
+      `${hub} worker end <编号>`,
+      `${hub} worker list`,
     ]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
@@ -168,9 +171,9 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).toContain("hub/5-修登录按钮");
     expect(prompt).toContain(WORKER_REPORT_FORMAT);
     expect(prompt).toContain(WORKER_HUB_USAGE_PROMPT);
-    expect(WORKER_HUB_USAGE_PROMPT).toContain("hub status");
-    for (const gone of ["hub worker", "hub persona", "hub project"]) expect(WORKER_HUB_USAGE_PROMPT).not.toContain(gone);
-    expect(prompt).not.toContain("hub worker start");
+    expect(WORKER_HUB_USAGE_PROMPT).toContain(`${hub} status`);
+    for (const gone of [`${hub} worker`, `${hub} persona`, `${hub} project`]) expect(WORKER_HUB_USAGE_PROMPT).not.toContain(gone);
+    expect(prompt).not.toContain(`${hub} worker start`);
     expect(prompt).not.toContain("说话直接");
     expect(prompt).not.toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).not.toContain(PM_MODE_PROMPTS.hands_on);
@@ -206,10 +209,5 @@ describe("提示词：Worker（M3）", () => {
 
   it("buildLaunchPrompt 按角色分：Worker 的上下文得到 Worker 的提示词", () => {
     expect(buildLaunchPrompt(workerContext(), dir)).toBe(buildWorkerPrompt(workerContext(), dir));
-  });
-
-  it("命令名都来自 names.ts", () => {
-    expect(HUB_COMMAND).toBe("hub");
-    expect(PRODUCT_NAME).toBe("agent-hub");
   });
 });

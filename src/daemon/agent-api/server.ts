@@ -29,6 +29,7 @@ import {
   type SessionTokens,
 } from "../../shared/index.ts";
 import { assertSocketPathFits } from "../../shared/paths.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
@@ -200,7 +201,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       ledger.reportHealth("agent-api", error);
     } catch (err) {
       app.log.error({ err }, "agent-api reportHealth failed");
-      opts.log?.(`agent-hub: agent 接口记健康状态失败：${err instanceof Error ? err.message : String(err)}`);
+      opts.log?.(`${LOG_PREFIX} agent 接口记健康状态失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -223,7 +224,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。
     if (status !== undefined && status >= 400 && status < 500) return fail(reply, "invalid", `参数不对：${err.message}`);
     req.log.error({ err }, "agent-api request failed");
-    opts.log?.(`agent-hub: hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
+    opts.log?.(`${LOG_PREFIX} hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
     reportHealth(err.message);
     return fail(reply, "internal", err.message);
   });

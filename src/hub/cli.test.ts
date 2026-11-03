@@ -6,12 +6,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, PRODUCT_NAME, type SessionTokens } from "../shared/index.ts";
 import { runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
 import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
 import { installHubShim } from "../daemon/agent-api/shim.ts";
 import { createSessionTokens } from "../daemon/agent-api/tokens.ts";
+
+/** 命令名（names.ts）：改名只改那一处，这里的断言跟着变。 */
+const cmd = HUB_COMMAND;
 
 const HUB_MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
 const HUB_CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
@@ -125,7 +128,7 @@ describe("hub cli", () => {
     it("prints help with exit 0 and does not call the daemon", async () => {
       const r = await hub(["--help"]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("hub project create --folder");
+      expect(r.stdout).toContain(`${cmd} project create --folder`);
       expect(r.stdout).not.toContain("assign");
       expect(ledger.calls).toHaveLength(0);
     });
@@ -197,7 +200,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of ["hub worker start --title", "--readonly", "--no-worktree", "hub worker send <编号> --stdin", "hub worker end <编号>", "hub worker list"]) {
+      for (const usage of [`${cmd} worker start --title`, "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`]) {
         expect(r.stdout).toContain(usage);
       }
     });
@@ -391,7 +394,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
         stderr: { write: (s: string) => void (stderr += s) },
       });
       expect(code).toBe(HUB_EXIT.usage);
-      expect(stderr).toBe("hub：出了意外的错：stdin exploded\n");
+      expect(stderr).toBe(`${cmd}：出了意外的错：stdin exploded\n`);
       expect(ledger.calls).toHaveLength(0);
     });
 
@@ -434,8 +437,8 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
   });
 
   describe("unreachable daemon (exit 3)", () => {
-    const UNREACHABLE = /连不上 agent-hub/;
-    const MAYBE_EXECUTED = /请求可能已经执行，请先用 `hub status` 确认/;
+    const UNREACHABLE = new RegExp(`连不上 ${PRODUCT_NAME}`);
+    const MAYBE_EXECUTED = new RegExp(`请求可能已经执行，请先用 \`${cmd} status\` 确认`);
 
     it("HUB_SOCK points at a missing file", async () => {
       const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: join(dir, "nope.sock") } });
@@ -474,7 +477,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
         const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock }, timeoutMs: 200 });
         expect(r.code).toBe(HUB_EXIT.unreachable);
         expect(r.stderr).toMatch(MAYBE_EXECUTED);
-        expect(r.stderr).toContain("hub status");
+        expect(r.stderr).toContain(`${cmd} status`);
         expect(r.stderr).not.toMatch(UNREACHABLE);
       } finally {
         for (const socket of held) socket.destroy();
@@ -530,7 +533,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     it("writes an executable 0700 wrapper that runs hub with the given node", async () => {
       const binDir = join(dir, "run", "bin");
       const shim = installHubShim({ binDir });
-      expect(shim).toBe(join(binDir, "hub"));
+      expect(shim).toBe(join(binDir, cmd));
       expect(statSync(shim).mode & 0o777).toBe(0o700);
       expect(statSync(binDir).mode & 0o777).toBe(0o700);
       const content = readFileSync(shim, "utf8");

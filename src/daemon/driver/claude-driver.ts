@@ -27,7 +27,6 @@ import {
   type DriverOptions,
   type DriverSendInput,
   type DriverSendResult,
-  type DriverStartOptions,
   type LaunchFiles,
   type MessageId,
   type MessageSource,
@@ -169,11 +168,10 @@ export class ClaudeDriver implements Driver {
     return () => this.#listeners.delete(listener);
   }
 
-  async start(sessionId: SessionId, options: DriverStartOptions = {}): Promise<void> {
+  async start(sessionId: SessionId): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);
     this.#assertNotEnded(st);
-    if (options.recovery) st.recoveryNote = true;
     for (;;) {
       if (st.starting) return st.starting;
       this.#assertNotEnded(st);
@@ -184,12 +182,12 @@ export class ClaudeDriver implements Driver {
         continue;
       }
       if (proc) {
-        // 起好了还没写过东西（之前只起了进程）：有恢复说明就现在写，等到 init
+        // 起好了还没写过东西（之前只起了进程）：有待发的就现在写，等到 init
         if (proc.initSeen || st.inFlight) return;
-        const batch = this.#takeBatch(st, true);
+        const batch = this.#takeBatch(st);
         return batch ? this.#runStartup(st, batch, proc) : undefined;
       }
-      const batch = this.#takeBatch(st, true);
+      const batch = this.#takeBatch(st);
       if (batch) return this.#runStartup(st, batch, null);
       // 没有要写的：只把进程起起来（M0 实测 init 在每轮开头才出，没消息就等不到 init）
       const promise: Promise<void> = this.#spawn(st, this.#resumeFor(st), null)
@@ -222,7 +220,11 @@ export class ClaudeDriver implements Driver {
       return { kind: "rejected" };
     }
     // 排序只在 #takeBatch 里做（用户的拼成一条排在系统的前面），这里按到达顺序放
-    if (!this.#isPending(st, ids)) st.pending.push(entry);
+    if (!this.#isPending(st, ids)) {
+      st.pending.push(entry);
+      // 重启恢复的第一条：之后写进去的第一行前面加恢复说明（和消息同一行，不单独占一轮）
+      if (input.recovery) st.recoveryNote = true;
+    }
     await this.#pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
@@ -399,10 +401,9 @@ export class ClaudeDriver implements Driver {
   }
 
   /**
-   * 取下一行：队列里有用户消息就全部拼成一条；否则取最早的一条系统消息。恢复说明加在最前面。
-   * noteAlone：没有消息时，恢复说明单独写一条（start 的 recovery）。
+   * 取下一行：队列里有用户消息就全部拼成一条；否则取最早的一条系统消息。恢复说明加在最前面，和消息写在同一行。
    */
-  #takeBatch(st: SessionState, noteAlone: boolean): Batch | null {
+  #takeBatch(st: SessionState): Batch | null {
     let body: string | null = null;
     let messageIds: MessageId[] = [];
     const users = st.pending.filter((e) => e.source === "user");
@@ -416,7 +417,7 @@ export class ClaudeDriver implements Driver {
       messageIds = entry.messageIds;
     }
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
-    if (body === null && !(noteAlone && notes.recovery)) return null;
+    if (body === null) return null;
     const parts = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
@@ -455,7 +456,7 @@ export class ClaudeDriver implements Driver {
         await this.#deliverNext(st, proc);
         continue;
       }
-      const batch = this.#takeBatch(st, false);
+      const batch = this.#takeBatch(st);
       if (!batch) return;
       return this.#runStartup(st, batch, null);
     }
@@ -484,11 +485,11 @@ export class ClaudeDriver implements Driver {
         this.#assertRunning();
         if (st.ended) return;
         st.relaunchNote = true;
-        const batch = this.#takeBatch(st, false);
+        const batch = this.#takeBatch(st);
         if (batch) await this.#startup(st, batch, null, files);
         return;
       }
-      const batch = this.#takeBatch(st, false);
+      const batch = this.#takeBatch(st);
       if (!batch) return;
       if (proc.initSeen) await this.#writeBatch(st, proc, batch);
       else await this.#startup(st, batch, proc, null);
@@ -845,6 +846,8 @@ export class ClaudeDriver implements Driver {
       durationMs: typeof obj.duration_ms === "number" ? obj.duration_ms : null,
       at,
     };
+    // 关机时被 SIGINT 结束的一轮才算：没理 SIGINT、正常做完的照常是回复
+    if (proc.closing === "shutdown" && (!ok || st.turnInterrupted)) event.shutdown = true;
     if (!ok) {
       event.error = { subtype, message: resultMessage(obj, subtype) };
       this.#forgetWritten(st, batch);

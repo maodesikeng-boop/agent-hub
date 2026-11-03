@@ -557,28 +557,24 @@ describe("原始日志", () => {
 });
 
 describe("恢复和重发", () => {
-  it("start(recovery) 且没有待发消息：单独写一条恢复说明，等到 init 才 resolve", async () => {
+  it("send(recovery)：恢复说明、重发说明和消息写在同一行，这一轮对应这条消息（不单独占一轮）", async () => {
     const t = harness({ driver: { idleCloseMs: 50 } });
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
     await t.waitFor("session.exited");
-    await t.driver.start(s.id, { recovery: true });
-    expect(t.of("session.started")).toHaveLength(2);
-    expect(t.stdinTexts()[1]).toBe(RESTART_RECOVERY_NOTE);
-    // 单独写的说明不对应任何消息
+    await expect(t.driver.send(s.id, { ...user(5, "之前那条"), resend: true, recovery: true })).resolves.toEqual({ kind: "written" });
     await t.waitFor("turn.ended", undefined, 2);
-    expect(t.of("turn.ended")[1]!.messageIds).toEqual([]);
-    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+    expect(t.stdinTexts()).toEqual(["hi", `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n之前那条`]);
+    expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [5]]);
   });
 
-  it("start(recovery) 后紧接着的消息排在说明后面；重发的消息前面加 RESEND_NOTE", async () => {
+  it("send(recovery) 只给它之后写进去的第一行加恢复说明；后面再重发的不加", async () => {
     const t = harness({ script: { turns: [slowTurn(200)] } });
     const s = t.addSession({ hasCompletedTurn: false });
-    const starting = t.driver.start(s.id, { recovery: true });
-    await expect(t.driver.send(s.id, { ...user(5, "之前那条"), resend: true })).resolves.toEqual({ kind: "queued" });
-    await starting;
+    await t.driver.send(s.id, { ...user(5, "第一条"), resend: true, recovery: true });
+    await expect(t.driver.send(s.id, { ...system(6, "【Worker #1 · X 的汇报】好了"), resend: true })).resolves.toEqual({ kind: "queued" });
     await t.waitFor("turn.ended", undefined, 2);
-    expect(t.stdinTexts()).toEqual([RESTART_RECOVERY_NOTE, `${RESEND_NOTE}\n\n之前那条`]);
+    expect(t.stdinTexts()).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n第一条`, `${RESEND_NOTE}\n\n【Worker #1 · X 的汇报】好了`]);
   });
 
   it("start 已经在跑的会话：直接返回，不再起进程", async () => {
@@ -611,6 +607,35 @@ describe("关机", () => {
     expect(t.store.get(idle.id)).toMatchObject({ status: "idle", pid: null });
     expect(t.store.get(busy.id)).toMatchObject({ status: "idle", pid: null });
     await expect(t.driver.send(idle.id, user(3, "hi"))).rejects.toMatchObject({ code: "spawn_failed" });
+  });
+
+  it("关机时 SIGINT 结束的那一轮：turn.ended 带 shutdown（账本据此让 Worker 重启后接着做）；用户点停止的不带", async () => {
+    const t = harness({ script: { turns: [slowTurn(30_000), slowTurn(30_000)] } });
+    const stopped = t.addSession();
+    const busy = t.addSession();
+    await t.driver.send(stopped.id, user(1, "写很久"));
+    await t.waitFor("message.processing", (e) => e.messageIds[0] === 1);
+    await t.driver.interrupt(stopped.id);
+    await t.driver.send(busy.id, user(2, "写很久"));
+    await t.waitFor("message.processing", (e) => e.messageIds[0] === 2);
+    await t.driver.shutdown();
+    const ended = t.events.filter((e) => e.event.type === "turn.ended");
+    const byUser = ended.find((e) => e.sessionId === stopped.id)!.event;
+    const byShutdown = ended.find((e) => e.sessionId === busy.id)!.event;
+    expect(byUser).toMatchObject({ interrupted: true, messageIds: [1] });
+    expect(byUser).not.toHaveProperty("shutdown");
+    expect(byShutdown).toMatchObject({ interrupted: true, shutdown: true, messageIds: [2] });
+  });
+
+  it("关机时这一轮其实正常做完了（claude 没理 SIGINT）：turn.ended 不带 shutdown，账本照常记回复、发汇报", async () => {
+    const t = harness({ driver: { shutdownGraceMs: 1_500 }, script: { ignoreSigint: true, turns: [slowTurn(400)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "写一会儿"));
+    await t.waitFor("message.processing", (e) => e.messageIds[0] === 1);
+    await t.driver.shutdown();
+    const [ended] = t.of("turn.ended");
+    expect(ended).toMatchObject({ ok: true, interrupted: false, messageIds: [1] });
+    expect(ended).not.toHaveProperty("shutdown");
   });
 
   it("不理 SIGINT 的进程：最多等 shutdownGraceMs，然后强制结束", async () => {
@@ -948,10 +973,10 @@ describe("启动和关闭的边角", () => {
     expect(t.of("session.exited")).toEqual([]);
   });
 
-  it("start(recovery) 启动失败：恢复说明还回去，下一条写进去时带上", async () => {
+  it("send(recovery) 启动失败：恢复说明还回去，下一条写进去时带上", async () => {
     const t = harness({ script: { rejectSessionArgs: true } });
     const s = t.addSession();
-    await expect(t.driver.start(s.id, { recovery: true })).rejects.toMatchObject({ code: "start_args_conflict" });
+    await expect(t.driver.send(s.id, { ...user(9, "先发的"), recovery: true })).rejects.toMatchObject({ code: "start_args_conflict" });
     writeFileSync(join(t.dir, "script.json"), "{}");
     await expect(t.driver.send(s.id, user(1, "hi"))).resolves.toEqual({ kind: "written" });
     await t.waitFor("turn.ended");

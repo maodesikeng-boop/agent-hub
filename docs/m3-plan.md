@@ -3,6 +3,7 @@
 > 状态：用户 2026-11-03 看过并改了一轮，总的原则是“设计的时候不要限制太多了”。第 4 节的问题都已经定了，没有待定的。硬限制只留一条：Worker 不能写记忆（第 2.2 节）。其余的靠提示词里的规矩、`auto` 档的分类器和项目经理自己判断。
 > 依据：[prototype-design.md](prototype-design.md)（下文简称“设计”）第 2.3、3.3、5.1、7.7、8.4、11、12 章；[m0-report.md](m0-report.md)；main 上 `ace2901` 的 M2 实现；Claude Code 官方文档（链接在文末）；2026-11-03 用 `claude` 2.1.314 实测过一次（第 2.1 节）。
 > 写于 2026-11-03。
+> 进度：W0～W5 都做完了（PR #30～#34 和 W5 的 PR）。各块和计划不一样的地方见第 6 节。
 
 ## 1. 范围
 
@@ -55,7 +56,7 @@
   - 在 `-p` 下被连续拦 3 次或者累计 20 次，那个动作就不做，Claude 接着干，不会卡死。
   - 订阅账号的分类器调用不算用量，只有企业版和 API 账号算（[permission-modes][cc-modes] 的 Cost and latency 一节）。
 - **推送、合并、装软件**：不用规则拦，写成提示词里的规矩，两边都有，放在 `prompt.ts` 的 `ASK_FIRST_RULES`：“推送、合并、装软件（`brew`、全局安装）、`sudo` 之前，先问用户。”项目经理直接问用户；Worker 问不了用户，就在汇报的“问题”里写，由项目经理去问。其余的交给分类器和项目经理自己判断。要知道的一点：文档写明 `auto` 默认允许“推送到当前仓库的任何分支”，所以推送前问不问用户，全靠这条规矩。
-- **写进哪里**：设置文件的 `permissions.defaultMode: "auto"`，不加命令行参数。这样内容进 `fingerprint`，改了下一条消息前自动重启（M2 现成的机制）。`--settings` 文件里的 `defaultMode` 管不管用，要实测（冒烟 S11）；不管用就改成在 `buildClaudeArgs` 里加 `--permission-mode`。
+- **写进哪里**：设置文件的 `permissions.defaultMode: "auto"`，不加命令行参数。这样内容进 `fingerprint`，改了下一条消息前自动重启（M2 现成的机制）。`--settings` 文件里的 `defaultMode` 管用：冒烟 S11 用 `claude` 2.1.314 + haiku 实测，`system/init` 里的 `permissionMode` 是 `auto`，Write、`git commit`、`hub status` 都没被拦。
 
 **“一样”具体指什么**：以 `src/daemon/launch.ts` 现在给项目经理的做法为准，Worker 走同一个函数：
 
@@ -106,7 +107,7 @@
 
 - `Edit` 规则也管 Write 工具、Bash 里认得出的 `sed`、`tee` 和重定向（[permissions][cc-perms] 的 What Read and Edit rules cover 一节）。拒绝规则在所有模式下都先于别的规则（同一页的 Manage permissions 一节）。
 - **局限**：Worker 自己写 Python、Node 脚本去改文件，这些规则就拦不住了。文档也说这类规则“不是安全边界”，要真隔开得开沙箱，原型不做（设计第 11 章）。M3 不在合并前再查一道（用户定的）。合并是项目经理做的，它看改动时能看出来。
-- **要实测的**（冒烟 S12）：`auto` 档下这几条拒绝规则真的生效，附加文件夹里的约定文件也拦得住；`Edit(~/.claude/**)` 挡得住 Write；自动记忆关掉以后真的不写。
+- **实测过**（冒烟 S12，2.1.314 + haiku）：`auto` 档下这几条拒绝规则生效，工作目录里的 `AGENTS.md`、附加文件夹里的 `AGENTS.md` 和 `CLAUDE.md`、`~/.claude/` 下的探针都在 `permission_denials` 里、文件没变；自动记忆目录前后一样；同一个 Worker 在工作目录和附加文件夹里写普通文件都成功。只读的 Worker（`dontAsk`）读得到、写入被拒。
 
 **Worker 的任务本身就要改 `AGENTS.md` 怎么办**：由项目经理来改。Worker 的提示词写明：“记忆文件（`AGENTS.md`、`CLAUDE.md`、`.claude/` 下的东西）你不能改。觉得需要改，就在汇报的‘问题’里写清楚要改成什么。”项目经理验收时在主文件夹里自己改，它有写权限。
 
@@ -135,7 +136,7 @@
   - Worker 的对话和项目经理的一样有“正在运行 `xxx`”和停止按钮，用户看得见、点得停。
   - 这一轮出错、崩溃、被停止，项目经理都会收到一行，写明原因，由它决定 `send` 让 Worker 接着做，还是 `end` 收工。
   - 建 worktree 失败（重试 3 次后），项目经理的会话里发一行，写明原因，这个 Worker 标 `ended`。
-  - 守护进程重启后照 M2 的做法用 `--resume` 恢复。
+  - 守护进程重启后照 M2 的做法用 `--resume` 恢复。关机打断的那一轮和 M1 不一样：Worker 的消息不标“已停止”，也不发“这一轮没做完”，重启后接着做完再汇报；项目经理正在处理的汇报也一样，重启后重发给它（第 6 节 W5 第 3 条）。
 
 ### 2.5 汇报格式和“做完了”
 
@@ -211,7 +212,7 @@ W1 建 worktree（不依赖别的） ──────────────�
 | W2 账本 | `src/daemon/ledger/`（新文件 `workers.ts`）、`hub-commands.ts`（`hubCall` 按 `HUB_COMMAND_ROLES` 放行）、`src/daemon/agent-api/`（请求体规格）、`src/hub/cli.ts`（`hub worker …` 的命令行解析） | W0 |
 | W3 启动文件和提示词 | `src/daemon/launch.ts`、`src/daemon/prompt.ts`、`test/fake-claude/`（按会话选剧本） | W0 |
 | W4 网页 + 界面服务 | `src/web/`、`src/daemon/ui-server/` | W0 |
-| W5 组装 | `src/daemon/daemon.ts`、`handlers.ts`（`worktree.create` 的处理函数接到 W1）、`main.ts`、`test/e2e/`、`test/smoke/`、`HANDOVER.md`、本文档 | W1～W4 |
+| W5 组装 | `src/daemon/daemon.ts`、`handlers.ts`（`worktree.create` 的处理函数接到 W1）、`main.ts`、`test/e2e/`、`test/smoke/`、`HANDOVER.md`、本文档；名字收拢到 `src/shared/names.ts`（第 6 节）；修了关机打断 Worker 的 bug（驱动层、账本各一处） | W1～W4 |
 
 **接口约定**（W0 写进 `src/shared/`，之后要改得在 PR 里说明）：
 
@@ -287,7 +288,14 @@ W1 建 worktree（不依赖别的） ──────────────�
 | 收工：剧本跑 `hub worker end 1` | Worker 会话 `ended`、令牌作废，会话里一行“已收工” |
 | 不是仓库：主文件夹不是 git 仓库，派活 | 能派；Worker 的 cwd 是主文件夹 |
 | Worker 越权：剧本跑 `hub persona edit` | 退出码 1，`forbidden` |
-| 重启：Worker 跑到一半 SIGTERM，再启动 | Worker 用 `--resume` 接着做，worktree 还在 |
+| 重启：Worker 跑到一半 SIGTERM，再启动 | Worker 用 `--resume` 接着做，worktree 还在；关机时不发“这一轮没做完”，重启后只有一行汇报（验收第 11 条） |
+| 重启：项目经理处理 Worker 的汇报时关机 | 汇报还是处理中，不标已停止；再启动后带着重发说明交给项目经理的同一个会话（`--resume`），它照常处理完 |
+| 重启：worktree 还没建好（第一次建失败、在等重试）就关机 | 再启动后接着建，Worker 照常开工、汇报 |
+| 连派 10 个（用 worktree） | 都成功，10 个不同的 worktree，10 行汇报 |
+| 建 worktree 失败：分支名已被占 | 重试 3 次后项目经理收到一行 `worktree_failed`，Worker 标 `ended`，没起 Worker 会话 |
+| Worker 的对话 | 快照里有（kind `worker`）；`GET …/messages?before=` 能往前翻；`POST …/stop` 停的是 Worker，项目经理收到“被停止了” |
+
+实现在 `test/e2e/m3.test.ts`（8 条）。
 
 **真 `claude` 冒烟**（`pnpm smoke`，用 haiku，在一次性的小 git 仓库里跑，三次调用就够；M1、M2 的照跑）：
 
@@ -300,6 +308,8 @@ W1 建 worktree（不依赖别的） ──────────────�
   期望：前两件都在 `permission_denials` 里，`AGENTS.md` 和探针文件都没变；这个仓库的自动记忆目录跑前跑后一样。同一个 Worker 写一个普通文件能成功，证明不是整个都被拦了。
   - 带附加文件夹：项目挂一个附加文件夹（里面放 `AGENTS.md` 和 `CLAUDE.md`），派一个在主文件夹里干活的 Worker（带 `--add-dir`），让它改附加文件夹里这两个文件。期望：都在 `permission_denials` 里，文件没变；同一个附加文件夹里的普通文件能写。
 - **S13 整条路**：项目经理一句话派一个 haiku Worker，改一行、提交；Worker 的汇报回到项目经理会话；用户说“合并吧”，主文件夹里有这次改动，worktree 删了。
+
+实现在 `test/smoke/m3.ts`，后来又加了 S14（Worker 干到一半关机，再启动后接着做完、汇报回来；重启后只写一行）。2026-11-03 用 `claude` 2.1.314 + haiku 各跑一次，S11、S12、S13 都通过；顺带看了额度：`rate_limit_event` 里各窗口的 `utilization` 是 0～1 的小数（这次是 0.4、0.19），W4 按这个显示是对的。为了稳，S12 让项目经理原样跑一条现成的命令（任务说明放在文件里，`--stdin < 文件`），不靠它转述。
 
 ## 4. 要用户拍板的问题
 
@@ -331,6 +341,42 @@ M3 所有 PR 合并后，用户在本机：
 10. 一个不是 git 仓库的文件夹，建成另一个项目经理的项目，让它派 Worker：照样能派，Worker 直接在那个文件夹里改。
 11. 派一个慢的 Worker，Ctrl+C 再 `pnpm start`：Worker 接着做完，汇报照样回来。
 12. `pnpm smoke`：S1～S6、S8～S13 全部通过。
+
+## 6. 实际做法和计划不一样的地方（W5 组装后补）
+
+各块 PR 里写明的差别，汇总在这里，以代码为准。
+
+**W0（PR #31）**
+
+1. `buildSessionSettings` 的参数用 `stateDir`（`state/` 的真实路径），不是 `hubHome`。
+2. `WorkerMessageMeta` 多带 `workerConversationId`、`title`、`readonly`，网页显示那一行、点开对话都不用另查。
+3. 消息发送方加了 `pm`：Worker 对话里项目经理说的话（任务说明、打回）。
+4. 汇报和出错那一行就是交给项目经理的那条消息：`text` 以“【Worker #N · 标题 的汇报】”开头，走 `session.send`；`started`、`ended` 只给人看。
+5. 标题超过 80 个字符截断；任务说明最多 100 KB。
+
+**W2（PR #34）**
+
+1. 项目经理的 `--add-dir` 里的 `worktrees/<项目编号>/` 是这个项目派过 worktree Worker 之后才加，没用 Worker 的项目经理不会因此重启。
+2. 在主文件夹里干活的 Worker，`addDirs` 只带项目的附加文件夹。
+3. 派活前由 agent 接口异步探 git（`probeWorkspace`，每次最多 5 秒），账本的事务里不做 I/O；git 没跑成就拒绝派活，提示重试或加 `--no-worktree`，不默默改成在主文件夹里干。
+4. Worker 收工后，正在跑的那一轮照样汇报。
+5. Worker 的消息发不出去（`session.send` 次数用完）也给项目经理发一行 `turn_failed`。
+
+**W3（PR #33）**：`createPmLaunchPreparer` 改名 `createLaunchPreparer`，两种角色一个函数；`buildHubSettings` 删了，放行规则挪到 `policy.ts`。
+
+**W5（组装）**
+
+1. `worktree.create` 的处理函数在 `handlers.ts`：先 `getWorktreeTask`（null 或已收工 → 做完），再 `addWorktree`，再 `onWorktreeCreated`；git 出错抛给执行器重试，次数用完执行器调 `onActionFailed`。
+2. `worktrees/` 启动时先 `mkdir -p` 再 realpath，账本和启动准备用同一个真实路径（`state/` 也是）。这样 Worker 的 cwd、项目经理的 `--add-dir` 和主文件夹、附加文件夹一样都是真实路径（macOS 上 `/var` 是 `/private/var`）。
+3. **修了一个 bug：关机打断的一轮。** 关机时驱动层给忙着的 `claude` 发 SIGINT，`claude` 回一条被打断的 `result`。原来账本把它当成“用户点了停止”：Worker 的消息标“已停止”，项目经理收到“这一轮没做完：被停止了”，重启后也不会接着做，和接口约定、验收第 11 条对不上。现在：
+   - 驱动层：关机时被 SIGINT 结束的那一轮（`!ok` 或 `interrupted`），`turn.ended` 带 `shutdown: true`（`shared/driver.ts` 的 `TurnEndedEvent`）；关机中 `claude` 没理 SIGINT、正常做完的一轮不带，照常算回复、汇报（PR #35 审查第 2 条）；
+   - 账本：Worker 的会话遇到它（或者 `session.exited` 的 `shutdown`），消息不改状态，还是已送达、处理中，重启恢复把它重发给同一个会话；也不发那一行（`ledger/messages.ts` 的 `resumesAfterShutdown`、`ledger/workers.ts` 的 `turnOutcome`）；
+   - 项目经理的会话按消息分：系统交给它的（sender `system`：Worker 的汇报、`turn_failed` 那几行）同样不改状态，重启后重发给它，不用等用户提醒；用户自己发的照 M2 标“已停止”，用户自己再发。
+4. **恢复说明不再单独占一轮**（PR #35 审查第 1 条）。原来重启恢复先登记一个 `session.start recovery`，驱动层把 `RESTART_RECOVERY_NOTE` 单独写成一行；真 `claude` 在那一轮就把活干完、写了汇报，可那一轮不对应任何消息，汇报丢了，项目经理收到的是下一轮“这条我已经做过了”。现在不登记 `session.start`，每个被打断的会话第一条重发的消息带 `SessionSendParams.recovery`，驱动层把恢复说明、重发说明和原文写在同一行。M1、M2 的项目经理恢复走的是同一段代码，一起改了；`DriverStartOptions` 删了。冒烟 S14 用真 `claude` 验过。
+5. **建 worktree 时 git 被强杀留下的半成品**（PR #35 审查第 3 条）：`git worktree list` 里还锁着 `initializing` 的，`addWorktree` 不当成已经建好，先 `git worktree remove -f -f`、`git branch -D` 清掉再重建；`worktree add` 用 `LC_ALL=C` 跑，锁的理由不会被翻译。
+6. **名字收拢**：命令名、产品名只在 `src/shared/names.ts` 定（`HUB_COMMAND`、`PRODUCT_NAME`，加上由它们拼出来的 `LOG_PREFIX`、`DATA_DIR_NAME`、`WORKER_BRANCH_PREFIX`）。用到的地方：提示词、放行规则、`hub` 外壳的文件名、`hub/cli.ts` 的用法和报错、账本回给 agent 的话、Worker 的分支名、数据目录的默认名、日志开头、网页标题（`vite.config.ts` 把 `index.html` 里的 `%PRODUCT_NAME%` 换掉）和左上角。测试里的断言和假 `claude` 的剧本也用这些常量：把 `names.ts` 里的两个值改掉再跑 `pnpm check`，全部通过（W5 实测过）。
+   - 没跟着变的：环境变量名（`AGENT_HUB_HOME` 这些，在 `limits.ts`），用户可能已经在 shell 里设了；`hub.sock`、`hub.sqlite` 这些内部文件名。
+   - 还没做的：改了 `PRODUCT_NAME` 以后默认数据目录跟着变，已经有 `~/.agent-hub` 的用户要自己搬，或者用 `AGENT_HUB_HOME` 指过去。
 
 [cc-headless]: https://code.claude.com/docs/en/headless
 [cc-modes]: https://code.claude.com/docs/en/permission-modes

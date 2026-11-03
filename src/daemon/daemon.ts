@@ -4,7 +4,7 @@
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
 // - 关机（启动到哪一步就关到哪一步）：执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
@@ -18,11 +18,19 @@ import {
   type Unsubscribe,
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
+import { LOG_PREFIX } from "../shared/names.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import { createClaudeDriver } from "./driver/index.ts";
-import { createSessionEndHandler, createSessionSendHandler, createSessionStartHandler, endedOnRevokedTokens } from "./handlers.ts";
+import { addWorktree } from "./git/index.ts";
+import {
+  createSessionEndHandler,
+  createSessionSendHandler,
+  createSessionStartHandler,
+  createWorktreeCreateHandler,
+  endedOnRevokedTokens,
+} from "./handlers.ts";
 import { createLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
@@ -86,7 +94,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     try {
       await fn();
     } catch (error) {
-      log(`agent-hub: 关闭${what}时出错：${error instanceof Error ? error.message : String(error)}`);
+      log(`${LOG_PREFIX} 关闭${what}时出错：${error instanceof Error ? error.message : String(error)}`);
     }
   };
   const shutdown = async () => {
@@ -120,10 +128,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 2. 开库并迁移
     const { db } = openStore(paths);
     parts.db = db;
+    // realpath 过的两个目录，账本和启动准备用同一份：
+    // - stateDir：Worker 的记忆规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
+    // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
+    //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
+    mkdirSync(paths.worktreesDir, { recursive: true });
+    const stateDir = realpathSync.native(paths.stateDir);
+    const worktreesDir = realpathSync.native(paths.worktreesDir);
     const ledger = createLedger(db, {
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
       dataHome: paths.home,
+      worktreesDir,
     });
     const sessions = createSessionStore(db);
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
@@ -138,9 +154,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       store: sessions,
       prepareLaunch: createLaunchPreparer({
         launchDir: paths.launchDir,
-        // realpath 过的：Worker 的记忆规则（policy.ts 的 stateDirDenyRule）按真实路径匹配
-        stateDir: realpathSync.native(paths.stateDir),
-        worktreesDir: paths.worktreesDir,
+        stateDir,
+        worktreesDir,
         getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
         tokens: endedOnRevokedTokens(tokens),
         // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
@@ -156,15 +171,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 5. 重启恢复（账本那部分；执行器启动时再把“执行中”改回“待执行”），然后按数据库同步性格设定文件
     const recovered = ledger.recoverAfterRestart();
     if (recovered.resentMessageIds.length + recovered.requeuedMessageIds.length > 0) {
-      log(`agent-hub: 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
+      log(`${LOG_PREFIX} 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
     }
     const synced = ledger.syncPersonaFiles();
-    if (synced.recordedPmIds.length > 0) log(`agent-hub: 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
+    if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
     // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件）
     if (ledger.snapshot().pms.length === 0) {
       const defaultModel = env[ENV_DEFAULT_MODEL] || undefined;
       const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: DEFAULT_PM_PERSONA, ...(defaultModel ? { defaultModel } : {}) });
-      log(`agent-hub: 第一次启动，建了项目经理“${pm.name}”`);
+      log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
     }
 
     // 7. 处理函数、接线、启动执行器
@@ -172,11 +187,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const deps = { driver, ledger, sessions, tokens };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
+    // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌
     executor.register("session.end", createSessionEndHandler(deps));
+    executor.register("worktree.create", createWorktreeCreateHandler({ ledger, addWorktree }));
     parts.unsubscribe.push(
       ledger.onActionEnqueued(() => executor.wake()),
       ledger.onStopRequested(({ sessionId }) => {
-        driver.interrupt(sessionId).catch((error: unknown) => log(`agent-hub: 停止失败：${String(error)}`));
+        driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
       }),
     );
     parts.executor = executor;
@@ -185,7 +202,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
-    if (!existsSync(staticDir)) log(`agent-hub: 没找到网页文件 ${staticDir}，先跑 pnpm build`);
+    if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     parts.ui = await startUiServer({ ledger, token, port, staticDir });
 
     let stopping: Promise<void> | undefined;

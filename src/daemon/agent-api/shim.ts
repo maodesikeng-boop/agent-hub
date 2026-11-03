@@ -3,6 +3,7 @@
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HUB_COMMAND } from "../../shared/names.ts";
 
 const BIN_DIR_MODE = 0o700;
 const SHIM_MODE = 0o700;
@@ -27,11 +28,11 @@ export function hubShimContent(nodePath: string, mainScript: string): string {
   return `#!/bin/sh\nexec ${shellQuote(nodePath)} ${shellQuote(mainScript)} "$@"\n`;
 }
 
-/** 写（或重写）<binDir>/hub，临时文件 + 改名；返回它的路径。 */
+/** 写（或重写）<binDir>/hub（文件名是 names.ts 的 HUB_COMMAND），临时文件 + 改名；返回它的路径。 */
 export function installHubShim(opts: HubShimOptions): string {
   mkdirSync(opts.binDir, { recursive: true, mode: BIN_DIR_MODE });
   chmodSync(opts.binDir, BIN_DIR_MODE);
-  const target = join(opts.binDir, "hub");
+  const target = join(opts.binDir, HUB_COMMAND);
   const tmp = `${target}.${process.pid}.tmp`;
   writeFileSync(tmp, hubShimContent(opts.nodePath ?? process.execPath, opts.mainScript ?? DEFAULT_HUB_MAIN), { mode: SHIM_MODE });
   // writeFileSync 的 mode 受 umask 影响，改名前再定一次

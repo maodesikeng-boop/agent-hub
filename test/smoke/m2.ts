@@ -3,7 +3,7 @@
 // 就用界面接口建，只有场景要验的那一步让真 claude 去做。
 // S5 会话里一句话定项目；S6 挂文件夹后下一条消息前自动重启；S8 说“以后用列表”；S9 两个项目经理同时回答。
 // S7（换项目经理、交接）11-03 拿掉了。
-import { RELAUNCH_NOTE } from "../../src/shared/index.ts";
+import { HUB_COMMAND, RELAUNCH_NOTE } from "../../src/shared/index.ts";
 import { waitForStatus, waitUntil } from "../e2e/harness.ts";
 import { MODEL, Smoke, TURN_MS, expect, looksLikeList, scenario, type Outcome } from "./kit.ts";
 
@@ -28,7 +28,8 @@ async function pmWithFolder(smoke: Smoke, name: string, folder: string): Promise
 }
 
 /** agent 敲过的、以 hub 开头的命令。 */
-const hubCommands = (smoke: Smoke, sessionId: number) => smoke.bashCommands(sessionId).filter((c) => /(^|\n|;|&&)\s*hub\b/.test(c));
+const hub = HUB_COMMAND;
+const hubCommands = (smoke: Smoke, sessionId: number) => smoke.bashCommands(sessionId).filter((c) => new RegExp(`(^|\\n|;|&&)\\s*${hub}\\b`).test(c));
 
 export async function runM2(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
   if (only("S5")) {
@@ -39,7 +40,7 @@ export async function runM2(outcomes: Outcome[], only: (name: string) => boolean
       const state = await smoke.client.state();
       const project = state.projects.find((p) => p.conversationId === smoke.privateId);
       const session = smoke.sessionRow();
-      const create = hubCommands(smoke, session.id).filter((c) => c.includes("hub project create"));
+      const create = hubCommands(smoke, session.id).filter((c) => c.includes(`${hub} project create`));
       expect(project, `没建出项目；agent 敲的命令：${JSON.stringify(smoke.bashCommands(session.id))}；回复：${replies.join("|")}`);
       expect(create.length > 0, "agent 没敲 hub project create");
       expect(create.every((c) => !c.includes("$")), `hub project create 命令里有变量：${create.join(" | ")}`);
@@ -66,7 +67,7 @@ export async function runM2(outcomes: Outcome[], only: (name: string) => boolean
       const secret = `KIWI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       const extra = smoke.folder("extra", { "secret.txt": `暗号是 ${secret}\n` });
       const conversationId = await pmWithFolder(smoke, "阿周", main);
-      await smoke.ask(conversationId, `用 hub project attach 把文件夹 ${extra} 挂到你的项目上。挂好后只回复“挂好了”。`);
+      await smoke.ask(conversationId, `用 ${hub} project attach 把文件夹 ${extra} 挂到你的项目上。挂好后只回复“挂好了”。`);
       const attached = (await smoke.client.state()).folders.some((f) => f.path === extra && !f.isMain);
       expect(attached, "项目里没有新挂的文件夹");
       const session = await smoke.currentSession(conversationId);
@@ -89,7 +90,7 @@ export async function runM2(outcomes: Outcome[], only: (name: string) => boolean
       const chat = smoke.privateId;
       await smoke.ask(
         chat,
-        "以后你所有回复都用 Markdown 列表（每条以“- ”开头）。请用 hub persona edit 记下来：先 hub persona show 看原文，在原文基础上加这条要求，用 --stdin 和 heredoc 提交，理由写“用户要求用列表”。记好后回复“记好了”。",
+        `以后你所有回复都用 Markdown 列表（每条以“- ”开头）。请用 ${hub} persona edit 记下来：先 ${hub} persona show 看原文，在原文基础上加这条要求，用 --stdin 和 heredoc 提交，理由写“用户要求用列表”。记好后回复“记好了”。`,
       );
       const session = smoke.sessionRow();
       const edits = smoke.query<{ actor: string; text_after: string; text_before: string }>("SELECT actor, text_before, text_after FROM persona_changes");

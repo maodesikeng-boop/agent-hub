@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { PRODUCT_NAME } from "../../shared/names.ts";
 import { formatTime } from "../format.ts";
 import { stripMarkdown } from "../plainText.ts";
 import type { ConversationEntry } from "../selectors.ts";
@@ -54,7 +55,7 @@ export function Sidebar({
   return (
     <aside className="flex w-[300px] shrink-0 flex-col bg-sidebar max-[1100px]:w-[264px]">
       <div className="flex h-16 shrink-0 items-center px-5">
-        <span className="text-[17px] font-semibold tracking-tight">agent-hub</span>
+        <span className="text-[17px] font-semibold tracking-tight">{PRODUCT_NAME}</span>
       </div>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 pt-1" aria-label="对话列表">
         {entries.map((entry) => (

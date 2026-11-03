@@ -122,8 +122,15 @@ export async function probeWorkspace(folder: string, options: GitOptions = {}): 
 }
 
 /**
+ * `git worktree add` 建的过程中给 worktree 加的锁的理由（git 源码 builtin/worktree.c）。git 正常跑完会解锁；
+ * 还锁着这个理由，说明上次 add 被强杀了，留下的是半成品（文件不全）。add 用 LC_ALL=C 跑，这个理由不会被翻译。
+ */
+const INITIALIZING_LOCK = "initializing";
+
+/**
  * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`。
  * 重复执行算成功：worktree 已经在这个目录、分支也对得上，就直接返回 `created: false`，不动里面的东西。
+ * 上次 add 被强杀留下的半成品（还锁着 initializing）不算建好：`git worktree remove -f -f` 加 `git branch -D` 清掉，再重建。
  * 分支名已经有了（比如别的 Worker 占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
  */
 export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorktreeResult> {
@@ -137,7 +144,17 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
 
   const listRun = await git(["-c", "core.quotePath=false", "worktree", "list", "--porcelain"]);
   if (listRun.code !== 0) throw failed("git worktree list", listRun);
-  const existing = findWorktree(parseWorktreeList(listRun.stdout), worktreePath);
+  let existing = findWorktree(parseWorktreeList(listRun.stdout), worktreePath);
+  if (existing?.locked === INITIALIZING_LOCK) {
+    // 两个 -f：锁着的 worktree 要这样才删得掉。分支是那次 add 建的，还没有 Worker 在上面干过活
+    const removeRun = await git(["worktree", "remove", "-f", "-f", existing.path]);
+    if (removeRun.code !== 0) throw failed("git worktree remove（清掉没建完的 worktree）", removeRun);
+    if (existing.branch === `refs/heads/${branch}`) {
+      const deleteRun = await git(["branch", "-D", branch]);
+      if (deleteRun.code !== 0) throw failed("git branch -D（清掉没建完的 worktree 的分支）", deleteRun);
+    }
+    existing = undefined;
+  }
   if (existing) {
     if (existing.branch !== `refs/heads/${branch}`) {
       const now = existing.branch ? existing.branch.replace(/^refs\/heads\//, "") : "（没有分支）";
@@ -150,7 +167,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
   const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
   if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
 
-  const addRun = await git(["worktree", "add", "-b", branch, worktreePath, baseCommit]);
+  const addRun = await runGit(repoFolder, ["worktree", "add", "-b", branch, worktreePath, baseCommit], timeoutMs, { LC_ALL: "C" });
   if (addRun.code !== 0) throw failed("git worktree add", addRun);
   return { created: true, baseCommit };
 }
@@ -159,6 +176,8 @@ interface WorktreeEntry {
   path: string;
   /** `refs/heads/...`；游离 HEAD 或 bare 时没有。 */
   branch: string | null;
+  /** 锁着时的理由（没写理由是空串）；没锁是 null。 */
+  locked: string | null;
 }
 
 /** 解析 `git worktree list --porcelain`：每个 worktree 一段，段之间空一行。 */
@@ -167,11 +186,13 @@ function parseWorktreeList(output: string): WorktreeEntry[] {
   for (const block of output.split(/\n\s*\n/)) {
     let path: string | null = null;
     let branch: string | null = null;
+    let locked: string | null = null;
     for (const line of block.split("\n")) {
       if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
       else if (line.startsWith("branch ")) branch = line.slice("branch ".length);
+      else if (line === "locked" || line.startsWith("locked ")) locked = line.slice("locked".length).trim();
     }
-    if (path !== null) entries.push({ path, branch });
+    if (path !== null) entries.push({ path, branch, locked });
   }
   return entries;
 }

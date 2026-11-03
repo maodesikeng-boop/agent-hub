@@ -27,6 +27,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_MODEL_CHARS, MAX_TASK_BYTES } from "../../shared/limits.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { parseWorkerReport, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
 import { fail } from "./context.ts";
@@ -68,6 +69,8 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
   if (event.messageIds.length === 0) return null;
   const turnMessageId = Math.max(...event.messageIds);
   if (event.type === "turn.ended") {
+    // 关机时 SIGINT 结束的一轮：重启后接着做完再汇报（messages.ts 的 resumesAfterShutdown）
+    if (event.shutdown === true) return null;
     if (event.interrupted) return { event: "turn_failed", turnMessageId, reason: TURN_STOPPED };
     if (!event.ok) {
       const reason = event.error === undefined ? TURN_FAILED : `${event.error.subtype}: ${event.error.message}`;
@@ -223,7 +226,7 @@ export function createLedgerWorkers(
     context: HubCallContext,
   ): HubResult<"worker.start"> => {
     const project = activeProjectOf(caller.pmId);
-    if (project === null) throw fail("invalid", "你还没有项目，没法派 Worker：先用 hub project create --folder <主文件夹> 建一个");
+    if (project === null) throw fail("invalid", `你还没有项目，没法派 Worker：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
     const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     const task = validTask(args.task, "任务说明");
@@ -302,7 +305,7 @@ export function createLedgerWorkers(
     const notes = [`已派出 Worker #${id}“${title}”，${describeWorkspace(worker, card.mainFolder)}`];
     if (workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
     if (readonly) notes.push("。它是只读的，只看不改");
-    notes.push(`。它每做完一轮，汇报会自动发给你；打回用 hub worker send ${id} --stdin，收工用 hub worker end ${id}。`);
+    notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
     if (workspace === "worktree" && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
     return { text: notes.join(""), data: { worker: toWorkerRecord(worker) } };
   };
@@ -373,7 +376,7 @@ export function createLedgerWorkers(
   /** 在 applyDriverEvent 的同一个事务里、消息状态改完之后调。不是 Worker 的会话、不是一轮结束，什么也不做。 */
   /** 这一轮没做完：一行 turn_failed，原因交给项目经理。去重键是这一轮（或发不出去的那条）消息的编号。 */
   const insertTurnFailed = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, reason: string) => {
-    const deliver = `这一轮没做完：${reason}。要它接着做用 hub worker send ${worker.id} --stdin，不要了用 hub worker end ${worker.id}。`;
+    const deliver = `这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`;
     insertLine(p, worker, { event: "turn_failed", status: null, summary: reason, turnMessageId, deliver });
   };
 

@@ -1,8 +1,9 @@
-// 三类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条）。
-// - session.start → driver.start(sessionId, { recovery })；
+// 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
+// - session.start → driver.start(sessionId)；
 // - session.send → 读出消息，调 driver.send：written / rejected → done；queued（会话正忙）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
-// - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态。
+// - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
+// - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）。
 // session_ended（会话已经 end 过）不是故障，不抛给执行器（执行器就不会记 driver 的 health），怎么接见 Driver.end 的注释。
 import {
   DriverError,
@@ -18,6 +19,7 @@ import {
   type SessionStore,
   type SessionTokens,
 } from "../shared/index.ts";
+import type { AddWorktreeOptions, AddWorktreeResult } from "./git/index.ts";
 
 
 export interface HandlerDeps {
@@ -33,9 +35,9 @@ const isSessionEnded = (error: unknown): error is DriverError => error instanceo
 
 export function createSessionStartHandler(deps: Pick<HandlerDeps, "driver">): ActionHandler<"session.start"> {
   return async (action) => {
-    const { sessionId, recovery } = action.params;
+    const { sessionId } = action.params;
     try {
-      await deps.driver.start(sessionId, recovery ? { recovery: true } : {});
+      await deps.driver.start(sessionId);
     } catch (error) {
       // 会话已经结束：没什么可起的
       if (isSessionEnded(error)) return { kind: "done" };
@@ -55,7 +57,7 @@ export function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, ses
 
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
-    const { sessionId, messageId, source, resend } = action.params;
+    const { sessionId, messageId, source, resend, recovery } = action.params;
     const message = deps.ledger.getMessage(messageId);
     // 消息没了，或者已经有结果（已回复、已停止）：没什么可发的
     if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
@@ -68,10 +70,11 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
         source,
         text: message.text,
         ...(resend ? { resend: true } : {}),
+        ...(recovery ? { recovery: true } : {}),
       });
     } catch (error) {
       if (!isSessionEnded(error)) throw error;
-      // 会话已经结束（迁移 0003 结束了老项目群的会话；以后 M3 结束 Worker 会话），这条消息发不出去了。
+      // 会话已经结束（迁移 0003 结束了老项目群的会话；Worker 收工了），这条消息发不出去了。
       // 已经写进去一半的（已送达、处理中：重启恢复时会遇到）按“这一轮被重启打断”处理，标已停止（和关机打断一轮一样）；
       // 还在排队的没有这一轮可停，标失败。
       const now = deps.ledger.getMessage(messageId);
@@ -93,6 +96,27 @@ export function createSessionEndHandler(deps: Pick<HandlerDeps, "driver" | "ledg
     deps.tokens.revoke(sessionId);
     // 驱动层直接把那一行写成 ended，没有对应的事件：推一次，网页才看得到
     deps.ledger.refreshSessionState(sessionId);
+    return { kind: "done" };
+  };
+}
+
+export interface WorktreeHandlerDeps {
+  ledger: Pick<Ledger, "getWorktreeTask" | "onWorktreeCreated">;
+  /** daemon/git 的 addWorktree（重复执行算成功）；测试换成假的。 */
+  addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
+}
+
+/**
+ * 给 Worker 建 worktree（shared/actions.ts 的 WorktreeCreateParams）。Worker 不在了、不用 worktree、已经收工：什么也不做。
+ * git 出错原样抛给执行器，按 ACTION_RETRY 重试；次数用完执行器调 onActionFailed（项目经理收到一行 worktree_failed）。
+ */
+export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHandler<"worktree.create"> {
+  return async (action) => {
+    const { workerId } = action.params;
+    const task = deps.ledger.getWorktreeTask(workerId);
+    if (task === null || task.status === "ended") return { kind: "done" };
+    const { baseCommit } = await deps.addWorktree({ repoFolder: task.repo, worktreePath: task.worktreePath, branch: task.branch });
+    deps.ledger.onWorktreeCreated(workerId, baseCommit);
     return { kind: "done" };
   };
 }

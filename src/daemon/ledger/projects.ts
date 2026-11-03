@@ -14,6 +14,7 @@ import type { LedgerPersona } from "./persona.ts";
 import { toProject, toProjectFolder } from "./rows.ts";
 import type { ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 
 export type LedgerProjects = ReturnType<typeof createLedgerProjects>;
 
@@ -59,7 +60,7 @@ export function createLedgerProjects(
 
   const requireProject = (pmId: PmId): ProjectDbRow => {
     const row = activeProjectOf(pmId);
-    if (row === null) throw fail("not_found", "你还没有项目：先用 hub project create --folder <主文件夹> 建一个");
+    if (row === null) throw fail("not_found", `你还没有项目：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
     return row;
   };
 

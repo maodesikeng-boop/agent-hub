@@ -1,6 +1,6 @@
 // 执行器（设计第 12.2 节）：取到点的“待执行”动作，调注册的处理函数，按结果改状态。
 // - 同一个会话一次只跑一个动作（params.sessionId 相同的排队），不同会话并行，总数不超过 concurrency；
-// - 到点的动作里“启动或恢复会话”一律排在“发消息”前面（不看谁先到点），重启恢复时先带着恢复说明把会话起来；
+// - 到点的动作里“启动会话”一律排在“发消息”前面（不看谁先到点）；
 // - 处理函数抛错按 ACTION_RETRY 退避，每次都 reportHealth（DriverError → "driver"，其他 → "actions"），
 //   次数用完标 failed 并调 onActionFailed；任何一个动作成功，都把 "driver" 和 "actions" 清零（不看内存里报过什么）；
 // - 改动作状态写库失败记 "store"；没跑完却停在 running 的行（结果没写进去），下一轮改回 pending 重做；
@@ -18,6 +18,7 @@ import type {
 import { DriverError } from "../../shared/driver.ts";
 import type { ActionId, HealthModule } from "../../shared/domain.ts";
 import type { Ledger } from "../../shared/ledger.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
 import type { Db } from "../store/index.ts";
 import { setActionStatus, toActionRow } from "./queue.ts";
 import type { ActionDbRow } from "./queue.ts";
@@ -91,7 +92,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     try {
       deps.reportHealth(module, error);
     } catch (e) {
-      console.error("agent-hub executor: reportHealth failed:", e);
+      console.error(`${LOG_PREFIX} executor: reportHealth failed:`, e);
     }
   };
 
@@ -100,7 +101,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     try {
       fn();
     } catch (error) {
-      console.error("agent-hub executor:", error);
+      console.error(`${LOG_PREFIX} executor:`, error);
       report("store", errorMessage(error));
     }
   };

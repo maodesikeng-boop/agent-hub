@@ -11,6 +11,7 @@ import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
 import { HUB_CALL_FIELD_MAX_BYTES, MAX_NAME_CHARS, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -317,7 +318,7 @@ describe("文件夹", () => {
     hub(lin.sessionId, "project.attach", { folder: extra });
     expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: extra }), "conflict");
     expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: foo.dir }), "conflict");
-    expectLedgerError(() => hub(zhou.sessionId, "project.attach", { folder: extra }), "not_found", /还没有项目.*hub project create/);
+    expectLedgerError(() => hub(zhou.sessionId, "project.attach", { folder: extra }), "not_found", new RegExp(`还没有项目.*${HUB_COMMAND} project create`));
     expectLedgerError(() => hub(zhou.sessionId, "project.detach", { folder: extra }), "not_found", /还没有项目/);
     expectLedgerError(() => hub(lin.sessionId, "project.attach", { folder: join(work, "gone") }), "invalid", /不存在/);
   });
@@ -544,7 +545,7 @@ describe("hubCall 其他命令", () => {
     expect(status.text).toContain(extra);
     const none = hub(zhou.sessionId, "status", {} as never);
     expect(none.data.project).toBeNull();
-    expect(none.text).toMatch(/还没有项目.*hub project create/);
+    expect(none.text).toMatch(new RegExp(`还没有项目.*${HUB_COMMAND} project create`));
   });
 
   it("会话不存在、不是项目经理的会话 → forbidden；长字段在 hub_calls 里截断", () => {

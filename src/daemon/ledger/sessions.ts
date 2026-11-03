@@ -144,20 +144,15 @@ export function createLedgerSessions(ctx: LedgerContext) {
       // 按最早一条被打断的消息排，旧的先恢复
       const recoveredSessionIds: SessionId[] = [];
       for (const row of rows) {
-        const interrupted = row.status !== "queued";
-        (interrupted ? resentMessageIds : requeuedMessageIds).push(row.id);
-        if (interrupted && !recoveredSessionIds.includes(row.session_id)) recoveredSessionIds.push(row.session_id);
-      }
-      for (const sessionId of recoveredSessionIds) {
-        const session = getAgentSession(db, sessionId)!;
-        enqueue(p, { type: "session.start", params: { sessionId, generation: session.generation, recovery: true } });
-      }
-      for (const row of rows) {
-        const source = row.sender === "system" ? "system" : "user";
         const resend = row.status !== "queued";
+        (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
+        // 每个被打断的会话，第一条重发的消息带上恢复说明（和它写在同一行，不单独登记 session.start 去写）
+        const recovery = resend && !recoveredSessionIds.includes(row.session_id);
+        if (recovery) recoveredSessionIds.push(row.session_id);
+        const source = row.sender === "system" ? "system" : "user";
         enqueue(p, {
           type: "session.send",
-          params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}) },
+          params: { sessionId: row.session_id, messageId: row.id, source, ...(resend ? { resend: true } : {}), ...(recovery ? { recovery: true } : {}) },
         });
       }
       return { resentMessageIds, requeuedMessageIds, recoveredSessionIds };

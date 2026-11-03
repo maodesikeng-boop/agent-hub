@@ -7,7 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_PATHS, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, PRODUCT_NAME, RELAUNCH_NOTE, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
@@ -167,7 +167,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
   it("一句话建项目：会话里剧本跑 hub project create，推 project.created，对话里“项目已建好”，hub_calls 一行；下一条消息前按主文件夹重启", async () => {
     env = makeEnv();
     const foo = folder("foo");
-    env.setScript({ turns: [{ steps: [{ bash: `hub project create --folder ${foo}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
+    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project create --folder ${foo}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
     const { daemon, client, state, privateId, pmId } = await boot();
     const ws = await client.ws(state.seq);
     const id = await client.post(privateId, `在 ${foo} 建项目`);
@@ -234,7 +234,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(childEnv.HUB_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(childEnv.PATH!.split(":")[0]).toBe(join(env.home, "run", "bin"));
     const settings = JSON.parse(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")) as Record<string, unknown>;
-    expect(JSON.stringify(settings)).toContain("Bash(hub:*)");
+    expect(JSON.stringify(settings)).toContain(`Bash(${HUB_COMMAND}:*)`);
     expect(JSON.stringify(settings)).toContain(JSON.stringify(sock));
     // 令牌只在环境变量里，不落盘
     expect(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")).not.toContain(childEnv.HUB_TOKEN!);
@@ -299,7 +299,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     env = makeEnv();
     const foo = folder("foo");
     const extra = folder("foo-docs");
-    env.setScript({ turns: [{ steps: [{ bash: `hub project attach ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
+    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project attach ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
     const { daemon, client } = await boot();
     const zhou = await pmWithProject(client, "阿周", foo);
     const first = await client.post(zhou.conversationId, `把 ${extra} 也挂上`);
@@ -452,7 +452,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
     const result = await env.runHub(proc!.pid, ["status"]);
     expect(result.code).toBe(3);
-    expect(result.stderr).toContain("连不上 agent-hub");
+    expect(result.stderr).toContain(`连不上 ${PRODUCT_NAME}`);
   });
 
   it("重试：找不到 claude 导致消息失败；修好路径重启后点重试，排队中 → 已送达 → 已回复，不多出消息", { timeout: 60_000 }, async () => {

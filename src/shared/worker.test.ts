@@ -12,6 +12,7 @@ import {
   workerReportHeader,
 } from "./worker.ts";
 import { WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
+import { WORKER_BRANCH_PREFIX } from "./names.ts";
 
 const report = (body: string) => `${REPORT_START}\n${body}\n${REPORT_END}`;
 
@@ -157,19 +158,19 @@ describe("回到项目经理那一行", () => {
 
 describe("workerBranchName", () => {
   it("hub/<编号>-<短名>：小写，空白和符号变成 -，中文保留", () => {
-    expect(workerBranchName(3, "Fix README typo")).toBe("hub/3-fix-readme-typo");
-    expect(workerBranchName(12, "修 X 的 bug!")).toBe("hub/12-修-x-的-bug");
-    expect(workerBranchName(4, "a/b..c~d^e:f?g*h[i]\\j@{k}")).toBe("hub/4-a-b-c-d-e-f-g-h-i-j-k");
+    expect(workerBranchName(3, "Fix README typo")).toBe(`${WORKER_BRANCH_PREFIX}3-fix-readme-typo`);
+    expect(workerBranchName(12, "修 X 的 bug!")).toBe(`${WORKER_BRANCH_PREFIX}12-修-x-的-bug`);
+    expect(workerBranchName(4, "a/b..c~d^e:f?g*h[i]\\j@{k}")).toBe(`${WORKER_BRANCH_PREFIX}4-a-b-c-d-e-f-g-h-i-j-k`);
   });
 
   it("带重音的字母不拆开：先 NFC，组合用的附加符号也算字母的一部分", () => {
-    expect(workerBranchName(7, "éclair")).toBe("hub/7-éclair");
-    expect(workerBranchName(7, "e\u0301clair")).toBe("hub/7-éclair");
-    expect(workerBranchName(8, "नमस्ते")).toBe("hub/8-नमस्ते");
+    expect(workerBranchName(7, "éclair")).toBe(`${WORKER_BRANCH_PREFIX}7-éclair`);
+    expect(workerBranchName(7, "e\u0301clair")).toBe(`${WORKER_BRANCH_PREFIX}7-éclair`);
+    expect(workerBranchName(8, "नमस्ते")).toBe(`${WORKER_BRANCH_PREFIX}8-नमस्ते`);
   });
 
   it("短名太长截断；整个是符号就只有编号", () => {
-    expect(workerBranchName(5, "x".repeat(200))).toBe(`hub/5-${"x".repeat(30)}`);
-    expect(workerBranchName(6, "!!! ...")).toBe("hub/6");
+    expect(workerBranchName(5, "x".repeat(200))).toBe(`${WORKER_BRANCH_PREFIX}5-${"x".repeat(30)}`);
+    expect(workerBranchName(6, "!!! ...")).toBe(`${WORKER_BRANCH_PREFIX}6`);
   });
 });

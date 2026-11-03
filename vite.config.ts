@@ -1,8 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type ProxyOptions } from "vite";
+import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import { ENV_DEV_DAEMON_PORT } from "./src/shared/limits.ts";
+import { PRODUCT_NAME } from "./src/shared/names.ts";
 
 // 只管 src/web：守护进程只发打包好的 dist/ 静态文件。
 // 开发时（pnpm dev）：先起守护进程，把它的端口设到 AGENT_HUB_DAEMON_PORT，再跑 vite；
@@ -29,9 +30,15 @@ function proxyTo(to: string, ws: boolean): ProxyOptions {
   };
 }
 
+/** index.html 里的 %PRODUCT_NAME% 换成产品名（names.ts），改名只改那一处。 */
+const productName: Plugin = {
+  name: "product-name",
+  transformIndexHtml: (html) => html.replaceAll("%PRODUCT_NAME%", PRODUCT_NAME),
+};
+
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), productName],
   build: {
     outDir: "../../dist/web",
     emptyOutDir: true,

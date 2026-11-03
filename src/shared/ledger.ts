@@ -367,7 +367,8 @@ export interface Ledger {
    * - delivered、processing 的：不管有没有 pending、running 的动作都登记，带 resend: true
    *   （已有活动动作时 UPSERT 只把参数改成 resend: true，不重置、不通知）；
    * - queued 的：只在没有 pending、running 的 session.send 动作时登记，不带 resend。
-   * 有 delivered、processing 消息的会话（上次一轮被打断了），再登记一个 session.start（当前这一代，recovery: true）。
+   * 有 delivered、processing 消息的会话（上次一轮被打断了），它第一条重发的消息再带 recovery: true：驱动层把恢复说明
+   * 和这条写在同一行。不单独登记 session.start 去写恢复说明（单独一行会自己占一轮，那一轮的回复对不上任何消息）。
    * 重复登记按 NewAction 的规则重置已结束的动作。返回登记了什么，方便日志和测试。
    */
   recoverAfterRestart(): { resentMessageIds: MessageId[]; requeuedMessageIds: MessageId[]; recoveredSessionIds: SessionId[] };
