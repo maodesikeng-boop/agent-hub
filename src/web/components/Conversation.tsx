@@ -15,6 +15,7 @@ export function Conversation({
   session,
   older,
   draft,
+  notices,
   onDraftChange,
   onSend,
   onRetry,
@@ -27,6 +28,8 @@ export function Conversation({
   session: SessionState | null;
   older: OlderState | undefined;
   draft: string;
+  /** 顶部提醒，放在标题栏下面。 */
+  notices: React.ReactNode;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
   onSend: (conversationId: ConversationId, text: string) => void;
   onRetry: (clientId: string) => void;
@@ -53,13 +56,14 @@ export function Conversation({
   const empty = view.messages.length === 0 && pending.length === 0;
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
-    <section className="conversation" aria-label={entry.name}>
-      <header className="conversation-header">
-        <Avatar name={entry.name} colorKey={entry.avatarKey} />
-        <h1>{entry.name}</h1>
+    <section className="flex min-h-0 flex-1 flex-col" aria-label={entry.name}>
+      <header className="flex h-16 shrink-0 items-center gap-3 px-6">
+        <Avatar colorKey={entry.avatarKey} size={34} />
+        <h1 className="text-[17px] font-semibold">{entry.name}</h1>
       </header>
-      <div className="conversation-body">
-        {empty && <div className="empty">还没有消息</div>}
+      {notices}
+      <div className="relative min-h-0 flex-1">
+        {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>}
         <MessageList
           messages={view.messages}
           pending={pending}
@@ -70,8 +74,15 @@ export function Conversation({
           onRetry={onRetry}
         />
       </div>
-      <StatusLine agentName={entry.name} session={session} stopPhase={stopPhase} onStop={stop} />
-      <Composer value={draft} onChange={(v) => onDraftChange(id, v)} onSend={(text) => onSend(id, text)} />
+      <div className="mx-auto w-full max-w-[888px] shrink-0 space-y-2.5 px-6 pb-5">
+        <StatusLine agentName={entry.name} session={session} stopPhase={stopPhase} onStop={stop} />
+        <Composer
+          value={draft}
+          placeholder={`给 ${entry.name} 发消息`}
+          onChange={(v) => onDraftChange(id, v)}
+          onSend={(text) => onSend(id, text)}
+        />
+      </div>
     </section>
   );
 }

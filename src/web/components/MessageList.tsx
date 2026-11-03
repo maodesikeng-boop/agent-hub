@@ -1,7 +1,9 @@
+import { ChevronDown } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Message } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
+import { Button } from "../ui/button.tsx";
 import { MessageBubble, PendingBubble, ToolGroup } from "./Messages.tsx";
 
 /** 离底部不到这么多像素算“在底部”，新消息来了跟着滚。 */
@@ -77,10 +79,15 @@ export function MessageList({
 
   let previous: "agent" | "other" | null = null;
   return (
-    <div className="messages-wrap">
-      <div className="messages" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
+    <div className="relative h-full">
+      <div className="messages flex h-full flex-col overflow-y-auto pt-4 pb-6" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
         {hasMore && (
-          <button type="button" className="older" disabled={older === "loading"} onClick={loadOlder}>
+          <button
+            type="button"
+            className="mt-1 cursor-pointer self-center rounded-full border border-border px-3.5 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-60"
+            disabled={older === "loading"}
+            onClick={loadOlder}
+          >
             {older === "error" ? "加载失败，点击重试" : older === "loading" ? "加载中" : "加载更早的消息"}
           </button>
         )}
@@ -98,9 +105,15 @@ export function MessageList({
         ))}
       </div>
       {away && (
-        <button type="button" className="to-bottom" aria-label="回到底部" onClick={scrollToBottom}>
-          <span className="chevron down" aria-hidden="true" />
-        </button>
+        <Button
+          variant="outline"
+          size="icon"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
+          aria-label="回到底部"
+          onClick={scrollToBottom}
+        >
+          <ChevronDown aria-hidden="true" />
+        </Button>
       )}
     </div>
   );
