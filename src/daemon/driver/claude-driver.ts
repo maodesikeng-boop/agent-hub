@@ -1,11 +1,10 @@
 // Claude 驱动层（设计第 7.2～7.4 节，按 M0 改过的做法）：每个会话一个官方 claude 进程，
 // 我们这边管待发队列（一轮一条、忙时用户连发拼成一条、写入前校验）、打断、空闲关闭、--session-id / --resume。
-// M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束按进程组。
+// M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束连同它所有后代所在的进程组（process.ts 的 forceKill）。
 // 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import type { Readable } from "node:stream";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
@@ -17,7 +16,6 @@ import {
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
-  STALE_POLL_MS,
   STDERR_TAIL_CHARS,
   START_TIMEOUT_MS,
   STDIO_DRAIN_MS,
@@ -49,6 +47,7 @@ import {
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
+import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -281,7 +280,7 @@ export class ClaudeDriver implements Driver {
     const proc = st.proc;
     if (proc) {
       this.#clearTimer(st, "idleTimer");
-      if (!proc.closing) this.#closeStdin(proc, "idle");
+      if (!proc.closing) this.#closeStdin(st, proc, "idle");
       await proc.exited;
     }
     this.#update(st, { status: "ended", pid: null });
@@ -324,7 +323,7 @@ export class ClaudeDriver implements Driver {
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
       if ((await within(all, this.#opts.shutdownGraceMs)) === "timeout") {
-        for (const p of procs) if (p.child.exitCode === null && p.child.signalCode === null) killGroup(p.child, "SIGKILL");
+        await Promise.all(procs.map((p) => forceKill(p.child)));
         await within(all, KILL_WAIT_MS);
       }
     }
@@ -351,7 +350,7 @@ export class ClaudeDriver implements Driver {
       signalPid(pid, "SIGINT");
       if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
         // 只有它自己是进程组长（我们 detached 起的）才按组杀；不是的话按组杀会连累同组的别的进程
-        signalPid(pgid === pid ? -pid : pid, "SIGKILL");
+        await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
       }
     }
@@ -480,7 +479,7 @@ export class ClaudeDriver implements Driver {
       if (st.ended || st.proc !== proc || proc.closing) return;
       const row = files ? this.#row(st) : null;
       if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
-        this.#closeStdin(proc, "idle");
+        this.#closeStdin(st, proc, "idle");
         await proc.exited;
         this.#assertRunning();
         if (st.ended) return;
@@ -549,12 +548,12 @@ export class ClaudeDriver implements Driver {
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
       if (st.proc !== proc || proc.closing || st.inFlight || st.pending.length > 0 || st.starting || st.ended) return;
-      this.#closeStdin(proc, "idle");
+      this.#closeStdin(st, proc, "idle");
     }, this.#opts.idleCloseMs);
   }
 
-  /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再给整个进程组 SIGKILL。 */
-  #closeStdin(proc: Proc, reason: ClosingReason): void {
+  /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
+  #closeStdin(st: SessionState, proc: Proc, reason: ClosingReason): void {
     proc.closing = reason;
     proc.child.stdin.end();
     const grace = this.#opts.interruptGraceMs;
@@ -563,7 +562,7 @@ export class ClaudeDriver implements Driver {
       proc.child.kill("SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
-        killGroup(proc.child, "SIGKILL");
+        this.#forceKill(st, proc);
       }, grace);
     }, grace);
   }
@@ -639,7 +638,7 @@ export class ClaudeDriver implements Driver {
   #abortIfStopped(st: SessionState, proc: Proc): void {
     this.#assertRunning();
     if (!st.ended) return;
-    if (!proc.closing) this.#closeStdin(proc, "idle");
+    if (!proc.closing) this.#closeStdin(st, proc, "idle");
     throw new DriverError("session_ended", `session ${st.id} has been ended`);
   }
 
@@ -649,7 +648,7 @@ export class ClaudeDriver implements Driver {
       st.startTimer = null;
       if (st.proc !== proc || proc.initSeen) return;
       proc.startTimedOut = true;
-      killGroup(proc.child, "SIGKILL");
+      this.#forceKill(st, proc);
     }, this.#opts.startTimeoutMs);
   }
 
@@ -689,7 +688,7 @@ export class ClaudeDriver implements Driver {
     }
     // 等 spawn 的这一会儿可能已经开始关机：shutdown 看不到这个进程，自己结束它
     if (this.#shuttingDown) {
-      killGroup(child, "SIGKILL");
+      killFreshGroup(child);
       this.#assertRunning();
     }
     let resolveReady!: (o: StartupOutcome) => void;
@@ -730,9 +729,8 @@ export class ClaudeDriver implements Driver {
     // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
-      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：确认退出的这一刻给它原来的进程组补一个 SIGTERM，
-      // 清掉它留下的子进程。只这一次，不延迟再发，免得进程号被复用后误杀。
-      if (proc.closing === "idle" && child.pid !== undefined) signalPid(-child.pid, "SIGTERM");
+      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：给它原来的进程组补一个 SIGTERM，清掉它留下的子进程
+      if (proc.closing === "idle") termGroupAfterExit(child);
       const timer = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();
@@ -919,6 +917,11 @@ export class ClaudeDriver implements Driver {
     this.#emit(st.id, { type: "driver.error", code: "invalid_input", message: `invalid_input: ${problem}`, messageIds, at: Date.now() });
   }
 
+  /** 不等结果的强制结束：出错不往上冒（免得成了没人接的 Promise 拒绝），记一条 internal_error。 */
+  #forceKill(st: SessionState, proc: Proc): void {
+    forceKill(proc.child).catch((error: unknown) => this.#internalError(st.id, `force kill failed: ${errorMessage(error)}`));
+  }
+
   #internalError(sessionId: SessionId, detail: string): void {
     this.#emit(sessionId, { type: "driver.error", code: "internal_error", message: `internal_error: ${detail}`, at: Date.now() });
   }
@@ -1059,13 +1062,6 @@ function clearKillTimer(proc: Proc): void {
   proc.killTimer = null;
 }
 
-function streamClosed(stream: Readable): Promise<void> {
-  return new Promise((resolve) => {
-    if (stream.closed) resolve();
-    else stream.once("close", () => resolve());
-  });
-}
-
 /** 等 promise，最多 ms 毫秒。 */
 async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "timeout"> {
   let timer: NodeJS.Timeout | undefined;
@@ -1079,22 +1075,6 @@ async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "
   }
 }
 
-/**
- * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
- * 是的话返回它的进程组号，不是（或者不在了）返回 null。
- */
-function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], (error, stdout) => {
-      if (error) return resolve(null); // 进程不在了：ps 退出码 1
-      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-      if (!match) return resolve(null);
-      const command = match[2]!;
-      resolve(/claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null);
-    });
-  });
-}
-
 /** 会话那一行（cwd、addDirs、model）或 fingerprint 和进程启动时不一样。env 不算。 */
 function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
   return (
@@ -1104,46 +1084,4 @@ function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerpri
     launched.addDirs.length !== row.addDirs.length ||
     launched.addDirs.some((d, i) => d !== row.addDirs[i])
   );
-}
-
-/** 给 claude 所在的整个进程组发信号（它是 detached 起的，进程组号就是它的 pid）；发不了就只发给它本身。 */
-function killGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  // 已经退出了：进程号可能被复用，不再发
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const pid = child.pid;
-  if (pid !== undefined) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // 进程组已经没了，或者不是组长：退回只发给它本身
-    }
-  }
-  child.kill(signal);
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function signalPid(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // 已经不在了
-  }
-}
-
-async function waitForExit(pid: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (isAlive(pid)) {
-    if (Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, STALE_POLL_MS));
-  }
-  return true;
 }

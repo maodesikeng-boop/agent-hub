@@ -39,8 +39,11 @@ export type FakeStep =
   | { apiRetry: { attempt?: number; error?: string } }
   /** 起一个脱离的孙进程，继承标准输出和标准错误，活 sleepSec 秒（测孙进程占着 stdio）。进程号记进日志。 */
   | { spawnOrphan: { sleepSec: number } }
-  /** 起一个普通子进程（不脱离，和 claude 同一个进程组）睡 sleepSec 秒，标准输入输出都不接。进程号记进日志（测按进程组强制结束）。 */
-  | { spawnChild: { sleepSec: number } }
+  /**
+   * 起一个子进程睡 sleepSec 秒，标准输入输出都不接。进程号记进日志（测按进程组强制结束）。
+   * 默认和 claude 同一个进程组；detached 时放进它自己的新进程组（像真 claude 的 Bash 工具那样）。
+   */
+  | { spawnChild: ChildSpec }
   /**
    * 像真 claude 的 Bash 工具那样跑一条命令（M2，端到端测 agent 敲 hub）：用自己拿到的环境变量和工作目录 `sh -c`，
    * 先出一个 name 为 "Bash" 的 tool_use，跑完再出 tool_result（内容是标准输出 + 标准错误；退出码不是 0 时
@@ -78,8 +81,13 @@ export interface FakeScript {
   ignoreSigint?: boolean;
   /** 不管会话在不在，--session-id 一律报 “already in use”，--resume 一律报 “No conversation found”。 */
   rejectSessionArgs?: boolean;
-  /** 一起来就起一个普通子进程睡这么多秒（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
-  spawnChildOnStart?: number;
+  /** 一起来就起一个子进程（同 spawnChild 步骤；配合 noInit 测启动超时按进程组强制结束）。 */
+  spawnChildOnStart?: number | ChildSpec;
+}
+
+export interface ChildSpec {
+  sleepSec: number;
+  detached?: boolean;
 }
 
 export type FakeLogEntry =
@@ -211,13 +219,15 @@ if (resumeId !== undefined && (script.rejectSessionArgs || !sessionExists(resume
   exit(1);
 }
 
-function spawnChild(sleepSec: number): void {
-  const child = spawn("sleep", [String(sleepSec)], { stdio: "ignore" });
+function spawnChild({ sleepSec, detached = false }: ChildSpec): void {
+  const child = spawn("sleep", [String(sleepSec)], { stdio: "ignore", detached });
   child.unref();
   log({ kind: "child", pid: process.pid, childPid: child.pid ?? -1 });
 }
 
-if (script.spawnChildOnStart !== undefined) spawnChild(script.spawnChildOnStart);
+if (script.spawnChildOnStart !== undefined) {
+  spawnChild(typeof script.spawnChildOnStart === "number" ? { sleepSec: script.spawnChildOnStart } : script.spawnChildOnStart);
+}
 
 // --- 一轮一轮跑 ---
 
@@ -364,7 +374,7 @@ async function runTurn(content: UserContent[]): Promise<void> {
       orphan.unref();
       log({ kind: "orphan", pid: process.pid, orphanPid: orphan.pid ?? -1 });
     } else if ("spawnChild" in step) {
-      spawnChild(step.spawnChild.sleepSec);
+      spawnChild(step.spawnChild);
     } else if ("bash" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: "Bash", input: { command: step.bash } }]);

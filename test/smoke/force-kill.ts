@@ -1,8 +1,9 @@
 // 强制结束（m2-plan 第 6 节第 4 条）：agent 在 Bash 里跑着 `sleep 300`，结束它的 claude，sleep 子进程要跟着没了。
 // 真 claude 的 Bash 工具可能把命令放进它自己的进程组，按 claude 的进程组杀就可能杀不到，所以先把进程表（谁是谁的子进程、进程组号）记下来。
 // S10a 守护进程正常关机（SIGTERM）；S10b 守护进程被 SIGKILL 后重启，靠启动时清理残留进程（cleanupStale）；
-// S10c 照驱动层 killGroup 的做法，直接对 claude 的进程组发 SIGKILL（真正的“强制结束”，不给 claude 自己清理的机会）。
+// S10c 直接调驱动层强制结束用的 forceKillTree（SIGKILL claude 和它所有后代所在的进程组，真正的“强制结束”，不给 claude 自己清理的机会）。
 // 结束后不管结果怎样，我们自己记下的 sleep 进程都会补一刀，免得测试留下 300 秒的睡眠进程。
+import { forceKillTree } from "../../src/daemon/driver/process.ts";
 import { isAlive } from "../e2e/harness.ts";
 import { Smoke, expect, processTable, scenario, sleep, waitUntil, type Outcome } from "./kit.ts";
 
@@ -109,13 +110,13 @@ export async function runForceKill(outcomes: Outcome[], only: (name: string) => 
   if (only("S10c")) {
     const smoke = await Smoke.boot();
     let tree: Tree | undefined;
-    const ok = await scenario(outcomes, "S10c 对 claude 的进程组发 SIGKILL（killGroup 的做法）：sleep 跟着没了", async () => {
+    const ok = await scenario(outcomes, "S10c 驱动层的强制结束（forceKillTree）：sleep 跟着没了", async () => {
       tree = await startSleep(smoke);
-      process.kill(-tree.claudePid, "SIGKILL");
+      await forceKillTree(tree.claudePid, true);
       const claudeGone = await goneWithin(tree.claudePid, 3_000);
       const sleepGone = await goneWithin(tree.sleepPid, 3_000);
       expect(claudeGone, `claude ${tree.claudePid} 没被杀掉`);
-      expect(sleepGone, `按 claude 的进程组杀完，claude 没了，但 sleep ${tree.sleepPid} 还在：${describe(tree)}；进程链 ${tree.chain}`);
+      expect(sleepGone, `强制结束之后 claude 没了，但 sleep ${tree.sleepPid} 还在：${describe(tree)}；进程链 ${tree.chain}`);
       return `${describe(tree)}，都没了；进程链 ${tree.chain}`;
     });
     const swept = tree ? sweep([tree.sleepPid, tree.claudePid]) : [];

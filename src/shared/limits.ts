@@ -50,6 +50,8 @@ export const LAST_EVENT_WRITE_MS = 1_000;
 export const STDIO_DRAIN_MS = 300;
 /** 驱动层：发了 SIGKILL 之后最多再等多久。 */
 export const KILL_WAIT_MS = 2_000;
+/** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
+export const PS_TIMEOUT_MS = 2_000;
 /** 驱动层：清理残留进程时多久看一次它还在不在。 */
 export const STALE_POLL_MS = 50;
 /** 处理函数：会话正忙、消息在驱动层排队（或交接后改指了新一代）时，隔多久再问一次。 */
