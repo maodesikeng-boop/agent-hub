@@ -148,7 +148,8 @@ const ledgerCalls = () =>
   ledger.personaReads.length +
   ledger.personaEdits.length +
   ledger.reverted.length +
-  ledger.retried.length;
+  ledger.retried.length +
+  ledger.renewed.length;
 
 describe("没登录", () => {
   const apiRequests: Array<[Method, string, unknown?]> = [
@@ -163,6 +164,7 @@ describe("没登录", () => {
     ["PUT", "/api/pms/1/persona", { text: "x" }],
     ["POST", "/api/persona-changes/1/revert"],
     ["POST", "/api/messages/1/retry"],
+    ["POST", "/api/pms/1/renew-session"],
   ];
 
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
@@ -573,6 +575,7 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST retry", "POST", "/api/messages/1/retry"],
+  ["POST renew-session", "POST", "/api/pms/1/renew-session"],
 ];
 
 /** 每个新接口都被这三道检查拦：Host、Origin（会改状态的请求都查，包括 PUT）、cookie。 */
@@ -893,6 +896,22 @@ describe("POST /api/messages/:id/retry 重试失败的消息", () => {
     const res = await call("POST", "/api/messages/12/retry");
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: "只有失败的消息能重试", code: "conflict" });
+  });
+});
+
+describe("POST /api/pms/:id/renew-session 开新会话", () => {
+  it("调 ledger.renewSession，202 返回交接请求的消息编号", async () => {
+    const res = await call("POST", "/api/pms/3/renew-session");
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ messageId: 50 });
+    expect(ledger.renewed).toEqual([3]);
+  });
+
+  it("项目经理不存在 → 404", async () => {
+    ledger.failWith = new LedgerRequestError("not_found", "没有编号 3 的项目经理");
+    const res = await call("POST", "/api/pms/3/renew-session");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "没有编号 3 的项目经理", code: "not_found" });
   });
 });
 

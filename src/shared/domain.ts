@@ -379,6 +379,9 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return meta.folderId;
       case "persona.changed":
         return meta.personaChangeId;
+      case "handover.requested":
+      case "session.renewed":
+        return meta.sessionId;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -388,7 +391,7 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
  * 系统消息的事件（Message.meta.event）。会扩展。
  * 11-03 拿掉了 project.reassigned（交接）：老数据里还有，systemEventOf 认不出就当普通系统消息，照样居中显示文字。
  */
-export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed"] as const;
+export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed", "handover.requested", "session.renewed"] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
 /**
@@ -399,12 +402,19 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * - persona.changed：改了性格设定（项目经理自己、用户在界面改、撤销、启动时发现文件被手改）。界面上带“撤销”按钮
  *   （personaChangeId；只有最近一条能撤销）。
  * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
+ *
+ * 开新会话（资料页的按钮，见 ledger/handover.ts）的两条要发给 agent（status 从 queued 起照常走，source system），
+ * text 是发给 agent 的全文，网页只显示 systemNoticeText 给的一句：
+ * - handover.requested：发给旧会话（sessionId），让项目经理把交接写成这一轮的回复；
+ * - session.renewed：发给新一代会话（sessionId），带上交接和最近几条原话；网页显示“项目经理开了新会话（交接见上一条）”。
  */
 export type SystemMessageMeta =
   | { event: "project.created"; projectId: ProjectId }
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
-  | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null };
+  | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
+  | { event: "handover.requested"; sessionId: SessionId }
+  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId };
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
 export const SYSTEM_MESSAGE_PREFIX = "【系统】";
@@ -413,6 +423,18 @@ export const SYSTEM_MESSAGE_PREFIX = "【系统】";
 export function systemEventOf(message: Pick<Message, "sender" | "meta">): SystemMessageMeta | null {
   if (message.sender !== "system" || message.meta === null) return null;
   return isOneOf(SYSTEM_EVENTS, message.meta.event) ? (message.meta as SystemMessageMeta) : null;
+}
+
+/** 网页上系统消息显示的那一句：开新会话的两条显示固定的一句（text 是发给 agent 的全文），别的去掉开头的【系统】。 */
+export function systemNoticeText(message: Pick<Message, "sender" | "meta" | "text">): string {
+  switch (systemEventOf(message)?.event) {
+    case "handover.requested":
+      return "已请项目经理写交接，写完换新会话";
+    case "session.renewed":
+      return "项目经理开了新会话（交接见上一条）";
+    default:
+      return stripSystemPrefix(message.text);
+  }
 }
 
 /** 网页显示系统消息时去掉开头的【系统】。 */
@@ -569,7 +591,7 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
  * - 还没有项目：cwd 是 pm-home/<编号>/（它自己的空目录），addDirs 空；
  * - 有项目：cwd 是主文件夹的真实路径，addDirs 是其他没移除的文件夹。建项目、挂和移除文件夹时账本改这两列，
  *   驱动层在下一条消息前按新的值 --resume 重启（--resume 换了工作目录也接得上，m0-report 实验 2）。
- * 发消息一律找这个对话 generation 最大的那个会话（现在每个对话只有一代；以后自动换代时加一）。
+ * 发消息一律找这个对话 generation 最大的那个会话。项目经理在资料页点“开新会话”时加一（见 ledger/handover.ts）。
  */
 export interface AgentSessionRow {
   id: SessionId;

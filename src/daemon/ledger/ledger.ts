@@ -6,6 +6,7 @@
 // - persona.ts：项目经理、性格设定和性格设定文件；
 // - projects.ts：项目（每个项目经理最多一个，挂在它唯一的对话上）、文件夹；
 // - hub-commands.ts：hub 命令；
+// - handover.ts：开新会话（写交接、换代）；
 // - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
 // - launch-context.ts：启动 claude 前给提示词用的上下文。
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
@@ -20,6 +21,7 @@ import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
 import type { LedgerFiles } from "./context.ts";
 import { createResolveFolder, writeFileAtomic as defaultWriteFileAtomic } from "./files.ts";
+import { createLedgerHandover } from "./handover.ts";
 import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerMessages } from "./messages.ts";
@@ -98,6 +100,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
+  const handover = createLedgerHandover(ctx, sessions, messages, persona);
   const hub = createLedgerHubCommands(ctx, persona, projects, workers);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
@@ -150,13 +153,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onStopRequested: (listener) => subscribe(stopListeners, listener),
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
-    // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）
+    // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
     applyDriverEvent(sessionId, event) {
       const session = getAgentSession(db, sessionId);
       if (session === null) return;
       write((p) => {
         messages.applyEvent(p, session, event);
         workers.afterDriverEvent(p, session, event);
+        handover.afterDriverEvent(p, session, event);
       });
     },
     refreshSessionState: sessions.refreshSessionState,
@@ -190,6 +194,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     revertPersonaChange: persona.revertPersonaChange,
 
     retryMessage: messages.retryMessage,
+    renewSession: handover.renewSession,
+    waitsForHandover: handover.waitsForHandover,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),

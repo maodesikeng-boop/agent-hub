@@ -94,6 +94,7 @@ export class FakeLedger {
   readonly personaEdits: Array<{ pmId: PmId; input: EditPersonaInput; actor: LedgerActor }> = [];
   readonly reverted: PersonaChangeId[] = [];
   readonly retried: MessageId[] = [];
+  readonly renewed: PmId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
@@ -213,6 +214,12 @@ export class FakeLedger {
     return { messageId };
   }
 
+  renewSession(pmId: PmId): { messageId: MessageId } {
+    this.check();
+    this.renewed.push(pmId);
+    return { messageId: 50 };
+  }
+
   snapshot(): StateSnapshot {
     this.check();
     return { ...this.snapshotValue, seq: this.seq };
@@ -267,6 +274,8 @@ export class FakeLedger {
       editPersona: (p, i, a) => this.editPersona(p, i, a),
       revertPersonaChange: (c) => this.revertPersonaChange(c),
       retryMessage: (m) => this.retryMessage(m),
+      renewSession: (p) => this.renewSession(p),
+      waitsForHandover: unused("waitsForHandover"),
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),

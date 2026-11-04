@@ -28,6 +28,8 @@ export const MAX_MODEL_CHARS = 100;
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
 /** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
+/** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。 */
+export const HANDOVER_RECENT_MESSAGES = 10;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 

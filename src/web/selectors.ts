@@ -2,6 +2,7 @@
 import {
   attachmentsOf,
   isQuotaExhausted,
+  systemEventOf,
   workerEventOf,
   type ConversationId,
   type HealthEntry,
@@ -314,6 +315,17 @@ export function waitingConversations(state: HubState, lastSeen: LastSeen): Conve
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {
   return state.pending.filter((p) => p.conversationId === conversationId);
+}
+
+/**
+ * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果，或者新会话的第一条（交接）还在排队。
+ * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
+ */
+export function isRenewing(state: HubState, conversationId: ConversationId): boolean {
+  return (state.conversations[conversationId]?.messages ?? []).some((m) => {
+    const event = systemEventOf(m)?.event;
+    return (event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status)) || (event === "session.renewed" && m.status === "queued");
+  });
 }
 
 /** 有错误的健康项（成功一次后 lastError 会被清成 null）。 */

@@ -372,7 +372,7 @@ describe("M2：系统消息", () => {
   });
 
   it("所有系统消息事件都列出来了；11-03 拿掉的 project.reassigned 认不出（老数据当普通系统消息显示）", () => {
-    expect(SYSTEM_EVENTS).toEqual(["project.created", "folder.attached", "folder.detached", "persona.changed"]);
+    expect(SYSTEM_EVENTS).toEqual(["project.created", "folder.attached", "folder.detached", "persona.changed", "handover.requested", "session.renewed"]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
 
@@ -551,6 +551,9 @@ describe("M2：系统消息的去重键", () => {
     expect(systemMessageDedupeKey(1, { event: "persona.changed", pmId: 1, personaChangeId: 9, revertOf: null })).toBe(
       "system:1:persona.changed:9",
     );
+    // 开新会话：每一代会话最多一条交接请求、一条换代
+    expect(systemMessageDedupeKey(1, { event: "handover.requested", sessionId: 4 })).toBe("system:1:handover.requested:4");
+    expect(systemMessageDedupeKey(1, { event: "session.renewed", sessionId: 5, fromSessionId: 4 })).toBe("system:1:session.renewed:5");
   });
 });
 
@@ -716,6 +719,8 @@ describe("M3：动作", () => {
     expectTypeOf<Ledger["getWorktreeTask"]>().toEqualTypeOf<(workerId: number) => WorktreeTask | null>();
     expectTypeOf<Ledger["onSetupStarted"]>().toEqualTypeOf<(workerId: number) => boolean>();
     expectTypeOf<Ledger["waitsForFirstTurn"]>().toEqualTypeOf<(sessionId: number, messageId: number) => boolean>();
+    expectTypeOf<Ledger["renewSession"]>().toEqualTypeOf<(pmId: number) => { messageId: number }>();
+    expectTypeOf<Ledger["waitsForHandover"]>().toEqualTypeOf<(messageId: number) => boolean>();
     expectTypeOf<Ledger["onWorktreeCreated"]>().toEqualTypeOf<(workerId: number, baseCommit: string, setup?: SetupOutcome) => void>();
   });
 });

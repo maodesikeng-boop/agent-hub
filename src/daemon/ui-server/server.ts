@@ -46,6 +46,7 @@ import {
   type PickFolderResponse,
   type PmMode,
   type PostMessageResponse,
+  type RenewSessionResponse,
   type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
@@ -444,6 +445,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const raw = parseObjectBody(req.body ?? {}, ["startDir"]);
       const startDir = raw.startDir === undefined ? undefined : requireBoundedBytes(raw.startDir, "startDir", MAX_PATH_BYTES);
       return { path: await folderPicker.pick(startDir) };
+    });
+
+    routes.post("/api/pms/:id/renew-session", async (req, reply) => {
+      const result = ledger.renewSession(parseId((req.params as { id?: unknown }).id, "pm id"));
+      return reply.code(202).send({ messageId: result.messageId } satisfies RenewSessionResponse);
     });
 
     routes.post("/api/messages/:id/retry", async (req, reply) => {

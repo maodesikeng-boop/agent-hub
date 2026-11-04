@@ -11,7 +11,8 @@
 //   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
 // - ledger/messages.ts 的 insertSystemMessage：系统消息（只给人看），具体文字在调用它的 persona.ts、projects.ts 里；
-// - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答。
+// - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答；
+// - ledger/handover.ts：开新会话时让项目经理写交接的那条、新会话收到的第一条（交接 + 最近几条原话）。
 // worktree 准备命令（hub project setup）给 Worker、项目经理看的话也在这里：文件末尾的 setupNote、SETUP_RECEIPT_NOTE。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
