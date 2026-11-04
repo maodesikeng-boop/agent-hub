@@ -17,6 +17,46 @@ export const READONLY_PERMISSION_MODE = "dontAsk";
 export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof READONLY_PERMISSION_MODE;
 
 /**
+ * 只读档额外放行的东西。dontAsk 下要批准的一律拒绝，真 claude 实测（11-04）：WebSearch 和 Slack 的 slack_search_public
+ * （声明了 readOnlyHint 也一样）都被拒，所以连接器的只读工具要自己列。以后连了新连接器、或新增了只读工具，往下面加一行就行。
+ * 只放读、搜、查的；发消息、发邮件、写文件、改工单一律不列。键是连接器在 claude 里的服务名（mcp__<服务名>__<工具名>）。
+ */
+export const READONLY_WEB_ALLOW_RULES = ["WebSearch", "WebFetch"] as const;
+/** 只读 git：-C 指到别的 worktree 也行（真 claude 实测 `:*` 写法在 -C 后的通配不生效，要写成 `git -C * log *`；git status/diff/log/show/blame/ls-files/branch 只看，不改仓库）。 */
+export const READONLY_GIT_ALLOW_RULES = ["status", "diff", "log", "show", "blame", "ls-files", "rev-parse"].flatMap((sub) => [`Bash(git -C * ${sub})`, `Bash(git -C * ${sub} *)`]);
+export const READONLY_CONNECTOR_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  claude_ai_Slack: [
+    "slack_search_public", "slack_search_public_and_private", "slack_search_channels", "slack_search_users", "slack_search_emojis",
+    "slack_read_channel", "slack_read_thread", "slack_read_canvas", "slack_read_file", "slack_read_list", "slack_read_user_profile",
+    "slack_list_channel_members", "slack_list_user_channels", "slack_get_reactions",
+  ],
+  claude_ai_Gmail: ["search_threads", "get_message", "get_thread", "get_draft", "list_drafts", "list_labels"],
+  claude_ai_Google_Drive: ["search_files", "read_file_content", "get_file_metadata", "get_file_permissions", "list_recent_files"],
+  claude_ai_Google_Docs: ["read_doc"],
+  claude_ai_Google_Sheets: ["get_spreadsheet", "get_values"],
+  claude_ai_Atlassian_Rovo: [
+    "search", "fetch", "searchJiraIssuesUsingJql", "searchConfluenceUsingCql", "atlassianUserInfo", "getAccessibleAtlassianResources",
+    "getJiraIssue", "getJiraIssueRemoteIssueLinks", "getJiraIssueTypeMetaWithFields", "getJiraProjectIssueTypesMetadata", "getVisibleJiraProjects",
+    "getTransitionsForJiraIssue", "getIssueLinkTypes", "lookupJiraAccountId",
+    "getConfluencePage", "getConfluencePageDescendants", "getConfluencePageFooterComments", "getConfluencePageInlineComments",
+    "getConfluenceCommentChildren", "getConfluenceSpaces", "getPagesInConfluenceSpace",
+    "getCompassComponent", "getCompassComponents", "getCompassCustomFieldDefinitions", "getTeamworkGraphContext", "getTeamworkGraphObject",
+  ],
+};
+
+/** 只读档的放行规则：上网、读本项目的 worktrees/<项目编号>/（别的 Worker 的 worktree，审查要读）、只读 git、连接器只读工具。 */
+export function readonlyAllowRules(projectWorktreesDir: string | undefined): string[] {
+  const rules: string[] = [...READONLY_WEB_ALLOW_RULES];
+  if (projectWorktreesDir !== undefined) {
+    // 绝对路径 // 开头，特殊字符转义，同 stateDirDenyRule
+    rules.push(`Read(/${projectWorktreesDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&")}/**)`);
+  }
+  rules.push(...READONLY_GIT_ALLOW_RULES);
+  for (const [server, tools] of Object.entries(READONLY_CONNECTOR_TOOLS)) for (const tool of tools) rules.push(`mcp__${server}__${tool}`);
+  return rules;
+}
+
+/**
  * Worker 不能写记忆（唯一的硬限制，m3-plan 第 2.2 节），路径固定的那几条：
  * 整台机器上任何位置的约定文件（AGENTS.md、CLAUDE.md、CLAUDE.local.md）和 .claude/，加上用户级的 ~/.claude/。
  * 用 // 开头的绝对通配，不用 Edit(AGENTS.md) 这种相对写法：相对写法锚在当前目录，只管到工作目录之下，
@@ -63,6 +103,8 @@ export interface SessionSettingsInput {
   hubSock: string;
   /** 数据目录 state/ 的真实路径，Worker 的记忆规则用。 */
   stateDir: string;
+  /** 本项目的 worktrees/<项目编号>/ 真实路径；只读档放行读它。没有项目就不传。 */
+  projectWorktreesDir?: string;
 }
 
 /** --settings 文件的内容。 */
@@ -74,7 +116,7 @@ export interface SessionSettings {
 
 /**
  * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
- * - 两种角色都有：默认档（readonly 时换成只读档）、放行 hub、放行 hub.sock；
+ * - 两种角色都有：默认档（readonly 时换成只读档，并多放行 readonlyAllowRules）、放行 hub、放行 hub.sock；
  * - Worker 再加记忆规则和 autoMemoryEnabled: false。最后无条件加，不管 readonly 怎么写。
  * 每次返回新对象。
  */
@@ -83,6 +125,7 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     permissions: { defaultMode: input.readonly ? READONLY_PERMISSION_MODE : DEFAULT_PERMISSION_MODE, allow: [HUB_ALLOW_RULE] },
     sandbox: { network: { allowUnixSockets: [input.hubSock] } },
   };
+  if (input.readonly) settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
   if (input.role === "worker") {
     settings.permissions.deny = workerMemoryDenyRules(input.stateDir);
     settings.autoMemoryEnabled = false;

@@ -186,7 +186,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const normal = await prepare(row(9, dir, "worker"));
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await prepare(row(9, dir, "worker"));
-    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir }));
+    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 
