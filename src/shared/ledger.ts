@@ -223,8 +223,10 @@ export interface SetupOutcome {
   exitCode: number | null;
   /** 被信号杀了时的信号名。 */
   signal: string | null;
-  /** 起不来（找不到 shell、目录不在）时的原因；其他是 null。 */
+  /** 起不来（找不到 shell、worktree 目录不在）、意外出错（“准备命令出错：…”）时的原因；其他是 null。 */
   error: string | null;
+  /** 这次用的超时（runner 的 timeoutMs，默认 SETUP_TIMEOUT_MS）；附注里“超过 N 分钟”按它写。 */
+  timeoutMs: number;
   durationMs: number;
   /** 输出（标准输出和标准错误合在一起）的最后 SETUP_OUTPUT_TAIL_LINES 行、最多 SETUP_OUTPUT_TAIL_BYTES 字节。 */
   tail: string;
@@ -345,9 +347,17 @@ export interface Ledger {
   getWorktreeTask(workerId: WorkerId): WorktreeTask | null;
   /**
    * 项目配了准备命令、建好 worktree 后开始跑它（M3 之后加的）：Worker 会话的 activity 设成 preparing，推 session.status；
-   * hub worker list 显示“准备中”。Worker 不存在、已经 ended、已经开工（base_commit 有了）什么也不做。
+   * hub worker list 显示“准备中”。返回真的进了准备中没有：Worker 不存在、已经 ended（比如建 worktree 时收工了）、
+   * 已经开工（base_commit 有了）什么也不做，返回 false，处理函数就不跑准备命令。
+   * preparing 不会被驱动层的事件盖成 working（sessions.ts 的 working）。
    */
-  onSetupStarted(workerId: WorkerId): void;
+  onSetupStarted(workerId: WorkerId): boolean;
+  /**
+   * session.send 处理函数用（兜底：不管消息是项目经理、用户还是系统发的）：这条消息要不要先等等再发。
+   * Worker 的会话、Worker 没收工时：还没开工（在 worktree 里干、base_commit 还是 NULL）→ 都等；开工了但任务说明还在排队 →
+   * 除任务说明外都等。这样会话不会被别的消息提前拉起来，第一轮一定是任务说明。别的会话一律 false。
+   */
+  waitsForFirstTurn(sessionId: SessionId, messageId: MessageId): boolean;
   /**
    * worktree 建好了（或者早就建好了），配了准备命令的是准备命令也跑完了：同一个事务里记下 base_commit（已经有就不改），
    * 登记 Worker 的 session.start 和它对话里第一条消息的 session.send（按去重键，重复调用无害）。Worker 已经 ended 什么也不做。

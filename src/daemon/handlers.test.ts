@@ -3,6 +3,7 @@ import {
   DriverError,
   QUEUED_RECHECK_MS,
   SessionTokenRevokedError,
+  WORKER_FIRST_TURN_RECHECK_MS,
   type ActionRow,
   type AgentSessionRow,
   type DriverSendResult,
@@ -47,7 +48,9 @@ function action<T extends "session.start" | "session.send" | "session.end" | "wo
   return { id: 1, type, dedupeKey: "k", params, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 };
 }
 
-function deps(options: { message?: Message | null; send?: DriverSendResult | Error; rateLimit?: RateLimitInfo | null } = {}) {
+function deps(
+  options: { message?: Message | null; send?: DriverSendResult | Error; rateLimit?: RateLimitInfo | null; waitsForFirstTurn?: boolean } = {},
+) {
   const send = vi.fn(async () => {
     if (options.send instanceof Error) throw options.send;
     return options.send ?? { kind: "written" as const };
@@ -59,14 +62,15 @@ function deps(options: { message?: Message | null; send?: DriverSendResult | Err
   const refreshSessionState = vi.fn();
   const stopMessage = vi.fn();
   const revoke = vi.fn();
+  const waitsForFirstTurn = vi.fn(() => options.waitsForFirstTurn ?? false);
   const d: HandlerDeps = {
     driver: { start, send, end },
-    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage },
+    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn },
     sessions: { get: () => ({ rateLimit: options.rateLimit ?? null }) as AgentSessionRow },
     tokens: { revoke },
     now: () => NOW,
   };
-  return { d, send, start, end, getMessage, onActionFailed, refreshSessionState, stopMessage, revoke };
+  return { d, send, start, end, getMessage, onActionFailed, refreshSessionState, stopMessage, revoke, waitsForFirstTurn };
 }
 
 const sendAction = (extra: { resend?: boolean } = {}) =>
@@ -119,6 +123,13 @@ describe("session.start 处理函数", () => {
 });
 
 describe("session.send 处理函数", () => {
+  it("R1 Worker 还没开工、或者任务说明还没写进去（ledger.waitsForFirstTurn）：later，不调 driver.send，会话不会被拉起来", async () => {
+    const { d, send, waitsForFirstTurn } = deps({ waitsForFirstTurn: true });
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" });
+    expect(waitsForFirstTurn).toHaveBeenCalledWith(1, 7);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("读出消息文字，调 driver.send；写进去了 → done", async () => {
     const { d, send } = deps();
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
@@ -264,10 +275,13 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     setupCommand: null,
   };
 
-  function worktreeDeps(options: { task?: WorktreeTask | null; add?: Error } = {}) {
+  function worktreeDeps(options: { task?: WorktreeTask | null; add?: Error; preparing?: boolean } = {}) {
     const calls: string[] = [];
     const getWorktreeTask = vi.fn(() => (options.task === undefined ? task : options.task));
-    const onSetupStarted = vi.fn(() => void calls.push("onSetupStarted"));
+    const onSetupStarted = vi.fn(() => {
+      calls.push("onSetupStarted");
+      return options.preparing ?? true;
+    });
     const onWorktreeCreated = vi.fn(() => void calls.push("onWorktreeCreated"));
     const addWorktree = vi.fn(async () => {
       calls.push("addWorktree");
@@ -320,9 +334,17 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
       rootPath: "/code/foo",
       logPath: "/data/state/logs/setup/worker-3.log",
     });
-    const outcome: SetupOutcome = { kind: "failed", command: "pnpm install", exitCode: 1, signal: null, error: null, durationMs: 5, tail: "x", logPath: "/l", logError: null };
+    const outcome: SetupOutcome = { kind: "failed", command: "pnpm install", exitCode: 1, signal: null, error: null, timeoutMs: 600_000, durationMs: 5, tail: "x", logPath: "/l", logError: null };
     t.jobs[0]!.onDone(outcome);
     expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee", outcome);
+  });
+
+  it("R2 建 worktree 的时候收工了（onSetupStarted 返回 false）：不跑准备命令、不交给账本，做完", async () => {
+    const t = worktreeDeps({ task: { ...task, setupCommand: "pnpm install" }, preparing: false });
+    expect(await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }))).toEqual({ kind: "done" });
+    expect(t.calls).toEqual(["addWorktree", "onSetupStarted"]);
+    expect(t.start).not.toHaveBeenCalled();
+    expect(t.onWorktreeCreated).not.toHaveBeenCalled();
   });
 
   it("Worker 不在了、不用 worktree（null）或已经收工：直接做完，不碰 git", async () => {

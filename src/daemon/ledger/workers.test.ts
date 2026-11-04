@@ -878,6 +878,7 @@ describe("worktree 准备命令（hub project setup）", () => {
     exitCode: 0,
     signal: null,
     error: null,
+    timeoutMs: SETUP_TIMEOUT_MS,
     durationMs: 23_400,
     tail: "",
     logPath: "/data/state/logs/setup/worker-1.log",
@@ -1055,5 +1056,72 @@ describe("worktree 准备命令（hub project setup）", () => {
     ledger.recoverAfterRestart();
     expect(enqueued.filter((a) => a.type === "worktree.create").map((a) => [a.params, a.status])).toEqual([[{ workerId: waiting.id }, "pending"]]);
     expect(actionsOf("worktree.create").filter((a) => a.status === "pending").map((a) => a.params)).toEqual([{ workerId: waiting.id }]);
+  });
+});
+
+describe("准备命令：审查后补的（PR #47）", () => {
+  const sessionOfWorker = (workerId: WorkerId) => workerSessionId(workerId);
+  const activityOf = (workerId: WorkerId) =>
+    ledger.snapshot().sessions.find((s) => s.sessionId === workerSessionId(workerId))!.activity;
+
+  it("R1 还没开工（准备中）的 Worker：hub worker send 拒绝（conflict，说清楚原因），什么都没写", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    const before = tableCounts();
+    expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }), "conflict", /Worker 还在准备，等它开工后再发/);
+    expect(tableCounts()).toEqual(before);
+    // 开工以后照常能发
+    ledger.onWorktreeCreated(worker.id, "c0ffee");
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.worker.id).toBe(worker.id);
+  });
+
+  it("R1 waitsForFirstTurn：没开工的、任务说明还没写进去时别的消息都要等；任务说明本身、写进去之后、项目经理的会话不等", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    const sessionId = sessionOfWorker(worker.id);
+    const task = taskMessage(worker).id;
+    // 准备中：什么都等（连任务说明也还没到发的时候）
+    expect(ledger.waitsForFirstTurn(sessionId, task)).toBe(true);
+    expect(ledger.waitsForFirstTurn(sessionId, 9_999)).toBe(true);
+    ledger.onWorktreeCreated(worker.id, "c0ffee");
+    const other = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再补一句" }).data.messageId;
+    // 开工了、任务说明还在排队：任务说明先走，别的等它
+    expect(ledger.waitsForFirstTurn(sessionId, task)).toBe(false);
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(true);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [task], at: now });
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(false);
+    expect(ledger.waitsForFirstTurn(lin.sessionId, 1)).toBe(false);
+  });
+
+  it("R1 在主文件夹里干的 Worker：任务说明还在排队时，别的消息也等它", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = sessionOfWorker(worker.id);
+    const other = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再补一句" }).data.messageId;
+    expect(ledger.waitsForFirstTurn(sessionId, taskMessage(worker).id)).toBe(false);
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(true);
+  });
+
+  it("R1 准备中不会被驱动层的事件盖成“干活中”", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    const sessionId = sessionOfWorker(worker.id);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t", toolUseId: "t", name: "Bash", input: { command: "ls" }, at: now });
+    expect(activityOf(worker.id)).toBe("preparing");
+  });
+
+  it("R2 onSetupStarted 返回有没有真的进准备中：已收工、已经开工的返回 false", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    expect(ledger.onSetupStarted(worker.id)).toBe(true);
+    const ended = start({ title: "乙" }).data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: ended.id });
+    expect(ledger.onSetupStarted(ended.id)).toBe(false);
+    const started = start({ title: "丙" }).data.worker;
+    ledger.onWorktreeCreated(started.id, "c0ffee");
+    expect(ledger.onSetupStarted(started.id)).toBe(false);
+    expect(ledger.onSetupStarted(9_999)).toBe(false);
   });
 });

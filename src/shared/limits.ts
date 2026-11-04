@@ -93,6 +93,8 @@ export const PS_TIMEOUT_MS = 2_000;
 export const STALE_POLL_MS = 50;
 /** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */
 export const QUEUED_RECHECK_MS = 1_000;
+/** 处理函数：Worker 还没开工（在建 worktree、跑准备命令）或任务说明还没写进去时，发给它的别的消息隔多久再看一次。 */
+export const WORKER_FIRST_TURN_RECHECK_MS = 2_000;
 /** 处理函数：额度用完时最多推迟多久再看一次。 */
 export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;
 /** 处理函数：额度用完、知道恢复时间时，在恢复时间之后多等一会儿再发，免得卡在边界上。 */

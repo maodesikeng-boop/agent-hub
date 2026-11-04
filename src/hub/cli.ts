@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
-import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
+import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES, SETUP_TIMEOUT_MS } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 
 export interface HubIo {
@@ -38,7 +38,10 @@ export const HUB_USAGE = `用法：
   ${hub} project attach <文件夹>                             给项目挂上附加文件夹
   ${hub} project detach <文件夹>                             从项目上移除附加文件夹
   ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
-                                                          给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工
+                                                          给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工。
+                                                          用守护进程的 $SHELL -c 跑，标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
+                                                          能用 AGENT_HUB_ROOT_PATH（主文件夹）、AGENT_HUB_WORKTREE_PATH。
+                                                          别把密钥写进命令：原文会出现在日志和失败附注里
   ${hub} persona show
   ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
   ${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin

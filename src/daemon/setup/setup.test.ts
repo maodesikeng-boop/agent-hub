@@ -1,12 +1,12 @@
 // worktree 准备命令（方案测试表 1～15）：真 shell、临时目录。
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SetupOutcome } from "../../shared/index.ts";
-import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, SETUP_OUTPUT_TAIL_BYTES, SETUP_OUTPUT_TAIL_LINES } from "../../shared/index.ts";
+import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, SETUP_OUTPUT_TAIL_BYTES, SETUP_OUTPUT_TAIL_LINES, SETUP_TIMEOUT_MS } from "../../shared/index.ts";
 import { isAlive, waitForExit } from "../driver/process.ts";
-import { buildSetupEnv, createSetupRunner, outputTail, runSetupCommand, type SetupJob } from "./index.ts";
+import { buildSetupEnv, cleanTerminalText, createSetupRunner, outputTail, runSetupCommand, type SetupJob } from "./index.ts";
 
 let root: string;
 let cwd: string;
@@ -74,12 +74,6 @@ describe("runSetupCommand", () => {
     const outcome = await run("echo hi", { shell: join(root, "no-such-shell") });
     expect(outcome.kind).toBe("failed");
     expect(outcome.exitCode).toBeNull();
-    expect(outcome.error).toMatch(/准备命令起不来/);
-  });
-
-  it("4b 目录不在：failed，带原因", async () => {
-    const outcome = await run("echo hi", { cwd: join(root, "gone") });
-    expect(outcome.kind).toBe("failed");
     expect(outcome.error).toMatch(/准备命令起不来/);
   });
 
@@ -264,5 +258,106 @@ describe("createSetupRunner", () => {
     );
     await new Promise((r) => setTimeout(r, 10));
     expect(lines.join("\n")).toContain("boom");
+  });
+});
+
+describe("审查后补的（PR #47）", () => {
+  it("R4 环境变量：按忽略大小写去掉模型和 hub 的凭据，GH、AWS、NPM 的令牌保留", () => {
+    const base = {
+      ANTHROPIC_API_KEY: "x",
+      anthropic_auth_token: "x",
+      ANTHROPIC_FOUNDRY_API_KEY: "x",
+      ANTHROPIC_AWS_API_KEY: "x",
+      AWS_BEARER_TOKEN_BEDROCK: "x",
+      CLAUDE_CODE_OAUTH_TOKEN: "x",
+      Claude_Code_OAuth_Refresh_Token: "x",
+      CLAUDE_CODE_SESSION_ACCESS_TOKEN: "x",
+      CLAUDE_CODE_CLIENT_KEY: "x",
+      CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: "x",
+      CLAUDE_CODE_CLIENT_CERT: "x",
+      MCP_CLIENT_SECRET: "x",
+      HUB_TOKEN: "x",
+      hub_sock: "x",
+      HUB_ANYTHING: "x",
+      agent_hub_home: "x",
+      GH_TOKEN: "keep",
+      GITHUB_TOKEN: "keep",
+      NPM_TOKEN: "keep",
+      AWS_ACCESS_KEY_ID: "keep",
+      AWS_SECRET_ACCESS_KEY: "keep",
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "keep",
+      PATH: "/bin",
+    };
+    expect(buildSetupEnv(base, { rootPath: "/r", worktreePath: "/w" })).toEqual({
+      GH_TOKEN: "keep",
+      GITHUB_TOKEN: "keep",
+      NPM_TOKEN: "keep",
+      AWS_ACCESS_KEY_ID: "keep",
+      AWS_SECRET_ACCESS_KEY: "keep",
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "keep",
+      PATH: "/bin",
+      [ENV_SETUP_ROOT_PATH]: "/r",
+      [ENV_SETUP_WORKTREE_PATH]: "/w",
+    });
+  });
+
+  it("R3 输出尾部：去掉 ANSI 序列和控制字符，\\r 只留最后一段（进度条），CRLF 照常是换行", async () => {
+    const outcome = await run(
+      "printf '\\033[31mred\\033[0m line\\r\\n'; printf 'progress 10%%\\rprogress 100%%\\n'; printf 'bell\\007 \\033]0;title\\007ok\\n'; printf 'tab\\there\\n'",
+    );
+    expect(outcome.tail).toBe("red line\nprogress 100%\nbell ok\ntab\there");
+  });
+
+  it("R3 cleanTerminalText：单独去掉 ESC、C1 控制字符，保留换行和制表符", () => {
+    expect(cleanTerminalText("a\u001b[2Kb\u009bc\u0000d\ne\tf")).toBe("abcd\ne\tf");
+  });
+
+  it("R6 worktree 目录不在：起命令前就报清楚原因，不是 spawn ENOENT", async () => {
+    const outcome = await run("echo hi", { cwd: join(root, "gone") });
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.error).toBe(`worktree 目录不在：${join(root, "gone")}`);
+  });
+
+  it("R7 日志目录权限 0700", async () => {
+    await run("true");
+    expect(statSync(join(root, "logs", "setup")).mode & 0o777).toBe(0o700);
+  });
+
+  it("R5 spawn 同步抛错（命令里有 NUL）：不抛，给 failed 和原因，日志的 fd 不漏", async () => {
+    const before = readdirSync("/dev/fd").length;
+    const outcome = await run("echo a\0b");
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.error).toMatch(/准备命令出错/);
+    expect(readdirSync("/dev/fd").length).toBe(before);
+    expect(readFileSync(logPath, "utf8")).toContain("结束（failed");
+  });
+
+  it("R10 结果带着实际的超时（附注里的分钟数跟它走）", async () => {
+    expect((await run("true", { timeoutMs: 120_000 })).timeoutMs).toBe(120_000);
+    expect((await run("true")).timeoutMs).toBe(SETUP_TIMEOUT_MS);
+  });
+
+  it("R5 runner：onDone 抛错时再调一次，带“准备命令出错”的结果，Worker 不会卡在准备中", async () => {
+    const lines: string[] = [];
+    const runner = createSetupRunner({ shell: "/bin/sh", log: (l) => lines.push(l) });
+    const seen: SetupOutcome[] = [];
+    await new Promise<void>((resolve) =>
+      runner.start({
+        workerId: 1,
+        sessionId: 10,
+        command: "true",
+        cwd,
+        rootPath: root,
+        logPath,
+        onDone: (o) => {
+          seen.push(o);
+          if (seen.length === 1) throw new Error("账本写不进去");
+          resolve();
+        },
+      }),
+    );
+    expect(seen.map((o) => o.kind)).toEqual(["ok", "failed"]);
+    expect(seen[1]!.error).toBe("准备命令出错：账本写不进去");
+    expect(lines.join("\n")).toContain("账本写不进去");
   });
 });

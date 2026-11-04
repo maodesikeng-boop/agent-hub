@@ -214,6 +214,41 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await terminate(daemon);
   });
 
+  it("R1 准备中项目经理发话（hub worker send）：被拒、Worker 不会被拉起来；放行后第一轮是任务说明", async () => {
+    env = makeEnv();
+    const dir = repo("early");
+    const gate = join(env.dir, "gate");
+    env.setScript(
+      scripts(
+        {
+          turns: [
+            { steps: [{ bash: setupCmd(`touch started; while [ ! -f '${gate}' ]; do sleep 0.1; done`) }, { bash: startCmd("修 X", "把 X 修好") }, { text: "派了" }] },
+            { steps: [{ bash: `${hub} worker send 1 --stdin <<'EOF'\n顺便看看 Y\nEOF` }, { text: "发了" }] },
+          ],
+          defaultTurn: say("收到"),
+        },
+        { defaultTurn: say(report("好了")) },
+      ),
+    );
+    const { daemon, client } = await boot();
+    const pm = await pmWithProject(client, dir);
+    await waitForStatus(client, await client.post(pm.conversationId, "派活"), "replied");
+    const [worker] = workerRows();
+    await waitUntil("preparing", async () => ((await workerSessionOf(client, worker!)).activity === "preparing" && existsSync(join(worker!.worktree_path!, "started")) ? true : undefined));
+    await waitForStatus(client, await client.post(pm.conversationId, "再让它看看 Y"), "replied");
+    const sendRun = env.bashRuns()[2]!;
+    expect(sendRun.exitCode).toBe(1);
+    expect(sendRun.output).toContain("Worker 还在准备，等它开工后再发");
+    expect(procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
+    expect((await workerSessionOf(client, worker!)).activity).toBe("preparing");
+    writeFileSync(gate, "");
+    await waitLines(client, pm.conversationId, "report");
+    const procs = procsOf((await workerSessionOf(client, worker!)).sessionId);
+    expect(env.stdinTextsOf(procs[0]!.pid)).toHaveLength(1);
+    expect(env.stdinTextsOf(procs[0]!.pid)[0]).toMatch(/^【系统】已经在这个 worktree 里跑过[\s\S]*\n\n把 X 修好$/);
+    await terminate(daemon);
+  });
+
   it("37、38 准备中关机：很快关完、准备命令没了；改好命令重启后从头再跑，Worker 开工", async () => {
     env = makeEnv();
     const dir = repo("restart");

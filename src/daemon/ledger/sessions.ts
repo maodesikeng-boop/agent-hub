@@ -26,8 +26,9 @@ export interface LiveSession {
   apiRetry?: ApiRetryInfo | null;
 }
 
+/** 正在停、准备中（Worker 在跑准备命令，还没开工）不被盖掉。 */
 export const working = (currentTool: string | null) => (l: LiveSession) => {
-  if (l.activity !== "stopping") l.activity = "working";
+  if (l.activity !== "stopping" && l.activity !== "preparing") l.activity = "working";
   l.currentTool = currentTool;
   l.apiRetry = null;
 };

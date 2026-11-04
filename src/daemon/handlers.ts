@@ -12,6 +12,7 @@ import {
   RATE_LIMIT_RECHECK_MAX_MS,
   RATE_LIMIT_RECHECK_PAD_MS,
   SessionTokenRevokedError,
+  WORKER_FIRST_TURN_RECHECK_MS,
   agentTextOf,
   isQuotaExhausted,
   type ActionHandler,
@@ -28,7 +29,7 @@ import type { SetupRunner } from "./setup/index.ts";
 
 export interface HandlerDeps {
   driver: Pick<Driver, "start" | "send" | "end">;
-  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage">;
+  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage" | "waitsForFirstTurn">;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
   tokens: Pick<SessionTokens, "revoke">;
@@ -65,6 +66,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     const message = deps.ledger.getMessage(messageId);
     // 消息没了，或者已经有结果（已回复、已停止）：没什么可发的
     if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
+    // Worker 还没开工（建 worktree、跑准备命令）或任务说明还没写进去：先等，别让这条把会话提前拉起来（第一轮要是任务说明）
+    if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
     const wait = rateLimitWaitMs(deps, sessionId);
     if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
     let result;
@@ -135,7 +138,8 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       deps.ledger.onWorktreeCreated(workerId, baseCommit);
       return { kind: "done" };
     }
-    deps.ledger.onSetupStarted(workerId);
+    // 建 worktree 的时候 Worker 可能已经收工了：onSetupStarted 再确认一次，没进准备中就不跑
+    if (!deps.ledger.onSetupStarted(workerId)) return { kind: "done" };
     deps.setup.start({
       workerId,
       sessionId: task.sessionId,

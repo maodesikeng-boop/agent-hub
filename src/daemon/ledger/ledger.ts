@@ -178,6 +178,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     getLaunchContext: launch.getLaunchContext,
     getWorktreeTask: workers.getWorktreeTask,
     onSetupStarted: workers.onSetupStarted,
+    waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
 
     syncPersonaFiles: persona.syncPersonaFiles,

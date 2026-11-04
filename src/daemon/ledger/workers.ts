@@ -208,6 +208,9 @@ export function createLedgerWorkers(
     }
   };
 
+  /** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
+  const notStarted = (worker: WorkerDbRow) => worker.workspace === "worktree" && worker.base_commit === null;
+
   /** 起 Worker 的会话、把任务说明发给它（主文件夹里干的派活时就做，worktree 的建好了再做）。 */
   const enqueueFirstTurn = (p: Pending, worker: WorkerDbRow) => {
     const session = workerSession(worker.id);
@@ -317,6 +320,8 @@ export function createLedgerWorkers(
   const sendIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.send">): HubResult<"worker.send"> => {
     const worker = ownWorker(caller.pmId, args.workerId);
     if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
+    // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
+    if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
     const text = validTask(args.text, "要发给 Worker 的话");
     const message = insertPmMessage(p, worker, workerSession(worker.id), text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
@@ -434,16 +439,32 @@ export function createLedgerWorkers(
     };
   };
 
-  /** 准备命令开始跑：Worker 的会话显示“准备中”（网页的状态行、hub worker list）。已收工、已经开工的不改。 */
-  const onSetupStarted = (workerId: WorkerId) => {
+  /**
+   * 准备命令开始跑：Worker 的会话显示“准备中”（网页的状态行、hub worker list）。返回真的进了准备中没有：
+   * Worker 不在了、已收工（比如建 worktree 的时候收工了）、已经开工的不改，返回 false，调用方就不跑准备命令。
+   */
+  const onSetupStarted = (workerId: WorkerId): boolean =>
     write((p) => {
       const worker = workerRow(workerId);
-      if (worker === null || worker.status === "ended" || worker.base_commit !== null) return;
+      if (worker === null || worker.workspace !== "worktree" || worker.status === "ended" || worker.base_commit !== null) return false;
       updateLive(p, workerSession(workerId).id, (l) => {
         l.activity = "preparing";
         l.currentTool = null;
       });
+      return true;
     });
+
+  /**
+   * session.send 处理函数问（兜底，不管消息从哪来）：这条消息要不要先等着，免得 Worker 的会话被它提前拉起来、第一轮不是任务说明。
+   * Worker 的会话、Worker 还开着时：还没开工（worktree 没建好、准备命令在跑）→ 什么都等；开工了、任务说明还在排队 → 除了任务说明都等。
+   */
+  const waitsForFirstTurn = (sessionId: SessionId, messageId: MessageId): boolean => {
+    const workerId = db.get<{ worker_id: number | null }>("SELECT worker_id FROM agent_sessions WHERE id = ?", sessionId)?.worker_id ?? null;
+    const worker = workerId === null ? null : workerRow(workerId);
+    if (worker === null || worker.status === "ended") return false;
+    if (notStarted(worker)) return true;
+    const task = db.get<{ id: number; status: string }>("SELECT id, status FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
+    return task !== undefined && task.status === "queued" && task.id !== messageId;
   };
 
   /**
@@ -553,6 +574,7 @@ export function createLedgerWorkers(
     afterDriverEvent,
     getWorktreeTask,
     onSetupStarted,
+    waitsForFirstTurn,
     onWorktreeCreated,
     recoverWorktrees,
     actionFailedIn,

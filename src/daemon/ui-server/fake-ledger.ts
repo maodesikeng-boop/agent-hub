@@ -247,6 +247,7 @@ export class FakeLedger {
       getLaunchContext: unused("getLaunchContext"),
       getWorktreeTask: unused("getWorktreeTask"),
       onSetupStarted: unused("onSetupStarted"),
+      waitsForFirstTurn: unused("waitsForFirstTurn"),
       onWorktreeCreated: unused("onWorktreeCreated"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
