@@ -265,6 +265,32 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 
+  it("同一个文件夹可以有多个项目经理：网页新建弹窗选别人的主文件夹照样建好；hub project create、attach 别人的主文件夹也不报占用", async () => {
+    env = makeEnv();
+    const foo = folder("foo");
+    env.setScript({ defaultTurn: quick("在") });
+    const { daemon, client, privateId } = await boot();
+    // 网页新建项目经理（POST /api/pms）：阿周、老王都用 foo 当主文件夹
+    const zhou = await pmWithProject(client, "阿周", foo);
+    const wang = await pmWithProject(client, "老王", foo);
+    // 第一次启动自动建的项目经理在会话里 hub project create 同一个文件夹
+    await warmUp(client, privateId);
+    const created = await env.runHub(lastProcOf(sessionsOf(await client.state(), privateId)[0]!.sessionId).pid, ["project", "create", "--folder", foo]);
+    expect(created.code).toBe(0);
+    expect(created.stdout).toContain("已建好项目“foo”");
+    // 别的项目挂着的附加文件夹也能挂
+    const shared = folder("shared");
+    await warmUp(client, zhou.conversationId);
+    await warmUp(client, wang.conversationId);
+    for (const pm of [zhou, wang]) expect((await env.runHub(lastProcOf(pm.sessionId).pid, ["project", "attach", shared])).code).toBe(0);
+    const s = await client.state();
+    expect(s.projects.map((p) => p.name)).toEqual(["foo", "foo", "foo"]);
+    expect(new Set(s.projects.map((p) => p.pmId)).size).toBe(3);
+    expect(s.folders.filter((f) => f.isMain).map((f) => f.path)).toEqual([real(foo), real(foo), real(foo)]);
+    expect(s.folders.filter((f) => !f.isMain).map((f) => f.path)).toEqual([real(shared), real(shared)]);
+    await terminate(daemon);
+  });
+
   it("同时跑：两个项目经理各自的会话同时回答，两个进程同时在跑，回复各进各的对话", async () => {
     env = makeEnv();
     const foo = folder("foo");

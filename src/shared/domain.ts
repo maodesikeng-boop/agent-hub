@@ -549,9 +549,11 @@ export const RATE_LIMIT_REJECTED = "rejected";
 /**
  * 额度是不是用完了：只有 rejected 算。发消息的处理函数（等额度）和网页（状态行显示“等额度”）都用它，
  * 免得两边判断不一样（m2-plan 第 7 节第 2 条）。
+ * 传了 nowMs（毫秒）的，info.resetsAt 已经到了或过了就不算：rejected 是重置前记下的，Claude 要等下一条事件才会改它。
  */
-export function isQuotaExhausted(info: RateLimitInfo | null | undefined): boolean {
-  return info?.status === RATE_LIMIT_REJECTED;
+export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?: number): boolean {
+  if (info?.status !== RATE_LIMIT_REJECTED) return false;
+  return nowMs === undefined || info.resetsAt === null || info.resetsAt * 1000 > nowMs;
 }
 
 /**
