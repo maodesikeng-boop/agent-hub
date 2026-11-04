@@ -11,6 +11,7 @@ import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { failingHealth, listConversations, pendingOf, quotaUsage, runningWorkerCount, sessionOf, workerLineOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
+import { useWaitingReminders } from "./notify.ts";
 import { useHub } from "./useHub.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
@@ -25,6 +26,22 @@ export function App() {
   const [creating, setCreating] = useState(false);
   /** 打开着的 Worker 的对话；选了左栏的对话或点“返回”就回到项目经理的会话。 */
   const [openWorker, setOpenWorker] = useState<ConversationId | null>(null);
+
+  const entries = listConversations(state);
+  const active = entries.find((e) => e.id === selected) ?? entries[0] ?? null;
+  const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
+  const select = (id: ConversationId) => {
+    setProfilePm(null);
+    setOpenWorker(null);
+    setSelected(id);
+  };
+  const workerView = openWorker === null ? undefined : state.conversations[openWorker];
+  // Worker 的对话归派它的项目经理；对话还没同步过来就用打开它的那个会话
+  const workerPm = workerView?.conversation.pmId ?? active?.pm?.id ?? null;
+  const workerPmEntry = entries.find((e) => e.pm?.id === workerPm) ?? active;
+  // 用户正开着的对话：资料页不算；打开着 Worker 的对话算它的项目经理的会话
+  const activeId = profile ? null : ((openWorker !== null ? workerPmEntry?.id : active?.id) ?? null);
+  const reminders = useWaitingReminders(state, activeId, select);
 
   if (state.phase === "loading") {
     return (
@@ -50,20 +67,12 @@ export function App() {
     );
   }
 
-  const entries = listConversations(state);
-  const active = entries.find((e) => e.id === selected) ?? entries[0] ?? null;
   // 默认选中的那个固定下来，之后别的对话来了新消息排到前面也不会跳走。
   // 选中的对话还没从服务端同步过来（刚建好，响应先于变化到）就不动它，等它到了自然切过去
   if (active && selected === null) setSelected(active.id);
   const view = active ? state.conversations[active.id] : undefined;
   const notices = <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />;
-  const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  const select = (id: ConversationId) => {
-    setProfilePm(null);
-    setOpenWorker(null);
-    setSelected(id);
-  };
   const created = (conversationId: ConversationId) => {
     setCreating(false);
     select(conversationId);
@@ -77,11 +86,7 @@ export function App() {
     },
   };
 
-  const workerView = openWorker === null ? undefined : state.conversations[openWorker];
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
-  // Worker 的对话归派它的项目经理；对话还没同步过来就用打开它的那个会话
-  const workerPm = workerView?.conversation.pmId ?? active?.pm?.id ?? null;
-  const workerPmEntry = entries.find((e) => e.pm?.id === workerPm) ?? active;
   const stats = (pmId: number | null | undefined) => (
     <TopBarStats quota={quotaUsage(state)} running={pmId == null ? 0 : runningWorkerCount(state, pmId)} />
   );
@@ -90,9 +95,12 @@ export function App() {
     <div className="flex h-full">
       <Sidebar
         entries={entries}
-        activeId={profile ? null : ((openWorker !== null ? workerPmEntry?.id : active?.id) ?? null)}
+        activeId={activeId}
+        waiting={reminders.waiting}
+        notifyPermission={reminders.permission}
         onSelect={select}
         onNewPm={() => setCreating(true)}
+        onEnableNotify={() => void reminders.requestPermission()}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">

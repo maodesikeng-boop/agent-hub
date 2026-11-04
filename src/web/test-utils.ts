@@ -371,3 +371,58 @@ export function healthChange(seq: number, health: HealthEntry): Change {
 export function changeOf<T extends Change["type"]>(seq: number, type: T, data: Extract<Change, { type: T }>["data"]): Change {
   return { seq, type, data } as Change;
 }
+
+// ---- 假浏览器通知（M4） ----
+
+/** 假的 Notification：permission 和 requestPermission 可以改，弹出来的都记在 instances 里。 */
+export class FakeNotification {
+  static instances: FakeNotification[] = [];
+  static permission: NotificationPermission = "granted";
+  /** 用户在浏览器弹窗里点了什么；requestPermission 之后 permission 变成它。 */
+  static answer: NotificationPermission = "granted";
+  static requestPermission = vi.fn(async (): Promise<NotificationPermission> => {
+    FakeNotification.permission = FakeNotification.answer;
+    return FakeNotification.permission;
+  });
+  static get last(): FakeNotification {
+    const n = FakeNotification.instances.at(-1);
+    if (!n) throw new Error("还没弹过通知");
+    return n;
+  }
+
+  readonly title: string;
+  readonly options: NotificationOptions;
+  onclick: (() => void) | null = null;
+  closed = false;
+
+  constructor(title: string, options: NotificationOptions = {}) {
+    this.title = title;
+    this.options = options;
+    FakeNotification.instances.push(this);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
+/** 换上假的 Notification；permission 是授权状态，null 表示这个浏览器根本没有通知接口。 */
+export function installFakeNotification(permission: NotificationPermission | null = "granted"): void {
+  FakeNotification.instances = [];
+  FakeNotification.requestPermission.mockClear();
+  FakeNotification.answer = "granted";
+  if (permission === null) {
+    vi.stubGlobal("Notification", undefined);
+    return;
+  }
+  FakeNotification.permission = permission;
+  vi.stubGlobal("Notification", FakeNotification);
+}
+
+/** 网页在不在前台：标签页可见并且窗口有焦点。 */
+export function setForeground(foreground: boolean): void {
+  vi.spyOn(document, "hasFocus").mockReturnValue(foreground);
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (foreground ? "visible" : "hidden") });
+  window.dispatchEvent(new Event(foreground ? "focus" : "blur"));
+  document.dispatchEvent(new Event("visibilitychange"));
+}
