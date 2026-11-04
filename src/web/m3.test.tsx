@@ -268,19 +268,19 @@ describe("点开 Worker", () => {
     expect(screen.getByText("第二句").closest("article")).toHaveAttribute("data-head", "false");
   });
 
-  it("Worker 在干活：状态行显示它在做什么，“停止”停的是 Worker 的对话", async () => {
+  it("Worker 在干活：头像旁显示它在做什么，“停止”停的是 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     await user.click(within(log()).getByRole("button", { name: /已派出/ }));
-    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working", currentTool: "Bash" })));
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } })));
     const status = screen.getByRole("status", { name: "状态" });
-    expect(status).toHaveTextContent("Bash");
+    expect(status).toHaveTextContent("在运行命令");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
-  it("Worker 网络出错在重试：状态行写“网络出错，正在重试”，“停止”照常停 Worker 的对话", async () => {
+  it("Worker 网络出错在重试：头像旁写“网络出错，正在重试”，“停止”照常停 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     await user.click(within(log()).getByRole("button", { name: /已派出/ }));
@@ -303,13 +303,13 @@ describe("点开 Worker", () => {
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
-  it("31 Worker 准备中：状态行写“准备中”、有停止按钮，停的是 Worker 的对话", async () => {
+  it("31 Worker 准备中：头像旁写“正在跑准备命令”、有停止按钮，停的是 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     await user.click(within(log()).getByRole("button", { name: /已派出/ }));
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "preparing" })));
     const status = screen.getByRole("status", { name: "状态" });
-    expect(status).toHaveTextContent("准备中：在跑项目的准备命令");
+    expect(status).toHaveTextContent("正在跑准备命令");
     expect(status).toHaveAttribute("data-busy", "true");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));

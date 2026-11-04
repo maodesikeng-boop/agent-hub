@@ -4,7 +4,7 @@ import type { Message, MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
-import { MessageBubble, PendingBubble, ToolGroup, type MessageActions } from "./Messages.tsx";
+import { AgentTyping, MessageBubble, PendingBubble, ToolGroup, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
 /** 离底部不到这么多像素算“在底部”，新消息来了跟着滚。 */
 const STICK_DISTANCE_PX = 80;
@@ -23,6 +23,8 @@ export function MessageList({
   onRetry,
   actions,
   focus,
+  status,
+  statusAgent,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -35,6 +37,12 @@ export function MessageList({
   actions: MessageActions;
   /** 要跳到并高亮的消息；n 变了就再跳一次。 */
   focus?: { id: MessageId; n: number } | null;
+  /**
+   * agent 在忙时它在做什么（AgentStatus），没在忙是 null。显示在这一轮最后一条回复的头像行上；
+   * 最后一条不是 agent 的回复（这一轮还没出回复）时，在列表底部单独出一行“头像 名字 · 状态”，名字用 statusAgent。
+   */
+  status?: React.ReactNode;
+  statusAgent?: AgentIdentity;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [highlightId, setHighlightId] = useState<MessageId | null>(null);
@@ -45,7 +53,7 @@ export function MessageList({
   const prevPendingCount = useRef(pending.length);
 
   const items = groupMessages(messages);
-  const lastKey = `${messages.at(-1)?.id ?? 0}:${pending.length}`;
+  const lastKey = `${messages.at(-1)?.id ?? 0}:${pending.length}:${status != null}`;
   const firstId = messages[0]?.id ?? 0;
 
   const scrollToBottom = () => {
@@ -95,6 +103,11 @@ export function MessageList({
     if (hasMore && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
   };
 
+  /** 状态跟着最后一项走：它是 agent 的回复（文字或一组操作）就接在它的头像行上，不然（用户消息、系统消息、待发的）单独出一行。 */
+  const lastItem = items.at(-1);
+  const rideOnLast = status != null && pending.length === 0 && lastItem !== undefined && (lastItem.kind === "tools" || lastItem.message.sender === "agent");
+  const typing = status != null && !rideOnLast && statusAgent !== undefined;
+
   /** 上一项是哪个 agent 说的（头像编号）；不是 agent 的消息是 null。换人也要重新署名。 */
   let previous: number | null = null;
   return (
@@ -114,23 +127,28 @@ export function MessageList({
           const message = item.kind === "tools" ? item.messages[0]! : item.message;
           const identity = agentOf(message);
           const head = previous !== identity.avatarKey;
+          const itemStatus = rideOnLast && item === lastItem ? status : undefined;
           if (item.kind === "tools") {
             previous = identity.avatarKey;
-            return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} />;
+            return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} status={itemStatus} />;
           }
           previous = item.message.sender === "agent" || item.message.sender === "pm" ? identity.avatarKey : null;
-          return <MessageBubble
+          return (
+            <MessageBubble
               key={item.message.id}
               message={item.message}
               identity={identity}
               head={head}
+              status={itemStatus}
               actions={actions}
               highlighted={item.message.id === highlightId}
-            />;
+            />
+          );
         })}
         {pending.map((p) => (
           <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />
         ))}
+        {typing && statusAgent && <AgentTyping identity={statusAgent} status={status} />}
       </div>
       {away && (
         <Button

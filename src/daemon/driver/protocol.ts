@@ -4,8 +4,10 @@ import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../..
 import type {
   AgentSessionRow,
   AgentTextEvent,
+  AgentThinkingEvent,
   AgentVendor,
   AgentToolEvent,
+  AgentToolResultEvent,
   ApiRetryInfo,
   LaunchFiles,
   RateLimitInfo,
@@ -85,14 +87,30 @@ export function lineUuid(obj: { uuid?: unknown }, rawLine: string): string {
   return `line:${createHash("sha256").update(rawLine).digest("hex").slice(0, 32)}`;
 }
 
-/** 一个 assistant 事件：几段文字拼成一个 agent.text，每个 tool_use 一个 agent.tool。 */
-export function parseAssistant(obj: Record<string, unknown>, rawLine: string, at: number): Array<AgentTextEvent | AgentToolEvent> {
+/** 子任务里的事件（Agent / Task 工具派出去的）带 parent_tool_use_id；主 agent 自己的是 null，没有就不加字段。 */
+function subtaskOf(obj: Record<string, unknown>): { parentToolUseId?: string } {
+  const parent = obj.parent_tool_use_id;
+  return typeof parent === "string" && parent !== "" ? { parentToolUseId: parent } : {};
+}
+
+/**
+ * 一个 assistant 事件：thinking 块出一个 agent.thinking，几段文字拼成一个 agent.text，每个 tool_use 一个 agent.tool。
+ * 真实日志里 claude 一个事件只带一个块；一个事件里有几种块时，按“thinking、文字、工具”的顺序出，状态以最后出的为准。
+ */
+export function parseAssistant(
+  obj: Record<string, unknown>,
+  rawLine: string,
+  at: number,
+): Array<AgentThinkingEvent | AgentTextEvent | AgentToolEvent> {
   const message = obj.message as { content?: unknown } | undefined;
   const content = Array.isArray(message?.content) ? (message.content as Array<Record<string, unknown>>) : [];
   const uuid = lineUuid(obj, rawLine);
+  const subtask = subtaskOf(obj);
+  let thinking = false;
   const texts: string[] = [];
   const tools: AgentToolEvent[] = [];
   for (const part of content) {
+    if (part?.type === "thinking") thinking = true;
     if (part?.type === "text" && typeof part.text === "string" && part.text.trim() !== "") texts.push(part.text);
     if (part?.type === "tool_use") {
       tools.push({
@@ -102,12 +120,27 @@ export function parseAssistant(obj: Record<string, unknown>, rawLine: string, at
         name: String(part.name ?? ""),
         input: part.input ?? null,
         at,
+        ...subtask,
       });
     }
   }
-  const out: Array<AgentTextEvent | AgentToolEvent> = [];
-  if (texts.length > 0) out.push({ type: "agent.text", uuid, text: texts.join("\n\n"), at });
+  const out: Array<AgentThinkingEvent | AgentTextEvent | AgentToolEvent> = [];
+  if (thinking) out.push({ type: "agent.thinking", uuid, at, ...subtask });
+  if (texts.length > 0) out.push({ type: "agent.text", uuid, text: texts.join("\n\n"), at, ...subtask });
   return [...out, ...tools];
+}
+
+/**
+ * user 事件里的 tool_result 块 → agent.tool_result（工具结果回来了）；回显（isReplay）、普通文字、没有 tool_use_id 的不算，返回 null。
+ */
+export function parseToolResults(obj: Record<string, unknown>, at: number): AgentToolResultEvent | null {
+  if (obj.isReplay === true) return null;
+  const content = (obj.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return null;
+  const toolUseIds = (content as Array<Record<string, unknown>>).flatMap((p) =>
+    p?.type === "tool_result" && typeof p.tool_use_id === "string" && p.tool_use_id !== "" ? [p.tool_use_id] : [],
+  );
+  return toolUseIds.length === 0 ? null : { type: "agent.tool_result", toolUseIds, at, ...subtaskOf(obj) };
 }
 
 /** user 事件里的文字（content 可能是字符串，也可能是几段）。 */
