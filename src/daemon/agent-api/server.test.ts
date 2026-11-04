@@ -48,6 +48,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.send": { workerId: 3, text: "再改一下" },
   "worker.end": { workerId: 3 },
   "worker.list": {},
+  ask: { text: "用 A 还是 B？" },
 };
 
 describe("agent api over inject", () => {
@@ -386,6 +387,13 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("worker.send", { workerId: 3, text: "" }));
       await expectInvalid(await call("worker.end", {}));
       await expectInvalid(await call("worker.list", { all: true }));
+    });
+
+    it("hub ask：正文缺、空、超字节、多余字段 → invalid", async () => {
+      await expectInvalid(await call("ask", {}));
+      await expectInvalid(await call("ask", { text: "" }));
+      await expectInvalid(await call("ask", { text: "问".repeat(Math.floor(MAX_TASK_BYTES / 3) + 1) }));
+      await expectInvalid(await call("ask", { text: "问", workerId: 3 }));
     });
 
     it("30 hub project setup：command 可以是多行字符串或 null（清除）；缺、类型不对、超字节 → invalid", async () => {

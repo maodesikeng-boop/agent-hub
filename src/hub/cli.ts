@@ -50,6 +50,8 @@ export const HUB_USAGE = `用法：
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
+  ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
+                                                          会单独提醒用户，不会被别的消息刷掉
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -239,6 +241,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], "worker end");
     expectPositionals(rest, 1, "worker end");
     return { command: "worker.end", body: { workerId: workerIdOf(rest[0], "worker end") }, textSource: null };
+  }
+  if (group === "ask") {
+    allowOnly(values, ["stdin"], "ask");
+    expectPositionals(parsed.positionals.slice(1), 0, "ask");
+    return { command: "ask", body: {}, textSource: requireStdin(values, "ask"), textField: "text" };
   }
   if (group === "worker" && action === "list") {
     allowOnly(values, [], "worker list");

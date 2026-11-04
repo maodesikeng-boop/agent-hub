@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { workerEventOf } from "../../shared/domain.ts";
+import { askOf, workerEventOf } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, WorkerRecord } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
@@ -694,6 +694,59 @@ describe("出错、停止", () => {
     // 重发由执行器做：消息 failed → 再送达、处理中
     runTurn(worker, [id], report("做完了", "好了"));
     expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "turn_failed", "report"]);
+  });
+});
+
+describe("向用户提问（hub ask）", () => {
+  it("在项目经理的对话里发一条带 needsUser 标记的消息，不发给 agent、推 message.created、记 hub_calls", () => {
+    enqueued = [];
+    changes = [];
+    const result = hub(lin.sessionId, "ask", { text: "用 **A** 还是 B？" });
+    const message = ledger.getMessage(result.data.messageId)!;
+    expect(message).toMatchObject({
+      conversationId: lin.conversationId,
+      sessionId: lin.sessionId,
+      workerId: null,
+      sender: "agent",
+      kind: "text",
+      text: "用 **A** 还是 B？",
+      status: null,
+    });
+    expect(askOf(message)).toEqual({ needsUser: true });
+    expect(enqueued).toEqual([]);
+    expect(changes).toMatchObject([{ type: "message.created", data: { message: { id: message.id } } }]);
+    expect(count("hub_calls", "command = 'ask' AND ok = 1")).toBe(1);
+  });
+
+  it("连问两次是两条消息", () => {
+    const a = hub(lin.sessionId, "ask", { text: "问 1" }).data.messageId;
+    const b = hub(lin.sessionId, "ask", { text: "问 1" }).data.messageId;
+    expect(b).not.toBe(a);
+  });
+
+  it("Worker 不能用 → forbidden，什么也没写；正文空的 → invalid", () => {
+    const worker = start().data.worker;
+    const before = tableCounts();
+    expectLedgerError(() => hub(workerSessionId(worker.id), "ask", { text: "问" }), "forbidden");
+    expectLedgerError(() => hub(lin.sessionId, "ask", { text: "  " }), "invalid");
+    expect(tableCounts()).toEqual(before);
+  });
+
+  it("dismissAsk：meta 加上 dismissed，推 message.updated；再点一次什么也不变", () => {
+    const id = hub(lin.sessionId, "ask", { text: "问" }).data.messageId;
+    changes = [];
+    ledger.dismissAsk(id);
+    expect(askOf(ledger.getMessage(id)!)).toEqual({ needsUser: true, dismissed: true });
+    expect(changes).toMatchObject([{ type: "message.updated", data: { message: { id } } }]);
+    changes = [];
+    ledger.dismissAsk(id);
+    expect(changes).toEqual([]);
+  });
+
+  it("dismissAsk：没有这条 → not_found；不是 hub ask 发的 → conflict", () => {
+    const worker = start().data.worker;
+    expectLedgerError(() => ledger.dismissAsk(99_999), "not_found");
+    expectLedgerError(() => ledger.dismissAsk(taskMessage(worker).id), "conflict");
   });
 });
 

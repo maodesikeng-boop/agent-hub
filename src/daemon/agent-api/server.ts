@@ -119,6 +119,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
+  ask: { type: "object", additionalProperties: false, required: ["text"], properties: { text: taskField } },
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -140,6 +141,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "persona.edit": { text: MAX_PERSONA_BYTES },
   "worker.start": { task: MAX_TASK_BYTES },
   "worker.send": { text: MAX_TASK_BYTES },
+  ask: { text: MAX_TASK_BYTES },
 };
 
 class HubError extends Error {

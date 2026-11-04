@@ -1,5 +1,6 @@
 // 从 HubState 算出界面要用的东西。
 import {
+  askOf,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
   isQuotaExhausted,
@@ -325,6 +326,20 @@ export function waitingConversations(state: HubState, lastSeen: LastSeen): Conve
       return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
     })
     .map(({ conversation }) => conversation.id);
+}
+
+/**
+ * 对话里还在等用户确定的 hub ask（M5）：没点“知道了”（meta.dismissed），并且这条之后用户没发过消息
+ * （包括刚发出、服务端还没确认的）。从老到新。
+ */
+export function pendingAsks(state: HubState, conversationId: ConversationId): Message[] {
+  const view = state.conversations[conversationId];
+  if (!view || pendingOf(state, conversationId).some((p) => p.phase !== "failed")) return [];
+  const lastUserId = view.messages.findLast((m) => m.sender === "user")?.id ?? 0;
+  return view.messages.filter((m) => {
+    const meta = askOf(m);
+    return meta !== null && meta.dismissed !== true && m.id > lastUserId;
+  });
 }
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {

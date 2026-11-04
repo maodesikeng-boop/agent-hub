@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
-import type { Message } from "../../shared/index.ts";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { Message, MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
@@ -10,6 +10,8 @@ import { MessageBubble, PendingBubble, ToolGroup, type MessageActions } from "./
 const STICK_DISTANCE_PX = 80;
 /** 滚到离顶部这么近就加载更早的消息。 */
 const LOAD_OLDER_DISTANCE_PX = 40;
+/** 跳到某条消息后，高亮这么久。 */
+const HIGHLIGHT_MS = 2_000;
 
 export function MessageList({
   messages,
@@ -20,6 +22,7 @@ export function MessageList({
   onLoadOlder,
   onRetry,
   actions,
+  focus,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -30,8 +33,11 @@ export function MessageList({
   onLoadOlder: () => void;
   onRetry: (clientId: string) => void;
   actions: MessageActions;
+  /** 要跳到并高亮的消息；n 变了就再跳一次。 */
+  focus?: { id: MessageId; n: number } | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [highlightId, setHighlightId] = useState<MessageId | null>(null);
   const stick = useRef(true);
   const [away, setAway] = useState(false);
   /** 触发“加载更早”时的内容高度，加载完据此保持原来的位置。 */
@@ -65,6 +71,15 @@ export function MessageList({
       anchorHeight.current = null;
     }
   }, [firstId]);
+
+  // 点了“等你确定”条里的某个问题：滚到那条消息，高亮一会儿
+  useEffect(() => {
+    if (!focus) return;
+    ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center" });
+    setHighlightId(focus.id);
+    const timer = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [focus]);
 
   const loadOlder = () => {
     anchorHeight.current = ref.current?.scrollHeight ?? null;
@@ -104,7 +119,14 @@ export function MessageList({
             return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} />;
           }
           previous = item.message.sender === "agent" || item.message.sender === "pm" ? identity.avatarKey : null;
-          return <MessageBubble key={item.message.id} message={item.message} identity={identity} head={head} actions={actions} />;
+          return <MessageBubble
+              key={item.message.id}
+              message={item.message}
+              identity={identity}
+              head={head}
+              actions={actions}
+              highlighted={item.message.id === highlightId}
+            />;
         })}
         {pending.map((p) => (
           <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  askOf,
   attachmentsOf,
   sentFilesOf,
   stripSystemPrefix,
@@ -61,16 +62,28 @@ function AgentRow({
   head,
   as: Tag = "div",
   title,
+  messageId,
+  highlighted,
   children,
 }: {
   identity: AgentIdentity;
   head: boolean;
   as?: "div" | "article";
   title?: string;
+  /** 给“等你确定”条跳转用（MessageList 按它找到这条消息）。 */
+  messageId?: MessageId;
+  highlighted?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <Tag className={cn("flex flex-col", head ? "mt-5" : "mt-1.5")} data-side="left" data-head={head} title={title}>
+    <Tag
+      className={cn("flex flex-col", head ? "mt-5" : "mt-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
+      data-side="left"
+      data-head={head}
+      data-message-id={messageId}
+      data-highlighted={highlighted ? "true" : undefined}
+      title={title}
+    >
       {head && (
         <div className="mb-1.5 flex items-center gap-2">
           <Avatar colorKey={identity.avatarKey} size={24} />
@@ -174,11 +187,13 @@ export function MessageBubble({
   identity,
   head,
   actions,
+  highlighted = false,
 }: {
   message: Message;
   identity: AgentIdentity;
   head: boolean;
   actions: MessageActions;
+  highlighted?: boolean;
 }) {
   const time = formatTime(message.createdAt);
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
@@ -208,7 +223,10 @@ export function MessageBubble({
     );
   }
   return (
-    <AgentRow identity={identity} head={head} as="article" title={time}>
+    <AgentRow identity={identity} head={head} as="article" title={time} messageId={message.id} highlighted={highlighted}>
+      {askOf(message) && (
+        <span className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你确定</span>
+      )}
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
         <Markdown text={message.text} files={files} />
       </div>
