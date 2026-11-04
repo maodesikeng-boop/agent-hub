@@ -112,7 +112,7 @@ export function Composer({
             e.target.value = ""; // 清掉，同一个文件还能再选
           }}
         />
-        <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy} onClick={() => picker.current?.click()}>
+        <Button variant="secondary" size="icon" className="hover:bg-foreground/10" aria-label="添加文件" disabled={busy} onClick={() => picker.current?.click()}>
           <Paperclip className="size-5" aria-hidden="true" />
         </Button>
         <div className="ml-auto flex items-center gap-2">

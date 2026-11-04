@@ -22,6 +22,7 @@ describe("Composer 布局", () => {
     setup();
     const attach = screen.getByRole("button", { name: "添加文件" });
     const send = screen.getByRole("button", { name: "发送" });
+    expect(attach).toHaveClass("bg-secondary");
     for (const cls of ["size-9", "rounded-[var(--radius-btn)]"]) {
       expect(attach).toHaveClass(cls);
       expect(send).toHaveClass(cls);
