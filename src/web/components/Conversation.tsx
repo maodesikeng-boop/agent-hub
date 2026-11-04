@@ -20,7 +20,6 @@ export function Conversation({
   older,
   draft,
   staging,
-  stats,
   notices,
   onDraftChange,
   onSend,
@@ -38,8 +37,6 @@ export function Conversation({
   draft: string;
   /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
-  /** 标题栏右边的额度和在跑的 Worker 数。 */
-  stats: React.ReactNode;
   /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
@@ -99,7 +96,6 @@ export function Conversation({
             </ul>
           )}
         </div>
-        {stats}
       </header>
       {notices}
       <div className="relative min-h-0 flex-1">

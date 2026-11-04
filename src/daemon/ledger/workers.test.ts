@@ -1186,3 +1186,238 @@ describe("准备命令：审查后补的（PR #47）", () => {
     expect(ledger.onSetupStarted(9_999)).toBe(false);
   });
 });
+
+describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
+  let worker: WorkerRecord;
+  let sessionId: SessionId;
+  beforeEach(() => {
+    worker = start({ noWorktree: true }).data.worker;
+    sessionId = workerSessionId(worker.id);
+    enqueued = [];
+    changes = [];
+  });
+
+  const post = (text: string, clientId = `c-${text}`) =>
+    ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId, text }).messageId;
+  const userMessageLines = () => workerLines().filter((m) => workerEventOf(m)?.event === "user_message");
+
+  it("发一条：Worker 对话里一条 sender user、带 Worker 编号的排队消息，登记 session.send（source user）；项目经理那边这时还没有那一行", () => {
+    const id = post("顺便把 README 也改了");
+    expect(ledger.getMessage(id)).toMatchObject({
+      conversationId: worker.workerConversationId,
+      sessionId,
+      workerId: worker.id,
+      sender: "user",
+      kind: "text",
+      text: "顺便把 README 也改了",
+      status: "queued",
+    });
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: id, source: "user" }]]);
+    expect(userMessageLines()).toEqual([]);
+  });
+
+  it("项目经理对话里用户发的消息照旧不带 Worker 编号", () => {
+    const id = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "pm-1", text: "在吗" }).messageId;
+    expect(ledger.getMessage(id)!.workerId).toBeNull();
+  });
+
+  it("Worker 收到了（message.delivered）：同一个事务里项目经理对话多一行 user_message，全文带标签和原文，交给项目经理（source system）", () => {
+    const id = post("顺便把 README 也改了");
+    enqueued = [];
+    changes = [];
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    const [line] = userMessageLines();
+    expect(workerEventOf(line!)).toEqual({
+      workerId: worker.id,
+      workerConversationId: worker.workerConversationId,
+      title: "修 X",
+      readonly: false,
+      event: "user_message",
+      status: null,
+      summary: "顺便把 README 也改了",
+    });
+    expect(line).toMatchObject({ sender: "system", kind: "worker", status: "queued", sessionId: lin.sessionId, workerId: worker.id });
+    expect(line!.text).toBe("【用户直接对 Worker #1 · 修 X 说的话（Worker 已收到）】\n\n顺便把 README 也改了");
+    expect(line!.dedupeKey).toBe(`worker:${worker.id}:user_message:${id}`);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: line!.id, source: "system" }]]);
+    // 消息状态和那一行在同一批变化里
+    expect(changes.map((c) => c.type)).toEqual(["message.updated", "message.created", "session.status"]);
+  });
+
+  it("带附件：交给项目经理的全文里有附件的完整路径，那一行的摘要还是用户写的字", () => {
+    const attachment = { id: "u1", name: "图.png", path: "/data/uploads/u1/图.png", size: 10, mime: "image/png" };
+    const id = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "f", text: "看这张图", attachments: [attachment] }).messageId;
+    expect(ledger.getMessage(id)).toMatchObject({ workerId: worker.id, meta: { attachments: [attachment] } });
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    const line = userMessageLines()[0]!;
+    expect(workerEventOf(line)?.summary).toBe("看这张图");
+    expect(line.text).toContain(attachment.path);
+  });
+
+  it("同一个 delivered 重放（重启后重发）：还是只有一行，只登记一次", () => {
+    const id = post("改 README");
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    enqueued = [];
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    expect(userMessageLines()).toHaveLength(1);
+    expect(enqueued).toEqual([]);
+  });
+
+  it("Worker 已收工：发消息、重试失败的消息都是 conflict，什么都没写", () => {
+    const failed = post("先发一条");
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === failed)!;
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    const before = tableCounts();
+    enqueued = [];
+    expectLedgerError(() => post("还在吗"), "conflict", /收工/);
+    expectLedgerError(() => ledger.retryMessage(failed), "conflict", /收工/);
+    expect(tableCounts()).toEqual(before);
+    expect(enqueued).toEqual([]);
+    expect(ledger.getMessage(failed)!.status).toBe("failed");
+  });
+
+  it("收工前同一个 clientId 已经发过：重发返回已有的编号，不报错", () => {
+    const id = post("改 README", "same");
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    expect(post("改 README", "same")).toBe(id);
+  });
+
+  it("收工时用户的话还在排队（Worker 正忙）：标已停止，项目经理不会收到 user_message", () => {
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
+    const id = post("先别动 Y");
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    expect(ledger.getMessage(id)!.status).toBe("stopped");
+    expect(userMessageLines()).toEqual([]);
+  });
+
+  it("worktree 还没建好（Worker 还在准备）：发消息是 conflict（还在准备），什么都没写；建好之后能发，排在任务说明后面", () => {
+    repos.add(main);
+    const w = start({ title: "等 worktree" }).data.worker;
+    const before = tableCounts();
+    const postTo = () => ledger.postUserMessage({ conversationId: w.workerConversationId, clientId: "early", text: "先别动 Y" });
+    expectLedgerError(postTo, "conflict", /还在准备/);
+    expect(tableCounts()).toEqual(before);
+    ledger.onWorktreeCreated(w.id, "c0ffee");
+    const id = postTo().messageId;
+    // 任务说明先进驱动层，用户的话排在后面
+    const sends = actionsOf("session.send").filter((a) => a.type === "session.send" && a.params.sessionId === workerSessionId(w.id));
+    expect(sends.map((a) => a.type === "session.send" && a.params.messageId)).toEqual([taskMessage(w).id, id]);
+  });
+
+  it("worktree 没建好时重试一条失败的消息也是 conflict（还在准备）", () => {
+    repos.add(main);
+    const w = start({ title: "等 worktree" }).data.worker;
+    ledger.onWorktreeCreated(w.id, "c0ffee");
+    const id = ledger.postUserMessage({ conversationId: w.workerConversationId, clientId: "r", text: "改 README" }).messageId;
+    db.run("UPDATE messages SET status = 'failed' WHERE id = ?", id);
+    // 模拟“准备中”（PR #47 起准备命令跑完才写 base_commit）
+    db.run("UPDATE workers SET base_commit = NULL WHERE id = ?", w.id);
+    expectLedgerError(() => ledger.retryMessage(id), "conflict", /还在准备/);
+    expect(ledger.getMessage(id)!.status).toBe("failed");
+  });
+
+  it("消息已经停止了才收到 delivered（收工时被标已停止，驱动层的事件晚到）：不发“Worker 已收到”那一行", () => {
+    const id = post("改 README");
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    expect(ledger.getMessage(id)!.status).toBe("stopped");
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    expect(userMessageLines()).toEqual([]);
+  });
+
+  it("这一轮里有用户的话、这一轮出错：turn_failed 交给项目经理的话里带用户的原文，写明用户可以自己点重试", () => {
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
+    const id = post("顺便改 README");
+    runTurn(worker, [id], null, { ok: false, error: { subtype: "error_during_execution", message: "炸了" } });
+    expect(ledger.getMessage(id)!.status).toBe("failed");
+    const line = workerLines().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "turn_failed" });
+    expect(line.text).toContain("「顺便改 README」");
+    expect(line.text).toContain("自己点重试");
+  });
+
+  it("用户的话发不出去（session.send 次数用完）：turn_failed 里同样带原文和重试说明；项目经理的话发不出去不带", () => {
+    const id = post("顺便改 README");
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === id)!;
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    const line = workerLines().at(-1)!;
+    expect(line.text).toContain("「顺便改 README」");
+    expect(line.text).toContain("自己点重试");
+    const fromPm = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再看看" }).data.messageId;
+    const pmSend = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === fromPm)!;
+    ledger.onActionFailed(pmSend, "claude_not_found: 找不到 claude");
+    expect(workerLines().at(-1)!.text).not.toContain("重试");
+  });
+
+  it("Worker 正忙时用户连发两条：都排队；一起送达后项目经理收到两行，各带各的原文", () => {
+    const task = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [task], at: now });
+    const a = post("第一条");
+    const b = post("第二条");
+    expect([a, b].map((id) => ledger.getMessage(id)!.status)).toEqual(["queued", "queued"]);
+    expect(userMessageLines()).toEqual([]);
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [task], durationMs: 1, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [a, b], at: now });
+    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["第一条", "第二条"]);
+  });
+
+  it("项目经理和用户同时发：一起送达，只有用户那条通知项目经理；这一轮结束照常一行汇报，去重键用这一轮最大的编号", () => {
+    const task = taskMessage(worker).id;
+    runTurn(worker, [task], report("做完了", "第一轮"));
+    const fromPm = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再跑一遍测试" }).data.messageId;
+    const fromUser = post("顺便改 README");
+    runTurn(worker, [fromPm, fromUser], report("做完了", "都做了"));
+    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["顺便改 README"]);
+    const last = workerLines().at(-1)!;
+    expect(workerEventOf(last)).toMatchObject({ event: "report", summary: "都做了" });
+    expect(last.dedupeKey).toBe(`worker:${worker.id}:report:${Math.max(fromPm, fromUser)}`);
+    expect([fromPm, fromUser].map((id) => ledger.getMessage(id)!.status)).toEqual(["replied", "replied"]);
+  });
+
+  it("用户的消息发不出去（session.send 次数用完）：标失败，项目经理收到一行 turn_failed", () => {
+    const id = post("改 README");
+    const send = actionsOf("session.send").find((a) => a.type === "session.send" && a.params.messageId === id)!;
+    ledger.onActionFailed(send, "claude_not_found: 找不到 claude");
+    expect(ledger.getMessage(id)).toMatchObject({ status: "failed", failureReason: "claude_not_found: 找不到 claude" });
+    expect(workerLines().at(-1)!.dedupeKey).toBe(`worker:${worker.id}:turn_failed:${id}`);
+    // 重试：回到排队，重新登记（执行器在调 onActionFailed 前已经把动作标 failed）
+    db.run("UPDATE actions SET status = 'failed' WHERE id = ?", send.id);
+    enqueued = [];
+    ledger.retryMessage(id);
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: id, source: "user" }]]);
+  });
+
+  it("关机打断有用户的话的那一轮：消息不标已停止，重启后重发给同一个会话；交给项目经理的那一行也重发", () => {
+    const task = taskMessage(worker).id;
+    runTurn(worker, [task], report("做完了", "第一轮"));
+    const id = post("改 README");
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [id], durationMs: 1, at: now });
+    expect(ledger.getMessage(id)!.status).toBe("processing");
+    const line = userMessageLines()[0]!;
+    // 项目经理那边也在处理那一行时被关机打断
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [line.id], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, shutdown: true, messageIds: [line.id], durationMs: 1, at: now });
+    db.run("DELETE FROM actions");
+    enqueued = [];
+    const recovered = ledger.recoverAfterRestart();
+    expect(recovered.resentMessageIds).toEqual(expect.arrayContaining([id, line.id]));
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual(
+      expect.arrayContaining([
+        ["session.send", { sessionId, messageId: id, source: "user", resend: true, recovery: true }],
+        ["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system", resend: true, recovery: true }],
+      ]),
+    );
+    // 重启后再送达：不多出一行
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    expect(userMessageLines()).toHaveLength(1);
+  });
+
+  it("老数据：Worker 对话里没有 Worker 编号的消息送达了，不发 user_message", () => {
+    const id = post("老的");
+    db.run("UPDATE messages SET worker_id = NULL WHERE id = ?", id);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    expect(userMessageLines()).toEqual([]);
+  });
+});

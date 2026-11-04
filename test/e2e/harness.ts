@@ -13,6 +13,7 @@ import {
   ENV_HUB_TOKEN,
   ENV_PORT,
   HUB_COMMAND,
+  WORKER_ENV,
   type Change,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -98,8 +99,10 @@ export function makeEnv(): E2eEnv {
   writeFileSync(scriptFile, "{}");
   const running = new Set<ChildProcess>();
 
+  // 在 Worker 的会话里跑测试时，Worker 才有的环境变量（WORKER_ENV）会传下去，假 claude 就把项目经理也当成 Worker：去掉
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !(key in WORKER_ENV)));
   const baseEnv = (claudePath: string, extra: Record<string, string> = {}) => ({
-    ...process.env,
+    ...inherited,
     [ENV_HOME]: home,
     [ENV_CLAUDE]: claudePath,
     [ENV_PORT]: "0",

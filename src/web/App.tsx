@@ -9,7 +9,7 @@ import { WorkerPanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workerPhaseOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
@@ -92,6 +92,22 @@ export function App() {
     },
   };
 
+  // 项目经理页面和 Worker 页面共用：草稿按对话分开，发出去就清空
+  const setDraft = (id: ConversationId, value: string) => setDrafts((d) => ({ ...d, [id]: value }));
+  const send = (id: ConversationId, text: string, files: File[]) => {
+    // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
+    // 传失败了什么都不清（文字和文件都留着）
+    if (files.length === 0) {
+      setDraft(id, "");
+      hub.send(id, text);
+      return;
+    }
+    return hub.sendWithFiles(id, text, files).then(() => {
+      setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d));
+      staging.of(id).removeSent(files);
+    });
+  };
+
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
   // 右边栏列的是当前打开的项目经理（资料页、Worker 的对话都算它）的 Worker
   const panelPm = profile?.id ?? (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
@@ -124,13 +140,19 @@ export function App() {
             key={openWorker}
             title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
             readonly={workerLine?.readonly ?? false}
+            phase={workerPhaseOf(state, openWorker)}
             pm={{ name: workerPmEntry?.name ?? "项目经理", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
             view={workerView}
+            pending={pendingOf(state, openWorker)}
             session={sessionOf(state, openWorker)}
             older={state.older[openWorker]}
-            stats={null}
+            draft={drafts[openWorker] ?? ""}
+            staging={staging.of(openWorker)}
             notices={notices}
             onBack={() => setOpenWorker(null)}
+            onDraftChange={setDraft}
+            onSend={send}
+            onRetry={hub.retrySend}
             onStop={hub.stop}
             onLoadOlder={(id) => void hub.loadOlder(id)}
             actions={actions}
@@ -145,22 +167,9 @@ export function App() {
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             staging={staging.of(active.id)}
-            stats={null}
             notices={notices}
-            onDraftChange={(id, value) => setDrafts((d) => ({ ...d, [id]: value }))}
-            onSend={(id, text, files) => {
-              // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
-              // 传失败了什么都不清（文字和文件都留着）
-              if (files.length === 0) {
-                setDrafts((d) => ({ ...d, [id]: "" }));
-                hub.send(id, text);
-                return;
-              }
-              return hub.sendWithFiles(id, text, files).then(() => {
-                setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d));
-                staging.of(id).removeSent(files);
-              });
-            }}
+            onDraftChange={setDraft}
+            onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
             onLoadOlder={(id) => void hub.loadOlder(id)}

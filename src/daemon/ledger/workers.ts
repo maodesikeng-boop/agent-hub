@@ -5,15 +5,19 @@
 //   （HubCallContext.workspace），这里不做 I/O；git 没跑成就拒绝派活，不默默改成主文件夹；
 // - Worker 的会话每一轮结束，在同一个事务里给项目经理的对话发那一行（kind worker），并把全文交给项目经理（session.send）；
 // - Worker 的消息发不出去（session.send 次数用完）也发一行 turn_failed 交给项目经理；
+// - 用户在网页上直接对 Worker 说的话：Worker 收到时（message.delivered）发一行 user_message 交给项目经理；
+//   Worker 收工、还没开工时不收（assertWorkerOpenForUser，messages.ts 的 postUserMessage、retryMessage 调）；
 // - 建 worktree 的回调（getWorktreeTask、onSetupStarted、onWorktreeCreated）和彻底失败（worktree_failed）；
 //   配了准备命令的，跑的时候 Worker 会话显示“准备中”，跑完的结果加在任务说明前面，重启后没开工的重新登记建 worktree；
 // - Worker 会话的启动上下文。
 // 汇报格式、解析、那一行的写法、分支名在 shared/worker.ts；按角色放行的表在 shared/hub.ts；git 在 daemon/git/。
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
+import { agentTextOf } from "../../shared/attachments.ts";
 import { normalizeWorkerTitle, personaOrTemplate, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
+  ConversationId,
   MessageId,
   PmId,
   PmMode,
@@ -32,10 +36,11 @@ import { checkEffort, checkModel, effortLabel } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
-import { parseWorkerReport, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
+import { parseWorkerReport, userToWorkerHeader, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
 import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import type { Db } from "../store/index.ts";
 import { exitFailureReason } from "./messages.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
@@ -51,6 +56,8 @@ export const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改�
 export const TURN_STOPPED = "被停止了";
 /** 这一轮出错、又没有错误信息时的原因。 */
 const TURN_FAILED = "这一轮出错了";
+/** 用户的话算 Worker 已收到的状态（user_message 那一行只给这些发）。 */
+const RECEIVED_STATUSES: ReadonlySet<string> = new Set(["delivered", "processing", "replied"]);
 /** 这一轮正常结束、却一段文字都没有时，交给项目经理的正文。 */
 const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 
@@ -59,7 +66,9 @@ const taskDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:task`;
 const sendDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:${randomUUID()}`;
 
 /** Worker 会话这一轮的结局：report 带这一轮最后一段文字，turn_failed 带原因。 */
-type TurnOutcome = { event: "report"; turnMessageId: MessageId } | { event: "turn_failed"; turnMessageId: MessageId; reason: string };
+type TurnOutcome =
+  | { event: "report"; turnMessageId: MessageId }
+  | { event: "turn_failed"; turnMessageId: MessageId; messageIds: MessageId[]; reason: string };
 
 /**
  * 驱动层事件里“这一轮结束了”的那几种（见 shared/ledger.ts 的 applyDriverEvent）；别的事件、关机、空闲退出是 null。
@@ -68,26 +77,47 @@ type TurnOutcome = { event: "report"; turnMessageId: MessageId } | { event: "tur
 function turnOutcome(event: DriverEvent): TurnOutcome | null {
   if (event.type === "driver.error") {
     const ids = event.messageIds ?? [];
-    return ids.length === 0 ? null : { event: "turn_failed", turnMessageId: Math.max(...ids), reason: event.message };
+    return ids.length === 0 ? null : { event: "turn_failed", turnMessageId: Math.max(...ids), messageIds: ids, reason: event.message };
   }
   if (event.type !== "turn.ended" && event.type !== "session.exited") return null;
   if (event.messageIds.length === 0) return null;
   const turnMessageId = Math.max(...event.messageIds);
+  const { messageIds } = event;
   if (event.type === "turn.ended") {
     // 关机时 SIGINT 结束的一轮：重启后接着做完再汇报（messages.ts 的 resumesAfterShutdown）
     if (event.shutdown === true) return null;
-    if (event.interrupted) return { event: "turn_failed", turnMessageId, reason: TURN_STOPPED };
+    if (event.interrupted) return { event: "turn_failed", turnMessageId, messageIds, reason: TURN_STOPPED };
     if (!event.ok) {
       const reason = event.error === undefined ? TURN_FAILED : turnFailureReason(event.error);
-      return { event: "turn_failed", turnMessageId, reason };
+      return { event: "turn_failed", turnMessageId, messageIds, reason };
     }
     return { event: "report", turnMessageId };
   }
   // 有 result 的那一轮已经按 turn.ended 发过了；关机打断的重启后接着做完再汇报；空闲退出没有在途的消息
   if (event.hadResult) return null;
-  if (event.reason === "interrupt") return { event: "turn_failed", turnMessageId, reason: TURN_STOPPED };
-  if (event.reason === "crash" || event.reason === "startup_failed") return { event: "turn_failed", turnMessageId, reason: exitFailureReason(event) };
+  if (event.reason === "interrupt") return { event: "turn_failed", turnMessageId, messageIds, reason: TURN_STOPPED };
+  if (event.reason === "crash" || event.reason === "startup_failed") {
+    return { event: "turn_failed", turnMessageId, messageIds, reason: exitFailureReason(event) };
+  }
   return null;
+}
+
+/** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
+const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
+
+/**
+ * 用户往对话里发消息、重试之前（messages.ts 的 postUserMessage、retryMessage，在事务里）。不是 Worker 的对话什么也不做。
+ * 和 hub worker send 的口径一样：已收工拒收；还没开工（notStarted）也拒收，不然用户的话会赶在任务说明前面。
+ * 网页用同样的意思判断输入框能不能用（web/selectors.ts 的 workerPhaseOf）。
+ */
+export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId): void {
+  const worker = db.get<Pick<WorkerDbRow, "id" | "status" | "workspace" | "base_commit">>(
+    "SELECT id, status, workspace, base_commit FROM workers WHERE worker_conversation_id = ?",
+    conversationId,
+  );
+  if (worker === undefined) return;
+  if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再给它发消息`);
+  if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
 }
 
 /** 给 agent 看的一句“在哪干活”。 */
@@ -141,7 +171,7 @@ export function createLedgerWorkers(
   };
 
   /**
-   * 项目经理对话里那一行（WorkerMessageMeta）。deliver：要交给项目经理（report、turn_failed、worktree_failed），
+   * 项目经理对话里那一行（WorkerMessageMeta）。deliver：要交给项目经理（report、turn_failed、worktree_failed、user_message），
    * 消息从 queued 起照常走，登记 session.send（source system）；否则只给人看（started、ended）。
    * 去重键带事件类型（workerMessageDedupeKey），重复调用只有一行、只登记一次。
    */
@@ -150,6 +180,7 @@ export function createLedgerWorkers(
     worker: WorkerDbRow,
     line: { event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; turnMessageId: MessageId | null; deliver: string | null },
   ) => {
+    const header = line.event === "user_message" ? userToWorkerHeader(worker.id, worker.title) : workerReportHeader(worker.id, worker.title);
     const meta: WorkerMessageMeta = {
       workerId: worker.id,
       workerConversationId: worker.worker_conversation_id,
@@ -161,7 +192,7 @@ export function createLedgerWorkers(
     };
     const pmSession = line.deliver === null ? null : currentSession(worker.pm_conversation_id);
     if (line.deliver !== null && pmSession === null) throw new Error(`conversation ${worker.pm_conversation_id} has no agent session`);
-    const text = line.deliver === null ? workerLineText(meta) : `${workerReportHeader(worker.id, worker.title)}\n\n${line.deliver}`;
+    const text = line.deliver === null ? workerLineText(meta) : `${header}\n\n${line.deliver}`;
     const t = now();
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
@@ -209,9 +240,6 @@ export function createLedgerWorkers(
       transition(p, row.id, "stopped");
     }
   };
-
-  /** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
-  const notStarted = (worker: WorkerDbRow) => worker.workspace === "worktree" && worker.base_commit === null;
 
   /** 起 Worker 的会话、把任务说明发给它（主文件夹里干的派活时就做，worktree 的建好了再做）。 */
   const enqueueFirstTurn = (p: Pending, worker: WorkerDbRow) => {
@@ -396,16 +424,44 @@ export function createLedgerWorkers(
   // ---- 驱动层事件：Worker 这一轮结束 ----
 
   /** 在 applyDriverEvent 的同一个事务里、消息状态改完之后调。不是 Worker 的会话、不是一轮结束，什么也不做。 */
-  /** 这一轮没做完：一行 turn_failed，原因交给项目经理。去重键是这一轮（或发不出去的那条）消息的编号。 */
-  const insertTurnFailed = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, reason: string) => {
-    const deliver = `这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`;
-    insertLine(p, worker, { event: "turn_failed", status: null, summary: reason, turnMessageId, deliver });
+  /**
+   * 这一轮没做完：一行 turn_failed，原因交给项目经理。去重键是这一轮（或发不出去的那条）消息的编号。
+   * 这一轮里有用户直接对 Worker 说的话：带上原文；标了失败的写明用户那边可以自己点重试（不用项目经理转告）。
+   */
+  const insertTurnFailed = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, messageIds: MessageId[], reason: string) => {
+    const lines = [`这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`];
+    for (const id of messageIds) {
+      const message = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
+      if (message === undefined || message.sender !== "user" || message.worker_id !== worker.id) continue;
+      const retry = message.status === "failed" ? "用户那边会看到发送失败，可以自己点重试。" : "";
+      lines.push(`这一轮里有用户直接对它说的话：「${message.text}」。${retry}`);
+    }
+    insertLine(p, worker, { event: "turn_failed", status: null, summary: reason, turnMessageId, deliver: lines.join("\n") });
+  };
+
+  /**
+   * Worker 收到了用户直接对它说的话（message.delivered）：每条一行 user_message，原文交给项目经理（不打断它，系统消息
+   * 等它空闲再发）。只认 Worker 对话里带 Worker 编号的用户消息，而且真的写进去了（已送达、处理中、已回复；已停止、失败的
+   * 不算）；重启后重发再送达，去重键挡住，不会出两行。
+   */
+  const insertUserMessageLines = (p: Pending, workerId: WorkerId, messageIds: MessageId[]) => {
+    const worker = workerRow(workerId);
+    if (worker === null) return;
+    for (const id of messageIds) {
+      const message = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
+      if (message === undefined || message.sender !== "user" || message.worker_id !== workerId) continue;
+      if (!RECEIVED_STATUSES.has(message.status ?? "")) continue;
+      // 交给项目经理的带上附件的完整路径（和写给 Worker 的一样，见 shared/attachments.ts 的 agentTextOf）
+      const deliver = agentTextOf(toMessage(message));
+      insertLine(p, worker, { event: "user_message", status: null, summary: message.text, turnMessageId: id, deliver });
+    }
   };
 
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
     if (event.type === "message.delivered") {
       turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }
     const outcome = turnOutcome(event);
@@ -415,7 +471,7 @@ export function createLedgerWorkers(
     const turnStart = Math.max(outcome.turnMessageId, turnStarts.get(session.id) ?? 0);
     turnStarts.delete(session.id);
     if (outcome.event === "turn_failed") {
-      insertTurnFailed(p, worker, outcome.turnMessageId, outcome.reason);
+      insertTurnFailed(p, worker, outcome.turnMessageId, outcome.messageIds, outcome.reason);
       return;
     }
     // 这一轮最后一段文字：这一轮开始之后、这个会话的 agent 文字里最新的一条；没有就是“没有文字回复”
@@ -526,7 +582,7 @@ export function createLedgerWorkers(
    * 动作彻底失败（ledger.onActionFailed，在同一个事务里、messages.ts 改完消息状态之后调）：
    * - worktree.create：Worker 标 ended、登记它会话的 session.end（同 endIn），项目经理对话里一行 worktree_failed 并交给它，
    *   任务说明标 failed；
-   * - session.send 发的是 Worker 对话里项目经理的话（Worker 起不来、消息写不进去）：一行 turn_failed 交给项目经理。
+   * - session.send 发的是 Worker 对话里项目经理或用户的话（Worker 起不来、消息写不进去）：一行 turn_failed 交给项目经理。
    *   Worker 已经收工的不发（收工后发不出去是意料之中的）。
    */
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
@@ -546,10 +602,10 @@ export function createLedgerWorkers(
     }
     if (action.type !== "session.send") return;
     const message = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", action.params.messageId);
-    if (message === undefined || message.sender !== "pm" || message.worker_id === null) return;
+    if (message === undefined || (message.sender !== "pm" && message.sender !== "user") || message.worker_id === null) return;
     const worker = workerRow(message.worker_id);
     if (worker === null || worker.status === "ended") return;
-    insertTurnFailed(p, worker, message.id, error);
+    insertTurnFailed(p, worker, message.id, [message.id], error);
   };
 
   /** agent 接口在 worker.start 之前探 git 用：这个会话所属项目经理的项目主文件夹；不是项目经理的会话、还没有项目 → null。 */

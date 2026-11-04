@@ -2,7 +2,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HUB_COMMANDS, PM_PERSONA_TEMPLATE, SETUP_TIMEOUT_MS, WORKER_REPORT_FORMAT, type SetupOutcome } from "../shared/index.ts";
+import {
+  HUB_COMMANDS,
+  PM_PERSONA_TEMPLATE,
+  SETUP_TIMEOUT_MS,
+  USER_TO_WORKER_TAG,
+  WORKER_REPORT_FORMAT,
+  userToWorkerHeader,
+  type SetupOutcome,
+} from "../shared/index.ts";
 import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import {
@@ -156,6 +164,15 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
+  it("用户直接对 Worker 说的话会告诉项目经理：开头和账本发的一样，写明 Worker 已收到、不用再转告", () => {
+    const header = userToWorkerHeader(1, "x");
+    expect(PM_WORKER_PROMPT).toContain(header.slice(0, header.indexOf("#") + 1));
+    expect(PM_WORKER_PROMPT).toContain("Worker 已收到");
+    expect(PM_WORKER_PROMPT).toContain("不用再转告");
+    // 只说事实，不规定它怎么回
+    for (const gone of ["回一句", "要不要调整安排"]) expect(PM_WORKER_PROMPT).not.toContain(gone);
+  });
+
   it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有建议用便宜的模型、没有规定怎么验收", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     for (const gone of [
@@ -209,6 +226,16 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).not.toContain(PM_MODE_PROMPTS.hands_on);
     expect(prompt).not.toContain("只读");
+  });
+
+  it("用户直接对它说的话带【用户直接对你说】，照做、照样汇报给项目经理；连发时每条开头的标签说明是谁说的", () => {
+    const prompt = buildWorkerPrompt(workerContext(), dir);
+    expect(prompt).toContain(`带有“${USER_TO_WORKER_TAG}”标签的`);
+    // 重启等情况下前面可能先有【系统】说明，所以不说“开头”
+    expect(prompt).not.toContain(`以“${USER_TO_WORKER_TAG}”开头`);
+    expect(prompt).toContain("不带标签的消息来自项目经理");
+    expect(prompt).toContain("【用户连发了 N 条】");
+    expect(prompt).not.toContain("发给你的消息都来自项目经理");
   });
 
   it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事，不硬性要求 git commit", () => {

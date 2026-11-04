@@ -606,7 +606,7 @@ describe("M3：对话和消息", () => {
   });
 
   it("那一行的事件", () => {
-    expect(WORKER_EVENTS).toEqual(["started", "report", "turn_failed", "worktree_failed", "ended"]);
+    expect(WORKER_EVENTS).toEqual(["started", "report", "turn_failed", "worktree_failed", "ended", "user_message"]);
   });
 
   it("workerEventOf：只认 kind worker 的消息", () => {
@@ -635,6 +635,9 @@ describe("M3：对话和消息", () => {
     expect(workerMessageDedupeKey(3, "report", 41)).not.toBe(workerMessageDedupeKey(3, "turn_failed", 41));
     expect(workerMessageDedupeKey(3, "report", 42)).not.toBe(workerMessageDedupeKey(3, "report", 41));
     expect(() => workerMessageDedupeKey(3, "report", null)).toThrow();
+    // 用户直接对 Worker 说的话：每条用户消息一行
+    expect(workerMessageDedupeKey(3, "user_message", 43)).toBe("worker:3:user_message:43");
+    expect(() => workerMessageDedupeKey(3, "user_message", null)).toThrow();
   });
 });
 

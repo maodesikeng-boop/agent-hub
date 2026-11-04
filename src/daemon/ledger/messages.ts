@@ -41,7 +41,21 @@ export function resumesAfterShutdown(session: AgentSessionRow, message: Pick<Mes
 
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
 
-export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSessions, sentFiles: LedgerSentFiles) {
+export interface LedgerMessagesOptions {
+  /**
+   * 用户往这个对话发消息、重试之前的检查，不让发就抛 LedgerRequestError（在事务里调）。
+   * 现在只有 Worker 收工后不收（workers.ts 的 assertWorkerOpenForUser，ledger.ts 接上）。
+   */
+  assertUserCanPost?: (conversationId: ConversationId) => void;
+}
+
+export function createLedgerMessages(
+  ctx: LedgerContext,
+  sessions: LedgerSessions,
+  sentFiles: LedgerSentFiles,
+  options: LedgerMessagesOptions = {},
+) {
+  const assertUserCanPost = options.assertUserCanPost ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
@@ -199,16 +213,19 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
       const dedupeKey = userMessageDedupeKey(input.conversationId, input.clientId);
       const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
       if (existing !== undefined) return { messageId: existing.id };
+      assertUserCanPost(input.conversationId);
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
       const t = now();
       // 有附件才写 meta（UserMessageMeta）；没有附件的用户消息 meta 还是 null，和老消息一样
       const meta: UserMessageMeta | null = input.attachments?.length ? { attachments: input.attachments } : null;
+      // Worker 对话里用户的话带上 Worker 编号（写给 Worker 时据此加标签，见 shared/worker.ts 的 deliveryText）
       const row = db.get<MessageDbRow>(
-        `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-         VALUES (?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
+        `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
         input.conversationId,
         session.id,
+        session.workerId,
         input.text,
         meta === null ? null : JSON.stringify(meta),
         dedupeKey,
@@ -277,6 +294,7 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
       if (message === null || !conversationExists(message.conversationId)) throw fail("not_found", `没有编号 ${messageId} 的消息`);
       if (message.sender !== "user") throw fail("conflict", "只能重试自己发的消息");
       if (message.status !== "failed") throw fail("conflict", "只有发送失败的消息能重试");
+      assertUserCanPost(message.conversationId);
       const session = currentSession(message.conversationId);
       if (session === null) throw new Error(`conversation ${message.conversationId} has no agent session`);
       db.run(

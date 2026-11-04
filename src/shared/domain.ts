@@ -72,6 +72,8 @@ export function canTransitionMessage(from: MessageStatus, to: MessageStatus): bo
  * kind 是 worker 时是项目经理对话里那一行 Worker 汇报（M3，见 WorkerMessageMeta）。
  * pm（M3）：Worker 对话里项目经理的话：派活时的任务说明、hub worker send 打回或回答。和用户消息一样有投递状态，
  * 登记 session.send 时 source 是 "user"（对 Worker 来说项目经理就是“用户”，忙时连发的会拼成一条）。
+ * user 在 Worker 对话里：用户在网页的 Worker 页面直接说的话，workerId 是这个 Worker；写给 Worker 时带 USER_TO_WORKER_TAG
+ * 和项目经理的话区分开（worker.ts 的 deliveryText）。
  */
 export const MESSAGE_SENDERS = ["user", "agent", "system", "pm"] as const;
 export type MessageSender = (typeof MESSAGE_SENDERS)[number];
@@ -424,9 +426,10 @@ export function stripSystemPrefix(text: string): string {
  * - report：Worker 这一轮正常结束（result），按 worker.ts 的 parseWorkerReport 取状态和摘要；
  * - turn_failed：这一轮出错、崩溃、被停止；
  * - worktree_failed：建 worktree 重试完了还是失败，Worker 标 ended；
- * - ended：收工了（hub worker end）。
+ * - ended：收工了（hub worker end）；
+ * - user_message：用户在网页的 Worker 页面直接对它说了一句，Worker 已经收到（message.delivered），告诉项目经理。
  */
-export const WORKER_EVENTS = ["started", "report", "turn_failed", "worktree_failed", "ended"] as const;
+export const WORKER_EVENTS = ["started", "report", "turn_failed", "worktree_failed", "ended", "user_message"] as const;
 export type WorkerEvent = (typeof WORKER_EVENTS)[number];
 
 /** 那一行的状态：report 时是 Worker 汇报里写的状态，没按格式是 "unformatted"；别的事件是 null。 */
@@ -438,6 +441,8 @@ export type WorkerLineStatus = WorkerReportStatus | "unformatted";
  * 消息的 text 是交给项目经理的全文：
  * - report、turn_failed、worktree_failed：要交给项目经理，text 以 workerReportHeader（“【Worker #3 · 修 X 的汇报】”）开头，
  *   后面是汇报原文或原因；status 从 queued 起照常走，登记 session.send（source system）发给项目经理；
+ * - user_message：同样交给项目经理，text 以 userToWorkerHeader（“【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】”）开头，
+ *   后面是用户的原文；
  * - started、ended：项目经理自己敲的 hub，只给人看，status 是 null，不发给它。
  * title、readonly、workerConversationId 抄自 WorkerRecord，网页不用另查。
  */
@@ -450,7 +455,7 @@ export type WorkerMessageMeta = {
   status: WorkerLineStatus | null;
   /**
    * report：解析出的摘要；没按格式是原文第一行（parseWorkerReport 给的，已截断）；turn_failed、worktree_failed：原因；
-   * started、ended：null。存完整的，显示时 workerLineText 压空白、按 WORKER_LINE_SUMMARY_CHARS 截断。
+   * user_message：用户的原文；started、ended：null。存完整的，显示时 workerLineText 压空白、按 WORKER_LINE_SUMMARY_CHARS 截断。
    */
   summary: string | null;
 };
@@ -465,11 +470,12 @@ export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMe
  * 那一行的去重键：
  * - started、ended、worktree_failed：每个 Worker 一条，`worker:<Worker 编号>:<事件>`，turnMessageId 给 null；
  * - report、turn_failed：`worker:<Worker 编号>:<事件>:<这一轮处理的消息里编号最大的那条>`。重放同一个 result（或同一次退出）不会出两行。
+ * - user_message：`worker:<Worker 编号>:user_message:<用户那条消息的编号>`（turnMessageId 传那条消息），重启后重发再送达不会出两行。
  *   事件类型在键里：同一条消息这一轮失败了（turn_failed），之后被重发又跑出结果（report），两行都有，后来的汇报不会被吞掉。
  * 什么时候发哪一行见 ledger.ts 的 applyDriverEvent。
  */
 export function workerMessageDedupeKey(workerId: WorkerId, event: WorkerEvent, turnMessageId: MessageId | null): string {
-  if (event === "report" || event === "turn_failed") {
+  if (event === "report" || event === "turn_failed" || event === "user_message") {
     if (turnMessageId === null) throw new Error(`workerMessageDedupeKey: ${event} needs the turn's message id`);
     return `worker:${workerId}:${event}:${turnMessageId}`;
   }

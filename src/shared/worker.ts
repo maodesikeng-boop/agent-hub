@@ -1,7 +1,8 @@
 // Worker 的汇报（m3-plan 第 2.5 节）：格式说明、解析、回到项目经理那一行的写法、分支名。
 // 格式说明（给 Worker 的提示词用）和解析函数放在一起，改格式只改这里。
+import { agentTextOf } from "./attachments.ts";
 import { truncateChars } from "./domain.ts";
-import type { WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
+import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
 
@@ -122,11 +123,32 @@ export function workerReportHeader(workerId: WorkerId, title: string): string {
   return `【Worker #${workerId} · ${title} 的汇报】`;
 }
 
+/**
+ * 用户在网页的 Worker 页面直接对它说的话，交给项目经理时的开头（来源标签）：
+ * “【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】”。
+ */
+export function userToWorkerHeader(workerId: WorkerId, title: string): string {
+  return `【用户直接对 Worker #${workerId} · ${title} 说的话（Worker 已收到）】`;
+}
+
+/** 用户直接对 Worker 说的话写给 Worker 时的开头；项目经理的话不带标签。 */
+export const USER_TO_WORKER_TAG = "【用户直接对你说】";
+
+/**
+ * 一条消息写给 agent 的文字（session.send 的处理函数用）：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf）；
+ * Worker 对话里用户说的（sender user、带 workerId）前面再加 USER_TO_WORKER_TAG。库里存的是原文，网页照原文显示。
+ */
+export function deliveryText(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): string {
+  const text = agentTextOf(message);
+  return message.workerId !== null && message.sender === "user" ? `${USER_TO_WORKER_TAG}\n${text}` : text;
+}
+
 const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
   started: "已派出",
   turn_failed: "这一轮没做完",
   worktree_failed: "建 worktree 失败",
   ended: "已收工",
+  user_message: "你对它说",
 };
 
 /**

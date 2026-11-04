@@ -6,13 +6,18 @@ import {
   WORKER_REPORT_FORMAT,
   WORKER_REPORT_STATUSES,
   WORKER_REPORT_STATUS_LABELS,
+  deliveryText,
   parseWorkerReport,
+  userToWorkerHeader,
   workerBranchName,
   workerLineText,
   workerReportHeader,
 } from "./worker.ts";
+import { agentTextOf } from "./attachments.ts";
 import { WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
+
+const ATTACHMENT = { id: "u1", name: "图.png", path: "/data/uploads/u1/图.png", size: 10, mime: "image/png" };
 
 const report = (body: string) => `${REPORT_START}\n${body}\n${REPORT_END}`;
 
@@ -145,6 +150,20 @@ describe("回到项目经理那一行", () => {
       "Worker · 修 X · 建 worktree 失败：目录被占用",
     );
     expect(workerLineText({ title: "修 X", event: "ended", status: null, summary: null, readonly: false })).toBe("Worker · 修 X · 已收工");
+    expect(workerLineText({ title: "修 X", event: "user_message", status: null, summary: "顺便\n改 README", readonly: false })).toBe(
+      "Worker · 修 X · 你对它说：顺便 改 README",
+    );
+  });
+
+  it("用户直接对 Worker 说的话：交给项目经理的开头；写给 Worker 时加【用户直接对你说】，项目经理的话和别的对话里的原样", () => {
+    expect(userToWorkerHeader(3, "修 X")).toBe("【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】");
+    expect(deliveryText({ workerId: 3, sender: "user", text: "改 README", meta: null })).toBe("【用户直接对你说】\n改 README");
+    expect(deliveryText({ workerId: 3, sender: "pm", text: "改 README", meta: null })).toBe("改 README");
+    expect(deliveryText({ workerId: null, sender: "user", text: "改 README", meta: null })).toBe("改 README");
+    // 带附件：标签在最前面，后面是原文和附件路径（和项目经理收到的一样，见 agentTextOf）
+    const withFile = { workerId: 3, sender: "user" as const, text: "看这张图", meta: { attachments: [ATTACHMENT] } };
+    expect(deliveryText(withFile)).toBe(`【用户直接对你说】\n${agentTextOf(withFile)}`);
+    expect(agentTextOf(withFile)).toContain(ATTACHMENT.path);
   });
 
   it("摘要的空白压成一个空格，太长按字数截断", () => {

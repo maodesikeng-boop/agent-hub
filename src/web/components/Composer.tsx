@@ -19,10 +19,13 @@ export function Composer({
   staging,
   onChange,
   onSend,
+  disabled = false,
 }: {
   value: string;
   placeholder: string;
   staging: StagedFiles;
+  /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用。 */
+  disabled?: boolean;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
 }) {
@@ -30,7 +33,7 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   const tooLong = byteLength(value) > MAX_MESSAGE_BYTES;
-  const canSend = (value.trim() !== "" || files.length > 0) && !tooLong && !busy;
+  const canSend = !disabled && (value.trim() !== "" || files.length > 0) && !tooLong && !busy;
 
   // 输入框跟着内容长高，到上限后出滚动条
   useLayoutEffect(() => {
@@ -83,7 +86,8 @@ export function Composer({
         aria-label="输入消息"
         placeholder={placeholder}
         readOnly={busy}
-        className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
+        disabled={disabled}
+        className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onPaste={(e) => {
@@ -112,7 +116,7 @@ export function Composer({
             e.target.value = ""; // 清掉，同一个文件还能再选
           }}
         />
-        <Button variant="secondary" size="icon" className="hover:bg-foreground/10" aria-label="添加文件" disabled={busy} onClick={() => picker.current?.click()}>
+        <Button variant="secondary" size="icon" className="hover:bg-foreground/10" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
           <Paperclip className="size-5" aria-hidden="true" />
         </Button>
         <div className="ml-auto flex items-center gap-2">

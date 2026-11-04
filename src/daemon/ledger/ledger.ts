@@ -29,7 +29,7 @@ import { toConversation, toHealth, toPm, toProject, toProjectFolder } from "./ro
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
-import { createLedgerWorkers } from "./workers.ts";
+import { assertWorkerOpenForUser, createLedgerWorkers } from "./workers.ts";
 
 export type SqliteLedger = Ledger;
 
@@ -92,7 +92,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userHome,
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
-  const messages = createLedgerMessages(ctx, sessions, sentFiles);
+  // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）
+  const messages = createLedgerMessages(ctx, sessions, sentFiles, { assertUserCanPost: (id) => assertWorkerOpenForUser(db, id) });
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);

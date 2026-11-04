@@ -274,6 +274,8 @@ export interface Ledger {
   /**
    * 同一个事务里：写一条“排队中”的用户消息 + 登记一个 session.send 动作。clientId 重复时返回已有的编号。
    * 对话不存在抛 ConversationNotFoundError。对话存在但没有会话（数据不一致）抛普通 Error，界面服务按 500 处理。
+   * Worker 的对话也走这里（用户在网页的 Worker 页面直接对它说）：消息带 workerId；Worker 已收工抛 LedgerRequestError("conflict")
+   * （clientId 重复的照样返回已有的编号）。Worker 收到后项目经理对话里多一行 user_message（见 applyDriverEvent）。
    */
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
   /**
@@ -420,6 +422,8 @@ export interface Ledger {
    *   --resume 接着做（m3-plan 验收第 11 条），做完的那一轮照常出 report；idle 没有在途的消息，什么也不发；
    * - 同一条消息先 turn_failed、之后又被重发并跑出结果：两行都有（事件类型在去重键里），后来的 report 不会被吞掉；
    *   同一个事件重放（同一个 result 再来一遍）只有一行。
+   * - Worker 会话的 message.delivered 里有用户直接对它说的话（Worker 对话里 sender user、带 workerId）→ 每条一行 user_message，
+   *   原文交给项目经理；重启后重发再送达不会多一行。
    */
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
   /**

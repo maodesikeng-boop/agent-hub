@@ -8,13 +8,14 @@
 // - shared/driver.ts 的 *_NOTE：驱动层在消息前面拼的【系统】说明（重启恢复、重发、设置更新后重启、进程意外退出）；
 // - shared/domain.ts 的 PM_PERSONA_TEMPLATE：性格设定模板（新项目经理的默认性格设定）；
 // - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
+//   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
 // - ledger/messages.ts 的 insertSystemMessage：系统消息（只给人看），具体文字在调用它的 persona.ts、projects.ts 里；
 // - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答。
 // worktree 准备命令（hub project setup）给 Worker、项目经理看的话也在这里：文件末尾的 setupNote、SETUP_RECEIPT_NOTE。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_EFFORTS, HUB_COMMAND as HUB, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, WORKER_REPORT_FORMAT } from "../shared/index.ts";
+import { ALL_EFFORTS, HUB_COMMAND as HUB, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, USER_TO_WORKER_TAG, WORKER_REPORT_FORMAT } from "../shared/index.ts";
 import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
@@ -72,6 +73,7 @@ Worker 是你派出去干活的 agent，在自己的会话里干，每干完一�
 
 - Worker 每干完一轮，你会收到一条以“【Worker #编号 · 标题 的汇报】”开头的消息，后面是它的汇报原文（状态、摘要、提交、测试、问题）。这一轮出错或者被停止，也会告诉你原因。
 - Worker 的 worktree 你也能读，比如 \`git -C <worktree 路径> log\`、\`git -C <worktree 路径> diff\`。
+- 用户也能在网页上直接对 Worker 说话。Worker 收到后你会收到一条以“【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】”开头的消息，后面是原文。这是通知：Worker 已收到，不用再转告它。Worker 照做完的那一轮汇报照常交给你。
 - 用 \`${HUB} worker send <编号> --stdin\` 可以让它接着改，或者回答它在“问题”里问你的事；同一个 Worker 接着做，之前做过的都在。
 - Worker 不能改记忆文件（\`AGENTS.md\`、\`CLAUDE.md\`、\`.claude/\` 下的东西）。它在“问题”里建议改的，你觉得对，就在主文件夹里自己改。
 - 不要它了，或者活干完了，用 \`${HUB} worker end <编号>\` 收工。`;
@@ -157,7 +159,7 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
  */
 export const WORKER_RULES = `# 你的规矩
 
-- 你问不了用户，也不直接和用户说话。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
+- 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
 - 记忆文件你不能改：任何位置的 \`AGENTS.md\`、\`CLAUDE.md\`、\`CLAUDE.local.md\` 和 \`.claude/\` 下的东西，还有用户目录下的 \`~/.claude/\`，改了会被系统拒绝。任务需要改的话，在汇报的“问题”里写清楚改哪个文件、改成什么，由项目经理来改。`;
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
@@ -167,7 +169,10 @@ function workerRoleSection(ctx: LaunchContext, worker: WorkerRecord): string {
   return `# 你的角色
 
 你是项目经理“${ctx.pm.name}”派出的 Worker #${worker.id}（${worker.title}）。你只负责做完下面的任务，每做完一轮就把结果汇报给项目经理。
-- 发给你的消息都来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。以“【…】”开头的是系统发的消息。
+- 不带标签的消息来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。
+- 带有“${USER_TO_WORKER_TAG}”标签的是用户在网页上直接对你说的话：照着做，这一轮的汇报照样交给项目经理（项目经理也会知道用户说了什么）。
+- 你忙的时候收到的几条会拼成一条，开头写“【用户连发了 N 条】”并编号，每一条是谁说的看那一条带不带“${USER_TO_WORKER_TAG}”标签；每一条都回应到。
+- 别的以“【…】”开头的是系统发的消息。
 ${SHARE_FILES_NOTE}
 - 回复用中文，简洁。`;
 }
