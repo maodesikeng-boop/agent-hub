@@ -5,7 +5,6 @@
 // 前后端都用这个文件认链接、认 meta；接口地址在 api.ts 的 API_PATHS.sentFile。
 import { API_PATHS } from "./api.ts";
 import { FALLBACK_MIME, isImageMime, mimeOfFileName } from "./attachments.ts";
-import { MAX_SENT_FILES_PER_MESSAGE } from "./limits.ts";
 
 /**
  * 一个链接的处理结果：
@@ -109,6 +108,9 @@ export interface MdNode {
   type: string;
   url?: string;
   alt?: string | null;
+  /** 引用式链接（linkReference、imageReference）和定义（definition）对上用的标识。 */
+  identifier?: string;
+  value?: string;
   children?: MdNode[];
   data?: Record<string, unknown>;
 }
@@ -160,8 +162,8 @@ export function parseLocalHref(href: string): LocalHref | null {
 }
 
 /**
- * 回复里要处理的本机链接：按出现顺序去重（同一个地址写两次只存一份），最多 MAX_SENT_FILES_PER_MESSAGE 个，多出来的不处理。
- * 图片和链接一视同仁：存副本、按类型决定网页显示成图还是卡片。
+ * 回复里写成本机路径的链接（候选）：按出现顺序去重（同一个地址写两次只算一个）。图片和链接一视同仁。
+ * 不一定都是文件（站内链接 /login、不存在的相对路径），守护进程逐个判断（daemon/sent-files.ts），最多收 MAX_SENT_FILES_PER_MESSAGE 个。
  */
 export function localLinksOf(tree: MdNode): { href: string; local: LocalHref }[] {
   const seen = new Set<string>();
@@ -173,8 +175,6 @@ export function localLinksOf(tree: MdNode): { href: string; local: LocalHref }[]
     if (local === null) continue;
     seen.add(href);
     out.push({ href, local });
-    if (out.length === MAX_SENT_FILES_PER_MESSAGE) break;
   }
   return out;
 }
-

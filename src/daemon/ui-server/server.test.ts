@@ -1294,6 +1294,16 @@ describe("GET /api/sent-files/:id/:name（agent 发出的文件的副本）", ()
     expect(res.headers["content-security-policy"]).toMatch(/^sandbox;/);
     expect(res.headers["content-security-policy"]).toContain("default-src 'none'");
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    // 直接打开时 svg 自带的样式（<style>、style=""）要能生效，否则点开大图是黑的；脚本仍被 sandbox 和 default-src 'none' 拦着
+    expect(res.headers["content-security-policy"]).toBe("sandbox; default-src 'none'; style-src 'unsafe-inline'");
+  });
+
+  it("别的类型（含 png、html）不放开 style-src", async () => {
+    for (const name of ["a.png", "a.html"]) {
+      rmSync(sentFilesDir, { recursive: true, force: true });
+      sentCopy(ID, name, "x");
+      expect((await call("GET", `/api/sent-files/${ID}/${name}`)).headers["content-security-policy"]).toBe("sandbox; default-src 'none'");
+    }
   });
 
   it("pdf、md、csv、html：当下载（attachment），html 这一步不预览", async () => {
@@ -1327,6 +1337,10 @@ describe("GET /api/sent-files/:id/:name（agent 发出的文件的副本）", ()
     const past = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=10-" } });
     expect(past.statusCode).toBe(416);
     expect(past.headers["content-range"]).toBe("bytes */10");
+    // 末位比首位小：按 RFC 9110 这个 Range 无效、整个忽略，返回 200 全量（不是 416）
+    const reversed = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=5-2" } });
+    expect(reversed.statusCode).toBe(200);
+    expect(reversed.body).toBe("0123456789");
     const whole = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "items=1-2" } });
     expect(whole.statusCode).toBe(200);
     expect(whole.body).toBe("0123456789");

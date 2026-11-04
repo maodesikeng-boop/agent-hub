@@ -13,7 +13,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   attachmentsOf,
   sentFilesOf,
@@ -178,6 +178,8 @@ export function MessageBubble({
   actions: MessageActions;
 }) {
   const time = formatTime(message.createdAt);
+  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
+  const files = useMemo(() => sentFilesOf(message), [message.meta]);
   const workerLine = workerEventOf(message);
   if (workerLine) return <WorkerLine line={workerLine} onOpen={actions.onOpenWorker} />;
   if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
@@ -205,7 +207,7 @@ export function MessageBubble({
   return (
     <AgentRow identity={identity} head={head} as="article" title={time}>
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={message.text} files={sentFilesOf(message)} />
+        <Markdown text={message.text} files={files} />
       </div>
     </AgentRow>
   );

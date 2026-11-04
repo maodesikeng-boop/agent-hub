@@ -86,7 +86,7 @@ describe("agent 文字消息入库时存副本", () => {
   });
 
   it("不在可分享的文件夹里：照样入库，状态写原因，不拷", () => {
-    say(pm.sessionId, "[hosts](/etc/hosts) 和 [没有](./nope.md)");
+    say(pm.sessionId, `[hosts](/etc/hosts) 和 [没有](${join(main, "nope.md")}) 和 [登录](/login)`);
     expect(sentFilesOf(lastMessage(pm.conversationId)).map((f) => f.status)).toEqual(["not_allowed", "missing"]);
     expect(existsSync(sentFilesDir) ? readdirSync(sentFilesDir) : []).toEqual([]);
   });

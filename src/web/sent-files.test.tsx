@@ -138,3 +138,42 @@ describe("Worker 页面", () => {
     expect(screen.getByRole("img", { name: "w" })).toHaveAttribute("src", API_PATHS.sentFile("0123456789abcdef", "a.png"));
   });
 });
+
+describe("重渲染（WS 推送让父组件重画）", () => {
+  it("内联图和文件卡片不卸载重建：rerender 后还是同一个 DOM 节点", () => {
+    const text = "![图](/tmp/a.png)\n\n[报告](/tmp/b.pdf)";
+    const files = () => [
+      sent({ href: "/tmp/a.png", name: "a.png" }),
+      sent({ href: "/tmp/b.pdf", name: "b.pdf", mime: "application/pdf", id: "1111111111111111" }),
+    ];
+    // 每次都是新的 message、meta、files 对象（推送来的就是这样）
+    const bubble = () => <MessageBubble message={makeMessage({ id: 1, text, meta: { files: files() } })} identity={identity} head actions={actions} />;
+    const { container, rerender } = render(bubble());
+    const img = container.querySelector("img[alt='图']");
+    const card = container.querySelector("[data-file-card]");
+    expect(img).not.toBeNull();
+    rerender(bubble());
+    rerender(bubble());
+    expect(container.querySelector("img[alt='图']")).toBe(img);
+    expect(container.querySelector("[data-file-card]")).toBe(card);
+  });
+});
+
+describe("引用式链接（[a][r] + [r]: 地址）", () => {
+  it("指向本机路径的引用式图片、链接：当文字显示，不发请求、没有链接", () => {
+    const { container } = agentSays("看 ![截图][s] 和 [报告][r]\n\n[s]: /tmp/a.png\n[r]: file:///tmp/b.pdf", null);
+    expect(container).toHaveTextContent("看 截图 和 报告");
+    expect(urls(container)).toEqual({ src: [], href: [] });
+  });
+
+  it("有 meta.files 也一样（守护进程不处理引用式）", () => {
+    const { container } = agentSays("![截图][s]\n\n[s]: /tmp/a.png", [sent({ href: "/tmp/a.png", name: "a.png" })]);
+    expect(urls(container)).toEqual({ src: [], href: [] });
+    expect(container).toHaveTextContent("截图");
+  });
+
+  it("指向网址的引用式链接照常", () => {
+    agentSays("[文档][d]\n\n[d]: https://example.com/doc", null);
+    expect(screen.getByRole("link", { name: "文档" })).toHaveAttribute("href", "https://example.com/doc");
+  });
+});

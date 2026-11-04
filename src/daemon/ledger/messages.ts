@@ -142,7 +142,7 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
-        const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text, dedupeKey);
+        const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
         updateLive(p, sessionId, working(null));
         return;

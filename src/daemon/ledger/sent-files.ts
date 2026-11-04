@@ -33,7 +33,7 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
   };
 
   /** 回复里有本机文件链接就存副本、返回 { files }；没有返回 null（meta 照旧是 null）。出了意外只记日志，消息照样入库。 */
-  const metaFor = (session: AgentSessionRow, text: string, dedupeKey: string): AgentTextMeta | null => {
+  const metaFor = (session: AgentSessionRow, text: string): AgentTextMeta | null => {
     try {
       const projectId = projectOf(session);
       const folders =
@@ -41,7 +41,7 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
           ? []
           : db.all<{ path: string }>("SELECT path FROM project_folders WHERE project_id = ? AND removed_at IS NULL", projectId).map((r) => r.path);
       const worktrees = projectId === null ? [] : [projectWorktreesDir(opts.worktreesDir, projectId)];
-      const files = shareLinkedFiles(text, dedupeKey, {
+      const files = shareLinkedFiles(text, {
         sentFilesDir: opts.sentFilesDir,
         cwd: session.cwd,
         userHome: opts.userHome,

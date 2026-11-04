@@ -213,7 +213,7 @@ function parsePostBody(body: unknown): { clientId: string; text: string; attachm
   return { clientId, text, attachmentIds: ids };
 }
 
-/** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带或认不出是 null（发整个文件），超出文件是 "unsatisfiable"。 */
+/** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带、认不出、无效是 null（发整个文件），超出文件是 "unsatisfiable"。 */
 export function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
   const match = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (match === null || (match[1] === "" && match[2] === "")) return null;
@@ -223,10 +223,20 @@ export function parseRange(header: string | undefined, size: number): { start: n
     return { start: Math.max(0, size - suffix), end: size - 1 };
   }
   const start = Number(match[1]);
-  const end = match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1);
-  if (start >= size || start > end) return "unsatisfiable";
-  return { start, end };
+  // 末位比首位小（bytes=5-2）：RFC 9110 说这个 Range 无效、整个忽略，发整个文件
+  if (match[2] !== "" && Number(match[2]) < start) return null;
+  if (start >= size) return "unsatisfiable";
+  return { start, end: match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1) };
 }
+
+/** 存着的文件的 CSP：沙箱、什么都不许加载，直接打开也不会当网页执行。 */
+const STORED_FILE_CSP = "sandbox; default-src 'none'";
+const SVG_MIME = "image/svg+xml";
+/**
+ * svg 直接打开（点开看大图）时，它自带的 <style>、style="" 被 default-src 'none' 拦掉，画出来是黑的（真浏览器验证过），
+ * 所以只给 svg 放开内联样式；脚本仍被 sandbox（没有 allow-scripts）和 default-src 'none' 拦着。
+ */
+const SVG_CSP = `${STORED_FILE_CSP}; style-src 'unsafe-inline'`;
 
 /**
  * 发一个存在数据目录里的文件（上传的、agent 发出的副本）。文件不可信：只有图片内联显示，别的一律当下载；
@@ -238,7 +248,7 @@ function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Att
     .header("content-type", file.mime)
     .header("content-disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`)
     .header("x-content-type-options", "nosniff")
-    .header("content-security-policy", "sandbox; default-src 'none'")
+    .header("content-security-policy", file.mime === SVG_MIME ? SVG_CSP : STORED_FILE_CSP)
     .header("cache-control", "private, max-age=3600")
     .header("accept-ranges", "bytes");
   const range = parseRange(req.headers.range, file.size);
