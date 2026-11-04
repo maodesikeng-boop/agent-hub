@@ -717,13 +717,6 @@ describe("0003_pm_conversation：约束", () => {
       INSERT INTO project_folders (project_id, path, is_main, added_at) VALUES (2, '/code/app', 1, 0);
     `);
     expect(db.get("SELECT count(*) AS n FROM project_folders WHERE path = '/code/app'")).toEqual({ n: 2 });
-    // 最新的库里也没有（11-04：同一个文件夹可以有多个项目经理，各管各的项目）：项目、文件夹上只剩这几个唯一索引
-    const unique = db
-      .all<{ name: string }>(
-        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('projects', 'project_folders') AND sql LIKE 'CREATE UNIQUE%' ORDER BY name",
-      )
-      .map((r) => r.name);
-    expect(unique).toEqual(["project_folders_attached", "project_folders_one_main", "projects_active_pm"]);
   });
 });
 

@@ -182,29 +182,14 @@ describe("createPm（M2）", () => {
     expect(sessionRow(plain.sessionId).cwd).toBe(join(dataHome, "pm-home", String(plain.pm.id)));
   });
 
-  it("选的文件夹不存在：invalid，项目经理也没建", () => {
+  it("选的文件夹不对（不存在、已是别人项目的主文件夹）：invalid / conflict，项目经理也没建", () => {
     createFoo();
     changes = [];
     const before = tableCounts();
     expectLedgerError(() => ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: join(work, "nope") }), "invalid", /文件夹不存在/);
+    expectLedgerError(() => ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: join(work, "foo") }), "conflict", /小林.*foo/);
     expect(tableCounts()).toEqual(before);
     expect(changes).toEqual([]);
-  });
-
-  it("选的文件夹已是别的项目经理的主文件夹：照样建好，各管各的项目（同一个文件夹可以有多个项目经理）", () => {
-    const foo = createFoo();
-    const wang = ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: foo.dir });
-    expect(wang.project).toMatchObject({ name: "foo", pmId: wang.pm.id, status: "active" });
-    expect(wang.project!.id).not.toBe(foo.project.id);
-    expect(sessionRow(wang.sessionId).cwd).toBe(foo.dir);
-    // 小林的项目不受影响
-    expect(sessionRow(lin.sessionId).cwd).toBe(foo.dir);
-    const snap = ledger.snapshot();
-    expect(snap.projects.map((p) => [p.pmId, p.name])).toEqual([
-      [lin.pmId, "foo"],
-      [wang.pm.id, "foo"],
-    ]);
-    expect(snap.folders.filter((f) => f.path === foo.dir && f.isMain).map((f) => f.projectId)).toEqual([foo.project.id, wang.project!.id]);
   });
 });
 
@@ -274,7 +259,7 @@ describe("建项目（在项目经理的会话里一句话）", () => {
     expect(changes).toEqual([]);
   });
 
-  it("文件夹不对：不存在、是文件、在数据目录里 → invalid；名字不对 → invalid；都什么也没写", () => {
+  it("文件夹不对：不存在、是文件、在数据目录里 → invalid；已是别人项目的主文件夹 → conflict；名字不对 → invalid；都什么也没写", () => {
     createFoo();
     writeFileSync(join(work, "a-file"), "x");
     mkdirSync(join(dataHome, "inside"), { recursive: true });
@@ -286,6 +271,7 @@ describe("建项目（在项目经理的会话里一句话）", () => {
       [{ folder: join(work, "a-file") }, "invalid", /不是文件夹/],
       [{ folder: join(dataHome, "inside") }, "invalid", /数据目录/],
       [{ folder: dataHome }, "invalid", /数据目录/],
+      [{ folder: join(work, "foo") }, "conflict", /小林的项目“foo”的主文件夹/],
       [{ folder: folder("other"), name: "a\nb" }, "invalid", /名字/],
     ];
     for (const [args, code, message] of cases) expectLedgerError(() => hub(zhou.sessionId, "project.create", args), code, message);
@@ -293,36 +279,6 @@ describe("建项目（在项目经理的会话里一句话）", () => {
     expect(changes).toEqual([]);
     // 失败的调用也记一行
     expect(hubCalls().slice(callsBefore).map((c) => [c.ok, c.error_code])).toEqual(cases.map(([, code]) => [0, code]));
-  });
-
-  it("同一个文件夹可以有多个项目经理：别人的主文件夹也能拿来建项目，同名也行；hub status 里各是各的", () => {
-    const foo = createFoo();
-    changes = [];
-    const result = hub(zhou.sessionId, "project.create", { folder: foo.dir });
-    expect(result.data.project).toMatchObject({ name: "foo", pmId: zhou.pmId, conversationId: zhou.conversationId });
-    expect(result.data.mainFolder).toMatchObject({ path: foo.dir, isMain: true });
-    expect(sessionRow(zhou.sessionId).cwd).toBe(foo.dir);
-    expect(changes.map((c) => c.type)).toEqual(["project.created", "folders.updated", "message.created"]);
-    // 改名后也照样（项目名不要求唯一，网页和 hub status 靠项目经理的名字分）
-    const named = ledger.createPm({ name: "老王", mode: "manage_only", persona: "", folder: foo.dir });
-    hub(named.sessionId, "project.setup", { command: "pnpm install" });
-    const linStatus = hub(lin.sessionId, "status", {});
-    const zhouStatus = hub(zhou.sessionId, "status", {});
-    expect(linStatus.text).toContain("小林");
-    expect(zhouStatus.text).toContain("阿周");
-    expect(linStatus.data).toMatchObject({ project: { id: foo.project.id, mainFolder: foo.dir }, setupCommand: null });
-    expect(zhouStatus.data).toMatchObject({ project: { id: result.data.project.id, mainFolder: foo.dir }, setupCommand: null });
-    // 准备命令按项目各存一份：老王设了不影响小林、阿周
-    expect(hub(named.sessionId, "status", {}).data).toMatchObject({ project: { id: named.project!.id }, setupCommand: "pnpm install" });
-  });
-
-  it("挂文件夹：别的项目的主文件夹、别的项目挂着的文件夹也能挂", () => {
-    const foo = createFoo();
-    const shared = folder("shared");
-    hub(lin.sessionId, "project.attach", { folder: shared });
-    hub(zhou.sessionId, "project.create", { folder: folder("bar") });
-    expect(hub(zhou.sessionId, "project.attach", { folder: foo.dir }).data.folder).toMatchObject({ path: foo.dir, isMain: false });
-    expect(hub(zhou.sessionId, "project.attach", { folder: shared }).data.folder).toMatchObject({ path: shared, isMain: false });
   });
 
   it("默认的 resolveFolder：展开 ~，相对路径拒绝", () => {

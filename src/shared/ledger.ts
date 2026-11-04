@@ -32,7 +32,7 @@ import type { AgentVendor } from "./vendors.ts";
  * - invalid：参数不对（名字空、文件夹不存在、主文件夹不能移除……）；
  * - not_found：要找的东西没有（项目、项目经理、消息、修改记录）；
  * - forbidden：管不着（不是项目经理的会话、改别人的性格设定）；
- * - conflict：和现在的状态冲突（重名、已经有项目了、不是最近一次修改、消息不是失败状态）。
+ * - conflict：和现在的状态冲突（重名、已经有项目了、路径已经是别的项目的主文件夹、不是最近一次修改、消息不是失败状态）。
  * message 是给人看的一句中文，agent 也看得懂，界面和 hub 原样显示。
  */
 export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict"] as const;
@@ -117,8 +117,7 @@ export interface CreatePmInput {
  * 账本负责建这个目录）；给了 folder 的再建项目（见 hub project create：会话的 cwd 换成主文件夹，对话里一条“项目已建好”）。
  * 提交后写 personas/pm-<编号>.md，推 pm.created、conversation.created、session.created（有项目再加 project.created、
  * folders.updated、message.created）。不记 persona_changes（建的时候不算修改）。
- * 错误：名字不对、正文太长、文件夹不对 → invalid；项目经理同名 → conflict。
- * 文件夹已是别的项目经理的主文件夹也照样建（同一个文件夹可以有多个项目经理，各管各的项目）。任何错误都什么也不写。
+ * 错误：名字不对、正文太长、文件夹不对 → invalid；同名、文件夹已是别的项目的主文件夹 → conflict。任何错误都什么也不写。
  */
 export interface CreatePmResult {
   pm: Pm;
@@ -327,7 +326,7 @@ export interface Ledger {
    *   推 project.created、folders.updated、message.created。不登记 session.start：下一条消息前驱动层按新的 cwd 自动重启。
    *   已经有进行中的项目 → conflict（“一个项目经理只管一个项目，请新建一个项目经理”）；文件夹不对（不存在、不是目录、
    *   在数据目录里）→ invalid，不存在时是“文件夹不存在，请先建好：<路径>”（m2-plan 第 6 节第 1 条：不替用户建）；
-   *   名字、说明不对 → invalid。路径已经是别的项目的主文件夹也照样建（同一个文件夹可以有多个项目经理），项目名也不要求唯一；
+   *   路径已经是别的进行中项目的主文件夹 → conflict；名字、说明不对 → invalid；
    * - project.attach / detach：同一个事务里改 project_folders、改会话的 addDirs、发一条系统消息（只给人看）、推 folders.updated、
    *   message.created。还没有项目 → not_found；detach 主文件夹 → invalid；没挂着 → not_found；已经挂着 → conflict。
    *   detach 找“哪一行”：先 realpath 传进来的路径；realpath 失败（目录已经被删了、改名了）就用 path.resolve 之后的字面路径；

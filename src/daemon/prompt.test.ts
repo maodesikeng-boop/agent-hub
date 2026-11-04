@@ -64,7 +64,6 @@ describe("提示词：有项目", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).toContain("小林");
     expect(prompt).toContain("一个项目经理只管一个项目，请新建一个项目经理");
-    expect(prompt).toContain("同一个文件夹可以有多个项目经理");
     expect(prompt).toContain("- 说话直接。");
     expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
     expect(PM_MODE_PROMPTS.manage_only).toMatch(/派 Worker/);
@@ -90,8 +89,6 @@ describe("提示词：有项目", () => {
     }
     for (const gone of [`${hub} pm list`, `${hub} project assign`, "交接", "群"]) expect(HUB_USAGE_PROMPT).not.toContain(gone);
     expect(HUB_USAGE_PROMPT).toContain("一个项目经理只管一个项目");
-    // 别的项目经理在用的文件夹也能建项目
-    expect(HUB_USAGE_PROMPT).toContain("同一个文件夹可以有多个项目经理");
   });
 
   it("按 M1 规则加“先读 AGENTS.md”：主文件夹里 AGENTS.md、CLAUDE.md 都有、CLAUDE.md 没引用时才加", () => {

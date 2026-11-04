@@ -131,8 +131,14 @@ export function createLedgerProjects(
     }
     const path = resolveFolder(input.folder);
     // 只有自己给的名字不对才报错；默认名一定能用
-    // 同一个文件夹可以有多个项目经理（各管各的项目）：别的项目的主文件夹也能用，项目名也可以重名，靠项目经理的名字分
     const name = input.name === undefined ? defaultProjectName(path) : validName(input.name, "项目");
+    const owner = db.get<{ name: string; pm_name: string }>(
+      `SELECT p.name, pm.name AS pm_name FROM project_folders f
+       JOIN projects p ON p.id = f.project_id JOIN pms pm ON pm.id = p.pm_id
+       WHERE f.path = ? AND f.is_main = 1 AND f.removed_at IS NULL AND p.status = 'active'`,
+      path,
+    );
+    if (owner !== undefined) throw fail("conflict", `这个文件夹已经是${owner.pm_name}的项目“${owner.name}”的主文件夹：${path}`);
     const t = now();
     const row = db.get<ProjectDbRow>(
       `INSERT INTO projects (name, description, status, pm_id, conversation_id, created_at, updated_at)
