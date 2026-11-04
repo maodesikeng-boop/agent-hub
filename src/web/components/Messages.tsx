@@ -16,6 +16,7 @@ import {
 import { useState } from "react";
 import {
   attachmentsOf,
+  sentFilesOf,
   stripSystemPrefix,
   systemEventOf,
   workerEventOf,
@@ -204,7 +205,7 @@ export function MessageBubble({
   return (
     <AgentRow identity={identity} head={head} as="article" title={time}>
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={message.text} />
+        <Markdown text={message.text} files={sentFilesOf(message)} />
       </div>
     </AgentRow>
   );

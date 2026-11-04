@@ -111,11 +111,16 @@ ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Wor
 const MESSAGE_RULES = `- 用户的消息原样发给你，不带标签；以“【…】”开头的是系统发的消息（比如“【系统】”），不是用户说的。
 - 用户在你忙的时候连发的几条，会拼成一条发给你，开头写“【用户连发了 N 条】”并编号；请每一条都回应到。`;
 
+/** 发文件给用户（项目经理、Worker 共用）：只说能力。守护进程发出时存副本，网页显示图片和文件卡片（daemon/sent-files.ts）。 */
+export const SHARE_FILES_NOTE =
+  "- 想让用户直接看某个文件，在回复里用 Markdown 写绝对路径：图片 `![说明](/绝对/路径.png)`，其他文件 `[文件名](/绝对/路径)`；路径有空格用尖括号包起来，比如 `[报告](</绝对/路径/周 报.pdf>)`。";
+
 function roleSection(ctx: LaunchContext): string {
   return `# 你的角色
 
 你是用户的项目经理，名字叫“${ctx.pm.name}”。用户在自己电脑上的网页里和你聊天，你们之间只有这一个对话。
 ${MESSAGE_RULES}
+${SHARE_FILES_NOTE}
 - 你只管一个项目（见下面“你的项目”）。用户要你再管别的项目时，告诉用户：一个项目经理只管一个项目，请新建一个项目经理。
 - 回复用中文，简洁。`;
 }
@@ -162,6 +167,7 @@ function workerRoleSection(ctx: LaunchContext, worker: WorkerRecord): string {
 
 你是项目经理“${ctx.pm.name}”派出的 Worker #${worker.id}（${worker.title}）。你只负责做完下面的任务，每做完一轮就把结果汇报给项目经理。
 - 发给你的消息都来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。以“【…】”开头的是系统发的消息。
+${SHARE_FILES_NOTE}
 - 回复用中文，简洁。`;
 }
 

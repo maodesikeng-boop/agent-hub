@@ -10,6 +10,7 @@ import {
   HUB_USAGE_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
+  SHARE_FILES_NOTE,
   WORKER_HUB_USAGE_PROMPT,
   WORKER_READONLY_NOTE,
   WORKER_RULES,
@@ -41,6 +42,18 @@ describe("提示词", () => {
     rmSync(join(dir, "AGENTS.md"));
     writeFileSync(join(dir, "CLAUDE.md"), "# 只有 CLAUDE.md");
     expect(needsAgentsNote(dir)).toBe(false);
+  });
+});
+
+describe("提示词：发文件给用户", () => {
+  it("项目经理（有没有项目）和 Worker 都有同一句：用 Markdown 写绝对路径，图片 ![]()、其他 []()，有空格用尖括号", () => {
+    for (const ctx of [projectContext(), noProjectContext(), workerContext()]) {
+      const prompt = buildLaunchPrompt(ctx, dir);
+      expect(prompt.split(SHARE_FILES_NOTE)).toHaveLength(2);
+    }
+    expect(SHARE_FILES_NOTE).toContain("![说明](/绝对/路径.png)");
+    expect(SHARE_FILES_NOTE).toContain("[文件名](/绝对/路径)");
+    expect(SHARE_FILES_NOTE).toContain("尖括号");
   });
 });
 

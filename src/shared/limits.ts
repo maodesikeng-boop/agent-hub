@@ -57,6 +57,15 @@ export const MAX_UPLOAD_EXTENSION_BYTES = 16;
 /** 存到磁盘上的文件名最多多少字节（UTF-8；APFS、ext4 的单个文件名上限是 255）；超了截断，扩展名尽量留着。 */
 export const MAX_UPLOAD_NAME_BYTES = 120;
 
+// ---- agent 发给用户的文件（回复里的 Markdown 链接指向本机文件，发出时存副本，见 daemon/sent-files.ts）----
+
+/** 单个文件最多 50 MB，超了不存副本，卡片写“太大”。 */
+export const MAX_SENT_FILE_BYTES = 50 * 1024 * 1024;
+/** 一条消息的副本合计最多 200 MB，超出的那几个不存。 */
+export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
+/** 一条消息最多处理几个文件链接（按出现顺序，多出来的照普通链接显示）。 */
+export const MAX_SENT_FILES_PER_MESSAGE = 10;
+
 // ---- worktree 准备命令（hub project setup，见 src/daemon/setup/setup.ts）----
 
 /** 准备命令（hub project setup --stdin 的正文）最多多大（UTF-8 字节）。 */

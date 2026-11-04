@@ -9,7 +9,7 @@
 // - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
 // - launch-context.ts：启动 claude 前给提示词用的上下文。
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConversationSnapshot, StateSnapshot } from "../../shared/api.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
@@ -26,6 +26,7 @@ import { createLedgerPersona } from "./persona.ts";
 import { createLedgerProjects } from "./projects.ts";
 import { toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
+import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerWorkers } from "./workers.ts";
 
@@ -51,6 +52,12 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
+  /** agent 发给用户的文件存副本的地方（HubPaths.sentFilesDir），默认 <dataHome>/sent-files。 */
+  sentFilesDir?: string;
+  /** 聊天框上传的文件（HubPaths.uploadsDir），默认 <dataHome>/uploads：agent 也能把它们发回给用户。 */
+  uploadsDir?: string;
+  /** agent 能发给用户的临时目录，默认 /tmp 和 os.tmpdir()。测试的临时目录都在 os.tmpdir() 下，测“不在允许的文件夹里”时传空。 */
+  shareTmpDirs?: string[];
   /** 展开 `~` 用（默认 resolveFolder、detach 退回字面路径时），默认 os.homedir()。 */
   userHome?: string;
   /** 文件夹校验，默认 createResolveFolder({ dataHome, userHome })。 */
@@ -74,7 +81,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   };
   const sessions = createLedgerSessions(ctx);
   const { sessionState } = sessions;
-  const messages = createLedgerMessages(ctx, sessions);
+  const sentFiles = createLedgerSentFiles(db, {
+    sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
+    uploadsDir: options.uploadsDir ?? join(dataHome, "uploads"),
+    worktreesDir: files.worktreesDir,
+    dataHome,
+    userHome,
+    tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
+  });
+  const messages = createLedgerMessages(ctx, sessions, sentFiles);
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
