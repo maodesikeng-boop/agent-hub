@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentSessionRow,
+  AgentStep,
   ApiRetryInfo,
   ConversationId,
   MessageId,
@@ -25,19 +26,43 @@ export interface LiveSession {
   rateLimit?: RateLimitInfo | null;
   /** claude 正在重试（断网、过载）；下一个正常事件（working、idle）清掉。 */
   apiRetry?: ApiRetryInfo | null;
+  /** 在做什么（见 AgentStep）；空闲时没有。 */
+  step?: AgentStep | null;
+  /** 调了、结果还没回来的工具（按调用顺序）：几个工具同时在跑时，结果一个个回来，还没回来的最后一个就是当前这一步。 */
+  openTools?: Array<{ toolUseId: string; step: AgentStep }>;
 }
 
-/** 正在停、准备中（Worker 在跑准备命令，还没开工）不被盖掉。 */
-export const working = (currentTool: string | null) => (l: LiveSession) => {
+const THINKING: AgentStep = { type: "thinking" };
+
+/**
+ * 正在停、准备中（Worker 在跑准备命令，还没开工）不被盖掉。step 不传就保持原样（还没有就是“在思考”：一轮刚开始，
+ * claude 在想）；子任务里的事件不传，不改主 agent 的状态。
+ */
+export const working = (currentTool: string | null, step?: AgentStep) => (l: LiveSession) => {
   if (l.activity !== "stopping" && l.activity !== "preparing") l.activity = "working";
   l.currentTool = currentTool;
   l.apiRetry = null;
+  l.step = step ?? l.step ?? THINKING;
+};
+
+/** 主 agent 调了一个工具：记下它没回结果，当前这一步就是它。 */
+export const toolStarted = (currentTool: string, toolUseId: string, step: AgentStep) => (l: LiveSession) => {
+  working(currentTool, step)(l);
+  l.openTools = [...(l.openTools ?? []).filter((t) => t.toolUseId !== toolUseId), { toolUseId, step }];
+};
+
+/** 工具结果回来了：还有没回来的，当前这一步是其中最后一个；都回来了，claude 在接着想。 */
+export const toolFinished = (toolUseIds: string[]) => (l: LiveSession) => {
+  l.openTools = (l.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
+  working(l.currentTool, l.openTools.at(-1)?.step ?? THINKING)(l);
 };
 
 export const idle = (l: LiveSession) => {
   l.activity = "idle";
   l.currentTool = null;
   l.apiRetry = null;
+  l.step = null;
+  l.openTools = [];
 };
 
 export type LedgerSessions = ReturnType<typeof createLedgerSessions>;
@@ -73,6 +98,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
       vendor: row.vendor,
       model: row.model,
       effort: row.effort,
+      step: l.step ?? null,
       lastEventAt: row.lastEventAt,
     };
   };
