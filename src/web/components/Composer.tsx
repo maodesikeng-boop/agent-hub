@@ -51,9 +51,9 @@ export function Composer({
   };
 
   return (
-    <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)] focus-within:border-primary/40">
+    <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)] focus-within:border-foreground/25">
       {files.length > 0 && (
-        <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-4 pt-3">
+        <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-5 pt-3">
           {files.map(({ key, file }) => (
             <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-[13.5px]">
               <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -77,7 +77,30 @@ export function Composer({
           {notice}
         </p>
       )}
-      <div className="flex items-end gap-1 py-2 pr-2 pl-2">
+      <textarea
+        ref={ref}
+        rows={1}
+        aria-label="输入消息"
+        placeholder={placeholder}
+        readOnly={busy}
+        className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onPaste={(e) => {
+          // 粘贴截图或复制来的文件：加进待发列表；纯文字照常粘进去
+          const pasted = Array.from(e.clipboardData.files);
+          if (pasted.length === 0) return;
+          e.preventDefault();
+          staging.add(pasted);
+        }}
+        onKeyDown={(e) => {
+          // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
+          if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+          e.preventDefault();
+          submit();
+        }}
+      />
+      <div className="flex items-center gap-1 px-2 pt-1 pb-2">
         <input
           ref={picker}
           type="file"
@@ -92,33 +115,12 @@ export function Composer({
         <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy} onClick={() => picker.current?.click()}>
           <Paperclip className="size-5" aria-hidden="true" />
         </Button>
-        <textarea
-          ref={ref}
-          rows={1}
-          aria-label="输入消息"
-          placeholder={placeholder}
-          readOnly={busy}
-          className="min-h-9 flex-1 resize-none bg-transparent py-1.5 pl-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onPaste={(e) => {
-            // 粘贴截图或复制来的文件：加进待发列表；纯文字照常粘进去
-            const pasted = Array.from(e.clipboardData.files);
-            if (pasted.length === 0) return;
-            e.preventDefault();
-            staging.add(pasted);
-          }}
-          onKeyDown={(e) => {
-            // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
-            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-            e.preventDefault();
-            submit();
-          }}
-        />
-        {tooLong && <span className="self-center text-[13px] text-danger">消息太长</span>}
-        <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
-          <ArrowUp className="size-5" aria-hidden="true" />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {tooLong && <span className="text-[13px] text-danger">消息太长</span>}
+          <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
+            <ArrowUp className="size-5" aria-hidden="true" />
+          </Button>
+        </div>
       </div>
     </div>
   );
