@@ -137,7 +137,7 @@ export function Composer({
         </Button>
         <div className="ml-auto flex items-center gap-2">
           {tooLong && <span className="text-[13px] text-danger">消息太长</span>}
-          {stop?.failed && showStop && <span className="text-[13px] text-danger">停止失败</span>}
+          {stop?.failed && showStop && <span className="text-[13.5px] text-danger">停止失败</span>}
           {showStop ? (
             <StopButton stop={stop} />
           ) : (
