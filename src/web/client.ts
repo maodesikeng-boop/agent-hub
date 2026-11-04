@@ -1,7 +1,9 @@
 // 网页调用界面服务的接口。路径和数据形状都来自 src/shared/api.ts。
 import {
   API_PATHS,
+  UPLOAD_TOO_LARGE_MESSAGE,
   type ApiErrorBody,
+  type Attachment,
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -84,6 +86,24 @@ export function fetchOlderMessages(conversationId: ConversationId, before: Messa
 
 export function postMessage(conversationId: ConversationId, body: PostMessageRequest): Promise<PostMessageResponse> {
   return postJson<PostMessageResponse>(API_PATHS.messages(conversationId), body);
+}
+
+/**
+ * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。
+ * 一律声明 application/octet-stream（File 自带的类型是 application/json 之类时，服务端不会当 JSON 去解析，但这里也不依赖它）。
+ * 413：界面服务对普通请求说“最多 1 MB”，上传接口的上限是 20 MB，换成上传自己的说法。
+ */
+export async function postUpload(file: Blob, name: string): Promise<Attachment> {
+  try {
+    return await request<Attachment>(`${API_PATHS.uploads}?name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 413) throw new ApiError(413, UPLOAD_TOO_LARGE_MESSAGE);
+    throw err;
+  }
 }
 
 export function postStop(conversationId: ConversationId): Promise<void> {

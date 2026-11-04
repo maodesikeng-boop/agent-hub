@@ -2,6 +2,7 @@
 // 全是纯函数，方便测试；网络和定时器在 useHub.ts。
 import {
   userMessageDedupeKey,
+  type Attachment,
   type Change,
   type ConversationId,
   type ConversationSnapshot,
@@ -22,8 +23,12 @@ export interface PendingMessage {
   clientId: string;
   conversationId: ConversationId;
   text: string;
+  /** 已经传上去的文件（上传接口的响应）；没有文件是空数组。 */
+  attachments: Attachment[];
   /** sending：POST 在路上或已成功等服务端推回；failed：POST 失败，可以重试。 */
   phase: "sending" | "failed";
+  /** phase 是 failed 时的原因：带的文件已经不在服务端（重试也没用，要重新添加）；其他失败不写，可以重试。 */
+  failure?: "attachments_missing";
   createdAt: number;
 }
 
@@ -87,7 +92,7 @@ export type HubAction =
   | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean }
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
-  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"] }
+  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"] }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -248,7 +253,11 @@ export function reducer(state: HubState, action: HubAction): HubState {
     case "pendingPhase":
       return {
         ...state,
-        pending: state.pending.map((p) => (p.clientId === action.clientId ? { ...p, phase: action.phase } : p)),
+        pending: state.pending.map((p) => {
+          if (p.clientId !== action.clientId) return p;
+          const { failure: _old, ...rest } = p;
+          return { ...rest, phase: action.phase, ...(action.failure ? { failure: action.failure } : {}) };
+        }),
       };
   }
 }

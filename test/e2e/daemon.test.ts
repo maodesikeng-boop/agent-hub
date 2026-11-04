@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../src/shared/index.ts";
+import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, type Attachment } from "../../src/shared/index.ts";
 import { AGENTS_NOTE, DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
 import {
   Client,
@@ -315,5 +315,51 @@ describe("W5 组装 + 端到端", () => {
     expect(second.stdout).not.toMatch(/auth\?token=/);
     expect((await client.state()).pms).toHaveLength(1);
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
+  });
+});
+
+describe("聊天框上传文件", () => {
+  it("先上传、再发消息：文件存在数据目录的 uploads/，claude 收到的正文带着文件的完整绝对路径；老消息和普通消息不受影响", async () => {
+    env = makeEnv();
+    env.setScript({ defaultTurn: quick("看到了") });
+    const { daemon, client, conversationId } = await boot();
+    const res = await fetch(client.base + `${API_PATHS.uploads}?name=${encodeURIComponent("../便签.txt")}`, {
+      method: "POST",
+      headers: client.headers({ "content-type": "application/octet-stream" }),
+      body: Buffer.from("暗号：蓝鲸"),
+    });
+    expect(res.status).toBe(200);
+    const attachment = (await res.json()) as Attachment;
+    expect(attachment.name).toBe("便签.txt");
+    expect(attachment.path.startsWith(`${realpathSync.native(join(env.home, "uploads"))}/`)).toBe(true);
+    expect(readFileSync(attachment.path, "utf8")).toBe("暗号：蓝鲸");
+
+    const posted = await fetch(client.base + API_PATHS.messages(conversationId), {
+      method: "POST",
+      headers: client.headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ clientId: "f1", text: "看看这个", attachmentIds: [attachment.id] }),
+    });
+    expect(posted.status).toBe(200);
+    const { messageId } = (await posted.json()) as { messageId: number };
+    await waitForStatus(client, messageId, "replied");
+
+    const sent = env.stdinTexts().at(-1)!;
+    expect(sent.startsWith("看看这个")).toBe(true);
+    expect(sent).toContain(attachment.path);
+    // 界面看到的还是用户写的原文，附件在 meta 里
+    const shown = messageById(await client.state(), messageId);
+    expect(shown?.text).toBe("看看这个");
+    expect(shown?.meta).toEqual({ attachments: [attachment] });
+
+    // 只有文件没有文字
+    const only = await fetch(client.base + API_PATHS.messages(conversationId), {
+      method: "POST",
+      headers: client.headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ clientId: "f2", text: "", attachmentIds: [attachment.id] }),
+    });
+    expect(only.status).toBe(200);
+    await waitForStatus(client, ((await only.json()) as { messageId: number }).messageId, "replied");
+    expect(env.stdinTexts().at(-1)).toContain(attachment.path);
+    await terminate(daemon);
   });
 });

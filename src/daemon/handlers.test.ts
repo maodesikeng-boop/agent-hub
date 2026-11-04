@@ -70,6 +70,32 @@ function deps(options: { message?: Message | null; send?: DriverSendResult | Err
 const sendAction = (extra: { resend?: boolean } = {}) =>
   action("session.send", { sessionId: 1, messageId: 7, source: "user", ...extra });
 
+describe("session.send 处理函数：带附件的消息", () => {
+  const attachment = { id: "0123456789abcdef", name: "图.png", path: "/data/uploads/0123456789abcdef/图.png", size: 12, mime: "image/png" };
+
+  it("发给 agent 的正文 = 用户写的字 + 附件的完整绝对路径", async () => {
+    const { d, send } = deps({ message: message({ text: "看这张", meta: { attachments: [attachment] } }) });
+    await createSessionSendHandler(d)(sendAction());
+    const text = (send.mock.calls[0] as unknown as [number, { text: string }])[1].text;
+    expect(text.startsWith("看这张\n\n")).toBe(true);
+    expect(text).toContain(`- \`${attachment.path}\``);
+  });
+
+  it("只有文件：正文就是路径清单", async () => {
+    const { d, send } = deps({ message: message({ text: "", meta: { attachments: [attachment] } }) });
+    await createSessionSendHandler(d)(sendAction());
+    const text = (send.mock.calls[0] as unknown as [number, { text: string }])[1].text;
+    expect(text).toContain(attachment.path);
+    expect(text.startsWith("\n")).toBe(false);
+  });
+
+  it("没有附件的消息（含 meta 是 null 的老消息）：原文不变", async () => {
+    const { d, send } = deps({ message: message({ text: "你好" }) });
+    await createSessionSendHandler(d)(sendAction());
+    expect((send.mock.calls[0] as unknown as [number, { text: string }])[1].text).toBe("你好");
+  });
+});
+
 describe("session.start 处理函数", () => {
   it("调 driver.start", async () => {
     const { d, start } = deps();

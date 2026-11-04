@@ -11,6 +11,7 @@ import {
   RATE_LIMIT_RECHECK_MAX_MS,
   RATE_LIMIT_RECHECK_PAD_MS,
   SessionTokenRevokedError,
+  agentTextOf,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -68,7 +69,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       result = await deps.driver.send(sessionId, {
         messageIds: [messageId],
         source,
-        text: message.text,
+        // 用户写的字 + 附件的完整路径（没有附件就是原文）
+        text: agentTextOf(message),
         ...(resend ? { resend: true } : {}),
         ...(recovery ? { recovery: true } : {}),
       });

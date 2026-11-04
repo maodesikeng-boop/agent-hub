@@ -30,6 +30,11 @@ export interface HubPaths {
    * 项目经理的会话把它自己项目那一层（projectWorktreesDir）用 --add-dir 带上，验收时能看、能跑测试。
    */
   worktreesDir: string;
+  /**
+   * uploads/：用户在聊天框上传的文件，<上传编号>/<原文件名>（daemon/uploads.ts）。不放进项目文件夹；
+   * agent 拿到的是文件的绝对路径，自己用读文件工具读。
+   */
+  uploadsDir: string;
   /** claude 程序：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。 */
   claudePath: string;
 }
@@ -53,6 +58,7 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     hubSock: join(home, "run", "hub.sock"),
     hubBinDir: join(home, "run", "bin"),
     worktreesDir: join(home, "worktrees"),
+    uploadsDir: join(home, "uploads"),
     claudePath: env[ENV_CLAUDE] || "claude",
   };
 }

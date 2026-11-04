@@ -117,7 +117,7 @@ describe("waitingConversations（瞬时判断）", () => {
   it("网页上还在发送的消息：不算", () => {
     const state = reducer(idle(), {
       type: "pendingAdd",
-      pending: { clientId: "c1", conversationId: 1, text: "再来", phase: "sending", createdAt: T0 },
+      pending: { clientId: "c1", conversationId: 1, text: "再来", attachments: [], phase: "sending", createdAt: T0 },
     });
     expect(waitingConversations(state, {})).toEqual([]);
   });

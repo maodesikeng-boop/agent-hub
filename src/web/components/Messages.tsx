@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import {
+  attachmentsOf,
   stripSystemPrefix,
   systemEventOf,
   workerEventOf,
@@ -30,6 +31,7 @@ import { describeError, formatTime, STATUS_LABELS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -179,11 +181,16 @@ export function MessageBubble({
   if (workerLine) return <WorkerLine line={workerLine} onOpen={actions.onOpenWorker} />;
   if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
   if (message.sender === "user") {
+    const attachments = attachmentsOf(message);
     return (
       <article className="mt-5 flex flex-col items-end" data-side="right" data-status={message.status ?? undefined} title={time}>
-        <div className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
-          {message.text}
-        </div>
+        {/* 只发文件没写字的消息没有文字气泡 */}
+        {(message.text !== "" || attachments.length === 0) && (
+          <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
+            {message.text}
+          </div>
+        )}
+        <AttachmentList attachments={attachments} />
         {message.status && (
           <DeliveryStatus
             status={message.status}
@@ -267,18 +274,22 @@ function DeliveryStatus({
 /** 网页先显示出来、服务端还没确认的用户消息。 */
 export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; onRetry: (clientId: string) => void }) {
   const failed = pending.phase === "failed";
+  const filesGone = failed && pending.failure === "attachments_missing";
   return (
     <article className="mt-5 flex flex-col items-end" data-side="right" data-status={failed ? "send_failed" : "queued"}>
-      <div className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
-        {pending.text}
-      </div>
+      {(pending.text !== "" || pending.attachments.length === 0) && (
+        <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
+          {pending.text}
+        </div>
+      )}
+      <AttachmentList attachments={pending.attachments} />
       <div
         className={cn("mt-1 flex items-center gap-1.5 pr-1 text-xs", failed ? "text-danger" : "text-muted-foreground")}
         data-status={failed ? "failed" : "queued"}
       >
         {failed ? <X className="size-3.5 shrink-0" aria-hidden="true" /> : <Clock className="size-3.5 shrink-0" aria-hidden="true" />}
-        <span>{failed ? "发送失败" : STATUS_LABELS.queued}</span>
-        {failed && (
+        <span>{filesGone ? "文件已不在，请重新添加" : failed ? "发送失败" : STATUS_LABELS.queued}</span>
+        {failed && !filesGone && (
           <button
             type="button"
             className="cursor-pointer font-medium text-primary underline underline-offset-2"

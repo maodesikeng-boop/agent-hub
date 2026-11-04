@@ -119,6 +119,28 @@ describe("postUserMessage", () => {
     expect(changes).toEqual([{ seq: INITIAL_SEQ + 1, type: "message.created", data: { message } }]);
   });
 
+  it("带附件：text 还是用户写的原文，附件记在 meta.attachments 里，推送和 getMessage 里都有", () => {
+    const attachment = { id: "0123456789abcdef", name: "图.png", path: "/data/uploads/0123456789abcdef/图.png", size: 12, mime: "image/png" };
+    const { messageId } = ledger.postUserMessage({ conversationId, clientId: "f1", text: "看这张", attachments: [attachment] });
+    const message = ledger.getMessage(messageId)!;
+    expect(message.text).toBe("看这张");
+    expect(message.meta).toEqual({ attachments: [attachment] });
+    expect(changes.at(-1)).toMatchObject({ type: "message.created", data: { message: { meta: { attachments: [attachment] } } } });
+    expect(ledger.snapshot().conversations.find((c) => c.conversation.id === conversationId)!.messages.at(-1)!.meta).toEqual({ attachments: [attachment] });
+  });
+
+  it("只有文件没有文字：text 是空串，照样入队", () => {
+    const attachment = { id: "0123456789abcdef", name: "a.txt", path: "/data/uploads/0123456789abcdef/a.txt", size: 1, mime: "application/octet-stream" };
+    const { messageId } = ledger.postUserMessage({ conversationId, clientId: "f2", text: "", attachments: [attachment] });
+    expect(ledger.getMessage(messageId)).toMatchObject({ text: "", status: "queued" });
+    expect(listActions(db)).toHaveLength(1);
+  });
+
+  it("空的附件列表和没有附件一样：meta 还是 null", () => {
+    const { messageId } = ledger.postUserMessage({ conversationId, clientId: "f3", text: "hi", attachments: [] });
+    expect(ledger.getMessage(messageId)!.meta).toBeNull();
+  });
+
   it("同一条消息来两次：只有一条消息、一个动作，两次返回同一个编号", () => {
     const a = post("dup");
     const b = post("dup", "文字不同也算重复");
