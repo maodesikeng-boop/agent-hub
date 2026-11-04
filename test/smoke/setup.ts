@@ -1,4 +1,4 @@
-// S15 worktree 准备命令（hub project setup）：真 claude。项目是本仓库的一个本地克隆（有 pnpm-lock.yaml）。
+// S17 worktree 准备命令（hub project setup）：真 claude。项目是本仓库的一个本地克隆（有 pnpm-lock.yaml）。
 // 项目经理配好 `pnpm install --frozen-lockfile --ignore-scripts` 再派 Worker；Worker 不装依赖，直接跑一个测试文件。
 // 看：准备命令跑成功（日志）、Worker 起来时 worktree 里已经有 node_modules、任务说明前面有“已经跑过”那一行、
 // Worker 没敲 install、测试跑了、汇报回到项目经理。
@@ -18,9 +18,9 @@ const TEST_FILE = "src/shared/worker.test.ts";
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 export async function runSetup(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
-  if (!only("S15")) return;
+  if (!only("S17")) return;
   const smoke = await Smoke.boot();
-  const ok = await scenario(outcomes, "S15 准备命令：配好 pnpm install，派 Worker，Worker 不用自己装就能跑测试", async () => {
+  const ok = await scenario(outcomes, "S17 准备命令：配好 pnpm install，派 Worker，Worker 不用自己装就能跑测试", async () => {
     const dir = join(smoke.env.dir, "code", "s15");
     git(REPO_ROOT, "clone", "-q", REPO_ROOT, dir);
     git(dir, "config", "user.name", "smoke");
@@ -67,5 +67,5 @@ export async function runSetup(outcomes: Outcome[], only: (name: string) => bool
     return `准备命令跑了 ${seconds} 秒；Worker 敲的命令 ${JSON.stringify(commands)}；汇报“${line.status}：${line.summary}”`;
   });
   const problems = await smoke.finish(!ok);
-  if (problems.length > 0) outcomes.push({ name: "S15（收尾）", ok: false, detail: problems.join("；") });
+  if (problems.length > 0) outcomes.push({ name: "S17（收尾）", ok: false, detail: problems.join("；") });
 }
