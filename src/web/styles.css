@@ -187,3 +187,34 @@ code {
   border: 0;
   border-top: 1px solid var(--border);
 }
+
+/* 文件预览窗里的代码：每行一个 .line，行号用 CSS 计数（Shiki 的输出和纯文本回退都是这个结构） */
+.code-view {
+  margin: 0;
+  padding: 12px 0;
+  width: max-content;
+  min-width: 100%;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.code-view pre {
+  margin: 0;
+  background: transparent !important;
+}
+.code-view code {
+  display: block;
+  font-size: inherit;
+  white-space: pre;
+  counter-reset: line;
+}
+.code-view .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 4ch;
+  margin-right: 2ch;
+  text-align: right;
+  color: var(--muted-foreground);
+  user-select: none;
+}

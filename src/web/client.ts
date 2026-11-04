@@ -9,6 +9,8 @@ import {
   type CreatePmResponse,
   type EditPersonaRequest,
   type EditPersonaResponse,
+  type FileAction,
+  type FileActionResponse,
   type MessageId,
   type MessagesPage,
   type ModelsResponse,
@@ -152,4 +154,25 @@ export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResp
 export function changeStreamUrl(since: number): string {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   return `${scheme}://${location.host}${API_PATHS.ws}?since=${since}`;
+}
+
+/** 在 Finder 中显示 / 用默认程序打开的对象：agent 发来的文件（哪条消息的第几个）或聊天框上传的附件。 */
+export type FileActionTarget = { kind: "sent"; messageId: MessageId; index: number } | { kind: "upload"; id: string };
+
+export function postFileAction(target: FileActionTarget, action: FileAction): Promise<FileActionResponse> {
+  const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
+  return postJson<FileActionResponse>(path);
+}
+
+/** 预览窗取文件内容：maxBytes 不是 null 时只要前这么多字节（Range；服务端不理 Range 也截到这么多）。 */
+export async function fetchFileBytes(url: string, maxBytes: number | null): Promise<ArrayBuffer> {
+  let res: Response;
+  try {
+    res = await fetch(url, { credentials: "same-origin", ...(maxBytes === null ? {} : { headers: { range: `bytes=0-${maxBytes - 1}` } }) });
+  } catch (err) {
+    throw new ApiError(0, err instanceof Error ? err.message : "网络错误");
+  }
+  if (!res.ok) throw new ApiError(res.status, await failureMessage(res));
+  const bytes = await res.arrayBuffer();
+  return maxBytes === null || bytes.byteLength <= maxBytes ? bytes : bytes.slice(0, maxBytes);
 }

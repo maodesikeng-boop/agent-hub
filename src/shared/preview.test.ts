@@ -1,0 +1,97 @@
+import { describe, expect, it } from "vitest";
+import { canOpenWithDefault, codeLanguageOf, previewKindOf } from "./preview.ts";
+import { sentFileMime } from "./sent-files.ts";
+
+const kind = (name: string) => previewKindOf(name, sentFileMime(name));
+
+describe("previewKindOf：按文件选预览方式", () => {
+  it("各类型对上各自的渲染方式", () => {
+    expect(kind("说明.md")).toBe("markdown");
+    expect(kind("README.markdown")).toBe("markdown");
+    expect(kind("a.ts")).toBe("code");
+    expect(kind("a.PY")).toBe("code");
+    expect(kind("a.json")).toBe("code");
+    expect(kind("a.txt")).toBe("code");
+    expect(kind("run.log")).toBe("code");
+    expect(kind("a.sh")).toBe("code");
+    expect(kind("数据.csv")).toBe("csv");
+    expect(kind("数据.tsv")).toBe("csv");
+    expect(kind("报告.pdf")).toBe("pdf");
+    expect(kind("页面.html")).toBe("html");
+    expect(kind("页面.htm")).toBe("html");
+    expect(kind("a.mp4")).toBe("video");
+    expect(kind("a.mov")).toBe("video");
+    expect(kind("a.webm")).toBe("video");
+    expect(kind("a.mp3")).toBe("audio");
+    expect(kind("a.wav")).toBe("audio");
+    expect(kind("a.png")).toBe("image");
+    expect(kind("a.svg")).toBe("image");
+  });
+
+  it("不认识的类型：other", () => {
+    expect(kind("a.zip")).toBe("other");
+    expect(kind("a.xlsx")).toBe("other");
+    expect(kind("noext")).toBe("other");
+  });
+
+  it("按 mime 优先：mime 是 text/* 的当文本", () => {
+    expect(previewKindOf("weird.xyz", "text/plain")).toBe("code");
+    expect(previewKindOf("a.md", "application/octet-stream")).toBe("code");
+  });
+});
+
+describe("codeLanguageOf", () => {
+  it("扩展名对上语言；纯文本是 text；不认识是 null", () => {
+    expect(codeLanguageOf("a.ts")).toBe("typescript");
+    expect(codeLanguageOf("A.TSX")).toBe("tsx");
+    expect(codeLanguageOf("a.json")).toBe("json");
+    expect(codeLanguageOf("a.txt")).toBe("text");
+    expect(codeLanguageOf("a.md")).toBe("markdown");
+    expect(codeLanguageOf("a.zip")).toBeNull();
+    expect(codeLanguageOf("noext")).toBeNull();
+  });
+});
+
+describe("canOpenWithDefault：能不能用默认程序打开（白名单）", () => {
+  it("文档、图片、音视频、纯文本能开（大小写不论）", () => {
+    for (const name of ["a.txt", "a.md", "a.csv", "a.tsv", "a.json", "a.log", "a.pdf", "a.rtf", "a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.heic"]) {
+      expect(canOpenWithDefault(name), name).toBe(true);
+    }
+    for (const name of ["a.mp4", "a.mov", "a.m4a", "a.mp3", "a.wav", "a.docx", "a.xlsx", "a.pptx", "a.doc", "a.xls", "a.ppt", "a.pages", "a.numbers", "a.key", "a.html", "a.htm"]) {
+      expect(canOpenWithDefault(name), name).toBe(true);
+    }
+    for (const name of ["A.PDF", "报告.Docx", "x.y.PNG"]) expect(canOpenWithDefault(name), name).toBe(true);
+  });
+
+  it("一双击就可能执行的类型不能开：.terminal、.tool、.command、.workflow、.action、.fileloc、.pkg、.mpkg、.app、.prefPane、.scpt、.jar、.sh、.zsh、.bash、.py", () => {
+    for (const name of [
+      "a.terminal",
+      "a.tool",
+      "a.command",
+      "a.workflow",
+      "a.action",
+      "a.fileloc",
+      "a.pkg",
+      "a.mpkg",
+      "a.app",
+      "a.prefPane",
+      "a.scpt",
+      "a.jar",
+      "a.sh",
+      "a.zsh",
+      "a.bash",
+      "a.py",
+      "A.TERMINAL",
+      "x.pdf.command",
+      "a.svg",
+      "a.zip",
+      "a.dmg",
+    ]) {
+      expect(canOpenWithDefault(name), name).toBe(false);
+    }
+  });
+
+  it("没有扩展名、只有点开头的名字、以点结尾：不能开", () => {
+    for (const name of ["noext", "app", "pdf", ".pdf", "a.", ""]) expect(canOpenWithDefault(name), name).toBe(false);
+  });
+});

@@ -262,7 +262,7 @@ export function MessageBubble({
         <span className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你确定</span>
       )}
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={message.text} files={files} />
+        <Markdown text={message.text} files={files} messageId={message.id} />
       </div>
     </AgentRow>
   );

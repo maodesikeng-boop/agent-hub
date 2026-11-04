@@ -233,7 +233,13 @@ describe("发出之后", () => {
     expect(within(mine).getByText("截图.png")).toBeInTheDocument();
     expect(within(mine).getByText("报告.pdf")).toBeInTheDocument();
     expect(within(mine).queryByRole("img", { name: "报告.pdf" })).toBeNull();
-    expect(within(mine).getByRole("link", { name: /报告\.pdf/ })).toHaveAttribute("href", "/api/uploads/0000000000000002/%E6%8A%A5%E5%91%8A.pdf");
+    // 点文件卡片打开预览窗：下载链接指向上传接口，在 Finder 中显示走附件接口
+    await user.click(within(mine).getByRole("button", { name: /报告\.pdf/ }));
+    expect(within(screen.getByRole("dialog", { name: "报告.pdf" })).getByRole("link", { name: /下载/ })).toHaveAttribute(
+      "href",
+      "/api/uploads/0000000000000002/%E6%8A%A5%E5%91%8A.pdf",
+    );
+    expect(screen.getByRole("button", { name: /在 Finder 中显示/ })).toBeInTheDocument();
   });
 
   it("刚发出还没收到服务端推回时，图片也先显示缩略图", async () => {
