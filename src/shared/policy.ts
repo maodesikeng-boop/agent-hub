@@ -8,8 +8,7 @@ import { HUB_COMMAND } from "./names.ts";
 export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
 
 /**
- * 默认档（用户 11-03 定的）：auto，分类器替人审每一步，项目经理和 Worker 一样。不加拒绝规则：
- * 推送、合并、装软件之前先问用户，写在提示词里（prompt.ts 的 ASK_FIRST_RULES），不靠规则拦。
+ * 默认档（用户 11-03 定的）：auto，分类器替人审每一步，项目经理和 Worker 一样。不加拒绝规则（11-04 起提示词里也不写死“先问用户”清单，由 agent 按项目的 AGENTS.md 判断）。
  * 写进设置文件的 permissions.defaultMode，内容进 fingerprint，改了下一条消息前自动重启。
  */
 export const DEFAULT_PERMISSION_MODE = "auto";

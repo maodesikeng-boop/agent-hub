@@ -1,7 +1,7 @@
 // 提示词（设计第 7.2 节）：buildLaunchPrompt 按会话的角色拼 prompt.md。
-// - 项目经理：角色说明、默认做法（模式）、先问用户的事、派 Worker（利弊、验收、合并）、hub 用法（软件定的，agent 改不了）
+// - 项目经理：角色说明、默认做法（模式）、派 Worker、hub 用法（软件定的，agent 改不了）
 //   + 性格设定 + 它的项目和文件夹（11-03 起一个项目经理只管一个项目）+（按情况）“先读 AGENTS.md”；
-// - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、先问用户的事、Worker 的规矩、只有 hub status 的用法。
+// - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、Worker 的规矩、只有 hub status 的用法。
 // 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createLaunchPreparer。命令名、产品名用 shared/names.ts 的。
 //
 // 给 agent 看的话不止这里，改口径时一起看：
@@ -54,54 +54,25 @@ export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
 };
 
 /**
- * 先问用户的事（m3-plan 第 2.1 节，用户 11-03 定的）：不用规则拦，项目经理和 Worker 的提示词里都有。
- * 项目经理直接问用户；Worker 问不了，写进汇报的“问题”（WORKER_RULES）。auto 档默认允许推送，推送前问不问全靠这条。
- */
-export const ASK_FIRST_RULES = `# 先问用户的事
-
-推送（\`git push\`）、合并分支、装软件（\`brew\`、\`npm install -g\` 这类全局安装）、\`sudo\` 之前，先问用户，用户同意了再做。`;
-
-/**
- * 项目经理怎么用 Worker（m3-plan 第 2.3、2.4、2.6、2.7 节）：派活、在哪干活的利弊、汇报和验收、合并和收拾 worktree。
- * 合并、删 worktree 都是项目经理自己用 git 做，守护进程只建 worktree。
+ * 项目经理怎么用 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程）。
+ * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
  */
 export const PM_WORKER_PROMPT = `# 派 Worker
 
 Worker 是你派出去干活的 agent，在自己的会话里干，每干完一轮就把汇报交回给你。
 - 用 \`${HUB} worker start\` 派（用法见下面“系统命令 ${HUB}”）。任务说明要写清目标和验收标准：Worker 看不到你和用户的对话，只有你写的任务说明和项目里的文件。
-- 能自己几句话做完的事就不派。简单的活用 \`--model\` 派便宜的模型（比如 haiku）；不写就用你自己的模型。
 - 只要它看、查、写方案，不改文件的，加 \`--readonly\`。
 - 同时派几个都行，不限数量。
-
-## 在哪干活：worktree 还是主文件夹
-
-主文件夹是 git 仓库、而且至少有一次提交时，默认给 Worker 建一个 git worktree：单独的目录和分支（\`hub/<编号>-<短名>\`），从主文件夹最后一次提交开出来。不是 git 仓库或者还没有提交，Worker 直接在主文件夹里干。你也可以加 \`--no-worktree\` 让它在主文件夹里干。
-
-| | worktree | 主文件夹 |
-|---|---|---|
-| 好处 | 和主文件夹、和别的 Worker 互不干扰；不满意整个扔掉就行；合并前能看清改了什么 | 不用合并；能看到主文件夹里还没提交的改动；不是 git 仓库也能用 |
-| 坏处 | 要合并；看不到主文件夹里没提交的改动；依赖要重新装（比如 \`pnpm install\`） | 两个 Worker、或者 Worker 和你同时改同一个文件，会互相覆盖；改坏了不好退 |
-| 适合 | 改代码，尤其是同时派好几个的时候 | 很小的改动、不是代码的活、只读的调查 |
+- 主文件夹是 git 仓库、而且至少有一次提交时，默认给 Worker 建一个 git worktree：单独的目录和分支（\`hub/<编号>-<短名>\`），从主文件夹最后一次提交开出来。不是 git 仓库或者还没有提交，Worker 直接在主文件夹里干。你也可以加 \`--no-worktree\` 让它在主文件夹里干。
+- 这个项目怎么协作，比如提不提 PR、做什么之前要不要先问用户，看项目的 \`AGENTS.md\`；没写的你自己判断。
 
 ## 汇报和验收
 
 - Worker 每干完一轮，你会收到一条以“【Worker #编号 · 标题 的汇报】”开头的消息，后面是它的汇报原文（状态、摘要、提交、测试、问题）。这一轮出错或者被停止，也会告诉你原因。
-- 收到后自己验收：看改动（Worker 的 worktree 你也能读，比如 \`git -C <worktree 路径> log\`、\`git -C <worktree 路径> diff\`），需要的话跑测试，再把结论告诉用户。
-- 不行就用 \`${HUB} worker send <编号> --stdin\` 打回，写清哪里不对；它在“问题”里问你的，也这样回答。同一个 Worker 接着做，之前做过的都在。
-- 它在“问题”里写了要问用户的事（推送、合并、装软件这类），你去问用户，再把答复转给它。
+- Worker 的 worktree 你也能读，比如 \`git -C <worktree 路径> log\`、\`git -C <worktree 路径> diff\`。
+- 用 \`${HUB} worker send <编号> --stdin\` 可以让它接着改，或者回答它在“问题”里问你的事；同一个 Worker 接着做，之前做过的都在。
 - Worker 不能改记忆文件（\`AGENTS.md\`、\`CLAUDE.md\`、\`.claude/\` 下的东西）。它在“问题”里建议改的，你觉得对，就在主文件夹里自己改。
-- 不要它了，或者活干完了，用 \`${HUB} worker end <编号>\` 收工。
-
-## 合并和收拾 worktree
-
-用户说合并（比如“合并吧”）时，你在主文件夹里自己用 git 做，一次合一个 Worker：
-1. \`git status\` 确认主文件夹是干净的；
-2. \`git merge --no-ff <Worker 的分支>\`（分支名和 worktree 路径见 \`${HUB} worker list\`）；
-3. 有冲突，就自己解决，或者用 \`${HUB} worker send\` 打回给 Worker，让它基于最新的分支更新后再合；
-4. 合并完 \`git worktree remove <worktree 路径>\`，分支留着；
-5. \`${HUB} worker end <编号>\` 收工。
-
-只在本地合并，不推送。在主文件夹里干活的 Worker 没有分支要合，验收完直接收工。`;
+- 不要它了，或者活干完了，用 \`${HUB} worker end <编号>\` 收工。`;
 
 /**
  * hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条，11-03、M3 改过），给项目经理看。命令以 shared/hub.ts 的命令表为准。
@@ -116,9 +87,9 @@ ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Wor
 - \`${HUB} project attach <文件夹路径>\`、\`${HUB} project detach <文件夹路径>\`：给你的项目挂上、移除附加文件夹。主文件夹不能移除。
 - \`${HUB} persona show\`：看自己现在的性格设定和模式。
 - \`${HUB} persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：改自己的做事习惯。用户说“以后都……”这类长期要求时用它记下来。正文是新的完整性格设定（先 \`${HUB} persona show\` 看原文，在原文上改），不是只写新增的那句；只改模式可以不带正文。
-- \`${HUB} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin\`：派一个 Worker，正文是任务说明。回的话里写明它在哪干活。
+- \`${HUB} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin\`：派一个 Worker，正文是任务说明。默认在单独的 git worktree 里干；加 \`--no-worktree\` 则直接在主文件夹里干。回的话里写明它在哪干活。
 - \`${HUB} worker send <编号> --stdin\`：打回，或者回答它的问题，正文是你要对它说的话；同一个 Worker 接着做。
-- \`${HUB} worker end <编号>\`：收工，结束这个 Worker 的会话。worktree 由你自己删（见“合并和收拾 worktree”）。
+- \`${HUB} worker end <编号>\`：收工，结束这个 Worker 的会话。worktree 由你自己删。
 - \`${HUB} worker list\`：你派出去的 Worker，各自的状态、在哪干活（分支、worktree 路径）。
 - 长文本一律用 \`--stdin <<'EOF'\` 传（引号里的 EOF 不能省），短的也可以用 \`--text "<正文>"\`。没写 \`--stdin\` 时 ${HUB} 不读标准输入：
   \`\`\`
@@ -171,12 +142,12 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 /**
- * Worker 的规矩（m3-plan 第 2.1、2.2 节）：问不了用户，要问的写进汇报的“问题”；不能写记忆（唯一的硬限制，
+ * Worker 的规矩（m3-plan 第 2.1、2.2 节）：问不了用户，有问题写进汇报的“问题”；不能写记忆（唯一的硬限制，
  * 规则在 shared/policy.ts 的 WORKER_MEMORY_DENY_RULES，这里是告诉它为什么被拒、该怎么办）。
  */
 export const WORKER_RULES = `# 你的规矩
 
-- 你问不了用户，也不直接和用户说话。碰到上面“先问用户的事”，先别做，写进汇报的“问题”里，由项目经理去问用户；别的拿不准、要项目经理定的事，也写进“问题”。
+- 你问不了用户，也不直接和用户说话。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
 - 记忆文件你不能改：任何位置的 \`AGENTS.md\`、\`CLAUDE.md\`、\`CLAUDE.local.md\` 和 \`.claude/\` 下的东西，还有用户目录下的 \`~/.claude/\`，改了会被系统拒绝。任务需要改的话，在汇报的“问题”里写清楚改哪个文件、改成什么，由项目经理来改。`;
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
@@ -198,7 +169,6 @@ function workerWorkspaceSection(project: ProjectCard, worker: WorkerRecord): str
     lines.push(
       `- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`,
       `- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。`,
-      `- 改完在这个分支上提交（\`git commit\`），提交号写进汇报。合并由项目经理来做。`,
     );
   } else {
     lines.push(
@@ -234,7 +204,6 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
     `# 你的任务\n\n${worker.task.trim()}`,
     workerWorkspaceSection(project, worker),
     workerReportSection(),
-    ASK_FIRST_RULES,
     WORKER_RULES,
     WORKER_HUB_USAGE_PROMPT,
   ];
@@ -248,7 +217,7 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
  */
 export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
-  const parts = [roleSection(ctx), PM_MODE_PROMPTS[ctx.pm.mode], ASK_FIRST_RULES, PM_WORKER_PROMPT, HUB_USAGE_PROMPT];
+  const parts = [roleSection(ctx), PM_MODE_PROMPTS[ctx.pm.mode], PM_WORKER_PROMPT, HUB_USAGE_PROMPT];
   if (ctx.pm.persona.trim() !== "") parts.push(ctx.pm.persona.trim());
   parts.push(projectSection(ctx.project));
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
