@@ -277,6 +277,19 @@ describe("点开 Worker", () => {
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
+  it("31 Worker 准备中：状态行写“准备中”、有停止按钮，停的是 Worker 的对话", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "preparing" })));
+    const status = screen.getByRole("status", { name: "状态" });
+    expect(status).toHaveTextContent("准备中：在跑项目的准备命令");
+    expect(status).toHaveAttribute("data-busy", "true");
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
+  });
+
   it("新消息推来就接在后面", async () => {
     const user = userEvent.setup();
     const ws = await boot();
@@ -490,9 +503,17 @@ describe("右边栏的 Worker 列表", () => {
 
   it("各状态的文字：干活中、停止中、空闲、已收工；不认识的 activity 显示“进行中”", async () => {
     const stopping = makeSession({ sessionId: 3, conversationId: 30, activity: "stopping" });
-    const unknown = makeSession({ sessionId: 4, conversationId: 31, activity: "preparing" as SessionState["activity"] });
+    const unknown = makeSession({ sessionId: 4, conversationId: 31, activity: "bogus" as SessionState["activity"] });
     await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), stopping, unknown, makeSession({ sessionId: 5, conversationId: 32, status: "ended" })] }));
     expect(rows()).toEqual(["修 X停止中", "写文档进行中", "查日志已收工"]);
+  });
+
+  it("准备中（在跑项目的准备命令）：显示“准备中”", async () => {
+    const preparing = makeSession({ sessionId: 3, conversationId: 30, activity: "preparing" });
+    await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), preparing] }));
+    expect(rows()[0]).toBe("修 X准备中");
+    // 和“干活中”一样用主色
+    expect(screen.getByText("准备中")).toHaveClass("text-primary");
   });
 
   it("项目经理的会话里有“收工”那一行也算收工；会话还没有的 Worker 当空闲", async () => {
@@ -616,5 +637,18 @@ describe("selectors", () => {
     expect(runningWorkerCount(state, 1)).toBe(1);
     expect(runningWorkerCount(state, 2)).toBe(1);
     expect(runningWorkerCount(state, 3)).toBe(0);
+  });
+
+  it("31b runningWorkerCount：准备中的 Worker 也算在跑", () => {
+    const state = loaded(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1 }) }),
+        ],
+        sessions: [makeSession({ sessionId: 2, conversationId: 30, activity: "preparing" })],
+      }),
+    );
+    expect(runningWorkerCount(state, 1)).toBe(1);
   });
 });

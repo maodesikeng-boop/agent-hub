@@ -37,9 +37,9 @@ describe("打开存储和迁移", () => {
     const store = openStore(paths);
     try {
       expect(existsSync(join(home, "state", "hub.sqlite"))).toBe(true);
-      expect(store.migration).toEqual({ from: 0, to: 4, applied: [1, 2, 3, 4] });
+      expect(store.migration).toEqual({ from: 0, to: 5, applied: [1, 2, 3, 4, 5] });
       expect(store.db.get<{ journal_mode: string }>("PRAGMA journal_mode")?.journal_mode).toBe("wal");
-      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(4);
+      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(5);
       expect(store.db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys).toBe(1);
       const tables = store.db
         .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -59,9 +59,9 @@ describe("打开存储和迁移", () => {
 
     const second = openStore(paths);
     try {
-      expect(second.migration).toEqual({ from: 4, to: 4, applied: [] });
+      expect(second.migration).toEqual({ from: 5, to: 5, applied: [] });
       expect(schemaDump(second.db)).toEqual(before);
-      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(4);
+      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(5);
     } finally {
       second.db.close();
     }

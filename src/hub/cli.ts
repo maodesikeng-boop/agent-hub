@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
-import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES } from "../shared/limits.ts";
+import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES, SETUP_TIMEOUT_MS } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 
 export interface HubIo {
@@ -37,6 +37,11 @@ export const HUB_USAGE = `用法：
                                                           建项目（一个项目经理只管一个项目）
   ${hub} project attach <文件夹>                             给项目挂上附加文件夹
   ${hub} project detach <文件夹>                             从项目上移除附加文件夹
+  ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
+                                                          给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工。
+                                                          用守护进程的 $SHELL -c 跑，标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
+                                                          能用 AGENT_HUB_ROOT_PATH（主文件夹）、AGENT_HUB_WORKTREE_PATH。
+                                                          别把密钥写进命令：原文会出现在日志和失败附注里
   ${hub} persona show
   ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
   ${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin
@@ -73,6 +78,7 @@ type Options = {
   model?: string;
   readonly?: boolean;
   "no-worktree"?: boolean;
+  clear?: boolean;
   help?: boolean;
 };
 
@@ -83,7 +89,7 @@ interface Parsed {
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "text" | "task";
+  textField?: "text" | "task" | "command";
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
@@ -146,6 +152,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         model: { type: "string" },
         readonly: { type: "boolean" },
         "no-worktree": { type: "boolean" },
+        clear: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -175,6 +182,14 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], `project ${action}`);
     expectPositionals(rest, 1, `project ${action}`);
     return { command: `project.${action}`, body: { folder: expandPath(rest[0] as string, env, cwd) }, textSource: null };
+  }
+  if (group === "project" && action === "setup") {
+    allowOnly(values, ["stdin", "clear"], "project setup");
+    expectPositionals(rest, 0, "project setup");
+    if (values.stdin === true && values.clear === true) throw new UsageError("--stdin 和 --clear 只能用一个");
+    if (values.clear === true) return { command: "project.setup", body: { command: null }, textSource: null };
+    if (values.stdin !== true) throw new UsageError(`${hub} project setup 要 --stdin（准备命令从标准输入读）或 --clear（清除）`);
+    return { command: "project.setup", body: {}, textSource: { kind: "stdin" }, textField: "command" };
   }
   if (group === "persona" && action === "show") {
     allowOnly(values, [], "persona show");

@@ -75,6 +75,7 @@ import type {
   WorkerMessageMeta,
   WorktreeCreateParams,
   WorktreeTask,
+  SetupOutcome,
 } from "./index.ts";
 import {
   CONVERSATION_KINDS,
@@ -457,6 +458,7 @@ describe("M2：agent 接口", () => {
       "project.create",
       "project.attach",
       "project.detach",
+      "project.setup",
       "persona.show",
       "persona.edit",
       "worker.start",
@@ -695,13 +697,17 @@ describe("M3：动作", () => {
   it("账本给处理函数的“要建什么”", () => {
     expectTypeOf<WorktreeTask>().toEqualTypeOf<{
       workerId: number;
+      sessionId: number;
       repo: string;
       branch: string;
       worktreePath: string;
       status: "open" | "ended";
+      setupCommand: string | null;
     }>();
     expectTypeOf<Ledger["getWorktreeTask"]>().toEqualTypeOf<(workerId: number) => WorktreeTask | null>();
-    expectTypeOf<Ledger["onWorktreeCreated"]>().toEqualTypeOf<(workerId: number, baseCommit: string) => void>();
+    expectTypeOf<Ledger["onSetupStarted"]>().toEqualTypeOf<(workerId: number) => boolean>();
+    expectTypeOf<Ledger["waitsForFirstTurn"]>().toEqualTypeOf<(sessionId: number, messageId: number) => boolean>();
+    expectTypeOf<Ledger["onWorktreeCreated"]>().toEqualTypeOf<(workerId: number, baseCommit: string, setup?: SetupOutcome) => void>();
   });
 });
 
@@ -712,6 +718,7 @@ describe("M3：hub 命令按角色放行", () => {
       "project.create": ["pm"],
       "project.attach": ["pm"],
       "project.detach": ["pm"],
+      "project.setup": ["pm"],
       "persona.show": ["pm"],
       "persona.edit": ["pm"],
       "worker.start": ["pm"],

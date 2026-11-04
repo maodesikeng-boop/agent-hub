@@ -57,6 +57,19 @@ export const MAX_UPLOAD_EXTENSION_BYTES = 16;
 /** 存到磁盘上的文件名最多多少字节（UTF-8；APFS、ext4 的单个文件名上限是 255）；超了截断，扩展名尽量留着。 */
 export const MAX_UPLOAD_NAME_BYTES = 120;
 
+// ---- worktree 准备命令（hub project setup，见 src/daemon/setup/setup.ts）----
+
+/** 准备命令（hub project setup --stdin 的正文）最多多大（UTF-8 字节）。 */
+export const MAX_SETUP_COMMAND_BYTES = 16 * 1024;
+/** 准备命令最多跑多久，到点连同所有后代一起强制结束；Worker 照常开工，任务说明前附上“超时”。 */
+export const SETUP_TIMEOUT_MS = 10 * 60_000;
+/** 准备命令没跑成功时，附在任务说明前的输出最多几行（取最后这么多）…… */
+export const SETUP_OUTPUT_TAIL_LINES = 40;
+/** ……最多多少字节。 */
+export const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
+/** 准备命令的日志（state/logs/setup/worker-<编号>.log）每跑一次最多写多少字节，超了写一行“后面省略”，输出照样读完。 */
+export const SETUP_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
 /** 打断：控制消息 5 秒没回应就发 SIGINT。 */
 export const INTERRUPT_GRACE_MS = 5_000;
 /** 启动后 60 秒没有 system/init，结束进程。 */
@@ -80,6 +93,8 @@ export const PS_TIMEOUT_MS = 2_000;
 export const STALE_POLL_MS = 50;
 /** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */
 export const QUEUED_RECHECK_MS = 1_000;
+/** 处理函数：Worker 还没开工（在建 worktree、跑准备命令）或任务说明还没写进去时，发给它的别的消息隔多久再看一次。 */
+export const WORKER_FIRST_TURN_RECHECK_MS = 2_000;
 /** 处理函数：额度用完时最多推迟多久再看一次。 */
 export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;
 /** 处理函数：额度用完、知道恢复时间时，在恢复时间之后多等一会儿再发，免得卡在边界上。 */
@@ -130,6 +145,9 @@ export const ENV_CLAUDE = "AGENT_HUB_CLAUDE";
 export const ENV_PORT = "AGENT_HUB_PORT";
 /** 第一次启动自动建项目经理时用的默认模型（如 claude-haiku-5-5，冒烟测试用）；不设就用 claude 自己的默认。 */
 export const ENV_DEFAULT_MODEL = "AGENT_HUB_DEFAULT_MODEL";
+/** 准备命令里能用的：项目主文件夹（比如 cp "$AGENT_HUB_ROOT_PATH/.env" .）、这个 worktree 的目录。 */
+export const ENV_SETUP_ROOT_PATH = "AGENT_HUB_ROOT_PATH";
+export const ENV_SETUP_WORKTREE_PATH = "AGENT_HUB_WORKTREE_PATH";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
 export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 

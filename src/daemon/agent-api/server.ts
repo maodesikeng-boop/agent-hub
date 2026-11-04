@@ -16,6 +16,7 @@ import {
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
+  MAX_SETUP_COMMAND_BYTES,
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
@@ -77,6 +78,13 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "project.attach": folderOnly,
   "project.detach": folderOnly,
+  // null 是清除（hub project setup --clear）；字节数另查（BYTE_LIMITS），空的、带 NUL 由账本拒
+  "project.setup": {
+    type: "object",
+    additionalProperties: false,
+    required: ["command"],
+    properties: { command: { type: ["string", "null"], maxLength: MAX_SETUP_COMMAND_BYTES } },
+  },
   "persona.show": noArgs,
   "persona.edit": {
     type: "object",
@@ -126,6 +134,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.create": { folder: MAX_PATH_BYTES },
   "project.attach": { folder: MAX_PATH_BYTES },
   "project.detach": { folder: MAX_PATH_BYTES },
+  "project.setup": { command: MAX_SETUP_COMMAND_BYTES },
   "persona.edit": { text: MAX_PERSONA_BYTES },
   "worker.start": { task: MAX_TASK_BYTES },
   "worker.send": { text: MAX_TASK_BYTES },

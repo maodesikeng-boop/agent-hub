@@ -141,7 +141,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       });
     },
     refreshSessionState: sessions.refreshSessionState,
-    recoverAfterRestart: sessions.recoverAfterRestart,
+    // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑）
+    recoverAfterRestart() {
+      const recovered = sessions.recoverAfterRestart();
+      workers.recoverWorktrees();
+      return recovered;
+    },
 
     createPm,
 
@@ -172,6 +177,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     getLaunchContext: launch.getLaunchContext,
     getWorktreeTask: workers.getWorktreeTask,
+    onSetupStarted: workers.onSetupStarted,
+    waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
 
     syncPersonaFiles: persona.syncPersonaFiles,

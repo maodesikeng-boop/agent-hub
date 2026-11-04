@@ -13,6 +13,8 @@ export interface HubPaths {
   launchDir: string;
   logsDir: string;
   sessionLogsDir: string;
+  /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
+  setupLogsDir: string;
   pmHomeDir: string;
   /** state/personas/：性格设定的副本 pm-<编号>.md（见 personaFilePath）。 */
   personasDir: string;
@@ -52,6 +54,7 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     launchDir: join(stateDir, "launch"),
     logsDir,
     sessionLogsDir: join(logsDir, "sessions"),
+    setupLogsDir: join(logsDir, "setup"),
     pmHomeDir: join(home, "pm-home"),
     personasDir: join(stateDir, "personas"),
     runDir: join(home, "run"),
@@ -76,6 +79,11 @@ export function projectWorktreesDir(worktreesDir: string, projectId: number): st
 /** 一个 Worker 的 worktree 目录（WorkerRecord.worktreePath）。 */
 export function workerWorktreePath(worktreesDir: string, projectId: number, workerId: number): string {
   return join(projectWorktreesDir(worktreesDir, projectId), String(workerId));
+}
+
+/** 一个 Worker 的准备命令日志：每跑一次追加一段（重启后重跑也在同一个文件里）。 */
+export function workerSetupLogPath(setupLogsDir: string, workerId: number): string {
+  return join(setupLogsDir, `worker-${workerId}.log`);
 }
 
 /**

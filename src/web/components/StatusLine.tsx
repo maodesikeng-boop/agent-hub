@@ -7,7 +7,7 @@ import { RetryNotice } from "./RetryNotice.tsx";
 
 export type StopPhase = "idle" | "sending" | "requested" | "failed";
 
-/** 消息流底部的一行：agent 在做什么、等额度，以及“停止”。 */
+/** 消息流底部的一行：agent 在做什么、等额度、Worker 准备中（在跑项目的准备命令），以及“停止”。 */
 export function StatusLine({
   agentName,
   session,
@@ -24,7 +24,7 @@ export function StatusLine({
   if (activity === "idle" && !waiting) return null;
   const resetsAt = session?.rateLimit?.resetsAt;
   const stoppable = activity !== "idle";
-  const busy = activity === "working";
+  const busy = activity === "working" || activity === "preparing";
   return (
     <div
       className="flex min-h-11 items-center gap-2.5 rounded-full bg-muted py-1.5 pr-1.5 pl-4 text-[13.5px]"
@@ -41,6 +41,8 @@ export function StatusLine({
           </>
         ) : activity === "stopping" ? (
           "正在停止"
+        ) : activity === "preparing" ? (
+          "准备中：在跑项目的准备命令，跑完开工"
         ) : session?.apiRetry ? (
           <RetryNotice info={session.apiRetry} />
         ) : session?.currentTool ? (

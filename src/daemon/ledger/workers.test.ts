@@ -10,11 +10,12 @@ import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, Wor
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
-import { MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS } from "../../shared/limits.ts";
+import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
+import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
+import { buildLaunchPrompt, SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -424,10 +425,12 @@ describe("建 worktree（worktree.create 处理函数用）", () => {
     const worker = start().data.worker;
     expect(ledger.getWorktreeTask(worker.id)).toEqual({
       workerId: worker.id,
+      sessionId: workerSessionId(worker.id),
       repo: main,
       branch: worker.branch,
       worktreePath: worker.worktreePath,
       status: "open",
+      setupCommand: null,
     });
     expect(ledger.getWorktreeTask(999)).toBeNull();
     expect(ledger.getWorktreeTask(start({ noWorktree: true }).data.worker.id)).toBeNull();
@@ -865,5 +868,260 @@ describe("审查后补的（PR #34）", () => {
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 1, at: now });
     expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended", "report"]);
     expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ summary: "收工前做完的" });
+  });
+});
+
+describe("worktree 准备命令（hub project setup）", () => {
+  const outcome = (over: Partial<SetupOutcome> = {}): SetupOutcome => ({
+    kind: "ok",
+    command: "pnpm install",
+    exitCode: 0,
+    signal: null,
+    error: null,
+    timeoutMs: SETUP_TIMEOUT_MS,
+    durationMs: 23_400,
+    tail: "",
+    logPath: "/data/state/logs/setup/worker-1.log",
+    logError: null,
+    ...over,
+  });
+  const setup = (command: string | null) => hub(lin.sessionId, "project.setup", { command });
+  const activityOf = (workerId: WorkerId) =>
+    ledger.snapshot().sessions.find((s) => s.sessionId === workerSessionId(workerId))!.activity;
+
+  it("24 设置、清除：写进 projects.setup_command，hub_calls 都记；不推变化、不改会话", () => {
+    changes = [];
+    const set = setup("pnpm install --frozen-lockfile --ignore-scripts");
+    expect(set.data.setupCommand).toBe("pnpm install --frozen-lockfile --ignore-scripts");
+    expect(set.text).toContain("已设好");
+    expect(db.get("SELECT setup_command FROM projects WHERE id = ?", projectId)).toEqual({ setup_command: "pnpm install --frozen-lockfile --ignore-scripts" });
+    const cleared = setup(null);
+    expect(cleared.data.setupCommand).toBeNull();
+    expect(cleared.text).toContain("已清除");
+    expect(db.get("SELECT setup_command FROM projects WHERE id = ?", projectId)).toEqual({ setup_command: null });
+    expect(count("hub_calls", "command = 'project.setup' AND ok = 1")).toBe(2);
+    expect(changes).toEqual([]);
+  });
+
+  it("24b 空的、带 NUL、超长 → invalid；没有项目 → not_found；Worker 调 → forbidden；失败的也记 hub_calls", () => {
+    expectLedgerError(() => setup("  \n"), "invalid", /--clear/);
+    expectLedgerError(() => setup("a\0b"), "invalid", /NUL/);
+    expectLedgerError(() => setup("中".repeat(Math.floor(MAX_SETUP_COMMAND_BYTES / 3) + 1)), "invalid", /字节/);
+    expectLedgerError(() => hub(zhou.sessionId, "project.setup", { command: "x" }), "not_found");
+    const worker = start({ noWorktree: true }).data.worker;
+    expectLedgerError(() => hub(workerSessionId(worker.id), "project.setup", { command: "x" }), "forbidden");
+    expect(db.get("SELECT setup_command FROM projects WHERE id = ?", projectId)).toEqual({ setup_command: null });
+    expect(count("hub_calls", "command = 'project.setup' AND ok = 0")).toBe(5);
+  });
+
+  it("25 hub status：显示准备命令，没配说没配", () => {
+    expect(hub(lin.sessionId, "status", {} as never).text).toContain("准备命令：没配");
+    setup("pnpm install");
+    const status = hub(lin.sessionId, "status", {} as never);
+    expect(status.data).toMatchObject({ setupCommand: "pnpm install" });
+    expect(status.text).toContain("pnpm install");
+    // 没有项目：不提准备命令
+    const none = hub(zhou.sessionId, "status", {} as never);
+    expect(none.data).toMatchObject({ project: null, setupCommand: null });
+    expect(none.text).not.toContain("准备命令");
+  });
+
+  it("26 改准备命令：项目经理会话的提示词（指纹的来源）不变，不重启", () => {
+    const before = buildLaunchPrompt(ledger.getLaunchContext(lin.sessionId), main);
+    const row = sessionRow(lin.sessionId);
+    setup("pnpm install");
+    expect(buildLaunchPrompt(ledger.getLaunchContext(lin.sessionId), main)).toBe(before);
+    expect(sessionRow(lin.sessionId)).toEqual(row);
+  });
+
+  it("27 派活回执：配了命令又用 worktree 才有那一句；--no-worktree、没配都没有", () => {
+    repos.add(main);
+    expect(start().text).not.toContain(SETUP_RECEIPT_NOTE);
+    setup("pnpm install");
+    expect(start({ title: "乙" }).text).toContain(SETUP_RECEIPT_NOTE);
+    expect(start({ title: "丙", noWorktree: true }).text).not.toContain(SETUP_RECEIPT_NOTE);
+  });
+
+  it("getWorktreeTask 带着现在的准备命令（跑的那一刻取）", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    expect(ledger.getWorktreeTask(worker.id)!.setupCommand).toBeNull();
+    setup("pnpm install");
+    expect(ledger.getWorktreeTask(worker.id)!.setupCommand).toBe("pnpm install");
+  });
+
+  it("19 onSetupStarted：会话推 session.status preparing；hub worker list 显示“准备中”；跑完回到空闲", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    changes = [];
+    ledger.onSetupStarted(worker.id);
+    expect(changes).toEqual([{ type: "session.status", seq: expect.any(Number), data: { session: expect.objectContaining({ sessionId: workerSessionId(worker.id), activity: "preparing" }) } }]);
+    expect(activityOf(worker.id)).toBe("preparing");
+    expect(hub(lin.sessionId, "worker.list", {}).text).toContain(`#${worker.id} 修 X · 准备中`);
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
+    expect(activityOf(worker.id)).toBe("idle");
+    expect(hub(lin.sessionId, "worker.list", {}).text).toContain(`#${worker.id} 修 X · 进行中`);
+  });
+
+  it("19b onSetupStarted：已收工、已经开工的什么也不做", () => {
+    repos.add(main);
+    const ended = start().data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: ended.id });
+    const started = start({ title: "乙" }).data.worker;
+    ledger.onWorktreeCreated(started.id, "c0ffee");
+    changes = [];
+    ledger.onSetupStarted(ended.id);
+    ledger.onSetupStarted(started.id);
+    expect(changes).toEqual([]);
+  });
+
+  it("19c 准备中点停止：标“正在停”、通知停止的监听者（组装代码接到 setup.cancel）；跑完回到空闲", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    const stops: SessionId[] = [];
+    ledger.onStopRequested(({ sessionId }) => stops.push(sessionId));
+    ledger.requestStop(worker.workerConversationId);
+    expect(stops).toEqual([workerSessionId(worker.id)]);
+    expect(activityOf(worker.id)).toBe("stopping");
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome({ kind: "stopped", exitCode: null }));
+    expect(activityOf(worker.id)).toBe("idle");
+    expect(taskMessage(worker).text).toContain("被用户停止了");
+  });
+
+  it("20 失败：任务说明前面加上原因、命令、输出最后几行和日志，推 message.updated；登记第一轮；workers.task 是原文", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    changes = [];
+    enqueued = [];
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome({ kind: "failed", exitCode: 1, tail: "ERR_PNPM_OUTDATED_LOCKFILE\n第二行" }));
+    const task = taskMessage(worker);
+    expect(task.text.startsWith("【系统】建好 worktree 后跑项目的准备命令没成功（退出码 1，用时 23 秒，日志：/data/state/logs/setup/worker-1.log）")).toBe(true);
+    expect(task.text).toContain("```\npnpm install\n```");
+    expect(task.text).toContain("```\nERR_PNPM_OUTDATED_LOCKFILE\n第二行\n```");
+    expect(task.text.endsWith("下面是任务说明。\n\n把 X 修好，测试要过")).toBe(true);
+    expect(task.status).toBe("queued");
+    expect(changes.filter((c) => c.type === "message.updated")).toEqual([{ type: "message.updated", seq: expect.any(Number), data: { message: task } }]);
+    expect(enqueued.map((a) => a.type)).toEqual(["session.start", "session.send"]);
+    expect(db.get("SELECT task, base_commit FROM workers WHERE id = ?", worker.id)).toEqual({ task: "把 X 修好，测试要过", base_commit: "c0ffee" });
+  });
+
+  it("20b 超时、起不来、被信号结束、日志没写成、没有输出：附注写对原因", () => {
+    const note = (o: SetupOutcome) => setupNote(o);
+    expect(note(outcome({ kind: "timeout", exitCode: null }))).toContain(`超过 ${SETUP_TIMEOUT_MS / 60_000} 分钟没跑完，被中止了`);
+    expect(note(outcome({ kind: "failed", exitCode: null, error: "准备命令起不来：spawn /bin/nope ENOENT" }))).toContain("spawn /bin/nope ENOENT");
+    expect(note(outcome({ kind: "failed", exitCode: null, signal: "SIGKILL" }))).toContain("被信号 SIGKILL 结束了");
+    expect(note(outcome({ kind: "failed", exitCode: 2, logError: "EACCES" }))).toContain("日志没写成：EACCES");
+    expect(note(outcome({ kind: "failed", exitCode: 2, tail: "" }))).toContain("（没有输出）");
+  });
+
+  it("21 成功：任务说明前面只加一行（用时、日志），登记第一轮", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    enqueued = [];
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
+    expect(taskMessage(worker).text).toBe(
+      "【系统】已经在这个 worktree 里跑过项目的准备命令（用时 23 秒，日志：/data/state/logs/setup/worker-1.log）。\n\n把 X 修好，测试要过",
+    );
+    expect(enqueued.map((a) => a.type)).toEqual(["session.start", "session.send"]);
+    // 重复调用（重启恢复撞上）不再加一遍
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
+    expect(taskMessage(worker).text.match(/【系统】/g)).toHaveLength(1);
+  });
+
+  it("22 准备中收工：跑完后 onWorktreeCreated 什么也不做（不登记第一轮、不改任务说明），状态回到空闲", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    enqueued = [];
+    ledger.onWorktreeCreated(worker.id, "c0ffee", outcome({ kind: "stopped", exitCode: null }));
+    expect(enqueued).toEqual([]);
+    expect(taskMessage(worker)).toMatchObject({ text: "把 X 修好，测试要过", status: "stopped" });
+    expect(activityOf(worker.id)).toBe("idle");
+  });
+
+  it("23 重启恢复：只给 open、在 worktree 里、还没开工的重新登记 worktree.create（做完了的那一行重置成 pending）", () => {
+    repos.add(main);
+    const waiting = start({ title: "等着" }).data.worker;
+    const ended = start({ title: "收工了" }).data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: ended.id });
+    const started = start({ title: "开工了" }).data.worker;
+    ledger.onWorktreeCreated(started.id, "c0ffee");
+    start({ title: "主文件夹", noWorktree: true });
+    // 上次运行 worktree.create 都做完了（准备命令在后台跑的时候关机了）
+    db.run("UPDATE actions SET status = 'done' WHERE type = 'worktree.create'");
+    enqueued = [];
+    ledger.recoverAfterRestart();
+    expect(enqueued.filter((a) => a.type === "worktree.create").map((a) => [a.params, a.status])).toEqual([[{ workerId: waiting.id }, "pending"]]);
+    expect(actionsOf("worktree.create").filter((a) => a.status === "pending").map((a) => a.params)).toEqual([{ workerId: waiting.id }]);
+  });
+});
+
+describe("准备命令：审查后补的（PR #47）", () => {
+  const sessionOfWorker = (workerId: WorkerId) => workerSessionId(workerId);
+  const activityOf = (workerId: WorkerId) =>
+    ledger.snapshot().sessions.find((s) => s.sessionId === workerSessionId(workerId))!.activity;
+
+  it("R1 还没开工（准备中）的 Worker：hub worker send 拒绝（conflict，说清楚原因），什么都没写", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    const before = tableCounts();
+    expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }), "conflict", /Worker 还在准备，等它开工后再发/);
+    expect(tableCounts()).toEqual(before);
+    // 开工以后照常能发
+    ledger.onWorktreeCreated(worker.id, "c0ffee");
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.worker.id).toBe(worker.id);
+  });
+
+  it("R1 waitsForFirstTurn：没开工的、任务说明还没写进去时别的消息都要等；任务说明本身、写进去之后、项目经理的会话不等", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    const sessionId = sessionOfWorker(worker.id);
+    const task = taskMessage(worker).id;
+    // 准备中：什么都等（连任务说明也还没到发的时候）
+    expect(ledger.waitsForFirstTurn(sessionId, task)).toBe(true);
+    expect(ledger.waitsForFirstTurn(sessionId, 9_999)).toBe(true);
+    ledger.onWorktreeCreated(worker.id, "c0ffee");
+    const other = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再补一句" }).data.messageId;
+    // 开工了、任务说明还在排队：任务说明先走，别的等它
+    expect(ledger.waitsForFirstTurn(sessionId, task)).toBe(false);
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(true);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [task], at: now });
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(false);
+    expect(ledger.waitsForFirstTurn(lin.sessionId, 1)).toBe(false);
+  });
+
+  it("R1 在主文件夹里干的 Worker：任务说明还在排队时，别的消息也等它", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = sessionOfWorker(worker.id);
+    const other = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再补一句" }).data.messageId;
+    expect(ledger.waitsForFirstTurn(sessionId, taskMessage(worker).id)).toBe(false);
+    expect(ledger.waitsForFirstTurn(sessionId, other)).toBe(true);
+  });
+
+  it("R1 准备中不会被驱动层的事件盖成“干活中”", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    ledger.onSetupStarted(worker.id);
+    const sessionId = sessionOfWorker(worker.id);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t", toolUseId: "t", name: "Bash", input: { command: "ls" }, at: now });
+    expect(activityOf(worker.id)).toBe("preparing");
+  });
+
+  it("R2 onSetupStarted 返回有没有真的进准备中：已收工、已经开工的返回 false", () => {
+    repos.add(main);
+    const worker = start().data.worker;
+    expect(ledger.onSetupStarted(worker.id)).toBe(true);
+    const ended = start({ title: "乙" }).data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: ended.id });
+    expect(ledger.onSetupStarted(ended.id)).toBe(false);
+    const started = start({ title: "丙" }).data.worker;
+    ledger.onWorktreeCreated(started.id, "c0ffee");
+    expect(ledger.onSetupStarted(started.id)).toBe(false);
+    expect(ledger.onSetupStarted(9_999)).toBe(false);
   });
 });

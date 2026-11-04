@@ -38,6 +38,7 @@ export const ENV_HUB_SOCK = "HUB_SOCK";
  * - `hub project create --folder <路径> [--name <名>] [--description <说明>]` → project.create：给自己建项目（只能有一个）
  * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
  * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
+ * - `hub project setup --stdin | --clear`                 → project.setup：设置、清除项目的 worktree 准备命令
  * - `hub persona show`                                   → persona.show
  * - `hub persona edit [--mode <模式>] [--reason <理由>] [--stdin | --text <正文>]` → persona.edit，新全文；可以只改模式
  *
@@ -54,6 +55,7 @@ export const HUB_COMMANDS = [
   "project.create",
   "project.attach",
   "project.detach",
+  "project.setup",
   "persona.show",
   "persona.edit",
   "worker.start",
@@ -72,6 +74,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "project.create": ["pm"],
   "project.attach": ["pm"],
   "project.detach": ["pm"],
+  "project.setup": ["pm"],
   "persona.show": ["pm"],
   "persona.edit": ["pm"],
   "worker.start": ["pm"],
@@ -95,6 +98,12 @@ export interface HubArgsMap {
   "project.create": { folder: string; name?: string; description?: string };
   "project.attach": { folder: string };
   "project.detach": { folder: string };
+  /**
+   * `hub project setup --stdin`（command 是标准输入读到的正文）/ `hub project setup --clear`（command 是 null）：
+   * 项目的 worktree 准备命令，存在 projects.setup_command。给 Worker 建好 worktree 后在里面用 shell 跑它，跑完 Worker 再开工
+   * （daemon/setup/setup.ts）；在主文件夹里干的 Worker 不跑。不超过 MAX_SETUP_COMMAND_BYTES，不能是空的、不能带 NUL。
+   */
+  "project.setup": { command: string | null };
   "persona.show": Record<string, never>;
   /** text：新的完整性格设定（不超过 MAX_PERSONA_BYTES）。text、mode 至少给一个。 */
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
@@ -136,6 +145,8 @@ export interface PmHubStatus {
   conversationId: ConversationId;
   /** 它的项目；还没有是 null。 */
   project: ProjectCard | null;
+  /** 项目的 worktree 准备命令（hub project setup）；没有项目、没配是 null。 */
+  setupCommand: string | null;
 }
 
 /** Worker 调 hub status（M3）：我是哪个 Worker、任务是什么、在哪干活。 */
@@ -157,6 +168,8 @@ export interface HubDataMap {
   "project.create": { project: Project; mainFolder: ProjectFolder };
   "project.attach": { project: Project; folder: ProjectFolder };
   "project.detach": { project: Project; folder: ProjectFolder };
+  /** 改完以后的准备命令，清除了是 null。 */
+  "project.setup": { project: Project; setupCommand: string | null };
   "persona.show": { text: string; mode: PmMode };
   /** change 为 null：内容和模式都没变，什么也没记。 */
   "persona.edit": { change: PersonaChange | null };

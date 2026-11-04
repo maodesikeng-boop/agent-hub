@@ -5,7 +5,8 @@
 //   （HubCallContext.workspace），这里不做 I/O；git 没跑成就拒绝派活，不默默改成主文件夹；
 // - Worker 的会话每一轮结束，在同一个事务里给项目经理的对话发那一行（kind worker），并把全文交给项目经理（session.send）；
 // - Worker 的消息发不出去（session.send 次数用完）也发一行 turn_failed 交给项目经理；
-// - 建 worktree 的两个回调（getWorktreeTask、onWorktreeCreated）和彻底失败（worktree_failed）；
+// - 建 worktree 的回调（getWorktreeTask、onSetupStarted、onWorktreeCreated）和彻底失败（worktree_failed）；
+//   配了准备命令的，跑的时候 Worker 会话显示“准备中”，跑完的结果加在任务说明前面，重启后没开工的重新登记建 worktree；
 // - Worker 会话的启动上下文。
 // 汇报格式、解析、那一行的写法、分支名在 shared/worker.ts；按角色放行的表在 shared/hub.ts；git 在 daemon/git/。
 import { randomUUID } from "node:crypto";
@@ -25,11 +26,12 @@ import type {
 } from "../../shared/domain.ts";
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
-import type { HubCallContext, LaunchContext, WorktreeTask } from "../../shared/ledger.ts";
+import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_MODEL_CHARS, MAX_TASK_BYTES } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { parseWorkerReport, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
+import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { exitFailureReason } from "./messages.ts";
@@ -38,6 +40,7 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import { toConversation, toMessage, toWorkerRecord } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from "./rows.ts";
+import { idle } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
@@ -103,7 +106,7 @@ export function createLedgerWorkers(
   options: { worktreesDir: string },
 ) {
   const { db, now, write, enqueue } = ctx;
-  const { currentSession, insertSession } = sessions;
+  const { currentSession, insertSession, liveOf, updateLive } = sessions;
   const { transition } = messages;
   const { pmRow } = persona;
   const { activeProjectOf, projectCard, syncSessionFolders } = projects;
@@ -204,6 +207,9 @@ export function createLedgerWorkers(
       transition(p, row.id, "stopped");
     }
   };
+
+  /** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
+  const notStarted = (worker: WorkerDbRow) => worker.workspace === "worktree" && worker.base_commit === null;
 
   /** 起 Worker 的会话、把任务说明发给它（主文件夹里干的派活时就做，worktree 的建好了再做）。 */
   const enqueueFirstTurn = (p: Pending, worker: WorkerDbRow) => {
@@ -306,6 +312,7 @@ export function createLedgerWorkers(
     if (workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
     if (readonly) notes.push("。它是只读的，只看不改");
     notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
+    if (workspace === "worktree" && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
     if (workspace === "worktree" && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
     return { text: notes.join(""), data: { worker: toWorkerRecord(worker) } };
   };
@@ -313,6 +320,8 @@ export function createLedgerWorkers(
   const sendIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.send">): HubResult<"worker.send"> => {
     const worker = ownWorker(caller.pmId, args.workerId);
     if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
+    // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
+    if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
     const text = validTask(args.text, "要发给 Worker 的话");
     const message = insertPmMessage(p, worker, workerSession(worker.id), text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
@@ -346,7 +355,8 @@ export function createLedgerWorkers(
     if (rows.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
     const lines = rows.map((w) => {
       const where = w.workspace === "worktree" ? `worktree ${w.worktree_path}（分支 ${w.branch}）` : "主文件夹";
-      return `#${w.id} ${w.title} · ${w.status === "open" ? "进行中" : "已收工"} · ${where}${w.readonly === 1 ? " · 只读" : ""}`;
+      const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
+      return `#${w.id} ${w.title} · ${state} · ${where}${w.readonly === 1 ? " · 只读" : ""}`;
     });
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };
   };
@@ -420,22 +430,85 @@ export function createLedgerWorkers(
     if (worker === null || worker.workspace !== "worktree") return null;
     return {
       workerId,
+      sessionId: workerSession(workerId).id,
       repo: mainFolderOf(worker.project_id),
       branch: worker.branch!,
       worktreePath: worker.worktree_path!,
       status: worker.status as WorktreeTask["status"],
+      setupCommand: projectRow(worker.project_id).setup_command,
     };
   };
 
-  /** base_commit 和第一轮的两个动作在同一个事务里写，所以 base_commit 已经有了就说明做过了，重复调用什么也不做。 */
-  const onWorktreeCreated = (workerId: WorkerId, baseCommit: string) => {
+  /**
+   * 准备命令开始跑：Worker 的会话显示“准备中”（网页的状态行、hub worker list）。返回真的进了准备中没有：
+   * Worker 不在了、已收工（比如建 worktree 的时候收工了）、已经开工的不改，返回 false，调用方就不跑准备命令。
+   */
+  const onSetupStarted = (workerId: WorkerId): boolean =>
     write((p) => {
       const worker = workerRow(workerId);
-      if (worker === null || worker.workspace !== "worktree" || worker.status === "ended" || worker.base_commit !== null) return;
+      if (worker === null || worker.workspace !== "worktree" || worker.status === "ended" || worker.base_commit !== null) return false;
+      updateLive(p, workerSession(workerId).id, (l) => {
+        l.activity = "preparing";
+        l.currentTool = null;
+      });
+      return true;
+    });
+
+  /**
+   * session.send 处理函数问（兜底，不管消息从哪来）：这条消息要不要先等着，免得 Worker 的会话被它提前拉起来、第一轮不是任务说明。
+   * Worker 的会话、Worker 还开着时：还没开工（worktree 没建好、准备命令在跑）→ 什么都等；开工了、任务说明还在排队 → 除了任务说明都等。
+   */
+  const waitsForFirstTurn = (sessionId: SessionId, messageId: MessageId): boolean => {
+    const workerId = db.get<{ worker_id: number | null }>("SELECT worker_id FROM agent_sessions WHERE id = ?", sessionId)?.worker_id ?? null;
+    const worker = workerId === null ? null : workerRow(workerId);
+    if (worker === null || worker.status === "ended") return false;
+    if (notStarted(worker)) return true;
+    const task = db.get<{ id: number; status: string }>("SELECT id, status FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
+    return task !== undefined && task.status === "queued" && task.id !== messageId;
+  };
+
+  /**
+   * base_commit 和第一轮的两个动作在同一个事务里写，所以 base_commit 已经有了就说明做过了，重复调用什么也不做。
+   * setup：准备命令跑完的结果，加在任务说明（Worker 对话里第一条消息）前面，推 message.updated；workers.task 留原文。
+   * 准备中、正在停（网页上点了停止）的状态先回到空闲，收工了也一样。
+   */
+  const onWorktreeCreated = (workerId: WorkerId, baseCommit: string, setup?: SetupOutcome) => {
+    write((p) => {
+      const worker = workerRow(workerId);
+      if (worker === null || worker.workspace !== "worktree" || worker.base_commit !== null) return;
+      // 还没开工，会话没起过：准备中、正在停只可能是准备命令那段留下的
+      const sessionId = workerSession(workerId).id;
+      const activity = liveOf(sessionId).activity;
+      if (activity === "preparing" || activity === "stopping") updateLive(p, sessionId, idle);
+      if (worker.status === "ended") return;
       db.run("UPDATE workers SET base_commit = ?, updated_at = ? WHERE id = ?", baseCommit, now(), workerId);
+      if (setup !== undefined) {
+        const task = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", taskDedupeKey(workerId))!;
+        const row = db.get<MessageDbRow>(
+          "UPDATE messages SET text = ?, updated_at = ? WHERE id = ? RETURNING *",
+          `${setupNote(setup)}\n\n${task.text}`,
+          now(),
+          task.id,
+        )!;
+        p.changes.push({ type: "message.updated", data: { message: toMessage(row) } });
+      }
       enqueueFirstTurn(p, worker);
     });
   };
+
+  /**
+   * 重启恢复（在 recoverAfterRestart 里调）：还没开工的 worktree Worker（open、base_commit 还是 NULL：worktree 没建完，
+   * 或者准备命令被关机打断了）重新登记 worktree.create。done 的那一行按 NewAction 的规则重置成 pending；
+   * addWorktree 重复执行算成功，准备命令从头再跑。返回登记了哪些 Worker。
+   */
+  const recoverWorktrees = (): WorkerId[] =>
+    write((p) => {
+      const ids = db
+        .all<{ id: number }>("SELECT id FROM workers WHERE status = 'open' AND workspace = 'worktree' AND base_commit IS NULL ORDER BY id")
+        .map((r) => r.id);
+      for (const id of ids) enqueue(p, { type: "worktree.create", params: { workerId: id } });
+      return ids;
+    });
 
   /**
    * 动作彻底失败（ledger.onActionFailed，在同一个事务里、messages.ts 改完消息状态之后调）：
@@ -500,7 +573,10 @@ export function createLedgerWorkers(
     status,
     afterDriverEvent,
     getWorktreeTask,
+    onSetupStarted,
+    waitsForFirstTurn,
     onWorktreeCreated,
+    recoverWorktrees,
     actionFailedIn,
     workerStartFolder,
     launchContextFor,

@@ -577,8 +577,11 @@ export interface AgentSessionRow {
   updatedAt: number;
 }
 
-/** 空闲 / 在干活 / 正在停。 */
-export type SessionActivity = "idle" | "working" | "stopping";
+/**
+ * 空闲 / 在干活 / 正在停 / 准备中（Worker 的会话还没起，系统在它的 worktree 里跑项目的准备命令，跑完才开工；
+ * 能停，停了只停准备命令，Worker 照常开工）。
+ */
+export type SessionActivity = "idle" | "working" | "stopping" | "preparing";
 
 /**
  * 网页要显示的会话状态（状态行、停止按钮、等额度）。WebSocket 的 session.status、session.created 推的就是它。

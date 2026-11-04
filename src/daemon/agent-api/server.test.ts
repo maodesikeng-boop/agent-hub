@@ -17,6 +17,7 @@ import {
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
+  MAX_SETUP_COMMAND_BYTES,
   MAX_WORKER_TITLE_CHARS,
   hubPath,
   type HubArgsMap,
@@ -40,6 +41,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "project.create": { folder: "/x", name: "foo", description: "一个项目" },
   "project.attach": { folder: "/y" },
   "project.detach": { folder: "/y" },
+  "project.setup": { command: "pnpm install --frozen-lockfile --ignore-scripts" },
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
   "worker.start": { title: "修 X", task: "把 X 修好，测试要过", model: "claude-haiku-5-5", readonly: true, noWorktree: true },
@@ -384,6 +386,17 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("worker.send", { workerId: 3, text: "" }));
       await expectInvalid(await call("worker.end", {}));
       await expectInvalid(await call("worker.list", { all: true }));
+    });
+
+    it("30 hub project setup：command 可以是多行字符串或 null（清除）；缺、类型不对、超字节 → invalid", async () => {
+      await expectInvalid(await call("project.setup", {}));
+      await expectInvalid(await call("project.setup", { command: 3 }));
+      await expectInvalid(await call("project.setup", { command: "x", clear: true }));
+      await expectInvalid(await call("project.setup", { command: "中".repeat(Math.floor(MAX_SETUP_COMMAND_BYTES / 3) + 1) }));
+      expect((await call("project.setup", { command: "a\n\tb" })).statusCode).toBe(200);
+      expect((await call("project.setup", { command: null })).statusCode).toBe(200);
+      expect((await call("project.setup", { command: "a".repeat(MAX_SETUP_COMMAND_BYTES) })).statusCode).toBe(200);
+      expect(ledger.calls).toHaveLength(3);
     });
 
     it("hub worker：标题太长不拒（账本截断），任务说明可以多行", async () => {
