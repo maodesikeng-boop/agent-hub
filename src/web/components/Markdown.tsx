@@ -6,12 +6,13 @@ import {
   isSentImage,
   linkNodesOf,
   parseLocalHref,
+  FILE_EXPIRED_TEXT,
   sentFileUrl,
   type MdNode,
   type SentFile,
 } from "../../shared/index.ts";
 import { formatBytes } from "../upload.ts";
-import { FileCard } from "./Attachments.tsx";
+import { FileCard, useFileExpired } from "./Attachments.tsx";
 
 /** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或文件卡片。 */
 const SENT_FILE_ATTR = "data-sent-file";
@@ -77,6 +78,17 @@ function useSentFile(props: object): SentFile | undefined {
   return typeof raw === "string" ? files[Number(raw)] : undefined;
 }
 
+/** 内联图片；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图。 */
+function InlineSentImage({ url, alt, file }: { url: string; alt: string; file: SentFile }) {
+  const [expired, markExpired] = useFileExpired(url, false);
+  if (expired) return <FileCard name={file.name} mime={file.mime} detail={FILE_EXPIRED_TEXT} className="my-1.5 w-fit max-w-full" />;
+  return (
+    <a href={url} target="_blank" rel="noreferrer" data-sent-image className="my-1.5 block w-fit max-w-full">
+      <img src={url} alt={alt} loading="lazy" onError={markExpired} className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
+    </a>
+  );
+}
+
 /**
  * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（宽同正文、最高 480px，点开看大图）；
  * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了下载；没存下来的写原因。
@@ -84,13 +96,7 @@ function useSentFile(props: object): SentFile | undefined {
 function SentFileView({ file, inline, alt }: { file: SentFile; inline: boolean; alt?: string }) {
   if (file.status === "saved" && file.id !== null) {
     const url = sentFileUrl({ id: file.id, name: file.name });
-    if (inline && isSentImage(file)) {
-      return (
-        <a href={url} target="_blank" rel="noreferrer" data-sent-image className="my-1.5 block w-fit max-w-full">
-          <img src={url} alt={alt || file.name} loading="lazy" className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
-        </a>
-      );
-    }
+    if (inline && isSentImage(file)) return <InlineSentImage url={url} alt={alt || file.name} file={file} />;
     return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} href={url} className="my-1.5 w-fit max-w-full" />;
   }
   return <FileCard name={file.name} mime={file.mime} detail={SENT_FILE_REASONS[file.status as Exclude<SentFile["status"], "saved">]} className="my-1.5 w-fit max-w-full" />;

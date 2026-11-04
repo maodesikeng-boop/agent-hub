@@ -1,6 +1,6 @@
 // agent 发来的文件：Markdown 里对上 meta.files 的图片内联、链接换成文件卡片；老消息照原样（shared/sent-files.ts、components/Markdown.tsx）。
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { API_PATHS, SENT_FILE_REASONS, type SentFile } from "../shared/index.ts";
 import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
 import { makeMessage } from "./test-utils.ts";
@@ -175,5 +175,42 @@ describe("引用式链接（[a][r] + [r]: 地址）", () => {
   it("指向网址的引用式链接照常", () => {
     agentSays("[文档][d]\n\n[d]: https://example.com/doc", null);
     expect(screen.getByRole("link", { name: "文档" })).toHaveAttribute("href", "https://example.com/doc");
+  });
+});
+
+describe("文件已过期（副本被定期清理）", () => {
+  it("内联图片加载失败：换成“文件已过期”卡片，没有破图", () => {
+    const file = sent({ href: "/tmp/shot.png", name: "shot.png" });
+    const { container } = agentSays("![截图](/tmp/shot.png)", [file]);
+    fireEvent.error(screen.getByRole("img", { name: "截图" }));
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(within(container.querySelector("[data-file-card]") as HTMLElement).getByText("文件已过期")).toBeInTheDocument();
+  });
+
+  it("文件卡片：取文件返回 404 显示“文件已过期”，不再是链接；别的状态照常", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 404 });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const file = sent({ href: "/tmp/a.pdf", name: "a.pdf", mime: "application/pdf" });
+      const { container } = agentSays("[报告](/tmp/a.pdf)", [file]);
+      expect(await screen.findByText("文件已过期")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(API_PATHS.sentFile(file.id!, "a.pdf"), { method: "HEAD" });
+      expect(container.querySelectorAll("a")).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("文件卡片：取文件正常（200）就是普通下载链接", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { container } = agentSays("[报告](/tmp/a.pdf)", [sent({ href: "/tmp/a.pdf", name: "a.pdf", mime: "application/pdf" })]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(screen.queryByText("文件已过期")).toBeNull();
+      expect(container.querySelectorAll("a")).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
