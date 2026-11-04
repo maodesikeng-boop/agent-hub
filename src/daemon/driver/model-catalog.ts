@@ -17,6 +17,7 @@ import {
   bundledModelCatalog,
   checkModel,
   truncateChars,
+  type AgentVendor,
   type CatalogModel,
   type ModelCatalog,
 } from "../../shared/index.ts";
@@ -160,6 +161,8 @@ export interface ModelCatalogsOptions {
 export interface ModelCatalogs {
   /** 每家厂商一份（按 AGENT_VENDORS 的顺序），不会失败。refresh：不管新不新都重新问一次，问完再回。 */
   list(options?: { refresh?: boolean }): Promise<ModelCatalog[]>;
+  /** 现在缓存着的那份（不问 claude、不等），还没问到过是 null。账本写系统消息时用。 */
+  current(vendor: AgentVendor): ModelCatalog | null;
   /** 关机：取消在问的那次，之后不再问。 */
   close(): void;
 }
@@ -218,6 +221,9 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     async list(opts = {}) {
       const claude = await claudeCatalog(opts.refresh === true);
       return AGENT_VENDORS.map((vendor) => (vendor === "claude" ? claude : bundledModelCatalog(vendor)));
+    },
+    current(vendor) {
+      return vendor === "claude" ? cached : null;
     },
     close() {
       closed = true;

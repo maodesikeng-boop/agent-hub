@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import type { ConversationSnapshot, StateSnapshot } from "../../shared/api.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
+import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
@@ -34,6 +35,8 @@ export type SqliteLedger = Ledger;
 
 export interface LedgerOptions {
   now?: () => number;
+  /** 现在缓存着的模型名单（ModelCatalogs.current）：系统消息、hub 输出里的模型名用它的显示名。不给用打包的。 */
+  modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
   initialSeq?: number;
   changeBufferSize?: number;

@@ -234,6 +234,14 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(t.calls).toHaveLength(1);
   });
 
+  it("current：不问 claude，给缓存着的那份；还没问到是 null，问到了是 claude 的", async () => {
+    const t = setup([REAL_MODELS]);
+    expect(t.catalogs.current("claude")).toBeNull();
+    expect(t.calls).toHaveLength(0);
+    await t.catalogs.list();
+    expect(t.catalogs.current("claude")?.models[0]?.label).toBe("Opus 5.5");
+  });
+
   it("同时要好几次：只问一次", async () => {
     const t = setup([REAL_MODELS]);
     t.gate();

@@ -6,6 +6,7 @@ import type { ConversationId, HealthModule, SessionId } from "../../shared/domai
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
+import { modelLabel, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { enqueueAction } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
@@ -57,6 +58,8 @@ export interface LedgerContext {
   write<T>(fn: (p: Pending) => T): T;
   enqueue(p: Pending, action: NewAction): void;
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
+  /** 系统消息、hub 输出里的模型名：用缓存着的模型名单里的名字（“Opus 4.6”），没有名单用打包的，都没有原样。 */
+  modelLabel(vendor: AgentVendor, model: string | null): string;
 }
 
 /** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
@@ -72,6 +75,8 @@ export interface LedgerFiles {
 
 export interface LedgerContextOptions {
   now?: () => number;
+  /** 现在缓存着的模型名单（daemon/driver/model-catalog.ts 的 ModelCatalogs.current），还没问到是 null。 */
+  modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
   initialSeq?: number;
   changeBufferSize?: number;
 }
@@ -145,5 +150,9 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     p.changes.push({ type: "health.updated", data: { health: toHealth(updated) } });
   };
 
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn };
+  const label = (vendor: AgentVendor, model: string | null) => {
+    const catalog = options.modelCatalog?.(vendor) ?? null;
+    return catalog === null ? modelLabel(vendor, model) : modelLabel(vendor, model, catalog);
+  };
+  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label };
 }

@@ -28,7 +28,7 @@ import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES } from "../../shared/limits.ts";
-import { checkEffort, checkModel, effortLabel, modelLabel } from "../../shared/vendors.ts";
+import { checkEffort, checkModel, effortLabel } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -367,7 +367,7 @@ export function createLedgerWorkers(
       const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
       const session = workerSession(w.id);
-      const setting = `模型 ${modelLabel(session.vendor as AgentVendor, session.model)} · 思考程度 ${effortLabel(session.effort)}`;
+      const setting = `模型 ${ctx.modelLabel(session.vendor as AgentVendor, session.model)} · 思考程度 ${effortLabel(session.effort)}`;
       return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;
     });
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };

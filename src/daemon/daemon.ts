@@ -150,7 +150,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const sentFilesDir = realpathSync.native(paths.sentFilesDir);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
+    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时问 claude，在用户主目录下起，不带任何项目的设置；
+    // 账本写系统消息时用它缓存着的显示名
+    const models = createModelCatalogs({
+      queryClaude: (signal) => queryClaudeModels({ claudePath: paths.claudePath, cwd: options.userHome, signal }),
+      log,
+    });
+    parts.models = models;
     const ledger = createLedger(db, {
+      modelCatalog: (vendor) => models.current(vendor),
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
       dataHome: paths.home,
@@ -181,12 +189,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     });
     parts.driver = driver;
-    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时问 claude，在用户主目录下起，不带任何项目的设置
-    const models = createModelCatalogs({
-      queryClaude: (signal) => queryClaudeModels({ claudePath: paths.claudePath, cwd: options.userHome, signal }),
-      log,
-    });
-    parts.models = models;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
 
     // 4. 清掉上次留下的 claude

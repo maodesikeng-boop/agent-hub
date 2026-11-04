@@ -14,7 +14,7 @@
 关掉标准输入它就自己退出。之前会先出几行 `system/hook_started`、`hook_response`（用户的 SessionStart 钩子照常跑），之后还有 `system/commands_changed`，都不用管。
 不认识的 subtype 回 `{"subtype":"error","request_id":"…","error":"Unsupported control request subtype: …"}`。
 
-`response` 里的字段：`commands`、`agents`、`output_style`、`available_output_styles`、`user_output_styles_dir`、**`models`**、`account`（账号信息，我们不读、不存、不转发）、
+`response` 里的字段（账号相关的那一项这里不列，我们不读、不存、不转发）：`commands`、`agents`、`output_style`、`available_output_styles`、`user_output_styles_dir`、**`models`**、
 `pid`、`claude_code_version`、`current_permission_mode`、`feedback_mode`、`analytics_disabled`、`remote_control_*`、`ide_rc_auto_enable_gate`、
 `fast_mode_state`、`fast_mode_disabled_reason`、`session_state`、`capabilities`。
 
