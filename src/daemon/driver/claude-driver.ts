@@ -499,7 +499,8 @@ export class ClaudeDriver implements Driver {
         this.#internalError(st.id, `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`);
       }
       this.#assertRunning();
-      if (st.ended || st.proc !== proc || proc.closing) return;
+      // 等 prepareLaunch 的时候 claude 可能自己开了一轮：消息留在队列里，那一轮的 result 之后 #afterTurn 再发
+      if (st.ended || st.proc !== proc || proc.closing || this.#busy(st)) return;
       const row = files ? this.#row(st) : null;
       if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
         this.#closeStdin(st, proc, "idle");

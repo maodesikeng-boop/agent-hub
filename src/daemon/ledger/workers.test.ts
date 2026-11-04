@@ -1503,21 +1503,29 @@ describe("claude 自己开的一轮（后台任务完成）", () => {
     expect(enqueued.map((a) => (a.params as { messageId: number }).messageId)).toEqual(reports().map((m) => m.id));
   });
 
-  it("同一个 result 重放：只有一行；连着自己开两轮：两行都在（去重键不吞）", () => {
+  it("同一个 result 重放（只重放 turn.ended，没有 turn.started）：不多出一行；连着自己开两轮：两行都在（去重键不吞）", () => {
     runTurn(worker, [taskMessage(worker).id], "在等");
     selfTurn("self-1", "第一次好了");
-    selfTurn("self-1", "第一次好了");
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
     expect(reports()).toHaveLength(2);
     selfTurn("self-2", "第二次好了");
     expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["在等", "第一次好了", "第二次好了"]);
   });
 
-  it("这一轮只有工具调用、没有文字：照样汇报，写“没有文字回复”，不拿上一轮的旧文字", () => {
+  it("没有 turn.started 的游离 turn.ended（没带消息）：不出汇报", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 5, at: now });
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["在等"]);
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "report"]);
+  });
+
+  it("这一轮只有工具调用、没有文字：不给项目经理发汇报（不拿上一轮的旧文字顶替）", () => {
     runTurn(worker, [taskMessage(worker).id], "上一轮的话");
     ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
     ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t1", toolUseId: "tu", name: "Bash", input: { command: "ls" }, at: now });
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
-    expect(reports().at(-1)!.text).toContain("（这一轮没有文字回复）");
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["上一轮的话"]);
   });
 
   it("什么都没做的一轮（没有任何消息）：不发汇报", () => {

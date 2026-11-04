@@ -1,4 +1,6 @@
 // claude 自己开的一轮（后台任务完成通知触发，不是我们写的消息）：驱动层要认成一轮，发 turn.started，结束时发 messageIds 为空的 turn.ended。
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeHarness, type Harness } from "./test-helpers.ts";
 
@@ -68,5 +70,28 @@ describe("claude 自己开的一轮", () => {
     await h.driver.send(s.id, user(2, "再来"));
     await h.waitFor("turn.ended", () => true, 3);
     expect(h.of("turn.ended")[2]).toMatchObject({ messageIds: [2], ok: true });
+  });
+  it("排队的消息等 prepareLaunch 的时候 claude 自己开了一轮：写之前重查忙，消息留在队列里，等这一轮结束才写", async () => {
+    let slow = false;
+    h = makeHarness({
+      script: { turns: [{ steps: [{ text: "在等" }], selfTurn: { steps: [{ sleepMs: 500 }, { text: "后台好了" }], afterMs: 50 } }, { steps: [{ text: "收到" }] }] },
+      driver: {
+        prepareLaunch: async (row) => {
+          if (slow) await new Promise((r) => setTimeout(r, 300));
+          return { promptFile: join(h!.dir, "prompt.md"), env: {}, fingerprint: String(row.id) };
+        },
+      },
+    });
+    writeFileSync(join(h.dir, "prompt.md"), "你是项目经理。");
+    const s = h.addSession();
+    await h.driver.send(s.id, user(1, "开始"));
+    await h.waitFor("turn.ended");
+    slow = true;
+    // prepareLaunch 的 300 毫秒里，假 claude 的自己开的一轮（50 毫秒后）开始了
+    await expect(h.driver.send(s.id, user(2, "再来一句"))).resolves.toEqual({ kind: "queued" });
+    await h.waitFor("turn.ended", () => true, 3);
+    const order = h.events.map((e) => e.event.type + (e.event.type === "turn.ended" ? `:${e.event.messageIds.join()}` : ""));
+    expect(order.indexOf("message.delivered", order.indexOf("turn.started"))).toBeGreaterThan(order.indexOf("turn.ended:"));
+    expect(h.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [], [2]]);
   });
 });

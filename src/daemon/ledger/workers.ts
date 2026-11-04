@@ -474,9 +474,11 @@ export function createLedgerWorkers(
     if (outcome === null) return;
     const worker = workerRow(session.workerId);
     if (worker === null) return;
+    // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
+    if (outcome.turnMessageId === null && !turnStarts.has(session.id)) return;
     const turnStart = Math.max(outcome.turnMessageId ?? 0, turnStarts.get(session.id) ?? 0);
     turnStarts.delete(session.id);
-    // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号（重放同一个 result，agent 消息按 uuid 去重，编号不变，键也不变）；这一轮什么都没做就不汇报
+    // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId =
       outcome.turnMessageId ??
       db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, session.id, turnStart)!.id;
@@ -492,6 +494,8 @@ export function createLedgerWorkers(
       turnStart,
     );
     const text = last?.text ?? "";
+    // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
+    if (outcome.turnMessageId === null && text.trim() === "") return;
     const parsed = parseWorkerReport(text);
     insertLine(p, worker, {
       event: "report",
