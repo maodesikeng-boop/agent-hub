@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PM_PERSONA_TEMPLATE, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { MODEL_NAME_RULE, PM_PERSONA_TEMPLATE, VENDOR_SPECS, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import {
   FakeApi,
@@ -60,6 +60,19 @@ function twoPms(): StateSnapshot {
   });
 }
 
+/** 资料页里的一张卡片（section，aria-label 是标题）。 */
+function cardIn(page: HTMLElement, title: string): HTMLElement {
+  return within(page).getByRole("region", { name: title });
+}
+
+function saveIn(page: HTMLElement, title: string): HTMLElement {
+  return within(cardIn(page, title)).getByRole("button", { name: "保存" });
+}
+
+function optionsOf(select: HTMLElement): string[] {
+  return within(select).getAllByRole("option").map((o) => o.textContent ?? "");
+}
+
 function nav() {
   return screen.getByRole("navigation", { name: "对话列表" });
 }
@@ -111,7 +124,7 @@ describe("新建项目经理", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "  阿明 ");
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", persona: PM_PERSONA_TEMPLATE });
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", vendor: "claude", persona: PM_PERSONA_TEMPLATE });
     // 服务端先把变化推过来，响应随后到
     push(ws, changeOf(11, "pm.created", { pm: makePm({ id: 50, name: "阿明" }) }));
     push(ws, changeOf(12, "conversation.created", { conversation: makeConvSnapshot([], { conversation: { id: 50, pmId: 50, title: "阿明" } }).conversation }));
@@ -132,7 +145,7 @@ describe("新建项目经理", () => {
     expect(screen.getByRole("region", { name: "阿明" })).toBeInTheDocument();
   });
 
-  it("选“自己也干活”、改性格设定、填模型：请求体带上", async () => {
+  it("选“自己也干活”、改性格设定、选模型和思考程度：请求体带上", async () => {
     const user = userEvent.setup();
     await boot();
     await user.click(screen.getByRole("button", { name: "新建项目经理" }));
@@ -140,14 +153,70 @@ describe("新建项目经理", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
     await user.click(within(dialog).getByRole("radio", { name: "自己也干活" }));
     await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
-    await user.type(within(dialog).getByRole("textbox", { name: "模型" }), "opus");
+    // 下拉：厂商只有 Claude Code；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
+    const vendor = within(dialog).getByRole("combobox", { name: "厂商" });
+    const model = within(dialog).getByRole("combobox", { name: "模型" });
+    const effort = within(dialog).getByRole("combobox", { name: "思考程度" });
+    expect(optionsOf(vendor)).toEqual(["Claude Code"]);
+    expect(optionsOf(model)).toEqual(["默认", "Fable", "Opus", "Sonnet", "Haiku", "自定义"]);
+    expect(optionsOf(effort)).toEqual(["默认", "low", "medium", "high", "xhigh", "max"]);
+    expect(model).toHaveDisplayValue("默认");
+    expect(effort).toHaveDisplayValue("默认");
+    await user.selectOptions(model, "Opus");
+    await user.selectOptions(effort, "high");
     const persona = within(dialog).getByRole("textbox", { name: "性格设定" });
     expect(persona).toHaveValue(PM_PERSONA_TEMPLATE);
     await user.clear(persona);
     await user.type(persona, "话少");
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "hands_on", defaultModel: "opus", persona: "话少" });
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({
+      name: "阿明",
+      mode: "hands_on",
+      vendor: "claude",
+      defaultModel: "opus",
+      effort: "high",
+      persona: "话少",
+    });
+  });
+
+  it("模型选“自定义”：出现模型名输入框（光标在里面）；没填不能创建，字符不对提示原因，填对了请求体带完整模型名", async () => {
+    const user = userEvent.setup();
+    await boot();
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+    await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
+    expect(within(dialog).queryByRole("textbox", { name: "模型名" })).not.toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "模型" }), "自定义");
+    const name = within(dialog).getByRole("textbox", { name: "模型名" });
+    expect(name).toHaveFocus();
+    const create = within(dialog).getByRole("button", { name: "创建" });
+    expect(create).toBeDisabled();
+    await user.type(name, "claude opus");
+    expect(within(dialog).getByText(MODEL_NAME_RULE)).toBeInTheDocument();
+    expect(create).toBeDisabled();
+    await user.clear(name);
+    await user.type(name, "claude-opus-5-5");
+    expect(within(dialog).queryByText(MODEL_NAME_RULE)).not.toBeInTheDocument();
+    await user.click(create);
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ vendor: "claude", defaultModel: "claude-opus-5-5" });
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).not.toHaveProperty("effort");
+  });
+
+  it("模型名超过 100 个字：提示，不能创建", async () => {
+    const user = userEvent.setup();
+    await boot();
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+    await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "模型" }), "自定义");
+    await user.click(within(dialog).getByRole("textbox", { name: "模型名" }));
+    await user.paste("m".repeat(101));
+    expect(within(dialog).getByText("模型名最多 100 个字")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "创建" })).toBeDisabled();
   });
 
   it("填了主文件夹：请求体带 folder（去掉首尾空白）；没填就不带", async () => {
@@ -159,7 +228,13 @@ describe("新建项目经理", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "主文件夹（可选）" }), "  ~/code/foo ");
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", persona: PM_PERSONA_TEMPLATE, folder: "~/code/foo" });
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({
+      name: "阿明",
+      mode: "manage_only",
+      vendor: "claude",
+      persona: PM_PERSONA_TEMPLATE,
+      folder: "~/code/foo",
+    });
   });
 
   it("主文件夹不存在（400）：表单里显示原因，不关表单，左栏不多", async () => {
@@ -390,7 +465,7 @@ describe("资料页", () => {
     const page = await pmChat(user);
     const box = await within(page).findByRole("textbox", { name: "性格设定" });
     await waitFor(() => expect(box).toHaveValue("旧"));
-    const save = within(page).getByRole("button", { name: "保存" });
+    const save = saveIn(page, "性格设定");
     expect(save).toBeDisabled();
     expect(within(page).queryByRole("list", { name: "修改记录" })).not.toBeInTheDocument();
     await user.clear(box);
@@ -401,7 +476,7 @@ describe("资料页", () => {
     const log = await within(page).findByRole("list", { name: "修改记录" });
     expect(within(log).getAllByRole("listitem")).toHaveLength(1);
     expect(box).toHaveValue("多用列表");
-    expect(within(page).getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(saveIn(page, "性格设定")).toBeDisabled();
   });
 
   it("只改模式：PUT 只带 mode", async () => {
@@ -409,8 +484,12 @@ describe("资料页", () => {
     await boot();
     const page = await pmChat(user);
     await within(page).findByRole("textbox", { name: "性格设定" });
+    expect(saveIn(page, "工作方式")).toBeDisabled();
     await user.click(within(page).getByRole("radio", { name: "自己也干活" }));
-    await user.click(within(page).getByRole("button", { name: "保存" }));
+    // 别的卡片的保存不受影响
+    expect(saveIn(page, "性格设定")).toBeDisabled();
+    expect(saveIn(page, "Agent")).toBeDisabled();
+    await user.click(saveIn(page, "工作方式"));
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
     expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ mode: "hands_on" });
   });
@@ -422,10 +501,10 @@ describe("资料页", () => {
     const page = await pmChat(user);
     const box = await within(page).findByRole("textbox", { name: "性格设定" });
     await user.type(box, "加一句");
-    await user.click(within(page).getByRole("button", { name: "保存" }));
-    expect(await within(page).findByRole("alert")).toHaveTextContent("性格设定太长");
+    await user.click(saveIn(page, "性格设定"));
+    expect(await within(cardIn(page, "性格设定")).findByRole("alert")).toHaveTextContent("性格设定太长");
     expect(box).toHaveValue(`${makePersonaView().text}加一句`);
-    expect(within(page).getByRole("button", { name: "保存" })).toBeEnabled();
+    expect(saveIn(page, "性格设定")).toBeEnabled();
   });
 
   it("撤销最近一次：发 revert，性格设定改回去，记录多一条；409 显示“只能撤销最近一次”", async () => {
@@ -513,6 +592,172 @@ describe("资料页", () => {
     await user.click(inNav(/阿周/));
     expect(screen.queryByRole("region", { name: "小林 的资料" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
+  });
+});
+
+describe("资料页：Agent 一栏（厂商、模型、思考程度）", () => {
+  const open = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(inNav(/小林/));
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    const page = screen.getByRole("region", { name: "小林 的资料" });
+    await within(page).findByRole("textbox", { name: "性格设定" });
+    return page;
+  };
+  /** 假后端：PUT 按请求体改，返回改完的样子和一条修改记录。 */
+  const serve = (start: Partial<ReturnType<typeof makePersonaView>> = {}) => {
+    let view = makePersonaView({ pmId: 1, ...start });
+    api.getPersona = () => ({ status: 200, body: view });
+    api.putPersona = (_id, body) => {
+      const change = makePersonaChange({
+        id: view.changes.length + 1,
+        textBefore: view.text,
+        textAfter: view.text,
+        modelBefore: view.model,
+        modelAfter: body.model === undefined ? view.model : body.model,
+        effortBefore: view.effort,
+        effortAfter: body.effort === undefined ? view.effort : body.effort,
+      });
+      view = { ...view, model: change.modelAfter, effort: change.effortAfter, changes: [change, ...view.changes], revertableChangeId: change.id };
+      return { status: 200, body: { changed: true, persona: view } };
+    };
+  };
+
+  it("五张卡片：基本信息、Agent、工作方式、性格设定、修改记录；基本信息里是项目和文件夹，没有模型", async () => {
+    const user = userEvent.setup();
+    await boot();
+    const page = await open(user);
+    expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["基本信息", "Agent", "工作方式", "性格设定", "修改记录"]);
+    const basic = cardIn(page, "基本信息");
+    expect(within(basic).getByText("foo")).toBeInTheDocument();
+    expect(within(basic).queryByText("模型")).not.toBeInTheDocument();
+    for (const title of ["基本信息", "Agent", "工作方式", "性格设定", "修改记录"]) {
+      expect(within(cardIn(page, title)).getByRole("heading", { name: title })).toBeInTheDocument();
+    }
+  });
+
+  it("显示现在的设置：别名显示名字，完整模型名显示“自定义”和输入框", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve({ model: "claude-opus-5-5", effort: "xhigh" });
+    const agent = cardIn(await open(user), "Agent");
+    expect(within(agent).getByRole("combobox", { name: "厂商" })).toHaveDisplayValue("Claude Code");
+    expect(within(agent).getByRole("combobox", { name: "模型" })).toHaveDisplayValue("自定义");
+    expect(within(agent).getByRole("textbox", { name: "模型名" })).toHaveValue("claude-opus-5-5");
+    // 打开页面不抢焦点
+    expect(within(agent).getByRole("textbox", { name: "模型名" })).not.toHaveFocus();
+    expect(within(agent).getByRole("combobox", { name: "思考程度" })).toHaveDisplayValue("xhigh");
+    expect(within(agent).getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+
+  it("改成 Haiku + low 保存：PUT 只带改了的两项；保存后下拉是新的值、按钮变灰；修改记录写明改了什么", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve();
+    const page = await open(user);
+    const agent = cardIn(page, "Agent");
+    const save = within(agent).getByRole("button", { name: "保存" });
+    expect(save).toBeDisabled();
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "Haiku");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "思考程度" }), "low");
+    expect(save).toBeEnabled();
+    // 改回原样：又不能保存
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "思考程度" }), "默认");
+    expect(save).toBeEnabled();
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "默认");
+    expect(save).toBeDisabled();
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "Haiku");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "思考程度" }), "low");
+    await user.click(save);
+    await waitFor(() => expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: "haiku", effort: "low" });
+    const log = await within(page).findByRole("list", { name: "修改记录" });
+    expect(within(log).getAllByRole("listitem")[0]).toHaveTextContent("你 模型改成Haiku，思考程度改成low");
+    expect(within(agent).getByRole("combobox", { name: "模型" })).toHaveDisplayValue("Haiku");
+    expect(within(agent).getByRole("combobox", { name: "思考程度" })).toHaveDisplayValue("low");
+    expect(within(agent).getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+
+  it("改回默认：PUT 带 null", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve({ model: "haiku", effort: "low" });
+    const agent = cardIn(await open(user), "Agent");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "默认");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "思考程度" }), "默认");
+    await user.click(within(agent).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: null, effort: null });
+  });
+
+  it("自定义：选了之后光标在模型名里；没填或字符不对不能保存（字符不对有提示）；填对了 PUT 带完整模型名", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve();
+    const agent = cardIn(await open(user), "Agent");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "自定义");
+    const name = within(agent).getByRole("textbox", { name: "模型名" });
+    expect(name).toHaveFocus();
+    expect(name).toHaveAttribute("placeholder", VENDOR_SPECS.claude.customModelExample);
+    const save = within(agent).getByRole("button", { name: "保存" });
+    expect(save).toBeDisabled();
+    await user.type(name, "-p");
+    expect(within(agent).getByText(MODEL_NAME_RULE)).toBeInTheDocument();
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(save).toBeDisabled();
+    await user.clear(name);
+    await user.paste("claude-sonnet-5-5[1m]");
+    expect(within(agent).queryByText(MODEL_NAME_RULE)).not.toBeInTheDocument();
+    await user.click(save);
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: "claude-sonnet-5-5[1m]" });
+  });
+
+  it("保存失败：Agent 卡片里显示原因，选的值还在，可以再保存；别的卡片不显示", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.putPersona = () => ({ status: 400, body: { error: "思考程度只能是 low、medium、high、xhigh、max", code: "invalid" } });
+    const page = await open(user);
+    const agent = cardIn(page, "Agent");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "思考程度" }), "max");
+    await user.click(within(agent).getByRole("button", { name: "保存" }));
+    expect(await within(agent).findByRole("alert")).toHaveTextContent("思考程度只能是 low、medium、high、xhigh、max");
+    expect(within(agent).getByRole("combobox", { name: "思考程度" })).toHaveDisplayValue("max");
+    expect(within(agent).getByRole("button", { name: "保存" })).toBeEnabled();
+    expect(within(cardIn(page, "性格设定")).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("网络断了：Agent 卡片里提示，可以再保存", async () => {
+    const user = userEvent.setup();
+    await boot();
+    const agent = cardIn(await open(user), "Agent");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "Opus");
+    api.fetch.mockImplementationOnce(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await user.click(within(agent).getByRole("button", { name: "保存" }));
+    expect(await within(agent).findByRole("alert")).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
+  it("请求在路上时：下拉和各个保存按钮都不能点", async () => {
+    const user = userEvent.setup();
+    await boot();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    api.putPersona = async (_id, body) => {
+      await gate;
+      return { status: 200, body: { changed: true, persona: makePersonaView({ pmId: 1, model: body.model ?? null }) } };
+    };
+    const page = await open(user);
+    const agent = cardIn(page, "Agent");
+    await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "Opus");
+    await user.click(within(agent).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(within(agent).getByRole("combobox", { name: "模型" })).toBeDisabled());
+    expect(within(agent).getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(saveIn(page, "工作方式")).toBeDisabled();
+    release();
+    await waitFor(() => expect(within(agent).getByRole("combobox", { name: "模型" })).toBeEnabled());
+    expect(within(agent).getByRole("combobox", { name: "模型" })).toHaveDisplayValue("Opus");
   });
 });
 

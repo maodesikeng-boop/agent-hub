@@ -244,6 +244,10 @@ export class Client {
     });
   }
 
+  async putJson(path: string, body: unknown): Promise<Response> {
+    return fetch(this.base + path, { method: "PUT", headers: this.headers({ "content-type": "application/json" }), body: JSON.stringify(body) });
+  }
+
   async createPm(input: CreatePmRequest): Promise<CreatePmResponse> {
     const res = await this.postJson(API_PATHS.pms, input);
     if (res.status !== 201) throw new Error(`POST /api/pms: ${res.status} ${await res.text()}`);

@@ -2,6 +2,7 @@
 // 不用 enum（erasableSyntaxOnly）：取值用 `as const` 数组，类型从数组推出来。
 
 import { MAX_NAME_CHARS, MAX_WORKER_TITLE_CHARS } from "./limits.ts";
+import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
 
 export type PmId = number;
@@ -141,7 +142,12 @@ export interface Pm {
   name: string;
   avatarFile: string | null;
   mode: PmMode;
+  /** 用哪家的 agent（厂商清单 vendors.ts）。 */
+  vendor: AgentVendor;
+  /** 项目经理的模型，null = 默认（不传 --model）。Worker 不给 --model 时也用它。 */
   defaultModel: string | null;
+  /** 思考程度，null = 默认（不传 --effort）。Worker 不给 --effort 时也用它。 */
+  effort: string | null;
   /**
    * 性格设定文件 personas/pm-<编号>.md（位置一律用 paths.ts 的 personaFilePath 算）。只是给人看、给人手改的副本：
    * 正文以数据库 pms.persona 为准（见 ledger.ts 的 getPersona）。同步规则见 Ledger.syncPersonaFiles。
@@ -240,6 +246,8 @@ export interface WorkerRecord {
   task: string;
   /** --model 给的；null = 用项目经理自己的模型。 */
   model: string | null;
+  /** --effort 给的；null = 用项目经理自己的思考程度。 */
+  effort: string | null;
   /** --readonly：Worker 只看不改（policy.ts 的 READONLY_PERMISSION_MODE）。打回、重启都沿用。 */
   readonly: boolean;
   workspace: WorkerWorkspace;
@@ -273,6 +281,13 @@ export interface PersonaChange {
   textAfter: string;
   modeBefore: PmMode;
   modeAfter: PmMode;
+  /** 厂商、模型、思考程度的前后两份（资料页的 Agent 一栏；撤销时一起改回去）。0006 之前的老记录前后都是升级时的值。 */
+  vendorBefore: AgentVendor;
+  vendorAfter: AgentVendor;
+  modelBefore: string | null;
+  modelAfter: string | null;
+  effortBefore: string | null;
+  effortAfter: string | null;
   /** 改的理由（hub persona edit --reason、界面的说明），没有就是 null。 */
   reason: string | null;
   /** 这一条是撤销哪一条；不是撤销就是 null。 */
@@ -566,7 +581,9 @@ export interface AgentSessionRow {
   addDirs: string[];
   /** 开新会话加一；和会话 ID 一起做“启动或恢复会话”动作的去重键。 */
   generation: number;
+  /** 模型、思考程度：null = 默认（不传参数）。项目经理的会话跟着资料页改，变了下一条消息前 --resume 重启。 */
   model: string | null;
+  effort: string | null;
   pid: number | null;
   status: SessionStatus;
   /** 是否跑完过一轮：决定下次用 --session-id 还是 --resume。 */

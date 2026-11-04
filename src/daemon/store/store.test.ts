@@ -28,6 +28,13 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+/** migrations/ 下所有迁移的编号，从小到大。 */
+const ALL_VERSIONS = readdirSync(new URL("../../../migrations/", import.meta.url))
+  .flatMap((name) => /^(\d+)_.*\.sql$/.exec(name)?.[1] ?? [])
+  .map(Number)
+  .sort((a, b) => a - b);
+const LATEST = ALL_VERSIONS.at(-1)!;
+
 function schemaDump(db: Db): unknown[] {
   return db.all("SELECT type, name, sql FROM sqlite_master ORDER BY name");
 }
@@ -37,9 +44,9 @@ describe("打开存储和迁移", () => {
     const store = openStore(paths);
     try {
       expect(existsSync(join(home, "state", "hub.sqlite"))).toBe(true);
-      expect(store.migration).toEqual({ from: 0, to: 5, applied: [1, 2, 3, 4, 5] });
+      expect(store.migration).toEqual({ from: 0, to: LATEST, applied: ALL_VERSIONS });
       expect(store.db.get<{ journal_mode: string }>("PRAGMA journal_mode")?.journal_mode).toBe("wal");
-      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(5);
+      expect(store.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(LATEST);
       expect(store.db.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys).toBe(1);
       const tables = store.db
         .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -59,9 +66,9 @@ describe("打开存储和迁移", () => {
 
     const second = openStore(paths);
     try {
-      expect(second.migration).toEqual({ from: 5, to: 5, applied: [] });
+      expect(second.migration).toEqual({ from: LATEST, to: LATEST, applied: [] });
       expect(schemaDump(second.db)).toEqual(before);
-      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(5);
+      expect(second.db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(LATEST);
     } finally {
       second.db.close();
     }

@@ -31,7 +31,9 @@ export function makePm(over: Partial<Pm> = {}): Pm {
     name: "项目经理",
     avatarFile: null,
     mode: "manage_only",
+    vendor: "claude",
     defaultModel: null,
+    effort: null,
     personaFile: null,
     createdAt: 1_000,
     ...over,
@@ -160,6 +162,12 @@ export function makePersonaChange(over: Partial<PersonaChange> = {}): PersonaCha
     textAfter: "新设定",
     modeBefore: "manage_only",
     modeAfter: "manage_only",
+    vendorBefore: "claude",
+    vendorAfter: "claude",
+    modelBefore: null,
+    modelAfter: null,
+    effortBefore: null,
+    effortAfter: null,
     reason: null,
     revertOf: null,
     createdAt: 20_000,
@@ -168,7 +176,17 @@ export function makePersonaChange(over: Partial<PersonaChange> = {}): PersonaCha
 }
 
 export function makePersonaView(over: Partial<PersonaView> = {}): PersonaView {
-  return { pmId: 1, text: "# 性格设定\n\n说大白话", mode: "manage_only", changes: [], revertableChangeId: null, ...over };
+  return {
+    pmId: 1,
+    text: "# 性格设定\n\n说大白话",
+    mode: "manage_only",
+    vendor: "claude",
+    model: null,
+    effort: null,
+    changes: [],
+    revertableChangeId: null,
+    ...over,
+  };
 }
 
 export function makeSession(over: Partial<SessionState> = {}): SessionState {

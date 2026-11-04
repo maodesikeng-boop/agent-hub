@@ -27,7 +27,9 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { MAX_MODEL_CHARS, MAX_TASK_BYTES } from "../../shared/limits.ts";
+import { MAX_TASK_BYTES } from "../../shared/limits.ts";
+import { checkEffort, checkModel, effortLabel, modelLabel } from "../../shared/vendors.ts";
+import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { parseWorkerReport, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
@@ -236,8 +238,12 @@ export function createLedgerWorkers(
     const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     const task = validTask(args.task, "任务说明");
+    // 模型、思考程度按项目经理那家的清单查；不给就用项目经理会话现在的（资料页改过的话是改过的）
+    const vendor = caller.vendor as AgentVendor;
     const model = typeof args.model === "string" ? args.model.trim() || null : null;
-    if (model !== null && [...model].length > MAX_MODEL_CHARS) throw fail("invalid", `模型名最多 ${MAX_MODEL_CHARS} 个字`);
+    const effort = typeof args.effort === "string" ? args.effort.trim() || null : null;
+    const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, effort);
+    if (badSetting !== null) throw fail("invalid", badSetting);
     const readonly = args.readonly === true;
     const card = projectCard(project);
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
@@ -262,9 +268,9 @@ export function createLedgerWorkers(
     p.changes.push({ type: "conversation.created", data: { conversation } });
     // 编号要先有才能定分支和目录：worktree 的先占个空串（满足 CHECK），马上改成真的
     const id = db.run(
-      `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, readonly, workspace,
+      `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, effort, readonly, workspace,
                             branch, worktree_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       project.id,
       caller.pmId,
       project.conversation_id,
@@ -272,6 +278,7 @@ export function createLedgerWorkers(
       title,
       task,
       model,
+      effort,
       readonly ? 1 : 0,
       workspace,
       workspace === "worktree" ? "" : null,
@@ -296,7 +303,9 @@ export function createLedgerWorkers(
       cwd: worker.worktree_path ?? card.mainFolder,
       addDirs: workspace === "worktree" ? [] : card.otherFolders,
       generation: 1,
+      vendor,
       model: model ?? caller.model,
+      effort: effort ?? caller.effort,
     });
     insertPmMessage(p, worker, session, task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
@@ -356,7 +365,10 @@ export function createLedgerWorkers(
     const lines = rows.map((w) => {
       const where = w.workspace === "worktree" ? `worktree ${w.worktree_path}（分支 ${w.branch}）` : "主文件夹";
       const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
-      return `#${w.id} ${w.title} · ${state} · ${where}${w.readonly === 1 ? " · 只读" : ""}`;
+      // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
+      const session = workerSession(w.id);
+      const setting = `模型 ${modelLabel(session.vendor as AgentVendor, session.model)} · 思考程度 ${effortLabel(session.effort)}`;
+      return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;
     });
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };
   };

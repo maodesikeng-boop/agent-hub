@@ -163,7 +163,7 @@ describe("提示词：项目经理（M3）", () => {
 
   it("hub 用法有 hub worker 的四个命令，和 shared/hub.ts 的命令表对得上", () => {
     for (const sub of [
-      `${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin`,
+      `${hub} worker start --title <标题> [--model <模型>] [--effort low|medium|high|xhigh|max] [--readonly] [--no-worktree] --stdin`,
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,

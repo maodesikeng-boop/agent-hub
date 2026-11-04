@@ -150,6 +150,24 @@ describe("hub cli", () => {
       ]);
     });
 
+    it("worker start --effort sends the level; any level from the vendor list is accepted", async () => {
+      for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+        expect((await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      }
+      expect(ledger.calls.map((c) => c.args)).toEqual(
+        ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
+      );
+    });
+
+    it("worker start --effort with a level not in the list is a usage error", async () => {
+      for (const level of ["ultra", "LOW", ""]) {
+        const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
+        expect(r.code).toBe(HUB_EXIT.usage);
+        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max");
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("worker start without the optional flags sends only title and task", async () => {
       expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       expect(ledger.calls[0]?.args).toEqual({ title: "修 X", task: "任务" });
@@ -200,7 +218,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`]) {
+      for (const usage of [`${cmd} worker start --title`, "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`]) {
         expect(r.stdout).toContain(usage);
       }
     });

@@ -15,6 +15,7 @@ import type {
   SessionState,
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
+import type { AgentVendor } from "./vendors.ts";
 
 export const API_PATHS = {
   /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
@@ -103,12 +104,15 @@ export interface ApiErrorBody {
 
 /**
  * POST /api/pms。name 按 normalizeName；persona 不超过 MAX_PERSONA_BYTES；defaultModel 空串或不给 = 用 claude 自己的默认。
+ * vendor、defaultModel、effort 的取值见厂商清单 vendors.ts，不对 → 400 带原因。
  * folder：主文件夹（用户填的路径，可以带 ~，服务端解析成真实路径），可选；给了就同时建好项目，不存在等不对 → 400 带原因。
  */
 export interface CreatePmRequest {
   name: string;
   mode: PmMode;
+  vendor?: AgentVendor;
   defaultModel?: string | null;
+  effort?: string | null;
   persona: string;
   folder?: string;
 }
@@ -122,10 +126,13 @@ export interface CreatePmResponse {
 /** GET /api/pms/:id/persona 的响应就是账本的 PersonaView。 */
 export type PersonaResponse = PersonaView;
 
-/** PUT /api/pms/:id/persona。text、mode 至少给一个。 */
+/** PUT /api/pms/:id/persona。至少给一个字段（reason 不算）；model、effort 给 null 是改回默认。 */
 export interface EditPersonaRequest {
   text?: string;
   mode?: PmMode;
+  vendor?: AgentVendor;
+  model?: string | null;
+  effort?: string | null;
   reason?: string;
 }
 

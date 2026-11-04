@@ -344,7 +344,9 @@ describe("GET /api/state 和 /messages?before=", () => {
   it("/api/state 返回账本的快照", async () => {
     ledger.snapshotValue = {
       seq: 0,
-      pms: [{ id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", defaultModel: null, personaFile: null, createdAt: 1 }],
+      pms: [
+        { id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 },
+      ],
       projects: [],
       folders: [],
       conversations: [],
@@ -668,6 +670,15 @@ describe("POST /api/pms 建项目经理", () => {
     expect(res.json()).toEqual({ error: "文件夹不存在，请先建好：/x", code: "invalid" });
   });
 
+  it("厂商、思考程度：给了原样交给账本，effort 可以是 null", async () => {
+    const bodies = [
+      { ...NEW_PM, vendor: "claude", effort: "low" },
+      { ...NEW_PM, effort: null },
+    ];
+    for (const body of bodies) expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
+    expect(ledger.createdPms).toEqual(bodies);
+  });
+
   it("defaultModel 不给、给 null、给空串都放行，原样交给账本", async () => {
     const { defaultModel: _omit, ...withoutModel } = NEW_PM;
     for (const body of [withoutModel, { ...NEW_PM, defaultModel: null }, { ...NEW_PM, defaultModel: "" }]) {
@@ -706,6 +717,8 @@ describe("POST /api/pms 建项目经理", () => {
     ["没给性格设定", { name: "阿周", mode: "hands_on" }],
     ["模型名超过 100 个字符", { ...NEW_PM, defaultModel: "m".repeat(MAX_MODEL_CHARS + 1) }],
     ["模型名不是字符串", { ...NEW_PM, defaultModel: 3 }],
+    ["厂商不在清单里", { ...NEW_PM, vendor: "codex" }],
+    ["思考程度不是字符串", { ...NEW_PM, effort: 1 }],
     ["路径是空串", { ...NEW_PM, folder: "" }],
     ["路径全是空白", { ...NEW_PM, folder: "  " }],
     ["路径超过 4096 字节", { ...NEW_PM, folder: "/".padEnd(MAX_PATH_BYTES + 1, "a") }],
@@ -770,6 +783,19 @@ describe("性格设定 GET、PUT /api/pms/:id/persona 和 POST /api/persona-chan
     expect(ledger.personaEdits.map((e) => e.input)).toEqual([{ text: "x" }, { mode: "hands_on" }, { text: "" }]);
   });
 
+  it("PUT：厂商、模型、思考程度原样交给账本；model、effort 给 null 是改回默认", async () => {
+    const bodies = [{ vendor: "claude", model: "haiku", effort: "low" }, { model: null }, { effort: null }, { model: "claude-opus-5-5", effort: "max" }];
+    for (const body of bodies) expect((await call("PUT", "/api/pms/3/persona", { body })).statusCode).toBe(200);
+    expect(ledger.personaEdits.map((e) => e.input)).toEqual(bodies);
+  });
+
+  it("PUT：账本说值不对（比如思考程度不在清单里）→ 400，原因原样给网页", async () => {
+    ledger.failWith = new LedgerRequestError("invalid", "思考程度只能是 low、medium、high、xhigh、max");
+    const res = await call("PUT", "/api/pms/3/persona", { body: { effort: "low" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "思考程度只能是 low、medium、high、xhigh、max", code: "invalid" });
+  });
+
   it("PUT：账本说没改动（change 为 null）→ changed 是 false", async () => {
     ledger.personaChange = null;
     const res = await call("PUT", "/api/pms/3/persona", { body: { text: "一样的" } });
@@ -790,6 +816,11 @@ describe("性格设定 GET、PUT /api/pms/:id/persona 和 POST /api/persona-chan
     ["text 是 null", { text: null }],
     ["mode 不对", { mode: "foo" }],
     ["mode 不是字符串", { mode: 1 }],
+    ["vendor 不在清单里", { vendor: "codex" }],
+    ["vendor 是 null", { vendor: null }],
+    ["model 超过 100 个字符", { model: "m".repeat(MAX_MODEL_CHARS + 1) }],
+    ["model 不是字符串", { model: 3 }],
+    ["effort 不是字符串", { effort: true }],
     ["reason 超过 500 个字符", { text: "x", reason: "理".repeat(MAX_REASON_CHARS + 1) }],
     ["reason 不是字符串", { text: "x", reason: 1 }],
     ["多余字段", { text: "x", pmId: 2 }],

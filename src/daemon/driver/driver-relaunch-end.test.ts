@@ -191,6 +191,7 @@ describe("两轮之间重启", () => {
   it.each([
     ["addDirs", (t: Harness, id: number) => t.store.set(id, { addDirs: ["/tmp/agent-hub-extra"] }), ["--add-dir", "/tmp/agent-hub-extra"]],
     ["model", (t: Harness, id: number) => t.store.set(id, { model: "opus" }), ["--model", "opus"]],
+    ["effort", (t: Harness, id: number) => t.store.set(id, { effort: "low" }), ["--effort", "low"]],
   ] as const)("会话那一行的 %s 变了：也重启，新参数带上", async (_name, change, expected) => {
     const t = harness();
     const s = t.addSession();
@@ -203,6 +204,28 @@ describe("两轮之间重启", () => {
     const argv = t.argvs()[1]!;
     expect(argv[argv.indexOf(expected[0]) + 1]).toBe(expected[1]);
     expect(t.stdinTexts()[1]).toBe(`${RELAUNCH_NOTE}\n\n二`);
+  });
+
+  it("资料页把模型、思考程度改成 haiku + low，再改回默认：每次都 --resume 同一个会话重启；默认的不传参数", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    t.store.set(s.id, { model: "haiku", effort: "low" });
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    t.store.set(s.id, { model: null, effort: null });
+    await t.driver.send(s.id, user(3, "三"));
+    await t.waitFor("turn.ended", undefined, 3);
+    const [first, second, third] = t.argvs();
+    expect(pids(t)).toHaveLength(3);
+    expect(first).not.toContain("--model");
+    expect(first).not.toContain("--effort");
+    expect(second!.slice(7, 13)).toEqual(["--resume", s.vendorSessionId, "--model", "haiku", "--effort", "low"]);
+    expect(third!.slice(7, 9)).toEqual(["--resume", s.vendorSessionId]);
+    expect(third).not.toContain("--model");
+    expect(third).not.toContain("--effort");
+    expect(t.stdinTexts()).toEqual(["一", `${RELAUNCH_NOTE}\n\n二`, `${RELAUNCH_NOTE}\n\n三`]);
   });
 
   it("会话那一行的 cwd 变了：也重启，新进程在新目录里", async () => {

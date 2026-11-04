@@ -9,6 +9,7 @@ import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
 import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES, SETUP_TIMEOUT_MS } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
+import { ALL_EFFORTS } from "../shared/vendors.ts";
 
 export interface HubIo {
   argv: string[];
@@ -44,11 +45,11 @@ export const HUB_USAGE = `用法：
                                                           别把密钥写进命令：原文会出现在日志和失败附注里
   ${hub} persona show
   ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
-  ${hub} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin
+  ${hub} worker start --title <标题> [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
                                                           派一个 Worker，任务说明从标准输入读
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
-  ${hub} worker list                                         我派出去的 Worker
+  ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -76,6 +77,7 @@ type Options = {
   reason?: string;
   title?: string;
   model?: string;
+  effort?: string;
   readonly?: boolean;
   "no-worktree"?: boolean;
   clear?: boolean;
@@ -150,6 +152,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         reason: { type: "string" },
         title: { type: "string" },
         model: { type: "string" },
+        effort: { type: "string" },
         readonly: { type: "boolean" },
         "no-worktree": { type: "boolean" },
         clear: { type: "boolean" },
@@ -212,12 +215,16 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "persona.edit", body, textSource, textField: "text" };
   }
   if (group === "worker" && action === "start") {
-    allowOnly(values, ["title", "model", "readonly", "no-worktree", "stdin"], "worker start");
+    allowOnly(values, ["title", "model", "effort", "readonly", "no-worktree", "stdin"], "worker start");
     expectPositionals(rest, 0, "worker start");
     if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
+    if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
+      throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
+    }
     const textSource = requireStdin(values, "worker start");
     const body: Record<string, unknown> = { title: values.title };
     if (values.model !== undefined) body.model = values.model;
+    if (values.effort !== undefined) body.effort = values.effort;
     if (values.readonly === true) body.readonly = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
     return { command: "worker.start", body, textSource, textField: "task" };

@@ -649,6 +649,7 @@ describe("M3：Worker 的记录", () => {
       | "title"
       | "task"
       | "model"
+      | "effort"
       | "readonly"
       | "workspace"
       | "branch"

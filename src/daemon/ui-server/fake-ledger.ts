@@ -56,6 +56,12 @@ export function makePersonaChange(id = 1, pmId = 1): PersonaChange {
     textAfter: "新",
     modeBefore: "manage_only",
     modeAfter: "manage_only",
+    vendorBefore: "claude",
+    vendorAfter: "claude",
+    modelBefore: null,
+    modelAfter: null,
+    effortBefore: null,
+    effortAfter: null,
     reason: null,
     revertOf: null,
     createdAt: 1,
@@ -63,7 +69,16 @@ export function makePersonaChange(id = 1, pmId = 1): PersonaChange {
 }
 
 export function makePersonaView(pmId: PmId, changes: PersonaChange[] = []): PersonaView {
-  return { pmId, text: "性格设定正文", mode: "manage_only", changes, revertableChangeId: changes[0]?.id ?? null };
+  return {
+    pmId,
+    text: "性格设定正文",
+    mode: "manage_only",
+    vendor: "claude",
+    model: null,
+    effort: null,
+    changes,
+    revertableChangeId: changes[0]?.id ?? null,
+  };
 }
 
 export class FakeLedger {
@@ -153,7 +168,17 @@ export class FakeLedger {
     this.check();
     this.createdPms.push(input);
     return {
-      pm: { id: 7, name: input.name, avatarFile: null, mode: input.mode, defaultModel: input.defaultModel ?? null, personaFile: null, createdAt: 1 },
+      pm: {
+        id: 7,
+        name: input.name,
+        avatarFile: null,
+        mode: input.mode,
+        vendor: input.vendor ?? "claude",
+        defaultModel: input.defaultModel ?? null,
+        effort: input.effort ?? null,
+        personaFile: null,
+        createdAt: 1,
+      },
       conversation: { id: 70, kind: "pm", pmId: 7, projectId: null, title: input.name, createdAt: 1 },
       sessionId: 700,
       project:

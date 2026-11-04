@@ -5,6 +5,7 @@ import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
+  AGENT_VENDORS,
   API_PATHS,
   ConversationNotFoundError,
   LEDGER_ERROR_HTTP_STATUS,
@@ -21,12 +22,14 @@ import {
   MAX_CONCURRENT_UPLOADS,
   MAX_UPLOAD_BYTES,
   PM_MODES,
+  isAgentVendor,
   UI_COOKIE_NAME,
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   isImageMime,
   normalizeName,
   utf8Bytes,
+  type AgentVendor,
   type ApiErrorBody,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -138,16 +141,27 @@ function requireBoundedChars(value: unknown, what: string, maxChars: number): st
   return value;
 }
 
+/** 厂商：清单里的编号。 */
+function requireVendor(value: unknown): AgentVendor {
+  if (!isAgentVendor(value)) throw new HttpError(400, `vendor must be one of ${AGENT_VENDORS.join(", ")}`);
+  return value;
+}
+
+/** 模型、思考程度：字符串或 null（默认）。取值对不对由账本按厂商清单查，原因原样回给网页。 */
+function optionalSetting(value: unknown, what: string): string | null {
+  return value === null ? null : requireBoundedChars(value, what, MAX_MODEL_CHARS);
+}
+
 function parseCreatePmBody(body: unknown): CreatePmRequest {
-  const raw = parseObjectBody(body, ["name", "mode", "defaultModel", "persona", "folder"]);
+  const raw = parseObjectBody(body, ["name", "mode", "vendor", "defaultModel", "effort", "persona", "folder"]);
   const input: CreatePmRequest = {
     name: requireName(raw.name, "name"),
     mode: requireMode(raw.mode),
     persona: requireBoundedBytes(raw.persona, "persona", MAX_PERSONA_BYTES),
   };
-  if (raw.defaultModel !== undefined) {
-    input.defaultModel = raw.defaultModel === null ? null : requireBoundedChars(raw.defaultModel, "defaultModel", MAX_MODEL_CHARS);
-  }
+  if (raw.vendor !== undefined) input.vendor = requireVendor(raw.vendor);
+  if (raw.defaultModel !== undefined) input.defaultModel = optionalSetting(raw.defaultModel, "defaultModel");
+  if (raw.effort !== undefined) input.effort = optionalSetting(raw.effort, "effort");
   // 主文件夹可选；给了就必须是个非空路径（存不存在、是不是目录由账本查）
   if (raw.folder !== undefined) {
     const folder = requireBoundedBytes(raw.folder, "folder", MAX_PATH_BYTES);
@@ -158,11 +172,15 @@ function parseCreatePmBody(body: unknown): CreatePmRequest {
 }
 
 function parseEditPersonaBody(body: unknown): EditPersonaRequest {
-  const raw = parseObjectBody(body, ["text", "mode", "reason"]);
-  if (raw.text === undefined && raw.mode === undefined) throw new HttpError(400, "text or mode is required");
+  const fields = ["text", "mode", "vendor", "model", "effort"];
+  const raw = parseObjectBody(body, [...fields, "reason"]);
+  if (fields.every((f) => raw[f] === undefined)) throw new HttpError(400, `one of ${fields.join(", ")} is required`);
   const input: EditPersonaRequest = {};
   if (raw.text !== undefined) input.text = requireBoundedBytes(raw.text, "text", MAX_PERSONA_BYTES);
   if (raw.mode !== undefined) input.mode = requireMode(raw.mode);
+  if (raw.vendor !== undefined) input.vendor = requireVendor(raw.vendor);
+  if (raw.model !== undefined) input.model = optionalSetting(raw.model, "model");
+  if (raw.effort !== undefined) input.effort = optionalSetting(raw.effort, "effort");
   if (raw.reason !== undefined) input.reason = requireBoundedChars(raw.reason, "reason", MAX_REASON_CHARS);
   return input;
 }

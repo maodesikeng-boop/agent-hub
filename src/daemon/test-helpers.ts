@@ -47,6 +47,7 @@ export function workerRecord(over: Partial<WorkerRecord> = {}): WorkerRecord {
     title: "修登录按钮",
     task: "登录按钮点了没反应，查原因并修好。验收：pnpm test 全绿。",
     model: null,
+    effort: null,
     readonly: false,
     workspace: "worktree",
     branch: "hub/5-修登录按钮",

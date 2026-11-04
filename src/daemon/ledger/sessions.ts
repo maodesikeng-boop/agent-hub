@@ -16,6 +16,7 @@ import type {
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import type { AgentVendor } from "../../shared/vendors.ts";
 
 /** 只在内存里的会话状态（守护进程重启后从头开始）。status 不在这里，只从 agent_sessions 那一行读。 */
 export interface LiveSession {
@@ -100,22 +101,27 @@ export function createLedgerSessions(ctx: LedgerContext) {
       cwd: string;
       addDirs: string[];
       generation: number;
+      vendor: AgentVendor;
       model: string | null;
+      effort: string | null;
     },
   ): AgentSessionRow => {
     const t = now();
     const id = db.run(
-      `INSERT INTO agent_sessions (role, conversation_id, pm_id, worker_id, vendor_session_id, cwd, add_dirs, generation, model, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_sessions (role, conversation_id, pm_id, worker_id, vendor, vendor_session_id, cwd, add_dirs, generation, model, effort,
+                                   created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       fields.role ?? "pm",
       fields.conversationId,
       fields.pmId,
       fields.workerId ?? null,
+      fields.vendor,
       randomUUID(),
       fields.cwd,
       JSON.stringify(fields.addDirs),
       fields.generation,
       fields.model,
+      fields.effort,
       t,
       t,
     ).lastInsertRowid;

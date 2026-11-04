@@ -10,9 +10,11 @@ import {
   AGENT_API_CLOSE_MS,
   DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
+  DEFAULT_AGENT_VENDOR,
   ENV_DEFAULT_MODEL,
   ENV_PORT,
   EXECUTOR_STOP_GRACE_MS,
+  checkModel,
   type ActionExecutor,
   type Driver,
   type Unsubscribe,
@@ -184,7 +186,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
     // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件）
     if (ledger.snapshot().pms.length === 0) {
-      const defaultModel = env[ENV_DEFAULT_MODEL] || undefined;
+      let defaultModel = env[ENV_DEFAULT_MODEL]?.trim() || undefined;
+      // 不合规的模型名不让第一次启动失败：忽略，按默认
+      const badModel = defaultModel === undefined ? null : checkModel(DEFAULT_AGENT_VENDOR, defaultModel);
+      if (badModel !== null) {
+        log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
+        defaultModel = undefined;
+      }
       const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: DEFAULT_PM_PERSONA, ...(defaultModel ? { defaultModel } : {}) });
       log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
     }

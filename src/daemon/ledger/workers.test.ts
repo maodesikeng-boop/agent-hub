@@ -183,6 +183,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
       title: "修 X",
       task: "把 X 修好，测试要过",
       model: "claude-haiku-5-5",
+      effort: null,
       readonly: false,
       workspace: "worktree",
       branch: workerBranchName(1, "修 X"),
@@ -748,6 +749,42 @@ describe("收工", () => {
     expect(result.text).toContain("甲");
     expect(result.text).toContain("乙");
     expect(hub(zhou.sessionId, "worker.list", {}).data.workers.map((w) => w.title)).toEqual(["丙"]);
+  });
+});
+
+describe("派活：思考程度（--effort）", () => {
+  it("给了就记在 Worker 记录和会话上；没给就和项目经理现在的一样（资料页改过的话是改过的）", () => {
+    const own = start({ title: "甲", effort: "high" }).data.worker;
+    expect(own).toMatchObject({ model: null, effort: "high" });
+    expect(sessionRow(workerSessionId(own.id))).toMatchObject({ vendor: "claude", model: "claude-sonnet-5-5", effort: "high" });
+    // 项目经理的思考程度是默认：Worker 也是默认（不传 --effort）
+    const inherit = start({ title: "乙" }).data.worker;
+    expect(inherit).toMatchObject({ model: null, effort: null });
+    expect(sessionRow(workerSessionId(inherit.id))).toMatchObject({ model: "claude-sonnet-5-5", effort: null });
+    // 用户在资料页改了项目经理的模型、思考程度：之后派的 Worker 跟着新的
+    ledger.editPersona(lin.pmId, { model: "opus", effort: "max" }, { kind: "user" });
+    const after = start({ title: "丙" }).data.worker;
+    expect(sessionRow(workerSessionId(after.id))).toMatchObject({ model: "opus", effort: "max" });
+    // 已经派出去的不变
+    expect(sessionRow(workerSessionId(inherit.id))).toMatchObject({ model: "claude-sonnet-5-5", effort: null });
+  });
+
+  it("思考程度不在清单里、模型名带不合规的字符：invalid，什么都没写", () => {
+    const before = tableCounts();
+    expectLedgerError(() => start({ effort: "ultra" }), "invalid", /思考程度只能是 low、medium、high、xhigh、max/);
+    expectLedgerError(() => start({ effort: "LOW" }), "invalid", /思考程度/);
+    expectLedgerError(() => start({ model: "haiku; rm -rf" }), "invalid", /模型名只能用/);
+    expect(tableCounts()).toEqual(before);
+  });
+
+  it("worker.list 写明每个 Worker 实际用的模型和思考程度", () => {
+    const a = start({ title: "甲", model: "haiku", effort: "low" }).data.worker;
+    const b = start({ title: "乙" }).data.worker;
+    const text = hub(lin.sessionId, "worker.list", {}).text;
+    expect(text).toContain(`#${a.id} 甲 · 进行中 · `);
+    expect(text).toContain("模型 Haiku · 思考程度 low");
+    expect(text).toContain(`#${b.id} 乙`);
+    expect(text).toContain("模型 claude-sonnet-5-5 · 思考程度 默认");
   });
 });
 

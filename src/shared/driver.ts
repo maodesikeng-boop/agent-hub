@@ -244,7 +244,7 @@ export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => 
  * 两轮之间自动重启（m2-plan 第 6 节第 3 条）：每次要往一个已经在跑、空闲的进程写下一条之前，驱动层先调一次 prepareLaunch，
  * 下面任何一样和这个进程启动时不一样，就关标准输入、等它退出，再用 --resume 起一个新的，然后才写这条：
  * - LaunchFiles.fingerprint；
- * - 会话那一行的 cwd、addDirs、model（model 是配置的模型，驱动层只读不写）。
+ * - 会话那一行的 cwd、addDirs、model、effort（配置的模型、思考程度，驱动层只读不写）。
  * env 不参与比较。正在跑的这一轮不打断，等它结束再比。消息不丢、不重复（还是同一次 send，只是先重启）。
  * 重启时用的是重启前调的那次 prepareLaunch 的结果，不再调第二次。重启后写进去的第一条消息前面加 RELAUNCH_NOTE。
  */

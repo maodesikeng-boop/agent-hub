@@ -493,6 +493,118 @@ describe("性格设定", () => {
   });
 });
 
+describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => {
+  it("建项目经理时选：pms、会话那一行都记下；不给就是 Claude Code、默认、默认", () => {
+    const made = ledger.createPm({ name: "阿明", mode: "manage_only", persona: "", vendor: "claude", defaultModel: "haiku", effort: "low" });
+    expect(made.pm).toMatchObject({ vendor: "claude", defaultModel: "haiku", effort: "low" });
+    expect(sessionRow(made.sessionId)).toMatchObject({ vendor: "claude", model: "haiku", effort: "low" });
+    expect(ledger.getPersona(made.pm.id)).toMatchObject({ vendor: "claude", model: "haiku", effort: "low" });
+    expect(ledger.snapshot().pms.find((p) => p.id === lin.pmId)).toMatchObject({ vendor: "claude", defaultModel: null, effort: null });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: null, effort: null });
+    // 空串当默认；完整模型名也行
+    const custom = ledger.createPm({ name: "阿亮", mode: "manage_only", persona: "", defaultModel: " claude-opus-5-5 ", effort: "" });
+    expect(custom.pm).toMatchObject({ defaultModel: "claude-opus-5-5", effort: null });
+  });
+
+  it("建的时候值不对（厂商、模型名的字符和长度、思考程度）：invalid，原因来自清单，什么都没写", () => {
+    const before = tableCounts();
+    const base = { name: "阿明", mode: "manage_only" as const, persona: "" };
+    expectLedgerError(() => ledger.createPm({ ...base, vendor: "codex" as never }), "invalid", /厂商/);
+    expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "claude opus" }), "invalid", /模型名只能用/);
+    expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "--resume" }), "invalid", /模型名只能用/);
+    expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "m".repeat(101) }), "invalid", /最多 100/);
+    expectLedgerError(() => ledger.createPm({ ...base, effort: "huge" }), "invalid", /思考程度只能是 low、medium、high、xhigh、max/);
+    expect(tableCounts()).toEqual(before);
+  });
+
+  it("资料页改模型、思考程度：pms 和项目经理的会话都改了，修改记录一条（前后都有），对话里一条系统消息，推 pm.updated", () => {
+    now = 3_000;
+    const { change, persona } = ledger.editPersona(lin.pmId, { model: "haiku", effort: "low" }, { kind: "user" });
+    expect(change).toMatchObject({
+      actor: "user",
+      vendorBefore: "claude",
+      vendorAfter: "claude",
+      modelBefore: null,
+      modelAfter: "haiku",
+      effortBefore: null,
+      effortAfter: "low",
+      textBefore: "小林的习惯",
+      textAfter: "小林的习惯",
+      modeBefore: "manage_only",
+      modeAfter: "manage_only",
+    });
+    expect(persona).toMatchObject({ vendor: "claude", model: "haiku", effort: "low", text: "小林的习惯", revertableChangeId: change!.id });
+    expect(persona.changes[0]).toEqual(change);
+    // 会话那一行改了：驱动层下一条消息前比出不一样，--resume 重启
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low", hasCompletedTurn: false, updatedAt: 3_000 });
+    expect(sessionRow(zhou.sessionId)).toMatchObject({ model: null, effort: null });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Haiku，思考程度：默认 → low）");
+    expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created"]);
+    expect(changes[0]).toMatchObject({ data: { pm: { id: lin.pmId, vendor: "claude", defaultModel: "haiku", effort: "low" } } });
+    // 不登记重启动作：下一条消息前驱动层自己重启
+    expect(enqueued).toEqual([]);
+  });
+
+  it("改回默认（null）、自定义完整模型名；和现在一样就什么也不写", () => {
+    ledger.editPersona(lin.pmId, { model: "haiku", effort: "max" }, { kind: "user" });
+    const back = ledger.editPersona(lin.pmId, { model: null, effort: null }, { kind: "user" });
+    expect(back.change).toMatchObject({ modelBefore: "haiku", modelAfter: null, effortBefore: "max", effortAfter: null });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
+    const custom = ledger.editPersona(lin.pmId, { model: "claude-sonnet-5-5[1m]" }, { kind: "user" });
+    expect(custom.persona).toMatchObject({ model: "claude-sonnet-5-5[1m]", effort: null });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → claude-sonnet-5-5[1m]）");
+    const records = count("persona_changes");
+    expect(ledger.editPersona(lin.pmId, { vendor: "claude", model: "claude-sonnet-5-5[1m]", effort: null }, { kind: "user" }).change).toBeNull();
+    expect(count("persona_changes")).toBe(records);
+  });
+
+  it("和性格设定、模式一起改：一条记录；系统消息里写模式和模型的变化", () => {
+    const { change } = ledger.editPersona(lin.pmId, { text: "新习惯", mode: "hands_on", model: "opus" }, { kind: "user" });
+    expect(change).toMatchObject({ textAfter: "新习惯", modeAfter: "hands_on", modelBefore: null, modelAfter: "opus" });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的性格设定（模式：只管理 → 自己也干活，模型：默认 → Opus）");
+  });
+
+  it("值不对：invalid，什么都没写；项目经理自己用 hub 改不了（forbidden）", () => {
+    const before = tableCounts();
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { model: "a b" }, { kind: "user" }), "invalid", /模型名只能用/);
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { effort: "ultra" }, { kind: "user" }), "invalid", /思考程度/);
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { vendor: "codex" as never }, { kind: "user" }), "invalid", /厂商/);
+    expectLedgerError(
+      () => ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "session", sessionId: lin.sessionId }),
+      "forbidden",
+      /只能由用户在资料页改/,
+    );
+    expect(tableCounts()).toEqual(before);
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
+  });
+
+  it("老库里不合规的模型名不锁死别的保存：改性格设定、工作方式、只改思考程度都行，模型不动；改模型时才查", () => {
+    // 0006 之前模型名只限长度
+    db.run("UPDATE pms SET default_model = 'claude opus' WHERE id = ?", lin.pmId);
+    db.run("UPDATE agent_sessions SET model = 'claude opus' WHERE id = ?", lin.sessionId);
+    expect(ledger.editPersona(lin.pmId, { text: "新习惯" }, { kind: "user" }).persona).toMatchObject({ text: "新习惯", model: "claude opus" });
+    expect(ledger.editPersona(lin.pmId, { mode: "hands_on" }, { kind: "user" }).persona).toMatchObject({ mode: "hands_on", model: "claude opus" });
+    expect(ledger.editPersona(lin.pmId, { effort: "low" }, { kind: "user" }).persona).toMatchObject({ effort: "low", model: "claude opus" });
+    // hub persona edit 也不受影响
+    expect(hub(lin.sessionId, "persona.edit", { text: "自己改的" }).data.change).toMatchObject({ textAfter: "自己改的", modelAfter: "claude opus" });
+    // 要改模型就得改成合规的
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { model: "claude sonnet" }, { kind: "user" }), "invalid", /模型名只能用/);
+    expect(ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "user" }).persona).toMatchObject({ model: "haiku", effort: "low" });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low" });
+  });
+
+  it("撤销：模型、思考程度一起改回去，会话那一行也改回去；撤销老的只改性格设定的记录不动模型", () => {
+    const textOnly = ledger.editPersona(lin.pmId, { text: "改一下" }, { kind: "user" }).change!;
+    expect(textOnly).toMatchObject({ modelBefore: null, modelAfter: null });
+    const agent = ledger.editPersona(lin.pmId, { model: "haiku", effort: "low" }, { kind: "user" }).change!;
+    const reverted = ledger.revertPersonaChange(agent.id);
+    expect(reverted.persona).toMatchObject({ model: null, effort: null, text: "改一下" });
+    expect(reverted.change).toMatchObject({ revertOf: agent.id, modelBefore: "haiku", modelAfter: null, effortBefore: "low", effortAfter: null });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("已撤销小林的上一次设置修改（模型：Haiku → 默认，思考程度：low → 默认）");
+  });
+});
+
 describe("retryMessage", () => {
   it("重试失败消息：状态回到 queued、失败原因清空、推 message.updated、同一行动作重置；replied → conflict；不存在 → not_found", () => {
     const failed = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "f", text: "失败的" }).messageId;
