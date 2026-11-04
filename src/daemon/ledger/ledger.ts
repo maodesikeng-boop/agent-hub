@@ -98,7 +98,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
@@ -194,6 +194,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     revertPersonaChange: persona.revertPersonaChange,
 
     retryMessage: messages.retryMessage,
+    dismissAsk: messages.dismissAsk,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),

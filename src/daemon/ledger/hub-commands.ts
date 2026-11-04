@@ -12,6 +12,7 @@ import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { summarizeArgs, truncateField } from "./files.ts";
+import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerWorkers } from "./workers.ts";
@@ -34,7 +35,13 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
 /** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
-export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
+export function createLedgerHubCommands(
+  ctx: LedgerContext,
+  persona: LedgerPersona,
+  projects: LedgerProjects,
+  workers: LedgerWorkers,
+  messages: LedgerMessages,
+) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
   const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn, setupIn } = projects;
@@ -101,6 +108,12 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
         return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":
         return workers.list(caller);
+      case "ask": {
+        const { text } = args as HubArgs<"ask">;
+        if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
+        const message = messages.insertAskMessage(p, caller, text);
+        return { text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。", data: { messageId: message.id } };
+      }
     }
   };
 

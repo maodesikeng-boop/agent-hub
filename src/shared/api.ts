@@ -32,6 +32,8 @@ export const API_PATHS = {
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
+  /** POST，没有请求体 → 204。用户点“知道了”，清掉一条 hub ask 的提醒（Ledger.dismissAsk）。 */
+  dismissAsk: (messageId: MessageId) => `/api/messages/${messageId}/dismiss-ask`,
   /**
    * POST ?name=<文件名>：请求体就是文件原样的字节（不是 JSON，不绑定接收方），最多 MAX_UPLOAD_BYTES，不动别的接口 1 MB 的上限。
    * 200 → Attachment；空文件、太大（413）、文件名不合法 → 中文原因。之后发消息时在 PostMessageRequest.attachmentIds 里带上它的 id。

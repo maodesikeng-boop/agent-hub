@@ -50,7 +50,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 
 ## 4. 颜色
 
-- **主色（`--primary`，樱粉）只用在**：主按钮（一屏最多一个：创建、保存、发送）、选中态（单选行的勾、开关打开）、“等你”标签、Markdown 里的链接、用户自己的气泡。
+- **主色（`--primary`，樱粉）只用在**：主按钮（一屏最多一个：创建、保存、发送）、选中态（单选行的勾、开关打开）、“等你”标签、“等你确定”标签和对话顶部的“等你确定”条（项目经理用 `hub ask` 问用户的事，比“等你”醒目：左栏标签是实心主色，条是 `bg-primary/10`）、Markdown 里的链接、用户自己的气泡。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白）；左栏和分组框 `bg-sidebar`；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`。
   - 分隔线：白底上 `border-border`，浅灰框里 `divide-sidebar-active`。

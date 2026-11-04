@@ -406,6 +406,18 @@ export type SystemMessageMeta =
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null };
 
+/**
+ * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；dismissed 是用户点了“知道了”（存在这里，
+ * 刷新、重启后还是清掉的）。用户在这条之后发了任何消息也算处理了，那个由网页按消息顺序算，不写进 meta。
+ */
+export type AskMeta = { needsUser: true; dismissed?: true };
+
+/** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
+export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null {
+  if (message.sender !== "agent" || message.meta?.needsUser !== true) return null;
+  return message.meta.dismissed === true ? { needsUser: true, dismissed: true } : { needsUser: true };
+}
+
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
 export const SYSTEM_MESSAGE_PREFIX = "【系统】";
 

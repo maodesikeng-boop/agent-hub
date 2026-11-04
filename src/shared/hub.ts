@@ -39,6 +39,7 @@ export const ENV_HUB_SOCK = "HUB_SOCK";
  * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
  * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
  * - `hub project setup --stdin | --clear`                 → project.setup：设置、清除项目的 worktree 准备命令
+ * - `hub ask --stdin`                                    → ask：向用户提问（要用户拍板、确认、选择的事），正文是问题（Markdown）
  * - `hub persona show`                                   → persona.show
  * - `hub persona edit [--mode <模式>] [--reason <理由>] [--stdin | --text <正文>]` → persona.edit，新全文；可以只改模式
  *
@@ -62,6 +63,7 @@ export const HUB_COMMANDS = [
   "worker.send",
   "worker.end",
   "worker.list",
+  "ask",
 ] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
@@ -81,6 +83,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.send": ["pm"],
   "worker.end": ["pm"],
   "worker.list": ["pm"],
+  ask: ["pm"],
 };
 
 export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean {
@@ -121,6 +124,11 @@ export interface HubArgsMap {
   "worker.end": { workerId: WorkerId };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
+  /**
+   * `hub ask --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
+   * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的。
+   */
+  ask: { text: string };
 }
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
@@ -180,6 +188,8 @@ export interface HubDataMap {
   "worker.end": { worker: WorkerRecord };
   /** 按编号从小到大，含已收工的。 */
   "worker.list": { workers: WorkerRecord[] };
+  /** messageId：对话里那条带标记的消息。 */
+  ask: { messageId: MessageId };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

@@ -97,6 +97,7 @@ ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Wor
 - \`${HUB} worker send <编号> --stdin\`：打回，或者回答它的问题，正文是你要对它说的话；同一个 Worker 接着做。
 - \`${HUB} worker end <编号>\`：收工，结束这个 Worker 的会话。worktree 由你自己删。
 - \`${HUB} worker list\`：你派出去的 Worker，各自的状态、在哪干活（分支、worktree 路径）、模型和思考程度。
+- \`${HUB} ask --stdin\`：要用户拍板、确认、选择的事用它问，正文是要问的内容（Markdown）。会单独提醒用户、不会被别的消息刷掉。
 - 长文本一律用 \`--stdin <<'EOF'\` 传（引号里的 EOF 不能省），短的也可以用 \`--text "<正文>"\`。没写 \`--stdin\` 时 ${HUB} 不读标准输入：
   \`\`\`
   ${HUB} persona edit --reason "用户要求回复用列表" --stdin <<'EOF'
