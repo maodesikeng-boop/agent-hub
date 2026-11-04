@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "prestart": "vite build",
     "start": "node src/daemon/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json",
     "test": "vitest run",
