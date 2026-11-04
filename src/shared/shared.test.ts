@@ -559,15 +559,14 @@ describe("M2：两轮之间自动重启", () => {
   });
 
   it("指纹只看内容：同样的输入两次算出来一样，任何一样变了就不一样", () => {
-    const input = { prompt: "你是项目经理", settings: '{"a":1}', mcpConfig: "{}" };
+    const input = { prompt: "你是项目经理", settings: '{"a":1}' };
     expect(launchFingerprint(input)).toBe(launchFingerprint({ ...input }));
     expect(launchFingerprint(input)).toMatch(/^[0-9a-f]{64}$/);
     expect(launchFingerprint({ ...input, prompt: "你是项目经理。" })).not.toBe(launchFingerprint(input));
     expect(launchFingerprint({ ...input, settings: null })).not.toBe(launchFingerprint(input));
-    expect(launchFingerprint({ ...input, mcpConfig: "{ }" })).not.toBe(launchFingerprint(input));
     // 拼接边界不会撞：内容挪到另一段算不一样
-    expect(launchFingerprint({ prompt: "ab", settings: "c", mcpConfig: "" })).not.toBe(
-      launchFingerprint({ prompt: "a", settings: "bc", mcpConfig: "" }),
+    expect(launchFingerprint({ prompt: "ab", settings: "c" })).not.toBe(
+      launchFingerprint({ prompt: "a", settings: "bc" }),
     );
   });
 });

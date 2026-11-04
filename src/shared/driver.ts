@@ -304,8 +304,6 @@ export interface LaunchFiles {
    * （内容见 policy.ts 的 buildSessionSettings）。
    */
   settingsFile?: string;
-  /** 空的 MCP 配置，配合 --strict-mcp-config。 */
-  mcpConfigFile: string;
   /**
    * 这一次启动额外的环境变量（M2）：ENV_HUB_TOKEN、ENV_HUB_SOCK、PATH（hub 外壳所在的 run/bin 放最前面，后面接守护进程自己的 PATH）。
    * 合并顺序：守护进程的 process.env < DriverOptions.env < 这里，同名的后者覆盖前者（PATH 整个替换）。
@@ -313,7 +311,7 @@ export interface LaunchFiles {
    */
   env: Record<string, string>;
   /**
-   * 提示词、设置文件、MCP 配置内容的摘要：用 src/shared/launch.ts 的 launchFingerprint 算。内容一样就一样，变了就不一样。
+   * 提示词、设置文件内容的摘要：用 src/shared/launch.ts 的 launchFingerprint 算。内容一样就一样，变了就不一样。
    * 只算实际写进文件的内容，不含时间、随机数、令牌。驱动层只比较它是否相等。
    */
   fingerprint: string;

@@ -531,10 +531,8 @@ describe("关机撞上起进程", () => {
             const dir = join(h!.dir, "launch", String(session.id));
             mkdirSync(dir, { recursive: true });
             writeFileSync(join(dir, "prompt.md"), "你是项目经理。");
-            writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
             return {
               promptFile: join(dir, "prompt.md"),
-              mcpConfigFile: join(dir, "mcp.json"),
               fingerprint: "",
               // 拼环境变量（spawn 之前）时排一个 nextTick 关机：它在 spawn 事件之前跑
               get env() {

@@ -74,24 +74,21 @@ describe("prepareLaunch（M2、M3）", () => {
     worktreesDir = join(dir, "worktrees");
   });
 
-  it("写 prompt.md、settings.json（放行 hub、hub.sock）、空的 MCP 配置；env 带令牌、socket、PATH；fingerprint 按三份内容算", async () => {
+  it("写 prompt.md、settings.json（放行 hub、hub.sock）；env 带令牌、socket、PATH；fingerprint 按两份内容算", async () => {
     const files = await make()(row(7));
     const base = join(launchDir, "7");
     expect(files).toMatchObject({
       promptFile: join(base, "prompt.md"),
       settingsFile: join(base, "settings.json"),
-      mcpConfigFile: join(base, "mcp.json"),
       env: { [ENV_HUB_TOKEN]: "token-of-7", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" },
     });
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
-    const mcpConfig = readFileSync(files.mcpConfigFile, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
     expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir }));
-    expect(JSON.parse(mcpConfig)).toEqual({ mcpServers: {} });
-    expect(files.fingerprint).toBe(launchFingerprint({ prompt, settings, mcpConfig }));
+    expect(files.fingerprint).toBe(launchFingerprint({ prompt, settings }));
     // 令牌只在 env 里，不进任何文件
-    for (const content of [prompt, settings, mcpConfig]) expect(content).not.toContain("token-of-7");
+    for (const content of [prompt, settings]) expect(content).not.toContain("token-of-7");
   });
 
   it("同一个会话两次 prepareLaunch：令牌相同、fingerprint 相同", async () => {

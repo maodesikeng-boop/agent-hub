@@ -49,8 +49,8 @@ describe("首次启动参数", () => {
     expect(pairs("--model")).toBe("haiku");
     expect(pairs("--add-dir")).toBe("/tmp/extra-a");
     expect(pairs("--append-system-prompt-file")).toMatch(/prompt\.md$/);
-    expect(argv).toContain("--strict-mcp-config");
-    expect(pairs("--mcp-config")).toMatch(/mcp\.json$/);
+    expect(argv).not.toContain("--strict-mcp-config");
+    expect(argv).not.toContain("--mcp-config");
     expect(argv).not.toContain("--bare");
     // 工作目录是会话的 cwd
     const entry = t.log().find((e) => e.kind === "argv");
@@ -921,8 +921,7 @@ describe("重发不被吞", () => {
           const launch = join(t.dir, "launch-slow", String(session.id));
           mkdirSync(launch, { recursive: true });
           writeFileSync(join(launch, "prompt.md"), "p");
-          writeFileSync(join(launch, "mcp.json"), "{}");
-          return { promptFile: join(launch, "prompt.md"), mcpConfigFile: join(launch, "mcp.json"), env: {}, fingerprint: "" };
+          return { promptFile: join(launch, "prompt.md"), env: {}, fingerprint: "" };
         },
       },
     });
