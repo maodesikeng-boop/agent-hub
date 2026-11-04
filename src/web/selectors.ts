@@ -12,6 +12,7 @@ import {
   type SessionState,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
+import { stripMarkdown } from "./plainText.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 
 /** 左栏的一行：一个项目经理和它唯一的那个对话（11-03 起不再有项目群）。 */
@@ -58,6 +59,13 @@ export function listConversations(state: HubState): ConversationEntry[] {
       };
     })
     .toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id);
+}
+
+/** agent 的消息是 Markdown，预览去掉符号；用户和系统消息本来就是纯文本。左栏的预览和通知的正文都用它。 */
+export function previewText(entry: ConversationEntry): string {
+  const last = entry.lastMessage;
+  if (!last) return "";
+  return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
 }
 
 /** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。 */
@@ -119,6 +127,30 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
     }
   }
   return null;
+}
+
+/** 每个对话用户上次看的时间（毫秒）；没看过的没有。存在 localStorage，见 notify.ts。 */
+export type LastSeen = Record<ConversationId, number | undefined>;
+
+/** 还没处理完的消息状态：排队中、已送达、处理中。 */
+const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
+
+/**
+ * 在“等你”的对话（m4-plan 2.2，不含“停稳 3 秒”，那个在 notify.ts）：对话自己和它派的 Worker 的会话都是 idle，
+ * 没有排队、已送达、处理中的消息，最后一条不是用户发的，并且用户上次看之后又有了新消息。Worker 自己的对话不算。
+ */
+export function waitingConversations(state: HubState, lastSeen: LastSeen): ConversationId[] {
+  return Object.values(state.conversations)
+    .filter(({ conversation, messages }) => {
+      if (conversation.kind === "worker") return false;
+      const last = messages.at(-1);
+      if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
+      if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status))) return false;
+      if (pendingOf(state, conversation.id).some((p) => p.phase === "sending")) return false;
+      if ((sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
+      return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
+    })
+    .map(({ conversation }) => conversation.id);
 }
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {

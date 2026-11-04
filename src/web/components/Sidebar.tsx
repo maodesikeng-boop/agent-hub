@@ -1,20 +1,24 @@
-import { Plus } from "lucide-react";
+import { Bell, Plus } from "lucide-react";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { formatTime } from "../format.ts";
-import { stripMarkdown } from "../plainText.ts";
-import type { ConversationEntry } from "../selectors.ts";
+import type { NotifyPermission } from "../notify.ts";
+import { previewText, type ConversationEntry } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 
-/** agent 的消息是 Markdown，预览去掉符号；用户和系统消息本来就是纯文本。 */
-function previewText(entry: ConversationEntry): string {
-  const last = entry.lastMessage;
-  if (!last) return "";
-  return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
-}
-
-function EntryButton({ entry, active, onSelect }: { entry: ConversationEntry; active: boolean; onSelect: (id: number) => void }) {
+function EntryButton({
+  entry,
+  active,
+  waiting,
+  onSelect,
+}: {
+  entry: ConversationEntry;
+  active: boolean;
+  /** 对话停稳了，在等用户。 */
+  waiting: boolean;
+  onSelect: (id: number) => void;
+}) {
   return (
     <button
       type="button"
@@ -29,9 +33,10 @@ function EntryButton({ entry, active, onSelect }: { entry: ConversationEntry; ac
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-2">
           <span className={cn("truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{entry.name}</span>
-          {entry.lastMessage && (
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
-          )}
+          <span className="flex shrink-0 items-center gap-2">
+            {waiting && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你</span>}
+            {entry.lastMessage && <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>}
+          </span>
         </span>
         <span className="mt-0.5 block truncate text-[13.5px] text-muted-foreground">{previewText(entry)}</span>
       </span>
@@ -43,14 +48,21 @@ function EntryButton({ entry, active, onSelect }: { entry: ConversationEntry; ac
 export function Sidebar({
   entries,
   activeId,
+  waiting,
+  notifyPermission,
   onSelect,
   onNewPm,
+  onEnableNotify,
 }: {
   /** 已经按最后一条消息的时间排好。 */
   entries: ConversationEntry[];
   activeId: number | null;
+  /** 在“等你”的对话。 */
+  waiting: ReadonlySet<number>;
+  notifyPermission: NotifyPermission;
   onSelect: (id: number) => void;
   onNewPm: () => void;
+  onEnableNotify: () => void;
 }) {
   return (
     <aside className="flex w-[300px] shrink-0 flex-col bg-sidebar max-[1100px]:w-[264px]">
@@ -59,10 +71,16 @@ export function Sidebar({
       </div>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 pt-1" aria-label="对话列表">
         {entries.map((entry) => (
-          <EntryButton key={entry.id} entry={entry} active={entry.id === activeId} onSelect={onSelect} />
+          <EntryButton key={entry.id} entry={entry} active={entry.id === activeId} waiting={waiting.has(entry.id)} onSelect={onSelect} />
         ))}
       </nav>
-      <div className="px-3 pt-3">
+      <div className="space-y-2 px-3 pt-3">
+        {notifyPermission === "default" && (
+          <Button variant="outline" size="sm" className="h-8 w-full" onClick={onEnableNotify}>
+            <Bell aria-hidden="true" />
+            开启通知
+          </Button>
+        )}
         <Button variant="outline" size="sm" className="h-8 w-full" aria-label="新建项目经理" onClick={onNewPm}>
           <Plus aria-hidden="true" />
           项目经理
