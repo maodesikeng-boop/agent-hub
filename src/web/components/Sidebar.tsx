@@ -2,11 +2,12 @@ import { Plus, Search, Settings } from "lucide-react";
 import { useState } from "react";
 import { formatTime } from "../format.ts";
 import type { NotifySettings } from "../notify.ts";
-import { previewText, type ConversationEntry } from "../selectors.ts";
+import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { QuotaPopover } from "./QuotaPopover.tsx";
 import { SettingsDialog } from "./SettingsDialog.tsx";
 
 function EntryButton({
@@ -58,6 +59,7 @@ export function Sidebar({
   activeId,
   waiting,
   notify,
+  quota,
   onSelect,
   onNewPm,
 }: {
@@ -67,6 +69,7 @@ export function Sidebar({
   /** 在“等你”的对话。 */
   waiting: ReadonlySet<number>;
   notify: NotifySettings;
+  quota: QuotaVendor[];
   onSelect: (id: number) => void;
   onNewPm: () => void;
 }) {
@@ -100,6 +103,7 @@ export function Sidebar({
       <div className="flex items-center gap-2.5 py-4 pr-3 pl-5">
         <span className="flex size-9 items-center justify-center rounded-full bg-emerald-600 text-sm font-semibold text-white">我</span>
         <span className="flex-1 text-[15px] font-medium">我</span>
+        <QuotaPopover quota={quota} />
         <Button variant="ghost" size="icon-sm" aria-label="设置" onClick={() => setSettingsOpen(true)}>
           <Settings aria-hidden="true" />
         </Button>

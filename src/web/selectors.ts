@@ -82,30 +82,86 @@ export function isWaitingForQuota(session: SessionState | null): boolean {
   return isQuotaExhausted(session?.rateLimit);
 }
 
-/** 额度窗口在 RateLimitInfo.windows 里的键（Claude 的 rate_limit_event）。 */
-const FIVE_HOUR_WINDOW = "five_hour";
-const SEVEN_DAY_WINDOW = "seven_day";
+/** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
+export const QUOTA_WARNING_PERCENT = 80;
+const QUOTA_WARNING_STATUS = "allowed_warning";
 
-/** 5 小时、7 天额度已用的百分比（四舍五入的整数）；还没有数据是 null。 */
-export interface QuotaUsage {
-  fiveHour: number | null;
-  sevenDay: number | null;
+/** 一个厂商的额度窗口：窗口键（RateLimitInfo.windows 里的键）→ 中文名，顺序就是显示顺序。 */
+interface QuotaVendorSpec {
+  id: string;
+  name: string;
+  windows: readonly { key: string; label: string }[];
 }
 
-/** m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最近一次事件（lastEventAt 最大，同时间取会话编号大的）那个会话的值。 */
-export function quotaUsage(state: HubState): QuotaUsage {
-  const latest = (key: string): number | null => {
-    let best: SessionState | null = null;
-    for (const s of state.sessions) {
-      if (s.rateLimit?.windows[key] === undefined) continue;
-      const at = s.lastEventAt ?? -1;
-      const bestAt = best?.lastEventAt ?? -1;
-      if (best === null || at > bestAt || (at === bestAt && s.sessionId > best.sessionId)) best = s;
+/**
+ * 有额度数据的厂商。会话还没有“哪家厂商”这个字段，现在的额度都是 Claude 的（rate_limit_event）；
+ * 以后加厂商：在这里加一项，并让 quotaUsage 按会话的厂商分开取。
+ */
+const QUOTA_VENDORS: readonly QuotaVendorSpec[] = [
+  {
+    id: "claude",
+    name: "Claude",
+    windows: [
+      { key: "five_hour", label: "5 小时" },
+      { key: "seven_day", label: "7 天" },
+    ],
+  },
+];
+
+export interface QuotaWindowUsage {
+  key: string;
+  label: string;
+  /** 已用的百分比，四舍五入的整数，夹在 0 到 100 之间。 */
+  percent: number;
+  /** 重置时间，Unix 秒；没有是 null。 */
+  resetsAt: number | null;
+  /** 快用完了。 */
+  warning: boolean;
+}
+
+export interface QuotaVendor {
+  id: string;
+  name: string;
+  /** 有数据的窗口，按 QUOTA_VENDORS 里的顺序。 */
+  windows: QuotaWindowUsage[];
+  /** 额度用完了（isQuotaExhausted，取最近一次事件的那个会话）。 */
+  exhausted: boolean;
+}
+
+/** a 的事件比 b 新（lastEventAt 大；一样大取会话编号大的）。 */
+const newerSession = (a: SessionState, b: SessionState | null): boolean =>
+  b === null || (a.lastEventAt ?? -1) > (b.lastEventAt ?? -1) || ((a.lastEventAt ?? -1) === (b.lastEventAt ?? -1) && a.sessionId > b.sessionId);
+
+/**
+ * m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最近一次事件的那个会话的值；没有数据的窗口、厂商不返回。
+ * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
+ */
+export function quotaUsage(state: HubState): QuotaVendor[] {
+  const vendors: QuotaVendor[] = [];
+  for (const spec of QUOTA_VENDORS) {
+    const windows: QuotaWindowUsage[] = [];
+    for (const { key, label } of spec.windows) {
+      let best: SessionState | null = null;
+      for (const s of state.sessions) {
+        if (s.rateLimit?.windows[key] !== undefined && newerSession(s, best)) best = s;
+      }
+      const window = best?.rateLimit?.windows[key];
+      if (window === undefined || !Number.isFinite(window.utilization)) continue;
+      const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
+      windows.push({
+        key,
+        label,
+        percent,
+        resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,
+        warning: window.status === QUOTA_WARNING_STATUS || percent >= QUOTA_WARNING_PERCENT,
+      });
     }
-    const window = best?.rateLimit?.windows[key];
-    return window === undefined ? null : Math.round(window.utilization * 100);
-  };
-  return { fiveHour: latest(FIVE_HOUR_WINDOW), sevenDay: latest(SEVEN_DAY_WINDOW) };
+    if (windows.length === 0) continue;
+    let latest: SessionState | null = null;
+    for (const s of state.sessions) if (s.rateLimit !== null && newerSession(s, latest)) latest = s;
+    vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit) });
+  }
+  return vendors;
 }
 
 /** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
@@ -114,6 +170,39 @@ export function runningWorkerCount(state: HubState, pmId: PmId): number {
     ({ conversation }) =>
       conversation.kind === "worker" && conversation.pmId === pmId && (sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle",
   ).length;
+}
+
+export interface WorkerEntry {
+  conversationId: ConversationId;
+  title: string;
+  /** 会话的 activity；没有会话当 idle。不一定是 SessionActivity 里的值（以后会加），显示的地方要有兜底。 */
+  activity: string;
+  /** 收工了：项目经理的会话里有 ended / worktree_failed 那一行，或者它的会话结束了。 */
+  ended: boolean;
+}
+
+/** 这个项目经理派的 Worker：进行中的在前，收工的在后，同一组里按派出的顺序（对话编号）。 */
+export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
+  const endedLines = new Set<ConversationId>();
+  for (const { conversation, messages } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
+    for (const message of messages) {
+      const meta = workerEventOf(message);
+      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) endedLines.add(meta.workerConversationId);
+    }
+  }
+  return Object.values(state.conversations)
+    .filter(({ conversation }) => conversation.kind === "worker" && conversation.pmId === pmId)
+    .map(({ conversation }) => {
+      const session = sessionOf(state, conversation.id);
+      return {
+        conversationId: conversation.id,
+        title: conversation.title,
+        activity: session?.activity ?? "idle",
+        ended: endedLines.has(conversation.id) || session?.status === "ended",
+      };
+    })
+    .toSorted((a, b) => Number(a.ended) - Number(b.ended) || a.conversationId - b.conversationId);
 }
 
 /** 项目经理会话里指向这个 Worker 对话的那几行里最新的一行的内容（标题、只读）；翻页翻掉了、找不到是 null。 */

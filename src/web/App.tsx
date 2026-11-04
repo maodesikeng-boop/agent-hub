@@ -5,11 +5,11 @@ import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { TopBarStats } from "./components/TopBarStats.tsx";
+import { WorkerPanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, quotaUsage, runningWorkerCount, sessionOf, workerLineOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, quotaUsage, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useHub } from "./useHub.ts";
@@ -87,17 +87,17 @@ export function App() {
   };
 
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
-  const stats = (pmId: number | null | undefined) => (
-    <TopBarStats quota={quotaUsage(state)} running={pmId == null ? 0 : runningWorkerCount(state, pmId)} />
-  );
+  // 右边栏列的是当前打开的项目经理（资料页、Worker 的对话都算它）的 Worker
+  const panelPm = profile?.id ?? (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
 
   return (
-    <div className="flex h-full">
+    <div className="relative flex h-full">
       <Sidebar
         entries={entries}
         activeId={activeId}
         waiting={reminders.waiting}
         notify={reminders.notify}
+        quota={quotaUsage(state)}
         onSelect={select}
         onNewPm={() => setCreating(true)}
       />
@@ -121,7 +121,7 @@ export function App() {
             view={workerView}
             session={sessionOf(state, openWorker)}
             older={state.older[openWorker]}
-            stats={stats(workerPm)}
+            stats={null}
             notices={notices}
             onBack={() => setOpenWorker(null)}
             onStop={hub.stop}
@@ -137,7 +137,7 @@ export function App() {
             session={sessionOf(state, active.id)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
-            stats={stats(active.pm?.id)}
+            stats={null}
             notices={notices}
             onDraftChange={(id, value) => setDrafts((d) => ({ ...d, [id]: value }))}
             onSend={(id, text) => {
@@ -157,6 +157,7 @@ export function App() {
           </>
         )}
       </main>
+      <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />
     </div>
   );
 }
