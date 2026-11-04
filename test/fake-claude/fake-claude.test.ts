@@ -147,6 +147,18 @@ describe("假 claude", () => {
     expect(r.events.find((e) => e.subtype === "api_retry")).toMatchObject({ type: "system", attempt: 2 });
   });
 
+  it("api_retry 步骤：字段可调，errorStatus 给 null 就是没有状态码", async () => {
+    const step = { apiRetry: { attempt: 3, maxRetries: 9, retryDelayMs: 2062, errorStatus: null, error: "unknown" } };
+    const r = await withScript({ defaultTurn: { steps: [step, { text: "ok" }] } }, () => run(["--session-id", "h2"], [userLine("x")]));
+    expect(r.events.find((e) => e.subtype === "api_retry")).toMatchObject({
+      attempt: 3,
+      max_retries: 9,
+      retry_delay_ms: 2062,
+      error_status: null,
+      error: "unknown",
+    });
+  });
+
   it("工具调用中被打断：标记是 “for tool use” 那种", async () => {
     const interrupt = JSON.stringify({ type: "control_request", request_id: "i1", request: { subtype: "interrupt" } });
     const r = await withScript({ defaultTurn: { steps: [{ tool: { name: "Bash", input: {}, durationMs: 1_000 } }] } }, () =>

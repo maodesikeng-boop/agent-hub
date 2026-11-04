@@ -121,6 +121,9 @@ export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 /** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
 
+/** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
+export const MAX_API_RETRY_ERROR_CHARS = 200;
+
 /** 同一个模块连续失败几次就算“坏了”（界面标红）。 */
 export const HEALTH_FAILURE_THRESHOLD = 3;
 

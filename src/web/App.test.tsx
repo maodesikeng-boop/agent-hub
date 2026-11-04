@@ -544,6 +544,82 @@ describe("状态行和停止", () => {
   });
 });
 
+describe("网络出错重试", () => {
+  const retrying = (attempt: number, over: Partial<NonNullable<ReturnType<typeof makeSession>["apiRetry"]>> = {}) =>
+    makeSession({
+      status: "running",
+      activity: "working",
+      apiRetry: { attempt, maxRetries: 10, retryAt: Date.now() + 30_000, errorStatus: null, error: "unknown", ...over },
+    });
+  const statusLine = () => screen.getByRole("status", { name: "状态" });
+
+  it("session.status 带重试信息：状态行写“网络出错，正在重试（第 3/10 次）”和倒计时，停止照常能点", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, sessionChange(11, retrying(3)));
+    expect(statusLine()).toHaveTextContent("网络出错，正在重试（第 3/10 次）");
+    expect(statusLine()).toHaveTextContent(/\d+ 秒后重试/);
+    expect(statusLine()).not.toHaveTextContent("正在处理");
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
+  });
+
+  it("连续几条：显示最新的一次；清掉后回到“正在处理”", async () => {
+    const ws = await boot();
+    push(ws, sessionChange(11, retrying(3)));
+    push(ws, sessionChange(12, retrying(4)));
+    expect(statusLine()).toHaveTextContent("第 4/10 次");
+    expect(statusLine()).not.toHaveTextContent("第 3/10 次");
+    push(ws, sessionChange(13, makeSession({ status: "running", activity: "working", apiRetry: null })));
+    expect(statusLine()).toHaveTextContent("正在处理");
+    expect(statusLine()).not.toHaveTextContent("重试");
+  });
+
+  it("下次重试时间点没有（null）：只写第几次，不写倒计时", async () => {
+    const ws = await boot();
+    push(ws, sessionChange(11, retrying(2, { retryAt: null })));
+    expect(statusLine()).toHaveTextContent("网络出错，正在重试（第 2/10 次）");
+    expect(statusLine()).not.toHaveTextContent("秒后重试");
+  });
+
+  it("老服务端（会话状态里没有 apiRetry 这个字段）：照常显示“正在处理”", async () => {
+    const ws = await boot();
+    const old: Partial<ReturnType<typeof makeSession>> = makeSession({ status: "running", activity: "working", currentTool: "Bash" });
+    delete old.apiRetry;
+    push(ws, sessionChange(11, old as ReturnType<typeof makeSession>));
+    expect(statusLine()).toHaveTextContent("Bash");
+    expect(statusLine()).not.toHaveTextContent("重试");
+  });
+
+  it("点了停止（正在停止）：显示“正在停止”，不再写重试", async () => {
+    const ws = await boot();
+    push(ws, sessionChange(11, { ...retrying(3), activity: "stopping" }));
+    expect(statusLine()).toHaveTextContent("正在停止");
+    expect(statusLine()).not.toHaveTextContent("重试");
+  });
+
+  it("重试用完这一轮以出错结束：用户消息标“失败”，写着原因，还有“重试”按钮；状态行没有了", async () => {
+    const ws = await boot();
+    push(ws, sessionChange(11, retrying(10)));
+    push(ws, messageChange(12, "message.created", makeUserMessage({ id: 3, text: "查一下", status: "processing", createdAt: 7_000 })));
+    push(
+      ws,
+      messageChange(
+        13,
+        "message.updated",
+        makeUserMessage({ id: 3, text: "查一下", status: "failed", failureReason: "API Error: Unable to connect to API (ConnectionRefused)", createdAt: 7_000 }),
+      ),
+    );
+    push(ws, sessionChange(14, makeSession({ status: "running", activity: "idle", apiRetry: null })));
+    const article = within(log()).getByText("查一下").closest("article")!;
+    expect(article).toHaveAttribute("data-status", "failed");
+    expect(article).toHaveTextContent("失败");
+    expect(article).toHaveTextContent("API Error: Unable to connect to API (ConnectionRefused)");
+    expect(within(article).getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+  });
+});
+
 describe("等额度", () => {
   it("额度状态不是 allowed：状态行显示“等额度”", async () => {
     const ws = await boot();

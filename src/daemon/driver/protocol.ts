@@ -1,6 +1,15 @@
 // 和 claude 的 stream-json 协议打交道的纯函数（设计第 7.2～7.4 节，事件形状照 docs/m0-report.md）。
 import { createHash } from "node:crypto";
-import type { AgentSessionRow, AgentTextEvent, AgentToolEvent, LaunchFiles, RateLimitInfo, RateLimitWindow } from "../../shared/index.ts";
+import { MAX_API_RETRY_ERROR_CHARS, truncateChars } from "../../shared/index.ts";
+import type {
+  AgentSessionRow,
+  AgentTextEvent,
+  AgentToolEvent,
+  ApiRetryInfo,
+  LaunchFiles,
+  RateLimitInfo,
+  RateLimitWindow,
+} from "../../shared/index.ts";
 
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
@@ -119,6 +128,28 @@ export function parseRateLimit(info: unknown): RateLimitInfo | null {
     resetsAt: typeof i.resetsAt === "number" ? i.resetsAt : null,
     windows,
   };
+}
+
+/**
+ * system/api_retry → ApiRetryInfo（at 是收到它的毫秒时间，retryAt = at + retry_delay_ms）。
+ * attempt、max_retries 要是正整数，retry_delay_ms 要是不小于 0 的有限数，缺了或类型不对返回 null，调用方跳过；
+ * error_status 不是数字当没有，error 不是字符串当空。
+ */
+export function parseApiRetry(obj: Record<string, unknown>, at: number): ApiRetryInfo | null {
+  const { attempt, max_retries: maxRetries, retry_delay_ms: delayMs } = obj;
+  if (!isPositiveInteger(attempt) || !isPositiveInteger(maxRetries)) return null;
+  if (typeof delayMs !== "number" || !Number.isFinite(delayMs) || delayMs < 0) return null;
+  return {
+    attempt,
+    maxRetries,
+    retryAt: at + delayMs,
+    errorStatus: typeof obj.error_status === "number" ? obj.error_status : null,
+    error: typeof obj.error === "string" ? truncateChars(obj.error, MAX_API_RETRY_ERROR_CHARS) : "",
+  };
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 /**

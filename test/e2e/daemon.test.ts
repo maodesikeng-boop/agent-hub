@@ -119,6 +119,58 @@ describe("W5 组装 + 端到端", () => {
     await terminate(daemon);
   });
 
+  it("断网重试：session.status 带重试信息（最新一次），重试中点停止能停，停完信息清掉", async () => {
+    env = makeEnv();
+    env.setScript({
+      turns: [
+        {
+          steps: [
+            { apiRetry: { attempt: 1, maxRetries: 10, retryDelayMs: 1_000, errorStatus: null, error: "unknown" } },
+            { apiRetry: { attempt: 2, maxRetries: 10, retryDelayMs: 2_000, errorStatus: null, error: "unknown" } },
+            { sleepMs: 20_000 },
+          ],
+        },
+      ],
+    });
+    const { daemon, client, state, conversationId } = await boot();
+    const ws = await client.ws(state.seq);
+    const id = await client.post(conversationId, "查一下");
+    const sessionStates = () => ws.messages.flatMap((m) => (m.type === "session.status" ? [m.data.session] : []));
+    await waitUntil("retry 2 pushed", () => (sessionStates().some((x) => x.apiRetry?.attempt === 2) ? true : undefined));
+    expect(sessionStates().at(-1)).toMatchObject({
+      activity: "working",
+      apiRetry: { attempt: 2, maxRetries: 10, errorStatus: null, error: "unknown" },
+    });
+    expect((await client.state()).sessions[0]?.apiRetry).toMatchObject({ attempt: 2 });
+    expect(await client.stop(conversationId)).toBe(202);
+    await waitForStatus(client, id, "stopped");
+    await waitUntil("retry cleared", async () => ((await client.state()).sessions[0]?.apiRetry === null ? true : undefined));
+    expect((await client.state()).sessions[0]).toMatchObject({ activity: "idle", apiRetry: null });
+    ws.close();
+    await terminate(daemon);
+  });
+
+  it("断网重试用完（result 是 is_error）：消息标失败、原因是 claude 给的话；重试信息清掉；再发照常", async () => {
+    env = makeEnv();
+    env.setScript({
+      turns: [
+        {
+          steps: [{ apiRetry: { attempt: 10, maxRetries: 10, errorStatus: null, error: "unknown" } }],
+          result: { subtype: "success", isError: true, result: "API Error: Unable to connect to API (ConnectionRefused)" },
+        },
+      ],
+      defaultTurn: quick("网通了"),
+    });
+    const { daemon, client, conversationId } = await boot();
+    const id = await client.post(conversationId, "查一下");
+    const failed = await waitForStatus(client, id, "failed");
+    expect(failed.failureReason).toBe("API Error: Unable to connect to API (ConnectionRefused)");
+    expect((await client.state()).sessions[0]).toMatchObject({ activity: "idle", apiRetry: null });
+    const next = await client.post(conversationId, "再来");
+    await waitForStatus(client, next, "replied");
+    await terminate(daemon);
+  });
+
   it("停止：没有在跑的会话时什么也不做，仍回 202；对话不存在回 404", async () => {
     env = makeEnv();
     const { daemon, client, conversationId } = await boot();

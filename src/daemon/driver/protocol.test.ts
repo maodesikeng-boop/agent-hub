@@ -1,7 +1,7 @@
 // 不起进程的部分：写入的那一行、拼消息、读 assistant 事件、额度、启动参数和环境。
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { AgentSessionRow } from "../../shared/index.ts";
+import { MAX_API_RETRY_ERROR_CHARS, type AgentSessionRow } from "../../shared/index.ts";
 import {
   buildClaudeArgs,
   buildChildEnv,
@@ -12,6 +12,7 @@ import {
   isInterruptMarker,
   lineUuid,
   mergeUserTexts,
+  parseApiRetry,
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
@@ -116,6 +117,40 @@ describe("额度", () => {
     expect(parseRateLimit("x")).toBeNull();
     expect(parseRateLimit({ resetsAt: 1 })).toBeNull();
     expect(parseRateLimit({ status: "allowed" })).toEqual({ status: "allowed", resetsAt: null, windows: {} });
+  });
+});
+
+describe("system/api_retry", () => {
+  const event = { type: "system", subtype: "api_retry", attempt: 3, max_retries: 10, retry_delay_ms: 2062, error_status: null, error: "unknown" };
+  it("attempt、max_retries 照抄；下次重试的时间点 = 收到的时间 + retry_delay_ms", () => {
+    expect(parseApiRetry(event, 1_000)).toEqual({ attempt: 3, maxRetries: 10, retryAt: 3_062, errorStatus: null, error: "unknown" });
+  });
+  it("error_status 是数字就带上", () => {
+    expect(parseApiRetry({ ...event, error_status: 529, error: "overloaded" }, 0)).toMatchObject({ errorStatus: 529, error: "overloaded" });
+  });
+  it("error_status 不是数字（缺了、字符串）当没有；error 不是字符串当空，太长的截断", () => {
+    const { error_status: _s, error: _e, ...bare } = event;
+    expect(parseApiRetry(bare, 0)).toMatchObject({ errorStatus: null, error: "" });
+    expect(parseApiRetry({ ...event, error_status: "529", error: 7 }, 0)).toMatchObject({ errorStatus: null, error: "" });
+    expect([...parseApiRetry({ ...event, error: "x".repeat(5_000) }, 0)!.error].length).toBeLessThanOrEqual(MAX_API_RETRY_ERROR_CHARS);
+  });
+  it("缺了或类型不对的 attempt、max_retries、retry_delay_ms：整条忽略（返回 null）", () => {
+    for (const [key, bad] of [
+      ["attempt", undefined],
+      ["attempt", "3"],
+      ["attempt", 0],
+      ["attempt", 1.5],
+      ["attempt", Number.NaN],
+      ["max_retries", undefined],
+      ["max_retries", "10"],
+      ["max_retries", -1],
+      ["retry_delay_ms", undefined],
+      ["retry_delay_ms", "2062"],
+      ["retry_delay_ms", -5],
+      ["retry_delay_ms", Number.POSITIVE_INFINITY],
+    ] as const) {
+      expect(parseApiRetry({ ...event, [key]: bad }, 0), `${key}=${String(bad)}`).toBeNull();
+    }
   });
 });
 

@@ -571,6 +571,21 @@ describe("出错、停止", () => {
     expect(lastLine().text).toContain("炸了");
   });
 
+  it("断网重试用完（result 是 success 但 is_error）：turn_failed 写 claude 给的原因，不带 “success:” 前缀", () => {
+    const sessionId = workerSessionId(worker.id);
+    ledger.applyDriverEvent(sessionId, {
+      type: "api_retry",
+      info: { attempt: 10, maxRetries: 10, retryAt: now + 1_000, errorStatus: null, error: "unknown" },
+      at: now,
+    });
+    runTurn(worker, [taskMessage(worker).id], null, {
+      ok: false,
+      error: { subtype: "success", message: "API Error: Unable to connect to API (ConnectionRefused)" },
+    });
+    expect(workerEventOf(lastLine())).toMatchObject({ event: "turn_failed", summary: "API Error: Unable to connect to API (ConnectionRefused)" });
+    expect(lastLine().text).toContain("Unable to connect to API");
+  });
+
   it("进程崩溃、打断没回应（没有 result 就退出）：一行写明退出码或信号", () => {
     const sessionId = workerSessionId(worker.id);
     const id = taskMessage(worker).id;

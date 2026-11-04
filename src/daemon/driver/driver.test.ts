@@ -1095,16 +1095,6 @@ describe("其他输入输出", () => {
     expect(t.store.get(s.id)!.rateLimit).toBeNull();
   });
 
-  it("system/api_retry：不出事件也不报错，这一轮照常", async () => {
-    const t = harness({ script: { defaultTurn: { steps: [{ apiRetry: { attempt: 1 } }, { text: "好了" }] } } });
-    const s = t.addSession();
-    await t.driver.send(s.id, user(1, "hi"));
-    const ended = await t.waitFor("turn.ended");
-    expect(ended.ok).toBe(true);
-    expect(t.of("driver.error")).toEqual([]);
-    expect(t.of("agent.text").map((e) => e.text)).toEqual(["好了"]);
-  });
-
   it("先写库再发事件：监听者读到的那一行已经是新的", async () => {
     const t = harness({ driver: { idleCloseMs: 50 } });
     const s = t.addSession();

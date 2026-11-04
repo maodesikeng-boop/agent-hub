@@ -513,6 +513,20 @@ export interface RateLimitInfo {
   windows: Record<string, RateLimitWindow>;
 }
 
+/**
+ * 照抄 Claude 的 system/api_retry（断网、服务过载时它自己在重试）：attempt、max_retries、error_status、error 原样，
+ * retry_delay_ms 驱动层按收到的时间换成 retryAt（Unix 毫秒），网页好直接倒计时。
+ * errorStatus 是 HTTP 状态码，断网时没有（null）；error 是 Claude 给的错误类别，如 "unknown"、"overloaded"。
+ * 只在内存里，不入库；收到下一个正常事件（agent 输出、工具调用、一轮结束）就清掉。
+ */
+export interface ApiRetryInfo {
+  attempt: number;
+  maxRetries: number;
+  retryAt: number | null;
+  errorStatus: number | null;
+  error: string;
+}
+
 export const RATE_LIMIT_ALLOWED = "allowed";
 /** 额度用完了。Claude 的 status 有 "allowed"、"allowed_warning"（快到了，照常干活）、"rejected"。 */
 export const RATE_LIMIT_REJECTED = "rejected";
@@ -583,6 +597,8 @@ export interface SessionState {
   /** 正在用的工具名，状态行显示“正在做什么”；没有就是 null。 */
   currentTool: string | null;
   rateLimit: RateLimitInfo | null;
+  /** 正在因为网络出错重试；没有（或老服务端没带这个字段）就是 null / undefined，网页照常显示。 */
+  apiRetry?: ApiRetryInfo | null;
   lastEventAt: number | null;
 }
 

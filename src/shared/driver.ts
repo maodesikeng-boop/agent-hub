@@ -1,5 +1,5 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
-import type { AgentSessionRow, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
+import type { AgentSessionRow, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
 
 export type MessageSource = "user" | "system";
@@ -132,6 +132,20 @@ export interface RateLimitEvent extends DriverEventBase {
   info: RateLimitInfo;
 }
 
+/** system/api_retry：claude 因为网络出错、服务过载在自己重试。不改消息状态，只让会话状态带上重试信息，下一个正常事件清掉。 */
+export interface ApiRetryEvent extends DriverEventBase {
+  type: "api_retry";
+  info: ApiRetryInfo;
+}
+
+/**
+ * 出错的一轮给人看的原因：subtype 加 claude 给的话（“error_during_execution: …”）。
+ * claude 重试用完（断网）时 result 的 subtype 还是 "success"、只是 is_error，这时前缀会误导，只留 claude 给的话。
+ */
+export function turnFailureReason(error: { subtype: string; message: string }): string {
+  return error.subtype === "success" ? error.message : `${error.subtype}: ${error.message}`;
+}
+
 /**
  * 进程为什么退出：
  * - idle：空闲关掉标准输入后正常退出；
@@ -214,6 +228,7 @@ export type DriverEvent =
   | AgentToolEvent
   | TurnEndedEvent
   | RateLimitEvent
+  | ApiRetryEvent
   | SessionExitedEvent
   | DriverErrorEvent;
 

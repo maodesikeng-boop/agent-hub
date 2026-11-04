@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentSessionRow,
+  ApiRetryInfo,
   ConversationId,
   MessageId,
   PmId,
@@ -21,16 +22,20 @@ export interface LiveSession {
   activity: SessionActivity;
   currentTool: string | null;
   rateLimit?: RateLimitInfo | null;
+  /** claude 正在重试（断网、过载）；下一个正常事件（working、idle）清掉。 */
+  apiRetry?: ApiRetryInfo | null;
 }
 
 export const working = (currentTool: string | null) => (l: LiveSession) => {
   if (l.activity !== "stopping") l.activity = "working";
   l.currentTool = currentTool;
+  l.apiRetry = null;
 };
 
 export const idle = (l: LiveSession) => {
   l.activity = "idle";
   l.currentTool = null;
+  l.apiRetry = null;
 };
 
 export type LedgerSessions = ReturnType<typeof createLedgerSessions>;
@@ -61,6 +66,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
       activity: l.activity,
       currentTool: l.currentTool,
       rateLimit: l.rateLimit !== undefined ? l.rateLimit : row.rateLimit,
+      apiRetry: l.apiRetry ?? null,
       lastEventAt: row.lastEventAt,
     };
   };

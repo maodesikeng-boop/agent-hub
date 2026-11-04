@@ -38,8 +38,8 @@ export type FakeStep =
   /** 等这个文件出现再往下走（测试用它卡住一轮，想放行时自己建文件；比睡固定时间稳，机器忙也不会错过窗口）。 */
   | { waitFile: string }
   | { exit: number }
-  /** 发一条 system/api_retry（M0 记录的字段）。 */
-  | { apiRetry: { attempt?: number; error?: string } }
+  /** 发一条 system/api_retry（字段照真 claude；errorStatus 给 null 就是没有状态码，比如断网）。 */
+  | { apiRetry: { attempt?: number; maxRetries?: number; retryDelayMs?: number; errorStatus?: number | null; error?: string } }
   /** 起一个脱离的孙进程，继承标准输出和标准错误，活 sleepSec 秒（测孙进程占着 stdio）。进程号记进日志。 */
   | { spawnOrphan: { sleepSec: number } }
   /**
@@ -422,9 +422,9 @@ async function runTurn(content: UserContent[]): Promise<void> {
         type: "system",
         subtype: "api_retry",
         attempt: step.apiRetry.attempt ?? 1,
-        max_retries: 10,
-        retry_delay_ms: 500,
-        error_status: 529,
+        max_retries: step.apiRetry.maxRetries ?? 10,
+        retry_delay_ms: step.apiRetry.retryDelayMs ?? 500,
+        error_status: step.apiRetry.errorStatus === undefined ? 529 : step.apiRetry.errorStatus,
         error: step.apiRetry.error ?? "overloaded",
         session_id: sessionId,
         uuid: randomUUID(),

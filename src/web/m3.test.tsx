@@ -252,6 +252,29 @@ describe("点开 Worker", () => {
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
+  it("Worker 网络出错在重试：状态行写“网络出错，正在重试”，“停止”照常停 Worker 的对话", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    push(
+      ws,
+      sessionChange(
+        11,
+        makeSession({
+          sessionId: 2,
+          conversationId: 30,
+          status: "running",
+          activity: "working",
+          apiRetry: { attempt: 5, maxRetries: 10, retryAt: null, errorStatus: null, error: "unknown" },
+        }),
+      ),
+    );
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("网络出错，正在重试（第 5/10 次）");
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
+  });
+
   it("新消息推来就接在后面", async () => {
     const user = userEvent.setup();
     const ws = await boot();

@@ -290,6 +290,96 @@ describe("applyDriverEvent", () => {
     expect(ledger.snapshot().sessions).toEqual([states[3]]);
   });
 
+  describe("api_retry（断网、过载时 claude 在重试）", () => {
+    const retry = (attempt: number, over: Partial<{ errorStatus: number | null; error: string }> = {}) =>
+      ({ type: "api_retry", at: attempt, info: { attempt, maxRetries: 10, retryAt: 1_000 * attempt, errorStatus: null, error: "unknown", ...over } }) as const;
+    const apiRetries = () => sessionStates().map((s) => s.apiRetry?.attempt ?? null);
+
+    it("收到就推给网页：会话状态带第几次 / 共几次、下次重试时间点、状态码、error；连续几条更新为最新的", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(retry(1));
+      ev(retry(2, { errorStatus: 529, error: "overloaded" }));
+      expect(sessionStates().at(-1)).toMatchObject({
+        activity: "working",
+        apiRetry: { attempt: 2, maxRetries: 10, retryAt: 2_000, errorStatus: 529, error: "overloaded" },
+      });
+      expect(apiRetries()).toEqual([null, 1, 2]);
+      expect(ledger.snapshot().sessions[0]?.apiRetry).toMatchObject({ attempt: 2 });
+    });
+
+    it("同样的信息再来一次不重复推", () => {
+      setSession({ status: "running" });
+      ev(retry(1));
+      ev(retry(1));
+      expect(apiRetries()).toEqual([1]);
+    });
+
+    it("没有重试信息的会话：apiRetry 是 null", () => {
+      setSession({ status: "running" });
+      ev({ type: "session.started", at: 1, resumed: false, model: null, tools: [] });
+      expect(sessionStates().at(-1)?.apiRetry).toBeNull();
+    });
+
+    it("之后来了 agent 文字、工具调用就清掉", () => {
+      for (const next of [
+        { type: "agent.text", at: 5, uuid: "u1", text: "好了" },
+        { type: "agent.tool", at: 5, uuid: "u2", toolUseId: "t", name: "Bash", input: { command: "ls" } },
+      ] as const) {
+        ev(retry(3));
+        expect(sessionStates().at(-1)?.apiRetry?.attempt).toBe(3);
+        ev(next);
+        expect(sessionStates().at(-1)?.apiRetry).toBeNull();
+      }
+    });
+
+    it("重试用完、这一轮以出错结束：消息标失败带原因，重试信息清掉，回到空闲", () => {
+      const id = post();
+      setStatus(id, "processing");
+      ev(retry(10));
+      ev({
+        type: "turn.ended",
+        at: 11,
+        ok: false,
+        interrupted: false,
+        messageIds: [id],
+        durationMs: 5,
+        error: { subtype: "success", message: "API Error: Unable to connect to API (ConnectionRefused)" },
+      });
+      expect(ledger.getMessage(id)).toMatchObject({
+        status: "failed",
+        failureReason: "API Error: Unable to connect to API (ConnectionRefused)",
+      });
+      expect(sessionStates().at(-1)).toMatchObject({ activity: "idle", apiRetry: null });
+    });
+
+    it("重试中点停止：状态变“正在停止”，重试信息还在，这一轮停掉后清掉", () => {
+      const id = post();
+      setStatus(id, "processing");
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(retry(2));
+      ledger.requestStop(conversationId);
+      expect(sessionStates().at(-1)).toMatchObject({ activity: "stopping", apiRetry: { attempt: 2 } });
+      ev({ type: "turn.ended", at: 3, ok: false, interrupted: true, messageIds: [id], durationMs: null });
+      expect(ledger.getMessage(id)?.status).toBe("stopped");
+      expect(sessionStates().at(-1)).toMatchObject({ activity: "idle", apiRetry: null });
+    });
+
+    it("重试中进程退出（关机、被杀）：消息按退出原因标，重试信息清掉", () => {
+      const [a, b] = [post("a"), post("b")];
+      for (const id of [a, b]) setStatus(id, "processing");
+      ev(retry(4));
+      ev({ type: "session.exited", at: 5, reason: "shutdown", exitCode: null, signal: "SIGINT", hadResult: false, messageIds: [a] });
+      expect(ledger.getMessage(a)?.status).toBe("stopped");
+      expect(sessionStates().at(-1)).toMatchObject({ activity: "idle", apiRetry: null });
+      ev(retry(5));
+      ev({ type: "session.exited", at: 6, reason: "crash", exitCode: 137, signal: null, hadResult: false, messageIds: [b] });
+      expect(ledger.getMessage(b)).toMatchObject({ status: "failed", failureReason: "crash: exit code 137" });
+      expect(sessionStates().at(-1)).toMatchObject({ activity: "idle", apiRetry: null });
+    });
+  });
+
   it("会话状态只从那一行读：驱动层先写库再发事件，状态变化照样推出去", () => {
     ev({ type: "rate_limit", at: 1, info: { status: "allowed", resetsAt: 1, windows: {} } });
     expect(sessionStates().at(-1)?.status).toBe("idle");
@@ -549,7 +639,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, lastEventAt: null },
+      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);

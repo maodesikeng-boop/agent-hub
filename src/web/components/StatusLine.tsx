@@ -3,6 +3,7 @@ import type { SessionState } from "../../shared/index.ts";
 import { formatResetTime } from "../format.ts";
 import { isWaitingForQuota } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
+import { RetryNotice } from "./RetryNotice.tsx";
 
 export type StopPhase = "idle" | "sending" | "requested" | "failed";
 
@@ -40,6 +41,8 @@ export function StatusLine({
           </>
         ) : activity === "stopping" ? (
           "正在停止"
+        ) : session?.apiRetry ? (
+          <RetryNotice info={session.apiRetry} />
         ) : session?.currentTool ? (
           <>
             {agentName} 正在运行{" "}

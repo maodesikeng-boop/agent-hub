@@ -4,6 +4,7 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
@@ -154,7 +155,7 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         updateLive(p, sessionId, working(event.name));
         return;
       case "turn.ended": {
-        const reason = event.error === undefined ? "turn_failed" : `${event.error.subtype}: ${event.error.message}`;
+        const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
         for (const id of event.messageIds) {
           if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
           if (event.interrupted) transition(p, id, "stopped");
@@ -167,6 +168,11 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
       case "rate_limit":
         updateLive(p, sessionId, (l) => {
           l.rateLimit = event.info;
+        });
+        return;
+      case "api_retry":
+        updateLive(p, sessionId, (l) => {
+          l.apiRetry = event.info;
         });
         return;
       case "session.exited": {
