@@ -2,10 +2,10 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import type { Message, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { formatQuotaReset } from "./format.ts";
 import { App } from "./App.tsx";
-import { isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount } from "./selectors.ts";
+import { isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount, workerPhaseOf } from "./selectors.ts";
 import { initialState, reducer } from "./state.ts";
 import {
   FakeApi,
@@ -72,6 +72,14 @@ function withWorker(over: Partial<StateSnapshot> = {}): StateSnapshot {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function nav() {
   return screen.getByRole("navigation", { name: "对话列表" });
 }
@@ -109,6 +117,25 @@ describe("那一行", () => {
       }),
     );
     expect(within(log()).getByRole("button", { name: "Worker · 调查 Y · 已派出（只读）" })).toBeInTheDocument();
+  });
+
+  it("用户直接对 Worker 说的话：一行“Worker · 标题 · 你对它说：原文”，点开是 Worker 的对话", async () => {
+    const user = userEvent.setup();
+    await boot(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [makeWorkerLine({ id: 2, conversationId: 1, line: { event: "user_message", summary: "顺便改 README" }, text: "【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】\n\n顺便改 README" })],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          withWorker().conversations[1]!,
+        ],
+      }),
+    );
+    const line = within(log()).getByRole("button", { name: "Worker · 修 X · 你对它说：顺便改 README" });
+    expect(within(log()).queryByText(/Worker 已收到/)).not.toBeInTheDocument();
+    await user.click(line);
+    expect(screen.getByRole("region", { name: "Worker · 修 X" })).toBeInTheDocument();
   });
 
   it("各种事件：有问题、放弃了、没按格式、这一轮没做完、建 worktree 失败、已收工", async () => {
@@ -172,7 +199,7 @@ describe("左栏", () => {
 });
 
 describe("点开 Worker", () => {
-  it("点那一行：右边是 Worker 的对话，有任务、回复和折叠的操作；只看不发，没有输入框", async () => {
+  it("点那一行：右边是 Worker 的对话，有任务、回复和折叠的操作", async () => {
     const user = userEvent.setup();
     await boot();
     await user.click(within(log()).getByRole("button", { name: /做完了/ }));
@@ -183,7 +210,6 @@ describe("点开 Worker", () => {
     await user.click(within(section).getByRole("button", { name: /执行了 2 个操作/ }));
     expect(within(section).getByText("Bash: git status")).toBeInTheDocument();
     expect(within(section).getByText("Edit: src/x.ts")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     // 项目经理的会话不见了，左栏还停在项目经理上
     expect(screen.queryByRole("region", { name: "小林" })).not.toBeInTheDocument();
     expect(within(nav()).getByRole("button", { name: /小林/ })).toHaveAttribute("aria-current", "true");
@@ -639,6 +665,31 @@ describe("右边栏的 Worker 列表", () => {
 describe("selectors", () => {
   const loaded = (snapshot: StateSnapshot) => reducer(initialState, { type: "loaded", snapshot });
 
+  it("workerPhaseOf：收工（已收工、建 worktree 失败那一行，或会话 ended）/ 准备中（任务说明还在排队）/ 能接话", () => {
+    const at = (workerMessages: Message[], lines: Message[] = [], status: "idle" | "ended" = "idle", activity: SessionState["activity"] = "idle") =>
+      workerPhaseOf(
+        loaded(
+          withWorker({
+            conversations: [
+              makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 }), ...lines], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+              makeConvSnapshot(workerMessages, { conversation: makeWorkerConversation() }),
+            ],
+            sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 30, status, activity })],
+          }),
+        ),
+        30,
+      );
+    const task = (status: Message["status"]) => makeMessage({ id: 10, conversationId: 30, sender: "pm", status, text: "任务" });
+    expect(at([task("queued")])).toBe("preparing");
+    expect(at([task("delivered")])).toBe("open");
+    expect(at([task("replied"), makeMessage({ id: 11, conversationId: 30, sender: "pm", status: "queued", text: "打回" })])).toBe("open");
+    expect(at([task("replied")], [makeWorkerLine({ id: 3, conversationId: 1, line: { event: "ended" } })])).toBe("ended");
+    expect(at([task("failed")], [makeWorkerLine({ id: 3, conversationId: 1, line: { event: "worktree_failed" } })])).toBe("ended");
+    expect(at([task("queued")], [], "ended")).toBe("ended");
+    // 正在跑准备命令（PR #47）
+    expect(at([task("delivered")], [], "idle", "preparing")).toBe("preparing");
+  });
+
   it("listConversations 不含 kind worker 的对话", () => {
     expect(listConversations(loaded(withWorker())).map((e) => e.id)).toEqual([1]);
   });
@@ -766,5 +817,188 @@ describe("selectors", () => {
       }),
     );
     expect(runningWorkerCount(state, 1)).toBe(1);
+  });
+});
+
+describe("在 Worker 页面直接对它说话", () => {
+  async function openWorker(snapshot?: StateSnapshot) {
+    const user = userEvent.setup();
+    const ws = await boot(snapshot);
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    const section = screen.getByRole("region", { name: "Worker · 修 X" });
+    return { user, ws, section, box: () => within(section).getByRole("textbox", { name: "输入消息" }) };
+  }
+
+  it("有和项目经理页面一样的输入框；回车发到 Worker 的对话，先乐观显示成我的气泡，真消息到了不重复", async () => {
+    const { user, ws, section, box } = await openWorker();
+    expect(box()).toHaveAttribute("placeholder", "给 修 X 发消息");
+    const gate = deferred<{ status: number; body: unknown }>();
+    api.postMessage = () => gate.promise;
+    await user.type(box(), "顺便改 README{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    const call = api.callsTo("POST", /messages$/)[0]!;
+    expect(call.path).toBe("/api/conversations/30/messages");
+    expect(call.body).toMatchObject({ text: "顺便改 README" });
+    expect(box()).toHaveValue("");
+    const mine = within(section).getByText("顺便改 README").closest("article")!;
+    expect(mine).toHaveAttribute("data-side", "right");
+    expect(within(mine).getByText("排队中")).toBeInTheDocument();
+    const clientId = (call.body as { clientId: string }).clientId;
+    push(
+      ws,
+      messageChange(11, "message.created", makeUserMessage({ id: 40, conversationId: 30, workerId: 3, text: "顺便改 README", status: "queued", dedupeKey: `client:30:${clientId}` })),
+    );
+    gate.resolve({ status: 200, body: { messageId: 40 } });
+    await act(async () => {});
+    expect(within(section).getAllByText("顺便改 README")).toHaveLength(1);
+    expect(within(within(section).getByText("顺便改 README").closest("article")!).getByText("排队中")).toBeInTheDocument();
+  });
+
+  it("我说的靠右、项目经理说的靠左带它的名字，两种署名分得清", async () => {
+    const { section } = await openWorker(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot(
+            [
+              makeMessage({ id: 10, conversationId: 30, sender: "pm", sessionId: null, status: "replied", text: "任务：修 X" }),
+              makeUserMessage({ id: 11, conversationId: 30, workerId: 3, text: "我插一句" }),
+            ],
+            { conversation: makeWorkerConversation() },
+          ),
+        ],
+      }),
+    );
+    expect(within(section).getByText("任务：修 X").closest("article")).toHaveAttribute("data-side", "left");
+    const mine = within(section).getByText("我插一句").closest("article")!;
+    expect(mine).toHaveAttribute("data-side", "right");
+    expect(within(mine).queryByText("小林")).not.toBeInTheDocument();
+  });
+
+  it("草稿按对话分开：Worker 页面打了一半回到项目经理，项目经理的输入框是空的；再回来草稿还在", async () => {
+    const { user, box } = await openWorker();
+    await user.type(box(), "写了一半");
+    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    expect(within(screen.getByRole("region", { name: "小林" })).getByRole("textbox")).toHaveValue("");
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    expect(box()).toHaveValue("写了一半");
+  });
+
+  it("Worker 正忙：输入框照样能发，和项目经理页面一样", async () => {
+    const { user, ws, box } = await openWorker();
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working", currentTool: "Bash" })));
+    expect(box()).toBeEnabled();
+    await user.type(box(), "忙完看一下这个{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+  });
+
+  it("Worker 已收工（会话 ended）：不显示输入框", async () => {
+    const { ws, section } = await openWorker();
+    expect(within(section).getByRole("textbox")).toBeInTheDocument();
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "ended" })));
+    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(section).getByText("已经修好了")).toBeInTheDocument();
+  });
+
+  it("项目经理已经让它收工（有“已收工”那一行），会话还在跑完这一轮：Worker 页面不显示输入框，右边栏也算收工", async () => {
+    const { ws, section } = await openWorker();
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working" })));
+    push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "ended" } })));
+    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+    const panel = screen.getByRole("complementary", { name: "Worker" });
+    expect(within(panel).getByText("已收工")).toBeInTheDocument();
+  });
+
+  it("建 worktree 失败（worktree_failed 那一行）：不显示输入框", async () => {
+    const { ws, section } = await openWorker();
+    push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "worktree_failed", summary: "目录被占用" } })));
+    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("还在准备（任务说明还在排队，worktree 没建好）：输入框不可用；任务说明送达后能用", async () => {
+    const { ws, box } = await openWorker(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([makeMessage({ id: 10, conversationId: 30, sender: "pm", status: "queued", text: "任务：修 X" })], {
+            conversation: makeWorkerConversation(),
+          }),
+        ],
+      }),
+    );
+    expect(box()).toBeDisabled();
+    expect(box()).toHaveAttribute("placeholder", "修 X 还在准备");
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    push(ws, messageChange(11, "message.updated", makeMessage({ id: 10, conversationId: 30, sender: "pm", status: "delivered", text: "任务：修 X" })));
+    expect(box()).toBeEnabled();
+    expect(box()).toHaveAttribute("placeholder", "给 修 X 发消息");
+  });
+
+  it("和项目经理页面一样能带文件：回形针选文件，先上传、再发到 Worker 的对话；草稿和待发文件按对话分开", async () => {
+    const { user, section, box } = await openWorker();
+    await user.type(box(), "看这个");
+    await user.upload(within(section).getByLabelText("选择文件") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
+    expect(within(within(section).getByRole("list", { name: "待发送的文件" })).getByText("日志.txt")).toBeInTheDocument();
+    // 回到项目经理：它的输入框上没有这份待发文件
+    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    expect(within(screen.getByRole("region", { name: "小林" })).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    const again = screen.getByRole("region", { name: "Worker · 修 X" });
+    await user.click(within(again).getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    const call = api.callsTo("POST", /messages$/)[0]!;
+    expect(call.path).toBe("/api/conversations/30/messages");
+    expect(call.body).toMatchObject({ text: "看这个", attachmentIds: [expect.any(String)] });
+    expect(api.uploads.map((u) => u.name)).toEqual(["日志.txt"]);
+  });
+
+  it("切对话不重复发：Worker 页面带文件发出去以后回到项目经理再发，只多一条发给项目经理的、不带那份文件，也不再上传", async () => {
+    const { user, section, box } = await openWorker();
+    await user.upload(within(section).getByLabelText("选择文件") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
+    await user.type(box(), "看这个{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    await waitFor(() => expect(within(section).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    const pm = screen.getByRole("region", { name: "小林" });
+    expect(within(pm).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
+    await user.type(within(pm).getByRole("textbox", { name: "输入消息" }), "收到了吗{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
+    const [toWorker, toPm] = api.callsTo("POST", /messages$/);
+    expect(toWorker!.path).toBe("/api/conversations/30/messages");
+    expect(toPm!.path).toBe("/api/conversations/1/messages");
+    expect(toPm!.body).not.toHaveProperty("attachmentIds");
+    expect(api.uploads).toHaveLength(1);
+    // 再回 Worker：输入框和待发列表是空的
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    const again = screen.getByRole("region", { name: "Worker · 修 X" });
+    expect(within(again).getByRole("textbox", { name: "输入消息" })).toHaveValue("");
+    expect(within(again).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
+  });
+
+  it("还在准备时加文件按钮也不可用", async () => {
+    const { section } = await openWorker(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([makeMessage({ id: 10, conversationId: 30, sender: "pm", status: "queued", text: "任务：修 X" })], {
+            conversation: makeWorkerConversation(),
+          }),
+        ],
+      }),
+    );
+    expect(within(section).getByRole("button", { name: "添加文件" })).toBeDisabled();
+  });
+
+  it("服务端拒收（409，收工那一刻正好发出去）或断网：标“发送失败”，可以重试", async () => {
+    const { user, section, box } = await openWorker();
+    api.postMessage = () => ({ status: 409, body: { error: "Worker #3 已经收工了，不能再给它发消息", code: "conflict" } });
+    await user.type(box(), "还在吗{Enter}");
+    expect(await within(section).findByText("发送失败")).toBeInTheDocument();
+    api.postMessage = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await user.click(within(section).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
+    expect(await within(section).findByText("发送失败")).toBeInTheDocument();
   });
 });

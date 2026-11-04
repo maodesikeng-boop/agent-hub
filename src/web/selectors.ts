@@ -213,36 +213,65 @@ export function runningWorkerCount(state: HubState, pmId: PmId): number {
   ).length;
 }
 
+/**
+ * Worker 现在能不能接用户的话（右边栏和 Worker 页面共用，和账本 workers.ts 的 assertWorkerOpenForUser 同一个意思）：
+ * - ended：收工了：项目经理的会话里有 ended / worktree_failed 那一行（项目经理 worker end 后会话要等这一轮跑完才 ended），
+ *   或者它的会话结束了；
+ * - preparing：还在准备：会话在跑准备命令（activity preparing），或者任务说明还在排队、没发给它（worktree 还没建好）。比账本严一点：建好之后、
+ *   任务说明送达之前的一小会儿也算；
+ * - open：能接话。
+ */
+export type WorkerPhase = "preparing" | "open" | "ended";
+
+/** 这个项目经理的会话里有“已收工”“建 worktree 失败”那一行的 Worker 对话。 */
+function endedByLine(state: HubState, pmId: PmId | null): Set<ConversationId> {
+  const ended = new Set<ConversationId>();
+  for (const { conversation, messages } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
+    for (const message of messages) {
+      const meta = workerEventOf(message);
+      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) ended.add(meta.workerConversationId);
+    }
+  }
+  return ended;
+}
+
+function phaseOf(state: HubState, workerConversationId: ConversationId, endedLines: Set<ConversationId>): WorkerPhase {
+  const session = sessionOf(state, workerConversationId);
+  if (endedLines.has(workerConversationId) || session?.status === "ended") return "ended";
+  // 正在跑项目的准备命令（PR #47，会话 activity 是 preparing）
+  if (session?.activity === "preparing") return "preparing";
+  const view = state.conversations[workerConversationId];
+  // 第一条是任务说明（翻页翻掉了说明早就发过了）
+  const task = view?.hasMore === false ? view.messages[0] : undefined;
+  return task?.sender === "pm" && task.status === "queued" ? "preparing" : "open";
+}
+
+export function workerPhaseOf(state: HubState, workerConversationId: ConversationId): WorkerPhase {
+  const pmId = state.conversations[workerConversationId]?.conversation.pmId ?? null;
+  return phaseOf(state, workerConversationId, endedByLine(state, pmId));
+}
+
 export interface WorkerEntry {
   conversationId: ConversationId;
   title: string;
   /** 会话的 activity；没有会话当 idle。不一定是 SessionActivity 里的值（以后会加），显示的地方要有兜底。 */
   activity: string;
-  /** 收工了：项目经理的会话里有 ended / worktree_failed 那一行，或者它的会话结束了。 */
+  /** 收工了（workerPhaseOf 是 ended）。 */
   ended: boolean;
 }
 
 /** 这个项目经理派的 Worker：进行中的在前，收工的在后，同一组里按派出的顺序（对话编号）。 */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
-  const endedLines = new Set<ConversationId>();
-  for (const { conversation, messages } of Object.values(state.conversations)) {
-    if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
-    for (const message of messages) {
-      const meta = workerEventOf(message);
-      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) endedLines.add(meta.workerConversationId);
-    }
-  }
+  const endedLines = endedByLine(state, pmId);
   return Object.values(state.conversations)
     .filter(({ conversation }) => conversation.kind === "worker" && conversation.pmId === pmId)
-    .map(({ conversation }) => {
-      const session = sessionOf(state, conversation.id);
-      return {
-        conversationId: conversation.id,
-        title: conversation.title,
-        activity: session?.activity ?? "idle",
-        ended: endedLines.has(conversation.id) || session?.status === "ended",
-      };
-    })
+    .map(({ conversation }) => ({
+      conversationId: conversation.id,
+      title: conversation.title,
+      activity: sessionOf(state, conversation.id)?.activity ?? "idle",
+      ended: phaseOf(state, conversation.id, endedLines) === "ended",
+    }))
     .toSorted((a, b) => Number(a.ended) - Number(b.ended) || a.conversationId - b.conversationId);
 }
 

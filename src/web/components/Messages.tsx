@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Loader2,
+  MessageSquare,
   Square,
   TerminalSquare,
   TriangleAlert,
@@ -125,13 +126,15 @@ function SystemNotice({ message, actions }: { message: Message; actions: Message
 
 const WORKER_LINE_ICON_CLASS = "size-4 shrink-0";
 
-/** 那一行前面的图标：派出、做完了、有问题、出错或放弃、没按格式、收工。 */
+/** 那一行前面的图标：派出、做完了、有问题、出错或放弃、没按格式、收工、你直接对它说的话。 */
 function WorkerLineIcon({ line }: { line: WorkerMessageMeta }) {
   switch (line.event) {
     case "started":
       return <CirclePlay className={cn(WORKER_LINE_ICON_CLASS, "text-primary")} aria-hidden="true" />;
     case "ended":
       return <Archive className={WORKER_LINE_ICON_CLASS} aria-hidden="true" />;
+    case "user_message":
+      return <MessageSquare className={cn(WORKER_LINE_ICON_CLASS, "text-muted-foreground")} aria-hidden="true" />;
     case "turn_failed":
     case "worktree_failed":
       return <CircleX className={cn(WORKER_LINE_ICON_CLASS, "text-danger")} aria-hidden="true" />;

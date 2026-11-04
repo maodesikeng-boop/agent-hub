@@ -136,6 +136,18 @@ describe("session.send 处理函数", () => {
     expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text: "你好" });
   });
 
+  it("Worker 对话里用户直接说的话：前面加【用户直接对你说】；项目经理的话、项目经理对话里用户的话原样发", async () => {
+    for (const [patch, text] of [
+      [{ workerId: 3, sender: "user" }, "【用户直接对你说】\n你好"],
+      [{ workerId: 3, sender: "pm" }, "你好"],
+      [{ workerId: null, sender: "user" }, "你好"],
+    ] as const) {
+      const { d, send } = deps({ message: message(patch) });
+      await createSessionSendHandler(d)(sendAction());
+      expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text });
+    }
+  });
+
   it("重启后重发：resend 传过去（重发说明由驱动层加，这里不加标签）", async () => {
     const { d, send } = deps({ message: message({ status: "processing" }) });
     await createSessionSendHandler(d)(sendAction({ resend: true }));

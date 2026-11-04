@@ -33,7 +33,7 @@
 
 - 工单卡片（设计里的，M3 不做）的多种状态、原地更新：一行一行的汇报就够看了，状态只在 `workers` 表里留一列。M3 也不另立“工单”这个叫法，每个 Worker 一条记录就叫 Worker（2026-11-03 定，见第 3 节接口约定）。
 - 收件箱、“待你验收”分组、通知、权限钩子、审批卡片（M4）：M3 没人能中途批准，所以默认档用 `auto`（第 2.1 节）。
-- `@Worker`、用户直接跟 Worker 说话：用户的话都经过项目经理，少一条路要测。用户想纠正 Worker，跟项目经理说就行。
+- `@Worker`、用户直接跟 Worker 说话：用户的话都经过项目经理，少一条路要测。用户想纠正 Worker，跟项目经理说就行。（11-04 起用户能在 Worker 页面直接说话，见第 6 节“M3 之后”。）
 - 汇报格式不对时自动让它重写：每一轮结束都当成一份汇报交给项目经理，格式不对就标“没按格式”，由项目经理看原文判断。
 - 合并按钮、“通过”“打回”按钮、Worker 详情页（设计里的工单详情页）、改动预览：合并由用户在会话里说一句，项目经理用 git 做。
 - 守护进程替 agent 合并、删 worktree、合并前检查：都交给项目经理用 git 做，少一套要测的代码。
@@ -373,6 +373,14 @@ M3 所有 PR 合并后，用户在本机：
 6. **名字收拢**：命令名、产品名只在 `src/shared/names.ts` 定（`HUB_COMMAND`、`PRODUCT_NAME`，加上由它们拼出来的 `LOG_PREFIX`、`DATA_DIR_NAME`、`WORKER_BRANCH_PREFIX`）。用到的地方：提示词、放行规则、`hub` 外壳的文件名、`hub/cli.ts` 的用法和报错、账本回给 agent 的话、Worker 的分支名、数据目录的默认名、日志开头、网页标题（`vite.config.ts` 把 `index.html` 里的 `%PRODUCT_NAME%` 换掉）和左上角。测试里的断言和假 `claude` 的剧本也用这些常量：把 `names.ts` 里的两个值改掉再跑 `pnpm check`，全部通过（W5 实测过）。
    - 没跟着变的：环境变量名（`AGENT_HUB_HOME` 这些，在 `limits.ts`），用户可能已经在 shell 里设了；`hub.sock`、`hub.sqlite` 这些内部文件名。
    - 还没做的：改了 `PRODUCT_NAME` 以后默认数据目录跟着变，已经有 `~/.agent-hub` 的用户要自己搬，或者用 `AGENT_HUB_HOME` 指过去。
+
+**M3 之后：用户在 Worker 页面直接说话（11-04）**
+
+1. Worker 页面底部是和项目经理页面同一个输入框（`Composer`），草稿、待发文件（回形针、拖放、粘贴）、乐观显示、重试也是同一套；收工了不显示输入框，还在准备（任务说明还在排队）时输入框不可用；判断用 `web/selectors.ts` 的 `workerPhaseOf`，右边栏的 Worker 列表也用它（PR #42 审查第 1、2 条）。
+2. 不加新接口：还是 `POST /api/conversations/:id/messages` → `postUserMessage`（消息带 `workerId`）→ `session.send`（source `user`）。Worker 已收工、还在准备（worktree 没建好，`base_commit` 还是空的）都回 409，重试也一样（`workers.ts` 的 `assertWorkerOpenForUser`），不会让用户的话赶在任务说明前面。
+3. 写给 Worker 时，`handlers.ts` 用 `shared/worker.ts` 的 `deliveryText`（原文加附件路径，即 `agentTextOf`）在用户的话前面加“【用户直接对你说】”，项目经理的话不带标签；库里存原文。忙时和项目经理的话一起拼成一条，每条看开头就知道是谁说的。
+4. Worker 真正收到时（`message.delivered`，同一个事务），项目经理对话里多一行 `user_message`（“Worker · 标题 · 你对它说：…”），全文以“【用户直接对 Worker #N · 标题 说的话（Worker 已收到）】”开头交给项目经理（source `system`，不打断它，空闲时再发）。没送到的（收工前还在排队、发不出去）不发这一行；发不出去或这一轮出错，照旧给项目经理一行 `turn_failed`，里面带用户的原文，失败的写明用户那边可以自己点重试。
+5. 不用迁移：`messages.worker_id` 早就有，新事件只在 meta 的 JSON 里。
 
 [cc-headless]: https://code.claude.com/docs/en/headless
 [cc-modes]: https://code.claude.com/docs/en/permission-modes

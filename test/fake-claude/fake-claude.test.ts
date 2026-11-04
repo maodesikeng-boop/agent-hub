@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { WORKER_ENV } from "../../src/shared/policy.ts";
 
 const FAKE = new URL("./fake-claude.ts", import.meta.url).pathname;
 const userLine = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
@@ -23,7 +24,9 @@ function run(
   extra: { env?: Record<string, string>; cwd?: string } = {},
 ): Promise<{ code: number | null; events: Array<Record<string, unknown>>; stderr: string }> {
   dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
-  const env: Record<string, string | undefined> = { ...process.env, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log"), ...extra.env };
+  // 在 Worker 的会话里跑测试时 Worker 才有的环境变量会传下来（假 claude 靠它认角色），去掉
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !(key in WORKER_ENV)));
+  const env: Record<string, string | undefined> = { ...inherited, FAKE_CLAUDE_STATE: dir, FAKE_CLAUDE_LOG: join(dir, "log"), ...extra.env };
   if (stateless) {
     delete env.FAKE_CLAUDE_STATE;
     delete env.FAKE_CLAUDE_LOG;

@@ -1,6 +1,6 @@
 // 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
 // - session.start → driver.start(sessionId)；
-// - session.send → 读出消息，调 driver.send：written / rejected → done；queued（会话正忙）→ later；
+// - session.send → 读出消息（写给 agent 的文字用 deliveryText），调 driver.send：written / rejected → done；queued（会话正忙）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
 // - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）；
@@ -13,7 +13,7 @@ import {
   RATE_LIMIT_RECHECK_PAD_MS,
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
-  agentTextOf,
+  deliveryText,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -75,8 +75,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       result = await deps.driver.send(sessionId, {
         messageIds: [messageId],
         source,
-        // 用户写的字 + 附件的完整路径（没有附件就是原文）
-        text: agentTextOf(message),
+        // 用户写的字 + 附件的完整路径；Worker 对话里用户直接说的话再加上标签（shared/worker.ts）
+        text: deliveryText(message),
         ...(resend ? { resend: true } : {}),
         ...(recovery ? { recovery: true } : {}),
       });
