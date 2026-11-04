@@ -1,5 +1,4 @@
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
 import type { ConversationId, SessionState } from "../../shared/index.ts";
 import type { WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -10,7 +9,8 @@ import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
-import { StatusLine, type StopPhase } from "./StatusLine.tsx";
+import { useStop } from "../useStop.ts";
+import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
 
 /**
  * 点开项目经理会话里的 Worker 那一行看到的：这个 Worker 自己的对话。用户可以直接对它说话，输入框、草稿、乐观显示、
@@ -62,21 +62,7 @@ export function WorkerConversation({
   actions: MessageActions;
 }) {
   const id = view?.conversation.id;
-  const [stopPhase, setStopPhase] = useState<StopPhase>("idle");
-  const activity = session?.activity ?? "idle";
-
-  useEffect(() => {
-    if (activity === "idle") setStopPhase("idle");
-  }, [activity]);
-
-  const stop = () => {
-    if (id === undefined) return;
-    setStopPhase("sending");
-    onStop(id).then(
-      () => setStopPhase("requested"),
-      () => setStopPhase("failed"),
-    );
-  };
+  const stop = useStop(session, id === undefined ? null : () => onStop(id));
 
   const identity = { name: title, avatarKey: id ?? 0 };
   return (
@@ -108,15 +94,17 @@ export function WorkerConversation({
               onLoadOlder={() => onLoadOlder(view.conversation.id)}
               onRetry={onRetry}
               actions={actions}
+              status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
+              statusAgent={identity}
             />
           </div>
-          <div className="mx-auto w-full max-w-[888px] shrink-0 space-y-2.5 px-6 pb-5 empty:hidden">
-            <StatusLine agentName={title} session={session} stopPhase={stopPhase} onStop={stop} />
+          <div className="mx-auto w-full max-w-[888px] shrink-0 px-6 pb-5 empty:hidden">
             {phase !== "ended" && (
               <Composer
                 value={draft}
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
+                stop={stop}
                 onChange={(v) => onDraftChange(view.conversation.id, v)}
                 staging={staging}
                 onSend={(text, files) => onSend(view.conversation.id, text, files)}

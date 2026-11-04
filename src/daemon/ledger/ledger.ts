@@ -170,6 +170,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     createPm,
 
     getMessage: messages.getMessage,
+    sentFileAllows(sessionId, realPath) {
+      const session = getAgentSession(db, sessionId);
+      return session !== null && sentFiles.allows(session, realPath);
+    },
     // 消息标 failed（messages.ts），Worker 的再给项目经理发一行（workers.ts），同一个事务
     onActionFailed(action, error) {
       write((p) => {

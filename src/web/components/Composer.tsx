@@ -1,22 +1,35 @@
-import { ArrowUp, FileText, Paperclip, X } from "lucide-react";
+import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { byteLength } from "../format.ts";
 import { formatBytes, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
+import type { StopControl } from "../useStop.ts";
 
 const MAX_HEIGHT_PX = 180;
+
+/** “停止”键：和发送键同一个按钮（同位置、同大小），图标是方块；正在停止时不可点。 */
+function StopButton({ stop }: { stop: StopControl }) {
+  return (
+    <Button size="icon" aria-label="停止" disabled={stop.stopping} onClick={stop.onStop}>
+      <Square className="size-4 fill-current" aria-hidden="true" />
+    </Button>
+  );
+}
 
 /**
  * 输入框：打字、回形针选文件（可多选）、粘贴截图/文件，待发文件列在输入框上方。不绑定哪个对话：
  * 文字和待发文件（staging，见 upload.ts 的 useStagingStore）都由调用者保存；
  * onSend 收到文字和待发的文件，只有文字时同步处理（返回 undefined），带文件时返回 Promise（上传、发出去），
  * 它 reject 的 Error.message 会显示在输入框上方，文字和文件都留着。
+ * stop：agent 在忙、而且输入框里没有文字也没有待发文件时，发送键变成“停止”（同一个位置、同样大小，图标是方块）；
+ * 一有内容就变回发送（照常排队）；正在停止时不可点。
  */
 export function Composer({
   value,
   placeholder,
   staging,
+  stop,
   onChange,
   onSend,
   disabled = false,
@@ -24,8 +37,9 @@ export function Composer({
   value: string;
   placeholder: string;
   staging: StagedFiles;
-  /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用。 */
+  /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
+  stop?: StopControl;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
 }) {
@@ -33,7 +47,9 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   const tooLong = byteLength(value) > MAX_MESSAGE_BYTES;
-  const canSend = !disabled && (value.trim() !== "" || files.length > 0) && !tooLong && !busy;
+  const hasContent = value.trim() !== "" || files.length > 0;
+  const canSend = !disabled && hasContent && !tooLong && !busy;
+  const showStop = stop !== undefined && stop.busy && !hasContent;
 
   // 输入框跟着内容长高，到上限后出滚动条
   useLayoutEffect(() => {
@@ -121,9 +137,14 @@ export function Composer({
         </Button>
         <div className="ml-auto flex items-center gap-2">
           {tooLong && <span className="text-[13px] text-danger">消息太长</span>}
-          <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
-            <ArrowUp className="size-5" aria-hidden="true" />
-          </Button>
+          {stop?.failed && showStop && <span className="text-[13.5px] text-danger">停止失败</span>}
+          {showStop ? (
+            <StopButton stop={stop} />
+          ) : (
+            <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
+              <ArrowUp className="size-5" aria-hidden="true" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

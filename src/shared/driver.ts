@@ -99,15 +99,35 @@ export interface TurnStartedEvent extends DriverEventBase {
   type: "turn.started";
 }
 
+/**
+ * 子任务（Agent / Task 工具派出去的）里的事件，原始事件的 parent_tool_use_id 照抄过来；主 agent 自己的事件没有这个字段。
+ * 账本照常入库，但不拿它改“在做什么”（那是主 agent 的状态）。
+ */
+export interface SubtaskField {
+  parentToolUseId?: string;
+}
+
 /** assistant 的一段文字。 */
-export interface AgentTextEvent extends DriverEventBase {
+export interface AgentTextEvent extends DriverEventBase, SubtaskField {
   type: "agent.text";
   uuid: string;
   text: string;
 }
 
+/** assistant 的一个 thinking 块（内容不带，只告诉账本“在思考”）。 */
+export interface AgentThinkingEvent extends DriverEventBase, SubtaskField {
+  type: "agent.thinking";
+  uuid: string;
+}
+
+/** 工具结果回来了（user 事件里的 tool_result 块）：toolUseIds 是对应的 tool_use 的 id。 */
+export interface AgentToolResultEvent extends DriverEventBase, SubtaskField {
+  type: "agent.tool_result";
+  toolUseIds: string[];
+}
+
 /** 一次工具调用（调用开始时出一个）。Message.text 的一行摘要由账本生成。 */
-export interface AgentToolEvent extends DriverEventBase {
+export interface AgentToolEvent extends DriverEventBase, SubtaskField {
   type: "agent.tool";
   uuid: string;
   toolUseId: string;
@@ -234,7 +254,9 @@ export type DriverEvent =
   | MessageProcessingEvent
   | TurnStartedEvent
   | AgentTextEvent
+  | AgentThinkingEvent
   | AgentToolEvent
+  | AgentToolResultEvent
   | TurnEndedEvent
   | RateLimitEvent
   | ApiRetryEvent

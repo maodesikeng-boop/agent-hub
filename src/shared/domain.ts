@@ -561,6 +561,22 @@ export interface ApiRetryInfo {
   error: string;
 }
 
+/**
+ * agent 这一刻在做什么：照 claude assistant 消息里 content 块的样子（type、name、input），只留显示要用的几个参数。
+ * 只在内存里，不入库；工具结果回来、一轮结束、进程退出时更新或清掉。网页的文案映射在 web/step-labels.ts。
+ */
+export type AgentStep =
+  | { type: "thinking" }
+  | { type: "text" }
+  | { type: "tool_use"; name: string; input: AgentStepInput };
+
+/** tool_use 的 input 里状态要用的字段（Skill 的 skill、读写文件的 file_path / notebook_path），别的不带。 */
+export interface AgentStepInput {
+  skill?: string;
+  file_path?: string;
+  notebook_path?: string;
+}
+
 export const RATE_LIMIT_ALLOWED = "allowed";
 /** 额度用完了。Claude 的 status 有 "allowed"、"allowed_warning"（快到了，照常干活）、"rejected"。 */
 export const RATE_LIMIT_REJECTED = "rejected";
@@ -661,6 +677,8 @@ export interface SessionState {
   vendor?: string;
   model?: string | null;
   effort?: string | null;
+  /** 在做什么（思考、写回复、哪个工具）；没有（空闲，或老服务端没带这个字段）就是 null / undefined，网页只显示“在处理”。 */
+  step?: AgentStep | null;
   lastEventAt: number | null;
 }
 

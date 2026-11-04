@@ -551,8 +551,9 @@ claude -p --output-format json --json-schema <分拣结果的格式>
 | `user`，`--replay-user-messages` 的回显 | 对应的消息标“处理中” |
 | `user`，内容是 `[Request interrupted by user]` | 标记这一轮“被打断”（第 7.4 节） |
 | `assistant`，内容里有文字 | 变成一条 agent 消息显示出来 |
-| `assistant`，内容里有工具调用；`user`，内容里是工具结果 | 记进这一轮的操作列表，界面折叠成“执行了 N 个操作”；顶部状态显示当前在做什么 |
-| `system` / `api_retry` | 断网、过载时 claude 自己在重试。出 `api_retry` 事件（第几次 / 共几次、下次重试时间点、状态码、error），账本放进会话状态的 `apiRetry`（只在内存），网页状态行显示“网络出错，正在重试（第 3/10 次）”；下一个正常事件（agent 输出、工具调用、一轮结束）清掉。重试用完 claude 出一个 `subtype: success`、`is_error: true` 的 result，按“这一轮出错”走（消息标失败，原因是 result 里那句话；Worker 的发 turn_failed 给项目经理）。字段缺了或类型不对的整条跳过 |
+| `assistant`，内容里有工具调用；`user`，内容里是工具结果 | 记进这一轮的操作列表，界面折叠成“执行了 N 个操作”；同时算“当前在做什么”（见下一行） |
+| `assistant`，内容里有 `thinking` 块；`user`，内容里是 `tool_result` | 出 `agent.thinking`、`agent.tool_result` 事件（带 `parent_tool_use_id` 的是子任务里的，字段 `parentToolUseId`，只入库，不改状态）。账本算出“当前在做什么”放进会话状态的 `step`（`{ type: "thinking" }`、`{ type: "text" }`、`{ type: "tool_use", name, input }`，input 只留 `skill`、`file_path`、`notebook_path`；只在内存）：一轮开始 = 思考；文字 = 写回复；工具调用 = 那个工具；几个工具同时跑时，结果回来一个切一次，都回来了切回思考；一轮结束、进程退出清掉。网页在 agent 头像旁显示，文案映射表在 `src/web/step-labels.ts`；老服务端没有 `step` 就只写“在处理” |
+| `system` / `api_retry` | 断网、过载时 claude 自己在重试。出 `api_retry` 事件（第几次 / 共几次、下次重试时间点、状态码、error），账本放进会话状态的 `apiRetry`（只在内存），网页在 agent 头像旁显示“网络出错，正在重试（第 3/10 次）”；下一个正常事件（agent 输出、工具调用、一轮结束）清掉。重试用完 claude 出一个 `subtype: success`、`is_error: true` 的 result，按“这一轮出错”走（消息标失败，原因是 result 里那句话；Worker 的发 turn_failed 给项目经理）。字段缺了或类型不对的整条跳过 |
 | `rate_limit_event` | 每轮都有。记下各个额度窗口的 `utilization` 和 `resetsAt`，界面可以显示“5 小时额度已用 N%”；`status` 不是 `allowed` 时状态“等额度”。额度真用完时长什么样，M0 没碰上，等碰上再补 |
 | `control_response` | 打断控制消息的回应（第 7.4 节），只记录 |
 | `result` | 一轮结束：记下成功与否、耗时、用量、被拒绝的权限。这一轮前面有过 `[Request interrupted by user]` 的，算“已停止”，不算正常结束，不交给汇报解析。其余情况，Worker 的这一轮最后一条文字交给汇报解析。然后从待发队列里取下一条写进去 |

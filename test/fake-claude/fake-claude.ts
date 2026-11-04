@@ -31,6 +31,8 @@ import { createInterface } from "node:readline";
 export type FakeStep =
   /** usage、messageId：这条 assistant 消息带的 message.usage 和 message.id（同一个 id 发几次，像真 claude 分几个事件推同一条消息）；parentToolUseId：子 agent 的消息。 */
   | { text: string; noUuid?: boolean; usage?: Record<string, number>; messageId?: string; parentToolUseId?: string }
+  /** 一个 thinking 块（真实日志里 thinking 单独一个事件，内容常是空的）。 */
+  | { thinking: true }
   /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）。 */
   | { tool: { name: string; input: unknown; result?: string; durationMs?: number } }
   | { rateLimit: Record<string, unknown> }
@@ -412,6 +414,8 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
     } else if ("text" in step) {
       lastText = step.text;
       assistant([{ type: "text", text: step.text }], !step.noUuid, step);
+    } else if ("thinking" in step) {
+      assistant([{ type: "thinking", thinking: "", signature: "sig" }]);
     } else if ("tool" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }]);

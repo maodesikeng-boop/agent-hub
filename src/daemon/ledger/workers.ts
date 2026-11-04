@@ -533,6 +533,7 @@ export function createLedgerWorkers(
       updateLive(p, workerSession(workerId).id, (l) => {
         l.activity = "preparing";
         l.currentTool = null;
+        l.step = null;
       });
       return true;
     });
