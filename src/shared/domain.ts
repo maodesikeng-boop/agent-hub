@@ -2,6 +2,7 @@
 // 不用 enum（erasableSyntaxOnly）：取值用 `as const` 数组，类型从数组推出来。
 
 import { MAX_NAME_CHARS, MAX_WORKER_TITLE_CHARS } from "./limits.ts";
+import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
 
@@ -367,10 +368,11 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
 
 /**
  * 系统消息的去重键：`system:<对话>:<事件>:<相关编号>`。相关编号：project.created → projectId；
- * folder.attached / detached → folderId；persona.changed → personaChangeId。
+ * folder.attached / detached → folderId；persona.changed → personaChangeId；schedule.created / removed → scheduleId；
+ * schedule.run → <scheduleId>:<原定时间>；schedule.failed → 失败的那条消息的编号。
  */
 export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
-  const ref = ((): number => {
+  const ref = ((): number | string => {
     switch (meta.event) {
       case "project.created":
         return meta.projectId;
@@ -379,6 +381,13 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return meta.folderId;
       case "persona.changed":
         return meta.personaChangeId;
+      case "schedule.created":
+      case "schedule.removed":
+        return meta.scheduleId;
+      case "schedule.run":
+        return `${meta.scheduleId}:${meta.scheduledAt}`;
+      case "schedule.failed":
+        return meta.messageId;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -388,7 +397,16 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
  * 系统消息的事件（Message.meta.event）。会扩展。
  * 11-03 拿掉了 project.reassigned（交接）：老数据里还有，systemEventOf 认不出就当普通系统消息，照样居中显示文字。
  */
-export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed"] as const;
+export const SYSTEM_EVENTS = [
+  "project.created",
+  "folder.attached",
+  "folder.detached",
+  "persona.changed",
+  "schedule.created",
+  "schedule.removed",
+  "schedule.run",
+  "schedule.failed",
+] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
 /**
@@ -398,13 +416,21 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  *   （hub 是它自己调的，白白多跑一轮），重启后驱动层在下一条写进去的消息前面拼 RELAUNCH_NOTE（见 driver.ts）；
  * - persona.changed：改了性格设定（项目经理自己、用户在界面改、撤销、启动时发现文件被手改）。界面上带“撤销”按钮
  *   （personaChangeId；只有最近一条能撤销）。
+ * - schedule.created / removed（M6）：项目经理用 hub schedule add / remove 建了、删了定时任务，只给人看；
+ * - schedule.run：到点了，这一条要交给项目经理（status 从 queued 起，登记 session.send，source system），text 以
+ *   “【定时任务：名字（原定 09:00）】”开头，后面是任务说明；catchUp 是补跑（睡眠、守护进程没开错过的，只补一次）；
+ * - schedule.failed：这一轮失败或会话起不来，“定时任务没跑成：名字：原因”，只给人看；messageId 是失败的那条 schedule.run 消息。
  * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
  */
 export type SystemMessageMeta =
   | { event: "project.created"; projectId: ProjectId }
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
-  | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null };
+  | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
+  | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
+  | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
+  | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
+  | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId };
 
 /**
  * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；dismissed 是用户点了“知道了”（存在这里，

@@ -357,6 +357,7 @@ describe("GET /api/state 和 /messages?before=", () => {
       conversations: [],
       sessions: [],
       health: [],
+      schedules: [],
     };
     const res = await call("GET", "/api/state");
     expect(res.statusCode).toBe(200);

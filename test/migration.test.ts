@@ -996,6 +996,37 @@ describe("0006_agent_settings：从 M3 的库升级", () => {
   });
 });
 
+// ---- 0008_schedules ----
+
+describe("0008_schedules：从 0007 的库升级", () => {
+  it("只加一张空的 schedules 表：老数据一行不少、一个字不变，user_version 升到 8", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(7));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(userVersion(db)).toBe(7);
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 7, to: LATEST_VERSION });
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(8);
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM schedules")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("频率和字段对不上、状态不是三种之一、不是真的项目经理都被拒", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    const insert = (cols: string, values: string) => () =>
+      db.exec(`INSERT INTO schedules (pm_id, name, kind, ${cols}, prompt, next_run_at, created_at, updated_at) VALUES (1, 'x', ${values}, 'p', 0, 0, 0)`);
+    expect(insert("at_time", "'daily', '09:00'")).not.toThrow();
+    expect(insert("every_minutes", "'interval', 30")).not.toThrow();
+    expect(insert("every_minutes", "'daily', 30")).toThrow(/CHECK/);
+    expect(insert("at_time", "'interval', '09:00'")).toThrow(/CHECK/);
+    expect(insert("at_time", "'weekly', '09:00'")).toThrow(/CHECK/);
+    expect(() => db.exec("UPDATE schedules SET last_status = 'ok' WHERE id = 1")).toThrow(/CHECK/);
+    expect(() => db.exec("UPDATE schedules SET pm_id = 99 WHERE id = 1")).toThrow(/FOREIGN KEY/);
+  });
+});
+
 describe("迁移器：迁移期间关外键，提交前检查", () => {
   it("迁移留下悬空引用就整个回滚，user_version 不变，外键检查恢复", () => {
     const dir = m1MigrationsDir();

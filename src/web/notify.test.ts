@@ -109,6 +109,19 @@ describe("waitingConversations（瞬时判断）", () => {
     expect(waitingConversations(withAgentLast, {})).toEqual([]);
   });
 
+  it("定时任务没跑成（最后一条是系统写的那条“没跑成”）：算，和平时一样弹“等你”（M6）", () => {
+    const failure = makeMessage({
+      id: 3,
+      sender: "system",
+      sessionId: null,
+      text: "定时任务没跑成：日报：claude_not_found",
+      meta: { event: "schedule.failed", scheduleId: 1, name: "日报", messageId: 2 },
+      createdAt: T0 - 3_000,
+    });
+    const state = apply(idle(), messageChange(0, "message.created", failure));
+    expect(waitingConversations(state, {})).toEqual([1]);
+  });
+
   it("最后一条是用户发的：不算", () => {
     const state = apply(idle(), messageChange(0, "message.created", makeUserMessage({ id: 3, status: "replied", createdAt: T0 - 3_000 })));
     expect(waitingConversations(state, {})).toEqual([]);

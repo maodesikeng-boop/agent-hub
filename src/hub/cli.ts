@@ -7,8 +7,15 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
-import { HUB_CLI_STDIN_IDLE_MS, HUB_CLI_TIMEOUT_MS, HUB_MAX_BODY_BYTES, SETUP_TIMEOUT_MS } from "../shared/limits.ts";
+import {
+  HUB_CLI_STDIN_IDLE_MS,
+  HUB_CLI_TIMEOUT_MS,
+  HUB_MAX_BODY_BYTES,
+  MIN_SCHEDULE_EVERY_MINUTES,
+  SETUP_TIMEOUT_MS,
+} from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
+import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
 import { ALL_EFFORTS } from "../shared/vendors.ts";
 
 export interface HubIo {
@@ -52,6 +59,13 @@ export const HUB_USAGE = `用法：
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
   ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
                                                           会单独提醒用户，不会被别的消息刷掉
+  ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
+                                                          建定时任务：到点把任务说明（从标准输入读）发到我自己的对话里。
+                                                          --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）
+  ${hub} schedule list                                       我的定时任务：频率、下次运行、上次结果
+  ${hub} schedule pause <编号>                                 暂停
+  ${hub} schedule resume <编号>                                恢复（从现在算下一次）
+  ${hub} schedule remove <编号>                                删除
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -59,6 +73,9 @@ export const HUB_USAGE = `用法：
   EOF
   ${hub} worker start --title "修 X" --stdin <<'EOF'
   任务说明：目标、验收标准
+  EOF
+  ${hub} schedule add --name "每日汇报" --daily 09:00 --stdin <<'EOF'
+  每次要做的事
   EOF
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
@@ -83,6 +100,8 @@ type Options = {
   readonly?: boolean;
   "no-worktree"?: boolean;
   clear?: boolean;
+  daily?: string;
+  every?: string;
   help?: boolean;
 };
 
@@ -93,7 +112,7 @@ interface Parsed {
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "text" | "task" | "command";
+  textField?: "text" | "task" | "command" | "prompt";
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
@@ -116,15 +135,16 @@ function expectPositionals(positionals: string[], count: number, what: string): 
   if (positionals.length !== count) throw new UsageError(`${hub} ${what} 的参数个数不对`);
 }
 
-/** Worker 编号：正整数。 */
-function workerIdOf(raw: string | undefined, what: string): number {
+/** Worker、定时任务的编号：正整数。 */
+function idOf(raw: string | undefined, what: string, label: string): number {
   if (raw === undefined || !/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
-    throw new UsageError(`${hub} ${what} 要一个 Worker 编号（正整数）`);
+    throw new UsageError(`${hub} ${what} 要一个${label}编号（正整数）`);
   }
   return Number(raw);
 }
+const workerIdOf = (raw: string | undefined, what: string) => idOf(raw, what, " Worker ");
 
-/** hub worker start、send 的正文只从标准输入读。 */
+/** hub worker start、send，schedule add 的正文只从标准输入读。 */
 function requireStdin(values: Options, what: string): Parsed["textSource"] {
   if (values.stdin !== true) throw new UsageError(`${hub} ${what} 要 --stdin，正文从标准输入读`);
   return { kind: "stdin" };
@@ -158,6 +178,8 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         readonly: { type: "boolean" },
         "no-worktree": { type: "boolean" },
         clear: { type: "boolean" },
+        daily: { type: "string" },
+        every: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -251,6 +273,36 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], "worker list");
     expectPositionals(rest, 0, "worker list");
     return { command: "worker.list", body: {}, textSource: null };
+  }
+  if (group === "schedule" && action === "add") {
+    allowOnly(values, ["name", "daily", "every", "stdin"], "schedule add");
+    expectPositionals(rest, 0, "schedule add");
+    if (values.name === undefined) throw new UsageError(`${hub} schedule add 要 --name <名>`);
+    if ((values.daily === undefined) === (values.every === undefined)) {
+      throw new UsageError(`${hub} schedule add 的频率要写 --daily HH:MM 或 --every 30m|2h，二选一`);
+    }
+    const body: Record<string, unknown> = { name: values.name };
+    if (values.daily !== undefined) {
+      if (parseDailyTime(values.daily) === null) throw new UsageError("--daily 要写成 HH:MM（24 小时制，如 09:00）");
+      body.daily = values.daily;
+    } else {
+      const minutes = parseEvery(values.every!);
+      if (minutes === null) throw new UsageError("--every 要写成 30m（分钟）或 2h（小时）");
+      const bad = checkEveryMinutes(minutes);
+      if (bad !== null) throw new UsageError(`--every：${bad}`);
+      body.everyMinutes = minutes;
+    }
+    return { command: "schedule.add", body, textSource: requireStdin(values, "schedule add"), textField: "prompt" };
+  }
+  if (group === "schedule" && action === "list") {
+    allowOnly(values, [], "schedule list");
+    expectPositionals(rest, 0, "schedule list");
+    return { command: "schedule.list", body: {}, textSource: null };
+  }
+  if (group === "schedule" && (action === "pause" || action === "resume" || action === "remove")) {
+    allowOnly(values, [], `schedule ${action}`);
+    expectPositionals(rest, 1, `schedule ${action}`);
+    return { command: `schedule.${action}`, body: { scheduleId: idOf(rest[0], `schedule ${action}`, "定时任务") }, textSource: null };
   }
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }

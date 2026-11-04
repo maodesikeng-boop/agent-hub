@@ -13,6 +13,7 @@ import {
   type PmId,
   type Project,
   type ProjectFolder,
+  type ScheduleRecord,
   type SessionState,
   type StateSnapshot,
 } from "../shared/index.ts";
@@ -60,6 +61,8 @@ export interface HubState {
   conversations: Record<ConversationId, ConversationView>;
   sessions: SessionState[];
   health: HealthEntry[];
+  /** 所有项目经理的定时任务（ScheduleRecord.pmId 认是谁的）；资料页的定时任务卡片用。 */
+  schedules: ScheduleRecord[];
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
@@ -77,6 +80,7 @@ export const initialState: HubState = {
   conversations: {},
   sessions: [],
   health: [],
+  schedules: [],
   pending: [],
   older: {},
   retry: {},
@@ -146,6 +150,10 @@ export function applyChange(state: HubState, change: Change): HubState {
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
     case "health.updated":
       return { ...next, health: upsertBy(state.health, change.data.health, (a, b) => a.module === b.module) };
+    case "schedule.updated":
+      return { ...next, schedules: upsertBy(state.schedules, change.data.schedule, (a, b) => a.id === b.id) };
+    case "schedule.removed":
+      return { ...next, schedules: state.schedules.filter((x) => x.id !== change.data.scheduleId) };
     case "pm.created":
       return { ...next, pms: upsertBy(state.pms, change.data.pm, (a, b) => a.id === b.id) };
     case "pm.updated": {
@@ -204,6 +212,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     conversations,
     sessions: snapshot.sessions,
     health: snapshot.health,
+    schedules: snapshot.schedules,
     pending: dropConfirmed(state.pending, all),
     older: {},
     retry: keepStillFailed(state.retry, all),

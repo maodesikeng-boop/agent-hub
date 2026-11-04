@@ -49,6 +49,11 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.end": { workerId: 3 },
   "worker.list": {},
   ask: { text: "用 A 还是 B？" },
+  "schedule.add": { name: "每日汇报", prompt: "汇报昨天的进展", daily: "09:00" },
+  "schedule.list": {},
+  "schedule.pause": { scheduleId: 3 },
+  "schedule.resume": { scheduleId: 3 },
+  "schedule.remove": { scheduleId: 3 },
 };
 
 describe("agent api over inject", () => {

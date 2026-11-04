@@ -68,6 +68,8 @@ const folderOnly = { type: "object", additionalProperties: false, required: ["fo
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
 
+const scheduleIdOnly = { type: "object", additionalProperties: false, required: ["scheduleId"], properties: { scheduleId: workerIdField } };
+
 const BODY_SCHEMAS: Record<HubCommand, object> = {
   status: noArgs,
   "project.create": {
@@ -120,6 +122,22 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
   ask: { type: "object", additionalProperties: false, required: ["text"], properties: { text: taskField } },
+  // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查
+  "schedule.add": {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "prompt"],
+    properties: {
+      name: nameField,
+      prompt: taskField,
+      daily: { type: "string", maxLength: 5 },
+      everyMinutes: { type: "integer" },
+    },
+  },
+  "schedule.list": noArgs,
+  "schedule.pause": scheduleIdOnly,
+  "schedule.resume": scheduleIdOnly,
+  "schedule.remove": scheduleIdOnly,
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -128,6 +146,7 @@ const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> 
   "project.attach": { folder: "path" },
   "project.detach": { folder: "path" },
   "worker.start": { title: "name" },
+  "schedule.add": { name: "name" },
 };
 /** C0、DEL、C1 控制字符（含 NUL、换行、制表符）。 */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -142,6 +161,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "worker.start": { task: MAX_TASK_BYTES },
   "worker.send": { text: MAX_TASK_BYTES },
   ask: { text: MAX_TASK_BYTES },
+  "schedule.add": { prompt: MAX_TASK_BYTES },
 };
 
 class HubError extends Error {

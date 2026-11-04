@@ -1,6 +1,6 @@
 // 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
 // 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
-// worker.* 和 Worker 调的 status 在 workers.ts。
+// worker.* 和 Worker 调的 status 在 workers.ts；schedule.* 在 schedules.ts。
 import { PM_MODE_LABELS } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { hubCommandAllowed } from "../../shared/hub.ts";
@@ -15,6 +15,7 @@ import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
+import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerWorkers } from "./workers.ts";
 
 /** status 里的一句“项目和文件夹”。 */
@@ -41,6 +42,7 @@ export function createLedgerHubCommands(
   projects: LedgerProjects,
   workers: LedgerWorkers,
   messages: LedgerMessages,
+  schedules: LedgerSchedules,
 ) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
@@ -114,6 +116,16 @@ export function createLedgerHubCommands(
         const message = messages.insertAskMessage(p, caller, text);
         return { text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。", data: { messageId: message.id } };
       }
+      case "schedule.add":
+        return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
+      case "schedule.list":
+        return schedules.list(caller);
+      case "schedule.pause":
+        return schedules.pauseIn(p, caller, args as HubArgs<"schedule.pause">);
+      case "schedule.resume":
+        return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
+      case "schedule.remove":
+        return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
     }
   };
 
