@@ -185,6 +185,10 @@ export function createLedgerMessages(
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
+      case "turn.started":
+        // claude 自己开了一轮（后台任务完成等）：和写进去的消息开始处理一样显示在处理
+        updateLive(p, sessionId, working(null));
+        return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件

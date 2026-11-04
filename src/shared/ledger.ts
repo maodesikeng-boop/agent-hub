@@ -425,6 +425,8 @@ export interface Ledger {
    * - session.exited 且这一轮没有 result：reason 是 interrupt、crash、startup_failed → turn_failed（原因写退出码或信号）；
    *   reason 是 shutdown（守护进程关机）→ 不发这一行，也不交给项目经理：重启后 recoverAfterRestart 照 M2 重发这条消息、
    *   --resume 接着做（m3-plan 验收第 11 条），做完的那一轮照常出 report；idle 没有在途的消息，什么也不发；
+   * - claude 自己开的一轮（后台任务完成等，turn.started 开头、turn.ended 没有消息编号）照样汇报：这一轮最后一段 agent 文字，
+   *   去重键里的编号用这一轮最后一条 agent 消息的编号；这一轮一条消息都没有就不汇报；
    * - 同一条消息先 turn_failed、之后又被重发并跑出结果：两行都有（事件类型在去重键里），后来的 report 不会被吞掉；
    *   同一个事件重放（同一个 result 再来一遍）只有一行。
    * - Worker 会话的 message.delivered 里有用户直接对它说的话（Worker 对话里 sender user、带 workerId）→ 每条一行 user_message，
