@@ -63,10 +63,11 @@ export function checkEveryMinutes(minutes: unknown): string | null {
 /** 在 after 之后（严格晚于）最近的一个本地时间 HH:MM。 */
 export function nextDailyRun(after: number, atTime: string): number {
   const [hours, minutes] = atTime.split(":").map(Number) as [number, number];
-  const next = new Date(after);
-  next.setHours(hours, minutes, 0, 0);
-  if (next.getTime() <= after) next.setDate(next.getDate() + 1);
-  return next.getTime();
+  const today = new Date(after);
+  const at = (dayOffset: number) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + dayOffset, hours, minutes).getTime();
+  // 明天的时间重新按“年月日 + 时分”构造，不在今天的结果上加一天：春季跳时那天落在不存在的 02:30 会被推到 03:30，
+  // 在它上面加一天会让以后每天都停在 03:30
+  return at(0) > after ? at(0) : at(1);
 }
 
 /** 从 now 算下一次运行（创建、恢复、每次运行之后都用它）。 */

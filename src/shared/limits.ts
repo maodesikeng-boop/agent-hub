@@ -51,6 +51,8 @@ export const SCHEDULE_LATE_MS = 2 * SCHEDULER_TICK_MS;
 /** “每隔 N 分钟/小时”最短 15 分钟，最长 7 天。 */
 export const MIN_SCHEDULE_EVERY_MINUTES = 15;
 export const MAX_SCHEDULE_EVERY_MINUTES = 7 * 24 * 60;
+/** 一个项目经理最多建几个定时任务（含暂停的）。 */
+export const MAX_SCHEDULES_PER_PM = 20;
 /** 定时任务的名字最多几个字符（同项目经理的名字）。任务说明最多 MAX_TASK_BYTES，它就是发给项目经理的消息。 */
 export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
 

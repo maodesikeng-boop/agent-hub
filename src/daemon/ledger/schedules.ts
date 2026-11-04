@@ -11,7 +11,7 @@ import { normalizeName, systemMessageDedupeKey, utf8Bytes } from "../../shared/d
 import type { AgentSessionRow, MessageId, PmId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
-import { MAX_SCHEDULE_NAME_CHARS, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
+import { MAX_SCHEDULE_NAME_CHARS, MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { checkEveryMinutes, nextRunAfter, parseDailyTime, scheduleLabel, scheduledTimeText, scheduleRunTitle } from "../../shared/schedule.ts";
 import type { ScheduleId, ScheduleRecord } from "../../shared/schedule.ts";
@@ -62,6 +62,8 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   const addIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
     const name = typeof args.name === "string" ? normalizeName(args.name, MAX_SCHEDULE_NAME_CHARS) : null;
     if (name === null) throw fail("invalid", `定时任务的名字不能是空的，也不能带换行等控制字符，最多 ${MAX_SCHEDULE_NAME_CHARS} 个字符`);
+    // 【】是标题的括号（【定时任务：名字（原定 09:00）】），名字里有会让项目经理分不清标题到哪结束
+    if (name.includes("【") || name.includes("】")) throw fail("invalid", "定时任务的名字里不能有“【”“】”");
     if (typeof args.prompt !== "string" || args.prompt.trim() === "") throw fail("invalid", "任务说明不能是空的");
     if (utf8Bytes(args.prompt) > MAX_TASK_BYTES) throw fail("invalid", `任务说明不能超过 ${MAX_TASK_BYTES} 字节`);
     if ((args.daily === undefined) === (args.everyMinutes === undefined)) {
@@ -75,6 +77,10 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
       const bad = checkEveryMinutes(args.everyMinutes);
       if (bad !== null) throw fail("invalid", bad);
       frequency = { kind: "interval", atTime: null, everyMinutes: args.everyMinutes! };
+    }
+    const owned = db.get<{ n: number }>("SELECT count(*) AS n FROM schedules WHERE pm_id = ?", caller.pmId)!.n;
+    if (owned >= MAX_SCHEDULES_PER_PM) {
+      throw fail("conflict", `定时任务最多 ${MAX_SCHEDULES_PER_PM} 个，你已经有 ${owned} 个了：先用 ${HUB_COMMAND} schedule remove <编号> 删掉不要的`);
     }
     const t = now();
     const nextRunAt = nextRunAfter(frequency, t);

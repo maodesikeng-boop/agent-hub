@@ -46,6 +46,23 @@ describe("下一次", () => {
     expect(nextDailyRun(local(30, 10), "09:00")).toBe(local(1, 9, 0, 11));
   });
 
+  it("春季跳时（America/Los_Angeles，2026-03-08 02:00 跳到 03:00）：02:30 那天落在 03:30，之后一天回到 02:30，不会一直停在 03:30", () => {
+    const oldTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      const at = (month: number, day: number, h: number, m = 0) => new Date(2026, month, day, h, m).getTime();
+      expect(new Date(at(2, 8, 2, 30)).getHours()).toBe(3);
+      expect(nextDailyRun(at(2, 7, 12), "02:30")).toBe(at(2, 8, 3, 30));
+      expect(nextDailyRun(at(2, 8, 3, 30), "02:30")).toBe(at(2, 9, 2, 30));
+      expect(new Date(nextDailyRun(at(2, 8, 3, 30), "02:30")).getHours()).toBe(2);
+      // 秋季多出一小时那天：每天 09:00 不受影响
+      expect(nextDailyRun(at(10, 1, 9), "09:00")).toBe(at(10, 2, 9));
+    } finally {
+      if (oldTz === undefined) delete process.env.TZ;
+      else process.env.TZ = oldTz;
+    }
+  });
+
   it("间隔：现在 + 间隔，不管原定时间", () => {
     expect(nextRunAfter({ kind: "interval", atTime: null, everyMinutes: 120 }, local(4, 8))).toBe(local(4, 10));
     expect(nextRunAfter({ kind: "daily", atTime: "09:00", everyMinutes: null }, local(4, 8))).toBe(local(4, 9));

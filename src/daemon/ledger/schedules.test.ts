@@ -11,7 +11,7 @@ import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode } from "../../shared/ledger.ts";
-import { MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
+import { MAX_SCHEDULES_PER_PM, MAX_TASK_BYTES, SCHEDULE_LATE_MS } from "../../shared/limits.ts";
 import { listActions } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -396,6 +396,8 @@ describe("T8 只能管自己的、非法参数被拒", () => {
     bad({ name: "  " }, /名字/);
     bad({ name: "a\nb" }, /名字/);
     bad({ name: "长".repeat(41) }, /名字/);
+    bad({ name: "【日报】" }, /【/);
+    bad({ name: "日报】" }, /【/);
     bad({ prompt: " \n" }, /任务说明不能是空的/);
     bad({ prompt: "x".repeat(MAX_TASK_BYTES + 1) }, /任务说明不能超过/);
     bad({ everyMinutes: 60 }, /二选一/);
@@ -409,6 +411,14 @@ describe("T8 只能管自己的、非法参数被拒", () => {
     bad({ daily: undefined, everyMinutes: 30.5 }, /整数/);
     expect(hub(lin.sessionId, "schedule.list", {}).data.schedules).toEqual([]);
     expect(db.get("SELECT count(*) AS n FROM messages WHERE conversation_id = ? AND sender = 'system'", lin.conversationId)).toEqual({ n: 0 });
+  });
+
+  it("每个项目经理最多 20 个（含暂停的），超了报能看懂的错；别人的不占名额；删掉一个又能建", () => {
+    for (let i = 0; i < MAX_SCHEDULES_PER_PM; i++) add({ name: `任务${i}` });
+    expectLedgerError(() => add({ name: "多的一个" }), "conflict", /最多 20 个.*schedule remove/);
+    expect(add({ name: "阿周的" }, zhou.sessionId).pmId).toBe(zhou.pmId);
+    hub(lin.sessionId, "schedule.remove", { scheduleId: 1 });
+    expect(add({ name: "补上" }).name).toBe("补上");
   });
 
   it("最短 15 分钟、最长 7 天都能建", () => {
