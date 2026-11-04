@@ -59,6 +59,11 @@ export const MAX_UPLOAD_NAME_BYTES = 120;
 
 // ---- agent 发给用户的文件（回复里的 Markdown 链接指向本机文件，发出时存副本，见 daemon/sent-files.ts）----
 
+/** 上传的文件和发出文件的副本留多少天：目录修改时间超过这么久的，守护进程启动时和之后每天清一次。 */
+export const FILE_RETENTION_DAYS = 30;
+/** 多久清一次。 */
+export const FILE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 /** 单个文件最多 50 MB，超了不存副本，卡片写“太大”。 */
 export const MAX_SENT_FILE_BYTES = 50 * 1024 * 1024;
 /** 一条消息的副本合计最多 200 MB，超出的那几个不存。 */
