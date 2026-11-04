@@ -162,14 +162,14 @@ function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf
     controls = (
       <>
         {kind === "markdown" && (
-          <Button variant="outline" size="sm" onClick={() => setSource((v) => !v)}>
+          <Button variant="outline" onClick={() => setSource((v) => !v)}>
             {source ? "渲染" : "源码"}
           </Button>
         )}
         {showCode && (
           <Button
             variant="outline"
-            size="sm"
+           
             onClick={() => {
               void navigator.clipboard.writeText(text).then(() => setCopied(true));
             }}
@@ -284,7 +284,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Button asChild variant="outline" size="sm">
+        <Button asChild variant="outline">
           <a href={file.url} download={file.name}>
             <Download />
             下载
@@ -292,13 +292,13 @@ function PreviewContent({ file }: { file: PreviewFile }) {
         </Button>
         {file.target !== null && (
           <>
-            <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void run("reveal")}>
+            <Button variant="outline" disabled={busy !== null} onClick={() => void run("reveal")}>
               <FolderSearch />
               在 Finder 中显示
             </Button>
             <Button
               variant="outline"
-              size="sm"
+             
               disabled={busy !== null || !openAllowed}
               title={openAllowed ? undefined : OPEN_BLOCKED_TITLE}
               onClick={() => void run("open")}
