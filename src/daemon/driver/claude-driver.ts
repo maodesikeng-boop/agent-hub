@@ -43,6 +43,7 @@ import {
   detectArgsConflict,
   isInterruptMarker,
   mergeUserTexts,
+  parseApiRetry,
   parseAssistant,
   parseRateLimit,
 } from "./protocol.ts";
@@ -786,6 +787,7 @@ export class ClaudeDriver implements Driver {
     switch (obj.type) {
       case "system":
         if (obj.subtype === "init") this.#onInit(st, proc, obj, at);
+        else if (obj.subtype === "api_retry") this.#onApiRetry(st, obj, at);
         return;
       case "user":
         if (isInterruptMarker(obj)) st.turnInterrupted = true;
@@ -814,6 +816,12 @@ export class ClaudeDriver implements Driver {
         this.#onResult(st, proc, obj, at);
         return;
     }
+  }
+
+  /** claude 在自己重试（断网、过载）：残缺的跳过。只通知账本，不写库（重试信息只在内存里）。 */
+  #onApiRetry(st: SessionState, obj: Record<string, unknown>, at: number): void {
+    const info = parseApiRetry(obj, at);
+    if (info) this.#emit(st.id, { type: "api_retry", info, at });
   }
 
   #markProcessing(st: SessionState, batch: Batch, at: number): void {

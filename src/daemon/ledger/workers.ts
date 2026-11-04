@@ -23,7 +23,7 @@ import type {
   WorkerMessageMeta,
   WorkerRecord,
 } from "../../shared/domain.ts";
-import type { DriverEvent } from "../../shared/driver.ts";
+import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_MODEL_CHARS, MAX_TASK_BYTES } from "../../shared/limits.ts";
@@ -73,7 +73,7 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
     if (event.shutdown === true) return null;
     if (event.interrupted) return { event: "turn_failed", turnMessageId, reason: TURN_STOPPED };
     if (!event.ok) {
-      const reason = event.error === undefined ? TURN_FAILED : `${event.error.subtype}: ${event.error.message}`;
+      const reason = event.error === undefined ? TURN_FAILED : turnFailureReason(event.error);
       return { event: "turn_failed", turnMessageId, reason };
     }
     return { event: "report", turnMessageId };
