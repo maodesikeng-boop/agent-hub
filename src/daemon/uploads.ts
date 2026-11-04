@@ -35,7 +35,7 @@ const DEFAULT_FILE_NAME = "文件";
  */
 const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 /** 上传编号：16 位小写十六进制。找文件时只认这个形状，别的一律当没有（不会拼出 uploads/ 之外的路径）。 */
-const UPLOAD_ID = /^[0-9a-f]{16}$/;
+export const UPLOAD_ID = /^[0-9a-f]{16}$/;
 
 /** 按 UTF-8 字节截断，不切坏一个字（码点）。 */
 function truncateBytes(text: string, maxBytes: number): string {
