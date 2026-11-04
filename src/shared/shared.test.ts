@@ -95,6 +95,7 @@ import {
   workerMessageDedupeKey,
 } from "./index.ts";
 import { launchFingerprint } from "./launch.ts";
+import { parseLocalHref, sentFileMime } from "./sent-files.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import {
   MAX_UNIX_SOCKET_PATH_BYTES,
@@ -266,6 +267,10 @@ describe("数据目录", () => {
   it("聊天框上传的文件放在 uploads/，不放进项目文件夹", () => {
     expect(resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u").uploadsDir).toBe("/tmp/x/uploads");
     expect(resolveHubPaths({}, "/home/u").uploadsDir).toBe(`/home/u/${DATA_DIR_NAME}/uploads`);
+  });
+
+  it("agent 发给用户的文件的副本放在 sent-files/", () => {
+    expect(resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u").sentFilesDir).toBe("/tmp/x/sent-files");
   });
 
   it("claude 的路径用 AGENT_HUB_CLAUDE 改，默认找 PATH 里的 claude", () => {
@@ -752,5 +757,36 @@ describe("M3：数据目录", () => {
     expect(paths.worktreesDir).toBe("/tmp/x/worktrees");
     expect(projectWorktreesDir(paths.worktreesDir, 2)).toBe("/tmp/x/worktrees/2");
     expect(workerWorktreePath(paths.worktreesDir, 2, 7)).toBe("/tmp/x/worktrees/2/7");
+  });
+});
+
+describe("agent 发给用户的文件：认本机路径（sent-files.ts）", () => {
+  it.each([
+    ["/tmp/a.png", { kind: "absolute", path: "/tmp/a.png" }],
+    ["/tmp/%E5%9B%BE%20a.png", { kind: "absolute", path: "/tmp/图 a.png" }],
+    ["/tmp/100%.txt", { kind: "absolute", path: "/tmp/100%.txt" }],
+    ["/tmp/a#b.md", { kind: "absolute", path: "/tmp/a#b.md" }],
+    ["file:///tmp/a%20b.png", { kind: "absolute", path: "/tmp/a b.png" }],
+    ["FILE://localhost/tmp/a.png", { kind: "absolute", path: "/tmp/a.png" }],
+    ["~/a.md", { kind: "home", path: "/a.md" }],
+    ["docs/a.md", { kind: "relative", path: "docs/a.md" }],
+    ["./a.md", { kind: "relative", path: "./a.md" }],
+  ])("%j 是本机路径", (href, expected) => {
+    expect(parseLocalHref(href)).toEqual(expected);
+  });
+
+  it.each(["https://x.y/a.png", "http://x", "mailto:a@b.c", "javascript:alert(1)", "//host/a", "#top", "?q", "", "file://host/a", "/a%00b"])(
+    "%j 不是",
+    (href) => {
+      expect(parseLocalHref(href)).toBeNull();
+    },
+  );
+
+  it("类型：位图、svg 是图片；pdf、md、csv、html 有类型但不内联；别的 octet-stream", () => {
+    expect(sentFileMime("a.PNG")).toBe("image/png");
+    expect(sentFileMime("a.svg")).toBe("image/svg+xml");
+    expect(sentFileMime("a.pdf")).toBe("application/pdf");
+    expect(sentFileMime("a.html")).toBe("text/html");
+    expect(sentFileMime("a.exe")).toBe("application/octet-stream");
   });
 });

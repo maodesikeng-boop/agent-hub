@@ -37,6 +37,11 @@ export interface HubPaths {
    * agent 拿到的是文件的绝对路径，自己用读文件工具读。
    */
   uploadsDir: string;
+  /**
+   * sent-files/：agent 在回复里用 Markdown 链接发给用户的文件，发出时存的副本，<副本编号>/<文件名>（daemon/sent-files.ts）。
+   * 原文件之后被删、被改，网页照样显示发出时的样子。
+   */
+  sentFilesDir: string;
   /** claude 程序：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。 */
   claudePath: string;
 }
@@ -62,6 +67,7 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     hubBinDir: join(home, "run", "bin"),
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),
+    sentFilesDir: join(home, "sent-files"),
     claudePath: env[ENV_CLAUDE] || "claude",
   };
 }

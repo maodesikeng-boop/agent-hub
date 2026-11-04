@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -36,15 +36,17 @@ const NEW_PM = { name: "阿周", mode: "hands_on", defaultModel: "claude-haiku-5
 
 let staticDir: string;
 let uploadsDir: string;
+let sentFilesDir: string;
 let ledger: FakeLedger;
 let app: FastifyInstance;
 
 beforeEach(async () => {
   staticDir = mkdtempSync(join(tmpdir(), "hub-static-"));
   uploadsDir = join(mkdtempSync(join(tmpdir(), "hub-uploads-")), "uploads");
+  sentFilesDir = join(uploadsDir, "..", "sent-files");
   writeFileSync(join(staticDir, "index.html"), INDEX_HTML);
   ledger = new FakeLedger();
-  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: PORT });
+  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT });
   await app.ready();
 });
 
@@ -83,7 +85,7 @@ async function call(method: Method, url: string, opts: ReqOpts = {}) {
 
 describe("只听本机", () => {
   it("startUiServer 监听 127.0.0.1，返回实际端口，Host 用它就能访问", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
     try {
       const addr = running.app.server.address();
       expect(addr).toMatchObject({ address: "127.0.0.1", port: running.port });
@@ -99,7 +101,7 @@ describe("只听本机", () => {
 describe("令牌格式", () => {
   it("太短的令牌（含空串）直接拒绝创建，免得空 cookie 就能登录", () => {
     for (const token of ["", "short", "has space in it 0123456789", "semi;colon-0123456789abc"]) {
-      expect(() => createUiServer({ ledger: ledger.asLedger(), token, staticDir, uploadsDir })).toThrow(/token/);
+      expect(() => createUiServer({ ledger: ledger.asLedger(), token, staticDir, uploadsDir, sentFilesDir })).toThrow(/token/);
     }
   });
 });
@@ -326,7 +328,7 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
   });
 
   it("端口跟着实际监听的走：真起服务，同源 Origin 放行，别的端口拒绝", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
     try {
       const url = `http://127.0.0.1:${running.port}/api/conversations/1/stop`;
       const send = (origin: string) => fetch(url, { method: "POST", headers: { cookie: COOKIE, origin } });
@@ -921,6 +923,7 @@ describe("静态文件", () => {
       token: TOKEN,
       staticDir: join(staticDir, "missing"),
       uploadsDir,
+      sentFilesDir,
       port: PORT,
     });
     try {
@@ -1262,6 +1265,105 @@ describe("GET /api/uploads/:id/:name", () => {
   });
 });
 
+/** 在 sent-files/<编号>/ 放一个副本（守护进程发出时存的，见 daemon/sent-files.ts）。 */
+function sentCopy(id: string, name: string, content: string | Buffer): void {
+  mkdirSync(join(sentFilesDir, id), { recursive: true });
+  writeFileSync(join(sentFilesDir, id, name), content);
+}
+
+describe("GET /api/sent-files/:id/:name（agent 发出的文件的副本）", () => {
+  const ID = "0123456789abcdef";
+
+  it("png：内联，带 nosniff、CSP 沙箱、Content-Length", async () => {
+    sentCopy(ID, "图.png", "png-bytes");
+    const res = await call("GET", `/api/sent-files/${ID}/${encodeURIComponent("图.png")}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/png");
+    expect(res.headers["content-disposition"]).toContain("inline");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["content-security-policy"]).toBe("sandbox; default-src 'none'");
+    expect(res.headers["content-length"]).toBe("9");
+    expect(res.body).toBe("png-bytes");
+  });
+
+  it("svg：当图片（image/svg+xml、内联），但有 CSP sandbox + nosniff，直接打开地址里面的脚本也不执行", async () => {
+    sentCopy(ID, "画.svg", '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const res = await call("GET", `/api/sent-files/${ID}/x.svg`);
+    expect(res.headers["content-type"]).toBe("image/svg+xml");
+    expect(res.headers["content-disposition"]).toContain("inline");
+    expect(res.headers["content-security-policy"]).toMatch(/^sandbox;/);
+    expect(res.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    // 直接打开时 svg 自带的样式（<style>、style=""）要能生效，否则点开大图是黑的；脚本仍被 sandbox 和 default-src 'none' 拦着
+    expect(res.headers["content-security-policy"]).toBe("sandbox; default-src 'none'; style-src 'unsafe-inline'");
+  });
+
+  it("别的类型（含 png、html）不放开 style-src", async () => {
+    for (const name of ["a.png", "a.html"]) {
+      rmSync(sentFilesDir, { recursive: true, force: true });
+      sentCopy(ID, name, "x");
+      expect((await call("GET", `/api/sent-files/${ID}/${name}`)).headers["content-security-policy"]).toBe("sandbox; default-src 'none'");
+    }
+  });
+
+  it("pdf、md、csv、html：当下载（attachment），html 这一步不预览", async () => {
+    for (const [name, mime] of [
+      ["报告.pdf", "application/pdf"],
+      ["说明.md", "text/markdown"],
+      ["数据.csv", "text/csv"],
+      ["页面.html", "text/html"],
+    ] as const) {
+      rmSync(sentFilesDir, { recursive: true, force: true });
+      sentCopy(ID, name, "x");
+      const res = await call("GET", `/api/sent-files/${ID}/${encodeURIComponent(name)}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toBe(mime);
+      expect(res.headers["content-disposition"]).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+      expect(res.headers["content-security-policy"]).toContain("sandbox");
+    }
+  });
+
+  it("Range：206 + Content-Range；bytes=-n 取最后 n 个；超出文件 416", async () => {
+    sentCopy(ID, "a.pdf", "0123456789");
+    const part = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=2-5" } });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers["content-range"]).toBe("bytes 2-5/10");
+    expect(part.headers["accept-ranges"]).toBe("bytes");
+    expect(part.body).toBe("2345");
+    const open = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=7-" } });
+    expect(open.body).toBe("789");
+    const suffix = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=-3" } });
+    expect(suffix.body).toBe("789");
+    const past = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=10-" } });
+    expect(past.statusCode).toBe(416);
+    expect(past.headers["content-range"]).toBe("bytes */10");
+    // 末位比首位小：按 RFC 9110 这个 Range 无效、整个忽略，返回 200 全量（不是 416）
+    const reversed = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "bytes=5-2" } });
+    expect(reversed.statusCode).toBe(200);
+    expect(reversed.body).toBe("0123456789");
+    const whole = await call("GET", `/api/sent-files/${ID}/a.pdf`, { headers: { range: "items=1-2" } });
+    expect(whole.statusCode).toBe(200);
+    expect(whole.body).toBe("0123456789");
+  });
+
+  it("上传的文件也支持 Range（同一套发文件的代码）", async () => {
+    const a = await uploaded("a.png", "abcdef");
+    const res = await call("GET", `/api/uploads/${a.id}/a.png`, { headers: { range: "bytes=1-2" } });
+    expect(res.statusCode).toBe(206);
+    expect(res.body).toBe("bc");
+  });
+
+  it("没有这个编号、编号想走出 sent-files/、副本是符号链接、没登录：404 / 404 / 404 / 401", async () => {
+    sentCopy(ID, "a.png", "png");
+    expect((await call("GET", `/api/sent-files/fedcba9876543210/a.png`)).statusCode).toBe(404);
+    expect((await call("GET", `/api/sent-files/..%2F..%2Fetc/passwd`)).statusCode).toBe(404);
+    mkdirSync(join(sentFilesDir, "1111111111111111"));
+    symlinkSync("/etc/hosts", join(sentFilesDir, "1111111111111111", "hosts"));
+    expect((await call("GET", `/api/sent-files/1111111111111111/hosts`)).statusCode).toBe(404);
+    expect((await call("GET", `/api/sent-files/${ID}/a.png`, { cookie: null })).statusCode).toBe(401);
+  });
+});
+
 describe("POST 消息带附件", () => {
   const post = (body: unknown) => call("POST", "/api/conversations/1/messages", { body });
 
@@ -1342,7 +1444,7 @@ describe("同时上传的个数", () => {
   }
 
   it(`同时收 ${MAX_CONCURRENT_UPLOADS} 个；再来第 ${MAX_CONCURRENT_UPLOADS + 1} 个回 429 和中文原因；有一个收完就又能收`, async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
     try {
       const open = await startHalfUploads(running.port, MAX_CONCURRENT_UPLOADS);
       const url = `http://127.0.0.1:${running.port}/api/uploads?name=extra.txt`;
@@ -1359,7 +1461,7 @@ describe("同时上传的个数", () => {
   });
 
   it("连接中途断掉也释放名额", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
     try {
       const { request } = await import("node:http");
       for (let i = 0; i < MAX_CONCURRENT_UPLOADS * 2; i++) {

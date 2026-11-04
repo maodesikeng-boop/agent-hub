@@ -36,6 +36,7 @@ import {
 import { createLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
+import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
@@ -142,6 +143,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // uploadsDir 也是：用户在聊天框上传的文件，agent 拿到的是这个真实路径下的绝对路径（权限规则按真实路径匹配）
     mkdirSync(paths.uploadsDir, { recursive: true, mode: 0o700 });
     const uploadsDir = realpathSync.native(paths.uploadsDir);
+    // sentFilesDir：agent 在回复里发给用户的文件的副本（sent-files.ts），顺手清掉上次没拷完的
+    prepareSentFilesDir(paths.sentFilesDir);
+    const sentFilesDir = realpathSync.native(paths.sentFilesDir);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     const ledger = createLedger(db, {
@@ -149,6 +153,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       personasDir: paths.personasDir,
       dataHome: paths.home,
       worktreesDir,
+      uploadsDir,
+      sentFilesDir,
     });
     const sessions = createSessionStore(db);
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
@@ -226,7 +232,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir });
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir });
 
     let stopping: Promise<void> | undefined;
     return {

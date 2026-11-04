@@ -38,6 +38,8 @@ export const API_PATHS = {
   uploads: "/api/uploads",
   /** GET：按上传编号取文件。图片内联显示（缩略图），别的当下载。 */
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
+  /** GET：按副本编号取 agent 发出的文件（shared/sent-files.ts）。图片（含 svg）内联，别的当下载；支持 Range。 */
+  sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;

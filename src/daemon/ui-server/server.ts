@@ -28,9 +28,11 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   isImageMime,
   normalizeName,
+  sentFileMime,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
+  type Attachment,
   type CreatePmRequest,
   type CreatePmResponse,
   type EditPersonaRequest,
@@ -52,6 +54,8 @@ export interface UiServerOptions {
   token: string;
   /** 聊天框上传的文件放哪（paths.ts 的 uploadsDir；守护进程传 realpath 过的，agent 拿到的路径和它一致）。 */
   uploadsDir: string;
+  /** agent 发给用户的文件的副本放哪（paths.ts 的 sentFilesDir）。 */
+  sentFilesDir: string;
   /** 网页打包产物（vite build 的 dist/）。不存在就只提供 API，请求页面返回 404。 */
   staticDir: string;
   /**
@@ -209,8 +213,56 @@ function parsePostBody(body: unknown): { clientId: string; text: string; attachm
   return { clientId, text, attachmentIds: ids };
 }
 
+/** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带、认不出、无效是 null（发整个文件），超出文件是 "unsatisfiable"。 */
+export function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
+  const match = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (match === null || (match[1] === "" && match[2] === "")) return null;
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (suffix === 0 || size === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  // 末位比首位小（bytes=5-2）：RFC 9110 说这个 Range 无效、整个忽略，发整个文件
+  if (match[2] !== "" && Number(match[2]) < start) return null;
+  if (start >= size) return "unsatisfiable";
+  return { start, end: match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1) };
+}
+
+/** 存着的文件的 CSP：沙箱、什么都不许加载，直接打开也不会当网页执行。 */
+const STORED_FILE_CSP = "sandbox; default-src 'none'";
+const SVG_MIME = "image/svg+xml";
+/**
+ * svg 直接打开（点开看大图）时，它自带的 <style>、style="" 被 default-src 'none' 拦掉，画出来是黑的（真浏览器验证过），
+ * 所以只给 svg 放开内联样式；脚本仍被 sandbox（没有 allow-scripts）和 default-src 'none' 拦着。
+ */
+const SVG_CSP = `${STORED_FILE_CSP}; style-src 'unsafe-inline'`;
+
+/**
+ * 发一个存在数据目录里的文件（上传的、agent 发出的副本）。文件不可信：只有图片内联显示，别的一律当下载；
+ * 禁止嗅探、CSP 沙箱化，直接打开地址也不会当网页执行（svg 里的脚本也不跑）。支持单段 Range（视频、大 PDF 拖动用）。
+ */
+function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Attachment, "name" | "path" | "size" | "mime">) {
+  const inline = isImageMime(file.mime);
+  reply
+    .header("content-type", file.mime)
+    .header("content-disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    .header("x-content-type-options", "nosniff")
+    .header("content-security-policy", file.mime === SVG_MIME ? SVG_CSP : STORED_FILE_CSP)
+    .header("cache-control", "private, max-age=3600")
+    .header("accept-ranges", "bytes");
+  const range = parseRange(req.headers.range, file.size);
+  if (range === "unsatisfiable") return reply.code(416).header("content-range", `bytes */${file.size}`).send();
+  if (range === null) return reply.header("content-length", file.size).send(createReadStream(file.path));
+  return reply
+    .code(206)
+    .header("content-range", `bytes ${range.start}-${range.end}/${file.size}`)
+    .header("content-length", range.end - range.start + 1)
+    .send(createReadStream(file.path, { start: range.start, end: range.end }));
+}
+
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
-  const { ledger, staticDir, uploadsDir } = opts;
+  const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
   const expectedToken = digest(opts.token);
   const app = Fastify({ logger: opts.logger ?? false });
@@ -297,17 +349,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     uploads.get("/api/uploads/:id/*", async (req, reply) => {
       const attachment = resolveUpload(uploadsDir, String((req.params as { id?: unknown }).id ?? ""));
       if (attachment === null) return fail(reply, 404, "not_found");
-      // 用户传的文件不可信：只有位图内联显示（缩略图），别的一律当下载；禁止嗅探、沙箱化，不会当网页执行
-      const inline = isImageMime(attachment.mime);
-      return reply
-        .header("content-type", attachment.mime)
-        .header("content-disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`)
-        .header("x-content-type-options", "nosniff")
-        .header("content-security-policy", "sandbox; default-src 'none'")
-        .header("cache-control", "private, max-age=3600")
-        .send(createReadStream(attachment.path));
+      return sendStoredFile(req, reply, attachment);
     });
   });
+
+  // agent 发给用户的文件的副本（daemon/sent-files.ts）：和上传的文件同一个布局，同一套查找和响应头；类型按 sentFileMime（svg 算图片）
+  app.get("/api/sent-files/:id/*", async (req, reply) => {
+    const copy = resolveUpload(sentFilesDir, String((req.params as { id?: unknown }).id ?? ""));
+    if (copy === null) return fail(reply, 404, "not_found");
+    return sendStoredFile(req, reply, { ...copy, mime: sentFileMime(copy.name) });
+  });
+
   if (existsSync(staticDir)) {
     app.register(fastifyStatic, { root: staticDir });
   } else {

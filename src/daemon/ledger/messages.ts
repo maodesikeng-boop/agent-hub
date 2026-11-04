@@ -14,6 +14,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
+import type { LedgerSentFiles } from "./sent-files.ts";
 import { idle, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { summarizeToolCall } from "./tool-summary.ts";
@@ -40,7 +41,7 @@ export function resumesAfterShutdown(session: AgentSessionRow, message: Pick<Mes
 
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
 
-export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSessions) {
+export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSessions, sentFiles: LedgerSentFiles) {
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
@@ -137,15 +138,15 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
-      case "agent.text":
-        insertAgentMessage(p, session, {
-          kind: "text",
-          text: event.text,
-          meta: null,
-          dedupeKey: agentMessageDedupeKey(sessionId, event.uuid),
-        });
+      case "agent.text": {
+        const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
+        // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件
+        const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
+        const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
+        insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
         updateLive(p, sessionId, working(null));
         return;
+      }
       case "agent.tool":
         insertAgentMessage(p, session, {
           kind: "tool",
