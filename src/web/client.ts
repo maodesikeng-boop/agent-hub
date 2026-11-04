@@ -12,6 +12,8 @@ import {
   type MessageId,
   type MessagesPage,
   type ModelsResponse,
+  type PickFolderRequest,
+  type PickFolderResponse,
   type PostMessageRequest,
   type PersonaChangeId,
   type PersonaResponse,
@@ -113,6 +115,11 @@ export function postStop(conversationId: ConversationId): Promise<void> {
 
 export function postCreatePm(body: CreatePmRequest): Promise<CreatePmResponse> {
   return postJson<CreatePmResponse>(API_PATHS.pms, body);
+}
+
+/** 让守护进程弹出原生的“选择文件夹”。等用户选完才回；取消（或超时）是 path null。 */
+export function postPickFolder(body: PickFolderRequest): Promise<PickFolderResponse> {
+  return postJson<PickFolderResponse>(API_PATHS.pickFolder, body);
 }
 
 export function fetchPersona(pmId: PmId): Promise<PersonaResponse> {

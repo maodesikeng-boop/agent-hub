@@ -134,6 +134,71 @@ describe("新建项目经理", () => {
     expect(within(nav()).getByRole("button", { name: /阿明/ })).toHaveAttribute("aria-current", "true");
   });
 
+  describe("主文件夹的“选择…”按钮", () => {
+    async function openDialog() {
+      const user = userEvent.setup();
+      await boot();
+      await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+      const dialog = screen.getByRole("dialog", { name: "新建项目经理" });
+      return { user, dialog, input: within(dialog).getByRole("textbox", { name: "主文件夹（可选）" }), button: within(dialog).getByRole("button", { name: "选择…" }) };
+    }
+
+    it("点了：请求守护进程弹窗，选中的路径填进输入框；输入框里已有的路径当起点；创建时带上", async () => {
+      const { user, dialog, input, button } = await openDialog();
+      await user.type(input, "/work/start");
+      await user.click(button);
+      await waitFor(() => expect(input).toHaveValue("/Users/me/picked"));
+      expect(api.callsTo("POST", /^\/api\/pick-folder$/).map((c) => c.body)).toEqual([{ startDir: "/work/start" }]);
+      await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+      await user.click(within(dialog).getByRole("button", { name: "创建" }));
+      await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
+      expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ folder: "/Users/me/picked" });
+    });
+
+    it("输入框是空的：不带起点", async () => {
+      const { user, button } = await openDialog();
+      await user.click(button);
+      await waitFor(() => expect(api.callsTo("POST", /^\/api\/pick-folder$/)).toHaveLength(1));
+      expect(api.callsTo("POST", /^\/api\/pick-folder$/)[0]?.body).toEqual({});
+    });
+
+    it("取消（path 是 null）：输入框不变，不报错", async () => {
+      const { user, input, button } = await openDialog();
+      await user.type(input, "/work/keep");
+      api.pickFolder = () => ({ status: 200, body: { path: null } });
+      await user.click(button);
+      await waitFor(() => expect(api.callsTo("POST", /^\/api\/pick-folder$/)).toHaveLength(1));
+      await waitFor(() => expect(button).toBeEnabled());
+      expect(input).toHaveValue("/work/keep");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("窗口开着的时候按钮不能点；选完恢复", async () => {
+      const { user, button } = await openDialog();
+      let finish: (r: { status: number; body: unknown }) => void = () => {};
+      api.pickFolder = () => new Promise((r) => (finish = r));
+      await user.click(button);
+      await waitFor(() => expect(button).toBeDisabled());
+      await user.click(button);
+      expect(api.callsTo("POST", /^\/api\/pick-folder$/)).toHaveLength(1);
+      finish({ status: 200, body: { path: "/a/b" } });
+      await waitFor(() => expect(button).toBeEnabled());
+    });
+
+    it("出错：在这一行下面显示原因，输入框不变；再点一次会清掉原因", async () => {
+      const { user, dialog, input, button } = await openDialog();
+      await user.type(input, "/work/keep");
+      api.pickFolder = () => ({ status: 409, body: { error: "已经有一个选择文件夹的窗口开着了" } });
+      await user.click(button);
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("已经有一个选择文件夹的窗口开着了");
+      expect(input).toHaveValue("/work/keep");
+      api.pickFolder = () => ({ status: 200, body: { path: "/x" } });
+      await user.click(button);
+      await waitFor(() => expect(input).toHaveValue("/x"));
+      expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
   it("响应比变化先到：先停在原来的对话，变化到了之后自动切过去", async () => {
     const user = userEvent.setup();
     const ws = await boot();

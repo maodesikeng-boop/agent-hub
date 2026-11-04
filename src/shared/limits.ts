@@ -187,3 +187,8 @@ export const HEALTH_FAILURE_THRESHOLD = 3;
  * 个别用例要更久的（重启、重试）在用例上单独写。
  */
 export const TEST_TIMEOUT_MS = 20_000;
+
+// ---- 新建项目经理时选主文件夹（守护进程替网页弹 macOS 原生的“选择文件夹”，见 daemon/pick-folder.ts）----
+
+/** 选文件夹的对话框最多开多久；超了结束 osascript、当用户取消处理（用户走开了不能一直占着“同时只有一个”）。 */
+export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
