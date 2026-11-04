@@ -201,18 +201,27 @@ describe("三个按钮", () => {
     expect(calls.at(-1)!.url).toBe(API_PATHS.attachmentAction(ID, "open"));
   });
 
-  it(".sh、.app 这类：“用默认程序打开”点不了，“在 Finder 中显示”可以", async () => {
+  it("不在白名单里的类型（.sh、.py、.terminal、没有扩展名）：“用默认程序打开”点不了，“在 Finder 中显示”可以；白名单里的都能点", async () => {
+    for (const name of ["run.sh", "a.py", "a.terminal", "a.fileloc", "noext"]) {
+      const { unmount } = show(file(name));
+      expect(screen.getByRole("button", { name: /用默认程序打开/ }), name).toBeDisabled();
+      unmount();
+    }
+    for (const name of ["a.pdf", "A.DOCX", "a.txt"]) {
+      const { unmount } = show(file(name));
+      expect(screen.getByRole("button", { name: /用默认程序打开/ }), name).toBeEnabled();
+      unmount();
+    }
     show(file("run.sh"));
-    expect(screen.getByRole("button", { name: /用默认程序打开/ })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: /在 Finder 中显示/ }));
     expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/reveal"))).toBe(true);
   });
 
   it("服务端拒绝：把原因写出来", async () => {
-    actionReply = { status: 403, body: { error: "这种文件打开可能会直接运行，只能在 Finder 中显示" } };
-    show(file("tool"));
+    actionReply = { status: 403, body: { error: "这个类型打开可能会直接运行，只能在 Finder 中显示" } };
+    show(file("tool.pdf"));
     await user.click(screen.getByRole("button", { name: /用默认程序打开/ }));
-    expect(await screen.findByText("这种文件打开可能会直接运行，只能在 Finder 中显示")).toBeInTheDocument();
+    expect(await screen.findByText("这个类型打开可能会直接运行，只能在 Finder 中显示")).toBeInTheDocument();
   });
 
   it("用的是副本时说一声", async () => {

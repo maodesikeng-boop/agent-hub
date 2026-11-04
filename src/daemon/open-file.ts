@@ -1,6 +1,7 @@
 // 网页的“在 Finder 中显示”“用默认程序打开”：用 macOS 的 open 命令（execFile，不经过 shell，路径放在 -- 之后）。
 // 优先用原文件（原路径还在、是普通文件、还在会话允许的文件夹里——先 realpath 再判断），否则用守护进程存的副本。
-// .app、.command、.sh、.pkg、.scpt、.jar 和带可执行权限的文件只许显示、不许打开（打开可能直接运行）。
+// 只有白名单扩展名（shared/preview.ts 的 OPEN_ALLOWED_EXTENSIONS：文档、媒体、纯文本）的才许“用默认程序打开”；
+// 别的和带可执行权限的文件只许显示（打开可能直接运行）。
 import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { basename } from "node:path";
@@ -16,10 +17,10 @@ export const runOpenCommand: RunOpen = (args) =>
 
 /** 没找到能用的文件（原文件、副本都没了）。 */
 export class OpenTargetMissing extends Error {}
-/** 这个文件只许显示，不许打开。 */
+/** 这个文件只许显示，不许打开（扩展名不在白名单里、或有可执行权限）。 */
 export class OpenNotAllowed extends Error {}
 
-export const OPEN_NOT_ALLOWED_MESSAGE = "这种文件打开可能会直接运行，只能在 Finder 中显示";
+export const OPEN_NOT_ALLOWED_MESSAGE = "这个类型打开可能会直接运行，只能在 Finder 中显示";
 
 function realFileOrNull(path: string): { real: string; mode: number } | null {
   try {

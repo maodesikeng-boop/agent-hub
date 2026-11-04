@@ -30,7 +30,7 @@ export interface PreviewFile {
 /** 放进 iframe、播放器、<img> 的地址：?inline=1 让服务端把 pdf、html 内联发（daemon/ui-server/server.ts）。 */
 const inlineUrl = (url: string) => `${url}?inline=1`;
 
-const OPEN_BLOCKED_TITLE = "这种文件打开可能会直接运行，只能在 Finder 中显示";
+const OPEN_BLOCKED_TITLE = "这个类型打开可能会直接运行，只能在 Finder 中显示";
 const COPY_NOTICE = "原文件已经不在了，显示的是发出时存的副本";
 const MB = 1024 * 1024;
 

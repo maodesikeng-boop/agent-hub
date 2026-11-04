@@ -51,7 +51,7 @@ export const API_PATHS = {
   /**
    * POST，没有请求体 → FileActionResponse：用 macOS 的 open 在 Finder 中显示（reveal）/ 用默认程序打开（open）agent 发来的文件。
    * 按消息编号 + meta.files 的下标找文件（不收路径）；原文件还在、还在这个会话允许的文件夹里用原文件，否则用副本。
-   * 带可执行权限的、.app/.sh 这类（OPEN_BLOCKED_EXTENSIONS）的 open 回 403，reveal 照常。
+   * 带可执行权限的、扩展名不在白名单（OPEN_ALLOWED_EXTENSIONS，文档、图片、音视频、纯文本）里的 open 回 403，reveal 照常。
    */
   sentFileAction: (messageId: MessageId, index: number, action: FileAction) => `/api/messages/${messageId}/files/${index}/${action}`,
   /** POST，同上，对象是聊天框上传的附件（按上传编号，只有数据目录里的那一份）。 */

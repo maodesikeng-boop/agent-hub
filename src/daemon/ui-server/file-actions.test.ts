@@ -198,8 +198,9 @@ describe("POST 在 Finder 中显示 / 用默认程序打开（agent 发来的文
     expect(opened).toEqual([["--", copy]]);
   });
 
-  it("可执行类型（.sh、.app、.command、.pkg、.scpt、.jar）：只能显示，打开 403 且不执行", async () => {
-    for (const name of ["run.sh", "a.command", "b.pkg", "c.scpt", "d.jar", "E.APP"]) {
+  it("不在白名单里的类型（.sh、.app、.command、.pkg、.scpt、.jar、.terminal、.tool、.workflow、.action、.fileloc、.mpkg、.prefPane、.zsh、.bash、.py）：只能显示，打开 403 且不执行", async () => {
+    const names = ["run.sh", "a.command", "b.pkg", "c.scpt", "d.jar", "E.APP", "a.terminal", "a.tool", "a.workflow", "a.action", "a.fileloc", "a.mpkg", "a.prefPane", "a.zsh", "a.bash", "a.py", "noext"];
+    for (const name of names) {
       opened = [];
       const { original } = sendFile(name);
       const refused = await post(url("open"));
@@ -211,8 +212,24 @@ describe("POST 在 Finder 中显示 / 用默认程序打开（agent 发来的文
     }
   });
 
-  it("带可执行权限的文件（没有扩展名也一样）：打开 403，显示可以", async () => {
-    const { original } = sendFile("tool");
+  it("白名单里的类型（大小写不论）能打开", async () => {
+    for (const name of ["a.pdf", "A.PNG", "a.Docx", "a.md", "a.mp4", "a.html"]) {
+      opened = [];
+      const { original } = sendFile(name);
+      expect((await post(url("open"))).statusCode, name).toBe(200);
+      expect(opened, name).toEqual([["--", original]]);
+    }
+  });
+
+  it("副本的名字不在白名单里也一样拒绝（按消息里记的文件名判断，不只看原路径）", async () => {
+    const { original } = sendFile("a.pdf", { name: "a.terminal" });
+    rmSync(original);
+    expect((await post(url("open"))).statusCode).toBe(403);
+    expect(opened).toEqual([]);
+  });
+
+  it("白名单里的类型但带可执行权限：打开 403，显示可以", async () => {
+    const { original } = sendFile("tool.pdf");
     chmodSync(original, 0o755);
     expect((await post(url("open"))).statusCode).toBe(403);
     expect(opened).toEqual([]);

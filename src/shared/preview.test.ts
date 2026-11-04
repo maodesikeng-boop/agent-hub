@@ -52,14 +52,46 @@ describe("codeLanguageOf", () => {
   });
 });
 
-describe("canOpenWithDefault：能不能用默认程序打开", () => {
-  it(".app、.command、.sh、.pkg、.scpt、.jar（大小写不论）不能", () => {
-    for (const name of ["a.app", "a.command", "a.sh", "a.pkg", "a.scpt", "a.jar", "A.APP", "x.y.Command"]) {
+describe("canOpenWithDefault：能不能用默认程序打开（白名单）", () => {
+  it("文档、图片、音视频、纯文本能开（大小写不论）", () => {
+    for (const name of ["a.txt", "a.md", "a.csv", "a.tsv", "a.json", "a.log", "a.pdf", "a.rtf", "a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.heic"]) {
+      expect(canOpenWithDefault(name), name).toBe(true);
+    }
+    for (const name of ["a.mp4", "a.mov", "a.m4a", "a.mp3", "a.wav", "a.docx", "a.xlsx", "a.pptx", "a.doc", "a.xls", "a.ppt", "a.pages", "a.numbers", "a.key", "a.html", "a.htm"]) {
+      expect(canOpenWithDefault(name), name).toBe(true);
+    }
+    for (const name of ["A.PDF", "报告.Docx", "x.y.PNG"]) expect(canOpenWithDefault(name), name).toBe(true);
+  });
+
+  it("一双击就可能执行的类型不能开：.terminal、.tool、.command、.workflow、.action、.fileloc、.pkg、.mpkg、.app、.prefPane、.scpt、.jar、.sh、.zsh、.bash、.py", () => {
+    for (const name of [
+      "a.terminal",
+      "a.tool",
+      "a.command",
+      "a.workflow",
+      "a.action",
+      "a.fileloc",
+      "a.pkg",
+      "a.mpkg",
+      "a.app",
+      "a.prefPane",
+      "a.scpt",
+      "a.jar",
+      "a.sh",
+      "a.zsh",
+      "a.bash",
+      "a.py",
+      "A.TERMINAL",
+      "x.pdf.command",
+      "a.svg",
+      "a.zip",
+      "a.dmg",
+    ]) {
       expect(canOpenWithDefault(name), name).toBe(false);
     }
   });
 
-  it("别的能", () => {
-    for (const name of ["a.pdf", "a.png", "a.md", "noext", "app", "sh"]) expect(canOpenWithDefault(name), name).toBe(true);
+  it("没有扩展名、只有点开头的名字、以点结尾：不能开", () => {
+    for (const name of ["noext", "app", "pdf", ".pdf", "a.", ""]) expect(canOpenWithDefault(name), name).toBe(false);
   });
 });

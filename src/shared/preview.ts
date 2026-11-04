@@ -76,11 +76,52 @@ export function previewKindOf(name: string, mime: string): PreviewKind {
   return "other";
 }
 
-/** 双击会运行程序、装东西的类型：只允许在 Finder 中显示，不允许用默认程序打开。（带可执行权限的文件由守护进程按权限位再拦。） */
-export const OPEN_BLOCKED_EXTENSIONS: readonly string[] = ["app", "command", "sh", "pkg", "scpt", "jar"];
+/**
+ * 能“用默认程序打开”的扩展名（小写，白名单）：只有文档、图片、音视频、纯文本这类打开只会看、不会执行的。
+ * 不在表里的（含没有扩展名的）只能“在 Finder 中显示”：.terminal、.tool、.command、.workflow、.action、.fileloc、.pkg、.mpkg、
+ * .app、.prefPane、.scpt、.jar、.sh/.zsh/.bash、.py 之类一双击就可能执行，黑名单列不全，所以反过来写。
+ * html、htm 用默认浏览器打开（浏览器里的脚本在沙箱内）；svg 不放（可能带脚本）。带可执行权限的文件另由守护进程按权限位拦。
+ */
+export const OPEN_ALLOWED_EXTENSIONS: readonly string[] = [
+  "txt",
+  "md",
+  "csv",
+  "tsv",
+  "json",
+  "log",
+  "pdf",
+  "rtf",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "heic",
+  "bmp",
+  "tif",
+  "tiff",
+  "mp4",
+  "m4v",
+  "mov",
+  "m4a",
+  "mp3",
+  "wav",
+  "docx",
+  "xlsx",
+  "pptx",
+  "doc",
+  "xls",
+  "ppt",
+  "pages",
+  "numbers",
+  "key",
+  "html",
+  "htm",
+];
 
 export function canOpenWithDefault(name: string): boolean {
-  return !OPEN_BLOCKED_EXTENSIONS.includes(extensionOf(name));
+  // 点开头的名字（.pdf 是隐藏文件，不是 pdf）不算有扩展名
+  return name.lastIndexOf(".") > 0 && OPEN_ALLOWED_EXTENSIONS.includes(extensionOf(name));
 }
 
 /** 在 Finder 中显示 / 用默认程序打开。 */
