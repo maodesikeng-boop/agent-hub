@@ -470,6 +470,7 @@ describe("M2：agent 接口", () => {
       "worker.send",
       "worker.end",
       "worker.list",
+      "ask",
     ]);
     expect(hubPath("project.create")).toBe("/v1/project.create");
     expect(ENV_HUB_TOKEN).toBe("HUB_TOKEN");
@@ -740,6 +741,7 @@ describe("M3：hub 命令按角色放行", () => {
       "worker.send": ["pm"],
       "worker.end": ["pm"],
       "worker.list": ["pm"],
+      ask: ["pm"],
     });
     expect(hubCommandAllowed("worker", "status")).toBe(true);
     expect(hubCommandAllowed("worker", "persona.edit")).toBe(false);

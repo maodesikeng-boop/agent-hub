@@ -101,7 +101,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
   const handover = createLedgerHandover(ctx, sessions, messages, persona);
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
@@ -174,6 +174,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     createPm,
 
     getMessage: messages.getMessage,
+    sentFileAllows(sessionId, realPath) {
+      const session = getAgentSession(db, sessionId);
+      return session !== null && sentFiles.allows(session, realPath);
+    },
     // 消息标 failed（messages.ts），Worker 的再给项目经理发一行（workers.ts），同一个事务
     onActionFailed(action, error) {
       write((p) => {
@@ -197,6 +201,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     retryMessage: messages.retryMessage,
     renewSession: handover.renewSession,
     waitsForHandover: handover.waitsForHandover,
+    dismissAsk: messages.dismissAsk,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),

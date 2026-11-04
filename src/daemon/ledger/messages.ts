@@ -1,10 +1,11 @@
 // 账本里的消息：用户发消息、停止、重试，驱动层事件变成 agent 的消息和消息状态，系统消息。
 // 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改（transition）。
+import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
-import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentSessionRow, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import { agentMessageDedupeKey, askOf, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
+import type { AgentSessionRow, AskMeta, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -15,9 +16,9 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
-import { idle, working } from "./sessions.ts";
+import { idle, toolFinished, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
-import { summarizeToolCall } from "./tool-summary.ts";
+import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 
@@ -112,6 +113,38 @@ export function createLedgerMessages(
     if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
+  /** hub ask：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
+  const insertAskMessage = (p: Pending, session: AgentSessionRow, text: string): Message => {
+    const t = now();
+    const row = db.get<MessageDbRow>(
+      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (?, ?, 'agent', 'text', ?, ?, ?, ?, ?) RETURNING *`,
+      session.conversationId,
+      session.id,
+      text,
+      JSON.stringify({ needsUser: true } satisfies AskMeta),
+      `ask:${session.id}:${randomUUID()}`,
+      t,
+      t,
+    )!;
+    const message = toMessage(row);
+    p.changes.push({ type: "message.created", data: { message } });
+    return message;
+  };
+
+  /** 用户点“知道了”：meta 加上 dismissed。已经清过的什么也不改。 */
+  const dismissAsk = (messageId: MessageId): void => {
+    write((p) => {
+      const message = getMessage(messageId);
+      if (message === null || !conversationExists(message.conversationId)) throw fail("not_found", `没有编号 ${messageId} 的消息`);
+      const ask = askOf(message);
+      if (ask === null) throw fail("conflict", "这条消息不是要用户确定的提问");
+      if (ask.dismissed === true) return;
+      db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...message.meta, dismissed: true }), now(), messageId);
+      p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
+    });
+  };
+
   /** 写一条只给人看的系统消息（规则见 domain.ts 的 SystemMessageMeta）：没有会话、没有状态。 */
   const insertSystemMessage = (p: Pending, conversationId: ConversationId, meta: SystemMessageMeta, text: string): Message => {
     const t = now();
@@ -152,13 +185,20 @@ export function createLedgerMessages(
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
+      case "agent.thinking":
+        // 子任务里的事件不改主 agent 的状态
+        if (event.parentToolUseId === undefined) updateLive(p, sessionId, working(liveOf(sessionId).currentTool, { type: "thinking" }));
+        return;
+      case "agent.tool_result":
+        if (event.parentToolUseId === undefined) updateLive(p, sessionId, toolFinished(event.toolUseIds));
+        return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
-        updateLive(p, sessionId, working(null));
+        updateLive(p, sessionId, working(null, event.parentToolUseId === undefined ? { type: "text" } : undefined));
         return;
       }
       case "agent.tool":
@@ -168,7 +208,11 @@ export function createLedgerMessages(
           meta: { toolUseId: event.toolUseId, name: event.name, input: event.input },
           dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
         });
-        updateLive(p, sessionId, working(event.name));
+        updateLive(
+          p,
+          sessionId,
+          event.parentToolUseId === undefined ? toolStarted(event.name, event.toolUseId, stepOfTool(event.name, event.input)) : working(event.name),
+        );
         return;
       case "turn.ended": {
         const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
@@ -315,6 +359,8 @@ export function createLedgerMessages(
     transition,
     applyEvent,
     insertSystemMessage,
+    insertAskMessage,
+    dismissAsk,
     postUserMessage,
     requestStop,
     messagesBefore,

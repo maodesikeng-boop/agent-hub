@@ -1076,7 +1076,7 @@ describe("当前会话取 generation 最大的一代", () => {
       sessions,
     });
 
-  it("旧一代在跑、新一代空闲：不显示状态行和停止按钮", async () => {
+  it("旧一代在跑、新一代空闲：不显示头像旁的状态，也没有停止键", async () => {
     // 旧一代的会话编号反而更大，确认不是按编号取
     await boot(
       generations([
@@ -1090,19 +1090,25 @@ describe("当前会话取 generation 最大的一代", () => {
 
   it("新一代在跑、旧一代空闲：显示新一代的状态；不管推送先后", async () => {
     const ws = await boot(
-      generations([makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "running", activity: "working", currentTool: "Read" })]),
+      generations([makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "running", activity: "working", step: { type: "tool_use", name: "Read", input: { file_path: "/x/Read.ts" } } })]),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Read");
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在读 Read.ts");
     // 旧一代后推来“在跑”，不抢新一代的位置
-    push(ws, sessionChange(11, makeSession({ sessionId: 9, conversationId: 2, generation: 1, status: "running", activity: "working", currentTool: "Bash" })));
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Read");
-    expect(screen.getByRole("status", { name: "状态" })).not.toHaveTextContent("Bash");
+    push(
+      ws,
+      sessionChange(
+        11,
+        makeSession({ sessionId: 9, conversationId: 2, generation: 1, status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } }),
+      ),
+    );
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在读 Read.ts");
+    expect(screen.getByRole("status", { name: "状态" })).not.toHaveTextContent("在运行命令");
     // 新一代回到空闲：状态行消失，不显示旧一代还在跑的
     push(ws, sessionChange(12, makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "idle", activity: "idle" })));
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
   });
 
-  it("session.created：新一代出现，状态行跟着它", async () => {
+  it("session.created：新一代出现，头像旁的状态跟着它", async () => {
     const ws = await boot(
       generations([makeSession({ sessionId: 3, conversationId: 2, generation: 1, status: "running", activity: "working", currentTool: "Bash" })]),
     );
@@ -1130,13 +1136,13 @@ describe("等额度", () => {
           makeSession({
             status: "running",
             activity: "working",
-            currentTool: "Bash",
+            step: { type: "tool_use", name: "Bash", input: {} },
             rateLimit: { status: "allowed_warning", resetsAt: null, windows: {} },
           }),
         ],
       }),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Bash");
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在运行命令");
     expect(screen.queryByText(/等额度/)).not.toBeInTheDocument();
   });
 

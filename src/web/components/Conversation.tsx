@@ -1,16 +1,18 @@
 import { Folder } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { ConversationId, PmId } from "../../shared/index.ts";
+import { useState } from "react";
+import type { ConversationId, Message, MessageId, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
+import { AskBar } from "./AskBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
 import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
-import { StatusLine, type StopPhase } from "./StatusLine.tsx";
+import { useStop } from "../useStop.ts";
+import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
 
 export function Conversation({
   entry,
@@ -28,6 +30,8 @@ export function Conversation({
   onStop,
   onLoadOlder,
   actions,
+  asks,
+  onDismissAsks,
   onOpenProfile,
 }: {
   entry: ConversationEntry;
@@ -49,24 +53,15 @@ export function Conversation({
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
+  /** 还在等用户确定的 hub ask（selectors.ts 的 pendingAsks），顶栏下面显示成一条。 */
+  asks: Message[];
+  onDismissAsks: (messageIds: MessageId[]) => void;
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
-  const [stopPhase, setStopPhase] = useState<StopPhase>("idle");
-  const activity = session?.activity ?? "idle";
-
-  // 这一轮结束了，下一轮又能点“停止”
-  useEffect(() => {
-    if (activity === "idle") setStopPhase("idle");
-  }, [activity]);
-
-  const stop = () => {
-    setStopPhase("sending");
-    onStop(id).then(
-      () => setStopPhase("requested"),
-      () => setStopPhase("failed"),
-    );
-  };
+  /** 点“等你确定”条里的某个问题：n 每点一次加一，点同一条也再跳一次。 */
+  const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
+  const stop = useStop(session, () => onStop(id));
 
   const empty = view.messages.length === 0 && pending.length === 0;
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
@@ -102,6 +97,7 @@ export function Conversation({
         {stats}
       </header>
       {notices}
+      <AskBar asks={asks} onJump={(messageId) => setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }))} onDismiss={onDismissAsks} />
       <div className="relative min-h-0 flex-1">
         {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>}
         <MessageList
@@ -113,14 +109,17 @@ export function Conversation({
           onLoadOlder={() => onLoadOlder(id)}
           onRetry={onRetry}
           actions={actions}
+          focus={focus}
+          status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
+          statusAgent={agent}
         />
       </div>
-      <div className="mx-auto w-full max-w-[888px] shrink-0 space-y-2.5 px-6 pb-5">
-        <StatusLine agentName={agent.name} session={session} stopPhase={stopPhase} onStop={stop} />
+      <div className="mx-auto w-full max-w-[888px] shrink-0 px-6 pb-5">
         <Composer
           value={draft}
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}
+          stop={stop}
           onChange={(v) => onDraftChange(id, v)}
           onSend={(text, files) => onSend(id, text, files)}
         />

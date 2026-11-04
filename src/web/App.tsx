@@ -1,7 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import type { ConversationId, PersonaChangeId, PmId } from "../shared/index.ts";
-import { postRevertPersonaChange } from "./client.ts";
+import { postDismissAsk, postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
@@ -9,7 +9,7 @@ import { WorkerPanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, isRenewing, listConversations, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workerPhaseOf, workersOf } from "./selectors.ts";
+import { failingHealth, isRenewing, listConversations, pendingAsks, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workerPhaseOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
@@ -120,6 +120,7 @@ export function App() {
         entries={entries}
         activeId={activeId}
         waiting={reminders.waiting}
+        asking={reminders.asking}
         notify={reminders.notify}
         quota={quotaUsage(state)}
         onSelect={select}
@@ -178,6 +179,8 @@ export function App() {
             onStop={hub.stop}
             onLoadOlder={(id) => void hub.loadOlder(id)}
             actions={actions}
+            asks={pendingAsks(state, active.id)}
+            onDismissAsks={(ids) => ids.forEach((id) => void postDismissAsk(id).catch(() => {}))}
             onOpenProfile={setProfilePm}
           />
         ) : (

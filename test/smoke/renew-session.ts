@@ -1,19 +1,19 @@
-// 开新会话的冒烟（S20）：和项目经理聊一句带暗号的话，资料页点“开新会话”：它写完交接后换成新的 claude 会话（新的会话 ID），
+// 开新会话的冒烟（S22）：和项目经理聊一句带暗号的话，资料页点“开新会话”：它写完交接后换成新的 claude 会话（新的会话 ID），
 // 再问暗号，新会话从交接里答得出来。
 import { API_PATHS, type RenewSessionResponse } from "../../src/shared/index.ts";
 import { MODEL, Smoke, TURN_MS, expect, scenario, waitUntil, type Outcome } from "./kit.ts";
 
 export async function runRenewSession(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
-  if (!only("S20")) return;
+  if (!only("S22")) return;
   const smoke = await Smoke.boot();
-  const ok = await scenario(outcomes, "S20 开新会话：写完交接换成新的 claude 会话，新会话从交接里答得出暗号", async () => {
+  const ok = await scenario(outcomes, "S22 开新会话：写完交接换成新的 claude 会话，新会话从交接里答得出暗号", async () => {
     const secret = `KIWI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const { pmId, conversationId } = await smoke.client.createPm({
       name: "阿周",
       mode: "hands_on",
       defaultModel: MODEL,
       persona: "阿周：简洁、直接。",
-      folder: smoke.folder("s20"),
+      folder: smoke.folder("s22"),
     });
     await smoke.ask(conversationId, `记住暗号 ${secret}，以后会问你。这一条只回复“好”。`);
     const old = await smoke.currentSession(conversationId);
@@ -47,5 +47,5 @@ export async function runRenewSession(outcomes: Outcome[], only: (name: string) 
     return `旧会话 ${oldVendor} → 新会话 ${newVendor}（日志 init 报的也是它）；交接开头“${handover.slice(0, 60).replace(/\n/g, " ")}…”；回复“${reply.trim()}”`;
   });
   const problems = await smoke.finish(!ok);
-  if (problems.length > 0) outcomes.push({ name: "S20（收尾）", ok: false, detail: problems.join("；") });
+  if (problems.length > 0) outcomes.push({ name: "S22（收尾）", ok: false, detail: problems.join("；") });
 }

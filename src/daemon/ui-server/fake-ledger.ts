@@ -23,6 +23,7 @@ import {
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
+  type SessionId,
   type StateSnapshot,
   type Unsubscribe,
 } from "../../shared/index.ts";
@@ -95,9 +96,14 @@ export class FakeLedger {
   readonly reverted: PersonaChangeId[] = [];
   readonly retried: MessageId[] = [];
   readonly renewed: PmId[] = [];
+  readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
+  /** getMessage 能取到的消息（测试自己放）。 */
+  readonly storedMessages = new Map<MessageId, Message>();
+  /** sentFileAllows 的判断，默认都允许。 */
+  sentFileAllows: (sessionId: SessionId, realPath: string) => boolean = () => true;
   /** 抛出它来模拟账本出错（普通 Error 是内部出错，LedgerRequestError 是被拒绝）；所有方法都抛。 */
   failWith: Error | null = null;
 
@@ -220,6 +226,11 @@ export class FakeLedger {
     return { messageId: 50 };
   }
 
+  dismissAsk(messageId: MessageId): void {
+    this.check();
+    this.dismissed.push(messageId);
+  }
+
   snapshot(): StateSnapshot {
     this.check();
     return { ...this.snapshotValue, seq: this.seq };
@@ -266,7 +277,8 @@ export class FakeLedger {
       refreshSessionState: unused("refreshSessionState"),
       recoverAfterRestart: unused("recoverAfterRestart"),
       createPm: (i) => this.createPm(i),
-      getMessage: unused("getMessage"),
+      getMessage: (id) => this.storedMessages.get(id) ?? null,
+      sentFileAllows: (s, p) => this.sentFileAllows(s, p),
       onActionFailed: unused("onActionFailed"),
       stopMessage: unused("stopMessage"),
       reportHealth: unused("reportHealth"),
@@ -276,6 +288,7 @@ export class FakeLedger {
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
       waitsForHandover: unused("waitsForHandover"),
+      dismissAsk: (m) => this.dismissAsk(m),
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),

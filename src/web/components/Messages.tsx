@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  askOf,
   attachmentsOf,
   sentFilesOf,
   systemEventOf,
@@ -37,7 +38,7 @@ import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-interface AgentIdentity {
+export interface AgentIdentity {
   name: string;
   avatarKey: number;
 }
@@ -55,28 +56,71 @@ export interface MessageActions {
 
 const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
 
-/** agent 一连串消息的第一条在正文上方带一行小头像和名字，后面的只有正文；正文从最左边开始、占满整行。 */
+/** 头像 + 名字，状态（AgentStatus，agent 忙时才有）接在名字后面：“项目经理 · 在思考…”。 */
+function AgentHead({ identity, status }: { identity: AgentIdentity; status?: React.ReactNode }) {
+  return (
+    <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
+      <Avatar colorKey={identity.avatarKey} size={24} />
+      <div className="shrink-0 text-[13.5px] font-medium text-muted-foreground">{identity.name}</div>
+      {status != null && (
+        <>
+          <span className="text-[13.5px] text-muted-foreground" aria-hidden="true">
+            ·
+          </span>
+          <div className="min-w-0 truncate text-[13.5px] text-muted-foreground">{status}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * agent 打字提示：这一轮还没出回复（最后一条是用户的消息）时，消息列表底部单独的一行“头像 名字 · 状态”。
+ * 回复出来后状态改由这一轮最后一条回复的头像行带着（AgentRow 的 status）。
+ */
+export function AgentTyping({ identity, status }: { identity: AgentIdentity; status: React.ReactNode }) {
+  return (
+    <div className="mt-5 flex flex-col" data-side="left" data-typing>
+      <AgentHead identity={identity} status={status} />
+    </div>
+  );
+}
+
+/**
+ * agent 一连串消息的第一条在正文上方带一行小头像和名字，后面的只有正文；正文从最左边开始、占满整行。
+ * status：agent 还在忙、这是这一轮最后一条回复时有，这一条不管是不是第一条都带头像行，状态接在名字后面。
+ */
 function AgentRow({
   identity,
   head,
+  status,
   as: Tag = "div",
   title,
+  messageId,
+  highlighted,
   children,
 }: {
   identity: AgentIdentity;
   head: boolean;
+  status?: React.ReactNode;
   as?: "div" | "article";
   title?: string;
+  /** 给“等你确定”条跳转用（MessageList 按它找到这条消息）。 */
+  messageId?: MessageId;
+  highlighted?: boolean;
   children: React.ReactNode;
 }) {
+  const showHead = head || status != null;
   return (
-    <Tag className={cn("flex flex-col", head ? "mt-5" : "mt-1.5")} data-side="left" data-head={head} title={title}>
-      {head && (
-        <div className="mb-1.5 flex items-center gap-2">
-          <Avatar colorKey={identity.avatarKey} size={24} />
-          <div className="text-[13px] font-medium text-muted-foreground">{identity.name}</div>
-        </div>
-      )}
+    <Tag
+      className={cn("flex flex-col", showHead ? "mt-5" : "mt-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
+      data-side="left"
+      data-head={showHead}
+      data-message-id={messageId}
+      data-highlighted={highlighted ? "true" : undefined}
+      title={title}
+    >
+      {showHead && <AgentHead identity={identity} status={status} />}
       <div className="w-full min-w-0 space-y-1.5">{children}</div>
     </Tag>
   );
@@ -173,12 +217,17 @@ export function MessageBubble({
   message,
   identity,
   head,
+  status,
   actions,
+  highlighted = false,
 }: {
   message: Message;
   identity: AgentIdentity;
   head: boolean;
+  /** 见 AgentRow。 */
+  status?: React.ReactNode;
   actions: MessageActions;
+  highlighted?: boolean;
 }) {
   const time = formatTime(message.createdAt);
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
@@ -208,9 +257,12 @@ export function MessageBubble({
     );
   }
   return (
-    <AgentRow identity={identity} head={head} as="article" title={time}>
+    <AgentRow identity={identity} head={head} status={status} as="article" title={time} messageId={message.id} highlighted={highlighted}>
+      {askOf(message) && (
+        <span className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你确定</span>
+      )}
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={message.text} files={files} />
+        <Markdown text={message.text} files={files} messageId={message.id} />
       </div>
     </AgentRow>
   );
@@ -314,14 +366,17 @@ export function ToolGroup({
   messages,
   identity,
   head,
+  status,
 }: {
   messages: Message[];
   identity: AgentIdentity;
   head: boolean;
+  /** 见 AgentRow。 */
+  status?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <AgentRow identity={identity} head={head}>
+    <AgentRow identity={identity} head={head} status={status}>
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group flex cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 py-1.5 text-[13.5px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
           <TerminalSquare className="size-4" aria-hidden="true" />

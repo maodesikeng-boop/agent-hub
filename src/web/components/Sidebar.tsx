@@ -14,12 +14,15 @@ function EntryButton({
   entry,
   active,
   waiting,
+  asking,
   onSelect,
 }: {
   entry: ConversationEntry;
   active: boolean;
   /** 对话停稳了，在等用户。 */
   waiting: boolean;
+  /** 项目经理用 hub ask 问了用户，还没处理；比“等你”更醒目，两个都有时只显示它。 */
+  asking: boolean;
   onSelect: (id: number) => void;
 }) {
   return (
@@ -37,7 +40,11 @@ function EntryButton({
         <span className="flex items-baseline justify-between gap-2">
           <span className={cn("truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{entry.name}</span>
           <span className="flex shrink-0 items-center gap-2">
-            {waiting && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你</span>}
+            {asking ? (
+              <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">等你确定</span>
+            ) : (
+              waiting && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你</span>
+            )}
             {entry.lastMessage && <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>}
           </span>
         </span>
@@ -58,6 +65,7 @@ export function Sidebar({
   entries,
   activeId,
   waiting,
+  asking,
   notify,
   quota,
   onSelect,
@@ -68,6 +76,8 @@ export function Sidebar({
   activeId: number | null;
   /** 在“等你”的对话。 */
   waiting: ReadonlySet<number>;
+  /** 有“等你确定”的提问没处理的对话。 */
+  asking: ReadonlySet<number>;
   notify: NotifySettings;
   quota: QuotaVendor[];
   onSelect: (id: number) => void;
@@ -97,7 +107,7 @@ export function Sidebar({
         {entries
           .filter((entry) => matches(entry, query))
           .map((entry) => (
-            <EntryButton key={entry.id} entry={entry} active={entry.id === activeId} waiting={waiting.has(entry.id)} onSelect={onSelect} />
+            <EntryButton key={entry.id} entry={entry} active={entry.id === activeId} waiting={waiting.has(entry.id)} asking={asking.has(entry.id)} onSelect={onSelect} />
           ))}
       </nav>
       <div className="flex items-center gap-2.5 py-4 pr-3 pl-5">

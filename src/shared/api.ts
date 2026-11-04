@@ -16,6 +16,7 @@ import type {
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { AgentVendor, ModelCatalog } from "./vendors.ts";
+import type { FileAction } from "./preview.ts";
 
 export const API_PATHS = {
   /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
@@ -33,6 +34,8 @@ export const API_PATHS = {
   renewSession: (pmId: PmId) => `/api/pms/${pmId}/renew-session`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
+  /** POST，没有请求体 → 204。用户点“知道了”，清掉一条 hub ask 的提醒（Ledger.dismissAsk）。 */
+  dismissAsk: (messageId: MessageId) => `/api/messages/${messageId}/dismiss-ask`,
   /**
    * POST ?name=<文件名>：请求体就是文件原样的字节（不是 JSON，不绑定接收方），最多 MAX_UPLOAD_BYTES，不动别的接口 1 MB 的上限。
    * 200 → Attachment；空文件、太大（413）、文件名不合法 → 中文原因。之后发消息时在 PostMessageRequest.attachmentIds 里带上它的 id。
@@ -49,6 +52,14 @@ export const API_PATHS = {
    * 取消、超时回 path null（不是错误）；同时已经有一个对话框 409；起不来 osascript 回中文原因。
    */
   pickFolder: "/api/pick-folder",
+  /**
+   * POST，没有请求体 → FileActionResponse：用 macOS 的 open 在 Finder 中显示（reveal）/ 用默认程序打开（open）agent 发来的文件。
+   * 按消息编号 + meta.files 的下标找文件（不收路径）；原文件还在、还在这个会话允许的文件夹里用原文件，否则用副本。
+   * 带可执行权限的、扩展名不在白名单（OPEN_ALLOWED_EXTENSIONS，文档、图片、音视频、纯文本）里的 open 回 403，reveal 照常。
+   */
+  sentFileAction: (messageId: MessageId, index: number, action: FileAction) => `/api/messages/${messageId}/files/${index}/${action}`,
+  /** POST，同上，对象是聊天框上传的附件（按上传编号，只有数据目录里的那一份）。 */
+  attachmentAction: (id: string, action: FileAction) => `/api/attachments/${id}/${action}`,
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;

@@ -209,6 +209,7 @@ describe("applyDriverEvent", () => {
       "session.status", // working
       "message.updated",
       "message.created",
+      "session.status", // 在写回复
       "message.updated",
       "session.status", // idle
     ]);
@@ -320,6 +321,118 @@ describe("applyDriverEvent", () => {
     setSession({ usage });
     ev({ type: "agent.tool", at: 2, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "ls" } });
     expect(sessionStates().at(-1)!.usage).toEqual(usage);
+  });
+
+  describe("step（agent 在做什么，只在内存里，推给网页）", () => {
+    const steps = () => sessionStates().map((s) => s.step ?? null);
+    const last = () => sessionStates().at(-1)!;
+    const tool = (toolUseId: string, name: string, input: unknown = {}, extra: Record<string, unknown> = {}) =>
+      ({ type: "agent.tool", at: 1, uuid: `u-${toolUseId}`, toolUseId, name, input, ...extra }) as DriverEvent;
+    const result = (...toolUseIds: string[]) => ({ type: "agent.tool_result", at: 1, toolUseIds }) as DriverEvent;
+
+    it("一轮开始（message.processing）：在思考；thinking、文字、工具各自切换", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      expect(last().step).toEqual({ type: "thinking" });
+      ev({ type: "agent.text", at: 2, uuid: "t1", text: "好" });
+      expect(last().step).toEqual({ type: "text" });
+      ev({ type: "agent.thinking", at: 3, uuid: "k1" });
+      expect(last().step).toEqual({ type: "thinking" });
+      ev(tool("a", "Skill", { skill: "frontend-rules", args: "x" }));
+      expect(last().step).toEqual({ type: "tool_use", name: "Skill", input: { skill: "frontend-rules" } });
+      ev(tool("b", "mcp__slack__search_messages", { query: "q" }, { uuid: "u-b2" }));
+      expect(last().step).toEqual({ type: "tool_use", name: "mcp__slack__search_messages", input: {} });
+    });
+
+    it("工具结果回来：切回在思考；一轮结束清掉", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("a", "Read", { file_path: "/x/y.ts" }));
+      expect(last().step).toEqual({ type: "tool_use", name: "Read", input: { file_path: "/x/y.ts" } });
+      ev(result("a"));
+      expect(last().step).toEqual({ type: "thinking" });
+      ev({ type: "turn.ended", at: 5, ok: true, interrupted: false, messageIds: [id], durationMs: 1 });
+      expect(last()).toMatchObject({ activity: "idle", step: null });
+    });
+
+    it("同时调了几个工具：结果一个个回来，还有没回来的就显示它，都回来了才切回在思考", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("a", "Bash", { command: "ls" }));
+      ev(tool("b", "Read", { file_path: "/r.ts" }));
+      ev(result("b"));
+      expect(last().step).toEqual({ type: "tool_use", name: "Bash", input: {} });
+      ev(result("a"));
+      expect(last().step).toEqual({ type: "thinking" });
+    });
+
+    it("不认识的 tool_use id 的结果：不影响还没回来的工具；同一个结果重复来无害", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("a", "Bash"));
+      ev(result("zzz"));
+      expect(last().step).toEqual({ type: "tool_use", name: "Bash", input: {} });
+      ev(result("a"));
+      ev(result("a"));
+      expect(last().step).toEqual({ type: "thinking" });
+    });
+
+    it("子任务里的事件（带 parentToolUseId）照常入库，但不改主 agent 的状态", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("agent1", "Agent", { description: "查一下" }));
+      const before = sessionStates().length;
+      ev(tool("sub1", "Bash", { command: "ls" }, { parentToolUseId: "agent1" }));
+      ev({ type: "agent.thinking", at: 2, uuid: "k", parentToolUseId: "agent1" });
+      ev({ type: "agent.text", at: 3, uuid: "tx", text: "子任务的话", parentToolUseId: "agent1" });
+      ev({ type: "agent.tool_result", at: 4, toolUseIds: ["sub1"], parentToolUseId: "agent1" });
+      expect(last().step).toEqual({ type: "tool_use", name: "Agent", input: {} });
+      expect(sessionStates().slice(before).every((s) => s.step?.type === "tool_use" && s.step.name === "Agent")).toBe(true);
+      expect(count("messages")).toBeGreaterThanOrEqual(3);
+      ev(result("agent1"));
+      expect(last().step).toEqual({ type: "thinking" });
+    });
+
+    it("进程退出、一轮出错：清掉；正在停止时照常记着，停完清掉", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("a", "Bash"));
+      ev({ type: "session.exited", at: 2, reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [id] });
+      expect(last()).toMatchObject({ activity: "idle", step: null });
+      ev({ type: "message.processing", at: 3, messageIds: [id] });
+      ev(tool("b", "Bash"));
+      ev({ type: "turn.ended", at: 4, ok: false, interrupted: false, messageIds: [id], durationMs: 1, error: { subtype: "error_during_execution", message: "x" } });
+      expect(last()).toMatchObject({ activity: "idle", step: null });
+    });
+
+    it("api_retry 时 step 还在；下一个正常事件清掉重试、step 照新事件走", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev(tool("a", "WebSearch", { query: "x" }));
+      ev({ type: "api_retry", at: 2, info: { attempt: 1, maxRetries: 10, retryAt: 9, errorStatus: null, error: "unknown" } });
+      expect(last()).toMatchObject({ apiRetry: { attempt: 1 }, step: { type: "tool_use", name: "WebSearch" } });
+      ev({ type: "agent.text", at: 3, uuid: "t", text: "好" });
+      expect(last()).toMatchObject({ apiRetry: null, step: { type: "text" } });
+    });
+
+    it("step 变了才推 session.status；没变不重复推；快照里也带", () => {
+      const id = post();
+      setSession({ status: "running" });
+      ev({ type: "message.processing", at: 1, messageIds: [id] });
+      ev({ type: "agent.thinking", at: 2, uuid: "k1" });
+      const n = sessionStates().length;
+      ev({ type: "agent.thinking", at: 3, uuid: "k2" });
+      expect(sessionStates()).toHaveLength(n);
+      expect(steps()).toEqual([{ type: "thinking" }]);
+      expect(ledger.snapshot().sessions[0]?.step).toEqual({ type: "thinking" });
+    });
   });
 
   describe("api_retry（断网、过载时 claude 在重试）", () => {
@@ -671,7 +784,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
+      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, step: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);
