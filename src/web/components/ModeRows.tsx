@@ -33,13 +33,13 @@ export function ModeRows({
             value={mode}
             aria-labelledby={`${id}-label`}
             aria-describedby={`${id}-detail`}
-            className="flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover disabled:cursor-default disabled:opacity-50"
+            className="flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:opacity-50"
           >
             <span className="min-w-0 flex-1">
               <span id={`${id}-label`} className="block text-[15px]">
                 {MODE_OPTION_LABELS[mode]}
               </span>
-              <span id={`${id}-detail`} className="block text-[13px] text-muted-foreground">
+              <span id={`${id}-detail`} className="block text-[13.5px] text-muted-foreground">
                 {MODE_OPTION_DETAILS[mode]}
               </span>
             </span>

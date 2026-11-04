@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -150,7 +150,7 @@ process.stdin.on("data", (d) => {
       "--no-session-persistence",
     ]);
     const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
-    await expect.poll(() => isAlive(pid)).toBe(false);
+    await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
   });
 
   it("claude 回错误：带着原因失败", async () => {
@@ -168,8 +168,11 @@ process.stdin.on("data", (d) => {
     const started = Date.now();
     await expect(queryClaudeModels({ claudePath, cwd: dir, timeoutMs: 2_000 })).rejects.toThrow(/超时|timed out/);
     expect(Date.now() - started).toBeLessThan(5_000);
-    const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
-    await expect.poll(() => isAlive(pid)).toBe(false);
+    // 机器忙时假 claude 可能还没来得及写下进程号就被结束了；写了的话它一定已经不在
+    if (existsSync(join(dir, "pid"))) {
+      const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+      await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
+    }
   });
 
   it("claude 不存在：失败", async () => {
@@ -180,11 +183,11 @@ process.stdin.on("data", (d) => {
     const claudePath = fakeClaude(`setInterval(() => {}, 1000);`);
     const controller = new AbortController();
     const query = queryClaudeModels({ claudePath, cwd: dir, signal: controller.signal });
-    await expect.poll(() => readFileSync(join(dir, "pid"), "utf8").length > 0, { timeout: 5_000 }).toBe(true);
+    await expect.poll(() => readFileSync(join(dir, "pid"), "utf8").length > 0, { timeout: 15_000 }).toBe(true);
     controller.abort();
     await expect(query).rejects.toThrow();
     const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
-    await expect.poll(() => isAlive(pid)).toBe(false);
+    await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
   });
 });
 

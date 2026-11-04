@@ -1,0 +1,51 @@
+// 共用组件守着 docs/ui-standard.md 的几条硬规则：聚焦不用主色、控件统一高度、不能点的主按钮是中性灰。
+import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { Button } from "./button.tsx";
+import { Input, Select, Textarea } from "./input.tsx";
+
+const classOf = (el: HTMLElement) => el.className.split(/\s+/);
+
+describe("界面标准：共用组件", () => {
+  it("输入框、多行输入、下拉：聚焦只加深边框（中性），没有主色、没有光圈；圆角 rounded-xl；输入框和下拉高 36px", () => {
+    render(
+      <>
+        <Input aria-label="输入框" />
+        <Textarea aria-label="多行" />
+        <Select aria-label="下拉">
+          <option>一</option>
+        </Select>
+      </>,
+    );
+    for (const el of [screen.getByRole("textbox", { name: "输入框" }), screen.getByRole("textbox", { name: "多行" }), screen.getByRole("combobox", { name: "下拉" })]) {
+      const cls = classOf(el);
+      expect(cls).toContain("focus-visible:border-foreground/25");
+      expect(cls).toContain("rounded-xl");
+      expect(el.className).not.toMatch(/primary|focus-visible:ring/);
+    }
+    expect(classOf(screen.getByRole("textbox", { name: "输入框" }))).toContain("h-9");
+    expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
+  });
+
+  it("按钮：默认 36px、sm 32px，图标按钮同两档；键盘焦点是中性的 ring-ring；不能点的主按钮换中性灰", () => {
+    render(
+      <>
+        <Button>默认</Button>
+        <Button size="sm">小</Button>
+        <Button size="icon" aria-label="图标" />
+        <Button size="icon-sm" aria-label="小图标" />
+      </>,
+    );
+    expect(classOf(screen.getByRole("button", { name: "默认" }))).toEqual(expect.arrayContaining(["h-9", "focus-visible:ring-ring/50", "disabled:bg-sidebar-active"]));
+    expect(classOf(screen.getByRole("button", { name: "小" }))).toContain("h-8");
+    expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
+    expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
+  });
+
+  it("--ring 是中性灰，不是主色", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/--color-ring: var\(--ring\);/);
+    expect(css).toMatch(/--ring: #a1a1aa;/);
+  });
+});

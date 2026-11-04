@@ -88,7 +88,7 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
 1. **数据（`domain.ts` + `0002`）**
    - `PM_MODES = ["manage_only", "hands_on"]`；迁移把已有的 `'default'` 改成 `'manage_only'`，加 CHECK。
    - `Project { id, name, description, status, pmId, conversationId, createdAt, updatedAt }`，`PROJECT_STATUSES = ["active", "archived", "deleted"]`（M2 只用 `active`）；进行中的项目名字唯一，项目经理名字唯一。
-   - `ProjectFolder { id, projectId, path(真实路径), isMain, addedAt, removedAt }`；同一个真实路径只能当一个进行中项目的主文件夹。
+   - `ProjectFolder { id, projectId, path(真实路径), isMain, addedAt, removedAt }`；~~同一个真实路径只能当一个进行中项目的主文件夹。~~（11-04 起去掉：同一个文件夹可以有多个项目经理，各管各的项目）
    - `PersonaChange { id, pmId, actor: "user" | "pm" | "file", sessionId, textBefore, textAfter, modeBefore, modeAfter, reason, revertOf, createdAt }`（列名 `text_before`、`text_after`：`before`、`after` 是 SQL 关键字）。
    - `Handoff { id, projectId, fromSessionId, toSessionId, fromPmId, toPmId, file, reason: "reassign", createdAt }`，正文写在 `state/handoffs/<项目编号>/<交接编号>-<时间>.md`。
    - `AgentSessionRow` 加 `pmId`（项目经理的会话一定有）。群会话：`conversation_id` = 群，换项目经理时开下一代；账本发消息一直找最新一代（M1 已经这样）。群对话按 `project_id` 唯一。
@@ -169,7 +169,7 @@ W0 接口和迁移 ──┬── W1 账本：项目经理、项目、交接、
 | 建项目经理 | `createPm` | 一个项目经理、一个私聊、一个会话（带 `pm_id`）、性格设定文件；推 `pm.created`、`conversation.created` |
 | 同名项目经理 | 再建一个同名的 | `conflict`，什么都没写 |
 | 一句话建项目 | 私聊会话调 `hubCall(project.create)` | 项目、主文件夹、群、群会话（cwd 是主文件夹真实路径）；群里“项目已建好”；`hub_calls` 一行；返回文字里有群名 |
-| 文件夹不对 | 路径不存在、是文件、在 `~/.agent-hub` 里、已是别的项目的主文件夹 | `invalid` 或 `conflict`，带原因；什么都没写 |
+| 文件夹不对 | 路径不存在、是文件、在 `~/.agent-hub` 里、已是别的项目的主文件夹（11-04 起照样能建） | `invalid`，带原因；什么都没写 |
 | 挂文件夹 | `project.attach` | `project_folders` 多一行；群会话的 `add_dirs` 有它；群里一条系统消息，同时登记一条给 agent 的 `session.send` |
 | 移除文件夹 | `project.detach` 一个挂着的、主文件夹、没挂过的 | 第一个标移除时间；第二个 `invalid`（主文件夹不能移除）；第三个 `not_found` |
 | 管不着 | 阿周的会话 `attach` 小林的项目 | `forbidden` |

@@ -78,7 +78,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             <span className="font-medium">{ACTOR_LABELS[change.actor]}</span> {describeChange(change, catalog)}
             {change.reason && <span>：{change.reason}</span>}
           </div>
-          <div className="text-[13px] text-muted-foreground tabular-nums">{formatTime(change.createdAt)}</div>
+          <div className="text-xs text-muted-foreground tabular-nums">{formatTime(change.createdAt)}</div>
         </div>
         {revertable && (
           <Button variant="outline" size="sm" disabled={busy} onClick={onRevert}>
@@ -88,14 +88,14 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
       </div>
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-[13.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             查看改动
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 grid gap-2 sm:grid-cols-2">
             {(["改之前", "改之后"] as const).map((label) => (
               <div key={label} className="min-w-0">
-                <div className="mb-1 text-[13px] font-medium">{label}</div>
+                <div className="mb-1 text-[13.5px] font-medium text-muted-foreground">{label}</div>
                 <pre className="max-h-60 overflow-auto rounded-xl bg-background p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "改之前" ? change.textBefore : change.textAfter}
                 </pre>
@@ -230,7 +230,7 @@ function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project
           onCustomSubmit={saveCustom}
           customAction={
             customDirty && (
-              <Button size="sm" onClick={saveCustom}>
+              <Button onClick={saveCustom}>
                 保存
               </Button>
             )
@@ -337,8 +337,8 @@ export function PmProfile({
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-12">
-        <div className="mx-auto grid max-w-[640px] gap-7">
-          <header className="flex flex-col items-center text-center">
+        <div className="mx-auto grid max-w-[640px] gap-6">
+          <header className="flex flex-col items-center pb-2 text-center">
             <Avatar colorKey={pm.id} size={72} />
             <h1 className="mt-4 text-[22px] leading-tight font-semibold">{pm.name}</h1>
             {project && <p className="mt-1.5 text-[14px] text-muted-foreground">{project.name}</p>}

@@ -6,8 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   return (
     <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-3 text-[14px]">
-        <span className="font-medium">{window.label}</span>
+      <div className="flex items-baseline justify-between gap-3 text-[15px]">
+        <span>{window.label}</span>
         <span className={cn("tabular-nums", exhausted ? "text-danger" : window.warning && "text-warn-foreground")}>{window.percent}%</span>
       </div>
       <div
@@ -23,7 +23,7 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
           style={{ width: `${window.percent}%` }}
         />
       </div>
-      {window.resetsAt !== null && <span className="text-[13px] text-muted-foreground tabular-nums">{formatQuotaReset(window.resetsAt)} 重置</span>}
+      {window.resetsAt !== null && <span className="text-[13.5px] text-muted-foreground tabular-nums">{formatQuotaReset(window.resetsAt)} 重置</span>}
     </div>
   );
 }
@@ -40,7 +40,7 @@ export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {
       <PopoverTrigger
         aria-label={exhausted ? "额度已用完" : `${window.label}额度已用 ${window.percent}%`}
         className={cn(
-          "h-7 shrink-0 cursor-pointer rounded-full px-2.5 text-[13px] font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "h-8 shrink-0 cursor-pointer rounded-full px-3 text-[13px] font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           exhausted ? "bg-danger-soft text-danger" : warning ? "bg-warn text-warn-foreground" : "bg-sidebar-active text-foreground hover:bg-sidebar-hover",
         )}
       >
@@ -49,8 +49,8 @@ export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {
       <PopoverContent side="top" align="end" aria-label="额度">
         <div className="grid gap-5">
           {quota.map((vendor) => (
-            <section key={vendor.id} className="grid gap-3" aria-label={vendor.name}>
-              <h3 className="text-[15px] font-semibold">{vendor.name}</h3>
+            <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>
+              <h3 className="text-[13.5px] font-medium text-muted-foreground">{vendor.name}</h3>
               {vendor.windows.map((w) => (
                 <WindowRow key={w.key} window={w} exhausted={vendor.exhausted} />
               ))}

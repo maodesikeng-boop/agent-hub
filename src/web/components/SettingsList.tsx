@@ -1,5 +1,5 @@
-// 设置页那种分组列表（资料页、新建项目经理、全局设置共用）：组标题在框外，框里一行一项，左边名字、右边紧凑的控件。
-// 颜色、圆角、字号跟左栏一致：浅灰底（bg-sidebar）、rounded-2xl、15px。
+// 分组列表（docs/ui-standard.md 第 9 条；资料页、新建项目经理、全局设置共用）：组标题在框外，框里一行一项，左边名字、右边控件。
+// 颜色、圆角、字号跟左栏一致：浅灰底（bg-sidebar）、rounded-2xl、15px；文字左边和组标题都对齐在框内 16px（px-4）。
 import { useId, type ReactNode } from "react";
 import { cn } from "../lib/utils.ts";
 
@@ -43,7 +43,7 @@ export function SettingsRow({
           <label htmlFor={id} className="text-[15px]">
             {label}
           </label>
-          {detail && <div className="text-[13px] text-muted-foreground">{detail}</div>}
+          {detail && <div className="text-[13.5px] text-muted-foreground">{detail}</div>}
         </div>
         <div className={cn("flex min-w-0 items-center justify-end gap-2", !wide && "shrink-0")}>{children(id)}</div>
       </div>
@@ -55,7 +55,7 @@ export function SettingsRow({
 /** 行下面的错误。 */
 export function RowError({ children }: { children: ReactNode }) {
   return (
-    <p role="alert" className="mt-1 text-[13px] text-danger [overflow-wrap:anywhere]">
+    <p role="alert" className="mt-1 text-[13.5px] text-danger [overflow-wrap:anywhere]">
       {children}
     </p>
   );

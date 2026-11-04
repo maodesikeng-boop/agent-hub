@@ -12,7 +12,7 @@ import {
   type ModelCatalog,
 } from "../../shared/index.ts";
 import { useModelCatalog } from "../models.tsx";
-import { CompactInput, CompactSelect } from "../ui/input.tsx";
+import { Input, Select } from "../ui/input.tsx";
 import { SettingsRow } from "./SettingsList.tsx";
 
 /** 表单里的 Agent 一栏：模型下拉选了“自定义”时 customModel 是输入框里的字。effort 是 "" = 默认。 */
@@ -100,18 +100,18 @@ export function AgentRows({
     <>
       <SettingsRow label="厂商" error={errors.vendor}>
         {(id) => (
-          <CompactSelect id={id} value={value.vendor} disabled={disabled} onChange={(e) => setVendor(e.target.value)}>
+          <Select id={id} value={value.vendor} disabled={disabled} onChange={(e) => setVendor(e.target.value)}>
             {AGENT_VENDORS.map((v) => (
               <option key={v} value={v}>
                 {VENDOR_SPECS[v].label}
               </option>
             ))}
-          </CompactSelect>
+          </Select>
         )}
       </SettingsRow>
       <SettingsRow label="模型" error={errors.model}>
         {(id) => (
-          <CompactSelect
+          <Select
             id={id}
             value={choice}
             disabled={disabled}
@@ -128,14 +128,14 @@ export function AgentRows({
             ))}
             {unlisted && <option value={choice}>自定义：{choice}</option>}
             {spec.customModel && <option value={CUSTOM_MODEL}>自定义</option>}
-          </CompactSelect>
+          </Select>
         )}
       </SettingsRow>
       {choice === CUSTOM_MODEL && (
         <SettingsRow label="模型名" error={customError}>
           {(id) => (
             <>
-              <CompactInput
+              <Input
                 ref={customRef}
                 id={id}
                 value={value.customModel}
@@ -144,7 +144,7 @@ export function AgentRows({
                 spellCheck={false}
                 placeholder={spec.customModelExample}
                 aria-invalid={customError !== null}
-                className="w-[220px] aria-invalid:border-danger aria-invalid:focus-visible:ring-danger/20"
+                className="w-[240px]"
                 onChange={(e) => onChange(withModel({ ...value, customModel: e.target.value }, CUSTOM_MODEL, catalog), "model")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing && onCustomSubmit) {
@@ -160,7 +160,7 @@ export function AgentRows({
       )}
       <SettingsRow label="思考程度" error={errors.effort}>
         {(id) => (
-          <CompactSelect id={id} value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
+          <Select id={id} value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
             <option value="">默认</option>
             {efforts.map((e) => (
               <option key={e} value={e}>
@@ -168,7 +168,7 @@ export function AgentRows({
               </option>
             ))}
             {value.effort !== "" && !efforts.includes(value.effort) && <option value={value.effort}>{value.effort}</option>}
-          </CompactSelect>
+          </Select>
         )}
       </SettingsRow>
     </>

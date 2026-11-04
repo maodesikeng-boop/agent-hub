@@ -14,8 +14,8 @@ import { postCreatePm } from "../client.ts";
 import { errorText } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
-import { Dialog, DialogContent } from "../ui/dialog.tsx";
-import { CompactInput, Textarea } from "../ui/input.tsx";
+import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
+import { Input, Textarea } from "../ui/input.tsx";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
@@ -63,11 +63,11 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     <form className="grid gap-6" onSubmit={(e) => void submit(e)}>
       <SettingsGroup>
         <SettingsRow label="名字">
-          {(id) => <CompactInput id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" onChange={(e) => setName(e.target.value)} />}
+          {(id) => <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" onChange={(e) => setName(e.target.value)} />}
         </SettingsRow>
         <SettingsRow label="主文件夹（可选）">
           {(id) => (
-            <CompactInput
+            <Input
               id={id}
               value={folder}
               autoComplete="off"
@@ -83,7 +83,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
         <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
       </SettingsGroup>
       <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-        <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
           <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
           更多设置
         </CollapsibleTrigger>
@@ -108,14 +108,16 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
         </CollapsibleContent>
       </Collapsible>
       {error && (
-        <p role="alert" className="text-[13.5px] text-danger [overflow-wrap:anywhere]">
+        <p role="alert" className="px-4 text-[13.5px] text-danger [overflow-wrap:anywhere]">
           {error}
         </p>
       )}
-      <Button type="submit" disabled={!canSubmit} className="justify-self-end">
-        {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-        {busy ? "创建中" : "创建"}
-      </Button>
+      <DialogFooter>
+        <Button type="submit" disabled={!canSubmit}>
+          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy ? "创建中" : "创建"}
+        </Button>
+      </DialogFooter>
     </form>
   );
 }
@@ -131,7 +133,7 @@ export function NewPmDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="新建项目经理" className="max-w-[520px]">
+      <DialogContent title="新建项目经理">
         <NewPmForm onCreated={onCreated} />
       </DialogContent>
     </Dialog>
