@@ -1,9 +1,13 @@
 import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   MAX_PERSONA_BYTES,
   PM_MODE_LABELS,
+  effortLabel,
+  modelLabel,
   utf8Bytes,
+  vendorLabel,
+  type AgentSetting,
   type EditPersonaRequest,
   type PersonaChange,
   type PersonaView,
@@ -17,8 +21,8 @@ import { ACTOR_LABELS, errorText, formatTime } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Textarea } from "../ui/input.tsx";
+import { AgentFields, draftOf, settingOf, type AgentDraft } from "./AgentFields.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { Field } from "./Field.tsx";
 import { ModeField } from "./ModeField.tsx";
 
 type Load = { phase: "loading" } | { phase: "error"; message: string } | { phase: "ready"; persona: PersonaView };
@@ -49,9 +53,10 @@ function describeChange(change: PersonaChange): string {
   if (change.revertOf !== null) return "撤销了一次修改";
   const parts: string[] = [];
   if (change.textBefore !== change.textAfter) parts.push("改了性格设定");
-  if (change.modeBefore !== change.modeAfter) {
-    parts.push(`模式改成${PM_MODE_LABELS[change.modeAfter]}`);
-  }
+  if (change.modeBefore !== change.modeAfter) parts.push(`模式改成${PM_MODE_LABELS[change.modeAfter]}`);
+  if (change.vendorBefore !== change.vendorAfter) parts.push(`厂商改成${vendorLabel(change.vendorAfter)}`);
+  if (change.modelBefore !== change.modelAfter) parts.push(`模型改成${modelLabel(change.vendorAfter, change.modelAfter)}`);
+  if (change.effortBefore !== change.effortAfter) parts.push(`思考程度改成${effortLabel(change.effortAfter)}`);
   return parts.join("，") || "改了设置";
 }
 
@@ -59,7 +64,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
   const [open, setOpen] = useState(false);
   const textChanged = change.textBefore !== change.textAfter;
   return (
-    <li className="py-3">
+    <li className="py-3 first:pt-0 last:pb-0">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-[15px]">
@@ -96,19 +101,54 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
   );
 }
 
-function PersonaEditor({ pm, persona, onUpdate }: { pm: Pm; persona: PersonaView; onUpdate: (p: PersonaView) => void }) {
+/** 资料页的一张卡片：标题 + 内容。aria-label 就是标题。 */
+function Card({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section aria-label={title} className="grid gap-4 rounded-2xl border border-border p-5">
+      <h2 className="text-[15px] font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+/** 卡片底部：保存失败的原因 + 保存按钮。 */
+function SaveRow({ error, canSave, saving, onSave }: { error: string | null; canSave: boolean; saving: boolean; onSave: () => void }) {
+  return (
+    <div className="flex items-center justify-end gap-4">
+      {error && (
+        <p role="alert" className="mr-auto text-[13.5px] text-danger [overflow-wrap:anywhere]">
+          {error}
+        </p>
+      )}
+      <Button disabled={!canSave} onClick={onSave}>
+        {saving && <Loader2 className="animate-spin" aria-hidden="true" />}
+        保存
+      </Button>
+    </div>
+  );
+}
+
+type Section = "agent" | "mode" | "text";
+
+function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
+  return a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
+}
+
+/** Agent、工作方式、性格设定三张卡片各自保存（只发自己那几项），修改记录在最后。 */
+function PmEditor({ pm, persona, onUpdate }: { pm: Pm; persona: PersonaView; onUpdate: (p: PersonaView) => void }) {
   // null：没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
-  const [draftText, setDraftText] = useState<string | null>(null);
+  const [draftAgent, setDraftAgent] = useState<AgentDraft | null>(null);
   const [draftMode, setDraftMode] = useState<PmMode | null>(null);
-  const [busy, setBusy] = useState<"save" | "revert" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const text = draftText ?? persona.text;
+  const [draftText, setDraftText] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Section | "revert" | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<Section | "revert", string>>>({});
+  const saved: AgentSetting = { vendor: persona.vendor, model: persona.model, effort: persona.effort };
+  const agent = draftAgent ?? draftOf(saved);
+  const agentResult = settingOf(agent);
+  const agentDirty = agentResult.ok ? !sameSetting(agentResult.setting, saved) : true;
   const mode = draftMode ?? persona.mode;
-  const textDirty = text !== persona.text;
-  const modeDirty = mode !== persona.mode;
+  const text = draftText ?? persona.text;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
-  const canSave = (textDirty || modeDirty) && !tooLong && busy === null;
-  // 撤销的结果回来后，本地没提交的输入已经没意义了
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -117,62 +157,82 @@ function PersonaEditor({ pm, persona, onUpdate }: { pm: Pm; persona: PersonaView
     };
   }, []);
 
-  const save = async () => {
-    const body: EditPersonaRequest = { ...(textDirty ? { text } : {}), ...(modeDirty ? { mode } : {}) };
-    setBusy("save");
-    setError(null);
+  const run = async (section: Section | "revert", call: () => Promise<PersonaView>, reset: () => void, failText?: (err: unknown) => string) => {
+    setBusy(section);
+    setErrors((e) => ({ ...e, [section]: undefined }));
     try {
-      const res = await putPersona(pm.id, body);
+      const next = await call();
       if (!aliveRef.current) return;
-      setDraftText(null);
-      setDraftMode(null);
-      onUpdate(res.persona);
+      reset();
+      onUpdate(next);
     } catch (err) {
-      if (aliveRef.current) setError(errorText(err));
+      if (aliveRef.current) setErrors((e) => ({ ...e, [section]: failText?.(err) ?? errorText(err) }));
     } finally {
       if (aliveRef.current) setBusy(null);
     }
   };
 
-  const revert = async (changeId: number) => {
-    setBusy("revert");
-    setError(null);
-    try {
-      const res = await postRevertPersonaChange(changeId);
-      if (!aliveRef.current) return;
-      setDraftText(null);
-      setDraftMode(null);
-      onUpdate(res.persona);
-    } catch (err) {
-      if (aliveRef.current) setError(err instanceof ApiError && err.status === 409 ? "只能撤销最近一次" : errorText(err));
-    } finally {
-      if (aliveRef.current) setBusy(null);
-    }
+  const save = (section: Section) => {
+    let body: EditPersonaRequest;
+    if (section === "agent") {
+      if (!agentResult.ok) return;
+      const next = agentResult.setting;
+      body = {
+        ...(next.vendor !== saved.vendor ? { vendor: next.vendor } : {}),
+        ...(next.model !== saved.model ? { model: next.model } : {}),
+        ...(next.effort !== saved.effort ? { effort: next.effort } : {}),
+      };
+    } else body = section === "mode" ? { mode } : { text };
+    const reset = { agent: () => setDraftAgent(null), mode: () => setDraftMode(null), text: () => setDraftText(null) }[section];
+    void run(section, async () => (await putPersona(pm.id, body)).persona, reset);
   };
 
+  const revert = (changeId: number) =>
+    void run(
+      "revert",
+      async () => (await postRevertPersonaChange(changeId)).persona,
+      // 撤销的结果回来后，本地没提交的输入已经没意义了
+      () => {
+        setDraftAgent(null);
+        setDraftMode(null);
+        setDraftText(null);
+      },
+      (err) => (err instanceof ApiError && err.status === 409 ? "只能撤销最近一次" : errorText(err)),
+    );
+
+  const disabled = busy !== null;
   return (
-    <div className="grid gap-8">
-      <div className="grid gap-2">
-        <div className="text-[13.5px] font-medium">模式</div>
-        <ModeField label="模式" value={mode} onChange={setDraftMode} disabled={busy !== null} />
-      </div>
-      <Field label="性格设定">
-        {(id) => <Textarea id={id} rows={10} className="font-mono text-[13.5px]" value={text} onChange={(e) => setDraftText(e.target.value)} />}
-      </Field>
-      {tooLong && <p className="-mt-6 text-[13px] text-danger">性格设定太长</p>}
-      {error && (
-        <p role="alert" className="-mt-4 text-[13.5px] text-danger">
-          {error}
-        </p>
-      )}
-      <div className="-mt-4 flex justify-end">
-        <Button disabled={!canSave} onClick={() => void save()}>
-          {busy === "save" && <Loader2 className="animate-spin" aria-hidden="true" />}
-          保存
-        </Button>
-      </div>
-      <section aria-label="修改历史" className="grid gap-1">
-        <h2 className="text-[15px] font-semibold">修改记录</h2>
+    <>
+      <Card title="Agent">
+        <AgentFields value={agent} onChange={setDraftAgent} disabled={disabled} />
+        <SaveRow error={errors.agent ?? null} canSave={agentDirty && agentResult.ok && !disabled} saving={busy === "agent"} onSave={() => save("agent")} />
+      </Card>
+      <Card title="工作方式">
+        <ModeField label="工作方式" value={mode} onChange={setDraftMode} disabled={disabled} />
+        <SaveRow error={errors.mode ?? null} canSave={mode !== persona.mode && !disabled} saving={busy === "mode"} onSave={() => save("mode")} />
+      </Card>
+      <Card title="性格设定">
+        <Textarea
+          aria-label="性格设定"
+          rows={10}
+          className="font-mono text-[13.5px]"
+          value={text}
+          onChange={(e) => setDraftText(e.target.value)}
+        />
+        {tooLong && <p className="-mt-2 text-[13px] text-danger">性格设定太长</p>}
+        <SaveRow
+          error={errors.text ?? null}
+          canSave={text !== persona.text && !tooLong && !disabled}
+          saving={busy === "text"}
+          onSave={() => save("text")}
+        />
+      </Card>
+      <Card title="修改记录">
+        {errors.revert && (
+          <p role="alert" className="-mt-2 text-[13.5px] text-danger">
+            {errors.revert}
+          </p>
+        )}
         {persona.changes.length === 0 ? (
           <p className="text-[14px] text-muted-foreground">还没有修改</p>
         ) : (
@@ -182,18 +242,18 @@ function PersonaEditor({ pm, persona, onUpdate }: { pm: Pm; persona: PersonaView
                 key={change.id}
                 change={change}
                 revertable={change.id === persona.revertableChangeId}
-                busy={busy !== null}
-                onRevert={() => void revert(change.id)}
+                busy={disabled}
+                onRevert={() => revert(change.id)}
               />
             ))}
           </ul>
         )}
-      </section>
-    </div>
+      </Card>
+    </>
   );
 }
 
-/** 项目经理资料页（设计第 3.6 节）：模式、模型、性格设定可改，修改记录，它的项目和文件夹。 */
+/** 项目经理资料页（设计第 3.6 节）：基本信息、Agent、工作方式、性格设定、修改记录五张卡片。 */
 export function PmProfile({
   pm,
   project,
@@ -221,27 +281,27 @@ export function PmProfile({
         <h1 className="text-[17px] font-semibold">{pm.name}</h1>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10">
-        <div className="mx-auto grid max-w-[720px] gap-8 pt-2">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[15px]">
-            <dt className="text-muted-foreground">模型</dt>
-            <dd>{pm.defaultModel ?? "默认"}</dd>
-            <dt className="text-muted-foreground">项目</dt>
-            <dd>{project ? project.name : "还没有"}</dd>
-            {folders.length > 0 && (
-              <>
-                <dt className="text-muted-foreground">文件夹</dt>
-                <dd className="min-w-0">
-                  <ul aria-label="文件夹" className="grid gap-0.5">
-                    {folders.map((f) => (
-                      <li key={f.id} className="truncate" title={f.path}>
-                        {f.path}
-                      </li>
-                    ))}
-                  </ul>
-                </dd>
-              </>
-            )}
-          </dl>
+        <div className="mx-auto grid max-w-[720px] gap-5 pt-2">
+          <Card title="基本信息">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[15px]">
+              <dt className="text-muted-foreground">项目</dt>
+              <dd>{project ? project.name : "还没有"}</dd>
+              {folders.length > 0 && (
+                <>
+                  <dt className="text-muted-foreground">文件夹</dt>
+                  <dd className="min-w-0">
+                    <ul aria-label="文件夹" className="grid gap-0.5">
+                      {folders.map((f) => (
+                        <li key={f.id} className="truncate" title={f.path}>
+                          {f.path}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </>
+              )}
+            </dl>
+          </Card>
           {load.phase === "loading" && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -258,7 +318,7 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PersonaEditor pm={pm} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <PmEditor pm={pm} persona={load.persona} onUpdate={set} />}
         </div>
       </div>
     </section>

@@ -166,6 +166,7 @@ const row: AgentSessionRow = {
   addDirs: ["/a", "/b"],
   generation: 1,
   model: null,
+  effort: null,
   pid: null,
   status: "idle",
   hasCompletedTurn: false,
@@ -203,6 +204,17 @@ describe("启动参数", () => {
     expect(args.slice(7, 11)).toEqual(["--resume", row.vendorSessionId, "--model", "sonnet"]);
     expect(args).not.toContain("--settings");
     expect(args).not.toContain("--add-dir");
+    expect(args).not.toContain("--effort");
+  });
+  it("有思考程度带 --effort，紧跟在 --model 后面；默认（null）的都不带", () => {
+    const args = buildClaudeArgs({ ...row, model: "haiku", effort: "low" }, files, true);
+    expect(args.slice(7, 13)).toEqual(["--resume", row.vendorSessionId, "--model", "haiku", "--effort", "low"]);
+    const effortOnly = buildClaudeArgs({ ...row, effort: "max" }, files, true);
+    expect(effortOnly.slice(9, 11)).toEqual(["--effort", "max"]);
+    expect(effortOnly).not.toContain("--model");
+    const neither = buildClaudeArgs(row, files, true);
+    expect(neither).not.toContain("--model");
+    expect(neither).not.toContain("--effort");
   });
 });
 

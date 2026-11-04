@@ -25,6 +25,7 @@ import type {
   Unsubscribe,
 } from "./domain.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "./hub.ts";
+import type { AgentVendor } from "./vendors.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -97,13 +98,16 @@ export type LedgerActor = { kind: "user" } | { kind: "session"; sessionId: Sessi
 
 /**
  * 新建项目经理（界面的表单、第一次启动）。pm-home/、personas/ 的位置是账本的构造参数，不在这里。
- * name 用 normalizeName 规整；persona 不超过 MAX_PERSONA_BYTES；defaultModel 不超过 MAX_MODEL_CHARS，空串当没给。
+ * name 用 normalizeName 规整；persona 不超过 MAX_PERSONA_BYTES；defaultModel 空串当没给。
+ * vendor、defaultModel、effort 按厂商清单（vendors.ts 的 checkAgentSetting）校验，不给 = Claude Code、默认、默认。
  * folder：主文件夹（用户填的路径，可以带 ~），给了就在同一个事务里给它建项目（同 hub project create），不给就没有项目。
  */
 export interface CreatePmInput {
   name: string;
   mode: PmMode;
+  vendor?: AgentVendor;
   defaultModel?: string | null;
+  effort?: string | null;
   persona: string;
   folder?: string;
 }
@@ -137,16 +141,28 @@ export interface PersonaView {
   /** 正文，以数据库 pms.persona 为准；是 NULL 时用 personaOrTemplate 兜底成模板。 */
   text: string;
   mode: PmMode;
+  /** 厂商、模型、思考程度（资料页的 Agent 一栏），同 Pm 的 vendor、defaultModel、effort。 */
+  vendor: AgentVendor;
+  model: string | null;
+  effort: string | null;
   /** 修改记录，新的在前，最多 PERSONA_CHANGES_LIMIT 条。 */
   changes: PersonaChange[];
   /** 能撤销的那一条（最近一条）的编号；没有修改记录是 null。 */
   revertableChangeId: PersonaChangeId | null;
 }
 
-/** text、mode 至少给一个；text 是新的完整正文，不超过 MAX_PERSONA_BYTES；reason 不超过 MAX_REASON_CHARS。 */
+/**
+ * text、mode、vendor、model、effort 至少给一个；text 是新的完整正文，不超过 MAX_PERSONA_BYTES；reason 不超过 MAX_REASON_CHARS。
+ * vendor、model、effort（资料页的 Agent 一栏）按厂商清单校验，model、effort 给 null 是改回默认；只有界面上的用户能改
+ * （项目经理用 hub persona edit 带这几样 → forbidden）。改了之后这个项目经理的会话（agent_sessions.model、effort）跟着改，
+ * 驱动层在下一条消息前按新参数 --resume 重启。换厂商要开新会话，现在只有一家，不会发生。
+ */
 export interface EditPersonaInput {
   text?: string;
   mode?: PmMode;
+  vendor?: AgentVendor;
+  model?: string | null;
+  effort?: string | null;
   reason?: string;
 }
 

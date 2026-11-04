@@ -19,6 +19,7 @@ import type {
   WorkerStatus,
   WorkerWorkspace,
 } from "../../shared/domain.ts";
+import type { AgentVendor } from "../../shared/vendors.ts";
 
 export interface PmDbRow {
   id: number;
@@ -27,6 +28,8 @@ export interface PmDbRow {
   mode: string;
   default_model: string | null;
   persona_file: string | null;
+  vendor: string;
+  effort: string | null;
   /** 性格设定正文，以它为准；M1 升上来的是 NULL。 */
   persona: string | null;
   /** 上次成功写入性格设定文件的内容哈希。只有账本用，不进 Pm。 */
@@ -65,6 +68,12 @@ export interface PersonaChangeDbRow {
   text_after: string;
   mode_before: string;
   mode_after: string;
+  vendor_before: string;
+  vendor_after: string;
+  model_before: string | null;
+  model_after: string | null;
+  effort_before: string | null;
+  effort_after: string | null;
   reason: string | null;
   revert_of: number | null;
   created_at: number;
@@ -105,6 +114,7 @@ export interface WorkerDbRow {
   title: string;
   task: string;
   model: string | null;
+  effort: string | null;
   readonly: number;
   workspace: string;
   branch: string | null;
@@ -128,7 +138,9 @@ export function toPm(row: PmDbRow): Pm {
     name: row.name,
     avatarFile: row.avatar_file,
     mode: row.mode as PmMode,
+    vendor: row.vendor as AgentVendor,
     defaultModel: row.default_model,
+    effort: row.effort,
     personaFile: row.persona_file,
     createdAt: row.created_at,
   };
@@ -207,6 +219,12 @@ export function toPersonaChange(row: PersonaChangeDbRow): PersonaChange {
     textAfter: row.text_after,
     modeBefore: row.mode_before as PmMode,
     modeAfter: row.mode_after as PmMode,
+    vendorBefore: row.vendor_before as AgentVendor,
+    vendorAfter: row.vendor_after as AgentVendor,
+    modelBefore: row.model_before,
+    modelAfter: row.model_after,
+    effortBefore: row.effort_before,
+    effortAfter: row.effort_after,
     reason: row.reason,
     revertOf: row.revert_of,
     createdAt: row.created_at,
@@ -223,6 +241,7 @@ export function toWorkerRecord(row: WorkerDbRow): WorkerRecord {
     title: row.title,
     task: row.task,
     model: row.model,
+    effort: row.effort,
     readonly: row.readonly === 1,
     workspace: row.workspace as WorkerWorkspace,
     branch: row.branch,

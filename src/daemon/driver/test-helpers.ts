@@ -178,6 +178,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       addDirs: [],
       generation: 1,
       model: null,
+      effort: null,
       pid: null,
       status: "idle",
       hasCompletedTurn: false,

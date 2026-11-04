@@ -88,6 +88,8 @@ interface LaunchSnapshot {
   addDirs: string[];
   /** 启动时会话那一行的 model（配置的模型，账本和界面写，驱动层只读）。 */
   model: string | null;
+  /** 同上，思考程度。 */
+  effort: string | null;
 }
 
 interface Proc {
@@ -710,7 +712,7 @@ export class ClaudeDriver implements Driver {
     const proc: Proc = {
       child,
       resume,
-      launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model },
+      launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
       initSeen: false,
       stderr: "",
       closing: null,
@@ -1100,12 +1102,13 @@ async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "
   }
 }
 
-/** 会话那一行（cwd、addDirs、model）或 fingerprint 和进程启动时不一样。env 不算。 */
+/** 会话那一行（cwd、addDirs、model、effort）或 fingerprint 和进程启动时不一样。env 不算。 */
 function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
   return (
     launched.fingerprint !== fingerprint ||
     launched.cwd !== row.cwd ||
     launched.model !== row.model ||
+    launched.effort !== row.effort ||
     launched.addDirs.length !== row.addDirs.length ||
     launched.addDirs.some((d, i) => d !== row.addDirs[i])
   );

@@ -87,7 +87,7 @@
 **派活时的开关**（只留两个）：
 
 - `--readonly`：Worker 只看不改，比如做调查、写方案。用 `dontAsk` 档：要批准的一律拒绝，读文件和只读命令照常能用（[permission-modes][cc-modes]）。
-- `--model <模型>`：见第 2.4 节。
+- `--model <模型>`、`--effort <思考程度>`：见第 2.4 节。
 
 开关记在 Worker 的记录上，Worker 被打回、重启都沿用。开过只读的，“已派出”那一行上会写明。不管开关怎么写，记忆规则都不去掉：`buildSessionSettings` 最后无条件加上，有一条单元测试专门测这个。
 
@@ -120,11 +120,12 @@
 ### 2.4 派活命令、模型、并发、卡住
 
 - **命令**（`hub worker …`，只给项目经理）：
-  - `start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin`：任务说明从标准输入读，要写清目标和验收标准；
+  - `start --title <标题> [--model <模型>] [--effort <思考程度>] [--readonly] [--no-worktree] --stdin`：任务说明从标准输入读，要写清目标和验收标准；
   - `send <编号> --stdin`：打回，或者回答它的问题，同一个 Worker 会话接着做；
   - `end <编号>`：结束 Worker 会话。worktree 由项目经理自己删；
-  - `list`：我派出去的 Worker、各自在哪干活、状态。
+  - `list`：我派出去的 Worker、各自在哪干活、状态、实际用的模型和思考程度。
 - **模型**：项目经理用 `--model` 定。不写就用项目经理自己的模型（11-04 起提示词不再写“建议用便宜的模型”，由 agent 自己判断）。
+- **思考程度**：`--effort low|medium|high|xhigh|max`，不写就用项目经理自己的（资料页 Agent 一栏设的）。模型、思考程度的取值和对应的命令行参数都在厂商清单 `src/shared/vendors.ts`。
 - **同时跑几个**：不限，照设计 7.6。
 - **卡住、失败**：M3 不做看门狗。
   - Worker 的对话和项目经理的一样有“正在运行 `xxx`”和停止按钮，用户看得见、点得停。

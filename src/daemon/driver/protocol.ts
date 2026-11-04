@@ -1,9 +1,10 @@
 // 和 claude 的 stream-json 协议打交道的纯函数（设计第 7.2～7.4 节，事件形状照 docs/m0-report.md）。
 import { createHash } from "node:crypto";
-import { MAX_API_RETRY_ERROR_CHARS, truncateChars } from "../../shared/index.ts";
+import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../../shared/index.ts";
 import type {
   AgentSessionRow,
   AgentTextEvent,
+  AgentVendor,
   AgentToolEvent,
   ApiRetryInfo,
   LaunchFiles,
@@ -154,7 +155,7 @@ function isPositiveInteger(value: unknown): value is number {
 
 /**
  * 启动参数（设计第 7.2 节）。resume：用 --resume 还是 --session-id。
- * 这里只放固定的协议参数和会话那一行的 --model、--add-dir；每次启动要变的东西（提示词、设置文件、环境变量）
+ * 这里只放固定的协议参数和会话那一行的 --model、--effort、--add-dir；每次启动要变的东西（提示词、设置文件、环境变量）
  * 由 daemon/launch.ts 的 createLaunchPreparer 生成，经 LaunchFiles 原样传进来。
  */
 export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, resume: boolean): string[] {
@@ -169,7 +170,8 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
     resume ? "--resume" : "--session-id",
     session.vendorSessionId,
   ];
-  if (session.model) args.push("--model", session.model);
+  // 模型、思考程度的参数名在厂商清单里（vendors.ts），默认的不传
+  args.push(...agentLaunchArgs({ vendor: session.vendor as AgentVendor, model: session.model, effort: session.effort }));
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
   for (const dir of session.addDirs) args.push("--add-dir", dir);

@@ -15,6 +15,7 @@ export interface AgentSessionDbRow {
   add_dirs: string;
   generation: number;
   model: string | null;
+  effort: string | null;
   pid: number | null;
   status: string;
   has_completed_turn: number;
@@ -37,6 +38,7 @@ export function toAgentSessionRow(row: AgentSessionDbRow): AgentSessionRow {
     addDirs: JSON.parse(row.add_dirs) as string[],
     generation: row.generation,
     model: row.model,
+    effort: row.effort,
     pid: row.pid,
     status: row.status as SessionStatus,
     hasCompletedTurn: row.has_completed_turn === 1,

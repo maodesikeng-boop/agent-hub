@@ -55,6 +55,7 @@ describe("prepareLaunch（M2、M3）", () => {
     addDirs: [],
     generation: 1,
     model: null,
+    effort: null,
     pid: null,
     status: "idle",
     hasCompletedTurn: false,

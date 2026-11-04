@@ -1,7 +1,7 @@
 import { ChevronRight, Loader2 } from "lucide-react";
 import { useState } from "react";
 import {
-  MAX_MODEL_CHARS,
+  DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
   PM_PERSONA_TEMPLATE,
   DEFAULT_PM_MODE,
@@ -16,6 +16,7 @@ import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
+import { AgentFields, draftOf, settingOf } from "./AgentFields.tsx";
 import { Field } from "./Field.tsx";
 import { ModeField } from "./ModeField.tsx";
 
@@ -23,7 +24,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
-  const [model, setModel] = useState("");
+  const [agent, setAgent] = useState(() => draftOf(DEFAULT_AGENT_SETTING));
   const [persona, setPersona] = useState(PM_PERSONA_TEMPLATE);
   const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -31,20 +32,23 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
 
   const cleanName = normalizeName(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
-  const canSubmit = cleanName !== null && !personaTooLong && !busy;
+  const agentResult = settingOf(agent);
+  const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && !busy;
 
   const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (cleanName === null || !canSubmit) return;
+    if (cleanName === null || !canSubmit || !agentResult.ok) return;
     setBusy(true);
     setError(null);
     try {
-      const defaultModel = model.trim();
+      const { vendor, model, effort } = agentResult.setting;
       const mainFolder = folder.trim();
       const res = await postCreatePm({
         name: cleanName,
         mode,
-        ...(defaultModel ? { defaultModel } : {}),
+        vendor,
+        ...(model !== null ? { defaultModel: model } : {}),
+        ...(effort !== null ? { effort } : {}),
         persona,
         ...(mainFolder ? { folder: mainFolder } : {}),
       });
@@ -79,11 +83,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
           更多设置
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 grid gap-4">
-          <Field label="模型">
-            {(id) => (
-              <Input id={id} value={model} maxLength={MAX_MODEL_CHARS} placeholder="默认" onChange={(e) => setModel(e.target.value)} />
-            )}
-          </Field>
+          <AgentFields value={agent} onChange={setAgent} disabled={busy} />
           <Field label="性格设定">
             {(id) => <Textarea id={id} rows={8} value={persona} onChange={(e) => setPersona(e.target.value)} />}
           </Field>

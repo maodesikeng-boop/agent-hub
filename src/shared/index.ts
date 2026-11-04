@@ -11,3 +11,4 @@ export * from "./names.ts";
 export * from "./policy.ts";
 export * from "./store.ts";
 export * from "./worker.ts";
+export * from "./vendors.ts";

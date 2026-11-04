@@ -14,7 +14,7 @@
 // worktree 准备命令（hub project setup）给 Worker、项目经理看的话也在这里：文件末尾的 setupNote、SETUP_RECEIPT_NOTE。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { HUB_COMMAND as HUB, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, WORKER_REPORT_FORMAT } from "../shared/index.ts";
+import { ALL_EFFORTS, HUB_COMMAND as HUB, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, WORKER_REPORT_FORMAT } from "../shared/index.ts";
 import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
@@ -91,16 +91,16 @@ ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Wor
   它在新 worktree 里用守护进程的 \`$SHELL -c\` 跑（没有就 /bin/sh），标准输入是空的，最多 ${Math.round(SETUP_TIMEOUT_MS / 60_000)} 分钟；环境变量 \`AGENT_HUB_ROOT_PATH\`（主文件夹）、\`AGENT_HUB_WORKTREE_PATH\` 可以用，比如 \`cp "$AGENT_HUB_ROOT_PATH/.env" .\`。别把密钥写进命令：命令原文会出现在日志和失败时的附注里。
 - \`${HUB} persona show\`：看自己现在的性格设定和模式。
 - \`${HUB} persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：改自己的做事习惯。用户说“以后都……”这类长期要求时用它记下来。正文是新的完整性格设定（先 \`${HUB} persona show\` 看原文，在原文上改），不是只写新增的那句；只改模式可以不带正文。
-- \`${HUB} worker start --title <标题> [--model <模型>] [--readonly] [--no-worktree] --stdin\`：派一个 Worker，正文是任务说明。默认在单独的 git worktree 里干；加 \`--no-worktree\` 则直接在主文件夹里干。回的话里写明它在哪干活。
+- \`${HUB} worker start --title <标题> [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派一个 Worker，正文是任务说明。\`--model\`、\`--effort\`（思考程度）不写就和你自己的一样。默认在单独的 git worktree 里干；加 \`--no-worktree\` 则直接在主文件夹里干。回的话里写明它在哪干活。
 - \`${HUB} worker send <编号> --stdin\`：打回，或者回答它的问题，正文是你要对它说的话；同一个 Worker 接着做。
 - \`${HUB} worker end <编号>\`：收工，结束这个 Worker 的会话。worktree 由你自己删。
-- \`${HUB} worker list\`：你派出去的 Worker，各自的状态、在哪干活（分支、worktree 路径）。
+- \`${HUB} worker list\`：你派出去的 Worker，各自的状态、在哪干活（分支、worktree 路径）、模型和思考程度。
 - 长文本一律用 \`--stdin <<'EOF'\` 传（引号里的 EOF 不能省），短的也可以用 \`--text "<正文>"\`。没写 \`--stdin\` 时 ${HUB} 不读标准输入：
   \`\`\`
   ${HUB} persona edit --reason "用户要求回复用列表" --stdin <<'EOF'
   （新的完整性格设定）
   EOF
-  ${HUB} worker start --title "修登录按钮" --model haiku --stdin <<'EOF'
+  ${HUB} worker start --title "修登录按钮" --model haiku --effort low --stdin <<'EOF'
   （任务说明：目标、验收标准）
   EOF
   \`\`\`

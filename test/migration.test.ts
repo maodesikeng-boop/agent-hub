@@ -185,6 +185,12 @@ describe("0001_init.sql：唯一约束", () => {
 // ---- 0002_projects：用 node:sqlite 和真正的迁移器测 ----
 
 const migrationsDir = new URL("../migrations/", import.meta.url).pathname;
+/** migrations/ 下所有迁移的编号，从小到大。 */
+const ALL_VERSIONS = readdirSync(migrationsDir)
+  .flatMap((name) => /^(\d+)_.*\.sql$/.exec(name)?.[1] ?? [])
+  .map(Number)
+  .sort((a, b) => a - b);
+const LATEST_VERSION = ALL_VERSIONS.at(-1)!;
 
 /** 只有编号不超过 version 的迁移的目录：模拟老版本的守护进程建出来的库。 */
 function migrationsUpTo(version: number): string {
@@ -369,7 +375,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     const memory = openDatabase(":memory:");
     try {
       migrate(memory, m1MigrationsDir());
-      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3, 4, 5] });
+      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: ALL_VERSIONS.slice(1) });
     } finally {
       memory.close();
     }
@@ -397,7 +403,7 @@ describe("0002_projects：从 M1 的库升级", () => {
 
   it("空库连跑全部迁移没有报错", () => {
     const db = open();
-    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 5, applied: [1, 2, 3, 4, 5] });
+    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: LATEST_VERSION, applied: ALL_VERSIONS });
   });
 
   it("新建的项目经理默认只管理", () => {
@@ -847,7 +853,7 @@ describe("0004_workers：从 M2 的库升级", () => {
 describe("0004_workers：约束", () => {
   function migratedM2(): Db {
     const db = m2Db();
-    migrate(db, migrationsDir);
+    migrate(db, migrationsUpTo(4));
     return db;
   }
 
@@ -928,6 +934,54 @@ describe("0004_workers：约束", () => {
     expect(() => bad("2, 99, 1, 12")).toThrow(/FOREIGN KEY/);
     expect(() => bad("2, 1, 99, 12")).toThrow(/FOREIGN KEY/);
     expect(() => bad("2, 1, 1, 99")).toThrow(/FOREIGN KEY/);
+  });
+});
+
+// ---- 0006_agent_settings ----
+
+/** M3 发布时的库（user_version 4）：m2Db 升到 4，项目经理 1 的模型是 opus，派过一个 Worker，有一条性格设定修改。 */
+function m3Db(): Db {
+  const db = m2Db();
+  migrate(db, migrationsUpTo(4));
+  db.exec("UPDATE pms SET default_model = 'opus' WHERE id = 1; UPDATE agent_sessions SET model = 'opus' WHERE id = 1;");
+  insertWorker(db, { model: "haiku" });
+  return db;
+}
+
+describe("0006_agent_settings：从 M3 的库升级", () => {
+  it("只加列：老数据一个字不变；厂商是 claude，思考程度是默认（NULL）", () => {
+    const db = m3Db();
+    const tables = ["pms", "agent_sessions", "workers", "persona_changes"];
+    const dump = Object.fromEntries(tables.map((t) => [t, db.all<Record<string, unknown>>(`SELECT * FROM ${t} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 4, to: LATEST_VERSION });
+    expect(db.all("SELECT * FROM pms ORDER BY id")).toEqual(dump.pms!.map((r) => ({ ...r, vendor: "claude", effort: null })));
+    expect(db.all("SELECT * FROM agent_sessions ORDER BY id")).toEqual(dump.agent_sessions!.map((r) => ({ ...r, effort: null })));
+    expect(db.all("SELECT * FROM workers ORDER BY id")).toEqual(dump.workers!.map((r) => ({ ...r, effort: null })));
+    // 老的修改记录：前后都是项目经理现在的值
+    expect(db.all("SELECT * FROM persona_changes ORDER BY id")).toEqual(
+      dump.persona_changes!.map((r) => ({
+        ...r,
+        vendor_before: "claude",
+        vendor_after: "claude",
+        model_before: r.pm_id === 1 ? "opus" : null,
+        model_after: r.pm_id === 1 ? "opus" : null,
+        effort_before: null,
+        effort_after: null,
+      })),
+    );
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("升级后账本：资料页是 Claude Code、原来的模型、默认思考程度；Worker 记录的思考程度是默认", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    const root = mkdtempSync(join(tmpdir(), "agent-hub-m6-ledger-"));
+    extraDirs.push(root);
+    const ledger = createLedger(db, { pmHomeRoot: join(root, "pm-home"), resolveFolder: (p) => p });
+    expect(ledger.getPersona(1)).toMatchObject({ vendor: "claude", model: "opus", effort: null });
+    expect(ledger.snapshot().pms.find((p) => p.id === 1)).toMatchObject({ vendor: "claude", defaultModel: "opus", effort: null });
+    expect(ledger.getPersona(1).changes[0]).toMatchObject({ modelBefore: "opus", modelAfter: "opus", effortBefore: null, effortAfter: null });
+    expect(ledger.hubCall(1, "worker.list", {}).data.workers[0]).toMatchObject({ model: "haiku", effort: null });
   });
 });
 
