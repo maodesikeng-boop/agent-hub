@@ -5,7 +5,7 @@ import type { AgentTextMeta } from "../../shared/sent-files.ts";
 import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
-import { shareLinkedFiles } from "../sent-files.ts";
+import { isShareable, shareLinkedFiles, type ShareScope } from "../sent-files.ts";
 import type { Db } from "../store/index.ts";
 
 export interface SentFilesOptions {
@@ -32,23 +32,28 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
     return null;
   };
 
+  /** 这个会话能分享哪些文件夹（副本放哪、相对路径按什么解析也在里面）。 */
+  const scopeFor = (session: AgentSessionRow): ShareScope => {
+    const projectId = projectOf(session);
+    const folders =
+      projectId === null
+        ? []
+        : db.all<{ path: string }>("SELECT path FROM project_folders WHERE project_id = ? AND removed_at IS NULL", projectId).map((r) => r.path);
+    const worktrees = projectId === null ? [] : [projectWorktreesDir(opts.worktreesDir, projectId)];
+    return {
+      sentFilesDir: opts.sentFilesDir,
+      cwd: session.cwd,
+      userHome: opts.userHome,
+      roots: [...folders, ...worktrees, session.cwd, ...session.addDirs, opts.uploadsDir, ...opts.tmpDirs],
+      dataHome: opts.dataHome,
+      dataExceptions: [opts.uploadsDir, ...worktrees],
+    };
+  };
+
   /** 回复里有本机文件链接就存副本、返回 { files }；没有返回 null（meta 照旧是 null）。出了意外只记日志，消息照样入库。 */
   const metaFor = (session: AgentSessionRow, text: string): AgentTextMeta | null => {
     try {
-      const projectId = projectOf(session);
-      const folders =
-        projectId === null
-          ? []
-          : db.all<{ path: string }>("SELECT path FROM project_folders WHERE project_id = ? AND removed_at IS NULL", projectId).map((r) => r.path);
-      const worktrees = projectId === null ? [] : [projectWorktreesDir(opts.worktreesDir, projectId)];
-      const files = shareLinkedFiles(text, {
-        sentFilesDir: opts.sentFilesDir,
-        cwd: session.cwd,
-        userHome: opts.userHome,
-        roots: [...folders, ...worktrees, session.cwd, ...session.addDirs, opts.uploadsDir, ...opts.tmpDirs],
-        dataHome: opts.dataHome,
-        dataExceptions: [opts.uploadsDir, ...worktrees],
-      });
+      const files = shareLinkedFiles(text, scopeFor(session));
       return files.length === 0 ? null : { files };
     } catch (error) {
       console.error(`${LOG_PREFIX} sent files:`, error);
@@ -56,5 +61,8 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
     }
   };
 
-  return { metaFor };
+  /** 这个路径（已 realpath）现在还能不能分享给这个会话的用户（见 Ledger.sentFileAllows）。 */
+  const allows = (session: AgentSessionRow, realPath: string): boolean => isShareable(realPath, scopeFor(session));
+
+  return { metaFor, allows };
 }

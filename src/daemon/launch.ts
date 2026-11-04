@@ -54,7 +54,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
-    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir }), null, 2) + "\n";
+    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");

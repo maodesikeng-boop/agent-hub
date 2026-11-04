@@ -1,5 +1,5 @@
 import { Folder } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ConversationId, Message, MessageId, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -11,7 +11,8 @@ import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
-import { StatusLine, type StopPhase } from "./StatusLine.tsx";
+import { useStop } from "../useStop.ts";
+import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
 
 export function Conversation({
   entry,
@@ -58,23 +59,9 @@ export function Conversation({
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
-  const [stopPhase, setStopPhase] = useState<StopPhase>("idle");
-  const activity = session?.activity ?? "idle";
   /** 点“等你确定”条里的某个问题：n 每点一次加一，点同一条也再跳一次。 */
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
-
-  // 这一轮结束了，下一轮又能点“停止”
-  useEffect(() => {
-    if (activity === "idle") setStopPhase("idle");
-  }, [activity]);
-
-  const stop = () => {
-    setStopPhase("sending");
-    onStop(id).then(
-      () => setStopPhase("requested"),
-      () => setStopPhase("failed"),
-    );
-  };
+  const stop = useStop(session, () => onStop(id));
 
   const empty = view.messages.length === 0 && pending.length === 0;
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
@@ -123,14 +110,16 @@ export function Conversation({
           onRetry={onRetry}
           actions={actions}
           focus={focus}
+          status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
+          statusAgent={agent}
         />
       </div>
-      <div className="mx-auto w-full max-w-[888px] shrink-0 space-y-2.5 px-6 pb-5">
-        <StatusLine agentName={agent.name} session={session} stopPhase={stopPhase} onStop={stop} />
+      <div className="mx-auto w-full max-w-[888px] shrink-0 px-6 pb-5">
         <Composer
           value={draft}
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}
+          stop={stop}
           onChange={(v) => onDraftChange(id, v)}
           onSend={(text, files) => onSend(id, text, files)}
         />

@@ -16,9 +16,9 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
-import { idle, working } from "./sessions.ts";
+import { idle, toolFinished, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
-import { summarizeToolCall } from "./tool-summary.ts";
+import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 
@@ -185,13 +185,20 @@ export function createLedgerMessages(
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
+      case "agent.thinking":
+        // 子任务里的事件不改主 agent 的状态
+        if (event.parentToolUseId === undefined) updateLive(p, sessionId, working(liveOf(sessionId).currentTool, { type: "thinking" }));
+        return;
+      case "agent.tool_result":
+        if (event.parentToolUseId === undefined) updateLive(p, sessionId, toolFinished(event.toolUseIds));
+        return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
         // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
-        updateLive(p, sessionId, working(null));
+        updateLive(p, sessionId, working(null, event.parentToolUseId === undefined ? { type: "text" } : undefined));
         return;
       }
       case "agent.tool":
@@ -201,7 +208,11 @@ export function createLedgerMessages(
           meta: { toolUseId: event.toolUseId, name: event.name, input: event.input },
           dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
         });
-        updateLive(p, sessionId, working(event.name));
+        updateLive(
+          p,
+          sessionId,
+          event.parentToolUseId === undefined ? toolStarted(event.name, event.toolUseId, stepOfTool(event.name, event.input)) : working(event.name),
+        );
         return;
       case "turn.ended": {
         const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);

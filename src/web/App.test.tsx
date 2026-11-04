@@ -470,16 +470,16 @@ describe("操作折叠", () => {
   });
 });
 
-describe("状态行和停止", () => {
-  it("推 session.status 为运行中：底部有状态行，点“停止”发出 POST /stop", async () => {
+describe("头像旁的状态和输入框里的停止", () => {
+  it("推 session.status 为运行中：头像旁有状态，输入框的发送键变停止，点“停止”发出 POST /stop", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
-    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", currentTool: "Bash" })));
+    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } })));
     const line = screen.getByRole("status", { name: "状态" });
-    expect(line).toHaveTextContent("小林");
-    expect(line).toHaveTextContent("Bash");
+    expect(line).toHaveTextContent("在运行命令");
+    expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/1/stop");
@@ -488,13 +488,50 @@ describe("状态行和停止", () => {
     expect(screen.queryByText("停止失败")).not.toBeInTheDocument();
   });
 
-  it("没有当前工具时只写“正在处理”", async () => {
+  it("状态条已不存在：状态只在消息列表里（头像旁），输入框旁边没有", async () => {
     const ws = await boot();
-    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("正在处理");
+    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "thinking" } })));
+    const status = screen.getByRole("status", { name: "状态" });
+    expect(log()).toContainElement(status);
+    expect(status.closest("[data-slot='agent-head']")).not.toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(box().closest("div[class*='max-w-[888px]']")).not.toContainElement(status);
   });
 
-  it("首屏就在干活：状态行和停止按钮直接有", async () => {
+  it("忙时输入框有字：发送键（发出去照常排队）；清空又是停止", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
+    await user.type(box(), "补一句");
+    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
+  });
+
+  it("agent 这一轮还没出回复：消息列表底部先出“头像 名字 · 状态”，这一轮结束就消失", async () => {
+    const ws = await boot(makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: [makeConvSnapshot([makeUserMessage({ id: 1, text: "查一下", status: "processing", createdAt: 5_000 })], { conversation: { id: 1, pmId: 1, title: "小林" } })],
+    }));
+    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "thinking" } })));
+    const head = within(log()).getByRole("status", { name: "状态" }).closest("[data-slot='agent-head']") as HTMLElement;
+    expect(head).toHaveTextContent("小林·在思考");
+    push(ws, sessionChange(12, makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Skill", input: { skill: "frontend-rules" } } })));
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在加载 skill frontend-rules");
+    push(ws, messageChange(13, "message.created", makeMessage({ id: 2, text: "好的", createdAt: 6_000 })));
+    expect(within(log()).getByText("好的").closest("article")).toContainElement(screen.getByRole("status", { name: "状态" }));
+    push(ws, sessionChange(14, makeSession({ status: "running", activity: "idle" })));
+    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+  });
+
+  it("没有 step（老服务端）时只写“在处理”", async () => {
+    const ws = await boot();
+    push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在处理");
+  });
+
+  it("首屏就在干活：头像旁的状态和停止按钮直接有", async () => {
     await boot(makeSnapshot({ conversations: [makeConvSnapshot([])], sessions: [makeSession({ activity: "working" })] }));
     expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
   });
@@ -529,12 +566,13 @@ describe("状态行和停止", () => {
     expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
   });
 
-  it("回到空闲：状态行和停止按钮消失", async () => {
+  it("回到空闲：状态没有了，停止键变回发送键", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
     push(ws, sessionChange(12, makeSession({ status: "idle", activity: "idle" })));
     expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument();
   });
 
   it("别的对话的会话状态不影响当前对话", async () => {
@@ -559,19 +597,19 @@ describe("网络出错重试", () => {
     push(ws, sessionChange(11, retrying(3)));
     expect(statusLine()).toHaveTextContent("网络出错，正在重试（第 3/10 次）");
     expect(statusLine()).toHaveTextContent(/\d+ 秒后重试/);
-    expect(statusLine()).not.toHaveTextContent("正在处理");
+    expect(statusLine()).not.toHaveTextContent("在处理");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
   });
 
-  it("连续几条：显示最新的一次；清掉后回到“正在处理”", async () => {
+  it("连续几条：显示最新的一次；清掉后回到“在处理”", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, retrying(3)));
     push(ws, sessionChange(12, retrying(4)));
     expect(statusLine()).toHaveTextContent("第 4/10 次");
     expect(statusLine()).not.toHaveTextContent("第 3/10 次");
     push(ws, sessionChange(13, makeSession({ status: "running", activity: "working", apiRetry: null })));
-    expect(statusLine()).toHaveTextContent("正在处理");
+    expect(statusLine()).toHaveTextContent("在处理");
     expect(statusLine()).not.toHaveTextContent("重试");
   });
 
@@ -582,12 +620,13 @@ describe("网络出错重试", () => {
     expect(statusLine()).not.toHaveTextContent("秒后重试");
   });
 
-  it("老服务端（会话状态里没有 apiRetry 这个字段）：照常显示“正在处理”", async () => {
+  it("老服务端（会话状态里没有 apiRetry、step 这些字段）：照常显示“在处理”", async () => {
     const ws = await boot();
     const old: Partial<ReturnType<typeof makeSession>> = makeSession({ status: "running", activity: "working", currentTool: "Bash" });
     delete old.apiRetry;
+    delete old.step;
     push(ws, sessionChange(11, old as ReturnType<typeof makeSession>));
-    expect(statusLine()).toHaveTextContent("Bash");
+    expect(statusLine()).toHaveTextContent("在处理");
     expect(statusLine()).not.toHaveTextContent("重试");
   });
 
@@ -598,7 +637,7 @@ describe("网络出错重试", () => {
     expect(statusLine()).not.toHaveTextContent("重试");
   });
 
-  it("重试用完这一轮以出错结束：用户消息标“失败”，写着原因，还有“重试”按钮；状态行没有了", async () => {
+  it("重试用完这一轮以出错结束：用户消息标“失败”，写着原因，还有“重试”按钮；头像旁的状态没有了", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, retrying(10)));
     push(ws, messageChange(12, "message.created", makeUserMessage({ id: 3, text: "查一下", status: "processing", createdAt: 7_000 })));
@@ -621,7 +660,7 @@ describe("网络出错重试", () => {
 });
 
 describe("等额度", () => {
-  it("额度状态不是 allowed：状态行显示“等额度”", async () => {
+  it("额度状态不是 allowed：头像旁显示“等额度”", async () => {
     const ws = await boot();
     push(
       ws,

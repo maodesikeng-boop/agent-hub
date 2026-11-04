@@ -461,6 +461,12 @@ export interface Ledger {
   /** 给执行器处理函数用：读动作要发的消息。找不到返回 null。 */
   getMessage(id: MessageId): Message | null;
   /**
+   * 这个会话现在能不能分享这个文件（realPath 已 realpath）：不在敏感路径、.git/ 里，在这个会话所属项目的文件夹、worktrees 目录、
+   * 会话自己的 cwd 和附加文件夹、uploads、临时目录之内（和存副本时同一套规则，daemon/sent-files.ts 的 isShareable）。
+   * 界面服务“用 Finder / 默认程序打开”发出去的原文件前用它再查一次（项目文件夹后来可能改了）。会话不存在 false。
+   */
+  sentFileAllows(sessionId: SessionId, realPath: string): boolean;
+  /**
    * 执行器：动作彻底失败（次数用完）或被放弃（坏行、没有处理函数，error 以“放弃：”开头）时调用。
    * session.send → 那条消息标 failed，failureReason = error；
    * session.start、session.end → 什么也不做：不碰消息（每条消息由它自己的 session.send 失败时标），

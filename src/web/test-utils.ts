@@ -328,6 +328,8 @@ export class FakeApi {
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
     const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);
     if (retry && method === "POST") return jsonResponse(await this.retryMessage(Number(retry[1])));
+    // 文件接口的 HEAD（卡片探测文件是否已被清理）：假后端里文件都在
+    if (method === "HEAD" && /^\/api\/(uploads|sent-files)\//.test(url.pathname)) return new Response(null, { status: 200 });
     const dismiss = /^\/api\/messages\/(\d+)\/dismiss-ask$/.exec(url.pathname);
     if (dismiss && method === "POST") return jsonResponse(await this.dismissAsk(Number(dismiss[1])));
     return jsonResponse({ status: 404, body: { error: "not found" } });

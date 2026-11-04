@@ -14,6 +14,7 @@ import {
   mergeUserTexts,
   parseApiRetry,
   parseAssistant,
+  parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
 
@@ -87,16 +88,79 @@ describe("assistant 事件", () => {
     };
     const out = parseAssistant(obj, JSON.stringify(obj), 123);
     expect(out).toEqual([
+      { type: "agent.thinking", uuid: "u1", at: 123 },
       { type: "agent.text", uuid: "u1", text: "先看看\n\n再改", at: 123 },
       { type: "agent.tool", uuid: "u1", toolUseId: "toolu_1", name: "Read", input: { file_path: "a.ts" }, at: 123 },
       { type: "agent.tool", uuid: "u1", toolUseId: "toolu_2", name: "Edit", input: {}, at: 123 },
     ]);
   });
 
+  it("thinking 块（真实日志里单独一个事件，内容常是空的）出 agent.thinking，不带内容", () => {
+    const obj = { type: "assistant", uuid: "u2", message: { content: [{ type: "thinking", thinking: "", signature: "abc" }] } };
+    expect(parseAssistant(obj, JSON.stringify(obj), 5)).toEqual([{ type: "agent.thinking", uuid: "u2", at: 5 }]);
+  });
+
+  it("子任务里的事件带 parentToolUseId（照抄 parent_tool_use_id），主 agent 的不带；空串、非字符串当没有", () => {
+    const mk = (parent: unknown) => ({
+      type: "assistant",
+      uuid: "u3",
+      parent_tool_use_id: parent,
+      message: {
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: "hi" },
+          { type: "tool_use", id: "t1", name: "Read", input: {} },
+        ],
+      },
+    });
+    const sub = parseAssistant(mk("toolu_parent"), "{}", 1);
+    expect(sub).toHaveLength(3);
+    for (const e of sub) expect(e).toMatchObject({ parentToolUseId: "toolu_parent" });
+    for (const parent of [null, "", 7, undefined]) {
+      for (const e of parseAssistant(mk(parent), "{}", 1)) expect(e).not.toHaveProperty("parentToolUseId");
+    }
+  });
+
   it("没有文字、没有工具调用：什么都不出；空白文字也不算", () => {
     expect(parseAssistant({ message: { content: [{ type: "text", text: "  " }] } }, "{}", 1)).toEqual([]);
     expect(parseAssistant({ message: {} }, "{}", 1)).toEqual([]);
     expect(parseAssistant({}, "{}", 1)).toEqual([]);
+  });
+});
+
+describe("工具结果（user 事件里的 tool_result）", () => {
+  const result = (over: Record<string, unknown> = {}) => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok", is_error: false }] },
+    parent_tool_use_id: null,
+    ...over,
+  });
+
+  it("出 agent.tool_result，带这些 tool_use 的 id；一个 user 事件里有几个结果就带几个", () => {
+    expect(parseToolResults(result(), 9)).toEqual({ type: "agent.tool_result", toolUseIds: ["toolu_1"], at: 9 });
+    const two = result({
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "a" },
+          { type: "text", text: "x" },
+          { type: "tool_result", tool_use_id: "b" },
+        ],
+      },
+    });
+    expect(parseToolResults(two, 9)).toMatchObject({ toolUseIds: ["a", "b"] });
+  });
+
+  it("子任务里的结果带 parentToolUseId", () => {
+    expect(parseToolResults(result({ parent_tool_use_id: "toolu_p" }), 1)).toMatchObject({ parentToolUseId: "toolu_p" });
+  });
+
+  it("不是工具结果（普通文字、回显、字符串内容）、脏的（没有 id、content 不是数组）：null", () => {
+    expect(parseToolResults({ type: "user", message: { content: [{ type: "text", text: "hi" }] } }, 1)).toBeNull();
+    expect(parseToolResults({ type: "user", message: { content: "hi" } }, 1)).toBeNull();
+    expect(parseToolResults({ type: "user", message: {} }, 1)).toBeNull();
+    expect(parseToolResults({ type: "user" }, 1)).toBeNull();
+    expect(parseToolResults(result({ message: { content: [{ type: "tool_result" }] } }), 1)).toBeNull();
+    expect(parseToolResults(result({ isReplay: true }), 1)).toBeNull();
   });
 });
 
