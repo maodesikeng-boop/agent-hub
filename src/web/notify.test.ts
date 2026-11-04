@@ -2,7 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change, MessageStatus, SessionActivity, StateSnapshot } from "../shared/index.ts";
-import { LAST_SEEN_KEY, WAITING_SETTLE_MS, useWaitingReminders } from "./notify.ts";
+import { LAST_SEEN_KEY, NOTIFY_ENABLED_KEY, WAITING_SETTLE_MS, useWaitingReminders } from "./notify.ts";
 import { waitingConversations } from "./selectors.ts";
 import { applyChange, initialState, reducer, type HubState } from "./state.ts";
 import {
@@ -370,21 +370,21 @@ describe("弹通知", () => {
 });
 
 describe("通知权限", () => {
-  it("权限是 default（还没问过）：不弹；点了才申请，批准了以后能弹", async () => {
+  it("权限是 default（还没问过）：不弹；拨开关才申请，批准了以后能弹", async () => {
     installFakeNotification("default");
     const busy = load(snapshot());
     const s = setup(busy);
-    expect(s.result.current.permission).toBe("default");
+    expect(s.result.current.notify.permission).toBe("default");
     s.update(pmIdle(busy));
     s.wait(WAITING_SETTLE_MS);
     expect(s.waiting()).toEqual([1]); // 左栏照常
     expect(FakeNotification.instances).toHaveLength(0);
 
     await act(async () => {
-      await s.result.current.requestPermission();
+      await s.result.current.notify.setEnabled(true);
     });
     expect(FakeNotification.requestPermission).toHaveBeenCalledOnce();
-    expect(s.result.current.permission).toBe("granted");
+    expect(s.result.current.notify.permission).toBe("granted");
     // 之后新的“等你”会弹
     const again = activity(pmIdle(busy), 1, 1, "working", 1);
     s.update(again);
@@ -399,13 +399,53 @@ describe("通知权限", () => {
     const busy = load(snapshot());
     const s = setup(busy);
     await act(async () => {
-      await s.result.current.requestPermission();
+      await s.result.current.notify.setEnabled(true);
     });
-    expect(s.result.current.permission).toBe("denied");
+    expect(s.result.current.notify.permission).toBe("denied");
     s.update(pmIdle(busy));
     s.wait(WAITING_SETTLE_MS);
     expect(FakeNotification.instances).toHaveLength(0);
     expect(document.title).toBe("(1) agent-hub");
+  });
+
+  it("开关关掉后不弹，左栏和标题照常；再打开又能弹", async () => {
+    const busy = load(snapshot());
+    const s = setup(busy);
+    expect(s.result.current.notify.enabled).toBe(true); // 已授权、没存过偏好：默认开
+    await act(async () => {
+      await s.result.current.notify.setEnabled(false);
+    });
+    expect(s.result.current.notify.enabled).toBe(false);
+    expect(localStorage.getItem(NOTIFY_ENABLED_KEY)).toBe("0");
+    s.update(pmIdle(busy));
+    s.wait(WAITING_SETTLE_MS);
+    expect(FakeNotification.instances).toHaveLength(0);
+    expect(s.waiting()).toEqual([1]);
+    expect(document.title).toBe("(1) agent-hub");
+
+    await act(async () => {
+      await s.result.current.notify.setEnabled(true);
+    });
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled(); // 已授权，不再问
+    expect(localStorage.getItem(NOTIFY_ENABLED_KEY)).toBe("1");
+    const again = activity(pmIdle(busy), 1, 1, "working", 1);
+    s.update(again);
+    s.update(apply(activity(again, 1, 1, "idle", 1), messageChange(0, "message.created", makeMessage({ id: 5, createdAt: T0 + 1 }))));
+    s.wait(WAITING_SETTLE_MS);
+    expect(FakeNotification.instances).toHaveLength(1);
+  });
+
+  it("存的偏好：关着重开还是关；没存过值或值不认识就看授权（已授权是开，没问过是关）", () => {
+    localStorage.setItem(NOTIFY_ENABLED_KEY, "0");
+    expect(setup(load(snapshot())).result.current.notify.enabled).toBe(false);
+    for (const dirty of ["abc", "true", "", "{}"]) {
+      localStorage.setItem(NOTIFY_ENABLED_KEY, dirty);
+      expect(setup(load(snapshot())).result.current.notify.enabled).toBe(true);
+    }
+    // 存的是开，但浏览器那边的授权没了：开关是关
+    localStorage.setItem(NOTIFY_ENABLED_KEY, "1");
+    installFakeNotification("default");
+    expect(setup(load(snapshot())).result.current.notify.enabled).toBe(false);
   });
 
   it("弹的时候才看权限：中途在浏览器设置里关掉了，就不弹", () => {
@@ -438,7 +478,7 @@ describe("通知权限", () => {
     installFakeNotification(null);
     const busy = load(snapshot());
     const s = setup(busy);
-    expect(s.result.current.permission).toBe("unsupported");
+    expect(s.result.current.notify.permission).toBe("unsupported");
     s.update(pmIdle(busy));
     s.wait(WAITING_SETTLE_MS);
     expect(s.waiting()).toEqual([1]);

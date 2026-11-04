@@ -97,10 +97,9 @@ export function App() {
         entries={entries}
         activeId={activeId}
         waiting={reminders.waiting}
-        notifyPermission={reminders.permission}
+        notify={reminders.notify}
         onSelect={select}
         onNewPm={() => setCreating(true)}
-        onEnableNotify={() => void reminders.requestPermission()}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
