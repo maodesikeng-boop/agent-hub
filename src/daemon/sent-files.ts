@@ -24,6 +24,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeSync,
   type Stats,
 } from "node:fs";
@@ -238,8 +239,12 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
       const copied = copyFromFd(fd, stat, join(partial, name));
       const id = sentFileId(name, copied.sha256);
       // 同样的文件已经存过（别的消息发过、重放）：用那一份，这一份扔掉
-      if (resolveUpload(scope.sentFilesDir, id) !== null) rmSync(partial, { recursive: true, force: true });
-      else renameSync(partial, join(scope.sentFilesDir, id));
+      if (resolveUpload(scope.sentFilesDir, id) !== null) {
+        rmSync(partial, { recursive: true, force: true });
+        // 命中已有副本：刷新目录修改时间，刚发过的不会被定期清理（file-cleanup.ts）删掉
+        const now = new Date();
+        utimesSync(join(scope.sentFilesDir, id), now, now);
+      } else renameSync(partial, join(scope.sentFilesDir, id));
       return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
     } catch (error) {
       rmSync(partial, { recursive: true, force: true });
