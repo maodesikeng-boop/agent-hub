@@ -6,7 +6,6 @@ import { HUB_COMMANDS, PM_PERSONA_TEMPLATE, WORKER_REPORT_FORMAT } from "../shar
 import { HUB_COMMAND } from "../shared/names.ts";
 import {
   AGENTS_NOTE,
-  ASK_FIRST_RULES,
   HUB_USAGE_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
@@ -113,36 +112,37 @@ describe("提示词：还没有项目", () => {
 // ---- M3：Worker ----
 
 describe("提示词：项目经理（M3）", () => {
-  it("“只管理”写成派 Worker、验收；两种模式都有先问用户的规矩、派活和合并的说明、hub worker 用法", () => {
+  it("“只管理”写成派 Worker、验收；两种模式都有派 Worker 的说明和 hub worker 用法", () => {
     expect(PM_MODE_PROMPTS.manage_only).toContain(`${hub} worker start`);
     expect(PM_MODE_PROMPTS.manage_only).toContain("验收");
     for (const ctx of [projectContext(), noProjectContext()]) {
       const prompt = buildLaunchPrompt(ctx, dir);
-      expect(prompt).toContain(ASK_FIRST_RULES);
       expect(prompt).toContain(PM_WORKER_PROMPT);
       expect(prompt).toContain(HUB_USAGE_PROMPT);
     }
   });
 
-  it("先问用户：推送、合并、装软件、sudo", () => {
-    for (const word of ["推送", "合并", "装软件", "brew", "sudo", "先问用户"]) expect(ASK_FIRST_RULES).toContain(word);
-  });
-
-  it("合并和收拾 worktree 的步骤：git status、merge --no-ff、冲突、worktree remove、hub worker end；只在本地、不推送", () => {
-    const steps = ["git status", "git merge --no-ff", "冲突", "git worktree remove", `${hub} worker end`];
-    let at = -1;
-    for (const step of steps) {
-      const i = PM_WORKER_PROMPT.indexOf(step, at + 1);
-      expect(i, step).toBeGreaterThan(at);
-      at = i;
-    }
-    expect(PM_WORKER_PROMPT).toContain("不推送");
-    expect(PM_WORKER_PROMPT).toContain("分支留着");
-  });
-
-  it("worktree 和主文件夹的利弊、--no-worktree、汇报怎么回来、打回用 hub worker send", () => {
-    for (const word of ["worktree", "主文件夹", "好处", "坏处", "适合", "互相覆盖", "pnpm install", "--no-worktree", "【Worker #", `${hub} worker send`, "便宜的模型"]) {
+  it("派 Worker 说明：worktree、--no-worktree、汇报怎么回来、打回用 hub worker send、收工用 hub worker end、按 AGENTS.md 协作", () => {
+    for (const word of ["worktree", "主文件夹", "--no-worktree", "【Worker #", `${hub} worker send`, `${hub} worker end`, "AGENTS.md"]) {
       expect(PM_WORKER_PROMPT).toContain(word);
+    }
+  });
+
+  it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有建议用便宜的模型", () => {
+    const prompt = buildLaunchPrompt(projectContext(), dir);
+    for (const gone of [
+      "先问用户的事",
+      "git merge --no-ff",
+      "合并和收拾 worktree",
+      "只在本地合并，不推送",
+      "分支留着",
+      "| 好处 |",
+      "| 坏处 |",
+      "便宜的模型",
+      "brew",
+      "sudo",
+    ]) {
+      expect(prompt).not.toContain(gone);
     }
   });
 
@@ -180,12 +180,14 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain("只读");
   });
 
-  it("不能改记忆文件，要改就写进汇报的问题；推送、合并、装软件写进汇报的问题", () => {
+  it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
     for (const word of ["AGENTS.md", "CLAUDE.md", ".claude/", "不能改", "“问题”"]) expect(WORKER_RULES).toContain(word);
-    expect(prompt).toContain(ASK_FIRST_RULES);
     expect(WORKER_RULES).toMatch(/问不了用户/);
+    for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做"]) {
+      expect(prompt).not.toContain(gone);
+    }
   });
 
   it("在主文件夹里：写明主文件夹和附加文件夹，没有分支", () => {

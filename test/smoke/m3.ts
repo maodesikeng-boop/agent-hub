@@ -3,7 +3,7 @@
 // S11 默认档 auto：项目经理写文件、git commit、hub status 都不被拦；顺便看额度 utilization 是不是 0～1 的小数。
 // S12 Worker 写不了记忆：约定文件（工作目录里、附加文件夹里）、~/.claude/ 下的探针、自动记忆都写不了，普通文件照样能写；
 //     只读的 Worker（dontAsk 档）能读、写不了。
-// S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户说“合并吧”，项目经理在本地合并、删 worktree、收工。
+// S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户在会话里说清楚“合并到 main，删掉 worktree，然后让 Worker 收工”，项目经理照做。
 // S14 Worker 干到一半关机再启动（验收第 11 条，PR #35 审查第 1、2 条）：不发“这一轮没做完”；重启后恢复说明、重发说明和
 //     任务原文写在同一行，Worker 接着做完，汇报回到项目经理。
 import { execFileSync } from "node:child_process";
@@ -205,7 +205,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
   }
 
   if (only("S13")) {
-    await inFreshSmoke(outcomes, "S13 整条路：派活 → 汇报 → “合并吧” → 本地合并、删 worktree、收工", async (smoke) => {
+    await inFreshSmoke(outcomes, "S13 整条路：派活 → 汇报 → 用户让合并到 main、删 worktree、让 Worker 收工", async (smoke) => {
       const dir = repo(smoke, "s13", { "README.md": "# s13\n" });
       const chat = await pmWithFolder(smoke, "小林", dir, "manage_only");
       await smoke.ask(chat, `派一个 Worker（用 ${MODEL}，在 worktree 里干）：在 README.md 末尾加一行 hello，然后提交。派完只回复“派了”。`);
@@ -216,12 +216,12 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       expect(git(dir, "log", "--format=%s", worker!.branch!).split("\n").length >= 2, `Worker 的分支上没有新提交：${git(dir, "log", "--oneline", worker!.branch!)}`);
       await waitSettled(smoke, chat);
 
-      const { replies } = await smoke.ask(chat, "合并吧");
+      const { replies } = await smoke.ask(chat, "把它的分支合并到 main（只合本地，分支留着），删掉它的 worktree，然后让这个 Worker 收工。");
       await waitSettled(smoke, chat);
       const readme = readFileSync(join(dir, "README.md"), "utf8");
       expect(readme.includes("hello"), `主文件夹的 README.md 里没有 hello：${readme}；回复：${replies.join("|")}`);
-      const merges = git(dir, "log", "--merges", "--format=%s");
-      expect(merges !== "", `git log 里没有合并提交：${git(dir, "log", "--oneline", "-5")}`);
+      const logSubjects = git(dir, "log", "--format=%s").split("\n").filter(Boolean);
+      expect(logSubjects.length >= 2, `git log 里没有合入提交：${git(dir, "log", "--oneline", "-5")}`);
       const worktrees = git(dir, "worktree", "list", "--porcelain");
       expect(!worktrees.includes(worker!.worktree_path!), `worktree 没删：${worktrees}`);
       expect(git(dir, "branch", "--list", worker!.branch!) !== "", `分支 ${worker!.branch} 被删了`);
@@ -229,7 +229,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       const lines = await workerLines(smoke, chat);
       expect(lines.some((l) => l.event === "ended"), `没有“已收工”那一行：${JSON.stringify(lines.map((l) => l.event))}`);
       const denials = smoke.permissionDenials(sessionIdOf(smoke, chat));
-      return `合并提交“${merges.split("\n")[0]}”，worktree 已删、分支留着，Worker 已收工；项目经理被拒 ${denials.length} 次`;
+      return `最新提交“${logSubjects[0]}”，worktree 已删、分支留着，Worker 已收工；项目经理被拒 ${denials.length} 次`;
     });
   }
 

@@ -158,11 +158,13 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(existsSync(worktreesDir)).toBe(false);
   });
 
-  it("Worker：提示词是 buildWorkerPrompt；设置文件是 buildSessionSettings(worker)；env 有自己的令牌和关自动记忆", async () => {
+  it("Worker：提示词是 buildWorkerPrompt（含规矩、没有先问用户清单）；设置文件是 buildSessionSettings(worker)；env 有自己的令牌和关自动记忆", async () => {
     const worktree = join(dir, "wt");
     contexts.set(9, workerContext({ worktreePath: worktree }));
     const files = await make()(row(9, worktree, "worker"));
-    expect(readFileSync(files.promptFile, "utf8")).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
+    const prompt = readFileSync(files.promptFile, "utf8");
+    expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
+    expect(prompt).not.toContain("先问用户的事");
     expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock, stateDir }));
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
