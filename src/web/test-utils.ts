@@ -6,6 +6,7 @@ import type {
   Conversation,
   ConversationSnapshot,
   CreatePmRequest,
+  PickFolderRequest,
   EditPersonaRequest,
   HealthEntry,
   Message,
@@ -287,6 +288,8 @@ export class FakeApi {
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
+  pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
   fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
@@ -314,6 +317,7 @@ export class FakeApi {
       }
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
     }
+    if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
     if (persona && method === "GET") return jsonResponse(await this.getPersona(Number(persona[1])));

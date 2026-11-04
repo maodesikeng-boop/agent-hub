@@ -42,6 +42,11 @@ export const API_PATHS = {
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
   /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回。 */
   models: "/api/models",
+  /**
+   * POST（PickFolderRequest → PickFolderResponse）：守护进程在这台 Mac 上弹原生的“选择文件夹”，等用户选完才回。
+   * 取消、超时回 path null（不是错误）；同时已经有一个对话框 409；起不来 osascript 回中文原因。
+   */
+  pickFolder: "/api/pick-folder",
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;
@@ -154,6 +159,16 @@ export interface ModelsResponse {
 /** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */
 export interface RetryMessageResponse {
   messageId: MessageId;
+}
+
+/** POST /api/pick-folder 的请求体：对话框从哪个文件夹开始（输入框里已有的路径）；没给、不存在或不是文件夹就从家目录开始。 */
+export interface PickFolderRequest {
+  startDir?: string;
+}
+
+/** POST /api/pick-folder 的响应：选中的文件夹的绝对路径；用户点了取消（或超时）是 null。 */
+export interface PickFolderResponse {
+  path: string | null;
 }
 
 // ---- WebSocket：服务端 → 网页 ----

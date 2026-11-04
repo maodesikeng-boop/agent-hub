@@ -10,7 +10,7 @@ import {
   type ConversationId,
   type PmMode,
 } from "../../shared/index.ts";
-import { postCreatePm } from "../client.ts";
+import { postCreatePm, postPickFolder } from "../client.ts";
 import { errorText } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -29,11 +29,28 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
 
   const cleanName = normalizeName(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
   const agentResult = settingOf(agent);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && !busy;
+
+  // 守护进程弹原生的“选择文件夹”：选中填进输入框；取消（path 为 null）输入框不变；出错在这一行下面写原因
+  const pickFolder = async () => {
+    setPicking(true);
+    setPickError(null);
+    try {
+      const startDir = folder.trim();
+      const { path } = await postPickFolder(startDir ? { startDir } : {});
+      if (path !== null) setFolder(path);
+    } catch (err) {
+      setPickError(errorText(err));
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -65,17 +82,23 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
         <SettingsRow label="名字">
           {(id) => <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" onChange={(e) => setName(e.target.value)} />}
         </SettingsRow>
-        <SettingsRow label="主文件夹（可选）">
+        <SettingsRow label="主文件夹（可选）" error={pickError}>
           {(id) => (
-            <Input
-              id={id}
-              value={folder}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="~/code/my-project"
-              className="w-[240px]"
-              onChange={(e) => setFolder(e.target.value)}
-            />
+            <>
+              <Input
+                id={id}
+                value={folder}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="~/code/my-project"
+                className="w-[160px]"
+                onChange={(e) => setFolder(e.target.value)}
+              />
+              <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
+                {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
+                选择…
+              </Button>
+            </>
           )}
         </SettingsRow>
       </SettingsGroup>

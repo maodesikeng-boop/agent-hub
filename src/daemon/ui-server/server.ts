@@ -43,11 +43,13 @@ import {
   type ModelCatalog,
   type ModelsResponse,
   type PersonaResponse,
+  type PickFolderResponse,
   type PmMode,
   type PostMessageResponse,
   type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
 
@@ -69,6 +71,8 @@ export interface UiServerOptions {
   logger?: boolean;
   /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
   models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
+  /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript；测试里传假的。 */
+  folderPicker?: FolderPicker;
 }
 
 /** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
@@ -270,6 +274,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
   const expectedToken = digest(opts.token);
+  const folderPicker = opts.folderPicker ?? createFolderPicker();
   const app = Fastify({ logger: opts.logger ?? false });
 
   const listeningPort = (): number | undefined => {
@@ -308,7 +313,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (path.startsWith("/api/") && !isAuthenticated(req)) return fail(reply, 401, "unauthorized");
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError, req, reply) => {
+    if (err instanceof PickFolderError) return fail(reply, err.statusCode, err.message);
     if (err instanceof ConversationNotFoundError) return fail(reply, 404, err.code);
     if (err instanceof UploadError) return fail(reply, err.statusCode, err.message, err.statusCode === 400 ? "invalid" : undefined);
     // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口的 413 照旧）
@@ -432,6 +438,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {
       const result = ledger.revertPersonaChange(parseId((req.params as { id?: unknown }).id, "persona change id"));
       return { changed: result.change !== null, persona: result.persona };
+    });
+
+    routes.post(API_PATHS.pickFolder, async (req): Promise<PickFolderResponse> => {
+      const raw = parseObjectBody(req.body ?? {}, ["startDir"]);
+      const startDir = raw.startDir === undefined ? undefined : requireBoundedBytes(raw.startDir, "startDir", MAX_PATH_BYTES);
+      return { path: await folderPicker.pick(startDir) };
     });
 
     routes.post("/api/messages/:id/retry", async (req, reply) => {

@@ -23,6 +23,7 @@ import {
   type LedgerErrorCode,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
 import { createUiServer, startUiServer } from "./server.ts";
 
@@ -1534,5 +1535,93 @@ describe("GET /api/models（模型名单）", () => {
 
   it("要登录", async () => {
     expect((await call("GET", "/api/models", { cookie: null })).statusCode).toBe(401);
+  });
+});
+
+describe("POST /api/pick-folder（选主文件夹）", () => {
+  let picked: Array<string | undefined>;
+  let pickResult: () => Promise<string | null>;
+  let picker: FolderPicker;
+  let other: FastifyInstance;
+
+  beforeEach(async () => {
+    picked = [];
+    pickResult = async () => "/Users/me/code/foo";
+    picker = {
+      pick: (startDir) => {
+        picked.push(startDir);
+        return pickResult();
+      },
+    };
+    other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, folderPicker: picker });
+    await other.ready();
+  });
+
+  afterEach(async () => {
+    await other.close();
+  });
+
+  async function pick(opts: ReqOpts = {}) {
+    const headers: Record<string, string> = { host: opts.host ?? HOST, "content-type": "application/json" };
+    const cookie = opts.cookie === undefined ? COOKIE : opts.cookie;
+    if (cookie !== null) headers.cookie = cookie;
+    const origin = opts.origin === undefined ? ORIGIN : opts.origin;
+    if (origin !== null) headers.origin = origin;
+    return other.inject({ method: "POST", url: "/api/pick-folder", headers, payload: opts.rawBody ?? JSON.stringify(opts.body ?? {}) });
+  }
+
+  it("正常：回选中的路径，请求里的 startDir 交给选择器", async () => {
+    const res = await pick({ body: { startDir: "/Users/me/code" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: "/Users/me/code/foo" });
+    expect(picked).toEqual(["/Users/me/code"]);
+  });
+
+  it("没带 startDir、请求体空：也行", async () => {
+    expect((await pick()).json()).toEqual({ path: "/Users/me/code/foo" });
+    const res = await other.inject({ method: "POST", url: "/api/pick-folder", headers: { host: HOST, cookie: COOKIE, origin: ORIGIN } });
+    expect(res.statusCode).toBe(200);
+    expect(picked).toEqual([undefined, undefined]);
+  });
+
+  it("取消（或超时）：200，path 是 null", async () => {
+    pickResult = async () => null;
+    const res = await pick();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: null });
+  });
+
+  it("已经有一个窗口开着：409 加原因；起不来 osascript：501 / 500 加原因", async () => {
+    pickResult = async () => {
+      throw new PickFolderError(409, "已经有一个窗口");
+    };
+    let res = await pick();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "已经有一个窗口" });
+    pickResult = async () => {
+      throw new PickFolderError(501, "没有 osascript");
+    };
+    res = await pick();
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: "没有 osascript" });
+    pickResult = async () => {
+      throw new PickFolderError(500, "弹不出窗口：boom");
+    };
+    expect((await pick()).json()).toEqual({ error: "弹不出窗口：boom" });
+  });
+
+  it("请求体不合法：400；多余字段 400", async () => {
+    expect((await pick({ body: { startDir: 5 } })).statusCode).toBe(400);
+    expect((await pick({ body: { startDir: "/" + "a".repeat(MAX_PATH_BYTES) } })).statusCode).toBe(400);
+    expect((await pick({ body: { other: 1 } })).statusCode).toBe(400);
+    expect(picked).toEqual([]);
+  });
+
+  it("没登录 401、Origin 不对或没带 403、Host 不对 403，都不会弹窗", async () => {
+    expect((await pick({ cookie: null })).statusCode).toBe(401);
+    expect((await pick({ origin: null })).statusCode).toBe(403);
+    expect((await pick({ origin: "http://127.0.0.1:4001" })).statusCode).toBe(403);
+    expect((await pick({ host: "evil.example:4000" })).statusCode).toBe(403);
+    expect(picked).toEqual([]);
   });
 });
