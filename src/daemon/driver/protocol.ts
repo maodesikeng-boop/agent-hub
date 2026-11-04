@@ -10,6 +10,7 @@ import type {
   LaunchFiles,
   RateLimitInfo,
   RateLimitWindow,
+  TokenUsage,
 } from "../../shared/index.ts";
 
 /**
@@ -145,6 +146,46 @@ export function parseRateLimit(info: unknown): RateLimitInfo | null {
     resetsAt: typeof i.resetsAt === "number" ? i.resetsAt : null,
     windows,
   };
+}
+
+const tokenCount = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** claude 的 usage 对象（result.usage、assistant 的 message.usage）里的四个数，缺了或不是数字当 0。 */
+export function parseUsage(usage: unknown): Omit<TokenUsage, "context"> {
+  const u = typeof usage === "object" && usage !== null ? (usage as Record<string, unknown>) : {};
+  return {
+    input: tokenCount(u.input_tokens),
+    cacheRead: tokenCount(u.cache_read_input_tokens),
+    cacheWrite: tokenCount(u.cache_creation_input_tokens),
+    output: tokenCount(u.output_tokens),
+  };
+}
+
+/**
+ * 累计用量加上这一轮的 result.usage。累计只认 result：同一条 assistant 消息会分几个事件推出来，而且 assistant 里的
+ * output_tokens 是流式开头的快照（实测只有几个），result 的才是这一轮的总数。
+ */
+export function addTurnUsage(total: TokenUsage, resultUsage: unknown): TokenUsage {
+  const turn = parseUsage(resultUsage);
+  return {
+    input: total.input + turn.input,
+    cacheRead: total.cacheRead + turn.cacheRead,
+    cacheWrite: total.cacheWrite + turn.cacheWrite,
+    output: total.output + turn.output,
+    context: total.context,
+  };
+}
+
+/**
+ * 一个 assistant 事件的上下文大小：这次请求的 input + 缓存读 + 缓存写。子 agent 的消息（parent_tool_use_id 不是 null）
+ * 和没带 usage 的返回 null，不更新。
+ */
+export function assistantContext(obj: Record<string, unknown>): number | null {
+  if (obj.parent_tool_use_id !== undefined && obj.parent_tool_use_id !== null) return null;
+  const usage = (obj.message as { usage?: unknown } | undefined)?.usage;
+  if (typeof usage !== "object" || usage === null) return null;
+  const { input, cacheRead, cacheWrite } = parseUsage(usage);
+  return input + cacheRead + cacheWrite;
 }
 
 /**

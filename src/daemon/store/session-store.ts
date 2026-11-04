@@ -1,6 +1,7 @@
 // SessionStore：驱动层读写 agent_sessions 的一行。
 import type { AgentSessionPatch, SessionStore } from "../../shared/store.ts";
-import type { AgentRole, AgentSessionRow, RateLimitInfo, SessionId, SessionStatus } from "../../shared/domain.ts";
+import { EMPTY_TOKEN_USAGE } from "../../shared/domain.ts";
+import type { AgentRole, AgentSessionRow, RateLimitInfo, SessionId, SessionStatus, TokenUsage } from "../../shared/domain.ts";
 import type { Db, SqlValue } from "./db.ts";
 
 export interface AgentSessionDbRow {
@@ -21,6 +22,7 @@ export interface AgentSessionDbRow {
   has_completed_turn: number;
   last_event_at: number | null;
   rate_limit: string | null;
+  token_usage: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -44,6 +46,7 @@ export function toAgentSessionRow(row: AgentSessionDbRow): AgentSessionRow {
     hasCompletedTurn: row.has_completed_turn === 1,
     lastEventAt: row.last_event_at,
     rateLimit: row.rate_limit === null ? null : (JSON.parse(row.rate_limit) as RateLimitInfo),
+    usage: row.token_usage === null ? { ...EMPTY_TOKEN_USAGE } : { ...EMPTY_TOKEN_USAGE, ...(JSON.parse(row.token_usage) as Partial<TokenUsage>) },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -60,6 +63,7 @@ const PATCH_COLUMNS: { [K in keyof Required<AgentSessionPatch>]: (value: AgentSe
   hasCompletedTurn: (v) => ["has_completed_turn", v ? 1 : 0],
   lastEventAt: (v) => ["last_event_at", v ?? null],
   rateLimit: (v) => ["rate_limit", v == null ? null : JSON.stringify(v)],
+  usage: (v) => ["token_usage", v == null ? null : JSON.stringify(v)],
 };
 
 export interface SessionStoreOptions {

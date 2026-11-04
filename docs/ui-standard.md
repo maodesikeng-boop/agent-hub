@@ -117,6 +117,10 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 `PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
 
+列表型浮层（对话页顶栏的 Worker 面板）：宽 360px、窄屏最宽 `100vw - 24px`、最高 `min(70vh, 480px)` 内部滚动；里面放一个 `SettingsGroup`（第 9 条），一行一项、整行可点。
+行第一行：名字（15px、500，当前打开的 600）靠左，状态（13.5px，在忙用主色、其余灰）靠右；第二行：13.5px 灰，左边说明（超长 `truncate`），右边数字（`tabular-nums`，`title` 放明细）。
+当前打开的行 `bg-sidebar-active`，悬停 `bg-sidebar-hover`，已结束的 `opacity-60`。点浮层外面、按 Esc、再点触发按钮都收起。
+
 ## 12. 交互和状态
 
 - 悬停：浅灰底（`hover:bg-sidebar-hover` / `hover:bg-accent`），不变色、不放大。

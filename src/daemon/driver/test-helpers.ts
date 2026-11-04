@@ -12,6 +12,7 @@ import type {
   SessionId,
   SessionStore,
 } from "../../shared/index.ts";
+import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
 import { createClaudeDriver, type ClaudeDriver } from "./index.ts";
 
@@ -184,6 +185,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       hasCompletedTurn: false,
       lastEventAt: null,
       rateLimit: null,
+      usage: { ...EMPTY_TOKEN_USAGE },
       createdAt: Date.now(),
       updatedAt: Date.now(),
       ...patch,
