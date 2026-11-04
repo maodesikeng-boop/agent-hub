@@ -27,9 +27,11 @@ import {
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   bundledModelCatalog,
+  FILE_ACTIONS,
   isImageMime,
   normalizeName,
   sentFileMime,
+  sentFilesOf,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
@@ -38,6 +40,8 @@ import {
   type CreatePmResponse,
   type EditPersonaRequest,
   type EditPersonaResponse,
+  type FileAction,
+  type FileActionResponse,
   type Ledger,
   type LedgerErrorCode,
   type ModelCatalog,
@@ -50,6 +54,7 @@ import {
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
+import { OPEN_NOT_ALLOWED_MESSAGE, OpenNotAllowed, OpenTargetMissing, performFileAction, runOpenCommand, type RunOpen } from "../open-file.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
 
@@ -73,6 +78,8 @@ export interface UiServerOptions {
   models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript；测试里传假的。 */
   folderPicker?: FolderPicker;
+  /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")；测试里换成假的，不真的打开。 */
+  runOpen?: RunOpen;
 }
 
 /** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
@@ -247,17 +254,27 @@ const SVG_MIME = "image/svg+xml";
  */
 const SVG_CSP = `${STORED_FILE_CSP}; style-src 'unsafe-inline'`;
 
+/** 预览窗取文件时带 ?inline=1：pdf、html 才内联（放进 iframe 看），别的照旧当下载。 */
+const wantsPreview = (req: FastifyRequest) => (req.query as { inline?: unknown }).inline === "1";
+/** html 预览：脚本能跑，但 sandbox 没有 allow-same-origin，页面是“不透明来源”：拿不到 cookie、请求界面接口没有登录也过不了 Origin 检查。 */
+const HTML_PREVIEW_CSP = "sandbox allow-scripts";
+
 /**
  * 发一个存在数据目录里的文件（上传的、agent 发出的副本）。文件不可信：只有图片内联显示，别的一律当下载；
  * 禁止嗅探、CSP 沙箱化，直接打开地址也不会当网页执行（svg 里的脚本也不跑）。支持单段 Range（视频、大 PDF 拖动用）。
+ * 例外：预览窗带 ?inline=1 取的 pdf 内联（CSP 不变，实测浏览器自带查看器在这样的响应里能渲染），html 内联并换成 HTML_PREVIEW_CSP。
  */
 function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Attachment, "name" | "path" | "size" | "mime">) {
-  const inline = isImageMime(file.mime);
+  const preview = wantsPreview(req);
+  const inline = isImageMime(file.mime) || (preview && (file.mime === "application/pdf" || file.mime === "text/html"));
+  // 预览 html 是页面：没写 charset 的中文页面会按 Latin-1 显示成乱码，所以明说 UTF-8
+  const contentType = preview && file.mime === "text/html" ? `${file.mime}; charset=utf-8` : file.mime;
+  const csp = file.mime === SVG_MIME ? SVG_CSP : preview && file.mime === "text/html" ? HTML_PREVIEW_CSP : STORED_FILE_CSP;
   reply
-    .header("content-type", file.mime)
+    .header("content-type", contentType)
     .header("content-disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`)
     .header("x-content-type-options", "nosniff")
-    .header("content-security-policy", file.mime === SVG_MIME ? SVG_CSP : STORED_FILE_CSP)
+    .header("content-security-policy", csp)
     .header("cache-control", "private, max-age=3600")
     .header("accept-ranges", "bytes");
   const range = parseRange(req.headers.range, file.size);
@@ -272,6 +289,7 @@ function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Att
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
+  const runOpen = opts.runOpen ?? runOpenCommand;
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
   const expectedToken = digest(opts.token);
   const folderPicker = opts.folderPicker ?? createFolderPicker();
@@ -360,7 +378,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     uploads.get("/api/uploads/:id/*", async (req, reply) => {
       const attachment = resolveUpload(uploadsDir, String((req.params as { id?: unknown }).id ?? ""));
       if (attachment === null) return fail(reply, 404, "not_found");
-      return sendStoredFile(req, reply, attachment);
+      // 预览窗（?inline=1）按扩展名认类型：上传时只认图片，pdf、html 之类也要能放进 iframe
+      const mime = wantsPreview(req) ? sentFileMime(attachment.name) : attachment.mime;
+      return sendStoredFile(req, reply, { ...attachment, mime });
     });
   });
 
@@ -413,6 +433,51 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         text,
         ...(attachments.length > 0 ? { attachments: attachments as NonNullable<(typeof attachments)[number]>[] } : {}),
       });
+    });
+
+    // 在 Finder 中显示 / 用默认程序打开（open-file.ts）。只收“哪条消息的第几个文件”或上传编号，不收路径。
+    const doFileAction = async (reply: FastifyReply, run: () => Promise<FileActionResponse>) => {
+      try {
+        return await run();
+      } catch (error) {
+        if (error instanceof OpenTargetMissing) return fail(reply, 404, "not_found");
+        if (error instanceof OpenNotAllowed) return fail(reply, 403, OPEN_NOT_ALLOWED_MESSAGE);
+        console.error("ui-server open failed:", error);
+        return fail(reply, 500, "没能打开这个文件");
+      }
+    };
+    const parseAction = (raw: unknown): FileAction | null => ((FILE_ACTIONS as readonly unknown[]).includes(raw) ? (raw as FileAction) : null);
+
+    routes.post("/api/messages/:id/files/:index/:action", async (req, reply) => {
+      const { id, index, action } = req.params as Record<string, unknown>;
+      const act = parseAction(action);
+      const message = typeof id === "string" && POSITIVE_INT.test(id) ? ledger.getMessage(Number(id)) : null;
+      const file = message === null || typeof index !== "string" || !NON_NEGATIVE_INT.test(index) ? undefined : sentFilesOf(message)[Number(index)];
+      if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");
+      const copy = resolveUpload(sentFilesDir, file.id);
+      const sessionId = message.sessionId;
+      return doFileAction(reply, () =>
+        performFileAction(
+          act,
+          {
+            original: file.path,
+            isAllowed: (real) => sessionId !== null && ledger.sentFileAllows(sessionId, real),
+            copy: copy?.path ?? null,
+            name: file.name,
+          },
+          runOpen,
+        ),
+      );
+    });
+
+    routes.post("/api/attachments/:id/:action", async (req, reply) => {
+      const { id, action } = req.params as Record<string, unknown>;
+      const act = parseAction(action);
+      const attachment = resolveUpload(uploadsDir, String(id ?? ""));
+      if (act === null || attachment === null) return fail(reply, 404, "not_found");
+      return doFileAction(reply, () =>
+        performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen),
+      );
     });
 
     routes.post("/api/conversations/:id/stop", async (req, reply) => {

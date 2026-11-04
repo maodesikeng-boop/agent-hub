@@ -1,5 +1,6 @@
 // agent 发来的文件：Markdown 里对上 meta.files 的图片内联、链接换成文件卡片；老消息照原样（shared/sent-files.ts、components/Markdown.tsx）。
 import { render, screen, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { API_PATHS, SENT_FILE_REASONS, type SentFile } from "../shared/index.ts";
 import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
@@ -27,7 +28,7 @@ function urls(container: HTMLElement) {
 }
 
 describe("图片内联", () => {
-  it("png：直接显示在正文里，地址是取副本的接口，点开在新窗口看大图", () => {
+  it("png：直接显示在正文里，点开是预览窗里的大图，窗里有下载、在 Finder 中显示、用默认程序打开", async () => {
     const file = sent({ href: "/tmp/shot.png", name: "shot.png" });
     const { container } = agentSays("做好了：\n\n![首页截图](/tmp/shot.png)", [file]);
     const img = screen.getByRole("img", { name: "首页截图" });
@@ -35,10 +36,13 @@ describe("图片内联", () => {
     expect(img).toHaveAttribute("src", url);
     expect(img.className).toContain("max-h-[480px]");
     expect(img.className).toContain("max-w-full");
-    const link = img.closest("a")!;
-    expect(link).toHaveAttribute("href", url);
-    expect(link).toHaveAttribute("target", "_blank");
     expect(urls(container).src).toEqual([url]);
+    await userEvent.click(img.closest("button")!);
+    const dialog = screen.getByRole("dialog", { name: "shot.png" });
+    expect(within(dialog).getByRole("img", { name: "shot.png" })).toHaveAttribute("src", `${url}?inline=1`);
+    expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("href", url);
+    expect(within(dialog).getByRole("button", { name: /在 Finder 中显示/ })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: /用默认程序打开/ })).toBeEnabled();
   });
 
   it("几张图：各自显示，对得上各自的副本", () => {
@@ -63,32 +67,32 @@ describe("图片内联", () => {
 });
 
 describe("文件卡片", () => {
-  it("pdf、md、csv：链接换成卡片（文件名、大小），点了下载", () => {
+  it("pdf、md、csv：链接换成卡片（文件名、大小），点了打开预览窗", async () => {
     const files = [
       sent({ href: "/p/报告.pdf", name: "报告.pdf", mime: "application/pdf", id: "0000000000000001", size: 1536 }),
       sent({ href: "/p/说明.md", name: "说明.md", mime: "text/markdown", id: "0000000000000002" }),
       sent({ href: "/p/数据.csv", name: "数据.csv", mime: "text/csv", id: "0000000000000003" }),
     ];
     agentSays("见 [报告](/p/报告.pdf)、[说明](/p/说明.md) 和 ![表](/p/数据.csv)", files);
-    for (const f of files) {
-      const card = screen.getByRole("link", { name: new RegExp(f.name) });
-      expect(card).toHaveAttribute("href", API_PATHS.sentFile(f.id!, f.name));
-      expect(card).toHaveAttribute("download", f.name);
-      expect(card).toHaveAttribute("data-file-card");
-    }
-    expect(screen.getByRole("link", { name: /报告\.pdf/ })).toHaveTextContent("1.5 KB");
+    expect(screen.getAllByRole("button").filter((b) => b.hasAttribute("data-file-card"))).toHaveLength(3);
+    expect(screen.getByRole("button", { name: /报告\.pdf/ })).toHaveTextContent("1.5 KB");
+    await userEvent.click(screen.getByRole("button", { name: /报告\.pdf/ }));
+    const dialog = screen.getByRole("dialog", { name: "报告.pdf" });
+    expect(within(dialog).getByTitle("报告.pdf")).toHaveAttribute("src", `${API_PATHS.sentFile("0000000000000001", "报告.pdf")}?inline=1`);
+    expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("download", "报告.pdf");
   });
 
-  it("普通链接写的图片：卡片带缩略图（不内联成大图），同一张图又用 ![]() 写了的照样内联", () => {
+  it("普通链接写的图片：卡片带缩略图（不内联成大图），点了是预览窗里的大图，同一张图又用 ![]() 写了的照样内联", async () => {
     const file = sent({ href: "/tmp/c.png", name: "c.png" });
     const { container } = agentSays("![图](/tmp/c.png)（路径 [c.png](/tmp/c.png)）", [file]);
     const url = API_PATHS.sentFile(file.id!, "c.png");
-    const card = screen.getByRole("link", { name: /c\.png.*2\.0 KB/ });
+    const card = screen.getByRole("button", { name: /c\.png.*2\.0 KB/ });
     expect(card).toHaveAttribute("data-file-card");
-    expect(card).toHaveAttribute("href", url);
-    expect(card).not.toHaveAttribute("download");
+    expect(card.querySelector("img")).toHaveAttribute("src", url);
     expect(card.querySelector("img")?.className).toContain("size-10");
     expect(container.querySelectorAll("[data-sent-image]")).toHaveLength(1);
+    await userEvent.click(card);
+    expect(within(screen.getByRole("dialog")).getByRole("img", { name: "c.png" })).toHaveAttribute("src", `${url}?inline=1`);
   });
 
   it("没存下来的：卡片写原因，不是链接，不发请求", () => {

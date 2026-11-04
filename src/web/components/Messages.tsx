@@ -210,7 +210,7 @@ export function MessageBubble({
   return (
     <AgentRow identity={identity} head={head} as="article" title={time}>
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={message.text} files={files} />
+        <Markdown text={message.text} files={files} messageId={message.id} />
       </div>
     </AgentRow>
   );

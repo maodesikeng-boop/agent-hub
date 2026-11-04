@@ -125,3 +125,15 @@ describe("agent 文字消息入库时存副本", () => {
     expect(sentFilesOf(message).map((f) => f.status)).toEqual(["saved", "saved", "not_allowed"]);
   });
 });
+
+describe("sentFileAllows：打开原文件前再查一次", () => {
+  it("项目文件夹里的能分享；文件夹外、敏感路径、数据目录的 state/ 不能；会话不存在 false", () => {
+    const inside = file(join(main, "a.txt"));
+    const outside = file(join(root, "elsewhere", "b.txt"));
+    const secret = file(join(dataHome, "state", "ui-token"));
+    expect(ledger.sentFileAllows(pm.sessionId, inside)).toBe(true);
+    expect(ledger.sentFileAllows(pm.sessionId, outside)).toBe(false);
+    expect(ledger.sentFileAllows(pm.sessionId, secret)).toBe(false);
+    expect(ledger.sentFileAllows(9999, inside)).toBe(false);
+  });
+});

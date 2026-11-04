@@ -58,11 +58,20 @@ const SENT_FILE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   json: "application/json",
   html: "text/html",
   htm: "text/html",
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  m4a: "audio/mp4",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
 };
 
 /**
  * 发出去的文件按扩展名定类型：位图同上传（mimeOfFileName），再加上 svg（当图片显示，只用 <img> 加载，带 CSP sandbox，脚本不执行）
- * 和几种常见文档；别的 application/octet-stream。只有 image/* 内联显示，别的这一步都当下载。
+ * 、常见文档和音视频；别的 application/octet-stream。直接取文件时只有 image/* 内联，别的当下载（预览窗带 ?inline=1 取 pdf、html，见 daemon/ui-server/server.ts）。
  */
 export function sentFileMime(name: string): string {
   const image = mimeOfFileName(name);

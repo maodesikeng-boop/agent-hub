@@ -66,6 +66,13 @@ export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
 /** 一条消息最多处理几个文件链接（按出现顺序，多出来的照普通链接显示）。 */
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
 
+// ---- 预览窗（web/components/FilePreview.tsx）----
+
+/** 文本、代码、Markdown、CSV 预览最多读多少字节：大文件只取前面这么多（Range 请求）。 */
+export const MAX_PREVIEW_TEXT_BYTES = 1024 * 1024;
+/** CSV 预览最多显示多少行数据（不含表头）。 */
+export const MAX_PREVIEW_CSV_ROWS = 1000;
+
 // ---- worktree 准备命令（hub project setup，见 src/daemon/setup/setup.ts）----
 
 /** 准备命令（hub project setup --stdin 的正文）最多多大（UTF-8 字节）。 */

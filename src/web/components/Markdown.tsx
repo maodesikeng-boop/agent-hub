@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ComponentProps } from "react";
+import { createContext, useContext, useMemo, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../../shared/index.ts";
 import { formatBytes } from "../upload.ts";
 import { FileCard } from "./Attachments.tsx";
+import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 
 /** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或文件卡片。 */
 const SENT_FILE_ATTR = "data-sent-file";
@@ -68,30 +69,43 @@ function remarkSentFiles(files: SentFile[]) {
   };
 }
 
-/** 这条消息的 meta.files：模块级的 a、img 组件从这里取（组件引用不变，重渲染时内联图、卡片不卸载重建）。 */
-const SentFilesContext = createContext<SentFile[]>([]);
+/** 这条消息的 meta.files 和消息编号（预览窗的“在 Finder 中显示”按它找文件）：模块级的 a、img 组件从这里取（组件引用不变，重渲染时内联图、卡片不卸载重建）。 */
+const SentFilesContext = createContext<{ files: SentFile[]; messageId: number | undefined }>({ files: [], messageId: undefined });
 
-function useSentFile(props: object): SentFile | undefined {
-  const files = useContext(SentFilesContext);
+function useSentFile(props: object): { file: SentFile; index: number; messageId: number | undefined } | undefined {
+  const { files, messageId } = useContext(SentFilesContext);
   const raw = (props as Record<string, unknown>)[SENT_FILE_ATTR];
-  return typeof raw === "string" ? files[Number(raw)] : undefined;
+  const index = typeof raw === "string" ? Number(raw) : -1;
+  const file = files[index];
+  return file === undefined ? undefined : { file, index, messageId };
+}
+
+/** 点开预览窗要的信息；没有消息编号（不是从消息里渲染的）就没有 Finder / 默认程序按钮。 */
+function previewOf(file: SentFile, url: string, index: number, messageId: number | undefined): PreviewFile {
+  return { name: file.name, mime: file.mime, size: file.size, url, target: messageId === undefined ? null : { kind: "sent", messageId, index } };
 }
 
 /**
  * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（宽同正文、最高 480px，点开看大图）；
- * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了下载；没存下来的写原因。
+ * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了看预览；没存下来的写原因。大图和预览是同一个预览窗。
  */
-function SentFileView({ file, inline, alt }: { file: SentFile; inline: boolean; alt?: string }) {
+function SentFileView({ sent, inline, alt }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string }) {
+  const { file, index, messageId } = sent;
+  const [open, setOpen] = useState(false);
   if (file.status === "saved" && file.id !== null) {
     const url = sentFileUrl({ id: file.id, name: file.name });
+    const preview = previewOf(file, url, index, messageId);
     if (inline && isSentImage(file)) {
       return (
-        <a href={url} target="_blank" rel="noreferrer" data-sent-image className="my-1.5 block w-fit max-w-full">
-          <img src={url} alt={alt || file.name} loading="lazy" className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
-        </a>
+        <>
+          <button type="button" onClick={() => setOpen(true)} data-sent-image className="my-1.5 block w-fit max-w-full cursor-pointer">
+            <img src={url} alt={alt || file.name} loading="lazy" className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
+          </button>
+          <FilePreview file={preview} open={open} onOpenChange={setOpen} />
+        </>
       );
     }
-    return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} href={url} className="my-1.5 w-fit max-w-full" />;
+    return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} preview={preview} className="my-1.5 w-fit max-w-full" />;
   }
   return <FileCard name={file.name} mime={file.mime} detail={SENT_FILE_REASONS[file.status as Exclude<SentFile["status"], "saved">]} className="my-1.5 w-fit max-w-full" />;
 }
@@ -103,14 +117,14 @@ function withoutNode<T extends object>(props: T): Omit<T, "node"> {
 
 /** 链接一律在新窗口打开；noopener noreferrer 防止新页面拿到当前页面的 window。对上 meta.files 的换成文件卡片。 */
 function Link(props: ComponentProps<"a">) {
-  const file = useSentFile(props);
-  if (file !== undefined) return <SentFileView file={file} inline={false} />;
+  const sent = useSentFile(props);
+  if (sent !== undefined) return <SentFileView sent={sent} inline={false} />;
   return <a {...withoutNode(props)} target="_blank" rel="noopener noreferrer" />;
 }
 
 function Image(props: ComponentProps<"img">) {
-  const file = useSentFile(props);
-  if (file !== undefined) return <SentFileView file={file} inline alt={props.alt} />;
+  const sent = useSentFile(props);
+  if (sent !== undefined) return <SentFileView sent={sent} inline alt={props.alt} />;
   return <img {...withoutNode(props)} />;
 }
 
@@ -122,11 +136,13 @@ const NO_FILES: SentFile[] = [];
  * agent 消息的 Markdown。不加 rehype-raw：消息里的原始 HTML 不会变成元素，当字面文字显示；
  * 链接地址由 react-markdown 默认的过滤处理（javascript: 之类不会带 href）。
  * files：这条消息的 meta.files（agent 发来的文件），对上的图片内联、链接换成文件卡片；老消息没有，照原样显示。
+ * messageId：这条消息的编号，预览窗用它找文件做“在 Finder 中显示”；预览窗里渲染 .md 文件时不带（没有这两个按钮的对象）。
  */
-export function Markdown({ text, files = NO_FILES }: { text: string; files?: SentFile[] }) {
+export function Markdown({ text, files = NO_FILES, messageId }: { text: string; files?: SentFile[]; messageId?: number }) {
   const remarkPlugins = useMemo(() => [remarkGfm, remarkSentFiles(files)], [files]);
+  const context = useMemo(() => ({ files, messageId }), [files, messageId]);
   return (
-    <SentFilesContext value={files}>
+    <SentFilesContext value={context}>
       <div className="markdown">
         <ReactMarkdown remarkPlugins={remarkPlugins} components={COMPONENTS}>
           {text}
