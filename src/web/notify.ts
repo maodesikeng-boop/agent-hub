@@ -14,7 +14,36 @@ export const LAST_SEEN_KEY = `${PRODUCT_NAME}:lastSeen`;
 /** 通知的 tag：同一个项目经理只留最新的一条。 */
 const notificationTag = (pmId: number | null, conversationId: ConversationId) => (pmId === null ? `conversation-${conversationId}` : `pm-${pmId}`);
 
+/** 用户有没有开通知，存在这个 localStorage 键里（"1" 开，"0" 关）；没有值或值不认识就看浏览器的授权。 */
+export const NOTIFY_ENABLED_KEY = `${PRODUCT_NAME}:notifyEnabled`;
+
 export type NotifyPermission = NotificationPermission | "unsupported";
+
+/** 左栏设置面板里“通知”开关要的东西。 */
+export interface NotifySettings {
+  permission: NotifyPermission;
+  /** 开关现在是开还是关：浏览器已授权，并且用户没关。 */
+  enabled: boolean;
+  /** 用户拨开关。打开时浏览器还没授权就申请，被拒就仍然是关。 */
+  setEnabled: (on: boolean) => Promise<void>;
+}
+
+function loadNotifyPref(): boolean | null {
+  try {
+    const value = localStorage.getItem(NOTIFY_ENABLED_KEY);
+    return value === "1" ? true : value === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveNotifyPref(on: boolean): void {
+  try {
+    localStorage.setItem(NOTIFY_ENABLED_KEY, on ? "1" : "0");
+  } catch {
+    // 存不了：这次打开期间还是有效，重开以后按浏览器的授权来
+  }
+}
 
 function loadLastSeen(): LastSeen {
   try {
@@ -68,6 +97,7 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
   const foreground = useForeground();
   const [lastSeen, setLastSeen] = useState(loadLastSeen);
   const [permission, setPermission] = useState(currentPermission);
+  const [notifyPref, setNotifyPref] = useState(loadNotifyPref);
   const [waiting, setWaiting] = useState<ReadonlySet<ConversationId>>(new Set());
 
   // 网页在前台、正开着这个对话的时候，它的每条新消息都算看过
@@ -85,17 +115,19 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
   const candidates = useMemo(() => (ready ? waitingConversations(state, lastSeen) : []), [ready, state, lastSeen]);
   const candidatesKey = candidates.join(",");
 
-  const latest = useRef({ state, viewing, foreground, onOpen });
-  latest.current = { state, viewing, foreground, onOpen };
+  // 没存过偏好的老用户：授权过就是开
+  const notifyEnabled = permission === "granted" && notifyPref !== false;
+  const latest = useRef({ state, viewing, foreground, onOpen, notifyEnabled });
+  latest.current = { state, viewing, foreground, onOpen, notifyEnabled };
   /** 已经算“等你”的（停稳了的，和刚打开网页时本来就在等的）。 */
   const settled = useRef(new Set<ConversationId>());
   const timers = useRef(new Map<ConversationId, ReturnType<typeof setTimeout>>());
   const opened = useRef(false);
 
   const announce = useCallback((conversationId: ConversationId) => {
-    const { state, viewing, foreground, onOpen } = latest.current;
+    const { state, viewing, foreground, onOpen, notifyEnabled } = latest.current;
     if (foreground && viewing === conversationId) return;
-    if (currentPermission() !== "granted") return;
+    if (!notifyEnabled || currentPermission() !== "granted") return;
     const entry = listConversations(state).find((e) => e.id === conversationId);
     if (!entry) return;
     try {
@@ -156,16 +188,26 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
     document.title = waiting.size > 0 ? `(${waiting.size}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [waiting]);
 
-  /** 申请通知权限；浏览器要求由用户的操作触发（点按钮），所以只在点的时候调。 */
-  const requestPermission = useCallback(async () => {
-    if (typeof Notification === "undefined") return;
-    try {
-      await Notification.requestPermission();
-    } catch {
-      // 被浏览器拒了：按当前的权限状态走
+  /** 拨通知开关；浏览器要求申请权限由用户的操作触发，所以只在拨的时候申请。 */
+  const setEnabled = useCallback(async (on: boolean) => {
+    if (!on) {
+      saveNotifyPref(false);
+      setNotifyPref(false);
+      return;
     }
-    setPermission(currentPermission());
+    if (currentPermission() === "default") {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        // 被浏览器拒了：按当前的权限状态走
+      }
+      setPermission(currentPermission());
+    }
+    const granted = currentPermission() === "granted";
+    saveNotifyPref(granted);
+    setNotifyPref(granted);
   }, []);
 
-  return { waiting, permission, requestPermission };
+  const notify: NotifySettings = { permission, enabled: notifyEnabled, setEnabled };
+  return { waiting, notify };
 }
