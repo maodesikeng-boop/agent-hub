@@ -9,6 +9,7 @@ import { runForceKill } from "./force-kill.ts";
 import { runM1 } from "./m1.ts";
 import { runM2 } from "./m2.ts";
 import { runM3 } from "./m3.ts";
+import { runUploads } from "./uploads.ts";
 import { PRODUCT_NAME } from "../../src/shared/index.ts";
 
 const filters = process.argv.slice(2);
@@ -34,6 +35,7 @@ try {
   await runM2(outcomes, only);
   await runForceKill(outcomes, only);
   await runM3(outcomes, only);
+  await runUploads(outcomes, only);
 } catch (error) {
   console.error("smoke 没跑完：", error);
   exitCode = 1;

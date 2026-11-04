@@ -5,7 +5,9 @@ import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Avatar } from "./Avatar.tsx";
+import type { StagedFiles } from "../upload.ts";
 import { Composer } from "./Composer.tsx";
+import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { StatusLine, type StopPhase } from "./StatusLine.tsx";
@@ -17,6 +19,7 @@ export function Conversation({
   session,
   older,
   draft,
+  staging,
   stats,
   notices,
   onDraftChange,
@@ -33,12 +36,15 @@ export function Conversation({
   session: SessionState | null;
   older: OlderState | undefined;
   draft: string;
+  /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
+  staging: StagedFiles;
   /** 标题栏右边的额度和在跑的 Worker 数。 */
   stats: React.ReactNode;
   /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
-  onSend: (conversationId: ConversationId, text: string) => void;
+  /** 只有文字：同步发出（返回 undefined）；带文件：返回 Promise，传完、发出才 resolve，失败 reject（Error.message 给用户看）。 */
+  onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
@@ -66,7 +72,7 @@ export function Conversation({
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label={entry.name}>
+    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
       <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
         {entry.pm ? (
           <button
@@ -114,10 +120,11 @@ export function Conversation({
         <Composer
           value={draft}
           placeholder={`给 ${entry.name} 发消息`}
+          staging={staging}
           onChange={(v) => onDraftChange(id, v)}
-          onSend={(text) => onSend(id, text)}
+          onSend={(text, files) => onSend(id, text, files)}
         />
       </div>
-    </section>
+    </FileDropZone>
   );
 }

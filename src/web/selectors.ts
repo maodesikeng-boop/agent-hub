@@ -1,5 +1,6 @@
 // 从 HubState 算出界面要用的东西。
 import {
+  attachmentsOf,
   isQuotaExhausted,
   workerEventOf,
   type ConversationId,
@@ -65,6 +66,9 @@ export function listConversations(state: HubState): ConversationEntry[] {
 export function previewText(entry: ConversationEntry): string {
   const last = entry.lastMessage;
   if (!last) return "";
+  // 只发了文件没写字的用户消息：写文件名
+  const files = attachmentsOf(last);
+  if (last.text.trim() === "" && files.length > 0) return `[文件] ${files.map((f) => f.name).join("、")}`;
   return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
 }
 

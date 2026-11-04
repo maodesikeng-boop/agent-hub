@@ -12,6 +12,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { failingHealth, listConversations, pendingOf, quotaUsage, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
+import { useStagingStore } from "./upload.ts";
 import { useHub } from "./useHub.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
@@ -21,6 +22,7 @@ export function App() {
   const { state } = hub;
   const [selected, setSelected] = useState<ConversationId | null>(null);
   const [drafts, setDrafts] = useState<Record<ConversationId, string>>({});
+  const staging = useStagingStore<ConversationId>();
   /** 打开着的项目经理资料页；选了左栏的对话就回到对话。 */
   const [profilePm, setProfilePm] = useState<PmId | null>(null);
   const [creating, setCreating] = useState(false);
@@ -137,12 +139,22 @@ export function App() {
             session={sessionOf(state, active.id)}
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
+            staging={staging.of(active.id)}
             stats={null}
             notices={notices}
             onDraftChange={(id, value) => setDrafts((d) => ({ ...d, [id]: value }))}
-            onSend={(id, text) => {
-              setDrafts((d) => ({ ...d, [id]: "" }));
-              hub.send(id, text);
+            onSend={(id, text, files) => {
+              // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
+              // 传失败了什么都不清（文字和文件都留着）
+              if (files.length === 0) {
+                setDrafts((d) => ({ ...d, [id]: "" }));
+                hub.send(id, text);
+                return;
+              }
+              return hub.sendWithFiles(id, text, files).then(() => {
+                setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d));
+                staging.of(id).removeSent(files);
+              });
             }}
             onRetry={hub.retrySend}
             onStop={hub.stop}

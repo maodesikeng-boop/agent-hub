@@ -1,9 +1,10 @@
 // 把接口、WebSocket 和 state.ts 接起来：先拉快照，再按 seq 接着收变化；收到 resync 重新拉。
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import type { Change, ConversationId, MessageId } from "../shared/index.ts";
+import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type MessageId } from "../shared/index.ts";
 import { ApiError, fetchOlderMessages, fetchState, postMessage, postRetryMessage, postStop } from "./client.ts";
 import { openChangeStream, type ConnectionStatus } from "./connection.ts";
 import { newClientId } from "./format.ts";
+import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer } from "./state.ts";
 
 /** resync 拉快照失败后隔多久再试。 */
@@ -107,33 +108,50 @@ export function useHub() {
     });
   }, [ready, resync, applyChange]);
 
-  const submit = useCallback(async (conversationId: ConversationId, clientId: string, text: string) => {
+  const submit = useCallback(async (conversationId: ConversationId, clientId: string, text: string, attachmentIds: string[]) => {
     try {
-      await postMessage(conversationId, { clientId, text });
-    } catch {
-      if (alive.current) dispatch({ type: "pendingPhase", clientId, phase: "failed" });
+      await postMessage(conversationId, { clientId, text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
+    } catch (err) {
+      // 带的文件服务端已经找不到了：重试也没用，要用户重新添加
+      const missing = err instanceof ApiError && err.status === 400 && err.message === ATTACHMENTS_MISSING_MESSAGE;
+      if (alive.current) dispatch({ type: "pendingPhase", clientId, phase: "failed", ...(missing ? { failure: "attachments_missing" as const } : {}) });
     }
   }, []);
 
-  const send = useCallback(
-    (conversationId: ConversationId, text: string) => {
+  /** 消息先显示出来（排队中），再发给服务端。 */
+  const post = useCallback(
+    (conversationId: ConversationId, text: string, attachments: Attachment[]) => {
       const clientId = newClientId();
       dispatch({
         type: "pendingAdd",
-        pending: { clientId, conversationId, text, phase: "sending", createdAt: Date.now() },
+        pending: { clientId, conversationId, text, attachments, phase: "sending", createdAt: Date.now() },
       });
-      void submit(conversationId, clientId, text);
+      void submit(conversationId, clientId, text, attachments.map((a) => a.id));
     },
     [submit],
   );
 
-  /** 重发：同一个 clientId，服务端按它去重。 */
+  const send = useCallback((conversationId: ConversationId, text: string) => post(conversationId, text, []), [post]);
+
+  /**
+   * 带文件发：先把文件都传上去，都传好了才发消息；传失败 reject（Error.message 是中文），这时什么消息都没发出去。
+   * 传的时候不显示临时消息（输入框那边显示“发送中”）。
+   */
+  const sendWithFiles = useCallback(
+    async (conversationId: ConversationId, text: string, files: File[]) => {
+      const attachments = await uploadFiles(files);
+      if (alive.current) post(conversationId, text, attachments);
+    },
+    [post],
+  );
+
+  /** 重发：同一个 clientId、同样的附件，服务端按 clientId 去重。 */
   const retrySend = useCallback(
     (clientId: string) => {
       const pending = stateRef.current.pending.find((p) => p.clientId === clientId);
       if (!pending) return;
       dispatch({ type: "pendingPhase", clientId, phase: "sending" });
-      void submit(pending.conversationId, clientId, pending.text);
+      void submit(pending.conversationId, clientId, pending.text, pending.attachments.map((a) => a.id));
     },
     [submit],
   );
@@ -167,5 +185,5 @@ export function useHub() {
     }
   }, []);
 
-  return { state, reload: loadState, send, retrySend, retryMessage, stop, loadOlder };
+  return { state, reload: loadState, send, sendWithFiles, retrySend, retryMessage, stop, loadOlder };
 }

@@ -262,6 +262,11 @@ describe("数据目录", () => {
     expect(paths.pmHomeDir).toBe("/tmp/x/pm-home");
   });
 
+  it("聊天框上传的文件放在 uploads/，不放进项目文件夹", () => {
+    expect(resolveHubPaths({ AGENT_HUB_HOME: "/tmp/x" }, "/home/u").uploadsDir).toBe("/tmp/x/uploads");
+    expect(resolveHubPaths({}, "/home/u").uploadsDir).toBe(`/home/u/${DATA_DIR_NAME}/uploads`);
+  });
+
   it("claude 的路径用 AGENT_HUB_CLAUDE 改，默认找 PATH 里的 claude", () => {
     expect(resolveHubPaths({}, "/home/u").claudePath).toBe("claude");
     expect(resolveHubPaths({ AGENT_HUB_CLAUDE: "/tmp/fake" }, "/home/u").claudePath).toBe("/tmp/fake");

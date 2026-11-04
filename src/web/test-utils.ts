@@ -1,6 +1,7 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
 import type {
+  Attachment,
   Change,
   Conversation,
   ConversationSnapshot,
@@ -69,6 +70,13 @@ export function makeUserMessage(over: Partial<Message> & Pick<Message, "id">): M
     dedupeKey: `client:${over.conversationId ?? 1}:c${over.id}`,
     ...over,
   });
+}
+
+/** 一个上传好的文件（服务端上传接口的响应）。 */
+export function makeAttachment(over: Partial<Attachment> = {}): Attachment {
+  const name = over.name ?? "报告.pdf";
+  const id = over.id ?? "0123456789abcdef";
+  return { id, name, path: `/Users/u/.agent-hub/uploads/${id}/${name}`, size: 2048, mime: "application/octet-stream", ...over };
 }
 
 export function makeToolMessage(over: Partial<Message> & Pick<Message, "id">): Message {
@@ -213,6 +221,13 @@ export interface RecordedCall {
 
 export type Reply = { status: number; body?: unknown };
 
+/** 上传接口收到的一个文件（请求体是文件原样的字节，文件名在 ?name=）。 */
+export interface RecordedUpload {
+  name: string | null;
+  file: Blob;
+  contentType: string | null;
+}
+
 function jsonResponse(reply: Reply): Response {
   const body = reply.body === undefined ? null : JSON.stringify(reply.body);
   return new Response(body, { status: reply.status, headers: { "content-type": "application/json" } });
@@ -244,11 +259,23 @@ export class FakeApi {
     status: 200,
     body: { changed: true, persona: makePersonaView() },
   });
+  uploads: RecordedUpload[] = [];
+  /** 默认：200，编号按收到的顺序 0000000000000001、0000000000000002…，名字原样，类型按扩展名（图片 image/*）。 */
+  upload: (name: string | null, file: Blob) => Reply | Promise<Reply> = (name, file) => {
+    const id = String(this.uploads.length).padStart(16, "0");
+    const fileName = name ?? "文件";
+    return { status: 200, body: makeAttachment({ id, name: fileName, size: file.size, mime: /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? "image/png" : "application/octet-stream" }) };
+  };
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
   fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    if (method === "POST" && url.pathname === "/api/uploads") {
+      this.calls.push({ method, path: url.pathname, query: url.searchParams, body: init?.body });
+      this.uploads.push({ name: url.searchParams.get("name"), file: init?.body as Blob, contentType: new Headers(init?.headers).get("content-type") });
+      return jsonResponse(await this.upload(url.searchParams.get("name"), init?.body as Blob));
+    }
     // 跟真的界面服务（Fastify）一样：声明了 JSON 却没有请求体，回 400
     const contentType = new Headers(init?.headers).get("content-type");
     if (contentType?.startsWith("application/json") && (init?.body === undefined || init.body === "")) {

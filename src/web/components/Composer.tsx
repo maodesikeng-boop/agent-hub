@@ -1,25 +1,36 @@
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, FileText, Paperclip, X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { byteLength } from "../format.ts";
+import { formatBytes, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
+/**
+ * 输入框：打字、回形针选文件（可多选）、粘贴截图/文件，待发文件列在输入框上方。不绑定哪个对话：
+ * 文字和待发文件（staging，见 upload.ts 的 useStagingStore）都由调用者保存；
+ * onSend 收到文字和待发的文件，只有文字时同步处理（返回 undefined），带文件时返回 Promise（上传、发出去），
+ * 它 reject 的 Error.message 会显示在输入框上方，文字和文件都留着。
+ */
 export function Composer({
   value,
   placeholder,
+  staging,
   onChange,
   onSend,
 }: {
   value: string;
   placeholder: string;
+  staging: StagedFiles;
   onChange: (value: string) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, files: File[]) => void | Promise<void>;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const { files, busy, notice } = staging;
   const tooLong = byteLength(value) > MAX_MESSAGE_BYTES;
-  const canSend = value.trim() !== "" && !tooLong;
+  const canSend = (value.trim() !== "" || files.length > 0) && !tooLong && !busy;
 
   // 输入框跟着内容长高，到上限后出滚动条
   useLayoutEffect(() => {
@@ -31,30 +42,84 @@ export function Composer({
 
   const submit = () => {
     if (!canSend) return;
-    onSend(value.trim());
+    staging.track(
+      onSend(
+        value.trim(),
+        files.map((f) => f.file),
+      ),
+    );
   };
 
   return (
-    <div className="flex items-end gap-2 rounded-[26px] border border-border bg-background py-2 pr-2 pl-5 shadow-[0_2px_10px_rgba(0,0,0,0.05)] focus-within:border-primary/40">
-      <textarea
-        ref={ref}
-        rows={1}
-        aria-label="输入消息"
-        placeholder={placeholder}
-        className="min-h-9 flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
-          if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-          e.preventDefault();
-          submit();
-        }}
-      />
-      {tooLong && <span className="self-center text-[13px] text-danger">消息太长</span>}
-      <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
-        <ArrowUp className="size-5" aria-hidden="true" />
-      </Button>
+    <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)] focus-within:border-primary/40">
+      {files.length > 0 && (
+        <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-4 pt-3">
+          {files.map(({ key, file }) => (
+            <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-[13.5px]">
+              <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0 truncate">{file.name}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+              <button
+                type="button"
+                aria-label={`去掉 ${file.name}`}
+                disabled={busy}
+                className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
+                onClick={() => staging.remove(key)}
+              >
+                <X className="size-3.5" aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {notice !== null && (
+        <p role="alert" className="px-5 pt-2.5 text-[13px] text-danger">
+          {notice}
+        </p>
+      )}
+      <div className="flex items-end gap-1 py-2 pr-2 pl-2">
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          aria-label="选择文件"
+          onChange={(e) => {
+            staging.add(Array.from(e.target.files ?? []));
+            e.target.value = ""; // 清掉，同一个文件还能再选
+          }}
+        />
+        <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy} onClick={() => picker.current?.click()}>
+          <Paperclip className="size-5" aria-hidden="true" />
+        </Button>
+        <textarea
+          ref={ref}
+          rows={1}
+          aria-label="输入消息"
+          placeholder={placeholder}
+          readOnly={busy}
+          className="min-h-9 flex-1 resize-none bg-transparent py-1.5 pl-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onPaste={(e) => {
+            // 粘贴截图或复制来的文件：加进待发列表；纯文字照常粘进去
+            const pasted = Array.from(e.clipboardData.files);
+            if (pasted.length === 0) return;
+            e.preventDefault();
+            staging.add(pasted);
+          }}
+          onKeyDown={(e) => {
+            // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
+            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+            e.preventDefault();
+            submit();
+          }}
+        />
+        {tooLong && <span className="self-center text-[13px] text-danger">消息太长</span>}
+        <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
+          <ArrowUp className="size-5" aria-hidden="true" />
+        </Button>
+      </div>
     </div>
   );
 }

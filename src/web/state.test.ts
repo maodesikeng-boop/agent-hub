@@ -52,7 +52,7 @@ describe("applyChange", () => {
     let s = loaded({ seq: 10 });
     s = reducer(s, {
       type: "pendingAdd",
-      pending: { clientId: "abc", conversationId: 1, text: "hi", phase: "sending", createdAt: 1 },
+      pending: { clientId: "abc", conversationId: 1, text: "hi", attachments: [], phase: "sending", createdAt: 1 },
     });
     s = applyChange(s, messageChange(11, "message.created", makeUserMessage({ id: 7, dedupeKey: "client:1:abc" })));
     expect(s.pending).toEqual([]);
@@ -71,7 +71,7 @@ describe("loaded", () => {
     for (const clientId of ["a", "b"]) {
       s = reducer(s, {
         type: "pendingAdd",
-        pending: { clientId, conversationId: 1, text: clientId, phase: "failed", createdAt: 1 },
+        pending: { clientId, conversationId: 1, text: clientId, attachments: [], phase: "failed", createdAt: 1 },
       });
     }
     s = reducer(s, {

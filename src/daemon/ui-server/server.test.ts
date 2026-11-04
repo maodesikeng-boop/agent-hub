@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -12,8 +12,12 @@ import {
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_CONCURRENT_UPLOADS,
   MAX_REASON_CHARS,
+  MAX_UPLOAD_BYTES,
   UI_COOKIE_NAME,
+  type Attachment,
   type Change,
   type LedgerErrorCode,
   type WsServerMessage,
@@ -31,20 +35,23 @@ const INDEX_HTML = "<!doctype html><title>agent-hub</title>";
 const NEW_PM = { name: "阿周", mode: "hands_on", defaultModel: "claude-haiku-5-5", persona: "# 性格\n- 简短" };
 
 let staticDir: string;
+let uploadsDir: string;
 let ledger: FakeLedger;
 let app: FastifyInstance;
 
 beforeEach(async () => {
   staticDir = mkdtempSync(join(tmpdir(), "hub-static-"));
+  uploadsDir = join(mkdtempSync(join(tmpdir(), "hub-uploads-")), "uploads");
   writeFileSync(join(staticDir, "index.html"), INDEX_HTML);
   ledger = new FakeLedger();
-  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, port: PORT });
+  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: PORT });
   await app.ready();
 });
 
 afterEach(async () => {
   await app.close();
   rmSync(staticDir, { recursive: true, force: true });
+  rmSync(join(uploadsDir, ".."), { recursive: true, force: true });
 });
 
 interface ReqOpts {
@@ -76,7 +83,7 @@ async function call(method: Method, url: string, opts: ReqOpts = {}) {
 
 describe("只听本机", () => {
   it("startUiServer 监听 127.0.0.1，返回实际端口，Host 用它就能访问", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
     try {
       const addr = running.app.server.address();
       expect(addr).toMatchObject({ address: "127.0.0.1", port: running.port });
@@ -92,7 +99,7 @@ describe("只听本机", () => {
 describe("令牌格式", () => {
   it("太短的令牌（含空串）直接拒绝创建，免得空 cookie 就能登录", () => {
     for (const token of ["", "short", "has space in it 0123456789", "semi;colon-0123456789abc"]) {
-      expect(() => createUiServer({ ledger: ledger.asLedger(), token, staticDir })).toThrow(/token/);
+      expect(() => createUiServer({ ledger: ledger.asLedger(), token, staticDir, uploadsDir })).toThrow(/token/);
     }
   });
 });
@@ -319,7 +326,7 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
   });
 
   it("端口跟着实际监听的走：真起服务，同源 Origin 放行，别的端口拒绝", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
     try {
       const url = `http://127.0.0.1:${running.port}/api/conversations/1/stop`;
       const send = (origin: string) => fetch(url, { method: "POST", headers: { cookie: COOKIE, origin } });
@@ -882,6 +889,7 @@ describe("静态文件", () => {
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir: join(staticDir, "missing"),
+      uploadsDir,
       port: PORT,
     });
     try {
@@ -1081,5 +1089,270 @@ describe("WebSocket /api/ws", () => {
     await client.settle();
     expect(client.received).toEqual(emitted);
     client.ws.terminate();
+  });
+});
+
+// ---- 聊天框上传文件 ----
+
+interface UploadOpts {
+  cookie?: string | null;
+  origin?: string | null;
+  contentType?: string;
+}
+
+/** 上传一个文件：请求体是文件原样的字节，文件名放在 ?name=。 */
+async function upload(name: string | null, data: Buffer, opts: UploadOpts = {}) {
+  const headers: Record<string, string> = { host: HOST, "content-type": opts.contentType ?? "application/octet-stream" };
+  if (opts.cookie !== null) headers.cookie = opts.cookie ?? COOKIE;
+  if (opts.origin !== null) headers.origin = opts.origin ?? ORIGIN;
+  return app.inject({
+    method: "POST",
+    url: name === null ? "/api/uploads" : `/api/uploads?name=${encodeURIComponent(name)}`,
+    headers,
+    payload: data,
+  });
+}
+
+const uploaded = async (name: string, text = "内容") => (await upload(name, Buffer.from(text))).json() as Attachment;
+
+describe("POST /api/uploads", () => {
+  it("正常上传：200，返回 Attachment；文件落在 uploads/<编号>/<文件名>，内容原样；不需要指定接收方", async () => {
+    const res = await upload("笔记.txt", Buffer.from("你好，项目经理"));
+    expect(res.statusCode).toBe(200);
+    const a = res.json() as Attachment;
+    expect(a).toMatchObject({ name: "笔记.txt", size: Buffer.byteLength("你好，项目经理"), mime: "application/octet-stream" });
+    expect(a.path).toBe(join(uploadsDir, a.id, "笔记.txt"));
+    expect(readFileSync(a.path, "utf8")).toBe("你好，项目经理");
+  });
+
+  it("图片：按扩展名认类型，不管浏览器报什么 content-type", async () => {
+    const res = await upload("截图.png", Buffer.from("png"), { contentType: "text/html" });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Attachment).mime).toBe("image/png");
+  });
+
+  it("上传多个、同名的：各有各的目录，互不覆盖", async () => {
+    const a = await uploaded("image.png", "一");
+    const b = await uploaded("image.png", "二");
+    expect(a.path).not.toBe(b.path);
+    expect(readFileSync(a.path, "utf8")).toBe("一");
+    expect(readFileSync(b.path, "utf8")).toBe("二");
+    expect(readdirSync(uploadsDir)).toHaveLength(2);
+  });
+
+  it("文件名带 ../ 或绝对路径：只留最后一段，文件不会出 uploads/", async () => {
+    const a = await uploaded("../../../../tmp/evil.sh");
+    expect(a.name).toBe("evil.sh");
+    expect(a.path.startsWith(`${uploadsDir}/`)).toBe(true);
+    expect(existsSync(join(uploadsDir, "..", "evil.sh"))).toBe(false);
+  });
+
+  it("没给文件名：用默认名", async () => {
+    const res = await upload(null, Buffer.from("x"));
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Attachment).name).toBe("文件");
+  });
+
+  it("空文件：400，中文原因，磁盘上没有东西", async () => {
+    const res = await upload("空.txt", Buffer.alloc(0));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "文件是空的，没有内容可发", code: "invalid" });
+    expect(existsSync(uploadsDir) ? readdirSync(uploadsDir) : []).toEqual([]);
+  });
+
+  it("刚好 20 MB 收下；多 1 字节：413，中文原因，磁盘上没有东西", async () => {
+    expect((await upload("edge.bin", Buffer.alloc(MAX_UPLOAD_BYTES))).statusCode).toBe(200);
+    const before = readdirSync(uploadsDir).length;
+    const res = await upload("big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toEqual({ error: "文件太大，单个文件最多 20 MB" });
+    expect(readdirSync(uploadsDir)).toHaveLength(before);
+  });
+
+  it("20 MB 的上限只属于上传接口：普通消息接口超过 1 MB 照样 413", async () => {
+    const res = await call("POST", "/api/conversations/1/messages", {
+      rawBody: JSON.stringify({ clientId: "c", text: "hi", pad: " ".repeat(2 * 1024 * 1024) }),
+    });
+    expect(res.statusCode).toBe(413);
+    expect(ledger.posted).toEqual([]);
+  });
+
+  it("没登录 401；没带同源 Origin 403：都不落盘", async () => {
+    expect((await upload("a.txt", Buffer.from("x"), { cookie: null })).statusCode).toBe(401);
+    expect((await upload("a.txt", Buffer.from("x"), { origin: null })).statusCode).toBe(403);
+    expect((await upload("a.txt", Buffer.from("x"), { origin: "http://evil.example:4000" })).statusCode).toBe(403);
+    expect(existsSync(uploadsDir)).toBe(false);
+  });
+});
+
+describe("GET /api/uploads/:id/:name", () => {
+  it("图片：内联显示（缩略图用），带 nosniff 和沙箱，不让浏览器当网页执行", async () => {
+    const a = await uploaded("图.png", "png-bytes");
+    const res = await call("GET", `/api/uploads/${a.id}/${encodeURIComponent(a.name)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/png");
+    expect(res.headers["content-disposition"]).toContain("inline");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["content-security-policy"]).toContain("sandbox");
+    expect(res.body).toBe("png-bytes");
+  });
+
+  it("不是图片（含 html、svg）：一律当下载，类型是 octet-stream", async () => {
+    for (const name of ["页面.html", "画.svg", "笔记.txt"]) {
+      const a = await uploaded(name, "<script>alert(1)</script>");
+      const res = await call("GET", `/api/uploads/${a.id}/${encodeURIComponent(a.name)}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toBe("application/octet-stream");
+      expect(res.headers["content-disposition"]).toContain("attachment");
+    }
+  });
+
+  it("文件名很长（101～120 字节，含中文长名）：照样取得到，地址里的名字只是给浏览器看的", async () => {
+    for (const name of ["a".repeat(101) + ".png", "b".repeat(116) + ".png", "很长的中文名字".repeat(5) + ".png", "文".repeat(38) + ".png"]) {
+      const a = await uploaded(name, "png");
+      expect(a.name).toBe(name);
+      const res = await call("GET", `/api/uploads/${a.id}/${encodeURIComponent(a.name)}`);
+      expect(res.statusCode, `${name.length} 个字符`).toBe(200);
+      expect(res.body).toBe("png");
+    }
+  });
+
+  it("地址里的名字写什么都行（取文件只看编号）", async () => {
+    const a = await uploaded("a.png", "png");
+    expect((await call("GET", `/api/uploads/${a.id}/${"x".repeat(500)}`)).statusCode).toBe(200);
+    expect((await call("GET", `/api/uploads/${a.id}/`)).statusCode).toBe(200);
+  });
+
+  it("没有这个编号、编号想走出 uploads/、没登录：404 / 404 / 401", async () => {
+    const a = await uploaded("a.png");
+    expect((await call("GET", `/api/uploads/0123456789abcdef/x.png`)).statusCode).toBe(404);
+    expect((await call("GET", `/api/uploads/..%2F..%2Fetc/passwd`)).statusCode).toBe(404);
+    expect((await call("GET", `/api/uploads/${a.id}/a.png`, { cookie: null })).statusCode).toBe(401);
+  });
+});
+
+describe("POST 消息带附件", () => {
+  const post = (body: unknown) => call("POST", "/api/conversations/1/messages", { body });
+
+  it("attachmentIds：账本拿到服务端从磁盘算出来的附件，不是客户端报的", async () => {
+    const a = await uploaded("图.png", "abc");
+    const res = await post({ clientId: "c1", text: "看这张", attachmentIds: [a.id] });
+    expect(res.statusCode).toBe(200);
+    expect(ledger.posted).toEqual([{ conversationId: 1, clientId: "c1", text: "看这张", attachments: [a] }]);
+  });
+
+  it("多个文件，同一个编号写两遍只算一个", async () => {
+    const a = await uploaded("a.txt");
+    const b = await uploaded("b.txt");
+    await post({ clientId: "c2", text: "两个", attachmentIds: [a.id, b.id, a.id] });
+    expect(ledger.posted[0]!.attachments).toEqual([a, b]);
+  });
+
+  it("只有文件没有文字：可以发（text 空串）", async () => {
+    const a = await uploaded("a.txt");
+    const res = await post({ clientId: "c3", text: "", attachmentIds: [a.id] });
+    expect(res.statusCode).toBe(200);
+    expect(ledger.posted[0]).toMatchObject({ text: "", attachments: [a] });
+  });
+
+  it("文字和文件都没有：照旧 400", async () => {
+    expect((await post({ clientId: "c4", text: "  " })).statusCode).toBe(400);
+    expect((await post({ clientId: "c4", text: "", attachmentIds: [] })).statusCode).toBe(400);
+    expect(ledger.posted).toEqual([]);
+  });
+
+  it("没有 attachmentIds 的老请求照旧：账本拿到的输入里没有 attachments 字段", async () => {
+    await post({ clientId: "c5", text: "hi" });
+    expect(ledger.posted[0]).toEqual({ conversationId: 1, clientId: "c5", text: "hi" });
+  });
+
+  it("编号不存在（没传过、被清理了）：400，中文原因，不调账本", async () => {
+    const res = await post({ clientId: "c6", text: "hi", attachmentIds: ["0123456789abcdef"] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "有文件找不到了（可能已被清理），请重新添加", code: "invalid" });
+    expect(ledger.posted).toEqual([]);
+  });
+
+  it("编号想走出 uploads/、不是字符串、不是数组、太多：400", async () => {
+    const a = await uploaded("a.txt");
+    for (const attachmentIds of [["../x"], [1], "abc", [a.id, 7], Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 1 }, () => a.id).map((id, i) => (i === 0 ? id : `${id}${i}`))]) {
+      const res = await post({ clientId: "c7", text: "hi", attachmentIds });
+      expect(res.statusCode, JSON.stringify(attachmentIds)).toBe(400);
+    }
+    expect(ledger.posted).toEqual([]);
+  });
+});
+
+describe("同时上传的个数", () => {
+  /** 真起服务，用原始连接发一个“只发了一半”的上传：占着一个名额，直到 finish()。 */
+  async function startHalfUploads(port: number, n: number) {
+    const { request } = await import("node:http");
+    const open: Array<{ finish: () => Promise<number> }> = [];
+    for (let i = 0; i < n; i++) {
+      const req = request({
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: `/api/uploads?name=half${i}.txt`,
+        headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, cookie: COOKIE, "content-type": "application/octet-stream", "content-length": "10" },
+      });
+      const done = new Promise<number>((resolve, reject) => {
+        req.on("response", (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.on("error", reject);
+      });
+      req.write("hello");
+      open.push({ finish: () => (req.end("world"), done) });
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    return open;
+  }
+
+  it(`同时收 ${MAX_CONCURRENT_UPLOADS} 个；再来第 ${MAX_CONCURRENT_UPLOADS + 1} 个回 429 和中文原因；有一个收完就又能收`, async () => {
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    try {
+      const open = await startHalfUploads(running.port, MAX_CONCURRENT_UPLOADS);
+      const url = `http://127.0.0.1:${running.port}/api/uploads?name=extra.txt`;
+      const headers = { origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream" };
+      const refused = await fetch(url, { method: "POST", headers, body: "x" });
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toEqual({ error: "同时上传的文件太多了，稍等一下再试" });
+      expect(await open[0]!.finish()).toBe(200);
+      expect((await fetch(url, { method: "POST", headers, body: "x" })).status).toBe(200);
+      for (const u of open.slice(1)) expect(await u.finish()).toBe(200);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it("连接中途断掉也释放名额", async () => {
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, port: 0 });
+    try {
+      const { request } = await import("node:http");
+      for (let i = 0; i < MAX_CONCURRENT_UPLOADS * 2; i++) {
+        const req = request({
+          host: "127.0.0.1",
+          port: running.port,
+          method: "POST",
+          path: "/api/uploads?name=abort.txt",
+          headers: { host: `127.0.0.1:${running.port}`, origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream", "content-length": "10" },
+        });
+        req.on("error", () => {});
+        req.write("abc");
+        await new Promise((r) => setTimeout(r, 30));
+        req.destroy();
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      const res = await fetch(`http://127.0.0.1:${running.port}/api/uploads?name=ok.txt`, {
+        method: "POST",
+        headers: { origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream" },
+        body: "x",
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await running.close();
+    }
   });
 });

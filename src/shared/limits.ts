@@ -42,6 +42,21 @@ export const WORKER_LINE_SUMMARY_CHARS = 120;
 /** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
 export const WORKER_BRANCH_SLUG_CHARS = 30;
 
+// ---- 聊天框上传文件 ----
+
+/** 单个上传文件最多 20 MB。上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节），不动普通消息接口 1 MB 的请求体上限。 */
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+/** 一条消息最多带几个文件。 */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+/** 服务端同时在收的上传最多几个（超出的回 429，不收）：每个上传整个读进内存，不限的话一次拖一堆大文件会撑爆。 */
+export const MAX_CONCURRENT_UPLOADS = 4;
+/** 网页一条消息的文件同时最多传几个（要小于 MAX_CONCURRENT_UPLOADS，留出别的页面的余地）。 */
+export const UPLOAD_CLIENT_CONCURRENCY = 3;
+/** 文件名太长要截断时，扩展名（含点）最多留多少字节；再长的“扩展名”不当扩展名，一起截。 */
+export const MAX_UPLOAD_EXTENSION_BYTES = 16;
+/** 存到磁盘上的文件名最多多少字节（UTF-8；APFS、ext4 的单个文件名上限是 255）；超了截断，扩展名尽量留着。 */
+export const MAX_UPLOAD_NAME_BYTES = 120;
+
 /** 打断：控制消息 5 秒没回应就发 SIGINT。 */
 export const INTERRUPT_GRACE_MS = 5_000;
 /** 启动后 60 秒没有 system/init，结束进程。 */

@@ -2,6 +2,7 @@
 // 数据库是同步接口，账本方法也都是同步的；调用方想 await 也行。
 // 这里只从 hub.ts 引类型（hub.ts 从这里引常量），没有运行时的循环引用。
 import type { Change, MessagesPage, StateSnapshot } from "./api.ts";
+import type { Attachment } from "./attachments.ts";
 import type { DriverEvent } from "./driver.ts";
 import type { AnyActionRow } from "./actions.ts";
 import type {
@@ -68,7 +69,10 @@ export interface PostUserMessageInput {
   conversationId: ConversationId;
   /** 网页生成；同一个对话里同一个 clientId 只会有一条消息、一个动作（去重键见 userMessageDedupeKey）。 */
   clientId: string;
+  /** 用户写的原文；有附件时可以是空的。 */
   text: string;
+  /** 已经验过、磁盘上确实有的附件（界面服务查的）；写进消息的 meta（UserMessageMeta），发给 agent 时拼进正文（agentTextOf）。 */
+  attachments?: Attachment[];
 }
 
 export interface PostUserMessageResult {

@@ -133,6 +133,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
     //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
     mkdirSync(paths.worktreesDir, { recursive: true });
+    // uploadsDir 也是：用户在聊天框上传的文件，agent 拿到的是这个真实路径下的绝对路径（权限规则按真实路径匹配）
+    mkdirSync(paths.uploadsDir, { recursive: true, mode: 0o700 });
+    const uploadsDir = realpathSync.native(paths.uploadsDir);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     const ledger = createLedger(db, {
@@ -203,7 +206,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
-    parts.ui = await startUiServer({ ledger, token, port, staticDir });
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir });
 
     let stopping: Promise<void> | undefined;
     return {

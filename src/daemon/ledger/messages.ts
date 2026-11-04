@@ -2,6 +2,7 @@
 // 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改（transition）。
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
+import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
@@ -200,12 +201,15 @@ export function createLedgerMessages(ctx: LedgerContext, sessions: LedgerSession
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
       const t = now();
+      // 有附件才写 meta（UserMessageMeta）；没有附件的用户消息 meta 还是 null，和老消息一样
+      const meta: UserMessageMeta | null = input.attachments?.length ? { attachments: input.attachments } : null;
       const row = db.get<MessageDbRow>(
-        `INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at)
-         VALUES (?, ?, 'user', 'text', ?, ?, 'queued', ?, ?) RETURNING *`,
+        `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+         VALUES (?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
         input.conversationId,
         session.id,
         input.text,
+        meta === null ? null : JSON.stringify(meta),
         dedupeKey,
         t,
         t,

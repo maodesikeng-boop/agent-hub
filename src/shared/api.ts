@@ -30,6 +30,13 @@ export const API_PATHS = {
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
+  /**
+   * POST ?name=<文件名>：请求体就是文件原样的字节（不是 JSON，不绑定接收方），最多 MAX_UPLOAD_BYTES，不动别的接口 1 MB 的上限。
+   * 200 → Attachment；空文件、太大（413）、文件名不合法 → 中文原因。之后发消息时在 PostMessageRequest.attachmentIds 里带上它的 id。
+   */
+  uploads: "/api/uploads",
+  /** GET：按上传编号取文件。图片内联显示（缩略图），别的当下载。 */
+  upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;
@@ -66,10 +73,15 @@ export interface MessagesPage {
   hasMore: boolean;
 }
 
-/** POST /api/conversations/:id/messages。clientId 由网页生成，重发用同一个。 */
+/**
+ * POST /api/conversations/:id/messages。clientId 由网页生成，重发用同一个。
+ * attachmentIds：先用 API_PATHS.uploads 上传拿到的上传编号；有附件时 text 可以是空的（只发文件）。服务端按编号找到磁盘上的文件，
+ * 找不到（没传过、被清理了）→ 400；消息里存的附件信息和正文里的路径都是服务端从文件算出来的。
+ */
 export interface PostMessageRequest {
   clientId: string;
   text: string;
+  attachmentIds?: string[];
 }
 
 export interface PostMessageResponse {

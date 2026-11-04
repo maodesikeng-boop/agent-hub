@@ -1,6 +1,6 @@
 // 界面服务（设计第 4.2、4.3 节；m1-plan 第 3 节接口约定第 1、2 条）：HTTP + WebSocket，只监听 127.0.0.1。
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -15,8 +15,16 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
+  ATTACHMENTS_MISSING_MESSAGE,
+  ATTACHMENTS_TOO_MANY_MESSAGE,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_CONCURRENT_UPLOADS,
+  MAX_UPLOAD_BYTES,
   PM_MODES,
   UI_COOKIE_NAME,
+  UPLOAD_BUSY_MESSAGE,
+  UPLOAD_TOO_LARGE_MESSAGE,
+  isImageMime,
   normalizeName,
   utf8Bytes,
   type ApiErrorBody,
@@ -32,12 +40,15 @@ import {
   type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
 
 export interface UiServerOptions {
   ledger: Ledger;
   /** 界面用户令牌，见 loadOrCreateUiToken。 */
   token: string;
+  /** 聊天框上传的文件放哪（paths.ts 的 uploadsDir；守护进程传 realpath 过的，agent 拿到的路径和它一致）。 */
+  uploadsDir: string;
   /** 网页打包产物（vite build 的 dist/）。不存在就只提供 API，请求页面返回 404。 */
   staticDir: string;
   /**
@@ -156,21 +167,32 @@ function parseEditPersonaBody(body: unknown): EditPersonaRequest {
   return input;
 }
 
-function parsePostBody(body: unknown): { clientId: string; text: string } {
+/** 请求体里的 attachmentIds：字符串数组，去重，最多 MAX_ATTACHMENTS_PER_MESSAGE 个。没写就是空。 */
+function parseAttachmentIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string")) throw new HttpError(400, "attachmentIds must be an array of strings");
+  const ids = [...new Set(value as string[])];
+  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new HttpError(400, ATTACHMENTS_TOO_MANY_MESSAGE);
+  return ids;
+}
+
+function parsePostBody(body: unknown): { clientId: string; text: string; attachmentIds: string[] } {
   if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "body must be a JSON object");
-  const { clientId, text } = body as Record<string, unknown>;
+  const { clientId, text, attachmentIds } = body as Record<string, unknown>;
   if (typeof clientId !== "string" || clientId.length === 0 || clientId.length > MAX_CLIENT_ID_LENGTH) {
     throw new HttpError(400, `clientId must be a non-empty string of at most ${MAX_CLIENT_ID_LENGTH} characters`);
   }
-  if (typeof text !== "string" || text.trim().length === 0) throw new HttpError(400, "text must not be empty");
+  const ids = parseAttachmentIds(attachmentIds);
+  // 只发文件的时候文字可以是空的
+  if (typeof text !== "string" || (text.trim().length === 0 && ids.length === 0)) throw new HttpError(400, "text must not be empty");
   if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
     throw new HttpError(400, `text must be at most ${MAX_MESSAGE_BYTES} bytes`);
   }
-  return { clientId, text };
+  return { clientId, text, attachmentIds: ids };
 }
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
-  const { ledger, staticDir } = opts;
+  const { ledger, staticDir, uploadsDir } = opts;
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
   const expectedToken = digest(opts.token);
   const app = Fastify({ logger: opts.logger ?? false });
@@ -211,8 +233,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (path.startsWith("/api/") && !isAuthenticated(req)) return fail(reply, 401, "unauthorized");
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError, req, reply) => {
     if (err instanceof ConversationNotFoundError) return fail(reply, 404, err.code);
+    if (err instanceof UploadError) return fail(reply, err.statusCode, err.message, err.statusCode === 400 ? "invalid" : undefined);
+    // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口的 413 照旧）
+    if ((err as FastifyError).statusCode === 413 && (req.url.split("?", 1)[0] ?? "") === API_PATHS.uploads) {
+      return fail(reply, 413, UPLOAD_TOO_LARGE_MESSAGE);
+    }
     if (err instanceof LedgerRequestError) return fail(reply, LEDGER_ERROR_HTTP_STATUS[err.code], err.message, err.code);
     const status = (err as FastifyError).statusCode;
     // 请求体校验没过（含 JSON 解析失败）一律 400 + code "invalid"，和账本拒绝的 invalid 同形，网页统一处理。
@@ -224,6 +251,45 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   app.setNotFoundHandler((_req, reply) => fail(reply, 404, "not_found"));
 
   app.register(fastifyWebsocket);
+
+  // 上传文件（不绑定接收方，谁来用都是先上传、再在发消息时带编号）：请求体是文件原样的字节，上限 MAX_UPLOAD_BYTES，只对这个接口放大。
+  // 放进单独的插件里：内容类型解析器只在这个插件里生效（别的接口照旧只收 JSON、上限 1 MB）；
+  // 先去掉 Fastify 自带的 JSON、文本解析器，免得 .json、.txt 文件被当成文本解析坏掉。
+  app.register(async (uploads) => {
+    uploads.removeAllContentTypeParsers();
+    uploads.addContentTypeParser("*", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+
+    // 同时在收的上传有上限：每个都整个读进内存。名额占到响应结束（正常结束、连接中途断掉都会释放）
+    let activeUploads = 0;
+    uploads.addHook("onRequest", async (req, reply) => {
+      if (req.method !== "POST") return;
+      if (activeUploads >= MAX_CONCURRENT_UPLOADS) return fail(reply, 429, UPLOAD_BUSY_MESSAGE);
+      activeUploads++;
+      reply.raw.once("close", () => {
+        activeUploads--;
+      });
+    });
+
+    uploads.post(API_PATHS.uploads, { bodyLimit: MAX_UPLOAD_BYTES }, async (req) => {
+      const { name } = req.query as { name?: unknown };
+      return saveUpload(uploadsDir, typeof name === "string" ? name : "", Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    });
+
+    // 地址里的文件名只是给浏览器看的（取文件只认编号），用通配：命名参数 Fastify 默认最多 100 个字符，长文件名会 404
+    uploads.get("/api/uploads/:id/*", async (req, reply) => {
+      const attachment = resolveUpload(uploadsDir, String((req.params as { id?: unknown }).id ?? ""));
+      if (attachment === null) return fail(reply, 404, "not_found");
+      // 用户传的文件不可信：只有位图内联显示（缩略图），别的一律当下载；禁止嗅探、沙箱化，不会当网页执行
+      const inline = isImageMime(attachment.mime);
+      return reply
+        .header("content-type", attachment.mime)
+        .header("content-disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`)
+        .header("x-content-type-options", "nosniff")
+        .header("content-security-policy", "sandbox; default-src 'none'")
+        .header("cache-control", "private, max-age=3600")
+        .send(createReadStream(attachment.path));
+    });
+  });
   if (existsSync(staticDir)) {
     app.register(fastifyStatic, { root: staticDir });
   } else {
@@ -251,8 +317,16 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.post("/api/conversations/:id/messages", async (req): Promise<PostMessageResponse> => {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
-      const { clientId, text } = parsePostBody(req.body);
-      return ledger.postUserMessage({ conversationId, clientId, text });
+      const { clientId, text, attachmentIds } = parsePostBody(req.body);
+      // 附件按编号从磁盘重新算（路径、名字、大小），不信请求里的任何别的东西
+      const attachments = attachmentIds.map((id) => resolveUpload(uploadsDir, id) ?? undefined);
+      if (attachments.some((a) => a === undefined)) throw new HttpError(400, ATTACHMENTS_MISSING_MESSAGE);
+      return ledger.postUserMessage({
+        conversationId,
+        clientId,
+        text,
+        ...(attachments.length > 0 ? { attachments: attachments as NonNullable<(typeof attachments)[number]>[] } : {}),
+      });
     });
 
     routes.post("/api/conversations/:id/stop", async (req, reply) => {
