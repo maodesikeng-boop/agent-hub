@@ -367,6 +367,30 @@ describe("派活：边界", () => {
   });
 });
 
+describe("同一个文件夹的两个项目经理各派 Worker", () => {
+  it("分支名按全局的 Worker 编号，worktree 按项目编号分目录，不撞；准备命令各用各的", () => {
+    repos.add(main);
+    const zhouProject = hub(zhou.sessionId, "project.create", { folder: main }).data.project;
+    hub(zhou.sessionId, "project.setup", { command: "pnpm install" });
+    const a = start({ title: "修 X" }).data.worker;
+    const b = start({ title: "修 X" }, zhou.sessionId).data.worker;
+    expect([a.projectId, b.projectId]).toEqual([projectId, zhouProject.id]);
+    expect(a.id).not.toBe(b.id);
+    expect(a.branch).not.toBe(b.branch);
+    expect([a.branch, b.branch]).toEqual([`hub/${a.id}-修-x`, `hub/${b.id}-修-x`]);
+    expect(a.worktreePath).toBe(join(worktreesDir, String(projectId), String(a.id)));
+    expect(b.worktreePath).toBe(join(worktreesDir, String(zhouProject.id), String(b.id)));
+    expect(ledger.getWorktreeTask(a.id)).toMatchObject({ repo: main, setupCommand: null });
+    expect(ledger.getWorktreeTask(b.id)).toMatchObject({ repo: main, setupCommand: "pnpm install" });
+    // 项目经理的会话只带自己项目那一层 worktrees 目录
+    expect(sessionRow(lin.sessionId).addDirs).toEqual([join(worktreesDir, String(projectId))]);
+    expect(sessionRow(zhou.sessionId).addDirs).toEqual([join(worktreesDir, String(zhouProject.id))]);
+    // 各自只看到自己派的
+    expect(hub(lin.sessionId, "worker.list", {}).data.workers.map((w) => w.id)).toEqual([a.id]);
+    expect(hub(zhou.sessionId, "worker.list", {}).data.workers.map((w) => w.id)).toEqual([b.id]);
+  });
+});
+
 describe("按角色放行", () => {
   it("Worker 调 persona.edit、project.create、worker.* → forbidden；status 能用，返回自己的记录", () => {
     repos.add(main);

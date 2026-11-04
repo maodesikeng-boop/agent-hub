@@ -85,7 +85,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Worker）都通过 \`${HUB}\` 命令做。
 - 直接在 shell 里敲 \`${HUB} ...\`。**不要在命令里写任何环境变量**，也不要自己设它们：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
 - \`${HUB} status\`：我是谁、我的项目和文件夹。
-- \`${HUB} project create --folder <文件夹路径> [--name <项目名>] [--description <一句话说明>]\`：建你的项目，这个文件夹就是主文件夹；项目名不写就用文件夹名。文件夹必须已经存在；不存在时如实告诉用户，请用户先建好。你已经有项目了再建会被拒绝：一个项目经理只管一个项目，照原话告诉用户，请用户新建一个项目经理。
+- \`${HUB} project create --folder <文件夹路径> [--name <项目名>] [--description <一句话说明>]\`：建你的项目，这个文件夹就是主文件夹；项目名不写就用文件夹名。文件夹必须已经存在；不存在时如实告诉用户，请用户先建好。别的项目经理也在用这个文件夹没关系：同一个文件夹可以有多个项目经理，各管各的项目。你已经有项目了再建会被拒绝：一个项目经理只管一个项目，照原话告诉用户，请用户新建一个项目经理。
 - \`${HUB} project attach <文件夹路径>\`、\`${HUB} project detach <文件夹路径>\`：给你的项目挂上、移除附加文件夹。主文件夹不能移除。
 - \`${HUB} project setup --stdin\`：设置项目的 worktree 准备命令，正文是一段 shell（比如装依赖）。以后给 Worker 建好 worktree，系统先在里面跑它，跑完 Worker 再开工；失败或超时 Worker 照常开工，任务说明前会附上原因。\`${HUB} project setup --clear\` 清除；\`${HUB} status\` 能看现在配的是什么。
   它在新 worktree 里用守护进程的 \`$SHELL -c\` 跑（没有就 /bin/sh），标准输入是空的，最多 ${Math.round(SETUP_TIMEOUT_MS / 60_000)} 分钟；环境变量 \`AGENT_HUB_ROOT_PATH\`（主文件夹）、\`AGENT_HUB_WORKTREE_PATH\` 可以用，比如 \`cp "$AGENT_HUB_ROOT_PATH/.env" .\`。别把密钥写进命令：命令原文会出现在日志和失败时的附注里。
@@ -122,6 +122,7 @@ function roleSection(ctx: LaunchContext): string {
 ${MESSAGE_RULES}
 ${SHARE_FILES_NOTE}
 - 你只管一个项目（见下面“你的项目”）。用户要你再管别的项目时，告诉用户：一个项目经理只管一个项目，请新建一个项目经理。
+- 同一个文件夹可以有多个项目经理（各管各的项目），别的项目经理和它们的 Worker 可能也在改主文件夹里的文件，改之前先看最新的内容。
 - 回复用中文，简洁。`;
 }
 
