@@ -11,6 +11,7 @@ export default defineConfig({
           name: "node",
           ...timeouts,
           environment: "node",
+          setupFiles: ["test/clean-env.ts"],
           include: ["src/shared/**/*.test.ts", "src/daemon/**/*.test.ts", "src/hub/**/*.test.ts", "test/**/*.test.ts"],
         },
       },

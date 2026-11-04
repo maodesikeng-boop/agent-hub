@@ -17,7 +17,7 @@ describe("骨架", () => {
 
   it("pnpm check 分两份做类型检查，再跑测试", () => {
     const pkg = readJson("package.json");
-    expect(pkg.scripts.check).toBe("tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && vitest run");
+    expect(pkg.scripts.check).toBe("tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && vitest run --reporter=dot");
   });
 
   it("守护进程和测试那份不带 DOM、不管 src/web；网页那份带 DOM", () => {
