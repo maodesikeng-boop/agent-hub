@@ -1023,7 +1023,8 @@ describe("0005_project_setup：从 M3 的库升级（老项目没有准备命令
     const before = rowCounts(db);
     const dump = Object.fromEntries(tableNames(db).map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY rowid`)]));
 
-    expect(migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 4, 9, 0, 0) })).toMatchObject({ from: 4, to: 5, applied: [5] });
+    const upTo5 = migrationsUpTo(5);
+    expect(migrate(db, upTo5, { now: () => Date.UTC(2026, 10, 4, 9, 0, 0) })).toMatchObject({ from: 4, to: 5, applied: [5] });
 
     expect(userVersion(db)).toBe(5);
     expect(rowCounts(db)).toEqual(before);
@@ -1038,7 +1039,7 @@ describe("0005_project_setup：从 M3 的库升级（老项目没有准备命令
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     expect(db.get("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
     expect(readdirSync(dir!).filter((f) => f.startsWith("hub.sqlite.bak-4-"))).toEqual(["hub.sqlite.bak-4-20261104T090000Z"]);
-    expect(migrate(db, migrationsDir)).toEqual({ from: 5, to: 5, applied: [] });
+    expect(migrate(db, upTo5)).toEqual({ from: 5, to: 5, applied: [] });
   });
 
   it("28b 升级后账本照常读老项目：准备命令当作没配", () => {
