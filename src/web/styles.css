@@ -137,14 +137,14 @@ code {
 .markdown code {
   padding: 0.1em 0.4em;
   border-radius: 6px;
-  background: var(--background);
+  background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
 }
 .markdown pre {
   overflow-x: auto;
   padding: 0.7em 0.9em;
   border-radius: 12px;
-  background: var(--background);
+  background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
   line-height: 1.5;
 }
@@ -168,10 +168,11 @@ code {
 .markdown th,
 .markdown td {
   padding: 0.3em 0.8em;
+  overflow-wrap: normal;
   border: 1px solid var(--border);
 }
 .markdown th {
-  background: var(--background);
+  background: var(--muted);
   font-weight: 600;
 }
 .markdown hr {
