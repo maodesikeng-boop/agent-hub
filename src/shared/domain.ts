@@ -593,6 +593,20 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
  *   驱动层在下一条消息前按新的值 --resume 重启（--resume 换了工作目录也接得上，m0-report 实验 2）。
  * 发消息一律找这个对话 generation 最大的那个会话。项目经理在资料页点“开新会话”时加一（见 ledger/handover.ts）。
  */
+/**
+ * 一个会话累计用了多少 token（驱动层从 claude 每轮的 result.usage 累加，老数据没有就是全 0），加上当前上下文的大小。
+ * context：最近一次请求的 input + 缓存读 + 缓存写（取最近一条 assistant 消息的 usage，子 agent 的不算）。
+ */
+export interface TokenUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  context: number;
+}
+
+export const EMPTY_TOKEN_USAGE: Readonly<TokenUsage> = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 };
+
 export interface AgentSessionRow {
   id: SessionId;
   role: AgentRole;
@@ -620,6 +634,7 @@ export interface AgentSessionRow {
   hasCompletedTurn: boolean;
   lastEventAt: number | null;
   rateLimit: RateLimitInfo | null;
+  usage: TokenUsage;
   createdAt: number;
   updatedAt: number;
 }
@@ -649,6 +664,12 @@ export interface SessionState {
   rateLimit: RateLimitInfo | null;
   /** 正在因为网络出错重试；没有（或老服务端没带这个字段）就是 null / undefined，网页照常显示。 */
   apiRetry?: ApiRetryInfo | null;
+  /** 累计用量；老服务端没带这个字段就是 undefined，网页当 0。 */
+  usage?: TokenUsage;
+  /** 这个会话的厂商、模型、思考程度（同 AgentSessionRow，model、effort 是 null = 默认）；老服务端没带就是 undefined。Worker 面板显示。 */
+  vendor?: string;
+  model?: string | null;
+  effort?: string | null;
   lastEventAt: number | null;
 }
 

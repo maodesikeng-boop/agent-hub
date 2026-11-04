@@ -109,8 +109,9 @@ export function App() {
   };
 
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
-  // 右边栏列的是当前打开的项目经理（资料页、Worker 的对话都算它）的 Worker
-  const panelPm = profile?.id ?? (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
+  // 对话页顶栏右边的 Worker 按钮列的是当前打开的项目经理（Worker 的对话也算它）的 Worker
+  const panelPm = (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
+  const workerPanel = <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />;
 
   return (
     <ModelCatalogProvider>
@@ -149,6 +150,7 @@ export function App() {
             older={state.older[openWorker]}
             draft={drafts[openWorker] ?? ""}
             staging={staging.of(openWorker)}
+            stats={workerPanel}
             notices={notices}
             onBack={() => setOpenWorker(null)}
             onDraftChange={setDraft}
@@ -168,6 +170,7 @@ export function App() {
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             staging={staging.of(active.id)}
+            stats={workerPanel}
             notices={notices}
             onDraftChange={setDraft}
             onSend={send}
@@ -184,7 +187,6 @@ export function App() {
           </>
         )}
       </main>
-      <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />
     </div>
     </ModelCatalogProvider>
   );

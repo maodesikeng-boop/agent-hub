@@ -312,6 +312,16 @@ describe("applyDriverEvent", () => {
     expect(ledger.snapshot().sessions).toEqual([states[3]]);
   });
 
+  it("会话状态带累计用量：驱动层写进那一行的，下一个事件时推给网页；老数据（没记过）是全 0", () => {
+    setSession({ status: "running" });
+    ev({ type: "session.started", at: 1, resumed: true, model: null, tools: [] });
+    expect(sessionStates().at(-1)!.usage).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 });
+    const usage = { input: 4, cacheRead: 210, cacheWrite: 15, output: 60, context: 117 };
+    setSession({ usage });
+    ev({ type: "agent.tool", at: 2, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "ls" } });
+    expect(sessionStates().at(-1)!.usage).toEqual(usage);
+  });
+
   describe("api_retry（断网、过载时 claude 在重试）", () => {
     const retry = (attempt: number, over: Partial<{ errorStatus: number | null; error: string }> = {}) =>
       ({ type: "api_retry", at: attempt, info: { attempt, maxRetries: 10, retryAt: 1_000 * attempt, errorStatus: null, error: "unknown", ...over } }) as const;
@@ -661,7 +671,7 @@ describe("snapshot 和翻页", () => {
     expect(conv.messages[99]?.text).toBe("m104");
     expect(conv.hasMore).toBe(true);
     expect(snap.sessions).toEqual([
-      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, lastEventAt: null },
+      { sessionId, conversationId, pmId: snap.pms[0]!.id, generation: 1, status: "idle", activity: "idle", currentTool: null, rateLimit: null, apiRetry: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 }, vendor: "claude", model: null, effort: null, lastEventAt: null },
     ]);
 
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);

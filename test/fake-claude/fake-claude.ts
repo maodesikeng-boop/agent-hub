@@ -29,7 +29,8 @@ import { createInterface } from "node:readline";
 
 /** 一轮里的一步。 */
 export type FakeStep =
-  | { text: string; noUuid?: boolean }
+  /** usage、messageId：这条 assistant 消息带的 message.usage 和 message.id（同一个 id 发几次，像真 claude 分几个事件推同一条消息）；parentToolUseId：子 agent 的消息。 */
+  | { text: string; noUuid?: boolean; usage?: Record<string, number>; messageId?: string; parentToolUseId?: string }
   /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）。 */
   | { tool: { name: string; input: unknown; result?: string; durationMs?: number } }
   | { rateLimit: Record<string, unknown> }
@@ -58,6 +59,8 @@ export interface FakeTurn {
   steps?: FakeStep[];
   /** 不给就是 success。 */
   result?: { subtype?: string; isError?: boolean; result?: string };
+  /** result 里的 usage（这一轮的用量）；不给是 { input_tokens: 10, output_tokens: 5 }。 */
+  usage?: Record<string, number>;
   /** 默认每轮在 result 前发一条 M0 记录里的 rate_limit_event；false 不发。 */
   rateLimit?: Record<string, unknown> | false;
 }
@@ -299,7 +302,7 @@ let turnSeq = 0;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function result(subtype: string, isError: boolean, text: string, startedAt: number): void {
+function result(subtype: string, isError: boolean, text: string, startedAt: number, usage?: Record<string, number>): void {
   emit({
     type: "result",
     subtype,
@@ -310,7 +313,7 @@ function result(subtype: string, isError: boolean, text: string, startedAt: numb
     result: text,
     session_id: sessionId,
     total_cost_usd: 0.0011,
-    usage: { input_tokens: 10, output_tokens: 5 },
+    usage: usage ?? { input_tokens: 10, output_tokens: 5 },
     permission_denials: [],
     uuid: randomUUID(),
   });
@@ -329,19 +332,23 @@ function interruptedMarker(): void {
   });
 }
 
-function assistant(content: unknown[], withUuid = true): void {
+function assistant(
+  content: unknown[],
+  withUuid = true,
+  extra: { usage?: Record<string, number>; messageId?: string; parentToolUseId?: string } = {},
+): void {
   const event: Record<string, unknown> = {
     type: "assistant",
     message: {
-      id: `msg_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      id: extra.messageId ?? `msg_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       type: "message",
       role: "assistant",
       model,
       content,
       stop_reason: null,
-      usage: { input_tokens: 10, output_tokens: 5 },
+      usage: extra.usage ?? { input_tokens: 10, output_tokens: 5 },
     },
-    parent_tool_use_id: null,
+    parent_tool_use_id: extra.parentToolUseId ?? null,
     session_id: sessionId,
   };
   if (withUuid) event.uuid = randomUUID();
@@ -394,7 +401,7 @@ async function runTurn(content: UserContent[]): Promise<void> {
       while (!existsSync(step.waitFile) && !aborted()) await sleep(20);
     } else if ("text" in step) {
       lastText = step.text;
-      assistant([{ type: "text", text: step.text }], !step.noUuid);
+      assistant([{ type: "text", text: step.text }], !step.noUuid, step);
     } else if ("tool" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }]);
@@ -471,7 +478,7 @@ async function runTurn(content: UserContent[]): Promise<void> {
     });
   }
   const r = turn.result ?? {};
-  result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt);
+  result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt, turn.usage);
   finishTurn();
 }
 

@@ -220,6 +220,7 @@ describe("SessionStore", () => {
         status: "idle",
         hasCompletedTurn: false,
         rateLimit: null,
+        usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 },
         addDirs: [],
         createdAt: 500,
         updatedAt: 500,
@@ -236,6 +237,12 @@ describe("SessionStore", () => {
       t = 3_000;
       expect(store.update(id, { pid: null, rateLimit: null })).toMatchObject({ pid: null, rateLimit: null, status: "running", updatedAt: 3_000 });
       expect(store.listWithProcess()).toEqual([]);
+      // 用量存成 JSON，读出来一样；缺的字段当 0
+      const usage = { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, context: 5 };
+      expect(store.update(id, { usage }).usage).toEqual(usage);
+      expect(createSessionStore(db).get(id)!.usage).toEqual(usage);
+      db.run("UPDATE agent_sessions SET token_usage = ? WHERE id = ?", JSON.stringify({ input: 9 }), id);
+      expect(store.get(id)!.usage).toEqual({ input: 9, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 });
       // 空补丁只更新 updatedAt
       t = 4_000;
       expect(store.update(id, {}).updatedAt).toBe(4_000);

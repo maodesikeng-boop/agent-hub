@@ -1,5 +1,5 @@
 // 界面上的文字：状态名、错误、时间。
-import type { MessageStatus, PersonaChange, PmMode } from "../shared/index.ts";
+import type { MessageStatus, PersonaChange, PmMode, TokenUsage } from "../shared/index.ts";
 import { ApiError } from "./client.ts";
 
 export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
@@ -51,6 +51,18 @@ export function formatQuotaReset(resetsAtSeconds: number, now: Date = new Date()
   const d = new Date(resetsAtSeconds * 1000);
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return d.toDateString() === now.toDateString() ? time : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
+
+/** token 数用“万”做单位：不到 100 万留一位小数（去掉 .0），再大取整。 */
+export function formatTokens(count: number): string {
+  const wan = count / 10_000;
+  return `${wan < 100 ? Number(wan.toFixed(1)) : Math.round(wan)} 万`;
+}
+
+/** 悬停 token 数时的明细，一项一行：输入、缓存读、缓存写、输出、当前上下文。 */
+export function formatTokenDetail(usage: TokenUsage): string {
+  const n = (v: number) => v.toLocaleString("en-US");
+  return [`输入 ${n(usage.input)}`, `缓存读 ${n(usage.cacheRead)}`, `缓存写 ${n(usage.cacheWrite)}`, `输出 ${n(usage.output)}`, `当前上下文 ${n(usage.context)}`].join("\n");
 }
 
 export function byteLength(text: string): number {

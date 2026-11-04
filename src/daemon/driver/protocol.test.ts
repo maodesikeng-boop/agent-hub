@@ -212,6 +212,7 @@ const row: AgentSessionRow = {
   hasCompletedTurn: false,
   lastEventAt: null,
   rateLimit: null,
+  usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 },
   createdAt: 0,
   updatedAt: 0,
 };

@@ -27,6 +27,7 @@ export function WorkerConversation({
   older,
   draft,
   staging,
+  stats,
   notices,
   onBack,
   onDraftChange,
@@ -49,6 +50,8 @@ export function WorkerConversation({
   draft: string;
   /** 还没发的文件（和项目经理页面同一套，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
+  /** 标题栏右边：Worker 按钮。 */
+  stats: React.ReactNode;
   notices: React.ReactNode;
   onBack: () => void;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
@@ -85,6 +88,7 @@ export function WorkerConversation({
         <Avatar colorKey={identity.avatarKey} size={34} />
         <h1 className="min-w-0 truncate text-[17px] leading-snug font-semibold">{title}</h1>
         {readonly && <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-[13px] font-medium">只读</span>}
+        {stats}
       </header>
       {notices}
       {view === undefined ? (

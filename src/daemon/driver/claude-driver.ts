@@ -11,6 +11,7 @@ import {
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
   KILL_WAIT_MS,
+  EMPTY_TOKEN_USAGE,
   LAST_EVENT_WRITE_MS,
   RELAUNCH_NOTE,
   RESEND_NOTE,
@@ -35,6 +36,8 @@ import {
   type Unsubscribe,
 } from "../../shared/index.ts";
 import {
+  addTurnUsage,
+  assistantContext,
   buildChildEnv,
   buildClaudeArgs,
   buildInterruptLine,
@@ -795,9 +798,13 @@ export class ClaudeDriver implements Driver {
         if (isInterruptMarker(obj)) st.turnInterrupted = true;
         else if (obj.isReplay === true && st.inFlight) this.#markProcessing(st, st.inFlight, at);
         return;
-      case "assistant":
+      case "assistant": {
+        const context = assistantContext(obj);
+        const row = context === null ? null : this.#row(st);
+        if (context !== null && row && context !== row.usage.context) this.#update(st, { usage: { ...row.usage, context } });
         for (const ev of parseAssistant(obj, line, at)) this.#emit(st.id, ev);
         return;
+      }
       case "rate_limit_event": {
         const info = parseRateLimit(obj.rate_limit_info);
         if (!info) return;
@@ -876,7 +883,10 @@ export class ClaudeDriver implements Driver {
     }
     st.turnInterrupted = false;
     st.stopRequested = false;
-    if (this.#row(st)?.hasCompletedTurn === false) this.#update(st, { hasCompletedTurn: true });
+    const row = this.#row(st);
+    const patch: AgentSessionPatch = { usage: addTurnUsage(row?.usage ?? EMPTY_TOKEN_USAGE, obj.usage) };
+    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
+    this.#update(st, patch);
     this.#clearTimer(st, "interruptTimer");
     this.#emit(st.id, event);
     this.#resolveInterrupt(st);
