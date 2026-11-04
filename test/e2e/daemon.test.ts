@@ -94,8 +94,9 @@ describe("W5 组装 + 端到端", () => {
     expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
     // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
     expect(prompt).not.toContain(AGENTS_NOTE);
-    expect(argv).toContain("--strict-mcp-config");
-    expect(JSON.parse(readFileSync(argv[argv.indexOf("--mcp-config") + 1]!, "utf8"))).toEqual({ mcpServers: {} });
+    // 不限制 MCP：不带这两个参数，claude 按默认方式加载用户的连接器
+    expect(argv).not.toContain("--strict-mcp-config");
+    expect(argv).not.toContain("--mcp-config");
     // 用户的消息原样写进去，不加标签
     expect(env.stdinTexts()).toEqual(["你好"]);
     await terminate(daemon);

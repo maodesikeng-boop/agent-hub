@@ -154,7 +154,7 @@ function isPositiveInteger(value: unknown): value is number {
 
 /**
  * 启动参数（设计第 7.2 节）。resume：用 --resume 还是 --session-id。
- * 这里只放固定的协议参数和会话那一行的 --model、--add-dir；每次启动要变的东西（提示词、设置文件、MCP 配置、环境变量）
+ * 这里只放固定的协议参数和会话那一行的 --model、--add-dir；每次启动要变的东西（提示词、设置文件、环境变量）
  * 由 daemon/launch.ts 的 createLaunchPreparer 生成，经 LaunchFiles 原样传进来。
  */
 export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, resume: boolean): string[] {
@@ -173,7 +173,6 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
   for (const dir of session.addDirs) args.push("--add-dir", dir);
-  args.push("--strict-mcp-config", "--mcp-config", files.mcpConfigFile);
   return args;
 }
 

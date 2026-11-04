@@ -61,7 +61,7 @@
 **“一样”具体指什么**：以 `src/daemon/launch.ts` 现在给项目经理的做法为准，Worker 走同一个函数：
 
 - 照样加载全局 `~/.claude`：全局 `CLAUDE.md`、钩子、插件都进来，不用 `--bare`；
-- 生成同样的三份文件：`prompt.md`、`settings.json`、空的 `mcp.json`（`--strict-mcp-config`）；
+- 生成同样的两份文件：`prompt.md`、`settings.json`（不限制 MCP，见 prototype-design 第 7.2 节）；
 - 同样的环境变量：`HUB_TOKEN`（Worker 自己的令牌）、`HUB_SOCK`、`PATH`；
 - 同一个默认档 `auto`；
 - 工作目录不一样：在 worktree 里干活时是 worktree，不带项目的附加文件夹；在主文件夹里干活时和项目经理一样，主文件夹加附加文件夹。

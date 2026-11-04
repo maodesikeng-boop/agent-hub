@@ -176,7 +176,7 @@ const row: AgentSessionRow = {
 };
 
 describe("启动参数", () => {
-  const files = { promptFile: "/l/prompt.md", settingsFile: "/l/settings.json", mcpConfigFile: "/l/mcp.json", env: {}, fingerprint: "" };
+  const files = { promptFile: "/l/prompt.md", settingsFile: "/l/settings.json", env: {}, fingerprint: "" };
   it("第一次 --session-id，带设置文件和每个附加文件夹；没有模型就不带 --model", () => {
     expect(buildClaudeArgs(row, files, false)).toEqual([
       "-p",
@@ -196,13 +196,10 @@ describe("启动参数", () => {
       "/a",
       "--add-dir",
       "/b",
-      "--strict-mcp-config",
-      "--mcp-config",
-      "/l/mcp.json",
     ]);
   });
   it("恢复用 --resume，有模型带 --model", () => {
-    const args = buildClaudeArgs({ ...row, model: "sonnet", addDirs: [] }, { promptFile: "/p", mcpConfigFile: "/m", env: {}, fingerprint: "" }, true);
+    const args = buildClaudeArgs({ ...row, model: "sonnet", addDirs: [] }, { promptFile: "/p", env: {}, fingerprint: "" }, true);
     expect(args.slice(7, 11)).toEqual(["--resume", row.vendorSessionId, "--model", "sonnet"]);
     expect(args).not.toContain("--settings");
     expect(args).not.toContain("--add-dir");

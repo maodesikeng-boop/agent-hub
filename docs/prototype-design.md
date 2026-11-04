@@ -500,7 +500,6 @@ claude -p
   --append-system-prompt-file <launch/会话/prompt.md>
   --settings <launch/会话/settings.json>
   --add-dir <附加文件夹> ...
-  --strict-mcp-config --mcp-config <空配置>   # 不加载项目里的 MCP 服务器
 ```
 
 - **提示词**：守护进程每次启动前生成 `prompt.md`，内容依次是：软件定的角色说明和 `hub` 命令用法（agent 改不了）、性格设定、项目信息（名字、文件夹、进行中的工单）、最近一份交接、“先读项目根目录的 `AGENTS.md`”。用“追加”而不是“替换”系统提示，保留 Claude Code 自带的能力。
@@ -515,7 +514,7 @@ claude -p
 - **用户全局设置会跟着进来**：`--settings` 是在用户自己的设置上**加**一层，不是替换。M0 实测，用户全局 `~/.claude/` 里的 `CLAUDE.md`、钩子（包括用户自己的 `PermissionRequest` 钩子）、插件，每个 agent 都会加载。这和“权限沿用 agent 自己的设置”一致，是有意的。影响和另一种做法见 [m1-plan.md](m1-plan.md) 的待拍板问题。
 - **工作目录**：项目经理在项目里 = 主文件夹；项目经理私聊 = `pm-home/<项目经理>/`；Worker = 自己的 worktree。
 - **环境变量**：`HUB_TOKEN`（这个会话的令牌）、`HUB_SOCK`（`hub.sock` 的真实路径）、需要时 `CLAUDE_CONFIG_DIR`。
-- **项目的 `.mcp.json`**：`claude -p` 在没信任过的文件夹里也会连项目里配置的 MCP 服务器（[headless][cc-headless] 的 bare mode 一节），所以用 `--strict-mcp-config` 只加载我们给的配置。
+- **MCP**：不加 `--strict-mcp-config`，也不传 `--mcp-config`，`claude` 按默认方式加载 MCP：用户的 claude.ai 连接器（Slack、Gmail、Google Drive、Jira 等）、用户级配置都能用。项目文件夹里的 `.mcp.json` 也可能被加载：`claude -p` 在没信任过的文件夹里也会连项目里配置的 MCP 服务器（[headless][cc-headless] 的 bare mode 一节）。已知，用户接受（11-04 用户定；此前用空配置加 `--strict-mcp-config` 挡掉它，同时也挡掉了用户的连接器）。不做白名单或只读过滤。
 - **定时任务的运行**额外加 `--permission-prompts none`：没人能回答的权限请求直接拒绝，不挂着等（[headless][cc-headless] 的 “Turn off permission prompts in unattended runs” 一节）。
 
 总助的分拣和汇总是一次性调用，不留会话：

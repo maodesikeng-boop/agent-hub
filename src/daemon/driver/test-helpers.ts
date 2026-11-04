@@ -113,10 +113,8 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       const launchDir = join(dir, "launch", String(session.id));
       mkdirSync(launchDir, { recursive: true });
       writeFileSync(join(launchDir, "prompt.md"), "你是项目经理。");
-      writeFileSync(join(launchDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
       const files: LaunchFiles = {
         promptFile: join(launchDir, "prompt.md"),
-        mcpConfigFile: join(launchDir, "mcp.json"),
         env: { ...launch.env, ...launch.perSession.get(session.id)?.env },
         fingerprint: launch.perSession.get(session.id)?.fingerprint ?? launch.fingerprint,
       };
