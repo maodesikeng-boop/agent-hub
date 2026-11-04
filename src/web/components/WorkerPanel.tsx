@@ -9,6 +9,7 @@ import { Button } from "../ui/button.tsx";
 const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
   working: "干活中",
   stopping: "停止中",
+  preparing: "准备中",
   idle: "空闲",
 };
 /** 不认识的 activity 当“进行中”显示。 */

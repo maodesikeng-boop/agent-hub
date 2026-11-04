@@ -503,9 +503,15 @@ describe("右边栏的 Worker 列表", () => {
 
   it("各状态的文字：干活中、停止中、空闲、已收工；不认识的 activity 显示“进行中”", async () => {
     const stopping = makeSession({ sessionId: 3, conversationId: 30, activity: "stopping" });
-    const unknown = makeSession({ sessionId: 4, conversationId: 31, activity: "preparing" as SessionState["activity"] });
+    const unknown = makeSession({ sessionId: 4, conversationId: 31, activity: "bogus" as SessionState["activity"] });
     await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), stopping, unknown, makeSession({ sessionId: 5, conversationId: 32, status: "ended" })] }));
     expect(rows()).toEqual(["修 X停止中", "写文档进行中", "查日志已收工"]);
+  });
+
+  it("准备中（在跑项目的准备命令）：显示“准备中”", async () => {
+    const preparing = makeSession({ sessionId: 3, conversationId: 30, activity: "preparing" });
+    await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), preparing] }));
+    expect(rows()[0]).toBe("修 X准备中");
   });
 
   it("项目经理的会话里有“收工”那一行也算收工；会话还没有的 Worker 当空闲", async () => {
