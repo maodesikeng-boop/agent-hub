@@ -1,9 +1,10 @@
 import { Folder } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ConversationId, PmId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
+import { AskBar } from "./AskBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
 import { Composer } from "./Composer.tsx";
@@ -28,6 +29,8 @@ export function Conversation({
   onStop,
   onLoadOlder,
   actions,
+  asks,
+  onDismissAsks,
   onOpenProfile,
 }: {
   entry: ConversationEntry;
@@ -49,11 +52,16 @@ export function Conversation({
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
+  /** 还在等用户确定的 hub ask（selectors.ts 的 pendingAsks），顶栏下面显示成一条。 */
+  asks: Message[];
+  onDismissAsks: (messageIds: MessageId[]) => void;
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
   const [stopPhase, setStopPhase] = useState<StopPhase>("idle");
   const activity = session?.activity ?? "idle";
+  /** 点“等你确定”条里的某个问题：n 每点一次加一，点同一条也再跳一次。 */
+  const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
   // 这一轮结束了，下一轮又能点“停止”
   useEffect(() => {
@@ -102,6 +110,7 @@ export function Conversation({
         {stats}
       </header>
       {notices}
+      <AskBar asks={asks} onJump={(messageId) => setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }))} onDismiss={onDismissAsks} />
       <div className="relative min-h-0 flex-1">
         {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>}
         <MessageList
@@ -113,6 +122,7 @@ export function Conversation({
           onLoadOlder={() => onLoadOlder(id)}
           onRetry={onRetry}
           actions={actions}
+          focus={focus}
         />
       </div>
       <div className="mx-auto w-full max-w-[888px] shrink-0 space-y-2.5 px-6 pb-5">

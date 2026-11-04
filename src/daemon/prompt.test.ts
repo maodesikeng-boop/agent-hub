@@ -200,6 +200,8 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,
+      `${hub} ask --stdin`,
+      "会单独提醒用户、不会被别的消息刷掉",
     ]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }

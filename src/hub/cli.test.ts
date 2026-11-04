@@ -178,6 +178,25 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.send", args: { workerId: 3, text: "再改一下" } }]);
     });
 
+    it("ask --stdin sends the text", async () => {
+      expect((await hub(["ask", "--stdin"], { stdin: stdinOf("用 A 还是 B？\n") })).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask", args: { text: "用 A 还是 B？" } }]);
+    });
+
+    it.each([[["ask"]], [["ask", "--text", "x"]], [["ask", "3", "--stdin"]], [["ask", "--title", "x", "--stdin"]]])(
+      "usage error: hub %j",
+      async (argv) => {
+        const r = await hub([...argv], { stdin: stdinOf("问") });
+        expect(r.code).toBe(HUB_EXIT.usage);
+        expect(ledger.calls).toHaveLength(0);
+      },
+    );
+
+    it("an empty question from --stdin is a usage error", async () => {
+      expect((await hub(["ask", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it.each([
       [["worker", "end", "3"], "worker.end", { workerId: 3 }],
       [["worker", "list"], "worker.list", {}],
@@ -218,7 +237,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`]) {
+      for (const usage of [`${cmd} worker start --title`, "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} ask --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });

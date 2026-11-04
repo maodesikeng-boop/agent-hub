@@ -9,7 +9,7 @@ import { stripMarkdown } from "./plainText.ts";
 
 const identity = { name: "小林", avatarKey: 1 };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
-const sidebarProps = { waiting: new Set<number>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
+const sidebarProps = { waiting: new Set<number>(), asking: new Set<number>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
 
 function agentSays(text: string) {
   return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head actions={actions} />);

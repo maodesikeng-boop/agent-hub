@@ -318,6 +318,11 @@ export interface Ledger {
    * 错误：没有这条消息（包括老项目群里的）→ not_found；不是用户发的、不是 failed → conflict。
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
+  /**
+   * 用户点“知道了”，清掉一条 hub ask 的提醒（M5，POST /api/messages/:id/dismiss-ask）：meta 加上 dismissed、推 message.updated；
+   * 已经清过的什么也不做。错误：没有这条消息（包括老项目群里的）→ not_found；不是 hub ask 发的 → conflict。
+   */
+  dismissAsk(messageId: MessageId): void;
 
   // ---- agent 接口用（M2）----
   /**

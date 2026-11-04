@@ -113,6 +113,11 @@ export function postStop(conversationId: ConversationId): Promise<void> {
   return postJson<void>(API_PATHS.stop(conversationId));
 }
 
+/** 用户点“知道了”，清掉一条 hub ask 的提醒。 */
+export function postDismissAsk(messageId: MessageId): Promise<void> {
+  return postJson<void>(API_PATHS.dismissAsk(messageId));
+}
+
 export function postCreatePm(body: CreatePmRequest): Promise<CreatePmResponse> {
   return postJson<CreatePmResponse>(API_PATHS.pms, body);
 }

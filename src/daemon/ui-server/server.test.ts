@@ -163,6 +163,7 @@ describe("没登录", () => {
     ["PUT", "/api/pms/1/persona", { text: "x" }],
     ["POST", "/api/persona-changes/1/revert"],
     ["POST", "/api/messages/1/retry"],
+    ["POST", "/api/messages/1/dismiss-ask"],
   ];
 
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
@@ -573,6 +574,7 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST retry", "POST", "/api/messages/1/retry"],
+  ["POST dismiss-ask", "POST", "/api/messages/1/dismiss-ask"],
 ];
 
 /** 每个新接口都被这三道检查拦：Host、Origin（会改状态的请求都查，包括 PUT）、cookie。 */
@@ -893,6 +895,26 @@ describe("POST /api/messages/:id/retry 重试失败的消息", () => {
     const res = await call("POST", "/api/messages/12/retry");
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: "只有失败的消息能重试", code: "conflict" });
+  });
+});
+
+describe("POST /api/messages/:id/dismiss-ask 清掉 hub ask 的提醒", () => {
+  it("调 ledger.dismissAsk，204", async () => {
+    const res = await call("POST", "/api/messages/12/dismiss-ask");
+    expect(res.statusCode).toBe(204);
+    expect(ledger.dismissed).toEqual([12]);
+  });
+
+  it.each(["abc", "0", "1.5"])("消息编号 %s 不是正整数 → 400，不调账本", async (id) => {
+    expect((await call("POST", `/api/messages/${id}/dismiss-ask`)).statusCode).toBe(400);
+    expect(ledger.dismissed).toEqual([]);
+  });
+
+  it("消息不存在 → 404，不是提问 → 409", async () => {
+    ledger.failWith = new LedgerRequestError("not_found", "没有这条消息");
+    expect((await call("POST", "/api/messages/12/dismiss-ask")).statusCode).toBe(404);
+    ledger.failWith = new LedgerRequestError("conflict", "这条消息不是要用户确定的提问");
+    expect((await call("POST", "/api/messages/12/dismiss-ask")).statusCode).toBe(409);
   });
 });
 

@@ -1,8 +1,10 @@
 // “等你”提醒（m4-plan）：对话停稳了就在左栏、标签页标题和浏览器通知里提醒用户。判断在网页里算，守护进程不管。
+// “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import type { ConversationId } from "../shared/index.ts";
-import { listConversations, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
+import type { ConversationId, MessageId } from "../shared/index.ts";
+import { stripMarkdown } from "./plainText.ts";
+import { listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
 import type { HubState } from "./state.ts";
 
 /** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
@@ -89,8 +91,9 @@ function currentPermission(): NotifyPermission {
 }
 
 /**
- * 判断每个对话在不在“等你”，并提醒用户：返回在“等你”的对话（左栏显示）、通知权限和申请权限的函数；
- * 同时把标签页标题改成“(N) 产品名”，从“不算”变成“等你”时弹一次浏览器通知。
+ * 判断每个对话在不在“等你”、有没有“等你确定”的提问，并提醒用户：返回在“等你”的对话、有提问的对话（左栏显示）、
+ * 通知权限和申请权限的函数；同时把标签页标题改成“(N) 产品名”（N 是两种提醒的对话数，同一个对话只算一次），
+ * 从“不算”变成“等你”时弹一次浏览器通知，来了新的提问马上弹一次。
  * viewing 是用户正开着的对话（没有就是 null）；onOpen 在用户点通知时调，打开那个对话。
  */
 export function useWaitingReminders(state: HubState, viewing: ConversationId | null, onOpen: (conversationId: ConversationId) => void) {
@@ -124,16 +127,18 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
   const timers = useRef(new Map<ConversationId, ReturnType<typeof setTimeout>>());
   const opened = useRef(false);
 
-  const announce = useCallback((conversationId: ConversationId) => {
+  /** 弹一条通知。ask 是提问的正文（有就是“等你确定”，没有就是“等你”，正文取对话的最后一条）。 */
+  const announce = useCallback((conversationId: ConversationId, ask?: string) => {
     const { state, viewing, foreground, onOpen, notifyEnabled } = latest.current;
     if (foreground && viewing === conversationId) return;
     if (!notifyEnabled || currentPermission() !== "granted") return;
     const entry = listConversations(state).find((e) => e.id === conversationId);
     if (!entry) return;
+    const tag = notificationTag(entry.pm?.id ?? null, conversationId);
     try {
-      const notification = new Notification(`${entry.name} 等你`, {
-        body: previewText(entry),
-        tag: notificationTag(entry.pm?.id ?? null, conversationId),
+      const notification = new Notification(`${entry.name} ${ask === undefined ? "等你" : "等你确定"}`, {
+        body: ask === undefined ? previewText(entry) : stripMarkdown(ask),
+        tag: ask === undefined ? tag : `ask-${tag}`,
       });
       notification.onclick = () => {
         window.focus();
@@ -176,6 +181,26 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
     // candidates 的内容变了才重新算；它的引用每次状态变化都是新的
   }, [ready, candidatesKey, announce]);
 
+  // 有提问的对话：一直算到处理；新来的提问马上弹通知（刚打开网页时本来就有的不弹）
+  const asks = useMemo(
+    () =>
+      ready
+        ? Object.keys(state.conversations).flatMap((key) => pendingAsks(state, Number(key)).map((message) => ({ conversationId: Number(key), message })))
+        : [],
+    [ready, state],
+  );
+  const asking = useMemo<ReadonlySet<ConversationId>>(() => new Set(asks.map((a) => a.conversationId)), [asks]);
+  const knownAsks = useRef<Set<MessageId> | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    const known = (knownAsks.current ??= new Set(asks.map((a) => a.message.id)));
+    for (const { conversationId, message } of asks) {
+      if (known.has(message.id)) continue;
+      known.add(message.id);
+      announce(conversationId, message.text);
+    }
+  }, [ready, asks, announce]);
+
   useEffect(() => {
     const pending = timers.current;
     return () => {
@@ -184,9 +209,10 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
     };
   }, []);
 
+  const reminded = new Set([...waiting, ...asking]).size;
   useEffect(() => {
-    document.title = waiting.size > 0 ? `(${waiting.size}) ${PRODUCT_NAME}` : PRODUCT_NAME;
-  }, [waiting]);
+    document.title = reminded > 0 ? `(${reminded}) ${PRODUCT_NAME}` : PRODUCT_NAME;
+  }, [reminded]);
 
   /** 拨通知开关；浏览器要求申请权限由用户的操作触发，所以只在拨的时候申请。 */
   const setEnabled = useCallback(async (on: boolean) => {
@@ -209,5 +235,5 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
   }, []);
 
   const notify: NotifySettings = { permission, enabled: notifyEnabled, setEnabled };
-  return { waiting, notify };
+  return { waiting, asking, notify };
 }
