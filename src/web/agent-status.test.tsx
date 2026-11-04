@@ -116,18 +116,31 @@ describe("MessageList：状态跟着最后一条回复的头像行", () => {
     expect(head!.parentElement).toHaveTextContent("执行了 2 个操作");
   });
 
-  it("状态跟着走：最后一条不是一串里的第一条，也带头像行；前面的只在第一条有头像", () => {
+  it("一串连续回复：状态在这一串第一行的头像行上，后面的回复不再多出同名头像行", () => {
     const { container } = list([
       makeUserMessage({ id: 1, text: "做点事" }),
       makeToolMessage({ id: 2 }),
       makeMessage({ id: 3, text: "第二段回复" }),
+      makeToolMessage({ id: 4 }),
+    ]);
+    const all = heads(container);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toHaveTextContent("项目经理·在写回复...");
+    expect(all[0]!.parentElement).toHaveTextContent("执行了 1 个操作");
+    expect(container.querySelectorAll("article[data-head='true'], [data-head='true']")).toHaveLength(1);
+  });
+
+  it("上一轮的回复后面又有用户消息：状态只在新这一串的头像行上，上一串的头像行照旧", () => {
+    const { container } = list([
+      makeMessage({ id: 1, text: "上一轮回复" }),
+      makeUserMessage({ id: 2, text: "再来" }),
+      makeToolMessage({ id: 3 }),
+      makeMessage({ id: 4, text: "这一轮回复" }),
     ]);
     const all = heads(container);
     expect(all).toHaveLength(2);
     expect(all[0]).not.toHaveTextContent("在写回复");
-    expect(all[0]).toHaveTextContent("项目经理");
-    expect(all[1]).toHaveTextContent("项目经理·在写回复...");
-    expect(all[1]!.closest("article")).toHaveTextContent("第二段回复");
+    expect(all[1]).toHaveTextContent("在写回复");
   });
 
   it("这一轮结束（没有状态）：状态没了，只有第一条回复带头像", () => {

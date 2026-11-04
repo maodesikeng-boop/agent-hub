@@ -103,13 +103,27 @@ export function MessageList({
     if (hasMore && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
   };
 
-  /** 状态跟着最后一项走：它是 agent 的回复（文字或一组操作）就接在它的头像行上，不然（用户消息、系统消息、待发的）单独出一行。 */
-  const lastItem = items.at(-1);
-  const rideOnLast = status != null && pending.length === 0 && lastItem !== undefined && (lastItem.kind === "tools" || lastItem.message.sender === "agent");
-  const typing = status != null && !rideOnLast && statusAgent !== undefined;
-
-  /** 上一项是哪个 agent 说的（头像编号）；不是 agent 的消息是 null。换人也要重新署名。 */
+  /** 每一项要不要带头像行：上一项不是同一个 agent 说的（头像编号不同，或不是 agent 的消息）就要，换人也要重新署名。 */
+  const heads: boolean[] = [];
   let previous: number | null = null;
+  for (const item of items) {
+    const message = item.kind === "tools" ? item.messages[0]! : item.message;
+    const avatarKey = agentOf(message).avatarKey;
+    heads.push(previous !== avatarKey);
+    previous = item.kind === "tools" || message.sender === "agent" || message.sender === "pm" ? avatarKey : null;
+  }
+
+  /**
+   * 状态挂在这一串连续回复（最后一项往前到它的第一条）的头像行上，后面的回复不另出头像行；
+   * 最后一项不是 agent 的回复（用户消息、系统消息、待发的）就在列表底部单独出一行。
+   */
+  const lastIndex = items.length - 1;
+  const lastItem = items[lastIndex];
+  const rideOnRun = status != null && pending.length === 0 && lastItem !== undefined && (lastItem.kind === "tools" || lastItem.message.sender === "agent");
+  let runHead = lastIndex;
+  while (rideOnRun && runHead > 0 && !heads[runHead]) runHead--;
+  const typing = status != null && !rideOnRun && statusAgent !== undefined;
+
   return (
     <div className="relative h-full">
       <div className="messages flex h-full flex-col overflow-y-auto pt-4 pb-6" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
@@ -123,16 +137,14 @@ export function MessageList({
             {older === "error" ? "加载失败，点击重试" : older === "loading" ? "加载中" : "加载更早的消息"}
           </button>
         )}
-        {items.map((item) => {
+        {items.map((item, index) => {
           const message = item.kind === "tools" ? item.messages[0]! : item.message;
           const identity = agentOf(message);
-          const head = previous !== identity.avatarKey;
-          const itemStatus = rideOnLast && item === lastItem ? status : undefined;
+          const head = heads[index]!;
+          const itemStatus = rideOnRun && index === runHead ? status : undefined;
           if (item.kind === "tools") {
-            previous = identity.avatarKey;
             return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} status={itemStatus} />;
           }
-          previous = item.message.sender === "agent" || item.message.sender === "pm" ? identity.avatarKey : null;
           return (
             <MessageBubble
               key={item.message.id}
