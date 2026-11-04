@@ -243,6 +243,89 @@ describe("hub cli", () => {
     });
   });
 
+  describe("hub schedule（M6）", () => {
+    it("add --daily HH:MM --stdin 把任务说明（多行、带 $）原样放进 prompt", async () => {
+      const prompt = "汇报昨天的进展\n用 $HOME 别展开\n";
+      expect((await hub(["schedule", "add", "--name", "每日汇报", "--daily", "09:00", "--stdin"], { stdin: stdinOf(prompt) })).code).toBe(0);
+      expect(ledger.calls).toEqual([
+        { sessionId: 42, command: "schedule.add", args: { name: "每日汇报", daily: "09:00", prompt: prompt.slice(0, -1) } },
+      ]);
+    });
+
+    it.each([
+      ["30m", 30],
+      ["2h", 120],
+      ["15m", 15],
+      ["168h", 168 * 60],
+    ])("add --every %s → everyMinutes %i", async (every, minutes) => {
+      expect((await hub(["schedule", "add", "--name", "巡检", "--every", every, "--stdin"], { stdin: stdinOf("看一眼") })).code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({ name: "巡检", everyMinutes: minutes, prompt: "看一眼" });
+    });
+
+    it.each([
+      [["schedule", "list"], "schedule.list", {}],
+      [["schedule", "pause", "3"], "schedule.pause", { scheduleId: 3 }],
+      [["schedule", "resume", "3"], "schedule.resume", { scheduleId: 3 }],
+      [["schedule", "remove", "3"], "schedule.remove", { scheduleId: 3 }],
+    ] as const)("hub %j → %s", async (argv, command, args) => {
+      expect((await hub([...argv])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
+    });
+
+    it.each([
+      [["schedule"]],
+      [["schedule", "edit", "3"]],
+      [["schedule", "add", "--daily", "09:00", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--daily", "09:00", "--every", "2h", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--daily", "09:00"]],
+      [["schedule", "add", "--name", "x", "--daily", "09:00", "--text", "y"]],
+      [["schedule", "add", "--name", "x", "--daily", "9:00", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--daily", "24:00", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--daily", "09:60", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "10m", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "0h", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "169h", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "2d", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "1.5h", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--every", "2", "--stdin"]],
+      [["schedule", "add", "--name", "x", "--daily", "09:00", "--stdin", "extra"]],
+      [["schedule", "pause"]],
+      [["schedule", "pause", "abc"]],
+      [["schedule", "resume", "0"]],
+      [["schedule", "remove", "3", "4"]],
+      [["schedule", "remove", "-1"]],
+      [["schedule", "list", "--stdin"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv], { stdin: stdinOf("任务") });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).not.toBe("");
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("the pause error names the schedule, not a Worker", async () => {
+      expect((await hub(["schedule", "pause", "abc"])).stderr).toContain("定时任务编号");
+    });
+
+    it("an empty task from --stdin is a usage error", async () => {
+      expect((await hub(["schedule", "add", "--name", "x", "--daily", "09:00", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("the usage text lists the schedule commands", async () => {
+      const r = await hub(["--help"]);
+      for (const usage of [
+        `${cmd} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`,
+        `${cmd} schedule list`,
+        `${cmd} schedule pause <编号>`,
+        `${cmd} schedule resume <编号>`,
+        `${cmd} schedule remove <编号>`,
+      ]) {
+        expect(r.stdout).toContain(usage);
+      }
+    });
+  });
+
   describe("hub project setup（29）", () => {
     it("--stdin 读准备命令（多行、带 $ 原样）", async () => {
       const command = 'pnpm install --frozen-lockfile --ignore-scripts\ncp "$AGENT_HUB_ROOT_PATH/.env" .\n';

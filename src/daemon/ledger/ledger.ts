@@ -7,6 +7,7 @@
 // - projects.ts：项目（每个项目经理最多一个，挂在它唯一的对话上）、文件夹；
 // - hub-commands.ts：hub 命令；
 // - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
+// - schedules.ts：定时任务（M6）：hub schedule 命令、到点往项目经理的对话发消息、这一轮没跑成的记录；
 // - launch-context.ts：启动 claude 前给提示词用的上下文。
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
 import { homedir, tmpdir } from "node:os";
@@ -27,6 +28,7 @@ import { createLedgerPersona } from "./persona.ts";
 import { createLedgerProjects } from "./projects.ts";
 import { toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
+import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { assertWorkerOpenForUser, createLedgerWorkers } from "./workers.ts";
@@ -98,7 +100,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages);
+  const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
@@ -140,6 +143,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
           )
           .map((r) => sessionState(toAgentSessionRow(r))),
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
+        schedules: schedules.all(),
       };
     },
 
@@ -157,6 +161,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => {
         messages.applyEvent(p, session, event);
         workers.afterDriverEvent(p, session, event);
+        schedules.afterDriverEvent(p, event);
       });
     },
     refreshSessionState: sessions.refreshSessionState,
@@ -179,6 +184,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => {
         messages.actionFailedIn(p, action, error);
         workers.actionFailedIn(p, action, error);
+        schedules.actionFailedIn(p, action);
       });
     },
     stopMessage: messages.stopMessage,
@@ -198,6 +204,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
+
+    runDueSchedules: schedules.runDueSchedules,
 
     getLaunchContext: launch.getLaunchContext,
     getWorktreeTask: workers.getWorktreeTask,

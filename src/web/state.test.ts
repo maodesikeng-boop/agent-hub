@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
 import { describeError, formatTime } from "./format.ts";
-import { CHANGE_TYPES } from "../shared/index.ts";
+import { CHANGE_TYPES, type ScheduleRecord } from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
@@ -318,5 +318,42 @@ describe("selectors", () => {
     expect(zhou?.folders.map((f) => f.path)).toEqual(["/work/foo", "/work/docs"]);
     expect(lin).toMatchObject({ id: 1, name: "小林", project: null });
     expect(lin?.folders).toEqual([]);
+  });
+});
+
+describe("定时任务（M6）：快照带上，变化实时更新", () => {
+  const schedule = (id: number, over: Partial<ScheduleRecord> = {}): ScheduleRecord => ({
+    id,
+    pmId: 1,
+    name: "日报",
+    kind: "daily",
+    atTime: "09:00",
+    everyMinutes: null,
+    prompt: "写日报",
+    enabled: true,
+    nextRunAt: 5_000,
+    lastRunAt: null,
+    lastStatus: null,
+    lastError: null,
+    lastMessageId: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    ...over,
+  });
+
+  it("快照里的定时任务进状态；schedule.updated 按编号新增或替换；schedule.removed 删掉", () => {
+    let s = loaded({ schedules: [schedule(1)] });
+    expect(s.schedules.map((x) => x.id)).toEqual([1]);
+    s = applyChange(s, changeOf(11, "schedule.updated", { schedule: schedule(2, { name: "巡检" }) }));
+    expect(s.schedules.map((x) => x.name)).toEqual(["日报", "巡检"]);
+    s = applyChange(s, changeOf(12, "schedule.updated", { schedule: schedule(1, { enabled: false }) }));
+    expect(s.schedules.map((x) => [x.id, x.enabled])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
+    s = applyChange(s, changeOf(13, "schedule.removed", { scheduleId: 1 }));
+    expect(s.schedules.map((x) => x.id)).toEqual([2]);
+    // 重新拉快照以快照为准
+    expect(reducer(s, { type: "loaded", snapshot: makeSnapshot({ schedules: [] }) }).schedules).toEqual([]);
   });
 });

@@ -1,8 +1,8 @@
 // 组装（m1-plan 第 3 节 W5，m2-plan 第 3 节接口约定第 6 条）：启动和关闭顺序、各块之间的接线。main.ts 只管命令行、信号和退出码。
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
-//   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：准备命令 → 执行器 → claude（含问模型名单的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+//   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 界面令牌、界面服务。
+// - 关机（启动到哪一步就关到哪一步）：调度器 → 准备命令 → 执行器 → claude（含问模型名单的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import {
   ENV_DEFAULT_MODEL,
   ENV_PORT,
   EXECUTOR_STOP_GRACE_MS,
+  SCHEDULER_TICK_MS,
   checkModel,
   type ActionExecutor,
   type Driver,
@@ -88,6 +89,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   // （准备命令最先：它不回调账本，重启后重跑；不先停的话执行器、关机要等它跑完）
   // （agent 接口在 claude 都退出之后才关：最后一轮里 agent 还可能敲 hub；它要用账本，所以在库之前）
   const parts: {
+    scheduler?: NodeJS.Timeout;
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
@@ -107,7 +109,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { setup, executor, driver, models, ui, agentApi, db, lock } = parts;
+    const { scheduler, setup, executor, driver, models, ui, agentApi, db, lock } = parts;
+    if (scheduler) clearInterval(scheduler);
     parts.stopFileCleanup?.();
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
@@ -242,6 +245,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     );
     parts.executor = executor;
     executor.start();
+    // 定时任务：启动时先查一次（守护进程停着、电脑睡着时错过的只补跑一次），之后每 SCHEDULER_TICK_MS 查一次
+    const runSchedules = () => {
+      try {
+        ledger.runDueSchedules(Date.now());
+      } catch (error) {
+        log(`${LOG_PREFIX} 定时任务调度出错：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    runSchedules();
+    parts.scheduler = setInterval(runSchedules, SCHEDULER_TICK_MS);
 
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);
