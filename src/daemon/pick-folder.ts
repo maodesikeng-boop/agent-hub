@@ -98,7 +98,9 @@ export function createFolderPicker(options: FolderPickerOptions = {}): FolderPic
         const stderr = String(errorField(err, "stderr") ?? "");
         if (stderr.includes(USER_CANCELED)) return null;
         if (errorField(err, "code") === "ENOENT") throw new PickFolderError(501, PICK_FOLDER_UNAVAILABLE_MESSAGE);
-        const reason = stderr.trim() || (err instanceof Error ? err.message : String(err));
+        // stderr 空（被信号结束之类）时别把 err.message 里整条命令抖出来
+        const signal = errorField(err, "signal");
+        const reason = stderr.trim() || (typeof signal === "string" ? `osascript 被 ${signal} 结束了` : "osascript 异常退出");
         throw new PickFolderError(500, `弹不出选择文件夹的窗口：${reason}`);
       } finally {
         open = false;

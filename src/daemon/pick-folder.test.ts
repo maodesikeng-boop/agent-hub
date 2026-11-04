@@ -106,6 +106,16 @@ describe("createFolderPicker", () => {
     });
   });
 
+  it("别的错且 stderr 是空的（被信号结束）：原因里写信号，不带整条命令", async () => {
+    const run: RunOsascript = async () => {
+      throw osascriptError({ signal: "SIGKILL", stderr: "" });
+    };
+    await expect(createFolderPicker({ run, homeDir: HOME }).pick()).rejects.toMatchObject({
+      statusCode: 500,
+      message: "弹不出选择文件夹的窗口：osascript 被 SIGKILL 结束了",
+    });
+  });
+
   it("别的错：500，原因里带 stderr", async () => {
     const run: RunOsascript = async () => {
       throw osascriptError({ code: 1, stderr: "execution error: 没有权限 (-1743)\n" });
