@@ -268,12 +268,13 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     const { daemon, client } = await boot();
     const pm = await pmWithProject(client, dir);
     await waitForStatus(client, await client.post(pm.conversationId, "派五个"), "replied");
+    // 5 个都在准备中，准备命令都真的跑起来了（started 是它写的）
     await waitUntil("5 preparing", async () => {
       const s = await client.state();
       const rows = workerRows();
-      return rows.length === 5 && rows.every((r) => sessionOf(s, r.worker_conversation_id).activity === "preparing") ? true : undefined;
+      const running = rows.length === 5 && rows.every((r) => sessionOf(s, r.worker_conversation_id).activity === "preparing");
+      return running && rows.every((r) => existsSync(join(r.worktree_path!, "started"))) ? true : undefined;
     }, 30_000);
-    expect(workerRows().every((r) => existsSync(join(r.worktree_path!, "started")))).toBe(true);
     // 5 个准备命令占着的话执行器就满了：项目经理这条要能照常回
     await waitForStatus(client, await client.post(pm.conversationId, "还在吗"), "replied", 15_000);
     writeFileSync(gate, "");

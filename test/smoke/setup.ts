@@ -43,7 +43,13 @@ export async function runSetup(outcomes: Outcome[], only: (name: string) => bool
 
     const line = await waitUntil(
       "Worker 的汇报",
-      async () => messagesOf(await smoke.client.state(), chat).map(workerEventOf).find((m) => m !== null && m.event !== "started" && m.event !== "ended"),
+      async () =>
+        messagesOf(await smoke.client.state(), chat)
+          .flatMap((m) => {
+            const meta = workerEventOf(m);
+            return meta === null ? [] : [meta];
+          })
+          .find((m) => m.event !== "started" && m.event !== "ended"),
       TURN_MS * 3,
     );
     expect(line.event === "report", `Worker 没有正常汇报：${JSON.stringify(line)}`);
