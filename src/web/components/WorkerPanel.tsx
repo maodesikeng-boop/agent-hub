@@ -12,6 +12,8 @@ const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
   preparing: "准备中",
   idle: "空闲",
 };
+/** 这几种用主色（在忙）：干活中、准备中（在跑项目的准备命令）。 */
+const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing"]);
 /** 不认识的 activity 当“进行中”显示。 */
 const UNKNOWN_ACTIVITY_TEXT = "进行中";
 const ENDED_TEXT = "已收工";
@@ -78,7 +80,7 @@ export function WorkerPanel({
                   }}
                 >
                   <span className={cn("truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{worker.title}</span>
-                  <span className={cn("text-[13.5px]", !worker.ended && worker.activity === "working" ? "text-primary" : "text-muted-foreground")}>
+                  <span className={cn("text-[13.5px]", !worker.ended && BUSY_ACTIVITIES.has(worker.activity) ? "text-primary" : "text-muted-foreground")}>
                     {statusText(worker)}
                   </span>
                 </button>

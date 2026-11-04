@@ -512,6 +512,8 @@ describe("右边栏的 Worker 列表", () => {
     const preparing = makeSession({ sessionId: 3, conversationId: 30, activity: "preparing" });
     await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), preparing] }));
     expect(rows()[0]).toBe("修 X准备中");
+    // 和“干活中”一样用主色
+    expect(screen.getByText("准备中")).toHaveClass("text-primary");
   });
 
   it("项目经理的会话里有“收工”那一行也算收工；会话还没有的 Worker 当空闲", async () => {
