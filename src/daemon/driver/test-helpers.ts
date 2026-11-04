@@ -21,6 +21,16 @@ export const FAKE_CLAUDE = new URL("../../../test/fake-claude/fake-claude.ts", i
 const realSetTimeout = globalThis.setTimeout;
 export const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
 
+/** 等条件满足（fn 返回非 undefined）再往下走；等的是进程起来、写日志这类事，机器忙时可能很慢，所以上限给足，超了抛错说清楚等的是什么。 */
+export async function waitUntil<T>(what: string, fn: () => T | undefined, timeoutMs = 15_000): Promise<T> {
+  for (const deadline = Date.now() + timeoutMs; ; ) {
+    const value = fn();
+    if (value !== undefined) return value;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
+    await realSleep(25);
+  }
+}
+
 export class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
   readonly patches: Array<{ id: SessionId; patch: AgentSessionPatch }> = [];

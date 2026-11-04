@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PS_TIMEOUT_MS } from "../../shared/index.ts";
 import { forceKill, forceKillTree, killTargets, parsePs, type PsRow } from "./process.ts";
-import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
+import { FAKE_CLAUDE, makeHarness, waitUntil, type Harness } from "./test-helpers.ts";
 
 describe("parsePs", () => {
   it("每行 pid ppid pgid，前面有空格对齐；空行和认不出的行跳过", () => {
@@ -106,26 +106,19 @@ function alive(pid: number): boolean {
   }
 }
 
-async function goneWithin(pid: number, ms = 3_000): Promise<boolean> {
-  for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
-    if (!alive(pid)) return true;
-    await realSleep(25);
-  }
-  return !alive(pid);
+async function goneWithin(pid: number, ms = 10_000): Promise<boolean> {
+  return waitUntil("process to be gone", () => (alive(pid) ? undefined : true), ms).catch(() => false);
 }
 
 /** 等假 claude 记下它起的睡眠子进程，确认它在自己的新进程组里。 */
 async function detachedChild(t: Harness): Promise<number> {
-  for (let i = 0; i < 200; i++) {
+  const pid = await waitUntil("fake claude to spawn its child", () => {
     const e = t.log().find((x) => x.kind === "child");
-    if (e?.kind === "child") {
-      leftovers.push(e.childPid);
-      expect(await pgidOf(e.childPid)).toBe(e.childPid);
-      return e.childPid;
-    }
-    await realSleep(25);
-  }
-  throw new Error("fake claude never spawned its child");
+    return e?.kind === "child" ? e.childPid : undefined;
+  });
+  leftovers.push(pid);
+  expect(await pgidOf(pid)).toBe(pid);
+  return pid;
 }
 
 function pgidOf(pid: number): Promise<number> {
