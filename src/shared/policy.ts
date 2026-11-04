@@ -24,6 +24,8 @@ export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof READONLY_PE
 export const READONLY_WEB_ALLOW_RULES = ["WebSearch", "WebFetch"] as const;
 /** 只读 git：-C 指到别的 worktree 也行（真 claude 实测 `:*` 写法在 -C 后的通配不生效，要写成 `git -C * log *`；git status/diff/log/show/blame/ls-files/branch 只看，不改仓库）。 */
 export const READONLY_GIT_ALLOW_RULES = ["status", "diff", "log", "show", "blame", "ls-files", "rev-parse"].flatMap((sub) => [`Bash(git -C * ${sub})`, `Bash(git -C * ${sub} *)`]);
+/** 只读 git 里会越界的参数：--output=<文件> 会写文件，--ext-diff 会跑仓库配置的外部程序。拒绝规则先于放行。 */
+export const READONLY_GIT_DENY_RULES = ["Bash(git * --output*)", "Bash(git * --ext-diff*)"] as const;
 export const READONLY_CONNECTOR_TOOLS: Readonly<Record<string, readonly string[]>> = {
   claude_ai_Slack: [
     "slack_search_public", "slack_search_public_and_private", "slack_search_channels", "slack_search_users", "slack_search_emojis",
@@ -125,9 +127,12 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     permissions: { defaultMode: input.readonly ? READONLY_PERMISSION_MODE : DEFAULT_PERMISSION_MODE, allow: [HUB_ALLOW_RULE] },
     sandbox: { network: { allowUnixSockets: [input.hubSock] } },
   };
-  if (input.readonly) settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
+  if (input.readonly) {
+    settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
+    settings.permissions.deny = [...READONLY_GIT_DENY_RULES];
+  }
   if (input.role === "worker") {
-    settings.permissions.deny = workerMemoryDenyRules(input.stateDir);
+    settings.permissions.deny = [...(settings.permissions.deny ?? []), ...workerMemoryDenyRules(input.stateDir)];
     settings.autoMemoryEnabled = false;
   }
   return settings;

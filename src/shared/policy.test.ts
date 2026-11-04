@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PERMISSION_MODE,
+  READONLY_GIT_DENY_RULES,
   READONLY_PERMISSION_MODE,
   WORKER_ENV,
   WORKER_MEMORY_DENY_RULES,
@@ -76,8 +77,14 @@ describe("buildSessionSettings：只读", () => {
     expect(READONLY_PERMISSION_MODE).toBe("dontAsk");
     expect(worker.permissions.defaultMode).toBe("dontAsk");
     expect(worker.permissions.allow).toEqual([allowHub, ...readonlyAllowRules(undefined)]);
-    expect(worker.permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
+    expect(worker.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES, ...workerMemoryDenyRules(base.stateDir)]);
     expect(worker.autoMemoryEnabled).toBe(false);
+  });
+
+  it("只读 git 拒绝 --output（写文件）和 --ext-diff（跑外部程序）；项目经理开只读也有", () => {
+    expect(READONLY_GIT_DENY_RULES).toEqual(["Bash(git * --output*)", "Bash(git * --ext-diff*)"]);
+    expect(buildSessionSettings({ role: "pm", readonly: true, ...base }).permissions.deny).toEqual([...READONLY_GIT_DENY_RULES]);
+    expect(buildSessionSettings({ role: "worker", readonly: false, ...base }).permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
   });
 
   it("只读档放行：上网、读本项目 worktrees、只读 git、连接器只读工具", () => {
@@ -99,7 +106,7 @@ describe("buildSessionSettings：只读", () => {
     for (const rule of allow.filter((r) => r.startsWith("mcp__"))) {
       expect(rule).not.toMatch(/__(slack_send|slack_schedule|slack_create|slack_update|slack_add|slack_complete|slack_get_file_upload|send_|create_|update_|delete_|trash_|share_|copy_|forward|reply|label_|unlabel_|apply_|mark_|unmark_|untrash_|append_|batch_clear|insert_|edit|add|transition|set_)/);
     }
-    expect(s.permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(workerMemoryDenyRules(base.stateDir)));
   });
 
   it("读 worktrees 的路径里有特殊字符要转义；非只读档不带这些规则", () => {
@@ -110,7 +117,7 @@ describe("buildSessionSettings：只读", () => {
 
   it("项目经理开只读也只换档", () => {
     expect(buildSessionSettings({ role: "pm", readonly: true, ...base })).toEqual({
-      permissions: { defaultMode: "dontAsk", allow: [allowHub, ...readonlyAllowRules(undefined)] },
+      permissions: { defaultMode: "dontAsk", allow: [allowHub, ...readonlyAllowRules(undefined)], deny: [...READONLY_GIT_DENY_RULES] },
       sandbox: { network: { allowUnixSockets: [base.hubSock] } },
     });
   });
