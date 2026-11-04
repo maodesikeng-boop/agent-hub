@@ -9,8 +9,11 @@ import {
   checkEffort,
   checkModel,
   isAgentVendor,
+  bundledModelCatalog,
+  effortsFor,
   modelChoiceOf,
   modelLabel,
+  type ModelCatalog,
 } from "./vendors.ts";
 import { MAX_MODEL_CHARS } from "./limits.ts";
 
@@ -75,15 +78,53 @@ describe("命令行参数", () => {
 });
 
 describe("界面上的叫法", () => {
-  it("modelChoiceOf：默认、别名、自定义", () => {
-    expect(modelChoiceOf("claude", null)).toBe("");
-    expect(modelChoiceOf("claude", "sonnet")).toBe("sonnet");
-    expect(modelChoiceOf("claude", "claude-sonnet-5-5")).toBe(CUSTOM_MODEL);
+  it("modelChoiceOf：默认是空串，别的是模型名本身；“自定义”的值以横线开头，不会和模型名撞", () => {
+    expect(modelChoiceOf(null)).toBe("");
+    expect(modelChoiceOf("sonnet")).toBe("sonnet");
+    expect(modelChoiceOf("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+    expect(checkModel("claude", CUSTOM_MODEL)).not.toBeNull();
   });
 
   it("modelLabel：默认、别名的名字、完整模型名原样", () => {
     expect(modelLabel("claude", null)).toBe("默认");
     expect(modelLabel("claude", "haiku")).toBe("Haiku");
     expect(modelLabel("claude", "claude-haiku-5-5")).toBe("claude-haiku-5-5");
+  });
+
+  it("modelLabel 给了名单：用名单里的名字", () => {
+    expect(modelLabel("claude", "claude-opus-4-6", catalog)).toBe("Opus 4.6");
+    expect(modelLabel("claude", "haiku", catalog)).toBe("haiku");
+  });
+});
+
+const catalog: ModelCatalog = {
+  vendor: "claude",
+  source: "vendor",
+  models: [
+    { id: "opus", label: "Opus 5.5", description: null, efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { id: "claude-opus-4-6", label: "Opus 4.6", description: null, efforts: ["low", "high", "max", "ultra"] },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5", description: null, efforts: null },
+    { id: "old", label: "Old", description: null, efforts: [] },
+  ],
+  defaultEfforts: ["low", "high"],
+};
+
+describe("模型名单", () => {
+  it("打包的名单：VENDOR_SPECS 里的模型，来源 bundled，都没写思考程度", () => {
+    expect(bundledModelCatalog("claude")).toEqual({
+      vendor: "claude",
+      source: "bundled",
+      defaultEfforts: null,
+      models: VENDOR_SPECS.claude.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),
+    });
+  });
+
+  it("effortsFor：名单里写了按它（只留通用档位里有的），没写或不在名单里用通用档位；默认看 defaultEfforts", () => {
+    expect(effortsFor(catalog, "claude-opus-4-6")).toEqual(["low", "high", "max"]);
+    expect(effortsFor(catalog, "claude-haiku-4-5")).toEqual(VENDOR_SPECS.claude.efforts);
+    expect(effortsFor(catalog, "old")).toEqual([]);
+    expect(effortsFor(catalog, "not-listed")).toEqual(VENDOR_SPECS.claude.efforts);
+    expect(effortsFor(catalog, null)).toEqual(["low", "high"]);
+    expect(effortsFor(bundledModelCatalog("claude"), null)).toEqual(VENDOR_SPECS.claude.efforts);
   });
 });

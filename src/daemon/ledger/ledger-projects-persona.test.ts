@@ -13,6 +13,7 @@ import type { LedgerErrorCode } from "../../shared/ledger.ts";
 import { HUB_CALL_FIELD_MAX_BYTES, MAX_NAME_CHARS, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { personaFilePath } from "../../shared/paths.ts";
+import type { ModelCatalog } from "../../shared/vendors.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -587,6 +588,28 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(changes[0]).toMatchObject({ data: { pm: { id: lin.pmId, vendor: "claude", defaultModel: "haiku", effort: "low" } } });
     // 不登记重启动作：下一条消息前驱动层自己重启
     expect(enqueued).toEqual([]);
+  });
+
+  it("系统消息里的模型名用缓存着的模型名单的显示名；名单里没有的原样；还没有名单用打包的", () => {
+    let catalog: ModelCatalog | null = {
+      vendor: "claude",
+      source: "vendor",
+      defaultEfforts: null,
+      models: [
+        { id: "claude-opus-4-6", label: "Opus 4.6", description: null, efforts: null },
+        { id: "opus", label: "Opus 5.5", description: null, efforts: null },
+      ],
+    };
+    const withCatalog = createLedger(db, options({ modelCatalog: (vendor) => (vendor === "claude" ? catalog : null) }));
+    withCatalog.editPersona(lin.pmId, { model: "claude-opus-4-6" }, { kind: "user" });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Opus 4.6）");
+    withCatalog.editPersona(lin.pmId, { model: "claude-opus-4-1" }, { kind: "user" });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：Opus 4.6 → claude-opus-4-1）");
+    withCatalog.editPersona(lin.pmId, { model: "opus" }, { kind: "user" });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：claude-opus-4-1 → Opus 5.5）");
+    catalog = null;
+    withCatalog.editPersona(lin.pmId, { model: "claude-opus-4-6" }, { kind: "user" });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：Opus → claude-opus-4-6）");
   });
 
   it("改回默认（null）、自定义完整模型名；和现在一样就什么也不写", () => {

@@ -22,7 +22,6 @@ import {
   checkModel,
   effortLabel,
   isAgentVendor,
-  modelLabel,
   vendorLabel,
 } from "../../shared/vendors.ts";
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
@@ -48,10 +47,10 @@ const agentOf = (pm: PmDbRow): AgentSetting => ({ vendor: pm.vendor as AgentVend
 const sameAgent = (a: AgentSetting, b: AgentSetting) => a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 
 /** 修改记录、系统消息里的“模型：默认 → Haiku”这几段（没变的不写）。 */
-function agentNotes(before: AgentSetting, after: AgentSetting): string[] {
+function agentNotes(before: AgentSetting, after: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
   const notes: string[] = [];
   if (before.vendor !== after.vendor) notes.push(`厂商：${vendorLabel(before.vendor)} → ${vendorLabel(after.vendor)}`);
-  if (before.model !== after.model) notes.push(`模型：${modelLabel(before.vendor, before.model)} → ${modelLabel(after.vendor, after.model)}`);
+  if (before.model !== after.model) notes.push(`模型：${label(before.vendor, before.model)} → ${label(after.vendor, after.model)}`);
   if (before.effort !== after.effort) notes.push(`思考程度：${effortLabel(before.effort)} → ${effortLabel(after.effort)}`);
   return notes;
 }
@@ -226,7 +225,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
       )!,
     );
     p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(pm.id)!) } });
-    const notes = agentNotes(agentBefore, next.agent);
+    const notes = agentNotes(agentBefore, next.agent, ctx.modelLabel);
     if (next.mode !== modeBefore) notes.unshift(`模式：${PM_MODE_LABELS[modeBefore]} → ${PM_MODE_LABELS[next.mode]}`);
     const modeNote = notes.length === 0 ? "" : `（${notes.join("，")}）`;
     const reasonNote = next.reason === null ? "" : `。理由：${next.reason}`;

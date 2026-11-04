@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* 主题变量：樱粉，只有浅色。shadcn 组件和 Tailwind 的颜色类都从这里取值 */
+/* 主题变量：樱粉，只有浅色。shadcn 组件和 Tailwind 的颜色类都从这里取值；怎么用见 docs/ui-standard.md */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -15,7 +15,7 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-border: var(--border);
-  --color-ring: var(--primary);
+  --color-ring: var(--ring);
   --color-bubble-me: var(--bubble-me);
   --color-bubble-me-foreground: var(--bubble-me-foreground);
   --color-bubble-agent: var(--bubble-agent);
@@ -45,6 +45,8 @@
   --muted-foreground: #71717a;
   --accent: #f1f1f3;
   --border: #ececef;
+  /* 键盘焦点的圈：中性灰，不用主色（docs/ui-standard.md 第 7 条） */
+  --ring: #a1a1aa;
   --bubble-me: #d6336c;
   --bubble-me-foreground: #ffffff;
   --bubble-agent: #f2f2f4;

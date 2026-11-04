@@ -15,7 +15,7 @@ import type {
   SessionState,
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
-import type { AgentVendor } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 
 export const API_PATHS = {
   /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
@@ -40,6 +40,8 @@ export const API_PATHS = {
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
   /** GET：按副本编号取 agent 发出的文件（shared/sent-files.ts）。图片（含 svg）内联，别的当下载；支持 Range。 */
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
+  /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回。 */
+  models: "/api/models",
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;
@@ -142,6 +144,11 @@ export interface EditPersonaRequest {
 export interface EditPersonaResponse {
   changed: boolean;
   persona: PersonaView;
+}
+
+/** GET /api/models：每家厂商一份模型名单（按 AGENT_VENDORS 的顺序）。问不到厂商时是打包的名单，不报错。 */
+export interface ModelsResponse {
+  catalogs: ModelCatalog[];
 }
 
 /** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */

@@ -98,6 +98,16 @@ export const STDIO_DRAIN_MS = 300;
 export const KILL_WAIT_MS = 2_000;
 /** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
 export const PS_TIMEOUT_MS = 2_000;
+/** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
+export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
+/** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
+export const MAX_CATALOG_MODELS = 50;
+export const MAX_CATALOG_LABEL_CHARS = 80;
+export const MAX_CATALOG_DESCRIPTION_CHARS = 200;
+/** 模型名单：问到之后多久算旧了，下次有人要时在后台再问一次（先给旧的）。 */
+export const MODEL_CATALOG_FRESH_MS = 6 * 60 * 60_000;
+/** 模型名单：没问到（claude 没装、超时、报错）时，隔多久才再问。 */
+export const MODEL_CATALOG_RETRY_MS = 5 * 60_000;
 /** 驱动层：清理残留进程时多久看一次它还在不在。 */
 export const STALE_POLL_MS = 50;
 /** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */

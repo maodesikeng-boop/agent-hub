@@ -56,6 +56,22 @@ export function buildInterruptLine(requestId: string): string {
   return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "interrupt" } });
 }
 
+/** 要模型名单等信息的控制消息（Claude Agent SDK 的 supportedModels() 用的就是它，回应里有 models）。 */
+export function buildInitializeLine(requestId: string): string {
+  return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } });
+}
+
+/** 问模型名单时起 claude 的参数（model-catalog.ts）：不发用户消息、不存会话，拿到回应就关。 */
+export const MODEL_QUERY_ARGS: readonly string[] = [
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--no-session-persistence",
+];
+
 /** 忙时用户连发的几条拼成一条（设计第 7.3 节）。 */
 export function mergeUserTexts(texts: string[]): string {
   if (texts.length === 1) return texts[0]!;

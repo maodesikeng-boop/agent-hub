@@ -13,6 +13,7 @@ import { failingHealth, listConversations, pendingOf, quotaResetTimes, quotaUsag
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
+import { ModelCatalogProvider } from "./models.tsx";
 import { useHub } from "./useHub.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
@@ -96,6 +97,7 @@ export function App() {
   const panelPm = profile?.id ?? (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
 
   return (
+    <ModelCatalogProvider>
     <div className="relative flex h-full">
       <Sidebar
         entries={entries}
@@ -174,5 +176,6 @@ export function App() {
       </main>
       <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />
     </div>
+    </ModelCatalogProvider>
   );
 }

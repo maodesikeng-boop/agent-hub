@@ -26,6 +26,7 @@ import {
   UI_COOKIE_NAME,
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
+  bundledModelCatalog,
   isImageMime,
   normalizeName,
   sentFileMime,
@@ -39,6 +40,8 @@ import {
   type EditPersonaResponse,
   type Ledger,
   type LedgerErrorCode,
+  type ModelCatalog,
+  type ModelsResponse,
   type PersonaResponse,
   type PmMode,
   type PostMessageResponse,
@@ -64,6 +67,8 @@ export interface UiServerOptions {
    */
   port?: number;
   logger?: boolean;
+  /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
+  models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
 }
 
 /** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
@@ -378,6 +383,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.state, async () => ledger.snapshot());
+
+    routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
+      const refresh = (req.query as { refresh?: unknown }).refresh === "1";
+      return { catalogs: opts.models ? await opts.models.list({ refresh }) : AGENT_VENDORS.map((v) => bundledModelCatalog(v)) };
+    });
 
     routes.get("/api/conversations/:id/messages", async (req) => {
       const { id } = req.params as { id?: unknown };
