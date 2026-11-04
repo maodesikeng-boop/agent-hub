@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NAME_RULE, PM_PERSONA_TEMPLATE, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { MODEL_NAME_RULE, PM_PERSONA_TEMPLATE, VENDOR_SPECS, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import {
   FakeApi,
@@ -697,6 +697,7 @@ describe("资料页：Agent 一栏（厂商、模型、思考程度）", () => {
     await user.selectOptions(within(agent).getByRole("combobox", { name: "模型" }), "自定义");
     const name = within(agent).getByRole("textbox", { name: "模型名" });
     expect(name).toHaveFocus();
+    expect(name).toHaveAttribute("placeholder", VENDOR_SPECS.claude.customModelExample);
     const save = within(agent).getByRole("button", { name: "保存" });
     expect(save).toBeDisabled();
     await user.type(name, "-p");

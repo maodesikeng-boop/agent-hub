@@ -49,7 +49,7 @@ export const HUB_USAGE = `用法：
                                                           派一个 Worker，任务说明从标准输入读
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
-  ${hub} worker list                                         我派出去的 Worker
+  ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'

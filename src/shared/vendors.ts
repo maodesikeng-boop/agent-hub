@@ -14,6 +14,8 @@ export interface VendorSpec {
   models: readonly { id: string; label: string }[];
   /** 能不能填完整模型名（下拉里的“自定义”）。 */
   customModel: boolean;
+  /** 自定义模型名输入框里的示例。 */
+  customModelExample: string;
   /** 思考程度，原样传给 effortFlag。 */
   efforts: readonly string[];
   flags: { model: string; effort: string };
@@ -29,6 +31,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
       { id: "haiku", label: "Haiku" },
     ],
     customModel: true,
+    customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
     flags: { model: "--model", effort: "--effort" },
   },

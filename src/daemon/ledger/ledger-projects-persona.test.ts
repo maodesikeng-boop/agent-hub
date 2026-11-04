@@ -578,6 +578,21 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
   });
 
+  it("老库里不合规的模型名不锁死别的保存：改性格设定、工作方式、只改思考程度都行，模型不动；改模型时才查", () => {
+    // 0006 之前模型名只限长度
+    db.run("UPDATE pms SET default_model = 'claude opus' WHERE id = ?", lin.pmId);
+    db.run("UPDATE agent_sessions SET model = 'claude opus' WHERE id = ?", lin.sessionId);
+    expect(ledger.editPersona(lin.pmId, { text: "新习惯" }, { kind: "user" }).persona).toMatchObject({ text: "新习惯", model: "claude opus" });
+    expect(ledger.editPersona(lin.pmId, { mode: "hands_on" }, { kind: "user" }).persona).toMatchObject({ mode: "hands_on", model: "claude opus" });
+    expect(ledger.editPersona(lin.pmId, { effort: "low" }, { kind: "user" }).persona).toMatchObject({ effort: "low", model: "claude opus" });
+    // hub persona edit 也不受影响
+    expect(hub(lin.sessionId, "persona.edit", { text: "自己改的" }).data.change).toMatchObject({ textAfter: "自己改的", modelAfter: "claude opus" });
+    // 要改模型就得改成合规的
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { model: "claude sonnet" }, { kind: "user" }), "invalid", /模型名只能用/);
+    expect(ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "user" }).persona).toMatchObject({ model: "haiku", effort: "low" });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low" });
+  });
+
   it("撤销：模型、思考程度一起改回去，会话那一行也改回去；撤销老的只改性格设定的记录不动模型", () => {
     const textOnly = ledger.editPersona(lin.pmId, { text: "改一下" }, { kind: "user" }).change!;
     expect(textOnly).toMatchObject({ modelBefore: null, modelAfter: null });

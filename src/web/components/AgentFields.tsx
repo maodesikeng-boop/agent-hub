@@ -119,7 +119,7 @@ export function AgentFields({ value, onChange, disabled }: { value: AgentDraft; 
               disabled={disabled}
               autoComplete="off"
               spellCheck={false}
-              placeholder="claude-opus-5-5"
+              placeholder={spec.customModelExample}
               aria-invalid={!result.ok && result.error !== null}
               className="aria-invalid:border-danger aria-invalid:focus-visible:ring-danger/20"
               onChange={(e) => onChange({ ...value, customModel: e.target.value })}

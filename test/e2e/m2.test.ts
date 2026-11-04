@@ -7,7 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_PATHS, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, PRODUCT_NAME, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_DEFAULT_MODEL, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, PRODUCT_NAME, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
@@ -293,6 +293,20 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(env.stdinTextsOf(procsOf(lin.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
     expect(env.stdinTextsOf(procsOf(zhou.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
     await terminate(daemon);
+  });
+
+  it("第一次启动：AGENT_HUB_DEFAULT_MODEL 不合规就忽略、记一行日志，项目经理按默认建；合规的照用", async () => {
+    env = makeEnv();
+    const bad = await boot({ env: { [ENV_DEFAULT_MODEL]: "claude opus" } });
+    expect(bad.state.pms[0]).toMatchObject({ vendor: "claude", defaultModel: null, effort: null });
+    expect(bad.daemon.stderr()).toContain(`${ENV_DEFAULT_MODEL}="claude opus" 不能用`);
+    await terminate(bad.daemon);
+    await env.cleanup();
+    env = makeEnv();
+    const good = await boot({ env: { [ENV_DEFAULT_MODEL]: "haiku" } });
+    expect(good.state.pms[0]).toMatchObject({ defaultModel: "haiku" });
+    expect(good.daemon.stderr()).not.toContain("不能用");
+    await terminate(good.daemon);
   });
 
   it("资料页改模型、思考程度：下一条消息前 --resume 同一个会话重启，带 --model haiku --effort low；改回默认就不带", async () => {

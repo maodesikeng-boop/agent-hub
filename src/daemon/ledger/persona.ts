@@ -14,7 +14,17 @@ import type {
   SyncPersonaFilesResult,
 } from "../../shared/ledger.ts";
 import { MAX_NAME_CHARS, MAX_PERSONA_BYTES, MAX_REASON_CHARS, PERSONA_CHANGES_LIMIT } from "../../shared/limits.ts";
-import { DEFAULT_AGENT_VENDOR, checkAgentSetting, effortLabel, modelLabel, vendorLabel } from "../../shared/vendors.ts";
+import {
+  AGENT_VENDORS,
+  DEFAULT_AGENT_VENDOR,
+  checkAgentSetting,
+  checkEffort,
+  checkModel,
+  effortLabel,
+  isAgentVendor,
+  modelLabel,
+  vendorLabel,
+} from "../../shared/vendors.ts";
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
@@ -46,20 +56,37 @@ function agentNotes(before: AgentSetting, after: AgentSetting): string[] {
   return notes;
 }
 
-/**
- * 校验厂商、模型、思考程度（建项目经理、资料页改）。模型、思考程度去掉首尾空白，空串当默认（null）。
- * 不对抛 invalid，原因来自厂商清单。
- */
+/** 模型、思考程度的输入：去掉首尾空白，空串、null、不给都当默认（null）。 */
+function optionalSetting(value: unknown, what: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") throw fail("invalid", `${what}要是字符串`);
+  return value.trim() || null;
+}
+
+/** 建项目经理：厂商、模型、思考程度全查。不对抛 invalid，原因来自厂商清单。 */
 function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }): AgentSetting {
-  const optional = (value: unknown, what: string): string | null => {
-    if (value === null || value === undefined) return null;
-    if (typeof value !== "string") throw fail("invalid", `${what}要是字符串`);
-    return value.trim() || null;
-  };
-  const setting = { vendor: raw.vendor, model: optional(raw.model, "模型"), effort: optional(raw.effort, "思考程度") };
+  const setting = { vendor: raw.vendor, model: optionalSetting(raw.model, "模型"), effort: optionalSetting(raw.effort, "思考程度") };
   const problem = checkAgentSetting(setting);
   if (problem !== null) throw fail("invalid", problem);
   return setting as AgentSetting;
+}
+
+/**
+ * 资料页改：只查这次给了的那几项，没给的沿用现在的值、不查。老库里可能有不合规的模型名（0006 之前只限长度），
+ * 不能因为它改不了性格设定、工作方式、思考程度。
+ */
+function nextAgent(current: AgentSetting, input: EditPersonaInput): AgentSetting {
+  if (input.vendor !== undefined && !isAgentVendor(input.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+  const next: AgentSetting = {
+    vendor: input.vendor ?? current.vendor,
+    model: input.model === undefined ? current.model : optionalSetting(input.model, "模型"),
+    effort: input.effort === undefined ? current.effort : optionalSetting(input.effort, "思考程度"),
+  };
+  const problem =
+    (input.model !== undefined ? checkModel(next.vendor, next.model) : null) ??
+    (input.effort !== undefined ? checkEffort(next.vendor, next.effort) : null);
+  if (problem !== null) throw fail("invalid", problem);
+  return next;
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 
@@ -229,11 +256,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     if (input.text !== undefined) validPersonaText(input.text);
     const mode = input.mode === undefined ? (pm.mode as PmMode) : validMode(input.mode);
     const current = agentOf(pm);
-    const agent = validAgent({
-      vendor: input.vendor ?? current.vendor,
-      model: input.model === undefined ? current.model : input.model,
-      effort: input.effort === undefined ? current.effort : input.effort,
-    });
+    const agent = touchesAgent ? nextAgent(current, input) : current;
     // 一个会话只属于一家：换厂商要开新会话（现在只有一家，走不到这里）
     if (agent.vendor !== current.vendor) throw fail("invalid", "还不支持给已有的项目经理换厂商，请新建一个项目经理");
     const reason = input.reason?.trim() || null;
