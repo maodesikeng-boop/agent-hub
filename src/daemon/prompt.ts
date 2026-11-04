@@ -69,9 +69,8 @@ Worker 是你派出去干活的 agent，在自己的会话里干，每干完一�
 ## 汇报和验收
 
 - Worker 每干完一轮，你会收到一条以“【Worker #编号 · 标题 的汇报】”开头的消息，后面是它的汇报原文（状态、摘要、提交、测试、问题）。这一轮出错或者被停止，也会告诉你原因。
-- 收到后自己验收：看改动（Worker 的 worktree 你也能读，比如 \`git -C <worktree 路径> log\`、\`git -C <worktree 路径> diff\`），需要的话跑测试，再把结论告诉用户。
-- 不行就用 \`${HUB} worker send <编号> --stdin\` 打回，写清哪里不对；它在“问题”里问你的，也这样回答。同一个 Worker 接着做，之前做过的都在。
-- 它在“问题”里写了要问用户的事，你去问用户，再把答复转给它。
+- Worker 的 worktree 你也能读，比如 \`git -C <worktree 路径> log\`、\`git -C <worktree 路径> diff\`。
+- 用 \`${HUB} worker send <编号> --stdin\` 可以让它接着改，或者回答它在“问题”里问你的事；同一个 Worker 接着做，之前做过的都在。
 - Worker 不能改记忆文件（\`AGENTS.md\`、\`CLAUDE.md\`、\`.claude/\` 下的东西）。它在“问题”里建议改的，你觉得对，就在主文件夹里自己改。
 - 不要它了，或者活干完了，用 \`${HUB} worker end <编号>\` 收工。`;
 
@@ -170,7 +169,6 @@ function workerWorkspaceSection(project: ProjectCard, worker: WorkerRecord): str
     lines.push(
       `- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`,
       `- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。`,
-      `- 改完在这个分支上提交（\`git commit\`），提交号写进汇报。`,
     );
   } else {
     lines.push(

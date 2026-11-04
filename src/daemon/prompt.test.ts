@@ -122,13 +122,23 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("派 Worker 说明：worktree、--no-worktree、汇报怎么回来、打回用 hub worker send、收工用 hub worker end、按 AGENTS.md 协作", () => {
-    for (const word of ["worktree", "主文件夹", "--no-worktree", "【Worker #", `${hub} worker send`, `${hub} worker end`, "AGENTS.md"]) {
+  it("派 Worker 说明：worktree、--no-worktree、汇报怎么回来、worktree 可读、用 hub worker send 接着改、收工用 hub worker end、按 AGENTS.md 协作", () => {
+    for (const word of [
+      "worktree",
+      "主文件夹",
+      "--no-worktree",
+      "【Worker #",
+      "Worker 的 worktree 你也能读",
+      `${hub} worker send`,
+      "可以让它接着改",
+      `${hub} worker end`,
+      "AGENTS.md",
+    ]) {
       expect(PM_WORKER_PROMPT).toContain(word);
     }
   });
 
-  it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有建议用便宜的模型", () => {
+  it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有建议用便宜的模型、没有规定怎么验收", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     for (const gone of [
       "先问用户的事",
@@ -139,6 +149,9 @@ describe("提示词：项目经理（M3）", () => {
       "| 好处 |",
       "| 坏处 |",
       "便宜的模型",
+      "收到后自己验收",
+      "再把结论告诉用户",
+      "拿不准的先问用户",
       "brew",
       "sudo",
     ]) {
@@ -180,12 +193,12 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain("只读");
   });
 
-  it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事", () => {
+  it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事，不硬性要求 git commit", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
     for (const word of ["AGENTS.md", "CLAUDE.md", ".claude/", "不能改", "“问题”"]) expect(WORKER_RULES).toContain(word);
     expect(WORKER_RULES).toMatch(/问不了用户/);
-    for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做"]) {
+    for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
       expect(prompt).not.toContain(gone);
     }
   });
