@@ -2,7 +2,7 @@
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：准备命令 → 执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+// - 关机（启动到哪一步就关到哪一步）：准备命令 → 执行器 → claude（含问模型名单的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,7 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { resolveHubPaths, workerSetupLogPath } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
-import { createClaudeDriver } from "./driver/index.ts";
+import { createClaudeDriver, createModelCatalogs, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
 import {
   createSessionEndHandler,
@@ -55,7 +55,7 @@ export interface RunningDaemon {
   paths: HubPaths;
   port: number;
   url: string;
-  /** 关机：停准备命令 → 停执行器 → 停 claude → 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
+  /** 关机：停准备命令 → 停执行器 → 停 claude（含问模型名单的）→ 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
   stop(): Promise<void>;
 }
 
@@ -90,6 +90,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
+    models?: ModelCatalogs;
     ui?: RunningUiServer;
     agentApi?: RunningAgentApi;
     db?: Db;
@@ -104,7 +105,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { setup, executor, driver, ui, agentApi, db, lock } = parts;
+    const { setup, executor, driver, models, ui, agentApi, db, lock } = parts;
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
       await step("执行器", async () => {
@@ -117,6 +118,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     if (driver) await step("claude", () => driver.shutdown());
+    if (models) await step("模型名单", () => models.close());
     if (ui) await step("界面服务", () => ui.close());
     if (agentApi) {
       await step("agent 接口", async () => {
@@ -179,6 +181,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     });
     parts.driver = driver;
+    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时问 claude，在用户主目录下起，不带任何项目的设置
+    const models = createModelCatalogs({
+      queryClaude: (signal) => queryClaudeModels({ claudePath: paths.claudePath, cwd: options.userHome, signal }),
+      log,
+    });
+    parts.models = models;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
 
     // 4. 清掉上次留下的 claude
@@ -232,7 +240,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir });
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models });
 
     let stopping: Promise<void> | undefined;
     return {

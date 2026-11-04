@@ -15,10 +15,10 @@ import { errorText } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
-import { Input, Textarea } from "../ui/input.tsx";
-import { AgentFields, draftOf, settingOf } from "./AgentFields.tsx";
-import { Field } from "./Field.tsx";
-import { ModeField } from "./ModeField.tsx";
+import { CompactInput, Textarea } from "../ui/input.tsx";
+import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
+import { ModeRows } from "./ModeRows.tsx";
+import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) => void }) {
   const [name, setName] = useState("");
@@ -60,34 +60,51 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   };
 
   return (
-    <form className="grid gap-5" onSubmit={(e) => void submit(e)}>
-      <Field label="名字">
-        {(id) => <Input id={id} value={name} autoFocus autoComplete="off" onChange={(e) => setName(e.target.value)} />}
-      </Field>
-      <Field label="主文件夹（可选）">
-        {(id) => (
-          <Input
-            id={id}
-            value={folder}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="~/code/my-project"
-            onChange={(e) => setFolder(e.target.value)}
-          />
-        )}
-      </Field>
-      <ModeField label="模式" value={mode} onChange={setMode} disabled={busy} />
+    <form className="grid gap-6" onSubmit={(e) => void submit(e)}>
+      <SettingsGroup>
+        <SettingsRow label="名字">
+          {(id) => <CompactInput id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" onChange={(e) => setName(e.target.value)} />}
+        </SettingsRow>
+        <SettingsRow label="主文件夹（可选）">
+          {(id) => (
+            <CompactInput
+              id={id}
+              value={folder}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="~/code/my-project"
+              className="w-[240px]"
+              onChange={(e) => setFolder(e.target.value)}
+            />
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title="工作方式">
+        <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
+      </SettingsGroup>
       <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-        <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
           <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
           更多设置
         </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3 grid gap-4">
-          <AgentFields value={agent} onChange={setAgent} disabled={busy} />
-          <Field label="性格设定">
-            {(id) => <Textarea id={id} rows={8} value={persona} onChange={(e) => setPersona(e.target.value)} />}
-          </Field>
-          {personaTooLong && <p className="text-[13px] text-danger">性格设定太长</p>}
+        <CollapsibleContent className="mt-3 grid gap-6">
+          <SettingsGroup title="Agent">
+            <AgentRows value={agent} onChange={setAgent} disabled={busy} />
+          </SettingsGroup>
+          <SettingsGroup title="性格设定">
+            <Textarea
+              aria-label="性格设定"
+              rows={8}
+              className="block max-h-[60vh] min-h-32 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] field-sizing-content focus-visible:ring-0"
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+            />
+            {personaTooLong && (
+              <div className="px-4 py-2.5">
+                <RowError>性格设定太长</RowError>
+              </div>
+            )}
+          </SettingsGroup>
         </CollapsibleContent>
       </Collapsible>
       {error && (
@@ -114,7 +131,7 @@ export function NewPmDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="新建项目经理">
+      <DialogContent title="新建项目经理" className="max-w-[520px]">
         <NewPmForm onCreated={onCreated} />
       </DialogContent>
     </Dialog>

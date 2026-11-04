@@ -1,5 +1,5 @@
-// 厂商清单：每家厂商有哪些模型、哪些思考程度、对应的命令行参数。网页（下拉）和后台（校验、启动参数）都从这里读，
-// 加厂商只改这一个文件。“默认”一律是 null，表示不传对应的参数，用厂商自己的默认。
+// 厂商清单：每家厂商打包的模型名单、哪些思考程度、对应的命令行参数。网页（下拉）和后台（校验、启动参数）都从这里读，
+// 加厂商只改这一个文件（问厂商要模型名单的代码在 daemon/driver/model-catalog.ts）。“默认”一律是 null，表示不传对应的参数，用厂商自己的默认。
 // agent_sessions.vendor、pms.vendor 存的就是这里的厂商编号。
 import { MAX_MODEL_CHARS } from "./limits.ts";
 
@@ -10,7 +10,7 @@ export const DEFAULT_AGENT_VENDOR: AgentVendor = "claude";
 export interface VendorSpec {
   /** 界面上的名字。 */
   label: string;
-  /** 下拉里的模型：id 原样传给 modelFlag，label 是界面上的名字。 */
+  /** 打包的模型名单（问不到厂商时用）：id 原样传给 modelFlag，label 是界面上的名字。 */
   models: readonly { id: string; label: string }[];
   /** 能不能填完整模型名（下拉里的“自定义”）。 */
   customModel: boolean;
@@ -89,19 +89,53 @@ export function agentLaunchArgs(setting: AgentSetting): string[] {
   return args;
 }
 
-/** 模型下拉里“自定义”那一项的值。 */
-export const CUSTOM_MODEL = "custom";
+/** 模型下拉里“自定义”那一项的值（选了它下面多一个输入框，填完整模型名）。以横线开头，不会和模型名撞。 */
+export const CUSTOM_MODEL = "-custom";
 
-/** 模型下拉选中哪一项：默认是 ""，清单里的别名是它自己，别的是 CUSTOM_MODEL。 */
-export function modelChoiceOf(vendor: AgentVendor, model: string | null): string {
-  if (model === null) return "";
-  return VENDOR_SPECS[vendor].models.some((m) => m.id === model) ? model : CUSTOM_MODEL;
+// ---- 模型名单 ----
+// 下拉里列哪些模型：优先用厂商自己报的（claude 的 initialize 控制请求，见 daemon/driver/model-catalog.ts），
+// 拿不到时用这里打包的（VENDOR_SPECS 的 models）。网页从 GET /api/models 拿，后台的校验、启动参数不看名单。
+
+/** 名单里的一个模型。id 原样传给 modelFlag；efforts 是它支持的思考程度，null = 没说，用厂商的通用档位。 */
+export interface CatalogModel {
+  id: string;
+  label: string;
+  description: string | null;
+  efforts: readonly string[] | null;
 }
 
-/** 界面、修改记录里显示的模型：默认、别名的名字，完整模型名原样。 */
-export function modelLabel(vendor: AgentVendor, model: string | null): string {
+export interface ModelCatalog {
+  vendor: AgentVendor;
+  /** vendor：厂商自己报的；bundled：打包在程序里的（厂商没装、超时、报错时）。 */
+  source: "vendor" | "bundled";
+  /** 不含“默认”（默认 = 不传参数，界面自己加在最前面）。 */
+  models: readonly CatalogModel[];
+  /** 选“默认”时支持的思考程度，null = 没说。 */
+  defaultEfforts: readonly string[] | null;
+}
+
+/** 打包在程序里的名单。 */
+export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
+  const models = VENDOR_SPECS[vendor].models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null }));
+  return { vendor, source: "bundled", models, defaultEfforts: null };
+}
+
+/** 某个模型（null = 默认）能选的思考程度：名单里说了就按它（只留厂商通用档位里有的，后台按通用档位校验），没说用通用档位。 */
+export function effortsFor(catalog: ModelCatalog, model: string | null): readonly string[] {
+  const all = VENDOR_SPECS[catalog.vendor].efforts;
+  const listed = model === null ? catalog.defaultEfforts : (catalog.models.find((m) => m.id === model)?.efforts ?? null);
+  return listed === null ? all : all.filter((e) => listed.includes(e));
+}
+
+/** 模型下拉选中哪一项：默认是 ""，别的是模型名本身（名单里没有的，下拉里单独列一项“自定义：模型名”）。 */
+export function modelChoiceOf(model: string | null): string {
+  return model ?? "";
+}
+
+/** 界面、修改记录里显示的模型：默认；名单里有的用它的名字（没给名单用打包的）；别的原样。 */
+export function modelLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return "默认";
-  return VENDOR_SPECS[vendor].models.find((m) => m.id === model)?.label ?? model;
+  return catalog.models.find((m) => m.id === model)?.label ?? model;
 }
 
 export function effortLabel(effort: string | null): string {

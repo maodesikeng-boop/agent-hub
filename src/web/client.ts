@@ -11,6 +11,7 @@ import {
   type EditPersonaResponse,
   type MessageId,
   type MessagesPage,
+  type ModelsResponse,
   type PostMessageRequest,
   type PersonaChangeId,
   type PersonaResponse,
@@ -124,6 +125,11 @@ export function putPersona(pmId: PmId, body: EditPersonaRequest): Promise<EditPe
 
 export function postRevertPersonaChange(changeId: PersonaChangeId): Promise<EditPersonaResponse> {
   return postJson<EditPersonaResponse>(API_PATHS.revertPersonaChange(changeId));
+}
+
+/** 每家厂商的模型名单（服务端问不到厂商时是打包的）。 */
+export function fetchModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>(API_PATHS.models);
 }
 
 export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {

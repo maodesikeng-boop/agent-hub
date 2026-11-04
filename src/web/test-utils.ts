@@ -285,6 +285,8 @@ export class FakeApi {
     return { status: 200, body: makeAttachment({ id, name: fileName, size: file.size, mime: /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? "image/png" : "application/octet-stream" }) };
   };
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
+  /** GET /api/models。默认 404：网页用打包的名单。 */
+  models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
@@ -302,6 +304,7 @@ export class FakeApi {
     }
     this.calls.push({ method, path: url.pathname, query: url.searchParams, body });
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
+    if (method === "GET" && url.pathname === "/api/models") return jsonResponse(await this.models());
     const m = /^\/api\/conversations\/(\d+)\/(messages|stop)$/.exec(url.pathname);
     if (m) {
       const id = Number(m[1]);

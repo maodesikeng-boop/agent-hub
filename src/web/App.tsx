@@ -13,6 +13,7 @@ import { failingHealth, listConversations, pendingOf, quotaUsage, sessionOf, wor
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
+import { ModelCatalogProvider } from "./models.tsx";
 import { useHub } from "./useHub.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
@@ -93,6 +94,7 @@ export function App() {
   const panelPm = profile?.id ?? (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
 
   return (
+    <ModelCatalogProvider>
     <div className="relative flex h-full">
       <Sidebar
         entries={entries}
@@ -171,5 +173,6 @@ export function App() {
       </main>
       <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />
     </div>
+    </ModelCatalogProvider>
   );
 }

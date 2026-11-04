@@ -17,6 +17,7 @@ import {
   MAX_REASON_CHARS,
   MAX_UPLOAD_BYTES,
   UI_COOKIE_NAME,
+  bundledModelCatalog,
   type Attachment,
   type Change,
   type LedgerErrorCode,
@@ -1487,5 +1488,51 @@ describe("同时上传的个数", () => {
     } finally {
       await running.close();
     }
+  });
+});
+
+describe("GET /api/models（模型名单）", () => {
+  const vendorCatalog = {
+    vendor: "claude" as const,
+    source: "vendor" as const,
+    models: [{ id: "opus", label: "Opus 5.5", description: null, efforts: ["low", "high"] }],
+    defaultEfforts: null,
+  };
+
+  it("没接名单来源：回打包的名单", async () => {
+    const res = await call("GET", "/api/models");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ catalogs: [bundledModelCatalog("claude")] });
+  });
+
+  it("接了：原样回；?refresh=1 让它重新问", async () => {
+    const calls: Array<{ refresh?: boolean }> = [];
+    const other = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      models: {
+        list: async (opts = {}) => {
+          calls.push(opts);
+          return [vendorCatalog];
+        },
+      },
+    });
+    try {
+      const headers = { host: HOST, cookie: COOKIE };
+      const res = await other.inject({ method: "GET", url: "/api/models", headers });
+      expect(res.json()).toEqual({ catalogs: [vendorCatalog] });
+      await other.inject({ method: "GET", url: "/api/models?refresh=1", headers });
+      expect(calls).toEqual([{ refresh: false }, { refresh: true }]);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it("要登录", async () => {
+    expect((await call("GET", "/api/models", { cookie: null })).statusCode).toBe(401);
   });
 });
