@@ -20,6 +20,7 @@ export function Conversation({
   older,
   draft,
   staging,
+  stats,
   notices,
   onDraftChange,
   onSend,

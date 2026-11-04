@@ -27,6 +27,7 @@ export function WorkerConversation({
   older,
   draft,
   staging,
+  stats,
   notices,
   onBack,
   onDraftChange,

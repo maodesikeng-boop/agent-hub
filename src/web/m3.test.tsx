@@ -995,13 +995,13 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(within(section).getByText("已经修好了")).toBeInTheDocument();
   });
 
-  it("项目经理已经让它收工（有“已收工”那一行），会话还在跑完这一轮：Worker 页面不显示输入框，右边栏也算收工", async () => {
+  it("项目经理已经让它收工（有“已收工”那一行），会话还在跑完这一轮：Worker 页面不显示输入框，Worker 面板也算收工", async () => {
     const { ws, section } = await openWorker();
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working" })));
     push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "ended" } })));
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
-    const panel = screen.getByRole("complementary", { name: "Worker" });
-    expect(within(panel).getByText("已收工")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Worker 0" }));
+    expect(within(screen.getByRole("dialog", { name: "Worker" })).getByText("已收工")).toBeInTheDocument();
   });
 
   it("建 worktree 失败（worktree_failed 那一行）：不显示输入框", async () => {

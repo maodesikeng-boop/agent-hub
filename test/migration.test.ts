@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/daemon/store/db.ts";
 import type { Db } from "../src/daemon/store/db.ts";
+import { createSessionStore } from "../src/daemon/store/session-store.ts";
 import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
 import { createLedger } from "../src/daemon/ledger/index.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
@@ -962,7 +963,10 @@ describe("0006_agent_settings：从 M3 的库升级", () => {
     const dump = Object.fromEntries(tables.map((t) => [t, db.all<Record<string, unknown>>(`SELECT * FROM ${t} ORDER BY rowid`)]));
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 4, to: LATEST_VERSION });
     expect(db.all("SELECT * FROM pms ORDER BY id")).toEqual(dump.pms!.map((r) => ({ ...r, vendor: "claude", effort: null })));
-    expect(db.all("SELECT * FROM agent_sessions ORDER BY id")).toEqual(dump.agent_sessions!.map((r) => ({ ...r, effort: null })));
+    // token_usage 是 0007 加的，这里只看 0006 的变化
+    expect(db.all("SELECT * FROM agent_sessions ORDER BY id").map(({ token_usage: _, ...r }: Record<string, unknown>) => r)).toEqual(
+      dump.agent_sessions!.map((r) => ({ ...r, effort: null })),
+    );
     expect(db.all("SELECT * FROM workers ORDER BY id")).toEqual(dump.workers!.map((r) => ({ ...r, effort: null })));
     // 老的修改记录：前后都是项目经理现在的值
     expect(db.all("SELECT * FROM persona_changes ORDER BY id")).toEqual(
@@ -1054,5 +1058,16 @@ describe("0005_project_setup：从 M3 的库升级（老项目没有准备命令
     migrate(db, migrationsDir);
     const ledger = createLedger(db, { pmHomeRoot: join(dir!, "pm-home"), resolveFolder: (p) => p });
     expect(ledger.getWorktreeTask(1)).toMatchObject({ workerId: 1, setupCommand: null });
+  });
+});
+
+describe("0007_token_usage：从 M3 的库升级（老会话没有用量，读出来是全 0）", () => {
+  it("只加 token_usage 一列：老数据一个字不变，新列是 NULL", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(6));
+    const dump = db.all<Record<string, unknown>>("SELECT * FROM agent_sessions ORDER BY id");
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 6, to: LATEST_VERSION });
+    expect(db.all("SELECT * FROM agent_sessions ORDER BY id")).toEqual(dump.map((r) => ({ ...r, token_usage: null })));
+    expect(createSessionStore(db).get(1)!.usage).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 });
   });
 });
