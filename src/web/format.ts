@@ -46,6 +46,13 @@ export function formatResetTime(resetsAtSeconds: number): string {
   return formatTime(resetsAtSeconds * 1000);
 }
 
+/** 额度重置的时间（Unix 秒）：今天的显示“时:分”，别的日子带上“月/日”。 */
+export function formatQuotaReset(resetsAtSeconds: number, now: Date = new Date()): string {
+  const d = new Date(resetsAtSeconds * 1000);
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? time : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
+
 export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }

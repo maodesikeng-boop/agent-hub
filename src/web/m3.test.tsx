@@ -1,14 +1,16 @@
-// M3 网页（W4）：项目经理会话里的 Worker 汇报那一行、点开看 Worker 的过程、顶栏的额度和在跑的 Worker 数。接口和 WebSocket 都是假的。
+// M3 网页（W4）：项目经理会话里的 Worker 汇报那一行、点开看 Worker 的过程、左下角的额度、右边栏的 Worker 列表。接口和 WebSocket 都是假的。
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import type { RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import { formatQuotaReset } from "./format.ts";
 import { App } from "./App.tsx";
 import { listConversations, quotaUsage, runningWorkerCount } from "./selectors.ts";
 import { initialState, reducer } from "./state.ts";
 import {
   FakeApi,
   FakeWebSocket,
+  changeOf,
   installFakeWebSocket,
   makeConvSnapshot,
   makeMessage,
@@ -358,47 +360,205 @@ describe("点开 Worker", () => {
   });
 });
 
-describe("顶栏", () => {
-  const quota = (five: number, seven: number) => ({
-    status: "allowed",
-    resetsAt: null,
-    windows: {
-      five_hour: { utilization: five, resetsAt: 1_793_619_600, status: "allowed" },
-      seven_day: { utilization: seven, resetsAt: 1_793_646_000, status: "allowed" },
-    },
-  });
+describe("左下角的额度", () => {
+  const win = (utilization: number, over: Partial<RateLimitWindow> = {}): RateLimitWindow => ({ utilization, resetsAt: 1_793_619_600, status: "allowed", ...over });
+  const limit = (windows: Record<string, RateLimitWindow>, status = "allowed") => ({ status, resetsAt: null, windows });
+  const quota = (five: number, seven: number) => limit({ five_hour: win(five), seven_day: win(seven, { resetsAt: 1_793_646_000 }) });
+  const withQuota = (rateLimit: ReturnType<typeof limit>) =>
+    withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit, lastEventAt: 5 })] });
+  const badge = () => screen.getByRole("button", { name: /额度/ });
 
-  it("额度：5 小时和 7 天的已用百分比", async () => {
-    await boot(withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.37, 0.59), lastEventAt: 5 })] }));
-    expect(screen.getByText("5 小时额度已用 37% · 7 天 59%")).toBeInTheDocument();
-  });
-
-  it("推 session.status 带来新的额度：跟着变", async () => {
-    const ws = await boot(withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.37, 0.59), lastEventAt: 5 })] }));
-    push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
-    expect(screen.getByText("5 小时额度已用 40% · 7 天 60%")).toBeInTheDocument();
+  it("右上角没有额度和“N 个 Worker 在跑”了", async () => {
+    await boot(withQuota(quota(0.37, 0.59)));
+    expect(screen.queryByText(/额度已用/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/个 Worker 在跑/)).not.toBeInTheDocument();
   });
 
   it("还没有额度数据：不显示", async () => {
     await boot();
-    expect(screen.queryByText(/额度已用/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /额度/ })).not.toBeInTheDocument();
   });
 
-  it("N 个 Worker 在跑：只数这个项目经理的、会话不是空闲的；一个都没在跑就不显示", async () => {
-    const ws = await boot();
-    expect(screen.queryByText(/个 Worker 在跑/)).not.toBeInTheDocument();
-    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working" })));
-    expect(screen.getByText("1 个 Worker 在跑")).toBeInTheDocument();
-    push(ws, sessionChange(12, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "idle" })));
-    expect(screen.queryByText(/个 Worker 在跑/)).not.toBeInTheDocument();
+  it("直接显示 5 小时额度已用的百分比，平时不是醒目色", async () => {
+    await boot(withQuota(quota(0.37, 0.59)));
+    expect(badge()).toHaveTextContent("37%");
+    expect(badge()).toHaveAccessibleName("5 小时额度已用 37%");
+    expect(badge()).not.toHaveClass("bg-warn", "bg-danger-soft");
   });
 
-  it("点开 Worker 后顶栏还在", async () => {
+  it("推 session.status 带来新的额度：跟着变", async () => {
+    const ws = await boot(withQuota(quota(0.37, 0.59)));
+    push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
+    expect(badge()).toHaveTextContent("40%");
+  });
+
+  it.each([
+    [0.79, "allowed", false],
+    [0.8, "allowed", true],
+    [0.5, "allowed_warning", true],
+  ])("快用完：已用 %s、status %s → 醒目色 %s", async (used, status, warn) => {
+    await boot(withQuota(limit({ five_hour: win(used, { status }) })));
+    if (warn) expect(badge()).toHaveClass("bg-warn");
+    else expect(badge()).not.toHaveClass("bg-warn");
+    expect(badge()).not.toHaveTextContent("已用完");
+  });
+
+  it("用完了（rejected）：显示“已用完”，不是百分比", async () => {
+    await boot(withQuota(limit({ five_hour: win(1, { status: "rejected" }) }, "rejected")));
+    expect(badge()).toHaveTextContent("已用完");
+    expect(badge()).not.toHaveTextContent("%");
+    expect(badge()).toHaveClass("bg-danger-soft");
+  });
+
+  it("点开小窗口：按厂商分组，每个窗口一行：名字、百分比、进度条、重置时间", async () => {
     const user = userEvent.setup();
-    await boot(withWorker({ sessions: [makeSession({ sessionId: 2, conversationId: 30, activity: "working", status: "running", rateLimit: quota(0.1, 0.2), lastEventAt: 1 })] }));
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
-    expect(screen.getByText("1 个 Worker 在跑")).toBeInTheDocument();
-    expect(screen.getByText("5 小时额度已用 10% · 7 天 20%")).toBeInTheDocument();
+    await boot(withQuota(quota(0.37, 0.59)));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(badge());
+    const group = screen.getByRole("region", { name: "Claude" });
+    expect(within(group).getByRole("heading", { name: "Claude" })).toBeInTheDocument();
+    const five = within(group).getByRole("progressbar", { name: "5 小时额度" });
+    expect(five).toHaveAttribute("aria-valuenow", "37");
+    expect(within(group).getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "59");
+    expect(within(group).getByText("37%")).toBeInTheDocument();
+    expect(within(group).getByText("59%")).toBeInTheDocument();
+    expect(within(group).getByText(`${formatQuotaReset(1_793_619_600)} 重置`)).toBeInTheDocument();
+    expect(within(group).getByText(`${formatQuotaReset(1_793_646_000)} 重置`)).toBeInTheDocument();
+    expect(within(group).getAllByRole("progressbar")).toHaveLength(2);
+  });
+
+  it("只有一个窗口有数据：标识显示它，小窗口里只有一行", async () => {
+    const user = userEvent.setup();
+    await boot(withQuota(limit({ seven_day: win(0.2) })));
+    expect(badge()).toHaveTextContent("20%");
+    await user.click(badge());
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+    expect(screen.getByRole("progressbar", { name: "7 天额度" })).toBeInTheDocument();
+  });
+
+  it("脏数据：超过 1 夹成 100%，负数夹成 0%，没有重置时间的不显示重置", async () => {
+    const user = userEvent.setup();
+    await boot(withQuota(limit({ five_hour: win(1.7, { resetsAt: 0 }), seven_day: win(-0.3) })));
+    expect(badge()).toHaveTextContent("100%");
+    expect(badge()).toHaveClass("bg-warn");
+    await user.click(badge());
+    expect(screen.getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getAllByText(/重置/)).toHaveLength(1);
+  });
+});
+
+describe("右边栏的 Worker 列表", () => {
+  const panel = () => screen.queryByRole("complementary", { name: "Worker" });
+  const rows = () => within(panel()!).getAllByRole("button").filter((b) => b.getAttribute("aria-label") === null).map((b) => b.textContent);
+  /** 小林（对话 1）派了 30 修 X、31 写文档、32 查日志；老马（对话 2）派了 40 老马的活。 */
+  const crowd = (over: Partial<StateSnapshot> = {}) =>
+    withWorker({
+      pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "老马" })],
+      conversations: [
+        makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1, line: { event: "started" } })], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+        makeConvSnapshot([], { conversation: { id: 2, pmId: 2, title: "老马" } }),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) }),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 32, title: "查日志" }) }),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 40, pmId: 2, title: "老马的活" }) }),
+      ],
+      sessions: [
+        makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }),
+        makeSession({ sessionId: 2, conversationId: 2, pmId: 2 }),
+        makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" }),
+        makeSession({ sessionId: 4, conversationId: 31 }),
+        makeSession({ sessionId: 5, conversationId: 32, status: "ended" }),
+        makeSession({ sessionId: 6, conversationId: 40 }),
+      ],
+      ...over,
+    });
+
+  it("没有 Worker：整个右边栏不显示", async () => {
+    await boot(makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } })] }));
+    expect(panel()).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Worker 列表/ })).not.toBeInTheDocument();
+  });
+
+  it("一行一个：标题和状态；进行中的在前、收工的在后且淡一些", async () => {
+    await boot(crowd());
+    expect(rows()).toEqual(["修 X干活中", "写文档空闲", "查日志已收工"]);
+    const ended = within(panel()!).getByRole("button", { name: /查日志/ });
+    expect(ended).toHaveClass("opacity-60");
+    expect(within(panel()!).getByRole("button", { name: /修 X/ })).not.toHaveClass("opacity-60");
+  });
+
+  it("各状态的文字：干活中、停止中、空闲、已收工；不认识的 activity 显示“进行中”", async () => {
+    const stopping = makeSession({ sessionId: 3, conversationId: 30, activity: "stopping" });
+    const unknown = makeSession({ sessionId: 4, conversationId: 31, activity: "preparing" as SessionState["activity"] });
+    await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), stopping, unknown, makeSession({ sessionId: 5, conversationId: 32, status: "ended" })] }));
+    expect(rows()).toEqual(["修 X停止中", "写文档进行中", "查日志已收工"]);
+  });
+
+  it("项目经理的会话里有“收工”那一行也算收工；会话还没有的 Worker 当空闲", async () => {
+    const lines = [
+      makeWorkerLine({ id: 2, conversationId: 1, line: { workerConversationId: 31, event: "ended" } }),
+      makeWorkerLine({ id: 3, conversationId: 1, line: { workerConversationId: 32, event: "worktree_failed" } }),
+    ];
+    await boot(
+      crowd({
+        conversations: [
+          makeConvSnapshot(lines, { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 32, title: "查日志" }) }),
+        ],
+        sessions: [],
+      }),
+    );
+    expect(rows()).toEqual(["修 X空闲", "写文档已收工", "查日志已收工"]);
+  });
+
+  it("点一行打开那个 Worker 的对话，当前打开的那行高亮；选左栏回到项目经理时不再高亮", async () => {
+    const user = userEvent.setup();
+    await boot(crowd());
+    const row = (name: RegExp) => within(panel()!).getByRole("button", { name });
+    expect(row(/修 X/)).not.toHaveAttribute("aria-current");
+    await user.click(row(/修 X/));
+    expect(screen.getByRole("region", { name: "Worker · 修 X" })).toBeInTheDocument();
+    expect(row(/修 X/)).toHaveAttribute("aria-current", "true");
+    expect(row(/写文档/)).not.toHaveAttribute("aria-current");
+    await user.click(row(/写文档/));
+    expect(screen.getByRole("region", { name: "Worker · 写文档" })).toBeInTheDocument();
+    expect(row(/写文档/)).toHaveAttribute("aria-current", "true");
+    await user.click(within(nav()).getByRole("button", { name: /小林/ }));
+    expect(row(/写文档/)).not.toHaveAttribute("aria-current");
+  });
+
+  it("切换项目经理：列表跟着变；对方没有 Worker 就整个不显示", async () => {
+    const user = userEvent.setup();
+    await boot(crowd());
+    await user.click(within(nav()).getByRole("button", { name: /老马/ }));
+    expect(rows()).toEqual(["老马的活空闲"]);
+    await user.click(within(nav()).getByRole("button", { name: /小林/ }));
+    expect(rows()).toEqual(["修 X干活中", "写文档空闲", "查日志已收工"]);
+  });
+
+  it("没有 Worker 的项目经理：右边栏不显示", async () => {
+    const user = userEvent.setup();
+    await boot(crowd({ conversations: crowd().conversations.filter((c) => c.conversation.id !== 40) }));
+    await user.click(within(nav()).getByRole("button", { name: /老马/ }));
+    expect(panel()).not.toBeInTheDocument();
+  });
+
+  it("实时变：会话状态一推就变；收工那一行一来，这个 Worker 排到后面、变淡", async () => {
+    const ws = await boot(crowd());
+    push(ws, sessionChange(11, makeSession({ sessionId: 4, conversationId: 31, status: "running", activity: "working" })));
+    expect(rows()).toEqual(["修 X干活中", "写文档干活中", "查日志已收工"]);
+    push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 50, conversationId: 1, line: { workerConversationId: 30, event: "ended" } })));
+    expect(rows()).toEqual(["写文档干活中", "修 X已收工", "查日志已收工"]);
+    expect(within(panel()!).getByRole("button", { name: /修 X/ })).toHaveClass("opacity-60");
+  });
+
+  it("新派的 Worker 一出现就在列表里", async () => {
+    const ws = await boot(crowd());
+    push(ws, changeOf(11, "conversation.created", { conversation: makeWorkerConversation({ id: 33, title: "新活" }) }));
+    expect(rows()).toContain("新活空闲");
   });
 });
 
@@ -409,7 +569,7 @@ describe("selectors", () => {
     expect(listConversations(loaded(withWorker())).map((e) => e.id)).toEqual([1]);
   });
 
-  it("quotaUsage：每个窗口各取最近一次事件（lastEventAt 最大）的那个会话；没有的窗口是 null", () => {
+  it("quotaUsage：厂商 → 窗口；每个窗口各取最近一次事件（lastEventAt 最大）的那个会话；没有数据的窗口、厂商不返回", () => {
     const state = loaded(
       withWorker({
         sessions: [
@@ -423,14 +583,16 @@ describe("selectors", () => {
             sessionId: 2,
             conversationId: 30,
             lastEventAt: 200,
-            rateLimit: { status: "allowed", resetsAt: null, windows: { five_hour: { utilization: 0.3, resetsAt: 1, status: "allowed" } } },
+            rateLimit: { status: "allowed", resetsAt: null, windows: { five_hour: { utilization: 0.3, resetsAt: 7, status: "allowed" } } },
           }),
           makeSession({ sessionId: 3, conversationId: 31, lastEventAt: 300, rateLimit: null }),
         ],
       }),
     );
-    expect(quotaUsage(state)).toEqual({ fiveHour: 30, sevenDay: null });
-    expect(quotaUsage(loaded(withWorker()))).toEqual({ fiveHour: null, sevenDay: null });
+    expect(quotaUsage(state)).toEqual([
+      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", percent: 30, resetsAt: 7, warning: false }] },
+    ]);
+    expect(quotaUsage(loaded(withWorker()))).toEqual([]);
   });
 
   it("runningWorkerCount：只数这个项目经理派的 Worker 对话里最新一代会话不是 idle 的", () => {
