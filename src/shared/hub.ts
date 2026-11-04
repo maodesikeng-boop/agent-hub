@@ -19,6 +19,7 @@ import type {
   WorkerRecord,
   WorkerId,
 } from "./domain.ts";
+import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
@@ -40,6 +41,8 @@ export const ENV_HUB_SOCK = "HUB_SOCK";
  * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
  * - `hub project setup --stdin | --clear`                 → project.setup：设置、清除项目的 worktree 准备命令
  * - `hub ask --stdin`                                    → ask：向用户提问（要用户拍板、确认、选择的事），正文是问题（Markdown）
+ * - `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin` → schedule.add：建定时任务（M6），任务说明从标准输入读
+ * - `hub schedule list | pause <编号> | resume <编号> | remove <编号>` → schedule.list / pause / resume / remove：只能管自己的
  * - `hub persona show`                                   → persona.show
  * - `hub persona edit [--mode <模式>] [--reason <理由>] [--stdin | --text <正文>]` → persona.edit，新全文；可以只改模式
  *
@@ -64,6 +67,11 @@ export const HUB_COMMANDS = [
   "worker.end",
   "worker.list",
   "ask",
+  "schedule.add",
+  "schedule.list",
+  "schedule.pause",
+  "schedule.resume",
+  "schedule.remove",
 ] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
@@ -84,6 +92,11 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.end": ["pm"],
   "worker.list": ["pm"],
   ask: ["pm"],
+  "schedule.add": ["pm"],
+  "schedule.list": ["pm"],
+  "schedule.pause": ["pm"],
+  "schedule.resume": ["pm"],
+  "schedule.remove": ["pm"],
 };
 
 export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean {
@@ -129,6 +142,18 @@ export interface HubArgsMap {
    * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的。
    */
   ask: { text: string };
+  /**
+   * `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`（M6）：给自己建定时任务。name 按 normalizeName；
+   * daily、everyMinutes 恰好给一个（HH:MM 本机本地时间；间隔最短 MIN_SCHEDULE_EVERY_MINUTES 分钟，hub 把 30m、2h 换成分钟数）；
+   * prompt 从标准输入读，不超过 MAX_TASK_BYTES、不能是空的。到点往项目经理自己的对话发一条消息、照常交给它，对话里留一条给人看的“已建定时任务”。
+   */
+  "schedule.add": { name: string; prompt: string; daily?: string; everyMinutes?: number };
+  /** `hub schedule list`：我的定时任务，含暂停的。 */
+  "schedule.list": Record<string, never>;
+  /** `hub schedule pause|resume|remove <编号>`：不存在 → not_found；不是自己的 → forbidden。resume 从现在算下一次；remove 在对话里留一条“已删除”。 */
+  "schedule.pause": { scheduleId: ScheduleId };
+  "schedule.resume": { scheduleId: ScheduleId };
+  "schedule.remove": { scheduleId: ScheduleId };
 }
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
@@ -190,6 +215,13 @@ export interface HubDataMap {
   "worker.list": { workers: WorkerRecord[] };
   /** messageId：对话里那条带标记的消息。 */
   ask: { messageId: MessageId };
+  "schedule.add": { schedule: ScheduleRecord };
+  /** 按编号从小到大，含暂停的。 */
+  "schedule.list": { schedules: ScheduleRecord[] };
+  "schedule.pause": { schedule: ScheduleRecord };
+  "schedule.resume": { schedule: ScheduleRecord };
+  /** 删之前的样子。 */
+  "schedule.remove": { schedule: ScheduleRecord };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

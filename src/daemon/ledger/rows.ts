@@ -19,6 +19,7 @@ import type {
   WorkerStatus,
   WorkerWorkspace,
 } from "../../shared/domain.ts";
+import type { ScheduleKind, ScheduleRecord, ScheduleStatus } from "../../shared/schedule.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
 export interface PmDbRow {
@@ -121,6 +122,24 @@ export interface WorkerDbRow {
   worktree_path: string | null;
   base_commit: string | null;
   status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ScheduleDbRow {
+  id: number;
+  pm_id: number;
+  name: string;
+  kind: string;
+  at_time: string | null;
+  every_minutes: number | null;
+  prompt: string;
+  enabled: number;
+  next_run_at: number;
+  last_run_at: number | null;
+  last_status: string | null;
+  last_error: string | null;
+  last_message_id: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -248,6 +267,26 @@ export function toWorkerRecord(row: WorkerDbRow): WorkerRecord {
     worktreePath: row.worktree_path,
     baseCommit: row.base_commit,
     status: row.status as WorkerStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function toSchedule(row: ScheduleDbRow): ScheduleRecord {
+  return {
+    id: row.id,
+    pmId: row.pm_id,
+    name: row.name,
+    kind: row.kind as ScheduleKind,
+    atTime: row.at_time,
+    everyMinutes: row.every_minutes,
+    prompt: row.prompt,
+    enabled: row.enabled === 1,
+    nextRunAt: row.next_run_at,
+    lastRunAt: row.last_run_at,
+    lastStatus: row.last_status as ScheduleStatus | null,
+    lastError: row.last_error,
+    lastMessageId: row.last_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

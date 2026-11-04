@@ -225,6 +225,7 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
     conversations: [makeConvSnapshot([])],
     sessions: [],
     health: [],
+    schedules: [],
     ...over,
   };
 }

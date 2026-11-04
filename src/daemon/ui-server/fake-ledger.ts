@@ -97,7 +97,7 @@ export class FakeLedger {
   readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
-  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
+  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
   /** 抛出它来模拟账本出错（普通 Error 是内部出错，LedgerRequestError 是被拒绝）；所有方法都抛。 */
   failWith: Error | null = null;
 
@@ -274,6 +274,7 @@ export class FakeLedger {
       revertPersonaChange: (c) => this.revertPersonaChange(c),
       retryMessage: (m) => this.retryMessage(m),
       dismissAsk: (m) => this.dismissAsk(m),
+      runDueSchedules: unused("runDueSchedules"),
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),

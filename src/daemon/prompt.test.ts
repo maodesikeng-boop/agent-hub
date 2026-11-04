@@ -15,6 +15,7 @@ import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
 import {
   AGENTS_NOTE,
+  DAILY_REPORT_TEMPLATE,
   HUB_USAGE_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
@@ -207,6 +208,31 @@ describe("提示词：项目经理（M3）", () => {
     }
     // 命令表里的每个命令都写进了用法
     for (const command of HUB_COMMANDS) expect(HUB_USAGE_PROMPT).toContain(`${HUB_COMMAND} ${command.replace(".", " ")}`);
+  });
+});
+
+describe("提示词：定时任务（M6）", () => {
+  it("hub 用法有 hub schedule 的命令（和 hub/cli.ts 的 HUB_USAGE 写法一致），说明到点会发什么消息、补跑和跳过", () => {
+    for (const sub of [
+      `${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`,
+      `${hub} schedule list`,
+      `${hub} schedule pause <编号>`,
+      `${hub} schedule resume <编号>`,
+      `${hub} schedule remove <编号>`,
+    ]) {
+      expect(HUB_USAGE_PROMPT).toContain(sub);
+      expect(HUB_USAGE).toContain(sub);
+    }
+    expect(HUB_USAGE_PROMPT).toContain("【定时任务：名字（原定 09:00）】");
+    expect(HUB_USAGE_PROMPT).toContain("补一次");
+    expect(HUB_USAGE_PROMPT).toContain("跳过");
+  });
+
+  it("日报不默认建：用法里写明用户要日报时才用 hub schedule add 建，任务说明用日报模板（四段）", () => {
+    expect(HUB_USAGE_PROMPT).toContain("用户要日报时用");
+    expect(HUB_USAGE_PROMPT).toContain("用户没要就不要建");
+    for (const part of ["昨天做完了什么", "什么在等你", "什么在进行", "风险"]) expect(DAILY_REPORT_TEMPLATE).toContain(part);
+    expect(HUB_USAGE_PROMPT).toContain(DAILY_REPORT_TEMPLATE.split("\n")[0]);
   });
 });
 

@@ -40,6 +40,8 @@ const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "message.updated": 5,
   "session.status": 6,
   "health.updated": 7,
+  "schedule.updated": 8,
+  "schedule.removed": 8,
 };
 
 export const fail = (code: LedgerErrorCode, message: string) => new LedgerRequestError(code, message);

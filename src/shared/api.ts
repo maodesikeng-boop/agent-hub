@@ -15,6 +15,7 @@ import type {
   SessionState,
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
+import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 
 export const API_PATHS = {
@@ -77,6 +78,8 @@ export interface StateSnapshot {
   conversations: ConversationSnapshot[];
   sessions: SessionState[];
   health: HealthEntry[];
+  /** 所有项目经理的定时任务（M6），按编号从小到大；ScheduleRecord.pmId 认是谁的。 */
+  schedules: ScheduleRecord[];
 }
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
@@ -177,7 +180,7 @@ export interface PickFolderResponse {
 
 /**
  * 同一个事务里推出的几条变化按这个顺序：pm.* → project.* → conversation.created → session.created → folders.updated →
- * message.* → session.status → health.updated。所以网页收到某个对话的 message.created 时，那个对话一定已经有了。
+ * message.* → session.status → health.updated → schedule.*。所以网页收到某个对话的 message.created 时，那个对话一定已经有了。
  */
 export const CHANGE_TYPES = [
   "message.created",
@@ -190,6 +193,8 @@ export const CHANGE_TYPES = [
   "folders.updated",
   "conversation.created",
   "session.created",
+  "schedule.updated",
+  "schedule.removed",
 ] as const;
 export type ChangeType = (typeof CHANGE_TYPES)[number];
 
@@ -209,6 +214,9 @@ export interface ChangeDataMap {
   "conversation.created": { conversation: Conversation };
   /** 新会话（建项目经理时；M3 起还有派活时 Worker 的会话）。 */
   "session.created": { session: SessionState };
+  /** 定时任务建了、暂停、恢复、跑过一次（M6），整行换成这一份。 */
+  "schedule.updated": { schedule: ScheduleRecord };
+  "schedule.removed": { scheduleId: ScheduleId };
 }
 
 /** 服务端推的一条变化：{ seq, type, data }。 */

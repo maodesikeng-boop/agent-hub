@@ -42,6 +42,18 @@ export const WORKER_LINE_SUMMARY_CHARS = 120;
 /** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
 export const WORKER_BRANCH_SLUG_CHARS = 30;
 
+// ---- M6：定时任务（见 src/shared/schedule.ts、daemon/ledger/schedules.ts）----
+
+/** 守护进程里的调度器多久查一次有没有到点的定时任务（启动时先查一次）。 */
+export const SCHEDULER_TICK_MS = 30_000;
+/** 到点后过了这么久才跑算“补跑”（睡眠、守护进程没开）；正常的延迟最多一个 tick。 */
+export const SCHEDULE_LATE_MS = 2 * SCHEDULER_TICK_MS;
+/** “每隔 N 分钟/小时”最短 15 分钟，最长 7 天。 */
+export const MIN_SCHEDULE_EVERY_MINUTES = 15;
+export const MAX_SCHEDULE_EVERY_MINUTES = 7 * 24 * 60;
+/** 定时任务的名字最多几个字符（同项目经理的名字）。任务说明最多 MAX_TASK_BYTES，它就是发给项目经理的消息。 */
+export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
+
 // ---- 聊天框上传文件 ----
 
 /** 单个上传文件最多 20 MB。上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节），不动普通消息接口 1 MB 的请求体上限。 */
