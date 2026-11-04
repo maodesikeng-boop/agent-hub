@@ -51,7 +51,7 @@ export interface MessageActions {
 
 const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
 
-/** agent 一连串消息的第一条带头像和名字，后面的只留头像的位置。 */
+/** agent 一连串消息的第一条在正文上方带一行小头像和名字，后面的只有正文；正文从最左边开始、占满整行。 */
 function AgentRow({
   identity,
   head,
@@ -66,12 +66,14 @@ function AgentRow({
   children: React.ReactNode;
 }) {
   return (
-    <Tag className={cn("flex gap-3", head ? "mt-5" : "mt-1.5")} data-side="left" data-head={head} title={title}>
-      <div className="w-9 shrink-0">{head && <Avatar colorKey={identity.avatarKey} size={36} />}</div>
-      <div className="min-w-0 max-w-[85%] space-y-1.5">
-        {head && <div className="text-[13px] font-medium text-muted-foreground">{identity.name}</div>}
-        {children}
-      </div>
+    <Tag className={cn("flex flex-col", head ? "mt-5" : "mt-1.5")} data-side="left" data-head={head} title={title}>
+      {head && (
+        <div className="mb-1.5 flex items-center gap-2">
+          <Avatar colorKey={identity.avatarKey} size={24} />
+          <div className="text-[13px] font-medium text-muted-foreground">{identity.name}</div>
+        </div>
+      )}
+      <div className="w-full min-w-0 space-y-1.5">{children}</div>
     </Tag>
   );
 }
@@ -194,7 +196,7 @@ export function MessageBubble({
   }
   return (
     <AgentRow identity={identity} head={head} as="article" title={time}>
-      <div className={cn(BUBBLE, "bg-bubble-agent")}>
+      <div className="w-full min-w-0 text-[15px] leading-relaxed">
         <Markdown text={message.text} />
       </div>
     </AgentRow>
