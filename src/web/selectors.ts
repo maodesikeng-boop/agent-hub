@@ -81,9 +81,9 @@ export function sessionOf(state: HubState, conversationId: ConversationId): Sess
   return current;
 }
 
-/** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）。 */
-export function isWaitingForQuota(session: SessionState | null): boolean {
-  return isQuotaExhausted(session?.rateLimit);
+/** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）；已经过了 resetsAt 的不算，Claude 要等下一条事件才会更新它。 */
+export function isWaitingForQuota(session: SessionState | null, now: number = Date.now()): boolean {
+  return isQuotaExhausted(session?.rateLimit, now);
 }
 
 /** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
@@ -136,21 +136,44 @@ export interface QuotaVendor {
 const newerSession = (a: SessionState, b: SessionState | null): boolean =>
   b === null || (a.lastEventAt ?? -1) > (b.lastEventAt ?? -1) || ((a.lastEventAt ?? -1) === (b.lastEventAt ?? -1) && a.sessionId > b.sessionId);
 
+/** resetsAt（Unix 秒）已经到了或过了；不是正的有限数（脏数据）当没到。 */
+const isReset = (resetsAt: number, now: number): boolean => Number.isFinite(resetsAt) && resetsAt > 0 && resetsAt * 1000 <= now;
+
 /**
- * m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最近一次事件的那个会话的值；没有数据的窗口、厂商不返回。
- * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
+ * 同一个窗口里 a 的值比 b 新。不能看会话的 lastEventAt：网页里它只在会话状态变了才跟着推过来，旧会话收尾也会把它刷新，
+ * 会让重置前的旧值盖住重置后的新值。所以：重置时间晚的是新窗口；同一个窗口里用量只增不减，高的是新的；都一样才看 lastEventAt。
  */
-export function quotaUsage(state: HubState): QuotaVendor[] {
+const newerWindow = (a: SessionState, b: SessionState | null, key: string): boolean => {
+  if (b === null) return true;
+  const wa = a.rateLimit!.windows[key]!;
+  const wb = b.rateLimit!.windows[key]!;
+  if (wa.resetsAt !== wb.resetsAt) return wa.resetsAt > wb.resetsAt;
+  if (wa.utilization !== wb.utilization) return wa.utilization > wb.utilization;
+  return newerSession(a, b);
+};
+
+/**
+ * m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
+ * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
+ * 过了 resetsAt 的窗口已经重置：显示 0%、没有重置时间、不标快用完（新窗口的数据要等下一条事件才来）；不是已用完。
+ * now 是毫秒；网页用 useRerenderAt 在每个重置时间点重新渲染，所以页面不动也会变。
+ */
+export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVendor[] {
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
     for (const { key, label } of spec.windows) {
       let best: SessionState | null = null;
       for (const s of state.sessions) {
-        if (s.rateLimit?.windows[key] !== undefined && newerSession(s, best)) best = s;
+        const w = s.rateLimit?.windows[key];
+        if (w !== undefined && Number.isFinite(w.utilization) && newerWindow(s, best, key)) best = s;
       }
       const window = best?.rateLimit?.windows[key];
-      if (window === undefined || !Number.isFinite(window.utilization)) continue;
+      if (window === undefined) continue;
+      if (isReset(window.resetsAt, now)) {
+        windows.push({ key, label, percent: 0, resetsAt: null, warning: false });
+        continue;
+      }
       const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
       windows.push({
         key,
@@ -163,9 +186,23 @@ export function quotaUsage(state: HubState): QuotaVendor[] {
     if (windows.length === 0) continue;
     let latest: SessionState | null = null;
     for (const s of state.sessions) if (s.rateLimit !== null && newerSession(s, latest)) latest = s;
-    vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit) });
+    vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit, now) });
   }
   return vendors;
+}
+
+/**
+ * 所有会话额度里的重置时间点（毫秒，去重、从早到晚）：窗口的 resetsAt 和整体的 resetsAt。
+ * 页面到了这些时间点要重新渲染一次，已重置的窗口才会变成 0%。
+ */
+export function quotaResetTimes(state: HubState): number[] {
+  const times = new Set<number>();
+  for (const { rateLimit } of state.sessions) {
+    if (rateLimit === null) continue;
+    for (const w of Object.values(rateLimit.windows)) if (Number.isFinite(w.resetsAt) && w.resetsAt > 0) times.add(w.resetsAt * 1000);
+    if (rateLimit.resetsAt !== null && Number.isFinite(rateLimit.resetsAt) && rateLimit.resetsAt > 0) times.add(rateLimit.resetsAt * 1000);
+  }
+  return [...times].sort((a, b) => a - b);
 }
 
 /** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */

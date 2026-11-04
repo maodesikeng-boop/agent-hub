@@ -509,6 +509,20 @@ describe("额度信息", () => {
     expect(t.store.get(s.id)!.rateLimit).toEqual(ev.info);
   });
 
+  it("同一轮里重置前、后两条事件：每条都出 rate_limit、都写库，库里最后是重置后的新窗口（utilization 0、新 resetsAt）", async () => {
+    const win = (utilization: number, resetsAt: number, status = "allowed") => ({ utilization, resetsAt, status });
+    const before = { status: "allowed_warning", resetsAt: 1793773800, rateLimitType: "five_hour", unifiedWindows: { five_hour: win(0.99, 1793773800, "allowed_warning"), seven_day: win(0.31, 1794250800) } };
+    const after = { status: "allowed", resetsAt: 1793791800, rateLimitType: "five_hour", unifiedWindows: { five_hour: win(0, 1793791800), seven_day: win(0.31, 1794250800) } };
+    const t = harness({ script: { defaultTurn: { rateLimit: false, steps: [{ rateLimit: before }, { rateLimit: after }, { text: "ok" }] } } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    const seen = t.of("rate_limit").map((e) => e.info.windows.five_hour);
+    expect(seen).toEqual([win(0.99, 1793773800, "allowed_warning"), win(0, 1793791800)]);
+    expect(t.store.get(s.id)!.rateLimit?.windows.five_hour).toEqual(win(0, 1793791800));
+    expect(t.store.get(s.id)!.rateLimit?.windows.seven_day).toEqual(win(0.31, 1794250800));
+  });
+
   it("额度用完的状态原样带出来", async () => {
     const t = harness({
       script: {

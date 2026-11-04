@@ -2,10 +2,10 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import type { RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { formatQuotaReset } from "./format.ts";
 import { App } from "./App.tsx";
-import { listConversations, quotaUsage, runningWorkerCount } from "./selectors.ts";
+import { isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount } from "./selectors.ts";
 import { initialState, reducer } from "./state.ts";
 import {
   FakeApi,
@@ -375,11 +375,15 @@ describe("点开 Worker", () => {
 
 describe("左下角的额度", () => {
   const win = (utilization: number, over: Partial<RateLimitWindow> = {}): RateLimitWindow => ({ utilization, resetsAt: 1_793_619_600, status: "allowed", ...over });
-  const limit = (windows: Record<string, RateLimitWindow>, status = "allowed") => ({ status, resetsAt: null, windows });
+  const limit = (windows: Record<string, RateLimitWindow>, status = "allowed"): RateLimitInfo => ({ status, resetsAt: null, windows });
   const quota = (five: number, seven: number) => limit({ five_hour: win(five), seven_day: win(seven, { resetsAt: 1_793_646_000 }) });
-  const withQuota = (rateLimit: ReturnType<typeof limit>) =>
+  const withQuota = (rateLimit: RateLimitInfo) =>
     withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit, lastEventAt: 5 })] });
   const badge = () => screen.getByRole("button", { name: /额度/ });
+  // 样例里的重置时间（1_793_619_600、1_793_646_000）要在“现在”之后，不然窗口算已重置
+  const T_BEFORE_RESET = (1_793_619_600 - 3600) * 1000;
+  beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now: T_BEFORE_RESET }));
+  afterEach(() => void vi.useRealTimers());
 
   it("右上角没有额度和“N 个 Worker 在跑”了", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
@@ -403,6 +407,55 @@ describe("左下角的额度", () => {
     const ws = await boot(withQuota(quota(0.37, 0.59)));
     push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
     expect(badge()).toHaveTextContent("40%");
+  });
+
+  describe("到了重置时间", () => {
+    const RESET = 1_793_773_800;
+    const NEXT_RESET = 1_793_791_800;
+    // 真实事件的顶层 resetsAt 就是触发这条的窗口（5 小时）的
+    const rl = (five: number, fiveReset: number, status = "allowed") => ({
+      ...limit({ five_hour: win(five, { resetsAt: fiveReset, status }), seven_day: win(0.31, { resetsAt: 1_794_250_800 }) }, status),
+      resetsAt: fiveReset,
+    });
+    // 假时钟只换 Date 和 setTimeout，waitFor 照常轮询
+    const clock = (nowSeconds: number) => vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"], shouldAdvanceTime: true, now: nowSeconds * 1000 });
+    const advance = (seconds: number) => act(() => void vi.advanceTimersByTime(seconds * 1000));
+
+    it("页面开着不动：到了 resetsAt 自己从 99% 变成 0%，重置时间的字也没了；不用刷新", async () => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      clock(RESET - 600);
+      await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
+      expect(badge()).toHaveTextContent("99%");
+      expect(badge()).toHaveClass("bg-warn");
+      advance(599);
+      expect(badge()).toHaveTextContent("99%");
+      advance(2);
+      expect(badge()).toHaveTextContent("0%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
+      expect(badge()).not.toHaveClass("bg-warn");
+      await user.click(badge());
+      expect(screen.getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "0");
+      expect(screen.getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "31");
+      expect(screen.getAllByText(/重置/)).toHaveLength(1); // 只剩 7 天窗口的
+    });
+
+    it("重置后新的 rate_limit_event 一到（新 resetsAt）：马上显示新窗口的值", async () => {
+      clock(RESET - 600);
+      const ws = await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
+      advance(601);
+      expect(badge()).toHaveTextContent("0%");
+      push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: rl(0.03, NEXT_RESET), lastEventAt: 9 })));
+      expect(badge()).toHaveTextContent("3%");
+    });
+
+    it("用完了（已用完）：到了 resetsAt 自己变回百分比", async () => {
+      clock(RESET - 600);
+      await boot(withQuota(rl(1, RESET, "rejected")));
+      expect(badge()).toHaveTextContent("已用完");
+      advance(601);
+      expect(badge()).toHaveTextContent("0%");
+      expect(badge()).not.toHaveClass("bg-danger-soft");
+    });
   });
 
   it.each([
@@ -590,7 +643,7 @@ describe("selectors", () => {
     expect(listConversations(loaded(withWorker())).map((e) => e.id)).toEqual([1]);
   });
 
-  it("quotaUsage：厂商 → 窗口；每个窗口各取最近一次事件（lastEventAt 最大）的那个会话；没有数据的窗口、厂商不返回", () => {
+  it("quotaUsage：厂商 → 窗口；每个窗口各取最新的那个值（重置时间晚的）；没有数据的窗口、厂商不返回", () => {
     const state = loaded(
       withWorker({
         sessions: [
@@ -610,10 +663,73 @@ describe("selectors", () => {
         ],
       }),
     );
-    expect(quotaUsage(state)).toEqual([
+    expect(quotaUsage(state, 0)).toEqual([
       { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", percent: 30, resetsAt: 7, warning: false }] },
     ]);
-    expect(quotaUsage(loaded(withWorker()))).toEqual([]);
+    expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
+  });
+
+  // 真实日志（2026-11-04）：5 小时窗口 14:30 重置（resetsAt 1793773800），重置前 0.96~0.99；重置后第一条事件 14:3x 才带来新窗口 resetsAt 1793791800
+  describe("quotaUsage：重置前后的真实序列", () => {
+    const RESET = 1_793_773_800;
+    const NEXT_RESET = 1_793_791_800;
+    const SEVEN_DAY_RESET = 1_794_250_800;
+    const rl = (five: number, fiveReset: number, seven: number, status = "allowed") => ({
+      status,
+      resetsAt: fiveReset,
+      windows: {
+        five_hour: { utilization: five, resetsAt: fiveReset, status },
+        seven_day: { utilization: seven, resetsAt: SEVEN_DAY_RESET, status: "allowed" },
+      },
+    });
+    const stateOf = (sessions: ReturnType<typeof makeSession>[]) => loaded(withWorker({ sessions }));
+    const five = (state: ReturnType<typeof stateOf>, now: number) => quotaUsage(state, now)[0]?.windows.find((w) => w.key === "five_hour");
+    const before = (RESET - 600) * 1000;
+    const after = (RESET + 600) * 1000;
+
+    it("重置前：照常显示 99%、带重置时间、快用完", () => {
+      const state = stateOf([makeSession({ sessionId: 18, conversationId: 30, lastEventAt: 100, rateLimit: rl(0.99, RESET, 0.31, "allowed_warning") })]);
+      expect(five(state, before)).toEqual({ key: "five_hour", label: "5 小时", percent: 99, resetsAt: RESET, warning: true });
+    });
+
+    it("过了 resetsAt 还没有新事件：5 小时窗口算已重置，显示 0%、没有重置时间、不标快用完；7 天窗口不受影响", () => {
+      const state = stateOf([makeSession({ sessionId: 18, conversationId: 30, lastEventAt: 100, rateLimit: rl(0.99, RESET, 0.31, "allowed_warning") })]);
+      expect(five(state, after)).toEqual({ key: "five_hour", label: "5 小时", percent: 0, resetsAt: null, warning: false });
+      expect(quotaUsage(state, after)[0]!.windows.find((w) => w.key === "seven_day")).toMatchObject({ percent: 31, resetsAt: SEVEN_DAY_RESET });
+    });
+
+    it("重置后第一条新事件到了（新 resetsAt、utilization 0）：显示新窗口的值和新的重置时间", () => {
+      const state = stateOf([makeSession({ sessionId: 1, conversationId: 1, lastEventAt: 200, rateLimit: rl(0, NEXT_RESET, 0.31) })]);
+      expect(five(state, after)).toEqual({ key: "five_hour", label: "5 小时", percent: 0, resetsAt: NEXT_RESET, warning: false });
+    });
+
+    it("旧会话（重置前的 99%，lastEventAt 更新）和新会话（重置后的 3%）并存：取新窗口的，不按 lastEventAt 选", () => {
+      const state = stateOf([
+        makeSession({ sessionId: 3, conversationId: 30, lastEventAt: 900, rateLimit: rl(0.98, RESET, 0.31, "allowed_warning") }),
+        makeSession({ sessionId: 21, conversationId: 31, lastEventAt: 300, rateLimit: rl(0.03, NEXT_RESET, 0.31) }),
+      ]);
+      expect(five(state, after)).toMatchObject({ percent: 3, resetsAt: NEXT_RESET, warning: false });
+    });
+
+    it("同一个窗口里几个会话的值不一样：取最高的（窗口里只增不减，高的是最新的），不管 lastEventAt", () => {
+      const state = stateOf([
+        makeSession({ sessionId: 17, conversationId: 30, lastEventAt: 900, rateLimit: rl(0.96, RESET, 0.31) }),
+        makeSession({ sessionId: 18, conversationId: 31, lastEventAt: 100, rateLimit: rl(0.99, RESET, 0.31) }),
+      ]);
+      expect(five(state, before)).toMatchObject({ percent: 99 });
+    });
+
+    it("用完（rejected）：重置前是已用完；过了 resetsAt 不再是已用完", () => {
+      const state = stateOf([makeSession({ sessionId: 3, conversationId: 30, lastEventAt: 100, rateLimit: rl(1, RESET, 0.31, "rejected") })]);
+      expect(quotaUsage(state, before)[0]!.exhausted).toBe(true);
+      expect(quotaUsage(state, after)[0]!.exhausted).toBe(false);
+    });
+
+    it("isWaitingForQuota：rejected 且 resetsAt 已过，不再算等额度", () => {
+      const session = makeSession({ rateLimit: rl(1, RESET, 0.31, "rejected") });
+      expect(isWaitingForQuota(session, before)).toBe(true);
+      expect(isWaitingForQuota(session, after)).toBe(false);
+    });
   });
 
   it("runningWorkerCount：只数这个项目经理派的 Worker 对话里最新一代会话不是 idle 的", () => {

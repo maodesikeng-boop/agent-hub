@@ -111,6 +111,46 @@ describe("额度", () => {
       }),
     ).toEqual({ status: "allowed", resetsAt: 1, windows: { five_hour: { utilization: 0.5, resetsAt: 2, status: "allowed" } } });
   });
+  // 真实日志（~/.agent-hub/state/logs/sessions/1.jsonl，2026-11-04）：14:30 重置前后的两条，顶层字段和窗口字段都是 Claude 原样的
+  const realBeforeReset = {
+    status: "allowed_warning",
+    resetsAt: 1793773800,
+    rateLimitType: "five_hour",
+    overageStatus: "rejected",
+    overageDisabledReason: "group_zero_credit_limit",
+    isUsingOverage: false,
+    unifiedWindows: {
+      five_hour: { utilization: 0.99, resetsAt: 1793773800, status: "allowed_warning" },
+      seven_day: { utilization: 0.31, resetsAt: 1794250800, status: "allowed" },
+    },
+  };
+  const realAfterReset = {
+    ...realBeforeReset,
+    status: "allowed",
+    resetsAt: 1793791800,
+    unifiedWindows: {
+      five_hour: { utilization: 0, resetsAt: 1793791800, status: "allowed" },
+      seven_day: { utilization: 0.31, resetsAt: 1794250800, status: "allowed" },
+    },
+  };
+  it("真实事件：重置前后两条都两个窗口齐全；重置后 utilization 是 0（不是缺）、resetsAt 换成新的", () => {
+    expect(parseRateLimit(realBeforeReset)).toEqual({
+      status: "allowed_warning",
+      resetsAt: 1793773800,
+      windows: {
+        five_hour: { utilization: 0.99, resetsAt: 1793773800, status: "allowed_warning" },
+        seven_day: { utilization: 0.31, resetsAt: 1794250800, status: "allowed" },
+      },
+    });
+    expect(parseRateLimit(realAfterReset)).toEqual({
+      status: "allowed",
+      resetsAt: 1793791800,
+      windows: {
+        five_hour: { utilization: 0, resetsAt: 1793791800, status: "allowed" },
+        seven_day: { utilization: 0.31, resetsAt: 1794250800, status: "allowed" },
+      },
+    });
+  });
   it("残缺的（不是对象、没有 status）返回 null，由调用方跳过", () => {
     expect(parseRateLimit(undefined)).toBeNull();
     expect(parseRateLimit(null)).toBeNull();
