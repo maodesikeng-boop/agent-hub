@@ -1185,3 +1185,86 @@ describe("清理残留进程", () => {
     }
   });
 });
+
+describe("token 用量", () => {
+  const usage = (input: number, cacheRead: number, cacheWrite: number, output: number) => ({
+    input_tokens: input,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheWrite,
+    output_tokens: output,
+  });
+
+  it("一轮结束：累计用 result 的 usage；同一条消息分几个事件推出来不重复算；上下文取最近一条消息的 input + 缓存读 + 缓存写", async () => {
+    const t = harness({
+      script: {
+        defaultTurn: {
+          steps: [
+            { text: "a", messageId: "msg_1", usage: usage(2, 100, 10, 8) },
+            { text: "b", messageId: "msg_1", usage: usage(2, 100, 10, 8) },
+            { text: "c", messageId: "msg_2", usage: usage(2, 110, 5, 9) },
+          ],
+          usage: usage(4, 210, 15, 60),
+        },
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 4, cacheRead: 210, cacheWrite: 15, output: 60, context: 117 });
+  });
+
+  it("多轮累加，上下文是最近一次的", async () => {
+    const t = harness({
+      script: {
+        turns: [
+          { steps: [{ text: "a", usage: usage(1, 1000, 100, 5) }], usage: usage(1, 1000, 100, 50) },
+          { steps: [{ text: "b", usage: usage(1, 1200, 20, 5) }], usage: usage(2, 2400, 40, 70) },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 3, cacheRead: 3400, cacheWrite: 140, output: 120, context: 1221 });
+  });
+
+  it("重启后接着累计：库里已有的数是起点", async () => {
+    const t = harness({ script: { defaultTurn: { steps: [{ text: "a", usage: usage(1, 10, 1, 1) }], usage: usage(1, 10, 1, 7) } } });
+    const s = t.addSession({ usage: { input: 100, cacheRead: 5000, cacheWrite: 300, output: 900, context: 4000 } });
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 101, cacheRead: 5010, cacheWrite: 301, output: 907, context: 12 });
+  });
+
+  it("子 agent 的消息不算上下文；result 没有 usage 的字段当 0", async () => {
+    const t = harness({
+      script: {
+        defaultTurn: {
+          steps: [
+            { text: "main", usage: usage(1, 50, 5, 3) },
+            { text: "sub", parentToolUseId: "toolu_1", usage: usage(9, 99999, 9, 9) },
+          ],
+          usage: { input_tokens: 4 },
+        },
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 4, cacheRead: 0, cacheWrite: 0, output: 0, context: 56 });
+  });
+
+  it("先写库再发事件：turn.ended 的监听者读到的已经是这一轮的用量", async () => {
+    const t = harness({ script: { defaultTurn: { steps: [{ text: "a", usage: usage(1, 2, 3, 4) }], usage: usage(1, 2, 3, 4) } } });
+    const s = t.addSession();
+    let seen: unknown;
+    t.driver.onEvent((id, ev) => {
+      if (ev.type === "turn.ended") seen = t.store.get(id)!.usage;
+    });
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(seen).toEqual({ input: 1, cacheRead: 2, cacheWrite: 3, output: 4, context: 6 });
+  });
+});

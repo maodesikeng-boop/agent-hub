@@ -1,11 +1,13 @@
 // 从 HubState 算出界面要用的东西。
 import {
+  EMPTY_TOKEN_USAGE,
   attachmentsOf,
   isQuotaExhausted,
   workerEventOf,
   type ConversationId,
   type HealthEntry,
   type Message,
+  type TokenUsage,
   type Pm,
   type PmId,
   type Project,
@@ -259,6 +261,12 @@ export interface WorkerEntry {
   activity: string;
   /** 收工了（workerPhaseOf 是 ended）。 */
   ended: boolean;
+  /** 会话的厂商、模型、思考程度（null = 默认）；没有会话、老服务端没带就是 undefined。 */
+  vendor?: string;
+  model?: string | null;
+  effort?: string | null;
+  /** 累计用量（老服务端没带当 0）。 */
+  usage: TokenUsage;
 }
 
 /** 这个项目经理派的 Worker：进行中的在前，收工的在后，同一组里按派出的顺序（对话编号）。 */
@@ -266,12 +274,19 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   const endedLines = endedByLine(state, pmId);
   return Object.values(state.conversations)
     .filter(({ conversation }) => conversation.kind === "worker" && conversation.pmId === pmId)
-    .map(({ conversation }) => ({
-      conversationId: conversation.id,
-      title: conversation.title,
-      activity: sessionOf(state, conversation.id)?.activity ?? "idle",
-      ended: phaseOf(state, conversation.id, endedLines) === "ended",
-    }))
+    .map(({ conversation }) => {
+      const session = sessionOf(state, conversation.id);
+      return {
+        conversationId: conversation.id,
+        title: conversation.title,
+        activity: session?.activity ?? "idle",
+        ended: phaseOf(state, conversation.id, endedLines) === "ended",
+        vendor: session?.vendor,
+        model: session?.model,
+        effort: session?.effort,
+        usage: session?.usage ?? EMPTY_TOKEN_USAGE,
+      };
+    })
     .toSorted((a, b) => Number(a.ended) - Number(b.ended) || a.conversationId - b.conversationId);
 }
 

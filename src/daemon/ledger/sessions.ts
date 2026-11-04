@@ -69,6 +69,10 @@ export function createLedgerSessions(ctx: LedgerContext) {
       currentTool: l.currentTool,
       rateLimit: l.rateLimit !== undefined ? l.rateLimit : row.rateLimit,
       apiRetry: l.apiRetry ?? null,
+      usage: row.usage,
+      vendor: row.vendor,
+      model: row.model,
+      effort: row.effort,
       lastEventAt: row.lastEventAt,
     };
   };
