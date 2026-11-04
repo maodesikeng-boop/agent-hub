@@ -9,6 +9,7 @@ export * from "./ledger.ts";
 export * from "./limits.ts";
 export * from "./names.ts";
 export * from "./policy.ts";
+export * from "./schedule.ts";
 export * from "./preview.ts";
 export * from "./sent-files.ts";
 export * from "./store.ts";

@@ -372,7 +372,19 @@ describe("M2：系统消息", () => {
   });
 
   it("所有系统消息事件都列出来了；11-03 拿掉的 project.reassigned 认不出（老数据当普通系统消息显示）", () => {
-    expect(SYSTEM_EVENTS).toEqual(["project.created", "folder.attached", "folder.detached", "persona.changed", "handover.requested", "session.renewed", "handover.failed"]);
+    expect(SYSTEM_EVENTS).toEqual([
+      "project.created",
+      "folder.attached",
+      "folder.detached",
+      "persona.changed",
+      "schedule.created",
+      "schedule.removed",
+      "schedule.run",
+      "schedule.failed",
+      "handover.requested",
+      "session.renewed",
+      "handover.failed",
+    ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
 
@@ -447,6 +459,8 @@ describe("M2：界面接口", () => {
       "folders.updated",
       "conversation.created",
       "session.created",
+      "schedule.updated",
+      "schedule.removed",
     ]);
   });
 
@@ -471,6 +485,11 @@ describe("M2：agent 接口", () => {
       "worker.end",
       "worker.list",
       "ask",
+      "schedule.add",
+      "schedule.list",
+      "schedule.pause",
+      "schedule.resume",
+      "schedule.remove",
     ]);
     expect(hubPath("project.create")).toBe("/v1/project.create");
     expect(ENV_HUB_TOKEN).toBe("HUB_TOKEN");
@@ -548,6 +567,10 @@ describe("M2：系统消息的去重键", () => {
     expect(systemMessageDedupeKey(2, { event: "project.created", projectId: 1 })).toBe("system:2:project.created:1");
     expect(systemMessageDedupeKey(2, { event: "folder.attached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.attached:5");
     expect(systemMessageDedupeKey(2, { event: "folder.detached", projectId: 1, folderId: 5, path: "/x" })).toBe("system:2:folder.detached:5");
+    expect(systemMessageDedupeKey(2, { event: "schedule.created", scheduleId: 3, name: "日报" })).toBe("system:2:schedule.created:3");
+    expect(systemMessageDedupeKey(2, { event: "schedule.removed", scheduleId: 3, name: "日报" })).toBe("system:2:schedule.removed:3");
+    expect(systemMessageDedupeKey(2, { event: "schedule.run", scheduleId: 3, name: "日报", scheduledAt: 1000, catchUp: false })).toBe("system:2:schedule.run:3:1000");
+    expect(systemMessageDedupeKey(2, { event: "schedule.failed", scheduleId: 3, name: "日报", messageId: 41 })).toBe("system:2:schedule.failed:41");
     expect(systemMessageDedupeKey(7, { event: "project.created", projectId: 1 })).not.toBe(systemMessageDedupeKey(2, { event: "project.created", projectId: 1 }));
     expect(systemMessageDedupeKey(1, { event: "persona.changed", pmId: 1, personaChangeId: 9, revertOf: null })).toBe(
       "system:1:persona.changed:9",
@@ -742,10 +765,17 @@ describe("M3：hub 命令按角色放行", () => {
       "worker.end": ["pm"],
       "worker.list": ["pm"],
       ask: ["pm"],
+      "schedule.add": ["pm"],
+      "schedule.list": ["pm"],
+      "schedule.pause": ["pm"],
+      "schedule.resume": ["pm"],
+      "schedule.remove": ["pm"],
     });
     expect(hubCommandAllowed("worker", "status")).toBe(true);
     expect(hubCommandAllowed("worker", "persona.edit")).toBe(false);
     expect(hubCommandAllowed("worker", "worker.start")).toBe(false);
+    expect(hubCommandAllowed("worker", "schedule.add")).toBe(false);
+    expect(hubCommandAllowed("pm", "schedule.add")).toBe(true);
     expect(hubCommandAllowed("pm", "worker.start")).toBe(true);
     expect(hubCommandAllowed("assistant", "status")).toBe(false);
   });

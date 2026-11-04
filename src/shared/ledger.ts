@@ -462,6 +462,15 @@ export interface Ledger {
   recoverAfterRestart(): { resentMessageIds: MessageId[]; requeuedMessageIds: MessageId[]; recoveredSessionIds: SessionId[] };
   /** 新建项目经理（界面；第一次启动没有项目经理时组装代码也调它）。见 CreatePmResult。 */
   createPm(input: CreatePmInput): CreatePmResult;
+  /**
+   * 调度器（M6，组装代码每 SCHEDULER_TICK_MS 调一次，启动时也调一次）：在一个事务里，对每个 next_run_at <= nowMs 的、没暂停的定时任务：
+   * 上一条定时消息（last_message_id）还在排队、已送达、处理中 → 记 skipped，不发；否则往项目经理的对话写一条 schedule.run 消息
+   * （status queued，标题“定时任务：名字（原定 09:00）”，晚了 SCHEDULE_LATE_MS 以上标“补跑”，错过几个周期都只补这一次）、
+   * 登记 session.send（source system）；然后 next_run_at 从 nowMs 重算（不是从原定时间往后推），推 schedule.updated。
+   * 这一轮失败（turn.ended 不成功等）或 session.send 彻底失败时（applyDriverEvent、onActionFailed 里）：记 failed，
+   * 对话里写一条 schedule.failed“定时任务没跑成：名字：原因”。
+   */
+  runDueSchedules(nowMs: number): void;
   /** 给执行器处理函数用：读动作要发的消息。找不到返回 null。 */
   getMessage(id: MessageId): Message | null;
   /**

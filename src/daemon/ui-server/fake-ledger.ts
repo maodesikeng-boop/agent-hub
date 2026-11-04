@@ -99,7 +99,7 @@ export class FakeLedger {
   readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
-  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [] };
+  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
   /** getMessage 能取到的消息（测试自己放）。 */
   readonly storedMessages = new Map<MessageId, Message>();
   /** sentFileAllows 的判断，默认都允许。 */
@@ -289,6 +289,7 @@ export class FakeLedger {
       renewSession: (p) => this.renewSession(p),
       waitsForHandover: unused("waitsForHandover"),
       dismissAsk: (m) => this.dismissAsk(m),
+      runDueSchedules: unused("runDueSchedules"),
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),

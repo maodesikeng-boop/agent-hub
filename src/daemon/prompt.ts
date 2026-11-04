@@ -16,7 +16,7 @@
 // worktree 准备命令（hub project setup）给 Worker、项目经理看的话也在这里：文件末尾的 setupNote、SETUP_RECEIPT_NOTE。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_EFFORTS, HUB_COMMAND as HUB, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, USER_TO_WORKER_TAG, WORKER_REPORT_FORMAT } from "../shared/index.ts";
+import { ALL_EFFORTS, HUB_COMMAND as HUB, MIN_SCHEDULE_EVERY_MINUTES, PM_PERSONA_TEMPLATE, PRODUCT_NAME, SETUP_TIMEOUT_MS, USER_TO_WORKER_TAG, WORKER_REPORT_FORMAT } from "../shared/index.ts";
 import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
@@ -80,6 +80,17 @@ Worker 是你派出去干活的 agent，在自己的会话里干，每干完一�
 - 不要它了，或者活干完了，用 \`${HUB} worker end <编号>\` 收工。`;
 
 /**
+ * 日报模板（M6）：用户要日报时，项目经理用 hub schedule add 建定时任务，任务说明用它。默认不建日报。
+ * 总助的每日汇总等 M7 再说。
+ */
+export const DAILY_REPORT_TEMPLATE = `给用户写一份日报，用中文，简洁，按下面四段，没有的写“无”：
+1. 昨天做完了什么
+2. 什么在等你（需要用户拍板、回答、验收的事）
+3. 什么在进行（你和 Worker 手上还没做完的）
+4. 风险（可能延误、出错、需要提前知道的）
+数据以你自己的对话记录、Worker 的汇报和项目的实际状态为准，查清楚再写，不要编。`;
+
+/**
  * hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条，11-03、M3 改过），给项目经理看。命令以 shared/hub.ts 的命令表为准。
  * 给人看的另有一份：hub/cli.ts 的 HUB_USAGE。改一份，记得改另一份。Worker 的见 WORKER_HUB_USAGE_PROMPT。
  */
@@ -99,6 +110,12 @@ ${PRODUCT_NAME} 的事（建项目、挂文件夹、改自己的习惯、派 Wor
 - \`${HUB} worker end <编号>\`：收工，结束这个 Worker 的会话。worktree 由你自己删。
 - \`${HUB} worker list\`：你派出去的 Worker，各自的状态、在哪干活（分支、worktree 路径）、模型和思考程度。
 - \`${HUB} ask --stdin\`：要用户拍板、确认、选择的事用它问，正文是要问的内容（Markdown）。会单独提醒用户、不会被别的消息刷掉。
+- \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务，正文是任务说明。\`--daily\` 每天几点（这台电脑的本地时间），\`--every\` 每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟，写 30m 或 2h）；没有每周、一次性、cron。到点系统会往你自己的对话里发一条“【定时任务：名字（原定 09:00）】”开头的消息，后面是任务说明：照着做，回复照常发给用户。电脑睡着、系统没开错过的，醒来只补一次（标题带“补跑”）；上一条还没做完又到点，这次跳过。
+  \`${HUB} schedule list\`：你的定时任务、下次运行、上次结果；\`${HUB} schedule pause <编号>\`、\`${HUB} schedule resume <编号>\`、\`${HUB} schedule remove <编号>\`：暂停、恢复、删除。只能管自己建的。
+  用户要日报时用 \`${HUB} schedule add\` 建，任务说明用下面这份模板；用户没要就不要建：
+  \`\`\`
+${DAILY_REPORT_TEMPLATE.split("\n").map((line) => `  ${line}`).join("\n")}
+  \`\`\`
 - 长文本一律用 \`--stdin <<'EOF'\` 传（引号里的 EOF 不能省），短的也可以用 \`--text "<正文>"\`。没写 \`--stdin\` 时 ${HUB} 不读标准输入：
   \`\`\`
   ${HUB} persona edit --reason "用户要求回复用列表" --stdin <<'EOF'
