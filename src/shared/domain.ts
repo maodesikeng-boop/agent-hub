@@ -370,7 +370,7 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
  * folder.attached / detached → folderId；persona.changed → personaChangeId。
  */
 export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
-  const ref = ((): number => {
+  const ref = ((): number | string => {
     switch (meta.event) {
       case "project.created":
         return meta.projectId;
@@ -382,6 +382,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
       case "handover.requested":
       case "session.renewed":
         return meta.sessionId;
+      case "handover.failed":
+        return `${meta.messageId}.${meta.attempt}`;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -391,7 +393,7 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
  * 系统消息的事件（Message.meta.event）。会扩展。
  * 11-03 拿掉了 project.reassigned（交接）：老数据里还有，systemEventOf 认不出就当普通系统消息，照样居中显示文字。
  */
-export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed", "handover.requested", "session.renewed"] as const;
+export const SYSTEM_EVENTS = ["project.created", "folder.attached", "folder.detached", "persona.changed", "handover.requested", "session.renewed", "handover.failed"] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
 /**
@@ -407,6 +409,10 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * text 是发给 agent 的全文，网页只显示 systemNoticeText 给的一句：
  * - handover.requested：发给旧会话（sessionId），让项目经理把交接写成这一轮的回复；
  * - session.renewed：发给新一代会话（sessionId），带上交接和最近几条原话；网页显示“项目经理开了新会话（交接见上一条）”。
+ *   失败、被停止了原地重新排队（attempts 记重排了几次），最多 HANDOVER_RENEW_RETRIES 次；
+ * - handover.failed：只给人看。交接那一轮没写成（没换代），或者新会话一直没接上交接（不再重排）。messageId 是那条 H / R，
+ *   attempt 是它第几次没成（同一条重新排队后又没成，再发一条）。
+ * H、R 的 meta 里账本还会记几个内部字段（turnStartId、attempts、settled，见 handover.ts），网页不用。
  */
 export type SystemMessageMeta =
   | { event: "project.created"; projectId: ProjectId }
@@ -414,7 +420,8 @@ export type SystemMessageMeta =
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
   | { event: "handover.requested"; sessionId: SessionId }
-  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId };
+  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId }
+  | { event: "handover.failed"; messageId: MessageId; attempt: number };
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
 export const SYSTEM_MESSAGE_PREFIX = "【系统】";

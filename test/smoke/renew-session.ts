@@ -13,7 +13,7 @@ export async function runRenewSession(outcomes: Outcome[], only: (name: string) 
       mode: "hands_on",
       defaultModel: MODEL,
       persona: "阿周：简洁、直接。",
-      folder: smoke.folder("s19"),
+      folder: smoke.folder("s20"),
     });
     await smoke.ask(conversationId, `记住暗号 ${secret}，以后会问你。这一条只回复“好”。`);
     const old = await smoke.currentSession(conversationId);

@@ -4,6 +4,7 @@ import {
   attachmentsOf,
   isQuotaExhausted,
   systemEventOf,
+  systemNoticeText,
   workerEventOf,
   type ConversationId,
   type HealthEntry,
@@ -72,6 +73,8 @@ export function previewText(entry: ConversationEntry): string {
   // 只发了文件没写字的用户消息：写文件名
   const files = attachmentsOf(last);
   if (last.text.trim() === "" && files.length > 0) return `[文件] ${files.map((f) => f.name).join("、")}`;
+  // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
+  if (last.sender === "system") return systemNoticeText(last);
   return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
 }
 

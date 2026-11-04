@@ -179,6 +179,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => {
         messages.actionFailedIn(p, action, error);
         workers.actionFailedIn(p, action, error);
+        handover.actionFailedIn(p, action);
       });
     },
     stopMessage: messages.stopMessage,

@@ -973,6 +973,18 @@ describe("资料页：开新会话", () => {
     expect(within(group).getByRole("button", { name: "开新会话" })).toBeEnabled();
   });
 
+  it("左栏的预览：交接请求、交接全文也只显示短的一句（审查 #35 第 6 条）", async () => {
+    const ws = await boot();
+    push(ws, messageChange(11, "message.created", request("queued")));
+    expect(within(nav()).getByText("已请项目经理写交接，写完换新会话")).toBeInTheDocument();
+    push(
+      ws,
+      messageChange(12, "message.created", makeSystemMessage({ id: 31, conversationId: 1, text: "【系统】这是新会话……交接全文", status: "queued", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1 } })),
+    );
+    expect(within(nav()).getByText("项目经理开了新会话（交接见上一条）")).toBeInTheDocument();
+    expect(within(nav()).queryByText(/交接全文|请写交接/)).not.toBeInTheDocument();
+  });
+
   it("对话里：交接请求和换代显示成短的一句", async () => {
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", request("queued")));

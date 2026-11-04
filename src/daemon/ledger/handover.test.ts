@@ -7,8 +7,9 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import { systemEventOf, systemNoticeText } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { HANDOVER_RECENT_MESSAGES } from "../../shared/limits.ts";
-import { listActions, setActionStatus } from "../actions/index.ts";
+import { ACTION_RETRY, retryDelayMs } from "../../shared/actions.ts";
+import { HANDOVER_RECENT_MESSAGES, HANDOVER_RENEW_RETRIES } from "../../shared/limits.ts";
+import { getAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -167,7 +168,10 @@ describe("换代期间的消息", () => {
     const line = renewed()!;
     expect(ledger.waitsForHandover(line.id)).toBe(false);
     expect(ledger.waitsForHandover(during)).toBe(true);
+    // 写进去了也还压着：等新会话回完交接这一轮（重启后重发的交接排在用户消息前面，驱动层会把用户的先写）
     ledger.applyDriverEvent(g2, { type: "message.delivered", at: now, messageIds: [line.id] });
+    expect(ledger.waitsForHandover(during)).toBe(true);
+    turn(g2, [line.id], ["已接上"]);
     expect(ledger.waitsForHandover(during)).toBe(false);
   });
 
@@ -204,5 +208,151 @@ describe("换代期间的消息", () => {
     expect(sendOf(renewed()!.id)).toMatchObject({ status: "pending", params: { sessionId: g2 } });
     expect(sendOf(during)).toMatchObject({ status: "pending", params: { sessionId: g2 } });
     expect(sessions()).toHaveLength(2);
+  });
+});
+
+/** 交接请求回完，换到第二代。返回新会话和新会话第一条（R）。 */
+function renewNow(handover = "交接"): { g2: SessionId; line: Message } {
+  const request = ledger.renewSession(pmId).messageId;
+  turn(firstSession, [request], [handover]);
+  return { g2: sessions()[1]!.id, line: renewed()! };
+}
+
+function notices(): string[] {
+  return messages().filter((m) => systemEventOf(m)?.event === "handover.failed").map((m) => systemNoticeText(m));
+}
+
+describe("审查 #35 第 1 条：新会话第一条（交接）没送成", () => {
+  it("失败、被停止：原地重新排队，带退避，最多 HANDOVER_RENEW_RETRIES 次，期间继续压着别的消息；用完了放行，对话里提示一句", () => {
+    const request = ledger.renewSession(pmId).messageId;
+    const during = post("换代时发的");
+    turn(firstSession, [request], ["交接"]);
+    const g2 = sessions()[1]!.id;
+    const line = renewed()!;
+    for (let i = 1; i <= HANDOVER_RENEW_RETRIES; i++) {
+      now += 1;
+      if (i % 2 === 1) turn(g2, [line.id], [], false);
+      else {
+        ledger.applyDriverEvent(g2, { type: "message.delivered", at: now, messageIds: [line.id] });
+        ledger.applyDriverEvent(g2, { type: "turn.ended", at: now, ok: false, interrupted: true, messageIds: [line.id], durationMs: 1 });
+      }
+      expect(ledger.getMessage(line.id)!.status).toBe("queued");
+      const send = sendOf(line.id)!;
+      expect(send.status).toBe("pending");
+      expect(send.nextAttemptAt).toBe(now + retryDelayMs(ACTION_RETRY["session.send"], i));
+      expect(ledger.waitsForHandover(during)).toBe(true);
+      expect(notices()).toEqual([]);
+    }
+    turn(g2, [line.id], [], false);
+    expect(ledger.getMessage(line.id)!.status).toBe("failed");
+    expect(ledger.waitsForHandover(during)).toBe(false);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toMatch(/^新会话没接上交接（.+），可以再点一次开新会话$/);
+  });
+
+  it("session.send 次数用完（onActionFailed）也一样重新排队", () => {
+    const { line } = renewNow();
+    const send = sendOf(line.id)!;
+    setActionStatus(db, send.id, { status: "failed" }, now);
+    ledger.onActionFailed({ ...send, status: "failed" }, "spawn_failed: boom");
+    expect(ledger.getMessage(line.id)!.status).toBe("queued");
+    expect(getAction(db, send.id)!.status).toBe("pending");
+  });
+
+  it("用完之后再点开新会话：把同一条交接重新排队（次数清零），不再让没上下文的新会话写交接", () => {
+    const { g2, line } = renewNow();
+    for (let i = 0; i <= HANDOVER_RENEW_RETRIES; i++) turn(g2, [line.id], [], false);
+    expect(ledger.getMessage(line.id)!.status).toBe("failed");
+    expect(ledger.renewSession(pmId).messageId).toBe(line.id);
+    expect(ledger.getMessage(line.id)!.status).toBe("queued");
+    turn(g2, [line.id], [], false);
+    expect(ledger.getMessage(line.id)!.status).toBe("queued");
+  });
+
+  it("换代时把旧会话的额度状态抄给新会话", () => {
+    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
+    createSessionStore(db).update(firstSession, { rateLimit: info });
+    const { g2 } = renewNow();
+    expect(createSessionStore(db).get(g2)!.rateLimit).toEqual(info);
+  });
+});
+
+describe("审查 #35 第 2 条：新会话第一条还在排队时再点", () => {
+  it("返回它的编号，不新建交接请求；第一条自己不被压着", () => {
+    const { line } = renewNow();
+    expect(ledger.renewSession(pmId).messageId).toBe(line.id);
+    expect(messages().filter((m) => systemEventOf(m)?.event === "handover.requested")).toHaveLength(1);
+    expect(ledger.waitsForHandover(line.id)).toBe(false);
+  });
+
+  it("只看同一代或更早的：新一代的交接请求不压旧一代留下的消息", () => {
+    const old = post("旧一代的");
+    db.run("UPDATE messages SET status = 'failed' WHERE id = ?", old);
+    const { g2, line } = renewNow();
+    turn(g2, [line.id], ["已接上"]);
+    db.run("UPDATE messages SET status = 'queued', session_id = ? WHERE id = ?", firstSession, old);
+    ledger.renewSession(pmId);
+    expect(ledger.waitsForHandover(old)).toBe(false);
+  });
+});
+
+describe("审查 #35 第 3 条：交接全文、最近原话的取法", () => {
+  it("交接只取交接那一轮开始之后的文字；原话只取那之前已回复的，不混进排在前面那一轮的回答、不带还没发的消息", () => {
+    const answered = post("早先的问题");
+    turn(firstSession, [answered], ["早先的回答"]);
+    const failed = post("没发成的");
+    turn(firstSession, [failed], [], false);
+    const busy = post("忙时排着的");
+    const request = ledger.renewSession(pmId).messageId;
+    // 排在交接请求前面的那一轮（它的回答编号比交接请求大）
+    turn(firstSession, [busy], ["忙时那条的回答"]);
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
+    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
+    const during = post("交接时发的");
+    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: "h1", text: "交接正文" });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
+
+    const text = renewed()!.text;
+    const [handover, recent] = text.split("## 最近的原话");
+    expect(handover).toContain("交接正文");
+    expect(handover).not.toContain("忙时那条的回答");
+    expect(recent).toContain("用户：早先的问题");
+    expect(recent).toContain("你：忙时那条的回答");
+    expect(recent).toContain("用户：忙时排着的");
+    expect(recent).not.toContain("没发成的");
+    expect(recent).not.toContain("交接时发的");
+    expect(ledger.getMessage(during)!.status).toBe("queued");
+  });
+});
+
+describe("审查 #35 第 4 条：重启恢复的顺序", () => {
+  it("新会话第一条先入队，压着的用户消息排在后面", () => {
+    const request = ledger.renewSession(pmId).messageId;
+    const during = post("换代时发的");
+    turn(firstSession, [request], ["交接"]);
+    const g2 = sessions()[1]!.id;
+    const line = renewed()!;
+    ledger.applyDriverEvent(g2, { type: "message.delivered", at: now, messageIds: [line.id] });
+    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
+
+    const restarted = createLedger(db, { now: () => now, pmHomeRoot: home });
+    const order: number[] = [];
+    restarted.onActionEnqueued((a) => a.type === "session.send" && order.push(a.params.messageId));
+    restarted.recoverAfterRestart();
+    expect(order).toEqual([line.id, during]);
+    expect(restarted.waitsForHandover(during)).toBe(true);
+  });
+});
+
+describe("审查 #35 第 5 条：交接没写成", () => {
+  it("那一轮失败、被停止：不换代，对话里提示一句；再点再失败再提示一句", () => {
+    const request = ledger.renewSession(pmId).messageId;
+    turn(firstSession, [request], [], false);
+    expect(sessions()).toHaveLength(1);
+    expect(notices()).toEqual(["交接没写成，没换会话"]);
+    expect(ledger.renewSession(pmId).messageId).toBe(request);
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: false, interrupted: true, messageIds: [request], durationMs: 1 });
+    expect(notices()).toEqual(["交接没写成，没换会话", "交接没写成，没换会话"]);
   });
 });

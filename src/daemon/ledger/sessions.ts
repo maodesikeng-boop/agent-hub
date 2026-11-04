@@ -154,7 +154,8 @@ export function createLedgerSessions(ctx: LedgerContext) {
                WHERE a.type = 'session.send' AND a.dedupe_key = CAST(m.id AS TEXT) AND a.status IN ('pending', 'running')
              ))
            )
-         ORDER BY m.id`,
+         -- 开新会话：新会话的第一条（交接）排在压着的消息前面
+         ORDER BY (m.sender = 'system' AND m.kind = 'text' AND json_extract(m.meta, '$.event') = 'session.renewed') DESC, m.id`,
       );
       const resentMessageIds: MessageId[] = [];
       const requeuedMessageIds: MessageId[] = [];
