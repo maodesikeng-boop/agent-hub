@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PERMISSION_MODE,
+  READONLY_GIT_DENY_RULES,
   READONLY_PERMISSION_MODE,
   WORKER_ENV,
   WORKER_MEMORY_DENY_RULES,
   buildSessionSettings,
+  readonlyAllowRules,
   sessionEnv,
   stateDirDenyRule,
   workerMemoryDenyRules,
@@ -74,14 +76,48 @@ describe("buildSessionSettings：只读", () => {
     const worker = buildSessionSettings({ role: "worker", readonly: true, ...base });
     expect(READONLY_PERMISSION_MODE).toBe("dontAsk");
     expect(worker.permissions.defaultMode).toBe("dontAsk");
-    expect(worker.permissions.allow).toEqual([allowHub]);
-    expect(worker.permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
+    expect(worker.permissions.allow).toEqual([allowHub, ...readonlyAllowRules(undefined)]);
+    expect(worker.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES, ...workerMemoryDenyRules(base.stateDir)]);
     expect(worker.autoMemoryEnabled).toBe(false);
+  });
+
+  it("只读 git 拒绝 --output（写文件）和 --ext-diff（跑外部程序）；项目经理开只读也有", () => {
+    expect(READONLY_GIT_DENY_RULES).toEqual(["Bash(git * --output*)", "Bash(git * --ext-diff*)"]);
+    expect(buildSessionSettings({ role: "pm", readonly: true, ...base }).permissions.deny).toEqual([...READONLY_GIT_DENY_RULES]);
+    expect(buildSessionSettings({ role: "worker", readonly: false, ...base }).permissions.deny).toEqual(workerMemoryDenyRules(base.stateDir));
+  });
+
+  it("只读档放行：上网、读本项目 worktrees、只读 git、连接器只读工具", () => {
+    const allow = buildSessionSettings({ role: "worker", readonly: true, ...base, projectWorktreesDir: "/Users/u/.agent-hub/worktrees/1" }).permissions.allow;
+    expect(allow).toEqual(expect.arrayContaining([allowHub, "WebSearch", "WebFetch", "Read(//Users/u/.agent-hub/worktrees/1/**)"]));
+    expect(allow).toContain("Bash(git -C * log *)");
+    expect(allow).toContain("Bash(git -C * diff *)");
+    expect(allow).toContain("mcp__claude_ai_Slack__slack_search_public");
+    expect(allow).toContain("mcp__claude_ai_Slack__slack_read_channel");
+    expect(allow).toContain("mcp__claude_ai_Gmail__search_threads");
+  });
+
+  it("写操作一条都不放行：不放行写文件、git 写命令、连接器写工具；记忆拒绝规则照旧", () => {
+    const s = buildSessionSettings({ role: "worker", readonly: true, ...base, projectWorktreesDir: "/Users/u/.agent-hub/worktrees/1" });
+    const allow = s.permissions.allow;
+    expect(allow.some((r) => /^(Edit|Write|NotebookEdit)\b/.test(r))).toBe(false);
+    expect(allow.some((r) => /git -C \* (commit|push|add|reset|checkout|merge|rebase|stash|clean|rm|apply|branch)/.test(r))).toBe(false);
+    expect(allow).not.toContain("Bash(*)");
+    for (const rule of allow.filter((r) => r.startsWith("mcp__"))) {
+      expect(rule).not.toMatch(/__(slack_send|slack_schedule|slack_create|slack_update|slack_add|slack_complete|slack_get_file_upload|send_|create_|update_|delete_|trash_|share_|copy_|forward|reply|label_|unlabel_|apply_|mark_|unmark_|untrash_|append_|batch_clear|insert_|edit|add|transition|set_)/);
+    }
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(workerMemoryDenyRules(base.stateDir)));
+  });
+
+  it("读 worktrees 的路径里有特殊字符要转义；非只读档不带这些规则", () => {
+    expect(readonlyAllowRules("/Users/u/a[1]/worktrees/2/")).toContain("Read(//Users/u/a\\[1\\]/worktrees/2/**)");
+    const normal = buildSessionSettings({ role: "worker", readonly: false, ...base, projectWorktreesDir: "/x/worktrees/1" });
+    expect(normal.permissions.allow).toEqual([allowHub]);
   });
 
   it("项目经理开只读也只换档", () => {
     expect(buildSessionSettings({ role: "pm", readonly: true, ...base })).toEqual({
-      permissions: { defaultMode: "dontAsk", allow: [allowHub] },
+      permissions: { defaultMode: "dontAsk", allow: [allowHub, ...readonlyAllowRules(undefined)], deny: [...READONLY_GIT_DENY_RULES] },
       sandbox: { network: { allowUnixSockets: [base.hubSock] } },
     });
   });

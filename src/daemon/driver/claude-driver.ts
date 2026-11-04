@@ -48,6 +48,7 @@ import {
   mergeUserTexts,
   parseApiRetry,
   parseAssistant,
+  parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
@@ -797,6 +798,10 @@ export class ClaudeDriver implements Driver {
       case "user":
         if (isInterruptMarker(obj)) st.turnInterrupted = true;
         else if (obj.isReplay === true && st.inFlight) this.#markProcessing(st, st.inFlight, at);
+        else {
+          const result = parseToolResults(obj, at);
+          if (result) this.#emit(st.id, result);
+        }
         return;
       case "assistant": {
         const context = assistantContext(obj);
