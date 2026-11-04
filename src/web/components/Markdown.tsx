@@ -6,12 +6,13 @@ import {
   isSentImage,
   linkNodesOf,
   parseLocalHref,
+  FILE_EXPIRED_TEXT,
   sentFileUrl,
   type MdNode,
   type SentFile,
 } from "../../shared/index.ts";
 import { formatBytes } from "../upload.ts";
-import { FileCard } from "./Attachments.tsx";
+import { FileCard, useFileExpired } from "./Attachments.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 
 /** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或文件卡片。 */
@@ -85,26 +86,31 @@ function previewOf(file: SentFile, url: string, index: number, messageId: number
   return { name: file.name, mime: file.mime, size: file.size, url, target: messageId === undefined ? null : { kind: "sent", messageId, index } };
 }
 
+/** 内联图片，点开预览窗；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */
+function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; preview: PreviewFile }) {
+  const [open, setOpen] = useState(false);
+  const [expired, markExpired] = useFileExpired(preview.url, false);
+  if (expired) return <FileCard name={file.name} mime={file.mime} detail={FILE_EXPIRED_TEXT} className="my-1.5 w-fit max-w-full" />;
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} data-sent-image className="my-1.5 block w-fit max-w-full cursor-pointer">
+        <img src={preview.url} alt={alt} loading="lazy" onError={markExpired} className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
+      </button>
+      <FilePreview file={preview} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
 /**
  * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（宽同正文、最高 480px，点开看大图）；
  * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了看预览；没存下来的写原因。大图和预览是同一个预览窗。
  */
 function SentFileView({ sent, inline, alt }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string }) {
   const { file, index, messageId } = sent;
-  const [open, setOpen] = useState(false);
   if (file.status === "saved" && file.id !== null) {
     const url = sentFileUrl({ id: file.id, name: file.name });
     const preview = previewOf(file, url, index, messageId);
-    if (inline && isSentImage(file)) {
-      return (
-        <>
-          <button type="button" onClick={() => setOpen(true)} data-sent-image className="my-1.5 block w-fit max-w-full cursor-pointer">
-            <img src={url} alt={alt || file.name} loading="lazy" className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
-          </button>
-          <FilePreview file={preview} open={open} onOpenChange={setOpen} />
-        </>
-      );
-    }
+    if (inline && isSentImage(file)) return <InlineSentImage alt={alt || file.name} file={file} preview={preview} />;
     return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} preview={preview} className="my-1.5 w-fit max-w-full" />;
   }
   return <FileCard name={file.name} mime={file.mime} detail={SENT_FILE_REASONS[file.status as Exclude<SentFile["status"], "saved">]} className="my-1.5 w-fit max-w-full" />;

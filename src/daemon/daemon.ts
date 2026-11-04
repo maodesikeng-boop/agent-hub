@@ -21,6 +21,7 @@ import {
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
+import { startFileCleanup } from "./file-cleanup.ts";
 import { resolveHubPaths, workerSetupLogPath } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
@@ -95,6 +96,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     agentApi?: RunningAgentApi;
     db?: Db;
     lock?: DirLock;
+    stopFileCleanup?: () => void;
     unsubscribe: Unsubscribe[];
   } = { unsubscribe: [] };
   const step = async (what: string, fn: () => unknown) => {
@@ -106,6 +108,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { setup, executor, driver, models, ui, agentApi, db, lock } = parts;
+    parts.stopFileCleanup?.();
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
       await step("执行器", async () => {
@@ -148,6 +151,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // sentFilesDir：agent 在回复里发给用户的文件的副本（sent-files.ts），顺手清掉上次没拷完的
     prepareSentFilesDir(paths.sentFilesDir);
     const sentFilesDir = realpathSync.native(paths.sentFilesDir);
+    // 过期的上传文件和副本：启动时清一次，之后每天一次（出错只记日志）
+    parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时问 claude，在用户主目录下起，不带任何项目的设置；

@@ -358,6 +358,16 @@ describe("边界", () => {
     expect(copyOf(c!)).toBe("v2");
   });
 
+  it("再发已有的副本：副本目录的修改时间刷新到现在，刚发过的不会被定期清理", () => {
+    const md = write(join(proj, "a.md"), "v1");
+    const [a] = share(`[a](${md})`);
+    const dir = join(sentDir, a!.id!);
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+    utimesSync(dir, old, old);
+    share(`[a](${md})`);
+    expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000);
+  });
+
   it("同样内容、不同文件名：各存一份（副本目录里放的是文件名）", () => {
     const [a, b] = share(`[a](${write(join(proj, "a.md"), "same")}) [b](${write(join(proj, "b.md"), "same")})`);
     expect(a!.id).not.toBe(b!.id);

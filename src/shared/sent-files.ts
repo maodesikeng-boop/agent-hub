@@ -16,6 +16,9 @@ import { FALLBACK_MIME, isImageMime, mimeOfFileName } from "./attachments.ts";
 export const SENT_FILE_STATUSES = ["saved", "missing", "not_allowed", "not_file", "too_large", "unreadable"] as const;
 export type SentFileStatus = (typeof SENT_FILE_STATUSES)[number];
 
+/** 文件被定期清理删掉后（取文件接口 404），卡片和图片显示这个。 */
+export const FILE_EXPIRED_TEXT = "文件已过期";
+
 /** 没存副本时卡片上显示的原因。 */
 export const SENT_FILE_REASONS: Readonly<Record<Exclude<SentFileStatus, "saved">, string>> = {
   missing: "没找到文件",
