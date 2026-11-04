@@ -9,17 +9,20 @@ import { WorkerPanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingOf, quotaUsage, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
 import { useHub } from "./useHub.ts";
+import { useRerenderAt } from "./useRerenderAt.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
 
 export function App() {
   const hub = useHub();
   const { state } = hub;
+  // 额度到了重置时间自己变（左下角的百分比、状态行的“等额度”），不用刷新页面
+  useRerenderAt(quotaResetTimes(state));
   const [selected, setSelected] = useState<ConversationId | null>(null);
   const [drafts, setDrafts] = useState<Record<ConversationId, string>>({});
   const staging = useStagingStore<ConversationId>();
