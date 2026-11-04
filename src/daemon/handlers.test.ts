@@ -8,6 +8,7 @@ import {
   type DriverSendResult,
   type Message,
   type RateLimitInfo,
+  type SetupOutcome,
   type WorktreeTask,
 } from "../shared/index.ts";
 import {
@@ -18,6 +19,7 @@ import {
   endedOnRevokedTokens,
   type HandlerDeps,
 } from "./handlers.ts";
+import type { SetupJob } from "./setup/index.ts";
 
 const NOW = 1_800_000_000_000;
 
@@ -233,6 +235,16 @@ describe("session.end 处理函数", () => {
     expect(refreshSessionState).toHaveBeenCalledWith(4);
   });
 
+  it("18 先停掉这个会话正在跑的准备命令，再 driver.end", async () => {
+    const { d, end } = deps();
+    const order: string[] = [];
+    const cancel = vi.fn(() => void order.push("cancel"));
+    end.mockImplementationOnce(async () => void order.push("end"));
+    expect(await createSessionEndHandler({ ...d, setup: { cancel } })(endAction())).toEqual({ kind: "done" });
+    expect(cancel).toHaveBeenCalledWith(4);
+    expect(order).toEqual(["cancel", "end"]);
+  });
+
   it("driver.end 出错：抛给执行器重试，令牌不作废", async () => {
     const { d, end, revoke } = deps();
     end.mockRejectedValueOnce(new DriverError("internal_error", "boom"));
@@ -242,18 +254,39 @@ describe("session.end 处理函数", () => {
 });
 
 describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () => {
-  const task: WorktreeTask = { workerId: 3, repo: "/code/foo", branch: "hub/3-fix-x", worktreePath: "/data/worktrees/1/3", status: "open" };
+  const task: WorktreeTask = {
+    workerId: 3,
+    sessionId: 30,
+    repo: "/code/foo",
+    branch: "hub/3-fix-x",
+    worktreePath: "/data/worktrees/1/3",
+    status: "open",
+    setupCommand: null,
+  };
 
   function worktreeDeps(options: { task?: WorktreeTask | null; add?: Error } = {}) {
     const calls: string[] = [];
     const getWorktreeTask = vi.fn(() => (options.task === undefined ? task : options.task));
+    const onSetupStarted = vi.fn(() => void calls.push("onSetupStarted"));
     const onWorktreeCreated = vi.fn(() => void calls.push("onWorktreeCreated"));
     const addWorktree = vi.fn(async () => {
       calls.push("addWorktree");
       if (options.add) throw options.add;
       return { created: true, baseCommit: "c0ffee" };
     });
-    return { deps: { ledger: { getWorktreeTask, onWorktreeCreated }, addWorktree }, getWorktreeTask, onWorktreeCreated, addWorktree, calls };
+    const jobs: SetupJob[] = [];
+    const start = vi.fn((job: SetupJob) => {
+      calls.push("setup.start");
+      jobs.push(job);
+      return true;
+    });
+    const deps = {
+      ledger: { getWorktreeTask, onSetupStarted, onWorktreeCreated },
+      addWorktree,
+      setup: { start },
+      setupLogPath: (id: number) => `/data/state/logs/setup/worker-${id}.log`,
+    };
+    return { deps, getWorktreeTask, onSetupStarted, onWorktreeCreated, addWorktree, start, jobs, calls };
   }
 
   it("先取任务，再在主文件夹里建 worktree，最后把起点提交交给账本", async () => {
@@ -264,6 +297,32 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: "hub/3-fix-x" });
     expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee");
     expect(t.calls).toEqual(["addWorktree", "onWorktreeCreated"]);
+  });
+
+  it("16 没配准备命令：建好马上交给账本，不跑准备命令", async () => {
+    const t = worktreeDeps();
+    await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }));
+    expect(t.start).not.toHaveBeenCalled();
+    expect(t.onSetupStarted).not.toHaveBeenCalled();
+    expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee");
+  });
+
+  it("17 配了准备命令：标准备中、交给 runner，自己马上做完；跑完 runner 才把起点提交和结果交给账本", async () => {
+    const t = worktreeDeps({ task: { ...task, setupCommand: "pnpm install" } });
+    expect(await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }))).toEqual({ kind: "done" });
+    expect(t.calls).toEqual(["addWorktree", "onSetupStarted", "setup.start"]);
+    expect(t.onWorktreeCreated).not.toHaveBeenCalled();
+    expect(t.jobs[0]).toMatchObject({
+      workerId: 3,
+      sessionId: 30,
+      command: "pnpm install",
+      cwd: "/data/worktrees/1/3",
+      rootPath: "/code/foo",
+      logPath: "/data/state/logs/setup/worker-3.log",
+    });
+    const outcome: SetupOutcome = { kind: "failed", command: "pnpm install", exitCode: 1, signal: null, error: null, durationMs: 5, tail: "x", logPath: "/l", logError: null };
+    t.jobs[0]!.onDone(outcome);
+    expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee", outcome);
   });
 
   it("Worker 不在了、不用 worktree（null）或已经收工：直接做完，不碰 git", async () => {

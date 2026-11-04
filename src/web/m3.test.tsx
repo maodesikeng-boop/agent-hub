@@ -277,6 +277,19 @@ describe("点开 Worker", () => {
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
+  it("31 Worker 准备中：状态行写“准备中”、有停止按钮，停的是 Worker 的对话", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "preparing" })));
+    const status = screen.getByRole("status", { name: "状态" });
+    expect(status).toHaveTextContent("准备中：在跑项目的准备命令");
+    expect(status).toHaveAttribute("data-busy", "true");
+    await user.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
+  });
+
   it("新消息推来就接在后面", async () => {
     const user = userEvent.setup();
     const ws = await boot();
@@ -616,5 +629,18 @@ describe("selectors", () => {
     expect(runningWorkerCount(state, 1)).toBe(1);
     expect(runningWorkerCount(state, 2)).toBe(1);
     expect(runningWorkerCount(state, 3)).toBe(0);
+  });
+
+  it("31b runningWorkerCount：准备中的 Worker 也算在跑", () => {
+    const state = loaded(
+      withWorker({
+        conversations: [
+          makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1 }) }),
+        ],
+        sessions: [makeSession({ sessionId: 2, conversationId: 30, activity: "preparing" })],
+      }),
+    );
+    expect(runningWorkerCount(state, 1)).toBe(1);
   });
 });

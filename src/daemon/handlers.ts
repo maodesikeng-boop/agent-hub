@@ -3,7 +3,8 @@
 // - session.send → 读出消息，调 driver.send：written / rejected → done；queued（会话正忙）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
-// - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）。
+// - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）；
+//   项目配了准备命令的，先交给 setup runner 在后台跑，跑完再交给账本（daemon/setup/setup.ts）。
 // session_ended（会话已经 end 过）不是故障，不抛给执行器（执行器就不会记 driver 的 health），怎么接见 Driver.end 的注释。
 import {
   DriverError,
@@ -19,8 +20,10 @@ import {
   type Ledger,
   type SessionStore,
   type SessionTokens,
+  type WorkerId,
 } from "../shared/index.ts";
 import type { AddWorktreeOptions, AddWorktreeResult } from "./git/index.ts";
+import type { SetupRunner } from "./setup/index.ts";
 
 
 export interface HandlerDeps {
@@ -90,9 +93,13 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
   };
 }
 
-export function createSessionEndHandler(deps: Pick<HandlerDeps, "driver" | "ledger" | "tokens">): ActionHandler<"session.end"> {
+export function createSessionEndHandler(
+  deps: Pick<HandlerDeps, "driver" | "ledger" | "tokens"> & { setup?: Pick<SetupRunner, "cancel"> },
+): ActionHandler<"session.end"> {
   return async (action) => {
     const { sessionId } = action.params;
+    // Worker 收工时准备命令还在跑：先停掉它（Worker 已经 ended，跑完账本也不会让它开工）
+    deps.setup?.cancel(sessionId);
     // 正在跑就等这一轮回完：这一轮里 agent 可能还要用 hub，令牌等会话 ended 之后才作废
     await deps.driver.end(sessionId);
     deps.tokens.revoke(sessionId);
@@ -103,14 +110,20 @@ export function createSessionEndHandler(deps: Pick<HandlerDeps, "driver" | "ledg
 }
 
 export interface WorktreeHandlerDeps {
-  ledger: Pick<Ledger, "getWorktreeTask" | "onWorktreeCreated">;
+  ledger: Pick<Ledger, "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated">;
   /** daemon/git 的 addWorktree（重复执行算成功）；测试换成假的。 */
   addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
+  /** 跑准备命令的（daemon/setup 的 createSetupRunner）。 */
+  setup: Pick<SetupRunner, "start">;
+  /** 这个 Worker 的准备命令日志（paths.ts 的 workerSetupLogPath）。 */
+  setupLogPath: (workerId: WorkerId) => string;
 }
 
 /**
  * 给 Worker 建 worktree（shared/actions.ts 的 WorktreeCreateParams）。Worker 不在了、不用 worktree、已经收工：什么也不做。
  * git 出错原样抛给执行器，按 ACTION_RETRY 重试；次数用完执行器调 onActionFailed（项目经理收到一行 worktree_failed）。
+ * 项目配了准备命令：建好后交给 setup runner 在后台跑，这个动作马上做完（不占执行器：准备命令最长要跑 SETUP_TIMEOUT_MS），
+ * 跑完 runner 再调 onWorktreeCreated 带上结果。关机打断的不交给账本，重启后 recoverAfterRestart 重新登记这个动作。
  */
 export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHandler<"worktree.create"> {
   return async (action) => {
@@ -118,7 +131,20 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
     const task = deps.ledger.getWorktreeTask(workerId);
     if (task === null || task.status === "ended") return { kind: "done" };
     const { baseCommit } = await deps.addWorktree({ repoFolder: task.repo, worktreePath: task.worktreePath, branch: task.branch });
-    deps.ledger.onWorktreeCreated(workerId, baseCommit);
+    if (task.setupCommand === null) {
+      deps.ledger.onWorktreeCreated(workerId, baseCommit);
+      return { kind: "done" };
+    }
+    deps.ledger.onSetupStarted(workerId);
+    deps.setup.start({
+      workerId,
+      sessionId: task.sessionId,
+      command: task.setupCommand,
+      cwd: task.worktreePath,
+      rootPath: task.repo,
+      logPath: deps.setupLogPath(workerId),
+      onDone: (outcome) => deps.ledger.onWorktreeCreated(workerId, baseCommit, outcome),
+    });
     return { kind: "done" };
   };
 }

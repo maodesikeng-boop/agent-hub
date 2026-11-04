@@ -369,7 +369,7 @@ describe("0002_projects：从 M1 的库升级", () => {
     const memory = openDatabase(":memory:");
     try {
       migrate(memory, m1MigrationsDir());
-      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3, 4] });
+      expect(migrate(memory, migrationsDir)).toMatchObject({ applied: [2, 3, 4, 5] });
     } finally {
       memory.close();
     }
@@ -397,7 +397,7 @@ describe("0002_projects：从 M1 的库升级", () => {
 
   it("空库连跑全部迁移没有报错", () => {
     const db = open();
-    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 4, applied: [1, 2, 3, 4] });
+    expect(migrate(db, migrationsDir)).toEqual({ from: 0, to: 5, applied: [1, 2, 3, 4, 5] });
   });
 
   it("新建的项目经理默认只管理", () => {
@@ -770,7 +770,7 @@ describe("0004_workers：从 M2 的库升级", () => {
     const before = rowCounts(db);
     const dump = Object.fromEntries(tableNames(db).map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY rowid`)]));
 
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 3, to: 4, applied: [4] });
+    expect(migrate(db, migrationsUpTo(4))).toMatchObject({ from: 3, to: 4, applied: [4] });
 
     expect(userVersion(db)).toBe(4);
     expect(rowCounts(db)).toEqual({ ...before, workers: 0 });
@@ -804,10 +804,11 @@ describe("0004_workers：从 M2 的库升级", () => {
 
   it("重复执行什么也不做，不再备份", () => {
     const db = m2Db();
-    migrate(db, migrationsDir);
+    const upTo4 = migrationsUpTo(4);
+    migrate(db, upTo4);
     insertWorker(db);
     const backups = readdirSync(dir!).filter((f) => f.includes(".bak-"));
-    expect(migrate(db, migrationsDir)).toEqual({ from: 4, to: 4, applied: [] });
+    expect(migrate(db, upTo4)).toEqual({ from: 4, to: 4, applied: [] });
     expect(readdirSync(dir!).filter((f) => f.includes(".bak-"))).toEqual(backups);
     expect(db.get("SELECT count(*) AS n FROM workers")).toEqual({ n: 1 });
   });
@@ -949,5 +950,47 @@ describe("迁移器：不能在外层事务里调", () => {
     migrate(db, m1MigrationsDir());
     expect(() => db.transaction(() => migrate(db, migrationsDir))).toThrow(/inside a transaction/);
     expect(userVersion(db)).toBe(1);
+  });
+});
+
+// ---- 0005_project_setup ----
+
+describe("0005_project_setup：从 M3 的库升级（老项目没有准备命令这一列）", () => {
+  /** M3 发布时的库（user_version 4）：m2Db 升到 4，再派一个 Worker。 */
+  function m3Db(): Db {
+    const db = m2Db();
+    migrate(db, migrationsUpTo(4));
+    insertWorker(db);
+    return db;
+  }
+
+  it("28 user_version 升到 5，老数据一行不少、一个字不变；projects 多一列 setup_command，老项目是 NULL", () => {
+    const db = m3Db();
+    const before = rowCounts(db);
+    const dump = Object.fromEntries(tableNames(db).map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY rowid`)]));
+
+    expect(migrate(db, migrationsDir, { now: () => Date.UTC(2026, 10, 4, 9, 0, 0) })).toMatchObject({ from: 4, to: 5, applied: [5] });
+
+    expect(userVersion(db)).toBe(5);
+    expect(rowCounts(db)).toEqual(before);
+    for (const [table, rows] of Object.entries(dump)) {
+      const now = db.all<Record<string, unknown>>(`SELECT * FROM ${table} ORDER BY rowid`);
+      if (table !== "projects") {
+        expect(now).toEqual(rows);
+        continue;
+      }
+      expect(now).toEqual((rows as Record<string, unknown>[]).map((r) => ({ ...r, setup_command: null })));
+    }
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(db.get("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+    expect(readdirSync(dir!).filter((f) => f.startsWith("hub.sqlite.bak-4-"))).toEqual(["hub.sqlite.bak-4-20261104T090000Z"]);
+    expect(migrate(db, migrationsDir)).toEqual({ from: 5, to: 5, applied: [] });
+  });
+
+  it("28b 升级后账本照常读老项目：准备命令当作没配", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    const ledger = createLedger(db, { pmHomeRoot: join(dir!, "pm-home"), resolveFolder: (p) => p });
+    expect(ledger.getWorktreeTask(1)).toMatchObject({ workerId: 1, setupCommand: null });
   });
 });

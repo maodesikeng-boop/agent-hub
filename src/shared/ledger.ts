@@ -197,13 +197,40 @@ export interface LaunchContext {
 /**
  * worktree.create 处理函数要建什么（见 actions.ts 的 WorktreeCreateParams）。
  * repo 是项目主文件夹的真实路径；branch、worktreePath 抄自 WorkerRecord。
+ * setupCommand：项目现在的准备命令（hub project setup），没配是 null；建好 worktree 后在里面跑完它 Worker 再开工。
  */
 export interface WorktreeTask {
   workerId: WorkerId;
+  /** Worker 的会话：网页、hub worker list 上的“准备中”挂在它上面，停止也按它认。 */
+  sessionId: SessionId;
   repo: string;
   branch: string;
   worktreePath: string;
   status: WorkerStatus;
+  setupCommand: string | null;
+}
+
+/**
+ * 准备命令跑完的结果（daemon/setup/setup.ts 的 runSetupCommand），交给 onWorktreeCreated 写进任务说明前面。
+ * - ok：退出码 0；failed：退出码非 0、被信号杀了，或者起不来（error 写原因）；
+ * - timeout：超过 SETUP_TIMEOUT_MS 被强制结束；stopped：用户在网页上点了停止。
+ * 守护进程关机打断的不交给账本（重启后重跑）。
+ */
+export interface SetupOutcome {
+  kind: "ok" | "failed" | "timeout" | "stopped";
+  command: string;
+  /** 正常退出时的退出码；被信号杀了、起不来是 null。 */
+  exitCode: number | null;
+  /** 被信号杀了时的信号名。 */
+  signal: string | null;
+  /** 起不来（找不到 shell、目录不在）时的原因；其他是 null。 */
+  error: string | null;
+  durationMs: number;
+  /** 输出（标准输出和标准错误合在一起）的最后 SETUP_OUTPUT_TAIL_LINES 行、最多 SETUP_OUTPUT_TAIL_BYTES 字节。 */
+  tail: string;
+  logPath: string;
+  /** 日志写不了时的原因；写成了是 null。 */
+  logError: string | null;
 }
 
 /**
@@ -317,10 +344,18 @@ export interface Ledger {
   /** Worker 不存在、不在 worktree 里干活 → null。 */
   getWorktreeTask(workerId: WorkerId): WorktreeTask | null;
   /**
-   * worktree 建好了（或者早就建好了）：同一个事务里记下 base_commit（已经有就不改），登记 Worker 的 session.start 和
-   * 它对话里第一条消息的 session.send（按去重键，重复调用无害）。Worker 已经 ended 什么也不做。
+   * 项目配了准备命令、建好 worktree 后开始跑它（M3 之后加的）：Worker 会话的 activity 设成 preparing，推 session.status；
+   * hub worker list 显示“准备中”。Worker 不存在、已经 ended、已经开工（base_commit 有了）什么也不做。
    */
-  onWorktreeCreated(workerId: WorkerId, baseCommit: string): void;
+  onSetupStarted(workerId: WorkerId): void;
+  /**
+   * worktree 建好了（或者早就建好了），配了准备命令的是准备命令也跑完了：同一个事务里记下 base_commit（已经有就不改），
+   * 登记 Worker 的 session.start 和它对话里第一条消息的 session.send（按去重键，重复调用无害）。Worker 已经 ended 什么也不做。
+   * setup（跑了准备命令才有）：结果（prompt.ts 的 setupNote）加在那条任务说明前面，推 message.updated；
+   * 会话的 preparing、stopping 回到 idle（ended 的也回）。
+   * 重启恢复（recoverAfterRestart）会给 open、在 worktree 里、base_commit 还是 NULL 的 Worker 重新登记 worktree.create。
+   */
+  onWorktreeCreated(workerId: WorkerId, baseCommit: string, setup?: SetupOutcome): void;
 
   // ---- 组装代码用（M1 W5 接线，M2 起归 W6）----
   /**

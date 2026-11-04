@@ -23,13 +23,21 @@ function describeProject(card: ProjectCard | null): string {
   return `管着项目“${card.name}”：主文件夹 ${card.mainFolder}，${others}。`;
 }
 
+/** status 里的一句“准备命令”（hub project setup）；没有项目不说。 */
+function describeSetup(card: ProjectCard | null, setupCommand: string | null): string {
+  if (card === null) return "";
+  return setupCommand === null
+    ? `\n准备命令：没配（建 worktree 后不跑东西；要配用 ${HUB_COMMAND} project setup --stdin）。`
+    : `\n准备命令（建好 worktree 后先跑它，跑完 Worker 再开工）：\n${setupCommand}`;
+}
+
 /** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
 export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
-  const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn } = projects;
+  const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn, setupIn } = projects;
 
   const runHub = (
     p: Pending,
@@ -43,14 +51,16 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
         const pm = pmRow(caller.pmId)!;
         const row = activeProjectOf(pm.id);
         const project = row === null ? null : projectCard(row);
+        const setupCommand = row?.setup_command ?? null;
         return {
-          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}`,
+          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}`,
           data: {
             role: "pm",
             pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
             sessionId: caller.id,
             conversationId: caller.conversationId ?? -1,
             project,
+            setupCommand,
           },
         };
       }
@@ -71,6 +81,8 @@ export function createLedgerHubCommands(ctx: LedgerContext, persona: LedgerPerso
         return attachIn(p, caller, args as HubArgs<"project.attach">);
       case "project.detach":
         return detachIn(p, caller, args as HubArgs<"project.detach">);
+      case "project.setup":
+        return setupIn(caller, args as HubArgs<"project.setup">);
       case "persona.show": {
         const view = getPersona(caller.pmId);
         return { text: `模式：${PM_MODE_LABELS[view.mode]}\n\n${view.text}`, data: { text: view.text, mode: view.mode } };

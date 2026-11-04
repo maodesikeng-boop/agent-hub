@@ -1,10 +1,10 @@
 // 账本里的项目（11-03 起一个项目经理就是一个会话）：每个项目经理最多一个进行中的项目，挂在它唯一的那个对话上。
 // 建项目、挂和移除文件夹；那个对话的会话的 cwd、addDirs 跟着项目的文件夹走（foldersChanged），下一条消息前驱动层按新值重启。
 import { basename } from "node:path";
-import { normalizeName } from "../../shared/domain.ts";
+import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
-import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS } from "../../shared/limits.ts";
+import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_SETUP_COMMAND_BYTES } from "../../shared/limits.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
@@ -211,5 +211,29 @@ export function createLedgerProjects(
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
-  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn };
+  /**
+   * hub project setup：设置（command 是字符串）或清除（null）项目的 worktree 准备命令。只改 projects.setup_command：
+   * 不推变化、不发系统消息、不改会话（提示词里不显示它，项目经理的会话不重启）；下一个建 worktree 的 Worker 起生效。
+   */
+  const setupIn = (caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.setup">): HubResult<"project.setup"> => {
+    const project = requireProject(caller.pmId);
+    let command: string | null = null;
+    if (args.command !== null) {
+      if (typeof args.command !== "string" || args.command.trim() === "") {
+        throw fail("invalid", `准备命令不能是空的；要清除用 ${HUB_COMMAND} project setup --clear`);
+      }
+      if (args.command.includes("\0")) throw fail("invalid", "准备命令里不能有 NUL 字符");
+      if (utf8Bytes(args.command) > MAX_SETUP_COMMAND_BYTES) throw fail("invalid", `准备命令不能超过 ${MAX_SETUP_COMMAND_BYTES} 字节`);
+      command = args.command;
+    }
+    db.run("UPDATE projects SET setup_command = ?, updated_at = ? WHERE id = ?", command, now(), project.id);
+    const row = db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", project.id)!;
+    const text =
+      command === null
+        ? `已清除项目“${project.name}”的准备命令：以后建 worktree 后不跑东西，Worker 直接开工。`
+        : `已设好项目“${project.name}”的准备命令：以后给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工（已经派出去的不受影响）。`;
+    return { text, data: { project: toProject(row), setupCommand: command } };
+  };
+
+  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn, setupIn };
 }

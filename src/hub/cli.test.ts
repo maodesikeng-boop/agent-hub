@@ -206,6 +206,38 @@ describe("hub cli", () => {
     });
   });
 
+  describe("hub project setup（29）", () => {
+    it("--stdin 读准备命令（多行、带 $ 原样）", async () => {
+      const command = 'pnpm install --frozen-lockfile --ignore-scripts\ncp "$AGENT_HUB_ROOT_PATH/.env" .\n';
+      expect((await hub(["project", "setup", "--stdin"], { stdin: stdinOf(command) })).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "project.setup", args: { command: command.slice(0, -1) } }]);
+    });
+
+    it("--clear 发 command: null，不读标准输入", async () => {
+      expect((await hub(["project", "setup", "--clear"])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "project.setup", args: { command: null } }]);
+    });
+
+    it.each([[["project", "setup"]], [["project", "setup", "--stdin", "--clear"]], [["project", "setup", "--text", "x"]], [["project", "setup", "--clear", "x"]]])(
+      "usage error: hub %j",
+      async (argv) => {
+        const r = await hub([...argv], { stdin: stdinOf("x") });
+        expect(r.code).toBe(HUB_EXIT.usage);
+        expect(ledger.calls).toHaveLength(0);
+      },
+    );
+
+    it("标准输入读到空的是用法错（清除要用 --clear）", async () => {
+      expect((await hub(["project", "setup", "--stdin"], { stdin: stdinOf("\n") })).code).toBe(2);
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("用法里有这条命令", async () => {
+      const r = await hub(["--help"]);
+      expect(r.stdout).toContain(`${cmd} project setup --stdin | --clear`);
+    });
+  });
+
   describe("long text via --stdin", () => {
     it("delivers a 3 KB persona text with $, backticks and quotes unchanged", async () => {
       const line = "价格 $HUB_TOKEN `rm -rf /` \"双引号\" 'single' \\ $(whoami) ${x}\n";

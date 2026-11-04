@@ -539,6 +539,7 @@ describe("hubCall 其他命令", () => {
       sessionId: lin.sessionId,
       conversationId: lin.conversationId,
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
+      setupCommand: null,
     });
     expect(status.text).toContain("小林");
     expect(status.text).toContain(foo.dir);

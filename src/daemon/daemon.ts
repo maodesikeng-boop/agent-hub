@@ -2,7 +2,7 @@
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+// - 关机（启动到哪一步就关到哪一步）：准备命令 → 执行器 → claude → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,7 @@ import {
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
-import { resolveHubPaths } from "../shared/paths.ts";
+import { resolveHubPaths, workerSetupLogPath } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import { createClaudeDriver } from "./driver/index.ts";
@@ -34,6 +34,7 @@ import {
 import { createLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
+import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 
@@ -51,7 +52,7 @@ export interface RunningDaemon {
   paths: HubPaths;
   port: number;
   url: string;
-  /** 关机：停执行器 → 停 claude → 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
+  /** 关机：停准备命令 → 停执行器 → 停 claude → 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
   stop(): Promise<void>;
 }
 
@@ -79,9 +80,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const paths = resolveHubPaths(env, options.userHome);
   const port = parsePort(env[ENV_PORT]);
 
-  // 启动到哪一步，关机就关到哪一步；顺序固定：执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
+  // 启动到哪一步，关机就关到哪一步；顺序固定：准备命令 → 执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
+  // （准备命令最先：它不回调账本，重启后重跑；不先停的话执行器、关机要等它跑完）
   // （agent 接口在 claude 都退出之后才关：最后一轮里 agent 还可能敲 hub；它要用账本，所以在库之前）
   const parts: {
+    setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
     ui?: RunningUiServer;
@@ -98,7 +101,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { executor, driver, ui, agentApi, db, lock } = parts;
+    const { setup, executor, driver, ui, agentApi, db, lock } = parts;
+    if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
       await step("执行器", async () => {
         const stopped = executor.stop();
@@ -187,15 +191,23 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     // 7. 处理函数、接线、启动执行器
     const executor = createActionExecutor(db, ledger);
-    const deps = { driver, ledger, sessions, tokens };
+    // worktree 准备命令（hub project setup）：在后台跑，不占执行器；网页上点停止、收工、关机时结束它
+    const setup = createSetupRunner({ log });
+    parts.setup = setup;
+    const deps = { driver, ledger, sessions, tokens, setup };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
     // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌
     executor.register("session.end", createSessionEndHandler(deps));
-    executor.register("worktree.create", createWorktreeCreateHandler({ ledger, addWorktree }));
+    executor.register(
+      "worktree.create",
+      createWorktreeCreateHandler({ ledger, addWorktree, setup, setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId) }),
+    );
     parts.unsubscribe.push(
       ledger.onActionEnqueued(() => executor.wake()),
       ledger.onStopRequested(({ sessionId }) => {
+        // Worker 还在准备中：只停准备命令，Worker 照常开工（没有在跑的就什么也不做）
+        setup.cancel(sessionId);
         driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
       }),
     );

@@ -41,6 +41,8 @@ export interface ProjectDbRow {
   status: string;
   pm_id: number;
   conversation_id: number;
+  /** worktree 准备命令（0005）；NULL = 没配。 */
+  setup_command: string | null;
   created_at: number;
   updated_at: number;
 }

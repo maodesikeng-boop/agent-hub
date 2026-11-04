@@ -1,5 +1,5 @@
 // 管 claude 进程的小函数：强制结束（连同所有后代的进程组）、看进程在不在、等它退出、用 ps 认残留的 claude。
-import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Readable } from "node:stream";
 import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
 
@@ -60,10 +60,10 @@ export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
 }
 
 /**
- * claude 自己正常退出的这一刻，给它原来的进程组补一个 SIGTERM，清掉同组留下的子进程。
+ * claude（或 worktree 准备命令，都是 detached 起的）自己正常退出的这一刻，给它原来的进程组补一个 SIGTERM，清掉同组留下的子进程。
  * 只在确认退出时发这一次，不延迟再发，免得进程号被复用后误杀。
  */
-export function termGroupAfterExit(child: ChildProcessWithoutNullStreams): void {
+export function termGroupAfterExit(child: Pick<ChildProcess, "pid">): void {
   if (child.pid !== undefined && child.pid > 1) signalPid(-child.pid, "SIGTERM");
 }
 
