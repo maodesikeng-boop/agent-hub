@@ -22,7 +22,7 @@ import {
   type ScheduleRecord,
 } from "../../shared/index.ts";
 import { ApiError, fetchPersona, postRenewSession, postRevertPersonaChange, putPersona } from "../client.ts";
-import { ACTOR_LABELS, errorText, formatTime } from "../format.ts";
+import { ACTOR_LABELS, errorText, formatTime, shortPath } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -111,6 +111,11 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
   );
 }
 
+/** 路径最后一段（文件夹名）。 */
+function folderName(path: string): string {
+  return path.replace(/\/+$/, "").split("/").pop() || path;
+}
+
 function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
   return a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 }
@@ -162,17 +167,15 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
   return { draft, error, save, reset };
 }
 
-/** Agent、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后。 */
+/** 模型、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后。项目名只在头部，这里不再列。 */
 function PmEditor({
   pm,
-  project,
   folders,
   schedules,
   persona,
   onUpdate,
 }: {
   pm: Pm;
-  project: Project | null;
   folders: ProjectFolder[];
   schedules: ScheduleRecord[];
   persona: PersonaView;
@@ -239,7 +242,8 @@ function PmEditor({
 
   return (
     <>
-      <SettingsGroup title="Agent">
+      {/* 头部下面第一组，头部就是它的标题，不另写组名 */}
+      <SettingsGroup label="模型">
         <AgentRows
           value={agent}
           onChange={changeAgent}
@@ -262,22 +266,21 @@ function PmEditor({
           </div>
         )}
       </SettingsGroup>
-      <SettingsGroup title="项目">
-        <SettingsRow label="项目">{() => <span className="text-[15px] text-muted-foreground">{project ? project.name : "还没有"}</span>}</SettingsRow>
-        {folders.length > 0 && (
-          <SettingsRow label="文件夹" wide>
-            {() => (
-              <ul aria-label="文件夹" className="grid min-w-0 gap-0.5 text-right text-[14px] text-muted-foreground">
-                {folders.map((f) => (
-                  <li key={f.id} className="truncate" title={f.path}>
-                    {f.path}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SettingsRow>
-        )}
-      </SettingsGroup>
+      {folders.length > 0 && (
+        <SettingsGroup title="文件夹">
+          <ul aria-label="文件夹" className="divide-y divide-sidebar-active">
+            {folders.map((f) => (
+              <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[15px]">{folderName(f.path)}</div>
+                  <div className="truncate text-[13.5px] leading-snug text-muted-foreground">{shortPath(f.path)}</div>
+                </div>
+                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">主文件夹</span>}
+              </li>
+            ))}
+          </ul>
+        </SettingsGroup>
+      )}
       <ScheduleGroup pmId={pm.id} schedules={schedules} />
       <SettingsGroup
         title="性格设定"
@@ -352,11 +355,12 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
   const busy = renewing || sending;
   return (
     <SettingsGroup title="会话">
-      <SettingsRow label="开新会话" error={error}>
+      {/* 行名说是什么，按钮说做什么（不重复）；“…”表示点了还要确认。在换的时候是状态，用英文 */}
+      <SettingsRow label="开新会话" detail="项目经理先写交接，聊天记录都在" error={error}>
         {() => (
           <Button variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-            {busy ? "交接中" : "开新会话"}
+            {busy ? "Handing off…" : "开始…"}
           </Button>
         )}
       </SettingsRow>
@@ -375,7 +379,7 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
   );
 }
 
-/** 项目经理资料页（设计第 3.6 节）：头像和名字居中，下面是 Agent、工作方式、项目、性格设定、修改记录、会话几组设置。 */
+/** 项目经理资料页（设计第 3.6 节）：头像、名字、项目名居中，下面是模型、工作方式、文件夹、定时任务、性格设定、修改记录、会话几组设置。 */
 export function PmProfile({
   pm,
   project,
@@ -402,16 +406,16 @@ export function PmProfile({
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
       <div className="flex h-16 shrink-0 items-center px-6">
-        <Button variant="ghost" size="icon-sm" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-12">
         <div className="mx-auto grid max-w-[640px] gap-6">
           <header className="flex flex-col items-center pb-2 text-center">
-            <Avatar colorKey={pm.id} size={72} />
-            <h1 className="mt-4 text-[22px] leading-tight font-semibold">{pm.name}</h1>
-            {project && <p className="mt-1.5 text-[14px] text-muted-foreground">{project.name}</p>}
+            <Avatar colorKey={pm.id} size={64} />
+            <h1 className="mt-4 text-[22px] leading-tight font-semibold tracking-tight">{pm.name}</h1>
+            {project && <p className="mt-1 text-[13.5px] text-muted-foreground">{project.name}</p>}
           </header>
           {load.phase === "loading" && (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
@@ -429,7 +433,7 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PmEditor pm={pm} project={project} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <PmEditor pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
           {load.phase === "ready" && <RenewSessionGroup pmId={pm.id} renewing={renewing} />}
         </div>
       </div>
