@@ -769,6 +769,15 @@ describe("打回", () => {
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
     expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "x" }), "conflict");
   });
+
+  it("worker.send 发隐藏的命令（/clear 会换会话 ID）：拦下，invalid 带厂商给的原因，不存不发；别的命令照常发", () => {
+    const worker = start().data.worker;
+    const before = tableCounts();
+    expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/clear" }), "invalid", /^\/clear：.*会话/);
+    expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/model opus" }), "invalid", /资料页/);
+    expect(tableCounts()).toEqual(before);
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/compact" }).data.messageId).toBeGreaterThan(0);
+  });
 });
 
 describe("收工", () => {
@@ -943,6 +952,35 @@ describe("审查后补的（PR #34）", () => {
     expect(workerEventOf(line)).toMatchObject({ event: "report", status: "unformatted", summary: "" });
     expect(line.text).not.toContain("第一轮的结论");
     expect(line.text).toContain("没有文字回复");
+  });
+
+  it("只做了 /compact、没有文字的一轮：不给项目经理发汇报；Worker 对话里那行“已压缩上下文”照留", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
+    const reportsBefore = workerLines().filter((l) => workerEventOf(l)?.event === "report").length;
+    const compact = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "compact", text: "/compact" }).messageId;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [compact], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [compact], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-w", trigger: "manual", preTokens: 100, postTokens: 10, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [compact], durationMs: 10, at: now });
+    expect(workerLines().filter((l) => workerEventOf(l)?.event === "report")).toHaveLength(reportsBefore);
+    expect(ledger.getMessage(compact)?.status).toBe("replied");
+    expect(messagesIn(worker.workerConversationId).some((m) => m.sender === "system" && m.text === "已压缩上下文")).toBe(true);
+    // 下一轮照常汇报（压缩只算那一轮）
+    const next = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "接着做" }).data.messageId;
+    runTurn(worker, [next], report("做完了", "第二轮"));
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report", summary: "第二轮" });
+  });
+
+  it("压缩了但这一轮也有文字（自动压缩后接着干活）：照常汇报", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-auto", trigger: "auto", preTokens: 100, postTokens: 10, at: now });
+    runTurn(worker, [first], report("做完了", "压缩后做完"));
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report", summary: "压缩后做完" });
   });
 
   it("建 worktree 彻底失败：也登记 Worker 会话的 session.end", () => {

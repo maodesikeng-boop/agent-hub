@@ -229,6 +229,8 @@ result success
 - `GET /api/conversations/:id/commands` → `{ commands: { name, description, argumentHint? }[] }`：已经去掉隐藏的，问不到给空列表。
 - `GET /api/conversations/:id/files?q=` → `{ entries: { path, root, insert }[], truncated }`：`insert` 是插进输入框的文字（claude 是 `@path`、`@"a b.md"`），主文件夹里的用相对路径，别的用绝对路径。
 - 发消息时手打了隐藏的命令：`POST messages` 回 400（`code: "invalid"`），`error` 是给用户看的原因，这条不存、不发。
+- 项目经理用 `hub worker send` 发隐藏的命令也一样拦：退出码 1，打印同样的原因，不发。
+- Worker 对话里只做了 `/compact`、没有文字的那一轮不给项目经理汇报；对话里那行“已压缩上下文”照留。
 
 文件分工：
 
@@ -242,6 +244,7 @@ result success
 | `src/daemon/workspace-files.ts` | 文件搜索（跟厂商无关）：`git ls-files` 或自己遍历，每个文件夹最多 25000 个，缓存 30 秒，文件名命中排在路径命中前面，最多 50 条 |
 | `src/daemon/composer.ts` | 按对话找会话、厂商、目录（`Ledger.composerTarget`），把上面几样接起来给界面服务 |
 | `src/daemon/ledger/messages.ts` | 拦隐藏的命令；`context.compacted` 记一条系统消息“已压缩上下文” |
+| `src/daemon/ledger/workers.ts` | `hub worker send` 拦隐藏的命令；只压缩、没有文字的一轮不汇报 |
 
 可调的数都在 `src/shared/limits.ts` 的“输入框”一节。
 

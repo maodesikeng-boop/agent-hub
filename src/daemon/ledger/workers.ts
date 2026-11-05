@@ -38,6 +38,7 @@ import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { parseWorkerReport, userToWorkerHeader, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
 import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
+import { composerBaseOf } from "../vendors/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { Db } from "../store/index.ts";
@@ -362,7 +363,11 @@ export function createLedgerWorkers(
     // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
     if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
     const text = validTask(args.text, "要发给 Worker 的话");
-    const message = insertPmMessage(p, worker, workerSession(worker.id), text, sendDedupeKey(worker.id));
+    const session = workerSession(worker.id);
+    // 和用户在网页上手打一样：隐藏的命令（/clear 会换会话 ID，之后接回的是旧对话）不发，hub 退出码 1 打印原因（原因由厂商实现给）
+    const blocked = composerBaseOf(session.vendor)?.blockReason(text) ?? null;
+    if (blocked !== null) throw fail("invalid", blocked);
+    const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
     return {
       text: `已发给 Worker #${worker.id}“${worker.title}”，它会接着做，做完一轮汇报会自动发给你。`,
@@ -459,6 +464,17 @@ export function createLedgerWorkers(
     }
   };
 
+  /** 这一轮（turnStart 之后）这个会话压缩过上下文：对话里有它的 context.compacted 系统消息（messages.ts 记的）。 */
+  const compactedSince = (session: AgentSessionRow, turnStart: number): boolean =>
+    session.conversationId !== null &&
+    db.get(
+      `SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender = 'system' AND id > ?
+       AND json_extract(meta, '$.event') = 'context.compacted' AND json_extract(meta, '$.sessionId') = ? LIMIT 1`,
+      session.conversationId,
+      turnStart,
+      session.id,
+    ) !== undefined;
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
     if (event.type === "message.delivered") {
@@ -496,6 +512,8 @@ export function createLedgerWorkers(
     const text = last?.text ?? "";
     // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
     if (outcome.turnMessageId === null && text.trim() === "") return;
+    // 只压缩了上下文（用户发的 /compact）、没有文字的一轮：不汇报，对话里那行“已压缩上下文”照留
+    if (text.trim() === "" && compactedSince(session, turnStart)) return;
     const parsed = parseWorkerReport(text);
     insertLine(p, worker, {
       event: "report",
