@@ -13,7 +13,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 主区页面左右边距 | 24px | `px-6` |
 | 对话列（消息、输入框）两边的最小边距 | 主区 640px 以下 12px，之上 48px，列在主区里居中 | `--chat-gutter`（`.chat-column` 自带，见第 8 条） |
 | 对话顶栏两边 | 左 20px、右 12px | `--header-gutter-start` / `--header-gutter-end`（见第 8 条） |
-| 右栏左右边距、组与组之间 | 12px / 24px | `px-3` / `gap-6` |
+| 右栏左右边距、组内上下 | 20px / 12px（组之间一条分隔线，见第 12 条） | `px-5` / `py-3` |
 | 左栏左右边距、左栏列表项之间 | 12px / 4px | `px-3` / `space-y-1` |
 | 组与组之间、弹窗里各块之间 | 24px | `gap-6` |
 | 组标题和它的框之间 | 8px | `gap-2` |
@@ -48,9 +48,10 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 组标题、“更多设置”这类折叠开关 | 13.5px `text-[13.5px]` | 500 | `text-muted-foreground` |
 | 次要文字：行下面的说明、资料页头部的项目名、文件夹路径、左栏的消息预览、错误 | 13.5px，行下的说明 `leading-snug` | 400 | `text-muted-foreground`（错误 `text-danger`） |
 | 按钮里的字 | 14px（默认）/ 13px（sm） | 500 | 按钮自带 |
-| 时间、计数这类小标注；列表行的状态和第二行（模型、思考程度、token） | 12px `text-xs` | 400 | `text-muted-foreground`，数字加 `tabular-nums` |
+| 时间、计数这类小标注 | 12px `text-xs` | 400 | `text-muted-foreground`，数字加 `tabular-nums` |
+| 右栏（第 12 条，照 Claude desktop，比别处小一档） | 组标题、状态词、Show more 13px；行的名字 14px；第二行 12px | 400 | 组标题前景色，名字前景色，其余 `text-muted-foreground` |
 
-不用 13px、14px 做正文或次要文字（上面两档按钮字除外）。
+不用 13px、14px 做正文或次要文字（上面两档按钮字和右栏除外）。
 
 措辞（分组列表、弹窗里的字）：
 - 组标题、行名用中文名词短语（“工作方式”“思考程度”），不夹英文单词（“Agent”这种），不带括号说明（“只管理（推荐用于复杂项目）”不行）。
@@ -61,7 +62,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 
 ## 4. 颜色
 
-- **主色（`--primary`，樱粉）只用在**：主按钮（一屏最多一个：创建、保存、发送）、选中态（单选行的勾、开关打开）、“等你”标签、“等你确定”标签和右栏“等你确定”组标题前的小圆点（项目经理用 `hub ask` 问用户的事，比“等你”醒目：左栏标签是实心主色）、右栏 Worker 行里在忙的状态词（Working… 等）、Markdown 里的链接、用户自己的气泡。
+- **主色（`--primary`，樱粉）只用在**：主按钮（一屏最多一个：创建、保存、发送）、选中态（单选行的勾、开关打开）、“等你”标签、“等你确定”标签和右栏“等你确定”组标题前的小圆点（项目经理用 `hub ask` 问用户的事，比“等你”醒目：左栏标签是实心主色）、右栏 Worker 行里在忙的状态词（Working… 等）和图标右下角的小圆点、Markdown 里的链接、用户自己的气泡。
 - 头像底色：项目经理的团子按 key 轮着取（`Avatar.tsx`）；“我”用 `bg-me text-me-foreground`（`--me`），不写死 Tailwind 色板里的颜色。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白）；左栏和分组框 `bg-sidebar`；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`。
@@ -154,22 +155,26 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 12. 右栏（等你确定、Worker）
 
-对话右边的一栏（`RightRail`，`src/web/components/RightRail.tsx`），样子照 Claude desktop 的右栏：组标题加简单的行，不加框、不加阴影。
+对话右边的一栏（`RightRail`，`src/web/components/RightRail.tsx`），**照 Claude desktop 的右栏**：组标题加紧凑的行，一组一组用细线隔开，只列几条，不加框、不加阴影。
 
 - **只放两组**：“等你确定”在上，Worker 在下；别的一律不加。两组都没有内容的组不显示。
-- **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-border bg-background px-3 py-4`，内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
+- **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-border bg-background`，左右 20px（`px-5`），内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
 - **太窄放不下时（720px 以下）**：右栏不再并排，改成顶栏下面的一块（`border-b`，最高 `40dvh`，里面滚动），把消息往下推；不自动展开，点顶栏的开关才出来。不盖住消息和输入框。
 - **展开和收起**：这个项目经理有 Worker 或有“等你确定”时自动展开，两样都没有时整栏不渲染、不占位置。开关是 `PanelRight` 图标（第 6 条的 ghost 图标按钮，有内容才显示），跟着右栏走：并排的右栏展开时在右栏最上面一行（64px 高，和对话顶栏同高，靠右）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问，开关右上角一个 6px 的主色圆点。资料页不显示右栏。
-- **组标题**：13.5px、500、`text-muted-foreground`、`px-3`，右边是这一组的个数（12px、`tabular-nums`；Worker 组只数没收工的）；和下面的行之间 8px。“等你确定”标题前一个 6px 的主色圆点。
-- **行**（第 13 条的列表行规则）：`rounded-2xl px-3 py-2`，行间 2px（`space-y-0.5`），悬停 `bg-sidebar-hover`，当前打开的 `bg-sidebar-active`。
-  - “等你确定”：一个问题一行，去掉 Markdown 符号后的第一行（15px，超长 `truncate`），右边一个向右的箭头；点一下在这一行下面展开全文（Markdown），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
-  - Worker：第一行标题（15px、500，当前打开的也是 500、只靠 `bg-sidebar-active` 表示，`truncate`）靠左，状态词（12px，英文：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用主色，其余灰）靠右。第二行 12px 灰：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`；没有数据显示“—”。点一行打开它的对话。
-  - **只列要关心的**：干活的、准备中的、等验收的（Idle）照常一行一个；收工的不逐个列出，收成 Worker 组最下面一行“已收工 52 ›”（13.5px 灰，数字 12px `tabular-nums`，`aria-expanded`，箭头展开时转向下），默认收着，点开才在这一行下面列出收工的（行同上，`opacity-60`）。正开着的是收工的 Worker 时自动展开，当前那一行看得见。没有收工的就没有这一行。
+- **组**：组和组之间一条 1px 细线（`divide-y divide-border`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。组标题 13px、前景色、正常字重，高 32px（`h-8`），**没有计数**；“等你确定”标题前一个 6px 的主色圆点。标题下面直接是行，不留空。
+- **行**：和 Claude 一样，左边一个 16px 线条图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（14px，前景色，400，超长 `truncate`），右边只放一个状态词或一个小箭头。单行一行 32px（`py-1.5` + 20px 行高），图标和字之间 12px（`gap-3`），`rounded-xl`（32px 高的行用 `rounded-2xl` 会变成胶囊），行间不留缝；左右各 8px 内边距加等宽的负外边距，所以文字和组标题、分隔线对齐，悬停底色比字宽一圈。悬停 `bg-sidebar-hover`，当前打开的 `bg-sidebar-active`，只靠底色，字重不变。
+  - “等你确定”：一个问题一行：问号图标、去掉 Markdown 符号后的第一行，右边一个向右的小箭头；点一下在这一行下面展开全文（13px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
+  - Worker：`Bot` 图标，**状态用图标右下角的小色点表示**（6px，和 Worker 汇报气泡的色点是同一个做法：图标本身一直是中性灰）：在忙（Working… / Setting up…）主色，Idle 和 Stopping… 灰（`bg-muted-foreground/50`），收工的没有色点。右边英文状态词（13px：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用主色，其余灰）。第二行 12px 灰，和名字左对齐：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`，不用符号拼接；没有数据显示“—”。点一行打开它的对话。
+- **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
+  - Worker：没收工的最多列 3 条，**在忙的排前面**（其余按派出的顺序）；多了，下面一行灰色的 **Show more**（13px、`text-muted-foreground`，没有底色和胶囊，悬停变前景色、`bg-sidebar-hover`），点开展开全部，同一处变成 Show less。正开着的 Worker 在被收起的那几条里时自动展开。
+  - “等你确定”：同样最多 3 条，多了 Show more。
+  - 收工的 Worker 不逐个列出，收成 Worker 组最下面一行“已收工 30 ›”，样子和 Show more 一样（13px 灰，数字 12px `tabular-nums`，箭头 14px，`aria-expanded`，展开时箭头转向下），默认收着，点开才列出收工的（行同上，`opacity-60`，全部列出）。正开着的是收工的 Worker 时自动展开。没有收工的就没有这一行。
+  - 状态、操作的字用英文（Show more、Working…），组标题和“已收工”用中文。
 
 ## 13. 字体、数字、列表行
 
 - **字体栈只在 `styles.css` 的 `--font-ui` / `--font-code` 定义**，组件里不写 `font-family`，用 `font-sans` / `font-mono`。
-  - 界面：`"Inter Variable"`（打包进程序）→ 系统英文字体（`-apple-system`、`BlinkMacSystemFont`、`"SF Pro Text"`、`"Helvetica Neue"`）→ 中文字体（`"PingFang SC"`、`"Hiragino Sans GB"`、`"Microsoft YaHei"`）→ `sans-serif`。**英文字体一律排在中文字体前面**：英文字母和数字在中文字体里有字形，排前面就会落到中文字体上，样子不一致；汉字在英文字体里没有字形，会自动落到后面的中文字体。
+  - 界面：**系统字体**（照 Claude desktop 和 t3code，不打包字体）：`-apple-system`、`BlinkMacSystemFont`、`"SF Pro Text"`、`"Helvetica Neue"` → 中文字体（`"PingFang SC"`、`"Hiragino Sans GB"`、`"Microsoft YaHei"`）→ `sans-serif`。**英文字体一律排在中文字体前面**：英文字母和数字在中文字体里有字形，排前面就会落到中文字体上，样子不一致；汉字在英文字体里没有字形，会自动落到后面的中文字体。
   - 代码：`"SF Mono"`、`ui-monospace`、`Menlo`、`Consolas`，后面补中文字体，最后 `monospace`。
 - **计量用英文单位**：token、用量、文件大小这类数用 K / M（token）、KB / MB（文件大小），不用“万”“亿”。token 写“820 tokens”“291K tokens”“6.48M tokens”（1 个是“1 token”）；不到 1000 原样，之上取 3 位有效数字并去掉多余的 0，999.5K 以上进到 1M（`formatCount` / `formatTokens`，`src/web/format.ts`）。悬停明细的标签也用英文（Input、Cache read…）。没有数据（老数据没记录）显示“—”，不显示 0。
 - **数字对齐**：列表、表格、行右边的数字（计数、时间、百分比、token）一律 `tabular-nums`。

@@ -92,7 +92,7 @@ describe("右栏的“等你确定”", () => {
     expect(rail()).not.toBeInTheDocument();
     unmountApp();
     await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
-    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent("等你确定2");
+    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent(/^等你确定$/);
     expect(askRows().map((b) => b.textContent)).toEqual(["用 方案 A 还是方案 B？", "再问一个"]);
   });
 

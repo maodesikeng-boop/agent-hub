@@ -569,12 +569,12 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
   const toggle = () => screen.queryByRole("button", { name: /右栏/ });
   const rail = () => screen.queryByRole("complementary", { name: "右栏" });
   const workerGroup = () => within(rail()!).getByRole("region", { name: /^Worker/ });
-  /** 每行第一行的字：标题 + 状态。 */
+  /** 每个 Worker 行第一行的字：标题 + 状态。 */
   const rows = () =>
     within(workerGroup())
       .getAllByRole("button")
-      .filter((b) => b.getAttribute("aria-expanded") === null)
-      .map((b) => b.firstElementChild!.textContent);
+      .filter((b) => b.querySelector('[data-testid="worker-meta"]') !== null)
+      .map((b) => b.querySelector('[data-testid="worker-meta"]')!.previousElementSibling!.textContent);
   /** 最下面的“已收工 N ›”一行；没有收工的 Worker 就没有。 */
   const endedToggle = () => within(workerGroup()).queryByRole("button", { name: /^已收工/ });
   /** 小林（对话 1）派了 30 修 X、31 写文档、32 查日志；老马（对话 2）派了 40 老马的活。 */
@@ -634,11 +634,10 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
         ],
       }),
     );
-    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["等你确定1", "Worker1"]);
+    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["等你确定", "Worker"]);
     cleanup();
     await boot(crowd());
-    // 数字只算没收工的（查日志收工了）
-    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Worker2"]);
+    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Worker"]);
   });
 
   it("开关：右栏展开时在右栏顶部、收起时回到窗口右上角（顶栏右边）；ghost 图标按钮（没有底色、描边、字）；点一下收起，再点展开", async () => {
@@ -685,7 +684,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(toggleEnded).toHaveTextContent("已收工 1");
     expect(toggleEnded).toHaveAttribute("aria-expanded", "false");
     expect(within(toggleEnded).getByText("1")).toHaveClass("tabular-nums");
-    expect(workerGroup().lastElementChild!.lastElementChild).toBe(toggleEnded);
+    expect(workerGroup().lastElementChild).toBe(toggleEnded);
     await user.click(toggleEnded);
     expect(toggleEnded).toHaveAttribute("aria-expanded", "true");
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle", "查日志Ended"]);
@@ -697,7 +696,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(within(workerGroup()).getByText("Idle")).toHaveClass("text-muted-foreground");
   });
 
-  it("一堆收工的 Worker：只列在干活的，标题数字只算它们，收工的数量写在最下面一行", async () => {
+  it("一堆收工的 Worker：只列在干活的，收工的数量写在最下面一行", async () => {
     const ended = Array.from({ length: 30 }, (_, i) => 100 + i);
     await boot(
       crowd({
@@ -714,7 +713,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       }),
     );
     expect(rows()).toEqual(["修 XWorking…"]);
-    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Worker1"]);
+    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Worker"]);
     expect(endedToggle()).toHaveTextContent("已收工 30");
   });
 
@@ -730,7 +729,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const preparing = makeSession({ sessionId: 4, conversationId: 31, activity: "preparing" });
     const unknown = makeSession({ sessionId: 6, conversationId: 40, activity: "bogus" as SessionState["activity"] });
     await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), stopping, preparing, makeSession({ sessionId: 5, conversationId: 32, status: "ended" }), unknown] }));
-    expect(rows()).toEqual(["修 XStopping…", "写文档Setting up…"]);
+    // 在忙的（准备中）排在前面
+    expect(rows()).toEqual(["写文档Setting up…", "修 XStopping…"]);
     expect(within(workerGroup()).getByText("Setting up…")).toHaveClass("text-primary");
     await userEvent.setup().click(within(nav()).getByRole("button", { name: /老马/ }));
     expect(rows()).toEqual(["老马的活Working…"]);
@@ -767,7 +767,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
           makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working", ...over }),
         ],
       });
-    const metaOf = () => within(workerGroup()).getByRole("button", { name: /修 X/ }).lastElementChild!;
+    const metaOf = () => within(workerGroup()).getByRole("button", { name: /修 X/ }).querySelector('[data-testid="worker-meta"]')!;
 
     it("第二行：模型的显示名（模型目录里的名字）、思考程度、token（英文单位）；不写厂商，也没有“·”；小一号灰字", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
@@ -827,7 +827,6 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(row(/修 X/)).toHaveAttribute("aria-current", "true");
     expect(row(/修 X/)).toHaveClass("bg-sidebar-active");
     // 选中只靠底色，标题字重不变
-    expect(within(row(/修 X/)).getByText("修 X")).toHaveClass("font-medium");
     expect(within(row(/修 X/)).getByText("修 X")).not.toHaveClass("font-semibold");
     expect(row(/写文档/)).not.toHaveAttribute("aria-current");
     await user.click(row(/写文档/));
