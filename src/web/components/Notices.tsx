@@ -3,13 +3,14 @@ import { HEALTH_FAILURE_THRESHOLD, type HealthEntry } from "../../shared/index.t
 import { describeError } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 
-const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full px-4 py-2 text-[13.5px] shadow-sm ring-1 ring-black/5";
+// 只用底色，不加阴影和描边（docs/ui-standard.md 第 4 条）
+const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full px-4 py-2 text-[13.5px]";
 
-/** 顶部的提醒：守护进程报告的问题（比如找不到 claude）和断线重连。 */
+/** 顶部的提醒：守护进程报告的问题（比如找不到 claude）和断线重连。靠左放在对话列里，和消息同一条左边线。 */
 export function Notices({ health, reconnecting }: { health: HealthEntry[]; reconnecting: boolean }) {
   if (health.length === 0 && !reconnecting) return null;
   return (
-    <div className="flex flex-col items-center gap-2 px-6 pt-3">
+    <div className="chat-column flex flex-col items-start gap-2 pt-3">
       {health.map((entry) => {
         const { label, detail } = describeError(entry.lastError ?? "");
         const severity = entry.consecutiveFailures >= HEALTH_FAILURE_THRESHOLD ? "error" : "warn";

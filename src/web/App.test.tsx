@@ -495,7 +495,7 @@ describe("头像旁的状态和输入框里的停止", () => {
     expect(log()).toContainElement(status);
     expect(status.closest("[data-slot='agent-head']")).not.toBeNull();
     expect(screen.getAllByRole("status")).toHaveLength(1);
-    expect(box().closest("div[class*='max-w-[888px]']")).not.toContainElement(status);
+    expect(box().closest("div.chat-column")).not.toContainElement(status);
   });
 
   it("忙时输入框有字：发送键（发出去照常排队）；清空又是停止", async () => {

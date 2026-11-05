@@ -19,6 +19,13 @@ export interface VendorSpec {
   /** 思考程度，原样传给 effortFlag。 */
   efforts: readonly string[];
   flags: { model: string; effort: string };
+  /**
+   * 额度（左下角）：厂商在事件里报的用量窗口（键是 RateLimitInfo.windows 里的键），按显示顺序；label 是浮层里的全名，
+   * short 是左下角按钮上的简写。warningStatus：厂商自己报“快用完”时的状态值。没有额度数据的厂商不写。
+   */
+  quota?: { name: string; windows: readonly { key: string; label: string; short: string }[]; warningStatus: string };
+  /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
+  shortModelName?: (model: string) => string | null;
 }
 
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
@@ -34,6 +41,21 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
     flags: { model: "--model", effort: "--effort" },
+    quota: {
+      name: "Claude",
+      windows: [
+        { key: "five_hour", label: "5 小时", short: "5h" },
+        { key: "seven_day", label: "7 天", short: "7d" },
+      ],
+      warningStatus: "allowed_warning",
+    },
+    // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m] → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M
+    shortModelName: (model) => {
+      const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model);
+      if (!m) return null;
+      const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1);
+      return [family, m[3] === undefined ? m[2] : `${m[2]}.${m[3]}`, m[4] ? "1M" : null].filter(Boolean).join(" ");
+    },
   },
 };
 
@@ -136,6 +158,12 @@ export function modelChoiceOf(model: string | null): string {
 export function modelLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return "默认";
   return catalog.models.find((m) => m.id === model)?.label ?? model;
+}
+
+/** 列表里（右栏的 Worker 行）显示的模型：和 modelLabel 一样，名单里没有的完整模型名再按厂商的规则缩短（Sonnet 5.5）。 */
+export function modelShortLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
+  const label = modelLabel(vendor, model, catalog);
+  return model !== null && label === model ? (VENDOR_SPECS[vendor].shortModelName?.(model) ?? model) : label;
 }
 
 export function effortLabel(effort: string | null): string {

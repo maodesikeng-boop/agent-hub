@@ -24,6 +24,8 @@
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
+  --color-me: var(--me);
+  --color-me-foreground: var(--me-foreground);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
 }
@@ -57,7 +59,13 @@
   --danger: #d92d20;
   --danger-soft: #feeeec;
   --success: #16a34a;
+  /* 左下角“我”的头像 */
+  --me: #1fb37d;
+  --me-foreground: #ffffff;
   --radius-btn: 9999px;
+  /* 对话列（docs/ui-standard.md 第 8 条）：靠左，左边距 --chat-inset，内容最宽 --chat-max；顶栏、消息、输入框共用 */
+  --chat-inset: 40px;
+  --chat-max: 760px;
 
   color-scheme: light;
 }
@@ -80,9 +88,18 @@ code {
   font-size: 0.88em;
 }
 
-/* 消息列表：内容居中成一列，窄窗口留 24px 边距 */
-.messages {
-  padding-inline: max(24px, calc((100% - 840px) / 2));
+@media (max-width: 1100px) {
+  :root {
+    --chat-inset: 24px;
+  }
+}
+
+/* 对话列：靠左，从 --chat-inset 开始，最宽 --chat-max，主区更宽时空白留在右边（至少 24px）。
+   消息列表（MessageList 的 .messages）和输入框的外层都用它，左右边线对齐 */
+.messages,
+.chat-column {
+  padding-left: var(--chat-inset);
+  padding-right: max(24px, calc(100% - var(--chat-inset) - var(--chat-max)));
 }
 
 /* agent 消息里的 Markdown */

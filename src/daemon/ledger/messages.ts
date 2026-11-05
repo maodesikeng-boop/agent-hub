@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
-import { agentMessageDedupeKey, askOf, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
+import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, AskMeta, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
@@ -132,17 +132,22 @@ export function createLedgerMessages(
     return message;
   };
 
-  /** 用户点“知道了”：meta 加上 dismissed。已经清过的什么也不改。 */
-  const dismissAsk = (messageId: MessageId): void => {
-    write((p) => {
-      const message = getMessage(messageId);
-      if (message === null || !conversationExists(message.conversationId)) throw fail("not_found", `没有编号 ${messageId} 的消息`);
-      const ask = askOf(message);
-      if (ask === null) throw fail("conflict", "这条消息不是要用户确定的提问");
-      if (ask.dismissed === true) return;
-      db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...message.meta, dismissed: true }), now(), messageId);
-      p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
-    });
+  /**
+   * 用户在这个对话里发了一条消息：之前没回答的 hub ask 都标成已回答（meta.answered），推 message.updated。
+   * 只有用户自己发的消息走到这里；agent、Worker 汇报、系统消息不算回答。
+   */
+  const answerAsks = (p: Pending, conversationId: ConversationId, before: MessageId) => {
+    const rows = db.all<MessageDbRow>(
+      `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'agent' AND id < ?
+         AND json_extract(meta, '$.needsUser') = 1 AND json_extract(meta, '$.answered') IS NULL AND json_extract(meta, '$.dismissed') IS NULL`,
+      conversationId,
+      before,
+    );
+    for (const row of rows) {
+      const message = toMessage(row);
+      db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...message.meta, answered: true }), now(), message.id);
+      p.changes.push({ type: "message.updated", data: { message: getMessage(message.id)! } });
+    }
   };
 
   /** 写一条只给人看的系统消息（规则见 domain.ts 的 SystemMessageMeta）：没有会话、没有状态。 */
@@ -282,6 +287,7 @@ export function createLedgerMessages(
       )!;
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
       p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
+      answerAsks(p, input.conversationId, row.id);
       return { messageId: row.id };
     });
   };
@@ -364,7 +370,6 @@ export function createLedgerMessages(
     applyEvent,
     insertSystemMessage,
     insertAskMessage,
-    dismissAsk,
     postUserMessage,
     requestStop,
     messagesBefore,

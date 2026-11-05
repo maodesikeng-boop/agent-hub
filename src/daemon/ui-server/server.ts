@@ -546,11 +546,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(202).send({ messageId: result.messageId } satisfies RetryMessageResponse);
     });
 
-    routes.post("/api/messages/:id/dismiss-ask", async (req, reply) => {
-      ledger.dismissAsk(parseId((req.params as { id?: unknown }).id, "message id"));
-      return reply.code(204).send();
-    });
-
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
       // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
       const sinceValues = new URL(req.url, "http://localhost").searchParams.getAll("since");

@@ -332,11 +332,6 @@ export interface Ledger {
    * 或 session.renewed（新会话的第一条）还没结果（排队、已送达、处理中）时都等，换代后发给新会话。session.renewed 自己不等。
    */
   waitsForHandover(messageId: MessageId): boolean;
-  /**
-   * 用户点“知道了”，清掉一条 hub ask 的提醒（M5，POST /api/messages/:id/dismiss-ask）：meta 加上 dismissed、推 message.updated；
-   * 已经清过的什么也不做。错误：没有这条消息（包括老项目群里的）→ not_found；不是 hub ask 发的 → conflict。
-   */
-  dismissAsk(messageId: MessageId): void;
 
   // ---- agent 接口用（M2）----
   /**

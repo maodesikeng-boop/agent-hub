@@ -731,23 +731,6 @@ describe("向用户提问（hub ask）", () => {
     expectLedgerError(() => hub(lin.sessionId, "ask", { text: "  " }), "invalid");
     expect(tableCounts()).toEqual(before);
   });
-
-  it("dismissAsk：meta 加上 dismissed，推 message.updated；再点一次什么也不变", () => {
-    const id = hub(lin.sessionId, "ask", { text: "问" }).data.messageId;
-    changes = [];
-    ledger.dismissAsk(id);
-    expect(askOf(ledger.getMessage(id)!)).toEqual({ needsUser: true, dismissed: true });
-    expect(changes).toMatchObject([{ type: "message.updated", data: { message: { id } } }]);
-    changes = [];
-    ledger.dismissAsk(id);
-    expect(changes).toEqual([]);
-  });
-
-  it("dismissAsk：没有这条 → not_found；不是 hub ask 发的 → conflict", () => {
-    const worker = start().data.worker;
-    expectLedgerError(() => ledger.dismissAsk(99_999), "not_found");
-    expectLedgerError(() => ledger.dismissAsk(taskMessage(worker).id), "conflict");
-  });
 });
 
 describe("打回", () => {
