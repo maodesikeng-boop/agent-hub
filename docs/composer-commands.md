@@ -221,3 +221,36 @@ result success
 - 方案说“拿不到命令列表时”要重新问：实测可以直接问正在跑的会话（T8），不用再起 claude；方案里“如果 T8 可行就改成直接问正在跑的会话”这条成立。
 - T4 比方案猜的更宽松：不需要 `/` 开头消息不加标签的退路，加字放前面的块、原文放最后一块就行（但原文不能有前导空格，也不能和前面的加字写在同一块）。
 - 测试时发现：自定义命令同时是 skill，模型会自己调 `Skill` 工具跑，容易误判成“命令展开了”。以后写测试要加 `disable-model-invocation: true` 加随机标记。
+
+## 后台怎么接的（#53）
+
+网页只认通用接口，不认识哪家厂商：
+
+- `GET /api/conversations/:id/commands` → `{ commands: { name, description, argumentHint? }[] }`：已经去掉隐藏的，问不到给空列表。
+- `GET /api/conversations/:id/files?q=` → `{ entries: { path, root, insert }[], truncated }`：`insert` 是插进输入框的文字（claude 是 `@path`、`@"a b.md"`），主文件夹里的用相对路径，别的用绝对路径。
+- 发消息时手打了隐藏的命令：`POST messages` 回 400（`code: "invalid"`），`error` 是给用户看的原因，这条不存、不发。
+
+文件分工：
+
+| 文件 | 管什么 |
+|---|---|
+| `src/shared/vendors.ts` 的 `VENDOR_SPECS[厂商].composer` | 纯数据：命令开头的字符、隐藏名单（含别名）和每个的拦截原因 |
+| `src/daemon/vendors/types.ts` | 厂商接口 `VendorComposer`：`queryCommands`（会话没在跑时另起进程问）、`parseCommands`、`isHiddenCommand`、`isCommand`、`blockReason`、`mention`、`buildUserContent` |
+| `src/daemon/vendors/claude.ts` | claude 的实现；`index.ts` 按厂商登记 |
+| `src/daemon/driver/claude-driver.ts` | `queryCommands(sessionId)`：往正在跑的进程再写一次 `initialize`；`system/commands_changed` → `commands.changed` 事件；`compact_boundary` → `context.compacted` 事件；`conversation_reset` 只记日志 |
+| `src/daemon/commands-catalog.ts` | 命令列表：在跑的会话每次直接问它；没在跑的按（厂商、目录）缓存，过期先给旧的、后台再问；`commands.changed` 直接更新 |
+| `src/daemon/workspace-files.ts` | 文件搜索（跟厂商无关）：`git ls-files` 或自己遍历，每个文件夹最多 25000 个，缓存 30 秒，文件名命中排在路径命中前面，最多 50 条 |
+| `src/daemon/composer.ts` | 按对话找会话、厂商、目录（`Ledger.composerTarget`），把上面几样接起来给界面服务 |
+| `src/daemon/ledger/messages.ts` | 拦隐藏的命令；`context.compacted` 记一条系统消息“已压缩上下文” |
+
+可调的数都在 `src/shared/limits.ts` 的“输入框”一节。
+
+发出去的格式（T4）：恢复、重启、重发说明，“【用户直接对你说】”，“【用户连发了 N 条】”和连发的每一条，各占一个 text 块放在前面；
+用户原文单独放最后一块。以命令开头的用户消息不和别的拼，按到达顺序单独写一行。连发拼一条时，每一条里的标签、重发说明和以前一样写在那一条里。
+
+以后接 Codex、Gemini：
+
+1. `shared/vendors.ts` 加厂商清单，带 `composer`（它的命令开头字符、隐藏名单和原因）；
+2. 平级加 `daemon/vendors/<厂商>.ts` 实现 `VendorComposer`（怎么问命令列表、`@` 文件怎么写、一条用户消息的 content 怎么拼），在 `vendors/index.ts` 登记；
+3. 它的驱动层实现 `Driver.queryCommands`（不支持就返回 null，退回另起进程问），列表变了发 `commands.changed`，压缩了发 `context.compacted`。
+网页、账本、命令缓存、文件搜索都不用改。

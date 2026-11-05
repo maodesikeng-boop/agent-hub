@@ -529,7 +529,8 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(reports[1]!.summary).toBe("README 也改了");
     const workerSession = sessionOf(await client.state(), worker.worker_conversation_id).sessionId;
     const workerTexts = procsOf(workerSession).flatMap((p) => env.stdinTextsOf(p.pid));
-    expect(workerTexts).toContain("【用户直接对你说】\n顺便把 README 也改了");
+    // 标签一块、原文单独放最后一块（stdinTextsOf 把块之间空一行连起来）
+    expect(workerTexts).toContain("【用户直接对你说】\n\n顺便把 README 也改了");
     await waitUntil("pm got the notice", () =>
       env.stdinTexts().some((t) => t.includes("【用户直接对 Worker #1 · 写笔记 说的话（Worker 已收到）】\n\n顺便把 README 也改了")) ? true : undefined,
     );

@@ -229,7 +229,7 @@ describe("用户在系统前", () => {
     await t.waitFor("turn.ended", undefined, 4);
     const texts = t.stdinTexts();
     expect(texts[0]).toBe("第一条");
-    expect(texts[1]).toBe("【用户连发了 2 条】\n1. 用户一\n2. 用户二");
+    expect(t.stdinBlocks()[1]).toEqual(["【用户连发了 2 条】", "1. 用户一", "2. 用户二"]);
     expect(texts.slice(2)).toEqual(["系统甲", "系统乙"]);
     expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [3, 5], [2], [4]]);
   });

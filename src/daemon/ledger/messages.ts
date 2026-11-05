@@ -9,7 +9,7 @@ import type { AgentSessionRow, AskMeta, ConversationId, Message, MessageId, Mess
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
-import type { PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
+import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -19,8 +19,12 @@ import type { LedgerSentFiles } from "./sent-files.ts";
 import { idle, toolFinished, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
+import { composerBaseOf } from "../vendors/index.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
+
+/** agent 压缩了上下文之后对话里那一行（domain.ts 的 context.compacted）。 */
+export const CONTEXT_COMPACTED_TEXT = "已压缩上下文";
 
 export function exitFailureReason(event: SessionExitedEvent): string {
   if (event.signal !== null) return `${event.reason}: signal ${event.signal}`;
@@ -260,6 +264,18 @@ export function createLedgerMessages(
         for (const id of event.messageIds ?? []) transition(p, id, "failed", event.message);
         reportHealthIn(p, "driver", event.message);
         return;
+      case "context.compacted":
+        // 用户发的 /compact（或自动压缩）：对话里记一行，只给人看；这一轮照常由 turn.ended 收尾
+        if (session.conversationId !== null) {
+          const meta: SystemMessageMeta = { event: "context.compacted", sessionId, uuid: event.uuid, trigger: event.trigger };
+          if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(session.conversationId, meta)) === undefined) {
+            insertSystemMessage(p, session.conversationId, meta, CONTEXT_COMPACTED_TEXT);
+          }
+        }
+        return;
+      case "commands.changed":
+        // 只给命令列表的缓存用（daemon/commands-catalog.ts），账本不管
+        return;
     }
   };
 
@@ -272,6 +288,9 @@ export function createLedgerMessages(
       assertUserCanPost(input.conversationId);
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
+      // 隐藏的命令（/clear、/model……）不发给 agent：不存这条，回原因让网页显示（原因由厂商实现给，daemon/vendors/）
+      const blocked = composerBaseOf(session.vendor)?.blockReason(input.text) ?? null;
+      if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
       // 有附件才写 meta（UserMessageMeta）；没有附件的用户消息 meta 还是 null，和老消息一样
       const meta: UserMessageMeta | null = input.attachments?.length ? { attachments: input.attachments } : null;
@@ -293,6 +312,24 @@ export function createLedgerMessages(
       answerAsks(p, input.conversationId, row.id);
       return { messageId: row.id };
     });
+  };
+
+  /**
+   * 输入框“/”“@”用（shared/ledger.ts 的 composerTarget）：这个对话最新一代的会话和它的目录。
+   * “@”能搜的文件夹：工作目录 + 附加文件夹，去掉项目经理带着的 worktrees 目录（那是 Worker 的，不是“这个对话的工作文件夹”）。
+   */
+  const composerTarget = (conversationId: ConversationId, worktreesDir: string): ComposerTarget => {
+    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
+    const session = currentSession(conversationId);
+    if (session === null) throw new Error(`conversation ${conversationId} has no agent session`);
+    const underWorktrees = (dir: string) => dir === worktreesDir || dir.startsWith(`${worktreesDir.replace(/\/+$/, "")}/`);
+    return {
+      sessionId: session.id,
+      vendor: session.vendor,
+      cwd: session.cwd,
+      addDirs: session.addDirs,
+      fileRoots: [session.cwd, ...session.addDirs.filter((d) => !underWorktrees(d))],
+    };
   };
 
   const requestStop = (conversationId: ConversationId) => {
@@ -374,6 +411,7 @@ export function createLedgerMessages(
     insertSystemMessage,
     insertAskMessage,
     postUserMessage,
+    composerTarget,
     requestStop,
     messagesBefore,
     actionFailedIn,

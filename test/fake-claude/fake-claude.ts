@@ -17,6 +17,7 @@
 //   剧本 lateReplay 时回显推迟到第一个不是 sleepMs、waitFile 的步骤之前（更像真 claude：开始处理时才回显）。
 // - 忙时收到的几条合并成下一轮的一条（回显里是几段 text）。
 // - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
+// - initialize 控制消息：回 control_response，带剧本里的 commands（剧本 commands）；
 // - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]`（工具调用中是
 //   `[Request interrupted by user for tool use]`）和一条 result，进程不退出。
 // - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
@@ -87,6 +88,11 @@ export interface FakeScript {
   control?: "ack_only" | "error";
   /** 收到控制消息后过这么久再处理。 */
   controlDelayMs?: number;
+  /**
+   * initialize 控制消息的回应里带的 commands（形状照真 claude：{name, description, argumentHint, aliases?, builtin?}，
+   * 见 docs/composer-commands.md 的 T1）。不给就不带 commands。
+   */
+  commands?: unknown[];
   /** 标准输入关掉也不退出（测空闲关闭的升级）。 */
   ignoreStdinEnd?: boolean;
   /** 回显推迟到第一个不是 sleepMs、waitFile 的步骤之前。 */
@@ -543,7 +549,8 @@ function onLine(line: string): void {
         emit({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "cannot interrupt now" } });
         return;
       }
-      emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
+      const body = msg.request?.subtype === "initialize" ? { commands: script.commands, models: [] } : { still_queued: [] };
+      emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: body } });
       if (script.control !== "ack_only" && msg.request?.subtype === "interrupt" && busy) {
         turnSeq++;
         interruptedMarker();

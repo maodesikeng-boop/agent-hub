@@ -144,15 +144,15 @@ describe("session.send 处理函数", () => {
     expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text: "你好" });
   });
 
-  it("Worker 对话里用户直接说的话：前面加【用户直接对你说】；项目经理的话、项目经理对话里用户的话原样发", async () => {
-    for (const [patch, text] of [
-      [{ workerId: 3, sender: "user" }, "【用户直接对你说】\n你好"],
-      [{ workerId: 3, sender: "pm" }, "你好"],
-      [{ workerId: null, sender: "user" }, "你好"],
+  it("Worker 对话里用户直接说的话：带【用户直接对你说】标签（prefixes，驱动层放在原文前面单独一块）；项目经理的话、项目经理对话里用户的话原样发", async () => {
+    for (const [patch, extra] of [
+      [{ workerId: 3, sender: "user" }, { prefixes: ["【用户直接对你说】"] }],
+      [{ workerId: 3, sender: "pm" }, {}],
+      [{ workerId: null, sender: "user" }, {}],
     ] as const) {
       const { d, send } = deps({ message: message(patch) });
       await createSessionSendHandler(d)(sendAction());
-      expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text });
+      expect(send).toHaveBeenCalledWith(1, { messageIds: [7], source: "user", text: "你好", ...extra });
     }
   });
 

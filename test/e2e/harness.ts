@@ -75,8 +75,10 @@ export interface E2eEnv {
   /** 起一个预期马上退出的守护进程（比如第二个），返回退出码和输出。 */
   runToExit(): Promise<{ code: number | null; stdout: string; stderr: string }>;
   log(): FakeLogEntry[];
-  /** 假 claude 收到的用户消息的文字。 */
+  /** 假 claude 收到的用户消息的文字：几个 text 块之间空一行连起来（我们加的字各占一块，原文放最后一块）。 */
   stdinTexts(): string[];
+  /** 同上，每条消息的 text 块分开。 */
+  stdinBlocks(): string[][];
   argvs(): Array<{ pid: number; argv: string[]; cwd: string }>;
   /** 假 claude 启动时记下的环境变量（HUB_TOKEN、HUB_SOCK、PATH……），按进程。 */
   envs(): Array<{ pid: number; env: Record<string, string> }>;
@@ -157,8 +159,9 @@ export function makeEnv(): E2eEnv {
       return { code, stdout: d.out(), stderr: d.err() };
     },
     log,
-    stdinTexts: () => userTexts(log()),
-    stdinTextsOf: (pid) => userTexts(log().filter((e) => e.pid === pid)),
+    stdinTexts: () => userBlocks(log()).map((b) => b.join("\n\n")),
+    stdinBlocks: () => userBlocks(log()),
+    stdinTextsOf: (pid) => userBlocks(log().filter((e) => e.pid === pid)).map((b) => b.join("\n\n")),
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [{ pid: e.pid, argv: e.argv, cwd: e.cwd }] : [])),
     envs: () => log().flatMap((e) => (e.kind === "env" ? [{ pid: e.pid, env: e.env }] : [])),
     bashRuns: () => log().flatMap((e) => (e.kind === "bash" ? [{ pid: e.pid, command: e.command, exitCode: e.exitCode, output: e.output }] : [])),
@@ -186,11 +189,11 @@ export function makeEnv(): E2eEnv {
   };
 }
 
-function userTexts(entries: FakeLogEntry[]): string[] {
+function userBlocks(entries: FakeLogEntry[]): string[][] {
   return entries.flatMap((e) => {
     if (e.kind !== "stdin") return [];
     const obj = JSON.parse(e.line) as { type: string; message?: { content: Array<{ text: string }> } };
-    return obj.type === "user" ? [obj.message!.content.map((c) => c.text).join("")] : [];
+    return obj.type === "user" ? [obj.message!.content.map((c) => c.text)] : [];
   });
 }
 

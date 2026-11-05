@@ -118,6 +118,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   return {
     postUserMessage: messages.postUserMessage,
     requestStop: messages.requestStop,
+    composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): StateSnapshot {
       const conversations: ConversationSnapshot[] = db

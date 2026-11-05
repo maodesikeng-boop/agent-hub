@@ -63,6 +63,13 @@ export const API_PATHS = {
   pmSchedules: (pmId: PmId) => `/api/pms/${pmId}/schedules`,
   /** PUT（SetScheduleEnabledRequest → ScheduleRecord）暂停 / 恢复；DELETE → 204。 */
   schedule: (scheduleId: ScheduleId) => `/api/schedules/${scheduleId}`,
+  /**
+   * GET → CommandsResponse：输入框“/”列表。后台按对话找到它的会话和厂商去问，已经去掉隐藏的命令；问不到给空列表，不报错。
+   * 对话不存在 → 404。用户手打了隐藏的命令（/clear、/model……），发消息时 400（code invalid），error 是拦下的原因。
+   */
+  commands: (conversationId: ConversationId) => `/api/conversations/${conversationId}/commands`,
+  /** GET ?q=<搜索词> → FilesResponse：输入框“@”列表，只在这个对话的工作文件夹里搜文件（不含文件夹）。对话不存在 → 404。 */
+  files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
   /** WebSocket，?since=<seq>。 */
   ws: "/api/ws",
 } as const;
@@ -185,6 +192,37 @@ export interface SetScheduleEnabledRequest {
 /** GET /api/models：每家厂商一份模型名单（按 AGENT_VENDORS 的顺序）。问不到厂商时是打包的名单，不报错。 */
 export interface ModelsResponse {
   catalogs: ModelCatalog[];
+}
+
+/** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给。 */
+export interface ComposerCommand {
+  name: string;
+  description: string;
+  argumentHint?: string;
+}
+
+/** GET /api/conversations/:id/commands。 */
+export interface CommandsResponse {
+  commands: ComposerCommand[];
+}
+
+/**
+ * 输入框“@”列表里的一项：
+ * - path：在 root 下的相对路径（显示用：文件名 + 父目录）；
+ * - root：它在哪个工作文件夹（绝对路径）；
+ * - insert：选中后插进输入框的文字（不含末尾空格），由厂商实现生成（claude 是 `@path`，带空格的 `@"a b.md"`），网页原样插入。
+ *   主文件夹（agent 的工作目录）里的用相对路径，别的文件夹里的用绝对路径。
+ */
+export interface FileEntry {
+  path: string;
+  root: string;
+  insert: string;
+}
+
+/** GET /api/conversations/:id/files?q=。最多 MAX_FILE_RESULTS 条，按匹配程度排好；truncated：有文件夹文件太多，没列全。 */
+export interface FilesResponse {
+  entries: FileEntry[];
+  truncated: boolean;
 }
 
 /** POST /api/pms/:id/renew-session → 202：交接请求那条系统消息的编号（连点返回同一条）。之后照常从 WebSocket 推。 */
