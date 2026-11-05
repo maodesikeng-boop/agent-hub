@@ -1,6 +1,7 @@
 import { formatQuotaReset } from "../format.ts";
 import type { QuotaVendor, QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
+import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
@@ -28,7 +29,22 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
   );
 }
 
-/** 左下角的额度标识：直接显示第一个厂商的第一个窗口（5 小时）已用的百分比，点开按厂商分组看每个窗口。没有数据不显示。 */
+/** 16px 的小圆环：已用的部分画成弧，颜色跟着文字走（currentColor）。 */
+function Ring({ percent }: { percent: number }) {
+  const r = 6;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 16 16" className="size-4 -rotate-90" aria-hidden="true">
+      <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity={0.2} strokeWidth={2} />
+      {percent > 0 && <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeDasharray={`${(c * percent) / 100} ${c}`} />}
+    </svg>
+  );
+}
+
+/**
+ * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 按钮，小圆环 + 第一个厂商的第一个窗口的简写和已用百分比（“5h 37%”），
+ * 用完写“额度用完”；快用完、用完换颜色。点开按厂商分组看每个窗口。没有数据不显示。
+ */
 export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {
   const head = quota[0];
   const window = head?.windows[0];
@@ -37,14 +53,16 @@ export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
   return (
     <Popover>
-      <PopoverTrigger
-        aria-label={exhausted ? "额度已用完" : `${window.label}额度已用 ${window.percent}%`}
-        className={cn(
-          "h-8 shrink-0 cursor-pointer rounded-full px-3 text-[13px] font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-          exhausted ? "bg-danger-soft text-danger" : warning ? "bg-warn text-warn-foreground" : "bg-sidebar-active text-foreground hover:bg-sidebar-hover",
-        )}
-      >
-        {exhausted ? "已用完" : `${window.percent}%`}
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={exhausted ? "额度已用完" : `${window.label}额度已用 ${window.percent}%`}
+          className={cn("shrink-0 gap-1.5 px-2.5 tabular-nums", exhausted ? "text-danger hover:text-danger" : warning && "text-warn-foreground hover:text-warn-foreground")}
+        >
+          <Ring percent={exhausted ? 100 : window.percent} />
+          {exhausted ? "额度用完" : `${window.short} ${window.percent}%`}
+        </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" aria-label="额度">
         <div className="grid gap-5">

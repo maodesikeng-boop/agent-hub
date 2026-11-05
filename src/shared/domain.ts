@@ -459,15 +459,16 @@ export type SystemMessageMeta =
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null };
 
 /**
- * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；dismissed 是用户点了“知道了”（存在这里，
- * 刷新、重启后还是清掉的）。用户在这条之后发了任何消息也算处理了，那个由网页按消息顺序算，不写进 meta。
+ * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；answered 是用户回答了——用户在这个项目经理的对话里
+ * 发出一条消息时，守护进程在同一个事务里把之前没回答的都标上（ledger/messages.ts 的 postUserMessage），存在库里，刷新、重启、
+ * 几个标签页都一致。老版本点“知道了”留下的 dismissed 读出来也当 answered（迁移 0009 已把老数据改成 answered）。
  */
-export type AskMeta = { needsUser: true; dismissed?: true };
+export type AskMeta = { needsUser: true; answered?: true };
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
 export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null {
   if (message.sender !== "agent" || message.meta?.needsUser !== true) return null;
-  return message.meta.dismissed === true ? { needsUser: true, dismissed: true } : { needsUser: true };
+  return message.meta.answered === true || message.meta.dismissed === true ? { needsUser: true, answered: true } : { needsUser: true };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */

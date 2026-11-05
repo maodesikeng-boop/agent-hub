@@ -120,7 +120,6 @@ export class FakeLedger {
   /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
   readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
   readonly renewed: PmId[] = [];
-  readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
@@ -250,11 +249,6 @@ export class FakeLedger {
     return { messageId: 50 };
   }
 
-  dismissAsk(messageId: MessageId): void {
-    this.check();
-    this.dismissed.push(messageId);
-  }
-
   snapshot(): StateSnapshot {
     this.check();
     return { ...this.snapshotValue, seq: this.seq };
@@ -314,7 +308,6 @@ export class FakeLedger {
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
       waitsForHandover: unused("waitsForHandover"),
-      dismissAsk: (m) => this.dismissAsk(m),
       runDueSchedules: unused("runDueSchedules"),
       addSchedule: (pmId, args) => {
         this.check();

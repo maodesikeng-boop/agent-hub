@@ -19,6 +19,13 @@ export interface VendorSpec {
   /** 思考程度，原样传给 effortFlag。 */
   efforts: readonly string[];
   flags: { model: string; effort: string };
+  /**
+   * 额度（左下角）：厂商在事件里报的用量窗口（键是 RateLimitInfo.windows 里的键），按显示顺序；label 是浮层里的全名，
+   * short 是左下角按钮上的简写。warningStatus：厂商自己报“快用完”时的状态值。没有额度数据的厂商不写。
+   */
+  quota?: { name: string; windows: readonly { key: string; label: string; short: string }[]; warningStatus: string };
+  /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
+  shortModelName?: (model: string) => string | null;
   /** 输入框的命令（纯数据；用它的代码在 daemon/vendors/）。 */
   composer: ComposerSpec;
 }
@@ -61,6 +68,21 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
     flags: { model: "--model", effort: "--effort" },
+    quota: {
+      name: "Claude",
+      windows: [
+        { key: "five_hour", label: "5 小时", short: "5h" },
+        { key: "seven_day", label: "7 天", short: "7d" },
+      ],
+      warningStatus: "allowed_warning",
+    },
+    // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m] → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M
+    shortModelName: (model) => {
+      const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model);
+      if (!m) return null;
+      const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1);
+      return [family, m[3] === undefined ? m[2] : `${m[2]}.${m[3]}`, m[4] ? "1M" : null].filter(Boolean).join(" ");
+    },
     composer: {
       commandPrefix: "/",
       blockedCommands: {
@@ -156,25 +178,47 @@ export interface CatalogModel {
   efforts: readonly string[] | null;
 }
 
+/**
+ * 一家厂商的名单：网页的厂商、模型、思考程度下拉只看它（GET /api/models 每家一份），不直接读 VENDOR_SPECS，
+ * 所以厂商名、通用思考程度、能不能自定义也跟着名单走（取自 VENDOR_SPECS）。
+ */
 export interface ModelCatalog {
   vendor: AgentVendor;
+  /** 界面上的厂商名（VENDOR_SPECS 的 label）。 */
+  label: string;
   /** vendor：厂商自己报的；bundled：打包在程序里的（厂商没装、超时、报错时）。 */
   source: "vendor" | "bundled";
   /** 不含“默认”（默认 = 不传参数，界面自己加在最前面）。 */
   models: readonly CatalogModel[];
   /** 选“默认”时支持的思考程度，null = 没说。 */
   defaultEfforts: readonly string[] | null;
+  /** “默认”实际用的模型的名字（如 Opus 5.5），厂商没说是 null（界面只写“默认”）。 */
+  defaultModel: string | null;
+  /** 这家的通用思考程度（VENDOR_SPECS 的 efforts）。 */
+  efforts: readonly string[];
+  /** 能不能填完整模型名，能的话输入框里的示例；不能是 null。 */
+  customModelExample: string | null;
 }
 
 /** 打包在程序里的名单。 */
 export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
-  const models = VENDOR_SPECS[vendor].models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null }));
-  return { vendor, source: "bundled", models, defaultEfforts: null };
+  const spec = VENDOR_SPECS[vendor];
+  const models = spec.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null }));
+  return {
+    vendor,
+    label: spec.label,
+    source: "bundled",
+    models,
+    defaultEfforts: null,
+    defaultModel: null,
+    efforts: spec.efforts,
+    customModelExample: spec.customModel ? spec.customModelExample : null,
+  };
 }
 
-/** 某个模型（null = 默认）能选的思考程度：名单里说了就按它（只留厂商通用档位里有的，后台按通用档位校验），没说用通用档位。 */
+/** 某个模型（null = 默认）能选的思考程度：名单里说了就按它（只留这家通用档位里有的，后台按通用档位校验），没说用通用档位。 */
 export function effortsFor(catalog: ModelCatalog, model: string | null): readonly string[] {
-  const all = VENDOR_SPECS[catalog.vendor].efforts;
+  const all = catalog.efforts;
   const listed = model === null ? catalog.defaultEfforts : (catalog.models.find((m) => m.id === model)?.efforts ?? null);
   return listed === null ? all : all.filter((e) => listed.includes(e));
 }
@@ -188,6 +232,21 @@ export function modelChoiceOf(model: string | null): string {
 export function modelLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return "默认";
   return catalog.models.find((m) => m.id === model)?.label ?? model;
+}
+
+/** 模型下拉里“默认”那一项：知道默认是哪个模型就写出来（“Opus 5.5（默认）”），不知道只写“默认”。 */
+export function defaultModelOption(catalog: ModelCatalog): string {
+  return catalog.defaultModel === null ? "默认" : `${catalog.defaultModel}（默认）`;
+}
+
+/**
+ * 列表里（右栏的 Worker 行）显示的模型：名单里有的用名单的名字；名单里没有的完整模型名按厂商的规则缩短（Sonnet 5.5）；
+ * 默认（null）写厂商说的实际模型（ModelCatalog.defaultModel），厂商没说才写“默认”。
+ */
+export function modelShortLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
+  if (model === null) return catalog.defaultModel ?? "默认";
+  const label = modelLabel(vendor, model, catalog);
+  return label === model ? (VENDOR_SPECS[vendor].shortModelName?.(model) ?? model) : label;
 }
 
 export function effortLabel(effort: string | null): string {

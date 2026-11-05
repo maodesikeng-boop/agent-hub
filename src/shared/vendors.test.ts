@@ -10,9 +10,11 @@ import {
   checkModel,
   isAgentVendor,
   bundledModelCatalog,
+  defaultModelOption,
   effortsFor,
   modelChoiceOf,
   modelLabel,
+  modelShortLabel,
   type ModelCatalog,
 } from "./vendors.ts";
 import { MAX_MODEL_CHARS } from "./limits.ts";
@@ -98,7 +100,7 @@ describe("界面上的叫法", () => {
 });
 
 const catalog: ModelCatalog = {
-  vendor: "claude",
+  ...bundledModelCatalog("claude"),
   source: "vendor",
   models: [
     { id: "opus", label: "Opus 5.5", description: null, efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -107,16 +109,31 @@ const catalog: ModelCatalog = {
     { id: "old", label: "Old", description: null, efforts: [] },
   ],
   defaultEfforts: ["low", "high"],
+  defaultModel: "Opus 5.5",
 };
 
 describe("模型名单", () => {
   it("打包的名单：VENDOR_SPECS 里的模型，来源 bundled，都没写思考程度", () => {
     expect(bundledModelCatalog("claude")).toEqual({
       vendor: "claude",
+      label: VENDOR_SPECS.claude.label,
       source: "bundled",
       defaultEfforts: null,
+      defaultModel: null,
+      efforts: VENDOR_SPECS.claude.efforts,
+      customModelExample: VENDOR_SPECS.claude.customModelExample,
       models: VENDOR_SPECS.claude.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),
     });
+  });
+
+  it("defaultModelOption：知道默认是哪个模型就写出来，不知道只写“默认”", () => {
+    expect(defaultModelOption(catalog)).toBe("Opus 5.5（默认）");
+    expect(defaultModelOption(bundledModelCatalog("claude"))).toBe("默认");
+  });
+
+  it("effortsFor 按名单自己的通用档位（换一家厂商的名单，档位跟着变）", () => {
+    const other: ModelCatalog = { ...catalog, efforts: ["low", "high"], models: [], defaultEfforts: null };
+    expect(effortsFor(other, null)).toEqual(["low", "high"]);
   });
 
   it("effortsFor：名单里写了按它（只留通用档位里有的），没写或不在名单里用通用档位；默认看 defaultEfforts", () => {
@@ -126,5 +143,19 @@ describe("模型名单", () => {
     expect(effortsFor(catalog, "not-listed")).toEqual(VENDOR_SPECS.claude.efforts);
     expect(effortsFor(catalog, null)).toEqual(["low", "high"]);
     expect(effortsFor(bundledModelCatalog("claude"), null)).toEqual(VENDOR_SPECS.claude.efforts);
+  });
+});
+
+describe("modelShortLabel（右栏的 Worker 行）", () => {
+  it("名单里有的用名单的名字；完整的 claude 模型名缩成“家族 版本”；认不出来的原样", () => {
+    expect(modelShortLabel("claude", null)).toBe("默认");
+    expect(modelShortLabel("claude", "sonnet")).toBe("Sonnet");
+    expect(modelShortLabel("claude", "claude-sonnet-5-5")).toBe("Sonnet 5.5");
+    expect(modelShortLabel("claude", "claude-opus-4-1-20250805")).toBe("Opus 4.1");
+    expect(modelShortLabel("claude", "claude-sonnet-5-5[1m]")).toBe("Sonnet 5.5 1M");
+    expect(modelShortLabel("claude", "claude-haiku-5")).toBe("Haiku 5");
+    expect(modelShortLabel("claude", "us.anthropic.claude-haiku-5-5:0")).toBe("us.anthropic.claude-haiku-5-5:0");
+    // 默认：名单说了实际是哪个模型就写它
+    expect(modelShortLabel("claude", null, { ...bundledModelCatalog("claude"), defaultModel: "Opus 5.5" })).toBe("Opus 5.5");
   });
 });

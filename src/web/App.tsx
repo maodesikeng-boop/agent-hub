@@ -1,11 +1,11 @@
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
-import type { ConversationId, PersonaChangeId, PmId } from "../shared/index.ts";
-import { postDismissAsk, postRevertPersonaChange } from "./client.ts";
+import { Loader2, PanelLeft } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import type { ConversationId, MessageId, PersonaChangeId, PmId } from "../shared/index.ts";
+import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { WorkerPanelToggle, WorkerSidePanel } from "./components/WorkerPanel.tsx";
+import { RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -14,42 +14,87 @@ import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
 import { ModelCatalogProvider } from "./models.tsx";
+import { useRoute } from "./route.ts";
 import { useHub } from "./useHub.ts";
+import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
+
+/** 用户手动收起右栏后记住（docs/ui-standard.md 第 12 条）：存 "closed"；再手动展开就删掉。 */
+export const RIGHT_RAIL_KEY = "agent-hub.rightRail";
+const loadRailClosed = () => {
+  try {
+    return localStorage.getItem(RIGHT_RAIL_KEY) === "closed";
+  } catch {
+    return false;
+  }
+};
+const saveRailClosed = (closed: boolean) => {
+  try {
+    if (closed) localStorage.setItem(RIGHT_RAIL_KEY, "closed");
+    else localStorage.removeItem(RIGHT_RAIL_KEY);
+  } catch {
+    // 存不了（隐私模式）：这次照常，刷新后忘掉
+  }
+};
 
 export function App() {
   const hub = useHub();
   const { state } = hub;
   // 额度到了重置时间自己变（左下角的百分比、状态行的“等额度”），不用刷新页面
   useRerenderAt(quotaResetTimes(state));
-  const [selected, setSelected] = useState<ConversationId | null>(null);
+  const { route, navigate, replace } = useRoute();
   const [drafts, setDrafts] = useState<Record<ConversationId, string>>({});
   const staging = useStagingStore<ConversationId>();
-  /** 打开着的项目经理资料页；选了左栏的对话就回到对话。 */
-  const [profilePm, setProfilePm] = useState<PmId | null>(null);
   const [creating, setCreating] = useState(false);
-  /** 打开着的 Worker 的对话；选了左栏的对话或点“返回”就回到项目经理的会话。 */
-  /** 对话右边的 Worker 面板展开着（切对话、切项目经理都保持）。 */
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [openWorker, setOpenWorker] = useState<ConversationId | null>(null);
+  /** 窄屏时左栏抽屉拉出来了。 */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+  /** 用户手动收起了右栏（记住）。 */
+  const [railClosed, setRailClosed] = useState(loadRailClosed);
+  /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
+  const [compactRailOpen, setCompactRailOpen] = useState(false);
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const compact = useMediaQuery(COMPACT_QUERY);
+  /** 右栏点开一个提问：对话滚到那条消息。n 每点一次加一，点同一条也再跳一次。 */
+  const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
   const entries = listConversations(state);
-  const active = entries.find((e) => e.id === selected) ?? entries[0] ?? null;
+  const profilePm = route?.view === "profile" ? route.pmId : null;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
-  const select = (id: ConversationId) => {
-    setProfilePm(null);
-    setOpenWorker(null);
-    setSelected(id);
-  };
+  // 网址写的 Worker 对话其实不是 Worker 的（手改的网址）：当没写
+  const routedWorker = route?.view === "worker" && state.conversations[route.id]?.conversation.kind !== "pm" ? route.id : null;
+  const openWorker = routedWorker;
   const workerView = openWorker === null ? undefined : state.conversations[openWorker];
-  // Worker 的对话归派它的项目经理；对话还没同步过来就用打开它的那个会话
-  const workerPm = workerView?.conversation.pmId ?? active?.pm?.id ?? null;
-  const workerPmEntry = entries.find((e) => e.pm?.id === workerPm) ?? active;
+  // 网址指的项目经理对话：直接是对话；Worker 的对话归派它的项目经理；资料页是那个项目经理的对话
+  const routedEntry =
+    route === null
+      ? undefined
+      : route.view === "conversation"
+        ? entries.find((e) => e.id === route.id)
+        : route.view === "worker"
+          ? entries.find((e) => e.pm !== null && e.pm.id === workerView?.conversation.pmId)
+          : entries.find((e) => e.pm?.id === route.pmId);
+  const active = routedEntry ?? entries[0] ?? null;
+  const select = useCallback(
+    (id: ConversationId) => {
+      setDrawerOpen(false);
+      navigate({ view: "conversation", id });
+    },
+    [navigate],
+  );
   // 用户正开着的对话：资料页不算；打开着 Worker 的对话算它的项目经理的会话
-  const activeId = profile ? null : ((openWorker !== null ? workerPmEntry?.id : active?.id) ?? null);
+  const activeId = profile ? null : (active?.id ?? null);
   const reminders = useWaitingReminders(state, activeId, select);
+
+  // 网址没写（第一次打开）：落到第一个对话，并把网址改成它（不记历史）。默认选中的那个就固定在网址里，
+  // 之后别的对话来了新消息排到前面也不会跳走。写了但找不到的（刚建好、服务端的变化还没到；或者编号不对）先显示第一个，网址不动，
+  // 对话到了自然切过去
+  const defaultId = route === null ? (entries[0]?.id ?? null) : null;
+  useEffect(() => {
+    if (defaultId !== null) replace({ view: "conversation", id: defaultId });
+  }, [defaultId, replace]);
 
   if (state.phase === "loading") {
     return (
@@ -75,9 +120,6 @@ export function App() {
     );
   }
 
-  // 默认选中的那个固定下来，之后别的对话来了新消息排到前面也不会跳走。
-  // 选中的对话还没从服务端同步过来（刚建好，响应先于变化到）就不动它，等它到了自然切过去
-  if (active && selected === null) setSelected(active.id);
   const view = active ? state.conversations[active.id] : undefined;
   const notices = <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />;
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
@@ -85,10 +127,14 @@ export function App() {
     setCreating(false);
     select(conversationId);
   };
+  const openWorkerConversation = (id: ConversationId) => {
+    if (compact) setCompactRailOpen(false);
+    navigate({ view: "worker", id });
+  };
   const actions = {
     retry: state.retry,
     onRetryMessage: (messageId: number) => void hub.retryMessage(messageId),
-    onOpenWorker: setOpenWorker,
+    onOpenWorker: openWorkerConversation,
     onRevertPersona: async (changeId: PersonaChangeId) => {
       await postRevertPersonaChange(changeId);
     },
@@ -111,23 +157,54 @@ export function App() {
   };
 
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
-  // 对话页顶栏右边的 Worker 按钮列的是当前打开的项目经理（Worker 的对话也算它）的 Worker
-  const panelPm = (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
-  const panelWorkers = panelPm === null ? [] : workersOf(state, panelPm);
-  const workerToggle = <WorkerPanelToggle workers={panelWorkers} open={panelOpen} onToggle={() => setPanelOpen((v) => !v)} />;
+  const workerPmEntry = active;
+  // 右栏列的是当前打开的项目经理（Worker 的对话也算它）的“等你确定”和 Worker
+  const railPm = active?.pm?.id ?? null;
+  const railWorkers = railPm === null ? [] : workersOf(state, railPm);
+  const railAsks = active ? pendingAsks(state, active.id) : [];
+  const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0);
+  const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed);
+  const toggleRail = () => {
+    if (compact) {
+      setCompactRailOpen((v) => !v);
+      return;
+    }
+    const closed = !railClosed;
+    setRailClosed(closed);
+    saveRailClosed(closed);
+  };
+  const openAsk = (messageId: MessageId) => {
+    if (active && openWorker !== null) navigate({ view: "conversation", id: active.id });
+    setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
+  };
+  const toolbar = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} onToggle={toggleRail} />;
+  const leading = narrow ? (
+    <Button variant="ghost" size="icon" className="shrink-0" aria-label="对话列表" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
+      <PanelLeft aria-hidden="true" />
+    </Button>
+  ) : null;
+  const rail = railOpen ? (
+    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
+  ) : null;
+  const top = compact ? rail : null;
 
   return (
     <ModelCatalogProvider>
     <div className="relative flex h-full">
       <Sidebar
         entries={entries}
-        activeId={activeId}
+        activeId={profileEntry?.id ?? activeId}
         waiting={reminders.waiting}
         asking={reminders.asking}
         notify={reminders.notify}
         quota={quotaUsage(state)}
+        drawerOpen={narrow && drawerOpen}
+        onCloseDrawer={closeDrawer}
         onSelect={select}
-        onNewPm={() => setCreating(true)}
+        onNewPm={() => {
+          setDrawerOpen(false);
+          setCreating(true);
+        }}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -140,7 +217,7 @@ export function App() {
             schedules={state.schedules.filter((x) => x.pmId === profile.id)}
             rev={state.personaRev[profile.id] ?? 0}
             renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-            onBack={() => setProfilePm(null)}
+            onBack={() => profileEntry && select(profileEntry.id)}
           />
         ) : openWorker !== null ? (
           <WorkerConversation
@@ -155,9 +232,11 @@ export function App() {
             older={state.older[openWorker]}
             draft={drafts[openWorker] ?? ""}
             staging={staging.of(openWorker)}
-            stats={workerToggle}
+            leading={leading}
+            toolbar={toolbar}
+            top={top}
             notices={notices}
-            onBack={() => setOpenWorker(null)}
+            onBack={() => workerPmEntry && select(workerPmEntry.id)}
             onDraftChange={setDraft}
             onSend={send}
             onRetry={hub.retrySend}
@@ -175,7 +254,9 @@ export function App() {
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             staging={staging.of(active.id)}
-            stats={workerToggle}
+            leading={leading}
+            toolbar={toolbar}
+            top={top}
             notices={notices}
             onDraftChange={setDraft}
             onSend={send}
@@ -183,9 +264,8 @@ export function App() {
             onStop={hub.stop}
             onLoadOlder={(id) => void hub.loadOlder(id)}
             actions={actions}
-            asks={pendingAsks(state, active.id)}
-            onDismissAsks={(ids) => ids.forEach((id) => void postDismissAsk(id).catch(() => {}))}
-            onOpenProfile={setProfilePm}
+            focus={focus}
+            onOpenProfile={(pmId: PmId) => navigate({ view: "profile", pmId })}
           />
         ) : (
           <>
@@ -194,7 +274,7 @@ export function App() {
           </>
         )}
       </main>
-      <WorkerSidePanel workers={panelWorkers} open={panelOpen && !profile} openId={openWorker} onOpen={setOpenWorker} onClose={() => setPanelOpen(false)} />
+      {!compact && rail}
     </div>
     </ModelCatalogProvider>
   );

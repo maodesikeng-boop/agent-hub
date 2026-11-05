@@ -1,5 +1,5 @@
 import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { byteLength } from "../format.ts";
 import { formatBytes, type StagedFiles } from "../upload.ts";
@@ -33,6 +33,7 @@ export function Composer({
   onChange,
   onSend,
   disabled = false,
+  autoFocus = false,
 }: {
   value: string;
   placeholder: string;
@@ -42,6 +43,8 @@ export function Composer({
   stop?: StopControl;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
+  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放。 */
+  autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -50,6 +53,11 @@ export function Composer({
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
+
+  useEffect(() => {
+    if (autoFocus && !disabled) ref.current?.focus({ preventScroll: true });
+    // 只在出现时放一次；对话切换时整个页面换了一个（key），会重新放
+  }, []);
 
   // 输入框跟着内容长高，到上限后出滚动条
   useLayoutEffect(() => {
@@ -132,7 +140,7 @@ export function Composer({
             e.target.value = ""; // 清掉，同一个文件还能再选
           }}
         />
-        <Button variant="secondary" size="icon" className="hover:bg-foreground/10" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
+        <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
           <Paperclip className="size-5" aria-hidden="true" />
         </Button>
         <div className="ml-auto flex items-center gap-2">

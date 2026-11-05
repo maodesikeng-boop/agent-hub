@@ -208,7 +208,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     retryMessage: messages.retryMessage,
     renewSession: handover.renewSession,
     waitsForHandover: handover.waitsForHandover,
-    dismissAsk: messages.dismissAsk,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),

@@ -170,7 +170,6 @@ describe("没登录", () => {
     ["DELETE", "/api/schedules/1"],
     ["POST", "/api/messages/1/retry"],
     ["POST", "/api/pms/1/renew-session"],
-    ["POST", "/api/messages/1/dismiss-ask"],
   ];
 
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
@@ -586,7 +585,6 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["DELETE schedule", "DELETE", "/api/schedules/1"],
   ["POST retry", "POST", "/api/messages/1/retry"],
   ["POST renew-session", "POST", "/api/pms/1/renew-session"],
-  ["POST dismiss-ask", "POST", "/api/messages/1/dismiss-ask"],
 ];
 
 /** 每个新接口都被这三道检查拦：Host、Origin（会改状态的请求都查，包括 PUT）、cookie。 */
@@ -923,26 +921,6 @@ describe("POST /api/pms/:id/renew-session 开新会话", () => {
     const res = await call("POST", "/api/pms/3/renew-session");
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "没有编号 3 的项目经理", code: "not_found" });
-  });
-});
-
-describe("POST /api/messages/:id/dismiss-ask 清掉 hub ask 的提醒", () => {
-  it("调 ledger.dismissAsk，204", async () => {
-    const res = await call("POST", "/api/messages/12/dismiss-ask");
-    expect(res.statusCode).toBe(204);
-    expect(ledger.dismissed).toEqual([12]);
-  });
-
-  it.each(["abc", "0", "1.5"])("消息编号 %s 不是正整数 → 400，不调账本", async (id) => {
-    expect((await call("POST", `/api/messages/${id}/dismiss-ask`)).statusCode).toBe(400);
-    expect(ledger.dismissed).toEqual([]);
-  });
-
-  it("消息不存在 → 404，不是提问 → 409", async () => {
-    ledger.failWith = new LedgerRequestError("not_found", "没有这条消息");
-    expect((await call("POST", "/api/messages/12/dismiss-ask")).statusCode).toBe(404);
-    ledger.failWith = new LedgerRequestError("conflict", "这条消息不是要用户确定的提问");
-    expect((await call("POST", "/api/messages/12/dismiss-ask")).statusCode).toBe(409);
   });
 });
 
@@ -1544,7 +1522,7 @@ describe("同时上传的个数", () => {
 
 describe("GET /api/models（模型名单）", () => {
   const vendorCatalog = {
-    vendor: "claude" as const,
+    ...bundledModelCatalog("claude"),
     source: "vendor" as const,
     models: [{ id: "opus", label: "Opus 5.5", description: null, efforts: ["low", "high"] }],
     defaultEfforts: null,

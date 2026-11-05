@@ -50,26 +50,35 @@ export function parseInitializeModels(raw: unknown): ModelCatalog | null {
   if (!Array.isArray(raw)) return null;
   const models: CatalogModel[] = [];
   let defaultEfforts: string[] | null = null;
+  // “默认”实际用哪个模型：default 那项的 resolvedModel，对上名单里哪项（同一个 resolvedModel）就用它的名字
+  let defaultResolved: string | null = null;
+  const labelOfResolved = new Map<string, string>();
   for (const item of raw) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
     const id = typeof entry.value === "string" ? entry.value : null;
     if (id === null) continue;
+    const resolved = nonEmptyString(entry.resolvedModel);
     if (id === DEFAULT_VALUE) {
       defaultEfforts = effortsOf(entry);
+      defaultResolved = resolved;
       continue;
     }
     if (checkModel("claude", id) !== null || models.some((m) => m.id === id)) continue;
     const description = nonEmptyString(entry.description);
+    const label = truncateChars(nonEmptyString(entry.displayName) ?? id, MAX_CATALOG_LABEL_CHARS);
+    if (resolved !== null && !labelOfResolved.has(resolved)) labelOfResolved.set(resolved, label);
     models.push({
       id,
-      label: truncateChars(nonEmptyString(entry.displayName) ?? id, MAX_CATALOG_LABEL_CHARS),
+      label,
       description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
       efforts: effortsOf(entry),
     });
     if (models.length === MAX_CATALOG_MODELS) break;
   }
-  return models.length === 0 ? null : { vendor: "claude", source: "vendor", models, defaultEfforts };
+  if (models.length === 0) return null;
+  const defaultModel = defaultResolved === null ? null : (labelOfResolved.get(defaultResolved) ?? truncateChars(defaultResolved, MAX_CATALOG_LABEL_CHARS));
+  return { ...bundledModelCatalog("claude"), source: "vendor", models, defaultEfforts, defaultModel };
 }
 
 export interface ClaudeModelQueryOptions {

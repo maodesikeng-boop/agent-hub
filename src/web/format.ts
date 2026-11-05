@@ -1,5 +1,5 @@
 // 界面上的文字：状态名、错误、时间。
-import type { MessageStatus, PersonaChange, PmMode, TokenUsage } from "../shared/index.ts";
+import { MAX_NAME_CHARS, type MessageStatus, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
 import { ApiError } from "./client.ts";
 
 export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
@@ -102,16 +102,26 @@ export function newClientId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-/** 单选的标签：“只管理”标推荐。 */
-export const MODE_OPTION_LABELS: Readonly<Record<PmMode, string>> = {
-  manage_only: "只管理（推荐用于复杂项目）",
-  hands_on: "自己也干活",
-};
+/**
+ * 表单里名字的问题（docs/ui-standard.md 第 9 条“表单校验”）：空的不算错（返回 null，调用方让主按钮变灰）；
+ * 超长、带控制字符各返回一句原因，一句只说一件事。规则同 normalizeName。
+ */
+export function nameError(raw: string, maxChars: number = MAX_NAME_CHARS): string | null {
+  const name = raw.trim();
+  if ([...name].length > maxChars) return `名字最多 ${maxChars} 个字`;
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return "名字里不能有换行";
+  return null;
+}
 
-/** 单选下面的一句说明。 */
+/** 给人看的路径：用户目录写成 ~（/Users/名字、/home/名字），别的原样。 */
+export function shortPath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+/** 单选下面的一句说明（名字就用 PM_MODE_LABELS）：说清这种模式怎么干活，不加括号、不写“推荐”（docs/ui-standard.md 第 3 条措辞）。 */
 export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
-  manage_only: "只讨论、拆任务，要动手先问你",
-  hands_on: "直接在项目文件夹里改，适合不复杂的项目",
+  manage_only: "拆任务、派 Worker 去做，自己负责验收",
+  hands_on: "小事直接在项目文件夹里改，大活再派 Worker",
 };
 
 /** 接口出错给用户看的话：服务端的原因原样显示，连不上就说连不上。 */
