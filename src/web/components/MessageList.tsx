@@ -133,14 +133,7 @@ export function MessageList({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div
-        className="messages fade-edges min-h-0 flex-1 overflow-y-auto"
-        ref={ref}
-        role="log"
-        aria-label="消息"
-        data-away={away ? "true" : undefined}
-        onScroll={onScroll}
-      >
+      <div className="messages min-h-0 flex-1 overflow-y-auto" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
         <div className="flex min-h-full flex-col pt-4 pb-6" ref={contentRef}>
           {hasMore && (
             <button
@@ -180,10 +173,9 @@ export function MessageList({
           {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} actions={actions} />}
         </div>
       </div>
-      {/* 往上翻了：消息区的下沿（styles.css 的 .fade-edges）渐隐成空白，按钮放在这块空白里、靠消息列右边——
-          不盖字、不在消息中间切出一条硬边，消息区自己不缩短。回到底部就收起，贴底接着贴 */}
+      {/* 往上翻了：“回到底部”浮在输入框上方一点、消息列水平正中（照 t3code 的 Scroll to end）；消息区高度不变，文字照常滚动。回到底部就收起，贴底接着贴 */}
       {away && (
-        <div className="messages pointer-events-none absolute inset-x-0 bottom-0.5 flex justify-end" data-back-to-bottom>
+        <div className="messages pointer-events-none absolute inset-x-0 bottom-3 flex justify-center" data-back-to-bottom>
           <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="回到底部" title="回到底部" onClick={scrollToBottom}>
             <ChevronDown aria-hidden="true" />
           </Button>
