@@ -29,6 +29,7 @@ export function MessageList({
   onRetry,
   actions,
   focus,
+  onFocusDone,
   status,
   statusAgent,
 }: {
@@ -43,6 +44,8 @@ export function MessageList({
   actions: MessageActions;
   /** 要跳到并高亮的消息；n 变了就再跳一次。 */
   focus?: { id: MessageId; n: number } | null;
+  /** 这次跳转用完了，请清掉 focus。 */
+  onFocusDone?: () => void;
   /**
    * agent 在忙时它在做什么（AgentStatus），没在忙是 null。最后一项是 agent 的一轮回复时显示在这一轮最下面；
    * 不是（这一轮还没出东西）时在列表底部单独出一轮“头像 名字 + 状态”，署名用 statusAgent。
@@ -102,14 +105,18 @@ export function MessageList({
     }
   }, [firstId]);
 
-  // 点了“等你确定”里的某个问题：滚到那条消息，高亮一会儿
+  // 点了“等你确定”里的某个问题：滚到那条消息，高亮一会儿。跳一次就用掉（通知 App 清掉），重新挂载时不会再跳
   useEffect(() => {
     if (!focus) return;
     ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center" });
     setHighlightId(focus.id);
+    onFocusDone?.();
+  }, [focus, onFocusDone]);
+  useEffect(() => {
+    if (highlightId === null) return;
     const timer = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
     return () => clearTimeout(timer);
-  }, [focus]);
+  }, [highlightId]);
 
   const loadOlder = () => {
     anchorHeight.current = ref.current?.scrollHeight ?? null;

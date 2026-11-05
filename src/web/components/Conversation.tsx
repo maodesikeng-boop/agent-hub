@@ -34,6 +34,7 @@ export function Conversation({
   onLoadOlder,
   actions,
   focus,
+  onFocusDone,
   onOpenProfile,
 }: {
   entry: ConversationEntry;
@@ -61,6 +62,7 @@ export function Conversation({
   actions: MessageActions;
   /** 要滚到并高亮的消息（右栏点开一个提问）：n 每点一次加一，点同一条也再跳一次。 */
   focus: { id: MessageId; n: number } | null;
+  onFocusDone: () => void;
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
@@ -113,6 +115,7 @@ export function Conversation({
           onRetry={onRetry}
           actions={actions}
           focus={focus}
+          onFocusDone={onFocusDone}
           status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
           statusAgent={agent}
         />

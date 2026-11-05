@@ -61,6 +61,8 @@ export function App() {
   /** 右栏点开一个提问：对话滚到那条消息。n 每点一次加一，点同一条也再跳一次。 */
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
+  const clearFocus = useCallback(() => setFocus(null), []);
+
   const entries = listConversations(state);
   const profilePm = route?.view === "profile" ? route.pmId : null;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
@@ -274,6 +276,7 @@ export function App() {
             onLoadOlder={(id) => void hub.loadOlder(id)}
             actions={actions}
             focus={focus}
+            onFocusDone={clearFocus}
             onOpenProfile={(pmId: PmId) => navigate({ view: "profile", pmId })}
           />
         ) : (
