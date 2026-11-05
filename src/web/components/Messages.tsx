@@ -23,7 +23,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  askOf,
   attachmentsOf,
   REPORT_END,
   REPORT_START,
@@ -105,7 +104,7 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-/** agent 说的一段文字（Markdown）；hub ask 问你的带“等你确定”。 */
+/** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
 function AgentText({ message, highlighted }: { message: Message; highlighted: boolean }) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
@@ -116,7 +115,6 @@ function AgentText({ message, highlighted }: { message: Message; highlighted: bo
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {askOf(message) && <span className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你确定</span>}
       <div className="w-full min-w-0 text-[15px] leading-relaxed">
         <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
       </div>

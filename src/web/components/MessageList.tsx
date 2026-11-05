@@ -174,7 +174,7 @@ export function MessageList({
         </div>
       </div>
       {away && (
-        <Button variant="outline" size="icon" className="absolute bottom-3 left-1/2 -translate-x-1/2" aria-label="回到底部" onClick={scrollToBottom}>
+        <Button variant="secondary" size="icon-sm" className="absolute bottom-3 left-1/2 -translate-x-1/2" aria-label="回到底部" onClick={scrollToBottom}>
           <ChevronDown aria-hidden="true" />
         </Button>
       )}
