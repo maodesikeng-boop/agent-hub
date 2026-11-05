@@ -77,7 +77,14 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(700);
   });
 
-  it("用户往上翻了：内容变高不拉回去，消息区下面出现“回到底部”（浅灰底，没有描边和阴影，不压在消息上）", () => {
+  it("贴底时没有“回到底部”，消息区没有渐隐蒙版", () => {
+    const { log } = setup();
+    expect(log.className).not.toContain("fade");
+    expect(log).not.toHaveAttribute("data-away");
+    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
+  });
+
+  it("用户往上翻了：内容变高不拉回去，“回到底部”浮在消息列水平正中（浅灰底、没有描边和阴影、不带字），点了回到底部", () => {
     const { log, box } = setup();
     log.scrollTop = 100;
     fireEvent.scroll(log);
@@ -86,13 +93,20 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(100);
     const back = screen.getByRole("button", { name: "回到底部" });
     expect(back.className).not.toMatch(/shadow|border/);
-    // 不浮在消息上：不在消息区里、不是绝对定位，是消息区下面让出来的一条
-    expect(log).not.toContainElement(back);
-    expect(back.className).not.toContain("absolute");
-    expect(back.closest("[data-back-to-bottom]")!.className).not.toContain("absolute");
     expect(back.className).toContain("bg-secondary");
+    expect(back).toHaveTextContent("");
+    // 浮在输入框上方一点、消息列正中；外层不挡鼠标，只有按钮自己能点；消息区的高度不跟着变（不让出一条、不加蒙版）
+    expect(log).not.toContainElement(back);
+    expect(log.className).not.toMatch(/mask|fade/);
+    const holder = back.closest("[data-back-to-bottom]") as HTMLElement;
+    expect(holder.className).toContain("messages");
+    expect(holder.className).toContain("justify-center");
+    expect(holder.className).toContain("absolute");
+    expect(holder.className).toContain("pointer-events-none");
+    expect(back.className).toContain("pointer-events-auto");
     fireEvent.click(back);
     expect(log.scrollTop).toBe(1100);
+    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
     // 回到底部后又贴底
     box.scrollHeight = 1800;
     resize();
