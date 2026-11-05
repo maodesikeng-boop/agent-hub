@@ -684,18 +684,21 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
             [
               makeWorkerLine({ id: 2, conversationId: 1, line: { workerConversationId: 31, event: "report", status: "done", summary: "好了" } }),
               makeWorkerLine({ id: 3, conversationId: 1, line: { workerConversationId: 30, event: "report", status: "problem", summary: "卡住了" } }),
+              makeWorkerLine({ id: 4, conversationId: 1, line: { workerConversationId: 32, event: "report", status: "problem", summary: "要你看一下" } }),
             ],
             { conversation: { id: 1, pmId: 1, title: "小林" } },
           ),
           makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) }),
           makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 32, title: "查日志" }) }),
         ],
-        sessions: [makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" }), makeSession({ sessionId: 4, conversationId: 31 })],
+        sessions: [makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" }), makeSession({ sessionId: 4, conversationId: 31 }), makeSession({ sessionId: 5, conversationId: 32 })],
       }),
     );
     const dot = (name: RegExp) => within(within(workerGroup()).getByRole("button", { name })).getByTestId("status-dot");
     expect(dot(/修 X/)).toHaveClass("bg-primary");
     expect(dot(/写文档/)).toHaveClass("bg-success");
+    expect(dot(/查日志/)).toHaveClass("bg-caution");
   });
 
   it("Worker 一行一个：标题和状态（英文状态词）；干活的、Idle 的照常列出，收工的收成最下面一行“已收工 N ›”，点开才展开，展开后淡一些", async () => {
