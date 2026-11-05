@@ -249,7 +249,7 @@ function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRev
       {phase === "error" && <span className="text-danger">撤销失败</span>}
       <button
         type="button"
-        className="cursor-pointer font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
+        className="cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
         disabled={phase === "busy"}
         onClick={revert}
       >
@@ -457,7 +457,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
 const SHOWN_STATUSES = new Set<Message["status"]>(["queued", "failed", "stopped"]);
 
 const DELIVERY_ROW = "mt-1 flex items-center gap-1.5 pr-1 text-xs";
-const RETRY_BUTTON = "cursor-pointer font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
+const RETRY_BUTTON = "cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
 
 function DeliveryStatus({
   status,

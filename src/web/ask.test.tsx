@@ -176,6 +176,8 @@ describe("左栏标签和标题数字", () => {
   it("有提问的项目经理那一行显示“等你确定”；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
+    // 左栏不属于任何项目经理：实心的前景色（深底白字），不带主色
+    expect(within(row("老马")).getByText("等你确定")).toHaveClass("bg-foreground", "text-background");
     expect(hasTag("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
     // 老马还在干活（Worker 在跑也一样）：照样显示

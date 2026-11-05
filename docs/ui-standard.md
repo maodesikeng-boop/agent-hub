@@ -62,14 +62,20 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 
 ## 4. 颜色
 
-- **主色（`--primary`，樱粉）只用在**：主按钮（一屏最多一个：创建、保存、发送）、选中态（单选行的勾、开关打开）、“等你”标签、“等你确定”标签和右栏“等你确定”组标题前的小圆点（项目经理用 `hub ask` 问用户的事，比“等你”醒目：左栏标签是实心主色）、右栏 Worker 行里在忙的状态词（Working… 等）和图标右下角的小圆点、Markdown 里的链接、用户自己的气泡。
-- 头像底色：项目经理的团子按 key 轮着取（`Avatar.tsx`）；“我”用 `bg-me text-me-foreground`（`--me`），不写死 Tailwind 色板里的颜色。
+- **强调色（`--primary` / `--primary-foreground`）跟着当前会话的项目经理走，没有固定的粉色。**
+  - **来源**：`src/web/lib/palette.ts` 的 `PALETTE` 一处，头像的团子颜色（`blob`）和强调色（`accent` + 文字色 `accentForeground`）共用这一份，按项目经理的编号（头像的 `colorKey`）轮着取。别处不写颜色值。
+  - **谁在里面**：项目经理的对话、它的 Worker 的对话、它的资料页、右栏，外面包一层 `AccentScope`（`lib/accent-scope.tsx`，`display: contents`），在这层上设好 `--primary` 和 `--primary-foreground`，里面的组件照常写 `bg-primary text-primary-foreground`，不自己算颜色。会话里打开的弹窗（如资料页的“开新会话？”）也渲染进这层，颜色跟着。**左栏、设置弹窗、新建项目经理弹窗、加载页不在里面**，`:root` 里的 `--primary` 是中性的前景色 `#18181b`，所以不用单独处理。
+  - **用在哪**：主按钮（一屏最多一个：创建、保存、发送、停止；悬停用 `hover:brightness-90` 变深，不用透明度，对比度只升不降）、选中态（单选行的勾、开关打开）、右栏“等你确定”组标题前的小圆点和收起时右栏开关上的圆点、右栏 Worker 行里在忙的状态词（Working… 等）和图标右下角的小圆点、Markdown 里的链接、用户自己的气泡（`bg-bubble-me` 就是 `--primary`）、拖文件进输入框时的虚线框。
+  - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、发送失败的“重试”这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框（拖文件的虚线框除外）。
+  - **左栏的标签是中性色**：“等你确定”（比“等你”醒目）是实心前景色的小胶囊（`bg-foreground text-background`，深底白字），“等你”是浅灰底深字（`bg-foreground/10 text-foreground`）；靠深浅区分轻重，不靠颜色。
+  - **对比度**：强调色同时当“白字的底色”和“白底上的文字色”，所以每种颜色对白色的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。头像的团子是明亮的原色（不放文字），`accent` 是同一个色相深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
+- 头像底色：项目经理的团子按 key 轮着取（`PALETTE.blob`，`Avatar.tsx`）；“我”用 `bg-me text-me-foreground`（`--me`），不写死 Tailwind 色板里的颜色。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白）；左栏和分组框 `bg-sidebar`；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`。
   - 分隔线：白底上 `border-border`，浅灰框里 `divide-sidebar-active`。
   - 次要文字 `text-muted-foreground`；错误 `text-danger`；警告 `bg-warn text-warn-foreground`。
   - 状态色（Worker 汇报头像右下角的小圆点，第 17 条）：做完了 `--success`、有问题 `--caution`、放弃了和出错 `--danger`，不用主色。
-- 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的粉。
+- 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的强调色。
 - 不用渐变、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。提示条（“重连中”、健康问题）也只用底色，不加阴影和描边。
 
 ## 5. 图标
@@ -122,7 +128,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 行：`px-4 py-2`，内容最少 36px 高（`min-h-9`），所以一行是 52px；有说明小字的行 `py-3`，跟着长高。
 - 输入框是白底带边框（`Input` 自带），和浅灰框分得开。
 - 下拉：改了马上存的设置行用 `Select variant="plain"`：没有边框和底色，字是前景色，右边一个上下箭头（`ChevronsUpDown`，灰），悬停、聚焦 `bg-sidebar-hover`，像 macOS 系统设置的弹出菜单。表单里和输入框并排的（定时任务的“每天 / 每隔”）用默认的带边框样式，和输入框一致。
-- 多选一：一行一个选项，名字 + 一句说明；右边一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是主色实心圆里一个白色粗勾（`RadioMark`）。整行可点，悬停 `bg-sidebar-hover`。
+- 多选一：一行一个选项，名字 + 一句说明；右边一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点，悬停 `bg-sidebar-hover`。
 - 厂商、模型、思考程度（`AgentRows`）的选项全从模型名单拿（`useModelCatalogs`，名单的厂商名、通用思考程度、能不能自定义来自 `src/shared/vendors.ts`，模型来自厂商自己报的 `model-catalog`），页面里不写死厂商、模型名。
   - 只有一家厂商：厂商一行只显示厂商名（只读值），不放下拉。两家以上才是下拉。
   - 模型选“默认”时显示实际用的模型：“Opus 5.5（默认）”（名单里报了默认是哪个时）；不知道才只写“默认”。
@@ -161,11 +167,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **只放两组**：“等你确定”在上，Worker 在下；别的一律不加。两组都没有内容的组不显示。
 - **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-border bg-background`，左右 20px（`px-5`），内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
 - **太窄放不下时（720px 以下）**：右栏不再并排，改成顶栏下面的一块（`border-b`，最高 `40dvh`，里面滚动），把消息往下推；不自动展开，点顶栏的开关才出来。不盖住消息和输入框。
-- **展开和收起**：这个项目经理有 Worker 或有“等你确定”时自动展开，两样都没有时整栏不渲染、不占位置。开关是 `PanelRight` 图标（第 6 条的 ghost 图标按钮，有内容才显示），跟着右栏走：并排的右栏展开时在右栏最上面一行（64px 高，和对话顶栏同高，靠右）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问，开关右上角一个 6px 的主色圆点。资料页不显示右栏。
-- **组**：组和组之间一条 1px 细线（`divide-y divide-border`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。组标题 13px、前景色、正常字重，高 32px（`h-8`），**没有计数**；“等你确定”标题前一个 6px 的主色圆点。标题下面直接是行，不留空。
+- **展开和收起**：这个项目经理有 Worker 或有“等你确定”时自动展开，两样都没有时整栏不渲染、不占位置。开关是 `PanelRight` 图标（第 6 条的 ghost 图标按钮，有内容才显示），跟着右栏走：并排的右栏展开时在右栏最上面一行（64px 高，和对话顶栏同高，靠右）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
+- **组**：组和组之间一条 1px 细线（`divide-y divide-border`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。组标题 13px、前景色、正常字重，高 32px（`h-8`），**没有计数**；“等你确定”标题前一个 6px 的强调色圆点。标题下面直接是行，不留空。
 - **行**：和 Claude 一样，左边一个 16px 线条图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（14px，前景色，400，超长 `truncate`），右边只放一个状态词或一个小箭头。单行一行 32px（`py-1.5` + 20px 行高），图标和字之间 12px（`gap-3`），`rounded-xl`（32px 高的行用 `rounded-2xl` 会变成胶囊），行间不留缝；左右各 8px 内边距加等宽的负外边距，所以文字和组标题、分隔线对齐，悬停底色比字宽一圈。悬停 `bg-sidebar-hover`，当前打开的 `bg-sidebar-active`，只靠底色，字重不变。
   - “等你确定”：一个问题一行：问号图标、去掉 Markdown 符号后的第一行，右边一个向右的小箭头；点一下在这一行下面展开全文（13px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
-  - Worker：`Bot` 图标，**状态用图标右下角的小色点表示**（6px，和 Worker 汇报气泡的色点是同一个做法：图标本身一直是中性灰）：在忙（Working… / Setting up…）主色，Idle 和 Stopping… 灰（`bg-muted-foreground/50`），收工的没有色点。右边英文状态词（13px：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用主色，其余灰）。第二行 12px 灰，和名字左对齐：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`，不用符号拼接；没有数据显示“—”。点一行打开它的对话。
+  - Worker：`Bot` 图标，**状态用图标右下角的小色点表示**（6px，和 Worker 汇报气泡的色点是同一个做法：图标本身一直是中性灰）：在忙（Working… / Setting up…）强调色，Idle 和 Stopping… 灰（`bg-muted-foreground/50`），收工的没有色点。右边英文状态词（13px：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用强调色，其余灰）。第二行 12px 灰，和名字左对齐：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`，不用符号拼接；没有数据显示“—”。点一行打开它的对话。
 - **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
   - Worker：没收工的最多列 3 条，**在忙的排前面**（其余按派出的顺序）；多了，下面一行灰色的 **Show more**（13px、`text-muted-foreground`，没有底色和胶囊，悬停变前景色、`bg-sidebar-hover`），点开展开全部，同一处变成 Show less。正开着的 Worker 在被收起的那几条里时自动展开。
   - “等你确定”：同样最多 3 条，多了 Show more。
@@ -197,7 +203,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **标题**：只用 600 一档字重，层级靠字号。h1 20px、h2 17px、h3 15px、h4 到 h6 15px 灰（`--muted-foreground`）500；上方留 1.4～1.1 倍字高，下方 0.4 倍，贴着自己的内容；消息开头的标题不留上边距。
 - **列表**：缩进 1.5em，圆点 / 序号用灰色，条之间 4px，嵌套列表上下 4px；任务列表（`- [ ]`）去掉圆点，勾选框和文字之间 8px。
 - **行内代码**：`--font-code`，0.875em，`--muted` 底、6px 圆角、内边距 `0.12em 0.4em`，不加粗不换色。
-- **链接**：主色（第 4 条），下划线用半透明主色，悬停变实；长链接、长路径在任意位置换行，不撑破消息列。
+- **链接**：强调色（第 4 条），下划线用半透明强调色，悬停变实；长链接、长路径在任意位置换行，不撑破消息列。
 - **引用块**：左边 3px 灰竖线（`#d4d4d8`），文字比正文淡一档，不加底色。分隔线 1px `--border`，上下各 1.5em。
 - **代码块**：容器 `rounded-xl`、`--muted` 底、1px 内描边；右上角一行：语言名（12px 灰，原样显示作者写的名字）靠右、紧挨着一个复制图标按钮（`size-7`，无底色，悬停 `bg-accent`），不写语言的只有复制按钮；代码 13.5px 等宽、行高 1.6、横向滚动不换行、内边距 `px-4 pb-3`。
   - **高亮**：复用 `src/web/highlight.ts`（Shiki，`github-light`），打开消息时按需加载，不阻塞渲染。先显示纯文本，加载好再换成上色的；Shiki 不认识的语言一直是纯文本，不报错、不提示。

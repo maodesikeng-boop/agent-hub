@@ -475,7 +475,11 @@ describe("撤销性格设定修改", () => {
     const user = userEvent.setup();
     const ws = await boot(makeSnapshot());
     push(ws, messageChange(11, "message.created", changed(3, 42)));
-    await user.click(within(log()).getByRole("button", { name: "撤销" }));
+    const revert = within(log()).getByRole("button", { name: "撤销" });
+    // 灰色的文字按钮，不用主色；悬停变前景色
+    expect(revert).toHaveClass("text-muted-foreground", "hover:text-foreground");
+    expect(revert.className).not.toMatch(/primary/);
+    await user.click(revert);
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/42\/revert$/)).toHaveLength(1));
     expect(api.callsTo("POST", /revert$/)[0]?.body).toBeUndefined();
     expect(await within(log()).findByText("已撤销")).toBeInTheDocument();
