@@ -50,6 +50,7 @@ import {
   buildTurnInterruptRequest,
   buildTurnStartRequest,
   checkCodexTurnText,
+  codexOfSession,
   combineCodexTurnText,
   decideCommandApproval,
   decideFileChangeApproval,
@@ -61,7 +62,6 @@ import {
   type CodexLaunchConfig,
 } from "./codex-protocol.ts";
 import {
-  claudeOfSession,
   forceKill,
   forceKillTree,
   killFreshGroup,
@@ -139,6 +139,8 @@ interface SessionState {
   inFlight: Batch | null;
   selfTurn: boolean;
   activeTurnId: string | null;
+  /** 单调递增的轮次计数，保证跨轮或重启后即使 codex 复用 item.id，发出的事件 uuid 依然绝对唯一。 */
+  turnSeq: number;
   turnInterrupted: boolean;
   stopRequested: boolean;
   pending: PendingEntry[];
@@ -387,7 +389,8 @@ export class CodexDriver implements Driver {
     } catch (error) {
       throw new DriverError("internal_error", `listWithProcess failed: ${errorMessage(error)}`);
     }
-    await Promise.all(rows.map((row) => this.#cleanupStaleRow(row)));
+    const codexRows = rows.filter((row) => row.vendor === "codex");
+    await Promise.all(codexRows.map((row) => this.#cleanupStaleRow(row)));
   }
 
   async #cleanupStaleRow(row: AgentSessionRow): Promise<void> {
@@ -395,7 +398,7 @@ export class CodexDriver implements Driver {
     const pid = row.pid;
     if (pid === null) return;
     if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
-    const pgid = await claudeOfSession(pid, row.vendorSessionId);
+    const pgid = await codexOfSession(pid);
     if (pgid !== null) {
       signalPid(pid, "SIGINT");
       if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
@@ -417,6 +420,7 @@ export class CodexDriver implements Driver {
         inFlight: null,
         selfTurn: false,
         activeTurnId: null,
+        turnSeq: 0,
         turnInterrupted: false,
         stopRequested: false,
         pending: [],
@@ -584,6 +588,7 @@ export class CodexDriver implements Driver {
     }
     this.#clearTimer(st, "idleTimer");
     st.inFlight = batch;
+    st.turnSeq += 1;
     st.turnInterrupted = false;
     st.stopRequested = false;
     st.agentMessageBuffers.clear();
@@ -673,6 +678,11 @@ export class CodexDriver implements Driver {
     if (st.proc !== proc || proc.closing) return;
     proc.closing = "interrupt";
     proc.child.kill("SIGINT");
+    clearKillTimer(proc);
+    proc.killTimer = setTimeout(() => {
+      proc.killTimer = null;
+      this.#forceKill(st, proc);
+    }, this.#opts.interruptGraceMs);
   }
 
   // --- 启动与握手 ---
@@ -969,6 +979,7 @@ export class CodexDriver implements Driver {
         if (errorObj) {
           // thread/resume 报错（如 not found / no rollout found）：自动回退发 thread/start 开启新线程
           proc.resume = false;
+          proc.threadId = null;
           const row = this.#row(st);
           const sessionInfo = {
             cwd: row?.cwd ?? proc.launched.cwd,
@@ -1134,6 +1145,7 @@ export class CodexDriver implements Driver {
           this.#markProcessing(st, st.inFlight, at);
         } else if (!st.selfTurn && st.proc === proc) {
           st.selfTurn = true;
+          st.turnSeq += 1;
           this.#clearTimer(st, "idleTimer");
           this.#emit(st.id, { type: "turn.started", at });
         }
@@ -1147,8 +1159,8 @@ export class CodexDriver implements Driver {
             : null;
         if (!item) return;
         if (item.type === "reasoning") {
-          const uuid = typeof item.id === "string" && item.id !== "" ? item.id : lineUuid(item, rawLine);
-          this.#emitThinkingOnce(st, uuid, at);
+          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : lineUuid(item, rawLine);
+          this.#emitThinkingOnce(st, itemId, at);
           return;
         }
         if (item.type === "agentMessage") {
@@ -1159,7 +1171,8 @@ export class CodexDriver implements Driver {
           return;
         }
         if (isCodexToolItemType(item.type)) {
-          const toolEv = parseCodexToolStarted(item, at);
+          const rawId = typeof item.id === "string" && item.id !== "" ? item.id : null;
+          const toolEv = rawId ? parseCodexToolStarted(item, at, this.#scopedUuid(st, rawId)) : null;
           if (toolEv) this.#emit(st.id, toolEv);
         }
         return;
@@ -1192,13 +1205,13 @@ export class CodexDriver implements Driver {
             : null;
         if (!item) return;
         if (item.type === "agentMessage") {
-          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : lineUuid(item, rawLine);
+          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
           const buffered = st.agentMessageBuffers.get(itemId) ?? "";
           st.agentMessageBuffers.delete(itemId);
           const fullText = typeof item.text === "string" && item.text !== "" ? item.text : buffered;
           if (fullText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
             st.emittedMessageIds.add(itemId);
-            this.#emit(st.id, { type: "agent.text", uuid: itemId, text: fullText, at });
+            this.#emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: fullText, at });
           }
           return;
         }
@@ -1236,10 +1249,16 @@ export class CodexDriver implements Driver {
     }
   }
 
-  #emitThinkingOnce(st: SessionState, uuid: string, at: number): void {
-    if (st.emittedThinkingIds.has(uuid)) return;
-    st.emittedThinkingIds.add(uuid);
-    this.#emit(st.id, { type: "agent.thinking", uuid, at });
+  /** 将当前轮序号与 turnId 拼进 itemId，保证跨轮或重启后即使 codex 复用 itemId，发出的 uuid 也永不冲突。 */
+  #scopedUuid(st: SessionState, itemId: string): string {
+    const turnPrefix = st.activeTurnId ? `${st.activeTurnId}:${st.turnSeq}` : `turn-${st.turnSeq}`;
+    return `${turnPrefix}:${itemId}`;
+  }
+
+  #emitThinkingOnce(st: SessionState, itemId: string, at: number): void {
+    if (st.emittedThinkingIds.has(itemId)) return;
+    st.emittedThinkingIds.add(itemId);
+    this.#emit(st.id, { type: "agent.thinking", uuid: this.#scopedUuid(st, itemId), at });
   }
 
   #onTurnCompleted(st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
@@ -1249,7 +1268,7 @@ export class CodexDriver implements Driver {
     for (const [itemId, bufferedText] of st.agentMessageBuffers.entries()) {
       if (bufferedText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
         st.emittedMessageIds.add(itemId);
-        this.#emit(st.id, { type: "agent.text", uuid: itemId, text: bufferedText, at });
+        this.#emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: bufferedText, at });
       }
     }
     st.agentMessageBuffers.clear();

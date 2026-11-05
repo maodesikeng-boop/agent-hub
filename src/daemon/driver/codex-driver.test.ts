@@ -1,4 +1,5 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,6 +66,8 @@ export interface FakeCodexTurnScript {
   }>;
   /** agentMessage 的分段 delta。 */
   messageDeltas?: string[];
+  /** 自定义 agentMessage 的 item.id（用于测跨轮相同 item.id 不撞车）。 */
+  messageItemId?: string;
   /** item/completed 里的完整文本（不填则用 messageDeltas 拼接）。 */
   completedMessageText?: string;
   /** 若为 true，不发 agentMessage 的 item/completed，测 turn/completed 兜底补发。 */
@@ -174,7 +177,7 @@ function runTurn(turnId, threadId, turnScript) {
 
   const finishTurn = () => {
     const deltas = turnScript.messageDeltas || [];
-    const msgId = \`msg-\${turnId}\`;
+    const msgId = turnScript.messageItemId || \`msg-\${turnId}\`;
     if (deltas.length > 0 || turnScript.completedMessageText) {
       send({
         jsonrpc: "2.0",
@@ -645,25 +648,28 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
     expect(t.of("message.delivered")[0]!.messageIds).toEqual([10]);
     expect(t.of("message.processing")[0]!.messageIds).toEqual([10]);
 
-    // 4. reasoning -> agent.thinking（带稳定 uuid）
+    // 4. reasoning -> agent.thinking（带跨轮唯一且本轮稳定的 uuid）
     const thinkings = t.of("agent.thinking");
     expect(thinkings.length).toBeGreaterThanOrEqual(1);
-    expect(thinkings[0]!.uuid).toBe("reason-1");
+    expect(thinkings[0]!.uuid).toBe("turn-1:1:reason-1");
 
     // 5. tools -> agent.tool & agent.tool_result
     const tools = t.of("agent.tool");
     expect(tools).toHaveLength(3);
     expect(tools[0]).toMatchObject({
+      uuid: "turn-1:1:call-cmd-1",
       toolUseId: "call-cmd-1",
       name: "commandExecution",
       input: { command: "pnpm typecheck", cwd: "/tmp/work" },
     });
     expect(tools[1]).toMatchObject({
+      uuid: "turn-1:1:call-file-1",
       toolUseId: "call-file-1",
       name: "fileChange",
       input: expect.objectContaining({ file_path: "src/index.ts" }),
     });
     expect(tools[2]).toMatchObject({
+      uuid: "turn-1:1:call-web-1",
       toolUseId: "call-web-1",
       name: "webSearch",
       input: { query: "codex jsonrpc" },
@@ -676,7 +682,7 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
     const texts = t.of("agent.text");
     expect(texts).toHaveLength(1);
     expect(texts[0]).toMatchObject({
-      uuid: "msg-turn-1",
+      uuid: "turn-1:1:msg-turn-1",
       text: "你好，我是 Codex！",
     });
 
@@ -999,5 +1005,63 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 记忆保护与只读模�
     expect(turnStarts[1]?.params).toMatchObject({
       sandboxPolicy: { type: "readOnly", networkAccess: true },
     });
+  });
+});
+
+describe("CodexDriver 跨轮 item.id 防撞车与残留进程清理", () => {
+  it("不同轮次即使 codex 复用相同的 item.id，发出的 agent.text / agent.tool uuid 仍跨轮唯一", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            messageItemId: "item_shared_1",
+            messageDeltas: ["第一轮回复"],
+            tools: [{ id: "tool_shared_1", type: "commandExecution", command: "ls" }],
+          },
+          {
+            messageItemId: "item_shared_1",
+            messageDeltas: ["第二轮回复"],
+            tools: [{ id: "tool_shared_1", type: "commandExecution", command: "pwd" }],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+
+    await t.driver.send(s.id, user(1, "第一轮"));
+    await t.waitFor("turn.ended", undefined, 1);
+
+    await t.driver.send(s.id, user(2, "第二轮"));
+    await t.waitFor("turn.ended", undefined, 2);
+
+    const texts = t.of("agent.text");
+    expect(texts).toHaveLength(2);
+    expect(texts[0]!.uuid).not.toBe(texts[1]!.uuid);
+    expect(texts.map((e) => e.text)).toEqual(["第一轮回复", "第二轮回复"]);
+
+    const tools = t.of("agent.tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.uuid).not.toBe(tools[1]!.uuid);
+  });
+
+  it("cleanupStale() 识别并清理残留的 codex app-server 进程且将 pid 置空", async () => {
+    const t = makeCodexHarness();
+    const fakeCodexBin = join(t.dir, "fake-codex");
+    const staleChild = spawn(fakeCodexBin, ["app-server", "--listen", "stdio://"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+    });
+    await new Promise<void>((resolve, reject) => {
+      staleChild.once("spawn", resolve);
+      staleChild.once("error", reject);
+    });
+    const stalePid = staleChild.pid!;
+    expect(stalePid).toBeGreaterThan(0);
+
+    const s = t.addSession({ pid: stalePid, status: "running" });
+    await t.driver.cleanupStale();
+
+    expect(t.store.get(s.id)!.pid).toBeNull();
+    expect(t.store.get(s.id)!.status).toBe("idle");
   });
 });

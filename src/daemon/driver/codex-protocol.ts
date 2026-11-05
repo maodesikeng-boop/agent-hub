@@ -1,7 +1,9 @@
 // OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
 // 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 记忆保护审批判定。
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
+  PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
   isProtectedMemoryPath,
   type AgentRole,
@@ -11,6 +13,24 @@ import {
   type RateLimitInfo,
   type RateLimitWindow,
 } from "../../shared/index.ts";
+
+const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
+
+/**
+ * 用 ps 检查 pid 对应的进程命令行是否为残留的 `codex app-server`。
+ * 是则返回其进程组号 pgid，否则（或进程已不存在）返回 null。
+ */
+export function codexOfSession(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], PS_OPTIONS, (error, stdout) => {
+      if (error) return resolve(null);
+      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+      if (!match) return resolve(null);
+      const command = match[2]!;
+      resolve(/codex/i.test(command) && /app-server/i.test(command) ? Number(match[1]) : null);
+    });
+  });
+}
 
 /** Codex App-Server 固定启动参数（M0 实测验证）。 */
 export const CODEX_APP_SERVER_ARGS = ["app-server", "--listen", "stdio://"] as const;
@@ -292,13 +312,17 @@ export function buildCodexToolInput(item: Record<string, unknown>): Record<strin
 }
 
 /** 将工具类 item/started 转换为 AgentToolEvent。 */
-export function parseCodexToolStarted(item: Record<string, unknown>, at: number): AgentToolEvent | null {
+export function parseCodexToolStarted(
+  item: Record<string, unknown>,
+  at: number,
+  uuid?: string,
+): AgentToolEvent | null {
   if (!isCodexToolItemType(item.type)) return null;
   const id = typeof item.id === "string" && item.id !== "" ? item.id : null;
   if (!id) return null;
   return {
     type: "agent.tool",
-    uuid: id,
+    uuid: uuid ?? id,
     toolUseId: id,
     name: item.type,
     input: buildCodexToolInput(item),
