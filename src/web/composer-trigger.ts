@@ -2,6 +2,8 @@
 // 规则参考 t3code 的 composerTrigger.ts：“/” 只认整条消息开头，带第二个 “/” 的是路径（/usr/bin）；
 // “@” 必须在开头或空白后（a@b.com 是邮箱）。网页不认识具体厂商，要插入什么文字由后台给。
 
+import type { ComposerCommand } from "../shared/index.ts";
+
 export type ComposerTriggerKind = "command" | "file";
 
 export interface ComposerTrigger {
@@ -11,12 +13,6 @@ export interface ComposerTrigger {
   /** 选中后要替换的那一段文字：[start, end)，从触发符号开始，到这个词的末尾（光标后面的半个词也算）。 */
   start: number;
   end: number;
-}
-
-export interface CommandInfo {
-  name: string;
-  description: string;
-  argumentHint?: string;
 }
 
 const isSpace = (char: string | undefined): boolean => char === " " || char === "\n" || char === "\t" || char === "\r";
@@ -62,10 +58,10 @@ export function insertSelection(text: string, trigger: Pick<ComposerTrigger, "st
 }
 
 /** 按输入筛选命令：名字开头命中的排最前，其次名字里有，最后说明里有；同一档保持后台给的顺序。不区分大小写。 */
-export function rankCommands(commands: CommandInfo[], query: string): CommandInfo[] {
+export function rankCommands(commands: ComposerCommand[], query: string): ComposerCommand[] {
   const q = query.trim().toLowerCase();
   if (q === "") return commands;
-  const ranked: { command: CommandInfo; rank: number }[] = [];
+  const ranked: { command: ComposerCommand; rank: number }[] = [];
   for (const command of commands) {
     const name = command.name.toLowerCase();
     const rank = name.startsWith(q) ? 0 : name.includes(q) ? 1 : command.description.toLowerCase().includes(q) ? 2 : -1;

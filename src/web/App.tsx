@@ -145,6 +145,10 @@ export function App() {
   const send = (id: ConversationId, text: string, files: File[]) => {
     // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
     // 传失败了什么都不清（文字和文件都留着）
+    // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
+    if (files.length === 0 && text.startsWith("/")) {
+      return hub.sendChecked(id, text).then(() => setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d)));
+    }
     if (files.length === 0) {
       setDraft(id, "");
       hub.send(id, text);

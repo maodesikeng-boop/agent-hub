@@ -1,6 +1,6 @@
 // 把接口、WebSocket 和 state.ts 接起来：先拉快照，再按 seq 接着收变化；收到 resync 重新拉。
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type MessageId } from "../shared/index.ts";
+import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type MessageId, userMessageDedupeKey } from "../shared/index.ts";
 import { ApiError, fetchOlderMessages, fetchState, postMessage, postRetryMessage, postStop } from "./client.ts";
 import { openChangeStream, type ConnectionStatus } from "./connection.ts";
 import { newClientId } from "./format.ts";
@@ -134,6 +134,29 @@ export function useHub() {
   const send = useCallback((conversationId: ConversationId, text: string) => post(conversationId, text, []), [post]);
 
   /**
+   * 先发、等接口回应再显示（以 / 开头的消息：手打的命令可能被拦）：被拦（400，Error.message 是原因）reject，什么都没留下，
+   * 输入框那边显示原因、原文不动；发出去了就显示成排队中；网络、服务出错和普通消息一样变成可重试的待发消息。
+   */
+  const sendChecked = useCallback(
+    async (conversationId: ConversationId, text: string) => {
+      const clientId = newClientId();
+      const pending = { clientId, conversationId, text, attachments: [], createdAt: Date.now() };
+      try {
+        await postMessage(conversationId, { clientId, text });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 400) throw new Error(err.message);
+        if (alive.current) dispatch({ type: "pendingAdd", pending: { ...pending, phase: "failed" } });
+        return;
+      }
+      // 服务端的推送可能比 POST 的回应先到：消息已经在列表里了就不再加临时消息
+      const key = userMessageDedupeKey(conversationId, clientId);
+      const arrived = stateRef.current.conversations[conversationId]?.messages.some((m) => m.sender === "user" && m.dedupeKey === key);
+      if (alive.current && !arrived) dispatch({ type: "pendingAdd", pending: { ...pending, phase: "sending" } });
+    },
+    [],
+  );
+
+  /**
    * 带文件发：先把文件都传上去，都传好了才发消息；传失败 reject（Error.message 是中文），这时什么消息都没发出去。
    * 传的时候不显示临时消息（输入框那边显示“发送中”）。
    */
@@ -185,5 +208,5 @@ export function useHub() {
     }
   }, []);
 
-  return { state, reload: loadState, send, sendWithFiles, retrySend, retryMessage, stop, loadOlder };
+  return { state, reload: loadState, send, sendChecked, sendWithFiles, retrySend, retryMessage, stop, loadOlder };
 }

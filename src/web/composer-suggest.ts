@@ -3,23 +3,17 @@
 // 命令列表和要插入的文字都由后台给（GET /api/conversations/:id/commands 和 files?q=）。
 // 拿不到列表（后台问不到、请求失败）一律不弹、不报错，输入框照常能发。
 import { useEffect, useMemo, useState } from "react";
+import { API_PATHS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
-import { type CommandInfo, type ComposerTrigger, detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { type ComposerTrigger, detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
 
 /** 接着打字，等这么久没再打才去后台搜文件。 */
 export const FILE_SEARCH_DEBOUNCE_MS = 120;
 
-export interface ComposerFileEntry {
-  path: string;
-  root: string;
-  /** 选中后插进输入框的文字，网页不自己拼 @。 */
-  insert: string;
-}
-
 /** 列表数据从哪来。按对话取：conversationSource(id)。 */
 export interface ComposerSource {
-  commands: (signal: AbortSignal) => Promise<CommandInfo[]>;
-  files: (query: string, signal: AbortSignal) => Promise<{ entries: ComposerFileEntry[]; truncated: boolean }>;
+  commands: (signal: AbortSignal) => Promise<ComposerCommand[]>;
+  files: (query: string, signal: AbortSignal) => Promise<FilesResponse>;
 }
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
@@ -29,10 +23,9 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
 }
 
 export function conversationSource(conversationId: number): ComposerSource {
-  const base = `/api/conversations/${conversationId}`;
   return {
-    commands: async (signal) => (await getJson<{ commands: CommandInfo[] }>(`${base}/commands`, signal)).commands,
-    files: (query, signal) => getJson(`${base}/files?q=${encodeURIComponent(query)}`, signal),
+    commands: async (signal) => (await getJson<CommandsResponse>(API_PATHS.commands(conversationId), signal)).commands,
+    files: (query, signal) => getJson<FilesResponse>(API_PATHS.files(conversationId, query), signal),
   };
 }
 
@@ -53,10 +46,10 @@ export interface MenuState {
   activeIndex: number;
 }
 
-const commandItems = (commands: CommandInfo[]): MenuItem[] =>
+const commandItems = (commands: ComposerCommand[]): MenuItem[] =>
   commands.map((c) => ({ id: `command:${c.name}`, label: `/${c.name}`, detail: c.description, insert: `/${c.name}` }));
 
-const fileItems = (entries: ComposerFileEntry[]): MenuItem[] =>
+const fileItems = (entries: FileEntry[]): MenuItem[] =>
   entries.map((e) => {
     const { name, dir } = splitPath(e.path);
     return { id: `file:${e.root}:${e.path}`, label: name, detail: dir, insert: e.insert };
@@ -99,7 +92,7 @@ export function useComposerSuggest({
   }, [detected]);
 
   // 命令列表：每次在开头打 / 都重新问一次（列表会变），拿到之前沿用上一份；问不到就当没有
-  const [commands, setCommands] = useState<{ source: ComposerSource; list: CommandInfo[] } | null>(null);
+  const [commands, setCommands] = useState<{ source: ComposerSource; list: ComposerCommand[] } | null>(null);
   const commandOpen = trigger?.kind === "command";
   useEffect(() => {
     if (!commandOpen || source === undefined) return;
@@ -116,7 +109,7 @@ export function useComposerSuggest({
   }, [commandOpen, source]);
 
   // 文件：等 120ms 没再打字才发；再打字时旧请求作废，后发先回也不会把旧结果显示出来
-  const [files, setFiles] = useState<{ source: ComposerSource; query: string; entries: ComposerFileEntry[] } | null>(null);
+  const [files, setFiles] = useState<{ source: ComposerSource; query: string; entries: FileEntry[] } | null>(null);
   const fileQuery = trigger?.kind === "file" ? trigger.query : null;
   useEffect(() => {
     if (fileQuery === null || source === undefined) {
