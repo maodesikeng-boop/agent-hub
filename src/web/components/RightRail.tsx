@@ -31,7 +31,7 @@ const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(wo
 export const RIGHT_RAIL_ID = "right-rail";
 
 /**
- * 右栏的字号（第 12 条）：组标题 / 状态词 / Show more 13px，行的名字 14px，第二行 12px。图标 16px 线条（stroke 1.5）。
+ * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“已收工 N ›” 14px，第二行 13px（行高 18px）。图标 16px 线条（stroke 1.5）。
  * 行：左右 8px 内边距、负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 32px。
  */
 const ROW = "flex w-[calc(100%+1rem)] cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
@@ -74,10 +74,11 @@ function useCollapsedGroups() {
 /**
  * 组标题：整行是一个按钮（aria-expanded），点一下收起或展开这一组，标题后面一个小三角（展开朝下、收起朝右，照 Claude 右栏的 “Context ▸”）。
  * 收起时标题后面带这一组的个数（12px），还有几条没处理看得出来。和整栏的开关（RightRailToggle）是两回事。
+ * trailing：同一行右边放的东西（并排的右栏里第一组放整栏的开关，这样顶上不多占一行）。
  */
-function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = false }: { id: string; bodyId: string; children: React.ReactNode; count: number; collapsed: boolean; onToggle: () => void; dot?: boolean }) {
-  return (
-    <h2 id={id} className="h-8 text-[13px] font-normal text-foreground">
+function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = false, trailing }: { id: string; bodyId: string; children: React.ReactNode; count: number; collapsed: boolean; onToggle: () => void; dot?: boolean; trailing?: React.ReactNode }) {
+  const title = (
+    <h2 id={id} className={cn("h-8 text-[13px] font-normal text-foreground", trailing && "min-w-0 flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
@@ -92,6 +93,14 @@ function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = fa
       </button>
     </h2>
   );
+  if (!trailing) return title;
+  return (
+    <div className="flex items-center gap-2">
+      {title}
+      {/* 开关的图标和收起时在顶栏右边的位置一样（右边 12px），点开关时不跳 */}
+      <div className="-mr-2 shrink-0">{trailing}</div>
+    </div>
+  );
 }
 
 /** 一组的内容：收起时只剩标题。高度用网格行 0fr↔1fr 过渡（很短，不跳；减弱动效时关掉）；收起后 inert + aria-hidden，键盘和读屏都够不着。 */
@@ -104,7 +113,8 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
       inert={collapsed}
       className={cn("grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none", collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]")}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      {/* 高度过渡要 overflow-hidden；行向两边伸出 8px（ROW 的 -mx-2），键盘聚焦圈再 2px，所以这层也向两边多留 12px（-mx-3 px-3），圆角和圈才不会被剪成方的 */}
+      <div className="-mx-3 min-h-0 overflow-hidden px-3">{children}</div>
     </div>
   );
 }
@@ -112,7 +122,7 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
 /** “Show more / Show less”，“已收工 N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 items-center text-[13px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 items-center text-[14px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );
@@ -170,7 +180,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
           <span className="min-w-0 truncate text-[14px] leading-5">{worker.title}</span>
           <span className={cn("shrink-0 text-[13px]", busy ? "text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
         </span>
-        <span data-testid="worker-meta" className="flex items-baseline gap-3 text-xs leading-4 text-muted-foreground">
+        <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
           {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
           {worker.effort && <span className="shrink-0">{effortLabel(worker.effort)}</span>}
           {(context !== NO_DATA || (worker.vendor === undefined && !worker.effort)) && (
@@ -184,7 +194,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   );
 }
 
-/** 右栏开关：ghost 图标按钮，右栏展开时在右栏顶部，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
+/** 右栏开关：ghost 图标按钮，右栏展开时在右栏第一组标题的同一行右边，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
 export function RightRailToggle({ visible, open, attention, onToggle }: { visible: boolean; open: boolean; attention: boolean; onToggle: () => void }) {
   if (!visible) return null;
   return (
@@ -252,7 +262,7 @@ function EndedWorkers({ workers, openWorkerId, onOpenWorker }: { workers: Worker
 /**
  * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：只有两组，“等你确定”（这个项目经理还没回答的 hub ask）和 Worker
  * （它派的：在忙的排前面，最多列 3 条，多了 Show more；收工的收成最下面一行）。组之间一条细分隔线。layout：side 是和对话并排的一栏
- * （推开对话），顶上放右栏开关（toggle）；top 是太窄时顶栏下面的一块，开关留在顶栏。
+ * （推开对话），右栏开关（toggle）放在第一组标题的同一行右边，内容从最顶上开始；top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
 export function RightRail({
   asks,
@@ -297,11 +307,10 @@ export function RightRail({
       aria-label="右栏"
       className={cn("flex shrink-0 flex-col bg-background", side ? "w-[320px] border-l border-border" : "max-h-[40dvh] border-b border-border")}
     >
-      {side && <div className="flex h-16 shrink-0 items-center justify-end px-3">{toggle}</div>}
       <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-y-auto px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
           <section aria-labelledby="rail-asks" className="py-3">
-            <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot>
+            <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot trailing={side ? toggle : undefined}>
               等你确定
             </GroupTitle>
             <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
@@ -316,7 +325,7 @@ export function RightRail({
         )}
         {workers.length > 0 && (
           <section aria-labelledby="rail-workers" className="py-3">
-            <GroupTitle id="rail-workers" bodyId="rail-workers-body" count={live.length} collapsed={groups.collapsed.workers === true} onToggle={() => groups.toggle("workers")}>
+            <GroupTitle id="rail-workers" bodyId="rail-workers-body" count={live.length} collapsed={groups.collapsed.workers === true} onToggle={() => groups.toggle("workers")} trailing={side && asks.length === 0 ? toggle : undefined}>
               Worker
             </GroupTitle>
             <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>

@@ -1,11 +1,11 @@
 // 输入框、多行输入、下拉（docs/ui-standard.md 第 6、7 条）：高 36px（h-9）、rounded-xl、15px 字、白底细边框；
-// 聚焦只把边框加深（border-foreground/25，和聊天输入框一样），不用主色、不加光圈；不合规（aria-invalid）是红边框。
+// 聚焦时样子不变（边框不加深、不加光圈），靠光标表示；不合规（aria-invalid）是红边框。
 import { ChevronDown, ChevronsUpDown } from "lucide-react";
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
 const FIELD =
-  "w-full rounded-xl border border-border bg-background px-3 text-[15px] outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-foreground/25 aria-invalid:border-danger disabled:cursor-default disabled:opacity-50";
+  "w-full rounded-xl border border-border bg-background px-3 text-[15px] outline-none transition-colors placeholder:text-muted-foreground aria-invalid:border-danger disabled:cursor-default disabled:opacity-50";
 
 export function Input({ className, ...props }: React.ComponentProps<"input">) {
   return <input data-slot="input" className={cn(FIELD, "h-9", className)} {...props} />;

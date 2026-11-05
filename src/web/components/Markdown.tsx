@@ -2,6 +2,8 @@ import { Check, Copy } from "lucide-react";
 import { Children, createContext, isValidElement, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
+import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough/parseOnly";
 import remarkGfm from "remark-gfm";
 import {
   SENT_FILE_REASONS,
@@ -274,12 +276,13 @@ const NO_FILES: SentFile[] = [];
 
 /**
  * agent 消息的 Markdown。不加 rehype-raw：消息里的原始 HTML 不会变成元素，当字面文字显示；
+ * 中文旁边的 **、*、~~：CommonMark 在收尾符号前是标点（。）、后面紧跟汉字时认不出收尾，用 remark-cjk-friendly 修（顺序：必须在 remarkGfm 之后）。
  * 链接地址由 react-markdown 默认的过滤处理（javascript: 之类不会带 href）。
  * files：这条消息的 meta.files（agent 发来的文件），对上的图片内联、链接换成文件卡片；老消息没有，照原样显示。
  * messageId：这条消息的编号，预览窗用它找文件做“在 Finder 中显示”；预览窗里渲染 .md 文件时不带（没有这两个按钮的对象）。
  */
 export function Markdown({ text, files = NO_FILES, messageId }: { text: string; files?: SentFile[]; messageId?: number }) {
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkBreaks, remarkSentFiles(files)], [files]);
+  const remarkPlugins = useMemo(() => [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkSentFiles(files)], [files]);
   const context = useMemo(() => ({ files, messageId }), [files, messageId]);
   return (
     <SentFilesContext value={context}>

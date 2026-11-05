@@ -56,6 +56,8 @@ export function App() {
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
   const [compactRailOpen, setCompactRailOpen] = useState(false);
+  /** 手动打开右栏看已收工的 Worker 时，是哪个项目经理（没有要关心的事时右栏默认不出来）。 */
+  const [railPeek, setRailPeek] = useState<PmId | null>(null);
   const narrow = useMediaQuery(NARROW_QUERY);
   const compact = useMediaQuery(COMPACT_QUERY);
   /** 右栏点开一个提问：对话滚到那条消息。n 每点一次加一，点同一条也再跳一次。 */
@@ -170,15 +172,20 @@ export function App() {
   const railWorkers = railPm === null ? [] : workersOf(state, railPm);
   const railAsks = active ? pendingAsks(state, active.id) : [];
   const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0);
-  const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed);
+  // 有要关心的事才自动出来：有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
+  const railNeedsYou = !profile && (railAsks.length > 0 || railWorkers.some((w) => !w.ended));
+  const railPeeking = railPeek !== null && railPeek === railPm;
+  const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed && (railNeedsYou || railPeeking));
   const toggleRail = () => {
     if (compact) {
       setCompactRailOpen((v) => !v);
       return;
     }
-    const closed = !railClosed;
+    const closed = railOpen;
     setRailClosed(closed);
     saveRailClosed(closed);
+    // 手动打开、而又没有要关心的事：记下来，右栏才不会马上又收回去（只在这个项目经理、这次打开期间）
+    setRailPeek(closed || railNeedsYou ? null : railPm);
   };
   const openAsk = (messageId: MessageId) => {
     if (active && openWorker !== null) navigate({ view: "conversation", id: active.id });

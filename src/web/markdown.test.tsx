@@ -23,6 +23,27 @@ describe("agent 消息的 Markdown", () => {
     expect(document.body).not.toHaveTextContent("**");
   });
 
+  describe("中文旁边的加粗、斜体、删除线（CommonMark 在中文里认不出收尾的符号，用 remark-cjk-friendly 修）", () => {
+    it.each([
+      ["**中文。**中文", "STRONG", "中文。"],
+      ["**中文**中文", "STRONG", "中文"],
+      ["中文**加粗**中文", "STRONG", "加粗"],
+      ["**切回对话的 bug 修好了（#81）。**原因跟我猜的一样", "STRONG", "切回对话的 bug 修好了（#81）。"],
+      ["他说**“你好”**然后走了", "STRONG", "“你好”"],
+      ["中文*斜体。*中文", "EM", "斜体。"],
+      ["中文~~删除。~~中文", "DEL", "删除。"],
+      ["英文 **bold** text", "STRONG", "bold"],
+      ["English *italic* text", "EM", "italic"],
+      ["English ~~gone~~ text", "DEL", "gone"],
+    ])("%j", (text, tag, inner) => {
+      const { container } = agentSays(text);
+      const el = container.querySelector(tag.toLowerCase());
+      expect(el).not.toBeNull();
+      expect(el).toHaveTextContent(inner);
+      expect(container).not.toHaveTextContent(/\*|~~/);
+    });
+  });
+
   it("列表渲染成 list / listitem", () => {
     agentSays("步骤：\n\n- 先读\n- 再改\n\n1. 跑测试\n2. 提 PR");
     const lists = screen.getAllByRole("list");

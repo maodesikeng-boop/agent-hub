@@ -8,7 +8,7 @@ import { Input, Select, Textarea } from "./input.tsx";
 const classOf = (el: HTMLElement) => el.className.split(/\s+/);
 
 describe("界面标准：共用组件", () => {
-  it("输入框、多行输入、下拉：聚焦只加深边框（中性），没有主色、没有光圈；圆角 rounded-xl；输入框和下拉高 36px", () => {
+  it("输入框、多行输入、下拉：聚焦时样子不变（边框不加深、没有光圈），靠光标表示；圆角 rounded-xl；输入框和下拉高 36px", () => {
     render(
       <>
         <Input aria-label="输入框" />
@@ -20,9 +20,8 @@ describe("界面标准：共用组件", () => {
     );
     for (const el of [screen.getByRole("textbox", { name: "输入框" }), screen.getByRole("textbox", { name: "多行" }), screen.getByRole("combobox", { name: "下拉" })]) {
       const cls = classOf(el);
-      expect(cls).toContain("focus-visible:border-foreground/25");
       expect(cls).toContain("rounded-xl");
-      expect(el.className).not.toMatch(/primary|focus-visible:ring/);
+      expect(el.className).not.toMatch(/primary|focus|ring/);
     }
     expect(classOf(screen.getByRole("textbox", { name: "输入框" }))).toContain("h-9");
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");

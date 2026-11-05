@@ -52,11 +52,10 @@ describe("Composer 布局", () => {
     expect(box).toHaveClass("px-5");
   });
 
-  it("获得焦点时外框不带粉色（primary / ring）", () => {
+  it("获得焦点时外框不变（边框颜色、粗细都不变，也不带粉色），靠光标表示", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
-    expect(frame.className).toContain("focus-within:border-foreground");
-    expect(frame.className).not.toMatch(/(primary|ring)/);
+    expect(frame.className).not.toMatch(/(focus|primary|ring)/);
     expect(screen.getByRole("textbox", { name: "输入消息" }).className).not.toMatch(/(primary|ring)/);
   });
 
