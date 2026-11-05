@@ -291,6 +291,8 @@ export class FakeLedger {
     return {
       postUserMessage: (i) => this.postUserMessage(i),
       requestStop: (c) => this.requestStop(c),
+      // 输入框的 commands、files 接口走 UiServerOptions.composer（daemon/composer.ts），界面服务自己不调
+      composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),
       messagesBefore: (c, b) => this.messagesBefore(c, b),
       changesSince: (s) => this.changesSince(s),

@@ -18,9 +18,21 @@ import type {
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
  * 但按 JS 行终止符切行的读法（如 node:readline）会在这里断开，所以再转义成 \u2028、\u2029。
+ * prefixes 是我们加的字（说明、标签），text 是用户原文；content 怎么拼由 claude 的厂商实现定（每项一个 text 块，原文放最后一块）。
  */
-export function buildUserLine(text: string): string {
-  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }));
+export function buildUserLine(text: string, prefixes: readonly string[] = []): string {
+  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: userContent(prefixes, text) } }));
+}
+
+/**
+ * 一条用户消息的 content（vendors/claude.ts 的 buildUserContent 就是它）：我们加的字每项一个 text 块在前，用户原文单独放最后一块。
+ * claude 只看最后一个 text 块是不是以 / 开头，前面的块模型照样看得到（docs/composer-commands.md 的 T4）。
+ * 空白的块不放（API 不收空的 text 块）；全是空白时留一块，写入前的校验会按“文字是空的”拒绝。
+ */
+export function userContent(prefixes: readonly string[], text: string): Array<{ type: "text"; text: string }> {
+  const blocks = prefixes.filter((p) => p.trim() !== "");
+  if (text.trim() !== "" || blocks.length === 0) blocks.push(text);
+  return blocks.map((t) => ({ type: "text", text: t }));
 }
 
 function escapeLineSeparators(json: string): string {
@@ -75,10 +87,14 @@ export const MODEL_QUERY_ARGS: readonly string[] = [
   "--no-session-persistence",
 ];
 
-/** 忙时用户连发的几条拼成一条（设计第 7.3 节）。 */
-export function mergeUserTexts(texts: string[]): string {
-  if (texts.length === 1) return texts[0]!;
-  return [`【用户连发了 ${texts.length} 条】`, ...texts.map((t, i) => `${i + 1}. ${t}`)].join("\n");
+/**
+ * 忙时用户连发的几条拼成一条（设计第 7.3 节）：“【用户连发了 N 条】”和每条（带编号）各一个 text 块，最后一条放 text。
+ * 以命令开头的不拼（驱动层的 #takeBatch 挑），所以这里不用管命令。只有一条时原样。
+ */
+export function mergeUserTexts(texts: string[]): { prefixes: string[]; text: string } {
+  if (texts.length === 1) return { prefixes: [], text: texts[0]! };
+  const items = texts.map((t, i) => `${i + 1}. ${t}`);
+  return { prefixes: [`【用户连发了 ${texts.length} 条】`, ...items.slice(0, -1)], text: items.at(-1)! };
 }
 
 /** 去重用的 uuid：原始事件有就照抄，没有就 `line:<原始那一行的 sha256 前 32 位>`（driver.ts 的约定）。 */

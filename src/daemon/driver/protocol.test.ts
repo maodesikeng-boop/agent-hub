@@ -55,10 +55,28 @@ describe("写进标准输入的一行", () => {
 
 describe("忙时连发的用户消息", () => {
   it("一条不拼", () => {
-    expect(mergeUserTexts(["只有一条"])).toBe("只有一条");
+    expect(mergeUserTexts(["只有一条"])).toEqual({ prefixes: [], text: "只有一条" });
   });
-  it("几条拼成一条，开头写“【用户连发了 N 条】”，每条编号", () => {
-    expect(mergeUserTexts(["一", "二", "三"])).toBe("【用户连发了 3 条】\n1. 一\n2. 二\n3. 三");
+  it("几条拼成一条：“【用户连发了 N 条】”和每条（带编号）各一块，最后一条放 text", () => {
+    expect(mergeUserTexts(["一", "二", "三"])).toEqual({ prefixes: ["【用户连发了 3 条】", "1. 一", "2. 二"], text: "3. 三" });
+  });
+});
+
+describe("我们加的字和用户原文分块（docs/composer-commands.md 的 T4）", () => {
+  it("加的字每项一个 text 块在前，原文单独放最后一块，原文以 / 开头不变", () => {
+    const line = buildUserLine("/x 参数", ["【系统】重发说明", "【用户直接对你说】"]);
+    expect(JSON.parse(line).message.content).toEqual([
+      { type: "text", text: "【系统】重发说明" },
+      { type: "text", text: "【用户直接对你说】" },
+      { type: "text", text: "/x 参数" },
+    ]);
+    expect(checkUserLine(line)).toBeNull();
+  });
+
+  it("空白的块不放（API 不收空的 text 块）；全是空白时按“文字是空的”拒绝", () => {
+    expect(JSON.parse(buildUserLine("hi", ["", "  "])).message.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(JSON.parse(buildUserLine(" ", ["标签"])).message.content).toEqual([{ type: "text", text: "标签" }]);
+    expect(checkUserLine(buildUserLine("", [""]))).toMatch(/空/);
   });
 });
 

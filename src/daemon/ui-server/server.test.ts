@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ConversationNotFoundError,
   LEDGER_ERROR_CODES,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
@@ -1584,6 +1585,69 @@ describe("GET /api/models（模型名单）", () => {
 
   it("要登录", async () => {
     expect((await call("GET", "/api/models", { cookie: null })).statusCode).toBe(401);
+  });
+});
+
+describe("GET /api/conversations/:id/commands、files（输入框的“/”“@”列表）", () => {
+  const withComposer = async (fn: (get: (url: string) => ReturnType<typeof call>) => Promise<void>) => {
+    const calls: unknown[][] = [];
+    const other = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      composer: {
+        commands: async (id) => {
+          calls.push(["commands", id]);
+          if (id === 404) throw new ConversationNotFoundError(id);
+          return { commands: [{ name: "compact", description: "Free up context" }] };
+        },
+        files: async (id, q) => {
+          calls.push(["files", id, q]);
+          return { entries: [{ path: "a b.md", root: "/repo", insert: '@"a b.md"' }], truncated: false };
+        },
+      },
+    });
+    try {
+      await fn((url) => other.inject({ method: "GET", url, headers: { host: HOST, cookie: COOKIE } }));
+    } finally {
+      await other.close();
+    }
+    return calls;
+  };
+
+  it("交给 composer，原样回；q 解码后传过去，没给是空串", async () => {
+    const calls = await withComposer(async (get) => {
+      expect((await get("/api/conversations/3/commands")).json()).toEqual({ commands: [{ name: "compact", description: "Free up context" }] });
+      const files = await get("/api/conversations/3/files?q=a%20b");
+      expect(files.statusCode).toBe(200);
+      expect(files.json()).toEqual({ entries: [{ path: "a b.md", root: "/repo", insert: '@"a b.md"' }], truncated: false });
+      await get("/api/conversations/3/files");
+    });
+    expect(calls).toEqual([["commands", 3], ["files", 3, "a b"], ["files", 3, ""]]);
+  });
+
+  it("对话不存在 404；编号不对 400", async () => {
+    await withComposer(async (get) => {
+      expect((await get("/api/conversations/404/commands")).statusCode).toBe(404);
+      expect((await get("/api/conversations/abc/files?q=x")).statusCode).toBe(400);
+    });
+  });
+
+  it("没接 composer：空列表；要登录", async () => {
+    expect((await call("GET", "/api/conversations/1/commands")).json()).toEqual({ commands: [] });
+    expect((await call("GET", "/api/conversations/1/files?q=x")).json()).toEqual({ entries: [], truncated: false });
+    expect((await call("GET", "/api/conversations/1/commands", { cookie: null })).statusCode).toBe(401);
+    expect((await call("GET", "/api/conversations/1/files", { cookie: null })).statusCode).toBe(401);
+  });
+
+  it("发消息被账本拦下（手打 /clear）：400，error 是原因", async () => {
+    ledger.failWith = new LedgerRequestError("invalid", "/clear：会话由 agent-hub 管");
+    const res = await call("POST", "/api/conversations/1/messages", { body: { clientId: "c", text: "/clear" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "/clear：会话由 agent-hub 管", code: "invalid" });
   });
 });
 

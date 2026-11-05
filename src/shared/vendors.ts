@@ -19,6 +19,33 @@ export interface VendorSpec {
   /** 思考程度，原样传给 effortFlag。 */
   efforts: readonly string[];
   flags: { model: string; effort: string };
+  /** 输入框的命令（纯数据；用它的代码在 daemon/vendors/）。 */
+  composer: ComposerSpec;
+}
+
+/**
+ * 输入框里“/”命令的厂商数据（docs/composer-commands.md 实测）。怎么问命令列表、`@` 文件怎么写、怎么拼写进 agent 的内容
+ * 这些要写代码的，在 daemon/vendors/<厂商>.ts。
+ */
+export interface ComposerSpec {
+  /** 命令的开头：用户原文以它开头（前面不能有空格）才算命令。 */
+  commandPrefix: string;
+  /**
+   * 隐藏的命令（不带开头的 /，别名也要写上）→ 用户手打时拦下、告诉用户的原因。这些不进列表，手打的也不发给 agent：
+   * 会打乱 hub 管着的会话（换会话 ID）、和资料页的设置打架、或者只能在终端界面里用。
+   */
+  blockedCommands: Readonly<Record<string, string>>;
+}
+
+// claude 的隐藏命令：按“为什么拦”分组，原因是给用户看的一句（docs/composer-commands.md 的 T1、T2、T7）
+const CLAUDE_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请用资料页的“开新会话”按钮";
+const CLAUDE_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
+const CLAUDE_SETTINGS_BLOCKED = "这个命令会改 claude 自己的设置，这里不能用；要改请在终端里打开 claude";
+const CLAUDE_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 claude";
+const CLAUDE_TERMINAL_BLOCKED = "这个命令只能在终端界面里用";
+
+function blocked(reason: string, names: readonly string[]): Record<string, string> {
+  return Object.fromEntries(names.map((name) => [name, reason]));
 }
 
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
@@ -34,6 +61,31 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
     flags: { model: "--model", effort: "--effort" },
+    composer: {
+      commandPrefix: "/",
+      blockedCommands: {
+        // /clear 会换会话 ID，我们 --resume 的还是旧的（T7）
+        ...blocked(CLAUDE_SESSION_BLOCKED, ["clear", "reset", "new", "resume", "exit", "quit", "rename", "name"]),
+        ...blocked(CLAUDE_MODEL_BLOCKED, ["model", "effort", "fast", "advisor"]),
+        ...blocked(CLAUDE_SETTINGS_BLOCKED, [
+          "config",
+          "settings",
+          "output-style",
+          "autocompact",
+          "mcp",
+          "agents",
+          "auto-mode-setup",
+          "import",
+          "debug",
+          "goal",
+          "__remote-workflow",
+          "workflow-launch-exec",
+        ]),
+        ...blocked(CLAUDE_ACCOUNT_BLOCKED, ["login", "logout", "usage-credits", "extra-usage", "design-consent", "design-revoke"]),
+        // system/init 的 terminal_slash_commands 标出来的四个，加上 heapdump（往桌面写文件）
+        ...blocked(CLAUDE_TERMINAL_BLOCKED, ["doctor", "checkup", "color", "focus", "reload-plugins", "heapdump"]),
+      },
+    },
   },
 };
 

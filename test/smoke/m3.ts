@@ -303,7 +303,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       );
       expect(reports[1]!.event === "report", `第二轮不是汇报：${JSON.stringify(reports[1])}`);
       const written = smoke.writtenTexts(workerSession);
-      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n${said}`)), `Worker 收到的不带标签：${JSON.stringify(written.slice(-2))}`);
+      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n\n${said}`)), `Worker 收到的不带标签：${JSON.stringify(written.slice(-2))}`);
       const readme = git(worker!.worktree_path!, "show", "HEAD:README.md");
       expect(readme.includes("direct-from-user"), `Worker 没照用户说的改 README：${readme}`);
       const status = smoke.query<{ status: string }>("SELECT status FROM messages WHERE id = ?", messageId)[0]?.status;

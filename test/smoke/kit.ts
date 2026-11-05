@@ -165,13 +165,16 @@ export class Smoke {
       });
   }
 
-  /** 我们写给 claude 的用户消息（--replay-user-messages 回显的那些）的文字。 */
+  /**
+   * 我们写给 claude 的用户消息（--replay-user-messages 回显的那些）的文字：几个 text 块之间空一行连起来
+   * （我们加的字各占一块，原文放最后一块）。被当命令展开的消息没有回显，不在这里。
+   */
   writtenTexts(sessionId: number): string[] {
     return this.sessionLog(sessionId)
       .filter((e) => e.isReplay === true)
       .map((e) => {
         const content = e.message?.content;
-        return Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? "").join("") : String(content ?? "");
+        return Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? "").join("\n\n") : String(content ?? "");
       });
   }
 

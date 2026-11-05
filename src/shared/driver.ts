@@ -1,4 +1,5 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
+import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -16,6 +17,13 @@ export interface DriverSendInput {
    * 自己在开头带 `【…】` 标签（如“【Worker #12 · 修 X 的汇报】”）；驱动层加的恢复说明、重发说明都以 `【系统】` 开头。
    */
   text: string;
+  /**
+   * 调用方加在 text 前面的标签（如 Worker 对话里的“【用户直接对你说】”），不给就是没有。
+   * 写进去的格式（docs/composer-commands.md 的 T4）：我们加的字（恢复、重启、重发说明，这些标签，“【用户连发了 N 条】”）
+   * 每项一个 text 块放在前面，用户原文单独放最后一块，这样以 / 开头的原文照样被 agent 当命令展开。
+   * 以命令开头的消息（厂商的 isCommand）不和别的用户消息拼在一起，单独写一行。
+   */
+  prefixes?: string[];
   /** 重启后重发（SessionSendParams.resend）：前面加 RESEND_NOTE。 */
   resend?: boolean;
   /**
@@ -70,6 +78,28 @@ export interface DriverEventBase {
  * 账本不依赖“写库”和“发事件”这两步的先后顺序：每处理一个事件都按那一行重新算出会话状态，
  * 和上次推给网页的比，变了就推，不会漏推。先发事件后写库时，新状态在下一个事件时推出去。
  */
+
+/**
+ * agent 的命令列表变了（claude 的 system/commands_changed，带完整名单）：已经换成通用形状，没去掉隐藏的。
+ * 账本不管它；命令列表的缓存（daemon/commands-catalog.ts）用它更新。
+ */
+export interface CommandsChangedEvent extends DriverEventBase {
+  type: "commands.changed";
+  commands: ComposerCommand[];
+}
+
+/**
+ * 上下文压缩完了（claude 的 system/compact_boundary：用户发了 /compact，或者 claude 自动压缩）。
+ * 账本在对话里记一条“已压缩上下文”的系统消息；这一轮照常以 turn.ended 结束（/compact 没有文字回复）。
+ */
+export interface ContextCompactedEvent extends DriverEventBase {
+  type: "context.compacted";
+  uuid: string;
+  /** manual：用户发的 /compact；auto：claude 自己压缩的；认不出是 null。 */
+  trigger: string | null;
+  preTokens: number | null;
+  postTokens: number | null;
+}
 
 /** 进程起来、收到第一个 system/init。resumed：这次是 --resume。model：claude 实际报回来的模型（只在这里，不写会话那一行）。 */
 export interface SessionStartedEvent extends DriverEventBase {
@@ -261,7 +291,9 @@ export type DriverEvent =
   | RateLimitEvent
   | ApiRetryEvent
   | SessionExitedEvent
-  | DriverErrorEvent;
+  | DriverErrorEvent
+  | CommandsChangedEvent
+  | ContextCompactedEvent;
 
 export type DriverEventType = DriverEvent["type"];
 
@@ -324,6 +356,12 @@ export interface Driver {
    * status 置 idle（已经是 ended 的保持 ended）。
    */
   cleanupStale(): Promise<void>;
+  /**
+   * 问正在跑的会话要命令列表（claude：往进程里再写一次 initialize 控制请求，实测约 10 毫秒，一轮进行中也行）。
+   * 不起进程：没有进程、正在退出、超时、回了错误都返回 null，调用方另起一个进程问（daemon/commands-catalog.ts）。
+   * 返回的已经换成通用形状，没去掉隐藏的。
+   */
+  queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null>;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 
@@ -361,9 +399,13 @@ export interface DriverOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
   env?: Record<string, string>;
+  /** 记日志（不进 health 的事，比如 claude 出了 conversation_reset）。默认写标准错误。 */
+  log?: (line: string) => void;
   /** 以下都有默认值，见 limits.ts；测试可以改小。 */
   idleCloseMs?: number;
   interruptGraceMs?: number;
+  /** 问正在跑的会话要命令列表最多等多久（queryCommands）。 */
+  commandsTimeoutMs?: number;
   startTimeoutMs?: number;
   shutdownGraceMs?: number;
 }

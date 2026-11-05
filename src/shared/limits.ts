@@ -140,6 +140,31 @@ export const MAX_CATALOG_DESCRIPTION_CHARS = 200;
 export const MODEL_CATALOG_FRESH_MS = 6 * 60 * 60_000;
 /** 模型名单：没问到（claude 没装、超时、报错）时，隔多久才再问。 */
 export const MODEL_CATALOG_RETRY_MS = 5 * 60_000;
+// ---- 输入框的“/”命令和“@”文件（daemon/commands-catalog.ts、daemon/workspace-files.ts）----
+
+/** 命令列表：问正在跑的会话（再发一次 initialize，实测约 10 毫秒）最多等多久，超时当问不到。 */
+export const RUNNING_COMMANDS_TIMEOUT_MS = 3_000;
+/** 命令列表：会话没在跑时另起一个 claude 问（约 0.9 秒）最多等多久。 */
+export const COMMANDS_QUERY_TIMEOUT_MS = 15_000;
+/** 命令列表：按（厂商、目录）缓存，多久算旧了，下次有人要时先给旧的、在后台再问。 */
+export const COMMANDS_FRESH_MS = 10 * 60_000;
+/** 命令列表：没问到时，隔多久才再问（这期间给空列表）。 */
+export const COMMANDS_RETRY_MS = 60_000;
+/** 命令列表最多几项；说明、参数提示最多几个字（插件命令的说明有几百字）。 */
+export const MAX_COMMANDS = 500;
+export const MAX_COMMAND_DESCRIPTION_CHARS = 200;
+export const MAX_COMMAND_HINT_CHARS = 80;
+/** “@”文件：每个文件夹最多列多少个文件，多了不再列（truncated）。 */
+export const MAX_WORKSPACE_FILES = 25_000;
+/** “@”文件：一个文件夹的文件清单缓存多久。 */
+export const WORKSPACE_FILES_FRESH_MS = 30_000;
+/** “@”文件：一次最多回几条。 */
+export const MAX_FILE_RESULTS = 50;
+/** “@”文件：搜索词最多几个字（多的截掉）。 */
+export const MAX_FILE_QUERY_CHARS = 200;
+/** “@”文件：列一个文件夹（git ls-files 或自己遍历）最多等多久。 */
+export const WORKSPACE_LIST_TIMEOUT_MS = 10_000;
+
 /** 驱动层：清理残留进程时多久看一次它还在不在。 */
 export const STALE_POLL_MS = 50;
 /** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */

@@ -35,6 +35,8 @@ import {
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
+  type CommandsResponse,
+  type FilesResponse,
   type Attachment,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -54,6 +56,7 @@ import {
   type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import type { ComposerService } from "../composer.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import { OPEN_NOT_ALLOWED_MESSAGE, OpenNotAllowed, OpenTargetMissing, performFileAction, runOpenCommand, type RunOpen } from "../open-file.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
@@ -77,6 +80,10 @@ export interface UiServerOptions {
   logger?: boolean;
   /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
   models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
+  /**
+   * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
+   */
+  composer?: ComposerService;
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript；测试里传假的。 */
   folderPicker?: FolderPicker;
   /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")；测试里换成假的，不真的打开。 */
@@ -414,6 +421,18 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       const refresh = (req.query as { refresh?: unknown }).refresh === "1";
       return { catalogs: opts.models ? await opts.models.list({ refresh }) : AGENT_VENDORS.map((v) => bundledModelCatalog(v)) };
+    });
+
+    // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表
+    routes.get("/api/conversations/:id/commands", async (req): Promise<CommandsResponse> => {
+      const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
+      return opts.composer ? opts.composer.commands(conversationId) : { commands: [] };
+    });
+
+    routes.get("/api/conversations/:id/files", async (req): Promise<FilesResponse> => {
+      const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
+      const { q } = req.query as { q?: unknown };
+      return opts.composer ? opts.composer.files(conversationId, typeof q === "string" ? q : "") : { entries: [], truncated: false };
     });
 
     routes.get("/api/conversations/:id/messages", async (req) => {
