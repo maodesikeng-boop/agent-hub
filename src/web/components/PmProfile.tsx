@@ -406,7 +406,7 @@ export function PmProfile({
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
       <div className="flex h-16 shrink-0 items-center px-6">
-        <Button variant="ghost" size="icon-sm" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
       </div>
