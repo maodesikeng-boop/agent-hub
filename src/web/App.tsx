@@ -196,7 +196,6 @@ export function App() {
         activeId={activeId}
         waiting={reminders.waiting}
         asking={reminders.asking}
-        busy={new Set(entries.filter((e) => (sessionOf(state, e.id)?.activity ?? "idle") !== "idle").map((e) => e.id))}
         notify={reminders.notify}
         quota={quotaUsage(state)}
         drawerOpen={narrow && drawerOpen}

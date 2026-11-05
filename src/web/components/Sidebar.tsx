@@ -10,15 +10,11 @@ import { Avatar } from "./Avatar.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
 import { SettingsDialog } from "./SettingsDialog.tsx";
 
-/** 左栏行右边的状态词：项目经理（或它的 Worker）在忙。英文，和右栏一样（docs/ui-standard.md 第 12、15 条）。 */
-const BUSY_TEXT = "Working…";
-
 function EntryButton({
   entry,
   active,
   waiting,
   asking,
-  busy,
   onSelect,
 }: {
   entry: ConversationEntry;
@@ -27,15 +23,11 @@ function EntryButton({
   waiting: boolean;
   /** 项目经理用 hub ask 问了用户，还没回答；比“等你”更醒目，两个都有时只显示它。 */
   asking: boolean;
-  /** 项目经理在忙（会话不是空闲）。 */
-  busy: boolean;
   onSelect: (id: number) => void;
 }) {
-  // 右边只放一个标注：等你确定 > 在忙 > 等你 > 时间
+  // 右边只放一个标注：等你确定 > 等你 > 时间（在忙不另加标记）
   const tag = asking ? (
     <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">等你确定</span>
-  ) : busy ? (
-    <span className="text-xs text-primary">{BUSY_TEXT}</span>
   ) : waiting ? (
     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你</span>
   ) : entry.lastMessage ? (
@@ -64,7 +56,6 @@ function EntryButton({
   );
 }
 
-const NONE: ReadonlySet<number> = new Set();
 const noop = () => {};
 
 /** 按项目经理的名字和项目名筛，不区分大小写，前后空格不算。 */
@@ -82,7 +73,6 @@ export function Sidebar({
   activeId,
   waiting,
   asking,
-  busy = NONE,
   notify,
   quota,
   drawerOpen = false,
@@ -97,8 +87,6 @@ export function Sidebar({
   waiting: ReadonlySet<number>;
   /** 有“等你确定”的提问没回答的对话。 */
   asking: ReadonlySet<number>;
-  /** 项目经理在忙的对话。 */
-  busy?: ReadonlySet<number>;
   notify: NotifySettings;
   quota: QuotaVendor[];
   /** 窄屏时抽屉拉出来了（宽屏不看它）。 */
@@ -155,7 +143,6 @@ export function Sidebar({
                 active={entry.id === activeId}
                 waiting={waiting.has(entry.id)}
                 asking={asking.has(entry.id)}
-                busy={busy.has(entry.id)}
                 onSelect={onSelect}
               />
             ))}

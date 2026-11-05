@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
+import { formatTime } from "./format.ts";
 import { parseRoute, routeHash } from "./route.ts";
 import {
   FakeApi,
@@ -130,13 +131,13 @@ describe("焦点", () => {
 });
 
 describe("左栏", () => {
-  it("项目经理在忙：行右边显示 Working…（主色），代替时间；空闲了变回时间", async () => {
+  it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
     const ws = await boot();
-    expect(within(row("老马")).queryByText("Working…")).not.toBeInTheDocument();
+    const time = () => within(row("老马")).getByText(formatTime(20_000));
+    expect(time()).toBeInTheDocument();
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, status: "running", activity: "working" })));
-    expect(within(row("老马")).getByText("Working…")).toHaveClass("text-primary", "text-xs");
-    push(ws, sessionChange(12, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, status: "running", activity: "idle" })));
-    expect(within(row("老马")).queryByText("Working…")).not.toBeInTheDocument();
+    expect(within(row("老马")).queryByText(/Working/)).not.toBeInTheDocument();
+    expect(time()).toBeInTheDocument();
   });
 
   it("没有消息的行：第二行留空但占位，和别的行一样高", async () => {
