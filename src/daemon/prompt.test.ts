@@ -392,7 +392,9 @@ describe("提示词：Worker（M3）", () => {
   it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事，不硬性要求 git commit", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
-    for (const word of ["AGENTS.md", "CLAUDE.md", ".claude/", "不能改", "“问题”"]) expect(WORKER_RULES).toContain(word);
+    for (const word of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/", ".gemini/", ".codex/", "不能改", "“问题”"]) {
+      expect(WORKER_RULES).toContain(word);
+    }
     expect(WORKER_RULES).toMatch(/问不了用户/);
     for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
       expect(prompt).not.toContain(gone);

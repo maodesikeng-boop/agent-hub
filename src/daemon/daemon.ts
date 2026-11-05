@@ -23,14 +23,31 @@ import {
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
-import { resolveHubPaths, workerSetupLogPath } from "../shared/paths.ts";
+import {
+  defaultAgyFallbackPaths,
+  defaultCodexFallbackPaths,
+  resolveExecutable,
+  resolveHubPaths,
+  workerSetupLogPath,
+} from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
 import { createVendorComposers } from "./vendors/index.ts";
 import { createWorkspaceFiles } from "./workspace-files.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
-import { createClaudeDriver, createModelCatalogs, queryClaudeInitialize, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
+import {
+  createAgyDriver,
+  createClaudeDriver,
+  createCodexDriver,
+  createModelCatalogs,
+  createMultiVendorDriver,
+  queryAgyModels,
+  queryClaudeInitialize,
+  queryClaudeModels,
+  queryCodexModels,
+  type ModelCatalogs,
+} from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
 import {
   createSessionEndHandler,
@@ -87,6 +104,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
+  const claudePath = paths.claudePath;
+  const agyPath = resolveExecutable(paths.agyPath, env.PATH, defaultAgyFallbackPaths(options.userHome));
+  const codexPath = resolveExecutable(paths.codexPath, env.PATH, defaultCodexFallbackPaths(options.userHome));
   const port = parsePort(env[ENV_PORT]);
 
   // 启动到哪一步，关机就关到哪一步；顺序固定：准备命令 → 执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
@@ -164,10 +184,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
-    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时问 claude，在用户主目录下起，不带任何项目的设置；
+    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；
     // 账本写系统消息时用它缓存着的显示名
     const models = createModelCatalogs({
-      queryClaude: (signal) => queryClaudeModels({ claudePath: paths.claudePath, cwd: options.userHome, signal }),
+      queryClaude: (signal) => queryClaudeModels({ claudePath, cwd: options.userHome, signal }),
+      queryAgy: (signal) => queryAgyModels({ agyPath, cwd: options.userHome, signal }),
+      queryCodex: (signal) => queryCodexModels({ codexPath, cwd: options.userHome, signal }),
       log,
     });
     parts.models = models;
@@ -189,27 +211,33 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const agentApi = await startAgentApi({ ledger, tokens, runDir: paths.runDir, hubSock: paths.hubSock, log });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
-    const driver = createClaudeDriver({
-      claudePath: paths.claudePath,
-      sessionLogsDir: paths.sessionLogsDir,
+    const prepareLaunch = createLaunchPreparer({
+      launchDir: paths.launchDir,
+      stateDir,
+      worktreesDir,
+      getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
+      tokens: endedOnRevokedTokens(tokens),
+      // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
+      hubSock: agentApi.socketPath,
+      hubBinDir: paths.hubBinDir,
+    });
+    const driver = createMultiVendorDriver({
       store: sessions,
-      log,
-      prepareLaunch: createLaunchPreparer({
-        launchDir: paths.launchDir,
-        stateDir,
-        worktreesDir,
-        getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
-        tokens: endedOnRevokedTokens(tokens),
-        // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
-        hubSock: agentApi.socketPath,
-        hubBinDir: paths.hubBinDir,
-      }),
+      drivers: {
+        claude: createClaudeDriver({ claudePath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
+        agy: createAgyDriver({ agyPath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
+        codex: createCodexDriver({ codexPath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
+      },
     });
     parts.driver = driver;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
-    // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个 claude 在会话的目录里问；会话中途推来的新名单直接更新缓存
+    // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个对应厂商 CLI 在会话的目录里问；会话中途推来的新名单直接更新缓存
     const commands = createCommandCatalogs({
-      vendors: createVendorComposers({ claude: { claudePath: paths.claudePath, queryInitialize: queryClaudeInitialize } }),
+      vendors: createVendorComposers({
+        claude: { claudePath, queryInitialize: queryClaudeInitialize },
+        agy: { agyPath },
+        codex: { codexPath },
+      }),
       queryRunning: (sessionId) => driver.queryCommands(sessionId),
       log,
     });

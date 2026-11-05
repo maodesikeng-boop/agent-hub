@@ -1,5 +1,6 @@
-// 数据目录布局（设计第 6.1 节）。用到 node:path，只给守护进程和测试用，不要从网页里引。
-import { join } from "node:path";
+// 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
+import { existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 
@@ -109,6 +110,39 @@ export function resolvePaths(
   const env = input.env ?? (inputOrEnv as Record<string, string | undefined>);
   const userHome = input.userHome ?? env.HOME ?? "";
   return resolveHubPaths(env, userHome, input);
+}
+
+/**
+ * 解析厂商可执行文件路径：
+ * - 如果 `cmd` 含有 `/`（显式路径），直接返回 `cmd`；
+ * - 如果 `envPath`（`PATH`）中的某个目录下存在 `cmd`（`existsSync(join(dir, cmd))`），返回 `cmd`（保持原样）；
+ * - 否则按顺序检查 `fallbackPaths`，如果某个候选路径 `existsSync(candidate)` 为真，返回该绝对路径；
+ * - 都不存在则返回 `cmd`。
+ */
+export function resolveExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
+  if (cmd.includes("/")) return cmd;
+  if (envPath) {
+    for (const dir of envPath.split(delimiter)) {
+      if (dir && existsSync(join(dir, cmd))) return cmd;
+    }
+  }
+  for (const candidate of fallbackPaths) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return cmd;
+}
+
+/** 本机 `agy` 的默认候选安装路径（当 `PATH` 里找不到 `agy` 时回退）。 */
+export function defaultAgyFallbackPaths(userHome: string): string[] {
+  return [join(userHome, ".local", "bin", "agy")];
+}
+
+/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）。 */
+export function defaultCodexFallbackPaths(userHome: string): string[] {
+  return [
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+    join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex"),
+  ];
 }
 
 /** 项目经理的性格设定文件。 */
