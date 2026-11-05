@@ -46,7 +46,7 @@ function EntryButton({
       <Avatar colorKey={entry.avatarKey} size={44} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-2">
-          <span className={cn("truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{entry.name}</span>
+          <span className="truncate text-[15px] font-medium">{entry.name}</span>
           {tag && <span className="flex shrink-0 items-center">{tag}</span>}
         </span>
         {/* 没有消息也占一行的高度，每行一样高 */}

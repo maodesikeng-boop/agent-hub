@@ -73,7 +73,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       onClick={onOpen}
     >
       <span className="flex w-full items-baseline justify-between gap-3">
-        <span className={cn("min-w-0 truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{worker.title}</span>
+        <span className="min-w-0 truncate text-[15px] font-medium">{worker.title}</span>
         <span className={cn("shrink-0 text-xs", !worker.ended && BUSY_ACTIVITIES.has(worker.activity) ? "text-primary" : "text-muted-foreground")}>
           {statusText(worker)}
         </span>

@@ -826,6 +826,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
     expect(row(/修 X/)).toHaveAttribute("aria-current", "true");
     expect(row(/修 X/)).toHaveClass("bg-sidebar-active");
+    // 选中只靠底色，标题字重不变
+    expect(within(row(/修 X/)).getByText("修 X")).toHaveClass("font-medium");
+    expect(within(row(/修 X/)).getByText("修 X")).not.toHaveClass("font-semibold");
     expect(row(/写文档/)).not.toHaveAttribute("aria-current");
     await user.click(row(/写文档/));
     expect(screen.getByRole("region", { name: "Worker 写文档" })).toBeInTheDocument();

@@ -44,7 +44,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 资料页头部的名字（只有这一处） | 22px `text-[22px]`，`tracking-tight` | 600 | 前景 |
 | 正文、行的名字、控件里的字、输入框 | 15px `text-[15px]`（body 默认） | 400 | 前景 |
 | 行右边的只读值（厂商只有一家时的厂商名） | 15px | 400 | `text-muted-foreground` |
-| 人名、对话名（左栏、修改记录里的“谁”） | 15px | 500（选中 600） | 前景 |
+| 人名、对话名（左栏、修改记录里的“谁”） | 15px | 500（选中也是 500，只靠底色表示） | 前景 |
 | 组标题、“更多设置”这类折叠开关 | 13.5px `text-[13.5px]` | 500 | `text-muted-foreground` |
 | 次要文字：行下面的说明、资料页头部的项目名、文件夹路径、左栏的消息预览、错误 | 13.5px，行下的说明 `leading-snug` | 400 | `text-muted-foreground`（错误 `text-danger`） |
 | 按钮里的字 | 14px（默认）/ 13px（sm） | 500 | 按钮自带 |
@@ -163,7 +163,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **组标题**：13.5px、500、`text-muted-foreground`、`px-3`，右边是这一组的个数（12px、`tabular-nums`；Worker 组只数没收工的）；和下面的行之间 8px。“等你确定”标题前一个 6px 的主色圆点。
 - **行**（第 13 条的列表行规则）：`rounded-2xl px-3 py-2`，行间 2px（`space-y-0.5`），悬停 `bg-sidebar-hover`，当前打开的 `bg-sidebar-active`。
   - “等你确定”：一个问题一行，去掉 Markdown 符号后的第一行（15px，超长 `truncate`），右边一个向右的箭头；点一下在这一行下面展开全文（Markdown），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
-  - Worker：第一行标题（15px、500，当前打开的 600，`truncate`）靠左，状态词（12px，英文：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用主色，其余灰）靠右。第二行 12px 灰：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`；没有数据显示“—”。点一行打开它的对话。
+  - Worker：第一行标题（15px、500，当前打开的也是 500、只靠 `bg-sidebar-active` 表示，`truncate`）靠左，状态词（12px，英文：Working… / Stopping… / Setting up… / Idle / Ended；在忙的用主色，其余灰）靠右。第二行 12px 灰：模型名（从厂商的模型目录取显示名；目录里没有的完整模型名按 `vendors.ts` 的 `shortModelName` 缩短，如 Sonnet 5.5；用的是默认模型时写厂商说的实际模型 `defaultModel`，厂商没说才写“默认”）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细），之间 `gap-3`；没有数据显示“—”。点一行打开它的对话。
   - **只列要关心的**：干活的、准备中的、等验收的（Idle）照常一行一个；收工的不逐个列出，收成 Worker 组最下面一行“已收工 52 ›”（13.5px 灰，数字 12px `tabular-nums`，`aria-expanded`，箭头展开时转向下），默认收着，点开才在这一行下面列出收工的（行同上，`opacity-60`）。正开着的是收工的 Worker 时自动展开，当前那一行看得见。没有收工的就没有这一行。
 
 ## 13. 字体、数字、列表行

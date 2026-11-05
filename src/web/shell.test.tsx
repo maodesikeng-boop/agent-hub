@@ -132,6 +132,16 @@ describe("焦点", () => {
 });
 
 describe("左栏", () => {
+  it("选中的对话：只靠底色 bg-sidebar-active 表示，名字字重不变（都是 500，不加粗）", async () => {
+    await boot();
+    const name = (label: string) => within(row(label)).getByText(label);
+    expect(row("小林")).toHaveAttribute("aria-current", "true");
+    expect(row("小林")).toHaveClass("bg-sidebar-active");
+    expect(name("小林")).toHaveClass("font-medium");
+    expect(name("小林")).not.toHaveClass("font-semibold");
+    expect(name("老马")).toHaveClass("font-medium");
+  });
+
   it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
     const ws = await boot();
     const time = () => within(row("老马")).getByText(formatTime(20_000));
