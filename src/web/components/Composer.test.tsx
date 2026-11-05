@@ -18,11 +18,12 @@ const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
 
 describe("Composer 布局", () => {
-  it("回形针和发送键同尺寸、同圆角", () => {
+  it("回形针和发送键同尺寸、同圆角；回形针是不带底色的 ghost 图标按钮（悬停才有浅底）", () => {
     setup();
     const attach = screen.getByRole("button", { name: "添加文件" });
     const send = screen.getByRole("button", { name: "发送" });
-    expect(attach).toHaveClass("bg-secondary");
+    expect(attach).toHaveClass("text-muted-foreground", "hover:bg-accent");
+    expect(attach.className).not.toMatch(/(^|\s)bg-/);
     for (const cls of ["size-9", "rounded-[var(--radius-btn)]"]) {
       expect(attach).toHaveClass(cls);
       expect(send).toHaveClass(cls);
