@@ -27,7 +27,7 @@ export interface CommandsRequest {
 
 export interface CommandCatalogsOptions {
   /** 每家厂商的实现（vendors/index.ts 的 createVendorComposers）。 */
-  vendors: Readonly<Record<AgentVendor, VendorComposer>>;
+  vendors: Readonly<Partial<Record<AgentVendor, VendorComposer>>>;
   /** 问正在跑的会话（Driver.queryCommands）：没在跑、没问到返回 null。 */
   queryRunning: (sessionId: SessionId) => Promise<ComposerCommand[] | null>;
   now?: () => number;
@@ -88,7 +88,7 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
   };
 
   const vendorOf = (vendor: string): VendorComposer | null =>
-    Object.hasOwn(options.vendors, vendor) ? options.vendors[vendor as AgentVendor] : null;
+    Object.hasOwn(options.vendors, vendor) ? (options.vendors[vendor as AgentVendor] ?? null) : null;
 
   /** 放到最后（最新），超过上限就删最前面（最旧）的。 */
   const touch = (key: string, entry: Entry) => {

@@ -70,9 +70,60 @@ export const WORKER_MEMORY_DENY_RULES = [
   "Edit(//**/AGENTS.md)",
   "Edit(//**/CLAUDE.md)",
   "Edit(//**/CLAUDE.local.md)",
+  "Edit(//**/GEMINI.md)",
   "Edit(//**/.claude/**)",
   "Edit(~/.claude/**)",
+  "Edit(//**/.gemini/**)",
+  "Edit(~/.gemini/**)",
+  "Edit(//**/.codex/**)",
+  "Edit(~/.codex/**)",
 ] as const;
+
+const PROTECTED_MEMORY_FILES = new Set(["agents.md", "claude.md", "claude.local.md", "gemini.md"]);
+const PROTECTED_MEMORY_DIRS = new Set([".claude", ".gemini", ".codex"]);
+
+function normalizePathSegments(rawPath: string, homeDir?: string): { absolute: boolean; segments: string[]; normalized: string } {
+  let p = rawPath.trim().replace(/\\/g, "/");
+  if (homeDir && (p === "~" || p.startsWith("~/"))) {
+    const cleanHome = homeDir.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    p = cleanHome + p.slice(1);
+  }
+  const absolute = p.startsWith("/");
+  const segments: string[] = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!absolute) {
+        segments.push("..");
+      }
+    } else {
+      segments.push(part);
+    }
+  }
+  const normalized = (absolute ? "/" : "") + segments.join("/");
+  return { absolute, segments, normalized };
+}
+
+/**
+ * 供 AgyDriver 和 CodexDriver 在拦截 Worker 文件修改/命令审批时判断某个路径是否命中记忆保护范围：
+ * 任何位置的 AGENTS.md、CLAUDE.md、CLAUDE.local.md、GEMINI.md、路径段含 .claude / .gemini / .codex、或在 stateDir 下。
+ */
+export function isProtectedMemoryPath(targetPath: string, stateDir: string, homeDir?: string): boolean {
+  const { segments, normalized } = normalizePathSegments(targetPath, homeDir);
+  if (segments.length === 0) return false;
+  const last = segments[segments.length - 1]!.toLowerCase();
+  if (PROTECTED_MEMORY_FILES.has(last)) return true;
+  if (segments.some((seg) => PROTECTED_MEMORY_DIRS.has(seg.toLowerCase()))) return true;
+  if (stateDir.trim() !== "") {
+    const normState = normalizePathSegments(stateDir, homeDir).normalized;
+    if (normState !== "" && normState !== "/" && (normalized === normState || normalized.startsWith(`${normState}/`))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * 数据目录的 state/（性格设定文件 personas/、数据库、令牌）：stateDir 要 realpath 过（paths.ts 的 stateDir）。

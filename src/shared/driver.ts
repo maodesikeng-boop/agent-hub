@@ -1,7 +1,9 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
 import type { ComposerCommand } from "./api.ts";
-import type { AgentSessionRow, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
+import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
+
+export type { AgentStep, AgentStepInput } from "./domain.ts";
 
 export type MessageSource = "user" | "system";
 
@@ -265,6 +267,18 @@ export class DriverError extends Error {
   }
 }
 
+/** 会话不存在或状态不合法时抛出的错误（继承 DriverError，不可重试）。 */
+export class DriverSessionError extends DriverError {
+  readonly reason: string;
+  readonly sessionId: SessionId;
+  constructor(reason: string, sessionId: SessionId) {
+    super("internal_error", `${reason}: session ${sessionId}`);
+    this.name = "DriverSessionError";
+    this.reason = reason;
+    this.sessionId = sessionId;
+  }
+}
+
 /**
  * 不能重试、也不属于哪次 start、send 调用的错误，以事件交给账本：
  * - invalid_input：带 messageIds，账本把它们标 failed；
@@ -362,6 +376,7 @@ export interface Driver {
    * 返回的已经换成通用形状，没去掉隐藏的。
    */
   queryCommands(sessionId: SessionId): Promise<ComposerCommand[] | null>;
+  isRunning?(sessionId: SessionId): boolean;
   onEvent(listener: DriverEventListener): Unsubscribe;
 }
 

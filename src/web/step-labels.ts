@@ -25,12 +25,15 @@ const fileName = (path: string | undefined): string | null => {
 
 /** “Reading a.ts”；没有文件名就写“Reading file”。 */
 const onFile = (verb: string) => (input: AgentStepInput) => {
-  const name = fileName(input.file_path ?? input.notebook_path);
+  const name = fileName(
+    input.file_path ?? input.notebook_path ?? input.AbsolutePath ?? input.TargetFile ?? input.Path ?? input.path,
+  );
   return name === null ? `${verb} file` : `${verb} ${name}`;
 };
 
-/** 工具名（claude 原样的 tool_use.name）→ 文案；mcp__ 开头的和没列出来的见 describeTool。 */
+/** 工具名（claude / agy / codex 原样的 tool_use.name）→ 文案；mcp__ 开头的和没列出来的见 describeTool。 */
 const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
+  // claude
   Bash: () => "Running command",
   bash: () => "Running command",
   Read: onFile("Reading"),
@@ -47,6 +50,30 @@ const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
   Task: () => "Running subagent",
   TodoWrite: () => "Updating todos",
   ToolSearch: () => "Finding tools",
+  // agy
+  run_command: () => "Running command",
+  read_file: onFile("Reading"),
+  view_file_outline: onFile("Reading"),
+  view_code_item: onFile("Reading"),
+  write_to_file: onFile("Writing"),
+  write_file: onFile("Writing"),
+  edit_file: onFile("Editing"),
+  replace_file_content: onFile("Editing"),
+  multi_replace_file_content: onFile("Editing"),
+  grep_search: () => "Searching files",
+  find_by_name: () => "Searching files",
+  list_dir: () => "Searching files",
+  search_web: () => "Searching the web",
+  read_url_content: () => "Reading web page",
+  invoke_subagent: () => "Running subagent",
+  // codex
+  commandExecution: () => "Running command",
+  exec_command: () => "Running command",
+  fileChange: onFile("Editing"),
+  apply_patch: onFile("Editing"),
+  webSearch: () => "Searching the web",
+  web_search: () => "Searching the web",
+  mcpToolCall: () => "Calling tool",
 };
 
 /** `mcp__<连接器>__<工具>`：显示“Calling 连接器 工具”，名字照抄。 */

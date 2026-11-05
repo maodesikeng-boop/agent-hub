@@ -168,7 +168,9 @@ describe("厂商接口的完整性", () => {
 describe("按厂商找实现", () => {
   it("认识的厂商有，不认识的 null", () => {
     expect(composerBaseOf("claude")?.vendor).toBe("claude");
-    expect(composerBaseOf("codex")).toBeNull();
+    expect(composerBaseOf("agy")?.vendor).toBe("agy");
+    expect(composerBaseOf("codex")?.vendor).toBe("codex");
+    expect(composerBaseOf("unknown")).toBeNull();
     expect(composerBaseOf("constructor")).toBeNull();
   });
 });

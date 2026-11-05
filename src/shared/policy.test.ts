@@ -6,6 +6,7 @@ import {
   WORKER_ENV,
   WORKER_MEMORY_DENY_RULES,
   buildSessionSettings,
+  isProtectedMemoryPath,
   readonlyAllowRules,
   sessionEnv,
   stateDirDenyRule,
@@ -46,19 +47,60 @@ describe("buildSessionSettings：Worker", () => {
     });
   });
 
-  it("记忆规则：整台机器上任何位置的约定文件和 .claude/（工作目录、附加文件夹都算）、用户级 ~/.claude/、数据目录的 state/", () => {
+  it("记忆规则：整台机器上任何位置的约定文件和 .claude/.gemini/.codex（工作目录、附加文件夹都算）、用户级 ~/.claude/~/.gemini/~/.codex、数据目录的 state/", () => {
     // 相对写法（Edit(AGENTS.md)）只锚在当前目录，附加文件夹里的拦不住（审查实测），所以一律用 // 开头的绝对通配
     expect(WORKER_MEMORY_DENY_RULES).toEqual([
       "Edit(//**/AGENTS.md)",
       "Edit(//**/CLAUDE.md)",
       "Edit(//**/CLAUDE.local.md)",
+      "Edit(//**/GEMINI.md)",
       "Edit(//**/.claude/**)",
       "Edit(~/.claude/**)",
+      "Edit(//**/.gemini/**)",
+      "Edit(~/.gemini/**)",
+      "Edit(//**/.codex/**)",
+      "Edit(~/.codex/**)",
     ]);
     // 绝对路径的写法是 // 开头
     expect(stateDirDenyRule("/Users/u/.agent-hub/state")).toBe("Edit(//Users/u/.agent-hub/state/**)");
     expect(stateDirDenyRule("/Users/u/.agent-hub/state/")).toBe("Edit(//Users/u/.agent-hub/state/**)");
     expect(workerMemoryDenyRules(base.stateDir)).toEqual([...WORKER_MEMORY_DENY_RULES, "Edit(//Users/u/.agent-hub/state/**)"]);
+  });
+
+  it("isProtectedMemoryPath：识别约定文件、.claude/.gemini/.codex 目录、stateDir 及 ~ 展开", () => {
+    const stateDir = "/Users/u/.agent-hub/state";
+    const homeDir = "/Users/u";
+    for (const p of [
+      "AGENTS.md",
+      "/repo/AGENTS.md",
+      "/repo/sub/CLAUDE.md",
+      "/repo/CLAUDE.local.md",
+      "/repo/GEMINI.md",
+      "/repo/.claude/settings.json",
+      "/repo/.gemini/config.json",
+      "/repo/.codex/config.toml",
+      "~/.claude/CLAUDE.md",
+      "~/.gemini/antigravity/rules.md",
+      "~/.codex/auth.json",
+      "/Users/u/.agent-hub/state",
+      "/Users/u/.agent-hub/state/personas/pm-1.md",
+      "/Users/u/.agent-hub/work/../state/hub.sqlite",
+      "~/.agent-hub/state/ui-token",
+    ]) {
+      expect(isProtectedMemoryPath(p, stateDir, homeDir), p).toBe(true);
+    }
+
+    for (const p of [
+      "/repo/src/index.ts",
+      "/repo/README.md",
+      "/repo/AGENTS.md.bak",
+      "/repo/my-claude.md",
+      "/Users/u/.agent-hub/worktrees/1/2/src/a.ts",
+      "/Users/u/.agent-hub/state-other/a.txt",
+      "",
+    ]) {
+      expect(isProtectedMemoryPath(p, stateDir, homeDir), p).toBe(false);
+    }
   });
 
   it("数据目录路径里有 gitignore 的特殊字符要转义", () => {

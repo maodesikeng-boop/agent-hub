@@ -1,7 +1,16 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path，只给守护进程和测试用，不要从网页里引。
 import { join } from "node:path";
-import { ENV_CLAUDE, ENV_HOME } from "./limits.ts";
+import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
+
+export interface ResolvePathsInput {
+  env?: Record<string, string | undefined>;
+  userHome?: string;
+  home?: string;
+  claude?: string;
+  agy?: string;
+  codex?: string;
+}
 
 export interface HubPaths {
   home: string;
@@ -44,10 +53,25 @@ export interface HubPaths {
   sentFilesDir: string;
   /** claude 程序：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。 */
   claudePath: string;
+  /** agy 可执行文件（默认 "agy"，或 AGENT_HUB_AGY）。 */
+  agyPath: string;
+  /** codex 可执行文件（默认 "codex"，或 AGENT_HUB_CODEX）。 */
+  codexPath: string;
 }
 
-export function resolveHubPaths(env: Record<string, string | undefined>, userHome: string): HubPaths {
-  const home = env[ENV_HOME] || join(userHome, DATA_DIR_NAME);
+function expandHome(raw: string, userHome: string): string {
+  if (raw === "~") return userHome;
+  if (raw.startsWith("~/")) return join(userHome, raw.slice(2));
+  return raw;
+}
+
+export function resolveHubPaths(
+  env: Record<string, string | undefined>,
+  userHome: string,
+  input: ResolvePathsInput = {},
+): HubPaths {
+  const rawHome = input.home || env[ENV_HOME];
+  const home = rawHome ? expandHome(rawHome, userHome) : join(userHome, DATA_DIR_NAME);
   const stateDir = join(home, "state");
   const logsDir = join(stateDir, "logs");
   return {
@@ -68,8 +92,23 @@ export function resolveHubPaths(env: Record<string, string | undefined>, userHom
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),
     sentFilesDir: join(home, "sent-files"),
-    claudePath: env[ENV_CLAUDE] || "claude",
+    claudePath: expandHome(input.claude || env[ENV_CLAUDE] || "claude", userHome),
+    agyPath: expandHome(input.agy || env[ENV_AGY] || "agy", userHome),
+    codexPath: expandHome(input.codex || env[ENV_CODEX] || "codex", userHome),
   };
+}
+
+export function resolvePaths(
+  inputOrEnv: ResolvePathsInput | Record<string, string | undefined> = {},
+  maybeUserHome?: string,
+): HubPaths {
+  if (maybeUserHome !== undefined) {
+    return resolveHubPaths(inputOrEnv as Record<string, string | undefined>, maybeUserHome);
+  }
+  const input = inputOrEnv as ResolvePathsInput;
+  const env = input.env ?? (inputOrEnv as Record<string, string | undefined>);
+  const userHome = input.userHome ?? env.HOME ?? "";
+  return resolveHubPaths(env, userHome, input);
 }
 
 /** 项目经理的性格设定文件。 */

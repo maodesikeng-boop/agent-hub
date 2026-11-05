@@ -168,6 +168,22 @@ describe("hub cli", () => {
       expect(ledger.calls).toHaveLength(0);
     });
 
+    it("worker start --vendor sends the vendor; unknown vendor is a usage error", async () => {
+      for (const vendor of ["claude", "agy", "codex"]) {
+        expect((await hub(["worker", "start", "--title", "修 X", "--vendor", vendor, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      }
+      expect(ledger.calls.map((c) => c.args)).toEqual(
+        ["claude", "agy", "codex"].map((vendor) => ({ title: "修 X", vendor, task: "任务" })),
+      );
+      ledger.calls.length = 0;
+      for (const bad of ["gemini", "CLAUDE", ""]) {
+        const r = await hub(["worker", "start", "--title", "修 X", "--vendor", bad, "--stdin"], { stdin: stdinOf("任务") });
+        expect(r.code).toBe(HUB_EXIT.usage);
+        expect(r.stderr).toContain("--vendor 只能是 claude、agy、codex");
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("worker start without the optional flags sends only title and task", async () => {
       expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       expect(ledger.calls[0]?.args).toEqual({ title: "修 X", task: "任务" });
@@ -237,7 +253,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} ask --stdin`]) {
+      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} ask --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });

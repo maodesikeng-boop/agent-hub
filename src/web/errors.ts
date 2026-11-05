@@ -20,6 +20,8 @@ const TEXT: Readonly<Record<FailureKind, (serviceName: string) => string>> = {
   quota: (name) => `${name} 额度用完了`,
   network: () => "网络断了，稍后重试",
   start: (name) => `${name} 没能启动`,
+  auth: (name) => `${name} 未登录或鉴权失败`,
+  context: (name) => `${name} 上下文超长`,
 };
 
 const UNKNOWN_TEXT = "出错了";

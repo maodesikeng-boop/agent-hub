@@ -13,34 +13,47 @@ import {
   MAX_COMMAND_HINT_CHARS,
   VENDOR_SPECS,
   truncateChars,
+  type AgentVendor,
   type ComposerCommand,
 } from "../../shared/index.ts";
 import type { ClaudeModelQueryOptions } from "../driver/model-catalog.ts";
 import { userContent } from "../driver/protocol.ts";
 import type { CommandsTarget, VendorComposer, VendorComposerBase } from "./types.ts";
 
-const SPEC = VENDOR_SPECS.claude.composer;
-
-/**
- * 原文是命令就返回命令名（不带 /，原样大小写），否则 null。只认最开头的 /，前面有空格不算（T4 的 F）。
- * 命令名里带 / 的不算（`/Users/x/foo.py 这里有 bug` 是绝对路径开头的普通话；插件命令用 :，不带 /）。
- */
-function commandNameOf(text: string): string | null {
-  if (!text.startsWith(SPEC.commandPrefix)) return null;
-  const name = text.slice(SPEC.commandPrefix.length).split(/\s/u, 1)[0] ?? "";
-  return name === "" || name.includes("/") ? null : name;
-}
-
-function blockedReasonOf(name: string): string | null {
-  const key = name.toLowerCase();
-  return Object.hasOwn(SPEC.blockedCommands, key) ? SPEC.blockedCommands[key]! : null;
-}
-
 /** 缓存的命令列表里这个名字是不是用户自己的（有这个名字、而且不是 builtin；名字不分大小写）。没缓存、列表里没有这个名字都是 false。 */
 function isUserOwned(name: string, known: readonly ComposerCommand[] | null): boolean {
   const key = name.toLowerCase();
   const same = (known ?? []).filter((c) => c.name.toLowerCase() === key);
   return same.length > 0 && same.every((c) => c.builtin !== true);
+}
+
+/** 按 VENDOR_SPECS[vendor].composer 生成不需要起进程的基础实现。 */
+export function createSpecComposerBase(vendor: AgentVendor): VendorComposerBase {
+  const spec = VENDOR_SPECS[vendor].composer;
+  const commandNameOf = (text: string): string | null => {
+    if (!text.startsWith(spec.commandPrefix)) return null;
+    const name = text.slice(spec.commandPrefix.length).split(/\s/u, 1)[0] ?? "";
+    return name === "" || name.includes("/") ? null : name;
+  };
+  const blockedReasonOf = (name: string): string | null => {
+    const key = name.toLowerCase();
+    return Object.hasOwn(spec.blockedCommands, key) ? spec.blockedCommands[key]! : null;
+  };
+  return {
+    vendor,
+    parseCommands: parseClaudeCommands,
+    isHiddenCommand: (command) => command.builtin === true && blockedReasonOf(command.name) !== null,
+    isCommand: (text) => commandNameOf(text) !== null,
+    isCompactCommand: (text) => commandNameOf(text) === spec.compactCommand,
+    blockReason(text, known) {
+      const name = commandNameOf(text);
+      const reason = name === null ? null : blockedReasonOf(name);
+      if (name === null || reason === null || isUserOwned(name, known)) return null;
+      return `/${name}：${reason}`;
+    },
+    mention: (path) => (/[\s"]/u.test(path) ? `@"${path}"` : `@${path}`),
+    buildUserContent: userContent,
+  };
 }
 
 /** initialize 回应、commands_changed 里的 commands → 通用形状。name 不是非空字符串的、重复的跳过；说明、参数提示截断；builtin: true 的留着。 */
@@ -68,22 +81,7 @@ export function parseClaudeCommands(raw: unknown): ComposerCommand[] | null {
 }
 
 /** 不用起进程的那部分（驱动层拼消息、账本拦命令，经 vendors/index.ts 的 composerBaseOf 拿）。 */
-export const claudeComposerBase: VendorComposerBase = {
-  vendor: "claude",
-  parseCommands: parseClaudeCommands,
-  isHiddenCommand: (command) => command.builtin === true && blockedReasonOf(command.name) !== null,
-  isCommand: (text) => commandNameOf(text) !== null,
-  isCompactCommand: (text) => commandNameOf(text) === SPEC.compactCommand,
-  blockReason(text, known) {
-    const name = commandNameOf(text);
-    const reason = name === null ? null : blockedReasonOf(name);
-    if (name === null || reason === null || isUserOwned(name, known)) return null;
-    return `/${name}：${reason}`;
-  },
-  mention: (path) => (/[\s"]/u.test(path) ? `@"${path}"` : `@${path}`),
-  // 写进 stream-json 的格式在驱动层的协议文件里（driver/protocol.ts），这里就是它
-  buildUserContent: userContent,
-};
+export const claudeComposerBase: VendorComposerBase = createSpecComposerBase("claude");
 
 export interface ClaudeComposerOptions {
   claudePath: string;

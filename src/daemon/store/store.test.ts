@@ -246,6 +246,12 @@ describe("SessionStore", () => {
       // 空补丁只更新 updatedAt
       t = 4_000;
       expect(store.update(id, {}).updatedAt).toBe(4_000);
+      // vendorSessionId 支持更新并落库
+      t = 5_000;
+      const withVendorSid = store.update(id, { vendorSessionId: "thread-codex-123" });
+      expect(withVendorSid.vendorSessionId).toBe("thread-codex-123");
+      expect(withVendorSid.updatedAt).toBe(5_000);
+      expect(store.get(id)?.vendorSessionId).toBe("thread-codex-123");
     } finally {
       db.close();
     }

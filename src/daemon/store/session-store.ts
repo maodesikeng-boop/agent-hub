@@ -58,6 +58,7 @@ export function getAgentSession(db: Db, id: SessionId): AgentSessionRow | null {
 }
 
 const PATCH_COLUMNS: { [K in keyof Required<AgentSessionPatch>]: (value: AgentSessionPatch[K]) => [string, SqlValue] } = {
+  vendorSessionId: (v) => ["vendor_session_id", v ?? ""],
   pid: (v) => ["pid", v ?? null],
   status: (v) => ["status", v ?? null],
   hasCompletedTurn: (v) => ["has_completed_turn", v ? 1 : 0],

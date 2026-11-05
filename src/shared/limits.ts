@@ -223,6 +223,8 @@ export const UI_TOKEN_FILE_MODE = 0o600;
 /** 环境变量。 */
 export const ENV_HOME = "AGENT_HUB_HOME";
 export const ENV_CLAUDE = "AGENT_HUB_CLAUDE";
+export const ENV_AGY = "AGENT_HUB_AGY";
+export const ENV_CODEX = "AGENT_HUB_CODEX";
 /** 界面服务的端口，默认 DEFAULT_UI_PORT；0 表示由系统分配（测试用）。 */
 export const ENV_PORT = "AGENT_HUB_PORT";
 /** 第一次启动自动建项目经理时用的默认模型（如 claude-haiku-5-5，冒烟测试用）；不设就用 claude 自己的默认。 */

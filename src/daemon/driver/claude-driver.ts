@@ -212,6 +212,11 @@ export class ClaudeDriver implements Driver {
     return () => this.#listeners.delete(listener);
   }
 
+  isRunning(sessionId: SessionId): boolean {
+    const proc = this.#sessions.get(sessionId)?.proc;
+    return Boolean(proc && !proc.closing);
+  }
+
   async start(sessionId: SessionId): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);

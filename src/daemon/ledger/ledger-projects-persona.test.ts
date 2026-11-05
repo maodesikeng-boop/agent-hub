@@ -554,7 +554,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
   it("建的时候值不对（厂商、模型名的字符和长度、思考程度）：invalid，原因来自清单，什么都没写", () => {
     const before = tableCounts();
     const base = { name: "阿明", mode: "manage_only" as const, persona: "" };
-    expectLedgerError(() => ledger.createPm({ ...base, vendor: "codex" as never }), "invalid", /厂商/);
+    expectLedgerError(() => ledger.createPm({ ...base, vendor: "unknown" as never }), "invalid", /厂商/);
     expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "claude opus" }), "invalid", /模型名只能用/);
     expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "--resume" }), "invalid", /模型名只能用/);
     expectLedgerError(() => ledger.createPm({ ...base, defaultModel: "m".repeat(101) }), "invalid", /最多 100/);
@@ -635,7 +635,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     const before = tableCounts();
     expectLedgerError(() => ledger.editPersona(lin.pmId, { model: "a b" }, { kind: "user" }), "invalid", /模型名只能用/);
     expectLedgerError(() => ledger.editPersona(lin.pmId, { effort: "ultra" }, { kind: "user" }), "invalid", /思考程度/);
-    expectLedgerError(() => ledger.editPersona(lin.pmId, { vendor: "codex" as never }, { kind: "user" }), "invalid", /厂商/);
+    expectLedgerError(() => ledger.editPersona(lin.pmId, { vendor: "unknown" as never }, { kind: "user" }), "invalid", /厂商/);
     expectLedgerError(
       () => ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "session", sessionId: lin.sessionId }),
       "forbidden",

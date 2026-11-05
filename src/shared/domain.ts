@@ -635,11 +635,19 @@ export type AgentStep =
   | { type: "text" }
   | { type: "tool_use"; name: string; input: AgentStepInput };
 
-/** tool_use 的 input 里状态要用的字段（Skill 的 skill、读写文件的 file_path / notebook_path），别的不带。 */
+/** tool_use 的 input 里状态要用的字段（Skill 的 skill、读写文件的路径等），别的不带。 */
 export interface AgentStepInput {
   skill?: string;
   file_path?: string;
   notebook_path?: string;
+  AbsolutePath?: string;
+  TargetFile?: string;
+  Path?: string;
+  path?: string;
+  CommandLine?: string;
+  command?: string;
+  query?: string;
+  SearchPath?: string;
 }
 
 export const RATE_LIMIT_ALLOWED = "allowed";
