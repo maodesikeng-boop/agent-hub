@@ -45,6 +45,7 @@ export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
+  "sed_file",
   "replace_file_content",
   "multi_replace_file_content",
   "delete_file",
@@ -185,7 +186,7 @@ const tokenCount = (v: unknown): number => (typeof v === "number" && Number.isFi
 
 /**
  * 解析 agy 的 usage 对象（input_tokens, output_tokens, thinking_tokens, cache_read_tokens）。
- * thinking_tokens 计入 output，cache_read_tokens 计入 cacheRead。
+ * 真实 agy 的 output_tokens 已包含 thinking_tokens（input_tokens + output_tokens === total_tokens），不重复累加；cache_read_tokens 计入 cacheRead。
  */
 export function parseAgyUsage(usage: unknown): Omit<TokenUsage, "context"> {
   const u = typeof usage === "object" && usage !== null ? (usage as Record<string, unknown>) : {};
@@ -193,7 +194,7 @@ export function parseAgyUsage(usage: unknown): Omit<TokenUsage, "context"> {
     input: tokenCount(u.input_tokens),
     cacheRead: tokenCount(u.cache_read_tokens) || tokenCount(u.cache_read_input_tokens),
     cacheWrite: tokenCount(u.cache_write_tokens) || tokenCount(u.cache_creation_input_tokens),
-    output: tokenCount(u.output_tokens) + tokenCount(u.thinking_tokens),
+    output: tokenCount(u.output_tokens),
   };
 }
 
@@ -250,8 +251,9 @@ export function buildAgySessionStartedEvent(
   resumed: boolean,
   at: number,
 ): SessionStartedEvent & { vendorSessionId: string } {
-  const convId = typeof obj.conversation_id === "string" && obj.conversation_id.trim() !== "" ? obj.conversation_id.trim() : "";
   const initObj = typeof obj.init === "object" && obj.init !== null ? (obj.init as Record<string, unknown>) : undefined;
+  const rawConvId = initObj?.conversation_id ?? obj.conversation_id;
+  const convId = typeof rawConvId === "string" && rawConvId.trim() !== "" ? rawConvId.trim() : "";
   const rawTools = Array.isArray(initObj?.tools) ? initObj.tools : Array.isArray(obj.tools) ? obj.tools : [];
   const tools = rawTools.flatMap((t) => {
     if (typeof t === "string") return [t];

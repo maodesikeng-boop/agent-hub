@@ -138,7 +138,10 @@ interface SessionState {
   seenThinkingSteps: Set<string>;
   /** 自上一次工具调用（或轮开始）以来是否已经发出过 agent.text。 */
   hasTextSinceLastTool: boolean;
+  /** 已完成的轮次计数（当前轮次为 resultSeq + 1），防止跨轮/重启后 step_index 复位的 UUID 冲突。 */
   resultSeq: number;
+  /** 会话内单调递增的事件序号。 */
+  eventSeq: number;
   pending: PendingEntry[];
   written: Set<MessageId>;
   recoveryNote: boolean;
@@ -432,6 +435,7 @@ export class AgyDriver implements Driver {
         seenThinkingSteps: new Set(),
         hasTextSinceLastTool: false,
         resultSeq: 0,
+        eventSeq: 0,
         pending: [],
         written: new Set(),
         recoveryNote: false,
@@ -912,6 +916,7 @@ export class AgyDriver implements Driver {
   /** 将某个（或全部）step_id 累积的文本作为单条 agent.text 发出。 */
   #flushStepTexts(st: SessionState, at: number, exceptStepId?: string): void {
     const convId = this.#conversationIdOf(st);
+    const turnNo = st.resultSeq + 1;
     for (const [stepId, text] of [...st.stepTexts.entries()]) {
       if (exceptStepId !== undefined && stepId === exceptStepId) continue;
       st.stepTexts.delete(stepId);
@@ -919,7 +924,7 @@ export class AgyDriver implements Driver {
         st.hasTextSinceLastTool = true;
         this.#emit(st.id, {
           type: "agent.text",
-          uuid: `agy-step-${convId}-${stepId}`,
+          uuid: `agy-step-${convId}-${turnNo}-${stepId}-${++st.eventSeq}`,
           text,
           at,
         });
@@ -928,7 +933,9 @@ export class AgyDriver implements Driver {
   }
 
   #onInit(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    const convId = typeof obj.conversation_id === "string" && obj.conversation_id.trim() !== "" ? obj.conversation_id.trim() : "";
+    const initObj = typeof obj.init === "object" && obj.init !== null ? (obj.init as Record<string, unknown>) : undefined;
+    const rawConvId = initObj?.conversation_id ?? obj.conversation_id;
+    const convId = typeof rawConvId === "string" && rawConvId.trim() !== "" ? rawConvId.trim() : "";
     if (proc.initSeen) {
       if (convId !== "" && convId !== st.vendorSessionId) {
         st.vendorSessionId = convId;
@@ -963,12 +970,14 @@ export class AgyDriver implements Driver {
   }
 
   #onStepUpdate(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    const stepId = typeof obj.step_id === "number" || typeof obj.step_id === "string" ? String(obj.step_id) : "0";
     const su =
       typeof obj.step_update === "object" && obj.step_update !== null
         ? (obj.step_update as Record<string, unknown>)
         : obj;
+    const rawStepId = su.step_index ?? su.step_id ?? obj.step_index ?? obj.step_id;
+    const stepId = typeof rawStepId === "number" || typeof rawStepId === "string" ? String(rawStepId) : "0";
     const stepType = su.step_type;
+    const turnNo = st.resultSeq + 1;
 
     if (stepType === "user_input") {
       if (su.state === "DONE" && st.inFlight) {
@@ -1009,7 +1018,7 @@ export class AgyDriver implements Driver {
         st.seenThinkingSteps.add(stepId);
         this.#emit(st.id, {
           type: "agent.thinking",
-          uuid: `agy-thinking-${this.#conversationIdOf(st)}-${stepId}`,
+          uuid: `agy-thinking-${this.#conversationIdOf(st)}-${turnNo}-${stepId}-${++st.eventSeq}`,
           at,
         });
       }
@@ -1034,6 +1043,7 @@ export class AgyDriver implements Driver {
               ? toolInfo.name
               : "";
       const parameters = toolInfo?.parameters ?? su.parameters ?? null;
+      const toolUseId = `tool-${turnNo}-${stepId}`;
 
       if (su.state === "ACTIVE" || !st.seenToolSteps.has(stepId)) {
         st.seenToolSteps.add(stepId);
@@ -1042,8 +1052,8 @@ export class AgyDriver implements Driver {
 
         this.#emit(st.id, {
           type: "agent.tool",
-          uuid: `agy-tool-${convId}-${stepId}`,
-          toolUseId: `tool-${stepId}`,
+          uuid: `agy-tool-${convId}-${turnNo}-${stepId}-${++st.eventSeq}`,
+          toolUseId,
           name: toolName,
           input: parameters,
           at,
@@ -1068,7 +1078,7 @@ export class AgyDriver implements Driver {
       if (su.state === "DONE") {
         this.#emit(st.id, {
           type: "agent.tool_result",
-          toolUseIds: [`tool-${stepId}`],
+          toolUseIds: [toolUseId],
           at,
         });
       }
@@ -1086,7 +1096,8 @@ export class AgyDriver implements Driver {
       return;
     }
 
-    const convId = typeof obj.conversation_id === "string" && obj.conversation_id.trim() !== "" ? obj.conversation_id.trim() : "";
+    const rawConvId = res.conversation_id ?? obj.conversation_id;
+    const convId = typeof rawConvId === "string" && rawConvId.trim() !== "" ? rawConvId.trim() : "";
     if (convId !== "" && convId !== st.vendorSessionId) {
       st.vendorSessionId = convId;
       st.hasConversation = true;
@@ -1101,10 +1112,11 @@ export class AgyDriver implements Driver {
     this.#flushStepTexts(st, at);
 
     // 如果这一步还没有发出过最终回复文字且 result.response 非空，补发一条 agent.text
+    const turnNo = ++st.resultSeq;
     if (!st.hasTextSinceLastTool && st.policyViolation === null && typeof res.response === "string" && res.response.trim() !== "") {
       this.#emit(st.id, {
         type: "agent.text",
-        uuid: `agy-result-${this.#conversationIdOf(st)}-${++st.resultSeq}`,
+        uuid: `agy-result-${this.#conversationIdOf(st)}-${turnNo}-${++st.eventSeq}`,
         text: res.response,
         at,
       });
@@ -1195,6 +1207,7 @@ export class AgyDriver implements Driver {
       }
 
       // 如果因为 Worker 权限违规发了 SIGINT，且进程在发出 result 前就直接退出了，补发一条失败的 turn.ended
+      const hadInFlight = st.inFlight !== null;
       if (proc.initSeen && st.policyViolation !== null && st.inFlight !== null) {
         const batch = st.inFlight;
         const violation = st.policyViolation;
@@ -1215,6 +1228,7 @@ export class AgyDriver implements Driver {
       }
 
       const batch = proc.initSeen || proc.closing === "interrupt" ? st.inFlight : null;
+      if (hadInFlight) st.resultSeq++;
       st.inFlight = null;
       st.selfTurn = false;
       st.policyViolation = null;

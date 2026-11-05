@@ -171,8 +171,7 @@ async function runTurn(userObj) {
   const userStepId = stepCounter++;
   emit({
     event: "step_update",
-    step_id: userStepId,
-    step_update: { step_type: "user_input", state: "DONE" },
+    step_update: { conversation_id: conversationId, step_index: userStepId, step_type: "user_input", state: "DONE" },
   });
 
   let lastFullText = "";
@@ -190,8 +189,9 @@ async function runTurn(userObj) {
         acc += d;
         emit({
           event: "step_update",
-          step_id: sid,
           step_update: {
+            conversation_id: conversationId,
+            step_index: sid,
             step_type: "agent_response",
             state: "ACTIVE",
             text_delta: d,
@@ -203,8 +203,9 @@ async function runTurn(userObj) {
       if (!step.omitDone) {
         emit({
           event: "step_update",
-          step_id: sid,
           step_update: {
+            conversation_id: conversationId,
+            step_index: sid,
             step_type: "agent_response",
             state: "DONE",
             text_delta: "",
@@ -216,8 +217,9 @@ async function runTurn(userObj) {
       const sid = step.stepId ?? stepCounter++;
       emit({
         event: "step_update",
-        step_id: sid,
         step_update: {
+          conversation_id: conversationId,
+          step_index: sid,
           step_type: "tool",
           state: "ACTIVE",
           tool_name: step.name,
@@ -230,8 +232,9 @@ async function runTurn(userObj) {
       if (interrupted) return;
       emit({
         event: "step_update",
-        step_id: sid,
         step_update: {
+          conversation_id: conversationId,
+          step_index: sid,
           step_type: "tool",
           state: "DONE",
           tool_name: step.name,
@@ -245,8 +248,8 @@ async function runTurn(userObj) {
   const r = turn.result || {};
   emit({
     event: "result",
-    conversation_id: conversationId,
     result: {
+      conversation_id: conversationId,
       status: r.status || "SUCCESS",
       finished_reason: r.finishedReason ?? null,
       response: r.response !== undefined ? r.response : lastFullText,
@@ -562,7 +565,7 @@ describe("agy-protocol 纯函数", () => {
     expect(checkAgyUserLine(JSON.stringify({ event: "other", message: { content: [{ type: "text", text: "hi" }] } }))).toMatch(/event/);
   });
 
-  it("parseAgyUsage 与 detectAgyArgsConflict：正确解析 agy 用量字段和会话不存在错误", () => {
+  it("parseAgyUsage 与 detectAgyArgsConflict：正确解析 agy 用量字段（不重复累加 thinking_tokens）和会话不存在错误", () => {
     expect(
       parseAgyUsage({
         input_tokens: 120,
@@ -574,14 +577,14 @@ describe("agy-protocol 纯函数", () => {
       input: 120,
       cacheRead: 40,
       cacheWrite: 0,
-      output: 45,
+      output: 30,
     });
     expect(detectAgyArgsConflict("Error: conversation abc not found")).toBe("no_conversation");
     expect(detectAgyArgsConflict("No conversation with id 123")).toBe("no_conversation");
     expect(detectAgyArgsConflict("some other error")).toBeNull();
   });
 
-  it("checkWorkerToolViolation：拦截修改记忆文件和只读 Worker 写文件", () => {
+  it("checkWorkerToolViolation：拦截修改记忆文件和只读 Worker 写文件（含 sed_file）", () => {
     const stateDir = "/Users/u/.agent-hub/state";
     const cwd = "/Users/u/.agent-hub/worktrees/1/2";
     expect(
@@ -626,6 +629,16 @@ describe("agy-protocol 纯函数", () => {
 
     expect(
       checkWorkerToolViolation({
+        toolName: "sed_file",
+        parameters: { Path: "src/index.ts" },
+        readonly: true,
+        stateDir,
+        cwd,
+      }),
+    ).toBe("只读 Worker 不能修改文件");
+
+    expect(
+      checkWorkerToolViolation({
         toolName: "edit_file",
         parameters: { Path: "src/index.ts" },
         readonly: false,
@@ -637,7 +650,7 @@ describe("agy-protocol 纯函数", () => {
 });
 
 describe("1. 首次启动与完整流式回合", () => {
-  it("首次启动不带 --conversation、--print '' 在末尾，收到 init 更新 vendorSessionId，首条附带 promptFile 内容，完整走通 step_update 与 result 并统计 TurnUsage", async () => {
+  it("首次启动不带 --conversation、--print '' 在末尾，收到 init 更新 vendorSessionId，首条附带 promptFile 内容，完整走通 step_update.step_index 与 result 并统计 TurnUsage", async () => {
     const t = makeAgyHarness({
       script: {
         assignedConversationId: "agy-assigned-uuid-999",
@@ -722,25 +735,26 @@ describe("1. 首次启动与完整流式回合", () => {
     const texts = t.of("agent.text");
     expect(texts).toHaveLength(2);
     expect(texts[0]).toMatchObject({
-      uuid: "agy-step-agy-assigned-uuid-999-2",
+      uuid: "agy-step-agy-assigned-uuid-999-1-2-1",
       text: "正在为您检查文件…",
     });
     expect(texts[1]).toMatchObject({
-      uuid: "agy-step-agy-assigned-uuid-999-4",
+      uuid: "agy-step-agy-assigned-uuid-999-1-4-3",
       text: "检查完毕，一切正常！",
     });
 
     const tools = t.of("agent.tool");
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
-      toolUseId: "tool-3",
+      uuid: "agy-tool-agy-assigned-uuid-999-1-3-2",
+      toolUseId: "tool-1-3",
       name: "read_file",
       input: { Path: "README.md" },
     });
 
     const toolResults = t.of("agent.tool_result");
     expect(toolResults).toHaveLength(1);
-    expect(toolResults[0]!.toolUseIds).toEqual(["tool-3"]);
+    expect(toolResults[0]!.toolUseIds).toEqual(["tool-1-3"]);
 
     const ended = t.of("turn.ended")[0]!;
     expect(ended).toMatchObject({
@@ -749,18 +763,65 @@ describe("1. 首次启动与完整流式回合", () => {
       messageIds: [1],
     });
 
-    // 5. 检查 TurnUsage 统计
+    // 5. 检查 TurnUsage 统计（output_tokens 已含 thinking_tokens，不重复累加）
     expect(updatedRow.usage).toEqual({
       input: 250,
       cacheRead: 50,
       cacheWrite: 0,
-      output: 50, // 35 + 15 thinking
+      output: 35,
       context: 180, // 最后一步 step 4 的 150 + 30
     });
   });
 });
 
 describe("2. 长连接复用与会话恢复（--conversation）", () => {
+  it("进程重启恢复后第二轮同样 step_index 的消息与工具不会与第一轮 UUID / toolUseId 冲突", async () => {
+    const t = makeAgyHarness({
+      script: {
+        assignedConversationId: "agy-conv-uuid-check",
+        turns: [
+          {
+            steps: [
+              { type: "tool", stepId: 1, name: "read_file", parameters: { Path: "a.ts" } },
+              { type: "text", stepId: 2, deltas: ["第一轮步骤2文本"] },
+            ],
+          },
+          {
+            steps: [
+              { type: "tool", stepId: 1, name: "read_file", parameters: { Path: "b.ts" } },
+              { type: "text", stepId: 2, deltas: ["重启后第二轮同样步骤2文本"] },
+            ],
+          },
+        ],
+      },
+      driver: { idleCloseMs: 60 },
+    });
+
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一轮"));
+    await t.waitFor("turn.ended", undefined, 1);
+    await t.waitFor("session.exited", undefined, 1);
+
+    await t.driver.send(s.id, user(2, "第二轮（新进程 --conversation 恢复，step_index 重新从 1 开始）"));
+    await t.waitFor("turn.ended", undefined, 2);
+
+    const tools = t.of("agent.tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.uuid).not.toBe(tools[1]!.uuid);
+    expect(tools[0]!.uuid).toBe("agy-tool-agy-conv-uuid-check-1-1-1");
+    expect(tools[1]!.uuid).toBe("agy-tool-agy-conv-uuid-check-2-1-3");
+    expect(tools[0]!.toolUseId).toBe("tool-1-1");
+    expect(tools[1]!.toolUseId).toBe("tool-2-1");
+
+    const texts = t.of("agent.text");
+    expect(texts).toHaveLength(2);
+    expect(texts[0]!.text).toBe("第一轮步骤2文本");
+    expect(texts[1]!.text).toBe("重启后第二轮同样步骤2文本");
+    expect(texts[0]!.uuid).not.toBe(texts[1]!.uuid);
+    expect(texts[0]!.uuid).toBe("agy-step-agy-conv-uuid-check-1-2-2");
+    expect(texts[1]!.uuid).toBe("agy-step-agy-conv-uuid-check-2-2-4");
+  });
+
   it("第二轮直接复用长连接进程（不重发系统提示词）；空闲退出或设置变更重启后带 --conversation <agyAssignedId> 恢复", async () => {
     const t = makeAgyHarness({
       script: {
