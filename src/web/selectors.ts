@@ -1,6 +1,8 @@
 // 从 HubState 算出界面要用的东西。
 import {
+  AGENT_VENDORS,
   askOf,
+  VENDOR_SPECS,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
   isQuotaExhausted,
@@ -95,33 +97,21 @@ export function isWaitingForQuota(session: SessionState | null, now: number = Da
 
 /** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
 export const QUOTA_WARNING_PERCENT = 80;
-const QUOTA_WARNING_STATUS = "allowed_warning";
-
-/** 一个厂商的额度窗口：窗口键（RateLimitInfo.windows 里的键）→ 中文名，顺序就是显示顺序。 */
-interface QuotaVendorSpec {
-  id: string;
-  name: string;
-  windows: readonly { key: string; label: string }[];
-}
 
 /**
- * 有额度数据的厂商。会话还没有“哪家厂商”这个字段，现在的额度都是 Claude 的（rate_limit_event）；
- * 以后加厂商：在这里加一项，并让 quotaUsage 按会话的厂商分开取。
+ * 有额度数据的厂商（shared/vendors.ts 的 VendorSpec.quota）。会话还没有“哪家厂商”这个字段，现在的额度都是 Claude 的；
+ * 以后加厂商：在 vendors.ts 里写上它的 quota，并让 quotaUsage 按会话的厂商分开取。
  */
-const QUOTA_VENDORS: readonly QuotaVendorSpec[] = [
-  {
-    id: "claude",
-    name: "Claude",
-    windows: [
-      { key: "five_hour", label: "5 小时" },
-      { key: "seven_day", label: "7 天" },
-    ],
-  },
-];
+const QUOTA_VENDORS = AGENT_VENDORS.flatMap((id) => {
+  const quota = VENDOR_SPECS[id].quota;
+  return quota === undefined ? [] : [{ id, ...quota }];
+});
 
 export interface QuotaWindowUsage {
   key: string;
   label: string;
+  /** 左下角按钮上的简写（5h、7d）。 */
+  short: string;
   /** 已用的百分比，四舍五入的整数，夹在 0 到 100 之间。 */
   percent: number;
   /** 重置时间，Unix 秒；没有是 null。 */
@@ -169,7 +159,7 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
-    for (const { key, label } of spec.windows) {
+    for (const { key, label, short } of spec.windows) {
       let best: SessionState | null = null;
       for (const s of state.sessions) {
         const w = s.rateLimit?.windows[key];
@@ -178,16 +168,17 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
       const window = best?.rateLimit?.windows[key];
       if (window === undefined) continue;
       if (isReset(window.resetsAt, now)) {
-        windows.push({ key, label, percent: 0, resetsAt: null, warning: false });
+        windows.push({ key, label, short, percent: 0, resetsAt: null, warning: false });
         continue;
       }
       const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
       windows.push({
         key,
         label,
+        short,
         percent,
         resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,
-        warning: window.status === QUOTA_WARNING_STATUS || percent >= QUOTA_WARNING_PERCENT,
+        warning: window.status === spec.warningStatus || percent >= QUOTA_WARNING_PERCENT,
       });
     }
     if (windows.length === 0) continue;
@@ -333,16 +324,15 @@ export function waitingConversations(state: HubState, lastSeen: LastSeen): Conve
 }
 
 /**
- * 对话里还在等用户确定的 hub ask（M5）：没点“知道了”（meta.dismissed），并且这条之后用户没发过消息
- * （包括刚发出、服务端还没确认的）。从老到新。
+ * 对话里还在等用户确定的 hub ask（M5）：守护进程还没标成已回答（meta.answered，用户在这个对话里发了消息就标上，
+ * 见 ledger/messages.ts）。用户刚发出、服务端还没确认的消息也先当回答了，不等推送。从老到新。
  */
 export function pendingAsks(state: HubState, conversationId: ConversationId): Message[] {
   const view = state.conversations[conversationId];
   if (!view || pendingOf(state, conversationId).some((p) => p.phase !== "failed")) return [];
-  const lastUserId = view.messages.findLast((m) => m.sender === "user")?.id ?? 0;
   return view.messages.filter((m) => {
     const meta = askOf(m);
-    return meta !== null && meta.dismissed !== true && m.id > lastUserId;
+    return meta !== null && meta.answered !== true;
   });
 }
 
@@ -367,7 +357,7 @@ export function failingHealth(state: HubState): HealthEntry[] {
 }
 
 /**
- * 消息流里的一项（docs/ui-standard.md 第 16 条）：
+ * 消息流里的一项（docs/ui-standard.md 第 17 条）：
  * - message：单独显示的一条：用户的话、Worker 对话里项目经理的话、Worker 的汇报、到点的定时任务、很淡的系统行；
  * - turn：agent 的一轮回复，只出一个头像。work 是这一轮的操作（工具调用、派出 / 收工 Worker、建删定时任务），合成一行
  *   “Worked for …”；parts 是按顺序要显示的文字和夹在中间的系统行。startedAt / endedAt 算用时，都是已有的时间戳。

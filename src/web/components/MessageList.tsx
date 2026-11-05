@@ -16,7 +16,7 @@ const HIGHLIGHT_MS = 2_000;
 const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
 
 /**
- * 消息流（docs/ui-standard.md 第 16 条）：agent 的一轮回复一个头像，操作合成一行；打开、刷新、图片加载完、内容变高时，
+ * 消息流（docs/ui-standard.md 第 17 条）：agent 的一轮回复一个头像，操作合成一行；打开、刷新、图片加载完、内容变高时，
  * 原本在底部的继续贴底（ResizeObserver），往上翻了就不拉回去。
  */
 export function MessageList({

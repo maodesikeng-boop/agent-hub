@@ -1,10 +1,11 @@
-// 网页：hub ask 发的“等你确定”（M5）：对话顶部的条、跳转、清掉的规则、左栏标签和标题数字、立刻弹通知。接口、WebSocket、Notification 都是假的。
+// 网页：hub ask 发的“等你确定”（M5）：右栏里的那一组、展开全文和跳转、已回答（守护进程标的 meta.answered）就消失、左栏标签和标题数字、立刻弹通知。接口、WebSocket、Notification 都是假的。
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message, StateSnapshot } from "../shared/index.ts";
 import { PRODUCT_NAME } from "../shared/names.ts";
 import { App } from "./App.tsx";
 import { NOTIFY_ENABLED_KEY } from "./notify.ts";
+import { stripMarkdown } from "./plainText.ts";
 import {
   FakeApi,
   FakeNotification,
@@ -17,6 +18,7 @@ import {
   makeSession,
   makeSnapshot,
   makeUserMessage,
+  makeWorkerConversation,
   makeWorkerLine,
   messageChange,
   sessionChange,
@@ -55,12 +57,16 @@ function twoPms(lin: Message[], ma: Message[] = [makeUserMessage({ id: 21, conve
   });
 }
 
-const QUESTION = "用 **方案 A** 还是方案 B？";
-const bar = () => screen.queryByRole("button", { name: /^等你确定（\d+）/ });
+const QUESTION = "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B：单栏信息流";
+const rail = () => screen.queryByRole("complementary", { name: "右栏" });
+/** 右栏里的“等你确定”组；没有是 null。 */
+const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^等你确定/ }));
+const askRows = () => within(asksGroup()!).getAllByRole("button");
 const nav = () => screen.getByRole("navigation", { name: "对话列表" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
 const hasTag = (name: string) => within(row(name)).queryByText("等你确定") !== null;
 const askedByOldMa = () => twoPms([makeUserMessage({ id: 1, text: "小林说话了", createdAt: 20_000 })], [ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 })]);
+const answered = (over: Partial<Message> & Pick<Message, "id">) => ask({ ...over, meta: { needsUser: true, answered: true } });
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -80,25 +86,37 @@ afterEach(() => {
   Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 });
 
-describe("对话顶部的“等你确定”条", () => {
-  it("有提问：显示“等你确定（N）”；没有提问：不显示；普通消息不算", async () => {
+describe("右栏的“等你确定”", () => {
+  it("有提问：右栏自动展开，“等你确定”一组，一个问题一行；没有提问：没有这一组（也没有 Worker 就没有右栏）；普通消息不算", async () => {
     await boot(twoPms([makeUserMessage({ id: 1, text: "普通的话" })]));
-    expect(bar()).not.toBeInTheDocument();
+    expect(rail()).not.toBeInTheDocument();
     unmountApp();
     await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
-    expect(screen.getByRole("button", { name: /^等你确定（2）/ })).toBeInTheDocument();
+    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent("等你确定2");
+    expect(askRows().map((b) => b.textContent)).toEqual(["用 方案 A 还是方案 B？", "再问一个"]);
   });
 
-  it("点一下展开列出每个问题的摘要（去掉 Markdown 符号）；点某条跳到那条消息并高亮", async () => {
+  it("对话顶部没有横条，也没有“知道了”按钮", async () => {
+    await boot(twoPms([ask({ id: 1, text: QUESTION })]));
+    expect(screen.queryByRole("button", { name: "知道了" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("button", { name: /等你确定/ })).not.toBeInTheDocument();
+  });
+
+  it("点一行：在右栏里展开全文（Markdown），对话滚到那条消息并高亮；再点收起", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION }), makeMessage({ id: 2, text: "中间的话" }), ask({ id: 3, text: "再问一个" })]));
-    expect(screen.queryByRole("button", { name: /用 方案 A 还是方案 B？/ })).not.toBeInTheDocument();
-    fireEvent.click(bar()!);
-    expect(screen.getByRole("button", { name: /用 方案 A 还是方案 B？/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "再问一个" }));
-    const target = document.querySelector('[data-message-id="3"]')!;
+    const first = askRows()[0]!;
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    const body = first.parentElement!;
+    expect(within(body).getByText("方案 A").tagName).toBe("STRONG");
+    expect(within(body).getByText("B：单栏信息流")).toBeInTheDocument();
+    const target = document.querySelector('[data-message-id="1"]')!;
     expect(scrolled).toEqual([target]);
     expect(target).toHaveAttribute("data-highlighted", "true");
-    expect(document.querySelector('[data-message-id="1"]')).not.toHaveAttribute("data-highlighted");
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(within(body).queryByText("B：单栏信息流")).not.toBeInTheDocument();
   });
 
   it("那条消息上不另挂“等你确定”标签（细节藏起来，提问在别处列着）", async () => {
@@ -106,59 +124,56 @@ describe("对话顶部的“等你确定”条", () => {
     expect(within(document.querySelector('[data-message-id="1"]') as HTMLElement).queryByText("等你确定")).not.toBeInTheDocument();
   });
 
-  it("有新 Worker 消息和新的普通消息进来，条还在", async () => {
+  it("有新 Worker 消息和新的普通消息进来，提问还在", async () => {
     const ws = await boot(twoPms([ask({ id: 1, text: QUESTION })]));
     act(() => ws.push(messageChange(11, "message.created", makeWorkerLine({ id: 2, line: { event: "report", status: "done", summary: "好了" } }))));
     act(() => ws.push(messageChange(12, "message.created", makeMessage({ id: 3, text: "Worker 说完了" }))));
-    expect(screen.getByRole("button", { name: /^等你确定（1）/ })).toBeInTheDocument();
+    expect(askRows()).toHaveLength(1);
   });
 
-  it("用户在这条之后发了消息（对话里已有，或刚发出还没确认）：自动清掉", async () => {
-    const ws = await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    act(() => ws.push(messageChange(11, "message.created", makeUserMessage({ id: 2, text: "用 A", createdAt: Date.now() }))));
-    expect(bar()).not.toBeInTheDocument();
-    unmountApp();
-    // 刚打开、用户的回复已经在对话里
-    await boot(twoPms([ask({ id: 1, text: QUESTION }), makeUserMessage({ id: 2, text: "用 A" })]));
-    expect(bar()).not.toBeInTheDocument();
-    unmountApp();
-    // 在输入框里发：马上清，不等服务端确认
+  it("守护进程标成已回答（推 message.updated）：从右栏消失；没有提问也没有 Worker 时右栏整个收起", async () => {
+    const ws = await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
+    act(() => ws.push(messageChange(11, "message.created", makeUserMessage({ id: 3, text: "用 A", createdAt: Date.now() }))));
+    act(() => ws.push(messageChange(12, "message.updated", answered({ id: 1, text: QUESTION }))));
+    expect(askRows().map((b) => b.textContent)).toEqual(["再问一个"]);
+    act(() => ws.push(messageChange(13, "message.updated", answered({ id: 2, text: "再问一个" }))));
+    expect(rail()).not.toBeInTheDocument();
+  });
+
+  it("在输入框里发出去：马上消失，不等服务端确认", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "用 A" } });
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
-    await waitFor(() => expect(bar()).not.toBeInTheDocument());
+    await waitFor(() => expect(asksGroup()).toBeNull());
   });
 
-  it("用户先发的消息不算：提问在用户消息之后，条照样显示", async () => {
+  it("用户先发的消息不算：提问在用户消息之后，照样显示", async () => {
     await boot(twoPms([makeUserMessage({ id: 1, text: "帮我选" }), ask({ id: 2, text: QUESTION })]));
-    expect(screen.getByRole("button", { name: /^等你确定（1）/ })).toBeInTheDocument();
+    expect(askRows()).toHaveLength(1);
   });
 
-  it("“知道了”：请求服务端清掉；清掉之后（服务端推 message.updated）条消失，别的提问还在", async () => {
-    const ws = await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    await waitFor(() => expect(api.callsTo("POST", /\/api\/messages\/1\/dismiss-ask$/)).toHaveLength(1));
-    act(() => ws.push(messageChange(11, "message.updated", ask({ id: 1, text: QUESTION, meta: { needsUser: true, dismissed: true } }))));
-    expect(bar()).not.toBeInTheDocument();
-  });
-
-  it("“知道了”清掉这个对话里所有还没处理的提问", async () => {
-    await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
-    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
-    await waitFor(() => expect(api.callsTo("POST", /dismiss-ask$/).map((c) => c.path)).toEqual(["/api/messages/1/dismiss-ask", "/api/messages/2/dismiss-ask"]));
-  });
-
-  it("刷新页面、重启后：服务端记着已经清掉的，不再出现", async () => {
+  it("刷新页面、重启后：已回答的（包括老数据里点过“知道了”的）不再出现", async () => {
     setForeground(true);
-    await boot(twoPms([ask({ id: 1, text: QUESTION, meta: { needsUser: true, dismissed: true } })]));
-    expect(bar()).not.toBeInTheDocument();
+    await boot(twoPms([answered({ id: 1, text: QUESTION }), ask({ id: 2, text: "老的", meta: { needsUser: true, dismissed: true } })]));
+    expect(rail()).not.toBeInTheDocument();
     expect(hasTag("小林")).toBe(false);
     expect(document.title).toBe(PRODUCT_NAME);
+  });
+
+  it("在 Worker 的对话里：右栏照样列它的项目经理的提问；点一行回到项目经理的对话并滚到那条", async () => {
+    const snapshot = twoPms([ask({ id: 1, text: QUESTION })]);
+    snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
+    await boot(snapshot);
+    fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
+    expect(screen.getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
+    fireEvent.click(askRows()[0]!);
+    expect(screen.queryByRole("region", { name: "Worker 修 X" })).not.toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-message-id="1"]')).toHaveAttribute("data-highlighted", "true"));
   });
 });
 
 describe("左栏标签和标题数字", () => {
-  it("有提问的项目经理那一行显示“等你确定”；标题数字算上；处理之后都消失", async () => {
+  it("有提问的项目经理那一行显示“等你确定”；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
     expect(hasTag("小林")).toBe(false);
@@ -167,8 +182,16 @@ describe("左栏标签和标题数字", () => {
     act(() => ws.push(sessionChange(11, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, activity: "working" }))));
     expect(hasTag("老马")).toBe(true);
     act(() => ws.push(messageChange(12, "message.created", makeUserMessage({ id: 23, conversationId: 2, createdAt: Date.now() }))));
+    act(() => ws.push(messageChange(13, "message.updated", answered({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 }))));
     expect(hasTag("老马")).toBe(false);
     expect(document.title).toBe(PRODUCT_NAME);
+  });
+
+  it("用户在别的对话里发消息：这个对话的提问照旧", async () => {
+    const ws = await boot(askedByOldMa());
+    act(() => ws.push(messageChange(12, "message.created", makeUserMessage({ id: 30, conversationId: 1, createdAt: Date.now() }))));
+    expect(hasTag("老马")).toBe(true);
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 
   it("同一个项目经理又“等你”又有提问：只算一个，行上只显示“等你确定”", async () => {
@@ -178,11 +201,11 @@ describe("左栏标签和标题数字", () => {
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 
-  it("点那一行打开老马的对话，顶部是它的条", async () => {
+  it("点那一行打开老马的对话，右栏里是它的提问", async () => {
     await boot(askedByOldMa());
-    expect(bar()).not.toBeInTheDocument();
+    expect(asksGroup()).toBeNull();
     fireEvent.click(row("老马"));
-    expect(screen.getByRole("button", { name: /^等你确定（1）/ })).toBeInTheDocument();
+    expect(askRows().map((b) => b.textContent)).toEqual(["用 方案 A 还是方案 B？"]);
   });
 });
 
@@ -194,7 +217,7 @@ describe("通知", () => {
     act(() => ws.push(messageChange(12, "message.created", ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: Date.now() }))));
     expect(FakeNotification.instances).toHaveLength(1);
     expect(FakeNotification.last.title).toBe("老马 等你确定");
-    expect(FakeNotification.last.options.body).toBe("用 方案 A 还是方案 B？");
+    expect(FakeNotification.last.options.body).toBe(stripMarkdown(QUESTION));
     act(() => FakeNotification.last.onclick?.());
     expect(focus).toHaveBeenCalledOnce();
     expect(row("老马")).toHaveAttribute("aria-current", "true");
@@ -221,6 +244,6 @@ describe("通知", () => {
     const ws = await boot(twoPms([makeUserMessage({ id: 1, text: "小林说话了" })]));
     act(() => ws.push(messageChange(12, "message.created", ask({ id: 2, text: QUESTION, createdAt: Date.now() }))));
     expect(FakeNotification.instances).toHaveLength(0);
-    expect(screen.getByRole("button", { name: /^等你确定（1）/ })).toBeInTheDocument();
+    expect(askRows()).toHaveLength(1);
   });
 });

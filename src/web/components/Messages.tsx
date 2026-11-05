@@ -1,4 +1,4 @@
-// 消息流里的每一种东西（docs/ui-standard.md 第 16 条）：一轮回复（一个头像、操作合成一行 Worked for、文字、复制和时间）、
+// 消息流里的每一种东西（docs/ui-standard.md 第 17 条）：一轮回复（一个头像、操作合成一行 Worked for、文字、复制和时间）、
 // 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
 import {
   Archive,

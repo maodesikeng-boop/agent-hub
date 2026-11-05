@@ -24,7 +24,7 @@ export async function runAsk(outcomes: Outcome[], only: (name: string) => boolea
       async () => messagesOf(await smoke.client.state(), conversationId).find((m) => m.id > sent && askOf(m) !== null),
       TURN_MS,
     );
-    expect(askOf(asked)?.dismissed !== true, "刚发出的提问不该是已处理");
+    expect(askOf(asked)?.answered !== true, "刚发出的提问不该是已处理");
     expect(/蓝|绿|A|B/.test(asked.text), `提问里没有方案：${asked.text}`);
     const calls = smoke.query<{ command: string; ok: number }>("SELECT command, ok FROM hub_calls WHERE command = 'ask'");
     expect(calls.length === 1 && calls[0]!.ok === 1, `hub_calls 里没有成功的 ask：${JSON.stringify(calls)}`);

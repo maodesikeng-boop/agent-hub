@@ -1,4 +1,4 @@
-// 出错时给人看的那句话：分类和说法都在这里（docs/ui-standard.md 第 16 条）。按通用的类型分，不按厂商的错误码散写在组件里；
+// 出错时给人看的那句话：分类和说法都在这里（docs/ui-standard.md 第 17 条）。按通用的类型分，不按厂商的错误码散写在组件里；
 // 各家的错误特征在 shared/vendors.ts（VENDOR_FAILURE_SIGNS），和厂商无关的网络错误特征在下面。原始错误放 title。
 import { vendorFailureOf, type FailureKind } from "../shared/index.ts";
 

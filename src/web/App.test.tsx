@@ -363,7 +363,7 @@ describe("消息状态", () => {
     );
     const mine = () => bubbles()[0] as HTMLElement;
     expect(within(mine()).getByText("排队中")).toBeInTheDocument();
-    // 已送达、处理中、已回复都不显示（docs/ui-standard.md 第 16 条）
+    // 已送达、处理中、已回复都不显示（docs/ui-standard.md 第 17 条）
     push(ws, messageChange(11, "message.updated", makeUserMessage({ id: 1, text: "查一下", status: "delivered" })));
     expect(mine().querySelector("[data-delivery]")).toBeNull();
     push(ws, messageChange(12, "message.updated", makeUserMessage({ id: 1, text: "查一下", status: "processing" })));
@@ -498,7 +498,7 @@ describe("消息流里的状态和输入框里的停止", () => {
     expect(log()).toContainElement(status);
     expect(status.closest("[data-work-line]")).not.toBeNull();
     expect(screen.getAllByRole("status")).toHaveLength(1);
-    expect(box().closest("div[class*='max-w-[888px]']")).not.toContainElement(status);
+    expect(box().closest("div.chat-column")).not.toContainElement(status);
   });
 
   it("忙时输入框有字：发送键（发出去照常排队）；清空又是停止", async () => {

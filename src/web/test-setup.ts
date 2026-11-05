@@ -4,6 +4,11 @@ import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 
 afterEach(cleanup);
+// 网址（每个对话一个，route.ts）和右栏收起的记忆不带到下一条测试
+afterEach(() => {
+  window.history.replaceState(null, "", "/");
+  localStorage.removeItem("agent-hub.rightRail");
+});
 
 // jsdom 没有 ResizeObserver，Radix 的单选组要用
 class ResizeObserverStub {

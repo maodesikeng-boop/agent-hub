@@ -14,6 +14,7 @@ import {
   effortsFor,
   modelChoiceOf,
   modelLabel,
+  modelShortLabel,
   type ModelCatalog,
 } from "./vendors.ts";
 import { MAX_MODEL_CHARS } from "./limits.ts";
@@ -142,5 +143,19 @@ describe("模型名单", () => {
     expect(effortsFor(catalog, "not-listed")).toEqual(VENDOR_SPECS.claude.efforts);
     expect(effortsFor(catalog, null)).toEqual(["low", "high"]);
     expect(effortsFor(bundledModelCatalog("claude"), null)).toEqual(VENDOR_SPECS.claude.efforts);
+  });
+});
+
+describe("modelShortLabel（右栏的 Worker 行）", () => {
+  it("名单里有的用名单的名字；完整的 claude 模型名缩成“家族 版本”；认不出来的原样", () => {
+    expect(modelShortLabel("claude", null)).toBe("默认");
+    expect(modelShortLabel("claude", "sonnet")).toBe("Sonnet");
+    expect(modelShortLabel("claude", "claude-sonnet-5-5")).toBe("Sonnet 5.5");
+    expect(modelShortLabel("claude", "claude-opus-4-1-20250805")).toBe("Opus 4.1");
+    expect(modelShortLabel("claude", "claude-sonnet-5-5[1m]")).toBe("Sonnet 5.5 1M");
+    expect(modelShortLabel("claude", "claude-haiku-5")).toBe("Haiku 5");
+    expect(modelShortLabel("claude", "us.anthropic.claude-haiku-5-5:0")).toBe("us.anthropic.claude-haiku-5-5:0");
+    // 默认：名单说了实际是哪个模型就写它
+    expect(modelShortLabel("claude", null, { ...bundledModelCatalog("claude"), defaultModel: "Opus 5.5" })).toBe("Opus 5.5");
   });
 });

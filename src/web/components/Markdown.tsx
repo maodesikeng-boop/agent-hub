@@ -89,7 +89,7 @@ function previewOf(file: SentFile, url: string, index: number, messageId: number
   return { name: file.name, mime: file.mime, size: file.size, url, target: messageId === undefined ? null : { kind: "sent", messageId, index } };
 }
 
-/** 内联图片，点开预览窗。固定 240px 高、最宽 320px，加载前后高度不变（消息流不跳，docs/ui-standard.md 第 15、16 条）；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */
+/** 内联图片，点开预览窗。固定 240px 高、最宽 320px，加载前后高度不变（消息流不跳，docs/ui-standard.md 第 15、17 条）；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */
 function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; preview: PreviewFile }) {
   const [open, setOpen] = useState(false);
   const [expired, markExpired] = useFileExpired(preview.url, false);
