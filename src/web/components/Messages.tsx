@@ -5,7 +5,6 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
-  CircleCheck,
   CirclePlay,
   CircleX,
   Clock,
@@ -16,7 +15,6 @@ import {
   MessageSquare,
   RefreshCw,
   Square,
-  TriangleAlert,
   UserPen,
   X,
   type LucideIcon,
@@ -29,7 +27,6 @@ import {
   sentFilesOf,
   systemEventOf,
   systemNoticeText,
-  WORKER_REPORT_STATUS_LABELS,
   workerEventOf,
   workerLineText,
   type ConversationId,
@@ -46,6 +43,7 @@ import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
+import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AttachmentList } from "./Attachments.tsx";
@@ -76,13 +74,15 @@ const SECONDARY = "text-[13.5px] text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
 const TEXT_BUTTON = "cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-/** 头像（24px）+ 名字；Worker 的发言在名字后面跟状态小标注。头像旁不放 agent 的状态。 */
-function AgentHead({ identity, children }: { identity: AgentIdentity; children?: React.ReactNode }) {
+/** 头像（24px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。 */
+function AgentHead({ identity, dot }: { identity: AgentIdentity; dot?: Exclude<WorkerTone, "neutral"> }) {
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
-      <Avatar colorKey={identity.avatarKey} size={24} neutral={identity.neutral} />
+      <span className="relative flex shrink-0">
+        <Avatar colorKey={identity.avatarKey} size={24} neutral={identity.neutral} />
+        {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
+      </span>
       <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>
-      {children}
     </div>
   );
 }
@@ -357,50 +357,35 @@ function SystemNotice({ message, actions, inTurn = false }: { message: Message; 
   }
 }
 
-/** Worker 的状态小标注：图标带颜色、字是灰的。没按格式的不标。 */
-function workerTag(line: WorkerMessageMeta): { icon: LucideIcon; className: string; label: string } | null {
-  if (line.event === "turn_failed" || line.event === "worktree_failed") return { icon: CircleX, className: "text-danger", label: "出错" };
-  switch (line.status) {
-    case "done":
-      return { icon: CircleCheck, className: "text-success", label: WORKER_REPORT_STATUS_LABELS.done };
-    case "problem":
-      return { icon: TriangleAlert, className: "text-warn-foreground", label: WORKER_REPORT_STATUS_LABELS.problem };
-    case "gave_up":
-      return { icon: CircleX, className: "text-danger", label: WORKER_REPORT_STATUS_LABELS.gave_up };
-    default:
-      return null;
-  }
-}
+/** 状态色点（styles.css 的变量），在头像右下角；中性的没有点。 */
+const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger" };
 
 /**
- * Worker 的发言（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：中性头像 + 标题 + 状态小标注，正文是摘要。
- * 整条可点，打开 Worker 的完整对话。给项目经理的汇报原文不显示。
+ * Worker 的发言（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：头像 + 标题在上面，摘要在靠左的中性浅灰气泡里。
+ * 状态是头像右下角的一个小色点（workerStatusOf），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
+ * 给项目经理的汇报原文不显示。
  */
 function WorkerSpeech({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  const tag = workerTag(line);
+  const { tone, label } = workerStatusOf(line);
   const failed = line.event !== "report";
   const summary = line.summary?.trim() ?? "";
   const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw" }) : null;
+  const text = body ? body.text : summary;
   return (
-    <article className="mt-4 flex flex-col" data-side="left" data-worker-report>
+    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
+      <AgentHead identity={{ name: line.title, avatarKey: line.workerId, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
       <button
         type="button"
-        className="-mx-3 flex cursor-pointer flex-col items-start rounded-2xl px-3 py-2 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        data-bubble
+        title={label ?? undefined}
+        aria-label={label ? `${line.title}，${label}：${text}` : undefined}
+        className={cn(
+          BUBBLE,
+          "cursor-pointer bg-bubble-agent text-left transition-colors outline-none hover:bg-[color-mix(in_srgb,var(--bubble-agent),var(--foreground)_5%)] focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
+        )}
         onClick={() => onOpen(line.workerConversationId)}
       >
-        <AgentHead identity={{ name: line.title, avatarKey: line.workerId, neutral: true }}>
-          {tag && (
-            <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" data-tag>
-              <tag.icon className={cn("size-3.5", tag.className)} aria-hidden="true" />
-              {tag.label}
-            </span>
-          )}
-        </AgentHead>
-        {summary !== "" && (
-          <p className="w-full min-w-0 text-[15px] leading-relaxed [overflow-wrap:anywhere]" title={body ? body.raw : undefined}>
-            {body ? body.text : summary}
-          </p>
-        )}
+        <span title={body ? body.raw : undefined}>{text}</span>
       </button>
     </article>
   );
