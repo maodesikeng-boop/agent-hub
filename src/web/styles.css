@@ -112,6 +112,32 @@ code {
   padding-right: max(24px, calc(100% - var(--chat-inset) - var(--chat-max)));
 }
 
+/* 消息区上下边缘渐隐，文字不被硬切（docs/ui-standard.md 第 17 条“贴底”）。
+   上沿 16px、下沿 24px 正好落在内容自己的上下留白上，所以在顶上、贴底时看不出来；往上翻了（data-away）下沿渐隐成
+   36px 的空白，“回到底部”按钮放在里面。--fade-solid / --fade-clear 注册成长度，切换时有过渡 */
+@property --fade-solid {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 24px;
+}
+@property --fade-clear {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.fade-edges {
+  --fade-solid: 24px;
+  --fade-clear: 0px;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - var(--fade-solid)), transparent calc(100% - var(--fade-clear)));
+  transition:
+    --fade-solid 150ms,
+    --fade-clear 150ms;
+}
+.fade-edges[data-away] {
+  --fade-solid: 64px;
+  --fade-clear: 36px;
+}
+
 /* agent 消息里的 Markdown（规则见 docs/ui-standard.md 第 15 条） */
 .markdown {
   overflow-wrap: anywhere;

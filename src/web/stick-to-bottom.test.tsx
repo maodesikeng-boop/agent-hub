@@ -77,22 +77,34 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(700);
   });
 
-  it("用户往上翻了：内容变高不拉回去，消息区下面出现“回到底部”（浅灰底，没有描边和阴影，不压在消息上）", () => {
+  it("消息区上下边缘是渐隐，不硬切文字；贴底时下沿的渐隐只落在底部留白上", () => {
+    const { log } = setup();
+    expect(log.className).toContain("fade-edges");
+    expect(log).not.toHaveAttribute("data-away");
+    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
+  });
+
+  it("用户往上翻了：内容变高不拉回去，“回到底部”放在下沿渐隐出来的空白里（透明、不切消息、不挡字）", () => {
     const { log, box } = setup();
     log.scrollTop = 100;
     fireEvent.scroll(log);
     box.scrollHeight = 1500;
     resize();
     expect(log.scrollTop).toBe(100);
+    // 渐隐的下沿让出按钮的位置，消息区自己不缩短、不换行
+    expect(log).toHaveAttribute("data-away", "true");
     const back = screen.getByRole("button", { name: "回到底部" });
     expect(back.className).not.toMatch(/shadow|border/);
-    // 不浮在消息上：不在消息区里、不是绝对定位，是消息区下面让出来的一条
-    expect(log).not.toContainElement(back);
-    expect(back.className).not.toContain("absolute");
-    expect(back.closest("[data-back-to-bottom]")!.className).not.toContain("absolute");
     expect(back.className).toContain("bg-secondary");
+    // 按钮在消息区外面、盖在渐隐空白上；外层不挡鼠标，只有按钮自己能点
+    expect(log).not.toContainElement(back);
+    const holder = back.closest("[data-back-to-bottom]") as HTMLElement;
+    expect(holder.className).toContain("absolute");
+    expect(holder.className).toContain("pointer-events-none");
+    expect(back.className).toContain("pointer-events-auto");
     fireEvent.click(back);
     expect(log.scrollTop).toBe(1100);
+    expect(log).not.toHaveAttribute("data-away");
     // 回到底部后又贴底
     box.scrollHeight = 1800;
     resize();
