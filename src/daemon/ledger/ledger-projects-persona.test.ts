@@ -13,7 +13,7 @@ import type { LedgerErrorCode } from "../../shared/ledger.ts";
 import { HUB_CALL_FIELD_MAX_BYTES, MAX_NAME_CHARS, MAX_PERSONA_BYTES } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { personaFilePath } from "../../shared/paths.ts";
-import type { ModelCatalog } from "../../shared/vendors.ts";
+import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -592,7 +592,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
 
   it("系统消息里的模型名用缓存着的模型名单的显示名；名单里没有的原样；还没有名单用打包的", () => {
     let catalog: ModelCatalog | null = {
-      vendor: "claude",
+      ...bundledModelCatalog("claude"),
       source: "vendor",
       defaultEfforts: null,
       models: [
