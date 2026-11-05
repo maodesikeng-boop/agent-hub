@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkerMessageMeta } from "../shared/index.ts";
-import { workerStatusOf, WORKER_STATUS_STYLE } from "./worker-status.ts";
+import { workerStatusOf } from "./worker-status.ts";
 
 const line = (over: Partial<WorkerMessageMeta>): WorkerMessageMeta => ({
   workerId: 3,
@@ -28,9 +28,5 @@ describe("workerStatusOf", () => {
   it("没按格式、没有状态（老数据）是中性灰，没有说法", () => {
     expect(workerStatusOf(line({ status: "unformatted" }))).toEqual({ tone: "neutral", label: null });
     expect(workerStatusOf(line({ status: undefined }))).toEqual({ tone: "neutral", label: null });
-  });
-
-  it("默认方案是气泡带淡色（A）", () => {
-    expect(WORKER_STATUS_STYLE).toBe("tint");
   });
 });

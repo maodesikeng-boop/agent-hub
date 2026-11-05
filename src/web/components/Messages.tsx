@@ -43,7 +43,7 @@ import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
-import { WORKER_STATUS_STYLE, workerStatusOf, type WorkerStatusStyle, type WorkerTone } from "../worker-status.ts";
+import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AttachmentList } from "./Attachments.tsx";
@@ -74,7 +74,7 @@ const SECONDARY = "text-[13.5px] text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
 const TEXT_BUTTON = "cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-/** 头像（24px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报的方案 B 在头像右下角放一个状态色点。 */
+/** 头像（24px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。 */
 function AgentHead({ identity, dot }: { identity: AgentIdentity; dot?: Exclude<WorkerTone, "neutral"> }) {
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
@@ -357,38 +357,23 @@ function SystemNotice({ message, actions, inTurn = false }: { message: Message; 
   }
 }
 
-/** 状态色（styles.css 的变量）：方案 A 是气泡底色，方案 B 是头像右下角的色点。中性的没有点。 */
-const TONE_BUBBLE: Record<WorkerTone, string> = {
-  success: "[--tone:var(--bubble-success)]",
-  warn: "[--tone:var(--bubble-warn)]",
-  danger: "[--tone:var(--bubble-danger)]",
-  neutral: "[--tone:var(--bubble-agent)]",
-};
-const NEUTRAL_BUBBLE = TONE_BUBBLE.neutral;
+/** 状态色点（styles.css 的变量），在头像右下角；中性的没有点。 */
 const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger" };
 
 /**
- * Worker 的发言（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：头像 + 标题在上面，摘要在靠左的浅色气泡里。
- * 状态用颜色表示（workerStatusOf、WORKER_STATUS_STYLE），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
+ * Worker 的发言（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：头像 + 标题在上面，摘要在靠左的中性浅灰气泡里。
+ * 状态是头像右下角的一个小色点（workerStatusOf），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
  * 给项目经理的汇报原文不显示。
  */
-export function WorkerSpeech({
-  line,
-  onOpen,
-  variant = WORKER_STATUS_STYLE,
-}: {
-  line: WorkerMessageMeta;
-  onOpen: MessageActions["onOpenWorker"];
-  variant?: WorkerStatusStyle;
-}) {
+function WorkerSpeech({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
   const { tone, label } = workerStatusOf(line);
   const failed = line.event !== "report";
   const summary = line.summary?.trim() ?? "";
   const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw" }) : null;
   const text = body ? body.text : summary;
   return (
-    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone} data-style={variant}>
-      <AgentHead identity={{ name: line.title, avatarKey: line.workerId, neutral: true }} dot={variant === "dot" && tone !== "neutral" ? tone : undefined} />
+    <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
+      <AgentHead identity={{ name: line.title, avatarKey: line.workerId, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
       <button
         type="button"
         data-bubble
@@ -396,9 +381,7 @@ export function WorkerSpeech({
         aria-label={label ? `${line.title}，${label}：${text}` : undefined}
         className={cn(
           BUBBLE,
-          "cursor-pointer text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
-          "bg-(--tone) hover:bg-[color-mix(in_srgb,var(--tone),var(--foreground)_5%)]",
-          variant === "tint" ? TONE_BUBBLE[tone] : NEUTRAL_BUBBLE,
+          "cursor-pointer bg-bubble-agent text-left transition-colors outline-none hover:bg-[color-mix(in_srgb,var(--bubble-agent),var(--foreground)_5%)] focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
         )}
         onClick={() => onOpen(line.workerConversationId)}
       >

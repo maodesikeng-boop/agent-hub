@@ -2,10 +2,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { Message, WorkerMessageMeta } from "../shared/index.ts";
+import type { Message } from "../shared/index.ts";
 import { AgentStatus } from "./components/AgentStatus.tsx";
 import { MessageList } from "./components/MessageList.tsx";
-import { displayText, WorkerSpeech, type AgentIdentity, type MessageActions } from "./components/Messages.tsx";
+import { displayText, type AgentIdentity, type MessageActions } from "./components/Messages.tsx";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine } from "./test-utils.ts";
 
@@ -216,26 +216,17 @@ describe("Worker 的发言", () => {
     expect(within(rows[3]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
   });
 
-  it("方案 A（tint）：气泡底色带状态色，没有色点；中性的用中性灰", () => {
-    const { container } = render(<WorkerSpeech line={report().meta as WorkerMessageMeta} onOpen={() => {}} variant="tint" />);
+  it("气泡永远是中性浅灰，状态是头像右下角的色点；中性的没有点", () => {
+    const { container } = list([report({ status: "problem" })]);
     const bubble = container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble.className).toContain("--bubble-success");
-    expect(container.querySelector("[data-dot]")).toBeNull();
-    const neutral = render(<WorkerSpeech line={{ ...(report().meta as WorkerMessageMeta), status: "unformatted" }} onOpen={() => {}} variant="tint" />);
-    expect((neutral.container.querySelector("[data-bubble]") as HTMLElement).className).toContain("--bubble-agent");
-  });
-
-  it("方案 B（dot）：气泡永远中性灰，状态是头像右下角的色点；中性的没有点", () => {
-    const { container } = render(<WorkerSpeech line={report({ status: "problem" }).meta as WorkerMessageMeta} onOpen={() => {}} variant="dot" />);
-    const bubble = container.querySelector("[data-bubble]") as HTMLElement;
-    expect(bubble.className).toContain("--bubble-agent");
-    expect(bubble.className).not.toContain("--bubble-warn");
+    expect(bubble.className).toContain("bg-bubble-agent");
     const dot = container.querySelector("[data-dot]") as HTMLElement;
     expect(dot).toHaveAttribute("data-dot", "warn");
     expect(dot).toHaveAttribute("aria-hidden", "true");
     expect(dot.className).toContain("bg-caution");
-    const neutral = render(<WorkerSpeech line={{ ...(report().meta as WorkerMessageMeta), status: "unformatted" }} onOpen={() => {}} variant="dot" />);
-    expect(neutral.container.querySelector("[data-dot]")).toBeNull();
+    expect(dot.closest("[data-slot='agent-head']")).not.toBeNull();
+    const dots = list([report(), report({ status: "gave_up" }), report({ status: "unformatted" })]).container.querySelectorAll("[data-dot]");
+    expect(Array.from(dots).map((d) => d.getAttribute("data-dot"))).toEqual(["success", "danger"]);
   });
 
   it("没按格式：中性灰、没有 title，正文是第一行", () => {
