@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-/** 窄屏：左栏收成抽屉（docs/ui-standard.md 第 15 条）。和 CSS 里的 max-[1100px] 是同一个断点。 */
+/** 窄屏：左栏收成抽屉（docs/ui-standard.md 第 16 条）。和 CSS 里的 max-[1100px] 是同一个断点。 */
 export const NARROW_QUERY = "(max-width: 1100px)";
 /** 太窄、右栏放不下并排：改成顶栏下面的一块（第 12 条）。 */
 export const COMPACT_QUERY = "(max-width: 719px)";

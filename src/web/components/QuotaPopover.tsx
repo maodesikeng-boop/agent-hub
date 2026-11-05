@@ -42,7 +42,7 @@ function Ring({ percent }: { percent: number }) {
 }
 
 /**
- * 左下角的额度按钮（docs/ui-standard.md 第 15 条）：ghost 按钮，小圆环 + 第一个厂商的第一个窗口的简写和已用百分比（“5h 37%”），
+ * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 按钮，小圆环 + 第一个厂商的第一个窗口的简写和已用百分比（“5h 37%”），
  * 用完写“额度用完”；快用完、用完换颜色。点开按厂商分组看每个窗口。没有数据不显示。
  */
 export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {

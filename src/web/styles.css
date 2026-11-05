@@ -102,9 +102,10 @@ code {
   padding-right: max(24px, calc(100% - var(--chat-inset) - var(--chat-max)));
 }
 
-/* agent 消息里的 Markdown */
+/* agent 消息里的 Markdown（规则见 docs/ui-standard.md 第 15 条） */
 .markdown {
   overflow-wrap: anywhere;
+  line-height: 1.65;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -115,10 +116,13 @@ code {
 .markdown p,
 .markdown ul,
 .markdown ol,
-.markdown pre,
 .markdown blockquote,
-.markdown table {
-  margin: 0.6em 0;
+.markdown [data-md-code],
+.markdown [data-md-table] {
+  margin: 0.75em 0;
+}
+.markdown strong {
+  font-weight: 600;
 }
 .markdown h1,
 .markdown h2,
@@ -126,20 +130,31 @@ code {
 .markdown h4,
 .markdown h5,
 .markdown h6 {
-  margin: 0.9em 0 0.4em;
+  margin: 1.2em 0 0.4em;
   font-size: 1em;
   font-weight: 600;
   line-height: 1.4;
 }
 .markdown h1 {
-  font-size: 1.2em;
+  margin-top: 1.4em;
+  font-size: 1.333em;
+  line-height: 1.3;
 }
 .markdown h2 {
-  font-size: 1.1em;
+  margin-top: 1.3em;
+  font-size: 1.133em;
+  line-height: 1.35;
+}
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin-top: 1em;
+  color: var(--muted-foreground);
+  font-weight: 500;
 }
 .markdown ul,
 .markdown ol {
-  padding-left: 1.4em;
+  padding-left: 1.5em;
 }
 .markdown ul {
   list-style: disc;
@@ -147,13 +162,42 @@ code {
 .markdown ol {
   list-style: decimal;
 }
+.markdown li::marker {
+  color: var(--muted-foreground);
+}
 .markdown li + li {
-  margin-top: 0.2em;
+  margin-top: 0.25em;
+}
+.markdown li > ul,
+.markdown li > ol {
+  margin: 0.25em 0;
+}
+.markdown li > p {
+  margin: 0.25em 0;
+}
+.markdown li > p:first-child {
+  margin-top: 0;
+}
+.markdown li > p:last-child {
+  margin-bottom: 0;
+}
+.markdown ul.contains-task-list {
+  padding-left: 0.25em;
+  list-style: none;
+}
+.markdown .task-list-item input {
+  margin: 0 0.5em 0.15em 0;
+  vertical-align: middle;
 }
 .markdown a {
   color: var(--primary);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.markdown a:hover {
+  text-decoration-color: currentColor;
 }
 /* agent 发来的文件卡片（Attachments.tsx 的 FileCard）：不要链接的颜色和下划线 */
 .markdown [data-file-card] {
@@ -161,50 +205,109 @@ code {
   text-decoration: none;
 }
 .markdown code {
-  padding: 0.1em 0.4em;
+  padding: 0.12em 0.4em;
   border-radius: 6px;
   background: var(--muted);
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.05);
+  font-size: 0.875em;
 }
-.markdown pre {
-  overflow-x: auto;
-  padding: 0.7em 0.9em;
+.markdown blockquote {
+  padding-left: 1em;
+  border-left: 3px solid #d4d4d8;
+  color: color-mix(in srgb, var(--foreground) 70%, transparent);
+}
+.markdown blockquote > :first-child {
+  margin-top: 0;
+}
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+.markdown hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.markdown img {
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+/* 代码块：右上角语言名 + 复制按钮；代码是纯文本 <pre>，或 Shiki 上色后的 <pre>（.md-code-body 自己是 pre，或里面套一个 pre） */
+.markdown .md-code {
+  overflow: hidden;
   border-radius: 12px;
   background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
-  line-height: 1.5;
 }
-.markdown pre code {
+.markdown .md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 28px;
+  padding-inline: 8px 4px;
+}
+.markdown .md-code-lang {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1;
+}
+.markdown .md-code-body,
+.markdown .md-code-body pre {
+  margin: 0;
+  overflow-x: auto;
+  padding: 0 16px 12px;
+  background: transparent !important;
+  font-family: var(--font-code);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.markdown .md-code-body pre {
+  overflow: visible;
+  padding: 0;
+}
+.markdown .md-code-body code {
   padding: 0;
   background: none;
   box-shadow: none;
+  font-size: inherit;
   white-space: pre;
 }
-.markdown blockquote {
-  padding-left: 0.9em;
-  border-left: 3px solid var(--border);
-  color: var(--muted-foreground);
-}
-.markdown table {
-  display: block;
+
+/* 表格：外面一层横向滚动，表格宽度跟内容走；对齐用 Markdown 自带的 style，没写的靠左 */
+.markdown [data-md-table] {
   max-width: 100%;
   overflow-x: auto;
+}
+.markdown table {
+  width: max-content;
   border-collapse: collapse;
 }
 .markdown th,
 .markdown td {
-  padding: 0.3em 0.8em;
-  overflow-wrap: normal;
-  border: 1px solid var(--border);
+  min-width: 4em;
+  max-width: 28rem;
+  padding: 0.4em 0.75em;
+  overflow-wrap: break-word;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
 }
 .markdown th {
-  background: var(--muted);
-  font-weight: 600;
+  border-bottom-color: #d4d4d8;
+  color: var(--muted-foreground);
+  font-size: 13.5px;
+  font-weight: 500;
 }
-.markdown hr {
-  margin: 0.9em 0;
-  border: 0;
-  border-top: 1px solid var(--border);
+.markdown th:first-child,
+.markdown td:first-child {
+  padding-left: 0;
+}
+.markdown th:last-child,
+.markdown td:last-child {
+  padding-right: 0;
+}
+.markdown tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 /* 文件预览窗里的代码：每行一个 .line，行号用 CSS 计数（Shiki 的输出和纯文本回退都是这个结构） */

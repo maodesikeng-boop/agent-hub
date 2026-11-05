@@ -66,7 +66,7 @@ function matches(entry: ConversationEntry, query: string): boolean {
 
 /**
  * 左栏：每个项目经理一行（头像、名字、最后一条消息），点进去就是它唯一的那个对话。
- * 窄屏（1100px 以下）收成抽屉（docs/ui-standard.md 第 15 条）：drawerOpen 时盖在左边，点遮罩、按 Esc、选了对话都收起。
+ * 窄屏（1100px 以下）收成抽屉（docs/ui-standard.md 第 16 条）：drawerOpen 时盖在左边，点遮罩、按 Esc、选了对话都收起。
  */
 export function Sidebar({
   entries,

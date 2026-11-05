@@ -43,7 +43,7 @@ export function Composer({
   stop?: StopControl;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
-  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 15 条）；不可用时不放。 */
+  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放。 */
   autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);

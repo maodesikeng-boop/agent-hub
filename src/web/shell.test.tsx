@@ -1,4 +1,4 @@
-// 网页外壳（docs/ui-standard.md 第 6、15 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
+// 网页外壳（docs/ui-standard.md 第 6、16 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
 // 左栏的在忙、行高一致，左下角的按钮，“重连中”提示条。接口、WebSocket 都是假的。
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";

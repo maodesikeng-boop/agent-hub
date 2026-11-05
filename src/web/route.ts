@@ -1,4 +1,4 @@
-// 网址（docs/ui-standard.md 第 15 条）：每个对话、资料页都有自己的网址，刷新后回到原来那个，能前进后退。
+// 网址（docs/ui-standard.md 第 16 条）：每个对话、资料页都有自己的网址，刷新后回到原来那个，能前进后退。
 // 用 # 后面的部分（守护进程只认 / 这一个页面，不用改服务端）：#/c/<对话编号>、#/w/<Worker 对话编号>、#/pm/<项目经理编号>。
 import { useCallback, useEffect, useState } from "react";
 import type { ConversationId, PmId } from "../shared/index.ts";
