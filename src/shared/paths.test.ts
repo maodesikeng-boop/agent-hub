@@ -1,11 +1,17 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import {
   MAX_UNIX_SOCKET_PATH_BYTES,
   assertSocketPathFits,
+  defaultAgyFallbackPaths,
+  defaultCodexFallbackPaths,
   personaFilePath,
   projectWorktreesDir,
+  resolveExecutable,
   resolveHubPaths,
   resolvePaths,
   workerSetupLogPath,
@@ -77,5 +83,38 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(workerSetupLogPath("/l", 7)).toBe("/l/worker-7.log");
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES - 1))).not.toThrow();
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES))).toThrow(/AGENT_HUB_HOME/);
+  });
+
+  it("resolveExecutable：显式路径原样返回；PATH 命中保持原样；否则按顺序回退候选路径", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-paths-exec-"));
+    try {
+      const pathDir = join(dir, "path-bin");
+      const fallback1 = join(dir, "fallback-1", "agy");
+      const fallback2 = join(dir, "fallback-2", "agy");
+      mkdirSync(pathDir, { recursive: true });
+      mkdirSync(join(dir, "fallback-2"), { recursive: true });
+      writeFileSync(fallback2, "");
+
+      // 显式路径（含 /）直接返回
+      expect(resolveExecutable("/custom/bin/agy", pathDir, [fallback2])).toBe("/custom/bin/agy");
+
+      // PATH 中不存在，回退到第一个存在的 candidate
+      expect(resolveExecutable("agy", pathDir, [fallback1, fallback2])).toBe(fallback2);
+
+      // PATH 中存在，保持命令名 "agy"
+      writeFileSync(join(pathDir, "agy"), "");
+      expect(resolveExecutable("agy", `/nope${delimiter}${pathDir}`, [fallback2])).toBe("agy");
+
+      // 都不存在，保持原样
+      expect(resolveExecutable("codex", pathDir, [fallback1])).toBe("codex");
+
+      expect(defaultAgyFallbackPaths("/Users/u")).toEqual(["/Users/u/.local/bin/agy"]);
+      expect(defaultCodexFallbackPaths("/Users/u")).toEqual([
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
