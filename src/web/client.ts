@@ -7,7 +7,11 @@ import {
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
+  type AddScheduleRequest,
   type EditPersonaRequest,
+  type ScheduleId,
+  type ScheduleRecord,
+  type SetScheduleEnabledRequest,
   type EditPersonaResponse,
   type FileAction,
   type FileActionResponse,
@@ -21,6 +25,7 @@ import {
   type PersonaResponse,
   type PmId,
   type PostMessageResponse,
+  type RenewSessionResponse,
   type RetryMessageResponse,
   type StateSnapshot,
 } from "../shared/index.ts";
@@ -141,9 +146,25 @@ export function postRevertPersonaChange(changeId: PersonaChangeId): Promise<Edit
   return postJson<EditPersonaResponse>(API_PATHS.revertPersonaChange(changeId));
 }
 
+export function postAddSchedule(pmId: PmId, body: AddScheduleRequest): Promise<ScheduleRecord> {
+  return postJson<ScheduleRecord>(API_PATHS.pmSchedules(pmId), body);
+}
+
+export function putScheduleEnabled(scheduleId: ScheduleId, enabled: boolean): Promise<ScheduleRecord> {
+  return putJson<ScheduleRecord>(API_PATHS.schedule(scheduleId), { enabled } satisfies SetScheduleEnabledRequest);
+}
+
+export function deleteSchedule(scheduleId: ScheduleId): Promise<void> {
+  return request<void>(API_PATHS.schedule(scheduleId), { method: "DELETE" });
+}
+
 /** 每家厂商的模型名单（服务端问不到厂商时是打包的）。 */
 export function fetchModels(): Promise<ModelsResponse> {
   return request<ModelsResponse>(API_PATHS.models);
+}
+
+export function postRenewSession(pmId: PmId): Promise<RenewSessionResponse> {
+  return postJson<RenewSessionResponse>(API_PATHS.renewSession(pmId));
 }
 
 export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {

@@ -50,6 +50,7 @@ import {
   type PickFolderResponse,
   type PmMode,
   type PostMessageResponse,
+  type RenewSessionResponse,
   type RetryMessageResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
@@ -505,10 +506,39 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return { changed: result.change !== null, persona: result.persona };
     });
 
+    // 定时任务卡片：校验和写库都在账本里（同 hub schedule），这里只认请求体的形状
+    routes.post("/api/pms/:id/schedules", async (req, reply) => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      const raw = parseObjectBody(req.body, ["name", "prompt", "daily", "everyMinutes"]);
+      const schedule = ledger.addSchedule(pmId, {
+        name: raw.name as string,
+        prompt: raw.prompt as string,
+        ...(raw.daily !== undefined ? { daily: raw.daily as string } : {}),
+        ...(raw.everyMinutes !== undefined ? { everyMinutes: raw.everyMinutes as number } : {}),
+      });
+      return reply.code(201).send(schedule);
+    });
+
+    routes.put("/api/schedules/:id", async (req) => {
+      const raw = parseObjectBody(req.body, ["enabled"]);
+      if (typeof raw.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
+      return ledger.setScheduleEnabled(parseId((req.params as { id?: unknown }).id, "schedule id"), raw.enabled);
+    });
+
+    routes.delete("/api/schedules/:id", async (req, reply) => {
+      ledger.removeSchedule(parseId((req.params as { id?: unknown }).id, "schedule id"));
+      return reply.code(204).send();
+    });
+
     routes.post(API_PATHS.pickFolder, async (req): Promise<PickFolderResponse> => {
       const raw = parseObjectBody(req.body ?? {}, ["startDir"]);
       const startDir = raw.startDir === undefined ? undefined : requireBoundedBytes(raw.startDir, "startDir", MAX_PATH_BYTES);
       return { path: await folderPicker.pick(startDir) };
+    });
+
+    routes.post("/api/pms/:id/renew-session", async (req, reply) => {
+      const result = ledger.renewSession(parseId((req.params as { id?: unknown }).id, "pm id"));
+      return reply.code(202).send({ messageId: result.messageId } satisfies RenewSessionResponse);
     });
 
     routes.post("/api/messages/:id/retry", async (req, reply) => {

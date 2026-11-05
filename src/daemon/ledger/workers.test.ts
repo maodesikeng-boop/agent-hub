@@ -1475,6 +1475,44 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
   });
 });
 
+describe("项目经理开新会话（ledger/handover.ts）时 Worker 的汇报", () => {
+  /** 小林这一轮跑完（送达、处理中、文字、正常结束）。 */
+  function pmTurn(sessionId: SessionId, messageIds: MessageId[], text: string) {
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: `pm-${messageIds.join("-")}`, text, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds, durationMs: 10, at: now });
+  }
+
+  it("换代前交给旧会话；写交接时压着，换代后改发给新会话；之后的直接给新会话。Worker 照常干活", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const task = taskMessage(worker);
+    runTurn(worker, [task.id], report("做完了", "第一轮"));
+    const before = workerLines().at(-1)!;
+    expect(before.sessionId).toBe(lin.sessionId);
+
+    const request = ledger.renewSession(lin.pmId).messageId;
+    hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再改改" });
+    const again = messagesIn(worker.workerConversationId).at(-1)!;
+    runTurn(worker, [again.id], report("做完了", "第二轮"));
+    const during = workerLines().at(-1)!;
+    expect(during).toMatchObject({ sessionId: lin.sessionId, status: "queued" });
+    expect(ledger.waitsForHandover(during.id)).toBe(true);
+
+    pmTurn(lin.sessionId, [request], "交接：Worker 在改 X");
+    const g2 = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? AND generation = 2", lin.conversationId)!.id;
+    expect(ledger.getMessage(during.id)).toMatchObject({ sessionId: g2, status: "queued" });
+    expect(listActions(db).find((a) => a.type === "session.send" && a.params.messageId === during.id)!.params).toEqual({ sessionId: g2, messageId: during.id, source: "system" });
+    // Worker 的会话没动
+    expect(sessionRow(workerSessionId(worker.id)).status).not.toBe("ended");
+
+    hub(g2, "worker.send", { workerId: worker.id, text: "第三轮" });
+    const third = messagesIn(worker.workerConversationId).at(-1)!;
+    runTurn(worker, [third.id], report("做完了", "第三轮"));
+    expect(workerLines().at(-1)!.sessionId).toBe(g2);
+  });
+});
+
 describe("claude 自己开的一轮（后台任务完成）", () => {
   let worker: WorkerRecord;
   let sessionId: SessionId;

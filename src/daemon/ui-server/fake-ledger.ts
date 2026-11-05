@@ -23,10 +23,32 @@ import {
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
+  type ScheduleRecord,
   type SessionId,
   type StateSnapshot,
   type Unsubscribe,
 } from "../../shared/index.ts";
+
+function makeSchedule(over: Partial<ScheduleRecord>): ScheduleRecord {
+  return {
+    id: 1,
+    pmId: 1,
+    name: "晨报",
+    kind: "daily",
+    atTime: "09:00",
+    everyMinutes: null,
+    prompt: "x",
+    enabled: true,
+    nextRunAt: 1,
+    lastRunAt: null,
+    lastStatus: null,
+    lastError: null,
+    lastMessageId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  };
+}
 
 export function makeMessage(id: number, conversationId: number, text = `m${id}`): Message {
   return {
@@ -95,6 +117,9 @@ export class FakeLedger {
   readonly personaEdits: Array<{ pmId: PmId; input: EditPersonaInput; actor: LedgerActor }> = [];
   readonly reverted: PersonaChangeId[] = [];
   readonly retried: MessageId[] = [];
+  /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
+  readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
+  readonly renewed: PmId[] = [];
   readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
@@ -219,6 +244,12 @@ export class FakeLedger {
     return { messageId };
   }
 
+  renewSession(pmId: PmId): { messageId: MessageId } {
+    this.check();
+    this.renewed.push(pmId);
+    return { messageId: 50 };
+  }
+
   dismissAsk(messageId: MessageId): void {
     this.check();
     this.dismissed.push(messageId);
@@ -279,8 +310,24 @@ export class FakeLedger {
       editPersona: (p, i, a) => this.editPersona(p, i, a),
       revertPersonaChange: (c) => this.revertPersonaChange(c),
       retryMessage: (m) => this.retryMessage(m),
+      renewSession: (p) => this.renewSession(p),
+      waitsForHandover: unused("waitsForHandover"),
       dismissAsk: (m) => this.dismissAsk(m),
       runDueSchedules: unused("runDueSchedules"),
+      addSchedule: (pmId, args) => {
+        this.check();
+        this.scheduleCalls.push({ call: "add", args: [pmId, args] });
+        return makeSchedule({ id: 5, pmId, name: args.name, prompt: args.prompt });
+      },
+      setScheduleEnabled: (id, enabled) => {
+        this.check();
+        this.scheduleCalls.push({ call: "enable", args: [id, enabled] });
+        return makeSchedule({ id, enabled });
+      },
+      removeSchedule: (id) => {
+        this.check();
+        this.scheduleCalls.push({ call: "remove", args: [id] });
+      },
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       getLaunchContext: unused("getLaunchContext"),

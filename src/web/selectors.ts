@@ -4,6 +4,8 @@ import {
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
   isQuotaExhausted,
+  systemEventOf,
+  systemNoticeText,
   workerEventOf,
   type ConversationId,
   type HealthEntry,
@@ -72,6 +74,8 @@ export function previewText(entry: ConversationEntry): string {
   // 只发了文件没写字的用户消息：写文件名
   const files = attachmentsOf(last);
   if (last.text.trim() === "" && files.length > 0) return `[文件] ${files.map((f) => f.name).join("、")}`;
+  // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
+  if (last.sender === "system") return systemNoticeText(last);
   return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
 }
 
@@ -344,6 +348,17 @@ export function pendingAsks(state: HubState, conversationId: ConversationId): Me
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {
   return state.pending.filter((p) => p.conversationId === conversationId);
+}
+
+/**
+ * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果，或者新会话的第一条（交接）还在排队。
+ * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
+ */
+export function isRenewing(state: HubState, conversationId: ConversationId): boolean {
+  return (state.conversations[conversationId]?.messages ?? []).some((m) => {
+    const event = systemEventOf(m)?.event;
+    return (event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status)) || (event === "session.renewed" && m.status === "queued");
+  });
 }
 
 /** 有错误的健康项（成功一次后 lastError 会被清成 null）。 */

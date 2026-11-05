@@ -536,12 +536,12 @@ describe("资料页", () => {
     expect(api.callsTo("GET", /^\/api\/pms\/1\/persona$/)).toHaveLength(1);
   });
 
-  it("分组：Agent、工作方式、项目、性格设定、修改记录，每组有标题；没有大的“保存”按钮", async () => {
+  it("分组：Agent、工作方式、项目、性格设定、修改记录、会话，每组有标题；没有大的“保存”按钮", async () => {
     const user = userEvent.setup();
     await boot();
     const page = await pmChat(user);
     await within(page).findByRole("textbox", { name: "性格设定" });
-    const groups = ["Agent", "工作方式", "项目", "性格设定", "修改记录"];
+    const groups = ["Agent", "工作方式", "项目", "定时任务", "性格设定", "修改记录", "会话"];
     expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
     for (const title of groups) expect(within(groupIn(page, title)).getByRole("heading", { name: title })).toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
@@ -927,6 +927,74 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.type(within(agent).getByRole("textbox", { name: "模型名" }), "claude-opus-5-5{Enter}");
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ model: "claude-opus-5-5" });
+  });
+});
+
+describe("资料页：开新会话", () => {
+  const openProfile = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(inNav(/小林/));
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    return screen.getByRole("region", { name: "小林 的资料" });
+  };
+  const request = (status: "queued" | "processing" | "replied") =>
+    makeSystemMessage({ id: 30, conversationId: 1, text: "【系统】请写交接……", status, event: { event: "handover.requested", sessionId: 1 } });
+
+  it("“会话”一组里一行，点了先确认；确认后发 POST renew-session，按钮变“交接中”不能再点；取消不发", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    const page = await openProfile(user);
+    const group = groupIn(page, "会话");
+    await user.click(within(group).getByRole("button", { name: "开新会话" }));
+    const dialog = screen.getByRole("dialog", { name: "开新会话？" });
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(api.callsTo("POST", /renew-session$/)).toHaveLength(0);
+
+    await user.click(within(group).getByRole("button", { name: "开新会话" }));
+    await user.click(within(screen.getByRole("dialog", { name: "开新会话？" })).getByRole("button", { name: "开新会话" }));
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms\/1\/renew-session$/)).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // 交接请求推过来：在写交接，按钮不能点
+    push(ws, messageChange(11, "message.created", request("processing")));
+    expect(within(group).getByRole("button", { name: "交接中" })).toBeDisabled();
+    // 回完了（换代）：又能点
+    push(ws, messageChange(12, "message.updated", request("replied")));
+    expect(within(group).getByRole("button", { name: "开新会话" })).toBeEnabled();
+  });
+
+  it("接口失败：行下面写原因，按钮还能点", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.renewSession = () => ({ status: 404, body: { error: "没有编号 1 的项目经理", code: "not_found" } });
+    const page = await openProfile(user);
+    const group = groupIn(page, "会话");
+    await user.click(within(group).getByRole("button", { name: "开新会话" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "开新会话" }));
+    expect(await within(group).findByRole("alert")).toHaveTextContent("没有编号 1 的项目经理");
+    expect(within(group).getByRole("button", { name: "开新会话" })).toBeEnabled();
+  });
+
+  it("左栏的预览：交接请求、交接全文也只显示短的一句（审查 #35 第 6 条）", async () => {
+    const ws = await boot();
+    push(ws, messageChange(11, "message.created", request("queued")));
+    expect(within(nav()).getByText("已请项目经理写交接，写完换新会话")).toBeInTheDocument();
+    push(
+      ws,
+      messageChange(12, "message.created", makeSystemMessage({ id: 31, conversationId: 1, text: "【系统】这是新会话……交接全文", status: "queued", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1 } })),
+    );
+    expect(within(nav()).getByText("项目经理开了新会话（交接见上一条）")).toBeInTheDocument();
+    expect(within(nav()).queryByText(/交接全文|请写交接/)).not.toBeInTheDocument();
+  });
+
+  it("对话里：交接请求和换代显示成短的一句", async () => {
+    const ws = await boot(makeSnapshot());
+    push(ws, messageChange(11, "message.created", request("queued")));
+    push(
+      ws,
+      messageChange(12, "message.created", makeSystemMessage({ id: 31, text: "【系统】这是新会话……交接全文", status: "queued", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1 } })),
+    );
+    expect(within(log()).getByText("已请项目经理写交接，写完换新会话")).toBeInTheDocument();
+    expect(within(log()).getByText("项目经理开了新会话（交接见上一条）")).toBeInTheDocument();
+    expect(within(log()).queryByText(/交接全文/)).not.toBeInTheDocument();
   });
 });
 

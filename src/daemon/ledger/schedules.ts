@@ -59,7 +59,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   // ---- hub schedule …（只给项目经理，见 shared/hub.ts 的 HUB_COMMAND_ROLES）----
 
-  const addIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
+  const addIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
     const name = typeof args.name === "string" ? normalizeName(args.name, MAX_SCHEDULE_NAME_CHARS) : null;
     if (name === null) throw fail("invalid", `定时任务的名字不能是空的，也不能带换行等控制字符，最多 ${MAX_SCHEDULE_NAME_CHARS} 个字符`);
     // 【】是标题的括号（【定时任务：名字（原定 09:00）】），名字里有会让项目经理分不清标题到哪结束
@@ -106,7 +106,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     };
   };
 
-  const list = (caller: AgentSessionRow & { pmId: PmId }): HubResult<"schedule.list"> => {
+  const list = (caller: { pmId: PmId }): HubResult<"schedule.list"> => {
     const rows = db.all<ScheduleDbRow>("SELECT * FROM schedules WHERE pm_id = ? ORDER BY id", caller.pmId);
     if (rows.length === 0) return { text: "你还没有定时任务。", data: { schedules: [] } };
     const t = now();
@@ -122,7 +122,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     return { text: `你的定时任务：\n${lines.join("\n")}`, data: { schedules: rows.map(toSchedule) } };
   };
 
-  const pauseIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"schedule.pause">): HubResult<"schedule.pause"> => {
+  const pauseIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.pause">): HubResult<"schedule.pause"> => {
     const row = ownSchedule(caller.pmId, args.scheduleId);
     if (row.enabled === 1) {
       db.run("UPDATE schedules SET enabled = 0, updated_at = ? WHERE id = ?", now(), row.id);
@@ -131,7 +131,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     return { text: `定时任务 #${row.id}“${row.name}”已暂停，恢复用 ${HUB_COMMAND} schedule resume ${row.id}。`, data: { schedule: toSchedule(scheduleRow(row.id)!) } };
   };
 
-  const resumeIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"schedule.resume">): HubResult<"schedule.resume"> => {
+  const resumeIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.resume">): HubResult<"schedule.resume"> => {
     const row = ownSchedule(caller.pmId, args.scheduleId);
     if (row.enabled === 0) {
       const t = now();
@@ -142,7 +142,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     return { text: `定时任务 #${row.id}“${row.name}”在运行，下次 ${scheduledTimeText(schedule.nextRunAt, now())}。`, data: { schedule } };
   };
 
-  const removeIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"schedule.remove">): HubResult<"schedule.remove"> => {
+  const removeIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.remove">): HubResult<"schedule.remove"> => {
     const row = ownSchedule(caller.pmId, args.scheduleId);
     db.run("DELETE FROM schedules WHERE id = ?", row.id);
     p.changes.push({ type: "schedule.removed", data: { scheduleId: row.id } });
@@ -237,7 +237,30 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     if (action.type === "session.send") failedRunIn(p, action.params.messageId);
   };
 
+  // ---- 网页上的用户：同一套校验和写库，只是不看是谁的会话（资料页的定时任务卡片）----
+
+  const addForUser = (pmId: PmId, args: HubArgs<"schedule.add">): ScheduleRecord =>
+    write((p) => {
+      if (db.get("SELECT 1 AS x FROM pms WHERE id = ?", pmId) === undefined) throw fail("not_found", `没有编号 ${pmId} 的项目经理`);
+      return addIn(p, { pmId }, args).data.schedule;
+    });
+
+  const owner = (id: ScheduleId): { pmId: PmId } => {
+    const row = scheduleRow(id);
+    if (row === null) throw fail("not_found", `没有编号 ${id} 的定时任务`);
+    return { pmId: row.pm_id };
+  };
+
+  const setEnabledForUser = (scheduleId: ScheduleId, enabled: boolean): ScheduleRecord =>
+    write((p) => (enabled ? resumeIn(p, owner(scheduleId), { scheduleId }) : pauseIn(p, owner(scheduleId), { scheduleId })).data.schedule);
+
+  const removeForUser = (scheduleId: ScheduleId): void => {
+    write((p) => {
+      removeIn(p, owner(scheduleId), { scheduleId });
+    });
+  };
+
   const all = (): ScheduleRecord[] => db.all<ScheduleDbRow>("SELECT * FROM schedules ORDER BY id").map(toSchedule);
 
-  return { addIn, list, pauseIn, resumeIn, removeIn, runDueSchedules, afterDriverEvent, actionFailedIn, all };
+  return { addIn, addForUser, setEnabledForUser, removeForUser, list, pauseIn, resumeIn, removeIn, runDueSchedules, afterDriverEvent, actionFailedIn, all };
 }

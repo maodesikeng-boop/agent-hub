@@ -28,6 +28,10 @@ export const MAX_MODEL_CHARS = 100;
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
 /** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
+/** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。 */
+export const HANDOVER_RECENT_MESSAGES = 10;
+/** 开新会话：新会话的第一条（交接）失败、被停止后最多原地重新排队几次（退避同 session.send 的 ACTION_RETRY）；还不行就放行压着的消息，对话里提示一句。 */
+export const HANDOVER_RENEW_RETRIES = 5;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 

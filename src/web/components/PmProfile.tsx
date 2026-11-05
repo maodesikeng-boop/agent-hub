@@ -19,16 +19,19 @@ import {
   type PmMode,
   type Project,
   type ProjectFolder,
+  type ScheduleRecord,
 } from "../../shared/index.ts";
-import { ApiError, fetchPersona, postRevertPersonaChange, putPersona } from "../client.ts";
+import { ApiError, fetchPersona, postRenewSession, postRevertPersonaChange, putPersona } from "../client.ts";
 import { ACTOR_LABELS, errorText, formatTime } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Textarea } from "../ui/input.tsx";
 import { useModelCatalog } from "../models.tsx";
 import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
+import { ScheduleGroup } from "./ScheduleGroup.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 type Load = { phase: "loading" } | { phase: "error"; message: string } | { phase: "ready"; persona: PersonaView };
@@ -160,7 +163,21 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
 }
 
 /** Agent、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后。 */
-function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project: Project | null; folders: ProjectFolder[]; persona: PersonaView; onUpdate: (p: PersonaView) => void }) {
+function PmEditor({
+  pm,
+  project,
+  folders,
+  schedules,
+  persona,
+  onUpdate,
+}: {
+  pm: Pm;
+  project: Project | null;
+  folders: ProjectFolder[];
+  schedules: ScheduleRecord[];
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+}) {
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -261,6 +278,7 @@ function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project
           </SettingsRow>
         )}
       </SettingsGroup>
+      <ScheduleGroup pmId={pm.id} schedules={schedules} />
       <SettingsGroup
         title="性格设定"
         action={
@@ -311,20 +329,72 @@ function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project
   );
 }
 
-/** 项目经理资料页（设计第 3.6 节）：头像和名字居中，下面是 Agent、工作方式、项目、性格设定、修改记录几组设置。 */
+/**
+ * “会话”一组：开新会话。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
+ * renewing：在换（交接请求还没结果、新会话的第一条还没发），按钮不能点。
+ */
+function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirm = async () => {
+    setConfirming(false);
+    setSending(true);
+    setError(null);
+    try {
+      await postRenewSession(pmId);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setSending(false);
+    }
+  };
+  const busy = renewing || sending;
+  return (
+    <SettingsGroup title="会话">
+      <SettingsRow label="开新会话" error={error}>
+        {() => (
+          <Button variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
+            {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {busy ? "交接中" : "开新会话"}
+          </Button>
+        )}
+      </SettingsRow>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent title="开新会话？" className="max-w-[440px]">
+          <p>项目经理先写一份交接，写完换一个新会话接着干。聊天记录都还在。</p>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">取消</Button>
+            </DialogClose>
+            <Button onClick={() => void confirm()}>开新会话</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </SettingsGroup>
+  );
+}
+
+/** 项目经理资料页（设计第 3.6 节）：头像和名字居中，下面是 Agent、工作方式、项目、性格设定、修改记录、会话几组设置。 */
 export function PmProfile({
   pm,
   project,
   folders,
+  schedules,
   rev,
+  renewing,
   onBack,
 }: {
   pm: Pm;
   project: Project | null;
   /** 项目没移除的文件夹，主文件夹在前。 */
   folders: ProjectFolder[];
+  /** 这个项目经理的定时任务。 */
+  schedules: ScheduleRecord[];
   /** pm.updated 的次数，变了就重新拉。 */
   rev: number;
+  /** 在换新会话（selectors.ts 的 isRenewing）。 */
+  renewing: boolean;
   onBack: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
@@ -359,7 +429,8 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PmEditor pm={pm} project={project} folders={folders} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <PmEditor pm={pm} project={project} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <RenewSessionGroup pmId={pm.id} renewing={renewing} />}
         </div>
       </div>
     </section>
