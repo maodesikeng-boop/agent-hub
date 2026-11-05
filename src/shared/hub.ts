@@ -20,6 +20,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { AgentVendor } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
@@ -124,13 +125,13 @@ export interface HubArgsMap {
   /** text：新的完整性格设定（不超过 MAX_PERSONA_BYTES）。text、mode 至少给一个。 */
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   /**
-   * `hub worker start --title <标题> [--model <模型>] [--effort <思考程度>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
+   * `hub worker start --title <标题> [--vendor <厂商>] [--model <模型>] [--effort <思考程度>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
    * title 按 normalizeWorkerTitle（空的、带控制字符 → invalid；太长不报错，截断）；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
-   * model、effort 按项目经理那家的厂商清单（vendors.ts）查，不给 = 用项目经理会话现在的模型、思考程度。
+   * model、effort 按目标厂商清单（vendors.ts）查，不给且同厂商 = 用项目经理会话现在的模型、思考程度；换厂商则默认 null。
    * 账本同步判断在哪干活：主文件夹是有提交的 git 仓库、又没给 noWorktree → worktree，登记 worktree.create；
    * 否则 main，直接登记 Worker 的 session.start 和第一条 session.send。
    */
-  "worker.start": { title: string; task: string; model?: string; effort?: string; readonly?: boolean; noWorktree?: boolean };
+  "worker.start": { title: string; task: string; vendor?: AgentVendor; model?: string; effort?: string; readonly?: boolean; noWorktree?: boolean };
   /** `hub worker send <编号> --stdin`：打回或回答问题，发给同一个 Worker 会话。text 不超过 MAX_TASK_BYTES。 */
   "worker.send": { workerId: WorkerId; text: string };
   /** `hub worker end <编号>`：结束 Worker 会话（登记 session.end），Worker 标 ended。worktree 由项目经理自己删。 */

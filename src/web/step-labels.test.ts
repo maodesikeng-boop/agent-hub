@@ -23,12 +23,38 @@ describe("describeStep：状态词（英文）", () => {
     expect(describeStep(tool("Skill"))).toBe("Loading skill");
   });
 
-  it("读、改、写文件：只写文件名", () => {
+  it("读、改、写文件：只写文件名（兼容 claude / agy / codex 各种路径字段名）", () => {
     expect(describeStep(tool("Read", { file_path: "/Users/a/src/web/App.tsx" }))).toBe("Reading App.tsx");
     expect(describeStep(tool("Edit", { file_path: "/x/y/z.ts" }))).toBe("Editing z.ts");
     expect(describeStep(tool("MultiEdit", { file_path: "/x/y/z.ts" }))).toBe("Editing z.ts");
     expect(describeStep(tool("Write", { file_path: "C:\\proj\\notes.md" }))).toBe("Writing notes.md");
     expect(describeStep(tool("NotebookEdit", { notebook_path: "/n/analysis.ipynb" }))).toBe("Editing analysis.ipynb");
+    expect(describeStep(tool("read_file", { Path: "/Users/a/src/main.ts" }))).toBe("Reading main.ts");
+    expect(describeStep(tool("view_file", { AbsolutePath: "/Users/a/src/view.ts" }))).toBe("Reading view.ts");
+    expect(describeStep(tool("view_file_outline", { AbsolutePath: "/Users/a/src/outline.ts" }))).toBe("Reading outline.ts");
+    expect(describeStep(tool("view_code_item", { path: "/Users/a/src/item.ts" }))).toBe("Reading item.ts");
+    expect(describeStep(tool("write_to_file", { TargetFile: "/Users/a/src/new.ts" }))).toBe("Writing new.ts");
+    expect(describeStep(tool("edit_file", { Path: "/Users/a/src/edit.ts" }))).toBe("Editing edit.ts");
+    expect(describeStep(tool("replace_file_content", { TargetFile: "/Users/a/src/rep.ts" }))).toBe("Editing rep.ts");
+    expect(describeStep(tool("multi_replace_file_content", { TargetFile: "/Users/a/src/mrep.ts" }))).toBe("Editing mrep.ts");
+    expect(describeStep(tool("fileChange", { path: "/Users/a/src/codex.ts" }))).toBe("Editing codex.ts");
+    expect(describeStep(tool("apply_patch", { file_path: "/Users/a/src/patch.ts" }))).toBe("Editing patch.ts");
+  });
+
+  it("agy 与 codex 常见工具：跑命令、搜文件、搜网页、读网页、子代理、MCP", () => {
+    expect(describeStep(tool("run_command"))).toBe("Running command");
+    expect(describeStep(tool("grep_search"))).toBe("Searching files");
+    expect(describeStep(tool("find_by_name"))).toBe("Searching files");
+    expect(describeStep(tool("list_dir"))).toBe("Searching files");
+    expect(describeStep(tool("search_web"))).toBe("Searching the web");
+    expect(describeStep(tool("read_url_content"))).toBe("Reading web page");
+    expect(describeStep(tool("invoke_subagent"))).toBe("Running subagent");
+
+    expect(describeStep(tool("commandExecution"))).toBe("Running command");
+    expect(describeStep(tool("exec_command"))).toBe("Running command");
+    expect(describeStep(tool("webSearch"))).toBe("Searching the web");
+    expect(describeStep(tool("web_search"))).toBe("Searching the web");
+    expect(describeStep(tool("mcpToolCall"))).toBe("Calling tool");
   });
 
   it("没有文件名：只写动作", () => {

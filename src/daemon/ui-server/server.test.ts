@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   ConversationNotFoundError,
   LEDGER_ERROR_CODES,
   LedgerRequestError,
@@ -733,7 +734,7 @@ describe("POST /api/pms 建项目经理", () => {
     ["没给性格设定", { name: "阿周", mode: "hands_on" }],
     ["模型名超过 100 个字符", { ...NEW_PM, defaultModel: "m".repeat(MAX_MODEL_CHARS + 1) }],
     ["模型名不是字符串", { ...NEW_PM, defaultModel: 3 }],
-    ["厂商不在清单里", { ...NEW_PM, vendor: "codex" }],
+    ["厂商不在清单里", { ...NEW_PM, vendor: "unknown" }],
     ["思考程度不是字符串", { ...NEW_PM, effort: 1 }],
     ["路径是空串", { ...NEW_PM, folder: "" }],
     ["路径全是空白", { ...NEW_PM, folder: "  " }],
@@ -832,7 +833,7 @@ describe("性格设定 GET、PUT /api/pms/:id/persona 和 POST /api/persona-chan
     ["text 是 null", { text: null }],
     ["mode 不对", { mode: "foo" }],
     ["mode 不是字符串", { mode: 1 }],
-    ["vendor 不在清单里", { vendor: "codex" }],
+    ["vendor 不在清单里", { vendor: "unknown" }],
     ["vendor 是 null", { vendor: null }],
     ["model 超过 100 个字符", { model: "m".repeat(MAX_MODEL_CHARS + 1) }],
     ["model 不是字符串", { model: 3 }],
@@ -1531,7 +1532,7 @@ describe("GET /api/models（模型名单）", () => {
   it("没接名单来源：回打包的名单", async () => {
     const res = await call("GET", "/api/models");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ catalogs: [bundledModelCatalog("claude")] });
+    expect(res.json()).toEqual({ catalogs: AGENT_VENDORS.map(bundledModelCatalog) });
   });
 
   it("接了：原样回；?refresh=1 让它重新问", async () => {

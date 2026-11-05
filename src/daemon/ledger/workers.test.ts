@@ -257,6 +257,27 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(workerEventOf(workerLines()[0]!)?.readonly).toBe(true);
   });
 
+  it("跨厂商派 Worker（--vendor）：换厂商时未显式传 model/effort 用 null（不把 claude 模型继承给 agy/codex），按目标厂商校验", () => {
+    repos.add(main);
+    // 项目经理 lin 默认是 claude + claude-sonnet-5-5
+    const agyWorker = start({ vendor: "agy" }).data.worker;
+    expect(sessionRow(workerSessionId(agyWorker.id))).toMatchObject({
+      vendor: "agy",
+      model: null,
+      effort: null,
+    });
+    const codexWorker = start({ vendor: "codex", model: "gpt-5.4", effort: "xhigh" }).data.worker;
+    expect(sessionRow(workerSessionId(codexWorker.id))).toMatchObject({
+      vendor: "codex",
+      model: "gpt-5.4",
+      effort: "xhigh",
+    });
+    // codex 不支持 effort max
+    expectLedgerError(() => start({ vendor: "codex", effort: "max" }), "invalid", /思考程度只能是 low、medium、high、xhigh/);
+    // 非法厂商
+    expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", /厂商只能是 claude、agy、codex/);
+  });
+
   it("主文件夹有没提交的改动：返回的话提醒 Worker 看不到这些改动", () => {
     repos.add(main);
     dirty.add(main);

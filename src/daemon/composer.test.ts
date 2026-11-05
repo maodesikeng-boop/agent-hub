@@ -63,7 +63,7 @@ describe("files", () => {
 
   it("不认识的厂商、没有文件夹：空的", async () => {
     const main = folder(["a.txt"]);
-    expect(await service({ vendor: "codex", fileRoots: [main] }).svc.files(7, "a")).toEqual({ entries: [], truncated: false });
+    expect(await service({ vendor: "unknown", fileRoots: [main] }).svc.files(7, "a")).toEqual({ entries: [], truncated: false });
     expect(await service({ fileRoots: [] }).svc.files(7, "a")).toEqual({ entries: [], truncated: false });
   });
 

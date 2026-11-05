@@ -3,7 +3,7 @@
 // agent_sessions.vendor、pms.vendor 存的就是这里的厂商编号。
 import { MAX_MODEL_CHARS } from "./limits.ts";
 
-export const AGENT_VENDORS = ["claude"] as const;
+export const AGENT_VENDORS = ["claude", "agy", "codex"] as const;
 export type AgentVendor = (typeof AGENT_VENDORS)[number];
 export const DEFAULT_AGENT_VENDOR: AgentVendor = "claude";
 
@@ -18,7 +18,10 @@ export interface VendorSpec {
   customModelExample: string;
   /** 思考程度，原样传给 effortFlag。 */
   efforts: readonly string[];
+  modelFlag: string;
+  effortFlag: string;
   flags: { model: string; effort: string };
+  quotaWindows: Readonly<Record<string, string>>;
   /**
    * 额度（左下角）：厂商在事件里报的用量窗口（键是 RateLimitInfo.windows 里的键），按显示顺序；label 是浮层里的全名，
    * short 是左下角按钮上的简写。warningStatus：厂商自己报“快用完”时的状态值。没有额度数据的厂商不写。
@@ -53,8 +56,22 @@ const CLAUDE_SETTINGS_BLOCKED = "这个命令会改 claude 自己的设置，这
 const CLAUDE_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 claude";
 const CLAUDE_TERMINAL_BLOCKED = "这个命令只能在终端界面里用";
 
+const AGY_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const AGY_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
+const AGY_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 agy";
+const AGY_TERMINAL_BLOCKED = "交互式命令不能在后台会话跑，请在终端界面里打开 agy";
+
+const CODEX_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const CODEX_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
+const CODEX_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 codex";
+const CODEX_SANDBOX_BLOCKED = "权限和沙箱由 agent-hub 管，这里不能用这个命令";
+
 function blocked(reason: string, names: readonly string[]): Record<string, string> {
   return Object.fromEntries(names.map((name) => [name, reason]));
+}
+
+function cap(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
@@ -69,7 +86,10 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
+    modelFlag: "--model",
+    effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
+    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
     quota: {
       name: "Claude",
       windows: [
@@ -82,7 +102,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     shortModelName: (model) => {
       const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model);
       if (!m) return null;
-      const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1);
+      const family = cap(m[1]!);
       return [family, m[3] === undefined ? m[2] : `${m[2]}.${m[3]}`, m[4] ? "1M" : null].filter(Boolean).join(" ");
     },
     composer: {
@@ -109,6 +129,72 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
         ...blocked(CLAUDE_ACCOUNT_BLOCKED, ["login", "logout", "usage-credits", "extra-usage", "design", "design-consent", "design-revoke"]),
         // system/init 的 terminal_slash_commands 标出来的四个，加上 heapdump（往桌面写文件）
         ...blocked(CLAUDE_TERMINAL_BLOCKED, ["doctor", "checkup", "color", "focus", "reload-plugins", "heapdump"]),
+      },
+    },
+  },
+  agy: {
+    label: "Antigravity",
+    models: [
+      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
+      { id: "gemini-4-argon-max", label: "Gemini 4 Argon (Max)" },
+      { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
+      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+    ],
+    customModel: true,
+    customModelExample: "如 gemini-4-argon-medium",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    modelFlag: "--model",
+    effortFlag: "--effort",
+    flags: { model: "--model", effort: "--effort" },
+    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
+    shortModelName: (model) => {
+      const argon = /^gemini-\d+-argon-([a-z]+)$/.exec(model);
+      if (argon) return `Argon ${cap(argon[1]!)}`;
+      const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-thinking)?(?:-\d{8})?$/.exec(model);
+      if (claude) return `${cap(claude[1]!)} ${claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`}`;
+      const gptOss = /^gpt-oss-(\d+b)(?:-[a-z]+)?$/i.exec(model);
+      if (gptOss) return `GPT-OSS ${gptOss[1]!.toUpperCase()}`;
+      return null;
+    },
+    composer: {
+      commandPrefix: "/",
+      compactCommand: "compact",
+      blockedCommands: {
+        ...blocked(AGY_SESSION_BLOCKED, ["clear", "resume"]),
+        ...blocked(AGY_ACCOUNT_BLOCKED, ["logout", "login"]),
+        ...blocked(AGY_MODEL_BLOCKED, ["model", "effort", "mode"]),
+        ...blocked(AGY_TERMINAL_BLOCKED, ["update", "doctor", "color", "focus"]),
+      },
+    },
+  },
+  codex: {
+    label: "Codex",
+    models: [
+      { id: "gpt-5.4", label: "GPT-5.4" },
+      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+    ],
+    customModel: true,
+    customModelExample: "如 gpt-5.4",
+    efforts: ["low", "medium", "high", "xhigh"],
+    modelFlag: "--model",
+    effortFlag: "-c",
+    flags: { model: "--model", effort: "-c" },
+    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
+    shortModelName: (model) => {
+      const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z]+))?$/.exec(model);
+      if (!gpt) return null;
+      return gpt[2] === undefined ? `GPT-${gpt[1]}` : `GPT-${gpt[1]} ${cap(gpt[2])}`;
+    },
+    composer: {
+      commandPrefix: "/",
+      compactCommand: "compact",
+      blockedCommands: {
+        ...blocked(CODEX_SESSION_BLOCKED, ["clear", "new", "resume", "fork", "quit", "exit"]),
+        ...blocked(CODEX_ACCOUNT_BLOCKED, ["login", "logout"]),
+        ...blocked(CODEX_MODEL_BLOCKED, ["model"]),
+        ...blocked(CODEX_SANDBOX_BLOCKED, ["approvals", "permissions", "sandbox"]),
       },
     },
   },
@@ -159,10 +245,10 @@ export function checkAgentSetting(setting: { vendor: unknown; model: string | nu
 
 /** 启动参数里模型、思考程度那几个（默认的不传）。 */
 export function agentLaunchArgs(setting: AgentSetting): string[] {
-  const { flags } = VENDOR_SPECS[setting.vendor];
+  const spec = VENDOR_SPECS[setting.vendor];
   const args: string[] = [];
-  if (setting.model !== null && setting.model !== "") args.push(flags.model, setting.model);
-  if (setting.effort !== null && setting.effort !== "") args.push(flags.effort, setting.effort);
+  if (setting.model !== null && setting.model !== "") args.push(spec.modelFlag, setting.model);
+  if (setting.effort !== null && setting.effort !== "") args.push(spec.effortFlag, setting.effort);
   return args;
 }
 
@@ -265,31 +351,84 @@ export function vendorLabel(vendor: string): string {
 // 出一句人话（web/errors.ts），各家的错误长什么样只写在这里。网络断了这类和厂商无关的特征在 web/errors.ts。
 
 /** 失败的通用类型：服务繁忙、额度用完、网络断了、没能启动。认不出来的是 unknown（web/errors.ts）。 */
-export type FailureKind = "busy" | "quota" | "network" | "start";
+export type FailureKind = "busy" | "quota" | "network" | "start" | "auth" | "context";
 
 export interface VendorFailureSigns {
   /** 出错的话里称呼这家的服务：“Claude 服务繁忙”。 */
   serviceName: string;
   /** 按顺序匹配，先中先算。 */
   signs: readonly { kind: FailureKind; pattern: RegExp }[];
+  /** 鉴权失败匹配正则。 */
+  auth: RegExp;
+  /** 额度耗尽匹配正则。 */
+  quota: RegExp;
+  /** 上下文超长匹配正则。 */
+  context: RegExp;
 }
+
+const COMMON_AUTH_PATTERN = /not logged in|unauthenticated|sign in|\b401\b|invalid_api_key/i;
+const COMMON_QUOTA_PATTERN = /quota[_ ]?exceeded|rate[_ ]?limit|usage[_ ]?limit(?:_reached)?|resource_exhausted|\b429\b|credit balance|quota/i;
+const COMMON_CONTEXT_PATTERN = /context_length_exceeded|context window|prompt is too long/i;
+const COMMON_BUSY_PATTERN = /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i;
 
 export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSigns>> = {
   claude: {
     serviceName: "Claude",
+    auth: COMMON_AUTH_PATTERN,
+    quota: COMMON_QUOTA_PATTERN,
+    context: COMMON_CONTEXT_PATTERN,
     signs: [
       // 驱动层起不来 claude 的错误码（daemon/driver）
       { kind: "start", pattern: /^(claude_not_found|spawn_failed|start_timeout)\b/ },
-      { kind: "quota", pattern: /usage limit|rate[_ ]?limit|\b429\b|credit balance|quota/i },
-      { kind: "busy", pattern: /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i },
+      { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
+      { kind: "busy", pattern: COMMON_BUSY_PATTERN },
+      { kind: "auth", pattern: COMMON_AUTH_PATTERN },
+      { kind: "context", pattern: COMMON_CONTEXT_PATTERN },
+    ],
+  },
+  agy: {
+    serviceName: "Antigravity",
+    auth: COMMON_AUTH_PATTERN,
+    quota: COMMON_QUOTA_PATTERN,
+    context: COMMON_CONTEXT_PATTERN,
+    signs: [
+      { kind: "start", pattern: /^(agy_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
+      { kind: "busy", pattern: COMMON_BUSY_PATTERN },
+      { kind: "auth", pattern: COMMON_AUTH_PATTERN },
+      { kind: "context", pattern: COMMON_CONTEXT_PATTERN },
+    ],
+  },
+  codex: {
+    serviceName: "Codex",
+    auth: COMMON_AUTH_PATTERN,
+    quota: COMMON_QUOTA_PATTERN,
+    context: COMMON_CONTEXT_PATTERN,
+    signs: [
+      { kind: "start", pattern: /^(codex_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
+      { kind: "busy", pattern: COMMON_BUSY_PATTERN },
+      { kind: "auth", pattern: COMMON_AUTH_PATTERN },
+      { kind: "context", pattern: COMMON_CONTEXT_PATTERN },
     ],
   },
 };
 
+/** 从原文的特征词推断优先检查哪家厂商（如含 agy/antigravity 优先判 agy，含 codex/openai/chatgpt 优先判 codex）。 */
+function inferVendorFromRaw(raw: string): AgentVendor | null {
+  if (/^agy_not_found\b|\bagy\b|antigravity/i.test(raw)) return "agy";
+  if (/^codex_not_found\b|\bcodex\b|openai|chatgpt/i.test(raw)) return "codex";
+  if (/^claude_not_found\b|\bclaude\b|anthropic/i.test(raw)) return "claude";
+  return null;
+}
+
 /** 认得出是哪家的哪类错误就返回，否则 null。 */
-export function vendorFailureOf(raw: string): { kind: FailureKind; serviceName: string } | null {
-  for (const vendor of AGENT_VENDORS) {
-    const { serviceName, signs } = VENDOR_FAILURE_SIGNS[vendor];
+export function vendorFailureOf(raw: string, vendor?: AgentVendor): { kind: FailureKind; serviceName: string } | null {
+  const preferred = vendor !== undefined && isAgentVendor(vendor) ? vendor : inferVendorFromRaw(raw);
+  const order: readonly AgentVendor[] =
+    preferred !== null ? [preferred, ...AGENT_VENDORS.filter((v) => v !== preferred)] : AGENT_VENDORS;
+  for (const v of order) {
+    const { serviceName, signs } = VENDOR_FAILURE_SIGNS[v];
     const hit = signs.find((s) => s.pattern.test(raw));
     if (hit) return { kind: hit.kind, serviceName };
   }

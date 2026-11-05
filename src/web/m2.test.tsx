@@ -219,9 +219,10 @@ describe("新建项目经理", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
     await user.click(within(dialog).getByRole("radio", { name: "自己也干活" }));
     await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
-    // 厂商只有一家：只显示名字，不是下拉；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
-    expect(within(dialog).queryByRole("combobox", { name: "厂商" })).not.toBeInTheDocument();
-    expect(within(dialog).getByText("Claude Code")).toBeInTheDocument();
+    // 打包的名单有三家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
+    const vendor = within(dialog).getByRole("combobox", { name: "厂商" });
+    expect(optionsOf(vendor)).toEqual(["Claude Code", "Antigravity", "Codex"]);
+    expect(vendor).toHaveDisplayValue("Claude Code");
     const model = within(dialog).getByRole("combobox", { name: "模型" });
     const effort = within(dialog).getByRole("combobox", { name: "思考程度" });
     expect(optionsOf(model)).toEqual(["默认", "Fable", "Opus", "Sonnet", "Haiku", "自定义"]);
@@ -791,9 +792,10 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await boot();
     serve({ model: "haiku", effort: "xhigh" });
     const page = await open(user);
-    // 只有一家厂商：只显示名字，不是下拉
-    expect(within(groupIn(page, "模型")).getByText("Claude Code")).toBeInTheDocument();
-    expect(within(groupIn(page, "模型")).queryByRole("combobox", { name: "厂商" })).not.toBeInTheDocument();
+    // 打包的名单有三家厂商：显示厂商下拉（默认 Claude Code）
+    const vendor = combo(page, "厂商");
+    expect(optionsOf(vendor)).toEqual(["Claude Code", "Antigravity", "Codex"]);
+    expect(vendor).toHaveDisplayValue("Claude Code");
     expect(optionsOf(combo(page, "模型"))).toEqual(["默认", "Fable", "Opus", "Sonnet", "Haiku", "自定义"]);
     expect(combo(page, "模型")).toHaveDisplayValue("Haiku");
     expect(combo(page, "思考程度")).toHaveDisplayValue("xhigh");

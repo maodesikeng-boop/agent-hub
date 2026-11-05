@@ -16,7 +16,7 @@ import {
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
-import { ALL_EFFORTS } from "../shared/vendors.ts";
+import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
 
 export interface HubIo {
   argv: string[];
@@ -52,7 +52,7 @@ export const HUB_USAGE = `用法：
                                                           别把密钥写进命令：原文会出现在日志和失败附注里
   ${hub} persona show
   ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
-  ${hub} worker start --title <标题> [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
+  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
                                                           派一个 Worker，任务说明从标准输入读
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
@@ -95,6 +95,7 @@ type Options = {
   mode?: string;
   reason?: string;
   title?: string;
+  vendor?: string;
   model?: string;
   effort?: string;
   readonly?: boolean;
@@ -173,6 +174,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         mode: { type: "string" },
         reason: { type: "string" },
         title: { type: "string" },
+        vendor: { type: "string" },
         model: { type: "string" },
         effort: { type: "string" },
         readonly: { type: "boolean" },
@@ -239,14 +241,18 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "persona.edit", body, textSource, textField: "text" };
   }
   if (group === "worker" && action === "start") {
-    allowOnly(values, ["title", "model", "effort", "readonly", "no-worktree", "stdin"], "worker start");
+    allowOnly(values, ["title", "vendor", "model", "effort", "readonly", "no-worktree", "stdin"], "worker start");
     expectPositionals(rest, 0, "worker start");
     if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
+    if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
+      throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+    }
     if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
       throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
     }
     const textSource = requireStdin(values, "worker start");
     const body: Record<string, unknown> = { title: values.title };
+    if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
     if (values.effort !== undefined) body.effort = values.effort;
     if (values.readonly === true) body.readonly = true;

@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  AGENT_VENDORS,
   ALL_EFFORTS,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
@@ -117,7 +118,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} persona show\`：查看当前的性格设定和模式
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`${HUB} worker start --title <标题> [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
+  - \`${HUB} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
   - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
   - \`${HUB} worker list\`：查看所有 Worker 的状态、分支、目录和模型

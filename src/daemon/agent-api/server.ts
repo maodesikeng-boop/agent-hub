@@ -106,6 +106,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       // 太长不拒，账本用 normalizeWorkerTitle 截断到 MAX_WORKER_TITLE_CHARS
       title: { type: "string", minLength: 1 },
       task: taskField,
+      vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       // 取值由账本按项目经理那家的清单查（vendors.ts），这里只管形状
       effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },

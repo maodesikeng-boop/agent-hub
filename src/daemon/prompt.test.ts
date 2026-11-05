@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   ALL_EFFORTS,
   HUB_COMMANDS,
   MIN_SCHEDULE_EVERY_MINUTES,
@@ -324,7 +325,7 @@ describe("提示词：项目经理（M3）", () => {
 
   it("hub 用法有 hub worker 的四个命令，和 shared/hub.ts 的命令表对得上", () => {
     for (const sub of [
-      `${hub} worker start --title <标题> [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin`,
+      `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin`,
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,

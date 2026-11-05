@@ -32,7 +32,7 @@ import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES } from "../../shared/limits.ts";
-import { checkEffort, checkModel, effortLabel } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, effortLabel, isAgentVendor } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -269,8 +269,12 @@ export function createLedgerWorkers(
     const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     const task = validTask(args.task, "任务说明");
-    // 模型、思考程度按项目经理那家的清单查；不给就用项目经理会话现在的（资料页改过的话是改过的）
-    const vendor = caller.vendor as AgentVendor;
+    // 模型、思考程度按目标厂商清单查；同厂商不给就用项目经理会话现在的，换厂商不给就用 null
+    let vendor = caller.vendor as AgentVendor;
+    if (args.vendor !== undefined) {
+      if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+      vendor = args.vendor;
+    }
     const model = typeof args.model === "string" ? args.model.trim() || null : null;
     const effort = typeof args.effort === "string" ? args.effort.trim() || null : null;
     const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, effort);
@@ -326,6 +330,7 @@ export function createLedgerWorkers(
       );
     }
     const worker = workerRow(id)!;
+    const sameVendor = vendor === caller.vendor;
     const session = insertSession(p, {
       role: "worker",
       conversationId: conversation.id,
@@ -335,8 +340,8 @@ export function createLedgerWorkers(
       addDirs: workspace === "worktree" ? [] : card.otherFolders,
       generation: 1,
       vendor,
-      model: model ?? caller.model,
-      effort: effort ?? caller.effort,
+      model: model ?? (sameVendor ? caller.model : null),
+      effort: effort ?? (sameVendor ? caller.effort : null),
     });
     insertPmMessage(p, worker, session, task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
