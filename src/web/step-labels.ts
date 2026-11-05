@@ -1,4 +1,4 @@
-// agent 在做什么的状态词：全部在这里，别处不另写。照 Claude Code、t3code 的习惯用英文（docs/ui-standard.md 第 15 条）。
+// agent 在做什么的状态词：全部在这里，别处不另写。照 Claude Code、t3code 的习惯用英文（docs/ui-standard.md 第 16 条）。
 // 消息流里显示成一行“Running command…”，省略号的动效由 AgentStatus 加，这里的文字不带省略号；跑完是“Worked for 23s”。
 //
 // 注意：TOOL_TEXT 按 claude 的工具名（Bash、Read…）对应文案、describeMcpTool 认 claude 的 mcp__ 前缀，这是写死了厂商的。

@@ -1,26 +1,25 @@
-// 资料页的“定时任务”组（M6）：一个任务一行（名字、频率和下次时间、上次结果），右边开关（暂停/恢复）和删除（要二次确认）；
-// 最后一行“新建”，点了在组里展开表单。校验和写库都在后台（同 hub schedule add），这里只先拦明显的错，失败原因显示在表单下面。
+// 资料页的“定时任务”组（M6）：一个任务一行（名字，下面频率、下次时间，失败了才写上次结果），右边开关（暂停/恢复）和删除（要二次确认）；
+// 最后一行“新建”，点了在组里展开表单。表单照 docs/ui-standard.md 第 9 条“表单校验”：空着“保存”是灰的，填得不对边输入边在那一行下面写原因；
+// 后台再查一遍（同 hub schedule add），后台拒绝的原因写在按钮上面。
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import {
   MAX_SCHEDULES_PER_PM,
   MAX_SCHEDULE_NAME_CHARS,
+  MAX_TASK_BYTES,
   checkEveryMinutes,
-  normalizeName,
   parseDailyTime,
   scheduleLabel,
   scheduledTimeText,
+  utf8Bytes,
   type ScheduleRecord,
-  type ScheduleStatus,
 } from "../../shared/index.ts";
 import { deleteSchedule, postAddSchedule, putScheduleEnabled } from "../client.ts";
-import { errorText } from "../format.ts";
+import { errorText, nameError } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Select, Textarea } from "../ui/input.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-
-const RESULT_LABELS: Record<ScheduleStatus, string> = { sent: "成功", skipped: "跳过", failed: "失败" };
 
 function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
   const [busy, setBusy] = useState(false);
@@ -43,18 +42,16 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
       label={schedule.name}
       error={error}
       detail={
-        <>
-          <div>{`${scheduleLabel(schedule)}，${schedule.enabled ? `下次 ${scheduledTimeText(schedule.nextRunAt, now)}` : "已暂停"}`}</div>
-          <div className="text-xs">
-            {schedule.lastStatus === null ? (
-              "还没跑过"
-            ) : (
-              <span className={schedule.lastStatus === "failed" ? "text-danger" : undefined} title={schedule.lastError ?? undefined}>
-                {`上次${RESULT_LABELS[schedule.lastStatus]}`}
-              </span>
-            )}
-          </div>
-        </>
+        // 各项各自一段、用间距隔开（不用逗号拼）；上次成功、跳过、还没跑过都不用管，只有失败才写
+        <span className="flex flex-wrap gap-x-3 tabular-nums">
+          <span>{scheduleLabel(schedule)}</span>
+          <span>{schedule.enabled ? `下次 ${scheduledTimeText(schedule.nextRunAt, now)}` : "已暂停"}</span>
+          {schedule.lastStatus === "failed" && (
+            <span className="text-danger" title={schedule.lastError ?? undefined}>
+              上次失败
+            </span>
+          )}
+        </span>
       }
     >
       {(id) =>
@@ -83,7 +80,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
 
 type Unit = "minutes" | "hours";
 
-function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number; onClose: () => void }) {
+function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"daily" | "interval">("daily");
   const [time, setTime] = useState("09:00");
@@ -93,28 +90,26 @@ function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const check = (): { daily?: string; everyMinutes?: number } | string => {
-    if (count >= MAX_SCHEDULES_PER_PM) return `定时任务最多 ${MAX_SCHEDULES_PER_PM} 个，先删掉不要的`;
-    const clean = normalizeName(name, MAX_SCHEDULE_NAME_CHARS);
-    if (clean === null) return `名字不能是空的，最多 ${MAX_SCHEDULE_NAME_CHARS} 个字符`;
-    if (clean.includes("【") || clean.includes("】")) return "名字里不能有“【”“】”";
-    if (kind === "daily") {
-      if (parseDailyTime(time.trim()) === null) return "每天的时间要写成 HH:MM（24 小时制，如 09:00）";
-    } else {
-      const bad = checkEveryMinutes(/^[0-9]+$/.test(every.trim()) ? Number(every.trim()) * (unit === "hours" ? 60 : 1) : NaN);
-      if (bad !== null) return bad;
-    }
-    if (prompt.trim() === "") return "要它做什么不能是空的";
-    return kind === "daily" ? { daily: time.trim() } : { everyMinutes: Number(every.trim()) * (unit === "hours" ? 60 : 1) };
-  };
+  // 每一行自己的错：空着不算错（只是不能保存），填了不对才写
+  const nameProblem = nameError(name, MAX_SCHEDULE_NAME_CHARS) ?? (/[【】]/.test(name) ? "名字里不能有“【”“】”" : null);
+  const minutes = /^[0-9]+$/.test(every.trim()) ? Number(every.trim()) * (unit === "hours" ? 60 : 1) : NaN;
+  const freqEmpty = kind === "daily" ? time.trim() === "" : every.trim() === "";
+  const freqProblem = freqEmpty
+    ? null
+    : kind === "daily"
+      ? parseDailyTime(time.trim()) === null
+        ? "时间要写成 HH:MM，比如 09:00"
+        : null
+      : checkEveryMinutes(minutes);
+  const promptProblem = utf8Bytes(prompt) > MAX_TASK_BYTES ? "要它做什么写得太长了" : null;
+  const canSave = name.trim() !== "" && nameProblem === null && !freqEmpty && freqProblem === null && prompt.trim() !== "" && promptProblem === null && !busy;
 
   const save = async () => {
-    const frequency = check();
-    if (typeof frequency === "string") return setError(frequency);
+    if (!canSave) return;
     setBusy(true);
     setError(null);
     try {
-      await postAddSchedule(pmId, { name: name.trim(), prompt, ...frequency });
+      await postAddSchedule(pmId, { name: name.trim(), prompt, ...(kind === "daily" ? { daily: time.trim() } : { everyMinutes: minutes }) });
       onClose();
     } catch (err) {
       setError(errorText(err));
@@ -125,8 +120,10 @@ function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number
 
   return (
     <>
-      <SettingsRow label="名字">{(id) => <Input id={id} className="w-[240px]" value={name} onChange={(e) => setName(e.target.value)} />}</SettingsRow>
-      <SettingsRow label="频率">
+      <SettingsRow label="名字" error={nameProblem}>
+        {(id) => <Input id={id} className="w-[240px]" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
+      </SettingsRow>
+      <SettingsRow label="频率" error={freqProblem}>
         {(id) => (
           <>
             <Select id={id} aria-label="频率" value={kind} onChange={(e) => setKind(e.target.value as "daily" | "interval")}>
@@ -134,10 +131,10 @@ function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number
               <option value="interval">每隔</option>
             </Select>
             {kind === "daily" ? (
-              <Input aria-label="时间" className="w-24" placeholder="09:00" value={time} onChange={(e) => setTime(e.target.value)} />
+              <Input aria-label="时间" className="w-24 tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
             ) : (
               <>
-                <Input aria-label="间隔" inputMode="numeric" className="w-20" value={every} onChange={(e) => setEvery(e.target.value)} />
+                <Input aria-label="间隔" inputMode="numeric" className="w-20 tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
                 <Select aria-label="单位" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
                   <option value="minutes">分钟</option>
                   <option value="hours">小时</option>
@@ -147,23 +144,34 @@ function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number
           </>
         )}
       </SettingsRow>
-      <div className="px-4 py-2.5">
-        <label htmlFor="schedule-prompt" className="text-[15px]">
-          要它做什么
-        </label>
-        <Textarea id="schedule-prompt" rows={4} className="mt-2 min-h-24" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+      {/* 框里的多行输入是一整行：没有边框和拖拽角，跟着内容长高；名字放占位符 */}
+      <div data-slot="settings-row">
+        <Textarea
+          aria-label="要它做什么"
+          placeholder="要它做什么"
+          rows={3}
+          className="block max-h-[40vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 field-sizing-content focus-visible:ring-0"
+          value={prompt}
+          aria-invalid={promptProblem !== null}
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+        {promptProblem && (
+          <div className="px-4 pb-3">
+            <RowError>{promptProblem}</RowError>
+          </div>
+        )}
       </div>
-      <div className="px-4 py-2.5">
-        <div className="flex min-h-9 items-center justify-end gap-2">
-          <Button variant="outline" disabled={busy} onClick={onClose}>
+      <div className="px-4 py-3">
+        {error && <RowError>{error}</RowError>}
+        <div className={error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             取消
           </Button>
-          <Button disabled={busy} onClick={() => void save()}>
+          <Button disabled={!canSave} onClick={() => void save()}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
             保存
           </Button>
         </div>
-        {error && <RowError>{error}</RowError>}
       </div>
     </>
   );
@@ -171,21 +179,25 @@ function NewScheduleForm({ pmId, count, onClose }: { pmId: number; count: number
 
 export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: ScheduleRecord[] }) {
   const [adding, setAdding] = useState(false);
+  const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
     <SettingsGroup title="定时任务">
       {schedules.map((s) => (
         <ScheduleItem key={s.id} schedule={s} />
       ))}
       {adding ? (
-        <NewScheduleForm pmId={pmId} count={schedules.length} onClose={() => setAdding(false)} />
+        <NewScheduleForm pmId={pmId} onClose={() => setAdding(false)} />
       ) : (
+        // 满了不让填完才知道：“新建”直接不能点，右边写状态
         <button
           type="button"
-          className="flex min-h-14 w-full cursor-pointer items-center gap-2 px-4 py-2.5 text-left text-[15px] transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
+          disabled={full}
+          className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-[15px] transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
           onClick={() => setAdding(true)}
         >
           <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
-          新建
+          <span className={full ? "text-muted-foreground" : undefined}>新建</span>
+          {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`已满 ${MAX_SCHEDULES_PER_PM} 个`}</span>}
         </button>
       )}
     </SettingsGroup>

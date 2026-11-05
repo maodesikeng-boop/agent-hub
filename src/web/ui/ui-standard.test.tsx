@@ -28,6 +28,18 @@ describe("界面标准：共用组件", () => {
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
   });
 
+  it("下拉 plain（分组行里改了马上存的）：没有边框和底色，悬停、聚焦浅灰底，高 36px，不用主色", () => {
+    render(
+      <Select aria-label="行里的下拉" variant="plain">
+        <option>一</option>
+      </Select>,
+    );
+    const cls = classOf(screen.getByRole("combobox", { name: "行里的下拉" }));
+    expect(cls).toEqual(expect.arrayContaining(["h-9", "rounded-xl", "bg-transparent", "hover:bg-sidebar-hover", "focus-visible:bg-sidebar-hover"]));
+    expect(cls).not.toContain("border");
+    expect(cls.join(" ")).not.toMatch(/primary/);
+  });
+
   it("按钮：默认 36px、sm 32px，图标按钮同两档；键盘焦点是中性的 ring-ring；不能点的主按钮换中性灰", () => {
     render(
       <>

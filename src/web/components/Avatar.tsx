@@ -3,7 +3,7 @@ import { Avatar as AvatarRoot, AvatarFallback } from "../ui/avatar.tsx";
 /** 团子的身体颜色，按 key 在这一组里轮着取。 */
 const BLOB_COLORS = ["#ff3d8b", "#ff7a1a", "#2f8cff", "#18181b", "#1fb37d", "#f5b400"] as const;
 
-/** Worker 统一用的中性灰团子（docs/ui-standard.md 第 15 条），不按编号配色。 */
+/** Worker 统一用的中性灰团子（docs/ui-standard.md 第 16 条），不按编号配色。 */
 const NEUTRAL_COLOR = "#a1a1aa";
 
 /** 头像：一只有两只眼睛的小团子，颜色由 colorKey 决定；neutral（Worker）一律中性灰。 */

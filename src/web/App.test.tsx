@@ -363,7 +363,7 @@ describe("消息状态", () => {
     );
     const mine = () => bubbles()[0] as HTMLElement;
     expect(within(mine()).getByText("排队中")).toBeInTheDocument();
-    // 已送达、处理中、已回复都不显示（docs/ui-standard.md 第 15 条）
+    // 已送达、处理中、已回复都不显示（docs/ui-standard.md 第 16 条）
     push(ws, messageChange(11, "message.updated", makeUserMessage({ id: 1, text: "查一下", status: "delivered" })));
     expect(mine().querySelector("[data-delivery]")).toBeNull();
     push(ws, messageChange(12, "message.updated", makeUserMessage({ id: 1, text: "查一下", status: "processing" })));

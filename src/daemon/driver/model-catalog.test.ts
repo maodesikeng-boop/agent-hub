@@ -43,9 +43,10 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
   it("正常：value 当 id、displayName 当名字；default 那项不进名单，它的思考程度给“默认”用；每个模型带自己的思考程度", () => {
     const catalog = parseInitializeModels(REAL_MODELS);
     expect(catalog).toEqual({
-      vendor: "claude",
+      ...bundledModelCatalog("claude"),
       source: "vendor",
       defaultEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultModel: "Opus 5.5",
       models: [
         { id: "opus", label: "Opus 5.5", description: "For complex work and everyday tasks", efforts: ["low", "medium", "high", "xhigh", "max"] },
         { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", description: "Fastest for quick answers", efforts: null },
@@ -54,12 +55,22 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
     } satisfies ModelCatalog);
   });
 
+  it("“默认”实际用的模型：default 那项的 resolvedModel 对上名单里哪个就用它的名字；对不上用 resolvedModel 原样；没有 resolvedModel 是 null", () => {
+    const def = (resolvedModel?: string) => ({ value: "default", ...(resolvedModel ? { resolvedModel } : {}) });
+    const opus = { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5" };
+    expect(parseInitializeModels([def("claude-opus-5-5"), opus])?.defaultModel).toBe("Opus 5.5");
+    expect(parseInitializeModels([opus, def("claude-opus-5-5")])?.defaultModel).toBe("Opus 5.5");
+    expect(parseInitializeModels([def("claude-sonnet-9"), opus])?.defaultModel).toBe("claude-sonnet-9");
+    expect(parseInitializeModels([def(), opus])?.defaultModel).toBeNull();
+  });
+
   it("字段缺失：没有 displayName 用 value；没有 description 是 null；没给思考程度是 null，明说不支持是空的；没有 default 那项时“默认”的思考程度是 null", () => {
     const catalog = parseInitializeModels([{ value: "opus" }, { value: "haiku", displayName: "", supportsEffort: false }]);
     expect(catalog).toEqual({
-      vendor: "claude",
+      ...bundledModelCatalog("claude"),
       source: "vendor",
       defaultEfforts: null,
+      defaultModel: null,
       models: [
         { id: "opus", label: "opus", description: null, efforts: null },
         { id: "haiku", label: "haiku", description: null, efforts: [] },

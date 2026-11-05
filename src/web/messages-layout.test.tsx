@@ -66,14 +66,14 @@ describe("agent 消息布局", () => {
     const { container } = agent("| a | b |\n| - | - |\n| 1 | 2 |\n\n```\nconst a = 1;\n```");
     expect((container.querySelector(".markdown")!.parentElement as HTMLElement).className).toContain("min-w-0");
     const css = readFileSync("src/web/styles.css", "utf8");
-    // 同一个选择器可能在几条规则里出现（比如共用的 margin 那条），把它们的声明合在一起看
-    const rules = (selector: string) =>
-      [...css.matchAll(new RegExp(`(?:^|[};])\\s*${selector.replace(".", "\\.")}\\s*\\{([^}]*)\\}`, "gm"))]
-        .map((m) => m[1]!.replace(/\s+/g, ""))
-        .join(";");
-    expect(rules(".markdown pre")).toContain("overflow-x:auto");
-    expect(rules(".markdown table")).toContain("overflow-x:auto");
-    expect(rules(".markdown table")).toContain("max-width:100%");
+    // 表格套在 [data-md-table] 里滚动；代码块的正文（.md-code-body）自己横向滚动
+    // 同一个选择器会在几条规则里出现（共用的 margin 那条），把声明合在一起看
+    const rule = (selector: string) =>
+      [...css.matchAll(new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]!.replace(/\s+/g, "")).join(";");
+    expect(container.querySelector("[data-md-table] table")).not.toBeNull();
+    expect(rule(".markdown [data-md-table]")).toContain("overflow-x:auto");
+    expect(rule(".markdown [data-md-table]")).toContain("max-width:100%");
+    expect(css).toMatch(/\.markdown \.md-code-body,[^{]*\{[^}]*overflow-x:\s*auto/);
   });
 
   it("用户消息的气泡样式不变", () => {

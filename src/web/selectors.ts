@@ -367,7 +367,7 @@ export function failingHealth(state: HubState): HealthEntry[] {
 }
 
 /**
- * 消息流里的一项（docs/ui-standard.md 第 15 条）：
+ * 消息流里的一项（docs/ui-standard.md 第 16 条）：
  * - message：单独显示的一条：用户的话、Worker 对话里项目经理的话、Worker 的汇报、到点的定时任务、很淡的系统行；
  * - turn：agent 的一轮回复，只出一个头像。work 是这一轮的操作（工具调用、派出 / 收工 Worker、建删定时任务），合成一行
  *   “Worked for …”；parts 是按顺序要显示的文字和夹在中间的系统行。startedAt / endedAt 算用时，都是已有的时间戳。

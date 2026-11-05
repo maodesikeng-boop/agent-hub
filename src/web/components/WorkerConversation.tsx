@@ -64,7 +64,7 @@ export function WorkerConversation({
   const id = view?.conversation.id;
   const stop = useStop(session, id === undefined ? null : () => onStop(id));
 
-  // Worker 统一用中性灰的头像（docs/ui-standard.md 第 15 条）
+  // Worker 统一用中性灰的头像（docs/ui-standard.md 第 16 条）
   const identity = { name: title, avatarKey: id ?? 0, neutral: true };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
