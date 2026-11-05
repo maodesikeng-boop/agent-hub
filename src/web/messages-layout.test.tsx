@@ -4,29 +4,36 @@ import { render } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MessageList } from "./components/MessageList.tsx";
-import { MessageBubble, ToolGroup, type MessageActions } from "./components/Messages.tsx";
-import { makeMessage, makeUserMessage } from "./test-utils.ts";
+import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
+import type { Message } from "../shared/index.ts";
+import { makeMessage, makeToolMessage, makeUserMessage } from "./test-utils.ts";
 
 const identity = { name: "小林", avatarKey: 1 };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 
-function agent(text: string, head = true) {
-  return render(<MessageBubble message={makeMessage({ id: 1, text })} identity={identity} head={head} actions={actions} />);
+function list(messages: Message[]) {
+  return render(
+    <MessageList messages={messages} pending={[]} agentOf={() => identity} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />,
+  );
+}
+
+function agent(text: string) {
+  return list([makeMessage({ id: 1, text })]);
 }
 
 describe("agent 消息布局", () => {
   it("没有头像那一列的缩进：头像和名字在正文上方，正文占满整行", () => {
     const { container } = agent("你好");
-    const row = container.querySelector("article[data-side='left']") as HTMLElement;
-    expect(row.className).not.toContain("flex-row");
-    expect(row.className).not.toMatch(/\bgap-3\b/);
-    expect(row.querySelector(".w-9")).toBeNull();
-    const body = row.querySelector(".markdown")!.parentElement as HTMLElement;
+    const turn = container.querySelector("[data-turn]") as HTMLElement;
+    expect(turn.className).not.toContain("flex-row");
+    expect(turn.className).not.toMatch(/\bgap-3\b/);
+    expect(turn.querySelector(".w-9")).toBeNull();
+    const body = turn.querySelector(".markdown")!.parentElement as HTMLElement;
     expect(body.className).not.toContain("max-w-[85%]");
     expect(body.className).toContain("w-full");
     expect(body.className).toContain("min-w-0");
     // 名字在正文前面
-    const name = Array.from(row.querySelectorAll("div")).find((d) => d.textContent === "小林")!;
+    const name = Array.from(turn.querySelectorAll("div")).find((d) => d.textContent === "小林")!;
     expect(name.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -43,30 +50,16 @@ describe("agent 消息布局", () => {
   });
 
   it("连续消息只有第一条带头像和名字", () => {
-    const messages = [makeMessage({ id: 1, text: "第一条" }), makeMessage({ id: 2, text: "第二条" })];
-    const { container } = render(
-      <MessageList
-        messages={messages}
-        pending={[]}
-        agentOf={() => identity}
-        hasMore={false}
-        older={undefined}
-        onLoadOlder={() => {}}
-        onRetry={() => {}}
-        actions={actions}
-      />,
-    );
-    const rows = container.querySelectorAll("article[data-side='left']");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.getAttribute("data-head")).toBe("true");
-    expect(rows[1]!.getAttribute("data-head")).toBe("false");
+    const { container } = list([makeMessage({ id: 1, text: "第一条" }), makeMessage({ id: 2, text: "第二条" })]);
+    expect(container.querySelectorAll("article[data-side='left']")).toHaveLength(2);
     expect(container.querySelectorAll("[data-slot='avatar']")).toHaveLength(1);
     expect(container.textContent?.match(/小林/g)).toHaveLength(1);
   });
 
-  it("工具调用折叠行同样从最左边开始", () => {
-    const { container } = render(<ToolGroup messages={[makeMessage({ id: 1, text: "ls" })]} identity={identity} head />);
+  it("操作合成的那一行同样从最左边开始", () => {
+    const { container } = list([makeToolMessage({ id: 1, text: "ls" })]);
     expect(container.querySelector(".w-9")).toBeNull();
+    expect(container.querySelector("[data-work-line]")).not.toBeNull();
   });
 
   it("宽表格和代码块在自己的容器里横向滚动，不撑破消息列", () => {

@@ -1,5 +1,5 @@
-// agent 在做什么显示在头像旁；停止并进输入框的发送键。
-import { render, screen } from "@testing-library/react";
+// agent 在做什么（英文状态词）显示在这一轮最下面那一行；停止并进输入框的发送键。
+import { render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../shared/index.ts";
@@ -7,14 +7,14 @@ import { AgentStatus, hasAgentStatus } from "./components/AgentStatus.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { MessageList } from "./components/MessageList.tsx";
 import type { MessageActions } from "./components/Messages.tsx";
-import { makeMessage, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine } from "./test-utils.ts";
+import { makeMessage, makeSession, makeToolMessage, makeUserMessage, makeWorkerLine } from "./test-utils.ts";
 import type { PendingMessage } from "./state.ts";
 import type { StagedFiles } from "./upload.ts";
 import type { StopControl } from "./useStop.ts";
 
 const working = (over: Partial<SessionState> = {}) => makeSession({ status: "running", activity: "working", ...over });
 
-describe("AgentStatus：头像旁的状态", () => {
+describe("AgentStatus：消息流里的状态", () => {
   const text = (session: SessionState | null) => {
     const { container } = render(<AgentStatus session={session} />);
     return container.textContent;
@@ -30,33 +30,33 @@ describe("AgentStatus：头像旁的状态", () => {
   it("干活：按 step 显示，后面带省略号动效（装饰，读屏不读）", () => {
     const { container } = render(<AgentStatus session={working({ step: { type: "thinking" } })} />);
     const status = screen.getByRole("status", { name: "状态" });
-    expect(status).toHaveTextContent("在思考...");
+    expect(status).toHaveTextContent("Thinking...");
     const dots = container.querySelector("[aria-hidden='true']") as HTMLElement;
     expect(dots).toHaveTextContent("...");
     expect(dots.querySelectorAll(".animate-pulse, [class*='animate-pulse']")).toHaveLength(3);
   });
 
-  it("没有 step（老服务端、刚开始）：在处理", () => {
-    expect(text(working())).toBe("在处理...");
-    expect(text(working({ step: null }))).toBe("在处理...");
+  it("没有 step（老服务端、刚开始）：Working", () => {
+    expect(text(working())).toBe("Working...");
+    expect(text(working({ step: null }))).toBe("Working...");
   });
 
   it("正在停止、准备中（Worker 在跑准备命令）", () => {
-    expect(text(makeSession({ activity: "stopping", step: { type: "thinking" } }))).toBe("正在停止...");
-    expect(text(makeSession({ activity: "preparing" }))).toBe("正在跑准备命令...");
+    expect(text(makeSession({ activity: "stopping", step: { type: "thinking" } }))).toBe("Stopping...");
+    expect(text(makeSession({ activity: "preparing" }))).toBe("Running setup...");
   });
 
   it("网络出错在重试：第几次 / 共几次，比 step 优先；正在停止比重试优先", () => {
     const apiRetry = { attempt: 2, maxRetries: 10, retryAt: null, errorStatus: null, error: "unknown" };
-    expect(text(working({ step: { type: "thinking" }, apiRetry }))).toContain("网络出错，正在重试（第 2/10 次）");
-    expect(text(working({ activity: "stopping", apiRetry }))).toContain("正在停止");
+    expect(text(working({ step: { type: "thinking" }, apiRetry }))).toContain("Retrying 2/10");
+    expect(text(working({ activity: "stopping", apiRetry }))).toContain("Stopping");
   });
 
   it("等额度：额度用完（rejected）时写恢复时间；空闲也显示；比别的都优先；没有时间点只写“等额度”", () => {
     const rejected = { status: "rejected", resetsAt: 1_900_000_000, windows: {} };
-    expect(text(makeSession({ rateLimit: rejected }))).toMatch(/^等额度，.+ 恢复$/);
-    expect(text(working({ step: { type: "thinking" }, rateLimit: rejected }))).toMatch(/^等额度，/);
-    expect(text(makeSession({ rateLimit: { ...rejected, resetsAt: null } }))).toBe("等额度");
+    expect(text(makeSession({ rateLimit: rejected }))).toMatch(/^Usage limit reached, resets .+$/);
+    expect(text(working({ step: { type: "thinking" }, rateLimit: rejected }))).toMatch(/^Usage limit reached/);
+    expect(text(makeSession({ rateLimit: { ...rejected, resetsAt: null } }))).toBe("Usage limit reached");
     expect(hasAgentStatus(makeSession({ rateLimit: { status: "allowed_warning", resetsAt: null, windows: {} } }))).toBe(false);
   });
 });
@@ -83,54 +83,47 @@ function list(messages: ReturnType<typeof makeMessage>[], over: { pending?: Pend
 }
 
 const heads = (container: HTMLElement) => Array.from(container.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
+const statusLine = () => screen.getByRole("status", { name: "状态" }).closest("[data-work-line]") as HTMLElement;
 
-describe("MessageList：状态跟着最后一条回复的头像行", () => {
-  it("这一轮还没出回复（最后一条是用户的消息）：底部先出一行“头像 名字 · 状态”", () => {
+describe("MessageList：状态在这一轮最下面", () => {
+  it("这一轮还没出回复（最后一条是用户的消息）：底部先出一轮“头像 名字”，下面一行状态", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事", status: "processing" })]);
     const [head] = heads(container);
-    expect(head).toBeDefined();
-    expect(head).toHaveTextContent("项目经理·在写回复...");
-    expect(head!.parentElement).toHaveAttribute("data-typing");
+    expect(head).toHaveTextContent(/^项目经理$/);
+    expect(statusLine()).toHaveTextContent("Writing...");
+    expect(head!.closest("[data-turn]")).toHaveAttribute("data-running", "true");
     // 在用户消息后面
     const user = container.querySelector("article[data-side='right']") as HTMLElement;
     expect(user.compareDocumentPosition(head!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("用户消息还在发（待发的）、空对话：也在底部出这一行", () => {
+  it("用户消息还在发（待发的）：也在底部出这一轮", () => {
     const pending: PendingMessage = { clientId: "c", text: "hi", attachments: [], phase: "sending", failure: null } as unknown as PendingMessage;
-    expect(heads(list([makeMessage({ id: 1, text: "旧回复" })], { pending: [pending] }).container).at(-1)).toHaveTextContent("在写回复");
+    const { container } = list([makeMessage({ id: 1, text: "旧回复" })], { pending: [pending] });
+    expect(heads(container)).toHaveLength(2);
+    expect(statusLine().closest("[data-turn]")).toBe(heads(container)[1]!.closest("[data-turn]"));
   });
 
-  it("回复出来后：状态在这一轮最后一条回复的头像行上，不再单独出一行", () => {
+  it("回复出来后：状态在这一轮最下面，不再单独出一轮", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事" }), makeMessage({ id: 2, text: "好的" })]);
-    expect(container.querySelector("[data-typing]")).toBeNull();
-    const [head] = heads(container);
-    expect(head).toHaveTextContent("项目经理·在写回复...");
-    expect(head!.closest("article")).toHaveTextContent("好的");
+    expect(heads(container)).toHaveLength(1);
+    expect(statusLine().closest("[data-turn]")).toHaveTextContent("好的");
+    expect(screen.getByText("好的").compareDocumentPosition(statusLine()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("最后一条是一组操作：状态在它的头像行上", () => {
-    const { container } = list([makeUserMessage({ id: 1, text: "做点事" }), makeToolMessage({ id: 2 }), makeToolMessage({ id: 3 })]);
-    const [head] = heads(container);
-    expect(head).toHaveTextContent("在写回复");
-    expect(head!.parentElement).toHaveTextContent("执行了 2 个操作");
-  });
-
-  it("一串连续回复：状态在这一串第一行的头像行上，后面的回复不再多出同名头像行", () => {
+  it("一串操作和回复：一个头像，状态那一行能点开看操作", () => {
     const { container } = list([
       makeUserMessage({ id: 1, text: "做点事" }),
       makeToolMessage({ id: 2 }),
       makeMessage({ id: 3, text: "第二段回复" }),
       makeToolMessage({ id: 4 }),
     ]);
-    const all = heads(container);
-    expect(all).toHaveLength(1);
-    expect(all[0]).toHaveTextContent("项目经理·在写回复...");
-    expect(all[0]!.parentElement).toHaveTextContent("执行了 1 个操作");
-    expect(container.querySelectorAll("article[data-head='true'], [data-head='true']")).toHaveLength(1);
+    expect(heads(container)).toHaveLength(1);
+    expect(statusLine()).toHaveTextContent("Writing...");
+    expect(within(statusLine()).getByRole("button")).toBeInTheDocument();
   });
 
-  it("上一轮的回复后面又有用户消息：状态只在新这一串的头像行上，上一串的头像行照旧", () => {
+  it("上一轮的回复后面又有用户消息：状态只在新这一轮", () => {
     const { container } = list([
       makeMessage({ id: 1, text: "上一轮回复" }),
       makeUserMessage({ id: 2, text: "再来" }),
@@ -139,28 +132,25 @@ describe("MessageList：状态跟着最后一条回复的头像行", () => {
     ]);
     const all = heads(container);
     expect(all).toHaveLength(2);
-    expect(all[0]).not.toHaveTextContent("在写回复");
-    expect(all[1]).toHaveTextContent("在写回复");
+    expect(all[0]!.closest("[data-turn]")).not.toHaveAttribute("data-running");
+    expect(all[1]!.closest("[data-turn]")).toHaveAttribute("data-running", "true");
   });
 
-  it("这一轮结束（没有状态）：状态没了，只有第一条回复带头像", () => {
+  it("这一轮结束（没有状态）：状态没了，只有一个头像", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "做点事" }), makeToolMessage({ id: 2 }), makeMessage({ id: 3, text: "好了" })], { status: null });
     expect(heads(container)).toHaveLength(1);
-    expect(container.textContent).not.toContain("在写回复");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("最后一条是系统消息、Worker 那一行：状态在底部单独一行（不挂到它们上）", () => {
-    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeSystemMessage({ id: 2, text: "改了设置" })]);
-    expect(heads(container).at(-1)!.parentElement).toHaveAttribute("data-typing");
-    const worker = list([makeMessage({ id: 3, text: "旧回复" }), makeWorkerLine({ id: 4, conversationId: 1 })]);
-    expect(heads(worker.container).at(-1)!.parentElement).toHaveAttribute("data-typing");
+  it("最后一条是 Worker 的汇报、你对 Worker 说的话：状态在底部新的一轮", () => {
+    const { container } = list([makeMessage({ id: 1, text: "旧回复" }), makeWorkerLine({ id: 2, conversationId: 1, line: { event: "report", status: "done", summary: "好了" } })]);
+    expect(statusLine().closest("[data-turn]")).not.toHaveTextContent("旧回复");
+    expect(heads(container).at(-1)).toHaveTextContent(/^项目经理$/);
   });
 
-  it("状态文字是小号次要色", () => {
+  it("状态文字是 13.5px 次要色", () => {
     list([makeUserMessage({ id: 1, text: "做点事" })]);
-    const box = screen.getByRole("status", { name: "状态" }).parentElement as HTMLElement;
-    expect(box).toHaveClass("text-[13.5px]", "text-muted-foreground");
+    expect(statusLine()).toHaveClass("text-[13.5px]", "text-muted-foreground");
   });
 });
 
