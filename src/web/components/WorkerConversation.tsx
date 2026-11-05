@@ -64,14 +64,15 @@ export function WorkerConversation({
   const id = view?.conversation.id;
   const stop = useStop(session, id === undefined ? null : () => onStop(id));
 
-  const identity = { name: title, avatarKey: id ?? 0 };
+  // Worker 统一用中性灰的头像（docs/ui-standard.md 第 15 条）
+  const identity = { name: title, avatarKey: id ?? 0, neutral: true };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
       <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
         <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
-        <Avatar colorKey={identity.avatarKey} size={34} />
+        <Avatar colorKey={identity.avatarKey} size={34} neutral />
         <h1 className="min-w-0 truncate text-[17px] leading-snug font-semibold">{title}</h1>
         {readonly && <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-[13px] font-medium">只读</span>}
         {stats}
@@ -82,9 +83,6 @@ export function WorkerConversation({
       ) : (
         <>
           <div className="relative min-h-0 flex-1">
-            {view.messages.length === 0 && pending.length === 0 && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>
-            )}
             <MessageList
               messages={view.messages}
               pending={pending}

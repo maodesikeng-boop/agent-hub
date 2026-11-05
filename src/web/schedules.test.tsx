@@ -191,7 +191,8 @@ describe("新建表单", () => {
 });
 
 describe("对话里的到点消息", () => {
-  it("标题是一行小标题，任务说明按普通文字显示，不在居中灰条里", async () => {
+  it("一眼看出是系统发的：时钟 + 标题一行（没有头像），点开才看任务说明", async () => {
+    const user = userEvent.setup();
     const scheduledAt = new Date(2030, 0, 2, 9, 0).getTime();
     const message = makeSystemMessage({
       id: 5,
@@ -202,12 +203,15 @@ describe("对话里的到点消息", () => {
     api.install();
     installFakeWebSocket();
     render(<App />);
-    const heading = await screen.findByRole("heading", { level: 3, name: "定时任务：晨报（原定 09:00）" });
-    const block = heading.closest("article")!;
+    const trigger = await screen.findByRole("button", { name: "定时任务：晨报（原定 09:00）" });
+    const block = trigger.closest("[data-event='schedule.run']") as HTMLElement;
     expect(block).toHaveAttribute("data-side", "left");
+    expect(block.querySelector("[data-slot='avatar']")).toBeNull();
+    expect(within(block).queryByText(/整理昨天的进展/)).not.toBeInTheDocument();
+    await user.click(trigger);
     const body = within(block).getByText(/整理昨天的进展/);
     expect(body.textContent).toBe("整理昨天的进展\n再看看报错");
-    expect(body.className).toContain("text-[15px]");
+    expect(body.className).toContain("text-muted-foreground");
     expect(block.textContent).not.toContain("【");
   });
 });

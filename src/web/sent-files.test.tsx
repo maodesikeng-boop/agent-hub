@@ -34,7 +34,8 @@ describe("图片内联", () => {
     const img = screen.getByRole("img", { name: "首页截图" });
     const url = API_PATHS.sentFile(file.id!, "shot.png");
     expect(img).toHaveAttribute("src", url);
-    expect(img.className).toContain("max-h-[480px]");
+    // 固定高度占位：加载前后高度不变，消息流不跳
+    expect(img.className).toContain("h-80");
     expect(img.className).toContain("max-w-full");
     expect(urls(container).src).toEqual([url]);
     await userEvent.click(img.closest("button")!);

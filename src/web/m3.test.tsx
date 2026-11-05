@@ -88,6 +88,14 @@ function log() {
   return screen.getByRole("log", { name: "消息" });
 }
 
+/**
+ * 点开 Worker 的那个按钮：Worker 的汇报（默认数据里“已派出”在项目经理那一轮里，收在 Worked for 里看不见），
+ * 或者只有“已派出”一行时那很淡的一行。
+ */
+function workerButton() {
+  return within(log()).getByRole("button", { name: /已派出|做完了/ });
+}
+
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -98,11 +106,16 @@ afterEach(() => {
 });
 
 describe("那一行", () => {
-  it("kind worker 的消息显示成“Worker「标题」状态：摘要”，是一个按钮，不是普通的气泡", async () => {
+  it("Worker 的汇报是“中性头像 + 标题 + 状态小标注 + 摘要”，整条是一个按钮；“已派出”收在项目经理那一轮的 Worked for 里", async () => {
+    const user = userEvent.setup();
     await boot();
+    const done = within(log()).getByRole("button", { name: /做完了/ });
+    expect(done).toHaveTextContent("修 X");
+    expect(done).toHaveTextContent("改好了，测试通过");
+    expect(done.closest("[data-worker-report]")).not.toBeNull();
+    expect(within(log()).queryByRole("button", { name: "Worker「修 X」已派出" })).not.toBeInTheDocument();
+    await user.click(within(log()).getByRole("button", { name: /Worked for/ }));
     expect(within(log()).getByRole("button", { name: "Worker「修 X」已派出" })).toBeInTheDocument();
-    const done = within(log()).getByRole("button", { name: "Worker「修 X」做完了：改好了，测试通过" });
-    expect(done.closest("article")).toBeNull();
     // 汇报原文（给项目经理的那段）不显示给人看
     expect(within(log()).queryByText(/的汇报】/)).not.toBeInTheDocument();
   });
@@ -157,17 +170,24 @@ describe("那一行", () => {
         ],
       }),
     );
-    const texts = within(log())
-      .getAllByRole("button")
-      .map((b) => b.textContent);
-    expect(texts).toEqual([
-      "Worker「修 X」有问题：缺一个 key",
-      "Worker「修 X」放弃了：做不了",
-      "Worker「修 X」没按格式：我改完了",
-      "Worker「修 X」这一轮没做完：被停止了",
-      "Worker「修 X」建 worktree 失败：目录被占用",
-      "Worker「修 X」已收工",
-    ]);
+    const buttons = within(log()).getAllByRole("button");
+    expect(buttons).toHaveLength(6);
+    const expected = [
+      ["有问题", "缺一个 key"],
+      ["放弃了", "做不了"],
+      [null, "我改完了"],
+      ["出错", "被停止了"],
+      ["出错", "目录被占用"],
+    ] as const;
+    expected.forEach(([tag, summary], i) => {
+      const row = buttons[i]!.closest("[data-worker-report]") as HTMLElement;
+      expect(row).toHaveTextContent("修 X");
+      expect(row.querySelector("[data-tag]")?.textContent ?? null).toBe(tag);
+      expect(row).toHaveTextContent(summary);
+    });
+    // 收工：不在一轮里，很淡的一行
+    expect(buttons[5]).toHaveTextContent("Worker「修 X」已收工");
+    expect(buttons[5]!.closest("[data-notice]")).not.toBeNull();
   });
 
   it("推一条新的 worker 消息，会话里多一行；左栏的预览还是最后一条文字", async () => {
@@ -208,7 +228,7 @@ describe("点开 Worker", () => {
     expect(within(section).getByRole("heading", { name: "修 X" })).toBeInTheDocument();
     expect(within(section).getByText("任务：修 X")).toBeInTheDocument();
     expect(within(section).getByText("已经修好了")).toBeInTheDocument();
-    await user.click(within(section).getByRole("button", { name: /执行了 2 个操作/ }));
+    await user.click(within(section).getByRole("button", { name: /Worked for/ }));
     expect(within(section).getByText("Bash: git status")).toBeInTheDocument();
     expect(within(section).getByText("Edit: src/x.ts")).toBeInTheDocument();
     // 项目经理的会话不见了，左栏还停在项目经理上
@@ -233,16 +253,16 @@ describe("点开 Worker", () => {
         ],
       }),
     );
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     const section = screen.getByRole("region", { name: "Worker 修 X" });
-    const task = within(section).getByText("任务：修 X").closest("article")!;
+    const task = within(section).getByText("任务：修 X").closest("[data-head]") as HTMLElement;
     expect(task).toHaveAttribute("data-side", "left");
     expect(task).toHaveAttribute("data-head", "true");
     expect(within(task).getByText("小林")).toBeInTheDocument();
     // Worker 自己的话署 Worker 的标题，两边不会混
-    const reply = within(section).getByText("收到").closest("article")!;
+    const reply = within(section).getByText("收到").closest("[data-turn]") as HTMLElement;
     expect(within(reply).getByText("修 X")).toBeInTheDocument();
-    expect(within(section).getByText("再改一下").closest("article")).toHaveAttribute("data-head", "true");
+    expect(within(section).getByText("再改一下").closest("[data-head]")).toHaveAttribute("data-head", "true");
     expect(within(section).queryByText("已回复")).not.toBeInTheDocument();
     expect(within(section).queryByText("发送失败")).not.toBeInTheDocument();
     expect(within(section).queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
@@ -265,26 +285,26 @@ describe("点开 Worker", () => {
         ],
       }),
     );
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
-    expect(screen.getByText("第二句").closest("article")).toHaveAttribute("data-head", "false");
+    await user.click(workerButton());
+    expect(screen.getByText("第二句").closest("[data-head]")).toHaveAttribute("data-head", "false");
   });
 
-  it("Worker 在干活：头像旁显示它在做什么，“停止”停的是 Worker 的对话", async () => {
+  it("Worker 在干活：消息流里显示它在做什么，“停止”停的是 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } })));
     const status = screen.getByRole("status", { name: "状态" });
-    expect(status).toHaveTextContent("在运行命令");
+    expect(status).toHaveTextContent("Running command");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
-  it("Worker 网络出错在重试：头像旁写“网络出错，正在重试”，“停止”照常停 Worker 的对话", async () => {
+  it("Worker 网络出错在重试：状态写“Retrying”，“停止”照常停 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     push(
       ws,
       sessionChange(
@@ -298,19 +318,19 @@ describe("点开 Worker", () => {
         }),
       ),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("网络出错，正在重试（第 5/10 次）");
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Retrying 5/10");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
 
-  it("31 Worker 准备中：头像旁写“正在跑准备命令”、有停止按钮，停的是 Worker 的对话", async () => {
+  it("31 Worker 准备中：状态写“Running setup”、有停止按钮，停的是 Worker 的对话", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "preparing" })));
     const status = screen.getByRole("status", { name: "状态" });
-    expect(status).toHaveTextContent("正在跑准备命令");
+    expect(status).toHaveTextContent("Running setup");
     expect(status).toHaveAttribute("data-busy", "true");
     await user.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
@@ -320,7 +340,7 @@ describe("点开 Worker", () => {
   it("新消息推来就接在后面", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     push(ws, messageChange(11, "message.created", makeMessage({ id: 14, conversationId: 30, workerId: 3, text: "再补一句" })));
     expect(within(screen.getByRole("region", { name: "Worker 修 X" })).getByText("再补一句")).toBeInTheDocument();
   });
@@ -339,7 +359,7 @@ describe("点开 Worker", () => {
       }),
     );
     api.older = () => ({ status: 200, body: { messages: [makeMessage({ id: 5, conversationId: 30, workerId: 3, text: "早先的话" })], hasMore: false } });
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     await user.click(screen.getByRole("button", { name: "加载更早的消息" }));
     await waitFor(() => expect(screen.getByText("早先的话")).toBeInTheDocument());
     const call = api.callsTo("GET", /\/messages$/)[0];
@@ -357,7 +377,7 @@ describe("点开 Worker", () => {
         ],
       }),
     );
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     expect(screen.getByText("还没有消息")).toBeInTheDocument();
   });
 
@@ -368,7 +388,7 @@ describe("点开 Worker", () => {
         conversations: [makeConvSnapshot([makeWorkerLine({ id: 2, conversationId: 1 })], { conversation: { id: 1, pmId: 1, title: "小林" } })],
       }),
     );
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     expect(screen.getByText("找不到这个 Worker 的对话")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "返回 小林" }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
@@ -377,10 +397,10 @@ describe("点开 Worker", () => {
   it("“返回”回到项目经理的会话；点左栏也回去", async () => {
     const user = userEvent.setup();
     await boot();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     await user.click(screen.getByRole("button", { name: "返回 小林" }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     await user.click(within(nav()).getByRole("button", { name: /小林/ }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
   });
@@ -395,7 +415,7 @@ describe("点开 Worker", () => {
         ],
       }),
     );
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     expect(within(screen.getByRole("region", { name: "Worker 修 X" })).getByText("只读")).toBeInTheDocument();
   });
 });
@@ -973,7 +993,7 @@ describe("在 Worker 页面直接对它说话", () => {
   async function openWorker(snapshot?: StateSnapshot) {
     const user = userEvent.setup();
     const ws = await boot(snapshot);
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     const section = screen.getByRole("region", { name: "Worker 修 X" });
     return { user, ws, section, box: () => within(section).getByRole("textbox", { name: "输入消息" }) };
   }
@@ -1029,7 +1049,7 @@ describe("在 Worker 页面直接对它说话", () => {
     await user.type(box(), "写了一半");
     await user.click(screen.getByRole("button", { name: "返回 小林" }));
     expect(within(screen.getByRole("region", { name: "小林" })).getByRole("textbox")).toHaveValue("");
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     expect(box()).toHaveValue("写了一半");
   });
 
@@ -1091,7 +1111,7 @@ describe("在 Worker 页面直接对它说话", () => {
     // 回到项目经理：它的输入框上没有这份待发文件
     await user.click(screen.getByRole("button", { name: "返回 小林" }));
     expect(within(screen.getByRole("region", { name: "小林" })).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     const again = screen.getByRole("region", { name: "Worker 修 X" });
     await user.click(within(again).getByRole("button", { name: "发送" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
@@ -1118,7 +1138,7 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(toPm!.body).not.toHaveProperty("attachmentIds");
     expect(api.uploads).toHaveLength(1);
     // 再回 Worker：输入框和待发列表是空的
-    await user.click(within(log()).getByRole("button", { name: /已派出/ }));
+    await user.click(workerButton());
     const again = screen.getByRole("region", { name: "Worker 修 X" });
     expect(within(again).getByRole("textbox", { name: "输入消息" })).toHaveValue("");
     expect(within(again).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();

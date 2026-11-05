@@ -63,7 +63,6 @@ export function Conversation({
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
   const stop = useStop(session, () => onStop(id));
 
-  const empty = view.messages.length === 0 && pending.length === 0;
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
@@ -99,7 +98,6 @@ export function Conversation({
       {notices}
       <AskBar asks={asks} onJump={(messageId) => setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }))} onDismiss={onDismissAsks} />
       <div className="relative min-h-0 flex-1">
-        {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>}
         <MessageList
           messages={view.messages}
           pending={pending}

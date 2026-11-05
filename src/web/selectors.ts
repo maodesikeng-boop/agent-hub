@@ -366,21 +366,85 @@ export function failingHealth(state: HubState): HealthEntry[] {
   return state.health.filter((h) => h.lastError !== null);
 }
 
+/**
+ * 消息流里的一项（docs/ui-standard.md 第 15 条）：
+ * - message：单独显示的一条：用户的话、Worker 对话里项目经理的话、Worker 的汇报、到点的定时任务、很淡的系统行；
+ * - turn：agent 的一轮回复，只出一个头像。work 是这一轮的操作（工具调用、派出 / 收工 Worker、建删定时任务），合成一行
+ *   “Worked for …”；parts 是按顺序要显示的文字和夹在中间的系统行。startedAt / endedAt 算用时，都是已有的时间戳。
+ */
 export type RenderItem =
   | { kind: "message"; message: Message }
-  | { kind: "tools"; key: string; messages: Message[] };
+  | { kind: "turn"; key: string; work: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
-/** 连续的工具调用合成一组，界面折叠成“执行了 N 个操作”。 */
+/** 一条消息在消息流里算什么。 */
+type FlowRole =
+  /** 交给 agent 的一句（一轮的开头）：用户、项目经理（Worker 对话里）、Worker 的汇报和用户对它说的话、到点的定时任务、开新会话的两条。 */
+  | "input"
+  /** agent 自己说的、调的工具：在一轮里。 */
+  | "agent"
+  /** agent 这一轮的操作结果（派出 / 收工 Worker、建删定时任务）：在一轮里就收进 Worked for，不在就单独显示。 */
+  | "work"
+  /** 别的系统行：在一轮中间就留在原位置，不另起头像。 */
+  | "notice";
+
+const INPUT_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed", "user_message"]);
+const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run", "handover.requested", "session.renewed"]);
+const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
+
+function flowRole(message: Message): FlowRole {
+  const line = workerEventOf(message);
+  if (line) return INPUT_WORKER_EVENTS.has(line.event) ? "input" : "work";
+  if (message.sender === "user" || message.sender === "pm") return "input";
+  if (message.sender === "agent") return "agent";
+  const event = systemEventOf(message)?.event;
+  if (event !== undefined && INPUT_SYSTEM_EVENTS.has(event)) return "input";
+  if (event !== undefined && WORK_SYSTEM_EVENTS.has(event)) return "work";
+  return "notice";
+}
+
+/** 把消息分成一轮一轮：一轮从 agent 的第一条说的或调的工具开始，到下一句交给它的话为止。 */
 export function groupMessages(messages: Message[]): RenderItem[] {
   const items: RenderItem[] = [];
+  let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
+  /** 上一句交给 agent 的话、上一条 agent 的东西的时间：新一轮从两者里晚的那个算起。 */
+  let lastInputAt: number | null = null;
+  let lastAgentAt: number | null = null;
+
+  /** 一轮结束：末尾的系统行不算这一轮的，挪到它后面单独显示。 */
+  const close = () => {
+    if (turn === null) return;
+    const trailing: Message[] = [];
+    while (turn.parts.length > 0 && turn.parts.at(-1)!.sender !== "agent") trailing.unshift(turn.parts.pop()!);
+    for (const message of trailing) items.push({ kind: "message", message });
+    turn = null;
+  };
+
   for (const message of messages) {
-    const last = items.at(-1);
-    if (message.kind === "tool") {
-      if (last?.kind === "tools") last.messages.push(message);
-      else items.push({ kind: "tools", key: `tools-${message.id}`, messages: [message] });
-    } else {
+    const role = flowRole(message);
+    if (role === "input") {
+      close();
       items.push({ kind: "message", message });
+      lastInputAt = message.createdAt;
+      continue;
     }
+    if (role === "agent" && turn === null) {
+      const starts = [lastInputAt, lastAgentAt].filter((t): t is number => t !== null);
+      turn = { kind: "turn", key: `turn-${message.id}`, work: [], parts: [], startedAt: starts.length > 0 ? Math.max(...starts) : message.createdAt, endedAt: message.createdAt };
+      items.push(turn);
+    }
+    if (turn === null) {
+      items.push({ kind: "message", message });
+      continue;
+    }
+    if (role === "notice") {
+      turn.parts.push(message);
+      continue;
+    }
+    if (message.kind === "tool" || role === "work") turn.work.push(message);
+    else turn.parts.push(message);
+    turn.endedAt = message.createdAt;
+    lastAgentAt = message.createdAt;
   }
+  close();
   return items;
 }

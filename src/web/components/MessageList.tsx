@@ -4,15 +4,21 @@ import type { Message, MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
-import { AgentTyping, MessageBubble, PendingBubble, ToolGroup, type AgentIdentity, type MessageActions } from "./Messages.tsx";
+import { EmptyConversation, MessageBubble, PendingBubble, TurnView, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-/** 离底部不到这么多像素算“在底部”，新消息来了跟着滚。 */
+/** 离底部不到这么多像素算“在底部”，内容变高、新消息来了跟着滚。 */
 const STICK_DISTANCE_PX = 80;
 /** 滚到离顶部这么近就加载更早的消息。 */
 const LOAD_OLDER_DISTANCE_PX = 40;
 /** 跳到某条消息后，高亮这么久。 */
 const HIGHLIGHT_MS = 2_000;
 
+const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
+
+/**
+ * 消息流（docs/ui-standard.md 第 15 条）：agent 的一轮回复一个头像，操作合成一行；打开、刷新、图片加载完、内容变高时，
+ * 原本在底部的继续贴底（ResizeObserver），往上翻了就不拉回去。
+ */
 export function MessageList({
   messages,
   pending,
@@ -28,8 +34,8 @@ export function MessageList({
 }: {
   messages: Message[];
   pending: PendingMessage[];
-  /** 一条消息署谁的名字。 */
-  agentOf: (message: Message) => { name: string; avatarKey: number };
+  /** 一条消息署谁的名字（一轮回复按它的第一条）。 */
+  agentOf: (message: Message) => AgentIdentity;
   hasMore: boolean;
   older: OlderState | undefined;
   onLoadOlder: () => void;
@@ -38,13 +44,15 @@ export function MessageList({
   /** 要跳到并高亮的消息；n 变了就再跳一次。 */
   focus?: { id: MessageId; n: number } | null;
   /**
-   * agent 在忙时它在做什么（AgentStatus），没在忙是 null。显示在这一轮最后一条回复的头像行上；
-   * 最后一条不是 agent 的回复（这一轮还没出回复）时，在列表底部单独出一行“头像 名字 · 状态”，名字用 statusAgent。
+   * agent 在忙时它在做什么（AgentStatus），没在忙是 null。最后一项是 agent 的一轮回复时显示在这一轮最下面；
+   * 不是（这一轮还没出东西）时在列表底部单独出一轮“头像 名字 + 状态”，署名用 statusAgent。
    */
   status?: React.ReactNode;
+  /** agent 是谁：状态那一轮、空对话用。 */
   statusAgent?: AgentIdentity;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [highlightId, setHighlightId] = useState<MessageId | null>(null);
   const stick = useRef(true);
   const [away, setAway] = useState(false);
@@ -53,7 +61,8 @@ export function MessageList({
   const prevPendingCount = useRef(pending.length);
 
   const items = groupMessages(messages);
-  const lastKey = `${messages.at(-1)?.id ?? 0}:${pending.length}:${status != null}`;
+  const busy = status != null;
+  const lastKey = `${messages.at(-1)?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
   const scrollToBottom = () => {
@@ -71,6 +80,19 @@ export function MessageList({
     else setAway(true);
   }, [lastKey]);
 
+  // 内容变高（图片加载完、展开明细、文字长出来）、滚动区变矮（输入框长高）：原本在底部就继续贴底，翻上去了不动。
+  useEffect(() => {
+    const el = ref.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // 更早的消息接到前面后，保持用户正在看的那一条不动。
   useLayoutEffect(() => {
     const el = ref.current;
@@ -80,7 +102,7 @@ export function MessageList({
     }
   }, [firstId]);
 
-  // 点了“等你确定”条里的某个问题：滚到那条消息，高亮一会儿
+  // 点了“等你确定”里的某个问题：滚到那条消息，高亮一会儿
   useEffect(() => {
     if (!focus) return;
     ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center" });
@@ -103,73 +125,56 @@ export function MessageList({
     if (hasMore && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
   };
 
-  /** 每一项要不要带头像行：上一项不是同一个 agent 说的（头像编号不同，或不是 agent 的消息）就要，换人也要重新署名。 */
-  const heads: boolean[] = [];
-  let previous: number | null = null;
-  for (const item of items) {
-    const message = item.kind === "tools" ? item.messages[0]! : item.message;
-    const avatarKey = agentOf(message).avatarKey;
-    heads.push(previous !== avatarKey);
-    previous = item.kind === "tools" || message.sender === "agent" || message.sender === "pm" ? avatarKey : null;
-  }
-
-  /**
-   * 状态挂在这一串连续回复（最后一项往前到它的第一条）的头像行上，后面的回复不另出头像行；
-   * 最后一项不是 agent 的回复（用户消息、系统消息、待发的）就在列表底部单独出一行。
-   */
-  const lastIndex = items.length - 1;
-  const lastItem = items[lastIndex];
-  const rideOnRun = status != null && pending.length === 0 && lastItem !== undefined && (lastItem.kind === "tools" || lastItem.message.sender === "agent");
-  let runHead = lastIndex;
-  while (rideOnRun && runHead > 0 && !heads[runHead]) runHead--;
-  const typing = status != null && !rideOnRun && statusAgent !== undefined;
+  /** 状态挂在最后一轮回复上；最后一项不是 agent 的回复（用户消息、Worker 的汇报、系统行、待发的）就在底部单独出一轮。 */
+  const lastItem = items.at(-1);
+  const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
+  const typing = busy && !rideOnTurn && statusAgent !== undefined;
+  const empty = messages.length === 0 && pending.length === 0 && !busy && !hasMore;
 
   return (
     <div className="relative h-full">
-      <div className="messages flex h-full flex-col overflow-y-auto pt-4 pb-6" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
-        {hasMore && (
-          <button
-            type="button"
-            className="mt-1 cursor-pointer self-center rounded-full border border-border px-3.5 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-60"
-            disabled={older === "loading"}
-            onClick={loadOlder}
-          >
-            {older === "error" ? "加载失败，点击重试" : older === "loading" ? "加载中" : "加载更早的消息"}
-          </button>
-        )}
-        {items.map((item, index) => {
-          const message = item.kind === "tools" ? item.messages[0]! : item.message;
-          const identity = agentOf(message);
-          const head = heads[index]!;
-          const itemStatus = rideOnRun && index === runHead ? status : undefined;
-          if (item.kind === "tools") {
-            return <ToolGroup key={item.key} messages={item.messages} identity={identity} head={head} status={itemStatus} />;
-          }
-          return (
-            <MessageBubble
-              key={item.message.id}
-              message={item.message}
-              identity={identity}
-              head={head}
-              status={itemStatus}
-              actions={actions}
-              highlighted={item.message.id === highlightId}
-            />
-          );
-        })}
-        {pending.map((p) => (
-          <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />
-        ))}
-        {typing && statusAgent && <AgentTyping identity={statusAgent} status={status} />}
+      <div className="messages h-full overflow-y-auto" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
+        <div className="flex min-h-full flex-col pt-4 pb-6" ref={contentRef}>
+          {hasMore && (
+            <button
+              type="button"
+              className="mb-2 cursor-pointer self-center rounded-full px-3 py-1 text-[13.5px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+              disabled={older === "loading"}
+              onClick={loadOlder}
+            >
+              {older === "error" ? "加载失败，点击重试" : older === "loading" ? "加载中" : "加载更早的消息"}
+            </button>
+          )}
+          {empty && <EmptyConversation identity={statusAgent} />}
+          {items.map((item, index) => {
+            if (item.kind === "turn") {
+              const first = item.work[0] ?? item.parts[0]!;
+              const turnStatus = rideOnTurn && index === items.length - 1 ? status : undefined;
+              return <TurnView key={item.key} turn={item} identity={agentOf(first)} status={turnStatus} actions={actions} highlightId={highlightId} />;
+            }
+            const { message } = item;
+            // Worker 对话里项目经理连说几句：只有第一句带头像
+            const previous = items[index - 1];
+            const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
+            return (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                identity={agentOf(message)}
+                head={head}
+                actions={actions}
+                highlighted={message.id === highlightId}
+              />
+            );
+          })}
+          {pending.map((p) => (
+            <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />
+          ))}
+          {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} actions={actions} />}
+        </div>
       </div>
       {away && (
-        <Button
-          variant="outline"
-          size="icon"
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
-          aria-label="回到底部"
-          onClick={scrollToBottom}
-        >
+        <Button variant="outline" size="icon" className="absolute bottom-3 left-1/2 -translate-x-1/2" aria-label="回到底部" onClick={scrollToBottom}>
           <ChevronDown aria-hidden="true" />
         </Button>
       )}

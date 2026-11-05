@@ -86,7 +86,7 @@ function previewOf(file: SentFile, url: string, index: number, messageId: number
   return { name: file.name, mime: file.mime, size: file.size, url, target: messageId === undefined ? null : { kind: "sent", messageId, index } };
 }
 
-/** 内联图片，点开预览窗；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */
+/** 内联图片，点开预览窗。固定 320px 高，加载前后高度不变（消息流不跳，docs/ui-standard.md 第 15 条）；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */
 function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; preview: PreviewFile }) {
   const [open, setOpen] = useState(false);
   const [expired, markExpired] = useFileExpired(preview.url, false);
@@ -94,7 +94,7 @@ function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; 
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-sent-image className="my-1.5 block w-fit max-w-full cursor-pointer">
-        <img src={preview.url} alt={alt} loading="lazy" onError={markExpired} className="block max-h-[480px] max-w-full rounded-xl bg-muted object-contain ring-1 ring-black/5" />
+        <img src={preview.url} alt={alt} loading="lazy" onError={markExpired} className="block h-80 w-auto max-w-full rounded-xl object-contain object-left" />
       </button>
       <FilePreview file={preview} open={open} onOpenChange={setOpen} />
     </>
@@ -102,7 +102,7 @@ function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; 
 }
 
 /**
- * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（宽同正文、最高 480px，点开看大图）；
+ * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（固定 320px 高、最宽同正文，点开看大图）；
  * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了看预览；没存下来的写原因。大图和预览是同一个预览窗。
  */
 function SentFileView({ sent, inline, alt }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string }) {
