@@ -3,11 +3,19 @@ import { Avatar as AvatarRoot, AvatarFallback } from "../ui/avatar.tsx";
 /** 团子的身体颜色，按 key 在这一组里轮着取。 */
 const BLOB_COLORS = ["#ff3d8b", "#ff7a1a", "#2f8cff", "#18181b", "#1fb37d", "#f5b400"] as const;
 
-/** 头像：一只有两只眼睛的小团子，颜色由 colorKey 决定。 */
-export function Avatar({ colorKey, size = 44 }: { colorKey: number; size?: number }) {
-  const color = BLOB_COLORS[Math.abs(colorKey) % BLOB_COLORS.length];
+/** Worker 统一用的中性灰团子（docs/ui-standard.md 第 17 条），不按编号配色。 */
+const NEUTRAL_COLOR = "#a1a1aa";
+
+/** 头像：一只有两只眼睛的小团子，颜色由 colorKey 决定；neutral（Worker）一律中性灰。 */
+export function Avatar({ colorKey, size = 44, neutral = false }: { colorKey: number; size?: number; neutral?: boolean }) {
+  const color = neutral ? NEUTRAL_COLOR : BLOB_COLORS[Math.abs(colorKey) % BLOB_COLORS.length];
   return (
-    <AvatarRoot style={{ width: size, height: size }} className="overflow-visible rounded-none" aria-hidden="true">
+    <AvatarRoot
+      style={{ width: size, height: size }}
+      className="overflow-visible rounded-none"
+      aria-hidden="true"
+      data-neutral={neutral ? "true" : undefined}
+    >
       <AvatarFallback>
         <svg viewBox="0 0 40 40" className="size-full">
           <path

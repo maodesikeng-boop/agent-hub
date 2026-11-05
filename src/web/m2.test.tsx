@@ -419,14 +419,14 @@ describe("对话顶栏", () => {
 });
 
 describe("系统消息", () => {
-  it("居中显示，去掉【系统】前缀，不显示投递状态", async () => {
+  it("靠左很淡的一行，去掉【系统】前缀，不显示投递状态", async () => {
     const ws = await boot(makeSnapshot());
     push(
       ws,
       messageChange(11, "message.created", makeSystemMessage({ id: 3, text: "【系统】已挂上文件夹 /x", status: "queued" })),
     );
     const text = within(log()).getByText("已挂上文件夹 /x");
-    expect(text.closest("[data-side]")).toHaveAttribute("data-side", "center");
+    expect(text.closest("[data-notice]")).toHaveAttribute("data-side", "left");
     expect(within(log()).queryByText(/【系统】/)).not.toBeInTheDocument();
     expect(within(log()).queryByText("排队中")).not.toBeInTheDocument();
     expect(text.closest("[data-status]")).toBeNull();
@@ -1018,7 +1018,7 @@ describe("重试失败的消息", () => {
   it("失败的消息有“重试”：点了发 POST retry，按钮变“重试中”，推回排队中后按钮和原因都没了", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    expect(within(log()).getByText("找不到 claude")).toBeInTheDocument();
+    expect(within(log()).getByText("Claude 没能启动")).toBeInTheDocument();
     await user.click(within(log()).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/messages\/5\/retry$/)).toHaveLength(1));
     expect(api.callsTo("POST", /retry$/)[0]?.body).toBeUndefined();
@@ -1026,7 +1026,7 @@ describe("重试失败的消息", () => {
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     expect(within(log()).queryByRole("button")).not.toBeInTheDocument();
     expect(within(log()).getByText("排队中")).toBeInTheDocument();
-    expect(within(log()).queryByText("找不到 claude")).not.toBeInTheDocument();
+    expect(within(log()).queryByText("Claude 没能启动")).not.toBeInTheDocument();
     expect(within(log()).getAllByRole("article")).toHaveLength(1);
   });
 
@@ -1064,7 +1064,7 @@ describe("重试失败的消息", () => {
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     push(ws, messageChange(12, "message.updated", failed({ id: 5, failureReason: "spawn_failed: x" })));
     expect(within(log()).getByRole("button", { name: "重试" })).toBeEnabled();
-    expect(within(log()).getByText("claude 启动失败")).toBeInTheDocument();
+    expect(within(log()).getByText("Claude 没能启动")).toHaveAttribute("title", "spawn_failed: x");
   });
 
   it("网页自己没发出去的消息的“重试”照旧（用同一个 clientId 重发，不走 retry 接口）", async () => {
@@ -1103,7 +1103,7 @@ describe("当前会话取 generation 最大的一代", () => {
     const ws = await boot(
       generations([makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "running", activity: "working", step: { type: "tool_use", name: "Read", input: { file_path: "/x/Read.ts" } } })]),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在读 Read.ts");
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Reading Read.ts");
     // 旧一代后推来“在跑”，不抢新一代的位置
     push(
       ws,
@@ -1112,8 +1112,8 @@ describe("当前会话取 generation 最大的一代", () => {
         makeSession({ sessionId: 9, conversationId: 2, generation: 1, status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } }),
       ),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在读 Read.ts");
-    expect(screen.getByRole("status", { name: "状态" })).not.toHaveTextContent("在运行命令");
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Reading Read.ts");
+    expect(screen.getByRole("status", { name: "状态" })).not.toHaveTextContent("Running command");
     // 新一代回到空闲：状态行消失，不显示旧一代还在跑的
     push(ws, sessionChange(12, makeSession({ sessionId: 3, conversationId: 2, generation: 2, status: "idle", activity: "idle" })));
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
@@ -1136,7 +1136,7 @@ describe("等额度", () => {
         sessions: [makeSession({ rateLimit: { status: "allowed_warning", resetsAt: 1_900_000_000, windows: {} } })],
       }),
     );
-    expect(screen.queryByText(/等额度/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Usage limit/)).not.toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
   });
 
@@ -1153,8 +1153,8 @@ describe("等额度", () => {
         ],
       }),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("在运行命令");
-    expect(screen.queryByText(/等额度/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Running command");
+    expect(screen.queryByText(/Usage limit/)).not.toBeInTheDocument();
   });
 
   it("额度状态以新一代为准：旧一代 rejected、新一代 allowed 时不显示“等额度”", async () => {
@@ -1168,7 +1168,7 @@ describe("等额度", () => {
         ],
       }),
     );
-    expect(screen.queryByText(/等额度/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Usage limit/)).not.toBeInTheDocument();
   });
 });
 

@@ -119,9 +119,9 @@ describe("右栏的“等你确定”", () => {
     expect(within(body).queryByText("B：单栏信息流")).not.toBeInTheDocument();
   });
 
-  it("那条消息上有“等你确定”的小标记", async () => {
+  it("那条消息上不另挂“等你确定”标签（细节藏起来，提问在别处列着）", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    expect(within(document.querySelector('[data-message-id="1"]') as HTMLElement).getByText("等你确定")).toBeInTheDocument();
+    expect(within(document.querySelector('[data-message-id="1"]') as HTMLElement).queryByText("等你确定")).not.toBeInTheDocument();
   });
 
   it("有新 Worker 消息和新的普通消息进来，提问还在", async () => {
