@@ -1,5 +1,6 @@
 // 网页外壳（docs/ui-standard.md 第 6、16 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
 // 左栏的在忙、行高一致，左下角的按钮，“重连中”提示条。接口、WebSocket 都是假的。
+import { readFileSync } from "node:fs";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,5 +170,27 @@ describe("提示条", () => {
     expect(pill.className).not.toMatch(/shadow|ring-/);
     expect(pill.parentElement).toHaveClass("chat-column", "items-start");
     vi.useRealTimers();
+  });
+});
+
+describe("对话列的宽度（docs/ui-standard.md 第 8 条）", () => {
+  const css = readFileSync("src/web/styles.css", "utf8");
+  const declaration = (selector: string, prop: string) => {
+    const body = css.match(new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{([^}]*)\\}`))![1]!;
+    return body.match(new RegExp(`${prop}:\\s*([^;]+);`))![1]!.replace(/\s+/g, " ").trim();
+  };
+
+  it("最宽 960px，左边从 --chat-inset 起；主区更宽时居中，空白两边平分，不全堆在对话和右栏之间", () => {
+    expect(declaration(":root", "--chat-max")).toBe("960px");
+    expect(declaration(":root", "--chat-left")).toBe("max(var(--chat-inset), calc((100% - var(--chat-max)) / 2))");
+    // 右边：对话和右栏之间至少留 24px，主区没比上限宽时占满
+    expect(declaration(".chat-column", "padding-left")).toBe("var(--chat-left)");
+    expect(declaration(".chat-column", "padding-right")).toBe("max(24px, calc(100% - var(--chat-left) - var(--chat-max)))");
+  });
+
+  it("顶栏的左边线和对话列是同一条", async () => {
+    await boot();
+    const header = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
+    expect(header.className).toContain("pl-[var(--chat-left)]");
   });
 });

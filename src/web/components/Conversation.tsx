@@ -1,5 +1,6 @@
 import { Folder } from "lucide-react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
+import { shortPath } from "../format.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
@@ -67,7 +68,7 @@ export function Conversation({
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-inset)]">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-left)]">
         {leading}
         {entry.pm ? (
           <button
@@ -84,11 +85,11 @@ export function Conversation({
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[17px] leading-snug font-semibold">{entry.name}</h1>
           {entry.folders.length > 0 && (
-            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-[13.5px] leading-snug text-muted-foreground">
               {entry.folders.map((f) => (
                 <li key={f.id} className="flex min-w-0 items-center gap-1.5" title={f.path}>
                   <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{f.path}</span>
+                  <span className="truncate">{shortPath(f.path)}</span>
                 </li>
               ))}
             </ul>

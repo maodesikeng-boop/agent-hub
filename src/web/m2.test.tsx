@@ -390,6 +390,24 @@ describe("对话顶栏", () => {
     expect(screen.getByRole("region", { name: "小林 的资料" })).toBeInTheDocument();
   });
 
+  it("顶栏的文件夹路径：用户目录写成 ~，title 放全路径；别的路径原样", async () => {
+    const user = userEvent.setup();
+    await boot(
+      makeSnapshot({
+        ...twoPms(),
+        folders: [
+          makeFolder({ id: 1, projectId: 1, path: "/Users/zhang/agent-hub", isMain: true }),
+          makeFolder({ id: 2, projectId: 1, path: "/work/docs", isMain: false }),
+        ],
+      }),
+    );
+    await user.click(inNav(/小林/));
+    const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
+    expect(folders.map((f) => f.textContent)).toEqual(["~/agent-hub", "/work/docs"]);
+    expect(folders.map((f) => f.getAttribute("title"))).toEqual(["/Users/zhang/agent-hub", "/work/docs"]);
+    expect(screen.getByRole("list", { name: "文件夹" })).toHaveClass("text-[13.5px]");
+  });
+
   it("还没有项目：顶栏没有文件夹列表", async () => {
     await boot();
     expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
