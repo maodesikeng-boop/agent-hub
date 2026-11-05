@@ -1,5 +1,5 @@
 import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { byteLength } from "../format.ts";
@@ -24,7 +24,6 @@ function StopButton({ stop }: { stop: StopControl }) {
  * 文字和待发文件（staging，见 upload.ts 的 useStagingStore）都由调用者保存；
  * onSend 收到文字和待发的文件，只有文字时同步处理（返回 undefined），带文件时返回 Promise（上传、发出去），
  * 它 reject 的 Error.message 会显示在输入框上方，文字和文件都留着。
- * source：输入 “/” 命令、“@” 文件时弹出的列表从哪来（见 composer-suggest.ts）；不给就不弹。
  * stop：agent 在忙、而且输入框里没有文字也没有待发文件时，发送键变成“停止”（同一个位置、同样大小，图标是方块）；
  * 一有内容就变回发送（照常排队）；正在停止时不可点。
  */
@@ -37,6 +36,7 @@ export function Composer({
   onChange,
   onSend,
   disabled = false,
+  autoFocus = false,
 }: {
   value: string;
   placeholder: string;
@@ -44,9 +44,12 @@ export function Composer({
   /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
+  /** 输入 “/” 命令、“@” 文件时弹出的列表从哪来（见 composer-suggest.ts）；不给就不弹。 */
   source?: ComposerSource;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
+  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放。 */
+  autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -71,6 +74,11 @@ export function Composer({
       onChange(text);
     },
   });
+
+  useEffect(() => {
+    if (autoFocus && !disabled) ref.current?.focus({ preventScroll: true });
+    // 只在出现时放一次；对话切换时整个页面换了一个（key），会重新放
+  }, []);
 
   // 输入框跟着内容长高，到上限后出滚动条
   useLayoutEffect(() => {
@@ -171,7 +179,7 @@ export function Composer({
               e.target.value = ""; // 清掉，同一个文件还能再选
             }}
           />
-          <Button variant="secondary" size="icon" className="hover:bg-foreground/10" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
+          <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
             <Paperclip className="size-5" aria-hidden="true" />
           </Button>
           <div className="ml-auto flex items-center gap-2">

@@ -1,10 +1,9 @@
 import { Folder } from "lucide-react";
-import { useMemo, useState } from "react";
-import type { ConversationId, Message, MessageId, PmId } from "../../shared/index.ts";
+import { useMemo } from "react";
+import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
-import { AskBar } from "./AskBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
@@ -23,7 +22,9 @@ export function Conversation({
   older,
   draft,
   staging,
-  stats,
+  leading,
+  toolbar,
+  top,
   notices,
   onDraftChange,
   onSend,
@@ -31,8 +32,7 @@ export function Conversation({
   onStop,
   onLoadOlder,
   actions,
-  asks,
-  onDismissAsks,
+  focus,
   onOpenProfile,
 }: {
   entry: ConversationEntry;
@@ -43,8 +43,12 @@ export function Conversation({
   draft: string;
   /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
-  /** 标题栏右边：Worker 按钮。 */
-  stats: React.ReactNode;
+  /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
+  leading: React.ReactNode;
+  /** 标题栏右边：右栏开关。 */
+  toolbar: React.ReactNode;
+  /** 太窄时放在顶栏下面的右栏。 */
+  top: React.ReactNode;
   /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
@@ -54,14 +58,11 @@ export function Conversation({
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
-  /** 还在等用户确定的 hub ask（selectors.ts 的 pendingAsks），顶栏下面显示成一条。 */
-  asks: Message[];
-  onDismissAsks: (messageIds: MessageId[]) => void;
+  /** 要滚到并高亮的消息（右栏点开一个提问）：n 每点一次加一，点同一条也再跳一次。 */
+  focus: { id: MessageId; n: number } | null;
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
-  /** 点“等你确定”条里的某个问题：n 每点一次加一，点同一条也再跳一次。 */
-  const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
   const stop = useStop(session, () => onStop(id));
   const source = useMemo(() => conversationSource(id), [id]);
 
@@ -70,7 +71,8 @@ export function Conversation({
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-inset)]">
+        {leading}
         {entry.pm ? (
           <button
             type="button"
@@ -83,10 +85,10 @@ export function Conversation({
         ) : (
           <Avatar colorKey={entry.avatarKey} size={34} />
         )}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="truncate text-[17px] leading-snug font-semibold">{entry.name}</h1>
           {entry.folders.length > 0 && (
-            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-muted-foreground">
+            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
               {entry.folders.map((f) => (
                 <li key={f.id} className="flex min-w-0 items-center gap-1.5" title={f.path}>
                   <Folder className="size-3.5 shrink-0" aria-hidden="true" />
@@ -96,10 +98,10 @@ export function Conversation({
             </ul>
           )}
         </div>
-        {stats}
+        {toolbar}
       </header>
+      {top}
       {notices}
-      <AskBar asks={asks} onJump={(messageId) => setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }))} onDismiss={onDismissAsks} />
       <div className="relative min-h-0 flex-1">
         {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-muted-foreground">还没有消息</div>}
         <MessageList
@@ -116,8 +118,9 @@ export function Conversation({
           statusAgent={agent}
         />
       </div>
-      <div className="mx-auto w-full max-w-[888px] shrink-0 px-6 pb-5">
+      <div className="chat-column w-full shrink-0 pb-5">
         <Composer
+          autoFocus
           value={draft}
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}

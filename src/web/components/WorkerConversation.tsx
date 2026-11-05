@@ -29,7 +29,9 @@ export function WorkerConversation({
   older,
   draft,
   staging,
-  stats,
+  leading,
+  toolbar,
+  top,
   notices,
   onBack,
   onDraftChange,
@@ -52,8 +54,12 @@ export function WorkerConversation({
   draft: string;
   /** 还没发的文件（和项目经理页面同一套，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
-  /** 标题栏右边：Worker 按钮。 */
-  stats: React.ReactNode;
+  /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
+  leading: React.ReactNode;
+  /** 标题栏右边：右栏开关。 */
+  toolbar: React.ReactNode;
+  /** 太窄时放在顶栏下面的右栏。 */
+  top: React.ReactNode;
   notices: React.ReactNode;
   onBack: () => void;
   onDraftChange: (conversationId: ConversationId, value: string) => void;
@@ -70,15 +76,18 @@ export function WorkerConversation({
   const identity = { name: title, avatarKey: id ?? 0 };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-inset)]">
+        {leading}
         <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
         <Avatar colorKey={identity.avatarKey} size={34} />
         <h1 className="min-w-0 truncate text-[17px] leading-snug font-semibold">{title}</h1>
-        {readonly && <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-[13px] font-medium">只读</span>}
-        {stats}
+        {readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">只读</span>}
+        <span className="flex-1" />
+        {toolbar}
       </header>
+      {top}
       {notices}
       {view === undefined ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">找不到这个 Worker 的对话</div>
@@ -101,9 +110,10 @@ export function WorkerConversation({
               statusAgent={identity}
             />
           </div>
-          <div className="mx-auto w-full max-w-[888px] shrink-0 px-6 pb-5 empty:hidden">
+          <div className="chat-column w-full shrink-0 pb-5 empty:hidden">
             {phase !== "ended" && (
               <Composer
+                autoFocus
                 value={draft}
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
