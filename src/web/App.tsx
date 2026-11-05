@@ -193,7 +193,7 @@ export function App() {
     <div className="relative flex h-full">
       <Sidebar
         entries={entries}
-        activeId={activeId}
+        activeId={profileEntry?.id ?? activeId}
         waiting={reminders.waiting}
         asking={reminders.asking}
         notify={reminders.notify}

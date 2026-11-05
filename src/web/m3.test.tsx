@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledModelCatalog } from "../shared/index.ts";
 import type { Message, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { COMPACT_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import { formatCount, formatQuotaReset, formatTokens, formatUsageTotal } from "./format.ts";
@@ -709,6 +710,17 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     it("默认模型显示“默认”；没设思考程度就不显示这一项", async () => {
       await boot(withAgent({ vendor: "claude", model: null, effort: null, usage }));
       expect([...metaOf().children].map((c) => c.textContent)).toEqual(["默认", "47.6M tokens"]);
+    });
+
+    it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），就写它，不写“默认”", async () => {
+      const fake = new FakeApi(withAgent({ vendor: "claude", model: null, effort: null, usage }));
+      fake.models = () => ({ status: 200, body: { catalogs: [{ ...bundledModelCatalog("claude"), source: "vendor", defaultModel: "Opus 5.5" }] } });
+      fake.install();
+      installFakeWebSocket();
+      render(<App />);
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      act(() => FakeWebSocket.last.open());
+      await waitFor(() => expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Opus 5.5", "47.6M tokens"]));
     });
 
     it("老服务端没带厂商、模型、用量：不显示模型，token 显示“—”而不是 0", async () => {

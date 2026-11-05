@@ -1,19 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  AGENT_VENDORS,
   CUSTOM_MODEL,
-  VENDOR_SPECS,
   checkModel,
+  defaultModelOption,
   effortsFor,
-  isAgentVendor,
   modelChoiceOf,
   type AgentSetting,
   type AgentVendor,
   type ModelCatalog,
 } from "../../shared/index.ts";
-import { useModelCatalog } from "../models.tsx";
+import { useModelCatalog, useModelCatalogs } from "../models.tsx";
 import { Input, Select } from "../ui/input.tsx";
-import { SettingsRow } from "./SettingsList.tsx";
+import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
 /** 表单里的 Agent 一栏：模型下拉选了“自定义”时 customModel 是输入框里的字。effort 是 "" = 默认。 */
 export interface AgentDraft {
@@ -57,7 +55,12 @@ function withModel(draft: AgentDraft, modelChoice: string, catalog: ModelCatalog
 
 /**
  * 厂商、模型、思考程度三行（放在 SettingsGroup 里）；模型选“自定义”时下面多一行填模型名。新建项目经理和资料页共用。
- * 模型下拉列的是厂商自己报的名单（拉不到用打包的）；存着的模型不在名单里时单独列一项“自定义：模型名”。
+ * 选项全从模型名单来（models.tsx，docs/ui-standard.md 第 9 条），这里不写死厂商的东西：
+ * - 厂商：只有一家时只显示名字（只读），两家以上是下拉；
+ * - 模型：厂商自己报的名单（拉不到用打包的），“默认”写出实际用的模型；存着的模型不在名单里时单独列一项“自定义：模型名”；
+ *   这家能填完整模型名才有“自定义”；
+ * - 思考程度：按选的模型给的档位，没说用这家的通用档位。
+ * 下拉都是改了马上存的设置行样式（Select plain）。
  * errors：哪一行保存失败了。customAction：模型名那一行右边额外的东西（资料页的“保存”）。
  */
 export function AgentRows({
@@ -75,7 +78,7 @@ export function AgentRows({
   customAction?: ReactNode;
   onCustomSubmit?: () => void;
 }) {
-  const spec = VENDOR_SPECS[value.vendor];
+  const catalogs = useModelCatalogs();
   const catalog = useModelCatalog(value.vendor);
   const result = settingOf(value);
   // 刚选了“自定义”：光标放进模型名输入框（打开页面时不抢焦点）
@@ -88,9 +91,10 @@ export function AgentRows({
   }, [focusCustom]);
 
   const setVendor = (vendor: string) => {
-    if (!isAgentVendor(vendor) || vendor === value.vendor) return;
+    const next = catalogs.find((c) => c.vendor === vendor);
+    if (next === undefined || vendor === value.vendor) return;
     // 换了厂商：模型、思考程度回到默认（别家的不一定有）
-    onChange({ vendor, modelChoice: "", customModel: "", effort: "" }, "vendor");
+    onChange({ vendor: next.vendor, modelChoice: "", customModel: "", effort: "" }, "vendor");
   };
   const choice = value.modelChoice;
   const unlisted = choice !== "" && choice !== CUSTOM_MODEL && !catalog.models.some((m) => m.id === choice);
@@ -99,20 +103,25 @@ export function AgentRows({
   return (
     <>
       <SettingsRow label="厂商" error={errors.vendor}>
-        {(id) => (
-          <Select id={id} value={value.vendor} disabled={disabled} onChange={(e) => setVendor(e.target.value)}>
-            {AGENT_VENDORS.map((v) => (
-              <option key={v} value={v}>
-                {VENDOR_SPECS[v].label}
-              </option>
-            ))}
-          </Select>
-        )}
+        {(id) =>
+          catalogs.length > 1 ? (
+            <Select id={id} variant="plain" value={value.vendor} disabled={disabled} onChange={(e) => setVendor(e.target.value)}>
+              {catalogs.map((c) => (
+                <option key={c.vendor} value={c.vendor}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <ReadonlyValue id={id}>{catalog.label}</ReadonlyValue>
+          )
+        }
       </SettingsRow>
       <SettingsRow label="模型" error={errors.model}>
         {(id) => (
           <Select
             id={id}
+            variant="plain"
             value={choice}
             disabled={disabled}
             onChange={(e) => {
@@ -120,14 +129,14 @@ export function AgentRows({
               if (e.target.value === CUSTOM_MODEL) setFocusCustom(true);
             }}
           >
-            <option value="">默认</option>
+            <option value="">{defaultModelOption(catalog)}</option>
             {catalog.models.map((m) => (
               <option key={m.id} value={m.id} title={m.description ?? undefined}>
                 {m.label}
               </option>
             ))}
             {unlisted && <option value={choice}>自定义：{choice}</option>}
-            {spec.customModel && <option value={CUSTOM_MODEL}>自定义</option>}
+            {catalog.customModelExample !== null && <option value={CUSTOM_MODEL}>自定义</option>}
           </Select>
         )}
       </SettingsRow>
@@ -142,7 +151,7 @@ export function AgentRows({
                 disabled={disabled}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder={spec.customModelExample}
+                placeholder={catalog.customModelExample ?? undefined}
                 aria-invalid={customError !== null}
                 className="w-[240px]"
                 onChange={(e) => onChange(withModel({ ...value, customModel: e.target.value }, CUSTOM_MODEL, catalog), "model")}
@@ -160,7 +169,7 @@ export function AgentRows({
       )}
       <SettingsRow label="思考程度" error={errors.effort}>
         {(id) => (
-          <Select id={id} value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
+          <Select id={id} variant="plain" value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
             <option value="">默认</option>
             {efforts.map((e) => (
               <option key={e} value={e}>
