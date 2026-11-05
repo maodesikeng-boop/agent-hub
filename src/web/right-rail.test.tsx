@@ -1,13 +1,14 @@
 // 右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：组标题 + 紧凑的行，每组最多 3 条、多了 Show more，分隔线分组。
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationId, Message } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
-import { RIGHT_RAIL_VISIBLE_ROWS, RightRail } from "./components/RightRail.tsx";
+import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RightRail } from "./components/RightRail.tsx";
 import type { WorkerEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
 
+beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 const worker = (id: number, over: Partial<WorkerEntry> = {}): WorkerEntry => ({
@@ -16,6 +17,7 @@ const worker = (id: number, over: Partial<WorkerEntry> = {}): WorkerEntry => ({
   activity: "idle",
   ended: false,
   usage: EMPTY_TOKEN_USAGE,
+  tone: "neutral",
   ...over,
 });
 const busy = (id: number) => worker(id, { activity: "working" });
@@ -34,11 +36,14 @@ function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWork
     />,
   );
 }
-const workerGroup = () => screen.getByRole("region", { name: "Worker" });
-const asksGroup = () => screen.getByRole("region", { name: "等你确定" });
+const workerGroup = () => screen.getByRole("region", { name: /^Worker/ });
+const asksGroup = () => screen.getByRole("region", { name: /^等你确定/ });
+/** 一组里的行和 Show more 之类的按钮（不含组标题那个收起按钮）。 */
+const buttons = (group: HTMLElement) => within(group).getAllByRole("button").filter((b) => !b.closest("h2"));
+const titleButton = (group: HTMLElement) => within(group).getByRole("heading").querySelector("button")!;
 
 describe("右栏：照 Claude desktop 的样子", () => {
-  it("组标题：13px、前景色（不是灰色小标题）、没有计数；“等你确定”前一个 6px 主色圆点", () => {
+  it("组标题：13px、前景色（不是灰色小标题）、展开时没有计数；“等你确定”前一个 6px 强调色圆点", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30)] });
     for (const [name, group] of [["等你确定", asksGroup()], ["Worker", workerGroup()]] as const) {
       const heading = within(group).getByRole("heading");
@@ -46,8 +51,8 @@ describe("右栏：照 Claude desktop 的样子", () => {
       expect(heading).toHaveClass("text-[13px]", "text-foreground");
       expect(heading.className).not.toMatch(/muted-foreground/);
     }
-    expect(asksGroup().querySelector("h2 > span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
-    expect(workerGroup().querySelector("h2 > span.bg-primary")).toBeNull();
+    expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
+    expect(workerGroup().querySelector("h2 button > span.bg-primary")).toBeNull();
   });
 
   it("组和组之间一条 1px 细分隔线（border-border），上下留白一样；没有框、没有阴影", () => {
@@ -70,26 +75,45 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary");
   });
 
-  it("状态用颜色：图标右下角一个小色点；在忙主色，Idle 灰，Ended 没有；图标本身一直是中性灰", () => {
-    renderRail({ workers: [busy(30), worker(31), done(32)], openWorkerId: null });
+  it("状态用颜色（worker-status 的 tone）：图标右下角一个小色点；在忙强调色，空闲时跟着最近一次汇报：做完了绿、有问题黄、放弃了红，没汇报灰；Ended 没有；图标本身一直是中性灰", () => {
+    renderRail({
+      workers: [busy(30), worker(31), worker(32, { tone: "success" }), worker(33, { tone: "warn" }), worker(34, { tone: "danger" }), { ...busy(35), tone: "danger" }, done(36)],
+      openWorkerId: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
     const dot = (name: RegExp) => within(screen.getByRole("button", { name })).queryByTestId("status-dot");
     expect(dot(/活 30/)).toHaveClass("bg-primary", "size-1.5", "rounded-full");
     expect(dot(/活 31/)).toHaveClass("bg-muted-foreground/50");
+    expect(dot(/活 32/)).toHaveClass("bg-success");
+    expect(dot(/活 33/)).toHaveClass("bg-caution");
+    expect(dot(/活 34/)).toHaveClass("bg-danger");
+    // 又在干活了：看现在的状态，不看上一次汇报
+    expect(dot(/活 35/)).toHaveClass("bg-primary");
     expect(dot(/活 30/)!.parentElement!.querySelector("svg")).toHaveClass("text-muted-foreground");
     // 收工的在“已收工”里，没展开时看不到
-    expect(screen.queryByRole("button", { name: /活 32/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /活 36/ })).toBeNull();
   });
 
-  it("没有厂商、模型信息时第二行只有一个“—”；有就是模型、思考程度、token（小一号灰字，之间用间距）", () => {
-    renderRail({ workers: [worker(30), worker(31, { vendor: "claude", model: "sonnet", effort: "high", usage: { input: 1, cacheRead: 2_000_000, cacheWrite: 0, output: 0, context: 0 } })] });
+  it("没有厂商、模型信息时第二行只有一个“—”；有就是模型、思考程度、现在的对话长度（小一号灰字，之间用间距）", () => {
+    renderRail({ workers: [worker(30), worker(31, { vendor: "claude", model: "sonnet", effort: "high", usage: { input: 1, cacheRead: 2_000_000, cacheWrite: 0, output: 5, context: 158_000 } })] });
     const meta = (name: RegExp) => within(screen.getByRole("button", { name })).getByTestId("worker-meta");
     expect(meta(/活 30/)).toHaveTextContent(/^—$/);
-    expect([...meta(/活 31/).children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "2M tokens"]);
+    expect([...meta(/活 31/).children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "158K context"]);
+    expect(within(meta(/活 31/)).getByText("158K context")).toHaveClass("tabular-nums");
     expect(meta(/活 31/)).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
     expect(meta(/活 31/)).not.toHaveTextContent("·");
+    expect(meta(/活 31/)).not.toHaveTextContent("tokens");
   });
 
-  it("有模型、还没有用量：不显示“—”占位，只有模型和思考程度", () => {
+  it("悬停 context 看明细：累计的 Input、Cache read、Cache write、Output，外加一行说明是累计", () => {
+    renderRail({ workers: [worker(31, { vendor: "claude", model: "sonnet", usage: { input: 392, cacheRead: 47_000_000, cacheWrite: 448_354, output: 154_408, context: 117_000 } })] });
+    expect(within(screen.getByRole("button", { name: /活 31/ })).getByText("117K context")).toHaveAttribute(
+      "title",
+      ["Context 117,000 tokens", "Cumulative so far", "Input 392 tokens", "Cache read 47,000,000 tokens", "Cache write 448,354 tokens", "Output 154,408 tokens"].join("\n"),
+    );
+  });
+
+  it("有模型、还没有对话长度：不显示“—”占位，只有模型和思考程度", () => {
     renderRail({ workers: [worker(30, { vendor: "claude", model: "sonnet", effort: "high" })] });
     expect([...within(screen.getByRole("button", { name: /活 30/ })).getByTestId("worker-meta").children].map((c) => c.textContent)).toEqual(["Sonnet", "high"]);
   });
@@ -102,14 +126,14 @@ describe("右栏：只列几条", () => {
 
   it("Worker 不到 4 个：全列，没有 Show more", () => {
     renderRail({ workers: [busy(30), worker(31), worker(32)] });
-    expect(within(workerGroup()).getAllByRole("button")).toHaveLength(3);
+    expect(buttons(workerGroup())).toHaveLength(3);
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
   });
 
   it("Worker 多了：在忙的排前面，只显示前 3 条，下面一行灰色 Show more；点开展开全部，再点收回（Show less）", async () => {
     const user = userEvent.setup();
     renderRail({ workers: [worker(1), worker(2), busy(3), worker(4), busy(5)] });
-    const names = () => within(workerGroup()).getAllByRole("button").map((b) => b.textContent).filter((t) => /活/.test(t!)).map((t) => /活 \d/.exec(t!)![0]);
+    const names = () => buttons(workerGroup()).map((b) => b.textContent).filter((t) => /活/.test(t!)).map((t) => /活 \d/.exec(t!)![0]);
     expect(names()).toEqual(["活 3", "活 5", "活 1"]);
     const more = screen.getByRole("button", { name: "Show more" });
     expect(more).toHaveAttribute("aria-expanded", "false");
@@ -131,7 +155,7 @@ describe("右栏：只列几条", () => {
   it("“等你确定”同样最多 3 条，多了 Show more，点开展开全部", async () => {
     const user = userEvent.setup();
     renderRail({ asks: [ask(1), ask(2), ask(3), ask(4)] });
-    const rows = () => within(asksGroup()).getAllByRole("button").filter((b) => /问题/.test(b.textContent!));
+    const rows = () => buttons(asksGroup()).filter((b) => /问题/.test(b.textContent!));
     expect(rows().map((b) => b.textContent)).toEqual(["问题 1", "问题 2", "问题 3"]);
     await user.click(within(asksGroup()).getByRole("button", { name: "Show more" }));
     expect(rows().map((b) => b.textContent)).toEqual(["问题 1", "问题 2", "问题 3", "问题 4"]);
@@ -146,9 +170,9 @@ describe("右栏：只列几条", () => {
     expect(ended).toHaveClass("text-[13px]", "text-muted-foreground", "hover:text-foreground");
     expect(ended.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
     expect(within(ended).getByText("30")).toHaveClass("tabular-nums");
-    expect(within(workerGroup()).getAllByRole("button")).toHaveLength(2);
+    expect(buttons(workerGroup())).toHaveLength(2);
     await user.click(ended);
-    expect(within(workerGroup()).getAllByRole("button")).toHaveLength(32);
+    expect(buttons(workerGroup())).toHaveLength(32);
     expect(within(workerGroup()).getByRole("button", { name: /活 100/ })).toHaveClass("opacity-60");
   });
 
@@ -170,5 +194,80 @@ describe("右栏：提问行", () => {
     expect(row).toHaveAttribute("aria-expanded", "false");
     await userEvent.setup().click(row);
     expect(row).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+describe("右栏：每组可以收起", () => {
+  const body = (group: HTMLElement) => group.querySelector("[data-group-body]") as HTMLElement;
+
+  it("标题是按钮（aria-expanded），旁边一个小三角：展开时朝下、收起时朝右；点一下收起，只剩标题，再点展开", async () => {
+    const user = userEvent.setup();
+    renderRail({ workers: [busy(30), worker(31)] });
+    const title = titleButton(workerGroup());
+    expect(title).toHaveAttribute("aria-expanded", "true");
+    expect(title.querySelector("svg")).toHaveClass("rotate-90");
+    await user.click(title);
+    expect(title).toHaveAttribute("aria-expanded", "false");
+    expect(title.querySelector("svg")).not.toHaveClass("rotate-90");
+    // 收起：内容读屏和键盘都够不着（inert + aria-hidden），不再占高度（网格行 0fr）
+    expect(body(workerGroup())).toHaveAttribute("aria-hidden", "true");
+    expect(body(workerGroup())).toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: /活 30/ })).toBeNull();
+    expect(body(workerGroup()).className).toMatch(/grid-rows-\[0fr\]/);
+    await user.click(title);
+    expect(title).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /活 30/ })).toBeInTheDocument();
+  });
+
+  it("过渡很短、不跳：网格行高度的 transition（150ms 以内），减弱动效时关掉", () => {
+    renderRail({ workers: [busy(30)] });
+    const cls = body(workerGroup()).className;
+    expect(cls).toMatch(/transition-\[grid-template-rows\]/);
+    expect(cls).toMatch(/duration-(100|150)/);
+    expect(cls).toMatch(/motion-reduce:transition-none/);
+  });
+
+  it("收起后标题后面带个数：等你确定是没回答的几条，Worker 是没收工的几个；展开时不带", async () => {
+    const user = userEvent.setup();
+    renderRail({ asks: [ask(1), ask(2), ask(3), ask(4)], workers: [busy(30), worker(31), done(32)] });
+    expect(within(asksGroup()).getByRole("heading")).toHaveTextContent(/^等你确定$/);
+    await user.click(titleButton(asksGroup()));
+    await user.click(titleButton(workerGroup()));
+    expect(within(asksGroup()).getByRole("heading")).toHaveTextContent(/^等你确定4$/);
+    expect(within(workerGroup()).getByRole("heading")).toHaveTextContent(/^Worker2$/);
+    expect(within(within(asksGroup()).getByRole("heading")).getByText("4")).toHaveClass("tabular-nums");
+  });
+
+  it("每组各自记住（localStorage），刷新、切对话（重新挂载）都保持；两组互不影响", async () => {
+    const user = userEvent.setup();
+    renderRail({ asks: [ask(1)], workers: [busy(30)] });
+    await user.click(titleButton(workerGroup()));
+    expect(JSON.parse(localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY)!)).toEqual({ workers: true });
+    cleanup();
+    renderRail({ asks: [ask(1)], workers: [busy(30)] });
+    expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "false");
+    expect(titleButton(asksGroup())).toHaveAttribute("aria-expanded", "true");
+    await user.click(titleButton(workerGroup()));
+    await user.click(titleButton(asksGroup()));
+    expect(JSON.parse(localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY)!)).toEqual({ asks: true });
+  });
+
+  it("存的值坏了、没有：当作都展开，不报错", () => {
+    localStorage.setItem(RIGHT_RAIL_COLLAPSED_KEY, "{不是 json");
+    renderRail({ asks: [ask(1)], workers: [busy(30)] });
+    expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "true");
+    expect(titleButton(asksGroup())).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("键盘：标题能聚焦（有聚焦圈），Enter 和空格都能收起展开", async () => {
+    const user = userEvent.setup();
+    renderRail({ workers: [busy(30)] });
+    const title = titleButton(workerGroup());
+    expect(title.className).toMatch(/focus-visible:ring-2/);
+    title.focus();
+    await user.keyboard("{Enter}");
+    expect(title).toHaveAttribute("aria-expanded", "false");
+    await user.keyboard(" ");
+    expect(title).toHaveAttribute("aria-expanded", "true");
   });
 });

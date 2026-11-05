@@ -1,12 +1,13 @@
-import { Bot, ChevronRight, MessageCircleQuestionMark, PanelRight } from "lucide-react";
+import { Bot, ChevronRight, MessageCircleQuestionMark, PanelRight, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_AGENT_VENDOR, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
-import { formatTokenDetail, formatUsageTotal } from "../format.ts";
+import { formatContext, formatTokenDetail, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import type { WorkerEntry } from "../selectors.ts";
+import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -36,15 +37,75 @@ export const RIGHT_RAIL_ID = "right-rail";
 const ROW = "flex w-[calc(100%+1rem)] cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
-/** formatUsageTotal 没数据时的写法：别的项都有时不显示它，整行都没数据才显示。 */
-const NO_USAGE = "—";
+/** 空闲 Worker 的小圆点颜色：跟着最近一次汇报（worker-status.ts 的 tone），和汇报气泡头像上的色点一样；没汇报是灰。 */
+const TONE_DOT: Record<WorkerTone, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger", neutral: "bg-muted-foreground/50" };
 
-function GroupTitle({ id, children, dot = false }: { id: string; children: React.ReactNode; dot?: boolean }) {
+/** 每组的收起状态记在这个 localStorage 键里：{ asks?: true, workers?: true }，没写的是展开。 */
+export const RIGHT_RAIL_COLLAPSED_KEY = "agent-hub.rightRail.collapsed";
+type GroupKey = "asks" | "workers";
+const readCollapsed = (): Partial<Record<GroupKey, true>> => {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) ?? "{}");
+    if (parsed === null || typeof parsed !== "object") return {};
+    const value = parsed as Record<string, unknown>;
+    return { ...(value.asks === true && { asks: true as const }), ...(value.workers === true && { workers: true as const }) };
+  } catch {
+    return {};
+  }
+};
+function useCollapsedGroups() {
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggle = (key: GroupKey) =>
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      try {
+        if (Object.keys(next).length > 0) localStorage.setItem(RIGHT_RAIL_COLLAPSED_KEY, JSON.stringify(next));
+        else localStorage.removeItem(RIGHT_RAIL_COLLAPSED_KEY);
+      } catch {
+        // 存不了（隐私模式、满了）：这次照样收起，只是刷新后不记得
+      }
+      return next;
+    });
+  return { collapsed, toggle };
+}
+
+/**
+ * 组标题：整行是一个按钮（aria-expanded），点一下收起或展开这一组，标题后面一个小三角（展开朝下、收起朝右，照 Claude 右栏的 “Context ▸”）。
+ * 收起时标题后面带这一组的个数（12px），还有几条没处理看得出来。和整栏的开关（RightRailToggle）是两回事。
+ */
+function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = false }: { id: string; bodyId: string; children: React.ReactNode; count: number; collapsed: boolean; onToggle: () => void; dot?: boolean }) {
   return (
-    <h2 id={id} className="flex h-8 items-center gap-2 text-[13px] font-normal text-foreground">
-      {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
-      {children}
+    <h2 id={id} className="h-8 text-[13px] font-normal text-foreground">
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-controls={bodyId}
+        className="-mx-2 flex h-8 w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-xl px-2 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={onToggle}
+      >
+        {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
+        {children}
+        {collapsed && <span className="text-xs font-normal text-muted-foreground tabular-nums">{count}</span>}
+        <Play className={cn("size-2.5 shrink-0 fill-current text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")} aria-hidden="true" />
+      </button>
     </h2>
+  );
+}
+
+/** 一组的内容：收起时只剩标题。高度用网格行 0fr↔1fr 过渡（很短，不跳；减弱动效时关掉）；收起后 inert + aria-hidden，键盘和读屏都够不着。 */
+function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      id={id}
+      data-group-body
+      aria-hidden={collapsed || undefined}
+      inert={collapsed}
+      className={cn("grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none", collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]")}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
   );
 }
 
@@ -79,14 +140,14 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
 }
 
 /**
- * 一个 Worker 一行（信息靠层次区分，不用符号拼接）：左边线条图标（右下角一个小色点表示状态：在忙主色、Idle 灰、收工没有），
- * 第一行标题 + 右边英文状态词；第二行小一号灰字：模型、思考程度（有才显示）、token，之间用间距隔开。token 悬停看明细。收工的淡一些。
+ * 一个 Worker 一行（信息靠层次区分，不用符号拼接）：左边线条图标（右下角一个小色点表示状态：在忙强调色、空闲的跟着最近一次汇报的状态色、收工没有），
+ * 第一行标题 + 右边英文状态词；第二行小一号灰字：模型、思考程度（有才显示）、现在的对话长度（“158K context”），之间用间距隔开。context 悬停看累计明细。收工的淡一些。
  */
 function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: boolean; onOpen: () => void }) {
   const vendor = isAgentVendor(worker.vendor) ? worker.vendor : DEFAULT_AGENT_VENDOR;
   const catalog = useModelCatalog(vendor);
   const busy = isBusy(worker);
-  const tokens = formatUsageTotal(worker.usage);
+  const context = formatContext(worker.usage);
   return (
     <button
       type="button"
@@ -99,7 +160,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
         {!worker.ended && (
           <span
             data-testid="status-dot"
-            className={cn("absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background", busy ? "bg-primary" : "bg-muted-foreground/50")}
+            className={cn("absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background", busy ? "bg-primary" : TONE_DOT[worker.tone])}
             aria-hidden="true"
           />
         )}
@@ -112,9 +173,9 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
         <span data-testid="worker-meta" className="flex items-baseline gap-3 text-xs leading-4 text-muted-foreground">
           {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
           {worker.effort && <span className="shrink-0">{effortLabel(worker.effort)}</span>}
-          {(tokens !== NO_USAGE || (worker.vendor === undefined && !worker.effort)) && (
+          {(context !== NO_DATA || (worker.vendor === undefined && !worker.effort)) && (
             <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
-              {tokens}
+              {context}
             </span>
           )}
         </span>
@@ -228,6 +289,7 @@ export function RightRail({
   const ended = workers.filter((w) => w.ended);
   const shownAsks = useLimited(asks, (ask) => openAsks.has(ask.id));
   const shownLive = useLimited(live, (w) => w.conversationId === openWorkerId);
+  const groups = useCollapsedGroups();
   const side = layout === "side";
   return (
     <aside
@@ -239,29 +301,35 @@ export function RightRail({
       <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-y-auto px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
           <section aria-labelledby="rail-asks" className="py-3">
-            <GroupTitle id="rail-asks" dot>
+            <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot>
               等你确定
             </GroupTitle>
-            <ul>
-              {shownAsks.shown.map((ask) => (
-                <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
-              ))}
-            </ul>
-            <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
+            <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
+              <ul>
+                {shownAsks.shown.map((ask) => (
+                  <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
+                ))}
+              </ul>
+              <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
+            </GroupBody>
           </section>
         )}
         {workers.length > 0 && (
           <section aria-labelledby="rail-workers" className="py-3">
-            <GroupTitle id="rail-workers">Worker</GroupTitle>
-            <ul>
-              {shownLive.shown.map((worker) => (
-                <li key={worker.conversationId}>
-                  <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
-                </li>
-              ))}
-            </ul>
-            <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-            {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
+            <GroupTitle id="rail-workers" bodyId="rail-workers-body" count={live.length} collapsed={groups.collapsed.workers === true} onToggle={() => groups.toggle("workers")}>
+              Worker
+            </GroupTitle>
+            <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
+              <ul>
+                {shownLive.shown.map((worker) => (
+                  <li key={worker.conversationId}>
+                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+                  </li>
+                ))}
+              </ul>
+              <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
+              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
+            </GroupBody>
           </section>
         )}
       </div>

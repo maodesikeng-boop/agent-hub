@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledModelCatalog } from "../shared/index.ts";
 import type { Message, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { COMPACT_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
-import { formatCount, formatQuotaReset, formatTokens, formatUsageTotal } from "./format.ts";
+import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
 import { isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount, workerPhaseOf } from "./selectors.ts";
 import { initialState, reducer } from "./state.ts";
@@ -676,6 +676,28 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
   });
 
+  it("Worker 的小圆点跟着项目经理会话里最近一行汇报的状态色（worker-status）：做完了绿、有问题黄；在忙的是强调色", async () => {
+    await boot(
+      crowd({
+        conversations: [
+          makeConvSnapshot(
+            [
+              makeWorkerLine({ id: 2, conversationId: 1, line: { workerConversationId: 31, event: "report", status: "done", summary: "好了" } }),
+              makeWorkerLine({ id: 3, conversationId: 1, line: { workerConversationId: 30, event: "report", status: "problem", summary: "卡住了" } }),
+            ],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+        ],
+        sessions: [makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" }), makeSession({ sessionId: 4, conversationId: 31 })],
+      }),
+    );
+    const dot = (name: RegExp) => within(within(workerGroup()).getByRole("button", { name })).getByTestId("status-dot");
+    expect(dot(/修 X/)).toHaveClass("bg-primary");
+    expect(dot(/写文档/)).toHaveClass("bg-success");
+  });
+
   it("Worker 一行一个：标题和状态（英文状态词）；干活的、Idle 的照常列出，收工的收成最下面一行“已收工 N ›”，点开才展开，展开后淡一些", async () => {
     const user = userEvent.setup();
     await boot(crowd());
@@ -685,7 +707,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(toggleEnded).toHaveTextContent("已收工 1");
     expect(toggleEnded).toHaveAttribute("aria-expanded", "false");
     expect(within(toggleEnded).getByText("1")).toHaveClass("tabular-nums");
-    expect(workerGroup().lastElementChild).toBe(toggleEnded);
+    expect(workerGroup().querySelector("[data-group-body] > div")!.lastElementChild).toBe(toggleEnded);
     await user.click(toggleEnded);
     expect(toggleEnded).toHaveAttribute("aria-expanded", "true");
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle", "查日志Ended"]);
@@ -770,19 +792,19 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       });
     const metaOf = () => within(workerGroup()).getByRole("button", { name: /修 X/ }).querySelector('[data-testid="worker-meta"]')!;
 
-    it("第二行：模型的显示名（模型目录里的名字）、思考程度、token（英文单位）；不写厂商，也没有“·”；小一号灰字", async () => {
+    it("第二行：模型的显示名（模型目录里的名字）、思考程度、现在的对话长度（158K context 这样，不是累计 token）；不写厂商，也没有“·”；小一号灰字", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
       const row = within(workerGroup()).getByRole("button", { name: /修 X/ });
-      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "47.6M tokens"]);
+      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
       expect(row).not.toHaveTextContent("Claude Code");
       expect(row).not.toHaveTextContent("·");
       expect(metaOf()).toHaveClass("text-xs", "text-muted-foreground");
-      expect(within(row).getByText("47.6M tokens")).toHaveClass("tabular-nums");
+      expect(within(row).getByText("117K context")).toHaveClass("tabular-nums");
     });
 
     it("默认模型显示“默认”；没设思考程度就不显示这一项", async () => {
       await boot(withAgent({ vendor: "claude", model: null, effort: null, usage }));
-      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["默认", "47.6M tokens"]);
+      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["默认", "117K context"]);
     });
 
     it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），就写它，不写“默认”", async () => {
@@ -793,19 +815,19 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       render(<App />);
       await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
       act(() => FakeWebSocket.last.open());
-      await waitFor(() => expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Opus 5.5", "47.6M tokens"]));
+      await waitFor(() => expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Opus 5.5", "117K context"]));
     });
 
-    it("老服务端没带厂商、模型、用量：不显示模型，token 显示“—”而不是 0", async () => {
+    it("老服务端没带厂商、模型、用量：不显示模型，对话长度显示“—”而不是 0", async () => {
       await boot(withAgent({}));
       expect([...metaOf().children].map((c) => c.textContent)).toEqual(["—"]);
     });
 
-    it("悬停 token 显示明细（英文单位）", async () => {
+    it("悬停 context 显示明细（累计的各项，英文单位）", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", usage }));
-      expect(within(workerGroup()).getByText("47.6M tokens")).toHaveAttribute(
+      expect(within(workerGroup()).getByText("117K context")).toHaveAttribute(
         "title",
-        ["Input 392 tokens", "Cache read 47,000,000 tokens", "Cache write 448,354 tokens", "Output 154,408 tokens", "Context 117,000 tokens"].join("\n"),
+        ["Context 117,000 tokens", "Cumulative so far", "Input 392 tokens", "Cache read 47,000,000 tokens", "Cache write 448,354 tokens", "Output 154,408 tokens"].join("\n"),
       );
     });
 
@@ -940,9 +962,10 @@ describe("formatTokens / formatCount", () => {
     expect(formatCount(1_000_000)).toBe("1M");
   });
 
-  it("formatUsageTotal：四项加起来；全是 0（老 Worker 没记录）显示“—”", () => {
-    expect(formatUsageTotal({ input: 100, cacheRead: 200_000, cacheWrite: 90_000, output: 1000, context: 5 })).toBe("291K tokens");
-    expect(formatUsageTotal({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 })).toBe("—");
+  it("formatContext：现在的对话长度（不是累计）；没有记录（老 Worker、还没干过活）显示“—”", () => {
+    expect(formatContext({ input: 100, cacheRead: 200_000, cacheWrite: 90_000, output: 1000, context: 158_000 })).toBe("158K context");
+    expect(formatContext({ input: 100, cacheRead: 200_000, cacheWrite: 90_000, output: 1000, context: 820 })).toBe("820 context");
+    expect(formatContext({ input: 100, cacheRead: 200_000, cacheWrite: 90_000, output: 1000, context: 0 })).toBe("—");
   });
 });
 
