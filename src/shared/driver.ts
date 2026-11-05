@@ -92,6 +92,14 @@ export interface MessageProcessingEvent extends DriverEventBase {
 }
 
 /**
+ * claude 自己开了一轮（后台任务完成等，没有我们写的消息触发）：进程里已经有 init 了、手上又没有在途的消息时，这一轮的 init 就是它。
+ * 这一轮结束时照常出 turn.ended，messageIds 是空的。
+ */
+export interface TurnStartedEvent extends DriverEventBase {
+  type: "turn.started";
+}
+
+/**
  * 子任务（Agent / Task 工具派出去的）里的事件，原始事件的 parent_tool_use_id 照抄过来；主 agent 自己的事件没有这个字段。
  * 账本照常入库，但不拿它改“在做什么”（那是主 agent 的状态）。
  */
@@ -244,6 +252,7 @@ export type DriverEvent =
   | SessionStartedEvent
   | MessageDeliveredEvent
   | MessageProcessingEvent
+  | TurnStartedEvent
   | AgentTextEvent
   | AgentThinkingEvent
   | AgentToolEvent

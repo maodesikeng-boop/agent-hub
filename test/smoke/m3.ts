@@ -6,6 +6,7 @@
 // S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户在会话里说清楚“合并到 main，删掉 worktree，然后让 Worker 收工”，项目经理照做。
 // S14 Worker 干到一半关机再启动（验收第 11 条，PR #35 审查第 1、2 条）：不发“这一轮没做完”；重启后恢复说明、重发说明和
 //     任务原文写在同一行，Worker 接着做完，汇报回到项目经理。
+// S21 Worker 跑后台命令：先回一句结束这一轮，后台命令跑完 claude 自己开一轮再回一句；项目经理两句都收到（claude 自己开的一轮也算汇报）。
 // S19 用户在网页上直接对 Worker 说：Worker 收到带【用户直接对你说】的原文、照做并汇报；项目经理收到“用户直接对 Worker 说的话”，
 //     回复里提到了这件事；之后汇报也到了项目经理。
 import { execFileSync } from "node:child_process";
@@ -319,6 +320,38 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       const replies = await smoke.repliesAfter(chat, noticeId);
       expect(replies.some((r) => r.includes("README")), `项目经理之后的回复没提到 README：${replies.join("|")}`);
       return `Worker 收到带标签的原文并照做（README 有 direct-from-user），汇报“${reports[1]!.summary}”；项目经理收到通知并回复：${replies[0]?.slice(0, 60)}`;
+    });
+  }
+
+  if (only("S21")) {
+    await inFreshSmoke(outcomes, "S21 Worker 跑后台命令：先回一句，后台跑完 claude 自己开一轮再回一句，项目经理两句都收到", async (smoke) => {
+      const dir = repo(smoke, "s20", { "README.md": "# s20\n" });
+      const tasks = smoke.folder("tasks", {
+        "bg.txt":
+          "用 Bash 工具运行 `sleep 20 && echo BG-DONE`，必须设 run_in_background 为 true（后台运行）。启动后不要等、不要轮询、不要读输出，立刻只回复一句“后台已启动”。" +
+          "后台命令跑完你会收到完成通知，那时再回复一句“后台完成 BG-DONE”。这两句话都直接回复这几个字就行，不用别的内容。",
+      });
+      const chat = await pmWithFolder(smoke, "小林", dir);
+      await smoke.ask(chat, `用 Bash 原样运行这一条命令，运行完只回复“派了”：\n\n${hub} worker start --title 后台命令 --no-worktree --model ${MODEL} --stdin < ${tasks}/bg.txt`);
+      const [worker] = workers(smoke);
+      expect(worker !== undefined, `没派出 Worker：${JSON.stringify(workers(smoke))}`);
+      const reports = await waitUntil(
+        "两次汇报",
+        async () => {
+          const r = (await workerLines(smoke, chat)).filter((l) => l.event === "report");
+          return r.length >= 2 ? r : undefined;
+        },
+        TURN_MS * 2,
+      );
+      expect(/后台已启动/.test(reports[0]!.summary ?? ""), `第一份汇报不对：${JSON.stringify(reports[0])}`);
+      expect(/BG-DONE/.test(reports[reports.length - 1]!.summary ?? ""), `最后一份汇报不对：${JSON.stringify(reports)}`);
+      await waitSettled(smoke, chat);
+      const toPm = smoke.writtenTexts(sessionIdOf(smoke, chat)).filter((t) => t.includes("的汇报】"));
+      expect(toPm.length >= 2 && toPm[0]!.includes("后台已启动") && toPm.some((t) => t.includes("BG-DONE")), `项目经理没按顺序收到两份：${JSON.stringify(toPm)}`);
+      const session = await smoke.currentSession(worker!.worker_conversation_id);
+      const selfStarted = smoke.sessionLog(session.sessionId).some((e) => e.type === "result" && e.origin !== undefined);
+      expect(selfStarted, "Worker 的会话日志里没有 claude 自己开的那一轮（result 带 origin）");
+      return `Worker 先回“${reports[0]!.summary}”，后台跑完自己开一轮回“${reports[reports.length - 1]!.summary}”，项目经理两份都收到`;
     });
   }
 }

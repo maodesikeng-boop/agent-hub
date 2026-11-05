@@ -217,7 +217,8 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
       return;
     }
-    settleFailures(p, session.conversationId);
+    // 只有这几种事件会把消息标成失败、已停止
+    if (event.type === "turn.ended" || event.type === "session.exited" || event.type === "driver.error") settleFailures(p, session.conversationId);
     // 交接请求那一轮正常结束（已回复），而且它的会话还是最新一代（重放的同一个事件不会再换）：换代
     if (event.type !== "turn.ended" || !event.ok || event.interrupted) return;
     for (const id of event.messageIds) {
