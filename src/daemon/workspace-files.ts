@@ -1,19 +1,23 @@
 // 输入框“@”的文件搜索（跟厂商无关；插进输入框的写法由厂商实现的 mention 生成，见 daemon/composer.ts）：
 // - 列文件：git 仓库用 `git ls-files --cached --others --exclude-standard`（跳过 .gitignore 里的）；不是 git 仓库的自己遍历，
 //   跳过 node_modules 和 .git，不跟符号链接进目录。只列文件，不列文件夹。每个文件夹最多 MAX_WORKSPACE_FILES 个，多了 truncated。
-// - 每个文件夹的清单缓存 WORKSPACE_FILES_FRESH_MS；
+//   git 一律带 GIT_READONLY_ARGS/ENV（不执行仓库配置里的 core.fsmonitor 脚本）；列出来的再 lstat 一遍，符号链接、已经不存在的、
+//   dir/ 结尾的（嵌套仓库）、子模块（是目录）都去掉，只留真的文件；
+// - 每个文件夹的清单缓存 WORKSPACE_FILES_FRESH_MS，最多存 MAX_WORKSPACE_FILE_CACHES 个文件夹，多了淘汰最旧的；
 // - 模糊打分：文件名命中排在路径命中前面，每次最多 MAX_FILE_RESULTS 条。
 // 只在给的文件夹里列，搜索词只拿来比，不当路径用，所以 `../../etc` 这类搜不出文件夹外面的东西。
 import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   MAX_FILE_QUERY_CHARS,
   MAX_FILE_RESULTS,
+  MAX_WORKSPACE_FILE_CACHES,
   MAX_WORKSPACE_FILES,
   WORKSPACE_FILES_FRESH_MS,
   WORKSPACE_LIST_TIMEOUT_MS,
 } from "../shared/index.ts";
+import { GIT_READONLY_ARGS, GIT_READONLY_ENV } from "./git/index.ts";
 
 /** 遍历时跳过的目录。 */
 const SKIPPED_DIRS = new Set(["node_modules", ".git"]);
@@ -35,6 +39,8 @@ export interface WorkspaceFilesOptions {
   now?: () => number;
   maxFiles?: number;
   freshMs?: number;
+  /** 清单最多缓存几个文件夹，默认 MAX_WORKSPACE_FILE_CACHES。 */
+  maxCaches?: number;
   timeoutMs?: number;
 }
 
@@ -46,8 +52,9 @@ export interface WorkspaceFiles {
 /** git ls-files 列；不是 git 仓库（或者没装 git）返回 null。 */
 function gitListFiles(root: string, maxFiles: number, timeoutMs: number): Promise<FileList | null> {
   return new Promise((resolve) => {
-    const child = spawn("git", ["-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    const child = spawn("git", [...GIT_READONLY_ARGS, "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
       cwd: root,
+      env: { ...process.env, ...GIT_READONLY_ENV },
       stdio: ["ignore", "pipe", "ignore"],
     });
     const files = new Set<string>();
@@ -108,12 +115,31 @@ async function walkFiles(root: string, maxFiles: number, deadline: number): Prom
   return { files, truncated: false };
 }
 
+/** lstat 一次同时查多少个（git 列出来的文件逐个查）。 */
+const LSTAT_BATCH = 256;
+
+/** 只留 root 下真的、现在还在的普通文件：不跟符号链接，git 列出来但磁盘上没有的（已删）、dir/（嵌套仓库）、子模块（目录）去掉。 */
+async function onlyRegularFiles(root: string, files: string[]): Promise<string[]> {
+  const kept: string[] = [];
+  const candidates = files.filter((f) => !f.endsWith("/"));
+  for (let i = 0; i < candidates.length; i += LSTAT_BATCH) {
+    const batch = candidates.slice(i, i + LSTAT_BATCH);
+    const stats = await Promise.all(batch.map((f) => lstat(join(root, f)).then((s) => s.isFile(), () => false)));
+    batch.forEach((f, j) => {
+      if (stats[j]) kept.push(f);
+    });
+  }
+  return kept;
+}
+
 /** 列一个文件夹里的文件。 */
 export async function listWorkspaceFiles(root: string, options: { maxFiles?: number; timeoutMs?: number } = {}): Promise<FileList> {
   const maxFiles = options.maxFiles ?? MAX_WORKSPACE_FILES;
   const timeoutMs = options.timeoutMs ?? WORKSPACE_LIST_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
-  return (await gitListFiles(root, maxFiles, timeoutMs)) ?? walkFiles(root, maxFiles, deadline);
+  const listed = await gitListFiles(root, maxFiles, timeoutMs);
+  if (listed === null) return walkFiles(root, maxFiles, deadline);
+  return { files: await onlyRegularFiles(root, listed.files), truncated: listed.truncated };
 }
 
 function isSubsequence(needle: string, hay: string): boolean {
@@ -150,6 +176,8 @@ export function normalizeFileQuery(query: string): string {
 export function createWorkspaceFiles(options: WorkspaceFilesOptions = {}): WorkspaceFiles {
   const now = options.now ?? Date.now;
   const freshMs = options.freshMs ?? WORKSPACE_FILES_FRESH_MS;
+  const maxCaches = options.maxCaches ?? MAX_WORKSPACE_FILE_CACHES;
+  /** Map 的顺序就是新旧：存的时候挪到最后，满了删最前面（最旧）的。 */
   const cache = new Map<string, { list: FileList; at: number }>();
   const inflight = new Map<string, Promise<FileList>>();
 
@@ -163,7 +191,9 @@ export function createWorkspaceFiles(options: WorkspaceFilesOptions = {}): Works
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       })
         .then((list) => {
+          cache.delete(root);
           cache.set(root, { list, at: now() });
+          while (cache.size > maxCaches) cache.delete(cache.keys().next().value!);
           return list;
         })
         .finally(() => inflight.delete(root));

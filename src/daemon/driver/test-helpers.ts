@@ -7,14 +7,13 @@ import type {
   AgentSessionPatch,
   AgentSessionRow,
   DriverEvent,
-  DriverOptions,
   LaunchFiles,
   SessionId,
   SessionStore,
 } from "../../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
-import { createClaudeDriver, type ClaudeDriver } from "./index.ts";
+import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "./index.ts";
 
 export const FAKE_CLAUDE = new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url).pathname;
 
@@ -94,7 +93,7 @@ export interface Harness {
 
 export interface HarnessOptions {
   script?: FakeScript;
-  driver?: Partial<DriverOptions>;
+  driver?: Partial<ClaudeDriverOptions>;
   /** 换一个状态目录不共享（默认和日志在一起）。 */
   dir?: string;
 }

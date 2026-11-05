@@ -150,6 +150,10 @@ export const COMMANDS_QUERY_TIMEOUT_MS = 15_000;
 export const COMMANDS_FRESH_MS = 10 * 60_000;
 /** 命令列表：没问到时，隔多久才再问（这期间给空列表）。 */
 export const COMMANDS_RETRY_MS = 60_000;
+/** 命令列表：同一时间另起的 agent 进程最多几个（每个都在项目目录里起一个完整的 claude，别一次起一堆），多的排队。 */
+export const MAX_CONCURRENT_COMMAND_QUERIES = 2;
+/** 命令列表：缓存最多存几份（按厂商、目录），多了淘汰最旧的。 */
+export const MAX_COMMAND_CACHE_ENTRIES = 50;
 /** 命令列表最多几项；说明、参数提示最多几个字（插件命令的说明有几百字）。 */
 export const MAX_COMMANDS = 500;
 export const MAX_COMMAND_DESCRIPTION_CHARS = 200;
@@ -158,6 +162,8 @@ export const MAX_COMMAND_HINT_CHARS = 80;
 export const MAX_WORKSPACE_FILES = 25_000;
 /** “@”文件：一个文件夹的文件清单缓存多久。 */
 export const WORKSPACE_FILES_FRESH_MS = 30_000;
+/** “@”文件：清单缓存最多存几个文件夹，多了淘汰最旧的。 */
+export const MAX_WORKSPACE_FILE_CACHES = 20;
 /** “@”文件：一次最多回几条。 */
 export const MAX_FILE_RESULTS = 50;
 /** “@”文件：搜索词最多几个字（多的截掉）。 */

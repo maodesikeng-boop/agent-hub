@@ -537,8 +537,14 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(query<{ worker_id: number; status: string }>("SELECT worker_id, status FROM messages WHERE id = ?", id)).toEqual([
       { worker_id: worker.id, status: "replied" },
     ]);
-    // 项目经理让它收工以后再发：409
     const pmSession = sessionOf(await client.state(), pm.conversationId).sessionId;
+    // 项目经理用 hub worker send 发 /clear（会换 Worker 的会话 ID）：退出码 1，打印厂商给的原因，不发
+    const pmMessagesBefore = query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n;
+    const clear = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "send", String(worker.id), "--stdin"], { stdin: "/clear" });
+    expect(clear.code).toBe(1);
+    expect(clear.stderr).toMatch(/\/clear：.*会话/);
+    expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n).toBe(pmMessagesBefore);
+    // 项目经理让它收工以后再发：409
     const ended = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "end", String(worker.id)]);
     expect(ended.code).toBe(0);
     const res = await client.postJson(API_PATHS.messages(worker.worker_conversation_id), { clientId: "late", text: "还在吗" });

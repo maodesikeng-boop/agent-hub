@@ -30,7 +30,7 @@ import { createComposerService } from "./composer.ts";
 import { createVendorComposers } from "./vendors/index.ts";
 import { createWorkspaceFiles } from "./workspace-files.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
-import { createClaudeDriver, createModelCatalogs, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
+import { createClaudeDriver, createModelCatalogs, queryClaudeInitialize, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
 import {
   createSessionEndHandler,
@@ -173,6 +173,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.models = models;
     const ledger = createLedger(db, {
       modelCatalog: (vendor) => models.current(vendor),
+      // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
+      knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
       dataHome: paths.home,
@@ -207,7 +209,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
     // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个 claude 在会话的目录里问；会话中途推来的新名单直接更新缓存
     const commands = createCommandCatalogs({
-      vendors: createVendorComposers({ claude: { claudePath: paths.claudePath } }),
+      vendors: createVendorComposers({ claude: { claudePath: paths.claudePath, queryInitialize: queryClaudeInitialize } }),
       queryRunning: (sessionId) => driver.queryCommands(sessionId),
       log,
     });

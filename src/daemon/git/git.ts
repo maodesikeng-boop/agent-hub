@@ -11,6 +11,14 @@ export const GIT_TIMEOUT_MS = 30_000;
 /** git 输出最多收多少字节（status 遇到大量没跟踪的文件会很长）。 */
 export const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
+/**
+ * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：
+ * 仓库配置里的 `core.fsmonitor` 指到脚本的话，git 读索引时会执行它（审查实测），所以每次都用 `-c core.fsmonitor=false` 盖掉；
+ * GIT_OPTIONAL_LOCKS=0 不去抢可选的锁（不刷新索引、不挡用户自己的 git 操作）。
+ */
+export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+export const GIT_READONLY_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+
 export interface GitOptions {
   /** 一次 git 调用的超时（毫秒），默认 GIT_TIMEOUT_MS。 */
   timeoutMs?: number;

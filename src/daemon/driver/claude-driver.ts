@@ -55,7 +55,7 @@ import {
   parseRateLimit,
   lineUuid,
 } from "./protocol.ts";
-import { claudeComposerBase } from "../vendors/claude.ts";
+import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
@@ -79,6 +79,9 @@ interface Batch {
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
+
+/** 这一行没带恢复、崩溃、重启说明（命令那一行，见 #takeBatch）。 */
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -173,11 +176,17 @@ interface SessionState {
   logBroken: boolean;
 }
 
+export interface ClaudeDriverOptions extends DriverOptions {
+  /** 这个驱动对应的厂商实现（命令的认法、写给 agent 的 content 怎么拼、命令列表怎么解析），默认 vendors/ 里 claude 那份。 */
+  composer?: VendorComposerBase;
+}
+
 export class ClaudeDriver implements Driver {
   readonly #opts: Required<
     Pick<DriverOptions, "idleCloseMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
   > &
     DriverOptions;
+  readonly #composer: VendorComposerBase;
   readonly #sessions = new Map<SessionId, SessionState>();
   readonly #listeners = new Set<DriverEventListener>();
   #shuttingDown = false;
@@ -185,7 +194,8 @@ export class ClaudeDriver implements Driver {
   /** 正在报监听者的错：这时监听者再抛错只打到标准错误，免得没完没了。 */
   #reportingListenerError = false;
 
-  constructor(options: DriverOptions) {
+  constructor({ composer, ...options }: ClaudeDriverOptions) {
+    this.#composer = composer ?? composerBaseOf("claude")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
@@ -255,7 +265,7 @@ export class ClaudeDriver implements Driver {
       resend: input.resend ?? false,
     };
     const parts = entryParts(entry);
-    const problem = checkUserLine(buildUserLine(parts.text, parts.prefixes));
+    const problem = checkUserLine(buildUserLine(parts.text, parts.prefixes, this.#composer.buildUserContent));
     if (problem) {
       this.#invalidInput(st, problem, ids);
       return { kind: "rejected" };
@@ -478,15 +488,19 @@ export class ClaudeDriver implements Driver {
   /**
    * 取下一行：队列里有用户消息就拼成一条（以命令开头的不拼：排在最前面的是命令就只写它，否则拼到下一条命令之前，顺序不乱）；
    * 否则取最早的一条系统消息。恢复说明加在最前面，和消息写在同一行；我们加的字各占一个 text 块，原文放最后一块（driver.ts 的 prefixes）。
+   * 写的是命令那一行时不带恢复、崩溃、重启说明，留给下一条不是命令的：/compact、/context 这类本地命令会把前面的 text 块整个丢掉
+   * （#76 审查用真 claude 测过），带上了 agent 也看不到。
    */
   #takeBatch(st: SessionState): Batch | null {
     let body: { prefixes: string[]; text: string } | null = null;
     let messageIds: MessageId[] = [];
+    let command = false;
     const users = st.pending.filter((e) => e.source === "user");
     if (users.length > 0) {
-      const isCommand = (e: PendingEntry) => claudeComposerBase.isCommand(e.text);
+      const isCommand = (e: PendingEntry) => this.#composer.isCommand(e.text);
       const firstCommand = users.findIndex(isCommand);
-      const take = firstCommand === 0 ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
+      command = firstCommand === 0;
+      const take = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
       st.pending = st.pending.filter((e) => !take.includes(e));
       body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
       messageIds = take.flatMap((e) => e.messageIds);
@@ -495,8 +509,11 @@ export class ClaudeDriver implements Driver {
       body = entryParts(entry);
       messageIds = entry.messageIds;
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     if (body === null) return null;
+    if (command) {
+      return { messageIds, line: buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent), notes: NO_NOTES, delivered: false, processing: false };
+    }
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
@@ -505,7 +522,7 @@ export class ClaudeDriver implements Driver {
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = false;
-    return { messageIds, line: buildUserLine(body.text, [...prefixes, ...body.prefixes]), notes, delivered: false, processing: false };
+    return { messageIds, line: buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent), notes, delivered: false, processing: false };
   }
 
   /** 没写成的一行：恢复说明留给下一行；消息本身不放回队列，由执行器重试 send 时再排。 */
@@ -895,7 +912,7 @@ export class ClaudeDriver implements Driver {
         const query = typeof response?.request_id === "string" ? st.commandQueries.get(response.request_id) : undefined;
         if (query) {
           const body = response?.response as { commands?: unknown } | undefined;
-          query(response?.subtype === "success" ? claudeComposerBase.parseCommands(body?.commands) : null);
+          query(response?.subtype === "success" ? this.#composer.parseCommands(body?.commands) : null);
           return;
         }
         if (response?.request_id === undefined || response.request_id !== st.interruptRequestId) return;
@@ -913,7 +930,7 @@ export class ClaudeDriver implements Driver {
 
   /** 命令列表变了（带完整名单）：换成通用形状交出去；认不出的跳过。 */
   #onCommandsChanged(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    const commands = claudeComposerBase.parseCommands(obj.commands);
+    const commands = this.#composer.parseCommands(obj.commands);
     if (commands) this.#emit(st.id, { type: "commands.changed", commands, at });
   }
 
@@ -1209,7 +1226,7 @@ export class ClaudeDriver implements Driver {
   }
 }
 
-export function createClaudeDriver(options: DriverOptions): ClaudeDriver {
+export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeDriver {
   return new ClaudeDriver(options);
 }
 

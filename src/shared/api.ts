@@ -194,11 +194,12 @@ export interface ModelsResponse {
   catalogs: ModelCatalog[];
 }
 
-/** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给。 */
+/** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给；builtin：厂商自带的命令（用户自己的命令、skill 不带这个字段）。 */
 export interface ComposerCommand {
   name: string;
   description: string;
   argumentHint?: string;
+  builtin?: true;
 }
 
 /** GET /api/conversations/:id/commands。 */
