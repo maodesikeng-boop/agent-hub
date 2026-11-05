@@ -222,7 +222,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
       ["report", "done", "加好了"],
       ["report", "done", "改成 hi 了"],
     ]);
-    expect(workerLines(s2, pm.conversationId)[0]!.text).toBe("Worker · 加 hello · 已派出");
+    expect(workerLines(s2, pm.conversationId)[0]!.text).toBe("Worker「加 hello」已派出");
     // 项目经理收到了两份汇报原文
     const delivered = await waitUntil("pm got both reports", () => {
       const texts = env.stdinTexts().filter((t) => t.includes("【Worker #1 · 加 hello 的汇报】"));

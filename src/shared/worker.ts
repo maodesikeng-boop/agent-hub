@@ -152,7 +152,7 @@ const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
 };
 
 /**
- * 项目经理对话里那一行给人看的字：“Worker · 标题 · 状态：摘要”。参数就是 WorkerMessageMeta 里的这几项。
+ * 项目经理对话里那一行给人看的字：“Worker「标题」状态：摘要”。参数就是 WorkerMessageMeta 里的这几项。
  * 网页直接显示它；只读的“已派出”后面带“（只读）”。摘要的空白（含换行）压成一个空格，超过 WORKER_LINE_SUMMARY_CHARS 个字符截断。
  */
 export function workerLineText(line: {
@@ -171,7 +171,7 @@ export function workerLineText(line: {
   const suffix = line.event === "started" && line.readonly ? "（只读）" : "";
   const summary = line.summary === null ? "" : truncateChars(collapseWhitespace(line.summary), WORKER_LINE_SUMMARY_CHARS);
   const detail = summary === "" ? "" : `：${summary}`;
-  return `Worker · ${line.title} · ${state}${suffix}${detail}`;
+  return `Worker「${line.title}」${state}${suffix}${detail}`;
 }
 
 /**

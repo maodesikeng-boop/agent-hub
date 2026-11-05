@@ -44,7 +44,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 组标题、“更多设置”这类折叠开关 | 13.5px `text-[13.5px]` | 500 | `text-muted-foreground` |
 | 次要文字：行下面的说明、左栏的消息预览、错误 | 13.5px | 400 | `text-muted-foreground`（错误 `text-danger`） |
 | 按钮里的字 | 14px（默认）/ 13px（sm） | 500 | 按钮自带 |
-| 时间、计数这类小标注 | 12px `text-xs` | 400 | `text-muted-foreground`，数字加 `tabular-nums` |
+| 时间、计数这类小标注；列表行的状态和第二行（模型、思考程度、token） | 12px `text-xs` | 400 | `text-muted-foreground`，数字加 `tabular-nums` |
 
 不用 13px、14px 做正文或次要文字（上面两档按钮字除外）。
 
@@ -117,11 +117,28 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 `PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
 
-列表型浮层（对话页顶栏的 Worker 面板）：宽 360px、窄屏最宽 `100vw - 24px`、最高 `min(70vh, 480px)` 内部滚动；里面放一个 `SettingsGroup`（第 9 条），一行一项、整行可点。
-行第一行：名字（15px、500，当前打开的 600）靠左，状态（13.5px，在忙用主色、其余灰）靠右；第二行：13.5px 灰，左边说明（超长 `truncate`），右边数字（`tabular-nums`，`title` 放明细）。
-当前打开的行 `bg-sidebar-active`，悬停 `bg-sidebar-hover`，已结束的 `opacity-60`。点浮层外面、按 Esc、再点触发按钮都收起。
+## 12. 侧边面板（Worker 面板）
 
-## 12. 交互和状态
+对话页顶栏右边的 Worker 按钮展开的面板（`WorkerSidePanel`，`src/web/components/WorkerPanel.tsx`）：
+
+- **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-border bg-background p-3`，内部纵向滚动；展开时对话区自动变窄，收起后恢复原宽。展开状态切对话、切项目经理时保持。
+- **窄屏（1100px 以下，和左栏收窄同一个断点）**：不再推开，浮在顶栏下面右边（`fixed top-16 right-3`，`rounded-2xl border`，宽 `min(320px, 100vw - 24px)`），最高 `100dvh - 16rem`，给输入框留位置；点一行打开对话时自动收起，不盖着对话。
+- **按钮**：和顶栏别的图标按钮同一个样式（`Button` ghost、`size="sm"`，无边框），一个 `PanelRight` 图标 + 还没收工的个数（`tabular-nums`）；展开时 `bg-accent`。不用描边、不写“Worker”字样（名字放 `aria-label`）。
+- **行**（第 13 条的列表行规则）：`rounded-2xl px-3 py-2.5`，行间 4px（`space-y-1`），当前打开的 `bg-sidebar-active`，悬停 `bg-sidebar-hover`，已收工的 `opacity-60` 且排在后面。
+  - 第一行：标题（15px、500，当前打开的 600，超长 `truncate`）靠左，状态（12px，在忙用主色、其余灰）靠右。
+  - 第二行：12px 灰，从左往右：模型名（只写模型；厂商只有一家时不写，以后多厂商再显示）、思考程度（有才显示）、token（英文单位，`tabular-nums`，`title` 放明细）；各项之间用 `gap-3` 隔开。没有数据显示“—”。
+
+## 13. 字体、数字、列表行
+
+- **字体栈只在 `styles.css` 的 `--font-ui` / `--font-code` 定义**，组件里不写 `font-family`，用 `font-sans` / `font-mono`。
+  - 界面：`"Inter Variable"`（打包进程序）→ 系统英文字体（`-apple-system`、`BlinkMacSystemFont`、`"SF Pro Text"`、`"Helvetica Neue"`）→ 中文字体（`"PingFang SC"`、`"Hiragino Sans GB"`、`"Microsoft YaHei"`）→ `sans-serif`。**英文字体一律排在中文字体前面**：英文字母和数字在中文字体里有字形，排前面就会落到中文字体上，样子不一致；汉字在英文字体里没有字形，会自动落到后面的中文字体。
+  - 代码：`"SF Mono"`、`ui-monospace`、`Menlo`、`Consolas`，后面补中文字体，最后 `monospace`。
+- **计量用英文单位**：token、用量、文件大小这类数用 K / M（token）、KB / MB（文件大小），不用“万”“亿”。token 写“820 tokens”“291K tokens”“6.48M tokens”（1 个是“1 token”）；不到 1000 原样，之上取 3 位有效数字并去掉多余的 0，999.5K 以上进到 1M（`formatCount` / `formatTokens`，`src/web/format.ts`）。悬停明细的标签也用英文（Input、Cache read…）。没有数据（老数据没记录）显示“—”，不显示 0。
+- **数字对齐**：列表、表格、行右边的数字（计数、时间、百分比、token）一律 `tabular-nums`。
+- **中英文之间留一个空格**：“Worker 3”“Sonnet 5.5 的 token”“在调用 slack 的 search”。数字和中文之间也留（“3 个”）；全角标点两侧不留。
+- **列表行不用“·”（中点）、“|”、“/”拼接多项信息**：用层级区分——主信息大一档（15px、500）、次要信息小一档（12px、灰），同一行的几项之间用间距（`gap-3`）隔开，不靠符号。缺的项直接不显示，不留空位也不放占位符（整个数据缺失才用“—”）。
+
+## 14. 交互和状态
 
 - 悬停：浅灰底（`hover:bg-sidebar-hover` / `hover:bg-accent`），不变色、不放大。
 - 加载：`Loader2` 转圈 + 短句（“加载中”），居中；按钮里转圈放在字前面。

@@ -39,9 +39,9 @@ describe("describeStep：状态文案映射", () => {
   });
 
   it("MCP 工具：连接器 · 工具名，原样显示；连接器名里有下划线、有连字符都行", () => {
-    expect(describeStep(tool("mcp__slack__search_messages"))).toBe("在调用 slack · search_messages");
-    expect(describeStep(tool("mcp__chrome-devtools__take_screenshot"))).toBe("在调用 chrome-devtools · take_screenshot");
-    expect(describeStep(tool("mcp__plugin_parallel_parallel-search__web_search"))).toBe("在调用 plugin_parallel_parallel-search · web_search");
+    expect(describeStep(tool("mcp__slack__search_messages"))).toBe("在调用 slack 的 search_messages");
+    expect(describeStep(tool("mcp__chrome-devtools__take_screenshot"))).toBe("在调用 chrome-devtools 的 take_screenshot");
+    expect(describeStep(tool("mcp__plugin_parallel_parallel-search__web_search"))).toBe("在调用 plugin_parallel_parallel-search 的 web_search");
   });
 
   it("残缺的 MCP 名：显示剩下的，不崩", () => {

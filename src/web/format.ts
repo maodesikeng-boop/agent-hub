@@ -53,16 +53,44 @@ export function formatQuotaReset(resetsAtSeconds: number, now: Date = new Date()
   return d.toDateString() === now.toDateString() ? time : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
 }
 
-/** token 数用“万”做单位：不到 100 万留一位小数（去掉 .0），再大取整。 */
-export function formatTokens(count: number): string {
-  const wan = count / 10_000;
-  return `${wan < 100 ? Number(wan.toFixed(1)) : Math.round(wan)} 万`;
+/** 计量的单位阶梯（docs/ui-standard.md 第 13 条）：K = 千，M = 百万，最大到 M。 */
+const COUNT_UNITS = [
+  { suffix: "", size: 1 },
+  { suffix: "K", size: 1_000 },
+  { suffix: "M", size: 1_000_000 },
+] as const;
+
+/** 取 3 位有效数字，去掉多余的 0：6.48、64.8、648；整数部分不止 3 位时取整。 */
+const significant = (value: number) => Number(value < 10 ? value.toFixed(2) : value < 100 ? value.toFixed(1) : value.toFixed(0));
+
+/** 个数用英文单位：820、1.23K、291K、999K 再往上进到 1M、6.48M。不到 1000 原样。 */
+export function formatCount(count: number): string {
+  let unit = 0;
+  while (unit < COUNT_UNITS.length - 1 && count >= COUNT_UNITS[unit + 1]!.size) unit++;
+  let value = unit === 0 ? Math.round(count) : significant(count / COUNT_UNITS[unit]!.size);
+  // 999_999 取 3 位有效数字是 1000K：进到下一档
+  if (unit > 0 && unit < COUNT_UNITS.length - 1 && value >= 1000) value = significant(count / COUNT_UNITS[++unit]!.size);
+  return `${value}${COUNT_UNITS[unit]!.suffix}`;
 }
 
-/** 悬停 token 数时的明细，一项一行：输入、缓存读、缓存写、输出、当前上下文。 */
+/** token 数：“820 tokens”、“291K tokens”、“6.48M tokens”（1 个是 “1 token”）。 */
+export function formatTokens(count: number): string {
+  return `${formatCount(count)} ${count === 1 ? "token" : "tokens"}`;
+}
+
+/** 一个会话累计用了多少 token（输入 + 缓存读 + 缓存写 + 输出）；没有记录（老 Worker、还没干过活）显示“—”。 */
+export function formatUsageTotal(usage: TokenUsage): string {
+  const total = usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
+  return total > 0 ? formatTokens(total) : NO_DATA;
+}
+
+/** 没有数据时占位的字。 */
+export const NO_DATA = "—";
+
+/** 悬停 token 数时的明细，一项一行：输入、缓存读、缓存写、输出、当前上下文（数字用千分位，单位是 tokens）。 */
 export function formatTokenDetail(usage: TokenUsage): string {
-  const n = (v: number) => v.toLocaleString("en-US");
-  return [`输入 ${n(usage.input)}`, `缓存读 ${n(usage.cacheRead)}`, `缓存写 ${n(usage.cacheWrite)}`, `输出 ${n(usage.output)}`, `当前上下文 ${n(usage.context)}`].join("\n");
+  const n = (v: number) => `${v.toLocaleString("en-US")} tokens`;
+  return [`Input ${n(usage.input)}`, `Cache read ${n(usage.cacheRead)}`, `Cache write ${n(usage.cacheWrite)}`, `Output ${n(usage.output)}`, `Context ${n(usage.context)}`].join("\n");
 }
 
 export function byteLength(text: string): number {

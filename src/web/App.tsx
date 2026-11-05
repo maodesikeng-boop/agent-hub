@@ -5,7 +5,7 @@ import { postDismissAsk, postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
-import { WorkerPanel } from "./components/WorkerPanel.tsx";
+import { WorkerPanelToggle, WorkerSidePanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -31,6 +31,8 @@ export function App() {
   const [profilePm, setProfilePm] = useState<PmId | null>(null);
   const [creating, setCreating] = useState(false);
   /** 打开着的 Worker 的对话；选了左栏的对话或点“返回”就回到项目经理的会话。 */
+  /** 对话右边的 Worker 面板展开着（切对话、切项目经理都保持）。 */
+  const [panelOpen, setPanelOpen] = useState(false);
   const [openWorker, setOpenWorker] = useState<ConversationId | null>(null);
 
   const entries = listConversations(state);
@@ -111,7 +113,8 @@ export function App() {
   const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
   // 对话页顶栏右边的 Worker 按钮列的是当前打开的项目经理（Worker 的对话也算它）的 Worker
   const panelPm = (openWorker !== null ? workerPm : active?.pm?.id) ?? null;
-  const workerPanel = <WorkerPanel workers={panelPm === null ? [] : workersOf(state, panelPm)} openId={openWorker} onOpen={setOpenWorker} />;
+  const panelWorkers = panelPm === null ? [] : workersOf(state, panelPm);
+  const workerToggle = <WorkerPanelToggle workers={panelWorkers} open={panelOpen} onToggle={() => setPanelOpen((v) => !v)} />;
 
   return (
     <ModelCatalogProvider>
@@ -150,7 +153,7 @@ export function App() {
             older={state.older[openWorker]}
             draft={drafts[openWorker] ?? ""}
             staging={staging.of(openWorker)}
-            stats={workerPanel}
+            stats={workerToggle}
             notices={notices}
             onBack={() => setOpenWorker(null)}
             onDraftChange={setDraft}
@@ -170,7 +173,7 @@ export function App() {
             older={state.older[active.id]}
             draft={drafts[active.id] ?? ""}
             staging={staging.of(active.id)}
-            stats={workerPanel}
+            stats={workerToggle}
             notices={notices}
             onDraftChange={setDraft}
             onSend={send}
@@ -189,6 +192,7 @@ export function App() {
           </>
         )}
       </main>
+      <WorkerSidePanel workers={panelWorkers} open={panelOpen && !profile} openId={openWorker} onOpen={setOpenWorker} onClose={() => setPanelOpen(false)} />
     </div>
     </ModelCatalogProvider>
   );

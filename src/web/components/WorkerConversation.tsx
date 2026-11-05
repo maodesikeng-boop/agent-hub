@@ -66,7 +66,7 @@ export function WorkerConversation({
 
   const identity = { name: title, avatarKey: id ?? 0 };
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker · ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
+    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
       <header className="flex min-h-16 shrink-0 items-center gap-3 px-6 py-3">
         <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />

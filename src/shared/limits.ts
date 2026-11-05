@@ -118,6 +118,8 @@ export const SHUTDOWN_GRACE_MS = 10_000;
 
 /** 驱动层：lastEventAt 最多每秒写一次库。 */
 export const LAST_EVENT_WRITE_MS = 1_000;
+/** 驱动层：一个会话的 token 累计最多每秒更新（写库、推给网页）一次；一轮里请求很密时合并，轮结束时马上更新。 */
+export const USAGE_PUSH_MS = 1_000;
 /** 驱动层：进程退出后最多等多久把标准输出、标准错误读完；孙进程占着管道时到点强制关掉。 */
 export const STDIO_DRAIN_MS = 300;
 /** 驱动层：发了 SIGKILL 之后最多再等多久。 */
