@@ -30,6 +30,7 @@ describe("describeStep：状态词（英文）", () => {
     expect(describeStep(tool("Write", { file_path: "C:\\proj\\notes.md" }))).toBe("Writing notes.md");
     expect(describeStep(tool("NotebookEdit", { notebook_path: "/n/analysis.ipynb" }))).toBe("Editing analysis.ipynb");
     expect(describeStep(tool("read_file", { Path: "/Users/a/src/main.ts" }))).toBe("Reading main.ts");
+    expect(describeStep(tool("view_file", { AbsolutePath: "/Users/a/src/view.ts" }))).toBe("Reading view.ts");
     expect(describeStep(tool("view_file_outline", { AbsolutePath: "/Users/a/src/outline.ts" }))).toBe("Reading outline.ts");
     expect(describeStep(tool("view_code_item", { path: "/Users/a/src/item.ts" }))).toBe("Reading item.ts");
     expect(describeStep(tool("write_to_file", { TargetFile: "/Users/a/src/new.ts" }))).toBe("Writing new.ts");

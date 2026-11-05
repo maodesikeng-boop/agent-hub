@@ -414,10 +414,21 @@ export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSig
   },
 };
 
+/** 从原文的特征词推断优先检查哪家厂商（如含 agy/antigravity 优先判 agy，含 codex/openai/chatgpt 优先判 codex）。 */
+function inferVendorFromRaw(raw: string): AgentVendor | null {
+  if (/^agy_not_found\b|\bagy\b|antigravity/i.test(raw)) return "agy";
+  if (/^codex_not_found\b|\bcodex\b|openai|chatgpt/i.test(raw)) return "codex";
+  if (/^claude_not_found\b|\bclaude\b|anthropic/i.test(raw)) return "claude";
+  return null;
+}
+
 /** 认得出是哪家的哪类错误就返回，否则 null。 */
-export function vendorFailureOf(raw: string): { kind: FailureKind; serviceName: string } | null {
-  for (const vendor of AGENT_VENDORS) {
-    const { serviceName, signs } = VENDOR_FAILURE_SIGNS[vendor];
+export function vendorFailureOf(raw: string, vendor?: AgentVendor): { kind: FailureKind; serviceName: string } | null {
+  const preferred = vendor !== undefined && isAgentVendor(vendor) ? vendor : inferVendorFromRaw(raw);
+  const order: readonly AgentVendor[] =
+    preferred !== null ? [preferred, ...AGENT_VENDORS.filter((v) => v !== preferred)] : AGENT_VENDORS;
+  for (const v of order) {
+    const { serviceName, signs } = VENDOR_FAILURE_SIGNS[v];
     const hit = signs.find((s) => s.pattern.test(raw));
     if (hit) return { kind: hit.kind, serviceName };
   }

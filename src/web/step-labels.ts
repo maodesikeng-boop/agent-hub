@@ -53,6 +53,7 @@ const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
   // agy
   run_command: () => "Running command",
   read_file: onFile("Reading"),
+  view_file: onFile("Reading"),
   view_file_outline: onFile("Reading"),
   view_code_item: onFile("Reading"),
   write_to_file: onFile("Writing"),

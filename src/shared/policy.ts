@@ -110,15 +110,24 @@ function normalizePathSegments(rawPath: string, homeDir?: string): { absolute: b
  * 供 AgyDriver 和 CodexDriver 在拦截 Worker 文件修改/命令审批时判断某个路径是否命中记忆保护范围：
  * 任何位置的 AGENTS.md、CLAUDE.md、CLAUDE.local.md、GEMINI.md、路径段含 .claude / .gemini / .codex、或在 stateDir 下。
  */
-export function isProtectedMemoryPath(targetPath: string, stateDir: string, homeDir?: string): boolean {
-  const { segments, normalized } = normalizePathSegments(targetPath, homeDir);
+export function isProtectedMemoryPath(targetPath: string, stateDir: string, homeDir?: string, cwd?: string): boolean {
+  const trimmedTarget = targetPath.trim().replace(/\\/g, "/");
+  if (trimmedTarget === "") return false;
+  const effectiveHome = homeDir ?? (typeof process !== "undefined" ? process.env.HOME : undefined);
+  const resolvedTarget =
+    cwd && cwd.trim() !== "" && !trimmedTarget.startsWith("/") && trimmedTarget !== "~" && !trimmedTarget.startsWith("~/")
+      ? `${cwd.trim().replace(/\\/g, "/").replace(/\/+$/, "")}/${trimmedTarget}`
+      : trimmedTarget;
+  const { segments, normalized } = normalizePathSegments(resolvedTarget, effectiveHome);
   if (segments.length === 0) return false;
   const last = segments[segments.length - 1]!.toLowerCase();
   if (PROTECTED_MEMORY_FILES.has(last)) return true;
   if (segments.some((seg) => PROTECTED_MEMORY_DIRS.has(seg.toLowerCase()))) return true;
   if (stateDir.trim() !== "") {
-    const normState = normalizePathSegments(stateDir, homeDir).normalized;
-    if (normState !== "" && normState !== "/" && (normalized === normState || normalized.startsWith(`${normState}/`))) {
+    const normState = normalizePathSegments(stateDir, effectiveHome).normalized;
+    const normLower = normalized.toLowerCase();
+    const stateLower = normState.toLowerCase();
+    if (stateLower !== "" && stateLower !== "/" && (normLower === stateLower || normLower.startsWith(`${stateLower}/`))) {
       return true;
     }
   }

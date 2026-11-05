@@ -103,6 +103,31 @@ describe("buildSessionSettings：Worker", () => {
     }
   });
 
+  it("isProtectedMemoryPath：防绕过（cwd 相对路径穿越、APFS 大小写混淆、未传 homeDir 时回退 process.env.HOME）", () => {
+    const stateDir = "/Users/u/.agent-hub/state";
+    const homeDir = "/Users/u";
+    const cwd = "/Users/u/.agent-hub/worktrees/1/2";
+
+    // 1. 相对路径从 worktree 穿越到 stateDir
+    expect(isProtectedMemoryPath("../../../state/personas/pm-1.md", stateDir, homeDir, cwd)).toBe(true);
+    expect(isProtectedMemoryPath("../../../state/hub.sqlite", stateDir, homeDir, cwd)).toBe(true);
+    expect(isProtectedMemoryPath("./src/index.ts", stateDir, homeDir, cwd)).toBe(false);
+
+    // 2. macOS APFS 大小写混淆绕过 stateDir
+    expect(isProtectedMemoryPath("/Users/u/.AGENT-HUB/STATE/personas/pm-1.md", stateDir, homeDir)).toBe(true);
+    expect(isProtectedMemoryPath("/users/U/.Agent-Hub/State", stateDir, homeDir)).toBe(true);
+    expect(isProtectedMemoryPath("../../../STATE/personas/pm-1.md", stateDir, homeDir, cwd)).toBe(true);
+
+    // 3. 未传 homeDir 时自动回退到 process.env.HOME
+    const realHome = process.env.HOME;
+    if (realHome) {
+      const envStateDir = `${realHome}/.agent-hub/state`;
+      expect(isProtectedMemoryPath("~/.agent-hub/state/personas/pm-1.md", envStateDir)).toBe(true);
+      expect(isProtectedMemoryPath("~/.claude/settings.json", envStateDir)).toBe(true);
+      expect(isProtectedMemoryPath("~/normal-project/src/index.ts", envStateDir)).toBe(false);
+    }
+  });
+
   it("数据目录路径里有 gitignore 的特殊字符要转义", () => {
     expect(stateDirDenyRule("/Users/u/a[1]/b*c?d\\e/state")).toBe("Edit(//Users/u/a\\[1\\]/b\\*c\\?d\\\\e/state/**)");
   });

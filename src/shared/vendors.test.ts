@@ -256,4 +256,33 @@ describe("VENDOR_FAILURE_SIGNS：错误特征匹配", () => {
     expect(vendorFailureOf("agy_not_found: spawn agy ENOENT")).toEqual({ kind: "start", serviceName: "Antigravity" });
     expect(vendorFailureOf("codex_not_found: spawn codex ENOENT")).toEqual({ kind: "start", serviceName: "Codex" });
   });
+
+  it("vendorFailureOf：支持显式传 vendor 或按原文里的厂商特征词归属 serviceName", () => {
+    // 1. 显式传 vendor：通用错误码归属给指定厂商
+    expect(vendorFailureOf("rate_limit_exceeded", "agy")).toEqual({ kind: "quota", serviceName: "Antigravity" });
+    expect(vendorFailureOf("not logged in", "codex")).toEqual({ kind: "auth", serviceName: "Codex" });
+    expect(vendorFailureOf("context_length_exceeded", "claude")).toEqual({ kind: "context", serviceName: "Claude" });
+
+    // 2. 未传 vendor：按原文里的 agy/antigravity 或 codex/openai/chatgpt 特征词优先匹配
+    expect(vendorFailureOf("Antigravity RESOURCE_EXHAUSTED: quota exceeded")).toEqual({
+      kind: "quota",
+      serviceName: "Antigravity",
+    });
+    expect(vendorFailureOf("agy: unauthenticated, please sign in")).toEqual({
+      kind: "auth",
+      serviceName: "Antigravity",
+    });
+    expect(vendorFailureOf("OpenAI API error: usage_limit_reached")).toEqual({
+      kind: "quota",
+      serviceName: "Codex",
+    });
+    expect(vendorFailureOf("codex error: invalid_api_key (401)")).toEqual({
+      kind: "auth",
+      serviceName: "Codex",
+    });
+    expect(vendorFailureOf("ChatGPT context window exceeded")).toEqual({
+      kind: "context",
+      serviceName: "Codex",
+    });
+  });
 });
