@@ -113,7 +113,8 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
       inert={collapsed}
       className={cn("grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none", collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]")}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      {/* 高度过渡要 overflow-hidden；行向两边伸出 8px（ROW 的 -mx-2），键盘聚焦圈再 2px，所以这层也向两边多留 12px（-mx-3 px-3），圆角和圈才不会被剪成方的 */}
+      <div className="-mx-3 min-h-0 overflow-hidden px-3">{children}</div>
     </div>
   );
 }

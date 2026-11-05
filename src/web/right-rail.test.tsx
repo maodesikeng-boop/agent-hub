@@ -152,6 +152,34 @@ describe("右栏：顶上不留空", () => {
   });
 });
 
+describe("右栏：行的底色是完整的圆角（不被收起动画的容器剪掉）", () => {
+  /** class 里 -mx-N 的 N（单位 rem/4，即 Tailwind 的档位）。 */
+  const bleed = (el: Element) => Number(/(?:^|\s)-mx-(\d+(?:\.\d+)?)(?:\s|$)/.exec(el.className)?.[1] ?? 0);
+
+  it("行向两边伸出的距离，不超过外面 overflow-hidden 容器多留的（再留 0.5 档给聚焦圈）；选中、悬停都是 rounded-xl", () => {
+    renderRail({ asks: [ask(1)], workers: [busy(30), done(40)], openWorkerId: 30 });
+    for (const group of [asksGroup(), workerGroup()]) {
+      const clip = group.querySelector("[data-group-body] > .overflow-hidden")!;
+      for (const row of within(group).getAllByRole("button").filter((b) => !b.closest("h2") && b.closest("li") !== null)) {
+        expect(row).toHaveClass("rounded-xl");
+        expect(row.className).toMatch(/px-2/);
+        expect(bleed(clip)).toBeGreaterThanOrEqual(bleed(row) + 0.5);
+        expect(clip).toHaveClass("px-3");
+      }
+    }
+    const active = within(workerGroup()).getByRole("button", { name: /活 30/ });
+    expect(active).toHaveClass("bg-sidebar-active", "rounded-xl");
+    expect(within(workerGroup()).getByRole("button", { name: /^已收工/ })).toHaveClass("rounded-xl", "hover:bg-sidebar-hover");
+  });
+
+  it("没有横向滚动：外层滚动区向两边留的内边距（px-5）比行伸出的多", () => {
+    renderRail({ workers: [busy(30)] });
+    const scroller = workerGroup().parentElement!;
+    expect(scroller).toHaveClass("overflow-y-auto", "px-5");
+    expect(bleed(workerGroup().querySelector("[data-group-body] > .overflow-hidden")!)).toBeLessThan(5);
+  });
+});
+
 describe("右栏：只列几条", () => {
   it("每组最多 3 条（常量 RIGHT_RAIL_VISIBLE_ROWS）", () => {
     expect(RIGHT_RAIL_VISIBLE_ROWS).toBe(3);
