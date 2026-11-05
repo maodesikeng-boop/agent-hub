@@ -18,11 +18,14 @@ import type { CommandsTarget, VendorComposer } from "./types.ts";
 
 const SPEC = VENDOR_SPECS.claude.composer;
 
-/** 原文是命令就返回命令名（不带 /，原样大小写），否则 null。只认最开头的 /，前面有空格不算（T4 的 F）。 */
+/**
+ * 原文是命令就返回命令名（不带 /，原样大小写），否则 null。只认最开头的 /，前面有空格不算（T4 的 F）。
+ * 命令名里带 / 的不算（`/Users/x/foo.py 这里有 bug` 是绝对路径开头的普通话；插件命令用 :，不带 /）。
+ */
 function commandNameOf(text: string): string | null {
   if (!text.startsWith(SPEC.commandPrefix)) return null;
   const name = text.slice(SPEC.commandPrefix.length).split(/\s/u, 1)[0] ?? "";
-  return name === "" ? null : name;
+  return name === "" || name.includes("/") ? null : name;
 }
 
 function blockedReasonOf(name: string): string | null {

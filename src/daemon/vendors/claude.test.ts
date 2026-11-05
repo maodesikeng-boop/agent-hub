@@ -79,6 +79,11 @@ describe("隐藏和拦截（方案第 5 节 8、9）", () => {
     expect(c.isCommand(" /x")).toBe(false);
     expect(c.isCommand("/")).toBe(false);
     expect(c.isCommand("hi /x")).toBe(false);
+    // 命令名里带 / 的是路径，不是命令（插件命令用 :）
+    expect(c.isCommand("/Users/x/foo.py 这里有 bug")).toBe(false);
+    expect(c.isCommand("/usr/bin")).toBe(false);
+    expect(c.isCommand("/slack:standup")).toBe(true);
+    expect(c.blockReason("/clear/x")).toBeNull();
   });
 });
 

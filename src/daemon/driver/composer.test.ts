@@ -2,7 +2,7 @@
 // 问正在跑的会话要命令列表、会话中途推来的新名单、/compact 的 compact_boundary、conversation_reset，
 // 以及写进去的格式：我们加的字各占一块在前，用户原文单独放最后一块；以 / 开头的不和别的拼。
 import { afterEach, describe, expect, it } from "vitest";
-import { RELAUNCH_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../shared/index.ts";
+import { CRASH_RECOVERY_NOTE, RELAUNCH_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../shared/index.ts";
 import { makeHarness, realSleep, type Harness, type HarnessOptions } from "./test-helpers.ts";
 
 const TAG = "【用户直接对你说】";
@@ -190,24 +190,66 @@ describe("写进去的格式：加的字在前面的块，原文单独放最后�
     ]);
   });
 
-  it("25：重启恢复的第一条是 /x：恢复说明、重发说明、标签各一块，/x 仍在最后一块的开头", async () => {
+  it("25：重启恢复的第一条是 /compact：命令那一行只带它自己的重发说明、标签；恢复说明留给下一条普通消息，只出现一次", async () => {
     const t = harness();
     const s = t.addSession();
-    await t.driver.send(s.id, user(1, "/x 参数", { prefixes: [TAG], resend: true, recovery: true }));
+    await t.driver.send(s.id, user(1, "/compact", { prefixes: [TAG], resend: true, recovery: true }));
     await t.waitFor("turn.ended");
-    expect(t.stdinBlocks()).toEqual([[RESTART_RECOVERY_NOTE, RESEND_NOTE, TAG, "/x 参数"]]);
+    await t.driver.send(s.id, user(2, "接着做"));
+    await t.waitFor("turn.ended", undefined, 2);
+    await t.driver.send(s.id, user(3, "再来一条"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinBlocks()).toEqual([[RESEND_NOTE, TAG, "/compact"], [RESTART_RECOVERY_NOTE, "接着做"], ["再来一条"]]);
   });
 
-  it("25：两轮之间设置变了自动重启：重启说明一块在前，/x 在最后一块", async () => {
+  it("4：崩溃之后第一条是 /compact：崩溃说明不进命令那一行，出现在下一条普通消息里，只出现一次", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ text: "写了一半" }, { exit: 1 }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一轮"));
+    await t.waitFor("session.exited");
+    await t.driver.send(s.id, user(2, "/compact"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(3, "还在吗"));
+    await t.waitFor("turn.ended", undefined, 2);
+    await t.driver.send(s.id, user(4, "再来一条"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinBlocks()).toEqual([["第一轮"], ["/compact"], [CRASH_RECOVERY_NOTE, "还在吗"], ["再来一条"]]);
+  });
+
+  it("25：两轮之间设置变了自动重启、第一条是 /compact：重启说明留给下一条普通消息，只出现一次", async () => {
     const t = harness();
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "一"));
     await t.waitFor("turn.ended");
     t.launch.fingerprint = "changed";
-    await t.driver.send(s.id, user(2, "/x 二"));
+    await t.driver.send(s.id, user(2, "/compact"));
     await t.waitFor("turn.ended", undefined, 2);
-    expect(t.stdinBlocks()).toEqual([["一"], [RELAUNCH_NOTE, "/x 二"]]);
+    await t.driver.send(s.id, user(3, "二"));
+    await t.waitFor("turn.ended", undefined, 3);
+    await t.driver.send(s.id, user(4, "三"));
+    await t.waitFor("turn.ended", undefined, 4);
+    expect(t.stdinBlocks()).toEqual([["一"], ["/compact"], [RELAUNCH_NOTE, "二"], ["三"]]);
     expect(t.argvs()).toHaveLength(2);
+  });
+
+  it("说明等着的时候来的是系统消息：系统消息照常带上说明（系统消息不算命令）", async () => {
+    const t = harness();
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "/compact", { recovery: true }));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "【Worker #1 · X 的汇报】好了" });
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinBlocks()).toEqual([["/compact"], [RESTART_RECOVERY_NOTE, "【Worker #1 · X 的汇报】好了"]]);
+  });
+
+  it("以绝对路径开头的不算命令（/Users/x/foo.py 这里有 bug），照常和别的拼", async () => {
+    const t = harness({ script: { turns: [slowTurn(300)] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.driver.send(s.id, user(2, "/Users/x/foo.py 这里有 bug"));
+    await t.driver.send(s.id, user(3, "补充"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinBlocks()[1]).toEqual(["【用户连发了 2 条】", "1. /Users/x/foo.py 这里有 bug", "2. 补充"]);
   });
 
   it("前面有空格的不算命令（实测 T4 的 F），照常和别的拼", async () => {

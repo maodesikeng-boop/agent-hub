@@ -80,6 +80,9 @@ interface Batch {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
+/** 这一行没带恢复、崩溃、重启说明（命令那一行，见 #takeBatch）。 */
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
+
 type StartupOutcome =
   | { kind: "ok" }
   /** 没等到 init 就自己退出了（或启动超时被结束）。 */
@@ -478,15 +481,19 @@ export class ClaudeDriver implements Driver {
   /**
    * 取下一行：队列里有用户消息就拼成一条（以命令开头的不拼：排在最前面的是命令就只写它，否则拼到下一条命令之前，顺序不乱）；
    * 否则取最早的一条系统消息。恢复说明加在最前面，和消息写在同一行；我们加的字各占一个 text 块，原文放最后一块（driver.ts 的 prefixes）。
+   * 写的是命令那一行时不带恢复、崩溃、重启说明，留给下一条不是命令的：/compact、/context 这类本地命令会把前面的 text 块整个丢掉
+   * （#76 审查用真 claude 测过），带上了 agent 也看不到。
    */
   #takeBatch(st: SessionState): Batch | null {
     let body: { prefixes: string[]; text: string } | null = null;
     let messageIds: MessageId[] = [];
+    let command = false;
     const users = st.pending.filter((e) => e.source === "user");
     if (users.length > 0) {
       const isCommand = (e: PendingEntry) => claudeComposerBase.isCommand(e.text);
       const firstCommand = users.findIndex(isCommand);
-      const take = firstCommand === 0 ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
+      command = firstCommand === 0;
+      const take = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
       st.pending = st.pending.filter((e) => !take.includes(e));
       body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
       messageIds = take.flatMap((e) => e.messageIds);
@@ -495,8 +502,11 @@ export class ClaudeDriver implements Driver {
       body = entryParts(entry);
       messageIds = entry.messageIds;
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     if (body === null) return null;
+    if (command) {
+      return { messageIds, line: buildUserLine(body.text, body.prefixes), notes: NO_NOTES, delivered: false, processing: false };
+    }
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
