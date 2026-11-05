@@ -209,7 +209,7 @@ export function App() {
         }}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
         {profile ? (
           <PmProfile
             key={profile.id}

@@ -11,7 +11,8 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 用在哪 | 值 | 类 |
 | --- | --- | --- |
 | 主区页面左右边距 | 24px | `px-6` |
-| 对话列（顶栏、消息、输入框）的左边距 | 至少 40px（1100px 以下 24px），主区很宽时居中 | `--chat-left`（`.chat-column` 自带，见第 8 条） |
+| 对话列（消息、输入框）两边的最小边距 | 主区 640px 以下 12px，之上 48px，列在主区里居中 | `--chat-gutter`（`.chat-column` 自带，见第 8 条） |
+| 对话顶栏两边 | 左 20px、右 12px | `--header-gutter-start` / `--header-gutter-end`（见第 8 条） |
 | 右栏左右边距、组与组之间 | 12px / 24px | `px-3` / `gap-6` |
 | 左栏左右边距、左栏列表项之间 | 12px / 4px | `px-3` / `space-y-1` |
 | 组与组之间、弹窗里各块之间 | 24px | `gap-6` |
@@ -105,7 +106,10 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 弹窗：标题在左上，关闭按钮在右上（`top-4 right-4`，32px）；底部按钮用 `DialogFooter`，靠右，主按钮在最右。
 - 页面头部（资料页）：头像（64px）、名字（22px）、项目名（13.5px 灰，和名字隔 4px）居中，项目名只在这里出现一次，下面的分组不再重复；返回按钮在左上 64px 高的顶栏里（和对话页顶栏同高）。
 - 主区内容最宽 640px 居中（资料页）。
-- **对话列宽度跟着主区走，不在对话和右栏之间留大块空白**：顶栏、消息、输入框共用一条左边线 `--chat-left`，内容最宽 960px（`--chat-max`，中文 15px 一行约 64 个字，再宽就读着累）。主区不到这个宽度时，左边从 `--chat-inset`（宽屏 40px，1100px 以下 24px）开始占满，右边留 24px；主区更宽时整列居中，多出来的空白左右平分（`--chat-left = max(--chat-inset, (主区宽 − --chat-max) / 2)`），不全堆在对话和右栏之间。用 `.chat-column`（`styles.css`），消息列表和输入框的外层都套它，不各写各的宽度。顶栏左边线同一条，右边离边 16px（`pr-4`）；右栏收起时，右栏开关在顶栏最右边，也就是窗口右上角。
+- **对话列照 t3code：有最大宽度，在“左栏和右栏之间剩下的区域”（主区 `main.chat-main`）里居中**，右栏展开、收起、窗口宽窄都一样自然，不会有哪一边空出一大块（右栏展开时主区窄，列差不多占满；收起时列居中，两边留白一样多）。出处：t3code `apps/web/src/index.css` 的 `--chat-content-max-width: 46rem`、`.chat-composer-lane`（两边内边距 0.75rem，sm 以上 3rem）、`.chat-content-lane`（`margin-inline: auto` + `max-width`），`ChatView.tsx`、`ChatComposer.tsx`、`MessagesTimeline.tsx` 里消息和输入框都套它。
+  - **宽度不写死像素**：全部数字只在 `styles.css` 一处，单位 rem（用户放大网页、调字号会跟着变）。`.chat-main` 是容器（`container: chat / inline-size`），按**主区宽度**（不是窗口宽度）分档：默认最宽 46rem（t3code 的默认值）；主区 ≥ 64rem 时 52rem；≥ 80rem 时 58rem；≥ 112rem 时 64rem（再宽就留白，免得一行太长）。分档的做法照 ChatGPT（`--thread-content-max-width` 随容器宽度变宽，档位由我按中文 15px 的舒适行长调整），t3code 自己只有一档（另有“宽”72rem / “满”设置）。
+  - **居中的写法**：`.chat-column` 和 `.messages`（消息列表）都是 `padding-inline: max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2))`，两边一样宽；`--chat-gutter` 主区 40rem 以下 0.75rem，之上 3rem。输入框外层、消息列表、提示条（Notices）都套 `.chat-column` / `.messages`，不各写各的宽度。
+  - **顶栏不跟着列居中**（照 t3code `ChatView.tsx` 的 header，两边是 `--workspace-gutter`）：标题在左上、按钮在右上，左边距 `--header-gutter-start`（20px）、右边距 `--header-gutter-end`（12px）。右栏开关也在右上角：右栏展开时在右栏最上面一行，收起时在顶栏最右边。
 
 ## 9. 分组列表（设置那种一行一项）
 

@@ -68,7 +68,7 @@ export function Conversation({
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-left)]">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         {entry.pm ? (
           <button

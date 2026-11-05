@@ -173,24 +173,45 @@ describe("提示条", () => {
   });
 });
 
-describe("对话列的宽度（docs/ui-standard.md 第 8 条）", () => {
+describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", () => {
   const css = readFileSync("src/web/styles.css", "utf8");
-  const declaration = (selector: string, prop: string) => {
-    const body = css.match(new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{([^}]*)\\}`))![1]!;
-    return body.match(new RegExp(`${prop}:\\s*([^;]+);`))![1]!.replace(/\s+/g, " ").trim();
-  };
+  /** 样式块：selector 是正则源码（不带前后的空白）。 */
+  const body = (selector: string) => css.match(new RegExp(`(?:^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const value = (block: string, prop: string) => block.match(new RegExp(`${prop}:\\s*([^;]+);`))?.[1]?.replace(/\s+/g, " ").trim();
+  /** 每一档：主区宽度到了 min-width（rem）时，对话列最宽是 max（rem）（只改边距的那一档不算）。 */
+  const tiers = [...css.matchAll(/@container chat \(min-width: ([\d.]+)rem\)\s*\{([^}]*\{[^}]*\})\s*\}/g)].map((m) => ({
+    min: Number(m[1]),
+    max: Number(value(m[2]!, "--chat-max")?.replace("rem", "")),
+  })).filter((t) => !Number.isNaN(t.max));
 
-  it("最宽 960px，左边从 --chat-inset 起；主区更宽时居中，空白两边平分，不全堆在对话和右栏之间", () => {
-    expect(declaration(":root", "--chat-max")).toBe("960px");
-    expect(declaration(":root", "--chat-left")).toBe("max(var(--chat-inset), calc((100% - var(--chat-max)) / 2))");
-    // 右边：对话和右栏之间至少留 24px，主区没比上限宽时占满
-    expect(declaration(".chat-column", "padding-left")).toBe("var(--chat-left)");
-    expect(declaration(".chat-column", "padding-right")).toBe("max(24px, calc(100% - var(--chat-left) - var(--chat-max)))");
+  it("默认 46rem（t3code 的 --chat-content-max-width），主区越宽越宽、分几档，有最大值；数字全用 rem，不写 px", () => {
+    expect(value(body("\\.messages,\\s*\\.chat-column"), "--chat-max")).toBe("46rem");
+    expect(tiers.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < tiers.length; i++) {
+      expect(tiers[i]!.min).toBeGreaterThan(tiers[i - 1]!.min);
+      expect(tiers[i]!.max).toBeGreaterThan(tiers[i - 1]!.max);
+    }
+    expect(tiers.at(-1)!.max).toBeLessThanOrEqual(64);
+    const lengths = [...css.matchAll(/(--chat-[\w-]+|--header-gutter[\w-]*):\s*([^;]+);/g)].map((m) => m[2]!);
+    expect(lengths.length).toBeGreaterThan(4);
+    for (const v of lengths) expect(v).not.toMatch(/\d\s*px/);
   });
 
-  it("顶栏的左边线和对话列是同一条", async () => {
+  it("主区是容器（按主区宽度分档，不按窗口宽度）；列在主区里居中：两边内边距相等，至少一个 gutter", () => {
+    expect(value(body("\\.chat-main"), "container")).toBe("chat / inline-size");
+    const column = body("\\.messages,\\s*\\.chat-column");
+    expect(value(column, "padding-inline")).toBe("max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2))");
+    expect(value(column, "padding-left")).toBeUndefined();
+    expect(value(column, "padding-right")).toBeUndefined();
+  });
+
+  it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter", async () => {
     await boot();
+    const main = screen.getByRole("main");
+    expect(main).toHaveClass("chat-main");
     const header = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
-    expect(header.className).toContain("pl-[var(--chat-left)]");
+    expect(header.className).toContain("pl-[var(--header-gutter-start)]");
+    expect(header.className).toContain("pr-[var(--header-gutter-end)]");
+    expect(header.className).not.toContain("chat-left");
   });
 });

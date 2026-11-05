@@ -63,11 +63,9 @@
   --me: #1fb37d;
   --me-foreground: #ffffff;
   --radius-btn: 9999px;
-  /* 对话列（docs/ui-standard.md 第 8 条）：内容最宽 --chat-max；主区没那么宽时从 --chat-inset 起占满，更宽时居中（空白两边平分，
-     不全堆在对话和右栏中间）。--chat-left 是列的左边距，顶栏、消息、输入框共用 */
-  --chat-inset: 40px;
-  --chat-max: 960px;
-  --chat-left: max(var(--chat-inset), calc((100% - var(--chat-max)) / 2));
+  /* 顶栏两边的边距（照 t3code 的 --workspace-gutter：0.75rem，sm 以上 1.25rem）：标题在左上、按钮在右上，不跟着对话列居中 */
+  --header-gutter-start: 1.25rem;
+  --header-gutter-end: 0.75rem;
 
   color-scheme: light;
 }
@@ -90,18 +88,43 @@ code {
   font-size: 0.88em;
 }
 
-@media (max-width: 1100px) {
-  :root {
-    --chat-inset: 24px;
-  }
+/* 对话列（docs/ui-standard.md 第 8 条，照 t3code：apps/web/src/index.css 的 --chat-content-max-width: 46rem、.chat-composer-lane 的内边距
+   0.75rem / sm 以上 3rem、.chat-content-lane 的 margin-inline: auto + max-width；分档照 ChatGPT 的 --thread-content-max-width 随容器变宽）。
+   主区（.chat-main，对话和右栏之间剩下的区域）是容器，列在里面居中：padding-inline = max(--chat-gutter, (主区宽 − --chat-max) / 2)，
+   两边一样宽。所有数字只在这一处，单位用 rem（跟着用户的字号和网页缩放走）；档位按主区宽度（不是窗口宽度）：主区越宽，列越宽，
+   最宽 64rem，再宽就留白（两边相等）。消息列表（.messages）、输入框外层、提示条（Notices）都用它，左右边线对齐 */
+.chat-main {
+  container: chat / inline-size;
 }
-
-/* 对话列：左边 --chat-left，最宽 --chat-max，右边至少留 24px。
-   消息列表（MessageList 的 .messages）和输入框的外层都用它，左右边线对齐 */
 .messages,
 .chat-column {
-  padding-left: var(--chat-left);
-  padding-right: max(24px, calc(100% - var(--chat-left) - var(--chat-max)));
+  --chat-max: 46rem;
+  --chat-gutter: 0.75rem;
+  padding-inline: max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2));
+}
+@container chat (min-width: 40rem) {
+  .messages,
+  .chat-column {
+    --chat-gutter: 3rem;
+  }
+}
+@container chat (min-width: 64rem) {
+  .messages,
+  .chat-column {
+    --chat-max: 52rem;
+  }
+}
+@container chat (min-width: 80rem) {
+  .messages,
+  .chat-column {
+    --chat-max: 58rem;
+  }
+}
+@container chat (min-width: 112rem) {
+  .messages,
+  .chat-column {
+    --chat-max: 64rem;
+  }
 }
 
 /* agent 消息里的 Markdown（规则见 docs/ui-standard.md 第 15 条） */
