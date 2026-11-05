@@ -1,8 +1,8 @@
 // 账本各部分共用的东西：数据库、事务（write：提交后才推变化、通知动作和停止请求）、动作登记、健康状态。
 // 账本拆成几个文件（messages.ts、sessions.ts……），都拿同一个 LedgerContext；只有 createLedger 建它。
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
-import type { Change, ChangeType } from "../../shared/api.ts";
-import type { ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
+import type { Change, ChangeType, ComposerCommand } from "../../shared/api.ts";
+import type { AgentSessionRow, ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
@@ -14,6 +14,7 @@ import { createChangeLog } from "./change-log.ts";
 import type { ChangeInput, ChangeLog } from "./change-log.ts";
 import { toHealth } from "./rows.ts";
 import type { HealthDbRow } from "./rows.ts";
+import { composerBaseOf } from "../vendors/index.ts";
 
 export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
 
@@ -62,6 +63,11 @@ export interface LedgerContext {
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
   /** 系统消息、hub 输出里的模型名：用缓存着的模型名单里的名字（“Opus 4.6”），没有名单用打包的，都没有原样。 */
   modelLabel(vendor: AgentVendor, model: string | null): string;
+  /**
+   * 用户（或项目经理）发给这个会话的话要不要拦下：是厂商隐藏的命令（/clear、/model……）就返回给人看的原因，否则 null。
+   * 缓存着这个会话的命令列表（LedgerOptions.knownCommands）时，用户自己的命令、skill 重名的放行（厂商实现的 blockReason）。
+   */
+  commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
 }
 
 /** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
@@ -79,6 +85,8 @@ export interface LedgerContextOptions {
   now?: () => number;
   /** 现在缓存着的模型名单（daemon/driver/model-catalog.ts 的 ModelCatalogs.current），还没问到是 null。 */
   modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
+  /** 缓存着的这个会话的完整命令列表（daemon/commands-catalog.ts 的 cached），没缓存是 null；不给等于都没缓存。 */
+  knownCommands?: (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">) => ComposerCommand[] | null;
   initialSeq?: number;
   changeBufferSize?: number;
 }
@@ -156,5 +164,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     const catalog = options.modelCatalog?.(vendor) ?? null;
     return catalog === null ? modelLabel(vendor, model) : modelLabel(vendor, model, catalog);
   };
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label };
+  const commandBlockReason = (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string) =>
+    composerBaseOf(session.vendor)?.blockReason(text, options.knownCommands?.(session) ?? null) ?? null;
+  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label, commandBlockReason };
 }

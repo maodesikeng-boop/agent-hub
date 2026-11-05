@@ -369,7 +369,7 @@ export function agentMessageDedupeKey(sessionId: SessionId, uuid: string, toolUs
 /**
  * 系统消息的去重键：`system:<对话>:<事件>:<相关编号>`。相关编号：project.created → projectId；
  * folder.attached / detached → folderId；persona.changed → personaChangeId；schedule.created / removed → scheduleId；
- * schedule.run → <scheduleId>:<原定时间>；schedule.failed → 失败的那条消息的编号。
+ * schedule.run → <scheduleId>:<原定时间>；schedule.failed → 失败的那条消息的编号；context.compacted → <会话>:<事件 uuid>。
  */
 export function systemMessageDedupeKey(conversationId: ConversationId, meta: SystemMessageMeta): string {
   const ref = ((): number | string => {
@@ -393,6 +393,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.scheduleId}:${meta.scheduledAt}`;
       case "schedule.failed":
         return meta.messageId;
+      case "context.compacted":
+        return `${meta.sessionId}:${meta.uuid}`;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -414,6 +416,7 @@ export const SYSTEM_EVENTS = [
   "handover.requested",
   "session.renewed",
   "handover.failed",
+  "context.compacted",
 ] as const;
 export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
@@ -437,6 +440,8 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  *   失败、被停止了原地重新排队（attempts 记重排了几次），最多 HANDOVER_RENEW_RETRIES 次；
  * - handover.failed：只给人看。交接那一轮没写成（没换代），或者新会话一直没接上交接（不再重排）。messageId 是那条 H / R，
  *   attempt 是它第几次没成（同一条重新排队后又没成，再发一条）。
+ * - context.compacted：agent 压缩了上下文（用户发了 /compact，或者自动压缩；驱动层的 context.compacted），“已压缩上下文”，
+ *   只给人看。发在这个会话所在的对话里（项目经理、Worker 的都有）；uuid 是 claude 那一行事件的，重放不会记两条。
  * H、R 的 meta 里账本还会记几个内部字段（turnStartId、attempts、settled，见 handover.ts），网页不用。
  */
 export type SystemMessageMeta =
@@ -450,7 +455,8 @@ export type SystemMessageMeta =
   | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
-  | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId };
+  | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId }
+  | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null };
 
 /**
  * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；answered 是用户回答了——用户在这个项目经理的对话里

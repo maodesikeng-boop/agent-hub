@@ -1,12 +1,12 @@
 # 输入框 “/” 命令和 “@” 文件：实测记录
 
-2026-11-05，本机 `claude` 2.1.314，模型 haiku。对应 `composer-plan.md` 第 3 节的 T1～T9。
+2026-11-05，本机 `claude` 2.1.314，模型 haiku。对应 `composer-plan.md` 第 3 节的 T1～T9；T10 是 #76 审查后补的。
 测试脚本在仓库外（`/tmp/composer-probe/`，不提交），每次都在 `mktemp -d` 的临时目录里跑。
 
 ## 怎么跑的（共同部分）
 
 起 `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --model haiku`
-（就是 `MODEL_QUERY_ARGS` 加 `--model haiku`），标准输入逐行写 JSON，按行读标准输出。长期会话就是不关标准输入、一轮一轮往里发。
+（当时的 `MODEL_QUERY_ARGS` 加 `--model haiku`；现在叫 `INITIALIZE_QUERY_ARGS`，多了 T10 的两个参数，T1～T9 是加之前测的，结果不受影响），标准输入逐行写 JSON，按行读标准输出。长期会话就是不关标准输入、一轮一轮往里发。
 临时目录里放：
 
 - `.claude/commands/x.md`（`description`、`argument-hint: [word]`，正文 `Reply with exactly: XCMD-EXPANDED $ARGUMENTS`）；
@@ -20,7 +20,7 @@
 
 ## T1　`initialize` 回应里的 `commands`
 
-跑法：`MODEL_QUERY_ARGS` 起 claude，写
+跑法：用上面那组参数起 claude，写
 `{"type":"control_request","request_id":"req_1","request":{"subtype":"initialize"}}`，等 `control_response`。
 
 - **耗时**：0.87～0.90 秒（和 `docs/model-catalog.md` 的模型名单是同一次回应，没有额外开销）。之前只会出 `system/hook_started`、`hook_response`。
@@ -191,6 +191,43 @@ result success
 当普通消息处理：**算一轮**，有 `system/init`、有模型回复（要花一次模型调用），不报错、没有专门的“未知命令”事件。
 所以手打的 `/xxx` 不在列表里也可以照常发。
 
+## T10　另起进程问命令列表时，不跑钩子、不连 MCP（#76 审查后补）
+
+**问题**：会话没在跑时，我们在项目目录另起一个 claude 问命令列表（目录要对，项目里的命令和 skill 才查得到）。不加任何开关时，
+项目 `.claude/settings.json` 里的 `SessionStart` 钩子、`.mcp.json` 里的 MCP 都会被拉起来，缓存每 10 分钟过期还会再来一次。
+
+**官方文档怎么说**（2026-11-05 读的）：
+
+- `disableAllHooks` 在 settings 参考页（https://code.claude.com/docs/en/settings-reference ，Hooks and automation 一节），不在 `/docs/en/settings` 页里：
+  “Turn off hooks, any custom status line, and any custom file suggestion command.” 它不能关 managed 的钩子（hooks 页 Hook locations：“the `disableAllHooks` setting can't disable managed hooks from outside managed settings”）。
+- 命令行 `--settings`（https://code.claude.com/docs/en/cli-reference ，CLI flags）：“Path to a settings JSON file or an inline JSON string. Values you set here override the same keys in your `settings.json` files for this session.”
+  优先级（https://code.claude.com/docs/en/settings ，Settings precedence）：managed settings、命令行、project local、shared project、user，所以命令行盖得过项目里写的 `disableAllHooks: false`。
+- `--strict-mcp-config`（同上）：“Only use MCP servers from `--mcp-config`, ignoring all other MCP configurations.” 不给 `--mcp-config` 就一个 MCP 都不连。
+- 文档（https://code.claude.com/docs/en/headless ，Start faster with bare mode）自己说，`-p` 不加开关会跑项目 `.claude/settings.json` 的钩子、连 `.mcp.json` 的服务，“even in a folder you've never trusted”。
+
+**实测**（临时目录，`CLAUDE_CONFIG_DIR` 指另一个临时目录，没碰 `~/.claude`）：项目里放一个 `SessionStart` 钩子（往文件里追加一行）、
+一个 stdio MCP（启动时往文件里写一行）、`.claude/commands/probecmd.md`、`.claude/skills/probe-skill/SKILL.md`，起 claude，发 `initialize`，回应后再等 4～6 秒才关（给 MCP 留够时间起来）：
+
+| 参数 | 钩子 | MCP | 项目的命令和 skill |
+|---|---|---|---|
+| 无（现状） | **跑了** | **起了** | 在 |
+| `--strict-mcp-config` | 跑了 | 没起 | 在 |
+| `--settings '{"disableAllHooks":true}'` | 没跑 | 起了 | 在 |
+| **`--settings '{"disableAllHooks":true}' --strict-mcp-config`** | **没跑** | **没起** | **在（probe-skill、probecmd 都在列表里）** |
+| 同上，项目 `.claude/settings.json` 和 `settings.local.json` 里都写 `disableAllHooks: false` | 没跑 | 没起 | 在（命令行盖过了项目） |
+| 同上，`CLAUDE_CONFIG_DIR` 里的用户级 settings 也放一个 `SessionStart` 钩子 | 没跑（用户级的也关了） | 没起 | 在 |
+| `--bare` | 没跑 | 没起 | **不在**（只剩自带的 48 项） |
+| `--safe-mode` | 没跑 | 没起 | **不在** |
+| `--setting-sources user --strict-mcp-config` | 没跑 | 没起 | **不在** |
+
+再用我们自己的代码走了一遍（`createVendorComposers(...).claude.queryCommands`，真 claude，项目目录里同样的钩子和 MCP）：钩子没跑、MCP 没起，列表里有 `probe-skill`、`probecmd`，`clear` 带 `builtin: true`。
+
+**结论**：用 `--settings '{"disableAllHooks":true}'` 加 `--strict-mcp-config`，工作目录仍是项目目录。`--bare`、`--safe-mode`、`--setting-sources` 都会把项目的命令和 skill 一起丢掉，不能用。
+这两个参数放在 `src/daemon/driver/protocol.ts` 的 `INITIALIZE_QUERY_ARGS`（问模型名单也用同一份：用户主目录里的钩子、MCP 也不用拉）。
+局限：managed settings 里的钩子关不掉（文档说明）；插件自己带的钩子归 `disableAllHooks` 管（文档写“hooks”，没有单独测插件的）。
+
+**并发上限**：另起的进程同一时间最多 `MAX_CONCURRENT_COMMAND_QUERIES`（2）个，多的排队，关机时排着的取消；缓存最多 `MAX_COMMAND_CACHE_ENTRIES`（50）份，多了淘汰最旧的（`commands-catalog.ts`）。
+
 ## 总表
 
 | 项 | 能用吗 | 怎么处理 | 来源 |
@@ -202,6 +239,7 @@ result success
 | `/clear`（别名 `reset`、`new`） | 会换会话 ID，`--resume` 旧 ID 接回清空前 | **拦**，提示用“开新会话”之类的按钮 | T7 |
 | `/model`、`/effort` | 在列表里 | **拦**（和资料页设置打架） | T1 |
 | `/fast`、`/config`、`/mcp`、`/agents`、`/rename`、`/import`、`/output-style`、`/auto-mode-setup`、`/heapdump`、`/goal` 等会改设置的自带命令 | 在列表里 | 隐藏名单里放，具体哪些由 C 定 | T1 |
+| `/design`（和 `/design-consent`、`/design-revoke` 同一类：授权 Claude 访问 Design 项目） | 在列表里，`builtin:true`，说明是 “Grant or revoke Claude agent access to your Design projects” | **隐藏**（账号相关，和同类放一组） | 本次实测 |
 | `/doctor`、`/color`、`/focus`、`/reload-plugins` | 在 `commands` 里，但只在终端能用 | **隐藏**（`system/init` 的 `terminal_slash_commands` 标出了它们） | T1、T2 |
 | `/help`、`/review` | 不在列表里 | 手打照常发给 claude | T1 |
 | 不存在的 `/foo` | 当普通消息，算一轮，模型说没有这个命令 | 照常发，不拦 | T9 |
@@ -221,3 +259,57 @@ result success
 - 方案说“拿不到命令列表时”要重新问：实测可以直接问正在跑的会话（T8），不用再起 claude；方案里“如果 T8 可行就改成直接问正在跑的会话”这条成立。
 - T4 比方案猜的更宽松：不需要 `/` 开头消息不加标签的退路，加字放前面的块、原文放最后一块就行（但原文不能有前导空格，也不能和前面的加字写在同一块）。
 - 测试时发现：自定义命令同时是 skill，模型会自己调 `Skill` 工具跑，容易误判成“命令展开了”。以后写测试要加 `disable-model-invocation: true` 加随机标记。
+
+## 后台怎么接的（#53）
+
+网页只认通用接口，不认识哪家厂商：
+
+- `GET /api/conversations/:id/commands` → `{ commands: { name, description, argumentHint?, builtin? }[] }`：已经去掉隐藏的，问不到给空列表。
+  **隐藏名单只藏 `builtin: true` 的**：用户自己的命令、skill 叫 `debug`、`new`、`reset` 这类名字，列表里照样有，手打也发得出去。
+- `GET /api/conversations/:id/files?q=` → `{ entries: { path, root, insert }[], truncated }`：`insert` 是插进输入框的文字（claude 是 `@path`、`@"a b.md"`），主文件夹里的用相对路径，别的用绝对路径。
+- 发消息时手打了隐藏的命令：`POST messages` 回 400（`code: "invalid"`），`error` 是给用户看的原因，这条不存、不发。
+  拦的时候看缓存着的这个会话的命令列表（`CommandCatalogs.cached`，账本经 `LedgerOptions.knownCommands` 拿）：这个名字在列表里、而且不是 builtin（是用户自己的）就放行；
+  没有缓存（还没问到过）、列表里没有这个名字（别名，比如 `/reset`）按名字拦，宁可保守。
+- 项目经理用 `hub worker send` 发隐藏的命令也一样拦：退出码 1，打印同样的原因，不发。
+- 项目经理用 `hub worker send` 发 `/compact`：返回“这一轮只压缩上下文，不会有汇报”，不再说“做完一轮汇报会自动发给你”（`isCompactCommand`）。
+- **只有手动 `/compact`（`context.compacted` 的 `trigger` 是 `manual`）、而且这一轮 Worker 没有任何 agent 消息（文字、工具调用都算）时**，这一轮不给项目经理汇报；
+  对话里那行“已压缩上下文”照留。Worker 做长任务时自动压缩（`trigger` 不是 `manual`），这一轮照常汇报，否则项目经理会一直干等。
+
+文件分工：
+
+| 文件 | 管什么 |
+|---|---|
+| `src/shared/vendors.ts` 的 `VENDOR_SPECS[厂商].composer` | 纯数据：命令开头的字符、隐藏名单（含别名）和每个的拦截原因 |
+| `src/daemon/vendors/types.ts` | 厂商接口：`VendorComposerBase`（不起进程的：`parseCommands`、`isHiddenCommand`、`isCommand`、`isCompactCommand`、`blockReason`、`mention`、`buildUserContent`）和 `VendorComposer`（再加 `queryCommands`：会话没在跑时另起进程问） |
+| `src/daemon/vendors/claude.ts` | claude 的实现；不引入起进程的代码（账本、驱动层只要它的纯数据），起进程的函数由 `index.ts` 的 `createVendorComposers` 选项传进来（`daemon.ts` 传 `queryClaudeInitialize`） |
+| `src/daemon/vendors/index.ts` | **厂商登记只有这一处**（`VENDORS`：每家的 `base` 和 `create`）；`composerBaseOf(vendor)` 取不起进程的那部分，`createVendorComposers` 取完整的 |
+| `src/daemon/driver/claude-driver.ts` | 拼写给 agent 的 content、认命令、解析命令列表都经厂商接口（`ClaudeDriverOptions.composer`，默认 `composerBaseOf("claude")`）；`queryCommands(sessionId)`：往正在跑的进程再写一次 `initialize`；`system/commands_changed` → `commands.changed` 事件；`compact_boundary` → `context.compacted` 事件；`conversation_reset` 只记日志 |
+| `src/daemon/commands-catalog.ts` | 命令列表：在跑的会话每次直接问它；没在跑的按（厂商、目录）缓存，过期先给旧的、后台再问；`commands.changed` 直接更新；另起进程同时最多 2 个、缓存最多 50 份；`cached()` 只看缓存（账本手打拦命令用） |
+| `src/daemon/workspace-files.ts` | 文件搜索（跟厂商无关）：`git ls-files` 或自己遍历，每个文件夹最多 25000 个，缓存 30 秒、最多存 20 个文件夹（多了淘汰最旧的），文件名命中排在路径命中前面，最多 50 条。git 一律带 `-c core.fsmonitor=false` 和 `GIT_OPTIONAL_LOCKS=0`（`git/git.ts` 的 `GIT_READONLY_ARGS`、`GIT_READONLY_ENV`：仓库里配了 `core.fsmonitor` 的话 git 会执行那个脚本，审查实测）；列出来的再 `lstat`，符号链接、已删的、`dir/` 结尾的（嵌套仓库）、子模块都去掉；文件名里带 `"` 的不特殊处理 |
+| `src/daemon/composer.ts` | 按对话找会话、厂商、目录（`Ledger.composerTarget`），把上面几样接起来给界面服务 |
+| `src/daemon/ledger/messages.ts` | 拦隐藏的命令（`ctx.commandBlockReason`，`ledger/context.ts`）；`context.compacted` 记一条系统消息“已压缩上下文” |
+| `src/daemon/ledger/workers.ts` | `hub worker send` 拦隐藏的命令；只压缩、没有文字的一轮不汇报 |
+
+可调的数都在 `src/shared/limits.ts` 的“输入框”一节。
+
+发出去的格式（T4）：恢复、重启、重发说明，“【用户直接对你说】”，“【用户连发了 N 条】”和连发的每一条，各占一个 text 块放在前面；
+用户原文单独放最后一块。以命令开头的用户消息不和别的拼，按到达顺序单独写一行。连发拼一条时，每一条里的标签、重发说明和以前一样写在那一条里。
+命令名里带 `/` 的不算命令（`/Users/x/foo.py 这里有 bug` 是路径开头的普通话）。
+
+**本地命令会丢掉前面的块**（#76 审查用真 claude 测过）：`/compact`、`/context`、`/usage` 这类 claude 自己处理、不交给模型的命令，
+在 `["超长前缀", "/context"]` 里前缀块根本没进上下文。所以写命令那一行时不带恢复、崩溃、重启说明，留给下一条不是命令的消息（用户的或系统的）带上，
+只带一次；命令那一行只带它自己的重发说明和标签（自定义命令、skill 展开时模型看得到，本地命令丢了也无妨）。
+
+**`/compact` 发到一半时关机，重启后会再压缩一次**：Worker 会话里的消息被关机打断后，重启会重发（`ledger/messages.ts` 的 `resumesAfterShutdown`），
+所以关机时 `/compact` 正在跑的话，重启后 Worker 又收到一遍 `/compact`，再压缩一次；重发说明对本地命令没用（前面的块会被丢掉）。
+项目经理对话里用户发的被关机打断按“已停止”处理，不重发，不会再压缩。
+多压缩一次不丢内容，只是多花点时间（haiku 约 5 秒），所以不改代码，记在这里。
+
+以后接 Codex、Gemini：
+
+1. `shared/vendors.ts` 加厂商清单，带 `composer`（它的命令开头字符、压缩命令名、隐藏名单和原因）；
+2. 平级加 `daemon/vendors/<厂商>.ts`：导出不起进程的 `VendorComposerBase`（命令认法、`@` 怎么写、一条用户消息的 content 怎么拼、命令列表怎么解析）和 `create<厂商>Composer`（怎么另起进程问命令列表；起进程的函数由选项传进来，这个文件别 import 起进程的代码）；
+3. `vendors/index.ts` 的 `VENDORS` 加一行（`VendorComposersOptions` 跟着变）；
+4. `daemon/daemon.ts` 给 `createVendorComposers` 传这家的选项；
+5. 它的驱动层（`daemon/driver/<厂商>-driver.ts`，按它的协议另写）实现 `Driver.queryCommands`（不支持就返回 null，退回另起进程问），列表变了发 `commands.changed`，压缩了发 `context.compacted`，拼 content 用 `composerBaseOf(厂商)`。
+网页、账本、命令缓存、文件搜索都不用改。

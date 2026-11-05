@@ -159,6 +159,10 @@ process.stdin.on("data", (d) => {
       "stream-json",
       "--verbose",
       "--no-session-persistence",
+      // 不跑钩子、不连 MCP（docs/composer-commands.md 的 T10）
+      "--settings",
+      '{"disableAllHooks":true}',
+      "--strict-mcp-config",
     ]);
     const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
     await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);

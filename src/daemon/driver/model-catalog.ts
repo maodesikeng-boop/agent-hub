@@ -23,7 +23,7 @@ import {
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { forceKill } from "./process.ts";
-import { MODEL_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
+import { INITIALIZE_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
 
 /** claude 回应里“默认”那一项的 value：不进名单，它支持的思考程度给“默认”用。 */
 const DEFAULT_VALUE = "default";
@@ -85,6 +85,8 @@ export interface ClaudeModelQueryOptions {
   claudePath: string;
   /** 在哪个目录起 claude（守护进程用用户主目录：不带任何项目的设置）。 */
   cwd: string;
+  /** 附加文件夹（--add-dir）：问命令列表时和会话一样带上。 */
+  addDirs?: readonly string[];
   timeoutMs?: number;
   /** 起 claude 的环境变量，默认守护进程自己的（去掉父会话那几个，见 buildChildEnv）。 */
   env?: Record<string, string | undefined>;
@@ -92,27 +94,35 @@ export interface ClaudeModelQueryOptions {
   signal?: AbortSignal;
 }
 
+/** 起一个 claude，发 initialize 控制请求，返回回应里的 models（原样，交给 parseInitializeModels）。失败同 queryClaudeInitialize。 */
+export async function queryClaudeModels(options: ClaudeModelQueryOptions): Promise<unknown> {
+  return (await queryClaudeInitialize(options)).models;
+}
+
 /**
- * 起一个 claude，发 initialize 控制请求，返回回应里的 models（原样，交给 parseInitializeModels）。
+ * 起一个 claude，发 initialize 控制请求，返回回应（response.response：models、commands……，原样）。
+ * 模型名单和会话没在跑时的命令列表（vendors/claude.ts）都用它。
  * 拿到回应就关标准输入让它自己退出，KILL_WAIT_MS 内没退出连同后代强制结束；超时、出错、取消都强制结束。
  * claude 不存在、没回就退出、回了错误、超时都是 Promise 失败（带原因）。
  */
-export function queryClaudeModels(options: ClaudeModelQueryOptions): Promise<unknown> {
+export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise<Record<string, unknown>> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
+  const args = [...INITIALIZE_QUERY_ARGS];
+  for (const dir of options.addDirs ?? []) args.push("--add-dir", dir);
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
-    const child = spawn(claudePath, MODEL_QUERY_ARGS, {
+    const child = spawn(claudePath, args, {
       cwd,
       env: buildChildEnv(options.env ?? process.env, undefined),
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    const requestId = `models-${randomUUID()}`;
+    const requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
     const exited = () => child.exitCode !== null || child.signalCode !== null;
-    const finish = (error: Error | null, models?: unknown) => {
+    const finish = (error: Error | null, response?: Record<string, unknown>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -128,7 +138,7 @@ export function queryClaudeModels(options: ClaudeModelQueryOptions): Promise<unk
         killTimer.unref();
         child.once("exit", () => clearTimeout(killTimer));
       }
-      resolve(models);
+      resolve(response ?? {});
     };
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
@@ -151,9 +161,10 @@ export function queryClaudeModels(options: ClaudeModelQueryOptions): Promise<unk
       } catch {
         return;
       }
-      const o = obj as { type?: unknown; response?: { subtype?: unknown; request_id?: unknown; error?: unknown; response?: { models?: unknown } } };
+      const o = obj as { type?: unknown; response?: { subtype?: unknown; request_id?: unknown; error?: unknown; response?: unknown } };
       if (o?.type !== "control_response" || o.response?.request_id !== requestId) return;
-      if (o.response.subtype === "success") finish(null, o.response.response?.models);
+      const body = o.response.response;
+      if (o.response.subtype === "success") finish(null, typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {});
       else finish(new Error(`claude 回了错误：${typeof o.response.error === "string" ? o.response.error : JSON.stringify(o.response)}`));
     });
     child.stdin.write(`${buildInitializeLine(requestId)}\n`);

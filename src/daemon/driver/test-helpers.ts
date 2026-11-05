@@ -7,14 +7,13 @@ import type {
   AgentSessionPatch,
   AgentSessionRow,
   DriverEvent,
-  DriverOptions,
   LaunchFiles,
   SessionId,
   SessionStore,
 } from "../../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
-import { createClaudeDriver, type ClaudeDriver } from "./index.ts";
+import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "./index.ts";
 
 export const FAKE_CLAUDE = new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url).pathname;
 
@@ -64,8 +63,13 @@ export interface Harness {
   ): Promise<Extract<DriverEvent, { type: T }>>;
   of<T extends DriverEvent["type"]>(type: T): Array<Extract<DriverEvent, { type: T }>>;
   log(): FakeLogEntry[];
-  /** 假 claude 收到的用户消息（只算 type=user 的行）里的文字。 */
+  /**
+   * 假 claude 收到的用户消息（只算 type=user 的行）里的文字：几个 text 块之间空一行连起来
+   * （我们加的说明、标签各占一块，原文放最后一块；以前是同一块里空一行连着，这样比对的字和以前一样）。
+   */
   stdinTexts(): string[];
+  /** 同上，每条消息的 text 块分开（测“原文单独放最后一块”）。 */
+  stdinBlocks(): string[][];
   argvs(): string[][];
   addSession(patch?: Partial<AgentSessionRow>): AgentSessionRow;
   /**
@@ -89,7 +93,7 @@ export interface Harness {
 
 export interface HarnessOptions {
   script?: FakeScript;
-  driver?: Partial<DriverOptions>;
+  driver?: Partial<ClaudeDriverOptions>;
   /** 换一个状态目录不共享（默认和日志在一起）。 */
   dir?: string;
 }
@@ -156,12 +160,13 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
           .map((l) => JSON.parse(l) as FakeLogEntry)
       : [];
 
-  const stdinTexts = () =>
+  const stdinBlocks = () =>
     log().flatMap((e) => {
       if (e.kind !== "stdin") return [];
       const obj = JSON.parse(e.line) as { type: string; message?: { content: Array<{ text: string }> } };
-      return obj.type === "user" ? [obj.message!.content.map((c) => c.text).join("")] : [];
+      return obj.type === "user" ? [obj.message!.content.map((c) => c.text)] : [];
     });
+  const stdinTexts = () => stdinBlocks().map((blocks) => blocks.join("\n\n"));
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = nextId++;
@@ -203,6 +208,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     of,
     log,
     stdinTexts,
+    stdinBlocks,
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [e.argv] : [])),
     addSession,
     launch,

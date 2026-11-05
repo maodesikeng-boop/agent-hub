@@ -29,7 +29,7 @@ import { MODEL, Smoke, TURN_MS, expect, scenario, type Outcome } from "./kit.ts"
 const hub = HUB_COMMAND;
 
 /** 每个场景的外壳：起、跑、收尾；收尾发现问题或场景失败，就把数据目录留着。 */
-async function inFreshSmoke(outcomes: Outcome[], name: string, fn: (smoke: Smoke) => Promise<string>): Promise<void> {
+export async function inFreshSmoke(outcomes: Outcome[], name: string, fn: (smoke: Smoke) => Promise<string>): Promise<void> {
   const smoke = await Smoke.boot();
   const ok = await scenario(outcomes, name, () => fn(smoke));
   const problems = await smoke.finish(!ok);
@@ -42,7 +42,7 @@ async function inFreshSmoke(outcomes: Outcome[], name: string, fn: (smoke: Smoke
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 /** 有一次提交的 git 仓库（用户名、邮箱写在仓库自己的配置里，worktree 共用），返回真实路径。 */
-function repo(smoke: Smoke, name: string, files: Record<string, string>): string {
+export function repo(smoke: Smoke, name: string, files: Record<string, string>): string {
   const dir = smoke.folder(name, files);
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.name", "smoke");
@@ -52,13 +52,13 @@ function repo(smoke: Smoke, name: string, files: Record<string, string>): string
   return dir;
 }
 
-async function pmWithFolder(smoke: Smoke, name: string, folder: string, mode: "hands_on" | "manage_only" = "hands_on"): Promise<number> {
+export async function pmWithFolder(smoke: Smoke, name: string, folder: string, mode: "hands_on" | "manage_only" = "hands_on"): Promise<number> {
   const { conversationId } = await smoke.client.createPm({ name, mode, defaultModel: MODEL, persona: `${name}：简洁、直接。`, folder });
   return conversationId;
 }
 
 /** 项目经理对话里那几行（kind worker）。 */
-async function workerLines(smoke: Smoke, pmConversationId: number): Promise<WorkerMessageMeta[]> {
+export async function workerLines(smoke: Smoke, pmConversationId: number): Promise<WorkerMessageMeta[]> {
   return messagesOf(await smoke.client.state(), pmConversationId).flatMap((m) => {
     const meta = workerEventOf(m);
     return meta === null ? [] : [meta];
@@ -66,7 +66,7 @@ async function workerLines(smoke: Smoke, pmConversationId: number): Promise<Work
 }
 
 /** 等 n 个 Worker 各自有了结果（汇报、这一轮没做完、建 worktree 失败）。 */
-async function waitResults(smoke: Smoke, pmConversationId: number, n: number): Promise<WorkerMessageMeta[]> {
+export async function waitResults(smoke: Smoke, pmConversationId: number, n: number): Promise<WorkerMessageMeta[]> {
   return waitUntil(
     `${n} 个 Worker 的结果`,
     async () => {
@@ -78,7 +78,7 @@ async function waitResults(smoke: Smoke, pmConversationId: number, n: number): P
 }
 
 /** 等这个对话里的消息都有了结果（没有排队中、已送达、处理中的）：项目经理把收到的汇报都处理完了。 */
-async function waitSettled(smoke: Smoke, conversationId: number): Promise<void> {
+export async function waitSettled(smoke: Smoke, conversationId: number): Promise<void> {
   await waitUntil(
     `对话 ${conversationId} 都处理完`,
     async () => {
@@ -89,9 +89,9 @@ async function waitSettled(smoke: Smoke, conversationId: number): Promise<void> 
   );
 }
 
-type WorkerDbRow = { id: number; worker_conversation_id: number; readonly: number; workspace: string; branch: string | null; worktree_path: string | null; status: string };
-const workers = (smoke: Smoke) => smoke.query<WorkerDbRow>("SELECT * FROM workers ORDER BY id");
-const sessionIdOf = (smoke: Smoke, conversationId: number) =>
+export type WorkerDbRow = { id: number; worker_conversation_id: number; readonly: number; workspace: string; branch: string | null; worktree_path: string | null; status: string };
+export const workers = (smoke: Smoke) => smoke.query<WorkerDbRow>("SELECT * FROM workers ORDER BY id");
+export const sessionIdOf = (smoke: Smoke, conversationId: number) =>
   smoke.query<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation DESC LIMIT 1", conversationId)[0]!.id;
 
 /** 这一会话 Worker 的回复文字（合起来）。 */
@@ -303,7 +303,7 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
       );
       expect(reports[1]!.event === "report", `第二轮不是汇报：${JSON.stringify(reports[1])}`);
       const written = smoke.writtenTexts(workerSession);
-      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n${said}`)), `Worker 收到的不带标签：${JSON.stringify(written.slice(-2))}`);
+      expect(written.some((t) => t.includes(`${USER_TO_WORKER_TAG}\n\n${said}`)), `Worker 收到的不带标签：${JSON.stringify(written.slice(-2))}`);
       const readme = git(worker!.worktree_path!, "show", "HEAD:README.md");
       expect(readme.includes("direct-from-user"), `Worker 没照用户说的改 README：${readme}`);
       const status = smoke.query<{ status: string }>("SELECT status FROM messages WHERE id = ?", messageId)[0]?.status;

@@ -6,7 +6,7 @@ import {
   WORKER_REPORT_FORMAT,
   WORKER_REPORT_STATUSES,
   WORKER_REPORT_STATUS_LABELS,
-  deliveryText,
+  deliveryParts,
   parseWorkerReport,
   userToWorkerHeader,
   workerBranchName,
@@ -155,15 +155,19 @@ describe("回到项目经理那一行", () => {
     );
   });
 
-  it("用户直接对 Worker 说的话：交给项目经理的开头；写给 Worker 时加【用户直接对你说】，项目经理的话和别的对话里的原样", () => {
+  it("用户直接对 Worker 说的话：交给项目经理的开头；写给 Worker 时带【用户直接对你说】标签（单独一块），项目经理的话和别的对话里的没有标签", () => {
     expect(userToWorkerHeader(3, "修 X")).toBe("【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】");
-    expect(deliveryText({ workerId: 3, sender: "user", text: "改 README", meta: null })).toBe("【用户直接对你说】\n改 README");
-    expect(deliveryText({ workerId: 3, sender: "pm", text: "改 README", meta: null })).toBe("改 README");
-    expect(deliveryText({ workerId: null, sender: "user", text: "改 README", meta: null })).toBe("改 README");
-    // 带附件：标签在最前面，后面是原文和附件路径（和项目经理收到的一样，见 agentTextOf）
+    expect(deliveryParts({ workerId: 3, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: ["【用户直接对你说】"], text: "改 README" });
+    expect(deliveryParts({ workerId: 3, sender: "pm", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
+    expect(deliveryParts({ workerId: null, sender: "user", text: "改 README", meta: null })).toEqual({ prefixes: [], text: "改 README" });
+    // 带附件：原文和附件路径在 text 里（和项目经理收到的一样，见 agentTextOf），标签另放
     const withFile = { workerId: 3, sender: "user" as const, text: "看这张图", meta: { attachments: [ATTACHMENT] } };
-    expect(deliveryText(withFile)).toBe(`【用户直接对你说】\n${agentTextOf(withFile)}`);
+    expect(deliveryParts(withFile)).toEqual({ prefixes: ["【用户直接对你说】"], text: agentTextOf(withFile) });
     expect(agentTextOf(withFile)).toContain(ATTACHMENT.path);
+  });
+
+  it("以 / 开头的原文原样留在 text 的开头，标签不和它拼在一起（命令才会被展开）", () => {
+    expect(deliveryParts({ workerId: 3, sender: "user", text: "/x 参数", meta: null })).toEqual({ prefixes: ["【用户直接对你说】"], text: "/x 参数" });
   });
 
   it("摘要的空白压成一个空格，太长按字数截断", () => {
