@@ -25,6 +25,7 @@ import {
   type PersonaResponse,
   type PmId,
   type PostMessageResponse,
+  type RenewSessionResponse,
   type RetryMessageResponse,
   type StateSnapshot,
 } from "../shared/index.ts";
@@ -160,6 +161,10 @@ export function deleteSchedule(scheduleId: ScheduleId): Promise<void> {
 /** 每家厂商的模型名单（服务端问不到厂商时是打包的）。 */
 export function fetchModels(): Promise<ModelsResponse> {
   return request<ModelsResponse>(API_PATHS.models);
+}
+
+export function postRenewSession(pmId: PmId): Promise<RenewSessionResponse> {
+  return postJson<RenewSessionResponse>(API_PATHS.renewSession(pmId));
 }
 
 export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {

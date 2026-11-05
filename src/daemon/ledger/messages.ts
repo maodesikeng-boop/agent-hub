@@ -185,6 +185,10 @@ export function createLedgerMessages(
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
+      case "turn.started":
+        // claude 自己开了一轮（后台任务完成等）：和写进去的消息开始处理一样显示在处理
+        updateLive(p, sessionId, working(null));
+        return;
       case "agent.thinking":
         // 子任务里的事件不改主 agent 的状态
         if (event.parentToolUseId === undefined) updateLive(p, sessionId, working(liveOf(sessionId).currentTool, { type: "thinking" }));

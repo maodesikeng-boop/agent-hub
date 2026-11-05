@@ -19,8 +19,8 @@ import {
   askOf,
   attachmentsOf,
   sentFilesOf,
-  stripSystemPrefix,
   systemEventOf,
+  systemNoticeText,
   workerEventOf,
   workerLineText,
   type ConversationId,
@@ -174,11 +174,11 @@ function ScheduleRun({ text }: { text: string }) {
 /** 系统消息：居中的一条，去掉发给 agent 时加的【系统】，不显示投递状态。 */
 function SystemNotice({ message, actions }: { message: Message; actions: MessageActions }) {
   const event = systemEventOf(message);
-  if (event?.event === "schedule.run") return <ScheduleRun text={stripSystemPrefix(message.text)} />;
+  if (event?.event === "schedule.run") return <ScheduleRun text={systemNoticeText(message)} />;
   return (
     <div className="mt-5 flex justify-center" data-side="center">
       <div className="flex max-w-[85%] flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 rounded-2xl bg-muted px-3.5 py-1.5 text-center text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-        <span>{stripSystemPrefix(message.text)}</span>
+        <span>{systemNoticeText(message)}</span>
         {event?.event === "persona.changed" && <RevertButton changeId={event.personaChangeId} onRevert={actions.onRevertPersona} />}
       </div>
     </div>

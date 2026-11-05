@@ -316,6 +316,7 @@ export class FakeApi {
     return { status: 200, body: makeAttachment({ id, name: fileName, size: file.size, mime: /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? "image/png" : "application/octet-stream" }) };
   };
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
+  renewSession: (pmId: number) => Reply | Promise<Reply> = () => ({ status: 202, body: { messageId: 99 } });
   dismissAsk: (messageId: number) => Reply | Promise<Reply> = () => ({ status: 204 });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
@@ -360,6 +361,8 @@ export class FakeApi {
     const sched = /^\/api\/schedules\/(\d+)$/.exec(url.pathname);
     if (sched && method === "PUT") return jsonResponse(await this.setScheduleEnabled(Number(sched[1]), body.enabled));
     if (sched && method === "DELETE") return jsonResponse(await this.removeSchedule(Number(sched[1])));
+    const renew = /^\/api\/pms\/(\d+)\/renew-session$/.exec(url.pathname);
+    if (renew && method === "POST") return jsonResponse(await this.renewSession(Number(renew[1])));
     const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);
     if (retry && method === "POST") return jsonResponse(await this.retryMessage(Number(retry[1])));
     // 文件接口的 HEAD（卡片探测文件是否已被清理）：假后端里文件都在

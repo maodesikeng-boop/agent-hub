@@ -119,6 +119,7 @@ export class FakeLedger {
   readonly retried: MessageId[] = [];
   /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
   readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
+  readonly renewed: PmId[] = [];
   readonly dismissed: MessageId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
@@ -243,6 +244,12 @@ export class FakeLedger {
     return { messageId };
   }
 
+  renewSession(pmId: PmId): { messageId: MessageId } {
+    this.check();
+    this.renewed.push(pmId);
+    return { messageId: 50 };
+  }
+
   dismissAsk(messageId: MessageId): void {
     this.check();
     this.dismissed.push(messageId);
@@ -303,6 +310,8 @@ export class FakeLedger {
       editPersona: (p, i, a) => this.editPersona(p, i, a),
       revertPersonaChange: (c) => this.revertPersonaChange(c),
       retryMessage: (m) => this.retryMessage(m),
+      renewSession: (p) => this.renewSession(p),
+      waitsForHandover: unused("waitsForHandover"),
       dismissAsk: (m) => this.dismissAsk(m),
       runDueSchedules: unused("runDueSchedules"),
       addSchedule: (pmId, args) => {

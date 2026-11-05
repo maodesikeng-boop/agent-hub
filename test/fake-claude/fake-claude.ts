@@ -65,6 +65,12 @@ export interface FakeTurn {
   usage?: Record<string, number>;
   /** 默认每轮在 result 前发一条 M0 记录里的 rate_limit_event；false 不发。 */
   rateLimit?: Record<string, unknown> | false;
+  /**
+   * 这一轮结束 afterMs（默认 50）毫秒后，claude 自己再开一轮（没有用户消息，像后台任务完成通知触发的那种）：
+   * 先发 system/task_notification，再 system/init、按它自己的步骤回，result 带 origin task-notification。不占剧本里的轮数。
+   * 到点时手上有一轮在跑就等它跑完。标准输入关了也等这一轮开过、跑完再退出。
+   */
+  selfTurn?: FakeTurn & { afterMs?: number };
 }
 
 export interface FakeScript {
@@ -304,8 +310,9 @@ let turnSeq = 0;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function result(subtype: string, isError: boolean, text: string, startedAt: number, usage?: Record<string, number>): void {
+function result(subtype: string, isError: boolean, text: string, startedAt: number, usage?: Record<string, number>, selfStarted = false): void {
   emit({
+    ...(selfStarted ? { origin: { kind: "task-notification", producer: "session-task" } } : {}),
     type: "result",
     subtype,
     is_error: isError,
@@ -359,14 +366,17 @@ function assistant(
 
 let currentTurnStartedAt = 0;
 
-async function runTurn(content: UserContent[]): Promise<void> {
+/** content 为 null：claude 自己开的一轮（selfTurn），turn 是它的剧本；不回显、不数轮数。 */
+async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Promise<void> {
   busy = true;
   const seq = ++turnSeq;
   const aborted = () => seq !== turnSeq;
   const startedAt = (currentTurnStartedAt = Date.now());
-  const turnIndex = nextTurnIndex();
-  const turn: FakeTurn = script.turns?.[turnIndex] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
+  const turn: FakeTurn = selfTurn ?? script.turns?.[nextTurnIndex()] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
   if (newSessionId !== undefined) createSession(newSessionId);
+  if (content === null) {
+    emit({ type: "system", subtype: "task_notification", status: "completed", session_id: sessionId, uuid: randomUUID() });
+  }
   emit({
     type: "system",
     subtype: "init",
@@ -379,9 +389,9 @@ async function runTurn(content: UserContent[]): Promise<void> {
     apiKeySource: "none",
     uuid: randomUUID(),
   });
-  let replayed = false;
+  let replayed = content === null;
   const replay = () => {
-    if (replayed) return;
+    if (replayed || content === null) return;
     replayed = true;
     emit({
       type: "user",
@@ -482,8 +492,13 @@ async function runTurn(content: UserContent[]): Promise<void> {
     });
   }
   const r = turn.result ?? {};
-  result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt, turn.usage);
-  finishTurn();
+  result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt, turn.usage, content === null);
+  const self = turn.selfTurn;
+  finishTurn(self !== undefined);
+  if (self !== undefined) {
+    const fire = () => (busy ? setTimeout(fire, 20) : void runTurn(null, self));
+    setTimeout(fire, self.afterMs ?? 50);
+  }
 }
 
 /** sh -c 跑一条命令：环境变量、工作目录都是自己的；标准输入不接（/dev/null）。 */
@@ -497,12 +512,12 @@ function runShell(command: string): Promise<{ exitCode: number; output: string }
   });
 }
 
-function finishTurn(): void {
+function finishTurn(holdExit = false): void {
   busy = false;
   const next = inbox.splice(0);
   if (next.length > 0) {
     void runTurn(next.flat());
-  } else if (stdinClosed) {
+  } else if (stdinClosed && !holdExit) {
     exit(0);
   }
 }

@@ -545,4 +545,42 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(((await res.json()) as { code: string }).code).toBe("conflict");
     await terminate(daemon);
   });
+
+  it("Worker 回一句“在等 CI”后，后台任务完成、claude 自己开一轮：两次汇报都交给项目经理，顺序对；项目经理自己开的一轮的回复也在对话里；关机不出错", { timeout: 40_000 }, async () => {
+    env = makeEnv();
+    const dir = repo("selfturn");
+    env.setScript(
+      scripts(
+        {
+          turns: [
+            { steps: [{ bash: startCmd("盯 CI", "推送后盯着 CI") }, { text: "派了" }] },
+            { steps: [{ text: "收到第一份" }], selfTurn: { steps: [{ text: "后台通知到了，我又看了一眼" }], afterMs: 100 } },
+          ],
+          defaultTurn: say("收到"),
+        },
+        { turns: [{ steps: [{ text: "已推送，在等 CI。" }], selfTurn: { steps: [{ text: report("CI 过了") }], afterMs: 1500 } }] },
+      ),
+    );
+    const { daemon, client } = await boot();
+    const pm = await pmWithProject(client, dir);
+    await client.post(pm.conversationId, "派个 Worker 盯 CI");
+    const reports = await waitLines(client, pm.conversationId, "report", 2);
+    expect(reports.map((r) => [r.status, r.summary])).toEqual([
+      ["unformatted", "已推送，在等 CI。"],
+      ["done", "CI 过了"],
+    ]);
+    // 两份都交给了项目经理（送到它的标准输入），先后顺序对
+    await waitUntil("pm got both reports", () => (env.stdinTexts().filter((t) => t.includes("【Worker #1 · 盯 CI 的汇报】")).length >= 2 ? true : undefined));
+    const toPm = env.stdinTexts().filter((t) => t.includes("【Worker #1 · 盯 CI 的汇报】"));
+    expect(toPm[0]).toContain("已推送，在等 CI。");
+    expect(toPm[1]).toContain("CI 过了");
+    // 项目经理自己开的一轮：回复在对话里
+    await waitUntil("pm self-turn text", async () =>
+      messagesOf(await client.state(), pm.conversationId).some((m) => m.text === "后台通知到了，我又看了一眼") ? true : undefined,
+    );
+    const workerSession = sessionOf(await client.state(), workerRows()[0]!.worker_conversation_id);
+    expect(workerSession.activity).toBe("idle");
+    const code = await terminate(daemon);
+    expect(code.code).toBe(0);
+  });
 });

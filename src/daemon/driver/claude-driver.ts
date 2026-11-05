@@ -118,6 +118,11 @@ interface SessionState {
   id: SessionId;
   proc: Proc | null;
   inFlight: Batch | null;
+  /**
+   * claude 自己开的一轮在跑（后台任务完成等，没有我们写的消息）：和 inFlight 一样算忙，新消息排着、等它的 result 再写；
+   * 空闲关闭、关机、打断、end 也都当有一轮在跑。
+   */
+  selfTurn: boolean;
   turnInterrupted: boolean;
   /** 这一轮用户点过停止（interrupt 调过、这一轮还没收尾）：关机碰上它，仍按停止收尾，不当关机打断。 */
   stopRequested: boolean;
@@ -282,7 +287,7 @@ export class ClaudeDriver implements Driver {
         continue;
       }
       const proc = st.proc;
-      if (proc && st.inFlight && !proc.closing) {
+      if (proc && this.#busy(st) && !proc.closing) {
         await new Promise<void>((resolve) => st.settleWaiters.push(resolve));
         continue;
       }
@@ -301,7 +306,7 @@ export class ClaudeDriver implements Driver {
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.#sessions.get(sessionId);
     const proc = st?.proc;
-    if (!st || !proc || !st.inFlight || proc.closing) return;
+    if (!st || !proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
@@ -328,12 +333,12 @@ export class ClaudeDriver implements Driver {
       clearKillTimer(proc);
       if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
       // 用户的停止还没收尾（控制消息没回应、或者回了还没等到 result）：照停止处理，消息标已停止，不当关机打断留着重发
-      if (st.stopRequested && st.inFlight) {
+      if (st.stopRequested && this.#busy(st)) {
         proc.closing = "interrupt";
         proc.child.kill("SIGINT");
         continue;
       }
-      const wasIdle = proc.closing === "idle" || (!st.inFlight && proc.initSeen);
+      const wasIdle = proc.closing === "idle" || (!this.#busy(st) && proc.initSeen);
       proc.closing = "shutdown";
       if (wasIdle) proc.child.stdin.end();
       else proc.child.kill("SIGINT");
@@ -384,6 +389,7 @@ export class ClaudeDriver implements Driver {
         id,
         proc: null,
         inFlight: null,
+        selfTurn: false,
         turnInterrupted: false,
         stopRequested: false,
         pending: [],
@@ -466,7 +472,7 @@ export class ClaudeDriver implements Driver {
         await proc.exited;
         continue;
       }
-      if (proc && st.inFlight) return;
+      if (proc && this.#busy(st)) return;
       if (st.pending.length === 0) return;
       if (proc) {
         // 往已经在跑、空闲的进程写之前先比设置；进程在这期间没了就再转一圈（重新起）
@@ -494,7 +500,8 @@ export class ClaudeDriver implements Driver {
         this.#internalError(st.id, `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`);
       }
       this.#assertRunning();
-      if (st.ended || st.proc !== proc || proc.closing) return;
+      // 等 prepareLaunch 的时候 claude 可能自己开了一轮：消息留在队列里，那一轮的 result 之后 #afterTurn 再发
+      if (st.ended || st.proc !== proc || proc.closing || this.#busy(st)) return;
       const row = files ? this.#row(st) : null;
       if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
         this.#closeStdin(st, proc, "idle");
@@ -557,6 +564,11 @@ export class ClaudeDriver implements Driver {
     else this.#armIdle(st, proc);
   }
 
+  /** 有一轮在跑：我们写进去的，或者 claude 自己开的。 */
+  #busy(st: SessionState): boolean {
+    return st.inFlight !== null || st.selfTurn;
+  }
+
   /** 这一轮结束或进程退出了：叫醒等着的 end。 */
   #settled(st: SessionState): void {
     for (const w of st.settleWaiters.splice(0)) w();
@@ -566,7 +578,7 @@ export class ClaudeDriver implements Driver {
     this.#clearTimer(st, "idleTimer");
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
-      if (st.proc !== proc || proc.closing || st.inFlight || st.pending.length > 0 || st.starting || st.ended) return;
+      if (st.proc !== proc || proc.closing || this.#busy(st) || st.pending.length > 0 || st.starting || st.ended) return;
       this.#closeStdin(st, proc, "idle");
     }, this.#opts.idleCloseMs);
   }
@@ -846,7 +858,15 @@ export class ClaudeDriver implements Driver {
   }
 
   #onInit(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    if (proc.initSeen) return;
+    if (proc.initSeen) {
+      // 之后每一轮开头还会出 init：没有在途的消息，就是 claude 自己开的一轮（比如后台任务完成了）
+      if (!st.inFlight && !st.selfTurn && st.proc === proc) {
+        st.selfTurn = true;
+        this.#clearTimer(st, "idleTimer");
+        this.#emit(st.id, { type: "turn.started", at });
+      }
+      return;
+    }
     proc.initSeen = true;
     this.#clearTimer(st, "startTimer");
     const model = typeof obj.model === "string" ? obj.model : null;
@@ -868,6 +888,7 @@ export class ClaudeDriver implements Driver {
     if (!proc.initSeen) return;
     const batch = st.inFlight;
     st.inFlight = null;
+    st.selfTurn = false;
     // 没等到回显就结束了（比如回显前被打断）：先补一个 message.processing，账本才能从“已送达”往下走
     if (batch) this.#markProcessing(st, batch, at);
     const ok = obj.subtype === "success" && obj.is_error !== true;
@@ -925,6 +946,7 @@ export class ClaudeDriver implements Driver {
       }
       const batch = proc.initSeen || proc.closing === "interrupt" ? st.inFlight : null;
       st.inFlight = null;
+      st.selfTurn = false;
       const reason: SessionExitReason = proc.closing ?? "crash";
       if (batch && reason === "crash") {
         st.crashNote = true;

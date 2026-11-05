@@ -320,6 +320,19 @@ export interface Ledger {
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
   /**
+   * 资料页的“开新会话”（POST /api/pms/:id/renew-session，见 ledger/handover.ts）：给项目经理现在的会话发一条 handover.requested，
+   * 让它把交接写成这一轮的回复；那一轮正常结束时（applyDriverEvent）同一个事务里换代：旧会话登记 session.end，
+   * 建 generation + 1 的新会话，发 session.renewed（交接 + 最近几条原话），换代期间压着的消息改发给新会话。
+   * 已经有一条在等（排队、已送达、处理中）就返回它，不再发；上一次失败、被停止的重新排队。新会话的第一条还没结果时返回它；
+   * 它重排次数用完了，把它重新排队（次数清零）。没有这个项目经理 → not_found。
+   */
+  renewSession(pmId: PmId): { messageId: MessageId };
+  /**
+   * session.send 处理函数用：这条消息要不要先压着。同一个对话里、和它同一代或更早的 handover.requested（项目经理在写交接）
+   * 或 session.renewed（新会话的第一条）还没结果（排队、已送达、处理中）时都等，换代后发给新会话。session.renewed 自己不等。
+   */
+  waitsForHandover(messageId: MessageId): boolean;
+  /**
    * 用户点“知道了”，清掉一条 hub ask 的提醒（M5，POST /api/messages/:id/dismiss-ask）：meta 加上 dismissed、推 message.updated；
    * 已经清过的什么也不做。错误：没有这条消息（包括老项目群里的）→ not_found；不是 hub ask 发的 → conflict。
    */
@@ -426,6 +439,8 @@ export interface Ledger {
    * - session.exited 且这一轮没有 result：reason 是 interrupt、crash、startup_failed → turn_failed（原因写退出码或信号）；
    *   reason 是 shutdown（守护进程关机）→ 不发这一行，也不交给项目经理：重启后 recoverAfterRestart 照 M2 重发这条消息、
    *   --resume 接着做（m3-plan 验收第 11 条），做完的那一轮照常出 report；idle 没有在途的消息，什么也不发；
+   * - claude 自己开的一轮（后台任务完成等，turn.started 开头、turn.ended 没有消息编号）照样汇报：这一轮最后一段 agent 文字，
+   *   去重键里的编号用这一轮最后一条 agent 消息的编号；这一轮没有文字（一条消息都没有、只有工具调用）就不汇报；没有 turn.started 的游离 turn.ended 不处理；
    * - 同一条消息先 turn_failed、之后又被重发并跑出结果：两行都有（事件类型在去重键里），后来的 report 不会被吞掉；
    *   同一个事件重放（同一个 result 再来一遍）只有一行。
    * - Worker 会话的 message.delivered 里有用户直接对它说的话（Worker 对话里 sender user、带 workerId）→ 每条一行 user_message，

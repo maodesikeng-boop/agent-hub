@@ -29,7 +29,7 @@ import type { SetupRunner } from "./setup/index.ts";
 
 export interface HandlerDeps {
   driver: Pick<Driver, "start" | "send" | "end">;
-  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage" | "waitsForFirstTurn">;
+  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage" | "waitsForFirstTurn" | "waitsForHandover">;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
   tokens: Pick<SessionTokens, "revoke">;
@@ -68,6 +68,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
     // Worker 还没开工（建 worktree、跑准备命令）或任务说明还没写进去：先等，别让这条把会话提前拉起来（第一轮要是任务说明）
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
+    // 项目经理在写交接、或者新会话的第一条（交接）还没发：先压着，换代后账本把它改发给新会话（ledger/handover.ts）
+    if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
     const wait = rateLimitWaitMs(deps, sessionId);
     if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
     let result;
