@@ -21,6 +21,7 @@ import {
   type WorkerMessageMeta,
 } from "../shared/index.ts";
 import { stripMarkdown } from "./plainText.ts";
+import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 
 /** 左栏的一行：一个项目经理和它唯一的那个对话（11-03 起不再有项目群）。 */
@@ -261,13 +262,29 @@ export interface WorkerEntry {
   vendor?: string;
   model?: string | null;
   effort?: string | null;
-  /** 累计用量（老服务端没带当 0）。 */
+  /** 累计用量和当前对话长度（context，老服务端没带当 0）。 */
   usage: TokenUsage;
+  /** 项目经理会话里这个 Worker 最近一行汇报的状态色（worker-status.ts）；没有汇报是 neutral。 */
+  tone: WorkerTone;
+}
+
+/** 每个 Worker 最近一行汇报的状态色（和项目经理对话里的汇报气泡同一个 workerStatusOf）。 */
+function latestTones(state: HubState, pmId: PmId): Map<ConversationId, WorkerTone> {
+  const tones = new Map<ConversationId, WorkerTone>();
+  for (const { conversation, messages } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
+    for (const message of messages) {
+      const meta = workerEventOf(message);
+      if (meta) tones.set(meta.workerConversationId, workerStatusOf(meta).tone);
+    }
+  }
+  return tones;
 }
 
 /** 这个项目经理派的 Worker：进行中的在前，收工的在后，同一组里按派出的顺序（对话编号）。 */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   const endedLines = endedByLine(state, pmId);
+  const tones = latestTones(state, pmId);
   return Object.values(state.conversations)
     .filter(({ conversation }) => conversation.kind === "worker" && conversation.pmId === pmId)
     .map(({ conversation }) => {
@@ -281,6 +298,7 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
         model: session?.model,
         effort: session?.effort,
         usage: session?.usage ?? EMPTY_TOKEN_USAGE,
+        tone: tones.get(conversation.id) ?? "neutral",
       };
     })
     .toSorted((a, b) => Number(a.ended) - Number(b.ended) || a.conversationId - b.conversationId);

@@ -78,19 +78,18 @@ export function formatTokens(count: number): string {
   return `${formatCount(count)} ${count === 1 ? "token" : "tokens"}`;
 }
 
-/** 一个会话累计用了多少 token（输入 + 缓存读 + 缓存写 + 输出）；没有记录（老 Worker、还没干过活）显示“—”。 */
-export function formatUsageTotal(usage: TokenUsage): string {
-  const total = usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
-  return total > 0 ? formatTokens(total) : NO_DATA;
-}
-
 /** 没有数据时占位的字。 */
 export const NO_DATA = "—";
 
-/** 悬停 token 数时的明细，一项一行：输入、缓存读、缓存写、输出、当前上下文（数字用千分位，单位是 tokens）。 */
+/** 这个会话现在的对话长度（最近一次请求的 input + 缓存读 + 缓存写，TokenUsage.context）：“158K context”；没有记录显示“—”。 */
+export function formatContext(usage: TokenUsage): string {
+  return usage.context > 0 ? `${formatCount(usage.context)} context` : NO_DATA;
+}
+
+/** 悬停 context 时的明细：当前对话长度，再是累计的输入、缓存读、缓存写、输出（数字用千分位，单位是 tokens），每项一行。 */
 export function formatTokenDetail(usage: TokenUsage): string {
   const n = (v: number) => `${v.toLocaleString("en-US")} tokens`;
-  return [`Input ${n(usage.input)}`, `Cache read ${n(usage.cacheRead)}`, `Cache write ${n(usage.cacheWrite)}`, `Output ${n(usage.output)}`, `Context ${n(usage.context)}`].join("\n");
+  return [`Context ${n(usage.context)}`, "Cumulative so far", `Input ${n(usage.input)}`, `Cache read ${n(usage.cacheRead)}`, `Cache write ${n(usage.cacheWrite)}`, `Output ${n(usage.output)}`].join("\n");
 }
 
 export function byteLength(text: string): number {
