@@ -103,6 +103,8 @@ describe("左栏和标题", () => {
     expect(document.title).toBe(PRODUCT_NAME);
     wait(1);
     expect(hasMark("老马")).toBe(true);
+    // 左栏不属于任何项目经理：标签是中性色，不带主色
+    expect(within(row("老马")).getByText("等你").className).not.toMatch(/primary/);
     expect(hasMark("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
 

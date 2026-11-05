@@ -27,9 +27,9 @@ function EntryButton({
 }) {
   // 右边只放一个标注：等你确定 > 等你 > 时间（在忙不另加标记）
   const tag = asking ? (
-    <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">等你确定</span>
+    <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-medium text-background">等你确定</span>
   ) : waiting ? (
-    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">等你</span>
+    <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-medium text-foreground">等你</span>
   ) : entry.lastMessage ? (
     <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
   ) : null;
