@@ -365,12 +365,16 @@ export function createLedgerWorkers(
     const text = validTask(args.text, "要发给 Worker 的话");
     const session = workerSession(worker.id);
     // 和用户在网页上手打一样：隐藏的命令（/clear 会换会话 ID，之后接回的是旧对话）不发，hub 退出码 1 打印原因（原因由厂商实现给）
-    const blocked = composerBaseOf(session.vendor)?.blockReason(text) ?? null;
+    const blocked = ctx.commandBlockReason(session, text);
     if (blocked !== null) throw fail("invalid", blocked);
     const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
+    // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等
+    const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
     return {
-      text: `已发给 Worker #${worker.id}“${worker.title}”，它会接着做，做完一轮汇报会自动发给你。`,
+      text: compactOnly
+        ? `已发给 Worker #${worker.id}“${worker.title}”：这一轮只压缩上下文，不会有汇报，压缩完它就空闲了，不用等。`
+        : `已发给 Worker #${worker.id}“${worker.title}”，它会接着做，做完一轮汇报会自动发给你。`,
       data: { worker: toWorkerRecord(worker), messageId: message.id },
     };
   };
@@ -464,16 +468,22 @@ export function createLedgerWorkers(
     }
   };
 
-  /** 这一轮（turnStart 之后）这个会话压缩过上下文：对话里有它的 context.compacted 系统消息（messages.ts 记的）。 */
-  const compactedSince = (session: AgentSessionRow, turnStart: number): boolean =>
+  /**
+   * 这一轮（turnStart 之后）只是用户发的 /compact：手动压缩过（context.compacted 的 trigger 是 manual，messages.ts 记的系统消息），
+   * 而且这个会话在这一轮里没有任何 agent 消息（文字、工具调用都算）。自动压缩（trigger 不是 manual）不算：
+   * 那是 Worker 做长任务时顺带压的，这一轮照常要汇报，否则项目经理会一直干等。
+   */
+  const onlyManualCompact = (session: AgentSessionRow, turnStart: number): boolean =>
     session.conversationId !== null &&
     db.get(
       `SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender = 'system' AND id > ?
-       AND json_extract(meta, '$.event') = 'context.compacted' AND json_extract(meta, '$.sessionId') = ? LIMIT 1`,
+       AND json_extract(meta, '$.event') = 'context.compacted' AND json_extract(meta, '$.sessionId') = ?
+       AND json_extract(meta, '$.trigger') = 'manual' LIMIT 1`,
       session.conversationId,
       turnStart,
       session.id,
-    ) !== undefined;
+    ) !== undefined &&
+    db.get(`SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? LIMIT 1`, session.id, turnStart) === undefined;
 
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
@@ -512,8 +522,8 @@ export function createLedgerWorkers(
     const text = last?.text ?? "";
     // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
     if (outcome.turnMessageId === null && text.trim() === "") return;
-    // 只压缩了上下文（用户发的 /compact）、没有文字的一轮：不汇报，对话里那行“已压缩上下文”照留
-    if (text.trim() === "" && compactedSince(session, turnStart)) return;
+    // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
+    if (onlyManualCompact(session, turnStart)) return;
     const parsed = parseWorkerReport(text);
     insertLine(p, worker, {
       event: "report",

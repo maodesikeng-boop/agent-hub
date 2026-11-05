@@ -23,7 +23,7 @@ import {
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { forceKill } from "./process.ts";
-import { MODEL_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
+import { INITIALIZE_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
 
 /** claude 回应里“默认”那一项的 value：不进名单，它支持的思考程度给“默认”用。 */
 const DEFAULT_VALUE = "default";
@@ -107,7 +107,7 @@ export async function queryClaudeModels(options: ClaudeModelQueryOptions): Promi
  */
 export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise<Record<string, unknown>> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
-  const args = [...MODEL_QUERY_ARGS];
+  const args = [...INITIALIZE_QUERY_ARGS];
   for (const dir of options.addDirs ?? []) args.push("--add-dir", dir);
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));

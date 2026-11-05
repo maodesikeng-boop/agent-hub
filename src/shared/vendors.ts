@@ -37,6 +37,8 @@ export interface VendorSpec {
 export interface ComposerSpec {
   /** 命令的开头：用户原文以它开头（前面不能有空格）才算命令。 */
   commandPrefix: string;
+  /** 压缩上下文的命令名（不带开头的 /）：这一轮只压缩、不回话，项目经理发了它不会有汇报。 */
+  compactCommand: string;
   /**
    * 隐藏的命令（不带开头的 /，别名也要写上）→ 用户手打时拦下、告诉用户的原因。这些不进列表，手打的也不发给 agent：
    * 会打乱 hub 管着的会话（换会话 ID）、和资料页的设置打架、或者只能在终端界面里用。
@@ -85,6 +87,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     },
     composer: {
       commandPrefix: "/",
+      compactCommand: "compact",
       blockedCommands: {
         // /clear 会换会话 ID，我们 --resume 的还是旧的（T7）
         ...blocked(CLAUDE_SESSION_BLOCKED, ["clear", "reset", "new", "resume", "exit", "quit", "rename", "name"]),
@@ -103,7 +106,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
           "__remote-workflow",
           "workflow-launch-exec",
         ]),
-        ...blocked(CLAUDE_ACCOUNT_BLOCKED, ["login", "logout", "usage-credits", "extra-usage", "design-consent", "design-revoke"]),
+        ...blocked(CLAUDE_ACCOUNT_BLOCKED, ["login", "logout", "usage-credits", "extra-usage", "design", "design-consent", "design-revoke"]),
         // system/init 的 terminal_slash_commands 标出来的四个，加上 heapdump（往桌面写文件）
         ...blocked(CLAUDE_TERMINAL_BLOCKED, ["doctor", "checkup", "color", "focus", "reload-plugins", "heapdump"]),
       },

@@ -15,7 +15,7 @@ const COMMANDS = [
 ];
 const VISIBLE = [
   { name: "x", description: "probe command x (project)", argumentHint: "word" },
-  { name: "compact", description: "Free up context", argumentHint: "<optional custom summarization instructions>" },
+  { name: "compact", description: "Free up context", argumentHint: "<optional custom summarization instructions>", builtin: true },
 ];
 const BOUNDARY = { type: "system", subtype: "compact_boundary", uuid: "cb-e2e", compact_metadata: { trigger: "manual", pre_tokens: 100, post_tokens: 10 } };
 
@@ -36,7 +36,10 @@ describe("输入框的“/”“@”（端到端）", () => {
     // 会话还没起来：另起一个 claude 问（不写会话）
     const before = (await (await client.get(API_PATHS.commands(conversationId))).json()) as CommandsResponse;
     expect(before.commands).toEqual(VISIBLE);
-    expect(env.argvs().some((a) => a.argv.includes("--no-session-persistence"))).toBe(true);
+    const query = env.argvs().find((a) => a.argv.includes("--no-session-persistence"))!;
+    // 另起的进程不跑钩子、不连 MCP（docs/composer-commands.md 的 T10）
+    expect(query.argv).toContain("--strict-mcp-config");
+    expect(query.argv[query.argv.indexOf("--settings") + 1]).toBe('{"disableAllHooks":true}');
 
     // 正在跑：问它本身（不再另起进程）
     const first = await client.post(conversationId, "你好");

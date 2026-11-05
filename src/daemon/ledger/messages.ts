@@ -19,7 +19,6 @@ import type { LedgerSentFiles } from "./sent-files.ts";
 import { idle, toolFinished, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
-import { composerBaseOf } from "../vendors/index.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 
@@ -289,7 +288,7 @@ export function createLedgerMessages(
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
       // 隐藏的命令（/clear、/model……）不发给 agent：不存这条，回原因让网页显示（原因由厂商实现给，daemon/vendors/）
-      const blocked = composerBaseOf(session.vendor)?.blockReason(input.text) ?? null;
+      const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
       // 有附件才写 meta（UserMessageMeta）；没有附件的用户消息 meta 还是 null，和老消息一样

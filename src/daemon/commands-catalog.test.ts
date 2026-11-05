@@ -7,27 +7,39 @@ import { claudeComposerBase, type VendorComposer } from "./vendors/index.ts";
 const LIST: ComposerCommand[] = [
   { name: "x", description: "probe command x (project)", argumentHint: "word" },
   { name: "compact", description: "Free up context" },
-  { name: "clear", description: "Start a new session", argumentHint: "[name]" },
-  { name: "model", description: "Set the AI model" },
-  { name: "doctor", description: "Health-check" },
+  { name: "clear", description: "Start a new session", argumentHint: "[name]", builtin: true },
+  { name: "model", description: "Set the AI model", builtin: true },
+  { name: "doctor", description: "Health-check", builtin: true },
+  // 用户自己的 skill 刚好叫 debug、new：不是 builtin，不藏
+  { name: "debug", description: "my own debug skill" },
+  { name: "new", description: "my own new command" },
 ];
-const VISIBLE = ["x", "compact"];
+const VISIBLE = ["x", "compact", "debug", "new"];
 const REQ: CommandsRequest = { sessionId: 1, vendor: "claude", cwd: "/repo", addDirs: [] };
 
-function setup(opts: { running?: () => Promise<ComposerCommand[] | null>; query?: () => Promise<ComposerCommand[]> } = {}) {
+function setup(
+  opts: { running?: () => Promise<ComposerCommand[] | null>; query?: () => Promise<ComposerCommand[]>; maxConcurrent?: number; maxEntries?: number } = {},
+) {
   let clock = 1_000_000;
   const query = vi.fn(opts.query ?? (async () => LIST));
   const vendor: VendorComposer = { ...claudeComposerBase, queryCommands: query };
   const queryRunning = vi.fn(opts.running ?? (async () => null));
   const logs: string[] = [];
-  const catalogs = createCommandCatalogs({ vendors: { claude: vendor }, queryRunning, now: () => clock, log: (l) => logs.push(l) });
+  const catalogs = createCommandCatalogs({
+    vendors: { claude: vendor },
+    queryRunning,
+    now: () => clock,
+    log: (l) => logs.push(l),
+    ...(opts.maxConcurrent !== undefined ? { maxConcurrent: opts.maxConcurrent } : {}),
+    ...(opts.maxEntries !== undefined ? { maxEntries: opts.maxEntries } : {}),
+  });
   return { catalogs, query, queryRunning, logs, advance: (ms: number) => (clock += ms) };
 }
 
 const names = (list: ComposerCommand[]) => list.map((c) => c.name);
 
 describe("命令列表", () => {
-  it("8：隐藏的命令（clear、model、doctor……）不在列表里", async () => {
+  it("8：隐藏的命令（clear、model、doctor……）不在列表里；用户自己叫 debug、new 的留着", async () => {
     const t = setup();
     expect(names(await t.catalogs.list(REQ))).toEqual(VISIBLE);
   });
@@ -116,5 +128,75 @@ describe("命令列表", () => {
     t.advance(COMMANDS_FRESH_MS);
     expect(names(await t.catalogs.list(REQ))).toEqual(VISIBLE);
     expect(t.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("cached：缓存着的完整名单（含隐藏的），没问过是 null，不起进程", async () => {
+    const t = setup();
+    const { sessionId: _ignored, ...target } = REQ;
+    expect(t.catalogs.cached(target)).toBeNull();
+    await t.catalogs.list(REQ);
+    expect(t.catalogs.cached(target)).toEqual(LIST);
+    expect(t.catalogs.cached({ ...target, cwd: "/other" })).toBeNull();
+    expect(t.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("另起的进程同一时间最多 maxConcurrent 个，多的排队，都能问到", async () => {
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    const t = setup({
+      maxConcurrent: 2,
+      query: () =>
+        new Promise((resolve) => {
+          active++;
+          peak = Math.max(peak, active);
+          releases.push(() => {
+            active--;
+            resolve(LIST);
+          });
+        }),
+    });
+    const lists = [1, 2, 3, 4].map((n) => t.catalogs.list({ ...REQ, cwd: `/repo${n}` }));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(t.query).toHaveBeenCalledTimes(2);
+    releases[0]!();
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    releases[1]!();
+    await vi.waitFor(() => expect(releases).toHaveLength(4));
+    releases[2]!();
+    releases[3]!();
+    for (const list of await Promise.all(lists)) expect(names(list)).toEqual(VISIBLE);
+    expect(peak).toBe(2);
+    expect(t.query).toHaveBeenCalledTimes(4);
+  });
+
+  it("排队的在关机时取消，不再起进程", async () => {
+    let started = 0;
+    const t = setup({
+      maxConcurrent: 1,
+      query: () => {
+        started++;
+        return new Promise(() => {});
+      },
+    });
+    const first = t.catalogs.list({ ...REQ, cwd: "/a" });
+    const second = t.catalogs.list({ ...REQ, cwd: "/b" });
+    await vi.waitFor(() => expect(started).toBe(1));
+    t.catalogs.close();
+    await expect(second).resolves.toEqual([]);
+    expect(started).toBe(1);
+    void first;
+  });
+
+  it("缓存有上限：超过 maxEntries 份，最旧的被淘汰，再要时重新问", async () => {
+    const t = setup({ maxEntries: 2 });
+    for (const cwd of ["/a", "/b", "/c"]) await t.catalogs.list({ ...REQ, cwd });
+    expect(t.query).toHaveBeenCalledTimes(3);
+    const target = (cwd: string) => ({ vendor: "claude", cwd, addDirs: [] });
+    expect(t.catalogs.cached(target("/a"))).toBeNull();
+    expect(t.catalogs.cached(target("/b"))).not.toBeNull();
+    expect(t.catalogs.cached(target("/c"))).not.toBeNull();
+    await t.catalogs.list({ ...REQ, cwd: "/a" });
+    expect(t.query).toHaveBeenCalledTimes(4);
   });
 });

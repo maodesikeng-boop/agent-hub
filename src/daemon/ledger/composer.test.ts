@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Change } from "../../shared/api.ts";
+import type { Change, ComposerCommand } from "../../shared/api.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
 import { systemNoticeText, type ConversationId, type SessionId } from "../../shared/domain.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -67,6 +67,36 @@ describe("手打隐藏的命令被拦（9）", () => {
     for (const text of ["/compact", "/x 参数", "/foo bar", " /clear", "please /clear"]) {
       expect(ledger.postUserMessage({ conversationId, clientId: text, text }).messageId).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("手打命令：缓存里是用户自己的就放行（隐藏名单只管厂商自带的）", () => {
+  it("knownCommands 给了列表：用户自己的 /debug 放行，builtin 的 /model、列表里没有的 /reset 拦；没缓存（null）按名字拦，问缓存时带会话的厂商和目录", () => {
+    let known: ComposerCommand[] | null = [
+      { name: "debug", description: "我的 skill" },
+      { name: "model", description: "", builtin: true },
+    ];
+    const asked: unknown[] = [];
+    const testDb = openTestDb();
+    const withCache = createLedger(testDb, {
+      now: () => 1_000,
+      pmHomeRoot: join(home, "pm-home2"),
+      worktreesDir: join(home, "worktrees2"),
+      knownCommands: (session) => {
+        asked.push(session);
+        return known;
+      },
+    });
+    const pm = withCache.createPm({ name: "项目经理", mode: "manage_only", persona: "" });
+    const post = (text: string) => withCache.postUserMessage({ conversationId: pm.conversation.id, clientId: text, text });
+    expect(post("/debug 看看").messageId).toBeGreaterThan(0);
+    expect(() => post("/model opus")).toThrow(/资料页/);
+    expect(() => post("/reset")).toThrow(/开新会话/);
+    const target = withCache.composerTarget(pm.conversation.id);
+    expect(asked.at(-1)).toMatchObject({ vendor: target.vendor, cwd: target.cwd, addDirs: target.addDirs });
+    known = null;
+    expect(() => post("/debug 再来")).toThrow(/^\/debug：/);
+    testDb.close();
   });
 });
 

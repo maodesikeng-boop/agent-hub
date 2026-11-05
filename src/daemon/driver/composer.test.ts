@@ -3,6 +3,7 @@
 // 以及写进去的格式：我们加的字各占一块在前，用户原文单独放最后一块；以 / 开头的不和别的拼。
 import { afterEach, describe, expect, it } from "vitest";
 import { CRASH_RECOVERY_NOTE, RELAUNCH_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE } from "../../shared/index.ts";
+import { composerBaseOf } from "../vendors/index.ts";
 import { makeHarness, realSleep, type Harness, type HarnessOptions } from "./test-helpers.ts";
 
 const TAG = "【用户直接对你说】";
@@ -37,7 +38,7 @@ describe("问正在跑的会话要命令列表（Driver.queryCommands）", () =>
     expect(t.argvs()).toHaveLength(0);
   });
 
-  it("一轮结束后再问：往同一个进程写 initialize，回通用形状（没去掉隐藏的，argumentHint 空的不给）", async () => {
+  it("一轮结束后再问：往同一个进程写 initialize，回通用形状（没去掉隐藏的，argumentHint 空的不给，builtin 留着）", async () => {
     const t = harness({ script: { commands: COMMANDS } });
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
@@ -45,8 +46,8 @@ describe("问正在跑的会话要命令列表（Driver.queryCommands）", () =>
     const commands = await t.driver.queryCommands(s.id);
     expect(commands).toEqual([
       { name: "x", description: "probe command x (project)", argumentHint: "word" },
-      { name: "compact", description: "Free up context by summarizing the conversation so far", argumentHint: "<optional custom summarization instructions>" },
-      { name: "clear", description: "Start a new session with empty context", argumentHint: "[name]" },
+      { name: "compact", description: "Free up context by summarizing the conversation so far", argumentHint: "<optional custom summarization instructions>", builtin: true },
+      { name: "clear", description: "Start a new session with empty context", argumentHint: "[name]", builtin: true },
       { name: "y", description: "probe skill y (project)" },
     ]);
     expect(t.argvs()).toHaveLength(1);
@@ -152,6 +153,17 @@ describe("写进去的格式：加的字在前面的块，原文单独放最后�
     await t.driver.send(s.id, user(1, "/x 参数", { prefixes: [TAG] }));
     await t.waitFor("turn.ended");
     expect(t.stdinBlocks()).toEqual([[TAG, "/x 参数"]]);
+  });
+
+  it("写给 agent 的 content 经厂商接口拿（驱动层不直接用 claude 的实现）：换一个实现，写进去的就是它拼的", async () => {
+    const base = composerBaseOf("claude")!;
+    const t = harness({
+      driver: { composer: { ...base, buildUserContent: (prefixes, text) => [{ type: "text", text: `[厂商拼的] ${[...prefixes, text].join("|")}` }] } },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "你好", { prefixes: [TAG] }));
+    await t.waitFor("turn.ended");
+    expect(t.stdinBlocks()).toEqual([[`[厂商拼的] ${TAG}|你好`]]);
   });
 
   it("没有标签的普通消息还是一块", async () => {

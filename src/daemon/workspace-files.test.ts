@@ -1,6 +1,6 @@
 // “@”文件搜索（方案第 5 节 14、15、16、27）。
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +51,44 @@ describe("列文件", () => {
     expect(files.sort()).toEqual([".hidden/ok.md", "README.md", "src/deep/a.ts"]);
   });
 
+  it("git 不执行仓库里配置的脚本：core.fsmonitor 指到脚本，列文件后脚本没跑", async () => {
+    const root = tempDir();
+    const outside = tempDir();
+    gitInit(root);
+    write(root, ["a.txt"]);
+    execFileSync("git", ["add", "a.txt"], { cwd: root });
+    const marker = join(outside, "ran");
+    const hook = join(outside, "fsmonitor.sh");
+    writeFileSync(hook, `#!/bin/sh\necho ran >> "${marker}"\nprintf '\\0'\n`);
+    chmodSync(hook, 0o755);
+    execFileSync("git", ["config", "core.fsmonitor", hook], { cwd: root });
+    // 先确认这个脚本在普通的 git ls-files 下真的会跑，不然下面的断言什么也证明不了
+    execFileSync("git", ["ls-files", "--cached", "--others"], { cwd: root });
+    expect(existsSync(marker)).toBe(true);
+    unlinkSync(marker);
+    const { files } = await listWorkspaceFiles(root);
+    expect(files).toEqual(["a.txt"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("符号链接、已经不存在的文件、嵌套仓库（git 列成 dir/ 或不带斜杠的子模块）都不列", async () => {
+    const root = tempDir();
+    gitInit(root);
+    write(root, ["a.txt", "gone.txt", "src/b.ts"]);
+    symlinkSync("a.txt", join(root, "link.txt"));
+    symlinkSync(root, join(root, "dirlink"));
+    mkdirSync(join(root, "nested"));
+    execFileSync("git", ["init", "-q"], { cwd: join(root, "nested") });
+    write(join(root, "nested"), ["inner.txt"]);
+    execFileSync("git", ["add", "a.txt", "gone.txt", "src/b.ts", "link.txt", "dirlink"], { cwd: root });
+    execFileSync("git", ["update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,sub"], { cwd: root });
+    unlinkSync(join(root, "gone.txt"));
+    const raw = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: root, encoding: "utf8" }).split("\n");
+    expect(raw).toEqual(expect.arrayContaining(["gone.txt", "link.txt", "nested/", "sub"]));
+    const { files } = await listWorkspaceFiles(root);
+    expect(files.sort()).toEqual(["a.txt", "src/b.ts"]);
+  });
+
   it("文件夹不存在：空的", async () => {
     await expect(listWorkspaceFiles(join(tmpdir(), "hub-no-such-dir-xyz"))).resolves.toEqual({ files: [], truncated: false });
   });
@@ -98,6 +136,18 @@ describe("打分和搜索", () => {
     expect((await files.search([root], "fresh")).matches).toEqual([]);
     clock = 1000;
     expect((await files.search([root], "fresh")).matches).toEqual([{ root, path: "fresh.md" }]);
+  });
+
+  it("清单缓存有上限：超过 maxCaches 个文件夹，最旧的被淘汰，下次搜它要重新列", async () => {
+    const [a, b, c] = [tempDir(), tempDir(), tempDir()];
+    for (const d of [a, b, c]) write(d, ["old.md"]);
+    const files = createWorkspaceFiles({ now: () => 0, freshMs: 1_000_000, maxCaches: 2 });
+    for (const d of [a, b, c]) await files.search([d], "");
+    for (const d of [a, b, c]) write(d, ["fresh.md"]);
+    // b、c 还在缓存里（看不到新文件），a 被淘汰了（重新列，看得到）
+    expect((await files.search([b], "fresh")).matches).toEqual([]);
+    expect((await files.search([c], "fresh")).matches).toEqual([]);
+    expect((await files.search([a], "fresh")).matches).toEqual([{ root: a, path: "fresh.md" }]);
   });
 
   it("27：搜索词只拿来比，`../../etc` 这类搜不出文件夹外面的东西", async () => {

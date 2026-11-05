@@ -983,6 +983,56 @@ describe("审查后补的（PR #34）", () => {
     expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report", summary: "压缩后做完" });
   });
 
+  it("自动压缩（trigger: auto）、这一轮以工具调用收尾没有文字：照常汇报，项目经理不干等", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t1", toolUseId: "tu1", name: "Bash", input: { command: "ls" }, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-auto2", trigger: "auto", preTokens: 100, postTokens: 10, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t2", toolUseId: "tu2", name: "Bash", input: { command: "pwd" }, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 10, at: now });
+    const line = workerLines().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status: "unformatted" });
+    expect(line.text).toContain("没有文字回复");
+  });
+
+  it("自动压缩、这一轮什么 agent 消息都没有：也照常汇报（只有手动 /compact 才跳过）", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-auto3", trigger: "auto", preTokens: 100, postTokens: 10, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 10, at: now });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report" });
+  });
+
+  it("手动 /compact 但这一轮还做了别的（有工具调用）：照常汇报", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
+    const reportsBefore = workerLines().filter((l) => workerEventOf(l)?.event === "report").length;
+    const compact = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "compact2", text: "/compact" }).messageId;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [compact], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [compact], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "context.compacted", uuid: "cb-m2", trigger: "manual", preTokens: 100, postTokens: 10, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t3", toolUseId: "tu3", name: "Bash", input: { command: "ls" }, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [compact], durationMs: 10, at: now });
+    expect(workerLines().filter((l) => workerEventOf(l)?.event === "report")).toHaveLength(reportsBefore + 1);
+  });
+
+  it("hub worker send /compact：返回文案说这一轮只压缩上下文、不会有汇报；别的话还是“做完一轮汇报会自动发给你”", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "第一轮"));
+    for (const text of ["/compact", "/compact 只留结论"]) {
+      const reply = hub(lin.sessionId, "worker.send", { workerId: worker.id, text }).text;
+      expect(reply, text).toMatch(/只压缩上下文，不会有汇报/);
+      expect(reply, text).not.toMatch(/自动发给你/);
+    }
+    expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "接着做" }).text).toMatch(/做完一轮汇报会自动发给你/);
+  });
+
   it("建 worktree 彻底失败：也登记 Worker 会话的 session.end", () => {
     repos.add(main);
     const worker = start().data.worker;
