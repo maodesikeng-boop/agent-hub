@@ -1,6 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import type * as React from "react";
+import { useAccentContainer } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
 
 // 弹窗（docs/ui-standard.md 第 10 条）：rounded-2xl、p-6、内容之间 gap-6；标题 17px 半粗在左上，关闭按钮右上；
@@ -15,8 +16,9 @@ export function DialogContent({
   title,
   ...props
 }: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "title"> & { title: string }) {
+  const container = useAccentContainer();
   return (
-    <DialogPrimitive.Portal>
+    <DialogPrimitive.Portal container={container}>
       <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/30" />
       <DialogPrimitive.Content
         data-slot="dialog-content"

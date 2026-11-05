@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* 主题变量：樱粉，只有浅色。shadcn 组件和 Tailwind 的颜色类都从这里取值；怎么用见 docs/ui-standard.md */
+/* 主题变量：中性色，只有浅色；强调色（--primary）在项目经理的会话里由外层容器按它的颜色设（lib/palette.ts）。shadcn 组件和 Tailwind 的颜色类都从这里取值；怎么用见 docs/ui-standard.md */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -16,8 +16,8 @@
   --color-accent: var(--accent);
   --color-border: var(--border);
   --color-ring: var(--ring);
-  --color-bubble-me: var(--bubble-me);
-  --color-bubble-me-foreground: var(--bubble-me-foreground);
+  --color-bubble-me: var(--primary);
+  --color-bubble-me-foreground: var(--primary-foreground);
   --color-bubble-agent: var(--bubble-agent);
   --color-warn: var(--warn);
   --color-warn-foreground: var(--warn-foreground);
@@ -41,7 +41,8 @@
   --sidebar: #f6f6f7;
   --sidebar-active: #e9e9ec;
   --sidebar-hover: #efeff1;
-  --primary: #d6336c;
+  /* 不属于任何项目经理的地方（左栏、设置、新建弹窗）用中性色；项目经理的会话里会被外层容器覆盖（lib/accent-scope.tsx） */
+  --primary: #18181b;
   --primary-foreground: #ffffff;
   --secondary: #f3f3f5;
   --secondary-foreground: #18181b;
@@ -51,8 +52,6 @@
   --border: #ececef;
   /* 键盘焦点的圈：中性灰，不用主色（docs/ui-standard.md 第 7 条） */
   --ring: #a1a1aa;
-  --bubble-me: #d6336c;
-  --bubble-me-foreground: #ffffff;
   --bubble-agent: #f2f2f4;
   --warn: #fff4e0;
   --warn-foreground: #8a4b00;

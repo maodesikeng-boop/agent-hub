@@ -1,5 +1,6 @@
 import { Loader2, PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { AccentScope } from "./lib/accent-scope.tsx";
 import type { ConversationId, MessageId, PersonaChangeId, PmId } from "../shared/index.ts";
 import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
@@ -99,7 +100,7 @@ export function App() {
   if (state.phase === "loading") {
     return (
       <div className={FULLPAGE}>
-        <Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
+        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
         <p>加载中</p>
       </div>
     );
@@ -213,6 +214,8 @@ export function App() {
         }}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
+      {/* 项目经理的会话（对话、它的 Worker、资料页、右栏）在它的强调色里；左栏和弹窗不在 */}
+      <AccentScope colorKey={active?.avatarKey ?? null}>
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
         {profile ? (
           <PmProfile
@@ -281,6 +284,7 @@ export function App() {
         )}
       </main>
       {!compact && rail}
+      </AccentScope>
     </div>
     </ModelCatalogProvider>
   );
