@@ -11,10 +11,10 @@ import {
   type PmMode,
 } from "../../shared/index.ts";
 import { postCreatePm, postPickFolder } from "../client.ts";
-import { errorText } from "../format.ts";
+import { errorText, nameError } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
-import { Dialog, DialogContent, DialogFooter } from "../ui/dialog.tsx";
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
 import { Input, Textarea } from "../ui/input.tsx";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
@@ -32,7 +32,9 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   const [picking, setPicking] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
 
+  // 表单校验（docs/ui-standard.md 第 9 条）：空着“创建”是灰的不报错；填得不对在那一行下面写原因
   const cleanName = normalizeName(name);
+  const nameProblem = nameError(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
   const agentResult = settingOf(agent);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && !busy;
@@ -76,60 +78,65 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     }
   };
 
+  // 标题和“创建”固定，只有中间（DialogBody）滚：展开“更多设置”后“创建”还在视野里
   return (
-    <form className="grid gap-6" onSubmit={(e) => void submit(e)}>
-      <SettingsGroup>
-        <SettingsRow label="名字">
-          {(id) => <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" onChange={(e) => setName(e.target.value)} />}
-        </SettingsRow>
-        <SettingsRow label="主文件夹（可选）" error={pickError}>
-          {(id) => (
-            <>
-              <Input
-                id={id}
-                value={folder}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="~/code/my-project"
-                className="w-[160px]"
-                onChange={(e) => setFolder(e.target.value)}
-              />
-              <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
-                {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
-                选择…
-              </Button>
-            </>
-          )}
-        </SettingsRow>
-      </SettingsGroup>
-      <SettingsGroup title="工作方式">
-        <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
-      </SettingsGroup>
-      <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-        <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
-          <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
-          更多设置
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3 grid gap-6">
-          <SettingsGroup title="Agent">
-            <AgentRows value={agent} onChange={setAgent} disabled={busy} />
-          </SettingsGroup>
-          <SettingsGroup title="性格设定">
-            <Textarea
-              aria-label="性格设定"
-              rows={8}
-              className="block max-h-[60vh] min-h-32 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] field-sizing-content focus-visible:ring-0"
-              value={persona}
-              onChange={(e) => setPersona(e.target.value)}
-            />
-            {personaTooLong && (
-              <div className="px-4 py-2.5">
-                <RowError>性格设定太长</RowError>
-              </div>
+    <DialogForm onSubmit={(e) => void submit(e)}>
+      <DialogBody>
+        <SettingsGroup>
+          <SettingsRow label="名字" error={nameProblem}>
+            {(id) => (
+              <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
             )}
-          </SettingsGroup>
-        </CollapsibleContent>
-      </Collapsible>
+          </SettingsRow>
+          <SettingsRow label="主文件夹" error={pickError}>
+            {(id) => (
+              <>
+                <Input
+                  id={id}
+                  value={folder}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="可选"
+                  className="w-[240px] min-w-0"
+                  onChange={(e) => setFolder(e.target.value)}
+                />
+                <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
+                  {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  选择…
+                </Button>
+              </>
+            )}
+          </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup title="工作方式">
+          <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
+        </SettingsGroup>
+        <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
+          <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
+            更多设置
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-3 grid gap-6">
+            <SettingsGroup label="模型">
+              <AgentRows value={agent} onChange={setAgent} disabled={busy} />
+            </SettingsGroup>
+            <SettingsGroup title="性格设定">
+              <Textarea
+                aria-label="性格设定"
+                rows={8}
+                className="block max-h-[60vh] min-h-32 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] field-sizing-content focus-visible:ring-0"
+                value={persona}
+                onChange={(e) => setPersona(e.target.value)}
+              />
+              {personaTooLong && (
+                <div className="px-4 py-2.5">
+                  <RowError>性格设定太长</RowError>
+                </div>
+              )}
+            </SettingsGroup>
+          </CollapsibleContent>
+        </Collapsible>
+      </DialogBody>
       {error && (
         <p role="alert" className="px-4 text-[13.5px] text-danger [overflow-wrap:anywhere]">
           {error}
@@ -138,10 +145,10 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
       <DialogFooter>
         <Button type="submit" disabled={!canSubmit}>
           {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          {busy ? "创建中" : "创建"}
+          {busy ? "Creating…" : "创建"}
         </Button>
       </DialogFooter>
-    </form>
+    </DialogForm>
   );
 }
 

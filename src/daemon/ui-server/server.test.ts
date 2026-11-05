@@ -1543,7 +1543,7 @@ describe("同时上传的个数", () => {
 
 describe("GET /api/models（模型名单）", () => {
   const vendorCatalog = {
-    vendor: "claude" as const,
+    ...bundledModelCatalog("claude"),
     source: "vendor" as const,
     models: [{ id: "opus", label: "Opus 5.5", description: null, efforts: ["low", "high"] }],
     defaultEfforts: null,

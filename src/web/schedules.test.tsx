@@ -35,19 +35,21 @@ async function openProfile(schedules = [makeSchedule()]) {
 }
 
 describe("定时任务组", () => {
-  it("每个任务一行：名字、频率、下次时间、上次结果；失败悬停看原因", async () => {
+  it("每个任务一行：名字，下面是频率、下次时间（各自一段，不用逗号拼）；只有失败才显示上次结果，悬停看原因", async () => {
     const { group } = await openProfile([
       makeSchedule({ id: 1, name: "晨报" }),
       makeSchedule({ id: 2, name: "巡检", kind: "interval", atTime: null, everyMinutes: 120, lastStatus: "failed", lastError: "会话起不来" }),
       makeSchedule({ id: 3, name: "周报", enabled: false, lastStatus: "sent" }),
     ]);
     expect(within(group).getByText("晨报")).toBeInTheDocument();
-    expect(within(group).getByText(/每天 09:00，下次 /)).toBeInTheDocument();
-    expect(within(group).getByText("还没跑过")).toBeInTheDocument();
-    expect(within(group).getByText(/每隔 2 小时/)).toBeInTheDocument();
+    expect(within(group).getAllByText("每天 09:00")).toHaveLength(2);
+    expect(within(group).getAllByText(/^下次 /).length).toBeGreaterThan(0);
+    expect(within(group).queryByText(/，/)).not.toBeInTheDocument();
+    expect(within(group).queryByText("还没跑过")).not.toBeInTheDocument();
+    expect(within(group).getByText("每隔 2 小时")).toBeInTheDocument();
     expect(within(group).getByText("上次失败")).toHaveAttribute("title", "会话起不来");
-    expect(within(group).getByText(/已暂停/)).toBeInTheDocument();
-    expect(within(group).getByText("上次成功")).toBeInTheDocument();
+    expect(within(group).getByText("已暂停")).toBeInTheDocument();
+    expect(within(group).queryByText("上次成功")).not.toBeInTheDocument();
     expect(within(group).getByRole("switch", { name: "晨报 运行中" })).toBeChecked();
     expect(within(group).getByRole("switch", { name: "周报 运行中" })).not.toBeChecked();
   });
@@ -89,8 +91,8 @@ describe("定时任务组", () => {
     const { group } = await openProfile([]);
     act(() => ws.push(changeOf(11, "schedule.updated", { schedule: makeSchedule({ id: 7, name: "新来的" }) })));
     expect(await within(group).findByText("新来的")).toBeInTheDocument();
-    act(() => ws.push(changeOf(12, "schedule.updated", { schedule: makeSchedule({ id: 7, name: "新来的", lastStatus: "skipped" }) })));
-    expect(await within(group).findByText("上次跳过")).toBeInTheDocument();
+    act(() => ws.push(changeOf(12, "schedule.updated", { schedule: makeSchedule({ id: 7, name: "新来的", lastStatus: "failed", lastError: "x" }) })));
+    expect(await within(group).findByText("上次失败")).toBeInTheDocument();
     act(() => ws.push(changeOf(13, "schedule.removed", { scheduleId: 7 })));
     await waitFor(() => expect(within(group).queryByText("新来的")).not.toBeInTheDocument());
   });
@@ -128,30 +130,61 @@ describe("新建表单", () => {
     expect(api.callsTo("POST", /schedules/)[0]!.body).toEqual({ name: "巡检", prompt: "看一眼", everyMinutes: 120 });
   });
 
-  it.each([
-    ["名字是空的", { name: "", prompt: "x" }, /名字不能是空的/],
-    ["名字带【】", { name: "晨【报】", prompt: "x" }, /不能有“【”“】”/],
-    ["任务说明是空的", { name: "晨报", prompt: "" }, /要它做什么不能是空的/],
-  ])("%s：不发请求，表单下显示原因", async (_label, v, message) => {
+  const rowOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-slot=settings-row]")!;
+  const saveButton = (group: HTMLElement) => within(group).getByRole("button", { name: "保存" });
+
+  it("空的：“保存”是灰的，不报错；只填了名字还是灰的", async () => {
     const { user, group } = await openProfile([]);
-    await fill(user, group, v);
-    await save(user, group);
-    expect(await within(group).findByRole("alert")).toHaveTextContent(message);
-    expect(api.callsTo("POST", /schedules/)).toHaveLength(0);
+    await fill(user, group, {});
+    expect(saveButton(group)).toBeDisabled();
+    expect(within(group).queryByRole("alert")).not.toBeInTheDocument();
+    await user.type(within(group).getByRole("textbox", { name: "名字" }), "晨报");
+    expect(saveButton(group)).toBeDisabled();
+    expect(within(group).queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("时间格式不对", async () => {
+  it.each([
+    ["名字超长", { name: "名".repeat(41), prompt: "x" }, "名字", "名字最多 40 个字"],
+    ["名字带【】", { name: "晨【报】", prompt: "x" }, "名字", "名字里不能有“【”“】”"],
+  ])("%s：那一行下面马上写原因，输入框红边，“保存”是灰的", async (_label, v, field, message) => {
+    const { user, group } = await openProfile([]);
+    await user.click(within(group).getByRole("button", { name: "新建" }));
+    const input = within(group).getByRole("textbox", { name: field });
+    await user.click(input);
+    await user.paste(v.name);
+    await user.type(within(group).getByRole("textbox", { name: "要它做什么" }), v.prompt);
+    expect(within(rowOf(input)).getByRole("alert")).toHaveTextContent(message);
+    expect(within(group).getAllByRole("alert")).toHaveLength(1);
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(saveButton(group)).toBeDisabled();
+  });
+
+  it("合法：没有错误，“保存”能点", async () => {
+    const { user, group } = await openProfile([]);
+    await fill(user, group, { name: "晨报", prompt: "整理进展" });
+    expect(within(group).queryByRole("alert")).not.toBeInTheDocument();
+    expect(saveButton(group)).toBeEnabled();
+  });
+
+  it("多行输入在框里：没有边框和拖拽角，名字放在占位符里", async () => {
+    const { user, group } = await openProfile([]);
+    await fill(user, group, {});
+    const prompt = within(group).getByRole("textbox", { name: "要它做什么" });
+    expect(prompt).toHaveClass("border-0", "resize-none");
+    expect(prompt).toHaveAttribute("placeholder", "要它做什么");
+  });
+
+  it("时间格式不对：频率那一行下面写原因，“保存”是灰的", async () => {
     const { user, group } = await openProfile([]);
     await fill(user, group, { name: "晨报", prompt: "x" });
     const time = within(group).getByRole("textbox", { name: "时间" });
     await user.clear(time);
     await user.type(time, "9点");
-    await save(user, group);
-    expect(await within(group).findByRole("alert")).toHaveTextContent("HH:MM");
-    expect(api.callsTo("POST", /schedules/)).toHaveLength(0);
+    expect(within(rowOf(time)).getByRole("alert")).toHaveTextContent("HH:MM");
+    expect(saveButton(group)).toBeDisabled();
   });
 
-  it("间隔小于 15 分钟", async () => {
+  it("间隔小于 15 分钟：频率那一行下面写原因", async () => {
     const { user, group } = await openProfile([]);
     await fill(user, group, { name: "巡检", prompt: "x" });
     await user.selectOptions(within(group).getByRole("combobox", { name: "频率" }), "interval");
@@ -159,21 +192,18 @@ describe("新建表单", () => {
     const every = within(group).getByRole("textbox", { name: "间隔" });
     await user.clear(every);
     await user.type(every, "5");
-    await save(user, group);
-    expect(await within(group).findByRole("alert")).toHaveTextContent("间隔最短 15 分钟");
-    expect(api.callsTo("POST", /schedules/)).toHaveLength(0);
+    expect(within(rowOf(every)).getByRole("alert")).toHaveTextContent("间隔最短 15 分钟");
+    expect(saveButton(group)).toBeDisabled();
   });
 
-  it("已经 20 个：不发请求，提示最多 20 个", async () => {
+  it("已经 20 个：“新建”不能点，旁边写已满", async () => {
     const many = Array.from({ length: 20 }, (_, i) => makeSchedule({ id: i + 1, name: `任务${i + 1}` }));
-    const { user, group } = await openProfile(many);
-    await fill(user, group, { name: "第 21 个", prompt: "x" });
-    await save(user, group);
-    expect(await within(group).findByRole("alert")).toHaveTextContent("最多 20 个");
-    expect(api.callsTo("POST", /schedules/)).toHaveLength(0);
+    const { group } = await openProfile(many);
+    expect(within(group).getByRole("button", { name: /新建/ })).toBeDisabled();
+    expect(within(group).getByText("已满 20 个")).toBeInTheDocument();
   });
 
-  it("后台拒绝：原因显示在表单下，表单保留", async () => {
+  it("后台拒绝：原因显示在按钮上面，表单保留", async () => {
     const { user, group } = await openProfile([]);
     api.addSchedule = () => ({ status: 409, body: { error: "定时任务最多 20 个，你已经有 20 个了" } });
     await fill(user, group, { name: "晨报", prompt: "x" });
