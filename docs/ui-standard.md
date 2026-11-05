@@ -66,6 +66,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
   - 页面底色 `bg-background`（白）；左栏和分组框 `bg-sidebar`；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`。
   - 分隔线：白底上 `border-border`，浅灰框里 `divide-sidebar-active`。
   - 次要文字 `text-muted-foreground`；错误 `text-danger`；警告 `bg-warn text-warn-foreground`。
+  - 状态色（Worker 汇报，第 17 条）：做完了 `--success`、有问题 `--caution`、放弃了和出错 `--danger`；气泡底色是它们掺进白底的很淡的一层（`--bubble-success` / `--bubble-warn` / `--bubble-danger`），不用主色。
 - 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的粉。
 - 不用渐变、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。提示条（“重连中”、健康问题）也只用底色，不加阴影和描边。
 
@@ -216,7 +217,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 一轮里的工具调用、派出 / 收工 Worker、建删定时任务这些操作合成**一行**，放在名字下面：`Worked for 23s ›`（13.5px 灰，悬停变前景色，无底色、无胶囊），点开才列出每一步（12px，等宽字体，命令原样）。用时 = 这一轮最后一条的时间 − 这一轮开始的时间（触发它的那句话、和上一轮最后一条里晚的那个），都用已有的时间戳。不到 10 秒带一位小数（8.3s），之后 23s、1m 5s、1h 2m。没有操作的轮不出这一行。
   - 正在跑：这一行挪到这一轮最下面，写英文状态（`Thinking…`、`Running command…`、`Reading a.ts…`，文案见 `step-labels.ts`），省略号有淡入淡出；有操作时同样能点开看明细。跑完回到名字下面，变成 `Worked for …`。
   - 这一轮的文字按顺序排在下面（`hub ask` 问你的那条不另挂“等你确定”标签，右栏列着，点过去高亮这一条）；跑完后最下面一行是复制按钮（图标按钮 `icon-sm`，复制这一轮所有文字的 Markdown 原文，点了换成勾）和结束时间（12px 灰，`tabular-nums`）。
-- **Worker 的发言**（项目经理对话里的汇报）：和 agent 一样是“头像 + 名字 + 正文”。头像统一用中性灰的团子（`Avatar` 的 `neutral`），不按 Worker 配色；名字写 Worker 的标题，后面跟状态小标注（12px：图标带颜色、字是灰的：做完了 / 有问题 / 放弃了 / 出错）；正文是汇报摘要。整条可点，悬停浅灰底，点开 Worker 的完整对话。Worker 自己的对话里它的头像同样是中性灰，项目经理说的话是项目经理的头像 + 名字。
+- **Worker 的发言**（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：是一个靠左的**消息气泡**，头像和名字在气泡上面（和 agent 一样一个 24px 中性灰团子 `Avatar neutral` + 名字 13.5px、500、灰，名字是 Worker 的标题），气泡里是汇报摘要。`WorkerSpeech`（`Messages.tsx`），状态和颜色的对应在 `worker-status.ts`。
+  - **气泡**：圆角、内边距和用户气泡同一套（`BUBBLE`：`rounded-[22px] px-4 py-2.5`，15px），底色是浅色，和项目经理自己的正文（没有气泡）、用户的粉色气泡一眼分得开。整个气泡是一个按钮，点开 Worker 的完整对话；悬停底色加深一点点（掺 5% 前景色），键盘聚焦有中性的圈。
+  - **状态用颜色，不写字**：做完了偏绿、有问题偏黄、放弃了和出错偏红，没按格式的、没有状态的是中性灰。“做完了 / 有问题 / 放弃了 / 出错”这几个字不显示，放在气泡的 `title`，`aria-label` 是“标题，状态：摘要”。颜色全部来自 `styles.css` 的变量（`--success`、`--caution`、`--danger` 掺进 `--background` 得到 `--bubble-success` / `--bubble-warn` / `--bubble-danger`），饱和度很低，不写死色值。
+  - **两种画法，用 `worker-status.ts` 的常量 `WORKER_STATUS_STYLE` 切换**：`"tint"`（方案 A）气泡底色带一点状态色；`"dot"`（方案 B）气泡是中性浅灰 `--bubble-agent`，状态是头像右下角一个 10px 的色点（白色 2px 描边，中性的没有点）。默认 `"tint"`，合并前改成用户选的那个，另一个画法的代码和样式可以删。
+  - Worker 自己的对话里它的头像同样是中性灰，项目经理说的话是项目经理的头像 + 名字。Worker 对话顶栏、右栏 Worker 行的状态是运行状态（Working… / Idle / Ended，第 12 条），不是汇报的结果，不用这套颜色。
 - **系统行**：
   - 不单独显示：派出 Worker、Worker 收工、项目经理建删定时任务——它们是项目经理这一轮的操作，收在 `Worked for` 里（不在任何一轮里时才显示成很淡的一行）。
   - 很淡的一行：建项目、挂上 / 移除文件夹、改性格设定（带“撤销”）、开新会话、交接失败、定时任务没跑成、你直接对 Worker 说的话。靠左和正文对齐，12px 灰，前面一个 14px 图标，没有底色、不居中、不用胶囊；出错的图标用 `text-danger`。

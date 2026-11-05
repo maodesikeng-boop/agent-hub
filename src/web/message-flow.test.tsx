@@ -2,10 +2,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { Message } from "../shared/index.ts";
+import type { Message, WorkerMessageMeta } from "../shared/index.ts";
 import { AgentStatus } from "./components/AgentStatus.tsx";
 import { MessageList } from "./components/MessageList.tsx";
-import { displayText, type AgentIdentity, type MessageActions } from "./components/Messages.tsx";
+import { displayText, WorkerSpeech, type AgentIdentity, type MessageActions } from "./components/Messages.tsx";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine } from "./test-utils.ts";
 
@@ -165,39 +165,86 @@ describe("Worker 的发言", () => {
   const report = (over: Parameters<typeof makeWorkerLine>[0]["line"] = {}) =>
     makeWorkerLine({ id: 5, line: { event: "report", status: "done", summary: "按钮统一成 36px，开了 PR #128", ...over } });
 
-  it("中性头像 + Worker 标题 + 状态小标注 + 摘要，整条点开 Worker 的对话", async () => {
+  it("头像和标题在气泡上面，摘要在靠左的气泡里，整个气泡点开 Worker 的对话", async () => {
     const onOpenWorker = vi.fn();
     const { container } = list([report()], { actions: actions({ onOpenWorker }) });
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
     expect(row).toHaveAttribute("data-side", "left");
     expect(row.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
     expect(within(row).getByText("修 X")).toBeInTheDocument();
-    expect(within(row).getByText("做完了")).toBeInTheDocument();
-    expect(within(row).getByText("按钮统一成 36px，开了 PR #128")).toBeInTheDocument();
-    // 不再是灰色胶囊、不再有“Worker「」”
-    expect(row.innerHTML).not.toContain("bg-muted");
-    expect(row).not.toHaveTextContent("Worker「");
-    await userEvent.click(within(row).getByRole("button"));
+    const bubble = within(row).getByRole("button");
+    expect(bubble).toHaveAttribute("data-bubble");
+    expect(bubble).toHaveTextContent("按钮统一成 36px，开了 PR #128");
+    // 头像和标题在气泡外面、气泡前面
+    expect(bubble).not.toContainElement(row.querySelector("[data-slot='avatar']"));
+    expect(bubble).not.toHaveTextContent("修 X");
+    // 圆角、内边距和用户气泡同一套，悬停有反馈
+    const user = list([makeUserMessage({ id: 1 })]).container.querySelector("[data-bubble]") as HTMLElement;
+    for (const cls of ["rounded-[22px]", "px-4", "py-2.5"]) {
+      expect(bubble.className).toContain(cls);
+      expect(user.className).toContain(cls);
+    }
+    expect(bubble.className).toContain("hover:");
+    expect(row.innerHTML).not.toContain("Worker「");
+    await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
-  it("有问题、放弃了、出错：各自的小标注；出错的原因写成人话，原文在 title", () => {
+  it("状态不写字：做完了、有问题、放弃了、出错各一种颜色，字放在 title 和 aria-label", () => {
     const { container } = list([
+      report(),
       report({ status: "problem", summary: "缺一个 key" }),
       makeWorkerLine({ id: 6, line: { event: "report", status: "gave_up", summary: "做不了" } }),
       makeWorkerLine({ id: 7, line: { event: "turn_failed", summary: "error_during_execution: API Error: 529 Overloaded" } }),
       makeWorkerLine({ id: 8, line: { event: "turn_failed", summary: "被停止了" } }),
     ]);
     const rows = Array.from(container.querySelectorAll("[data-worker-report]")) as HTMLElement[];
-    expect(rows.map((r) => r.querySelector("[data-tag]")?.textContent)).toEqual(["有问题", "放弃了", "出错", "出错"]);
-    expect(within(rows[2]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
-    expect(within(rows[3]!).getByText("被停止了")).toBeInTheDocument();
+    expect(rows.map((r) => r.getAttribute("data-tone"))).toEqual(["success", "warn", "danger", "danger", "danger"]);
+    const buttons = rows.map((r) => within(r).getByRole("button"));
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["做完了", "有问题", "放弃了", "出错", "出错"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "修 X，做完了：按钮统一成 36px，开了 PR #128",
+      "修 X，有问题：缺一个 key",
+      "修 X，放弃了：做不了",
+      "修 X，出错：Claude 服务繁忙，稍后重试",
+      "修 X，出错：被停止了",
+    ]);
+    // 界面上不再有状态的字
+    for (const word of ["做完了", "有问题", "放弃了"]) expect(container).not.toHaveTextContent(word);
+    expect(container.querySelector("[data-tag]")).toBeNull();
+    // 出错的原因写成人话，原文在正文的 title
+    expect(within(rows[3]!).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", "error_during_execution: API Error: 529 Overloaded");
   });
 
-  it("没按格式：没有小标注，正文是第一行", () => {
+  it("方案 A（tint）：气泡底色带状态色，没有色点；中性的用中性灰", () => {
+    const { container } = render(<WorkerSpeech line={report().meta as WorkerMessageMeta} onOpen={() => {}} variant="tint" />);
+    const bubble = container.querySelector("[data-bubble]") as HTMLElement;
+    expect(bubble.className).toContain("--bubble-success");
+    expect(container.querySelector("[data-dot]")).toBeNull();
+    const neutral = render(<WorkerSpeech line={{ ...(report().meta as WorkerMessageMeta), status: "unformatted" }} onOpen={() => {}} variant="tint" />);
+    expect((neutral.container.querySelector("[data-bubble]") as HTMLElement).className).toContain("--bubble-agent");
+  });
+
+  it("方案 B（dot）：气泡永远中性灰，状态是头像右下角的色点；中性的没有点", () => {
+    const { container } = render(<WorkerSpeech line={report({ status: "problem" }).meta as WorkerMessageMeta} onOpen={() => {}} variant="dot" />);
+    const bubble = container.querySelector("[data-bubble]") as HTMLElement;
+    expect(bubble.className).toContain("--bubble-agent");
+    expect(bubble.className).not.toContain("--bubble-warn");
+    const dot = container.querySelector("[data-dot]") as HTMLElement;
+    expect(dot).toHaveAttribute("data-dot", "warn");
+    expect(dot).toHaveAttribute("aria-hidden", "true");
+    expect(dot.className).toContain("bg-caution");
+    const neutral = render(<WorkerSpeech line={{ ...(report().meta as WorkerMessageMeta), status: "unformatted" }} onOpen={() => {}} variant="dot" />);
+    expect(neutral.container.querySelector("[data-dot]")).toBeNull();
+  });
+
+  it("没按格式：中性灰、没有 title，正文是第一行", () => {
     const { container } = list([report({ status: "unformatted", summary: "我改完了" })]);
-    expect(container.querySelector("[data-tag]")).toBeNull();
-    expect(container).toHaveTextContent("我改完了");
+    const row = container.querySelector("[data-worker-report]") as HTMLElement;
+    expect(row).toHaveAttribute("data-tone", "neutral");
+    const bubble = within(row).getByRole("button");
+    expect(bubble).not.toHaveAttribute("title");
+    expect(bubble).toHaveTextContent("我改完了");
   });
 
   it("老数据：meta 里没有 summary、status 也能显示", () => {

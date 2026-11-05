@@ -21,6 +21,10 @@
   --color-bubble-agent: var(--bubble-agent);
   --color-warn: var(--warn);
   --color-warn-foreground: var(--warn-foreground);
+  --color-bubble-success: var(--bubble-success);
+  --color-bubble-warn: var(--bubble-warn);
+  --color-bubble-danger: var(--bubble-danger);
+  --color-caution: var(--caution);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
@@ -59,6 +63,12 @@
   --danger: #d92d20;
   --danger-soft: #feeeec;
   --success: #16a34a;
+  /* 黄色的状态色（有问题）：--warn 是提示条的浅底，圆点要深一点 */
+  --caution: #dba10b;
+  /* Worker 汇报气泡的状态底色（docs/ui-standard.md 第 17 条）：状态色掺进白底，很淡，对标 Slack、Linear */
+  --bubble-success: color-mix(in srgb, var(--success) 9%, var(--background));
+  --bubble-warn: color-mix(in srgb, var(--caution) 12%, var(--background));
+  --bubble-danger: color-mix(in srgb, var(--danger) 8%, var(--background));
   /* 左下角“我”的头像 */
   --me: #1fb37d;
   --me-foreground: #ffffff;

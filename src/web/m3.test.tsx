@@ -107,12 +107,13 @@ afterEach(() => {
 });
 
 describe("那一行", () => {
-  it("Worker 的汇报是“中性头像 + 标题 + 状态小标注 + 摘要”，整条是一个按钮；“已派出”收在项目经理那一轮的 Worked for 里", async () => {
+  it("Worker 的汇报是“头像 + 标题”加一个摘要气泡，整个气泡是一个按钮（状态是颜色，字在 aria-label）；“已派出”收在项目经理那一轮的 Worked for 里", async () => {
     const user = userEvent.setup();
     await boot();
     const done = within(log()).getByRole("button", { name: /做完了/ });
-    expect(done).toHaveTextContent("修 X");
+    expect(done.closest("[data-worker-report]")).toHaveTextContent("修 X");
     expect(done).toHaveTextContent("改好了，测试通过");
+    expect(done.closest("[data-worker-report]")).toHaveAttribute("data-tone", "success");
     expect(done.closest("[data-worker-report]")).not.toBeNull();
     expect(within(log()).queryByRole("button", { name: "Worker「修 X」已派出" })).not.toBeInTheDocument();
     await user.click(within(log()).getByRole("button", { name: /Worked for/ }));
@@ -174,16 +175,16 @@ describe("那一行", () => {
     const buttons = within(log()).getAllByRole("button");
     expect(buttons).toHaveLength(6);
     const expected = [
-      ["有问题", "缺一个 key"],
-      ["放弃了", "做不了"],
-      [null, "我改完了"],
-      ["出错", "被停止了"],
-      ["出错", "目录被占用"],
+      ["warn", "缺一个 key"],
+      ["danger", "做不了"],
+      ["neutral", "我改完了"],
+      ["danger", "被停止了"],
+      ["danger", "目录被占用"],
     ] as const;
-    expected.forEach(([tag, summary], i) => {
+    expected.forEach(([tone, summary], i) => {
       const row = buttons[i]!.closest("[data-worker-report]") as HTMLElement;
       expect(row).toHaveTextContent("修 X");
-      expect(row.querySelector("[data-tag]")?.textContent ?? null).toBe(tag);
+      expect(row).toHaveAttribute("data-tone", tone);
       expect(row).toHaveTextContent(summary);
     });
     // 收工：不在一轮里，很淡的一行
