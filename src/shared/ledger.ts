@@ -25,6 +25,7 @@ import type {
   Unsubscribe,
 } from "./domain.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "./hub.ts";
+import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 
 /**
@@ -473,6 +474,14 @@ export interface Ledger {
    * 对话里写一条 schedule.failed“定时任务没跑成：名字：原因”。
    */
   runDueSchedules(nowMs: number): void;
+  /**
+   * 界面的定时任务卡片（M6）：和 hub schedule add / pause / resume / remove 同一套校验和写库（schedules.ts），只是不看是谁的会话。
+   * addSchedule：项目经理不存在 → not_found；参数不合规 → invalid（中文原因）；超过 MAX_SCHEDULES_PER_PM → conflict。
+   * setScheduleEnabled：true = 恢复（下一次从现在算），false = 暂停；removeSchedule 在对话里留一条“已删除”。不存在 → not_found。
+   */
+  addSchedule(pmId: PmId, args: HubArgs<"schedule.add">): ScheduleRecord;
+  setScheduleEnabled(scheduleId: ScheduleId, enabled: boolean): ScheduleRecord;
+  removeSchedule(scheduleId: ScheduleId): void;
   /** 给执行器处理函数用：读动作要发的消息。找不到返回 null。 */
   getMessage(id: MessageId): Message | null;
   /**

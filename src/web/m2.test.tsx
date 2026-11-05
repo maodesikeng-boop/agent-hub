@@ -541,7 +541,7 @@ describe("资料页", () => {
     await boot();
     const page = await pmChat(user);
     await within(page).findByRole("textbox", { name: "性格设定" });
-    const groups = ["Agent", "工作方式", "项目", "性格设定", "修改记录", "会话"];
+    const groups = ["Agent", "工作方式", "项目", "定时任务", "性格设定", "修改记录", "会话"];
     expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
     for (const title of groups) expect(within(groupIn(page, title)).getByRole("heading", { name: title })).toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "保存" })).not.toBeInTheDocument();

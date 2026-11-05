@@ -1,7 +1,9 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
 import type {
+  AddScheduleRequest,
   Attachment,
+  ScheduleRecord,
   Change,
   Conversation,
   ConversationSnapshot,
@@ -190,6 +192,27 @@ export function makePersonaView(over: Partial<PersonaView> = {}): PersonaView {
   };
 }
 
+export function makeSchedule(over: Partial<ScheduleRecord> = {}): ScheduleRecord {
+  return {
+    id: 1,
+    pmId: 1,
+    name: "晨报",
+    kind: "daily",
+    atTime: "09:00",
+    everyMinutes: null,
+    prompt: "整理昨天的进展",
+    enabled: true,
+    nextRunAt: new Date(2030, 0, 2, 9, 0).getTime(),
+    lastRunAt: null,
+    lastStatus: null,
+    lastError: null,
+    lastMessageId: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    ...over,
+  };
+}
+
 export function makeSession(over: Partial<SessionState> = {}): SessionState {
   return {
     sessionId: 1,
@@ -279,6 +302,12 @@ export class FakeApi {
     status: 200,
     body: { changed: true, persona: makePersonaView() },
   });
+  addSchedule: (pmId: number, body: AddScheduleRequest) => Reply | Promise<Reply> = (pmId, body) => ({
+    status: 201,
+    body: makeSchedule({ id: 50, pmId, name: body.name, prompt: body.prompt }),
+  });
+  setScheduleEnabled: (id: number, enabled: boolean) => Reply | Promise<Reply> = (id, enabled) => ({ status: 200, body: makeSchedule({ id, enabled }) });
+  removeSchedule: (id: number) => Reply | Promise<Reply> = () => ({ status: 204 });
   uploads: RecordedUpload[] = [];
   /** 默认：200，编号按收到的顺序 0000000000000001、0000000000000002…，名字原样，类型按扩展名（图片 image/*）。 */
   upload: (name: string | null, file: Blob) => Reply | Promise<Reply> = (name, file) => {
@@ -327,6 +356,11 @@ export class FakeApi {
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
     const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
+    const addSched = /^\/api\/pms\/(\d+)\/schedules$/.exec(url.pathname);
+    if (addSched && method === "POST") return jsonResponse(await this.addSchedule(Number(addSched[1]), body));
+    const sched = /^\/api\/schedules\/(\d+)$/.exec(url.pathname);
+    if (sched && method === "PUT") return jsonResponse(await this.setScheduleEnabled(Number(sched[1]), body.enabled));
+    if (sched && method === "DELETE") return jsonResponse(await this.removeSchedule(Number(sched[1])));
     const renew = /^\/api\/pms\/(\d+)\/renew-session$/.exec(url.pathname);
     if (renew && method === "POST") return jsonResponse(await this.renewSession(Number(renew[1])));
     const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);

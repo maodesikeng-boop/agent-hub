@@ -134,6 +134,7 @@ export function App() {
             pm={profile}
             project={profileEntry?.project ?? null}
             folders={profileEntry?.folders ?? []}
+            schedules={state.schedules.filter((x) => x.pmId === profile.id)}
             rev={state.personaRev[profile.id] ?? 0}
             renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
             onBack={() => setProfilePm(null)}

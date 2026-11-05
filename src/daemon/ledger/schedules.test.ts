@@ -430,3 +430,30 @@ describe("T8 只能管自己的、非法参数被拒", () => {
     expect(() => hub(99_999, "schedule.list", {})).toThrow(LedgerRequestError);
   });
 });
+
+describe("界面的定时任务接口（和 hub 命令同一套校验和写库）", () => {
+  it("addSchedule：写库、推 schedule.updated、对话里留“已建”；非法参数、超 20 个报同样的原因", () => {
+    const s = ledger.addSchedule(lin.pmId, { name: "晨报", prompt: "整理", daily: "09:00" });
+    expect(s).toMatchObject({ pmId: lin.pmId, name: "晨报", kind: "daily", atTime: "09:00", enabled: true });
+    expect(changes.some((c) => c.type === "schedule.updated")).toBe(true);
+    expect(messagesIn(lin.conversationId).some((m) => systemEventOf(m)?.event === "schedule.created")).toBe(true);
+    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "", prompt: "x", daily: "09:00" }), "invalid");
+    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "【a】", prompt: "x", daily: "09:00" }), "invalid");
+    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "a", prompt: "x", daily: "9点" }), "invalid");
+    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "a", prompt: "x", everyMinutes: 5 }), "invalid", /最短 15 分钟/);
+    expectLedgerError(() => ledger.addSchedule(9_999, { name: "a", prompt: "x", daily: "09:00" }), "not_found");
+    for (let i = 1; i < MAX_SCHEDULES_PER_PM; i++) ledger.addSchedule(lin.pmId, { name: `t${i}`, prompt: "x", daily: "09:00" });
+    expectLedgerError(() => ledger.addSchedule(lin.pmId, { name: "多的", prompt: "x", daily: "09:00" }), "conflict", /最多 20/);
+  });
+
+  it("setScheduleEnabled：暂停、恢复；removeSchedule：删掉并留“已删除”；不存在 not_found", () => {
+    const { id } = ledger.addSchedule(lin.pmId, { name: "晨报", prompt: "x", everyMinutes: 30 });
+    expect(ledger.setScheduleEnabled(id, false).enabled).toBe(false);
+    expect(ledger.setScheduleEnabled(id, true)).toMatchObject({ enabled: true, nextRunAt: now + 30 * MINUTE });
+    ledger.removeSchedule(id);
+    expect(ledger.snapshot().schedules).toEqual([]);
+    expect(messagesIn(lin.conversationId).some((m) => systemEventOf(m)?.event === "schedule.removed")).toBe(true);
+    expectLedgerError(() => ledger.setScheduleEnabled(id, false), "not_found");
+    expectLedgerError(() => ledger.removeSchedule(id), "not_found");
+  });
+});

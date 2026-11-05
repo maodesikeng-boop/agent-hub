@@ -155,9 +155,26 @@ function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRev
   );
 }
 
+/** 到点的定时任务：一行小标题（“定时任务：名字（原定 09:00）”），下面是任务说明，按普通文字显示。 */
+function ScheduleRun({ text }: { text: string }) {
+  const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
+  const title = match?.[1] ?? "定时任务";
+  const body = match?.[2] ?? text;
+  return (
+    <article className="mt-5 flex flex-col items-start gap-1" data-side="left" data-event="schedule.run">
+      <h3 className="flex items-center gap-1.5 text-[13.5px] font-medium text-muted-foreground">
+        <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+        {title}
+      </h3>
+      <p className="w-full min-w-0 text-[15px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
+    </article>
+  );
+}
+
 /** 系统消息：居中的一条，去掉发给 agent 时加的【系统】，不显示投递状态。 */
 function SystemNotice({ message, actions }: { message: Message; actions: MessageActions }) {
   const event = systemEventOf(message);
+  if (event?.event === "schedule.run") return <ScheduleRun text={systemNoticeText(message)} />;
   return (
     <div className="mt-5 flex justify-center" data-side="center">
       <div className="flex max-w-[85%] flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 rounded-2xl bg-muted px-3.5 py-1.5 text-center text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">

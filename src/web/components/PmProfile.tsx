@@ -19,6 +19,7 @@ import {
   type PmMode,
   type Project,
   type ProjectFolder,
+  type ScheduleRecord,
 } from "../../shared/index.ts";
 import { ApiError, fetchPersona, postRenewSession, postRevertPersonaChange, putPersona } from "../client.ts";
 import { ACTOR_LABELS, errorText, formatTime } from "../format.ts";
@@ -30,6 +31,7 @@ import { useModelCatalog } from "../models.tsx";
 import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
+import { ScheduleGroup } from "./ScheduleGroup.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 type Load = { phase: "loading" } | { phase: "error"; message: string } | { phase: "ready"; persona: PersonaView };
@@ -161,7 +163,21 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
 }
 
 /** Agent、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后。 */
-function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project: Project | null; folders: ProjectFolder[]; persona: PersonaView; onUpdate: (p: PersonaView) => void }) {
+function PmEditor({
+  pm,
+  project,
+  folders,
+  schedules,
+  persona,
+  onUpdate,
+}: {
+  pm: Pm;
+  project: Project | null;
+  folders: ProjectFolder[];
+  schedules: ScheduleRecord[];
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+}) {
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -262,6 +278,7 @@ function PmEditor({ pm, project, folders, persona, onUpdate }: { pm: Pm; project
           </SettingsRow>
         )}
       </SettingsGroup>
+      <ScheduleGroup pmId={pm.id} schedules={schedules} />
       <SettingsGroup
         title="性格设定"
         action={
@@ -363,6 +380,7 @@ export function PmProfile({
   pm,
   project,
   folders,
+  schedules,
   rev,
   renewing,
   onBack,
@@ -371,6 +389,8 @@ export function PmProfile({
   project: Project | null;
   /** 项目没移除的文件夹，主文件夹在前。 */
   folders: ProjectFolder[];
+  /** 这个项目经理的定时任务。 */
+  schedules: ScheduleRecord[];
   /** pm.updated 的次数，变了就重新拉。 */
   rev: number;
   /** 在换新会话（selectors.ts 的 isRenewing）。 */
@@ -409,7 +429,7 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PmEditor pm={pm} project={project} folders={folders} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <PmEditor pm={pm} project={project} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
           {load.phase === "ready" && <RenewSessionGroup pmId={pm.id} renewing={renewing} />}
         </div>
       </div>
