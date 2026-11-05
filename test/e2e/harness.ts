@@ -7,7 +7,9 @@ import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import {
   API_PATHS,
+  ENV_AGY,
   ENV_CLAUDE,
+  ENV_CODEX,
   ENV_HOME,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
@@ -107,6 +109,8 @@ export function makeEnv(): E2eEnv {
     ...inherited,
     [ENV_HOME]: home,
     [ENV_CLAUDE]: claudePath,
+    [ENV_AGY]: join(fakeDir, "no-agy"),
+    [ENV_CODEX]: join(fakeDir, "no-codex"),
     [ENV_PORT]: "0",
     FAKE_CLAUDE_LOG: logFile,
     FAKE_CLAUDE_SCRIPT: scriptFile,
