@@ -3,20 +3,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ALL_EFFORTS,
   HUB_COMMANDS,
+  MIN_SCHEDULE_EVERY_MINUTES,
+  PM_MODES,
+  PM_MODE_LABELS,
   PM_PERSONA_TEMPLATE,
+  PRODUCT_NAME,
+  WORKER_BRANCH_PREFIX,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
   WORKER_REPORT_FORMAT,
   userToWorkerHeader,
+  workerReportHeader,
   type SetupOutcome,
 } from "../shared/index.ts";
 import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
+import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH } from "../shared/limits.ts";
+import { mergeUserTexts } from "./driver/protocol.ts";
 import {
   AGENTS_NOTE,
   DAILY_REPORT_TEMPLATE,
   HUB_USAGE_PROMPT,
+  PM_MEMORY_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
   SHARE_FILES_NOTE,
@@ -72,7 +82,8 @@ describe("提示词：有项目", () => {
   it("manage_only：角色、只管一个项目、性格、“只管理”的默认做法（派 Worker）、项目名和全部文件夹、hub 用法", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).toContain("小林");
-    expect(prompt).toContain("一个项目经理只管一个项目，请新建一个项目经理");
+    expect(prompt).toContain("一个项目经理只管一个项目");
+    expect(prompt).toContain("请用户在网页上新建一个项目经理");
     expect(prompt).toContain("同一个文件夹可以有多个项目经理");
     expect(prompt).toContain("- 说话直接。");
     expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
@@ -93,7 +104,7 @@ describe("提示词：有项目", () => {
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_TOKEN");
     expect(HUB_USAGE_PROMPT).not.toContain("$HUB_SOCK");
     expect(HUB_USAGE_PROMPT).toContain("--stdin <<'EOF'");
-    expect(HUB_USAGE_PROMPT).toContain(`不要在 \`${hub}\` 命令后面接 \`echo $?\``);
+    expect(HUB_USAGE_PROMPT).toContain("**不要**在命令后面接 `echo $?`");
     for (const sub of [`${hub} status`, `${hub} project create --folder`, `${hub} project attach <文件夹路径>`, `${hub} project detach <文件夹路径>`, `${hub} persona show`, `${hub} persona edit`]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
@@ -136,6 +147,130 @@ describe("提示词：还没有项目", () => {
   });
 });
 
+// ---- 11-05：照参考稿改写的结构和事实 ----
+
+/** 七节的标题，按顺序（性格设定在最后；用户存的性格设定自己带标题）。 */
+const SECTION_TITLES = ["# 你的角色与环境", "# 你的项目", "# 怎么干活（当前模式：", "# 怎么记事情", "# 怎么带 Worker", `# 系统命令 ${hub}`, "# 性格设定"];
+
+describe("提示词：项目经理的结构（照参考稿）", () => {
+  it("七节按顺序：角色与环境、项目、怎么干活（模式）、怎么记事情、怎么带 Worker、系统命令、性格设定", () => {
+    for (const ctx of [projectContext(), noProjectContext()]) {
+      const prompt = buildLaunchPrompt(ctx, dir);
+      const positions = SECTION_TITLES.map((title) => prompt.indexOf(`\n${title}`) + 1 || prompt.indexOf(title));
+      expect(positions.every((p) => p >= 0)).toBe(true);
+      expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    }
+  });
+
+  it("名字、产品名、命令名都是动态的：项目经理的名字、PRODUCT_NAME、hub 命令名", () => {
+    const prompt = buildLaunchPrompt(projectContext(), dir);
+    expect(prompt).toContain("你是用户的项目经理“小林”");
+    expect(prompt).toContain(`运行在 ${PRODUCT_NAME}（用户的本地 Agent 工作台）里`);
+    expect(prompt).not.toContain("Agent Hub");
+    expect(buildLaunchPrompt(projectContext({ pm: { id: 1, name: "阿虎", mode: "manage_only", persona: "x" } }), dir)).toContain("“阿虎”");
+  });
+
+  it("模式：两种各写一节，标题带模式的名字；只出当前的那一种", () => {
+    for (const mode of PM_MODES) {
+      const ctx = projectContext({ pm: { id: 1, name: "小林", mode, persona: "# 性格设定\n\n- x\n" } });
+      const prompt = buildLaunchPrompt(ctx, dir);
+      const other = PM_MODES.find((m) => m !== mode)!;
+      expect(prompt).toContain(PM_MODE_PROMPTS[mode]);
+      expect(prompt).not.toContain(PM_MODE_PROMPTS[other]);
+      expect(PM_MODE_PROMPTS[mode]).toContain(`# 怎么干活（当前模式：${PM_MODE_LABELS[mode]}）`);
+      // 切换的命令指向另一种模式
+      expect(PM_MODE_PROMPTS[mode]).toContain(`${hub} persona edit --mode ${other}`);
+    }
+    expect(PM_MODE_PROMPTS.hands_on).toContain("拿不准先问");
+  });
+
+  it("项目：名字、说明、主文件夹、附加文件夹（有、没有）；没有项目写明怎么建；两种都说一个项目经理只管一个项目", () => {
+    const withAll = buildLaunchPrompt(projectContext(), dir);
+    expect(withAll).toContain("- 项目：foo");
+    expect(withAll).toContain("- 说明：做一个记账小工具");
+    expect(withAll).toContain("- 主文件夹（工作目录）：/work/foo");
+    expect(withAll).toContain("- 附加文件夹（也能读写）：\n  - /work/foo-docs");
+    const bare = buildLaunchPrompt(projectContext({ project: card(1, "foo", "/work/foo") }), dir);
+    expect(bare).toContain("- 附加文件夹（也能读写）：没有");
+    expect(bare).not.toContain("- 说明：");
+    const none = buildLaunchPrompt(noProjectContext(), dir);
+    expect(none).toContain("现在还没有项目，工作目录是你自己的空文件夹");
+    expect(none).not.toContain("- 项目：");
+    for (const prompt of [withAll, bare, none]) expect(prompt).toContain("一个项目经理只管一个项目");
+  });
+
+  it("“先读 AGENTS.md”：两种模式、有没有项目，需要时加在最后，不需要时没有", () => {
+    const ctxs = [projectContext(), projectContext({ pm: { id: 1, name: "小林", mode: "hands_on", persona: "x" } }), noProjectContext(), noProjectContext({ pm: { id: 2, name: "阿周", mode: "manage_only", persona: "x" } })];
+    for (const ctx of ctxs) expect(buildLaunchPrompt(ctx, dir)).not.toContain(AGENTS_NOTE);
+    writeFileSync(join(dir, "AGENTS.md"), "x");
+    writeFileSync(join(dir, "CLAUDE.md"), "y");
+    for (const ctx of ctxs) expect(buildLaunchPrompt(ctx, dir).trimEnd().endsWith(AGENTS_NOTE)).toBe(true);
+    writeFileSync(join(dir, "CLAUDE.md"), "@AGENTS.md");
+    for (const ctx of ctxs) expect(buildLaunchPrompt(ctx, dir)).not.toContain(AGENTS_NOTE);
+  });
+
+  it("性格设定：用户存的那份原样放在最后；没带标题的补上“# 性格设定”；清空了不出这一节", () => {
+    const saved = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", persona: "# 性格设定\n\n- 只用英文缩写。\n" } }), dir);
+    expect(saved.trimEnd().endsWith("# 性格设定\n\n- 只用英文缩写。")).toBe(true);
+    expect(saved.split("\n# 性格设定")).toHaveLength(2); // 只有一节，没有重复加标题
+    const bare = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", persona: "说话直接" } }), dir);
+    expect(bare.trimEnd().endsWith("# 性格设定\n\n说话直接")).toBe(true);
+    const empty = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", persona: "" } }), dir);
+    expect(empty.trimEnd().endsWith(HUB_USAGE_PROMPT)).toBe(true);
+    // 参考稿末尾那三条不写死
+    expect(saved).not.toContain("像一个靠谱的同事");
+    expect(buildLaunchPrompt(noProjectContext(), dir)).toContain("像一个靠谱的同事"); // 这是 PM_PERSONA_TEMPLATE（用户存的默认那份）
+  });
+
+  it("怎么记事情：什么时候记、什么不记、怎么改（先 persona show 再 persona edit 写完整内容）", () => {
+    expect(buildLaunchPrompt(projectContext(), dir)).toContain(PM_MEMORY_PROMPT);
+    for (const word of ["什么时候主动记", "什么不要记", `${hub} persona show`, `${hub} persona edit --reason`, "完整"]) expect(PM_MEMORY_PROMPT).toContain(word);
+  });
+
+  it("严禁使用厂商自带的 subagent：点名内置工具，一律用 hub worker start 派 Worker，只读调研加 --readonly", () => {
+    const prompt = buildLaunchPrompt(projectContext(), dir);
+    expect(prompt).toContain("严禁使用厂商自带的 subagent");
+    for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(PM_WORKER_PROMPT).toContain(tool);
+    expect(PM_WORKER_PROMPT).toContain(`一律用 \`${hub} worker start\` 派 Worker`);
+    expect(PM_WORKER_PROMPT).toContain("只读调研加 `--readonly`");
+  });
+});
+
+describe("提示词：数值和事实以代码为准", () => {
+  it("定时任务最短间隔、--effort 可选值、Worker 分支前缀都从常量来", () => {
+    expect(MIN_SCHEDULE_EVERY_MINUTES).toBeGreaterThan(5); // 参考稿写的 5 分钟不对
+    expect(HUB_USAGE_PROMPT).toContain(`最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟`);
+    expect(HUB_USAGE_PROMPT).not.toContain("最短每 5 分钟");
+    expect(HUB_USAGE_PROMPT).toContain(`[--effort ${ALL_EFFORTS.join("|")}]`);
+    expect(ALL_EFFORTS).toContain("xhigh");
+    expect(HUB_USAGE).toContain(`[--effort ${ALL_EFFORTS.join("|")}]`);
+    expect(HUB_USAGE).toContain(`最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟`);
+    expect(PM_WORKER_PROMPT).toContain(`${WORKER_BRANCH_PREFIX}<编号>-<短名>`);
+  });
+
+  it("消息写法和驱动层、账本发的一致：汇报标题、用户直接对 Worker 说的话、连发合并", () => {
+    const report = workerReportHeader(3, "修 X");
+    expect(PM_WORKER_PROMPT).toContain(report.replace("#3", "#编号").replace("修 X", "标题"));
+    const direct = userToWorkerHeader(3, "修 X");
+    expect(PM_WORKER_PROMPT).toContain(direct.replace("#3", "#编号").replace("修 X", "标题"));
+    const merged = mergeUserTexts(["甲", "乙"]);
+    expect(merged.prefixes[0]).toBe("【用户连发了 2 条】");
+    const prompt = buildLaunchPrompt(projectContext(), dir);
+    expect(prompt).toContain("【用户连发了 N 条】");
+    expect(prompt).toContain("“1. …”“2. …”");
+    expect(merged.prefixes[1]).toBe("1. 甲");
+  });
+
+  it("hub status 的说明和真实输出对得上：名字、模式、项目、文件夹、准备命令", () => {
+    expect(HUB_USAGE_PROMPT).toContain(`\`${hub} status\`：看我的名字、模式、项目、文件夹和 worktree 准备命令`);
+  });
+
+  it("准备命令里能用的两个环境变量名用 limits.ts 的常量", () => {
+    expect(HUB_USAGE_PROMPT).toContain(`\`${ENV_SETUP_ROOT_PATH}\`（主文件夹）`);
+    expect(HUB_USAGE_PROMPT).toContain(`\`${ENV_SETUP_WORKTREE_PATH}\``);
+  });
+});
+
 // ---- M3：Worker ----
 
 describe("提示词：项目经理（M3）", () => {
@@ -157,7 +292,7 @@ describe("提示词：项目经理（M3）", () => {
       "【Worker #",
       "Worker 的 worktree 你也能读",
       `${hub} worker send`,
-      "可以让它接着改",
+      "同一个 Worker 接着做",
       `${hub} worker end`,
       "AGENTS.md",
     ]) {
@@ -274,6 +409,14 @@ describe("提示词：Worker（M3）", () => {
     for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
       expect(prompt).not.toContain(gone);
     }
+  });
+
+  it("不要用厂商自带的子代理：点名内置工具，需要并行就在汇报里建议项目经理多派 Worker（只加提示词，不拦工具）", () => {
+    const prompt = buildWorkerPrompt(workerContext(), dir);
+    expect(prompt).toContain(WORKER_RULES);
+    expect(WORKER_RULES).toContain("不要用厂商自带的子代理");
+    for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(WORKER_RULES).toContain(tool);
+    expect(WORKER_RULES).toContain("建议项目经理多派几个 Worker");
   });
 
   it("在主文件夹里：写明主文件夹和附加文件夹，没有分支", () => {

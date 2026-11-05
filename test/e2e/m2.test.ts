@@ -224,7 +224,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(proc!.cwd).toBe(real(foo));
     expect(proc!.argv).toContain("--session-id");
     const prompt = promptOf(proc!.argv);
-    expect(prompt).toContain("名字叫“阿周”");
+    expect(prompt).toContain("你是用户的项目经理“阿周”");
     expect(prompt).toContain("- 项目：foo");
     expect(prompt).toContain(`主文件夹（工作目录）：${real(foo)}`);
     // agent 接口：HUB_SOCK 是真实路径；设置文件放行 hub 和这个 socket；run/bin 在 PATH 最前面
