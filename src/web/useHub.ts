@@ -112,9 +112,18 @@ export function useHub() {
     try {
       await postMessage(conversationId, { clientId, text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
     } catch (err) {
-      // 带的文件服务端已经找不到了：重试也没用，要用户重新添加
-      const missing = err instanceof ApiError && err.status === 400 && err.message === ATTACHMENTS_MISSING_MESSAGE;
-      if (alive.current) dispatch({ type: "pendingPhase", clientId, phase: "failed", ...(missing ? { failure: "attachments_missing" as const } : {}) });
+      // 400：服务端拒绝了这条消息（同一个 clientId 重发还是会被拦，重试永远不会成功）：带的文件找不到了要重新添加，
+      // 别的原因（比如手打了不能用的命令）把服务端的 error 原样显示
+      const rejected = err instanceof ApiError && err.status === 400;
+      const missing = rejected && err.message === ATTACHMENTS_MISSING_MESSAGE;
+      if (alive.current) {
+        dispatch({
+          type: "pendingPhase",
+          clientId,
+          phase: "failed",
+          ...(missing ? { failure: "attachments_missing" as const } : rejected ? { failure: "rejected" as const, reason: err.message } : {}),
+        });
+      }
     }
   }, []);
 

@@ -88,6 +88,31 @@ describe("手打被拦的命令", () => {
   });
 });
 
+describe("发消息被后台拒绝（400 invalid）", () => {
+  const REASON = "消息里有不能发的内容";
+
+  it("不管是不是 / 开头：原因写在那条消息下面，没有“重试”（同一条重发也还是会被拦）", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.postMessage = () => ({ status: 400, body: { error: REASON, code: "invalid" } });
+    await user.type(box(), "你好{Enter}");
+    expect(await screen.findByText(REASON)).toBeInTheDocument();
+    expect(screen.getByText("你好")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(screen.queryByText("发送失败")).toBeNull();
+    expect(api.callsTo("POST", /\/messages$/)).toHaveLength(1);
+  });
+
+  it("别的失败（500、断网）照旧：发送失败加“重试”", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.postMessage = () => ({ status: 500, body: { error: "boom" } });
+    await user.type(box(), "你好{Enter}");
+    expect(await screen.findByText("发送失败")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+  });
+});
+
 describe("弹出列表走真接口地址", () => {
   it("打 / 请求 API_PATHS.commands；选中后插入 /名字 和空格", async () => {
     const user = userEvent.setup();

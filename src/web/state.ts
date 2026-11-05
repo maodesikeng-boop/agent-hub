@@ -28,8 +28,13 @@ export interface PendingMessage {
   attachments: Attachment[];
   /** sending：POST 在路上或已成功等服务端推回；failed：POST 失败，可以重试。 */
   phase: "sending" | "failed";
-  /** phase 是 failed 时的原因：带的文件已经不在服务端（重试也没用，要重新添加）；其他失败不写，可以重试。 */
-  failure?: "attachments_missing";
+  /**
+   * phase 是 failed 时的原因，都是重试也没用的：attachments_missing 带的文件已经不在服务端（要重新添加）；
+   * rejected 服务端拒绝了这条消息（400），原因在 reason，同一条重发还是会被拦。其他失败（断网、5xx）不写，可以重试。
+   */
+  failure?: "attachments_missing" | "rejected";
+  /** failure 是 rejected 时服务端给的原因（中文，原样显示）。 */
+  reason?: string;
   createdAt: number;
 }
 
@@ -96,7 +101,7 @@ export type HubAction =
   | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean }
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
-  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"] }
+  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: string }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -264,8 +269,8 @@ export function reducer(state: HubState, action: HubAction): HubState {
         ...state,
         pending: state.pending.map((p) => {
           if (p.clientId !== action.clientId) return p;
-          const { failure: _old, ...rest } = p;
-          return { ...rest, phase: action.phase, ...(action.failure ? { failure: action.failure } : {}) };
+          const { failure: _old, reason: _oldReason, ...rest } = p;
+          return { ...rest, phase: action.phase, ...(action.failure ? { failure: action.failure } : {}), ...(action.reason ? { reason: action.reason } : {}) };
         }),
       };
   }
