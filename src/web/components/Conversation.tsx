@@ -1,5 +1,5 @@
 import { Folder } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ConversationId, Message, MessageId, PmId } from "../../shared/index.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -7,6 +7,7 @@ import type { SessionState } from "../../shared/index.ts";
 import { AskBar } from "./AskBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
+import { conversationSource } from "../composer-suggest.ts";
 import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
@@ -62,6 +63,7 @@ export function Conversation({
   /** 点“等你确定”条里的某个问题：n 每点一次加一，点同一条也再跳一次。 */
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
   const stop = useStop(session, () => onStop(id));
+  const source = useMemo(() => conversationSource(id), [id]);
 
   const empty = view.messages.length === 0 && pending.length === 0;
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
@@ -120,6 +122,7 @@ export function Conversation({
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}
           stop={stop}
+          source={source}
           onChange={(v) => onDraftChange(id, v)}
           onSend={(text, files) => onSend(id, text, files)}
         />

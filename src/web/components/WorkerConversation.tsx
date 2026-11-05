@@ -1,10 +1,12 @@
 import { ArrowLeft } from "lucide-react";
+import { useMemo } from "react";
 import type { ConversationId, SessionState } from "../../shared/index.ts";
 import type { WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { conversationSource } from "../composer-suggest.ts";
 import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
@@ -63,6 +65,7 @@ export function WorkerConversation({
 }) {
   const id = view?.conversation.id;
   const stop = useStop(session, id === undefined ? null : () => onStop(id));
+  const source = useMemo(() => (id === undefined ? undefined : conversationSource(id)), [id]);
 
   const identity = { name: title, avatarKey: id ?? 0 };
   return (
@@ -105,6 +108,7 @@ export function WorkerConversation({
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
                 stop={stop}
+                source={source}
                 onChange={(v) => onDraftChange(view.conversation.id, v)}
                 staging={staging}
                 onSend={(text, files) => onSend(view.conversation.id, text, files)}
