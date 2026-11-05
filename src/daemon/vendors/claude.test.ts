@@ -1,12 +1,14 @@
-// claude 的输入框实现（实测见 docs/composer-commands.md）。
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+// claude / agy / codex 的输入框实现（实测见 docs/composer-commands.md）。
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_COMMAND_DESCRIPTION_CHARS, VENDOR_SPECS, type ComposerCommand } from "../../shared/index.ts";
 import { queryClaudeInitialize } from "../driver/model-catalog.ts";
 import { FAKE_CLAUDE } from "../driver/test-helpers.ts";
+import { agyComposerBase, createAgyComposer, parseAgyCommands } from "./agy.ts";
 import { claudeComposerBase, createClaudeComposer, parseClaudeCommands } from "./claude.ts";
+import { codexComposerBase, createCodexComposer, parseCodexCommands, rewriteCodexSkillCommand } from "./codex.ts";
 import { composerBaseOf, createVendorComposers } from "./index.ts";
 
 const c = claudeComposerBase;
@@ -160,7 +162,11 @@ describe("厂商接口的完整性", () => {
   it("写进 agent 的内容经厂商接口拿；createVendorComposers 给每家都建出完整实现", () => {
     const composers = createVendorComposers({ claude: { claudePath: FAKE_CLAUDE, queryInitialize: queryClaudeInitialize } });
     expect(composers.claude.vendor).toBe("claude");
+    expect(composers.agy.vendor).toBe("agy");
+    expect(composers.codex.vendor).toBe("codex");
     expect(typeof composers.claude.queryCommands).toBe("function");
+    expect(typeof composers.agy.queryCommands).toBe("function");
+    expect(typeof composers.codex.queryCommands).toBe("function");
     expect(composers.claude.buildUserContent(["x"], "/y")).toEqual(composerBaseOf("claude")!.buildUserContent(["x"], "/y"));
   });
 });
@@ -205,5 +211,154 @@ describe("会话没在跑时另起进程问（假 claude）", () => {
   it("问不到（程序不存在）：失败带原因", async () => {
     const composer = createClaudeComposer({ claudePath: "/nonexistent/claude", queryInitialize: queryClaudeInitialize });
     await expect(composer.queryCommands({ cwd: "/tmp", addDirs: [] }, new AbortController().signal)).rejects.toThrow(/nonexistent/);
+  });
+});
+
+describe("agy 输入框实现（parseAgyCommands / agyComposerBase / createAgyComposer）", () => {
+  it("parseAgyCommands：解析 command.data.skills 并合并内置 /compact，过滤非法与重复项", () => {
+    const parsed = parseAgyCommands({
+      command: {
+        name: "skills",
+        data: {
+          skills: [
+            { name: "how", description: "Explain how code works", path: "/x/how/SKILL.md" },
+            { name: "teach", description: "Teach a concept" },
+            { name: "how", description: "duplicate" },
+            { name: "bad name", description: "has space" },
+          ],
+        },
+      },
+    });
+    expect(parsed).toEqual([
+      { name: "how", description: "Explain how code works" },
+      { name: "teach", description: "Teach a concept" },
+      { name: "compact", description: "压缩当前对话上下文", builtin: true },
+    ]);
+    expect(parseAgyCommands(null)).toBeNull();
+    expect(parseAgyCommands("nope")).toBeNull();
+  });
+
+  it("agyComposerBase：mention 与隐藏命令拦截", () => {
+    expect(agyComposerBase.mention("src/index.ts")).toBe("@src/index.ts");
+    expect(agyComposerBase.mention("docs/my file.md")).toBe('@"docs/my file.md"');
+    expect(agyComposerBase.blockReason("/clear", null)).toMatch(/开新会话/);
+    expect(agyComposerBase.blockReason("/model", null)).toMatch(/资料页/);
+    expect(agyComposerBase.blockReason("/compact", null)).toBeNull();
+  });
+
+  it("createAgyComposer：未传选项回退内置命令；传 agyPath 时跑 agy -p \"/skills\" --output-format json", async () => {
+    const fallback = createAgyComposer();
+    expect(await fallback.queryCommands({ cwd: "/tmp", addDirs: [] }, new AbortController().signal)).toEqual([
+      { name: "compact", description: "压缩当前对话上下文", builtin: true },
+    ]);
+
+    const dir = mkdtempSync(join(tmpdir(), "hub-agy-commands-"));
+    try {
+      const agyPath = join(dir, "agy");
+      writeFileSync(
+        agyPath,
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(join(dir, "argv.json"))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+process.stdout.write(JSON.stringify({ command: { name: "skills", data: { skills: [{ name: "why", description: "Explain why" }] } } }) + "\\n");
+`,
+      );
+      chmodSync(agyPath, 0o755);
+      const composer = createAgyComposer({ agyPath });
+      const commands = await composer.queryCommands({ cwd: dir, addDirs: [] }, new AbortController().signal);
+      expect(commands).toEqual([
+        { name: "why", description: "Explain why" },
+        { name: "compact", description: "压缩当前对话上下文", builtin: true },
+      ]);
+      const recorded = JSON.parse(readFileSync(join(dir, "argv.json"), "utf8"));
+      expect(recorded.argv).toEqual(["-p", "/skills", "--output-format", "json"]);
+      expect(recorded.cwd).toBe(realpathSync(dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("codex 输入框实现（parseCodexCommands / codexComposerBase / createCodexComposer）", () => {
+  it("parseCodexCommands：解析 skills/list 的 data[].skills，跳过 enabled === false，合并内置 /compact", () => {
+    const parsed = parseCodexCommands({
+      data: [
+        {
+          cwd: "/repo",
+          skills: [
+            { name: "review", description: "Review code changes", enabled: true },
+            { name: "disabled-skill", description: "Should be skipped", enabled: false },
+            { name: "short-only", shortDescription: "Short description fallback", enabled: true },
+          ],
+        },
+      ],
+    });
+    expect(parsed).toEqual([
+      { name: "review", description: "Review code changes" },
+      { name: "short-only", description: "Short description fallback" },
+      { name: "compact", description: "压缩当前对话上下文", builtin: true },
+    ]);
+    expect(parseCodexCommands(null)).toBeNull();
+  });
+
+  it("codexComposerBase：非 compact 的 /<skill> 在 buildUserContent 中改写为 $<skill>，/compact 与路径保持原样", () => {
+    expect(rewriteCodexSkillCommand("/review src/a.ts")).toBe("$review src/a.ts");
+    expect(rewriteCodexSkillCommand("/compact")).toBe("/compact");
+    expect(rewriteCodexSkillCommand("/compact 留结论")).toBe("/compact 留结论");
+    expect(rewriteCodexSkillCommand("/Users/me/file.ts 有问题")).toBe("/Users/me/file.ts 有问题");
+    expect(rewriteCodexSkillCommand("普通消息")).toBe("普通消息");
+
+    expect(codexComposerBase.buildUserContent(["【用户直接对你说】"], "/review")).toEqual([
+      { type: "text", text: "【用户直接对你说】" },
+      { type: "text", text: "$review" },
+    ]);
+    expect(codexComposerBase.buildUserContent([], "/compact")).toEqual([{ type: "text", text: "/compact" }]);
+    expect(codexComposerBase.blockReason("/sandbox", null)).toMatch(/沙箱/);
+  });
+
+  it("createCodexComposer：未传选项回退内置命令；传 codexPath 时通过 app-server 发 skills/list", async () => {
+    const fallback = createCodexComposer();
+    expect(await fallback.queryCommands({ cwd: "/tmp", addDirs: [] }, new AbortController().signal)).toEqual([
+      { name: "compact", description: "压缩当前对话上下文", builtin: true },
+    ]);
+
+    const dir = mkdtempSync(join(tmpdir(), "hub-codex-commands-"));
+    try {
+      const codexPath = join(dir, "codex");
+      writeFileSync(
+        codexPath,
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === 1) out({ jsonrpc: "2.0", id: 1, result: {} });
+  if (msg.id === 2 && msg.method === "skills/list") {
+    fs.writeFileSync(${JSON.stringify(join(dir, "params.json"))}, JSON.stringify(msg.params));
+    out({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        data: [{ cwd: msg.params.cwds[0], skills: [{ name: "deploy", description: "Deploy service", enabled: true }] }],
+      },
+    });
+  }
+});
+`,
+      );
+      chmodSync(codexPath, 0o755);
+      const composer = createCodexComposer({ codexPath });
+      const commands = await composer.queryCommands({ cwd: dir, addDirs: ["/extra"] }, new AbortController().signal);
+      expect(commands).toEqual([
+        { name: "deploy", description: "Deploy service" },
+        { name: "compact", description: "压缩当前对话上下文", builtin: true },
+      ]);
+      expect(JSON.parse(readFileSync(join(dir, "params.json"), "utf8"))).toEqual({
+        cwds: [dir, "/extra"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

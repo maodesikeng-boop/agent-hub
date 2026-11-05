@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MODEL_CATALOG_FRESH_MS, MODEL_CATALOG_RETRY_MS, bundledModelCatalog, type ModelCatalog } from "../../shared/index.ts";
-import { createModelCatalogs, parseInitializeModels, queryClaudeModels } from "./model-catalog.ts";
+import {
+  createModelCatalogs,
+  parseAgyModels,
+  parseCodexModels,
+  parseInitializeModels,
+  queryAgyModels,
+  queryClaudeModels,
+  queryCodexModels,
+} from "./model-catalog.ts";
 import { isAlive } from "./process.ts";
 
 /** 本机 claude 2.1.314 对 initialize 的回应里 models 的前几项（原样，没有账号信息）。 */
@@ -36,6 +44,45 @@ const REAL_MODELS = [
     description: "Best for everyday, complex tasks",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "max"],
+  },
+];
+
+const REAL_AGY_OUTPUT = {
+  command: {
+    name: "models",
+    data: {
+      models: [
+        { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", currently_selected: true },
+        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)", currently_selected: false },
+      ],
+    },
+  },
+};
+
+const REAL_CODEX_MODELS = [
+  {
+    id: "gpt-5.4",
+    model: "gpt-5.4",
+    displayName: "GPT-5.4",
+    description: "Latest frontier agentic coding model.",
+    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "high" }, { reasoningEffort: "xhigh" }],
+    isDefault: true,
+    hidden: false,
+  },
+  {
+    id: "gpt-5.4-mini",
+    model: "gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
+    description: "Fast model.",
+    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }],
+    isDefault: false,
+    hidden: false,
+  },
+  {
+    id: "gpt-internal-hidden",
+    model: "gpt-internal-hidden",
+    displayName: "Hidden Model",
+    hidden: true,
   },
 ];
 
@@ -108,7 +155,69 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
   });
 });
 
-describe("queryClaudeModels：起一个 claude，发 initialize，拿 models", () => {
+describe("parseAgyModels：agy 报的模型名单", () => {
+  it("支持完整外层对象和直接传数组，提取 currently_selected 为 defaultModel", () => {
+    const fromFull = parseAgyModels(REAL_AGY_OUTPUT);
+    expect(fromFull).toEqual({
+      ...bundledModelCatalog("agy"),
+      source: "vendor",
+      defaultModel: "Gemini 4 Argon (Medium)",
+      models: [
+        { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", description: null, efforts: null },
+        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)", description: null, efforts: null },
+      ],
+    } satisfies ModelCatalog);
+
+    const fromArray = parseAgyModels(REAL_AGY_OUTPUT.command.data.models);
+    expect(fromArray).toEqual(fromFull);
+  });
+
+  it("过滤非法模型名和重复项；无效或空返回 null", () => {
+    const catalog = parseAgyModels([
+      { id: "bad model" },
+      { id: "--flag" },
+      { id: "gemini-4-argon-max", label: "Argon Max" },
+      { id: "gemini-4-argon-max", label: "Duplicate" },
+    ]);
+    expect(catalog?.models.map((m) => m.id)).toEqual(["gemini-4-argon-max"]);
+    for (const bad of [null, undefined, "str", {}, { command: { data: { models: [] } } }, [{ id: "a b" }]]) {
+      expect(parseAgyModels(bad)).toBeNull();
+    }
+  });
+});
+
+describe("parseCodexModels：codex 报的模型名单", () => {
+  it("跳过 hidden === true，提取 supportedReasoningEfforts 和 isDefault", () => {
+    const catalog = parseCodexModels({ data: REAL_CODEX_MODELS });
+    expect(catalog).toEqual({
+      ...bundledModelCatalog("codex"),
+      source: "vendor",
+      defaultModel: "GPT-5.4",
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          description: "Latest frontier agentic coding model.",
+          efforts: ["low", "medium", "high", "xhigh"],
+        },
+        {
+          id: "gpt-5.4-mini",
+          label: "GPT-5.4 Mini",
+          description: "Fast model.",
+          efforts: ["low", "medium"],
+        },
+      ],
+    } satisfies ModelCatalog);
+  });
+
+  it("全部 hidden 或无效时返回 null", () => {
+    expect(parseCodexModels([{ id: "gpt-5.4", hidden: true }])).toBeNull();
+    expect(parseCodexModels(null)).toBeNull();
+    expect(parseCodexModels({})).toBeNull();
+  });
+});
+
+describe("queryClaudeModels / queryAgyModels / queryCodexModels", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "model-catalog-"));
@@ -133,6 +242,43 @@ process.stdin.on("data", (d) => {
   const i = buf.indexOf("\\n");
   if (i < 0) return;
   const req = JSON.parse(buf.slice(0, i));
+  ${body}
+});
+`,
+    );
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  function fakeAgy(body: string): string {
+    const path = join(dir, "agy");
+    writeFileSync(
+      path,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(join(dir, "agy-argv.json"))}, JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(${JSON.stringify(join(dir, "agy-pid"))}, String(process.pid));
+${body}
+`,
+    );
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  function fakeCodex(body: string): string {
+    const path = join(dir, "codex");
+    writeFileSync(
+      path,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+fs.writeFileSync(${JSON.stringify(join(dir, "codex-argv.json"))}, JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(${JSON.stringify(join(dir, "codex-pid"))}, String(process.pid));
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+const lines = [];
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  lines.push(msg);
   ${body}
 });
 `,
@@ -204,10 +350,58 @@ process.stdin.on("data", (d) => {
     const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
     await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
   });
+
+  it("queryAgyModels：起 agy --output-format json models，返回解析后的 JSON", async () => {
+    const agyPath = fakeAgy(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(REAL_AGY_OUTPUT)}) + "\\n");
+      process.exit(0);
+    `);
+    const raw = await queryAgyModels({ agyPath, cwd: dir });
+    expect(raw).toEqual(REAL_AGY_OUTPUT);
+    expect(JSON.parse(readFileSync(join(dir, "agy-argv.json"), "utf8"))).toEqual(["--output-format", "json", "models"]);
+  });
+
+  it("queryAgyModels：超时或非零退出时失败并清理进程", async () => {
+    const failPath = fakeAgy(`process.stderr.write("agy error"); process.exit(1);`);
+    await expect(queryAgyModels({ agyPath: failPath, cwd: dir })).rejects.toThrow(/agy error/);
+
+    const hangPath = fakeAgy(`setInterval(() => {}, 1000);`);
+    await expect(queryAgyModels({ agyPath: hangPath, cwd: dir, timeoutMs: 500 })).rejects.toThrow(/超时/);
+    if (existsSync(join(dir, "agy-pid"))) {
+      const pid = Number(readFileSync(join(dir, "agy-pid"), "utf8"));
+      await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
+    }
+  });
+
+  it("queryCodexModels：起 codex app-server --listen stdio://，发 initialize → initialized → model/list，返回模型列表", async () => {
+    const codexPath = fakeCodex(`
+      if (msg.id === 1 && msg.method === "initialize") {
+        out({ jsonrpc: "2.0", id: 1, result: { userAgent: "codex" } });
+      }
+      if (msg.id === 2 && msg.method === "model/list") {
+        fs.writeFileSync(${JSON.stringify(join(dir, "codex-lines.json"))}, JSON.stringify(lines));
+        out({ jsonrpc: "2.0", id: 2, result: { data: ${JSON.stringify(REAL_CODEX_MODELS)} } });
+      }
+    `);
+    const data = await queryCodexModels({ codexPath, cwd: dir });
+    expect(data).toEqual(REAL_CODEX_MODELS);
+    expect(JSON.parse(readFileSync(join(dir, "codex-argv.json"), "utf8"))).toEqual(["app-server", "--listen", "stdio://"]);
+    const sent = JSON.parse(readFileSync(join(dir, "codex-lines.json"), "utf8")) as Array<{ method?: string }>;
+    expect(sent.map((m) => m.method)).toEqual(["initialize", "initialized", "model/list"]);
+  });
+
+  it("queryCodexModels：RPC 返回错误或超时时失败并清理进程", async () => {
+    const errPath = fakeCodex(`
+      if (msg.id === 2) out({ jsonrpc: "2.0", id: 2, error: { message: "model list unavailable" } });
+    `);
+    await expect(queryCodexModels({ codexPath: errPath, cwd: dir })).rejects.toThrow(/model list unavailable/);
+  });
 });
 
 describe("createModelCatalogs：问一次、缓存、过期再问、问不到用打包的", () => {
   const claudeOf = (catalogs: ModelCatalog[]) => catalogs.find((c) => c.vendor === "claude")!;
+  const agyOf = (catalogs: ModelCatalog[]) => catalogs.find((c) => c.vendor === "agy")!;
+  const codexOf = (catalogs: ModelCatalog[]) => catalogs.find((c) => c.vendor === "codex")!;
 
   function setup(answers: Array<unknown | Error>) {
     let now = 1_000_000;
@@ -323,5 +517,46 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     catalogs.close();
     expect(claudeOf(await listing)).toEqual(bundledModelCatalog("claude"));
     expect(aborted).toBe(true);
+  });
+
+  it("三家厂商并行查询、各自独立缓存与失败重试；没传查询函数的厂商直接回打包名单", async () => {
+    let now = 2_000_000;
+    let codexCalls = 0;
+    const codexAnswers: Array<unknown | Error> = [new Error("codex not ready"), REAL_CODEX_MODELS];
+    const logs: string[] = [];
+    const catalogs = createModelCatalogs({
+      queryClaude: async () => REAL_MODELS,
+      queryAgy: async () => REAL_AGY_OUTPUT,
+      queryCodex: async () => {
+        codexCalls++;
+        const next = codexAnswers.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      now: () => now,
+      log: (line) => logs.push(line),
+    });
+
+    const first = await catalogs.list();
+    expect(claudeOf(first).source).toBe("vendor");
+    expect(agyOf(first).source).toBe("vendor");
+    expect(agyOf(first).defaultModel).toBe("Gemini 4 Argon (Medium)");
+    expect(codexOf(first)).toEqual(bundledModelCatalog("codex"));
+    expect(catalogs.current("claude")?.source).toBe("vendor");
+    expect(catalogs.current("agy")?.source).toBe("vendor");
+    expect(catalogs.current("codex")).toBeNull();
+    expect(logs).toHaveLength(1);
+
+    // 没到重试窗口，codex 不再问
+    await catalogs.list();
+    expect(codexCalls).toBe(1);
+
+    // 到了 MODEL_CATALOG_RETRY_MS，只有失败过的 codex 重问，claude/agy 还在新鲜期内不重问
+    now += MODEL_CATALOG_RETRY_MS;
+    const second = await catalogs.list();
+    expect(codexCalls).toBe(2);
+    expect(codexOf(second).source).toBe("vendor");
+    expect(codexOf(second).defaultModel).toBe("GPT-5.4");
+    expect(catalogs.current("codex")?.defaultModel).toBe("GPT-5.4");
   });
 });
