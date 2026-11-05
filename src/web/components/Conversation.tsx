@@ -1,10 +1,13 @@
 import { Folder } from "lucide-react";
+import { useMemo } from "react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
+import { shortPath } from "../format.ts";
 import type { ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
+import { conversationSource } from "../composer-suggest.ts";
 import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
@@ -62,12 +65,13 @@ export function Conversation({
 }) {
   const id = view.conversation.id;
   const stop = useStop(session, () => onStop(id));
+  const source = useMemo(() => conversationSource(id), [id]);
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-inset)]">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         {entry.pm ? (
           <button
@@ -84,11 +88,11 @@ export function Conversation({
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[17px] leading-snug font-semibold">{entry.name}</h1>
           {entry.folders.length > 0 && (
-            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-[13.5px] leading-snug text-muted-foreground">
               {entry.folders.map((f) => (
                 <li key={f.id} className="flex min-w-0 items-center gap-1.5" title={f.path}>
                   <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{f.path}</span>
+                  <span className="truncate">{shortPath(f.path)}</span>
                 </li>
               ))}
             </ul>
@@ -120,6 +124,7 @@ export function Conversation({
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}
           stop={stop}
+          source={source}
           onChange={(v) => onDraftChange(id, v)}
           onSend={(text, files) => onSend(id, text, files)}
         />

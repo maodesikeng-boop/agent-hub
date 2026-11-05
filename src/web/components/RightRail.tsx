@@ -1,5 +1,5 @@
 import { ChevronRight, PanelRight } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DEFAULT_AGENT_VENDOR, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
 import { formatTokenDetail, formatUsageTotal } from "../format.ts";
@@ -73,7 +73,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       onClick={onOpen}
     >
       <span className="flex w-full items-baseline justify-between gap-3">
-        <span className={cn("min-w-0 truncate text-[15px]", active ? "font-semibold" : "font-medium")}>{worker.title}</span>
+        <span className="min-w-0 truncate text-[15px] font-medium">{worker.title}</span>
         <span className={cn("shrink-0 text-xs", !worker.ended && BUSY_ACTIVITIES.has(worker.activity) ? "text-primary" : "text-muted-foreground")}>
           {statusText(worker)}
         </span>
@@ -89,7 +89,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   );
 }
 
-/** 顶栏右边的右栏开关：ghost 图标按钮；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
+/** 右栏开关：ghost 图标按钮，右栏展开时在右栏顶部，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
 export function RightRailToggle({ visible, open, attention, onToggle }: { visible: boolean; open: boolean; attention: boolean; onToggle: () => void }) {
   if (!visible) return null;
   return (
@@ -108,15 +108,49 @@ export function RightRailToggle({ visible, open, attention, onToggle }: { visibl
   );
 }
 
+/** 收工的 Worker 收成一行“已收工 N ›”，点开才展开（默认收着）；正开着的是收工的 Worker 时自动展开，当前那行看得见。 */
+function EndedWorkers({ workers, openWorkerId, onOpenWorker }: { workers: WorkerEntry[]; openWorkerId: ConversationId | null; onOpenWorker: (id: ConversationId) => void }) {
+  const [open, setOpen] = useState(false);
+  const activeEnded = workers.some((w) => w.conversationId === openWorkerId);
+  useEffect(() => {
+    if (activeEnded) setOpen(true);
+  }, [activeEnded, openWorkerId]);
+  return (
+    <div className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        aria-expanded={open}
+        className={cn(ROW, "items-center gap-2 text-[13.5px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")}
+        onClick={() => setOpen((v) => !v)}
+      >
+        已收工{" "}
+        <span className="text-xs tabular-nums">{workers.length}</span>
+        <ChevronRight className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
+      </button>
+      {open && (
+        <ul className="space-y-0.5">
+          {workers.map((worker) => (
+            <li key={worker.conversationId}>
+              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /**
- * 对话右边的右栏（docs/ui-standard.md 第 12 条）：只有两组，“等你确定”（这个项目经理还没回答的 hub ask）和 Worker（它派的，
- * 进行中的在前、收工的在后）。layout：side 是和对话并排的一栏（推开对话），top 是太窄时顶栏下面的一块。
+ * 对话右边的右栏（docs/ui-standard.md 第 12 条）：只有两组，“等你确定”（这个项目经理还没回答的 hub ask）和 Worker（它派的：
+ * 干活的、等验收的列出来，收工的收成最下面一行）。layout：side 是和对话并排的一栏（推开对话），顶上放右栏开关（toggle）；
+ * top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
 export function RightRail({
   asks,
   workers,
   openWorkerId,
   layout,
+  toggle,
   onOpenAsk,
   onOpenWorker,
 }: {
@@ -125,6 +159,8 @@ export function RightRail({
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
   layout: "side" | "top";
+  /** side：放在右栏顶部的开关（RightRailToggle）。 */
+  toggle?: React.ReactNode;
   /** 点开一个提问：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
@@ -140,41 +176,45 @@ export function RightRail({
     });
     if (opening) onOpenAsk(id);
   };
+  const live = workers.filter((w) => !w.ended);
+  const ended = workers.filter((w) => w.ended);
+  const side = layout === "side";
   return (
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="右栏"
-      className={cn(
-        "flex shrink-0 flex-col gap-6 overflow-y-auto bg-background px-3 py-4",
-        layout === "side" ? "w-[320px] border-l border-border" : "max-h-[40dvh] border-b border-border",
-      )}
+      className={cn("flex shrink-0 flex-col bg-background", side ? "w-[320px] border-l border-border" : "max-h-[40dvh] border-b border-border")}
     >
-      {asks.length > 0 && (
-        <section aria-labelledby="rail-asks" className="flex flex-col gap-2">
-          <GroupTitle id="rail-asks" count={asks.length} dot>
-            等你确定
-          </GroupTitle>
-          <ul className="space-y-0.5">
-            {asks.map((ask) => (
-              <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
-            ))}
-          </ul>
-        </section>
-      )}
-      {workers.length > 0 && (
-        <section aria-labelledby="rail-workers" className="flex flex-col gap-2">
-          <GroupTitle id="rail-workers" count={workers.length}>
-            Worker
-          </GroupTitle>
-          <ul className="space-y-0.5">
-            {workers.map((worker) => (
-              <li key={worker.conversationId}>
-                <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {side && <div className="flex h-16 shrink-0 items-center justify-end px-3">{toggle}</div>}
+      <div className={cn("flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-3", side ? "pb-4" : "py-4")}>
+        {asks.length > 0 && (
+          <section aria-labelledby="rail-asks" className="flex flex-col gap-2">
+            <GroupTitle id="rail-asks" count={asks.length} dot>
+              等你确定
+            </GroupTitle>
+            <ul className="space-y-0.5">
+              {asks.map((ask) => (
+                <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
+              ))}
+            </ul>
+          </section>
+        )}
+        {workers.length > 0 && (
+          <section aria-labelledby="rail-workers" className="flex flex-col gap-2">
+            <GroupTitle id="rail-workers" count={live.length}>
+              Worker
+            </GroupTitle>
+            <ul className="space-y-0.5">
+              {live.map((worker) => (
+                <li key={worker.conversationId}>
+                  <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+                </li>
+              ))}
+            </ul>
+            {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
+          </section>
+        )}
+      </div>
     </aside>
   );
 }

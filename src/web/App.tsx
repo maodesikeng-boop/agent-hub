@@ -145,6 +145,10 @@ export function App() {
   const send = (id: ConversationId, text: string, files: File[]) => {
     // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
     // 传失败了什么都不清（文字和文件都留着）
+    // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
+    if (files.length === 0 && text.startsWith("/")) {
+      return hub.sendChecked(id, text).then(() => setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d)));
+    }
     if (files.length === 0) {
       setDraft(id, "");
       hub.send(id, text);
@@ -177,14 +181,16 @@ export function App() {
     if (active && openWorker !== null) navigate({ view: "conversation", id: active.id });
     setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
   };
-  const toolbar = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} onToggle={toggleRail} />;
+  // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
+  const railToggle = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} onToggle={toggleRail} />;
+  const toolbar = railOpen && !compact ? null : railToggle;
   const leading = narrow ? (
     <Button variant="ghost" size="icon" className="shrink-0" aria-label="对话列表" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
       <PanelLeft aria-hidden="true" />
     </Button>
   ) : null;
   const rail = railOpen ? (
-    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
+    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
   ) : null;
   const top = compact ? rail : null;
 
@@ -207,7 +213,7 @@ export function App() {
         }}
       />
       <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
         {profile ? (
           <PmProfile
             key={profile.id}

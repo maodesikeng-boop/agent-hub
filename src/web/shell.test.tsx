@@ -1,5 +1,6 @@
 // 网页外壳（docs/ui-standard.md 第 6、16 条）：每个对话的网址、刷新回到原来那个、前进后退，打开对话时焦点进输入框，
 // 左栏的在忙、行高一致，左下角的按钮，“重连中”提示条。接口、WebSocket 都是假的。
+import { readFileSync } from "node:fs";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +132,16 @@ describe("焦点", () => {
 });
 
 describe("左栏", () => {
+  it("选中的对话：只靠底色 bg-sidebar-active 表示，名字字重不变（都是 500，不加粗）", async () => {
+    await boot();
+    const name = (label: string) => within(row(label)).getByText(label);
+    expect(row("小林")).toHaveAttribute("aria-current", "true");
+    expect(row("小林")).toHaveClass("bg-sidebar-active");
+    expect(name("小林")).toHaveClass("font-medium");
+    expect(name("小林")).not.toHaveClass("font-semibold");
+    expect(name("老马")).toHaveClass("font-medium");
+  });
+
   it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
     const ws = await boot();
     const time = () => within(row("老马")).getByText(formatTime(20_000));
@@ -169,5 +180,48 @@ describe("提示条", () => {
     expect(pill.className).not.toMatch(/shadow|ring-/);
     expect(pill.parentElement).toHaveClass("chat-column", "items-start");
     vi.useRealTimers();
+  });
+});
+
+describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", () => {
+  const css = readFileSync("src/web/styles.css", "utf8");
+  /** 样式块：selector 是正则源码（不带前后的空白）。 */
+  const body = (selector: string) => css.match(new RegExp(`(?:^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const value = (block: string, prop: string) => block.match(new RegExp(`${prop}:\\s*([^;]+);`))?.[1]?.replace(/\s+/g, " ").trim();
+  /** 每一档：主区宽度到了 min-width（rem）时，对话列最宽是 max（rem）（只改边距的那一档不算）。 */
+  const tiers = [...css.matchAll(/@container chat \(min-width: ([\d.]+)rem\)\s*\{([^}]*\{[^}]*\})\s*\}/g)].map((m) => ({
+    min: Number(m[1]),
+    max: Number(value(m[2]!, "--chat-max")?.replace("rem", "")),
+  })).filter((t) => !Number.isNaN(t.max));
+
+  it("默认 46rem（t3code 的 --chat-content-max-width），主区越宽越宽、分几档，有最大值；数字全用 rem，不写 px", () => {
+    expect(value(body("\\.messages,\\s*\\.chat-column"), "--chat-max")).toBe("46rem");
+    expect(tiers.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < tiers.length; i++) {
+      expect(tiers[i]!.min).toBeGreaterThan(tiers[i - 1]!.min);
+      expect(tiers[i]!.max).toBeGreaterThan(tiers[i - 1]!.max);
+    }
+    expect(tiers.at(-1)!.max).toBeLessThanOrEqual(64);
+    const lengths = [...css.matchAll(/(--chat-[\w-]+|--header-gutter[\w-]*):\s*([^;]+);/g)].map((m) => m[2]!);
+    expect(lengths.length).toBeGreaterThan(4);
+    for (const v of lengths) expect(v).not.toMatch(/\d\s*px/);
+  });
+
+  it("主区是容器（按主区宽度分档，不按窗口宽度）；列在主区里居中：两边内边距相等，至少一个 gutter", () => {
+    expect(value(body("\\.chat-main"), "container")).toBe("chat / inline-size");
+    const column = body("\\.messages,\\s*\\.chat-column");
+    expect(value(column, "padding-inline")).toBe("max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2))");
+    expect(value(column, "padding-left")).toBeUndefined();
+    expect(value(column, "padding-right")).toBeUndefined();
+  });
+
+  it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter", async () => {
+    await boot();
+    const main = screen.getByRole("main");
+    expect(main).toHaveClass("chat-main");
+    const header = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
+    expect(header.className).toContain("pl-[var(--header-gutter-start)]");
+    expect(header.className).toContain("pr-[var(--header-gutter-end)]");
+    expect(header.className).not.toContain("chat-left");
   });
 });

@@ -1,10 +1,12 @@
 import { ArrowLeft } from "lucide-react";
+import { useMemo } from "react";
 import type { ConversationId, SessionState } from "../../shared/index.ts";
 import type { WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { conversationSource } from "../composer-suggest.ts";
 import { Composer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
@@ -69,12 +71,13 @@ export function WorkerConversation({
 }) {
   const id = view?.conversation.id;
   const stop = useStop(session, id === undefined ? null : () => onStop(id));
+  const source = useMemo(() => (id === undefined ? undefined : conversationSource(id)), [id]);
 
   // Worker 统一用中性灰的头像（docs/ui-standard.md 第 17 条）
   const identity = { name: title, avatarKey: id ?? 0, neutral: true };
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
-      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-4 pl-[var(--chat-inset)]">
+      <header className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
@@ -113,6 +116,7 @@ export function WorkerConversation({
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
                 stop={stop}
+                source={source}
                 onChange={(v) => onDraftChange(view.conversation.id, v)}
                 staging={staging}
                 onSend={(text, files) => onSend(view.conversation.id, text, files)}
