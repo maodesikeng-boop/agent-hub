@@ -61,7 +61,8 @@ const QUESTION = "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B�
 const rail = () => screen.queryByRole("complementary", { name: "右栏" });
 /** 右栏里的“等你确定”组；没有是 null。 */
 const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^等你确定/ }));
-const askRows = () => within(asksGroup()!).getAllByRole("button");
+/** 提问的行（不含组标题的收起按钮和 Show more）。 */
+const askRows = () => within(asksGroup()!).getAllByRole("button").filter((b) => !b.closest("h2") && b.textContent !== "Show more");
 const nav = () => screen.getByRole("navigation", { name: "对话列表" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
 const hasTag = (name: string) => within(row(name)).queryByText("等你确定") !== null;
@@ -92,7 +93,7 @@ describe("右栏的“等你确定”", () => {
     expect(rail()).not.toBeInTheDocument();
     unmountApp();
     await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
-    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent("等你确定2");
+    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent(/^等你确定$/);
     expect(askRows().map((b) => b.textContent)).toEqual(["用 方案 A 还是方案 B？", "再问一个"]);
   });
 
