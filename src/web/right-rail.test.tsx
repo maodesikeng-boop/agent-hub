@@ -100,7 +100,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(meta(/活 30/)).toHaveTextContent(/^—$/);
     expect([...meta(/活 31/).children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "158K context"]);
     expect(within(meta(/活 31/)).getByText("158K context")).toHaveClass("tabular-nums");
-    expect(meta(/活 31/)).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
+    expect(meta(/活 31/)).toHaveClass("text-[13px]", "leading-[18px]", "text-muted-foreground", "gap-3");
     expect(meta(/活 31/)).not.toHaveTextContent("·");
     expect(meta(/活 31/)).not.toHaveTextContent("tokens");
   });
@@ -116,6 +116,39 @@ describe("右栏：照 Claude desktop 的样子", () => {
   it("有模型、还没有对话长度：不显示“—”占位，只有模型和思考程度", () => {
     renderRail({ workers: [worker(30, { vendor: "claude", model: "sonnet", effort: "high" })] });
     expect([...within(screen.getByRole("button", { name: /活 30/ })).getByTestId("worker-meta").children].map((c) => c.textContent)).toEqual(["Sonnet", "high"]);
+  });
+});
+
+describe("右栏：顶上不留空", () => {
+  const toggle = <button type="button" aria-label="收起右栏" />;
+  const renderWithToggle = (props: { asks?: Message[]; workers?: WorkerEntry[] }) =>
+    render(<RightRail asks={props.asks ?? []} workers={props.workers ?? []} openWorkerId={null} layout="side" toggle={toggle} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
+
+  it("开关和第一组的标题在同一行（右边），开关上面没有单独的一行；内容从最顶上开始", () => {
+    renderWithToggle({ workers: [busy(30)] });
+    const aside = screen.getByRole("complementary", { name: "右栏" });
+    const heading = within(workerGroup()).getByRole("heading");
+    expect(within(heading.parentElement!).getByRole("button", { name: "收起右栏" })).toBeInTheDocument();
+    expect(heading.parentElement).toHaveClass("flex", "items-center");
+    // aside 里第一个元素就是滚动的内容区，没有放开关的 64px 高的空行
+    expect(aside.firstElementChild).toBe(workerGroup().parentElement);
+    expect(aside.innerHTML).not.toMatch(/h-16/);
+  });
+
+  it("有“等你确定”时开关在“等你确定”那一行，Worker 那一行没有；只有一个开关", () => {
+    renderWithToggle({ asks: [ask(1)], workers: [busy(30)] });
+    expect(within(asksGroup()).getByRole("button", { name: "收起右栏" })).toBeInTheDocument();
+    expect(within(workerGroup()).queryByRole("button", { name: "收起右栏" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "收起右栏" })).toHaveLength(1);
+  });
+
+  it("点标题还是收起这一组；点开关不会连带收起（两个按钮各管各的）", async () => {
+    const user = userEvent.setup();
+    renderWithToggle({ workers: [busy(30)] });
+    await user.click(screen.getByRole("button", { name: "收起右栏" }));
+    expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "true");
+    await user.click(titleButton(workerGroup()));
+    expect(titleButton(workerGroup())).toHaveAttribute("aria-expanded", "false");
   });
 });
 
@@ -137,7 +170,7 @@ describe("右栏：只列几条", () => {
     expect(names()).toEqual(["活 3", "活 5", "活 1"]);
     const more = screen.getByRole("button", { name: "Show more" });
     expect(more).toHaveAttribute("aria-expanded", "false");
-    expect(more).toHaveClass("text-[13px]", "text-muted-foreground", "hover:text-foreground");
+    expect(more).toHaveClass("text-[14px]", "text-muted-foreground", "hover:text-foreground");
     expect(more.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
     await user.click(more);
     expect(names()).toEqual(["活 3", "活 5", "活 1", "活 2", "活 4"]);
@@ -167,7 +200,7 @@ describe("右栏：只列几条", () => {
     const ended = within(workerGroup()).getByRole("button", { name: /^已收工/ });
     expect(ended).toHaveTextContent("已收工 30");
     expect(ended).toHaveAttribute("aria-expanded", "false");
-    expect(ended).toHaveClass("text-[13px]", "text-muted-foreground", "hover:text-foreground");
+    expect(ended).toHaveClass("text-[14px]", "text-muted-foreground", "hover:text-foreground");
     expect(ended.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
     expect(within(ended).getByText("30")).toHaveClass("tabular-nums");
     expect(buttons(workerGroup())).toHaveLength(2);

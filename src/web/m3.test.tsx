@@ -801,7 +801,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
       expect(row).not.toHaveTextContent("Claude Code");
       expect(row).not.toHaveTextContent("·");
-      expect(metaOf()).toHaveClass("text-xs", "text-muted-foreground");
+      expect(metaOf()).toHaveClass("text-[13px]", "leading-[18px]", "text-muted-foreground");
       expect(within(row).getByText("117K context")).toHaveClass("tabular-nums");
     });
 
@@ -892,6 +892,54 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).not.toBeInTheDocument();
     push(ws, changeOf(11, "conversation.created", { conversation: makeWorkerConversation({ id: 33, title: "新活" }) }));
     expect(rows()).toEqual(["新活Idle"]);
+  });
+
+  describe("没有要关心的事（没有在干活或等验收的 Worker，也没有等你确定）：右栏整栏不出来", () => {
+    /** 小林只有收工的 Worker（30）。 */
+    const onlyEnded = () => crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 3, conversationId: 30, status: "ended" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }), makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) })] });
+    const header = () => screen.getByRole("heading", { name: "小林" }).closest("header")!;
+
+    it("只有收工的 Worker：右栏不出来，开关在顶栏右上角；点开关手动打开，看到“已收工”；再点收起（并记住）", async () => {
+      const user = userEvent.setup();
+      await boot(onlyEnded());
+      expect(rail()).not.toBeInTheDocument();
+      expect(within(header()).getByRole("button", { name: "展开右栏" })).toBeInTheDocument();
+      await user.click(toggle()!);
+      expect(rail()).toBeInTheDocument();
+      expect(endedToggle()).toHaveTextContent("已收工 1");
+      expect(within(rail()!).getByRole("button", { name: "收起右栏" })).toBe(toggle());
+      await user.click(toggle()!);
+      expect(rail()).not.toBeInTheDocument();
+      expect(localStorage.getItem("agent-hub.rightRail")).toBe("closed");
+    });
+
+    it("手动打开后，来了在干活的 Worker 照样开着；手动打开的不记成“收起”", async () => {
+      const user = userEvent.setup();
+      const ws = await boot(onlyEnded());
+      await user.click(toggle()!);
+      expect(localStorage.getItem("agent-hub.rightRail")).toBeNull();
+      push(ws, changeOf(11, "conversation.created", { conversation: makeWorkerConversation({ id: 33, title: "新活" }) }));
+      expect(rows()).toEqual(["新活Idle"]);
+    });
+
+    it("来了新的 Worker（没收工的）或新的提问：右栏自动出来；用户手动收起过的不弹", async () => {
+      const ws = await boot(onlyEnded());
+      expect(rail()).not.toBeInTheDocument();
+      push(ws, changeOf(11, "conversation.created", { conversation: makeWorkerConversation({ id: 33, title: "新活" }) }));
+      expect(rows()).toEqual(["新活Idle"]);
+      cleanup();
+      const ws2 = await boot(onlyEnded());
+      push(ws2, messageChange(12, "message.created", makeMessage({ id: 9, conversationId: 1, text: "用 A 还是 B？", meta: { needsUser: true } })));
+      expect(within(rail()!).getByRole("region", { name: /^等你确定/ })).toBeInTheDocument();
+    });
+
+    it("在干活的 Worker 都收工了：右栏自己收起，开关还在", async () => {
+      const ws = await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }), makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, title: "修 X" }) })] }));
+      expect(rail()).toBeInTheDocument();
+      push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 50, conversationId: 1, line: { workerConversationId: 30, event: "ended" } })));
+      expect(rail()).not.toBeInTheDocument();
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    });
   });
 
   it("窄屏（1100px 以下）：右栏照样推开对话；左栏收成抽屉，顶栏最左边的按钮拉出来，选了对话、按 Esc、点遮罩都收起", async () => {
@@ -1215,6 +1263,8 @@ describe("在 Worker 页面直接对它说话", () => {
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working" })));
     push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "ended" } })));
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+    // 只剩收工的 Worker：右栏自己收起，点开关才看
+    await userEvent.setup().click(screen.getByRole("button", { name: "展开右栏" }));
     const aside = screen.getByRole("complementary", { name: "右栏" });
     expect(within(aside).getByRole("button", { name: /^已收工 1/ })).toBeInTheDocument();
   });
