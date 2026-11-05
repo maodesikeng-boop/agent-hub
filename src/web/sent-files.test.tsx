@@ -34,8 +34,8 @@ describe("图片内联", () => {
     const img = screen.getByRole("img", { name: "首页截图" });
     const url = API_PATHS.sentFile(file.id!, "shot.png");
     expect(img).toHaveAttribute("src", url);
-    expect(img.className).toContain("max-h-[480px]");
-    expect(img.className).toContain("max-w-full");
+    expect(img.className).toContain("max-h-60");
+    expect(img.className).toContain("max-w-xs");
     expect(urls(container).src).toEqual([url]);
     await userEvent.click(img.closest("button")!);
     const dialog = screen.getByRole("dialog", { name: "shot.png" });
