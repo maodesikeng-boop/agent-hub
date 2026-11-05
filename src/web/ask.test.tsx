@@ -172,6 +172,43 @@ describe("右栏的“等你确定”", () => {
   });
 });
 
+describe("跳到提问只生效一次", () => {
+  const messageOne = () => document.querySelector('[data-message-id="1"]');
+
+  it("点了提问、切到别的对话再切回来：不再跳到那条提问，也没有高亮", async () => {
+    await boot(twoPms([ask({ id: 1, text: QUESTION }), makeMessage({ id: 2, text: "后来的话" })]));
+    fireEvent.click(askRows()[0]!);
+    expect(scrolled).toHaveLength(1);
+    fireEvent.click(row("老马"));
+    fireEvent.click(row("小林"));
+    await waitFor(() => expect(messageOne()).toBeInTheDocument());
+    expect(scrolled).toHaveLength(1);
+    expect(messageOne()).not.toHaveAttribute("data-highlighted", "true");
+  });
+
+  it("点了提问、去 Worker 的对话再回来：不再跳", async () => {
+    const snapshot = twoPms([ask({ id: 1, text: QUESTION })]);
+    snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
+    await boot(snapshot);
+    fireEvent.click(askRows()[0]!);
+    expect(scrolled).toHaveLength(1);
+    fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
+    fireEvent.click(row("小林"));
+    await waitFor(() => expect(messageOne()).toBeInTheDocument());
+    expect(scrolled).toHaveLength(1);
+    expect(messageOne()).not.toHaveAttribute("data-highlighted", "true");
+  });
+
+  it("再点同一条提问照样跳、照样高亮", async () => {
+    await boot(twoPms([ask({ id: 1, text: QUESTION })]));
+    fireEvent.click(askRows()[0]!);
+    fireEvent.click(askRows()[0]!);
+    fireEvent.click(askRows()[0]!);
+    expect(scrolled).toHaveLength(2);
+    expect(messageOne()).toHaveAttribute("data-highlighted", "true");
+  });
+});
+
 describe("左栏标签和标题数字", () => {
   it("有提问的项目经理那一行显示“等你确定”；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
