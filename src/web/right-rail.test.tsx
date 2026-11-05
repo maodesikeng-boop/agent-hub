@@ -88,6 +88,11 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(meta(/活 31/)).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
     expect(meta(/活 31/)).not.toHaveTextContent("·");
   });
+
+  it("有模型、还没有用量：不显示“—”占位，只有模型和思考程度", () => {
+    renderRail({ workers: [worker(30, { vendor: "claude", model: "sonnet", effort: "high" })] });
+    expect([...within(screen.getByRole("button", { name: /活 30/ })).getByTestId("worker-meta").children].map((c) => c.textContent)).toEqual(["Sonnet", "high"]);
+  });
 });
 
 describe("右栏：只列几条", () => {

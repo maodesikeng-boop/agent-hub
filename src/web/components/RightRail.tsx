@@ -36,6 +36,8 @@ export const RIGHT_RAIL_ID = "right-rail";
 const ROW = "flex w-[calc(100%+1rem)] cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
+/** formatUsageTotal 没数据时的写法：别的项都有时不显示它，整行都没数据才显示。 */
+const NO_USAGE = "—";
 
 function GroupTitle({ id, children, dot = false }: { id: string; children: React.ReactNode; dot?: boolean }) {
   return (
@@ -84,6 +86,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   const vendor = isAgentVendor(worker.vendor) ? worker.vendor : DEFAULT_AGENT_VENDOR;
   const catalog = useModelCatalog(vendor);
   const busy = isBusy(worker);
+  const tokens = formatUsageTotal(worker.usage);
   return (
     <button
       type="button"
@@ -109,9 +112,11 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
         <span data-testid="worker-meta" className="flex items-baseline gap-3 text-xs leading-4 text-muted-foreground">
           {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
           {worker.effort && <span className="shrink-0">{effortLabel(worker.effort)}</span>}
-          <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
-            {formatUsageTotal(worker.usage)}
-          </span>
+          {(tokens !== NO_USAGE || (worker.vendor === undefined && !worker.effort)) && (
+            <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
+              {tokens}
+            </span>
+          )}
         </span>
       </span>
     </button>
