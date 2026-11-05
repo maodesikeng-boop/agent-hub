@@ -5,7 +5,7 @@
 // - claude 的路径：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。用户全局 ~/.claude 的设置照常生效。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ENV_DEFAULT_MODEL, type Message, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { Client, agentTexts, makeEnv, messagesOf, sleep, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "../e2e/harness.ts";
@@ -113,7 +113,10 @@ export class Smoke {
   folder(name: string, files: Record<string, string> = {}): string {
     const dir = join(this.env.dir, "code", name);
     mkdirSync(dir, { recursive: true });
-    for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content);
+    for (const [file, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, file)), { recursive: true });
+      writeFileSync(join(dir, file), content);
+    }
     return realpathSync.native(dir);
   }
 
