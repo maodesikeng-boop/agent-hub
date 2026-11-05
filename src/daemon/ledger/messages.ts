@@ -138,8 +138,11 @@ export function createLedgerMessages(
    */
   const answerAsks = (p: Pending, conversationId: ConversationId, before: MessageId) => {
     const rows = db.all<MessageDbRow>(
+      // meta 不是合法 JSON 的行跳过（CASE 保证先判断 json_valid），不让一行脏数据挡住用户发消息
       `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'agent' AND id < ?
-         AND json_extract(meta, '$.needsUser') = 1 AND json_extract(meta, '$.answered') IS NULL AND json_extract(meta, '$.dismissed') IS NULL`,
+         AND CASE WHEN json_valid(meta)
+           THEN json_extract(meta, '$.needsUser') = 1 AND json_extract(meta, '$.answered') IS NULL AND json_extract(meta, '$.dismissed') IS NULL
+           ELSE 0 END`,
       conversationId,
       before,
     );

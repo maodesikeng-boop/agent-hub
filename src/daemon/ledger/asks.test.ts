@@ -151,6 +151,26 @@ describe("不算回答", () => {
   });
 });
 
+describe("回答的那条消息后来怎样都不影响", () => {
+  it("用户的消息还在排队、发送失败、被停止：提问照样是已回答", () => {
+    const a = ask("问 1");
+    const queued = post(lin.conversationId, "用 A");
+    expect(ledger.getMessage(queued)!.status).toBe("queued");
+    expect(answered(a)).toBe(true);
+    ledger.applyDriverEvent(lin.sessionId, { type: "driver.error", code: "invalid_input", message: "炸了", messageIds: [queued], at: now });
+    expect(ledger.getMessage(queued)!.status).toBe("failed");
+    expect(answered(a)).toBe(true);
+
+    const b = ask("问 2");
+    const stopped = post(lin.conversationId, "用 B");
+    for (const type of ["message.delivered", "message.processing"] as const) ledger.applyDriverEvent(lin.sessionId, { type, messageIds: [stopped], at: now });
+    ledger.requestStop(lin.conversationId);
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [stopped], durationMs: 10, at: now });
+    expect(ledger.getMessage(stopped)!.status).toBe("stopped");
+    expect(answered(b)).toBe(true);
+  });
+});
+
 describe("持久化", () => {
   it("重启守护进程后已回答、没回答的都不变", () => {
     const a = ask("问 1");
@@ -174,6 +194,37 @@ describe("持久化", () => {
     db.close();
     open();
     expect([answered(dismissed), answered(replied), answered(open1), answered(other)]).toEqual([true, true, false, false]);
+  });
+
+  it("老数据：只点过“知道了”、后面没有用户消息的，迁移后是 answered，dismissed 留着（回滚到旧版本也不会冒出来）", () => {
+    const dismissed = ask("只点过知道了");
+    const open1 = ask("还没回");
+    db.run("UPDATE messages SET meta = '{\"needsUser\":true,\"dismissed\":true}' WHERE id = ?", dismissed);
+    db.run("UPDATE messages SET meta = '{\"needsUser\":true}' WHERE id = ?", open1);
+    db.exec("PRAGMA user_version = 8");
+    db.close();
+    open();
+    expect([answered(dismissed), answered(open1)]).toEqual([true, false]);
+    expect(ledger.getMessage(dismissed)!.meta).toEqual({ needsUser: true, dismissed: true, answered: true });
+  });
+
+  it("老数据：meta 不是合法 JSON 的行，迁移照样跑完、这一行不动；之后用户发消息也不受影响", () => {
+    const good = ask("好的提问");
+    const bad = ask("坏数据");
+    db.run("UPDATE messages SET meta = '{\"needsUser\":true}' WHERE id = ?", good);
+    db.run("UPDATE messages SET meta = '{not json' WHERE id = ?", bad);
+    post(lin.conversationId);
+    db.run("UPDATE messages SET meta = '{\"needsUser\":true}' WHERE id = ?", good);
+    db.exec("PRAGMA user_version = 8");
+    db.close();
+    open();
+    expect(db.get<{ user_version: number }>("PRAGMA user_version")!.user_version).toBeGreaterThanOrEqual(9);
+    expect(answered(good)).toBe(true);
+    expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", bad)!.meta).toBe("{not json");
+    const later = ask("迁移后再问");
+    post(lin.conversationId);
+    expect(answered(later)).toBe(true);
+    expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", bad)!.meta).toBe("{not json");
   });
 
   it("老数据：迁移前读到 dismissed 也当成已回答", () => {
