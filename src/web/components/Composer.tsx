@@ -105,7 +105,7 @@ export function Composer({
   return (
     <>
       {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
-      <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)] focus-within:border-foreground/25">
+      <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)]">
         {files.length > 0 && (
           <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-5 pt-3">
             {files.map(({ key, file }) => (

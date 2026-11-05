@@ -102,7 +102,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 ## 7. 聚焦态
 
 - 统一中性，**不用主色，不加彩色光圈**。`--ring` 是中性灰（`#a1a1aa`），`ring-ring` 就是它。
-- 输入框、多行输入、下拉：聚焦只把边框加深到 `border-foreground/25`（和聊天输入框一样），`Input` / `Select` / `Textarea` 自带。
+- 文字输入（聊天输入框、`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
 - 按钮、列表项、单选行、开关这类点的东西：键盘聚焦时显示 `focus-visible:ring-2 focus-visible:ring-ring/50`（单选行在框里，用 `ring-inset`）。只在键盘聚焦（`focus-visible`）时出现，鼠标点不出圈。
 - 不合规的输入：`aria-invalid` 时红边框（组件自带），原因写在那一行下面。
 
