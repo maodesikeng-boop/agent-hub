@@ -67,6 +67,17 @@ export class ConversationNotFoundError extends Error {
   }
 }
 
+/** Ledger.composerTarget 的结果。 */
+export interface ComposerTarget {
+  sessionId: SessionId;
+  /** 会话那一行的 vendor（shared/vendors.ts 的厂商编号）。 */
+  vendor: string;
+  cwd: string;
+  addDirs: string[];
+  /** “@”在哪些文件夹里搜，第一个是工作目录（插相对路径），别的插绝对路径。不含项目经理带着的 worktrees 目录。 */
+  fileRoots: string[];
+}
+
 export interface PostUserMessageInput {
   conversationId: ConversationId;
   /** 网页生成；同一个对话里同一个 clientId 只会有一条消息、一个动作（去重键见 userMessageDedupeKey）。 */
@@ -277,8 +288,14 @@ export interface Ledger {
    * 对话不存在抛 ConversationNotFoundError。对话存在但没有会话（数据不一致）抛普通 Error，界面服务按 500 处理。
    * Worker 的对话也走这里（用户在网页的 Worker 页面直接对它说）：消息带 workerId；Worker 已收工抛 LedgerRequestError("conflict")
    * （clientId 重复的照样返回已有的编号）。Worker 收到后项目经理对话里多一行 user_message（见 applyDriverEvent）。
+   * 隐藏的命令（厂商实现的 blockReason：/clear、/model……）不存、不发，抛 LedgerRequestError("invalid")，message 是给用户看的原因。
    */
   postUserMessage(input: PostUserMessageInput): PostUserMessageResult;
+  /**
+   * 输入框“/”命令和“@”文件用（界面服务的 commands、files 接口，daemon/composer.ts）：这个对话最新一代的会话、厂商和目录。
+   * 对话不存在（包括老的项目群）抛 ConversationNotFoundError。
+   */
+  composerTarget(conversationId: ConversationId): ComposerTarget;
   /**
    * 用户点“停止”。只停这个对话最新的一代（generation 最大的那个会话）：通知 onStopRequested 的监听者；
    * 最新一代没在跑时什么也不做。对话不存在抛 ConversationNotFoundError。

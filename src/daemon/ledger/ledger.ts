@@ -20,7 +20,7 @@ import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
-import type { LedgerFiles } from "./context.ts";
+import type { LedgerContextOptions, LedgerFiles } from "./context.ts";
 import { createResolveFolder, writeFileAtomic as defaultWriteFileAtomic } from "./files.ts";
 import { createLedgerHandover } from "./handover.ts";
 import { createLedgerHubCommands } from "./hub-commands.ts";
@@ -41,6 +41,8 @@ export interface LedgerOptions {
   now?: () => number;
   /** 现在缓存着的模型名单（ModelCatalogs.current）：系统消息、hub 输出里的模型名用它的显示名。不给用打包的。 */
   modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
+  /** 缓存着的这个会话的完整命令列表（CommandCatalogs.cached）：手打命令时，列表里这个名字是用户自己的就不拦。没缓存、不给都按名字拦。 */
+  knownCommands?: LedgerContextOptions["knownCommands"];
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
   initialSeq?: number;
   changeBufferSize?: number;
@@ -118,6 +120,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   return {
     postUserMessage: messages.postUserMessage,
     requestStop: messages.requestStop,
+    composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): StateSnapshot {
       const conversations: ConversationSnapshot[] = db

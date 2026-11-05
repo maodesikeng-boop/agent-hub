@@ -135,12 +135,15 @@ export function userToWorkerHeader(workerId: WorkerId, title: string): string {
 export const USER_TO_WORKER_TAG = "【用户直接对你说】";
 
 /**
- * 一条消息写给 agent 的文字（session.send 的处理函数用）：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf）；
- * Worker 对话里用户说的（sender user、带 workerId）前面再加 USER_TO_WORKER_TAG。库里存的是原文，网页照原文显示。
+ * 一条消息写给 agent 的内容（session.send 的处理函数用，交给 DriverSendInput 的 text、prefixes）：
+ * - text：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf），原文以 / 开头的照样以 / 开头；
+ * - prefixes：Worker 对话里用户说的（sender user、带 workerId）带 USER_TO_WORKER_TAG，驱动层把它放在原文前面单独一块
+ *   （原文单独放最后一块，/ 命令才会被展开，见 docs/composer-commands.md 的 T4）；别的没有标签。
+ * 库里存的是原文，网页照原文显示。
  */
-export function deliveryText(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): string {
+export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
   const text = agentTextOf(message);
-  return message.workerId !== null && message.sender === "user" ? `${USER_TO_WORKER_TAG}\n${text}` : text;
+  return { prefixes: message.workerId !== null && message.sender === "user" ? [USER_TO_WORKER_TAG] : [], text };
 }
 
 const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {

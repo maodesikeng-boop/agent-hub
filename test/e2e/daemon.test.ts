@@ -195,7 +195,8 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(client, first, "replied");
     await waitForStatus(client, a, "replied");
     await waitForStatus(client, b, "replied");
-    expect(env.stdinTexts()).toEqual(["写一个很长的东西", "【用户连发了 2 条】\n1. 补充一\n2. 补充二"]);
+    // “【用户连发了 N 条】”和每一条各占一个 text 块（docs/composer-commands.md 的 T4）
+    expect(env.stdinBlocks()).toEqual([["写一个很长的东西"], ["【用户连发了 2 条】", "1. 补充一", "2. 补充二"]]);
     expect(agentTexts(await client.state(), conversationId)).toEqual(["第一轮", "两条补充都收到"]);
     await terminate(daemon);
   });

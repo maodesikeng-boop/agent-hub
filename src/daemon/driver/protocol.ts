@@ -18,9 +18,25 @@ import type {
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
  * 但按 JS 行终止符切行的读法（如 node:readline）会在这里断开，所以再转义成 \u2028、\u2029。
+ * prefixes 是我们加的字（说明、标签），text 是用户原文；content 怎么拼由厂商实现定（VendorComposerBase.buildUserContent，驱动层传进来；不传是 claude 的 userContent：每项一个 text 块，原文放最后一块）。
  */
-export function buildUserLine(text: string): string {
-  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }));
+export function buildUserLine(
+  text: string,
+  prefixes: readonly string[] = [],
+  buildContent: (prefixes: readonly string[], text: string) => unknown[] = userContent,
+): string {
+  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: buildContent(prefixes, text) } }));
+}
+
+/**
+ * 一条用户消息的 content（vendors/claude.ts 的 buildUserContent 就是它，驱动层经厂商接口调）：我们加的字每项一个 text 块在前，用户原文单独放最后一块。
+ * claude 只看最后一个 text 块是不是以 / 开头，前面的块模型照样看得到（docs/composer-commands.md 的 T4）。
+ * 空白的块不放（API 不收空的 text 块）；全是空白时留一块，写入前的校验会按“文字是空的”拒绝。
+ */
+export function userContent(prefixes: readonly string[], text: string): Array<{ type: "text"; text: string }> {
+  const blocks = prefixes.filter((p) => p.trim() !== "");
+  if (text.trim() !== "" || blocks.length === 0) blocks.push(text);
+  return blocks.map((t) => ({ type: "text", text: t }));
 }
 
 function escapeLineSeparators(json: string): string {
@@ -64,8 +80,13 @@ export function buildInitializeLine(requestId: string): string {
   return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } });
 }
 
-/** 问模型名单时起 claude 的参数（model-catalog.ts）：不发用户消息、不存会话，拿到回应就关。 */
-export const MODEL_QUERY_ARGS: readonly string[] = [
+/**
+ * 另起一个 claude 只为发 initialize 控制请求时的参数（model-catalog.ts 的 queryClaudeInitialize：问模型名单、问会话没在跑时的命令列表）：
+ * 不发用户消息、不存会话，拿到回应就关；不跑钩子（`--settings '{"disableAllHooks":true}'`）、不连 MCP（`--strict-mcp-config` 没给 `--mcp-config`
+ * 就一个都不连），免得项目的 SessionStart 钩子、.mcp.json 里的 MCP 被我们一次次拉起。工作目录还是项目目录，项目的命令和 skill 照样查得到。
+ * 官方文档：code.claude.com/docs/en/hooks 的 Disable or remove hooks、cli-reference 的 --settings、--strict-mcp-config；实测见 docs/composer-commands.md 的 T10。
+ */
+export const INITIALIZE_QUERY_ARGS: readonly string[] = [
   "-p",
   "--input-format",
   "stream-json",
@@ -73,12 +94,19 @@ export const MODEL_QUERY_ARGS: readonly string[] = [
   "stream-json",
   "--verbose",
   "--no-session-persistence",
+  "--settings",
+  JSON.stringify({ disableAllHooks: true }),
+  "--strict-mcp-config",
 ];
 
-/** 忙时用户连发的几条拼成一条（设计第 7.3 节）。 */
-export function mergeUserTexts(texts: string[]): string {
-  if (texts.length === 1) return texts[0]!;
-  return [`【用户连发了 ${texts.length} 条】`, ...texts.map((t, i) => `${i + 1}. ${t}`)].join("\n");
+/**
+ * 忙时用户连发的几条拼成一条（设计第 7.3 节）：“【用户连发了 N 条】”和每条（带编号）各一个 text 块，最后一条放 text。
+ * 以命令开头的不拼（驱动层的 #takeBatch 挑），所以这里不用管命令。只有一条时原样。
+ */
+export function mergeUserTexts(texts: string[]): { prefixes: string[]; text: string } {
+  if (texts.length === 1) return { prefixes: [], text: texts[0]! };
+  const items = texts.map((t, i) => `${i + 1}. ${t}`);
+  return { prefixes: [`【用户连发了 ${texts.length} 条】`, ...items.slice(0, -1)], text: items.at(-1)! };
 }
 
 /** 去重用的 uuid：原始事件有就照抄，没有就 `line:<原始那一行的 sha256 前 32 位>`（driver.ts 的约定）。 */

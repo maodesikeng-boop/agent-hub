@@ -2,7 +2,7 @@
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：调度器 → 准备命令 → 执行器 → claude（含问模型名单的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+// - 关机（启动到哪一步就关到哪一步）：调度器 → 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,8 +25,12 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { resolveHubPaths, workerSetupLogPath } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
+import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
+import { createComposerService } from "./composer.ts";
+import { createVendorComposers } from "./vendors/index.ts";
+import { createWorkspaceFiles } from "./workspace-files.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
-import { createClaudeDriver, createModelCatalogs, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
+import { createClaudeDriver, createModelCatalogs, queryClaudeInitialize, queryClaudeModels, type ModelCatalogs } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
 import {
   createSessionEndHandler,
@@ -94,6 +98,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor?: ActionExecutor;
     driver?: Driver;
     models?: ModelCatalogs;
+    commands?: CommandCatalogs;
     ui?: RunningUiServer;
     agentApi?: RunningAgentApi;
     db?: Db;
@@ -109,7 +114,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, setup, executor, driver, models, ui, agentApi, db, lock } = parts;
+    const { scheduler, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     parts.stopFileCleanup?.();
     if (setup) await step("准备命令", () => setup.shutdown());
@@ -125,6 +130,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
     if (driver) await step("claude", () => driver.shutdown());
     if (models) await step("模型名单", () => models.close());
+    if (commands) await step("命令列表", () => commands.close());
     if (ui) await step("界面服务", () => ui.close());
     if (agentApi) {
       await step("agent 接口", async () => {
@@ -167,6 +173,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.models = models;
     const ledger = createLedger(db, {
       modelCatalog: (vendor) => models.current(vendor),
+      // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
+      knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
       dataHome: paths.home,
@@ -185,6 +193,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       claudePath: paths.claudePath,
       sessionLogsDir: paths.sessionLogsDir,
       store: sessions,
+      log,
       prepareLaunch: createLaunchPreparer({
         launchDir: paths.launchDir,
         stateDir,
@@ -198,6 +207,20 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.driver = driver;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
+    // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个 claude 在会话的目录里问；会话中途推来的新名单直接更新缓存
+    const commands = createCommandCatalogs({
+      vendors: createVendorComposers({ claude: { claudePath: paths.claudePath, queryInitialize: queryClaudeInitialize } }),
+      queryRunning: (sessionId) => driver.queryCommands(sessionId),
+      log,
+    });
+    parts.commands = commands;
+    parts.unsubscribe.push(
+      driver.onEvent((sessionId, event) => {
+        if (event.type !== "commands.changed") return;
+        const session = sessions.get(sessionId);
+        if (session) commands.update(session, event.commands);
+      }),
+    );
 
     // 4. 清掉上次留下的 claude
     await driver.cleanupStale();
@@ -260,7 +283,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models });
+    const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, composer });
 
     let stopping: Promise<void> | undefined;
     return {
