@@ -593,3 +593,75 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 });
+
+describe("开新会话（资料页的按钮，ledger/handover.ts）", { timeout: 60_000 }, () => {
+  /** 第 0 轮随便聊一句；第 1 轮是交接（卡在 hold 文件上，放行后写交接）；之后都回“已接上”。 */
+  const script = (hold: string) => ({
+    turns: [quick("记住了"), { steps: [{ waitFile: hold }, { text: "交接：暗号是 蓝鲸" }] }],
+    defaultTurn: quick("已接上"),
+  });
+  const renew = async (client: Client, pmId: number) => {
+    const res = await client.postJson(API_PATHS.renewSession(pmId), undefined);
+    expect(res.status).toBe(202);
+    return ((await res.json()) as { messageId: number }).messageId;
+  };
+
+  it("写完交接换代：新的 claude 会话（新的会话 ID）第一条收到交接和最近的原话；连点只发一条；换代期间发的消息给新会话", async () => {
+    env = makeEnv();
+    const hold = join(env.dir, "hold");
+    env.setScript(script(hold));
+    const { daemon, client, privateId, pmId } = await boot();
+    await warmUp(client, privateId, "记住暗号 蓝鲸");
+    const oldSession = sessionsOf(await client.state(), privateId)[0]!.sessionId;
+    const oldVendor = argValue(lastProcOf(oldSession).argv, "--session-id");
+
+    const request = await renew(client, pmId);
+    expect(await renew(client, pmId)).toBe(request);
+    await waitForStatus(client, request, "processing");
+    const during = await client.post(privateId, "换代时发的");
+    writeFileSync(hold, "");
+    await waitForStatus(client, during, "replied", 20_000);
+
+    const state = await client.state();
+    const [g1, g2] = sessionsOf(state, privateId);
+    expect(sessionsOf(state, privateId)).toHaveLength(2);
+    expect(g2!.generation).toBe(2);
+    expect(g1!.status).toBe("ended");
+    expect(messageById(state, during)!.sessionId).toBe(g2!.sessionId);
+    const proc = lastProcOf(g2!.sessionId);
+    expect(argValue(proc.argv, "--session-id")).not.toBe(oldVendor);
+    expect(proc.argv).not.toContain("--resume");
+    const [first, second] = env.stdinTextsOf(proc.pid);
+    expect(first).toContain("交接：暗号是 蓝鲸");
+    expect(first).toContain("用户：记住暗号 蓝鲸");
+    expect(second).toBe("换代时发的");
+    // 旧会话里只有交接请求，之后没再写东西
+    expect(env.stdinTextsOf(lastProcOf(oldSession).pid).at(-1)).toContain("交接");
+    expect(agentTexts(state, privateId)).toContain("交接：暗号是 蓝鲸");
+    await terminate(daemon);
+  });
+
+  it("写交接时守护进程重启：交接请求重发给旧会话，写完照常换一次代", async () => {
+    env = makeEnv();
+    const hold = join(env.dir, "hold");
+    // 被关机打断的那一轮也算一轮：重发的那一轮才写交接
+    env.setScript({ ...script(hold), turns: [...script(hold).turns, quick("交接：暗号是 蓝鲸")] });
+    const { daemon: before, client, privateId, pmId } = await boot();
+    await warmUp(client, privateId, "记住暗号 蓝鲸");
+    const request = await renew(client, pmId);
+    await waitForStatus(client, request, "processing");
+    expect(await terminate(before)).toEqual({ code: 0, signal: null });
+
+    const daemon = await env.start();
+    const c2 = client.withPort(daemon.port);
+    await waitForStatus(c2, request, "replied", 20_000);
+    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId)[1]);
+    const renewedId = await waitUntil("换代那一行", async () =>
+      messagesOf(await c2.state(), privateId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed")?.id,
+    );
+    await waitForStatus(c2, renewedId, "replied", 20_000);
+    expect(sessionsOf(await c2.state(), privateId)).toHaveLength(2);
+    expect(env.stdinTextsOf(lastProcOf(g2.sessionId).pid)[0]).toContain("交接：暗号是 蓝鲸");
+    await terminate(daemon);
+  });
+});

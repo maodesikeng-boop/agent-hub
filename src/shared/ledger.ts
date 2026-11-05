@@ -319,6 +319,19 @@ export interface Ledger {
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
   /**
+   * 资料页的“开新会话”（POST /api/pms/:id/renew-session，见 ledger/handover.ts）：给项目经理现在的会话发一条 handover.requested，
+   * 让它把交接写成这一轮的回复；那一轮正常结束时（applyDriverEvent）同一个事务里换代：旧会话登记 session.end，
+   * 建 generation + 1 的新会话，发 session.renewed（交接 + 最近几条原话），换代期间压着的消息改发给新会话。
+   * 已经有一条在等（排队、已送达、处理中）就返回它，不再发；上一次失败、被停止的重新排队。新会话的第一条还没结果时返回它；
+   * 它重排次数用完了，把它重新排队（次数清零）。没有这个项目经理 → not_found。
+   */
+  renewSession(pmId: PmId): { messageId: MessageId };
+  /**
+   * session.send 处理函数用：这条消息要不要先压着。同一个对话里、和它同一代或更早的 handover.requested（项目经理在写交接）
+   * 或 session.renewed（新会话的第一条）还没结果（排队、已送达、处理中）时都等，换代后发给新会话。session.renewed 自己不等。
+   */
+  waitsForHandover(messageId: MessageId): boolean;
+  /**
    * 用户点“知道了”，清掉一条 hub ask 的提醒（M5，POST /api/messages/:id/dismiss-ask）：meta 加上 dismissed、推 message.updated；
    * 已经清过的什么也不做。错误：没有这条消息（包括老项目群里的）→ not_found；不是 hub ask 发的 → conflict。
    */

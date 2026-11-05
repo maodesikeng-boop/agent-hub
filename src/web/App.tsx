@@ -9,7 +9,7 @@ import { WorkerPanel } from "./components/WorkerPanel.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { failingHealth, listConversations, pendingAsks, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workerPhaseOf, workersOf } from "./selectors.ts";
+import { failingHealth, isRenewing, listConversations, pendingAsks, pendingOf, quotaResetTimes, quotaUsage, sessionOf, workerLineOf, workerPhaseOf, workersOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
@@ -135,6 +135,7 @@ export function App() {
             project={profileEntry?.project ?? null}
             folders={profileEntry?.folders ?? []}
             rev={state.personaRev[profile.id] ?? 0}
+            renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
             onBack={() => setProfilePm(null)}
           />
         ) : openWorker !== null ? (

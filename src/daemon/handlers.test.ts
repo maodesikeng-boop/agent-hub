@@ -49,7 +49,7 @@ function action<T extends "session.start" | "session.send" | "session.end" | "wo
 }
 
 function deps(
-  options: { message?: Message | null; send?: DriverSendResult | Error; rateLimit?: RateLimitInfo | null; waitsForFirstTurn?: boolean } = {},
+  options: { message?: Message | null; send?: DriverSendResult | Error; rateLimit?: RateLimitInfo | null; waitsForFirstTurn?: boolean; waitsForHandover?: boolean } = {},
 ) {
   const send = vi.fn(async () => {
     if (options.send instanceof Error) throw options.send;
@@ -63,14 +63,15 @@ function deps(
   const stopMessage = vi.fn();
   const revoke = vi.fn();
   const waitsForFirstTurn = vi.fn(() => options.waitsForFirstTurn ?? false);
+  const waitsForHandover = vi.fn(() => options.waitsForHandover ?? false);
   const d: HandlerDeps = {
     driver: { start, send, end },
-    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn },
+    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn, waitsForHandover },
     sessions: { get: () => ({ rateLimit: options.rateLimit ?? null }) as AgentSessionRow },
     tokens: { revoke },
     now: () => NOW,
   };
-  return { d, send, start, end, getMessage, onActionFailed, refreshSessionState, stopMessage, revoke, waitsForFirstTurn };
+  return { d, send, start, end, getMessage, onActionFailed, refreshSessionState, stopMessage, revoke, waitsForFirstTurn, waitsForHandover };
 }
 
 const sendAction = (extra: { resend?: boolean } = {}) =>
@@ -127,6 +128,13 @@ describe("session.send 处理函数", () => {
     const { d, send, waitsForFirstTurn } = deps({ waitsForFirstTurn: true });
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" });
     expect(waitsForFirstTurn).toHaveBeenCalledWith(1, 7);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("项目经理在写交接、新会话的第一条还没发（ledger.waitsForHandover）：later，换代后再发给新会话", async () => {
+    const { d, send, waitsForHandover } = deps({ waitsForHandover: true });
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" });
+    expect(waitsForHandover).toHaveBeenCalledWith(7);
     expect(send).not.toHaveBeenCalled();
   });
 
