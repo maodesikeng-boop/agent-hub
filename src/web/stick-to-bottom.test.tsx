@@ -77,7 +77,7 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(700);
   });
 
-  it("用户往上翻了：内容变高不拉回去，出现“回到底部”（浅灰底，没有描边和阴影）", () => {
+  it("用户往上翻了：内容变高不拉回去，消息区下面出现“回到底部”（浅灰底，没有描边和阴影，不压在消息上）", () => {
     const { log, box } = setup();
     log.scrollTop = 100;
     fireEvent.scroll(log);
@@ -86,6 +86,10 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(100);
     const back = screen.getByRole("button", { name: "回到底部" });
     expect(back.className).not.toMatch(/shadow|border/);
+    // 不浮在消息上：不在消息区里、不是绝对定位，是消息区下面让出来的一条
+    expect(log).not.toContainElement(back);
+    expect(back.className).not.toContain("absolute");
+    expect(back.closest("[data-back-to-bottom]")!.className).not.toContain("absolute");
     expect(back.className).toContain("bg-secondary");
     fireEvent.click(back);
     expect(log.scrollTop).toBe(1100);
