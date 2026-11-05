@@ -29,8 +29,10 @@
 }
 
 :root {
-  --font-ui: "Inter Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --font-code: "SF Mono", ui-monospace, Menlo, monospace;
+  /* 字体栈只在这里定义（docs/ui-standard.md 第 13 条）：英文字体全排在中文字体前面，英文和数字不会落到中文字体上，
+     汉字在英文字体里没有字形，自动落到后面的苹方 / 冬青 / 雅黑。代码用等宽栈。 */
+  --font-ui: "Inter Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
   --background: #ffffff;
   --foreground: #18181b;

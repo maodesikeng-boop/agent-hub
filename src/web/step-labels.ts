@@ -44,7 +44,7 @@ const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
   ToolSearch: () => "在找工具",
 };
 
-/** `mcp__<连接器>__<工具>`：显示“在调用 连接器 · 工具”，名字照抄。 */
+/** `mcp__<连接器>__<工具>`：显示“在调用 连接器 的 工具”，名字照抄。 */
 function describeMcpTool(name: string): string {
   const rest = name.slice("mcp__".length);
   if (rest === "") return STEP_TEXT.working;
@@ -52,7 +52,7 @@ function describeMcpTool(name: string): string {
   if (separator <= 0) return `在调用 ${rest}`;
   const server = rest.slice(0, separator);
   const tool = rest.slice(separator + 2);
-  return tool === "" ? `在调用 ${server}` : `在调用 ${server} · ${tool}`;
+  return tool === "" ? `在调用 ${server}` : `在调用 ${server} 的 ${tool}`;
 }
 
 function describeTool(name: string, input: AgentStepInput): string {

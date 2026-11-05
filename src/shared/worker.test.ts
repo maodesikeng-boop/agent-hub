@@ -133,25 +133,25 @@ describe("回到项目经理那一行", () => {
     expect(workerReportHeader(3, "修 X")).toBe("【Worker #3 · 修 X 的汇报】");
   });
 
-  it("那一行的文字：Worker · 标题 · 状态：摘要", () => {
-    expect(workerLineText({ title: "修 X", event: "started", status: null, summary: null, readonly: false })).toBe("Worker · 修 X · 已派出");
-    expect(workerLineText({ title: "查 Y", event: "started", status: null, summary: null, readonly: true })).toBe("Worker · 查 Y · 已派出（只读）");
-    expect(workerLineText({ title: "修 X", event: "report", status: "done", summary: "好了", readonly: false })).toBe("Worker · 修 X · 做完了：好了");
+  it("那一行的文字：Worker「标题」状态：摘要", () => {
+    expect(workerLineText({ title: "修 X", event: "started", status: null, summary: null, readonly: false })).toBe("Worker「修 X」已派出");
+    expect(workerLineText({ title: "查 Y", event: "started", status: null, summary: null, readonly: true })).toBe("Worker「查 Y」已派出（只读）");
+    expect(workerLineText({ title: "修 X", event: "report", status: "done", summary: "好了", readonly: false })).toBe("Worker「修 X」做完了：好了");
     expect(workerLineText({ title: "修 X", event: "report", status: "unformatted", summary: null, readonly: false })).toBe(
-      "Worker · 修 X · 没按格式",
+      "Worker「修 X」没按格式",
     );
     expect(workerLineText({ title: "修 X", event: "report", status: "unformatted", summary: "改好了", readonly: false })).toBe(
-      "Worker · 修 X · 没按格式：改好了",
+      "Worker「修 X」没按格式：改好了",
     );
     expect(workerLineText({ title: "修 X", event: "turn_failed", status: null, summary: "被停止了", readonly: false })).toBe(
-      "Worker · 修 X · 这一轮没做完：被停止了",
+      "Worker「修 X」这一轮没做完：被停止了",
     );
     expect(workerLineText({ title: "修 X", event: "worktree_failed", status: null, summary: "目录被占用", readonly: false })).toBe(
-      "Worker · 修 X · 建 worktree 失败：目录被占用",
+      "Worker「修 X」建 worktree 失败：目录被占用",
     );
-    expect(workerLineText({ title: "修 X", event: "ended", status: null, summary: null, readonly: false })).toBe("Worker · 修 X · 已收工");
+    expect(workerLineText({ title: "修 X", event: "ended", status: null, summary: null, readonly: false })).toBe("Worker「修 X」已收工");
     expect(workerLineText({ title: "修 X", event: "user_message", status: null, summary: "顺便\n改 README", readonly: false })).toBe(
-      "Worker · 修 X · 你对它说：顺便 改 README",
+      "Worker「修 X」你对它说：顺便 改 README",
     );
   });
 
@@ -168,9 +168,9 @@ describe("回到项目经理那一行", () => {
 
   it("摘要的空白压成一个空格，太长按字数截断", () => {
     const line = (summary: string) => workerLineText({ title: "修 X", event: "report", status: "done", summary, readonly: false });
-    expect(line("第一行\n\n  第二行\t结尾  ")).toBe("Worker · 修 X · 做完了：第一行 第二行 结尾");
-    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS))).toBe(`Worker · 修 X · 做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS)}`);
-    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS + 1))).toBe(`Worker · 修 X · 做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS - 1)}…`);
+    expect(line("第一行\n\n  第二行\t结尾  ")).toBe("Worker「修 X」做完了：第一行 第二行 结尾");
+    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS))).toBe(`Worker「修 X」做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS)}`);
+    expect(line("字".repeat(WORKER_LINE_SUMMARY_CHARS + 1))).toBe(`Worker「修 X」做完了：${"字".repeat(WORKER_LINE_SUMMARY_CHARS - 1)}…`);
     expect(WORKER_LINE_SUMMARY_CHARS).toBe(120);
   });
 });

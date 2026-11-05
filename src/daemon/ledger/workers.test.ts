@@ -225,7 +225,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
       status: null,
       summary: null,
     });
-    expect(line!.text).toBe("Worker · 修 X · 已派出");
+    expect(line!.text).toBe("Worker「修 X」已派出");
     // worktree 先建，建好了才起 Worker 的会话
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([["worktree.create", { workerId: worker.id }]]);
     expect(actionsOf("session.start").filter((a) => a.type === "session.start" && a.params.sessionId === session.id)).toEqual([]);
@@ -253,7 +253,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     const worker = start({ readonly: true }).data.worker;
     expect(worker).toMatchObject({ model: null, readonly: true });
     expect(sessionRow(workerSessionId(worker.id)).model).toBe("claude-sonnet-5-5");
-    expect(workerLines()[0]!.text).toBe("Worker · 修 X · 已派出（只读）");
+    expect(workerLines()[0]!.text).toBe("Worker「修 X」已派出（只读）");
     expect(workerEventOf(workerLines()[0]!)?.readonly).toBe(true);
   });
 
@@ -800,7 +800,7 @@ describe("收工", () => {
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.end", { sessionId, generation: 1 }]]);
     const line = workerLines().at(-1)!;
     expect(workerEventOf(line)).toMatchObject({ event: "ended", status: null, summary: null });
-    expect(line).toMatchObject({ status: null, text: "Worker · 修 X · 已收工" });
+    expect(line).toMatchObject({ status: null, text: "Worker「修 X」已收工" });
     // worktree 留给项目经理自己删
     expect(result.text).toContain("git worktree remove");
 

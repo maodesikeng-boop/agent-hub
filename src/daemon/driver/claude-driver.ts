@@ -13,6 +13,7 @@ import {
   KILL_WAIT_MS,
   EMPTY_TOKEN_USAGE,
   LAST_EVENT_WRITE_MS,
+  USAGE_PUSH_MS,
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
@@ -24,6 +25,7 @@ import {
   type AgentSessionRow,
   type Driver,
   type DriverEvent,
+  type TokenUsage,
   type DriverEventListener,
   type DriverOptions,
   type DriverSendInput,
@@ -36,8 +38,6 @@ import {
   type Unsubscribe,
 } from "../../shared/index.ts";
 import {
-  addTurnUsage,
-  assistantContext,
   buildChildEnv,
   buildClaudeArgs,
   buildInterruptLine,
@@ -51,6 +51,7 @@ import {
   parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
+import { TurnUsage } from "./usage.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
 interface PendingEntry {
@@ -151,6 +152,11 @@ interface SessionState {
   interruptRequestId: string | null;
   interruptWaiters: Array<() => void>;
   lastEventWrite: number;
+  /** 这一轮的实时 token 累计；推给库和网页的节流（最多每 USAGE_PUSH_MS 一次，中间的合并，到点推最新的）。 */
+  turnUsage: TurnUsage;
+  usageLatest: TokenUsage | null;
+  usagePushedAt: number;
+  usageTimer: NodeJS.Timeout | null;
   /** logs/sessions/<会话>.jsonl 一直开着。 */
   logFd: number | null;
   /** 日志写不了：报过一次就不再写（下次起进程再试）。 */
@@ -408,6 +414,10 @@ export class ClaudeDriver implements Driver {
         interruptRequestId: null,
         interruptWaiters: [],
         lastEventWrite: 0,
+        turnUsage: new TurnUsage(),
+        usageLatest: null,
+        usagePushedAt: 0,
+        usageTimer: null,
         logFd: null,
         logBroken: false,
       };
@@ -816,9 +826,9 @@ export class ClaudeDriver implements Driver {
         }
         return;
       case "assistant": {
-        const context = assistantContext(obj);
-        const row = context === null ? null : this.#row(st);
-        if (context !== null && row && context !== row.usage.context) this.#update(st, { usage: { ...row.usage, context } });
+        const row = this.#row(st);
+        const live = row ? st.turnUsage.observe(obj, row.usage) : null;
+        if (live) this.#pushUsage(st, live);
         for (const ev of parseAssistant(obj, line, at)) this.#emit(st.id, ev);
         return;
       }
@@ -910,7 +920,8 @@ export class ClaudeDriver implements Driver {
     st.turnInterrupted = false;
     st.stopRequested = false;
     const row = this.#row(st);
-    const patch: AgentSessionPatch = { usage: addTurnUsage(row?.usage ?? EMPTY_TOKEN_USAGE, obj.usage) };
+    this.#cancelUsagePush(st);
+    const patch: AgentSessionPatch = { usage: st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, obj.usage) };
     if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
     this.#update(st, patch);
     this.#clearTimer(st, "interruptTimer");
@@ -927,6 +938,8 @@ export class ClaudeDriver implements Driver {
       this.#clearTimer(st, "startTimer");
       this.#clearTimer(st, "idleTimer");
       this.#clearTimer(st, "interruptTimer");
+      this.#flushUsage(st);
+      st.turnUsage.reset();
       this.#update(st, { pid: null, status: "idle", lastEventAt: Date.now() });
       const at = Date.now();
       if (!proc.initSeen) {
@@ -1019,6 +1032,31 @@ export class ClaudeDriver implements Driver {
     } catch (error) {
       this.#internalError(st.id, `updating agent session ${st.id} failed: ${errorMessage(error)}`);
     }
+  }
+
+  /** 实时的 token 累计：距上次推送够一秒就马上推，不够就等到点推最新的。 */
+  #pushUsage(st: SessionState, usage: TokenUsage): void {
+    st.usageLatest = usage;
+    const wait = USAGE_PUSH_MS - (Date.now() - st.usagePushedAt);
+    if (wait <= 0) this.#flushUsage(st);
+    else if (st.usageTimer === null) {
+      st.usageTimer = setTimeout(() => this.#flushUsage(st), wait);
+      st.usageTimer.unref();
+    }
+  }
+
+  #flushUsage(st: SessionState): void {
+    const usage = st.usageLatest;
+    this.#cancelUsagePush(st);
+    if (usage === null) return;
+    st.usagePushedAt = Date.now();
+    this.#update(st, { usage });
+  }
+
+  #cancelUsagePush(st: SessionState): void {
+    if (st.usageTimer) clearTimeout(st.usageTimer);
+    st.usageTimer = null;
+    st.usageLatest = null;
   }
 
   #touch(st: SessionState, at: number): void {

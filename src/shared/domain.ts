@@ -507,7 +507,7 @@ export type WorkerLineStatus = WorkerReportStatus | "unformatted";
 
 /**
  * 项目经理对话里那一行 Worker 汇报（sender system、kind worker、workerId 是 Worker 编号）的 meta。
- * 网页用 worker.ts 的 workerLineText 显示成“Worker · 标题 · 状态：摘要”，点开 workerConversationId。
+ * 网页用 worker.ts 的 workerLineText 显示成“Worker「标题」状态：摘要”，点开 workerConversationId。
  * 消息的 text 是交给项目经理的全文：
  * - report、turn_failed、worktree_failed：要交给项目经理，text 以 workerReportHeader（“【Worker #3 · 修 X 的汇报】”）开头，
  *   后面是汇报原文或原因；status 从 queued 起照常走，登记 session.send（source system）发给项目经理；
@@ -659,7 +659,7 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
  * 发消息一律找这个对话 generation 最大的那个会话。项目经理在资料页点“开新会话”时加一（见 ledger/handover.ts）。
  */
 /**
- * 一个会话累计用了多少 token（驱动层从 claude 每轮的 result.usage 累加，老数据没有就是全 0），加上当前上下文的大小。
+ * 一个会话累计用了多少 token（驱动层每条 assistant 消息（按 message.id 去重）实时累加、最多每秒推一次，一轮结束用 result.usage 校正；老数据没有就是全 0），加上当前上下文的大小。
  * context：最近一次请求的 input + 缓存读 + 缓存写（取最近一条 assistant 消息的 usage，子 agent 的不算）。
  */
 export interface TokenUsage {

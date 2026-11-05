@@ -1256,6 +1256,32 @@ describe("token 用量", () => {
     expect(t.store.get(s.id)!.usage).toEqual({ input: 4, cacheRead: 0, cacheWrite: 0, output: 0, context: 56 });
   });
 
+  it("实时：一轮还没结束，每条消息的用量就进了库（同一秒内的合并，到点推最新的）；轮结束用 result 校正", async () => {
+    const t = harness({
+      script: {
+        defaultTurn: {
+          steps: [
+            { text: "a", messageId: "msg_1", usage: usage(2, 100, 10, 1) },
+            { text: "a2", messageId: "msg_1", usage: usage(2, 100, 10, 8) },
+            { text: "b", messageId: "msg_2", usage: usage(3, 110, 5, 2) },
+            { sleepMs: 2500 },
+          ],
+          usage: usage(5, 210, 15, 60),
+        },
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await vi.waitFor(() => expect(t.store.get(s.id)!.usage.input).toBeGreaterThan(0), { timeout: 3000 });
+    // 第一条推出去后一秒内的更新还没推：库里是第一次推的那个数
+    expect(t.store.get(s.id)!.usage.input).toBe(2);
+    // 到点推最新的：msg_1 取最后一次的 usage（output 8），再加 msg_2
+    await vi.waitFor(() => expect(t.store.get(s.id)!.usage).toEqual({ input: 5, cacheRead: 210, cacheWrite: 15, output: 10, context: 118 }), { timeout: 3000 });
+    // 轮结束：用 result 校正，output 变准，其他不重复计
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 5, cacheRead: 210, cacheWrite: 15, output: 60, context: 118 });
+  });
+
   it("先写库再发事件：turn.ended 的监听者读到的已经是这一轮的用量", async () => {
     const t = harness({ script: { defaultTurn: { steps: [{ text: "a", usage: usage(1, 2, 3, 4) }], usage: usage(1, 2, 3, 4) } } });
     const s = t.addSession();

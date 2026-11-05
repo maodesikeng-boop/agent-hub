@@ -195,21 +195,6 @@ export function parseUsage(usage: unknown): Omit<TokenUsage, "context"> {
 }
 
 /**
- * 累计用量加上这一轮的 result.usage。累计只认 result：同一条 assistant 消息会分几个事件推出来，而且 assistant 里的
- * output_tokens 是流式开头的快照（实测只有几个），result 的才是这一轮的总数。
- */
-export function addTurnUsage(total: TokenUsage, resultUsage: unknown): TokenUsage {
-  const turn = parseUsage(resultUsage);
-  return {
-    input: total.input + turn.input,
-    cacheRead: total.cacheRead + turn.cacheRead,
-    cacheWrite: total.cacheWrite + turn.cacheWrite,
-    output: total.output + turn.output,
-    context: total.context,
-  };
-}
-
-/**
  * 一个 assistant 事件的上下文大小：这次请求的 input + 缓存读 + 缓存写。子 agent 的消息（parent_tool_use_id 不是 null）
  * 和没带 usage 的返回 null，不更新。
  */
