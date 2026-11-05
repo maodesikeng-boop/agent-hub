@@ -88,7 +88,7 @@ describe("W5 组装 + 端到端", () => {
     const promptFile = argv[argv.indexOf("--append-system-prompt-file") + 1]!;
     expect(promptFile).toBe(join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "prompt.md"));
     const prompt = readFileSync(promptFile, "utf8");
-    expect(prompt).toContain(`名字叫“${DEFAULT_PM_NAME}”`);
+    expect(prompt).toContain(`你是用户的项目经理“${DEFAULT_PM_NAME}”`);
     expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).toContain(HUB_USAGE_PROMPT);
     expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
