@@ -67,8 +67,8 @@ const sendDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:${randomUUI
 
 /** Worker 会话这一轮的结局：report 带这一轮最后一段文字，turn_failed 带原因。 */
 type TurnOutcome =
-  | { event: "report"; turnMessageId: MessageId }
-  | { event: "turn_failed"; turnMessageId: MessageId; messageIds: MessageId[]; reason: string };
+  | { event: "report"; turnMessageId: MessageId | null }
+  | { event: "turn_failed"; turnMessageId: MessageId | null; messageIds: MessageId[]; reason: string };
 
 /**
  * 驱动层事件里“这一轮结束了”的那几种（见 shared/ledger.ts 的 applyDriverEvent）；别的事件、关机、空闲退出是 null。
@@ -80,9 +80,11 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
     return ids.length === 0 ? null : { event: "turn_failed", turnMessageId: Math.max(...ids), messageIds: ids, reason: event.message };
   }
   if (event.type !== "turn.ended" && event.type !== "session.exited") return null;
-  if (event.messageIds.length === 0) return null;
-  const turnMessageId = Math.max(...event.messageIds);
   const { messageIds } = event;
+  // claude 自己开的一轮（后台任务完成等，turn.ended 没有消息）：没有消息编号，由 afterDriverEvent 拿这一轮最后一条 agent 消息的编号顶上
+  const selfStarted = event.type === "turn.ended" && messageIds.length === 0;
+  if (messageIds.length === 0 && !selfStarted) return null;
+  const turnMessageId = selfStarted ? null : Math.max(...messageIds);
   if (event.type === "turn.ended") {
     // 关机时 SIGINT 结束的一轮：重启后接着做完再汇报（messages.ts 的 resumesAfterShutdown）
     if (event.shutdown === true) return null;
@@ -464,14 +466,25 @@ export function createLedgerWorkers(
       insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }
+    if (event.type === "turn.started") {
+      turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      return;
+    }
     const outcome = turnOutcome(event);
     if (outcome === null) return;
     const worker = workerRow(session.workerId);
     if (worker === null) return;
-    const turnStart = Math.max(outcome.turnMessageId, turnStarts.get(session.id) ?? 0);
+    // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
+    if (outcome.turnMessageId === null && !turnStarts.has(session.id)) return;
+    const turnStart = Math.max(outcome.turnMessageId ?? 0, turnStarts.get(session.id) ?? 0);
     turnStarts.delete(session.id);
+    // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
+    const turnMessageId =
+      outcome.turnMessageId ??
+      db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, session.id, turnStart)!.id;
+    if (turnMessageId === null) return;
     if (outcome.event === "turn_failed") {
-      insertTurnFailed(p, worker, outcome.turnMessageId, outcome.messageIds, outcome.reason);
+      insertTurnFailed(p, worker, turnMessageId, outcome.messageIds, outcome.reason);
       return;
     }
     // 这一轮最后一段文字：这一轮开始之后、这个会话的 agent 文字里最新的一条；没有就是“没有文字回复”
@@ -481,12 +494,14 @@ export function createLedgerWorkers(
       turnStart,
     );
     const text = last?.text ?? "";
+    // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
+    if (outcome.turnMessageId === null && text.trim() === "") return;
     const parsed = parseWorkerReport(text);
     insertLine(p, worker, {
       event: "report",
       status: parsed.kind === "ok" ? parsed.report.status : "unformatted",
       summary: parsed.kind === "ok" ? parsed.report.summary : parsed.summary,
-      turnMessageId: outcome.turnMessageId,
+      turnMessageId,
       deliver: text.trim() === "" ? NO_REPLY_TEXT : text,
     });
   };

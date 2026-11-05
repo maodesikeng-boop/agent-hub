@@ -1474,3 +1474,93 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(userMessageLines()).toEqual([]);
   });
 });
+
+describe("claude 自己开的一轮（后台任务完成）", () => {
+  let worker: WorkerRecord;
+  let sessionId: SessionId;
+  beforeEach(() => {
+    worker = start().data.worker;
+    sessionId = workerSessionId(worker.id);
+    enqueued = [];
+  });
+
+  /** 自己开的一轮：turn.started、若干段文字、没有消息的 turn.ended。 */
+  const selfTurn = (uuid: string, text: string | null, end: Partial<Extract<DriverEvent, { type: "turn.ended" }>> = {}) => {
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    if (text !== null) ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid, text, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now, ...end });
+  };
+  const reports = () => workerLines().filter((m) => workerEventOf(m)?.event === "report");
+
+  it("两次汇报都交给项目经理，先后顺序对，各自是各自那一轮最后的文字", () => {
+    runTurn(worker, [taskMessage(worker).id], "已推送，在等 CI。");
+    selfTurn("self-1", report("做完了", "CI 过了"));
+    expect(reports().map((m) => [workerEventOf(m)!.status, workerEventOf(m)!.summary])).toEqual([
+      ["unformatted", "已推送，在等 CI。"],
+      ["done", "CI 过了"],
+    ]);
+    expect(reports()[1]!.text.startsWith("【Worker #1 · 修 X 的汇报】")).toBe(true);
+    expect(enqueued.map((a) => (a.params as { messageId: number }).messageId)).toEqual(reports().map((m) => m.id));
+  });
+
+  it("同一个 result 重放（只重放 turn.ended，没有 turn.started）：不多出一行；连着自己开两轮：两行都在（去重键不吞）", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    selfTurn("self-1", "第一次好了");
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(reports()).toHaveLength(2);
+    selfTurn("self-2", "第二次好了");
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["在等", "第一次好了", "第二次好了"]);
+  });
+
+  it("没有 turn.started 的游离 turn.ended（没带消息）：不出汇报", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 5, at: now });
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["在等"]);
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "report"]);
+  });
+
+  it("这一轮只有工具调用、没有文字：不给项目经理发汇报（不拿上一轮的旧文字顶替）", () => {
+    runTurn(worker, [taskMessage(worker).id], "上一轮的话");
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t1", toolUseId: "tu", name: "Bash", input: { command: "ls" }, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["上一轮的话"]);
+  });
+
+  it("什么都没做的一轮（没有任何消息）：不发汇报", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    selfTurn("x", null);
+    expect(reports()).toHaveLength(1);
+  });
+
+  it("自己开的一轮出错、被停止：一行 turn_failed 交给项目经理", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    selfTurn("self-1", "做到一半", { ok: false, error: { subtype: "error_during_execution", message: "炸了" } });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "turn_failed", summary: "error_during_execution: 炸了" });
+    selfTurn("self-2", "又做到一半", { ok: false, interrupted: true });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "turn_failed", summary: "被停止了" });
+  });
+
+  it("关机 SIGINT 结束的自己开的一轮：不发", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    selfTurn("self-1", "做到一半", { ok: false, interrupted: true, shutdown: true });
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "report"]);
+  });
+
+  it("turn.started 让会话显示在处理，turn.ended 回到空闲", () => {
+    runTurn(worker, [taskMessage(worker).id], "在等");
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("working");
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("idle");
+  });
+
+  it("项目经理自己开的一轮：文字进对话，不发 Worker 汇报", () => {
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.started", at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "agent.text", uuid: "pm-self", text: "Worker 做完了", at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(messagesIn(lin.conversationId).at(-1)).toMatchObject({ sender: "agent", kind: "text", text: "Worker 做完了" });
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started"]);
+  });
+});

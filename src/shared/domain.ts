@@ -508,6 +508,7 @@ export function workerEventOf(message: Pick<Message, "kind" | "meta">): WorkerMe
  * 那一行的去重键：
  * - started、ended、worktree_failed：每个 Worker 一条，`worker:<Worker 编号>:<事件>`，turnMessageId 给 null；
  * - report、turn_failed：`worker:<Worker 编号>:<事件>:<这一轮处理的消息里编号最大的那条>`。重放同一个 result（或同一次退出）不会出两行。
+ *   claude 自己开的一轮没有处理的消息，编号用这一轮最后一条 agent 消息的。
  * - user_message：`worker:<Worker 编号>:user_message:<用户那条消息的编号>`（turnMessageId 传那条消息），重启后重发再送达不会出两行。
  *   事件类型在键里：同一条消息这一轮失败了（turn_failed），之后被重发又跑出结果（report），两行都有，后来的汇报不会被吞掉。
  * 什么时候发哪一行见 ledger.ts 的 applyDriverEvent。
