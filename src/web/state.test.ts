@@ -13,8 +13,10 @@ import {
   makeProject,
   makeSession,
   makeSnapshot,
+  makeSystemMessage,
   makeToolMessage,
   makeUserMessage,
+  makeWorkerLine,
   messageChange,
 } from "./test-utils.ts";
 
@@ -109,16 +111,51 @@ describe("olderDone", () => {
   });
 });
 
-describe("groupMessages", () => {
-  it("连续的工具调用合成一组", () => {
+describe("groupMessages：一轮一轮", () => {
+  it("用户说一句之后 agent 的文字、工具调用、派出 Worker 合成一轮；操作进 work，文字进 parts", () => {
+    const items = groupMessages([
+      makeUserMessage({ id: 1 }),
+      makeToolMessage({ id: 2 }),
+      makeWorkerLine({ id: 3, line: { event: "started" } }),
+      makeMessage({ id: 4 }),
+      makeToolMessage({ id: 5 }),
+      makeMessage({ id: 6 }),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["message", "turn"]);
+    const turn = items[1]!;
+    if (turn.kind !== "turn") throw new Error("not a turn");
+    expect(turn.work.map((m) => m.id)).toEqual([2, 3, 5]);
+    expect(turn.parts.map((m) => m.id)).toEqual([4, 6]);
+    // 从用户那句（11s）到最后一条（16s）
+    expect(turn.endedAt - turn.startedAt).toBe(5_000);
+  });
+
+  it("Worker 的汇报、到点的定时任务把轮切开；新一轮从上一轮最后一条和这句话里晚的那个算起", () => {
     const items = groupMessages([
       makeMessage({ id: 1 }),
-      makeToolMessage({ id: 2 }),
-      makeToolMessage({ id: 3 }),
-      makeMessage({ id: 4 }),
+      makeWorkerLine({ id: 2, line: { event: "report", status: "done", summary: "好了" } }),
+      makeMessage({ id: 3 }),
+      makeSystemMessage({ id: 4, event: { event: "schedule.run", scheduleId: 1, name: "日报", scheduledAt: 0, catchUp: false } }),
+      makeToolMessage({ id: 5 }),
     ]);
-    expect(items.map((i) => i.kind)).toEqual(["message", "tools", "message"]);
-    expect(items[1]?.kind === "tools" && items[1].messages.length).toBe(2);
+    expect(items.map((i) => i.kind)).toEqual(["turn", "message", "turn", "message", "turn"]);
+    const first = items[0]!;
+    expect(first.kind === "turn" && first.endedAt - first.startedAt).toBe(0);
+  });
+
+  it("一轮中间的系统行留在原位置；末尾的挪出去单独显示；不在一轮里的派出 Worker 单独显示", () => {
+    const items = groupMessages([
+      makeWorkerLine({ id: 1, line: { event: "ended" } }),
+      makeMessage({ id: 2 }),
+      makeSystemMessage({ id: 3 }),
+      makeMessage({ id: 4 }),
+      makeSystemMessage({ id: 5 }),
+    ]);
+    expect(items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`))).toEqual([
+      "message:1",
+      "turn:2,3,4",
+      "message:5",
+    ]);
   });
 });
 

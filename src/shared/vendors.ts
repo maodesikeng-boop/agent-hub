@@ -259,3 +259,39 @@ export function effortLabel(effort: string | null): string {
 export function vendorLabel(vendor: string): string {
   return isAgentVendor(vendor) ? VENDOR_SPECS[vendor].label : vendor;
 }
+
+// ---- 出错的特征 ----
+// 失败原因（消息的 failureReason、Worker 这一轮没做完的原因、定时任务没跑成的原因）是厂商给的原文。网页按通用的类型
+// 出一句人话（web/errors.ts），各家的错误长什么样只写在这里。网络断了这类和厂商无关的特征在 web/errors.ts。
+
+/** 失败的通用类型：服务繁忙、额度用完、网络断了、没能启动。认不出来的是 unknown（web/errors.ts）。 */
+export type FailureKind = "busy" | "quota" | "network" | "start";
+
+export interface VendorFailureSigns {
+  /** 出错的话里称呼这家的服务：“Claude 服务繁忙”。 */
+  serviceName: string;
+  /** 按顺序匹配，先中先算。 */
+  signs: readonly { kind: FailureKind; pattern: RegExp }[];
+}
+
+export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSigns>> = {
+  claude: {
+    serviceName: "Claude",
+    signs: [
+      // 驱动层起不来 claude 的错误码（daemon/driver）
+      { kind: "start", pattern: /^(claude_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "quota", pattern: /usage limit|rate[_ ]?limit|\b429\b|credit balance|quota/i },
+      { kind: "busy", pattern: /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i },
+    ],
+  },
+};
+
+/** 认得出是哪家的哪类错误就返回，否则 null。 */
+export function vendorFailureOf(raw: string): { kind: FailureKind; serviceName: string } | null {
+  for (const vendor of AGENT_VENDORS) {
+    const { serviceName, signs } = VENDOR_FAILURE_SIGNS[vendor];
+    const hit = signs.find((s) => s.pattern.test(raw));
+    if (hit) return { kind: hit.kind, serviceName };
+  }
+  return null;
+}
