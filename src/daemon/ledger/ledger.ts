@@ -206,6 +206,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
 
     runDueSchedules: schedules.runDueSchedules,
+    addSchedule: schedules.addForUser,
+    setScheduleEnabled: schedules.setEnabledForUser,
+    removeSchedule: schedules.removeForUser,
 
     getLaunchContext: launch.getLaunchContext,
     getWorktreeTask: workers.getWorktreeTask,

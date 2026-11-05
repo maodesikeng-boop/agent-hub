@@ -68,7 +68,7 @@ interface ReqOpts {
   headers?: Record<string, string>;
 }
 
-type Method = "GET" | "POST" | "PUT";
+type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 async function call(method: Method, url: string, opts: ReqOpts = {}) {
   const headers: Record<string, string> = { host: opts.host ?? HOST, ...opts.headers };
@@ -148,7 +148,8 @@ const ledgerCalls = () =>
   ledger.personaReads.length +
   ledger.personaEdits.length +
   ledger.reverted.length +
-  ledger.retried.length;
+  ledger.retried.length +
+  ledger.scheduleCalls.length;
 
 describe("没登录", () => {
   const apiRequests: Array<[Method, string, unknown?]> = [
@@ -162,6 +163,9 @@ describe("没登录", () => {
     ["GET", "/api/pms/1/persona"],
     ["PUT", "/api/pms/1/persona", { text: "x" }],
     ["POST", "/api/persona-changes/1/revert"],
+    ["POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
+    ["PUT", "/api/schedules/1", { enabled: false }],
+    ["DELETE", "/api/schedules/1"],
     ["POST", "/api/messages/1/retry"],
     ["POST", "/api/messages/1/dismiss-ask"],
   ];
@@ -574,6 +578,9 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["POST /api/pms", "POST", "/api/pms", NEW_PM],
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
+  ["POST schedule", "POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
+  ["PUT schedule", "PUT", "/api/schedules/1", { enabled: false }],
+  ["DELETE schedule", "DELETE", "/api/schedules/1"],
   ["POST retry", "POST", "/api/messages/1/retry"],
   ["POST dismiss-ask", "POST", "/api/messages/1/dismiss-ask"],
 ];
@@ -1646,5 +1653,35 @@ describe("POST /api/pick-folder（选主文件夹）", () => {
     expect((await pick({ origin: "http://127.0.0.1:4001" })).statusCode).toBe(403);
     expect((await pick({ host: "evil.example:4000" })).statusCode).toBe(403);
     expect(picked).toEqual([]);
+  });
+});
+
+describe("定时任务 POST /api/pms/:id/schedules、PUT、DELETE /api/schedules/:id", () => {
+  it("POST：参数原样交给账本，201 回任务", async () => {
+    const res = await call("POST", "/api/pms/3/schedules", { origin: ORIGIN, body: { name: "晨报", prompt: "整理", daily: "09:00" } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ id: 5, pmId: 3, name: "晨报" });
+    expect(ledger.scheduleCalls).toEqual([{ call: "add", args: [3, { name: "晨报", prompt: "整理", daily: "09:00" }] }]);
+  });
+
+  it("POST：多余的字段 400；账本拒绝时把中文原因原样回去", async () => {
+    expect((await call("POST", "/api/pms/3/schedules", { origin: ORIGIN, body: { name: "a", prompt: "b", daily: "09:00", x: 1 } })).statusCode).toBe(400);
+    ledger.failWith = new LedgerRequestError("invalid", "间隔最短 15 分钟");
+    const res = await call("POST", "/api/pms/3/schedules", { origin: ORIGIN, body: { name: "a", prompt: "b", everyMinutes: 5 } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "间隔最短 15 分钟", code: "invalid" });
+  });
+
+  it("PUT：enabled 交给账本；不是布尔 400", async () => {
+    const res = await call("PUT", "/api/schedules/4", { origin: ORIGIN, body: { enabled: false } });
+    expect(res.json()).toMatchObject({ id: 4, enabled: false });
+    expect((await call("PUT", "/api/schedules/4", { origin: ORIGIN, body: { enabled: "no" } })).statusCode).toBe(400);
+    expect(ledger.scheduleCalls).toEqual([{ call: "enable", args: [4, false] }]);
+  });
+
+  it("DELETE：204", async () => {
+    const res = await call("DELETE", "/api/schedules/4", { origin: ORIGIN });
+    expect(res.statusCode).toBe(204);
+    expect(ledger.scheduleCalls).toEqual([{ call: "remove", args: [4] }]);
   });
 });
