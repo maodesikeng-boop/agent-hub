@@ -529,15 +529,22 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(reports[1]!.summary).toBe("README 也改了");
     const workerSession = sessionOf(await client.state(), worker.worker_conversation_id).sessionId;
     const workerTexts = procsOf(workerSession).flatMap((p) => env.stdinTextsOf(p.pid));
-    expect(workerTexts).toContain("【用户直接对你说】\n顺便把 README 也改了");
+    // 标签一块、原文单独放最后一块（stdinTextsOf 把块之间空一行连起来）
+    expect(workerTexts).toContain("【用户直接对你说】\n\n顺便把 README 也改了");
     await waitUntil("pm got the notice", () =>
       env.stdinTexts().some((t) => t.includes("【用户直接对 Worker #1 · 写笔记 说的话（Worker 已收到）】\n\n顺便把 README 也改了")) ? true : undefined,
     );
     expect(query<{ worker_id: number; status: string }>("SELECT worker_id, status FROM messages WHERE id = ?", id)).toEqual([
       { worker_id: worker.id, status: "replied" },
     ]);
-    // 项目经理让它收工以后再发：409
     const pmSession = sessionOf(await client.state(), pm.conversationId).sessionId;
+    // 项目经理用 hub worker send 发 /clear（会换 Worker 的会话 ID）：退出码 1，打印厂商给的原因，不发
+    const pmMessagesBefore = query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n;
+    const clear = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "send", String(worker.id), "--stdin"], { stdin: "/clear" });
+    expect(clear.code).toBe(1);
+    expect(clear.stderr).toMatch(/\/clear：.*会话/);
+    expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n).toBe(pmMessagesBefore);
+    // 项目经理让它收工以后再发：409
     const ended = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "end", String(worker.id)]);
     expect(ended.code).toBe(0);
     const res = await client.postJson(API_PATHS.messages(worker.worker_conversation_id), { clientId: "late", text: "还在吗" });
