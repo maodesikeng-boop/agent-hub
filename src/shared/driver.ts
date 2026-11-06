@@ -110,6 +110,15 @@ export interface CommandsChangedEvent extends DriverEventBase {
 }
 
 /**
+ * 会话里的后台任务个数变了（claude 的 system/background_tasks_changed，count 是现在还在跑的个数）。
+ * 只有 claude 有这个信号，别家不出这个事件。账本记在内存里，hub worker show 显示；不入库、不推给网页。
+ */
+export interface BackgroundChangedEvent extends DriverEventBase {
+  type: "background.changed";
+  count: number;
+}
+
+/**
  * 上下文压缩完了（claude 的 system/compact_boundary：用户发了 /compact，或者 claude 自动压缩）。
  * 账本在对话里记一条“已压缩上下文”的系统消息；这一轮照常以 turn.ended 结束（/compact 没有文字回复）。
  */
@@ -349,6 +358,7 @@ export type DriverEvent =
   | SessionExitedEvent
   | DriverErrorEvent
   | CommandsChangedEvent
+  | BackgroundChangedEvent
   | ContextCompactedEvent;
 
 export type DriverEventType = DriverEvent["type"];

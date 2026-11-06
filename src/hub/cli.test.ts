@@ -227,6 +227,10 @@ describe("hub cli", () => {
     it.each([
       [["worker", "end", "3"], "worker.end", { workerId: 3 }],
       [["worker", "list"], "worker.list", {}],
+      [["worker", "show", "3"], "worker.show", { workerId: 3 }],
+      [["worker", "log", "3"], "worker.log", { workerId: 3 }],
+      [["worker", "log", "3", "--last", "5"], "worker.log", { workerId: 3, last: 5 }],
+      [["worker", "log", "--last", "200", "3"], "worker.log", { workerId: 3, last: 200 }],
     ] as const)("hub %j → %s", async (argv, command, args) => {
       expect((await hub([...argv])).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
@@ -249,6 +253,18 @@ describe("hub cli", () => {
       [["worker", "end", "-1"]],
       [["worker", "end", "3", "4"]],
       [["worker", "list", "--readonly"]],
+      [["worker", "show"]],
+      [["worker", "show", "abc"]],
+      [["worker", "show", "3", "4"]],
+      [["worker", "show", "3", "--last", "5"]],
+      [["worker", "log"]],
+      [["worker", "log", "3", "--last", "0"]],
+      [["worker", "log", "3", "--last", "201"]],
+      [["worker", "log", "3", "--last", "abc"]],
+      [["worker", "log", "3", "--last", "-1"]],
+      [["worker", "log", "3", "--last", "1.5"]],
+      [["worker", "log", "3", "--last"]],
+      [["worker", "log", "3", "--stdin"]],
     ])("usage error: hub %j", async (argv) => {
       const r = await hub([...argv], { stdin: stdinOf("任务") });
       expect(r.code).toBe(HUB_EXIT.usage);
@@ -264,7 +280,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} ask --stdin`]) {
+      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N]`, `${cmd} ask --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });

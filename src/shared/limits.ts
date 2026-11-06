@@ -2,6 +2,19 @@
 
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
+
+// ---- hub worker show / log（ledger/steps.ts、ledger/worker-view.ts）----
+/** 每个会话在 session_steps 里最多留多少条（一轮结束时把更老的删掉）。 */
+export const SESSION_STEPS_KEEP = 1_000;
+/** hub worker log 默认看最近几步、最多几步。 */
+export const WORKER_LOG_DEFAULT_STEPS = 20;
+export const WORKER_LOG_MAX_STEPS = 200;
+/** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
+export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
+/** Worker 在干活、没有工具在跑、这么久没动静，hub worker show 提醒“可能卡住了”。 */
+export const WORKER_STALL_HINT_MS = 5 * 60_000;
+/** hub worker show 查 PR（gh pr list）最多等多久；超了当没有。 */
+export const WORKER_PR_PROBE_TIMEOUT_MS = 5_000;
 /** 一条用户消息最多 100 KB（按 UTF-8 字节算）。 */
 export const MAX_MESSAGE_BYTES = 100 * 1024;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */

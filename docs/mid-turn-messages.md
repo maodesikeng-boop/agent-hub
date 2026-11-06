@@ -388,7 +388,7 @@ interface BackgroundTaskSupport {
 
 照第 5、9 节做了，和方案不一样、或方案没写到的地方：
 
-**通用接口**（`src/shared/driver.ts`）：第 9.2 节的能力声明（`MidTurnSupport`）最后没做成接口——账本、网页都用不上它（网页不加“要等这一轮结束才看得到”之类的说明小字），只靠 `send` 的结果和事件；`send` 多两种结果 `{kind:"written", midTurn:true}` 和 `{kind:"cancelled"}`（交出去的那一刻用户点了停止，已出 `message.cancelled`）；新事件 `message.cancelled {messageIds, reason:"stop"}`（停止时写进去、没被取走的；方案里的 `session_ended` 从来不会出，去掉了）和 `message.requeued {messageIds}`（进程没了、或这一轮没读到它就结束了，账本放回排队中、重新登记 `session.send`）；`message.delivered` 多一个 `midTurn` 标记（Worker 汇报靠“开这一轮的那条送达”定这一轮从哪开始，中途送达的不算开头）。消息状态多一个 `cancelled`（已取消，迁移 `0010`），转换表多了 `delivered → cancelled`、`delivered → queued`。账本、网页只认这些，不看厂商。
+**通用接口**（`src/shared/driver.ts`）：第 9.2 节的能力声明（`MidTurnSupport`）最后没做成接口——账本、网页都用不上它（网页不加“要等这一轮结束才看得到”之类的说明小字），只靠 `send` 的结果和事件；`send` 多两种结果 `{kind:"written", midTurn:true}` 和 `{kind:"cancelled"}`（交出去的那一刻用户点了停止，已出 `message.cancelled`）；新事件 `message.cancelled {messageIds, reason:"stop"}`（停止时写进去、没被取走的；方案里的 `session_ended` 从来不会出，去掉了）和 `message.requeued {messageIds}`（进程没了、或这一轮没读到它就结束了，账本放回排队中、重新登记 `session.send`）；`message.delivered` 多一个 `midTurn` 标记（Worker 汇报靠“开这一轮的那条送达”定这一轮从哪开始，中途送达的不算开头）。消息状态多一个 `cancelled`（已取消，迁移 `0011`），转换表多了 `delivered → cancelled`、`delivered → queued`。账本、网页只认这些，不看厂商。
 
 **claude**（`claude-driver.ts`）：
 - 中途写入要 init 里 `msg_lifecycle_v1` **和** `interrupt_cancel_queued_v1` 都有（方案只要求前者、停止时再查后者）：少了后者，停止时没法取消，干脆照旧排队，“停止 = 没取走的都取消”就不会有例外。

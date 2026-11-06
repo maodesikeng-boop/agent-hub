@@ -896,7 +896,7 @@ describe("派活：思考程度（--effort）", () => {
     expect(text).toContain(`#${a.id} 甲 · 进行中 · `);
     expect(text).toContain("模型 Haiku · 思考程度 low");
     expect(text).toContain(`#${b.id} 乙`);
-    expect(text).toContain("模型 claude-sonnet-5-5 · 思考程度 默认");
+    expect(text).toContain("模型 Sonnet 5.5 · 思考程度 默认");
   });
 });
 

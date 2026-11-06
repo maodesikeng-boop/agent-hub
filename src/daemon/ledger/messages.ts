@@ -187,6 +187,8 @@ export function createLedgerMessages(
         // 状态（running）由驱动层写进那一行；这里只清掉上一次没等到退出的“正在停”
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
+          // 后台任务跟着进程走，新进程不带着旧的
+          l.backgroundTasks = undefined;
         });
         return;
       case "message.cancelled":
@@ -253,6 +255,11 @@ export function createLedgerMessages(
         updateLive(p, sessionId, idle);
         return;
       }
+      case "background.changed":
+        updateLive(p, sessionId, (l) => {
+          l.backgroundTasks = event.count;
+        });
+        return;
       case "rate_limit":
         updateLive(p, sessionId, (l) => {
           l.rateLimit = event.info;
@@ -269,7 +276,10 @@ export function createLedgerMessages(
           if (event.reason === "interrupt" || event.reason === "shutdown") transition(p, id, "stopped");
           else if (event.reason === "crash" || event.reason === "startup_failed") transition(p, id, "failed", exitFailureReason(event));
         }
-        updateLive(p, sessionId, idle);
+        updateLive(p, sessionId, (l) => {
+          idle(l);
+          l.backgroundTasks = undefined;
+        });
         return;
       }
       case "driver.error":

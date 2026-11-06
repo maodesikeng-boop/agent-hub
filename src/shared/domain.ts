@@ -614,7 +614,7 @@ export interface ApiRetryInfo {
 
 /**
  * agent 这一刻在做什么：照 claude assistant 消息里 content 块的样子（type、name、input），只留显示要用的几个参数。
- * 只在内存里，不入库；工具结果回来、一轮结束、进程退出时更新或清掉。网页的文案映射在 web/step-labels.ts。
+ * 只在内存里，不入库；工具结果回来、一轮结束、进程退出时更新或清掉。文案映射在 shared/step-labels.ts。
  */
 export type AgentStep =
   | { type: "thinking" }

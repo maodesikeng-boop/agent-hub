@@ -1,6 +1,6 @@
--- 0010_message_cancelled：消息状态多一个 cancelled（已取消）：一轮中途写给 agent、它还没取走，用户点了停止，
+-- 0011_message_cancelled：消息状态多一个 cancelled（已取消）：一轮中途写给 agent、它还没取走，用户点了停止，
 -- agent 没看到过、不自动重发（shared/domain.ts 的 MESSAGE_STATUS_TRANSITIONS，docs/mid-turn-messages.md）。
--- 约定同 0001～0009。CHECK 改不了，照 SQLite 的标准做法重建 messages（https://www.sqlite.org/lang_altertable.html 第 7 节；
+-- 约定同 0001～0010。CHECK 改不了，照 SQLite 的标准做法重建 messages（https://www.sqlite.org/lang_altertable.html 第 7 节；
 -- 迁移器跑这个文件时关着外键检查、提交前查一遍）。列、顺序、约束和原来一样，只是 status 多一个值；老数据一行不删、值不改，
 -- 编号原样搬过去，AUTOINCREMENT 的计数也接着原来的（删过的最大编号不会被再用）。
 CREATE TABLE messages_new (

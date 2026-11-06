@@ -60,6 +60,17 @@ describe("BackgroundTasks", () => {
   });
 });
 
+describe("background.changed 事件（账本给 hub worker show 用）", () => {
+  it("名单变了就发一个，带现在还在跑的个数；tasks 不是数组的不发", async () => {
+    const t = harness([turnWith([{ afterMs: 20, tasks: ["a"] }, { afterMs: 60, tasks: ["a", "b"] }, { afterMs: 100, tasks: [] }])]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    await t.waitFor("turn.ended");
+    await t.waitFor("background.changed", (e) => e.count === 0, 1);
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 2, 0]);
+  });
+});
+
 describe("有后台任务时空闲计时不触发", () => {
   it("一轮结束时还有任务（轮内发的）：过了好几个 idleCloseMs 进程还在，没有 session.exited", async () => {
     const t = harness([{ steps: [{ backgroundTasks: ["a"] }, { text: "已放后台" }] }]);

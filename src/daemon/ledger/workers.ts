@@ -32,7 +32,7 @@ import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES } from "../../shared/limits.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, effortLabel, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -46,6 +46,7 @@ import { exitFailureReason } from "./messages.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
+import { agentSettingOf } from "./worker-view.ts";
 import { toConversation, toMessage, toWorkerRecord } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from "./rows.ts";
 import { idle } from "./sessions.ts";
@@ -106,7 +107,7 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
 }
 
 /** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
-const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
+export const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
 
 /**
  * 用户往对话里发消息、重试之前（messages.ts 的 postUserMessage、retryMessage，在事务里）。不是 Worker 的对话什么也不做。
@@ -420,8 +421,8 @@ export function createLedgerWorkers(
       const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
       const session = workerSession(w.id);
-      const shown = splitModelEffort(session.vendor as AgentVendor, session.model, session.effort);
-      const setting = `模型 ${ctx.modelLabel(session.vendor as AgentVendor, shown.model)} · 思考程度 ${effortLabel(shown.effort)}`;
+      const shown = agentSettingOf(ctx, session);
+      const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
       return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;
     });
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };
@@ -688,6 +689,15 @@ export function createLedgerWorkers(
     insertTurnFailed(p, worker, message.id, [message.id], error);
   };
 
+  /** agent 接口在 worker.show 之前查 PR 用：这个项目经理派的、在 worktree 里干活的 Worker 的 worktree 目录和分支；别的 null。 */
+  const workerPrTarget = (session: AgentSessionRow | null, workerId: WorkerId): { cwd: string; branch: string } | null => {
+    if (session === null || session.role !== "pm" || session.pmId === null) return null;
+    const worker = workerRow(workerId);
+    if (worker === null || worker.pm_id !== session.pmId || worker.workspace !== "worktree") return null;
+    if (worker.worktree_path === null || worker.branch === null || worker.base_commit === null) return null;
+    return { cwd: worker.worktree_path, branch: worker.branch };
+  };
+
   /** agent 接口在 worker.start 之前探 git 用：这个会话所属项目经理的项目主文件夹；不是项目经理的会话、还没有项目 → null。 */
   const workerStartFolder = (session: AgentSessionRow | null): string | null => {
     if (session === null || session.role !== "pm" || session.pmId === null) return null;
@@ -727,6 +737,9 @@ export function createLedgerWorkers(
     recoverWorktrees,
     actionFailedIn,
     workerStartFolder,
+    workerPrTarget,
+    ownWorker,
+    workerSession,
     launchContextFor,
   };
 }

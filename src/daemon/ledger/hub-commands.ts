@@ -1,6 +1,6 @@
 // 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
 // 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
-// worker.* 和 Worker 调的 status 在 workers.ts；schedule.* 在 schedules.ts。
+// worker.* 和 Worker 调的 status 在 workers.ts（worker.show、worker.log 在 worker-view.ts）；schedule.* 在 schedules.ts。
 import { PM_MODE_LABELS } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { hubCommandAllowed } from "../../shared/hub.ts";
@@ -16,6 +16,7 @@ import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerSchedules } from "./schedules.ts";
+import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
 
 /** status 里的一句“项目和文件夹”。 */
@@ -43,6 +44,7 @@ export function createLedgerHubCommands(
   workers: LedgerWorkers,
   messages: LedgerMessages,
   schedules: LedgerSchedules,
+  workerView: ReturnType<typeof createLedgerWorkerView>,
 ) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
@@ -111,6 +113,10 @@ export function createLedgerHubCommands(
         return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":
         return workers.list(caller);
+      case "worker.show":
+        return workerView.show(caller, args as HubArgs<"worker.show">, context);
+      case "worker.log":
+        return workerView.log(caller, args as HubArgs<"worker.log">);
       case "ask": {
         const { text } = args as HubArgs<"ask">;
         if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
