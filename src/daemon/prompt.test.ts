@@ -333,7 +333,7 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("怎么带 Worker：worktree、--no-worktree、汇报怎么回来、worktree 可读、用 hub worker send 接着改、收工用 hub worker end、记忆文件只能项目经理改", () => {
+  it("怎么带 Worker：worktree、--no-worktree、汇报怎么回来、worktree 可读、用 hub worker send 接着改、收工用 hub worker end；不限制 Worker 改记忆文件", () => {
     for (const word of [
       "worktree",
       "主文件夹",
@@ -343,11 +343,12 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker send`,
       `${hub} worker end`,
       "不会删 worktree",
-      "Worker 不能改记忆文件",
-      "你在主文件夹里自己改",
       "至少有一次提交",
     ]) {
       expect(PM_WORKER_PROMPT).toContain(word);
+    }
+    for (const gone of ["Worker 不能改记忆文件", "你在主文件夹里自己改"]) {
+      expect(PM_WORKER_PROMPT).not.toContain(gone);
     }
   });
 
@@ -447,14 +448,12 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain("发给你的消息都来自项目经理");
   });
 
-  it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事，不硬性要求 git commit", () => {
+  it("问不了用户，有问题写进汇报交给项目经理；不限制改记忆文件；没有先问用户的事，不硬性要求 git commit", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
-    for (const word of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/", ".gemini/", ".codex/", "不能改", "“问题”"]) {
-      expect(WORKER_RULES).toContain(word);
-    }
+    expect(WORKER_RULES).toContain("“问题”");
     expect(WORKER_RULES).toMatch(/问不了用户/);
-    for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
+    for (const gone of ["记忆文件你不能改", "先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
       expect(prompt).not.toContain(gone);
     }
   });

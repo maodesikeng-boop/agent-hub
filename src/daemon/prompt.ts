@@ -117,7 +117,6 @@ export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptS
 - **验收与收尾**：
   - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
   - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
-  - Worker 不能改记忆文件（\`AGENTS.md\`、\`CLAUDE.md\`、\`GEMINI.md\`、\`.claude/\`、\`.gemini/\`、\`.codex/\`），它建议改的，你在主文件夹里自己改。
   - 要打回修改或回答它的问题，用 \`${HUB} worker send <编号> --stdin\`（原 Worker 会接着干）。
   - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（不会删 worktree，不再需要的你自己清理）。`;
 }
@@ -202,14 +201,10 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - \`${HUB} status\`：看我是哪个 Worker、任务是什么、在哪干活。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
-/**
- * Worker 的规矩（m3-plan 第 2.1、2.2 节）：问不了用户，有问题写进汇报的“问题”；不能写记忆（唯一的硬限制，
- * 规则在 shared/policy.ts 的 WORKER_MEMORY_DENY_RULES，这里是告诉它为什么被拒、该怎么办）。
- */
+/** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
 export const WORKER_RULES = `# 你的规矩
 
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
-- 记忆文件你不能改：任何位置的 \`AGENTS.md\`、\`CLAUDE.md\`、\`CLAUDE.local.md\`、\`GEMINI.md\` 和 \`.claude/\`、\`.gemini/\`、\`.codex/\` 下的东西，还有用户目录下的 \`~/.claude/\`、\`~/.gemini/\`、\`~/.codex/\`，改了会被系统拒绝。任务需要改的话，在汇报的“问题”里写清楚改哪个文件、改成什么，由项目经理来改。
 - 不要用厂商自带的子代理（如 \`Agent\`、\`Task\`、\`spawn_agent\` 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。`;
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
