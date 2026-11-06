@@ -223,7 +223,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildLaunchPrompt(noProjectContext(), dir)).not.toContain("# 性格设定");
   });
 
-  it("怎么记事情：三层分工（性格设定、仓库 AGENTS.md、自带记忆）、怎么写、怎么改；两种模式和三家厂商都有；不写“重启”", () => {
+  it("怎么记事情：照 Claude Code 记忆提示词翻成中文（四种类型、为什么和怎么用、相对日期转绝对日期、保存前查重更新删错、不记仓库已有的和当次对话、旧记忆核对），改成性格设定一条一项 + hub persona edit；两种模式和三家厂商都有", () => {
     for (const mode of PM_MODES) {
       for (const vendor of AGENT_VENDORS) {
         const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "" } }), dir);
@@ -231,28 +231,37 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       }
     }
     for (const word of [
-      "该记就主动记，记进性格设定",
-      "记在哪",
-      "不要只写进你自带的记忆",
+      "这些都记进性格设定，不要只写进你自带的记忆",
       "网页上看不到",
       "换了厂商也就没了",
-      "`AGENTS.md`",
-      "技术备忘、外部链接",
-      "临时任务的细节和一次性的报错，哪里都不记",
-      "怎么写",
-      "每条一句话，带上为什么或者什么时候用",
-      "重复或冲突",
-      "合并、改掉",
-      "怎么改",
+      "性格设定里一条一项",
+      "user | feedback | project | reference",
+      "**为什么：**",
+      "**怎么用：**",
+      "`user`：用户是谁（角色、专长、偏好）",
+      "`feedback`：用户对你怎么干活给出的指导",
+      "`project`：正在推进的工作、目标或限制条件",
+      "把相对日期改成绝对日期",
+      "`reference`：外部资源的入口（链接、看板、工单）",
       "提示词最后面",
+      `${hub} persona show`,
       `${hub} persona edit --reason "<为什么改>" --stdin`,
       "完整",
-      `${hub} persona show`,
       "聊过的不会丢",
+      "`AGENTS.md`",
+      "保存前，先查是不是已经有覆盖这件事的条目",
+      "不要重复建",
+      "发现记错了的要删掉",
+      "不要记仓库里已经有的东西",
+      "问清楚里面哪一点是不明显的",
+      "回忆出来的旧记忆只是背景",
+      "文件、函数或开关",
     ]) {
       expect(PM_MEMORY_PROMPT).toContain(word);
     }
-    expect(PM_MEMORY_PROMPT).not.toContain("重启");
+    for (const gone of ["[[", "MEMORY.md", "frontmatter", "重启"]) {
+      expect(PM_MEMORY_PROMPT).not.toContain(gone);
+    }
   });
 
   it("严禁使用厂商自带的 subagent：点名内置工具，一律用 hub worker start 派 Worker，只读调研加 --readonly", () => {
