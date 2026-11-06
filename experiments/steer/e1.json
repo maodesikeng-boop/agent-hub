@@ -1,0 +1,33 @@
+[
+ {
+  "send": "Run these 3 Bash commands one after another, each as a separate Bash call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next.",
+  "uuid": "00000000-0000-4000-8000-000000000001"
+ },
+ {
+  "wait_tool": "Bash",
+  "nth": 1
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "blocks": [
+   "【用户直接对你说】",
+   "STOP. Only run ONE command in total, skip the rest. Reply with the word ACK-E1."
+  ],
+  "uuid": "00000000-0000-4000-8000-000000000002"
+ },
+ {
+  "wait": "result",
+  "nth": 1
+ },
+ {
+  "sleep": 8
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]
