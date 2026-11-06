@@ -153,6 +153,11 @@ export function createLedgerWorkers(
    * 这一轮的消息编号算。
    */
   const turnStarts = new Map<SessionId, MessageId>();
+  /**
+   * 一轮中途送达（message.delivered midTurn）、Worker 还没读到的消息编号，只在内存里。读到（message.processing）时：
+   * 用户直接说的话这时才交给项目经理（读到之前点停止会被取消）；没赶上上一轮、claude 为它另起一轮的，这一轮从这里开始算。
+   */
+  const midTurnWaiting = new Set<MessageId>();
 
   const workerRow = (id: WorkerId): WorkerDbRow | null => db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;
   const projectRow = (id: number): ProjectDbRow => db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", id)!;
@@ -462,8 +467,8 @@ export function createLedgerWorkers(
   };
 
   /**
-   * Worker 收到了用户直接对它说的话（message.delivered）：每条一行 user_message，原文交给项目经理（不打断它，系统消息
-   * 等它空闲再发）。只认 Worker 对话里带 Worker 编号的用户消息，而且真的写进去了（已送达、处理中、已回复；已停止、失败的
+   * Worker 收到了用户直接对它说的话（message.delivered；一轮中途送达的等 message.processing，读到之前可能被停止取消）：
+   * 每条一行 user_message，原文交给项目经理（不打断它，系统消息等它空闲再发）。只认 Worker 对话里带 Worker 编号的用户消息，而且真的写进去了（已送达、处理中、已回复；已停止、失败的
    * 不算）；重启后重发再送达，去重键挡住，不会出两行。
    */
   const insertUserMessageLines = (p: Pending, workerId: WorkerId, messageIds: MessageId[]) => {
@@ -496,15 +501,34 @@ export function createLedgerWorkers(
     ) !== undefined &&
     db.get(`SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? LIMIT 1`, session.id, turnStart) === undefined;
 
+  const maxMessageId = () => db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0;
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
     if (event.type === "message.delivered") {
-      turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      // 一轮中途交给它的不算这一轮的开头（这一轮前面的文字还要算进汇报），用户的话也等它读到再告诉项目经理
+      if (event.midTurn === true) {
+        for (const id of event.messageIds) midTurnWaiting.add(id);
+        return;
+      }
+      turnStarts.set(session.id, maxMessageId());
       insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }
+    if (event.type === "message.processing") {
+      const taken = event.messageIds.filter((id) => midTurnWaiting.delete(id));
+      if (taken.length === 0) return;
+      // 没赶上上一轮（上一轮已经结束、turnStarts 删了）：claude 为它另起的这一轮从这里开始，不会再拿到上一轮的文字
+      if (!turnStarts.has(session.id)) turnStarts.set(session.id, maxMessageId());
+      insertUserMessageLines(p, session.workerId, taken);
+      return;
+    }
+    if (event.type === "message.cancelled" || event.type === "message.requeued") {
+      for (const id of event.messageIds) midTurnWaiting.delete(id);
+      return;
+    }
     if (event.type === "turn.started") {
-      turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      turnStarts.set(session.id, maxMessageId());
       return;
     }
     const outcome = turnOutcome(event);
@@ -513,7 +537,9 @@ export function createLedgerWorkers(
     if (worker === null) return;
     // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
     if (outcome.turnMessageId === null && !turnStarts.has(session.id)) return;
-    const turnStart = Math.max(outcome.turnMessageId ?? 0, turnStarts.get(session.id) ?? 0);
+    // 有这一轮开头的记录就用它；没有（重启后）退回这一轮最大的消息编号。不取两者大的那个：一轮中途送达的消息编号
+    // 比这一轮前面的文字大，取它会漏掉前面的汇报
+    const turnStart = turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
     turnStarts.delete(session.id);
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId =

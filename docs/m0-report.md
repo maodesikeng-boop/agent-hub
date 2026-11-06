@@ -49,6 +49,8 @@
   6.19 result/success
   ```
 
+  > 后来（2026-11）：有工具的会话里，一轮中途写进去的消息在当前工具跑完后就被同一轮读到，“只回第一条”也不再复现；驱动层已经改成忙时直接写（init 里有 `msg_lifecycle_v1`、`interrupt_cancel_queued_v1` 时），见 `docs/mid-turn-messages.md`。
+
 - 回显时间：第一条消息在 0 秒写入，回显在 4.9 秒和模型回复一起出来；排队的消息在它那一轮开始时才回显。
 - 坏输入：不是 JSON 的一行 → 标准错误 `Error parsing streaming input line (type=unknown, 16 chars): SyntaxError`，进程退出，退出码 1。少了 `role` → `Error: Expected message role 'user', got 'undefined'`，进程退出。
 

@@ -1,6 +1,7 @@
 // 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
 // - session.start → driver.start(sessionId)；
-// - session.send → 读出消息（写给 agent 的文字和标签用 deliveryParts），调 driver.send：written / rejected → done；queued（会话正忙）→ later；
+// - session.send → 读出消息（写给 agent 的文字和标签用 deliveryParts），调 driver.send：written（含忙时中途交给 agent 的）/ cancelled / rejected → done；
+//   queued（会话正忙、驱动层自己排着）→ later；written 了但账本那边又回到排队中（send 期间被收回）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
 // - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）；
@@ -64,8 +65,8 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
   return async (action): Promise<ActionResult> => {
     const { sessionId, messageId, source, resend, recovery } = action.params;
     const message = deps.ledger.getMessage(messageId);
-    // 消息没了，或者已经有结果（已回复、已停止）：没什么可发的
-    if (message === null || message.status === "replied" || message.status === "stopped") return { kind: "done" };
+    // 消息没了，或者已经有结果（已回复、已停止、已取消）：没什么可发的
+    if (message === null || message.status === "replied" || message.status === "stopped" || message.status === "cancelled") return { kind: "done" };
     // Worker 还没开工（建 worktree、跑准备命令）或任务说明还没写进去：先等，别让这条把会话提前拉起来（第一轮要是任务说明）
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
     // 项目经理在写交接、或者新会话的第一条（交接）还没发：先压着，换代后账本把它改发给新会话（ledger/handover.ts）
@@ -96,6 +97,9 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
       return { kind: "done" };
     }
     if (result.kind === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" };
+    // send 还没返回时这条被收回了（message.requeued：进程没了、停止时收回的系统消息）：账本放回排队中、重新登记的 session.send
+    // 撞上这次还在跑的同一个动作，只改了参数；这里返回 done 它就一直停在排队中，所以过一会儿再发一次
+    if (result.kind === "written" && deps.ledger.getMessage(messageId)?.status === "queued") return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "requeued" };
     return { kind: "done" };
   };
 }

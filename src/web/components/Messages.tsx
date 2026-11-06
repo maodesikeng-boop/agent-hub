@@ -2,6 +2,7 @@
 // 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
 import {
   Archive,
+  Ban,
   CalendarClock,
   Check,
   ChevronRight,
@@ -439,7 +440,15 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
       {/* 只发文件没写字的消息没有文字气泡 */}
       {(message.text !== "" || attachments.length === 0) && (
-        <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
+        <div
+          data-bubble
+          className={cn(
+            BUBBLE,
+            "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
+            // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
+            message.status === "cancelled" && "opacity-60",
+          )}
+        >
           {message.text}
         </div>
       )}
@@ -454,7 +463,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
 }
 
 /** 用户消息下面只在这几种状态显示一行；已送达、处理中、已回复不显示。 */
-const SHOWN_STATUSES = new Set<Message["status"]>(["queued", "failed", "stopped"]);
+const SHOWN_STATUSES = new Set<Message["status"]>(["queued", "failed", "stopped", "cancelled"]);
 
 const DELIVERY_ROW = "mt-1 flex items-center gap-1.5 pr-1 text-xs";
 const RETRY_BUTTON = "cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
@@ -476,6 +485,7 @@ function DeliveryStatus({
     <div className={cn(DELIVERY_ROW, failed ? "text-danger" : "text-muted-foreground")} data-status={status} data-delivery>
       {status === "queued" && <Clock className="size-3.5 shrink-0" aria-hidden="true" />}
       {status === "stopped" && <Square className="size-3 shrink-0 fill-current" aria-hidden="true" />}
+      {status === "cancelled" && <Ban className="size-3.5 shrink-0" aria-hidden="true" />}
       {failed && <X className="size-3.5 shrink-0" aria-hidden="true" />}
       {failed ? <span title={failure?.raw}>{failure ? failure.text : "发送失败"}</span> : <span>{STATUS_LABELS[status]}</span>}
       {retry && (

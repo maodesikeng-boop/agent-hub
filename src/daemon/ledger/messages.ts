@@ -191,6 +191,19 @@ export function createLedgerMessages(
           l.backgroundTasks = undefined;
         });
         return;
+      case "message.cancelled":
+        // 写给 agent 了、它还没取走就停了（或会话结束了）：agent 没看到过，不重发（驱动层不会再写）
+        for (const id of event.messageIds) transition(p, id, "cancelled");
+        return;
+      case "message.requeued":
+        // 写给 agent 了、它还没取走就收回了（进程没了、这一轮没读它就结束了）：放回排队中，重新登记发送，agent 没看到过、不加重发说明
+        for (const id of event.messageIds) {
+          const message = getMessage(id);
+          if (message?.status !== "delivered" || message.sessionId === null) continue;
+          transition(p, id, "queued");
+          enqueue(p, { type: "session.send", params: { sessionId: message.sessionId, messageId: id, source: message.sender === "user" ? "user" : "system" } });
+        }
+        return;
       case "message.delivered":
       case "message.processing": {
         const to = event.type === "message.delivered" ? "delivered" : "processing";
@@ -353,8 +366,13 @@ export function createLedgerMessages(
         `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
         session.id,
       ) !== undefined;
-    if (!working && !leftover) return;
+    // 停止 = agent 还没看到的用户消息都取消（docs/mid-turn-messages.md 第 11 节）：还在排队的（没交给驱动层，或在驱动层自己的队列里）
+    // 这里就标已取消，之后执行器再调 session.send 看到已取消就不发；驱动层队列里的那份由 driver.interrupt 丢掉。
+    // 系统消息（Worker 汇报、定时任务、交接）不取消，停止后照常发。
+    const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
+    if (!working && !leftover && queued.length === 0) return;
     write((p) => {
+      for (const { id } of queued) transition(p, id, "cancelled");
       if (working) {
         updateLive(p, session.id, (l) => {
           l.activity = "stopping";

@@ -39,12 +39,14 @@ export interface DriverSendInput {
  * send 的结果：
  * - written：写进标准输入成功（这一次，或者之前一次带同样 messageIds 的 send）。处理函数返回 done。
  *   那一轮出错（turn.ended ok=false）或进程崩溃、启动失败之后，这些消息不再算写过，重发会真的再写一次。
+ *   midTurn：会话正忙，这条在这一轮中途交给了 agent（claude、codex；agy 做不到，一律 queued），agent 之后会读到（已送达）。
  * - queued：会话正忙，消息在驱动层的待发队列里还没写。处理函数返回 { kind: "later" }，过一会儿再调 send；
  *   同样的 messageIds 再调不会重复排队，写进去之后再调返回 written。
+ * - cancelled：一轮中途交给 agent 时用户点了停止，agent 没看到过；驱动层已经出了 message.cancelled，不会再写。处理函数返回 done。
  * - rejected：写入前校验没过，没写，也不会再写；驱动层已经出了 driver.error(invalid_input, messageIds)，
  *   账本据此标 failed。处理函数返回 done。
  */
-export type DriverSendResult = { kind: "written" } | { kind: "queued" } | { kind: "rejected" };
+export type DriverSendResult = { kind: "written"; midTurn?: true } | { kind: "queued" } | { kind: "cancelled" } | { kind: "rejected" };
 
 /**
  * 重启后恢复会话（DriverSendInput.recovery）时，加在之后写进去的第一行最前面，和那条消息在同一行（设计第 5.4 节第 4 步）。
@@ -137,15 +139,36 @@ export interface SessionStartedEvent extends DriverEventBase {
   tools: string[];
 }
 
-/** 写进标准输入成功 → 已送达。 */
+/** 写进标准输入成功（codex：turn/start、turn/steer 收下了）→ 已送达。 */
 export interface MessageDeliveredEvent extends DriverEventBase {
   type: "message.delivered";
   messageIds: MessageId[];
+  /** 会话正忙时在这一轮中途交给 agent 的（不是开一轮的那条）：账本不拿它当“这一轮从这里开始”。 */
+  midTurn?: true;
 }
 
-/** 收到 --replay-user-messages 的回显 → 处理中。 */
+/** agent 取走了这些消息（claude 的 command_lifecycle started 或回显、codex 的 userMessage、agy 的 user_input）→ 处理中。 */
 export interface MessageProcessingEvent extends DriverEventBase {
   type: "message.processing";
+  messageIds: MessageId[];
+}
+
+/**
+ * 已写给 agent、agent 还没取走的消息不会再被处理了 → 已取消（账本 delivered → cancelled，不自动重发）：
+ * reason 只有 stop：用户点了停止（三家统一：claude 带 cancel_queued 的打断、codex 的 turn/completed interrupted、agy 打断时进程退出）。
+ */
+export interface MessageCancelledEvent extends DriverEventBase {
+  type: "message.cancelled";
+  messageIds: MessageId[];
+  reason: "stop";
+}
+
+/**
+ * 已写给 agent、agent 还没取走的消息被驱动层收回（进程崩溃、关机，或这一轮没读它就结束了且厂商不自己排下一轮）：
+ * agent 没看到过，账本放回排队中（delivered → queued）、重新登记 session.send，驱动层下次照常写（不加崩溃说明）。
+ */
+export interface MessageRequeuedEvent extends DriverEventBase {
+  type: "message.requeued";
   messageIds: MessageId[];
 }
 
@@ -322,6 +345,8 @@ export type DriverEvent =
   | SessionStartedEvent
   | MessageDeliveredEvent
   | MessageProcessingEvent
+  | MessageCancelledEvent
+  | MessageRequeuedEvent
   | TurnStartedEvent
   | AgentTextEvent
   | AgentThinkingEvent
@@ -364,12 +389,17 @@ export interface Driver {
   start(sessionId: SessionId): Promise<void>;
   /**
    * 会话没起来会先起（起不来抛 DriverError）。只有写进标准输入成功才 resolve 成 written；
-   * 会话正忙就放进驱动层自己的待发队列，resolve 成 queued（见 DriverSendResult）。
-   * 忙时用户消息排在系统消息前面，用户连发的拼成一条。
+   * 会话正忙：厂商能在一轮中途收（claude 看 init 的 capabilities、codex 用 turn/steer）、进程起好了、不在关闭、不是命令，
+   * 就在这一轮中途交给 agent，resolve 成 written（midTurn）；交出去的那一刻用户点了停止，resolve 成 cancelled；
+   * 否则放进驱动层自己的待发队列，resolve 成 queued（见 DriverSendResult）。
+   * 待发队列里用户消息排在系统消息前面，用户连发的拼成一条（只在自己排队时才拼）。
    * 这个会话已经调过 end（哪怕 end 还在等这一轮回完、还没 resolve）：直接抛 DriverError("session_ended")，不排队。
    */
   send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult>;
-  /** 先写 interrupt 控制消息，5 秒没回应发 SIGINT。 */
+  /**
+   * 先写 interrupt 控制消息，5 秒没回应发 SIGINT。已写给 agent、还没被取走的消息一律出 message.cancelled（reason stop），
+   * 不自动重发（停止时厂商会接着跑、静默丢掉还是进程没了，差别由驱动层抹平）。
+   */
   interrupt(sessionId: SessionId): Promise<void>;
   /**
    * 结束会话（M2，session.end 动作调）：
