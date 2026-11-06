@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, type Attachment } from "../../src/shared/index.ts";
-import { AGENTS_NOTE, DEFAULT_PM_NAME, DEFAULT_PM_PERSONA, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
+import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
 import {
   Client,
   agentTexts,
@@ -51,8 +51,8 @@ describe("W5 组装 + 端到端", () => {
     expect(state.conversations[0]!.conversation).toMatchObject({ kind: "pm", pmId: state.pms[0]!.id });
     expect(state.conversations[0]!.messages).toEqual([]);
     expect(state.sessions).toHaveLength(1);
-    // 性格设定写成文件，以后可以改
-    expect(readFileSync(join(env.home, "state", "personas", `pm-${state.pms[0]!.id}.md`), "utf8")).toBe(DEFAULT_PM_PERSONA);
+    // 新建的项目经理没有默认性格设定，文件是空的
+    expect(readFileSync(join(env.home, "state", "personas", `pm-${state.pms[0]!.id}.md`), "utf8")).toBe("");
 
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
     const again = await env.start();
@@ -91,7 +91,7 @@ describe("W5 组装 + 端到端", () => {
     expect(prompt).toContain(`你是用户的项目经理“${DEFAULT_PM_NAME}”`);
     expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).toContain(HUB_USAGE_PROMPT);
-    expect(prompt).toContain(DEFAULT_PM_PERSONA.trim());
+    expect(prompt).not.toContain("# 性格设定");
     // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
     expect(prompt).not.toContain(AGENTS_NOTE);
     // 不限制 MCP：不带这两个参数，claude 按默认方式加载用户的连接器

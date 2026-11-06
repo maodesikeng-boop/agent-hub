@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { PM_PERSONA_TEMPLATE } from "../../shared/domain.ts";
 import type { ConversationId, Message, PmId, SessionId } from "../../shared/domain.ts";
 import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
@@ -448,7 +447,14 @@ describe("性格设定", () => {
     changes = [];
     expect(hub(lin.sessionId, "persona.edit", { mode: "hands_on" }).data.change).toBeNull();
     expect(changes).toEqual([]);
-    expect(hub(lin.sessionId, "persona.show", {} as never).data).toEqual({ text: "以后回复都用列表", mode: "hands_on" });
+    const shown = hub(lin.sessionId, "persona.show", {} as never);
+    expect(shown.data).toEqual({ text: "以后回复都用列表", mode: "hands_on" });
+    expect(shown.text).toBe("模式：自己也干活\n\n以后回复都用列表");
+    // 性格设定为空时：persona.show 正常显示，data.text 是空串
+    const emptyPm = ledger.createPm({ name: "阿空", mode: "manage_only", persona: "" });
+    const emptyShown = hub(emptyPm.sessionId, "persona.show", {} as never);
+    expect(emptyShown.data).toEqual({ text: "", mode: "manage_only" });
+    expect(emptyShown.text).toBe("模式：只管理\n\n（还没有性格设定）");
   });
 
   it("界面改性格设定：系统消息发在项目经理的对话里；text、mode 都没给、太长 → invalid；不存在 → not_found；会话改别人的 → forbidden", () => {
@@ -515,13 +521,13 @@ describe("性格设定", () => {
     expect(db.get("SELECT persona_file_hash AS h FROM pms WHERE id = ?", lin.pmId)).toEqual({ h: contentHash("写不进文件") });
   });
 
-  it("同步的其他情况：M1 升上来正文是 NULL（有文件按文件填、没文件用模板）；文件被删了按数据库重写；从没写成功过的手改按数据库重写", () => {
+  it("同步的其他情况：M1 升上来正文是 NULL（有文件按文件填、没文件当空的）；文件被删了按数据库重写；从没写成功过的手改按数据库重写", () => {
     db.run("UPDATE pms SET persona = NULL, persona_file_hash = NULL WHERE id = ?", lin.pmId);
     writeFileSync(personaFilePath(personasDir, lin.pmId), "M1 的文件");
     db.run("UPDATE pms SET persona = NULL, persona_file_hash = NULL WHERE id = ?", zhou.pmId);
     rmSync(personaFilePath(personasDir, zhou.pmId));
-    // 正文 NULL 时读出来是模板
-    expect(ledger.getPersona(zhou.pmId).text).toBe(PM_PERSONA_TEMPLATE);
+    // 正文 NULL 时读出来是空串
+    expect(ledger.getPersona(zhou.pmId).text).toBe("");
     const third = ledger.createPm({ name: "老王", mode: "manage_only", persona: "老王的" }).pm.id;
     rmSync(personaFilePath(personasDir, third));
     const fourth = ledger.createPm({ name: "老李", mode: "manage_only", persona: "老李的" }).pm.id;
@@ -530,8 +536,8 @@ describe("性格设定", () => {
     const result = ledger.syncPersonaFiles();
     expect(result).toEqual({ recordedPmIds: [], rewrittenPmIds: [zhou.pmId, third, fourth] });
     expect(ledger.getPersona(lin.pmId).text).toBe("M1 的文件");
-    expect(ledger.getPersona(zhou.pmId).text).toBe(PM_PERSONA_TEMPLATE);
-    expect(readFileSync(personaFilePath(personasDir, zhou.pmId), "utf8")).toBe(PM_PERSONA_TEMPLATE);
+    expect(ledger.getPersona(zhou.pmId).text).toBe("");
+    expect(readFileSync(personaFilePath(personasDir, zhou.pmId), "utf8")).toBe("");
     expect(readFileSync(personaFilePath(personasDir, third), "utf8")).toBe("老王的");
     expect(readFileSync(personaFilePath(personasDir, fourth), "utf8")).toBe("老李的");
     expect(count("persona_changes")).toBe(0);
@@ -768,7 +774,7 @@ describe("hubCall 其他命令", () => {
 });
 
 describe("getLaunchContext", () => {
-  it("有项目：项目信息和文件夹；还没有项目：project 是 null；persona 是 NULL 时兜底成模板；会话不存在 → not_found", () => {
+  it("有项目：项目信息和文件夹；还没有项目：project 是 null；persona 是 NULL 时当空串；带当前厂商；会话不存在 → not_found", () => {
     const foo = createFoo();
     const extra = folder("extra");
     hub(lin.sessionId, "project.attach", { folder: extra });
@@ -776,13 +782,15 @@ describe("getLaunchContext", () => {
       sessionId: lin.sessionId,
       role: "pm",
       conversationId: lin.conversationId,
-      pm: { id: lin.pmId, name: "小林", mode: "manage_only", persona: "小林的习惯" },
+      pm: { id: lin.pmId, name: "小林", mode: "manage_only", vendor: "claude", persona: "小林的习惯" },
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
       worker: null,
     });
-    expect(ledger.getLaunchContext(zhou.sessionId)).toMatchObject({ pm: { name: "阿周", mode: "hands_on" }, project: null });
+    expect(ledger.getLaunchContext(zhou.sessionId)).toMatchObject({ pm: { name: "阿周", mode: "hands_on", vendor: "claude" }, project: null });
+    const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", vendor: "agy", persona: "" });
+    expect(ledger.getLaunchContext(agyPm.sessionId).pm).toEqual({ id: agyPm.pm.id, name: "阿吉", mode: "manage_only", vendor: "agy", persona: "" });
     db.run("UPDATE pms SET persona = NULL WHERE id = ?", lin.pmId);
-    expect(ledger.getLaunchContext(lin.sessionId).pm.persona).toBe(PM_PERSONA_TEMPLATE);
+    expect(ledger.getLaunchContext(lin.sessionId).pm.persona).toBe("");
     expectLedgerError(() => ledger.getLaunchContext(999), "not_found");
   });
 
