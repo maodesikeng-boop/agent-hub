@@ -6,7 +6,6 @@
 //
 // 给 agent 看的话不止这里，改口径时一起看：
 // - shared/driver.ts 的 *_NOTE：驱动层在消息前面拼的【系统】说明（重启恢复、重发、设置更新后重启、进程意外退出）；
-// - shared/domain.ts 的 PM_PERSONA_TEMPLATE：性格设定模板（新项目经理的默认性格设定）；
 // - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
 //   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
@@ -19,13 +18,13 @@ import { join } from "node:path";
 import {
   AGENT_VENDORS,
   ALL_EFFORTS,
+  DEFAULT_AGENT_VENDOR,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   HUB_COMMAND as HUB,
   MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_PERSONA_TEMPLATE,
   PRODUCT_NAME,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
@@ -37,9 +36,6 @@ import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, VendorSpec, Work
 import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
-
-/** 第一次启动自动建的项目经理的性格设定：就是 src/shared 里的 PM_PERSONA_TEMPLATE，只有那一份。 */
-export const DEFAULT_PM_PERSONA = PM_PERSONA_TEMPLATE;
 
 export const AGENTS_NOTE = "开始前先读工作目录里的 `AGENTS.md`。";
 
@@ -57,39 +53,52 @@ export function needsAgentsNote(cwd: string): boolean {
 // 提示词的结构和措辞照用户给的参考稿（11-05，基本照搬，保持它的长度和粒度）：角色与环境 → 你的项目 → 怎么干活（模式）→ 怎么记事情 → 怎么带 Worker → 系统命令 → 性格设定。
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
-/** 长命令放后台（只给项目经理，Worker 不加）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
+/** 长命令放后台（只给项目经理，Worker 不加；VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
 export const PM_BACKGROUND_COMMAND_NOTE =
   "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。";
 
-/**
- * 两种模式的默认做法（设计第 2.2 节）。只是提示词，程序不硬拦。M3 起“只管理”是派 Worker 干活、自己验收。
- */
-export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
-  manage_only: `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
+/** 不能把命令放后台叫醒自己的厂商（VENDOR_SPECS[vendor].backgroundCommands 为 false，见 docs/mid-turn-messages.md 第 10 节）：长命令派给 Worker 去等。 */
+export const PM_DELEGATE_LONG_COMMAND_NOTE =
+  "- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。";
+
+/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 VENDOR_SPECS 的 backgroundCommands 决定）。 */
+export function buildPmModePrompt(mode: PmMode, backgroundCommands = true): string {
+  const commandNote = backgroundCommands ? PM_BACKGROUND_COMMAND_NOTE : PM_DELEGATE_LONG_COMMAND_NOTE;
+  if (mode === "manage_only") {
+    return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
 
 - **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
 - **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
-${PM_BACKGROUND_COMMAND_NOTE}
-- **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`,
-  hands_on: `# 怎么干活（当前模式：${PM_MODE_LABELS.hands_on}）
+${commandNote}
+- **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`;
+  }
+  return `# 怎么干活（当前模式：${PM_MODE_LABELS.hands_on}）
 
 - **能直接做就直接做**：不复杂的事自己动手，做完告诉用户做了什么、改了哪些文件。
 - **活大了再派 Worker**：活大、能拆开同时做，或者想和主文件夹隔开的，派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
-${PM_BACKGROUND_COMMAND_NOTE}
+${commandNote}
 - **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
-- **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`,
+- **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`;
+}
+
+/**
+ * 两种模式的默认做法（设计第 2.2 节，默认按支持后台命令拼）。只是提示词，程序不硬拦。M3 起“只管理”是派 Worker 干活、自己验收。
+ */
+export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
+  manage_only: buildPmModePrompt("manage_only", true),
+  hands_on: buildPmModePrompt("hands_on", true),
 };
 
-/** 怎么记事情：长期有用的规矩记进性格设定（hub persona edit）。 */
-export const PM_MEMORY_PROMPT = `# 怎么记事情（更新你的性格设定）
+/** 怎么记事情：三处记忆的分工（性格设定、仓库 AGENTS.md、厂商自带记忆），长期有用的规矩主动记进性格设定（hub persona edit）。 */
+export const PM_MEMORY_PROMPT = `# 怎么记事情
 
-聊天记录长了会被压缩，长期有用的规矩不要靠上下文硬记，用 \`${HUB} persona edit\` 记进你的性格设定里（改完下一条消息前自动重启生效）：
-- **什么时候主动记**：
-  1. 用户明确提了长期要求（如“以后回复都用列表”、“派 Worker 前不用每次问我”、“不要用某某库”）。
-  2. 用户纠正了你的做法，且这件事以后还会再犯（如“别直接合 main，先提 PR 给我看”、“汇报不用贴完整日志”）。
-  3. 和用户固定下来的工作流程或项目约定（如“跑测试统一用 X 命令”、“发版前要检查 Y”）。
-- **什么不要记**：当前某一个临时任务的细节、报错或一次性指令，不要往里塞。
-- **怎么改**：先跑 \`${HUB} persona show\` 看现在的完整内容，在原文基础上增删合并（把过时的旧规矩删掉或替换掉，保持简短干净），再用 \`${HUB} persona edit --reason "<为什么改>" --stdin <<'EOF'\` 写入新的**完整**内容。`;
+- **该记就主动记，记进性格设定**：用户提了长期要求；用户纠正了你的做法、或者明确认可了某个做法，而且以后还会用到；和用户定下来的固定做法。
+- **记在哪**：
+  - 跟“你怎么当项目经理、怎么跟用户配合”有关的，一律记进性格设定，**不要只写进你自带的记忆**。自带的记忆用户在网页上看不到，换了厂商也就没了；
+  - Worker 也要遵守的项目规矩，写进仓库的 \`AGENTS.md\`；
+  - 自带的记忆（如果有）只放你自己用的技术备忘、外部链接。临时任务的细节和一次性的报错，哪里都不记。
+- **怎么写**：每条一句话，带上为什么或者什么时候用；记之前先看有没有重复或冲突的，有就合并、改掉。
+- **怎么改**：你现在完整的性格设定就在提示词最后面（空的时候还没有这一节）。在原文上增删，然后用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容。拿不准是不是最新的，再跑 \`${HUB} persona show\`。聊过的不会丢。`;
 
 export type VendorPromptSpec = Pick<VendorSpec, "label" | "models">;
 
@@ -278,7 +287,16 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
  */
 export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
-  const parts = [roleSection(ctx), projectSection(ctx.project), PM_MODE_PROMPTS[ctx.pm.mode], PM_MEMORY_PROMPT, buildPmWorkerPrompt(), HUB_USAGE_PROMPT];
+  const vendor = ctx.pm.vendor ?? DEFAULT_AGENT_VENDOR;
+  const backgroundCommands = VENDOR_SPECS[vendor]?.backgroundCommands ?? true;
+  const parts = [
+    roleSection(ctx),
+    projectSection(ctx.project),
+    buildPmModePrompt(ctx.pm.mode, backgroundCommands),
+    PM_MEMORY_PROMPT,
+    buildPmWorkerPrompt(),
+    HUB_USAGE_PROMPT,
+  ];
   const persona = personaSection(ctx.pm.persona);
   if (persona !== null) parts.push(persona);
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);

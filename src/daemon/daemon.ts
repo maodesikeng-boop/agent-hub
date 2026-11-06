@@ -58,7 +58,7 @@ import {
 } from "./handlers.ts";
 import { createLaunchPreparer } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
-import { DEFAULT_PM_NAME, DEFAULT_PM_PERSONA } from "./prompt.ts";
+import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
@@ -268,7 +268,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
         defaultModel = undefined;
       }
-      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: DEFAULT_PM_PERSONA, ...(defaultModel ? { defaultModel } : {}) });
+      const { pm } = ledger.createPm({ name: DEFAULT_PM_NAME, mode: DEFAULT_PM_MODE, persona: "", ...(defaultModel ? { defaultModel } : {}) });
       log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
     }
 

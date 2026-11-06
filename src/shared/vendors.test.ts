@@ -36,9 +36,11 @@ describe("厂商清单", () => {
     ]);
     expect(claude.customModel).toBe(true);
     expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(claude.backgroundCommands).toBe(true);
 
     const agy = VENDOR_SPECS.agy;
     expect(agy.label).toBe("Antigravity");
+    expect(agy.backgroundCommands).toBe(false);
     expect(agy.models).toEqual([
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
       { id: "gemini-4-argon-max", label: "Gemini 4 Argon (Max)" },
@@ -59,6 +61,7 @@ describe("厂商清单", () => {
 
     const codex = VENDOR_SPECS.codex;
     expect(codex.label).toBe("Codex");
+    expect(codex.backgroundCommands).toBe(false);
     expect(codex.models).toEqual([
       { id: "gpt-5.4", label: "GPT-5.4" },
       { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },

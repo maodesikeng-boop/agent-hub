@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NAME_RULE, PM_PERSONA_TEMPLATE, VENDOR_SPECS, bundledModelCatalog, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { MODEL_NAME_RULE, VENDOR_SPECS, bundledModelCatalog, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import {
   FakeApi,
@@ -125,7 +125,7 @@ describe("新建项目经理", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "  阿明 ");
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
-    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", vendor: "claude", persona: PM_PERSONA_TEMPLATE });
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toEqual({ name: "阿明", mode: "manage_only", vendor: "claude", persona: "" });
     // 服务端先把变化推过来，响应随后到
     push(ws, changeOf(11, "pm.created", { pm: makePm({ id: 50, name: "阿明" }) }));
     push(ws, changeOf(12, "conversation.created", { conversation: makeConvSnapshot([], { conversation: { id: 50, pmId: 50, title: "阿明" } }).conversation }));
@@ -232,8 +232,7 @@ describe("新建项目经理", () => {
     await user.selectOptions(model, "Opus");
     await user.selectOptions(effort, "high");
     const persona = within(dialog).getByRole("textbox", { name: "性格设定" });
-    expect(persona).toHaveValue(PM_PERSONA_TEMPLATE);
-    await user.clear(persona);
+    expect(persona).toHaveValue("");
     await user.type(persona, "话少");
     await user.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
@@ -322,7 +321,7 @@ describe("新建项目经理", () => {
       name: "阿明",
       mode: "manage_only",
       vendor: "claude",
-      persona: PM_PERSONA_TEMPLATE,
+      persona: "",
       folder: "~/code/foo",
     });
   });
@@ -594,6 +593,8 @@ describe("资料页", () => {
     });
     const page = await pmChat(user);
     const box = await within(page).findByRole("textbox", { name: "性格设定" });
+    expect(box).toHaveAttribute("placeholder", "还没有性格设定");
+    expect(box).toHaveClass("px-4");
     await waitFor(() => expect(box).toHaveValue("旧"));
     expect(textSave(page)).not.toBeInTheDocument();
     expect(within(groupIn(page, "修改记录")).getByText("还没有修改")).toBeInTheDocument();

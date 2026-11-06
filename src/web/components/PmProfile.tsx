@@ -1,5 +1,6 @@
 import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { cn } from "../lib/utils.ts";
 import {
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
@@ -295,8 +296,12 @@ function PmEditor({
       >
         <Textarea
           aria-label="性格设定"
-          rows={12}
-          className="block max-h-[60vh] min-h-32 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] field-sizing-content focus-visible:ring-0"
+          placeholder="还没有性格设定"
+          rows={1}
+          className={cn(
+            "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-[15px] field-sizing-content focus-visible:ring-0",
+            text === "" ? "text-[15px]" : "font-mono text-[13.5px]",
+          )}
           value={text}
           onChange={(e) => setDraftText(e.target.value)}
         />

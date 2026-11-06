@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { agentTextOf } from "../../shared/attachments.ts";
-import { normalizeWorkerTitle, personaOrTemplate, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
+import { normalizeWorkerTitle, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -676,7 +676,7 @@ export function createLedgerWorkers(
       sessionId: session.id,
       role: "worker",
       conversationId: worker.worker_conversation_id,
-      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: personaOrTemplate(pm.persona) },
+      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
       project: projectCard(projectRow(worker.project_id)),
       worker: toWorkerRecord(worker),
     };

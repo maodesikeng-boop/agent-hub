@@ -1,5 +1,4 @@
 // 提示词、启动文件测试共用的启动上下文（prompt.test.ts、launch.test.ts）：项目经理两种，Worker 一种（M3）。
-import { PM_PERSONA_TEMPLATE } from "../shared/index.ts";
 import type { LaunchContext, ProjectCard, WorkerRecord } from "../shared/index.ts";
 
 export const card = (id: number, name: string, mainFolder: string, otherFolders: string[] = [], description: string | null = null): ProjectCard => ({
@@ -16,20 +15,20 @@ export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext
     sessionId: 7,
     role: "pm",
     conversationId: 3,
-    pm: { id: 1, name: "小林", mode: "manage_only", persona: "# 性格设定\n\n- 说话直接。\n" },
+    pm: { id: 1, name: "小林", mode: "manage_only", vendor: "claude", persona: "# 性格设定\n\n- 说话直接。\n" },
     project: card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具"),
     worker: null,
     ...over,
   };
 }
 
-/** 还没有项目的项目经理：hands_on。 */
+/** 还没有项目的项目经理：hands_on，新建时没有性格设定（空串）。 */
 export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
     sessionId: 8,
     role: "pm",
     conversationId: 2,
-    pm: { id: 2, name: "阿周", mode: "hands_on", persona: PM_PERSONA_TEMPLATE },
+    pm: { id: 2, name: "阿周", mode: "hands_on", vendor: "claude", persona: "" },
     project: null,
     worker: null,
     ...over,

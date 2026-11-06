@@ -9,7 +9,6 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_PERSONA_TEMPLATE,
   PRODUCT_NAME,
   VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
@@ -18,6 +17,7 @@ import {
   WORKER_REPORT_FORMAT,
   userToWorkerHeader,
   workerReportHeader,
+  type AgentVendor,
   type SetupOutcome,
   type VendorSpec,
 } from "../shared/index.ts";
@@ -29,6 +29,7 @@ import {
   AGENTS_NOTE,
   HUB_USAGE_PROMPT,
   PM_BACKGROUND_COMMAND_NOTE,
+  PM_DELEGATE_LONG_COMMAND_NOTE,
   PM_MEMORY_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
@@ -37,6 +38,7 @@ import {
   WORKER_READONLY_NOTE,
   WORKER_RULES,
   buildLaunchPrompt,
+  buildPmModePrompt,
   buildWorkerPrompt,
   needsAgentsNote,
   setupNote,
@@ -133,12 +135,12 @@ describe("提示词：有项目", () => {
 });
 
 describe("提示词：还没有项目", () => {
-  it("hands_on：“自己也干活”的做法、性格设定模板；写明还没有项目、在自己的空文件夹里、怎么建", () => {
+  it("hands_on：“自己也干活”的做法、默认没有性格设定；写明还没有项目、在自己的空文件夹里、怎么建", () => {
     const prompt = buildLaunchPrompt(noProjectContext(), dir);
     expect(prompt).toContain("阿周");
     expect(prompt).toContain(PM_MODE_PROMPTS.hands_on);
     expect(prompt).not.toContain(PM_MODE_PROMPTS.manage_only);
-    expect(prompt).toContain(PM_PERSONA_TEMPLATE.trim());
+    expect(prompt).not.toContain("# 性格设定");
     expect(prompt).toMatch(/还没有项目，工作目录是你自己的空文件夹/);
     expect(prompt).toContain(`${hub} project create --folder <文件夹>`);
     expect(prompt).not.toContain("主文件夹（工作目录）");
@@ -151,13 +153,15 @@ describe("提示词：还没有项目", () => {
 const SECTION_TITLES = ["# 你的角色与环境", "# 你的项目", "# 怎么干活（当前模式：", "# 怎么记事情", "# 怎么带 Worker", `# 系统命令 ${hub}`, "# 性格设定"];
 
 describe("提示词：项目经理的结构（照参考稿）", () => {
-  it("七节按顺序：角色与环境、项目、怎么干活（模式）、怎么记事情、怎么带 Worker、系统命令、性格设定", () => {
-    for (const ctx of [projectContext(), noProjectContext()]) {
+  it("七节按顺序：角色与环境、项目、怎么干活（模式）、怎么记事情、怎么带 Worker、系统命令、性格设定（为空时不出现）", () => {
+    for (const ctx of [projectContext(), noProjectContext({ pm: { ...noProjectContext().pm, persona: "# 性格设定\n\n- 简短" } })]) {
       const prompt = buildLaunchPrompt(ctx, dir);
       const positions = SECTION_TITLES.map((title) => prompt.indexOf(`\n${title}`) + 1 || prompt.indexOf(title));
       expect(positions.every((p) => p >= 0)).toBe(true);
       expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     }
+    const emptyPrompt = buildLaunchPrompt(noProjectContext(), dir);
+    expect(emptyPrompt).not.toContain("# 性格设定");
   });
 
   it("名字、产品名、命令名都是动态的：项目经理的名字、PRODUCT_NAME、hub 命令名", () => {
@@ -215,14 +219,40 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(bare.trimEnd().endsWith("# 性格设定\n\n说话直接")).toBe(true);
     const empty = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", persona: "" } }), dir);
     expect(empty.trimEnd().endsWith(HUB_USAGE_PROMPT)).toBe(true);
-    // 参考稿末尾那三条不写死
-    expect(saved).not.toContain("像一个靠谱的同事");
-    expect(buildLaunchPrompt(noProjectContext(), dir)).toContain("像一个靠谱的同事"); // 这是 PM_PERSONA_TEMPLATE（用户存的默认那份）
+    expect(empty).not.toContain("# 性格设定");
+    expect(buildLaunchPrompt(noProjectContext(), dir)).not.toContain("# 性格设定");
   });
 
-  it("怎么记事情：什么时候记、什么不记、怎么改（先 persona show 再 persona edit 写完整内容）", () => {
-    expect(buildLaunchPrompt(projectContext(), dir)).toContain(PM_MEMORY_PROMPT);
-    for (const word of ["什么时候主动记", "什么不要记", `${hub} persona show`, `${hub} persona edit --reason`, "完整"]) expect(PM_MEMORY_PROMPT).toContain(word);
+  it("怎么记事情：三层分工（性格设定、仓库 AGENTS.md、自带记忆）、怎么写、怎么改；两种模式和三家厂商都有；不写“重启”", () => {
+    for (const mode of PM_MODES) {
+      for (const vendor of AGENT_VENDORS) {
+        const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "" } }), dir);
+        expect(prompt).toContain(PM_MEMORY_PROMPT);
+      }
+    }
+    for (const word of [
+      "该记就主动记，记进性格设定",
+      "记在哪",
+      "不要只写进你自带的记忆",
+      "网页上看不到",
+      "换了厂商也就没了",
+      "`AGENTS.md`",
+      "技术备忘、外部链接",
+      "临时任务的细节和一次性的报错，哪里都不记",
+      "怎么写",
+      "每条一句话，带上为什么或者什么时候用",
+      "重复或冲突",
+      "合并、改掉",
+      "怎么改",
+      "提示词最后面",
+      `${hub} persona edit --reason "<为什么改>" --stdin`,
+      "完整",
+      `${hub} persona show`,
+      "聊过的不会丢",
+    ]) {
+      expect(PM_MEMORY_PROMPT).toContain(word);
+    }
+    expect(PM_MEMORY_PROMPT).not.toContain("重启");
   });
 
   it("严禁使用厂商自带的 subagent：点名内置工具，一律用 hub worker start 派 Worker，只读调研加 --readonly", () => {
@@ -261,10 +291,20 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("用别家的模型");
   });
 
-  it("长命令放后台：两种模式下都有，写明一分钟以上用后台运行（如 run_in_background）、几秒钟在前台跑；只加在项目经理提示词里，Worker 不加", () => {
+  it("长命令按厂商能力（VENDOR_SPECS.backgroundCommands）分开写：两种模式、三家厂商都有对应那一条，不写死厂商名；Worker 不加", () => {
     for (const mode of PM_MODES) {
-      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
-      expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+      for (const vendor of AGENT_VENDORS) {
+        const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "x" } }), dir);
+        if (VENDOR_SPECS[vendor].backgroundCommands) {
+          expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+          expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
+          expect(prompt).toContain(buildPmModePrompt(mode, true));
+        } else {
+          expect(prompt).toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
+          expect(prompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
+          expect(prompt).toContain(buildPmModePrompt(mode, false));
+        }
+      }
     }
     for (const word of [
       "**长命令放后台**",
@@ -282,8 +322,20 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     ]) {
       expect(PM_BACKGROUND_COMMAND_NOTE).toContain(word);
     }
+    expect(PM_DELEGATE_LONG_COMMAND_NOTE).toContain("要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话");
+    // 由 VENDOR_SPECS 的 backgroundCommands 能力字段决定，不写死厂商名
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true };
+    try {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", vendor: "acme" as AgentVendor, persona: "x" } }), dir);
+      expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+      expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
+    } finally {
+      delete specs.acme;
+    }
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
     expect(workerPrompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
+    expect(workerPrompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
     expect(workerPrompt).not.toContain("长命令放后台");
     expect(workerPrompt).not.toContain("run_in_background");
   });
