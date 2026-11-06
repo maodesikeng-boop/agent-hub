@@ -96,6 +96,11 @@ export interface FakeCodexTurnScript {
   dropSteers?: boolean;
   /** 这一轮里的 turn/steer 一律回 “no active turn to steer”（模拟刚好结束）。 */
   rejectSteer?: boolean;
+  /**
+   * 这一轮里的 turn/steer 先不回，等这一轮的 turn/completed 发出去之后才回（模拟回执晚于这一轮结束）：ok 回成功、error 回
+   * “no active turn to steer”。这些 steer 都没被取走（没有 userMessage）。
+   */
+  deferSteerReply?: "ok" | "error";
 }
 
 export interface FakeCodexScript {
@@ -146,6 +151,8 @@ let activeTurn = null;
 let currentTurn = null;
 /** steer 进来还没取走的。 */
 let steered = [];
+/** deferSteerReply：还没回的 turn/steer（这一轮结束后回）。 */
+let deferredSteers = [];
 let userMessageSeq = 0;
 
 function echoUserMessage(threadId, turnId, input) {
@@ -170,6 +177,10 @@ function completeTurn(threadId, turnId, status, errorMessage) {
     method: "turn/completed",
     params: { threadId, turn: { id: turnId, status, ...(errorMessage ? { error: { message: errorMessage } } : {}) } },
   });
+  for (const d of deferredSteers.splice(0)) {
+    if (d.reply === "ok") send({ jsonrpc: "2.0", id: d.id, result: { turnId } });
+    else send({ jsonrpc: "2.0", id: d.id, error: { code: -32600, message: "no active turn to steer" } });
+  }
 }
 let currentThreadId = script.startThreadId || "thread-new-1";
 const pendingServerRequests = new Map();
@@ -401,6 +412,10 @@ function handleMessage(msg) {
     const p = msg.params || {};
     if (!currentTurn || currentTurn.turnScript.rejectSteer) {
       send({ jsonrpc: "2.0", id: msg.id, error: { code: -32600, message: "no active turn to steer" } });
+      return;
+    }
+    if (currentTurn.turnScript.deferSteerReply) {
+      deferredSteers.push({ id: msg.id, reply: currentTurn.turnScript.deferSteerReply });
       return;
     }
     if (p.expectedTurnId !== currentTurn.turnId) {
@@ -1155,7 +1170,6 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
   it("忙时发 turn/steer（expectedTurnId 是这一轮），回执成功算已送达（midTurn）；命令跑完出它的 userMessage → 处理中；同一轮一个 turn.ended 带两条", async () => {
     const t = steerHarness((dir) => [holdTurn(dir)]);
     const s = t.addSession();
-    expect(t.driver.midTurnSupport(s.id)).toMatchObject({ mode: "direct", seenAfter: "model_step", missed: "requeue" });
     await t.driver.send(s.id, user(1, "跑 3 条命令"));
     await t.waitFor("agent.tool");
     await expect(t.driver.send(s.id, user(2, "停下，只跑一条"))).resolves.toEqual({ kind: "written", midTurn: true });
@@ -1284,6 +1298,82 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     await t.driver.send(s.id, user(3, "下一条"));
     await t.waitFor("turn.ended", () => true, 2);
     expect(t.log().filter((e) => e.kind === "argv")).toHaveLength(2);
+  });
+
+  for (const reply of ["ok", "error"] as const) {
+    it(`steer 的回执晚于这一轮的 turn/completed（回执${reply === "ok" ? "成功" : "报错"}）：end 照样返回，进程关掉；这条没送达`, async () => {
+      const t = steerHarness((dir) => [holdTurn(dir, { deferSteerReply: reply }), { messageDeltas: ["收到"] }]);
+      const s = t.addSession();
+      await t.driver.send(s.id, user(1, "开始"));
+      await t.waitFor("agent.tool");
+      const sending = t.driver.send(s.id, user(2, "插一句"));
+      const ending = t.driver.end(s.id);
+      release(t.dir);
+      await ending;
+      expect(t.store.get(s.id)!.status).toBe("ended");
+      await expect(sending).rejects.toMatchObject({ code: "session_ended" });
+      expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1]]);
+      expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+      expect(methods(t).filter((m) => m === "turn/start")).toHaveLength(1);
+    });
+  }
+
+  it("steer 的回执晚于这一轮结束、没有 end：这条退回自己的队列，下一轮用 turn/start 发", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir, { deferSteerReply: "ok" }), { messageDeltas: ["收到"] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    const sending = t.driver.send(s.id, user(2, "插一句"));
+    release(t.dir);
+    // 回执到时这一轮已经结束：放回待发队列，马上用 turn/start 发（执行器下次再问就是 written）
+    await expect(sending).resolves.toEqual({ kind: "queued" });
+    expect(await t.waitFor("turn.ended", () => true, 2)).toMatchObject({ ok: true, messageIds: [2] });
+    expect(t.of("message.delivered").map((e) => [e.messageIds, e.midTurn])).toEqual([
+      [[1], undefined],
+      [[2], undefined],
+    ]);
+  });
+
+  it("停止时 steer 的回执还没到，回执（成功）在 turn/completed interrupted 之后才来：用户消息标已取消、send 返回 cancelled，不再发", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir, { deferSteerReply: "ok" }), { messageDeltas: ["不该跑"] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    const sending = t.driver.send(s.id, user(2, "插一句"));
+    await t.driver.interrupt(s.id);
+    await expect(sending).resolves.toEqual({ kind: "cancelled" });
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1], interrupted: true });
+    expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    await realSleepCodex(150);
+    expect(methods(t).filter((m) => m === "turn/start")).toHaveLength(1);
+    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+    expect(t.of("message.requeued")).toEqual([]);
+  });
+
+  it("停止时 steer 的回执还没到（回执报错）：系统消息（Worker 汇报）不取消，停止后照常用 turn/start 发", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir, { deferSteerReply: "error" }), { messageDeltas: ["收到汇报"] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    const sending = t.driver.send(s.id, { messageIds: [2], source: "system" as const, text: "【Worker #1 的汇报】A" });
+    await t.driver.interrupt(s.id);
+    await expect(sending).resolves.toEqual({ kind: "queued" });
+    expect(await t.waitFor("turn.ended", () => true, 2)).toMatchObject({ ok: true, messageIds: [2] });
+    expect(t.of("message.cancelled")).toEqual([]);
+  });
+
+  it("点了停止、turn/interrupt 还没结果时进程崩了：steer 了没读到的用户消息标已取消，不收回重发", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir, { ignoreInterrupt: true }), { messageDeltas: ["不该跑"] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    const stopping = t.driver.interrupt(s.id);
+    process.kill(t.store.get(s.id)!.pid!, "SIGKILL");
+    await stopping;
+    expect(await t.waitFor("session.exited")).toMatchObject({ reason: "crash", messageIds: [1] });
+    expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    expect(t.of("message.requeued")).toEqual([]);
   });
 });
 

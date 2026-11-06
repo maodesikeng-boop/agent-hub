@@ -36,7 +36,6 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
-  type MidTurnSupport,
   type SessionExitReason,
   type SessionId,
   type TokenUsage,
@@ -44,7 +43,6 @@ import {
 } from "../../shared/index.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import {
-  CODEX_MID_TURN,
   buildCodexArgs,
   buildInitializeRequest,
   buildInitializedNotification,
@@ -100,8 +98,19 @@ interface Batch {
   echoed: boolean;
   /** steer 的回执还没到时这一轮就结束了：回执来了也不算送达，退回待发队列。 */
   turnDone: boolean;
+  /** steer 的回执还没到时用户点了停止：回执来了按停止处理（用户的标已取消，系统的退回待发队列、停止后照常发）。 */
+  stopped: boolean;
   /** 用户的（几条拼成一条的也是）还是系统的：停止时没读到的，用户的取消、系统的收回（stop-untaken.ts）。 */
   source: MessageSource;
+}
+
+/** 一次 turn/steer 的结果：written 收下了（已送达）；queued 没收下，已经放回待发队列最前面；cancelled 停止时被取消了。 */
+type SteerOutcome = "written" | "queued" | "cancelled";
+
+interface Steer {
+  batch: Batch;
+  entry: PendingEntry;
+  resolve: (outcome: SteerOutcome) => void;
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
@@ -143,8 +152,8 @@ interface Proc {
   startTimedOut: boolean;
   killTimer: NodeJS.Timeout | null;
   pendingRpcs: Map<number | string, RpcPhase>;
-  /** 在等回执的 turn/steer：请求编号 → 那一行和交回结果（true = 收下了）。进程退出时都交回 false。 */
-  steers: Map<number | string, { batch: Batch; resolve: (accepted: boolean) => void }>;
+  /** 在等回执的 turn/steer：请求编号 → 那一行、原来的待发项和交回结果（#settleSteer）。进程退出时都按没收下处理。 */
+  steers: Map<number | string, Steer>;
   ready: Promise<StartupOutcome>;
   resolveReady: (o: StartupOutcome) => void;
   exited: Promise<void>;
@@ -243,10 +252,6 @@ export class CodexDriver implements Driver {
     return Boolean(proc && !proc.closing);
   }
 
-  midTurnSupport(_sessionId: SessionId): MidTurnSupport {
-    return CODEX_MID_TURN;
-  }
-
   async start(sessionId: SessionId): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);
@@ -310,10 +315,13 @@ export class CodexDriver implements Driver {
       if (proc && this.#canSteer(st, proc, entry)) {
         const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
         batch.midTurn = true;
-        if (await this.#steer(st, proc, batch)) return { kind: "written", midTurn: true };
-        this.#dropBatch(st, batch);
+        const outcome = await this.#steer(st, proc, batch, entry);
+        if (outcome === "written") return { kind: "written", midTurn: true };
+        if (outcome === "cancelled") return { kind: "cancelled" };
+        // queued：#settleSteer 已经放回待发队列了
+      } else {
+        st.pending.push(entry);
       }
-      st.pending.push(entry);
     }
     await this.#pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
@@ -338,21 +346,44 @@ export class CodexDriver implements Driver {
     );
   }
 
-  /** 发 turn/steer，等回执：收下了算已送达（midTurn），返回 true；报错（没有正在跑的轮等）或进程没了返回 false。 */
-  #steer(st: SessionState, proc: Proc, batch: Batch): Promise<boolean> {
+  /** 发 turn/steer，等回执（结果见 #settleSteer）。 */
+  #steer(st: SessionState, proc: Proc, batch: Batch, entry: PendingEntry): Promise<SteerOutcome> {
     const reqId = ++this.#requestSeq;
     st.inFlight.push(batch);
     this.#clearTimer(st, "idleTimer");
-    return new Promise<boolean>((resolve) => {
-      proc.steers.set(reqId, { batch, resolve });
+    return new Promise<SteerOutcome>((resolve) => {
+      const steer: Steer = { batch, entry, resolve };
+      proc.steers.set(reqId, steer);
       proc.pendingRpcs.set(reqId, "turn_steer");
       proc.child.stdin.write(buildTurnSteerRequest(reqId, proc.threadId!, st.activeTurnId!, batch.combinedText) + "\n", (err) => {
-        if (!err) return;
+        if (!err || !proc.steers.has(reqId)) return;
         proc.steers.delete(reqId);
         proc.pendingRpcs.delete(reqId);
-        resolve(false);
+        this.#settleSteer(st, steer, false);
       });
     });
+  }
+
+  /**
+   * steer 有结果了（回执、写失败、进程没了）。收下了、这一轮还没结束：已送达（停止时也一样，这一轮的 turn/completed interrupted
+   * 会把没读到的标已取消）。没收下，或者回执到之前这一轮已经结束了（codex 不会再处理它）：等回执期间点过停止的，用户的标已取消；
+   * 别的（包括停止时的系统消息）放回待发队列最前面，下一轮用 turn/start 发。
+   */
+  #settleSteer(st: SessionState, steer: Steer, accepted: boolean): void {
+    const { batch } = steer;
+    if (accepted && !batch.turnDone) {
+      this.#markDelivered(st, batch);
+      steer.resolve("written");
+      return;
+    }
+    this.#dropBatch(st, batch);
+    if (batch.stopped && batch.source === "user") {
+      this.#emit(st.id, { type: "message.cancelled", messageIds: batch.messageIds, reason: "stop", at: Date.now() });
+      steer.resolve("cancelled");
+      return;
+    }
+    if (!st.ended) st.pending.unshift(steer.entry);
+    steer.resolve("queued");
   }
 
   end(sessionId: SessionId): Promise<void> {
@@ -402,6 +433,8 @@ export class CodexDriver implements Driver {
     if (!proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
     st.turnInterrupted = true;
+    // steer 了、回执还没到的：回执到了也按停止处理，不退回队列再发（#settleSteer）
+    for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
       const reqId = ++this.#requestSeq;
@@ -708,6 +741,17 @@ export class CodexDriver implements Driver {
 
   #busy(st: SessionState): boolean {
     return st.inFlight.length > 0 || st.selfTurn;
+  }
+
+  /** 这一轮结束后还在等 steer 的回执，现在等到了、不忙了：补上 turn/completed 时因为还忙没做的收尾。 */
+  #idleAfterSteer(st: SessionState, proc: Proc): void {
+    // 只剩回执要等时点的停止（没有轮可打断，只起了 SIGINT 的计时）：到这里就停完了
+    this.#clearTimer(st, "interruptTimer");
+    st.stopRequested = false;
+    st.turnInterrupted = false;
+    this.#resolveInterrupt(st);
+    this.#afterTurn(st, proc);
+    this.#settled(st);
   }
 
   #settled(st: SessionState): void {
@@ -1099,15 +1143,11 @@ export class CodexDriver implements Driver {
         const steer = proc.steers.get(id);
         proc.steers.delete(id);
         if (!steer) return;
-        // 没收下（no active turn to steer、turn id 对不上），或者回执到之前这一轮已经结束了：退回待发队列（send 那边放）
-        if (errorObj || steer.batch.turnDone) {
-          if (errorObj) this.#opts.log(`[driver] session ${st.id}: turn/steer 没收下，退回队列：${String(errorObj.message ?? "")}`);
-          st.inFlight = st.inFlight.filter((b) => b !== steer.batch);
-          steer.resolve(false);
-          return;
-        }
-        this.#markDelivered(st, steer.batch);
-        steer.resolve(true);
+        // 没收下：no active turn to steer、turn id 对不上
+        if (errorObj) this.#opts.log(`[driver] session ${st.id}: turn/steer 没收下：${String(errorObj.message ?? "")}`);
+        this.#settleSteer(st, steer, !errorObj);
+        // 这一轮已经结束、只在等这个回执：现在才算闲下来（end 在等、待发队列要接着发、停止要收尾）
+        if (!this.#busy(st)) this.#idleAfterSteer(st, proc);
         return;
       }
 
@@ -1376,7 +1416,6 @@ export class CodexDriver implements Driver {
     const settled = st.inFlight.filter((b) => !b.midTurn || b.echoed);
     const missed = st.inFlight.filter((b) => b.midTurn && !b.echoed && b.delivered);
     const unacked = st.inFlight.filter((b) => b.midTurn && !b.echoed && !b.delivered);
-    for (const b of unacked) b.turnDone = true;
     st.inFlight = unacked;
     st.selfTurn = false;
     st.activeTurnId = null;
@@ -1389,6 +1428,10 @@ export class CodexDriver implements Driver {
     const status = typeof turn.status === "string" ? turn.status : "completed";
     const ok = status === "completed";
     const interrupted = status === "interrupted" || st.turnInterrupted || st.stopRequested;
+    for (const b of unacked) {
+      b.turnDone = true;
+      if (interrupted) b.stopped = true;
+    }
 
     const event: DriverEvent = {
       type: "turn.ended",
@@ -1518,11 +1561,9 @@ export class CodexDriver implements Driver {
       st.emittedThinkingIds.clear();
       this.#update(st, { pid: null, status: "idle", lastEventAt: Date.now() });
       const at = Date.now();
-      for (const steer of proc.steers.values()) {
-        st.inFlight = st.inFlight.filter((b) => b !== steer.batch);
-        steer.resolve(false);
-      }
+      const steers = [...proc.steers.values()];
       proc.steers.clear();
+      for (const steer of steers) this.#settleSteer(st, steer, false);
       if (!proc.initSeen) {
         if (proc.closing === null) {
           this.#forgetWritten(st, st.inFlight);
@@ -1559,6 +1600,8 @@ export class CodexDriver implements Driver {
         st.crashNote = true;
         this.#forgetWritten(st, taken);
       }
+      // 点了停止、turn/interrupt 还没结果时进程没了（崩溃也算）：没读到的照停止处理，用户的不收回重发
+      const stopped = reason === "interrupt" || st.stopRequested;
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.#emit(st.id, {
@@ -1570,7 +1613,7 @@ export class CodexDriver implements Driver {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.#releaseMissed(st, missed, reason === "interrupt", at);
+      this.#releaseMissed(st, missed, stopped, at);
     } finally {
       this.#resolveInterrupt(st);
       resolveExited();
@@ -1738,7 +1781,7 @@ export function createCodexDriver(options: CodexDriverOptions): CodexDriver {
 }
 
 function newBatch(messageIds: MessageId[], combinedText: string, notes: Batch["notes"], source: MessageSource): Batch {
-  return { messageIds, combinedText, notes, delivered: false, processing: false, midTurn: false, echoed: false, turnDone: false, source };
+  return { messageIds, combinedText, notes, delivered: false, processing: false, midTurn: false, echoed: false, turnDone: false, stopped: false, source };
 }
 
 function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {

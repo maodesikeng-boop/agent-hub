@@ -388,7 +388,7 @@ interface BackgroundTaskSupport {
 
 照第 5、9 节做了，和方案不一样、或方案没写到的地方：
 
-**通用接口**（`src/shared/driver.ts`）：`Driver.midTurnSupport(sessionId)` 返回第 9.2 节的 `MidTurnSupport`；`send` 多一种结果 `{kind:"written", midTurn:true}`；新事件 `message.cancelled {messageIds, reason}`（停止时写进去、没被取走的）和 `message.requeued {messageIds}`（进程没了、或这一轮没读到它就结束了，账本放回排队中、重新登记 `session.send`）；`message.delivered` 多一个 `midTurn` 标记（Worker 汇报靠“开这一轮的那条送达”定这一轮从哪开始，中途送达的不算开头）。消息状态多一个 `cancelled`（已取消，迁移 `0010`），转换表多了 `delivered → cancelled`、`delivered → queued`。账本、网页只认这些，不看厂商。
+**通用接口**（`src/shared/driver.ts`）：第 9.2 节的能力声明（`MidTurnSupport`）最后没做成接口——账本、网页都用不上它（网页不加“要等这一轮结束才看得到”之类的说明小字），只靠 `send` 的结果和事件；`send` 多两种结果 `{kind:"written", midTurn:true}` 和 `{kind:"cancelled"}`（交出去的那一刻用户点了停止，已出 `message.cancelled`）；新事件 `message.cancelled {messageIds, reason:"stop"}`（停止时写进去、没被取走的；方案里的 `session_ended` 从来不会出，去掉了）和 `message.requeued {messageIds}`（进程没了、或这一轮没读到它就结束了，账本放回排队中、重新登记 `session.send`）；`message.delivered` 多一个 `midTurn` 标记（Worker 汇报靠“开这一轮的那条送达”定这一轮从哪开始，中途送达的不算开头）。消息状态多一个 `cancelled`（已取消，迁移 `0010`），转换表多了 `delivered → cancelled`、`delivered → queued`。账本、网页只认这些，不看厂商。
 
 **claude**（`claude-driver.ts`）：
 - 中途写入要 init 里 `msg_lifecycle_v1` **和** `interrupt_cancel_queued_v1` 都有（方案只要求前者、停止时再查后者）：少了后者，停止时没法取消，干脆照旧排队，“停止 = 没取走的都取消”就不会有例外。
@@ -396,16 +396,22 @@ interface BackgroundTaskSupport {
 - result 只结算 `started` 过的；中途写进去没赶上的留着，它们开的下一轮的 init 不算“claude 自己开的轮”。兜底：一轮里一条 `started` 都没有（claude 没出生命周期事件）时，开这一轮的那条（空闲时写的）照旧算这一轮的。
 - 还有没取走的就算忙：不开始算空闲、`end` 等它们处理完、两轮之间不重启（中途写入本身也不调 `prepareLaunch`、不重启，设置的变化等这一轮完了下一条再生效）。
 - 停止：控制请求带 `cancel_queued:true`，以回执的 `cancelled` 和 `command_lifecycle cancelled` 为准出 `message.cancelled`；已经 `started` 的那条照旧按“这一轮被打断”收尾（它的 `cancelled` 在 result 之后到，不管）。控制请求没回应被 SIGINT 时，没取走的同样标已取消。
-- 崩溃、关机：没取走的出 `message.requeued`（方案是放回驱动层的待发队列：那样没有执行器的动作在等它，进程起不来就丢了，所以交给账本重新登记）；已取走的照旧按崩溃处理。
+- 崩溃、关机：没取走的出 `message.requeued`（方案是放回驱动层的待发队列：那样没有执行器的动作在等它，进程起不来就丢了，所以交给账本重新登记）；已取走的照旧按崩溃处理。点了停止、控制消息还没回应时进程崩了，没取走的照停止处理（用户的取消，不收回）。
+- 中途写的那一行写回调还没回来进程就退出（管道写满时会这样）：退出时已经按停止或崩溃收掉的，回调回来照那时的结论（不再出已送达）；写失败、期间点过停止的，用户的标已取消（`send` 返回 `cancelled`），不退回队列——不然停止之后会写给新起的进程。
 
-**codex**（`codex-driver.ts`）：忙时、知道当前 turn id 时发 `turn/steer`，回执成功算已送达，`userMessage` item（按文字对上是哪条，对不上按先后）算处理中；回执报错（`no active turn to steer` 等）退回驱动层自己的队列。`turn/completed` 时 steer 了没读到的：`interrupted` 标已取消，否则出 `message.requeued`；回执还没到这一轮就结束的，回执来了退回自己的队列。中途送达没有加关进程的路径（关进程仍只在 end、两轮之间重启、空闲关闭、end 后刚起的进程这几处，第 10.2 节的后台命令问题不在这次范围）。
+**codex**（`codex-driver.ts`）：忙时、知道当前 turn id 时发 `turn/steer`，回执成功算已送达，`userMessage` item（按文字对上是哪条，对不上按先后）算处理中；回执报错（`no active turn to steer` 等）退回驱动层自己的队列（最前面）。`turn/completed` 时 steer 了没读到的：`interrupted` 标已取消，否则出 `message.requeued`；回执还没到这一轮就结束的，回执来了退回自己的队列，这时才算闲下来（接着发、空闲计时、`end` 才返回）。等回执期间点了停止（或这一轮以 `interrupted` 结束）的，回执来了按停止处理：用户的标已取消，系统的退回队列、停止后照常发。点了停止、`turn/interrupt` 还没结果时进程崩了，没读到的照停止处理。中途送达没有加关进程的路径（关进程仍只在 end、两轮之间重启、空闲关闭、end 后刚起的进程这几处，第 10.2 节的后台命令问题不在这次范围）。
 
 **agy**：声明 `mode:"none"`，照旧排队、连发照旧合并。停止时写进去了、还没出 `user_input` 的标已取消（停止时 agy 先出一个 interrupted 的 result 再退出，两条路都处理）。
 
 **停止的统一规矩**（用户定的）：按了停止，agent 还没看到的**用户**消息都取消、不发——还在账本里排队的（账本 `requestStop` 当场标已取消）、在驱动层自己队列里的（`interrupt` 丢掉、出 `message.cancelled`）、一轮中途写进去还没被取走的（上面各家的做法），三家一样（`src/daemon/driver/stop-untaken.ts`）。**系统消息**（Worker 汇报、定时任务、交接）不取消：队列里的停止后照常发，写进去没被取走的收回重发——它们不是用户发的，取消了项目经理就收不到汇报，用户也没法替它们重发。网页上已取消的气泡变淡、下面一行“已取消”，没有重试，用户想再发自己复制。
 
+**账本**：
+- `message.requeued` 重新登记 `session.send` 是按去重键 UPSERT 的：同一条消息的 `session.send` 还在跑（`send` 还没返回时被收回）就只改了参数，跑完变 `done`，消息会一直排队中。处理函数在 `written` 之后再读一次消息，又回到排队中就返回 `later`（`handlers.ts`）。
+- Worker 汇报：中途送达的不算这一轮的开头；没赶上上一轮、claude 为它另起一轮的，它的 `message.processing` 到时补记这一轮的开头（不然这一轮只调工具没文字时会拿上一轮最后那段文字再汇报一次）。用户直接对 Worker 说的话，中途送达的等 `message.processing` 才告诉项目经理（读到之前点停止会被取消，项目经理不该收到“用户说了 X”）。
+- 交接（`handover.ts`）不认 `cancelled`：交接的两种消息是系统消息，停止时不取消。
+
 **已知没处理**：claude 一轮刚结束、它为没赶上的消息另起的下一轮还没开始的那几毫秒里点停止，消息会正常取消，但网页上的“正在停”可能要等下一个事件才消失。
 
-**没做的**：`priority:"now"`（立即插话）；网页上按 `mode` 显示“agent 不会中途看到”的提示。
+**没做的**：`priority:"now"`（立即插话）；网页上按厂商显示“agent 不会中途看到”的提示（能力声明也就没做成接口）。
 
 **冒烟**（`test/smoke/mid-turn.ts`，`pnpm smoke S27 S28`，直接用驱动层）：claude（haiku）、codex（gpt-5.6-luna）在 `sleep 8` 时说“停下”，都是第 1 条命令跑完就读到、同一轮一个结束、不再跑后面的；写进去还没读到就停止，都标已取消、停止后 8 秒没有新的一轮。

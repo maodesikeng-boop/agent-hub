@@ -62,7 +62,9 @@ export type FakeStep =
    */
   | { bash: string }
   /** 发一条 system/background_tasks_changed，tasks 是完整名单（见 BackgroundTaskSpec）。 */
-  | { backgroundTasks: BackgroundTaskSpec[] };
+  | { backgroundTasks: BackgroundTaskSpec[] }
+  /** 从此不再读标准输入（管道写满后对面的写入一直等着，测写回调还没回来进程就退出）。 */
+  | { stopReading: true };
 
 /** 字符串就是 task_id，其余字段照真 claude（实测见 docs/m0-report.md）补上；对象原样发（测 ambient、残缺条目）。 */
 export type BackgroundTaskSpec = string | Record<string, unknown>;
@@ -124,6 +126,8 @@ export interface FakeScript {
    * 有 msg_lifecycle_v1 才按真 claude 的“一轮中途取走”和 command_lifecycle 走（见文件开头）。
    */
   capabilities?: string[];
+  /** 带 cancel_queued 的 interrupt：回执里不列 cancelled（只有 still_queued），被取消的照样各出 command_lifecycle cancelled。 */
+  receiptWithoutCancelled?: boolean;
 }
 
 /**
@@ -491,6 +495,8 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
       emit({ type: "rate_limit_event", rate_limit_info: step.rateLimit, uuid: randomUUID(), session_id: sessionId });
     } else if ("raw" in step) {
       process.stdout.write(step.raw + "\n");
+    } else if ("stopReading" in step) {
+      rl.pause();
     } else if ("exit" in step) {
       exit(step.exit);
     } else if ("apiRetry" in step) {
@@ -633,7 +639,9 @@ function onLine(line: string): void {
         msg.request?.subtype === "initialize"
           ? { commands: script.commands, models: [] }
           : cancel
-            ? { still_queued: [], cancelled: queued }
+            ? script.receiptWithoutCancelled
+              ? { still_queued: [] }
+              : { still_queued: [], cancelled: queued }
             : { still_queued: lifecycle ? queued : [] };
       emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: body } });
       if (cancel) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");

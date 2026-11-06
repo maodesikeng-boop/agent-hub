@@ -1113,12 +1113,11 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
 
 
 describe("6. 一轮中途的消息（agy 不支持，照旧排队；停止时还没取走的标已取消）", () => {
-  it("声明不支持中途送达：忙时 send 返回 queued，这一轮结束再写", async () => {
+  it("不支持中途送达：忙时 send 返回 queued，这一轮结束再写", async () => {
     const t = makeAgyHarness();
     const gate = join(t.dir, "go");
     writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{ steps: [{ type: "waitFile", path: gate }, { type: "text", deltas: ["一"] }] }, { steps: [{ type: "text", deltas: ["二"] }] }] }));
     const s = t.addSession();
-    expect(t.driver.midTurnSupport(s.id)).toMatchObject({ mode: "none" });
     await t.driver.send(s.id, user(1, "一"));
     await t.waitFor("message.processing");
     await expect(t.driver.send(s.id, user(2, "二"))).resolves.toEqual({ kind: "queued" });

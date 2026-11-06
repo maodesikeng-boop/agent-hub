@@ -11,7 +11,6 @@ import {
   type AgentSessionRow,
   type AgentToolEvent,
   type LaunchFiles,
-  type MidTurnSupport,
   type RateLimitInfo,
   type RateLimitWindow,
 } from "../../shared/index.ts";
@@ -227,18 +226,6 @@ export function buildTurnStartRequest(
 }
 
 /** 构造 turn/interrupt 请求。 */
-/**
- * codex 的一轮中途交给 agent（docs/mid-turn-messages.md 第 8 节）：turn/steer，当前命令跑完或当前这次模型回复写完就在同一轮读到；
- * 这一轮结束都没读到的（userMessage 没出）codex 不会再处理，驱动层收回（message.requeued）；停止时它们被静默丢掉。
- */
-export const CODEX_MID_TURN: MidTurnSupport = {
-  mode: "direct",
-  seenAfter: "model_step",
-  missed: "requeue",
-  consumedBy: "echo_item",
-  onStopWritten: "vendor_drops_them",
-};
-
 /**
  * 往正在跑的这一轮加一条用户消息（turn/steer）。expectedTurnId 要是当前这一轮（turn/start 的回执或 turn/started 里的 id），
  * 不对、或者没有正在跑的轮，codex 回 -32600（“no active turn to steer”“expected active turn id … but found …”）。

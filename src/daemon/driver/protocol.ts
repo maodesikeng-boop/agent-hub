@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../../shared/index.ts";
 import type {
   AgentSessionRow,
-  MidTurnSupport,
   AgentTextEvent,
   AgentThinkingEvent,
   AgentVendor,
@@ -87,15 +86,6 @@ export function buildInterruptLine(requestId: string, cancelQueued = false): str
  * interrupt_cancel_queued_v1 才能在停止时取消还没取走的。两个都有才中途写，少一个就照旧排在驱动层自己的队列里。
  */
 export const MID_TURN_CAPABILITIES = ["msg_lifecycle_v1", "interrupt_cancel_queued_v1"] as const;
-
-/** claude 的一轮中途写入（init 里有 MID_TURN_CAPABILITIES 时）：当前工具跑完被同一轮读到；没赶上的 claude 自己排到下一轮。 */
-export const CLAUDE_MID_TURN: MidTurnSupport = {
-  mode: "direct",
-  seenAfter: "tool",
-  missed: "next_turn",
-  consumedBy: "lifecycle_event",
-  onStopWritten: "vendor_runs_them",
-};
 
 /** system/init 里的 capabilities（字符串数组）；没有或不是数组当空。 */
 export function parseCapabilities(obj: Record<string, unknown>): Set<string> {

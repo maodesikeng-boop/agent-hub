@@ -27,7 +27,6 @@ import {
   START_TIMEOUT_MS,
   STDIO_DRAIN_MS,
   RUNNING_COMMANDS_TIMEOUT_MS,
-  NO_MID_TURN,
   type AgentSessionPatch,
   type ComposerCommand,
   type AgentSessionRow,
@@ -41,13 +40,11 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
-  type MidTurnSupport,
   type SessionExitReason,
   type SessionId,
   type Unsubscribe,
 } from "../../shared/index.ts";
 import {
-  CLAUDE_MID_TURN,
   MID_TURN_CAPABILITIES,
   buildChildEnv,
   buildClaudeArgs,
@@ -98,7 +95,14 @@ interface Batch {
   midTurn: boolean;
   /** 用户的（几条拼成一条的也是）还是系统的：停止时没取走的，用户的取消、系统的收回（stop-untaken.ts）。 */
   source: MessageSource;
+  /** 中途写的这一行写回调还没回来时用户点了停止：写失败（进程正好没了）的话按停止处理，用户的标已取消、不退回队列。 */
+  stopped: boolean;
+  /** 没取走就被收掉了（停止、进程没了）：cancelled = 已出 message.cancelled；requeued = 收回了，要重新写。写回调晚到时照这个办。 */
+  released: "cancelled" | "requeued" | null;
 }
+
+/** 一轮中途写一行的结果：written 写成了；cancelled 停止时被取消了；retry 没写成，退回待发队列。 */
+type MidTurnWrite = "written" | "cancelled" | "retry";
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
@@ -253,13 +257,6 @@ export class ClaudeDriver implements Driver {
     return Boolean(proc && !proc.closing);
   }
 
-  midTurnSupport(sessionId: SessionId): MidTurnSupport {
-    const proc = this.#sessions.get(sessionId)?.proc;
-    // 还没 init 不知道这个 claude 支不支持：按声明的说（写的时候会再按 init 判断）
-    if (!proc?.initSeen) return CLAUDE_MID_TURN;
-    return midTurnCapable(proc) ? CLAUDE_MID_TURN : NO_MID_TURN;
-  }
-
   async start(sessionId: SessionId): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);
@@ -325,7 +322,9 @@ export class ClaudeDriver implements Driver {
       if (proc && this.#canWriteMidTurn(st, proc, entry)) {
         const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
         batch.midTurn = true;
-        if (await this.#writeMidTurn(st, proc, batch)) return { kind: "written", midTurn: true };
+        const outcome = await this.#writeMidTurn(st, proc, batch);
+        if (outcome === "written") return { kind: "written", midTurn: true };
+        if (outcome === "cancelled") return { kind: "cancelled" };
         // 没写成（进程正好没了）：退回待发队列，照旧等
         this.#dropBatch(st, batch);
       }
@@ -356,14 +355,25 @@ export class ClaudeDriver implements Driver {
     );
   }
 
-  /** 一轮中途写一行：不重启、不调 prepareLaunch、不动这一轮的打断标记。写成了返回 true。 */
-  async #writeMidTurn(st: SessionState, proc: Proc, batch: Batch): Promise<boolean> {
+  /** 一轮中途写一行：不重启、不调 prepareLaunch、不动这一轮的打断标记。 */
+  async #writeMidTurn(st: SessionState, proc: Proc, batch: Batch): Promise<MidTurnWrite> {
     st.inFlight.push(batch);
     this.#clearTimer(st, "idleTimer");
-    return new Promise<boolean>((resolve) => {
+    return new Promise<MidTurnWrite>((resolve) => {
       proc.child.stdin.write(batch.line + "\n", (err) => {
-        if (!err) this.#markDelivered(st, batch);
-        resolve(!err);
+        // 写回调回来之前进程已经退出、这一行按停止或崩溃收掉了（#onClose）：照那时的结论，不再算送达
+        if (batch.released !== null) return resolve(batch.released === "cancelled" ? "cancelled" : "retry");
+        if (!err) {
+          this.#markDelivered(st, batch);
+          return resolve("written");
+        }
+        // 没写成（进程正好没了）。写的期间点了停止：用户的标已取消，不退回队列（不然停止之后又写给新进程）
+        this.#dropBatch(st, batch);
+        if (batch.stopped && batch.source === "user") {
+          this.#emit(st.id, { type: "message.cancelled", messageIds: batch.messageIds, reason: "stop", at: Date.now() });
+          return resolve("cancelled");
+        }
+        resolve("retry");
       });
     });
   }
@@ -431,6 +441,8 @@ export class ClaudeDriver implements Driver {
     const proc = st.proc;
     if (!proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
+    // 中途写的、写回调还没回来的：写失败的话也按停止处理（#writeMidTurn）
+    for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
       const requestId = `interrupt-${++this.#requestSeq}`;
@@ -1127,6 +1139,7 @@ export class ClaudeDriver implements Driver {
 
   /** 停止时 claude 没取走的：用户的标已取消，不重发；系统的（Worker 汇报等）收回，账本重新登记发送（stop-untaken.ts）。 */
   #releaseOnStop(st: SessionState, batches: Batch[], at: number): void {
+    for (const b of batches) b.released = b.source === "user" ? "cancelled" : "requeued";
     this.#forgetWritten(st, batches.filter((b) => b.source === "system"));
     for (const event of untakenOnStopEvents(batches, at)) this.#emit(st.id, event);
   }
@@ -1263,6 +1276,8 @@ export class ClaudeDriver implements Driver {
         st.crashNote = true;
         this.#forgetWritten(st, taken);
       }
+      // 点了停止、控制消息还没回应时进程没了（崩溃也算）：没取走的照停止处理，用户的不收回重发
+      const stopped = reason === "interrupt" || st.stopRequested;
       st.interruptRequestId = null;
       st.stopRequested = false;
       this.#emit(st.id, {
@@ -1276,11 +1291,12 @@ export class ClaudeDriver implements Driver {
       });
       const untakenIds = untaken.flatMap((b) => b.messageIds);
       if (untakenIds.length > 0) {
-        if (reason === "interrupt") {
-          // 用户点的停止（控制消息没回应才 SIGINT）：和带 cancel_queued 的停止一样，用户的标已取消、系统的收回
+        if (stopped) {
+          // 用户点的停止（控制消息没回应才 SIGINT，或者等回应时崩了）：和带 cancel_queued 的停止一样，用户的标已取消、系统的收回
           this.#releaseOnStop(st, untaken, at);
         } else {
           // 崩溃、关机：进程没了，claude 里排着的也没了。放回去由账本重新登记发送（不加重发说明，模型没看到过）
+          for (const b of untaken) b.released = "requeued";
           this.#forgetWritten(st, untaken);
           this.#emit(st.id, { type: "message.requeued", messageIds: untakenIds, at });
         }
@@ -1477,7 +1493,7 @@ function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, star
 }
 
 function newBatch(messageIds: MessageId[], line: string, uuid: string, notes: Batch["notes"], source: MessageSource): Batch {
-  return { messageIds, line, uuid, notes, delivered: false, processing: false, started: false, midTurn: false, source };
+  return { messageIds, line, uuid, notes, delivered: false, processing: false, started: false, midTurn: false, source, stopped: false, released: null };
 }
 
 /** 这个进程能在一轮中途写入：init 里 MID_TURN_CAPABILITIES 都有。 */

@@ -33,8 +33,6 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
-  type MidTurnSupport,
-  NO_MID_TURN,
   type SessionExitReason,
   type SessionId,
   type TokenUsage,
@@ -219,14 +217,6 @@ export class AgyDriver implements Driver {
   isRunning(sessionId: SessionId): boolean {
     const proc = this.#sessions.get(sessionId)?.proc;
     return Boolean(proc && !proc.closing);
-  }
-
-  /**
-   * agy 一轮中途读不到新消息（headless 没有插话接口，写进去也排到整轮之后，docs/mid-turn-messages.md 第 7 节）：
-   * 忙时照旧排在驱动层自己的队列里（连发的拼成一条，agy 自己不合并）。
-   */
-  midTurnSupport(_sessionId: SessionId): MidTurnSupport {
-    return NO_MID_TURN;
   }
 
   async start(sessionId: SessionId): Promise<void> {

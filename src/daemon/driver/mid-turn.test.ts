@@ -46,7 +46,6 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "跑 3 条命令"));
     await t.waitFor("agent.text");
-    expect(t.driver.midTurnSupport(s.id)).toMatchObject({ mode: "direct", seenAfter: "tool" });
     await expect(t.driver.send(s.id, user(2, "停下，只跑一条"))).resolves.toEqual({ kind: "written", midTurn: true });
     expect(t.of("message.delivered").map((e) => [e.messageIds, e.midTurn])).toEqual([
       [[1], undefined],
@@ -112,7 +111,6 @@ describe("不支持时退回排队", () => {
     const s = h.addSession();
     await h.driver.send(s.id, user(1, "一"));
     await h.waitFor("message.processing");
-    expect(h.driver.midTurnSupport(s.id)).toMatchObject({ mode: "none" });
     await expect(h.driver.send(s.id, user(2, "二"))).resolves.toEqual({ kind: "queued" });
     await expect(h.driver.send(s.id, user(3, "三"))).resolves.toEqual({ kind: "queued" });
     await h.waitFor("turn.ended", () => true, 2);
@@ -299,6 +297,69 @@ describe("崩溃、重启：只有写进去了还没开始处理的放回去重�
     expect(exited).toMatchObject({ reason: "interrupt", messageIds: [] });
     expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
     expect(t.of("message.requeued")).toEqual([]);
+  });
+});
+
+describe("停止碰上别的事（审查后补的）", () => {
+  it("回执里没列 cancelled、只出了 command_lifecycle cancelled：照样标已取消，之后不再跑", async () => {
+    const t = harness([]);
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({ capabilities: CAPS, receiptWithoutCancelled: true, turns: [toolTurn(t.dir)], defaultTurn: { steps: [{ text: "不该跑" }] } }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.text");
+    await t.driver.send(s.id, user(2, "插一句"));
+    await t.driver.interrupt(s.id);
+    expect(await t.waitFor("message.cancelled")).toMatchObject({ messageIds: [2], reason: "stop" });
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1], interrupted: true });
+    await realSleep(200);
+    expect(t.of("turn.ended")).toHaveLength(1);
+    expect(t.of("message.cancelled")).toHaveLength(1);
+    expect(t.of("message.requeued")).toEqual([]);
+  });
+
+  it("点了停止、控制消息还没回应时进程崩了：没取走的用户消息标已取消，不收回重发", async () => {
+    const t = harness([], {}, { interruptGraceMs: 5000 });
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({ capabilities: CAPS, ignoreControl: true, turns: [{ steps: [{ text: "开始跑" }, gate(t.dir), { exit: 1 }] }], defaultTurn: { steps: [{ text: "不该跑" }] } }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.text");
+    await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    const stopping = t.driver.interrupt(s.id);
+    release(t, "go");
+    await stopping;
+    expect(await t.waitFor("session.exited")).toMatchObject({ reason: "crash", messageIds: [1] });
+    expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    expect(t.of("message.requeued")).toEqual([]);
+  });
+
+  it("中途写的那一行写回调还没回来（管道满了）就点了停止、进程随后退出：用户消息标已取消、send 返回 cancelled，不退回队列再写", async () => {
+    const t = harness([], {}, { interruptGraceMs: 200 });
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({ capabilities: CAPS, turns: [{ steps: [{ text: "开始跑" }, { stopReading: true }, { text: "不读了" }, gate(t.dir)] }], defaultTurn: { steps: [{ text: "好" }] } }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.text", (e) => e.text === "不读了");
+    // 比管道缓冲大得多：对面不读，写回调就一直不回来
+    const sending = t.driver.send(s.id, user(2, `插一句${"x".repeat(1_000_000)}`));
+    await realSleep(50);
+    const stopping = t.driver.interrupt(s.id);
+    await expect(sending).resolves.toEqual({ kind: "cancelled" });
+    await stopping;
+    await t.waitFor("session.exited");
+    expect(t.of("message.cancelled").flatMap((e) => e.messageIds)).toEqual([2]);
+    expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
+    // 下一条照常起新进程写，前面那条没跟着再写一次
+    await t.driver.send(s.id, user(3, "下一条"));
+    await t.waitFor("turn.ended", (e) => e.messageIds.includes(3));
+    expect(t.stdinTexts().at(-1)).toBe("下一条");
   });
 });
 

@@ -106,7 +106,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       const renewed = latest(conversation.id, "session.renewed");
       if (renewed !== undefined && renewed.session_id === session.id) {
         if (["queued", "delivered", "processing"].includes(renewed.status!)) return { messageId: renewed.id };
-        if (renewed.status === "failed" || renewed.status === "stopped" || renewed.status === "cancelled") {
+        if (renewed.status === "failed" || renewed.status === "stopped") {
           requeue(p, renewed, { ...metaOf(renewed), attempts: 0, settled: false });
           return { messageId: renewed.id };
         }
@@ -115,7 +115,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       // 每一代最多一条交接请求：还在等就是它；上一次被停止、失败了，同一条重新排队（和用户点重试一样）
       const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(conversation.id, meta));
       if (existing === undefined) return { messageId: insertQueued(p, session, meta, HANDOVER_REQUEST_TEXT) };
-      if (existing.status === "stopped" || existing.status === "failed" || existing.status === "cancelled") requeue(p, existing, { ...metaOf(existing), settled: false });
+      if (existing.status === "stopped" || existing.status === "failed") requeue(p, existing, { ...metaOf(existing), settled: false });
       return { messageId: existing.id };
     });
 
@@ -186,10 +186,10 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     insertSystemMessage(p, row.conversation_id, { event: "handover.failed", messageId: row.id, attempt }, text);
   };
 
-  /** 这个对话里刚没成（失败、被停止、被取消）还没处理过的 H、R：H 提示一句；R 重新排队，次数用完提示一句。 */
+  /** 这个对话里刚没成（失败、被停止）还没处理过的 H、R：H 提示一句；R 重新排队，次数用完提示一句。 */
   const settleFailures = (p: Pending, conversationId: ConversationId) => {
     const rows = db.all<MessageDbRow>(
-      `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'system' AND kind = 'text' AND status IN ('failed', 'stopped', 'cancelled')
+      `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'system' AND kind = 'text' AND status IN ('failed', 'stopped')
          AND json_extract(meta, '$.event') IN ('handover.requested', 'session.renewed') AND json_extract(meta, '$.settled') IS NOT 1`,
       conversationId,
     );
@@ -201,7 +201,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
       const attempts = meta.attempts ?? 0;
       if (attempts < HANDOVER_RENEW_RETRIES) requeue(p, row, { ...meta, attempts: attempts + 1 }, retryDelayMs(ACTION_RETRY["session.send"], attempts + 1));
-      else notify(p, row, meta, renewFailedText(row.failure_reason ?? (row.status === "failed" ? "没送成" : "被停止了")));
+      else notify(p, row, meta, renewFailedText(row.failure_reason ?? (row.status === "stopped" ? "被停止了" : "没送成")));
     }
   };
 
@@ -217,10 +217,8 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
       return;
     }
-    // 只有这几种事件会把消息标成失败、已停止、已取消
-    if (event.type === "turn.ended" || event.type === "session.exited" || event.type === "driver.error" || event.type === "message.cancelled") {
-      settleFailures(p, session.conversationId);
-    }
+    // 只有这几种事件会把消息标成失败、已停止（已取消只有用户发的消息会有，交接的 H、R 是系统消息，停止时不取消：stop-untaken.ts）
+    if (event.type === "turn.ended" || event.type === "session.exited" || event.type === "driver.error") settleFailures(p, session.conversationId);
     // 交接请求那一轮正常结束（已回复），而且它的会话还是最新一代（重放的同一个事件不会再换）：换代
     if (event.type !== "turn.ended" || !event.ok || event.interrupted) return;
     for (const id of event.messageIds) {

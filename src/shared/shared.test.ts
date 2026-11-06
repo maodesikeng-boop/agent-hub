@@ -225,8 +225,8 @@ describe("驱动层错误", () => {
     expect(new DriverError("invalid_input", "bad role").retryable).toBe(false);
   });
 
-  it("send 的结果只有三种", () => {
-    expectTypeOf<DriverSendResult["kind"]>().toEqualTypeOf<"written" | "queued" | "rejected">();
+  it("send 的结果只有四种", () => {
+    expectTypeOf<DriverSendResult["kind"]>().toEqualTypeOf<"written" | "queued" | "cancelled" | "rejected">();
   });
 });
 

@@ -55,7 +55,6 @@ function makeFakeDriver(name: string) {
     }),
     send: vi.fn(async () => ({ kind: "written" as const })),
     interrupt: vi.fn(async () => {}),
-    midTurnSupport: () => ({ mode: name === "agy" ? ("none" as const) : ("direct" as const) }),
     end: vi.fn(async (id: SessionId) => {
       running.delete(id);
     }),

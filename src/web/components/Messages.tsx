@@ -446,7 +446,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
             BUBBLE,
             "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
             // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
-            message.status === "cancelled" && "opacity-55",
+            message.status === "cancelled" && "opacity-60",
           )}
         >
           {message.text}

@@ -91,7 +91,6 @@ async function runVendor(outcomes: Outcome[], only: (name: string) => boolean, n
   if (only(`${name}a`)) {
     const r = rig(vendor);
     const ok = await scenario(outcomes, `${name}a ${vendor} 跑 sleep 8 时用户说“停下”：中途送达，命令跑完就读到，不再跑后面的`, async () => {
-      expect(r.driver.midTurnSupport(r.sessionId).mode === "direct", "没声明支持中途送达");
       await sendStopWhileRunning(r);
       const toolsAtSend = sleepTools(r).length;
       await waitUntil("“停下”所在那一轮结束", () => of(r, "turn.ended").find((e) => e.messageIds.includes(2)), TURN_MS);
