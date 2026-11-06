@@ -157,6 +157,22 @@ describe("groupMessages：一轮一轮", () => {
       "message:5",
     ]);
   });
+
+  it("换新会话：交接请求排队时就来了、压到换代才交给新会话的 Worker 汇报，显示在分隔线下面；旧会话处理的留在上面（审查 #113 第 8 条）", () => {
+    const shown = (items: ReturnType<typeof groupMessages>) => items.map((i) => (i.kind === "turn" ? `turn:${i.parts.map((m) => m.id).join(",")}` : `message:${i.message.id}`));
+    const items = groupMessages([
+      // 用户点开新会话时项目经理在忙（1、2 那一轮，旧会话）；交接请求 3 排着，这时来了 Worker 汇报 4（压着）
+      makeUserMessage({ id: 1, sessionId: 1, status: "replied" }),
+      makeSystemMessage({ id: 3, sessionId: 1, status: "replied", text: "【系统】请写交接", event: { event: "handover.requested", sessionId: 1 } }),
+      makeWorkerLine({ id: 4, sessionId: 2, status: "replied", line: { event: "report", status: "done", summary: "好了" } }),
+      makeMessage({ id: 5, sessionId: 1 }),
+      // 6 起是写交接那一轮（turnStartId 5），换代后 4 交给新会话 2，回了 8
+      makeMessage({ id: 6, sessionId: 1, meta: { handover: true } }),
+      makeSystemMessage({ id: 7, text: "交接", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 5 } }),
+      makeMessage({ id: 8, sessionId: 2 }),
+    ]);
+    expect(shown(items)).toEqual(["message:1", "turn:5", "message:7", "message:4", "turn:8"]);
+  });
 });
 
 describe("parseServerMessage", () => {

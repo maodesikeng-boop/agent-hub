@@ -81,6 +81,8 @@ export interface LedgerOptions {
   findTranscript?: HandoverOptions["findTranscript"];
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；冒烟测试改小。 */
   autoRenew?: HandoverOptions["autoRenew"];
+  /** 写守护进程日志（目前只有自动换新会话试满了次数时写一条）；不给不写。 */
+  log?: (line: string) => void;
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
@@ -112,7 +114,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
-  const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew });
+  const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew, log: options.log });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const steps = createLedgerSteps(ctx);
   const workerView = createLedgerWorkerView(ctx, steps, {

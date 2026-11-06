@@ -7,18 +7,27 @@
 //    text 是交接全文，网页显示成分隔线）。新会话不另开一轮：开场说明 + 交接 + 最近 HANDOVER_RECENT_MESSAGES 条原话由驱动层拼在
 //    第一条真正写给它的消息前面（sessionPreamble）；带着它的那一行开始处理时（message.processing 的 preamble）记 R 的 seen，之后不再拼；
 // 3. 换代期间（H 还没结果）这个对话里同一代或更晚的别的消息都压着（waitsForHandover），换代时改发给新会话，带着上面的开场说明；
-// 4. H 没写成（失败、被停止、写了超过 HANDOVER_TIMEOUT_MS 被停掉）：不换代，压着的消息照常发给旧会话。用户点的对话里提示一句；
-//    自动换的不提示，等之后又有一轮正常结束、再空闲时再试。
+// 4. H 没写成（失败、被停止、写了超过 HANDOVER_TIMEOUT_MS 被停掉、正常回完却一个字没写）：不换代，压着的消息照常发给旧会话。
+//    用户点的对话里提示一句；自动换的不提示，等之后又有一轮正常结束、再空闲、过了退避（AUTO_RENEW_RETRY_BACKOFF_MS，每次翻倍）
+//    时再试，每一代最多自动试 AUTO_RENEW_MAX_ATTEMPTS 次，用完记一条日志、这一代不再自动换（用户点的照常）。
 // 换代和那一轮的结果在同一个事务里：重启只会落在换代前（交接请求按“至少一次”重发给旧会话）或换代后，不会换两次。
 // H 的 meta 里另记几个字段（只有这里用）：requestedAt（登记、重新排队的时间）、startedAt 和 turnStartId（H 开始处理的时间、
-// 那时库里最大的消息编号）、abandoned（超时请驱动层停掉了）、settled（这次没成已经处理过；重新排队时清掉）、notices（提示过几次，
-// 做去重键）。R 的 meta 另记 seen（新会话读到开场说明了）。
+// 那时库里最大的消息编号）、writing（agent 正在写交接的那一轮：H 开始处理起，到这个会话的这一轮结束、进程退出、或别的消息开始处理为止；
+// 这期间 agent 的文字记 meta.handover，不看 H 现在的状态）、abandoned（超时请驱动层停掉了）、settled 和 failedAt（这次没成已经处理过、
+// 什么时候；重新排队时清掉）、notices（提示过几次，做去重键）、autoAttempts（这一代自动试过几次）。R 的 meta 另记 seen（新会话读到开场说明了）。
 import { agentTextOf } from "../../shared/attachments.ts";
 import { systemEventOf, systemMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { AUTO_RENEW_CONTEXT_TOKENS, AUTO_RENEW_IDLE_MS, HANDOVER_RECENT_MESSAGES, HANDOVER_TIMEOUT_MS } from "../../shared/limits.ts";
+import {
+  AUTO_RENEW_CONTEXT_TOKENS,
+  AUTO_RENEW_IDLE_MS,
+  AUTO_RENEW_MAX_ATTEMPTS,
+  AUTO_RENEW_RETRY_BACKOFF_MS,
+  HANDOVER_RECENT_MESSAGES,
+  HANDOVER_TIMEOUT_MS,
+} from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
@@ -37,6 +46,8 @@ export interface HandoverOptions {
   findTranscript?: FindTranscript;
   /** 自动换新会话的门槛、空闲多久、写交接最多多久，默认见 limits.ts；冒烟测试改小。 */
   autoRenew?: { contextTokens?: number; idleMs?: number; timeoutMs?: number };
+  /** 写守护进程日志（自动换新会话试满了次数）；默认不写。 */
+  log?: (line: string) => void;
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
@@ -95,6 +106,9 @@ export function sessionPreambleText(options: {
   ].join("\n\n");
 }
 
+/** 交接那一轮回完了却没写出文字：交接请求标失败，failureReason 是这个。 */
+export const HANDOVER_EMPTY_REASON = "handover_empty";
+
 /** 用户点的开新会话那一轮没写成时对话里的提示（自动换的不提示）。 */
 export const HANDOVER_NOT_WRITTEN_TEXT = "交接没写成，没换会话";
 
@@ -107,9 +121,12 @@ type HandoverMeta = {
   requestedAt?: number;
   startedAt?: number;
   turnStartId?: number;
+  writing?: boolean;
   abandoned?: boolean;
   settled?: boolean;
+  failedAt?: number;
   notices?: number;
+  autoAttempts?: number;
   seen?: boolean;
 };
 
@@ -132,6 +149,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const contextTokens = options.autoRenew?.contextTokens ?? AUTO_RENEW_CONTEXT_TOKENS;
   const idleMs = options.autoRenew?.idleMs ?? AUTO_RENEW_IDLE_MS;
   const timeoutMs = options.autoRenew?.timeoutMs ?? HANDOVER_TIMEOUT_MS;
+  const log = options.log ?? (() => {});
 
   const metaOf = (row: Pick<MessageDbRow, "meta">): HandoverMeta => JSON.parse(row.meta!) as HandoverMeta;
   const setMeta = (id: MessageId, meta: HandoverMeta) => db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), id);
@@ -158,7 +176,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     const text = handoverRequestText({ auto, transcriptPath: transcriptOf(session) });
     const existing = requestOf(session);
     if (existing === undefined) {
-      const meta: HandoverMeta = { event: "handover.requested", sessionId: session.id, ...(auto ? { auto: true } : {}), requestedAt: t };
+      const meta: HandoverMeta = { event: "handover.requested", sessionId: session.id, ...(auto ? { auto: true, autoAttempts: 1 } : {}), requestedAt: t };
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
          VALUES (?, ?, 'system', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
@@ -176,8 +194,18 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     }
     // 还在等就是它；上一次被停止、失败了，同一条重新排队（文字按这一次是谁要换的重写）
     if (existing.status === "stopped" || existing.status === "failed") {
-      const { notices } = metaOf(existing);
-      const meta: HandoverMeta = { event: "handover.requested", sessionId: session.id, ...(auto ? { auto: true } : {}), requestedAt: t, ...(notices !== undefined ? { notices } : {}) };
+      const { notices, autoAttempts = 0, writing } = metaOf(existing);
+      const attempts = autoAttempts + (auto ? 1 : 0);
+      const meta: HandoverMeta = {
+        event: "handover.requested",
+        sessionId: session.id,
+        ...(auto ? { auto: true } : {}),
+        requestedAt: t,
+        ...(notices !== undefined ? { notices } : {}),
+        ...(attempts > 0 ? { autoAttempts: attempts } : {}),
+        // 上一次被标了停止、驱动层那一轮还没真停下来：那一轮剩下的文字照样不显示
+        ...(writing === true ? { writing } : {}),
+      };
       db.run("UPDATE messages SET status = 'queued', failure_reason = NULL, text = ?, meta = ?, updated_at = ? WHERE id = ?", text, JSON.stringify(meta), t, existing.id);
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: existing.id, source: "system" } });
       p.changes.push({ type: "message.updated", data: { message: getMessage(existing.id)! } });
@@ -228,16 +256,22 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       .reverse()
       .map((row) => ({ sender: row.sender, text: agentTextOf(toMessage(row)) }));
 
-  /** 换代。request 是旧会话里刚回完的交接请求。 */
-  const renew = (p: Pending, old: AgentSessionRow, request: MessageDbRow) => {
-    const conversationId = old.conversationId!;
-    const requestMeta = metaOf(request);
-    // 交接那一轮开始时库里最大的编号：交接全文取它之后的文字
-    const turnStart = requestMeta.turnStartId ?? request.id;
-    const handover = db
-      .all<{ text: string }>("SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id", old.id, turnStart)
+  /** 交接全文：交接那一轮开始时库里最大的编号（turnStartId）之后，旧会话说的文字。 */
+  const handoverTextOf = (old: AgentSessionRow, request: MessageDbRow): string =>
+    db
+      .all<{ text: string }>(
+        "SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id",
+        old.id,
+        metaOf(request).turnStartId ?? request.id,
+      )
       .map((r) => r.text)
       .join("\n\n");
+
+  /** 换代。request 是旧会话里刚回完的交接请求，handover 是它写的交接（不空）。 */
+  const renew = (p: Pending, old: AgentSessionRow, request: MessageDbRow, handover: string) => {
+    const conversationId = old.conversationId!;
+    const requestMeta = metaOf(request);
+    const turnStart = requestMeta.turnStartId ?? request.id;
 
     const next = insertSession(p, {
       conversationId,
@@ -271,7 +305,8 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role !== "pm" || session.conversationId === null || session.generation <= 1) return null;
     const row = renewedOf(session);
-    if (row === undefined) return null;
+    // 升级前手动换代留下的那一行是发给 agent 的（有状态，早就读过）；现在这一行状态恒为 null
+    if (row === undefined || row.status !== null) return null;
     const meta = metaOf(row);
     if (meta.seen === true) return null;
     const old = meta.fromSessionId === undefined ? null : getAgentSession(db, meta.fromSessionId);
@@ -283,6 +318,12 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     });
   };
 
+  /** agent 不再写这条交接请求的那一轮了（见文件开头的 writing）。 */
+  const endWriting = (request: MessageDbRow) => {
+    const meta = metaOf(request);
+    if (meta.writing === true) setMeta(request.id, { ...meta, writing: false });
+  };
+
   /** 这个对话里刚没成（失败、被停止）还没处理过的交接请求：用户点的提示一句，自动换的不提示。 */
   const settleFailures = (p: Pending, conversationId: ConversationId) => {
     const rows = db.all<MessageDbRow>(
@@ -291,12 +332,16 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     );
     for (const row of rows) {
       const meta = metaOf(row);
+      const settled = { ...meta, settled: true, failedAt: now() };
       if (meta.auto === true) {
-        setMeta(row.id, { ...meta, settled: true });
+        setMeta(row.id, settled);
+        if ((meta.autoAttempts ?? 0) >= AUTO_RENEW_MAX_ATTEMPTS) {
+          log(`[auto-renew] 项目经理 ${meta.sessionId} 号会话自动换新会话试了 ${meta.autoAttempts} 次都没写成交接，这一代不再自动换（资料页的“开新会话”照常能用）`);
+        }
         continue;
       }
       const attempt = (meta.notices ?? 0) + 1;
-      setMeta(row.id, { ...meta, settled: true, notices: attempt });
+      setMeta(row.id, { ...settled, notices: attempt });
       insertSystemMessage(p, row.conversation_id, { event: "handover.failed", messageId: row.id, attempt }, HANDOVER_NOT_WRITTEN_TEXT);
     }
   };
@@ -309,14 +354,21 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
         const renewed = renewedOf(session);
         if (renewed !== undefined && metaOf(renewed).seen !== true) setMeta(renewed.id, { ...metaOf(renewed), seen: true });
       }
-      // H 开始处理：记下那一刻库里最大的编号（之后的文字才是交接）和时间（算超时）
-      for (const id of event.messageIds) {
-        const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
-        if (row === undefined || systemEventOf(toMessage(row))?.event !== "handover.requested") continue;
+      // H 开始处理：记下那一刻库里最大的编号（之后的文字才是交接）和时间（算超时），从这起 agent 在写交接（writing）；
+      // 之前请驱动层停过却没东西可停的（守护进程停了很久再起，超时检查跑在重发之前）不算数，超时了重新请它停
+      const request = requestOf(session);
+      if (request === undefined) return;
+      if (event.messageIds.includes(request.id)) {
         const max = db.get<{ id: number }>("SELECT max(id) AS id FROM messages")!.id;
-        setMeta(id, { ...metaOf(row), turnStartId: max, startedAt: now() });
-      }
+        const { abandoned: _, ...meta } = metaOf(request);
+        setMeta(request.id, { ...meta, turnStartId: max, startedAt: now(), writing: true });
+      } else endWriting(request);
       return;
+    }
+    // 这个会话的这一轮结束、进程退出：写交接那一轮（如果是）到此为止
+    if (event.type === "turn.ended" || event.type === "session.exited") {
+      const request = requestOf(session);
+      if (request !== undefined) endWriting(request);
     }
     // 只有这几种事件会把消息标成失败、已停止（交接请求是系统消息，停止时不取消：stop-untaken.ts）
     if (event.type === "turn.ended" || event.type === "session.exited" || event.type === "driver.error") settleFailures(p, session.conversationId);
@@ -327,7 +379,15 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       const meta = row === undefined ? null : systemEventOf(toMessage(row));
       if (meta?.event !== "handover.requested" || row!.status !== "replied" || meta.sessionId !== session.id) continue;
       if (currentSession(session.conversationId)?.id !== session.id) return;
-      renew(p, session, row!);
+      // 回完了却一个字没写（只调了工具、回了空）：当没写成，不换代（不然新会话什么都接不上）
+      const handover = handoverTextOf(session, row!);
+      if (handover.trim() === "") {
+        db.run("UPDATE messages SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?", HANDOVER_EMPTY_REASON, now(), row!.id);
+        p.changes.push({ type: "message.updated", data: { message: getMessage(row!.id)! } });
+        settleFailures(p, session.conversationId);
+        return;
+      }
+      renew(p, session, row!, handover);
       return;
     }
   };
@@ -341,7 +401,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
 
   /**
    * 该自动换了：对话够长；这一代最后一条交给它的消息正常回完（没被打断、没失败；上次交接没写成的，要等之后又有一轮回完）；
-   * 没有排队、在路上的消息；会话空闲（没有后台任务）已经 idleMs 了。
+   * 没有排队、在路上的消息；会话空闲（没有后台任务）已经 idleMs 了；这一代自动试的次数没满、上次没成之后过了退避。
    */
   const dueForAutoRenew = (session: AgentSessionRow, t: number): boolean => {
     if (session.usage.context < contextTokens || session.status === "ended" || session.status === "broken") return false;
@@ -350,6 +410,13 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     if (db.get(`SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ${IN_FLIGHT} LIMIT 1`, session.conversationId) !== undefined) return false;
     const last = db.get<MessageDbRow>("SELECT * FROM messages WHERE session_id = ? AND status IS NOT NULL ORDER BY id DESC LIMIT 1", session.id);
     if (last === undefined || last.status !== "replied" || systemEventOf(toMessage(last))?.event === "handover.requested") return false;
+    // 这一代自动试过的：试满了不再试；没满的要过了退避（每没成一次翻倍）
+    const request = requestOf(session);
+    if (request !== undefined) {
+      const { autoAttempts = 0, failedAt } = metaOf(request);
+      if (autoAttempts >= AUTO_RENEW_MAX_ATTEMPTS) return false;
+      if (autoAttempts > 0 && failedAt !== undefined && t - failedAt < AUTO_RENEW_RETRY_BACKOFF_MS * 2 ** (autoAttempts - 1)) return false;
+    }
     const latest = db.get<{ at: number | null }>("SELECT max(updated_at) AS at FROM messages WHERE conversation_id = ?", session.conversationId)!.at ?? 0;
     return t - Math.max(latest, session.lastEventAt ?? 0) >= idleMs;
   };

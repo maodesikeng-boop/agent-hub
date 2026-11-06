@@ -98,12 +98,13 @@ export function createLedgerMessages(
   ) => {
     if (session.conversationId === null) return;
     const t = now();
-    // 项目经理在写交接（这个会话的交接请求已送达、在处理，ledger/handover.ts）：这一轮的文字、工具调用记 handover，网页不显示
+    // 项目经理在写交接（这个会话的交接请求开始处理后的那一轮，meta.writing，ledger/handover.ts）：这一轮的文字、工具调用记 handover，
+    // 网页不显示。按请求自己记的标记认，不看它现在的状态：超时被标了已停止、驱动层那一轮还在写的，照样不显示
     const handoverTurn =
       session.role === "pm" &&
       db.get(
-        `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text' AND status IN ('delivered', 'processing')
-           AND json_extract(meta, '$.event') = 'handover.requested' LIMIT 1`,
+        `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
+           AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
         session.id,
       ) !== undefined;
     const meta = handoverTurn ? { ...fields.meta, handover: true } : fields.meta;

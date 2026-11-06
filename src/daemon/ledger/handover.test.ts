@@ -8,12 +8,20 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import { isHandoverTraffic, systemEventOf, systemNoticeText, SESSION_RENEWED_NOTICE } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { AUTO_RENEW_CONTEXT_TOKENS, AUTO_RENEW_IDLE_MS, HANDOVER_RECENT_MESSAGES, HANDOVER_TIMEOUT_MS } from "../../shared/limits.ts";
+import {
+  AUTO_RENEW_CONTEXT_TOKENS,
+  AUTO_RENEW_IDLE_MS,
+  AUTO_RENEW_MAX_ATTEMPTS,
+  AUTO_RENEW_RETRY_BACKOFF_MS,
+  HANDOVER_RECENT_MESSAGES,
+  HANDOVER_TIMEOUT_MS,
+} from "../../shared/limits.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { StopEvent } from "./context.ts";
+import { HANDOVER_EMPTY_REASON } from "./handover.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 
@@ -83,6 +91,12 @@ function turn(sessionId: SessionId, messageIds: MessageId[], texts: string[], ok
   ledger.applyDriverEvent(sessionId, { type: "message.processing", at: now, messageIds, ...(preamble ? { preamble: true as const } : {}) });
   for (const text of texts) ledger.applyDriverEvent(sessionId, { type: "agent.text", at: now, uuid: `u${++uuid}`, text });
   ledger.applyDriverEvent(sessionId, { type: "turn.ended", at: now, ok, interrupted: false, messageIds, durationMs: 1 });
+}
+
+/** 交接请求写进去、agent 开始处理（这一轮还没结束）。 */
+function turnStart(sessionId: SessionId, request: MessageId) {
+  ledger.applyDriverEvent(sessionId, { type: "message.delivered", at: now, messageIds: [request] });
+  ledger.applyDriverEvent(sessionId, { type: "message.processing", at: now, messageIds: [request] });
 }
 
 function interrupted(sessionId: SessionId, messageIds: MessageId[]) {
@@ -499,7 +513,7 @@ describe("自动换新会话（runAutoRenew）", () => {
     expect(sendsOf(requests()[0]!.id)).toHaveLength(1);
   });
 
-  it("写交接那一轮出错：放弃，不提示、不换代，旧会话照常用；之后又有一轮回完、再空闲才再试", () => {
+  it("写交接那一轮出错：放弃，不提示、不换代，旧会话照常用；之后又有一轮回完、再空闲、过了退避才再试", () => {
     readyForAuto();
     ledger.runAutoRenew();
     const request = requests()[0]!.id;
@@ -513,9 +527,13 @@ describe("自动换新会话（runAutoRenew）", () => {
     now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
     expect(ledger.getMessage(request)!.status).toBe("failed");
-    // 回完了、再空闲：同一条重新排队
+    // 回完了、再空闲，但还没过退避：不试
     turn(firstSession, [during], ["回答"]);
     now += AUTO_RENEW_IDLE_MS;
+    ledger.runAutoRenew();
+    expect(ledger.getMessage(request)!.status).toBe("failed");
+    // 过了退避：同一条重新排队
+    now += AUTO_RENEW_RETRY_BACKOFF_MS;
     ledger.runAutoRenew();
     expect(ledger.getMessage(request)).toMatchObject({ status: "queued", meta: { auto: true } });
     turn(firstSession, [request], ["这次写完了"]);
@@ -578,5 +596,125 @@ describe("自动换新会话（runAutoRenew）", () => {
     now += HANDOVER_TIMEOUT_MS * 3;
     ledger.runAutoRenew();
     expect(ledger.getMessage(request)!.status).toBe("queued");
+  });
+
+  it("每一代最多自动试 AUTO_RENEW_MAX_ATTEMPTS 次，退避每次翻倍；试满了记一条日志，这一代不再自动换，用户点的照常（审查 #113 第 4 条）", () => {
+    const logs: string[] = [];
+    ledger = open({ log: (line) => logs.push(line) });
+    let backoff = AUTO_RENEW_RETRY_BACKOFF_MS;
+    for (let attempt = 1; attempt <= AUTO_RENEW_MAX_ATTEMPTS; attempt++) {
+      readyForAuto();
+      ledger.runAutoRenew();
+      const request = requests()[0]!;
+      expect(request).toMatchObject({ status: "queued", meta: { autoAttempts: attempt } });
+      turn(firstSession, [request.id], ["写了一半"], false);
+      if (attempt < AUTO_RENEW_MAX_ATTEMPTS) {
+        // 没过这一次的退避：不试
+        const id = post("问");
+        turn(firstSession, [id], ["答"]);
+        now += backoff - 1;
+        ledger.runAutoRenew();
+        expect(ledger.getMessage(request.id)!.status).toBe("failed");
+        now -= backoff - 1;
+        now += backoff;
+        backoff *= 2;
+      }
+    }
+    expect(logs).toEqual([expect.stringContaining(`试了 ${AUTO_RENEW_MAX_ATTEMPTS} 次`)]);
+    // 试满了：再怎么空闲也不自动换
+    readyForAuto();
+    now += AUTO_RENEW_RETRY_BACKOFF_MS * 100;
+    ledger.runAutoRenew();
+    expect(requests()[0]!.status).toBe("failed");
+    expect(logs).toHaveLength(1);
+    // 用户点的照常，写成了就换代；新一代重新算次数
+    const request = ledger.renewSession(pmId).messageId;
+    turn(firstSession, [request], ["交接"]);
+    expect(sessions()).toHaveLength(2);
+  });
+
+  it("守护进程停了超过超时再起：启动检查请停（没进程可停）不算数；重发后那一轮的文字都不显示，就算请求超时被标了已停止（审查 #113 第 5 条）", () => {
+    readyForAuto();
+    ledger.runAutoRenew();
+    const request = requests()[0]!.id;
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
+    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
+    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
+
+    // 停了很久再起：启动时先查一次，超时了请驱动层停（这时还没进程），交接请求按“至少一次”重发
+    now += HANDOVER_TIMEOUT_MS * 2;
+    ledger = open();
+    ledger.recoverAfterRestart();
+    ledger.runAutoRenew();
+    expect(stops).toHaveLength(1);
+    // 重发：驱动层起进程写进去，agent 开始写交接
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
+    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
+    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接第一段" });
+    // 这一轮又写超时：重新请它停（之前那次没东西可停），不直接标已停止
+    now += HANDOVER_TIMEOUT_MS;
+    ledger.runAutoRenew();
+    expect(stops).toHaveLength(2);
+    expect(ledger.getMessage(request)!.status).toBe("processing");
+    // 还是停不下来：再过一个超时标已停止；驱动层那一轮还在写，写出来的照样不显示
+    now += HANDOVER_TIMEOUT_MS;
+    ledger.runAutoRenew();
+    expect(ledger.getMessage(request)!.status).toBe("stopped");
+    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接第二段" });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
+    const texts = messages().filter((m) => m.sender === "agent");
+    expect(texts.filter((m) => !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀"]);
+    expect(sessions()).toHaveLength(1);
+    // 那一轮结束后，旧会话再回的话照常显示
+    const id = post("在吗");
+    turn(firstSession, [id], ["在"]);
+    expect(messages().filter((m) => m.sender === "agent" && !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀", "在"]);
+  });
+
+  it("写交接那一轮被标了已停止、驱动层还在写时，压着的消息放出来在那一轮中途被读到：从读到起 agent 的话照常显示", () => {
+    readyForAuto();
+    ledger.runAutoRenew();
+    const request = requests()[0]!.id;
+    turnStart(firstSession, request);
+    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接" });
+    const during = post("写交接时发的");
+    now += HANDOVER_TIMEOUT_MS;
+    ledger.runAutoRenew();
+    now += HANDOVER_TIMEOUT_MS;
+    ledger.runAutoRenew();
+    expect(ledger.getMessage(request)!.status).toBe("stopped");
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [during], midTurn: true });
+    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [during] });
+    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "回你" });
+    expect(messages().filter((m) => m.sender === "agent" && !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀", "回你"]);
+  });
+});
+
+describe("审查 #113", () => {
+  it("第 2 条：升级前手动换代留下的那一行（有状态、没有 seen）不当成新会话没读到，不再拼开场说明", () => {
+    const { g2, line } = renewNow();
+    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", line.id);
+    expect(ledger.sessionPreamble(g2)).toBeNull();
+  });
+
+  it.each([
+    ["只调了工具", () => ledger.applyDriverEvent(firstSession, { type: "agent.tool", at: now, uuid: `u${++uuid}`, toolUseId: `t${uuid}`, name: "Bash", input: { command: "ls" } })],
+    ["回了空", () => ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "  " })],
+  ])("第 3 条：交接那一轮正常结束但没写出文字（%s）：当没写成，不换代；用户点的提示一句，压着的消息照常发给旧会话", (_, act) => {
+    const request = ledger.renewSession(pmId).messageId;
+    const during = post("写交接时发的");
+    turnStart(firstSession, request);
+    act();
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
+    expect(sessions()).toHaveLength(1);
+    expect(renewed()).toBeUndefined();
+    expect(ledger.getMessage(request)).toMatchObject({ status: "failed", failureReason: HANDOVER_EMPTY_REASON });
+    expect(notices()).toHaveLength(1);
+    expect(ledger.waitsForHandover(during)).toBe(false);
+    expect(ledger.getMessage(during)!.sessionId).toBe(firstSession);
+    // 再点：同一条重新排队，这次写了就换
+    ledger.renewSession(pmId);
+    turn(firstSession, [request], ["交接"]);
+    expect(sessions()).toHaveLength(2);
   });
 });

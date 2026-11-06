@@ -18,6 +18,7 @@ import {
   type PmId,
   type Project,
   type ProjectFolder,
+  type SessionId,
   type SessionState,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
@@ -346,6 +347,8 @@ const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
 /**
  * 在“等你”的对话（m4-plan 2.2，不含“停稳 3 秒”，那个在 notify.ts）：对话自己和它派的 Worker 的会话都是 idle，
  * 没有排队、已送达、处理中的消息，最后一条不是用户发的，并且用户上次看之后又有了新消息。Worker 自己的对话不算。
+ * 换新会话那一轮不算（交接请求在路上、写交接时会话在忙，按 visibleSessionOf 的口径）：不然换一次会话，
+ * 对话会先退出“等你”再回来，同一条没看的回复又弹一次通知。
  */
 export function waitingConversations(state: HubState, lastSeen: LastSeen): ConversationId[] {
   return Object.values(state.conversations)
@@ -353,9 +356,9 @@ export function waitingConversations(state: HubState, lastSeen: LastSeen): Conve
       if (conversation.kind === "worker") return false;
       const last = messages.findLast((m) => !isQuietMessage(m));
       if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
-      if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status))) return false;
+      if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status) && !isHandoverTraffic(m))) return false;
       if (pendingOf(state, conversation.id).some((p) => p.phase === "sending")) return false;
-      if ((sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
+      if ((visibleSessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
       return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
     })
     .map(({ conversation }) => conversation.id);
@@ -397,11 +400,21 @@ function renewingIn(messages: Message[]): boolean {
 export function visibleSessionOf(state: HubState, conversationId: ConversationId): SessionState | null {
   const session = sessionOf(state, conversationId);
   const messages = state.conversations[conversationId]?.messages ?? [];
-  if (session === null || !renewingIn(messages)) return session;
+  if (session === null || !inHandoverTurn(messages, session.sessionId)) return session;
   const waiting =
     messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingOf(state, conversationId).some((p) => p.phase === "sending");
   const quiet = { currentTool: null, apiRetry: null };
   return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
+}
+
+/**
+ * 会话现在的状态属于写交接那一轮：交接请求还没结果；或者交给这个会话的最后一条就是交接请求（那一轮刚结束，
+ * 账本一条一条推变化，交接请求先变成已回复、会话后变空闲，中间这一下也算）。
+ */
+function inHandoverTurn(messages: Message[], sessionId: SessionId): boolean {
+  if (renewingIn(messages)) return true;
+  const last = messages.findLast((m) => m.sessionId === sessionId && m.status !== null);
+  return last !== undefined && systemEventOf(last)?.event === "handover.requested";
 }
 
 /** 网页显示用的消息：写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。 */
@@ -456,16 +469,21 @@ function flowRole(message: Message): FlowRole {
 
 /**
  * 换新会话：写交接的来往不显示；分隔线挪到写交接开始的地方（turnStartId 之后第一条的前面），换代期间来的话排在它下面。
+ * 交接请求还在排队时就来了、压着等到换代才交给新会话的（Worker 汇报、用户的话），编号比 turnStartId 小，也挪到分隔线下面，
+ * 和实际处理它的会话对上。
  */
 function placeHandovers(all: Message[]): Message[] {
   const shown = all.filter((m) => !isHandoverTraffic(m));
   const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
   if (dividers.length === 0) return shown;
-  const rest = shown.filter((m) => !dividers.includes(m));
+  let rest = shown.filter((m) => !dividers.includes(m));
   for (const divider of dividers) {
-    const after = (divider.meta as { turnStartId?: number } | null)?.turnStartId ?? divider.id;
+    const { sessionId, turnStartId } = divider.meta as { sessionId: number; turnStartId?: number };
+    const after = turnStartId ?? divider.id;
+    const held = rest.filter((m) => m.id <= after && m.sessionId === sessionId);
+    rest = rest.filter((m) => !held.includes(m));
     const at = rest.findIndex((m) => m.id > after && systemEventOf(m)?.event !== "session.renewed");
-    rest.splice(at === -1 ? rest.length : at, 0, divider);
+    rest.splice(at === -1 ? rest.length : at, 0, divider, ...held);
   }
   return rest;
 }

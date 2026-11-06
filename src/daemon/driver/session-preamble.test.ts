@@ -16,9 +16,10 @@ afterEach(async () => {
 const user = (id: number, text: string) => ({ messageIds: [id], source: "user" as const, text });
 const system = (id: number, text: string) => ({ messageIds: [id], source: "system" as const, text });
 
-function harness(script: FakeScript = {}) {
+/** 启动超时用默认的；要等它超时的（进程起不来）用 8 秒，同 process.test.ts（太短了并行跑会偶发 start_timeout）。 */
+function harness(script: FakeScript = {}, startTimeoutMs?: number) {
   const ledger = fakePreambleLedger();
-  h = makeHarness({ script, driver: { sessionPreamble: ledger.sessionPreamble, startTimeoutMs: 500 } });
+  h = makeHarness({ script, driver: { sessionPreamble: ledger.sessionPreamble, ...(startTimeoutMs === undefined ? {} : { startTimeoutMs }) } });
   ledger.watch(h.driver);
   return { t: h, ledger };
 }
@@ -58,7 +59,7 @@ describe("claude：换代后的开场说明", () => {
   });
 
   it("写进去了、进程没起来（agent 没读到）：重写时再带；读到了的那一行开始处理时带 preamble 标记", async () => {
-    const { t } = harness({ noInit: true });
+    const { t } = harness({ noInit: true }, 8_000);
     h = t;
     const s = t.addSession();
     await expect(t.driver.send(s.id, user(1, "接着说"))).rejects.toThrow();

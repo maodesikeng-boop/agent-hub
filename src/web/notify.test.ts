@@ -224,6 +224,53 @@ describe("停稳了才算", () => {
   });
 });
 
+describe("换新会话不重新弹（审查 #113 第 1 条）", () => {
+  const H = (status: MessageStatus) =>
+    makeMessage({ id: 3, sender: "system", sessionId: 1, status, text: "【系统】请写交接", meta: { event: "handover.requested", sessionId: 1, auto: true }, createdAt: T0 + 1_000 });
+
+  it("waitingConversations：交接请求排队、送达、处理中，写交接时会话在忙：照旧算“等你”；换代期间来了真要处理的话：不算", () => {
+    const idle = pmIdle(load(snapshot()));
+    for (const status of ["queued", "delivered", "processing"] as const) {
+      const state = activity(apply(idle, messageChange(0, "message.created", H(status))), 1, 1, "working", 1);
+      expect(waitingConversations(state, {})).toEqual([1]);
+    }
+    const writing = activity(apply(idle, messageChange(0, "message.created", H("processing"))), 1, 1, "working", 1);
+    const report = makeMessage({ id: 5, sender: "system", kind: "worker", sessionId: 1, status: "queued", text: "汇报", createdAt: T0 + 2_000 });
+    expect(waitingConversations(apply(writing, messageChange(0, "message.created", report)), {})).toEqual([]);
+  });
+
+  it("没看的回复弹过一次通知后自动换会话：从交接请求到换完代都不退出“等你”，不再弹", () => {
+    let state = pmIdle(load(snapshot()));
+    const s = setup(activity(state, 1, 1, "working", 1));
+    s.update(state);
+    s.wait(WAITING_SETTLE_MS);
+    expect(FakeNotification.instances).toHaveLength(1);
+
+    const steps: ((st: HubState) => HubState)[] = [
+      (st) => apply(st, messageChange(0, "message.created", H("queued"))),
+      (st) => activity(st, 1, 1, "working", 1),
+      (st) => apply(st, messageChange(0, "message.updated", H("delivered"))),
+      (st) => apply(st, messageChange(0, "message.updated", H("processing"))),
+      (st) => apply(st, messageChange(0, "message.created", makeMessage({ id: 4, text: "交接全文", meta: { handover: true }, createdAt: T0 + 2_000 }))),
+      (st) => apply(st, messageChange(0, "message.updated", H("replied"))),
+      (st) =>
+        apply(
+          st,
+          messageChange(0, "message.created", makeMessage({ id: 5, sender: "system", sessionId: null, text: "交接全文", meta: { event: "session.renewed", sessionId: 4, fromSessionId: 1, turnStartId: 3 }, createdAt: T0 + 3_000 })),
+        ),
+      (st) => activity(st, 1, 1, "idle", 1),
+      (st) => apply(st, sessionChange(0, makeSession({ sessionId: 4, conversationId: 1, pmId: 1, generation: 2, activity: "idle" }))),
+    ];
+    for (const step of steps) {
+      state = step(state);
+      s.update(state);
+      expect(s.waiting()).toEqual([1]);
+      s.wait(WAITING_SETTLE_MS);
+    }
+    expect(FakeNotification.instances).toHaveLength(1);
+  });
+});
+
 describe("看过了", () => {
   it("网页在前台、正开着这个会话：不算；之后切走，又来了新消息并且停稳：重新算", () => {
     setForeground(true);

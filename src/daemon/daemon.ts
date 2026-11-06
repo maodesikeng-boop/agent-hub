@@ -215,6 +215,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // 交接提示词里写上会话原始记录的路径
       findTranscript: (ref) => vendorTranscriptPath(ref),
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
+      log,
     });
     const sessions = createSessionStore(db);
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。

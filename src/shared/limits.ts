@@ -62,6 +62,10 @@ export const AUTO_RENEW_IDLE_MS = 20_000;
 export const AUTO_RENEW_TICK_MS = 5_000;
 /** 写交接那一轮（从交接请求登记起）最多等这么久：超时就停掉那一轮、放弃这次换代，旧会话照常用（自动换的下次空闲再试）。 */
 export const HANDOVER_TIMEOUT_MS = 5 * 60_000;
+/** 自动换新会话：每一代会话最多自动试几次（写交接出错、超时、写出来是空的都算一次）；用完这一代不再自动换，资料页的“开新会话”照常能点。 */
+export const AUTO_RENEW_MAX_ATTEMPTS = 3;
+/** 自动换新会话没成：至少过这么久才再试，之后每没成一次翻倍（10、20 分钟）；还要照常等又一轮回完、再空闲。 */
+export const AUTO_RENEW_RETRY_BACKOFF_MS = 10 * 60_000;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 
