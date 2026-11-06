@@ -18,7 +18,7 @@ import {
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
-import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
+import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor, VENDOR_SPECS } from "../shared/vendors.ts";
 
 export interface HubIo {
   argv: string[];
@@ -40,6 +40,9 @@ const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 /** 命令名（names.ts 的 HUB_COMMAND），下面的用法和报错里用。 */
 const hub = HUB_COMMAND;
 
+/** “claude 是 sonnet、其它厂商用自己的默认”：从 VENDOR_SPECS 读，加厂商不用改这里。 */
+const WORKER_DEFAULTS = AGENT_VENDORS.map((v) => `${v}：${VENDOR_SPECS[v].workerDefaultModel ?? "厂商自己的默认"}`).join("；");
+
 /** hub 用法，给人看（hub help、用法不对时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
 export const HUB_USAGE = `用法：
   ${hub} status                                              我是谁、我的项目和文件夹
@@ -55,7 +58,8 @@ export const HUB_USAGE = `用法：
   ${hub} persona show
   ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
   ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
-                                                          派一个 Worker，任务说明从标准输入读
+                                                          派一个 Worker，任务说明从标准输入读。不写 --model 时用这家厂商的 Worker 默认模型（${WORKER_DEFAULTS}），
+                                                          不写 --effort 用厂商自己的默认；都不沿用项目经理自己的
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度

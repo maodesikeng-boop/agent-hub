@@ -31,8 +31,9 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { MAX_TASK_BYTES } from "../../shared/limits.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
+import { formatCount } from "../../shared/count-format.ts";
+import { MAX_TASK_BYTES, WORKER_CONTEXT_WARN_TOKENS } from "../../shared/limits.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, VENDOR_SPECS } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -159,6 +160,13 @@ export function createLedgerWorkers(
    */
   const midTurnWaiting = new Set<MessageId>();
 
+  /** 汇报开头那行后面带上这个 Worker 的对话长度；超了门槛再加一行提醒（只提醒，不拦）。没有数据（0）不写。 */
+  const contextNote = (context: number): string => {
+    if (context <= 0) return "";
+    const note = `（对话 ${formatCount(context)} context）`;
+    return context > WORKER_CONTEXT_WARN_TOKENS ? `${note}\n⚠ 这个 Worker 的对话已经很长，要接着改的话建议新派一个 Worker 接手。` : note;
+  };
+
   const workerRow = (id: WorkerId): WorkerDbRow | null => db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;
   const projectRow = (id: number): ProjectDbRow => db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", id)!;
   /** Worker 的会话（一个 Worker 一个）。 */
@@ -187,9 +195,17 @@ export function createLedgerWorkers(
   const insertLine = (
     p: Pending,
     worker: WorkerDbRow,
-    line: { event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; turnMessageId: MessageId | null; deliver: string | null },
+    line: {
+      event: WorkerEvent;
+      status: WorkerLineStatus | null;
+      summary: string | null;
+      turnMessageId: MessageId | null;
+      deliver: string | null;
+      /** 开头那行后面的附注（汇报里的对话长度、超长提醒），可以多行。 */
+      headerNote?: string;
+    },
   ) => {
-    const header = line.event === "user_message" ? userToWorkerHeader(worker.id, worker.title) : workerReportHeader(worker.id, worker.title);
+    const header = (line.event === "user_message" ? userToWorkerHeader(worker.id, worker.title) : workerReportHeader(worker.id, worker.title)) + (line.headerNote ?? "");
     const meta: WorkerMessageMeta = {
       workerId: worker.id,
       workerConversationId: worker.worker_conversation_id,
@@ -338,9 +354,7 @@ export function createLedgerWorkers(
       );
     }
     const worker = workerRow(id)!;
-    const sameVendor = vendor === caller.vendor;
-    // 没给的沿用项目经理现在的（也按 模型 + 思考程度 拆开：老数据里存的可能是带档位的完整 ID）
-    const inherited = sameVendor ? splitModelEffort(vendor, caller.model, caller.effort) : { model: null, effort: null };
+    // 没给 --model：用这家厂商的 Worker 默认模型（VENDOR_SPECS 里没写的厂商 = 用厂商自己的默认），不沿用项目经理的
     const session = insertSession(p, {
       role: "worker",
       conversationId: conversation.id,
@@ -350,8 +364,8 @@ export function createLedgerWorkers(
       addDirs: workspace === "worktree" ? [] : card.otherFolders,
       generation: 1,
       vendor,
-      model: model ?? inherited.model,
-      effort: effort ?? inherited.effort,
+      model: model ?? VENDOR_SPECS[vendor].workerDefaultModel ?? null,
+      effort,
     });
     insertPmMessage(p, worker, session, task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
@@ -562,7 +576,9 @@ export function createLedgerWorkers(
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
     const parsed = parseWorkerReport(text);
+    const context = workerSession(worker.id).usage.context;
     insertLine(p, worker, {
+      headerNote: contextNote(context),
       event: "report",
       status: parsed.kind === "ok" ? parsed.report.status : "unformatted",
       summary: parsed.kind === "ok" ? parsed.report.summary : parsed.summary,

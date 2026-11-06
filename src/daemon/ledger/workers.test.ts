@@ -11,7 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
-import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS } from "../../shared/limits.ts";
+import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_CONTEXT_WARN_TOKENS } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
@@ -248,11 +248,11 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(sessionRow(lin.sessionId).addDirs).toEqual([projectWorktreesDir(worktreesDir, projectId)]);
   });
 
-  it("不给 --model 就用项目经理自己的模型；--readonly 记在记录上，“已派出”那一行写明只读", () => {
+  it("不给 --model 就用厂商的 Worker 默认模型（claude 是 sonnet），不沿用项目经理的；--readonly 记在记录上，“已派出”那一行写明只读", () => {
     repos.add(main);
     const worker = start({ readonly: true }).data.worker;
     expect(worker).toMatchObject({ model: null, readonly: true });
-    expect(sessionRow(workerSessionId(worker.id)).model).toBe("claude-sonnet-5-5");
+    expect(sessionRow(workerSessionId(worker.id)).model).toBe("sonnet");
     expect(workerLines()[0]!.text).toBe("Worker「修 X」已派出（只读）");
     expect(workerEventOf(workerLines()[0]!)?.readonly).toBe(true);
   });
@@ -562,6 +562,33 @@ describe("汇报回到项目经理", () => {
     enqueued = [];
   });
 
+  const setContext = (context: number) =>
+    createSessionStore(db).update(workerSessionId(worker.id), { usage: { input: 1, cacheRead: 1, cacheWrite: 1, output: 1, context } });
+  const lastReport = () => workerLines().filter((m) => workerEventOf(m)?.event === "report").at(-1)!;
+
+  it("汇报开头带 Worker 的对话长度，没超门槛没有换人提醒（正文不动）", () => {
+    setContext(110_000);
+    const text = report("做完了", "X 修好了");
+    runTurn(worker, [taskMessage(worker).id], text);
+    expect(lastReport().text).toBe(`【Worker #1 · 修 X 的汇报】（对话 110K context）\n\n${text}`);
+  });
+
+  it("超过门槛（WORKER_CONTEXT_WARN_TOKENS）多一句提醒新派一个 Worker 接手；正好等于门槛不提醒", () => {
+    setContext(WORKER_CONTEXT_WARN_TOKENS);
+    runTurn(worker, [taskMessage(worker).id], report("有问题", "卡住"));
+    expect(lastReport().text).not.toContain("新派");
+
+    const other = start({ title: "乙" }).data.worker;
+    createSessionStore(db).update(workerSessionId(other.id), { usage: { input: 1, cacheRead: 1, cacheWrite: 1, output: 1, context: 220_000 } });
+    const text = report("做完了", "又改了");
+    runTurn(other, [taskMessage(other).id], text);
+    const line = lastReport().text;
+    expect(line.split("\n")[0]).toBe("【Worker #2 · 乙 的汇报】（对话 220K context）");
+    expect(line).toContain("对话已经很长");
+    expect(line).toContain("新派一个 Worker 接手");
+    expect(line.endsWith(`\n\n${text}`)).toBe(true);
+  });
+
   it("这一轮 result：会话里一行（状态、摘要），全文交给项目经理（session.send，开头“【Worker #N”）；重放同一个 result 只有一行", () => {
     const text = report("做完了", "X 修好了");
     runTurn(worker, [taskMessage(worker).id], text);
@@ -578,6 +605,7 @@ describe("汇报回到项目经理", () => {
       summary: "X 修好了",
     });
     expect(line).toMatchObject({ sender: "system", status: "queued", sessionId: lin.sessionId, workerId: worker.id });
+    // 没有 usage 数据（context 0）：开头不带长度
     expect(line.text).toBe(`【Worker #1 · 修 X 的汇报】\n\n${text}`);
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId: lin.sessionId, messageId: line.id, source: "system" }]]);
     expect(taskMessage(worker).status).toBe("replied");
@@ -865,20 +893,21 @@ describe("收工", () => {
 });
 
 describe("派活：思考程度（--effort）", () => {
-  it("给了就记在 Worker 记录和会话上；没给就和项目经理现在的一样（资料页改过的话是改过的）", () => {
+  it("给了就记在 Worker 记录和会话上；没给就是默认（不沿用项目经理的）", () => {
     const own = start({ title: "甲", effort: "high" }).data.worker;
     expect(own).toMatchObject({ model: null, effort: "high" });
-    expect(sessionRow(workerSessionId(own.id))).toMatchObject({ vendor: "claude", model: "claude-sonnet-5-5", effort: "high" });
+    expect(sessionRow(workerSessionId(own.id))).toMatchObject({ vendor: "claude", model: "sonnet", effort: "high" });
     // 项目经理的思考程度是默认：Worker 也是默认（不传 --effort）
     const inherit = start({ title: "乙" }).data.worker;
     expect(inherit).toMatchObject({ model: null, effort: null });
-    expect(sessionRow(workerSessionId(inherit.id))).toMatchObject({ model: "claude-sonnet-5-5", effort: null });
-    // 用户在资料页改了项目经理的模型、思考程度：之后派的 Worker 跟着新的
+    expect(sessionRow(workerSessionId(inherit.id))).toMatchObject({ model: "sonnet", effort: null });
+    // 用户在资料页改了项目经理的模型、思考程度：Worker 不跟着
     ledger.editPersona(lin.pmId, { model: "opus", effort: "max" }, { kind: "user" });
     const after = start({ title: "丙" }).data.worker;
-    expect(sessionRow(workerSessionId(after.id))).toMatchObject({ model: "opus", effort: "max" });
-    // 已经派出去的不变
-    expect(sessionRow(workerSessionId(inherit.id))).toMatchObject({ model: "claude-sonnet-5-5", effort: null });
+    expect(sessionRow(workerSessionId(after.id))).toMatchObject({ model: "sonnet", effort: null });
+    // 写了 --model 照用
+    const given = start({ title: "丁", model: "opus" }).data.worker;
+    expect(sessionRow(workerSessionId(given.id))).toMatchObject({ model: "opus", effort: null });
   });
 
   it("思考程度不在清单里、模型名带不合规的字符：invalid，什么都没写", () => {
@@ -896,7 +925,7 @@ describe("派活：思考程度（--effort）", () => {
     expect(text).toContain(`#${a.id} 甲 · 进行中 · `);
     expect(text).toContain("模型 Haiku · 思考程度 low");
     expect(text).toContain(`#${b.id} 乙`);
-    expect(text).toContain("模型 Sonnet 5.5 · 思考程度 默认");
+    expect(text).toContain("模型 Sonnet · 思考程度 默认");
   });
 });
 

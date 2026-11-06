@@ -9,6 +9,8 @@ export const SESSION_STEPS_KEEP = 1_000;
 /** hub worker log 默认看最近几步、最多几步。 */
 export const WORKER_LOG_DEFAULT_STEPS = 20;
 export const WORKER_LOG_MAX_STEPS = 200;
+/** Worker 的对话（session usage.context）超过这么多 token，交给项目经理的汇报开头提醒“对话已经很长，要接着改建议新派一个 Worker”。只提醒，不拦。 */
+export const WORKER_CONTEXT_WARN_TOKENS = 200_000;
 /** hub worker log --stats 里“读得最多的文件”“重复最多的命令”各列几个。 */
 export const WORKER_STATS_TOP = 3;
 /** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
