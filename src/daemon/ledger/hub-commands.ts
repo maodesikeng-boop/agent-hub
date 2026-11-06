@@ -102,7 +102,7 @@ export function createLedgerHubCommands(
       case "persona.edit": {
         const change = editPersonaChecked(p, caller.pmId, args as HubArgs<"persona.edit">, { actor: "pm", session: caller });
         const text =
-          change === null ? "性格设定和模式都和现在一样，没有改动。" : "已改好自己的做事习惯，下一条消息起生效；用户可以在资料页撤销。";
+          change === null ? "性格设定和模式都和现在一样，没有改动。" : "已改好自己的做事习惯，马上生效，聊过的不会丢；用户可以在资料页撤销。";
         return { text, data: { change } };
       }
       case "worker.start":

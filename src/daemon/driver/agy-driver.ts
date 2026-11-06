@@ -55,6 +55,7 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
@@ -71,7 +72,8 @@ interface Batch {
   text: string;
   prefixes: string[];
   rawLine?: string;
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean };
+  /** persona：性格设定、模式改了的说明（persona-note.ts），没写成时退回去。 */
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 用户的（几条拼成一条的也是）还是系统的；不写是用户的（测试直接写的那行）。停止时没取走的，用户的取消、系统的收回。 */
@@ -80,7 +82,7 @@ interface Batch {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -106,6 +108,9 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** 这次拼进系统指令的性格设定是哪一版（LaunchFiles.personaRevision）：第一个 init 时定 agent 看到的版本（persona-note.ts）。 */
+  personaLaunched: number | null;
+  /** 新进程第一条消息前面带的系统指令（agy 没有系统提示词参数），里面的性格设定是 personaRevision 那一版。 */
   systemPrompt: string | null;
   promptSent: boolean;
   readonly: boolean;
@@ -146,6 +151,8 @@ interface SessionState {
   eventSeq: number;
   pending: PendingEntry[];
   written: Set<MessageId>;
+  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   recoveryNote: boolean;
   crashNote: boolean;
   relaunchNote: boolean;
@@ -437,6 +444,7 @@ export class AgyDriver implements Driver {
         eventSeq: 0,
         pending: [],
         written: new Set(),
+        personaSeen: null,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -497,11 +505,15 @@ export class AgyDriver implements Driver {
         source: "user",
       };
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
+    // 性格设定改了的说明只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼系统指令）
+    const proc = st.proc && !st.proc.closing ? st.proc : null;
+    const persona = proc ? this.#takePersonaNote(st) : null;
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
     const notePrefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
+      persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
@@ -522,6 +534,23 @@ export class AgyDriver implements Driver {
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
+    batch.notes.persona?.restore();
+  }
+
+  #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
+    return takePersonaNote(
+      this.#opts.personaNote,
+      st.id,
+      st,
+      (revision) => this.#update(st, { personaRevision: revision }),
+      (error) => this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`),
+    );
+  }
+
+  #setPersonaSeen(st: SessionState, revision: number | null): void {
+    if (revision === null || revision === st.personaSeen) return;
+    st.personaSeen = revision;
+    this.#update(st, { personaRevision: revision });
   }
 
   /** 为指定进程构造要写入 stdin 的 NDJSON 行（若为该进程第一条消息，则在 prefixes 最前面注入系统提示词）。 */
@@ -626,8 +655,10 @@ export class AgyDriver implements Driver {
     if (batch.messageIds.length > 0) this.#emit(st.id, { type: "message.delivered", messageIds: batch.messageIds, at: Date.now() });
   }
 
+  /** 这条要重发：不再算写过；带着的性格设定说明也退回去（新进程会重新带系统指令的话，restore 发现版本已经变了就不退）。 */
   #forgetWritten(st: SessionState, batch: Batch | null): void {
     for (const id of batch?.messageIds ?? []) st.written.delete(id);
+    batch?.notes.persona?.restore();
   }
 
   #afterTurn(st: SessionState, proc: Proc): void {
@@ -808,6 +839,7 @@ export class AgyDriver implements Driver {
         model: row.model,
         effort: row.effort,
       },
+      personaLaunched: files.personaRevision ?? null,
       systemPrompt,
       promptSent: false,
       readonly,
@@ -949,6 +981,8 @@ export class AgyDriver implements Driver {
     proc.initSeen = true;
     this.#clearTimer(st, "startTimer");
     const row = this.#row(st);
+    // 新进程第一条消息前面重新带系统指令，里面就是这次拼的性格设定（persona-note.ts）；真起来了才算数
+    this.#setPersonaSeen(st, personaSeenAtStart(st, row, proc.personaLaunched, true));
     const patch: AgentSessionPatch = { status: "running", lastEventAt: at };
     if (convId !== "") {
       patch.vendorSessionId = convId;

@@ -701,6 +701,11 @@ export interface AgentSessionRow {
   lastEventAt: number | null;
   rateLimit: RateLimitInfo | null;
   usage: TokenUsage;
+  /**
+   * agent 已经看到的性格设定、模式是哪一版（persona_changes 的编号，驱动层写，见 driver.ts 的“两轮之间自动重启”）。
+   * null / 不给：没记过（Worker、还没起过进程、0012 之前的老会话）。
+   */
+  personaRevision?: number | null;
   createdAt: number;
   updatedAt: number;
 }

@@ -328,6 +328,7 @@ export class FakeLedger {
       workerPrTarget: unused("workerPrTarget"),
       workerTranscriptTarget: unused("workerTranscriptTarget"),
       getLaunchContext: unused("getLaunchContext"),
+      personaUpdate: unused("personaUpdate"),
       getWorktreeTask: unused("getWorktreeTask"),
       onSetupStarted: unused("onSetupStarted"),
       waitsForFirstTurn: unused("waitsForFirstTurn"),

@@ -186,7 +186,8 @@ export interface EditPersonaInput {
  * 提交后写 personas/pm-<编号>.md（临时文件 + 改名），写成功了再把 pms.persona_file_hash 设成这份内容的哈希。
  * 写文件失败不影响结果（数据库已提交），persona_file_hash 不更新；下次启动 syncPersonaFiles 看到文件哈希仍等于
  * persona_file_hash，知道文件没人动过、只是没写成，按数据库重写（不会误记成用户手改，见 syncPersonaFiles 第 3 条）。
- * 这个项目经理的所有会话在下一条消息前自动重启（驱动层比 fingerprint，账本不用管）。
+ * 正文、模式变了不重启：驱动层在下一条写进去的消息前加说明（见 personaUpdate）；厂商、模型、思考程度变了，
+ * 这个项目经理的会话在下一条消息前自动重启（驱动层比会话那一行，账本不用管）。
  */
 export interface EditPersonaResult {
   change: PersonaChange | null;
@@ -218,9 +219,26 @@ export interface LaunchContext {
   sessionId: SessionId;
   role: AgentRole;
   conversationId: ConversationId;
-  pm: { id: PmId; name: string; mode: PmMode; vendor?: AgentVendor; persona: string };
+  /**
+   * personaRevision：拼进提示词的这份性格设定、模式对应的修改记录编号（这个项目经理最新一条 persona_changes 的 id，没改过是 0）。
+   * 驱动层记下它，之后改了不重启，在下一条消息前加说明（见 personaUpdate）。Worker 的会话不给。
+   */
+  pm: { id: PmId; name: string; mode: PmMode; vendor?: AgentVendor; persona: string; personaRevision?: number };
   project: ProjectCard | null;
   worker: WorkerRecord | null;
+}
+
+/**
+ * 性格设定、模式在 sinceRevision 之后改过什么（personaUpdate 的结果，给驱动层在下一条消息前加说明用，见 driver.ts 的 PersonaNote）。
+ * 比的是内容：改了又撤销回去、只改了模型这类，对应的一项是 null。
+ * bySelf：这一项在 sinceRevision 之后的每次修改都是这个会话自己 hub persona edit 改的（它知道新内容，只说一句已生效）。
+ */
+export interface PersonaUpdate {
+  /** 现在最新一条修改记录的编号，没有是 0。 */
+  revision: number;
+  vendor: AgentVendor;
+  persona: { text: string; bySelf: boolean } | null;
+  mode: { mode: PmMode; bySelf: boolean } | null;
 }
 
 /**
@@ -405,6 +423,11 @@ export interface Ledger {
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
+  /**
+   * 见 PersonaUpdate。只读，驱动层每次往项目经理的会话写一条之前调（sinceRevision 是 agent 已经看到的那一版）。
+   * 不是项目经理的会话 → null。
+   */
+  personaUpdate(sessionId: SessionId, sinceRevision: number): PersonaUpdate | null;
 
   // ---- worktree.create 处理函数用（M3）----
   /** Worker 不存在、不在 worktree 里干活 → null。 */

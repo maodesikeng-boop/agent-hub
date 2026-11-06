@@ -233,6 +233,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     removeSchedule: schedules.removeForUser,
 
     getLaunchContext: launch.getLaunchContext,
+    personaUpdate: persona.personaUpdate,
     getWorktreeTask: workers.getWorktreeTask,
     onSetupStarted: workers.onSetupStarted,
     waitsForFirstTurn: workers.waitsForFirstTurn,

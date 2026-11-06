@@ -10,6 +10,7 @@ import type {
   EditPersonaInput,
   EditPersonaResult,
   LedgerActor,
+  PersonaUpdate,
   PersonaView,
   SyncPersonaFilesResult,
 } from "../../shared/ledger.ts";
@@ -174,11 +175,39 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     };
   };
 
+  /** 这个项目经理最新一条修改记录的编号（拼提示词时记下，见 LaunchContext 的 personaRevision），没改过是 0。 */
+  const personaRevision = (pmId: PmId): number =>
+    db.get<{ id: number | null }>("SELECT MAX(id) AS id FROM persona_changes WHERE pm_id = ?", pmId)?.id ?? 0;
+
+  /** 见 shared/ledger.ts 的 personaUpdate：按内容比 agent 看到的那一版（sinceRevision 改完的样子）和现在的。 */
+  const personaUpdate = (sessionId: SessionId, sinceRevision: number): PersonaUpdate | null => {
+    const session = pmSession(sessionId);
+    if (session === null) return null;
+    const pm = requirePm(session.pmId);
+    const vendor = pm.vendor as AgentVendor;
+    const after = db.all<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE pm_id = ? AND id > ? ORDER BY id", pm.id, sinceRevision);
+    if (after.length === 0) return { revision: sinceRevision, vendor, persona: null, mode: null };
+    // 从没改过（0）时 agent 看到的是第一条改之前的
+    const base = db.get<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE id = ? AND pm_id = ?", sinceRevision, pm.id);
+    const seenText = base?.text_after ?? after[0]!.text_before;
+    const seenMode = base?.mode_after ?? after[0]!.mode_before;
+    const text = pm.persona ?? "";
+    const mode = pm.mode as PmMode;
+    const bySelf = (changed: (r: PersonaChangeDbRow) => boolean) =>
+      after.filter(changed).every((r) => r.actor === "pm" && r.session_id === sessionId);
+    return {
+      revision: after.at(-1)!.id,
+      vendor,
+      persona: text === seenText ? null : { text, bySelf: bySelf((r) => r.text_before !== r.text_after) },
+      mode: mode === seenMode ? null : { mode, bySelf: bySelf((r) => r.mode_before !== r.mode_after) },
+    };
+  };
+
   /**
    * 改性格设定（editPersona、撤销、启动时发现手改都走这里），参数已经校验过。没变化（且不是撤销）返回 null。
    * 撤销哪怕内容一样也记一条（revertOf）。提交后写文件。
-   * 厂商、模型、思考程度变了：这个项目经理的会话那一行跟着改，驱动层下一条消息前比出不一样，--resume 重启（设置变化重启，
-   * 同改性格设定、挂文件夹）。
+   * 正文、模式变了不重启，驱动层在下一条消息前加说明（personaUpdate）。
+   * 厂商、模型、思考程度变了：这个项目经理的会话那一行跟着改，驱动层下一条消息前比出不一样，--resume 重启（同挂文件夹）。
    */
   const editPersonaIn = (
     p: Pending,
@@ -412,6 +441,8 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     privateConversation,
     validName,
     getPersona,
+    personaRevision,
+    personaUpdate,
     editPersonaChecked,
     editPersona,
     createPmIn,

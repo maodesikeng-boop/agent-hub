@@ -773,6 +773,53 @@ describe("hubCall 其他命令", () => {
   });
 });
 
+describe("personaUpdate（性格设定、模式改了不重启，驱动层下一条前面加说明）", () => {
+  it("没改过：版本号 0，什么也没变；getLaunchContext 带上最新的版本号", () => {
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toEqual({ revision: 0, vendor: "claude", persona: null, mode: null });
+    expect(ledger.getLaunchContext(lin.sessionId).pm.personaRevision).toBe(0);
+    const { change } = ledger.editPersona(lin.pmId, { text: "新" }, { kind: "user" });
+    expect(ledger.getLaunchContext(lin.sessionId).pm.personaRevision).toBe(change!.id);
+  });
+
+  it("用户改了正文、模式：给现在的内容，bySelf 是 false；连改几次只看最新的；从最新的版本号再问什么也没变", () => {
+    ledger.editPersona(lin.pmId, { text: "第一版" }, { kind: "user" });
+    const { change } = ledger.editPersona(lin.pmId, { text: "第二版", mode: "hands_on" }, { kind: "user" });
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toEqual({
+      revision: change!.id,
+      vendor: "claude",
+      persona: { text: "第二版", bySelf: false },
+      mode: { mode: "hands_on", bySelf: false },
+    });
+    expect(ledger.personaUpdate(lin.sessionId, change!.id)).toEqual({ revision: change!.id, vendor: "claude", persona: null, mode: null });
+  });
+
+  it("项目经理自己 hub persona edit 改的：bySelf 是 true；中间夹着用户改的就是 false", () => {
+    hub(lin.sessionId, "persona.edit", { text: "我记的" });
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toMatchObject({ persona: { text: "我记的", bySelf: true }, mode: null });
+    ledger.editPersona(lin.pmId, { text: "用户改的" }, { kind: "user" });
+    hub(lin.sessionId, "persona.edit", { text: "我又记的" });
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toMatchObject({ persona: { text: "我又记的", bySelf: false } });
+  });
+
+  it("撤销：算一次修改，按内容比；改了又撤销回 agent 看到的那版，什么也没变（版本号照样前进）", () => {
+    const first = ledger.editPersona(lin.pmId, { text: "新" }, { kind: "user" }).change!;
+    const revert = ledger.revertPersonaChange(first.id).change!;
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toEqual({ revision: revert.id, vendor: "claude", persona: null, mode: null });
+    expect(ledger.personaUpdate(lin.sessionId, first.id)).toMatchObject({ revision: revert.id, persona: { text: "小林的习惯", bySelf: false } });
+  });
+
+  it("只改了模型：内容都没变（会话那一行变了，驱动层按重启处理）", () => {
+    const { change } = ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "user" });
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toEqual({ revision: change!.id, vendor: "claude", persona: null, mode: null });
+  });
+
+  it("只看这个项目经理自己的修改；不是项目经理的会话 → null", () => {
+    ledger.editPersona(zhou.pmId, { text: "阿周新的" }, { kind: "user" });
+    expect(ledger.personaUpdate(lin.sessionId, 0)).toEqual({ revision: 0, vendor: "claude", persona: null, mode: null });
+    expect(ledger.personaUpdate(999, 0)).toBeNull();
+  });
+});
+
 describe("getLaunchContext", () => {
   it("有项目：项目信息和文件夹；还没有项目：project 是 null；persona 是 NULL 时当空串；带当前厂商；会话不存在 → not_found", () => {
     const foo = createFoo();
@@ -782,13 +829,13 @@ describe("getLaunchContext", () => {
       sessionId: lin.sessionId,
       role: "pm",
       conversationId: lin.conversationId,
-      pm: { id: lin.pmId, name: "小林", mode: "manage_only", vendor: "claude", persona: "小林的习惯" },
+      pm: { id: lin.pmId, name: "小林", mode: "manage_only", vendor: "claude", persona: "小林的习惯", personaRevision: 0 },
       project: { id: foo.project.id, name: "foo", description: null, mainFolder: foo.dir, otherFolders: [extra] },
       worker: null,
     });
     expect(ledger.getLaunchContext(zhou.sessionId)).toMatchObject({ pm: { name: "阿周", mode: "hands_on", vendor: "claude" }, project: null });
     const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", vendor: "agy", persona: "" });
-    expect(ledger.getLaunchContext(agyPm.sessionId).pm).toEqual({ id: agyPm.pm.id, name: "阿吉", mode: "manage_only", vendor: "agy", persona: "" });
+    expect(ledger.getLaunchContext(agyPm.sessionId).pm).toEqual({ id: agyPm.pm.id, name: "阿吉", mode: "manage_only", vendor: "agy", persona: "", personaRevision: 0 });
     db.run("UPDATE pms SET persona = NULL WHERE id = ?", lin.pmId);
     expect(ledger.getLaunchContext(lin.sessionId).pm.persona).toBe("");
     expectLedgerError(() => ledger.getLaunchContext(999), "not_found");

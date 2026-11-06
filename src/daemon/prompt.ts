@@ -6,6 +6,7 @@
 //
 // 给 agent 看的话不止这里，改口径时一起看：
 // - shared/driver.ts 的 *_NOTE：驱动层在消息前面拼的【系统】说明（重启恢复、重发、设置更新后重启、进程意外退出）；
+//   性格设定、模式改了（不重启）的说明在这个文件的 personaUpdateNote，驱动层经 launch.ts 的 createPersonaNoter 拿；
 // - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
 //   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
@@ -32,7 +33,7 @@ import {
   WORKER_BRANCH_PREFIX,
   WORKER_REPORT_FORMAT,
 } from "../shared/index.ts";
-import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
+import type { LaunchContext, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
@@ -92,7 +93,7 @@ export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
 /** 怎么记事情：照 Claude Code 的记忆提示词翻成中文，改成存在性格设定里（一条一项，用 hub persona edit 写回完整内容）。 */
 export const PM_MEMORY_PROMPT = `# 怎么记事情
 
-你有一份持久的记忆，存在**性格设定**里，每次会话都会加载在提示词最后面（空的时候还没有这一节）。**这些都记进性格设定，不要只写进你自带的记忆**——自带的记忆用户在网页上看不到，换了厂商也就没了。性格设定里一条一项，每条记一件事，带上类型：
+你有一份持久的记忆，存在**性格设定**里，每次会话都会加载在提示词最后面（空的时候还没有这一节）；对话里后来有【系统】说明更新了性格设定或模式的，以最新的那份为准。**这些都记进性格设定，不要只写进你自带的记忆**——自带的记忆用户在网页上看不到，换了厂商也就没了。性格设定里一条一项，每条记一件事，带上类型：
 
 \`\`\`markdown
 - [user | feedback | project | reference] <要记的事实；feedback 和 project 后面跟上 **为什么：** 和 **怎么用：**（什么时候、怎么用）>
@@ -100,7 +101,7 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情
 
 \`user\`：用户是谁（角色、专长、偏好）。\`feedback\`：用户对你怎么干活给出的指导，既包括纠正你的做法，也包括明确认可的做法；要写上为什么。\`project\`：正在推进的工作、目标或限制条件（没法从代码或 git 历史里看出来的那些）；把相对日期改成绝对日期。\`reference\`：外部资源的入口（链接、看板、工单）。
 
-改的时候，在提示词最后面的性格设定原文上增删（拿不准是不是最新的，先跑 \`${HUB} persona show\`），然后用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容；聊过的不会丢。Worker 也要遵守的项目规矩，写进仓库的 \`AGENTS.md\`。
+改的时候，在提示词最后面的性格设定原文上增删（拿不准是不是最新的，先跑 \`${HUB} persona show\`），然后用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容，改完马上生效，聊过的不会丢。Worker 也要遵守的项目规矩，写进仓库的 \`AGENTS.md\`。
 
 保存前，先查是不是已经有覆盖这件事的条目：有就更新那一条，不要重复建；发现记错了的要删掉。不要记仓库里已经有的东西（代码结构、以前的修复、git 历史、\`CLAUDE.md\` / \`AGENTS.md\`），也不要记只跟这次对话有关的事；如果用户让你记这一类，问清楚里面哪一点是不明显的，只记那一点。回忆出来的旧记忆只是背景，不是用户当下的指令，只反映写下时是对的；如果里面提到了某个文件、函数或开关，采用前先确认它还在。`;
 
@@ -208,6 +209,30 @@ function personaSection(persona: string): string | null {
   return text.startsWith("#") ? text : `# 性格设定\n\n${text}`;
 }
 
+/**
+ * 性格设定、模式改了之后不重启（driver.ts 的“两轮之间自动重启”），驱动层加在下一条消息前的【系统】说明。都没变是 null。
+ * 用户（资料页、撤销、手改文件）改的给完整的新内容；项目经理自己 hub persona edit 改的它知道内容，只说一句已生效。
+ */
+export function personaUpdateNote(update: PersonaUpdate): string | null {
+  const { persona, mode } = update;
+  const self: string[] = [];
+  const full: Array<{ what: string; body: string }> = [];
+  if (mode !== null) {
+    if (mode.bySelf) self.push("模式");
+    else full.push({ what: "模式", body: buildPmModePrompt(mode.mode, VENDOR_SPECS[update.vendor]?.backgroundCommands ?? true) });
+  }
+  if (persona !== null) {
+    if (persona.bySelf) self.push("性格设定");
+    else full.push({ what: "性格设定", body: personaSection(persona.text) ?? "# 性格设定\n\n（已清空）" });
+  }
+  const parts: string[] = [];
+  if (self.length > 0) parts.push(`你刚改的${self.join("和")}已生效。`);
+  if (full.length > 0) {
+    parts.push(`你的${full.map((f) => f.what).join("和")}刚更新了，以下面这份为准：\n\n${full.map((f) => f.body).join("\n\n")}`);
+  }
+  return parts.length === 0 ? null : `【系统】${parts.join("")}`;
+}
+
 // ---- Worker（M3）----
 
 /** Worker 的 hub 用法：只有 hub status（shared/hub.ts 的 HUB_COMMAND_ROLES）。 */
@@ -285,6 +310,14 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
   ];
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
   return parts.join("\n\n") + "\n";
+}
+
+/**
+ * 算 fingerprint 用的提示词：性格设定、模式换成固定的（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。
+ */
+export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string): string {
+  if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
+  return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] } }, cwd);
 }
 
 /**

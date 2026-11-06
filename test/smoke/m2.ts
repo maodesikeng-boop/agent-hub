@@ -87,7 +87,7 @@ export async function runM2(outcomes: Outcome[], only: (name: string) => boolean
   }
 
   if (only("S8")) {
-    await inFreshSmoke(outcomes, "S8 说“以后回复都用列表”", async (smoke) => {
+    await inFreshSmoke(outcomes, "S8 说“以后回复都用列表”（不重启）", async (smoke) => {
       const chat = smoke.privateId;
       await smoke.ask(
         chat,
@@ -103,10 +103,13 @@ export async function runM2(outcomes: Outcome[], only: (name: string) => boolean
       const pidBefore = smoke.sessionRow().pid;
       const { replies } = await smoke.ask(chat, "用三句话介绍一下太阳系。");
       const reply = replies.join("\n");
-      expect(smoke.sessionRow().pid !== pidBefore, "进程没换：改了性格设定没有在下一条前重启");
-      expect(smoke.writtenTexts(session.id).some((t) => t.includes(RELAUNCH_NOTE)), "重启后写进去的第一条前面没有 RELAUNCH_NOTE");
+      // 改性格设定不重启：同一个进程，下一条前面带一句“已生效”（它自己改的，知道内容）
+      expect(smoke.sessionRow().pid === pidBefore, `进程换了（${pidBefore} → ${smoke.sessionRow().pid}）：改性格设定不该重启`);
+      const texts = smoke.writtenTexts(session.id);
+      expect(!texts.some((t) => t.includes(RELAUNCH_NOTE)), "不该有 RELAUNCH_NOTE");
+      expect(texts.at(-1)!.includes("【系统】你刚改的性格设定已生效。"), `下一条前面没有“已生效”：${texts.at(-1)}`);
       expect(looksLikeList(reply), `回复不是列表：${reply}`);
-      return "persona.edit 成功（actor: pm），重启后下一条回复是列表";
+      return "persona.edit 成功（actor: pm），没重启，下一条带“已生效”，回复是列表";
     });
   }
 

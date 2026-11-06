@@ -6,7 +6,7 @@ import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_ENV, buildSessionSettings, type Age
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
-import { buildLaunchPrompt, buildWorkerPrompt } from "./prompt.ts";
+import { buildFingerprintPrompt, buildLaunchPrompt, buildWorkerPrompt } from "./prompt.ts";
 import { noProjectContext, projectContext, workerContext } from "./test-helpers.ts";
 
 let dir: string;
@@ -76,7 +76,7 @@ describe("prepareLaunch（M2、M3）", () => {
     worktreesDir = join(dir, "worktrees");
   });
 
-  it("写 prompt.md、settings.json（放行 hub、hub.sock）；env 带令牌、socket、PATH；fingerprint 按两份内容算", async () => {
+  it("写 prompt.md、settings.json（放行 hub、hub.sock）；env 带令牌、socket、PATH；fingerprint 按两份内容算（性格设定、模式除外）", async () => {
     const files = await make()(row(7));
     const base = join(launchDir, "7");
     expect(files).toMatchObject({
@@ -88,7 +88,8 @@ describe("prepareLaunch（M2、M3）", () => {
     const settings = readFileSync(files.settingsFile!, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
     expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir }));
-    expect(files.fingerprint).toBe(launchFingerprint({ prompt, settings }));
+    expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir), settings }));
+    expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
     // 令牌只在 env 里，不进任何文件
     for (const content of [prompt, settings]) expect(content).not.toContain("token-of-7");
   });
@@ -109,13 +110,34 @@ describe("prepareLaunch（M2、M3）", () => {
     expect((await prepare(row(8))).fingerprint).not.toBe(before.fingerprint);
   });
 
-  it("性格设定、模式、文件夹变了：fingerprint 都跟着变", async () => {
+  it("性格设定、模式变了：提示词里是新的、带上新的版本号，fingerprint 不变（不重启，下一条消息前加说明）", async () => {
+    const prepare = make();
+    const base = await prepare(row(7));
+    const ctx = projectContext();
+    const variants: LaunchContext[] = [
+      { ...ctx, pm: { ...ctx.pm, persona: "以后回复都用列表。", personaRevision: 3 } },
+      { ...ctx, pm: { ...ctx.pm, mode: ctx.pm.mode === "hands_on" ? "manage_only" : "hands_on", personaRevision: 4 } },
+      { ...ctx, pm: { ...ctx.pm, persona: "", personaRevision: 5 } },
+    ];
+    for (const v of variants) {
+      contexts.set(7, v);
+      const files = await prepare(row(7));
+      expect(files.fingerprint).toBe(base.fingerprint);
+      expect(files.personaRevision).toBe(v.pm.personaRevision);
+      expect(readFileSync(files.promptFile, "utf8")).toBe(buildLaunchPrompt(v, dir));
+    }
+  });
+
+  it("Worker 的会话不带性格设定的版本号", async () => {
+    contexts.set(9, workerContext());
+    expect((await make()(row(9, dir, "worker"))).personaRevision).toBeUndefined();
+  });
+
+  it("文件夹变了：fingerprint 跟着变", async () => {
     const prepare = make();
     const base = (await prepare(row(7))).fingerprint;
     const ctx = projectContext();
     const variants: LaunchContext[] = [
-      { ...ctx, pm: { ...ctx.pm, persona: "以后回复都用列表。" } },
-      { ...ctx, pm: { ...ctx.pm, mode: "hands_on" } },
       { ...ctx, project: { ...ctx.project!, otherFolders: ["/work/foo-docs", "/work/more"] } },
       { ...ctx, project: { ...ctx.project!, mainFolder: "/work/foo2" } },
     ];

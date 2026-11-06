@@ -75,6 +75,7 @@ import {
 } from "./process.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
+import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -88,7 +89,8 @@ interface PendingEntry {
 interface Batch {
   messageIds: MessageId[];
   combinedText: string;
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean };
+  /** persona：性格设定、模式改了的说明（persona-note.ts），没写成、codex 没读到时退回去。 */
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 会话正忙时用 turn/steer 在一轮中途交给 codex 的（不是 turn/start 开一轮的那条）。 */
@@ -114,7 +116,7 @@ interface Steer {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -142,6 +144,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：线程建好或恢复好时定 agent 看到的版本（persona-note.ts）。 */
+  personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
   threadId: string | null;
@@ -171,6 +175,8 @@ interface SessionState {
   stopRequested: boolean;
   pending: PendingEntry[];
   written: Set<MessageId>;
+  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   recoveryNote: boolean;
   crashNote: boolean;
   relaunchNote: boolean;
@@ -522,6 +528,7 @@ export class CodexDriver implements Driver {
         stopRequested: false,
         pending: [],
         written: new Set(),
+        personaSeen: null,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -577,14 +584,19 @@ export class CodexDriver implements Driver {
     return this.#batchOf(st, body, messageIds, command, users.length > 0 ? "user" : "system");
   }
 
-  /** 拼一条：不是命令的话把恢复、崩溃、重启说明加在最前面（加一次就清掉）。 */
+  /**
+   * 拼一条：不是命令的话把恢复、崩溃、重启、性格设定改了的说明加在最前面（加一次就清掉）。
+   * 性格设定的和会话记着的比（thread/resume 起的进程按不换说明算，所以没有进程时也要比，见 persona-note.ts）。
+   */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
+    const persona = this.#takePersonaNote(st);
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
+      persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
@@ -597,6 +609,25 @@ export class CodexDriver implements Driver {
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
+    batch.notes.persona?.restore();
+  }
+
+  #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
+    // 守护进程重启后第一次：从会话那一行读
+    if (st.personaSeen === null) st.personaSeen = personaSeenFromRow(this.#row(st));
+    return takePersonaNote(
+      this.#opts.personaNote,
+      st.id,
+      st,
+      (revision) => this.#update(st, { personaRevision: revision }),
+      (error) => this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`),
+    );
+  }
+
+  #setPersonaSeen(st: SessionState, revision: number | null): void {
+    if (revision === null || revision === st.personaSeen) return;
+    st.personaSeen = revision;
+    this.#update(st, { personaRevision: revision });
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -720,8 +751,12 @@ export class CodexDriver implements Driver {
     this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, at });
   }
 
+  /** 这几条要重发（出错、崩溃、收回）：不再算写过；带着的性格设定说明也退回去，重发时再带（多带一次无害，漏了不行）。 */
   #forgetWritten(st: SessionState, batches: Batch[]): void {
-    for (const batch of batches) for (const id of batch.messageIds) st.written.delete(id);
+    for (const batch of batches) {
+      for (const id of batch.messageIds) st.written.delete(id);
+      batch.notes.persona?.restore();
+    }
   }
 
   #afterTurn(st: SessionState, proc: Proc): void {
@@ -913,6 +948,7 @@ export class CodexDriver implements Driver {
         model: row.model,
         effort: row.effort,
       },
+      personaLaunched: files.personaRevision ?? null,
       launchConfig,
       readonly: launchConfig.readonly,
       threadId: resume ? row.vendorSessionId : null,
@@ -1194,6 +1230,8 @@ export class CodexDriver implements Driver {
     if (proc.initSeen) return;
     proc.initSeen = true;
     proc.resume = resumed;
+    // 线程好了才定 agent 看到的性格设定：thread/start（包括 resume 失败退回的）是这次拼的；thread/resume 见 persona-note.ts
+    this.#setPersonaSeen(st, personaSeenAtStart(st, this.#row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
     this.#clearTimer(st, "startTimer");
 
     const patch: AgentSessionPatch = {
@@ -1480,6 +1518,8 @@ export class CodexDriver implements Driver {
   #releaseMissed(st: SessionState, missed: Batch[], stopped: boolean, at: number): void {
     const messageIds = missed.flatMap((b) => b.messageIds);
     if (messageIds.length === 0) return;
+    // codex 没读到带着的性格设定说明：退回去，下一条再带
+    for (const b of missed) b.notes.persona?.restore();
     if (stopped) {
       this.#forgetWritten(st, missed.filter((b) => b.source === "system"));
       for (const event of untakenOnStopEvents(missed, at)) this.#emit(st.id, event);

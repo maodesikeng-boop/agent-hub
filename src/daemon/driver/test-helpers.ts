@@ -82,6 +82,8 @@ export interface Harness {
     settings: boolean;
     /** true：prepareLaunch 抛错。 */
     fail: boolean;
+    /** 给了就当 LaunchFiles.personaRevision（拼进提示词的性格设定是哪一版），见 persona-fixture.ts。 */
+    personaRevision: (() => number) | null;
     perSession: Map<SessionId, { fingerprint?: string; env?: Record<string, string> }>;
   };
   /** prepareLaunch 被调了几次（按会话）。 */
@@ -106,7 +108,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
   const store = new MemorySessionStore();
-  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, perSession: new Map() };
+  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map() };
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
@@ -123,6 +125,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
         env: { ...launch.env, ...launch.perSession.get(session.id)?.env },
         fingerprint: launch.perSession.get(session.id)?.fingerprint ?? launch.fingerprint,
       };
+      if (launch.personaRevision) files.personaRevision = launch.personaRevision();
       if (launch.settings) {
         files.settingsFile = join(launchDir, "settings.json");
         writeFileSync(files.settingsFile, "{}");

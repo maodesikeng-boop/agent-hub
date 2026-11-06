@@ -2,6 +2,7 @@
 import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
+import { HUB_COMMAND } from "./names.ts";
 
 export type { AgentStep, AgentStepInput } from "./domain.ts";
 
@@ -57,10 +58,11 @@ export const RESTART_RECOVERY_NOTE = "【系统】守护进程重启，你上一
 export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发给过你。如果你已经处理过这条，忽略它。";
 /**
  * 两轮之间因为设置变了自动重启之后（见下面“两轮之间自动重启”），加在下一条写进去的消息前面。
- * 项目经理自己调 hub 改了设置（挂、移除文件夹，改性格设定、模式）时，账本不再单独给它发【系统】消息，靠这一句告诉它
- * 新设置已经生效（见 domain.ts 的 SystemMessageMeta）。
+ * 项目经理自己调 hub 改了设置（挂、移除文件夹）时，账本不再单独给它发【系统】消息，靠这一句告诉它
+ * 新设置已经生效（见 domain.ts 的 SystemMessageMeta）。性格设定、模式变了不重启，说明见 PersonaNote。
+ * 不说“见系统提示词”：claude --resume 沿用会话最初的系统提示词（driver/persona-note.ts），里面的项目、文件夹可能是旧的。
  */
-export const RELAUNCH_NOTE = "【系统】你的设置（性格设定、模式、文件夹或管着的项目）刚更新过，已经按新设置重新启动，最新的设置见系统提示词。";
+export const RELAUNCH_NOTE = `【系统】你的设置（文件夹、管着的项目、模型或思考程度）刚更新过，已经按新设置重新启动。系统提示词里的项目和文件夹可能是旧的，最新的以 \`${HUB_COMMAND} status\`、\`${HUB_COMMAND} persona show\` 为准。`;
 /** 后台任务被结束时说明里最多列几个任务、每个任务的 description 最多几个字符。 */
 const KILLED_NOTE_MAX_TASKS = 5;
 const KILLED_NOTE_MAX_DESC_CHARS = 80;
@@ -376,6 +378,15 @@ export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => 
  * - 会话那一行的 cwd、addDirs、model、effort（配置的模型、思考程度，驱动层只读不写）。
  * env 不参与比较。正在跑的这一轮不打断，等它结束再比。消息不丢、不重复（还是同一次 send，只是先重启）。
  * 重启时用的是重启前调的那次 prepareLaunch 的结果，不再调第二次。重启后写进去的第一条消息前面加 RELAUNCH_NOTE。
+ *
+ * 性格设定、模式变了不重启（不进 fingerprint）：系统提示词在整段对话最前面，一改整段缓存就失效，所以开头不动，
+ * 在后面追加说明（照 Claude Code 发现 CLAUDE.md 改了的做法）：
+ * - 每个会话记着 agent 已经看到的那一版（persona_changes 的编号），写进会话那一行（AgentSessionRow.personaRevision），守护进程重启也接得上；
+ * - 写每一行（空闲时写、一轮中途写、排队的）之前调 DriverOptions.personaNote，变了就把说明放在前面的 text 块里，
+ *   记下新的版本号，同一版只带一次；连改几次只带最新的；命令那一行不带（同别的说明，留给下一条）；没写成、agent 没读到的退回去，下一行再带；
+ * - 新起的进程算不算按最新的拼过（driver/persona-note.ts）：新会话（--session-id、thread/start）、agy 每个新进程（第一条前面重新带系统指令）算，
+ *   记下 LaunchFiles.personaRevision、不再带说明；claude --resume、codex thread/resume 都沿用会话最初的（实测，见 docs/persona-updates.md），
+ *   空闲关闭、换模型、崩溃之后恢复的进程照样靠说明。
  */
 
 /** 执行器 ↔ 驱动层。 */
@@ -456,6 +467,17 @@ export interface LaunchFiles {
    * 只算实际写进文件的内容，不含时间、随机数、令牌。驱动层只比较它是否相等。
    */
   fingerprint: string;
+  /**
+   * 拼进提示词的性格设定、模式是哪一版（LaunchContext 的 personaRevision）。不进 fingerprint：变了不重启，
+   * 见上面“两轮之间自动重启”的性格设定那段。没有（Worker）就不比。
+   */
+  personaRevision?: number;
+}
+
+/** personaNote 的结果：revision 是现在最新的版本号；note 是要加在前面的【系统】说明，只是版本号变了、内容没变是 null。 */
+export interface PersonaNote {
+  revision: number;
+  note: string | null;
 }
 
 export interface DriverOptions {
@@ -469,6 +491,11 @@ export interface DriverOptions {
    * 所以它要能反复调：同一个会话每次给的令牌一样（SessionTokens.issue 的约定），文件内容没变就给一样的 fingerprint。
    */
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
+  /**
+   * 往进程写一行之前调（同步）：sinceRevision 是 agent 已经看到的那一版。没变、不是项目经理的会话返回 null。
+   * 抛错当没变（记 internal_error），照常写。不给就不比（老测试）。
+   */
+  personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
   /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
   env?: Record<string, string>;
   /** 记日志（不进 health 的事，比如 claude 出了 conversation_reset）。默认写标准错误。 */

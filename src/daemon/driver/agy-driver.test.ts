@@ -18,6 +18,7 @@ import {
   type SessionStore,
 } from "../../shared/index.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
+import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -332,6 +333,7 @@ interface AgyTestHarness {
     fingerprint: string;
     readonly: boolean;
     env: Record<string, string>;
+    personaRevision: (() => number) | null;
   };
   waitFor<T extends DriverEvent["type"]>(
     type: T,
@@ -371,6 +373,8 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     fingerprint: "fp-1",
     readonly: false,
     env: {} as Record<string, string>,
+    /** 给了就当 LaunchFiles.personaRevision（见 persona-fixture.ts）。 */
+    personaRevision: null as (() => number) | null,
   };
 
   const driver = createAgyDriver({
@@ -397,6 +401,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
         settingsFile,
         env: { ...launch.env },
         fingerprint: launch.fingerprint,
+        ...(launch.personaRevision ? { personaRevision: launch.personaRevision() } : {}),
       };
     },
     env: {
@@ -1165,4 +1170,114 @@ describe("6. 一轮中途的消息（agy 不支持，照旧排队；停止时还
       expect(t.of("session.exited").flatMap((e) => e.messageIds)).toEqual([]);
     });
   }
+});
+
+describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说明）", () => {
+  let f: PersonaFixture | undefined;
+  afterEach(() => {
+    f?.cleanup();
+    f = undefined;
+  });
+  const SYS = (prompt: string) => `<system_instructions>\n${prompt}\n</system_instructions>`;
+  function personaHarness(script: FakeAgyScript = {}, driver: Partial<AgyDriverOptions> = {}): AgyTestHarness {
+    f = makePersonaFixture();
+    const t = makeAgyHarness({ script, driver: { personaNote: f.personaNote, ...driver } });
+    t.launch.personaRevision = f.revision;
+    t.launch.prompt = "旧提示词";
+    return t;
+  }
+  async function turn(t: AgyTestHarness, sessionId: SessionId, id: number, text: string, n: number): Promise<void> {
+    await t.driver.send(sessionId, user(id, text));
+    await t.waitFor("turn.ended", undefined, n);
+  }
+
+  it("用户在资料页改：不重启，下一条前面带完整的新内容，只带一次", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "以后回复都用列表。" });
+    await turn(t, s.id, 2, "二", 2);
+    await turn(t, s.id, 3, "三", 3);
+    expect(t.argvs()).toHaveLength(1);
+    const blocks = t.stdinBlocks();
+    expect(blocks[0]).toEqual([SYS("旧提示词"), "一"]);
+    expect(blocks[1]).toHaveLength(2);
+    expect(blocks[1]![0]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：/);
+    expect(blocks[1]![0]).toContain("以后回复都用列表。");
+    expect(blocks[1]![1]).toBe("二");
+    expect(blocks[2]).toEqual(["三"]);
+  });
+
+  it("连改两次：只带最新的一份", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "第一版" });
+    f!.userEdit({ text: "第二版" });
+    await turn(t, s.id, 2, "二", 2);
+    expect(t.stdinBlocks()[1]![0]).toContain("第二版");
+    expect(t.stdinBlocks()[1]![0]).not.toContain("第一版");
+  });
+
+  it("改模型还是重启（--conversation）；新进程首条带最新的系统指令，同时改的性格设定不再带说明", async () => {
+    const t = personaHarness({ assignedConversationId: "agy-conv-p" });
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "新习惯" });
+    t.launch.prompt = "新提示词";
+    t.store.rows.set(s.id, { ...t.store.get(s.id)!, model: "gemini-3-pro" });
+    await turn(t, s.id, 2, "二", 2);
+    expect(t.argvs()).toHaveLength(2);
+    expect(t.argvs()[1]).toContain("--conversation");
+    expect(t.stdinBlocks()[1]).toEqual([SYS("新提示词"), RELAUNCH_NOTE, "二"]);
+  });
+
+  it("闲置关闭后再起来：新进程首条带最新的系统指令，不带说明", async () => {
+    const t = personaHarness({ assignedConversationId: "agy-conv-p" }, { idleCloseMs: 50 });
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    await t.waitFor("session.exited");
+    f!.userEdit({ text: "新习惯" });
+    t.launch.prompt = "新提示词";
+    await turn(t, s.id, 2, "二", 2);
+    expect(t.argvs()).toHaveLength(2);
+    expect(t.stdinBlocks()[1]).toEqual([SYS("新提示词"), "二"]);
+  });
+
+  it("撤销：带撤销后的内容，不重启", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "新习惯" });
+    await turn(t, s.id, 2, "二", 2);
+    f!.revert();
+    await turn(t, s.id, 3, "三", 3);
+    expect(t.stdinBlocks()[2]![0]).toMatch(/^【系统】你的性格设定刚更新了/);
+    expect(t.stdinBlocks()[2]![0]).toContain("小林的习惯");
+    expect(t.argvs()).toHaveLength(1);
+  });
+
+  it("项目经理自己 hub persona edit 改的：只带一句已生效", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.selfEdit("我自己记的");
+    await turn(t, s.id, 2, "二", 2);
+    expect(t.stdinBlocks()[1]).toEqual(["【系统】你刚改的性格设定已生效。", "二"]);
+  });
+
+  it("忙着时排队的（agy 不能中途写）：写进去时比，带上", async () => {
+    const waitFile = join(tmpdir(), `agy-persona-go-${process.pid}-${Date.now()}`);
+    const t = personaHarness({ turns: [{ steps: [{ type: "waitFile", path: waitFile }, { type: "text", deltas: ["一"] }] }] });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await expect(t.driver.send(s.id, user(2, "二"))).resolves.toEqual({ kind: "queued" });
+    f!.userEdit({ text: "新习惯" });
+    writeFileSync(waitFile, "");
+    await t.waitFor("turn.ended", undefined, 2);
+    rmSync(waitFile, { force: true });
+    expect(t.stdinBlocks()[1]![0]).toContain("新习惯");
+    expect(t.stdinBlocks()[1]![1]).toBe("二");
+    expect(t.argvs()).toHaveLength(1);
+  });
 });

@@ -56,7 +56,7 @@ import {
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
-import { createLaunchPreparer } from "./launch.ts";
+import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
@@ -221,12 +221,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       hubSock: agentApi.socketPath,
       hubBinDir: paths.hubBinDir,
     });
+    // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
+    const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
+    const launch = { stateDir, store: sessions, log, prepareLaunch, personaNote };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: {
-        claude: createClaudeDriver({ claudePath, stateDir, store: sessions, log, prepareLaunch }),
-        agy: createAgyDriver({ agyPath, stateDir, store: sessions, log, prepareLaunch }),
-        codex: createCodexDriver({ codexPath, stateDir, store: sessions, log, prepareLaunch }),
+        claude: createClaudeDriver({ claudePath, ...launch }),
+        agy: createAgyDriver({ agyPath, ...launch }),
+        codex: createCodexDriver({ codexPath, ...launch }),
       },
     });
     parts.driver = driver;
