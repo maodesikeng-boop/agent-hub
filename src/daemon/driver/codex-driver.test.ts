@@ -1306,12 +1306,13 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
       const s = t.addSession();
       await t.driver.send(s.id, user(1, "开始"));
       await t.waitFor("agent.tool");
-      const sending = t.driver.send(s.id, user(2, "插一句"));
+      // 先挂上断言：send 会在 end 返回之前就 reject
+      const sent = expect(t.driver.send(s.id, user(2, "插一句"))).rejects.toMatchObject({ code: "session_ended" });
       const ending = t.driver.end(s.id);
       release(t.dir);
       await ending;
       expect(t.store.get(s.id)!.status).toBe("ended");
-      await expect(sending).rejects.toMatchObject({ code: "session_ended" });
+      await sent;
       expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1]]);
       expect(t.of("message.delivered").map((e) => e.messageIds)).toEqual([[1]]);
       expect(methods(t).filter((m) => m === "turn/start")).toHaveLength(1);
