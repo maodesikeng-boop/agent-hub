@@ -501,6 +501,114 @@ describe("留多少：只留最近的若干条", () => {
   });
 });
 
+/** 各家的“读文件”“搜索”“改文件”“上网”工具（驱动层原样交给账本的 name、input）。 */
+const OTHER_TOOLS: Record<AgentVendor, Record<"read" | "search" | "edit" | "web", (arg: string) => { name: string; input: unknown }>> = {
+  claude: {
+    read: (p) => ({ name: "Read", input: { file_path: p } }),
+    search: (q) => ({ name: "Grep", input: { pattern: q } }),
+    edit: (p) => ({ name: "Edit", input: { file_path: p } }),
+    web: (q) => ({ name: "WebSearch", input: { query: q } }),
+  },
+  codex: {
+    read: (p) => ({ name: "read_file", input: { path: p } }),
+    search: (q) => ({ name: "grep_search", input: { query: q } }),
+    edit: (p) => ({ name: "apply_patch", input: { path: p } }),
+    web: (q) => ({ name: "webSearch", input: { query: q } }),
+  },
+  agy: {
+    read: (p) => ({ name: "view_file", input: { AbsolutePath: p } }),
+    search: (q) => ({ name: "find_by_name", input: { Pattern: q, SearchPath: "." } }),
+    edit: (p) => ({ name: "replace_file_content", input: { TargetFile: p } }),
+    web: (q) => ({ name: "search_web", input: { query: q } }),
+  },
+};
+const runNamed = (workerId: WorkerId, tool: { name: string; input: unknown }, wait = 1_000) => {
+  const id = `tool-${++seq}`;
+  emit(workerId, { type: "agent.tool", uuid: `u-${id}`, toolUseId: id, name: tool.name, input: tool.input, ...at() });
+  advance(wait);
+  emit(workerId, { type: "agent.tool_result", toolUseIds: [id], ...at() });
+};
+const stats = (workerId: WorkerId) => ledger.hubCall(lin.sessionId, "worker.log", { workerId, stats: true }, {});
+
+describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {
+  it("各类别计数、读得最多的文件、重复最多的命令、思考和等工具的用时、轮的结局", () => {
+    const w = startWorker(vendor);
+    const t = OTHER_TOOLS[vendor];
+    startTurn(w);
+    emit(w, { type: "agent.thinking", uuid: "t1", ...at() });
+    advance(4_000);
+    emit(w, { type: "agent.thinking", uuid: "t2", ...at() });
+    advance(6_000);
+    for (const f of ["/x/a.ts", "/y/a.ts", "/x/b.ts"]) runNamed(w, t.read(f), 2_000);
+    runNamed(w, t.search("foo"));
+    runNamed(w, t.edit("/x/a.ts"));
+    runNamed(w, t.web("q"));
+    runTool(vendor, w, "pnpm test");
+    runTool(vendor, w, "pnpm test");
+    runTool(vendor, w, "ls");
+    endTurn(w);
+    startTurn(w);
+    endTurn(w, { ok: false, interrupted: true });
+    startTurn(w);
+    endTurn(w, { ok: false, error: { subtype: "x", message: "boom" } });
+    const text = stats(w).text;
+    expect(text).toContain("共 9 步，3 轮：ok 1 / interrupted 1 / failed 1");
+    expect(text).toContain("读文件 3，搜索 1，跑命令 3，改文件 1，上网 1，其它 0");
+    expect(text).not.toContain("认不出");
+    expect(text).toContain("读得最多的文件：a.ts ×2，b.ts ×1");
+    expect(text).toContain("重复最多的命令：pnpm test ×2");
+    expect(text).not.toContain("ls ×");
+    expect(text).toContain("思考 10s（1 次），等工具结果 ");
+    expect(text.split("\n").length).toBeLessThanOrEqual(15);
+    expect(stats(w).data.steps).toEqual([]);
+  });
+});
+
+describe("hub worker log --stats：认不出的工具、其它、多会话、没有步骤", () => {
+  it("认不出的工具按原名单独计数；技能、连接器、子代理算其它", () => {
+    const w = startWorker("claude");
+    startTurn(w);
+    runNamed(w, { name: "FooTool", input: {} });
+    runNamed(w, { name: "FooTool", input: {} });
+    runNamed(w, { name: "BarTool", input: {} });
+    runNamed(w, { name: "Skill", input: { skill: "x" } });
+    runNamed(w, { name: "mcp__codegraph__explore", input: {} });
+    const text = stats(w).text;
+    expect(text).toContain("共 5 步，1 轮：ok 0 / interrupted 0 / failed 0 / running 1");
+    expect(text).toContain("读文件 0，搜索 0，跑命令 0，改文件 0，上网 0，其它 2");
+    expect(text).toContain("认不出的工具：FooTool ×2，BarTool ×1");
+    expect(text).toContain("读得最多的文件：—");
+    expect(text).toContain("重复最多的命令：—");
+  });
+
+  it("换代后合计所有会话的步骤", () => {
+    const w = startWorker("claude");
+    startTurn(w);
+    runTool("claude", w, "pnpm test");
+    runTool("claude", w, "pnpm test");
+    endTurn(w);
+    // 换代：同一个对话里再来一个 generation 2 的会话
+    const cols = db.all<{ name: string }>("PRAGMA table_info(agent_sessions)").map((c) => c.name).filter((n) => n !== "id");
+    const list = cols.map((c) => (c === "generation" ? "generation + 1" : c === "vendor_session_id" ? "vendor_session_id || '-gen2'" : c)).join(", ");
+    db.run(`INSERT INTO agent_sessions (${cols.join(", ")}) SELECT ${list} FROM agent_sessions WHERE id = ?`, sessionOf(w));
+    const second = db.get<{ id: number }>("SELECT max(id) AS id FROM agent_sessions")!.id;
+    ledger.applyDriverEvent(second, { type: "message.processing", messageIds: [1], ...at() });
+    ledger.applyDriverEvent(second, { type: "agent.tool", uuid: "g2", toolUseId: "g2", name: "Bash", input: { command: "pnpm test" }, ...at() });
+    ledger.applyDriverEvent(second, { type: "turn.ended", ok: true, interrupted: false, messageIds: [1], durationMs: null, ...at() });
+    const text = stats(w).text;
+    expect(text).toContain("（2 个会话）");
+    expect(text).toContain("共 3 步，2 轮：ok 2 / interrupted 0 / failed 0");
+    expect(text).toContain("重复最多的命令：pnpm test ×3");
+  });
+
+  it("没有步骤：一句话；不能和 --last 一起用；只能看自己派的", () => {
+    const w = startWorker("claude");
+    expect(stats(w).text).toBe(`Worker #${w}“修 X”还没有记录到任何一步。`);
+    expectLedgerError(() => ledger.hubCall(lin.sessionId, "worker.log", { workerId: w, stats: true, last: 5 }, {}), "invalid", /--last/);
+    expectLedgerError(() => ledger.hubCall(zhou.sessionId, "worker.log", { workerId: w, stats: true }, {}), "forbidden", /不是你派的/);
+  });
+});
+
 describe("clipText", () => {
   it("不超长原样，超长截断加省略号，按字符不按字节", () => {
     expect(clipText("abc", 5)).toBe("abc");

@@ -9,6 +9,8 @@ export const SESSION_STEPS_KEEP = 1_000;
 /** hub worker log 默认看最近几步、最多几步。 */
 export const WORKER_LOG_DEFAULT_STEPS = 20;
 export const WORKER_LOG_MAX_STEPS = 200;
+/** hub worker log --stats 里“读得最多的文件”“重复最多的命令”各列几个。 */
+export const WORKER_STATS_TOP = 3;
 /** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
 export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
 /** Worker 在干活、没有工具在跑、这么久没动静，hub worker show 提醒“可能卡住了”。 */

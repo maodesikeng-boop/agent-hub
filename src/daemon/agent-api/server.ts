@@ -141,7 +141,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["workerId"],
-    properties: { workerId: workerIdField, last: { type: "integer" } },
+    properties: { workerId: workerIdField, last: { type: "integer" }, stats: { type: "boolean" } },
   },
   ask: { type: "object", additionalProperties: false, required: ["text"], properties: { text: taskField } },
   // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查

@@ -147,8 +147,9 @@ export interface HubArgsMap {
   /**
    * `hub worker log <编号> [--last N]`：这个 Worker 最近 N 步（默认 WORKER_LOG_DEFAULT_STEPS，最多 WORKER_LOG_MAX_STEPS），
    * 一行一步，从账本的 session_steps 取，不看各厂商的原始日志。
+   * `--stats`：不列步骤，汇总这个 Worker 所有会话里账本留着的全部步骤（steps 数组留空），不能和 last 一起用。
    */
-  "worker.log": { workerId: WorkerId; last?: number };
+  "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
   /**
    * `hub ask --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
    * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的。

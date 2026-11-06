@@ -231,6 +231,7 @@ describe("hub cli", () => {
       [["worker", "log", "3"], "worker.log", { workerId: 3 }],
       [["worker", "log", "3", "--last", "5"], "worker.log", { workerId: 3, last: 5 }],
       [["worker", "log", "--last", "200", "3"], "worker.log", { workerId: 3, last: 200 }],
+      [["worker", "log", "3", "--stats"], "worker.log", { workerId: 3, stats: true }],
     ] as const)("hub %j → %s", async (argv, command, args) => {
       expect((await hub([...argv])).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
@@ -264,6 +265,7 @@ describe("hub cli", () => {
       [["worker", "log", "3", "--last", "-1"]],
       [["worker", "log", "3", "--last", "1.5"]],
       [["worker", "log", "3", "--last"]],
+      [["worker", "log", "3", "--stats", "--last", "5"]],
       [["worker", "log", "3", "--stdin"]],
     ])("usage error: hub %j", async (argv) => {
       const r = await hub([...argv], { stdin: stdinOf("任务") });
@@ -280,7 +282,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N]`, `${cmd} ask --stdin`]) {
+      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });
