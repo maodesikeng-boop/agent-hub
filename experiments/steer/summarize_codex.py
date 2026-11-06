@@ -42,5 +42,6 @@ for line in open(sys.argv[1]):
         elif "id" in j and "result" in j:
             res = j["result"]
             keys = list(res.keys())[:4]
-            if keys and keys != ["thread"] and "userAgent" not in res:
+            if "data" in res: print(f"{dt:7.2f} response   id={j['id']} {json.dumps(res, ensure_ascii=False)[:300]}")
+            elif keys and keys != ["thread"] and "userAgent" not in res:
                 print(f"{dt:7.2f} response   id={j['id']} {json.dumps(res, ensure_ascii=False)[:160]}")

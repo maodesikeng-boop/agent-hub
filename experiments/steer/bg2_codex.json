@@ -1,0 +1,33 @@
+[
+ {
+  "turn_start": "Run exactly this one shell command with your shell/exec tool, using a yield time or timeout of about 3 seconds so that the command keeps running in the background and you do NOT wait for it: `sleep 30; echo BGDONE > bg_done.txt`. Do not poll it. As soon as the tool call returns, reply with the single word STARTED and end your turn."
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 120
+ },
+ {
+  "bg_list": true
+ },
+ {
+  "sleep": 10
+ },
+ {
+  "bg_list": true
+ },
+ {
+  "sleep": 30
+ },
+ {
+  "bg_list": true
+ },
+ {
+  "sleep": 10
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]

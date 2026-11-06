@@ -301,3 +301,84 @@ interface MidTurnSupport {
 **6) 界面**：只认“排队中 / 已送达 / 处理中 / 已取消”；“已送达”在支持中途送达的厂商上表示“agent 会在当前这一步跑完后读到”，agy 没有这个状态（直接排队中）。是否显示“agent 不会中途看到”之类提示由能力声明里的 `mode` 决定，不按厂商名判断。
 
 **7) 没测的（agy、codex）**：codex——steer 被收下的同一刻这一轮恰好结束的竞态、`clientUserMessageId` 是否回显、审批请求（`requestApproval`）挂着时 steer、`thread/resume` 之后的 steer、`gpt-5.4-mini` 以外的模型（行为由 app-server 决定，应与模型无关）、长工具（比如 10 分钟的命令）里 steer 要等到它结束（和 claude 一样，没有 `priority:"now"` 那种挪去后台的办法）；agy——`--mode auto` 在本账号不可用，用的是默认模式 + `--dangerously-skip-permissions`，没测别的权限模式；另外 agy 一轮里工具权限请求挂着时的行为没测。
+
+## 10. 后台任务的信号（agy、codex 有没有对应 claude 的 `system/background_tasks_changed`）
+
+**要回答的**：驱动层靠它判断“还有后台命令在跑，别因为闲置把进程关掉”（claude 的做法见 PR #92 和 `docs/m0-report.md` 的“后台任务事件”一节：`background_tasks_changed` 带完整名单；任务结束时顺序是 `task_updated` → `task_notification` → `background_tasks_changed(tasks=[])` → 约 100 毫秒后 claude 自己开一轮）。agy、codex 有没有对应的信号。
+
+**做法**：同第 7、8 节的环境和参数，让 agent 起一个后台跑 30 秒的命令（`sleep 30; echo BGDONE > bg_done.txt`），记下这段时间的所有事件。agy 脚本 `bg_agy.json`、`bg2_agy.json`，codex 脚本 `bg_codex.json`、`bg2_codex.json`（codex 的 `steer_codex.py` 加了 `bg_list` 步骤，调 `thread/backgroundTerminals/list`）。
+
+### 10.1 agy
+
+官方文档（<https://antigravity.google/docs/cli/headless>）没有后台任务的事件；`init` 里的工具有 `run_command`、`command_status`、`manage_task`、`send_command_input`，没有推送。实测（`bg_agy`，第一个进程等 50 秒）：
+
+```
+ 6.89 step#2 tool/ACTIVE run_command {"CommandLine":"sleep 30; echo BGDONE > bg_done.txt"}   ← 之后一直没有这一步的 DONE
+11.47 step#3 agent_response/DONE 'STARTED'   11.47 result/SUCCESS turns=1
+      …… 11.47 到 62.10 之间没有任何事件（命令约 37 秒时跑完，bg_done.txt 写好了，已核对）
+```
+
+- **运行期间**：没有任何“后台任务”事件。唯一的痕迹是这个 `run_command` 的 tool step 出了 `ACTIVE` 之后到 `result` 都没出 `DONE`（对比前台命令：`ACTIVE` 之后命令一跑完就出 `DONE`，见第 7 节 A）。
+- **跑完时**：没有通知，没有 `step_update`，**不会自己开新的一轮**。agent 要自己调 `command_status` 才知道结果，这要有下一轮。
+- **进程关闭**（`bg2_agy`，turn 结束后 2 秒关标准输入）：agy 9.19 `result`、12.92 退出（退出码 0），**不等后台命令**；命令没被杀，孤儿进程自己跑完、写好了文件，但结果没有任何地方接。
+- **结论：agy 不能可靠判断“有后台任务在跑”**。只有一个启发式：`result` 到的时候还有 `step_type:"tool"` 的 `ACTIVE` 步骤没 `DONE`——两次实测都是这样，官方没写、没测过其他情形（`command_status` 查询之后会不会补 `DONE`、权限请求挂着、别的工具），**不建议当真**。agy 保持现状（闲置关闭不看后台任务）。
+
+### 10.2 codex
+
+官方文档（<https://developers.openai.com/codex/app-server>）没写后台任务；本机 `generate-json-schema --experimental` 里有 `thread/backgroundTerminals/list|clean|terminate`（返回 `{data:[{itemId, processId, command, cwd, osPid, cpuPercent, rssKb}], nextCursor}`）和 `item/commandExecution/terminalInteraction` 通知。实测分两种情形：
+
+**1) 命令是 codex 自己的“长命令”（unified exec，`source:"unifiedExecStartup"`，`bg2_codex`，让模型给 3 秒的 yield 时间）：**
+
+```
+12.14 item/started   commandExecution "sleep 30; echo BGDONE > bg_done.txt" status=inProgress processId=77837
+16.44 item/completed agentMessage 'STARTED'
+16.50 thread/status/changed idle ; turn/completed status=completed        ← turn.items 里只有 agentMessage，没有这个命令
+16.50 thread/backgroundTerminals/list → data:[{itemId:"exec-2bee…", processId:"77837", command:"sleep 30; …", cwd, osPid:null,…}]
+26.56 同上：还在名单里
+42.05 item/completed commandExecution status=completed exitCode=0 durationMs=29905 aggregatedOutput=null
+56.57 thread/backgroundTerminals/list → data:[]
+```
+
+- **运行期间能判断**：两个办法都行——①事件：`item/started`（`type:"commandExecution"`）之后没出对应 `item/completed`，这个命令 item **跨过 `turn/completed` 继续开着**，名单就是“开着的 commandExecution item（按 `item.id`）”；②查询：`thread/backgroundTerminals/list {threadId}`（回完整名单，`processId`、`command` 字段，`osPid` 实测是 null）。**`turn/completed` 的 `turn.items` 不含这个命令，不能靠它。**
+- **跑完时有通知**：`item/completed`（`status:"completed"`、`exitCode`、`durationMs`，`aggregatedOutput` 是 null），名单随即变空。**不会自己开新的一轮**（42.05 前后没有 `turn/started`，`thread/status` 一直是 idle），模型也没被叫醒——agent 要等下一轮自己去查（或由我们发一条系统消息叫醒它，见 10.3）。
+- 一轮结束时没有专门的“后台任务变了”事件，`thread/status/changed` 的 `activeFlags` 在这期间是空的，不能用。
+
+**2) 命令是 shell 层面放后台（`nohup … &`、`( … ) &`，`bg_codex`，模型被要求“放后台”时选的是这种）：**
+
+```
+13.47 item/started commandExecution "/bin/zsh -lc \"nohup sh -c 'sleep 30; echo BGDONE > bg_done.txt' >/dev/null 2>&1 &\"" 
+13.47 item/completed commandExecution status=completed exitCode=0 durationMs=0       ← 外壳立刻退出
+22.96 turn/completed ; thread/backgroundTerminals/list → data:[]（命令约 44 秒时才跑完）
+```
+
+codex 看到的是一个立刻结束的命令，**之后命令还在跑，但没有任何事件、名单也是空的**，不能判断，也没有完成通知。
+
+- **结论：codex 能判断一部分**：codex 自己的长命令（yield 出去的 unified exec）能判断，靠 `item/started`/`item/completed` 对子 commandExecution item、或 `thread/backgroundTerminals/list` 的 `data` 是否为空；agent 自己用 `nohup &` 放到后台的命令，codex 不知道，**判断不了**。哪一种取决于模型怎么选（我们的系统提示词“长命令放后台”那句，在 codex 上多半会被模型翻译成 `nohup &`——见 PR #90 的提示词——所以名单大概率是空的）。
+
+### 10.3 三家对比和接口
+
+| | claude | codex | agy |
+| --- | --- | --- | --- |
+| 有没有“后台任务名单” | 有：`system/background_tasks_changed`，`tasks[]` 完整名单（每次整个换掉） | 部分：`thread/backgroundTerminals/list`（完整名单，主动查）；以及开着的 `commandExecution` item；只管 unified exec 的长命令，管不到 `nohup &` | **没有** |
+| 运行时的信号 | 事件推送 | 事件（`item/started` 没配对 `item/completed`）+ 查询 | 无（只有一个没 `DONE` 的 tool step，不可靠） |
+| 完成时的通知 | `task_notification`、`background_tasks_changed(tasks=[])` | `item/completed`（`exitCode`、`durationMs`） | 无 |
+| 会不会自己开新的一轮 | **会**（约 100 毫秒后，agent 读到结果） | **不会** | **不会** |
+| 一轮的 `result`/`turn/completed` 之后 | 后台任务通常还在跑 | 命令 item 仍开着 | 命令还在跑 |
+| 关进程时 | （没测，见 PR #92） | 没测 | 进程不等它就退出，命令成孤儿自己跑完，结果没人接 |
+
+**接口**：沿用第 9.2 节的思路，能力声明加一项，界面和闲置关闭只认通用的东西：
+
+```ts
+interface BackgroundTaskSupport {
+  /** "none" = 这家看不到后台任务（闲置关闭照旧）；"snapshot_event" = 事件带完整名单（claude）；"item_lifecycle" = 靠命令 item 的开始/结束对子，加可选的名单查询（codex）。 */
+  signal: "none" | "snapshot_event" | "item_lifecycle";
+  /** 任务结束后厂商会不会自己开一轮叫醒 agent。false 时，驱动层要靠“任务结束”事件自己发一条系统消息，不然 agent 不知道命令跑完了。 */
+  wakesAgent: boolean;
+}
+```
+驱动层对外只出一个通用事件 `background.changed { count: number }`（claude 用 `tasks.length`，不算 `ambient`；codex 用开着的 `commandExecution` item 数，turn 结束和重启时调一次 `thread/backgroundTerminals/list` 校准），闲置关闭（`idleDelayMs`）只看 `count>0`。`signal:"none"` 的驱动不发这个事件。
+
+- claude：`{signal:"snapshot_event", wakesAgent:true}`（现状，PR #92）。
+- codex：`{signal:"item_lifecycle", wakesAgent:false}`：**可以像 claude 一样“有任务就不闲置关闭”，但光保住进程不够**——命令跑完时 agent 不会被叫醒，要由驱动层在 `item/completed`（后台那个命令）到达时发一条系统消息（“后台命令 X 已结束，退出码 N”）把 agent 叫起来读结果，否则只是命令没被杀、结果没人看。
+- agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；系统提示词里不要对 agy 说“长命令放后台等它”（会丢结果），让 agy 前台跑（当前这一轮等它）。
+- **没测的**：codex 的 unified exec 进程在 app-server 退出时是否被杀、`thread/backgroundTerminals/terminate/clean` 的行为、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。

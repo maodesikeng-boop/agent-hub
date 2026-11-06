@@ -1,0 +1,19 @@
+[
+ {
+  "send": "Start this shell command in the BACKGROUND so that it keeps running without you waiting for it: `sleep 30; echo BGDONE > bg_done.txt`. Do not wait for it to finish. As soon as it has started, reply with the single word STARTED and end your turn."
+ },
+ {
+  "wait": "result",
+  "nth": 1,
+  "timeout": 120
+ },
+ {
+  "sleep": 50
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]

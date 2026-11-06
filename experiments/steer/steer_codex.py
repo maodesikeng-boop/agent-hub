@@ -11,6 +11,7 @@ Steps (list in SCENARIO):
   {"steer": "text"}                        turn/steer with expectedTurnId = current active turn
   {"steer": "text", "expected": "bogus"}   turn/steer with a wrong expectedTurnId
   {"queue_add": "text"} {"queue_start": true} {"queue_list": true}    thread/queue/*
+  {"bg_list": true}                        thread/backgroundTerminals/list (background command sessions)
   {"interrupt": true}                      turn/interrupt for the active turn
   {"wait_cmd": 1}                          nth commandExecution item/started
   {"wait_cmd_done": 1}                     nth commandExecution item/completed
@@ -158,6 +159,8 @@ for step in scenario:
                                      "input": [{"type": "text", "text": step["queue_add"]}]})
     elif "queue_start" in step:
         request("thread/queue/start", {"threadId": state["thread"]})
+    elif "bg_list" in step:
+        request("thread/backgroundTerminals/list", {"threadId": state["thread"]})
     elif "queue_list" in step:
         request("thread/queue/list", {"threadId": state["thread"]})
     elif "interrupt" in step:
