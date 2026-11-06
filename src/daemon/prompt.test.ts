@@ -11,6 +11,7 @@ import {
   PM_MODE_LABELS,
   PM_PERSONA_TEMPLATE,
   PRODUCT_NAME,
+  VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
@@ -18,6 +19,7 @@ import {
   userToWorkerHeader,
   workerReportHeader,
   type SetupOutcome,
+  type VendorSpec,
 } from "../shared/index.ts";
 import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
@@ -26,6 +28,7 @@ import { mergeUserTexts } from "./driver/protocol.ts";
 import {
   AGENTS_NOTE,
   HUB_USAGE_PROMPT,
+  PM_BACKGROUND_COMMAND_NOTE,
   PM_MEMORY_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
@@ -229,6 +232,61 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(PM_WORKER_PROMPT).toContain(`一律用 \`${hub} worker start\` 派 Worker`);
     expect(PM_WORKER_PROMPT).toContain("只读调研加 `--readonly`");
   });
+
+  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 agy/codex/gemini", () => {
+    for (const mode of PM_MODES) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
+      expect(prompt).toContain("**用别家的模型**");
+      for (const [vendor, spec] of Object.entries(VENDOR_SPECS)) {
+        expect(prompt).toContain(`\`${vendor}\`（${spec.label}`);
+        expect(prompt).toContain(`\`${spec.models[0]!.id}\``);
+      }
+      expect(prompt).toContain(`${hub} worker start --vendor <厂商> --model <模型>`);
+      expect(prompt).toContain("不写 `--vendor`");
+      for (const cli of ["`agy`", "`codex`", "`gemini`"]) expect(prompt).toContain(cli);
+    }
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    specs.acme = {
+      ...VENDOR_SPECS.claude,
+      label: "Acme Rocket",
+      models: [{ id: "acme-ultra-9", label: "Acme Ultra 9" }],
+    };
+    try {
+      const prompt = buildLaunchPrompt(projectContext(), dir);
+      expect(prompt).toContain("`acme`（Acme Rocket");
+      expect(prompt).toContain("`acme-ultra-9`");
+    } finally {
+      delete specs.acme;
+    }
+    expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("用别家的模型");
+  });
+
+  it("长命令放后台：两种模式下都有，写明一分钟以上用后台运行（如 run_in_background）、几秒钟在前台跑；只加在项目经理提示词里，Worker 不加", () => {
+    for (const mode of PM_MODES) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
+      expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+    }
+    for (const word of [
+      "**长命令放后台**",
+      "一分钟以上",
+      "等 CI",
+      "跑冒烟测试",
+      "跑全量测试",
+      "后台运行",
+      "`run_in_background`",
+      "这一轮先结束",
+      "用户能接着说话",
+      "命令跑完会叫醒你",
+      "几秒钟的命令照常在前台跑",
+      "放后台反而多花请求",
+    ]) {
+      expect(PM_BACKGROUND_COMMAND_NOTE).toContain(word);
+    }
+    const workerPrompt = buildWorkerPrompt(workerContext(), dir);
+    expect(workerPrompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
+    expect(workerPrompt).not.toContain("长命令放后台");
+    expect(workerPrompt).not.toContain("run_in_background");
+  });
 });
 
 describe("提示词：数值和事实以代码为准", () => {
@@ -275,7 +333,7 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("怎么带 Worker：worktree、--no-worktree、汇报怎么回来、worktree 可读、用 hub worker send 接着改、收工用 hub worker end、记忆文件只能项目经理改", () => {
+  it("怎么带 Worker：worktree、--no-worktree、汇报怎么回来、worktree 可读、用 hub worker send 接着改、收工用 hub worker end；不限制 Worker 改记忆文件", () => {
     for (const word of [
       "worktree",
       "主文件夹",
@@ -285,11 +343,12 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker send`,
       `${hub} worker end`,
       "不会删 worktree",
-      "Worker 不能改记忆文件",
-      "你在主文件夹里自己改",
       "至少有一次提交",
     ]) {
       expect(PM_WORKER_PROMPT).toContain(word);
+    }
+    for (const gone of ["Worker 不能改记忆文件", "你在主文件夹里自己改"]) {
+      expect(PM_WORKER_PROMPT).not.toContain(gone);
     }
   });
 
@@ -389,14 +448,12 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain("发给你的消息都来自项目经理");
   });
 
-  it("不能改记忆文件，要改就写进汇报的问题；问不了用户，有问题写进汇报交给项目经理；没有先问用户的事，不硬性要求 git commit", () => {
+  it("问不了用户，有问题写进汇报交给项目经理；不限制改记忆文件；没有先问用户的事，不硬性要求 git commit", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
-    for (const word of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/", ".gemini/", ".codex/", "不能改", "“问题”"]) {
-      expect(WORKER_RULES).toContain(word);
-    }
+    expect(WORKER_RULES).toContain("“问题”");
     expect(WORKER_RULES).toMatch(/问不了用户/);
-    for (const gone of ["先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
+    for (const gone of ["记忆文件你不能改", "先问用户的事", "git push", "brew", "sudo", "合并由项目经理来做", "改完在这个分支上提交", "git commit"]) {
       expect(prompt).not.toContain(gone);
     }
   });
