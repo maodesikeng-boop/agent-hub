@@ -17,10 +17,6 @@ jobs:
   check:
     runs-on: macos-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        rep: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
 
@@ -37,19 +33,14 @@ jobs:
 
       - run: pnpm typecheck
 
-      # CI 里不用 pnpm check 的 dot reporter：它在 CI 日志里看不到失败汇总（见 PR 说明），
-      # 改用 verbose（逐条用例 + 耗时）、github-actions（失败写成注解）、junit（留档）。
-      - run: pnpm vitest run --exclude test/tmp-dot-probe.test.ts --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml
-
-      - name: probe dot reporter
-        if: matrix.rep == 1
-        continue-on-error: true
-        run: pnpm check
+      # 不用 pnpm check：它的 dot reporter 在 CI 里跑整套时看不到点、失败汇总和统计（只剩 stderr），
+      # 一条用例失败也只看到 exit code 1。test:ci 用 verbose + github-actions，失败写成注解。
+      - run: pnpm test:ci
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure()
         with:
-          name: vitest-junit-${{ matrix.rep }}
+          name: vitest-junit
           path: vitest-junit.xml
           if-no-files-found: ignore
 
