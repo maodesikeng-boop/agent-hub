@@ -67,7 +67,7 @@ import {
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
-import { takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { personaSeenAtSpawn, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
@@ -140,8 +140,6 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
-  /** agent 已经看到的性格设定、模式是哪一版（起来时是 LaunchFiles.personaRevision，带了说明就跟着改）；null 不比（persona-note.ts）。 */
-  personaSeen: number | null;
   initSeen: boolean;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -179,6 +177,8 @@ interface SessionState {
   pending: PendingEntry[];
   /** 已经写进去（已送达）、还没失败的消息；这一轮出错或进程崩溃时删掉，好让重发真的再写一次。 */
   written: Set<MessageId>;
+  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   recoveryNote: boolean;
   crashNote: boolean;
   /**
@@ -555,6 +555,7 @@ export class ClaudeDriver implements Driver {
         stopRequested: false,
         pending: [],
         written: new Set(),
+        personaSeen: null,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -627,15 +628,14 @@ export class ClaudeDriver implements Driver {
 
   /**
    * 拼一行：不是命令的话把恢复、崩溃、重启、后台任务被结束、性格设定改了的说明加在最前面（加一次就清掉）。
-   * 性格设定的只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼提示词）。
+   * 性格设定的和会话记着的比（--resume 起的进程不换系统提示词，所以没有进程时也要比，见 persona-note.ts）。
    */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     const uuid = randomUUID();
     if (command) {
       return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
-    const proc = st.proc && !st.proc.closing ? st.proc : null;
-    const persona = proc ? takePersonaNote(this.#opts.personaNote, st.id, proc, (e) => this.#personaNoteError(st, e)) : null;
+    const persona = this.#takePersonaNote(st);
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote, persona };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
@@ -661,8 +661,22 @@ export class ClaudeDriver implements Driver {
     batch.notes.persona?.restore();
   }
 
-  #personaNoteError(st: SessionState, error: unknown): void {
-    this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`);
+  #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
+    // 守护进程重启后第一次：从会话那一行读
+    if (st.personaSeen === null) st.personaSeen = this.#row(st)?.personaRevision ?? null;
+    return takePersonaNote(
+      this.#opts.personaNote,
+      st.id,
+      st,
+      (revision) => this.#update(st, { personaRevision: revision }),
+      (error) => this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`),
+    );
+  }
+
+  #setPersonaSeen(st: SessionState, revision: number | null): void {
+    if (revision === null || revision === st.personaSeen) return;
+    st.personaSeen = revision;
+    this.#update(st, { personaRevision: revision });
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -759,8 +773,12 @@ export class ClaudeDriver implements Driver {
     this.#emit(st.id, { type: "message.delivered", messageIds: batch.messageIds, ...(batch.midTurn ? { midTurn: true as const } : {}), at: Date.now() });
   }
 
+  /** 这几行要重写（出错、崩溃、收回）：不再算写过；带着的性格设定说明也退回去，重写时再带（多带一次无害，漏了不行）。 */
   #forgetWritten(st: SessionState, batches: Batch[]): void {
-    for (const batch of batches) for (const id of batch.messageIds) st.written.delete(id);
+    for (const batch of batches) {
+      for (const id of batch.messageIds) st.written.delete(id);
+      batch.notes.persona?.restore();
+    }
   }
 
   /**
@@ -946,7 +964,6 @@ export class ClaudeDriver implements Driver {
       child,
       resume,
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
-      personaSeen: files.personaRevision ?? null,
       initSeen: false,
       capabilities: new Set(),
       stderr: "",
@@ -958,6 +975,8 @@ export class ClaudeDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
+    // --resume 沿用会话最初的系统提示词，agent 看到的性格设定接着算之前的；--session-id 是这次拼的（persona-note.ts）
+    this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, !resume));
     st.background.clear();
     st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });

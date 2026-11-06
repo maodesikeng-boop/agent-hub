@@ -582,7 +582,9 @@ describe("M2：两轮之间自动重启", () => {
   it("重启说明说得通用：设置刚更新过、已经按新设置重新启动，不只列文件夹", () => {
     expect(RELAUNCH_NOTE).toContain("刚更新过");
     expect(RELAUNCH_NOTE).toContain("已经按新设置重新启动");
-    for (const what of ["性格设定", "模式", "文件夹", "管着的项目"]) expect(RELAUNCH_NOTE).toContain(what);
+    for (const what of ["文件夹", "管着的项目", "模型", "思考程度"]) expect(RELAUNCH_NOTE).toContain(what);
+    // 性格设定、模式变了不重启（下一条前面加说明，见 driver.ts）
+    for (const gone of ["性格设定", "模式"]) expect(RELAUNCH_NOTE).not.toContain(gone);
   });
 
   it("指纹只看内容：同样的输入两次算出来一样，任何一样变了就不一样", () => {

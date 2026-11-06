@@ -7,7 +7,7 @@ import type { AgentSessionRow, SessionId } from "./domain.ts";
  * claude 实际报回来的模型只在 session.started 事件里。
  */
 export type AgentSessionPatch = Partial<
-  Pick<AgentSessionRow, "vendorSessionId" | "pid" | "status" | "hasCompletedTurn" | "lastEventAt" | "rateLimit" | "usage">
+  Pick<AgentSessionRow, "vendorSessionId" | "pid" | "status" | "hasCompletedTurn" | "lastEventAt" | "rateLimit" | "usage" | "personaRevision">
 >;
 
 export interface SessionStore {

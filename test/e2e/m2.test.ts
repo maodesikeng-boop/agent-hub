@@ -367,7 +367,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 
-  it("资料页改性格设定、撤销，项目经理自己 hub persona edit：都不重启（同一个进程），下一条前面带说明、只带一次；之后换模型重启按最新的拼、不再带", async () => {
+  it("资料页改性格设定、撤销，项目经理自己 hub persona edit：都不重启（同一个进程），下一条前面带说明、只带一次；换模型 --resume 重启照样带", async () => {
     env = makeEnv();
     env.setScript({ defaultTurn: quick("好的") });
     const { daemon, client } = await boot();
@@ -388,13 +388,20 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(texts[2]).toBe("第三条");
     expect(texts[3]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n阿周的习惯\n\n第四条$/);
     expect(texts[4]).toBe("【系统】你刚改的性格设定已生效。\n\n第五条");
-    // 换模型：照旧重启，按最新的性格设定拼提示词，不再带性格设定的说明
+    // 换模型：照旧重启（--resume）；claude 恢复会话沿用最初的系统提示词，同时改的性格设定照样带说明，只带一次
     await put({ model: "haiku", text: "用户最后改的" });
     await warmUp(client, zhou.conversationId, "第六条");
+    await warmUp(client, zhou.conversationId, "第七条");
     const [, second] = procsOf(zhou.sessionId);
     expect(second).toBeDefined();
-    expect(env.stdinTextsOf(second!.pid)).toEqual([`${RELAUNCH_NOTE}\n\n第六条`]);
-    expect(promptOf(second!.argv)).toContain("用户最后改的");
+    expect(second!.argv).toContain("--resume");
+    expect(env.stdinTextsOf(second!.pid)).toEqual([
+      `${RELAUNCH_NOTE}\n\n【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n用户最后改的\n\n第六条`,
+      "第七条",
+    ]);
+    // 看到的版本记在会话那一行（守护进程重启也接得上）
+    const latest = query("SELECT max(id) AS id FROM persona_changes")[0] as { id: number };
+    expect(query("SELECT revision FROM session_persona_seen WHERE session_id = " + zhou.sessionId)).toEqual([{ revision: latest.id }]);
     await terminate(daemon);
   });
 

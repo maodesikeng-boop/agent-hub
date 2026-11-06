@@ -379,10 +379,12 @@ export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => 
  *
  * 性格设定、模式变了不重启（不进 fingerprint）：系统提示词在整段对话最前面，一改整段缓存就失效，所以开头不动，
  * 在后面追加说明（照 Claude Code 发现 CLAUDE.md 改了的做法）：
- * - 进程起来时记下 LaunchFiles.personaRevision（拼进提示词的那一版）；
- * - 往这个进程写每一行（空闲时写、一轮中途写、排队的）之前调 DriverOptions.personaNote，变了就把说明放在前面的 text 块里，
- *   记下新的版本号，同一版只带一次；连改几次只带最新的；命令那一行不带（同别的说明，留给下一条）；
- * - 进程没了（空闲关闭、崩溃、两轮之间重启、关机）之后起的新进程按最新的拼提示词，记下新的版本号，不再带说明。
+ * - 每个会话记着 agent 已经看到的那一版（persona_changes 的编号），写进会话那一行（AgentSessionRow.personaRevision），守护进程重启也接得上；
+ * - 写每一行（空闲时写、一轮中途写、排队的）之前调 DriverOptions.personaNote，变了就把说明放在前面的 text 块里，
+ *   记下新的版本号，同一版只带一次；连改几次只带最新的；命令那一行不带（同别的说明，留给下一条）；没写成、agent 没读到的退回去，下一行再带；
+ * - 新起的进程算不算按最新的拼过（driver/persona-note.ts）：新会话（--session-id、thread/start）、agy 每个新进程（第一条前面重新带系统指令）算，
+ *   记下 LaunchFiles.personaRevision、不再带说明；claude --resume 沿用会话最初的系统提示词（2.1.314 实测），codex thread/resume 按一样算，
+ *   空闲关闭、换模型、崩溃之后恢复的进程照样靠说明。
  */
 
 /** 执行器 ↔ 驱动层。 */

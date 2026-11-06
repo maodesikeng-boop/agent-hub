@@ -1118,7 +1118,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
     expect(seq).toBe(maxId);
 
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 10, to: LATEST_VERSION });
-    expect(LATEST_VERSION).toBe(11);
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(11);
     expect(db.all("SELECT * FROM messages ORDER BY id")).toEqual(dump);
     // 0010 的步骤表不受影响
     expect(db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_steps'")).toEqual({ n: 1 });
@@ -1137,5 +1137,28 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
     expect(db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = 'k-0011'")!.id).toBe(seq + 1);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     expect(db.get("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+  });
+});
+
+// ---- 0012_session_persona_revision ----
+
+describe("0012_session_persona_revision：从 0011 的库升级", () => {
+  it("只加一张空的 session_persona_seen 表，老数据一个字不变；再跑一遍也行；会话读出来 personaRevision 是 null，写了能读到", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(11));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 11, to: LATEST_VERSION });
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM session_persona_seen")).toEqual([]);
+    db.exec("PRAGMA user_version = 11");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    const store = createSessionStore(db);
+    const id = dump.agent_sessions![0]!.id as number;
+    expect(store.get(id)!.personaRevision).toBeNull();
+    expect(store.update(id, { personaRevision: 3 }).personaRevision).toBe(3);
+    expect(store.update(id, { personaRevision: 5 }).personaRevision).toBe(5);
+    expect(db.all("SELECT * FROM session_persona_seen")).toEqual([{ session_id: id, revision: 5 }]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

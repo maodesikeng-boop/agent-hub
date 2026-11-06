@@ -76,7 +76,7 @@ import {
 } from "./process.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
-import { takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { personaSeenAtSpawn, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -145,8 +145,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
-  /** agent 已经看到的性格设定、模式是哪一版（起来时是 LaunchFiles.personaRevision，带了说明就跟着改）；null 不比（persona-note.ts）。 */
-  personaSeen: number | null;
+  /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：thread/resume 失败退回 thread/start 时用。 */
+  personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
   threadId: string | null;
@@ -176,6 +176,8 @@ interface SessionState {
   stopRequested: boolean;
   pending: PendingEntry[];
   written: Set<MessageId>;
+  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   recoveryNote: boolean;
   crashNote: boolean;
   relaunchNote: boolean;
@@ -533,6 +535,7 @@ export class CodexDriver implements Driver {
         stopRequested: false,
         pending: [],
         written: new Set(),
+        personaSeen: null,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -592,12 +595,11 @@ export class CodexDriver implements Driver {
 
   /**
    * 拼一条：不是命令的话把恢复、崩溃、重启、性格设定改了的说明加在最前面（加一次就清掉）。
-   * 性格设定的只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼提示词）。
+   * 性格设定的和会话记着的比（thread/resume 起的进程按不换说明算，所以没有进程时也要比，见 persona-note.ts）。
    */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
-    const proc = st.proc && !st.proc.closing ? st.proc : null;
-    const persona = proc ? takePersonaNote(this.#opts.personaNote, st.id, proc, (e) => this.#personaNoteError(st, e)) : null;
+    const persona = this.#takePersonaNote(st);
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
@@ -619,8 +621,22 @@ export class CodexDriver implements Driver {
     batch.notes.persona?.restore();
   }
 
-  #personaNoteError(st: SessionState, error: unknown): void {
-    this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`);
+  #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
+    // 守护进程重启后第一次：从会话那一行读
+    if (st.personaSeen === null) st.personaSeen = this.#row(st)?.personaRevision ?? null;
+    return takePersonaNote(
+      this.#opts.personaNote,
+      st.id,
+      st,
+      (revision) => this.#update(st, { personaRevision: revision }),
+      (error) => this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`),
+    );
+  }
+
+  #setPersonaSeen(st: SessionState, revision: number | null): void {
+    if (revision === null || revision === st.personaSeen) return;
+    st.personaSeen = revision;
+    this.#update(st, { personaRevision: revision });
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -744,8 +760,12 @@ export class CodexDriver implements Driver {
     this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, at });
   }
 
+  /** 这几条要重发（出错、崩溃、收回）：不再算写过；带着的性格设定说明也退回去，重发时再带（多带一次无害，漏了不行）。 */
   #forgetWritten(st: SessionState, batches: Batch[]): void {
-    for (const batch of batches) for (const id of batch.messageIds) st.written.delete(id);
+    for (const batch of batches) {
+      for (const id of batch.messageIds) st.written.delete(id);
+      batch.notes.persona?.restore();
+    }
   }
 
   #afterTurn(st: SessionState, proc: Proc): void {
@@ -937,7 +957,7 @@ export class CodexDriver implements Driver {
         model: row.model,
         effort: row.effort,
       },
-      personaSeen: files.personaRevision ?? null,
+      personaLaunched: files.personaRevision ?? null,
       launchConfig,
       readonly: launchConfig.readonly,
       threadId: resume ? row.vendorSessionId : null,
@@ -953,6 +973,8 @@ export class CodexDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
+    // thread/resume 按沿用会话最初的说明算（没实测，同 claude），thread/start 是这次拼的（persona-note.ts）；resume 退回 start 时再改
+    this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, !resume));
     st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });
 
@@ -1104,6 +1126,8 @@ export class CodexDriver implements Driver {
           // thread/resume 报错（如 not found / no rollout found）：自动回退发 thread/start 开启新线程
           proc.resume = false;
           proc.threadId = null;
+          // 新线程的说明是这次拼的
+          this.#setPersonaSeen(st, proc.personaLaunched);
           const row = this.#row(st);
           const sessionInfo = {
             cwd: row?.cwd ?? proc.launched.cwd,

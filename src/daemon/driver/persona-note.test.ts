@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RELAUNCH_NOTE } from "../../shared/index.ts";
 import type { FakeScript, FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
-import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
+import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
 let f: PersonaFixture | undefined;
@@ -74,7 +74,7 @@ describe("claude：性格设定、模式改了不重启", () => {
     expect(t.argvs()).toHaveLength(1);
   });
 
-  it("改模型还是重启（--resume）；新进程按最新的拼提示词，同时改的性格设定不再带说明", async () => {
+  it("改模型还是重启（--resume）；--resume 沿用会话最初的系统提示词，同时改的性格设定照样带说明", async () => {
     const { t, f } = harness();
     const s = t.addSession();
     await turn(t, 1, "一", 1);
@@ -84,20 +84,71 @@ describe("claude：性格设定、模式改了不重启", () => {
     await turn(t, 2, "二", 2);
     expect(t.argvs()).toHaveLength(2);
     expect(t.argvs()[1]).toContain("--resume");
-    expect(t.stdinBlocks()[1]).toEqual([RELAUNCH_NOTE, "二"]);
+    const blocks = t.stdinBlocks()[1]!;
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]).toBe(RELAUNCH_NOTE);
+    expect(blocks[1]).toContain("新习惯");
+    expect(blocks[2]).toBe("二");
   });
 
-  it("闲置关闭后再起来：按最新的拼提示词（重新 prepareLaunch），不带说明", async () => {
+  it("闲置关闭后 --resume 再起来：系统提示词还是最初的，照样带说明、只带一次", async () => {
     const { t, f } = harness({}, { idleCloseMs: 50 });
-    const s = t.addSession();
+    t.addSession();
     await turn(t, 1, "一", 1);
     await t.waitFor("session.exited");
-    const calls = t.prepareCalls.get(s.id)!;
     f.userEdit({ text: "新习惯" });
     await turn(t, 2, "二", 2);
-    expect(t.prepareCalls.get(s.id)).toBeGreaterThan(calls);
+    await turn(t, 3, "三", 3);
     expect(t.argvs()).toHaveLength(2);
-    expect(t.stdinBlocks()[1]).toEqual(["二"]);
+    expect(t.argvs()[1]).toContain("--resume");
+    expect(t.stdinBlocks()[1]![0]).toContain("新习惯");
+    expect(t.stdinBlocks()[2]).toEqual(["三"]);
+  });
+
+  it("新会话（--session-id，开新会话、第一次启动）：按最新的拼提示词，不带说明", async () => {
+    const { t, f } = harness();
+    const s = t.addSession();
+    f.userEdit({ text: "新习惯" });
+    await turn(t, 1, "一", 1);
+    expect(t.argvs()[0]).toContain("--session-id");
+    expect(t.stdinBlocks()[0]).toEqual(["一"]);
+    expect(t.store.get(s.id)!.personaRevision).toBe(f.revision());
+  });
+
+  it("看到的版本写进会话那一行：守护进程重启后（新的驱动层、内存里没有）从那一行接着比", async () => {
+    const { t, f } = harness();
+    const s = t.addSession();
+    await turn(t, 1, "一", 1);
+    const seen = t.store.get(s.id)!.personaRevision;
+    f.userEdit({ text: "第一版" });
+    await turn(t, 2, "二", 2);
+    expect(t.store.get(s.id)!.personaRevision).toBe(f.revision());
+    expect(f.revision()).not.toBe(seen);
+    // 换一个驱动层（同一个库）：模拟守护进程重启，--resume 起来
+    await t.driver.shutdown();
+    f.userEdit({ text: "第二版" });
+    const { createClaudeDriver } = await import("./index.ts");
+    const again = createClaudeDriver({
+      claudePath: FAKE_CLAUDE,
+      sessionLogsDir: join(t.dir, "logs", "sessions"),
+      store: t.store,
+      prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
+      personaNote: f.personaNote,
+      env: { FAKE_CLAUDE_LOG: join(t.dir, "fake-claude.log"), FAKE_CLAUDE_SCRIPT: join(t.dir, "script.json"), FAKE_CLAUDE_STATE: t.dir },
+    });
+    writeFileSync(join(t.dir, "prompt.md"), "你是项目经理。");
+    const ended = new Promise<void>((resolve) => again.onEvent((_id, e) => e.type === "turn.ended" && resolve()));
+    try {
+      await again.send(s.id, user(3, "三"));
+      await ended;
+      expect(t.argvs().at(-1)).toContain("--resume");
+      const last = t.stdinBlocks().at(-1)!;
+      expect(last[0]).toContain("第二版");
+      expect(last[0]).not.toContain("第一版");
+      expect(last[1]).toBe("三");
+    } finally {
+      await again.shutdown();
+    }
   });
 
   it("撤销也算一次修改：不重启，带撤销后的内容；改了又撤销回去（agent 没看到过中间那版）不带", async () => {
@@ -169,7 +220,7 @@ describe("claude：性格设定、模式改了不重启", () => {
     await turn(t, 5, "五", 3);
     expect(t.stdinBlocks().at(-1)![0]).toContain("第二版");
     expect(t.stdinBlocks().at(-1)![1]).toBe("五");
-    expect(t.argvs()).toHaveLength(1);
+    // 不看进程数：机器忙时打断的控制消息可能等不到回应、改发 SIGINT，进程会换一个（说明照样要带）
   });
 
   it("忙着时排队的（老 claude 不能中途写）：写进去时比，带上", async () => {

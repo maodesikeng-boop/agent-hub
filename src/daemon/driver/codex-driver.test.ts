@@ -1435,7 +1435,7 @@ describe("CodexDriver 性格设定、模式改了不重启（下一条前面加�
     expect(inputs(t)[1]).not.toContain("第一版");
   });
 
-  it("改模型还是重启（thread/resume）；新进程按最新的拼，同时改的性格设定不再带说明", async () => {
+  it("改模型还是重启（thread/resume）；恢复的线程按沿用最初的说明算，同时改的性格设定照样带", async () => {
     const t = personaHarness();
     const s = t.addSession();
     await turn(t, s.id, 1, "一", 1);
@@ -1444,18 +1444,39 @@ describe("CodexDriver 性格设定、模式改了不重启（下一条前面加�
     await turn(t, s.id, 2, "二", 2);
     expect(procs(t)).toHaveLength(2);
     expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
-    expect(inputs(t)[1]).toBe(`${RELAUNCH_NOTE}\n\n二`);
+    expect(inputs(t)[1]!.startsWith(`${RELAUNCH_NOTE}\n\n【系统】你的性格设定刚更新了`)).toBe(true);
+    expect(inputs(t)[1]).toContain("新习惯");
   });
 
-  it("闲置关闭后再起来：不带说明", async () => {
+  it("闲置关闭后 thread/resume 再起来：照样带说明、只带一次", async () => {
     const t = personaHarness(() => [], { idleCloseMs: 50 });
     const s = t.addSession();
     await turn(t, s.id, 1, "一", 1);
     await t.waitFor("session.exited");
     f!.userEdit({ text: "新习惯" });
     await turn(t, s.id, 2, "二", 2);
+    await turn(t, s.id, 3, "三", 3);
     expect(procs(t)).toHaveLength(2);
-    expect(inputs(t)[1]).toBe("二");
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(inputs(t)[1]).toContain("新习惯");
+    expect(inputs(t)[2]).toBe("三");
+    expect(t.store.get(s.id)!.personaRevision).toBe(f!.revision());
+  });
+
+  it("新线程（thread/start；thread/resume 找不到线程退回 thread/start 也算）：按最新的拼，不带说明", async () => {
+    const t = personaHarness(() => [], { idleCloseMs: 50 });
+    const s = t.addSession();
+    f!.userEdit({ text: "第一版" });
+    await turn(t, s.id, 1, "一", 1);
+    expect(inputs(t)[0]).toBe("一");
+    await t.waitFor("session.exited");
+    f!.userEdit({ text: "第二版" });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ failResumeWith: "no rollout found" }));
+    await turn(t, s.id, 2, "二", 2);
+    expect(t.rpcIn().filter((r) => r.method === "thread/start")).toHaveLength(2);
+    // 拼这一条时还以为会恢复，带上了说明（多带一次无害）；之后的不再带
+    await turn(t, s.id, 3, "三", 3);
+    expect(inputs(t)[2]).toBe("三");
   });
 
   it("撤销：带撤销后的内容", async () => {
