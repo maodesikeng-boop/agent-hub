@@ -33,6 +33,8 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
+  type MidTurnSupport,
+  NO_MID_TURN,
   type SessionExitReason,
   type SessionId,
   type TokenUsage,
@@ -214,6 +216,14 @@ export class AgyDriver implements Driver {
   isRunning(sessionId: SessionId): boolean {
     const proc = this.#sessions.get(sessionId)?.proc;
     return Boolean(proc && !proc.closing);
+  }
+
+  /**
+   * agy 一轮中途读不到新消息（headless 没有插话接口，写进去也排到整轮之后，docs/mid-turn-messages.md 第 7 节）：
+   * 忙时照旧排在驱动层自己的队列里（连发的拼成一条，agy 自己不合并）。
+   */
+  midTurnSupport(_sessionId: SessionId): MidTurnSupport {
+    return NO_MID_TURN;
   }
 
   async start(sessionId: SessionId): Promise<void> {
@@ -1103,9 +1113,14 @@ export class AgyDriver implements Driver {
       st.hasConversation = true;
     }
 
-    const batch = st.inFlight;
+    const finishedReason = typeof res.finished_reason === "string" ? res.finished_reason : null;
+    const rawInterrupted = finishedReason === "interrupted" || st.turnInterrupted || st.stopRequested;
+    const written = st.inFlight;
     st.inFlight = null;
     st.selfTurn = false;
+    // 停止时 agy 还没取走（没出 user_input）：agent 没看到过，标已取消，不算这一轮的
+    const untaken = rawInterrupted && written !== null && !written.processing ? written : null;
+    const batch = untaken === null ? written : null;
     if (batch) this.#markProcessing(st, batch, at);
 
     // 先把残余的 step_update 文本冲刷出去
@@ -1125,8 +1140,6 @@ export class AgyDriver implements Driver {
     const violation = st.policyViolation;
     st.policyViolation = null;
 
-    const finishedReason = typeof res.finished_reason === "string" ? res.finished_reason : null;
-    const rawInterrupted = finishedReason === "interrupted" || st.turnInterrupted || st.stopRequested;
     if (rawInterrupted && proc.closing === null) {
       // agy 在输出 finished_reason: "interrupted" 后会退出（exit code 1），标为 interrupt 避免当成 crash
       proc.closing = "interrupt";
@@ -1172,6 +1185,9 @@ export class AgyDriver implements Driver {
 
     this.#clearTimer(st, "interruptTimer");
     this.#emit(st.id, event);
+    if (untaken !== null && untaken.messageIds.length > 0) {
+      this.#emit(st.id, { type: "message.cancelled", messageIds: untaken.messageIds, reason: "stop", at });
+    }
     this.#resolveInterrupt(st);
     this.#afterTurn(st, proc);
     this.#settled(st);
@@ -1243,15 +1259,21 @@ export class AgyDriver implements Driver {
         this.#forgetWritten(st, batch);
       }
       st.stopRequested = false;
+      // 用户点停止、进程退出时 agy 还没取走（没出 user_input）：agent 没看到过，和别家一样标已取消（不是“这一轮被打断”）
+      const untaken = reason === "interrupt" && proc.initSeen && batch !== null && !batch.processing ? batch : null;
+      const taken = untaken === null ? batch : null;
       this.#emit(st.id, {
         type: "session.exited",
         reason,
         exitCode: code,
         signal,
-        hadResult: batch === null,
-        messageIds: batch?.messageIds ?? [],
+        hadResult: taken === null,
+        messageIds: taken?.messageIds ?? [],
         at,
       });
+      if (untaken !== null && untaken.messageIds.length > 0) {
+        this.#emit(st.id, { type: "message.cancelled", messageIds: untaken.messageIds, reason: "stop", at });
+      }
     } finally {
       this.#resolveInterrupt(st);
       resolveExited();

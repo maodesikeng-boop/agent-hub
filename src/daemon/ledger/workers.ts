@@ -494,9 +494,7 @@ export function createLedgerWorkers(
     if (session.role !== "worker" || session.workerId === null) return;
     if (event.type === "message.delivered") {
       // 一轮中途交给它的不算这一轮的开头（这一轮前面的文字还要算进汇报）
-      if (event.midTurn !== true || !turnStarts.has(session.id)) {
-        turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
-      }
+      if (event.midTurn !== true) turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
       insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }
@@ -510,7 +508,9 @@ export function createLedgerWorkers(
     if (worker === null) return;
     // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
     if (outcome.turnMessageId === null && !turnStarts.has(session.id)) return;
-    const turnStart = Math.max(outcome.turnMessageId ?? 0, turnStarts.get(session.id) ?? 0);
+    // 有这一轮开头的记录就用它；没有（重启后）退回这一轮最大的消息编号。不取两者大的那个：一轮中途送达的消息编号
+    // 比这一轮前面的文字大，取它会漏掉前面的汇报
+    const turnStart = turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
     turnStarts.delete(session.id);
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId =

@@ -208,7 +208,7 @@ describe("session.send 处理函数", () => {
   });
 
   it("消息不在了，或者已经有结果（已回复、已停止）→ done，不再发", async () => {
-    for (const m of [null, message({ status: "replied" }), message({ status: "stopped" })]) {
+    for (const m of [null, message({ status: "replied" }), message({ status: "stopped" }), message({ status: "cancelled" })]) {
       const { d, send } = deps({ message: m });
       expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
       expect(send).not.toHaveBeenCalled();

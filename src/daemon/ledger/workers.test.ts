@@ -975,6 +975,20 @@ describe("审查后补的（PR #34）", () => {
     expect(line.text).toContain("没有文字回复");
   });
 
+  it("一轮中途送达的话（message.delivered midTurn）不算这一轮的开头：这一轮前面写的汇报照样交给项目经理", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "r1", text: report("做完了", "前半段就做完了")!, at: now });
+    const second = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.messageId;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [second], midTurn: true, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [second], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first, second], durationMs: 1, at: now });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report", status: "done", summary: "前半段就做完了" });
+  });
+
   it("只做了 /compact、没有文字的一轮：不给项目经理发汇报；Worker 对话里那行“已压缩上下文”照留", () => {
     const worker = start({ noWorktree: true }).data.worker;
     const sessionId = workerSessionId(worker.id);

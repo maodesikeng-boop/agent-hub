@@ -217,6 +217,36 @@ describe("applyDriverEvent", () => {
     expect(seqs).toEqual(seqs.map((_, i) => INITIAL_SEQ + 1 + i));
   });
 
+  it("一轮中途送达的（midTurn）被取消：已送达 → 已取消；已经处理中的不动；之后再来什么都不改", () => {
+    const first = post("c1", "跑命令");
+    const second = post("c2", "停下");
+    ev({ type: "message.delivered", at: 1, messageIds: [first] });
+    ev({ type: "message.processing", at: 2, messageIds: [first] });
+    ev({ type: "message.delivered", at: 3, messageIds: [second], midTurn: true });
+    ev({ type: "message.cancelled", at: 4, messageIds: [first, second], reason: "stop" });
+    expect(ledger.getMessage(first)?.status).toBe("processing");
+    expect(ledger.getMessage(second)?.status).toBe("cancelled");
+    ev({ type: "turn.ended", at: 5, ok: false, interrupted: true, messageIds: [first], durationMs: 1 });
+    ev({ type: "message.processing", at: 6, messageIds: [second] });
+    expect(ledger.getMessage(first)?.status).toBe("stopped");
+    expect(ledger.getMessage(second)?.status).toBe("cancelled");
+  });
+
+  it("写进去了还没被取走就被收回（message.requeued）：已送达 → 排队中，重新登记 session.send（不带重发说明）；处理中的不动", () => {
+    const first = post("c1", "跑命令");
+    const second = post("c2", "插一句");
+    for (const action of listActions(db)) setActionStatus(db, action.id, { status: "done" }, now);
+    ev({ type: "message.delivered", at: 1, messageIds: [first] });
+    ev({ type: "message.processing", at: 2, messageIds: [first] });
+    ev({ type: "message.delivered", at: 3, messageIds: [second], midTurn: true });
+    enqueued = [];
+    ev({ type: "message.requeued", at: 4, messageIds: [first, second] });
+    expect(ledger.getMessage(first)?.status).toBe("processing");
+    expect(ledger.getMessage(second)?.status).toBe("queued");
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: second, source: "user" }]]);
+    expect(listActions(db).find((a) => a.type === "session.send" && a.params.messageId === second)?.status).toBe("pending");
+  });
+
   it("agent 输出去重：同一个（会话，uuid）交两次只有一条；工具按 toolUseId 分开", () => {
     ev({ type: "agent.text", at: 1, uuid: "u1", text: "一" });
     ev({ type: "agent.text", at: 1, uuid: "u1", text: "一" });

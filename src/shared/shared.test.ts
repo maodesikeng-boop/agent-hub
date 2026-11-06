@@ -178,10 +178,17 @@ describe("消息", () => {
       ["delivered", "failed"],
       ["failed", "delivered"],
       ["failed", "queued"],
+      // 一轮中途写给 agent、它还没取走：停止 → 已取消；进程没了 → 收回排队
+      ["delivered", "cancelled"],
+      ["delivered", "queued"],
     ];
     for (const [from, to] of ok) expect(canTransitionMessage(from as never, to as never), `${from}→${to}`).toBe(true);
     const bad: [string, string][] = [
-      ["delivered", "queued"],
+      ["processing", "queued"],
+      ["processing", "cancelled"],
+      ["queued", "cancelled"],
+      ["cancelled", "queued"],
+      ["cancelled", "delivered"],
       ["processing", "delivered"],
       ["replied", "delivered"],
       ["stopped", "delivered"],
@@ -234,7 +241,7 @@ describe("账本错误", () => {
 
 describe("约定好的名字", () => {
   it("消息状态和变化类型", () => {
-    expect(MESSAGE_STATUSES).toEqual(["queued", "delivered", "processing", "replied", "stopped", "failed"]);
+    expect(MESSAGE_STATUSES).toEqual(["queued", "delivered", "processing", "replied", "stopped", "failed", "cancelled"]);
     expect(CHANGE_TYPES.slice(0, 4)).toEqual(["message.created", "message.updated", "session.status", "health.updated"]);
   });
 

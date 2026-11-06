@@ -383,3 +383,25 @@ interface BackgroundTaskSupport {
 - codex：`{signal:"item_lifecycle", wakesAgent:false}`：**可以像 claude 一样“有任务就不闲置关闭”，但光保住进程不够**——命令跑完时 agent 不会被叫醒，要由驱动层在 `item/completed`（后台那个命令）到达时发一条系统消息（“后台命令 X 已结束，退出码 N”）把 agent 叫起来读结果，否则只是命令没被杀、结果没人看。
 - agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；`prompt.ts` 里“长命令放后台、跑完会叫醒你”这一句对 agy（和 codex）不成立，要按厂商分开写或只给 claude（agy 让它前台跑，当前这一轮等它；这一条另开任务）。
 - **没测的**：`thread/backgroundTerminals/terminate/clean` 的行为、强杀（进程组 SIGKILL）时 agy 的孤儿命令会不会被一起杀、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。
+
+## 11. 实现（PR：忙时直接把消息送给 agent）
+
+照第 5、9 节做了，和方案不一样、或方案没写到的地方：
+
+**通用接口**（`src/shared/driver.ts`）：`Driver.midTurnSupport(sessionId)` 返回第 9.2 节的 `MidTurnSupport`；`send` 多一种结果 `{kind:"written", midTurn:true}`；新事件 `message.cancelled {messageIds, reason}`（停止时写进去、没被取走的）和 `message.requeued {messageIds}`（进程没了、或这一轮没读到它就结束了，账本放回排队中、重新登记 `session.send`）；`message.delivered` 多一个 `midTurn` 标记（Worker 汇报靠“开这一轮的那条送达”定这一轮从哪开始，中途送达的不算开头）。消息状态多一个 `cancelled`（已取消，迁移 `0010`），转换表多了 `delivered → cancelled`、`delivered → queued`。账本、网页只认这些，不看厂商。
+
+**claude**（`claude-driver.ts`）：
+- 中途写入要 init 里 `msg_lifecycle_v1` **和** `interrupt_cancel_queued_v1` 都有（方案只要求前者、停止时再查后者）：少了后者，停止时没法取消，干脆照旧排队，“停止 = 没取走的都取消”就不会有例外。
+- 每行都带 uuid（命令行也带）；在途改成按写入先后的数组。`command_lifecycle` 的形状实测是顶层 `{"type":"command_lifecycle","command_uuid","state"}`，第一条的 `queued`、`started` 在第一个 init **之前**到、`completed` 在 result **之后**到：`started` 先记下，init 时再出处理中，事件顺序和以前一样。
+- result 只结算 `started` 过的；中途写进去没赶上的留着，它们开的下一轮的 init 不算“claude 自己开的轮”。兜底：一轮里一条 `started` 都没有（claude 没出生命周期事件）时，开这一轮的那条（空闲时写的）照旧算这一轮的。
+- 还有没取走的就算忙：不开始算空闲、`end` 等它们处理完、两轮之间不重启（中途写入本身也不调 `prepareLaunch`、不重启，设置的变化等这一轮完了下一条再生效）。
+- 停止：控制请求带 `cancel_queued:true`，以回执的 `cancelled` 和 `command_lifecycle cancelled` 为准出 `message.cancelled`；已经 `started` 的那条照旧按“这一轮被打断”收尾（它的 `cancelled` 在 result 之后到，不管）。控制请求没回应被 SIGINT 时，没取走的同样标已取消。
+- 崩溃、关机：没取走的出 `message.requeued`（方案是放回驱动层的待发队列：那样没有执行器的动作在等它，进程起不来就丢了，所以交给账本重新登记）；已取走的照旧按崩溃处理。
+
+**codex**（`codex-driver.ts`）：忙时、知道当前 turn id 时发 `turn/steer`，回执成功算已送达，`userMessage` item（按文字对上是哪条，对不上按先后）算处理中；回执报错（`no active turn to steer` 等）退回驱动层自己的队列。`turn/completed` 时 steer 了没读到的：`interrupted` 标已取消，否则出 `message.requeued`；回执还没到这一轮就结束的，回执来了退回自己的队列。中途送达没有加关进程的路径（关进程仍只在 end、两轮之间重启、空闲关闭、end 后刚起的进程这几处，第 10.2 节的后台命令问题不在这次范围）。
+
+**agy**：声明 `mode:"none"`，照旧排队、连发照旧合并。停止时写进去了、还没出 `user_input` 的标已取消（停止时 agy 先出一个 interrupted 的 result 再退出，两条路都处理）。
+
+**没做的**：`priority:"now"`（立即插话）；网页上按 `mode` 显示“agent 不会中途看到”的提示；停止时驱动层**自己队列里**排着的消息照旧在停止后发出去（和以前一样，没改）。
+
+**冒烟**（`test/smoke/mid-turn.ts`，`pnpm smoke S27 S28`，直接用驱动层）：claude（haiku）、codex（gpt-5.6-luna）在 `sleep 8` 时说“停下”，都是第 1 条命令跑完就读到、同一轮一个结束、不再跑后面的；写进去还没读到就停止，都标已取消、停止后 8 秒没有新的一轮。
