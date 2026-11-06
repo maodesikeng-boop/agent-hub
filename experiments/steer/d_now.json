@@ -1,0 +1,33 @@
+[
+ {
+  "send": "Write a story of about 500 words about a lighthouse keeper. No tools. Output only the story.",
+  "uuid": "00000000-0000-4000-8000-000000000001"
+ },
+ {
+  "wait_stream_text": 8
+ },
+ {
+  "send": "MID-STREAM: after you finish, add one final line that says ACK-D_NOW.",
+  "uuid": "00000000-0000-4000-8000-000000000002",
+  "extra": {
+   "priority": "now",
+   "origin": {
+    "kind": "human"
+   }
+  }
+ },
+ {
+  "wait": "result",
+  "nth": 1,
+  "timeout": 90
+ },
+ {
+  "sleep": 6
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]
