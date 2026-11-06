@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json",
     "test": "vitest run",
     "test:quiet": "vitest run --reporter=dot",
+    "test:ci": "vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && vitest run --reporter=dot",
     "smoke": "node test/smoke/main.ts"
   },

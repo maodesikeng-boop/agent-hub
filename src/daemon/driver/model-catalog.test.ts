@@ -336,6 +336,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     return path;
   }
 
+  /**
+   * 等假进程（写了进程号文件的话）真的没了。失败路径上 model-catalog 是 `void forceKill(child)`（SIGSTOP 住再 SIGKILL，中间隔着异步的 ps），
+   * 用例不等的话测试进程收尾时 SIGKILL 还没发出去，假进程就停在 SIGSTOP 状态孤儿化（留在机器上，CI 上留到作业结束被清理）。
+   */
+  async function expectGone(pidFile: string): Promise<void> {
+    if (!existsSync(join(dir, pidFile))) return; // 机器忙时可能还没来得及写进程号就被结束了
+    const pid = Number(readFileSync(join(dir, pidFile), "utf8"));
+    await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false);
+  }
+
   it("正常：参数是 -p + stream-json 进出 + 不存会话；回 control_response 里的 models；之后 claude 退出", async () => {
     const claudePath = fakeClaude(`
       out({ type: "system", subtype: "hook_started" });
@@ -366,6 +376,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   it("claude 回错误：带着原因失败", async () => {
     const claudePath = fakeClaude(`out({ type: "control_response", response: { subtype: "error", request_id: req.request_id, error: "Unsupported control request subtype: initialize" } });`);
     await expect(queryClaudeModels({ claudePath, cwd: dir })).rejects.toThrow(/Unsupported control request/);
+    await expectGone("pid");
   });
 
   it("没回就退出：失败，带上标准错误", async () => {
@@ -444,6 +455,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       if (msg.id === 2) out({ jsonrpc: "2.0", id: 2, error: { message: "model list unavailable" } });
     `);
     await expect(queryCodexModels({ codexPath: errPath, cwd: dir })).rejects.toThrow(/model list unavailable/);
+    await expectGone("codex-pid");
   });
 });
 

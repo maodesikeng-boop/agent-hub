@@ -4,3 +4,4 @@ HANDOVER.md
 node_modules/
 dist/
 coverage/
+vitest-junit.xml

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
 import { describeError, formatTime } from "./format.ts";
 import { CHANGE_TYPES, type ScheduleRecord } from "../shared/index.ts";
-import { groupMessages, isWaitingForQuota, listConversations, sessionOf } from "./selectors.ts";
+import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
   changeOf,
@@ -355,6 +355,27 @@ describe("selectors", () => {
     expect(zhou?.folders.map((f) => f.path)).toEqual(["/work/foo", "/work/docs"]);
     expect(lin).toMatchObject({ id: 1, name: "小林", project: null });
     expect(lin?.folders).toEqual([]);
+  });
+
+  it("workersOf：进行中的按编号；已收工的最近收工的在前，没有收工那一行的按编号倒序排在后面", () => {
+    const end = (id: number, workerConversationId: number, createdAt: number, event: "ended" | "worktree_failed" = "ended") =>
+      makeWorkerLine({ id, createdAt, line: { workerId: workerConversationId, workerConversationId, event } });
+    const s = loaded({
+      conversations: [
+        makeConvSnapshot([end(1, 31, 5_000), end(2, 32, 9_000), end(3, 33, 7_000, "worktree_failed")]),
+        ...[30, 31, 32, 33, 34, 35, 36].map((id) => makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1 } })),
+      ],
+      sessions: [35, 36].map((conversationId) => makeSession({ sessionId: conversationId, conversationId, status: "ended" })),
+    });
+    expect(workersOf(s, 1).map((w) => [w.conversationId, w.ended])).toEqual([
+      [30, false],
+      [34, false],
+      [32, true],
+      [33, true],
+      [31, true],
+      [36, true],
+      [35, true],
+    ]);
   });
 });
 

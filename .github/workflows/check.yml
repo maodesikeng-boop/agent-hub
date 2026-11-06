@@ -31,6 +31,17 @@ jobs:
       # (onlyBuiltDependencies); none are approved here.
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm check
+      - run: pnpm typecheck
+
+      # 不用 pnpm check：它的 dot reporter 在 CI 里跑整套时看不到点、失败汇总和统计（只剩 stderr），
+      # 一条用例失败也只看到 exit code 1。test:ci 用 verbose + github-actions，失败写成注解。
+      - run: pnpm test:ci
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: vitest-junit
+          path: vitest-junit.xml
+          if-no-files-found: ignore
 
       - run: pnpm build

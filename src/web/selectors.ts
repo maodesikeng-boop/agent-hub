@@ -222,20 +222,22 @@ export function runningWorkerCount(state: HubState, pmId: PmId): number {
  */
 export type WorkerPhase = "preparing" | "open" | "ended";
 
-/** 这个项目经理的会话里有“已收工”“建 worktree 失败”那一行的 Worker 对话。 */
-function endedByLine(state: HubState, pmId: PmId | null): Set<ConversationId> {
-  const ended = new Set<ConversationId>();
+/** 这个项目经理的会话里有“已收工”“建 worktree 失败”那一行的 Worker 对话，值是那一行的时间（有几行取最晚的）。 */
+function endedByLine(state: HubState, pmId: PmId | null): Map<ConversationId, number> {
+  const ended = new Map<ConversationId, number>();
   for (const { conversation, messages } of Object.values(state.conversations)) {
     if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
     for (const message of messages) {
       const meta = workerEventOf(message);
-      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) ended.add(meta.workerConversationId);
+      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) {
+        ended.set(meta.workerConversationId, Math.max(ended.get(meta.workerConversationId) ?? 0, message.createdAt));
+      }
     }
   }
   return ended;
 }
 
-function phaseOf(state: HubState, workerConversationId: ConversationId, endedLines: Set<ConversationId>): WorkerPhase {
+function phaseOf(state: HubState, workerConversationId: ConversationId, endedLines: Map<ConversationId, number>): WorkerPhase {
   const session = sessionOf(state, workerConversationId);
   if (endedLines.has(workerConversationId) || session?.status === "ended") return "ended";
   // 正在跑项目的准备命令（PR #47，会话 activity 是 preparing）
@@ -281,7 +283,7 @@ function latestTones(state: HubState, pmId: PmId): Map<ConversationId, WorkerTon
   return tones;
 }
 
-/** 这个项目经理派的 Worker：进行中的在前，收工的在后，同一组里按派出的顺序（对话编号）。 */
+/** 这个项目经理派的 Worker：进行中的在前，收工的在后；进行中的按派出的顺序（对话编号），收工的最近收工的在前（没有收工那一行的按对话编号倒序，排在有的后面）。 */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   const endedLines = endedByLine(state, pmId);
   const tones = latestTones(state, pmId);
@@ -301,7 +303,15 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
         tone: tones.get(conversation.id) ?? "neutral",
       };
     })
-    .toSorted((a, b) => Number(a.ended) - Number(b.ended) || a.conversationId - b.conversationId);
+    .toSorted((a, b) => {
+      if (a.ended !== b.ended) return Number(a.ended) - Number(b.ended);
+      if (!a.ended) return a.conversationId - b.conversationId;
+      const at = endedLines.get(a.conversationId);
+      const bt = endedLines.get(b.conversationId);
+      if (at !== undefined && bt !== undefined && at !== bt) return bt - at;
+      if ((at === undefined) !== (bt === undefined)) return at === undefined ? 1 : -1;
+      return b.conversationId - a.conversationId;
+    });
 }
 
 /** 项目经理会话里指向这个 Worker 对话的那几行里最新的一行的内容（标题、只读）；翻页翻掉了、找不到是 null。 */
