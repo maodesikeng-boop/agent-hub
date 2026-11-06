@@ -48,7 +48,6 @@ import {
   checkAgyUserLine,
   checkWorkerToolViolation,
   detectAgyArgsConflict,
-  extractStateDirFromSettings,
   finishAgyUsage,
   isReadonlySettings,
   mergeUserTexts,
@@ -107,7 +106,6 @@ interface Proc {
   systemPrompt: string | null;
   promptSent: boolean;
   readonly: boolean;
-  stateDir: string;
   initSeen: boolean;
   stderr: string;
   closing: ClosingReason | null;
@@ -170,15 +168,12 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
   /** agy 可执行文件路径（优先取 agyPath，兼容传 claudePath，默认 "agy"）。 */
   agyPath?: string;
   claudePath?: string;
-  /** 数据目录 state/ 的真实路径（用于 Worker 记忆保护检查）。 */
-  stateDir?: string;
   /** 这个驱动对应的厂商实现，默认 vendors/ 里 agy 那份。 */
   composer?: VendorComposerBase;
 }
 
 export class AgyDriver implements Driver {
   readonly #agyPath: string;
-  readonly #defaultStateDir: string;
   readonly #opts: Required<
     Pick<DriverOptions, "idleCloseMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
   > &
@@ -192,9 +187,6 @@ export class AgyDriver implements Driver {
   constructor({ composer, ...options }: AgyDriverOptions) {
     this.#composer = composer ?? composerBaseOf("agy")!;
     this.#agyPath = options.agyPath ?? options.claudePath ?? "agy";
-    const logsParent = dirname(dirname(options.sessionLogsDir));
-    this.#defaultStateDir =
-      options.stateDir ?? (logsParent.endsWith("/state") ? logsParent : join(logsParent, "state"));
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
@@ -774,7 +766,6 @@ export class AgyDriver implements Driver {
     const args = buildAgyArgs(row, files, resume);
     const systemPrompt = readSystemInstructions(files.promptFile);
     const readonly = isReadonlySettings(files.settingsFile);
-    const stateDir = this.#opts.stateDir ?? extractStateDirFromSettings(files.settingsFile) ?? this.#defaultStateDir;
 
     const child = spawn(this.#agyPath, args, {
       cwd: row.cwd,
@@ -812,7 +803,6 @@ export class AgyDriver implements Driver {
       systemPrompt,
       promptSent: false,
       readonly,
-      stateDir,
       initSeen: false,
       stderr: "",
       closing: null,
@@ -1062,10 +1052,7 @@ export class AgyDriver implements Driver {
         if (row?.role === "worker") {
           const violation = checkWorkerToolViolation({
             toolName,
-            parameters,
             readonly: proc.readonly,
-            stateDir: proc.stateDir,
-            cwd: row.cwd,
           });
           if (violation !== null) {
             st.policyViolation = violation;

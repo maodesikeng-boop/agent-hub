@@ -50,103 +50,12 @@ export const READONLY_CONNECTOR_TOOLS: Readonly<Record<string, readonly string[]
 export function readonlyAllowRules(projectWorktreesDir: string | undefined): string[] {
   const rules: string[] = [...READONLY_WEB_ALLOW_RULES];
   if (projectWorktreesDir !== undefined) {
-    // 绝对路径 // 开头，特殊字符转义，同 stateDirDenyRule
+    // 绝对路径 // 开头，特殊字符转义
     rules.push(`Read(/${projectWorktreesDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&")}/**)`);
   }
   rules.push(...READONLY_GIT_ALLOW_RULES);
   for (const [server, tools] of Object.entries(READONLY_CONNECTOR_TOOLS)) for (const tool of tools) rules.push(`mcp__${server}__${tool}`);
   return rules;
-}
-
-/**
- * Worker 不能写记忆（唯一的硬限制，m3-plan 第 2.2 节），路径固定的那几条：
- * 整台机器上任何位置的约定文件（AGENTS.md、CLAUDE.md、CLAUDE.local.md）和 .claude/，加上用户级的 ~/.claude/。
- * 用 // 开头的绝对通配，不用 Edit(AGENTS.md) 这种相对写法：相对写法锚在当前目录，只管到工作目录之下，
- * --add-dir 带进来的附加文件夹里的拦不住（PR #31 审查用真 claude 实测过；绝对通配下全部被拒，普通文件照样能写）。
- * Edit 规则也管 Write 工具和 Bash 里认得出的 sed、tee、重定向；拒绝规则在所有档下都先于别的规则。
- * 数据目录的 state/ 跟着数据目录走，见 stateDirDenyRule。
- */
-export const WORKER_MEMORY_DENY_RULES = [
-  "Edit(//**/AGENTS.md)",
-  "Edit(//**/CLAUDE.md)",
-  "Edit(//**/CLAUDE.local.md)",
-  "Edit(//**/GEMINI.md)",
-  "Edit(//**/.claude/**)",
-  "Edit(~/.claude/**)",
-  "Edit(//**/.gemini/**)",
-  "Edit(~/.gemini/**)",
-  "Edit(//**/.codex/**)",
-  "Edit(~/.codex/**)",
-] as const;
-
-const PROTECTED_MEMORY_FILES = new Set(["agents.md", "claude.md", "claude.local.md", "gemini.md"]);
-const PROTECTED_MEMORY_DIRS = new Set([".claude", ".gemini", ".codex"]);
-
-function normalizePathSegments(rawPath: string, homeDir?: string): { absolute: boolean; segments: string[]; normalized: string } {
-  let p = rawPath.trim().replace(/\\/g, "/");
-  if (homeDir && (p === "~" || p.startsWith("~/"))) {
-    const cleanHome = homeDir.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-    p = cleanHome + p.slice(1);
-  }
-  const absolute = p.startsWith("/");
-  const segments: string[] = [];
-  for (const part of p.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") {
-      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
-        segments.pop();
-      } else if (!absolute) {
-        segments.push("..");
-      }
-    } else {
-      segments.push(part);
-    }
-  }
-  const normalized = (absolute ? "/" : "") + segments.join("/");
-  return { absolute, segments, normalized };
-}
-
-/**
- * 供 AgyDriver 和 CodexDriver 在拦截 Worker 文件修改/命令审批时判断某个路径是否命中记忆保护范围：
- * 任何位置的 AGENTS.md、CLAUDE.md、CLAUDE.local.md、GEMINI.md、路径段含 .claude / .gemini / .codex、或在 stateDir 下。
- */
-export function isProtectedMemoryPath(targetPath: string, stateDir: string, homeDir?: string, cwd?: string): boolean {
-  const trimmedTarget = targetPath.trim().replace(/\\/g, "/");
-  if (trimmedTarget === "") return false;
-  const effectiveHome = homeDir ?? (typeof process !== "undefined" ? process.env.HOME : undefined);
-  const resolvedTarget =
-    cwd && cwd.trim() !== "" && !trimmedTarget.startsWith("/") && trimmedTarget !== "~" && !trimmedTarget.startsWith("~/")
-      ? `${cwd.trim().replace(/\\/g, "/").replace(/\/+$/, "")}/${trimmedTarget}`
-      : trimmedTarget;
-  const { segments, normalized } = normalizePathSegments(resolvedTarget, effectiveHome);
-  if (segments.length === 0) return false;
-  const last = segments[segments.length - 1]!.toLowerCase();
-  if (PROTECTED_MEMORY_FILES.has(last)) return true;
-  if (segments.some((seg) => PROTECTED_MEMORY_DIRS.has(seg.toLowerCase()))) return true;
-  if (stateDir.trim() !== "") {
-    const normState = normalizePathSegments(stateDir, effectiveHome).normalized;
-    const normLower = normalized.toLowerCase();
-    const stateLower = normState.toLowerCase();
-    if (stateLower !== "" && stateLower !== "/" && (normLower === stateLower || normLower.startsWith(`${stateLower}/`))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * 数据目录的 state/（性格设定文件 personas/、数据库、令牌）：stateDir 要 realpath 过（paths.ts 的 stateDir）。
- * 绝对路径的写法是 // 开头：/Users/u/.agent-hub/state → Edit(//Users/u/.agent-hub/state/**)。
- * 规则按 gitignore 的写法匹配，路径里的 \ [ ] * ? 前面加 \ 转义，当普通字符。
- */
-export function stateDirDenyRule(stateDir: string): string {
-  const escaped = stateDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&");
-  return `Edit(/${escaped}/**)`;
-}
-
-/** Worker 的全部记忆规则。 */
-export function workerMemoryDenyRules(stateDir: string): string[] {
-  return [...WORKER_MEMORY_DENY_RULES, stateDirDenyRule(stateDir)];
 }
 
 /**
@@ -163,8 +72,6 @@ export interface SessionSettingsInput {
   readonly: boolean;
   /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
   hubSock: string;
-  /** 数据目录 state/ 的真实路径，Worker 的记忆规则用。 */
-  stateDir: string;
   /** 本项目的 worktrees/<项目编号>/ 真实路径；只读档放行读它。没有项目就不传。 */
   projectWorktreesDir?: string;
 }
@@ -179,7 +86,7 @@ export interface SessionSettings {
 /**
  * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
  * - 两种角色都有：默认档（readonly 时换成只读档，并多放行 readonlyAllowRules）、放行 hub、放行 hub.sock；
- * - Worker 再加记忆规则和 autoMemoryEnabled: false。最后无条件加，不管 readonly 怎么写。
+ * - Worker 再加 autoMemoryEnabled: false。
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
@@ -191,10 +98,8 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
     settings.permissions.deny = [...READONLY_GIT_DENY_RULES];
   }
-  if (input.role === "worker") {
-    settings.permissions.deny = [...(settings.permissions.deny ?? []), ...workerMemoryDenyRules(input.stateDir)];
-    settings.autoMemoryEnabled = false;
-  }
+  // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则：改不改全凭 Worker 自己决定
+  if (input.role === "worker") settings.autoMemoryEnabled = false;
   return settings;
 }
 

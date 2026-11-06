@@ -17,7 +17,6 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("prepareLaunch（M2、M3）", () => {
   const hubSock = "/private/var/agent-hub/run/hub.sock";
-  const stateDir = "/private/var/agent-hub/state";
   let worktreesDir: string;
   let contexts: Map<number, LaunchContext>;
   let issued: number[];
@@ -31,7 +30,6 @@ describe("prepareLaunch（M2、M3）", () => {
   const make = (basePath = "/usr/bin:/bin") =>
     createLaunchPreparer({
       launchDir,
-      stateDir,
       worktreesDir,
       getLaunchContext: (id) => {
         const ctx = contexts.get(id);
@@ -87,7 +85,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
-    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir }));
+    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock }));
     expect(files.fingerprint).toBe(launchFingerprint({ prompt, settings }));
     // 令牌只在 env 里，不进任何文件
     for (const content of [prompt, settings]) expect(content).not.toContain("token-of-7");
@@ -164,30 +162,29 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
     expect(prompt).not.toContain("先问用户的事");
-    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock, stateDir }));
+    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock }));
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 
-  it("同一个项目的项目经理和 Worker：两份设置文件只差记忆那几条", async () => {
+  it("同一个项目的项目经理和 Worker：两份设置文件只差 autoMemoryEnabled", async () => {
     contexts.set(9, workerContext());
     const pm = JSON.parse(readFileSync((await make()(row(7))).settingsFile!, "utf8"));
     const worker = JSON.parse(readFileSync((await make()(row(9, dir, "worker"))).settingsFile!, "utf8"));
-    const { deny, ...workerPermissions } = worker.permissions;
-    expect(deny.length).toBeGreaterThan(0);
-    expect(workerPermissions).toEqual(pm.permissions);
+    expect(worker.permissions.deny).toBeUndefined();
+    expect(worker.permissions).toEqual(pm.permissions);
     expect(worker.sandbox).toEqual(pm.sandbox);
     expect(worker.autoMemoryEnabled).toBe(false);
     expect(pm.autoMemoryEnabled).toBeUndefined();
   });
 
-  it("只读 Worker：只读档，记忆规则一条不少；开关变了 fingerprint 跟着变", async () => {
+  it("只读 Worker：只读档；开关变了 fingerprint 跟着变", async () => {
     contexts.set(9, workerContext());
     const prepare = make();
     const normal = await prepare(row(9, dir, "worker"));
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await prepare(row(9, dir, "worker"));
-    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
+    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 

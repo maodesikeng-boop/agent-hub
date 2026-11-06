@@ -5,7 +5,6 @@ import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
   agentLaunchArgs,
-  isProtectedMemoryPath,
   type AgentSessionRow,
   type LaunchFiles,
   type SessionStartedEvent,
@@ -27,20 +26,6 @@ export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
  */
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
-/** 工具调用参数里需要做记忆路径保护检查的字段名。 */
-export const AGY_PATH_PARAM_KEYS = [
-  "Path",
-  "TargetFile",
-  "AbsolutePath",
-  "DirectoryPath",
-  "SearchPath",
-  "file_path",
-  "path",
-] as const;
-
-/** 工具调用参数里表示命令行字符串的字段名。 */
-export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
-
 /** 只读 Worker 禁止调用的写文件工具集合。 */
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
@@ -57,7 +42,6 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
 ]);
 
-export const WORKER_MEMORY_VIOLATION_MESSAGE = "Worker 不能修改记忆文件";
 export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文件";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -71,27 +55,6 @@ export function isReadonlySettings(settingsFile: string | undefined): boolean {
   } catch {
     return false;
   }
-}
-
-/** 从 settingsFile 的 deny 规则（如 Edit(//path/to/state/**)）提取 stateDir，提取不到返回 null。 */
-export function extractStateDirFromSettings(settingsFile: string | undefined): string | null {
-  if (!settingsFile || !existsSync(settingsFile)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(settingsFile, "utf8")) as { permissions?: { deny?: unknown } };
-    const deny = parsed?.permissions?.deny;
-    if (!Array.isArray(deny)) return null;
-    for (const rule of deny) {
-      if (typeof rule !== "string") continue;
-      if (rule.startsWith("Edit(//**/") || rule.startsWith("Edit(~/")) continue;
-      const match = /^Edit\(\/(\/.+)\/\*\*\)$/.exec(rule);
-      if (match) {
-        return match[1]!.replace(/\\([\\[\]*?])/g, "$1");
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 /**
@@ -275,57 +238,15 @@ export function buildAgySessionStartedEvent(
 
 export interface WorkerToolCheckInput {
   toolName: string;
-  parameters: unknown;
   readonly: boolean;
-  stateDir: string;
-  cwd?: string;
-}
-
-const SHELL_WRITE_INDICATORS =
-  />|>>|\b(tee|sed|awk|perl|python\d*|node|ruby|cp|mv|rm|touch|dd|truncate|patch|install|chmod|chown|sh|bash|zsh)\b/;
-
-function commandWritesProtectedMemory(command: string, stateDir: string, cwd?: string): boolean {
-  const tokens = command
-    .split(/[\s><|&;'"`()]+/)
-    .map((t) => t.trim())
-    .filter(Boolean);
-  const hitsProtected = tokens.some((tok) => {
-    const clean = tok.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "");
-    return clean !== "" && isProtectedMemoryPath(clean, stateDir, undefined, cwd);
-  });
-  if (!hitsProtected) return false;
-  // 如果命令含写操作指示符，或访问了 stateDir / .claude / .gemini / .codex，一律拦截
-  if (SHELL_WRITE_INDICATORS.test(command)) return true;
-  const readOnlyCmd = /^\s*(cat|head|tail|less|more|wc|stat|ls)\b/.test(command);
-  return !readOnlyCmd;
 }
 
 /**
- * 检查 Worker 的工具调用是否违规：
- * 1. 写类工具（AGY_WRITE_TOOLS）参数中的路径字段（Path, TargetFile, AbsolutePath, DirectoryPath, SearchPath, file_path, path）命中受保护记忆路径，
- *    或 CommandLine / command 试图修改受保护记忆文件 → 返回 "Worker 不能修改记忆文件"；
- * 2. 只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；
- * 3. 合规返回 null。
+ * 检查 Worker 的工具调用是否违规：只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；合规返回 null。
+ * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查：改不改记忆文件全凭 Worker 自己决定。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
-  const { toolName, parameters, readonly, stateDir, cwd } = input;
-  if (typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
-    const params = parameters as Record<string, unknown>;
-    // 只有写类工具的路径参数才查记忆文件；读类工具（view_file / grep_search / list_dir 等）读记忆文件是允许的
-    const pathKeys = AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : [];
-    for (const key of pathKeys) {
-      const val = params[key];
-      if (typeof val === "string" && val.trim() !== "" && isProtectedMemoryPath(val, stateDir, undefined, cwd)) {
-        return WORKER_MEMORY_VIOLATION_MESSAGE;
-      }
-    }
-    for (const key of AGY_COMMAND_PARAM_KEYS) {
-      const cmd = params[key];
-      if (typeof cmd === "string" && cmd.trim() !== "" && commandWritesProtectedMemory(cmd, stateDir, cwd)) {
-        return WORKER_MEMORY_VIOLATION_MESSAGE;
-      }
-    }
-  }
+  const { toolName, readonly } = input;
   if (readonly && AGY_WRITE_TOOLS.has(toolName)) {
     return READONLY_WORKER_VIOLATION_MESSAGE;
   }
