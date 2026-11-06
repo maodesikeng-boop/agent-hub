@@ -32,6 +32,7 @@ import {
   VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   WORKER_REPORT_FORMAT,
+  WORKER_SEND_MAX_TOKENS,
 } from "../shared/index.ts";
 import type { LaunchContext, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
@@ -130,6 +131,7 @@ export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptS
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
 - **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
 - **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
+- **别反复打回对话很长的 Worker**：打回或追问之前，先用 \`${HUB} worker show <编号>\` 看它的对话长度；超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 就别再 send 给它，让它收工（\`${HUB} worker end\`），新派一个接手，任务说明里写清分支、已有的提交、还要改的点。审查意见多、要来回改好几轮的，也直接新派。
 - **验收与收尾**：
   - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
   - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。

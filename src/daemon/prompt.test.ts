@@ -23,7 +23,7 @@ import {
 } from "../shared/index.ts";
 import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
-import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH } from "../shared/limits.ts";
+import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, WORKER_SEND_MAX_TOKENS } from "../shared/limits.ts";
 import { mergeUserTexts } from "./driver/protocol.ts";
 import {
   AGENTS_NOTE,
@@ -450,6 +450,30 @@ describe("提示词：项目经理（M3）", () => {
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
     expect(workerPrompt).not.toContain("大量材料交给 Worker 读");
     expect(workerPrompt).not.toContain("看 Worker 干了什么，一层层往下看");
+  });
+
+  it("别反复打回对话很长的 Worker：在“验收与收尾”之前，数字来自 WORKER_SEND_MAX_TOKENS（按 K 写），用动态命令名，不写死厂商名，Worker 提示词不加", () => {
+    expect(WORKER_SEND_MAX_TOKENS).toBe(200_000);
+    const order = ["**工作目录隔离**", "**别反复打回对话很长的 Worker**", "**验收与收尾**"];
+    const positions = order.map((title) => PM_WORKER_PROMPT.indexOf(title));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+
+    const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
+    for (const word of [
+      "**别反复打回对话很长的 Worker**",
+      `先用 \`${hub} worker show <编号>\` 看它的对话长度`,
+      `超过 ${limitK} 就别再 send 给它`,
+      `让它收工（\`${hub} worker end\`），新派一个接手`,
+      "任务说明里写清分支、已有的提交、还要改的点",
+      "审查意见多、要来回改好几轮的，也直接新派",
+    ]) {
+      expect(PM_WORKER_PROMPT).toContain(word);
+    }
+    const line = PM_WORKER_PROMPT.split("\n").find((l) => l.includes("**别反复打回对话很长的 Worker**"))!;
+    expect(line).toBeDefined();
+    for (const vendor of AGENT_VENDORS) expect(line.toLowerCase()).not.toContain(vendor);
+    expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("别反复打回对话很长的 Worker");
   });
 
   it("用户直接对 Worker 说的话会告诉项目经理：开头和账本发的一样，写明 Worker 已收到、无需转告", () => {

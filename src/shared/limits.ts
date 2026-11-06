@@ -66,6 +66,8 @@ export const MAX_TASK_BYTES = MAX_MESSAGE_BYTES;
 export const WORKER_LINE_SUMMARY_CHARS = 120;
 /** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
 export const WORKER_BRANCH_SLUG_CHARS = 30;
+/** Worker 对话长到多少 token 就别再打回，让它收工、新派一个（见 prompt.ts 的 buildPmWorkerPrompt）。 */
+export const WORKER_SEND_MAX_TOKENS = 200_000;
 
 // ---- M6：定时任务（见 src/shared/schedule.ts、daemon/ledger/schedules.ts）----
 
