@@ -631,6 +631,29 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(count("persona_changes")).toBe(records);
   });
 
+  it("agy 老数据存的是完整 ID：资料页只改思考程度，存成 模型 + 新档位（不报冲突）；改了别的不动它", () => {
+    const agy = ledger.createPm({ name: "阿亮", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon", effort: "high" });
+    expect(agy.pm).toMatchObject({ vendor: "agy", defaultModel: "gemini-4-argon", effort: "high" });
+    // 老库里存的是完整 ID
+    db.run("UPDATE pms SET default_model = ?, effort = NULL WHERE id = ?", "gemini-4-argon-high", agy.pm.id);
+    db.run("UPDATE agent_sessions SET model = ?, effort = NULL WHERE id = ?", "gemini-4-argon-high", agy.sessionId);
+    const text = ledger.editPersona(agy.pm.id, { text: "新习惯" }, { kind: "user" });
+    expect(text.persona).toMatchObject({ model: "gemini-4-argon-high", effort: null });
+    const { persona } = ledger.editPersona(agy.pm.id, { effort: "low" }, { kind: "user" });
+    expect(persona).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "low" });
+    expect(sessionRow(agy.sessionId)).toMatchObject({ model: "gemini-4-argon", effort: "low" });
+    // 对话里的系统消息：模型没变不写，思考程度单独一段（老数据里的 high 是从完整 ID 里拆出来的）
+    expect(messagesIn(agy.conversation.id).at(-1)!.text).toBe("你改了阿亮的设置（思考程度：high → low）");
+  });
+
+  it("agy 只给完整 ID：拆成 模型 + 思考程度；完整 ID 加对不上的思考程度：invalid", () => {
+    const made = ledger.createPm({ name: "阿亮", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-3.8-flash-low", effort: "" });
+    expect(made.pm).toMatchObject({ vendor: "agy", defaultModel: "gemini-3.8-flash", effort: "low" });
+    const { persona } = ledger.editPersona(made.pm.id, { model: "claude-opus-5-5-medium" }, { kind: "user" });
+    expect(persona).toMatchObject({ vendor: "agy", model: "claude-opus-5-5", effort: "medium" });
+    expectLedgerError(() => ledger.editPersona(made.pm.id, { model: "gemini-4-argon-low", effort: "high" }, { kind: "user" }), "invalid", /gemini-4-argon-low/);
+  });
+
   it("和性格设定、模式一起改：一条记录；系统消息里写模式和模型的变化", () => {
     const { change } = ledger.editPersona(lin.pmId, { text: "新习惯", mode: "hands_on", model: "opus" }, { kind: "user" });
     expect(change).toMatchObject({ textAfter: "新习惯", modeAfter: "hands_on", modelBefore: null, modelAfter: "opus" });

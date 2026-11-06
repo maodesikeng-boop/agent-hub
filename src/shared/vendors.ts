@@ -11,13 +11,18 @@ export interface VendorSpec {
   /** 界面上的名字。 */
   label: string;
   /** 打包的模型名单（问不到厂商时用）：id 原样传给 modelFlag，label 是界面上的名字。 */
-  models: readonly { id: string; label: string }[];
+  models: readonly { id: string; label: string; efforts?: readonly string[] }[];
   /** 能不能填完整模型名（下拉里的“自定义”）。 */
   customModel: boolean;
   /** 自定义模型名输入框里的示例。 */
   customModelExample: string;
-  /** 思考程度，原样传给 effortFlag。 */
+  /** 思考程度，原样传给 effortFlag（effortInModelId 的厂商拼进模型 ID）。 */
   efforts: readonly string[];
+  /**
+   * 思考程度写在模型 ID 末尾（agy：gemini-4-argon-high）。界面把它拆成“模型 + 思考程度”（和 Antigravity 软件一致），
+   * 启动时再拼回完整 ID 传给 modelFlag，不再传 effortFlag（agy 对两个都传且对不上会报错）。
+   */
+  effortInModelId?: boolean;
   modelFlag: string;
   effortFlag: string;
   flags: { model: string; effort: string };
@@ -62,6 +67,9 @@ const CLAUDE_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worke
 const CLAUDE_SETTINGS_BLOCKED = "这个命令会改 claude 自己的设置，这里不能用；要改请在终端里打开 claude";
 const CLAUDE_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 claude";
 const CLAUDE_TERMINAL_BLOCKED = "这个命令只能在终端界面里用";
+
+/** agy 的思考程度：和 Antigravity 软件一样三档（实测 xhigh、max 被 agy 拒绝）。 */
+const AGY_EFFORTS: readonly string[] = ["low", "medium", "high"];
 
 const AGY_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
 const AGY_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
@@ -143,26 +151,29 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   },
   agy: {
     label: "Antigravity",
+    // 2026-11-06 `agy models` 的实际内容去掉档位后的样子（docs/model-catalog.md）；拿不到名单时兜底
     models: [
-      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
-      { id: "gemini-4-argon-max", label: "Gemini 4 Argon (Max)" },
-      { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
-      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-      { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+      { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: AGY_EFFORTS },
+      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", efforts: AGY_EFFORTS },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: AGY_EFFORTS },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", efforts: AGY_EFFORTS },
+      { id: "gpt-oss-120b", label: "GPT-OSS 120B", efforts: ["medium"] },
     ],
     customModel: true,
-    customModelExample: "如 gemini-4-argon-medium",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
+    customModelExample: "如 gemini-4-argon",
+    efforts: AGY_EFFORTS,
+    effortInModelId: true,
     modelFlag: "--model",
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
     quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
+    // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B
     shortModelName: (model) => {
-      const argon = /^gemini-\d+-argon-([a-z]+)$/.exec(model);
-      if (argon) return `Argon ${cap(argon[1]!)}`;
-      const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-thinking)?(?:-\d{8})?$/.exec(model);
-      if (claude) return `${cap(claude[1]!)} ${claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`}`;
-      const gptOss = /^gpt-oss-(\d+b)(?:-[a-z]+)?$/i.exec(model);
+      const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(model);
+      if (gemini) return `Gemini ${gemini[1]} ${cap(gemini[2]!)}`;
+      const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(model);
+      if (claude) return `Claude ${cap(claude[1]!)} ${claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`}`;
+      const gptOss = /^gpt-oss-(\d+b)$/i.exec(model);
       if (gptOss) return `GPT-OSS ${gptOss[1]!.toUpperCase()}`;
       return null;
     },
@@ -250,18 +261,61 @@ export function checkEffort(vendor: AgentVendor, effort: string | null): string 
   return `思考程度只能是 ${VENDOR_SPECS[vendor].efforts.join("、")}`;
 }
 
+/**
+ * 思考程度写在模型 ID 里的厂商（agy）：完整 ID 拆成 模型 + 思考程度。末尾是这家清单里的档位词（-low、-medium、-high）才拆；
+ * 不带档位的、默认（null）、别家厂商原样返回。ID 里的档位优先于另存的 effort（启动时 agy 认的就是 ID）。
+ * 老数据里存的是完整 ID，界面、右栏用它显示成“模型 + 档位”。
+ */
+export function splitModelEffort(vendor: AgentVendor, model: string | null, effort: string | null): { model: string | null; effort: string | null } {
+  // 网页的厂商来自名单，名单里可能有这里没有的厂商（测试里的假厂商），所以 spec 可能是 undefined
+  const spec = VENDOR_SPECS[vendor] as VendorSpec | undefined;
+  if (!spec?.effortInModelId || model === null) return { model, effort };
+  const split = splitEffortSuffix(model, spec.efforts);
+  return split === null ? { model, effort } : { model: split.base, effort: split.effort };
+}
+
+/** 末尾是 -<档位> 且档位在 efforts 里：拆成 { base, effort }，否则 null。 */
+export function splitEffortSuffix(id: string, efforts: readonly string[]): { base: string; effort: string } | null {
+  const dash = id.lastIndexOf("-");
+  if (dash <= 0) return null;
+  const effort = id.slice(dash + 1);
+  return efforts.includes(effort) ? { base: id.slice(0, dash), effort } : null;
+}
+
+/** 完整 ID 里已经带了档位，另给的思考程度和它对不上（agy 会报 conflicts）：返回给人看的原因，否则 null。 */
+export function checkModelEffort(vendor: AgentVendor, model: string | null, effort: string | null): string | null {
+  if (effort === null) return null;
+  const split = splitModelEffort(vendor, model, null);
+  if (split.effort === null || split.effort === effort) return null;
+  return `模型 ${model} 已经带了思考程度 ${split.effort}，和 ${effort} 对不上；请用不带档位的 ${split.model} 再选思考程度，或者去掉思考程度`;
+}
+
 /** 厂商、模型、思考程度一起查（vendor 可以是任何值）。 */
 export function checkAgentSetting(setting: { vendor: unknown; model: string | null; effort: string | null }): string | null {
   if (!isAgentVendor(setting.vendor)) return `厂商只能是 ${AGENT_VENDORS.join("、")}`;
-  return checkModel(setting.vendor, setting.model) ?? checkEffort(setting.vendor, setting.effort);
+  return (
+    checkModel(setting.vendor, setting.model) ??
+    checkEffort(setting.vendor, setting.effort) ??
+    checkModelEffort(setting.vendor, setting.model, setting.effort)
+  );
 }
 
-/** 启动参数里模型、思考程度那几个（默认的不传）。 */
+/**
+ * 启动参数里模型、思考程度那几个（默认的不传）。思考程度在模型 ID 里的厂商（agy）：不带档位的模型 + 思考程度拼成完整 ID
+ * 一个 --model（gemini-4-argon + high → gemini-4-argon-high），不再另传 --effort；只有思考程度才传 --effort。
+ */
 export function agentLaunchArgs(setting: AgentSetting): string[] {
   const spec = VENDOR_SPECS[setting.vendor];
   const args: string[] = [];
-  if (setting.model !== null && setting.model !== "") args.push(spec.modelFlag, setting.model);
-  if (setting.effort !== null && setting.effort !== "") args.push(spec.effortFlag, setting.effort);
+  const hasModel = setting.model !== null && setting.model !== "";
+  const hasEffort = setting.effort !== null && setting.effort !== "";
+  if (spec.effortInModelId && hasModel) {
+    const { model, effort } = splitModelEffort(setting.vendor, setting.model, hasEffort ? setting.effort : null);
+    args.push(spec.modelFlag, effort === null ? model! : `${model}-${effort}`);
+    return args;
+  }
+  if (hasModel) args.push(spec.modelFlag, setting.model!);
+  if (hasEffort) args.push(spec.effortFlag, setting.effort!);
   return args;
 }
 
@@ -305,7 +359,7 @@ export interface ModelCatalog {
 /** 打包在程序里的名单。 */
 export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
   const spec = VENDOR_SPECS[vendor];
-  const models = spec.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null }));
+  const models = spec.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: m.efforts ?? null }));
   return {
     vendor,
     label: spec.label,
@@ -330,10 +384,14 @@ export function modelChoiceOf(model: string | null): string {
   return model ?? "";
 }
 
-/** 界面、修改记录里显示的模型：默认；名单里有的用它的名字（没给名单用打包的）；别的原样。 */
+/** 界面、修改记录里显示的模型：默认；名单里有的用它的名字（没给名单用打包的；带档位的完整 ID 只取模型的名字）；别的原样。 */
 export function modelLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return "默认";
-  return catalog.models.find((m) => m.id === model)?.label ?? model;
+  const listed = catalog.models.find((m) => m.id === model);
+  if (listed) return listed.label;
+  // 老数据存的是带档位的完整 ID（agy）：只显示模型的名字，档位另外显示（agentEffortOf），不拼在一起
+  const bare = splitModelEffort(vendor, model, null).model!;
+  return catalog.models.find((m) => m.id === bare)?.label ?? model;
 }
 
 /** 模型下拉里“默认”那一项：知道默认是哪个模型就写出来（“Opus 5.5（默认）”），不知道只写“默认”。 */
@@ -347,8 +405,15 @@ export function defaultModelOption(catalog: ModelCatalog): string {
  */
 export function modelShortLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return catalog.defaultModel ?? "默认";
-  const label = modelLabel(vendor, model, catalog);
-  return label === model ? (VENDOR_SPECS[vendor].shortModelName?.(model) ?? model) : label;
+  // 带档位的完整 ID（老数据）只显示模型，档位另外显示（agentEffortOf）
+  const bare = splitModelEffort(vendor, model, null).model!;
+  const label = modelLabel(vendor, bare, catalog);
+  return label === bare ? (VENDOR_SPECS[vendor].shortModelName?.(bare) ?? bare) : label;
+}
+
+/** 列表里显示的思考程度：另存的，或者老数据里写在模型 ID 末尾的（ID 优先）。 */
+export function agentEffortOf(vendor: AgentVendor, model: string | null, effort: string | null): string | null {
+  return splitModelEffort(vendor, model, effort).effort;
 }
 
 export function effortLabel(effort: string | null): string {

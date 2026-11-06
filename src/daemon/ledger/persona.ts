@@ -20,8 +20,10 @@ import {
   checkAgentSetting,
   checkEffort,
   checkModel,
+  checkModelEffort,
   effortLabel,
   isAgentVendor,
+  splitModelEffort,
   vendorLabel,
 } from "../../shared/vendors.ts";
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
@@ -47,7 +49,10 @@ const agentOf = (pm: PmDbRow): AgentSetting => ({ vendor: pm.vendor as AgentVend
 const sameAgent = (a: AgentSetting, b: AgentSetting) => a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 
 /** 修改记录、系统消息里的“模型：默认 → Haiku”这几段（没变的不写）。 */
-function agentNotes(before: AgentSetting, after: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
+function agentNotes(rawBefore: AgentSetting, rawAfter: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
+  // 老数据里 agy 的模型是带档位的完整 ID：先拆成 模型 + 思考程度，各写各的
+  const before = { vendor: rawBefore.vendor, ...splitModelEffort(rawBefore.vendor, rawBefore.model, rawBefore.effort) };
+  const after = { vendor: rawAfter.vendor, ...splitModelEffort(rawAfter.vendor, rawAfter.model, rawAfter.effort) };
   const notes: string[] = [];
   if (before.vendor !== after.vendor) notes.push(`厂商：${vendorLabel(before.vendor)} → ${vendorLabel(after.vendor)}`);
   if (before.model !== after.model) notes.push(`模型：${label(before.vendor, before.model)} → ${label(after.vendor, after.model)}`);
@@ -67,7 +72,8 @@ function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }): 
   const setting = { vendor: raw.vendor, model: optionalSetting(raw.model, "模型"), effort: optionalSetting(raw.effort, "思考程度") };
   const problem = checkAgentSetting(setting);
   if (problem !== null) throw fail("invalid", problem);
-  return setting as AgentSetting;
+  const { vendor, model, effort } = setting as AgentSetting;
+  return { vendor, ...splitModelEffort(vendor, model, effort) };
 }
 
 /**
@@ -76,16 +82,21 @@ function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }): 
  */
 function nextAgent(current: AgentSetting, input: EditPersonaInput): AgentSetting {
   if (input.vendor !== undefined && !isAgentVendor(input.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
-  const next: AgentSetting = {
-    vendor: input.vendor ?? current.vendor,
-    model: input.model === undefined ? current.model : optionalSetting(input.model, "模型"),
-    effort: input.effort === undefined ? current.effort : optionalSetting(input.effort, "思考程度"),
-  };
+  const vendor = input.vendor ?? current.vendor;
+  // 思考程度写在模型 ID 里的厂商（agy）：现在存的可能是带档位的完整 ID（老数据），先拆成 模型 + 思考程度再改
+  const touched = input.model !== undefined || input.effort !== undefined;
+  const from = touched && vendor === current.vendor ? splitModelEffort(vendor, current.model, current.effort) : { model: current.model, effort: current.effort };
+  const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
+  const effort = input.effort === undefined ? from.effort : optionalSetting(input.effort, "思考程度");
   const problem =
-    (input.model !== undefined ? checkModel(next.vendor, next.model) : null) ??
-    (input.effort !== undefined ? checkEffort(next.vendor, next.effort) : null);
+    (input.model !== undefined ? checkModel(vendor, model) : null) ??
+    (input.effort !== undefined ? checkEffort(vendor, effort) : null) ??
+    // 这次明确给了完整 ID 又明确给了对不上的思考程度才报错；只改其中一项时沿用的那项让位给改的
+    (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort) : null);
   if (problem !== null) throw fail("invalid", problem);
-  return next;
+  return input.model !== undefined && input.effort === undefined
+    ? { vendor, ...splitModelEffort(vendor, model, effort) }
+    : { vendor, model, effort };
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 
