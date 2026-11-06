@@ -173,6 +173,30 @@ export function parseLocalHref(href: string): LocalHref | null {
   return { kind: "relative", path };
 }
 
+/** 路径末尾的行号写法：#L10、#L10-L20、#L10-20、#L10C5（GitHub），:10、:10:5、:10-20、:10:5-12:3（编辑器）。 */
+const LOCATION_SUFFIX = /(?:#L?\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?|:\d+(?::\d+)?(?:-\d+(?::\d+)?)?)$/;
+
+/**
+ * 原样找不到文件时，再试的路径（按顺序）：去掉末尾行号写法；file:// 链接再去掉任何 # 片段（片段本来就不是路径）。
+ * 原样的路径由调用方先试：文件名里真带 # 或 : 的照旧能找到。
+ */
+export function locationFallbackPaths(href: string, path: string): string[] {
+  const out: string[] = [];
+  const add = (candidate: string) => {
+    if (candidate !== "" && candidate !== path && !out.includes(candidate)) out.push(candidate);
+  };
+  add(path.replace(LOCATION_SUFFIX, ""));
+  if (/^file:/i.test(href.trim())) {
+    // 片段在百分号解码前就切掉：%23 是文件名里真有的 #，已经解码进 path 了，所以这里按原链接的写法再算一遍
+    const hash = href.trim().indexOf("#");
+    if (hash >= 0) {
+      const local = parseLocalHref(href.trim().slice(0, hash));
+      if (local !== null) add(local.path);
+    }
+  }
+  return out;
+}
+
 /**
  * 回复里写成本机路径的链接（候选）：按出现顺序去重（同一个地址写两次只算一个）。图片和链接一视同仁。
  * 不一定都是文件（站内链接 /login、不存在的相对路径），守护进程逐个判断（daemon/sent-files.ts），最多收 MAX_SENT_FILES_PER_MESSAGE 个。

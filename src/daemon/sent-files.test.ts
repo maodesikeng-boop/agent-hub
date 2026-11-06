@@ -396,3 +396,41 @@ describe("边界", () => {
     expect(copies()).toEqual([file!.id]);
   });
 });
+
+describe("链接后面带行号", () => {
+  const link = (href: string) => share(`[协议](${href})`);
+
+  it.each(["#L10", "#L10-L20", "#L10-20", "#L10C5", "#L10C5-L12C3", ":10", ":10:5", ":10-20", ":10:5-12:3"])("%s：去掉后找到文件，标题照原样", (suffix) => {
+    const file = write(join(proj, "src", "protocol.ts"), "CODE");
+    const [saved, ...rest] = link(`${file}${suffix}`);
+    expect(rest).toEqual([]);
+    expect(saved).toMatchObject({ status: "saved", name: "protocol.ts", path: file, size: 4, href: `${file}${suffix}` });
+    expect(copyOf(saved!)).toBe("CODE");
+  });
+
+  it("file:// 链接：# 片段不是路径，什么写法都去掉", () => {
+    const file = write(join(proj, "a b.ts"), "CODE");
+    expect(link(`file://${file.replace(" ", "%20")}#L502-L520`)[0]).toMatchObject({ status: "saved", name: "a b.ts" });
+    expect(link(`file://${file.replace(" ", "%20")}#anchor`)[0]).toMatchObject({ status: "saved", name: "a b.ts" });
+  });
+
+  it("相对路径也认", () => {
+    write(join(proj, "docs", "a.md"), "A");
+    expect(link("docs/a.md:3")[0]).toMatchObject({ status: "saved", name: "a.md" });
+    expect(link("docs/a.md#L2-L5")[0]).toMatchObject({ status: "saved", name: "a.md" });
+  });
+
+  it("文件名里真带 # 或 : 且原样存在：按原样找，不去掉", () => {
+    const hashed = write(join(proj, "a#L10"), "H");
+    const colon = write(join(proj, "b:10"), "C");
+    write(join(proj, "a"), "plain");
+    write(join(proj, "b"), "plain");
+    expect(link(hashed)[0]).toMatchObject({ status: "saved", name: "a#L10", size: 1 });
+    expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+  });
+
+  it("去掉行号后也不存在：照旧没找到", () => {
+    expect(link(`${join(proj, "nope.ts")}#L1-L2`)[0]).toMatchObject({ status: "missing", name: "nope.ts#L1-L2", id: null });
+    expect(link(`${join(proj, "nope.ts")}:7`)[0]).toMatchObject({ status: "missing", id: null });
+  });
+});
