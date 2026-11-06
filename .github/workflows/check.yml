@@ -39,7 +39,12 @@ jobs:
 
       # CI 里不用 pnpm check 的 dot reporter：它在 CI 日志里看不到失败汇总（见 PR 说明），
       # 改用 verbose（逐条用例 + 耗时）、github-actions（失败写成注解）、junit（留档）。
-      - run: pnpm vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml
+      - run: pnpm vitest run --exclude test/tmp-dot-probe.test.ts --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml
+
+      - name: probe dot reporter
+        if: matrix.rep == 1
+        continue-on-error: true
+        run: pnpm vitest run --reporter=dot test/tmp-dot-probe.test.ts src/shared/vendors.test.ts
 
       - uses: actions/upload-artifact@v4
         if: always()
