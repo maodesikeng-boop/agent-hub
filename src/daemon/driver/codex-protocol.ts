@@ -1,11 +1,12 @@
 // OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
-// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 记忆保护审批判定。
+// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 系统数据目录保护 / 只读模式的审批判定。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
-  isProtectedMemoryPath,
+  commandWritesStateDir,
+  isStateDirPath,
   type AgentRole,
   type AgentSessionRow,
   type AgentToolEvent,
@@ -410,25 +411,11 @@ export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null 
   };
 }
 
-/** 从命令字符串或参数数组中切出可能的路径片段，供记忆保护检查。 */
-function extractCommandCandidatePaths(commandField: unknown): string[] {
-  if (typeof commandField === "string") {
-    return commandField
-      .split(/[\s><|&;()"'=`]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-  if (Array.isArray(commandField)) {
-    return commandField.flatMap((item) => (typeof item === "string" ? extractCommandCandidatePaths(item) : []));
-  }
-  return [];
-}
-
 /**
  * 判定 item/commandExecution/requestApproval 的审批结果：
  * - readonly 会话一律 decline
- * - worker 会话若命令或路径触碰受保护记忆路径（AGENTS.md、CLAUDE.md、.claude、stateDir 等）则 decline
- * - 其余情况 accept
+ * - worker 会话若命令会写系统数据目录 stateDir 则 decline
+ * - 其余情况 accept（2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）
  */
 export function decideCommandApproval(
   params: Record<string, unknown>,
@@ -436,16 +423,10 @@ export function decideCommandApproval(
 ): CodexApprovalDecision {
   if (context.readonly) return "decline";
   if (context.role === "worker") {
-    const candidates = [
-      ...extractCommandCandidatePaths(params.command),
-      ...extractFileChangePaths(params),
-    ];
     const effectiveCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd : context.cwd;
-    for (const candidate of candidates) {
-      if (isProtectedMemoryPath(candidate, context.stateDir, undefined, effectiveCwd)) {
-        return "decline";
-      }
-    }
+    const command = Array.isArray(params.command) ? params.command.filter((x) => typeof x === "string").join(" ") : params.command;
+    if (typeof command === "string" && commandWritesStateDir(command, context.stateDir, effectiveCwd)) return "decline";
+    if (extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, effectiveCwd))) return "decline";
   }
   return "accept";
 }
@@ -453,7 +434,7 @@ export function decideCommandApproval(
 /**
  * 判定 item/fileChange/requestApproval 的审批结果：
  * - readonly 会话一律 decline
- * - worker 会话若修改的文件路径触碰受保护记忆路径（AGENTS.md、CLAUDE.md、.claude、stateDir 等）则 decline
+ * - worker 会话若修改的文件在系统数据目录 stateDir 下则 decline
  * - 其余情况 accept
  */
 export function decideFileChangeApproval(
@@ -461,13 +442,8 @@ export function decideFileChangeApproval(
   context: { role: AgentRole; readonly: boolean; stateDir: string; cwd: string },
 ): CodexApprovalDecision {
   if (context.readonly) return "decline";
-  if (context.role === "worker") {
-    const paths = extractFileChangePaths(params);
-    for (const p of paths) {
-      if (isProtectedMemoryPath(p, context.stateDir, undefined, context.cwd)) {
-        return "decline";
-      }
-    }
+  if (context.role === "worker" && extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, context.cwd))) {
+    return "decline";
   }
   return "accept";
 }

@@ -169,7 +169,7 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 
-  it("同一个项目的项目经理和 Worker：两份设置文件只差记忆那几条", async () => {
+  it("同一个项目的项目经理和 Worker：两份设置文件只差 state/ 的拒绝规则和 autoMemoryEnabled", async () => {
     contexts.set(9, workerContext());
     const pm = JSON.parse(readFileSync((await make()(row(7))).settingsFile!, "utf8"));
     const worker = JSON.parse(readFileSync((await make()(row(9, dir, "worker"))).settingsFile!, "utf8"));
@@ -181,7 +181,7 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(pm.autoMemoryEnabled).toBeUndefined();
   });
 
-  it("只读 Worker：只读档，记忆规则一条不少；开关变了 fingerprint 跟着变", async () => {
+  it("只读 Worker：只读档，带 state/ 拒绝规则；开关变了 fingerprint 跟着变", async () => {
     contexts.set(9, workerContext());
     const prepare = make();
     const normal = await prepare(row(9, dir, "worker"));
