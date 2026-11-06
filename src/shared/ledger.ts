@@ -1,7 +1,7 @@
 // 账本（W1 实现）对界面服务、agent 接口、执行器、驱动层和组装代码开放的接口。
 // 数据库是同步接口，账本方法也都是同步的；调用方想 await 也行。
 // 这里只从 hub.ts 引类型（hub.ts 从这里引常量），没有运行时的循环引用。
-import type { Change, MessagesPage, StateSnapshot } from "./api.ts";
+import type { Change, LedgerSnapshot, MessagesPage } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { DriverEvent } from "./driver.ts";
 import type { AnyActionRow } from "./actions.ts";
@@ -329,7 +329,7 @@ export interface Ledger {
    * 网页看得到的东西：不含老的项目群（对话、它们的会话）和归档的项目（见 CONVERSATION_KINDS）。
    * 含 Worker 的对话（kind worker）和会话：网页左栏不显示，点项目经理对话里那一行打开。
    */
-  snapshot(): StateSnapshot;
+  snapshot(): LedgerSnapshot;
   /** 更早的 100 条（before 之前，从小到大）。对话不存在（包括老的项目群）抛 ConversationNotFoundError。 */
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   changesSince(seq: number): ChangesSince;

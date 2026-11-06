@@ -14,7 +14,7 @@
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ConversationSnapshot, StateSnapshot } from "../../shared/api.ts";
+import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
@@ -132,7 +132,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     requestStop: messages.requestStop,
     composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
-    snapshot(): StateSnapshot {
+    snapshot(): LedgerSnapshot {
       const conversations: ConversationSnapshot[] = db
         .all<ConversationDbRow>("SELECT * FROM conversations WHERE kind != 'project_group' ORDER BY id")
         .map((row) => {

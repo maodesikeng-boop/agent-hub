@@ -32,6 +32,7 @@ import {
   normalizeName,
   sentFileMime,
   sentFilesOf,
+  serverInfoFor,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
@@ -54,11 +55,22 @@ import {
   type PostMessageResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
+  type ServerInfo,
+  type StateSnapshot,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import type { ComposerService } from "../composer.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
-import { OPEN_NOT_ALLOWED_MESSAGE, OpenNotAllowed, OpenTargetMissing, performFileAction, runOpenCommand, type RunOpen } from "../open-file.ts";
+import {
+  FILE_ACTIONS_UNAVAILABLE_MESSAGE,
+  FileActionsUnavailable,
+  OPEN_NOT_ALLOWED_MESSAGE,
+  OpenNotAllowed,
+  OpenTargetMissing,
+  performFileAction,
+  runOpenCommand,
+  type RunOpen,
+} from "../open-file.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
 
@@ -84,10 +96,12 @@ export interface UiServerOptions {
    * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
    */
   composer?: ComposerService;
-  /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript；测试里传假的。 */
+  /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
   folderPicker?: FolderPicker;
-  /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")；测试里换成假的，不真的打开。 */
+  /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")（不是 macOS 回 501）；测试里换成假的，不真的打开。 */
   runOpen?: RunOpen;
+  /** 这台机器能做什么，原样放进 /api/state 的 server，网页按它显示控件。默认按 process.platform（shared/server-info.ts）。 */
+  serverInfo?: ServerInfo;
 }
 
 /** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
@@ -297,10 +311,18 @@ function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Att
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
-  const runOpen = opts.runOpen ?? runOpenCommand;
+  const serverInfo = opts.serverInfo ?? serverInfoFor(process.platform);
+  // 默认的 open 只有 macOS 上有；不是 macOS 又没注入假的：回 501，不去起一个不存在的 open
+  const runOpen: RunOpen =
+    opts.runOpen ??
+    (serverInfo.fileActions
+      ? runOpenCommand
+      : async () => {
+          throw new FileActionsUnavailable();
+        });
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
   const expectedToken = digest(opts.token);
-  const folderPicker = opts.folderPicker ?? createFolderPicker();
+  const folderPicker = opts.folderPicker ?? createFolderPicker({ available: serverInfo.folderPicker });
   const app = Fastify({ logger: opts.logger ?? false });
 
   const listeningPort = (): number | undefined => {
@@ -416,7 +438,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.redirect("/", 302);
     });
 
-    routes.get(API_PATHS.state, async () => ledger.snapshot());
+    routes.get(API_PATHS.state, async (): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfo }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       const refresh = (req.query as { refresh?: unknown }).refresh === "1";
@@ -462,6 +484,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       } catch (error) {
         if (error instanceof OpenTargetMissing) return fail(reply, 404, "not_found");
         if (error instanceof OpenNotAllowed) return fail(reply, 403, OPEN_NOT_ALLOWED_MESSAGE);
+        if (error instanceof FileActionsUnavailable) return fail(reply, 501, FILE_ACTIONS_UNAVAILABLE_MESSAGE);
         console.error("ui-server open failed:", error);
         return fail(reply, 500, "没能打开这个文件");
       }

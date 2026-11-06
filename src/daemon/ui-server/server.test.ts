@@ -20,6 +20,7 @@ import {
   MAX_UPLOAD_BYTES,
   UI_COOKIE_NAME,
   bundledModelCatalog,
+  serverInfoFor,
   type Attachment,
   type Change,
   type LedgerErrorCode,
@@ -368,7 +369,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     };
     const res = await call("GET", "/api/state");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
+    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
     expect(res.headers["cache-control"]).toBe("no-store");
   });
 
@@ -385,7 +386,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     const body = (await call("GET", "/api/state")).json();
     expect(body.projects).toEqual([project]);
     expect(body.folders).toHaveLength(2);
-    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
+    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
   });
 
   it("?before= 把对话编号和消息编号原样交给账本，返回它给的页", async () => {
@@ -537,7 +538,7 @@ describe("Worker 的对话（M3，kind worker）：界面服务不另设接口�
       ...ledger.snapshotValue,
       conversations: [{ conversation: workerConversation, messages: [{ ...makeMessage(6, 30), sender: "pm", workerId: 3 }, line], hasMore: false }],
     };
-    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq });
+    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
   });
 
   it("按会话翻页、点停止：和项目经理的对话一样", async () => {

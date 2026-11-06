@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NAME_RULE, VENDOR_SPECS, bundledModelCatalog, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { MODEL_NAME_RULE, VENDOR_SPECS, bundledModelCatalog, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import {
   FakeApi,
@@ -197,6 +197,20 @@ describe("新建项目经理", () => {
       await waitFor(() => expect(input).toHaveValue("/x"));
       expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
     });
+  });
+
+  it("服务端不是 macOS（Linux 服务器）：没有“选择…”，主文件夹只能手填，创建时照样带上路径", async () => {
+    const user = userEvent.setup();
+    await boot({ ...twoPms(), server: serverInfoFor("linux") });
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog", { name: "新建项目经理" });
+    expect(within(dialog).queryByRole("button", { name: "选择…" })).not.toBeInTheDocument();
+    await user.type(within(dialog).getByRole("textbox", { name: "主文件夹" }), "/srv/code/foo");
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ folder: "/srv/code/foo" });
+    expect(api.callsTo("POST", /^\/api\/pick-folder$/)).toHaveLength(0);
   });
 
   it("响应比变化先到：先停在原来的对话，变化到了之后自动切过去", async () => {

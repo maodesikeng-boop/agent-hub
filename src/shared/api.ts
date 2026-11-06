@@ -18,6 +18,7 @@ import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
+import type { ServerInfo } from "./server-info.ts";
 
 export const API_PATHS = {
   /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
@@ -49,12 +50,14 @@ export const API_PATHS = {
   /**
    * POST（PickFolderRequest → PickFolderResponse）：守护进程在这台 Mac 上弹原生的“选择文件夹”，等用户选完才回。
    * 取消、超时回 path null（不是错误）；同时已经有一个对话框 409；起不来 osascript 回中文原因。
+   * 不是 macOS（StateSnapshot.server.folderPicker 为 false）回 501，网页不显示这个按钮。
    */
   pickFolder: "/api/pick-folder",
   /**
    * POST，没有请求体 → FileActionResponse：用 macOS 的 open 在 Finder 中显示（reveal）/ 用默认程序打开（open）agent 发来的文件。
    * 按消息编号 + meta.files 的下标找文件（不收路径）；原文件还在、还在这个会话允许的文件夹里用原文件，否则用副本。
    * 带可执行权限的、扩展名不在白名单（OPEN_ALLOWED_EXTENSIONS，文档、图片、音视频、纯文本）里的 open 回 403，reveal 照常。
+   * 不是 macOS（StateSnapshot.server.fileActions 为 false）回 501，网页不显示这两个按钮。
    */
   sentFileAction: (messageId: MessageId, index: number, action: FileAction) => `/api/messages/${messageId}/files/${index}/${action}`,
   /** POST，同上，对象是聊天框上传的附件（按上传编号，只有数据目录里的那一份）。 */
@@ -100,7 +103,12 @@ export interface StateSnapshot {
   health: HealthEntry[];
   /** 所有项目经理的定时任务（M6），按编号从小到大；ScheduleRecord.pmId 认是谁的。 */
   schedules: ScheduleRecord[];
+  /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
+  server: ServerInfo;
 }
+
+/** 账本给出的快照：界面服务在 /api/state 里再补上 server。 */
+export type LedgerSnapshot = Omit<StateSnapshot, "server">;
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
 export interface MessagesPage {

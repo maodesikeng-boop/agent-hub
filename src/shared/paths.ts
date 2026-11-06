@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
+import type { AgentVendor } from "./vendors.ts";
 
 export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
@@ -130,18 +131,45 @@ export function resolveExecutable(cmd: string, envPath: string | undefined, fall
   return cmd;
 }
 
-/** 本机 `agy` 的默认候选安装路径（当 `PATH` 里找不到 `agy` 时回退）。 */
-export function defaultAgyFallbackPaths(userHome: string): string[] {
-  return [join(userHome, ".local", "bin", "agy")];
+/**
+ * Linux 上各家 CLI 官方安装方式放可执行文件的目录（`PATH` 里找不到时按顺序试；出处见 docs/linux.md）：
+ * - ~/.local/bin：claude（原生安装脚本）、agy（install.sh）、codex（install.sh，CODEX_INSTALL_DIR 默认值）都装在这里；
+ * - ~/.npm-global/bin：npm 官方文档给“全局安装不用 sudo”的做法（`npm config set prefix ~/.npm-global`），claude、codex 的 npm 包都装到这；
+ * - /usr/local/bin：npm 全局安装在 Unix 上的默认前缀；
+ * - /home/linuxbrew/.linuxbrew/bin：Homebrew 在 Linux 上的默认前缀（codex 有 brew 安装）。
+ * 为什么要有这个兜底：systemd 用户服务的 PATH 里没有 ~/.local/bin，守护进程那样启动时 `PATH` 找不到刚装好的 CLI。
+ */
+export function linuxInstallDirs(userHome: string): string[] {
+  return [join(userHome, ".local", "bin"), join(userHome, ".npm-global", "bin"), "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
 }
 
-/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）。 */
-export function defaultCodexFallbackPaths(userHome: string): string[] {
-  return [
-    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-    join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex"),
-  ];
+/** 本机 `claude` 的候选安装路径（当 `PATH` 里找不到时回退）：只有不是 macOS 才有（macOS 上沿用原来的行为：只认 `PATH`）。 */
+export function defaultClaudeFallbackPaths(userHome: string, platform: string = process.platform): string[] {
+  return platform === "darwin" ? [] : linuxInstallDirs(userHome).map((dir) => join(dir, "claude"));
 }
+
+/** 本机 `agy` 的默认候选安装路径（当 `PATH` 里找不到 `agy` 时回退）。 */
+export function defaultAgyFallbackPaths(userHome: string, platform: string = process.platform): string[] {
+  const home = join(userHome, ".local", "bin", "agy");
+  return platform === "darwin" ? [home] : [home, ...linuxInstallDirs(userHome).map((dir) => join(dir, "agy"))];
+}
+
+/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）：macOS 先看 ChatGPT.app 里带的，别的系统看 linuxInstallDirs。 */
+export function defaultCodexFallbackPaths(userHome: string, platform: string = process.platform): string[] {
+  const plugin = join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex");
+  if (platform === "darwin") return ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex", plugin];
+  return [...linuxInstallDirs(userHome).map((dir) => join(dir, "codex")), plugin];
+}
+
+/**
+ * 每家厂商的兜底安装路径。写成 Record<AgentVendor, …>：vendors.ts 加了厂商这里不补就过不了 typecheck，
+ * 不会有哪家在 Linux 上忘了写查找位置（daemon.ts 按家调用，paths.test.ts 逐家核对）。
+ */
+export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = {
+  claude: defaultClaudeFallbackPaths,
+  agy: defaultAgyFallbackPaths,
+  codex: defaultCodexFallbackPaths,
+};
 
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {

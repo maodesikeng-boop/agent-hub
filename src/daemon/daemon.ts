@@ -25,6 +25,7 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import {
   defaultAgyFallbackPaths,
+  defaultClaudeFallbackPaths,
   defaultCodexFallbackPaths,
   resolveExecutable,
   resolveHubPaths,
@@ -104,7 +105,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
-  const claudePath = paths.claudePath;
+  const claudePath = resolveExecutable(paths.claudePath, env.PATH, defaultClaudeFallbackPaths(options.userHome));
   const agyPath = resolveExecutable(paths.agyPath, env.PATH, defaultAgyFallbackPaths(options.userHome));
   const codexPath = resolveExecutable(paths.codexPath, env.PATH, defaultCodexFallbackPaths(options.userHome));
   const port = parsePort(env[ENV_PORT]);
