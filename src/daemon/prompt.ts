@@ -145,6 +145,8 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
   - \`${HUB} worker list\`：查看所有 Worker 的状态、分支、目录和模型
+  - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
+  - \`${HUB} worker log <编号> [--last N]\`：看它最近 N 步（默认 20）：调了什么、思考多久、一轮怎么结束
   - \`${HUB} ask --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒）
 - **定时任务**
   - \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）

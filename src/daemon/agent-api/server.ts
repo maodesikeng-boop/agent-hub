@@ -31,17 +31,23 @@ import {
 } from "../../shared/index.ts";
 import { assertSocketPathFits } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import type { WorkerPr } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
-import { probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
+import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder">;
+  ledger: Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget">;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
    * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
    */
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
+  /**
+   * hub worker show 之前异步查 Worker 分支上的 PR（同上，事务里不做 I/O），结果作为 HubCallContext.pr。
+   * 查不到（没装 gh、没登录、没网、超时、没有 PR）返回 null，show 就不写 PR 这一行。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
+   */
+  probePr?: (cwd: string, branch: string) => Promise<WorkerPr | null>;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -122,6 +128,14 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
+  "worker.show": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
+  // last 的范围（1 到 WORKER_LOG_MAX_STEPS）由账本查，报中文原因
+  "worker.log": {
+    type: "object",
+    additionalProperties: false,
+    required: ["workerId"],
+    properties: { workerId: workerIdField, last: { type: "integer" } },
+  },
   ask: { type: "object", additionalProperties: false, required: ["text"], properties: { text: taskField } },
   // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查
   "schedule.add": {
@@ -203,9 +217,15 @@ const UNAUTHORIZED_MESSAGE = "令牌不对或已作废：这个会话不能再�
 export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
+  const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
 
-  /** hubCall 之前要异步准备的东西：只有 worker.start（没带 noWorktree、有项目）要探 git。 */
+  /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR。 */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
+    if (command === "worker.show") {
+      const target = ledger.workerPrTarget(sessionId, body.workerId as number);
+      const pr = target === null ? null : await probePr(target.cwd, target.branch);
+      return pr === null ? {} : { pr };
+    }
     if (command !== "worker.start" || body.noWorktree === true) return {};
     const folder = ledger.workerStartFolder(sessionId);
     return folder === null ? {} : { workspace: await probeWorkspace(folder) };

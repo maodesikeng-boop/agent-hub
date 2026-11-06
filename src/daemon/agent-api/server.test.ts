@@ -48,6 +48,8 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.send": { workerId: 3, text: "再改一下" },
   "worker.end": { workerId: 3 },
   "worker.list": {},
+  "worker.show": { workerId: 3 },
+  "worker.log": { workerId: 3, last: 10 },
   ask: { text: "用 A 还是 B？" },
   "schedule.add": { name: "每日汇报", prompt: "汇报昨天的进展", daily: "09:00" },
   "schedule.list": {},
@@ -287,6 +289,42 @@ describe("agent api over inject", () => {
       const res = await call("worker.start", { title: "修 X", task: "任务" });
       expect(res.statusCode).toBe(401);
       expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
+  describe("hub worker show：调 hubCall 之前先异步查分支上的 PR", () => {
+    const pr = { number: 97, state: "OPEN", url: "https://github.com/o/r/pull/97" };
+    const withPr = async (probePr: (cwd: string, branch: string) => Promise<typeof pr | null>) => {
+      await app.close();
+      app = createAgentApi({ ledger, tokens, probePr });
+      await app.ready();
+    };
+
+    it("查的是账本给的 worktree 和分支，结果作为 context.pr 交给 hubCall", async () => {
+      ledger.prTarget = { cwd: "/wt/1/5", branch: "hub/5-x" };
+      const probed: string[][] = [];
+      await withPr(async (cwd, branch) => {
+        probed.push([cwd, branch]);
+        return pr;
+      });
+      expect((await call("worker.show", { workerId: 5 })).statusCode).toBe(200);
+      expect(probed).toEqual([["/wt/1/5", "hub/5-x"]]);
+      expect(ledger.contexts).toEqual([{ pr }]);
+    });
+
+    it("查不到、账本说不用查（别人的 Worker、没在 worktree 里）、别的命令：context 是空的，不查", async () => {
+      let probes = 0;
+      await withPr(async () => {
+        probes += 1;
+        return null;
+      });
+      ledger.prTarget = { cwd: "/wt/1/5", branch: "hub/5-x" };
+      await call("worker.show", { workerId: 5 });
+      ledger.prTarget = null;
+      await call("worker.show", { workerId: 6 });
+      await call("worker.log", { workerId: 5 });
+      expect(probes).toBe(1);
+      expect(ledger.contexts).toEqual([{}, {}, {}]);
     });
   });
 

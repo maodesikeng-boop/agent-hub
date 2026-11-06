@@ -106,7 +106,7 @@ function turnOutcome(event: DriverEvent): TurnOutcome | null {
 }
 
 /** 在 worktree 里干、还没开工（base_commit 要等 worktree 建好、准备命令跑完才写）。 */
-const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
+export const notStarted = (worker: Pick<WorkerDbRow, "workspace" | "base_commit">) => worker.workspace === "worktree" && worker.base_commit === null;
 
 /**
  * 用户往对话里发消息、重试之前（messages.ts 的 postUserMessage、retryMessage，在事务里）。不是 Worker 的对话什么也不做。
@@ -662,6 +662,15 @@ export function createLedgerWorkers(
     insertTurnFailed(p, worker, message.id, [message.id], error);
   };
 
+  /** agent 接口在 worker.show 之前查 PR 用：这个项目经理派的、在 worktree 里干活的 Worker 的 worktree 目录和分支；别的 null。 */
+  const workerPrTarget = (session: AgentSessionRow | null, workerId: WorkerId): { cwd: string; branch: string } | null => {
+    if (session === null || session.role !== "pm" || session.pmId === null) return null;
+    const worker = workerRow(workerId);
+    if (worker === null || worker.pm_id !== session.pmId || worker.workspace !== "worktree") return null;
+    if (worker.worktree_path === null || worker.branch === null || worker.base_commit === null) return null;
+    return { cwd: worker.worktree_path, branch: worker.branch };
+  };
+
   /** agent 接口在 worker.start 之前探 git 用：这个会话所属项目经理的项目主文件夹；不是项目经理的会话、还没有项目 → null。 */
   const workerStartFolder = (session: AgentSessionRow | null): string | null => {
     if (session === null || session.role !== "pm" || session.pmId === null) return null;
@@ -701,6 +710,9 @@ export function createLedgerWorkers(
     recoverWorktrees,
     actionFailedIn,
     workerStartFolder,
+    workerPrTarget,
+    ownWorker,
+    workerSession,
     launchContextFor,
   };
 }

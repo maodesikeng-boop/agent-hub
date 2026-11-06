@@ -1,4 +1,4 @@
-// 测试用的内存假账本：只实现 agent 接口用到的 hubCall、workerStartFolder 和 reportHealth，记下每次调用；可以让它们抛指定的错。
+// 测试用的内存假账本：只实现 agent 接口用到的 hubCall、workerStartFolder、workerPrTarget 和 reportHealth，记下每次调用；可以让它们抛指定的错。
 import type { HealthModule, HubArgs, HubCallContext, HubCommand, HubData, HubResult, Ledger, SessionId } from "../../shared/index.ts";
 
 export interface FakeHubCall {
@@ -7,12 +7,14 @@ export interface FakeHubCall {
   args: unknown;
 }
 
-export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder"> {
+export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget"> {
   readonly calls: FakeHubCall[] = [];
   /** 每次 hubCall 收到的 context（和 calls 一一对应）。 */
   readonly contexts: HubCallContext[] = [];
   /** workerStartFolder 返回什么；默认 null（没有项目，agent 接口不探 git）。 */
   startFolder: string | null = null;
+  /** workerPrTarget 返回什么；默认 null（不查 PR）。 */
+  prTarget: { cwd: string; branch: string } | null = null;
   readonly healthReports: [HealthModule, string | null][] = [];
   /** 下一次（以及之后每次）调用抛它；null 表示正常返回。 */
   failWith: Error | null = null;
@@ -29,6 +31,10 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | 
 
   workerStartFolder(_sessionId: SessionId): string | null {
     return this.startFolder;
+  }
+
+  workerPrTarget(_sessionId: SessionId, _workerId: number): { cwd: string; branch: string } | null {
+    return this.prTarget;
   }
 
   reportHealth(module: HealthModule, error: string | null): void {

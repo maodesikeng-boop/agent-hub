@@ -67,6 +67,8 @@ export const HUB_COMMANDS = [
   "worker.send",
   "worker.end",
   "worker.list",
+  "worker.show",
+  "worker.log",
   "ask",
   "schedule.add",
   "schedule.list",
@@ -92,6 +94,8 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.send": ["pm"],
   "worker.end": ["pm"],
   "worker.list": ["pm"],
+  "worker.show": ["pm"],
+  "worker.log": ["pm"],
   ask: ["pm"],
   "schedule.add": ["pm"],
   "schedule.list": ["pm"],
@@ -138,6 +142,13 @@ export interface HubArgsMap {
   "worker.end": { workerId: WorkerId };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
+  /** `hub worker show <编号>`：一个 Worker 现在的情况（只能看自己派的；已收工的也能看）。 */
+  "worker.show": { workerId: WorkerId };
+  /**
+   * `hub worker log <编号> [--last N]`：这个 Worker 最近 N 步（默认 WORKER_LOG_DEFAULT_STEPS，最多 WORKER_LOG_MAX_STEPS），
+   * 一行一步，从账本的 session_steps 取，不看各厂商的原始日志。
+   */
+  "worker.log": { workerId: WorkerId; last?: number };
   /**
    * `hub ask --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
    * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的。
@@ -195,6 +206,24 @@ export interface WorkerHubStatus {
   project: ProjectCard;
 }
 
+/** hub worker log 的一步：一行的时间和文字。kind：tool 调工具、thinking 思考、text 回复、turn_ended 一轮结束。 */
+export interface WorkerLogStep {
+  at: number;
+  kind: "tool" | "thinking" | "text" | "turn_ended";
+  text: string;
+}
+
+/**
+ * hub worker show 之前 agent 接口异步查到的这个 Worker 的 PR（gh pr list --head <分支>）：
+ * 查不到（没装 gh、没登录、没网、超时、没有 PR）就没有。账本的事务里不做 I/O。
+ */
+export interface WorkerPr {
+  number: number;
+  /** gh 给的状态：OPEN、MERGED、CLOSED。 */
+  state: string;
+  url: string;
+}
+
 /** 各命令成功时的 data。text 是给 agent 看的一两句中文，data 给程序用。 */
 export interface HubDataMap {
   /** 按 role 收窄。 */
@@ -214,6 +243,9 @@ export interface HubDataMap {
   "worker.end": { worker: WorkerRecord };
   /** 按编号从小到大，含已收工的。 */
   "worker.list": { workers: WorkerRecord[] };
+  "worker.show": { worker: WorkerRecord };
+  /** steps：最近的几步，从旧到新，和 text 里的行一一对应。 */
+  "worker.log": { worker: WorkerRecord; steps: WorkerLogStep[] };
   /** messageId：对话里那条带标记的消息。 */
   ask: { messageId: MessageId };
   "schedule.add": { schedule: ScheduleRecord };

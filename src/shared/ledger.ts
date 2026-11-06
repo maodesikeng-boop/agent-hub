@@ -24,7 +24,7 @@ import type {
   WorkerStatus,
   Unsubscribe,
 } from "./domain.ts";
-import type { HubArgs, HubCommand, HubResult, ProjectCard } from "./hub.ts";
+import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 
@@ -279,6 +279,8 @@ export type WorkspaceProbe =
 export interface HubCallContext {
   /** worker.start 没带 noWorktree 时必须有（主文件夹是 workerStartFolder 给的那个），否则不用。 */
   workspace?: WorkspaceProbe;
+  /** worker.show：这个 Worker 分支上的 PR；查不到或没有就没有这一项。 */
+  pr?: WorkerPr;
 }
 
 export interface Ledger {
@@ -389,6 +391,11 @@ export interface Ledger {
    * 不是项目经理的会话、还没有项目 → null（不用探，hubCall 自己会报 forbidden、invalid）。
    */
   workerStartFolder(sessionId: SessionId): string | null;
+  /**
+   * agent 接口在 worker.show 之前调（只读）：要查 PR 的 Worker 的分支和 worktree 目录。
+   * 不是项目经理的会话、不是它派的、不在 worktree 里干活 → null（不用查，hubCall 自己会报错或不写 PR）。
+   */
+  workerPrTarget(sessionId: SessionId, workerId: WorkerId): { cwd: string; branch: string } | null;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
 
