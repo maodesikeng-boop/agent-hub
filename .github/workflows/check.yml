@@ -17,6 +17,10 @@ jobs:
   check:
     runs-on: macos-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
 
@@ -40,7 +44,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vitest-junit
+          name: vitest-junit-${{ matrix.rep }}
           path: vitest-junit.xml
           if-no-files-found: ignore
 
