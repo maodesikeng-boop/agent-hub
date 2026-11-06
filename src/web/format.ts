@@ -9,6 +9,7 @@ export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
   replied: "已回复",
   stopped: "已停止",
   failed: "失败",
+  cancelled: "已取消",
 };
 
 const ERROR_LABELS: Readonly<Record<string, string>> = {

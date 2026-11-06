@@ -1102,3 +1102,37 @@ describe("0007_token_usage：从 M3 的库升级（老会话没有用量，读�
     expect(createSessionStore(db).get(1)!.usage).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 });
   });
 });
+
+// ---- 0010_message_cancelled ----
+
+describe("0010_message_cancelled：从 0009 的库升级", () => {
+  it("消息表重建：老数据一行不少、一个字不变，索引还在，编号接着原来的往后排；状态能写 cancelled，别的值照样被拒", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(9));
+    // 删掉最后一条：AUTOINCREMENT 的计数比现有最大编号大，升级后不能被再用
+    const maxId = db.get<{ id: number }>("SELECT max(id) AS id FROM messages")!.id;
+    db.exec(`DELETE FROM messages WHERE id = ${maxId}`);
+    const dump = db.all<Record<string, unknown>>("SELECT * FROM messages ORDER BY id");
+    expect(dump.length).toBeGreaterThan(0);
+    const seq = db.get<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'messages'")!.seq;
+    expect(seq).toBe(maxId);
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 9, to: LATEST_VERSION });
+    expect(db.all("SELECT * FROM messages ORDER BY id")).toEqual(dump);
+    expect(db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name NOT LIKE 'sqlite_%'")).toEqual([
+      { name: "messages_conversation" },
+    ]);
+    expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'messages'")).toEqual({ seq });
+    expect(db.get("SELECT count(*) AS n FROM sqlite_sequence WHERE name = 'messages_new'")).toEqual({ n: 0 });
+
+    const id = dump[0]!.id as number;
+    expect(() => db.exec(`UPDATE messages SET status = 'cancelled' WHERE id = ${id}`)).not.toThrow();
+    expect(() => db.exec(`UPDATE messages SET status = 'gone' WHERE id = ${id}`)).toThrow(/CHECK/);
+    db.exec(
+      `INSERT INTO messages (conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (${dump[0]!.conversation_id as number}, 'system', 'text', 'x', 'k-0010', 0, 0)`,
+    );
+    expect(db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = 'k-0010'")!.id).toBe(seq + 1);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(db.get("PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+  });
+});

@@ -16,6 +16,10 @@
 // - 每轮开头发 system/init；先回显收到的消息（isReplay），再按剧本发 assistant、rate_limit_event、result。
 //   剧本 lateReplay 时回显推迟到第一个不是 sleepMs、waitFile 的步骤之前（更像真 claude：开始处理时才回显）。
 // - 忙时收到的几条合并成下一轮的一条（回显里是几段 text）。
+// - 剧本 capabilities 里有 msg_lifecycle_v1 时照真 claude 2.1.314（docs/mid-turn-messages.md）：init 带 capabilities；
+//   带 uuid 的 user 行出 command_lifecycle（写进来就 queued，被取走 started——第一条在 init 之前——，那一轮 result 之后 completed）；
+//   忙时写进来的在当前工具（tool、bash 步骤）跑完后被同一轮取走（各自回显 + started），没赶上的（只剩文字时）排到下一轮；
+//   interrupt 带 cancel_queued 时把还没取走的取消（回执 cancelled、各出 cancelled），不带就照旧排到下一轮。
 // - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
 // - initialize 控制消息：回 control_response，带剧本里的 commands（剧本 commands）；
 // - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]`（工具调用中是
@@ -115,6 +119,11 @@ export interface FakeScript {
   spawnChildOnStart?: number | ChildSpec;
   /** 按会话另选剧本，只在顶层剧本里认（见 FakeSessionScript）。 */
   sessions?: FakeSessionScript[];
+  /**
+   * init 里的 capabilities（真 claude 2.1.314 有 msg_lifecycle_v1、interrupt_cancel_queued_v1 等）。不给就不带这个字段（老 claude）。
+   * 有 msg_lifecycle_v1 才按真 claude 的“一轮中途取走”和 command_lifecycle 走（见文件开头）。
+   */
+  capabilities?: string[];
 }
 
 /**
@@ -318,7 +327,32 @@ if (script.spawnChildOnStart !== undefined) {
 
 type UserContent = { type: "text"; text: string };
 
-const inbox: UserContent[][] = [];
+/** 收到还没取走的一条：uuid 是 user 行里带的（command_lifecycle 用）。 */
+interface InboxEntry {
+  content: UserContent[];
+  uuid?: string;
+}
+
+const inbox: InboxEntry[] = [];
+/** 真 claude 的一轮中途取走和 command_lifecycle（剧本 capabilities 里有 msg_lifecycle_v1）。 */
+const lifecycle = (script.capabilities ?? []).includes("msg_lifecycle_v1");
+/** 这一轮已经取走（started）的消息 uuid：result 之后出 completed，打断之后出 cancelled。 */
+let turnCommands: string[] = [];
+
+function emitLifecycle(uuid: string | undefined, state: "queued" | "started" | "completed" | "cancelled"): void {
+  if (!lifecycle || uuid === undefined) return;
+  emit({ type: "command_lifecycle", command_uuid: uuid, state, uuid: randomUUID(), session_id: sessionId });
+}
+
+/** 当前工具跑完：忙时写进来的几条在同一轮里取走，各自回显、各自 started。 */
+function takeMidTurn(): void {
+  if (!lifecycle) return;
+  for (const entry of inbox.splice(0)) {
+    emit({ type: "user", message: { role: "user", content: entry.content }, parent_tool_use_id: null, session_id: sessionId, uuid: entry.uuid ?? randomUUID(), isReplay: true });
+    emitLifecycle(entry.uuid, "started");
+    if (entry.uuid !== undefined) turnCommands.push(entry.uuid);
+  }
+}
 let busy = false;
 let stdinClosed = false;
 /** 当前这一轮的编号；打断时加一，旧的那一轮看到编号变了就不再往下做。 */
@@ -382,10 +416,13 @@ function assistant(
 
 let currentTurnStartedAt = 0;
 
-/** content 为 null：claude 自己开的一轮（selfTurn），turn 是它的剧本；不回显、不数轮数。 */
-async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Promise<void> {
+/** content 为 null：claude 自己开的一轮（selfTurn），turn 是它的剧本；不回显、不数轮数。uuids：开这一轮的消息（command_lifecycle 用）。 */
+async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids: string[] = []): Promise<void> {
   busy = true;
   const seq = ++turnSeq;
+  turnCommands = [...uuids];
+  // 真 claude：消息被取走的 started 在这一轮的 init 之前
+  for (const uuid of uuids) emitLifecycle(uuid, "started");
   const aborted = () => seq !== turnSeq;
   const startedAt = (currentTurnStartedAt = Date.now());
   const turn: FakeTurn = selfTurn ?? script.turns?.[nextTurnIndex()] ?? script.defaultTurn ?? { steps: [{ text: "ok" }] };
@@ -403,6 +440,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
     model,
     permissionMode: "default",
     apiKeySource: "none",
+    ...(script.capabilities ? { capabilities: script.capabilities } : {}),
     uuid: randomUUID(),
   });
   let replayed = content === null;
@@ -448,6 +486,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
         session_id: sessionId,
         uuid: randomUUID(),
       });
+      takeMidTurn();
     } else if ("rateLimit" in step) {
       emit({ type: "rate_limit_event", rate_limit_info: step.rateLimit, uuid: randomUUID(), session_id: sessionId });
     } else if ("raw" in step) {
@@ -497,6 +536,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
         session_id: sessionId,
         uuid: randomUUID(),
       });
+      takeMidTurn();
     }
   }
   if (aborted()) return; // 打断的那条 result 已经由打断的地方发了
@@ -511,6 +551,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
   }
   const r = turn.result ?? {};
   result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt, turn.usage, content === null);
+  for (const uuid of turnCommands.splice(0)) emitLifecycle(uuid, "completed");
   for (const ev of turn.backgroundTasksAfter ?? []) setTimeout(() => emitBackgroundTasks(ev.tasks), ev.afterMs);
   const self = turn.selfTurn;
   finishTurn(self !== undefined);
@@ -547,7 +588,11 @@ function finishTurn(holdExit = false): void {
   busy = false;
   const next = inbox.splice(0);
   if (next.length > 0) {
-    void runTurn(next.flat());
+    void runTurn(
+      next.flatMap((e) => e.content),
+      undefined,
+      next.flatMap((e) => (e.uuid === undefined ? [] : [e.uuid])),
+    );
   } else if (stdinClosed && !holdExit) {
     exit(0);
   }
@@ -566,7 +611,13 @@ function onLine(line: string): void {
   } catch {
     badInput(`Error parsing streaming input line (type=unknown, ${line.length} chars): SyntaxError`);
   }
-  const msg = obj as { type?: unknown; request_id?: unknown; request?: { subtype?: unknown }; message?: { role?: unknown; content?: unknown } };
+  const msg = obj as {
+    type?: unknown;
+    uuid?: unknown;
+    request_id?: unknown;
+    request?: { subtype?: unknown; cancel_queued?: unknown };
+    message?: { role?: unknown; content?: unknown };
+  };
   if (msg.type === "control_request") {
     if (script.ignoreControl) return;
     const handle = () => {
@@ -574,13 +625,25 @@ function onLine(line: string): void {
         emit({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "cannot interrupt now" } });
         return;
       }
-      const body = msg.request?.subtype === "initialize" ? { commands: script.commands, models: [] } : { still_queued: [] };
+      const interrupting = msg.request?.subtype === "interrupt" && script.control !== "ack_only";
+      // 带 cancel_queued：还没取走的一并取消（真 claude 的回执 {still_queued:[], cancelled:[…]}），不再排到下一轮
+      const cancel = interrupting && msg.request?.cancel_queued === true;
+      const queued = inbox.flatMap((e) => (e.uuid === undefined ? [] : [e.uuid]));
+      const body =
+        msg.request?.subtype === "initialize"
+          ? { commands: script.commands, models: [] }
+          : cancel
+            ? { still_queued: [], cancelled: queued }
+            : { still_queued: lifecycle ? queued : [] };
       emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: body } });
-      if (script.control !== "ack_only" && msg.request?.subtype === "interrupt" && busy) {
+      if (cancel) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");
+      if (interrupting && busy) {
         turnSeq++;
         interruptedMarker();
         inTool = false;
         result("success", false, "", currentTurnStartedAt);
+        // 真 claude：被打断的那一轮里取走过的消息，result 之后标 cancelled
+        for (const uuid of turnCommands.splice(0)) emitLifecycle(uuid, "cancelled");
         finishTurn();
       }
     };
@@ -593,8 +656,10 @@ function onLine(line: string): void {
   const content: UserContent[] =
     typeof raw === "string" ? [{ type: "text", text: raw }] : Array.isArray(raw) ? (raw as UserContent[]) : [];
   if (script.noInit) return;
-  if (busy) inbox.push(content);
-  else void runTurn(content);
+  const uuid = typeof msg.uuid === "string" && msg.uuid !== "" ? msg.uuid : undefined;
+  emitLifecycle(uuid, "queued");
+  if (busy) inbox.push({ content, ...(uuid === undefined ? {} : { uuid }) });
+  else void runTurn(content, undefined, uuid === undefined ? [] : [uuid]);
 }
 
 process.on("SIGINT", () => {

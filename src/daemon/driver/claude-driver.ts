@@ -1,8 +1,11 @@
 // Claude 驱动层（设计第 7.2～7.4 节，按 M0 改过的做法）：每个会话一个官方 claude 进程，
 // 我们这边管待发队列（一轮一条、忙时用户连发拼成一条、写入前校验）、打断、空闲关闭、--session-id / --resume。
+// 一轮中途写入（docs/mid-turn-messages.md 第 5 节）：init 里有 MID_TURN_CAPABILITIES 时，忙着也直接把 user 行（带 uuid）写进去，
+// claude 在当前工具跑完后同一轮读到；用 command_lifecycle 对账“被取走”（处理中），在途的是一个集合。待发队列只留写不了的情况。
 // M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束连同它所有后代所在的进程组（process.ts 的 forceKill）。
 // 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -24,6 +27,7 @@ import {
   START_TIMEOUT_MS,
   STDIO_DRAIN_MS,
   RUNNING_COMMANDS_TIMEOUT_MS,
+  NO_MID_TURN,
   type AgentSessionPatch,
   type ComposerCommand,
   type AgentSessionRow,
@@ -37,11 +41,14 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
+  type MidTurnSupport,
   type SessionExitReason,
   type SessionId,
   type Unsubscribe,
 } from "../../shared/index.ts";
 import {
+  CLAUDE_MID_TURN,
+  MID_TURN_CAPABILITIES,
   buildChildEnv,
   buildClaudeArgs,
   buildInitializeLine,
@@ -49,10 +56,13 @@ import {
   buildUserLine,
   checkUserLine,
   detectArgsConflict,
+  interruptCancelled,
   isInterruptMarker,
   mergeUserTexts,
   parseApiRetry,
   parseAssistant,
+  parseCapabilities,
+  parseLifecycle,
   parseToolResults,
   parseRateLimit,
   lineUuid,
@@ -76,9 +86,15 @@ interface PendingEntry {
 interface Batch {
   messageIds: MessageId[];
   line: string;
+  /** 写在这一行里的 uuid：claude 的 command_lifecycle 用它（command_uuid）告诉我们这一行排着、被取走、做完、被取消。 */
+  uuid: string;
   notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null };
   delivered: boolean;
   processing: boolean;
+  /** 收到这一行的 command_lifecycle started：claude 取走了（模型看到了）。 */
+  started: boolean;
+  /** 会话正忙时在一轮中途写进去的（不是开一轮的那条）。 */
+  midTurn: boolean;
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
@@ -116,6 +132,8 @@ interface Proc {
   resume: boolean;
   launched: LaunchSnapshot;
   initSeen: boolean;
+  /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
+  capabilities: Set<string>;
   stderr: string;
   /** 我们自己让它退出的原因；null 表示没让它退。 */
   closing: ClosingReason | null;
@@ -132,7 +150,11 @@ interface Proc {
 interface SessionState {
   id: SessionId;
   proc: Proc | null;
-  inFlight: Batch | null;
+  /**
+   * 已经写给 claude（或正要写）、还没收尾的行，按写入先后。空闲时写的开一轮；中途写的（midTurn）等 claude 取走。
+   * 一轮的 result 只结算其中 started 过的（老 claude 没有 command_lifecycle：就是唯一那一行），没取走的留着等下一轮。
+   */
+  inFlight: Batch[];
   /**
    * claude 自己开的一轮在跑（后台任务完成等，没有我们写的消息）：和 inFlight 一样算忙，新消息排着、等它的 result 再写；
    * 空闲关闭、关机、打断、end 也都当有一轮在跑。
@@ -228,6 +250,13 @@ export class ClaudeDriver implements Driver {
     return Boolean(proc && !proc.closing);
   }
 
+  midTurnSupport(sessionId: SessionId): MidTurnSupport {
+    const proc = this.#sessions.get(sessionId)?.proc;
+    // 还没 init 不知道这个 claude 支不支持：按声明的说（写的时候会再按 init 判断）
+    if (!proc?.initSeen) return CLAUDE_MID_TURN;
+    return midTurnCapable(proc) ? CLAUDE_MID_TURN : NO_MID_TURN;
+  }
+
   async start(sessionId: SessionId): Promise<void> {
     this.#assertRunning();
     const st = this.#state(sessionId);
@@ -243,7 +272,7 @@ export class ClaudeDriver implements Driver {
       }
       if (proc) {
         // 起好了还没写过东西（之前只起了进程）：有待发的就现在写，等到 init
-        if (proc.initSeen || st.inFlight) return;
+        if (proc.initSeen || st.inFlight.length > 0) return;
         const batch = this.#takeBatch(st);
         return batch ? this.#runStartup(st, batch, proc) : undefined;
       }
@@ -286,14 +315,54 @@ export class ClaudeDriver implements Driver {
       this.#invalidInput(st, problem, ids);
       return { kind: "rejected" };
     }
-    // 排序只在 #takeBatch 里做（用户的拼成一条排在系统的前面），这里按到达顺序放
     if (!this.#isPending(st, ids)) {
-      st.pending.push(entry);
-      // 重启恢复的第一条：之后写进去的第一行前面加恢复说明（和消息同一行，不单独占一轮）
       if (input.recovery) st.recoveryNote = true;
+      // 忙着、但这个 claude 能在一轮中途收：直接写进去，不进待发队列
+      const proc = st.proc;
+      if (proc && this.#canWriteMidTurn(st, proc, entry)) {
+        const batch = this.#batchOf(st, entryParts(entry), ids, false);
+        batch.midTurn = true;
+        if (await this.#writeMidTurn(st, proc, batch)) return { kind: "written", midTurn: true };
+        // 没写成（进程正好没了）：退回待发队列，照旧等
+        this.#dropBatch(st, batch);
+      }
+      // 排序只在 #takeBatch 里做（用户的拼成一条排在系统的前面），这里按到达顺序放
+      // 重启恢复的第一条：之后写进去的第一行前面加恢复说明（和消息同一行，不单独占一轮）
+      st.pending.push(entry);
     }
     await this.#pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
+  }
+
+  /**
+   * 能不能在这一轮中途直接写（docs/mid-turn-messages.md 第 5.1 节）：进程 init 过、支持（MID_TURN_CAPABILITIES）、不在关闭、
+   * 正忙（空闲时走 #pump，写之前要比设置）、没在两轮之间重启（starting）、这一轮没点过停止（写进去会被一起取消）、
+   * 待发队列是空的（前面还排着的话不插队）、不是命令（本地命令在轮中间的行为没测，也会丢前缀块，见 #76）。
+   */
+  #canWriteMidTurn(st: SessionState, proc: Proc, entry: PendingEntry): boolean {
+    return (
+      proc.initSeen &&
+      midTurnCapable(proc) &&
+      !proc.closing &&
+      !this.#shuttingDown &&
+      this.#busy(st) &&
+      st.starting === null &&
+      !st.stopRequested &&
+      st.pending.length === 0 &&
+      !this.#composer.isCommand(entry.text)
+    );
+  }
+
+  /** 一轮中途写一行：不重启、不调 prepareLaunch、不动这一轮的打断标记。写成了返回 true。 */
+  async #writeMidTurn(st: SessionState, proc: Proc, batch: Batch): Promise<boolean> {
+    st.inFlight.push(batch);
+    this.#clearTimer(st, "idleTimer");
+    return new Promise<boolean>((resolve) => {
+      proc.child.stdin.write(batch.line + "\n", (err) => {
+        if (!err) this.#markDelivered(st, batch);
+        resolve(!err);
+      });
+    });
   }
 
   /**
@@ -307,14 +376,8 @@ export class ClaudeDriver implements Driver {
       return { kind: "rejected" };
     }
     const proc = st.proc;
-    if (!proc || !proc.initSeen || proc.closing || st.inFlight) throw new Error(`session ${sessionId} is not idle`);
-    await this.#writeBatch(st, proc, {
-      messageIds,
-      line,
-      notes: NO_NOTES,
-      delivered: false,
-      processing: false,
-    });
+    if (!proc || !proc.initSeen || proc.closing || st.inFlight.length > 0) throw new Error(`session ${sessionId} is not idle`);
+    await this.#writeBatch(st, proc, newBatch(messageIds, line, randomUUID(), NO_NOTES));
     return { kind: "written" };
   }
 
@@ -366,7 +429,8 @@ export class ClaudeDriver implements Driver {
     if (st.interruptRequestId === null) {
       const requestId = `interrupt-${++this.#requestSeq}`;
       st.interruptRequestId = requestId;
-      proc.child.stdin.write(buildInterruptLine(requestId) + "\n");
+      // 写进去还没被取走的一并取消（不带的话 claude 打断之后会接着跑它们）；不支持的老 claude 不会有中途写进去的
+      proc.child.stdin.write(buildInterruptLine(requestId, proc.capabilities.has("interrupt_cancel_queued_v1")) + "\n");
       st.interruptTimer = setTimeout(() => {
         st.interruptTimer = null;
         this.#sigintForInterrupt(st, proc);
@@ -462,7 +526,7 @@ export class ClaudeDriver implements Driver {
       st = {
         id,
         proc: null,
-        inFlight: null,
+        inFlight: [],
         selfTurn: false,
         background: new BackgroundTasks(),
         turnInterrupted: false,
@@ -500,7 +564,7 @@ export class ClaudeDriver implements Driver {
   /** 已经在待发队列里，或者就是正在启动、还没写成的那一行。 */
   #isPending(st: SessionState, ids: MessageId[]): boolean {
     const covers = (batchIds: MessageId[]) => ids.every((id) => batchIds.includes(id));
-    if (st.inFlight && covers(st.inFlight.messageIds)) return true;
+    if (st.inFlight.some((b) => covers(b.messageIds))) return true;
     return st.pending.some((e) => covers(e.messageIds));
   }
 
@@ -529,8 +593,14 @@ export class ClaudeDriver implements Driver {
       messageIds = entry.messageIds;
     }
     if (body === null) return null;
+    return this.#batchOf(st, body, messageIds, command);
+  }
+
+  /** 拼一行：不是命令的话把恢复、崩溃、重启、后台任务被结束的说明加在最前面（加一次就清掉）。 */
+  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean): Batch {
+    const uuid = randomUUID();
     if (command) {
-      return { messageIds, line: buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent), notes: NO_NOTES, delivered: false, processing: false };
+      return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES);
     }
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote };
     const prefixes = [
@@ -543,12 +613,12 @@ export class ClaudeDriver implements Driver {
     st.crashNote = false;
     st.relaunchNote = false;
     st.killedNote = null;
-    return { messageIds, line: buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent), notes, delivered: false, processing: false };
+    return newBatch(messageIds, buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent, uuid), uuid, notes);
   }
 
   /** 没写成的一行：恢复说明留给下一行；消息本身不放回队列，由执行器重试 send 时再排。 */
   #dropBatch(st: SessionState, batch: Batch): void {
-    if (st.inFlight === batch) st.inFlight = null;
+    st.inFlight = st.inFlight.filter((b) => b !== batch);
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
@@ -630,7 +700,7 @@ export class ClaudeDriver implements Driver {
       return;
     }
     this.#clearTimer(st, "idleTimer");
-    st.inFlight = batch;
+    st.inFlight.push(batch);
     st.turnInterrupted = false;
     st.stopRequested = false;
     await new Promise<void>((resolve) => {
@@ -645,24 +715,28 @@ export class ClaudeDriver implements Driver {
     if (batch.delivered) return;
     batch.delivered = true;
     for (const id of batch.messageIds) st.written.add(id);
-    if (batch.messageIds.length > 0) this.#emit(st.id, { type: "message.delivered", messageIds: batch.messageIds, at: Date.now() });
+    if (batch.messageIds.length === 0) return;
+    this.#emit(st.id, { type: "message.delivered", messageIds: batch.messageIds, ...(batch.midTurn ? { midTurn: true as const } : {}), at: Date.now() });
   }
 
-  #forgetWritten(st: SessionState, batch: Batch | null): void {
-    for (const id of batch?.messageIds ?? []) st.written.delete(id);
+  #forgetWritten(st: SessionState, batches: Batch[]): void {
+    for (const batch of batches) for (const id of batch.messageIds) st.written.delete(id);
   }
 
-  /** 一轮结束（或一行没写成）之后：有排队的就写下一条，没有就开始算空闲。 */
+  /**
+   * 一轮结束（或一行没写成）之后：有排队的就写下一条，没有就开始算空闲。
+   * 还有中途写进去、claude 没取走的（这一轮没赶上）：它会自己另起一轮处理它们，等那一轮结束再说。
+   */
   #afterTurn(st: SessionState, proc: Proc): void {
-    if (st.proc !== proc || proc.closing || this.#shuttingDown || st.ended) return;
+    if (st.proc !== proc || proc.closing || this.#shuttingDown || st.ended || this.#busy(st)) return;
     // 没人等这次写：出错的话消息不在队列里了，执行器下次 send 会重新排
     if (st.pending.length > 0) void this.#deliverNext(st, proc).catch(() => {});
     else this.#armIdle(st, proc);
   }
 
-  /** 有一轮在跑：我们写进去的，或者 claude 自己开的。 */
+  /** 有一轮在跑（或马上要跑）：我们写进去、还没收尾的，或者 claude 自己开的。 */
   #busy(st: SessionState): boolean {
-    return st.inFlight !== null || st.selfTurn;
+    return st.inFlight.length > 0 || st.selfTurn;
   }
 
   /** 这一轮结束或进程退出了：叫醒等着的 end。 */
@@ -726,7 +800,7 @@ export class ClaudeDriver implements Driver {
 
   /** #runStartup 的本体，不碰 st.starting（#deliverNext 在自己占着的时候直接调）。files：已经调好的 prepareLaunch 结果。 */
   #startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
-    st.inFlight = batch;
+    st.inFlight = [batch];
     st.turnInterrupted = false;
     st.stopRequested = false;
     const run = async () => {
@@ -739,7 +813,7 @@ export class ClaudeDriver implements Driver {
             this.#abortIfStopped(st, proc);
           }
           this.#clearTimer(st, "idleTimer");
-          st.inFlight = batch;
+          st.inFlight = [batch];
           proc.child.stdin.write(batch.line + "\n");
           this.#armStartTimer(st, proc);
           const outcome = await proc.ready;
@@ -833,6 +907,7 @@ export class ClaudeDriver implements Driver {
       resume,
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
       initSeen: false,
+      capabilities: new Set(),
       stderr: "",
       closing: null,
       startTimedOut: false,
@@ -918,10 +993,16 @@ export class ClaudeDriver implements Driver {
         // /clear 换了会话 ID（实测 T7）：网页和账本都拦着 /clear，理论上不会出现；出现了只记日志，会话 ID 照旧
         this.#opts.log(`[driver] session ${st.id}: claude 出了 conversation_reset（${String(obj.trigger ?? "")}），会话 ID 可能换了，--resume 仍用原来的`);
         return;
+      case "command_lifecycle":
+        this.#onLifecycle(st, proc, obj, at);
+        return;
       case "user":
         if (isInterruptMarker(obj)) st.turnInterrupted = true;
-        else if (obj.isReplay === true && st.inFlight) this.#markProcessing(st, st.inFlight, at);
-        else {
+        else if (obj.isReplay === true) {
+          // 有 command_lifecycle 就靠它对账（回显会把几条合成一个，只带最后一条的 uuid）；老 claude 靠回显，在途只有一行
+          const first = st.inFlight[0];
+          if (!proc.capabilities.has("msg_lifecycle_v1") && first) this.#markProcessing(st, first, at);
+        } else {
           const result = parseToolResults(obj, at);
           if (result) this.#emit(st.id, result);
         }
@@ -951,8 +1032,12 @@ export class ClaudeDriver implements Driver {
         if (response?.request_id === undefined || response.request_id !== st.interruptRequestId) return;
         this.#clearTimer(st, "interruptTimer");
         // 只有 success 才算打断收到了；回了 error 就不等了，直接 SIGINT
-        if (response.subtype === "success") this.#resolveInterrupt(st);
-        else this.#sigintForInterrupt(st, proc);
+        if (response.subtype === "success") {
+          // 带 cancel_queued 时回执里列着它取消了的（写进去还没取走的）
+          const cancelled = new Set(interruptCancelled(response.response));
+          this.#cancelBatches(st, proc, st.inFlight.filter((b) => !b.started && cancelled.has(b.uuid)), at);
+          this.#resolveInterrupt(st);
+        } else this.#sigintForInterrupt(st, proc);
         return;
       }
       case "result":
@@ -999,6 +1084,35 @@ export class ClaudeDriver implements Driver {
     if (info) this.#emit(st.id, { type: "api_retry", info, at });
   }
 
+  /**
+   * command_lifecycle（docs/mid-turn-messages.md 第 2 节）：started → 这一行被 claude 取走了，处理中（第一行的 started 在 init 之前到，
+   * 先记下，init 时再出，事件顺序和以前一样）；cancelled → 没取走就被取消了（停止时），已取消。
+   * 已经取走的被 cancelled（打断那一轮，在 result 之后到）不管：那一轮的 result 已经按打断收尾了。queued、completed 不用：送达看写入，完成看 result。
+   */
+  #onLifecycle(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
+    const event = parseLifecycle(obj);
+    const batch = event ? st.inFlight.find((b) => b.uuid === event.uuid) : undefined;
+    if (!event || !batch) return;
+    if (event.state === "started") {
+      batch.started = true;
+      if (proc.initSeen) this.#markProcessing(st, batch, at);
+    } else if (event.state === "cancelled" && !batch.started) {
+      this.#cancelBatches(st, proc, [batch], at);
+    }
+  }
+
+  /** 写进去还没被取走的这几行不会再被处理了（停止）：出 message.cancelled，不重发。没有别的在途了就算这一轮完了。 */
+  #cancelBatches(st: SessionState, proc: Proc, batches: Batch[], at: number): void {
+    if (batches.length === 0) return;
+    st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
+    const messageIds = batches.flatMap((b) => b.messageIds);
+    if (messageIds.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds, reason: "stop", at });
+    if (!this.#busy(st)) {
+      this.#afterTurn(st, proc);
+      this.#settled(st);
+    }
+  }
+
   #markProcessing(st: SessionState, batch: Batch, at: number): void {
     this.#markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
@@ -1008,8 +1122,9 @@ export class ClaudeDriver implements Driver {
 
   #onInit(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
     if (proc.initSeen) {
-      // 之后每一轮开头还会出 init：没有在途的消息，就是 claude 自己开的一轮（比如后台任务完成了）
-      if (!st.inFlight && !st.selfTurn && st.proc === proc) {
+      // 之后每一轮开头还会出 init：没有在途的消息，就是 claude 自己开的一轮（比如后台任务完成了）。
+      // 中途写进去、上一轮没赶上的还在 inFlight 里：这一轮是 claude 为它们开的，不算自己开的
+      if (st.inFlight.length === 0 && !st.selfTurn && st.proc === proc) {
         st.selfTurn = true;
         this.#clearTimer(st, "idleTimer");
         this.#emit(st.id, { type: "turn.started", at });
@@ -1017,6 +1132,10 @@ export class ClaudeDriver implements Driver {
       return;
     }
     proc.initSeen = true;
+    proc.capabilities = parseCapabilities(obj);
+    if (proc.capabilities.has("msg_lifecycle_v1") && !midTurnCapable(proc)) {
+      this.#opts.log(`[driver] session ${st.id}: claude 不支持停止时取消排着的消息（没有 interrupt_cancel_queued_v1），忙时照旧排队`);
+    }
     this.#clearTimer(st, "startTimer");
     const model = typeof obj.model === "string" ? obj.model : null;
     const tools = Array.isArray(obj.tools) ? obj.tools.filter((t): t is string => typeof t === "string") : [];
@@ -1028,25 +1147,27 @@ export class ClaudeDriver implements Driver {
     st.resumeHint = null;
     this.#update(st, patch);
     this.#emit(st.id, { type: "session.started", resumed: proc.resume, model, tools, at });
-    if (st.inFlight) this.#markDelivered(st, st.inFlight);
+    for (const batch of st.inFlight) {
+      this.#markDelivered(st, batch);
+      if (batch.started) this.#markProcessing(st, batch, at);
+    }
     proc.resolveReady({ kind: "ok" });
   }
 
   #onResult(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
     // 没等到 init 就来的 result 是启动错误（如 No conversation found），不算一轮
     if (!proc.initSeen) return;
-    const batch = st.inFlight;
-    st.inFlight = null;
+    const batches = this.#takeSettled(st, proc);
     st.selfTurn = false;
     // 没等到回显就结束了（比如回显前被打断）：先补一个 message.processing，账本才能从“已送达”往下走
-    if (batch) this.#markProcessing(st, batch, at);
+    for (const batch of batches) this.#markProcessing(st, batch, at);
     const ok = obj.subtype === "success" && obj.is_error !== true;
     const subtype = typeof obj.subtype === "string" ? obj.subtype : "unknown";
     const event: DriverEvent = {
       type: "turn.ended",
       ok,
       interrupted: st.turnInterrupted,
-      messageIds: batch?.messageIds ?? [],
+      messageIds: batches.flatMap((b) => b.messageIds),
       durationMs: typeof obj.duration_ms === "number" ? obj.duration_ms : null,
       at,
     };
@@ -1054,7 +1175,7 @@ export class ClaudeDriver implements Driver {
     if (proc.closing === "shutdown" && (!ok || st.turnInterrupted)) event.shutdown = true;
     if (!ok) {
       event.error = { subtype, message: resultMessage(obj, subtype) };
-      this.#forgetWritten(st, batch);
+      this.#forgetWritten(st, batches);
     }
     st.turnInterrupted = false;
     st.stopRequested = false;
@@ -1068,6 +1189,20 @@ export class ClaudeDriver implements Driver {
     this.#resolveInterrupt(st);
     this.#afterTurn(st, proc);
     this.#settled(st);
+  }
+
+  /**
+   * 这一轮的 result 结算哪几行（docs/mid-turn-messages.md 第 5.2 节）：有 command_lifecycle 的是 started 过的（可能好几行）；
+   * 没赶上的（中途写进去还没取走）留在 inFlight，claude 会另起一轮。老 claude（没有 msg_lifecycle_v1）在途只有一行，就是它。
+   * 兜底：这一轮一行 started 都没有（claude 没出生命周期事件），开这一轮的那行（空闲时写的）照旧算这一轮的。
+   */
+  #takeSettled(st: SessionState, proc: Proc): Batch[] {
+    if (!proc.capabilities.has("msg_lifecycle_v1")) return st.inFlight.splice(0);
+    let settled = st.inFlight.filter((b) => b.started);
+    const first = st.inFlight[0];
+    if (settled.length === 0 && !st.selfTurn && first && !first.midTurn) settled = [first];
+    st.inFlight = st.inFlight.filter((b) => !settled.includes(b));
+    return settled;
   }
 
   #onClose(st: SessionState, proc: Proc, code: number | null, signal: NodeJS.Signals | null, resolveExited: () => void): void {
@@ -1088,7 +1223,7 @@ export class ClaudeDriver implements Driver {
         if (proc.closing === null) {
           const conflict = detectArgsConflict(proc.stderr);
           // 没人在等这次启动（只起了进程、还没写东西）：记下该用哪个参数，下次起就对了
-          if (conflict && !st.inFlight) st.resumeHint = conflict === "session_in_use";
+          if (conflict && st.inFlight.length === 0) st.resumeHint = conflict === "session_in_use";
           this.#forgetWritten(st, st.inFlight);
           proc.resolveReady({ kind: "failed", exitCode: code, signal, stderr: proc.stderr, conflict, timedOut: proc.startTimedOut });
           // 在途的那一行由抛出的 DriverError 交给执行器重试，这里不带 messageIds，免得账本提前标失败
@@ -1096,16 +1231,19 @@ export class ClaudeDriver implements Driver {
           return;
         }
         // 启动阶段被打断：那一行已经写进标准输入，算送达，下面跟着 session.exited(interrupt) 标已停止
-        if (proc.closing === "interrupt" && st.inFlight) this.#markDelivered(st, st.inFlight);
+        if (proc.closing === "interrupt") for (const batch of st.inFlight) this.#markDelivered(st, batch);
         proc.resolveReady({ kind: "closed", reason: proc.closing });
       }
-      const batch = proc.initSeen || proc.closing === "interrupt" ? st.inFlight : null;
-      st.inFlight = null;
+      const batches = proc.initSeen || proc.closing === "interrupt" ? st.inFlight : [];
+      st.inFlight = [];
       st.selfTurn = false;
       const reason: SessionExitReason = proc.closing ?? "crash";
-      if (batch && reason === "crash") {
+      // 中途写进去、claude 还没取走的（模型没看到过）和这一轮的分开（docs/mid-turn-messages.md 第 5.5 节）
+      const untaken = batches.filter((b) => b.midTurn && !b.started && proc.capabilities.has("msg_lifecycle_v1"));
+      const taken = batches.filter((b) => !untaken.includes(b));
+      if (taken.length > 0 && reason === "crash") {
         st.crashNote = true;
-        this.#forgetWritten(st, batch);
+        this.#forgetWritten(st, taken);
       }
       st.interruptRequestId = null;
       st.stopRequested = false;
@@ -1114,10 +1252,21 @@ export class ClaudeDriver implements Driver {
         reason,
         exitCode: code,
         signal,
-        hadResult: batch === null,
-        messageIds: batch?.messageIds ?? [],
+        hadResult: taken.length === 0,
+        messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
+      const untakenIds = untaken.flatMap((b) => b.messageIds);
+      if (untakenIds.length > 0) {
+        if (reason === "interrupt") {
+          // 用户点的停止（控制消息没回应才 SIGINT）：和带 cancel_queued 的停止一样标已取消，不重发
+          this.#emit(st.id, { type: "message.cancelled", messageIds: untakenIds, reason: "stop", at });
+        } else {
+          // 崩溃、关机：进程没了，claude 里排着的也没了。放回去由账本重新登记发送（不加重发说明，模型没看到过）
+          this.#forgetWritten(st, untaken);
+          this.#emit(st.id, { type: "message.requeued", messageIds: untakenIds, at });
+        }
+      }
     } finally {
       for (const query of [...st.commandQueries.values()]) query(null);
       this.#resolveInterrupt(st);
@@ -1307,6 +1456,15 @@ function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, star
     return new DriverError("start_args_conflict", `${retried ? "after switching --session-id/--resume: " : ""}${stderr || how}`);
   }
   return new DriverError("spawn_failed", `claude exited before system/init (${how})${stderr ? `: ${stderr}` : ""}`);
+}
+
+function newBatch(messageIds: MessageId[], line: string, uuid: string, notes: Batch["notes"]): Batch {
+  return { messageIds, line, uuid, notes, delivered: false, processing: false, started: false, midTurn: false };
+}
+
+/** 这个进程能在一轮中途写入：init 里 MID_TURN_CAPABILITIES 都有。 */
+function midTurnCapable(proc: Proc): boolean {
+  return MID_TURN_CAPABILITIES.every((c) => proc.capabilities.has(c));
 }
 
 function clearKillTimer(proc: Proc): void {

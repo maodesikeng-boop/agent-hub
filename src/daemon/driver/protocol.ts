@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../../shared/index.ts";
 import type {
   AgentSessionRow,
+  MidTurnSupport,
   AgentTextEvent,
   AgentThinkingEvent,
   AgentVendor,
@@ -24,8 +25,11 @@ export function buildUserLine(
   text: string,
   prefixes: readonly string[] = [],
   buildContent: (prefixes: readonly string[], text: string) => unknown[] = userContent,
+  uuid?: string,
 ): string {
-  return escapeLineSeparators(JSON.stringify({ type: "user", message: { role: "user", content: buildContent(prefixes, text) } }));
+  // uuid：claude 据它出这条消息的 command_lifecycle（docs/mid-turn-messages.md 第 2 节），不给就不出
+  const line = { type: "user", ...(uuid === undefined ? {} : { uuid }), message: { role: "user", content: buildContent(prefixes, text) } };
+  return escapeLineSeparators(JSON.stringify(line));
 }
 
 /**
@@ -70,9 +74,47 @@ export function checkUserLine(line: string): string | null {
   return null;
 }
 
-/** 打断控制消息（设计第 7.4 节，M0 实测）。 */
-export function buildInterruptLine(requestId: string): string {
-  return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "interrupt" } });
+/**
+ * 打断控制消息（设计第 7.4 节，M0 实测）。cancelQueued：把已经写进去、claude 还没取走的消息一并取消（init 里有
+ * interrupt_cancel_queued_v1 才能带；不带的话它们会在打断之后另起一轮接着跑，docs/mid-turn-messages.md 第 3 节 F）。
+ */
+export function buildInterruptLine(requestId: string, cancelQueued = false): string {
+  return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "interrupt", ...(cancelQueued ? { cancel_queued: true } : {}) } });
+}
+
+/**
+ * 一轮中途写入要的 init capabilities（docs/mid-turn-messages.md 第 2、5 节）：msg_lifecycle_v1 才有 command_lifecycle 对账“被取走”；
+ * interrupt_cancel_queued_v1 才能在停止时取消还没取走的。两个都有才中途写，少一个就照旧排在驱动层自己的队列里。
+ */
+export const MID_TURN_CAPABILITIES = ["msg_lifecycle_v1", "interrupt_cancel_queued_v1"] as const;
+
+/** claude 的一轮中途写入（init 里有 MID_TURN_CAPABILITIES 时）：当前工具跑完被同一轮读到；没赶上的 claude 自己排到下一轮。 */
+export const CLAUDE_MID_TURN: MidTurnSupport = {
+  mode: "direct",
+  seenAfter: "tool",
+  missed: "next_turn",
+  consumedBy: "lifecycle_event",
+  onStopWritten: "vendor_runs_them",
+};
+
+/** system/init 里的 capabilities（字符串数组）；没有或不是数组当空。 */
+export function parseCapabilities(obj: Record<string, unknown>): Set<string> {
+  return new Set(Array.isArray(obj.capabilities) ? obj.capabilities.filter((c): c is string => typeof c === "string") : []);
+}
+
+/** command_lifecycle 事件（带 uuid 的 user 行才有）：command_uuid 是我们给的 uuid；认不出的返回 null。 */
+export function parseLifecycle(obj: Record<string, unknown>): { uuid: string; state: "queued" | "started" | "completed" | "cancelled" } | null {
+  const uuid = obj.command_uuid;
+  const state = obj.state;
+  if (typeof uuid !== "string" || uuid === "") return null;
+  if (state !== "queued" && state !== "started" && state !== "completed" && state !== "cancelled") return null;
+  return { uuid, state };
+}
+
+/** interrupt 回执里 claude 取消了的消息 uuid（带 cancel_queued 时的 cancelled）。 */
+export function interruptCancelled(response: unknown): string[] {
+  const cancelled = (response as { cancelled?: unknown } | null | undefined)?.cancelled;
+  return Array.isArray(cancelled) ? cancelled.filter((u): u is string => typeof u === "string") : [];
 }
 
 /** 要模型名单等信息的控制消息（Claude Agent SDK 的 supportedModels() 用的就是它，回应里有 models）。 */

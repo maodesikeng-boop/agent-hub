@@ -189,6 +189,19 @@ export function createLedgerMessages(
           if (l.activity === "stopping") idle(l);
         });
         return;
+      case "message.cancelled":
+        // 写给 agent 了、它还没取走就停了（或会话结束了）：agent 没看到过，不重发（驱动层不会再写）
+        for (const id of event.messageIds) transition(p, id, "cancelled");
+        return;
+      case "message.requeued":
+        // 写给 agent 了、它还没取走就收回了（进程没了、这一轮没读它就结束了）：放回排队中，重新登记发送，agent 没看到过、不加重发说明
+        for (const id of event.messageIds) {
+          const message = getMessage(id);
+          if (message?.status !== "delivered" || message.sessionId === null) continue;
+          transition(p, id, "queued");
+          enqueue(p, { type: "session.send", params: { sessionId: message.sessionId, messageId: id, source: message.sender === "user" ? "user" : "system" } });
+        }
+        return;
       case "message.delivered":
       case "message.processing": {
         const to = event.type === "message.delivered" ? "delivered" : "processing";

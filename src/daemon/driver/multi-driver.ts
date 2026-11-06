@@ -2,12 +2,14 @@
 import {
   DriverError,
   DriverSessionError,
+  NO_MID_TURN,
   type AgentVendor,
   type ComposerCommand,
   type Driver,
   type DriverEventListener,
   type DriverSendInput,
   type DriverSendResult,
+  type MidTurnSupport,
   type SessionId,
   type SessionStore,
   type Unsubscribe,
@@ -51,6 +53,12 @@ export function createMultiVendorDriver(options: MultiVendorDriverOptions): Driv
         return;
       }
       await Promise.all(registeredDrivers().map((d) => d.interrupt(sessionId).catch(() => {})));
+    },
+
+    midTurnSupport(sessionId: SessionId): MidTurnSupport {
+      const row = store.get(sessionId);
+      const driver = row ? drivers[row.vendor as AgentVendor] : undefined;
+      return driver?.midTurnSupport(sessionId) ?? NO_MID_TURN;
     },
 
     async end(sessionId: SessionId): Promise<void> {

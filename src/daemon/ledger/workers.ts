@@ -493,7 +493,10 @@ export function createLedgerWorkers(
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
     if (event.type === "message.delivered") {
-      turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      // 一轮中途交给它的不算这一轮的开头（这一轮前面的文字还要算进汇报）
+      if (event.midTurn !== true || !turnStarts.has(session.id)) {
+        turnStarts.set(session.id, db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0);
+      }
       insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }

@@ -346,6 +346,15 @@ describe("消息状态：只在排队、失败、停止时出现", () => {
     expect(statuses([makeUserMessage({ id: 1, status: "queued" }), makeUserMessage({ id: 2, status: "stopped" })])).toEqual(["排队中", "已停止"]);
   });
 
+  it("已取消（一轮中途写给 agent、它还没读到就停了）：和已停止一样灰色一行，不能重试", () => {
+    const { container } = list([makeUserMessage({ id: 1, status: "cancelled" })]);
+    const row = container.querySelector("[data-delivery]") as HTMLElement;
+    expect(row).toHaveTextContent("已取消");
+    expect(row).toHaveAttribute("data-status", "cancelled");
+    expect(row).toHaveClass("text-muted-foreground");
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
   it("失败：一句人话 + 重试，原始错误在 title，不用“·”", () => {
     const raw = "error_during_execution: API Error: 529 Overloaded";
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: raw })]);
