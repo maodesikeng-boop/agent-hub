@@ -367,6 +367,37 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 
+  it("资料页改性格设定、撤销，项目经理自己 hub persona edit：都不重启（同一个进程），下一条前面带说明、只带一次；之后换模型重启按最新的拼、不再带", async () => {
+    env = makeEnv();
+    env.setScript({ defaultTurn: quick("好的") });
+    const { daemon, client } = await boot();
+    const zhou = await pmWithProject(client, "阿周", folder("foo"));
+    await warmUp(client, zhou.conversationId);
+    const put = (body: unknown) => client.putJson(API_PATHS.persona(zhou.pmId), body);
+    const edited = (await (await put({ text: "以后回复都用列表。" })).json()) as EditPersonaResponse;
+    await warmUp(client, zhou.conversationId, "第二条");
+    await warmUp(client, zhou.conversationId, "第三条");
+    expect((await client.postJson(API_PATHS.revertPersonaChange(edited.persona.revertableChangeId!), {})).status).toBe(200);
+    await warmUp(client, zhou.conversationId, "第四条");
+    const [first] = procsOf(zhou.sessionId);
+    expect((await rawHub(tokenOf(first!.pid), "persona.edit", { text: "我自己记的" })).status).toBe(200);
+    await warmUp(client, zhou.conversationId, "第五条");
+    expect(procsOf(zhou.sessionId)).toHaveLength(1);
+    const texts = env.stdinTextsOf(first!.pid);
+    expect(texts[1]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n以后回复都用列表。\n\n第二条$/);
+    expect(texts[2]).toBe("第三条");
+    expect(texts[3]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n阿周的习惯\n\n第四条$/);
+    expect(texts[4]).toBe("【系统】你刚改的性格设定已生效。\n\n第五条");
+    // 换模型：照旧重启，按最新的性格设定拼提示词，不再带性格设定的说明
+    await put({ model: "haiku", text: "用户最后改的" });
+    await warmUp(client, zhou.conversationId, "第六条");
+    const [, second] = procsOf(zhou.sessionId);
+    expect(second).toBeDefined();
+    expect(env.stdinTextsOf(second!.pid)).toEqual([`${RELAUNCH_NOTE}\n\n第六条`]);
+    expect(promptOf(second!.argv)).toContain("用户最后改的");
+    await terminate(daemon);
+  });
+
   it("挂文件夹：剧本跑 hub project attach，再发一条：先按新参数重启（多一个 --add-dir），这条前面带 RELAUNCH_NOTE", async () => {
     env = makeEnv();
     const foo = folder("foo");

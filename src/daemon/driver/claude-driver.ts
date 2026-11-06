@@ -67,6 +67,7 @@ import {
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
+import { takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
@@ -86,7 +87,8 @@ interface Batch {
   line: string;
   /** 写在这一行里的 uuid：claude 的 command_lifecycle 用它（command_uuid）告诉我们这一行排着、被取走、做完、被取消。 */
   uuid: string;
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null };
+  /** persona：性格设定、模式改了的说明（persona-note.ts），没写成时退回去。 */
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null; persona: PersonaNoteTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 收到这一行的 command_lifecycle started：claude 取走了（模型看到了）。 */
@@ -107,7 +109,7 @@ type MidTurnWrite = "written" | "cancelled" | "retry";
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
 /** 这一行没带恢复、崩溃、重启说明（命令那一行，见 #takeBatch）。 */
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, killed: null };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, killed: null, persona: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -138,6 +140,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** agent 已经看到的性格设定、模式是哪一版（起来时是 LaunchFiles.personaRevision，带了说明就跟着改）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   initSeen: boolean;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -621,18 +625,24 @@ export class ClaudeDriver implements Driver {
     if (dropped.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
   }
 
-  /** 拼一行：不是命令的话把恢复、崩溃、重启、后台任务被结束的说明加在最前面（加一次就清掉）。 */
+  /**
+   * 拼一行：不是命令的话把恢复、崩溃、重启、后台任务被结束、性格设定改了的说明加在最前面（加一次就清掉）。
+   * 性格设定的只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼提示词）。
+   */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     const uuid = randomUUID();
     if (command) {
       return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote };
+    const proc = st.proc && !st.proc.closing ? st.proc : null;
+    const persona = proc ? takePersonaNote(this.#opts.personaNote, st.id, proc, (e) => this.#personaNoteError(st, e)) : null;
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote, persona };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
       notes.killed,
+      persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
@@ -648,6 +658,11 @@ export class ClaudeDriver implements Driver {
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
     if (batch.notes.killed !== null) st.killedNote = batch.notes.killed;
+    batch.notes.persona?.restore();
+  }
+
+  #personaNoteError(st: SessionState, error: unknown): void {
+    this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`);
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -931,6 +946,7 @@ export class ClaudeDriver implements Driver {
       child,
       resume,
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
+      personaSeen: files.personaRevision ?? null,
       initSeen: false,
       capabilities: new Set(),
       stderr: "",
@@ -1140,7 +1156,11 @@ export class ClaudeDriver implements Driver {
 
   /** 停止时 claude 没取走的：用户的标已取消，不重发；系统的（Worker 汇报等）收回，账本重新登记发送（stop-untaken.ts）。 */
   #releaseOnStop(st: SessionState, batches: Batch[], at: number): void {
-    for (const b of batches) b.released = b.source === "user" ? "cancelled" : "requeued";
+    for (const b of batches) {
+      b.released = b.source === "user" ? "cancelled" : "requeued";
+      // agent 没看到带着的性格设定说明：退回去，下一行再带
+      b.notes.persona?.restore();
+    }
     this.#forgetWritten(st, batches.filter((b) => b.source === "system"));
     for (const event of untakenOnStopEvents(batches, at)) this.#emit(st.id, event);
   }

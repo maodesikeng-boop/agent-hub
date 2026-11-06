@@ -37,8 +37,10 @@ import {
   WORKER_HUB_USAGE_PROMPT,
   WORKER_READONLY_NOTE,
   WORKER_RULES,
+  buildFingerprintPrompt,
   buildLaunchPrompt,
   buildPmModePrompt,
+  personaUpdateNote,
   buildWorkerPrompt,
   needsAgentsNote,
   setupNote,
@@ -247,7 +249,8 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       `${hub} persona show`,
       `${hub} persona edit --reason "<为什么改>" --stdin`,
       "完整",
-      "聊过的不会丢",
+      "改完马上生效，聊过的不会丢",
+      "以最新的那份为准",
       "`AGENTS.md`",
       "保存前，先查是不是已经有覆盖这件事的条目",
       "不要重复建",
@@ -599,5 +602,62 @@ describe("准备命令（hub project setup，PR #47 审查后补的）", () => {
       expect(text).toContain("密钥");
     }
     expect(HUB_USAGE_PROMPT).toContain("勿写密钥");
+  });
+});
+
+describe("性格设定、模式改了的说明（不重启，驱动层加在下一条前面）", () => {
+  const update = (over: Partial<Parameters<typeof personaUpdateNote>[0]> = {}) => ({ revision: 3, vendor: "claude" as AgentVendor, persona: null, mode: null, ...over });
+
+  it("都没变：null", () => {
+    expect(personaUpdateNote(update())).toBeNull();
+  });
+
+  it("用户改的性格设定：完整的新内容（没有标题就加上“# 性格设定”）", () => {
+    expect(personaUpdateNote(update({ persona: { text: "说话直接。", bySelf: false } }))).toBe(
+      "【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n说话直接。",
+    );
+    expect(personaUpdateNote(update({ persona: { text: "# 我的习惯\n\n- 简洁", bySelf: false } }))).toBe(
+      "【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 我的习惯\n\n- 简洁",
+    );
+  });
+
+  it("清空了：说清楚已清空", () => {
+    expect(personaUpdateNote(update({ persona: { text: "  ", bySelf: false } }))).toBe("【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n（已清空）");
+  });
+
+  it("用户改的模式：完整的“怎么干活”一节（按厂商能不能放后台）", () => {
+    expect(personaUpdateNote(update({ mode: { mode: "hands_on", bySelf: false } }))).toBe(
+      `【系统】你的模式刚更新了，以下面这份为准：\n\n${buildPmModePrompt("hands_on", VENDOR_SPECS.claude.backgroundCommands)}`,
+    );
+    const agy = personaUpdateNote(update({ vendor: "agy", mode: { mode: "manage_only", bySelf: false } }))!;
+    expect(agy).toContain(buildPmModePrompt("manage_only", VENDOR_SPECS.agy.backgroundCommands));
+  });
+
+  it("两样都是用户改的：一段说明，模式在前、性格设定在后（同提示词里的顺序）", () => {
+    const note = personaUpdateNote(update({ persona: { text: "说话直接。", bySelf: false }, mode: { mode: "hands_on", bySelf: false } }))!;
+    expect(note.startsWith("【系统】你的模式和性格设定刚更新了，以下面这份为准：")).toBe(true);
+    expect(note.indexOf("# 怎么干活")).toBeLessThan(note.indexOf("# 性格设定"));
+  });
+
+  it("项目经理自己改的：只说一句已生效，不带内容", () => {
+    expect(personaUpdateNote(update({ persona: { text: "x", bySelf: true } }))).toBe("【系统】你刚改的性格设定已生效。");
+    expect(personaUpdateNote(update({ persona: { text: "x", bySelf: true }, mode: { mode: "hands_on", bySelf: true } }))).toBe(
+      "【系统】你刚改的模式和性格设定已生效。",
+    );
+  });
+
+  it("自己改了性格设定、用户改了模式：一句已生效 + 模式的完整内容", () => {
+    const note = personaUpdateNote(update({ persona: { text: "x", bySelf: true }, mode: { mode: "hands_on", bySelf: false } }))!;
+    expect(note.startsWith("【系统】你刚改的性格设定已生效。你的模式刚更新了，以下面这份为准：")).toBe(true);
+    expect(note).not.toContain("# 性格设定");
+  });
+
+  it("算 fingerprint 的提示词不含性格设定和模式：改了不变；文件夹变了照样变", () => {
+    const ctx = projectContext();
+    const base = buildFingerprintPrompt(ctx, dir);
+    expect(base).not.toContain("说话直接");
+    expect(buildFingerprintPrompt({ ...ctx, pm: { ...ctx.pm, persona: "别的", mode: "hands_on" } }, dir)).toBe(base);
+    expect(buildFingerprintPrompt({ ...ctx, project: { ...ctx.project!, mainFolder: "/work/other" } }, dir)).not.toBe(base);
+    expect(buildFingerprintPrompt(workerContext(), dir)).toBe(buildWorkerPrompt(workerContext(), dir));
   });
 });

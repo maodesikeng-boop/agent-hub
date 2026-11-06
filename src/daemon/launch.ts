@@ -9,10 +9,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
+import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
-import { buildLaunchPrompt } from "./prompt.ts";
+import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
 
 export interface LaunchPreparerOptions {
   launchDir: string;
@@ -70,7 +70,23 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         PATH: basePath === "" ? hubBinDir : `${hubBinDir}:${basePath}`,
         ...sessionEnv(role),
       },
-      fingerprint: launchFingerprint({ prompt, settings }),
+      // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
+      fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings }),
+      personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
     };
+  };
+}
+
+/**
+ * 给驱动层的 personaNote（DriverOptions.personaNote）：问账本 sinceRevision 之后性格设定、模式改了什么，拼成说明（prompt.ts 的 personaUpdateNote）。
+ * 不是项目经理的会话、版本号没变返回 null。
+ */
+export function createPersonaNoter(
+  personaUpdate: (sessionId: SessionId, sinceRevision: number) => PersonaUpdate | null,
+): (sessionId: SessionId, sinceRevision: number) => PersonaNote | null {
+  return (sessionId, sinceRevision) => {
+    const update = personaUpdate(sessionId, sinceRevision);
+    if (update === null || update.revision === sinceRevision) return null;
+    return { revision: update.revision, note: personaUpdateNote(update) };
   };
 }

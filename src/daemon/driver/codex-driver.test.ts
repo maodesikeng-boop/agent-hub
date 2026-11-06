@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
    buildSessionSettings,
+  RELAUNCH_NOTE,
   type AgentSessionPatch,
   type AgentSessionRow,
   type DriverEvent,
@@ -15,6 +16,7 @@ import {
   type SessionStore,
 } from "../../shared/index.ts";
 import { createCodexDriver, type CodexDriver, type CodexDriverOptions } from "./codex-driver.ts";
+import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 
 class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
@@ -488,7 +490,9 @@ afterEach(async () => {
   activeHarness = undefined;
 });
 
-function makeCodexHarness(options: { script?: FakeCodexScript; driver?: Partial<CodexDriverOptions> } = {}): CodexTestHarness {
+function makeCodexHarness(
+  options: { script?: FakeCodexScript; driver?: Partial<CodexDriverOptions>; personaRevision?: () => number } = {},
+): CodexTestHarness {
   const dir = mkdtempSync(join(tmpdir(), "agent-hub-codex-driver-"));
   const stateDir = join(dir, "state");
   const sessionLogsDir = join(stateDir, "logs", "sessions");
@@ -534,6 +538,7 @@ function makeCodexHarness(options: { script?: FakeCodexScript; driver?: Partial<
         },
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
+      if (options.personaRevision) files.personaRevision = options.personaRevision();
       return files;
     },
     env: {
@@ -1379,3 +1384,123 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
 });
 
 const realSleepCodex = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+describe("CodexDriver 性格设定、模式改了不重启（下一条前面加说明）", () => {
+  let f: PersonaFixture | undefined;
+  afterEach(() => {
+    f?.cleanup();
+    f = undefined;
+  });
+  function personaHarness(turns: (dir: string) => FakeCodexTurnScript[] = () => [], driver: Partial<CodexDriverOptions> = {}): CodexTestHarness {
+    f = makePersonaFixture();
+    const t = makeCodexHarness({ driver: { personaNote: f.personaNote, ...driver }, personaRevision: f.revision });
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: turns(t.dir) }));
+    return t;
+  }
+  /** 交给 codex 的每一条（turn/start、turn/steer）的文字。 */
+  const inputs = (t: CodexTestHarness) =>
+    t
+      .rpcIn()
+      .filter((r) => r.method === "turn/start" || r.method === "turn/steer")
+      .map((r) => (r.params as { input: Array<{ text: string }> }).input[0]!.text);
+  const procs = (t: CodexTestHarness) => t.log().filter((e) => e.kind === "argv");
+  async function turn(t: CodexTestHarness, sessionId: SessionId, id: number, text: string, n: number): Promise<void> {
+    await t.driver.send(sessionId, user(id, text));
+    await t.waitFor("turn.ended", undefined, n);
+  }
+
+  it("用户在资料页改：不重启，下一条前面带完整的新内容，只带一次", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "以后回复都用列表。" });
+    await turn(t, s.id, 2, "二", 2);
+    await turn(t, s.id, 3, "三", 3);
+    expect(procs(t)).toHaveLength(1);
+    const [, second, third] = inputs(t);
+    expect(second).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：/);
+    expect(second).toContain("以后回复都用列表。");
+    expect(second!.endsWith("\n\n二")).toBe(true);
+    expect(third).toBe("三");
+  });
+
+  it("连改两次：只带最新的一份", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "第一版" });
+    f!.userEdit({ text: "第二版" });
+    await turn(t, s.id, 2, "二", 2);
+    expect(inputs(t)[1]).toContain("第二版");
+    expect(inputs(t)[1]).not.toContain("第一版");
+  });
+
+  it("改模型还是重启（thread/resume）；新进程按最新的拼，同时改的性格设定不再带说明", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "新习惯" });
+    t.store.rows.set(s.id, { ...t.store.get(s.id)!, model: "gpt-5.5" });
+    await turn(t, s.id, 2, "二", 2);
+    expect(procs(t)).toHaveLength(2);
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(inputs(t)[1]).toBe(`${RELAUNCH_NOTE}\n\n二`);
+  });
+
+  it("闲置关闭后再起来：不带说明", async () => {
+    const t = personaHarness(() => [], { idleCloseMs: 50 });
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    await t.waitFor("session.exited");
+    f!.userEdit({ text: "新习惯" });
+    await turn(t, s.id, 2, "二", 2);
+    expect(procs(t)).toHaveLength(2);
+    expect(inputs(t)[1]).toBe("二");
+  });
+
+  it("撤销：带撤销后的内容", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.userEdit({ text: "新习惯" });
+    await turn(t, s.id, 2, "二", 2);
+    f!.revert();
+    await turn(t, s.id, 3, "三", 3);
+    expect(inputs(t)[2]).toMatch(/^【系统】你的性格设定刚更新了/);
+    expect(inputs(t)[2]).toContain("小林的习惯");
+    expect(procs(t)).toHaveLength(1);
+  });
+
+  it("项目经理自己 hub persona edit 改的：只带一句已生效", async () => {
+    const t = personaHarness();
+    const s = t.addSession();
+    await turn(t, s.id, 1, "一", 1);
+    f!.selfEdit("我自己记的");
+    await turn(t, s.id, 2, "二", 2);
+    expect(inputs(t)[1]).toBe("【系统】你刚改的性格设定已生效。\n\n二");
+  });
+
+  it("turn/steer 中途交的那条带上；停止时没读到，下一条再带", async () => {
+    const t = personaHarness((dir) => [{ holdFile: join(dir, "go1"), messageDeltas: ["完"] }, { holdFile: join(dir, "go2"), messageDeltas: ["完"] }, { messageDeltas: ["好"] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    f!.userEdit({ text: "第一版" });
+    await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    expect(inputs(t)[1]).toContain("第一版");
+    writeFileSync(join(t.dir, "go1"), "");
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1, 2] });
+    await t.driver.send(s.id, user(3, "再开始"));
+    await t.waitFor("agent.tool", undefined, 2);
+    f!.userEdit({ text: "第二版" });
+    await expect(t.driver.send(s.id, user(4, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    expect(inputs(t)[3]).toContain("第二版");
+    await t.driver.interrupt(s.id);
+    await t.waitFor("message.cancelled");
+    await t.waitFor("turn.ended", undefined, 2);
+    await turn(t, s.id, 5, "五", 3);
+    expect(inputs(t).at(-1)).toContain("第二版");
+    expect(inputs(t).at(-1)!.endsWith("\n\n五")).toBe(true);
+    expect(procs(t)).toHaveLength(1);
+  });
+});

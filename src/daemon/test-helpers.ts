@@ -15,7 +15,7 @@ export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext
     sessionId: 7,
     role: "pm",
     conversationId: 3,
-    pm: { id: 1, name: "小林", mode: "manage_only", vendor: "claude", persona: "# 性格设定\n\n- 说话直接。\n" },
+    pm: { id: 1, name: "小林", mode: "manage_only", vendor: "claude", persona: "# 性格设定\n\n- 说话直接。\n", personaRevision: 2 },
     project: card(1, "foo", "/work/foo", ["/work/foo-docs"], "做一个记账小工具"),
     worker: null,
     ...over,

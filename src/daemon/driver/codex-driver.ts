@@ -76,6 +76,7 @@ import {
 } from "./process.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
+import { takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -89,7 +90,8 @@ interface PendingEntry {
 interface Batch {
   messageIds: MessageId[];
   combinedText: string;
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean };
+  /** persona：性格设定、模式改了的说明（persona-note.ts），没写成、codex 没读到时退回去。 */
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 会话正忙时用 turn/steer 在一轮中途交给 codex 的（不是 turn/start 开一轮的那条）。 */
@@ -115,7 +117,7 @@ interface Steer {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -143,6 +145,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** agent 已经看到的性格设定、模式是哪一版（起来时是 LaunchFiles.personaRevision，带了说明就跟着改）；null 不比（persona-note.ts）。 */
+  personaSeen: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
   threadId: string | null;
@@ -586,14 +590,20 @@ export class CodexDriver implements Driver {
     return this.#batchOf(st, body, messageIds, command, users.length > 0 ? "user" : "system");
   }
 
-  /** 拼一条：不是命令的话把恢复、崩溃、重启说明加在最前面（加一次就清掉）。 */
+  /**
+   * 拼一条：不是命令的话把恢复、崩溃、重启、性格设定改了的说明加在最前面（加一次就清掉）。
+   * 性格设定的只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼提示词）。
+   */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
+    const proc = st.proc && !st.proc.closing ? st.proc : null;
+    const persona = proc ? takePersonaNote(this.#opts.personaNote, st.id, proc, (e) => this.#personaNoteError(st, e)) : null;
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
+      persona?.note ?? null,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
@@ -606,6 +616,11 @@ export class CodexDriver implements Driver {
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
+    batch.notes.persona?.restore();
+  }
+
+  #personaNoteError(st: SessionState, error: unknown): void {
+    this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`);
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -922,6 +937,7 @@ export class CodexDriver implements Driver {
         model: row.model,
         effort: row.effort,
       },
+      personaSeen: files.personaRevision ?? null,
       launchConfig,
       readonly: launchConfig.readonly,
       threadId: resume ? row.vendorSessionId : null,
@@ -1491,6 +1507,8 @@ export class CodexDriver implements Driver {
   #releaseMissed(st: SessionState, missed: Batch[], stopped: boolean, at: number): void {
     const messageIds = missed.flatMap((b) => b.messageIds);
     if (messageIds.length === 0) return;
+    // codex 没读到带着的性格设定说明：退回去，下一条再带
+    for (const b of missed) b.notes.persona?.restore();
     if (stopped) {
       this.#forgetWritten(st, missed.filter((b) => b.source === "system"));
       for (const event of untakenOnStopEvents(missed, at)) this.#emit(st.id, event);

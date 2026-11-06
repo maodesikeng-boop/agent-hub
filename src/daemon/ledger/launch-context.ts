@@ -10,7 +10,7 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerWorkers } from "./workers.ts";
 
 export function createLedgerLaunchContext(db: Db, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
-  const { pmRow, pmSession } = persona;
+  const { pmRow, pmSession, personaRevision } = persona;
   const { activeProjectOf, projectCard } = projects;
 
   const getLaunchContext = (sessionId: SessionId): LaunchContext => {
@@ -25,7 +25,7 @@ export function createLedgerLaunchContext(db: Db, persona: LedgerPersona, projec
       sessionId,
       role: session.role,
       conversationId: session.conversationId,
-      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, vendor: pm.vendor as AgentVendor, persona: pm.persona ?? "" },
+      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, vendor: pm.vendor as AgentVendor, persona: pm.persona ?? "", personaRevision: personaRevision(pm.id) },
       project: project === null ? null : projectCard(project),
       worker: null,
     };
