@@ -37,7 +37,6 @@ function restartedDriver(t: Harness, f: PersonaFixture) {
   writeFileSync(join(t.dir, "prompt.md"), "你是项目经理。");
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
-    stateDir: join(t.dir, "state"),
     store: t.store,
     prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
     personaNote: f.personaNote,

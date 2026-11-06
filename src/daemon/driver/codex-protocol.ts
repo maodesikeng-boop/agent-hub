@@ -1,18 +1,18 @@
 // OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
-// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 系统数据目录保护 / 只读模式的审批判定。
+// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 可写范围 / 只读模式的审批判定。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
-  commandWritesStateDir,
-  isStateDirPath,
-  type AgentRole,
+  commandMayWriteOutsideScope,
+  scopeAllowsWrite,
   type AgentSessionRow,
   type AgentToolEvent,
   type LaunchFiles,
   type RateLimitInfo,
   type RateLimitWindow,
+  type WriteScope,
 } from "../../shared/index.ts";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -170,18 +170,23 @@ export function buildThreadResumeRequest(
   });
 }
 
-/** 构造 turn/start 的 sandboxPolicy。 */
+/**
+ * 构造 turn/start 的 sandboxPolicy。Worker 的可写范围（writeScope）在这里落实一半：writableRoots 去掉数据目录里不能写的
+ * （codex 的沙箱只能写 writableRoots 和临时目录，数据目录别处本来就写不了）；另一半在审批（decideCommandApproval、decideFileChangeApproval）。
+ */
 export function buildSandboxPolicy(
   session: Pick<AgentSessionRow, "cwd" | "addDirs">,
   readonly: boolean,
+  writeScope: WriteScope | null = null,
 ): CodexSandboxPolicy {
   if (readonly) {
     return { type: "readOnly", networkAccess: true };
   }
+  const roots = [session.cwd, ...session.addDirs];
   return {
     type: "workspaceWrite",
     networkAccess: true,
-    writableRoots: [session.cwd, ...session.addDirs],
+    writableRoots: writeScope === null ? roots : roots.filter((dir) => scopeAllowsWrite(writeScope, dir)),
   };
 }
 
@@ -207,6 +212,7 @@ export function buildTurnStartRequest(
     combinedText: string;
     session: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
     readonly: boolean;
+    writeScope?: WriteScope | null;
   },
 ): string {
   return serializeJsonRpcLine({
@@ -220,7 +226,7 @@ export function buildTurnStartRequest(
       model: params.session.model ?? undefined,
       effort: params.session.effort ?? undefined,
       summary: "detailed",
-      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly),
+      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly, params.writeScope ?? null),
     },
   });
 }
@@ -432,39 +438,42 @@ export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null 
   };
 }
 
+export interface CodexApprovalContext {
+  readonly: boolean;
+  /** Worker 的可写范围；项目经理是 null（不拦）。 */
+  writeScope: WriteScope | null;
+  cwd: string;
+}
+
 /**
- * 判定 item/commandExecution/requestApproval 的审批结果：
- * - readonly 会话一律 decline
- * - worker 会话若命令会写系统数据目录 stateDir 则 decline
- * - 其余情况 accept（2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）
+ * 判定 item/commandExecution/requestApproval 的审批结果。在 workspace-write、on-request 下，codex 只为要越出沙箱跑的命令
+ * （模型申请提权）来问；同意了这条命令就不在沙箱里跑，所以 Worker 的可写范围要在这里拦：
+ * - readonly 会话一律 decline；
+ * - 有可写范围（Worker）：命令的工作目录、或命令行里的路径落在范围外（数据目录里、自己的工作目录外），且不是只读命令 → decline；
+ *   要改的文件在范围外 → decline。只能看字面：脚本里拼出来、不写在命令行上的路径看不出来（见 commandMayWriteOutsideScope）；
+ * - 其余 accept（数据目录以外照旧；2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）。
  */
-export function decideCommandApproval(
-  params: Record<string, unknown>,
-  context: { role: AgentRole; readonly: boolean; stateDir: string; cwd: string },
-): CodexApprovalDecision {
+export function decideCommandApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
   if (context.readonly) return "decline";
-  if (context.role === "worker") {
+  const scope = context.writeScope;
+  if (scope !== null) {
     const effectiveCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd : context.cwd;
     const command = Array.isArray(params.command) ? params.command.filter((x) => typeof x === "string").join(" ") : params.command;
-    if (typeof command === "string" && commandWritesStateDir(command, context.stateDir, effectiveCwd)) return "decline";
-    if (extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, effectiveCwd))) return "decline";
+    if (typeof command === "string" && commandMayWriteOutsideScope(command, scope, effectiveCwd)) return "decline";
+    if (extractFileChangePaths(params).some((p) => !scopeAllowsWrite(scope, p, effectiveCwd))) return "decline";
   }
   return "accept";
 }
 
 /**
- * 判定 item/fileChange/requestApproval 的审批结果：
- * - readonly 会话一律 decline
- * - worker 会话若修改的文件在系统数据目录 stateDir 下则 decline
- * - 其余情况 accept
+ * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）：
+ * - readonly 会话一律 decline；
+ * - 有可写范围（Worker）且要改的文件在范围外 → decline；
+ * - 其余 accept。
  */
-export function decideFileChangeApproval(
-  params: Record<string, unknown>,
-  context: { role: AgentRole; readonly: boolean; stateDir: string; cwd: string },
-): CodexApprovalDecision {
+export function decideFileChangeApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
   if (context.readonly) return "decline";
-  if (context.role === "worker" && extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, context.cwd))) {
-    return "decline";
-  }
+  const scope = context.writeScope;
+  if (scope !== null && extractFileChangePaths(params).some((p) => !scopeAllowsWrite(scope, p, context.cwd))) return "decline";
   return "accept";
 }

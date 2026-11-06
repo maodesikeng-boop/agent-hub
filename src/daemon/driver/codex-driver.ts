@@ -39,6 +39,7 @@ import {
   type SessionId,
   type TokenUsage,
   type Unsubscribe,
+  type WriteScope,
 } from "../../shared/index.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import {
@@ -77,6 +78,7 @@ import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
+import { WRITE_SCOPE_ENFORCERS } from "./write-scope.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -148,6 +150,8 @@ interface Proc {
   personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
+  /** Worker 的可写范围（LaunchFiles.writeScope）：沙箱的 writableRoots 和审批按它；项目经理是 null。 */
+  writeScope: WriteScope | null;
   threadId: string | null;
   initSeen: boolean;
   stderr: string;
@@ -213,7 +217,6 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
 
 export class CodexDriver implements Driver {
   readonly #codexPath: string;
-  readonly #stateDir: string;
   readonly #opts: Required<
     Pick<
       DriverOptions,
@@ -230,7 +233,6 @@ export class CodexDriver implements Driver {
 
   constructor({ codexPath, claudePath, composer, ...options }: CodexDriverOptions) {
     this.#codexPath = codexPath ?? claudePath ?? "codex";
-    this.#stateDir = options.stateDir;
     this.#composer = composer ?? composerBaseOf("codex")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
@@ -726,6 +728,7 @@ export class CodexDriver implements Driver {
         effort: row?.effort ?? proc.launched.effort,
       },
       readonly: proc.readonly,
+      writeScope: proc.writeScope,
     });
     await new Promise<void>((resolve) => {
       proc.child.stdin.write(line + "\n", (err) => {
@@ -913,7 +916,9 @@ export class CodexDriver implements Driver {
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
 
     const launchConfig = readCodexLaunchConfig(files);
-    const child = spawn(this.#codexPath, buildCodexArgs(), {
+    // Worker 的可写范围：codex 自己的沙箱管，进程不包（write-scope.ts），这里照样过一遍接口
+    const launch = WRITE_SCOPE_ENFORCERS.codex.spawnCommand({ command: this.#codexPath, args: buildCodexArgs() }, files.writeScope ?? null);
+    const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
       env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
       stdio: ["pipe", "pipe", "pipe"],
@@ -951,6 +956,7 @@ export class CodexDriver implements Driver {
       personaLaunched: files.personaRevision ?? null,
       launchConfig,
       readonly: launchConfig.readonly,
+      writeScope: files.writeScope ?? null,
       threadId: resume ? row.vendorSessionId : null,
       initSeen: false,
       stderr: "",
@@ -1541,9 +1547,8 @@ export class CodexDriver implements Driver {
       typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
     const row = this.#row(st);
     const context = {
-      role: row?.role ?? "worker",
       readonly: proc.readonly,
-      stateDir: this.#stateDir,
+      writeScope: proc.writeScope,
       cwd: row?.cwd ?? proc.launched.cwd,
     };
 

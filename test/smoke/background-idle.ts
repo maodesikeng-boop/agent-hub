@@ -61,7 +61,6 @@ async function run(holdMaxMs: number | undefined): Promise<Run> {
   const driver = createClaudeDriver({
     // 单个 claude 进程跑完，不 --resume：不存会话记录
     claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
-    stateDir: dir,
     store,
     prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }),
     idleCloseMs: IDLE_MS,

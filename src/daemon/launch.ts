@@ -5,10 +5,11 @@
 // --model、--add-dir）在驱动层 driver/protocol.ts 的 buildClaudeArgs，子进程的环境变量在同一个文件的 buildChildEnv。
 // 工作目录（项目经理是主文件夹，Worker 是它的 worktree 或主文件夹）由账本写在会话那一行的 cwd 上，驱动层照用。
 // prompt.md 的内容由 prompt.ts 的 buildLaunchPrompt 拼；settings.json 是 policy.ts 的 buildSessionSettings（默认档、放行 hub
-// 和 hub.sock，Worker 加不能写记忆的规则），用户全局 ~/.claude 的设置照常生效。
+// 和 hub.sock），用户全局 ~/.claude 的设置照常生效。Worker 的可写范围（数据目录里只有自己的工作目录能写）是
+// write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
@@ -16,8 +17,8 @@ import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./
 
 export interface LaunchPreparerOptions {
   launchDir: string;
-  /** 数据目录 state/ 的真实路径（paths.ts 的 stateDir，realpath 过）：Worker 的记忆规则用。 */
-  stateDir: string;
+  /** 数据目录的真实路径（paths.ts 的 home，realpath 过）：Worker 的可写范围用。 */
+  dataDir: string;
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
   /** 账本的 getLaunchContext。 */
@@ -46,7 +47,7 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  * 有项目的会话启动前先 mkdir -p <worktreesDir>/<项目编号>/：项目经理的 --add-dir 里有它，claude 要求目录在（LaunchContext 的注释）。
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
-  const { launchDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
+  const { launchDir, dataDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
   const basePath = options.basePath ?? process.env.PATH ?? "";
   return async (session) => {
     const ctx = getLaunchContext(session.id);
@@ -54,13 +55,14 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
-    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
+    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");
     const settingsFile = join(dir, "settings.json");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
     writeFileSync(settingsFile, settings, { mode: 0o600 });
+    const writeScope = workerWriteScope({ role, dataDir, cwd: session.cwd });
     return {
       promptFile,
       settingsFile,
@@ -73,6 +75,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
       fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
+      ...(writeScope === null ? {} : { writeScope }),
     };
   };
 }

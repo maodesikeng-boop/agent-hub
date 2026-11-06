@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
    buildSessionSettings,
+  workerWriteScope,
   RELAUNCH_NOTE,
   type AgentSessionPatch,
   type AgentSessionRow,
@@ -510,7 +511,6 @@ function makeCodexHarness(
 
   const driver = createCodexDriver({
     codexPath: fakeCodexBin,
-    stateDir,
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
@@ -523,7 +523,6 @@ function makeCodexHarness(
         role: session.role === "worker" ? "worker" : "pm",
         readonly,
         hubSock: join(dir, "run", "hub.sock"),
-        stateDir,
       });
       writeFileSync(settingsFile, JSON.stringify(settings));
       const files: LaunchFiles = {
@@ -537,6 +536,9 @@ function makeCodexHarness(
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
       if (options.personaRevision) files.personaRevision = options.personaRevision();
+      // 数据目录是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
+      const writeScope = workerWriteScope({ role: session.role, dataDir: dir, cwd: session.cwd });
+      if (writeScope !== null) files.writeScope = writeScope;
       return files;
     },
     env: {
@@ -914,8 +916,8 @@ describe("CodexDriver 打断（interrupt）", () => {
   });
 });
 
-describe("CodexDriver 反向 RPC 审批拦截（Worker 系统数据目录 state/ 保护与只读模式；记忆文件不拦）", () => {
-  it("Worker 收到 fileChange/commandExecution 审批改 stateDir 返回 decline，改 AGENTS.md 和普通文件返回 accept", async () => {
+describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读模式；记忆文件不拦）", () => {
+  it("Worker 收到审批：改数据目录（state/、新建目录、别的会话的目录）返回 decline，改 AGENTS.md、自己目录、普通文件返回 accept", async () => {
     const t = makeCodexHarness({
       script: {
         turns: [
@@ -959,8 +961,9 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 系统数据目录 state/
     });
 
     const worker = t.addSession({ role: "worker", workerId: 1 });
-    // 动态加一条指向 stateDir 的审批请求
+    // 动态加几条往数据目录（临时目录本身）里写的审批请求
     const stateFile = join(t.stateDir, "personas", "pm-1.md");
+    const otherSession = join(t.dir, "workspace", "999", "a.ts");
     writeFileSync(
       join(t.dir, "script.json"),
       JSON.stringify({
@@ -997,6 +1000,26 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 系统数据目录 state/
                 method: "item/tool/requestUserInput",
                 params: { itemId: "ask-1", questions: [{ id: "q1", question: "choose" }] },
               },
+              {
+                id: 907,
+                method: "item/commandExecution/requestApproval",
+                params: { itemId: "cmd-3", command: ["/bin/zsh", "-lc", `mkdir -p ${join(t.dir, "shots")}`] },
+              },
+              {
+                id: 908,
+                method: "item/fileChange/requestApproval",
+                params: { itemId: "fc-4", filePath: otherSession },
+              },
+              {
+                id: 909,
+                method: "item/commandExecution/requestApproval",
+                params: { itemId: "cmd-4", command: `echo ok > ${join(worker.cwd, "ok.txt")} && git commit -am x` },
+              },
+              {
+                id: 910,
+                method: "item/commandExecution/requestApproval",
+                params: { itemId: "cmd-5", command: "touch x", cwd: t.dir },
+              },
             ],
             messageDeltas: ["Worker 执行完毕"],
           },
@@ -1019,10 +1042,25 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 系统数据目录 state/
       { id: 904, result: { decision: "accept" } },
       { id: 905, result: { decision: "accept" } },
       { id: 906, result: { answers: {} } },
+      { id: 907, result: { decision: "decline" } },
+      { id: 908, result: { decision: "decline" } },
+      { id: 909, result: { decision: "accept" } },
+      { id: 910, result: { decision: "decline" } },
     ]);
   });
 
-  it("PM 会话修改 AGENTS.md 或 stateDir 时审批返回 accept；只读 Worker 一律返回 decline 且用 readOnly 沙箱", async () => {
+  it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {
+    const t = makeCodexHarness();
+    const outside = mkdtempSync(join(tmpdir(), "agent-hub-codex-outside-"));
+    const worker = t.addSession({ role: "worker", workerId: 3, addDirs: [join(t.dir, "workspace"), outside] });
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    const turnStart = t.rpcIn().find((r) => r.method === "turn/start") as { params: { sandboxPolicy: unknown } } | undefined;
+    expect(turnStart?.params.sandboxPolicy).toEqual({ type: "workspaceWrite", networkAccess: true, writableRoots: [worker.cwd, outside] });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("PM 会话修改 AGENTS.md 时审批返回 accept（项目经理没有可写范围）；只读 Worker 一律返回 decline 且用 readOnly 沙箱", async () => {
     const t = makeCodexHarness({
       script: {
         turns: [

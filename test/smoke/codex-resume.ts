@@ -49,7 +49,7 @@ async function trial(first: string, second: string): Promise<{ answer: string; r
   store.add(row);
   const run = async (secret: string, text: string) => {
     writeFileSync(promptFile, instructions(secret));
-    const driver = createCodexDriver({ codexPath: CODEX, stateDir: join(dir, "state"), store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} });
+    const driver = createCodexDriver({ codexPath: CODEX, store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} });
     const events: DriverEvent[] = [];
     driver.onEvent((_id, e) => events.push(e));
     try {

@@ -1,6 +1,6 @@
 // AgyDriver 与 agy-protocol 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,9 +16,11 @@ import {
   type LaunchFiles,
   type SessionId,
   type SessionStore,
+  type WriteScope,
 } from "../../shared/index.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
+import { SANDBOX_EXEC } from "./write-scope.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -89,13 +91,16 @@ interface FakeAgyScript {
 }
 
 interface FakeAgyLogEntry {
-  kind: "argv" | "stdin" | "signal" | "exit";
+  kind: "argv" | "stdin" | "signal" | "exit" | "probe";
   pid: number;
   argv?: string[];
   cwd?: string;
   line?: string;
   signal?: string;
   code?: number;
+  /** kind probe：FAKE_AGY_PROBE 写没写成。 */
+  ok?: boolean;
+  errno?: string;
 }
 
 /** 生成模拟 agy CLI 行为的 Node 脚本。 */
@@ -119,6 +124,14 @@ function emit(obj) {
 
 const argv = process.argv.slice(2);
 log({ kind: "argv", argv, cwd: process.cwd() });
+if (process.env.FAKE_AGY_PROBE) {
+  try {
+    writeFileSync(process.env.FAKE_AGY_PROBE, "probe");
+    log({ kind: "probe", ok: true });
+  } catch (error) {
+    log({ kind: "probe", ok: false, errno: error.code });
+  }
+}
 
 const script = scriptFile && existsSync(scriptFile) ? JSON.parse(readFileSync(scriptFile, "utf8")) : {};
 const convIdx = argv.indexOf("--conversation");
@@ -334,6 +347,8 @@ interface AgyTestHarness {
     readonly: boolean;
     env: Record<string, string>;
     personaRevision: (() => number) | null;
+    /** 给了就当 LaunchFiles.writeScope（Worker 的可写范围）。 */
+    writeScope: WriteScope | null;
   };
   waitFor<T extends DriverEvent["type"]>(
     type: T,
@@ -375,11 +390,11 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     env: {} as Record<string, string>,
     /** 给了就当 LaunchFiles.personaRevision（见 persona-fixture.ts）。 */
     personaRevision: null as (() => number) | null,
+    writeScope: null as WriteScope | null,
   };
 
   const driver = createAgyDriver({
     agyPath: fakeAgyPath,
-    stateDir,
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
@@ -402,6 +417,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
         env: { ...launch.env },
         fingerprint: launch.fingerprint,
         ...(launch.personaRevision ? { personaRevision: launch.personaRevision() } : {}),
+        ...(launch.writeScope ? { writeScope: launch.writeScope } : {}),
       };
     },
     env: {
@@ -597,44 +613,17 @@ describe("agy-protocol 纯函数", () => {
     expect(detectAgyArgsConflict("some other error")).toBeNull();
   });
 
-  const stateDir = "/Users/u/.agent-hub/state";
-  const cwd = "/Users/u/.agent-hub/worktrees/1/2";
-
   it("checkWorkerToolViolation：只读 Worker 写文件被拦（含 sed_file、notebook_edit）；非只读 Worker 不拦", () => {
     for (const toolName of ["edit_file", "sed_file", "notebook_edit", "write_to_file"]) {
-      expect(checkWorkerToolViolation({ toolName, parameters: { Path: "src/index.ts" }, readonly: true, stateDir, cwd })).toBe(
-        "只读 Worker 不能修改文件",
-      );
-      expect(checkWorkerToolViolation({ toolName, parameters: { Path: "src/index.ts" }, readonly: false, stateDir, cwd })).toBeNull();
+      expect(checkWorkerToolViolation({ toolName, readonly: true })).toBe("只读 Worker 不能修改文件");
+      expect(checkWorkerToolViolation({ toolName, readonly: false })).toBeNull();
     }
-    expect(checkWorkerToolViolation({ toolName: "view_file", parameters: { AbsolutePath: "src/index.ts" }, readonly: true, stateDir, cwd })).toBeNull();
+    expect(checkWorkerToolViolation({ toolName: "view_file", readonly: true })).toBeNull();
   });
 
-  it("checkWorkerToolViolation：写类工具和写命令碰 state/ 被拦，读 state/ 不拦", () => {
-    const statePath = `${stateDir}/personas/pm-1.md`;
-    for (const toolName of ["write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "notebook_edit"]) {
-      expect(checkWorkerToolViolation({ toolName, parameters: { TargetFile: statePath }, readonly: false, stateDir, cwd })).toBe(
-        "Worker 不能修改系统数据目录",
-      );
-    }
-    for (const toolName of ["view_file", "read_file", "grep_search", "list_dir"]) {
-      expect(checkWorkerToolViolation({ toolName, parameters: { AbsolutePath: statePath, SearchPath: statePath, DirectoryPath: stateDir }, readonly: false, stateDir, cwd })).toBeNull();
-    }
-    expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: `echo x > ${statePath}` }, readonly: false, stateDir, cwd })).toBe(
-      "Worker 不能修改系统数据目录",
-    );
-    expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: `cat ${statePath}` }, readonly: false, stateDir, cwd })).toBeNull();
-  });
-
-  it("checkWorkerToolViolation：Worker 改记忆文件不再拦（2026-11-06 用户去掉了这条限制）", () => {
-    const memoryPaths = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/settings.json"];
-    for (const p of memoryPaths) {
-      for (const toolName of ["view_file", "write_to_file", "replace_file_content", "sed_file", "notebook_edit"]) {
-        expect(checkWorkerToolViolation({ toolName, parameters: { TargetFile: p, Path: p }, readonly: false, stateDir, cwd })).toBeNull();
-      }
-    }
-    for (const commandLine of ["echo x > CLAUDE.md", "cat AGENTS.md", "sed -i s/a/b/ .claude/settings.json"]) {
-      expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: commandLine }, readonly: false, stateDir, cwd })).toBeNull();
+  it("checkWorkerToolViolation：数据目录（含 state/）、记忆文件都不在这里拦（数据目录由 OS 沙箱管，见 write-scope.ts）", () => {
+    for (const toolName of ["write_to_file", "replace_file_content", "sed_file", "run_command"]) {
+      expect(checkWorkerToolViolation({ toolName, readonly: false })).toBeNull();
     }
   });
 });
@@ -941,7 +930,7 @@ describe("3. interrupt() 打断与恢复", () => {
   });
 });
 
-describe("4. Worker 安全拦截（系统数据目录 state/ 与只读模式拦截）", () => {
+describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式在这里拦）", () => {
   it("Worker 通过 edit_file 修改 AGENTS.md 不被拦，这一轮正常结束（2026-11-06 用户去掉了这条限制）", async () => {
     const t = makeAgyHarness({
       script: {
@@ -968,21 +957,24 @@ describe("4. Worker 安全拦截（系统数据目录 state/ 与只读模式拦�
     expect(t.log().some((e) => e.kind === "signal" && e.signal === "SIGINT")).toBe(false);
   });
 
-  it("Worker 试图修改 stateDir 下的文件时被驱动层拦截并报错", async () => {
-    const t = makeAgyHarness();
-    const targetInState = join(t.stateDir, "personas", "pm-1.md");
-    writeFileSync(
-      join(t.dir, "script.json"),
-      JSON.stringify({
-        turns: [{ steps: [{ type: "tool", stepId: 2, name: "edit_file", parameters: { TargetFile: targetInState }, durationMs: 2000 }] }],
-      }),
-    );
-    const s = t.addSession({ role: "worker", workerId: 11 });
-    await t.driver.send(s.id, user(1, "修改性格设定文件"));
-    const ended = await t.waitFor("turn.ended");
-    expect(ended.ok).toBe(false);
-    expect(ended.interrupted).toBe(false);
-    expect(ended.error?.message).toContain("Worker 不能修改系统数据目录");
+  it.runIf(process.platform === "darwin" && existsSync(SANDBOX_EXEC))("Worker 的可写范围：进程包在 OS 沙箱里，数据目录写不成，这一轮照常跑完；项目经理不包", async () => {
+    for (const [role, scoped] of [["worker", true], ["pm", false]] as const) {
+      const t = makeAgyHarness();
+      const dataDir = join(realpathSync.native(t.dir), "home");
+      const cwd = join(dataDir, "worktrees", "1", "2");
+      mkdirSync(cwd, { recursive: true });
+      const probe = join(dataDir, "probe.txt");
+      t.launch.env = { FAKE_AGY_PROBE: probe };
+      if (scoped) t.launch.writeScope = { dataDir, writableDirs: [cwd] };
+      const s = t.addSession({ role, cwd, ...(role === "worker" ? { workerId: 11 } : {}) });
+      await t.driver.send(s.id, user(1, "hi"));
+      const ended = await t.waitFor("turn.ended");
+      expect(ended.ok, role).toBe(true);
+      expect(t.log().find((e) => e.kind === "probe"), role).toMatchObject(scoped ? { ok: false, errno: "EPERM" } : { ok: true });
+      expect(existsSync(probe), role).toBe(!scoped);
+      await t.cleanup();
+      activeHarness = undefined;
+    }
   });
 
   it("只读 Worker 启动带 --mode plan，试图调用写文件工具修改普通文件时被驱动层拦截并报错", async () => {

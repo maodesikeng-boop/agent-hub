@@ -69,6 +69,7 @@ import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import { WRITE_SCOPE_ENFORCERS } from "./write-scope.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -930,7 +931,9 @@ export class ClaudeDriver implements Driver {
     this.#assertNotEnded(st);
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
     // detached：claude 在自己的进程组里（进程组号 = 它的 pid），强制结束时连它起的子进程一起结束
-    const child = spawn(this.#opts.claudePath, buildClaudeArgs(row, files, resume), {
+    // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts）
+    const launch = WRITE_SCOPE_ENFORCERS.claude.spawnCommand({ command: this.#opts.claudePath, args: buildClaudeArgs(row, files, resume) }, files.writeScope ?? null);
+    const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
       env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
       stdio: ["pipe", "pipe", "pipe"],

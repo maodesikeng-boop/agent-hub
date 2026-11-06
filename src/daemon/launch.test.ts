@@ -17,7 +17,6 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("prepareLaunch（M2、M3）", () => {
   const hubSock = "/private/var/agent-hub/run/hub.sock";
-  const stateDir = "/private/var/agent-hub/state";
   let worktreesDir: string;
   let contexts: Map<number, LaunchContext>;
   let issued: number[];
@@ -31,7 +30,8 @@ describe("prepareLaunch（M2、M3）", () => {
   const make = (basePath = "/usr/bin:/bin") =>
     createLaunchPreparer({
       launchDir,
-      stateDir,
+      // 数据目录：临时目录本身（Worker 的 worktree 建在它下面）
+      dataDir: dir,
       worktreesDir,
       getLaunchContext: (id) => {
         const ctx = contexts.get(id);
@@ -87,9 +87,11 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
-    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir }));
+    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock }));
     expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir), settings }));
     expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
+    // 项目经理不受可写范围限制
+    expect(files.writeScope).toBeUndefined();
     // 令牌只在 env 里，不进任何文件
     for (const content of [prompt, settings]) expect(content).not.toContain("token-of-7");
   });
@@ -186,30 +188,36 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
     expect(prompt).not.toContain("先问用户的事");
-    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock, stateDir }));
+    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock }));
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    // 可写范围：数据目录里只有自己的 worktree
+    expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [worktree] });
   });
 
-  it("同一个项目的项目经理和 Worker：两份设置文件只差 state/ 的拒绝规则和 autoMemoryEnabled", async () => {
+  it("在主文件夹干活的 Worker：数据目录整个不能写，主文件夹在数据目录外不受影响", async () => {
+    const main = "/Users/u/code/app";
+    contexts.set(9, workerContext());
+    expect((await make()(row(9, main, "worker"))).writeScope).toEqual({ dataDir: dir, writableDirs: [] });
+  });
+
+  it("同一个项目的项目经理和 Worker：两份设置文件只差 autoMemoryEnabled", async () => {
     contexts.set(9, workerContext());
     const pm = JSON.parse(readFileSync((await make()(row(7))).settingsFile!, "utf8"));
     const worker = JSON.parse(readFileSync((await make()(row(9, dir, "worker"))).settingsFile!, "utf8"));
-    const { deny, ...workerPermissions } = worker.permissions;
-    expect(deny.length).toBeGreaterThan(0);
-    expect(workerPermissions).toEqual(pm.permissions);
+    expect(worker.permissions).toEqual(pm.permissions);
     expect(worker.sandbox).toEqual(pm.sandbox);
     expect(worker.autoMemoryEnabled).toBe(false);
     expect(pm.autoMemoryEnabled).toBeUndefined();
   });
 
-  it("只读 Worker：只读档，带 state/ 拒绝规则；开关变了 fingerprint 跟着变", async () => {
+  it("只读 Worker：只读档；开关变了 fingerprint 跟着变", async () => {
     contexts.set(9, workerContext());
     const prepare = make();
     const normal = await prepare(row(9, dir, "worker"));
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await prepare(row(9, dir, "worker"));
-    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
+    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 
