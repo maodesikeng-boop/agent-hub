@@ -371,6 +371,15 @@ describe("模型名、思考程度：和网页右栏、资料页一样的写法"
     expect(line(old)).not.toContain("gpt-oss-120b-medium");
   });
 
+  it("hub worker list 和 show 写法一致", () => {
+    const ids = [startWorker("claude", { model: "claude-opus-5-5" }), startWorker("agy", { model: "gemini-4-argon", effort: "high" }), startWorker("codex")];
+    const list = ledger.hubCall(lin.sessionId, "worker.list", {}, {}).text.split("\n");
+    for (const id of ids) {
+      const shown = show(id).text.match(/，模型 (.+)，思考程度 (.+)$/m)!;
+      expect(list.find((l) => l.startsWith(`#${id} `))).toContain(`模型 ${shown[1]} · 思考程度 ${shown[2]}`);
+    }
+  });
+
   it("厂商报了“默认”实际用哪个模型就写它", () => {
     const withCatalog = createLedger(db, {
       now: () => now,

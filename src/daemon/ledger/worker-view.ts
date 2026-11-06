@@ -81,6 +81,16 @@ function outcomeText(end: StepRow): string {
   return end.summary === null ? "出错" : `出错：${clipText(end.summary)}`;
 }
 
+/**
+ * Worker 实际用的模型和思考程度，hub worker list、show 共用，和网页右栏、资料页同一个写法：模型写显示名，
+ * agy 的模型和思考程度分开写（老数据里写在模型 ID 末尾的也拆开）；思考程度“默认”时厂商没告诉我们实际是哪一档
+ * （ModelCatalog 里没有），只能写默认。
+ */
+export function agentSettingOf(ctx: Pick<LedgerContext, "modelShortLabel">, session: Pick<AgentSessionRow, "vendor" | "model" | "effort">): { model: string; effort: string } {
+  const vendor = session.vendor as AgentVendor;
+  return { model: ctx.modelShortLabel(vendor, session.model), effort: effortLabel(agentEffortOf(vendor, session.model, session.effort)) };
+}
+
 export interface WorkerViewDeps {
   ownWorker: (pmId: number, workerId: number) => WorkerDbRow;
   workerSession: (workerId: number) => AgentSessionRow;
@@ -147,13 +157,10 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const t = now();
 
     const state = stateOf(worker, live, lastEnded);
-    // 和网页右栏、资料页一样：模型写显示名，agy 的模型和思考程度分开写（老数据里写在模型 ID 末尾的也拆开）；
-    // 思考程度“默认”时厂商没告诉我们实际是哪一档（ModelCatalog 里没有），只能写默认
-    const vendor = session.vendor as AgentVendor;
-    const effort = agentEffortOf(vendor, session.model, session.effort);
+    const setting = agentSettingOf(ctx, session);
     const lines: string[] = [];
     lines.push(`Worker #${worker.id}“${worker.title}”：${state}${worker.readonly === 1 ? "，只读" : ""}`);
-    lines.push(`厂商 ${vendorLabel(session.vendor)}，模型 ${ctx.modelShortLabel(vendor, session.model)}，思考程度 ${effortLabel(effort)}`);
+    lines.push(`厂商 ${vendorLabel(session.vendor)}，模型 ${setting.model}，思考程度 ${setting.effort}`);
 
     const alive = session.pid !== null;
     const quiet = session.lastEventAt === null ? "还没有过动静" : `最后一次有动静是 ${formatDuration(t - session.lastEventAt)} 前`;
