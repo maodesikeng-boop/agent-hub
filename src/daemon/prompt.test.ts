@@ -416,6 +416,42 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
+  it("大量材料交给 Worker 读、看 Worker 干了什么一层层往下看：跟在“派活要交代清楚”后面，两种模式共用，用动态命令名，不写死厂商名", () => {
+    for (const mode of PM_MODES) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
+      expect(prompt).toContain(PM_WORKER_PROMPT);
+    }
+    const order = ["**派活要交代清楚**", "**大量材料交给 Worker 读**", "**看 Worker 干了什么，一层层往下看**", "**工作目录隔离**"];
+    const positions = order.map((title) => PM_WORKER_PROMPT.indexOf(title));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+
+    for (const word of [
+      "**大量材料交给 Worker 读**",
+      "要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件）",
+      "只读的加 `--readonly`，机械的整理用便宜的模型",
+      "汇报只回结论和出处、限定长度",
+      "工具返回的内容会一直留在你的上下文里，之后每一步都要重读",
+      "几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省",
+      "要亲眼核对的关键几行，按 Worker 给的出处自己取来看",
+      "**看 Worker 干了什么，一层层往下看**",
+      `先 \`${hub} worker show <编号>\`，再 \`${hub} worker log <编号> --last N\` 找到可疑的那几步`,
+      "按 show 里“原始记录”的路径只取那一段，不整份打开",
+    ]) {
+      expect(PM_WORKER_PROMPT).toContain(word);
+    }
+    const addedLines = PM_WORKER_PROMPT.split("\n").filter(
+      (line) => line.includes("**大量材料交给 Worker 读**") || line.includes("**看 Worker 干了什么，一层层往下看**"),
+    );
+    expect(addedLines).toHaveLength(2);
+    for (const line of addedLines) {
+      for (const vendor of AGENT_VENDORS) expect(line.toLowerCase()).not.toContain(vendor);
+    }
+    const workerPrompt = buildWorkerPrompt(workerContext(), dir);
+    expect(workerPrompt).not.toContain("大量材料交给 Worker 读");
+    expect(workerPrompt).not.toContain("看 Worker 干了什么，一层层往下看");
+  });
+
   it("用户直接对 Worker 说的话会告诉项目经理：开头和账本发的一样，写明 Worker 已收到、无需转告", () => {
     const header = userToWorkerHeader(1, "x");
     expect(PM_WORKER_PROMPT).toContain(header.slice(0, header.indexOf("#") + 1));
@@ -425,7 +461,7 @@ describe("提示词：项目经理（M3）", () => {
     for (const gone of ["回一句", "要不要调整安排"]) expect(PM_WORKER_PROMPT).not.toContain(gone);
   });
 
-  it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有建议用便宜的模型、没有规定怎么验收", () => {
+  it("不写死工作流程（11-04）：没有合并步骤、没有利弊表、没有先问用户清单、没有规定怎么验收", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     for (const gone of [
       "先问用户的事",
@@ -435,7 +471,6 @@ describe("提示词：项目经理（M3）", () => {
       "分支留着",
       "| 好处 |",
       "| 坏处 |",
-      "便宜的模型",
       "收到后自己验收",
       "再把结论告诉用户",
       "拿不准的先问用户",
