@@ -233,7 +233,7 @@ describe("hub cli", () => {
       [["worker", "log", "--last", "200", "3"], "worker.log", { workerId: 3, last: 200 }],
       [["worker", "log", "3", "--stats"], "worker.log", { workerId: 3, stats: true }],
       [["worker", "show", "3", "--task"], "worker.show", { workerId: 3, task: true }],
-      [["worker", "show", "3", "--report"], "worker.show", { workerId: 3, report: 1 }],
+      [["worker", "show", "3", "--report"], "worker.show", { workerId: 3, report: "latest" }],
       [["worker", "show", "3", "--report", "2"], "worker.show", { workerId: 3, report: 2 }],
       [["worker", "search", "登录", "Bug"], "worker.search", { keywords: ["登录", "Bug"] }],
       [["worker", "search", "x", "--limit", "100"], "worker.search", { keywords: ["x"], limit: 100 }],

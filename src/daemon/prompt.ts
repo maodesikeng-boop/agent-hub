@@ -163,7 +163,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} worker list\`：查看所有 Worker 的状态、分支、目录和模型
   - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
   - \`${HUB} worker log <编号> [--last N]\`：看它最近 N 步（默认 20）：调了什么、思考多久、一轮怎么结束
-  - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、最近（或倒数第 N 次）汇报原文
+  - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）
   - \`${HUB} worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
   - \`${HUB} ask --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒）
 - **定时任务**

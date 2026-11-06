@@ -52,13 +52,13 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
       workerId,
     );
 
-  /** hub worker show --report [N]：最近一次（N=1）或倒数第 N 次汇报原文。 */
-  const reportText = (worker: WorkerDbRow, n: number): string => {
-    if (!Number.isSafeInteger(n) || n < 1) throw fail("invalid", "--report 的 N 要写正整数（1 是最近一次，2 是倒数第二次…）");
+  /** hub worker show --report [N]：第 N 轮汇报原文（和 search 里的“汇报 #N”一致，从 1 起、从旧到新）；"latest" 是最新一轮。 */
+  const reportText = (worker: WorkerDbRow, n: number | "latest"): string => {
+    if (n !== "latest" && (!Number.isSafeInteger(n) || n < 1)) throw fail("invalid", "--report 的 N 要写正整数（第几轮汇报，和 search 里的“汇报 #N”一致）");
     const reports = reportsOf(worker.id);
     if (reports.length === 0) throw fail("invalid", `Worker #${worker.id}“${worker.title}”还没有汇报过`);
-    const row = reports[reports.length - n];
-    if (row === undefined) throw fail("invalid", `Worker #${worker.id}“${worker.title}”只汇报过 ${reports.length} 次，没有倒数第 ${n} 次`);
+    const row = reports[n === "latest" ? reports.length - 1 : n - 1];
+    if (row === undefined) throw fail("invalid", `Worker #${worker.id}“${worker.title}”只汇报过 ${reports.length} 次，没有第 ${n} 轮`);
     return reportBody(worker, row.text);
   };
 

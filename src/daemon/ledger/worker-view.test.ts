@@ -640,7 +640,7 @@ function reportTurn(workerId: WorkerId, text: string, caller = lin.sessionId): v
 const search = (keywords: string[], limit?: number, caller = lin.sessionId) =>
   ledger.hubCall(caller, "worker.search", limit === undefined ? { keywords } : { keywords, limit }, {});
 const showTask = (workerId: WorkerId, caller = lin.sessionId) => ledger.hubCall(caller, "worker.show", { workerId, task: true }, {});
-const showReport = (workerId: WorkerId, n?: number, caller = lin.sessionId) => ledger.hubCall(caller, "worker.show", { workerId, report: n ?? 1 }, {});
+const showReport = (workerId: WorkerId, n?: number, caller = lin.sessionId) => ledger.hubCall(caller, "worker.show", { workerId, report: n ?? "latest" }, {});
 
 describe("hub worker search", () => {
   it("标题、任务说明、汇报都能搜；一处一行，写编号、标题、状态、命中在哪和上下文", () => {
@@ -738,7 +738,7 @@ describe("hub worker show --task / --report", () => {
     expect(showTask(w).text).toBe(task);
   });
 
-  it("--report 是最近一次，--report N 是倒数第 N 次；输出汇报原文，不带“【Worker … 的汇报】”开头", () => {
+  it("--report 是最新一轮，--report N 是第 N 轮（从旧到新，和 search 的“汇报 #N”一致）；输出汇报原文，不带“【Worker … 的汇报】”开头", () => {
     const w = startTask("R", "任务");
     const r1 = reportText("第一轮", "一");
     const r2 = reportText("第二轮", "二");
@@ -747,20 +747,21 @@ describe("hub worker show --task / --report", () => {
     reportTurn(w, r2);
     reportTurn(w, r3);
     expect(showReport(w).text).toBe(r3);
-    expect(showReport(w, 1).text).toBe(r3);
+    expect(showReport(w, 1).text).toBe(r1);
     expect(showReport(w, 2).text).toBe(r2);
-    expect(showReport(w, 3).text).toBe(r1);
+    expect(showReport(w, 3).text).toBe(r3);
     expect(showReport(w).text).not.toContain("的汇报】");
     expectLedgerError(() => showReport(w, 4), "invalid", /只汇报过 3 次/);
     expectLedgerError(() => showReport(w, 0), "invalid", /正整数/);
-    // search 的“汇报 #2”是第 2 轮（从旧到新）
+    // search 里的“汇报 #2”读出来就是 show --report 2
     expect(search(["第二轮"]).text).toContain("汇报 #2：");
+    expect(showReport(w, search(["第二轮"]).data.hits[0]!.report).text).toBe(r2);
   });
 
   it("还没汇报过：报错；--task 和 --report 不能一起；只能看自己派的；不带参数的 show 不变", () => {
     const w = startTask("R", "任务");
     expectLedgerError(() => showReport(w), "invalid", /还没有汇报过/);
-    expectLedgerError(() => ledger.hubCall(lin.sessionId, "worker.show", { workerId: w, task: true, report: 1 }, {}), "invalid", /只能用一个/);
+    expectLedgerError(() => ledger.hubCall(lin.sessionId, "worker.show", { workerId: w, task: true, report: "latest" }, {}), "invalid", /只能用一个/);
     expectLedgerError(() => showTask(w, zhou.sessionId), "forbidden", /不是你派的/);
     expectLedgerError(() => showReport(w, 1, zhou.sessionId), "forbidden", /不是你派的/);
     expect(show(w).text).toContain(`Worker #${w}“R”：`);

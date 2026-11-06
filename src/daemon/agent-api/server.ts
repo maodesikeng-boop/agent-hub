@@ -139,7 +139,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["workerId"],
-    properties: { workerId: workerIdField, task: { type: "boolean" }, report: { type: "integer" } },
+    properties: { workerId: workerIdField, task: { type: "boolean" }, report: { oneOf: [{ type: "integer" }, { const: "latest" }] } },
   },
   // 关键词个数、长度、limit 的范围由账本查，报中文原因
   "worker.search": {

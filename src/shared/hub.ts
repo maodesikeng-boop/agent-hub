@@ -146,10 +146,10 @@ export interface HubArgsMap {
   "worker.list": Record<string, never>;
   /**
    * `hub worker show <编号>`：一个 Worker 现在的情况（只能看自己派的；已收工的也能看）。
-   * `--task`：只输出任务说明原文；`--report [N]`：只输出最近一次（N=1）或倒数第 N 次汇报原文（不含“【Worker … 的汇报】”那行开头）。
+   * `--task`：只输出任务说明原文；`--report [N]`：只输出第 N 轮汇报原文（N 和 search 里的“汇报 #N”一致，从 1 起、从旧到新），不给 N（"latest"）就是最新一轮（不含“【Worker … 的汇报】”那行开头）。
    * 两个不能一起用；没有这次汇报 → invalid。
    */
-  "worker.show": { workerId: WorkerId; task?: boolean; report?: number };
+  "worker.show": { workerId: WorkerId; task?: boolean; report?: number | "latest" };
   /**
    * `hub worker search <关键词…> [--limit N]`：在我派过的所有 Worker（含已收工的）的标题、任务说明、汇报里搜。
    * 关键词都要包含（同一处：标题、任务说明或某一轮汇报），中文按子串、英文不分大小写；一处一行，最新的在前，

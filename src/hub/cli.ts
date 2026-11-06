@@ -62,7 +62,7 @@ export const HUB_USAGE = `用法：
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
   ${hub} worker show <编号> [--task | --report [N]]            一个 Worker 现在的情况：状态、在干什么、这一轮和上一轮、进程、分支和 PR；
-                                                          --task 只出任务说明原文，--report 只出最近一次汇报原文（--report 2 是倒数第二次）
+                                                          --task 只出任务说明原文，--report [N] 只出第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写就是最新一轮）
   ${hub} worker search <关键词…> [--limit N]                   在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜：关键词都要包含，
                                                           中文按子串、英文不分大小写；一处一行，最新的在前（默认 ${WORKER_SEARCH_DEFAULT_LIMIT} 条，最多 ${WORKER_SEARCH_MAX_LIMIT}）
   ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
@@ -303,15 +303,15 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   if (group === "worker" && action === "show") {
     allowOnly(values, ["task", "report"], "worker show");
     if (values.task === true && values.report === true) throw new UsageError("--task 和 --report 只能用一个");
-    // --report 后面可以跟一个 N（倒数第几次汇报），写在编号后面
+    // --report 后面可以跟一个 N（第几轮汇报，从旧到新），写在编号后面
     expectPositionals(rest, values.report === true && rest.length === 2 ? 2 : 1, "worker show");
     const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker show") };
     if (values.task === true) body.task = true;
     if (values.report === true) {
       if (rest[1] !== undefined && (!/^[1-9][0-9]*$/.test(rest[1]) || !Number.isSafeInteger(Number(rest[1])))) {
-        throw new UsageError("--report 后面的 N 要写正整数（1 是最近一次，2 是倒数第二次…）");
+        throw new UsageError("--report 后面的 N 要写正整数（第几轮汇报，和 search 里的“汇报 #N”一致）");
       }
-      body.report = rest[1] === undefined ? 1 : Number(rest[1]);
+      body.report = rest[1] === undefined ? "latest" : Number(rest[1]);
     }
     return { command: "worker.show", body, textSource: null };
   }
