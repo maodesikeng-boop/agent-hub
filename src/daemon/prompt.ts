@@ -127,6 +127,8 @@ export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptS
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 Claude/Codex 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`spawn_agent\` 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
 - **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`agy\`、\`codex\`、\`gemini\` 这类工具。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
+- **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
+- **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
 - **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
 - **验收与收尾**：
   - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
