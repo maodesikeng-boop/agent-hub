@@ -47,17 +47,24 @@ const REAL_MODELS = [
   },
 ];
 
-const REAL_AGY_OUTPUT = {
-  command: {
-    name: "models",
-    data: {
-      models: [
-        { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", currently_selected: true },
-        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)", currently_selected: false },
-      ],
-    },
-  },
-};
+/** 本机 agy 1.5.1 `agy --output-format json models` 的 command.data.models（2026-11-06 原样，思考程度写在 ID 末尾）。 */
+const REAL_AGY_MODELS = [
+  { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
+  { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
+  { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
+  { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" },
+  { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+  { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+  { id: "claude-opus-5-5-low", label: "Claude Opus 5.5 (Low)" },
+  { id: "claude-opus-5-5-medium", label: "Claude Opus 5.5 (Medium)" },
+  { id: "claude-opus-5-5-high", label: "Claude Opus 5.5 (High)" },
+  { id: "claude-sonnet-5-5-low", label: "Claude Sonnet 5.5 (Low)" },
+  { id: "claude-sonnet-5-5-medium", label: "Claude Sonnet 5.5 (Medium)" },
+  { id: "claude-sonnet-5-5-high", label: "Claude Sonnet 5.5 (High)" },
+  { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+];
+
+const REAL_AGY_OUTPUT = { command: { name: "models", data: { models: REAL_AGY_MODELS } } };
 
 const REAL_CODEX_MODELS = [
   {
@@ -155,31 +162,73 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
   });
 });
 
-describe("parseAgyModels：agy 报的模型名单", () => {
-  it("支持完整外层对象和直接传数组，提取 currently_selected 为 defaultModel", () => {
-    const fromFull = parseAgyModels(REAL_AGY_OUTPUT);
-    expect(fromFull).toEqual({
+describe("parseAgyModels：agy 报的模型名单（按 Antigravity 软件的做法拆成 模型 + 思考程度）", () => {
+  const entry = (id: string, label: string, efforts: string[]) => ({ id, label, description: null, efforts });
+
+  it("真名单：十三个带档位的 ID 拆成五个不带档位的模型，各自的档位按 low、medium、high 排，GPT-OSS 只有 medium", () => {
+    const catalog = parseAgyModels(REAL_AGY_OUTPUT);
+    expect(catalog).toEqual({
       ...bundledModelCatalog("agy"),
       source: "vendor",
-      defaultModel: "Gemini 4 Argon (Medium)",
+      defaultModel: null,
       models: [
-        { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", description: null, efforts: null },
-        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)", description: null, efforts: null },
+        entry("gemini-4-argon", "Gemini 4 Argon", ["low", "medium", "high"]),
+        entry("gemini-3.8-flash", "Gemini 3.8 Flash", ["low", "medium", "high"]),
+        entry("claude-opus-5-5", "Claude Opus 5.5", ["low", "medium", "high"]),
+        entry("claude-sonnet-5-5", "Claude Sonnet 5.5", ["low", "medium", "high"]),
+        entry("gpt-oss-120b", "GPT-OSS 120B", ["medium"]),
       ],
     } satisfies ModelCatalog);
+    // 直接传数组也行
+    expect(parseAgyModels(REAL_AGY_MODELS)).toEqual(catalog);
+  });
 
-    const fromArray = parseAgyModels(REAL_AGY_OUTPUT.command.data.models);
-    expect(fromArray).toEqual(fromFull);
+  it("打包的名单就是真名单拆完的样子（拿不到名单时兜底，和真的一致）", () => {
+    expect(bundledModelCatalog("agy").models).toEqual(parseAgyModels(REAL_AGY_MODELS)!.models);
+  });
+
+  it("没见过的新模型照样拆：按“ID 末尾 -档位、名字末尾 (档位)”认，不看模型名", () => {
+    const catalog = parseAgyModels([
+      { id: "gemini-9-nova-high", label: "Gemini 9 Nova (High)" },
+      { id: "gemini-9-nova-low", label: "Gemini 9 Nova (Low)" },
+      { id: "mystery-7b-medium", label: "Mystery 7B (Medium)" },
+    ]);
+    expect(catalog?.models).toEqual([entry("gemini-9-nova", "Gemini 9 Nova", ["low", "high"]), entry("mystery-7b", "Mystery 7B", ["medium"])]);
+  });
+
+  it("不带档位的（ID 或名字对不上档位）原样留着，明说没有思考程度（界面不出下拉）", () => {
+    const catalog = parseAgyModels([
+      { id: "plain-model", label: "Plain Model" },
+      { id: "foo-thinking", label: "Foo (Thinking)" },
+      { id: "bar-high", label: "Bar" },
+      { id: "baz-high", label: "Baz (Low)" },
+      { id: "no-label" },
+    ]);
+    expect(catalog?.models).toEqual([
+      entry("plain-model", "Plain Model", []),
+      entry("foo-thinking", "Foo (Thinking)", []),
+      entry("bar-high", "Bar", []),
+      entry("baz-high", "Baz (Low)", []),
+      entry("no-label", "no-label", []),
+    ]);
+  });
+
+  it("currently_selected 的那项记成默认模型，名字不带档位", () => {
+    const catalog = parseAgyModels([
+      { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
+      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", currently_selected: true },
+    ]);
+    expect(catalog?.defaultModel).toBe("Gemini 4 Argon");
   });
 
   it("过滤非法模型名和重复项；无效或空返回 null", () => {
     const catalog = parseAgyModels([
       { id: "bad model" },
       { id: "--flag" },
-      { id: "gemini-4-argon-max", label: "Argon Max" },
-      { id: "gemini-4-argon-max", label: "Duplicate" },
+      { id: "gemini-4-argon-high", label: "Argon (High)" },
+      { id: "gemini-4-argon-high", label: "Duplicate (High)" },
     ]);
-    expect(catalog?.models.map((m) => m.id)).toEqual(["gemini-4-argon-max"]);
+    expect(catalog?.models.map((m) => [m.id, m.efforts])).toEqual([["gemini-4-argon", ["high"]]]);
     for (const bad of [null, undefined, "str", {}, { command: { data: { models: [] } } }, [{ id: "a b" }]]) {
       expect(parseAgyModels(bad)).toBeNull();
     }
@@ -526,7 +575,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     const logs: string[] = [];
     const catalogs = createModelCatalogs({
       queryClaude: async () => REAL_MODELS,
-      queryAgy: async () => REAL_AGY_OUTPUT,
+      queryAgy: async () => ({ command: { data: { models: REAL_AGY_MODELS.map((m) => ({ ...m, currently_selected: m.id === "gemini-4-argon-medium" })) } } }),
       queryCodex: async () => {
         codexCalls++;
         const next = codexAnswers.shift();
@@ -540,7 +589,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     const first = await catalogs.list();
     expect(claudeOf(first).source).toBe("vendor");
     expect(agyOf(first).source).toBe("vendor");
-    expect(agyOf(first).defaultModel).toBe("Gemini 4 Argon (Medium)");
+    expect(agyOf(first).defaultModel).toBe("Gemini 4 Argon");
     expect(codexOf(first)).toEqual(bundledModelCatalog("codex"));
     expect(catalogs.current("claude")?.source).toBe("vendor");
     expect(catalogs.current("agy")?.source).toBe("vendor");

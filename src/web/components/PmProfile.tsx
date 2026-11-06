@@ -8,6 +8,7 @@ import {
   effortLabel,
   isAgentVendor,
   modelLabel,
+  splitModelEffort,
   utf8Bytes,
   vendorLabel,
   type AgentSetting,
@@ -188,7 +189,8 @@ function PmEditor({
       aliveRef.current = false;
     };
   }, []);
-  const saved: AgentSetting = { vendor: persona.vendor, model: persona.model, effort: persona.effort };
+  // 老数据里 agy 的模型可能是带档位的完整 ID：按 模型 + 思考程度 拆开再比，没改的不重复存
+  const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
   const agentSave = useInstantSave<AgentDraft, AgentRowKey>(pm.id, onUpdate, aliveRef);
   const modeSave = useInstantSave<PmMode, "mode">(pm.id, onUpdate, aliveRef);
   const agent = agentSave.draft ?? draftOf(saved);

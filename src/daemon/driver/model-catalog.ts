@@ -14,8 +14,10 @@ import {
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
   MODEL_CATALOG_TIMEOUT_MS,
+  VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
+  splitEffortSuffix,
   truncateChars,
   type AgentVendor,
   type CatalogModel,
@@ -102,32 +104,57 @@ function extractAgyModels(raw: unknown): unknown[] | null {
   return null;
 }
 
+/** 名字末尾的“(Medium)”：拆成 { base: 不带档位的名字, tier: 小写的档位词 }。 */
+function splitLabelTier(label: string): { base: string; tier: string } | null {
+  const m = /^(.*\S)\s*\(([^()]+)\)$/.exec(label);
+  return m === null ? null : { base: m[1]!, tier: m[2]!.trim().toLowerCase() };
+}
+
 /**
  * `agy --output-format json models` 的输出 → 名单。支持完整外层对象 `{ command: { data: { models: [...] } } }` 或直接传数组。
- * 若 `currently_selected === true` 则将其 `label` 记为 `defaultModel`。
+ * agy 把思考程度写在模型 ID 里（gemini-4-argon-high / 名字 Gemini 4 Argon (High)），按 Antigravity 软件的做法拆成
+ * “模型 + 思考程度”：ID 末尾是 VENDOR_SPECS.agy.efforts 里的档位词（-low、-medium、-high），并且名字末尾括号里是同一个词，
+ * 才拆（不看模型名，agy 出新模型照样拆）；同一个不带档位的模型下各档位合成一项，efforts 按清单里的顺序。
+ * 拆不开的（不带档位、对不上）原样留着，efforts 是空的：界面不出思考程度下拉，启动时原样传 ID。
+ * 若 `currently_selected === true` 则将其不带档位的名字记为 `defaultModel`。
  */
 export function parseAgyModels(raw: unknown): ModelCatalog | null {
   const list = extractAgyModels(raw);
   if (list === null) return null;
-  const models: CatalogModel[] = [];
+  const tiers = VENDOR_SPECS.agy.efforts;
+  // 不带档位的模型（按第一次出现的顺序）→ 名字、说明、报了哪些档位
+  const found = new Map<string, { label: string; description: string | null; efforts: Set<string> }>();
+  const seen = new Set<string>();
   let defaultModel: string | null = null;
   for (const item of list) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
     const id = typeof entry.id === "string" ? entry.id : typeof entry.value === "string" ? entry.value : null;
-    if (id === null || checkModel("agy", id) !== null || models.some((m) => m.id === id)) continue;
-    const label = truncateChars(nonEmptyString(entry.label) ?? nonEmptyString(entry.displayName) ?? id, MAX_CATALOG_LABEL_CHARS);
-    const description = nonEmptyString(entry.description);
+    if (id === null || checkModel("agy", id) !== null || seen.has(id)) continue;
+    seen.add(id);
+    const fullLabel = nonEmptyString(entry.label) ?? nonEmptyString(entry.displayName) ?? id;
+    const idSplit = splitEffortSuffix(id, tiers);
+    const labelSplit = splitLabelTier(fullLabel);
+    const tiered = idSplit !== null && labelSplit !== null && labelSplit.tier === idSplit.effort;
+    const baseId = tiered ? idSplit.base : id;
+    const label = truncateChars(tiered ? labelSplit.base : fullLabel, MAX_CATALOG_LABEL_CHARS);
     if (entry.currently_selected === true || entry.isDefault === true) defaultModel ??= label;
-    models.push({
-      id,
-      label,
-      description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
-      efforts: effortsOf(entry),
-    });
-    if (models.length === MAX_CATALOG_MODELS) break;
+    let model = found.get(baseId);
+    if (model === undefined) {
+      if (found.size === MAX_CATALOG_MODELS) continue;
+      const description = nonEmptyString(entry.description);
+      model = { label, description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS), efforts: new Set() };
+      found.set(baseId, model);
+    }
+    if (tiered) model.efforts.add(idSplit.effort);
   }
-  if (models.length === 0) return null;
+  if (found.size === 0) return null;
+  const models: CatalogModel[] = [...found].map(([id, m]) => ({
+    id,
+    label: m.label,
+    description: m.description,
+    efforts: tiers.filter((t) => m.efforts.has(t)),
+  }));
   return { ...bundledModelCatalog("agy"), source: "vendor", models, defaultModel };
 }
 

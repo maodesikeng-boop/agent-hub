@@ -39,16 +39,18 @@ describe("厂商清单", () => {
 
     const agy = VENDOR_SPECS.agy;
     expect(agy.label).toBe("Antigravity");
-    expect(agy.models).toEqual([
-      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
-      { id: "gemini-4-argon-max", label: "Gemini 4 Argon (Max)" },
-      { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
-      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-      { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+    // 模型不带档位，档位另外列（agy-effort.test.ts 里有更细的）
+    expect(agy.models.map((m) => [m.id, m.label])).toEqual([
+      ["gemini-4-argon", "Gemini 4 Argon"],
+      ["gemini-3.8-flash", "Gemini 3.8 Flash"],
+      ["claude-opus-5-5", "Claude Opus 5.5"],
+      ["claude-sonnet-5-5", "Claude Sonnet 5.5"],
+      ["gpt-oss-120b", "GPT-OSS 120B"],
     ]);
     expect(agy.customModel).toBe(true);
-    expect(agy.customModelExample).toBe("如 gemini-4-argon-medium");
-    expect(agy.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(agy.customModelExample).toBe("如 gemini-4-argon");
+    expect(agy.efforts).toEqual(["low", "medium", "high"]);
+    expect(agy.effortInModelId).toBe(true);
     expect(agy.modelFlag).toBe("--model");
     expect(agy.effortFlag).toBe("--effort");
     expect(agy.quotaWindows).toEqual({ five_hour: "5 小时", seven_day: "7 天" });
@@ -104,12 +106,13 @@ describe("取值校验", () => {
   it("思考程度：null（默认）和各厂商清单里的档位行，别的不行", () => {
     for (const e of [null, "low", "medium", "high", "xhigh", "max"]) {
       expect(checkEffort("claude", e)).toBeNull();
-      expect(checkEffort("agy", e)).toBeNull();
     }
+    for (const e of [null, "low", "medium", "high"]) expect(checkEffort("agy", e)).toBeNull();
     for (const e of ["", "LOW", "min", "ultra", " high"]) {
       expect(checkEffort("claude", e)).toBe("思考程度只能是 low、medium、high、xhigh、max");
-      expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high、xhigh、max");
+      expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
     }
+    for (const e of ["xhigh", "max"]) expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
     for (const e of [null, "low", "medium", "high", "xhigh"]) {
       expect(checkEffort("codex", e)).toBeNull();
     }
@@ -118,7 +121,7 @@ describe("取值校验", () => {
 
   it("checkAgentSetting：厂商不对、模型不对、思考程度不对各报各的", () => {
     expect(checkAgentSetting({ vendor: "claude", model: "haiku", effort: "low" })).toBeNull();
-    expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon-medium", effort: "max" })).toBeNull();
+    expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toBeNull();
     expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "xhigh" })).toBeNull();
     expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "max" })).toBe("思考程度只能是 low、medium、high、xhigh");
     expect(checkAgentSetting({ vendor: "unknown", model: null, effort: null })).toBe("厂商只能是 claude、agy、codex");
@@ -138,7 +141,8 @@ describe("命令行参数", () => {
     expect(agentLaunchArgs({ vendor: "claude", model: "haiku", effort: null })).toEqual(["--model", "haiku"]);
     expect(agentLaunchArgs({ vendor: "claude", model: null, effort: "low" })).toEqual(["--effort", "low"]);
     expect(agentLaunchArgs({ vendor: "claude", model: "claude-opus-5-5", effort: "max" })).toEqual(["--model", "claude-opus-5-5", "--effort", "max"]);
-    expect(agentLaunchArgs({ vendor: "agy", model: "gemini-4-argon-medium", effort: "high" })).toEqual(["--model", "gemini-4-argon-medium", "--effort", "high"]);
+    // agy 把思考程度拼进模型 ID（agy-effort.test.ts）
+    expect(agentLaunchArgs({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toEqual(["--model", "gemini-4-argon-high"]);
     expect(agentLaunchArgs({ vendor: "codex", model: "gpt-5.4", effort: "high" })).toEqual(["--model", "gpt-5.4", "-c", "high"]);
   });
 });
@@ -155,6 +159,7 @@ describe("界面上的叫法", () => {
     expect(modelLabel("claude", null)).toBe("默认");
     expect(modelLabel("claude", "haiku")).toBe("Haiku");
     expect(modelLabel("claude", "claude-haiku-5-5")).toBe("claude-haiku-5-5");
+    expect(modelLabel("agy", "gemini-4-argon")).toBe("Gemini 4 Argon");
     expect(modelLabel("agy", "gemini-4-argon-medium")).toBe("Gemini 4 Argon (Medium)");
     expect(modelLabel("codex", "gpt-5.4-mini")).toBe("GPT-5.4 Mini");
   });
@@ -225,11 +230,11 @@ describe("modelShortLabel 与 shortModelName", () => {
   });
 
   it("agy 與 codex 的 shortModelName", () => {
-    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-4-argon-medium")).toBe("Argon Medium");
-    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-4-argon-max")).toBe("Argon Max");
-    expect(VENDOR_SPECS.agy.shortModelName?.("claude-opus-4-6-thinking")).toBe("Opus 4.6");
-    expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-4-6")).toBe("Sonnet 4.6");
-    expect(VENDOR_SPECS.agy.shortModelName?.("gpt-oss-120b-medium")).toBe("GPT-OSS 120B");
+    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-4-argon")).toBe("Gemini 4 Argon");
+    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-3.8-flash")).toBe("Gemini 3.8 Flash");
+    expect(VENDOR_SPECS.agy.shortModelName?.("claude-opus-5-5")).toBe("Claude Opus 5.5");
+    expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-5-5")).toBe("Claude Sonnet 5.5");
+    expect(VENDOR_SPECS.agy.shortModelName?.("gpt-oss-120b")).toBe("GPT-OSS 120B");
     expect(VENDOR_SPECS.agy.shortModelName?.("custom-unknown-model")).toBeNull();
 
     expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.4")).toBe("GPT-5.4");

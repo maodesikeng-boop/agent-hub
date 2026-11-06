@@ -1,6 +1,6 @@
 import { Bot, ChevronRight, MessageCircleQuestionMark, PanelRight, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_AGENT_VENDOR, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
+import { DEFAULT_AGENT_VENDOR, agentEffortOf, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
 import { formatContext, formatTokenDetail, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -158,6 +158,8 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   const catalog = useModelCatalog(vendor);
   const busy = isBusy(worker);
   const context = formatContext(worker.usage);
+  // 老数据里 agy 的模型可能是带档位的完整 ID：档位从 ID 里取，和资料页一样显示成 模型 + 思考程度
+  const effort = agentEffortOf(vendor, worker.model ?? null, worker.effort ?? null);
   return (
     <button
       type="button"
@@ -182,8 +184,8 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
         </span>
         <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
           {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
-          {worker.effort && <span className="shrink-0">{effortLabel(worker.effort)}</span>}
-          {(context !== NO_DATA || (worker.vendor === undefined && !worker.effort)) && (
+          {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
+          {(context !== NO_DATA || (worker.vendor === undefined && !effort)) && (
             <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
               {context}
             </span>

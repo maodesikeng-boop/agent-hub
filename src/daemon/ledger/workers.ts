@@ -32,7 +32,7 @@ import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES } from "../../shared/limits.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, effortLabel, isAgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, effortLabel, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -275,10 +275,12 @@ export function createLedgerWorkers(
       if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
       vendor = args.vendor;
     }
-    const model = typeof args.model === "string" ? args.model.trim() || null : null;
-    const effort = typeof args.effort === "string" ? args.effort.trim() || null : null;
-    const badSetting = checkModel(vendor, model) ?? checkEffort(vendor, effort);
+    const givenModel = typeof args.model === "string" ? args.model.trim() || null : null;
+    const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : null;
+    const badSetting = checkModel(vendor, givenModel) ?? checkEffort(vendor, givenEffort) ?? checkModelEffort(vendor, givenModel, givenEffort);
     if (badSetting !== null) throw fail("invalid", badSetting);
+    // 思考程度写在模型 ID 里的厂商（agy）：--model gemini-4-argon-high 和 --model gemini-4-argon --effort high 存成一样的 模型 + 思考程度
+    const { model, effort } = splitModelEffort(vendor, givenModel, givenEffort);
     const readonly = args.readonly === true;
     const card = projectCard(project);
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
@@ -331,6 +333,8 @@ export function createLedgerWorkers(
     }
     const worker = workerRow(id)!;
     const sameVendor = vendor === caller.vendor;
+    // 没给的沿用项目经理现在的（也按 模型 + 思考程度 拆开：老数据里存的可能是带档位的完整 ID）
+    const inherited = sameVendor ? splitModelEffort(vendor, caller.model, caller.effort) : { model: null, effort: null };
     const session = insertSession(p, {
       role: "worker",
       conversationId: conversation.id,
@@ -340,8 +344,8 @@ export function createLedgerWorkers(
       addDirs: workspace === "worktree" ? [] : card.otherFolders,
       generation: 1,
       vendor,
-      model: model ?? (sameVendor ? caller.model : null),
-      effort: effort ?? (sameVendor ? caller.effort : null),
+      model: model ?? inherited.model,
+      effort: effort ?? inherited.effort,
     });
     insertPmMessage(p, worker, session, task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
