@@ -1,0 +1,11 @@
+[
+ {"send":"Run these 3 Bash commands one after another, each as a separate Bash call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next.","uuid":"00000000-0000-4000-8000-000000000001"},
+ {"wait_tool":"Bash","nth":1},
+ {"sleep":1},
+ {"send":"MSG-B1: also tell me what 2+2 is, and put the answer in your next sentence.","uuid":"00000000-0000-4000-8000-000000000002"},
+ {"sleep":1},
+ {"send":"MSG-B2: and finish your final report with the word PINEAPPLE.","uuid":"00000000-0000-4000-8000-000000000003"},
+ {"wait":"result","nth":1},
+ {"sleep":15},
+ {"close":true},{"exit":60}
+]
