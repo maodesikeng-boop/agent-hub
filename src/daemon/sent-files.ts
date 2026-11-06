@@ -38,6 +38,7 @@ import {
   MAX_SENT_FILES_PER_MESSAGE,
   MAX_SENT_FILES_TOTAL_BYTES,
   localLinksOf,
+  locationFallbackPaths,
   sentFileMime,
   type LocalHref,
   type MdNode,
@@ -207,6 +208,14 @@ const reject = (status: Exclude<SentFileStatus, "saved">, stat?: Stats): Outcome
   mtime: stat?.mtimeMs ?? null,
 });
 
+/** 链接对应的绝对路径：原样找不到文件时，试去掉行号（#L10-L20、:10:5 之类）的写法，都找不到还是原样（记成没找到）。 */
+function existingPathOf(href: string, local: LocalHref, scope: Pick<ShareScope, "cwd" | "userHome">): string {
+  const path = absolutePathOf(local, scope);
+  if (realOrNull(path) !== null) return path;
+  for (const candidate of locationFallbackPaths(href, path)) if (realOrNull(candidate) !== null) return candidate;
+  return path;
+}
+
 /** 处理一个链接：判断、开、拷。budget 是这条消息还能拷多少字节。 */
 function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope): Outcome {
   const real = realOrNull(path);
@@ -266,7 +275,7 @@ export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
   let used = 0;
   for (const { href, local } of localLinksOf(markdown.parse(text) as MdNode)) {
     if (files.length === MAX_SENT_FILES_PER_MESSAGE) break;
-    const path = absolutePathOf(local, scope);
+    const path = existingPathOf(href, local, scope);
     const name = sanitizeFileName(basename(path));
     let outcome: Outcome;
     try {
