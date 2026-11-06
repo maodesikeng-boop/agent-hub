@@ -143,7 +143,7 @@ export function createLedgerWorkers(
 ) {
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, liveOf, updateLive } = sessions;
-  const { transition } = messages;
+  const { transition, stopIn } = messages;
   const { pmRow } = persona;
   const { activeProjectOf, projectCard, syncSessionFolders } = projects;
   const { worktreesDir } = options;
@@ -158,6 +158,11 @@ export function createLedgerWorkers(
    * 用户直接说的话这时才交给项目经理（读到之前点停止会被取消）；没赶上上一轮、claude 为它另起一轮的，这一轮从这里开始算。
    */
   const midTurnWaiting = new Set<MessageId>();
+  /**
+   * 收工时打断了正在跑的一轮（endIn）的 Worker 会话，只在内存里。这一轮被停止的结局不再汇报给项目经理（它自己叫停的），
+   * 下一次一轮结束时清掉。
+   */
+  const endInterrupted = new Set<SessionId>();
 
   const workerRow = (id: WorkerId): WorkerDbRow | null => db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;
   const projectRow = (id: number): ProjectDbRow => db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", id)!;
@@ -242,7 +247,7 @@ export function createLedgerWorkers(
 
   /**
    * 收工了：Worker 对话里还在排队、没发给它的话标已停止，不会再发（比如 worktree 还没建好就收工了的任务说明）。
-   * 已经写进去的那一轮照常跑完、照常汇报。
+   * 正在跑的那一轮在这之前已经按网页“停止”的路径打断了（endIn）。
    */
   const stopQueued = (p: Pending, worker: WorkerDbRow) => {
     for (const row of db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued'", worker.worker_conversation_id)) {
@@ -400,6 +405,9 @@ export function createLedgerWorkers(
       return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
     }
     const session = workerSession(worker.id);
+    // 正在跑（一轮没结束、或有排队待送的消息）：先走和网页“停止”同一条打断路径（messages.ts 的 stopIn）。还没开工的在准备中，没有这一轮
+    const interrupted = !notStarted(worker) && stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
+    if (interrupted) endInterrupted.add(session.id);
     db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", now(), worker.id);
     const ended = workerRow(worker.id)!;
     // 正在跑就等这一轮回完再关，然后作废令牌（session.end 的处理函数）
@@ -410,7 +418,8 @@ export function createLedgerWorkers(
       ended.workspace === "worktree"
         ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：合并完用 git worktree remove ${ended.worktree_path} 删掉 worktree。`
         : "";
-    return { text: `Worker #${ended.id}“${ended.title}”已收工。${cleanup}`, data: { worker: toWorkerRecord(ended) } };
+    const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
+    return { text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${cleanup}`, data: { worker: toWorkerRecord(ended) } };
   };
 
   const list = (caller: AgentSessionRow & { pmId: PmId }): HubResult<"worker.list"> => {
@@ -541,6 +550,8 @@ export function createLedgerWorkers(
     // 比这一轮前面的文字大，取它会漏掉前面的汇报
     const turnStart = turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
     turnStarts.delete(session.id);
+    // 收工时打断的这一轮：被停止了不再汇报（项目经理自己叫停的）
+    if (endInterrupted.delete(session.id) && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) return;
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId =
       outcome.turnMessageId ??

@@ -847,6 +847,58 @@ describe("收工", () => {
     expect(enqueued).toEqual([]);
   });
 
+  describe.each(["claude", "agy", "codex"] as const)("收工时打断正在跑的一轮（%s）", (vendor) => {
+    let worker: WorkerRecord;
+    let stops: SessionId[];
+    const activityOf = (workerId: WorkerId) => ledger.snapshot().sessions.find((s) => s.sessionId === workerSessionId(workerId))!.activity;
+    beforeEach(() => {
+      worker = start({ vendor, noWorktree: true }).data.worker;
+      stops = [];
+      ledger.onStopRequested(({ sessionId }) => stops.push(sessionId));
+      enqueued = [];
+    });
+
+    it("在跑：先走停止的路径（通知打断、标正在停），回复写“已打断正在跑的那一轮”，这一轮被停止了也不给项目经理汇报", () => {
+      const sessionId = workerSessionId(worker.id);
+      const id = taskMessage(worker).id;
+      ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+      ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+      const result = hub(lin.sessionId, "worker.end", { workerId: worker.id });
+      expect(result.text).toContain("已打断正在跑的那一轮");
+      expect(result.data.worker.status).toBe("ended");
+      expect(stops).toEqual([sessionId]);
+      expect(activityOf(worker.id)).toBe("stopping");
+      expect(enqueued.map((a) => a.type)).toEqual(["session.end"]);
+      const before = workerLines().length;
+      ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [id], durationMs: 1, at: now });
+      expect(ledger.getMessage(id)!.status).toBe("stopped");
+      expect(workerLines().length).toBe(before);
+      expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended"]);
+    });
+
+    it("有排队待送的消息（没人在跑）：用户的标已取消，项目经理的标已停止，也算打断", () => {
+      const sessionId = workerSessionId(worker.id);
+      const queuedPm = taskMessage(worker).id;
+      const userMessage = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "c1", text: "插一句" }).messageId;
+      const result = hub(lin.sessionId, "worker.end", { workerId: worker.id });
+      expect(result.text).toContain("已打断正在跑的那一轮");
+      expect(stops).toEqual([sessionId]);
+      expect(ledger.getMessage(userMessage)!.status).toBe("cancelled");
+      expect(ledger.getMessage(queuedPm)!.status).toBe("stopped");
+    });
+
+    it("没在跑：和以前一样，不通知打断，回复里没有“已打断”", () => {
+      runTurn(worker, [taskMessage(worker).id], report("做完了", "好了"));
+      expect(activityOf(worker.id)).toBe("idle");
+      const result = hub(lin.sessionId, "worker.end", { workerId: worker.id });
+      expect(result.text).not.toContain("已打断");
+      expect(result.text).toContain("已收工");
+      expect(stops).toEqual([]);
+      // 跑完那一轮的汇报还在发给项目经理，收工只多一个 session.end
+      expect(enqueued.map((a) => a.type)).toEqual(["session.send", "session.end"]);
+    });
+  });
+
   it("worker.list：我派出去的 Worker，按编号，含已收工的；别的项目经理的不在里面", () => {
     const a = start({ title: "甲" }).data.worker;
     const b = start({ title: "乙" }).data.worker;
@@ -1502,11 +1554,11 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(post("改 README", "same")).toBe(id);
   });
 
-  it("收工时用户的话还在排队（Worker 正忙）：标已停止，项目经理不会收到 user_message", () => {
+  it("收工时用户的话还在排队（Worker 正忙）：照停止的规则标已取消，项目经理不会收到 user_message", () => {
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
     const id = post("先别动 Y");
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
-    expect(ledger.getMessage(id)!.status).toBe("stopped");
+    expect(ledger.getMessage(id)!.status).toBe("cancelled");
     expect(userMessageLines()).toEqual([]);
   });
 
@@ -1536,10 +1588,10 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(ledger.getMessage(id)!.status).toBe("failed");
   });
 
-  it("消息已经停止了才收到 delivered（收工时被标已停止，驱动层的事件晚到）：不发“Worker 已收到”那一行", () => {
+  it("消息已经取消了才收到 delivered（收工时被标已取消，驱动层的事件晚到）：不发“Worker 已收到”那一行", () => {
     const id = post("改 README");
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
-    expect(ledger.getMessage(id)!.status).toBe("stopped");
+    expect(ledger.getMessage(id)!.status).toBe("cancelled");
     ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
     expect(userMessageLines()).toEqual([]);
   });

@@ -354,10 +354,11 @@ export function createLedgerMessages(
     };
   };
 
-  const requestStop = (conversationId: ConversationId) => {
-    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
-    const session = currentSession(conversationId);
-    if (session === null) return;
+  /**
+   * 停止这个会话正在跑的一轮（在事务里调；网页“停止”和 hub worker end 共用）：排队的用户消息标已取消、标“正在停”、通知驱动层打断。
+   * 没有要停的（空闲、没有排队、没有残留的处理中消息）什么也不做，返回 false。
+   */
+  const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }): boolean => {
     const working = liveOf(session.id).activity !== "idle";
     // 重启后内存里是空闲、库里还有处理中的消息：进程不在，只记下停止请求，不标“正在停”（不会有事件把它清掉）
     const leftover =
@@ -370,15 +371,23 @@ export function createLedgerMessages(
     // 这里就标已取消，之后执行器再调 session.send 看到已取消就不发；驱动层队列里的那份由 driver.interrupt 丢掉。
     // 系统消息（Worker 汇报、定时任务、交接）不取消，停止后照常发。
     const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
-    if (!working && !leftover && queued.length === 0) return;
+    if (!working && !leftover && queued.length === 0) return false;
+    for (const { id } of queued) transition(p, id, "cancelled");
+    if (working) {
+      updateLive(p, session.id, (l) => {
+        l.activity = "stopping";
+      });
+    }
+    p.stops.push({ conversationId: session.conversationId, sessionId: session.id });
+    return true;
+  };
+
+  const requestStop = (conversationId: ConversationId) => {
+    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
+    const session = currentSession(conversationId);
+    if (session === null) return;
     write((p) => {
-      for (const { id } of queued) transition(p, id, "cancelled");
-      if (working) {
-        updateLive(p, session.id, (l) => {
-          l.activity = "stopping";
-        });
-      }
-      p.stops.push({ conversationId, sessionId: session.id });
+      stopIn(p, { ...session, conversationId });
     });
   };
 
@@ -440,6 +449,7 @@ export function createLedgerMessages(
     postUserMessage,
     composerTarget,
     requestStop,
+    stopIn,
     messagesBefore,
     actionFailedIn,
     stopMessage,
