@@ -781,7 +781,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rows()).toEqual(["修 XIdle"]);
     expect(endedToggle()).toHaveTextContent("已收工 2");
     await userEvent.setup().click(endedToggle()!);
-    expect(rows()).toEqual(["修 XIdle", "写文档Ended", "查日志Ended"]);
+    expect(rows()).toEqual(["修 XIdle", "查日志Ended", "写文档Ended"]);
   });
 
   describe("模型、思考程度、token", () => {
