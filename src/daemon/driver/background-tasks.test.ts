@@ -1,7 +1,7 @@
 // 会话里有后台任务时不算闲着（background-tasks.ts + claude-driver.ts 的 #armIdle、#onBackgroundTasksChanged）：
 // 用假 claude 发 system/background_tasks_changed。事件的真实形状见 docs/m0-report.md“后台任务事件”。
 import { afterEach, describe, expect, it } from "vitest";
-import { BACKGROUND_TASKS_HOLD_MAX_MS, IDLE_CLOSE_MS } from "../../shared/index.ts";
+import { BACKGROUND_TASKS_HOLD_MAX_MS, IDLE_CLOSE_MS, RELAUNCH_NOTE, backgroundTasksKilledNote } from "../../shared/index.ts";
 import type { FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
@@ -284,5 +284,106 @@ describe("进程退出时状态清掉", () => {
     expect(Date.now() - began).toBeLessThan(5000);
     expect(t.of("session.exited").at(-1)).toMatchObject({ reason: "shutdown" });
     expect(t.of("driver.error")).toEqual([]);
+  });
+});
+
+describe("关进程会结束后台任务：下一条消息前告诉 agent（只一次）", () => {
+  it("说明的文字：列出任务描述，超过 5 个只列前 5 个，描述太长截断", () => {
+    expect(backgroundTasksKilledNote("relaunch", ["等 CI"])).toBe("【系统】为了让新设置生效重启了，正在跑的 1 个后台任务（等 CI）被结束了，需要的话重新启动。");
+    const many = backgroundTasksKilledNote("hold_max", ["a", "b", "c", "d", "e", "f", "g"]);
+    expect(many).toContain("7 个后台任务（a；b；c；d；e；等共 7 个）");
+    expect(many).toContain("后台任务太久没结束");
+    expect(backgroundTasksKilledNote("relaunch", ["x".repeat(200)])).toContain(`${"x".repeat(80)}…`);
+    expect(backgroundTasksKilledNote("relaunch", [""])).toContain("（没有描述）");
+  });
+
+  it("有后台任务时设置变了重启：下一条消息前有说明，之后的不再有；没有后台任务的重启没有这句", async () => {
+    const t = harness([{ steps: [{ backgroundTasks: [{ task_id: "ci", description: "等 CI 跑完" }] }, { text: "一" }] }, { steps: [{ text: "二" }] }, { steps: [{ text: "三" }] }], {
+      idleCloseMs: 60_000,
+      backgroundHoldMaxMs: 60_000,
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    t.launch.fingerprint = "v2";
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    await t.driver.send(s.id, user(3, "三"));
+    await t.waitFor("turn.ended", undefined, 3);
+    const killed = backgroundTasksKilledNote("relaunch", ["等 CI 跑完"]);
+    expect(t.stdinTexts()).toEqual(["一", `${RELAUNCH_NOTE}\n\n${killed}\n\n二`, "三"]);
+    // 新进程不带旧名单：它空闲时按 idleCloseMs 算，不是兜底
+    expect(t.of("session.exited").map((e) => e.reason)).toEqual(["idle"]);
+  });
+
+  it("兜底到点关闭后再发消息：同样带说明，只一次", async () => {
+    const t = harness([{ steps: [{ backgroundTasks: [{ task_id: "x", description: "卡死的任务" }] }, { text: "一" }] }, { steps: [{ text: "二" }] }, { steps: [{ text: "三" }] }], {
+      idleCloseMs: 100,
+      backgroundHoldMaxMs: 300,
+      log: (() => {}) as never,
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("session.exited");
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    await t.waitFor("session.exited", undefined, 2);
+    await t.driver.send(s.id, user(3, "三"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinTexts()).toEqual(["一", `${backgroundTasksKilledNote("hold_max", ["卡死的任务"])}\n\n二`, "三"]);
+  });
+
+  it("没有后台任务的空闲关闭：下一条消息前没有这句", async () => {
+    const t = harness([{ steps: [{ text: "一" }] }, { steps: [{ text: "二" }] }]);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("session.exited");
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinTexts()).toEqual(["一", "二"]);
+  });
+});
+
+describe("边角", () => {
+  it("claude 自己开的一轮一直跑过了兜底时长：不在它跑的时候关；它结束后兜底重新算，到点才关并带说明", async () => {
+    const t = harness(
+      [
+        { steps: [{ backgroundTasks: [{ task_id: "a", description: "还在等" }] }, { text: "一" }], selfTurn: { steps: [{ sleepMs: 700 }, { text: "自己开的" }], afterMs: 100 } },
+        { steps: [{ text: "二" }] },
+      ],
+      { idleCloseMs: 100, backgroundHoldMaxMs: 300, log: (() => {}) as never },
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended", () => true, 2);
+    const selfEnded = t.of("turn.ended")[1]!;
+    expect(t.of("session.exited")).toEqual([]); // 自己开的一轮跑了 700 ms，比兜底 300 ms 长，没被关
+    const exited = await t.waitFor("session.exited");
+    expect(exited.reason).toBe("idle");
+    expect(exited.at - selfEnded.at).toBeGreaterThanOrEqual(300 - 60);
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinTexts()).toEqual(["一", `${backgroundTasksKilledNote("hold_max", ["还在等"])}\n\n二`]);
+  });
+
+  it("正在关闭（proc.closing）时收到 background_tasks_changed：记下来不报错、不重新计时；退出后新进程不带它", async () => {
+    // 空闲关闭后 claude 不理标准输入关闭，拖到 SIGINT 才退；这期间来了一条名单
+    h = makeHarness({
+      script: { ignoreStdinEnd: true, turns: [turnWith([{ afterMs: 300, tasks: ["late"] }]), { steps: [{ text: "二" }] }] },
+      driver: { idleCloseMs: 100, backgroundHoldMaxMs: 60_000, interruptGraceMs: 400 },
+    });
+    const t = h;
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    await t.waitFor("session.exited");
+    expect(t.of("driver.error")).toEqual([]);
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "idle" });
+    await t.driver.send(s.id, user(2, "二"));
+    const ended = await t.waitFor("turn.ended", undefined, 2);
+    // 新进程的名单是空的：空闲按 idleCloseMs 关，不是 60 秒兜底；也没有“后台任务被结束”的说明（关的时候名单是空的）
+    const exited = await t.waitFor("session.exited", undefined, 2);
+    expect(exited.at - ended.at).toBeLessThan(2000);
+    expect(t.stdinTexts()).toEqual(["一", "二"]);
   });
 });

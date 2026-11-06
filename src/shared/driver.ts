@@ -59,6 +59,23 @@ export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发�
  * 新设置已经生效（见 domain.ts 的 SystemMessageMeta）。
  */
 export const RELAUNCH_NOTE = "【系统】你的设置（性格设定、模式、文件夹或管着的项目）刚更新过，已经按新设置重新启动，最新的设置见系统提示词。";
+/** 后台任务被结束时说明里最多列几个任务、每个任务的 description 最多几个字符。 */
+const KILLED_NOTE_MAX_TASKS = 5;
+const KILLED_NOTE_MAX_DESC_CHARS = 80;
+/**
+ * 进程被我们关掉时会话里还有后台任务（它们跟着进程一起被结束）：下一条写进去的消息前面加这一句，让 agent 知道，需要的话重新启动。
+ * relaunch：两轮之间因为设置变了重启；hold_max：后台任务超过 BACKGROUND_TASKS_HOLD_MAX_MS 没结束，空闲关闭照常关。
+ * 停止、end、关机也会结束后台任务，但那之后不再有 agent 在等它们的结果，不加这句。
+ */
+export function backgroundTasksKilledNote(reason: "relaunch" | "hold_max", descriptions: string[]): string {
+  const shown = descriptions
+    .slice(0, KILLED_NOTE_MAX_TASKS)
+    .map((d) => (d.length > KILLED_NOTE_MAX_DESC_CHARS ? `${d.slice(0, KILLED_NOTE_MAX_DESC_CHARS)}…` : d) || "（没有描述）");
+  const more = descriptions.length - shown.length;
+  const list = `${shown.join("；")}${more > 0 ? `；等共 ${descriptions.length} 个` : ""}`;
+  const why = reason === "relaunch" ? "为了让新设置生效重启了" : "后台任务太久没结束，进程被关闭了";
+  return `【系统】${why}，正在跑的 ${descriptions.length} 个后台任务（${list}）被结束了，需要的话重新启动。`;
+}
 /** 进程上一轮没等到 result 就退出了（崩溃）：加在下一条写进去的消息前面。 */
 export const CRASH_RECOVERY_NOTE = "【系统】你的进程上一轮意外退出了，那一轮可能没做完。请先看一下工作区现在的状态，再接着做。";
 

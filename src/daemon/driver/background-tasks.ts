@@ -3,15 +3,16 @@
 
 /** 记一个会话现在有哪些后台任务。事件里的 tasks 是完整的当前名单，每次整个换掉，不靠增减去算。 */
 export class BackgroundTasks {
-  #ids = new Set<string>();
+  /** task_id → description。 */
+  #tasks = new Map<string, string>();
 
   /** 有几个任务在跑。 */
   get count(): number {
-    return this.#ids.size;
+    return this.#tasks.size;
   }
 
   get active(): boolean {
-    return this.#ids.size > 0;
+    return this.#tasks.size > 0;
   }
 
   /**
@@ -20,19 +21,24 @@ export class BackgroundTasks {
    */
   replace(tasks: unknown): boolean {
     if (!Array.isArray(tasks)) return false;
-    const ids = new Set<string>();
+    const next = new Map<string, string>();
     for (const t of tasks) {
       if (typeof t !== "object" || t === null) continue;
-      const { task_id: id, ambient } = t as { task_id?: unknown; ambient?: unknown };
-      if (typeof id === "string" && id !== "" && ambient !== true) ids.add(id);
+      const { task_id: id, ambient, description } = t as { task_id?: unknown; ambient?: unknown; description?: unknown };
+      if (typeof id === "string" && id !== "" && ambient !== true) next.set(id, typeof description === "string" ? description : "");
     }
-    this.#ids = ids;
+    this.#tasks = next;
     return true;
+  }
+
+  /** 现在每个任务的 description（进程被关掉前取，给“后台任务被结束了”的说明用）。 */
+  descriptions(): string[] {
+    return [...this.#tasks.values()];
   }
 
   /** 进程起来、退出时都清掉：后台任务跟着进程走，新进程不会带着旧的。 */
   clear(): void {
-    this.#ids.clear();
+    this.#tasks.clear();
   }
 }
 
