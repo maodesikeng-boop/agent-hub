@@ -1102,3 +1102,36 @@ describe("0007_token_usage：从 M3 的库升级（老会话没有用量，读�
     expect(createSessionStore(db).get(1)!.usage).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 });
   });
 });
+
+describe("升级前的备份只留最近 MAX_DB_BACKUPS 份", () => {
+  /** 一版一版升级，每版一个时间；返回每次升级后目录里剩下的备份文件名。 */
+  function upgradeStepwise(versions: number[]): string[][] {
+    const db = open();
+    migrate(db, m1MigrationsDir());
+    const left: string[][] = [];
+    versions.forEach((v, i) => {
+      migrate(db, migrationsUpTo(v), { now: () => Date.UTC(2026, 10, 3, 9, i, 0) });
+      left.push(readdirSync(dir!).filter((f) => f.includes(".bak-")).sort());
+    });
+    return left;
+  }
+
+  it("只有 1 份时不删；到 2 份还不删；第 3 份写好以后删掉最旧的", () => {
+    const left = upgradeStepwise([2, 3, 4]);
+    expect(left[0]).toEqual(["hub.sqlite.bak-1-20261103T090000Z"]);
+    expect(left[1]).toEqual(["hub.sqlite.bak-1-20261103T090000Z", "hub.sqlite.bak-2-20261103T090100Z"]);
+    expect(left[2]).toEqual(["hub.sqlite.bak-2-20261103T090100Z", "hub.sqlite.bak-3-20261103T090200Z"]);
+  });
+
+  it("再升级一版还是只留最近 2 份，不认识的文件不动", () => {
+    const db = open();
+    migrate(db, m1MigrationsDir());
+    writeFileSync(join(dir!, "hub.sqlite.bak-notes"), "x");
+    for (const [i, v] of [2, 3, 4, 5].entries()) migrate(db, migrationsUpTo(v), { now: () => Date.UTC(2026, 10, 3, 9, i, 0) });
+    expect(readdirSync(dir!).filter((f) => f.includes(".bak-")).sort()).toEqual([
+      "hub.sqlite.bak-3-20261103T090200Z",
+      "hub.sqlite.bak-4-20261103T090300Z",
+      "hub.sqlite.bak-notes",
+    ]);
+  });
+});

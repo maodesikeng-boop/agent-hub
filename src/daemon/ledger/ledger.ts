@@ -225,6 +225,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
+    workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
 
     runDueSchedules: schedules.runDueSchedules,
     addSchedule: schedules.addForUser,

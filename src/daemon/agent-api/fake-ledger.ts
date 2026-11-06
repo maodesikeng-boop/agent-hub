@@ -7,7 +7,7 @@ export interface FakeHubCall {
   args: unknown;
 }
 
-export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget"> {
+export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "workerTranscriptTarget"> {
   readonly calls: FakeHubCall[] = [];
   /** 每次 hubCall 收到的 context（和 calls 一一对应）。 */
   readonly contexts: HubCallContext[] = [];
@@ -15,6 +15,8 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | 
   startFolder: string | null = null;
   /** workerPrTarget 返回什么；默认 null（不查 PR）。 */
   prTarget: { cwd: string; branch: string } | null = null;
+  /** workerTranscriptTarget 返回什么；默认 null（找不到原始记录）。 */
+  transcriptTarget: { vendor: string; vendorSessionId: string; cwd: string } | null = null;
   readonly healthReports: [HealthModule, string | null][] = [];
   /** 下一次（以及之后每次）调用抛它；null 表示正常返回。 */
   failWith: Error | null = null;
@@ -31,6 +33,10 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "reportHealth" | 
 
   workerStartFolder(_sessionId: SessionId): string | null {
     return this.startFolder;
+  }
+
+  workerTranscriptTarget(_sessionId: SessionId, _workerId: number): { vendor: string; vendorSessionId: string; cwd: string } | null {
+    return this.transcriptTarget;
   }
 
   workerPrTarget(_sessionId: SessionId, _workerId: number): { cwd: string; branch: string } | null {

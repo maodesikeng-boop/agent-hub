@@ -19,7 +19,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 export async function runSetup(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
   if (!only("S17")) return;
-  const smoke = await Smoke.boot();
+  const smoke = await Smoke.boot({ persist: true });
   const ok = await scenario(outcomes, "S17 准备命令：配好 pnpm install，派 Worker，Worker 不用自己装就能跑测试", async () => {
     const dir = join(smoke.env.dir, "code", "s15");
     git(REPO_ROOT, "clone", "-q", REPO_ROOT, dir);

@@ -416,7 +416,7 @@
 │   ├── uploads/               # 用户拖进聊天的文件
 │   └── logs/
 │       ├── daemon.log
-│       └── sessions/<会话>.jsonl   # claude 输出的原始事件流
+│       └── setup/<Worker>.log      # worktree 准备命令的输出
 ├── run/                       # 只有守护进程在跑时才有内容，权限 0700
 │   └── hub.sock               # agent 接口的 Unix socket，权限 0600（第 8.1 节）
 ├── pm-home/<项目经理>/          # 项目经理私聊会话的工作目录（空文件夹）
@@ -463,7 +463,6 @@
 | `personas/*.md` | 账本（处理用户编辑或 `hub persona` 命令时写） |
 | `handoffs/` | 账本（处理 `hub handoff write` 时写） |
 | `launch/` | 驱动层（每次启动前生成） |
-| `logs/sessions/` | 驱动层 |
 | `worktrees/<项目>/<工单>/` | 建和删：worktree 管理；里面的文件：这张工单的 Worker |
 
 **参考**：
@@ -544,7 +543,7 @@ claude -p --output-format json --json-schema <分拣结果的格式>
 - **投递状态**：写进标准输入成功 → “已送达”；收到 `--replay-user-messages` 的回显 → “处理中”（M0 实测回显在这一轮开始处理它时才出来，不是收到时）；这一轮 `result` 到了 → “已回复”；被打断 → “已停止”；起不来且重试次数用完、写入前校验没过、这一轮出错或进程崩溃 → “失败”，记下原因，界面显示出来。状态只往前走，只有“失败”能在重发时回到“已送达”。
 - **进程意外退出**（崩溃、被打断后退出）：这一轮按崩溃处理，下次有消息时按第 7.4 节用 `--resume` 重启。
 
-**读输出**：一行一个事件，驱动层逐行读，原样追加到 `logs/sessions/<会话>.jsonl`，再翻译成统一事件交给账本：
+**读输出**：一行一个事件，驱动层逐行读，翻译成统一事件交给账本（不再存一份原始事件流：原文厂商自己存了，账本 `agent_sessions` 的 `vendor`、`vendor_session_id`、`cwd` 就是索引，`hub worker show` 的“原始记录”那一行按它们算出厂商那边的文件在哪，见 `src/daemon/driver/transcript.ts`）：
 
 | Claude 的事件 | 我们怎么处理 |
 |---|---|

@@ -11,7 +11,7 @@ import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type DriverEvent } from "../..
 import { createClaudeDriver } from "../../src/daemon/driver/index.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { waitUntil } from "../e2e/harness.ts";
-import { CLAUDE, MODEL, TURN_MS, expect, processTable, scenario, type Outcome } from "./kit.ts";
+import { CLAUDE, MODEL, TURN_MS, expect, processTable, removeOwnClaudeProjects, scenario, writeClaudeWrapper, type Outcome } from "./kit.ts";
 
 /** 空闲关闭时间（冒烟临时调短）；后台 sleep 要明显比它长。 */
 const IDLE_MS = 6_000;
@@ -29,7 +29,7 @@ interface Run {
 
 /** 起一个会话发 PROMPT，一直看到 session.exited 或超时；记下期间出现过的 claude、sleep 进程号。 */
 async function run(holdMaxMs: number | undefined): Promise<Run> {
-  const dir = mkdtempSync(join(tmpdir(), "agent-hub-smoke-bg-"));
+  const dir = mkdtempSync(join(tmpdir(), "ah-bg-"));
   const cwd = join(dir, "cwd");
   mkdirSync(cwd, { recursive: true });
   const promptFile = join(dir, "prompt.md");
@@ -59,8 +59,9 @@ async function run(holdMaxMs: number | undefined): Promise<Run> {
   };
   store.add(row);
   const driver = createClaudeDriver({
-    claudePath: CLAUDE,
-    sessionLogsDir: join(dir, "logs"),
+    // 单个 claude 进程跑完，不 --resume：不存会话记录
+    claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
+    stateDir: dir,
     store,
     prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }),
     idleCloseMs: IDLE_MS,
@@ -101,6 +102,7 @@ async function run(holdMaxMs: number | undefined): Promise<Run> {
         // 已经没了
       }
     }
+    removeOwnClaudeProjects(dir);
     rmSync(dir, { recursive: true, force: true });
   }
 }

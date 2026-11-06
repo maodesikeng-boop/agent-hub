@@ -672,6 +672,18 @@ export function createLedgerWorkers(
     return { cwd: worker.worktree_path, branch: worker.branch };
   };
 
+  /**
+   * agent 接口在 worker.show 之前找“原始记录”用：这个 Worker 当前会话在厂商那边的三样索引（agent_sessions 的 vendor、vendor_session_id、cwd）。
+   * 不是项目经理的会话、不是它派的 → null。
+   */
+  const workerTranscriptTarget = (session: AgentSessionRow | null, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null => {
+    if (session === null || session.role !== "pm" || session.pmId === null) return null;
+    const worker = workerRow(workerId);
+    if (worker === null || worker.pm_id !== session.pmId) return null;
+    const target = workerSession(workerId);
+    return { vendor: target.vendor, vendorSessionId: target.vendorSessionId, cwd: target.cwd };
+  };
+
   /** agent 接口在 worker.start 之前探 git 用：这个会话所属项目经理的项目主文件夹；不是项目经理的会话、还没有项目 → null。 */
   const workerStartFolder = (session: AgentSessionRow | null): string | null => {
     if (session === null || session.role !== "pm" || session.pmId === null) return null;
@@ -712,6 +724,7 @@ export function createLedgerWorkers(
     actionFailedIn,
     workerStartFolder,
     workerPrTarget,
+    workerTranscriptTarget,
     ownWorker,
     workerSession,
     launchContextFor,

@@ -33,11 +33,13 @@ import { assertSocketPathFits } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { WorkerPr } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
+import { vendorTranscriptPath } from "../driver/transcript.ts";
+import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget">;
+  ledger: Pick<Ledger, "hubCall" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "workerTranscriptTarget">;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
    * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
@@ -48,6 +50,11 @@ export interface AgentApiOptions {
    * 查不到（没装 gh、没登录、没网、超时、没有 PR）返回 null，show 就不写 PR 这一行。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
    */
   probePr?: (cwd: string, branch: string) => Promise<WorkerPr | null>;
+  /**
+   * hub worker show 之前找这个 Worker 会话在厂商那边的原始记录文件，结果作为 HubCallContext.transcript。
+   * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。
+   */
+  findTranscript?: (ref: TranscriptRef) => string | null;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -218,13 +225,16 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
   const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
+  const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
   /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR。 */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
       const pr = target === null ? null : await probePr(target.cwd, target.branch);
-      return pr === null ? {} : { pr };
+      const ref = ledger.workerTranscriptTarget(sessionId, body.workerId as number);
+      const transcript = ref === null ? null : findTranscript(ref);
+      return { ...(pr === null ? {} : { pr }), transcript };
     }
     if (command !== "worker.start" || body.noWorktree === true) return {};
     const folder = ledger.workerStartFolder(sessionId);

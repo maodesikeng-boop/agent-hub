@@ -1,11 +1,17 @@
 // 冒烟测试的共用零件：起守护进程（临时数据目录、真 claude）、发消息等回复、读库、读驱动层记下的 claude 原始输入输出、查进程。
 // 各组场景（m1.ts、m2.ts、force-kill.ts）只写“做什么、期望什么”，起停和查东西都用这里的。
 // - 数据放临时目录，跑完删掉（有场景失败时留着，方便看日志）；不碰 ~/.agent-hub。
+// - 不往用户的 ~/.claude/projects/ 里留东西：起 claude 走一个转发脚本（writeClaudeWrapper），需要 --resume 的场景保留会话记录，
+//   其余场景加 --no-session-persistence；收尾（finish）时删掉这次数据目录对应的 ~/.claude/projects/<目录名>/，只删自己这次产生的。
+//   原来驱动层写的 state/logs/sessions/ 没有了：转发脚本把 claude 的 stdout 另存一份在 <数据目录>/streams/，场景从那里读。
 // - 默认用小模型（AGENT_HUB_DEFAULT_MODEL，默认 claude-haiku-5-5），提示词都很短。
 // - claude 的路径：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。用户全局 ~/.claude 的设置照常生效。
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { claudeProjectDirName, codexTranscriptPath } from "../../src/daemon/driver/transcript.ts";
 import { ENV_DEFAULT_MODEL, type Message, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { Client, agentTexts, makeEnv, messagesOf, sleep, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "../e2e/harness.ts";
@@ -17,6 +23,101 @@ export const TURN_MS = 180_000;
 
 export { sleep, waitUntil };
 
+/** 转发脚本记下的 claude 输出放在 <数据目录>/streams/，文件名是会话 ID 的哈希（不让会话 ID 出现在 tee 的命令行里，查进程时认不错）。 */
+export const STREAMS_DIR = "streams";
+export const streamFileName = (vendorSessionId: string): string => `${createHash("sha1").update(vendorSessionId).digest("hex").slice(0, 16)}.jsonl`;
+
+/**
+ * 冒烟用的 claude 转发脚本（exec，进程号不变）：
+ * - 带 --session-id / --resume 的（驱动层起的会话进程）：stdout 另存一份到 <dir>/streams/（场景要看原始事件：init、result、权限拒绝……）；
+ * - persist 为 false：加 --no-session-persistence，claude 不在 ~/.claude/projects/ 存会话记录（只有 -p 能用；不能 --resume）。
+ * 返回脚本路径。
+ */
+export function writeClaudeWrapper(dir: string, options: { claude: string; persist: boolean }): string {
+  const streams = join(dir, STREAMS_DIR);
+  mkdirSync(streams, { recursive: true });
+  const script = join(dir, "claude-smoke.sh");
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  writeFileSync(
+    script,
+    `#!/bin/bash
+real=${quote(options.claude)}
+streams=${quote(streams)}
+id=
+prev=
+for a in "$@"; do
+  case "$prev" in --session-id|--resume) id="$a";; esac
+  prev="$a"
+done
+flag=(${options.persist ? "" : "--no-session-persistence"})
+if [ -z "$id" ]; then exec "$real" "\${flag[@]}" "$@"; fi
+key=$(printf %s "$id" | shasum | cut -c1-16)
+exec "$real" "\${flag[@]}" "$@" > >(tee -a "$streams/$key.jsonl")
+`,
+  );
+  chmodSync(script, 0o755);
+  return script;
+}
+
+/**
+ * 删掉 codex、agy 为这次数据目录里的会话留在用户目录里的原始记录（它们起会话时没法不存）：只删账本里这次的会话 ID 对应的——
+ * codex：<CODEX_HOME>/sessions/…/rollout-*-<thread id>.jsonl；agy：~/.gemini/antigravity-cli/ 下的 conversations/<id>.db（和 -wal、-shm）、
+ * brain/<id>/、annotations/<id>.pbtxt。位置见 src/daemon/driver/transcript.ts。codex、agy 自己的索引（state_5.sqlite、history）里的行删不掉，也不动。
+ * 返回删掉的路径。
+ */
+export function removeOwnVendorRecords(dbFile: string, home = homedir()): string[] {
+  const db = openDatabase(dbFile);
+  let rows: { vendor: string; vendor_session_id: string; cwd: string }[];
+  try {
+    rows = db.all("SELECT vendor, vendor_session_id, cwd FROM agent_sessions");
+  } finally {
+    db.close();
+  }
+  const removed: string[] = [];
+  const drop = (path: string) => {
+    if (!existsSync(path)) return;
+    rmSync(path, { recursive: true, force: true });
+    removed.push(path);
+  };
+  const agy = join(home, ".gemini", "antigravity-cli");
+  for (const row of rows) {
+    const id = row.vendor_session_id;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) continue;
+    if (row.vendor === "codex") {
+      const file = codexTranscriptPath({ vendor: "codex", vendorSessionId: id, cwd: row.cwd }, { home });
+      if (file !== null) drop(file);
+    } else if (row.vendor === "agy") {
+      for (const suffix of ["", "-wal", "-shm"]) drop(join(agy, "conversations", `${id}.db${suffix}`));
+      drop(join(agy, "brain", id));
+      drop(join(agy, "annotations", `${id}.pbtxt`));
+    }
+  }
+  return removed;
+}
+
+/**
+ * 删掉 claude 为这个临时目录（和它下面的目录）在 ~/.claude/projects/ 里建的 <目录名>/：会话记录、自动记忆。
+ * 只认这个临时目录本身的名字（带 -ah-e2e-/ah-mv-/ah-smoke- 这种随机后缀的 mkdtemp 目录），别的项目的目录一个都不碰。
+ */
+export function removeOwnClaudeProjects(dir: string, env: Readonly<Record<string, string | undefined>> = process.env): string[] {
+  if (!/^ah-[a-z0-9]+-/.test(basename(dir))) return [];
+  const projects = join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
+  const names = new Set([claudeProjectDirName(dir)]);
+  try {
+    names.add(claudeProjectDirName(realpathSync.native(dir)));
+  } catch {
+    // 目录已经没了
+  }
+  if (!existsSync(projects)) return [];
+  const removed: string[] = [];
+  for (const entry of readdirSync(projects)) {
+    if (![...names].some((n) => entry === n || entry.startsWith(`${n}-`))) continue;
+    rmSync(join(projects, entry), { recursive: true, force: true });
+    removed.push(entry);
+  }
+  return removed;
+}
+
 /** 一个起好的守护进程和它的临时数据目录。一个场景（或 S1～S4 那一串）用一个。 */
 export class Smoke {
   readonly env: E2eEnv;
@@ -25,14 +126,21 @@ export class Smoke {
   /** 一直用来推进的“界面”：第一次启动自动建的项目经理和它的私聊。 */
   privateId = 0;
   pmId = 0;
+  /** 起 claude 用的转发脚本（见 writeClaudeWrapper）。 */
+  private readonly claudePath: string;
 
-  private constructor(env: E2eEnv) {
+  private constructor(env: E2eEnv, persist: boolean) {
     this.env = env;
+    this.claudePath = writeClaudeWrapper(env.dir, { claude: CLAUDE, persist });
   }
 
-  /** 起守护进程、登录、拿到默认项目经理和它的私聊。 */
-  static async boot(): Promise<Smoke> {
-    const smoke = new Smoke(makeEnv());
+  /**
+   * 起守护进程、登录、拿到默认项目经理和它的私聊。
+   * persist：场景里会 --resume（重启守护进程、换设置重启 claude 进程……）的要写 true，claude 才存会话记录（收尾时删）；
+   * 默认 false（加 --no-session-persistence）。拿不准就写 true：多存一份、收尾删掉，比 --resume 失败好。
+   */
+  static async boot(options: { persist?: boolean } = {}): Promise<Smoke> {
+    const smoke = new Smoke(makeEnv(), options.persist ?? false);
     await smoke.start();
     const state = await smoke.client.state();
     smoke.privateId = state.conversations[0]!.conversation.id;
@@ -42,7 +150,7 @@ export class Smoke {
 
   /** （重新）起守护进程，沿用同一个数据目录和 cookie。 */
   async start(): Promise<void> {
-    this.daemon = await this.env.start({ claudePath: CLAUDE, env: { [ENV_DEFAULT_MODEL]: MODEL } });
+    this.daemon = await this.env.start({ claudePath: this.claudePath, env: { [ENV_DEFAULT_MODEL]: MODEL } });
     this.client = this.client ? this.client.withPort(this.daemon.port) : await Client.login(this.daemon);
   }
 
@@ -65,6 +173,7 @@ export class Smoke {
     }
     const left = vendorIds.flatMap((id) => this.processesOf(id));
     if (left.length > 0) problems.push(`关机后还有 ${left.length} 个 claude 进程没退出：${left.join(" | ")}`);
+    removeOwnClaudeProjects(this.env.dir);
     if (keep) console.log(`  数据目录留着：${this.env.dir}`);
     else await this.env.cleanup();
     return problems;
@@ -150,11 +259,11 @@ export class Smoke {
     }
   }
 
-  // ---- 驱动层记下的 claude 原始输入输出（state/logs/sessions/<会话>.jsonl）----
+  // ---- claude 的原始输出（转发脚本另存的 <数据目录>/streams/，一个 Claude 会话 ID 一个文件）----
 
-  /** 一个会话的日志，每行一个 JSON；坏行跳过。 */
+  /** 一个会话的 claude 输出，每行一个 JSON；坏行跳过。 */
   sessionLog(sessionId: number): Array<Record<string, any>> {
-    const file = join(this.env.home, "state", "logs", "sessions", `${sessionId}.jsonl`);
+    const file = join(this.env.dir, STREAMS_DIR, streamFileName(this.sessionRow(sessionId).vendorSessionId));
     if (!existsSync(file)) return [];
     return readFileSync(file, "utf8")
       .split("\n")

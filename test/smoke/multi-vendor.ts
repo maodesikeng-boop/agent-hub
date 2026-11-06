@@ -12,7 +12,7 @@ import { startDaemon } from "../../src/daemon/daemon.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { API_PATHS, ENV_HOME, ENV_PORT, HUB_COMMAND, WORKER_ENV } from "../../src/shared/index.ts";
 import { Client, agentTexts, isAlive, messagesOf, waitForStatus } from "../e2e/harness.ts";
-import { expect, psLines, scenario, type Outcome } from "./kit.ts";
+import { expect, psLines, removeOwnClaudeProjects, removeOwnVendorRecords, scenario, type Outcome } from "./kit.ts";
 
 const TURN_TIMEOUT_MS = 180_000;
 
@@ -169,6 +169,15 @@ try {
     return `已停止守护进程，检查了 ${trackedPids.size} 个 pid 与 ${trackedVendorIds.size} 个会话 ID 均无残留`;
   });
   if (!stopOk) keepDir = true;
+
+  // codex、agy 起会话时没法不存记录：关机后（进程都没了）删掉这次会话在用户目录里留的那几份，只删账本里这次的会话 ID 对应的
+  try {
+    const removed = removeOwnVendorRecords(join(home, "state", "hub.sqlite"));
+    removed.push(...removeOwnClaudeProjects(dir));
+    console.log(`清掉了这次留在用户目录里的 ${removed.length} 项原始记录`);
+  } catch (error) {
+    console.log(`清理原始记录失败（请手动查 ~/.codex/sessions、~/.gemini/antigravity-cli/conversations）：${String(error)}`);
+  }
 
   if (keepDir) {
     console.log(`有失败场景，保留临时目录供排查：${dir}`);

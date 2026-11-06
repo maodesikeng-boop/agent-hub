@@ -5,7 +5,7 @@ import { MODEL, Smoke, expect, scenario, type Outcome } from "./kit.ts";
 
 export async function runAgentSettings(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
   if (!only("S18")) return;
-  const smoke = await Smoke.boot();
+  const smoke = await Smoke.boot({ persist: true }); // 改设置后 --resume
   const ok = await scenario(outcomes, "S18 资料页把项目经理改成 haiku + low：下一条消息按新参数 --resume 重启，聊过的还在", async () => {
     const secret = `PEAR-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const { pmId, conversationId } = await smoke.client.createPm({

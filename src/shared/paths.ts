@@ -22,7 +22,6 @@ export interface HubPaths {
   uiTokenFile: string;
   launchDir: string;
   logsDir: string;
-  sessionLogsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
   setupLogsDir: string;
   pmHomeDir: string;
@@ -83,7 +82,6 @@ export function resolveHubPaths(
     uiTokenFile: join(stateDir, "ui-token"),
     launchDir: join(stateDir, "launch"),
     logsDir,
-    sessionLogsDir: join(logsDir, "sessions"),
     setupLogsDir: join(logsDir, "setup"),
     pmHomeDir: join(home, "pm-home"),
     personasDir: join(stateDir, "personas"),

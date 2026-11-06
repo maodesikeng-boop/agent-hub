@@ -200,6 +200,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
         : `在项目主文件夹里干活（没有单独的分支和 worktree）`,
     );
     if (context.pr !== undefined) lines.push(prLine(context.pr));
+    lines.push(`原始记录：${context.transcript ?? "找不到"}`);
 
     return { text: lines.join("\n"), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
   };

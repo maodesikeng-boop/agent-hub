@@ -2,7 +2,7 @@
 // m3-plan 第 3 节的 S11～S13、PR #35 审查后加的 S14（Worker）、S17（worktree 准备命令）、S18（资料页改模型和思考程度）、S19（用户直接对 Worker 说）、S20（hub ask 向用户提问）、S21（后台命令跑完 claude 自己开的一轮）、m6.ts 的 S23（定时任务）、renew-session.ts 的 S22（开新会话）、composer.ts 的 S24、S25（输入框的 / 命令和 @ 文件）、background-idle.ts 的 S26（后台任务不算闲着，直接用驱动层）。上传文件的 S15、S16 在 uploads.ts。
 // 不进 pnpm check 和 CI；验收时和每次升级 claude 后手动跑。真 claude 用的是订阅额度，每个场景跑通一次就够，失败了先看日志。
 // 只跑一部分：pnpm smoke S5 S6，或 pnpm smoke S10（匹配 S10a、S10b）。S1～S4 是一串（S2 靠 S1 记下的暗号），选其中一个就整串都跑。
-// 场景失败时数据目录留着（路径会打印），日志在 <目录>/home/state/logs/sessions/。
+// 场景失败时数据目录留着（路径会打印），claude 的原始输出在 <目录>/streams/。
 // 文件分工：kit.ts 是共用的零件（起守护进程、发消息等回复、读库读日志、查进程）；m1.ts、m2.ts、force-kill.ts、m3.ts、setup.ts 是各组场景。
 import { Smoke, CLAUDE, MODEL, type Outcome } from "./kit.ts";
 import { runForceKill } from "./force-kill.ts";
@@ -29,7 +29,8 @@ console.log(`${PRODUCT_NAME} smoke：claude=${CLAUDE}，模型 ${MODEL}`);
 let exitCode = 0;
 try {
   if (["S1", "S2", "S3", "S4"].some(only)) {
-    const smoke = await Smoke.boot();
+    // S2 重启守护进程后 --resume，要存会话记录（收尾时删）
+    const smoke = await Smoke.boot({ persist: true });
     await runM1(outcomes, smoke);
     const problems = await smoke.finish(outcomes.some((o) => !o.ok));
     if (problems.length > 0) {

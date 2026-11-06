@@ -257,7 +257,6 @@ describe("数据目录", () => {
     expect(paths.dbFile).toBe("/tmp/x/state/hub.sqlite");
     expect(paths.lockFile).toBe("/tmp/x/state/lock");
     expect(paths.uiTokenFile).toBe("/tmp/x/state/ui-token");
-    expect(paths.sessionLogsDir).toBe("/tmp/x/state/logs/sessions");
     expect(paths.launchDir).toBe("/tmp/x/state/launch");
     expect(paths.pmHomeDir).toBe("/tmp/x/pm-home");
   });

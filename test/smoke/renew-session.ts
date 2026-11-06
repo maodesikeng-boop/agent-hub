@@ -5,7 +5,7 @@ import { MODEL, Smoke, TURN_MS, expect, scenario, waitUntil, type Outcome } from
 
 export async function runRenewSession(outcomes: Outcome[], only: (name: string) => boolean): Promise<void> {
   if (!only("S22")) return;
-  const smoke = await Smoke.boot();
+  const smoke = await Smoke.boot({ persist: true });
   const ok = await scenario(outcomes, "S22 开新会话：写完交接换成新的 claude 会话，新会话从交接里答得出暗号", async () => {
     const secret = `KIWI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const { pmId, conversationId } = await smoke.client.createPm({
