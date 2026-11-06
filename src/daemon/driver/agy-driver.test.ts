@@ -649,6 +649,46 @@ describe("agy-protocol 纯函数", () => {
   });
 });
 
+describe("checkWorkerToolViolation：读类工具读记忆文件不算违规", () => {
+  const stateDir = "/Users/u/.agent-hub/state";
+  const cwd = "/Users/u/.agent-hub/worktrees/1/2";
+  const memoryPaths = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/settings.json", `${cwd}/AGENTS.md`];
+
+  it.each(memoryPaths)("view_file / grep_search / list_dir 读 %s 返回 null", (p) => {
+    for (const [toolName, parameters] of [
+      ["view_file", { AbsolutePath: p }],
+      ["read_file", { Path: p }],
+      ["grep_search", { SearchPath: p }],
+      ["list_dir", { DirectoryPath: p }],
+    ] as const) {
+      expect(checkWorkerToolViolation({ toolName, parameters, readonly: false, stateDir, cwd })).toBeNull();
+    }
+  });
+
+  it.each(memoryPaths)("写类工具（含 notebook_edit）改 %s 仍然违规", (p) => {
+    for (const toolName of ["write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "notebook_edit"]) {
+      expect(checkWorkerToolViolation({ toolName, parameters: { TargetFile: p, Path: p }, readonly: false, stateDir, cwd })).toBe(
+        "Worker 不能修改记忆文件",
+      );
+    }
+  });
+
+  it("只读 Worker 调 notebook_edit 属于写文件", () => {
+    expect(
+      checkWorkerToolViolation({ toolName: "notebook_edit", parameters: { Path: "a.ipynb" }, readonly: true, stateDir, cwd }),
+    ).toBe("只读 Worker 不能修改文件");
+  });
+
+  it("命令参数写记忆文件仍违规，cat 读不违规", () => {
+    expect(
+      checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: "echo x > CLAUDE.md" }, readonly: false, stateDir, cwd }),
+    ).toBe("Worker 不能修改记忆文件");
+    expect(
+      checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: "cat AGENTS.md" }, readonly: false, stateDir, cwd }),
+    ).toBeNull();
+  });
+});
+
 describe("1. 首次启动与完整流式回合", () => {
   it("首次启动不带 --conversation、--print '' 在末尾，收到 init 更新 vendorSessionId，首条附带 promptFile 内容，完整走通 step_update.step_index 与 result 并统计 TurnUsage", async () => {
     const t = makeAgyHarness({

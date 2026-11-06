@@ -48,6 +48,7 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "sed_file",
   "replace_file_content",
   "multi_replace_file_content",
+  "notebook_edit", // agy init.tools 里会改 .ipynb 文件的工具
   "delete_file",
   "write_file",
   "create_file",
@@ -301,7 +302,7 @@ function commandWritesProtectedMemory(command: string, stateDir: string, cwd?: s
 
 /**
  * 检查 Worker 的工具调用是否违规：
- * 1. 参数中的路径字段（Path, TargetFile, AbsolutePath, DirectoryPath, SearchPath, file_path, path）命中受保护记忆路径，
+ * 1. 写类工具（AGY_WRITE_TOOLS）参数中的路径字段（Path, TargetFile, AbsolutePath, DirectoryPath, SearchPath, file_path, path）命中受保护记忆路径，
  *    或 CommandLine / command 试图修改受保护记忆文件 → 返回 "Worker 不能修改记忆文件"；
  * 2. 只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；
  * 3. 合规返回 null。
@@ -310,7 +311,9 @@ export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | 
   const { toolName, parameters, readonly, stateDir, cwd } = input;
   if (typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
     const params = parameters as Record<string, unknown>;
-    for (const key of AGY_PATH_PARAM_KEYS) {
+    // 只有写类工具的路径参数才查记忆文件；读类工具（view_file / grep_search / list_dir 等）读记忆文件是允许的
+    const pathKeys = AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : [];
+    for (const key of pathKeys) {
       const val = params[key];
       if (typeof val === "string" && val.trim() !== "" && isProtectedMemoryPath(val, stateDir, undefined, cwd)) {
         return WORKER_MEMORY_VIOLATION_MESSAGE;
