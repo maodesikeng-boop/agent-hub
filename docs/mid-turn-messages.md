@@ -353,7 +353,7 @@ interface MidTurnSupport {
 
 codex 看到的是一个立刻结束的命令，**之后命令还在跑，但没有任何事件、名单也是空的**，不能判断，也没有完成通知。
 
-- **结论：codex 能判断一部分**：codex 自己的长命令（yield 出去的 unified exec）能判断，靠 `item/started`/`item/completed` 对子 commandExecution item、或 `thread/backgroundTerminals/list` 的 `data` 是否为空；agent 自己用 `nohup &` 放到后台的命令，codex 不知道，**判断不了**。哪一种取决于模型怎么选（我们的系统提示词“长命令放后台”那句，在 codex 上多半会被模型翻译成 `nohup &`——见 PR #90 的提示词——所以名单大概率是空的）。
+- **结论：codex 能判断一部分**：codex 自己的长命令（yield 出去的 unified exec）能判断，靠 `item/started`/`item/completed` 对子 commandExecution item、或 `thread/backgroundTerminals/list` 的 `data` 是否为空；agent 自己用 `nohup &` 放到后台的命令，codex 不知道，**判断不了**。哪一种取决于模型怎么选：本次让它“放后台”，一次选了 `nohup … &`、一次选了 `( … ) &`（都是 shell 层面的），只有明确要求“用 yield 时间让命令继续跑”才走 unified exec。`src/daemon/prompt.ts` 里项目经理的“长命令放后台”那句（`run_in_background`，“命令跑完会叫醒你”）只对 claude 成立：codex、agy 没有 `run_in_background`，跑完也不会叫醒。
 
 ### 10.3 三家对比和接口
 
@@ -380,5 +380,5 @@ interface BackgroundTaskSupport {
 
 - claude：`{signal:"snapshot_event", wakesAgent:true}`（现状，PR #92）。
 - codex：`{signal:"item_lifecycle", wakesAgent:false}`：**可以像 claude 一样“有任务就不闲置关闭”，但光保住进程不够**——命令跑完时 agent 不会被叫醒，要由驱动层在 `item/completed`（后台那个命令）到达时发一条系统消息（“后台命令 X 已结束，退出码 N”）把 agent 叫起来读结果，否则只是命令没被杀、结果没人看。
-- agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；系统提示词里不要对 agy 说“长命令放后台等它”（会丢结果），让 agy 前台跑（当前这一轮等它）。
+- agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；`prompt.ts` 里“长命令放后台、跑完会叫醒你”这一句对 agy（和 codex）不成立，要按厂商分开写或只给 claude（agy 让它前台跑，当前这一轮等它；这一条另开任务）。
 - **没测的**：codex 的 unified exec 进程在 app-server 退出时是否被杀、`thread/backgroundTerminals/terminate/clean` 的行为、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。
