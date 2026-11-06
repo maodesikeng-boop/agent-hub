@@ -304,7 +304,7 @@ describe("边界", () => {
   });
 
   it("中文名、括号、#、%、emoji、超长名都能发", () => {
-    const names = ["中文 名字.md", "a(1).png", "第#1.md", "100%.txt", "😀.png", `${"长".repeat(100)}.md`];
+    const names = ["中文 名字.md", "a(1).png", "第#1.md", "100%.txt", "😀.png", `${"长".repeat(80)}.md`];
     for (const n of names) write(join(proj, n));
     const hrefs = [
       `<${join(proj, "中文 名字.md")}>`,
@@ -312,12 +312,12 @@ describe("边界", () => {
       join(proj, "第#1.md"),
       join(proj, "100%25.txt"),
       join(proj, "😀.png"),
-      join(proj, `${"长".repeat(100)}.md`),
+      join(proj, `${"长".repeat(80)}.md`),
     ];
     const files = share(hrefs.map((h, i) => `[${i}](${h})`).join(" "));
     expect(files.map((f) => f.status)).toEqual(Array(6).fill("saved"));
     expect(files.slice(0, 5).map((f) => f.name)).toEqual(names.slice(0, 5));
-    // 超长名截到 120 字节以内，扩展名留着
+    // 超长名截到 120 字节以内，扩展名留着（源文件名 243 字节：Linux 的文件名上限是 255 字节，100 个字就放不下了）
     expect(files[5]!.name.endsWith(".md")).toBe(true);
     expect(Buffer.byteLength(files[5]!.name)).toBeLessThanOrEqual(120);
     expect(copyOf(files[5]!)).toBe("x");
