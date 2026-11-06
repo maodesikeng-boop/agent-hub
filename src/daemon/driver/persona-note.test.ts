@@ -314,7 +314,7 @@ describe("claude：性格设定、模式改了不重启", () => {
     await t.waitFor("agent.text");
     f.userEdit({ text: "第一版" });
     await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
-    expect(t.stdinBlocks()[1]![0]).toContain("第一版");
+    expect((await nthBlock(t, 2))[0]).toContain("第一版");
     release(t, "go1");
     await t.waitFor("turn.ended");
     expect(t.of("turn.ended")[0]!.messageIds).toEqual([1, 2]);
@@ -323,7 +323,7 @@ describe("claude：性格设定、模式改了不重启", () => {
     await t.waitFor("agent.text", undefined, 3);
     f.userEdit({ text: "第二版" });
     await expect(t.driver.send(s.id, user(4, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
-    expect(t.stdinBlocks()[3]![0]).toContain("第二版");
+    expect((await nthBlock(t, 4))[0]).toContain("第二版");
     await t.driver.interrupt(s.id);
     await t.waitFor("message.cancelled");
     expect(t.of("message.cancelled").at(-1)!.messageIds).toEqual([4]);
