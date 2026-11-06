@@ -77,6 +77,57 @@ const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
   mcpToolCall: () => "Calling tool",
 };
 
+/** 动作类别：跟厂商无关，hub worker log --stats 按它计数。 */
+export type ToolCategory = "read" | "search" | "command" | "edit" | "web" | "other";
+export const TOOL_CATEGORIES: readonly ToolCategory[] = ["read", "search", "command", "edit", "web", "other"];
+
+/** 工具名 → 类别，和 TOOL_TEXT 同一批名字（以后加厂商，工具名两边都补）；不在这里的见 toolCategory。 */
+const TOOL_CATEGORY: Readonly<Record<string, ToolCategory>> = {
+  // claude
+  Bash: "command",
+  bash: "command",
+  Read: "read",
+  Edit: "edit",
+  MultiEdit: "edit",
+  NotebookEdit: "edit",
+  Write: "edit",
+  Grep: "search",
+  Glob: "search",
+  WebSearch: "web",
+  WebFetch: "web",
+  // agy
+  run_command: "command",
+  read_file: "read",
+  view_file: "read",
+  view_file_outline: "read",
+  view_code_item: "read",
+  write_to_file: "edit",
+  write_file: "edit",
+  edit_file: "edit",
+  replace_file_content: "edit",
+  multi_replace_file_content: "edit",
+  grep_search: "search",
+  find_by_name: "search",
+  list_dir: "search",
+  search_web: "web",
+  read_url_content: "web",
+  // codex
+  commandExecution: "command",
+  exec_command: "command",
+  fileChange: "edit",
+  apply_patch: "edit",
+  webSearch: "web",
+  web_search: "web",
+};
+
+/** 工具名属于哪一类；null：认不出（统计里按原工具名单独计数）。技能、子代理、待办、连接器这些认得但不属于前五类的算“其它”。 */
+export function toolCategory(name: string): ToolCategory | null {
+  const known = TOOL_CATEGORY[name];
+  if (known !== undefined) return known;
+  if (name.startsWith("mcp__") || Object.hasOwn(TOOL_TEXT, name)) return "other";
+  return null;
+}
+
 /** `mcp__<连接器>__<工具>`：显示“Calling 连接器 工具”，名字照抄。 */
 function describeMcpTool(name: string): string {
   const rest = name.slice("mcp__".length);

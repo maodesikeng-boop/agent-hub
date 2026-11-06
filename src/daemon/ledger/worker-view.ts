@@ -16,6 +16,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 import { toWorkerRecord } from "./rows.ts";
+import { workerStatsLines } from "./worker-stats.ts";
 import type { LiveSession } from "./sessions.ts";
 import type { LedgerSteps, StepRow } from "./steps.ts";
 
@@ -253,8 +254,22 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     return out;
   };
 
+  /** --stats：所有换过代的会话里账本留着的全部步骤，汇成几行。 */
+  const stats = (worker: WorkerDbRow, args: HubArgs<"worker.log">): HubResult<"worker.log"> => {
+    if (args.last !== undefined) throw fail("invalid", "--stats 汇总全部步骤，不能和 --last 一起用");
+    const sessions = ctx.db
+      .all<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", worker.worker_conversation_id)
+      .map((s) => steps.rows(s.id));
+    const name = `Worker #${worker.id}“${worker.title}”`;
+    const text = sessions.every((rows) => rows.length === 0)
+      ? `${name}还没有记录到任何一步。`
+      : `${name}账本里留着的全部步骤（${sessions.length} 个会话）：\n${workerStatsLines(sessions).join("\n")}`;
+    return { text, data: { worker: toWorkerRecord(worker), steps: [] } };
+  };
+
   const log = (caller: { pmId: number }, args: HubArgs<"worker.log">): HubResult<"worker.log"> => {
     const worker = ownWorker(caller.pmId, args.workerId);
+    if (args.stats === true) return stats(worker, args);
     const last = args.last ?? WORKER_LOG_DEFAULT_STEPS;
     if (!Number.isSafeInteger(last) || last < 1 || last > WORKER_LOG_MAX_STEPS) {
       throw fail("invalid", `--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);

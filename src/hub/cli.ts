@@ -60,7 +60,8 @@ export const HUB_USAGE = `用法：
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
   ${hub} worker show <编号>                                   一个 Worker 现在的情况：状态、在干什么、这一轮和上一轮、进程、分支和 PR
-  ${hub} worker log <编号> [--last N]                         它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束
+  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
+                                                          --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时
   ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
                                                           会单独提醒用户，不会被别的消息刷掉
   ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
@@ -108,6 +109,7 @@ type Options = {
   daily?: string;
   every?: string;
   last?: string;
+  stats?: boolean;
   help?: boolean;
 };
 
@@ -188,6 +190,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         daily: { type: "string" },
         every: { type: "string" },
         last: { type: "string" },
+        stats: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -292,9 +295,14 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.show", body: { workerId: workerIdOf(rest[0], "worker show") }, textSource: null };
   }
   if (group === "worker" && action === "log") {
-    allowOnly(values, ["last"], "worker log");
+    allowOnly(values, ["last", "stats"], "worker log");
     expectPositionals(rest, 1, "worker log");
     const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker log") };
+    if (values.stats === true) {
+      if (values.last !== undefined) throw new UsageError("--stats 汇总全部步骤，不能和 --last 一起用");
+      body.stats = true;
+      return { command: "worker.log", body, textSource: null };
+    }
     if (values.last !== undefined) {
       if (!/^[1-9][0-9]*$/.test(values.last) || Number(values.last) > WORKER_LOG_MAX_STEPS) {
         throw new UsageError(`--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
