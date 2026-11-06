@@ -180,13 +180,13 @@ describe("消息", () => {
       ["failed", "queued"],
       // 一轮中途写给 agent、它还没取走：停止 → 已取消；进程没了 → 收回排队
       ["delivered", "cancelled"],
+      ["queued", "cancelled"],
       ["delivered", "queued"],
     ];
     for (const [from, to] of ok) expect(canTransitionMessage(from as never, to as never), `${from}→${to}`).toBe(true);
     const bad: [string, string][] = [
       ["processing", "queued"],
       ["processing", "cancelled"],
-      ["queued", "cancelled"],
       ["cancelled", "queued"],
       ["cancelled", "delivered"],
       ["processing", "delivered"],

@@ -77,6 +77,7 @@ import {
   waitForExit,
 } from "./process.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
+import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -99,6 +100,8 @@ interface Batch {
   echoed: boolean;
   /** steer 的回执还没到时这一轮就结束了：回执来了也不算送达，退回待发队列。 */
   turnDone: boolean;
+  /** 用户的（几条拼成一条的也是）还是系统的：停止时没读到的，用户的取消、系统的收回（stop-untaken.ts）。 */
+  source: MessageSource;
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
@@ -305,7 +308,7 @@ export class CodexDriver implements Driver {
       // 忙着：用 turn/steer 交给正在跑的这一轮；codex 不收（这一轮正好结束等）就退回待发队列
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false);
+        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
         batch.midTurn = true;
         if (await this.#steer(st, proc, batch)) return { kind: "written", midTurn: true };
         this.#dropBatch(st, batch);
@@ -390,8 +393,13 @@ export class CodexDriver implements Driver {
 
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.#sessions.get(sessionId);
-    const proc = st?.proc;
-    if (!st || !proc || !this.#busy(st) || proc.closing) return;
+    if (!st) return;
+    // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
+    const { kept, dropped } = dropUserEntries(st.pending);
+    st.pending = kept;
+    if (dropped.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
+    const proc = st.proc;
+    if (!proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
     st.turnInterrupted = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
@@ -542,12 +550,12 @@ export class CodexDriver implements Driver {
       messageIds = entry.messageIds;
     }
     if (body === null) return null;
-    return this.#batchOf(st, body, messageIds, command);
+    return this.#batchOf(st, body, messageIds, command, users.length > 0 ? "user" : "system");
   }
 
   /** 拼一条：不是命令的话把恢复、崩溃、重启说明加在最前面（加一次就清掉）。 */
-  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean): Batch {
-    if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES);
+  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
+    if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
@@ -557,7 +565,7 @@ export class CodexDriver implements Driver {
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = false;
-    return newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes);
+    return newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes, source);
   }
 
   #dropBatch(st: SessionState, batch: Batch): void {
@@ -1433,12 +1441,16 @@ export class CodexDriver implements Driver {
     this.#settled(st);
   }
 
-  /** steer 收下了、codex 没读到就不再处理的（这一轮结束、进程没了）：停止的标已取消，别的收回让账本重新登记发送。 */
+  /**
+   * steer 收下了、codex 没读到就不再处理的（这一轮结束、进程没了）：停止时用户的标已取消、系统的收回（stop-untaken.ts）；
+   * 不是停止的都收回，让账本重新登记发送。
+   */
   #releaseMissed(st: SessionState, missed: Batch[], stopped: boolean, at: number): void {
     const messageIds = missed.flatMap((b) => b.messageIds);
     if (messageIds.length === 0) return;
     if (stopped) {
-      this.#emit(st.id, { type: "message.cancelled", messageIds, reason: "stop", at });
+      this.#forgetWritten(st, missed.filter((b) => b.source === "system"));
+      for (const event of untakenOnStopEvents(missed, at)) this.#emit(st.id, event);
       return;
     }
     this.#forgetWritten(st, missed);
@@ -1725,8 +1737,8 @@ export function createCodexDriver(options: CodexDriverOptions): CodexDriver {
   return new CodexDriver(options);
 }
 
-function newBatch(messageIds: MessageId[], combinedText: string, notes: Batch["notes"]): Batch {
-  return { messageIds, combinedText, notes, delivered: false, processing: false, midTurn: false, echoed: false, turnDone: false };
+function newBatch(messageIds: MessageId[], combinedText: string, notes: Batch["notes"], source: MessageSource): Batch {
+  return { messageIds, combinedText, notes, delivered: false, processing: false, midTurn: false, echoed: false, turnDone: false, source };
 }
 
 function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {

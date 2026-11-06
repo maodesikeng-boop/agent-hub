@@ -70,6 +70,7 @@ import {
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
+import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
 interface PendingEntry {
@@ -95,6 +96,8 @@ interface Batch {
   started: boolean;
   /** 会话正忙时在一轮中途写进去的（不是开一轮的那条）。 */
   midTurn: boolean;
+  /** 用户的（几条拼成一条的也是）还是系统的：停止时没取走的，用户的取消、系统的收回（stop-untaken.ts）。 */
+  source: MessageSource;
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
@@ -320,7 +323,7 @@ export class ClaudeDriver implements Driver {
       // 忙着、但这个 claude 能在一轮中途收：直接写进去，不进待发队列
       const proc = st.proc;
       if (proc && this.#canWriteMidTurn(st, proc, entry)) {
-        const batch = this.#batchOf(st, entryParts(entry), ids, false);
+        const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
         batch.midTurn = true;
         if (await this.#writeMidTurn(st, proc, batch)) return { kind: "written", midTurn: true };
         // 没写成（进程正好没了）：退回待发队列，照旧等
@@ -377,7 +380,7 @@ export class ClaudeDriver implements Driver {
     }
     const proc = st.proc;
     if (!proc || !proc.initSeen || proc.closing || st.inFlight.length > 0) throw new Error(`session ${sessionId} is not idle`);
-    await this.#writeBatch(st, proc, newBatch(messageIds, line, randomUUID(), NO_NOTES));
+    await this.#writeBatch(st, proc, newBatch(messageIds, line, randomUUID(), NO_NOTES, "user"));
     return { kind: "written" };
   }
 
@@ -422,8 +425,11 @@ export class ClaudeDriver implements Driver {
 
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.#sessions.get(sessionId);
-    const proc = st?.proc;
-    if (!st || !proc || !this.#busy(st) || proc.closing) return;
+    if (!st) return;
+    // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
+    this.#dropPendingUsers(st);
+    const proc = st.proc;
+    if (!proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
@@ -593,14 +599,21 @@ export class ClaudeDriver implements Driver {
       messageIds = entry.messageIds;
     }
     if (body === null) return null;
-    return this.#batchOf(st, body, messageIds, command);
+    return this.#batchOf(st, body, messageIds, command, users.length > 0 ? "user" : "system");
+  }
+
+  /** 停止时：待发队列里用户的那几条丢掉、标已取消。 */
+  #dropPendingUsers(st: SessionState): void {
+    const { kept, dropped } = dropUserEntries(st.pending);
+    st.pending = kept;
+    if (dropped.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
   }
 
   /** 拼一行：不是命令的话把恢复、崩溃、重启、后台任务被结束的说明加在最前面（加一次就清掉）。 */
-  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean): Batch {
+  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     const uuid = randomUUID();
     if (command) {
-      return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES);
+      return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote };
     const prefixes = [
@@ -613,7 +626,7 @@ export class ClaudeDriver implements Driver {
     st.crashNote = false;
     st.relaunchNote = false;
     st.killedNote = null;
-    return newBatch(messageIds, buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent, uuid), uuid, notes);
+    return newBatch(messageIds, buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent, uuid), uuid, notes, source);
   }
 
   /** 没写成的一行：恢复说明留给下一行；消息本身不放回队列，由执行器重试 send 时再排。 */
@@ -1101,16 +1114,21 @@ export class ClaudeDriver implements Driver {
     }
   }
 
-  /** 写进去还没被取走的这几行不会再被处理了（停止）：出 message.cancelled，不重发。没有别的在途了就算这一轮完了。 */
+  /** 写进去还没被取走的这几行不会再被处理了（停止）：用户的标已取消、系统的收回（#releaseOnStop）。没有别的在途了就算这一轮完了。 */
   #cancelBatches(st: SessionState, proc: Proc, batches: Batch[], at: number): void {
     if (batches.length === 0) return;
     st.inFlight = st.inFlight.filter((b) => !batches.includes(b));
-    const messageIds = batches.flatMap((b) => b.messageIds);
-    if (messageIds.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds, reason: "stop", at });
+    this.#releaseOnStop(st, batches, at);
     if (!this.#busy(st)) {
       this.#afterTurn(st, proc);
       this.#settled(st);
     }
+  }
+
+  /** 停止时 claude 没取走的：用户的标已取消，不重发；系统的（Worker 汇报等）收回，账本重新登记发送（stop-untaken.ts）。 */
+  #releaseOnStop(st: SessionState, batches: Batch[], at: number): void {
+    this.#forgetWritten(st, batches.filter((b) => b.source === "system"));
+    for (const event of untakenOnStopEvents(batches, at)) this.#emit(st.id, event);
   }
 
   #markProcessing(st: SessionState, batch: Batch, at: number): void {
@@ -1259,8 +1277,8 @@ export class ClaudeDriver implements Driver {
       const untakenIds = untaken.flatMap((b) => b.messageIds);
       if (untakenIds.length > 0) {
         if (reason === "interrupt") {
-          // 用户点的停止（控制消息没回应才 SIGINT）：和带 cancel_queued 的停止一样标已取消，不重发
-          this.#emit(st.id, { type: "message.cancelled", messageIds: untakenIds, reason: "stop", at });
+          // 用户点的停止（控制消息没回应才 SIGINT）：和带 cancel_queued 的停止一样，用户的标已取消、系统的收回
+          this.#releaseOnStop(st, untaken, at);
         } else {
           // 崩溃、关机：进程没了，claude 里排着的也没了。放回去由账本重新登记发送（不加重发说明，模型没看到过）
           this.#forgetWritten(st, untaken);
@@ -1458,8 +1476,8 @@ function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, star
   return new DriverError("spawn_failed", `claude exited before system/init (${how})${stderr ? `: ${stderr}` : ""}`);
 }
 
-function newBatch(messageIds: MessageId[], line: string, uuid: string, notes: Batch["notes"]): Batch {
-  return { messageIds, line, uuid, notes, delivered: false, processing: false, started: false, midTurn: false };
+function newBatch(messageIds: MessageId[], line: string, uuid: string, notes: Batch["notes"], source: MessageSource): Batch {
+  return { messageIds, line, uuid, notes, delivered: false, processing: false, started: false, midTurn: false, source };
 }
 
 /** 这个进程能在一轮中途写入：init 里 MID_TURN_CAPABILITIES 都有。 */

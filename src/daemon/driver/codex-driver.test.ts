@@ -1228,6 +1228,24 @@ describe("CodexDriver 一轮中途用 turn/steer 交给 agent", () => {
     expect(t.of("message.requeued")).toEqual([]);
   });
 
+  it("停止时：自己队列里排着的用户消息标已取消、不再发；系统消息照常发；steer 了没读到的系统消息收回", async () => {
+    const t = steerHarness((dir) => [holdTurn(dir), { messageDeltas: ["收到"] }]);
+    const s = t.addSession();
+    const system = (id: number, text: string) => ({ messageIds: [id], source: "system" as const, text });
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool");
+    await expect(t.driver.send(s.id, system(2, "【Worker #1 的汇报】A"))).resolves.toEqual({ kind: "written", midTurn: true });
+    await expect(t.driver.send(s.id, user(3, "/compact"))).resolves.toEqual({ kind: "queued" });
+    await expect(t.driver.send(s.id, system(4, "【Worker #2 的汇报】B"))).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1], interrupted: true });
+    expect(t.of("message.cancelled").flatMap((e) => e.messageIds)).toEqual([3]);
+    expect(t.of("message.requeued").flatMap((e) => e.messageIds)).toEqual([2]);
+    expect(await t.waitFor("turn.ended", () => true, 2)).toMatchObject({ messageIds: [4] });
+    const inputs = t.rpcIn().filter((r) => r.method === "turn/start").map((r) => (r.params as { input: Array<{ text: string }> }).input[0]!.text);
+    expect(inputs).toEqual(["开始", "【Worker #2 的汇报】B"]);
+  });
+
   it("点了停止、这一轮还没收尾：新消息排队，不 steer", async () => {
     const t = steerHarness((dir) => [holdTurn(dir), { messageDeltas: ["好"] }]);
     const s = t.addSession();

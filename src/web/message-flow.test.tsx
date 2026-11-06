@@ -353,6 +353,13 @@ describe("消息状态：只在排队、失败、停止时出现", () => {
     expect(row).toHaveAttribute("data-status", "cancelled");
     expect(row).toHaveClass("text-muted-foreground");
     expect(within(row).queryByRole("button")).toBeNull();
+    // 气泡变淡，一眼看得出没发出去；别的状态不变淡
+    expect(container.querySelector("[data-bubble]")).toHaveClass("opacity-55");
+  });
+
+  it("只有已取消的气泡变淡", () => {
+    const { container } = list([makeUserMessage({ id: 1, status: "stopped" }), makeUserMessage({ id: 2, status: "queued" })]);
+    for (const bubble of container.querySelectorAll("[data-bubble]")) expect(bubble).not.toHaveClass("opacity-55");
   });
 
   it("失败：一句人话 + 重试，原始错误在 title，不用“·”", () => {

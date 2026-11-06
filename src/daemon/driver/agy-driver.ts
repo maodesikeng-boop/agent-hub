@@ -58,6 +58,7 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -76,6 +77,8 @@ interface Batch {
   notes: { recovery: boolean; crash: boolean; relaunch: boolean };
   delivered: boolean;
   processing: boolean;
+  /** 用户的（几条拼成一条的也是）还是系统的；不写是用户的（测试直接写的那行）。停止时没取走的，用户的取消、系统的收回。 */
+  source?: MessageSource;
 }
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
@@ -352,8 +355,13 @@ export class AgyDriver implements Driver {
 
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.#sessions.get(sessionId);
-    const proc = st?.proc;
-    if (!st || !proc || !this.#busy(st) || proc.closing) return;
+    if (!st) return;
+    // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
+    const { kept, dropped } = dropUserEntries(st.pending);
+    st.pending = kept;
+    if (dropped.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
+    const proc = st.proc;
+    if (!proc || !this.#busy(st) || proc.closing) return;
     st.stopRequested = true;
     st.turnInterrupted = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
@@ -507,6 +515,7 @@ export class AgyDriver implements Driver {
         notes: NO_NOTES,
         delivered: false,
         processing: false,
+        source: "user",
       };
     }
     const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
@@ -525,6 +534,7 @@ export class AgyDriver implements Driver {
       notes,
       delivered: false,
       processing: false,
+      source: users.length > 0 ? "user" : "system",
     };
   }
 
@@ -1185,9 +1195,7 @@ export class AgyDriver implements Driver {
 
     this.#clearTimer(st, "interruptTimer");
     this.#emit(st.id, event);
-    if (untaken !== null && untaken.messageIds.length > 0) {
-      this.#emit(st.id, { type: "message.cancelled", messageIds: untaken.messageIds, reason: "stop", at });
-    }
+    if (untaken !== null) this.#releaseOnStop(st, untaken, at);
     this.#resolveInterrupt(st);
     this.#afterTurn(st, proc);
     this.#settled(st);
@@ -1271,9 +1279,7 @@ export class AgyDriver implements Driver {
         messageIds: taken?.messageIds ?? [],
         at,
       });
-      if (untaken !== null && untaken.messageIds.length > 0) {
-        this.#emit(st.id, { type: "message.cancelled", messageIds: untaken.messageIds, reason: "stop", at });
-      }
+      if (untaken !== null) this.#releaseOnStop(st, untaken, at);
     } finally {
       this.#resolveInterrupt(st);
       resolveExited();
@@ -1282,6 +1288,13 @@ export class AgyDriver implements Driver {
         void this.#pump(st).catch(() => {});
       }
     }
+  }
+
+  /** 停止时 agy 还没取走的那条：用户的标已取消，不重发；系统的收回，账本重新登记发送（stop-untaken.ts）。 */
+  #releaseOnStop(st: SessionState, batch: Batch, at: number): void {
+    const source = batch.source ?? "user";
+    if (source === "system") this.#forgetWritten(st, batch);
+    for (const event of untakenOnStopEvents([{ messageIds: batch.messageIds, source }], at)) this.#emit(st.id, event);
   }
 
   // --- 辅助方法 ---

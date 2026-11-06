@@ -52,15 +52,15 @@ export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
  *     重新登记 session.send，推一条 message.updated；之后照 queued → delivered → … 正常走；
  *   - failed → delivered：重启后重发、或执行器自己重试时写进去了（M1 就有）。
  * - queued → stopped（M3）：Worker 收工时还没发给它的话（比如 worktree 还没建好就收工了的任务说明），不会再发了。
- * - delivered → cancelled：一轮中途写给 agent、它还没取走，用户点了停止（driver.ts 的 message.cancelled）。agent 没看到过，
- *   不自动重发；cancelled 是终点。
+ * - queued、delivered → cancelled：用户点了停止时 agent 还没看到的用户消息（还在排队的，或一轮中途写给 agent、它还没取走的，
+ *   driver.ts 的 message.cancelled）。agent 没看到过，不自动重发；cancelled 是终点。
  * - delivered → queued：一轮中途写给 agent、它还没取走，进程就没了或这一轮没读它就结束了（driver.ts 的 message.requeued）：
  *   账本放回排队中、重新登记 session.send。
  * 账本只按这张表改状态；不合法的转换（包括同状态）一律忽略，不报错——
  * 比如重启后重发一条 processing 的消息，驱动层再出 message.delivered，它仍然是 processing。
  */
 export const MESSAGE_STATUS_TRANSITIONS: Readonly<Record<MessageStatus, readonly MessageStatus[]>> = {
-  queued: ["delivered", "failed", "stopped"],
+  queued: ["delivered", "failed", "stopped", "cancelled"],
   delivered: ["processing", "stopped", "failed", "cancelled", "queued"],
   processing: ["replied", "stopped", "failed"],
   replied: [],

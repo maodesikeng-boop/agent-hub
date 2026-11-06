@@ -615,14 +615,42 @@ describe("requestStop", () => {
     expect(last?.type === "session.status" && last.data.session.activity).toBe("stopping");
   });
 
-  it("没有在跑的会话：什么也不做", () => {
+  it("没有在跑的会话、也没有排着的消息：什么也不做", () => {
     const stops = vi.fn();
     ledger.onStopRequested(stops);
-    post();
+    const id = post();
+    setStatus(id, "replied");
     const before = changes.length;
     ledger.requestStop(conversationId);
     expect(stops).not.toHaveBeenCalled();
     expect(changes).toHaveLength(before);
+  });
+
+  it("停止时 agent 还没看到的用户消息（排队中）都标已取消；系统消息照常排着；已经在处理的照旧等这一轮的结果", () => {
+    const stops = vi.fn();
+    ledger.onStopRequested(stops);
+    const running = post("c1", "跑命令");
+    ev({ type: "message.delivered", at: 1, messageIds: [running] });
+    ev({ type: "message.processing", at: 2, messageIds: [running] });
+    const waiting = post("c2", "接着做 B");
+    const system = ledger.postUserMessage({ conversationId, clientId: "c3", text: "x" }).messageId;
+    db.run("UPDATE messages SET sender = 'system' WHERE id = ?", system);
+    ledger.requestStop(conversationId);
+    expect(ledger.getMessage(waiting)?.status).toBe("cancelled");
+    expect(ledger.getMessage(system)?.status).toBe("queued");
+    expect(ledger.getMessage(running)?.status).toBe("processing");
+    expect(stops).toHaveBeenCalledWith({ conversationId, sessionId });
+    expect(changes.some((c) => c.type === "message.updated" && c.data.message.id === waiting && c.data.message.status === "cancelled")).toBe(true);
+  });
+
+  it("空闲时只有排着的用户消息（还没交给 agent）：也标已取消，并通知驱动层把它自己队列里的丢掉", () => {
+    const stops = vi.fn();
+    ledger.onStopRequested(stops);
+    const id = post();
+    ledger.requestStop(conversationId);
+    expect(ledger.getMessage(id)?.status).toBe("cancelled");
+    expect(stops).toHaveBeenCalledTimes(1);
+    expect(ledger.snapshot().sessions[0]?.activity).toBe("idle");
   });
 
   it("重启后内存里没有活动状态，但有处理中的消息：也算在跑", () => {

@@ -440,7 +440,15 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
       {/* 只发文件没写字的消息没有文字气泡 */}
       {(message.text !== "" || attachments.length === 0) && (
-        <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
+        <div
+          data-bubble
+          className={cn(
+            BUBBLE,
+            "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
+            // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
+            message.status === "cancelled" && "opacity-55",
+          )}
+        >
           {message.text}
         </div>
       )}

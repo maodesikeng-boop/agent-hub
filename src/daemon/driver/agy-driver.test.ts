@@ -1128,6 +1128,19 @@ describe("6. 一轮中途的消息（agy 不支持，照旧排队；停止时还
     expect(t.of("message.delivered").some((e) => e.midTurn)).toBe(false);
   });
 
+  it("停止时：自己队列里排着的用户消息标已取消、不再发；系统消息停止后照常发", async () => {
+    const t = makeAgyHarness();
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{ steps: [{ type: "waitFile", path: join(t.dir, "never") }] }, { steps: [{ type: "text", deltas: ["收到汇报"] }] }] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑"));
+    await t.waitFor("message.processing");
+    await expect(t.driver.send(s.id, user(2, "排着的"))).resolves.toEqual({ kind: "queued" });
+    await expect(t.driver.send(s.id, { messageIds: [3], source: "system", text: "【Worker #1 的汇报】做完了" })).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [3], ok: true });
+  });
+
   for (const silentSigint of [false, true]) {
     it(`写进去了、agy 还没取走（没出 user_input）就点了停止：标已取消，不算这一轮被打断（${silentSigint ? "SIGINT 后直接退出" : "SIGINT 后先出 result"}）`, async () => {
       const t = makeAgyHarness();

@@ -208,6 +208,60 @@ describe("停止：写进去了还没被取走的标已取消，不重发", () =
   });
 });
 
+describe("停止：agent 还没看到的用户消息都取消（包括驱动层自己队列里的），系统消息不取消", () => {
+  const system = (id: number, text: string) => ({ messageIds: [id], source: "system" as const, text });
+
+  it("老 claude（只能排队）：停止时队列里排着的用户消息标已取消、不再写；系统消息停止后照常写", async () => {
+    h = makeHarness({ script: { turns: [{ steps: [{ sleepMs: 5000 }, { text: "不会说完" }] }], defaultTurn: { steps: [{ text: "好" }] } } });
+    const s = h.addSession();
+    await h.driver.send(s.id, user(1, "跑"));
+    await h.waitFor("message.processing");
+    await expect(h.driver.send(s.id, user(2, "排着的用户消息"))).resolves.toEqual({ kind: "queued" });
+    await expect(h.driver.send(s.id, system(3, "【Worker #1 的汇报】做完了"))).resolves.toEqual({ kind: "queued" });
+    await h.driver.interrupt(s.id);
+    expect(h.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    await h.waitFor("turn.ended", () => true, 2);
+    expect(h.of("turn.ended").map((e) => [e.messageIds, e.interrupted])).toEqual([
+      [[1], true],
+      [[3], false],
+    ]);
+    expect(h.stdinTexts()).toEqual(["跑", "【Worker #1 的汇报】做完了"]);
+    // 执行器再来问（账本已经标了已取消，处理函数本来就不会再调；就算调了也只是重新排队，不会被吞掉）
+  });
+
+  it("支持中途写入时：命令排在队列里、普通消息中途写进去了，停止时两条用户消息都取消", async () => {
+    const t = harness([]);
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ capabilities: CAPS, turns: [toolTurn(t.dir)], defaultTurn: { steps: [{ text: "不该跑" }] } }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑"));
+    await t.waitFor("agent.text");
+    await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    await expect(t.driver.send(s.id, user(3, "/compact"))).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    await realSleep(200);
+    expect(t.of("message.cancelled").flatMap((e) => e.messageIds).sort()).toEqual([2, 3]);
+    expect(t.of("turn.ended")).toHaveLength(1);
+    expect(t.stdinTexts()).toEqual(["跑", "插一句"]);
+  });
+
+  it("中途写进去、还没被取走的系统消息（Worker 汇报）：停止时收回重发（message.requeued），不取消", async () => {
+    const t = harness([]);
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ capabilities: CAPS, turns: [toolTurn(t.dir)], defaultTurn: { steps: [{ text: "收到汇报" }] } }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑"));
+    await t.waitFor("agent.text");
+    await expect(t.driver.send(s.id, system(2, "【Worker #1 的汇报】做完了"))).resolves.toEqual({ kind: "written", midTurn: true });
+    await t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    expect(t.of("message.cancelled")).toEqual([]);
+    expect(t.of("message.requeued")).toEqual([expect.objectContaining({ messageIds: [2] })]);
+    // 账本重新登记的 session.send：停止后真的再写一次
+    await expect(t.driver.send(s.id, system(2, "【Worker #1 的汇报】做完了"))).resolves.toEqual({ kind: "written" });
+    expect(await t.waitFor("turn.ended", () => true, 2)).toMatchObject({ messageIds: [2], ok: true });
+  });
+});
+
 describe("崩溃、重启：只有写进去了还没开始处理的放回去重发", () => {
   it("进程崩了：处理中的照旧算崩溃（session.exited 带着，下一条带崩溃说明），没取走的出 message.requeued、再 send 会真的再写一次（不加重发说明）", async () => {
     const t = harness([]);

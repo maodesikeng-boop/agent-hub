@@ -356,8 +356,13 @@ export function createLedgerMessages(
         `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
         session.id,
       ) !== undefined;
-    if (!working && !leftover) return;
+    // 停止 = agent 还没看到的用户消息都取消（docs/mid-turn-messages.md 第 11 节）：还在排队的（没交给驱动层，或在驱动层自己的队列里）
+    // 这里就标已取消，之后执行器再调 session.send 看到已取消就不发；驱动层队列里的那份由 driver.interrupt 丢掉。
+    // 系统消息（Worker 汇报、定时任务、交接）不取消，停止后照常发。
+    const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
+    if (!working && !leftover && queued.length === 0) return;
     write((p) => {
+      for (const { id } of queued) transition(p, id, "cancelled");
       if (working) {
         updateLive(p, session.id, (l) => {
           l.activity = "stopping";
