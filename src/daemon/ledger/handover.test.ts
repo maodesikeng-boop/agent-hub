@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { systemEventOf, systemNoticeText } from "../../shared/domain.ts";
+import { systemEventOf, systemNoticeText, workerEventOf } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { ACTION_RETRY, retryDelayMs } from "../../shared/actions.ts";
-import { HANDOVER_RECENT_MESSAGES, HANDOVER_RENEW_RETRIES } from "../../shared/limits.ts";
+import { HANDOVER_AUTO_CONTEXT_TOKENS, HANDOVER_RECENT_MESSAGES, HANDOVER_RENEW_RETRIES } from "../../shared/limits.ts";
 import { getAction, listActions, setActionStatus } from "../actions/index.ts";
+import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -29,7 +30,7 @@ beforeEach(() => {
   db = openTestDb();
   home = mkdtempSync(join(tmpdir(), "agent-hub-handover-"));
   now = 1_000;
-  ledger = createLedger(db, { now: () => now, pmHomeRoot: home });
+  ledger = createLedger(db, { now: () => now, pmHomeRoot: home, dataHome: home });
   const created = ledger.createPm({ name: "小林", mode: "manage_only", persona: "", defaultModel: "opus" });
   pmId = created.pm.id;
   conversationId = created.conversation.id;
@@ -354,5 +355,152 @@ describe("审查 #35 第 5 条：交接没写成", () => {
     ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
     ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: false, interrupted: true, messageIds: [request], durationMs: 1 });
     expect(notices()).toEqual(["交接没写成，没换会话", "交接没写成，没换会话"]);
+  });
+});
+
+describe("对话太长自动换代", () => {
+  /** 驱动层把当前对话长度写进会话（在 turn.ended 之前）。 */
+  function setContext(sessionId: SessionId, context: number) {
+    const store = createSessionStore(db);
+    store.update(sessionId, { usage: { ...store.get(sessionId)!.usage, context } });
+  }
+  function requests(): Message[] {
+    return messages().filter((m) => systemEventOf(m)?.event === "handover.requested");
+  }
+
+  it("一轮正常结束时到门槛：自动发交接请求（文字、网页上一句说明是自动的），写完照常换代", () => {
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS);
+    turn(firstSession, [q], ["回答"]);
+    const [request] = requests();
+    expect(request).toMatchObject({ sender: "system", status: "queued", sessionId: firstSession, meta: { event: "handover.requested", sessionId: firstSession, auto: true } });
+    expect(request!.text).toMatch(/太长/);
+    expect(request!.text).toMatch(/自动/);
+    expect(request!.text).toMatch(/交接/);
+    expect(systemNoticeText(request!)).toBe("对话太长，自动请项目经理写交接，写完换新会话");
+    expect(sendOf(request!.id)?.params).toEqual({ sessionId: firstSession, messageId: request!.id, source: "system" });
+    expect(sessions()).toHaveLength(1);
+
+    turn(firstSession, [request!.id], ["交接：暗号是 蓝鲸"]);
+    expect(sessions().map((r) => r.generation)).toEqual([1, 2]);
+    expect(renewed()!.text).toContain("交接：暗号是 蓝鲸");
+    expect(renewed()!.text).toContain("回答");
+  });
+
+  it("没到门槛：不换", () => {
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS - 1);
+    turn(firstSession, [q], ["回答"]);
+    expect(requests()).toHaveLength(0);
+    expect(sessions()).toHaveLength(1);
+  });
+
+  it("手动的请求文字不变，网页上还是原来那一句", () => {
+    const request = ledger.getMessage(ledger.renewSession(pmId).messageId)!;
+    expect(request.meta).toEqual({ event: "handover.requested", sessionId: firstSession });
+    expect(request.text).toMatch(/用户要给你换一个新会话/);
+  });
+
+  it("正在换代（交接请求在写）、已经手动请求过：不重复触发", () => {
+    const manual = ledger.renewSession(pmId).messageId;
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS + 1);
+    // 别的消息压着，这一轮结束后（先送达处理中的别的消息）不会再发一条
+    turn(firstSession, [q], ["回答"]);
+    expect(requests().map((m) => m.id)).toEqual([manual]);
+    // 交接那一轮自己回完：换代，不会再发
+    turn(firstSession, [manual], ["交接"]);
+    expect(requests()).toHaveLength(1);
+    expect(sessions()).toHaveLength(2);
+  });
+
+  it("自动发出后，又一轮结束（请求还没回）：不重复", () => {
+    const a = post("a");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS);
+    turn(firstSession, [a], ["回答"]);
+    const b = post("b");
+    turn(firstSession, [b], ["回答2"]);
+    expect(requests()).toHaveLength(1);
+  });
+
+  it("新会话第一条还没结果、新会话对话很短：不触发；换代后新会话没到门槛不触发", () => {
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS);
+    turn(firstSession, [q], ["回答"]);
+    turn(firstSession, [requests()[0]!.id], ["交接"]);
+    const g2 = sessions()[1]!.id;
+    const line = renewed()!;
+    turn(g2, [line.id], ["已接上"]);
+    expect(requests()).toHaveLength(1);
+    expect(sessions()).toHaveLength(2);
+  });
+
+  it("交接上一次没写成（失败）：这一代不再自动触发，用户可以手动再点", () => {
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS);
+    turn(firstSession, [q], ["回答"]);
+    const request = requests()[0]!.id;
+    turn(firstSession, [request], [], false);
+    expect(ledger.getMessage(request)!.status).toBe("failed");
+    const q2 = post("再问");
+    turn(firstSession, [q2], ["回答"]);
+    expect(requests()).toHaveLength(1);
+    expect(ledger.renewSession(pmId).messageId).toBe(request);
+  });
+
+  it("一轮被打断或失败：不触发", () => {
+    const a = post("a");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS + 1000);
+    turn(firstSession, [a], ["写了一半"], false);
+    const b = post("b");
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [b] });
+    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [b] });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: true, messageIds: [b], durationMs: 1 });
+    expect(requests()).toHaveLength(0);
+    expect(sessions()).toHaveLength(1);
+  });
+
+  const projectFolders: string[] = [];
+  afterEach(() => {
+    for (const dir of projectFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  /** 建项目、派一个在主文件夹干活的 Worker。 */
+  function startWorker() {
+    const folder = mkdtempSync(join(tmpdir(), "agent-hub-handover-proj-"));
+    projectFolders.push(folder);
+    ledger.hubCall(firstSession, "project.create", { folder });
+    return ledger.hubCall(firstSession, "worker.start", { title: "修 X", task: "把 X 修好", noWorktree: true }).data.worker;
+  }
+
+  it("Worker 不触发", () => {
+    const worker = startWorker();
+    const workerSession = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
+    setContext(workerSession, HANDOVER_AUTO_CONTEXT_TOKENS * 3);
+    const task = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? ORDER BY id LIMIT 1", worker.workerConversationId)!.id;
+    turn(workerSession, [task], ["做完了"]);
+    expect(requests()).toHaveLength(0);
+    expect(db.all("SELECT 1 FROM agent_sessions WHERE worker_id = ?", worker.id)).toHaveLength(1);
+  });
+
+  it("换代期间 Worker 的汇报不丢：压着，换代后改发给新会话", () => {
+    const worker = startWorker();
+    const workerSession = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
+    const q = post("问题");
+    setContext(firstSession, HANDOVER_AUTO_CONTEXT_TOKENS);
+    turn(firstSession, [q], ["回答"]);
+    const request = requests()[0]!;
+
+    // 交接在写的时候 Worker 汇报到了
+    const task = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? ORDER BY id LIMIT 1", worker.workerConversationId)!.id;
+    const text = `改好了。\n\n${REPORT_START}\n状态: 做完了\n摘要: X 修好了\n提交: abc\n测试: 通过\n问题: 无\n${REPORT_END}`;
+    turn(workerSession, [task], [text]);
+    const reportLine = messages().find((m) => workerEventOf(m)?.event === "report")!;
+    expect(reportLine).toMatchObject({ status: "queued", sessionId: firstSession });
+    expect(ledger.waitsForHandover(reportLine.id)).toBe(true);
+
+    turn(firstSession, [request.id], ["交接"]);
+    const g2 = sessions()[1]!.id;
+    expect(ledger.getMessage(reportLine.id)).toMatchObject({ status: "queued", sessionId: g2 });
+    expect(sendOf(reportLine.id)!.params).toEqual({ sessionId: g2, messageId: reportLine.id, source: "system" });
   });
 });

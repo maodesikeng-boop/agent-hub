@@ -421,7 +421,7 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  *
  * 开新会话（资料页的按钮，见 ledger/handover.ts）的两条要发给 agent（status 从 queued 起照常走，source system），
  * text 是发给 agent 的全文，网页只显示 systemNoticeText 给的一句：
- * - handover.requested：发给旧会话（sessionId），让项目经理把交接写成这一轮的回复；
+ * - handover.requested：发给旧会话（sessionId），让项目经理把交接写成这一轮的回复；auto 是对话到门槛自动发的（不是用户点的）；
  * - session.renewed：发给新一代会话（sessionId），带上交接和最近几条原话；网页显示“项目经理开了新会话（交接见上一条）”。
  *   失败、被停止了原地重新排队（attempts 记重排了几次），最多 HANDOVER_RENEW_RETRIES 次；
  * - handover.failed：只给人看。交接那一轮没写成（没换代），或者新会话一直没接上交接（不再重排）。messageId 是那条 H / R，
@@ -435,7 +435,7 @@ export type SystemMessageMeta =
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
-  | { event: "handover.requested"; sessionId: SessionId }
+  | { event: "handover.requested"; sessionId: SessionId; auto?: true }
   | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId }
   | { event: "handover.failed"; messageId: MessageId; attempt: number }
   | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
@@ -470,7 +470,7 @@ export function systemEventOf(message: Pick<Message, "sender" | "meta">): System
 export function systemNoticeText(message: Pick<Message, "sender" | "meta" | "text">): string {
   switch (systemEventOf(message)?.event) {
     case "handover.requested":
-      return "已请项目经理写交接，写完换新会话";
+      return (message.meta as { auto?: boolean }).auto === true ? "对话太长，自动请项目经理写交接，写完换新会话" : "已请项目经理写交接，写完换新会话";
     case "session.renewed":
       return "项目经理开了新会话（交接见上一条）";
     default:

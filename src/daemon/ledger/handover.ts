@@ -6,6 +6,7 @@
 // 3. 换代期间（交接请求 H、新会话第一条 R 还没结果）这个对话里同一代或更晚的别的消息都压着（waitsForHandover），换代时改发给新会话；
 // 4. H 没写成（失败、被停止）：不换代，对话里提示一句；R 没送成：原地重新排队（退避），最多 HANDOVER_RENEW_RETRIES 次，
 //    还不行就放行压着的消息、提示一句，再点“开新会话”把同一条 R 重新排队。
+// 自动：项目经理一轮正常结束时当前对话长度（usage.context）到 HANDOVER_AUTO_CONTEXT_TOKENS，走 1 同样的流程（请求文字和网页那一句说明是对话太长自动换的）。
 // 换代和那一轮的结果在同一个事务里：重启只会落在换代前（交接请求按“至少一次”重发给旧会话）或换代后，不会换两次。
 // H、R 的 meta 里另记几个字段（只有这里用）：turnStartId（H 开始处理时库里最大的消息编号）、attempts（R 重排了几次）、
 // settled（这次没成已经处理过：提示过或重排过，不再处理；重新排队时清掉）、notices（提示过几次，做去重键）。
@@ -15,7 +16,7 @@ import type { AgentSessionRow, ConversationId, MessageId, PmId, SystemMessageMet
 import type { DriverEvent } from "../../shared/driver.ts";
 import { ACTION_RETRY, retryDelayMs } from "../../shared/actions.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { HANDOVER_RECENT_MESSAGES, HANDOVER_RENEW_RETRIES } from "../../shared/limits.ts";
+import { HANDOVER_AUTO_CONTEXT_TOKENS, HANDOVER_RECENT_MESSAGES, HANDOVER_RENEW_RETRIES } from "../../shared/limits.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -23,10 +24,17 @@ import type { LedgerPersona } from "./persona.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { getAgentSession } from "../store/index.ts";
 
 /** 发给旧会话：让项目经理把交接写成这一轮的回复。 */
 export const HANDOVER_REQUEST_TEXT = `【系统】用户要给你换一个新会话（现在的上下文太长了）。请在这一轮写一份交接，直接写成这一轮的回复：新会话看不到现在的上下文，只看得到这份交接和最近 ${HANDOVER_RECENT_MESSAGES} 条你和用户的原话。
 交接写清楚：现状、已经定下的事、正在做的事、还在跑的 Worker 和 PR（编号、在做什么、到哪一步了）、下一步。这一轮只写交接，不做别的事。`;
+
+/** 对话到门槛自动换时发给旧会话的：同上，只是说明原因。 */
+export const HANDOVER_AUTO_REQUEST_TEXT = HANDOVER_REQUEST_TEXT.replace(
+  "用户要给你换一个新会话（现在的上下文太长了）",
+  `现在的对话太长了（超过 ${HANDOVER_AUTO_CONTEXT_TOKENS} token），系统自动给你换一个新会话`,
+);
 
 /** 发给新会话的第一条：交接 + 最近几条原话。 */
 export function renewedText(handover: string, recent: { sender: string; text: string }[]): string {
@@ -97,27 +105,29 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       event,
     );
 
-  const renewSession = (pmId: PmId): { messageId: MessageId } =>
-    write((p) => {
-      requirePm(pmId);
-      const conversation = privateConversation(pmId)!;
-      const session = currentSession(conversation.id)!;
-      // 新会话的第一条还没结果：就是它（再发 H 会和它互相等）；重排次数用完了：同一条重新排队，次数清零
-      const renewed = latest(conversation.id, "session.renewed");
-      if (renewed !== undefined && renewed.session_id === session.id) {
-        if (["queued", "delivered", "processing"].includes(renewed.status!)) return { messageId: renewed.id };
-        if (renewed.status === "failed" || renewed.status === "stopped") {
-          requeue(p, renewed, { ...metaOf(renewed), attempts: 0, settled: false });
-          return { messageId: renewed.id };
-        }
+  /** 手动（资料页的按钮）和自动（对话到门槛）共用：发交接请求，auto 只影响请求的文字和网页上那一句。 */
+  const requestHandover = (p: Pending, pmId: PmId, auto: boolean): { messageId: MessageId } => {
+    requirePm(pmId);
+    const conversation = privateConversation(pmId)!;
+    const session = currentSession(conversation.id)!;
+    // 新会话的第一条还没结果：就是它（再发 H 会和它互相等）；重排次数用完了：同一条重新排队，次数清零
+    const renewed = latest(conversation.id, "session.renewed");
+    if (renewed !== undefined && renewed.session_id === session.id) {
+      if (["queued", "delivered", "processing"].includes(renewed.status!)) return { messageId: renewed.id };
+      if (renewed.status === "failed" || renewed.status === "stopped") {
+        requeue(p, renewed, { ...metaOf(renewed), attempts: 0, settled: false });
+        return { messageId: renewed.id };
       }
-      const meta: SystemMessageMeta = { event: "handover.requested", sessionId: session.id };
-      // 每一代最多一条交接请求：还在等就是它；上一次被停止、失败了，同一条重新排队（和用户点重试一样）
-      const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(conversation.id, meta));
-      if (existing === undefined) return { messageId: insertQueued(p, session, meta, HANDOVER_REQUEST_TEXT) };
-      if (existing.status === "stopped" || existing.status === "failed") requeue(p, existing, { ...metaOf(existing), settled: false });
-      return { messageId: existing.id };
-    });
+    }
+    const meta: SystemMessageMeta = auto ? { event: "handover.requested", sessionId: session.id, auto: true } : { event: "handover.requested", sessionId: session.id };
+    // 每一代最多一条交接请求：还在等就是它；上一次被停止、失败了，同一条重新排队（和用户点重试一样）
+    const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(conversation.id, meta));
+    if (existing === undefined) return { messageId: insertQueued(p, session, meta, auto ? HANDOVER_AUTO_REQUEST_TEXT : HANDOVER_REQUEST_TEXT) };
+    if (existing.status === "stopped" || existing.status === "failed") requeue(p, existing, { ...metaOf(existing), settled: false });
+    return { messageId: existing.id };
+  };
+
+  const renewSession = (pmId: PmId): { messageId: MessageId } => write((p) => requestHandover(p, pmId, false));
 
   /** 同一代或更早的 H、R 还没结果（排队、已送达、处理中）就压着；R 自己不压（它是新会话的第一条）。 */
   const waitsForHandover = (messageId: MessageId): boolean =>
@@ -205,6 +215,27 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     }
   };
 
+  /**
+   * 项目经理的一轮正常结束后，当前对话长度到了门槛：自动走手动“开新会话”的流程。
+   * 这一代已经发过交接请求（还在写、写完在换、上一次没写成）或新会话第一条还没结果：不再触发（没写成的用户可以手动再点）。
+   * usage 由驱动层直接写库、在 turn.ended 之前，所以读库里最新的，不用事件前取的那一份。
+   */
+  const autoRenewIfTooLong = (p: Pending, session: AgentSessionRow) => {
+    const conversationId = session.conversationId!;
+    if (currentSession(conversationId)?.id !== session.id) return;
+    if ((getAgentSession(db, session.id)?.usage.context ?? 0) < HANDOVER_AUTO_CONTEXT_TOKENS) return;
+    const handedOver = db.get(
+      `SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender = 'system' AND kind = 'text'
+         AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.sessionId') = ? LIMIT 1`,
+      conversationId,
+      session.id,
+    );
+    if (handedOver !== undefined) return;
+    const renewed = latest(conversationId, "session.renewed");
+    if (renewed !== undefined && renewed.session_id === session.id && renewed.status !== "replied") return;
+    requestHandover(p, session.pmId!, true);
+  };
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "pm" || session.conversationId === null) return;
     // H 开始处理：记下那一刻库里最大的编号（之后的文字才是交接）
@@ -229,6 +260,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       renew(p, session, row!);
       return;
     }
+    autoRenewIfTooLong(p, session);
   };
 
   /** session.send 次数用完（ledger.onActionFailed，消息已经标了 failed）：H、R 一样处理。 */
