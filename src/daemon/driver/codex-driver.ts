@@ -75,7 +75,7 @@ import {
 } from "./process.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
-import { personaSeenAtSpawn, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
 
 interface PendingEntry {
@@ -144,7 +144,7 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
-  /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：thread/resume 失败退回 thread/start 时用。 */
+  /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：线程建好或恢复好时定 agent 看到的版本（persona-note.ts）。 */
   personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
@@ -614,7 +614,7 @@ export class CodexDriver implements Driver {
 
   #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
     // 守护进程重启后第一次：从会话那一行读
-    if (st.personaSeen === null) st.personaSeen = this.#row(st)?.personaRevision ?? null;
+    if (st.personaSeen === null) st.personaSeen = personaSeenFromRow(this.#row(st));
     return takePersonaNote(
       this.#opts.personaNote,
       st.id,
@@ -964,8 +964,6 @@ export class CodexDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
-    // thread/resume 按沿用会话最初的说明算（没实测，同 claude），thread/start 是这次拼的（persona-note.ts）；resume 退回 start 时再改
-    this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, !resume));
     this.#update(st, { pid: child.pid ?? null });
 
     child.on("error", () => {});
@@ -1115,8 +1113,6 @@ export class CodexDriver implements Driver {
           // thread/resume 报错（如 not found / no rollout found）：自动回退发 thread/start 开启新线程
           proc.resume = false;
           proc.threadId = null;
-          // 新线程的说明是这次拼的
-          this.#setPersonaSeen(st, proc.personaLaunched);
           const row = this.#row(st);
           const sessionInfo = {
             cwd: row?.cwd ?? proc.launched.cwd,
@@ -1234,6 +1230,8 @@ export class CodexDriver implements Driver {
     if (proc.initSeen) return;
     proc.initSeen = true;
     proc.resume = resumed;
+    // 线程好了才定 agent 看到的性格设定：thread/start（包括 resume 失败退回的）是这次拼的；thread/resume 见 persona-note.ts
+    this.#setPersonaSeen(st, personaSeenAtStart(st, this.#row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
     this.#clearTimer(st, "startTimer");
 
     const patch: AgentSessionPatch = {

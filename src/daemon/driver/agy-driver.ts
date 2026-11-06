@@ -55,7 +55,7 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
-import { personaSeenAtSpawn, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
@@ -108,6 +108,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** 这次拼进系统指令的性格设定是哪一版（LaunchFiles.personaRevision）：第一个 init 时定 agent 看到的版本（persona-note.ts）。 */
+  personaLaunched: number | null;
   /** 新进程第一条消息前面带的系统指令（agy 没有系统提示词参数），里面的性格设定是 personaRevision 那一版。 */
   systemPrompt: string | null;
   promptSent: boolean;
@@ -837,6 +839,7 @@ export class AgyDriver implements Driver {
         model: row.model,
         effort: row.effort,
       },
+      personaLaunched: files.personaRevision ?? null,
       systemPrompt,
       promptSent: false,
       readonly,
@@ -851,8 +854,6 @@ export class AgyDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
-    // 新进程第一条消息前面重新带系统指令，里面就是这次拼的性格设定（persona-note.ts）
-    this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, true));
     this.#update(st, { pid: child.pid ?? null });
 
     child.on("error", () => {});
@@ -980,6 +981,8 @@ export class AgyDriver implements Driver {
     proc.initSeen = true;
     this.#clearTimer(st, "startTimer");
     const row = this.#row(st);
+    // 新进程第一条消息前面重新带系统指令，里面就是这次拼的性格设定（persona-note.ts）；真起来了才算数
+    this.#setPersonaSeen(st, personaSeenAtStart(st, row, proc.personaLaunched, true));
     const patch: AgentSessionPatch = { status: "running", lastEventAt: at };
     if (convId !== "") {
       patch.vendorSessionId = convId;

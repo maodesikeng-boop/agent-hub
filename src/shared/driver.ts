@@ -2,6 +2,7 @@
 import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
+import { HUB_COMMAND } from "./names.ts";
 
 export type { AgentStep, AgentStepInput } from "./domain.ts";
 
@@ -59,8 +60,9 @@ export const RESEND_NOTE = "【系统】下面这条消息之前可能已经发�
  * 两轮之间因为设置变了自动重启之后（见下面“两轮之间自动重启”），加在下一条写进去的消息前面。
  * 项目经理自己调 hub 改了设置（挂、移除文件夹）时，账本不再单独给它发【系统】消息，靠这一句告诉它
  * 新设置已经生效（见 domain.ts 的 SystemMessageMeta）。性格设定、模式变了不重启，说明见 PersonaNote。
+ * 不说“见系统提示词”：claude --resume 沿用会话最初的系统提示词（driver/persona-note.ts），里面的项目、文件夹可能是旧的。
  */
-export const RELAUNCH_NOTE = "【系统】你的设置（文件夹、管着的项目、模型或思考程度）刚更新过，已经按新设置重新启动，最新的设置见系统提示词。";
+export const RELAUNCH_NOTE = `【系统】你的设置（文件夹、管着的项目、模型或思考程度）刚更新过，已经按新设置重新启动。系统提示词里的项目和文件夹可能是旧的，最新的以 \`${HUB_COMMAND} status\`、\`${HUB_COMMAND} persona show\` 为准。`;
 /** 后台任务被结束时说明里最多列几个任务、每个任务的 description 最多几个字符。 */
 const KILLED_NOTE_MAX_TASKS = 5;
 const KILLED_NOTE_MAX_DESC_CHARS = 80;
@@ -383,7 +385,7 @@ export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => 
  * - 写每一行（空闲时写、一轮中途写、排队的）之前调 DriverOptions.personaNote，变了就把说明放在前面的 text 块里，
  *   记下新的版本号，同一版只带一次；连改几次只带最新的；命令那一行不带（同别的说明，留给下一条）；没写成、agent 没读到的退回去，下一行再带；
  * - 新起的进程算不算按最新的拼过（driver/persona-note.ts）：新会话（--session-id、thread/start）、agy 每个新进程（第一条前面重新带系统指令）算，
- *   记下 LaunchFiles.personaRevision、不再带说明；claude --resume 沿用会话最初的系统提示词（2.1.314 实测），codex thread/resume 按一样算，
+ *   记下 LaunchFiles.personaRevision、不再带说明；claude --resume、codex thread/resume 都沿用会话最初的（实测，见 docs/persona-updates.md），
  *   空闲关闭、换模型、崩溃之后恢复的进程照样靠说明。
  */
 

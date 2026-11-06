@@ -66,7 +66,7 @@ import {
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
-import { personaSeenAtSpawn, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
@@ -139,6 +139,8 @@ interface Proc {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
+  /** 这次拼进提示词的性格设定是哪一版（LaunchFiles.personaRevision）：第一个 init 时定 agent 看到的版本（persona-note.ts）。 */
+  personaLaunched: number | null;
   initSeen: boolean;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -654,7 +656,7 @@ export class ClaudeDriver implements Driver {
 
   #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
     // 守护进程重启后第一次：从会话那一行读
-    if (st.personaSeen === null) st.personaSeen = this.#row(st)?.personaRevision ?? null;
+    if (st.personaSeen === null) st.personaSeen = personaSeenFromRow(this.#row(st));
     return takePersonaNote(
       this.#opts.personaNote,
       st.id,
@@ -955,6 +957,7 @@ export class ClaudeDriver implements Driver {
       child,
       resume,
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
+      personaLaunched: files.personaRevision ?? null,
       initSeen: false,
       capabilities: new Set(),
       stderr: "",
@@ -966,8 +969,6 @@ export class ClaudeDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
-    // --resume 沿用会话最初的系统提示词，agent 看到的性格设定接着算之前的；--session-id 是这次拼的（persona-note.ts）
-    this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, !resume));
     st.background.clear();
     this.#update(st, { pid: child.pid ?? null });
     child.on("error", () => {}); // 出错之后总会有 exit
@@ -1192,6 +1193,9 @@ export class ClaudeDriver implements Driver {
       return;
     }
     proc.initSeen = true;
+    // 真起来了才定 agent 看到的性格设定：--resume 沿用会话最初的系统提示词，接着算之前的；--session-id 是这次拼的（persona-note.ts）。
+    // 不在 spawn 时定：--session-id 撞了改 --resume 重试的那次不能算数
+    this.#setPersonaSeen(st, personaSeenAtStart(st, this.#row(st), proc.personaLaunched, !proc.resume));
     proc.capabilities = parseCapabilities(obj);
     if (proc.capabilities.has("msg_lifecycle_v1") && !midTurnCapable(proc)) {
       this.#opts.log(`[driver] session ${st.id}: claude 不支持停止时取消排着的消息（没有 interrupt_cancel_queued_v1），忙时照旧排队`);

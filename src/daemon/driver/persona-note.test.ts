@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RELAUNCH_NOTE } from "../../shared/index.ts";
 import type { FakeScript, FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
+import { createClaudeDriver } from "./index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
@@ -27,6 +28,42 @@ function harness(script: FakeScript = {}, driver: { idleCloseMs?: number } = {})
   h = makeHarness({ script, driver: { personaNote: f.personaNote, ...driver } });
   h.launch.personaRevision = f.revision;
   return { t: h, f };
+}
+
+/**
+ * 换一个驱动层（同一个库、同一个假 claude 的记录）：模拟守护进程重启。turn 发一条、等这个驱动层出一个 turn.ended。
+ */
+function restartedDriver(t: Harness, f: PersonaFixture) {
+  writeFileSync(join(t.dir, "prompt.md"), "你是项目经理。");
+  const driver = createClaudeDriver({
+    claudePath: FAKE_CLAUDE,
+    stateDir: join(t.dir, "state"),
+    store: t.store,
+    prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
+    personaNote: f.personaNote,
+    env: { FAKE_CLAUDE_LOG: join(t.dir, "fake-claude.log"), FAKE_CLAUDE_SCRIPT: join(t.dir, "script.json"), FAKE_CLAUDE_STATE: t.dir },
+  });
+  let ended = 0;
+  const waiters: Array<() => void> = [];
+  driver.onEvent((_id, e) => {
+    if (e.type !== "turn.ended") return;
+    ended++;
+    for (const w of waiters.splice(0)) w();
+  });
+  return {
+    driver,
+    turn: async (sessionId: number, id: number, text: string) => {
+      const target = ended + 1;
+      await driver.send(sessionId, user(id, text));
+      while (ended < target) await new Promise<void>((resolve) => waiters.push(resolve));
+    },
+  };
+}
+
+/** 等假 claude 记下第 n 条 user 行（它读到再记，比 send 返回晚一点）。 */
+async function nthBlock(t: Harness, n: number): Promise<string[]> {
+  for (let i = 0; i < 200 && t.stdinBlocks().length < n; i++) await realSleep(10);
+  return t.stdinBlocks()[n - 1]!;
 }
 
 /** 发一条，等到第 n 个 turn.ended。 */
@@ -127,28 +164,102 @@ describe("claude：性格设定、模式改了不重启", () => {
     // 换一个驱动层（同一个库）：模拟守护进程重启，--resume 起来
     await t.driver.shutdown();
     f.userEdit({ text: "第二版" });
-    const { createClaudeDriver } = await import("./index.ts");
-    const again = createClaudeDriver({
-      claudePath: FAKE_CLAUDE,
-      stateDir: join(t.dir, "state"),
-      store: t.store,
-      prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
-      personaNote: f.personaNote,
-      env: { FAKE_CLAUDE_LOG: join(t.dir, "fake-claude.log"), FAKE_CLAUDE_SCRIPT: join(t.dir, "script.json"), FAKE_CLAUDE_STATE: t.dir },
-    });
-    writeFileSync(join(t.dir, "prompt.md"), "你是项目经理。");
-    const ended = new Promise<void>((resolve) => again.onEvent((_id, e) => e.type === "turn.ended" && resolve()));
+    const again = restartedDriver(t, f);
     try {
-      await again.send(s.id, user(3, "三"));
-      await ended;
+      await again.turn(s.id, 3, "三");
       expect(t.argvs().at(-1)).toContain("--resume");
       const last = t.stdinBlocks().at(-1)!;
       expect(last[0]).toContain("第二版");
       expect(last[0]).not.toContain("第一版");
       expect(last[1]).toBe("三");
     } finally {
-      await again.shutdown();
+      await again.driver.shutdown();
     }
+  });
+
+  it("0012 之前的老会话（跑过一轮、没有记录）：按 0 算，守护进程重启后第一条带一次全文", async () => {
+    const { t, f } = harness();
+    const s = t.addSession();
+    f.userEdit({ text: "升级前改的" });
+    await turn(t, 1, "一", 1);
+    await t.driver.shutdown();
+    t.store.set(s.id, { personaRevision: null });
+    const again = restartedDriver(t, f);
+    try {
+      await again.turn(s.id, 2, "二");
+      await again.turn(s.id, 3, "三");
+      const blocks = t.stdinBlocks();
+      expect(blocks.at(-2)![0]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：/);
+      expect(blocks.at(-2)![0]).toContain("升级前改的");
+      expect(blocks.at(-1)).toEqual(["三"]);
+    } finally {
+      await again.driver.shutdown();
+    }
+  });
+
+  it("--session-id 撞了改 --resume 重试：第一次没起来不算数，按恢复会话算，之后带说明（不会当成已按最新的拼）", async () => {
+    const { t, f } = harness({}, { idleCloseMs: 50 });
+    const s = t.addSession();
+    await turn(t, 1, "一", 1);
+    await t.waitFor("session.exited");
+    await t.driver.shutdown();
+    // 守护进程重启；账本里的“跑完过一轮”和看到的版本都丢了（老会话），这期间改了性格设定
+    t.store.set(s.id, { personaRevision: null, hasCompletedTurn: false });
+    f.userEdit({ text: "新习惯" });
+    const again = restartedDriver(t, f);
+    try {
+      await again.turn(s.id, 2, "二");
+      const argvs = t.argvs();
+      expect(argvs.at(-2)).toContain("--session-id");
+      expect(argvs.at(-1)).toContain("--resume");
+      await again.turn(s.id, 3, "三");
+      const last = t.stdinBlocks().at(-1)!;
+      expect(last[0]).toContain("新习惯");
+      expect(last[1]).toBe("三");
+    } finally {
+      await again.driver.shutdown();
+    }
+  });
+
+  it("中途写进去带了说明的一行还没被取走，之后只改了模型（版本推进、没带说明）；停止收回时退到它之前，下一条再带", async () => {
+    const { t, f } = harness();
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ capabilities: CAPS, turns: [toolTurn(t, "go1")], defaultTurn: { steps: [{ text: "好" }] } }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.text");
+    f.userEdit({ text: "新习惯" });
+    await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    expect((await nthBlock(t, 2))[0]).toContain("新习惯");
+    f.userModel("haiku"); // 只记在账本，会话那一行不改：不触发重启
+    await expect(t.driver.send(s.id, user(3, "再插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
+    expect(await nthBlock(t, 3)).toEqual(["再插一句"]);
+    await t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    expect(t.of("message.cancelled").flatMap((e) => e.messageIds).sort()).toEqual([2, 3]);
+    await turn(t, 4, "四", 2);
+    expect(t.stdinBlocks().at(-1)![0]).toContain("新习惯");
+    expect(t.stdinBlocks().at(-1)![1]).toBe("四");
+  });
+
+  it("中途写进去的两行各带了说明（先改模式、再改正文），一起被停止收回：退到最早那行之前，下一条两样都带", async () => {
+    const { t, f } = harness();
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ capabilities: CAPS, turns: [toolTurn(t, "go1")], defaultTurn: { steps: [{ text: "好" }] } }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.text");
+    f.userEdit({ mode: "hands_on" });
+    await t.driver.send(s.id, user(2, "插一句"));
+    f.userEdit({ text: "新习惯" });
+    await t.driver.send(s.id, user(3, "再插一句"));
+    expect((await nthBlock(t, 2))[0]).toMatch(/^【系统】你的模式刚更新了/);
+    expect((await nthBlock(t, 3))[0]).toMatch(/^【系统】你的性格设定刚更新了/);
+    await t.driver.interrupt(s.id);
+    await t.waitFor("turn.ended");
+    await turn(t, 4, "四", 2);
+    const last = t.stdinBlocks().at(-1)!;
+    expect(last[0]).toMatch(/^【系统】你的模式和性格设定刚更新了/);
+    expect(last[0]).toContain("新习惯");
+    expect(last[1]).toBe("四");
   });
 
   it("撤销也算一次修改：不重启，带撤销后的内容；改了又撤销回去（agent 没看到过中间那版）不带", async () => {
