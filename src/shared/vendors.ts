@@ -16,6 +16,11 @@ export interface VendorSpec {
   customModel: boolean;
   /** 自定义模型名输入框里的示例。 */
   customModelExample: string;
+  /**
+   * hub worker start 不写 --model 时这家用的 Worker 默认模型（id 原样传给 modelFlag）；不写 = 用厂商自己的默认。
+   * 不再沿用项目经理的模型：项目经理用贵模型时 Worker 不跟着贵。
+   */
+  workerDefaultModel?: string;
   /** 思考程度，原样传给 effortFlag（effortInModelId 的厂商拼进模型 ID）。 */
   efforts: readonly string[];
   /**
@@ -98,6 +103,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
       { id: "sonnet", label: "Sonnet" },
       { id: "haiku", label: "Haiku" },
     ],
+    workerDefaultModel: "sonnet",
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
