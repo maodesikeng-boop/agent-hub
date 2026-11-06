@@ -9,6 +9,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { bundledModelCatalog } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -70,10 +71,10 @@ function expectLedgerError(fn: () => unknown, code: LedgerErrorCode, message?: R
 
 const sessionOf = (workerId: WorkerId): SessionId => db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", workerId)!.id;
 
-function startWorker(vendor: AgentVendor, extra: { title?: string; noWorktree?: boolean } = {}): WorkerId {
+function startWorker(vendor: AgentVendor, extra: { title?: string; noWorktree?: boolean; model?: string; effort?: string } = {}): WorkerId {
   const probe: WorkspaceProbe = { kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false };
   const context: HubCallContext = extra.noWorktree === false ? { workspace: { ...probe, isRepoWithCommit: true } } : {};
-  return ledger.hubCall(lin.sessionId, "worker.start", { title: extra.title ?? "修 X", task: "把 X 修好", vendor, noWorktree: extra.noWorktree ?? true }, context).data
+  return ledger.hubCall(lin.sessionId, "worker.start", { title: extra.title ?? "修 X", task: "把 X 修好", vendor, noWorktree: extra.noWorktree ?? true, ...(extra.model ? { model: extra.model } : {}), ...(extra.effort ? { effort: extra.effort } : {}) }, context).data
     .worker.id;
 }
 
@@ -351,6 +352,37 @@ describe.each(["claude", "codex", "agy"] as const)("%s 的 Worker", (vendor) => 
     startTurn(w);
     advance(10_000);
     expect(show(w).text).toContain("这一轮跑了 10s");
+  });
+});
+
+describe("模型名、思考程度：和网页右栏、资料页一样的写法", () => {
+  const line = (w: WorkerId) => show(w).text.split("\n")[1];
+
+  it("claude 的完整模型名写成显示名；默认写“默认”", () => {
+    expect(line(startWorker("claude", { model: "claude-opus-5-5" }))).toBe("厂商 Claude Code，模型 Opus 5.5，思考程度 默认");
+    expect(line(startWorker("claude", { model: "claude-sonnet-5-5", effort: "high" }))).toBe("厂商 Claude Code，模型 Sonnet 5.5，思考程度 high");
+  });
+
+  it("agy：模型和思考程度分开写（另存的、写在模型 ID 末尾的老数据都拆开）", () => {
+    expect(line(startWorker("agy", { model: "gemini-4-argon", effort: "high" }))).toBe("厂商 Antigravity，模型 Gemini 4 Argon，思考程度 high");
+    const old = startWorker("agy");
+    db.run("UPDATE agent_sessions SET model = 'gpt-oss-120b-medium', effort = NULL WHERE worker_id = ?", old);
+    expect(line(old)).toMatch(/，思考程度 medium$/);
+    expect(line(old)).not.toContain("gpt-oss-120b-medium");
+  });
+
+  it("厂商报了“默认”实际用哪个模型就写它", () => {
+    const withCatalog = createLedger(db, {
+      now: () => now,
+      pmHomeRoot: join(root, ".agent-hub", "pm-home"),
+      dataHome: join(root, ".agent-hub"),
+      resolveFolder: createResolveFolder({ dataHome: join(root, ".agent-hub"), userHome: root }),
+      modelCatalog: (vendor) => ({ ...bundledModelCatalog(vendor), source: "vendor", defaultModel: "Opus 5.5" }),
+    });
+    const w = startWorker("claude");
+    db.run("UPDATE agent_sessions SET model = NULL WHERE worker_id = ?", w);
+    const text = withCatalog.hubCall(lin.sessionId, "worker.show", { workerId: w }, {}).text;
+    expect(text).toContain("模型 Opus 5.5，思考程度 默认");
   });
 });
 

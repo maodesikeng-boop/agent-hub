@@ -10,7 +10,7 @@ import type { HubArgs, HubResult, WorkerLogStep, WorkerPr } from "../../shared/h
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
-import { effortLabel, splitModelEffort, vendorLabel } from "../../shared/vendors.ts";
+import { agentEffortOf, effortLabel, vendorLabel } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
@@ -147,10 +147,13 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const t = now();
 
     const state = stateOf(worker, live, lastEnded);
-    const shown = splitModelEffort(session.vendor as AgentVendor, session.model, session.effort);
+    // 和网页右栏、资料页一样：模型写显示名，agy 的模型和思考程度分开写（老数据里写在模型 ID 末尾的也拆开）；
+    // 思考程度“默认”时厂商没告诉我们实际是哪一档（ModelCatalog 里没有），只能写默认
+    const vendor = session.vendor as AgentVendor;
+    const effort = agentEffortOf(vendor, session.model, session.effort);
     const lines: string[] = [];
     lines.push(`Worker #${worker.id}“${worker.title}”：${state}${worker.readonly === 1 ? "，只读" : ""}`);
-    lines.push(`厂商 ${vendorLabel(session.vendor)}，模型 ${ctx.modelLabel(session.vendor as AgentVendor, shown.model)}，思考程度 ${effortLabel(shown.effort)}`);
+    lines.push(`厂商 ${vendorLabel(session.vendor)}，模型 ${ctx.modelShortLabel(vendor, session.model)}，思考程度 ${effortLabel(effort)}`);
 
     const alive = session.pid !== null;
     const quiet = session.lastEventAt === null ? "还没有过动静" : `最后一次有动静是 ${formatDuration(t - session.lastEventAt)} 前`;
