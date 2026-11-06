@@ -341,6 +341,7 @@ interface MidTurnSupport {
 
 - **运行期间能判断**：两个办法都行——①事件：`item/started`（`type:"commandExecution"`）之后没出对应 `item/completed`，这个命令 item **跨过 `turn/completed` 继续开着**，名单就是“开着的 commandExecution item（按 `item.id`）”；②查询：`thread/backgroundTerminals/list {threadId}`（回完整名单，`processId`、`command` 字段，`osPid` 实测是 null）。**`turn/completed` 的 `turn.items` 不含这个命令，不能靠它。**
 - **跑完时有通知**：`item/completed`（`status:"completed"`、`exitCode`、`durationMs`，`aggregatedOutput` 是 null），名单随即变空。**不会自己开新的一轮**（42.05 前后没有 `turn/started`，`thread/status` 一直是 idle），模型也没被叫醒——agent 要等下一轮自己去查（或由我们发一条系统消息叫醒它，见 10.3）。
+- **闲置关闭（关标准输入）会杀掉它**（`bg3_codex`，turn 结束后 2 秒关标准输入）：app-server 14.79 `turn/completed`、17.18 退出（退出码 0），**那个 unified exec 命令随之被杀**——退出后进程已不在，再等 32 秒 `bg_done.txt` 也没有写出。所以 codex 不处理后台信号的话，超过闲置时长的长命令一定会在关进程时被杀。（shell 层 `nohup &` 的命令是脱离的，应该能活下来，没单独测。）
 - 一轮结束时没有专门的“后台任务变了”事件，`thread/status/changed` 的 `activeFlags` 在这期间是空的，不能用。
 
 **2) 命令是 shell 层面放后台（`nohup … &`、`( … ) &`，`bg_codex`，模型被要求“放后台”时选的是这种）：**
@@ -364,7 +365,7 @@ codex 看到的是一个立刻结束的命令，**之后命令还在跑，但没
 | 完成时的通知 | `task_notification`、`background_tasks_changed(tasks=[])` | `item/completed`（`exitCode`、`durationMs`） | 无 |
 | 会不会自己开新的一轮 | **会**（约 100 毫秒后，agent 读到结果） | **不会** | **不会** |
 | 一轮的 `result`/`turn/completed` 之后 | 后台任务通常还在跑 | 命令 item 仍开着 | 命令还在跑 |
-| 关进程时 | （没测，见 PR #92） | 没测 | 进程不等它就退出，命令成孤儿自己跑完，结果没人接 |
+| 闲置关闭（关标准输入）时 | 没有信号就会被杀（PR #92 要解决的问题） | **杀掉** unified exec 的长命令（`bg3_codex`）；`nohup &` 的没测 | 进程不等它就退出，**不杀**，命令成孤儿自己跑完，结果没人接 |
 
 **接口**：沿用第 9.2 节的思路，能力声明加一项，界面和闲置关闭只认通用的东西：
 
@@ -381,4 +382,4 @@ interface BackgroundTaskSupport {
 - claude：`{signal:"snapshot_event", wakesAgent:true}`（现状，PR #92）。
 - codex：`{signal:"item_lifecycle", wakesAgent:false}`：**可以像 claude 一样“有任务就不闲置关闭”，但光保住进程不够**——命令跑完时 agent 不会被叫醒，要由驱动层在 `item/completed`（后台那个命令）到达时发一条系统消息（“后台命令 X 已结束，退出码 N”）把 agent 叫起来读结果，否则只是命令没被杀、结果没人看。
 - agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；`prompt.ts` 里“长命令放后台、跑完会叫醒你”这一句对 agy（和 codex）不成立，要按厂商分开写或只给 claude（agy 让它前台跑，当前这一轮等它；这一条另开任务）。
-- **没测的**：codex 的 unified exec 进程在 app-server 退出时是否被杀、`thread/backgroundTerminals/terminate/clean` 的行为、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。
+- **没测的**：`thread/backgroundTerminals/terminate/clean` 的行为、强杀（进程组 SIGKILL）时 agy 的孤儿命令会不会被一起杀、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。
