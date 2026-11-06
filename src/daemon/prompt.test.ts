@@ -406,6 +406,7 @@ describe("提示词：项目经理（M3）", () => {
       "git -C <worktree路径> diff",
       `${hub} worker send`,
       `${hub} worker end`,
+      "正在跑的一轮会先被打断",
       "不会删 worktree",
       "至少有一次提交",
     ]) {
@@ -467,6 +468,7 @@ describe("提示词：项目经理（M3）", () => {
       `让它收工（\`${hub} worker end\`），新派一个接手`,
       "任务说明里写清分支、已有的提交、还要改的点",
       "审查意见多、要来回改好几轮的，也直接新派",
+      "只差一两步就完的（比如再推一次、回答一个问题），对话长也可以接着用",
     ]) {
       expect(PM_WORKER_PROMPT).toContain(word);
     }
