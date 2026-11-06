@@ -828,8 +828,8 @@ describe("CodexDriver 打断（interrupt）", () => {
   });
 });
 
-describe("CodexDriver 反向 RPC 审批拦截（Worker 记忆保护与只读模式）", () => {
-  it("Worker 收到 fileChange/commandExecution 审批触碰 AGENTS.md 或 stateDir 时返回 decline，普通文件返回 accept", async () => {
+describe("CodexDriver 反向 RPC 审批拦截（Worker 系统数据目录 state/ 保护与只读模式；记忆文件不拦）", () => {
+  it("Worker 收到 fileChange/commandExecution 审批改 stateDir 返回 decline，改 AGENTS.md 和普通文件返回 accept", async () => {
     const t = makeCodexHarness({
       script: {
         turns: [
@@ -927,10 +927,10 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 记忆保护与只读模�
       .map((r) => ({ id: r.id, result: r.result }));
 
     expect(responses).toEqual([
-      { id: 901, result: { decision: "decline" } },
+      { id: 901, result: { decision: "accept" } },
       { id: 902, result: { decision: "decline" } },
       { id: 903, result: { decision: "accept" } },
-      { id: 904, result: { decision: "decline" } },
+      { id: 904, result: { decision: "accept" } },
       { id: 905, result: { decision: "accept" } },
       { id: 906, result: { answers: {} } },
     ]);

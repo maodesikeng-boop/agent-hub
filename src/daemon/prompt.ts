@@ -29,10 +29,11 @@ import {
   PRODUCT_NAME,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
+  VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   WORKER_REPORT_FORMAT,
 } from "../shared/index.ts";
-import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, WorkerRecord } from "../shared/index.ts";
+import type { LaunchContext, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
@@ -56,6 +57,10 @@ export function needsAgentsNote(cwd: string): boolean {
 // 提示词的结构和措辞照用户给的参考稿（11-05，基本照搬，保持它的长度和粒度）：角色与环境 → 你的项目 → 怎么干活（模式）→ 怎么记事情 → 怎么带 Worker → 系统命令 → 性格设定。
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
+/** 长命令放后台（只给项目经理，Worker 不加）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
+export const PM_BACKGROUND_COMMAND_NOTE =
+  "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。";
+
 /**
  * 两种模式的默认做法（设计第 2.2 节）。只是提示词，程序不硬拦。M3 起“只管理”是派 Worker 干活、自己验收。
  */
@@ -64,11 +69,13 @@ export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
 
 - **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
 - **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
+${PM_BACKGROUND_COMMAND_NOTE}
 - **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`,
   hands_on: `# 怎么干活（当前模式：${PM_MODE_LABELS.hands_on}）
 
 - **能直接做就直接做**：不复杂的事自己动手，做完告诉用户做了什么、改了哪些文件。
 - **活大了再派 Worker**：活大、能拆开同时做，或者想和主文件夹隔开的，派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
+${PM_BACKGROUND_COMMAND_NOTE}
 - **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
 - **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`,
 };
@@ -84,21 +91,37 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情（更新你的性格设定）
 - **什么不要记**：当前某一个临时任务的细节、报错或一次性指令，不要往里塞。
 - **怎么改**：先跑 \`${HUB} persona show\` 看现在的完整内容，在原文基础上增删合并（把过时的旧规矩删掉或替换掉，保持简短干净），再用 \`${HUB} persona edit --reason "<为什么改>" --stdin <<'EOF'\` 写入新的**完整**内容。`;
 
+export type VendorPromptSpec = Pick<VendorSpec, "label" | "models">;
+
+/** 把厂商清单（VENDOR_SPECS）拼成提示词里的列表：厂商名、显示名、几个代表模型。 */
+export function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
+  return Object.entries(specs)
+    .map(([vendor, spec]) => {
+      const models = spec.models.map((m) => `\`${m.id}\``).join("、");
+      return models ? `\`${vendor}\`（${spec.label}，如 ${models}）` : `\`${vendor}\`（${spec.label}）`;
+    })
+    .join("、");
+}
+
 /**
  * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
  * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
  */
-export const PM_WORKER_PROMPT = `# 怎么带 Worker
+export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
+  return `# 怎么带 Worker
 
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 Claude/Codex 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`spawn_agent\` 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`agy\`、\`codex\`、\`gemini\` 这类工具。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
 - **验收与收尾**：
   - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
   - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
-  - Worker 不能改记忆文件（\`AGENTS.md\`、\`CLAUDE.md\`、\`GEMINI.md\`、\`.claude/\`、\`.gemini/\`、\`.codex/\`），它建议改的，你在主文件夹里自己改。
   - 要打回修改或回答它的问题，用 \`${HUB} worker send <编号> --stdin\`（原 Worker 会接着干）。
   - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（不会删 worktree，不再需要的你自己清理）。`;
+}
+
+export const PM_WORKER_PROMPT = buildPmWorkerPrompt();
 
 /**
  * hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条，11-03、M3 改过，11-05 照参考稿的长度），给项目经理看。命令以 shared/hub.ts 的命令表为准。
@@ -178,14 +201,10 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - \`${HUB} status\`：看我是哪个 Worker、任务是什么、在哪干活。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
-/**
- * Worker 的规矩（m3-plan 第 2.1、2.2 节）：问不了用户，有问题写进汇报的“问题”；不能写记忆（唯一的硬限制，
- * 规则在 shared/policy.ts 的 WORKER_MEMORY_DENY_RULES，这里是告诉它为什么被拒、该怎么办）。
- */
+/** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
 export const WORKER_RULES = `# 你的规矩
 
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
-- 记忆文件你不能改：任何位置的 \`AGENTS.md\`、\`CLAUDE.md\`、\`CLAUDE.local.md\`、\`GEMINI.md\` 和 \`.claude/\`、\`.gemini/\`、\`.codex/\` 下的东西，还有用户目录下的 \`~/.claude/\`、\`~/.gemini/\`、\`~/.codex/\`，改了会被系统拒绝。任务需要改的话，在汇报的“问题”里写清楚改哪个文件、改成什么，由项目经理来改。
 - 不要用厂商自带的子代理（如 \`Agent\`、\`Task\`、\`spawn_agent\` 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。`;
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
@@ -259,7 +278,7 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
  */
 export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
-  const parts = [roleSection(ctx), projectSection(ctx.project), PM_MODE_PROMPTS[ctx.pm.mode], PM_MEMORY_PROMPT, PM_WORKER_PROMPT, HUB_USAGE_PROMPT];
+  const parts = [roleSection(ctx), projectSection(ctx.project), PM_MODE_PROMPTS[ctx.pm.mode], PM_MEMORY_PROMPT, buildPmWorkerPrompt(), HUB_USAGE_PROMPT];
   const persona = personaSection(ctx.pm.persona);
   if (persona !== null) parts.push(persona);
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);

@@ -584,68 +584,45 @@ describe("agy-protocol 纯函数", () => {
     expect(detectAgyArgsConflict("some other error")).toBeNull();
   });
 
-  it("checkWorkerToolViolation：拦截修改记忆文件和只读 Worker 写文件（含 sed_file）", () => {
-    const stateDir = "/Users/u/.agent-hub/state";
-    const cwd = "/Users/u/.agent-hub/worktrees/1/2";
-    expect(
-      checkWorkerToolViolation({
-        toolName: "edit_file",
-        parameters: { Path: "AGENTS.md" },
-        readonly: false,
-        stateDir,
-        cwd,
-      }),
-    ).toBe("Worker 不能修改记忆文件");
+  const stateDir = "/Users/u/.agent-hub/state";
+  const cwd = "/Users/u/.agent-hub/worktrees/1/2";
 
-    expect(
-      checkWorkerToolViolation({
-        toolName: "write_to_file",
-        parameters: { TargetFile: "/Users/u/.agent-hub/state/personas/pm-1.md" },
-        readonly: false,
-        stateDir,
-        cwd,
-      }),
-    ).toBe("Worker 不能修改记忆文件");
+  it("checkWorkerToolViolation：只读 Worker 写文件被拦（含 sed_file、notebook_edit）；非只读 Worker 不拦", () => {
+    for (const toolName of ["edit_file", "sed_file", "notebook_edit", "write_to_file"]) {
+      expect(checkWorkerToolViolation({ toolName, parameters: { Path: "src/index.ts" }, readonly: true, stateDir, cwd })).toBe(
+        "只读 Worker 不能修改文件",
+      );
+      expect(checkWorkerToolViolation({ toolName, parameters: { Path: "src/index.ts" }, readonly: false, stateDir, cwd })).toBeNull();
+    }
+    expect(checkWorkerToolViolation({ toolName: "view_file", parameters: { AbsolutePath: "src/index.ts" }, readonly: true, stateDir, cwd })).toBeNull();
+  });
 
-    expect(
-      checkWorkerToolViolation({
-        toolName: "run_command",
-        parameters: { CommandLine: "echo bad > AGENTS.md" },
-        readonly: false,
-        stateDir,
-        cwd,
-      }),
-    ).toBe("Worker 不能修改记忆文件");
+  it("checkWorkerToolViolation：写类工具和写命令碰 state/ 被拦，读 state/ 不拦", () => {
+    const statePath = `${stateDir}/personas/pm-1.md`;
+    for (const toolName of ["write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "notebook_edit"]) {
+      expect(checkWorkerToolViolation({ toolName, parameters: { TargetFile: statePath }, readonly: false, stateDir, cwd })).toBe(
+        "Worker 不能修改系统数据目录",
+      );
+    }
+    for (const toolName of ["view_file", "read_file", "grep_search", "list_dir"]) {
+      expect(checkWorkerToolViolation({ toolName, parameters: { AbsolutePath: statePath, SearchPath: statePath, DirectoryPath: stateDir }, readonly: false, stateDir, cwd })).toBeNull();
+    }
+    expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: `echo x > ${statePath}` }, readonly: false, stateDir, cwd })).toBe(
+      "Worker 不能修改系统数据目录",
+    );
+    expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: `cat ${statePath}` }, readonly: false, stateDir, cwd })).toBeNull();
+  });
 
-    expect(
-      checkWorkerToolViolation({
-        toolName: "edit_file",
-        parameters: { Path: "src/index.ts" },
-        readonly: true,
-        stateDir,
-        cwd,
-      }),
-    ).toBe("只读 Worker 不能修改文件");
-
-    expect(
-      checkWorkerToolViolation({
-        toolName: "sed_file",
-        parameters: { Path: "src/index.ts" },
-        readonly: true,
-        stateDir,
-        cwd,
-      }),
-    ).toBe("只读 Worker 不能修改文件");
-
-    expect(
-      checkWorkerToolViolation({
-        toolName: "edit_file",
-        parameters: { Path: "src/index.ts" },
-        readonly: false,
-        stateDir,
-        cwd,
-      }),
-    ).toBeNull();
+  it("checkWorkerToolViolation：Worker 改记忆文件不再拦（2026-11-06 用户去掉了这条限制）", () => {
+    const memoryPaths = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/settings.json"];
+    for (const p of memoryPaths) {
+      for (const toolName of ["view_file", "write_to_file", "replace_file_content", "sed_file", "notebook_edit"]) {
+        expect(checkWorkerToolViolation({ toolName, parameters: { TargetFile: p, Path: p }, readonly: false, stateDir, cwd })).toBeNull();
+      }
+    }
+    for (const commandLine of ["echo x > CLAUDE.md", "cat AGENTS.md", "sed -i s/a/b/ .claude/settings.json"]) {
+      expect(checkWorkerToolViolation({ toolName: "run_command", parameters: { CommandLine: commandLine }, readonly: false, stateDir, cwd })).toBeNull();
+    }
   });
 });
 
@@ -951,8 +928,8 @@ describe("3. interrupt() 打断与恢复", () => {
   });
 });
 
-describe("4. Worker 安全拦截（防写记忆文件与只读模式拦截）", () => {
-  it("Worker 试图通过 edit_file 修改 AGENTS.md 时被驱动层拦截并发送 SIGINT 打断报错", async () => {
+describe("4. Worker 安全拦截（系统数据目录 state/ 与只读模式拦截）", () => {
+  it("Worker 通过 edit_file 修改 AGENTS.md 不被拦，这一轮正常结束（2026-11-06 用户去掉了这条限制）", async () => {
     const t = makeAgyHarness({
       script: {
         turns: [
@@ -962,8 +939,8 @@ describe("4. Worker 安全拦截（防写记忆文件与只读模式拦截）", 
                 type: "tool",
                 stepId: 2,
                 name: "edit_file",
-                parameters: { Path: "AGENTS.md", Replacement: "hacked" },
-                durationMs: 2000,
+                parameters: { Path: "AGENTS.md", Replacement: "ok" },
+                durationMs: 200,
               },
             ],
           },
@@ -974,10 +951,8 @@ describe("4. Worker 安全拦截（防写记忆文件与只读模式拦截）", 
     const s = t.addSession({ role: "worker", workerId: 10 });
     await t.driver.send(s.id, user(1, "去改 AGENTS.md"));
     const ended = await t.waitFor("turn.ended");
-    expect(ended.ok).toBe(false);
-    expect(ended.interrupted).toBe(false);
-    expect(ended.error?.message).toContain("Worker 不能修改记忆文件");
-    expect(t.log().some((e) => e.kind === "signal" && e.signal === "SIGINT")).toBe(true);
+    expect(ended.ok).toBe(true);
+    expect(t.log().some((e) => e.kind === "signal" && e.signal === "SIGINT")).toBe(false);
   });
 
   it("Worker 试图修改 stateDir 下的文件时被驱动层拦截并报错", async () => {
@@ -986,28 +961,15 @@ describe("4. Worker 安全拦截（防写记忆文件与只读模式拦截）", 
     writeFileSync(
       join(t.dir, "script.json"),
       JSON.stringify({
-        turns: [
-          {
-            steps: [
-              {
-                type: "tool",
-                stepId: 2,
-                name: "edit_file",
-                parameters: { TargetFile: targetInState },
-                durationMs: 2000,
-              },
-            ],
-          },
-        ],
+        turns: [{ steps: [{ type: "tool", stepId: 2, name: "edit_file", parameters: { TargetFile: targetInState }, durationMs: 2000 }] }],
       }),
     );
-
     const s = t.addSession({ role: "worker", workerId: 11 });
     await t.driver.send(s.id, user(1, "修改性格设定文件"));
     const ended = await t.waitFor("turn.ended");
     expect(ended.ok).toBe(false);
     expect(ended.interrupted).toBe(false);
-    expect(ended.error?.message).toContain("Worker 不能修改记忆文件");
+    expect(ended.error?.message).toContain("Worker 不能修改系统数据目录");
   });
 
   it("只读 Worker 启动带 --mode plan，试图调用写文件工具修改普通文件时被驱动层拦截并报错", async () => {
