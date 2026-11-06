@@ -11,7 +11,7 @@ import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type AgentVendor, type Driver,
 import { createClaudeDriver, createCodexDriver } from "../../src/daemon/driver/index.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { sleep, waitUntil } from "../e2e/harness.ts";
-import { CLAUDE, MODEL, TURN_MS, expect, scenario, type Outcome } from "./kit.ts";
+import { CLAUDE, MODEL, TURN_MS, expect, removeOwnClaudeProjects, removeVendorRecordsOf, scenario, writeClaudeWrapper, type Outcome } from "./kit.ts";
 
 const CODEX = process.env.AGENT_HUB_CODEX || "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 /** codex 的 model/list 里最便宜的（本机账号实测：gpt-6-luna、gpt-5.6-terra、gpt-5.6-luna）。 */
@@ -28,15 +28,19 @@ interface Rig {
   events: DriverEvent[];
   sessionId: number;
   dir: string;
+  vendor: AgentVendor;
+  vendorSessionId: string;
+  cwd: string;
 }
 
 function rig(vendor: AgentVendor): Rig {
-  const dir = mkdtempSync(join(tmpdir(), `agent-hub-smoke-midturn-${vendor}-`));
+  const dir = mkdtempSync(join(tmpdir(), `ah-mt-${vendor}-`));
   const cwd = join(dir, "cwd");
   mkdirSync(cwd, { recursive: true });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, PROMPT);
   const store = new MemorySessionStore();
+  const vendorSessionId = randomUUID();
   const row: AgentSessionRow = {
     id: 1,
     role: "pm",
@@ -44,7 +48,7 @@ function rig(vendor: AgentVendor): Rig {
     pmId: null,
     workerId: null,
     vendor,
-    vendorSessionId: randomUUID(),
+    vendorSessionId,
     cwd,
     addDirs: [],
     generation: 1,
@@ -60,12 +64,13 @@ function rig(vendor: AgentVendor): Rig {
     updatedAt: Date.now(),
   };
   store.add(row);
-  const common = { sessionLogsDir: join(dir, "state", "logs", "sessions"), store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} };
+  // claude 单个进程跑完、不 --resume：不存会话记录；codex 没法不存，closeRig 里删
+  const common = { stateDir: join(dir, "state"), store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} };
   const driver: Driver =
-    vendor === "codex" ? createCodexDriver({ ...common, codexPath: CODEX, stateDir: join(dir, "state") }) : createClaudeDriver({ ...common, claudePath: CLAUDE });
+    vendor === "codex" ? createCodexDriver({ ...common, codexPath: CODEX, stateDir: join(dir, "state") }) : createClaudeDriver({ ...common, claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
-  return { driver, events, sessionId: 1, dir };
+  return { driver, events, sessionId: 1, dir, vendor, vendorSessionId, cwd };
 }
 
 const user = (id: number, text: string) => ({ messageIds: [id], source: "user" as const, text });
@@ -84,6 +89,9 @@ async function sendStopWhileRunning(r: Rig): Promise<void> {
 
 async function closeRig(r: Rig, keep: boolean): Promise<void> {
   await r.driver.shutdown();
+  // 关掉进程之后，删掉这次在用户目录里留的原始记录（codex 的 rollout、claude 的目录）
+  removeVendorRecordsOf([{ vendor: r.vendor, vendor_session_id: r.vendorSessionId, cwd: r.cwd }]);
+  removeOwnClaudeProjects(r.dir);
   if (!keep) rmSync(r.dir, { recursive: true, force: true });
 }
 

@@ -481,8 +481,8 @@ export interface PersonaNote {
 export interface DriverOptions {
   /** claude 程序路径（AGENT_HUB_CLAUDE）。 */
   claudePath: string;
-  /** logs/sessions/ 所在目录。 */
-  sessionLogsDir: string;
+  /** 数据目录 state/ 的路径（Worker 记忆保护判断用）。 */
+  stateDir: string;
   store: SessionStore;
   /**
    * 每次启动前调用，生成提示词和设置文件；两轮之间判断要不要重启时也调（见上面“两轮之间自动重启”）。

@@ -130,7 +130,7 @@ describe("claude：性格设定、模式改了不重启", () => {
     const { createClaudeDriver } = await import("./index.ts");
     const again = createClaudeDriver({
       claudePath: FAKE_CLAUDE,
-      sessionLogsDir: join(t.dir, "logs", "sessions"),
+      stateDir: join(t.dir, "state"),
       store: t.store,
       prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
       personaNote: f.personaNote,

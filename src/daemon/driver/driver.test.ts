@@ -1,7 +1,6 @@
 // 驱动层 + 假 claude：m1-plan 第 4 节“W2 驱动层 + 假 claude”测试表，每条一个 describe。
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -148,10 +147,7 @@ describe("一轮正常", () => {
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
     const text = await t.waitFor("agent.text");
-    const raw = readFileSync(join(t.dir, "logs", "sessions", `${s.id}.jsonl`), "utf8")
-      .split("\n")
-      .find((l) => l.includes("无 uuid"))!;
-    expect(text.uuid).toBe(`line:${createHash("sha256").update(raw).digest("hex").slice(0, 32)}`);
+    expect(text.uuid).toMatch(/^line:[0-9a-f]{32}$/);
   });
 });
 
@@ -555,18 +551,14 @@ describe("坏的输出行", () => {
   });
 });
 
-describe("原始日志", () => {
-  it("跑完一轮：logs/sessions/<会话>.jsonl 里每个事件一行，原样", async () => {
+describe("不写原始日志", () => {
+  it("跑完一轮：数据目录和临时目录里都没有 .jsonl，也没有 logs/sessions/", async () => {
     const t = harness({ script: { defaultTurn: { steps: [{ text: "hi" }, { raw: "oops" }] } } });
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
     await t.waitFor("turn.ended");
-    const lines = readFileSync(join(t.dir, "logs", "sessions", `${s.id}.jsonl`), "utf8").split("\n").filter(Boolean);
-    expect(lines).toContain("oops");
-    const types = lines.filter((l) => l !== "oops").map((l) => (JSON.parse(l) as { type: string; subtype?: string }).type);
-    expect(types).toEqual(["system", "user", "assistant", "rate_limit_event", "result"]);
-    const init = JSON.parse(lines[0]!) as { subtype: string; session_id: string };
-    expect(init).toMatchObject({ subtype: "init", session_id: s.vendorSessionId });
+    const files = readdirSync(t.dir, { recursive: true }).map(String);
+    expect(files.filter((f) => f.endsWith(".jsonl") || f.includes(join("logs", "sessions")))).toEqual([]);
   });
 });
 
@@ -767,22 +759,6 @@ describe("抛错不弄垮驱动层", () => {
     const ended = await t.waitFor("turn.ended");
     expect(ended.ok).toBe(true);
     expect(t.of("driver.error").find((e) => e.code === "internal_error")!.message).toContain("disk I/O error");
-  });
-
-  it("日志目录写不了：出一条 driver.error(internal_error)，这一轮照常结束", async () => {
-    const t = harness();
-    const blocker = join(t.dir, "not-a-dir");
-    writeFileSync(blocker, "");
-    const t2 = makeHarness({ dir: t.dir, driver: { sessionLogsDir: join(blocker, "sessions") } });
-    try {
-      const s = t2.addSession();
-      await t2.driver.send(s.id, user(1, "hi"));
-      const ended = await t2.waitFor("turn.ended");
-      expect(ended.ok).toBe(true);
-      expect(t2.of("driver.error").filter((e) => e.code === "internal_error")).toHaveLength(1);
-    } finally {
-      await t2.driver.shutdown();
-    }
   });
 
   it("会话那一行没了：退出时写库失败也照样收尾，exited 会 resolve；再 send 抛不可重试的错", async () => {

@@ -299,6 +299,8 @@ export interface HubCallContext {
   workspace?: WorkspaceProbe;
   /** worker.show：这个 Worker 分支上的 PR；查不到或没有就没有这一项。 */
   pr?: WorkerPr;
+  /** worker.show：这个 Worker 的会话在厂商那边的原始记录文件；找不到就是 null（show 写“找不到”）。 */
+  transcript?: string | null;
 }
 
 export interface Ledger {
@@ -414,6 +416,11 @@ export interface Ledger {
    * 不是项目经理的会话、不是它派的、不在 worktree 里干活 → null（不用查，hubCall 自己会报错或不写 PR）。
    */
   workerPrTarget(sessionId: SessionId, workerId: WorkerId): { cwd: string; branch: string } | null;
+  /**
+   * agent 接口在 worker.show 之前调（只读）：这个 Worker 当前会话在厂商那边的索引（vendor、vendor_session_id、cwd），
+   * 用来找厂商自己存的原始记录在哪（驱动层的 vendorTranscriptPath）。不是项目经理的会话、不是它派的 → null。
+   */
+  workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
   /**

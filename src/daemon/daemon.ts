@@ -223,7 +223,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
-    const launch = { sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch, personaNote };
+    const launch = { stateDir, store: sessions, log, prepareLaunch, personaNote };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: {

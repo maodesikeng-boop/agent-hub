@@ -3,11 +3,10 @@
 // 一轮中途写入（docs/mid-turn-messages.md 第 5 节）：init 里有 MID_TURN_CAPABILITIES 时，忙着也直接把 user 行（带 uuid）写进去，
 // claude 在当前工具跑完后同一轮读到；用 command_lifecycle 对账“被取走”（处理中），在途的是一个集合。待发队列只留写不了的情况。
 // M2：每个会话自己的环境变量；两轮之间设置变了自动重启（--resume）；end；claude 起在自己的进程组里，强制结束连同它所有后代所在的进程组（process.ts 的 forceKill）。
-// 驱动层自己出的错（写库、写日志、监听者抛错）不往上冒，记成 driver.error(internal_error)。
+// 驱动层自己出的错（写库、监听者抛错）不往上冒，记成 driver.error(internal_error)。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   BACKGROUND_TASKS_HOLD_MAX_MS,
   CRASH_RECOVERY_NOTE,
@@ -213,10 +212,6 @@ interface SessionState {
   usageTimer: NodeJS.Timeout | null;
   /** 在等回应的命令列表请求（queryCommands）：request_id → 交回结果（null = 没问到）。进程退出时都交回 null。 */
   commandQueries: Map<string, (commands: ComposerCommand[] | null) => void>;
-  /** logs/sessions/<会话>.jsonl 一直开着。 */
-  logFd: number | null;
-  /** 日志写不了：报过一次就不再写（下次起进程再试）。 */
-  logBroken: boolean;
 }
 
 export interface ClaudeDriverOptions extends DriverOptions {
@@ -434,7 +429,6 @@ export class ClaudeDriver implements Driver {
       await proc.exited;
     }
     this.#update(st, { status: "ended", pid: null });
-    this.#closeLog(st);
   }
 
   async interrupt(sessionId: SessionId): Promise<void> {
@@ -510,7 +504,6 @@ export class ClaudeDriver implements Driver {
         await within(all, KILL_WAIT_MS);
       }
     }
-    for (const st of this.#sessions.values()) this.#closeLog(st);
   }
 
   async cleanupStale(): Promise<void> {
@@ -576,8 +569,6 @@ export class ClaudeDriver implements Driver {
         usagePushedAt: 0,
         usageTimer: null,
         commandQueries: new Map(),
-        logFd: null,
-        logBroken: false,
       };
       this.#sessions.set(id, st);
     }
@@ -978,7 +969,6 @@ export class ClaudeDriver implements Driver {
     // --resume 沿用会话最初的系统提示词，agent 看到的性格设定接着算之前的；--session-id 是这次拼的（persona-note.ts）
     this.#setPersonaSeen(st, personaSeenAtSpawn(st, row, files, !resume));
     st.background.clear();
-    st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });
     child.on("error", () => {}); // 出错之后总会有 exit
     child.stdin.on("error", () => {}); // 进程退了还在写：EPIPE，交给 exit 处理
@@ -1028,7 +1018,6 @@ export class ClaudeDriver implements Driver {
   }
 
   #onLine(st: SessionState, proc: Proc, line: string): void {
-    this.#appendLog(st, line);
     if (line.trim() === "") return;
     let obj: Record<string, unknown>;
     try {
@@ -1433,31 +1422,6 @@ export class ClaudeDriver implements Driver {
     const timer = st[key];
     if (timer) clearTimeout(timer);
     st[key] = null;
-  }
-
-  #appendLog(st: SessionState, line: string): void {
-    if (st.logBroken) return;
-    try {
-      if (st.logFd === null) {
-        mkdirSync(this.#opts.sessionLogsDir, { recursive: true, mode: 0o700 });
-        st.logFd = openSync(join(this.#opts.sessionLogsDir, `${st.id}.jsonl`), "a", 0o600);
-      }
-      writeSync(st.logFd, line + "\n");
-    } catch (error) {
-      st.logBroken = true;
-      this.#closeLog(st);
-      this.#internalError(st.id, `writing session log failed: ${errorMessage(error)}`);
-    }
-  }
-
-  #closeLog(st: SessionState): void {
-    if (st.logFd === null) return;
-    try {
-      closeSync(st.logFd);
-    } catch {
-      // 关不上也没什么可做的
-    }
-    st.logFd = null;
   }
 
   #emit(sessionId: SessionId, event: DriverEvent): void {

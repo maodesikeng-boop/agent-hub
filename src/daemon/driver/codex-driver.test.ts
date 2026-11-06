@@ -1,6 +1,6 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -495,8 +495,7 @@ function makeCodexHarness(
 ): CodexTestHarness {
   const dir = mkdtempSync(join(tmpdir(), "agent-hub-codex-driver-"));
   const stateDir = join(dir, "state");
-  const sessionLogsDir = join(stateDir, "logs", "sessions");
-  mkdirSync(sessionLogsDir, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
 
   const logFile = join(dir, "fake-codex.log");
   const scriptFile = join(dir, "script.json");
@@ -511,7 +510,6 @@ function makeCodexHarness(
 
   const driver = createCodexDriver({
     codexPath: fakeCodexBin,
-    sessionLogsDir,
     stateDir,
     store,
     prepareLaunch: async (session) => {
@@ -1151,6 +1149,17 @@ describe("CodexDriver 跨轮 item.id 防撞车与残留进程清理", () => {
 
     expect(t.store.get(s.id)!.pid).toBeNull();
     expect(t.store.get(s.id)!.status).toBe("idle");
+  });
+});
+
+describe("不写原始日志", () => {
+  it("跑完一轮：数据目录和临时目录里没有 .jsonl，也没有 logs/sessions/（原文在厂商自己的目录里）", async () => {
+    const t = makeCodexHarness({ script: { turns: [{ messageDeltas: ["hi"] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    const files = readdirSync(t.dir, { recursive: true }).map(String);
+    expect(files.filter((f) => f.endsWith(".jsonl") || f.includes(join("logs", "sessions")))).toEqual([]);
   });
 });
 

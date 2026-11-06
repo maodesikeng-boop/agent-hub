@@ -112,7 +112,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
-    sessionLogsDir: join(dir, "logs", "sessions"),
+    stateDir: join(dir, "state"),
     store,
     prepareLaunch: async (session) => {
       prepareCalls.set(session.id, (prepareCalls.get(session.id) ?? 0) + 1);

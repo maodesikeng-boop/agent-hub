@@ -4,9 +4,11 @@
 // 有悬空引用就回滚，报错里列出是哪些行。这样迁移可以按 SQLite 的标准做法重建被别的表引用的表（0002 重建 pms）。
 // 所以不能在外层事务里调（那样关不了外键检查），调了直接报错。
 // 已有数据的库升级前先备份一份：<库文件>.bak-<升级前的版本>-<UTC 时间>（VACUUM INTO，是个完整的库文件）。
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+// 新备份写好后，只留最近 MAX_DB_BACKUPS 份，更早的删掉。
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import type { Db } from "./db.ts";
 
 export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
@@ -70,7 +72,34 @@ function backup(db: Db, from: number, now: () => number): string | undefined {
   let target = `${file}.bak-${from}-${backupStamp(now())}`;
   for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
   db.run("VACUUM INTO ?", target);
+  pruneBackups(file, target);
   return target;
+}
+
+/** 备份文件名 <库文件>.bak-<版本>-<时间>[-<序号>] → 排序用的键（时间、序号）；不是这个格式的文件不动。 */
+function backupSortKey(dbName: string, name: string): [string, number] | null {
+  if (!name.startsWith(`${dbName}.bak-`)) return null;
+  const match = /^\d+-(\d{8}T\d{6}Z)(?:-(\d+))?$/.exec(name.slice(dbName.length + 5));
+  return match === null ? null : [match[1]!, match[2] === undefined ? 1 : Number(match[2])];
+}
+
+/** 只留最近 MAX_DB_BACKUPS 份备份（刚写好的 keep 一定留），更早的删掉。删不掉就算了，不能让升级失败。 */
+function pruneBackups(dbFile: string, keep: string): void {
+  const dbName = basename(dbFile);
+  const dir = dirname(dbFile);
+  const backups: { name: string; key: [string, number] }[] = [];
+  for (const name of readdirSync(dir)) {
+    const key = backupSortKey(dbName, name);
+    if (key !== null && join(dir, name) !== keep) backups.push({ name, key });
+  }
+  backups.sort((a, b) => (a.key[0] < b.key[0] ? -1 : a.key[0] > b.key[0] ? 1 : a.key[1] - b.key[1]));
+  for (const { name } of backups.slice(0, Math.max(0, backups.length - (MAX_DB_BACKUPS - 1)))) {
+    try {
+      rmSync(join(dir, name), { force: true });
+    } catch {
+      // 旧备份删不掉不影响升级
+    }
+  }
 }
 
 function checkForeignKeys(db: Db): void {
