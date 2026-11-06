@@ -16,6 +16,8 @@ import { buildLaunchPrompt } from "./prompt.ts";
 
 export interface LaunchPreparerOptions {
   launchDir: string;
+  /** 数据目录 state/ 的真实路径（paths.ts 的 stateDir，realpath 过）：Worker 的记忆规则用。 */
+  stateDir: string;
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
   /** 账本的 getLaunchContext。 */
@@ -44,7 +46,7 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  * 有项目的会话启动前先 mkdir -p <worktreesDir>/<项目编号>/：项目经理的 --add-dir 里有它，claude 要求目录在（LaunchContext 的注释）。
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
-  const { launchDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
+  const { launchDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
   const basePath = options.basePath ?? process.env.PATH ?? "";
   return async (session) => {
     const ctx = getLaunchContext(session.id);
@@ -52,7 +54,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
-    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
+    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");

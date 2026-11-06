@@ -177,12 +177,15 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   /** codex 可执行文件路径，默认 "codex"（若未传但传了 claudePath 则回退 claudePath）。 */
   codexPath?: string;
   claudePath?: string;
+  /** 数据目录 state/ 的路径（用于 Worker 记忆保护判断）；不传时默认从 sessionLogsDir 向上两级推导。 */
+  stateDir?: string;
   /** 厂商命令与输入拼装器，默认 vendors/ 里的 codex。 */
   composer?: VendorComposerBase;
 }
 
 export class CodexDriver implements Driver {
   readonly #codexPath: string;
+  readonly #stateDir: string;
   readonly #opts: Required<
     Pick<
       DriverOptions,
@@ -197,8 +200,9 @@ export class CodexDriver implements Driver {
   #requestSeq = 0;
   #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, composer, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, stateDir, composer, ...options }: CodexDriverOptions) {
     this.#codexPath = codexPath ?? claudePath ?? "codex";
+    this.#stateDir = stateDir ?? dirname(dirname(options.sessionLogsDir));
     this.#composer = composer ?? composerBaseOf("codex")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
@@ -1346,7 +1350,12 @@ export class CodexDriver implements Driver {
     const params =
       typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
     const row = this.#row(st);
-    const context = { readonly: proc.readonly };
+    const context = {
+      role: row?.role ?? "worker",
+      readonly: proc.readonly,
+      stateDir: this.#stateDir,
+      cwd: row?.cwd ?? proc.launched.cwd,
+    };
 
     switch (method) {
       case "item/commandExecution/requestApproval": {

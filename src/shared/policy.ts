@@ -59,6 +59,70 @@ export function readonlyAllowRules(projectWorktreesDir: string | undefined): str
 }
 
 /**
+ * 系统数据目录 state/（数据库、令牌、性格设定文件 personas/）：Worker 不能写（2026-11-06 用户去掉了记忆文件那条限制，这条保留）。
+ * stateDir 要 realpath 过（paths.ts 的 stateDir）。绝对路径的写法是 // 开头：/Users/u/.agent-hub/state → Edit(//Users/u/.agent-hub/state/**)。
+ * 规则按 gitignore 的写法匹配，路径里的 \ [ ] * ? 前面加 \ 转义，当普通字符。
+ */
+export function stateDirDenyRule(stateDir: string): string {
+  const escaped = stateDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&");
+  return `Edit(/${escaped}/**)`;
+}
+
+function normalizePathSegments(rawPath: string, homeDir?: string): { absolute: boolean; segments: string[]; normalized: string } {
+  let p = rawPath.trim().replace(/\\/g, "/");
+  if (homeDir && (p === "~" || p.startsWith("~/"))) {
+    const cleanHome = homeDir.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    p = cleanHome + p.slice(1);
+  }
+  const absolute = p.startsWith("/");
+  const segments: string[] = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!absolute) {
+        segments.push("..");
+      }
+    } else {
+      segments.push(part);
+    }
+  }
+  const normalized = (absolute ? "/" : "") + segments.join("/");
+  return { absolute, segments, normalized };
+}
+
+/**
+ * 供 AgyDriver 和 CodexDriver 判断某个路径是否在系统数据目录 stateDir 下（展开 ~、相对 cwd 解析、消掉 ..、不分大小写）。
+ */
+export function isStateDirPath(targetPath: string, stateDir: string, homeDir?: string, cwd?: string): boolean {
+  const trimmedTarget = targetPath.trim().replace(/\\/g, "/");
+  if (trimmedTarget === "" || stateDir.trim() === "") return false;
+  const effectiveHome = homeDir ?? (typeof process !== "undefined" ? process.env.HOME : undefined);
+  const resolvedTarget =
+    cwd && cwd.trim() !== "" && !trimmedTarget.startsWith("/") && trimmedTarget !== "~" && !trimmedTarget.startsWith("~/")
+      ? `${cwd.trim().replace(/\\/g, "/").replace(/\/+$/, "")}/${trimmedTarget}`
+      : trimmedTarget;
+  const normLower = normalizePathSegments(resolvedTarget, effectiveHome).normalized.toLowerCase();
+  const stateLower = normalizePathSegments(stateDir, effectiveHome).normalized.toLowerCase();
+  return stateLower !== "" && stateLower !== "/" && (normLower === stateLower || normLower.startsWith(`${stateLower}/`));
+}
+
+const SHELL_WRITE_INDICATORS =
+  />|>>|\b(tee|sed|awk|perl|python\d*|node|ruby|cp|mv|rm|touch|dd|truncate|patch|install|chmod|chown|sh|bash|zsh)\b/;
+
+/** 命令行是否会写系统数据目录：提到 stateDir 下的路径，且不是 cat/head/tail/less/more/wc/stat/ls 这类只读命令。 */
+export function commandWritesStateDir(command: string, stateDir: string, cwd?: string): boolean {
+  const tokens = command
+    .split(/[\s><|&;'"`()=]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (!tokens.some((tok) => isStateDirPath(tok, stateDir, undefined, cwd))) return false;
+  if (SHELL_WRITE_INDICATORS.test(command)) return true;
+  return !/^\s*(cat|head|tail|less|more|wc|stat|ls)\b/.test(command);
+}
+
+/**
  * Worker 启动时多设的环境变量：关掉 Claude Code 的自动记忆（同一个仓库的所有 worktree 共用一个自动记忆目录，
  * Worker 写进去项目经理下次就会读到）。代价是 Worker 也读不到自动记忆。设置文件里再写 autoMemoryEnabled: false。
  */
@@ -72,6 +136,8 @@ export interface SessionSettingsInput {
   readonly: boolean;
   /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
   hubSock: string;
+  /** 数据目录 state/ 的真实路径，Worker 的数据目录规则用。 */
+  stateDir: string;
   /** 本项目的 worktrees/<项目编号>/ 真实路径；只读档放行读它。没有项目就不传。 */
   projectWorktreesDir?: string;
 }
@@ -86,7 +152,7 @@ export interface SessionSettings {
 /**
  * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
  * - 两种角色都有：默认档（readonly 时换成只读档，并多放行 readonlyAllowRules）、放行 hub、放行 hub.sock；
- * - Worker 再加 autoMemoryEnabled: false。
+ * - Worker 再加 state/ 的拒绝规则和 autoMemoryEnabled: false。
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
@@ -98,8 +164,11 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
     settings.permissions.deny = [...READONLY_GIT_DENY_RULES];
   }
-  // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则：改不改全凭 Worker 自己决定
-  if (input.role === "worker") settings.autoMemoryEnabled = false;
+  // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则；系统数据目录 state/ 的保护保留
+  if (input.role === "worker") {
+    settings.permissions.deny = [...(settings.permissions.deny ?? []), stateDirDenyRule(input.stateDir)];
+    settings.autoMemoryEnabled = false;
+  }
   return settings;
 }
 

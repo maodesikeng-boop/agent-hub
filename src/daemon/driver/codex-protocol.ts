@@ -1,10 +1,12 @@
 // OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
-// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与只读模式审批判定。
+// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 系统数据目录保护 / 只读模式的审批判定。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
+  commandWritesStateDir,
+  isStateDirPath,
   type AgentRole,
   type AgentSessionRow,
   type AgentToolEvent,
@@ -410,14 +412,38 @@ export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null 
 }
 
 /**
- * 判定 item/commandExecution/requestApproval 的审批结果：readonly 会话一律 decline，其余 accept。
- * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查：改不改记忆文件全凭 Worker 自己决定。
+ * 判定 item/commandExecution/requestApproval 的审批结果：
+ * - readonly 会话一律 decline
+ * - worker 会话若命令会写系统数据目录 stateDir 则 decline
+ * - 其余情况 accept（2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）
  */
-export function decideCommandApproval(_params: Record<string, unknown>, context: { readonly: boolean }): CodexApprovalDecision {
-  return context.readonly ? "decline" : "accept";
+export function decideCommandApproval(
+  params: Record<string, unknown>,
+  context: { role: AgentRole; readonly: boolean; stateDir: string; cwd: string },
+): CodexApprovalDecision {
+  if (context.readonly) return "decline";
+  if (context.role === "worker") {
+    const effectiveCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd : context.cwd;
+    const command = Array.isArray(params.command) ? params.command.filter((x) => typeof x === "string").join(" ") : params.command;
+    if (typeof command === "string" && commandWritesStateDir(command, context.stateDir, effectiveCwd)) return "decline";
+    if (extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, effectiveCwd))) return "decline";
+  }
+  return "accept";
 }
 
-/** 判定 item/fileChange/requestApproval 的审批结果：readonly 会话一律 decline，其余 accept。 */
-export function decideFileChangeApproval(_params: Record<string, unknown>, context: { readonly: boolean }): CodexApprovalDecision {
-  return context.readonly ? "decline" : "accept";
+/**
+ * 判定 item/fileChange/requestApproval 的审批结果：
+ * - readonly 会话一律 decline
+ * - worker 会话若修改的文件在系统数据目录 stateDir 下则 decline
+ * - 其余情况 accept
+ */
+export function decideFileChangeApproval(
+  params: Record<string, unknown>,
+  context: { role: AgentRole; readonly: boolean; stateDir: string; cwd: string },
+): CodexApprovalDecision {
+  if (context.readonly) return "decline";
+  if (context.role === "worker" && extractFileChangePaths(params).some((p) => isStateDirPath(p, context.stateDir, undefined, context.cwd))) {
+    return "decline";
+  }
+  return "accept";
 }

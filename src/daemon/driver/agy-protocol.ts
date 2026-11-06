@@ -5,6 +5,8 @@ import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
   agentLaunchArgs,
+  commandWritesStateDir,
+  isStateDirPath,
   type AgentSessionRow,
   type LaunchFiles,
   type SessionStartedEvent,
@@ -26,7 +28,21 @@ export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
  */
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
-/** 只读 Worker 禁止调用的写文件工具集合。 */
+/** 工具调用参数里需要做系统数据目录检查的路径字段名（只对写类工具检查，读不拦）。 */
+export const AGY_PATH_PARAM_KEYS = [
+  "Path",
+  "TargetFile",
+  "AbsolutePath",
+  "DirectoryPath",
+  "SearchPath",
+  "file_path",
+  "path",
+] as const;
+
+/** 工具调用参数里表示命令行字符串的字段名。 */
+export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
+
+/** 只读 Worker 禁止调用的写文件工具集合；写类工具碰系统数据目录 state/ 也拦。 */
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
@@ -42,6 +58,7 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
 ]);
 
+export const STATE_DIR_VIOLATION_MESSAGE = "Worker 不能修改系统数据目录";
 export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文件";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -55,6 +72,23 @@ export function isReadonlySettings(settingsFile: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/** 从 settingsFile 的 deny 规则（Edit(//path/to/state/**)）提取 stateDir，提取不到返回 null。 */
+export function extractStateDirFromSettings(settingsFile: string | undefined): string | null {
+  if (!settingsFile || !existsSync(settingsFile)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(settingsFile, "utf8")) as { permissions?: { deny?: unknown } };
+    const deny = parsed?.permissions?.deny;
+    if (!Array.isArray(deny)) return null;
+    for (const rule of deny) {
+      const match = typeof rule === "string" ? /^Edit\(\/(\/.+)\/\*\*\)$/.exec(rule) : null;
+      if (match) return match[1]!.replace(/\\([\\[\]*?])/g, "$1");
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /**
@@ -238,15 +272,35 @@ export function buildAgySessionStartedEvent(
 
 export interface WorkerToolCheckInput {
   toolName: string;
+  parameters: unknown;
   readonly: boolean;
+  stateDir: string;
+  cwd?: string;
 }
 
 /**
- * 检查 Worker 的工具调用是否违规：只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；合规返回 null。
- * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查：改不改记忆文件全凭 Worker 自己决定。
+ * 检查 Worker 的工具调用是否违规：
+ * 1. 写类工具（AGY_WRITE_TOOLS）的路径参数在系统数据目录 stateDir 下，或 CommandLine / command 会写 stateDir → 返回 "Worker 不能修改系统数据目录"；读类工具读 stateDir 不拦；
+ * 2. 只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；
+ * 3. 合规返回 null。
+ * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
-  const { toolName, readonly } = input;
+  const { toolName, parameters, readonly, stateDir, cwd } = input;
+  if (typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
+    const params = parameters as Record<string, unknown>;
+    const pathKeys = AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : [];
+    for (const key of pathKeys) {
+      const val = params[key];
+      if (typeof val === "string" && isStateDirPath(val, stateDir, undefined, cwd)) return STATE_DIR_VIOLATION_MESSAGE;
+    }
+    for (const key of AGY_COMMAND_PARAM_KEYS) {
+      const cmd = params[key];
+      if (typeof cmd === "string" && cmd.trim() !== "" && commandWritesStateDir(cmd, stateDir, cwd)) {
+        return STATE_DIR_VIOLATION_MESSAGE;
+      }
+    }
+  }
   if (readonly && AGY_WRITE_TOOLS.has(toolName)) {
     return READONLY_WORKER_VIOLATION_MESSAGE;
   }
