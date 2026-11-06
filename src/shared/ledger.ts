@@ -151,7 +151,7 @@ export type ResolveFolder = (path: string) => string;
 /** 资料页、hub persona show 看到的性格设定。 */
 export interface PersonaView {
   pmId: PmId;
-  /** 正文，以数据库 pms.persona 为准；是 NULL 时用 personaOrTemplate 兜底成模板。 */
+  /** 正文，以数据库 pms.persona 为准；是 NULL 时当空串。 */
   text: string;
   mode: PmMode;
   /** 厂商、模型、思考程度（资料页的 Agent 一栏），同 Pm 的 vendor、defaultModel、effort。 */
@@ -203,8 +203,8 @@ export interface SyncPersonaFilesResult {
 
 /**
  * 给生成提示词和设置文件用（驱动层的 prepareLaunch 里调）。只读。
- * - 项目经理的会话（role pm）：pm 是这个会话所属的项目经理（AgentSessionRow.pmId）；pm.persona 已经兜过底：pms.persona 是 NULL 时给
- *   PM_PERSONA_TEMPLATE（personaOrTemplate）。project 是它的项目（文件夹按现在的），还没有是 null。worker 是 null；
+ * - 项目经理的会话（role pm）：pm 是这个会话所属的项目经理（AgentSessionRow.pmId）；pm.persona 是 pms.persona（NULL 时当空串）。
+ *   project 是它的项目（文件夹按现在的），还没有是 null。worker 是 null；
  * - Worker 的会话（role worker，M3）：worker 是它的记录（标题、任务、只读、在哪干活、分支）；pm 是派它的项目经理
  *   （Worker 的提示词不放性格设定，W3 只用名字）；project 是 Worker 所在的项目，不会是 null；conversationId 是 Worker 自己的对话。
  * 错误：会话不存在、不是项目经理或 Worker 的会话 → not_found。
@@ -218,7 +218,7 @@ export interface LaunchContext {
   sessionId: SessionId;
   role: AgentRole;
   conversationId: ConversationId;
-  pm: { id: PmId; name: string; mode: PmMode; persona: string };
+  pm: { id: PmId; name: string; mode: PmMode; vendor?: AgentVendor; persona: string };
   project: ProjectCard | null;
   worker: WorkerRecord | null;
 }
@@ -428,7 +428,7 @@ export interface Ledger {
   /**
    * 守护进程启动时调一次（M2，在 recoverAfterRestart 之后）。对每个项目经理读 personas/pm-<编号>.md（路径用 paths.ts 的
    * personaFilePath），算文件内容的哈希（sha256 十六进制），和 pms.persona_file_hash（上次成功写入文件的内容哈希）比：
-   * 1. 数据库正文是 NULL（M1 升上来的）：文件在就用文件内容填上，没有就用 PM_PERSONA_TEMPLATE 并写文件；不记修改。
+   * 1. 数据库正文是 NULL（M1 升上来的）：文件在就用文件内容填上，没有就填成空串并写文件；不记修改。
    * 2. 文件不存在或读不了：按数据库重写文件。
    * 3. 文件哈希等于 persona_file_hash：没人动过文件。文件内容和数据库正文一样就什么也不做；不一样说明上次写文件失败了
    *    （数据库已经改了），按数据库重写文件。不记修改。

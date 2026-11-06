@@ -2,7 +2,7 @@
 // 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, personaOrTemplate, utf8Bytes } from "../../shared/domain.ts";
+import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, PersonaChange, PersonaChangeId, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import type {
   CreatePmInput,
@@ -166,7 +166,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
       .map(toPersonaChange);
     return {
       pmId,
-      text: personaOrTemplate(pm.persona),
+      text: pm.persona ?? "",
       mode: pm.mode as PmMode,
       ...agentOf(pm),
       changes,
@@ -187,7 +187,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     editor: PersonaEditor,
     revertOf: PersonaChangeId | null = null,
   ): PersonaChange | null => {
-    const textBefore = personaOrTemplate(pm.persona);
+    const textBefore = pm.persona ?? "";
     const modeBefore = pm.mode as PmMode;
     const agentBefore = agentOf(pm);
     const agentChanged = !sameAgent(agentBefore, next.agent);
@@ -271,7 +271,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     if (agent.vendor !== current.vendor) throw fail("invalid", "还不支持给已有的项目经理换厂商，请新建一个项目经理");
     const reason = input.reason?.trim() || null;
     if (reason !== null && [...reason].length > MAX_REASON_CHARS) throw fail("invalid", `理由最多 ${MAX_REASON_CHARS} 个字`);
-    return editPersonaIn(p, pm, { text: input.text ?? personaOrTemplate(pm.persona), mode, agent, reason }, editor);
+    return editPersonaIn(p, pm, { text: input.text ?? pm.persona ?? "", mode, agent, reason }, editor);
   };
 
   const editPersona = (pmId: PmId, input: EditPersonaInput, actor: LedgerActor): EditPersonaResult => {
@@ -294,14 +294,14 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     } catch {
       content = null;
     }
-    // 1. M1 升上来的：文件在就按文件填，没有就用模板；不记修改
+    // 1. M1 升上来的：文件在就按文件填，没有就当空串；不记修改
     if (pm.persona === null) {
       if (content !== null) {
         db.run("UPDATE pms SET persona = ?, persona_file = ?, persona_file_hash = ? WHERE id = ?", content, file, contentHash(content), pm.id);
         return null;
       }
-      db.run("UPDATE pms SET persona = ? WHERE id = ?", personaOrTemplate(null), pm.id);
-      persistPersonaFile(pm.id, personaOrTemplate(null));
+      db.run("UPDATE pms SET persona = ? WHERE id = ?", "", pm.id);
+      persistPersonaFile(pm.id, "");
       return "rewritten";
     }
     // 2. 文件不在或读不了

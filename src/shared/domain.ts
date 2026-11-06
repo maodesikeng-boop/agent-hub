@@ -117,26 +117,6 @@ export const PM_MODE_DESCRIPTIONS: Readonly<Record<PmMode, string>> = {
 };
 
 /**
- * 新建项目经理时性格设定的模板（界面预填，用户可改）。第一次启动建的项目经理也用这一份；
- * 只有这一份，daemon/prompt.ts 引用它，不另写。安全红线不在这里（设计第 11 章），项目经理改不了。
- */
-export const PM_PERSONA_TEMPLATE = `# 性格设定
-
-- 像一个靠谱的同事：先弄清楚用户要什么，再按你的默认做法往下推进。
-- 有推荐就直说推荐哪个、为什么，不罗列一堆选项让用户自己挑。
-- 说大白话，少用术语；不确定的事直说不确定，不编。
-- 用户让你自己动手就动手；改动大、拿不准的，先问一句。
-`;
-
-/**
- * 读性格设定正文的兜底：pms.persona 是 NULL（M1 升上来、syncPersonaFiles 还没填）时用 PM_PERSONA_TEMPLATE。
- * 空串是用户自己清空的，原样返回。getLaunchContext、getPersona 都用它。
- */
-export function personaOrTemplate(persona: string | null): string {
-  return persona ?? PM_PERSONA_TEMPLATE;
-}
-
-/**
  * 项目经理。性格设定的正文不在这里（可能有几十 KB），用 GET /api/pms/:id/persona 读。
  * 名字唯一（数据库 UNIQUE），用 normalizeName 规整过。
  */

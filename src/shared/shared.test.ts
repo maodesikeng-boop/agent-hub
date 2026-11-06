@@ -16,7 +16,6 @@ import {
   PERSONA_ACTORS,
   PM_MODES,
   PM_MODE_LABELS,
-  PM_PERSONA_TEMPLATE,
   PROJECT_STATUSES,
   SYSTEM_EVENTS,
   SYSTEM_MESSAGE_PREFIX,
@@ -43,7 +42,6 @@ import {
   HEALTH_MODULES,
   HUB_CALL_FIELD_MAX_BYTES,
   RELAUNCH_NOTE,
-  personaOrTemplate,
   systemMessageDedupeKey,
   retryDelayMs,
   userMessageDedupeKey,
@@ -305,16 +303,6 @@ describe("M2：枚举", () => {
     expect(PROJECT_STATUSES).toEqual(["active", "archived", "deleted"]);
     expect(PERSONA_ACTORS).toEqual(["user", "pm", "file"]);
   });
-
-  it("新建项目经理的性格设定模板不是空的", () => {
-    expect(PM_PERSONA_TEMPLATE.trim().length).toBeGreaterThan(0);
-    expect(new TextEncoder().encode(PM_PERSONA_TEMPLATE).length).toBeLessThan(MAX_PERSONA_BYTES);
-  });
-
-  it("性格设定模板不替模式做主：不叫它“动手或给建议”，把怎么推进交给默认做法", () => {
-    expect(PM_PERSONA_TEMPLATE).not.toContain("再动手或给建议");
-    expect(PM_PERSONA_TEMPLATE).toContain("默认做法");
-  });
 });
 
 describe("M2：名字", () => {
@@ -550,12 +538,6 @@ describe("M2：令牌和性格设定的接口形状", () => {
 
   it("PersonaView 带能撤销的那一条的编号", () => {
     expectTypeOf<PersonaView["revertableChangeId"]>().toEqualTypeOf<number | null>();
-  });
-
-  it("性格设定正文是 NULL（M1 升上来还没同步）时用模板兜底", () => {
-    expect(personaOrTemplate(null)).toBe(PM_PERSONA_TEMPLATE);
-    expect(personaOrTemplate("")).toBe("");
-    expect(personaOrTemplate("我的习惯")).toBe("我的习惯");
   });
 });
 
