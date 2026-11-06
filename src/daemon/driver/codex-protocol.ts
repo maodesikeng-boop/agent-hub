@@ -466,14 +466,18 @@ export function decideCommandApproval(params: Record<string, unknown>, context: 
 }
 
 /**
- * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）：
+ * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）。真 codex 的审批参数只带 itemId，
+ * 路径要调用方从这一条的 item/started 里补进 params.paths（codex-driver.ts 的 fileChangePaths）：
  * - readonly 会话一律 decline；
- * - 有可写范围（Worker）且要改的文件在范围外 → decline；
+ * - 有可写范围（Worker）：要改的文件在范围外，或者不知道改哪些文件 → decline（实测不补路径时一律同意，Worker 写进了数据目录）；
  * - 其余 accept。
  */
 export function decideFileChangeApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
   if (context.readonly) return "decline";
   const scope = context.writeScope;
-  if (scope !== null && extractFileChangePaths(params).some((p) => !scopeAllowsWrite(scope, p, context.cwd))) return "decline";
+  if (scope !== null) {
+    const paths = extractFileChangePaths(params);
+    if (paths.length === 0 || paths.some((p) => !scopeAllowsWrite(scope, p, context.cwd))) return "decline";
+  }
   return "accept";
 }

@@ -1049,6 +1049,41 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     ]);
   });
 
+  it("真 codex 的改文件审批只带 itemId：按这一条 item/started 里的路径判断；不知道改哪些文件的 Worker 一律 decline", async () => {
+    const t = makeCodexHarness();
+    const worker = t.addSession({ role: "worker", workerId: 4 });
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            tools: [
+              { id: "fc-out", type: "fileChange", changes: [{ path: join(t.dir, "shots", "a.png"), kind: { type: "add" } }] },
+              { id: "fc-in", type: "fileChange", changes: [{ path: join(worker.cwd, "ok.txt"), kind: { type: "add" } }] },
+            ],
+            serverRequests: [
+              { id: 951, method: "item/fileChange/requestApproval", params: { itemId: "fc-out", reason: null, grantRoot: null } },
+              { id: 952, method: "item/fileChange/requestApproval", params: { itemId: "fc-in", reason: null, grantRoot: null } },
+              { id: 953, method: "item/fileChange/requestApproval", params: { itemId: "fc-unknown" } },
+            ],
+            messageDeltas: ["done"],
+          },
+        ],
+      } satisfies FakeCodexScript),
+    );
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    const decisions = t
+      .rpcIn()
+      .filter((r) => r.id !== undefined && r.method === undefined)
+      .map((r) => ({ id: r.id, result: r.result }));
+    expect(decisions).toEqual([
+      { id: 951, result: { decision: "decline" } },
+      { id: 952, result: { decision: "accept" } },
+      { id: 953, result: { decision: "decline" } },
+    ]);
+  });
+
   it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {
     const t = makeCodexHarness();
     const outside = mkdtempSync(join(tmpdir(), "agent-hub-codex-outside-"));

@@ -58,6 +58,7 @@ import {
   combineCodexTurnText,
   decideCommandApproval,
   decideFileChangeApproval,
+  extractFileChangePaths,
   isCodexToolItemType,
   parseCodexRateLimits,
   parseCodexTokenUsage,
@@ -152,6 +153,11 @@ interface Proc {
   readonly: boolean;
   /** Worker 的可写范围（LaunchFiles.writeScope）：沙箱的 writableRoots 和审批按它；项目经理是 null。 */
   writeScope: WriteScope | null;
+  /**
+   * fileChange 条目要改的文件（item/started 里的 changes），按条目编号记：codex 的 item/fileChange/requestApproval 只带 itemId、
+   * 不带路径（app-server generate-ts 的 FileChangeRequestApprovalParams），审批时按它判断。
+   */
+  fileChangePaths: Map<string, string[]>;
   threadId: string | null;
   initSeen: boolean;
   stderr: string;
@@ -957,6 +963,7 @@ export class CodexDriver implements Driver {
       launchConfig,
       readonly: launchConfig.readonly,
       writeScope: files.writeScope ?? null,
+      fileChangePaths: new Map(),
       threadId: resume ? row.vendorSessionId : null,
       initSeen: false,
       stderr: "",
@@ -1328,6 +1335,7 @@ export class CodexDriver implements Driver {
         }
         if (isCodexToolItemType(item.type)) {
           const rawId = typeof item.id === "string" && item.id !== "" ? item.id : null;
+          if (item.type === "fileChange" && rawId) proc.fileChangePaths.set(rawId, extractFileChangePaths(item));
           const toolEv = rawId ? parseCodexToolStarted(item, at, this.#scopedUuid(st, rawId)) : null;
           if (toolEv) this.#emit(st.id, toolEv);
         }
@@ -1559,7 +1567,8 @@ export class CodexDriver implements Driver {
         return;
       }
       case "item/fileChange/requestApproval": {
-        const decision = decideFileChangeApproval(params, context);
+        const itemId = typeof params.itemId === "string" ? params.itemId : "";
+        const decision = decideFileChangeApproval({ ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] }, context);
         proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
         return;
       }
