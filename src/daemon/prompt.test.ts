@@ -11,6 +11,7 @@ import {
   PM_MODE_LABELS,
   PM_PERSONA_TEMPLATE,
   PRODUCT_NAME,
+  VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
@@ -18,6 +19,7 @@ import {
   userToWorkerHeader,
   workerReportHeader,
   type SetupOutcome,
+  type VendorSpec,
 } from "../shared/index.ts";
 import { HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
@@ -26,6 +28,7 @@ import { mergeUserTexts } from "./driver/protocol.ts";
 import {
   AGENTS_NOTE,
   HUB_USAGE_PROMPT,
+  PM_BACKGROUND_COMMAND_NOTE,
   PM_MEMORY_PROMPT,
   PM_MODE_PROMPTS,
   PM_WORKER_PROMPT,
@@ -228,6 +231,61 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(PM_WORKER_PROMPT).toContain(tool);
     expect(PM_WORKER_PROMPT).toContain(`一律用 \`${hub} worker start\` 派 Worker`);
     expect(PM_WORKER_PROMPT).toContain("只读调研加 `--readonly`");
+  });
+
+  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 agy/codex/gemini", () => {
+    for (const mode of PM_MODES) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
+      expect(prompt).toContain("**用别家的模型**");
+      for (const [vendor, spec] of Object.entries(VENDOR_SPECS)) {
+        expect(prompt).toContain(`\`${vendor}\`（${spec.label}`);
+        expect(prompt).toContain(`\`${spec.models[0]!.id}\``);
+      }
+      expect(prompt).toContain(`${hub} worker start --vendor <厂商> --model <模型>`);
+      expect(prompt).toContain("不写 `--vendor`");
+      for (const cli of ["`agy`", "`codex`", "`gemini`"]) expect(prompt).toContain(cli);
+    }
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    specs.acme = {
+      ...VENDOR_SPECS.claude,
+      label: "Acme Rocket",
+      models: [{ id: "acme-ultra-9", label: "Acme Ultra 9" }],
+    };
+    try {
+      const prompt = buildLaunchPrompt(projectContext(), dir);
+      expect(prompt).toContain("`acme`（Acme Rocket");
+      expect(prompt).toContain("`acme-ultra-9`");
+    } finally {
+      delete specs.acme;
+    }
+    expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("用别家的模型");
+  });
+
+  it("长命令放后台：两种模式下都有，写明一分钟以上用后台运行（如 run_in_background）、几秒钟在前台跑；只加在项目经理提示词里，Worker 不加", () => {
+    for (const mode of PM_MODES) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
+      expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+    }
+    for (const word of [
+      "**长命令放后台**",
+      "一分钟以上",
+      "等 CI",
+      "跑冒烟测试",
+      "跑全量测试",
+      "后台运行",
+      "`run_in_background`",
+      "这一轮先结束",
+      "用户能接着说话",
+      "命令跑完会叫醒你",
+      "几秒钟的命令照常在前台跑",
+      "放后台反而多花请求",
+    ]) {
+      expect(PM_BACKGROUND_COMMAND_NOTE).toContain(word);
+    }
+    const workerPrompt = buildWorkerPrompt(workerContext(), dir);
+    expect(workerPrompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
+    expect(workerPrompt).not.toContain("长命令放后台");
+    expect(workerPrompt).not.toContain("run_in_background");
   });
 });
 
