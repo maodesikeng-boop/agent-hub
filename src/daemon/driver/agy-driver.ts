@@ -36,6 +36,7 @@ import {
   type SessionId,
   type TokenUsage,
   type Unsubscribe,
+  type WriteScope,
 } from "../../shared/index.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import {
@@ -47,7 +48,6 @@ import {
   checkAgyUserLine,
   checkWorkerToolViolation,
   detectAgyArgsConflict,
-  extractStateDirFromSettings,
   finishAgyUsage,
   isReadonlySettings,
   mergeUserTexts,
@@ -55,6 +55,7 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import { spawnInWriteScope } from "./write-scope.ts";
 import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
@@ -114,7 +115,8 @@ interface Proc {
   systemPrompt: string | null;
   promptSent: boolean;
   readonly: boolean;
-  stateDir: string;
+  /** 没有 OS 沙箱时要兜底检查的可写范围（checkWorkerToolViolation）；包进了沙箱、或项目经理是 null。 */
+  fallbackScope: WriteScope | null;
   initSeen: boolean;
   stderr: string;
   closing: ClosingReason | null;
@@ -183,7 +185,6 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
 
 export class AgyDriver implements Driver {
   readonly #agyPath: string;
-  readonly #defaultStateDir: string;
   readonly #opts: Required<
     Pick<DriverOptions, "idleCloseMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
   > &
@@ -197,7 +198,6 @@ export class AgyDriver implements Driver {
   constructor({ composer, ...options }: AgyDriverOptions) {
     this.#composer = composer ?? composerBaseOf("agy")!;
     this.#agyPath = options.agyPath ?? options.claudePath ?? "agy";
-    this.#defaultStateDir = options.stateDir;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
@@ -804,9 +804,10 @@ export class AgyDriver implements Driver {
     const args = buildAgyArgs(row, files, resume);
     const systemPrompt = readSystemInstructions(files.promptFile);
     const readonly = isReadonlySettings(files.settingsFile);
-    const stateDir = this.#opts.stateDir ?? extractStateDirFromSettings(files.settingsFile) ?? this.#defaultStateDir;
 
-    const child = spawn(this.#agyPath, args, {
+    // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱时记警告，按工具参数兜底检查
+    const launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.#opts.log, `session ${st.id}`);
+    const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
       env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
       stdio: ["pipe", "pipe", "pipe"],
@@ -843,7 +844,7 @@ export class AgyDriver implements Driver {
       systemPrompt,
       promptSent: false,
       readonly,
-      stateDir,
+      fallbackScope: launch.osSandboxed ? null : (files.writeScope ?? null),
       initSeen: false,
       stderr: "",
       closing: null,
@@ -1095,7 +1096,7 @@ export class AgyDriver implements Driver {
             toolName,
             parameters,
             readonly: proc.readonly,
-            stateDir: proc.stateDir,
+            fallbackScope: proc.fallbackScope,
             cwd: row.cwd,
           });
           if (violation !== null) {

@@ -39,6 +39,7 @@ import {
   type SessionId,
   type TokenUsage,
   type Unsubscribe,
+  type WriteScope,
 } from "../../shared/index.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import {
@@ -57,6 +58,7 @@ import {
   combineCodexTurnText,
   decideCommandApproval,
   decideFileChangeApproval,
+  extractFileChangePaths,
   isCodexToolItemType,
   parseCodexRateLimits,
   parseCodexTokenUsage,
@@ -77,6 +79,7 @@ import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { TurnUsage } from "./usage.ts";
+import { spawnInWriteScope } from "./write-scope.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -148,6 +151,15 @@ interface Proc {
   personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
   readonly: boolean;
+  /** Worker 的可写范围（LaunchFiles.writeScope）：沙箱的 writableRoots 和审批按它；项目经理是 null。 */
+  writeScope: WriteScope | null;
+  /** 进程包进了 OS 沙箱（spawnInWriteScope）：turn 用 externalSandbox。 */
+  osSandboxed: boolean;
+  /**
+   * fileChange 条目要改的文件（item/started 里的 changes），按条目编号记：codex 的 item/fileChange/requestApproval 只带 itemId、
+   * 不带路径（app-server generate-ts 的 FileChangeRequestApprovalParams），审批时按它判断；item/completed 时删掉。
+   */
+  fileChangePaths: Map<string, string[]>;
   threadId: string | null;
   initSeen: boolean;
   stderr: string;
@@ -209,11 +221,13 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   claudePath?: string;
   /** 厂商命令与输入拼装器，默认 vendors/ 里的 codex。 */
   composer?: VendorComposerBase;
+  /** 按哪个系统落实 Worker 的可写范围（write-scope.ts 的 spawnInWriteScope），默认本机；测试用。 */
+  platform?: NodeJS.Platform;
 }
 
 export class CodexDriver implements Driver {
   readonly #codexPath: string;
-  readonly #stateDir: string;
+  readonly #platform: NodeJS.Platform;
   readonly #opts: Required<
     Pick<
       DriverOptions,
@@ -228,9 +242,9 @@ export class CodexDriver implements Driver {
   #requestSeq = 0;
   #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, composer, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, composer, platform, ...options }: CodexDriverOptions) {
     this.#codexPath = codexPath ?? claudePath ?? "codex";
-    this.#stateDir = options.stateDir;
+    this.#platform = platform ?? process.platform;
     this.#composer = composer ?? composerBaseOf("codex")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
@@ -726,6 +740,8 @@ export class CodexDriver implements Driver {
         effort: row?.effort ?? proc.launched.effort,
       },
       readonly: proc.readonly,
+      writeScope: proc.writeScope,
+      osSandboxed: proc.osSandboxed,
     });
     await new Promise<void>((resolve) => {
       proc.child.stdin.write(line + "\n", (err) => {
@@ -913,7 +929,11 @@ export class CodexDriver implements Driver {
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
 
     const launchConfig = readCodexLaunchConfig(files);
-    const child = spawn(this.#codexPath, buildCodexArgs(), {
+    // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时记警告，
+    // 靠 codex 自己的沙箱和审批兜底。只读 Worker 不包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
+    const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
+    const launch = spawnInWriteScope("codex", { command: this.#codexPath, args: buildCodexArgs() }, wrapScope, this.#opts.log, `session ${st.id}`, this.#platform);
+    const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
       env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
       stdio: ["pipe", "pipe", "pipe"],
@@ -951,6 +971,9 @@ export class CodexDriver implements Driver {
       personaLaunched: files.personaRevision ?? null,
       launchConfig,
       readonly: launchConfig.readonly,
+      writeScope: files.writeScope ?? null,
+      osSandboxed: launch.osSandboxed,
+      fileChangePaths: new Map(),
       threadId: resume ? row.vendorSessionId : null,
       initSeen: false,
       stderr: "",
@@ -1322,6 +1345,7 @@ export class CodexDriver implements Driver {
         }
         if (isCodexToolItemType(item.type)) {
           const rawId = typeof item.id === "string" && item.id !== "" ? item.id : null;
+          if (item.type === "fileChange" && rawId) proc.fileChangePaths.set(rawId, extractFileChangePaths(item));
           const toolEv = rawId ? parseCodexToolStarted(item, at, this.#scopedUuid(st, rawId)) : null;
           if (toolEv) this.#emit(st.id, toolEv);
         }
@@ -1354,6 +1378,7 @@ export class CodexDriver implements Driver {
             ? (params.item as Record<string, unknown>)
             : null;
         if (!item) return;
+        if (item.type === "fileChange" && typeof item.id === "string") proc.fileChangePaths.delete(item.id);
         if (item.type === "agentMessage") {
           const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
           const buffered = st.agentMessageBuffers.get(itemId) ?? "";
@@ -1541,9 +1566,8 @@ export class CodexDriver implements Driver {
       typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
     const row = this.#row(st);
     const context = {
-      role: row?.role ?? "worker",
       readonly: proc.readonly,
-      stateDir: this.#stateDir,
+      writeScope: proc.writeScope,
       cwd: row?.cwd ?? proc.launched.cwd,
     };
 
@@ -1554,7 +1578,8 @@ export class CodexDriver implements Driver {
         return;
       }
       case "item/fileChange/requestApproval": {
-        const decision = decideFileChangeApproval(params, context);
+        const itemId = typeof params.itemId === "string" ? params.itemId : "";
+        const decision = decideFileChangeApproval({ ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] }, context);
         proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
         return;
       }

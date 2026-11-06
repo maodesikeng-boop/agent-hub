@@ -170,7 +170,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const { db } = openStore(paths);
     parts.db = db;
     // realpath 过的两个目录，账本和启动准备用同一份：
-    // - stateDir：Worker 的记忆规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
+    // - dataDir：Worker 的可写范围（write-scope.ts）按真实路径匹配，沙箱认的是真实路径；
+    // - stateDir：Worker 设置文件里 state/ 的兜底拒绝规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
     // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
     //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
     mkdirSync(paths.worktreesDir, { recursive: true });
@@ -182,6 +183,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const sentFilesDir = realpathSync.native(paths.sentFilesDir);
     // 过期的上传文件和副本：启动时清一次，之后每天一次（出错只记日志）
     parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
+    const dataDir = realpathSync.native(paths.home);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；
@@ -213,6 +215,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     installHubShim({ binDir: paths.hubBinDir });
     const prepareLaunch = createLaunchPreparer({
       launchDir: paths.launchDir,
+      dataDir,
       stateDir,
       worktreesDir,
       getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
@@ -223,7 +226,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
-    const launch = { stateDir, store: sessions, log, prepareLaunch, personaNote };
+    const launch = { store: sessions, log, prepareLaunch, personaNote };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: {

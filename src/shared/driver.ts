@@ -2,6 +2,7 @@
 import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { SessionStore } from "./store.ts";
+import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
 
 export type { AgentStep, AgentStepInput } from "./domain.ts";
@@ -468,6 +469,12 @@ export interface LaunchFiles {
    */
   fingerprint: string;
   /**
+   * Worker 的可写范围（write-scope.ts 的 workerWriteScope）：数据目录里只有自己的工作目录能写。项目经理没有。
+   * 每家驱动按 daemon/driver/write-scope.ts 的 WRITE_SCOPE_ENFORCERS 落实（编辑工具和 shell 都要管住）。
+   * 由角色、cwd、数据目录决定，cwd 变了驱动层本来就重启，所以不进 fingerprint。
+   */
+  writeScope?: WriteScope;
+  /**
    * 拼进提示词的性格设定、模式是哪一版（LaunchContext 的 personaRevision）。不进 fingerprint：变了不重启，
    * 见上面“两轮之间自动重启”的性格设定那段。没有（Worker）就不比。
    */
@@ -483,8 +490,6 @@ export interface PersonaNote {
 export interface DriverOptions {
   /** claude 程序路径（AGENT_HUB_CLAUDE）。 */
   claudePath: string;
-  /** 数据目录 state/ 的路径（Worker 记忆保护判断用）。 */
-  stateDir: string;
   store: SessionStore;
   /**
    * 每次启动前调用，生成提示词和设置文件；两轮之间判断要不要重启时也调（见上面“两轮之间自动重启”）。

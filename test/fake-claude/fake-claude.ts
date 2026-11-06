@@ -8,6 +8,7 @@
 // - FAKE_CLAUDE_LOG：把命令行参数、每一行标准输入、收到的信号、退出码记成 JSONL（见 FakeLogEntry）。
 // - FAKE_CLAUDE_STATE：状态目录，记哪些会话 ID 已经存在、一共跑了几轮（跨进程）。默认是日志所在目录；
 //   两个都没给就记在进程内存里（只在这一个进程里算数）。
+// - FAKE_CLAUDE_PROBE：启动时试着写这个文件，结果记进日志（kind probe），测 Worker 的可写范围。
 //
 // 默认行为：
 // - --session-id 一个已经存在的 ID（剧本 rejectSessionArgs 时一律当已存在 / 不存在）：标准错误 “Error: Session ID … is already in use.”，退出码 1；
@@ -165,7 +166,9 @@ export type FakeLogEntry =
   | { kind: "env"; pid: number; env: Record<string, string> }
   /** 用的是哪份剧本：顶层是 null，否则是 sessions 里的下标。role 是认出来的角色。 */
   | { kind: "script"; pid: number; role: FakeRole; session: number | null }
-  | { kind: "bash"; pid: number; command: string; exitCode: number; output: string };
+  | { kind: "bash"; pid: number; command: string; exitCode: number; output: string }
+  /** FAKE_CLAUDE_PROBE：启动时试着写这个文件，记下写没写成（测 Worker 的可写范围，见 daemon/driver/write-scope.ts）。 */
+  | { kind: "probe"; pid: number; ok: boolean; code?: string };
 
 /** M0 实测的 rate_limit_event.rate_limit_info（额度正常时）。 */
 export const M0_RATE_LIMIT_INFO = {
@@ -276,6 +279,14 @@ function nextTurnIndex(): number {
 
 const argv = process.argv.slice(2);
 log({ kind: "argv", pid: process.pid, argv, cwd: process.cwd() });
+if (process.env.FAKE_CLAUDE_PROBE) {
+  try {
+    writeFileSync(process.env.FAKE_CLAUDE_PROBE, "probe");
+    log({ kind: "probe", pid: process.pid, ok: true });
+  } catch (error) {
+    log({ kind: "probe", pid: process.pid, ok: false, code: (error as NodeJS.ErrnoException).code });
+  }
+}
 
 /** 测试关心的环境变量：每个会话自己的令牌、socket、PATH，Worker 关自动记忆的那个。 */
 const LOGGED_ENV = ["HUB_TOKEN", "HUB_SOCK", "PATH", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"] as const;

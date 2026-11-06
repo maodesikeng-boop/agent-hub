@@ -59,67 +59,14 @@ export function readonlyAllowRules(projectWorktreesDir: string | undefined): str
 }
 
 /**
- * 系统数据目录 state/（数据库、令牌、性格设定文件 personas/）：Worker 不能写（2026-11-06 用户去掉了记忆文件那条限制，这条保留）。
- * stateDir 要 realpath 过（paths.ts 的 stateDir）。绝对路径的写法是 // 开头：/Users/u/.agent-hub/state → Edit(//Users/u/.agent-hub/state/**)。
+ * 系统数据目录 state/（数据库、令牌、性格设定）的 Edit 拒绝规则：Worker 都带上，是可写范围（write-scope.ts）的兜底——
+ * 有 OS 沙箱时数据目录本来就写不了，这条多余但无害；没有（不是 macOS）时编辑工具至少还写不了 state/（shell 管不住）。
+ * stateDir 要 realpath 过。绝对路径的写法是 // 开头：/Users/u/.agent-hub/state → Edit(//Users/u/.agent-hub/state/**)。
  * 规则按 gitignore 的写法匹配，路径里的 \ [ ] * ? 前面加 \ 转义，当普通字符。
  */
 export function stateDirDenyRule(stateDir: string): string {
   const escaped = stateDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&");
   return `Edit(/${escaped}/**)`;
-}
-
-function normalizePathSegments(rawPath: string, homeDir?: string): { absolute: boolean; segments: string[]; normalized: string } {
-  let p = rawPath.trim().replace(/\\/g, "/");
-  if (homeDir && (p === "~" || p.startsWith("~/"))) {
-    const cleanHome = homeDir.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-    p = cleanHome + p.slice(1);
-  }
-  const absolute = p.startsWith("/");
-  const segments: string[] = [];
-  for (const part of p.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") {
-      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
-        segments.pop();
-      } else if (!absolute) {
-        segments.push("..");
-      }
-    } else {
-      segments.push(part);
-    }
-  }
-  const normalized = (absolute ? "/" : "") + segments.join("/");
-  return { absolute, segments, normalized };
-}
-
-/**
- * 供 AgyDriver 和 CodexDriver 判断某个路径是否在系统数据目录 stateDir 下（展开 ~、相对 cwd 解析、消掉 ..、不分大小写）。
- */
-export function isStateDirPath(targetPath: string, stateDir: string, homeDir?: string, cwd?: string): boolean {
-  const trimmedTarget = targetPath.trim().replace(/\\/g, "/");
-  if (trimmedTarget === "" || stateDir.trim() === "") return false;
-  const effectiveHome = homeDir ?? (typeof process !== "undefined" ? process.env.HOME : undefined);
-  const resolvedTarget =
-    cwd && cwd.trim() !== "" && !trimmedTarget.startsWith("/") && trimmedTarget !== "~" && !trimmedTarget.startsWith("~/")
-      ? `${cwd.trim().replace(/\\/g, "/").replace(/\/+$/, "")}/${trimmedTarget}`
-      : trimmedTarget;
-  const normLower = normalizePathSegments(resolvedTarget, effectiveHome).normalized.toLowerCase();
-  const stateLower = normalizePathSegments(stateDir, effectiveHome).normalized.toLowerCase();
-  return stateLower !== "" && stateLower !== "/" && (normLower === stateLower || normLower.startsWith(`${stateLower}/`));
-}
-
-const SHELL_WRITE_INDICATORS =
-  />|>>|\b(tee|sed|awk|perl|python\d*|node|ruby|cp|mv|rm|touch|dd|truncate|patch|install|chmod|chown|sh|bash|zsh)\b/;
-
-/** 命令行是否会写系统数据目录：提到 stateDir 下的路径，且不是 cat/head/tail/less/more/wc/stat/ls 这类只读命令。 */
-export function commandWritesStateDir(command: string, stateDir: string, cwd?: string): boolean {
-  const tokens = command
-    .split(/[\s><|&;'"`()=]+/)
-    .map((t) => t.trim())
-    .filter(Boolean);
-  if (!tokens.some((tok) => isStateDirPath(tok, stateDir, undefined, cwd))) return false;
-  if (SHELL_WRITE_INDICATORS.test(command)) return true;
-  return !/^\s*(cat|head|tail|less|more|wc|stat|ls)\b/.test(command);
 }
 
 /**
@@ -136,8 +83,13 @@ export interface SessionSettingsInput {
   readonly: boolean;
   /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
   hubSock: string;
-  /** 数据目录 state/ 的真实路径，Worker 的数据目录规则用。 */
+  /** 数据目录 state/ 的真实路径：Worker 的 stateDirDenyRule 用。 */
   stateDir: string;
+  /**
+   * Worker 的进程会包进 OS 沙箱（daemon/driver/write-scope.ts 的 osSandboxAvailable，macOS 上是）：
+   * 是的话关掉 claude 自带的沙箱（sandbox.enabled: false）——macOS 沙箱不能嵌套，开着 Bash 全部 exit 71。
+   */
+  osSandboxed: boolean;
   /** 本项目的 worktrees/<项目编号>/ 真实路径；只读档放行读它。没有项目就不传。 */
   projectWorktreesDir?: string;
 }
@@ -145,14 +97,16 @@ export interface SessionSettingsInput {
 /** --settings 文件的内容。 */
 export interface SessionSettings {
   permissions: { defaultMode: PermissionMode; allow: string[]; deny?: string[] };
-  sandbox: { network: { allowUnixSockets: string[] } };
+  sandbox: { enabled?: false; network: { allowUnixSockets: string[] } };
   autoMemoryEnabled?: false;
 }
 
 /**
  * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
  * - 两种角色都有：默认档（readonly 时换成只读档，并多放行 readonlyAllowRules）、放行 hub、放行 hub.sock；
- * - Worker 再加 state/ 的拒绝规则和 autoMemoryEnabled: false。
+ * - Worker 再加 autoMemoryEnabled: false 和 state/ 的拒绝规则（兜底，见 stateDirDenyRule）。数据目录不能写主要不靠设置文件：
+ *   权限规则管不住 shell，由驱动层按 LaunchFiles.writeScope 落实（daemon/driver/write-scope.ts）；包进 OS 沙箱的 Worker
+ *   再写 sandbox.enabled: false（--settings 压过用户和项目设置，用户自己开了 claude 的沙箱也关掉）。
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
@@ -164,10 +118,11 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
     settings.permissions.deny = [...READONLY_GIT_DENY_RULES];
   }
-  // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则；系统数据目录 state/ 的保护保留
+  // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则；数据目录的保护在 writeScope（见上）
   if (input.role === "worker") {
     settings.permissions.deny = [...(settings.permissions.deny ?? []), stateDirDenyRule(input.stateDir)];
     settings.autoMemoryEnabled = false;
+    if (input.osSandboxed) settings.sandbox.enabled = false;
   }
   return settings;
 }

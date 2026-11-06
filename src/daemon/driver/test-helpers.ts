@@ -10,6 +10,7 @@ import type {
   LaunchFiles,
   SessionId,
   SessionStore,
+  WriteScope,
 } from "../../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
@@ -85,6 +86,8 @@ export interface Harness {
     /** 给了就当 LaunchFiles.personaRevision（拼进提示词的性格设定是哪一版），见 persona-fixture.ts。 */
     personaRevision: (() => number) | null;
     perSession: Map<SessionId, { fingerprint?: string; env?: Record<string, string> }>;
+    /** 给了就当 LaunchFiles.writeScope（Worker 的可写范围）。 */
+    writeScope: WriteScope | null;
   };
   /** prepareLaunch 被调了几次（按会话）。 */
   prepareCalls: Map<SessionId, number>;
@@ -108,11 +111,10 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
   const store = new MemorySessionStore();
-  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map() };
+  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map(), writeScope: null };
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
-    stateDir: join(dir, "state"),
     store,
     prepareLaunch: async (session) => {
       prepareCalls.set(session.id, (prepareCalls.get(session.id) ?? 0) + 1);
@@ -126,6 +128,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
         fingerprint: launch.perSession.get(session.id)?.fingerprint ?? launch.fingerprint,
       };
       if (launch.personaRevision) files.personaRevision = launch.personaRevision();
+      if (launch.writeScope) files.writeScope = launch.writeScope;
       if (launch.settings) {
         files.settingsFile = join(launchDir, "settings.json");
         writeFileSync(files.settingsFile, "{}");

@@ -65,9 +65,9 @@ function rig(vendor: AgentVendor): Rig {
   };
   store.add(row);
   // claude 单个进程跑完、不 --resume：不存会话记录；codex 没法不存，closeRig 里删
-  const common = { stateDir: join(dir, "state"), store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} };
+  const common = { store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} };
   const driver: Driver =
-    vendor === "codex" ? createCodexDriver({ ...common, codexPath: CODEX, stateDir: join(dir, "state") }) : createClaudeDriver({ ...common, claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
+    vendor === "codex" ? createCodexDriver({ ...common, codexPath: CODEX }) : createClaudeDriver({ ...common, claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
   return { driver, events, sessionId: 1, dir, vendor, vendorSessionId, cwd };

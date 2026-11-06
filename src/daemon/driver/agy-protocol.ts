@@ -1,15 +1,16 @@
-// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 安全拦截、残留进程识别。
+// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（只读、没有 OS 沙箱时的可写范围兜底）、残留进程识别。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
   agentLaunchArgs,
-  commandWritesStateDir,
-  isStateDirPath,
+  commandMayWriteOutsideScope,
+  scopeAllowsWrite,
   type AgentSessionRow,
   type LaunchFiles,
   type SessionStartedEvent,
+  type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol.ts";
@@ -28,21 +29,13 @@ export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
  */
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
-/** 工具调用参数里需要做系统数据目录检查的路径字段名（只对写类工具检查，读不拦）。 */
-export const AGY_PATH_PARAM_KEYS = [
-  "Path",
-  "TargetFile",
-  "AbsolutePath",
-  "DirectoryPath",
-  "SearchPath",
-  "file_path",
-  "path",
-] as const;
+/** 没有 OS 沙箱时（不是 macOS）兜底检查可写范围的路径字段名（只对写类工具检查，读不拦）。 */
+export const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath", "file_path", "path"] as const;
 
-/** 工具调用参数里表示命令行字符串的字段名。 */
+/** 工具调用参数里表示命令行字符串的字段名（没有 OS 沙箱时兜底检查）。 */
 export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
 
-/** 只读 Worker 禁止调用的写文件工具集合；写类工具碰系统数据目录 state/ 也拦。 */
+/** 只读 Worker 禁止调用的写文件工具集合；没有 OS 沙箱时，写类工具写到可写范围外也拦。 */
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
@@ -58,7 +51,7 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
 ]);
 
-export const STATE_DIR_VIOLATION_MESSAGE = "Worker 不能修改系统数据目录";
+export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写自己的工作目录";
 export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文件";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -72,23 +65,6 @@ export function isReadonlySettings(settingsFile: string | undefined): boolean {
   } catch {
     return false;
   }
-}
-
-/** 从 settingsFile 的 deny 规则（Edit(//path/to/state/**)）提取 stateDir，提取不到返回 null。 */
-export function extractStateDirFromSettings(settingsFile: string | undefined): string | null {
-  if (!settingsFile || !existsSync(settingsFile)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(settingsFile, "utf8")) as { permissions?: { deny?: unknown } };
-    const deny = parsed?.permissions?.deny;
-    if (!Array.isArray(deny)) return null;
-    for (const rule of deny) {
-      const match = typeof rule === "string" ? /^Edit\(\/(\/.+)\/\*\*\)$/.exec(rule) : null;
-      if (match) return match[1]!.replace(/\\([\\[\]*?])/g, "$1");
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 /**
@@ -274,37 +250,34 @@ export interface WorkerToolCheckInput {
   toolName: string;
   parameters: unknown;
   readonly: boolean;
-  stateDir: string;
-  cwd?: string;
+  /** 没有 OS 沙箱时要兜底检查的可写范围（agy-driver 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
+  fallbackScope: WriteScope | null;
+  cwd: string;
 }
 
 /**
  * 检查 Worker 的工具调用是否违规：
- * 1. 写类工具（AGY_WRITE_TOOLS）的路径参数在系统数据目录 stateDir 下，或 CommandLine / command 会写 stateDir → 返回 "Worker 不能修改系统数据目录"；读类工具读 stateDir 不拦；
- * 2. 只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；
+ * 1. 有 fallbackScope（没有 OS 沙箱）时：写类工具（AGY_WRITE_TOOLS）的路径参数落在可写范围外，或 CommandLine / command 会写到范围外
+ *    → "Worker 在数据目录里只能写自己的工作目录"。只能看字面（shared/write-scope.ts 的 commandMayWriteOutsideScope）；
+ *    macOS 上数据目录不能写由 OS 沙箱管（write-scope.ts），这里不查；
+ * 2. 只读 Worker 调用写文件工具 → "只读 Worker 不能修改文件"；
  * 3. 合规返回 null。
  * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
-  const { toolName, parameters, readonly, stateDir, cwd } = input;
-  if (typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
+  const { toolName, parameters, readonly, fallbackScope, cwd } = input;
+  if (fallbackScope !== null && typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
     const params = parameters as Record<string, unknown>;
-    const pathKeys = AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : [];
-    for (const key of pathKeys) {
+    for (const key of AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : []) {
       const val = params[key];
-      if (typeof val === "string" && isStateDirPath(val, stateDir, undefined, cwd)) return STATE_DIR_VIOLATION_MESSAGE;
+      if (typeof val === "string" && !scopeAllowsWrite(fallbackScope, val, cwd)) return WRITE_SCOPE_VIOLATION_MESSAGE;
     }
     for (const key of AGY_COMMAND_PARAM_KEYS) {
       const cmd = params[key];
-      if (typeof cmd === "string" && cmd.trim() !== "" && commandWritesStateDir(cmd, stateDir, cwd)) {
-        return STATE_DIR_VIOLATION_MESSAGE;
-      }
+      if (typeof cmd === "string" && cmd.trim() !== "" && commandMayWriteOutsideScope(cmd, fallbackScope, cwd)) return WRITE_SCOPE_VIOLATION_MESSAGE;
     }
   }
-  if (readonly && AGY_WRITE_TOOLS.has(toolName)) {
-    return READONLY_WORKER_VIOLATION_MESSAGE;
-  }
-  return null;
+  return readonly && AGY_WRITE_TOOLS.has(toolName) ? READONLY_WORKER_VIOLATION_MESSAGE : null;
 }
 
 /**

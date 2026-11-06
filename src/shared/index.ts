@@ -15,3 +15,4 @@ export * from "./sent-files.ts";
 export * from "./store.ts";
 export * from "./worker.ts";
 export * from "./vendors.ts";
+export * from "./write-scope.ts";
