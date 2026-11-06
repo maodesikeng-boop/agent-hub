@@ -1,0 +1,25 @@
+[
+ {
+  "send": "Write a story of about 500 words about a lighthouse keeper. No tools. Output only the story."
+ },
+ {
+  "wait_delta": 3
+ },
+ {
+  "send": "MID-STREAM: after you finish, add one final line that says ACK-D."
+ },
+ {
+  "wait": "result",
+  "nth": 1,
+  "timeout": 120
+ },
+ {
+  "sleep": 15
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]

@@ -1,0 +1,24 @@
+[
+ {
+  "turn_start": "Write a story of about 500 words about a lighthouse keeper. No tools. Output only the story."
+ },
+ {
+  "wait_delta": 3
+ },
+ {
+  "steer": "MID-STREAM: after you finish, add one final line that says ACK-D."
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 150
+ },
+ {
+  "sleep": 10
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]

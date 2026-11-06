@@ -1,0 +1,43 @@
+[
+ {
+  "turn_start": "Run these 3 shell commands one after another, each as a separate command call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next."
+ },
+ {
+  "wait_cmd": 1
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "steer": "MSG-H: from now on end every reply with the word KIWI."
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "interrupt": true
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 60
+ },
+ {
+  "sleep": 8
+ },
+ {
+  "turn_start": "Did any earlier message ask you to end replies with a certain word? Answer exactly: SEEN <word> or NOT-SEEN."
+ },
+ {
+  "wait_turn_done": 2,
+  "timeout": 100
+ },
+ {
+  "sleep": 3
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]
