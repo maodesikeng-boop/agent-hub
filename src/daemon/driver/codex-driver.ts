@@ -5,8 +5,7 @@
 // 一轮中途交给 agent（docs/mid-turn-messages.md 第 8、9 节）：忙时用 turn/steer，回执成功算已送达，userMessage item 出来算处理中；
 // 报错（no active turn to steer 等）退回自己的队列；这一轮结束都没读到的收回（message.requeued），停止时标已取消。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
@@ -196,16 +195,12 @@ interface SessionState {
   emittedMessageIds: Set<string>;
   /** 当前轮已经发过 agent.thinking 的 itemId 集合，避免每个 delta 刷屏。 */
   emittedThinkingIds: Set<string>;
-  logFd: number | null;
-  logBroken: boolean;
 }
 
 export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   /** codex 可执行文件路径，默认 "codex"（若未传但传了 claudePath 则回退 claudePath）。 */
   codexPath?: string;
   claudePath?: string;
-  /** 数据目录 state/ 的路径（用于 Worker 记忆保护判断）；不传时默认从 sessionLogsDir 向上两级推导。 */
-  stateDir?: string;
   /** 厂商命令与输入拼装器，默认 vendors/ 里的 codex。 */
   composer?: VendorComposerBase;
 }
@@ -227,9 +222,9 @@ export class CodexDriver implements Driver {
   #requestSeq = 0;
   #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, stateDir, composer, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, composer, ...options }: CodexDriverOptions) {
     this.#codexPath = codexPath ?? claudePath ?? "codex";
-    this.#stateDir = stateDir ?? dirname(dirname(options.sessionLogsDir));
+    this.#stateDir = options.stateDir;
     this.#composer = composer ?? composerBaseOf("codex")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
@@ -419,7 +414,6 @@ export class CodexDriver implements Driver {
       await proc.exited;
     }
     this.#update(st, { status: "ended", pid: null });
-    this.#closeLog(st);
   }
 
   async interrupt(sessionId: SessionId): Promise<void> {
@@ -483,7 +477,6 @@ export class CodexDriver implements Driver {
         await within(all, KILL_WAIT_MS);
       }
     }
-    for (const st of this.#sessions.values()) this.#closeLog(st);
   }
 
   async cleanupStale(): Promise<void> {
@@ -550,8 +543,6 @@ export class CodexDriver implements Driver {
         agentMessageBuffers: new Map(),
         emittedMessageIds: new Set(),
         emittedThinkingIds: new Set(),
-        logFd: null,
-        logBroken: false,
       };
       this.#sessions.set(id, st);
     }
@@ -937,7 +928,6 @@ export class CodexDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
-    st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });
 
     child.on("error", () => {});
@@ -993,7 +983,6 @@ export class CodexDriver implements Driver {
   }
 
   #onLine(st: SessionState, proc: Proc, line: string): void {
-    this.#appendLog(st, line);
     if (line.trim() === "") return;
     let obj: Record<string, unknown>;
     try {
@@ -1714,31 +1703,6 @@ export class CodexDriver implements Driver {
     const timer = st[key];
     if (timer) clearTimeout(timer);
     st[key] = null;
-  }
-
-  #appendLog(st: SessionState, line: string): void {
-    if (st.logBroken) return;
-    try {
-      if (st.logFd === null) {
-        mkdirSync(this.#opts.sessionLogsDir, { recursive: true, mode: 0o700 });
-        st.logFd = openSync(join(this.#opts.sessionLogsDir, `${st.id}.jsonl`), "a", 0o600);
-      }
-      writeSync(st.logFd, line + "\n");
-    } catch (error) {
-      st.logBroken = true;
-      this.#closeLog(st);
-      this.#internalError(st.id, `writing session log failed: ${errorMessage(error)}`);
-    }
-  }
-
-  #closeLog(st: SessionState): void {
-    if (st.logFd === null) return;
-    try {
-      closeSync(st.logFd);
-    } catch {
-      // ignore
-    }
-    st.logFd = null;
   }
 
   #emit(sessionId: SessionId, event: DriverEvent): void {

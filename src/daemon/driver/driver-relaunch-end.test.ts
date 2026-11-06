@@ -1,7 +1,7 @@
 // 驱动层 M2：m2-plan 第 4 节“W3 驱动层 + 提示词 + 假 claude”测试表里驱动层的那几条，外加第 6 节第 4 条的进程组。
 // 提示词那几条在 src/daemon/prompt.test.ts，假 claude 自己的在 test/fake-claude/fake-claude.test.ts。
 import { ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -623,19 +623,6 @@ describe("空闲退出、崩溃后重新起进程", () => {
     await t.driver.send(s.id, user(2, "二"));
     await t.waitFor("turn.ended", undefined, 2);
     expect(t.stdinTexts()).toEqual(["一", "二"]);
-  });
-});
-
-describe("会话日志的权限", () => {
-  it("logs/ 和 logs/sessions/ 是 0700，会话日志文件是 0600", async () => {
-    const t = harness();
-    const s = t.addSession();
-    await t.driver.send(s.id, user(1, "hi"));
-    await t.waitFor("turn.ended");
-    const mode = (p: string) => statSync(p).mode & 0o777;
-    expect(mode(join(t.dir, "logs"))).toBe(0o700);
-    expect(mode(join(t.dir, "logs", "sessions"))).toBe(0o700);
-    expect(mode(join(t.dir, "logs", "sessions", `${s.id}.jsonl`))).toBe(0o600);
   });
 });
 

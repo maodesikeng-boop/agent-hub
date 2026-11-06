@@ -224,9 +224,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: {
-        claude: createClaudeDriver({ claudePath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
-        agy: createAgyDriver({ agyPath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
-        codex: createCodexDriver({ codexPath, sessionLogsDir: paths.sessionLogsDir, store: sessions, log, prepareLaunch }),
+        claude: createClaudeDriver({ claudePath, stateDir, store: sessions, log, prepareLaunch }),
+        agy: createAgyDriver({ agyPath, stateDir, store: sessions, log, prepareLaunch }),
+        codex: createCodexDriver({ codexPath, stateDir, store: sessions, log, prepareLaunch }),
       },
     });
     parts.driver = driver;

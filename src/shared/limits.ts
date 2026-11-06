@@ -260,6 +260,9 @@ export const DEFAULT_UI_PORT = 4317;
 /** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
 export const MAX_API_RETRY_ERROR_CHARS = 200;
 
+/** 升级数据库前自动备份的 hub.sqlite.bak-* 最多留几份：新备份写好后删掉更早的。 */
+export const MAX_DB_BACKUPS = 2;
+
 /** 同一个模块连续失败几次就算“坏了”（界面标红）。 */
 export const HEALTH_FAILURE_THRESHOLD = 3;
 

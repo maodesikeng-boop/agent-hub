@@ -418,6 +418,26 @@ describe("后台任务：有这个信号的厂商（claude）才显示", () => {
   });
 });
 
+describe("原始记录：厂商自己存的会话文件在哪", () => {
+  it("show 多一行“原始记录：<路径>”；找不到（没给、给了 null）写“找不到”", () => {
+    const w = startWorker("claude");
+    expect(show(w).text).toContain("\n原始记录：找不到");
+    expect(show(w, lin.sessionId, { transcript: null }).text).toContain("\n原始记录：找不到");
+    expect(show(w, lin.sessionId, { transcript: "/h/.claude/projects/-p/v.jsonl" }).text).toContain("\n原始记录：/h/.claude/projects/-p/v.jsonl");
+  });
+
+  it("workerTranscriptTarget：自己派的 Worker 给当前会话的 vendor、vendor_session_id、cwd；别人的、Worker 自己调的是 null", () => {
+    const w = startWorker("codex", { title: "转写" });
+    const store = createSessionStore(db);
+    store.update(sessionOf(w), { vendorSessionId: "thread-9" });
+    const session = store.get(sessionOf(w))!;
+    expect(ledger.workerTranscriptTarget(lin.sessionId, w)).toEqual({ vendor: "codex", vendorSessionId: "thread-9", cwd: session.cwd });
+    expect(ledger.workerTranscriptTarget(zhou.sessionId, w)).toBeNull();
+    expect(ledger.workerTranscriptTarget(sessionOf(w), w)).toBeNull();
+    expect(ledger.workerTranscriptTarget(lin.sessionId, 999)).toBeNull();
+  });
+});
+
 describe("PR、分支", () => {
   it("agent 接口查到的 PR 写一行；没有就不写", () => {
     const w = startWorker("claude");

@@ -2,8 +2,7 @@
 // 管理待发队列（一轮一条、忙时用户连发合并、写入前校验）、首条消息系统提示词注入、init 会话 ID 持久化与 --conversation 恢复、
 // SIGINT 打断、Worker 记忆路径与只读工具安全拦截、空闲关闭与残留清理。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
@@ -165,16 +164,12 @@ interface SessionState {
   usageLatest: TokenUsage | null;
   usagePushedAt: number;
   usageTimer: NodeJS.Timeout | null;
-  logFd: number | null;
-  logBroken: boolean;
 }
 
 export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
   /** agy 可执行文件路径（优先取 agyPath，兼容传 claudePath，默认 "agy"）。 */
   agyPath?: string;
   claudePath?: string;
-  /** 数据目录 state/ 的真实路径（用于 Worker 记忆保护检查）。 */
-  stateDir?: string;
   /** 这个驱动对应的厂商实现，默认 vendors/ 里 agy 那份。 */
   composer?: VendorComposerBase;
 }
@@ -195,9 +190,7 @@ export class AgyDriver implements Driver {
   constructor({ composer, ...options }: AgyDriverOptions) {
     this.#composer = composer ?? composerBaseOf("agy")!;
     this.#agyPath = options.agyPath ?? options.claudePath ?? "agy";
-    const logsParent = dirname(dirname(options.sessionLogsDir));
-    this.#defaultStateDir =
-      options.stateDir ?? (logsParent.endsWith("/state") ? logsParent : join(logsParent, "state"));
+    this.#defaultStateDir = options.stateDir;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
@@ -340,7 +333,6 @@ export class AgyDriver implements Driver {
       await proc.exited;
     }
     this.#update(st, { status: "ended", pid: null });
-    this.#closeLog(st);
   }
 
   async interrupt(sessionId: SessionId): Promise<void> {
@@ -395,7 +387,6 @@ export class AgyDriver implements Driver {
         await within(all, KILL_WAIT_MS);
       }
     }
-    for (const st of this.#sessions.values()) this.#closeLog(st);
   }
 
   async cleanupStale(): Promise<void> {
@@ -464,8 +455,6 @@ export class AgyDriver implements Driver {
         usageLatest: null,
         usagePushedAt: 0,
         usageTimer: null,
-        logFd: null,
-        logBroken: false,
       };
       this.#sessions.set(id, st);
     }
@@ -833,7 +822,6 @@ export class AgyDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
-    st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });
 
     child.on("error", () => {});
@@ -883,7 +871,6 @@ export class AgyDriver implements Driver {
   }
 
   #onLine(st: SessionState, proc: Proc, line: string): void {
-    this.#appendLog(st, line);
     if (line.trim() === "") return;
     let obj: Record<string, unknown>;
     try {
@@ -1366,31 +1353,6 @@ export class AgyDriver implements Driver {
     const timer = st[key];
     if (timer) clearTimeout(timer);
     st[key] = null;
-  }
-
-  #appendLog(st: SessionState, line: string): void {
-    if (st.logBroken) return;
-    try {
-      if (st.logFd === null) {
-        mkdirSync(this.#opts.sessionLogsDir, { recursive: true, mode: 0o700 });
-        st.logFd = openSync(join(this.#opts.sessionLogsDir, `${st.id}.jsonl`), "a", 0o600);
-      }
-      writeSync(st.logFd, line + "\n");
-    } catch (error) {
-      st.logBroken = true;
-      this.#closeLog(st);
-      this.#internalError(st.id, `writing session log failed: ${errorMessage(error)}`);
-    }
-  }
-
-  #closeLog(st: SessionState): void {
-    if (st.logFd === null) return;
-    try {
-      closeSync(st.logFd);
-    } catch {
-      // ignore
-    }
-    st.logFd = null;
   }
 
   #emit(sessionId: SessionId, event: DriverEvent): void {

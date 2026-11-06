@@ -18,3 +18,11 @@ export {
   type ModelCatalogsOptions,
 } from "./model-catalog.ts";
 export { DriverSessionError, createMultiVendorDriver, type MultiVendorDriverOptions } from "./multi-driver.ts";
+export {
+  agyTranscriptPath,
+  claudeTranscriptPath,
+  codexTranscriptPath,
+  vendorTranscriptPath,
+  type TranscriptRef,
+  type TranscriptRoots,
+} from "./transcript.ts";

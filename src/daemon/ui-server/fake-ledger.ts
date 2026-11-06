@@ -326,6 +326,7 @@ export class FakeLedger {
       hubCall: unused("hubCall"),
       workerStartFolder: unused("workerStartFolder"),
       workerPrTarget: unused("workerPrTarget"),
+      workerTranscriptTarget: unused("workerTranscriptTarget"),
       getLaunchContext: unused("getLaunchContext"),
       getWorktreeTask: unused("getWorktreeTask"),
       onSetupStarted: unused("onSetupStarted"),

@@ -309,7 +309,7 @@ describe("agent api over inject", () => {
       });
       expect((await call("worker.show", { workerId: 5 })).statusCode).toBe(200);
       expect(probed).toEqual([["/wt/1/5", "hub/5-x"]]);
-      expect(ledger.contexts).toEqual([{ pr }]);
+      expect(ledger.contexts).toEqual([{ pr, transcript: null }]);
     });
 
     it("查不到、账本说不用查（别人的 Worker、没在 worktree 里）、别的命令：context 是空的，不查", async () => {
@@ -324,7 +324,34 @@ describe("agent api over inject", () => {
       await call("worker.show", { workerId: 6 });
       await call("worker.log", { workerId: 5 });
       expect(probes).toBe(1);
-      expect(ledger.contexts).toEqual([{}, {}, {}]);
+      expect(ledger.contexts).toEqual([{ transcript: null }, { transcript: null }, {}]);
+    });
+  });
+
+  describe("hub worker show：调 hubCall 之前找厂商那边的原始记录", () => {
+    it("账本给的索引交给 findTranscript，结果作为 context.transcript；找不到是 null", async () => {
+      const asked: unknown[] = [];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        findTranscript: (ref) => {
+          asked.push(ref);
+          return ref.vendorSessionId === "v-1" ? "/vendor/v-1.jsonl" : null;
+        },
+      });
+      await app.ready();
+      ledger.transcriptTarget = { vendor: "claude", vendorSessionId: "v-1", cwd: "/wt/1/5" };
+      await call("worker.show", { workerId: 5 });
+      ledger.transcriptTarget = { vendor: "claude", vendorSessionId: "v-2", cwd: "/wt/1/5" };
+      await call("worker.show", { workerId: 5 });
+      ledger.transcriptTarget = null;
+      await call("worker.show", { workerId: 6 });
+      expect(asked).toEqual([
+        { vendor: "claude", vendorSessionId: "v-1", cwd: "/wt/1/5" },
+        { vendor: "claude", vendorSessionId: "v-2", cwd: "/wt/1/5" },
+      ]);
+      expect(ledger.contexts).toEqual([{ transcript: "/vendor/v-1.jsonl" }, { transcript: null }, { transcript: null }]);
     });
   });
 

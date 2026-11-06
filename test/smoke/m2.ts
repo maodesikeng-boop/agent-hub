@@ -12,7 +12,8 @@ const hubCalls = (smoke: Smoke) => smoke.query<HubCallRow>("SELECT session_id, c
 
 /** 每个 M2 场景的外壳：起、跑、收尾；收尾发现问题或场景失败，就把数据目录留着。 */
 async function inFreshSmoke(outcomes: Outcome[], name: string, fn: (smoke: Smoke) => Promise<string>): Promise<void> {
-  const smoke = await Smoke.boot();
+  // M2 的场景都要重启 claude 进程再 --resume，要存会话记录（收尾时删）
+  const smoke = await Smoke.boot({ persist: true });
   const ok = await scenario(outcomes, name, () => fn(smoke));
   const problems = await smoke.finish(!ok);
   if (problems.length > 0) {

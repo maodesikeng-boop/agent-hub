@@ -1,6 +1,6 @@
 // AgyDriver 与 agy-protocol 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -375,7 +375,6 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
 
   const driver = createAgyDriver({
     agyPath: fakeAgyPath,
-    sessionLogsDir: join(stateDir, "logs", "sessions"),
     stateDir,
     store,
     prepareLaunch: async (session) => {
@@ -1111,6 +1110,17 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
   });
 });
 
+
+describe("不写原始日志", () => {
+  it("跑完一轮：数据目录和临时目录里没有 .jsonl，也没有 logs/sessions/（原文在厂商自己的目录里）", async () => {
+    const t = makeAgyHarness({ script: { turns: [{ steps: [{ type: "text", stepId: 2, deltas: ["hi"] }], result: { status: "SUCCESS", finishedReason: null, response: "hi", usage: {} } }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    const files = readdirSync(t.dir, { recursive: true }).map(String);
+    expect(files.filter((f) => f.endsWith(".jsonl") || f.includes(join("logs", "sessions")))).toEqual([]);
+  });
+});
 
 describe("6. 一轮中途的消息（agy 不支持，照旧排队；停止时还没取走的标已取消）", () => {
   it("不支持中途送达：忙时 send 返回 queued，这一轮结束再写", async () => {
