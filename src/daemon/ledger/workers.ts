@@ -415,7 +415,8 @@ export function createLedgerWorkers(
       const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
       const session = workerSession(w.id);
-      const setting = `模型 ${ctx.modelLabel(session.vendor as AgentVendor, session.model)} · 思考程度 ${effortLabel(session.effort)}`;
+      const shown = splitModelEffort(session.vendor as AgentVendor, session.model, session.effort);
+      const setting = `模型 ${ctx.modelLabel(session.vendor as AgentVendor, shown.model)} · 思考程度 ${effortLabel(shown.effort)}`;
       return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;
     });
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };

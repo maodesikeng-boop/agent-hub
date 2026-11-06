@@ -636,6 +636,8 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     const { persona } = ledger.editPersona(agy.pm.id, { effort: "low" }, { kind: "user" });
     expect(persona).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "low" });
     expect(sessionRow(agy.sessionId)).toMatchObject({ model: "gemini-4-argon", effort: "low" });
+    // 对话里的系统消息：模型没变不写，思考程度单独一段（老数据里的 high 是从完整 ID 里拆出来的）
+    expect(messagesIn(agy.conversation.id).at(-1)!.text).toBe("你改了阿亮的设置（思考程度：high → low）");
   });
 
   it("agy 只给完整 ID：拆成 模型 + 思考程度；完整 ID 加对不上的思考程度：invalid", () => {

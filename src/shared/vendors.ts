@@ -371,15 +371,14 @@ export function modelChoiceOf(model: string | null): string {
   return model ?? "";
 }
 
-/** 界面、修改记录里显示的模型：默认；名单里有的用它的名字（没给名单用打包的）；别的原样。 */
+/** 界面、修改记录里显示的模型：默认；名单里有的用它的名字（没给名单用打包的；带档位的完整 ID 只取模型的名字）；别的原样。 */
 export function modelLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return "默认";
   const listed = catalog.models.find((m) => m.id === model);
   if (listed) return listed.label;
-  // 老数据存的是带档位的完整 ID（agy）：名单里有它的模型就显示“名字 (档位)”，和 agy 自己的写法一样
-  const split = splitModelEffort(vendor, model, null);
-  const base = split.effort === null ? undefined : catalog.models.find((m) => m.id === split.model);
-  return base === undefined || split.effort === null ? model : `${base.label} (${cap(split.effort)})`;
+  // 老数据存的是带档位的完整 ID（agy）：只显示模型的名字，档位另外显示（agentEffortOf），不拼在一起
+  const bare = splitModelEffort(vendor, model, null).model!;
+  return catalog.models.find((m) => m.id === bare)?.label ?? model;
 }
 
 /** 模型下拉里“默认”那一项：知道默认是哪个模型就写出来（“Opus 5.5（默认）”），不知道只写“默认”。 */

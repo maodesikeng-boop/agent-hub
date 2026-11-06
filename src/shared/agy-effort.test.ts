@@ -102,10 +102,10 @@ describe("打包的名单：照 agy models 的实际内容，模型不带档位"
 describe("老数据和右栏的显示：模型 + 档位", () => {
   const catalog = bundledModelCatalog("agy");
 
-  it("modelLabel：不带档位的用名单的名字；老数据的完整 ID 显示成“名字 (档位)”", () => {
+  it("modelLabel：用名单的名字；老数据的完整 ID 只显示模型的名字，档位另外显示，不拼在一起", () => {
     expect(modelLabel("agy", "gemini-4-argon", catalog)).toBe("Gemini 4 Argon");
-    expect(modelLabel("agy", "gemini-4-argon-high", catalog)).toBe("Gemini 4 Argon (High)");
-    expect(modelLabel("agy", "gpt-oss-120b-medium", catalog)).toBe("GPT-OSS 120B (Medium)");
+    expect(modelLabel("agy", "gemini-4-argon-high", catalog)).toBe("Gemini 4 Argon");
+    expect(modelLabel("agy", "gpt-oss-120b-medium", catalog)).toBe("GPT-OSS 120B");
     expect(modelLabel("agy", "unknown-thing", catalog)).toBe("unknown-thing");
   });
 

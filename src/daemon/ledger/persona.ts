@@ -49,7 +49,10 @@ const agentOf = (pm: PmDbRow): AgentSetting => ({ vendor: pm.vendor as AgentVend
 const sameAgent = (a: AgentSetting, b: AgentSetting) => a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 
 /** 修改记录、系统消息里的“模型：默认 → Haiku”这几段（没变的不写）。 */
-function agentNotes(before: AgentSetting, after: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
+function agentNotes(rawBefore: AgentSetting, rawAfter: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
+  // 老数据里 agy 的模型是带档位的完整 ID：先拆成 模型 + 思考程度，各写各的
+  const before = { vendor: rawBefore.vendor, ...splitModelEffort(rawBefore.vendor, rawBefore.model, rawBefore.effort) };
+  const after = { vendor: rawAfter.vendor, ...splitModelEffort(rawAfter.vendor, rawAfter.model, rawAfter.effort) };
   const notes: string[] = [];
   if (before.vendor !== after.vendor) notes.push(`厂商：${vendorLabel(before.vendor)} → ${vendorLabel(after.vendor)}`);
   if (before.model !== after.model) notes.push(`模型：${label(before.vendor, before.model)} → ${label(after.vendor, after.model)}`);

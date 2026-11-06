@@ -160,7 +160,7 @@ describe("界面上的叫法", () => {
     expect(modelLabel("claude", "haiku")).toBe("Haiku");
     expect(modelLabel("claude", "claude-haiku-5-5")).toBe("claude-haiku-5-5");
     expect(modelLabel("agy", "gemini-4-argon")).toBe("Gemini 4 Argon");
-    expect(modelLabel("agy", "gemini-4-argon-medium")).toBe("Gemini 4 Argon (Medium)");
+    expect(modelLabel("agy", "gemini-4-argon-medium")).toBe("Gemini 4 Argon");
     expect(modelLabel("codex", "gpt-5.4-mini")).toBe("GPT-5.4 Mini");
   });
 
