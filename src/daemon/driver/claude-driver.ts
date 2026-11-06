@@ -6,6 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import {
+  BACKGROUND_TASKS_HOLD_MAX_MS,
   CRASH_RECOVERY_NOTE,
   DriverError,
   IDLE_CLOSE_MS,
@@ -15,6 +16,7 @@ import {
   LAST_EVENT_WRITE_MS,
   USAGE_PUSH_MS,
   RELAUNCH_NOTE,
+  backgroundTasksKilledNote,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
   SHUTDOWN_GRACE_MS,
@@ -57,6 +59,7 @@ import {
 } from "./protocol.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
+import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 
 interface PendingEntry {
@@ -73,7 +76,7 @@ interface PendingEntry {
 interface Batch {
   messageIds: MessageId[];
   line: string;
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean };
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null };
   delivered: boolean;
   processing: boolean;
 }
@@ -81,7 +84,7 @@ interface Batch {
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
 /** 这一行没带恢复、崩溃、重启说明（命令那一行，见 #takeBatch）。 */
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, killed: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -135,6 +138,8 @@ interface SessionState {
    * 空闲关闭、关机、打断、end 也都当有一轮在跑。
    */
   selfTurn: boolean;
+  /** 会话里还在跑的后台任务（system/background_tasks_changed）：有就不算闲着，见 #armIdle。进程起来、退出时清空。 */
+  background: BackgroundTasks;
   turnInterrupted: boolean;
   /** 这一轮用户点过停止（interrupt 调过、这一轮还没收尾）：关机碰上它，仍按停止收尾，不当关机打断。 */
   stopRequested: boolean;
@@ -148,6 +153,11 @@ interface SessionState {
    * 空闲退出或崩溃之后重新起进程不标（崩溃有自己的 CRASH_RECOVERY_NOTE），那时用的本来就是最新设置。
    */
   relaunchNote: boolean;
+  /**
+   * 我们关进程（两轮之间设置变了重启、后台任务超过兜底上限的空闲关闭）时会话里还有后台任务，它们跟着进程被结束了：
+   * 这里存给 agent 的说明（backgroundTasksKilledNote），下一条写进去的前面加上，加一次。
+   */
+  killedNote: string | null;
   /** end 调过了（同步标上）：之后的 start、send 抛 session_ended。 */
   ended: boolean;
   /** end 的那个 promise，再调 end 返回同一个。 */
@@ -183,7 +193,7 @@ export interface ClaudeDriverOptions extends DriverOptions {
 
 export class ClaudeDriver implements Driver {
   readonly #opts: Required<
-    Pick<DriverOptions, "idleCloseMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
+    Pick<DriverOptions, "idleCloseMs" | "backgroundHoldMaxMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log">
   > &
     DriverOptions;
   readonly #composer: VendorComposerBase;
@@ -198,6 +208,7 @@ export class ClaudeDriver implements Driver {
     this.#composer = composer ?? composerBaseOf("claude")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
+      backgroundHoldMaxMs: BACKGROUND_TASKS_HOLD_MAX_MS,
       interruptGraceMs: INTERRUPT_GRACE_MS,
       startTimeoutMs: START_TIMEOUT_MS,
       shutdownGraceMs: SHUTDOWN_GRACE_MS,
@@ -300,7 +311,7 @@ export class ClaudeDriver implements Driver {
     await this.#writeBatch(st, proc, {
       messageIds,
       line,
-      notes: { recovery: false, crash: false, relaunch: false },
+      notes: NO_NOTES,
       delivered: false,
       processing: false,
     });
@@ -316,6 +327,7 @@ export class ClaudeDriver implements Driver {
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = false;
+    st.killedNote = null;
     this.#clearTimer(st, "idleTimer");
     st.ending = this.#finishEnd(st);
     return st.ending;
@@ -452,6 +464,7 @@ export class ClaudeDriver implements Driver {
         proc: null,
         inFlight: null,
         selfTurn: false,
+        background: new BackgroundTasks(),
         turnInterrupted: false,
         stopRequested: false,
         pending: [],
@@ -459,6 +472,7 @@ export class ClaudeDriver implements Driver {
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
+        killedNote: null,
         ended: false,
         ending: null,
         settleWaiters: [],
@@ -518,15 +532,17 @@ export class ClaudeDriver implements Driver {
     if (command) {
       return { messageIds, line: buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent), notes: NO_NOTES, delivered: false, processing: false };
     }
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote };
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote };
     const prefixes = [
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
+      notes.killed,
     ].filter((p): p is string => p !== null);
     st.recoveryNote = false;
     st.crashNote = false;
     st.relaunchNote = false;
+    st.killedNote = null;
     return { messageIds, line: buildUserLine(body.text, [...prefixes, ...body.prefixes], this.#composer.buildUserContent), notes, delivered: false, processing: false };
   }
 
@@ -536,6 +552,7 @@ export class ClaudeDriver implements Driver {
     if (batch.notes.recovery) st.recoveryNote = true;
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
+    if (batch.notes.killed !== null) st.killedNote = batch.notes.killed;
   }
 
   async #pump(st: SessionState): Promise<void> {
@@ -581,6 +598,8 @@ export class ClaudeDriver implements Driver {
       if (st.ended || st.proc !== proc || proc.closing || this.#busy(st)) return;
       const row = files ? this.#row(st) : null;
       if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
+        // 重启会把后台任务一起结束：记下来，写下一条时告诉 agent
+        if (st.background.active) st.killedNote = backgroundTasksKilledNote("relaunch", st.background.descriptions());
         this.#closeStdin(st, proc, "idle");
         await proc.exited;
         this.#assertRunning();
@@ -651,13 +670,20 @@ export class ClaudeDriver implements Driver {
     for (const w of st.settleWaiters.splice(0)) w();
   }
 
+  /**
+   * 开始算空闲。有后台任务时计时放宽到 backgroundHoldMaxMs（兜底，到点照常关）；任务清零时 #onBackgroundTasksChanged 重新调这里，从头算 idleCloseMs。
+   */
   #armIdle(st: SessionState, proc: Proc): void {
     this.#clearTimer(st, "idleTimer");
     st.idleTimer = setTimeout(() => {
       st.idleTimer = null;
       if (st.proc !== proc || proc.closing || this.#busy(st) || st.pending.length > 0 || st.starting || st.ended) return;
+      if (st.background.active) {
+        this.#opts.log(`[driver] session ${st.id}: 后台任务还有 ${st.background.count} 个没结束，已超过 ${this.#opts.backgroundHoldMaxMs} ms，照常空闲关闭`);
+        st.killedNote = backgroundTasksKilledNote("hold_max", st.background.descriptions());
+      }
       this.#closeStdin(st, proc, "idle");
-    }, this.#opts.idleCloseMs);
+    }, idleDelayMs(st.background, this.#opts.idleCloseMs, this.#opts.backgroundHoldMaxMs));
   }
 
   /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
@@ -816,6 +842,7 @@ export class ClaudeDriver implements Driver {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     st.proc = proc;
+    st.background.clear();
     st.logBroken = false;
     this.#update(st, { pid: child.pid ?? null });
     child.on("error", () => {}); // 出错之后总会有 exit
@@ -884,6 +911,7 @@ export class ClaudeDriver implements Driver {
         if (obj.subtype === "init") this.#onInit(st, proc, obj, at);
         else if (obj.subtype === "api_retry") this.#onApiRetry(st, obj, at);
         else if (obj.subtype === "commands_changed") this.#onCommandsChanged(st, obj, at);
+        else if (obj.subtype === "background_tasks_changed") this.#onBackgroundTasksChanged(st, proc, obj);
         else if (obj.subtype === "compact_boundary") this.#onCompactBoundary(st, obj, line, at);
         return;
       case "conversation_reset":
@@ -931,6 +959,18 @@ export class ClaudeDriver implements Driver {
         this.#onResult(st, proc, obj, at);
         return;
     }
+  }
+
+  /**
+   * 后台任务名单变了（完整名单，见 docs/m0-report.md）：记下来。有没有任务这件事变了、而且正在算空闲，就按新的情况重新计时：
+   * 来了任务 → 换成兜底时长；清零 → 从头算 idleCloseMs。一轮在跑时不动计时（那一轮结束 #afterTurn 会按当时的情况算）。
+   */
+  #onBackgroundTasksChanged(st: SessionState, proc: Proc, obj: Record<string, unknown>): void {
+    if (st.proc !== proc) return;
+    const wasActive = st.background.active;
+    if (!st.background.replace(obj.tasks)) return;
+    if (st.background.active === wasActive || st.idleTimer === null) return;
+    if (!proc.closing && !this.#busy(st) && !st.ended) this.#armIdle(st, proc);
   }
 
   /** 命令列表变了（带完整名单）：换成通用形状交出去；认不出的跳过。 */
@@ -1032,7 +1072,10 @@ export class ClaudeDriver implements Driver {
 
   #onClose(st: SessionState, proc: Proc, code: number | null, signal: NodeJS.Signals | null, resolveExited: () => void): void {
     try {
-      if (st.proc === proc) st.proc = null;
+      if (st.proc === proc) {
+        st.proc = null;
+        st.background.clear();
+      }
       clearKillTimer(proc);
       this.#clearTimer(st, "startTimer");
       this.#clearTimer(st, "idleTimer");
