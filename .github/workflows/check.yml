@@ -31,6 +31,17 @@ jobs:
       # (onlyBuiltDependencies); none are approved here.
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm check
+      - run: pnpm typecheck
+
+      # CI 里不用 pnpm check 的 dot reporter：它在 CI 日志里看不到失败汇总（见 PR 说明），
+      # 改用 verbose（逐条用例 + 耗时）、github-actions（失败写成注解）、junit（留档）。
+      - run: pnpm vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vitest-junit
+          path: vitest-junit.xml
+          if-no-files-found: ignore
 
       - run: pnpm build
