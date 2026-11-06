@@ -1,0 +1,29 @@
+[
+ {
+  "turn_start": "Run these 3 shell commands one after another, each as a separate command call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next."
+ },
+ {
+  "wait_cmd": 1
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "steer": "MSG-H: reply with ACK-H."
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "interrupt": true
+ },
+ {
+  "sleep": 20
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]

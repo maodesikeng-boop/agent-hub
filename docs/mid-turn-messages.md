@@ -1,7 +1,7 @@
 # 一轮中途写入的消息：claude 能不能马上看到（实测 + 改动方案）
 
 > 结论：**能。** claude 2.1.314 在 stream-json 输入下，一轮还在跑时写进标准输入的 user 消息，会在**当前这个工具调用跑完之后、下一次问模型之前**被读进同一轮，模型据此改计划；不用等整轮结束。M0 实验 1（`docs/m0-report.md`）说“忙时写入的消息只能等下一轮”，那是 `--tools ""` 没工具时的结果，对有工具的会话不成立。
-> 只实测、写文档，没改产品代码。脚本和剧本在 `experiments/steer/`（原始输出含本机信息，没提交，`out/` 已忽略；关键行摘在下面）。
+> 只实测、写文档，没改产品代码。（agy、codex 的实测和三家对比在第 7～9 节。）脚本和剧本在 `experiments/steer/`（原始输出含本机信息，没提交，`out/` 已忽略；关键行摘在下面）。
 
 ## 1. 官方文档怎么说
 
@@ -162,4 +162,223 @@
 - **没测的**：（1）`/compact` 等本地命令在轮中间写入；（2）`selfTurn`（claude 自己开的轮，后台任务完成）期间写入；（3）模型 haiku 以外（实测只用了 haiku，行为由 claude 的队列决定，应该和模型无关，但“模型看到消息后是否照做”各模型会不同）；（4）带 `--settings` 的权限钩子、真实的项目经理提示词，工具权限等待（`requires_action`）期间写入；（5）`--resume` 后的会话；（6）多个 Worker 的负载。
 - **别的版本**：`msg_lifecycle_v1`、`interrupt_cancel_queued_v1`（v2.1.219+）是靠 init 里的 `capabilities` 探测的，不要比版本号；`priority`、`origin` 字段的最低版本官方没写全（`now`+human 要 v2.1.286+）。
 - **旁观到的小事**：用户自己的 `~/.claude` 里有 `SessionStart` 钩子，每次启动会出 `hook_started`/`hook_response`，对本测试没有影响。
-- 另外 2 家（agy、codex）的驱动各有自己的 `#takeBatch`，本文不涉及；codex 的 app-server 是否有类似的插话机制，要做的话另测。
+- 另外 2 家（agy、codex）的实测见第 7、8 节，三家对比和跟厂商无关的驱动层接口见第 9 节。
+
+## 7. agy（Antigravity）实测
+
+**环境**：`agy` 1.5.1，`--model gemini-3.8-flash-low`，在 `/tmp` 临时目录里跑；参数照 `buildAgyArgs`：`--input-format stream-json --output-format stream-json --mode auto --dangerously-skip-permissions --model … --print ""`（本账号 `--mode auto` 不可用，agy 回一句 warning 后用默认模式，`--dangerously-skip-permissions` 照样放行工具）。每条消息是 `{"event":"user","message":{"content":[{"type":"text",…}]}}`，没有 uuid 字段。脚本 `experiments/steer/steer_agy.py`，剧本 `*_agy.json`，`run_agy.sh NAME` 跑一个。时间是从启动进程算起的秒数。任务同第 3 节（3 条 `sleep 5`）。
+
+### 7.1 官方文档
+
+出处 <https://antigravity.google/docs/cli/headless>（headless 模式）、<https://antigravity.google/docs/cli/settings>（`queuedMessages`）、<https://antigravity.google/docs/cli/reference>（命令行参数）、<https://antigravity.google/docs/changelog?tab=cli&version=1.4.7>：
+
+- 流式输入：“feeding it prompts one by one on standard input … **Each prompt executes a full turn and emits its own `result` event.**”；“Drive a session programmatically”一节的提示：“**Wait until you receive the `result` event for the current prompt before writing the next one.**”——官方没说一轮中途写进去会怎样，示例是等 `result` 再写下一条；一次管道里连写多条（`printf … | agy`）示例里每条各出一个 `result`。
+- 不支持的输入：`control_request`/`control_response` 事件 → `ERROR` 结果、**会话结束、退出码 2**；以 `/` 开头、CLI 自己处理的命令（`/model` 等）同样；不认识的 `event` 名只在 stderr 打 warning 跳过。所以**没有协议层的插话/打断接口**。
+- 停止：`result.status` 有 `INTERRUPTED`（“for example, SIGINT”）；关 stdin 是正常结束（等当前轮完成再退出）。
+- 只有交互式界面（TUI）有“忙时发消息”的设置：`queuedMessages` = `"queue"`（默认，“held until the current turn ends”）或 `"send-immediately"`（“interrupts the agent and sends it right away”），`alt+m` 临时反着来（changelog 1.4.7）。**这个只管 TUI，headless 的 stream-json 没有对应开关。**
+
+### 7.2 实测
+
+**A**：第一条命令跑时写入“只跑一条”。第一条命令 6.01 开始、11.28 结束；7.05 写入；**3 条命令全跑完**（13.09、19.97、26.82 各一段文字，27.05 `result` turns=1，回复里 ONE、TWO、THREE 都有）；27.08 才出这条消息的回显（`step#8 user_input/DONE`），28.70 回 `ACK-A`，29.06 第二个 `result`（turns=2）。**结论：整轮跑完才读到，和现在“忙时排队”一样。**
+
+**B**：连写两条（7.35、8.39）。27.33 第一个 `result`；27.36 B1 的 `user_input`、29.15 第二个 `result`（回 “2+2 is 4”）；29.18 B2 的 `user_input`、30.86 第三个 `result`（回 `PINEAPPLE`）。**结论：两条都处理，但每条自己占一轮、各一个 `result`，agy 自己在标准输入后面排队，不合并。**
+
+**C**：回显是 `step_update` 的 `step_type:"user_input"`、`state:"DONE"`，**在上一轮 `result` 之后 0.03 秒才出**（27.05→27.08、27.33→27.36、10.56→10.59），也就是“这一条开始被处理”；没有 uuid，只能按写入顺序（先进先出）对应。**一条消息一轮，中途写进去的永远是下一轮，不会和当前轮混在一起**；`result.num_turns` 是整个会话累计的。第一条消息的回显在 init 之后约 0.03 秒。
+
+**D**：正在流式输出故事时（5.82，已出 3 个 delta）写入 “最后加一行 ACK-D”。故事 10.30 写完、10.56 `result`（故事里没有 ACK-D），10.59 回显，12.39 第二个 `result` 回 `ACK-D.`。**结论：不打断，下一轮读到，和 A 一样。**
+
+**E**：中途写入 `content:[{text:"【用户直接对你说】"},{text:"Skip command (3)…ACK-E2A"}]`，再写一条不带标签的 “…PINEAPPLE”。同样是整轮（3 条命令）跑完后才读到，第二轮回 `ACK-E2A: Understood… skip command (3)`，第三轮回 `…PINEAPPLE`。**结论：标签不影响（进的是下一轮，两个块都被读到）。**
+
+**停止**（`f_agy`）：第一条命令跑时（6.34 开始）写入 “MSG-F，回复 ACK-F”（7.37），再发 `SIGINT`（现有 `interrupt()` 就是这个）：8.44 stderr `error: interrupted`，`result` 的 `status:"ERROR"`、`response:""`、`num_turns:1`，**进程退出码 1**，没有后续轮。再用同一个 `--conversation <id>` 起一个进程（`f2_agy`）问“你有没有收到过 MSG-F”，回 `NOT-SEEN-F`。**结论：停止就是杀进程，agy 里排着的消息整个丢了（连历史里都没有）；没有“取消排着的消息”这回事，也没有“停止之后它们接着跑”的风险。**
+
+### 7.3 结论（agy）
+
+不能做“当前工具跑完就看到新消息”。协议里没有插话/打断，只有“一条一轮”的队列。**照旧排队**（我们自己的待发队列），不要把消息提前写进标准输入：提前写进去也是排到整轮之后，还多一个“进程杀掉时写进去的消息丢了、而账本以为已送达”的问题；另外 agy 不合并连发消息，我们现有的“用户连发了 N 条”合并反而省轮数。想做“立即插话”只能 SIGINT 杀进程再 `--conversation` 重启，约 4 秒启动、被打断的工具白跑，不建议。
+
+## 8. codex（app-server）实测
+
+**环境**：`codex-cli 0.162.0-alpha.17.2`（ChatGPT.app 里那个），`codex app-server --listen stdio://`。握手和参数照 `codex-driver`/`codex-protocol`：`initialize`（`experimentalApi:true`）→ `initialized` → `thread/start {cwd, model, developerInstructions, sandbox:"workspace-write", approvalPolicy:"on-request"}` → `turn/start {…, summary:"detailed", sandboxPolicy:{type:"workspaceWrite", networkAccess:true, writableRoots:[cwd]}}`；服务端发来的审批请求脚本自动 `accept`。脚本 `experiments/steer/steer_codex.py`，剧本 `*_codex.json`，`run_codex.sh NAME` 跑一个。**模型：任务指定的 `gpt-5.4-mini` 在本机账号（ChatGPT 免费档）上不能用**：`400 The 'gpt-5.4-mini' model is not supported when using Codex with a ChatGPT account`（`model_not_found`）；`model/list` 只有 `gpt-6-luna`、`gpt-5.6-terra`、`gpt-5.6-luna`，实测用 **`gpt-5.6-luna`**。（`src/shared/vendors.ts` 里 codex 打包名单是 gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex，在这个账号上都不可用，不在本任务范围，见汇报。）时间同样是从启动进程算起的秒数；注意每一轮第一条用户消息的 `userMessage` 回显比 `turn/started` 晚 5～10 秒（模型首次响应前的启动），和本任务无关。
+
+### 8.1 官方文档
+
+出处 <https://developers.openai.com/codex/app-server>（同内容 <https://learn.chatgpt.com/docs/app-server>），源码 <https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs>、测试 `codex-rs/app-server/tests/suite/v2/turn_steer.rs`、`turn_interrupt.rs`；本机 `codex app-server generate-json-schema --experimental` 生成的 schema 也有：
+
+- **Thread**：“a conversation between a user and the Codex agent. Threads contain turns.” **Turn**：“a single user request and the agent work that follows”，含若干 item。生命周期：`turn/start` 开一轮；“**Steer an active turn**: Call `turn/steer` to append user input to the currently in-flight turn **without creating a new turn**”；一轮以 `turn/completed`（`status`: `completed` / `interrupted` / `failed`）结束。
+- **`turn/steer`**：“Include `expectedTurnId`; it must match the active turn id.”；“The request fails if there is no active turn on the thread.”；“`turn/steer` doesn’t emit a new `turn/started` notification.”；“doesn’t accept turn-level overrides (`model`, `cwd`, `sandboxPolicy`, or `outputSchema`)”；返回 `{turnId}`。参数还有 `clientUserMessageId`（可选）、`additionalContext`（实验）。
+- **`turn/interrupt`**：`{threadId, turnId}`，成功回 `{}`，“the turn finishes with status: "interrupted"”；`turnId` 不对报 `expected active turn id … but found …`。
+- `turn/start` 源码注释里提到“Ignored when this request steers an already-active turn”“Ignored when this request adds input to an active turn”，**也就是 `turn/start` 在一轮进行中会被当成往这一轮加输入**；官方文档没写这一点，而且 GitHub issue #59536（2026-11）在报告“有轮在跑时 `turn/start` 应该返回带活动 turn id 的可重试错误”，行为还在变，**不要依赖它，用 `turn/steer`**。
+- 还有 `thread/queue/add|list|start|update|delete|reorder`（schema 里有、文档页没写）：codex 自己的待发队列，通知 `thread/queue/changed`。
+
+### 8.2 实测
+
+**A**：第一条命令 10.02 开始；11.06 `turn/steer`，**马上回** `{"turnId":"…"}`；14.91 命令跑完；**14.92 就出 `item/started userMessage`（内容是“STOP…”），在同一个 turn 里**；16.49 `agentMessage` `ACK-A`，16.87 `turn/completed status=completed`。没再跑第 2、3 条。**结论：下一步就读到（当前命令跑完立刻），同一轮，只有一个 `turn/completed`。**
+
+**B**：连着两个 `turn/steer`（11.53、12.57），各自马上回成功；命令 15.40 跑完，**15.41 同一刻出两个 `userMessage` item**（B1、B2 各一个）；回复 “The first command output was ONE, and 2+2 is 4.”，最终 “…THREE. PINEAPPLE”，一个 `turn/completed`。**结论：都读到、都回应、各一个 item，不用拼。**
+
+**C**：回显是 `item/started`+`item/completed` 的 `userMessage` item，**在被取走的那一刻出（不是写入时）**：A 里写入 11.06、回显 14.92。同一轮：中途 steer 的消息 `turnId` 和这一轮相同，整轮一个 `turn/started`、一个 `turn/completed`。`turn/steer` 的回执只表示“收下了”，**不表示被模型读到**。**连在 `turn/started` 之前也行**：`turn/start` 的回执（0.15）一回来就 `turn/steer`（0.15，比 `turn/started` 的 0.26 还早）也被收下，第一条回复 `OK`（8.11）之后 8.12 出它的 `userMessage`，10.48 回 `ACK-L`，同一轮。
+
+**D**：正在流式输出故事时（13.70 `agentMessage` 开始）`turn/steer`（13.71）也马上被收下；故事 24.44 写完，**24.51 出 `userMessage`，随后同一轮又出一个新的 `agentMessage`（38.52，按要求重写并带上 `ACK-D`）**，一个 `turn/completed`。**结论：没有工具时也能在同一轮读到（等当前这次模型回复写完），不像 claude 那样另起一轮。**
+
+**E**：`turn/steer` 的 `input` 里放两个 text（`【用户直接对你说】` 单独一块 + 正文），再一个不带标签的。15.78 取走：第一条回显是一个 `userMessage`，`content` 里两个 text 块；回复 `Command 1 finished with output ONE. ACK-E2A`，不再跑第 3 条，最后回复以 `PINEAPPLE` 结尾。**结论：标签不影响。**
+
+**`turn/start` 在忙时**（`g_codex`）：第一条命令跑时 17.27 再发 `turn/start`，**回执里的 turn id 就是正在跑的这一轮**，21.13 命令跑完后出它的 `userMessage`，同一轮回 `ACK-G`，一个 `turn/completed`（27.47）。也就是行为上等于 steer，但文档没保证（见上面 issue）。
+
+**报错**：没有活动 turn 时 `turn/steer` → `{"code":-32600,"message":"no active turn to steer"}`（`i_codex`，turn 刚 `turn/completed` 之后）；`expectedTurnId` 不对 → `-32600 "expected active turn id `not-the-active-turn` but found `01a1…"`（`k_codex`）；`expectedTurnId` 传 null → `-32600 "Invalid request: invalid type: null, expected a string"`。
+
+**`thread/queue/add`**（`j_codex`）：第一条命令跑时 15.74 加入队列，回 `queuedSubmission`；`thread/queue/list` 能看到；**这一轮不读它**，35.28 `turn/completed` 之后 35.31 自动 `turn/started`（新 turn）处理它，回 `ACK-J`，队列清空。**等于 claude 的 `priority:"later"` 和现在的“忙时排队”。**
+
+**停止**（`h_codex`、`h2_codex`）：第一条命令跑时 steer “MSG-H：以后每条回复都以 KIWI 结尾”（12.01，已收下），1 秒后 `turn/interrupt`（13.04）：13.06 `turn/completed status=interrupted`；**命令没被杀，3 秒后还报 completed（15.87）**；这条被收下但没被取走的消息**没有出过 `userMessage`**；之后新开一轮问“之前有没有消息让你以某个词结尾”，回 `NOT-SEEN`。**结论：停止之后已收下、没被取走的 steer 消息静默丢了（连历史里都没有），不会接着跑；收到 `turn/completed interrupted` 时驱动层要自己把“已写但没见到回显”的消息标成取消。**
+
+### 8.3 结论（codex）
+
+**能做，而且比 claude 更直接**：忙的时候直接发 `turn/steer {threadId, expectedTurnId: <当前 turn id>, input:[…]}`，不用放进我们自己的队列。当前命令跑完（或当前这次模型回复写完）就读到，同一轮。要点：
+
+- 需要当前 turn id：`turn/start` 的回执和 `turn/started` 通知里都有（驱动层已存 `st.activeTurnId`）。`turn/start` 回执之后、`turn/started` 之前就能 steer。
+- 竞态：`turn/steer` 报 “no active turn to steer”（刚好 `turn/completed`）→ 退回我们自己的队列，等下一次 `turn/start`；回执成功但 `turn/completed` 来了还没见到那条的 `userMessage`，要不要重发——**没测**这个竞态（steer 被收下的同一刻这一轮恰好结束会不会丢），建议驱动层这样兜底：`turn/completed(status=completed)` 时对“已 steer、没见到回显”的消息按未处理重新排队；用 `clientUserMessageId` 对账（schema 里有，回显里是否带回**没测**，`userMessage` item 实测只有 `content`）。
+- 不要用 `turn/start` 当作 steer，也不要用 `thread/queue/*` 替换我们的队列（等同排队，没有收益）。
+- `turn/steer` 没有 `model`/`cwd`/`sandboxPolicy` 覆盖：我们每个 `turn/start` 都带的 `sandboxPolicy`、`effort` 等，steer 的消息沿用这一轮的。
+
+## 9. 三家对比和跟厂商无关的驱动层接口
+
+### 9.1 对比
+
+| | claude（2.1.314） | codex（0.162，app-server） | agy（1.5.1） |
+| --- | --- | --- | --- |
+| 中途能不能被读到 | 能：当前**工具**跑完后（A、B、E） | 能：当前工具跑完，或当前**模型回复**写完后（A、B、D、E） | **不能**，整轮跑完才读（A、B、D、E） |
+| 怎么送 | 照常写 user 行（可带 `uuid`，`priority` 默认 `next`） | 专门的 `turn/steer`（要 `expectedTurnId`） | 只能写 user 行，排在整轮后面 |
+| 文字输出时（D） | 等这次回复写完，**另起一轮**（两个 `result`） | 等这次回复写完，**同一轮**继续（一个 `turn/completed`） | 另起一轮 |
+| 连发两条（B） | 都读到，各一个回显，同一轮 | 都读到，各一个 `userMessage` item，同一轮 | 各占一轮，各一个 `result`，不合并 |
+| 怎么知道被取走了（C） | `command_lifecycle started`（要带 uuid；回显会合并，不能对账） | `item/started userMessage`（按顺序；`clientUserMessageId` 能不能带回没测） | `user_input` step（在上一轮 `result` 之后），按先进先出对 |
+| 一轮结束的标志 | `result`（可同时结算好几条） | `turn/completed`（`completed`/`interrupted`/`failed`） | `result`（每条消息一个） |
+| 标签（E） | 无影响 | 无影响 | 无影响 |
+| 立刻打断 | `interrupt` 控制请求（可带 `cancel_queued`）；`priority:"now"` | `turn/interrupt`（要 turn id）；命令不会被杀 | `SIGINT` 杀进程（退出码 1）；TUI 的 send-immediately 在 headless 没有 |
+| 停止时已写入、没取走的消息 | **默认接着另起一轮跑**；带 `cancel_queued:true` 才取消 | **静默丢了**（没有 `userMessage`，历史里也没有） | **进程没了，丢了**（`--conversation` 恢复后也没有） |
+| 官方文档有没有写 | 有（`priority` 字段） | 有（`turn/steer`，但 `turn/start` 忙时的行为没写） | 没有（只写了“等 `result` 再写下一条”） |
+
+### 9.2 接口设计
+
+原则：**界面和账本只认“能力声明 + 几个通用事件”，不认厂商**。厂商差别全收在驱动里。
+
+**1) 能力声明**：`Driver` 加一个只读属性（放 `src/shared/driver.ts`，每家驱动写死或按 init 探测）：
+
+```ts
+interface MidTurnSupport {
+  /** 一轮进行中能不能把消息交给 agent。"none" 时驱动层自己排队（现状）。 */
+  mode: "none" | "direct";
+  /** direct 时：agent 最早什么时候读到。"tool"=当前工具跑完；"model_step"=当前这次模型回复写完（含没有工具时）。 */
+  seenAfter?: "tool" | "model_step";
+  /** 没赶上这一轮（读到之前这一轮就结束）时：消息怎么办。"next_turn"=厂商自己排到下一轮；"requeue"=驱动层收回、放回自己的队列。 */
+  missed?: "next_turn" | "requeue";
+  /** 被取走的信号：驱动层据此发 message.processing。 */
+  consumedBy?: "lifecycle_event" | "echo_item";
+  /** 停止时已写入、还没被取走的消息，厂商是什么态度（驱动层要把它抹平成“已取消”）。 */
+  onStopWritten?: "vendor_runs_them" | "vendor_drops_them" | "process_gone";
+}
+```
+
+三家声明：claude `{mode:"direct", seenAfter:"tool", missed:"next_turn", consumedBy:"lifecycle_event", onStopWritten:"vendor_runs_them"}`（停止时带 `cancel_queued`，抹平成已取消）；codex `{mode:"direct", seenAfter:"model_step", missed:"requeue", consumedBy:"echo_item", onStopWritten:"vendor_drops_them"}`；agy `{mode:"none"}`（`onStopWritten:"process_gone"`，只对驱动自己排的队列有意义）。
+
+**2) `send` 的返回**：`DriverSendResult` 加一种 `{ kind: "written", midTurn: true }`——“忙时写进去了，agent 之后会读到”。`written`（空闲写入）、`queued`（驱动层自己排队，等这一轮完再写，agy 一律这样）、`rejected` 不变。调用方不用知道是 steer 还是直写。
+
+**3) 状态和事件（账本只认这些）**：
+
+| 账本状态 | 事件 | 谁产生 |
+| --- | --- | --- |
+| 排队中 | `send` 返回 `queued` | 驱动层自己的队列（agy 一律；claude/codex 只在进程没起、正在关闭、命令消息、codex 报“没有活动 turn”时） |
+| 已送达 | `message.delivered` | 写成功 / `turn/steer` 回执成功 |
+| 处理中 | `message.processing` | **按 `consumedBy` 各家自己判断**：claude 用 `command_lifecycle started`，codex 用 `userMessage` item，agy 用 `user_input` step（现状） |
+| 完成 | `turn.ended`，`messageIds` = 这一轮里已经 processing 的 | 驱动层按“已被取走”结算，没取走的留着（claude `queued` 没 `started`、codex steer 没见到回显） |
+| 取消 | **新增 `message.cancelled { messageIds, reason }`**（reason: `stop` \| `session_ended`） | 见下 |
+
+**4) 停止时（统一语义）**：用户按停止 = **这一刻所有还没被 agent 取走的消息都标已取消、不自动重发**（和第 5.4 节建议一致），不管厂商：
+
+- 驱动层自己队列里排着的：丢掉，发 `message.cancelled`（现状 `end` 里已经丢，这里补事件）；
+- 已写进厂商、没取走的：驱动层记着“已写、没 processing”的消息编号；claude 在 `interrupt` 控制请求里带 `cancel_queued:true` 并以回执为准；codex 收到 `turn/completed interrupted` 时把没见到 `userMessage` 的发 `cancelled`（厂商已丢）；agy 进程 SIGINT 退出后同理（厂商已丢）；
+- 这样“厂商停止后会接着跑排着的消息”（claude 默认）的差别不会漏给界面。
+
+**5) 忙时写入前的统一规则（驱动层内部）**：`mode==="none"` 或消息是命令、进程没起/没 init/在关闭 → 排自己的队列；否则直接写，并把消息编号登记到“已写、未取走”集合；这一轮结束时（`turn.ended`）集合里还没被取走的：`missed:"next_turn"` 的留着等下一轮的取走信号（claude），`missed:"requeue"` 的放回自己队列最前面、下一轮 `turn/start`（codex）。崩溃/重启：已 `processing` 的按现在的崩溃说明重发，“已写、没取走”的放回队列重发，不加崩溃说明（模型没看到过）。
+
+**6) 界面**：只认“排队中 / 已送达 / 处理中 / 已取消”；“已送达”在支持中途送达的厂商上表示“agent 会在当前这一步跑完后读到”，agy 没有这个状态（直接排队中）。是否显示“agent 不会中途看到”之类提示由能力声明里的 `mode` 决定，不按厂商名判断。
+
+**7) 没测的（agy、codex）**：codex——steer 被收下的同一刻这一轮恰好结束的竞态、`clientUserMessageId` 是否回显、审批请求（`requestApproval`）挂着时 steer、`thread/resume` 之后的 steer、`gpt-5.4-mini` 以外的模型（行为由 app-server 决定，应与模型无关）、长工具（比如 10 分钟的命令）里 steer 要等到它结束（和 claude 一样，没有 `priority:"now"` 那种挪去后台的办法）；agy——`--mode auto` 在本账号不可用，用的是默认模式 + `--dangerously-skip-permissions`，没测别的权限模式；另外 agy 一轮里工具权限请求挂着时的行为没测。
+
+## 10. 后台任务的信号（agy、codex 有没有对应 claude 的 `system/background_tasks_changed`）
+
+**要回答的**：驱动层靠它判断“还有后台命令在跑，别因为闲置把进程关掉”（claude 的做法见 PR #92 和 `docs/m0-report.md` 的“后台任务事件”一节：`background_tasks_changed` 带完整名单；任务结束时顺序是 `task_updated` → `task_notification` → `background_tasks_changed(tasks=[])` → 约 100 毫秒后 claude 自己开一轮）。agy、codex 有没有对应的信号。
+
+**做法**：同第 7、8 节的环境和参数，让 agent 起一个后台跑 30 秒的命令（`sleep 30; echo BGDONE > bg_done.txt`），记下这段时间的所有事件。agy 脚本 `bg_agy.json`、`bg2_agy.json`，codex 脚本 `bg_codex.json`、`bg2_codex.json`（codex 的 `steer_codex.py` 加了 `bg_list` 步骤，调 `thread/backgroundTerminals/list`）。
+
+### 10.1 agy
+
+官方文档（<https://antigravity.google/docs/cli/headless>）没有后台任务的事件；`init` 里的工具有 `run_command`、`command_status`、`manage_task`、`send_command_input`，没有推送。实测（`bg_agy`，第一个进程等 50 秒）：
+
+```
+ 6.89 step#2 tool/ACTIVE run_command {"CommandLine":"sleep 30; echo BGDONE > bg_done.txt"}   ← 之后一直没有这一步的 DONE
+11.47 step#3 agent_response/DONE 'STARTED'   11.47 result/SUCCESS turns=1
+      …… 11.47 到 62.10 之间没有任何事件（命令约 37 秒时跑完，bg_done.txt 写好了，已核对）
+```
+
+- **运行期间**：没有任何“后台任务”事件。唯一的痕迹是这个 `run_command` 的 tool step 出了 `ACTIVE` 之后到 `result` 都没出 `DONE`（对比前台命令：`ACTIVE` 之后命令一跑完就出 `DONE`，见第 7 节 A）。
+- **跑完时**：没有通知，没有 `step_update`，**不会自己开新的一轮**。agent 要自己调 `command_status` 才知道结果，这要有下一轮。
+- **进程关闭**（`bg2_agy`，turn 结束后 2 秒关标准输入）：agy 9.19 `result`、12.92 退出（退出码 0），**不等后台命令**；命令没被杀，孤儿进程自己跑完、写好了文件，但结果没有任何地方接。
+- **结论：agy 不能可靠判断“有后台任务在跑”**。只有一个启发式：`result` 到的时候还有 `step_type:"tool"` 的 `ACTIVE` 步骤没 `DONE`——两次实测都是这样，官方没写、没测过其他情形（`command_status` 查询之后会不会补 `DONE`、权限请求挂着、别的工具），**不建议当真**。agy 保持现状（闲置关闭不看后台任务）。
+
+### 10.2 codex
+
+官方文档（<https://developers.openai.com/codex/app-server>）没写后台任务；本机 `generate-json-schema --experimental` 里有 `thread/backgroundTerminals/list|clean|terminate`（返回 `{data:[{itemId, processId, command, cwd, osPid, cpuPercent, rssKb}], nextCursor}`）和 `item/commandExecution/terminalInteraction` 通知。实测分两种情形：
+
+**1) 命令是 codex 自己的“长命令”（unified exec，`source:"unifiedExecStartup"`，`bg2_codex`，让模型给 3 秒的 yield 时间）：**
+
+```
+12.14 item/started   commandExecution "sleep 30; echo BGDONE > bg_done.txt" status=inProgress processId=77837
+16.44 item/completed agentMessage 'STARTED'
+16.50 thread/status/changed idle ; turn/completed status=completed        ← turn.items 里只有 agentMessage，没有这个命令
+16.50 thread/backgroundTerminals/list → data:[{itemId:"exec-2bee…", processId:"77837", command:"sleep 30; …", cwd, osPid:null,…}]
+26.56 同上：还在名单里
+42.05 item/completed commandExecution status=completed exitCode=0 durationMs=29905 aggregatedOutput=null
+56.57 thread/backgroundTerminals/list → data:[]
+```
+
+- **运行期间能判断**：两个办法都行——①事件：`item/started`（`type:"commandExecution"`）之后没出对应 `item/completed`，这个命令 item **跨过 `turn/completed` 继续开着**，名单就是“开着的 commandExecution item（按 `item.id`）”；②查询：`thread/backgroundTerminals/list {threadId}`（回完整名单，`processId`、`command` 字段，`osPid` 实测是 null）。**`turn/completed` 的 `turn.items` 不含这个命令，不能靠它。**
+- **跑完时有通知**：`item/completed`（`status:"completed"`、`exitCode`、`durationMs`，`aggregatedOutput` 是 null），名单随即变空。**不会自己开新的一轮**（42.05 前后没有 `turn/started`，`thread/status` 一直是 idle），模型也没被叫醒——agent 要等下一轮自己去查（或由我们发一条系统消息叫醒它，见 10.3）。
+- 一轮结束时没有专门的“后台任务变了”事件，`thread/status/changed` 的 `activeFlags` 在这期间是空的，不能用。
+
+**2) 命令是 shell 层面放后台（`nohup … &`、`( … ) &`，`bg_codex`，模型被要求“放后台”时选的是这种）：**
+
+```
+13.47 item/started commandExecution "/bin/zsh -lc \"nohup sh -c 'sleep 30; echo BGDONE > bg_done.txt' >/dev/null 2>&1 &\"" 
+13.47 item/completed commandExecution status=completed exitCode=0 durationMs=0       ← 外壳立刻退出
+22.96 turn/completed ; thread/backgroundTerminals/list → data:[]（命令约 44 秒时才跑完）
+```
+
+codex 看到的是一个立刻结束的命令，**之后命令还在跑，但没有任何事件、名单也是空的**，不能判断，也没有完成通知。
+
+- **结论：codex 能判断一部分**：codex 自己的长命令（yield 出去的 unified exec）能判断，靠 `item/started`/`item/completed` 对子 commandExecution item、或 `thread/backgroundTerminals/list` 的 `data` 是否为空；agent 自己用 `nohup &` 放到后台的命令，codex 不知道，**判断不了**。哪一种取决于模型怎么选：本次让它“放后台”，一次选了 `nohup … &`、一次选了 `( … ) &`（都是 shell 层面的），只有明确要求“用 yield 时间让命令继续跑”才走 unified exec。`src/daemon/prompt.ts` 里项目经理的“长命令放后台”那句（`run_in_background`，“命令跑完会叫醒你”）只对 claude 成立：codex、agy 没有 `run_in_background`，跑完也不会叫醒。
+
+### 10.3 三家对比和接口
+
+| | claude | codex | agy |
+| --- | --- | --- | --- |
+| 有没有“后台任务名单” | 有：`system/background_tasks_changed`，`tasks[]` 完整名单（每次整个换掉） | 部分：`thread/backgroundTerminals/list`（完整名单，主动查）；以及开着的 `commandExecution` item；只管 unified exec 的长命令，管不到 `nohup &` | **没有** |
+| 运行时的信号 | 事件推送 | 事件（`item/started` 没配对 `item/completed`）+ 查询 | 无（只有一个没 `DONE` 的 tool step，不可靠） |
+| 完成时的通知 | `task_notification`、`background_tasks_changed(tasks=[])` | `item/completed`（`exitCode`、`durationMs`） | 无 |
+| 会不会自己开新的一轮 | **会**（约 100 毫秒后，agent 读到结果） | **不会** | **不会** |
+| 一轮的 `result`/`turn/completed` 之后 | 后台任务通常还在跑 | 命令 item 仍开着 | 命令还在跑 |
+| 关进程时 | （没测，见 PR #92） | 没测 | 进程不等它就退出，命令成孤儿自己跑完，结果没人接 |
+
+**接口**：沿用第 9.2 节的思路，能力声明加一项，界面和闲置关闭只认通用的东西：
+
+```ts
+interface BackgroundTaskSupport {
+  /** "none" = 这家看不到后台任务（闲置关闭照旧）；"snapshot_event" = 事件带完整名单（claude）；"item_lifecycle" = 靠命令 item 的开始/结束对子，加可选的名单查询（codex）。 */
+  signal: "none" | "snapshot_event" | "item_lifecycle";
+  /** 任务结束后厂商会不会自己开一轮叫醒 agent。false 时，驱动层要靠“任务结束”事件自己发一条系统消息，不然 agent 不知道命令跑完了。 */
+  wakesAgent: boolean;
+}
+```
+驱动层对外只出一个通用事件 `background.changed { count: number }`（claude 用 `tasks.length`，不算 `ambient`；codex 用开着的 `commandExecution` item 数，turn 结束和重启时调一次 `thread/backgroundTerminals/list` 校准），闲置关闭（`idleDelayMs`）只看 `count>0`。`signal:"none"` 的驱动不发这个事件。
+
+- claude：`{signal:"snapshot_event", wakesAgent:true}`（现状，PR #92）。
+- codex：`{signal:"item_lifecycle", wakesAgent:false}`：**可以像 claude 一样“有任务就不闲置关闭”，但光保住进程不够**——命令跑完时 agent 不会被叫醒，要由驱动层在 `item/completed`（后台那个命令）到达时发一条系统消息（“后台命令 X 已结束，退出码 N”）把 agent 叫起来读结果，否则只是命令没被杀、结果没人看。
+- agy：`{signal:"none", wakesAgent:false}`：判断不了，闲置关闭照旧，命令随进程退出变成没人接的孤儿；`prompt.ts` 里“长命令放后台、跑完会叫醒你”这一句对 agy（和 codex）不成立，要按厂商分开写或只给 claude（agy 让它前台跑，当前这一轮等它；这一条另开任务）。
+- **没测的**：codex 的 unified exec 进程在 app-server 退出时是否被杀、`thread/backgroundTerminals/terminate/clean` 的行为、`osPid` 为什么是 null、一个 turn 里同时多个后台命令（名单格式应与单个一致，没测）、`write_stdin`/轮询类工具的事件；agy 的 `manage_task` 工具（可能是子任务，没触发）、`command_status` 调用的事件形状；两家在 `--resume`/`thread/resume` 之后后台任务是否还在。

@@ -1,0 +1,36 @@
+[
+ {
+  "turn_start": "Run these 3 shell commands one after another, each as a separate command call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next."
+ },
+ {
+  "wait_cmd": 1
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "steer_blocks": [
+   "【用户直接对你说】",
+   "Skip command (3): only run two commands in total. Include the word ACK-E2A in your next sentence."
+  ]
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "steer": "Also end your final report with the word PINEAPPLE."
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 150
+ },
+ {
+  "sleep": 10
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]

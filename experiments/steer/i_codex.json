@@ -1,0 +1,28 @@
+[
+ {
+  "turn_start": "Reply with the single word OK. No tools."
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 100
+ },
+ {
+  "steer": "MSG-I: reply with ACK-I.",
+  "expected": "stale-or-bogus"
+ },
+ {
+  "sleep": 3
+ },
+ {
+  "steer": "MSG-I2 after the turn ended; reply ACK-I2."
+ },
+ {
+  "sleep": 5
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]

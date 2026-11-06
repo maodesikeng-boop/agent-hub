@@ -1,0 +1,1 @@
+[{"send": "Did you receive any earlier message containing the token MSG-F asking you to reply ACK-F? Answer exactly SEEN-F or NOT-SEEN-F, then stop."}, {"wait": "result", "nth": 1, "timeout": 90}, {"sleep": 2}, {"close": true}, {"exit": 30}]

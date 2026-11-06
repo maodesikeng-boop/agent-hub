@@ -1,0 +1,21 @@
+[
+ {
+  "turn_start": "Reply with the single word OK. No tools."
+ },
+ {
+  "steer": "MSG-L: after that, also reply with ACK-L."
+ },
+ {
+  "wait_turn_done": 1,
+  "timeout": 100
+ },
+ {
+  "sleep": 10
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 30
+ }
+]

@@ -1,0 +1,29 @@
+[
+ {
+  "send": "Run these 3 shell commands one after another, each as a separate command call: (1) `sleep 5; echo ONE` (2) `sleep 5; echo TWO` (3) `sleep 5; echo THREE`. After EACH command finishes, write one sentence reporting its output before running the next."
+ },
+ {
+  "wait_tool": 1
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "send": "MSG-F: reply with ACK-F."
+ },
+ {
+  "sleep": 1
+ },
+ {
+  "signal": "SIGINT"
+ },
+ {
+  "sleep": 15
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]
