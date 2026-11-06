@@ -117,6 +117,20 @@ describe("右栏：照 Claude desktop 的样子", () => {
     renderRail({ workers: [worker(30, { vendor: "claude", model: "sonnet", effort: "high" })] });
     expect([...within(screen.getByRole("button", { name: /活 30/ })).getByTestId("worker-meta").children].map((c) => c.textContent)).toEqual(["Sonnet", "high"]);
   });
+
+  it("Antigravity：模型和思考程度分开显示；老数据里带档位的完整 ID 也一样（Gemini 4 Argon + high）", () => {
+    renderRail({
+      workers: [
+        worker(30, { vendor: "agy", model: "gemini-4-argon", effort: "high" }),
+        worker(31, { vendor: "agy", model: "claude-opus-5-5-low", effort: null }),
+        worker(32, { vendor: "agy", model: "gpt-oss-120b-medium", effort: null }),
+      ],
+    });
+    const parts = (name: RegExp) => [...within(screen.getByRole("button", { name })).getByTestId("worker-meta").children].map((c) => c.textContent);
+    expect(parts(/活 30/)).toEqual(["Gemini 4 Argon", "high"]);
+    expect(parts(/活 31/)).toEqual(["Claude Opus 5.5", "low"]);
+    expect(parts(/活 32/)).toEqual(["GPT-OSS 120B", "medium"]);
+  });
 });
 
 describe("右栏：顶上不留空", () => {

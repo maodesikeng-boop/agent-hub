@@ -295,6 +295,29 @@ describe("新建项目经理", () => {
     expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ defaultModel: "claude-opus-4-6", effort: "max" });
   });
 
+  it("Antigravity：模型下拉只列不带档位的模型，思考程度只列 low/medium/high，GPT-OSS 只有一档所以没有思考程度下拉；请求体带不带档位的模型和思考程度", async () => {
+    const user = userEvent.setup();
+    await boot();
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "阿明");
+    await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "厂商" }), "Antigravity");
+    const model = within(dialog).getByRole("combobox", { name: "模型" });
+    expect(optionsOf(model)).toEqual(["默认", "Gemini 4 Argon", "Gemini 3.8 Flash", "Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B", "自定义"]);
+    expect(optionsOf(within(dialog).getByRole("combobox", { name: "思考程度" }))).toEqual(["默认", "low", "medium", "high"]);
+    await user.selectOptions(model, "Gemini 4 Argon");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "思考程度" }), "high");
+    // 换成只有一档的 GPT-OSS：思考程度这一行不显示（档位 high 它没有，回到默认）
+    await user.selectOptions(model, "GPT-OSS 120B");
+    expect(within(dialog).queryByRole("combobox", { name: "思考程度" })).not.toBeInTheDocument();
+    await user.selectOptions(model, "Claude Opus 5.5");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "思考程度" }), "low");
+    await user.click(within(dialog).getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /^\/api\/pms$/)[0]?.body).toMatchObject({ vendor: "agy", defaultModel: "claude-opus-5-5", effort: "low" });
+  });
+
   it("模型名超过 100 个字：提示，不能创建", async () => {
     const user = userEvent.setup();
     await boot();
