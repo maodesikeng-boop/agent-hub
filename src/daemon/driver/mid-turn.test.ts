@@ -414,7 +414,8 @@ describe("不和别的机制搅在一起", () => {
     await t.waitFor("turn.ended");
     expect(t.argvs()).toHaveLength(1);
     await t.driver.send(s.id, user(3, "下一条"));
-    await t.waitFor("turn.ended", () => true, 2);
+    // 按消息 id 等：中途写入的那条要是单独结了一轮，数“第 2 个 turn.ended”会在重启之前就满足
+    await t.waitFor("turn.ended", (e) => e.messageIds.includes(3));
     expect(t.argvs()).toHaveLength(2);
     expect(t.stdinBlocks().at(-1)).toEqual([RELAUNCH_NOTE, "下一条"]);
   });

@@ -44,7 +44,7 @@ jobs:
       - name: probe dot reporter
         if: matrix.rep == 1
         continue-on-error: true
-        run: pnpm vitest run --reporter=dot test/tmp-dot-probe.test.ts src/shared/vendors.test.ts
+        run: pnpm check
 
       - uses: actions/upload-artifact@v4
         if: always()
