@@ -122,6 +122,18 @@ describe("waitingConversations（瞬时判断）", () => {
     expect(waitingConversations(state, {})).toEqual([1]);
   });
 
+  it("换新会话（写交接的请求、交接全文、换代那一行）不算新消息：看过最后一条话就不算未读", () => {
+    const quiet = [
+      makeMessage({ id: 3, sender: "system", sessionId: 1, status: "replied", text: "【系统】请写交接", meta: { event: "handover.requested", sessionId: 1, auto: true }, createdAt: T0 - 3_000 }),
+      makeMessage({ id: 4, text: "交接全文", meta: { handover: true }, createdAt: T0 - 2_000 }),
+      makeMessage({ id: 5, sender: "system", sessionId: null, text: "交接全文", meta: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 2 }, createdAt: T0 - 1_000 }),
+    ];
+    const state = quiet.reduce((acc, m) => apply(acc, messageChange(0, "message.created", m)), idle());
+    expect(waitingConversations(state, { 1: T0 - 4_000 })).toEqual([]);
+    // 没看过换代之前那句：照旧算（未读的是那句话，不是换代）
+    expect(waitingConversations(state, {})).toEqual([1]);
+  });
+
   it("最后一条是用户发的：不算", () => {
     const state = apply(idle(), messageChange(0, "message.created", makeUserMessage({ id: 3, status: "replied", createdAt: T0 - 3_000 })));
     expect(waitingConversations(state, {})).toEqual([]);

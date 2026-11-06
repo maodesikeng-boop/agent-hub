@@ -51,8 +51,17 @@ export const HUB_MAX_BODY_BYTES = 256 * 1024;
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
 /** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。 */
 export const HANDOVER_RECENT_MESSAGES = 10;
-/** 开新会话：新会话的第一条（交接）失败、被停止后最多原地重新排队几次（退避同 session.send 的 ACTION_RETRY）；还不行就放行压着的消息，对话里提示一句。 */
-export const HANDOVER_RENEW_RETRIES = 5;
+/**
+ * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话（ledger/handover.ts 的 runAutoRenew）。
+ * 只对项目经理；Worker 的会话不自动换。
+ */
+export const AUTO_RENEW_CONTEXT_TOKENS = 200_000;
+/** 自动换新会话：一轮正常结束后要空闲这么久才开始写交接；期间来了新消息（用户的、Worker 汇报）就不换，等下一次空闲。 */
+export const AUTO_RENEW_IDLE_MS = 20_000;
+/** 守护进程多久查一次要不要自动换新会话、写交接有没有超时（启动时先查一次）。 */
+export const AUTO_RENEW_TICK_MS = 5_000;
+/** 写交接那一轮（从交接请求登记起）最多等这么久：超时就停掉那一轮、放弃这次换代，旧会话照常用（自动换的下次空闲再试）。 */
+export const HANDOVER_TIMEOUT_MS = 5 * 60_000;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 

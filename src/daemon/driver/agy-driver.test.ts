@@ -20,6 +20,7 @@ import {
 } from "../../shared/index.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
+import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
 import { SANDBOX_EXEC } from "./write-scope.ts";
 import {
   buildAgyArgs,
@@ -1288,5 +1289,23 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     expect(t.stdinBlocks()[1]![0]).toContain("新习惯");
     expect(t.stdinBlocks()[1]![1]).toBe("二");
     expect(t.argvs()).toHaveLength(1);
+  });
+});
+
+describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
+  const SYS = (prompt: string) => `<system_instructions>\n${prompt}\n</system_instructions>`;
+
+  it("第一条写进去的前面带一次（在系统指令后面），之后不带；带着它的那一行处理中带 preamble 标记", async () => {
+    const ledger = fakePreambleLedger();
+    const t = makeAgyHarness({ driver: { sessionPreamble: ledger.sessionPreamble } });
+    t.launch.prompt = "提示词";
+    ledger.watch(t.driver);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "接着说"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "汇报" });
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinBlocks()).toEqual([[SYS("提示词"), PREAMBLE, "接着说"], ["汇报"]]);
+    expect(t.of("message.processing").map((e) => e.preamble ?? false)).toEqual([true, false]);
   });
 });

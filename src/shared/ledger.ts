@@ -361,14 +361,25 @@ export interface Ledger {
   /**
    * 资料页的“开新会话”（POST /api/pms/:id/renew-session，见 ledger/handover.ts）：给项目经理现在的会话发一条 handover.requested，
    * 让它把交接写成这一轮的回复；那一轮正常结束时（applyDriverEvent）同一个事务里换代：旧会话登记 session.end，
-   * 建 generation + 1 的新会话，发 session.renewed（交接 + 最近几条原话），换代期间压着的消息改发给新会话。
-   * 已经有一条在等（排队、已送达、处理中）就返回它，不再发；上一次失败、被停止的重新排队。新会话的第一条还没结果时返回它；
-   * 它重排次数用完了，把它重新排队（次数清零）。没有这个项目经理 → not_found。
+   * 建 generation + 1 的新会话，记一行 session.renewed（交接全文，网页显示成分隔线），换代期间压着的消息改发给新会话。
+   * 新会话不另开一轮：开场说明 + 交接 + 最近几条原话拼在第一条写给它的消息前面（sessionPreamble）。
+   * 已经有一条在等（排队、已送达、处理中）就返回它，不再发；上一次失败、被停止的重新排队。没有这个项目经理 → not_found。
    */
   renewSession(pmId: PmId): { messageId: MessageId };
   /**
+   * 守护进程每 AUTO_RENEW_TICK_MS 调一次（ledger/handover.ts）：项目经理的对话长到 AUTO_RENEW_CONTEXT_TOKENS、这一轮正常结束、
+   * 没有排队的消息、空闲了 AUTO_RENEW_IDLE_MS，就和“开新会话”一样换代（交接请求标 auto，不给用户提示）；
+   * 写交接超过 HANDOVER_TIMEOUT_MS 的放弃（停掉那一轮，旧会话照常用）。
+   */
+  runAutoRenew(): void;
+  /**
+   * 驱动层往会话写一行之前调（DriverOptions.sessionPreamble）：换代后的新会话还没读到开场说明，返回开场说明 + 交接 + 最近原话；
+   * 读到了（它的消息开始处理过）、不是换代来的会话返回 null。
+   */
+  sessionPreamble(sessionId: SessionId): string | null;
+  /**
    * session.send 处理函数用：这条消息要不要先压着。同一个对话里、和它同一代或更早的 handover.requested（项目经理在写交接）
-   * 或 session.renewed（新会话的第一条）还没结果（排队、已送达、处理中）时都等，换代后发给新会话。session.renewed 自己不等。
+   * 还没结果（排队、已送达、处理中）时都等，换代后发给新会话。handover.requested 自己等它的会话空闲（单独一轮）。
    */
   waitsForHandover(messageId: MessageId): boolean;
 

@@ -24,6 +24,7 @@ import { createLedgerContext } from "./context.ts";
 import type { LedgerContextOptions, LedgerFiles } from "./context.ts";
 import { createResolveFolder, writeFileAtomic as defaultWriteFileAtomic } from "./files.ts";
 import { createLedgerHandover } from "./handover.ts";
+import type { HandoverOptions } from "./handover.ts";
 import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerMessages } from "./messages.ts";
@@ -76,6 +77,10 @@ export interface LedgerOptions {
   resolveFolder?: ResolveFolder;
   /** 写性格设定文件（临时文件 + 改名）。测试换成会失败的。 */
   writeFileAtomic?: (file: string, content: string) => void;
+  /** 找会话的原始记录（交接提示词里写路径），守护进程传 driver/transcript.ts 的 vendorTranscriptPath；不给都当找不到。 */
+  findTranscript?: HandoverOptions["findTranscript"];
+  /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；冒烟测试改小。 */
+  autoRenew?: HandoverOptions["autoRenew"];
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
@@ -107,7 +112,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
-  const handover = createLedgerHandover(ctx, sessions, messages, persona);
+  const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const steps = createLedgerSteps(ctx);
   const workerView = createLedgerWorkerView(ctx, steps, {
@@ -221,6 +226,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     retryMessage: messages.retryMessage,
     renewSession: handover.renewSession,
     waitsForHandover: handover.waitsForHandover,
+    runAutoRenew: handover.runAutoRenew,
+    sessionPreamble: handover.sessionPreamble,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),

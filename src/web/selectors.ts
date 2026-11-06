@@ -5,6 +5,7 @@ import {
   VENDOR_SPECS,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
+  isHandoverTraffic,
   isQuotaExhausted,
   systemEventOf,
   systemNoticeText,
@@ -40,9 +41,18 @@ export interface ConversationEntry {
   folders: ProjectFolder[];
 }
 
-/** 预览用最后一条文字消息；一条文字都没有就用最后一条。 */
+/**
+ * 换新会话的那几条（写交接的来往、换代那条分隔线）：用户没说话、项目经理也没对用户说话，不进左栏预览、不改排序、不算未读。
+ * 见 shared/domain.ts 的 isHandoverTraffic。
+ */
+export function isQuietMessage(message: Message): boolean {
+  return isHandoverTraffic(message) || systemEventOf(message)?.event === "session.renewed";
+}
+
+/** 预览用最后一条文字消息；一条文字都没有就用最后一条。换新会话的那几条不算。 */
 function previewMessage(messages: Message[]): Message | null {
-  return messages.findLast((m) => m.kind === "text") ?? messages.at(-1) ?? null;
+  const shown = messages.filter((m) => !isQuietMessage(m));
+  return shown.findLast((m) => m.kind === "text") ?? shown.at(-1) ?? null;
 }
 
 /** 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。 */
@@ -51,7 +61,7 @@ export function listConversations(state: HubState): ConversationEntry[] {
     .filter((view) => view.conversation.kind !== "worker")
     .map((view): ConversationEntry => {
       const { conversation } = view;
-      const last = view.messages.at(-1);
+      const last = view.messages.findLast((m) => !isQuietMessage(m));
       const pm = conversation.pmId === null ? null : (state.pms.find((p) => p.id === conversation.pmId) ?? null);
       const project = state.projects.find((p) => p.conversationId === conversation.id) ?? null;
       return {
@@ -341,7 +351,7 @@ export function waitingConversations(state: HubState, lastSeen: LastSeen): Conve
   return Object.values(state.conversations)
     .filter(({ conversation, messages }) => {
       if (conversation.kind === "worker") return false;
-      const last = messages.at(-1);
+      const last = messages.findLast((m) => !isQuietMessage(m));
       if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
       if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status))) return false;
       if (pendingOf(state, conversation.id).some((p) => p.phase === "sending")) return false;
@@ -369,14 +379,35 @@ export function pendingOf(state: HubState, conversationId: ConversationId): Pend
 }
 
 /**
- * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果，或者新会话的第一条（交接）还在排队。
+ * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果（排队、已送达、处理中）。
  * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
  */
 export function isRenewing(state: HubState, conversationId: ConversationId): boolean {
-  return (state.conversations[conversationId]?.messages ?? []).some((m) => {
-    const event = systemEventOf(m)?.event;
-    return (event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status)) || (event === "session.renewed" && m.status === "queued");
-  });
+  return renewingIn(state.conversations[conversationId]?.messages ?? []);
+}
+
+function renewingIn(messages: Message[]): boolean {
+  return messages.some((m) => systemEventOf(m)?.event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status));
+}
+
+/**
+ * 网页显示用的会话状态（状态行、停止键）：写交接那一轮不给用户看，当空闲；那期间有交给项目经理的话在等（用户的、Worker 汇报），
+ * 显示成在想（Thinking…），和平时它马上开始处理一样，换完代就真的开始处理。
+ */
+export function visibleSessionOf(state: HubState, conversationId: ConversationId): SessionState | null {
+  const session = sessionOf(state, conversationId);
+  const messages = state.conversations[conversationId]?.messages ?? [];
+  if (session === null || !renewingIn(messages)) return session;
+  const waiting =
+    messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingOf(state, conversationId).some((p) => p.phase === "sending");
+  const quiet = { currentTool: null, apiRetry: null };
+  return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
+}
+
+/** 网页显示用的消息：写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。 */
+export function visibleMessages(messages: Message[]): Message[] {
+  if (!renewingIn(messages)) return messages;
+  return messages.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
 }
 
 /** 有错误的健康项（成功一次后 lastError 会被清成 null）。 */
@@ -396,8 +427,10 @@ export type RenderItem =
 
 /** 一条消息在消息流里算什么。 */
 type FlowRole =
-  /** 交给 agent 的一句（一轮的开头）：用户、项目经理（Worker 对话里）、Worker 的汇报和用户对它说的话、到点的定时任务、开新会话的两条。 */
+  /** 交给 agent 的一句（一轮的开头）：用户、项目经理（Worker 对话里）、Worker 的汇报和用户对它说的话、到点的定时任务。 */
   | "input"
+  /** 换新会话的分隔线：前后的回合各归各的，单独一行；不算交给 agent 的话。 */
+  | "divider"
   /** agent 自己说的、调的工具：在一轮里。 */
   | "agent"
   /** agent 这一轮的操作结果（派出 / 收工 Worker、建删定时任务）：在一轮里就收进 Worked for，不在就单独显示。 */
@@ -406,7 +439,7 @@ type FlowRole =
   | "notice";
 
 const INPUT_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed", "user_message"]);
-const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run", "handover.requested", "session.renewed"]);
+const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run"]);
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
 function flowRole(message: Message): FlowRole {
@@ -415,13 +448,31 @@ function flowRole(message: Message): FlowRole {
   if (message.sender === "user" || message.sender === "pm") return "input";
   if (message.sender === "agent") return "agent";
   const event = systemEventOf(message)?.event;
+  if (event === "session.renewed") return "divider";
   if (event !== undefined && INPUT_SYSTEM_EVENTS.has(event)) return "input";
   if (event !== undefined && WORK_SYSTEM_EVENTS.has(event)) return "work";
   return "notice";
 }
 
+/**
+ * 换新会话：写交接的来往不显示；分隔线挪到写交接开始的地方（turnStartId 之后第一条的前面），换代期间来的话排在它下面。
+ */
+function placeHandovers(all: Message[]): Message[] {
+  const shown = all.filter((m) => !isHandoverTraffic(m));
+  const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
+  if (dividers.length === 0) return shown;
+  const rest = shown.filter((m) => !dividers.includes(m));
+  for (const divider of dividers) {
+    const after = (divider.meta as { turnStartId?: number } | null)?.turnStartId ?? divider.id;
+    const at = rest.findIndex((m) => m.id > after && systemEventOf(m)?.event !== "session.renewed");
+    rest.splice(at === -1 ? rest.length : at, 0, divider);
+  }
+  return rest;
+}
+
 /** 把消息分成一轮一轮：一轮从 agent 的第一条说的或调的工具开始，到下一句交给它的话为止。 */
-export function groupMessages(messages: Message[]): RenderItem[] {
+export function groupMessages(all: Message[]): RenderItem[] {
+  const messages = placeHandovers(all);
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
   /** 上一句交给 agent 的话、上一条 agent 的东西的时间：新一轮从两者里晚的那个算起。 */
@@ -439,6 +490,11 @@ export function groupMessages(messages: Message[]): RenderItem[] {
 
   for (const message of messages) {
     const role = flowRole(message);
+    if (role === "divider") {
+      close();
+      items.push({ kind: "message", message });
+      continue;
+    }
     if (role === "input") {
       close();
       items.push({ kind: "message", message });

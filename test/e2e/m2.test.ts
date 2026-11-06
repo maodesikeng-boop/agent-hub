@@ -633,10 +633,10 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
 });
 
 describe("开新会话（资料页的按钮，ledger/handover.ts）", { timeout: 60_000 }, () => {
-  /** 第 0 轮随便聊一句；第 1 轮是交接（卡在 hold 文件上，放行后写交接）；之后都回“已接上”。 */
+  /** 第 0 轮随便聊一句；第 1 轮是交接（卡在 hold 文件上，放行后写交接）；之后都回“好的”。 */
   const script = (hold: string) => ({
     turns: [quick("记住了"), { steps: [{ waitFile: hold }, { text: "交接：暗号是 蓝鲸" }] }],
-    defaultTurn: quick("已接上"),
+    defaultTurn: quick("好的"),
   });
   const renew = async (client: Client, pmId: number) => {
     const res = await client.postJson(API_PATHS.renewSession(pmId), undefined);
@@ -644,7 +644,7 @@ describe("开新会话（资料页的按钮，ledger/handover.ts）", { timeout:
     return ((await res.json()) as { messageId: number }).messageId;
   };
 
-  it("写完交接换代：新的 claude 会话（新的会话 ID）第一条收到交接和最近的原话；连点只发一条；换代期间发的消息给新会话", async () => {
+  it("写完交接换代：新的 claude 会话（新的会话 ID）不另开一轮，换代期间发的消息带着开场说明、交接和最近的原话一起写进去；连点只发一条", async () => {
     env = makeEnv();
     const hold = join(env.dir, "hold");
     env.setScript(script(hold));
@@ -669,13 +669,19 @@ describe("开新会话（资料页的按钮，ledger/handover.ts）", { timeout:
     const proc = lastProcOf(g2!.sessionId);
     expect(argValue(proc.argv, "--session-id")).not.toBe(oldVendor);
     expect(proc.argv).not.toContain("--resume");
-    const [first, second] = env.stdinTextsOf(proc.pid);
-    expect(first).toContain("交接：暗号是 蓝鲸");
-    expect(first).toContain("用户：记住暗号 蓝鲸");
-    expect(second).toBe("换代时发的");
+    // 新会话只写进去一行：开场说明 + 交接 + 最近原话 + 换代时发的那句，没有“已接上”那一轮
+    const lines = env.stdinTextsOf(proc.pid);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^【系统】这是新会话/);
+    expect(lines[0]).toContain("交接：暗号是 蓝鲸");
+    expect(lines[0]).toContain("用户：记住暗号 蓝鲸");
+    expect(lines[0]!.endsWith("换代时发的")).toBe(true);
     // 旧会话里只有交接请求，之后没再写东西
     expect(env.stdinTextsOf(lastProcOf(oldSession).pid).at(-1)).toContain("交接");
-    expect(agentTexts(state, privateId)).toContain("交接：暗号是 蓝鲸");
+    // 交接全文在换代那一行里，写交接那一轮的回复不给用户看
+    const renewedLine = messagesOf(state, privateId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed");
+    expect(renewedLine).toMatchObject({ text: "交接：暗号是 蓝鲸", status: null });
+    expect(messagesOf(state, privateId).find((m) => m.text === "交接：暗号是 蓝鲸" && m.sender === "agent")?.meta).toMatchObject({ handover: true });
     await terminate(daemon);
   });
 
@@ -694,12 +700,15 @@ describe("开新会话（资料页的按钮，ledger/handover.ts）", { timeout:
     const c2 = client.withPort(daemon.port);
     await waitForStatus(c2, request, "replied", 20_000);
     const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId)[1]);
-    const renewedId = await waitUntil("换代那一行", async () =>
+    await waitUntil("换代那一行", async () =>
       messagesOf(await c2.state(), privateId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed")?.id,
     );
-    await waitForStatus(c2, renewedId, "replied", 20_000);
+    const next = await c2.post(privateId, "接着来");
+    await waitForStatus(c2, next, "replied", 20_000);
     expect(sessionsOf(await c2.state(), privateId)).toHaveLength(2);
-    expect(env.stdinTextsOf(lastProcOf(g2.sessionId).pid)[0]).toContain("交接：暗号是 蓝鲸");
+    const [first] = env.stdinTextsOf(lastProcOf(g2.sessionId).pid);
+    expect(first).toContain("交接：暗号是 蓝鲸");
+    expect(first!.endsWith("接着来")).toBe(true);
     await terminate(daemon);
   });
 });

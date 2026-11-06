@@ -344,7 +344,7 @@ function PmEditor({
 
 /**
  * “会话”一组：开新会话。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
- * renewing：在换（交接请求还没结果、新会话的第一条还没发），按钮不能点。
+ * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
  */
 function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean }) {
   const [confirming, setConfirming] = useState(false);

@@ -67,6 +67,7 @@ import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import { TurnUsage } from "./usage.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 import { spawnInWriteScope } from "./write-scope.ts";
@@ -88,7 +89,7 @@ interface Batch {
   /** 写在这一行里的 uuid：claude 的 command_lifecycle 用它（command_uuid）告诉我们这一行排着、被取走、做完、被取消。 */
   uuid: string;
   /** persona：性格设定、模式改了的说明（persona-note.ts），没写成时退回去。 */
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null; persona: PersonaNoteTaken | null };
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; killed: string | null; persona: PersonaNoteTaken | null; preamble: PreambleTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 收到这一行的 command_lifecycle started：claude 取走了（模型看到了）。 */
@@ -109,7 +110,7 @@ type MidTurnWrite = "written" | "cancelled" | "retry";
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
 /** 这一行没带恢复、崩溃、重启说明（命令那一行，见 #takeBatch）。 */
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, killed: null, persona: null };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, killed: null, persona: null, preamble: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -181,6 +182,8 @@ interface SessionState {
   written: Set<MessageId>;
   /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
   personaSeen: number | null;
+  /** 换代后的开场说明这个进程里带过了（还没等到账本记读到）；session-preamble.ts。 */
+  preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
   /**
@@ -552,6 +555,7 @@ export class ClaudeDriver implements Driver {
         pending: [],
         written: new Set(),
         personaSeen: null,
+        preambleTaken: false,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -629,9 +633,11 @@ export class ClaudeDriver implements Driver {
     if (command) {
       return newBatch(messageIds, buildUserLine(body.text, body.prefixes, this.#composer.buildUserContent, uuid), uuid, NO_NOTES, source);
     }
+    const preamble = this.#takeSessionPreamble(st);
     const persona = this.#takePersonaNote(st);
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote, persona };
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, killed: st.killedNote, persona, preamble };
     const prefixes = [
+      preamble?.note ?? null,
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
@@ -653,6 +659,13 @@ export class ClaudeDriver implements Driver {
     if (batch.notes.relaunch) st.relaunchNote = true;
     if (batch.notes.killed !== null) st.killedNote = batch.notes.killed;
     batch.notes.persona?.restore();
+    batch.notes.preamble?.restore();
+  }
+
+  #takeSessionPreamble(st: SessionState): PreambleTaken | null {
+    return takeSessionPreamble(this.#opts.sessionPreamble, st.id, st, (error) =>
+      this.#internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
+    );
   }
 
   #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
@@ -772,6 +785,7 @@ export class ClaudeDriver implements Driver {
     for (const batch of batches) {
       for (const id of batch.messageIds) st.written.delete(id);
       batch.notes.persona?.restore();
+      batch.notes.preamble?.restore();
     }
   }
 
@@ -1172,6 +1186,7 @@ export class ClaudeDriver implements Driver {
       b.released = b.source === "user" ? "cancelled" : "requeued";
       // agent 没看到带着的性格设定说明：退回去，下一行再带
       b.notes.persona?.restore();
+      b.notes.preamble?.restore();
     }
     this.#forgetWritten(st, batches.filter((b) => b.source === "system"));
     for (const event of untakenOnStopEvents(batches, at)) this.#emit(st.id, event);
@@ -1181,7 +1196,7 @@ export class ClaudeDriver implements Driver {
     this.#markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
     batch.processing = true;
-    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, at });
+    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, ...(batch.notes.preamble ? { preamble: true as const } : {}), at });
   }
 
   #onInit(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {

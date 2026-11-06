@@ -154,6 +154,8 @@ export interface MessageDeliveredEvent extends DriverEventBase {
 export interface MessageProcessingEvent extends DriverEventBase {
   type: "message.processing";
   messageIds: MessageId[];
+  /** 这一行前面带着换代后的开场说明（DriverOptions.sessionPreamble）：agent 读到了，账本记下，之后不再给。 */
+  preamble?: true;
 }
 
 /**
@@ -501,6 +503,14 @@ export interface DriverOptions {
    * 抛错当没变（记 internal_error），照常写。不给就不比（老测试）。
    */
   personaNote?: (sessionId: SessionId, sinceRevision: number) => PersonaNote | null;
+  /**
+   * 换代后的新会话（ledger/handover.ts）：开场说明 + 交接 + 最近原话，拼在第一条真正写给它的消息最前面（不另开一轮）。
+   * 往进程写一行（命令那一行除外）之前调（同步）：返回要加的文字；agent 已经读到过（带着它的那一行开始处理，message.processing
+   * 的 preamble）、不是新会话返回 null。
+   * 驱动层记着这一行带过了，同一个进程里不再带；没写成、agent 没读到的（同 personaNote 退回去的那几处）退回去，下一行再带
+   * （driver/session-preamble.ts）。抛错当没有（记 internal_error），照常写。不给就不加（老测试）。
+   */
+  sessionPreamble?: (sessionId: SessionId) => string | null;
   /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
   env?: Record<string, string>;
   /** 记日志（不进 health 的事，比如 claude 出了 conversation_reset）。默认写标准错误。 */

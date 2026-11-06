@@ -308,6 +308,8 @@ export class FakeLedger {
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
       waitsForHandover: unused("waitsForHandover"),
+      runAutoRenew: unused("runAutoRenew"),
+      sessionPreamble: unused("sessionPreamble"),
       runDueSchedules: unused("runDueSchedules"),
       addSchedule: (pmId, args) => {
         this.check();

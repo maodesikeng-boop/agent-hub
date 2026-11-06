@@ -287,8 +287,6 @@ const NOTICE_ICONS: Partial<Record<SystemMessageMeta["event"], LucideIcon>> = {
   "persona.changed": UserPen,
   "schedule.created": CalendarClock,
   "schedule.removed": CalendarClock,
-  "handover.requested": RefreshCw,
-  "session.renewed": RefreshCw,
 };
 
 const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], LucideIcon>> = {
@@ -319,13 +317,41 @@ function NoticeLine({
   );
 }
 
-/** 系统消息：到点的定时任务是可点开的一行，别的都是很淡的一行（去掉发给 agent 时加的【系统】，不显示投递状态）。 */
+/**
+ * 换新会话（用户点的或自动换的，ledger/handover.ts）：很淡的一行分隔线，“图标 + Handed off to a new session ›”后面一条细线，
+ * 点开看交接全文（Markdown，左边一条竖线，和定时任务的说明一样）。写交接的来往本身不显示。
+ */
+function SessionRenewed({ text, handover }: { text: string; handover: string }) {
+  const [open, setOpen] = useState(false);
+  const body = handover.trim();
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="mt-4 flex flex-col" data-side="left" data-notice data-event="session.renewed">
+      <div className="flex items-center gap-2.5">
+        <CollapsibleTrigger className={cn("group inline-flex shrink-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground", TEXT_BUTTON)} disabled={body === ""}>
+          <RefreshCw className="size-3.5 shrink-0" aria-hidden="true" />
+          <span>{text}</span>
+          {body !== "" && <ChevronRight className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+        </CollapsibleTrigger>
+        <span className="h-px min-w-6 flex-1 bg-border" aria-hidden="true" />
+      </div>
+      <CollapsibleContent>
+        <div className={cn("mt-1.5 border-l border-border pl-3 leading-relaxed [overflow-wrap:anywhere]", SECONDARY)} data-handover>
+          <Markdown text={body} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** 系统消息：到点的定时任务、换新会话是可点开的一行，别的都是很淡的一行（去掉发给 agent 时加的【系统】，不显示投递状态）。 */
 function SystemNotice({ message, actions, inTurn = false }: { message: Message; actions: MessageActions; inTurn?: boolean }) {
   const event = systemEventOf(message);
   const text = systemNoticeText(message);
   switch (event?.event) {
     case "schedule.run":
       return <ScheduleRun text={text} />;
+    case "session.renewed":
+      return <SessionRenewed text={text} handover={message.text} />;
     case "schedule.failed": {
       // “定时任务没跑成：名字：原因”：原因写成人话，原文放 title
       const prefix = `定时任务没跑成：${event.name}：`;
