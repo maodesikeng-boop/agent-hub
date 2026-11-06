@@ -34,6 +34,13 @@ export interface VendorSpec {
   quota?: { name: string; windows: readonly { key: string; label: string; short: string }[]; warningStatus: string };
   /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
   shortModelName?: (model: string) => string | null;
+  /**
+   * 这家能不能把长命令放后台跑、跑完自动开新一轮叫醒 agent（见 docs/mid-turn-messages.md 第 10 节）：
+   * - claude（true）：Bash 工具有 run_in_background，命令跑完推 task_notification 并自动开新一轮叫醒 agent；
+   * - agy（false）：没有后台任务完成事件，跑完不会叫醒 agent，进程因闲置被关掉后结果还会丢掉；
+   * - codex（false）：命令跑完不会自己开新一轮叫醒 agent（nohup & 等后台命令也看不到状态）。
+   */
+  backgroundCommands: boolean;
   /** 输入框的命令（纯数据；用它的代码在 daemon/vendors/）。 */
   composer: ComposerSpec;
 }
@@ -113,6 +120,8 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
       const family = cap(m[1]!);
       return [family, m[3] === undefined ? m[2] : `${m[2]}.${m[3]}`, m[4] ? "1M" : null].filter(Boolean).join(" ");
     },
+    // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
+    backgroundCommands: true,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",
@@ -168,6 +177,8 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
       if (gptOss) return `GPT-OSS ${gptOss[1]!.toUpperCase()}`;
       return null;
     },
+    // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
+    backgroundCommands: false,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",
@@ -198,6 +209,8 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
       if (!gpt) return null;
       return gpt[2] === undefined ? `GPT-${gpt[1]}` : `GPT-${gpt[1]} ${cap(gpt[2])}`;
     },
+    // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）
+    backgroundCommands: false,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",

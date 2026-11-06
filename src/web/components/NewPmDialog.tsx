@@ -3,7 +3,6 @@ import { useState } from "react";
 import {
   DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
-  PM_PERSONA_TEMPLATE,
   DEFAULT_PM_MODE,
   normalizeName,
   utf8Bytes,
@@ -25,7 +24,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
   const [agent, setAgent] = useState(() => draftOf(DEFAULT_AGENT_SETTING));
-  const [persona, setPersona] = useState(PM_PERSONA_TEMPLATE);
+  const [persona, setPersona] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,8 +122,9 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
             <SettingsGroup title="性格设定">
               <Textarea
                 aria-label="性格设定"
-                rows={8}
-                className="block max-h-[60vh] min-h-32 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] field-sizing-content focus-visible:ring-0"
+                placeholder="可选"
+                rows={4}
+                className="block max-h-[60vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] placeholder:font-sans placeholder:text-[15px] field-sizing-content focus-visible:ring-0"
                 value={persona}
                 onChange={(e) => setPersona(e.target.value)}
               />

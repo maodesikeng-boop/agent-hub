@@ -36,9 +36,11 @@ describe("厂商清单", () => {
     ]);
     expect(claude.customModel).toBe(true);
     expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(claude.backgroundCommands).toBe(true);
 
     const agy = VENDOR_SPECS.agy;
     expect(agy.label).toBe("Antigravity");
+    expect(agy.backgroundCommands).toBe(false);
     // 模型不带档位，档位另外列（agy-effort.test.ts 里有更细的）
     expect(agy.models.map((m) => [m.id, m.label])).toEqual([
       ["gemini-4-argon", "Gemini 4 Argon"],
@@ -61,6 +63,7 @@ describe("厂商清单", () => {
 
     const codex = VENDOR_SPECS.codex;
     expect(codex.label).toBe("Codex");
+    expect(codex.backgroundCommands).toBe(false);
     expect(codex.models).toEqual([
       { id: "gpt-5.4", label: "GPT-5.4" },
       { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },

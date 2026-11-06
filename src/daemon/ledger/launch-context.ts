@@ -1,7 +1,7 @@
 // 启动 claude 前给提示词用的上下文（getLaunchContext）：这个会话是哪个项目经理的、它的项目和文件夹；Worker 的会话见 workers.ts。
-import { personaOrTemplate } from "../../shared/domain.ts";
 import type { PmMode, SessionId } from "../../shared/domain.ts";
 import type { LaunchContext } from "../../shared/ledger.ts";
+import type { AgentVendor } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { fail } from "./context.ts";
@@ -25,7 +25,7 @@ export function createLedgerLaunchContext(db: Db, persona: LedgerPersona, projec
       sessionId,
       role: session.role,
       conversationId: session.conversationId,
-      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: personaOrTemplate(pm.persona) },
+      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, vendor: pm.vendor as AgentVendor, persona: pm.persona ?? "" },
       project: project === null ? null : projectCard(project),
       worker: null,
     };
