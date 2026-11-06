@@ -1,13 +1,16 @@
-// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、只读 Worker 的拦截、残留进程识别。
+// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（只读、没有 OS 沙箱时的可写范围兜底）、残留进程识别。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
   READONLY_PERMISSION_MODE,
   agentLaunchArgs,
+  commandMayWriteOutsideScope,
+  scopeAllowsWrite,
   type AgentSessionRow,
   type LaunchFiles,
   type SessionStartedEvent,
+  type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol.ts";
@@ -26,7 +29,13 @@ export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
  */
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
-/** 只读 Worker 禁止调用的写文件工具集合。数据目录不能写由 OS 沙箱管（write-scope.ts），不在这里。 */
+/** 没有 OS 沙箱时（不是 macOS）兜底检查可写范围的路径字段名（只对写类工具检查，读不拦）。 */
+export const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath", "file_path", "path"] as const;
+
+/** 工具调用参数里表示命令行字符串的字段名（没有 OS 沙箱时兜底检查）。 */
+export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
+
+/** 只读 Worker 禁止调用的写文件工具集合；没有 OS 沙箱时，写类工具写到可写范围外也拦。 */
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
@@ -42,6 +51,7 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "MultiEdit",
 ]);
 
+export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写自己的工作目录";
 export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文件";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -238,16 +248,36 @@ export function buildAgySessionStartedEvent(
 
 export interface WorkerToolCheckInput {
   toolName: string;
+  parameters: unknown;
   readonly: boolean;
+  /** 没有 OS 沙箱时要兜底检查的可写范围（agy-driver 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
+  fallbackScope: WriteScope | null;
+  cwd: string;
 }
 
 /**
- * 检查 Worker 的工具调用是否违规：只读 Worker 调用写文件工具 → 返回 "只读 Worker 不能修改文件"；合规返回 null。
- * 数据目录（含 state/）不能写由 OS 沙箱管（write-scope.ts）：编辑工具和 shell 都拦得住，这里不再按命令行字面猜。
+ * 检查 Worker 的工具调用是否违规：
+ * 1. 有 fallbackScope（没有 OS 沙箱）时：写类工具（AGY_WRITE_TOOLS）的路径参数落在可写范围外，或 CommandLine / command 会写到范围外
+ *    → "Worker 在数据目录里只能写自己的工作目录"。只能看字面（shared/write-scope.ts 的 commandMayWriteOutsideScope）；
+ *    macOS 上数据目录不能写由 OS 沙箱管（write-scope.ts），这里不查；
+ * 2. 只读 Worker 调用写文件工具 → "只读 Worker 不能修改文件"；
+ * 3. 合规返回 null。
  * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
-  return input.readonly && AGY_WRITE_TOOLS.has(input.toolName) ? READONLY_WORKER_VIOLATION_MESSAGE : null;
+  const { toolName, parameters, readonly, fallbackScope, cwd } = input;
+  if (fallbackScope !== null && typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
+    const params = parameters as Record<string, unknown>;
+    for (const key of AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : []) {
+      const val = params[key];
+      if (typeof val === "string" && !scopeAllowsWrite(fallbackScope, val, cwd)) return WRITE_SCOPE_VIOLATION_MESSAGE;
+    }
+    for (const key of AGY_COMMAND_PARAM_KEYS) {
+      const cmd = params[key];
+      if (typeof cmd === "string" && cmd.trim() !== "" && commandMayWriteOutsideScope(cmd, fallbackScope, cwd)) return WRITE_SCOPE_VIOLATION_MESSAGE;
+    }
+  }
+  return readonly && AGY_WRITE_TOOLS.has(toolName) ? READONLY_WORKER_VIOLATION_MESSAGE : null;
 }
 
 /**

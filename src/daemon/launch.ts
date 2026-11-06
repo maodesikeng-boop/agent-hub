@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
+import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
 
@@ -19,6 +20,10 @@ export interface LaunchPreparerOptions {
   launchDir: string;
   /** 数据目录的真实路径（paths.ts 的 home，realpath 过）：Worker 的可写范围用。 */
   dataDir: string;
+  /** 数据目录 state/ 的真实路径（paths.ts 的 stateDir，realpath 过）：Worker 设置文件里的兜底拒绝规则用。 */
+  stateDir: string;
+  /** Worker 会不会包进 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定。 */
+  osSandboxed?: boolean;
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
   /** 账本的 getLaunchContext。 */
@@ -47,7 +52,8 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  * 有项目的会话启动前先 mkdir -p <worktreesDir>/<项目编号>/：项目经理的 --add-dir 里有它，claude 要求目录在（LaunchContext 的注释）。
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
-  const { launchDir, dataDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
+  const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
+  const osSandboxed = options.osSandboxed ?? osSandboxAvailable();
   const basePath = options.basePath ?? process.env.PATH ?? "";
   return async (session) => {
     const ctx = getLaunchContext(session.id);
@@ -55,7 +61,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
-    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
+    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, osSandboxed, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");

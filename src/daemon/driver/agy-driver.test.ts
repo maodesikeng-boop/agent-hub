@@ -25,6 +25,7 @@ import {
   buildAgyArgs,
   buildAgyUserLine,
   checkAgyUserLine,
+  WRITE_SCOPE_VIOLATION_MESSAGE,
   checkWorkerToolViolation,
   detectAgyArgsConflict,
   formatSystemInstructions,
@@ -614,17 +615,33 @@ describe("agy-protocol 纯函数", () => {
   });
 
   it("checkWorkerToolViolation：只读 Worker 写文件被拦（含 sed_file、notebook_edit）；非只读 Worker 不拦", () => {
+    const base = { parameters: {}, fallbackScope: null, cwd: "/w" };
     for (const toolName of ["edit_file", "sed_file", "notebook_edit", "write_to_file"]) {
-      expect(checkWorkerToolViolation({ toolName, readonly: true })).toBe("只读 Worker 不能修改文件");
-      expect(checkWorkerToolViolation({ toolName, readonly: false })).toBeNull();
+      expect(checkWorkerToolViolation({ ...base, toolName, readonly: true })).toBe("只读 Worker 不能修改文件");
+      expect(checkWorkerToolViolation({ ...base, toolName, readonly: false })).toBeNull();
     }
-    expect(checkWorkerToolViolation({ toolName: "view_file", readonly: true })).toBeNull();
+    expect(checkWorkerToolViolation({ ...base, toolName: "view_file", readonly: true })).toBeNull();
   });
 
-  it("checkWorkerToolViolation：数据目录（含 state/）、记忆文件都不在这里拦（数据目录由 OS 沙箱管，见 write-scope.ts）", () => {
+  it("checkWorkerToolViolation：包进了 OS 沙箱（fallbackScope 是 null）时数据目录不在这里拦", () => {
     for (const toolName of ["write_to_file", "replace_file_content", "sed_file", "run_command"]) {
-      expect(checkWorkerToolViolation({ toolName, readonly: false })).toBeNull();
+      const parameters = { TargetFile: "/Users/u/.agent-hub/state/x", CommandLine: "touch /Users/u/.agent-hub/state/x" };
+      expect(checkWorkerToolViolation({ toolName, parameters, readonly: false, fallbackScope: null, cwd: "/w" })).toBeNull();
     }
+  });
+
+  it("checkWorkerToolViolation：没有 OS 沙箱时兜底——写类工具的路径、命令行写到可写范围外就拦；读、写自己的工作目录、数据目录外不拦", () => {
+    const cwd = "/Users/u/.agent-hub/worktrees/1/2";
+    const fallbackScope = { dataDir: "/Users/u/.agent-hub", writableDirs: [cwd] };
+    const check = (toolName: string, parameters: Record<string, unknown>) => checkWorkerToolViolation({ toolName, parameters, readonly: false, fallbackScope, cwd });
+    expect(check("write_to_file", { TargetFile: "/Users/u/.agent-hub/state/x" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
+    expect(check("edit_file", { file_path: "../3/a.ts" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
+    expect(check("run_command", { CommandLine: "cd /Users/u && cd .agent-hub/state && touch x" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
+    expect(check("run_command", { command: "ls /Users/u/.agent-hub; find /Users/u/.agent-hub/state -delete" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
+    expect(check("view_file", { AbsolutePath: "/Users/u/.agent-hub/state/x" })).toBeNull();
+    expect(check("write_to_file", { TargetFile: `${cwd}/a.ts` })).toBeNull();
+    expect(check("write_to_file", { TargetFile: "/tmp/a.ts" })).toBeNull();
+    expect(check("run_command", { CommandLine: "cat /Users/u/.agent-hub/state/x && echo ok > out.txt" })).toBeNull();
   });
 });
 

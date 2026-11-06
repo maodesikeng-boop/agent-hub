@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { AGENT_VENDORS, VENDOR_SPECS } from "../../shared/index.ts";
 import { makeHarness, type Harness } from "./test-helpers.ts";
-import { SANDBOX_EXEC, WRITE_SCOPE_ENFORCERS, seatbeltProfile, wrapInSeatbelt } from "./write-scope.ts";
+import { SANDBOX_EXEC, WRITE_SCOPE_ENFORCERS, osSandboxAvailable, seatbeltProfile, spawnInWriteScope, wrapInSeatbelt } from "./write-scope.ts";
 
 const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
@@ -17,18 +17,45 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
   });
 
   it("项目经理（没有可写范围）每家都原样起", () => {
-    for (const vendor of AGENT_VENDORS) expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, null), vendor).toEqual(base);
+    for (const vendor of AGENT_VENDORS) expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, null, "darwin"), vendor).toEqual({ ...base, osSandboxed: false });
   });
 
-  it("claude、agy 的 Worker 在 macOS 上包一层 sandbox-exec；codex 不包（自己的沙箱管，不能嵌套）", () => {
-    const wrapped = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"] };
+  it("macOS 上三家的 Worker 都包一层 sandbox-exec（codex 换 externalSandbox，不再自己起沙箱）；别的系统不包", () => {
+    const wrapped = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"], osSandboxed: true };
     expect(wrapInSeatbelt(base, scope, "darwin")).toEqual(wrapped);
-    expect(wrapInSeatbelt(base, scope, "linux")).toEqual(base);
-    if (process.platform === "darwin") {
-      expect(WRITE_SCOPE_ENFORCERS.claude.spawnCommand(base, scope)).toEqual(wrapped);
-      expect(WRITE_SCOPE_ENFORCERS.agy.spawnCommand(base, scope)).toEqual(wrapped);
+    expect(wrapInSeatbelt(base, scope, "linux")).toEqual({ ...base, osSandboxed: false });
+    for (const vendor of AGENT_VENDORS) {
+      const off = WRITE_SCOPE_ENFORCERS[vendor].ownSandboxOffArgs;
+      expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, scope, "darwin"), vendor).toEqual({ ...wrapped, args: ["-p", seatbeltProfile(scope), "/bin/agent", ...off, "--x", "y"] });
+      expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, scope, "linux"), vendor).toEqual({ ...base, osSandboxed: false });
     }
-    expect(WRITE_SCOPE_ENFORCERS.codex.spawnCommand(base, scope)).toEqual(base);
+    // 包进去的进程不能再开自带的沙箱：agy 在命令行上关（claude 在设置文件、codex 在 sandboxPolicy 里关）
+    expect(WRITE_SCOPE_ENFORCERS.agy.ownSandboxOffArgs).toEqual(["--settings", '{"enableTerminalSandbox":false}']);
+    expect(WRITE_SCOPE_ENFORCERS.claude.ownSandboxOffArgs).toEqual([]);
+    expect(WRITE_SCOPE_ENFORCERS.codex.ownSandboxOffArgs).toEqual([]);
+    expect(osSandboxAvailable("darwin")).toBe(true);
+    expect(osSandboxAvailable("linux")).toBe(false);
+  });
+});
+
+describe("spawnInWriteScope", () => {
+  it("没有 OS 沙箱的 Worker：照常起（不拦），记一条警告，写明这家靠什么兜底", () => {
+    for (const vendor of AGENT_VENDORS) {
+      const lines: string[] = [];
+      expect(spawnInWriteScope(vendor, base, scope, (l) => lines.push(l), "session 3", "linux")).toEqual({ ...base, osSandboxed: false });
+      expect(lines, vendor).toHaveLength(1);
+      expect(lines[0]).toContain("session 3");
+      expect(lines[0]).toContain("警告");
+      expect(lines[0]).toContain(WRITE_SCOPE_ENFORCERS[vendor].fallback);
+    }
+  });
+
+  it("包进了沙箱、或没有可写范围（项目经理）不记", () => {
+    const lines: string[] = [];
+    expect(spawnInWriteScope("claude", base, scope, (l) => lines.push(l), "session 3", "darwin").osSandboxed).toBe(true);
+    expect(spawnInWriteScope("agy", base, null, (l) => lines.push(l), "session 3", "darwin")).toEqual({ ...base, osSandboxed: false });
+    spawnInWriteScope("codex", base, null, (l) => lines.push(l), "session 3", "linux");
+    expect(lines).toEqual([]);
   });
 });
 

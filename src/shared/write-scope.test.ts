@@ -92,4 +92,34 @@ describe("commandMayWriteOutsideScope", () => {
       expect(commandMayWriteOutsideScope(c, scope, cwd, home), c).toBe(false);
     }
   });
+
+  it("防绕过：前面一段是只读命令、cd 换到数据目录里再写（审查找到的两个绕法）", () => {
+    for (const c of [
+      "ls ~/.agent-hub; find ~/.agent-hub/state -delete",
+      "cat ~/.agent-hub/state/x | tee ~/.agent-hub/state/y",
+      "cd ~ && cd .agent-hub/state && touch x",
+      `cd ${dataDir}/state; rm hub.sqlite`,
+      "bash -c 'cd ~ && cd .agent-hub/state && touch x'",
+      "(cd ../.. && mkdir shots)",
+      "pushd ~/.agent-hub >/dev/null && touch x",
+      "cd - && touch x",
+      "cd $SOMEWHERE && touch x",
+    ]) {
+      expect(commandMayWriteOutsideScope(c, scope, cwd, home), c).toBe(true);
+    }
+  });
+
+  it("拆段、跟踪 cd 后，正常的写法不误拦", () => {
+    for (const c of [
+      "ls ~/.agent-hub; echo x > a.txt",
+      "cd src && touch a.ts",
+      `cd ${cwd}/src && git add -A && git commit -m x`,
+      "cd /tmp && touch x",
+      "cd ~ && cd .agent-hub/state && cat hub.sqlite",
+      "pnpm test 2>&1 | tail -20",
+      "cdk deploy",
+    ]) {
+      expect(commandMayWriteOutsideScope(c, scope, cwd, home), c).toBe(false);
+    }
+  });
 });

@@ -81,18 +81,53 @@ const SHELL_WRITE_INDICATORS =
   />|>>|\b(tee|sed|awk|perl|python\d*|node|ruby|cp|mv|rm|mkdir|touch|ln|dd|truncate|patch|install|chmod|chown|tar|unzip|git|sh|bash|zsh)\b/;
 const READONLY_COMMAND = /^\s*(cat|head|tail|less|more|wc|stat|ls|file|grep|rg)\b/;
 
-/**
- * 命令行会不会写到范围外（只能看字面，给 codex 的审批用：那是要越出 codex 沙箱跑的命令）：
- * 工作目录本身在范围外，或某个词按 cwd 解析后落在范围外，并且不是 cat、ls 这类只读命令。
- * 看不出不写字面路径的写法（脚本里拼出来的路径），codex 那边的说明见 codex-protocol.ts 的 decideCommandApproval。
- */
-export function commandMayWriteOutsideScope(command: string, scope: WriteScope, cwd: string, homeDir?: string): boolean {
-  const tokens = command
+/** 按 ; && || | & 换行拆成一段段命令。不管引号：`bash -c "cd x && touch y"` 引号里的也照样拆开跟踪，拆错了只会多拦。 */
+function splitShellSegments(command: string): string[] {
+  return command
+    .split(/&&|\|\||[;\n|]|(?<![<>])&(?!>)/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** 换目录的一段：cd、pushd、popd，前面可以有 ( { 和 sh/bash/zsh -c 的引号。第 2 组是 cd 的参数。 */
+const CD_SEGMENT = /^[\s({]*(?:\S*\b(?:sh|bash|zsh)\s+(?:-\w+\s+)*-c\s+['"]?)?\s*(cd|pushd|popd)\b\s*(.*)$/;
+
+/** 这一段 cd 之后的工作目录；看不出来（cd -、popd、带变量）返回 null。 */
+function cdTarget(verb: string, rawArgs: string, dir: string | null): string | null {
+  if (verb === "popd") return null;
+  const arg = rawArgs
+    .replace(/['"]/g, "")
+    .split(/\s+/)
+    .find((a) => a !== "" && (a === "-" || !a.startsWith("-")));
+  if (arg === undefined || arg === "~") return "~";
+  if (arg === "-" || /[`*?]|\$(?!\{?HOME\b)/.test(arg)) return null;
+  if (arg.startsWith("/") || arg.startsWith("~/") || /^\$\{?HOME\}?(\/|$)/.test(arg)) return arg;
+  return dir === null ? null : `${dir.replace(/\/+$/, "")}/${arg}`;
+}
+
+/** 一段命令会不会写到范围外：工作目录看不出、在范围外，或某个词落在范围外，并且不是只读命令。 */
+function segmentMayWriteOutsideScope(segment: string, scope: WriteScope, dir: string | null, homeDir?: string): boolean {
+  const tokens = segment
     .split(/[\s><|&;'"`()=]+/)
     .map((t) => t.trim())
     .filter(Boolean);
-  const touches = !scopeAllowsWrite(scope, cwd, undefined, homeDir) || tokens.some((tok) => !scopeAllowsWrite(scope, tok, cwd, homeDir));
+  const touches = dir === null || !scopeAllowsWrite(scope, dir, undefined, homeDir) || tokens.some((tok) => !scopeAllowsWrite(scope, tok, dir, homeDir));
   if (!touches) return false;
-  if (SHELL_WRITE_INDICATORS.test(command)) return true;
-  return !READONLY_COMMAND.test(command);
+  if (SHELL_WRITE_INDICATORS.test(segment)) return true;
+  return !READONLY_COMMAND.test(segment);
+}
+
+/**
+ * 命令行会不会写到范围外（只能看字面，给没有 OS 沙箱时的兜底用：codex 的审批、agy 的工具检查）：
+ * 按 ; && || | 拆成一段段，跟着 cd 换工作目录，每段判断：工作目录在范围外、或某个词按工作目录解析后落在范围外，并且不是 cat、ls 这类只读命令。
+ * 看不出不写字面路径的写法（变量、脚本里拼出来的路径、软链接），已知局限见 docs/write-scope.md。
+ */
+export function commandMayWriteOutsideScope(command: string, scope: WriteScope, cwd: string, homeDir?: string): boolean {
+  let dir: string | null = cwd;
+  for (const segment of splitShellSegments(command)) {
+    const cd = CD_SEGMENT.exec(segment);
+    if (cd) dir = cdTarget(cd[1]!, cd[2] ?? "", dir);
+    else if (segmentMayWriteOutsideScope(segment, scope, dir, homeDir)) return true;
+  }
+  return false;
 }

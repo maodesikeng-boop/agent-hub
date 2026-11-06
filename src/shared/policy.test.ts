@@ -7,13 +7,15 @@ import {
   buildSessionSettings,
   readonlyAllowRules,
   sessionEnv,
+  stateDirDenyRule,
 } from "./policy.ts";
 import { HUB_COMMAND } from "./names.ts";
 
 /** 放行 hub 的那条规则（命令名来自 names.ts）。 */
 const allowHub = `Bash(${HUB_COMMAND}:*)`;
 
-const base = { hubSock: "/private/tmp/h/run/hub.sock" };
+const base = { hubSock: "/private/tmp/h/run/hub.sock", stateDir: "/Users/u/.agent-hub/state", osSandboxed: false };
+const stateDeny = "Edit(//Users/u/.agent-hub/state/**)";
 
 describe("buildSessionSettings：项目经理", () => {
   it("auto 档；放行 hub 和 hub.sock；没有任何拒绝规则；不碰自动记忆", () => {
@@ -33,11 +35,23 @@ describe("buildSessionSettings：项目经理", () => {
 });
 
 describe("buildSessionSettings：Worker", () => {
-  it("和项目经理的一样，只多 autoMemoryEnabled: false；没有拒绝规则（数据目录不能写由驱动层按 writeScope 落实，见 write-scope.test.ts）", () => {
+  it("和项目经理的一样，只多 autoMemoryEnabled: false 和 state/ 的兜底拒绝规则（数据目录不能写主要由驱动层按 writeScope 落实，见 write-scope.test.ts）", () => {
     const pm = buildSessionSettings({ role: "pm", readonly: false, ...base });
     const worker = buildSessionSettings({ role: "worker", readonly: false, ...base });
-    expect(worker).toEqual({ ...pm, autoMemoryEnabled: false });
-    expect("deny" in worker.permissions).toBe(false);
+    expect(worker).toEqual({ ...pm, permissions: { ...pm.permissions, deny: [stateDeny] }, autoMemoryEnabled: false });
+  });
+
+  it("state/ 的拒绝规则：// 开头的绝对路径，结尾的 / 去掉，特殊字符转义", () => {
+    expect(stateDirDenyRule("/Users/u/.agent-hub/state")).toBe(stateDeny);
+    expect(stateDirDenyRule("/Users/u/.agent-hub/state/")).toBe(stateDeny);
+    expect(stateDirDenyRule("/Users/u/a[1]/state")).toBe("Edit(//Users/u/a\\[1\\]/state/**)");
+  });
+
+  it("包进 OS 沙箱的 Worker 关掉 claude 自带的沙箱（不能嵌套）；没包的、项目经理不写，照用户设置", () => {
+    expect(buildSessionSettings({ role: "worker", readonly: false, ...base, osSandboxed: true }).sandbox).toEqual({ enabled: false, network: { allowUnixSockets: [base.hubSock] } });
+    expect(buildSessionSettings({ role: "worker", readonly: true, ...base, osSandboxed: true }).sandbox.enabled).toBe(false);
+    expect("enabled" in buildSessionSettings({ role: "worker", readonly: false, ...base }).sandbox).toBe(false);
+    expect("enabled" in buildSessionSettings({ role: "pm", readonly: false, ...base, osSandboxed: true }).sandbox).toBe(false);
   });
 
   it("关掉自动记忆的环境变量", () => {
@@ -47,19 +61,19 @@ describe("buildSessionSettings：Worker", () => {
 });
 
 describe("buildSessionSettings：只读", () => {
-  it("readonly → dontAsk 档，只多只读 git 的拒绝规则", () => {
+  it("readonly → dontAsk 档，多只读 git 的拒绝规则（Worker 再加 state/ 的）", () => {
     const worker = buildSessionSettings({ role: "worker", readonly: true, ...base });
     expect(READONLY_PERMISSION_MODE).toBe("dontAsk");
     expect(worker.permissions.defaultMode).toBe("dontAsk");
     expect(worker.permissions.allow).toEqual([allowHub, ...readonlyAllowRules(undefined)]);
-    expect(worker.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES]);
+    expect(worker.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES, stateDeny]);
     expect(worker.autoMemoryEnabled).toBe(false);
   });
 
   it("只读 git 拒绝 --output（写文件）和 --ext-diff（跑外部程序）；项目经理开只读也有", () => {
     expect(READONLY_GIT_DENY_RULES).toEqual(["Bash(git * --output*)", "Bash(git * --ext-diff*)"]);
     expect(buildSessionSettings({ role: "pm", readonly: true, ...base }).permissions.deny).toEqual([...READONLY_GIT_DENY_RULES]);
-    expect(buildSessionSettings({ role: "worker", readonly: false, ...base }).permissions.deny).toBeUndefined();
+    expect(buildSessionSettings({ role: "worker", readonly: false, ...base }).permissions.deny).toEqual([stateDeny]);
   });
 
   it("只读档放行：上网、读本项目 worktrees、只读 git、连接器只读工具", () => {
@@ -101,7 +115,7 @@ describe("buildSessionSettings：只读", () => {
     a.permissions.deny!.length = 0;
     a.permissions.allow.push("Bash(*)");
     const b = buildSessionSettings({ role: "worker", readonly: true, ...base });
-    expect(b.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES]);
+    expect(b.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES, stateDeny]);
     expect(b.permissions.allow).not.toContain("Bash(*)");
   });
 });

@@ -1,8 +1,8 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
@@ -17,6 +17,7 @@ import {
   type SessionStore,
 } from "../../shared/index.ts";
 import { createCodexDriver, type CodexDriver, type CodexDriverOptions } from "./codex-driver.ts";
+import { buildSandboxPolicy, decideFileChangeApproval, extractFileChangePaths } from "./codex-protocol.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 
 class MemorySessionStore implements SessionStore {
@@ -55,12 +56,14 @@ export interface FakeCodexTurnScript {
     type: "commandExecution" | "fileChange" | "webSearch" | "mcpToolCall" | "collabToolCall";
     command?: string;
     cwd?: string;
-    changes?: Array<{ path: string; kind?: { type: string } }>;
+    changes?: Array<{ path: string; kind?: { type: string; move_path?: string | null } }>;
     query?: string;
     server?: string;
     tool?: string;
     arguments?: Record<string, unknown>;
   }>;
+  /** 工具条目的 item/completed 等反向 RPC 请求都回了再发（真 codex 的审批在条目开始和结束之间）。默认开始后马上结束。 */
+  toolsCompleteAfterRequests?: boolean;
   /** 反向 RPC 请求列表（在完成本轮前发给客户端并等待响应）。 */
   serverRequests?: Array<{
     id: number | string;
@@ -116,8 +119,11 @@ export interface FakeCodexScript {
 }
 
 export interface FakeCodexLogEntry {
-  kind: "argv" | "rpc_in" | "rpc_out" | "signal";
+  kind: "argv" | "rpc_in" | "rpc_out" | "signal" | "probe";
   pid: number;
+  /** probe：FAKE_CODEX_PROBE 写没写成。 */
+  ok?: boolean;
+  code?: string;
   argv?: string[];
   cwd?: string;
   msg?: Record<string, unknown>;
@@ -137,6 +143,15 @@ function appendLog(entry) {
 }
 
 appendLog({ kind: "argv", argv: process.argv.slice(2), cwd: process.cwd() });
+// FAKE_CODEX_PROBE：启动时试着写这个文件，记下写没写成（测 Worker 的可写范围）
+if (process.env.FAKE_CODEX_PROBE) {
+  try {
+    fs.writeFileSync(process.env.FAKE_CODEX_PROBE, "probe");
+    appendLog({ kind: "probe", ok: true });
+  } catch (e) {
+    appendLog({ kind: "probe", ok: false, code: e.code });
+  }
+}
 
 function send(obj) {
   appendLog({ kind: "rpc_out", msg: obj });
@@ -222,13 +237,15 @@ function runTurn(turnId, threadId, turnScript, input) {
         method: "item/started",
         params: { threadId, turnId, item: { ...tool, status: "inProgress" } },
       });
-      send({
-        jsonrpc: "2.0",
-        method: "item/completed",
-        params: { threadId, turnId, item: { ...tool, status: "completed" } },
-      });
+      if (!turnScript.toolsCompleteAfterRequests) completeTool(tool);
     }
   };
+  const completeTool = (tool) =>
+    send({
+      jsonrpc: "2.0",
+      method: "item/completed",
+      params: { threadId, turnId, item: { ...tool, status: "completed" } },
+    });
 
   const finishTurn = () => {
     const deltas = turnScript.messageDeltas || [];
@@ -297,6 +314,7 @@ function runTurn(turnId, threadId, turnScript, input) {
     const sendNextReq = () => {
       if (me.aborted) return;
       if (reqs.length === 0) {
+        if (turnScript.toolsCompleteAfterRequests) for (const tool of turnScript.tools || []) completeTool(tool);
         finishTurn();
         return;
       }
@@ -492,10 +510,19 @@ afterEach(async () => {
 });
 
 function makeCodexHarness(
-  options: { script?: FakeCodexScript; driver?: Partial<CodexDriverOptions>; personaRevision?: () => number } = {},
+  options: {
+    script?: FakeCodexScript;
+    driver?: Partial<CodexDriverOptions>;
+    personaRevision?: () => number;
+    /** 数据目录放在临时目录下的这个子目录里（默认就是临时目录本身）：真包 OS 沙箱时，假 codex 的日志、剧本得在数据目录外。 */
+    dataDirName?: string;
+    /** 假 codex 启动时试着往数据目录里写这个文件（FAKE_CODEX_PROBE），结果记进日志。 */
+    probeInDataDir?: string;
+  } = {},
 ): CodexTestHarness {
-  const dir = mkdtempSync(join(tmpdir(), "agent-hub-codex-driver-"));
-  const stateDir = join(dir, "state");
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-codex-driver-")));
+  const dataDir = options.dataDirName ? join(dir, options.dataDirName) : dir;
+  const stateDir = join(dataDir, "state");
   mkdirSync(stateDir, { recursive: true });
 
   const logFile = join(dir, "fake-codex.log");
@@ -523,6 +550,8 @@ function makeCodexHarness(
         role: session.role === "worker" ? "worker" : "pm",
         readonly,
         hubSock: join(dir, "run", "hub.sock"),
+        stateDir,
+        osSandboxed: false,
       });
       writeFileSync(settingsFile, JSON.stringify(settings));
       const files: LaunchFiles = {
@@ -536,15 +565,18 @@ function makeCodexHarness(
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
       if (options.personaRevision) files.personaRevision = options.personaRevision();
-      // 数据目录是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
-      const writeScope = workerWriteScope({ role: session.role, dataDir: dir, cwd: session.cwd });
+      // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
+      const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
       return files;
     },
     env: {
       FAKE_CODEX_LOG: logFile,
       FAKE_CODEX_SCRIPT: scriptFile,
+      ...(options.probeInDataDir ? { FAKE_CODEX_PROBE: join(dataDir, options.probeInDataDir) } : {}),
     },
+    // 默认按没有 OS 沙箱的系统跑（codex 自己的沙箱加审批兜底），跟本机是不是 macOS 无关；真包沙箱的用例自己传 darwin
+    platform: "linux",
     ...options.driver,
   });
 
@@ -578,7 +610,7 @@ function makeCodexHarness(
 
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = nextSessionId++;
-    const cwd = join(dir, "workspace", String(id));
+    const cwd = join(dataDir, "workspace", String(id));
     mkdirSync(cwd, { recursive: true });
     const row: AgentSessionRow = {
       id,
@@ -1061,6 +1093,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
               { id: "fc-out", type: "fileChange", changes: [{ path: join(t.dir, "shots", "a.png"), kind: { type: "add" } }] },
               { id: "fc-in", type: "fileChange", changes: [{ path: join(worker.cwd, "ok.txt"), kind: { type: "add" } }] },
             ],
+            toolsCompleteAfterRequests: true,
             serverRequests: [
               { id: 951, method: "item/fileChange/requestApproval", params: { itemId: "fc-out", reason: null, grantRoot: null } },
               { id: 952, method: "item/fileChange/requestApproval", params: { itemId: "fc-in", reason: null, grantRoot: null } },
@@ -1082,6 +1115,110 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
       { id: 952, result: { decision: "accept" } },
       { id: 953, result: { decision: "decline" } },
     ]);
+  });
+
+  it("改名的目标（kind.move_path，*** Move to:）也判断；grantRoot 在范围外就拒；条目结束后记下的路径删掉", async () => {
+    const t = makeCodexHarness();
+    const worker = t.addSession({ role: "worker", workerId: 5 });
+    const own = (name: string) => join(worker.cwd, name);
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            tools: [
+              { id: "fc-mv-out", type: "fileChange", changes: [{ path: own("a.txt"), kind: { type: "update", move_path: join(t.stateDir, "hub.sqlite") } }] },
+              { id: "fc-mv-in", type: "fileChange", changes: [{ path: own("b.txt"), kind: { type: "update", move_path: own("c.txt") } }] },
+              { id: "fc-grant", type: "fileChange", changes: [{ path: own("d.txt"), kind: { type: "add" } }] },
+            ],
+            toolsCompleteAfterRequests: true,
+            serverRequests: [
+              { id: 961, method: "item/fileChange/requestApproval", params: { itemId: "fc-mv-out" } },
+              { id: 962, method: "item/fileChange/requestApproval", params: { itemId: "fc-mv-in" } },
+              { id: 963, method: "item/fileChange/requestApproval", params: { itemId: "fc-grant", grantRoot: t.stateDir } },
+              { id: 964, method: "item/fileChange/requestApproval", params: { itemId: "fc-grant", grantRoot: worker.cwd } },
+            ],
+            messageDeltas: ["done"],
+          },
+          {
+            // 上一轮的条目已经结束：同一个 itemId 再来审批，路径已经删了，不知道改哪些文件 → decline
+            serverRequests: [{ id: 971, method: "item/fileChange/requestApproval", params: { itemId: "fc-mv-in" } }],
+            messageDeltas: ["again"],
+          },
+        ],
+      } satisfies FakeCodexScript),
+    );
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(worker.id, user(2, "再来"));
+    await t.waitFor("turn.ended", undefined, 2);
+    const decisions = t
+      .rpcIn()
+      .filter((r) => r.id !== undefined && r.method === undefined)
+      .map((r) => ({ id: r.id, result: r.result }));
+    expect(decisions).toEqual([
+      { id: 961, result: { decision: "decline" } },
+      { id: 962, result: { decision: "accept" } },
+      { id: 963, result: { decision: "decline" } },
+      { id: 964, result: { decision: "accept" } },
+      { id: 971, result: { decision: "decline" } },
+    ]);
+  });
+
+  it("越出沙箱的命令：审查找到的两个绕法（只读命令打头、cd 换进数据目录）都拒", async () => {
+    const t = makeCodexHarness();
+    const worker = t.addSession({ role: "worker", workerId: 6 });
+    // 数据目录是临时目录本身：先 cd 到它的上一级，再用相对路径 cd 进 state/（像 cd ~ && cd .agent-hub/state）
+    const parent = dirname(t.dir);
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            serverRequests: [
+              { id: 981, method: "item/commandExecution/requestApproval", params: { itemId: "c1", command: `ls ${t.dir}; find ${t.stateDir} -delete`, cwd: worker.cwd } },
+              { id: 982, method: "item/commandExecution/requestApproval", params: { itemId: "c2", command: `cd ${parent} && cd ${basename(t.dir)}/state && touch x`, cwd: worker.cwd } },
+              { id: 983, method: "item/commandExecution/requestApproval", params: { itemId: "c3", command: `ls ${t.dir}; echo ok > out.txt`, cwd: worker.cwd } },
+            ],
+            messageDeltas: ["done"],
+          },
+        ],
+      } satisfies FakeCodexScript),
+    );
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    const decisions = t
+      .rpcIn()
+      .filter((r) => r.id !== undefined && r.method === undefined)
+      .map((r) => ({ id: r.id, result: r.result }));
+    expect(decisions).toEqual([
+      { id: 981, result: { decision: "decline" } },
+      { id: 982, result: { decision: "decline" } },
+      { id: 983, result: { decision: "accept" } },
+    ]);
+  });
+
+  it.runIf(process.platform === "darwin")("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
+    const t = makeCodexHarness({ dataDirName: "home", probeInDataDir: "probe.txt", driver: { platform: "darwin" } });
+    const probe = join(t.dir, "home", "probe.txt");
+    const worker = t.addSession({ role: "worker", workerId: 7 });
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    const pm = t.addSession({ role: "pm" });
+    await t.driver.send(pm.id, user(2, "看看"));
+    await t.waitFor("turn.ended", undefined, 2);
+    const ro = t.addSession({ role: "worker", workerId: 8 });
+    t.setReadonly(ro.id, true);
+    await t.driver.send(ro.id, user(3, "只读"));
+    await t.waitFor("turn.ended", undefined, 3);
+    const probes = t.log().filter((e) => e.kind === "probe");
+    expect(probes.map((e) => e.ok)).toEqual([false, true, true]);
+    expect(probes[0]?.code).toBe("EPERM");
+    expect(existsSync(probe)).toBe(true); // 项目经理写成的
+    const policies = t.rpcIn().filter((r) => r.method === "turn/start").map((r) => (r.params as { sandboxPolicy: unknown }).sandboxPolicy);
+    expect(policies[0]).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
+    expect(policies[1]).toMatchObject({ type: "workspaceWrite" });
+    expect(policies[2]).toEqual({ type: "readOnly", networkAccess: true });
   });
 
   it("Worker 的 turn/start 沙箱：writableRoots 只留自己的目录和数据目录外的附加目录", async () => {
@@ -1605,5 +1742,31 @@ describe("CodexDriver 性格设定、模式改了不重启（下一条前面加�
     expect(inputs(t).at(-1)).toContain("第二版");
     expect(inputs(t).at(-1)!.endsWith("\n\n五")).toBe(true);
     expect(procs(t)).toHaveLength(1);
+  });
+});
+
+describe("codex-protocol 可写范围纯函数", () => {
+  const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
+  const context = { readonly: false, writeScope: scope, cwd: "/Users/u/.agent-hub/worktrees/1/2" };
+
+  it("改名（*** Move to:）的目标也算要改的文件：源在自己的工作目录、目标是 state/hub.sqlite → decline（审查用 tsx 复现过 accept）", () => {
+    const item = { changes: [{ path: "/Users/u/.agent-hub/worktrees/1/2/a.txt", kind: { type: "update", move_path: "/Users/u/.agent-hub/state/hub.sqlite" } }] };
+    expect(extractFileChangePaths(item)).toEqual(["/Users/u/.agent-hub/worktrees/1/2/a.txt", "/Users/u/.agent-hub/state/hub.sqlite"]);
+    expect(decideFileChangeApproval(item, context)).toBe("decline");
+    expect(decideFileChangeApproval({ changes: [{ path: "a.txt", kind: { type: "update", move_path: "b.txt" } }] }, context)).toBe("accept");
+    expect(decideFileChangeApproval({ changes: [{ path: "a.txt", kind: { type: "update", move_path: null } }] }, context)).toBe("accept");
+  });
+
+  it("grantRoot 落在范围外就拒", () => {
+    expect(decideFileChangeApproval({ paths: ["a.txt"], grantRoot: "/Users/u/.agent-hub" }, context)).toBe("decline");
+    expect(decideFileChangeApproval({ paths: ["a.txt"], grantRoot: "/Users/u/.agent-hub/worktrees/1/2" }, context)).toBe("accept");
+    expect(decideFileChangeApproval({ paths: ["a.txt"], grantRoot: "/tmp" }, context)).toBe("accept");
+  });
+
+  it("sandboxPolicy：包进了 OS 沙箱用 externalSandbox；只读照用 readOnly；没包用 workspaceWrite", () => {
+    const session = { cwd: "/Users/u/.agent-hub/worktrees/1/2", addDirs: ["/Users/u/.agent-hub/worktrees/1/3", "/x"] };
+    expect(buildSandboxPolicy(session, false, scope, true)).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
+    expect(buildSandboxPolicy(session, true, scope, true)).toEqual({ type: "readOnly", networkAccess: true });
+    expect(buildSandboxPolicy(session, false, scope, false)).toEqual({ type: "workspaceWrite", networkAccess: true, writableRoots: [session.cwd, "/x"] });
   });
 });

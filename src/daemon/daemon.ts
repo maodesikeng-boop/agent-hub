@@ -171,6 +171,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.db = db;
     // realpath 过的两个目录，账本和启动准备用同一份：
     // - dataDir：Worker 的可写范围（write-scope.ts）按真实路径匹配，沙箱认的是真实路径；
+    // - stateDir：Worker 设置文件里 state/ 的兜底拒绝规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
     // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
     //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
     mkdirSync(paths.worktreesDir, { recursive: true });
@@ -183,6 +184,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 过期的上传文件和副本：启动时清一次，之后每天一次（出错只记日志）
     parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
     const dataDir = realpathSync.native(paths.home);
+    const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；
     // 账本写系统消息时用它缓存着的显示名
@@ -214,6 +216,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const prepareLaunch = createLaunchPreparer({
       launchDir: paths.launchDir,
       dataDir,
+      stateDir,
       worktreesDir,
       getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
       tokens: endedOnRevokedTokens(tokens),

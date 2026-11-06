@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_ENV, buildSessionSettings, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_ENV, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
@@ -27,11 +27,13 @@ describe("prepareLaunch（M2、M3）", () => {
       return `token-of-${sessionId}`;
     },
   };
-  const make = (basePath = "/usr/bin:/bin") =>
+  const make = (basePath = "/usr/bin:/bin", osSandboxed = true) =>
     createLaunchPreparer({
       launchDir,
       // 数据目录：临时目录本身（Worker 的 worktree 建在它下面）
       dataDir: dir,
+      stateDir: join(dir, "state"),
+      osSandboxed,
       worktreesDir,
       getLaunchContext: (id) => {
         const ctx = contexts.get(id);
@@ -87,7 +89,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
-    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock }));
+    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
     expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir), settings }));
     expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
     // 项目经理不受可写范围限制
@@ -188,7 +190,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
     expect(prompt).not.toContain("先问用户的事");
-    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock }));
+    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     // 可写范围：数据目录里只有自己的 worktree
@@ -201,14 +203,22 @@ describe("prepareLaunch（M2、M3）", () => {
     expect((await make()(row(9, main, "worker"))).writeScope).toEqual({ dataDir: dir, writableDirs: [] });
   });
 
-  it("同一个项目的项目经理和 Worker：两份设置文件只差 autoMemoryEnabled", async () => {
+  it("同一个项目的项目经理和 Worker：Worker 多 autoMemoryEnabled、state/ 的兜底拒绝规则，包进 OS 沙箱时关掉 claude 自带的沙箱", async () => {
     contexts.set(9, workerContext());
     const pm = JSON.parse(readFileSync((await make()(row(7))).settingsFile!, "utf8"));
     const worker = JSON.parse(readFileSync((await make()(row(9, dir, "worker"))).settingsFile!, "utf8"));
-    expect(worker.permissions).toEqual(pm.permissions);
-    expect(worker.sandbox).toEqual(pm.sandbox);
+    expect(worker.permissions).toEqual({ ...pm.permissions, deny: [stateDirDenyRule(join(dir, "state"))] });
+    expect(worker.sandbox).toEqual({ ...pm.sandbox, enabled: false });
     expect(worker.autoMemoryEnabled).toBe(false);
     expect(pm.autoMemoryEnabled).toBeUndefined();
+    expect(pm.sandbox.enabled).toBeUndefined();
+  });
+
+  it("没有 OS 沙箱的机器（不是 macOS）：不关 claude 自带的沙箱，state/ 的拒绝规则照样有", async () => {
+    contexts.set(9, workerContext());
+    const worker = JSON.parse(readFileSync((await make(undefined, false)(row(9, dir, "worker"))).settingsFile!, "utf8"));
+    expect(worker.sandbox.enabled).toBeUndefined();
+    expect(worker.permissions.deny).toEqual([stateDirDenyRule(join(dir, "state"))]);
   });
 
   it("只读 Worker：只读档；开关变了 fingerprint 跟着变", async () => {
@@ -217,7 +227,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const normal = await prepare(row(9, dir, "worker"));
     contexts.set(9, workerContext({ readonly: true }));
     const readonly = await prepare(row(9, dir, "worker"));
-    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
+    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir: join(dir, "state"), osSandboxed: true, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 

@@ -62,7 +62,8 @@ export interface CodexLaunchConfig {
 
 export type CodexSandboxPolicy =
   | { type: "readOnly"; networkAccess: true }
-  | { type: "workspaceWrite"; networkAccess: true; writableRoots: string[] };
+  | { type: "workspaceWrite"; networkAccess: true; writableRoots: string[] }
+  | { type: "externalSandbox"; networkAccess: "enabled" };
 
 export type CodexApprovalDecision = "accept" | "decline";
 
@@ -171,17 +172,23 @@ export function buildThreadResumeRequest(
 }
 
 /**
- * 构造 turn/start 的 sandboxPolicy。Worker 的可写范围（writeScope）在这里落实一半：writableRoots 去掉数据目录里不能写的
- * （codex 的沙箱只能写 writableRoots 和临时目录，数据目录别处本来就写不了）；另一半在审批（decideCommandApproval、decideFileChangeApproval）。
+ * 构造 turn/start 的 sandboxPolicy。Worker 的可写范围（writeScope）：
+ * - 进程包进了 OS 沙箱（osSandboxed，macOS，driver/write-scope.ts）：externalSandbox——codex 不再自己起 sandbox-exec（macOS 沙箱不能嵌套），
+ *   命令和改文件都在外面那层里，数据目录写不了；
+ * - 没有 OS 沙箱（兜底）：codex 自己的 workspace-write，writableRoots 去掉数据目录里不能写的（codex 的沙箱只能写 writableRoots 和临时目录）；
+ *   越出沙箱的审批按范围判断（decideCommandApproval、decideFileChangeApproval）。
+ * 只读：readOnly（codex 自己的沙箱，进程不包）。
  */
 export function buildSandboxPolicy(
   session: Pick<AgentSessionRow, "cwd" | "addDirs">,
   readonly: boolean,
   writeScope: WriteScope | null = null,
+  osSandboxed = false,
 ): CodexSandboxPolicy {
   if (readonly) {
     return { type: "readOnly", networkAccess: true };
   }
+  if (osSandboxed) return { type: "externalSandbox", networkAccess: "enabled" };
   const roots = [session.cwd, ...session.addDirs];
   return {
     type: "workspaceWrite",
@@ -213,6 +220,8 @@ export function buildTurnStartRequest(
     session: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
     readonly: boolean;
     writeScope?: WriteScope | null;
+    /** 进程包进了 OS 沙箱（driver/write-scope.ts 的 ScopedSpawn.osSandboxed）。 */
+    osSandboxed?: boolean;
   },
 ): string {
   return serializeJsonRpcLine({
@@ -226,7 +235,7 @@ export function buildTurnStartRequest(
       model: params.session.model ?? undefined,
       effort: params.session.effort ?? undefined,
       summary: "detailed",
-      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly, params.writeScope ?? null),
+      sandboxPolicy: buildSandboxPolicy(params.session, params.readonly, params.writeScope ?? null, params.osSandboxed ?? false),
     },
   });
 }
@@ -276,7 +285,7 @@ export function isCodexToolItemType(type: unknown): type is CodexToolItemType {
   return typeof type === "string" && (CODEX_TOOL_ITEM_TYPES as readonly string[]).includes(type);
 }
 
-/** 从 fileChange item 或审批参数中提取所有涉及的文件路径。 */
+/** 从 fileChange item 或审批参数中提取所有涉及的文件路径（含改名的目标）。 */
 export function extractFileChangePaths(source: Record<string, unknown>): string[] {
   const paths: string[] = [];
   if (Array.isArray(source.changes)) {
@@ -287,6 +296,11 @@ export function extractFileChangePaths(source: Record<string, unknown>): string[
         const c = change as Record<string, unknown>;
         if (typeof c.path === "string" && c.path.trim() !== "") paths.push(c.path);
         else if (typeof c.filePath === "string" && c.filePath.trim() !== "") paths.push(c.filePath);
+        // 改名（apply_patch 的 *** Move to:）：目标在 kind.move_path（FileUpdateChange 的 PatchChangeKind），也要判断
+        const kind = typeof c.kind === "object" && c.kind !== null ? (c.kind as Record<string, unknown>) : null;
+        for (const moved of [kind?.move_path, kind?.movePath, c.move_path, c.movePath]) {
+          if (typeof moved === "string" && moved.trim() !== "") paths.push(moved);
+        }
       }
     }
   }
@@ -450,7 +464,8 @@ export interface CodexApprovalContext {
  * （模型申请提权）来问；同意了这条命令就不在沙箱里跑，所以 Worker 的可写范围要在这里拦：
  * - readonly 会话一律 decline；
  * - 有可写范围（Worker）：命令的工作目录、或命令行里的路径落在范围外（数据目录里、自己的工作目录外），且不是只读命令 → decline；
- *   要改的文件在范围外 → decline。只能看字面：脚本里拼出来、不写在命令行上的路径看不出来（见 commandMayWriteOutsideScope）；
+ *   要改的文件在范围外 → decline。只能看字面：按 ; && || | 拆段、跟着 cd，脚本里拼出来、不写在命令行上的路径看不出来
+ *   （见 commandMayWriteOutsideScope）。macOS 上进程包在 OS 沙箱里，这里只是多一道，漏了也写不进数据目录；
  * - 其余 accept（数据目录以外照旧；2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）。
  */
 export function decideCommandApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
@@ -469,7 +484,8 @@ export function decideCommandApproval(params: Record<string, unknown>, context: 
  * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）。真 codex 的审批参数只带 itemId，
  * 路径要调用方从这一条的 item/started 里补进 params.paths（codex-driver.ts 的 fileChangePaths）：
  * - readonly 会话一律 decline；
- * - 有可写范围（Worker）：要改的文件在范围外，或者不知道改哪些文件 → decline（实测不补路径时一律同意，Worker 写进了数据目录）；
+ * - 有可写范围（Worker）：要改的文件（含改名的目标）在范围外，或者不知道改哪些文件，或者 grantRoot 在范围外 → decline
+ *   （实测不补路径时一律同意，Worker 写进了数据目录）；
  * - 其余 accept。
  */
 export function decideFileChangeApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
@@ -478,6 +494,8 @@ export function decideFileChangeApproval(params: Record<string, unknown>, contex
   if (scope !== null) {
     const paths = extractFileChangePaths(params);
     if (paths.length === 0 || paths.some((p) => !scopeAllowsWrite(scope, p, context.cwd))) return "decline";
+    // 顺带申请这一会话都能写某个目录（grantRoot）：落在范围外就拒
+    if (typeof params.grantRoot === "string" && params.grantRoot.trim() !== "" && !scopeAllowsWrite(scope, params.grantRoot, context.cwd)) return "decline";
   }
   return "accept";
 }
