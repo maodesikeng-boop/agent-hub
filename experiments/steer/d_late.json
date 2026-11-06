@@ -1,0 +1,24 @@
+[
+ {
+  "send": "Count from 1 to 60, numbers separated by single spaces, on one line. No tools. Output only the numbers.",
+  "uuid": "00000000-0000-4000-8000-000000000001"
+ },
+ {
+  "wait_stream_text": 3
+ },
+ {
+  "send": "MID-STREAM: reply with exactly ACK-D_LATE.",
+  "uuid": "00000000-0000-4000-8000-000000000002"
+ },
+ {
+  "wait": "result",
+  "nth": 2,
+  "timeout": 90
+ },
+ {
+  "close": true
+ },
+ {
+  "exit": 60
+ }
+]

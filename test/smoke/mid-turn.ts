@@ -102,7 +102,8 @@ async function runVendor(outcomes: Outcome[], only: (name: string) => boolean, n
       const ended = of(r, "turn.ended");
       const texts = of(r, "agent.text").map((e) => e.text).join("\n");
       expect(texts.includes("ACK-STOP"), `回复里没有 ACK-STOP：${texts.slice(-300)}`);
-      expect(!texts.includes("THREE"), "停下之后还跑了第三条");
+      // 看真跑了的命令，不看回复的字（回复里常会说“TWO 和 THREE 没有运行”）
+      expect(!sleepTools(r).some((e) => JSON.stringify(e.input).includes("THREE")), "停下之后还跑了第三条");
       return `中途送达；第 ${toolsAtTaken} 条命令跑完被取走；一共 ${sleepTools(r).length} 条命令、${ended.length} 个 turn.ended（${ended.map((e) => `[${e.messageIds.join(",")}]`).join(" ")}）`;
     });
     await closeRig(r, !ok);

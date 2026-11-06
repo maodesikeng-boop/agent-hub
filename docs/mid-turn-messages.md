@@ -415,3 +415,5 @@ interface BackgroundTaskSupport {
 **没做的**：`priority:"now"`（立即插话）；网页上按厂商显示“agent 不会中途看到”的提示（能力声明也就没做成接口）。
 
 **冒烟**（`test/smoke/mid-turn.ts`，`pnpm smoke S27 S28`，直接用驱动层）：claude（haiku）、codex（gpt-5.6-luna）在 `sleep 8` 时说“停下”，都是第 1 条命令跑完就读到、同一轮一个结束、不再跑后面的；写进去还没读到就停止，都标已取消、停止后 8 秒没有新的一轮。
+
+**补测 D 场景的先后**（审查后，claude 2.1.314、haiku，`experiments/steer/d_next.json`、`d_late.json`，`d_order.py` 汇总）：没赶上这一轮的那条（B），第一个 `result` 和 `started(B)` 谁先到——两种写法各跑 5 次（`d_next` 长回复流到一半写入，`d_late` 短回复刚开始流就写入，离 `result` 只有 0.3～0.6 秒），10 次都是 `result` → `completed(A)` → `started(B)`（同一毫秒内也是这个顺序），没见过 `started(B)` 先到。所以“`result` 只结算 `started` 过的”这条规则在实测里站得住，没有为反过来的顺序再加处理。S27a 原来按回复里有没有 THREE 判断“又跑了第三条”，模型常回“TWO 和 THREE 没有运行”，会误报，改成看真跑了的命令。
