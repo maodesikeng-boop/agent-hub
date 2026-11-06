@@ -47,6 +47,8 @@ export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
 export const HANDOVER_RECENT_MESSAGES = 10;
 /** 开新会话：新会话的第一条（交接）失败、被停止后最多原地重新排队几次（退避同 session.send 的 ACTION_RETRY）；还不行就放行压着的消息，对话里提示一句。 */
 export const HANDOVER_RENEW_RETRIES = 5;
+/** 开新会话（自动）：项目经理的会话一轮正常结束时，当前对话长度（usage.context，token）到这个数就自动开新会话，流程同手动；Worker 不动。 */
+export const HANDOVER_AUTO_CONTEXT_TOKENS = 180_000;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 
