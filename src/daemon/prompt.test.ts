@@ -449,6 +449,8 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,
+      `${hub} worker show <编号>`,
+      `${hub} worker log <编号> [--last N]`,
       `${hub} ask --stdin`,
     ]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);

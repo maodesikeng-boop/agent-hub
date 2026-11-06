@@ -30,6 +30,11 @@ export interface LiveSession {
   step?: AgentStep | null;
   /** 调了、结果还没回来的工具（按调用顺序）：几个工具同时在跑时，结果一个个回来，还没回来的最后一个就是当前这一步。 */
   openTools?: Array<{ toolUseId: string; step: AgentStep }>;
+  /**
+   * 会话里还在跑的后台任务个数（驱动层的 background.changed，只有 claude 有这个信号）；没有信号就是 undefined。
+   * 进程起来、退出时清掉。hub worker show 用，不推给网页。
+   */
+  backgroundTasks?: number;
 }
 
 const THINKING: AgentStep = { type: "thinking" };

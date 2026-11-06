@@ -969,6 +969,7 @@ export class ClaudeDriver implements Driver {
     if (st.proc !== proc) return;
     const wasActive = st.background.active;
     if (!st.background.replace(obj.tasks)) return;
+    this.#emit(st.id, { type: "background.changed", count: st.background.count, at: Date.now() });
     if (st.background.active === wasActive || st.idleTimer === null) return;
     if (!proc.closing && !this.#busy(st) && !st.ended) this.#armIdle(st, proc);
   }

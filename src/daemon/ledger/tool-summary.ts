@@ -20,7 +20,7 @@ const KEY_ARGS = [
   "prompt",
 ];
 
-function oneLine(text: string): string {
+export function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 

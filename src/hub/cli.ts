@@ -13,6 +13,8 @@ import {
   HUB_MAX_BODY_BYTES,
   MIN_SCHEDULE_EVERY_MINUTES,
   SETUP_TIMEOUT_MS,
+  WORKER_LOG_DEFAULT_STEPS,
+  WORKER_LOG_MAX_STEPS,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
@@ -57,6 +59,8 @@ export const HUB_USAGE = `用法：
   ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
   ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
   ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
+  ${hub} worker show <编号>                                   一个 Worker 现在的情况：状态、在干什么、这一轮和上一轮、进程、分支和 PR
+  ${hub} worker log <编号> [--last N]                         它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束
   ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
                                                           会单独提醒用户，不会被别的消息刷掉
   ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
@@ -103,6 +107,7 @@ type Options = {
   clear?: boolean;
   daily?: string;
   every?: string;
+  last?: string;
   help?: boolean;
 };
 
@@ -182,6 +187,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         clear: { type: "boolean" },
         daily: { type: "string" },
         every: { type: "string" },
+        last: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -279,6 +285,23 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], "worker list");
     expectPositionals(rest, 0, "worker list");
     return { command: "worker.list", body: {}, textSource: null };
+  }
+  if (group === "worker" && action === "show") {
+    allowOnly(values, [], "worker show");
+    expectPositionals(rest, 1, "worker show");
+    return { command: "worker.show", body: { workerId: workerIdOf(rest[0], "worker show") }, textSource: null };
+  }
+  if (group === "worker" && action === "log") {
+    allowOnly(values, ["last"], "worker log");
+    expectPositionals(rest, 1, "worker log");
+    const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker log") };
+    if (values.last !== undefined) {
+      if (!/^[1-9][0-9]*$/.test(values.last) || Number(values.last) > WORKER_LOG_MAX_STEPS) {
+        throw new UsageError(`--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
+      }
+      body.last = Number(values.last);
+    }
+    return { command: "worker.log", body, textSource: null };
   }
   if (group === "schedule" && action === "add") {
     allowOnly(values, ["name", "daily", "every", "stdin"], "schedule add");
