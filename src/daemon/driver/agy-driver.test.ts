@@ -522,7 +522,7 @@ describe("agy-protocol 纯函数", () => {
         cwd: dir,
         addDirs: ["/extra/dir1", "/extra/dir2"],
         generation: 1,
-        model: "gemini-4-argon-medium",
+        model: "gemini-4-argon",
         effort: "high",
         pid: null,
         status: "idle",
@@ -539,8 +539,9 @@ describe("agy-protocol 纯函数", () => {
       expect(argsFirst).toContain("--mode");
       expect(argsFirst[argsFirst.indexOf("--mode") + 1]).toBe("auto");
       expect(argsFirst).toContain("--dangerously-skip-permissions");
-      expect(argsFirst[argsFirst.indexOf("--model") + 1]).toBe("gemini-4-argon-medium");
-      expect(argsFirst[argsFirst.indexOf("--effort") + 1]).toBe("high");
+      // 不带档位的模型 + 思考程度拼成完整 ID，不另传 --effort（agy 对两个都传且对不上会报错）
+      expect(argsFirst[argsFirst.indexOf("--model") + 1]).toBe("gemini-4-argon-high");
+      expect(argsFirst).not.toContain("--effort");
       expect(argsFirst.slice(-2)).toEqual(["--print", ""]);
 
       const filesPlan: LaunchFiles = { promptFile: join(dir, "p.md"), settingsFile: settingsPlan, env: {}, fingerprint: "f2" };
@@ -672,7 +673,7 @@ describe("1. 首次启动与完整流式回合", () => {
       },
     });
 
-    const s = t.addSession({ model: "gemini-4-argon-medium", effort: "high", addDirs: ["/tmp/extra-dir"] });
+    const s = t.addSession({ model: "gemini-4-argon", effort: "high", addDirs: ["/tmp/extra-dir"] });
     await expect(t.driver.send(s.id, user(1, "请帮我检查 README"))).resolves.toEqual({ kind: "written" });
     await t.waitFor("turn.ended");
 
@@ -683,8 +684,8 @@ describe("1. 首次启动与完整流式回合", () => {
     expect(argv!.slice(-2)).toEqual(["--print", ""]);
     expect(argv![argv!.indexOf("--input-format") + 1]).toBe("stream-json");
     expect(argv![argv!.indexOf("--output-format") + 1]).toBe("stream-json");
-    expect(argv![argv!.indexOf("--model") + 1]).toBe("gemini-4-argon-medium");
-    expect(argv![argv!.indexOf("--effort") + 1]).toBe("high");
+    expect(argv![argv!.indexOf("--model") + 1]).toBe("gemini-4-argon-high");
+    expect(argv).not.toContain("--effort");
     expect(argv![argv!.indexOf("--add-dir") + 1]).toBe("/tmp/extra-dir");
 
     // 2. 检查 init 更新了 vendorSessionId
@@ -694,7 +695,7 @@ describe("1. 首次启动与完整流式回合", () => {
     const started = t.of("session.started")[0]!;
     expect(started).toMatchObject({
       resumed: false,
-      model: "gemini-4-argon-medium",
+      model: "gemini-4-argon",
       vendorSessionId: "agy-assigned-uuid-999",
     });
 

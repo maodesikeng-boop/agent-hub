@@ -8,6 +8,7 @@ import {
   effortLabel,
   isAgentVendor,
   modelLabel,
+  splitModelEffort,
   utf8Bytes,
   vendorLabel,
   type AgentSetting,
@@ -64,8 +65,11 @@ function describeChange(change: PersonaChange, catalog: ModelCatalog): string {
   if (change.textBefore !== change.textAfter) parts.push("改了性格设定");
   if (change.modeBefore !== change.modeAfter) parts.push(`模式改成${PM_MODE_LABELS[change.modeAfter]}`);
   if (change.vendorBefore !== change.vendorAfter) parts.push(`厂商改成${vendorLabel(change.vendorAfter)}`);
-  if (change.modelBefore !== change.modelAfter) parts.push(`模型改成${modelLabel(change.vendorAfter, change.modelAfter, catalog)}`);
-  if (change.effortBefore !== change.effortAfter) parts.push(`思考程度改成${effortLabel(change.effortAfter)}`);
+  // 老数据里 agy 的模型是带档位的完整 ID：拆成 模型 + 思考程度，各写各的
+  const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore);
+  const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter);
+  if (before.model !== after.model) parts.push(`模型改成${modelLabel(change.vendorAfter, after.model, catalog)}`);
+  if (before.effort !== after.effort) parts.push(`思考程度改成${effortLabel(after.effort)}`);
   return parts.join("，") || "改了设置";
 }
 
@@ -188,7 +192,8 @@ function PmEditor({
       aliveRef.current = false;
     };
   }, []);
-  const saved: AgentSetting = { vendor: persona.vendor, model: persona.model, effort: persona.effort };
+  // 老数据里 agy 的模型可能是带档位的完整 ID：按 模型 + 思考程度 拆开再比，没改的不重复存
+  const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
   const agentSave = useInstantSave<AgentDraft, AgentRowKey>(pm.id, onUpdate, aliveRef);
   const modeSave = useInstantSave<PmMode, "mode">(pm.id, onUpdate, aliveRef);
   const agent = agentSave.draft ?? draftOf(saved);

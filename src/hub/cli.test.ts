@@ -184,6 +184,17 @@ describe("hub cli", () => {
       expect(ledger.calls).toHaveLength(0);
     });
 
+    it("worker start --vendor agy: full id with the effort inside, or a bare model plus --effort, both go through unchanged", async () => {
+      expect((await hub(["worker", "start", "--title", "修 X", "--vendor", "agy", "--model", "gemini-4-argon-high", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
+      expect(
+        (await hub(["worker", "start", "--title", "修 X", "--vendor", "agy", "--model", "gemini-4-argon", "--effort", "high", "--stdin"], { stdin: stdinOf("任务") })).code,
+      ).toBe(0);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        { title: "修 X", vendor: "agy", model: "gemini-4-argon-high", task: "任务" },
+        { title: "修 X", vendor: "agy", model: "gemini-4-argon", effort: "high", task: "任务" },
+      ]);
+    });
+
     it("worker start without the optional flags sends only title and task", async () => {
       expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       expect(ledger.calls[0]?.args).toEqual({ title: "修 X", task: "任务" });

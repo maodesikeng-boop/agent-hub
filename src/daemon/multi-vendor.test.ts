@@ -330,8 +330,8 @@ rl.on("line", (line) => {
     expect(claudeCat!.models.some((m) => m.id === "claude-sonnet-5-5")).toBe(true);
 
     expect(agyCat!.source).toBe("vendor");
-    expect(agyCat!.models.some((m) => m.id === "gemini-4-argon-high")).toBe(true);
-    expect(agyCat!.defaultModel).toBe("Gemini 4 Argon (High)");
+    expect(agyCat!.models.find((m) => m.id === "gemini-4-argon")?.efforts).toEqual(["high"]);
+    expect(agyCat!.defaultModel).toBe("Gemini 4 Argon");
 
     expect(codexCat!.source).toBe("vendor");
     expect(codexCat!.models.some((m) => m.id === "gpt-5.4")).toBe(true);

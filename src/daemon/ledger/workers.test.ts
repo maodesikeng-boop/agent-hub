@@ -278,6 +278,28 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", /厂商只能是 claude、agy、codex/);
   });
 
+  it("agy 两种写法存成一样：--model gemini-4-argon-high（完整 ID，老用法）和 --model gemini-4-argon --effort high 都是 模型 gemini-4-argon + 思考程度 high", () => {
+    repos.add(main);
+    for (const args of [
+      { model: "gemini-4-argon-high" },
+      { model: "gemini-4-argon", effort: "high" },
+      { model: "gemini-4-argon-high", effort: "high" },
+    ]) {
+      const worker = start({ vendor: "agy", ...args }).data.worker;
+      expect(worker).toMatchObject({ model: "gemini-4-argon", effort: "high" });
+      expect(sessionRow(workerSessionId(worker.id))).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "high" });
+    }
+    // 单一档位的模型、只有思考程度（模型沿用默认）
+    expect(sessionRow(workerSessionId(start({ vendor: "agy", model: "gpt-oss-120b-medium" }).data.worker.id))).toMatchObject({ model: "gpt-oss-120b", effort: "medium" });
+    expect(sessionRow(workerSessionId(start({ vendor: "agy", effort: "low" }).data.worker.id))).toMatchObject({ model: null, effort: "low" });
+  });
+
+  it("agy：完整 ID 的档位和 --effort 对不上、思考程度不是 low/medium/high：invalid，说清楚怎么改", () => {
+    repos.add(main);
+    expectLedgerError(() => start({ vendor: "agy", model: "gemini-4-argon-low", effort: "high" }), "invalid", /gemini-4-argon-low.*low.*high/);
+    expectLedgerError(() => start({ vendor: "agy", model: "gemini-4-argon", effort: "xhigh" }), "invalid", /思考程度只能是 low、medium、high/);
+  });
+
   it("主文件夹有没提交的改动：返回的话提醒 Worker 看不到这些改动", () => {
     repos.add(main);
     dirty.add(main);
