@@ -57,7 +57,8 @@ function deps(
   });
   const start = vi.fn(async () => {});
   const end = vi.fn(async () => {});
-  const getMessage = vi.fn(() => (options.message === undefined ? message() : options.message));
+  // 默认的消息：driver.send 之后再读是已送达（驱动层写进去时同步出 message.delivered，账本当场改）
+  const getMessage = vi.fn(() => (options.message === undefined ? message(send.mock.calls.length > 0 ? { status: "delivered" } : {}) : options.message));
   const onActionFailed = vi.fn();
   const refreshSessionState = vi.fn();
   const stopMessage = vi.fn();
@@ -173,6 +174,23 @@ describe("session.send 处理函数", () => {
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "session_busy" });
   });
 
+  it("send 还没返回时这条被收回了（message.requeued，账本放回排队中、重新登记的 session.send 被这次在跑的吞掉）→ later，再发一次", async () => {
+    const { d, getMessage } = deps();
+    getMessage.mockReturnValueOnce(message()).mockReturnValueOnce(message({ status: "queued" }));
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "requeued" });
+    // 平常写进去了（账本已经是已送达、处理中）照旧 done
+    for (const status of ["delivered", "processing", "cancelled"] as const) {
+      const { d: d2, getMessage: get2 } = deps();
+      get2.mockReturnValueOnce(message()).mockReturnValueOnce(message({ status }));
+      expect(await createSessionSendHandler(d2)(sendAction())).toEqual({ kind: "done" });
+    }
+  });
+
+  it("停止时被取消了（cancelled）→ done", async () => {
+    const { d } = deps({ send: { kind: "cancelled" } });
+    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
+  });
+
   it("写入前校验没过 → done（驱动层已经出了 driver.error，账本标失败）", async () => {
     const { d } = deps({ send: { kind: "rejected" } });
     expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
@@ -208,7 +226,7 @@ describe("session.send 处理函数", () => {
   });
 
   it("消息不在了，或者已经有结果（已回复、已停止）→ done，不再发", async () => {
-    for (const m of [null, message({ status: "replied" }), message({ status: "stopped" })]) {
+    for (const m of [null, message({ status: "replied" }), message({ status: "stopped" }), message({ status: "cancelled" })]) {
       const { d, send } = deps({ message: m });
       expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
       expect(send).not.toHaveBeenCalled();

@@ -217,6 +217,36 @@ describe("applyDriverEvent", () => {
     expect(seqs).toEqual(seqs.map((_, i) => INITIAL_SEQ + 1 + i));
   });
 
+  it("一轮中途送达的（midTurn）被取消：已送达 → 已取消；已经处理中的不动；之后再来什么都不改", () => {
+    const first = post("c1", "跑命令");
+    const second = post("c2", "停下");
+    ev({ type: "message.delivered", at: 1, messageIds: [first] });
+    ev({ type: "message.processing", at: 2, messageIds: [first] });
+    ev({ type: "message.delivered", at: 3, messageIds: [second], midTurn: true });
+    ev({ type: "message.cancelled", at: 4, messageIds: [first, second], reason: "stop" });
+    expect(ledger.getMessage(first)?.status).toBe("processing");
+    expect(ledger.getMessage(second)?.status).toBe("cancelled");
+    ev({ type: "turn.ended", at: 5, ok: false, interrupted: true, messageIds: [first], durationMs: 1 });
+    ev({ type: "message.processing", at: 6, messageIds: [second] });
+    expect(ledger.getMessage(first)?.status).toBe("stopped");
+    expect(ledger.getMessage(second)?.status).toBe("cancelled");
+  });
+
+  it("写进去了还没被取走就被收回（message.requeued）：已送达 → 排队中，重新登记 session.send（不带重发说明）；处理中的不动", () => {
+    const first = post("c1", "跑命令");
+    const second = post("c2", "插一句");
+    for (const action of listActions(db)) setActionStatus(db, action.id, { status: "done" }, now);
+    ev({ type: "message.delivered", at: 1, messageIds: [first] });
+    ev({ type: "message.processing", at: 2, messageIds: [first] });
+    ev({ type: "message.delivered", at: 3, messageIds: [second], midTurn: true });
+    enqueued = [];
+    ev({ type: "message.requeued", at: 4, messageIds: [first, second] });
+    expect(ledger.getMessage(first)?.status).toBe("processing");
+    expect(ledger.getMessage(second)?.status).toBe("queued");
+    expect(enqueued.map((a) => [a.type, a.params])).toEqual([["session.send", { sessionId, messageId: second, source: "user" }]]);
+    expect(listActions(db).find((a) => a.type === "session.send" && a.params.messageId === second)?.status).toBe("pending");
+  });
+
   it("agent 输出去重：同一个（会话，uuid）交两次只有一条；工具按 toolUseId 分开", () => {
     ev({ type: "agent.text", at: 1, uuid: "u1", text: "一" });
     ev({ type: "agent.text", at: 1, uuid: "u1", text: "一" });
@@ -585,14 +615,42 @@ describe("requestStop", () => {
     expect(last?.type === "session.status" && last.data.session.activity).toBe("stopping");
   });
 
-  it("没有在跑的会话：什么也不做", () => {
+  it("没有在跑的会话、也没有排着的消息：什么也不做", () => {
     const stops = vi.fn();
     ledger.onStopRequested(stops);
-    post();
+    const id = post();
+    setStatus(id, "replied");
     const before = changes.length;
     ledger.requestStop(conversationId);
     expect(stops).not.toHaveBeenCalled();
     expect(changes).toHaveLength(before);
+  });
+
+  it("停止时 agent 还没看到的用户消息（排队中）都标已取消；系统消息照常排着；已经在处理的照旧等这一轮的结果", () => {
+    const stops = vi.fn();
+    ledger.onStopRequested(stops);
+    const running = post("c1", "跑命令");
+    ev({ type: "message.delivered", at: 1, messageIds: [running] });
+    ev({ type: "message.processing", at: 2, messageIds: [running] });
+    const waiting = post("c2", "接着做 B");
+    const system = ledger.postUserMessage({ conversationId, clientId: "c3", text: "x" }).messageId;
+    db.run("UPDATE messages SET sender = 'system' WHERE id = ?", system);
+    ledger.requestStop(conversationId);
+    expect(ledger.getMessage(waiting)?.status).toBe("cancelled");
+    expect(ledger.getMessage(system)?.status).toBe("queued");
+    expect(ledger.getMessage(running)?.status).toBe("processing");
+    expect(stops).toHaveBeenCalledWith({ conversationId, sessionId });
+    expect(changes.some((c) => c.type === "message.updated" && c.data.message.id === waiting && c.data.message.status === "cancelled")).toBe(true);
+  });
+
+  it("空闲时只有排着的用户消息（还没交给 agent）：也标已取消，并通知驱动层把它自己队列里的丢掉", () => {
+    const stops = vi.fn();
+    ledger.onStopRequested(stops);
+    const id = post();
+    ledger.requestStop(conversationId);
+    expect(ledger.getMessage(id)?.status).toBe("cancelled");
+    expect(stops).toHaveBeenCalledTimes(1);
+    expect(ledger.snapshot().sessions[0]?.activity).toBe("idle");
   });
 
   it("重启后内存里没有活动状态，但有处理中的消息：也算在跑", () => {

@@ -60,6 +60,8 @@ class MemorySessionStore implements SessionStore {
 }
 
 interface FakeAgyTurn {
+  /** 等这个文件出现才出 user_input（模拟写进去了、agy 还没取走）。 */
+  holdUserInput?: string;
   steps?: Array<
     | { type: "text"; stepId?: number; deltas: string[]; usage?: Record<string, number>; omitDone?: boolean }
     | { type: "tool"; stepId?: number; name: string; parameters?: Record<string, unknown>; durationMs?: number }
@@ -81,6 +83,8 @@ interface FakeAgyScript {
   turns?: FakeAgyTurn[];
   defaultTurn?: FakeAgyTurn;
   rejectConversationOnce?: boolean;
+  /** SIGINT 时不出 result，直接退出。 */
+  silentSigint?: boolean;
 }
 
 interface FakeAgyLogEntry {
@@ -168,6 +172,10 @@ async function runTurn(userObj) {
     });
   }
 
+  if (turn.holdUserInput) {
+    while (!existsSync(turn.holdUserInput) && !interrupted) await sleep(20);
+    if (interrupted) return;
+  }
   const userStepId = stepCounter++;
   emit({
     event: "step_update",
@@ -270,7 +278,7 @@ async function runTurn(userObj) {
 process.on("SIGINT", () => {
   log({ kind: "signal", signal: "SIGINT" });
   interrupted = true;
-  if (busy) {
+  if (busy && !script.silentSigint) {
     emit({
       event: "result",
       conversation_id: conversationId,
@@ -1112,4 +1120,49 @@ describe("不写原始日志", () => {
     const files = readdirSync(t.dir, { recursive: true }).map(String);
     expect(files.filter((f) => f.endsWith(".jsonl") || f.includes(join("logs", "sessions")))).toEqual([]);
   });
+});
+
+describe("6. 一轮中途的消息（agy 不支持，照旧排队；停止时还没取走的标已取消）", () => {
+  it("不支持中途送达：忙时 send 返回 queued，这一轮结束再写", async () => {
+    const t = makeAgyHarness();
+    const gate = join(t.dir, "go");
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{ steps: [{ type: "waitFile", path: gate }, { type: "text", deltas: ["一"] }] }, { steps: [{ type: "text", deltas: ["二"] }] }] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("message.processing");
+    await expect(t.driver.send(s.id, user(2, "二"))).resolves.toEqual({ kind: "queued" });
+    writeFileSync(gate, "");
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [2]]);
+    expect(t.of("message.delivered").some((e) => e.midTurn)).toBe(false);
+  });
+
+  it("停止时：自己队列里排着的用户消息标已取消、不再发；系统消息停止后照常发", async () => {
+    const t = makeAgyHarness();
+    writeFileSync(join(t.dir, "script.json"), JSON.stringify({ turns: [{ steps: [{ type: "waitFile", path: join(t.dir, "never") }] }, { steps: [{ type: "text", deltas: ["收到汇报"] }] }] }));
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑"));
+    await t.waitFor("message.processing");
+    await expect(t.driver.send(s.id, user(2, "排着的"))).resolves.toEqual({ kind: "queued" });
+    await expect(t.driver.send(s.id, { messageIds: [3], source: "system", text: "【Worker #1 的汇报】做完了" })).resolves.toEqual({ kind: "queued" });
+    await t.driver.interrupt(s.id);
+    expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
+    expect(await t.waitFor("turn.ended", undefined, 2)).toMatchObject({ messageIds: [3], ok: true });
+  });
+
+  for (const silentSigint of [false, true]) {
+    it(`写进去了、agy 还没取走（没出 user_input）就点了停止：标已取消，不算这一轮被打断（${silentSigint ? "SIGINT 后直接退出" : "SIGINT 后先出 result"}）`, async () => {
+      const t = makeAgyHarness();
+      writeFileSync(join(t.dir, "script.json"), JSON.stringify({ silentSigint, turns: [{ holdUserInput: join(t.dir, "never") }] }));
+      const s = t.addSession();
+      await t.driver.send(s.id, user(1, "跑一个慢任务"));
+      await t.waitFor("message.delivered");
+      await t.driver.interrupt(s.id);
+      await t.waitFor("session.exited");
+      expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [1], reason: "stop" })]);
+      expect(t.of("message.processing")).toEqual([]);
+      expect(t.of("turn.ended").flatMap((e) => e.messageIds)).toEqual([]);
+      expect(t.of("session.exited").flatMap((e) => e.messageIds)).toEqual([]);
+    });
+  }
 });

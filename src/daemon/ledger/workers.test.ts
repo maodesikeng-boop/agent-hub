@@ -997,6 +997,40 @@ describe("审查后补的（PR #34）", () => {
     expect(line.text).toContain("没有文字回复");
   });
 
+  it("一轮中途送达的话（message.delivered midTurn）不算这一轮的开头：这一轮前面写的汇报照样交给项目经理", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "r1", text: report("做完了", "前半段就做完了")!, at: now });
+    const second = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.messageId;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [second], midTurn: true, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [second], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first, second], durationMs: 1, at: now });
+    expect(workerEventOf(workerLines().at(-1)!)).toMatchObject({ event: "report", status: "done", summary: "前半段就做完了" });
+  });
+
+  it("中途写进去的话没赶上这一轮、claude 为它另起的下一轮只调工具没文字：不把上一轮的汇报再发一遍", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const first = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [first], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [first], at: now });
+    // 中途写进去（编号比这一轮最后那段文字小），这一轮没读到它就结束了
+    const second = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "顺便看看 Y" }).data.messageId;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [second], midTurn: true, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "r1", text: report("做完了", "第一轮做完了")!, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [first], durationMs: 1, at: now });
+    // claude 为它另起一轮：只调工具，没有文字
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [second], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "agent.tool", uuid: "t1", toolUseId: "tu1", name: "Bash", input: { command: "ls" }, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [second], durationMs: 1, at: now });
+    const reports = workerLines().filter((m) => workerEventOf(m)?.event === "report");
+    expect(reports.map((m) => workerEventOf(m)?.summary)).toEqual(["第一轮做完了", ""]);
+    expect(reports[1]!.text).toContain("没有文字回复");
+  });
+
   it("只做了 /compact、没有文字的一轮：不给项目经理发汇报；Worker 对话里那行“已压缩上下文”照留", () => {
     const worker = start({ noWorktree: true }).data.worker;
     const sessionId = workerSessionId(worker.id);
@@ -1419,6 +1453,24 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     const line = userMessageLines()[0]!;
     expect(workerEventOf(line)?.summary).toBe("看这张图");
     expect(line.text).toContain(attachment.path);
+  });
+
+  it("一轮中途送达的（midTurn）：等 Worker 真的读到（处理中）才交给项目经理；读到之前点了停止、被取消的，项目经理那边没有这一行", () => {
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskMessage(worker).id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taskMessage(worker).id], at: now });
+    const cancelled = post("先别动 Y");
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [cancelled], midTurn: true, at: now });
+    expect(userMessageLines()).toEqual([]);
+    ledger.requestStop(worker.workerConversationId);
+    ledger.applyDriverEvent(sessionId, { type: "message.cancelled", messageIds: [cancelled], reason: "stop", at: now });
+    expect(ledger.getMessage(cancelled)!.status).toBe("cancelled");
+    expect(userMessageLines()).toEqual([]);
+    // 读到了的：处理中时交给项目经理，只一行
+    const taken = post("改 README");
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taken], midTurn: true, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taken], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taken], at: now });
+    expect(userMessageLines().map((m) => workerEventOf(m)?.summary)).toEqual(["改 README"]);
   });
 
   it("同一个 delivered 重放（重启后重发）：还是只有一行，只登记一次", () => {

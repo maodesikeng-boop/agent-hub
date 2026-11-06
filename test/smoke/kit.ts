@@ -67,12 +67,15 @@ exec "$real" "\${flag[@]}" "$@" > >(tee -a "$streams/$key.jsonl")
  */
 export function removeOwnVendorRecords(dbFile: string, home = homedir()): string[] {
   const db = openDatabase(dbFile);
-  let rows: { vendor: string; vendor_session_id: string; cwd: string }[];
   try {
-    rows = db.all("SELECT vendor, vendor_session_id, cwd FROM agent_sessions");
+    return removeVendorRecordsOf(db.all("SELECT vendor, vendor_session_id, cwd FROM agent_sessions"), home);
   } finally {
     db.close();
   }
+}
+
+/** 同上，会话的索引直接给（没有账本的冒烟，比如直接用驱动层的）。 */
+export function removeVendorRecordsOf(rows: { vendor: string; vendor_session_id: string; cwd: string }[], home = homedir()): string[] {
   const removed: string[] = [];
   const drop = (path: string) => {
     if (!existsSync(path)) return;

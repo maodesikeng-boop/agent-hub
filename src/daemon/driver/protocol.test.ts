@@ -9,11 +9,14 @@ import {
   buildUserLine,
   checkUserLine,
   detectArgsConflict,
+  interruptCancelled,
   isInterruptMarker,
   lineUuid,
   mergeUserTexts,
   parseApiRetry,
   parseAssistant,
+  parseCapabilities,
+  parseLifecycle,
   parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
@@ -367,5 +370,30 @@ describe("参数选错的报错", () => {
     expect(detectArgsConflict("No conversation found with session ID: x")).toBe("no_conversation");
     expect(detectArgsConflict("Error: port 8080 is already in use")).toBeNull();
     expect(detectArgsConflict("address already in use")).toBeNull();
+  });
+});
+
+describe("一轮中途写入（docs/mid-turn-messages.md 第 2、5 节）", () => {
+  it("user 行带 uuid（command_lifecycle 用），不给就不带；照样过写入前的校验", () => {
+    const line = buildUserLine("你好", [], undefined, "11111111-1111-4111-8111-111111111111");
+    expect(JSON.parse(line)).toEqual({ type: "user", uuid: "11111111-1111-4111-8111-111111111111", message: { role: "user", content: [{ type: "text", text: "你好" }] } });
+    expect(checkUserLine(line)).toBeNull();
+    expect(JSON.parse(buildUserLine("你好"))).not.toHaveProperty("uuid");
+  });
+
+  it("interrupt 控制消息：cancelQueued 时带 cancel_queued: true", () => {
+    expect(JSON.parse(buildInterruptLine("i1")).request).toEqual({ subtype: "interrupt" });
+    expect(JSON.parse(buildInterruptLine("i1", true)).request).toEqual({ subtype: "interrupt", cancel_queued: true });
+  });
+
+  it("init 的 capabilities、command_lifecycle、interrupt 回执里的 cancelled（照真 claude 2.1.314 的形状）", () => {
+    expect(parseCapabilities({ capabilities: ["msg_lifecycle_v1", 3, "interrupt_cancel_queued_v1"] })).toEqual(new Set(["msg_lifecycle_v1", "interrupt_cancel_queued_v1"]));
+    expect(parseCapabilities({})).toEqual(new Set());
+    expect(parseLifecycle({ type: "command_lifecycle", command_uuid: "u1", state: "started", uuid: "x" })).toEqual({ uuid: "u1", state: "started" });
+    expect(parseLifecycle({ type: "command_lifecycle", command_uuid: "u1", state: "weird" })).toBeNull();
+    expect(parseLifecycle({ type: "command_lifecycle", state: "started" })).toBeNull();
+    expect(interruptCancelled({ still_queued: [], cancelled: ["u2", 7] })).toEqual(["u2"]);
+    expect(interruptCancelled({ still_queued: [] })).toEqual([]);
+    expect(interruptCancelled(undefined)).toEqual([]);
   });
 });
