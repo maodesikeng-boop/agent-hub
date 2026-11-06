@@ -418,6 +418,8 @@ export interface DriverOptions {
   log?: (line: string) => void;
   /** 以下都有默认值，见 limits.ts；测试可以改小。 */
   idleCloseMs?: number;
+  /** 有后台任务时最多不关多久（默认 BACKGROUND_TASKS_HOLD_MAX_MS）。 */
+  backgroundHoldMaxMs?: number;
   interruptGraceMs?: number;
   /** 问正在跑的会话要命令列表最多等多久（queryCommands）。 */
   commandsTimeoutMs?: number;

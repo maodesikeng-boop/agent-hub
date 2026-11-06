@@ -115,6 +115,12 @@ export const INTERRUPT_GRACE_MS = 5_000;
 export const START_TIMEOUT_MS = 60_000;
 /** 一轮结束后空闲 10 分钟，关掉标准输入。 */
 export const IDLE_CLOSE_MS = 10 * 60_000;
+/**
+ * 会话里还有后台任务（Bash 的 run_in_background、Monitor、后台子代理）时，这一轮结束后最多不关多久；到点照常关。
+ * 后台任务在跑就不算闲着（否则等 CI、跑冒烟的命令超过 IDLE_CLOSE_MS 会连进程一起被杀），但卡死的任务不能让 claude 进程一直占着。
+ * 定 4 小时：等 CI、冒烟、构建这类事一般几十分钟，偶尔一两个小时；4 小时还没结束基本是卡死了，关掉后下次发消息 --resume 就行。
+ */
+export const BACKGROUND_TASKS_HOLD_MAX_MS = 4 * 60 * 60_000;
 /** 关机时最多等 10 秒，剩下的强制结束。 */
 export const SHUTDOWN_GRACE_MS = 10_000;
 

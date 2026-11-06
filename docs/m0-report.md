@@ -241,6 +241,61 @@
 - 每个工作目录会在 `~/.claude/projects/` 下生成一个目录，存会话记录和自动记忆。实验用到的这些目录已经删了。
 - `--include-hook-events` 会把所有钩子的开始和结果都输出成 `system/hook_started`、`system/hook_response`，调试权限钩子时很有用。
 
+## 后台任务事件（#69）
+
+**要弄清什么**：agent 用 Bash 的 `run_in_background`（或 Monitor）把命令放到后台后，claude 怎么告诉我们“后台还有任务在跑”。驱动层的空闲关闭（`IDLE_CLOSE_MS`，10 分钟）不能把这种会话当闲着，否则等 CI、跑冒烟的命令超过 10 分钟就跟着 claude 进程一起被杀。
+
+**出处**：
+- 官方文档 [Agent SDK TypeScript 参考](https://code.claude.com/docs/en/agent-sdk/typescript) 的 `SDKBackgroundTasksChangedMessage`（要求 Claude Code v2.1.203 以上）、`SDKTaskStartedMessage`、`SDKTaskUpdatedMessage`、`SDKTaskNotificationMessage` 几节。
+- 2026-11-06 用真 claude（2.1.314，`claude-haiku-5-5`，`-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages`，临时目录里）实测：让 agent 用 Bash 工具 `run_in_background: true` 跑 `sleep 30 && echo BGDONE`；另用 Monitor 工具跑 `sleep 20; echo MONDONE` 对照。
+
+**文档的说法**：
+- `system/background_tasks_changed` 在后台任务名单变化时发（任务开始、结束、被杀，前台 agent 转后台，条目的 `description`、`ambient`、`parent_task_id` 变了）。
+- `tasks` 是**完整的当前名单**，不是增量：“用每次的内容整个换掉缓存，别靠 `task_started`、`task_notification` 配对去算，下一次名单变化会纠正漏掉的事件。”
+- 一个任务结束时，它的 `task_updated`、`task_notification` 先到，再到把它从名单里去掉的 `background_tasks_changed`；别的先后不保证。
+- 启动时不发。进程起来（含重启）时把记的名单清空，等下一次变化再填。对已经在跑的会话再发 `initialize` 控制消息，claude 会在回应后补发一条当前名单（哪怕是空的）。
+- `ambient: true` 的条目不算会话的活（Claude Code 自己的任务、实时更新的 watcher），文档说统计活动时要排除。
+
+**实测的事件原样**（去掉 `session_id`）：
+
+```json
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bfzd9im3k","run_id":"0mw4e9un2-f55a4808","task_type":"local_bash","description":"Sleep 30 seconds then echo BGDONE"}],"uuid":"2d859a6c-…"}
+{"type":"system","subtype":"task_started","task_id":"bfzd9im3k","run_id":"0mw4e9un2-f55a4808","tool_use_id":"toolu_01HHTk7w…","description":"Sleep 30 seconds then echo BGDONE","is_backgrounded":true,"task_type":"local_bash","uuid":"034b6e2d-…"}
+…（任务跑完时）
+{"type":"system","subtype":"task_updated","task_id":"bfzd9im3k","run_id":"0mw4e9un2-f55a4808","patch":{"status":"completed","end_time":1793934513827},"uuid":"09bf36ec-…"}
+{"type":"system","subtype":"task_notification","task_id":"bfzd9im3k","run_id":"0mw4e9un2-f55a4808","tool_use_id":"toolu_01HHTk7w…","status":"completed","output_file":"…/tasks/bfzd9im3k.output","summary":"Background command \"Sleep 30 seconds then echo BGDONE\" completed (exit code 0)","uuid":"eefe17d6-…"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[],"uuid":"80736f28-…"}
+```
+
+字段：`tasks[]` 每条有 `task_id`、`run_id`、`task_type`（Bash 命令和 Monitor 都是 `local_bash`，子代理是 `local_agent`）、`description`，可能有 `subagent_type`、`parent_task_id`、`ambient`。实测的 Bash 后台任务和 Monitor 任务都没有 `ambient` 字段（不算 ambient）。
+
+**一次完整的事件顺序**（Bash 后台 `sleep 30`，时间从发消息起算，毫秒）：
+
+| 时间 | 事件 |
+|---|---|
+| 0 | 写入用户消息 |
+| ~2800 | `assistant`（tool_use，`run_in_background: true`） |
+| ~3170 | **`background_tasks_changed`（tasks 有 1 条）**、`task_started` |
+| ~3200 | `user`（tool_result：“Command running in background with ID …”） |
+| ~4130 | `assistant`（“started”） |
+| ~4190 | `result`（这一轮结束；**后台任务还在跑**） |
+| ~5900 | `commands_changed`（和后台任务无关） |
+| ~33200 | `task_updated`、`task_notification`，然后**`background_tasks_changed`（tasks 为空）** |
+| ~33310 | `init`（claude 自己开的一轮，没有我们写的消息；#64 已支持） |
+| ~34360 | `assistant`（汇报后台输出）、`result`（自己开的一轮结束） |
+
+要点：
+1. **后台任务通常在一轮里就出现，轮结束（`result`）时它还在跑**，所以光看“这一轮结束”会误判成闲着；必须记名单。
+2. 名单清零（`tasks: []`）在 claude 自己开的那一轮的 `init` **之前**约 100 毫秒到。所以清零时不能立刻当成“可以关”，但空闲计时远大于这个间隔，下一轮 `init` 会把计时停掉（驱动层 `#onInit` 本来就这么做）。
+3. 一次对话里这个事件可以反复来，每次都是完整名单；同一份名单重复发也无妨（整个换掉）。
+
+**对驱动层的影响**（`src/daemon/driver/background-tasks.ts`、`claude-driver.ts` 的 `#armIdle`、`#onBackgroundTasksChanged`）：
+- 每个会话记当前后台任务名单（按 `task_id` 去重，不算 `ambient` 的）。每次事件整个换掉；`tasks` 不是数组的残缺事件忽略。
+- 有后台任务时，空闲计时不用 `IDLE_CLOSE_MS`，换成兜底 `BACKGROUND_TASKS_HOLD_MAX_MS`（4 小时，见 `limits.ts`）；任务清零时（正在算空闲）从头重新算 `IDLE_CLOSE_MS`。一轮在跑时不动计时，轮结束 `#afterTurn` 按当时的名单算。兜底到点照常关，记一条日志。
+- 进程起来、退出（崩溃、停止、空闲关闭、end、关机）时把名单清空：后台任务跟着进程走，下一个进程不带旧的。
+- 冒烟 S26（`test/smoke/background-idle.ts`）：空闲调到 6 秒、后台 `sleep 24`，没被杀、自己开的一轮正常汇报；S26b 对照（兜底压到最短）确实被杀。
+- agy、codex 驱动：同样有空闲关闭，但没有对应的信号，这次没改，驱动层里没有认出后台任务的信号（agy 没实测，codex 本机没装），这次没改。
+
 ## 脚本
 
 都在 `experiments/m0/`，只用系统自带的 `python3`、`sh`、`curl`。

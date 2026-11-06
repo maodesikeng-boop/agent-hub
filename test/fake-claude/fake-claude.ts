@@ -56,7 +56,12 @@ export type FakeStep =
    * 先出一个 name 为 "Bash" 的 tool_use，跑完再出 tool_result（内容是标准输出 + 标准错误；退出码不是 0 时
    * 开头加 “Exit code N”，is_error: true）。
    */
-  | { bash: string };
+  | { bash: string }
+  /** 发一条 system/background_tasks_changed，tasks 是完整名单（见 BackgroundTaskSpec）。 */
+  | { backgroundTasks: BackgroundTaskSpec[] };
+
+/** 字符串就是 task_id，其余字段照真 claude（实测见 docs/m0-report.md）补上；对象原样发（测 ambient、残缺条目）。 */
+export type BackgroundTaskSpec = string | Record<string, unknown>;
 
 export interface FakeTurn {
   steps?: FakeStep[];
@@ -72,6 +77,11 @@ export interface FakeTurn {
    * 到点时手上有一轮在跑就等它跑完。标准输入关了也等这一轮开过、跑完再退出。
    */
   selfTurn?: FakeTurn & { afterMs?: number };
+  /**
+   * result 发出去之后，每隔 afterMs（从 result 起算）发一条 system/background_tasks_changed（不管那时忙不忙，像真 claude 在轮外报任务结束）。
+   * tasks 给 "malformed" 就发一条没有 tasks 数组的。
+   */
+  backgroundTasksAfter?: Array<{ afterMs: number; tasks: BackgroundTaskSpec[] | "malformed" }>;
 }
 
 export interface FakeScript {
@@ -462,6 +472,8 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
       log({ kind: "orphan", pid: process.pid, orphanPid: orphan.pid ?? -1 });
     } else if ("spawnChild" in step) {
       spawnChild(step.spawnChild);
+    } else if ("backgroundTasks" in step) {
+      emitBackgroundTasks(step.backgroundTasks);
     } else if ("bash" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: "Bash", input: { command: step.bash } }]);
@@ -499,12 +511,25 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn): Prom
   }
   const r = turn.result ?? {};
   result(r.subtype ?? "success", r.isError ?? false, r.result ?? lastText, startedAt, turn.usage, content === null);
+  for (const ev of turn.backgroundTasksAfter ?? []) setTimeout(() => emitBackgroundTasks(ev.tasks), ev.afterMs);
   const self = turn.selfTurn;
   finishTurn(self !== undefined);
   if (self !== undefined) {
     const fire = () => (busy ? setTimeout(fire, 20) : void runTurn(null, self));
     setTimeout(fire, self.afterMs ?? 50);
   }
+}
+
+function emitBackgroundTasks(tasks: BackgroundTaskSpec[] | "malformed"): void {
+  const entry = (t: BackgroundTaskSpec) =>
+    typeof t === "string" ? { task_id: t, run_id: `run-${t}`, task_type: "local_bash", description: `fake task ${t}` } : t;
+  emit({
+    type: "system",
+    subtype: "background_tasks_changed",
+    ...(tasks === "malformed" ? {} : { tasks: tasks.map(entry) }),
+    uuid: randomUUID(),
+    session_id: sessionId,
+  });
 }
 
 /** sh -c 跑一条命令：环境变量、工作目录都是自己的；标准输入不接（/dev/null）。 */
