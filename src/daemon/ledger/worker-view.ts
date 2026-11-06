@@ -17,6 +17,7 @@ import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
 import { toWorkerRecord } from "./rows.ts";
 import { workerStatsLines } from "./worker-stats.ts";
+import { createLedgerWorkerSearch } from "./worker-search.ts";
 import type { LiveSession } from "./sessions.ts";
 import type { LedgerSteps, StepRow } from "./steps.ts";
 
@@ -103,6 +104,7 @@ export interface WorkerViewDeps {
 export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, deps: WorkerViewDeps) {
   const { now } = ctx;
   const { ownWorker, workerSession, notStarted, liveOf } = deps;
+  const workerSearch = createLedgerWorkerSearch(ctx);
 
   /** 状态：已收工、准备中、在干活、空闲等验收。 */
   const stateOf = (worker: WorkerDbRow, live: LiveSession, lastEnded: Turn | null): string => {
@@ -149,6 +151,10 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 
   const show = (caller: { pmId: number }, args: HubArgs<"worker.show">, context: HubCallContext): HubResult<"worker.show"> => {
     const worker = ownWorker(caller.pmId, args.workerId);
+    if (args.task === true && args.report !== undefined) throw fail("invalid", "--task 和 --report 只能用一个");
+    // 原文：只出正文，不加别的
+    if (args.task === true) return { text: worker.task, data: { worker: toWorkerRecord(worker) as WorkerRecord } };
+    if (args.report !== undefined) return { text: workerSearch.reportText(worker, args.report), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
     const session = workerSession(worker.id);
     const live = liveOf(session.id);
     const turns = turnsOf(steps.rows(session.id));
@@ -286,7 +292,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     return { text, data: { worker: toWorkerRecord(worker), steps: shown } };
   };
 
-  return { show, log };
+  return { show, log, search: workerSearch.search };
 }
 
 const PR_STATE_LABELS: Readonly<Record<string, string>> = { OPEN: "开着", MERGED: "已合并", CLOSED: "已关闭" };

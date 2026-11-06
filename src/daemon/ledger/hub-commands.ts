@@ -117,6 +117,8 @@ export function createLedgerHubCommands(
         return workerView.show(caller, args as HubArgs<"worker.show">, context);
       case "worker.log":
         return workerView.log(caller, args as HubArgs<"worker.log">);
+      case "worker.search":
+        return workerView.search(caller, args as HubArgs<"worker.search">);
       case "ask": {
         const { text } = args as HubArgs<"ask">;
         if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");

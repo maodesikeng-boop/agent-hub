@@ -8,7 +8,7 @@ import type { ConversationId, PmId, SessionId, WorkerId } from "../../shared/dom
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { WORKER_LOG_MAX_STEPS, WORKER_SEARCH_CONTEXT_CHARS, WORKER_SEARCH_DEFAULT_LIMIT, WORKER_SEARCH_MAX_LIMIT, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { bundledModelCatalog } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -17,6 +17,7 @@ import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
+import { snippetOf } from "./worker-search.ts";
 import { clipText, formatClock } from "./worker-view.ts";
 
 let db: Db;
@@ -613,5 +614,156 @@ describe("clipText", () => {
   it("不超长原样，超长截断加省略号，按字符不按字节", () => {
     expect(clipText("abc", 5)).toBe("abc");
     expect(clipText("一二三四五六", 4)).toBe("一二三…");
+  });
+});
+
+// ---- hub worker search / show --task / --report ----
+
+const REPORT_START = "=== 汇报 ===";
+const REPORT_END = "=== 汇报结束 ===";
+const reportText = (summary: string, extra = "") => `${extra}\n\n${REPORT_START}\n状态: 做完了\n摘要: ${summary}\n提交: abc\n测试: ok\n问题: 无\n${REPORT_END}`;
+
+function startTask(title: string, task: string, caller = lin.sessionId): WorkerId {
+  return ledger.hubCall(caller, "worker.start", { title, task, noWorktree: true }, {}).data.worker.id;
+}
+/** Worker 干完一轮并汇报：第一轮回任务说明那条消息，之后的先由项目经理 send 一条。 */
+function reportTurn(workerId: WorkerId, text: string, caller = lin.sessionId): void {
+  const first = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", `pm:worker:${workerId}:task`)!.id;
+  const hasReport = db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE worker_id = ? AND kind = 'worker' AND json_extract(meta, '$.event') = 'report'", workerId)!.n;
+  const id = hasReport === 0 ? first : (ledger.hubCall(caller, "worker.send", { workerId, text: "接着做" }, {}).data as { messageId: number }).messageId;
+  emit(workerId, { type: "message.delivered", messageIds: [id], ...at() });
+  emit(workerId, { type: "message.processing", messageIds: [id], ...at() });
+  emit(workerId, { type: "agent.text", uuid: `rt-${workerId}-${id}`, text, ...at() });
+  endTurn(workerId, { messageIds: [id] });
+  advance(1_000);
+}
+const search = (keywords: string[], limit?: number, caller = lin.sessionId) =>
+  ledger.hubCall(caller, "worker.search", limit === undefined ? { keywords } : { keywords, limit }, {});
+const showTask = (workerId: WorkerId, caller = lin.sessionId) => ledger.hubCall(caller, "worker.show", { workerId, task: true }, {});
+const showReport = (workerId: WorkerId, n?: number, caller = lin.sessionId) => ledger.hubCall(caller, "worker.show", { workerId, report: n ?? "latest" }, {});
+
+describe("hub worker search", () => {
+  it("标题、任务说明、汇报都能搜；一处一行，写编号、标题、状态、命中在哪和上下文", () => {
+    const w = startTask("修登录", "登录页的 Bug：点按钮没反应");
+    reportTurn(w, reportText("按钮修好了", "改了 handler"));
+    const hits = search(["登录"]).data.hits;
+    expect(hits.map((h) => h.where)).toEqual(["task", "title"]);
+    const text = search(["按钮"]).text;
+    expect(text).toContain("搜到 2 处包含 “按钮”");
+    expect(text).toContain(`#${w}“修登录” · 进行中 · 汇报 #1：`);
+    expect(text).toContain(`#${w}“修登录” · 进行中 · 任务：登录页的 Bug：点按钮没反应`);
+    expect(search(["handler"]).data.hits).toMatchObject([{ workerId: w, where: "report", report: 1 }]);
+  });
+
+  it("多个关键词都要包含（在同一处）；中文按子串；英文不分大小写", () => {
+    const a = startTask("A", "修 Login 页面的 Timeout");
+    startTask("B", "修登录页面");
+    startTask("C", "Login 之外的事，Timeout 在别的地方");
+    expect(search(["login"]).data.hits.map((h) => h.workerId)).toHaveLength(2);
+    expect(search(["LOGIN", "timeout"]).data.hits.map((h) => h.workerId)).toEqual([a + 2, a]);
+    expect(search(["登录", "页面"]).data.hits.map((h) => h.workerId)).toEqual([a + 1]);
+    // 子串：不是整词
+    expect(search(["录页"]).data.hits.map((h) => h.workerId)).toEqual([a + 1]);
+    // 一个关键词没有就不算
+    expect(search(["Login", "不存在"]).data.hits).toEqual([]);
+  });
+
+  it("只搜自己派的：别的项目经理派的搜不到；已收工的也搜得到，状态写已收工", () => {
+    const mine = startTask("我的", "独一无二的暗号 alpha");
+    ledger.hubCall(zhou.sessionId, "project.create", { folder: main }, {});
+    const theirs = startTask("别人的", "也有暗号 alpha", zhou.sessionId);
+    expect(search(["alpha"]).data.hits.map((h) => h.workerId)).toEqual([mine]);
+    expect(search(["alpha"], undefined, zhou.sessionId).data.hits.map((h) => h.workerId)).toEqual([theirs]);
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: mine }, {});
+    const text = search(["alpha"]).text;
+    expect(text).toContain(`#${mine}“我的” · 已收工 · 任务：`);
+  });
+
+  it("最新的在前：按汇报或派活的时间倒序", () => {
+    const old = startTask("旧", "话题 zeta");
+    advance(10_000);
+    const fresh = startTask("新", "话题 zeta");
+    advance(10_000);
+    reportTurn(old, reportText("zeta 的新结论"));
+    expect(search(["zeta"]).data.hits.map((h) => `${h.workerId}${h.where}`)).toEqual([`${old}report`, `${fresh}task`, `${old}task`]);
+  });
+
+  it("上下文：前后合计不超过 80 个字，被截掉的那头有省略号；换行并成空格", () => {
+    const long = `${"前".repeat(100)}关键${"后".repeat(100)}`;
+    const w = startTask("长", long);
+    const hit = search(["关键"]).data.hits[0]!;
+    expect(hit.workerId).toBe(w);
+    const body = hit.snippet.replace(/…/g, "");
+    expect([...body].length).toBe(WORKER_SEARCH_CONTEXT_CHARS);
+    expect(body).toContain("关键");
+    expect(hit.snippet.startsWith("…") && hit.snippet.endsWith("…")).toBe(true);
+    // 命中在开头：只有后面有省略号；短文本原样
+    expect(snippetOf(`关键${"后".repeat(200)}`, ["关键"])).toMatch(/^关键后+…$/);
+    expect(snippetOf("短 文\n本", ["文"])).toBe("短 文 本");
+    expect(snippetOf("Hello WORLD", ["world"])).toBe("Hello WORLD");
+  });
+
+  it("--limit：默认 20 条，可调，超过上限报错；超出的提示还有几处", () => {
+    for (let i = 0; i < WORKER_SEARCH_DEFAULT_LIMIT + 3; i++) startTask(`W${i}`, "批量 omega");
+    const all = search(["omega"]);
+    expect(all.data.hits).toHaveLength(WORKER_SEARCH_DEFAULT_LIMIT);
+    expect(all.text).toContain(`搜到 ${WORKER_SEARCH_DEFAULT_LIMIT + 3} 处`);
+    expect(all.text).toContain("还有 3 处没列");
+    expect(search(["omega"], 2).data.hits).toHaveLength(2);
+    expect(search(["omega"], WORKER_SEARCH_MAX_LIMIT).data.hits).toHaveLength(WORKER_SEARCH_DEFAULT_LIMIT + 3);
+    for (const bad of [0, -1, 1.5, WORKER_SEARCH_MAX_LIMIT + 1]) expectLedgerError(() => search(["omega"], bad), "invalid", /--limit/);
+  });
+
+  it("没命中：一句话；关键词不合法报错", () => {
+    startTask("X", "什么都没有");
+    const r = search(["不存在", "foo"]);
+    expect(r.data.hits).toEqual([]);
+    expect(r.text).toBe("没有搜到同时包含 “不存在” “foo” 的 Worker 标题、任务说明或汇报。");
+    expectLedgerError(() => search([]), "invalid", /关键词/);
+    expectLedgerError(() => search(["  "]), "invalid", /关键词/);
+    expectLedgerError(() => search(Array.from({ length: 11 }, (_, i) => `k${i}`)), "invalid", /最多/);
+    expectLedgerError(() => search(["x".repeat(101)]), "invalid", /最多/);
+  });
+
+  it("项目经理之外不能用：Worker 调是 forbidden", () => {
+    const w = startTask("X", "任务");
+    expectLedgerError(() => search(["任务"], undefined, sessionOf(w)), "forbidden");
+  });
+});
+
+describe("hub worker show --task / --report", () => {
+  it("--task 输出任务说明原文，不加任何别的", () => {
+    const task = "第一行\n第二行 `代码`\n  缩进";
+    const w = startTask("T", task);
+    expect(showTask(w).text).toBe(task);
+  });
+
+  it("--report 是最新一轮，--report N 是第 N 轮（从旧到新，和 search 的“汇报 #N”一致）；输出汇报原文，不带“【Worker … 的汇报】”开头", () => {
+    const w = startTask("R", "任务");
+    const r1 = reportText("第一轮", "一");
+    const r2 = reportText("第二轮", "二");
+    const r3 = reportText("第三轮", "三");
+    reportTurn(w, r1);
+    reportTurn(w, r2);
+    reportTurn(w, r3);
+    expect(showReport(w).text).toBe(r3);
+    expect(showReport(w, 1).text).toBe(r1);
+    expect(showReport(w, 2).text).toBe(r2);
+    expect(showReport(w, 3).text).toBe(r3);
+    expect(showReport(w).text).not.toContain("的汇报】");
+    expectLedgerError(() => showReport(w, 4), "invalid", /只汇报过 3 次/);
+    expectLedgerError(() => showReport(w, 0), "invalid", /正整数/);
+    // search 里的“汇报 #2”读出来就是 show --report 2
+    expect(search(["第二轮"]).text).toContain("汇报 #2：");
+    expect(showReport(w, search(["第二轮"]).data.hits[0]!.report).text).toBe(r2);
+  });
+
+  it("还没汇报过：报错；--task 和 --report 不能一起；只能看自己派的；不带参数的 show 不变", () => {
+    const w = startTask("R", "任务");
+    expectLedgerError(() => showReport(w), "invalid", /还没有汇报过/);
+    expectLedgerError(() => ledger.hubCall(lin.sessionId, "worker.show", { workerId: w, task: true, report: "latest" }, {}), "invalid", /只能用一个/);
+    expectLedgerError(() => showTask(w, zhou.sessionId), "forbidden", /不是你派的/);
+    expectLedgerError(() => showReport(w, 1, zhou.sessionId), "forbidden", /不是你派的/);
+    expect(show(w).text).toContain(`Worker #${w}“R”：`);
   });
 });

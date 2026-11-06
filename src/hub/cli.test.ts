@@ -232,6 +232,11 @@ describe("hub cli", () => {
       [["worker", "log", "3", "--last", "5"], "worker.log", { workerId: 3, last: 5 }],
       [["worker", "log", "--last", "200", "3"], "worker.log", { workerId: 3, last: 200 }],
       [["worker", "log", "3", "--stats"], "worker.log", { workerId: 3, stats: true }],
+      [["worker", "show", "3", "--task"], "worker.show", { workerId: 3, task: true }],
+      [["worker", "show", "3", "--report"], "worker.show", { workerId: 3, report: "latest" }],
+      [["worker", "show", "3", "--report", "2"], "worker.show", { workerId: 3, report: 2 }],
+      [["worker", "search", "登录", "Bug"], "worker.search", { keywords: ["登录", "Bug"] }],
+      [["worker", "search", "x", "--limit", "100"], "worker.search", { keywords: ["x"], limit: 100 }],
     ] as const)("hub %j → %s", async (argv, command, args) => {
       expect((await hub([...argv])).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command, args }]);
@@ -258,6 +263,16 @@ describe("hub cli", () => {
       [["worker", "show", "abc"]],
       [["worker", "show", "3", "4"]],
       [["worker", "show", "3", "--last", "5"]],
+      [["worker", "show", "3", "--task", "--report"]],
+      [["worker", "show", "3", "--task", "2"]],
+      [["worker", "show", "3", "--report", "0"]],
+      [["worker", "show", "3", "--report", "x"]],
+      [["worker", "show", "3", "--report", "2", "3"]],
+      [["worker", "search"]],
+      [["worker", "search", "x", "--limit", "0"]],
+      [["worker", "search", "x", "--limit", "101"]],
+      [["worker", "search", "x", "--limit", "abc"]],
+      [["worker", "search", "x", "--stats"]],
       [["worker", "log"]],
       [["worker", "log", "3", "--last", "0"]],
       [["worker", "log", "3", "--last", "201"]],

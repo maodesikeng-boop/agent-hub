@@ -135,7 +135,19 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
-  "worker.show": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
+  "worker.show": {
+    type: "object",
+    additionalProperties: false,
+    required: ["workerId"],
+    properties: { workerId: workerIdField, task: { type: "boolean" }, report: { oneOf: [{ type: "integer" }, { const: "latest" }] } },
+  },
+  // 关键词个数、长度、limit 的范围由账本查，报中文原因
+  "worker.search": {
+    type: "object",
+    additionalProperties: false,
+    required: ["keywords"],
+    properties: { keywords: { type: "array", items: { type: "string" } }, limit: { type: "integer" } },
+  },
   // last 的范围（1 到 WORKER_LOG_MAX_STEPS）由账本查，报中文原因
   "worker.log": {
     type: "object",
