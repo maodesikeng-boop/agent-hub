@@ -49,6 +49,9 @@ export interface ChartRenderer {
   sourceLanguage: string;
 }
 
+// Vega-Lite：点图本身不放大（悬停提示要用），源码按 json 上色；vegalite 是别名。
+const VEGA_LITE: ChartRenderer = { load: () => import("./vega-lite.ts"), zoomOnClick: false, sourceLanguage: "json" };
+
 /**
  * 语言名（小写）→ 渲染器。加一种图表：在这里加一行（别名写多行）。
  * 比如：`mermaid: { load: () => import("./mermaid.ts"), zoomOnClick: true, sourceLanguage: "mermaid" }`。
@@ -56,6 +59,8 @@ export interface ChartRenderer {
  */
 export const CHART_RENDERERS: Record<string, ChartRenderer> = {
   mermaid: { load: () => import("./mermaid.ts"), zoomOnClick: true, sourceLanguage: "mermaid" },
+  "vega-lite": VEGA_LITE,
+  vegalite: VEGA_LITE,
 };
 
 export function isChartLanguage(language: string): boolean {
