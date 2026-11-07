@@ -3,13 +3,16 @@
 // - 配置：~/.gemini/config/mcp_config.json 的 mcpServers（stdio 有 command/args/env，远程有 url/serverUrl/httpUrl）；
 //   ~/.gemini/antigravity-cli/mcp/<服务器>/ 里有缓存、但配置里找不到的服务器（插件带的）问不到，记为不可用（整个拒）；
 // - 问不到清单的（起不来、超时、要 OAuth 认证）一律当不可用：只读 Worker 里拒，不放行未知的东西；
+// - 起 stdio 服务器问清单也是在跑第三方代码：必须和只读 Worker 同样包在外层只读沙箱里、环境变量用 Worker 那份（去掉 HUB_*）；没有 OS 沙箱就不问（该服务器整个当不可用）；
 // - 不在启动路径上做重活：结果按配置内容缓存 AGY_CONNECTOR_CACHE_MS，同一时刻多个会话共用一次查询；每个服务器最多等 AGY_CONNECTOR_LIST_TIMEOUT_MS。
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, type ConnectorToolAnnotations } from "../../shared/index.ts";
-import type { AgyConnectorCatalog } from "./readonly-agy.ts";
+import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
+import { buildChildEnv } from "./protocol.ts";
+import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly-agy.ts";
+import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "./write-scope.ts";
 
 /** MCP 服务器的启动方式（agy 的 mcp_config.json 里一项）。 */
 export interface McpServerSpec {
@@ -27,8 +30,48 @@ export interface McpListedTool {
   annotations?: ConnectorToolAnnotations | null;
 }
 
-/** 向一个服务器问工具清单；失败（起不来、超时、协议错）抛错。 */
-export type ListMcpTools = (name: string, spec: McpServerSpec, timeoutMs: number) => Promise<McpListedTool[]>;
+/** 探测进程怎么起：命令已经包好外层只读沙箱、env 是 Worker 那份；cleanup 在进程结束后调（删私有临时目录）。 */
+export interface McpProbeLaunch {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cleanup: () => void;
+}
+/** 把一个 stdio 服务器的启动命令包成探测进程（extraEnv 是配置里这个服务器自己的 env）；没有 OS 沙箱返回 null（不探测）。 */
+export type McpProbeLauncher = (base: SpawnCommand, extraEnv: Record<string, string>) => McpProbeLaunch | null;
+
+/** 向一个服务器问工具清单；失败（起不来、超时、协议错、stdio 服务器没有探测沙箱）抛错。远程服务器只发 HTTP，不起本地进程，不需要沙箱。 */
+export type ListMcpTools = (name: string, spec: McpServerSpec, timeoutMs: number, launcher?: McpProbeLauncher) => Promise<McpListedTool[]>;
+
+/** 探测进程的环境里去掉的变量（守护进程给 Worker 的 hub 令牌和 socket 等）：服务器不需要，也不该看到。 */
+const PROBE_ENV_STRIPPED_PREFIX = "HUB_";
+
+export interface ReadonlyProbeLauncherOptions {
+  policy: ReadonlyPolicy;
+  homeDir: string;
+  /** 守护进程自己的环境（process.env）：和 Worker 一样先去掉父会话变量。 */
+  baseEnv: Record<string, string | undefined>;
+  /** 驱动给 Worker 加的环境变量（不含每个会话自己的 files.env）。 */
+  extraEnv?: Record<string, string>;
+  /** 包外层只读沙箱（和 Worker 同一个函数）。 */
+  wrap: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
+}
+
+/** 探测用的启动器：每次起一个私有临时目录（TMPDIR 指到这）、包只读沙箱（connectorProbeSandboxInput）、env 用 Worker 那份去掉 HUB_*。没有 OS 沙箱返回 null。 */
+export function createReadonlyProbeLauncher(options: ReadonlyProbeLauncherOptions): McpProbeLauncher {
+  return (base, extraEnv) => {
+    const tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-probe-"));
+    const cleanup = () => rmSync(tmpDir, { recursive: true, force: true });
+    const wrapped = options.wrap(base, connectorProbeSandboxInput({ homeDir: realpathSync(options.homeDir), tmpDir, policy: options.policy }));
+    if (!wrapped.osSandboxed) {
+      cleanup();
+      return null;
+    }
+    const workerEnv = buildChildEnv(options.baseEnv, options.extraEnv);
+    const env = Object.fromEntries(Object.entries(workerEnv).filter(([k]) => !k.startsWith(PROBE_ENV_STRIPPED_PREFIX)));
+    return { command: wrapped.command, args: wrapped.args, env: { ...env, TMPDIR: tmpDir, ...extraEnv }, cleanup };
+  };
+}
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MAX_LIST_PAGES = 20;
@@ -58,13 +101,16 @@ export function parseToolsList(result: unknown): { tools: McpListedTool[]; nextC
 }
 
 /** stdio：起进程，换行分隔的 JSON-RPC：initialize → notifications/initialized → tools/list（翻页）。 */
-function listViaStdio(name: string, spec: McpServerSpec, timeoutMs: number): Promise<McpListedTool[]> {
+function listViaStdio(name: string, spec: McpServerSpec, timeoutMs: number, launcher: McpProbeLauncher | undefined): Promise<McpListedTool[]> {
   return new Promise((resolve, reject) => {
     if (typeof spec.command !== "string" || spec.command === "") return reject(new Error(`${name}: 没有 command`));
-    const child = spawn(spec.command, spec.args ?? [], {
+    const launch = launcher?.({ command: spec.command, args: spec.args ?? [] }, spec.env ?? {}) ?? null;
+    if (launch === null) return reject(new Error(`${name}: 没有 OS 沙箱，不起本地服务器探测`));
+    const child = spawn(launch.command, launch.args, {
       cwd: homedir(),
-      env: { ...process.env, ...(spec.env ?? {}) },
+      env: launch.env,
       stdio: ["pipe", "pipe", "ignore"],
+      detached: true,
     });
     const tools: McpListedTool[] = [];
     let done = false;
@@ -75,7 +121,12 @@ function listViaStdio(name: string, spec: McpServerSpec, timeoutMs: number): Pro
       if (done) return;
       done = true;
       clearTimeout(timer);
-      child.kill("SIGKILL");
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL"); // 整个进程组（npx 之类会再起子进程）
+      } catch {
+        child.kill("SIGKILL");
+      }
+      launch.cleanup();
       if (error) reject(error);
       else resolve(tools);
     };
@@ -163,8 +214,8 @@ async function listViaHttp(name: string, spec: McpServerSpec, timeoutMs: number)
 }
 
 /** 默认的问法：有 command 走 stdio，有 url 走 HTTP。 */
-export const listMcpTools: ListMcpTools = (name, spec, timeoutMs) =>
-  typeof spec.command === "string" && spec.command !== "" ? listViaStdio(name, spec, timeoutMs) : listViaHttp(name, spec, timeoutMs);
+export const listMcpTools: ListMcpTools = (name, spec, timeoutMs, launcher) =>
+  typeof spec.command === "string" && spec.command !== "" ? listViaStdio(name, spec, timeoutMs, launcher) : listViaHttp(name, spec, timeoutMs);
 
 /** agy 的 MCP 配置：{ mcpServers: { <名字>: <启动方式> } }；读不了或格式不对当空。 */
 export function readAgyMcpServers(homeDir: string, readFile: (path: string) => string = (p) => readFileSync(p, "utf8")): Record<string, McpServerSpec> {
@@ -189,6 +240,8 @@ export function readAgyCachedMcpServerNames(homeDir: string, listDir: (path: str
 export interface AgyConnectorResolverOptions {
   homeDir?: string;
   listTools?: ListMcpTools;
+  /** 起 stdio 服务器的探测启动器（只读沙箱 + Worker 的环境）；不给就不探测 stdio 服务器（整个当不可用）。 */
+  launcher?: McpProbeLauncher;
   timeoutMs?: number;
   cacheMs?: number;
   now?: () => number;
@@ -202,12 +255,13 @@ export async function buildAgyConnectorCatalog(
   cachedNames: readonly string[],
   listTools: ListMcpTools,
   timeoutMs: number,
+  launcher?: McpProbeLauncher,
 ): Promise<AgyConnectorCatalog> {
   const catalog: AgyConnectorCatalog = { servers: {}, unlistable: [] };
   await Promise.all(
     Object.entries(servers).map(async ([name, spec]) => {
       try {
-        const tools = await listTools(name, spec, timeoutMs);
+        const tools = await listTools(name, spec, timeoutMs, launcher);
         catalog.servers[name] = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? null]));
       } catch {
         catalog.unlistable.push(name);
@@ -237,7 +291,7 @@ export function createAgyConnectorResolver(options: AgyConnectorResolverOptions 
     const names = cachedNames(homeDir);
     const key = JSON.stringify([servers, names]);
     if (cached !== null && cached.key === key && now() - cached.at < cacheMs) return cached.value;
-    const value = buildAgyConnectorCatalog(servers, names, listTools, timeoutMs);
+    const value = buildAgyConnectorCatalog(servers, names, listTools, timeoutMs, options.launcher);
     cached = { key, at: now(), value };
     return value;
   };

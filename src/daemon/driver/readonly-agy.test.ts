@@ -9,6 +9,7 @@ import {
   agyReadonlySandboxInput,
   agyReadonlySettings,
   checkAgyConnectorCall,
+  connectorProbeSandboxInput,
   deniedActionsOf,
   deniedContinueText,
   describeDeniedAction,
@@ -109,6 +110,19 @@ describe("checkAgyConnectorCall：调用时的兜底检查", () => {
     expect(check("mcp_other_tool", {})).not.toBeNull();
   });
 
+  it("扁平名撞名（a-b/c 和 a_b/c 都是 mcp_a_b_c）：分不清，一律拒，哪怕撞上的有只读的、有手动补充", () => {
+    const clash: AgyConnectorCatalog = {
+      servers: { "a-b": { c: { readOnlyHint: true } }, a_b: { c: { readOnlyHint: false } } },
+      unlistable: [],
+    };
+    expect(checkAgyConnectorCall("mcp_a_b_c", {}, policy(), clash)).toContain("分不清");
+    expect(checkAgyConnectorCall("mcp_a_b_c", {}, policy({ extraAllow: ["a-b/c"] }), clash)).toContain("分不清");
+    // 两个都只读也拒（撞名一律拒）；不撞的照常
+    const bothRo: AgyConnectorCatalog = { servers: { "a-b": { c: { readOnlyHint: true } }, a_b: { c: { readOnlyHint: true } }, ok: { x: { readOnlyHint: true } } }, unlistable: [] };
+    expect(checkAgyConnectorCall("mcp_a_b_c", {}, policy(), bothRo)).toContain("分不清");
+    expect(checkAgyConnectorCall("mcp_ok_x", {}, policy(), bothRo)).toBeNull();
+  });
+
   it("手动补充放行、手动排除拒（压过只读标记）", () => {
     expect(check("call_mcp_tool", { ServerName: "jenkins", ToolName: "get_build" }, policy({ extraAllow: ["jenkins/get_build"] }))).toBeNull();
     expect(check("mcp_slack_read_channel", {}, policy({ deny: ["slack/*"] }))).not.toBeNull();
@@ -119,8 +133,19 @@ describe("checkAgyConnectorCall：调用时的兜底检查", () => {
   });
 });
 
+describe("connectorProbeSandboxInput：探测 MCP 服务器用的只读沙箱", () => {
+  it("只有私有临时目录和通用缓存目录可写，agy 运行时目录不放；密钥照禁（含钥匙串）", () => {
+    const input = connectorProbeSandboxInput({ homeDir: "/Users/u", tmpDir: "/tmp/probe-1", policy: policy(), realpath: (p) => p });
+    expect(input.tmpDir).toBe("/tmp/probe-1");
+    expect(input.writableDirs).toEqual(READONLY_CACHE_DIRS.map((d) => `/Users/u/${d}`));
+    expect(input.writableFileRegexes).toEqual([]);
+    expect(input.secretPaths).toContain("/Users/u/.ssh");
+    expect(input.secretPaths).toContain("/Users/u/Library/Keychains");
+  });
+});
+
 describe("agyReadonlySandboxInput", () => {
-  it("可写的只有私有临时目录、agy 运行时目录（含 bin：agentapi 脚本）、通用缓存目录；密钥原样交给沙箱；路径都过 realpath", () => {
+  it("可写的只有私有临时目录、agy 运行时目录、通用缓存目录和几个具体文件（bin/agentapi*、mcp 两层）；密钥原样交给沙箱；路径都过 realpath", () => {
     const real = (p: string) => p.replace(/^\/tmp\//, "/private/tmp/");
     const input = agyReadonlySandboxInput({ homeDir: "/Users/u", tmpDir: "/tmp/ro-1", policy: policy(), realpath: real });
     expect(input.tmpDir).toBe("/private/tmp/ro-1");
@@ -128,7 +153,13 @@ describe("agyReadonlySandboxInput", () => {
       ...AGY_RUNTIME_DIRS.map((d) => `/Users/u/.gemini/antigravity-cli/${d}`),
       ...READONLY_CACHE_DIRS.map((d) => `/Users/u/${d}`),
     ]);
-    expect(input.writableDirs).toContain("/Users/u/.gemini/antigravity-cli/bin");
+    // bin/、mcp/ 不整个放开：只有 agentapi 脚本、MCP 工具定义缓存的文件（两层）可写
+    expect(input.writableDirs).not.toContain("/Users/u/.gemini/antigravity-cli/bin");
+    expect(input.writableDirs).not.toContain("/Users/u/.gemini/antigravity-cli/mcp");
+    expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/bin/agentapi[^/]*$");
+    expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/mcp/[^/]*$");
+    expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/mcp/[^/]*/[^/]*$");
+    expect(input.writableFileRegexes.some((r) => r.includes("webm_encoder"))).toBe(false);
     expect(input.writableDirs).toContain("/Users/u/.cache");
     expect(input.writableDirs).toContain("/Users/u/Library/Caches");
     // 配置不放：settings.json、config/（mcp_config、hooks、plugins）

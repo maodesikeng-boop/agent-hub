@@ -24,7 +24,7 @@ import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-dr
 import type { AgyConnectorCatalog } from "./readonly-agy.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
-import { SANDBOX_EXEC } from "./write-scope.ts";
+import { SANDBOX_EXEC, type SpawnCommand } from "./write-scope.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -1132,6 +1132,44 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     const s = t.addSession({ role: "worker", workerId: 12 });
     await expect(t.driver.send(s.id, user(1, "hi"))).rejects.toThrow(/需要 OS 沙箱/);
     expect(t.argvs()).toEqual([]);
+  });
+
+  it("只读 agy 问连接器清单要起 stdio 服务器：走同一个 readonlySpawn 包沙箱、env 去掉 HUB_*；没有 OS 沙箱时不起服务器", async () => {
+    const marker = join(tmpdir(), `agy-probe-marker-${process.pid}-${Date.now()}`);
+    const wrapped: SpawnCommand[] = [];
+    const setup = (osSandboxed: boolean) => {
+      const t = makeAgyHarness({
+        driver: {
+          connectorCatalog: undefined, // 走真的探测
+          readonlySpawn: (base) => {
+            wrapped.push(base);
+            return { ...base, osSandboxed };
+          },
+        },
+      });
+      const cfgDir = join(t.dir, ".gemini", "config");
+      mkdirSync(cfgDir, { recursive: true });
+      const server = join(t.dir, "server.mjs");
+      writeFileSync(server, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ hub: process.env.HUB_TOKEN ?? null }));`);
+      writeFileSync(join(cfgDir, "mcp_config.json"), JSON.stringify({ mcpServers: { probe: { command: process.execPath, args: [server] } } }));
+      t.launch.readonly = true;
+      t.launch.env = { HUB_TOKEN: "worker-token" };
+      return t;
+    };
+    // 没有 OS 沙箱：不起探测进程，起 agy 也报错
+    const none = setup(false);
+    const s1 = none.addSession({ role: "worker", workerId: 12 });
+    await expect(none.driver.send(s1.id, user(1, "hi"))).rejects.toThrow(/需要 OS 沙箱/);
+    expect(existsSync(marker)).toBe(false);
+    // 有 OS 沙箱（这里的假沙箱原样跑）：探测进程经过 readonlySpawn，环境里没有 HUB_TOKEN
+    wrapped.length = 0;
+    const ok = setup(true);
+    const s2 = ok.addSession({ role: "worker", workerId: 13 });
+    await ok.driver.send(s2.id, user(1, "hi"));
+    await ok.waitFor("turn.ended");
+    expect(wrapped.some((b) => b.command === process.execPath)).toBe(true);
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({ hub: null });
+    rmSync(marker, { force: true });
   });
 
   it("被拒后自动补一轮：result 有 denied_actions 且回复为空 → 往同一个进程补一条“被拒了，换办法”，这一轮到补的那一轮出回复才结束；最多补 AGY_DENIED_CONTINUE_MAX 次", async () => {

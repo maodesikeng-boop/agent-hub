@@ -58,7 +58,7 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
-import { createAgyConnectorResolver } from "./agy-connectors.ts";
+import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./agy-connectors.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
   READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
@@ -828,8 +828,16 @@ export class AgyDriver implements Driver {
   }
 
   /** 只读 Worker 起进程前问的连接器清单；问崩了（不该发生）当空清单：规则里没有 mcp 的拒绝，全靠工具开始调用时的兜底检查（清单里查不到的都当非只读，打断）。 */
-  async #catalogFor(): Promise<AgyConnectorCatalog> {
-    this.#connectorCatalog ??= this.#opts.connectorCatalog ?? createAgyConnectorResolver(this.#opts.homeDir === undefined ? {} : { homeDir: this.#opts.homeDir });
+  async #catalogFor(policy: ReadonlyPolicy): Promise<AgyConnectorCatalog> {
+    // 问清单要起 stdio 服务器：和 Worker 同样包外层只读沙箱、用 Worker 的环境（去掉 HUB_*），没有 OS 沙箱就不问
+    const homeDir = this.#opts.homeDir ?? homedir();
+    const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlySeatbelt(base, input));
+    this.#connectorCatalog ??=
+      this.#opts.connectorCatalog ??
+      createAgyConnectorResolver({
+        homeDir,
+        launcher: createReadonlyProbeLauncher({ policy, homeDir, baseEnv: process.env, extraEnv: this.#opts.env, wrap }),
+      });
     try {
       return await this.#connectorCatalog();
     } catch (error) {
@@ -858,7 +866,7 @@ export class AgyDriver implements Driver {
 
     // 只读 Worker：先问清连接器哪些只读（拒绝规则要写进 --settings），再包外层只读沙箱（没有 OS 沙箱直接报错，设计第 8 节第 5 条）
     const readonlyPolicy = files.readonly;
-    const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor();
+    const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor(readonlyPolicy);
     const args = buildAgyArgs(row, files, resume, readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog));
     let tmpDir: string | null = null;
     let launch: ScopedSpawn;

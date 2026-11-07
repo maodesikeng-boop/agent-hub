@@ -22,10 +22,14 @@ export const AGY_READONLY_ALLOW_RULES: readonly string[] = ["read_file(*)", "com
 /** 只读 agy 直接拒的内置工具：写文件。显式 deny 只报错、不结束这一轮（设计 1.2 节实测）。 */
 export const AGY_READONLY_DENY_RULES: readonly string[] = ["write_file(*)"];
 
-/** agy 运行时要写的子目录，相对 ~/.gemini/antigravity-cli（只放子目录和具体文件，不放 settings.json、config/）。bin：run_command 每次重写里面的 agentapi 脚本（S4 实测不放命令全挂）。 */
-export const AGY_RUNTIME_DIRS: readonly string[] = ["conversations", "brain", "cache", "log", "presence", "updater", "crashes", "annotations", "implicit", "bin", "mcp"];
-/** agy 运行时要写的具体文件，相对 ~/.gemini/antigravity-cli；后面的 * 是任意后缀（-wal、-shm）。 */
-export const AGY_RUNTIME_FILES: readonly string[] = ["cli.log", "conversation_summaries.db*", "jetbox_summaries_proto.pb", "last_check.timestamp"];
+/** agy 运行时要写的子目录，相对 ~/.gemini/antigravity-cli（只放子目录和具体文件，不放 settings.json、config/）。 */
+export const AGY_RUNTIME_DIRS: readonly string[] = ["conversations", "brain", "cache", "log", "presence", "updater", "crashes", "annotations", "implicit"];
+/**
+ * agy 运行时要写的具体文件，相对 ~/.gemini/antigravity-cli；后面的 * 是任意后缀（-wal、-shm），也是目录里的任意文件名（不跨 /）。
+ * - bin/agentapi*：run_command 每次重写这个脚本（S4 实测不放命令全挂）；同目录的 webm_encoder 等二进制不放开，免得命令行把它们换掉；
+ * - mcp/*、mcp/星/*：agy 缓存 MCP 工具定义和说明（mcp/<服务器>/<工具>.json、instructions.md），只放两层，不放整个子树。
+ */
+export const AGY_RUNTIME_FILES: readonly string[] = ["cli.log", "conversation_summaries.db*", "jetbox_summaries_proto.pb", "last_check.timestamp", "bin/agentapi*", "mcp/*", "mcp/*/*"];
 /** 同上，相对 ~/.gemini/antigravity。 */
 export const AGY_RUNTIME_FILES_LEGACY: readonly string[] = ["conversation_summaries.db*", "agyhub_summaries_proto.pb"];
 /** 通用缓存目录，相对用户主目录（设计第 8 节第 3 条：放开，uv、npx 这类 MCP 服务器要写）。 */
@@ -76,6 +80,22 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
     writableDirs: [...AGY_RUNTIME_DIRS.map((d) => `${cli}/${d}`), ...READONLY_CACHE_DIRS.map((d) => `${home}/${d}`)],
     writableFileRegexes: [...AGY_RUNTIME_FILES.map((f) => fileRegex(`${cli}/${f}`)), ...AGY_RUNTIME_FILES_LEGACY.map((f) => fileRegex(`${legacy}/${f}`))],
     secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(trimSlash(p))),
+    secretGlobs: [...input.policy.secretGlobs],
+  };
+}
+
+/**
+ * 探测连接器工具清单（agy-connectors.ts）起 stdio MCP 服务器时用的外层只读沙箱参数：和 Worker 同样的只读 profile 和密钥禁读，
+ * 但不放开 agy 的运行时目录（服务器不是 agy），只留会话私有临时目录和通用缓存目录（npx、uv 要写）。
+ */
+export function connectorProbeSandboxInput(input: { homeDir: string; tmpDir: string; policy: ReadonlyPolicy; realpath?: (p: string) => string }): ReadonlySandboxInput {
+  const real = input.realpath ?? realpathOrSelf;
+  const home = trimSlash(real(input.homeDir));
+  return {
+    tmpDir: real(input.tmpDir),
+    writableDirs: READONLY_CACHE_DIRS.map((d) => `${home}/${d}`),
+    writableFileRegexes: [],
+    secretPaths: input.policy.secretPaths.map(real),
     secretGlobs: [...input.policy.secretGlobs],
   };
 }
@@ -181,10 +201,17 @@ export function checkAgyConnectorCall(
     return connectorToolAllowed(policy, server, tool, annotationsOf(server, tool)) ? null : connectorViolationMessage(server, tool);
   }
   if (!toolName.startsWith("mcp_")) return null;
+  // 扁平名会撞（a-b/c 和 a_b/c 都叫 mcp_a_b_c）：撞了分不出是哪个，一律拒，不管撞上的里有没有只读的
+  const matches: Array<[string, string, ConnectorToolAnnotations | null]> = [];
   for (const [server, tools] of Object.entries(catalog.servers)) {
     for (const tool of Object.keys(tools)) {
-      if (mcpFlatName(server, tool) === toolName) return connectorToolAllowed(policy, server, tool, tools[tool]) ? null : connectorViolationMessage(server, tool);
+      if (mcpFlatName(server, tool) === toolName) matches.push([server, tool, tools[tool] ?? null]);
     }
+  }
+  if (matches.length > 1) return `${connectorViolationMessage(toolName, toolName)}（名字对应多个连接器工具：${matches.map(([s, t]) => `${s}/${t}`).join("、")}，分不清）`;
+  if (matches.length === 1) {
+    const [server, tool, annotations] = matches[0]!;
+    return connectorToolAllowed(policy, server, tool, annotations) ? null : connectorViolationMessage(server, tool);
   }
   // 清单里没有（新连上的服务器、清单没问到）：名字拆不开，按“<名字>/<名字>”给手动清单看，放行不了就拒
   return connectorToolAllowed(policy, toolName, toolName, null) ? null : connectorViolationMessage(toolName, toolName);
