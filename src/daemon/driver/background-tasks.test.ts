@@ -398,3 +398,49 @@ describe("边角", () => {
     expect(t.stdinTexts()).toEqual(["一", "二"]);
   });
 });
+
+describe("每个会话自己的兜底（LaunchFiles.backgroundHoldMaxMs，Worker 用）", () => {
+  it("给了就按它关，不按驱动层的默认", async () => {
+    const t = harness([{ steps: [{ backgroundTasks: ["stuck"] }, { text: "放后台了" }] }], { ...timers, backgroundHoldMaxMs: 60_000 });
+    t.launch.backgroundHoldMaxMs = 400;
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    const ended = await t.waitFor("turn.ended");
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "idle" });
+    expect(exited.at - ended.at).toBeGreaterThanOrEqual(400 - 60);
+    expect(exited.at - ended.at).toBeLessThan(5000);
+  });
+});
+
+describe("空闲、只剩后台任务时停止：关掉进程（后台任务一起停）", () => {
+  it("session.exited 是 interrupt；下一条消息前说明后台任务因为停止被结束了，只一次", async () => {
+    const t = harness([{ steps: [{ backgroundTasks: [{ task_id: "ci", description: "等 CI" }] }, { text: "放后台了" }] }, { steps: [{ text: "二" }] }, { steps: [{ text: "三" }] }], {
+      idleCloseMs: 60_000,
+      backgroundHoldMaxMs: 60_000,
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    await t.driver.interrupt(s.id);
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "interrupt", messageIds: [] });
+    expect(t.driver.isRunning(s.id)).toBe(false);
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    await t.driver.send(s.id, user(3, "三"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinTexts()).toEqual(["一", `${backgroundTasksKilledNote("stopped", ["等 CI"])}\n\n二`, "三"]);
+  });
+
+  it("空闲、没有后台任务：停止什么也不做", async () => {
+    const t = harness([{ steps: [{ text: "好" }] }], { idleCloseMs: 60_000, backgroundHoldMaxMs: 60_000 });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    await t.driver.interrupt(s.id);
+    await realSleep(100);
+    expect(t.of("session.exited")).toEqual([]);
+    expect(t.driver.isRunning(s.id)).toBe(true);
+  });
+});

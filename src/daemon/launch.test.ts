@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_ENV, buildReadonlyPolicy, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_ENV, buildReadonlyPolicy, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
@@ -94,6 +94,8 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
     // 项目经理不受可写范围限制
     expect(files.writeScope).toBeUndefined();
+    // 项目经理有后台任务时用驱动层的默认兜底
+    expect(files.backgroundHoldMaxMs).toBeUndefined();
     // 令牌只在 env 里，不进任何文件
     for (const content of [prompt, settings]) expect(content).not.toContain("token-of-7");
   });
@@ -195,6 +197,8 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     // 可写范围：数据目录里只有自己的 worktree
     expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [worktree] });
+    // 有后台命令时最多等多久（到点驱动层关进程、账本照常汇报）
+    expect(files.backgroundHoldMaxMs).toBe(WORKER_BACKGROUND_HOLD_MAX_MS);
   });
 
   it("在主文件夹干活的 Worker：数据目录整个不能写，主文件夹在数据目录外不受影响", async () => {

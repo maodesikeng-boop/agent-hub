@@ -726,9 +726,10 @@ export interface AgentSessionRow {
 
 /**
  * 空闲 / 在干活 / 正在停 / 准备中（Worker 的会话还没起，系统在它的 worktree 里跑项目的准备命令，跑完才开工；
- * 能停，停了只停准备命令，Worker 照常开工）。
+ * 能停，停了只停准备命令，Worker 照常开工）/ 在等后台命令（Worker 一轮结束时还有放到后台的命令在跑，这一轮先不汇报，
+ * 命令跑完它被叫醒接着做；能停，停了后台命令一起停；用户、项目经理的话照常能发，见 ledger/workers.ts）。
  */
-export type SessionActivity = "idle" | "working" | "stopping" | "preparing";
+export type SessionActivity = "idle" | "working" | "stopping" | "preparing" | "background";
 
 /**
  * 网页要显示的会话状态（状态行、停止按钮、等额度）。WebSocket 的 session.status、session.created 推的就是它。

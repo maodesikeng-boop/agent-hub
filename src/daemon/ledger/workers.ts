@@ -4,6 +4,7 @@
 //   否则直接在主文件夹里干（直接登记 session.start 和第一条 session.send）。git 由 agent 接口在调 hubCall 之前异步探好
 //   （HubCallContext.workspace），这里不做 I/O；git 没跑成就拒绝派活，不默默改成主文件夹；
 // - Worker 的会话每一轮结束，在同一个事务里给项目经理的对话发那一行（kind worker），并把全文交给项目经理（session.send）；
+//   一轮结束时还有后台命令在跑的不算（awaitingBackground）：等命令跑完、它真结束一轮再发；
 // - Worker 的消息发不出去（session.send 次数用完）也发一行 turn_failed 交给项目经理；
 // - 用户在网页上直接对 Worker 说的话：Worker 收到时（message.delivered）发一行 user_message 交给项目经理；
 //   Worker 收工、还没开工时不收（assertWorkerOpenForUser，messages.ts 的 postUserMessage、retryMessage 调）；
@@ -31,7 +32,7 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { MAX_TASK_BYTES } from "../../shared/limits.ts";
+import { MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
@@ -60,12 +61,28 @@ export const TURN_STOPPED = "被停止了";
 const TURN_FAILED = "这一轮出错了";
 /** 用户的话算 Worker 已收到的状态（user_message 那一行只给这些发）。 */
 const RECEIVED_STATUSES: ReadonlySet<string> = new Set(["delivered", "processing", "replied"]);
+/**
+ * Worker 在等后台命令时进程被关了、后台命令跟着停了（workers.ts 的 flushAwaiting）：照常汇报，正文前面加这一句。
+ * idle：后台命令超过 WORKER_BACKGROUND_HOLD_MAX_MS 没结束，驱动层到点关的；shutdown：守护进程关了；
+ * restart：守护进程没走关机就没了（被杀、崩溃），重启后补发（recoverBackgroundWaits）。
+ */
+export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {
+  const resend = `要它重跑或接着做用 ${HUB_COMMAND} worker send。`;
+  if (reason === "restart") {
+    return `【系统】这个 Worker 在等放到后台的命令时守护进程重启了，命令随旧进程中断（跑没跑完、结果它都没看到）；下面是它中断前最后一轮的回复。${resend}`;
+  }
+  const why = reason === "idle" ? `超过 ${WORKER_BACKGROUND_HOLD_MAX_MS / 60_000} 分钟还没结束（可能卡住了）` : "还没结束，守护进程就关了";
+  return `【系统】这个 Worker 放到后台的命令${why}，已经连同它的进程一起停掉；下面是它停之前最后一轮的回复。${resend}`;
+}
 /** 这一轮正常结束、却一段文字都没有时，交给项目经理的正文。 */
 const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 
 /** Worker 对话里项目经理的话的去重键：任务说明一个 Worker 一条；打回、回答每次一条（hub 没有 clientId，用随机数）。 */
 const taskDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:task`;
 const sendDedupeKey = (workerId: WorkerId) => `pm:worker:${workerId}:${randomUUID()}`;
+
+/** 在等后台命令的那一轮（worker_background_waits 一行）。 */
+type BackgroundWait = { turnStart: MessageId; background: boolean };
 
 /** Worker 会话这一轮的结局：report 带这一轮最后一段文字，turn_failed 带原因。 */
 type TurnOutcome =
@@ -163,6 +180,35 @@ export function createLedgerWorkers(
    * 下一次一轮结束时清掉。
    */
   const endInterrupted = new Set<SessionId>();
+  /**
+   * 一轮正常结束时还有后台命令在跑（驱动层的 background.changed 记在 live.backgroundTasks，只有 claude 有）的 Worker 会话，
+   * 记在 worker_background_waits（0014）。这一轮不算汇报（不然项目经理会先收到一份“做完了”），会话显示在等后台命令；
+   * 命令跑完 claude 自己开一轮叫醒它，那一轮（或中间用户、项目经理的话开的轮）结束、而且没有后台命令了才汇报，
+   * 正文是从 turnStart 起最后一段文字。进程先没了（兜底上限到点被关、停止、崩溃、关机）就在 session.exited 时照常交代
+   * （flushAwaiting）；守护进程被杀、session.exited 没来的，重启后补发（recoverBackgroundWaits）。
+   * background：现在还有没有后台命令（被关进程时说明“被停了”用）。不轮询：只看已有的驱动层事件。
+   */
+  const awaitingBackground = {
+    get: (sessionId: SessionId): BackgroundWait | undefined => {
+      const row = db.get<{ turn_start: number; background: number }>("SELECT turn_start, background FROM worker_background_waits WHERE session_id = ?", sessionId);
+      return row === undefined ? undefined : { turnStart: row.turn_start, background: row.background === 1 };
+    },
+    set: (sessionId: SessionId, turnStart: MessageId) =>
+      db.run(
+        "INSERT OR REPLACE INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, ?, 1, ?)",
+        sessionId,
+        turnStart,
+        now(),
+      ),
+    setBackground: (sessionId: SessionId, background: boolean) =>
+      db.run("UPDATE worker_background_waits SET background = ? WHERE session_id = ?", background ? 1 : 0, sessionId),
+    /** 取出并删掉。 */
+    take: (sessionId: SessionId): BackgroundWait | undefined => {
+      const wait = awaitingBackground.get(sessionId);
+      if (wait !== undefined) db.run("DELETE FROM worker_background_waits WHERE session_id = ?", sessionId);
+      return wait;
+    },
+  };
 
   const workerRow = (id: WorkerId): WorkerDbRow | null => db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;
   const projectRow = (id: number): ProjectDbRow => db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", id)!;
@@ -512,8 +558,58 @@ export function createLedgerWorkers(
 
   const maxMessageId = () => db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0;
 
+  /** 这一轮从 turnStart 起最后一条 agent 消息的编号（汇报的去重键）；什么都没有是 null。 */
+  const lastAgentMessageId = (sessionId: SessionId, turnStart: number): MessageId | null =>
+    db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, sessionId, turnStart)!.id;
+
+  /** 从 turnStart 起这个会话最后一段 agent 文字；没有是空串。 */
+  const lastAgentText = (sessionId: SessionId, turnStart: number): string =>
+    db.get<{ text: string }>(
+      `SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
+      sessionId,
+      turnStart,
+    )?.text ?? "";
+
+  /** 按格式解析这一轮最后的文字，一行 report 交给项目经理；note 不是 null 就加在交给它的正文前面。 */
+  const insertReport = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, text: string, note: string | null = null) => {
+    const parsed = parseWorkerReport(text);
+    const body = text.trim() === "" ? NO_REPLY_TEXT : text;
+    insertLine(p, worker, {
+      event: "report",
+      status: parsed.kind === "ok" ? parsed.report.status : "unformatted",
+      summary: parsed.kind === "ok" ? parsed.report.summary : parsed.summary,
+      turnMessageId,
+      deliver: note === null ? body : `${note}\n\n${body}`,
+    });
+  };
+
+  /**
+   * 在等后台命令时进程没了（awaitingBackground，session.exited 不带在途消息）：不再有人叫醒它，把等着的这一轮交代给项目经理。
+   * 停止 → 被停止了；崩溃 → 出错；空闲关闭（后台命令还在就是到了兜底上限被关）、关机 → 照常汇报，后台命令被停了的在正文前说明。
+   * 已收工的不发（项目经理自己收的工）。
+   */
+  const flushAwaiting = (p: Pending, session: AgentSessionRow, event: Extract<DriverEvent, { type: "session.exited" }>, awaiting: BackgroundWait) => {
+    endInterrupted.delete(session.id);
+    const worker = workerRow(session.workerId!);
+    if (worker === null || worker.status === "ended") return;
+    const turnMessageId = lastAgentMessageId(session.id, awaiting.turnStart);
+    if (turnMessageId === null) return;
+    if (event.reason === "interrupt") return insertTurnFailed(p, worker, turnMessageId, [], TURN_STOPPED);
+    if (event.reason === "crash" || event.reason === "startup_failed") return insertTurnFailed(p, worker, turnMessageId, [], exitFailureReason(event));
+    insertReport(p, worker, turnMessageId, lastAgentText(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
+  };
+
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "worker" || session.workerId === null) return;
+    if (event.type === "background.changed") {
+      awaitingBackground.setBackground(session.id, event.count > 0);
+      return;
+    }
+    if (event.type === "session.exited") {
+      const awaiting = awaitingBackground.take(session.id);
+      // 有在途消息的（一轮跑到一半进程没了）照下面的老路交代那一轮
+      if (awaiting !== undefined && event.messageIds.length === 0) return flushAwaiting(p, session, event, awaiting);
+    }
     if (event.type === "message.delivered") {
       // 一轮中途交给它的不算这一轮的开头（这一轮前面的文字还要算进汇报），用户的话也等它读到再告诉项目经理
       if (event.midTurn === true) {
@@ -547,40 +643,57 @@ export function createLedgerWorkers(
     // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
     if (outcome.turnMessageId === null && !turnStarts.has(session.id)) return;
     // 有这一轮开头的记录就用它；没有（重启后）退回这一轮最大的消息编号。不取两者大的那个：一轮中途送达的消息编号
-    // 比这一轮前面的文字大，取它会漏掉前面的汇报
-    const turnStart = turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
+    // 比这一轮前面的文字大，取它会漏掉前面的汇报。之前有一轮在等后台命令没汇报：从那一轮的开头算
+    const awaiting = awaitingBackground.take(session.id);
+    const turnStart = awaiting?.turnStart ?? turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
     turnStarts.delete(session.id);
     // 收工时打断的这一轮：被停止了不再汇报（项目经理自己叫停的）
     if (endInterrupted.delete(session.id) && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) return;
+    // 正常结束、还有后台命令在跑：先不汇报，等命令跑完叫醒它、它再结束一轮（见 awaitingBackground）
+    if (outcome.event === "report" && event.type === "turn.ended" && (liveOf(session.id).backgroundTasks ?? 0) > 0) {
+      awaitingBackground.set(session.id, turnStart);
+      updateLive(p, session.id, (l) => {
+        l.activity = "background";
+      });
+      return;
+    }
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
-    const turnMessageId =
-      outcome.turnMessageId ??
-      db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, session.id, turnStart)!.id;
+    const turnMessageId = outcome.turnMessageId ?? lastAgentMessageId(session.id, turnStart);
     if (turnMessageId === null) return;
     if (outcome.event === "turn_failed") {
       insertTurnFailed(p, worker, turnMessageId, outcome.messageIds, outcome.reason);
       return;
     }
     // 这一轮最后一段文字：这一轮开始之后、这个会话的 agent 文字里最新的一条；没有就是“没有文字回复”
-    const last = db.get<{ text: string }>(
-      `SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
-      session.id,
-      turnStart,
-    );
-    const text = last?.text ?? "";
+    const text = lastAgentText(session.id, turnStart);
     // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
     if (outcome.turnMessageId === null && text.trim() === "") return;
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
-    const parsed = parseWorkerReport(text);
-    insertLine(p, worker, {
-      event: "report",
-      status: parsed.kind === "ok" ? parsed.report.status : "unformatted",
-      summary: parsed.kind === "ok" ? parsed.report.summary : parsed.summary,
-      turnMessageId,
-      deliver: text.trim() === "" ? NO_REPLY_TEXT : text,
-    });
+    insertReport(p, worker, turnMessageId, text);
   };
+
+  /**
+   * 重启恢复（在 recoverAfterRestart 里调）：上次运行没交代完的“在等后台命令”（守护进程被杀、session.exited 没来）。
+   * 后台命令随旧进程没了，不会再有人叫醒它：每个照常补发一次汇报（它中断前最后一轮的文字），正文前说明因重启中断；
+   * 不恢复会话让它接着干（后台命令的结果已经没了，接着干也得重跑，交给项目经理定）。已收工的只删记录。
+   * 去重键同那一轮的汇报，重复调用只有一行。
+   */
+  const recoverBackgroundWaits = () =>
+    write((p) => {
+      const waits = db.all<{ session_id: number; turn_start: number; worker_id: number | null }>(
+        `SELECT b.session_id, b.turn_start, s.worker_id FROM worker_background_waits b
+         JOIN agent_sessions s ON s.id = b.session_id ORDER BY b.session_id`,
+      );
+      db.run("DELETE FROM worker_background_waits");
+      for (const wait of waits) {
+        const worker = wait.worker_id === null ? null : workerRow(wait.worker_id);
+        if (worker === null || worker.status === "ended") continue;
+        const turnMessageId = lastAgentMessageId(wait.session_id, wait.turn_start);
+        if (turnMessageId === null) continue;
+        insertReport(p, worker, turnMessageId, lastAgentText(wait.session_id, wait.turn_start), backgroundKilledNote("restart"));
+      }
+    });
 
   // ---- 建 worktree（worktree.create 处理函数用）----
 
@@ -743,6 +856,7 @@ export function createLedgerWorkers(
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
       project: projectCard(projectRow(worker.project_id)),
       worker: toWorkerRecord(worker),
+      ...(isAgentVendor(session.vendor) ? { vendor: session.vendor } : {}),
     };
   };
 
@@ -758,6 +872,7 @@ export function createLedgerWorkers(
     waitsForFirstTurn,
     onWorktreeCreated,
     recoverWorktrees,
+    recoverBackgroundWaits,
     actionFailedIn,
     workerStartFolder,
     workerPrTarget,

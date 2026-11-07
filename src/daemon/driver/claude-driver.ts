@@ -143,6 +143,8 @@ interface Proc {
   launched: LaunchSnapshot;
   /** 这次拼进提示词的性格设定是哪一版（LaunchFiles.personaRevision）：第一个 init 时定 agent 看到的版本（persona-note.ts）。 */
   personaLaunched: number | null;
+  /** 有后台任务时最多不关多久：LaunchFiles.backgroundHoldMaxMs，没给用 DriverOptions.backgroundHoldMaxMs（#armIdle）。 */
+  backgroundHoldMaxMs: number;
   initSeen: boolean;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -443,7 +445,18 @@ export class ClaudeDriver implements Driver {
     // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
     this.#dropPendingUsers(st);
     const proc = st.proc;
-    if (!proc || !this.#busy(st) || proc.closing) return;
+    if (!proc || proc.closing) return;
+    // 一轮已经结束、只剩后台任务（Worker 在等它们跑完，账本显示“在等后台命令”）：停止就是停掉它们，连进程一起关；
+    // agent 之后还会被用到（项目经理打回、用户再说话），下一条消息前告诉它
+    if (!this.#busy(st)) {
+      if (!st.background.active) return;
+      this.#opts.log(`[driver] session ${st.id}: 停止时只剩 ${st.background.count} 个后台任务，关掉进程把它们一起停掉`);
+      st.killedNote = backgroundTasksKilledNote("stopped", st.background.descriptions());
+      this.#clearTimer(st, "idleTimer");
+      this.#closeStdin(st, proc, "interrupt");
+      await proc.exited;
+      return;
+    }
     st.stopRequested = true;
     // 中途写的、写回调还没回来的：写失败的话也按停止处理（#writeMidTurn）
     for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
@@ -811,7 +824,7 @@ export class ClaudeDriver implements Driver {
   }
 
   /**
-   * 开始算空闲。有后台任务时计时放宽到 backgroundHoldMaxMs（兜底，到点照常关）；任务清零时 #onBackgroundTasksChanged 重新调这里，从头算 idleCloseMs。
+   * 开始算空闲。有后台任务时计时放宽到这个进程的 backgroundHoldMaxMs（兜底，到点照常关）；任务清零时 #onBackgroundTasksChanged 重新调这里，从头算 idleCloseMs。
    */
   #armIdle(st: SessionState, proc: Proc): void {
     this.#clearTimer(st, "idleTimer");
@@ -819,11 +832,11 @@ export class ClaudeDriver implements Driver {
       st.idleTimer = null;
       if (st.proc !== proc || proc.closing || this.#busy(st) || st.pending.length > 0 || st.starting || st.ended) return;
       if (st.background.active) {
-        this.#opts.log(`[driver] session ${st.id}: 后台任务还有 ${st.background.count} 个没结束，已超过 ${this.#opts.backgroundHoldMaxMs} ms，照常空闲关闭`);
+        this.#opts.log(`[driver] session ${st.id}: 后台任务还有 ${st.background.count} 个没结束，已超过 ${proc.backgroundHoldMaxMs} ms，照常空闲关闭`);
         st.killedNote = backgroundTasksKilledNote("hold_max", st.background.descriptions());
       }
       this.#closeStdin(st, proc, "idle");
-    }, idleDelayMs(st.background, this.#opts.idleCloseMs, this.#opts.backgroundHoldMaxMs));
+    }, idleDelayMs(st.background, this.#opts.idleCloseMs, proc.backgroundHoldMaxMs));
   }
 
   /** 关标准输入让它正常退出；还不退：先给 claude 本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
@@ -975,6 +988,7 @@ export class ClaudeDriver implements Driver {
       resume,
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
       personaLaunched: files.personaRevision ?? null,
+      backgroundHoldMaxMs: files.backgroundHoldMaxMs ?? this.#opts.backgroundHoldMaxMs,
       initSeen: false,
       capabilities: new Set(),
       stderr: "",
@@ -1008,8 +1022,8 @@ export class ClaudeDriver implements Driver {
     // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
-      // 我们让它正常退的（end、两轮之间重启、空闲关闭）：给它原来的进程组补一个 SIGTERM，清掉它留下的子进程
-      if (proc.closing === "idle") termGroupAfterExit(child);
+      // 我们让它正常退的（end、两轮之间重启、空闲关闭、只剩后台任务时的停止）：给它原来的进程组补一个 SIGTERM，清掉它留下的子进程
+      if (proc.closing === "idle" || (proc.closing === "interrupt" && !this.#busy(st))) termGroupAfterExit(child);
       const timer = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();

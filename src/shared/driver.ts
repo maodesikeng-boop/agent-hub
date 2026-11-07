@@ -70,16 +70,17 @@ const KILLED_NOTE_MAX_TASKS = 5;
 const KILLED_NOTE_MAX_DESC_CHARS = 80;
 /**
  * 进程被我们关掉时会话里还有后台任务（它们跟着进程一起被结束）：下一条写进去的消息前面加这一句，让 agent 知道，需要的话重新启动。
- * relaunch：两轮之间因为设置变了重启；hold_max：后台任务超过 BACKGROUND_TASKS_HOLD_MAX_MS 没结束，空闲关闭照常关。
- * 停止、end、关机也会结束后台任务，但那之后不再有 agent 在等它们的结果，不加这句。
+ * relaunch：两轮之间因为设置变了重启；hold_max：后台任务超过兜底（BACKGROUND_TASKS_HOLD_MAX_MS，或这个会话的 LaunchFiles.backgroundHoldMaxMs）
+ * 没结束，空闲关闭照常关；stopped：一轮已经结束、只剩后台任务时用户点了停止（或收工），停止就是把它们停掉。
+ * 一轮在跑时的停止、end、关机也会结束后台任务，但那之后不再有 agent 在等它们的结果，不加这句。
  */
-export function backgroundTasksKilledNote(reason: "relaunch" | "hold_max", descriptions: string[]): string {
+export function backgroundTasksKilledNote(reason: "relaunch" | "hold_max" | "stopped", descriptions: string[]): string {
   const shown = descriptions
     .slice(0, KILLED_NOTE_MAX_TASKS)
     .map((d) => (d.length > KILLED_NOTE_MAX_DESC_CHARS ? `${d.slice(0, KILLED_NOTE_MAX_DESC_CHARS)}…` : d) || "（没有描述）");
   const more = descriptions.length - shown.length;
   const list = `${shown.join("；")}${more > 0 ? `；等共 ${descriptions.length} 个` : ""}`;
-  const why = reason === "relaunch" ? "为了让新设置生效重启了" : "后台任务太久没结束，进程被关闭了";
+  const why = reason === "relaunch" ? "为了让新设置生效重启了" : reason === "stopped" ? "用户点了停止" : "后台任务太久没结束，进程被关闭了";
   return `【系统】${why}，正在跑的 ${descriptions.length} 个后台任务（${list}）被结束了，需要的话重新启动。`;
 }
 /** 进程上一轮没等到 result 就退出了（崩溃）：加在下一条写进去的消息前面。 */
@@ -471,6 +472,11 @@ export interface LaunchFiles {
    * 只算实际写进文件的内容，不含时间、随机数、令牌。驱动层只比较它是否相等。
    */
   fingerprint: string;
+  /**
+   * 这个会话有后台任务时最多不关多久（到点照常空闲关闭，后台任务一起停）；不给用 DriverOptions.backgroundHoldMaxMs。
+   * Worker 给 WORKER_BACKGROUND_HOLD_MAX_MS（launch.ts）。由角色决定，不进 fingerprint。只有能认出后台任务的驱动用（claude）。
+   */
+  backgroundHoldMaxMs?: number;
   /**
    * Worker 的可写范围（write-scope.ts 的 workerWriteScope）：数据目录里只有自己的工作目录能写。项目经理没有。
    * 每家驱动按 daemon/driver/write-scope.ts 的 WRITE_SCOPE_ENFORCERS 落实（编辑工具和 shell 都要管住）。
