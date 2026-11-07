@@ -219,6 +219,7 @@ P0 接口约定（小，先合）
 | P1 | `device.json`；`daemon/platform/`（tailscale 命令路径、serve 目标、tailnet 名字探测）；Host/Origin 白名单；Secure cookie；身份头校验 | P0 | 中 |
 | P2 | `daemon/peers/`：配对、设备令牌、设备清单同步、移除；HTTP + WS 转发（可评估 `@fastify/http-proxy`） | P1 | 高 |
 | P3 | 网页：`client` 带 base、`useDevices`、按设备的 state、网址、左栏分组、跨设备“等你”、离线显示、新建项目经理选设备、设置 → 设备 | P0（用假数据），接真的要 P2 | 高 |
+|  | 已做（用假设备）：`web/devices.ts`（键、状态）、`web/device-hub.ts`（每台一个 DeviceHub，放在 Map 里）、`web/device-scope.tsx`；左栏最上面只汇总“等你确定”，“等你”在各组里标；右栏仍只看当前项目经理。假后端 `test/fake-devices/main.ts`，截图在 `docs/screenshots/multi-device/` | | |
 | P4 | manifest、Service Worker、图标；`shared/reminders.ts` 搬家；订阅接口、`web-push`、前台上报、提醒设备的常驻流 | P0；跨设备部分要 P2 | 中高 |
 | P5 | ui-standard 补第 6.3 节的条目 + 样式改动 + 截图 | 无 | 低中 |
 | P6 | 浏览器会话表、登录 / 退出 / 全部退出、二维码登录链接 | P0 | 中 |

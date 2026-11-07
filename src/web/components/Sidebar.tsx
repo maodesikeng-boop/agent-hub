@@ -1,20 +1,34 @@
-import { Plus, Search, Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronRight, Plus, Search, Settings } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatTime } from "../format.ts";
-import type { NotifySettings } from "../notify.ts";
+import type { ConversationRef, NotifySettings } from "../notify.ts";
 import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
-import { SettingsDialog } from "./SettingsDialog.tsx";
+import { SettingsDialog, type DeviceSettings } from "./SettingsDialog.tsx";
+
+/** 左栏的一组：一台设备和它的项目经理。只有一组时不显示组头（和没有联机时一样）。 */
+export interface SidebarGroup {
+  key: DeviceKey;
+  name: string;
+  platform: string;
+  status: DeviceStatus;
+  lastOnlineAt: number | null;
+  /** 已经按最后一条消息的时间排好。 */
+  entries: ConversationEntry[];
+}
 
 function EntryButton({
   entry,
   active,
   waiting,
   asking,
+  device,
   onSelect,
 }: {
   entry: ConversationEntry;
@@ -23,7 +37,9 @@ function EntryButton({
   waiting: boolean;
   /** 项目经理用 hub ask 问了用户，还没回答；比“等你”更醒目，两个都有时只显示它。 */
   asking: boolean;
-  onSelect: (id: number) => void;
+  /** 跨设备的“等你”汇总里，第二行前面写是哪台设备。 */
+  device?: string;
+  onSelect: () => void;
 }) {
   // 右边只放一个标注：等你确定 > 等你 > 时间（在忙不另加标记）
   const tag = asking ? (
@@ -41,7 +57,7 @@ function EntryButton({
         "flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
       )}
-      onClick={() => onSelect(entry.id)}
+      onClick={onSelect}
     >
       <Avatar colorKey={entry.avatarKey} size={44} />
       <span className="min-w-0 flex-1">
@@ -64,16 +80,41 @@ function matches(entry: ConversationEntry, query: string): boolean {
   return q === "" || entry.name.toLowerCase().includes(q) || (entry.project?.name.toLowerCase().includes(q) ?? false);
 }
 
+/** 一台设备的组头：设备名 + 状态点 + 系统图标，点了折叠。离线的整组变灰。 */
+function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <section aria-label={group.name} data-device-status={group.status} className="pt-2 first:pt-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-[13.5px] font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={onToggle}
+      >
+        <span className="truncate">{group.name}</span>
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
+        <span className="ml-auto flex shrink-0 items-center gap-2 text-xs font-normal">
+          <StatusText status={group.status} lastOnlineAt={group.lastOnlineAt} />
+          <StatusDot status={group.status} />
+          <PlatformIcon platform={group.platform} className="size-3.5" />
+        </span>
+      </button>
+      {open && <div className={cn("mt-1 space-y-1", isReadOnly(group.status) && "opacity-60")}>{children}</div>}
+    </section>
+  );
+}
+
 /**
  * 左栏：每个项目经理一行（头像、名字、最后一条消息），点进去就是它唯一的那个对话。
+ * 两台以上设备时按设备分组（组头可以折叠），最上面一组汇总所有设备的“等你确定”，每行带设备名；只有一台时和没有联机时一模一样。
  * 窄屏（1100px 以下）收成抽屉（docs/ui-standard.md 第 16 条）：drawerOpen 时盖在左边，点遮罩、按 Esc、选了对话都收起。
  */
 export function Sidebar({
-  entries,
-  activeId,
+  groups,
+  active,
   waiting,
   asking,
   notify,
+  devices = null,
   quota,
   quotaFetchable = false,
   drawerOpen = false,
@@ -81,25 +122,46 @@ export function Sidebar({
   onSelect,
   onNewPm,
 }: {
-  /** 已经按最后一条消息的时间排好。 */
-  entries: ConversationEntry[];
-  activeId: number | null;
-  /** 在“等你”的对话。 */
-  waiting: ReadonlySet<number>;
-  /** 有“等你确定”的提问没回答的对话。 */
-  asking: ReadonlySet<number>;
+  groups: SidebarGroup[];
+  active: ConversationRef | null;
+  /** 在“等你”的对话（devices.ts 的 conversationKey）。 */
+  waiting: ReadonlySet<string>;
+  /** 有“等你确定”的提问没回答的对话（同上）。 */
+  asking: ReadonlySet<string>;
   notify: NotifySettings;
+  /** 设置里的“设备”一组；null（守护进程还没有联机）不显示。 */
+  devices?: DeviceSettings | null;
   quota: QuotaVendor[];
   /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
   quotaFetchable?: boolean;
   /** 窄屏时抽屉拉出来了（宽屏不看它）。 */
   drawerOpen?: boolean;
   onCloseDrawer?: () => void;
-  onSelect: (id: number) => void;
+  onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
+  const grouped = groups.length > 1;
+  const row = (group: SidebarGroup, entry: ConversationEntry, device?: string) => {
+    const key = conversationKey(group.key, entry.id);
+    return (
+      <EntryButton
+        key={key}
+        entry={entry}
+        active={active !== null && active.device === group.key && active.id === entry.id}
+        waiting={waiting.has(key)}
+        asking={asking.has(key)}
+        device={device}
+        onSelect={() => onSelect({ device: group.key, id: entry.id })}
+      />
+    );
+  };
+  // 跨设备的“等你确定”汇总（联机第 4.2 节）：只放提问，“等你”只在各组里标；按左栏的顺序
+  const reminded = grouped
+    ? groups.flatMap((group) => group.entries.filter((e) => matches(e, query) && asking.has(conversationKey(group.key, e.id))).map((entry) => ({ group, entry })))
+    : [];
   useEffect(() => {
     if (!drawerOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -136,19 +198,35 @@ export function Sidebar({
             <Plus aria-hidden="true" />
           </Button>
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pt-1" aria-label="对话列表">
-          {entries
-            .filter((entry) => matches(entry, query))
-            .map((entry) => (
-              <EntryButton
-                key={entry.id}
-                entry={entry}
-                active={entry.id === activeId}
-                waiting={waiting.has(entry.id)}
-                asking={asking.has(entry.id)}
-                onSelect={onSelect}
-              />
-            ))}
+        <nav className={cn("flex-1 overflow-y-auto px-3 pt-1", !grouped && "space-y-1")} aria-label="对话列表">
+          {grouped ? (
+            <>
+              {reminded.length > 0 && (
+                <section aria-label="等你确定" className="mb-2">
+                  <h2 className="flex h-8 items-center px-3 text-[13.5px] font-medium text-muted-foreground">等你确定</h2>
+                  <div className="mt-1 space-y-1">{reminded.map(({ group, entry }) => row(group, entry, group.name))}</div>
+                </section>
+              )}
+              {groups.map((group) => (
+                <DeviceGroup
+                  key={group.key}
+                  group={group}
+                  open={!collapsed.has(group.key)}
+                  onToggle={() =>
+                    setCollapsed((prev) => {
+                      const next = new Set(prev);
+                      if (!next.delete(group.key)) next.add(group.key);
+                      return next;
+                    })
+                  }
+                >
+                  {group.entries.filter((entry) => matches(entry, query)).map((entry) => row(group, entry))}
+                </DeviceGroup>
+              ))}
+            </>
+          ) : (
+            groups.flatMap((group) => group.entries.filter((entry) => matches(entry, query)).map((entry) => row(group, entry)))
+          )}
         </nav>
         <div className="flex items-center gap-1 px-3 py-3">
           <span className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
@@ -162,7 +240,7 @@ export function Sidebar({
             <Settings aria-hidden="true" />
           </Button>
         </div>
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} />
+        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} devices={devices} />
       </aside>
     </>
   );

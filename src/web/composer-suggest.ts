@@ -22,10 +22,11 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function conversationSource(conversationId: number): ComposerSource {
+/** url：这个对话所在设备的地址（client.ts 的 HubClient.url），默认入口本机。 */
+export function conversationSource(conversationId: number, url: (path: string) => string = (path) => path): ComposerSource {
   return {
-    commands: async (signal) => (await getJson<CommandsResponse>(API_PATHS.commands(conversationId), signal)).commands,
-    files: (query, signal) => getJson<FilesResponse>(API_PATHS.files(conversationId, query), signal),
+    commands: async (signal) => (await getJson<CommandsResponse>(url(API_PATHS.commands(conversationId)), signal)).commands,
+    files: (query, signal) => getJson<FilesResponse>(url(API_PATHS.files(conversationId, query)), signal),
   };
 }
 

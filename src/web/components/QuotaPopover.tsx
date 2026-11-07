@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fetchQuota } from "../client.ts";
+import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
 import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
@@ -51,6 +51,7 @@ function Ring({ percent }: { percent: number }) {
  */
 export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
   const [fetched, setFetched] = useState<QuotaVendor[]>([]);
+  const client = useClient();
   const head = quota[0];
   const window = head?.windows[0];
   if (!window && !fetchable) return null;
@@ -59,7 +60,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
   const onOpenChange = (open: boolean) => {
     if (!open || !fetchable) return;
-    fetchQuota().then(
+    client.fetchQuota().then(
       (res) => setFetched(fetchedQuotaUsage(res)),
       () => setFetched([]),
     );

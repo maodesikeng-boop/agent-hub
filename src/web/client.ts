@@ -2,11 +2,18 @@
 import {
   API_PATHS,
   UPLOAD_TOO_LARGE_MESSAGE,
+  devicePath,
+  type AddDeviceRequest,
   type ApiErrorBody,
   type Attachment,
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
+  type DeviceId,
+  type DeviceInfo,
+  type DeviceInviteResponse,
+  type DevicesResponse,
+  type RenameDeviceRequest,
   type AddScheduleRequest,
   type EditPersonaRequest,
   type ScheduleId,
@@ -87,104 +94,105 @@ function putJson<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
-export function fetchState(): Promise<StateSnapshot> {
-  return request<StateSnapshot>(API_PATHS.state);
-}
-
-export function fetchOlderMessages(conversationId: ConversationId, before: MessageId): Promise<MessagesPage> {
-  return request<MessagesPage>(`${API_PATHS.messages(conversationId)}?before=${before}`);
-}
-
-export function postMessage(conversationId: ConversationId, body: PostMessageRequest): Promise<PostMessageResponse> {
-  return postJson<PostMessageResponse>(API_PATHS.messages(conversationId), body);
-}
-
 /**
- * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。
- * 一律声明 application/octet-stream（File 自带的类型是 application/json 之类时，服务端不会当 JSON 去解析，但这里也不依赖它）。
- * 413：界面服务对普通请求说“最多 1 MB”，上传接口的上限是 20 MB，换成上传自己的说法。
+ * 一台设备的接口（docs/multi-device-design.md 第 4.1 节）：device 是 null（入口本机）就是原路径，别的设备都加 /d/<设备编号>，
+ * 入口原样转发。网页里取数据、发消息都经过这里，组件用 device-scope.tsx 的 useClient() 拿当前设备的这一份。
  */
-export async function postUpload(file: Blob, name: string): Promise<Attachment> {
-  try {
-    return await request<Attachment>(`${API_PATHS.uploads}?name=${encodeURIComponent(name)}`, {
-      method: "POST",
-      headers: { "content-type": "application/octet-stream" },
-      body: file,
-    });
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 413) throw new ApiError(413, UPLOAD_TOO_LARGE_MESSAGE);
-    throw err;
-  }
+export function createClient(device: DeviceId | null) {
+  const at = (path: string) => devicePath(device, path);
+  return {
+    device,
+    /** 这台设备上的地址（文件链接、预览要用）。 */
+    url: at,
+    fetchState: () => request<StateSnapshot>(at(API_PATHS.state)),
+    fetchOlderMessages: (conversationId: ConversationId, before: MessageId) =>
+      request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
+    postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
+    /**
+     * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。
+     * 一律声明 application/octet-stream（File 自带的类型是 application/json 之类时，服务端不会当 JSON 去解析，但这里也不依赖它）。
+     * 413：界面服务对普通请求说“最多 1 MB”，上传接口的上限是 20 MB，换成上传自己的说法。
+     */
+    postUpload: async (file: Blob, name: string): Promise<Attachment> => {
+      try {
+        return await request<Attachment>(`${at(API_PATHS.uploads)}?name=${encodeURIComponent(name)}`, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: file,
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 413) throw new ApiError(413, UPLOAD_TOO_LARGE_MESSAGE);
+        throw err;
+      }
+    },
+    postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
+    postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),
+    /** 让守护进程弹出原生的“选择文件夹”。等用户选完才回；取消（或超时）是 path null。 */
+    postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body),
+    fetchPersona: (pmId: PmId) => request<PersonaResponse>(at(API_PATHS.persona(pmId))),
+    putPersona: (pmId: PmId, body: EditPersonaRequest) => putJson<EditPersonaResponse>(at(API_PATHS.persona(pmId)), body),
+    postRevertPersonaChange: (changeId: PersonaChangeId) => postJson<EditPersonaResponse>(at(API_PATHS.revertPersonaChange(changeId))),
+    postAddSchedule: (pmId: PmId, body: AddScheduleRequest) => postJson<ScheduleRecord>(at(API_PATHS.pmSchedules(pmId)), body),
+    putScheduleEnabled: (scheduleId: ScheduleId, enabled: boolean) =>
+      putJson<ScheduleRecord>(at(API_PATHS.schedule(scheduleId)), { enabled } satisfies SetScheduleEnabledRequest),
+    deleteSchedule: (scheduleId: ScheduleId) => request<void>(at(API_PATHS.schedule(scheduleId)), { method: "DELETE" }),
+    /** 每家厂商的模型名单（服务端问不到厂商时是打包的）。每台设备装的 CLI 不一样，名单按设备取。 */
+    fetchModels: () => request<ModelsResponse>(at(API_PATHS.models)),
+    /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
+    fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota)),
+    postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
+    postRetryMessage: (messageId: MessageId) => postJson<RetryMessageResponse>(at(API_PATHS.retryMessage(messageId))),
+    postFileAction: (target: FileActionTarget, action: FileAction) => {
+      const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
+      return postJson<FileActionResponse>(at(path));
+    },
+    /** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */
+    changeStreamUrl: (since: number) => {
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      return `${scheme}://${location.host}${at(API_PATHS.ws)}?since=${since}`;
+    },
+  };
 }
 
-export function postStop(conversationId: ConversationId): Promise<void> {
-  return postJson<void>(API_PATHS.stop(conversationId));
-}
+export type HubClient = ReturnType<typeof createClient>;
 
-export function postCreatePm(body: CreatePmRequest): Promise<CreatePmResponse> {
-  return postJson<CreatePmResponse>(API_PATHS.pms, body);
-}
+/** 入口本机。设备清单、配对这些入口自己的接口也只走它。 */
+export const localClient: HubClient = createClient(null);
 
-/** 让守护进程弹出原生的“选择文件夹”。等用户选完才回；取消（或超时）是 path null。 */
-export function postPickFolder(body: PickFolderRequest): Promise<PickFolderResponse> {
-  return postJson<PickFolderResponse>(API_PATHS.pickFolder, body);
-}
+export const {
+  fetchState,
+  fetchOlderMessages,
+  postMessage,
+  postUpload,
+  postStop,
+  postCreatePm,
+  postPickFolder,
+  fetchPersona,
+  putPersona,
+  postRevertPersonaChange,
+  postAddSchedule,
+  putScheduleEnabled,
+  deleteSchedule,
+  fetchModels,
+  fetchQuota,
+  postRenewSession,
+  postRetryMessage,
+  postFileAction,
+  changeStreamUrl,
+} = localClient;
 
-export function fetchPersona(pmId: PmId): Promise<PersonaResponse> {
-  return request<PersonaResponse>(API_PATHS.persona(pmId));
-}
+// ---- 入口自己的：设备清单（不转发） ----
 
-export function putPersona(pmId: PmId, body: EditPersonaRequest): Promise<EditPersonaResponse> {
-  return putJson<EditPersonaResponse>(API_PATHS.persona(pmId), body);
-}
-
-export function postRevertPersonaChange(changeId: PersonaChangeId): Promise<EditPersonaResponse> {
-  return postJson<EditPersonaResponse>(API_PATHS.revertPersonaChange(changeId));
-}
-
-export function postAddSchedule(pmId: PmId, body: AddScheduleRequest): Promise<ScheduleRecord> {
-  return postJson<ScheduleRecord>(API_PATHS.pmSchedules(pmId), body);
-}
-
-export function putScheduleEnabled(scheduleId: ScheduleId, enabled: boolean): Promise<ScheduleRecord> {
-  return putJson<ScheduleRecord>(API_PATHS.schedule(scheduleId), { enabled } satisfies SetScheduleEnabledRequest);
-}
-
-export function deleteSchedule(scheduleId: ScheduleId): Promise<void> {
-  return request<void>(API_PATHS.schedule(scheduleId), { method: "DELETE" });
-}
-
-/** 每家厂商的模型名单（服务端问不到厂商时是打包的）。 */
-export function fetchModels(): Promise<ModelsResponse> {
-  return request<ModelsResponse>(API_PATHS.models);
-}
-
-/** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
-export function fetchQuota(): Promise<QuotaResponse> {
-  return request<QuotaResponse>(API_PATHS.quota);
-}
-
-export function postRenewSession(pmId: PmId): Promise<RenewSessionResponse> {
-  return postJson<RenewSessionResponse>(API_PATHS.renewSession(pmId));
-}
-
-export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {
-  return postJson<RetryMessageResponse>(API_PATHS.retryMessage(messageId));
-}
-
-/** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */
-export function changeStreamUrl(since: number): string {
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  return `${scheme}://${location.host}${API_PATHS.ws}?since=${since}`;
-}
+/** GET /api/devices。老的守护进程（还没有联机）回 404：调用方当成只有本机一台。 */
+export const fetchDevices = () => request<DevicesResponse>(API_PATHS.devices);
+export const postAddDevice = (body: AddDeviceRequest) => postJson<DeviceInfo>(API_PATHS.devices, body);
+export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) =>
+  request<DeviceInfo>(API_PATHS.device(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
+export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.deviceInvites);
 
 /** 在 Finder 中显示 / 用默认程序打开的对象：agent 发来的文件（哪条消息的第几个）或聊天框上传的附件。 */
 export type FileActionTarget = { kind: "sent"; messageId: MessageId; index: number } | { kind: "upload"; id: string };
-
-export function postFileAction(target: FileActionTarget, action: FileAction): Promise<FileActionResponse> {
-  const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
-  return postJson<FileActionResponse>(path);
-}
 
 /** 预览窗取文件内容：maxBytes 不是 null 时只要前这么多字节（Range；服务端不理 Range 也截到这么多）。 */
 export async function fetchFileBytes(url: string, maxBytes: number | null): Promise<ArrayBuffer> {

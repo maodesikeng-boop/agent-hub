@@ -27,15 +27,22 @@ function StopButton({ stop }: { stop: StopControl }) {
  * stop：agent 在忙、而且输入框里没有文字也没有待发文件时，发送键变成“停止”（同一个位置、同样大小，图标是方块）；
  * 一有内容就变回发送（照常排队）；正在停止时不可点。
  */
+/** 设备连接对输入框的影响：readOnly 是只读的原因（离线），waiting 是能打字但发送要等连上（重连中）。 */
+export interface ComposerLink {
+  readOnly: string | null;
+  waiting: boolean;
+}
+
 export function Composer({
   value,
-  placeholder,
+  placeholder: placeholderProp,
   staging,
-  stop,
+  stop: stopProp,
   source,
   onChange,
   onSend,
-  disabled = false,
+  disabled: disabledProp = false,
+  link = null,
   autoFocus = false,
 }: {
   value: string;
@@ -44,6 +51,8 @@ export function Composer({
   /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
+  /** 对话所在的设备连不上（联机，devices.ts）：离线时整个输入框不可用、占位写原因；重连中能打字，发送等连上。 */
+  link?: ComposerLink | null;
   /** 输入 “/” 命令、“@” 文件时弹出的列表从哪来（见 composer-suggest.ts）；不给就不弹。 */
   source?: ComposerSource;
   onChange: (value: string) => void;
@@ -51,12 +60,17 @@ export function Composer({
   /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放。 */
   autoFocus?: boolean;
 }) {
+  // 设备离线：和“不能发”一样整个不可用，占位写原因，也不能停
+  const readOnly = link?.readOnly ?? null;
+  const disabled = disabledProp || readOnly !== null;
+  const placeholder = readOnly ?? placeholderProp;
+  const stop = readOnly === null ? stopProp : undefined;
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
   const tooLong = byteLength(value) > MAX_MESSAGE_BYTES;
   const hasContent = value.trim() !== "" || files.length > 0;
-  const canSend = !disabled && hasContent && !tooLong && !busy;
+  const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
 
   // “/”“@” 弹出列表：光标位置要自己记（打字、点、方向键都会动它）；选中后文字换掉，光标放到空格后
