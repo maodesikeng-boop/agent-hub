@@ -1,8 +1,9 @@
 // 不起进程的部分：写入的那一行、拼消息、读 assistant 事件、额度、启动参数和环境。
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { MAX_API_RETRY_ERROR_CHARS, type AgentSessionRow } from "../../shared/index.ts";
+import { MAX_API_RETRY_ERROR_CHARS, buildReadonlyPolicy, type AgentSessionRow } from "../../shared/index.ts";
 import {
+  CLAUDE_PERMISSION_PROMPT_TOOL,
   buildClaudeArgs,
   buildChildEnv,
   buildInterruptLine,
@@ -324,6 +325,14 @@ describe("启动参数", () => {
       "--add-dir",
       "/b",
     ]);
+  });
+  it("只读 Worker（LaunchFiles.readonly）：加 --permission-prompt-tool stdio，要批准的工具发 can_use_tool 给驱动；没有 readonly 不带", () => {
+    const readonly = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" });
+    const args = buildClaudeArgs(row, { ...files, readonly }, false);
+    expect(args.slice(args.indexOf("--permission-prompt-tool"), args.indexOf("--permission-prompt-tool") + 2)).toEqual(["--permission-prompt-tool", CLAUDE_PERMISSION_PROMPT_TOOL]);
+    expect(CLAUDE_PERMISSION_PROMPT_TOOL).toBe("stdio");
+    expect(args.indexOf("--permission-prompt-tool")).toBeGreaterThan(args.indexOf("--settings"));
+    expect(buildClaudeArgs(row, files, false)).not.toContain("--permission-prompt-tool");
   });
   it("恢复用 --resume，有模型带 --model", () => {
     const args = buildClaudeArgs({ ...row, model: "sonnet", addDirs: [] }, { promptFile: "/p", env: {}, fingerprint: "" }, true);

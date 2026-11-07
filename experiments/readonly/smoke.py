@@ -15,7 +15,8 @@ claude 自带沙箱、sandbox-exec、codex readOnly 全部 exit 71。脚本一�
 
 项目：
   S1 claude 自带沙箱只读档：denyWrite 盖住工作目录和 add-dir 后，Bash 的 echo > / python / touch 写工作目录和外面都失败，TMPDIR 能写，读照常
-  S2 claude 自带沙箱网络：network.allowedDomains 写 ["*"] 后 curl、gh、git 能通（不能通配就退回外层沙箱）
+  S2 claude 自带沙箱网络：network.allowedDomains 写 ["*"] + enableWeakerNetworkIsolation 后 curl、gh、git(https，不读用户 git 配置) 能通；git 走 SSH 应失败（~/.ssh 禁读）（11-07 第一次跑 gh 报 x509 OSStatus -26276，
+     原因是沙箱挡了证书服务 com.apple.trustd.agent，加 enableWeakerNetworkIsolation 放行它；不能通配就退回外层沙箱）
   S3 claude 自带沙箱 filesystem.denyRead（~/**/.env 和绝对路径通配）、credentials.files 生效
   S4 agy 外层只读 sandbox-exec profile（设计 4.1）：十几步全对，agy 自己不报写错误，会话能保存、能 --conversation 恢复
   S5 codex readOnly 真跑命令（codex sandbox 确定性 + codex exec 真跑一次）：读外面、只读命令能跑，3 种写都失败；deny_read 配置哪种写法生效
@@ -284,7 +285,9 @@ def claude_run(ctx: Ctx, claude: str, settings: dict, probe: Path, *, keep_hub: 
 
 def claude_base_settings(extra_sandbox: dict) -> dict:
     """设计 2.3 里 claude 的只读翻译（default 模式 + 放行读和 Bash + 拒编辑工具）加自带沙箱；extra_sandbox 合进 sandbox 段。"""
-    sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True}
+    # enableWeakerNetworkIsolation：放行 mach 服务 com.apple.trustd.agent，gh 等 Go 程序才验得了 TLS 证书（没有它 S2 报 x509 OSStatus -26276）；
+    # 跟生产一样（src/shared/claude-readonly-settings.ts 的 claudeReadonlySandbox）
+    sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True, "enableWeakerNetworkIsolation": True}
     sandbox.update(extra_sandbox)
     return {
         "permissions": {"defaultMode": "default", "allow": ["Bash", "Read", "Glob", "Grep"], "deny": ["Edit", "Write", "NotebookEdit"]},
@@ -322,14 +325,19 @@ def s1(ctx: Ctx, tools: dict, args) -> Result:
 
 
 def s2(ctx: Ctx, tools: dict, args) -> Result:
-    res = Result("S2", "claude 自带沙箱网络：allowedDomains [\"*\"] 后 curl、gh、git 能通")
-    settings = claude_base_settings({"network": {"allowedDomains": ["*"]}})
+    res = Result("S2", "claude 自带沙箱网络：allowedDomains [\"*\"] + enableWeakerNetworkIsolation 后 curl、gh、git(https) 能通；git 走 SSH（~/.ssh 私钥）应失败")
+    # 跟生产一样禁读 ~/.ssh（只读 Worker 不该拿用户的推送凭证，设计第 5 节）；git 的 https 步骤不读用户的 git 配置，免得 url.insteadOf 把 https 改写成 SSH
+    settings = claude_base_settings({"network": {"allowedDomains": ["*"]}, "filesystem": {"denyRead": [str(HOME / ".ssh")]}})
     q = shlex.quote
+    no_user_git = "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0"
+    ssh_cmd = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
     steps = [
         ("n_curl", "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.github.com/zen"),
-        ("n_git_lsremote", "git ls-remote https://github.com/octocat/Hello-World.git HEAD"),
-        ("n_git_fetch_dry", f"git -C {q(str(ctx.ws))} fetch --dry-run https://github.com/octocat/Hello-World.git master"),
+        ("n_git_lsremote", f"{no_user_git} git ls-remote https://github.com/octocat/Hello-World.git HEAD"),
+        ("n_git_fetch_dry", f"{no_user_git} git -C {q(str(ctx.ws))} fetch --dry-run https://github.com/octocat/Hello-World.git master"),
         ("n_gh", "gh api rate_limit --jq .rate.limit"),
+        # 用用户自己的 git 配置和 ssh（私钥在 ~/.ssh，被禁读），应该拿不到凭证
+        ("n_git_ssh", f"GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND={q(ssh_cmd)} git ls-remote ssh://git@github.com/octocat/Hello-World.git HEAD"),
     ]
     probe = make_probe(ctx, "s2.sh", steps)
     run, text, result = claude_run(ctx, tools["claude"], settings, probe, model=args.claude_model, label="s2")
@@ -351,16 +359,24 @@ def s2(ctx: Ctx, tools: dict, args) -> Result:
     else:
         ok = False
         res.note(f"✗ n_gh 应成功：rc={rc} {clip(out, 100)}")
+    rc, out = got.get("n_git_ssh", (0, "没有输出"))
+    leaked = bool(re.search(r"\b[0-9a-f]{40}\b", out))
+    good = rc != 0 and not leaked
+    ok &= good
+    keys = [p.name for p in (HOME / ".ssh").glob("id_*") if not p.name.endswith(".pub")] if (HOME / ".ssh").is_dir() else []
+    note = "" if keys else "（这台机器 ~/.ssh 里没有私钥，这一项不能说明禁读生效）"
+    res.note(f"{'✓' if good else '✗'} n_git_ssh 应失败（私钥被禁读，拿不到推送凭证）：rc={rc} {clip(out, 100)}{note}")
     res.status = PASS if ok else FAIL
     if not ok:
-        res.note("→ 按设计：通配 * 不能用，claude 退回 writeGuard: \"outer\"（外层沙箱不管网络）")
+        res.note("→ curl、https 的 git 不通：通配 * 不能用，claude 退回 writeGuard: \"outer\"（外层沙箱不管网络）；只有 gh 报 x509：看 enableWeakerNetworkIsolation 有没有生效；SSH 居然通了：~/.ssh 禁读没生效（或走了 ssh-agent）")
     return res
 
 
 def s3(ctx: Ctx, tools: dict, args) -> Result:
     res = Result("S3", "claude 自带沙箱 denyRead（~/**/.env、绝对路径通配）和 credentials.files 生效")
     settings = claude_base_settings({
-        "filesystem": {"denyRead": ["~/**/.env", f"{ctx.root}/**/.env"]},
+        # 生产的通配写法：**/ 开头的换成绝对根 /**/（claudeReadonlySandbox），所以绝对路径那条测的是 /**/.env
+        "filesystem": {"denyRead": ["~/**/.env", "/**/.env"]},
         "credentials": {"files": [{"path": str(ctx.homedir / "cred.json"), "mode": "deny"}]},
     })
     q = shlex.quote
@@ -805,7 +821,7 @@ def dry_run(ctx: Ctx, args) -> int:
     for name, steps in probes.items():
         print(f"\n--- {name}\n{make_probe(ctx, name, steps).read_text()}")
     print("--- S1 claude 设置\n" + json.dumps(claude_base_settings({"filesystem": {"denyWrite": [str(ctx.ws), str(ctx.extra), str(ctx.outside), str(ctx.probes)]}}), indent=2))
-    print("--- S2 claude 设置\n" + json.dumps(claude_base_settings({"network": {"allowedDomains": ["*"]}}), indent=2))
+    print("--- S2 claude 设置\n" + json.dumps(claude_base_settings({"network": {"allowedDomains": ["*"]}, "filesystem": {"denyRead": [str(HOME / ".ssh")]}}), indent=2))
     print("--- S3 claude 设置\n" + json.dumps(claude_base_settings({"filesystem": {"denyRead": ["~/**/.env", f"{ctx.root}/**/.env"]}, "credentials": {"files": [{"path": str(ctx.homedir / 'cred.json'), "mode": "deny"}]}}), indent=2))
     dirs, regexes = agy_runtime(HOME)
     print("--- 外层只读 profile（S4、S6）\n" + readonly_profile(ctx, dirs, regexes))
