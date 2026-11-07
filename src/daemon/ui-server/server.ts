@@ -33,6 +33,7 @@ import {
   sentFileMime,
   sentFilesOf,
   serverInfoFor,
+  isLoopbackAddress,
   serverInfoForClient,
   utf8Bytes,
   type AgentVendor,
@@ -497,7 +498,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     };
     // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
     const requireLocal = (req: FastifyRequest): void => {
-      if (!serverInfoForClient(serverInfo, req.ip).fileActions) throw new FileActionsUnavailable();
+      if (!isLoopbackAddress(req.ip)) throw new FileActionsUnavailable();
     };
     const parseAction = (raw: unknown): FileAction | null => ((FILE_ACTIONS as readonly unknown[]).includes(raw) ? (raw as FileAction) : null);
 
