@@ -4,9 +4,9 @@ import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
 // 按钮（docs/ui-standard.md 第 6、7 条）：都是胶囊形；默认高 36px（h-9），sm 和 icon-sm 是 32px（h-8），只用在列表行里的次要操作；
-// 键盘焦点是中性灰的圈（ring-ring/50）。
+// 键盘焦点是中性灰的圈（ring-ring/50）；touch-target：触屏下可点范围撑到 44px（第 19 条）。
 export const buttonVariants = cva(
-  "inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "touch-target inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

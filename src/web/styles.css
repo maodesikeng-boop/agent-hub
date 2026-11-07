@@ -68,6 +68,9 @@
   /* 顶栏两边的边距（照 t3code 的 --workspace-gutter：0.75rem，sm 以上 1.25rem）：标题在左上、按钮在右上，不跟着对话列居中 */
   --header-gutter-start: 1.25rem;
   --header-gutter-end: 0.75rem;
+  /* 安全区（docs/ui-standard.md 第 19 条）：主屏 App 全屏时刘海和底部横条的高度；电脑上是 0。组件里不直接写 env()，用这两个变量 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   color-scheme: light;
 }
@@ -77,6 +80,10 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+/* 手机上 vh 包含收起来的地址栏，底部会被挤出屏幕；dvh 跟着实际可见高度走（键盘弹起时配合 viewport 的 interactive-widget=resizes-content） */
+#root {
+  height: 100dvh;
 }
 
 body {
@@ -97,6 +104,9 @@ code {
    最宽 64rem，再宽就留白（两边相等）。消息列表（.messages）、输入框外层、提示条（Notices）都用它，左右边线对齐 */
 .chat-main {
   container: chat / inline-size;
+  /* 顶栏从刘海下面开始，输入框在底部横条上面（第 19 条） */
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
 }
 .messages,
 .chat-column {
@@ -398,4 +408,32 @@ code {
   text-align: right;
   color: var(--muted-foreground);
   user-select: none;
+}
+
+/* 触屏（docs/ui-standard.md 第 19 条） */
+/* 点击区域不小于 44px，视觉大小不变：.touch-target 用 ::after 把可点范围撑开。position: relative 放在 components 层，
+   工具类（absolute 之类）能盖掉它 */
+@layer components {
+  .touch-target {
+    position: relative;
+  }
+}
+@media (pointer: coarse) {
+  .touch-target::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    min-width: 44px;
+    min-height: 44px;
+    transform: translate(-50%, -50%);
+  }
+  /* iOS 对小于 16px 的输入框聚焦时会自动放大页面；不在层里，盖得过组件里的 text-[15px] */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
