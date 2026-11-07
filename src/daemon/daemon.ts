@@ -16,6 +16,7 @@ import {
   ENV_DEFAULT_MODEL,
   ENV_PORT,
   ENV_TAILNET_OWNER,
+  ENV_ALLOW_LOOPBACK_PEERS,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
@@ -74,7 +75,8 @@ import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
-import { defaultDeviceName, loadOrCreateDevice } from "./device.ts";
+import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
+import { createPeers, type Peers } from "./peers/index.ts";
 import {
   createTailnetProbe,
   runTailscaleStatus,
@@ -146,6 +148,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     models?: ModelCatalogs;
     commands?: CommandCatalogs;
     ui?: RunningUiServer;
+    peers?: Peers;
     agentApi?: RunningAgentApi;
     db?: Db;
     lock?: DirLock;
@@ -160,7 +163,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, peers, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
@@ -184,6 +187,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (driver) await step("claude", () => driver.shutdown());
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
+    // 先停设备之间在途的请求，再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
+    peers?.close();
     if (ui) await step("界面服务", () => ui.close());
     if (agentApi) {
       await step("agent 接口", async () => {
@@ -394,6 +399,25 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const tailscaleCli = tailscaleCommand({ env });
     const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
     const serveTarget = serveTargetKind({ env });
+    // 已配对的设备（state/peers.json）。本机网址：tailnet 名字；测试开关下没有 Tailscale 时用本机回环地址
+    const allowLoopbackPeers = env[ENV_ALLOW_LOOPBACK_PEERS] === "1";
+    let listeningPort: number | undefined;
+    const peers = createPeers({
+      file: paths.peersFile,
+      device,
+      saveName: (name) => {
+        device.name = name;
+        saveDevice(paths.deviceFile, device);
+      },
+      selfUrl: () => {
+        const self = tailnet.current();
+        if (self !== null) return `https://${self.dnsName}`;
+        return allowLoopbackPeers && listeningPort !== undefined ? `http://127.0.0.1:${listeningPort}` : null;
+      },
+      allowLoopback: allowLoopbackPeers,
+      log,
+    });
+    parts.peers = peers;
     parts.ui = await startUiServer({
       ledger,
       token,
@@ -408,15 +432,19 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       rotateToken,
       tailnet,
       serveTarget,
+      peers,
       ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
     });
     const uiPort = parts.ui.port;
+    listeningPort = uiPort;
     void tailnet.refresh().then((self) => {
       if (self === null) return;
       const target = serveTarget === "unix" ? { kind: "unix" as const, path: paths.uiSock } : { kind: "tcp" as const, port: uiPort };
       log(`${LOG_PREFIX} 联机：这台是 ${device.name}（${device.id}），tailnet 名字 ${self.dnsName}。别的设备、手机要访问，先跑一次：${serveCommandLine({ cli: tailscaleCli, target })}`);
       if (self.owner === null) log(`${LOG_PREFIX} 联机：这台打了 tag，问不到设备主人，经 tailnet 的访问会被拒绝；请设 ${ENV_TAILNET_OWNER}=<你的 Tailscale 登录名>`);
     });
+    // 上线时把设备清单同步一遍：离线期间别的设备改了名、换了网址、加了新设备，这时补上；离线期间被移除的，对方会拒（401），这边自己删
+    void tailnet.refresh().then(() => peers.announce());
 
     let stopping: Promise<void> | undefined;
     return {

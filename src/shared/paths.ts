@@ -23,6 +23,8 @@ export interface HubPaths {
   uiTokenFile: string;
   /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
   deviceFile: string;
+  /** state/peers.json：已配对的设备和设备令牌（联机，daemon/peers/store.ts），权限 0600。对方的令牌只存 sha256。 */
+  peersFile: string;
   launchDir: string;
   logsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
@@ -86,6 +88,7 @@ export function resolveHubPaths(
     lockFile: join(stateDir, "lock"),
     uiTokenFile: join(stateDir, "ui-token"),
     deviceFile: join(stateDir, "device.json"),
+    peersFile: join(stateDir, "peers.json"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),

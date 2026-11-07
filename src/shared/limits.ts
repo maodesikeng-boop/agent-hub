@@ -327,6 +327,12 @@ export const ENV_TAILSCALE = "AGENT_HUB_TAILSCALE";
 export const ENV_TAILNET_NAME = "AGENT_HUB_TAILNET_NAME";
 /** 联机：设备主人的 Tailscale 登录名写死。打了 tag 的设备 status 里没有主人，必须写这个，否则经 serve 的请求一律 403。 */
 export const ENV_TAILNET_OWNER = "AGENT_HUB_TAILNET_OWNER";
+/**
+ * 联机（daemon/peers/）：认 http://127.0.0.1:<端口>、http://localhost:<端口> 这种本机网址当设备网址（=1 时）。
+ * 只给测试、同一台机器上起两个守护进程用；平常设备网址只认 https://<机器>.<tailnet>.ts.net。
+ * 开了以后本机没有 tailnet 名字时，自己的网址报 http://127.0.0.1:<界面端口>。
+ */
+export const ENV_ALLOW_LOOPBACK_PEERS = "AGENT_HUB_ALLOW_LOOPBACK_PEERS";
 /** 联机：serve 转发目标 unix | tcp，默认 Linux unix、macOS tcp（老版本 tailscale 不支持 unix: 时改 tcp）。 */
 export const ENV_SERVE_TARGET = "AGENT_HUB_SERVE_TARGET";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
@@ -369,3 +375,26 @@ export const TAILNET_PROBE_OK_TTL_MS = 5 * 60_000;
 export const TAILNET_PROBE_FAIL_TTL_MS = 30_000;
 /** 联机：跑一次 tailscale status --json 最多等多久。 */
 export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;
+
+// ---- 联机：设备配对、转发（daemon/peers/，docs/multi-device-design.md 第 3.2 节） ----
+/** 邀请码：随机 128 位，10 分钟内、只能用一次。 */
+export const PEER_INVITE_BYTES = 16;
+export const PEER_INVITE_TTL_MS = 10 * 60_000;
+/** 邀请码错这么多次：作废所有没用掉的邀请码并锁住配对，直到用户在本机重新生成邀请码。 */
+export const PEER_INVITE_MAX_FAILURES = 5;
+/** 设备令牌：随机 32 字节（base64url 43 个字符）。对方的只存 sha256。 */
+export const PEER_TOKEN_BYTES = 32;
+/** 应邀配对后对方一直没来确认（它那边没存下来）：这么久后丢掉这条“待确认”。 */
+export const PEER_PENDING_TTL_MS = PEER_INVITE_TTL_MS;
+/** 记住移除过的设备（不让同步、介绍又把它配回来），最多这么多条，满了丢最早的。 */
+export const MAX_REMOVED_PEERS = 100;
+/** 设备清单最多这么多台（对方发来的清单超过就拒绝）。 */
+export const MAX_PEERS = 100;
+/** 设备之间的控制请求（配对、同步、移除、介绍、改名）最多等多久。 */
+export const PEER_REQUEST_TIMEOUT_MS = 10_000;
+/** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。响应体（下载）不限时。 */
+export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
+/** 转发 WebSocket：连对方最多等多久。 */
+export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
+/** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
+export const PEER_WS_PING_MS = 5_000;

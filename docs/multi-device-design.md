@@ -61,6 +61,15 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
   4. 已配对的设备之间互相同步设备清单（只同步“谁是谁、网址”，不同步令牌），第三台配一次就全通。
 - **转发时**：入口去掉浏览器的 cookie 和所有 `Tailscale-*` 头，加 `Authorization: Bearer <设备令牌>`、`X-Agent-Hub-Device: <入口 id>`。对方查令牌 + serve 给的身份头。
 - **撤销**：“设置 → 设备 → 移除”：删本机记录，并通知对方删它那边（对方离线就只删本机，对方上线后令牌被拒会自己标成“已移除”）。紧急情况（设备丢了、被入侵）：在 Tailscale 后台把设备踢出 tailnet，网络层立刻断，比改令牌快。
+- **已实现（P2，`daemon/peers/`）**：
+  - 存在 `state/peers.json`（0600，不进 sqlite，免得和账本迁移抢编号）。设备表一行一台：`id/name/platform/url`、`state`（`pending | paired`）、`inboundTokenSha256`（对方来访出示的令牌，只存哈希）、`outboundToken`（本机去访问对方出示的，明文）；外加移除过的设备编号（墓碑，同步、介绍不会把它配回来，用户手动添加时清掉）。邀请码只在内存里、只存哈希。
+  - 配对状态机：应邀方收到 `POST /api/peer/pair` 记成 `pending`（对方可能还没存下本机，这时只收它的请求、不主动找它、不进设备列表、不转发）→ 对方第一次带令牌来访（就是它配好后的清单同步）改成 `paired` 并同步自己的清单；`pending` 10 分钟没等到就丢掉。发起方拿到对方令牌直接 `paired`。移除 / 对方通知移除 / 对方拒了本机令牌（401 `peer_unauthorized`）→ 删掉并记墓碑。
+  - 第三台配一次就全通：收到的清单里有没配过的设备，编号小的那台请发清单的设备介绍（新增 `POST /api/peer/introductions`，它去那台 `POST /api/peer/invites` 要一个只给请求方用的邀请码），再直接配对；编号大的不动，同一对不会两边同时发起。清单同步只信发送方说它自己的名字和网址。
+  - 改名：名字归设备自己管；在入口给别的设备改名走新增的 `PUT /api/peer/name`，它改完同步给大家。
+  - 设备网址只认 `https://<机器>.<tailnet>.ts.net`；`AGENT_HUB_ALLOW_LOOPBACK_PEERS=1` 时另认 `http://127.0.0.1:<端口>`（只给测试、同机两个守护进程用）。
+  - 设备令牌（`Authorization: Bearer` + `x-agent-hub-device`）只能访问 `/api/` 下除 `ENTRY_ONLY_API_PREFIXES`（设备管理、浏览器登录、推送订阅）之外的接口，不能用 `/d/`（不能借本机的转发去第三台）；不查 Origin。`/api/peer/*` 只认设备令牌（pair 凭邀请码）。
+  - 转发自己写（fetch + ws），没用 `@fastify/http-proxy`：上游按设备编号查、要换令牌、两个方向的头都要白名单过滤。请求头只带 `accept/content-type/range/if-*`，加设备令牌；响应头只放 `content-*/accept-ranges/cache-control/etag/last-modified` 回去（不放 Set-Cookie、Location），一律加沙箱 CSP 和 nosniff（对方回的东西在入口的来源下显示，不能让它在入口的来源里跑脚本）。路径必须是 `/api/` 开头、规范化后不变（挡 `../`、`%2e%2e`、`\`）。请求体、响应体都是流（20 MB 上传不在入口落地）。等响应头最多 30 秒，连不上回 502 `device_offline`。
+  - WebSocket 转发：浏览器那条握手后连对方（`since` 原样带），消息、关闭双向转；每 5 秒 ping 对方，下一次还没 pong 就当离线，用 4502 `device_offline` 关浏览器那条（断网 10 秒内发现）。连接复用：HTTP 走 fetch 的 keep-alive 连接池，每台设备一个 origin 一组长连接；不轮询，清单只在配对、确认、改名、启动时同步一次。
 - **Tailscale 侧的设置**（写进 docs/linux.md 和新文档）：所有设备用用户本人账号登录（**别用 tag**：tag 设备发出的请求不带身份头）；服务器关掉 key 过期（默认 180 天，过期就掉线）；身份提供方（Google / GitHub / Apple）开两步验证；可选 Tailnet Lock。
 
 ### 3.3 Host / Origin 校验怎么改
