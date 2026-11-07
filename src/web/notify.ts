@@ -2,7 +2,8 @@
 // “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import { WAITING_SETTLE_MS, notificationTag, type ConversationId, type MessageId } from "../shared/index.ts";
+import { WAITING_SETTLE_MS, notificationTag, type ConversationId } from "../shared/index.ts";
+import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
 import { listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
@@ -46,18 +47,23 @@ function saveNotifyPref(on: boolean): void {
   }
 }
 
-function loadLastSeen(): LastSeen {
+/** 每台设备的“上次看过”分开存：入口本机用 LAST_SEEN_KEY（和没有联机时一样），别的设备在后面加设备编号。 */
+function lastSeenKey(device: DeviceKey): string {
+  return device === LOCAL_DEVICE ? LAST_SEEN_KEY : `${LAST_SEEN_KEY}:${device}`;
+}
+
+function loadLastSeen(device: DeviceKey): LastSeen {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_SEEN_KEY) ?? "{}");
+    const parsed: unknown = JSON.parse(localStorage.getItem(lastSeenKey(device)) ?? "{}");
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as LastSeen) : {};
   } catch {
     return {};
   }
 }
 
-function saveLastSeen(lastSeen: LastSeen): void {
+function saveLastSeen(device: DeviceKey, lastSeen: LastSeen): void {
   try {
-    localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(lastSeen));
+    localStorage.setItem(lastSeenKey(device), JSON.stringify(lastSeen));
   } catch {
     // 存不了（隐私模式、被禁用）：这次打开期间还是有效，重开以后当作都没看过
   }
@@ -90,61 +96,86 @@ function currentPermission(): NotifyPermission {
   return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 }
 
+/** 提醒要看的一台设备。name 只在两台以上时用（通知标题前面加设备名）。 */
+export interface ReminderDevice {
+  key: DeviceKey;
+  name: string;
+  state: HubState;
+}
+
+/** 哪台设备的哪个对话。 */
+export interface ConversationRef {
+  device: DeviceKey;
+  id: ConversationId;
+}
+
 /**
- * 判断每个对话在不在“等你”、有没有“等你确定”的提问，并提醒用户：返回在“等你”的对话、有提问的对话（左栏显示）、
- * 通知权限和申请权限的函数；同时把标签页标题改成“(N) 产品名”（N 是两种提醒的对话数，同一个对话只算一次），
- * 从“不算”变成“等你”时弹一次浏览器通知，来了新的提问马上弹一次。
+ * 判断所有设备的每个对话在不在“等你”、有没有“等你确定”的提问，并提醒用户：返回在“等你”的对话、有提问的对话
+ * （都是 devices.ts 的 conversationKey，左栏显示）、通知权限和申请权限的函数；同时把标签页标题改成“(N) 产品名”
+ * （N 是所有设备两种提醒的对话数合计，同一个对话只算一次），从“不算”变成“等你”时弹一次浏览器通知，来了新的提问马上弹一次。
+ * 每台设备第一次加载好时本来就在等的、本来就有的提问直接算，不弹。
  * viewing 是用户正开着的对话（没有就是 null）；onOpen 在用户点通知时调，打开那个对话。
  */
-export function useWaitingReminders(state: HubState, viewing: ConversationId | null, onOpen: (conversationId: ConversationId) => void) {
+export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: ConversationRef | null, onOpen: (ref: ConversationRef) => void) {
   const foreground = useForeground();
-  const [lastSeen, setLastSeen] = useState(loadLastSeen);
+  const [lastSeen, setLastSeen] = useState<Partial<Record<DeviceKey, LastSeen>>>({});
   const [permission, setPermission] = useState(currentPermission);
   const [notifyPref, setNotifyPref] = useState(loadNotifyPref);
-  const [waiting, setWaiting] = useState<ReadonlySet<ConversationId>>(new Set());
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set());
 
   // 网页在前台、正开着这个对话的时候，它的每条新消息都算看过
-  const viewingLastId = viewing === null ? null : (state.conversations[viewing]?.messages.at(-1)?.id ?? null);
+  const viewingDevice = viewing === null ? null : viewing.device;
+  const viewingId = viewing === null ? null : viewing.id;
+  const viewingState = devices.find((d) => d.key === viewingDevice)?.state;
+  const viewingLastId = viewingId === null ? null : (viewingState?.conversations[viewingId]?.messages.at(-1)?.id ?? null);
   useEffect(() => {
-    if (viewing === null || !foreground) return;
+    if (viewingDevice === null || viewingId === null || !foreground) return;
     setLastSeen((prev) => {
-      const next = { ...prev, [viewing]: Date.now() };
-      saveLastSeen(next);
-      return next;
+      const next = { ...(prev[viewingDevice] ?? loadLastSeen(viewingDevice)), [viewingId]: Date.now() };
+      saveLastSeen(viewingDevice, next);
+      return { ...prev, [viewingDevice]: next };
     });
-  }, [viewing, foreground, viewingLastId]);
+  }, [viewingDevice, viewingId, foreground, viewingLastId]);
 
-  const ready = state.phase === "ready";
-  const candidates = useMemo(() => (ready ? waitingConversations(state, lastSeen) : []), [ready, state, lastSeen]);
-  const candidatesKey = candidates.join(",");
+  const ready = devices.filter((d) => d.state.phase === "ready");
+  // 入口本机的键是 ""，不能用 join 拼：用 JSON
+  const readyKey = JSON.stringify(ready.map((d) => d.key));
+  const candidates = useMemo(
+    () => ready.flatMap((d) => waitingConversations(d.state, lastSeen[d.key] ?? loadLastSeen(d.key)).map((id) => ({ device: d.key, key: conversationKey(d.key, id), id }))),
+    [devices, lastSeen],
+  );
+  const candidatesKey = candidates.map((c) => c.key).join(",");
 
   // 没存过偏好的老用户：授权过就是开
   const notifyEnabled = permission === "granted" && notifyPref !== false;
-  const latest = useRef({ state, viewing, foreground, onOpen, notifyEnabled });
-  latest.current = { state, viewing, foreground, onOpen, notifyEnabled };
+  const latest = useRef({ devices, viewing, foreground, onOpen, notifyEnabled });
+  latest.current = { devices, viewing, foreground, onOpen, notifyEnabled };
   /** 已经算“等你”的（停稳了的，和刚打开网页时本来就在等的）。 */
-  const settled = useRef(new Set<ConversationId>());
-  const timers = useRef(new Map<ConversationId, ReturnType<typeof setTimeout>>());
-  const opened = useRef(false);
+  const settled = useRef(new Set<string>());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /** 已经加载好过的设备：第一次加载好时本来就在等的不弹。 */
+  const opened = useRef(new Set<DeviceKey>());
 
   /** 弹一条通知。ask 是提问的正文（有就是“等你确定”，没有就是“等你”，正文取对话的最后一条）。 */
-  const announce = useCallback((conversationId: ConversationId, ask?: string) => {
-    const { state, viewing, foreground, onOpen, notifyEnabled } = latest.current;
-    if (foreground && viewing === conversationId) return;
+  const announce = useCallback((ref: ConversationRef, ask?: string) => {
+    const { devices, viewing, foreground, onOpen, notifyEnabled } = latest.current;
+    if (foreground && viewing !== null && viewing.device === ref.device && viewing.id === ref.id) return;
     // 这个浏览器订阅了推送：退到后台时由守护进程推（联机 P4），这里不再弹，免得同一条两遍
     if (!foreground && hasPushSubscription()) return;
     if (!notifyEnabled || currentPermission() !== "granted") return;
-    const entry = listConversations(state).find((e) => e.id === conversationId);
-    if (!entry) return;
-    const tag = notificationTag(entry.pm?.id ?? null, conversationId);
+    const device = devices.find((d) => d.key === ref.device);
+    const entry = device && listConversations(device.state).find((e) => e.id === ref.id);
+    if (!device || !entry) return;
+    const prefix = devices.length > 1 ? `${device.name} · ` : "";
+    const tag = `${ref.device === LOCAL_DEVICE ? "" : `${ref.device}:`}${notificationTag(entry.pm?.id ?? null, ref.id)}`;
     try {
-      const notification = new Notification(`${entry.name} ${ask === undefined ? "等你" : "等你确定"}`, {
+      const notification = new Notification(`${prefix}${entry.name} ${ask === undefined ? "等你" : "等你确定"}`, {
         body: ask === undefined ? previewText(entry) : stripMarkdown(ask),
         tag: ask === undefined ? tag : `ask-${tag}`,
       });
       notification.onclick = () => {
         window.focus();
-        onOpen(conversationId);
+        onOpen(ref);
         notification.close();
       };
     } catch {
@@ -153,55 +184,59 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
-    const now = new Set(candidates);
-    for (const [id, timer] of timers.current) {
-      if (!now.has(id)) {
+    const now = new Map(candidates.map((c) => [c.key, c]));
+    for (const [key, timer] of timers.current) {
+      if (!now.has(key)) {
         clearTimeout(timer);
-        timers.current.delete(id);
+        timers.current.delete(key);
       }
     }
-    for (const id of settled.current) if (!now.has(id)) settled.current.delete(id);
-    if (!opened.current) {
-      // 刚打开网页时本来就在等的：直接算，不弹
-      opened.current = true;
-      for (const id of now) settled.current.add(id);
+    for (const key of settled.current) if (!now.has(key)) settled.current.delete(key);
+    for (const device of JSON.parse(readyKey) as DeviceKey[]) {
+      if (opened.current.has(device)) continue;
+      // 这台刚加载好：本来就在等的直接算，不弹
+      opened.current.add(device);
+      for (const c of candidates) if (c.device === device) settled.current.add(c.key);
     }
-    for (const id of now) {
-      if (settled.current.has(id) || timers.current.has(id)) continue;
+    for (const c of now.values()) {
+      if (settled.current.has(c.key) || timers.current.has(c.key)) continue;
       timers.current.set(
-        id,
+        c.key,
         setTimeout(() => {
-          timers.current.delete(id);
-          settled.current.add(id);
+          timers.current.delete(c.key);
+          settled.current.add(c.key);
           setWaiting(new Set(settled.current));
-          announce(id);
+          announce({ device: c.device, id: c.id });
         }, WAITING_SETTLE_MS),
       );
     }
-    setWaiting((prev) => (prev.size === settled.current.size && [...prev].every((id) => settled.current.has(id)) ? prev : new Set(settled.current)));
-    // candidates 的内容变了才重新算；它的引用每次状态变化都是新的
-  }, [ready, candidatesKey, announce]);
+    setWaiting((prev) => (prev.size === settled.current.size && [...prev].every((key) => settled.current.has(key)) ? prev : new Set(settled.current)));
+    // candidates 的内容变了才重新算；它的引用每次状态变化都是新的（useMemo 跟着 devices 变）
+  }, [readyKey, candidatesKey, announce]);
 
-  // 有提问的对话：一直算到处理；新来的提问马上弹通知（刚打开网页时本来就有的不弹）
+  // 有提问的对话：一直算到处理；新来的提问马上弹通知（每台第一次加载好时本来就有的不弹）
   const asks = useMemo(
     () =>
-      ready
-        ? Object.keys(state.conversations).flatMap((key) => pendingAsks(state, Number(key)).map((message) => ({ conversationId: Number(key), message })))
-        : [],
-    [ready, state],
+      ready.flatMap((d) =>
+        Object.keys(d.state.conversations).flatMap((key) =>
+          pendingAsks(d.state, Number(key)).map((message) => ({ device: d.key, conversationId: Number(key), message })),
+        ),
+      ),
+    [devices],
   );
-  const asking = useMemo<ReadonlySet<ConversationId>>(() => new Set(asks.map((a) => a.conversationId)), [asks]);
-  const knownAsks = useRef<Set<MessageId> | null>(null);
+  const asking = useMemo<ReadonlySet<string>>(() => new Set(asks.map((a) => conversationKey(a.device, a.conversationId))), [asks]);
+  const knownAsks = useRef(new Set<string>());
+  const asksOpened = useRef(new Set<DeviceKey>());
   useEffect(() => {
-    if (!ready) return;
-    const known = (knownAsks.current ??= new Set(asks.map((a) => a.message.id)));
-    for (const { conversationId, message } of asks) {
-      if (known.has(message.id)) continue;
-      known.add(message.id);
-      announce(conversationId, message.text);
+    const fresh = new Set(asks.map((a) => a.device).filter((device) => !asksOpened.current.has(device)));
+    for (const { device, conversationId, message } of asks) {
+      const key = `${device}:${message.id}`;
+      if (knownAsks.current.has(key)) continue;
+      knownAsks.current.add(key);
+      if (!fresh.has(device)) announce({ device, id: conversationId }, message.text);
     }
-  }, [ready, asks, announce]);
+    for (const device of JSON.parse(readyKey) as DeviceKey[]) asksOpened.current.add(device);
+  }, [readyKey, asks, announce]);
 
   useEffect(() => {
     const pending = timers.current;
@@ -245,4 +280,13 @@ export function useWaitingReminders(state: HubState, viewing: ConversationId | n
 
   const notify: NotifySettings = { permission, enabled: notifyEnabled, setEnabled };
   return { waiting, asking, notify };
+}
+
+/** 只看入口本机一台（没有联机时的样子）：在“等你”、有提问的对话编号。 */
+export function useWaitingReminders(state: HubState, viewing: ConversationId | null, onOpen: (conversationId: ConversationId) => void) {
+  const devices = useMemo(() => [{ key: LOCAL_DEVICE, name: "", state }], [state]);
+  const reminders = useDeviceReminders(devices, viewing === null ? null : { device: LOCAL_DEVICE, id: viewing }, (ref) => onOpen(ref.id));
+  const waiting = useMemo<ReadonlySet<ConversationId>>(() => new Set([...reminders.waiting].map(Number)), [reminders.waiting]);
+  const asking = useMemo<ReadonlySet<ConversationId>>(() => new Set([...reminders.asking].map(Number)), [reminders.asking]);
+  return { waiting, asking, notify: reminders.notify };
 }

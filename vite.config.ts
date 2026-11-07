@@ -8,7 +8,7 @@ import { webManifest } from "./src/web/pwa-manifest.ts";
 
 // 只管 src/web：守护进程只发打包好的 dist/ 静态文件。
 // 开发时（pnpm dev）：先起守护进程，把它的端口设到 AGENT_HUB_DAEMON_PORT，再跑 vite；
-// /api/（含 WebSocket /api/ws）和 /auth 代理过去。守护进程要求 Host 是它自己的地址、POST 和 WebSocket 握手的
+// /api/（含 WebSocket /api/ws）、/auth 和别的设备的 /d/<设备>/api/...（联机，入口转发）代理过去。守护进程要求 Host 是它自己的地址、POST 和 WebSocket 握手的
 // Origin 和它同源，否则回 403：changeOrigin 改 Host；Origin 只在请求确实来自 vite 这个页面时才改成守护进程的地址，
 // 别的来源原样转过去，照样被拒。
 const daemonPort = process.env[ENV_DEV_DAEMON_PORT];
@@ -74,6 +74,7 @@ export default defineConfig({
           // 带斜杠：不然 /apifoo 这种路径也会被转过去
           "/api/": proxyTo(target, true),
           "/auth": proxyTo(target, false),
+          "/d/": proxyTo(target, true),
         }
       : undefined,
   },

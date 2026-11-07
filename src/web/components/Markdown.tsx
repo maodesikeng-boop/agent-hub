@@ -21,6 +21,7 @@ import { FileCard, useFileExpired } from "./Attachments.tsx";
 import { ChartBlock } from "./ChartBlock.tsx";
 import { codeElementOf, codeSource, CodeBlock, languageOf } from "./CodeBlock.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
+import { useClient } from "../device-scope.tsx";
 
 /** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或文件卡片。 */
 const SENT_FILE_ATTR = "data-sent-file";
@@ -60,7 +61,7 @@ function flattenLocalReferences(tree: MdNode): void {
  * 对上的：存了副本的地址换成取副本的接口，记下是第几个文件；没存下来的地址清空（不发请求）。
  * 没对上的本机图片（老消息、没有 meta.files、超过个数的）：换成说明文字，不让浏览器拿本机路径去请求。
  */
-function remarkSentFiles(files: SentFile[]) {
+function remarkSentFiles(files: SentFile[], url: (path: string) => string) {
   const index = new Map(files.map((file, i) => [file.href, i]));
   return () => (tree: MdNode) => {
     flattenLocalReferences(tree);
@@ -68,7 +69,7 @@ function remarkSentFiles(files: SentFile[]) {
       const i = index.get(node.url!);
       const file = i === undefined ? undefined : files[i]!;
       if (file !== undefined) {
-        node.url = file.id === null ? "" : sentFileUrl({ id: file.id, name: file.name });
+        node.url = file.id === null ? "" : url(sentFileUrl({ id: file.id, name: file.name }));
         node.data = { ...node.data, hProperties: { [SENT_FILE_ATTR]: String(i) } };
       } else if (node.type === "image" && parseLocalHref(node.url!) !== null) {
         Object.assign(node, { type: "text", value: node.alt ?? "" });
@@ -114,8 +115,9 @@ function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; 
  */
 function SentFileView({ sent, inline, alt }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string }) {
   const { file, index, messageId } = sent;
+  const client = useClient();
   if (file.status === "saved" && file.id !== null) {
-    const url = sentFileUrl({ id: file.id, name: file.name });
+    const url = client.url(sentFileUrl({ id: file.id, name: file.name }));
     const preview = previewOf(file, url, index, messageId);
     if (inline && isSentImage(file)) return <InlineSentImage alt={alt || file.name} file={file} preview={preview} />;
     return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} preview={preview} className="my-1.5 w-fit max-w-full" />;
@@ -175,7 +177,8 @@ const NO_FILES: SentFile[] = [];
  * messageId：这条消息的编号，预览窗用它找文件做“在 Finder 中显示”；预览窗里渲染 .md 文件时不带（没有这两个按钮的对象）。
  */
 export function Markdown({ text, files = NO_FILES, messageId }: { text: string; files?: SentFile[]; messageId?: number }) {
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkChartBlocks, remarkSentFiles(files)], [files]);
+  const client = useClient();
+  const remarkPlugins = useMemo(() => [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkChartBlocks, remarkSentFiles(files, client.url)], [files, client]);
   const context = useMemo(() => ({ files, messageId }), [files, messageId]);
   return (
     <SentFilesContext value={context}>

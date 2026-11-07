@@ -75,6 +75,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 - “设置 → 已登录的浏览器”：列出、单个退出；“全部退出”= 换主钥匙 + 清会话。手机丢了：这里退掉它 + Tailscale 后台踢掉手机。
 - 手机第一次登录：电脑网页“在手机上打开”显示二维码（内容是入口的登录链接，5 分钟有效、用一次就失效），手机扫码打开即登录。不用手抄令牌。
 - 会话只在入口上：浏览器从不直接拿别的设备的任何令牌。
+- **已实现（P6）**：会话在库表 `browser_sessions`（只存令牌 sha256）；cookie 名 `agent_hub_ui_<网址里的端口>`（同一浏览器里 127.0.0.1 的不同端口各用各的，`ssh -L` 转来的东京不会顶掉本机）；退出 / 全部退出当场关掉那些浏览器的 WebSocket；全部退出换 `state/ui-token` 并作废没用掉的登录链接，新的登录链接打在守护进程日志里；登录链接 `/auth#link=<码>`（码放在 # 片段里，浏览器不发给服务器，不进代理 / 访问日志 / Referer；落地页读出后先清地址栏再 POST `/auth` 兑换；老的 `?link=` 不再认）只放内存、只存哈希；会话满 100 条挤掉最旧的，和退出一样关它的 WebSocket；经 tailnet/https 登录的 cookie 带 Secure，二维码地址有 tailnet 名字时用 `https://<名字>`。老 cookie（值是令牌本身）失效，要重新点一次登录链接。
 
 ## 4. 网页
 
@@ -219,6 +220,7 @@ P0 接口约定（小，先合）
 | P1 | `device.json`；`daemon/platform/`（tailscale 命令路径、serve 目标、tailnet 名字探测）；Host/Origin 白名单；Secure cookie；身份头校验 | P0 | 中 |
 | P2 | `daemon/peers/`：配对、设备令牌、设备清单同步、移除；HTTP + WS 转发（可评估 `@fastify/http-proxy`） | P1 | 高 |
 | P3 | 网页：`client` 带 base、`useDevices`、按设备的 state、网址、左栏分组、跨设备“等你”、离线显示、新建项目经理选设备、设置 → 设备 | P0（用假数据），接真的要 P2 | 高 |
+|  | 已做（用假设备）：`web/devices.ts`（键、状态）、`web/device-hub.ts`（每台一个 DeviceHub，放在 Map 里）、`web/device-scope.tsx`；左栏最上面只汇总“等你确定”，“等你”在各组里标；右栏仍只看当前项目经理。假后端 `test/fake-devices/main.ts`，截图在 `docs/screenshots/multi-device/` | | |
 | P4 | manifest、Service Worker、图标；`shared/reminders.ts` 搬家；订阅接口、`web-push`、前台上报、提醒设备的常驻流 | P0；跨设备部分要 P2 | 中高 |
 | P5 | ui-standard 补第 6.3 节的条目 + 样式改动 + 截图 | 无 | 低中 |
 | P6 | 浏览器会话表、登录 / 退出 / 全部退出、二维码登录链接 | P0 | 中 |
@@ -228,7 +230,7 @@ P0 接口约定（小，先合）
 
 ### P4 实现说明（2026-11-07）
 
-- 规则：`shared/reminders.ts`（等你、等你确定、停稳 3 秒的 `ReminderTracker`、tag、推送标题）。网页的 `selectors.ts` / `notify.ts` 从这里取；网页的 hook 还是自己的定时器（P3 正在改它），P3 合了以后可以换成 `ReminderTracker`。
+- 规则：`shared/reminders.ts`（等你、等你确定、停稳 3 秒的 `ReminderTracker`、tag、推送标题）。网页的 `selectors.ts` / `notify.ts` 从这里取；网页的 hook（P3 改成了多设备）还是自己的定时器，以后可以换成 `ReminderTracker`。
 - 守护进程：`daemon/push/`。VAPID 密钥 `state/push-vapid.json`、订阅 `state/push-subscriptions.json`（都是 0600，不进仓库）。订阅没进 sqlite：量很小，也免得和 P2 / P6 抢迁移编号。
 - 前台：网页在入口那条 WebSocket 上每 30 秒（和切前后台时）报 `presence`；任何一个网页在前台（75 秒内报过 visible）就不推。订阅了推送的浏览器退到后台时网页自己不弹，由推送提醒。
 - 跨设备（等 P2）：`PushService.watch(device)` 给每台已配对设备建一个 watcher，P2 用设备令牌开 `/api/state` + `/api/ws?since=`，按 `reset` / `apply` 喂进去；标题带设备名，网址带 `#/d/<设备>/`。

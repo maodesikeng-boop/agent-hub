@@ -7,18 +7,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { API_PATHS, UI_COOKIE_NAME, serverInfoFor } from "../../shared/index.ts";
+import { API_PATHS, UI_COOKIE_NAME, uiCookieName, serverInfoFor, type LoginLinkResponse } from "../../shared/index.ts";
+import { openTestDb } from "../store/test-helpers.ts";
 import type { TailnetSelf } from "../platform/index.ts";
+import type { Db } from "../store/index.ts";
 import { FakeLedger } from "./fake-ledger.ts";
+import { testLogin } from "./test-login.ts";
 import { createUiServer, startUiServer, type RunningUiServer } from "./server.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
 const NAME = "mac-mini.tail1234.ts.net";
 const OWNER = "owner@example.com";
-const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
-const LOCAL = { host: `127.0.0.1:${PORT}`, origin: `http://127.0.0.1:${PORT}`, cookie: COOKIE };
-const VIA_SERVE = { host: NAME, origin: `https://${NAME}`, cookie: COOKIE, "tailscale-user-login": OWNER };
+// 会话在库里：每个测试开始时开一个，cookie 的值是它的令牌（名字带端口，见 uiCookieName；经 serve 来的 Host 没端口，用不带端口的名字）。
+const LOCAL = { host: `127.0.0.1:${PORT}`, origin: `http://127.0.0.1:${PORT}`, cookie: "" };
+const VIA_SERVE = { host: NAME, origin: `https://${NAME}`, cookie: "", "tailscale-user-login": OWNER };
+let db: Db;
+let sessionToken: string;
+const cookieFor = (host: string) => `${uiCookieName(host)}=${sessionToken}`;
+function newSession() {
+  db = openTestDb();
+  sessionToken = testLogin(db, PORT).token;
+  LOCAL.cookie = cookieFor(LOCAL.host);
+  VIA_SERVE.cookie = cookieFor(NAME);
+}
 
 let root: string;
 let self: TailnetSelf | null;
@@ -37,6 +49,7 @@ function options(serveTarget: "unix" | "tcp") {
     staticDir: join(root, "no-static"),
     uploadsDir: join(root, "uploads"),
     sentFilesDir: join(root, "sent-files"),
+    db,
     tailnet: { current: () => self },
     serveTarget,
   };
@@ -48,17 +61,21 @@ const call = (method: "GET" | "POST", url: string, headers: Headers) =>
 
 describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
   beforeEach(async () => {
+    newSession();
     self = { dnsName: NAME, owner: OWNER };
     ledger = new FakeLedger();
     app = createUiServer({ ...options("tcp"), port: PORT });
     await app.ready();
   });
-  afterEach(() => app.close());
+  afterEach(async () => {
+    await app.close();
+    db.close();
+  });
 
   it("Host 是本机 tailnet 名字（大小写、带 :443 都算）、身份是主人：放行", async () => {
     expect((await call("GET", API_PATHS.state, VIA_SERVE)).statusCode).toBe(200);
     expect((await call("GET", API_PATHS.state, { ...VIA_SERVE, host: NAME.toUpperCase() })).statusCode).toBe(200);
-    expect((await call("GET", API_PATHS.state, { ...VIA_SERVE, host: `${NAME}:443` })).statusCode).toBe(200);
+    expect((await call("GET", API_PATHS.state, { ...VIA_SERVE, host: `${NAME}:443`, cookie: cookieFor(`${NAME}:443`) })).statusCode).toBe(200);
     expect((await call("GET", API_PATHS.state, { ...VIA_SERVE, "tailscale-user-login": OWNER.toUpperCase() })).statusCode).toBe(200);
   });
 
@@ -148,18 +165,81 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
   });
 });
 
+describe("二维码登录链接 × tailnet", () => {
+  beforeEach(async () => {
+    newSession();
+    self = { dnsName: NAME, owner: OWNER };
+    ledger = new FakeLedger();
+    app = createUiServer({ ...options("tcp"), port: PORT });
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    db.close();
+  });
+
+  const makeLink = async (headers: Headers) => (await call("POST", API_PATHS.loginLinks, headers)).json() as LoginLinkResponse;
+  const redeem = (headers: Headers, url: string) => {
+    const code = new URLSearchParams(new URL(url).hash.slice(1)).get("link");
+    return app.inject({
+      method: "POST",
+      url: "/auth",
+      headers: { ...Object.fromEntries(Object.entries({ ...headers, cookie: undefined }).filter(([, v]) => v !== undefined)), "content-type": "application/json" } as Record<string, string>,
+      payload: JSON.stringify({ link: code }),
+    });
+  };
+
+  it("二维码里的地址：经 serve 点的用 https://<tailnet 名字>；本机 127.0.0.1 上点的，本机认得 tailnet 名字也用它（手机才扫得通）", async () => {
+    expect((await makeLink(VIA_SERVE)).url).toMatch(new RegExp(`^https://${NAME.replaceAll(".", "\\.")}/auth#link=[A-Za-z0-9_-]{43,}$`));
+    expect((await makeLink(LOCAL)).url).toMatch(new RegExp(`^https://${NAME.replaceAll(".", "\\.")}/auth#link=`));
+  });
+
+  it("没有 tailnet 名字（没装 Tailscale、还没探到）：保持现状，用请求的 Host", async () => {
+    self = null;
+    expect((await makeLink(LOCAL)).url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/auth#link=`));
+  });
+
+  it("手机经 serve（https）用链接登录：cookie 带 Secure 和不带端口的名字；本机 http 兑换的不带 Secure", async () => {
+    const phone = await redeem(VIA_SERVE, (await makeLink(VIA_SERVE)).url);
+    expect(phone.statusCode).toBe(204);
+    const setCookie = String(phone.headers["set-cookie"]);
+    expect(setCookie).toMatch(/; Secure(;|$)/);
+    expect(setCookie.startsWith(`${UI_COOKIE_NAME}=`)).toBe(true);
+    const local = await redeem(LOCAL, (await makeLink(LOCAL)).url);
+    expect(local.statusCode).toBe(204);
+    expect(String(local.headers["set-cookie"])).not.toContain("Secure");
+  });
+
+  it("经 serve 兑换：身份不是主人 403、Origin 不对 403，链接没被用掉", async () => {
+    const link = await makeLink(VIA_SERVE);
+    expect((await redeem({ ...VIA_SERVE, "tailscale-user-login": "friend@example.com" }, link.url)).statusCode).toBe(403);
+    expect((await redeem({ ...VIA_SERVE, origin: "https://evil.example.com" }, link.url)).statusCode).toBe(403);
+    expect((await redeem(VIA_SERVE, link.url)).statusCode).toBe(204);
+  });
+
+  it("退出时清 cookie 也带 Secure（经 serve 来的）", async () => {
+    const res = await call("POST", API_PATHS.logoutAll, VIA_SERVE);
+    expect(res.statusCode).toBe(204);
+    expect(String(res.headers["set-cookie"])).toMatch(/Max-Age=0.*; Secure/);
+  });
+});
+
 describe("serve 转发到 Unix socket（Linux）", () => {
   let running: RunningUiServer;
   let socketPath: string;
 
   beforeEach(async () => {
+    newSession();
     self = { dnsName: NAME, owner: OWNER };
     ledger = new FakeLedger();
     socketPath = join(root, "ui.sock");
     running = await startUiServer({ ...options("unix"), port: 0, serveSocket: socketPath });
     app = running.app;
   });
-  afterEach(() => running.close());
+  afterEach(async () => {
+    await running.close();
+    db.close();
+  });
 
   function viaSocket(headers: Headers): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -184,7 +264,7 @@ describe("serve 转发到 Unix socket（Linux）", () => {
 
   it("TCP 端口上：只认本机 Host，tailnet 名字不认（本机别的进程连端口伪造不了 serve 流量）", async () => {
     const tcp = (headers: Headers) => call("GET", API_PATHS.state, headers);
-    expect((await tcp({ ...LOCAL, host: `127.0.0.1:${running.port}` })).statusCode).toBe(200);
+    expect((await tcp({ ...LOCAL, host: `127.0.0.1:${running.port}`, cookie: cookieFor(`127.0.0.1:${running.port}`) })).statusCode).toBe(200);
     expect((await tcp(VIA_SERVE)).statusCode).toBe(403);
   });
 

@@ -8,7 +8,8 @@ import type { SessionState } from "../../shared/index.ts";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
-import { Composer } from "./Composer.tsx";
+import { useClient } from "../device-scope.tsx";
+import { Composer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
@@ -33,6 +34,7 @@ export function Conversation({
   onStop,
   onLoadOlder,
   actions,
+  link = null,
   focus,
   onFocusDone,
   onOpenProfile,
@@ -60,6 +62,8 @@ export function Conversation({
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
+  /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
+  link?: ComposerLink | null;
   /** 要滚到并高亮的消息（右栏点开一个提问）：n 每点一次加一，点同一条也再跳一次。 */
   focus: { id: MessageId; n: number } | null;
   onFocusDone: () => void;
@@ -67,7 +71,8 @@ export function Conversation({
 }) {
   const id = view.conversation.id;
   const stop = useStop(session, () => onStop(id));
-  const source = useMemo(() => conversationSource(id), [id]);
+  const client = useClient();
+  const source = useMemo(() => conversationSource(id, client.url), [id, client]);
   const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
@@ -128,6 +133,7 @@ export function Conversation({
           placeholder={`给 ${entry.name} 发消息`}
           staging={staging}
           stop={stop}
+          link={link}
           source={source}
           onChange={(v) => onDraftChange(id, v)}
           onSend={(text, files) => onSend(id, text, files)}

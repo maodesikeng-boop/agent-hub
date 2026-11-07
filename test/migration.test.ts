@@ -1315,3 +1315,23 @@ describe("0014_worker_background_waits：从 0013 的库升级", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+// ---- 0015_browser_sessions ----
+
+describe("0015_browser_sessions：从 0014 的库升级", () => {
+  it("只加一张空的 browser_sessions 表，老数据一个字不变；再跑一遍也行；令牌哈希不能重复", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(14));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 14, to: LATEST_VERSION });
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM browser_sessions")).toEqual([]);
+    db.exec("PRAGMA user_version = 14");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    const insert = (id: string, hash: string) =>
+      db.run("INSERT INTO browser_sessions (id, token_hash, user_agent, entry, created_at, last_seen_at) VALUES (?, ?, 'ua', '127.0.0.1:4317', 0, 0)", id, hash);
+    insert("a", "h1");
+    expect(() => insert("b", "h1")).toThrow(/UNIQUE/);
+  });
+});

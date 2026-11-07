@@ -7,7 +7,8 @@ import type { StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { conversationSource } from "../composer-suggest.ts";
-import { Composer } from "./Composer.tsx";
+import { useClient } from "../device-scope.tsx";
+import { Composer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
@@ -40,6 +41,7 @@ export function WorkerConversation({
   onStop,
   onLoadOlder,
   actions,
+  link = null,
 }: {
   title: string;
   readonly: boolean;
@@ -68,10 +70,13 @@ export function WorkerConversation({
   onStop: (conversationId: ConversationId) => Promise<void>;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
+  /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
+  link?: ComposerLink | null;
 }) {
   const id = view?.conversation.id;
   const stop = useStop(session, id === undefined ? null : () => onStop(id));
-  const source = useMemo(() => (id === undefined ? undefined : conversationSource(id)), [id]);
+  const client = useClient();
+  const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
   // Worker 统一用中性灰的头像（docs/ui-standard.md 第 17 条）
   const identity = { name: title, avatarKey: id ?? 0, neutral: true };
@@ -116,6 +121,7 @@ export function WorkerConversation({
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
                 stop={stop}
+                link={link}
                 source={source}
                 onChange={(v) => onDraftChange(view.conversation.id, v)}
                 staging={staging}

@@ -4,15 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { API_PATHS, UI_COOKIE_NAME, type PresenceMessage } from "../../shared/index.ts";
+import { API_PATHS, type PresenceMessage } from "../../shared/index.ts";
 import { createPresenceBoard, type PresenceBoard } from "../push/presence.ts";
 import { createSubscriptionStore, type SubscriptionStore } from "../push/subscriptions.ts";
 import { FakeLedger } from "./fake-ledger.ts";
+import { openTestDb } from "../store/test-helpers.ts";
 import { createUiServer } from "./server.ts";
+import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
-const HEADERS = { host: `127.0.0.1:${PORT}`, cookie: `${UI_COOKIE_NAME}=${TOKEN}`, origin: `http://127.0.0.1:${PORT}` };
+const db = openTestDb();
+const HEADERS = { host: `127.0.0.1:${PORT}`, cookie: testLogin(db, PORT).cookie(), origin: `http://127.0.0.1:${PORT}` };
 const SUB = { endpoint: "https://web.push.apple.com/abc", keys: { p256dh: "BPk-key_1", auth: "auth_1" }, expirationTime: null };
 
 let root: string;
@@ -28,6 +31,7 @@ function build(withPush: boolean): FastifyInstance {
     uploadsDir: join(root, "uploads"),
     sentFilesDir: join(root, "sent-files"),
     port: PORT,
+    db,
     ...(withPush
       ? { push: { publicKey: "PUBLIC_KEY", subscribe: (s) => store.add(s), unsubscribe: (e) => store.remove(e), presence } }
       : {}),

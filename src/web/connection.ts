@@ -1,11 +1,12 @@
 // WebSocket 变化推送：断了自动重连（间隔 1、2、4… 秒，最多 10 秒），重连时带上最后收到的 seq。
 import { CHANGE_TYPES, type WsClientMessage, type WsServerMessage } from "../shared/index.ts";
-import { changeStreamUrl } from "./client.ts";
 import { startPresence } from "./presence.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting";
 
 export interface ChangeStreamHandlers {
+  /** 连哪：since 之后的变化（client.ts 的 changeStreamUrl，按设备）。 */
+  url(since: number): string;
   /** 重连时从哪个 seq 之后补；每次连接都重新问一遍。 */
   getSince(): number;
   onMessage(message: WsServerMessage): void;
@@ -47,7 +48,7 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
 
   const connect = () => {
     timer = undefined;
-    const ws = new WebSocket(changeStreamUrl(handlers.getSince()));
+    const ws = new WebSocket(handlers.url(handlers.getSince()));
     socket = ws;
     ws.onopen = () => {
       attempt = 0;

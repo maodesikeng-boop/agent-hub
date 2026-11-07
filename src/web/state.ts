@@ -1,5 +1,5 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
-// 全是纯函数，方便测试；网络和定时器在 useHub.ts。
+// 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
   serverInfoFor,
   userMessageDedupeKey,
@@ -145,7 +145,7 @@ export function applyChange(state: HubState, change: Change): HubState {
     case "message.updated": {
       const { message } = change.data;
       const view = state.conversations[message.conversationId];
-      if (!view) return next; // 不认识的对话，useHub 会重新拉快照
+      if (!view) return next; // 不认识的对话，device-hub.ts 会重新拉快照
       return {
         ...next,
         conversations: {
