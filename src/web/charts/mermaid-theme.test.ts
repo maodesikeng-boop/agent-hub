@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { contrastRatio } from "../lib/palette.ts";
 import { mermaidConfig, mermaidThemeVariables } from "./mermaid-theme.ts";
 import { TEST_THEME } from "./test-theme.ts";
 
 describe("mermaid 主题：白底节点、1px 描边、前景色字，连线灰；不用默认的紫色", () => {
-  it("节点底 = background，描边 = border，字 = foreground，连线 = muted-foreground，字号 13.5px", () => {
+  it("节点底 = background，描边和连线 = muted-foreground，字 = foreground，字号 13.5px；分组和注释的边 = border", () => {
     expect(mermaidThemeVariables(TEST_THEME)).toMatchObject({
       background: "#ffffff",
       primaryColor: "#ffffff",
-      primaryBorderColor: "#ececef",
+      primaryBorderColor: "#71717a",
+      nodeBorder: "#71717a",
+      clusterBorder: "#ececef",
+      clusterBkg: "#f3f3f5",
       primaryTextColor: "#18181b",
       lineColor: "#71717a",
       textColor: "#18181b",
       fontFamily: "sans-serif",
       fontSize: "13.5px",
     });
+  });
+
+  it("节点描边对白底 ≥ 3:1（图形元素，WCAG 1.4.11）", () => {
+    expect(contrastRatio(mermaidThemeVariables(TEST_THEME).nodeBorder!, TEST_THEME.background)).toBeGreaterThanOrEqual(3);
   });
 
   it("所有颜色值都来自主题（不含 mermaid 默认的紫色 #ECECFF 一类）", () => {
@@ -33,7 +41,8 @@ describe("mermaid 主题：白底节点、1px 描边、前景色字，连线灰�
     expect(config.themeVariables).toEqual(mermaidThemeVariables(TEST_THEME));
     expect(config.htmlLabels).toBe(false);
     expect(config.flowchart).toMatchObject({ useMaxWidth: true });
-    expect(config.sequence).toMatchObject({ useMaxWidth: true });
+    expect(config.look).toBe("classic");
+    expect(config.sequence).toMatchObject({ useMaxWidth: true, actorFontSize: 13.5, noteFontSize: 13.5, messageFontSize: 13.5 });
     expect(config.maxTextSize).toBe(50_000);
     expect(config.maxEdges).toBe(500);
   });

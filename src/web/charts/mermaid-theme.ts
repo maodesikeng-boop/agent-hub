@@ -6,7 +6,7 @@ import { CHART_MAX_SOURCE_CHARS, type ChartTheme } from "./registry.ts";
 export const MERMAID_MAX_EDGES = 500;
 
 /**
- * Mermaid 的 themeVariables（theme: "base"）：节点白底、1px 描边、前景色字，连线用次要文字色。
+ * Mermaid 的 themeVariables（theme: "base"）：节点白底、1px 描边（次要文字色）、前景色字，连线用次要文字色；分组、注释的底用 --muted、边用 --border。
  * 每个颜色都显式给出：base 主题会拿 primaryColor 算出别的颜色（色相偏移，容易出紫），所以凡是会被算出来的都钉死。
  */
 export function mermaidThemeVariables(theme: ChartTheme): Record<string, string> {
@@ -19,7 +19,8 @@ export function mermaidThemeVariables(theme: ChartTheme): Record<string, string>
     titleColor: foreground,
     lineColor: mutedForeground,
     primaryColor: background,
-    primaryBorderColor: border,
+    // 节点描边用次要文字色而不是 --border：#ececef 在白底上只有 1.2:1，看不清形状（图形元素要 ≥ 3:1）
+    primaryBorderColor: mutedForeground,
     primaryTextColor: foreground,
     secondaryColor: muted,
     secondaryBorderColor: border,
@@ -28,14 +29,14 @@ export function mermaidThemeVariables(theme: ChartTheme): Record<string, string>
     tertiaryBorderColor: border,
     tertiaryTextColor: foreground,
     mainBkg: background,
-    nodeBorder: border,
+    nodeBorder: mutedForeground,
     nodeTextColor: foreground,
     clusterBkg: muted,
     clusterBorder: border,
     edgeLabelBackground: background,
     // 时序图
     actorBkg: background,
-    actorBorder: border,
+    actorBorder: mutedForeground,
     actorTextColor: foreground,
     actorLineColor: mutedForeground,
     signalColor: mutedForeground,
@@ -81,6 +82,8 @@ export function mermaidConfig(theme: ChartTheme) {
     suppressErrorRendering: true,
     securityLevel: "strict" as const,
     theme: "base" as const,
+    // classic：1px 描边的节点；默认的 neo 给节点加投影，ui-standard 不要重阴影
+    look: "classic" as const,
     themeVariables: mermaidThemeVariables(theme),
     fontFamily: theme.fontFamily,
     maxTextSize: CHART_MAX_SOURCE_CHARS,
@@ -90,7 +93,8 @@ export function mermaidConfig(theme: ChartTheme) {
     htmlLabels: false,
     // 宽度跟容器（不撑破消息列）
     flowchart: { useMaxWidth: true },
-    sequence: { useMaxWidth: true },
+    // 时序图的字号默认 16px，和别的图对齐到图里的字号
+    sequence: { useMaxWidth: true, actorFontSize: theme.fontSize, noteFontSize: theme.fontSize, messageFontSize: theme.fontSize },
     state: { useMaxWidth: true },
     class: { useMaxWidth: true },
     er: { useMaxWidth: true },

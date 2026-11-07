@@ -37,6 +37,15 @@ describe("render（registry 的 ChartEngine）", () => {
     expect(lib.render).toHaveBeenCalledTimes(2);
   });
 
+  it("el 在页面里时也不会被清理临时节点的那一步误删（svg 的 id 和临时节点的 id 相同）", async () => {
+    const { render } = await freshModule();
+    lib.render.mockImplementation(async (id) => ({ svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}"><g/></svg>` }));
+    const el = document.createElement("div");
+    document.body.append(el);
+    await render("a", THEME, el);
+    expect(el.querySelector("svg")).not.toBeNull();
+  });
+
   it("主题版本变了才重新 initialize", async () => {
     const { render } = await freshModule();
     const el = document.createElement("div");
@@ -65,13 +74,19 @@ describe("render（registry 的 ChartEngine）", () => {
     expect(el.innerHTML).toBe("");
   });
 
-  it("渲染失败：清掉 mermaid 留在 body 里的临时节点，错误信息原样往外抛，el 不动", async () => {
+  it("语法错误：去掉 mermaid 贴的源码片段和指针行，剩一行“第几行 + 期望什么”（界面只显示第一行）", async () => {
+    const { render } = await freshModule();
+    lib.render.mockRejectedValue(new Error("Parse error on line 2:\n...A-->\n-----^\nExpecting 'SEMI', got 'LINK'"));
+    await expect(render("bad", THEME, document.createElement("div"))).rejects.toThrow("Parse error on line 2: Expecting 'SEMI', got 'LINK'");
+  });
+
+  it("渲染失败：清掉 mermaid 留在 body 里的临时节点，错误信息往外抛，el 不动", async () => {
     const { render } = await freshModule();
     lib.render.mockImplementation(async (id) => {
       const leftover = document.createElement("div");
       leftover.id = `d${id}`;
       document.body.append(leftover);
-      throw new Error("Parse error on line 2:\n...A-->\n-----^\nExpecting 'SEMI'");
+      throw new Error("Parse error on line 2: Expecting 'SEMI'");
     });
     const el = document.createElement("div");
     await expect(render("bad", THEME, el)).rejects.toThrow("Parse error on line 2");
