@@ -1,6 +1,6 @@
 // 项目经理的颜色表（docs/ui-standard.md 第 4 条）：头像颜色和强调色共用一份，强调色按 WCAG 2.x AA 的文字对比度 4.5:1 配好。
 import { describe, expect, it } from "vitest";
-import { accentStyle, contrastRatio, PALETTE, paletteOf } from "./palette.ts";
+import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
@@ -35,6 +35,16 @@ describe("颜色表", () => {
     expect(a["--primary-foreground"]).toBe(PALETTE[0]!.accentForeground);
     expect(b["--primary"]).toBe(PALETTE[1]!.accent);
     expect(b["--primary"]).not.toBe(a["--primary"]);
+  });
+
+  it("图表分类色：颜色表 accent 里的 6 种，互不重复", () => {
+    expect(CHART_CATEGORY_COLORS).toHaveLength(6);
+    expect(new Set(CHART_CATEGORY_COLORS).size).toBe(6);
+    for (const color of CHART_CATEGORY_COLORS) expect(PALETTE.map((c) => c.accent)).toContain(color);
+  });
+
+  it.each(CHART_CATEGORY_COLORS.map((c) => [c] as const))("图表分类色 %s：对白底 ≥ 3:1（WCAG 1.4.11 图形元素）", (color) => {
+    expect(contrastRatio(color, WHITE)).toBeGreaterThanOrEqual(3);
   });
 
   it("对比度公式：黑白 21:1，同色 1:1", () => {

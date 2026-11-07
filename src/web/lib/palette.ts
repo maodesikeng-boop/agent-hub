@@ -20,6 +20,14 @@ export const PALETTE = [
 
 export type PaletteColor = (typeof PALETTE)[number];
 
+/**
+ * 数据图表的分类色（docs/ui-standard.md 第 15 条“图表”）：取颜色表的 accent 一组（都已过白底对比度校验），不另起一套。
+ * 顺序按“相邻两个差别大”排：蓝、橙、绿、樱粉、黄、黑。图形元素（柱、线、点）按 WCAG 1.4.11 对白底 ≥ 3:1，palette.test.ts 逐色校验：
+ * https://www.w3.org/TR/WCAG21/#non-text-contrast
+ */
+const CHART_ORDER = ["蓝", "橙", "绿", "樱粉", "黄", "黑"] as const;
+export const CHART_CATEGORY_COLORS: readonly string[] = CHART_ORDER.map((name) => PALETTE.find((c) => c.name === name)!.accent);
+
 /** 按 key 在颜色表里轮着取（项目经理用它的编号）。 */
 export function paletteOf(key: number): PaletteColor {
   return PALETTE[Math.abs(key) % PALETTE.length]!;

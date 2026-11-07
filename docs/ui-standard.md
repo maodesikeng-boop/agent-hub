@@ -219,6 +219,15 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 对齐照 Markdown 语法（`:--` 左、`:-:` 中、`--:` 右），**表头和同一列的内容用同一个对齐**；没写对齐的一律靠左（表头不再默认居中）。
   - 数字 `tabular-nums`（第 13 条）；表头 13.5px、500、灰，下面一条 1px 线；行之间 1px `--border` 细线，没有竖线和斑马纹；单元格内边距 `px-3 py-2`，第一列左边不留缩进（`pl-0`），最后一列右边同理。
 - **内联图片**（`![]()` 写的、存了副本的）：固定 240px 高、最宽 320px（`h-60 w-auto max-w-xs`，`object-contain` 靠左），加载前后高度不变，消息流不跳（第 17 条）；`rounded-xl`，鼠标是放大镜，点开预览窗看大图；文件过期换成“文件已过期”卡片。链接写的文件不内联，是卡片。
+- **图表**（```` ```mermaid ````、```` ```vega-lite ```` / ```` ```vegalite ````，闭合后才渲染；`ChartBlock.tsx`、`src/web/charts/`，方案见 `docs/charts-diagrams-design.md`）：
+  - **外壳**同代码块（`.md-code`：`rounded-xl`、`--muted` 底、1px 内描边、右上角工具条）；图区是白底（`--background`），四周 12px 内边距，没有自己的描边。工具条从左到右：语言名（12px 灰）、源码/图切换（`Code` / `ChartNetwork` 图标，`aria-pressed`）、放大（`Maximize2`）、复制（复制源码）；按钮都是第 6 条的图标按钮（`size-7`，悬停 `bg-accent`）。
+  - **尺寸**：宽跟消息列走，不撑破；加载中最小高 160px（`CHART_MIN_HEIGHT`），图最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度，点放大看原尺寸。
+  - **渲染中**：占位里一个居中的 `Loader2` 转圈，不写字；离视口 600px 以内才开始渲染，缓存里有的同步出图。
+  - **看源码**：点切换，图区藏起来、换成上色的源码，再点回图（不重画）；状态只在这一块里，不记住。
+  - **失败**（源码有错、源码超过 5 万字、图表组件没加载下来）：显示成普通代码块，上面一行 `AlertCircle`（14px）+ 错误第一行（13.5px、`text-danger`、`truncate`），完整错误放 `title`；不弹 toast，源码不吞。没闭合的（流式中）照常是代码块，不报错。
+  - **放大窗**：`Dialog`（`w-[min(96vw,1400px)] h-[90dvh]`），里面是原尺寸的图，两个方向滚动；先不缩放、不拖动。点图本身也能放大（Mermaid）；Vega-Lite 有悬停提示，点图不放大，只有按钮。
+  - **颜色**：只用 CSS 变量（`--foreground`、`--muted-foreground`、`--border`、`--muted`、`--background`）和 `palette.ts` 的 `CHART_CATEGORY_COLORS`（颜色表 accent 里的 6 种，对白底 ≥ 3:1），不用库默认的紫色。
+  - **字**：图里 13.5px、坐标轴 12px，字体 `--font-ui`。
 - 不靠 emoji、粗体全大写之类撑层次。
 
 ## 16. 外壳：左栏、顶栏、窄屏、网址
