@@ -1078,6 +1078,35 @@ describe("selectors", () => {
     expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
   });
 
+  // 真实数据（2026-11-07 21:04）：codex 会话的 30 天窗口 resetsAt 1796193545（12/2 14:39）比 claude 会话的 5 小时窗口 1794070800 晚，
+  // 以前各家的会话混着挑“重置时间晚的”，claude 的 5 小时就显示成了 codex 的时间。
+  it("quotaUsage：每家厂商只看自己会话的额度，不混", () => {
+    const state = loaded(
+      withWorker({
+        sessions: [
+          makeSession({
+            sessionId: 1,
+            conversationId: 1,
+            vendor: "claude",
+            lastEventAt: 100,
+            rateLimit: { status: "allowed", resetsAt: null, windows: { five_hour: { utilization: 0.06, resetsAt: 1_794_070_800, status: "allowed" } } },
+          }),
+          makeSession({
+            sessionId: 2,
+            conversationId: 30,
+            vendor: "codex",
+            lastEventAt: 200,
+            rateLimit: { status: "allowed", resetsAt: null, windows: { thirty_day: { utilization: 0.19, resetsAt: 1_796_193_545, status: "allowed" } } },
+          }),
+        ],
+      }),
+    );
+    expect(quotaUsage(state, 0)).toEqual([
+      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", short: "5h", percent: 6, resetsAt: 1_794_070_800, warning: false }] },
+      { id: "codex", name: "Codex", exhausted: false, windows: [{ key: "thirty_day", label: "30 天", short: "30d", percent: 19, resetsAt: 1_796_193_545, warning: false }] },
+    ]);
+  });
+
   // 真实日志（2026-11-04）：5 小时窗口 14:30 重置（resetsAt 1793773800），重置前 0.96~0.99；重置后第一条事件 14:3x 才带来新窗口 resetsAt 1793791800
   describe("quotaUsage：重置前后的真实序列", () => {
     const RESET = 1_793_773_800;
