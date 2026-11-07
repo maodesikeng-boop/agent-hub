@@ -113,7 +113,7 @@ export function Sidebar({
         aria-label="左栏"
         data-drawer={drawerOpen ? "open" : "closed"}
         className={cn(
-          "flex w-[300px] shrink-0 flex-col bg-sidebar max-[1100px]:fixed max-[1100px]:inset-y-0 max-[1100px]:left-0 max-[1100px]:z-30",
+          "flex w-[300px] shrink-0 flex-col bg-sidebar pt-[var(--safe-top)] pb-[var(--safe-bottom)] max-[1100px]:fixed max-[1100px]:inset-y-0 max-[1100px]:left-0 max-[1100px]:z-30",
           !drawerOpen && "max-[1100px]:hidden",
         )}
       >
