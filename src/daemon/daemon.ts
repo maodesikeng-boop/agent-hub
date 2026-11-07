@@ -1,8 +1,9 @@
 // 组装（m1-plan 第 3 节 W5，m2-plan 第 3 节接口约定第 6 条）：启动和关闭顺序、各块之间的接线。main.ts 只管命令行、信号和退出码。
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
-//   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：调度器 → 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+//   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 后台写交接的跑腿的（补清上次没清掉的复制会话）
+//   → 界面令牌、界面服务。
+// - 关机（启动到哪一步就关到哪一步）：调度器 → 后台写交接的跑腿的（取消在写的、清理复制会话）→ 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ import {
   ENV_DEFAULT_MODEL,
   ENV_PORT,
   EXECUTOR_STOP_GRACE_MS,
+  HANDOVER_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
   AUTO_RENEW_TICK_MS,
   checkModel,
@@ -21,9 +23,11 @@ import {
   type Driver,
   type Unsubscribe,
 } from "../shared/index.ts";
+import type { LedgerHandoverWork } from "../shared/handover.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
+import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import {
   defaultAgyFallbackPaths,
   defaultCodexFallbackPaths,
@@ -83,7 +87,7 @@ export interface RunningDaemon {
   paths: HubPaths;
   port: number;
   url: string;
-  /** 关机：停准备命令 → 停执行器 → 停 claude（含问模型名单的）→ 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
+  /** 关机：停后台写交接 → 停准备命令 → 停执行器 → 停 claude（含问模型名单的）→ 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
   stop(): Promise<void>;
 }
 
@@ -120,6 +124,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const parts: {
     scheduler?: NodeJS.Timeout;
     autoRenew?: NodeJS.Timeout;
+    handoverRunner?: HandoverRunner;
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
@@ -140,9 +145,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
+    // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
+    if (handoverRunner) {
+      await step("后台写交接", async () => {
+        if (!(await within(handoverRunner.stop(), HANDOVER_STOP_GRACE_MS))) throw new Error(`${HANDOVER_STOP_GRACE_MS / 1000} 秒没收完，不再等`);
+      });
+    }
     parts.stopFileCleanup?.();
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
@@ -215,6 +226,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // 交接提示词里写上会话原始记录的路径
       findTranscript: (ref) => vendorTranscriptPath(ref),
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
+      // 账本有交接可以领了：叫醒跑腿的（它在下面才建，所以现用现取）
+      onHandoverClaimable: () => parts.handoverRunner?.wake(),
       log,
     });
     const sessions = createSessionStore(db);
@@ -339,6 +352,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runAutoRenew();
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
+    // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
+    // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
+    // （TODO：块 A 合入、Ledger extends LedgerHandoverWork 之后去掉这个转换）
+    const handoverRunner = createHandoverRunner({ ledger: ledger as unknown as LedgerHandoverWork, prepareLaunch, log });
+    parts.handoverRunner = handoverRunner;
+    handoverRunner.start();
 
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);

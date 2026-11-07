@@ -60,6 +60,8 @@ export const HANDOVER_POST_CUT_MAX_CHARS = 60_000;
 export const HANDOVER_READY_MAX_MS = 30 * 60_000;
 /** 跑腿的同时最多复制、写几份（每个复制进程几百 MB 内存），多的在 queued 等。 */
 export const HANDOVER_CONCURRENCY = 2;
+/** 关机时等跑腿的这么久：abort 在写的复制进程、报 shutdown、清理复制那份；到点还没完就不等了（没清掉的下次启动补清）。 */
+export const HANDOVER_STOP_GRACE_MS = 3_000;
 /**
  * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话：这一轮结束时进队列（ledger/handover.ts）。
  * 只对项目经理；Worker 的会话不自动换。
