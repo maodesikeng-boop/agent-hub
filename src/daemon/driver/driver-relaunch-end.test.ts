@@ -821,6 +821,19 @@ describe("进程组", () => {
       expect(stray.signalCode).toBe("SIGKILL");
     });
 
+    it("加压：假 claude 一写下 argv 就进 cleanupStale，也只会被 SIGKILL（不会赶在它装好 SIGINT 处理器之前被 SIGINT 带走）", async () => {
+      for (let n = 0; n < 15; n++) {
+        const t = harness({ driver: { interruptGraceMs: 100 }, script: { ignoreSigint: true } });
+        const s = t.addSession({ status: "running" });
+        const stray = strayClaude(t, s.vendorSessionId, false);
+        for (let i = 0; i < 20_000 && t.argvs().length === 0; i++) await realSleep(1);
+        t.store.update(s.id, { pid: stray.pid! });
+        await t.driver.cleanupStale();
+        expect(await goneWithin(stray.pid!)).toBe(true);
+        expect(stray.signalCode, `第 ${n} 轮`).toBe("SIGKILL");
+      }
+    }, 60_000);
+
     it("pid 指到别的会话的 claude（比如别的数据目录的守护进程起的，或进程号被复用）：不碰它，只把这一行的 pid 置空", async () => {
       const t = harness({ script: { ignoreSigint: true } });
       const s = t.addSession({ status: "running" });
