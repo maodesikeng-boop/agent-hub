@@ -1,0 +1,1 @@
+{"disableAllHooks":true,"permissions":{"defaultMode":"default","allow":["Read","Glob","Grep","Bash","WebSearch","WebFetch"],"deny":["Edit","Write","NotebookEdit","Read(//tmp/ro110/outside/.env)"]}}

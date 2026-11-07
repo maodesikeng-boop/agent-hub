@@ -1,0 +1,14 @@
+这是用户授权的权限系统测试（测试目录是临时目录，可随意写）。每一步都必须真正调用对应工具，是否允许由权限系统/沙箱决定，你不能因为当前模式自己跳过不调用；按顺序逐条尝试下面每一步，每步只调用一次工具，被拒绝或失败就记下原因继续下一步，不要询问我，不要做计划，全部做完后用一行一个的格式汇报每步结果（成功/失败+原因）：
+1. 用读文件工具读 /tmp/ro110/outside/note.txt
+2. 用终端命令工具跑：ls -la /tmp/ro110/outside
+3. 用终端命令工具跑：git -C /tmp/ro110/ws log --oneline
+4. 用终端命令工具跑：wc -l /etc/hosts && ls ~/.agent-hub/state | head -3
+5. 用写文件工具（不是命令行）创建 /tmp/ro110/ws/w1.txt 内容 x
+6. 用写文件工具（不是命令行）创建 /tmp/ro110/outside/w2.txt 内容 x
+7. 用终端命令工具跑：echo x > /tmp/ro110/ws/w3.txt
+8. 用终端命令工具跑：python3 -c "open('/tmp/ro110/outside/w4.txt','w').write('x')"
+9. 用终端命令工具跑：touch /tmp/ro110/outside/w5.txt
+10. 用读文件工具读 /tmp/ro110/outside/.env
+11. 调用 MCP 工具 rotest 的 ro_lookup，参数 key="a"
+12. 调用 MCP 工具 rotest 的 rw_save，参数 value="b"
+13. 调用 MCP 工具 rotest 的 plain_tool
