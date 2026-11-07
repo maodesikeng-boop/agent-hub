@@ -19,6 +19,7 @@ import {
   MAX_REASON_CHARS,
   MAX_UPLOAD_BYTES,
   UI_COOKIE_NAME,
+  uiCookieName,
   bundledModelCatalog,
   serverInfoFor,
   type Attachment,
@@ -27,14 +28,16 @@ import {
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
+import { openTestDb } from "../store/test-helpers.ts";
+import type { Db } from "../store/index.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
 import { createUiServer, startUiServer } from "./server.ts";
+import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
 const HOST = `127.0.0.1:${PORT}`;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
 const INDEX_HTML = "<!doctype html><title>agent-hub</title>";
 
 const NEW_PM = { name: "阿周", mode: "hands_on", defaultModel: "claude-haiku-5-5", persona: "# 性格\n- 简短" };
@@ -44,6 +47,10 @@ let uploadsDir: string;
 let sentFilesDir: string;
 let ledger: FakeLedger;
 let app: FastifyInstance;
+/** 每个测试一份库；里面有一个已登录的会话，COOKIE 是它的 cookie（浏览器访问 PORT 时带的）。几个界面服务共用同一份库就认同一个会话。 */
+let db: Db;
+let login: ReturnType<typeof testLogin>;
+let COOKIE: string;
 
 beforeEach(async () => {
   staticDir = mkdtempSync(join(tmpdir(), "hub-static-"));
@@ -51,12 +58,16 @@ beforeEach(async () => {
   sentFilesDir = join(uploadsDir, "..", "sent-files");
   writeFileSync(join(staticDir, "index.html"), INDEX_HTML);
   ledger = new FakeLedger();
-  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT });
+  db = openTestDb();
+  login = testLogin(db, PORT);
+  COOKIE = login.cookie();
+  app = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db });
   await app.ready();
 });
 
 afterEach(async () => {
   await app.close();
+  db.close();
   rmSync(staticDir, { recursive: true, force: true });
   rmSync(join(uploadsDir, ".."), { recursive: true, force: true });
 });
@@ -90,12 +101,12 @@ async function call(method: Method, url: string, opts: ReqOpts = {}) {
 
 describe("只听本机", () => {
   it("startUiServer 监听 127.0.0.1，返回实际端口，Host 用它就能访问", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0, db });
     try {
       const addr = running.app.server.address();
       expect(addr).toMatchObject({ address: "127.0.0.1", port: running.port });
       expect(running.port).toBeGreaterThan(0);
-      const res = await fetch(`http://127.0.0.1:${running.port}/api/state`, { headers: { cookie: COOKIE } });
+      const res = await fetch(`http://127.0.0.1:${running.port}/api/state`, { headers: { cookie: login.cookie(running.port) } });
       expect(res.status).toBe(200);
     } finally {
       await running.close();
@@ -112,12 +123,13 @@ describe("令牌格式", () => {
 });
 
 describe("登录 /auth", () => {
-  it("令牌对：设 HttpOnly、SameSite=Strict 的 cookie，跳到 /", async () => {
+  it("令牌对：设 HttpOnly、SameSite=Strict 的会话 cookie（名字带端口，值是随机的、不是令牌），跳到 /", async () => {
     const res = await call("GET", `/auth?token=${TOKEN}`, { cookie: null });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe("/");
     const setCookie = String(res.headers["set-cookie"]);
-    expect(setCookie).toContain(`${UI_COOKIE_NAME}=${TOKEN}`);
+    expect(setCookie).toContain(`${uiCookieName(HOST)}=`);
+    expect(setCookie).not.toContain(TOKEN);
     expect(setCookie).toMatch(/HttpOnly/i);
     expect(setCookie).toMatch(/SameSite=Strict/i);
     expect(setCookie).toMatch(/Path=\//);
@@ -129,6 +141,11 @@ describe("登录 /auth", () => {
     const cookie = String(login.headers["set-cookie"]).split(";")[0];
     const res = await call("GET", "/api/state", { cookie });
     expect(res.statusCode).toBe(200);
+  });
+
+  it("老 cookie（值就是令牌）不再有效，要重登一次", async () => {
+    expect((await call("GET", "/api/state", { cookie: `${UI_COOKIE_NAME}=${TOKEN}` })).statusCode).toBe(401);
+    expect((await call("GET", "/api/state", { cookie: `${uiCookieName(HOST)}=${TOKEN}` })).statusCode).toBe(401);
   });
 
   it.each([
@@ -184,11 +201,12 @@ describe("没登录", () => {
   });
 
   it.each([
-    ["错的令牌", `${UI_COOKIE_NAME}=wrong-token-0123456789abc`],
-    ["别的 cookie 名", `other=${TOKEN}`],
-    ["空值", `${UI_COOKIE_NAME}=`],
+    ["错的令牌", () => `${uiCookieName(HOST)}=wrong-token-0123456789abc`],
+    ["别的 cookie 名", () => `other=${COOKIE.split("=")[1]}`],
+    ["别的端口的 cookie 名", () => `${uiCookieName("127.0.0.1:4001")}=${COOKIE.split("=")[1]}`],
+    ["空值", () => `${uiCookieName(HOST)}=`],
   ])("cookie 不对（%s）：401", async (_name, cookie) => {
-    expect((await call("GET", "/api/state", { cookie })).statusCode).toBe(401);
+    expect((await call("GET", "/api/state", { cookie: cookie() })).statusCode).toBe(401);
   });
 
   it("cookie 夹在别的 cookie 中间也认", async () => {
@@ -339,10 +357,10 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
   });
 
   it("端口跟着实际监听的走：真起服务，同源 Origin 放行，别的端口拒绝", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0, db });
     try {
       const url = `http://127.0.0.1:${running.port}/api/conversations/1/stop`;
-      const send = (origin: string) => fetch(url, { method: "POST", headers: { cookie: COOKIE, origin } });
+      const send = (origin: string) => fetch(url, { method: "POST", headers: { cookie: login.cookie(running.port), origin } });
       expect((await send(`http://127.0.0.1:${running.port}`)).status).toBe(202);
       expect((await send(`http://localhost:${running.port}`)).status).toBe(202);
       expect((await send(`http://127.0.0.1:${running.port + 1}`)).status).toBe(403);
@@ -951,6 +969,7 @@ describe("静态文件", () => {
 
   it("静态目录不存在：服务照常起，/ 返回 404，API 仍可用", async () => {
     const other = createUiServer({
+      db,
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir: join(staticDir, "missing"),
@@ -1459,7 +1478,7 @@ describe("同时上传的个数", () => {
         port,
         method: "POST",
         path: `/api/uploads?name=half${i}.txt`,
-        headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, cookie: COOKIE, "content-type": "application/octet-stream", "content-length": "10" },
+        headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`, cookie: login.cookie(port), "content-type": "application/octet-stream", "content-length": "10" },
       });
       const done = new Promise<number>((resolve, reject) => {
         req.on("response", (res) => {
@@ -1476,11 +1495,11 @@ describe("同时上传的个数", () => {
   }
 
   it(`同时收 ${MAX_CONCURRENT_UPLOADS} 个；再来第 ${MAX_CONCURRENT_UPLOADS + 1} 个回 429 和中文原因；有一个收完就又能收`, async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0, db });
     try {
       const open = await startHalfUploads(running.port, MAX_CONCURRENT_UPLOADS);
       const url = `http://127.0.0.1:${running.port}/api/uploads?name=extra.txt`;
-      const headers = { origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream" };
+      const headers = { origin: `http://127.0.0.1:${running.port}`, cookie: login.cookie(running.port), "content-type": "application/octet-stream" };
       const refused = await fetch(url, { method: "POST", headers, body: "x" });
       expect(refused.status).toBe(429);
       expect(await refused.json()).toEqual({ error: "同时上传的文件太多了，稍等一下再试" });
@@ -1493,7 +1512,7 @@ describe("同时上传的个数", () => {
   });
 
   it("连接中途断掉也释放名额", async () => {
-    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0 });
+    const running = await startUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: 0, db });
     try {
       const { request } = await import("node:http");
       for (let i = 0; i < MAX_CONCURRENT_UPLOADS * 2; i++) {
@@ -1502,7 +1521,7 @@ describe("同时上传的个数", () => {
           port: running.port,
           method: "POST",
           path: "/api/uploads?name=abort.txt",
-          headers: { host: `127.0.0.1:${running.port}`, origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream", "content-length": "10" },
+          headers: { host: `127.0.0.1:${running.port}`, origin: `http://127.0.0.1:${running.port}`, cookie: login.cookie(running.port), "content-type": "application/octet-stream", "content-length": "10" },
         });
         req.on("error", () => {});
         req.write("abc");
@@ -1512,7 +1531,7 @@ describe("同时上传的个数", () => {
       }
       const res = await fetch(`http://127.0.0.1:${running.port}/api/uploads?name=ok.txt`, {
         method: "POST",
-        headers: { origin: `http://127.0.0.1:${running.port}`, cookie: COOKIE, "content-type": "application/octet-stream" },
+        headers: { origin: `http://127.0.0.1:${running.port}`, cookie: login.cookie(running.port), "content-type": "application/octet-stream" },
         body: "x",
       });
       expect(res.status).toBe(200);
@@ -1526,7 +1545,7 @@ describe("GET /api/quota（额度）", () => {
   it("没接来源：回空；接了：原样回", async () => {
     expect((await call("GET", "/api/quota")).json()).toEqual({ groups: [] });
     const value = { groups: [{ id: "gemini", name: "Gemini", windows: { five_hour: { utilization: 0.25, resetsAt: 1, status: "allowed" } } }] };
-    const other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, quota: { get: async () => value } });
+    const other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db, quota: { get: async () => value } });
     try {
       const res = await other.inject({ method: "GET", url: "/api/quota", headers: { host: HOST, cookie: COOKIE } });
       expect(res.json()).toEqual(value);
@@ -1553,6 +1572,7 @@ describe("GET /api/models（模型名单）", () => {
   it("接了：原样回；?refresh=1 让它重新问", async () => {
     const calls: Array<{ refresh?: boolean }> = [];
     const other = createUiServer({
+      db,
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir,
@@ -1586,6 +1606,7 @@ describe("GET /api/conversations/:id/commands、files（输入框的“/”“@�
   const withComposer = async (fn: (get: (url: string) => ReturnType<typeof call>) => Promise<void>) => {
     const calls: unknown[][] = [];
     const other = createUiServer({
+      db,
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir,
@@ -1660,7 +1681,7 @@ describe("POST /api/pick-folder（选主文件夹）", () => {
         return pickResult();
       },
     };
-    other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, folderPicker: picker });
+    other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db, folderPicker: picker });
     await other.ready();
   });
 

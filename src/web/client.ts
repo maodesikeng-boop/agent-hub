@@ -4,6 +4,8 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   type ApiErrorBody,
   type Attachment,
+  type BrowserSessionsResponse,
+  type LoginLinkResponse,
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -170,6 +172,26 @@ export function postRenewSession(pmId: PmId): Promise<RenewSessionResponse> {
 
 export function postRetryMessage(messageId: MessageId): Promise<RetryMessageResponse> {
   return postJson<RetryMessageResponse>(API_PATHS.retryMessage(messageId));
+}
+
+/** 已登录的浏览器（设置里的列表）。 */
+export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {
+  return request<BrowserSessionsResponse>(API_PATHS.browserSessions);
+}
+
+/** 退出一个浏览器（可以是自己）。 */
+export function deleteBrowserSession(id: string): Promise<void> {
+  return request<void>(API_PATHS.browserSession(id), { method: "DELETE" });
+}
+
+/** 全部退出（换主钥匙、清所有会话，包括自己）。 */
+export function postLogoutAll(): Promise<void> {
+  return postJson<void>(API_PATHS.logoutAll);
+}
+
+/** 给手机扫的一次性登录链接（5 分钟、用一次）。 */
+export function postLoginLink(): Promise<LoginLinkResponse> {
+  return postJson<LoginLinkResponse>(API_PATHS.loginLinks);
 }
 
 /** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */

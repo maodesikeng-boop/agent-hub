@@ -71,7 +71,7 @@ import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
-import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
+import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 
 /** 网页打包产物（pnpm build 的输出）。 */
 export const DEFAULT_STATIC_DIR = fileURLToPath(new URL("../../dist/web", import.meta.url));
@@ -370,7 +370,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const quota = createFetchedQuota({
       query: agyQuotaSpec && (() => queryFetchedQuota({ path: agyPath, spec: agyQuotaSpec, cwd: options.userHome })),
     });
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, quota, composer });
+    // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
+    const rotateToken = () => {
+      const next = rotateUiToken(paths.uiTokenFile);
+      log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
+      return next;
+    };
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, quota, composer, db, rotateToken });
 
     let stopping: Promise<void> | undefined;
     return {
