@@ -138,7 +138,7 @@ describe("在手机上打开", () => {
   it("倒计时一秒一秒走；到点换成“已过期”和“重新生成”，二维码撤掉；重新生成发新的", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     const start = Date.now();
-    api.loginLink = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth?link=a", expiresAt: Date.now() + 300_000 } });
+    api.loginLink = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth#link=a", expiresAt: Date.now() + 300_000 } });
     render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -196,13 +196,13 @@ describe("在手机上打开", () => {
 
 describe("qrModules（二维码的点阵）", () => {
   it("正方形，每边至少 21 格（二维码最小的一档），里面有深有浅；同样的内容同样的点阵", () => {
-    const m = qrModules("http://127.0.0.1:4317/auth?link=abc");
+    const m = qrModules("http://127.0.0.1:4317/auth#link=abc");
     expect(m.length).toBeGreaterThanOrEqual(21);
     expect(m.every((row) => row.length === m.length)).toBe(true);
     const dark = m.flat().filter(Boolean).length;
     expect(dark).toBeGreaterThan(0);
     expect(dark).toBeLessThan(m.length * m.length);
-    expect(qrModules("http://127.0.0.1:4317/auth?link=abc")).toEqual(m);
+    expect(qrModules("http://127.0.0.1:4317/auth#link=abc")).toEqual(m);
   });
 
   it("三个角上有定位块（7×7 的框：外圈全深）", () => {
@@ -220,7 +220,7 @@ describe("qrModules（二维码的点阵）", () => {
 
   it("内容越长点阵越大；长链接（43 位码的完整地址）也能编", () => {
     const short = qrModules("a").length;
-    const url = `https://tokyo.tail1234.ts.net/auth?link=${"x".repeat(43)}`;
+    const url = `https://tokyo.tail1234.ts.net/auth#link=${"x".repeat(43)}`;
     expect(qrModules(url).length).toBeGreaterThan(short);
     expect(qrModules(url).length).toBeLessThanOrEqual(57);
   });

@@ -15,6 +15,7 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_PORT,
+  ENV_TAILSCALE,
   HUB_COMMAND,
   WORKER_ENV,
   type Change,
@@ -113,6 +114,8 @@ export function makeEnv(): E2eEnv {
     [ENV_AGY]: join(fakeDir, "no-agy"),
     [ENV_CODEX]: join(fakeDir, "no-codex"),
     [ENV_PORT]: "0",
+    // 不去问这台机器真的 Tailscale：没有这个命令 = 没装，只认本机
+    [ENV_TAILSCALE]: join(fakeDir, "no-tailscale"),
     FAKE_CLAUDE_LOG: logFile,
     FAKE_CLAUDE_SCRIPT: scriptFile,
     FAKE_CLAUDE_STATE: fakeDir,

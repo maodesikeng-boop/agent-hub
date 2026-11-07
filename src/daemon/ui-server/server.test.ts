@@ -150,7 +150,6 @@ describe("登录 /auth", () => {
 
   it.each([
     ["令牌不对", `/auth?token=wrong-token-0123456789abc`],
-    ["没带令牌", "/auth"],
     ["令牌是空串", "/auth?token="],
     ["令牌带了两次", `/auth?token=${TOKEN}&token=${TOKEN}`],
     ["令牌只是前缀", `/auth?token=${TOKEN.slice(0, -1)}`],

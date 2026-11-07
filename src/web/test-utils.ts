@@ -329,7 +329,7 @@ export class FakeApi {
   /** POST /api/sessions/logout-all。 */
   logoutAll: () => Reply | Promise<Reply> = () => ({ status: 204 });
   /** POST /api/login-links。 */
-  loginLink: () => Reply | Promise<Reply> = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth?link=fake-code", expiresAt: Date.now() + 300_000 } });
+  loginLink: () => Reply | Promise<Reply> = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth#link=fake-code", expiresAt: Date.now() + 300_000 } });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** GET /api/quota。默认 404：不显示那一块。 */

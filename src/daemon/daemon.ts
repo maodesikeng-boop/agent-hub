@@ -6,6 +6,7 @@
 // - 关机（启动到哪一步就关到哪一步）：调度器 → 后台写交接的跑腿的（取消在写的、清理复制会话）→ 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
@@ -14,6 +15,7 @@ import {
   DEFAULT_AGENT_VENDOR,
   ENV_DEFAULT_MODEL,
   ENV_PORT,
+  ENV_TAILNET_OWNER,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
@@ -72,6 +74,15 @@ import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
+import { defaultDeviceName, loadOrCreateDevice } from "./device.ts";
+import {
+  createTailnetProbe,
+  runTailscaleStatus,
+  serveCommandLine,
+  serveTargetKind,
+  tailscaleCommand,
+  type TailnetProbe,
+} from "./platform/index.ts";
 
 /** 网页打包产物（pnpm build 的输出）。 */
 export const DEFAULT_STATIC_DIR = fileURLToPath(new URL("../../dist/web", import.meta.url));
@@ -81,6 +92,8 @@ export interface DaemonOptions {
   userHome: string;
   staticDir?: string;
   log?: (line: string) => void;
+  /** 本机 tailnet 名字和主人的探测（联机）。不给就真的问 tailscale status（结果缓存，见 daemon/platform/tailnet.ts）。 */
+  tailnet?: TailnetProbe;
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
   autoRenew?: LedgerOptions["autoRenew"];
 }
@@ -376,7 +389,34 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
       return next;
     };
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, quota, composer, db, rotateToken });
+    // 联机：设备身份；本机 tailnet 名字（后台问，不拖慢启动）；serve 转发目标（Linux 另听 run/ui.sock）
+    const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
+    const tailscaleCli = tailscaleCommand({ env });
+    const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
+    const serveTarget = serveTargetKind({ env });
+    parts.ui = await startUiServer({
+      ledger,
+      token,
+      port,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      models,
+      quota,
+      composer,
+      db,
+      rotateToken,
+      tailnet,
+      serveTarget,
+      ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
+    });
+    const uiPort = parts.ui.port;
+    void tailnet.refresh().then((self) => {
+      if (self === null) return;
+      const target = serveTarget === "unix" ? { kind: "unix" as const, path: paths.uiSock } : { kind: "tcp" as const, port: uiPort };
+      log(`${LOG_PREFIX} 联机：这台是 ${device.name}（${device.id}），tailnet 名字 ${self.dnsName}。别的设备、手机要访问，先跑一次：${serveCommandLine({ cli: tailscaleCli, target })}`);
+      if (self.owner === null) log(`${LOG_PREFIX} 联机：这台打了 tag，问不到设备主人，经 tailnet 的访问会被拒绝；请设 ${ENV_TAILNET_OWNER}=<你的 Tailscale 登录名>`);
+    });
 
     let stopping: Promise<void> | undefined;
     return {
