@@ -131,3 +131,39 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
 export function sessionEnv(role: SessionRole): Readonly<Record<string, string>> {
   return role === "worker" ? WORKER_ENV : {};
 }
+
+/**
+ * 后台写交接复制出来的那份 claude（daemon/handover/claude.ts）的 --settings：在项目经理的设置上叠三层，技术上不让它动任何东西
+ * （提示词里也说了“不调用工具”，这里不靠提示词）。不能改工具清单、模型、系统提示词（前缀变了吃不到缓存），所以只动权限和钩子。
+ * 2026-11-07 真 claude 2.1.314 实测（复制那份让它 Write、Bash 写文件、Edit 改文件）：不加时三样都写成了；叠上这三层三样都被拦，
+ * 连用户设置里放行过的 Bash(echo:*)、Write、Edit 也拦得住；第一个请求的缓存命中不加是 97.8%（读 77306/共 79020），叠上后 97.6%（77306/79231）。
+ * 反例：拒绝规则写整个工具（Bash、Bash(*)）会把工具从清单里拿掉，缓存读数掉到 0，所以 Bash 只靠钩子和 dontAsk 管。
+ * - PreToolUse 钩子拦下所有工具调用（退出码 2）：压过任何放行规则；disableAllHooks: false 盖过用户设置里关钩子的；
+ * - 权限档换成 dontAsk：钩子没跑时（托管策略只许托管钩子），没放行的工具一律拒绝；
+ * - Edit(//**) 拒绝：编辑工具（Edit、Write、NotebookEdit）哪里都写不了，压过任何放行规则。
+ * 都在 claude 进程里管、不靠 OS 沙箱，Linux 上一样。剩下的缺口：钩子没跑、且用户或项目设置里放行了会写文件的 shell 命令。
+ */
+export const FORK_PERMISSION_MODE = READONLY_PERMISSION_MODE;
+/** 只写带范围的拒绝规则：整工具的规则会把工具从清单里拿掉，缓存就没了（见上）。 */
+export const FORK_DENY_RULES: readonly string[] = ["Edit(//**)"];
+/** 拦下所有工具调用的 PreToolUse 钩子：退出码 2 是拦下，标准错误的话交给模型。 */
+export const FORK_DENY_ALL_HOOK = {
+  matcher: "*",
+  hooks: [{ type: "command", command: "echo '这是复制出来只写交接的一份：不能调用任何工具，直接把交接写成这一轮的回复。' >&2; exit 2" }],
+} as const;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const arrayOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** 复制那份的设置：项目经理的设置（设置文件读出来的对象）叠上上面三层，别的照留。返回新对象，不改 base。 */
+export function buildForkSettings(settings: object): Record<string, unknown> {
+  const base = settings as Record<string, unknown>;
+  const permissions = isRecord(base.permissions) ? base.permissions : {};
+  const hooks = isRecord(base.hooks) ? base.hooks : {};
+  return {
+    ...base,
+    permissions: { ...permissions, defaultMode: FORK_PERMISSION_MODE, deny: [...arrayOf(permissions.deny), ...FORK_DENY_RULES] },
+    hooks: { ...hooks, PreToolUse: [...arrayOf(hooks.PreToolUse), FORK_DENY_ALL_HOOK] },
+    disableAllHooks: false,
+  };
+}

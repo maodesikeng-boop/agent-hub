@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LaunchFiles } from "../../shared/driver.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
+import { buildForkSettings } from "../../shared/policy.ts";
 import { createClaudeForker, claudeProjectDirName, CLAUDE_FORKERS } from "./claude.ts";
 import { ForkUnsupportedError, type ForkSource } from "./forker.ts";
 import { FORKERS } from "./forkers.ts";
@@ -43,7 +44,11 @@ process.stdin.on("end", () => {
   return path;
 }
 
+/** 项目经理的设置文件（source() 每次都写一份）。 */
+const PM_SETTINGS = { permissions: { defaultMode: "auto", allow: ["Bash(hub:*)"] }, sandbox: { network: { allowUnixSockets: ["/s.sock"] } } };
+
 function source(over: Partial<ForkSource> = {}): ForkSource {
+  writeFileSync(join(dir, "settings.json"), JSON.stringify(PM_SETTINGS));
   const launch: LaunchFiles = {
     promptFile: join(dir, "prompt.md"),
     settingsFile: join(dir, "settings.json"),
@@ -87,7 +92,7 @@ describe("fork：只定编号，什么都不跑", () => {
 });
 
 describe("write：claude -p --resume 原编号 --fork-session --no-session-persistence", () => {
-  it("参数：resume、fork-session、不落盘、复制那份的编号、模型/思考程度/提示词文件/设置/--add-dir 照项目经理传；提示词走标准输入", async () => {
+  it("参数：resume、fork-session、不落盘、复制那份的编号、模型/思考程度/提示词文件/--add-dir 照项目经理传；提示词走标准输入", async () => {
     const f = createClaudeForker();
     const handle = await f.fork(source(), never);
     await f.write(source(), handle, "请写交接", never);
@@ -102,7 +107,6 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
     expect(valueOf(argv, "--model")).toBe("sonnet");
     expect(valueOf(argv, "--effort")).toBe("high");
     expect(valueOf(argv, "--append-system-prompt-file")).toBe(join(dir, "prompt.md"));
-    expect(valueOf(argv, "--settings")).toBe(join(dir, "settings.json"));
     expect(valueOf(argv, "--add-dir")).toBe("/code/bar");
     expect(argv).not.toContain("--input-format");
     expect(stdin).toBe("请写交接");
@@ -134,12 +138,40 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
     expect(call().argv).not.toContain("--no-session-persistence");
   });
 
-  it("model、effort、settings 为 null 时不传", async () => {
+  it("model、effort 为 null 时不传", async () => {
     const f = createClaudeForker();
-    const src = source({ model: null, effort: null, addDirs: [], launch: { ...source().launch, settingsFile: undefined } });
+    const src = source({ model: null, effort: null, addDirs: [] });
     await f.write(src, await f.fork(src, never), "p", never);
     const { argv } = call();
-    for (const flag of ["--model", "--effort", "--settings", "--add-dir"]) expect(argv).not.toContain(flag);
+    for (const flag of ["--model", "--effort", "--add-dir"]) expect(argv).not.toContain(flag);
+  });
+
+  it("--settings：项目经理的设置文件读出来叠上禁写三层（buildForkSettings），整段 JSON 直接传；只传一次", async () => {
+    const f = createClaudeForker();
+    await f.write(source(), await f.fork(source(), never), "p", never);
+    const { argv } = call();
+    expect(argv.filter((a) => a === "--settings")).toHaveLength(1);
+    expect(JSON.parse(valueOf(argv, "--settings")!)).toEqual(buildForkSettings(PM_SETTINGS));
+    expect(argv).not.toContain("--permission-mode");
+  });
+
+  it("项目经理没有设置文件：照样带上禁写三层", async () => {
+    const f = createClaudeForker();
+    const src = source({ launch: { ...source().launch, settingsFile: undefined } });
+    await f.write(src, await f.fork(src, never), "p", never);
+    expect(JSON.parse(valueOf(call().argv, "--settings")!)).toEqual(buildForkSettings({}));
+  });
+
+  it("设置文件读不了或不是 JSON 对象 → 抛错，不起进程（不能不带禁写就跑）", async () => {
+    const f = createClaudeForker();
+    for (const content of ["{坏的", "[1]", "null"]) {
+      const src = source();
+      writeFileSync(join(dir, "settings.json"), content);
+      await expect(f.write(src, await f.fork(src, never), "p", never)).rejects.toThrow(/设置文件/);
+    }
+    const gone = source({ launch: { ...source().launch, settingsFile: join(dir, "nope.json") } });
+    await expect(f.write(gone, await f.fork(gone, never), "p", never)).rejects.toThrow(/设置文件/);
+    expect(existsSync(join(dir, "call.json"))).toBe(false);
   });
 
   it("取 result 的文字；用量是 result.usage 四个数，context 是最后一个 assistant 请求的 input + 缓存读 + 缓存写", async () => {

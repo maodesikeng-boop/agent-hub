@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PERMISSION_MODE,
+  FORK_DENY_ALL_HOOK,
+  FORK_DENY_RULES,
   READONLY_GIT_DENY_RULES,
   READONLY_PERMISSION_MODE,
   WORKER_ENV,
+  buildForkSettings,
   buildSessionSettings,
   readonlyAllowRules,
   sessionEnv,
@@ -117,5 +120,51 @@ describe("buildSessionSettings：只读", () => {
     const b = buildSessionSettings({ role: "worker", readonly: true, ...base });
     expect(b.permissions.deny).toEqual([...READONLY_GIT_DENY_RULES, stateDeny]);
     expect(b.permissions.allow).not.toContain("Bash(*)");
+  });
+});
+
+describe("buildForkSettings：复制出来写交接的那份", () => {
+  const pm = buildSessionSettings({ role: "pm", readonly: false, ...base });
+
+  it("在项目经理的设置上：换成 dontAsk、加 Edit(//**) 拒绝、加拦所有工具的 PreToolUse 钩子、不许关钩子；别的照留", () => {
+    expect(buildForkSettings(pm)).toEqual({
+      permissions: { defaultMode: READONLY_PERMISSION_MODE, allow: [allowHub], deny: ["Edit(//**)"] },
+      sandbox: { network: { allowUnixSockets: [base.hubSock] } },
+      hooks: { PreToolUse: [FORK_DENY_ALL_HOOK] },
+      disableAllHooks: false,
+    });
+  });
+
+  it("拒绝规则不写整个工具（Bash、Bash(*) 会把工具从清单里拿掉，缓存就没了）", () => {
+    for (const rule of FORK_DENY_RULES) expect(rule).toMatch(/^\w+\(.+\)$/);
+    expect(FORK_DENY_RULES).not.toContain("Bash(*)");
+  });
+
+  it("钩子拦所有工具：matcher 是 *，命令退出码 2（claude 把 2 当拦下）", () => {
+    expect(FORK_DENY_ALL_HOOK.matcher).toBe("*");
+    expect(FORK_DENY_ALL_HOOK.hooks).toHaveLength(1);
+    expect(FORK_DENY_ALL_HOOK.hooks[0]!.command).toMatch(/exit 2$/);
+  });
+
+  it("项目经理已有的拒绝规则、钩子保留，追加在后面", () => {
+    const own = { permissions: { defaultMode: "auto", allow: ["Read"], deny: ["Bash(rm *)"] }, hooks: { PreToolUse: [{ matcher: "Bash", hooks: [] }], Stop: [{ hooks: [] }] } };
+    const fork = buildForkSettings(own);
+    expect(fork.permissions).toEqual({ defaultMode: "dontAsk", allow: ["Read"], deny: ["Bash(rm *)", "Edit(//**)"] });
+    expect(fork.hooks).toEqual({ PreToolUse: [{ matcher: "Bash", hooks: [] }, FORK_DENY_ALL_HOOK], Stop: [{ hooks: [] }] });
+  });
+
+  it("没有设置（空对象）也给齐三层", () => {
+    expect(buildForkSettings({})).toEqual({
+      permissions: { defaultMode: "dontAsk", deny: ["Edit(//**)"] },
+      hooks: { PreToolUse: [FORK_DENY_ALL_HOOK] },
+      disableAllHooks: false,
+    });
+  });
+
+  it("不改传进来的对象", () => {
+    const own = buildSessionSettings({ role: "pm", readonly: false, ...base });
+    const before = JSON.stringify(own);
+    buildForkSettings(own);
+    expect(JSON.stringify(own)).toBe(before);
   });
 });

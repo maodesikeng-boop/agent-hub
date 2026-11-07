@@ -63,17 +63,25 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 
 | 厂商 | 办法 | 做法 | 缓存 |
 |---|---|---|---|
-| claude | 自带（native） | `write` 时直接 `claude -p --resume <原编号> --fork-session --no-session-persistence`，model / `--append-system-prompt-file` / `--settings` 照项目经理的传；`fork` 本身什么都不做 | 约 97% |
+| claude | 自带（native） | `write` 时直接 `claude -p --resume <原编号> --fork-session --no-session-persistence`，model / `--append-system-prompt-file` 照项目经理的传，`--settings` 是项目经理的叠上禁写三层（见下）；`fork` 本身什么都不做 | 约 97% |
 | codex | 自带（native） | 单独起一个 `codex app-server`（不带 HUB_*），`thread/fork {threadId, cwd, model, developerInstructions, sandbox, approvalPolicy, config}`，参数和项目经理的 `thread/start` 同一个构造函数出 | 只中约 1.2 万 |
 | agy | 自造拷库（copy） | sqlite 备份接口拷 `conversations/<id>.db`，库里 `cascade_id`、`trajectory_id` 换成同长新 UUID，`brain/<id>/` 一起拷；之后 `--conversation <新编号>` | 0 |
 
 - 启动参数**复用驱动层现成的构造**（`protocol.ts` 的 `buildClaudeArgs`、`codex-protocol.ts` 的 `readCodexLaunchConfig` / `buildThreadStartRequest`、`agy-protocol.ts`），
   `prepareLaunch(session)` 拿到的文件和环境变量照用，**只去掉 `HUB_TOKEN`、`HUB_SOCK`**（codex 还要去掉 `shell_environment_policy.set` 里的这两个）。
   #108 实测：三家去掉后复制那份都拿不到凭证，工具清单不变（缓存不受影响）。
-- 复制那份不能派活（没凭证），但还能读写文件。防它乱动：
-  - codex、agy 本来就不走缓存，复制那份直接收紧：codex `sandbox: "read-only"`、`approvalPolicy: "never"`；agy `--settings` 拒绝所有工具。
-  - claude 要保缓存，设置和工具清单不能改（改了前缀就变）。只靠提示词“这一轮只写交接、不要调用工具”+ 没凭证；
-    实现时实测 `--max-turns 1` 能不能让它调工具前就停（这个参数只在 CLI 这边，不进提示词，不影响缓存），能就加上。
+- 复制那份不能派活（没凭证），也要技术上写不了文件（不能只靠提示词）：
+  - codex、agy 本来就不走缓存，复制那份直接收紧：codex `sandbox: "read-only"`、`approvalPolicy: "never"`、反向审批一律拒绝；
+    agy `--mode plan`（2026-11-07 实测：让它“批准了、执行”，`write_file` 照样报 permission check failed，无头模式不能问就自动拒）。
+  - claude 要保缓存，工具清单、模型、系统提示词不能改。`--settings` 换成项目经理的设置叠上三层（`shared/policy.ts` 的 `buildForkSettings`）：
+    拦所有工具调用的 PreToolUse 钩子（退出码 2）+ 权限档 `dontAsk` + `Edit(//**)` 拒绝。只动权限和钩子，不动工具清单。
+    2026-11-07 真 claude 2.1.314 实测（让复制那份 Write 建文件、Bash 写文件、Edit 改文件）：不加时三样都写成了；叠上后三样都被拦，
+    用户设置里放行过的 `Bash(echo:*)`、`Write`、`Edit` 也拦得住；第一个请求缓存命中不加 97.8%、叠上 97.6%。
+    反例：拒绝规则写整工具（`Bash`、`Bash(*)`）会把工具从清单里拿掉，缓存命中掉到 0。
+  - 没用 OS 沙箱（`sandbox-exec`）包 claude：Worker 自己就跑在 `sandbox-exec` 里（不能嵌套），没法在 Worker 里实测它包住后 claude 还能不能正常跑；
+    上面三层都在 claude 进程里管，Linux（没有 `sandbox-exec`）上一样生效。
+  - 剩下的缺口（三家都一样，都是用户自己放开的）：claude 的钩子没跑（托管策略只许托管钩子）且用户/项目设置放行了会写文件的 shell 命令；
+    agy 用户设置 `permissions.allow` 放行了 `write_file` / `run_command`。
 - 复制失败分两种：
   - `ForkUnsupportedError`（格式不认识、厂商没这个能力、`--conversation` 找不到）→ **这一次**直接换清单里的下一个办法，不算失败、不退避；
   - 其它错误（进程起不来、网络）→ 这一次失败（2.7）。

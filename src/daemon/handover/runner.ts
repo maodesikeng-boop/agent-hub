@@ -95,6 +95,19 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
     }
   };
 
+  /**
+   * 报复制好 / 写好：账本抛错（库忙、库坏）时这一行还卡在 forking / writing，记日志后接着抛，由 runJob 的 catch 改报 error，
+   * 账本按失败退避再来，不用等重启（handoverFailed 也抛就只剩日志，库真坏了等重启记 failed(restart)）。
+   */
+  const report = <T>(what: string, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (error) {
+      log(`${LOG_PREFIX} 后台写交接：${what}出错：${messageOf(error)}，改报失败`);
+      throw new Error(`${what}出错：${messageOf(error)}`);
+    }
+  };
+
   const failureOf = (error: unknown, run: Running): HandoverFailure => {
     if (run.reason === "timeout") return { kind: "timeout", detail: `超过 ${Math.round(timeoutMs / 1000)} 秒没写完，已停掉` };
     if (run.reason === "shutdown") return { kind: "shutdown", detail: "守护进程在关机，已取消" };
@@ -140,13 +153,9 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
       copy = forked;
       const { forker, handle } = forked;
       // 报复制好：账本总是存 fork_ref；还在 forking 才接着写，否则（被作废了）直接清理
-      let proceed = false;
-      await attempt(`报 #${handoverId} 复制好`, () => {
-        proceed = ledger.handoverForked(handoverId, { kind: forker.kind, ref: { forker: forker.id, handle } });
-      });
-      if (!proceed) return;
+      if (!report(`报 #${handoverId} 复制好`, () => ledger.handoverForked(handoverId, { kind: forker.kind, ref: { forker: forker.id, handle } }))) return;
       const result = await abortable(forker.write(src, handle, job.prompt, signal), signal);
-      await attempt(`报 #${handoverId} 写好`, () => ledger.handoverWritten(handoverId, result));
+      report(`报 #${handoverId} 写好`, () => ledger.handoverWritten(handoverId, result));
     } catch (error) {
       // 还没复制出来时的 ForkUnsupportedError 只会来自 forkSourceOf（认不出厂商）：和“都不支持”一样退回本会话写交接；复制出来之后的都算 error
       const failure: HandoverFailure = error instanceof ForkUnsupportedError && copy === null ? { kind: "unsupported", detail: error.message } : failureOf(error, run);

@@ -377,6 +377,38 @@ describe("handover runner", () => {
       await until(() => f.calls.includes("cleaned:2"));
       expect(logs.some((l) => l.includes("db closed"))).toBe(true);
     });
+
+    it("报写好时账本抛错 → 改报 error（行不卡在 writing，账本按失败退避再来），复制那份照样清理", async () => {
+      const f = fakeLedger([job(1)], {
+        handoverWritten: vi.fn(() => {
+          throw new Error("SQLITE_BUSY");
+        }),
+      });
+      const { runner, logs } = make(f.ledger, registryOf([fakeForker(f.calls)]));
+      runner.wake();
+      await until(() => f.calls.includes("cleaned:1"));
+      expect(f.failed).toHaveLength(1);
+      expect(f.failed[0]?.failure.kind).toBe("error");
+      expect(f.failed[0]?.failure.detail).toContain("SQLITE_BUSY");
+      expect(f.calls).toEqual(["claim:1", "fork:claude-native", "forked:1", "write:claude-native", "failed:1", "remove:f-101", "cleaned:1"]);
+      expect(logs.some((l) => l.includes("SQLITE_BUSY"))).toBe(true);
+    });
+
+    it("报复制好时账本抛错 → 不写，改报 error（行不卡在 forking），复制那份照样清理", async () => {
+      const f = fakeLedger([job(1)], {
+        handoverForked: vi.fn(() => {
+          throw new Error("SQLITE_BUSY");
+        }),
+      });
+      const forker = fakeForker(f.calls);
+      const { runner } = make(f.ledger, registryOf([forker]));
+      runner.wake();
+      await until(() => f.calls.includes("cleaned:1"));
+      expect(forker.write).not.toHaveBeenCalled();
+      expect(f.failed.map((x) => [x.id, x.failure.kind])).toEqual([[1, "error"]]);
+      expect(f.failed[0]?.failure.detail).toContain("SQLITE_BUSY");
+      expect(f.calls).toContain("remove:f-101");
+    });
   });
 
   describe("超时和取消", () => {
