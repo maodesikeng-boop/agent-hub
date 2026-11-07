@@ -197,10 +197,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     refreshSessionState: sessions.refreshSessionState,
     // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），
-    // 上次还在复制、写的交接记失败重新排队（handover.ts）
+    // 上次还在复制、写的交接记失败重新排队（handover.ts），在等后台命令时守护进程被杀的 Worker 补发汇报（workers.ts）
     recoverAfterRestart() {
       const recovered = sessions.recoverAfterRestart();
       workers.recoverWorktrees();
+      workers.recoverBackgroundWaits();
       handover.recoverAfterRestart();
       return recovered;
     },

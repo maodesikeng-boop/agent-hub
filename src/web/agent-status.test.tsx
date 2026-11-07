@@ -46,6 +46,12 @@ describe("AgentStatus：消息流里的状态", () => {
     expect(text(makeSession({ activity: "preparing" }))).toBe("Running setup...");
   });
 
+  it("Worker 一轮结束了、还在等它放到后台的命令跑完：有状态（会话不算空闲），写在等后台命令", () => {
+    const session = makeSession({ activity: "background", step: null });
+    expect(hasAgentStatus(session)).toBe(true);
+    expect(text(session)).toBe("Waiting for background command...");
+  });
+
   it("网络出错在重试：第几次 / 共几次，比 step 优先；正在停止比重试优先", () => {
     const apiRetry = { attempt: 2, maxRetries: 10, retryAt: null, errorStatus: null, error: "unknown" };
     expect(text(working({ step: { type: "thinking" }, apiRetry }))).toContain("Retrying 2/10");

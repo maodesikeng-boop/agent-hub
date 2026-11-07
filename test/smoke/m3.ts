@@ -6,7 +6,9 @@
 // S13 整条路：项目经理派一个 haiku Worker 改一行、提交；汇报回来；用户在会话里说清楚“合并到 main，删掉 worktree，然后让 Worker 收工”，项目经理照做。
 // S14 Worker 干到一半关机再启动（验收第 11 条，PR #35 审查第 1、2 条）：不发“这一轮没做完”；重启后恢复说明、重发说明和
 //     任务原文写在同一行，Worker 接着做完，汇报回到项目经理。
-// S21 Worker 跑后台命令：先回一句结束这一轮，后台命令跑完 claude 自己开一轮再回一句；项目经理两句都收到（claude 自己开的一轮也算汇报）。
+// S21 Worker 跑后台命令（sleep 90）：先回一句结束这一轮，这时还有后台命令，不算汇报、会话显示在等后台命令；跑完 claude 自己开一轮再回一句，
+//     项目经理只收到这一次汇报（ledger/workers.ts 的 awaitingBackground）。
+// S21b 等后台命令时项目经理收工：后台的 sleep 跟着停，不发汇报。
 // S19 用户在网页上直接对 Worker 说：Worker 收到带【用户直接对你说】的原文、照做并汇报；项目经理收到“用户直接对 Worker 说的话”，
 //     回复里提到了这件事；之后汇报也到了项目经理。
 import { execFileSync } from "node:child_process";
@@ -24,7 +26,11 @@ import {
   type WorkerMessageMeta,
 } from "../../src/shared/index.ts";
 import { messagesOf, waitUntil } from "../e2e/harness.ts";
-import { MODEL, Smoke, TURN_MS, expect, scenario, type Outcome } from "./kit.ts";
+import { MODEL, Smoke, TURN_MS, expect, psLines, scenario, sleep, type Outcome } from "./kit.ts";
+
+/** S21 后台命令跑多久（要明显长于一轮，中途能多看几次）；S21b 用另一个数，好按命令行找进程。 */
+const S21_SLEEP_SEC = 90;
+const S21B_SLEEP_SEC = 93;
 
 const hub = HUB_COMMAND;
 
@@ -330,34 +336,67 @@ export async function runM3(outcomes: Outcome[], only: (name: string) => boolean
   }
 
   if (only("S21")) {
-    await inFreshSmoke(outcomes, "S21 Worker 跑后台命令：先回一句，后台跑完 claude 自己开一轮再回一句，项目经理两句都收到", async (smoke) => {
-      const dir = repo(smoke, "s20", { "README.md": "# s20\n" });
+    await inFreshSmoke(outcomes, "S21 Worker 跑后台命令：这一轮结束时还有后台命令就不汇报、显示在等后台命令，跑完它自己开一轮做完，项目经理只收到一次汇报", async (smoke) => {
+      const dir = repo(smoke, "s21", { "README.md": "# s21\n" });
       const tasks = smoke.folder("tasks", {
         "bg.txt":
-          "用 Bash 工具运行 `sleep 20 && echo BG-DONE`，必须设 run_in_background 为 true（后台运行）。启动后不要等、不要轮询、不要读输出，立刻只回复一句“后台已启动”。" +
+          `用 Bash 工具运行 \`sleep ${S21_SLEEP_SEC} && echo BG-DONE\`，必须设 run_in_background 为 true（后台运行）。启动后不要等、不要轮询、不要读输出，立刻只回复一句“后台已启动”。` +
           "后台命令跑完你会收到完成通知，那时再回复一句“后台完成 BG-DONE”。这两句话都直接回复这几个字就行，不用别的内容。",
       });
       const chat = await pmWithFolder(smoke, "小林", dir);
       await smoke.ask(chat, `用 Bash 原样运行这一条命令，运行完只回复“派了”：\n\n${hub} worker start --title 后台命令 --no-worktree --model ${MODEL} --stdin < ${tasks}/bg.txt`);
       const [worker] = workers(smoke);
       expect(worker !== undefined, `没派出 Worker：${JSON.stringify(workers(smoke))}`);
+      // 第一轮结束、后台命令还在跑：会话显示在等后台命令，项目经理没收到汇报
+      await waitUntil("Worker 在等后台命令", async () => ((await smoke.currentSession(worker!.worker_conversation_id)).activity === "background" ? true : undefined), TURN_MS);
+      const waitingSince = Date.now();
+      console.log(`  S21 在等后台命令：网页 http://127.0.0.1:${smoke.daemon.port}/api/auth?token=${smoke.daemon.token} ，Worker 对话 ${worker!.worker_conversation_id}`);
+      while (Date.now() - waitingSince < (S21_SLEEP_SEC - 30) * 1000) {
+        const early = (await workerLines(smoke, chat)).filter((l) => l.event === "report" || l.event === "turn_failed");
+        expect(early.length === 0, `后台命令没跑完就汇报了：${JSON.stringify(early)}`);
+        expect((await smoke.currentSession(worker!.worker_conversation_id)).activity === "background", "等后台命令时会话状态变了");
+        await sleep(5_000);
+      }
       const reports = await waitUntil(
-        "两次汇报",
+        "一次汇报",
         async () => {
-          const r = (await workerLines(smoke, chat)).filter((l) => l.event === "report");
-          return r.length >= 2 ? r : undefined;
+          const r = (await workerLines(smoke, chat)).filter((l) => l.event === "report" || l.event === "turn_failed");
+          return r.length >= 1 ? r : undefined;
         },
-        TURN_MS * 2,
+        S21_SLEEP_SEC * 1000 + TURN_MS,
       );
-      expect(/后台已启动/.test(reports[0]!.summary ?? ""), `第一份汇报不对：${JSON.stringify(reports[0])}`);
-      expect(/BG-DONE/.test(reports[reports.length - 1]!.summary ?? ""), `最后一份汇报不对：${JSON.stringify(reports)}`);
       await waitSettled(smoke, chat);
+      await sleep(10_000);
+      const all = (await workerLines(smoke, chat)).filter((l) => l.event === "report" || l.event === "turn_failed");
+      expect(all.length === 1 && all[0]!.event === "report" && /BG-DONE/.test(all[0]!.summary ?? ""), `应该只有一份带 BG-DONE 的汇报：${JSON.stringify(all)}`);
       const toPm = smoke.writtenTexts(sessionIdOf(smoke, chat)).filter((t) => t.includes("的汇报】"));
-      expect(toPm.length >= 2 && toPm[0]!.includes("后台已启动") && toPm.some((t) => t.includes("BG-DONE")), `项目经理没按顺序收到两份：${JSON.stringify(toPm)}`);
+      expect(toPm.length === 1 && toPm[0]!.includes("BG-DONE") && !toPm[0]!.includes("后台已启动"), `项目经理应该只收到一份（跑完后的）：${JSON.stringify(toPm)}`);
       const session = await smoke.currentSession(worker!.worker_conversation_id);
+      expect(session.activity === "idle", `汇报后应该空闲：${session.activity}`);
       const selfStarted = smoke.sessionLog(session.sessionId).some((e) => e.type === "result" && e.origin !== undefined);
       expect(selfStarted, "Worker 的会话日志里没有 claude 自己开的那一轮（result 带 origin）");
-      return `Worker 先回“${reports[0]!.summary}”，后台跑完自己开一轮回“${reports[reports.length - 1]!.summary}”，项目经理两份都收到`;
+      return `等后台命令约 ${Math.round((Date.now() - waitingSince) / 1000)} 秒里没有汇报、显示在等后台命令；跑完只汇报一次“${reports[0]!.summary}”`;
+    });
+  }
+
+  if (only("S21b")) {
+    await inFreshSmoke(outcomes, "S21b Worker 在等后台命令时项目经理收工：后台命令跟着停，不发汇报", async (smoke) => {
+      const dir = repo(smoke, "s21b", { "README.md": "# s21b\n" });
+      const tasks = smoke.folder("tasks", {
+        "bg.txt": `用 Bash 工具运行 \`sleep ${S21B_SLEEP_SEC} && echo BG-DONE\`，必须设 run_in_background 为 true（后台运行）。启动后不要等、不要轮询，立刻只回复一句“后台已启动”。`,
+      });
+      const chat = await pmWithFolder(smoke, "小林", dir);
+      await smoke.ask(chat, `用 Bash 原样运行这一条命令，运行完只回复“派了”：\n\n${hub} worker start --title 后台命令 --no-worktree --model ${MODEL} --stdin < ${tasks}/bg.txt`);
+      const [worker] = workers(smoke);
+      expect(worker !== undefined, `没派出 Worker：${JSON.stringify(workers(smoke))}`);
+      await waitUntil("Worker 在等后台命令", async () => ((await smoke.currentSession(worker!.worker_conversation_id)).activity === "background" ? true : undefined), TURN_MS);
+      const sleeping = () => psLines().filter((l) => l.includes(`sleep ${S21B_SLEEP_SEC}`) && !l.includes("Bash"));
+      expect(sleeping().length > 0, "没看到后台的 sleep 进程");
+      await smoke.ask(chat, `用 Bash 原样运行 \`${hub} worker end ${worker!.id}\`，运行完只回复“收了”。`);
+      await waitUntil("后台 sleep 跟着停", () => (sleeping().length === 0 ? true : undefined), 30_000);
+      const lines = (await workerLines(smoke, chat)).map((l) => l.event);
+      expect(!lines.includes("report") && !lines.includes("turn_failed"), `收工后不该有汇报：${JSON.stringify(lines)}`);
+      return `收工后后台 sleep 停了，项目经理那边只有 ${lines.join("、")}`;
     });
   }
 }

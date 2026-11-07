@@ -14,6 +14,8 @@ export const STEP_TEXT = {
   stopping: "Stopping",
   /** Worker 开工前在跑项目的准备命令。 */
   preparing: "Running setup",
+  /** Worker 一轮做完了，在等它放到后台的命令跑完（跑完它接着做、再汇报）。 */
+  background: "Waiting for background command",
   rateLimited: "Usage limit reached",
 } as const;
 

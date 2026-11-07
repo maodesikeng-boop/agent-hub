@@ -227,6 +227,8 @@ export interface LaunchContext {
   pm: { id: PmId; name: string; mode: PmMode; vendor?: AgentVendor; persona: string; personaRevision?: number };
   project: ProjectCard | null;
   worker: WorkerRecord | null;
+  /** 这个会话自己的厂商：Worker 给（可能和项目经理不是同一家，提示词按它写长命令怎么等）；项目经理的看 pm.vendor。 */
+  vendor?: AgentVendor;
 }
 
 /**

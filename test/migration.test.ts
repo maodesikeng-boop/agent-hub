@@ -1294,3 +1294,24 @@ describe("0013_handovers：从 0012 的库升级", () => {
     expect(plan).toContain("handovers_uncleaned");
   });
 });
+
+// ---- 0014_worker_background_waits ----
+
+describe("0014_worker_background_waits：从 0013 的库升级", () => {
+  it("只加一张空的 worker_background_waits 表，老数据一个字不变；再跑一遍也行；会话不在不让写", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(13));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 13, to: LATEST_VERSION });
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM worker_background_waits")).toEqual([]);
+    db.exec("PRAGMA user_version = 13");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    const id = dump.agent_sessions![0]!.id as number;
+    db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 7, 1, 0)", id);
+    expect(db.all("SELECT * FROM worker_background_waits")).toEqual([{ session_id: id, turn_start: 7, background: 1, created_at: 0 }]);
+    expect(() => db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 7, 1, 0)", id + 1000)).toThrow(/FOREIGN KEY/);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

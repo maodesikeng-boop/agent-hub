@@ -24,7 +24,7 @@ function Dots() {
 
 /**
  * 消息流里这一轮最下面那一行状态（英文）：“Thinking…”“Reading App.tsx…”“Retrying 3/10 in 5s”“Usage limit reached, resets 14:30”
- * “Stopping…”“Running setup…”。文案在 step-labels.ts。老服务端没有 step 时只显示“Working…”。没有要显示的（空闲、没在等额度）返回 null。
+ * “Stopping…”“Running setup…”“Waiting for background command…”。文案在 step-labels.ts。老服务端没有 step 时只显示“Working…”。没有要显示的（空闲、没在等额度）返回 null。
  */
 export function AgentStatus({ session }: { session: SessionState | null }) {
   if (!hasAgentStatus(session)) return null;
@@ -40,6 +40,8 @@ export function AgentStatus({ session }: { session: SessionState | null }) {
     text = STEP_TEXT.stopping;
   } else if (activity === "preparing") {
     text = STEP_TEXT.preparing;
+  } else if (activity === "background") {
+    text = STEP_TEXT.background;
   } else if (session?.apiRetry) {
     text = <RetryNotice info={session.apiRetry} />;
   } else {

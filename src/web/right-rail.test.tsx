@@ -75,6 +75,14 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary");
   });
 
+  it("在等后台命令跑完的 Worker：状态词 Waiting…，算在忙（强调色、色点、排在前面）", () => {
+    renderRail({ workers: [worker(41), worker(42), worker(43), worker(44, { activity: "background", tone: "success" })], openWorkerId: null });
+    const row = within(workerGroup()).getByRole("button", { name: /活 44/ });
+    expect(within(row).getByText("Waiting…")).toHaveClass("text-primary");
+    expect(within(row).getByTestId("status-dot")).toHaveClass("bg-primary");
+    expect(within(workerGroup()).getAllByRole("button", { name: /活 \d+/ })[0]).toBe(row);
+  });
+
   it("状态用颜色（worker-status 的 tone）：图标右下角一个小色点；在忙强调色，空闲时跟着最近一次汇报：做完了绿、有问题黄、放弃了红，没汇报灰；Ended 没有；图标本身一直是中性灰", () => {
     renderRail({
       workers: [busy(30), worker(31), worker(32, { tone: "success" }), worker(33, { tone: "warn" }), worker(34, { tone: "danger" }), { ...busy(35), tone: "danger" }, done(36)],

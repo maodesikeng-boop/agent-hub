@@ -417,3 +417,23 @@ interface BackgroundTaskSupport {
 **冒烟**（`test/smoke/mid-turn.ts`，`pnpm smoke S27 S28`，直接用驱动层）：claude（haiku）、codex（gpt-5.6-luna）在 `sleep 8` 时说“停下”，都是第 1 条命令跑完就读到、同一轮一个结束、不再跑后面的；写进去还没读到就停止，都标已取消、停止后 8 秒没有新的一轮。
 
 **补测 D 场景的先后**（审查后，claude 2.1.314、haiku，`experiments/steer/d_next.json`、`d_late.json`，`d_order.py` 汇总）：没赶上这一轮的那条（B），第一个 `result` 和 `started(B)` 谁先到——两种写法各跑 5 次（`d_next` 长回复流到一半写入，`d_late` 短回复刚开始流就写入，离 `result` 只有 0.3～0.6 秒），10 次都是 `result` → `completed(A)` → `started(B)`（同一毫秒内也是这个顺序），没见过 `started(B)` 先到。所以“`result` 只结算 `started` 过的”这条规则在实测里站得住，没有为反过来的顺序再加处理。S27a 原来按回复里有没有 THREE 判断“又跑了第三条”，模型常回“TWO 和 THREE 没有运行”，会误报，改成看真跑了的命令。
+
+## 12. Worker 的长命令（2026-11-07 复测各家，PR：Worker 也能把长命令放后台）
+
+**问题**：Worker 一轮结束就是给项目经理交汇报，所以以前 Worker 的提示词不让放后台（放了会先交一份“做完了”），等 CI 只好 `sleep` + `gh run view` 反复查，每查一次都要重读整段对话。
+
+**复测**（本机 claude 2.1.314、codex-cli 0.162.0-alpha.17.2、agy 1.5.3；脚本 `experiments/steer/bg_agy.json`、`bg2_codex.json`、`fg_long_agy.json`、`fg_long_codex.json`；claude 的超时从程序本身读）：
+
+| | claude | codex | agy |
+| --- | --- | --- | --- |
+| 单条前台命令 | Bash 默认 2 分钟、最长 10 分钟（`BASH_DEFAULT_TIMEOUT_MS`/`BASH_MAX_TIMEOUT_MS`）；超时**自动转后台**，跑完通知 | 没有硬上限：`exec_command` 默认 10 秒 yield，模型用 `write_stdin` 空轮询（每次 5～300 秒）等；`sleep 150` 一轮里等完（轮询 3 次） | 没有硬上限：`run_command` 等 0.5～10 秒（`WaitMsBeforeAsync`）后转成后台任务，这一轮会等它跑完、系统通知后接着做；`sleep 150` 一轮里等完 |
+| 放后台、这一轮结束后跑完叫醒 | **支持**：`run_in_background`，跑完 `task_notification` 并自己开一轮；后台命令默认 30 分钟、最长 2 小时会被它停掉（也会通知） | 不支持（复测：一轮结束后 50 秒里没有新的一轮） | 不支持（复测同第 10.1 节：一轮结束后没有任何事件） |
+| 驱动层认得出后台命令 | 能（`background_tasks_changed`） | 部分（第 10.2 节，没接） | 不能 |
+
+**做法**：
+- 提示词（`prompt.ts`，按 Worker **自己那家**的 `VENDOR_SPECS[厂商].backgroundCommands`，不写厂商名）：能叫醒的写“长命令放后台、这一轮先结束，跑完会叫醒你，接着做完再汇报”（`WORKER_BACKGROUND_COMMAND_NOTE`）；不能的写“用一条会一直等到结束的命令（如 `gh pr checks --watch`），不要 sleep 轮询，也别放后台”（`WORKER_BLOCKING_WAIT_NOTE`）。
+- 账本（`ledger/workers.ts` 的 `awaitingBackground`）：Worker 一轮**正常**结束时 `live.backgroundTasks > 0`（驱动层已有的 `background.changed`，不另外查、不轮询）→ 这一轮不汇报，会话 activity 记成 `background`（网页状态行 “Waiting for background command…”、右栏 “Waiting…”）。命令跑完 claude 自己开一轮（只多这一步），那一轮结束、没有后台命令了才汇报，正文是从等待那一轮开头起最后一段文字。中间用户、项目经理的话照常能发（开新的一轮，结束时还有后台命令就照样不汇报）。出错、被停止的一轮照常马上交代。
+- 卡死的兜底：Worker 会话的 `LaunchFiles.backgroundHoldMaxMs` = `WORKER_BACKGROUND_HOLD_MAX_MS`（150 分钟，`limits.ts`；比 claude 自己的 2 小时上限长，正常走不到）。到点驱动层关进程（后台命令一起停），账本在 `session.exited` 时照常汇报，正文前加 `backgroundKilledNote`；下一条消息前驱动层告诉 agent 后台任务被结束了。
+- 守护进程被杀（没走关机，`session.exited` 没来）：“在等后台命令”记在库里（`worker_background_waits`，迁移 0014），不只在内存。重启恢复（`recoverAfterRestart` → `workers.ts` 的 `recoverBackgroundWaits`）对还开着的 Worker 补发一次汇报：正文前加 `backgroundKilledNote("restart")`（后台命令因重启中断），正文是它中断前最后一轮的文字；已收工的只删记录。不恢复会话让它接着干：后台命令的结果已经没了，接着干也得重跑，补一份汇报交项目经理定（`hub worker send` 让它重跑）最简单可靠，去重键同那一轮的汇报，不会补两次。
+- 停止、收工：一轮已经结束、只剩后台任务时 `interrupt` 关掉进程（`closing:"interrupt"`，补 SIGTERM 给进程组），`session.exited(interrupt)`：停止 → 一行“被停止了”；收工 → 不汇报。
+- 冒烟：`test/smoke/worker-background.ts` 的 S33（真 claude，`sleep 90` 放后台：中途约 100 秒没有汇报、状态是 background，跑完只汇报一次）、S33b（等的时候收工，`sleep` 进程跟着停）都过；`m3.ts` 的 S21、S21b 是同样两件事走整个守护进程（Worker 会话要包 sandbox-exec，在 Worker 自己的沙箱里套不上，留给本机直接跑）。

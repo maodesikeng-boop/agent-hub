@@ -16,10 +16,11 @@ const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
   working: "Working…",
   stopping: "Stopping…",
   preparing: "Setting up…",
+  background: "Waiting…",
   idle: "Idle",
 };
-/** 这几种算“在忙”（状态词和小圆点用主色，列表排在前面）：干活中、准备中（在跑项目的准备命令）；不认识的 activity 也当在忙。 */
-const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing"]);
+/** 这几种算“在忙”（状态词和小圆点用主色，列表排在前面）：干活中、准备中（在跑项目的准备命令）、在等后台命令跑完；不认识的 activity 也当在忙。 */
+const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing", "background"]);
 const UNKNOWN_ACTIVITY_TEXT = "Working…";
 const ENDED_TEXT = "Ended";
 /** 每组默认只列几条，多了出一行 Show more（照 Claude desktop 的右栏）。 */
