@@ -104,4 +104,15 @@ describe("真 mermaid：安全", () => {
     const huge = `flowchart TD\n${"  A --> B\n".repeat(6_000)}`;
     await expect(render(huge)).rejects.toThrow();
   });
+
+  it("饼图、甘特图用页面的分类色，不用 mermaid 自己算的色", async () => {
+    const [first, second] = TEST_THEME.categoryColors;
+    const pie = await render('pie title 来源\n  "网页" : 60\n  "iOS" : 40');
+    expect(pie.toLowerCase()).toContain(first);
+    expect(pie.toLowerCase()).toContain(second);
+    expect(pie).not.toMatch(/hsl\(/i);
+    const gantt = await render("gantt\n  dateFormat YYYY-MM-DD\n  section 一\n  做事 :a1, 2026-11-01, 3d\n  在做 :active, a2, after a1, 2d");
+    expect(gantt.toLowerCase()).toContain(first);
+    expect(gantt.toLowerCase()).toContain(second);
+  });
 });
