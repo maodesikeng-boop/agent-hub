@@ -66,18 +66,14 @@
 - **大图**：
   - 宽：图按消息列宽缩放（Mermaid `useMaxWidth: true`；Vega `autosize: fit-x`、`width: "container"`），不撑破消息列。
   - 高：图块内最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度（很长的时序图会变小），点放大看原尺寸。
-  - 放大：用现有 `Dialog`（`src/web/ui/`）开一个接近全屏的窗（`w-[min(96vw,1400px)] h-[90dvh]`），里面原尺寸图，可两个方向滚动；滚轮 + ⌘/Ctrl 缩放、拖动平移、`+` `-` `1:1` 三个图标按钮。缩放平移只是 CSS `transform`，不重新渲染。Esc 关闭。
+  - 放大：用现有 `Dialog`（`src/web/ui/`）开一个接近全屏的窗（`w-[min(96vw,1400px)] h-[90dvh]`），里面原尺寸图，可两个方向滚动（**不做缩放、拖动平移**，见第 9 节）。Esc 关闭。
   - 点击图本身也打开放大（光标 `cursor-zoom-in`，和内联图片一致）。Vega 有 tooltip，悬停照常显示；点击不触发放大以免和图表交互冲突——Vega 图只有放大按钮。
 - **复制成图片**：先不做（以后在放大窗加“下载 SVG/PNG”）。
 
 ## 4. 统一
 
 - **所有厂商**：Claude、Codex、agy 等的回复都是 `message.text`，统一经 `Messages.tsx` → `Markdown` → `COMPONENTS.pre`。只在 `Markdown.tsx` 的 `pre` 组件里分流：语言在渲染器表里且已闭合 → `ChartBlock`，否则 `CodeBlock`。不按厂商分支，右栏提问、交接全文、预览窗 .md 自动也能显示图。
-- **提示词**：要告诉 agent，加一句就够。提示词都在 `src/daemon/prompt.ts`；发文件的能力写在 `SHARE_FILES_NOTE`（`prompt.ts:176`），项目经理（`roleSection`，`prompt.ts:187`）和 Worker（`prompt.ts:267`）共用。照它加一个 `RICH_BLOCKS_NOTE`，放在它旁边、同样两处引用：
-
-  > - 要画流程图、时序图等，写 ```` ```mermaid ```` 代码块；要画柱状、折线等数据图，写 ```` ```vega-lite ```` 代码块（JSON，数据写在 `data.values` 里，不能用 url）。网页会直接显示成图。
-
-  只说能力，不要求用（“需要时”）。注意：提示词变了 fingerprint 会变，上线后每个会话下一条消息前会重启一次（`prompt.ts:324` 的说明），属于预期。
+- **提示词**：不改（第 9 节已拍板：不告诉 agent 能画图，`prompt.ts` 不动）。
 - 不改守护进程、不改存储：图表只是 Markdown 的一种显示方式，消息原文不变，复制这一轮拿到的仍是 Markdown 原文。
 
 ## 5. 结构和性能
@@ -120,13 +116,13 @@ src/web/components/ChartBlock.tsx  外壳、工具条、加载/失败/源码切�
 - 失败：代码块 + 上方一行 `text-danger` 13.5px 错误。
 - 颜色：只用 CSS 变量和 `PALETTE`；分类色 `CHART_CATEGORY_COLORS`。
 - 图里字 13.5px，坐标轴 12px，字体 `--font-ui`。
-- 放大窗：Dialog，原尺寸，可滚可缩放。
+- 放大窗：Dialog，原尺寸，可滚动（不缩放）。
 
 ## 7. 测试计划（TDD：先写失败的测试）
 
 jsdom 里 Mermaid 量不了尺寸（没有 `getBBox`），Vega 也画不出真东西，所以**单元测试把 `registry` 的 `load` 换成假渲染器**，验证分流、状态、缓存；**真库的效果和安全用浏览器跑**。
 
-### 7.1 单元测试（vitest + jsdom，`src/web/charts.test.tsx`、`src/daemon/prompt.test.ts`）
+### 7.1 单元测试（vitest + jsdom，`src/web/charts.test.tsx`）
 
 1. ```` ```mermaid ```` 闭合 → 出现 `data-chart` 块，不再是 `data-md-code`；语言名、复制、源码切换、放大按钮都在（按 `aria-label` 找）。
 2. 没闭合（流式中）→ 仍是普通代码块，不调用渲染器；补上收尾 fence 后调用一次。
@@ -141,7 +137,7 @@ jsdom 里 Mermaid 量不了尺寸（没有 `getBBox`），Vega 也画不出真�
 11. 卸载再挂载同一源码 → 同步出图，不出现转圈。
 12. 主包不含图表库：测试读 `Markdown.tsx`、`ChartBlock.tsx`、`registry.ts` 的源码，断言没有静态 `import ... from "mermaid" / "vega*"`（只允许 `import(`）。实现末尾再跑一次 `vite build`，看入口 chunk 里没有 mermaid / vega（写进 PR 说明）。
 13. `palette.test.ts`：`CHART_CATEGORY_COLORS` 每个色对白底 ≥ 3:1。
-14. `prompt.test.ts`：`RICH_BLOCKS_NOTE` 在项目经理和 Worker 提示词里各出现一次，含 `mermaid`、`vega-lite`、`values`。
+14. ~~`prompt.test.ts`~~：不做（提示词不改）。
 
 ### 7.2 安全测试（真库，浏览器里跑；放进 `test/smoke/charts.ts` 或用 vitest browser 模式，二选一由实现时定）
 
@@ -167,12 +163,10 @@ jsdom 里 Mermaid 量不了尺寸（没有 `getBBox`），Vega 也画不出真�
 
 1. **标准 + 基础设施**（小）：补 ui-standard 第 15 条“图表”小节；`palette.ts` 加 `CHART_CATEGORY_COLORS` + 校验；`remark-chart-blocks.ts`（闭合判断）；`registry.ts` / `cache.ts` / `ChartBlock.tsx`（外壳、工具条、加载/失败/源码切换、视口、缓存）+ 7.1 的 1–12 条测试，渲染器先用假的。
 2. **Mermaid 渲染器**（中，依赖 1 的接口，可先按约定接口并行写）：`mermaid.ts`、`theme.ts` 的 Mermaid 部分、安全测试、截图 1、2、4–8。
-3. **Vega-Lite 渲染器 + 提示词**（中）：`vega-lite.ts`、`theme.ts` 的 Vega 部分、安全 loader 和 interpreter、截图 3；`prompt.ts` 的 `RICH_BLOCKS_NOTE` + 测试；更新 `HANDOVER.md`。
+3. **Vega-Lite 渲染器**（中）：`vega-lite.ts`、`theme.ts` 的 Vega 部分、安全 loader 和 interpreter、截图 3；更新 `HANDOVER.md`（提示词不改）。
 
-如果用户只要流程图，第 3 项去掉 Vega 部分，只加提示词。
+## 9. 已拍板
 
-## 9. 需要用户拍板
-
-1. **数据图表要不要做 Vega-Lite**，还是先只做 Mermaid（Mermaid 自带 `pie` 和 `xychart-beta` 能画简单的饼图、柱状、折线，够不够用）？
-2. **提示词里要不要告诉 agent 能画图**（推荐要；代价是上线后每个会话重启一次，agent 也可能更爱画图）。
-3. **大图放大**：做带缩放平移的放大窗（推荐），还是只做原尺寸滚动？
+1. **数据图表上 Vega-Lite**（不只靠 Mermaid 的 `pie` / `xychart-beta`）。
+2. **提示词里不告诉 agent 能画图**：`RICH_BLOCKS_NOTE`、`prompt.ts` 的改动、7.1 第 14 条测试、第 4 节“提示词”一条全部不做；agent 自己写 ```` ```mermaid ```` / ```` ```vega-lite ```` 时网页照样显示。
+3. **放大窗先只做原尺寸滚动查看**：不做滚轮缩放、拖动平移、`+` `-` `1:1` 按钮（第 3 节“放大”一条里这几项不做，以后再加）。

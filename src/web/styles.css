@@ -145,8 +145,14 @@ code {
 .markdown ol,
 .markdown blockquote,
 .markdown [data-md-code],
+.markdown [data-chart],
+.markdown [data-chart-failed],
 .markdown [data-md-table] {
   margin: 0.75em 0;
+}
+/* 图表失败：错误一行 + 代码块是一个整体，代码块自己的上下外边距不再叠加 */
+.markdown [data-chart-failed] [data-md-code] {
+  margin: 0;
 }
 .markdown strong {
   font-weight: 600;
@@ -299,6 +305,32 @@ code {
   box-shadow: none;
   font-size: inherit;
   white-space: pre;
+}
+
+/* 图表块：外壳同代码块（.md-code），正文是白底（--background）图区，四周 12px；最高 480px，更高的等比缩小，点放大看原尺寸 */
+/* 白底图区会盖住外壳的内描边（box-shadow inset），图表块改用同色的真边框 */
+.markdown .md-chart {
+  box-shadow: none;
+  border: 1px solid rgb(0 0 0 / 0.06);
+}
+.markdown .md-chart-body {
+  position: relative;
+  padding: 12px;
+  background: var(--background);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+}
+.markdown .md-chart-body[hidden] {
+  display: none;
+}
+.markdown .md-chart-body svg {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  margin-inline: auto;
+}
+.markdown [data-chart-source] {
+  min-width: 0;
 }
 
 /* 表格：外面一层横向滚动，表格宽度跟内容走；对齐用 Markdown 自带的 style，没写的靠左 */
