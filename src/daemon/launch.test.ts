@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -89,7 +89,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
     expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
-    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", readonly: false, hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
+    expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
     expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir), settings }));
     expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
     // 项目经理不受可写范围限制
@@ -192,7 +192,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const prompt = readFileSync(files.promptFile, "utf8");
     expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
     expect(prompt).not.toContain("先问用户的事");
-    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: false, hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
+    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
     expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     // 可写范围：数据目录里只有自己的 worktree
@@ -225,14 +225,36 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(worker.permissions.deny).toEqual([stateDirDenyRule(join(dir, "state"))]);
   });
 
-  it("只读 Worker：只读档；开关变了 fingerprint 跟着变", async () => {
+  it("claude 只读 Worker：设置文件是只读翻译（沙箱 denyWrite 盖住工作目录和 add-dir 的真实路径）；进程不包外层沙箱（没有 writeScope）；开关变了 fingerprint 跟着变", async () => {
+    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     contexts.set(9, workerContext());
-    const prepare = make();
-    const normal = await prepare(row(9, dir, "worker"));
+    const prepare = make2();
+    const wt = join(dir, "wt");
+    const extra = join(dir, "extra");
+    mkdirSync(wt, { recursive: true });
+    mkdirSync(extra, { recursive: true });
+    const worker = { ...row(9, wt, "worker"), addDirs: [extra, join(dir, "not-created-yet")] };
+    const normal = await prepare(worker);
     contexts.set(9, workerContext({ readonly: true }));
-    const readonly = await prepare(row(9, dir, "worker"));
-    expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir: join(dir, "state"), osSandboxed: true, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
+    const readonly = await prepare(worker);
+    const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") });
+    const settings = JSON.parse(readFileSync(readonly.settingsFile!, "utf8"));
+    expect(settings).toEqual(
+      buildSessionSettings({ role: "worker", readonly: { policy, denyWrite: [realpathSync(wt), realpathSync(extra), join(dir, "not-created-yet")] }, hubSock, stateDir: join(dir, "state"), osSandboxed: true }),
+    );
+    expect(settings.permissions.defaultMode).toBe("default");
+    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, enableWeakerNetworkIsolation: true });
+    expect(readonly.writeScope).toBeUndefined();
+    expect(normal.writeScope).toEqual({ dataDir: dir, writableDirs: [wt] });
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
+  });
+
+  it("agy 的只读 Worker：设置文件它不读，照普通 Worker 生成；可写范围照旧（外层沙箱是 agy 自己那条线）；LaunchFiles.readonly 照给", async () => {
+    contexts.set(9, workerContext({ readonly: true }));
+    const files = await make()({ ...row(9, dir, "worker"), vendor: "agy" });
+    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
+    expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [] });
+    expect(files.readonly).toBeDefined();
   });
 
   it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录和数据目录展开）；普通 Worker、项目经理没有", async () => {

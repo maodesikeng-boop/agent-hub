@@ -4,12 +4,15 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
+  connectorToolAllowed,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
   type AgentSessionRow,
   type AgentToolEvent,
+  type ConnectorToolAnnotations,
   type LaunchFiles,
   type RateLimitInfo,
+  type ReadonlyPolicy,
   type RateLimitWindow,
   type WriteScope,
   type QuotaWindowKey,
@@ -58,8 +61,13 @@ export type CodexToolItemType = (typeof CODEX_TOOL_ITEM_TYPES)[number];
 export interface CodexLaunchConfig {
   developerInstructions: string;
   readonly: boolean;
+  /** 只读策略（files.readonly）；elicitation 兜底用。不是只读 null。 */
+  readonlyPolicy: ReadonlyPolicy | null;
   config: Record<string, unknown>;
 }
+
+/** 只读 Worker 的 codex 权限 profile 名（config 里 default_permissions 指向它）。 */
+export const CODEX_READONLY_PROFILE = "hub_readonly";
 
 export type CodexSandboxPolicy =
   | { type: "readOnly"; networkAccess: true }
@@ -114,7 +122,75 @@ export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
   if (files.env && Object.keys(files.env).length > 0) {
     config["shell_environment_policy.set"] = { ...files.env };
   }
-  return { developerInstructions, readonly, config };
+  if (files.readonly !== undefined) Object.assign(config, codexReadonlyConfig(files.readonly));
+  return { developerInstructions, readonly, readonlyPolicy: files.readonly ?? null, config };
+}
+
+/** config 里的键段：只有字母数字下划线横杠的原样，其余（点、空格……）加引号。 */
+function configKeySegment(name: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
+}
+
+/**
+ * 只读 Worker 追加的 codex 配置（设计 2.3）。sandbox 本身（read-only）由 thread/start 的参数给，这里只补两样：
+ * - 密钥禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
+ *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写；
+ * - 连接器：codex 原生放行 readOnlyHint 的，补充 → approval_mode="approve"，排除 → disabled_tools（整个服务器 → enabled=false）。
+ *   codex 配置要确切的服务器名和工具名，通配的写不进去；补充的通配项靠 elicitation 兜底（decideMcpElicitation）。
+ */
+export function codexReadonlyConfig(policy: ReadonlyPolicy): Record<string, unknown> {
+  const config: Record<string, unknown> = {
+    default_permissions: CODEX_READONLY_PROFILE,
+    [`permissions.${CODEX_READONLY_PROFILE}.extends`]: ":read-only",
+    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: Object.fromEntries(policy.secretPaths.map((p) => [p, "none"])),
+  };
+  const split = (rule: string): [string, string] => {
+    const slash = rule.indexOf("/");
+    return slash < 0 ? [rule, "*"] : [rule.slice(0, slash), rule.slice(slash + 1)];
+  };
+  const disabled = new Map<string, string[]>();
+  const disabledServers = new Set<string>();
+  for (const rule of policy.connectors.deny) {
+    const [server, tool] = split(rule);
+    if (server === "*" || tool === "") continue;
+    if (tool === "*") disabledServers.add(server);
+    else disabled.set(server, [...(disabled.get(server) ?? []), tool]);
+  }
+  for (const server of disabledServers) config[`mcp_servers.${configKeySegment(server)}.enabled`] = false;
+  for (const [server, tools] of disabled) {
+    if (!disabledServers.has(server)) config[`mcp_servers.${configKeySegment(server)}.disabled_tools`] = tools;
+  }
+  for (const rule of policy.connectors.extraAllow) {
+    const [server, tool] = split(rule);
+    if (server === "*" || tool === "*" || tool === "") continue;
+    if (!connectorToolAllowed({ connectors: { extraAllow: [], deny: policy.connectors.deny } }, server, tool, { readOnlyHint: true })) continue;
+    config[`mcp_servers.${configKeySegment(server)}.tools.${configKeySegment(tool)}.approval_mode`] = "approve";
+  }
+  return config;
+}
+
+export interface McpElicitationContext {
+  readonly: boolean;
+  policy: ReadonlyPolicy | null;
+}
+
+/**
+ * mcpServer/elicitation/request（codex 为非只读声明的连接器工具问批准，_meta.codex_approval_kind 是 "mcp_tool_call"）的回答，格式 {action}。
+ * 只读会话：按 connectorToolAllowed 判断（补充的放行、排除的拒、带只读声明的放行）；认不出服务器或工具名的拒。
+ * 非只读：拒（跟以前一样，codex 非只读 Worker 用没标只读的连接器工具另开一题）。
+ * 服务器名在 serverName；工具名和声明的位置真 codex 没抓全，所以几个可能的位置都看。
+ */
+export function decideMcpElicitation(params: Record<string, unknown>, context: McpElicitationContext): { action: "accept" | "decline" } {
+  const decline = { action: "decline" } as const;
+  if (!context.readonly || context.policy === null) return decline;
+  const meta = typeof params._meta === "object" && params._meta !== null ? (params._meta as Record<string, unknown>) : {};
+  if (meta.codex_approval_kind !== "mcp_tool_call") return decline;
+  const server = typeof params.serverName === "string" ? params.serverName : "";
+  const tool = [meta.tool_name, meta.tool_title, params.toolName].find((x): x is string => typeof x === "string" && x !== "") ?? "";
+  if (server === "" || tool === "") return decline;
+  const raw = meta.tool_annotations;
+  const annotations = typeof raw === "object" && raw !== null ? (raw as ConnectorToolAnnotations) : null;
+  return connectorToolAllowed(context.policy, server, tool, annotations) ? { action: "accept" } : decline;
 }
 
 /** 第 3 步（新会话）：发送 thread/start 请求。 */

@@ -75,14 +75,27 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
     // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
     const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
-    const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, osSandboxed, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
+    // claude 的只读 Worker 用自带沙箱落实（writeGuard native，设计第 2.3 节）：设置文件换成只读翻译，进程不再包外层沙箱（macOS 沙箱不能嵌套）。
+    // 别家的设置文件驱动不读，照普通 Worker 生成；它们的只读翻译在各自驱动层。
+    const nativeReadonly = readonlyPolicy !== undefined && session.vendor === "claude";
+    const settings = JSON.stringify(
+      buildSessionSettings({
+        role,
+        readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [session.cwd, ...session.addDirs].map(realpathOr) } : undefined,
+        hubSock,
+        stateDir,
+        osSandboxed,
+      }),
+      null,
+      2,
+    ) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");
     const settingsFile = join(dir, "settings.json");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
     writeFileSync(settingsFile, settings, { mode: 0o600 });
-    const writeScope = workerWriteScope({ role, dataDir, cwd: session.cwd });
+    const writeScope = nativeReadonly ? null : workerWriteScope({ role, dataDir, cwd: session.cwd });
     return {
       promptFile,
       settingsFile,

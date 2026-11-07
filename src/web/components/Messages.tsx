@@ -73,7 +73,7 @@ const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-
 /** 名字、Worked for、可点开的系统行：13.5px 灰。 */
 const SECONDARY = "text-[13.5px] text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
-const TEXT_BUTTON = "cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
+const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
 /** 头像（24px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。 */
 function AgentHead({ identity, dot }: { identity: AgentIdentity; dot?: Exclude<WorkerTone, "neutral"> }) {
@@ -250,7 +250,7 @@ function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRev
       {phase === "error" && <span className="text-danger">撤销失败</span>}
       <button
         type="button"
-        className="cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
+        className="touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
         disabled={phase === "busy"}
         onClick={revert}
       >
@@ -492,7 +492,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
 const SHOWN_STATUSES = new Set<Message["status"]>(["queued", "failed", "stopped", "cancelled"]);
 
 const DELIVERY_ROW = "mt-1 flex items-center gap-1.5 pr-1 text-xs";
-const RETRY_BUTTON = "cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
+const RETRY_BUTTON = "touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
 
 function DeliveryStatus({
   status,

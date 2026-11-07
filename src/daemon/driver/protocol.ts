@@ -288,6 +288,9 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+/** --permission-prompt-tool 的值：stdio ＝ 通过标准输入输出的控制协议问我们（SDK 的 canUseTool 就是这个）。 */
+export const CLAUDE_PERMISSION_PROMPT_TOOL = "stdio";
+
 /**
  * 启动参数（设计第 7.2 节）。resume：用 --resume 还是 --session-id。
  * 这里只放固定的协议参数和会话那一行的 --model、--effort、--add-dir；每次启动要变的东西（提示词、设置文件、环境变量）
@@ -309,6 +312,8 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
   args.push(...agentLaunchArgs({ vendor: session.vendor as AgentVendor, model: session.model, effort: session.effort }));
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
+  // 只读 Worker：default 模式下要批准的工具发 can_use_tool 控制请求给我们（driver/claude-readonly.ts 的 ClaudeReadonlyGate 回话）
+  if (files.readonly) args.push("--permission-prompt-tool", CLAUDE_PERMISSION_PROMPT_TOOL);
   for (const dir of session.addDirs) args.push("--add-dir", dir);
   return args;
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { API_PATHS, serverInfoFor } from "../../shared/index.ts";
+import { API_PATHS, isLoopbackAddress, serverInfoFor, serverInfoForClient } from "../../shared/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { FakeLedger } from "./fake-ledger.ts";
 import { createUiServer } from "./server.ts";
@@ -69,5 +69,43 @@ describe("服务端不是 macOS", () => {
       expect(res.statusCode, action).toBe(501);
       expect(res.json().error).toContain("下载");
     }
+  });
+});
+
+describe("浏览器和守护进程不在同一台机器（macOS 服务端，请求不是来自回环地址）", () => {
+  const mac = serverInfoFor("darwin");
+
+  it("isLoopbackAddress：127.x、::1、::ffff:127.x 是，别的不是", () => {
+    for (const a of ["127.0.0.1", "127.8.8.8", "::1", "::ffff:127.0.0.1"]) expect(isLoopbackAddress(a), a).toBe(true);
+    for (const a of ["192.168.1.5", "10.0.0.2", "::ffff:10.0.0.2", "fe80::1", "", undefined]) expect(isLoopbackAddress(a), String(a)).toBe(false);
+  });
+
+  it("serverInfoForClient：回环才保留 fileActions", () => {
+    expect(serverInfoForClient(mac, "127.0.0.1").fileActions).toBe(true);
+    expect(serverInfoForClient(mac, "192.168.1.5")).toEqual({ ...mac, fileActions: false });
+  });
+
+  it("/api/state 按请求来源：本机 true，别的机器 false", async () => {
+    const macApp = createUiServer({
+      ledger: new FakeLedger().asLedger(),
+      token: TOKEN,
+      staticDir: join(root, "no-static"),
+      uploadsDir: join(root, "uploads"),
+      sentFilesDir: join(root, "sent-files"),
+      port: PORT,
+      db,
+      serverInfo: mac,
+      runOpen: async () => {
+        throw new Error("不该被调用");
+      },
+    });
+    await macApp.ready();
+    const local = await macApp.inject({ method: "GET", url: API_PATHS.state, headers: HEADERS, remoteAddress: "127.0.0.1" });
+    expect(local.json().server.fileActions).toBe(true);
+    const remote = await macApp.inject({ method: "GET", url: API_PATHS.state, headers: HEADERS, remoteAddress: "192.168.1.5" });
+    expect(remote.json().server.fileActions).toBe(false);
+    const post = await macApp.inject({ method: "POST", url: API_PATHS.attachmentAction(ID, "reveal"), headers: HEADERS, remoteAddress: "192.168.1.5" });
+    expect(post.statusCode).toBe(501);
+    await macApp.close();
   });
 });

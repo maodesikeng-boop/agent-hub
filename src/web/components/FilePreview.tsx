@@ -228,7 +228,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
   const [busy, setBusy] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{ text: string; error: boolean } | null>(null);
   const openAllowed = canOpenWithDefault(file.name);
-  // 服务端不是 macOS（Linux 服务器没有 Finder，也没有人坐在它的屏幕前）：不显示“在 Finder 中显示”“用默认程序打开”，只留“下载”
+  // 服务端不是 macOS、或浏览器不在服务端这台机器上（服务端按请求来源定 fileActions）：不显示“在 Finder 中显示”“用默认程序打开”，只留“下载”
   const fileActions = useServerInfo().fileActions;
 
   const run = async (action: FileAction) => {
