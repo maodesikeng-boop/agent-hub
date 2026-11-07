@@ -1,6 +1,9 @@
 // 界面服务（设计第 4.2、4.3 节；m1-plan 第 3 节接口约定第 1、2 条）：HTTP + WebSocket，只监听 127.0.0.1。
+// 联机（docs/multi-device-design.md 第 3 节）：经 tailscale serve 进来的请求另外认本机的 tailnet 名字，并且只放行设备主人；
+// Linux 上 serve 转发到另听的 0600 Unix socket（startUiServer 的 serveSocket）。
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, lstatSync, unlinkSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -23,7 +26,8 @@ import {
   MAX_UPLOAD_BYTES,
   PM_MODES,
   isAgentVendor,
-  UI_COOKIE_NAME,
+  SESSION_MAX_AGE_MS,
+  uiCookieName,
   UPLOAD_BUSY_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   bundledModelCatalog,
@@ -33,9 +37,14 @@ import {
   sentFileMime,
   sentFilesOf,
   serverInfoFor,
+  isLoopbackAddress,
+  serverInfoForClient,
+  TAILSCALE_USER_LOGIN_HEADER,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
+  type BrowserSessionsResponse,
+  type LoginLinkResponse,
   type CommandsResponse,
   type FilesResponse,
   type Attachment,
@@ -72,13 +81,23 @@ import {
   runOpenCommand,
   type RunOpen,
 } from "../open-file.ts";
+import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
-import { UI_TOKEN_PATTERN } from "./token.ts";
+import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
+import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
+import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
+import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
 
 export interface UiServerOptions {
   ledger: Ledger;
-  /** 界面用户令牌，见 loadOrCreateUiToken。 */
+  /** 界面用户令牌（“主钥匙”），见 loadOrCreateUiToken：用来登录、生成登录链接；浏览器 cookie 里放的是各自的随机会话令牌，不是它。 */
   token: string;
+  /** 浏览器会话存哪（migrations/0015 的 browser_sessions）。不给就用只在内存里的库（测试用，重启即丢）。 */
+  db?: Db;
+  /** “全部退出”换主钥匙：守护进程在这里写 state/ui-token、打印新的登录链接，返回新令牌。不给就只在内存里换一个随机的。 */
+  rotateToken?: () => string;
+  /** 当前时间（毫秒），测试用：登录链接的有效期、会话的最后活动。 */
+  now?: () => number;
   /** 聊天框上传的文件放哪（paths.ts 的 uploadsDir；守护进程传 realpath 过的，agent 拿到的路径和它一致）。 */
   uploadsDir: string;
   /** agent 发给用户的文件的副本放哪（paths.ts 的 sentFilesDir）。 */
@@ -105,10 +124,16 @@ export interface UiServerOptions {
   runOpen?: RunOpen;
   /** 这台机器能做什么，原样放进 /api/state 的 server，网页按它显示控件。默认按 process.platform（shared/server-info.ts）。 */
   serverInfo?: ServerInfo;
+  /** 本机的 tailnet 名字和主人（daemon/platform/tailnet.ts 的探测，读缓存）。不给 = 只认本机 127.0.0.1，和联机之前一样。 */
+  tailnet?: { current(): TailnetSelf | null };
+  /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
+  serveTarget?: ServeTargetKind;
 }
 
-/** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
-const COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
+/** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
+const COOKIE_MAX_AGE_SECONDS = SESSION_MAX_AGE_MS / 1000;
+/** 退出 / 全部退出时 WebSocket 被关的状态码（1008 policy violation）和原因。 */
+const WS_CLOSE_UNAUTHORIZED = 1008;
 /** clientId 是网页生成的 UUID 一类的串，限长免得拿它撑大去重键。 */
 const MAX_CLIENT_ID_LENGTH = 200;
 const POSITIVE_INT = /^[1-9]\d*$/;
@@ -117,6 +142,12 @@ const HOST_HEADER = /^(?:127\.0\.0\.1|localhost):(\d+)$/i;
 /** 浏览器发的 Origin 是 scheme://host:port，没有路径和末尾斜杠；主机名那三种跟 Host 检查一致。 */
 const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+/** serve 的 https 默认端口：Host 可能带上 :443。 */
+const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
+const SERVE_SOCKET_MODE = 0o600;
+
+/** 从 serve 的 Unix socket 进来的请求（startUiServer 的 serveSocket）。按原始请求对象记。 */
+const viaServeSocket = new WeakSet<IncomingMessage>();
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -324,7 +355,26 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
           throw new FileActionsUnavailable();
         });
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
-  const expectedToken = digest(opts.token);
+  // 主钥匙：登录用；“全部退出”会换掉它
+  let expectedToken = digest(opts.token);
+  let ownedDb: Db | undefined;
+  if (opts.db === undefined) {
+    ownedDb = openDatabase(":memory:");
+    migrate(ownedDb);
+  }
+  const sessions = createBrowserSessions((opts.db ?? ownedDb)!, { ...(opts.now ? { now: opts.now } : {}) });
+  const loginLinks = createLoginLinks({ ...(opts.now ? { now: opts.now } : {}) });
+  // 每个已登录浏览器连着的 WebSocket：退出时当场关掉，不等它自己断线
+  const socketsBySession = new Map<string, Set<{ close(code?: number, reason?: string): void }>>();
+  const closeSockets = (sessionId?: string) => {
+    for (const [id, sockets] of socketsBySession) {
+      if (sessionId !== undefined && id !== sessionId) continue;
+      for (const socket of sockets) socket.close(WS_CLOSE_UNAUTHORIZED, "unauthorized");
+      socketsBySession.delete(id);
+    }
+  };
+  /** 这次请求是哪个会话（认证钩子里认出来的）。 */
+  const sessionOf = new WeakMap<FastifyRequest, string>();
   const folderPicker = opts.folderPicker ?? createFolderPicker({ available: serverInfo.folderPicker });
   const app = Fastify({ logger: opts.logger ?? false });
 
@@ -333,24 +383,82 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     return addr !== null && typeof addr === "object" ? addr.port : opts.port;
   };
 
-  const isAuthenticated = (req: FastifyRequest): boolean =>
-    tokenEquals(expectedToken, readCookie(req.headers.cookie, UI_COOKIE_NAME));
+  /** cookie 名带着网址里的端口（uiCookieName）：同一浏览器里不同端口的界面各用各的。 */
+  const sessionToken = (req: FastifyRequest) => readCookie(req.headers.cookie, uiCookieName(req.headers.host));
+
+  const isAuthenticated = (req: FastifyRequest): boolean => {
+    const session = sessions.authenticate(sessionToken(req));
+    if (session === null) return false;
+    sessionOf.set(req, session.id);
+    return true;
+  };
+
+  /** 设（或清：value 空、maxAge 0）这个浏览器的会话 cookie。 */
+  const sessionCookie = (req: FastifyRequest, value: string, maxAgeSeconds: number) =>
+    // 经 serve 来的是 https：加 Secure。本机 http://127.0.0.1 不能加（浏览器会丢掉这个 cookie）
+    `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}${tailnetRequests.has(req.raw) ? "; Secure" : ""}`;
+
+  /** 登录成功：开一个新会话、设 cookie。这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）；满了被挤掉的和被换掉的一样，走撤销的路（关 WebSocket）。 */
+  const startSession = (req: FastifyRequest, reply: FastifyReply) => {
+    const previous = sessions.authenticate(sessionToken(req));
+    if (previous !== null) {
+      sessions.revoke(previous.id);
+      closeSockets(previous.id);
+    }
+    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: req.headers.host ?? "" });
+    for (const id of session.evicted) closeSockets(id);
+    reply.header("set-cookie", sessionCookie(req, session.token, COOKIE_MAX_AGE_SECONDS)).header("referrer-policy", "no-referrer");
+  };
 
   const fail = (reply: FastifyReply, statusCode: number, error: string, code?: LedgerErrorCode) =>
     reply.code(statusCode).send((code === undefined ? { error } : { error, code }) satisfies ApiErrorBody);
 
+  const serveTarget = opts.serveTarget ?? "tcp";
+  /** 经 serve 进来、已经过了 Host 和身份检查的请求 → 当时认的 tailnet 名字（Origin 要和它同源，cookie 加 Secure）。 */
+  const tailnetRequests = new WeakMap<IncomingMessage, string>();
+
   // 防 DNS 重绑定：Host 必须是 127.0.0.1:<端口> 或 localhost:<端口>。所有路径都查，包括静态文件和 /auth。
+  // 联机：或者是本机的 tailnet 名字（只在 serve 转发来的那条路上认），这时 serve 给的身份头必须是设备主人。
+  // 身份头只是附加条件，不代替 cookie（本机别的进程能直连端口自己带这个头）。
   app.addHook("onRequest", async (req, reply) => {
-    const match = HOST_HEADER.exec(req.headers.host ?? "");
-    const port = listeningPort();
-    if (match === null || port === undefined || Number(match[1]) !== port) return fail(reply, 403, "forbidden_host");
+    const host = req.headers.host ?? "";
+    const fromServeSocket = viaServeSocket.has(req.raw);
+    const local = fromServeSocket ? null : HOST_HEADER.exec(host);
+    if (local !== null) {
+      const port = listeningPort();
+      if (port === undefined || Number(local[1]) !== port) return fail(reply, 403, "forbidden_host");
+      return;
+    }
+    // 本机 Host 对上了就不看 tailnet，不碰探测
+    const self = fromServeSocket === (serveTarget === "unix") ? (opts.tailnet?.current() ?? null) : null;
+    const lowerHost = host.toLowerCase();
+    if (self === null || (lowerHost !== self.dnsName && lowerHost !== self.dnsName + HTTPS_DEFAULT_PORT_SUFFIX)) {
+      return fail(reply, 403, "forbidden_host");
+    }
+    const login = req.headers[TAILSCALE_USER_LOGIN_HEADER];
+    if (self.owner === null || typeof login !== "string" || login.trim().toLowerCase() !== self.owner) {
+      return fail(reply, 403, "forbidden_identity");
+    }
+    tailnetRequests.set(req.raw, self.dnsName);
   });
+
+  /**
+   * 判断“浏览器在不在这台机器上”用的地址（serverInfoForClient）。经 serve 来的也是从 127.0.0.1（macOS）或 socket 进来，
+   * 但浏览器在别的设备上：当成没有地址（不是本机）。
+   */
+  const clientAddress = (req: FastifyRequest) => (tailnetRequests.has(req.raw) ? undefined : req.ip);
 
   // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
   // 会改状态的请求和 WebSocket 握手必须带同源的 Origin（http://<host>:<实际端口>），没带也拒绝；GET 不查。
   app.addHook("onRequest", async (req, reply) => {
     const path = req.url.split("?", 1)[0] ?? "";
     if (SAFE_METHODS.has(req.method) && path !== API_PATHS.ws) return;
+    // 经 serve 来的：只认 https://<本机 tailnet 名字>（serve 是 443，浏览器不写端口）
+    const tailnetName = tailnetRequests.get(req.raw);
+    if (tailnetName !== undefined) {
+      if ((req.headers.origin ?? "").toLowerCase() !== `https://${tailnetName}`) return fail(reply, 403, "forbidden_origin");
+      return;
+    }
     const match = ORIGIN_HEADER.exec(req.headers.origin ?? "");
     const port = listeningPort();
     // 端口要和实际端口逐字相同：不接受 04000 这种写法。
@@ -383,6 +491,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   app.setNotFoundHandler((_req, reply) => fail(reply, 404, "not_found"));
 
   app.register(fastifyWebsocket);
+  if (ownedDb !== undefined) app.addHook("onClose", async () => ownedDb.close());
 
   // 上传文件（不绑定接收方，谁来用都是先上传、再在发消息时带编号）：请求体是文件原样的字节，上限 MAX_UPLOAD_BYTES，只对这个接口放大。
   // 放进单独的插件里：内容类型解析器只在这个插件里生效（别的接口照旧只收 JSON、上限 1 MB）；
@@ -432,16 +541,60 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
   // 路由放进插件里：@fastify/websocket 的 onRoute 钩子只管它注册完之后才定义的路由，直接写在根上会比它先定义。
   app.register(async (routes) => {
+    // 登录有两条路：
+    // - GET /auth?token=<主钥匙>：启动时打印的链接。
+    // - 二维码的一次性链接 `/auth#link=<码>`：码在 # 片段里不会发给服务器（不进代理、访问日志，也不进 Referer）。
+    //   GET /auth（不带参数）是读片段的落地页，页面再 POST /auth {link} 兑换。老的 /auth?link=<码> 不再认（码会进日志）。
     routes.get(API_PATHS.auth, async (req, reply) => {
-      const { token } = req.query as { token?: unknown };
-      if (!tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");
-      reply
-        .header("set-cookie", `${UI_COOKIE_NAME}=${opts.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_SECONDS}`)
-        .header("referrer-policy", "no-referrer");
+      const { token, link } = req.query as { token?: unknown; link?: unknown };
+      if (token === undefined && link === undefined) return reply.type("text/html; charset=utf-8").header("referrer-policy", "no-referrer").send(LOGIN_LINK_PAGE);
+      if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");
+      startSession(req, reply);
       return reply.redirect("/", 302);
     });
 
-    routes.get(API_PATHS.state, async (): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfo }));
+    routes.post(API_PATHS.auth, async (req, reply) => {
+      const link = (req.body as { link?: unknown } | null | undefined)?.link;
+      if (!loginLinks.consume(link)) return fail(reply, 401, "unauthorized");
+      startSession(req, reply);
+      return reply.code(204).send();
+    });
+
+    routes.get(API_PATHS.browserSessions, async (req): Promise<BrowserSessionsResponse> => {
+      const current = sessionOf.get(req);
+      return { sessions: sessions.list().map((s) => ({ ...s, current: s.id === current })) };
+    });
+
+    routes.delete("/api/sessions/:id", async (req, reply) => {
+      const id = String((req.params as { id?: unknown }).id ?? "");
+      if (!sessions.revoke(id)) return fail(reply, 404, "not_found");
+      closeSockets(id);
+      // 退的是自己：顺手把浏览器里的 cookie 清掉
+      if (id === sessionOf.get(req)) reply.header("set-cookie", sessionCookie(req, "", 0));
+      return reply.code(204).send();
+    });
+
+    // 全部退出 = 换主钥匙 + 清所有会话（包括自己）+ 作废没用掉的登录链接
+    routes.post(API_PATHS.logoutAll, async (req, reply) => {
+      const next = opts.rotateToken?.() ?? newUiToken();
+      if (!UI_TOKEN_PATTERN.test(next)) throw new Error("rotated ui token must be at least 16 characters of [A-Za-z0-9_-]");
+      expectedToken = digest(next);
+      sessions.revokeAll();
+      loginLinks.clear();
+      closeSockets();
+      return reply.header("set-cookie", sessionCookie(req, "", 0)).code(204).send();
+    });
+
+    routes.post(API_PATHS.loginLinks, async (req, reply) => {
+      const { code, expiresAt } = loginLinks.issue();
+      // 手机要扫得通得是 tailnet 名字：请求本来就是经 serve 来的，或本机认得 tailnet 名字（Mac 本机上点的，Host 是 127.0.0.1）就用它（https，serve 是 443）。
+      // 都没有（没装 Tailscale、还没探到）保持现状：用请求的 Host（用户现在就是从这个地址进来的）；前面还有一层 https 转发时它会带 x-forwarded-proto。
+      const tailnetName = tailnetRequests.get(req.raw) ?? opts.tailnet?.current()?.dnsName;
+      const origin = tailnetName !== undefined ? `https://${tailnetName}` : `${req.headers["x-forwarded-proto"] === "https" ? "https" : "http"}://${req.headers.host}`;
+      return reply.code(201).send({ url: `${origin}/auth#${LOGIN_LINK_FRAGMENT_KEY}=${code}`, expiresAt } satisfies LoginLinkResponse);
+    });
+
+    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, clientAddress(req)) }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       const refresh = (req.query as { refresh?: unknown }).refresh === "1";
@@ -494,6 +647,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return fail(reply, 500, "没能打开这个文件");
       }
     };
+    // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
+    const requireLocal = (req: FastifyRequest): void => {
+      if (!isLoopbackAddress(clientAddress(req))) throw new FileActionsUnavailable();
+    };
     const parseAction = (raw: unknown): FileAction | null => ((FILE_ACTIONS as readonly unknown[]).includes(raw) ? (raw as FileAction) : null);
 
     routes.post("/api/messages/:id/files/:index/:action", async (req, reply) => {
@@ -504,8 +661,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");
       const copy = resolveUpload(sentFilesDir, file.id);
       const sessionId = message.sessionId;
-      return doFileAction(reply, () =>
-        performFileAction(
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(
           act,
           {
             original: file.path,
@@ -514,8 +672,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             name: file.name,
           },
           runOpen,
-        ),
-      );
+        );
+      });
     });
 
     routes.post("/api/attachments/:id/:action", async (req, reply) => {
@@ -523,9 +681,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const act = parseAction(action);
       const attachment = resolveUpload(uploadsDir, String(id ?? ""));
       if (act === null || attachment === null) return fail(reply, 404, "not_found");
-      return doFileAction(reply, () =>
-        performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen),
-      );
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen);
+      });
     });
 
     routes.post("/api/conversations/:id/stop", async (req, reply) => {
@@ -604,6 +763,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
+      // 记下这条连接属于哪个会话：那个会话被退出时当场关掉
+      const sessionId = sessionOf.get(req);
+      if (sessionId !== undefined) {
+        const sockets = socketsBySession.get(sessionId) ?? new Set();
+        sockets.add(socket);
+        socketsBySession.set(sessionId, sockets);
+        socket.once("close", () => {
+          sockets.delete(socket);
+          if (sockets.size === 0 && socketsBySession.get(sessionId) === sockets) socketsBySession.delete(sessionId);
+        });
+      }
 
       if (since === undefined) return; // 不带 since：只推之后的新变化
       if (typeof since !== "string" || !NON_NEGATIVE_INT.test(since)) return send({ type: "resync" });
@@ -630,11 +800,61 @@ export interface RunningUiServer {
   close(): Promise<void>;
 }
 
-/** 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。 */
-export async function startUiServer(opts: UiServerOptions & { port: number }): Promise<RunningUiServer> {
+/**
+ * serve 转发用的 Unix socket：另起一个 HTTP 服务，收到的请求（含 WebSocket 握手）记下“从 socket 来的”，交给同一个 Fastify 处理。
+ * 残留的 socket 文件直接删（调用方拿着数据目录锁，不会有另一个守护进程在听）；那里是别的东西就报错。
+ */
+async function listenServeSocket(app: FastifyInstance, socketPath: string): Promise<Server> {
+  try {
+    if (!lstatSync(socketPath).isSocket()) throw new Error(`界面服务的 socket 路径上已经有别的东西，不是 socket：${socketPath}。请确认后手动移走。`);
+    unlinkSync(socketPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const server = createServer((req, res) => {
+    viaServeSocket.add(req);
+    app.routing(req, res);
+  });
+  server.on("upgrade", (req: IncomingMessage, socket, head) => {
+    viaServeSocket.add(req);
+    app.server.emit("upgrade", req, socket, head);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  chmodSync(socketPath, SERVE_SOCKET_MODE);
+  return server;
+}
+
+/**
+ * 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。
+ * serveSocket：再听一个 Unix socket 给 tailscale serve 转发（serveTarget 为 unix 时，daemon/platform/tailscale.ts）。
+ */
+export async function startUiServer(opts: UiServerOptions & { port: number; serveSocket?: string }): Promise<RunningUiServer> {
   const app = createUiServer(opts);
   await app.listen({ host: "127.0.0.1", port: opts.port });
   const addr = app.server.address();
   if (addr === null || typeof addr !== "object") throw new Error("ui-server is not listening on a TCP port");
-  return { app, port: addr.port, close: () => app.close() };
+  let serveServer: Server | undefined;
+  if (opts.serveSocket !== undefined) {
+    try {
+      serveServer = await listenServeSocket(app, opts.serveSocket);
+    } catch (err) {
+      await app.close();
+      throw err;
+    }
+  }
+  const close = async () => {
+    if (serveServer === undefined) return app.close();
+    const closed = new Promise<void>((resolve) => serveServer.close(() => resolve()));
+    // 先关 Fastify（断开 WebSocket），再断 socket 上剩下的连接；socket 文件由 Node 在关闭时删掉
+    await app.close();
+    serveServer.closeAllConnections();
+    await closed;
+  };
+  return { app, port: addr.port, close };
 }

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import {
   API_PATHS,
+  uiCookieName,
   ENV_AGY,
   ENV_CLAUDE,
   ENV_CODEX,
@@ -14,6 +15,7 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_PORT,
+  ENV_TAILSCALE,
   HUB_COMMAND,
   WORKER_ENV,
   type Change,
@@ -112,6 +114,8 @@ export function makeEnv(): E2eEnv {
     [ENV_AGY]: join(fakeDir, "no-agy"),
     [ENV_CODEX]: join(fakeDir, "no-codex"),
     [ENV_PORT]: "0",
+    // 不去问这台机器真的 Tailscale：没有这个命令 = 没装，只认本机
+    [ENV_TAILSCALE]: join(fakeDir, "no-tailscale"),
     FAKE_CLAUDE_LOG: logFile,
     FAKE_CLAUDE_SCRIPT: scriptFile,
     FAKE_CLAUDE_STATE: fakeDir,
@@ -217,9 +221,9 @@ export class Client {
     return new Client(daemon.port, setCookie.split(";", 1)[0]!);
   }
 
-  /** 同一个 cookie 换一个端口（守护进程重启后）。 */
+  /** 同一个会话换一个端口（守护进程重启后）：会话在库里，重启后还认；cookie 名带端口，所以名字跟着换。 */
   withPort(port: number): Client {
-    return new Client(port, this.cookie);
+    return new Client(port, `${uiCookieName(`127.0.0.1:${port}`)}=${this.cookie.slice(this.cookie.indexOf("=") + 1)}`);
   }
 
   headers(extra: Record<string, string> = {}): Record<string, string> {

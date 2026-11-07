@@ -85,7 +85,7 @@ export function Conversation({
           <button
             type="button"
             aria-label={`查看 ${entry.pm.name} 的资料`}
-            className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="touch-target cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
             <Avatar colorKey={entry.avatarKey} size={34} />

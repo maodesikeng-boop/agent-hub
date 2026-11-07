@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UI_TOKEN_FILE_MODE } from "../../shared/index.ts";
-import { UI_TOKEN_PATTERN, loadOrCreateUiToken, loginUrl } from "./token.ts";
+import { UI_TOKEN_PATTERN, loadOrCreateUiToken, loginUrl, rotateUiToken } from "./token.ts";
 
 describe("loadOrCreateUiToken", () => {
   let dir: string;
@@ -44,6 +44,33 @@ describe("loadOrCreateUiToken", () => {
   it("每次新建的令牌不一样", () => {
     const other = join(dir, "other-token");
     expect(loadOrCreateUiToken(file)).not.toBe(loadOrCreateUiToken(other));
+  });
+});
+
+describe("rotateUiToken（全部退出换主钥匙）", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "hub-token-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("换成新的合格令牌写进文件（权限 0600），重启后读到的是新的", () => {
+    const file = join(dir, "state", "ui-token");
+    const old = loadOrCreateUiToken(file);
+    const next = rotateUiToken(file);
+    expect(next).toMatch(UI_TOKEN_PATTERN);
+    expect(next).not.toBe(old);
+    expect(readFileSync(file, "utf8").trim()).toBe(next);
+    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
+    expect(loadOrCreateUiToken(file)).toBe(next);
+  });
+
+  it("文件权限被放宽过，换完也是 0600", () => {
+    const file = join(dir, "ui-token");
+    loadOrCreateUiToken(file);
+    chmodSync(file, 0o644);
+    rotateUiToken(file);
+    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
   });
 });
 

@@ -550,7 +550,6 @@ function makeCodexHarness(
       const settingsFile = join(launchDir, "settings.json");
       const settings = buildSessionSettings({
         role: session.role === "worker" ? "worker" : "pm",
-        readonly,
         hubSock: join(dir, "run", "hub.sock"),
         stateDir,
         osSandboxed: false,

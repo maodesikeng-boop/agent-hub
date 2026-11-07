@@ -1,6 +1,7 @@
 import type { NotifySettings } from "../notify.ts";
 import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
+import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { DevicesSection, type DeviceSettings } from "./DeviceSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
@@ -44,14 +45,11 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="设置" className="max-w-[440px]">
-        {devices ? (
-          <DialogBody>
-            {notifyGroup}
-            <DevicesSection {...devices} />
-          </DialogBody>
-        ) : (
-          notifyGroup
-        )}
+        <DialogBody>
+          {notifyGroup}
+          {devices && <DevicesSection {...devices} />}
+          <BrowserSessionsSettings />
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );

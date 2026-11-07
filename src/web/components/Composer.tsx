@@ -131,7 +131,7 @@ export function Composer({
                   type="button"
                   aria-label={`去掉 ${file.name}`}
                   disabled={busy}
-                  className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
+                  className="touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
                   onClick={() => staging.remove(key)}
                 >
                   <X className="size-3.5" aria-hidden="true" />

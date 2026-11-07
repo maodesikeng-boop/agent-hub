@@ -6,7 +6,10 @@ export interface ServerInfo {
   platform: string;
   /** 能弹系统原生的“选择文件夹”（daemon/pick-folder.ts，macOS 的 osascript）。false：网页隐藏“选择…”，只留手填路径的输入框。 */
   folderPicker: boolean;
-  /** 能在这台机器的桌面上“在 Finder 中显示 / 用默认程序打开”文件（daemon/open-file.ts，macOS 的 open）。false：网页隐藏这两个按钮。 */
+  /**
+   * 能在这台机器的桌面上“在 Finder 中显示 / 用默认程序打开”文件（daemon/open-file.ts，macOS 的 open），并且浏览器就在这台机器上（请求来自回环地址）。
+   * false：网页隐藏这两个按钮。手机或别的电脑看这台 Mac 上的项目时是 false。
+   */
   fileActions: boolean;
 }
 
@@ -17,4 +20,15 @@ export interface ServerInfo {
 export function serverInfoFor(platform: string): ServerInfo {
   const desktop = platform === "darwin";
   return { platform, folderPicker: desktop, fileActions: desktop };
+}
+
+/** 回环地址：请求来自守护进程所在的这台机器（127.0.0.0/8、::1、::ffff:127.x）。 */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (address === undefined) return false;
+  return address === "::1" || /^(::ffff:)?127\./i.test(address);
+}
+
+/** 给这个请求的浏览器看的 ServerInfo：fileActions 还要浏览器和守护进程在同一台机器（“同一台机器才显示”的唯一判断）。 */
+export function serverInfoForClient(info: ServerInfo, remoteAddress: string | undefined): ServerInfo {
+  return { ...info, fileActions: info.fileActions && isLoopbackAddress(remoteAddress) };
 }

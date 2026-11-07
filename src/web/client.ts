@@ -6,6 +6,8 @@ import {
   type AddDeviceRequest,
   type ApiErrorBody,
   type Attachment,
+  type BrowserSessionsResponse,
+  type LoginLinkResponse,
   type ConversationId,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -190,6 +192,26 @@ export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) =>
   request<DeviceInfo>(API_PATHS.device(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
 export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.deviceInvites);
+
+/** 已登录的浏览器（设置里的列表）。 */
+export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {
+  return request<BrowserSessionsResponse>(API_PATHS.browserSessions);
+}
+
+/** 退出一个浏览器（可以是自己）。 */
+export function deleteBrowserSession(id: string): Promise<void> {
+  return request<void>(API_PATHS.browserSession(id), { method: "DELETE" });
+}
+
+/** 全部退出（换主钥匙、清所有会话，包括自己）。 */
+export function postLogoutAll(): Promise<void> {
+  return postJson<void>(API_PATHS.logoutAll);
+}
+
+/** 给手机扫的一次性登录链接（5 分钟、用一次）。 */
+export function postLoginLink(): Promise<LoginLinkResponse> {
+  return postJson<LoginLinkResponse>(API_PATHS.loginLinks);
+}
 
 /** 在 Finder 中显示 / 用默认程序打开的对象：agent 发来的文件（哪条消息的第几个）或聊天框上传的附件。 */
 export type FileActionTarget = { kind: "sent"; messageId: MessageId; index: number } | { kind: "upload"; id: string };

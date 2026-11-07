@@ -4,15 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { API_PATHS, UI_COOKIE_NAME, sentFileMime, type Attachment, type SentFile } from "../../shared/index.ts";
+import { API_PATHS, sentFileMime, type Attachment, type SentFile } from "../../shared/index.ts";
+import { openTestDb } from "../store/test-helpers.ts";
+import type { Db } from "../store/index.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
 import { createUiServer } from "./server.ts";
+import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
 const HOST = `127.0.0.1:${PORT}`;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-const COOKIE = `${UI_COOKIE_NAME}=${TOKEN}`;
 const ID = "0123456789abcdef";
 
 let root: string;
@@ -21,6 +23,8 @@ let uploadsDir: string;
 let sentFilesDir: string;
 let ledger: FakeLedger;
 let app: FastifyInstance;
+let db: Db;
+let COOKIE: string;
 let opened: string[][];
 let openError: Error | null;
 
@@ -32,6 +36,8 @@ beforeEach(async () => {
   mkdirSync(projectDir, { recursive: true });
   mkdirSync(uploadsDir, { recursive: true });
   mkdirSync(sentFilesDir, { recursive: true });
+  db = openTestDb();
+  COOKIE = testLogin(db, PORT).cookie();
   ledger = new FakeLedger();
   ledger.sentFileAllows = (_sessionId, real) => real.startsWith(projectDir);
   opened = [];
@@ -43,6 +49,7 @@ beforeEach(async () => {
     uploadsDir,
     sentFilesDir,
     port: PORT,
+    db,
     runOpen: async (args) => {
       if (openError !== null) throw openError;
       opened.push(args);
@@ -53,6 +60,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close();
+  db.close();
   rmSync(root, { recursive: true, force: true });
 });
 
