@@ -118,3 +118,13 @@ export const ACTOR_LABELS: Readonly<Record<PersonaChange["actor"], string>> = {
   pm: "项目经理",
   file: "手改文件",
 };
+
+/** 多久以前（设备离线时“3 分钟前”）：不到 1 分钟是“刚刚”，不到 1 小时按分钟，不到 1 天按小时，再久按天。 */
+export function formatAgo(ms: number, now: number = Date.now()): string {
+  const minutes = Math.floor(Math.max(0, now - ms) / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}

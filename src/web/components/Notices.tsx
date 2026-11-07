@@ -1,4 +1,4 @@
-import { Loader2, TriangleAlert } from "lucide-react";
+import { Loader2, TriangleAlert, WifiOff } from "lucide-react";
 import { HEALTH_FAILURE_THRESHOLD, type HealthEntry } from "../../shared/index.ts";
 import { describeError } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -6,9 +6,12 @@ import { cn } from "../lib/utils.ts";
 // 只用底色，不加阴影和描边（docs/ui-standard.md 第 4 条）
 const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full px-4 py-2 text-[13.5px]";
 
-/** 顶部的提醒：守护进程报告的问题（比如找不到 claude）和断线重连。靠左放在对话列里，和消息同一条左边线。 */
-export function Notices({ health, reconnecting }: { health: HealthEntry[]; reconnecting: boolean }) {
-  if (health.length === 0 && !reconnecting) return null;
+/**
+ * 顶部的提醒：守护进程报告的问题（比如找不到 claude）、断线重连、别的设备离线（offline 是那一句，联机第 4.3 节；不报错弹窗）。
+ * 靠左放在对话列里，和消息同一条左边线。
+ */
+export function Notices({ health, reconnecting, offline = null }: { health: HealthEntry[]; reconnecting: boolean; offline?: string | null }) {
+  if (health.length === 0 && !reconnecting && offline === null) return null;
   return (
     <div className="chat-column flex flex-col items-start gap-2 pt-3">
       {health.map((entry) => {
@@ -27,6 +30,12 @@ export function Notices({ health, reconnecting }: { health: HealthEntry[]; recon
           </div>
         );
       })}
+      {offline !== null && (
+        <div className={cn(PILL, "bg-muted text-muted-foreground")} role="status" data-severity="info">
+          <WifiOff className="size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 truncate">{offline}</span>
+        </div>
+      )}
       {reconnecting && (
         <div className={cn(PILL, "bg-muted text-muted-foreground")} data-severity="info">
           <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />

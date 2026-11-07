@@ -14,7 +14,7 @@ import {
   utf8Bytes,
   type ScheduleRecord,
 } from "../../shared/index.ts";
-import { deleteSchedule, postAddSchedule, putScheduleEnabled } from "../client.ts";
+import { useClient } from "../device-scope.tsx";
 import { errorText, nameError } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Select, Textarea } from "../ui/input.tsx";
@@ -22,6 +22,7 @@ import { Switch } from "../ui/switch.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
+  const client = useClient();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,14 +61,14 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
             <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
               取消
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => void run(() => deleteSchedule(schedule.id))}>
+            <Button size="sm" disabled={busy} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
               确认删除
             </Button>
           </>
         ) : (
           <>
-            <Switch id={id} aria-label={`${schedule.name} 运行中`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => putScheduleEnabled(schedule.id, on))} />
+            <Switch id={id} aria-label={`${schedule.name} 运行中`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
             <Button variant="ghost" size="icon-sm" aria-label={`删除 ${schedule.name}`} disabled={busy} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden="true" />
             </Button>
@@ -81,6 +82,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
 type Unit = "minutes" | "hours";
 
 function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void }) {
+  const client = useClient();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"daily" | "interval">("daily");
   const [time, setTime] = useState("09:00");
@@ -109,7 +111,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
     setBusy(true);
     setError(null);
     try {
-      await postAddSchedule(pmId, { name: name.trim(), prompt, ...(kind === "daily" ? { daily: time.trim() } : { everyMinutes: minutes }) });
+      await client.postAddSchedule(pmId, { name: name.trim(), prompt, ...(kind === "daily" ? { daily: time.trim() } : { everyMinutes: minutes }) });
       onClose();
     } catch (err) {
       setError(errorText(err));

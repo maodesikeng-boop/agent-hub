@@ -2,7 +2,10 @@ import type { NotifySettings } from "../notify.ts";
 import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
+import { DevicesSection, type DeviceSettings } from "./DeviceSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+
+export type { DeviceSettings };
 
 /** 开关打不开的原因，能打开的没有。 */
 const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
@@ -11,25 +14,40 @@ const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
 };
 
 /** 全局设置：和资料页一样的分组行，以后加设置就加一行 SettingsRow。 */
-export function SettingsDialog({ open, onOpenChange, notify }: { open: boolean; onOpenChange: (open: boolean) => void; notify: NotifySettings }) {
+export function SettingsDialog({
+  open,
+  onOpenChange,
+  notify,
+  devices = null,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  notify: NotifySettings;
+  /** 守护进程支持联机时才有“设备”一组。 */
+  devices?: DeviceSettings | null;
+}) {
+  const notifyGroup = (
+    <SettingsGroup>
+      {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
+      <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
+        {(id) => (
+          <Switch
+            id={id}
+            aria-label="通知"
+            checked={notify.enabled}
+            disabled={notify.permission === "denied" || notify.permission === "unsupported"}
+            onCheckedChange={(on) => void notify.setEnabled(on)}
+          />
+        )}
+      </SettingsRow>
+    </SettingsGroup>
+  );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="设置" className="max-w-[440px]">
         <DialogBody>
-          <SettingsGroup>
-            {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
-            <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
-              {(id) => (
-                <Switch
-                  id={id}
-                  aria-label="通知"
-                  checked={notify.enabled}
-                  disabled={notify.permission === "denied" || notify.permission === "unsupported"}
-                  onCheckedChange={(on) => void notify.setEnabled(on)}
-                />
-              )}
-            </SettingsRow>
-          </SettingsGroup>
+          {notifyGroup}
+          {devices && <DevicesSection {...devices} />}
           <BrowserSessionsSettings />
         </DialogBody>
       </DialogContent>

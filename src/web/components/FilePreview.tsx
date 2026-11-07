@@ -10,7 +10,8 @@ import {
   sentFileMime,
   type FileAction,
 } from "../../shared/index.ts";
-import { ApiError, fetchFileBytes, postFileAction, type FileActionTarget } from "../client.ts";
+import { ApiError, fetchFileBytes, type FileActionTarget } from "../client.ts";
+import { useClient } from "../device-scope.tsx";
 import { parseCsv } from "../csv.ts";
 import { useServerInfo } from "../server-info.tsx";
 import { highlightHtml } from "../highlight.ts";
@@ -222,6 +223,7 @@ export function FilePreview({ file, open, onOpenChange }: { file: PreviewFile; o
 }
 
 function PreviewContent({ file }: { file: PreviewFile }) {
+  const client = useClient();
   const mime = file.mime === FALLBACK_MIME ? sentFileMime(file.name) : file.mime;
   const kind = previewKindOf(file.name, mime);
   const { pending, failed, controls, note, body } = usePreviewBody(file, kind);
@@ -236,7 +238,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
     setBusy(action);
     setResult(null);
     try {
-      const response = await postFileAction(file.target, action);
+      const response = await client.postFileAction(file.target, action);
       if (response.target === "copy" && file.target.kind === "sent") setResult({ text: COPY_NOTICE, error: false });
     } catch (error) {
       setResult({ text: error instanceof ApiError ? error.message : "没能打开这个文件", error: true });

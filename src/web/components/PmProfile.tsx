@@ -23,7 +23,8 @@ import {
   type ProjectFolder,
   type ScheduleRecord,
 } from "../../shared/index.ts";
-import { ApiError, fetchPersona, postRenewSession, postRevertPersonaChange, putPersona } from "../client.ts";
+import { ApiError } from "../client.ts";
+import { useClient } from "../device-scope.tsx";
 import { ACTOR_LABELS, errorText, formatTime, shortPath } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -40,11 +41,12 @@ type Load = { phase: "loading" } | { phase: "error"; message: string } | { phase
 
 /** 性格设定：进页面拉一次；rev 变了（pm.updated，别处改了）重新拉。 */
 function usePersona(pmId: number, rev: number) {
+  const client = useClient();
   const [load, setLoad] = useState<Load>({ phase: "loading" });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let alive = true;
-    fetchPersona(pmId).then(
+    client.fetchPersona(pmId).then(
       (persona) => alive && setLoad({ phase: "ready", persona }),
       (err: unknown) => alive && setLoad((prev) => (prev.phase === "ready" ? prev : { phase: "error", message: errorText(err) })),
     );
@@ -139,6 +141,7 @@ function agentPatch(next: AgentSetting, saved: AgentSetting): EditPersonaRequest
  * 连着改几次时，只有最后一次的结果决定显示什么（前面的回来了也照样更新服务端的值）。
  */
 function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
+  const client = useClient();
   const [draft, setDraft] = useState<T | null>(null);
   const [error, setError] = useState<{ key: K; message: string } | null>(null);
   const seq = useRef(0);
@@ -151,7 +154,7 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
       setDraft(null);
       return;
     }
-    putPersona(pmId, body).then(
+    client.putPersona(pmId, body).then(
       (res) => {
         if (!aliveRef.current) return;
         onUpdate(res.persona);
@@ -186,6 +189,7 @@ function PmEditor({
   persona: PersonaView;
   onUpdate: (p: PersonaView) => void;
 }) {
+  const client = useClient();
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -232,11 +236,11 @@ function PmEditor({
       if (aliveRef.current) setBusy(null);
     }
   };
-  const saveText = () => void run("text", async () => (await putPersona(pm.id, { text })).persona, () => setDraftText(null));
+  const saveText = () => void run("text", async () => (await client.putPersona(pm.id, { text })).persona, () => setDraftText(null));
   const revert = (changeId: number) =>
     void run(
       "revert",
-      async () => (await postRevertPersonaChange(changeId)).persona,
+      async () => (await client.postRevertPersonaChange(changeId)).persona,
       // 撤销的结果回来后，本地没提交的输入已经没意义了
       () => {
         agentSave.reset();
@@ -347,6 +351,7 @@ function PmEditor({
  * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
  */
 function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean }) {
+  const client = useClient();
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -355,7 +360,7 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
     setSending(true);
     setError(null);
     try {
-      await postRenewSession(pmId);
+      await client.postRenewSession(pmId);
     } catch (err) {
       setError(errorText(err));
     } finally {

@@ -3,31 +3,37 @@
 // 联机（docs/multi-device-design.md 第 4.1 节，P3 实现）：别的设备前面加 #/d/<设备编号>，如 #/d/<设备>/c/<对话>；
 // 设备编号是 shared/api.ts 的 DeviceId（isDeviceId 校验）。不带 #/d/ 的老网址当成入口本机，继续能用。
 import { useCallback, useEffect, useState } from "react";
-import type { ConversationId, PmId } from "../shared/index.ts";
+import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
 
-export type Route =
+/** 哪台设备上的页面：不写（undefined）是入口本机。 */
+export type Route = (
   /** 项目经理的对话。 */
   | { view: "conversation"; id: ConversationId }
   /** Worker 的对话。 */
   | { view: "worker"; id: ConversationId }
   /** 项目经理的资料页。 */
-  | { view: "profile"; pmId: PmId };
+  | { view: "profile"; pmId: PmId }
+) & { device?: DeviceId };
 
 const PREFIX: Record<Route["view"], string> = { conversation: "c", worker: "w", profile: "pm" };
 
 export function routeHash(route: Route): string {
-  return `#/${PREFIX[route.view]}/${route.view === "profile" ? route.pmId : route.id}`;
+  const device = route.device === undefined ? "" : `/d/${route.device}`;
+  return `#${device}/${PREFIX[route.view]}/${route.view === "profile" ? route.pmId : route.id}`;
 }
 
-/** 认不出来（空的、编号不是正整数、别的路径）是 null。 */
+/** 认不出来（空的、编号不是正整数、设备编号不合法、别的路径）是 null。 */
 export function parseRoute(hash: string): Route | null {
-  const match = /^#\/(c|w|pm)\/([1-9]\d*)$/.exec(hash);
+  const match = /^#(?:\/d\/([^/]+))?\/(c|w|pm)\/([1-9]\d*)$/.exec(hash);
   if (!match) return null;
-  const n = Number(match[2]);
+  const device = match[1];
+  if (device !== undefined && !isDeviceId(device)) return null;
+  const n = Number(match[3]);
   if (!Number.isSafeInteger(n)) return null;
-  if (match[1] === "c") return { view: "conversation", id: n };
-  if (match[1] === "w") return { view: "worker", id: n };
-  return { view: "profile", pmId: n };
+  const on = device === undefined ? {} : { device };
+  if (match[2] === "c") return { view: "conversation", id: n, ...on };
+  if (match[2] === "w") return { view: "worker", id: n, ...on };
+  return { view: "profile", pmId: n, ...on };
 }
 
 const sameRoute = (a: Route | null, b: Route | null) => (a === null || b === null ? a === b : routeHash(a) === routeHash(b));

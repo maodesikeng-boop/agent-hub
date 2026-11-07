@@ -9,7 +9,7 @@ import {
   UPLOAD_CLIENT_CONCURRENCY,
   type Attachment,
 } from "../shared/index.ts";
-import { ApiError, postUpload } from "./client.ts";
+import { ApiError, localClient, type HubClient } from "./client.ts";
 import { errorText, newClientId } from "./format.ts";
 
 /** 待发的文件。key 只用来区分列表项（同名文件可以有好几个）。 */
@@ -65,7 +65,7 @@ function uploadFailure(name: string, err: unknown): Error {
  * 把文件都传上去（同时最多 UPLOAD_CLIENT_CONCURRENCY 个），按原来的顺序返回上传结果。任何一个失败整个抛错（message 是中文），
  * 抛错后不再开始新的上传，已经传上去的留在磁盘上不管。发送时才传：去掉的文件、没发出去的文件不会占磁盘。
  */
-export async function uploadFiles(files: File[]): Promise<Attachment[]> {
+export async function uploadFiles(files: File[], client: HubClient = localClient): Promise<Attachment[]> {
   const results: Attachment[] = new Array(files.length);
   let next = 0;
   let failure: Error | null = null;
@@ -74,7 +74,7 @@ export async function uploadFiles(files: File[]): Promise<Attachment[]> {
       const index = next++;
       const file = files[index]!;
       try {
-        results[index] = await postUpload(file, file.name);
+        results[index] = await client.postUpload(file, file.name);
       } catch (err) {
         failure ??= uploadFailure(file.name, err);
       }

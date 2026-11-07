@@ -37,15 +37,17 @@ describe("骨架", () => {
     expect(setup).toMatch(/afterEach\(\s*cleanup\s*\)/);
   });
 
-  it("vite 开发服务器把 /api/、/auth 和 WebSocket 代理到守护进程端口，只改 vite 自己页面发的 Origin", async () => {
+  it("vite 开发服务器把 /api/、/auth、别的设备的 /d/ 和 WebSocket 代理到守护进程端口，只改 vite 自己页面发的 Origin", async () => {
     vi.stubEnv(ENV_DEV_DAEMON_PORT, "4000");
     try {
       vi.resetModules();
       const config = (await import("../vite.config.ts")).default as UserConfig;
       const proxy = config.server!.proxy as Record<string, ProxyOptions>;
-      expect(Object.keys(proxy).sort()).toEqual(["/api/", "/auth"]);
+      expect(Object.keys(proxy).sort()).toEqual(["/api/", "/auth", "/d/"]);
       const target = "http://127.0.0.1:4000";
       expect(proxy["/api/"]).toMatchObject({ target, changeOrigin: true, ws: true });
+      // 联机：别的设备的接口是 /d/<设备>/api/...（含 WebSocket），入口转发
+      expect(proxy["/d/"]).toMatchObject({ target, changeOrigin: true, ws: true });
       expect(proxy["/auth"]).toMatchObject({ target, changeOrigin: true });
 
       for (const event of ["proxyReq", "proxyReqWs"]) {

@@ -1,6 +1,7 @@
 import { FileText } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, isImageMime, sentFileMime, uploadUrl, type Attachment } from "../../shared/index.ts";
+import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { formatBytes } from "../upload.ts";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
@@ -87,6 +88,7 @@ export function FileCard({
 
 /** 消息里的附件：图片是小缩略图，别的是文件图标；都带文件名和大小，点开看预览（上传的文件和 agent 发来的文件同一个预览窗）。没有附件什么也不画。 */
 export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
+  const client = useClient();
   if (attachments.length === 0) return null;
   return (
     <ul aria-label="附件" className="mt-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
@@ -96,7 +98,7 @@ export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
             name={a.name}
             mime={sentFileMime(a.name)}
             detail={formatBytes(a.size)}
-            preview={{ name: a.name, mime: sentFileMime(a.name), size: a.size, url: uploadUrl(a), target: { kind: "upload", id: a.id } }}
+            preview={{ name: a.name, mime: sentFileMime(a.name), size: a.size, url: client.url(uploadUrl(a)), target: { kind: "upload", id: a.id } }}
           />
         </li>
       ))}

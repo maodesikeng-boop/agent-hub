@@ -1,5 +1,5 @@
 import { ChevronRight, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
@@ -7,20 +7,50 @@ import {
   normalizeName,
   utf8Bytes,
   type ConversationId,
+  type AgentVendor,
   type PmMode,
+  type ServerInfo,
 } from "../../shared/index.ts";
-import { postCreatePm, postPickFolder } from "../client.ts";
+import type { HubClient } from "../client.ts";
+import { DeviceScope, useClient } from "../device-scope.tsx";
+import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { errorText, nameError } from "../format.ts";
+import { useModelCatalogs } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
-import { Input, Textarea } from "../ui/input.tsx";
+import { Input, Select, Textarea } from "../ui/input.tsx";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) => void }) {
+/**
+ * 两台以上设备时才有：换了设备（各台装的 CLI 不一样），选着的厂商那台没有就换成那台的第一家。
+ * 只有一台时不放它（不在打开表单时就拉模型名单，和没有联机时一样）。
+ */
+function VendorGuard({ vendor, onMissing }: { vendor: AgentVendor; onMissing: (vendor: AgentVendor) => void }) {
+  const catalogs = useModelCatalogs();
+  const missing = !catalogs.some((c) => c.vendor === vendor);
+  const first = catalogs[0]?.vendor;
+  useEffect(() => {
+    if (missing && first !== undefined) onMissing(first);
+  }, [missing, first, onMissing]);
+  return null;
+}
+
+/** 新建项目经理时能选的一台设备。 */
+export interface NewPmDevice {
+  key: DeviceKey;
+  name: string;
+  status: DeviceStatus;
+  client: HubClient;
+  server: ServerInfo;
+}
+
+/** deviceRow：两台以上设备时最上面一行“设备”；表单的接口、模型名单、能不能“选择…”都按外面 DeviceScope 的那台。 */
+function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: (conversationId: ConversationId) => void }) {
+  const client = useClient();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
@@ -47,7 +77,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     setPickError(null);
     try {
       const startDir = folder.trim();
-      const { path } = await postPickFolder(startDir ? { startDir } : {});
+      const { path } = await client.postPickFolder(startDir ? { startDir } : {});
       if (path !== null) setFolder(path);
     } catch (err) {
       setPickError(errorText(err));
@@ -64,7 +94,7 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
     try {
       const { vendor, model, effort } = agentResult.setting;
       const mainFolder = folder.trim();
-      const res = await postCreatePm({
+      const res = await client.postCreatePm({
         name: cleanName,
         mode,
         vendor,
@@ -84,7 +114,9 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   return (
     <DialogForm onSubmit={(e) => void submit(e)}>
       <DialogBody>
+        {deviceRow && <VendorGuard vendor={agent.vendor} onMissing={(vendor) => setAgent(draftOf({ ...DEFAULT_AGENT_SETTING, vendor }))} />}
         <SettingsGroup>
+          {deviceRow}
           <SettingsRow label="名字" error={nameProblem}>
             {(id) => (
               <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
@@ -157,20 +189,57 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   );
 }
 
+/** devices：能选的设备（入口本机第一）；只有一台时没有“设备”这一行。defaultDevice：打开时选中的（当前看的那台）。 */
 export function NewPmDialog({
   open,
+  devices,
+  defaultDevice,
   onOpenChange,
   onCreated,
 }: {
   open: boolean;
+  devices: readonly NewPmDevice[];
+  defaultDevice: DeviceKey;
   onOpenChange: (open: boolean) => void;
-  onCreated: (conversationId: ConversationId) => void;
+  onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="新建项目经理">
-        <NewPmForm onCreated={onCreated} />
+        <DevicePicker devices={devices} defaultDevice={defaultDevice} onCreated={onCreated} />
       </DialogContent>
     </Dialog>
+  );
+}
+
+function DevicePicker({
+  devices,
+  defaultDevice,
+  onCreated,
+}: {
+  devices: readonly NewPmDevice[];
+  defaultDevice: DeviceKey;
+  onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
+}) {
+  const [key, setKey] = useState(defaultDevice);
+  const device = devices.find((d) => d.key === key) ?? devices[0]!;
+  const deviceRow =
+    devices.length > 1 ? (
+      <SettingsRow label="设备">
+        {(id) => (
+          <Select id={id} variant="plain" value={device.key} onChange={(e) => setKey(e.target.value)}>
+            {devices.map((d) => (
+              <option key={d.key} value={d.key} disabled={isReadOnly(d.status)}>
+                {d.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </SettingsRow>
+    ) : null;
+  return (
+    <DeviceScope client={device.client} server={device.server}>
+      <NewPmForm deviceRow={deviceRow} onCreated={(conversationId) => onCreated(device.key, conversationId)} />
+    </DeviceScope>
   );
 }

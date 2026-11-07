@@ -1,15 +1,17 @@
 import { Loader2, PanelLeft } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccentScope } from "./lib/accent-scope.tsx";
 import type { ConversationId, MessageId, PersonaChangeId, PmId } from "../shared/index.ts";
-import { postRevertPersonaChange } from "./client.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { Sidebar, type SidebarGroup } from "./components/Sidebar.tsx";
+import { useDevices } from "./device-hub.ts";
+import { DeviceScope } from "./device-scope.tsx";
+import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, routeDeviceOf } from "./devices.ts";
 import {
   failingHealth,
   isRenewing,
@@ -26,12 +28,10 @@ import {
   workersOf,
 } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
-import { useWaitingReminders } from "./notify.ts";
+import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
 import { ModelCatalogProvider } from "./models.tsx";
-import { ServerInfoProvider } from "./server-info.tsx";
 import { useRoute } from "./route.ts";
-import { useHub } from "./useHub.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
@@ -56,13 +56,20 @@ const saveRailClosed = (closed: boolean) => {
 };
 
 export function App() {
-  const hub = useHub();
-  const { state } = hub;
+  const fleet = useDevices();
+  const { route, navigate, replace } = useRoute();
+  // 网址里的设备（没写是入口本机）；清单里没有（还没拉到、编号不对）先看入口本机
+  const local = fleet.devices[0]!;
+  const routedDevice = fleet.devices.find((d) => d.key === deviceKeyOf(route?.device, fleet.selfId));
+  const current = routedDevice ?? local;
+  const hub = fleet.hub(current.key);
+  const { state } = current;
+  const remote = current.key !== LOCAL_DEVICE;
   // 额度到了重置时间自己变（左下角的百分比、状态行的“等额度”），不用刷新页面
   useRerenderAt(quotaResetTimes(state));
-  const { route, navigate, replace } = useRoute();
-  const [drafts, setDrafts] = useState<Record<ConversationId, string>>({});
-  const staging = useStagingStore<ConversationId>();
+  /** 草稿、待发的文件按对话存，键带设备（devices.ts 的 conversationKey，各台的对话编号会撞）。 */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
   /** 窄屏时左栏抽屉拉出来了。 */
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -98,15 +105,16 @@ export function App() {
           : entries.find((e) => e.pm?.id === route.pmId);
   const active = routedEntry ?? entries[0] ?? null;
   const select = useCallback(
-    (id: ConversationId) => {
+    (ref: ConversationRef) => {
       setDrawerOpen(false);
-      navigate({ view: "conversation", id });
+      navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) });
     },
     [navigate],
   );
   // 用户正开着的对话：资料页不算；打开着 Worker 的对话算它的项目经理的会话
   const activeId = profile ? null : (active?.id ?? null);
-  const reminders = useWaitingReminders(state, activeId, select);
+  const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
+  const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
 
   // 网址没写（第一次打开）：落到第一个对话，并把网址改成它（不记历史）。默认选中的那个就固定在网址里，
   // 之后别的对话来了新消息排到前面也不会跳走。写了但找不到的（刚建好、服务端的变化还没到；或者编号不对）先显示第一个，网址不动，
@@ -115,8 +123,15 @@ export function App() {
   useEffect(() => {
     if (defaultId !== null) replace({ view: "conversation", id: defaultId });
   }, [defaultId, replace]);
+  // 网址写的设备清单里没有（编号不对、已经移除了）：回到入口本机
+  const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
+  const localFirst = local.state.phase === "ready" ? (listConversations(local.state)[0]?.id ?? null) : null;
+  useEffect(() => {
+    if (unknownDevice && localFirst !== null) replace({ view: "conversation", id: localFirst });
+  }, [unknownDevice, localFirst, replace]);
 
-  if (state.phase === "loading") {
+  // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
+  if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return (
       <div className={FULLPAGE}>
         <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
@@ -124,50 +139,56 @@ export function App() {
       </div>
     );
   }
-  if (state.phase === "unauthorized") {
+  if (local.state.phase === "unauthorized") {
     return (
       <div className={FULLPAGE}>
         <p>请用守护进程在终端里打印的链接打开</p>
       </div>
     );
   }
-  if (state.phase === "error") {
+  if (local.state.phase === "error") {
     return (
       <div className={FULLPAGE}>
         <p>连不上守护进程</p>
-        <Button onClick={() => void hub.reload()}>重试</Button>
+        <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>重试</Button>
       </div>
     );
   }
 
   const view = active ? state.conversations[active.id] : undefined;
-  const notices = <Notices health={failingHealth(state)} reconnecting={state.connection === "reconnecting"} />;
+  // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
+  const { offline, link } = deviceNotices(current);
+  const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
+  const notices = <Notices health={failingHealth(state)} reconnecting={reconnecting} offline={offline} />;
+  const here = routeDeviceOf(current.key);
+  const keyOf = (id: ConversationId) => conversationKey(current.key, id);
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  const created = (conversationId: ConversationId) => {
+  const created = (device: string, conversationId: ConversationId) => {
     setCreating(false);
-    select(conversationId);
+    select({ device, id: conversationId });
   };
   const openWorkerConversation = (id: ConversationId) => {
     if (compact) setCompactRailOpen(false);
-    navigate({ view: "worker", id });
+    navigate({ view: "worker", id, ...here });
   };
   const actions = {
     retry: state.retry,
     onRetryMessage: (messageId: number) => void hub.retryMessage(messageId),
     onOpenWorker: openWorkerConversation,
     onRevertPersona: async (changeId: PersonaChangeId) => {
-      await postRevertPersonaChange(changeId);
+      await hub.client.postRevertPersonaChange(changeId);
     },
   };
 
   // 项目经理页面和 Worker 页面共用：草稿按对话分开，发出去就清空
-  const setDraft = (id: ConversationId, value: string) => setDrafts((d) => ({ ...d, [id]: value }));
+  const setDraft = (id: ConversationId, value: string) => setDrafts((d) => ({ ...d, [keyOf(id)]: value }));
   const send = (id: ConversationId, text: string, files: File[]) => {
+    const key = keyOf(id);
     // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
     // 传失败了什么都不清（文字和文件都留着）
     // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
     if (files.length === 0 && text.startsWith("/")) {
-      return hub.sendChecked(id, text).then(() => setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d)));
+      return hub.sendChecked(id, text).then(() => setDrafts((d) => (d[key]?.trim() === text ? { ...d, [key]: "" } : d)));
     }
     if (files.length === 0) {
       setDraft(id, "");
@@ -175,8 +196,8 @@ export function App() {
       return;
     }
     return hub.sendWithFiles(id, text, files).then(() => {
-      setDrafts((d) => (d[id]?.trim() === text ? { ...d, [id]: "" } : d));
-      staging.of(id).removeSent(files);
+      setDrafts((d) => (d[key]?.trim() === text ? { ...d, [key]: "" } : d));
+      staging.of(key).removeSent(files);
     });
   };
 
@@ -203,7 +224,7 @@ export function App() {
     setRailPeek(closed || railNeedsYou ? null : railPm);
   };
   const openAsk = (messageId: MessageId) => {
-    if (active && openWorker !== null) navigate({ view: "conversation", id: active.id });
+    if (active && openWorker !== null) navigate({ view: "conversation", id: active.id, ...here });
     setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
   };
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
@@ -219,16 +240,41 @@ export function App() {
   ) : null;
   const top = compact ? rail : null;
 
+  const sidebarActive = profileEntry?.id ?? activeId;
+  const groups: SidebarGroup[] = fleet.devices.map((d) => ({
+    key: d.key,
+    name: d.info.name,
+    platform: d.info.platform,
+    status: d.status,
+    lastOnlineAt: d.lastOnlineAt,
+    entries: d.state.phase === "ready" ? (d.key === current.key ? entries : listConversations(d.state)) : [],
+  }));
+  const newPmDevices = fleet.devices.map((d) => ({ key: d.key, name: d.info.name, status: d.status, client: fleet.hub(d.key).client, server: d.state.server }));
+  // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
+  const deviceWaiting =
+    state.phase === "ready" ? null : current.status === "connecting" ? (
+      <div className={FULLPAGE}>
+        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+        <p>加载中</p>
+      </div>
+    ) : (
+      <div className={FULLPAGE}>
+        <p>还没连上这台设备</p>
+        <p className="text-[13.5px] text-muted-foreground">看看 Tailscale 开了没，{current.info.name}上的守护进程在不在</p>
+      </div>
+    );
+
   return (
-    <ServerInfoProvider value={state.server}>
+    <DeviceScope client={hub.client} server={state.server}>
     <ModelCatalogProvider>
     <div className="relative flex h-full">
       <Sidebar
-        entries={entries}
-        activeId={profileEntry?.id ?? activeId}
+        groups={groups}
+        active={sidebarActive === null ? null : { device: current.key, id: sidebarActive }}
         waiting={reminders.waiting}
         asking={reminders.asking}
         notify={reminders.notify}
+        devices={fleet.managed ? { devices: fleet.devices, onChanged: () => void fleet.refresh() } : null}
         quota={quotaUsage(state)}
         quotaFetchable={hasFetchedQuotaSession(state)}
         drawerOpen={narrow && drawerOpen}
@@ -239,24 +285,29 @@ export function App() {
           setCreating(true);
         }}
       />
-      <NewPmDialog open={creating} onOpenChange={setCreating} onCreated={created} />
+      <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
       {/* 项目经理的会话（对话、它的 Worker、资料页、右栏）在它的强调色里；左栏和弹窗不在 */}
       <AccentScope colorKey={active?.avatarKey ?? null}>
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
-        {profile ? (
+        {deviceWaiting ? (
+          <>
+            {leading && <div className="flex h-16 shrink-0 items-center px-3">{leading}</div>}
+            {deviceWaiting}
+          </>
+        ) : profile ? (
           <PmProfile
-            key={profile.id}
+            key={keyOf(profile.id)}
             pm={profile}
             project={profileEntry?.project ?? null}
             folders={profileEntry?.folders ?? []}
             schedules={state.schedules.filter((x) => x.pmId === profile.id)}
             rev={state.personaRev[profile.id] ?? 0}
             renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-            onBack={() => profileEntry && select(profileEntry.id)}
+            onBack={() => profileEntry && select({ device: current.key, id: profileEntry.id })}
           />
         ) : openWorker !== null ? (
           <WorkerConversation
-            key={openWorker}
+            key={keyOf(openWorker)}
             title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
             readonly={workerLine?.readonly ?? false}
             phase={workerPhaseOf(state, openWorker)}
@@ -265,30 +316,31 @@ export function App() {
             pending={pendingOf(state, openWorker)}
             session={sessionOf(state, openWorker)}
             older={state.older[openWorker]}
-            draft={drafts[openWorker] ?? ""}
-            staging={staging.of(openWorker)}
+            draft={drafts[keyOf(openWorker)] ?? ""}
+            staging={staging.of(keyOf(openWorker))}
             leading={leading}
             toolbar={toolbar}
             top={top}
             notices={notices}
-            onBack={() => workerPmEntry && select(workerPmEntry.id)}
+            onBack={() => workerPmEntry && select({ device: current.key, id: workerPmEntry.id })}
             onDraftChange={setDraft}
             onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
             onLoadOlder={(id) => void hub.loadOlder(id)}
             actions={actions}
+            link={link}
           />
         ) : active && view ? (
           <Conversation
-            key={active.id}
+            key={keyOf(active.id)}
             entry={active}
             view={view}
             pending={pendingOf(state, active.id)}
             session={visibleSessionOf(state, active.id)}
             older={state.older[active.id]}
-            draft={drafts[active.id] ?? ""}
-            staging={staging.of(active.id)}
+            draft={drafts[keyOf(active.id)] ?? ""}
+            staging={staging.of(keyOf(active.id))}
             leading={leading}
             toolbar={toolbar}
             top={top}
@@ -301,7 +353,8 @@ export function App() {
             actions={actions}
             focus={focus}
             onFocusDone={clearFocus}
-            onOpenProfile={(pmId: PmId) => navigate({ view: "profile", pmId })}
+            onOpenProfile={(pmId: PmId) => navigate({ view: "profile", pmId, ...here })}
+            link={link}
           />
         ) : (
           <>
@@ -314,6 +367,6 @@ export function App() {
       </AccentScope>
     </div>
     </ModelCatalogProvider>
-    </ServerInfoProvider>
+    </DeviceScope>
   );
 }
