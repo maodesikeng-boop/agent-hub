@@ -15,7 +15,8 @@ claude 自带沙箱、sandbox-exec、codex readOnly 全部 exit 71。脚本一�
 
 项目：
   S1 claude 自带沙箱只读档：denyWrite 盖住工作目录和 add-dir 后，Bash 的 echo > / python / touch 写工作目录和外面都失败，TMPDIR 能写，读照常
-  S2 claude 自带沙箱网络：network.allowedDomains 写 ["*"] 后 curl、gh、git 能通（不能通配就退回外层沙箱）
+  S2 claude 自带沙箱网络：network.allowedDomains 写 ["*"] + enableWeakerNetworkIsolation 后 curl、gh、git 能通（11-07 第一次跑 gh 报 x509 OSStatus -26276，
+     原因是沙箱挡了证书服务 com.apple.trustd.agent，加 enableWeakerNetworkIsolation 放行它；不能通配就退回外层沙箱）
   S3 claude 自带沙箱 filesystem.denyRead（~/**/.env 和绝对路径通配）、credentials.files 生效
   S4 agy 外层只读 sandbox-exec profile（设计 4.1）：十几步全对，agy 自己不报写错误，会话能保存、能 --conversation 恢复
   S5 codex readOnly 真跑命令（codex sandbox 确定性 + codex exec 真跑一次）：读外面、只读命令能跑，3 种写都失败；deny_read 配置哪种写法生效
@@ -283,7 +284,9 @@ def claude_run(ctx: Ctx, claude: str, settings: dict, probe: Path, *, keep_hub: 
 
 def claude_base_settings(extra_sandbox: dict) -> dict:
     """设计 2.3 里 claude 的只读翻译（default 模式 + 放行读和 Bash + 拒编辑工具）加自带沙箱；extra_sandbox 合进 sandbox 段。"""
-    sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True}
+    # enableWeakerNetworkIsolation：放行 mach 服务 com.apple.trustd.agent，gh 等 Go 程序才验得了 TLS 证书（没有它 S2 报 x509 OSStatus -26276）；
+    # 跟生产一样（src/shared/claude-readonly-settings.ts 的 claudeReadonlySandbox）
+    sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True, "enableWeakerNetworkIsolation": True}
     sandbox.update(extra_sandbox)
     return {
         "permissions": {"defaultMode": "default", "allow": ["Bash", "Read", "Glob", "Grep"], "deny": ["Edit", "Write", "NotebookEdit"]},
@@ -321,7 +324,7 @@ def s1(ctx: Ctx, tools: dict, args) -> Result:
 
 
 def s2(ctx: Ctx, tools: dict, args) -> Result:
-    res = Result("S2", "claude 自带沙箱网络：allowedDomains [\"*\"] 后 curl、gh、git 能通")
+    res = Result("S2", "claude 自带沙箱网络：allowedDomains [\"*\"] + enableWeakerNetworkIsolation 后 curl、gh、git 能通")
     settings = claude_base_settings({"network": {"allowedDomains": ["*"]}})
     q = shlex.quote
     steps = [
@@ -352,14 +355,15 @@ def s2(ctx: Ctx, tools: dict, args) -> Result:
         res.note(f"✗ n_gh 应成功：rc={rc} {clip(out, 100)}")
     res.status = PASS if ok else FAIL
     if not ok:
-        res.note("→ 按设计：通配 * 不能用，claude 退回 writeGuard: \"outer\"（外层沙箱不管网络）")
+        res.note("→ curl、git 不通：通配 * 不能用，claude 退回 writeGuard: \"outer\"（外层沙箱不管网络）；只有 gh 报 x509：看 enableWeakerNetworkIsolation 有没有生效")
     return res
 
 
 def s3(ctx: Ctx, tools: dict, args) -> Result:
     res = Result("S3", "claude 自带沙箱 denyRead（~/**/.env、绝对路径通配）和 credentials.files 生效")
     settings = claude_base_settings({
-        "filesystem": {"denyRead": ["~/**/.env", f"{ctx.root}/**/.env"]},
+        # 生产的通配写法：**/ 开头的换成绝对根 /**/（claudeReadonlySandbox），所以绝对路径那条测的是 /**/.env
+        "filesystem": {"denyRead": ["~/**/.env", "/**/.env"]},
         "credentials": {"files": [{"path": str(ctx.homedir / "cred.json"), "mode": "deny"}]},
     })
     q = shlex.quote

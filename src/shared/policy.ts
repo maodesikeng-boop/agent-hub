@@ -2,7 +2,9 @@
 // 以后想让 Worker 默认和项目经理不一样、加回某条拒绝规则、M4 加权限钩子，只改这个文件。
 // launch.ts 只调 buildSessionSettings 和 sessionEnv，两种角色走同一个函数。
 import type { AgentRole } from "./domain.ts";
+import { CLAUDE_READONLY_PERMISSION_MODE, claudeReadonlyPermissions, claudeReadonlySandbox, type ClaudeReadonlySandbox } from "./claude-readonly-settings.ts";
 import { HUB_COMMAND } from "./names.ts";
+import type { ReadonlyPolicy } from "./readonly-policy.ts";
 
 /** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
 export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
@@ -12,51 +14,8 @@ export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
  * 写进设置文件的 permissions.defaultMode，内容进 fingerprint，改了下一条消息前自动重启。
  */
 export const DEFAULT_PERMISSION_MODE = "auto";
-/** 派活时 --readonly：dontAsk，要批准的一律拒绝，读文件和只读命令照常能用。 */
-export const READONLY_PERMISSION_MODE = "dontAsk";
-export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof READONLY_PERMISSION_MODE;
-
-/**
- * 只读档额外放行的东西。dontAsk 下要批准的一律拒绝，真 claude 实测（11-04）：WebSearch 和 Slack 的 slack_search_public
- * （声明了 readOnlyHint 也一样）都被拒，所以连接器的只读工具要自己列。以后连了新连接器、或新增了只读工具，往下面加一行就行。
- * 只放读、搜、查的；发消息、发邮件、写文件、改工单一律不列。键是连接器在 claude 里的服务名（mcp__<服务名>__<工具名>）。
- */
-export const READONLY_WEB_ALLOW_RULES = ["WebSearch", "WebFetch"] as const;
-/** 只读 git：-C 指到别的 worktree 也行（真 claude 实测 `:*` 写法在 -C 后的通配不生效，要写成 `git -C * log *`；git status/diff/log/show/blame/ls-files/branch 只看，不改仓库）。 */
-export const READONLY_GIT_ALLOW_RULES = ["status", "diff", "log", "show", "blame", "ls-files", "rev-parse"].flatMap((sub) => [`Bash(git -C * ${sub})`, `Bash(git -C * ${sub} *)`]);
-/** 只读 git 里会越界的参数：--output=<文件> 会写文件，--ext-diff 会跑仓库配置的外部程序。拒绝规则先于放行。 */
-export const READONLY_GIT_DENY_RULES = ["Bash(git * --output*)", "Bash(git * --ext-diff*)"] as const;
-export const READONLY_CONNECTOR_TOOLS: Readonly<Record<string, readonly string[]>> = {
-  claude_ai_Slack: [
-    "slack_search_public", "slack_search_public_and_private", "slack_search_channels", "slack_search_users", "slack_search_emojis",
-    "slack_read_channel", "slack_read_thread", "slack_read_canvas", "slack_read_file", "slack_read_list", "slack_read_user_profile",
-    "slack_list_channel_members", "slack_list_user_channels", "slack_get_reactions",
-  ],
-  claude_ai_Gmail: ["search_threads", "get_message", "get_thread", "get_draft", "list_drafts", "list_labels"],
-  claude_ai_Google_Drive: ["search_files", "read_file_content", "get_file_metadata", "get_file_permissions", "list_recent_files"],
-  claude_ai_Google_Docs: ["read_doc"],
-  claude_ai_Google_Sheets: ["get_spreadsheet", "get_values"],
-  claude_ai_Atlassian_Rovo: [
-    "search", "fetch", "searchJiraIssuesUsingJql", "searchConfluenceUsingCql", "atlassianUserInfo", "getAccessibleAtlassianResources",
-    "getJiraIssue", "getJiraIssueRemoteIssueLinks", "getJiraIssueTypeMetaWithFields", "getJiraProjectIssueTypesMetadata", "getVisibleJiraProjects",
-    "getTransitionsForJiraIssue", "getIssueLinkTypes", "lookupJiraAccountId",
-    "getConfluencePage", "getConfluencePageDescendants", "getConfluencePageFooterComments", "getConfluencePageInlineComments",
-    "getConfluenceCommentChildren", "getConfluenceSpaces", "getPagesInConfluenceSpace",
-    "getCompassComponent", "getCompassComponents", "getCompassCustomFieldDefinitions", "getTeamworkGraphContext", "getTeamworkGraphObject",
-  ],
-};
-
-/** 只读档的放行规则：上网、读本项目的 worktrees/<项目编号>/（别的 Worker 的 worktree，审查要读）、只读 git、连接器只读工具。 */
-export function readonlyAllowRules(projectWorktreesDir: string | undefined): string[] {
-  const rules: string[] = [...READONLY_WEB_ALLOW_RULES];
-  if (projectWorktreesDir !== undefined) {
-    // 绝对路径 // 开头，特殊字符转义
-    rules.push(`Read(/${projectWorktreesDir.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&")}/**)`);
-  }
-  rules.push(...READONLY_GIT_ALLOW_RULES);
-  for (const [server, tools] of Object.entries(READONLY_CONNECTOR_TOOLS)) for (const tool of tools) rules.push(`mcp__${server}__${tool}`);
-  return rules;
-}
+/** 取代 dontAsk 的只读档（default + 驱动接 can_use_tool）在 claude-readonly-settings.ts 的 CLAUDE_READONLY_PERMISSION_MODE。 */
+export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof CLAUDE_READONLY_PERMISSION_MODE;
 
 /**
  * 系统数据目录 state/（数据库、令牌、性格设定）的 Edit 拒绝规则：Worker 都带上，是可写范围（write-scope.ts）的兜底——
@@ -77,52 +36,68 @@ export const WORKER_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_DISABL
 
 export type SessionRole = Extract<AgentRole, "pm" | "worker">;
 
+/** 只读 Worker 的 claude 翻译要的东西（claude-readonly-settings.ts）：统一策略，加这个会话工作目录和 add-dir 的真实路径（沙箱 denyWrite 盖住它们）。 */
+export interface SessionReadonlyInput {
+  policy: ReadonlyPolicy;
+  denyWrite: string[];
+}
+
 export interface SessionSettingsInput {
   role: SessionRole;
-  /** WorkerRecord 的 readonly；项目经理一律 false。 */
-  readonly: boolean;
+  /**
+   * 只读 Worker 才给（claude 用自带沙箱落实只读，见 claude-readonly-settings.ts）；项目经理、普通 Worker 不给。
+   * 给了就整个换成只读档：default 模式、放行读和命令、拒绝编辑工具、claude 自带沙箱，不再看 osSandboxed（这时进程不包外层沙箱，嵌套会 exit 71）。
+   */
+  readonly?: SessionReadonlyInput;
   /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
   hubSock: string;
   /** 数据目录 state/ 的真实路径：Worker 的 stateDirDenyRule 用。 */
   stateDir: string;
   /**
    * Worker 的进程会包进 OS 沙箱（daemon/driver/write-scope.ts 的 osSandboxAvailable，macOS 上是）：
-   * 是的话关掉 claude 自带的沙箱（sandbox.enabled: false）——macOS 沙箱不能嵌套，开着 Bash 全部 exit 71。
+   * 是的话关掉 claude 自带的沙箱（sandbox.enabled: false）——macOS 沙箱不能嵌套，开着 Bash 全部 exit 71。只读 Worker 不适用（见 readonly）。
    */
   osSandboxed: boolean;
-  /** 本项目的 worktrees/<项目编号>/ 真实路径；只读档放行读它。没有项目就不传。 */
-  projectWorktreesDir?: string;
 }
 
 /** --settings 文件的内容。 */
 export interface SessionSettings {
   permissions: { defaultMode: PermissionMode; allow: string[]; deny?: string[] };
-  sandbox: { enabled?: false; network: { allowUnixSockets: string[] } };
+  sandbox: PlainSandbox | ClaudeReadonlySandbox;
   autoMemoryEnabled?: false;
+}
+
+/** 项目经理、普通 Worker 的 sandbox 段：只放行 hub.sock；包进 OS 沙箱的 Worker 再加 enabled: false。 */
+interface PlainSandbox {
+  enabled?: false;
+  network: { allowUnixSockets: string[] };
 }
 
 /**
  * 每个会话的 --settings 文件内容（M3 起取代 M2 的 buildHubSettings，那个已删）。用户全局 ~/.claude 的设置照常生效。
- * - 两种角色都有：默认档（readonly 时换成只读档，并多放行 readonlyAllowRules）、放行 hub、放行 hub.sock；
+ * - 两种角色都有：默认档、放行 hub、放行 hub.sock；
  * - Worker 再加 autoMemoryEnabled: false 和 state/ 的拒绝规则（兜底，见 stateDirDenyRule）。数据目录不能写主要不靠设置文件：
  *   权限规则管不住 shell，由驱动层按 LaunchFiles.writeScope 落实（daemon/driver/write-scope.ts）；包进 OS 沙箱的 Worker
- *   再写 sandbox.enabled: false（--settings 压过用户和项目设置，用户自己开了 claude 的沙箱也关掉）。
+ *   再写 sandbox.enabled: false（--settings 压过用户和项目设置，用户自己开了 claude 的沙箱也关掉）；
+ * - 只读 Worker（readonly）：权限和沙箱都换成 claude-readonly-settings.ts 翻译出来的（hub 的放行规则照加），不写 state/ 的规则（编辑工具本来就全拒）。
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
-  const settings: SessionSettings = {
-    permissions: { defaultMode: input.readonly ? READONLY_PERMISSION_MODE : DEFAULT_PERMISSION_MODE, allow: [HUB_ALLOW_RULE] },
-    sandbox: { network: { allowUnixSockets: [input.hubSock] } },
-  };
   if (input.readonly) {
-    settings.permissions.allow.push(...readonlyAllowRules(input.projectWorktreesDir));
-    settings.permissions.deny = [...READONLY_GIT_DENY_RULES];
+    const { allow, deny } = claudeReadonlyPermissions(input.readonly.policy);
+    return {
+      permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [HUB_ALLOW_RULE, ...allow], deny },
+      sandbox: claudeReadonlySandbox(input.readonly.policy, { denyWrite: input.readonly.denyWrite, hubSock: input.hubSock }),
+      autoMemoryEnabled: false,
+    };
   }
+  const sandbox: PlainSandbox = { network: { allowUnixSockets: [input.hubSock] } };
+  const settings: SessionSettings = { permissions: { defaultMode: DEFAULT_PERMISSION_MODE, allow: [HUB_ALLOW_RULE] }, sandbox };
   // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则；数据目录的保护在 writeScope（见上）
   if (input.role === "worker") {
     settings.permissions.deny = [...(settings.permissions.deny ?? []), stateDirDenyRule(input.stateDir)];
     settings.autoMemoryEnabled = false;
-    if (input.osSandboxed) settings.sandbox.enabled = false;
+    if (input.osSandboxed) sandbox.enabled = false;
   }
   return settings;
 }
@@ -143,7 +118,7 @@ export function sessionEnv(role: SessionRole): Readonly<Record<string, string>> 
  * - Edit(//**) 拒绝：编辑工具（Edit、Write、NotebookEdit）哪里都写不了，压过任何放行规则。
  * 都在 claude 进程里管、不靠 OS 沙箱，Linux 上一样。剩下的缺口：钩子没跑、且用户或项目设置里放行了会写文件的 shell 命令。
  */
-export const FORK_PERMISSION_MODE = READONLY_PERMISSION_MODE;
+export const FORK_PERMISSION_MODE = "dontAsk";
 /** 只写带范围的拒绝规则：整工具的规则会把工具从清单里拿掉，缓存就没了（见上）。 */
 export const FORK_DENY_RULES: readonly string[] = ["Edit(//**)"];
 /** 拦下所有工具调用的 PreToolUse 钩子：退出码 2 是拦下，标准错误的话交给模型。 */

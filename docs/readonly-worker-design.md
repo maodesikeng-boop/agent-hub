@@ -1,6 +1,6 @@
 # 只读 Worker 统一方案（三家 + 连接器）
 
-状态：方案，第 8 节用户已拍板（2026-11-07）。W1 统一定义已做（Worker #132：`src/shared/readonly-policy.ts`、`LaunchFiles.readonly`），S1–S6 实测脚本在 `experiments/readonly/smoke.py`（7.3 节），其余 W2–W6 待做。调研和实测来自 Worker #110。
+状态：方案，第 8 节用户已拍板（2026-11-07）。W1 统一定义已做（Worker #132：`src/shared/readonly-policy.ts`、`LaunchFiles.readonly`），S1–S6 实测脚本在 `experiments/readonly/smoke.py`（7.3 节），W2 claude 已做（Worker #137，见 7.4），其余 W3–W6 待做。调研和实测来自 Worker #110。
 实测脚本在 `experiments/readonly/`（测试目录 `/tmp/ro110`，用完已清掉）。
 
 ## 0. 目标和结论
@@ -277,6 +277,19 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 | S6 | 只读 Worker 跑 `hub` 命令照常（hub.sock 在只读沙箱里能连） | `hub status` 成功 |
 
 S1–S3 任何一条不过：claude 改 `writeGuard: "outer"`，跟 agy 用同一份只读 profile（4.1 表里 claude 那行），权限部分不变。
+
+### 7.4 W2 claude 做完了（Worker #137）
+
+实测（2026-11-07，沙箱外）：S1、S3、S6 通过；S2 只有 `gh` 不过：`tls: failed to verify certificate: x509: OSStatus -26276`，curl、git 正常。
+**gh 的原因和修法**：macOS 上 Go 程序（gh、gcloud、terraform、kubectl）用系统证书服务验 TLS 证书，要 mach 服务 `com.apple.trustd.agent`；claude 自带沙箱默认不放行它，curl、git 用自带的证书库所以没事。claude 的设置项 `sandbox.enableWeakerNetworkIsolation: true` 就是放行它（claude 2.1.314 的设置说明和沙箱 profile 里都有：`(allow mach-lookup (global-name "com.apple.trustd.agent"))`），不用整体关沙箱。代价（claude 文档的话）：经 trustd 多一个外发口子；只读 Worker 本来就能联网，不多担风险。**这次在 Worker 沙箱里测不了（嵌套 exit 71），改完要项目经理在沙箱外重跑 S2（`--only S2`）确认 gh 通了。**
+
+做了什么：
+- `src/shared/claude-readonly-settings.ts`（新）：claude 的翻译，只读档的权限规则和沙箱段都在这一个文件（default 档；放行 Read/Glob/Grep/Bash/WebSearch/WebFetch；拒绝 Edit/Write/NotebookEdit、读密钥、手动排除的连接器；沙箱 enabled + failIfUnavailable + 不许绕出 + denyWrite 盖住工作目录和 add-dir + denyRead 密钥 + 域名全放 + enableWeakerNetworkIsolation）。
+- `policy.ts`：**删**了 `READONLY_PERMISSION_MODE`（dontAsk）、`READONLY_WEB_ALLOW_RULES`、`READONLY_GIT_ALLOW_RULES`、`READONLY_GIT_DENY_RULES`、`READONLY_CONNECTOR_TOOLS`、`readonlyAllowRules`；`buildSessionSettings` 的 `readonly` 参数从布尔改成 `{ policy, denyWrite }`（给了就整个换成只读翻译）。
+- `launch.ts`：claude 的只读 Worker 设置文件用只读翻译，**不再给 writeScope**（进程不包外层沙箱，macOS 沙箱不能嵌套）；agy、codex 不变。
+- 驱动：`driver/claude-readonly.ts` 的 `ClaudeReadonlyGate`——`--permission-prompt-tool stdio` 下回 `can_use_tool`：连接器工具按 `mcp_status` 的 annotations 和策略（`connectorToolAllowed`）判断，手动补充/排除不等 annotations 直接答，别的工具拒并给中文原因；`mcp_status` 5 秒不回按没有 annotations 处理。
+- 注意：`.config/gh` 在默认禁读清单里（W1），只读 Worker 的 `gh auth token --user …` 读不到 `hosts.yml`（令牌在钥匙串里，hosts.yml 只记用户名），**带登录的 gh 在只读 Worker 里可能不能用**，没登录的（`gh api rate_limit`、公开仓库）能用。要不要把 `.config/gh` 挪出清单（或只禁 hosts.yml 里有明文令牌的情况）等用户定。
+- 冒烟：S1–S3、S6 跑 `python3 experiments/readonly/smoke.py --only S1,S2,S3,S6`（脚本的 claude 设置已跟生产一致：加了 enableWeakerNetworkIsolation，S3 的绝对路径通配换成生产用的 `/**/.env` 写法）。
 
 ## 8. 已拍板（用户，2026-11-07）
 
