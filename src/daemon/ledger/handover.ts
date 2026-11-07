@@ -48,6 +48,8 @@ export interface HandoverOptions {
   autoRenew?: { contextTokens?: number; idleMs?: number; timeoutMs?: number };
   /** 写守护进程日志（自动换新会话试满了次数）；默认不写。 */
   log?: (line: string) => void;
+  /** 有交接可以领了（shared/handover.ts 的 claimHandover）：守护进程接到跑腿的 wake。默认什么都不做。 */
+  onHandoverClaimable?: () => void;
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
