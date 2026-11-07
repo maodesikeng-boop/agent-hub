@@ -22,7 +22,10 @@ import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
 
 export const API_PATHS = {
-  /** GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。 */
+  /**
+   * GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。
+   * 联机 P6 起：令牌只当主钥匙，登录后发随机的会话 cookie（每个浏览器一条，见 browserSessions）；老 cookie 失效一次，重点一次登录链接。
+   */
   auth: "/auth",
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
@@ -76,8 +79,48 @@ export const API_PATHS = {
   commands: (conversationId: ConversationId) => `/api/conversations/${conversationId}/commands`,
   /** GET ?q=<搜索词> → FilesResponse：输入框“@”列表，只在这个对话的工作文件夹里搜文件（不含文件夹）。对话不存在 → 404。 */
   files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
-  /** WebSocket，?since=<seq>。 */
+  /** WebSocket，?since=<seq>。服务端 → 网页是 WsServerMessage；网页 → 服务端是 WsClientMessage（联机 P4 起）。 */
   ws: "/api/ws",
+
+  // ---- 联机（docs/multi-device-design.md）：浏览器 → 入口 ----
+  // 别的设备的接口都是 devicePath(id, 上面的路径)，入口原样转发（HTTP 和 WebSocket）；对方连不上 → 502 code device_offline，
+  // 设备编号不认识 → 404 code not_found。下面这些是入口自己的，不转发。
+
+  /** GET → DevicesResponse（含本机，本机排第一）；POST（AddDeviceRequest：对方网址 + 对方给的邀请码）→ 201 DeviceInfo，配对失败回中文原因。 */
+  devices: "/api/devices",
+  /** PATCH（RenameDeviceRequest）→ DeviceInfo；DELETE → 204：删本机记录并通知对方删（对方离线只删本机）。不能删本机（400）。 */
+  device: (id: DeviceId) => `/api/devices/${id}`,
+  /** POST，没有请求体 → 201 DeviceInviteResponse：邀请别的设备加入本机（邀请码 128 位随机、10 分钟、只能用一次）。 */
+  deviceInvites: "/api/devices/invites",
+
+  // ---- 联机：设备 → 设备（带 Authorization: Bearer <设备令牌>、PEER_DEVICE_HEADER；只经 tailscale serve 进来，还要过身份头） ----
+
+  /** POST（PeerPairRequest，不带 Bearer，凭邀请码）→ PeerPairResponse。主人登录名和本机不一致、邀请码不对 / 过期 / 用过 → 403；错 5 次锁定。 */
+  peerPair: "/api/peer/pair",
+  /** PUT（PeerDeviceListRequest）→ 204：已配对的设备互相同步设备清单（只有谁是谁、网址，不带令牌）。 */
+  peerDevices: "/api/peer/devices",
+  /** POST，没有请求体 → 204：对方把本机移除了，本机也删掉它的记录。 */
+  peerUnpair: "/api/peer/unpair",
+
+  // ---- 联机：推送（只在“提醒设备”上用，手机 PWA 装在哪个来源就是哪台） ----
+
+  /** GET → PushKeyResponse：VAPID 公钥，网页订阅时用。 */
+  pushKey: "/api/push/key",
+  /** POST（PushSubscribeRequest，就是浏览器 PushSubscription.toJSON() 的样子）→ 204。同一个 endpoint 重复订阅是覆盖。 */
+  pushSubscriptions: "/api/push/subscriptions",
+  /** POST（PushUnsubscribeRequest）→ 204。没有这条订阅也是 204。 */
+  pushUnsubscribe: "/api/push/unsubscribe",
+
+  // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
+
+  /** GET → BrowserSessionsResponse。 */
+  browserSessions: "/api/sessions",
+  /** DELETE → 204：退出这一个浏览器（可以是自己）。 */
+  browserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}`,
+  /** POST，没有请求体 → 204：全部退出 = 换主钥匙（state/ui-token）+ 清所有会话，包括自己。 */
+  logoutAll: "/api/sessions/logout-all",
+  /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
+  loginLinks: "/api/login-links",
 } as const;
 
 export interface ConversationSnapshot {
@@ -141,8 +184,11 @@ export interface PostMessageResponse {
  */
 export interface ApiErrorBody {
   error: string;
-  code?: LedgerErrorCode;
+  code?: ApiErrorCode;
 }
+
+/** 账本的错误码，加上联机的：device_offline = 入口转发时连不上那台设备（502），网页据此显示离线，不弹错。 */
+export type ApiErrorCode = LedgerErrorCode | "device_offline";
 
 // ---- M2：项目经理、性格设定、重试 ----
 // 请求体由界面服务按 JSON Schema 校验（多余字段拒绝），长度上限见 limits.ts；业务校验在账本。
@@ -316,3 +362,161 @@ export interface ResyncMessage {
 }
 
 export type WsServerMessage = Change | ResyncMessage;
+
+// ---- WebSocket：网页 → 服务端（联机 P4） ----
+
+/**
+ * 网页每 30 秒（和切前台 / 后台时）报一次：在不在前台、正在看哪台设备的哪个对话。提醒设备据此跳过“正在看着”的推送。
+ * 发给入口自己的那条 WebSocket（本机的），不发给转发的。deviceId 是 null = 入口本机。
+ */
+export interface PresenceMessage {
+  type: "presence";
+  visible: boolean;
+  deviceId: DeviceId | null;
+  conversationId: ConversationId | null;
+}
+
+export type WsClientMessage = PresenceMessage;
+
+// ---- 联机：设备（docs/multi-device-design.md 第 3.2、4.1 节） ----
+
+/**
+ * 设备编号：每台第一次启动时生成的随机 UUID（小写，存 state/device.json），不会变。
+ * 别的编号（对话、项目经理、seq）都是各台本机自增的，多设备时会撞号：网页里的键都要带设备编号。
+ */
+export type DeviceId = string;
+
+const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** 是不是合法的设备编号。入口转发前先查，挡住 /d/../ 之类的路径。 */
+export function isDeviceId(value: string): value is DeviceId {
+  return DEVICE_ID_PATTERN.test(value);
+}
+
+/** 转发前缀：浏览器访问别的设备的接口用 /d/<设备编号>/api/...。 */
+export const DEVICE_PROXY_PREFIX = "/d";
+
+/** 某台设备上的接口路径。device 是 null（入口本机）就是原路径。path 是 API_PATHS 里的路径，以 / 开头。 */
+export function devicePath(device: DeviceId | null, path: string): string {
+  return device === null ? path : `${DEVICE_PROXY_PREFIX}/${device}${path}`;
+}
+
+/** tailscale serve 放进请求头的请求者登录名（serve 会删掉客户端自己带的同名头）。只有经 serve 进来的请求才有。 */
+export const TAILSCALE_USER_LOGIN_HEADER = "tailscale-user-login";
+
+/** 设备 → 设备的请求带上自己的设备编号（和 Bearer 设备令牌一起查）。 */
+export const PEER_DEVICE_HEADER = "x-agent-hub-device";
+
+/** GET /api/devices 里的一台。 */
+export interface DeviceInfo {
+  id: DeviceId;
+  /** 默认是主机名，能改。 */
+  name: string;
+  /** 那台的 process.platform（darwin、linux……）。能做什么看那台 /api/state 的 server，不看这个。 */
+  platform: string;
+  /** 是不是入口本机。 */
+  self: boolean;
+  /** 那台的 tailnet 网址（https://<机器>.<tailnet>.ts.net），没有 Tailscale 的本机是 null。 */
+  url: string | null;
+}
+
+/** GET /api/devices。在线状态不在这里：由网页到这台设备的 WebSocket 状态得出。 */
+export interface DevicesResponse {
+  devices: DeviceInfo[];
+}
+
+/** POST /api/devices：在已有设备上添加新设备。url 是新设备的 tailnet 网址，code 是新设备给的邀请码。 */
+export interface AddDeviceRequest {
+  url: string;
+  code: string;
+}
+
+/** PATCH /api/devices/:id。name 按 normalizeName。 */
+export interface RenameDeviceRequest {
+  name: string;
+}
+
+/** POST /api/devices/invites → 201。url 是本机的 tailnet 网址（没有 Tailscale 时 null，网页提示先装）；expiresAt 是毫秒时间戳。 */
+export interface DeviceInviteResponse {
+  code: string;
+  url: string | null;
+  expiresAt: number;
+}
+
+/** 设备之间互相告知的“谁是谁”（不带令牌）。 */
+export interface PeerDevice {
+  id: DeviceId;
+  name: string;
+  platform: string;
+  url: string;
+}
+
+/** POST /api/peer/pair：已有设备带着自己的身份、邀请码，和发给新设备用的设备令牌（32 字节随机，base64url）。 */
+export interface PeerPairRequest {
+  inviteCode: string;
+  device: PeerDevice;
+  token: string;
+}
+
+/** 新设备回自己的身份和发给对方用的设备令牌。双方都只存对方令牌的 sha256。 */
+export interface PeerPairResponse {
+  device: PeerDevice;
+  token: string;
+}
+
+/** PUT /api/peer/devices：发送方已配对的全部设备（含它自己）。 */
+export interface PeerDeviceListRequest {
+  devices: PeerDevice[];
+}
+
+// ---- 联机：推送（第 6.2 节） ----
+
+/** GET /api/push/key。 */
+export interface PushKeyResponse {
+  publicKey: string;
+}
+
+/** POST /api/push/subscriptions。 */
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
+/** POST /api/push/unsubscribe。 */
+export interface PushUnsubscribeRequest {
+  endpoint: string;
+}
+
+/**
+ * Service Worker 收到的推送内容。只带标题不带正文（用户拍板）：标题如“东京 · 项目 A：等你确定”。
+ * url：点通知打开的网址（#/d/<设备>/c/<对话>）；tag：同一个对话只留最新一条。
+ */
+export interface PushPayload {
+  title: string;
+  url: string;
+  tag: string;
+}
+
+// ---- 联机：浏览器登录（第 3.4 节） ----
+
+/** 一个已登录的浏览器。时间是毫秒时间戳。 */
+export interface BrowserSessionInfo {
+  id: string;
+  /** 登录时的 User-Agent，列表里显示成“iPhone Safari”之类。 */
+  userAgent: string;
+  createdAt: number;
+  lastSeenAt: number;
+  /** 是不是发这个请求的浏览器自己。 */
+  current: boolean;
+}
+
+/** GET /api/sessions，按最后活动从新到旧。 */
+export interface BrowserSessionsResponse {
+  sessions: BrowserSessionInfo[];
+}
+
+/** POST /api/login-links → 201。url 是入口上的完整登录链接（二维码内容），expiresAt 是毫秒时间戳。 */
+export interface LoginLinkResponse {
+  url: string;
+  expiresAt: number;
+}

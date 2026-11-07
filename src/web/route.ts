@@ -1,5 +1,7 @@
 // 网址（docs/ui-standard.md 第 16 条）：每个对话、资料页都有自己的网址，刷新后回到原来那个，能前进后退。
 // 用 # 后面的部分（守护进程只认 / 这一个页面，不用改服务端）：#/c/<对话编号>、#/w/<Worker 对话编号>、#/pm/<项目经理编号>。
+// 联机（docs/multi-device-design.md 第 4.1 节，P3 实现）：别的设备前面加 #/d/<设备编号>，如 #/d/<设备>/c/<对话>；
+// 设备编号是 shared/api.ts 的 DeviceId（isDeviceId 校验）。不带 #/d/ 的老网址当成入口本机，继续能用。
 import { useCallback, useEffect, useState } from "react";
 import type { ConversationId, PmId } from "../shared/index.ts";
 
