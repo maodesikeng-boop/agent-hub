@@ -202,6 +202,23 @@ describe("离线", () => {
     expect(within(groupHeader("Mac")).queryByText("离线")).toBeNull();
   });
 
+  it("离线设备在顶部“等你确定”汇总里的条目也变灰，在线的不变", async () => {
+    const ask = makeMessage({ id: 5, conversationId: 1, text: "要确定", meta: { needsUser: true }, dedupeKey: "ask:1:5" });
+    const fleet = new Fleet(onePm("小林", [ask]), onePm("阿青", [ask]));
+    await boot(fleet);
+    const summary = await within(nav()).findByRole("region", { name: "等你确定" });
+    await waitFor(() => expect(within(summary).getAllByRole("button")).toHaveLength(2));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    fleet.offline = true;
+    act(() => lastSocket("tokyo").drop());
+    act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 1_000));
+    const dim = (name: RegExp) => within(summary).getByRole("button", { name }).closest("[data-readonly]");
+    expect(dim(/阿青/)).toHaveAttribute("data-readonly", "true");
+    expect(dim(/阿青/)).toHaveClass("opacity-60");
+    expect(dim(/小林/)).toHaveAttribute("data-readonly", "false");
+    expect(dim(/小林/)).not.toHaveClass("opacity-60");
+  });
+
   it("从没连上过：组头写离线，进去是“还没连上这台设备”", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
     fleet.offline = true;
@@ -233,7 +250,9 @@ describe("跨设备的等你确定", () => {
     await boot(fleet);
     const summary = await within(nav()).findByRole("region", { name: "等你确定" });
     await waitFor(() => expect(within(summary).getAllByRole("button")).toHaveLength(2));
-    expect(within(summary).getByRole("button", { name: /阿青/ })).toHaveTextContent("东京");
+    // 名字旁边标出是哪台设备（组里的同名条目不标）
+    expect(within(summary).getAllByTestId("entry-device").map((e) => e.textContent)).toEqual(["Mac", "东京"]);
+    expect(within(nav()).getAllByTestId("entry-device")).toHaveLength(2);
     expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
     await userEvent.click(within(summary).getByRole("button", { name: /阿青/ }));
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);

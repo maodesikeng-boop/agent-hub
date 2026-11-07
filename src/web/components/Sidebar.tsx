@@ -37,7 +37,7 @@ function EntryButton({
   waiting: boolean;
   /** 项目经理用 hub ask 问了用户，还没回答；比“等你”更醒目，两个都有时只显示它。 */
   asking: boolean;
-  /** 跨设备的“等你”汇总里，第二行前面写是哪台设备。 */
+  /** 跨设备的“等你确定”汇总里，名字后面标是哪台设备（组里的同名条目不标）。 */
   device?: string;
   onSelect: () => void;
 }) {
@@ -62,7 +62,14 @@ function EntryButton({
       <Avatar colorKey={entry.avatarKey} size={44} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-[15px] font-medium">{entry.name}</span>
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate text-[15px] font-medium">{entry.name}</span>
+            {device && (
+              <span data-testid="entry-device" className="shrink-0 text-xs text-muted-foreground">
+                {device}
+              </span>
+            )}
+          </span>
           {tag && <span className="flex shrink-0 items-center">{tag}</span>}
         </span>
         {/* 没有消息也占一行的高度，每行一样高 */}
@@ -204,7 +211,14 @@ export function Sidebar({
               {reminded.length > 0 && (
                 <section aria-label="等你确定" className="mb-2">
                   <h2 className="flex h-8 items-center px-3 text-[13.5px] font-medium text-muted-foreground">等你确定</h2>
-                  <div className="mt-1 space-y-1">{reminded.map(({ group, entry }) => row(group, entry, group.name))}</div>
+                  <div className="mt-1 space-y-1">
+                    {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
+                    {reminded.map(({ group, entry }) => (
+                      <div key={conversationKey(group.key, entry.id)} data-readonly={isReadOnly(group.status)} className={cn(isReadOnly(group.status) && "opacity-60")}>
+                        {row(group, entry, group.name)}
+                      </div>
+                    ))}
+                  </div>
                 </section>
               )}
               {groups.map((group) => (
