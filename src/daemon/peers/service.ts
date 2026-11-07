@@ -76,9 +76,9 @@ export interface PeersOptions {
   platform?: string;
   /** 本机改名：写 state/device.json。 */
   saveName: (name: string) => void;
-  /** 本机的设备网址：https://<tailnet 名字>；没有 Tailscale 时 null（ENV_ALLOW_LOOPBACK_PEERS 时是 http://127.0.0.1:<端口>）。 */
+  /** 本机的设备网址：https://<tailnet 名字>；没有 Tailscale 时 null（测试入口认回环网址时是 http://127.0.0.1:<端口>）。 */
   selfUrl: () => string | null;
-  /** 认不认本机回环网址（ENV_ALLOW_LOOPBACK_PEERS）。 */
+  /** 认不认本机回环网址：只有测试（DaemonOptions.allowLoopbackPeers、test-helpers）开。 */
   allowLoopback: boolean;
   fetch?: typeof fetch;
   now?: () => number;
@@ -348,9 +348,17 @@ export function createPeers(opts: PeersOptions): Peers {
           "forbidden",
         );
       }
-      // 用户亲手发的邀请码：以前移除过也重新认；替别的设备要的（介绍）要求不是移除过的（发邀请码时查过，这里再查一次）
+      // 用户亲手发的邀请码：以前移除过也重新认；替别的设备要的（介绍）要求不是移除过的（发邀请码时查过，这里再查一次），
+      // 而且发起介绍的那台现在还配着
+      if (consumed.by !== "user") {
+        const { via } = consumed.by;
+        if (store.isRemoved(them.id)) throw new PeerError(403, "这台设备已经被移除了", "forbidden");
+        if (!paired().some((r) => r.id === via)) throw new PeerError(403, "介绍这台的设备已经不在了", "forbidden");
+      }
+      // 编号已经有了（配好的或没过期的待确认）：不覆盖，免得别的设备报这个编号把它的网址、令牌换掉
+      prunePending();
+      if (store.get(them.id) !== undefined) throw new PeerError(409, "这台设备已经配对过：要重新配对，先在这边把它移除", "conflict");
       if (consumed.by === "user") store.clearRemoved(them.id);
-      else if (store.isRemoved(them.id)) throw new PeerError(403, "这台设备已经被移除了", "forbidden");
       const tokenForThem = newPeerToken();
       store.put({
         id: them.id,
@@ -395,7 +403,9 @@ export function createPeers(opts: PeersOptions): Peers {
         throw invalid("deviceId 不对");
       }
       if (store.isRemoved(raw.deviceId)) throw new PeerError(403, "这台设备已经被移除了", "forbidden");
-      const invite = invites.create(raw.deviceId);
+      // 只替本机还不认得的设备要：认得的编号不发，免得已配对的设备拿它冒充那台
+      if (store.get(raw.deviceId) !== undefined) throw new PeerError(403, "这台设备已经配对过", "forbidden");
+      const invite = invites.create({ for: raw.deviceId, via: from });
       if (invite === null) throw new PeerError(403, "邀请码错太多次，已经锁住", "forbidden");
       return { code: invite.code, url: opts.selfUrl(), expiresAt: invite.expiresAt };
     },

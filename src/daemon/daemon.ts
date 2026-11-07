@@ -16,7 +16,6 @@ import {
   ENV_DEFAULT_MODEL,
   ENV_PORT,
   ENV_TAILNET_OWNER,
-  ENV_ALLOW_LOOPBACK_PEERS,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
@@ -98,6 +97,8 @@ export interface DaemonOptions {
   tailnet?: TailnetProbe;
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
   autoRenew?: LedgerOptions["autoRenew"];
+  /** 联机：认本机回环网址当设备网址（同机两个守护进程互相配对）。只给测试入口 test/e2e/loopback-daemon.ts，正式入口不传、没有环境变量开关。 */
+  allowLoopbackPeers?: boolean;
 }
 
 export interface RunningDaemon {
@@ -399,8 +400,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const tailscaleCli = tailscaleCommand({ env });
     const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
     const serveTarget = serveTargetKind({ env });
-    // 已配对的设备（state/peers.json）。本机网址：tailnet 名字；测试开关下没有 Tailscale 时用本机回环地址
-    const allowLoopbackPeers = env[ENV_ALLOW_LOOPBACK_PEERS] === "1";
+    // 已配对的设备（state/peers.json）。本机网址：tailnet 名字；测试入口下没有 Tailscale 时用本机回环地址
+    const allowLoopbackPeers = options.allowLoopbackPeers === true;
     let listeningPort: number | undefined;
     const peers = createPeers({
       file: paths.peersFile,

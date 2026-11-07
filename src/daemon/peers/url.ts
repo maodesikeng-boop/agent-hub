@@ -9,7 +9,7 @@ const DNS_LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
 /**
  * 规范化设备网址：只留 origin（小写、不带末尾斜杠）。不认的（别的域名、IP、带路径 / 参数 / 账号密码、http 的 ts.net）回 null。
- * allowLoopback：再认 http://127.0.0.1:<端口>、http://localhost:<端口>（ENV_ALLOW_LOOPBACK_PEERS）。
+ * allowLoopback：再认 http://127.0.0.1:<端口>、http://localhost:<端口>（只有测试开，见 DaemonOptions.allowLoopbackPeers）。
  */
 export function normalizePeerUrl(raw: unknown, allowLoopback: boolean): string | null {
   if (typeof raw !== "string" || raw.length > 300) return null;

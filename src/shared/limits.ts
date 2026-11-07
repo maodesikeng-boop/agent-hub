@@ -327,12 +327,6 @@ export const ENV_TAILSCALE = "AGENT_HUB_TAILSCALE";
 export const ENV_TAILNET_NAME = "AGENT_HUB_TAILNET_NAME";
 /** 联机：设备主人的 Tailscale 登录名写死。打了 tag 的设备 status 里没有主人，必须写这个，否则经 serve 的请求一律 403。 */
 export const ENV_TAILNET_OWNER = "AGENT_HUB_TAILNET_OWNER";
-/**
- * 联机（daemon/peers/）：认 http://127.0.0.1:<端口>、http://localhost:<端口> 这种本机网址当设备网址（=1 时）。
- * 只给测试、同一台机器上起两个守护进程用；平常设备网址只认 https://<机器>.<tailnet>.ts.net。
- * 开了以后本机没有 tailnet 名字时，自己的网址报 http://127.0.0.1:<界面端口>。
- */
-export const ENV_ALLOW_LOOPBACK_PEERS = "AGENT_HUB_ALLOW_LOOPBACK_PEERS";
 /** 联机：serve 转发目标 unix | tcp，默认 Linux unix、macOS tcp（老版本 tailscale 不支持 unix: 时改 tcp）。 */
 export const ENV_SERVE_TARGET = "AGENT_HUB_SERVE_TARGET";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
@@ -380,8 +374,10 @@ export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;
 /** 邀请码：随机 128 位，10 分钟内、只能用一次。 */
 export const PEER_INVITE_BYTES = 16;
 export const PEER_INVITE_TTL_MS = 10 * 60_000;
-/** 邀请码错这么多次：作废所有没用掉的邀请码并锁住配对，直到用户在本机重新生成邀请码。 */
+/** 同一台来配对的设备（按它报的设备编号）邀请码错这么多次：锁住这一台，直到用户在本机重新生成邀请码。别的设备不受影响。 */
 export const PEER_INVITE_MAX_FAILURES = 5;
+/** 错误次数最多记这么多台来源，满了丢最早的（只在内存里）。 */
+export const PEER_INVITE_FAILURE_SOURCES = 1_000;
 /** 设备令牌：随机 32 字节（base64url 43 个字符）。对方的只存 sha256。 */
 export const PEER_TOKEN_BYTES = 32;
 /** 应邀配对后对方一直没来确认（它那边没存下来）：这么久后丢掉这条“待确认”。 */

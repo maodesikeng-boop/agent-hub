@@ -1,4 +1,4 @@
-// 联机端到端（docs/multi-device-design.md 第 10 节“端到端”）：两个真守护进程（端口 0、不同数据目录），本机回环网址当设备网址。
+// 联机端到端（docs/multi-device-design.md 第 10 节“端到端”）：两个真守护进程（端口 0、不同数据目录），本机回环网址当设备网址（测试入口 LOOPBACK_MAIN）。
 // 走网页“设置 → 设备”用的那几个接口：邀请、添加、改名、移除；经入口给第二台发消息、看到回复；第二台停掉 → 离线；
 // 再起来（换了端口）→ 它上线时同步过来新网址，经入口自动恢复、带 since 补齐。
 import { readFileSync } from "node:fs";
@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   API_PATHS,
-  ENV_ALLOW_LOOPBACK_PEERS,
   PEER_DEVICE_HEADER,
   devicePath,
   type DeviceInfo,
@@ -15,9 +14,7 @@ import {
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
-import { Client, agentTexts, makeEnv, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
-
-const LOOPBACK = { [ENV_ALLOW_LOOPBACK_PEERS]: "1" };
+import { Client, LOOPBACK_MAIN, agentTexts, makeEnv, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
 let envs: E2eEnv[] = [];
 afterEach(async () => {
@@ -26,7 +23,7 @@ afterEach(async () => {
 });
 
 async function boot(env: E2eEnv) {
-  const daemon = await env.start({ env: LOOPBACK });
+  const daemon = await env.start({ main: LOOPBACK_MAIN });
   const client = await Client.login(daemon);
   const device = JSON.parse(readFileSync(join(env.home, "state", "device.json"), "utf8")) as { id: string; name: string };
   return { daemon, client, id: device.id };
@@ -64,6 +61,20 @@ async function remoteWs(client: Client, deviceId: string, since: number) {
   });
   return { messages, closed, close: () => socket.close() };
 }
+
+describe("联机：回环网址", () => {
+  it("正式入口不认回环网址：旧的环境变量开关打不开（只有测试入口能开）", async () => {
+    const env = makeEnv();
+    envs.push(env);
+    const daemon = await env.start({ env: { AGENT_HUB_ALLOW_LOOPBACK_PEERS: "1" } });
+    const client = await Client.login(daemon);
+    const invite = (await (await send(client, "POST", API_PATHS.deviceInvites)).json()) as DeviceInviteResponse;
+    expect(invite.url).toBeNull();
+    const res = await send(client, "POST", API_PATHS.devices, { url: "http://127.0.0.1:1", code: "x" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("tailnet");
+  }, 30_000);
+});
 
 describe("联机：两台守护进程", () => {
   it("配对 → 经入口聊天 → 第二台离线 → 再上线自动恢复并补齐 → 改名 → 移除", async () => {

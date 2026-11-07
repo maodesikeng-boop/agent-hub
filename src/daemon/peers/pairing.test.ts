@@ -90,8 +90,8 @@ describe("配对", () => {
     expect(b.records()).toEqual([]);
   });
 
-  it("错 5 次锁定：没用掉的邀请码也作废；用户重新生成才解锁", async () => {
-    const [a, b] = [await device(), await device()];
+  it("错 5 次只锁那一台来配对的设备：别的设备拿没用掉的邀请码照样能配；用户重新生成才解锁", async () => {
+    const [a, b, c] = [await device(), await device(), await device()];
     const good = await inviteOf(b);
     const errors: string[] = [];
     for (let i = 0; i < 5; i++) {
@@ -101,6 +101,8 @@ describe("配对", () => {
     }
     expect(errors[4]).toContain("锁住");
     expect((await a.browser(API_PATHS.devices, { method: "POST", body: { url: b.url, code: good.code } })).status).toBe(400);
+    // 锁着的那台没吃掉邀请码，别的设备不受影响
+    expect((await c.browser(API_PATHS.devices, { method: "POST", body: { url: b.url, code: good.code } })).status).toBe(201);
     const fresh = await inviteOf(b);
     expect((await a.browser(API_PATHS.devices, { method: "POST", body: { url: b.url, code: fresh.code } })).status).toBe(201);
   });
@@ -160,6 +162,53 @@ describe("配对", () => {
     now += PEER_PENDING_TTL_MS + 1;
     await b.browser(API_PATHS.devices);
     expect(b.records().map((r) => r.id)).toEqual([ghost.id]);
+  });
+});
+
+describe("冒充", () => {
+  it("已配对的设备不能替已有的设备要邀请码，也不能冒充已有的设备编号配对（不覆盖原记录）", async () => {
+    const [a, b, x] = [await device({ name: "a" }), await device({ name: "b" }), await device({ name: "x" })];
+    await pair(a, x);
+    await pair(b, x);
+    await settle([a, b, x]);
+    const aToX = a.records().find((r) => r.id === x.id)!.outboundToken;
+    const bAtX = () => x.records().find((r) => r.id === b.id);
+    const before = bAtX();
+    expect(before?.state).toBe("paired");
+
+    // A 替 B（X 已经认得的）要介绍用的邀请码：拒绝
+    const intro = await asPeer(x, API_PATHS.peerInvites, a.id, aToX, { method: "POST", body: { deviceId: b.id } });
+    expect(intro.status).toBe(403);
+
+    // 就算拿到用户发的邀请码，用 B 的编号、A 的网址和令牌来配：拒绝，不覆盖
+    const invite = await inviteOf(x);
+    const fake = { id: b.id, name: "fake", platform: process.platform, url: a.url };
+    const res = await fetch(x.url + API_PATHS.peerPair, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ inviteCode: invite.code, device: fake, token: newPeerToken() }),
+    });
+    expect(res.status).toBe(409);
+    expect(bAtX()).toEqual(before);
+  });
+
+  it("介绍用的邀请码绑定发起介绍的设备：它被移除后作废", async () => {
+    const [a, x] = [await device(), await device()];
+    await pair(a, x);
+    await settle([a, x]);
+    const aToX = a.records()[0]!.outboundToken;
+    const newcomer = { id: crypto.randomUUID(), name: "c", platform: process.platform, url: "http://127.0.0.1:1" };
+    const intro = await asPeer(x, API_PATHS.peerInvites, a.id, aToX, { method: "POST", body: { deviceId: newcomer.id } });
+    expect(intro.status).toBe(201);
+    const { code } = (await intro.json()) as { code: string };
+    expect((await x.browser(API_PATHS.device(a.id), { method: "DELETE" })).status).toBe(204);
+    const res = await fetch(x.url + API_PATHS.peerPair, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ inviteCode: code, device: newcomer, token: newPeerToken() }),
+    });
+    expect(res.status).toBe(403);
+    expect(x.records().map((r) => r.id)).not.toContain(newcomer.id);
   });
 });
 
