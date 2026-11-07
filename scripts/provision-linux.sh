@@ -19,9 +19,8 @@
 set -euo pipefail
 
 # ───────────── 可调的值（集中在这里）─────────────
-# 部署哪个版本。PR #112（Linux 兼容）还没合并，main 还不兼容 Linux，所以现在用它的分支。
-# TODO：#112 合并后把它改成 origin/main，之后以 main 为准。
-DEFAULT_REF="origin/hub/102-linux-兼容-所有厂商"
+# 部署哪个版本：以 main 为准（本机要先 git fetch origin）。
+DEFAULT_REF="origin/main"
 # 服务器上的界面端口。不用默认的 4317：Mac 上的守护进程占着它，而 ssh -L 要求本机端口 = 服务器端口。
 DEFAULT_PORT=4318
 SWAP_SIZE_GB=4
