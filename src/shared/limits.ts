@@ -171,6 +171,12 @@ export const IDLE_CLOSE_MS = 10 * 60_000;
  * 定 4 小时：等 CI、冒烟、构建这类事一般几十分钟，偶尔一两个小时；4 小时还没结束基本是卡死了，关掉后下次发消息 --resume 就行。
  */
 export const BACKGROUND_TASKS_HOLD_MAX_MS = 4 * 60 * 60_000;
+/**
+ * Worker 的会话有后台命令时最多等多久（LaunchFiles.backgroundHoldMaxMs，比上面的短）：Worker 有后台命令时一轮结束不汇报，
+ * 等命令跑完它被叫醒、真做完再汇报（ledger/workers.ts），项目经理一直在等。到点驱动层关进程（后台命令一起停），账本照常汇报并说明。
+ * 定 150 分钟：claude 自己给后台命令的上限最长 2 小时（2.1.314 实测，到点它会停掉命令并叫醒 agent），正常走不到这里，这是它没停时的兜底。
+ */
+export const WORKER_BACKGROUND_HOLD_MAX_MS = 150 * 60_000;
 /** 关机时最多等 10 秒，剩下的强制结束。 */
 export const SHUTDOWN_GRACE_MS = 10_000;
 

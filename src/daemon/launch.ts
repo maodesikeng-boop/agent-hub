@@ -9,7 +9,7 @@
 // write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
@@ -82,6 +82,8 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
+      // Worker 有后台命令时这一轮不汇报、项目经理在等，兜底比项目经理的短（limits.ts）
+      ...(role === "worker" ? { backgroundHoldMaxMs: WORKER_BACKGROUND_HOLD_MAX_MS } : {}),
     };
   };
 }

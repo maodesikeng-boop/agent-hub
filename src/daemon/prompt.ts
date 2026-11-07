@@ -1,7 +1,7 @@
 // 提示词（设计第 7.2 节）：buildLaunchPrompt 按会话的角色拼 prompt.md。
 // - 项目经理（结构照参考稿）：角色与环境、项目、默认做法（模式）、怎么记事情、怎么带 Worker、hub 用法（软件定的，agent 改不了）
 //   + 它的项目和文件夹（11-03 起一个项目经理只管一个项目）+ 性格设定（最后）+（按情况）“先读 AGENTS.md”；
-// - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、Worker 的规矩、只有 hub status 的用法。
+// - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、Worker 的规矩（含按厂商写的长命令怎么等）、只有 hub status 的用法。
 // 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createLaunchPreparer。命令名、产品名用 shared/names.ts 的。
 //
 // 给 agent 看的话不止这里，改口径时一起看：
@@ -55,7 +55,7 @@ export function needsAgentsNote(cwd: string): boolean {
 // 提示词的结构和措辞照用户给的参考稿（11-05，基本照搬，保持它的长度和粒度）：角色与环境 → 你的项目 → 怎么干活（模式）→ 怎么记事情 → 怎么带 Worker → 系统命令 → 性格设定。
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
-/** 长命令放后台（只给项目经理，Worker 不加；VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
+/** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
 export const PM_BACKGROUND_COMMAND_NOTE =
   "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。";
 
@@ -253,6 +253,22 @@ export const WORKER_RULES = `# 你的规矩
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
 - 不要用厂商自带的子代理（如 \`Agent\`、\`Task\`、\`spawn_agent\` 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。`;
 
+/**
+ * Worker 的长命令（VENDOR_SPECS[厂商].backgroundCommands 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
+ * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
+ */
+export const WORKER_BACKGROUND_COMMAND_NOTE =
+  "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。";
+
+/** 不能把命令放后台叫醒自己的厂商（backgroundCommands 为 false）：一条命令等到底，别轮询，也别放后台（跑完没人叫醒它，汇报会早发）。 */
+export const WORKER_BLOCKING_WAIT_NOTE =
+  "- **等长命令用一条命令等到底**：等 CI 之类，用一条会一直等到结束的命令（如 `gh pr checks <PR 号> --watch`），不要 sleep 后反复查状态，每查一次都要多花一步；也不要把命令放后台（跑完不会叫醒你）。";
+
+/** “你的规矩”：通用的几条，加上按厂商能不能放后台叫醒写的长命令那一条。 */
+function workerRulesSection(backgroundCommands: boolean): string {
+  return `${WORKER_RULES}\n${backgroundCommands ? WORKER_BACKGROUND_COMMAND_NOTE : WORKER_BLOCKING_WAIT_NOTE}`;
+}
+
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
 
@@ -306,12 +322,13 @@ ${WORKER_REPORT_FORMAT}
 export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
   const { worker, project } = ctx;
   if (worker === null || project === null) throw new Error(`session ${ctx.sessionId} is a worker session without worker or project`);
+  const backgroundCommands = VENDOR_SPECS[ctx.vendor ?? DEFAULT_AGENT_VENDOR]?.backgroundCommands ?? true;
   const parts = [
     workerRoleSection(ctx, worker),
     `# 你的任务\n\n${worker.task.trim()}`,
     workerWorkspaceSection(project, worker),
     workerReportSection(),
-    WORKER_RULES,
+    workerRulesSection(backgroundCommands),
     WORKER_HUB_USAGE_PROMPT,
   ];
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);

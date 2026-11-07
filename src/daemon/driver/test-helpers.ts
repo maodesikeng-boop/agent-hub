@@ -88,6 +88,8 @@ export interface Harness {
     perSession: Map<SessionId, { fingerprint?: string; env?: Record<string, string> }>;
     /** 给了就当 LaunchFiles.writeScope（Worker 的可写范围）。 */
     writeScope: WriteScope | null;
+    /** 给了就当 LaunchFiles.backgroundHoldMaxMs（这个会话有后台任务时最多不关多久）。 */
+    backgroundHoldMaxMs: number | null;
   };
   /** prepareLaunch 被调了几次（按会话）。 */
   prepareCalls: Map<SessionId, number>;
@@ -111,7 +113,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
   const store = new MemorySessionStore();
-  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map(), writeScope: null };
+  const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map(), writeScope: null, backgroundHoldMaxMs: null };
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
     claudePath: FAKE_CLAUDE,
@@ -129,6 +131,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       };
       if (launch.personaRevision) files.personaRevision = launch.personaRevision();
       if (launch.writeScope) files.writeScope = launch.writeScope;
+      if (launch.backgroundHoldMaxMs !== null) files.backgroundHoldMaxMs = launch.backgroundHoldMaxMs;
       if (launch.settings) {
         files.settingsFile = join(launchDir, "settings.json");
         writeFileSync(files.settingsFile, "{}");

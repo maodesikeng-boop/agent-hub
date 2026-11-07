@@ -11,7 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
-import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS } from "../../shared/limits.ts";
+import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
@@ -482,6 +482,8 @@ describe("Worker 的启动上下文", () => {
       pm: { id: lin.pmId, name: "小林", mode: "manage_only", persona: "" },
       project: { id: projectId, name: "foo", description: null, mainFolder: main, otherFolders: [] },
       worker,
+      // Worker 自己那家（提示词按它写长命令怎么等）
+      vendor: "claude",
     });
     expect(ledger.getLaunchContext(lin.sessionId)).toMatchObject({ role: "pm", worker: null });
   });
@@ -1826,5 +1828,149 @@ describe("claude 自己开的一轮（后台任务完成）", () => {
     ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
     expect(messagesIn(lin.conversationId).at(-1)).toMatchObject({ sender: "agent", kind: "text", text: "Worker 做完了" });
     expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started"]);
+  });
+});
+
+describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑完、它真结束一轮再汇报）", () => {
+  let worker: WorkerRecord;
+  let sessionId: SessionId;
+  let stops: SessionId[];
+  beforeEach(() => {
+    worker = start().data.worker;
+    sessionId = workerSessionId(worker.id);
+    stops = [];
+    ledger.onStopRequested(({ sessionId: id }) => stops.push(id));
+    enqueued = [];
+  });
+
+  const reports = () => workerLines().filter((m) => ["report", "turn_failed"].includes(workerEventOf(m)?.event ?? ""));
+  const activity = () => ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity;
+  const background = (count: number) => ledger.applyDriverEvent(sessionId, { type: "background.changed", count, at: now });
+  /** 后台命令跑完、claude 自己开的那一轮。 */
+  const wakeTurn = (uuid: string, text: string | null, end: Partial<Extract<DriverEvent, { type: "turn.ended" }>> = {}) => {
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    if (text !== null) ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid, text, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now, ...end });
+  };
+  /** 任务说明这一轮：中途放了一个后台命令，结束时它还在跑。 */
+  const firstTurnWithBackground = (text = "已推送，放后台等 CI。") => {
+    const id = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [id], at: now });
+    background(1);
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "first", text, at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 10, at: now });
+  };
+
+  it("一轮结束时还有后台命令：不汇报，会话显示在等后台命令；跑完它自己开的一轮结束才汇报一次（那一轮最后的文字）", () => {
+    firstTurnWithBackground();
+    expect(reports()).toEqual([]);
+    expect(enqueued.filter((a) => a.type === "session.send")).toEqual([]);
+    expect(activity()).toBe("background");
+    background(0);
+    expect(activity()).toBe("background");
+    wakeTurn("wake", report("做完了", "CI 过了"));
+    expect(reports().map((m) => [workerEventOf(m)!.status, workerEventOf(m)!.summary])).toEqual([["done", "CI 过了"]]);
+    expect(activity()).toBe("idle");
+  });
+
+  it("叫醒的那一轮没写文字：汇报等后台命令那一轮最后的文字", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    background(0);
+    wakeTurn("wake", null);
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI"]);
+  });
+
+  it("叫醒的那一轮又放了一个后台命令：还是不汇报，等第二个也跑完", () => {
+    firstTurnWithBackground();
+    background(0);
+    ledger.applyDriverEvent(sessionId, { type: "turn.started", at: now });
+    background(1);
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(reports()).toEqual([]);
+    expect(activity()).toBe("background");
+    background(0);
+    wakeTurn("wake-2", report("做完了", "两个都好了"));
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["两个都好了"]);
+  });
+
+  it("等的时候用户直接对它说话：照常插进来（交给项目经理一行 user_message），那一轮结束也不汇报，后台命令跑完汇报一次", () => {
+    firstTurnWithBackground();
+    const said = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "u1", text: "顺便看下 README" }).messageId;
+    runTurn(worker, [said], "好的，README 看过了，CI 还在跑。");
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "user_message"]);
+    expect(activity()).toBe("background");
+    background(0);
+    wakeTurn("wake", report("做完了", "CI 过了"));
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["CI 过了"]);
+  });
+
+  it("后台命令太久没结束、进程被关（session.exited idle）：照常汇报，正文前面说明后台命令被停了", () => {
+    firstTurnWithBackground(report("有问题", "CI 卡住了"));
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "idle", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
+    const line = reports().at(-1)!;
+    expect(workerEventOf(line)).toMatchObject({ event: "report", status: "problem", summary: "CI 卡住了" });
+    const delivered = ledger.getMessage(enqueued.filter((a) => a.type === "session.send").map((a) => (a.params as { messageId: number }).messageId).at(-1)!)!;
+    expect(delivered.text).toContain(`${WORKER_BACKGROUND_HOLD_MAX_MS / 60_000} 分钟`);
+    expect(delivered.text).toContain("CI 卡住了");
+    expect(activity()).toBe("idle");
+  });
+
+  it("后台命令跑完了却没自己开一轮、空闲关进程：照常汇报，不说被停了", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    background(0);
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "idle", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI"]);
+    const delivered = ledger.getMessage(enqueued.filter((a) => a.type === "session.send").map((a) => (a.params as { messageId: number }).messageId).at(-1)!)!;
+    expect(delivered.text).not.toContain("分钟");
+  });
+
+  it("用户在等的时候点停止：通知驱动层停（它会关掉后台命令），进程退出后一行“被停止了”交给项目经理", () => {
+    firstTurnWithBackground();
+    ledger.requestStop(worker.workerConversationId);
+    expect(stops).toEqual([sessionId]);
+    expect(activity()).toBe("stopping");
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "interrupt", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
+    expect(reports().map((m) => [workerEventOf(m)!.event, workerEventOf(m)!.summary])).toEqual([["turn_failed", "被停止了"]]);
+    expect(activity()).toBe("idle");
+  });
+
+  it("进程崩了：一行 turn_failed", () => {
+    firstTurnWithBackground();
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: true, messageIds: [], at: now });
+    expect(workerEventOf(reports().at(-1)!)).toMatchObject({ event: "turn_failed" });
+  });
+
+  it("等的时候项目经理收工：打断（驱动层关掉后台命令），之后不再汇报", () => {
+    firstTurnWithBackground();
+    const result = hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    expect(result.data.worker.status).toBe("ended");
+    expect(stops).toEqual([sessionId]);
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "interrupt", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
+    expect(reports()).toEqual([]);
+    expect(workerLines().map((m) => workerEventOf(m)?.event)).toEqual(["started", "ended"]);
+  });
+
+  it("这一轮出错（有后台命令也一样）：马上一行 turn_failed，不等", () => {
+    const id = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [id], at: now });
+    background(1);
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: false, interrupted: false, messageIds: [id], durationMs: 5, at: now, error: { subtype: "error_during_execution", message: "炸了" } });
+    expect(workerEventOf(reports().at(-1)!)).toMatchObject({ event: "turn_failed" });
+    expect(activity()).toBe("idle");
+  });
+
+  it("没有后台命令（后台个数 0 或没有这个信号）：照常马上汇报", () => {
+    background(0);
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "好了"));
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["好了"]);
+    expect(activity()).toBe("idle");
+  });
+
+  it("项目经理的会话有后台命令：照旧回到空闲（不显示在等后台命令）", () => {
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.started", at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "background.changed", count: 1, at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: now });
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === lin.sessionId)?.activity).toBe("idle");
   });
 });

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
+  DEFAULT_AGENT_VENDOR,
   ALL_EFFORTS,
   HUB_COMMANDS,
   MIN_SCHEDULE_EVERY_MINUTES,
@@ -37,6 +38,8 @@ import {
   WORKER_HUB_USAGE_PROMPT,
   WORKER_READONLY_NOTE,
   WORKER_RULES,
+  WORKER_BACKGROUND_COMMAND_NOTE,
+  WORKER_BLOCKING_WAIT_NOTE,
   buildFingerprintPrompt,
   buildLaunchPrompt,
   buildPmModePrompt,
@@ -348,8 +351,41 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
     expect(workerPrompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
     expect(workerPrompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
-    expect(workerPrompt).not.toContain("长命令放后台");
-    expect(workerPrompt).not.toContain("run_in_background");
+  });
+
+  it("Worker 的长命令也按它自己那家（不是项目经理那家）的 backgroundCommands 分开写，写在“你的规矩”里，不写死厂商名", () => {
+    for (const vendor of AGENT_VENDORS) {
+      const prompt = buildWorkerPrompt({ ...workerContext(), vendor }, dir);
+      const rules = prompt.slice(prompt.indexOf("# 你的规矩"));
+      if (VENDOR_SPECS[vendor].backgroundCommands) {
+        expect(rules).toContain(WORKER_BACKGROUND_COMMAND_NOTE);
+        expect(prompt).not.toContain(WORKER_BLOCKING_WAIT_NOTE);
+      } else {
+        expect(rules).toContain(WORKER_BLOCKING_WAIT_NOTE);
+        expect(prompt).not.toContain(WORKER_BACKGROUND_COMMAND_NOTE);
+      }
+      for (const name of ["claude", "codex", "agy", "Claude", "Codex"]) {
+        expect(WORKER_BACKGROUND_COMMAND_NOTE).not.toContain(name);
+        expect(WORKER_BLOCKING_WAIT_NOTE).not.toContain(name);
+      }
+    }
+    // 没给厂商（老数据）按默认那家
+    expect(buildWorkerPrompt(workerContext(), dir)).toContain(
+      VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommands ? WORKER_BACKGROUND_COMMAND_NOTE : WORKER_BLOCKING_WAIT_NOTE,
+    );
+    for (const word of ["**长命令放后台**", "等 CI", "`run_in_background`", "这一轮先结束", "命令跑完会叫醒你", "不会交给项目经理", "不要 sleep"]) {
+      expect(WORKER_BACKGROUND_COMMAND_NOTE).toContain(word);
+    }
+    for (const word of ["一条会一直等到结束的命令", "`gh pr checks <PR 号> --watch`", "不要 sleep", "跑完不会叫醒你"]) {
+      expect(WORKER_BLOCKING_WAIT_NOTE).toContain(word);
+    }
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true };
+    try {
+      expect(buildWorkerPrompt({ ...workerContext(), vendor: "acme" as AgentVendor }, dir)).toContain(WORKER_BACKGROUND_COMMAND_NOTE);
+    } finally {
+      delete specs.acme;
+    }
   });
 });
 

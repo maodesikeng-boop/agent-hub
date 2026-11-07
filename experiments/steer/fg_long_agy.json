@@ -1,0 +1,8 @@
+[
+ {"send": "Run this shell command in the FOREGROUND and wait until it finishes (do not put it in the background, do not poll with sleep): `sleep 150; echo FGDONE`. Then reply with its output only."},
+ {"wait": "result", "nth": 1, "timeout": 420},
+ {"send": "Quote verbatim, from your own tool definitions, every sentence about timeouts, waiting, yielding or running in the background for the tool you use to run shell commands (and any tool for checking a running command's status). No commentary."},
+ {"wait": "result", "nth": 2, "timeout": 180},
+ {"close": true},
+ {"exit": 60}
+]
