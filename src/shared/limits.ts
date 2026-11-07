@@ -328,3 +328,9 @@ export const TEST_TIMEOUT_MS = 20_000;
 
 /** 选文件夹的对话框最多开多久；超了结束 osascript、当用户取消处理（用户走开了不能一直占着“同时只有一个”）。 */
 export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
+
+// ---- 额度（只能另起进程问的厂商，agy；daemon/quota/fetched-quota.ts）----
+/** 问到的额度缓存多久；用户打开额度面板时才问，期内再开直接用缓存。 */
+export const FETCHED_QUOTA_FRESH_MS = 5 * 60_000;
+/** 问一次最多等多久；超了当没有。 */
+export const FETCHED_QUOTA_TIMEOUT_MS = 30_000;

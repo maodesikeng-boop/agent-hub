@@ -25,6 +25,16 @@ export function windowKeyByMinutes(mins: number | null | undefined): QuotaWindow
   return hit ?? null;
 }
 
+/**
+ * 事件流里没有额度、只能另起一次性进程问的厂商（agy：`agy -p "/usage"`，每行 “组名 TAB 窗口名 TAB 剩余百分比 TAB 重置时间”）。
+ * groups：厂商分的组，每组在浮层里是一块；windows：窗口名（命令输出里的写法）对应的额度窗口。
+ */
+export interface FetchedQuotaSpec {
+  args: readonly string[];
+  groups: readonly { key: string; name: string; match: string }[];
+  windows: Readonly<Record<string, QuotaWindowKey>>;
+}
+
 export interface VendorSpec {
   /** 界面上的名字。 */
   label: string;
@@ -48,7 +58,7 @@ export interface VendorSpec {
    * 额度（左下角）：厂商在事件里报的用量窗口（QUOTA_WINDOWS 的键，也是 RateLimitInfo.windows 里的键），按显示顺序。
    * warningStatus：厂商自己报“快用完”时的状态值，不报的不写。没有额度数据的厂商整个不写。
    */
-  quota?: { name: string; windows: readonly QuotaWindowKey[]; warningStatus?: string };
+  quota?: { name: string; windows: readonly QuotaWindowKey[]; warningStatus?: string; fetched?: FetchedQuotaSpec };
   /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
   shortModelName?: (model: string) => string | null;
   /**
@@ -175,7 +185,20 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     modelFlag: "--model",
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
-    // 没有 quota：agy 的事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（还分“Gemini”“Claude 和 GPT”两组），不为它另起进程轮询
+    // agy 的事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（分“Gemini”“Claude 和 GPT”两组）：
+    // 只在用户打开额度面板时问一次、结果缓存（FETCHED_QUOTA_FRESH_MS），不在后台轮询
+    quota: {
+      name: "Antigravity",
+      windows: ["five_hour", "seven_day"],
+      fetched: {
+        args: ["-p", "/usage"],
+        groups: [
+          { key: "gemini", name: "Gemini", match: "Gemini Models" },
+          { key: "claude_gpt", name: "Claude 和 GPT", match: "Claude and GPT models" },
+        ],
+        windows: { "Five Hour Limit Remaining": "five_hour", "Weekly Limit Remaining": "seven_day" },
+      },
+    },
     // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B
     shortModelName: (model) => {
       const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(model);

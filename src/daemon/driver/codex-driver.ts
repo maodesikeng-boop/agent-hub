@@ -57,6 +57,7 @@ import {
   codexUserMessageText,
   combineCodexTurnText,
   decideCommandApproval,
+  decideMcpElicitation,
   decideFileChangeApproval,
   extractFileChangePaths,
   isCodexToolItemType,
@@ -1610,6 +1611,11 @@ export class CodexDriver implements Driver {
         const itemId = typeof params.itemId === "string" ? params.itemId : "";
         const decision = decideFileChangeApproval({ ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] }, context);
         proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
+        return;
+      }
+      case "mcpServer/elicitation/request": {
+        const answer = decideMcpElicitation(params, { readonly: proc.readonly, policy: proc.launchConfig.readonlyPolicy });
+        proc.child.stdin.write(buildJsonRpcResponse(id, answer) + "\n");
         return;
       }
       case "item/tool/requestUserInput": {

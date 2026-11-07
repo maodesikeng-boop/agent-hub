@@ -50,6 +50,15 @@ async function goneWithin(pid: number, ms = 3_000): Promise<boolean> {
   return !alive(pid);
 }
 
+/** 等假 claude 装好 SIGINT 处理器（argv 记得更早，那时发 SIGINT 会按默认动作把它杀掉）。 */
+async function readyPid(t: Harness): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (t.log().some((x) => x.kind === "ready")) return;
+    await realSleep(5);
+  }
+  throw new Error("fake claude never became ready");
+}
+
 /** 等假 claude 记下它起的睡眠子进程。 */
 async function childPid(t: Harness): Promise<number> {
   for (let i = 0; i < 200; i++) {
@@ -813,13 +822,26 @@ describe("进程组", () => {
       const t = harness({ driver: { interruptGraceMs: 200 }, script: { ignoreSigint: true } });
       const s = t.addSession({ status: "running" });
       const stray = strayClaude(t, s.vendorSessionId, false);
-      for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(25);
+      await readyPid(t);
       t.store.update(s.id, { pid: stray.pid! });
       await t.driver.cleanupStale();
       expect(await goneWithin(stray.pid!)).toBe(true);
       // 测试进程自己（和它同组）还活着，能走到这一行就说明没被按组杀
       expect(stray.signalCode).toBe("SIGKILL");
     });
+
+    it("加压：假 claude 一写下 argv 就进 cleanupStale，也只会被 SIGKILL（不会赶在它装好 SIGINT 处理器之前被 SIGINT 带走）", async () => {
+      for (let n = 0; n < 15; n++) {
+        const t = harness({ driver: { interruptGraceMs: 100 }, script: { ignoreSigint: true } });
+        const s = t.addSession({ status: "running" });
+        const stray = strayClaude(t, s.vendorSessionId, false);
+        await readyPid(t);
+        t.store.update(s.id, { pid: stray.pid! });
+        await t.driver.cleanupStale();
+        expect(await goneWithin(stray.pid!)).toBe(true);
+        expect(stray.signalCode, `第 ${n} 轮`).toBe("SIGKILL");
+      }
+    }, 60_000);
 
     it("pid 指到别的会话的 claude（比如别的数据目录的守护进程起的，或进程号被复用）：不碰它，只把这一行的 pid 置空", async () => {
       const t = harness({ script: { ignoreSigint: true } });

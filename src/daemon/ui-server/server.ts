@@ -33,6 +33,8 @@ import {
   sentFileMime,
   sentFilesOf,
   serverInfoFor,
+  isLoopbackAddress,
+  serverInfoForClient,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
@@ -49,6 +51,7 @@ import {
   type LedgerErrorCode,
   type ModelCatalog,
   type ModelsResponse,
+  type QuotaResponse,
   type PersonaResponse,
   type PickFolderResponse,
   type PmMode,
@@ -92,6 +95,8 @@ export interface UiServerOptions {
   logger?: boolean;
   /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
   models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
+  /** 事件流里没有额度的厂商的额度（daemon/quota/fetched-quota.ts 的 createFetchedQuota）。不给就回空。 */
+  quota?: { get(): Promise<QuotaResponse> };
   /**
    * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
    */
@@ -438,12 +443,14 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.redirect("/", 302);
     });
 
-    routes.get(API_PATHS.state, async (): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfo }));
+    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, req.ip) }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       const refresh = (req.query as { refresh?: unknown }).refresh === "1";
       return { catalogs: opts.models ? await opts.models.list({ refresh }) : AGENT_VENDORS.map((v) => bundledModelCatalog(v)) };
     });
+
+    routes.get(API_PATHS.quota, async (): Promise<QuotaResponse> => (opts.quota ? await opts.quota.get() : { groups: [] }));
 
     // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表
     routes.get("/api/conversations/:id/commands", async (req): Promise<CommandsResponse> => {
@@ -489,6 +496,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return fail(reply, 500, "没能打开这个文件");
       }
     };
+    // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
+    const requireLocal = (req: FastifyRequest): void => {
+      if (!isLoopbackAddress(req.ip)) throw new FileActionsUnavailable();
+    };
     const parseAction = (raw: unknown): FileAction | null => ((FILE_ACTIONS as readonly unknown[]).includes(raw) ? (raw as FileAction) : null);
 
     routes.post("/api/messages/:id/files/:index/:action", async (req, reply) => {
@@ -499,8 +510,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");
       const copy = resolveUpload(sentFilesDir, file.id);
       const sessionId = message.sessionId;
-      return doFileAction(reply, () =>
-        performFileAction(
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(
           act,
           {
             original: file.path,
@@ -509,8 +521,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             name: file.name,
           },
           runOpen,
-        ),
-      );
+        );
+      });
     });
 
     routes.post("/api/attachments/:id/:action", async (req, reply) => {
@@ -518,9 +530,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const act = parseAction(action);
       const attachment = resolveUpload(uploadsDir, String(id ?? ""));
       if (act === null || attachment === null) return fail(reply, 404, "not_found");
-      return doFileAction(reply, () =>
-        performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen),
-      );
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen);
+      });
     });
 
     routes.post("/api/conversations/:id/stop", async (req, reply) => {

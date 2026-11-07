@@ -86,7 +86,7 @@
 
 **派活时的开关**（只留两个）：
 
-- `--readonly`：Worker 只看不改，比如做调查、写方案。用 `dontAsk` 档：要批准的一律拒绝，读文件和只读命令照常能用（[permission-modes][cc-modes]）。
+- `--readonly`：Worker 只看不改，比如做调查、写方案。（11-07 起 claude 不再用 `dontAsk` 档，改成 default 模式 + 自带沙箱 + can_use_tool，见 docs/readonly-worker-design.md 7.4。）
 - `--model <模型>`、`--effort <思考程度>`：见第 2.4 节。
 
 开关记在 Worker 的记录上，Worker 被打回、重启都沿用。开过只读的，“已派出”那一行上会写明。不管开关怎么写，记忆规则都不去掉：`buildSessionSettings` 最后无条件加上，有一条单元测试专门测这个。

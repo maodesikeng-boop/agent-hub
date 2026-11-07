@@ -71,3 +71,80 @@ describe("界面标准：共用组件", () => {
     expect(readFileSync("package.json", "utf8")).not.toMatch(/fontsource/);
   });
 });
+
+// 第 19 条：手机和小屏。jsdom 不算媒体查询，所以这里读 styles.css / index.html 的文字，守住数字和写法。
+describe("界面标准：手机和小屏（第 19 条）", () => {
+  const css = readFileSync("src/web/styles.css", "utf8");
+  const html = readFileSync("src/web/index.html", "utf8");
+  /** 取某个 @media 块里的全部文字（花括号配对）。 */
+  const mediaBlock = (query: RegExp) => {
+    const start = query.exec(css);
+    expect(start, `styles.css 里要有 ${query}`).not.toBeNull();
+    let depth = 0;
+    for (let i = css.indexOf("{", start!.index); i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      if (css[i] === "}" && --depth === 0) return css.slice(css.indexOf("{", start!.index) + 1, i);
+    }
+    throw new Error("花括号没配上");
+  };
+
+  it("视口：viewport-fit=cover（铺到刘海下）、interactive-widget=resizes-content（键盘弹起时网页变矮）", () => {
+    const viewport = /<meta name="viewport" content="([^"]+)"/.exec(html)![1]!;
+    expect(viewport).toContain("width=device-width");
+    expect(viewport).toContain("viewport-fit=cover");
+    expect(viewport).toContain("interactive-widget=resizes-content");
+  });
+
+  it("整页高度用 100dvh，不用会被地址栏挤出屏幕的 100vh", () => {
+    expect(css).toMatch(/#root\s*\{[^}]*height:\s*100dvh/);
+    expect(css).not.toMatch(/\b100vh\b/);
+  });
+
+  it("安全区：--safe-top / --safe-bottom 一处从 env() 取，主区和左栏抽屉上下各垫一份，组件里不直接写 env()", () => {
+    expect(css).toMatch(/--safe-top:\s*env\(safe-area-inset-top, 0px\)/);
+    expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
+    expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
+    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).toMatch(/pt-\[var\(--safe-top\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[var\(--safe-top\)\]/);
+    for (const file of ["Sidebar", "Conversation", "WorkerConversation", "PmProfile", "Composer"]) {
+      expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
+    }
+  });
+
+  it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {
+    const coarse = mediaBlock(/@media \(pointer: coarse\)/);
+    expect(coarse).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*16px/);
+    // 16px 只在触屏规则里，不改电脑上的 15px
+    expect(css.replace(coarse, "")).not.toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size/);
+  });
+
+  it("触屏下 .touch-target 把可点范围撑到 44px（视觉大小不变），放在 components 层，不盖掉 absolute 之类的工具类", () => {
+    const coarse = mediaBlock(/@media \(pointer: coarse\)/);
+    expect(coarse).toMatch(/\.touch-target::after\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/@layer components\s*\{[\s\S]*\.touch-target\s*\{[^}]*position:\s*relative/);
+  });
+
+  it("按钮（含图标按钮）和待发文件的“去掉”带 touch-target；视觉尺寸仍是 36 / 32px", () => {
+    render(
+      <>
+        <Button>默认</Button>
+        <Button size="sm">小</Button>
+        <Button size="icon" aria-label="图标" />
+        <Button size="icon-sm" aria-label="小图标" />
+      </>,
+    );
+    for (const name of ["默认", "小", "图标", "小图标"]) expect(classOf(screen.getByRole("button", { name }))).toContain("touch-target");
+    expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
+    expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
+    expect(readFileSync("src/web/components/Composer.tsx", "utf8")).toMatch(/className="touch-target [^"]*"\s+onClick=\{\(\) => staging\.remove/);
+  });
+
+  it("右栏的行（一行挨一行）触屏下本身 44px 高，不用撑开的办法", () => {
+    expect(readFileSync("src/web/components/RightRail.tsx", "utf8")).toContain("pointer-coarse:min-h-11");
+  });
+
+  it("没有悬停才出现的操作", () => {
+    for (const file of ["Messages", "RightRail", "Sidebar", "Composer", "Conversation"]) {
+      expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
+    }
+  });
+});

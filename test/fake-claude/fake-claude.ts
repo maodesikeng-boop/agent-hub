@@ -23,6 +23,7 @@
 //   interrupt 带 cancel_queued 时把还没取走的取消（回执 cancelled、各出 cancelled），不带就照旧排到下一轮。
 // - 坏的输入行（不是 JSON、message.role 不是 "user"）：标准错误写一行，退出码 1。
 // - initialize 控制消息：回 control_response，带剧本里的 commands（剧本 commands）；
+// - mcp_status 控制消息：回剧本里的 mcpServers（只读 Worker 的 can_use_tool 判断用）；驱动回的 control_response（allow/deny）记进日志，不当用户消息；
 // - interrupt 控制消息：回 control_response，再出 `[Request interrupted by user]`（工具调用中是
 //   `[Request interrupted by user for tool use]`）和一条 result，进程不退出。
 // - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
@@ -128,6 +129,8 @@ export interface FakeScript {
    * 有 msg_lifecycle_v1 才按真 claude 的“一轮中途取走”和 command_lifecycle 走（见文件开头）。
    */
   capabilities?: string[];
+  /** mcp_status 控制消息的回应里的 mcpServers（形状照真 claude：[{name, status, tools:[{name, annotations:{readOnly, destructive, openWorld}}]}]，见 docs/readonly-worker-design.md 1.1）。不给回空名单。 */
+  mcpServers?: unknown[];
   /** 带 cancel_queued 的 interrupt：回执里不列 cancelled（只有 still_queued），被取消的照样各出 command_lifecycle cancelled。 */
   receiptWithoutCancelled?: boolean;
 }
@@ -160,6 +163,8 @@ export type FakeLogEntry =
   | { kind: "stdin"; pid: number; line: string }
   | { kind: "signal"; pid: number; signal: string }
   | { kind: "stdin_closed"; pid: number }
+  /** 信号处理器装好了（argv 记得早，之后到这里还有一段启动代码；要发信号的测试等这一条）。 */
+  | { kind: "ready"; pid: number }
   | { kind: "exit"; pid: number; code: number }
   | { kind: "orphan"; pid: number; orphanPid: number }
   | { kind: "child"; pid: number; childPid: number }
@@ -647,6 +652,8 @@ function onLine(line: string): void {
     request?: { subtype?: unknown; cancel_queued?: unknown };
     message?: { role?: unknown; content?: unknown };
   };
+  // 驱动回我们发的控制请求（can_use_tool 的 allow/deny）：日志里记了就够，不是用户消息
+  if (msg.type === "control_response") return;
   if (msg.type === "control_request") {
     if (script.ignoreControl) return;
     const handle = () => {
@@ -661,11 +668,13 @@ function onLine(line: string): void {
       const body =
         msg.request?.subtype === "initialize"
           ? { commands: script.commands, models: [] }
-          : cancel
-            ? script.receiptWithoutCancelled
-              ? { still_queued: [] }
-              : { still_queued: [], cancelled: queued }
-            : { still_queued: lifecycle ? queued : [] };
+          : msg.request?.subtype === "mcp_status"
+            ? { mcpServers: script.mcpServers ?? [] }
+            : cancel
+              ? script.receiptWithoutCancelled
+                ? { still_queued: [] }
+                : { still_queued: [], cancelled: queued }
+              : { still_queued: lifecycle ? queued : [] };
       emit({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: body } });
       if (cancel) for (const entry of inbox.splice(0)) emitLifecycle(entry.uuid, "cancelled");
       if (interrupting && busy) {
@@ -703,6 +712,8 @@ process.on("SIGINT", () => {
   }
   exit(0);
 });
+
+log({ kind: "ready", pid: process.pid });
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", onLine);

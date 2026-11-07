@@ -71,6 +71,7 @@ import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 import { spawnInWriteScope } from "./write-scope.ts";
+import { ClaudeReadonlyGate } from "./claude-readonly.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -145,6 +146,8 @@ interface Proc {
   personaLaunched: number | null;
   /** 有后台任务时最多不关多久：LaunchFiles.backgroundHoldMaxMs，没给用 DriverOptions.backgroundHoldMaxMs（#armIdle）。 */
   backgroundHoldMaxMs: number;
+  /** 只读 Worker（LaunchFiles.readonly）才有：回 claude 的 can_use_tool 批准请求（claude-readonly.ts）。进程退出时 dispose。 */
+  readonlyGate: ClaudeReadonlyGate | null;
   initSeen: boolean;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -989,6 +992,7 @@ export class ClaudeDriver implements Driver {
       launched: { fingerprint: files.fingerprint, cwd: row.cwd, addDirs: [...row.addDirs], model: row.model, effort: row.effort },
       personaLaunched: files.personaRevision ?? null,
       backgroundHoldMaxMs: files.backgroundHoldMaxMs ?? this.#opts.backgroundHoldMaxMs,
+      readonlyGate: files.readonly ? new ClaudeReadonlyGate(files.readonly, (line) => child.stdin.write(line + "\n")) : null,
       initSeen: false,
       capabilities: new Set(),
       stderr: "",
@@ -1022,6 +1026,7 @@ export class ClaudeDriver implements Driver {
     // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
+      proc.readonlyGate?.dispose();
       // 我们让它正常退的（end、两轮之间重启、空闲关闭、只剩后台任务时的停止）：给它原来的进程组补一个 SIGTERM，清掉它留下的子进程
       if (proc.closing === "idle" || (proc.closing === "interrupt" && !this.#busy(st))) termGroupAfterExit(child);
       const timer = setTimeout(() => {
@@ -1102,7 +1107,12 @@ export class ClaudeDriver implements Driver {
         this.#emit(st.id, { type: "rate_limit", info, at });
         return;
       }
+      case "control_request":
+        // 只读 Worker 的批准请求（--permission-prompt-tool stdio）；别的进程不会收到
+        proc.readonlyGate?.onControlRequest(obj);
+        return;
       case "control_response": {
+        if (proc.readonlyGate?.onControlResponse(obj)) return;
         const response = obj.response as { subtype?: unknown; request_id?: unknown; response?: unknown } | undefined;
         const query = typeof response?.request_id === "string" ? st.commandQueries.get(response.request_id) : undefined;
         if (query) {

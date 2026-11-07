@@ -72,7 +72,7 @@ function rig(vendor: AgentVendor, dataDir: string, parent: string, osSandboxed =
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, "你是一个测试用的 Worker，按用户的话做，回复尽量短。");
   const settingsFile = join(dir, "settings.json");
-  writeFileSync(settingsFile, JSON.stringify(buildSessionSettings({ role: "worker", readonly: false, hubSock: existsSync(hubSock) ? realpathSync.native(hubSock) : hubSock, stateDir: realpathSync.native(hubPaths.stateDir), osSandboxed })));
+  writeFileSync(settingsFile, JSON.stringify(buildSessionSettings({ role: "worker", hubSock: existsSync(hubSock) ? realpathSync.native(hubSock) : hubSock, stateDir: realpathSync.native(hubPaths.stateDir), osSandboxed })));
   const store = new MemorySessionStore();
   const row: AgentSessionRow = {
     id: 1,

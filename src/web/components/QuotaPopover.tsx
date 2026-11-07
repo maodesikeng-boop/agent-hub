@@ -1,5 +1,7 @@
+import { useState } from "react";
+import { fetchQuota } from "../client.ts";
 import { formatQuotaReset } from "../format.ts";
-import type { QuotaVendor, QuotaWindowUsage } from "../selectors.ts";
+import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
@@ -44,29 +46,40 @@ function Ring({ percent }: { percent: number }) {
 /**
  * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 按钮，小圆环 + 第一个厂商的第一个窗口的简写和已用百分比（“5h 37%”），
  * 用完写“额度用完”；快用完、用完换颜色。点开按厂商分组看每个窗口。没有数据不显示。
+ * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在（只写“额度”）；
+ * 每次点开向服务端要一次（服务端缓存 5 分钟），问不到、问失败就没有那几块。
  */
-export function QuotaPopover({ quota }: { quota: QuotaVendor[] }) {
+export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
+  const [fetched, setFetched] = useState<QuotaVendor[]>([]);
   const head = quota[0];
   const window = head?.windows[0];
-  if (!head || !window) return null;
+  if (!window && !fetchable) return null;
+  const blocks = [...quota, ...fetched];
   const exhausted = quota.some((vendor) => vendor.exhausted);
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
+  const onOpenChange = (open: boolean) => {
+    if (!open || !fetchable) return;
+    fetchQuota().then(
+      (res) => setFetched(fetchedQuotaUsage(res)),
+      () => setFetched([]),
+    );
+  };
   return (
-    <Popover>
+    <Popover onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
-          aria-label={exhausted ? "额度已用完" : `${window.label}额度已用 ${window.percent}%`}
+          aria-label={exhausted ? "额度已用完" : window ? `${window.label}额度已用 ${window.percent}%` : "额度"}
           className={cn("shrink-0 gap-1.5 px-2.5 tabular-nums", exhausted ? "text-danger hover:text-danger" : warning && "text-warn-foreground hover:text-warn-foreground")}
         >
-          <Ring percent={exhausted ? 100 : window.percent} />
-          {exhausted ? "额度用完" : `${window.short} ${window.percent}%`}
+          <Ring percent={exhausted ? 100 : (window?.percent ?? 0)} />
+          {exhausted ? "额度用完" : window ? `${window.short} ${window.percent}%` : "额度"}
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" aria-label="额度">
         <div className="grid gap-5">
-          {quota.map((vendor) => (
+          {blocks.map((vendor) => (
             <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>
               <h3 className="text-[13.5px] font-medium text-muted-foreground">{vendor.name}</h3>
               {vendor.windows.map((w) => (
