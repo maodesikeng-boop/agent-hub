@@ -46,8 +46,9 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 ### 2.2 何时触发：到门槛后第一个空当，不等 20 秒
 
 - 账本在 `turn.ended`（`afterDriverEvent`）时看这个项目经理会话的 `usage.context`，≥ `AUTO_RENEW_CONTEXT_TOKENS`（20 万）就把对话**放进队列**（第 4 节），
-  同一个事务里立刻判断能不能开始：旧会话空闲（`activity === "idle"`）、没有发给它还在路上的消息（delivered / processing）→ 登记一行 `forking`，交给跑腿的。
-  不满足就留在队列里，下一次 `turn.ended` 或 5 秒检查再看。
+  同一个事务里登记一行 `queued`，提交后叫醒跑腿的（`onHandoverClaimable`）。跑腿的有空位就 `claimHandover()`：账本在这个事务里判断能不能开始——
+  旧会话空闲（`activity === "idle"`）、没有发给它还在路上的消息（delivered / processing）、过了退避 → 改成 `forking`、记切点，把活交给跑腿的。
+  不满足就留在 `queued`，下一次 `turn.ended` 叫醒或跑腿的每 5 秒自己领一次时再看。（PR 0 定的：判断只在 `claimHandover` 一处。）
 - **为什么不等 20 秒了**：以前要等，是因为写交接占着项目经理，怕和用户撞上；现在写交接在复制那份里，用户怎么聊都不受影响，越早开始交接越新、上下文也少涨一点。
 - **为什么还要等“两轮之间”而不是一轮中途就复制**：
   1. 一轮中途复制，复制那份里是半截的一轮（工具调了没结果），写出来的交接缺这一轮的结论；
@@ -113,7 +114,9 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 
 ### 2.6 清理复制那份
 
-- 换代后、失败后、作废后都要清。跑腿的调厂商的 `remove(handle)`，幂等（不存在算成功），清完记 `cleaned_at`；清不掉记日志，下次守护进程启动再试（扫 `cleaned_at IS NULL` 的终态行），**不挡换代**。
+- 复制那份写完交接就没用了：跑腿的在 `handoverWritten` / `handoverFailed` 之后**马上**清（不等换代；`handoverForked` 返回 false 时也直接清）。
+  调厂商的 `remove(handle)`，幂等（不存在算成功），清完 `handoverCleaned`；清不掉记日志，下次守护进程启动再试（`uncleanedHandovers()`），**不挡换代**。
+  换代事务里就不用再登记清理了。
 - 为什么要清：复制那份会出现在用户自己的 `claude --resume` 列表、codex 历史、agy 对话列表里，越积越多。
 - 各家：
   - claude：用了 `--no-session-persistence` 就没有文件，`remove` 只是保险：算出 `projects/<目录>/<编号>.jsonl`，在就删。
@@ -142,7 +145,7 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 
 - 切点之后用户和项目经理的原话**全部**带进开场说明，不受 3 万字限制（第 3 节）；只有切点之后的原话本身超过 `HANDOVER_POST_CUT_MAX_CHARS`（建议 6 万字）才说明交接太旧，作废重来。
 - 切点之后到的 **Worker 汇报**：每条一行目录（“交接之后到的 Worker 汇报：#112 做完了，全文 `hub worker show 112 --report`”），不带全文——
-  交接里不会有它们，不提一句新会话不知道要去查。（这条和“Worker 汇报不带”略有出入，列进待拍板。）
+  交接里不会有它们，不提一句新会话不知道要去查。（用户已拍板，见第 11 节第 1 条。）
 - 切点之后项目经理派的活、PR：交接里没有，但账本有，原话里也能看到项目经理当时怎么说的。开场说明加一句“交接写于切点，之后的事看下面的原话和 Worker 汇报目录”。
 
 ### 2.9 手动“开新会话”
@@ -180,7 +183,7 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 - 换代事务里登记 `session.start(新会话)`。执行器调 `driver.start`：三家现成的“只起进程不写消息”路径（`#spawn(st, resume, null)` 后 `#armIdle`）：
   claude 起进程等标准输入，codex 起 app-server 并 `thread/start`，agy 起进程。已经有压着的消息要发的，`session.send` 自己会起，`start` 遇到正在起就复用。
 - 只起进程，**不预读**（不把开场说明先喂进去跑一轮）：第一条回复省掉进程启动（claude 带 MCP 的话几秒），但开场说明（约 3 万字 + 交接 2000 字，claude 1 万多 token）
-  第一次要读入，多 2～5 秒。要更快就在后台先跑一轮“读完只回一个字、不显示”的预读——多花一轮，列进待拍板。
+  第一次要读入，多 2～5 秒。后台先预读一轮的做法不做（用户已拍板，见第 11 节第 3 条）。
 - 进程闲 `IDLE_CLOSE_MS`（10 分钟）没人说话照常被关，之后和平常一样按需再起。
 
 ## 6. 性能
@@ -210,48 +213,38 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 - `src/daemon/handover/<厂商>.ts`：各厂商的 `SessionForker`。
 - 本会话写交接（兜底）不需要厂商代码：它用的是现成的驱动接口（发消息、停止）。
 
-### 7.2 接口
+### 7.2 接口（PR 0 已定，以代码为准）
+
+- `src/shared/handover.ts`：账本和跑腿的之间的约定——`HandoverId`、`HANDOVER_STATUSES` / `ACTIVE_HANDOVER_STATUSES`、`ForkerKind`、`HandoverMethod`、
+  `ForkHandle`、`ForkRef`（`fork_ref` 存的 JSON：`{ forker: SessionForker.id, handle }`）、`HandoverJob`、`HandoverFailure`、`HandoverCleanJob`、`LedgerHandoverWork`。
+- `src/daemon/handover/forker.ts`：`ForkSource`、`ForkWriteResult`、`ForkUnsupportedError`、`SessionForker`、`ForkerRegistry`、`findForker`、`withoutHubEnv`、`forkSourceOf`。
+- `src/daemon/handover/forkers.ts`：`FORKERS`（`Record<AgentVendor, …>`，漏一家编译不过）；每家的清单在自己的文件里（`claude.ts` 的 `CLAUDE_FORKERS` 等，PR 0 都是 `[]`），
+  B、C、D 各改各的文件，不在同一处撞车。
 
 ```ts
 // src/daemon/handover/forker.ts
-export interface ForkSource {
-  vendor: AgentVendor;
-  vendorSessionId: string;
-  cwd: string;
-  addDirs: string[];
-  model: string | null;
-  effort: string | null;
-  /** prepareLaunch(项目经理会话) 的结果，env 里已经去掉 HUB_TOKEN、HUB_SOCK。 */
-  launch: LaunchFiles;
-}
-
-/** 复制那份的身份：存进 handovers.fork_ref（JSON），守护进程重启后凭它清理。 */
-export interface ForkHandle {
-  forkId: string;
-  extra?: Record<string, string>;
-}
-
-/** 这个办法这家用不了（格式不认识、找不到、厂商不支持）：换清单里下一个办法，不算失败。 */
-export class ForkUnsupportedError extends Error {}
-
 export interface SessionForker {
-  /** native：厂商自带；copy：自己造的（靠没公开的格式）。只用来记日志、排查。 */
-  readonly kind: "native" | "copy";
-  /** 复制一份（claude 什么都不做，只定个编号）。 */
-  fork(src: ForkSource, signal: AbortSignal): Promise<ForkHandle>;
-  /** 在复制那份上跑一轮 prompt，返回这一轮 agent 的全部文字和用量。 */
-  write(src: ForkSource, fork: ForkHandle, prompt: string, signal: AbortSignal): Promise<{ text: string; usage: TokenUsage }>;
-  /** 删掉复制那份；幂等。 */
-  remove(fork: ForkHandle): Promise<void>;
+  readonly id: string;              // 清单里唯一、发布后不改，存进 fork_ref，重启后凭它找回同一个办法 remove
+  readonly kind: ForkerKind;        // "native" | "copy"，存进 handovers.method
+  fork(src: ForkSource, signal: AbortSignal): Promise<ForkHandle>;              // 用不了抛 ForkUnsupportedError
+  write(src: ForkSource, fork: ForkHandle, prompt: string, signal: AbortSignal): Promise<ForkWriteResult>;  // { text, usage }
+  remove(fork: ForkHandle): Promise<void>;  // 幂等；只拿得到 handle，清理要的路径 fork 时放进 handle.extra
 }
 
-/** 办法清单，按优先顺序。键是 AGENT_VENDORS：加厂商漏了这里编译不过（和 write-scope.ts 一个做法）。空数组 = 只能本会话写交接。 */
-export const FORKERS: Record<AgentVendor, readonly SessionForker[]> = {
-  claude: [claudeForker],
-  codex: [codexForker],
-  agy: [agyCopyForker],
-};
+// src/shared/handover.ts：账本实现（Ledger extends 它），跑腿的调。都是同步的、各一个事务；对不上的报告静默忽略
+export interface LedgerHandoverWork {
+  claimHandover(): HandoverJob | null;            // 挑一行能开始的 queued → forking，记切点；{ handoverId, conversationId, session, auto, prompt }
+  handoverForked(id: HandoverId, fork: { kind: ForkerKind; ref: ForkRef }): boolean;  // 总是存 fork_ref；还在 forking → writing 返回 true，否则 false（别写了，直接清）
+  handoverWritten(id: HandoverId, result: { text: string; usage: TokenUsage }): void; // ready 或直接换代；空白记 failed(handover_empty)
+  handoverFailed(id: HandoverId, failure: HandoverFailure): void;  // kind: unsupported（退回 in_session，不算次数）| error | timeout | shutdown（不算次数）
+  handoverCleaned(id: HandoverId): void;          // 记 cleaned_at，幂等
+  uncleanedHandovers(): HandoverCleanJob[];       // 启动时补清：有 fork_ref、没 cleaned_at、不在 forking / writing
+}
 ```
+
+跑腿的一次活：`claimHandover` → `forkSourceOf(job.session, await prepareLaunch(job.session))` → 按 `FORKERS[vendor]` 从前往后 `fork`（`ForkUnsupportedError` 换下一个；
+清单空或都不支持 → `handoverFailed({ kind: "unsupported" })`）→ `handoverForked` → `write` → `handoverWritten`（出错 `handoverFailed`）→ `remove` → `handoverCleaned`。
+账本有行可以领时调 `LedgerOptions.onHandoverClaimable`（守护进程接到跑腿的 `wake`）。
 
 办法清单走完都“不支持”→ 账本退回 `in_session`。顺序原则：**厂商自带的放前面，自己造的放后面**；哪天 agy 出了 `-p` 下能用的 `/fork`，加一个 native 放在拷库前面就行。
 
@@ -264,32 +257,16 @@ export const FORKERS: Record<AgentVendor, readonly SessionForker[]> = {
 
 ## 8. 数据和常量
 
-迁移 `0013_handovers.sql`：
+迁移 `0013_handovers.sql`（PR 0 已建，以文件为准）：上面这些列，另加两处——
 
-```sql
-CREATE TABLE handovers (
-  id               INTEGER PRIMARY KEY,
-  conversation_id  INTEGER NOT NULL REFERENCES conversations (id),
-  from_session_id  INTEGER NOT NULL REFERENCES agent_sessions (id),
-  to_session_id    INTEGER REFERENCES agent_sessions (id),
-  auto             INTEGER NOT NULL CHECK (auto IN (0, 1)),
-  method           TEXT,             -- native / copy / in_session（用的哪个办法，排查用）
-  status           TEXT NOT NULL CHECK (status IN ('queued', 'forking', 'writing', 'ready', 'switched', 'failed', 'abandoned')),
-  cut_message_id   INTEGER,          -- 切点
-  fork_ref         TEXT,             -- ForkHandle 的 JSON
-  text             TEXT,             -- 交接全文
-  preamble         TEXT,             -- 换代时定稿的开场说明
-  usage            TEXT,             -- 复制那份的用量
-  failure_reason   TEXT,
-  created_at INTEGER NOT NULL, started_at INTEGER, ready_at INTEGER, switched_at INTEGER, cleaned_at INTEGER, updated_at INTEGER NOT NULL
-) STRICT;
-CREATE UNIQUE INDEX handovers_active ON handovers (conversation_id) WHERE status IN ('queued', 'forking', 'writing', 'ready');
-CREATE INDEX handovers_uncleaned ON handovers (id) WHERE cleaned_at IS NULL AND fork_ref IS NOT NULL;
-```
+- `to_vendor`、`to_model`、`to_effort`：新会话用哪家、什么模型和思考程度（第 12 节换厂商）。`to_vendor` 是 NULL = 三列都照抄旧会话；不是 NULL 就照这三列开
+  （`to_model`、`to_effort` 是 NULL = 新厂商的默认）。复制、写交接永远用旧会话的厂商。
+- 索引 `handovers_from_session (from_session_id)`：按一代会话数自动试的次数。
+- 表和索引都 `IF NOT EXISTS`（有的测试把 `user_version` 退回 8 再跑一遍迁移）。
 
 每一代自动试了几次、上次失败时间从这张表按 `from_session_id` 数，不再塞在 H 的 meta 里。H（交接请求消息）只剩兜底的本会话写交接在用。
 
-`limits.ts` 新增 / 改：`HANDOVER_RECENT_CHARS = 30_000`（替换 `HANDOVER_RECENT_MESSAGES`）、`HANDOVER_POST_CUT_MAX_CHARS = 60_000`、`HANDOVER_READY_MAX_MS = 30 * 60_000`、
+`limits.ts` 新增 / 改（PR 0 已加，`HANDOVER_RECENT_MESSAGES` 留到 A 换掉时删）：`HANDOVER_RECENT_CHARS = 30_000`（替换 `HANDOVER_RECENT_MESSAGES`）、`HANDOVER_POST_CUT_MAX_CHARS = 60_000`、`HANDOVER_READY_MAX_MS = 30 * 60_000`、
 `HANDOVER_CONCURRENCY = 2`；`AUTO_RENEW_IDLE_MS` 只剩兜底用；其余沿用。提示词（`handoverRequestText`、`sessionPreambleText`）留在 `handover.ts` 一处。
 
 ## 9. 测试计划（先写测试）
@@ -325,7 +302,7 @@ CREATE INDEX handovers_uncleaned ON handovers (id) WHERE cleaned_at IS NULL AND 
 
 ## 10. 实现拆分
 
-先合 **PR 0（小）**：`forker.ts` 接口 + `FORKERS` 占位 + 迁移 0013 + 常量。合了之后下面并行：
+先合 **PR 0（小）**：`shared/handover.ts` 约定 + `forker.ts` 接口 + `forkers.ts` 的 `FORKERS` 占位 + 迁移 0013 + 常量 + `onHandoverClaimable` 选项（只接到账本，还没人调）。合了之后下面并行：
 
 | 块 | 内容 | 依赖 | 建议 |
 |---|---|---|---|
@@ -336,12 +313,40 @@ CREATE INDEX handovers_uncleaned ON handovers (id) WHERE cleaned_at IS NULL AND 
 | E 跑腿的 | `handover/runner.ts` + `daemon.ts` 接线（启动重建、关机取消）+ 测试 | PR 0，接口对着 A 的 `handoverWritten / handoverFailed` 签名写 | Sonnet high |
 | F 冒烟 | `test/smoke/background-handover.ts` 三家 | A～E 都合 | Sonnet |
 
-A 和 E 之间只靠 PR 0 里写死的几个账本方法签名（`claimHandover / handoverForked / handoverWritten / handoverFailed / handoverCleaned`），可以同时做。
+A 和 E 之间只靠 PR 0 里写死的账本方法签名（`shared/handover.ts` 的 `LedgerHandoverWork`：`claimHandover / handoverForked / handoverWritten / handoverFailed / handoverCleaned / uncleanedHandovers`），可以同时做。
+A 实现时让 `Ledger` extends `LedgerHandoverWork`；E 只依赖 `LedgerHandoverWork`（测试里给假的）。
 A 改动大、要审查；B、C、D 各自独立、互不影响。
 
-## 11. 待拍板
+## 11. 已拍板（2026-11-07，都按推荐）
 
-1. **切点之后到的 Worker 汇报**：开场说明里每条一行目录（编号 + 状态 + 去哪查），不带全文。推荐带目录——交接里没有它们，不提一句新会话不知道要查。
-2. **交接写好时项目经理正忙**：这期间新来的消息压到新会话（等这一轮结束，一般几秒到一分钟；claude、codex 失去“一轮中途插进去”）；
-   还是照常插进旧会话（用户不多等，但换代可能一直推后，而且 agy 这种排在驱动层里的消息会和换代撞车，要多写一套收回的代码）。推荐压。
-3. **新会话预热到哪一步**：只起进程（推荐，不多花钱，第一条多 2～5 秒读开场说明）；还是后台先预读一轮（第一条也快，但每次换代多一轮）。
+1. **切点之后到的 Worker 汇报**：开场说明里每条列一行目录（编号 + 状态 + 去哪查），不带全文。
+2. **交接写好时项目经理正忙**：这期间新来的消息压到新会话（最多等这一轮结束），不插进旧会话。
+3. **新会话预热到哪一步**：只预先起好进程，不预读一轮。
+
+## 12. 给已有项目经理换厂商（方案，PR 0 只预留了 `to_vendor` 等三列，不实现）
+
+**思路：换厂商 = 一次换会话，只是新会话用另一家开。** 交接 + 约 3 万字原话照带（第 3 节），性格设定、模式、项目、Worker 都在我们这边，不受影响。
+
+- **触发**：资料页改厂商（`editPersona` 带 `vendor`）。现在 `src/daemon/ledger/persona.ts` 的 `editPersonaChecked` 遇到厂商变了直接报
+  “还不支持给已有的项目经理换厂商”；改成：同一个事务里登记一行手动交接（`auto = 0`），`to_vendor` = 新厂商，`to_model` / `to_effort` = 用户这次一起选的（没选是 NULL = 新厂商默认），
+  记一条性格设定修改（厂商、模型、思考程度的“改前 / 改后”照记）。`pms.vendor` / `default_model` / `effort` **不在这时改**，换代事务里才改（失败就不用回退）。
+  资料页在这期间显示“正在换到 codex…”，厂商下拉禁用；hub 里项目经理自己改不了厂商（照旧 forbidden）。
+- **复制、写交接用旧厂商**：跑腿的照常按 `FORKERS[旧会话.vendor]` 复制、写；清单走完不支持就退回旧会话里本会话写交接（`in_session`），和平常一样。
+  交接提示词多一句：“新会话换成 <新厂商>，别写只有 <旧厂商> 才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态”。
+- **换代时新会话用新厂商**：`renew` 建会话时 `vendor = to_vendor ?? old.vendor`；`to_vendor` 不是 NULL 时模型、思考程度用 `to_model` / `to_effort`
+  （NULL = 新厂商默认，**不抄旧会话的**：旧厂商的模型名到新厂商那儿不认识）；同一个事务里把 `pms` 的厂商、模型、思考程度改成新的。
+  旧会话的 `rate_limit` **不抄**给新会话（额度是按厂商的）。`prepareLaunch` 本来就按会话的厂商拼提示词、设置文件、启动参数，不用改。
+- **新厂商工具清单不同的影响**：
+  - hub 命令（派活、问用户、看 Worker）三家一样，主要能力不受影响；
+  - 交接和原话里可能提到旧厂商的工具名、做法（第一条提示词那句尽量避免）；开场说明加一句“上一个会话是 <旧厂商>，提到的工具名按你自己的工具理解”；
+  - “上一个会话的原始记录”是旧厂商的格式：claude 的 jsonl、codex 的 rollout 是文本能翻；agy 是 sqlite + protobuf，新会话翻不了——开场说明里照实写“格式是 agy 的，读不了，只看交接和原话”；
+  - 换厂商就没有缓存：新会话第一条要整个读入开场说明（约 1 万多 token），多几秒；
+  - 旧厂商的后台任务（claude `run_in_background`）：和平常一样，有后台任务在跑时不换（2.5.1）。
+- **Worker 汇报照常发给新会话**：Worker 汇报按对话发给 generation 最大的那个会话，和厂商无关；在跑的 Worker 自己的厂商不变、不受影响。
+- **失败怎么回退**：复制、写失败或超时 → 这一行 `failed`，什么都没换（`pms` 没改、旧会话照常用），对话里提示“换到 <新厂商> 没成：<原因>，还在用 <旧厂商>”，
+  资料页厂商回到旧的、可以再点一次；手动的不自动重试，不算自动换的次数。新会话起不来（新厂商没装、没登录）：换代已经提交了，和平常新会话起不来一样报错；
+  资料页能再改回旧厂商（又是一次换会话）。不做“换代后自动退回旧会话”（旧会话已登记 `session.end`，退回要多写一套，收益小）。
+- **和自动换会话撞上**：已经有一行在跑（`queued` 到 `ready`）就把 `to_vendor` 等三列写到那一行上、改成手动（同 2.9 的“并进去”）；已经 `ready` 的交接照用（交接内容和厂商无关），
+  只是开场说明换代时按新厂商定稿。用户在这期间又改回旧厂商：三列清回 NULL，这一行照常走（等于一次普通的换会话）。
+- **要改的地方**：`persona.ts`（去掉报错、登记交接）、`ledger/handover.ts`（`renew` 按 `to_vendor`、提示词两句、失败提示）、资料页（“正在换”、失败回退），
+  测试按上面每一条各一个。接口上 PR 0 只需要那三列，`LedgerHandoverWork` 不用变（跑腿的不关心新会话是哪家）。

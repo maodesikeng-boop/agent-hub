@@ -9,6 +9,7 @@ import { createSessionStore } from "../src/daemon/store/session-store.ts";
 import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
 import { createLedger } from "../src/daemon/ledger/index.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
+import { ACTIVE_HANDOVER_STATUSES, HANDOVER_STATUSES } from "../src/shared/handover.ts";
 
 const migration = new URL("../migrations/0001_init.sql", import.meta.url).pathname;
 
@@ -1193,5 +1194,103 @@ describe("0012_session_persona_revision：从 0011 的库升级", () => {
     expect(store.update(id, { personaRevision: 5 }).personaRevision).toBe(5);
     expect(db.all("SELECT * FROM session_persona_seen")).toEqual([{ session_id: id, revision: 5 }]);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+// ---- 0013_handovers ----
+
+describe("0013_handovers：从 0012 的库升级", () => {
+  /** 0012 的库升到最新，对话 1、项目经理会话 1 都在（m3Db 种的）。 */
+  function m13Db(): Db {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(12));
+    migrate(db, migrationsDir);
+    return db;
+  }
+  /** 再建一个对话（新项目经理的私聊：每个项目经理只能有一个），返回编号。 */
+  const newConversation = (db: Db): number => {
+    const pm = db.get<{ id: number }>("INSERT INTO pms (name, created_at) VALUES ('另一个' || (SELECT count(*) FROM pms), 0) RETURNING id")!.id;
+    return db.get<{ id: number }>("INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', ?, '另一个', 0) RETURNING id", pm)!.id;
+  };
+  const insert = (db: Db, status: string, over: Record<string, string | number | null> = {}): number => {
+    const row: Record<string, string | number | null> = { conversation_id: 1, from_session_id: 1, auto: 1, status, created_at: 0, updated_at: 0, ...over };
+    const cols = Object.keys(row);
+    return db.get<{ id: number }>(`INSERT INTO handovers (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) RETURNING id`, ...Object.values(row))!.id;
+  };
+
+  it("只加一张空的 handovers 表，老数据一个字不变；再跑一遍也行", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(12));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 12, to: LATEST_VERSION });
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM handovers")).toEqual([]);
+    expect(
+      db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'handovers' AND name NOT LIKE 'sqlite_%' ORDER BY name"),
+    ).toEqual([{ name: "handovers_active" }, { name: "handovers_from_session" }, { name: "handovers_uncleaned" }]);
+    db.exec("PRAGMA user_version = 12");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("状态只能是 HANDOVER_STATUSES 里的；auto 只能是 0、1；办法不限制（会扩展）", () => {
+    const db = m13Db();
+    // 每个对话同时最多一行不在终态，所以一个状态一个对话：先把终态的都插进对话 1，不在终态的各占一个新对话
+    for (const status of HANDOVER_STATUSES) {
+      if (ACTIVE_HANDOVER_STATUSES.includes(status)) {
+        const conv = newConversation(db);
+        expect(() => insert(db, status, { conversation_id: conv })).not.toThrow();
+      } else {
+        expect(() => insert(db, status)).not.toThrow();
+      }
+    }
+    expect(() => insert(db, "stopped")).toThrow(/CHECK/);
+    expect(() => insert(db, "failed", { auto: 2 })).toThrow(/CHECK/);
+    expect(() => insert(db, "failed", { method: "some-new-method" })).not.toThrow();
+  });
+
+  it("每个对话同时最多一行不在终态；终态的随便几行；别的对话不受影响", () => {
+    const db = m13Db();
+    insert(db, "failed");
+    insert(db, "switched");
+    insert(db, "abandoned");
+    insert(db, "queued");
+    for (const status of ACTIVE_HANDOVER_STATUSES) expect(() => insert(db, status)).toThrow(/UNIQUE/);
+    expect(() => insert(db, "failed")).not.toThrow();
+    const other = newConversation(db);
+    expect(() => insert(db, "writing", { conversation_id: other })).not.toThrow();
+    // 原来那一行进了终态，就能再登记新的一行
+    db.exec("UPDATE handovers SET status = 'switched' WHERE conversation_id = 1 AND status = 'queued'");
+    expect(() => insert(db, "queued")).not.toThrow();
+  });
+
+  it("新会话的厂商、模型、思考程度预留三列：默认 NULL（照抄旧会话），能写任意厂商名", () => {
+    const db = m13Db();
+    const id = insert(db, "queued");
+    expect(db.get("SELECT to_vendor, to_model, to_effort FROM handovers WHERE id = ?", id)).toEqual({ to_vendor: null, to_model: null, to_effort: null });
+    db.run("UPDATE handovers SET to_vendor = 'codex', to_model = NULL, to_effort = 'high' WHERE id = ?", id);
+    expect(db.get("SELECT to_vendor, to_model, to_effort FROM handovers WHERE id = ?", id)).toEqual({ to_vendor: "codex", to_model: null, to_effort: "high" });
+    expect(() => insert(db, "failed", { to_vendor: "some-new-vendor" })).not.toThrow();
+  });
+
+  it("外键：对话、会话都要在；to_session_id 可以空", () => {
+    const db = m13Db();
+    expect(() => insert(db, "queued", { conversation_id: 999 })).toThrow(/FOREIGN KEY/);
+    expect(() => insert(db, "queued", { from_session_id: 999 })).toThrow(/FOREIGN KEY/);
+    expect(() => insert(db, "switched", { to_session_id: 999 })).toThrow(/FOREIGN KEY/);
+    expect(() => insert(db, "switched", { to_session_id: 1 })).not.toThrow();
+    expect(() => insert(db, "queued", { to_session_id: null })).not.toThrow();
+  });
+
+  it("没清理的：只算有 fork_ref、没 cleaned_at 的行，走 handovers_uncleaned 索引", () => {
+    const db = m13Db();
+    insert(db, "failed", { fork_ref: '{"forker":"x","handle":{"forkId":"a"}}' });
+    insert(db, "switched", { fork_ref: '{"forker":"x","handle":{"forkId":"b"}}', cleaned_at: 5 });
+    insert(db, "abandoned");
+    const sql = "SELECT id FROM handovers WHERE cleaned_at IS NULL AND fork_ref IS NOT NULL ORDER BY id";
+    expect(db.all(sql)).toHaveLength(1);
+    const plan = db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`).map((r) => r.detail).join("\n");
+    expect(plan).toContain("handovers_uncleaned");
   });
 });

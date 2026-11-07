@@ -49,8 +49,19 @@ export const MAX_MODEL_CHARS = 100;
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
 /** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
-/** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。 */
+/** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。后台写交接（块 A）换成 HANDOVER_RECENT_CHARS 后删掉。 */
 export const HANDOVER_RECENT_MESSAGES = 10;
+
+// ---- 后台写交接（docs/background-handover-design.md）----
+
+/** 新会话开场说明里带切点之前多少字用户和项目经理的原话（String.length，中文一个字算 1），从新往旧取、可以跨好几代。切点之后的全带，不算在里面。 */
+export const HANDOVER_RECENT_CHARS = 30_000;
+/** 切点之后的原话超过这么多字：交接太旧了，作废（abandoned）重新复制。 */
+export const HANDOVER_POST_CUT_MAX_CHARS = 60_000;
+/** 交接写好（ready）后最多等旧会话这么久（比如后台任务一直不完），过了作废、过退避重新复制，不算失败次数。 */
+export const HANDOVER_READY_MAX_MS = 30 * 60_000;
+/** 跑腿的同时最多复制、写几份（每个复制进程几百 MB 内存），多的在 queued 等。 */
+export const HANDOVER_CONCURRENCY = 2;
 /**
  * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话（ledger/handover.ts 的 runAutoRenew）。
  * 只对项目经理；Worker 的会话不自动换。
@@ -60,7 +71,10 @@ export const AUTO_RENEW_CONTEXT_TOKENS = 200_000;
 export const AUTO_RENEW_IDLE_MS = 20_000;
 /** 守护进程多久查一次要不要自动换新会话、写交接有没有超时（启动时先查一次）。 */
 export const AUTO_RENEW_TICK_MS = 5_000;
-/** 写交接那一轮（从交接请求登记起）最多等这么久：超时就停掉那一轮、放弃这次换代，旧会话照常用（自动换的下次空闲再试）。 */
+/**
+ * 写交接最多等这么久：超时就放弃这次换代，旧会话照常用（自动换的下次空闲再试）。本会话写交接从交接请求登记起算，
+ * 后台写交接从跑腿的领到（forking）起算，到了跑腿的 abort（杀进程组）。
+ */
 export const HANDOVER_TIMEOUT_MS = 5 * 60_000;
 /** 自动换新会话：每一代会话最多自动试几次（写交接出错、超时、写出来是空的都算一次）；用完这一代不再自动换，资料页的“开新会话”照常能点。 */
 export const AUTO_RENEW_MAX_ATTEMPTS = 3;

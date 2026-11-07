@@ -4,6 +4,7 @@ export * from "./api.ts";
 export * from "./attachments.ts";
 export * from "./domain.ts";
 export * from "./driver.ts";
+export * from "./handover.ts";
 export * from "./hub.ts";
 export * from "./ledger.ts";
 export * from "./limits.ts";
