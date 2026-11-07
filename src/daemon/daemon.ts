@@ -244,7 +244,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       drivers: {
         claude: createClaudeDriver({ claudePath, ...launch }),
         agy: createAgyDriver({ agyPath, ...launch }),
-        codex: createCodexDriver({ codexPath, ...launch }),
+        codex: createCodexDriver({
+          codexPath,
+          ...launch,
+          // 没选模型时用名单里 codex 报的默认（名单有缓存，不是每次起会话都问）
+          defaultModel: async () => (await models.list()).find((c) => c.vendor === "codex")?.defaultModelId ?? null,
+        }),
       },
     });
     parts.driver = driver;

@@ -199,6 +199,7 @@ export function parseCodexModels(raw: unknown): ModelCatalog | null {
   if (list === null) return null;
   const models: CatalogModel[] = [];
   let defaultModel: string | null = null;
+  let defaultModelId: string | null = null;
   for (const item of list) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
@@ -207,7 +208,10 @@ export function parseCodexModels(raw: unknown): ModelCatalog | null {
     if (id === null || checkModel("codex", id) !== null || models.some((m) => m.id === id)) continue;
     const label = truncateChars(nonEmptyString(entry.displayName) ?? nonEmptyString(entry.label) ?? id, MAX_CATALOG_LABEL_CHARS);
     const description = nonEmptyString(entry.description);
-    if (entry.isDefault === true) defaultModel ??= label;
+    if (entry.isDefault === true && defaultModelId === null) {
+      defaultModel = label;
+      defaultModelId = id;
+    }
     models.push({
       id,
       label,
@@ -217,7 +221,7 @@ export function parseCodexModels(raw: unknown): ModelCatalog | null {
     if (models.length === MAX_CATALOG_MODELS) break;
   }
   if (models.length === 0) return null;
-  return { ...bundledModelCatalog("codex"), source: "vendor", models, defaultModel };
+  return { ...bundledModelCatalog("codex"), source: "vendor", models, defaultModel, defaultModelId };
 }
 
 export interface ClaudeModelQueryOptions {

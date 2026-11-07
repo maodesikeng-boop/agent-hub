@@ -193,12 +193,12 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   codex: {
     label: "Codex",
     models: [
-      { id: "gpt-5.4", label: "GPT-5.4" },
-      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      { id: "gpt-6-luna", label: "GPT-6-Luna" },
+      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
     ],
     customModel: true,
-    customModelExample: "如 gpt-5.4",
+    customModelExample: "如 gpt-6-luna",
     efforts: ["low", "medium", "high", "xhigh"],
     modelFlag: "--model",
     effortFlag: "-c",
@@ -350,6 +350,8 @@ export interface ModelCatalog {
   defaultEfforts: readonly string[] | null;
   /** “默认”实际用的模型的名字（如 Opus 5.5），厂商没说是 null（界面只写“默认”）。 */
   defaultModel: string | null;
+  /** 同上的模型 ID（codex 启动时显式传它：不传的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了）。厂商没说是 null。 */
+  defaultModelId: string | null;
   /** 这家的通用思考程度（VENDOR_SPECS 的 efforts）。 */
   efforts: readonly string[];
   /** 能不能填完整模型名，能的话输入框里的示例；不能是 null。 */
@@ -367,6 +369,7 @@ export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
     models,
     defaultEfforts: null,
     defaultModel: null,
+    defaultModelId: null,
     efforts: spec.efforts,
     customModelExample: spec.customModel ? spec.customModelExample : null,
   };

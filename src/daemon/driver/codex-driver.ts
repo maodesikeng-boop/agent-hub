@@ -151,6 +151,8 @@ interface Proc {
   /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：线程建好或恢复好时定 agent 看到的版本（persona-note.ts）。 */
   personaLaunched: number | null;
   launchConfig: CodexLaunchConfig;
+  /** 会话没选模型时 thread/start、thread/resume 显式带的（CodexDriverOptions.defaultModel），null 不带。 */
+  defaultModel: string | null;
   readonly: boolean;
   /** Worker 的可写范围（LaunchFiles.writeScope）：沙箱的 writableRoots 和审批按它；项目经理是 null。 */
   writeScope: WriteScope | null;
@@ -222,6 +224,12 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   /** codex 可执行文件路径，默认 "codex"（若未传但传了 claudePath 则回退 claudePath）。 */
   codexPath?: string;
   claudePath?: string;
+  /**
+   * 会话没选模型（null = 默认）时 thread/start、thread/resume 显式带的模型：守护进程接模型名单里 codex 报的默认（有缓存）。
+   * 不带的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了（实测 gpt-6-astra 报 model_not_found）。
+   * 没传或回 null 就不带，交给 codex。不写进库：界面仍显示“默认”。
+   */
+  defaultModel?: () => Promise<string | null>;
   /** 厂商命令与输入拼装器，默认 vendors/ 里的 codex。 */
   composer?: VendorComposerBase;
   /** 按哪个系统落实 Worker 的可写范围（write-scope.ts 的 spawnInWriteScope），默认本机；测试用。 */
@@ -239,13 +247,15 @@ export class CodexDriver implements Driver {
   > &
     Omit<DriverOptions, "claudePath">;
   readonly #composer: VendorComposerBase;
+  readonly #defaultModel: () => Promise<string | null>;
   readonly #sessions = new Map<SessionId, SessionState>();
   readonly #listeners = new Set<DriverEventListener>();
   #shuttingDown = false;
   #requestSeq = 0;
   #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, composer, platform, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, composer, platform, defaultModel, ...options }: CodexDriverOptions) {
+    this.#defaultModel = defaultModel ?? (async () => null);
     this.#codexPath = codexPath ?? claudePath ?? "codex";
     this.#platform = platform ?? process.platform;
     this.#composer = composer ?? composerBaseOf("codex")!;
@@ -749,7 +759,7 @@ export class CodexDriver implements Driver {
       session: {
         cwd: row?.cwd ?? proc.launched.cwd,
         addDirs: row?.addDirs ?? proc.launched.addDirs,
-        model: row?.model ?? proc.launched.model,
+        model: row?.model ?? proc.launched.model ?? proc.defaultModel,
         effort: row?.effort ?? proc.launched.effort,
       },
       readonly: proc.readonly,
@@ -943,6 +953,9 @@ export class CodexDriver implements Driver {
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
 
     const launchConfig = readCodexLaunchConfig(files);
+    const defaultModel = row.model === null ? await this.#defaultModel().catch(() => null) : null;
+    this.#assertRunning();
+    this.#assertNotEnded(st);
     // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时记警告，
     // 靠 codex 自己的沙箱和审批兜底。只读 Worker 不包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
@@ -984,6 +997,7 @@ export class CodexDriver implements Driver {
       },
       personaLaunched: files.personaRevision ?? null,
       launchConfig,
+      defaultModel,
       readonly: launchConfig.readonly,
       writeScope: files.writeScope ?? null,
       osSandboxed: launch.osSandboxed,
@@ -1132,7 +1146,7 @@ export class CodexDriver implements Driver {
         const sessionInfo = {
           vendorSessionId: row?.vendorSessionId ?? proc.threadId ?? "",
           cwd: row?.cwd ?? proc.launched.cwd,
-          model: row?.model ?? proc.launched.model,
+          model: row?.model ?? proc.launched.model ?? proc.defaultModel,
         };
         const nextId = ++this.#requestSeq;
         if (proc.resume) {
@@ -1153,7 +1167,7 @@ export class CodexDriver implements Driver {
           const row = this.#row(st);
           const sessionInfo = {
             cwd: row?.cwd ?? proc.launched.cwd,
-            model: row?.model ?? proc.launched.model,
+            model: row?.model ?? proc.launched.model ?? proc.defaultModel,
           };
           const startId = ++this.#requestSeq;
           proc.pendingRpcs.set(startId, "thread_start");

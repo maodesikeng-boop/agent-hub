@@ -855,6 +855,39 @@ describe("CodexDriver 会话恢复与失败回退", () => {
     expect(t.store.get(s.id)!.vendorSessionId).toBe("thr_existing_99");
   });
 
+  it("会话没选模型：thread/start 显式带上名单里的默认模型（不让 codex 用 config.toml 里钉死的）；选了的以选的为准", async () => {
+    const t = makeCodexHarness({
+      script: { turns: [{ messageDeltas: ["ok"] }] },
+      driver: { defaultModel: async () => "gpt-6-luna" },
+    });
+    const s = t.addSession({ model: null });
+    await t.driver.send(s.id, user(1, "你好"));
+    await t.waitFor("turn.ended");
+    expect(t.rpcIn().find((r) => r.method === "thread/start")).toMatchObject({ params: { model: "gpt-6-luna" } });
+    // 不改库里的 model：界面仍显示“默认”，也不会因为它被判成“启动参数变了”而反复重启
+    expect(t.store.get(s.id)!.model).toBeNull();
+
+    const t2 = makeCodexHarness({
+      script: { turns: [{ messageDeltas: ["ok"] }] },
+      driver: { defaultModel: async () => "gpt-6-luna" },
+    });
+    const s2 = t2.addSession({ model: "gpt-5.6-terra" });
+    await t2.driver.send(s2.id, user(1, "你好"));
+    await t2.waitFor("turn.ended");
+    expect(t2.rpcIn().find((r) => r.method === "thread/start")).toMatchObject({ params: { model: "gpt-5.6-terra" } });
+  });
+
+  it("名单里没有默认模型（问不到）：thread/start 不带 model，交给 codex 自己", async () => {
+    const t = makeCodexHarness({
+      script: { turns: [{ messageDeltas: ["ok"] }] },
+      driver: { defaultModel: async () => null },
+    });
+    const s = t.addSession({ model: null });
+    await t.driver.send(s.id, user(1, "你好"));
+    await t.waitFor("turn.ended");
+    expect(t.rpcIn().find((r) => r.method === "thread/start")?.params).not.toHaveProperty("model");
+  });
+
   it("thread/resume 报错找不到线程时自动回退 thread/start 并更新 vendorSessionId", async () => {
     const t = makeCodexHarness({
       script: {
