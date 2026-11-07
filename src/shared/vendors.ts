@@ -7,6 +7,24 @@ export const AGENT_VENDORS = ["claude", "agy", "codex"] as const;
 export type AgentVendor = (typeof AGENT_VENDORS)[number];
 export const DEFAULT_AGENT_VENDOR: AgentVendor = "claude";
 
+/**
+ * 额度窗口的统一定义：厂商报的窗口按长度（分钟）归到这些键上，label 是浮层里的全名，short 是左下角按钮上的简写。
+ * 厂商只报“第一个、第二个窗口”不报名字的（codex 的 primary / secondary），按 windowKeyByMinutes 用长度认，不按位置认：
+ * 同一个位置在不同账号上长度不一样（同一个 primary，有的账号是 5 小时，有的是 30 天）。加新长度的窗口只改这里。
+ */
+export const QUOTA_WINDOWS = {
+  five_hour: { durationMins: 300, label: "5 小时", short: "5h" },
+  seven_day: { durationMins: 7 * 24 * 60, label: "7 天", short: "7d" },
+  thirty_day: { durationMins: 30 * 24 * 60, label: "30 天", short: "30d" },
+} as const;
+export type QuotaWindowKey = keyof typeof QUOTA_WINDOWS;
+
+/** 窗口长度（分钟）→ 额度窗口的键；不认识的长度（或没报长度）返回 null。 */
+export function windowKeyByMinutes(mins: number | null | undefined): QuotaWindowKey | null {
+  const hit = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).find((key) => QUOTA_WINDOWS[key].durationMins === mins);
+  return hit ?? null;
+}
+
 export interface VendorSpec {
   /** 界面上的名字。 */
   label: string;
@@ -26,12 +44,11 @@ export interface VendorSpec {
   modelFlag: string;
   effortFlag: string;
   flags: { model: string; effort: string };
-  quotaWindows: Readonly<Record<string, string>>;
   /**
-   * 额度（左下角）：厂商在事件里报的用量窗口（键是 RateLimitInfo.windows 里的键），按显示顺序；label 是浮层里的全名，
-   * short 是左下角按钮上的简写。warningStatus：厂商自己报“快用完”时的状态值。没有额度数据的厂商不写。
+   * 额度（左下角）：厂商在事件里报的用量窗口（QUOTA_WINDOWS 的键，也是 RateLimitInfo.windows 里的键），按显示顺序。
+   * warningStatus：厂商自己报“快用完”时的状态值，不报的不写。没有额度数据的厂商整个不写。
    */
-  quota?: { name: string; windows: readonly { key: string; label: string; short: string }[]; warningStatus: string };
+  quota?: { name: string; windows: readonly QuotaWindowKey[]; warningStatus?: string };
   /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
   shortModelName?: (model: string) => string | null;
   /**
@@ -104,15 +121,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     modelFlag: "--model",
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
-    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
-    quota: {
-      name: "Claude",
-      windows: [
-        { key: "five_hour", label: "5 小时", short: "5h" },
-        { key: "seven_day", label: "7 天", short: "7d" },
-      ],
-      warningStatus: "allowed_warning",
-    },
+    quota: { name: "Claude", windows: ["five_hour", "seven_day"], warningStatus: "allowed_warning" },
     // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m] → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M
     shortModelName: (model) => {
       const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model);
@@ -166,7 +175,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     modelFlag: "--model",
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
-    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
+    // 没有 quota：agy 的事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（还分“Gemini”“Claude 和 GPT”两组），不为它另起进程轮询
     // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B
     shortModelName: (model) => {
       const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(model);
@@ -203,7 +212,8 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     modelFlag: "--model",
     effortFlag: "-c",
     flags: { model: "--model", effort: "-c" },
-    quotaWindows: { five_hour: "5 小时", seven_day: "7 天" },
+    // account/rateLimits/updated 只带窗口长度、不带名字：长度见 QUOTA_WINDOWS（codex-protocol.ts 的 parseCodexRateLimits 按它归类），codex 自己不报“快用完”
+    quota: { name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] },
     shortModelName: (model) => {
       const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z]+))?$/.exec(model);
       if (!gpt) return null;
