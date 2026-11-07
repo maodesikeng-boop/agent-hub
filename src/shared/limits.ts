@@ -190,6 +190,12 @@ export const USAGE_PUSH_MS = 1_000;
 export const STDIO_DRAIN_MS = 300;
 /** 驱动层：发了 SIGKILL 之后最多再等多久。 */
 export const KILL_WAIT_MS = 2_000;
+/** agy 驱动：一轮因为“被拒”（result 里 denied_actions 非空）又没回复就结束时，最多自动补几轮（防死循环）；用户发了新消息重新数。 */
+export const AGY_DENIED_CONTINUE_MAX = 3;
+/** agy 只读 Worker：启动前问每个 MCP 服务器要工具清单（拿 readOnlyHint）最多等多久，超时这个服务器整个当不可用（拒）。 */
+export const AGY_CONNECTOR_LIST_TIMEOUT_MS = 10_000;
+/** agy 只读 Worker：各 MCP 服务器的工具清单缓存多久（配置变了马上失效）。 */
+export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
 /** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */

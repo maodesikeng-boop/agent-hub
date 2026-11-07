@@ -40,6 +40,7 @@ import { workerWorktreePath } from "../../shared/paths.ts";
 import { parseWorkerReport, userToWorkerHeader, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
 import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
 import { composerBaseOf } from "../vendors/index.ts";
+import { READONLY_AGY_NEEDS_SANDBOX_MESSAGE } from "../driver/readonly-agy.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { Db } from "../store/index.ts";
@@ -339,6 +340,8 @@ export function createLedgerWorkers(
     // 思考程度写在模型 ID 里的厂商（agy）：--model gemini-4-argon-high 和 --model gemini-4-argon --effort high 存成一样的 模型 + 思考程度
     const { model, effort } = splitModelEffort(vendor, givenModel, givenEffort);
     const readonly = args.readonly === true;
+    // agy 没有原生只读命令行，只读靠外层 OS 沙箱；没有 OS 沙箱的机器上直接报错，不是警告后照跑（设计第 8 节第 5 条）
+    if (readonly && vendor === "agy" && !ctx.osSandboxed()) throw fail("invalid", READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
     const card = projectCard(project);
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
     if (args.noWorktree !== true) {

@@ -1,11 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { AGENT_VENDORS, VENDOR_SPECS } from "../../shared/index.ts";
 import { makeHarness, type Harness } from "./test-helpers.ts";
-import { SANDBOX_EXEC, WRITE_SCOPE_ENFORCERS, osSandboxAvailable, seatbeltProfile, spawnInWriteScope, wrapInSeatbelt } from "./write-scope.ts";
+import {
+  SANDBOX_EXEC,
+  WRITE_SCOPE_ENFORCERS,
+  osSandboxAvailable,
+  readonlySeatbeltProfile,
+  secretGlobRegex,
+  seatbeltProfile,
+  spawnInWriteScope,
+  wrapInReadonlySeatbelt,
+  wrapInSeatbelt,
+  type ReadonlySandboxInput,
+} from "./write-scope.ts";
 
 const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
@@ -147,4 +158,83 @@ describe.runIf(process.platform === "darwin" && existsSync(SANDBOX_EXEC))("claud
       expect(existsSync(probe)).toBe(!scoped);
     });
   }
+});
+
+// 只读 Worker 的外层沙箱（agy 用，设计 4.1）：哪里都不能写，会话私有临时目录、运行时目录、缓存目录除外，密钥禁读
+const roInput: ReadonlySandboxInput = {
+  tmpDir: "/private/tmp/ro-1",
+  writableDirs: ["/Users/u/.gemini/antigravity-cli/bin", "/Users/u/.cache"],
+  writableFileRegexes: ["^/Users/u/\\.gemini/antigravity-cli/conversation_summaries\\.db[^/]*$"],
+  secretPaths: ["/Users/u/.ssh"],
+  secretGlobs: ["**/.env", "**/.env.*", "**/id_rsa*"],
+};
+
+describe("readonlySeatbeltProfile", () => {
+  it("别的放行，哪里都不能写，再放行设备文件、临时目录、运行时和缓存目录、具体文件，最后密钥禁读（后面的规则压过前面的）", () => {
+    expect(readonlySeatbeltProfile(roInput).split("\n")).toEqual([
+      "(version 1)",
+      "(allow default)",
+      "(deny file-write*)",
+      '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+      '(allow file-write* (subpath "/private/tmp/ro-1"))',
+      '(allow file-write* (subpath "/Users/u/.gemini/antigravity-cli/bin"))',
+      '(allow file-write* (subpath "/Users/u/.cache"))',
+      '(allow file-write* (regex #"^/Users/u/\\.gemini/antigravity-cli/conversation_summaries\\.db[^/]*$"))',
+      '(deny file-read* (subpath "/Users/u/.ssh"))',
+      '(deny file-read* (regex #"/\\.env$"))',
+      '(deny file-read* (regex #"/\\.env\\.[^/]*$"))',
+      '(deny file-read* (regex #"/id_rsa[^/]*$"))',
+    ]);
+  });
+
+  it("密钥通配转正则：开头的 **/ 去掉，* 不跨目录，点要转义", () => {
+    expect(secretGlobRegex("**/.env")).toBe("/\\.env$");
+    expect(secretGlobRegex("**/*.pem")).toBe("/[^/]*\\.pem$");
+    expect(secretGlobRegex("**/id_ed25519*")).toBe("/id_ed25519[^/]*$");
+  });
+
+  it("wrapInReadonlySeatbelt：macOS 包 sandbox-exec，不加参数（agy 自带沙箱在设置里关）；别的系统原样返回、osSandboxed 是 false（调用方报错）", () => {
+    expect(wrapInReadonlySeatbelt(base, roInput, "darwin")).toEqual({ command: SANDBOX_EXEC, args: ["-p", readonlySeatbeltProfile(roInput), "/bin/agent", "--x", "y"], osSandboxed: true });
+    expect(wrapInReadonlySeatbelt(base, roInput, "linux")).toEqual({ ...base, osSandboxed: false });
+  });
+});
+
+// 真 sandbox-exec：只读 profile 下哪都写不了（含命令行三种写法、新建目录），临时目录、运行时目录能写，读照常，密钥读不了
+describe.runIf(process.platform === "darwin" && existsSync(SANDBOX_EXEC))("真 sandbox-exec：只读", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-ro-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("写不了任何地方，私有临时目录和运行时目录能写，读文件和只读命令照常，密钥读不了", () => {
+    const work = join(root, "work");
+    const tmp = join(root, "tmp");
+    const runtime = join(root, "runtime");
+    const secretDir = join(root, "secret");
+    for (const d of [work, tmp, runtime, secretDir]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(work, "note.txt"), "NOTE");
+    writeFileSync(join(work, ".env"), "SECRET=1");
+    writeFileSync(join(secretDir, "key"), "K");
+    const run = wrapInReadonlySeatbelt(
+      {
+        command: "/bin/sh",
+        args: [
+          "-c",
+          'echo x > "$W/w1.txt"; python3 -c "open(\'$W/w2.txt\',\'w\').write(\'x\')" 2>/dev/null; touch "$W/w3.txt"; mkdir "$W/dir"; echo x > "$R/../outside.txt"; ' +
+            'cat "$W/.env" >/dev/null 2>&1 && echo ENV_READ; cat "$S/key" >/dev/null 2>&1 && echo KEY_READ; ' +
+            'cat "$W/note.txt" && echo ok > "$TMPDIR/p" && echo ok > "$R/p" && echo done',
+        ],
+      },
+      { tmpDir: tmp, writableDirs: [runtime], writableFileRegexes: [], secretPaths: [secretDir], secretGlobs: ["**/.env"] },
+      "darwin",
+    );
+    const out = execFileSync(run.command, run.args, {
+      env: { ...process.env, W: work, R: runtime, S: secretDir, TMPDIR: tmp },
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    });
+    expect(out.trim()).toBe("NOTEdone");
+    for (const f of ["w1.txt", "w2.txt", "w3.txt", "dir"]) expect(existsSync(join(work, f)), f).toBe(false);
+    expect(existsSync(join(root, "outside.txt"))).toBe(false);
+    expect(existsSync(join(tmp, "p"))).toBe(true);
+    expect(existsSync(join(runtime, "p"))).toBe(true);
+  });
 });

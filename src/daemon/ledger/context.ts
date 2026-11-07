@@ -15,6 +15,7 @@ import type { ChangeInput, ChangeLog } from "./change-log.ts";
 import { toHealth } from "./rows.ts";
 import type { HealthDbRow } from "./rows.ts";
 import { composerBaseOf } from "../vendors/index.ts";
+import { osSandboxAvailable } from "../driver/write-scope.ts";
 
 export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
 
@@ -70,6 +71,8 @@ export interface LedgerContext {
    * 缓存着这个会话的命令列表（LedgerOptions.knownCommands）时，用户自己的命令、skill 重名的放行（厂商实现的 blockReason）。
    */
   commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
+  /** 这台机器有没有 OS 沙箱（driver/write-scope.ts 的 osSandboxAvailable）：没有的机器上派只读 agy 直接报错（hub worker start --readonly）。 */
+  osSandboxed(): boolean;
 }
 
 /** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
@@ -91,6 +94,8 @@ export interface LedgerContextOptions {
   knownCommands?: (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">) => ComposerCommand[] | null;
   initialSeq?: number;
   changeBufferSize?: number;
+  /** 这台机器有没有 OS 沙箱，默认按本机（osSandboxAvailable）；测试可以指定。 */
+  osSandboxed?: () => boolean;
 }
 
 export function createLedgerContext(db: Db, options: LedgerContextOptions): LedgerContext {
@@ -172,5 +177,5 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   };
   const commandBlockReason = (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string) =>
     composerBaseOf(session.vendor)?.blockReason(text, options.knownCommands?.(session) ?? null) ?? null;
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason };
+  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
 }

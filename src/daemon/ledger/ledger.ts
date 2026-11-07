@@ -50,6 +50,8 @@ export interface LedgerOptions {
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
   initialSeq?: number;
   changeBufferSize?: number;
+  /** 这台机器有没有 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；没有的机器上派只读 agy 报错。测试可以指定。 */
+  osSandboxed?: LedgerContextOptions["osSandboxed"];
   /** pm-home/ 的根目录；还没有项目的项目经理，会话的工作目录是 <pmHomeRoot>/<项目经理编号>/，createPm 负责建。必填。 */
   pmHomeRoot: string;
   /**

@@ -1,6 +1,6 @@
 # 只读 Worker 统一方案（三家 + 连接器）
 
-状态：方案，第 8 节用户已拍板（2026-11-07）。W1 统一定义已做（Worker #132：`src/shared/readonly-policy.ts`、`LaunchFiles.readonly`），S1–S6 实测脚本在 `experiments/readonly/smoke.py`（7.3 节），其余 W2–W6 待做。调研和实测来自 Worker #110。
+状态：方案，第 8 节用户已拍板（2026-11-07）。W1 统一定义已做（Worker #132：`src/shared/readonly-policy.ts`、`LaunchFiles.readonly`），S1–S6 实测脚本在 `experiments/readonly/smoke.py`（7.3 节），W3 agy 已做（Worker #138，见 7.4），其余 W2、W4–W6 待做。调研和实测来自 Worker #110。
 实测脚本在 `experiments/readonly/`（测试目录 `/tmp/ro110`，用完已清掉）。
 
 ## 0. 目标和结论
@@ -115,7 +115,7 @@ export const READONLY_ENFORCERS: Readonly<Record<AgentVendor, ReadonlyEnforcer>>
 | 编辑工具 | deny Edit、Write、NotebookEdit | deny `write_file(*)` | 原生拒 |
 | 写不了的硬保证 | native：claude 自带沙箱（7.3 不过就改 outer） | outer | native |
 | 密钥 | 权限 deny `Read(//<路径>)` + 沙箱 `denyRead`（支持 `~/**/.env`）/ `credentials` | deny `read_file(<真实路径>)` + 外层沙箱 denyRead（seatbelt 支持正则） | `permissions.filesystem` deny_read（待实测） |
-| 连接器只读 | 驱动在 `can_use_tool` 里判断（`mcp_status` 拿 annotations） | 原生（plan 认 readOnlyHint） | 原生（认 readOnlyHint） |
+| 连接器只读 | 驱动在 `can_use_tool` 里判断（`mcp_status` 拿 annotations） | **我们拦**（S4 实测 agy 不按 readOnlyHint 拦）：启动前向每个 MCP 服务器问 `tools/list`，不只读的生成 deny `mcp(服务器/工具)`；调用开始时兜底再查一次（见 7.4） | 原生（认 readOnlyHint） |
 | 连接器补充 | 同上（判断时查 extraAllow） | allow `mcp(<服务器>/<工具>)` | `approval_mode="approve"` |
 | 连接器排除 | deny `mcp__<服务器>__<工具>` | deny `mcp(<服务器>/<工具>)` | `disabled_tools` |
 | 被拒后 | 模型拿到错误继续 | 显式 deny：继续；“要批准”的：整轮结束 → 驱动自动补一轮（见 2.4） | 模型拿到错误继续 |
@@ -261,6 +261,19 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 4. **W4 codex**（小）：补充/排除/deny_read 配置 + elicitation 分支；测试 6。
 5. **W5 Linux**（中，等 Linux 兼容合了）：只读 bwrap，跟 `linux-write-scope.md` 一起做。
 6. **W6 冒烟**（小，必须不在沙箱里跑）：7.3 的清单。W2–W4 可以并行，W6 在它们之后、合并前。
+
+### 7.4 W3 agy 实现（Worker #138）
+
+- `daemon/driver/readonly-agy.ts`：翻译层。`--mode plan` + `--settings`（allow `read_file(*)`、`command(*)`、`read_url(*)`；deny `write_file(*)`、密钥 realpath、连接器规则；`enableTerminalSandbox:false`）；外层沙箱参数；被拒后补一轮的文字。
+- `daemon/driver/write-scope.ts`：`readonlySeatbeltProfile`（哪里都不能写；放行设备文件、会话私有 TMPDIR、agy 运行时目录——**S4 实测要加 `bin/`**，agy 每次跑命令都重写里面的 agentapi 脚本——和通用缓存目录；密钥禁读：路径 subpath + 通配转正则）、`wrapInReadonlySeatbelt`。
+- **连接器怎么拦**（用 W1 的 `connectorToolAllowed`，补充/排除清单照用）：
+  1. `daemon/driver/agy-connectors.ts`：读 `~/.gemini/config/mcp_config.json`，向每个 stdio / HTTP 服务器问 `tools/list` 拿 `readOnlyHint`（agy 自己的缓存不带 annotations）；结果按配置内容缓存 10 分钟、每个服务器最多等 10 秒，问不到（起不来、超时、要认证）、或只在 agy 缓存目录里出现的服务器整个当不可用；
+  2. 起进程前生成 deny 规则 `mcp(<服务器>/<工具>)`（不只读的工具，不可用的服务器 `mcp(<服务器>/*)`），补充的写进 allow；
+  3. 兜底：驱动在工具开始调用时 `checkAgyConnectorCall`（`call_mcp_tool` 看 `ServerName`/`ToolName`，`mcp_<服务器>_<工具>` 按清单反查），不放行的马上 SIGINT、这一轮以 policy_violation 结束；清单里查不到的当没标记。注意这是事后的：规则没拦住的本地写由外层沙箱挡，远程的靠规则那一层——S4 要确认 `mcp(rotest/rw_save)` 对直接露出的 `mcp_rotest_rw_save` 形式确实生效（上一次跑的脚本里写了这条 deny 但 rw_save 照样被调用了，`call_mcp_tool` 形式的 deny 是实测有效的）。
+- 删了只读的 SIGINT 分支（`checkWorkerToolViolation` 不再认只读；没有 OS 沙箱时的可写范围兜底分支留着）。
+- 驱动：result 里 `denied_actions` 非空、回复为空、成功结束 → 往同一个进程补发“上一步被拒了，换办法”，还算原来那条消息的这一轮，最多 `AGY_DENIED_CONTINUE_MAX`（3）次，用户发新消息重新数；只读和非只读都生效。
+- 没有 OS 沙箱：`hub worker start --vendor agy --readonly` 在账本里直接报错（`LedgerContext.osSandboxed`），驱动起进程时也报错（`READONLY_AGY_NEEDS_SANDBOX_MESSAGE`）。
+- S4 现在用 `experiments/readonly/agy-launch.ts` 打印的真实 profile 和 settings（不再是脚本里另写的参考写法）。
 
 ### 7.3 合并前必须补测的（这次测不了）
 
