@@ -26,8 +26,6 @@ const NO_PERSISTENCE_ARG = "--no-session-persistence";
 const STDERR_TAIL_CHARS = 2000;
 
 export interface ClaudeForkerOptions {
-  /** claude 可执行文件，默认 PATH 里的 claude。 */
-  claudePath?: string;
   /** true 时不加 --no-session-persistence（排查用，之后靠 remove 删）。 */
   persist?: boolean;
   /** claude 的配置目录（remove 找 projects/ 用），默认 CLAUDE_CONFIG_DIR 或 ~/.claude。 */
@@ -73,7 +71,6 @@ function parseOutput(stdout: string): ForkWriteResult {
 }
 
 export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionForker {
-  const claudePath = options.claudePath ?? "claude";
   const persist = options.persist ?? false;
   const configDir = (): string => options.configDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 
@@ -90,7 +87,7 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
       if (signal.aborted) return Promise.reject(new Error("aborted"));
       // 守护进程自己环境里的 HUB_* 也不能漏给复制那份；launch.env 已经去掉了
       const { [ENV_HUB_TOKEN]: _t, [ENV_HUB_SOCK]: _s, ...base } = process.env;
-      const child = spawn(claudePath, buildClaudeForkArgs(src, fork.forkId, persist), {
+      const child = spawn(src.executablePath, buildClaudeForkArgs(src, fork.forkId, persist), {
         cwd: src.cwd,
         env: buildChildEnv(base, src.launch.env),
         stdio: ["pipe", "pipe", "pipe"],
@@ -114,7 +111,7 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
         child.stdout.setEncoding("utf8").on("data", (c: string) => (stdout += c));
         child.stderr.setEncoding("utf8").on("data", (c: string) => (stderr = (stderr + c).slice(-STDERR_TAIL_CHARS)));
         child.stdin.on("error", () => {});
-        child.once("error", (error) => finish(() => reject(new Error(`${claudePath}: ${error.message}`))));
+        child.once("error", (error) => finish(() => reject(new Error(`${src.executablePath}: ${error.message}`))));
         child.once("close", (code, sig) => {
           termGroupAfterExit(child);
           finish(() => {

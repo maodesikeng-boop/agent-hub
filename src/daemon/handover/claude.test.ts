@@ -54,6 +54,7 @@ function source(over: Partial<ForkSource> = {}): ForkSource {
     sessionId: 7,
     vendor: "claude",
     vendorSessionId: "orig-session-id",
+    executablePath: fakeClaude(),
     cwd: dir,
     addDirs: ["/code/bar"],
     model: "sonnet",
@@ -76,7 +77,7 @@ describe("登记", () => {
 
 describe("fork：只定编号，什么都不跑", () => {
   it("每次给一个新的 UUID，extra 记下 cwd（remove 算路径用）", async () => {
-    const f = createClaudeForker({ claudePath: "/nonexistent/claude" });
+    const f = createClaudeForker();
     const a = await f.fork(source(), never);
     const b = await f.fork(source(), never);
     expect(a.forkId).toMatch(/^[0-9a-f-]{36}$/);
@@ -87,7 +88,7 @@ describe("fork：只定编号，什么都不跑", () => {
 
 describe("write：claude -p --resume 原编号 --fork-session --no-session-persistence", () => {
   it("参数：resume、fork-session、不落盘、复制那份的编号、模型/思考程度/提示词文件/设置/--add-dir 照项目经理传；提示词走标准输入", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     const handle = await f.fork(source(), never);
     await f.write(source(), handle, "请写交接", never);
     const { argv, stdin, cwd } = call();
@@ -113,7 +114,7 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
     process.env[ENV_HUB_SOCK] = "/leak.sock";
     process.env.CLAUDECODE = "1";
     try {
-      const f = createClaudeForker({ claudePath: fakeClaude() });
+      const f = createClaudeForker();
       await f.write(source(), await f.fork(source(), never), "p", never);
     } finally {
       delete process.env[ENV_HUB_TOKEN];
@@ -128,13 +129,13 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
   });
 
   it("persist: true 时不加 --no-session-persistence（排查用）", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude(), persist: true });
+    const f = createClaudeForker({ persist: true });
     await f.write(source(), await f.fork(source(), never), "p", never);
     expect(call().argv).not.toContain("--no-session-persistence");
   });
 
   it("model、effort、settings 为 null 时不传", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     const src = source({ model: null, effort: null, addDirs: [], launch: { ...source().launch, settingsFile: undefined } });
     await f.write(src, await f.fork(src, never), "p", never);
     const { argv } = call();
@@ -142,14 +143,14 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
   });
 
   it("取 result 的文字；用量是 result.usage 四个数，context 是最后一个 assistant 请求的 input + 缓存读 + 缓存写", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     const r = await f.write(source(), await f.fork(source(), never), "p", never);
     expect(r.text).toBe("交接正文");
     expect(r.usage).toEqual({ input: 11, cacheRead: 380100, cacheWrite: 300, output: 51, context: 190306 });
   });
 
   it("写出来是空的：照常返回空串，空不空由账本判断", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     process.env.FAKE_MODE = "empty";
     try {
       expect((await f.write(source(), await f.fork(source(), never), "p", never)).text).toBe("");
@@ -159,7 +160,7 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
   });
 
   it("退出码非 0 抛错，消息带标准错误；result.is_error 也抛；找不到可执行文件抛", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     process.env.FAKE_MODE = "fail";
     try {
       await expect(f.write(source(), await f.fork(source(), never), "p", never)).rejects.toThrow(/exit code 3.*boom/s);
@@ -168,12 +169,13 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
     } finally {
       delete process.env.FAKE_MODE;
     }
-    const missing = createClaudeForker({ claudePath: join(dir, "nope") });
-    await expect(missing.write(source(), await missing.fork(source(), never), "p", never)).rejects.toThrow(/nope/);
+    const missing = createClaudeForker();
+    const lost = source({ executablePath: join(dir, "nope") });
+    await expect(missing.write(lost, await missing.fork(lost, never), "p", never)).rejects.toThrow(/nope/);
   });
 
   it("signal abort：杀掉进程，抛错", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     const ac = new AbortController();
     process.env.FAKE_MODE = "hang";
     try {
@@ -188,7 +190,7 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
   });
 
   it("原会话不是 claude 的编号（空）→ ForkUnsupportedError", async () => {
-    const f = createClaudeForker({ claudePath: fakeClaude() });
+    const f = createClaudeForker();
     const src = source({ vendorSessionId: "" });
     await expect(f.write(src, await f.fork(src, never), "p", never)).rejects.toThrow(ForkUnsupportedError);
   });
@@ -203,7 +205,7 @@ describe("remove：保险性地删复制那份可能落盘的 jsonl，幂等", (
     mkdirSync(join(proj, "abc"), { recursive: true });
     writeFileSync(join(proj, "abc.jsonl"), "{}");
     writeFileSync(join(proj, "keep.jsonl"), "{}");
-    const f = createClaudeForker({ claudePath: "claude", configDir: config });
+    const f = createClaudeForker({ configDir: config });
     await f.remove({ forkId: "abc", extra: { cwd } });
     expect(existsSync(join(proj, "abc.jsonl"))).toBe(false);
     expect(existsSync(join(proj, "abc"))).toBe(false);
@@ -217,7 +219,7 @@ describe("remove：保险性地删复制那份可能落盘的 jsonl，幂等", (
     const proj = join(config, "projects", claudeProjectDirName("/w"));
     mkdirSync(proj, { recursive: true });
     writeFileSync(join(proj, "victim.jsonl"), "{}");
-    const f = createClaudeForker({ claudePath: "claude", configDir: config });
+    const f = createClaudeForker({ configDir: config });
     await f.remove({ forkId: "../victim", extra: { cwd: "/w" } });
     expect(existsSync(join(proj, "victim.jsonl"))).toBe(true);
   });

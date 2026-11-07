@@ -14,6 +14,8 @@ export interface ForkSource {
   sessionId: SessionId;
   vendor: AgentVendor;
   vendorSessionId: string;
+  /** 这家 CLI 的可执行文件路径：runner 按 vendor 从 paths.claudePath / codexPath / agyPath 填（用户可配、测试用假的）。forker 一律用它起进程。 */
+  executablePath: string;
   cwd: string;
   addDirs: string[];
   model: string | null;
@@ -63,12 +65,13 @@ export function withoutHubEnv(launch: LaunchFiles): LaunchFiles {
 }
 
 /** 账本给的会话 + prepareLaunch 的结果 → ForkSource（凭证已去掉）。厂商不认识抛 ForkUnsupportedError。 */
-export function forkSourceOf(session: AgentSessionRow, launch: LaunchFiles): ForkSource {
+export function forkSourceOf(session: AgentSessionRow, launch: LaunchFiles, executablePath: string): ForkSource {
   if (!isAgentVendor(session.vendor)) throw new ForkUnsupportedError(`不认识的厂商：${session.vendor}`);
   return {
     sessionId: session.id,
     vendor: session.vendor,
     vendorSessionId: session.vendorSessionId,
+    executablePath,
     cwd: session.cwd,
     addDirs: [...session.addDirs],
     model: session.model,
