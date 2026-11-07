@@ -75,6 +75,7 @@ export function Sidebar({
   asking,
   notify,
   quota,
+  quotaFetchable = false,
   drawerOpen = false,
   onCloseDrawer = noop,
   onSelect,
@@ -89,6 +90,8 @@ export function Sidebar({
   asking: ReadonlySet<number>;
   notify: NotifySettings;
   quota: QuotaVendor[];
+  /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
+  quotaFetchable?: boolean;
   /** 窄屏时抽屉拉出来了（宽屏不看它）。 */
   drawerOpen?: boolean;
   onCloseDrawer?: () => void;
@@ -154,7 +157,7 @@ export function Sidebar({
             </span>
             <span className="truncate text-[15px] font-medium">我</span>
           </span>
-          <QuotaPopover quota={quota} />
+          <QuotaPopover quota={quota} fetchable={quotaFetchable} />
           <Button variant="ghost" size="icon-sm" aria-label="设置" onClick={() => setSettingsOpen(true)}>
             <Settings aria-hidden="true" />
           </Button>

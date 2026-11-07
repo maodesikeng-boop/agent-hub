@@ -17,6 +17,7 @@ import {
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
+  VENDOR_SPECS,
   AUTO_RENEW_TICK_MS,
   checkModel,
   type ActionExecutor,
@@ -54,6 +55,7 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
+import { createFetchedQuota, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
 import {
@@ -363,7 +365,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
-    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, composer });
+    // 额度：agy 的只能另起进程问，网页打开额度面板时才问（缓存 5 分钟）
+    const agyQuotaSpec = VENDOR_SPECS.agy.quota?.fetched;
+    const quota = createFetchedQuota({
+      query: agyQuotaSpec && (() => queryFetchedQuota({ path: agyPath, spec: agyQuotaSpec, cwd: options.userHome })),
+    });
+    parts.ui = await startUiServer({ ledger, token, port, staticDir, uploadsDir, sentFilesDir, models, quota, composer });
 
     let stopping: Promise<void> | undefined;
     return {

@@ -25,6 +25,7 @@ import {
   type PersonaResponse,
   type PmId,
   type PostMessageResponse,
+  type QuotaResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
   type StateSnapshot,
@@ -156,6 +157,11 @@ export function deleteSchedule(scheduleId: ScheduleId): Promise<void> {
 /** 每家厂商的模型名单（服务端问不到厂商时是打包的）。 */
 export function fetchModels(): Promise<ModelsResponse> {
   return request<ModelsResponse>(API_PATHS.models);
+}
+
+/** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
+export function fetchQuota(): Promise<QuotaResponse> {
+  return request<QuotaResponse>(API_PATHS.quota);
 }
 
 export function postRenewSession(pmId: PmId): Promise<RenewSessionResponse> {

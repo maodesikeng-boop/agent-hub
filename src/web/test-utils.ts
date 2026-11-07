@@ -321,6 +321,8 @@ export class FakeApi {
   renewSession: (pmId: number) => Reply | Promise<Reply> = () => ({ status: 202, body: { handoverId: 99 } });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
+  /** GET /api/quota。默认 404：不显示那一块。 */
+  quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
   fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -341,6 +343,7 @@ export class FakeApi {
     this.calls.push({ method, path: url.pathname, query: url.searchParams, body });
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
     if (method === "GET" && url.pathname === "/api/models") return jsonResponse(await this.models());
+    if (method === "GET" && url.pathname === "/api/quota") return jsonResponse(await this.quota());
     const m = /^\/api\/conversations\/(\d+)\/(messages|stop)$/.exec(url.pathname);
     if (m) {
       const id = Number(m[1]);
