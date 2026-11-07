@@ -49,8 +49,6 @@ export const MAX_MODEL_CHARS = 100;
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
 /** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
-/** 开新会话：新会话的第一条消息里，除了交接，再带上交接之前最近几条用户和项目经理的原话。后台写交接（块 A）换成 HANDOVER_RECENT_CHARS 后删掉。 */
-export const HANDOVER_RECENT_MESSAGES = 10;
 
 // ---- 后台写交接（docs/background-handover-design.md）----
 
@@ -63,13 +61,13 @@ export const HANDOVER_READY_MAX_MS = 30 * 60_000;
 /** 跑腿的同时最多复制、写几份（每个复制进程几百 MB 内存），多的在 queued 等。 */
 export const HANDOVER_CONCURRENCY = 2;
 /**
- * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话（ledger/handover.ts 的 runAutoRenew）。
+ * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话：这一轮结束时进队列（ledger/handover.ts）。
  * 只对项目经理；Worker 的会话不自动换。
  */
 export const AUTO_RENEW_CONTEXT_TOKENS = 200_000;
-/** 自动换新会话：一轮正常结束后要空闲这么久才开始写交接；期间来了新消息（用户的、Worker 汇报）就不换，等下一次空闲。 */
+/** 本会话写交接（兜底，厂商复制不了时）：自动的要空闲这么久才发交接请求；期间来了新消息（用户的、Worker 汇报）就等下一次空闲。后台写交接不用等。 */
 export const AUTO_RENEW_IDLE_MS = 20_000;
-/** 守护进程多久查一次要不要自动换新会话、写交接有没有超时（启动时先查一次）。 */
+/** 守护进程多久看一次换新会话的队列（只看队列里的对话，队列空什么都不查；启动时先看一次）；跑腿的也按这个间隔自己领一次活兜底。 */
 export const AUTO_RENEW_TICK_MS = 5_000;
 /**
  * 写交接最多等这么久：超时就放弃这次换代，旧会话照常用（自动换的下次空闲再试）。本会话写交接从交接请求登记起算，

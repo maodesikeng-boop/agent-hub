@@ -738,7 +738,7 @@ describe("M3：动作", () => {
     expectTypeOf<Ledger["getWorktreeTask"]>().toEqualTypeOf<(workerId: number) => WorktreeTask | null>();
     expectTypeOf<Ledger["onSetupStarted"]>().toEqualTypeOf<(workerId: number) => boolean>();
     expectTypeOf<Ledger["waitsForFirstTurn"]>().toEqualTypeOf<(sessionId: number, messageId: number) => boolean>();
-    expectTypeOf<Ledger["renewSession"]>().toEqualTypeOf<(pmId: number) => { messageId: number }>();
+    expectTypeOf<Ledger["renewSession"]>().toEqualTypeOf<(pmId: number) => { handoverId: number }>();
     expectTypeOf<Ledger["waitsForHandover"]>().toEqualTypeOf<(messageId: number) => boolean>();
     expectTypeOf<Ledger["onWorktreeCreated"]>().toEqualTypeOf<(workerId: number, baseCommit: string, setup?: SetupOutcome) => void>();
   });

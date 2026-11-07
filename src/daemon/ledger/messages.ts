@@ -51,6 +51,8 @@ export interface LedgerMessagesOptions {
    * 现在只有 Worker 收工后不收（workers.ts 的 assertWorkerOpenForUser，ledger.ts 接上）。
    */
   assertUserCanPost?: (conversationId: ConversationId) => void;
+  /** 用户发出一条消息之后（同一个事务里）：项目经理正在本会话写交接的，要停掉那一轮（ledger/handover.ts 的 userPostedIn，ledger.ts 接上）。 */
+  afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
 }
 
 export function createLedgerMessages(
@@ -60,6 +62,7 @@ export function createLedgerMessages(
   options: LedgerMessagesOptions = {},
 ) {
   const assertUserCanPost = options.assertUserCanPost ?? (() => {});
+  const afterUserPost = options.afterUserPost ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
@@ -342,6 +345,7 @@ export function createLedgerMessages(
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
       p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
       answerAsks(p, input.conversationId, row.id);
+      afterUserPost(p, input.conversationId);
       return { messageId: row.id };
     });
   };

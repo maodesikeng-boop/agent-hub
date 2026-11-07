@@ -316,7 +316,7 @@ export class FakeApi {
     return { status: 200, body: makeAttachment({ id, name: fileName, size: file.size, mime: /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? "image/png" : "application/octet-stream" }) };
   };
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
-  renewSession: (pmId: number) => Reply | Promise<Reply> = () => ({ status: 202, body: { messageId: 99 } });
+  renewSession: (pmId: number) => Reply | Promise<Reply> = () => ({ status: 202, body: { handoverId: 99 } });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */

@@ -24,6 +24,7 @@ import type {
   WorkerStatus,
   Unsubscribe,
 } from "./domain.ts";
+import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
@@ -303,7 +304,8 @@ export interface HubCallContext {
   transcript?: string | null;
 }
 
-export interface Ledger {
+/** 后台写交接时跑腿的（daemon/handover/runner.ts）用的几个方法见 LedgerHandoverWork（shared/handover.ts）。 */
+export interface Ledger extends LedgerHandoverWork {
   // ---- 界面服务用 ----
   /**
    * 同一个事务里：写一条“排队中”的用户消息 + 登记一个 session.send 动作。clientId 重复时返回已有的编号。
@@ -359,27 +361,26 @@ export interface Ledger {
    */
   retryMessage(messageId: MessageId): { messageId: MessageId };
   /**
-   * 资料页的“开新会话”（POST /api/pms/:id/renew-session，见 ledger/handover.ts）：给项目经理现在的会话发一条 handover.requested，
-   * 让它把交接写成这一轮的回复；那一轮正常结束时（applyDriverEvent）同一个事务里换代：旧会话登记 session.end，
-   * 建 generation + 1 的新会话，记一行 session.renewed（交接全文，网页显示成分隔线），换代期间压着的消息改发给新会话。
-   * 新会话不另开一轮：开场说明 + 交接 + 最近几条原话拼在第一条写给它的消息前面（sessionPreamble）。
-   * 已经有一条在等（排队、已送达、处理中）就返回它，不再发；上一次失败、被停止的重新排队。没有这个项目经理 → not_found。
+   * 资料页的“开新会话”（POST /api/pms/:id/renew-session，见 ledger/handover.ts、docs/background-handover-design.md 第 2.9 节）：
+   * 跳过门槛直接登记一次交接（handovers 一行，auto = 0），跑腿的复制一份项目经理的会话在后台写交接，项目经理照常聊；写好后在它两轮之间换代
+   * （旧会话 session.end、建 generation + 1 的新会话并预先起好进程、记一行 session.renewed、压着的消息改发给新会话）。
+   * 已经有一次在跑（自动的也算）就并进去、改成手动的，返回它。没写成在对话里提示一句（handover.failed）。没有这个项目经理 → not_found。
    */
-  renewSession(pmId: PmId): { messageId: MessageId };
+  renewSession(pmId: PmId): { handoverId: HandoverId };
   /**
-   * 守护进程每 AUTO_RENEW_TICK_MS 调一次（ledger/handover.ts）：项目经理的对话长到 AUTO_RENEW_CONTEXT_TOKENS、这一轮正常结束、
-   * 没有排队的消息、空闲了 AUTO_RENEW_IDLE_MS，就和“开新会话”一样换代（交接请求标 auto，不给用户提示）；
-   * 写交接超过 HANDOVER_TIMEOUT_MS 的放弃（停掉那一轮，旧会话照常用）。
+   * 守护进程每 AUTO_RENEW_TICK_MS 调一次（ledger/handover.ts）：只看内存队列里的对话（项目经理的对话到 AUTO_RENEW_CONTEXT_TOKENS、
+   * 有交接在跑的），队列空什么都不查。交接写好了、旧会话空闲就换代（保险，平常在那一轮结束时已经换了）；写好后放太久的作废重来；
+   * 本会话写交接（兜底）空闲够久才发、超时放弃。
    */
   runAutoRenew(): void;
   /**
-   * 驱动层往会话写一行之前调（DriverOptions.sessionPreamble）：换代后的新会话还没读到开场说明，返回开场说明 + 交接 + 最近原话；
+   * 驱动层往会话写一行之前调（DriverOptions.sessionPreamble）：换代后的新会话还没读到开场说明，返回换代时定稿的开场说明（交接 + 原话）；
    * 读到了（它的消息开始处理过）、不是换代来的会话返回 null。
    */
   sessionPreamble(sessionId: SessionId): string | null;
   /**
-   * session.send 处理函数用：这条消息要不要先压着。同一个对话里、和它同一代或更早的 handover.requested（项目经理在写交接）
-   * 还没结果（排队、已送达、处理中）时都等，换代后发给新会话。handover.requested 自己等它的会话空闲（单独一轮）。
+   * session.send 处理函数用：这条消息要不要先压着。交接写好了（ready）、旧会话还在忙这一轮：发给旧会话的新消息压着，换代后发给新会话
+   * （旧会话有后台任务时不压）；本会话写交接（兜底）还没结果时，同一代的别的消息也压着。handover.requested 自己等它的会话空闲（单独一轮）。
    */
   waitsForHandover(messageId: MessageId): boolean;
 

@@ -243,10 +243,10 @@ export class FakeLedger {
     return { messageId };
   }
 
-  renewSession(pmId: PmId): { messageId: MessageId } {
+  renewSession(pmId: PmId): { handoverId: number } {
     this.check();
     this.renewed.push(pmId);
-    return { messageId: 50 };
+    return { handoverId: 50 };
   }
 
   snapshot(): StateSnapshot {
@@ -310,6 +310,12 @@ export class FakeLedger {
       waitsForHandover: unused("waitsForHandover"),
       runAutoRenew: unused("runAutoRenew"),
       sessionPreamble: unused("sessionPreamble"),
+      claimHandover: unused("claimHandover"),
+      handoverForked: unused("handoverForked"),
+      handoverWritten: unused("handoverWritten"),
+      handoverFailed: unused("handoverFailed"),
+      handoverCleaned: unused("handoverCleaned"),
+      uncleanedHandovers: unused("uncleanedHandovers"),
       runDueSchedules: unused("runDueSchedules"),
       addSchedule: (pmId, args) => {
         this.check();

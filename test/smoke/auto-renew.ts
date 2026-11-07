@@ -1,6 +1,6 @@
 // 自动换新会话的真机冒烟（手动跑：node test/smoke/auto-renew.ts [厂商…]，不进默认 vitest）：
 // 每个接入的厂商（VENDOR_SPECS）一个项目经理，门槛调到 1 token（测试专用），空闲 AUTO_IDLE_MS：
-// 1. 先让它记一个暗号，再连着聊几句（每句回完马上发下一句，不给它空闲），把记暗号那句挤出“最近原话”；
+// 1. 先让它记一个暗号，再连着聊几句（每句回完马上发下一句，不给它空闲）；
 // 2. 空闲后系统自动写交接、换成 generation 2 的新会话：聊天里只多一行分隔线（交接请求、交接全文不显示），新会话不另开一轮；
 // 3. 再问暗号：带着开场说明 + 交接写进新会话，新会话答得出来（只能从交接里知道）。
 // 跑完删掉临时目录和这次在各家用户目录里留下的会话记录。
@@ -14,7 +14,6 @@ import {
   API_PATHS,
   ENV_HOME,
   ENV_PORT,
-  HANDOVER_RECENT_MESSAGES,
   WORKER_ENV,
   isHandoverTraffic,
   systemEventOf,
@@ -24,6 +23,8 @@ import { Client, messagesOf, waitForStatus, waitUntil } from "../e2e/harness.ts"
 import { MODEL, expect, removeOwnClaudeProjects, removeOwnVendorRecords, scenario, type Outcome } from "./kit.ts";
 
 const TURN_MS = 240_000;
+/** 记暗号之后再连着聊几句。 */
+const CHATTER_TURNS = 5;
 /** 空闲多久自动换：比连着发的间隔长，比等待短。 */
 const AUTO_IDLE_MS = 15_000;
 /** 每家用的模型（便宜、快的）；codex 取它模型名单里的第一个。 */
@@ -83,9 +84,9 @@ try {
         return id;
       };
       await ask(`记住暗号 ${secret}，以后会问你。这一条只回复“好”。`);
-      // 连着聊几句，把记暗号那句挤出最近 HANDOVER_RECENT_MESSAGES 条原话
+      // 连着聊几句
       let lastAsked = 0;
-      for (let i = 1; i <= HANDOVER_RECENT_MESSAGES / 2; i++) lastAsked = await ask(`第 ${i} 句，只回复“${i}”。`);
+      for (let i = 1; i <= CHATTER_TURNS; i++) lastAsked = await ask(`第 ${i} 句，只回复“${i}”。`);
       const state0 = await client.state();
       const g1 = state0.sessions.find((s) => s.conversationId === chat && s.generation === 1)!;
       expect(!state0.sessions.some((s) => s.conversationId === chat && s.generation === 2), "连着聊的时候就换了（没等空闲）");

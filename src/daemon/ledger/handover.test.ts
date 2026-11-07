@@ -1,27 +1,32 @@
-// 换新会话（handover.ts）：请项目经理写交接 → 这一轮回完换代 → 新会话的开场说明拼在下一条消息前面；换代期间别的消息压着、改发给新会话；
-// 对话太长时空闲一会儿自动换（runAutoRenew），写交接出错、超时就放弃，旧会话照常用。
+// 换新会话的账本这一半（handover.ts，docs/background-handover-design.md 第 9 节）：跑腿的换成直接调 claimHandover / handoverForked /
+// handoverWritten / handoverFailed。到门槛进队列 → 旧会话空闲时开始复制（记切点）→ 写好了在旧会话两轮之间换代，开场说明定稿；
+// 没成按退避再来；复制不了退回本会话写交接（用户一发消息就打断）；重启、手动、清理；开场说明里的原话。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { isHandoverTraffic, systemEventOf, systemNoticeText, SESSION_RENEWED_NOTICE } from "../../shared/domain.ts";
-import type { ConversationId, Message, MessageId, PmId, SessionId } from "../../shared/domain.ts";
+import type { ConversationId, Message, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
+import type { HandoverJob } from "../../shared/handover.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import {
   AUTO_RENEW_CONTEXT_TOKENS,
   AUTO_RENEW_IDLE_MS,
   AUTO_RENEW_MAX_ATTEMPTS,
   AUTO_RENEW_RETRY_BACKOFF_MS,
-  HANDOVER_RECENT_MESSAGES,
+  HANDOVER_POST_CUT_MAX_CHARS,
+  HANDOVER_READY_MAX_MS,
+  HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
-import type { Db } from "../store/index.ts";
+import type { Db, SqlValue } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { StopEvent } from "./context.ts";
-import { HANDOVER_EMPTY_REASON } from "./handover.ts";
+import { HANDOVER_EMPTY_REASON, HANDOVER_NOT_WRITTEN_TEXT } from "./handover.ts";
+import { OMITTED_MARK, generationMark } from "./handover-recent.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 
@@ -34,11 +39,22 @@ let conversationId: ConversationId;
 let firstSession: SessionId;
 let uuid = 0;
 let stops: StopEvent[];
+let wakes: number;
+let logs: string[];
 
 const TRANSCRIPT = "/records/old-session.jsonl";
+const USAGE: TokenUsage = { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, context: 5 };
+const REF = { forker: "fake-native", handle: { forkId: "fork-1", extra: { path: "/tmp/fork-1" } } };
 
-function open(extra: Partial<LedgerOptions> = {}): SqliteLedger {
-  const created = createLedger(db, { now: () => now, pmHomeRoot: home, findTranscript: () => TRANSCRIPT, ...extra });
+function open(extra: Partial<LedgerOptions> = {}, on: Db = db): SqliteLedger {
+  const created = createLedger(on, {
+    now: () => now,
+    pmHomeRoot: home,
+    findTranscript: () => TRANSCRIPT,
+    onHandoverClaimable: () => wakes++,
+    log: (line) => logs.push(line),
+    ...extra,
+  });
   created.onStopRequested((event) => stops.push(event));
   return created;
 }
@@ -48,6 +64,8 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "agent-hub-handover-"));
   now = 1_000;
   stops = [];
+  wakes = 0;
+  logs = [];
   ledger = open();
   const created = ledger.createPm({ name: "小林", mode: "manage_only", persona: "", defaultModel: "opus" });
   pmId = created.pm.id;
@@ -61,12 +79,12 @@ afterEach(() => {
 });
 
 let clientSeq = 0;
-function post(text: string): MessageId {
-  return ledger.postUserMessage({ conversationId, clientId: `c${++clientSeq}`, text }).messageId;
+function post(text: string, conversation = conversationId): MessageId {
+  return ledger.postUserMessage({ conversationId: conversation, clientId: `c${++clientSeq}`, text }).messageId;
 }
 
 /** Worker 汇报这类系统消息：照 workers.ts 的 insertLine，status 从 queued 起、登记 session.send（source system）。 */
-function report(sessionId: SessionId, text: string): MessageId {
+function report(sessionId: SessionId, text: string, workerId = 1): MessageId {
   const id = Number(
     db.run(
       `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
@@ -74,7 +92,7 @@ function report(sessionId: SessionId, text: string): MessageId {
       conversationId,
       sessionId,
       text,
-      JSON.stringify({ event: "report", workerId: 1, workerConversationId: 99, title: "Worker 1", status: "done", summary: text }),
+      JSON.stringify({ event: "report", workerId, workerConversationId: 99, title: `Worker ${workerId}`, readonly: false, status: "done", summary: text }),
       `test-report:${++uuid}`,
       now,
       now,
@@ -84,24 +102,25 @@ function report(sessionId: SessionId, text: string): MessageId {
   return id;
 }
 
-/** 跑完一轮：送达、处理中、几段文字、结束（ok = false 是失败）。驱动层带了开场说明的那一行，处理中带 preamble 标记。 */
-function turn(sessionId: SessionId, messageIds: MessageId[], texts: string[], ok = true) {
+/** 写进去、开始处理（这一轮还没结束）。 */
+function turnStart(sessionId: SessionId, messageIds: MessageId[]) {
   const preamble = ledger.sessionPreamble(sessionId) !== null;
   ledger.applyDriverEvent(sessionId, { type: "message.delivered", at: now, messageIds });
   ledger.applyDriverEvent(sessionId, { type: "message.processing", at: now, messageIds, ...(preamble ? { preamble: true as const } : {}) });
+}
+
+/** 这一轮结束：ok = false 是失败；interrupted 是被打断。 */
+function turnEnd(sessionId: SessionId, messageIds: MessageId[], texts: string[] = [], how: "ok" | "failed" | "interrupted" = "ok") {
   for (const text of texts) ledger.applyDriverEvent(sessionId, { type: "agent.text", at: now, uuid: `u${++uuid}`, text });
-  ledger.applyDriverEvent(sessionId, { type: "turn.ended", at: now, ok, interrupted: false, messageIds, durationMs: 1 });
+  ledger.applyDriverEvent(sessionId, { type: "turn.ended", at: now, ok: how === "ok", interrupted: how === "interrupted", messageIds, durationMs: 1 });
+  // 驱动层每个事件都写 lastEventAt（本会话写交接按它算空闲）
+  createSessionStore(db).update(sessionId, { lastEventAt: now });
 }
 
-/** 交接请求写进去、agent 开始处理（这一轮还没结束）。 */
-function turnStart(sessionId: SessionId, request: MessageId) {
-  ledger.applyDriverEvent(sessionId, { type: "message.delivered", at: now, messageIds: [request] });
-  ledger.applyDriverEvent(sessionId, { type: "message.processing", at: now, messageIds: [request] });
-}
-
-function interrupted(sessionId: SessionId, messageIds: MessageId[]) {
-  ledger.applyDriverEvent(sessionId, { type: "message.delivered", at: now, messageIds });
-  ledger.applyDriverEvent(sessionId, { type: "turn.ended", at: now, ok: false, interrupted: true, messageIds, durationMs: 1 });
+/** 跑完一轮。 */
+function turn(sessionId: SessionId, messageIds: MessageId[], texts: string[], how: "ok" | "failed" | "interrupted" = "ok") {
+  turnStart(sessionId, messageIds);
+  turnEnd(sessionId, messageIds, texts, how);
 }
 
 function messages(): Message[] {
@@ -112,12 +131,33 @@ function sessions() {
   return db.all<{ id: number; generation: number }>("SELECT id, generation FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", conversationId);
 }
 
+interface Row {
+  id: number;
+  conversation_id: number;
+  from_session_id: number;
+  to_session_id: number | null;
+  auto: number;
+  method: string | null;
+  status: string;
+  cut_message_id: number | null;
+  fork_ref: string | null;
+  text: string | null;
+  preamble: string | null;
+  usage: string | null;
+  failure_reason: string | null;
+  cleaned_at: number | null;
+}
+
+function rows(conversation = conversationId): Row[] {
+  return db.all<Row>("SELECT * FROM handovers WHERE conversation_id = ? ORDER BY id", conversation);
+}
+
 function sendsOf(messageId: MessageId): AnyActionRow[] {
   return listActions(db).filter((a) => a.type === "session.send" && a.params.messageId === messageId);
 }
 
-function sendOf(messageId: MessageId): AnyActionRow | undefined {
-  return sendsOf(messageId)[0];
+function actionsFor(sessionId: SessionId, type: AnyActionRow["type"]): AnyActionRow[] {
+  return listActions(db).filter((a) => a.type === type && (a.params as { sessionId?: number }).sessionId === sessionId);
 }
 
 function requests(): Message[] {
@@ -136,84 +176,201 @@ function setContext(sessionId: SessionId, context: number) {
   createSessionStore(db).update(sessionId, { usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context } });
 }
 
-/** 交接请求回完，换到第二代。 */
-function renewNow(handover = "交接"): { g2: SessionId; line: Message } {
-  const request = ledger.renewSession(pmId).messageId;
-  turn(firstSession, [request], [handover]);
-  return { g2: sessions()[1]!.id, line: renewed()! };
-}
-
-/** 一轮聊完、对话够长、空闲够久：该自动换了。 */
-function readyForAuto(): MessageId {
-  const id = post("你好");
-  turn(firstSession, [id], ["你好呀"]);
-  setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS);
-  now += AUTO_RENEW_IDLE_MS;
+/** 聊一轮，这一轮结束时用量到门槛：进队列。 */
+function reachThreshold(sessionId = firstSession, text = "你好", reply = "你好呀"): MessageId {
+  const id = post(text);
+  setContext(sessionId, AUTO_RENEW_CONTEXT_TOKENS);
+  turn(sessionId, [id], [reply]);
   return id;
 }
 
-describe("renewSession（资料页的开新会话）", () => {
-  it("给现在的会话发一条交接请求（source system）：先讲后果、分节写；网页不显示它（isHandoverTraffic）", () => {
-    const { messageId } = ledger.renewSession(pmId);
-    const request = ledger.getMessage(messageId)!;
-    expect(request).toMatchObject({ sender: "system", kind: "text", status: "queued", sessionId: firstSession, meta: { event: "handover.requested", sessionId: firstSession } });
-    expect(request.meta!.auto).toBeUndefined();
-    expect(isHandoverTraffic(request)).toBe(true);
-    expect(request.text).toMatch(/^【系统】用户要给你换一个新会话/);
-    for (const part of [
-      "替换掉你现在的全部上下文",
-      `最近 ${HANDOVER_RECENT_MESSAGES} 条`,
-      "`hub worker search`",
-      "`hub worker show --task / --report`",
-      TRANSCRIPT,
-      "连去找都不会知道要去找",
-      "用户要做成什么、为什么",
-      "试过和否掉的",
-      "在等用户拍板的事：每件写清楚选项，并带上你的推荐",
-      "保留原话",
-      "一字不改",
-      "第 1 节和第 5 节原样带过来",
-      "2000 字",
-    ])
-      expect(request.text).toContain(part);
-    expect(sendOf(messageId)?.params).toEqual({ sessionId: firstSession, messageId, source: "system" });
+/** 跑腿的复制好、写完。 */
+function forkAndWrite(job: HandoverJob, text = "交接正文") {
+  expect(ledger.handoverForked(job.handoverId, { kind: "native", ref: REF })).toBe(true);
+  ledger.handoverWritten(job.handoverId, { text, usage: USAGE });
+}
+
+/** 资料页点开新会话、跑腿的写完，旧会话空闲：换到第二代。 */
+function renewNow(handover = "交接正文"): { g2: SessionId; line: Message } {
+  ledger.renewSession(pmId);
+  forkAndWrite(ledger.claimHandover()!, handover);
+  return { g2: sessions()[1]!.id, line: renewed()! };
+}
+
+/** 数 SQL 的库：包一层，每条语句（含事务）计一次。 */
+function countingDb(inner: Db): { db: Db; count: () => number; reset: () => void } {
+  let n = 0;
+  const wrapped: Db = {
+    exec: (sql) => {
+      n++;
+      inner.exec(sql);
+    },
+    run: (sql, ...params: SqlValue[]) => {
+      n++;
+      return inner.run(sql, ...params);
+    },
+    get: <T>(sql: string, ...params: SqlValue[]) => {
+      n++;
+      return inner.get<T>(sql, ...params);
+    },
+    all: <T>(sql: string, ...params: SqlValue[]) => {
+      n++;
+      return inner.all<T>(sql, ...params);
+    },
+    transaction: <T>(fn: () => T) => {
+      n++;
+      return inner.transaction(fn);
+    },
+    get inTransaction() {
+      return inner.inTransaction;
+    },
+    close: () => inner.close(),
+  };
+  return { db: wrapped, count: () => n, reset: () => (n = 0) };
+}
+
+describe("进队列：这一轮结束时用量到门槛", () => {
+  it("到门槛：登记一行 queued（auto），提交后叫醒跑腿的；没到门槛不登记", () => {
+    const id = post("你好");
+    setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS - 1);
+    turn(firstSession, [id], ["你好呀"]);
+    expect(rows()).toEqual([]);
+    expect(wakes).toBe(0);
+    reachThreshold();
+    expect(rows()).toMatchObject([{ status: "queued", auto: 1, from_session_id: firstSession, method: null }]);
+    expect(wakes).toBe(1);
+    // 再一轮也只有这一行
+    reachThreshold();
+    expect(rows()).toHaveLength(1);
   });
 
-  it("连点两次只发一条；没有这个项目经理 → not_found", () => {
-    const a = ledger.renewSession(pmId).messageId;
-    expect(ledger.renewSession(pmId).messageId).toBe(a);
-    expect(requests()).toHaveLength(1);
-    expect(() => ledger.renewSession(999)).toThrow(LedgerRequestError);
+  it("门槛可以改（冒烟测试用）", () => {
+    ledger = open({ autoRenew: { contextTokens: 100 } });
+    const id = post("你好");
+    setContext(firstSession, 100);
+    turn(firstSession, [id], ["你好呀"]);
+    expect(rows()).toHaveLength(1);
   });
 
-  it("上一次被停止、失败了：同一条重新排队", () => {
-    const a = ledger.renewSession(pmId).messageId;
-    interrupted(firstSession, [a]);
-    expect(ledger.getMessage(a)!.status).toBe("stopped");
-    setActionStatus(db, sendOf(a)!.id, { status: "done" }, now);
-    expect(ledger.renewSession(pmId).messageId).toBe(a);
-    expect(ledger.getMessage(a)!.status).toBe("queued");
-    expect(sendOf(a)!.status).toBe("pending");
+  it("队列空：runAutoRenew、claimHandover 一条 SQL 都不跑", () => {
+    const counting = countingDb(db);
+    ledger = open({}, counting.db);
+    counting.reset();
+    ledger.runAutoRenew();
+    expect(ledger.claimHandover()).toBeNull();
+    expect(counting.count()).toBe(0);
   });
 
-  it("交接请求等会话空闲才发（单独一轮，不混进正在跑的那一轮）", () => {
-    const busy = post("在跑的");
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [busy] });
-    const request = ledger.renewSession(pmId).messageId;
-    expect(ledger.waitsForHandover(request)).toBe(true);
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [busy], durationMs: 1 });
-    expect(ledger.waitsForHandover(request)).toBe(false);
+  it("50 个项目经理里只有 1 个到门槛：runAutoRenew 只查那一个（查询次数和项目经理个数无关）", () => {
+    reachThreshold();
+    const measure = () => {
+      const counting = countingDb(db);
+      const measured = open({}, counting.db);
+      counting.reset();
+      measured.runAutoRenew();
+      return counting.count();
+    };
+    const one = measure();
+    expect(one).toBeGreaterThan(0);
+    for (let i = 0; i < 49; i++) ledger.createPm({ name: `项目经理${i}`, mode: "manage_only", persona: "", defaultModel: "opus" });
+    expect(measure()).toBe(one);
+  });
+
+  it("重启：内存队列按库重建（用量到门槛的会话、不在终态的行）", () => {
+    setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS);
+    // 没经过 turn.ended（升级前就到门槛的）：重启后 runAutoRenew 登记
+    ledger = open();
+    ledger.runAutoRenew();
+    expect(rows()).toMatchObject([{ status: "queued", auto: 1 }]);
+    // 有一行在跑：重启后照样领得到
+    ledger = open();
+    expect(ledger.claimHandover()).not.toBeNull();
   });
 });
 
-describe("换代", () => {
-  it("交接这一轮回完：旧会话结束，建新一代会话，对话里只多一行分隔线（交接全文），新会话不另开一轮", () => {
-    for (let i = 1; i <= HANDOVER_RECENT_MESSAGES; i++) {
-      const id = post(`问题${i}`);
-      turn(firstSession, [id], [`回答${i}`]);
-    }
-    const request = ledger.renewSession(pmId).messageId;
-    turn(firstSession, [request], ["先看一下", "交接：暗号是 蓝鲸"]);
+describe("开始复制（claimHandover）", () => {
+  it("到门槛时旧会话空闲：马上领到（不等空闲 20 秒），改成 forking、记切点；交出的提示词是给复制那份的", () => {
+    reachThreshold();
+    const max = db.get<{ id: number }>("SELECT max(id) AS id FROM messages")!.id;
+    const job = ledger.claimHandover()!;
+    expect(job).toMatchObject({ handoverId: rows()[0]!.id, conversationId, auto: true, session: { id: firstSession } });
+    expect(rows()[0]).toMatchObject({ status: "forking", cut_message_id: max });
+    for (const part of [
+      "【系统】这是从你的会话复制出来的一份，只用来写交接",
+      "你的对话太长了，系统要自动给你换一个新会话",
+      "没有 hub 凭证，不要调用工具",
+      "替换掉你现在的全部上下文",
+      "约 3 万字你和用户的原话",
+      "`hub worker search`",
+      TRANSCRIPT,
+      "连去找都不会知道要去找",
+      "在等用户拍板的事：每件写清楚选项，并带上你的推荐",
+      "保留原话",
+      "原话会另外带给新会话，这里不用抄",
+      "第 1 节和第 5 节原样带过来",
+      "2000 字",
+      "不调用工具、不回复用户、不派活",
+    ])
+      expect(job.prompt).toContain(part);
+    expect(job.prompt).not.toContain("一字不改");
+    // 领走了就没有了
+    expect(ledger.claimHandover()).toBeNull();
+  });
+
+  it("旧会话在忙、有发给它还在路上的消息：不领，留在 queued；空闲了再领", () => {
+    reachThreshold();
+    const busy = post("在跑的");
+    turnStart(firstSession, [busy]);
+    expect(ledger.claimHandover()).toBeNull();
+    expect(rows()[0]!.status).toBe("queued");
+    turnEnd(firstSession, [busy], ["回完了"]);
+    // 空闲了，但驱动层队列里还有一条已送达的
+    const waiting = post("排着的");
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [waiting] });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [], durationMs: 1 });
+    expect(ledger.claimHandover()).toBeNull();
+    turn(firstSession, [waiting], ["好"]);
+    expect(ledger.claimHandover()).not.toBeNull();
+  });
+
+  it("写交接期间（forking / writing）：用户的消息照常发给旧会话、不压，旧会话照常回", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    const during = post("写交接时发的");
+    expect(ledger.waitsForHandover(during)).toBe(false);
+    ledger.handoverForked(job.handoverId, { kind: "native", ref: REF });
+    expect(ledger.waitsForHandover(during)).toBe(false);
+    turn(firstSession, [during], ["照常回"]);
+    expect(ledger.getMessage(during)).toMatchObject({ status: "replied", sessionId: firstSession });
+    expect(sessions()).toHaveLength(1);
+  });
+});
+
+describe("复制好了、写完了（handoverForked / handoverWritten）", () => {
+  it("handoverForked：还在 forking → writing、返回 true；不管怎样都存 fork_ref 和办法；已经不在 forking（作废了）返回 false", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    expect(ledger.handoverForked(job.handoverId, { kind: "copy", ref: REF })).toBe(true);
+    expect(rows()[0]).toMatchObject({ status: "writing", method: "copy", fork_ref: JSON.stringify(REF) });
+    // 重启记了失败之后才报复制好了：别写了，直接清
+    reachThreshold();
+    const second = (() => {
+      ledger.handoverFailed(job.handoverId, { kind: "error", detail: "x" });
+      now += AUTO_RENEW_RETRY_BACKOFF_MS;
+      return ledger.claimHandover()!;
+    })();
+    ledger = open();
+    ledger.recoverAfterRestart();
+    expect(ledger.handoverForked(second.handoverId, { kind: "native", ref: REF })).toBe(false);
+    expect(rows().find((r) => r.id === second.handoverId)).toMatchObject({ status: "failed", fork_ref: JSON.stringify(REF) });
+    // 不认识的编号
+    expect(ledger.handoverForked(999, { kind: "native", ref: REF })).toBe(false);
+  });
+
+  it("写完时旧会话空闲：同一个事务换代——新会话、分隔线、旧会话 session.end、预先起新会话的进程、开场说明定稿", () => {
+    const asked = reachThreshold(firstSession, "早先的问题", "早先的回答");
+    const job = ledger.claimHandover()!;
+    forkAndWrite(job, "交接：暗号是 蓝鲸");
 
     const [g1, g2] = sessions();
     expect(g1!.id).toBe(firstSession);
@@ -222,38 +379,122 @@ describe("换代", () => {
     const prev = createSessionStore(db).get(firstSession)!;
     expect(next).toMatchObject({ role: "pm", pmId, cwd: prev.cwd, addDirs: prev.addDirs, vendor: prev.vendor, model: "opus", hasCompletedTurn: false });
     expect(next.vendorSessionId).not.toBe(prev.vendorSessionId);
-    expect(listActions(db).filter((a) => a.type === "session.end")).toMatchObject([{ params: { sessionId: firstSession, generation: 1 } }]);
-
-    // 写交接那一轮的文字记 handover，网页不显示
-    const handoverTexts = messages().filter((m) => m.sender === "agent" && m.id > request);
-    expect(handoverTexts.map((m) => m.text)).toEqual(["先看一下", "交接：暗号是 蓝鲸"]);
-    expect(handoverTexts.every(isHandoverTraffic)).toBe(true);
-    expect(messages().filter((m) => m.sender === "agent" && m.id < request).some(isHandoverTraffic)).toBe(false);
+    expect(actionsFor(firstSession, "session.end")).toMatchObject([{ params: { sessionId: firstSession, generation: 1 } }]);
+    // 新会话预先起好进程（不发消息）
+    expect(actionsFor(g2!.id, "session.start")).toMatchObject([{ params: { sessionId: g2!.id, generation: 2 } }]);
+    expect(actionsFor(g2!.id, "session.send")).toEqual([]);
 
     const line = renewed()!;
-    expect(line).toMatchObject({ sender: "system", status: null, sessionId: null, text: "先看一下\n\n交接：暗号是 蓝鲸" });
-    expect(line.meta).toMatchObject({ event: "session.renewed", sessionId: g2!.id, fromSessionId: firstSession });
+    expect(line).toMatchObject({ sender: "system", status: null, sessionId: null, text: "交接：暗号是 蓝鲸" });
+    expect(line.meta).toMatchObject({ event: "session.renewed", sessionId: g2!.id, fromSessionId: firstSession, handoverId: job.handoverId, auto: true });
+    expect(line.meta!.turnStartId).toBeUndefined();
     expect(systemNoticeText(line)).toBe(SESSION_RENEWED_NOTICE);
-    // 新会话不主动开一轮：没有给它的 session.send、没有 session.start
-    expect(listActions(db).filter((a) => (a.params as { sessionId?: number }).sessionId === g2!.id)).toEqual([]);
+    // 对话里只多这一行分隔线
+    expect(messages().filter((m) => !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["早先的问题", "早先的回答", "交接：暗号是 蓝鲸"]);
 
-    // 开场说明拼在下一条前面：说明 + 交接 + 最近 10 条原话（问题 6～10、回答 6～10，按时间先后）
+    const row = rows()[0]!;
+    expect(row).toMatchObject({ status: "switched", to_session_id: g2!.id, text: "交接：暗号是 蓝鲸", usage: JSON.stringify(USAGE) });
     const preamble = ledger.sessionPreamble(g2!.id)!;
+    expect(preamble).toBe(row.preamble);
     expect(preamble).toMatch(/^【系统】这是新会话/);
-    expect(preamble).toContain("不用回复“已接上”");
-    expect(preamble).toContain("用户点了开新会话");
-    expect(preamble).toContain(TRANSCRIPT);
-    expect(preamble).toContain("## 交接\n\n先看一下\n\n交接：暗号是 蓝鲸");
-    expect(preamble).toContain("用户：问题6");
-    expect(preamble).toContain("你：回答10");
-    expect(preamble).not.toContain("问题5");
-    expect(preamble).not.toContain("这一轮请写一份交接");
-    expect(preamble.indexOf("问题6")).toBeLessThan(preamble.indexOf("回答10"));
+    for (const part of ["系统自动给你换了这个新会话", "约 3 万字你和用户的原话", "交接写于切点", "不用回复“已接上”", TRANSCRIPT, "## 交接\n\n交接：暗号是 蓝鲸", "用户：早先的问题\n\n你：早先的回答"])
+      expect(preamble).toContain(part);
+    expect(preamble).not.toContain("## 交接之后到的 Worker 汇报");
     // 之后用户发的给新会话
     expect(ledger.getMessage(post("新问题"))!.sessionId).toBe(g2!.id);
+    expect(ledger.getMessage(asked)!.sessionId).toBe(firstSession);
   });
 
-  it("开场说明只给到新会话读到为止：带着它的那一行开始处理就不再给（不带它的命令行不算）；旧会话、没换过代的会话没有", () => {
+  it.each(["ok", "failed", "interrupted"] as const)(
+    "写完时旧会话在忙：ready；之后发给旧会话的消息（用户的、Worker 汇报）压着；这一轮结束（%s）就换代，压着的改发给新会话，第一条带开场说明",
+    (how) => {
+      reachThreshold();
+      const job = ledger.claimHandover()!;
+      const busy = post("正在聊的");
+      turnStart(firstSession, [busy]);
+      forkAndWrite(job);
+      expect(rows()[0]!.status).toBe("ready");
+      expect(sessions()).toHaveLength(1);
+      expect(ledger.waitsForHandover(busy)).toBe(false);
+      const during = post("又发一条");
+      const workerLine = report(firstSession, "Worker 1 做完了");
+      expect(ledger.waitsForHandover(during)).toBe(true);
+      expect(ledger.waitsForHandover(workerLine)).toBe(true);
+
+      turnEnd(firstSession, [busy], ["回你"], how);
+      const g2 = sessions()[1]!.id;
+      expect(rows()[0]!.status).toBe("switched");
+      expect(ledger.getMessage(during)).toMatchObject({ status: "queued", sessionId: g2 });
+      expect(ledger.getMessage(workerLine)).toMatchObject({ status: "queued", sessionId: g2 });
+      expect(sendsOf(during).map((a) => a.params)).toEqual([{ sessionId: g2, messageId: during, source: "user" }]);
+      expect(sendsOf(workerLine).map((a) => a.params)).toEqual([{ sessionId: g2, messageId: workerLine, source: "system" }]);
+      expect(ledger.waitsForHandover(during)).toBe(false);
+      // 驱动层把两条拼成一行写进去，开始处理后开场说明就不再给
+      expect(ledger.sessionPreamble(g2)).toContain("## 交接\n\n交接正文");
+      turn(g2, [during, workerLine], ["好的"]);
+      expect(ledger.sessionPreamble(g2)).toBeNull();
+    },
+  );
+
+  it("旧会话有后台任务：不压消息、不换；后台任务没了再换", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    ledger.applyDriverEvent(firstSession, { type: "background.changed", at: now, count: 1 });
+    forkAndWrite(job);
+    expect(rows()[0]!.status).toBe("ready");
+    const during = post("后台任务跑着时发的");
+    expect(ledger.waitsForHandover(during)).toBe(false);
+    turn(firstSession, [during], ["回你"]);
+    ledger.runAutoRenew();
+    expect(sessions()).toHaveLength(1);
+    ledger.applyDriverEvent(firstSession, { type: "background.changed", at: now, count: 0 });
+    expect(sessions()).toHaveLength(2);
+  });
+
+  it(`ready 放超过 HANDOVER_READY_MAX_MS：作废（stale）、过退避重新复制，不算失败次数`, () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    ledger.applyDriverEvent(firstSession, { type: "background.changed", at: now, count: 1 });
+    forkAndWrite(job);
+    now += HANDOVER_READY_MAX_MS - 1;
+    ledger.runAutoRenew();
+    expect(rows()[0]!.status).toBe("ready");
+    now += 1;
+    ledger.runAutoRenew();
+    expect(rows()).toMatchObject([{ status: "abandoned", failure_reason: "stale" }, { status: "queued", auto: 1 }]);
+    ledger.applyDriverEvent(firstSession, { type: "background.changed", at: now, count: 0 });
+    expect(ledger.claimHandover()).toBeNull();
+    now += AUTO_RENEW_RETRY_BACKOFF_MS;
+    // 不算次数：再失败三次才满
+    for (let i = 0; i < AUTO_RENEW_MAX_ATTEMPTS; i++) {
+      const again = ledger.claimHandover()!;
+      expect(again).not.toBeNull();
+      ledger.handoverFailed(again.handoverId, { kind: "error", detail: "x" });
+      now += AUTO_RENEW_RETRY_BACKOFF_MS * 2 ** i;
+    }
+    expect(logs).toHaveLength(1);
+  });
+
+  it("同一个 turn.ended 重放、写完的又报一次：只换一次", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    forkAndWrite(job);
+    ledger.handoverWritten(job.handoverId, { text: "又一份", usage: USAGE });
+    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [], durationMs: 1 });
+    expect(sessions()).toHaveLength(2);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it("换代时把旧会话的额度状态抄给新会话", () => {
+    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
+    createSessionStore(db).update(firstSession, { rateLimit: info });
+    const { g2 } = renewNow();
+    expect(createSessionStore(db).get(g2)!.rateLimit).toEqual(info);
+  });
+});
+
+describe("开场说明：只给到新会话读到为止", () => {
+  it("带着它的那一行开始处理就不再给（不带它的命令行不算）；旧会话、没换过代的会话没有", () => {
     const { g2 } = renewNow();
     expect(ledger.sessionPreamble(firstSession)).toBeNull();
     const command = post("/compact");
@@ -272,449 +513,414 @@ describe("换代", () => {
     const first = post("接着说");
     ledger.applyDriverEvent(g2, { type: "message.delivered", at: now, messageIds: [first] });
     ledger.applyDriverEvent(g2, { type: "message.requeued", at: now, messageIds: [first] });
-    expect(ledger.getMessage(first)!.status).toBe("queued");
     expect(ledger.sessionPreamble(g2)).not.toBeNull();
   });
 
-  it("交接那一轮失败、被停止：不换代，用户点的提示一句；再点再失败再提示一句", () => {
-    const request = ledger.renewSession(pmId).messageId;
-    turn(firstSession, [request], ["写了一半"], false);
-    expect(sessions()).toHaveLength(1);
-    expect(renewed()).toBeUndefined();
-    expect(notices()).toEqual(["交接没写成，没换会话"]);
-    expect(ledger.renewSession(pmId).messageId).toBe(request);
-    interrupted(firstSession, [request]);
-    expect(notices()).toEqual(["交接没写成，没换会话", "交接没写成，没换会话"]);
-  });
-
-  it("同一个 turn.ended 重放：只换一次", () => {
-    const request = ledger.renewSession(pmId).messageId;
-    turn(firstSession, [request], ["交接"]);
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
-    expect(sessions()).toHaveLength(2);
-    // 换完再点：给新会话发新的一条，不是旧的那条
-    const again = ledger.renewSession(pmId).messageId;
-    expect(again).not.toBe(request);
-    expect(ledger.getMessage(again)!.sessionId).toBe(sessions()[1]!.id);
-  });
-
-  it("换代时把旧会话的额度状态抄给新会话", () => {
-    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
-    createSessionStore(db).update(firstSession, { rateLimit: info });
-    const { g2 } = renewNow();
-    expect(createSessionStore(db).get(g2)!.rateLimit).toEqual(info);
-  });
-
-  it("交接只取交接那一轮开始之后的文字；原话只取那之前已回复的，不混进排在前面那一轮的回答、不带还没发的消息、不带上一次写交接的文字", () => {
-    const answered = post("早先的问题");
-    turn(firstSession, [answered], ["早先的回答"]);
-    const failed = post("没发成的");
-    turn(firstSession, [failed], [], false);
-    const busy = post("忙时排着的");
-    const request = ledger.renewSession(pmId).messageId;
-    // 排在交接请求前面的那一轮（它的回答编号比交接请求大）
-    turn(firstSession, [busy], ["忙时那条的回答"]);
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
-    const during = post("交接时发的");
-    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: "h1", text: "交接正文" });
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
-
-    const g2 = sessions()[1]!.id;
-    expect(renewed()!.text).toBe("交接正文");
-    const [handover, recent] = ledger.sessionPreamble(g2)!.split("## 最近的原话");
-    expect(handover).toContain("交接正文");
-    expect(handover).not.toContain("忙时那条的回答");
-    expect(recent).toContain("用户：早先的问题");
-    expect(recent).toContain("你：忙时那条的回答");
-    expect(recent).toContain("用户：忙时排着的");
-    expect(recent).not.toContain("没发成的");
-    expect(recent).not.toContain("交接时发的");
-    expect(recent).not.toContain("交接正文");
-    expect(ledger.getMessage(during)!.status).toBe("queued");
-
-    // 第二次换代：上一次写交接的文字不算原话
-    turn(g2, [during], ["新会话的回答"]);
-    const second = ledger.renewSession(pmId).messageId;
-    turn(g2, [second], ["第二份交接"]);
-    const g3 = sessions()[2]!.id;
-    const recent2 = ledger.sessionPreamble(g3)!.split("## 最近的原话")[1]!;
-    expect(recent2).toContain("你：新会话的回答");
-    expect(recent2).not.toContain("交接正文");
-    expect(recent2).not.toContain("第二份交接");
-  });
-});
-
-describe("换代期间的消息", () => {
-  it("交接请求还没结果：用户的消息、Worker 的汇报都压着；换代后改发给新会话（各一个 session.send，不丢不重），第一条带开场说明", () => {
-    const request = ledger.renewSession(pmId).messageId;
-    expect(ledger.waitsForHandover(request)).toBe(false);
-    const during = post("换代时发的");
-    const workerLine = report(firstSession, "Worker 1 做完了");
-    expect(ledger.waitsForHandover(during)).toBe(true);
-    expect(ledger.waitsForHandover(workerLine)).toBe(true);
-    turn(firstSession, [request], ["交接"]);
-
-    const g2 = sessions()[1]!.id;
-    expect(ledger.getMessage(during)).toMatchObject({ status: "queued", sessionId: g2 });
-    expect(ledger.getMessage(workerLine)).toMatchObject({ status: "queued", sessionId: g2 });
-    expect(sendsOf(during).map((a) => a.params)).toEqual([{ sessionId: g2, messageId: during, source: "user" }]);
-    expect(sendsOf(workerLine).map((a) => a.params)).toEqual([{ sessionId: g2, messageId: workerLine, source: "system" }]);
-    // 换完立刻能发，不再等谁
-    expect(ledger.waitsForHandover(during)).toBe(false);
-    expect(ledger.waitsForHandover(workerLine)).toBe(false);
-    expect(ledger.sessionPreamble(g2)).toContain("## 交接\n\n交接");
-    // 驱动层把两条拼成一行写进去，开始处理后开场说明就不再给
-    turn(g2, [during, workerLine], ["好的"]);
+  it("升级前手动换代留下的那一行（有状态、没有 seen）不当成新会话没读到（审查 #113 第 2 条）", () => {
+    const { g2, line } = renewNow();
+    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", line.id);
     expect(ledger.sessionPreamble(g2)).toBeNull();
-    expect(ledger.getMessage(during)!.status).toBe("replied");
   });
 
-  it("交接请求失败了：压着的消息照常发给原来的会话", () => {
-    const request = ledger.renewSession(pmId).messageId;
-    const during = post("换代时发的");
-    turn(firstSession, [request], [], false);
-    expect(ledger.waitsForHandover(during)).toBe(false);
-    expect(ledger.getMessage(during)!.sessionId).toBe(firstSession);
-  });
-
-  it("只看同一代或更早的：新一代的交接请求不压旧一代留下的消息", () => {
-    const old = post("旧一代的");
-    db.run("UPDATE messages SET status = 'failed' WHERE id = ?", old);
-    renewNow();
-    db.run("UPDATE messages SET status = 'queued', session_id = ? WHERE id = ?", firstSession, old);
-    ledger.renewSession(pmId);
-    expect(ledger.waitsForHandover(old)).toBe(false);
-  });
-
-  it("重启：交接请求写进去了还没回完 → 重发给旧会话；换代之后才重启 → 改过去的消息照常恢复，开场说明还在，不再换代", () => {
-    const request = ledger.renewSession(pmId).messageId;
-    const during = post("换代时发的");
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
-
-    // 守护进程重启（换代前）
-    let restarted = open();
-    restarted.recoverAfterRestart();
-    expect(sendOf(request)).toMatchObject({ status: "pending", params: { sessionId: firstSession, resend: true } });
-    expect(sendOf(during)).toMatchObject({ status: "pending", params: { sessionId: firstSession } });
-    expect(restarted.waitsForHandover(during)).toBe(true);
-
-    ledger = restarted;
-    turn(firstSession, [request], ["交接"]);
-    expect(sessions()).toHaveLength(2);
-    const g2 = sessions()[1]!.id;
-    ledger.applyDriverEvent(g2, { type: "message.delivered", at: now, messageIds: [during] });
-    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
-
-    // 换代之后、新会话还没读到就重启：照样重发，开场说明照样给
-    restarted = open();
-    restarted.recoverAfterRestart();
-    expect(sendOf(during)).toMatchObject({ status: "pending", params: { sessionId: g2 } });
-    expect(restarted.sessionPreamble(g2)).not.toBeNull();
-    expect(sessions()).toHaveLength(2);
+  it("#113 换代、新会话还没读到就升级了（分隔线没有 handoverId）：按交接和那之前的原话现拼一份", () => {
+    const { g2, line } = renewNow("老交接");
+    const { handoverId: _, ...meta } = line.meta as Record<string, unknown>;
+    db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), line.id);
+    const preamble = ledger.sessionPreamble(g2)!;
+    expect(preamble).toContain("## 交接\n\n老交接");
   });
 });
 
-describe("自动换新会话（runAutoRenew）", () => {
-  it("对话到门槛、这一轮正常结束、空闲够久：发一条标 auto 的交接请求，说明是系统自动换的", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    const [request] = requests();
-    expect(request).toMatchObject({ status: "queued", sessionId: firstSession, meta: { event: "handover.requested", auto: true } });
-    expect(request!.text).toMatch(/^【系统】你的对话太长了，系统要自动给你换一个新会话——这是系统定的，不是用户要换/);
-    expect(sendOf(request!.id)?.params).toEqual({ sessionId: firstSession, messageId: request!.id, source: "system" });
-    // 写完照常换代，开场说明写明是自动换的；对话里只多一行分隔线，没有提示
-    turn(firstSession, [request!.id], ["交接"]);
-    const g2 = sessions()[1]!.id;
-    expect(renewed()!.meta).toMatchObject({ auto: true, sessionId: g2 });
-    expect(ledger.sessionPreamble(g2)).toContain("系统自动给你换了这个新会话");
+describe("没成：失败、超时、空文字、退避", () => {
+  it("出错：failed、算一次，马上登记下一行；退避内不领，过了退避才领；退避每次翻倍；满 AUTO_RENEW_MAX_ATTEMPTS 次记日志、这一代不再自动试", () => {
+    reachThreshold();
+    let backoff = AUTO_RENEW_RETRY_BACKOFF_MS;
+    for (let attempt = 1; attempt <= AUTO_RENEW_MAX_ATTEMPTS; attempt++) {
+      const job = ledger.claimHandover()!;
+      expect(job).not.toBeNull();
+      ledger.handoverFailed(job.handoverId, { kind: attempt === 2 ? "timeout" : "error", detail: "进程退出 1" });
+      expect(rows().find((r) => r.id === job.handoverId)).toMatchObject({ status: "failed", failure_reason: attempt === 2 ? "timeout: 进程退出 1" : "error: 进程退出 1" });
+      if (attempt === AUTO_RENEW_MAX_ATTEMPTS) break;
+      expect(rows().at(-1)).toMatchObject({ status: "queued", auto: 1 });
+      now += backoff - 1;
+      expect(ledger.claimHandover()).toBeNull();
+      now += 1;
+      backoff *= 2;
+    }
+    expect(logs).toEqual([expect.stringContaining(`试了 ${AUTO_RENEW_MAX_ATTEMPTS} 次`)]);
+    expect(rows().filter((r) => r.status === "queued")).toEqual([]);
     expect(notices()).toEqual([]);
-    const visible = messages().filter((m) => !isHandoverTraffic(m));
-    expect(visible.map((m) => m.text)).toEqual(["你好", "你好呀", "交接"]);
-    expect(systemEventOf(visible.at(-1)!)?.event).toBe("session.renewed");
+    // 这一代再怎么到门槛也不再自动试
+    now += AUTO_RENEW_RETRY_BACKOFF_MS * 100;
+    reachThreshold();
+    ledger.runAutoRenew();
+    expect(rows().filter((r) => r.status === "queued")).toEqual([]);
+    // 手动的照常能用，写成了就换代
+    renewNow();
+    expect(sessions()).toHaveLength(2);
   });
 
-  it("没到门槛不换", () => {
-    readyForAuto();
-    setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS - 1);
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
+  it("写出来是空的：failed（handover_empty），算一次", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    forkAndWrite(job, "   ");
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: HANDOVER_EMPTY_REASON });
+    expect(sessions()).toHaveLength(1);
+    expect(ledger.claimHandover()).toBeNull();
+    now += AUTO_RENEW_RETRY_BACKOFF_MS;
+    expect(ledger.claimHandover()).not.toBeNull();
   });
 
-  it("门槛、空闲时间可以改（冒烟测试用）", () => {
-    ledger = open({ autoRenew: { contextTokens: 100, idleMs: 10 } });
-    const id = post("你好");
-    turn(firstSession, [id], ["你好呀"]);
-    setContext(firstSession, 100);
-    now += 10;
-    ledger.runAutoRenew();
-    expect(requests()).toHaveLength(1);
+  it("关机（shutdown）：不算次数、不退避，下一行马上能领", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    ledger.handoverFailed(job.handoverId, { kind: "shutdown", detail: "" });
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: "shutdown" });
+    expect(ledger.claimHandover()).not.toBeNull();
   });
 
-  it("空闲还不够久不换；空闲期间来了消息不换，等它回完再重新算空闲", () => {
-    readyForAuto();
-    now -= 1;
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
-    // 来了一条（还排着）：不换
-    now += 1;
-    const next = post("再问一句");
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
-    // 回完了，空闲从这时算
-    now += 5;
-    turn(firstSession, [next], ["回答"]);
+  it("手动的没成：对话里提示一句，不自动重试；对不上的报告静默忽略", () => {
+    ledger.renewSession(pmId);
+    const job = ledger.claimHandover()!;
+    ledger.handoverFailed(job.handoverId, { kind: "error", detail: "x" });
+    expect(notices()).toEqual([HANDOVER_NOT_WRITTEN_TEXT]);
+    expect(rows()).toHaveLength(1);
+    ledger.handoverFailed(job.handoverId, { kind: "error", detail: "又报一次" });
+    ledger.handoverWritten(job.handoverId, { text: "晚到的", usage: USAGE });
+    expect(notices()).toHaveLength(1);
+    expect(sessions()).toHaveLength(1);
+  });
+});
+
+describe("兜底：复制不了，本会话写交接", () => {
+  /** 到门槛、领走、跑腿的报不支持。 */
+  function unsupported(): void {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    ledger.handoverFailed(job.handoverId, { kind: "unsupported", detail: "agy-copy: 格式不认识" });
+  }
+
+  it("报不支持：不算失败，这一行退回 in_session；跑腿的不再领它；自动的空闲 AUTO_RENEW_IDLE_MS 后才给旧会话发交接请求", () => {
+    unsupported();
+    expect(rows()).toMatchObject([{ status: "queued", method: "in_session" }]);
+    expect(ledger.claimHandover()).toBeNull();
     now += AUTO_RENEW_IDLE_MS - 1;
     ledger.runAutoRenew();
     expect(requests()).toEqual([]);
     now += 1;
     ledger.runAutoRenew();
-    expect(requests()).toHaveLength(1);
+    const [request] = requests();
+    expect(request).toMatchObject({ status: "queued", sessionId: firstSession, meta: { event: "handover.requested", auto: true, handoverId: rows()[0]!.id } });
+    expect(request!.text).toMatch(/^【系统】你的对话太长了，系统要自动给你换一个新会话——这是系统定的，不是用户要换/);
+    expect(request!.text).toContain("这一轮请写一份交接");
+    expect(request!.text).toContain("约 3 万字你和用户的原话");
+    expect(sendsOf(request!.id).map((a) => a.params)).toEqual([{ sessionId: firstSession, messageId: request!.id, source: "system" }]);
+    expect(rows()[0]!.status).toBe("writing");
   });
 
-  it("Worker 汇报在路上、会话在忙、有后台任务：不换", () => {
-    readyForAuto();
-    const line = report(firstSession, "汇报");
+  it("空闲期间来了消息：不发，等它回完再重新算空闲", () => {
+    unsupported();
+    now += AUTO_RENEW_IDLE_MS - 5;
+    const next = post("再问一句");
+    now += 5;
     ledger.runAutoRenew();
     expect(requests()).toEqual([]);
-    turn(firstSession, [line], ["收到"]);
-    now += AUTO_RENEW_IDLE_MS;
-    ledger.applyDriverEvent(firstSession, { type: "turn.started", at: now });
+    turn(firstSession, [next], ["回答"]);
     ledger.runAutoRenew();
     expect(requests()).toEqual([]);
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [], durationMs: 1 });
-    ledger.applyDriverEvent(firstSession, { type: "background.changed", at: now, count: 1 });
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
-  });
-
-  it("上一轮被打断、失败了不换", () => {
-    const id = post("你好");
-    interrupted(firstSession, [id]);
-    setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS);
-    now += AUTO_RENEW_IDLE_MS;
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
-    const again = post("再来");
-    turn(firstSession, [again], [], false);
-    now += AUTO_RENEW_IDLE_MS;
-    ledger.runAutoRenew();
-    expect(requests()).toEqual([]);
-  });
-
-  it("正在换代不重复：交接请求还没结果时再查，不再发", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    ledger.runAutoRenew();
     now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
     expect(requests()).toHaveLength(1);
-    expect(sendsOf(requests()[0]!.id)).toHaveLength(1);
   });
 
-  it("写交接那一轮出错：放弃，不提示、不换代，旧会话照常用；之后又有一轮回完、再空闲、过了退避才再试", () => {
-    readyForAuto();
+  it("写完那一轮：换代（分隔线带 turnStartId），那一轮的文字不显示，开场说明里不带它", () => {
+    unsupported();
+    now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
     const request = requests()[0]!.id;
-    const during = post("写交接时发的");
-    turn(firstSession, [request], ["写了一半"], false);
-    expect(sessions()).toHaveLength(1);
-    expect(notices()).toEqual([]);
+    turn(firstSession, [request], ["先看一下", "交接：暗号是 蓝鲸"]);
+    const g2 = sessions()[1]!.id;
+    const line = renewed()!;
+    expect(line).toMatchObject({ text: "先看一下\n\n交接：暗号是 蓝鲸", meta: { sessionId: g2, handoverId: rows()[0]!.id } });
+    expect(line.meta!.turnStartId).toEqual(expect.any(Number));
+    expect(rows()[0]).toMatchObject({ status: "switched", method: "in_session", to_session_id: g2 });
+    expect(messages().filter((m) => m.sender === "agent" && m.id > request).every(isHandoverTraffic)).toBe(true);
+    const preamble = ledger.sessionPreamble(g2)!;
+    expect(preamble).toContain("## 交接\n\n先看一下\n\n交接：暗号是 蓝鲸");
+    expect(preamble.split("## 最近的原话")[1]).not.toContain("暗号是 蓝鲸");
+    expect(actionsFor(g2, "session.start")).toHaveLength(1);
+  });
+
+  it("写交接那一轮里用户发了消息：请驱动层停掉这一轮，用户的消息等它停下后照常发给旧会话；不算失败次数，之后再空闲够久再试", () => {
+    unsupported();
+    now += AUTO_RENEW_IDLE_MS;
+    ledger.runAutoRenew();
+    const request = requests()[0]!.id;
+    turnStart(firstSession, [request]);
+    const during = post("急事");
+    expect(stops).toEqual([{ conversationId, sessionId: firstSession }]);
+    expect(ledger.waitsForHandover(during)).toBe(true);
+    // 再发一条不再请停
+    post("还有");
+    expect(stops).toHaveLength(1);
+    turnEnd(firstSession, [request], ["写了一半"], "interrupted");
+    expect(ledger.getMessage(request)!.status).toBe("stopped");
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: "user_message" });
+    expect(rows()[1]).toMatchObject({ status: "queued", method: null, auto: 1 });
     expect(ledger.waitsForHandover(during)).toBe(false);
-    expect(ledger.getMessage(during)!.sessionId).toBe(firstSession);
-    // 压着的那条还没回：不再试
+    expect(ledger.getMessage(during)).toMatchObject({ status: "queued", sessionId: firstSession });
+    // 不退避：马上能领（跑腿的再报不支持就又退回本会话写交接）
+    expect(ledger.claimHandover()).not.toBeNull();
+  });
+
+  it("交接请求还排着时用户发了消息：直接标已停止，不用请驱动层停", () => {
+    unsupported();
     now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("failed");
-    // 回完了、再空闲，但还没过退避：不试
-    turn(firstSession, [during], ["回答"]);
-    now += AUTO_RENEW_IDLE_MS;
+    const request = requests()[0]!.id;
+    const during = post("急事");
+    expect(stops).toEqual([]);
+    expect(ledger.getMessage(request)!.status).toBe("stopped");
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: "user_message" });
+    expect(ledger.waitsForHandover(during)).toBe(false);
+  });
+
+  it("手动的：空闲就发，不等 AUTO_RENEW_IDLE_MS；那一轮失败了提示一句；再点同一条交接请求重新排队", () => {
+    ledger.renewSession(pmId);
+    const job = ledger.claimHandover()!;
+    ledger.handoverFailed(job.handoverId, { kind: "unsupported", detail: "" });
     ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("failed");
-    // 过了退避：同一条重新排队
-    now += AUTO_RENEW_RETRY_BACKOFF_MS;
+    const request = requests()[0]!;
+    expect(request.text).toMatch(/^【系统】用户要给你换一个新会话/);
+    turn(firstSession, [request.id], ["写了一半"], "failed");
+    expect(notices()).toEqual([HANDOVER_NOT_WRITTEN_TEXT]);
+    expect(rows()[0]).toMatchObject({ status: "failed" });
+    ledger.renewSession(pmId);
+    ledger.handoverFailed(ledger.claimHandover()!.handoverId, { kind: "unsupported", detail: "" });
     ledger.runAutoRenew();
-    expect(ledger.getMessage(request)).toMatchObject({ status: "queued", meta: { auto: true } });
-    turn(firstSession, [request], ["这次写完了"]);
+    expect(requests()).toHaveLength(1);
+    expect(ledger.getMessage(request.id)!.status).toBe("queued");
+    turn(firstSession, [request.id], ["交接"]);
     expect(sessions()).toHaveLength(2);
   });
 
-  it("写交接超时：请驱动层停掉那一轮（不标正在停），停下来后放弃、不提示，压着的消息照常发给旧会话", () => {
-    readyForAuto();
+  it.each([
+    ["只调了工具", () => ledger.applyDriverEvent(firstSession, { type: "agent.tool", at: now, uuid: `u${++uuid}`, toolUseId: `t${uuid}`, name: "Bash", input: { command: "ls" } })],
+    ["回了空", () => ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "  " })],
+  ])("那一轮正常结束但没写出文字（%s）：当没写成，不换代，算一次（审查 #113 第 3 条）", (_, act) => {
+    unsupported();
+    now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
     const request = requests()[0]!.id;
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
-    const during = post("写交接时发的");
+    turnStart(firstSession, [request]);
+    act();
+    turnEnd(firstSession, [request]);
+    expect(sessions()).toHaveLength(1);
+    expect(ledger.getMessage(request)).toMatchObject({ status: "failed", failureReason: HANDOVER_EMPTY_REASON });
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: HANDOVER_EMPTY_REASON });
+  });
+
+  it("写交接超时：请驱动层停掉那一轮，停下来后记失败（timeout），压着的消息照常发给旧会话；停不下来再过一个超时直接标已停止", () => {
+    unsupported();
+    now += AUTO_RENEW_IDLE_MS;
+    ledger.runAutoRenew();
+    const request = requests()[0]!.id;
+    turnStart(firstSession, [request]);
+    const workerLine = report(firstSession, "汇报");
+    expect(ledger.waitsForHandover(workerLine)).toBe(true);
     now += HANDOVER_TIMEOUT_MS - 1;
     ledger.runAutoRenew();
     expect(stops).toEqual([]);
     now += 1;
     ledger.runAutoRenew();
     expect(stops).toEqual([{ conversationId, sessionId: firstSession }]);
-    expect(ledger.snapshot().sessions.find((s) => s.sessionId === firstSession)!.activity).toBe("working");
-    // 停下来之前还压着（不让用户的消息写进正在停的那一轮被取消）
-    expect(ledger.waitsForHandover(during)).toBe(true);
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: false, interrupted: true, messageIds: [request], durationMs: 1 });
-    expect(ledger.getMessage(request)!.status).toBe("stopped");
-    expect(sessions()).toHaveLength(1);
-    expect(notices()).toEqual([]);
-    expect(ledger.waitsForHandover(during)).toBe(false);
-    expect(ledger.getMessage(during)).toMatchObject({ status: "queued", sessionId: firstSession });
-  });
-
-  it("超时后驱动层一直没停下来：再过一个超时直接标已停止，不把用户卡住", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    const request = requests()[0]!.id;
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("processing");
     now += HANDOVER_TIMEOUT_MS;
     ledger.runAutoRenew();
     expect(ledger.getMessage(request)!.status).toBe("stopped");
-    expect(stops).toHaveLength(1);
-  });
-
-  it("交接请求一直没发出去（会话空闲却起不来）：超时直接标已停止", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    const request = requests()[0]!.id;
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("stopped");
-    expect(stops).toEqual([]);
-  });
-
-  it("用户点的开新会话碰上正在跑的一轮：那一轮跑多久都不算超时", () => {
-    const busy = post("在跑的");
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [busy] });
-    const request = ledger.renewSession(pmId).messageId;
-    now += HANDOVER_TIMEOUT_MS * 3;
-    ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("queued");
-  });
-
-  it("每一代最多自动试 AUTO_RENEW_MAX_ATTEMPTS 次，退避每次翻倍；试满了记一条日志，这一代不再自动换，用户点的照常（审查 #113 第 4 条）", () => {
-    const logs: string[] = [];
-    ledger = open({ log: (line) => logs.push(line) });
-    let backoff = AUTO_RENEW_RETRY_BACKOFF_MS;
-    for (let attempt = 1; attempt <= AUTO_RENEW_MAX_ATTEMPTS; attempt++) {
-      readyForAuto();
-      ledger.runAutoRenew();
-      const request = requests()[0]!;
-      expect(request).toMatchObject({ status: "queued", meta: { autoAttempts: attempt } });
-      turn(firstSession, [request.id], ["写了一半"], false);
-      if (attempt < AUTO_RENEW_MAX_ATTEMPTS) {
-        // 没过这一次的退避：不试
-        const id = post("问");
-        turn(firstSession, [id], ["答"]);
-        now += backoff - 1;
-        ledger.runAutoRenew();
-        expect(ledger.getMessage(request.id)!.status).toBe("failed");
-        now -= backoff - 1;
-        now += backoff;
-        backoff *= 2;
-      }
-    }
-    expect(logs).toEqual([expect.stringContaining(`试了 ${AUTO_RENEW_MAX_ATTEMPTS} 次`)]);
-    // 试满了：再怎么空闲也不自动换
-    readyForAuto();
-    now += AUTO_RENEW_RETRY_BACKOFF_MS * 100;
-    ledger.runAutoRenew();
-    expect(requests()[0]!.status).toBe("failed");
-    expect(logs).toHaveLength(1);
-    // 用户点的照常，写成了就换代；新一代重新算次数
-    const request = ledger.renewSession(pmId).messageId;
-    turn(firstSession, [request], ["交接"]);
-    expect(sessions()).toHaveLength(2);
-  });
-
-  it("守护进程停了超过超时再起：启动检查请停（没进程可停）不算数；重发后那一轮的文字都不显示，就算请求超时被标了已停止（审查 #113 第 5 条）", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    const request = requests()[0]!.id;
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
-    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
-
-    // 停了很久再起：启动时先查一次，超时了请驱动层停（这时还没进程），交接请求按“至少一次”重发
-    now += HANDOVER_TIMEOUT_MS * 2;
-    ledger = open();
-    ledger.recoverAfterRestart();
-    ledger.runAutoRenew();
-    expect(stops).toHaveLength(1);
-    // 重发：驱动层起进程写进去，agent 开始写交接
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [request] });
-    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接第一段" });
-    // 这一轮又写超时：重新请它停（之前那次没东西可停），不直接标已停止
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    expect(stops).toHaveLength(2);
-    expect(ledger.getMessage(request)!.status).toBe("processing");
-    // 还是停不下来：再过一个超时标已停止；驱动层那一轮还在写，写出来的照样不显示
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("stopped");
-    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接第二段" });
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
-    const texts = messages().filter((m) => m.sender === "agent");
-    expect(texts.filter((m) => !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀"]);
-    expect(sessions()).toHaveLength(1);
-    // 那一轮结束后，旧会话再回的话照常显示
-    const id = post("在吗");
-    turn(firstSession, [id], ["在"]);
-    expect(messages().filter((m) => m.sender === "agent" && !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀", "在"]);
-  });
-
-  it("写交接那一轮被标了已停止、驱动层还在写时，压着的消息放出来在那一轮中途被读到：从读到起 agent 的话照常显示", () => {
-    readyForAuto();
-    ledger.runAutoRenew();
-    const request = requests()[0]!.id;
-    turnStart(firstSession, request);
-    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "交接" });
-    const during = post("写交接时发的");
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    now += HANDOVER_TIMEOUT_MS;
-    ledger.runAutoRenew();
-    expect(ledger.getMessage(request)!.status).toBe("stopped");
-    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [during], midTurn: true });
-    ledger.applyDriverEvent(firstSession, { type: "message.processing", at: now, messageIds: [during] });
-    ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "回你" });
-    expect(messages().filter((m) => m.sender === "agent" && !isHandoverTraffic(m)).map((m) => m.text)).toEqual(["你好呀", "回你"]);
+    expect(rows()[0]).toMatchObject({ status: "failed", failure_reason: "timeout" });
+    expect(ledger.waitsForHandover(workerLine)).toBe(false);
+    expect(ledger.getMessage(workerLine)!.sessionId).toBe(firstSession);
   });
 });
 
-describe("审查 #113", () => {
-  it("第 2 条：升级前手动换代留下的那一行（有状态、没有 seen）不当成新会话没读到，不再拼开场说明", () => {
-    const { g2, line } = renewNow();
-    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", line.id);
-    expect(ledger.sessionPreamble(g2)).toBeNull();
+describe("重启", () => {
+  it("还在复制、写的：记失败（restart，不算次数）并马上重新排队；有 fork_ref 没清的交给跑腿的补清；清过的不再列", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    ledger.handoverForked(job.handoverId, { kind: "native", ref: REF });
+    ledger = open();
+    ledger.recoverAfterRestart();
+    expect(rows()).toMatchObject([{ status: "failed", failure_reason: "restart" }, { status: "queued", auto: 1 }]);
+    expect(ledger.uncleanedHandovers()).toEqual([{ handoverId: job.handoverId, vendor: "claude", ref: REF }]);
+    ledger.handoverCleaned(job.handoverId);
+    ledger.handoverCleaned(job.handoverId);
+    expect(ledger.uncleanedHandovers()).toEqual([]);
+    expect(ledger.claimHandover()).not.toBeNull();
   });
 
-  it.each([
-    ["只调了工具", () => ledger.applyDriverEvent(firstSession, { type: "agent.tool", at: now, uuid: `u${++uuid}`, toolUseId: `t${uuid}`, name: "Bash", input: { command: "ls" } })],
-    ["回了空", () => ledger.applyDriverEvent(firstSession, { type: "agent.text", at: now, uuid: `u${++uuid}`, text: "  " })],
-  ])("第 3 条：交接那一轮正常结束但没写出文字（%s）：当没写成，不换代；用户点的提示一句，压着的消息照常发给旧会话", (_, act) => {
-    const request = ledger.renewSession(pmId).messageId;
-    const during = post("写交接时发的");
-    turnStart(firstSession, request);
-    act();
-    ledger.applyDriverEvent(firstSession, { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [request], durationMs: 1 });
-    expect(sessions()).toHaveLength(1);
-    expect(renewed()).toBeUndefined();
-    expect(ledger.getMessage(request)).toMatchObject({ status: "failed", failureReason: HANDOVER_EMPTY_REASON });
-    expect(notices()).toHaveLength(1);
-    expect(ledger.waitsForHandover(during)).toBe(false);
-    expect(ledger.getMessage(during)!.sessionId).toBe(firstSession);
-    // 再点：同一条重新排队，这次写了就换
-    ledger.renewSession(pmId);
+  it("ready 的：重启后旧会话空闲就换（runAutoRenew）", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    const busy = post("在跑");
+    turnStart(firstSession, [busy]);
+    forkAndWrite(job);
+    // 守护进程重启：内存里会话是空闲；那一轮的消息重发
+    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", busy);
+    ledger = open();
+    ledger.recoverAfterRestart();
+    expect(rows()[0]!.status).toBe("ready");
+    ledger.runAutoRenew();
+    expect(sessions()).toHaveLength(2);
+  });
+
+  it("本会话写交接的 H 写进去了还没回完：照常重发给旧会话，那一行留着；写完照常换代", () => {
+    reachThreshold();
+    ledger.handoverFailed(ledger.claimHandover()!.handoverId, { kind: "unsupported", detail: "" });
+    now += AUTO_RENEW_IDLE_MS;
+    ledger.runAutoRenew();
+    const request = requests()[0]!.id;
+    ledger.applyDriverEvent(firstSession, { type: "message.delivered", at: now, messageIds: [request] });
+    for (const a of listActions(db)) setActionStatus(db, a.id, { status: "done" }, now);
+    ledger = open();
+    ledger.recoverAfterRestart();
+    expect(sendsOf(request)[0]).toMatchObject({ status: "pending", params: { sessionId: firstSession, resend: true } });
+    expect(rows()[0]!.status).toBe("writing");
     turn(firstSession, [request], ["交接"]);
     expect(sessions()).toHaveLength(2);
+  });
+});
+
+describe("手动开新会话（renewSession）", () => {
+  it("跳过门槛直接排队（auto = 0），叫醒跑腿的；连点返回同一个；没有这个项目经理 → not_found", () => {
+    const { handoverId } = ledger.renewSession(pmId);
+    expect(rows()).toMatchObject([{ id: handoverId, status: "queued", auto: 0 }]);
+    expect(wakes).toBe(1);
+    expect(ledger.renewSession(pmId).handoverId).toBe(handoverId);
+    expect(rows()).toHaveLength(1);
+    expect(() => ledger.renewSession(999)).toThrow(LedgerRequestError);
+    const job = ledger.claimHandover()!;
+    expect(job.auto).toBe(false);
+    expect(job.prompt).toContain("用户要给你换一个新会话");
+    forkAndWrite(job);
+    expect(ledger.sessionPreamble(sessions()[1]!.id)).toContain("用户点了开新会话");
+  });
+
+  it("自动的在跑：并成一个，改成手动的（没成要提示）", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    expect(ledger.renewSession(pmId).handoverId).toBe(job.handoverId);
+    expect(rows()).toMatchObject([{ auto: 0, status: "forking" }]);
+    ledger.handoverFailed(job.handoverId, { kind: "error", detail: "x" });
+    expect(notices()).toEqual([HANDOVER_NOT_WRITTEN_TEXT]);
+  });
+});
+
+describe("清理复制那份", () => {
+  it("换代不等清理；清理只报一次就不再列；清不掉（没报）下次启动照样列出来", () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    forkAndWrite(job);
+    expect(sessions()).toHaveLength(2);
+    expect(rows()[0]!.cleaned_at).toBeNull();
+    expect(ledger.uncleanedHandovers()).toHaveLength(1);
+    ledger = open();
+    expect(ledger.uncleanedHandovers()).toEqual([{ handoverId: job.handoverId, vendor: "claude", ref: REF }]);
+    ledger.handoverCleaned(job.handoverId);
+    expect(ledger.uncleanedHandovers()).toEqual([]);
+    // 正在复制、写的不列（跑腿的手上还在用）
+    reachThreshold(sessions()[1]!.id);
+    const second = ledger.claimHandover()!;
+    ledger.handoverForked(second.handoverId, { kind: "native", ref: REF });
+    expect(ledger.uncleanedHandovers()).toEqual([]);
+  });
+});
+
+describe("开场说明里的原话（账本查询）", () => {
+  it("只取用户和项目经理的文字：不取工具、Worker 汇报、系统消息、写交接那几轮，用户没回复的不带", () => {
+    const asked = post("问一句");
+    turnStart(firstSession, [asked]);
+    ledger.applyDriverEvent(firstSession, { type: "agent.tool", at: now, uuid: `u${++uuid}`, toolUseId: "t1", name: "Bash", input: { command: "echo 工具输出" } });
+    turnEnd(firstSession, [asked], ["答一句"]);
+    const line = report(firstSession, "汇报全文 XYZ");
+    turn(firstSession, [line], ["收到汇报"]);
+    const failed = post("没发成的");
+    turn(firstSession, [failed], [], "failed");
+    const job = (() => {
+      setContext(firstSession, AUTO_RENEW_CONTEXT_TOKENS);
+      ledger.renewSession(pmId);
+      return ledger.claimHandover()!;
+    })();
+    const busy = post("正在聊的");
+    turnStart(firstSession, [busy]);
+    forkAndWrite(job);
+    const held = post("压着没回的");
+    turnEnd(firstSession, [busy], ["正在聊的回答"]);
+    const recent = ledger.sessionPreamble(sessions()[1]!.id)!.split("## 最近的原话")[1]!;
+    expect(recent).toContain("用户：问一句\n\n你：答一句\n\n你：收到汇报");
+    expect(recent).toContain("用户：正在聊的\n\n你：正在聊的回答");
+    for (const absent of ["echo", "汇报全文 XYZ", "没发成的", "压着没回的", "交接正文"]) expect(recent).not.toContain(absent);
+    expect(ledger.getMessage(held)!.status).toBe("queued");
+  });
+
+  it(`切点之前从新往旧取到 HANDOVER_RECENT_CHARS 字，边界那条留后半截标（前面略）；切点之后的全带（哪怕超过上限）`, () => {
+    const old = post(`最早的${"甲".repeat(100)}`);
+    turn(firstSession, [old], ["乙".repeat(HANDOVER_RECENT_CHARS)]);
+    const near = post("切点前最后一句");
+    turn(firstSession, [near], ["好"]);
+    ledger.renewSession(pmId);
+    const job = ledger.claimHandover()!;
+    // 切点之后又聊了很多（超过 3 万字，但没超过作废的上限）
+    const after = post(`切点之后${"丙".repeat(HANDOVER_RECENT_CHARS)}`);
+    turn(firstSession, [after], ["切点之后的回答"]);
+    forkAndWrite(job);
+    const recent = ledger.sessionPreamble(sessions()[1]!.id)!.split("## 最近的原话")[1]!;
+    expect(recent).toContain(`切点之后${"丙".repeat(HANDOVER_RECENT_CHARS)}`);
+    expect(recent).toContain("用户：切点前最后一句\n\n你：好");
+    expect(recent).toContain(`你：${OMITTED_MARK}乙`);
+    expect(recent).not.toContain("最早的");
+  });
+
+  it("跨两代、三代都带，跨代处插一行（这之前是第 N 个会话）", () => {
+    const a = post("第一代的话");
+    turn(firstSession, [a], ["第一代的回答"]);
+    const { g2 } = renewNow("第一份交接");
+    const b = post("第二代的话");
+    turn(g2, [b], ["第二代的回答"]);
+    ledger.renewSession(pmId);
+    forkAndWrite(ledger.claimHandover()!, "第二份交接");
+    const g3 = sessions()[2]!.id;
+    const recent = ledger.sessionPreamble(g3)!.split("## 最近的原话")[1]!;
+    expect(recent).toContain(`用户：第一代的话\n\n你：第一代的回答\n\n${generationMark(1)}\n\n用户：第二代的话\n\n你：第二代的回答`);
+    expect(recent).not.toContain("第一份交接");
+  });
+
+  it(`切点之后聊的超过 HANDOVER_POST_CUT_MAX_CHARS：交接太旧，作废重来（不算次数）`, () => {
+    reachThreshold();
+    const job = ledger.claimHandover()!;
+    const after = post("丁".repeat(HANDOVER_POST_CUT_MAX_CHARS + 1));
+    turn(firstSession, [after], ["好"]);
+    forkAndWrite(job);
+    expect(sessions()).toHaveLength(1);
+    expect(rows()).toMatchObject([{ status: "abandoned", failure_reason: expect.stringMatching(/^post_cut/) }, { status: "queued", auto: 1 }]);
+    expect(ledger.claimHandover()).not.toBeNull();
+  });
+
+  it("切点之后交给项目经理的 Worker 汇报：每条一行目录（不带全文）；切点之前的、换代时还压着的不列", () => {
+    const before = report(firstSession, "切点之前的汇报", 7);
+    turn(firstSession, [before], ["收到 7"]);
+    ledger.renewSession(pmId);
+    const job = ledger.claimHandover()!;
+    const done = report(firstSession, "汇报全文 112", 112);
+    turnStart(firstSession, [done]);
+    forkAndWrite(job);
+    const held = report(firstSession, "压着的汇报", 113);
+    turnEnd(firstSession, [done], ["收到 112"]);
+    const preamble = ledger.sessionPreamble(sessions()[1]!.id)!;
+    const reports = preamble.split("## 交接之后到的 Worker 汇报")[1]!;
+    expect(reports).toContain("- #112「Worker 112」做完了，全文 `hub worker show 112 --report`");
+    expect(reports).not.toContain("汇报全文 112");
+    expect(reports).not.toContain("#7");
+    expect(reports).not.toContain("#113");
+    expect(ledger.getMessage(held)!.status).toBe("queued");
   });
 });
