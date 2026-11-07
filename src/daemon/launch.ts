@@ -7,9 +7,10 @@
 // prompt.md 的内容由 prompt.ts 的 buildLaunchPrompt 拼；settings.json 是 policy.ts 的 buildSessionSettings（默认档、放行 hub
 // 和 hub.sock），用户全局 ~/.claude 的设置照常生效。Worker 的可写范围（数据目录里只有自己的工作目录能写）是
 // write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
@@ -22,6 +23,8 @@ export interface LaunchPreparerOptions {
   dataDir: string;
   /** 数据目录 state/ 的真实路径（paths.ts 的 stateDir，realpath 过）：Worker 设置文件里的兜底拒绝规则用。 */
   stateDir: string;
+  /** 用户主目录（只读策略的密钥清单用），默认本机的 homedir；测试可以指定。会 realpath。 */
+  homeDir?: string;
   /** Worker 会不会包进 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定。 */
   osSandboxed?: boolean;
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
@@ -36,6 +39,14 @@ export interface LaunchPreparerOptions {
   hubBinDir: string;
   /** 接在 hubBinDir 后面的 PATH，默认守护进程自己的 process.env.PATH。 */
   basePath?: string;
+}
+
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 function sessionRole(ctx: LaunchContext): SessionRole {
@@ -55,12 +66,15 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
   const osSandboxed = options.osSandboxed ?? osSandboxAvailable();
   const basePath = options.basePath ?? process.env.PATH ?? "";
+  const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
     const ctx = getLaunchContext(session.id);
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
+    // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
+    const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
     const settings = JSON.stringify(buildSessionSettings({ role, readonly, hubSock, stateDir, osSandboxed, projectWorktreesDir: ctx.project === null ? undefined : projectWorktreesDir(worktreesDir, ctx.project.id) }), null, 2) + "\n";
     const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -79,9 +93,10 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         ...sessionEnv(role),
       },
       // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
-      fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings }),
+      fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings, readonly: readonlyPolicy }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
+      ...(readonlyPolicy === undefined ? {} : { readonly: readonlyPolicy }),
     };
   };
 }

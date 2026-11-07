@@ -6,7 +6,8 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
-   buildSessionSettings,
+  buildReadonlyPolicy,
+  buildSessionSettings,
   workerWriteScope,
   RELAUNCH_NOTE,
   type AgentSessionPatch,
@@ -569,6 +570,7 @@ function makeCodexHarness(
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
+      if (readonly) files.readonly = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir });
       return files;
     },
     env: {

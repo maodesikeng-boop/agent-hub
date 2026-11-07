@@ -1,6 +1,6 @@
 # 只读 Worker 统一方案（三家 + 连接器）
 
-状态：方案（2026-11-07，Worker #110 调研 + 实测）。这一版只写方案，没改产品代码。
+状态：方案，第 8 节用户已拍板（2026-11-07）。W1 统一定义已做（Worker #132：`src/shared/readonly-policy.ts`、`LaunchFiles.readonly`），S1–S6 实测脚本在 `experiments/readonly/smoke.py`（7.3 节），其余 W2–W6 待做。调研和实测来自 Worker #110。
 实测脚本在 `experiments/readonly/`（测试目录 `/tmp/ro110`，用完已清掉）。
 
 ## 0. 目标和结论
@@ -189,7 +189,7 @@ export const READONLY_ENFORCERS: Readonly<Record<AgentVendor, ReadonlyEnforcer>>
 
 注意：
 - `~/.claude.json` 里有用户级 mcpServers 配置，放了写就是一个残留风险（shell 能改它，影响以后的会话）。这是 claude 优先用自带沙箱的原因之一。
-- 外层包的是整个进程，厂商起的 **stdio MCP 服务器也在里面**：好处是它们也写不了本地文件；坏处是要写缓存的服务器会坏（实测 claude 起的 MCP 会写 `~/.cache/uv`）。要不要放 `~/.cache`、`~/Library/Caches` 是个取舍，需要拍板（第 8 节）。
+- 外层包的是整个进程，厂商起的 **stdio MCP 服务器也在里面**：好处是它们也写不了本地文件；坏处是要写缓存的服务器会坏（实测 claude 起的 MCP 会写 `~/.cache/uv`）。`~/.cache`、`~/Library/Caches` 等通用缓存目录：已拍板放开（第 8 节第 3 条），W3 的 profile 里加上。
 - 路径要 realpath（`/var` → `/private/var`），跟现在的 `seatbeltProfile` 一样。
 
 ### 4.2 Linux（bubblewrap，接 `pm-notes/linux-write-scope.md`）
@@ -208,7 +208,7 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 - bwrap 不支持按正则禁读：`**/.env` 这种只能启动时在工作目录和 home 下找一遍再逐个盖（有上限，找不全的靠权限规则那层）。
 - 跟 macOS 一样不能嵌套：包了外层的进程不能再开厂商自带沙箱（claude 的 Linux 沙箱也是 bwrap；Ubuntu 24.04 还有非特权 user namespace 的 AppArmor 限制，claude 文档给了 AppArmor profile）。
 - codex 在 Linux 上的 readOnly 用它自己的 Linux 沙箱（landlock/bwrap），不用我们管；claude 自带沙箱要装 bwrap、socat。
-- 没装 bwrap / 内核不支持：照 #108 记警告，退回各家的权限规则那层（agy 没有外层时命令行写挡不住——**建议这种机器上不允许派只读 agy**，见第 8 节）。
+- 没装 bwrap / 内核不支持：照 #108 记警告，退回各家的权限规则那层（agy 没有外层时命令行写挡不住——已拍板：这种机器上派只读 agy **直接报错**，见第 8 节第 5 条）。
 
 ### 4.3 “任何地方都不能写”的例外
 
@@ -219,7 +219,13 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 **默认禁读清单**（`READONLY_POLICY`，可调）：
 - 目录：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.codex/auth.json`、`~/.gemini/oauth*`、`~/Library/Keychains`、agent-hub 自己的令牌文件（`state/` 里的 hub 令牌）。
 - 通配：`**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*`。
-- **不禁** `~/.agent-hub/state/hub.sqlite` 和日志（排查要读，这是这次改的初衷）；如果数据库里存了令牌，要先把令牌挪出去（第 8 节）。
+- **不禁** `~/.agent-hub/state/hub.sqlite` 和日志（排查要读，这是这次改的初衷）。放开前已经查过库里有没有令牌（2026-11-07，Worker #132，见下面“令牌检查”）：**没有现行令牌**，只单独禁读 `state/ui-token` 这个文件。
+
+**令牌检查（hub.sqlite）**：
+- 会话令牌（`HUB_TOKEN`）：`agent-api/tokens.ts` 只放内存，进程环境变量里有，库里、文件里都没有。界面令牌：只在 `state/ui-token`（0600 文件），库里没有。
+- 用只读方式扫了真实库的全部 15 张表（14 张有文本列，共约 2.3 万行），找：界面令牌原文、`HUB_TOKEN=值`、`sk-`、`sk-ant-`、`ghp_`/`github_pat_`、`AKIA`、`xox`、私钥头、`Bearer 值`、`password/secret/token/api_key = 值`。除 `messages` 外 14 张表（含 `hub_calls`、`actions`、`session_steps`、`agent_sessions`）**0 命中**。
+- `messages` 只有工具记录（`kind=tool`，text/meta）命中：47 条是 Worker 起的**别的守护进程（测试用）打印的登录链接** `http://127.0.0.1:<端口>/auth?token=…`，不是现行 `ui-token`（原文 0 命中），那些进程早退出，令牌作废；另有几条是 Worker 写测试时的假密钥（`sk-a…`、`AKIA…`、`xoxb…`）和 `GH_TOKEN=$(gh auth token …)` 这种命令（取值的命令，不是值）。日志目录（108 个建工作区日志）、`launch/`（提示词和设置文件，令牌只在 env）、`personas/` 里没有令牌。
+- 结论：没有“有令牌的表”，不用单独禁读某张表（SQLite 是单个文件，OS 沙箱和各家规则也都没法按表禁读）。`READONLY_SECRET_STATE_FILES` 里放了 `ui-token`；以后要在库里存令牌，**先挪到 `state/` 下单独的文件再加进清单**，不要让只读 Worker 读到整库。`messages` 的工具记录是自由文本，agent 以后 `cat .env`、`env` 的输出会原样进去——这是“能读库”的固有代价，跟“能联网所以读到能外发”同一类，不承诺挡住。
 - 环境变量：只读 Worker 的子进程不带 `HUB_TOKEN` 以外的敏感变量（claude 有 `credentials.envVars` 和 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`）。
 
 **各层挡什么**：
@@ -249,7 +255,7 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 
 ## 7. 实现拆分（建议的 Worker 划分）
 
-1. **W1 统一定义**（小）：`readonly-policy.ts` + `LaunchFiles.readonly` + launch.ts 填它 + 删反读设置文件；测试 1、8。其它几个都依赖它，先合。
+1. **W1 统一定义**（小，已做：Worker #132）：`readonly-policy.ts` + `LaunchFiles.readonly` + launch.ts 填它 + 删反读设置文件；测试 1、8。其它几个都依赖它，先合。`policy.ts` 里 claude 的只读白名单（dontAsk 那套）这次没动，W2 删。
 2. **W2 claude**（中）：翻译器 + 驱动处理 `can_use_tool` 和 `mcp_status` 表；删 `policy.ts` 的只读白名单；测试 2、3。
 3. **W3 agy**（中）：翻译器 + 外层只读 seatbelt profile + 自动补一轮 + 删只读 SIGINT 分支；测试 4、5、7（mac 部分）。
 4. **W4 codex**（小）：补充/排除/deny_read 配置 + elicitation 分支；测试 6。
@@ -257,6 +263,9 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 6. **W6 冒烟**（小，必须不在沙箱里跑）：7.3 的清单。W2–W4 可以并行，W6 在它们之后、合并前。
 
 ### 7.3 合并前必须补测的（这次测不了）
+
+**一键跑**：`python3 experiments/readonly/smoke.py`（在没包沙箱的终端里；`--only S1,S3` 选几项，`--no-mcp` 不碰 agy 的 MCP 配置，`--dry-run` 只检查脚本，`--keep` 不删现场）。每项输出 通过 / 不通过 / 跳过 + 证据，最后一张汇总表，完整证据存 JSON；跑完删自己建的临时目录（`/tmp/ro-smoke-*`、`~/.ro-smoke-*`），S4 临时加进 agy 的 MCP 配置无条件恢复。退出码：0 全通过，1 有不通过，3 有跳过，2 环境不对（包着沙箱会直接退出）。脚本里的外层只读 profile 是 4.1 的参考写法，W3 做进 `write-scope.ts` 后换成直接生成那份再跑一遍。S6 要在 hub 会话里跑（用 `HUB_SOCK`、`HUB_TOKEN`），否则跳过。
+
 
 | # | 测什么 | 怎么判 |
 |---|---|---|
@@ -269,12 +278,12 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 
 S1–S3 任何一条不过：claude 改 `writeGuard: "outer"`，跟 agy 用同一份只读 profile（4.1 表里 claude 那行），权限部分不变。
 
-## 8. 需要用户拍板
+## 8. 已拍板（用户，2026-11-07）
 
-1. **只读 Worker 能不能联网**（WebSearch、curl、连接器读）：能联网就意味着读到的东西能被外发。建议能（排查要查文档、看 CI）。
-2. **写的例外**：允许每个会话一个私有临时目录（建议允许，不然很多命令跑不了）。
-3. **外层沙箱里要不要放缓存目录**（`~/.cache`、`~/Library/Caches`）：放了 uv、npx 这类 MCP 服务器才能起，但缓存里有可执行的东西，理论上能被“投毒”。建议放 `~/Library/Caches/claude-cli-nodejs` 这种厂商自己的，通用缓存先不放、坏了再加。
-4. **密钥清单**：第 5 节的默认清单是否够；`hub.sqlite`、日志放开读（要确认数据库里没有令牌，有的话先挪）。
-5. **没有 OS 沙箱的机器上的只读 agy**：agy 没有原生只读 shell，没外层沙箱时命令行写挡不住。建议这种机器上派只读 agy 直接报错，而不是警告后照跑。
-6. **claude 用自带沙箱还是外层沙箱**：建议自带（符合“优先厂商自带”，MCP 服务器不受影响，`~/.claude.json` 不用开写），前提是 7.3 S1–S3 通过。
-7. （顺带）codex 非只读 Worker 现在所有没标只读的 MCP 工具都被拒，要不要放开，另开一题。
+1. **只读 Worker 能联网**（WebSearch、curl、连接器读）。读到的东西能被外发，是已知的代价。
+2. **写的例外：允许每个会话一个私有临时目录**（TMPDIR）。
+3. **放开通用缓存目录**（`~/.cache`、`~/Library/Caches` 等）：外层沙箱里 uv、npx 这类 MCP 服务器能起；缓存里可执行的东西理论上能被“投毒”，接受。W3 的只读 profile 里加上，不再只放厂商自己的那几个子目录。
+4. **密钥清单用第 5 节的默认清单；`hub.sqlite` 和日志放开读**——放开前先查库里有没有令牌，有令牌的表单独禁读。已查（第 5 节“令牌检查”）：库里没有现行令牌，所以没有要单独禁读的表，只禁读 `state/ui-token` 文件。
+5. **没有 OS 沙箱的机器上，派只读 agy 直接报错**（agy 没有原生只读 shell，没有外层沙箱命令行写挡不住），不是警告后照跑。W3 在派活（`hub worker start --vendor agy --readonly`）和驱动启动两处都要拦，报错说清楚原因。
+6. **claude 用自带沙箱还是外层沙箱**：先用自带（符合“优先厂商自带”，MCP 服务器不受影响，`~/.claude.json` 不用开写），前提是 7.3 的 S1–S3 通过；不过就改外层。
+7. **codex 非只读 Worker 用不了没标只读的 MCP 工具**（比如发 Slack）：另开一题，这次不做。

@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
-  READONLY_PERMISSION_MODE,
   agentLaunchArgs,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
@@ -56,17 +55,6 @@ export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文�
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
-/** 读取 settingsFile 判断是否为只读模式（permissions.defaultMode === "dontAsk"）。 */
-export function isReadonlySettings(settingsFile: string | undefined): boolean {
-  if (!settingsFile || !existsSync(settingsFile)) return false;
-  try {
-    const parsed = JSON.parse(readFileSync(settingsFile, "utf8")) as { permissions?: { defaultMode?: unknown } };
-    return parsed?.permissions?.defaultMode === READONLY_PERMISSION_MODE;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * 构造 agy 启动参数：
  * - --input-format stream-json --output-format stream-json
@@ -81,7 +69,7 @@ export function buildAgyArgs(session: AgentSessionRow, files: LaunchFiles, resum
   if (resume && session.vendorSessionId.trim() !== "") {
     args.push("--conversation", session.vendorSessionId);
   }
-  if (isReadonlySettings(files.settingsFile)) {
+  if (files.readonly !== undefined) {
     args.push(...AGY_PLAN_PERMISSION_ARGS);
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
