@@ -33,8 +33,6 @@ const SQLITE_NOTADB = 26;
 export interface AgyCopyOptions {
   /** agy 的数据目录，默认 AGY_DATA_DIR；测试用。存进 handle.extra，remove 用同一个。 */
   root?: string;
-  /** agy 可执行文件，默认 "agy"；测试用。 */
-  agyPath?: string;
 }
 
 const isUuid = (id: string): boolean => UUID_PATTERN.test(id);
@@ -156,7 +154,6 @@ function buildForkArgs(src: ForkSource, forkId: string): string[] {
 
 export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker {
   const root = options.root ?? AGY_DATA_DIR;
-  const agyPath = options.agyPath ?? "agy";
   const conversationFile = (id: string) => join(root, "conversations", `${id}.db`);
 
   return {
@@ -206,7 +203,7 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       const env = buildChildEnv(process.env, src.launch.env);
       delete env[ENV_HUB_TOKEN];
       delete env[ENV_HUB_SOCK];
-      const child = spawn(agyPath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+      const child = spawn(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));

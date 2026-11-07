@@ -70,6 +70,7 @@ const source = (over: Partial<ForkSource> = {}): ForkSource => ({
   sessionId: 7,
   vendor: "agy",
   vendorSessionId: SRC_ID,
+  executablePath: bin,
   cwd: rec,
   addDirs: [],
   model: null,
@@ -78,7 +79,7 @@ const source = (over: Partial<ForkSource> = {}): ForkSource => ({
   ...over,
 });
 
-const forker = (extra: Record<string, unknown> = {}) => createAgyCopyForker({ root, agyPath: bin, ...extra });
+const forker = (extra: Record<string, unknown> = {}) => createAgyCopyForker({ root, ...extra });
 const signal = () => new AbortController().signal;
 const rows = (file: string, sql: string) => {
   const db = new DatabaseSync(file, { readOnly: true });
@@ -314,8 +315,8 @@ describe("write：--conversation <新编号> 续跑一轮", () => {
   });
 
   it("可执行文件不存在抛错（不是 ForkUnsupportedError）", async () => {
-    const err = await createAgyCopyForker({ root, agyPath: join(root, "no-such-agy") })
-      .write(source(), fakeHandle, "写", signal())
+    const err = await forker()
+      .write(source({ executablePath: join(root, "no-such-agy") }), fakeHandle, "写", signal())
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ForkUnsupportedError);
