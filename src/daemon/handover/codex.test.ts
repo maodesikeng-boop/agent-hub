@@ -25,8 +25,11 @@ class FakeServer extends EventEmitter {
   spawnArgs: { command: string; args: string[]; cwd: string; env: Record<string, string> } | null = null;
   reverseReplies: Json[] = [];
 
-  constructor(readonly handlers: Record<string, Handler>) {
+  readonly handlers: Record<string, Handler>;
+
+  constructor(handlers: Record<string, Handler>) {
     super();
+    this.handlers = handlers;
     let buf = "";
     this.stdin.on("data", (c: Buffer) => {
       buf += c.toString();
@@ -89,7 +92,6 @@ const baseHandlers = (): Record<string, Handler> => ({
 function setup(handlers = baseHandlers()) {
   const server = new FakeServer(handlers);
   const forker = createCodexForker({
-    codexPath: "/bin/codex",
     spawnProcess: (command, args, opts) => {
       server.spawnArgs = { command, args, cwd: opts.cwd, env: opts.env };
       return server as unknown as ChildProcess;
@@ -106,6 +108,7 @@ function source(overrides: Partial<ForkSource> = {}): ForkSource {
     sessionId: 7,
     vendor: "codex",
     vendorSessionId: "thread-src",
+    executablePath: "/bin/codex",
     cwd: "/code/foo",
     addDirs: [],
     model: "gpt-x",
@@ -121,7 +124,7 @@ function source(overrides: Partial<ForkSource> = {}): ForkSource {
       fingerprint: "fp",
     } as ForkSource["launch"],
     ...overrides,
-  };
+  } as ForkSource;
 }
 
 const noAbort = (): AbortSignal => new AbortController().signal;
@@ -139,6 +142,7 @@ describe("fork：app-server thread/fork", () => {
     const { server, forker } = setup();
     const handle = await forker.fork(source(), noAbort());
     expect(handle).toEqual({ forkId: "fork-1" });
+    expect(server.spawnArgs?.command).toBe("/bin/codex");
     expect(server.spawnArgs?.args).toEqual(["app-server", "--listen", "stdio://"]);
     expect(server.spawnArgs?.cwd).toBe("/code/foo");
     expect(server.spawnArgs?.env[ENV_HUB_TOKEN]).toBeUndefined();

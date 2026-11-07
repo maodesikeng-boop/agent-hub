@@ -141,8 +141,6 @@ class CodexRpc {
 }
 
 export interface CodexForkerOptions {
-  /** codex 可执行文件，默认 PATH 里的 codex（守护进程接线时传它解析出来的路径）。 */
-  codexPath?: string;
   /** 起进程，测试用假的。 */
   spawnProcess?: (command: string, args: string[], options: { cwd: string; env: Record<string, string> }) => ChildProcess;
 }
@@ -163,8 +161,13 @@ function addUsage(total: TokenUsage, last: Json): TokenUsage {
   };
 }
 
+/**
+ * 这家 CLI 的路径：ForkSource.executablePath（runner 按 paths.codexPath 填，用户可配、测试用假的）。
+ * 字段由 #118 加进 ForkSource，合了之后这里直接用 src.executablePath、删掉这层。
+ */
+const executablePathOf = (src: ForkSource): string => (src as ForkSource & { executablePath: string }).executablePath;
+
 export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
-  const codexPath = options.codexPath ?? "codex";
   const spawnProcess =
     options.spawnProcess ??
     ((command, args, opts) => spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true }));
@@ -174,7 +177,7 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
   async function startServer(src: ForkSource): Promise<CodexRpc> {
     const launch = withoutHubEnv(src.launch);
     const env = withoutHubEnv({ ...launch, env: buildChildEnv(process.env, launch.env) }).env;
-    const child = spawnProcess(codexPath, buildCodexArgs(), { cwd: src.cwd, env });
+    const child = spawnProcess(executablePathOf(src), buildCodexArgs(), { cwd: src.cwd, env });
     const rpc = new CodexRpc(child);
     try {
       await new Promise<void>((resolve, reject) => {
@@ -187,7 +190,7 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       rpc.notify("initialized");
     } catch (error) {
       await rpc.close();
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${codexPath}`);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${executablePathOf(src)}`);
       throw error;
     }
     return rpc;
