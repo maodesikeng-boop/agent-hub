@@ -632,85 +632,109 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
   });
 });
 
-// 后台写交接（docs/background-handover-design.md）之后，开新会话要跑腿的（daemon/handover/runner.ts，PR #120）接进守护进程才会动；
-// 这两条测的是 #113 的本会话写交接流程，等跑腿的接上后按后台写交接重写（账本这一半的流程见 ledger/handover.test.ts）。
-describe.skip("开新会话（资料页的按钮，ledger/handover.ts）", { timeout: 60_000 }, () => {
-  /** 第 0 轮随便聊一句；第 1 轮是交接（卡在 hold 文件上，放行后写交接）；之后都回“好的”。 */
-  const script = (hold: string) => ({
-    turns: [quick("记住了"), { steps: [{ waitFile: hold }, { text: "交接：暗号是 蓝鲸" }] }],
-    defaultTurn: quick("好的"),
-  });
+// 开新会话（后台写交接，docs/background-handover-design.md）：旧会话空闲时跑腿的（daemon/handover/runner.ts）起一份复制
+// （`claude -p --resume 原编号 --fork-session`，假 claude 认 --fork-session，标准输入是纯文本提示词）去写交接；项目经理照常聊，写完换代。
+describe("开新会话（资料页的按钮，ledger/handover.ts + daemon/handover/runner.ts）", { timeout: 60_000 }, () => {
+  /** 第 0 轮随便聊一句；第 1 轮（复制那份写交接）卡在 hold 文件上，放行后写交接；之后都回“好的”。 */
+  const holdTurn = (hold: string) => ({ steps: [{ waitFile: hold }, { text: "交接：暗号是 蓝鲸" }] });
   const renew = async (client: Client, pmId: number) => {
     const res = await client.postJson(API_PATHS.renewSession(pmId), undefined);
     expect(res.status).toBe(202);
     return ((await res.json()) as { handoverId: number }).handoverId;
   };
+  /** 复制那份的进程：参数里有 --fork-session，并且已经把提示词读完（这一轮的剧本已经取走）。 */
+  const forkProcs = () => env.argvs().filter((a) => a.argv.includes("--fork-session"));
+  const startedFork = (nth: number) =>
+    waitUntil(`第 ${nth + 1} 份复制`, () => {
+      const proc = forkProcs()[nth];
+      return proc !== undefined && env.stdinTextsOf(proc.pid).length > 0 ? proc : undefined;
+    });
+  const renewedLine = (state: StateSnapshot, conversationId: number) =>
+    messagesOf(state, conversationId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed");
 
-  it("写完交接换代：新的 claude 会话（新的会话 ID）不另开一轮，换代期间发的消息带着开场说明、交接和最近的原话一起写进去；连点只发一条", async () => {
+  it("复制那份在后台写交接，项目经理照常回；写完换代：新的 claude 会话（新的会话 ID）预热起来，开场说明带交接和原话（含写交接期间聊的）；连点只算一次", async () => {
     env = makeEnv();
     const hold = join(env.dir, "hold");
-    env.setScript(script(hold));
+    env.setScript({ turns: [quick("记住了"), holdTurn(hold)], defaultTurn: quick("好的") });
     const { daemon, client, privateId, pmId } = await boot();
     await warmUp(client, privateId, "记住暗号 蓝鲸");
     const oldSession = sessionsOf(await client.state(), privateId)[0]!.sessionId;
     const oldVendor = argValue(lastProcOf(oldSession).argv, "--session-id");
 
-    const request = await renew(client, pmId);
-    expect(await renew(client, pmId)).toBe(request);
-    await waitForStatus(client, request, "processing");
-    const during = await client.post(privateId, "换代时发的");
-    writeFileSync(hold, "");
-    await waitForStatus(client, during, "replied", 20_000);
+    const handover = await renew(client, pmId);
+    expect(await renew(client, pmId)).toBe(handover);
+    const fork = await startedFork(0);
+    // 复制那份：从旧会话 resume 出来、不落盘、没有 hub 凭证；收到的是交接提示词
+    expect(argValue(fork.argv, "--resume")).toBe(oldVendor);
+    expect(fork.argv).toContain("--no-session-persistence");
+    expect(argValue(fork.argv, "--session-id")).not.toBe(oldVendor);
+    const forkEnv = env.envs().find((e) => e.pid === fork.pid)!.env;
+    expect(forkEnv.HUB_TOKEN).toBeUndefined();
+    expect(forkEnv.HUB_SOCK).toBeUndefined();
+    expect(env.stdinTextsOf(fork.pid)[0]).toContain("交接");
 
-    const state = await client.state();
-    const [g1, g2] = sessionsOf(state, privateId);
+    // 写交接期间用户照常聊：消息发给旧会话、马上回，不用等交接
+    const during = await client.post(privateId, "写交接时发的");
+    await waitForStatus(client, during, "replied", 20_000);
+    let state = await client.state();
+    expect(messageById(state, during)!.sessionId).toBe(oldSession);
+    expect(sessionsOf(state, privateId)).toHaveLength(1);
+
+    writeFileSync(hold, "");
+    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await client.state(), privateId)[1], 20_000);
+    const next = await client.post(privateId, "换代之后的");
+    await waitForStatus(client, next, "replied", 20_000);
+    state = await client.state();
+    const [g1] = sessionsOf(state, privateId);
     expect(sessionsOf(state, privateId)).toHaveLength(2);
-    expect(g2!.generation).toBe(2);
+    expect(g2.generation).toBe(2);
     expect(g1!.status).toBe("ended");
-    expect(messageById(state, during)!.sessionId).toBe(g2!.sessionId);
-    const proc = lastProcOf(g2!.sessionId);
+    expect(messageById(state, next)!.sessionId).toBe(g2.sessionId);
+    const proc = lastProcOf(g2.sessionId);
     expect(argValue(proc.argv, "--session-id")).not.toBe(oldVendor);
     expect(proc.argv).not.toContain("--resume");
-    // 新会话只写进去一行：开场说明 + 交接 + 最近原话 + 换代时发的那句，没有“已接上”那一轮
+    // 新会话只写进去一行：开场说明 + 交接 + 原话（切点之后写交接期间聊的也在）+ 换代后发的那句
     const lines = env.stdinTextsOf(proc.pid);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^【系统】这是新会话/);
     expect(lines[0]).toContain("交接：暗号是 蓝鲸");
     expect(lines[0]).toContain("用户：记住暗号 蓝鲸");
-    expect(lines[0]!.endsWith("换代时发的")).toBe(true);
-    // 旧会话里只有交接请求，之后没再写东西
-    expect(env.stdinTextsOf(lastProcOf(oldSession).pid).at(-1)).toContain("交接");
-    // 交接全文在换代那一行里，写交接那一轮的回复不给用户看
-    const renewedLine = messagesOf(state, privateId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed");
-    expect(renewedLine).toMatchObject({ text: "交接：暗号是 蓝鲸", status: null });
-    expect(messagesOf(state, privateId).find((m) => m.text === "交接：暗号是 蓝鲸" && m.sender === "agent")?.meta).toMatchObject({ handover: true });
+    expect(lines[0]).toContain("写交接时发的");
+    expect(lines[0]!.endsWith("换代之后的")).toBe(true);
+    // 旧会话里没有交接请求：只有用户那两句
+    // （复制那份用的是同一个提示词文件，procsOf 会把它也算进去，这里要排除）
+    const oldProc = procsOf(oldSession).filter((p) => !p.argv.includes("--fork-session")).at(-1)!;
+    expect(env.stdinTextsOf(oldProc.pid)).toEqual(["记住暗号 蓝鲸", "写交接时发的"]);
+    // 交接全文在换代那一行里；复制那份的回复不进对话
+    expect(renewedLine(state, privateId)).toMatchObject({ text: "交接：暗号是 蓝鲸", status: null });
+    expect(messagesOf(state, privateId).filter((m) => m.text === "交接：暗号是 蓝鲸" && m.sender === "agent")).toHaveLength(0);
+    expect(forkProcs()).toHaveLength(1);
     await terminate(daemon);
   });
 
-  it("写交接时守护进程重启：交接请求重发给旧会话，写完照常换一次代", async () => {
+  it("写交接时守护进程关机再起：复制那份被取消，重启后账本重新排队、再复制一份，写完照常换一次代", async () => {
     env = makeEnv();
     const hold = join(env.dir, "hold");
-    // 被关机打断的那一轮也算一轮：重发的那一轮才写交接
-    env.setScript({ ...script(hold), turns: [...script(hold).turns, quick("交接：暗号是 蓝鲸")] });
+    // 第 1 轮是被关机杀掉的第一份复制；第 2 轮是重启后重新复制的那份
+    env.setScript({ turns: [quick("记住了"), holdTurn(hold), quick("交接：暗号是 蓝鲸")], defaultTurn: quick("好的") });
     const { daemon: before, client, privateId, pmId } = await boot();
     await warmUp(client, privateId, "记住暗号 蓝鲸");
-    const request = await renew(client, pmId);
-    await waitForStatus(client, request, "processing");
+    await renew(client, pmId);
+    await startedFork(0);
     expect(await terminate(before)).toEqual({ code: 0, signal: null });
 
     const daemon = await env.start();
     const c2 = client.withPort(daemon.port);
-    await waitForStatus(c2, request, "replied", 20_000);
-    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId)[1]);
-    await waitUntil("换代那一行", async () =>
-      messagesOf(await c2.state(), privateId).find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed")?.id,
-    );
+    await startedFork(1);
+    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId)[1], 20_000);
+    await waitUntil("换代那一行", async () => renewedLine(await c2.state(), privateId)?.id);
     const next = await c2.post(privateId, "接着来");
     await waitForStatus(c2, next, "replied", 20_000);
     expect(sessionsOf(await c2.state(), privateId)).toHaveLength(2);
     const [first] = env.stdinTextsOf(lastProcOf(g2.sessionId).pid);
     expect(first).toContain("交接：暗号是 蓝鲸");
     expect(first!.endsWith("接着来")).toBe(true);
+    expect(forkProcs()).toHaveLength(2);
     await terminate(daemon);
   });
 });

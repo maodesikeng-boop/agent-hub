@@ -104,6 +104,7 @@ function fakeForker(calls: string[], o: FakeForkerOptions = {}): SessionForker {
 
 const registryOf = (claude: SessionForker[], others: Partial<ForkerRegistry> = {}): ForkerRegistry => ({ claude, codex: [], agy: [], ...others });
 
+const PATHS = { claude: "/bin/claude", codex: "/bin/codex", agy: "/bin/agy" };
 const LAUNCH: LaunchFiles = { promptFile: "/p.md", env: { [ENV_HUB_TOKEN]: "t", [ENV_HUB_SOCK]: "/s", PATH: "/bin" }, fingerprint: "fp" };
 
 /** 一直等到 predicate 成立（事件循环轮几圈），超时抛错。 */
@@ -136,6 +137,7 @@ describe("handover runner", () => {
       ledger,
       registry,
       prepareLaunch: async () => LAUNCH,
+      executablePaths: PATHS,
       log: (line) => logs.push(line),
       tickMs: 3_600_000,
       ...extra,
@@ -173,6 +175,23 @@ describe("handover runner", () => {
       expect(seen.src?.cwd).toBe("/c");
       expect(seen.src?.launch.env).toEqual({ PATH: "/bin" });
       expect(seen.prompt).toBe("写交接 1");
+    });
+
+    it("ForkSource.executablePath 按旧会话的厂商从 executablePaths 填", async () => {
+      const f = fakeLedger([job(1), job(2, { vendor: "codex" })]);
+      const seen: Record<number, string> = {};
+      const spy = (id: string) =>
+        fakeForker(f.calls, {
+          id,
+          write: async (src) => {
+            seen[src.sessionId] = src.executablePath;
+            return { text: "x", usage: USAGE };
+          },
+        });
+      const { runner } = make(f.ledger, registryOf([spy("c")], { codex: [spy("x")] }));
+      runner.wake();
+      await until(() => f.calls.includes("cleaned:1") && f.calls.includes("cleaned:2"));
+      expect(seen).toEqual({ 101: "/bin/claude", 102: "/bin/codex" });
     });
 
     it("prepareLaunch 拿到的是旧会话", async () => {

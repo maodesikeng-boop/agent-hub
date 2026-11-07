@@ -6,6 +6,7 @@ import type { LaunchFiles } from "../../shared/driver.ts";
 import type { ForkHandle, HandoverCleanJob, HandoverFailure, HandoverJob, LedgerHandoverWork } from "../../shared/handover.ts";
 import { AUTO_RENEW_TICK_MS, HANDOVER_CONCURRENCY, HANDOVER_TIMEOUT_MS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import { isAgentVendor, type AgentVendor } from "../../shared/vendors.ts";
 import { ForkUnsupportedError, findForker, forkSourceOf } from "./forker.ts";
 import type { ForkerRegistry, SessionForker } from "./forker.ts";
 import { FORKERS } from "./forkers.ts";
@@ -15,6 +16,8 @@ export interface HandoverRunnerOptions {
   /** 守护进程的 prepareLaunch（和驱动层用的同一个）：给旧会话拼提示词文件、设置文件、环境变量。 */
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   log: (line: string) => void;
+  /** 各家 CLI 的路径（paths.claudePath 等，用户可配、测试用假可执行文件）：拼 ForkSource.executablePath，厂商的办法一律用它起进程。 */
+  executablePaths: Readonly<Record<AgentVendor, string>>;
   /** 办法清单，默认 FORKERS；测试换假的。 */
   registry?: ForkerRegistry;
   /** 同时最多几份，默认 HANDOVER_CONCURRENCY。 */
@@ -59,7 +62,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRunner {
-  const { ledger, prepareLaunch, log } = options;
+  const { ledger, prepareLaunch, log, executablePaths } = options;
   const registry = options.registry ?? FORKERS;
   const concurrency = options.concurrency ?? HANDOVER_CONCURRENCY;
   const timeoutMs = options.timeoutMs ?? HANDOVER_TIMEOUT_MS;
@@ -127,7 +130,8 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
     const { signal } = run.controller;
     let copy: { forker: SessionForker; handle: ForkHandle } | null = null;
     try {
-      const src = forkSourceOf(job.session, await abortable(prepareLaunch(job.session), signal));
+      const { vendor } = job.session;
+      const src = forkSourceOf(job.session, await abortable(prepareLaunch(job.session), signal), isAgentVendor(vendor) ? executablePaths[vendor] : "");
       const forked = await forkFirst(registry[src.vendor], src, signal);
       if ("unsupported" in forked) {
         await attempt(`报 #${handoverId} 不支持`, () => ledger.handoverFailed(handoverId, { kind: "unsupported", detail: forked.unsupported }));

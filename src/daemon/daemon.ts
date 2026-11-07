@@ -23,7 +23,6 @@ import {
   type Driver,
   type Unsubscribe,
 } from "../shared/index.ts";
-import type { LedgerHandoverWork } from "../shared/handover.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
@@ -354,8 +353,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
     // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
     // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
-    // （TODO：块 A 合入、Ledger extends LedgerHandoverWork 之后去掉这个转换）
-    const handoverRunner = createHandoverRunner({ ledger: ledger as unknown as LedgerHandoverWork, prepareLaunch, log });
+    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths: { claude: claudePath, codex: codexPath, agy: agyPath }, log });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
 

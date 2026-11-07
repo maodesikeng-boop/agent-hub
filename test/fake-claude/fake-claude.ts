@@ -27,6 +27,7 @@
 //   `[Request interrupted by user for tool use]`）和一条 result，进程不退出。
 // - SIGINT：结束这一轮（`[Request interrupted by user]` + is_error 的 result），然后退出码 0。
 // - 标准输入关掉：跑完手上这一轮再退出，退出码 0。
+// - 参数里有 --fork-session（后台写交接复制那份）：标准输入是纯文本提示词，关掉后当一条用户消息跑一轮，回完退出。
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -620,7 +621,18 @@ function badInput(message: string): never {
   exit(1);
 }
 
+/**
+ * 后台写交接复制那份（daemon/handover/claude.ts）：`claude -p --fork-session …`，没有 --input-format stream-json，
+ * 提示词是标准输入的纯文本，关掉标准输入才算说完。收齐后当一条用户消息跑一轮（日志里记成一行 user，stdinTextsOf 能读），回完退出。
+ */
+const rawPromptMode = argv.includes("--fork-session");
+const rawPromptLines: string[] = [];
+
 function onLine(line: string): void {
+  if (rawPromptMode) {
+    rawPromptLines.push(line);
+    return;
+  }
   log({ kind: "stdin", pid: process.pid, line });
   let obj: unknown;
   try {
@@ -701,5 +713,11 @@ rl.on("close", () => {
     return;
   }
   stdinClosed = true;
+  if (rawPromptMode) {
+    const content: UserContent[] = [{ type: "text", text: rawPromptLines.join("\n") }];
+    log({ kind: "stdin", pid: process.pid, line: JSON.stringify({ type: "user", message: { role: "user", content } }) });
+    void runTurn(content);
+    return;
+  }
   if (!busy) exit(0);
 });

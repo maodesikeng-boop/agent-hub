@@ -76,6 +76,14 @@ describe("假 claude", () => {
     expect(r.events[4]).toMatchObject({ subtype: "success", is_error: false });
   });
 
+  it("--fork-session（后台写交接复制那份）：标准输入是纯文本，关掉后跑一轮，结果里是回复的文字，退出码 0", async () => {
+    await run(["--session-id", "orig"], [userLine("hi")]);
+    const r = await run(["-p", "--resume", "orig", "--fork-session", "--session-id", "copy"], ["写交接", "要详细"]);
+    expect(r.code).toBe(0);
+    expect(r.events.at(-1)).toMatchObject({ type: "result", subtype: "success", is_error: false, result: "ok", session_id: "copy" });
+    expect(r.events.find((e) => e.type === "user")).toMatchObject({ message: { content: [{ type: "text", text: "写交接\n要详细" }] } });
+  });
+
   it("同一个 --session-id 第二次用：报 already in use；--resume 不存在的：No conversation found + result", async () => {
     await run(["--session-id", "d"], [userLine("hi")]);
     const again = await run(["--session-id", "d"], []);
