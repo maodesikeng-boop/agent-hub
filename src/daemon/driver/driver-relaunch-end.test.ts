@@ -50,6 +50,15 @@ async function goneWithin(pid: number, ms = 3_000): Promise<boolean> {
   return !alive(pid);
 }
 
+/** 等假 claude 装好 SIGINT 处理器（argv 记得更早，那时发 SIGINT 会按默认动作把它杀掉）。 */
+async function readyPid(t: Harness): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (t.log().some((x) => x.kind === "ready")) return;
+    await realSleep(5);
+  }
+  throw new Error("fake claude never became ready");
+}
+
 /** 等假 claude 记下它起的睡眠子进程。 */
 async function childPid(t: Harness): Promise<number> {
   for (let i = 0; i < 200; i++) {
@@ -813,7 +822,7 @@ describe("进程组", () => {
       const t = harness({ driver: { interruptGraceMs: 200 }, script: { ignoreSigint: true } });
       const s = t.addSession({ status: "running" });
       const stray = strayClaude(t, s.vendorSessionId, false);
-      for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(25);
+      await readyPid(t);
       t.store.update(s.id, { pid: stray.pid! });
       await t.driver.cleanupStale();
       expect(await goneWithin(stray.pid!)).toBe(true);
@@ -826,7 +835,7 @@ describe("进程组", () => {
         const t = harness({ driver: { interruptGraceMs: 100 }, script: { ignoreSigint: true } });
         const s = t.addSession({ status: "running" });
         const stray = strayClaude(t, s.vendorSessionId, false);
-        for (let i = 0; i < 20_000 && t.argvs().length === 0; i++) await realSleep(1);
+        await readyPid(t);
         t.store.update(s.id, { pid: stray.pid! });
         await t.driver.cleanupStale();
         expect(await goneWithin(stray.pid!)).toBe(true);
