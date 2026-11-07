@@ -35,8 +35,15 @@ export function serveTargetKind(opts: { platform?: string; env: Env }): ServeTar
   return (opts.platform ?? process.platform) === "linux" ? "unix" : "tcp";
 }
 
-/** 启动时提示给用户的 serve 命令（只在 tailnet 里可见，不是 Funnel）。 */
-export function serveCommandLine(cli: string, target: ServeTarget): string {
+/**
+ * 启动时提示给用户的 serve 命令（只在 tailnet 里可见，不是 Funnel）。
+ * Linux 前面加 sudo：tailscaled 以 root 跑，改 serve 配置要 root（Tailscale 文档的要求，代理 unix socket 也要 root）。
+ * socket 是 0600、属于跑守护进程的用户，root 跑的 tailscaled 照样连得上，别的普通用户连不上。
+ * macOS 的 App 版不用 sudo。
+ */
+export function serveCommandLine(opts: { platform?: string; cli: string; target: ServeTarget }): string {
+  const { cli, target } = opts;
   const to = target.kind === "unix" ? `unix:${target.path}` : `http://127.0.0.1:${target.port}`;
-  return `${cli} serve --bg ${to}`;
+  const sudo = (opts.platform ?? process.platform) === "linux" ? "sudo " : "";
+  return `${sudo}${cli} serve --bg ${to}`;
 }

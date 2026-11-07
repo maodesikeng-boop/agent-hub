@@ -406,7 +406,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     void tailnet.refresh().then((self) => {
       if (self === null) return;
       const target = serveTarget === "unix" ? { kind: "unix" as const, path: paths.uiSock } : { kind: "tcp" as const, port: uiPort };
-      log(`${LOG_PREFIX} 联机：这台是 ${device.name}（${device.id}），tailnet 名字 ${self.dnsName}。别的设备、手机要访问，先跑一次：${serveCommandLine(tailscaleCli, target)}`);
+      log(`${LOG_PREFIX} 联机：这台是 ${device.name}（${device.id}），tailnet 名字 ${self.dnsName}。别的设备、手机要访问，先跑一次：${serveCommandLine({ cli: tailscaleCli, target })}`);
       if (self.owner === null) log(`${LOG_PREFIX} 联机：这台打了 tag，问不到设备主人，经 tailnet 的访问会被拒绝；请设 ${ENV_TAILNET_OWNER}=<你的 Tailscale 登录名>`);
     });
 

@@ -42,11 +42,14 @@ describe("serve 转发目标", () => {
     expect(serveTargetKind({ platform: "linux", env: { AGENT_HUB_SERVE_TARGET: "x" } })).toBe("unix");
   });
 
-  it("给用户的 serve 命令", () => {
-    expect(serveCommandLine("tailscale", { kind: "unix", path: "/home/u/.agent-hub/run/ui.sock" })).toBe(
-      "tailscale serve --bg unix:/home/u/.agent-hub/run/ui.sock",
+  it("给用户的 serve 命令：Linux 要 sudo（tailscaled 以 root 跑，代理 unix socket 要 root；root 连得上 0600 的 socket），macOS 不要", () => {
+    expect(serveCommandLine({ platform: "linux", cli: "tailscale", target: { kind: "unix", path: "/home/u/.agent-hub/run/ui.sock" } })).toBe(
+      "sudo tailscale serve --bg unix:/home/u/.agent-hub/run/ui.sock",
     );
-    expect(serveCommandLine(MACOS_TAILSCALE_APP_CLI, { kind: "tcp", port: 4317 })).toBe(
+    expect(serveCommandLine({ platform: "linux", cli: "tailscale", target: { kind: "tcp", port: 4317 } })).toBe(
+      "sudo tailscale serve --bg http://127.0.0.1:4317",
+    );
+    expect(serveCommandLine({ platform: "darwin", cli: MACOS_TAILSCALE_APP_CLI, target: { kind: "tcp", port: 4317 } })).toBe(
       `${MACOS_TAILSCALE_APP_CLI} serve --bg http://127.0.0.1:4317`,
     );
   });
