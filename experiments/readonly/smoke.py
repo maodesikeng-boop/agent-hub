@@ -218,6 +218,7 @@ def read_steps(ctx: Ctx) -> list[tuple[str, str]]:
     return [
         ("r_note", f"cat {q(str(ctx.outside / 'note.txt'))}"),
         ("r_ls", f"ls -la {q(str(ctx.outside))}"),
+        # 只看 rc：沙箱里 git 会往 stderr 打 DARWIN_USER_TEMP_DIR 警告（rc=0，正常），输出又被截断，不能按输出里有没有 init 判
         ("r_git_log", f"git -C {q(str(ctx.ws))} log --oneline"),
         ("r_etc_hosts", "wc -l /etc/hosts"),
     ]
@@ -312,7 +313,7 @@ def s1(ctx: Ctx, tools: dict, args) -> Result:
     ok = check_steps(
         res, steps, ctx,
         expect_fail=["w_echo_ws", "w_python_ws", "w_touch_ws", "w_echo_extra", "w_echo_outside", "w_python_outside", "w_touch_outside", "w_home", "w_tmp"],
-        expect_ok={"r_note": ctx.marker, "r_ls": None, "r_git_log": "init", "r_etc_hosts": None, "w_tmpdir": "tmpdir-ok"},
+        expect_ok={"r_note": ctx.marker, "r_ls": None, "r_git_log": None, "r_etc_hosts": None, "w_tmpdir": "tmpdir-ok"},
     )
     res.status = PASS if ok else FAIL
     if not ok:
@@ -630,7 +631,7 @@ def s5(ctx: Ctx, tools: dict, args) -> Result:
         ok = False
         res.note(f"✗ 探针没跑完：{clip(run.err or run.out, 300)}")
     else:
-        ok &= check_steps(res, steps, ctx, expect_fail=[n for n, _ in write_steps(ctx, False)], expect_ok={"r_note": ctx.marker, "r_ls": None, "r_git_log": "init", "r_etc_hosts": None})
+        ok &= check_steps(res, steps, ctx, expect_fail=[n for n, _ in write_steps(ctx, False)], expect_ok={"r_note": ctx.marker, "r_ls": None, "r_git_log": None, "r_etc_hosts": None})
     # b. codex exec 真跑一次（模型照着跑探针，沙箱同一套）
     prompt = f"这是用户授权的沙箱测试，目录都是临时目录。请只跑一次 shell 命令，命令原样是：sh {probe}\n不要改命令、失败了也不要换办法、不要做别的事。命令结束后把它的完整输出原样贴出来。"
     run2 = sh_run([codex, "exec", "--ephemeral", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-c", 'model_reasoning_effort="low"', prompt], env=env, cwd=str(ctx.ws))
@@ -649,7 +650,7 @@ def s5(ctx: Ctx, tools: dict, args) -> Result:
         ok = False
         res.note(f"✗ 没拿到探针输出（模型没跑或被拒）：{clip(run2.err or run2.out[-300:], 300)}")
     else:
-        ok &= check_steps(res, parse_steps(exec_out), ctx, expect_fail=[n for n, _ in write_steps(ctx, False)], expect_ok={"r_note": ctx.marker, "r_git_log": "init"})
+        ok &= check_steps(res, parse_steps(exec_out), ctx, expect_fail=[n for n, _ in write_steps(ctx, False)], expect_ok={"r_note": ctx.marker, "r_git_log": None})
     # c. deny_read：几种写法都试，报告哪种生效（设计里这条没实测过；程序里 permissions.filesystem.deny_read 是 requirements 级的，-c 可能不收）
     secret = str(ctx.outside / ".env")
     cands = {
