@@ -294,6 +294,14 @@ export const ENV_DEFAULT_MODEL = "AGENT_HUB_DEFAULT_MODEL";
 /** 准备命令里能用的：项目主文件夹（比如 cp "$AGENT_HUB_ROOT_PATH/.env" .）、这个 worktree 的目录。 */
 export const ENV_SETUP_ROOT_PATH = "AGENT_HUB_ROOT_PATH";
 export const ENV_SETUP_WORKTREE_PATH = "AGENT_HUB_WORKTREE_PATH";
+/** 联机（daemon/platform/）：tailscale 命令行在哪，默认 macOS 用 App 里的、别的系统用 PATH 里的 tailscale。 */
+export const ENV_TAILSCALE = "AGENT_HUB_TAILSCALE";
+/** 联机：本机的 tailnet 名字（<机器>.<tailnet>.ts.net）写死，不问 tailscale status。 */
+export const ENV_TAILNET_NAME = "AGENT_HUB_TAILNET_NAME";
+/** 联机：设备主人的 Tailscale 登录名写死。打了 tag 的设备 status 里没有主人，必须写这个，否则经 serve 的请求一律 403。 */
+export const ENV_TAILNET_OWNER = "AGENT_HUB_TAILNET_OWNER";
+/** 联机：serve 转发目标 unix | tcp，默认 Linux unix、macOS tcp（老版本 tailscale 不支持 unix: 时改 tcp）。 */
+export const ENV_SERVE_TARGET = "AGENT_HUB_SERVE_TARGET";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
 export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 
@@ -328,3 +336,9 @@ export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
 export const FETCHED_QUOTA_FRESH_MS = 5 * 60_000;
 /** 问一次最多等多久；超了当没有。 */
 export const FETCHED_QUOTA_TIMEOUT_MS = 30_000;
+
+/** 联机：tailscale status 的结果缓存多久（毫秒）。问到了 5 分钟，没问到（没装、没开）30 秒后再问；都是有请求时才在后台问，不是每个请求都跑。 */
+export const TAILNET_PROBE_OK_TTL_MS = 5 * 60_000;
+export const TAILNET_PROBE_FAIL_TTL_MS = 30_000;
+/** 联机：跑一次 tailscale status --json 最多等多久。 */
+export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;

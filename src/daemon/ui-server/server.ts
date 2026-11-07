@@ -1,6 +1,9 @@
 // 界面服务（设计第 4.2、4.3 节；m1-plan 第 3 节接口约定第 1、2 条）：HTTP + WebSocket，只监听 127.0.0.1。
+// 联机（docs/multi-device-design.md 第 3 节）：经 tailscale serve 进来的请求另外认本机的 tailnet 名字，并且只放行设备主人；
+// Linux 上 serve 转发到另听的 0600 Unix socket（startUiServer 的 serveSocket）。
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, lstatSync, unlinkSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -33,6 +36,7 @@ import {
   sentFileMime,
   sentFilesOf,
   serverInfoFor,
+  TAILSCALE_USER_LOGIN_HEADER,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
@@ -73,6 +77,7 @@ import {
   type RunOpen,
 } from "../open-file.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
+import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
 import { UI_TOKEN_PATTERN } from "./token.ts";
 
 export interface UiServerOptions {
@@ -105,6 +110,10 @@ export interface UiServerOptions {
   runOpen?: RunOpen;
   /** 这台机器能做什么，原样放进 /api/state 的 server，网页按它显示控件。默认按 process.platform（shared/server-info.ts）。 */
   serverInfo?: ServerInfo;
+  /** 本机的 tailnet 名字和主人（daemon/platform/tailnet.ts 的探测，读缓存）。不给 = 只认本机 127.0.0.1，和联机之前一样。 */
+  tailnet?: { current(): TailnetSelf | null };
+  /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
+  serveTarget?: ServeTargetKind;
 }
 
 /** 登录 cookie 的有效期：一年。令牌不变 cookie 就一直有效，想让它失效删掉 ui-token。 */
@@ -117,6 +126,12 @@ const HOST_HEADER = /^(?:127\.0\.0\.1|localhost):(\d+)$/i;
 /** 浏览器发的 Origin 是 scheme://host:port，没有路径和末尾斜杠；主机名那三种跟 Host 检查一致。 */
 const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+/** serve 的 https 默认端口：Host 可能带上 :443。 */
+const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
+const SERVE_SOCKET_MODE = 0o600;
+
+/** 从 serve 的 Unix socket 进来的请求（startUiServer 的 serveSocket）。按原始请求对象记。 */
+const viaServeSocket = new WeakSet<IncomingMessage>();
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -339,11 +354,33 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const fail = (reply: FastifyReply, statusCode: number, error: string, code?: LedgerErrorCode) =>
     reply.code(statusCode).send((code === undefined ? { error } : { error, code }) satisfies ApiErrorBody);
 
+  const serveTarget = opts.serveTarget ?? "tcp";
+  /** 经 serve 进来、已经过了 Host 和身份检查的请求 → 当时认的 tailnet 名字（Origin 要和它同源，cookie 加 Secure）。 */
+  const tailnetRequests = new WeakMap<IncomingMessage, string>();
+
   // 防 DNS 重绑定：Host 必须是 127.0.0.1:<端口> 或 localhost:<端口>。所有路径都查，包括静态文件和 /auth。
+  // 联机：或者是本机的 tailnet 名字（只在 serve 转发来的那条路上认），这时 serve 给的身份头必须是设备主人。
+  // 身份头只是附加条件，不代替 cookie（本机别的进程能直连端口自己带这个头）。
   app.addHook("onRequest", async (req, reply) => {
-    const match = HOST_HEADER.exec(req.headers.host ?? "");
-    const port = listeningPort();
-    if (match === null || port === undefined || Number(match[1]) !== port) return fail(reply, 403, "forbidden_host");
+    const host = req.headers.host ?? "";
+    const fromServeSocket = viaServeSocket.has(req.raw);
+    const local = fromServeSocket ? null : HOST_HEADER.exec(host);
+    if (local !== null) {
+      const port = listeningPort();
+      if (port === undefined || Number(local[1]) !== port) return fail(reply, 403, "forbidden_host");
+      return;
+    }
+    // 本机 Host 对上了就不看 tailnet，不碰探测
+    const self = fromServeSocket === (serveTarget === "unix") ? (opts.tailnet?.current() ?? null) : null;
+    const lowerHost = host.toLowerCase();
+    if (self === null || (lowerHost !== self.dnsName && lowerHost !== self.dnsName + HTTPS_DEFAULT_PORT_SUFFIX)) {
+      return fail(reply, 403, "forbidden_host");
+    }
+    const login = req.headers[TAILSCALE_USER_LOGIN_HEADER];
+    if (self.owner === null || typeof login !== "string" || login.trim().toLowerCase() !== self.owner) {
+      return fail(reply, 403, "forbidden_identity");
+    }
+    tailnetRequests.set(req.raw, self.dnsName);
   });
 
   // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
@@ -351,6 +388,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   app.addHook("onRequest", async (req, reply) => {
     const path = req.url.split("?", 1)[0] ?? "";
     if (SAFE_METHODS.has(req.method) && path !== API_PATHS.ws) return;
+    // 经 serve 来的：只认 https://<本机 tailnet 名字>（serve 是 443，浏览器不写端口）
+    const tailnetName = tailnetRequests.get(req.raw);
+    if (tailnetName !== undefined) {
+      if ((req.headers.origin ?? "").toLowerCase() !== `https://${tailnetName}`) return fail(reply, 403, "forbidden_origin");
+      return;
+    }
     const match = ORIGIN_HEADER.exec(req.headers.origin ?? "");
     const port = listeningPort();
     // 端口要和实际端口逐字相同：不接受 04000 这种写法。
@@ -436,7 +479,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const { token } = req.query as { token?: unknown };
       if (!tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");
       reply
-        .header("set-cookie", `${UI_COOKIE_NAME}=${opts.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_SECONDS}`)
+        .header(
+          "set-cookie",
+          // 经 serve 来的是 https：加 Secure。本机 http://127.0.0.1 不能加（浏览器会丢掉这个 cookie）
+          `${UI_COOKIE_NAME}=${opts.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_SECONDS}${tailnetRequests.has(req.raw) ? "; Secure" : ""}`,
+        )
         .header("referrer-policy", "no-referrer");
       return reply.redirect("/", 302);
     });
@@ -630,11 +677,61 @@ export interface RunningUiServer {
   close(): Promise<void>;
 }
 
-/** 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。 */
-export async function startUiServer(opts: UiServerOptions & { port: number }): Promise<RunningUiServer> {
+/**
+ * serve 转发用的 Unix socket：另起一个 HTTP 服务，收到的请求（含 WebSocket 握手）记下“从 socket 来的”，交给同一个 Fastify 处理。
+ * 残留的 socket 文件直接删（调用方拿着数据目录锁，不会有另一个守护进程在听）；那里是别的东西就报错。
+ */
+async function listenServeSocket(app: FastifyInstance, socketPath: string): Promise<Server> {
+  try {
+    if (!lstatSync(socketPath).isSocket()) throw new Error(`界面服务的 socket 路径上已经有别的东西，不是 socket：${socketPath}。请确认后手动移走。`);
+    unlinkSync(socketPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const server = createServer((req, res) => {
+    viaServeSocket.add(req);
+    app.routing(req, res);
+  });
+  server.on("upgrade", (req: IncomingMessage, socket, head) => {
+    viaServeSocket.add(req);
+    app.server.emit("upgrade", req, socket, head);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  chmodSync(socketPath, SERVE_SOCKET_MODE);
+  return server;
+}
+
+/**
+ * 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。
+ * serveSocket：再听一个 Unix socket 给 tailscale serve 转发（serveTarget 为 unix 时，daemon/platform/tailscale.ts）。
+ */
+export async function startUiServer(opts: UiServerOptions & { port: number; serveSocket?: string }): Promise<RunningUiServer> {
   const app = createUiServer(opts);
   await app.listen({ host: "127.0.0.1", port: opts.port });
   const addr = app.server.address();
   if (addr === null || typeof addr !== "object") throw new Error("ui-server is not listening on a TCP port");
-  return { app, port: addr.port, close: () => app.close() };
+  let serveServer: Server | undefined;
+  if (opts.serveSocket !== undefined) {
+    try {
+      serveServer = await listenServeSocket(app, opts.serveSocket);
+    } catch (err) {
+      await app.close();
+      throw err;
+    }
+  }
+  const close = async () => {
+    if (serveServer === undefined) return app.close();
+    const closed = new Promise<void>((resolve) => serveServer.close(() => resolve()));
+    // 先关 Fastify（断开 WebSocket），再断 socket 上剩下的连接；socket 文件由 Node 在关闭时删掉
+    await app.close();
+    serveServer.closeAllConnections();
+    await closed;
+  };
+  return { app, port: addr.port, close };
 }

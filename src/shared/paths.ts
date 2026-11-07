@@ -21,6 +21,8 @@ export interface HubPaths {
   lockFile: string;
   /** 界面用户令牌，权限 0600，重启后沿用（见 limits.ts 的 UI_COOKIE_NAME）。 */
   uiTokenFile: string;
+  /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
+  deviceFile: string;
   launchDir: string;
   logsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
@@ -35,6 +37,8 @@ export interface HubPaths {
    * macOS 上 Unix socket 路径最多 MAX_UNIX_SOCKET_PATH_BYTES 字节：agent 接口 listen 之前用 assertSocketPathFits 查 realpath 后的路径。
    */
   hubSock: string;
+  /** run/ui.sock：界面服务另听的 socket，权限 0600，只给 tailscale serve 转发用（Linux，见 daemon/platform/tailscale.ts）。 */
+  uiSock: string;
   /** run/bin/：守护进程生成的 hub 外壳所在目录，放在 claude 的 PATH 最前面。 */
   hubBinDir: string;
   /**
@@ -81,6 +85,7 @@ export function resolveHubPaths(
     dbFile: join(stateDir, "hub.sqlite"),
     lockFile: join(stateDir, "lock"),
     uiTokenFile: join(stateDir, "ui-token"),
+    deviceFile: join(stateDir, "device.json"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),
@@ -88,6 +93,7 @@ export function resolveHubPaths(
     personasDir: join(stateDir, "personas"),
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
+    uiSock: join(home, "run", "ui.sock"),
     hubBinDir: join(home, "run", "bin"),
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),
