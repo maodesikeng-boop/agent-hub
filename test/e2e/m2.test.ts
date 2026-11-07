@@ -54,6 +54,13 @@ function folder(name: string): string {
 
 const real = (path: string) => realpathSync.native(path);
 const hubSock = () => join(env.home, "run", "hub.sock");
+/**
+ * 旧的 hub.sock 被删掉重建了。靠 inode 号不同判断只在 macOS 上成立：Linux 的文件系统会马上复用刚释放的 inode 号。
+ * Linux 上由别处证明：SIGTERM 那条在重启前确认文件已经没了，SIGKILL 那条后面 hub 能连上新的（旧文件没人监听）。
+ */
+const expectSockReplaced = (oldIno: number) => {
+  if (process.platform === "darwin") expect(statSync(hubSock()).ino).not.toBe(oldIno);
+};
 
 /** 这个对话的会话，按代从小到大。 */
 function sessionsOf(state: StateSnapshot, conversationId: number) {
@@ -455,7 +462,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(after.folders).toEqual(before.folders);
     expect(after.folders.map((f) => f.path)).toEqual([real(foo), real(extra)]);
     expect(messagesOf(after, zhou.conversationId).map((m: Message) => m.id)).toEqual(messagesOf(before, zhou.conversationId).map((m) => m.id));
-    expect(statSync(hubSock()).ino).not.toBe(sockIno);
+    expectSockReplaced(sockIno);
     // 上次的令牌全部作废
     expect((await env.runHub(oldPid, ["status"])).code).toBe(1);
     expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
@@ -603,7 +610,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
 
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
-    expect(statSync(hubSock()).ino).not.toBe(sockIno);
+    expectSockReplaced(sockIno);
     expect(statSync(hubSock()).mode & 0o777).toBe(0o600);
     await warmUp(client, first.privateId, "还在吗");
     const proc = env.argvs().at(-1)!;

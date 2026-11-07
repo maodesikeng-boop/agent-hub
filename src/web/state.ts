@@ -1,6 +1,7 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
 // 全是纯函数，方便测试；网络和定时器在 useHub.ts。
 import {
+  serverInfoFor,
   userMessageDedupeKey,
   type Attachment,
   type Change,
@@ -14,6 +15,7 @@ import {
   type Project,
   type ProjectFolder,
   type ScheduleRecord,
+  type ServerInfo,
   type SessionState,
   type StateSnapshot,
 } from "../shared/index.ts";
@@ -68,6 +70,8 @@ export interface HubState {
   health: HealthEntry[];
   /** 所有项目经理的定时任务（ScheduleRecord.pmId 认是谁的）；资料页的定时任务卡片用。 */
   schedules: ScheduleRecord[];
+  /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
+  server: ServerInfo;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
@@ -86,6 +90,7 @@ export const initialState: HubState = {
   sessions: [],
   health: [],
   schedules: [],
+  server: serverInfoFor("darwin"),
   pending: [],
   older: {},
   retry: {},
@@ -218,6 +223,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     sessions: snapshot.sessions,
     health: snapshot.health,
     schedules: snapshot.schedules,
+    server: snapshot.server,
     pending: dropConfirmed(state.pending, all),
     older: {},
     retry: keepStillFailed(state.retry, all),

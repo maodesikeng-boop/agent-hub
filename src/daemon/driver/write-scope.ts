@@ -93,7 +93,7 @@ export function spawnInWriteScope(
   const enforcer = WRITE_SCOPE_ENFORCERS[vendor];
   const launch = enforcer.spawnCommand(base, scope, platform);
   if (scope !== null && !launch.osSandboxed) {
-    log(`[write-scope] ${sessionLabel}: 警告：这台机器没有 OS 沙箱（${platform}），Worker 的可写范围（数据目录里只能写自己的工作目录）${enforcer.fallback}`);
+    log(`[write-scope] ${sessionLabel}: 警告：这台机器（${platform}）还没有 OS 沙箱（目前只有 macOS 有），Worker 的可写范围（数据目录里只能写自己的工作目录）退回到规则兜底，不是强制的：${enforcer.fallback}`);
   }
   return launch;
 }

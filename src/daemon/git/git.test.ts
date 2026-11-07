@@ -242,11 +242,17 @@ describe("addWorktree", () => {
 
 describe("拿不到的错误", () => {
   it("git 超时 → 中文信息写明超了多久", async () => {
-    const repo = makeRepo("slow");
-    const error = await hasUncommittedChanges(repo, { timeoutMs: 1 }).catch((e) => e);
-    expect(error).toBeInstanceOf(GitError);
-    expect(error.kind).toBe("timeout");
-    expect(error.message).toMatch(/超过.*没有结束/);
+    // 用一个睡着不动的假 git：真 git 在 Linux 上跑得比 1 毫秒的超时还快时，会正常结束、不超时（macOS 上碰巧总是慢）
+    const repo = makeRepoLater();
+    fakeGit("exec sleep 30");
+    try {
+      const error = await hasUncommittedChanges(repo, { timeoutMs: 50 }).catch((e) => e);
+      expect(error).toBeInstanceOf(GitError);
+      expect(error.kind).toBe("timeout");
+      expect(error.message).toMatch(/超过.*没有结束/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("找不到 git 程序 → 中文信息", async () => {

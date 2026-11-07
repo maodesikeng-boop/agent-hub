@@ -1,6 +1,7 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
 import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
+import type { ReadonlyPolicy } from "./readonly-policy.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
@@ -482,6 +483,11 @@ export interface LaunchFiles {
    * 由角色、cwd、数据目录决定，cwd 变了驱动层本来就重启，所以不进 fingerprint。
    */
   writeScope?: WriteScope;
+  /**
+   * 只读 Worker 的统一策略（readonly-policy.ts 的 buildReadonlyPolicy）：有就是只读，没有就不是——驱动层只看这个，
+   * 不再去反读设置文件里的权限档。三家各自翻译成自己的做法（daemon/driver/readonly.ts）。进 fingerprint：策略变了下一条消息前重启。
+   */
+  readonly?: ReadonlyPolicy;
   /**
    * 拼进提示词的性格设定、模式是哪一版（LaunchContext 的 personaRevision）。不进 fingerprint：变了不重启，
    * 见上面“两轮之间自动重启”的性格设定那段。没有（Worker）就不比。

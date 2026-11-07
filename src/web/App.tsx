@@ -28,6 +28,7 @@ import { Button } from "./ui/button.tsx";
 import { useWaitingReminders } from "./notify.ts";
 import { useStagingStore } from "./upload.ts";
 import { ModelCatalogProvider } from "./models.tsx";
+import { ServerInfoProvider } from "./server-info.tsx";
 import { useRoute } from "./route.ts";
 import { useHub } from "./useHub.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
@@ -218,6 +219,7 @@ export function App() {
   const top = compact ? rail : null;
 
   return (
+    <ServerInfoProvider value={state.server}>
     <ModelCatalogProvider>
     <div className="relative flex h-full">
       <Sidebar
@@ -310,5 +312,6 @@ export function App() {
       </AccentScope>
     </div>
     </ModelCatalogProvider>
+    </ServerInfoProvider>
   );
 }

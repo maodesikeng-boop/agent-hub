@@ -15,7 +15,13 @@ permissions:
 
 jobs:
   check:
-    runs-on: macos-latest
+    # macOS 是开发机、Ubuntu 是服务器：typecheck 和 test:ci 两边都跑。fail-fast 关掉，一边挂了另一边照样跑完，两边的结果都能看到。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -40,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: vitest-junit
+          name: vitest-junit-${{ matrix.os }}
           path: vitest-junit.xml
           if-no-files-found: ignore
 

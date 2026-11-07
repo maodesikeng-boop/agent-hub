@@ -4,7 +4,6 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
-  READONLY_PERMISSION_MODE,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
   type AgentSessionRow,
@@ -13,6 +12,8 @@ import {
   type RateLimitInfo,
   type RateLimitWindow,
   type WriteScope,
+  type QuotaWindowKey,
+  windowKeyByMinutes,
 } from "../../shared/index.ts";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -101,24 +102,12 @@ export function buildInitializedNotification(): string {
 /**
  * 从 prepareLaunch 产出的 LaunchFiles 读取提示词、只读模式与注入给 Codex shell 工具的环境变量配置。
  * - 读取 files.promptFile 作为 developerInstructions
- * - 读取 files.settingsFile：若 permissions?.defaultMode === "dontAsk" 则 readonly = true
+ * - files.readonly 有值就是只读（不再反读设置文件里的权限档，改设置文件的模式名影响不到这里）
  * - 构造 config：shell_environment_policy.inherit = "all" + shell_environment_policy.set = files.env
  */
 export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
   const developerInstructions = existsSync(files.promptFile) ? readFileSync(files.promptFile, "utf8") : "";
-  let readonly = false;
-  if (files.settingsFile && existsSync(files.settingsFile)) {
-    try {
-      const parsed = JSON.parse(readFileSync(files.settingsFile, "utf8")) as {
-        permissions?: { defaultMode?: unknown };
-      };
-      if (parsed?.permissions?.defaultMode === READONLY_PERMISSION_MODE) {
-        readonly = true;
-      }
-    } catch {
-      // settingsFile 解析失败时保持默认非只读
-    }
-  }
+  const readonly = files.readonly !== undefined;
   const config: Record<string, unknown> = {
     "shell_environment_policy.inherit": "all",
   };
@@ -416,38 +405,37 @@ export function parseCodexTokenUsage(
   };
 }
 
-function parseCodexWindow(raw: unknown): RateLimitWindow | null {
+/** 一个窗口 → [额度窗口的键, 窗口]；缺用量或重置时间、窗口长度不认识的返回 null（见 QUOTA_WINDOWS，不按位置猜）。 */
+function parseCodexWindow(raw: unknown): [QuotaWindowKey, RateLimitWindow] | null {
   if (typeof raw !== "object" || raw === null) return null;
   const w = raw as Record<string, unknown>;
   if (typeof w.usedPercent !== "number" || !Number.isFinite(w.usedPercent)) return null;
   if (typeof w.resetsAt !== "number" || !Number.isFinite(w.resetsAt)) return null;
+  const key = windowKeyByMinutes(typeof w.windowDurationMins === "number" ? w.windowDurationMins : null);
+  if (key === null) return null;
   const utilization = w.usedPercent / 100;
-  const status = utilization >= 1 ? "rejected" : "allowed";
-  return {
-    utilization,
-    resetsAt: w.resetsAt,
-    status,
-  };
+  return [key, { utilization, resetsAt: w.resetsAt, status: utilization >= 1 ? "rejected" : "allowed" }];
 }
 
 /**
- * 解析 account/rateLimits/updated 的 rateLimits（primary -> five_hour, secondary -> seven_day）为 RateLimitInfo。
+ * 解析 account/rateLimits/updated 的 rateLimits（primary、secondary）为 RateLimitInfo：每个窗口按 windowDurationMins 归到
+ * QUOTA_WINDOWS 的键上（不按 primary / secondary 的位置：有的账号 primary 是 30 天窗口）。
+ * 整体的 resetsAt：有窗口用完（rejected）就取用完的窗口里最晚恢复的（要等它们都恢复），没有就取最先重置的。
  */
 export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null {
   if (typeof rateLimits !== "object" || rateLimits === null) return null;
   const rl = rateLimits as { primary?: unknown; secondary?: unknown };
   const windows: Record<string, RateLimitWindow> = {};
-  const fiveHour = parseCodexWindow(rl.primary);
-  if (fiveHour) windows.five_hour = fiveHour;
-  const sevenDay = parseCodexWindow(rl.secondary);
-  if (sevenDay) windows.seven_day = sevenDay;
-  if (Object.keys(windows).length === 0) return null;
-
-  const rejected = Object.values(windows).some((w) => w.status === "rejected");
-  const resetsAt = fiveHour?.resetsAt ?? sevenDay?.resetsAt ?? null;
+  for (const raw of [rl.primary, rl.secondary]) {
+    const parsed = parseCodexWindow(raw);
+    if (parsed) windows[parsed[0]] = parsed[1];
+  }
+  const all = Object.values(windows);
+  if (all.length === 0) return null;
+  const rejected = all.filter((w) => w.status === "rejected");
   return {
-    status: rejected ? "rejected" : "allowed",
-    resetsAt,
+    status: rejected.length > 0 ? "rejected" : "allowed",
+    resetsAt: rejected.length > 0 ? Math.max(...rejected.map((w) => w.resetsAt)) : Math.min(...all.map((w) => w.resetsAt)),
     windows,
   };
 }

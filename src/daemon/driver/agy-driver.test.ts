@@ -10,6 +10,7 @@ import {
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
+  buildReadonlyPolicy,
   type AgentSessionPatch,
   type AgentSessionRow,
   type DriverEvent,
@@ -420,6 +421,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
         fingerprint: launch.fingerprint,
         ...(launch.personaRevision ? { personaRevision: launch.personaRevision() } : {}),
         ...(launch.writeScope ? { writeScope: launch.writeScope } : {}),
+        ...(launch.readonly ? { readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir }) } : {}),
       };
     },
     env: {
@@ -529,9 +531,7 @@ describe("agy-protocol 纯函数", () => {
     const dir = mkdtempSync(join(tmpdir(), "agy-args-"));
     try {
       const settingsAuto = join(dir, "auto.json");
-      const settingsPlan = join(dir, "plan.json");
       writeFileSync(settingsAuto, JSON.stringify({ permissions: { defaultMode: "auto" } }));
-      writeFileSync(settingsPlan, JSON.stringify({ permissions: { defaultMode: "dontAsk" } }));
 
       const session: AgentSessionRow = {
         id: 1,
@@ -566,7 +566,13 @@ describe("agy-protocol 纯函数", () => {
       expect(argsFirst).not.toContain("--effort");
       expect(argsFirst.slice(-2)).toEqual(["--print", ""]);
 
-      const filesPlan: LaunchFiles = { promptFile: join(dir, "p.md"), settingsFile: settingsPlan, env: {}, fingerprint: "f2" };
+      const filesPlan: LaunchFiles = {
+        promptFile: join(dir, "p.md"),
+        settingsFile: settingsAuto,
+        env: {},
+        fingerprint: "f2",
+        readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state" }),
+      };
       const argsResumePlan = buildAgyArgs(session, filesPlan, true);
       expect(argsResumePlan[argsResumePlan.indexOf("--conversation") + 1]).toBe("conv-123");
       expect(argsResumePlan[argsResumePlan.indexOf("--mode") + 1]).toBe("plan");

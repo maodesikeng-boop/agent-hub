@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_ENV, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_ENV, buildReadonlyPolicy, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
@@ -233,6 +233,27 @@ describe("prepareLaunch（M2、M3）", () => {
     const readonly = await prepare(row(9, dir, "worker"));
     expect(JSON.parse(readFileSync(readonly.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", readonly: true, hubSock, stateDir: join(dir, "state"), osSandboxed: true, projectWorktreesDir: projectWorktreesDir(worktreesDir, projectContext().project!.id) }));
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
+  });
+
+  it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录和数据目录展开）；普通 Worker、项目经理没有", async () => {
+    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    contexts.set(9, workerContext({ readonly: true }));
+    const readonly = await make2()(row(9, dir, "worker"));
+    expect(readonly.readonly).toEqual(buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: join(dir, "state") }));
+    expect(readonly.readonly!.secretPaths).toContain("/Users/u/.ssh");
+    expect(readonly.readonly!.secretPaths).toContain(join(dir, "state", "ui-token"));
+    contexts.set(9, workerContext());
+    expect((await make2()(row(9, dir, "worker"))).readonly).toBeUndefined();
+    contexts.set(1, projectContext());
+    expect((await make2()(row(1))).readonly).toBeUndefined();
+  });
+
+  it("只读 Worker：策略变了 fingerprint 跟着变（驱动层下一条消息前重启）；同样的策略 fingerprint 不变", () => {
+    const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" });
+    const base = { prompt: "p", settings: "{}" };
+    expect(launchFingerprint({ ...base, readonly: policy })).toBe(launchFingerprint({ ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" }) }));
+    expect(launchFingerprint({ ...base, readonly: policy })).not.toBe(launchFingerprint(base));
+    expect(launchFingerprint({ ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s", connectors: { deny: ["jenkins/*"] } }) })).not.toBe(launchFingerprint({ ...base, readonly: policy }));
   });
 
   it("不是项目经理也不是 Worker 的会话：抛错", async () => {

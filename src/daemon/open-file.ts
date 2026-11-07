@@ -1,4 +1,5 @@
 // 网页的“在 Finder 中显示”“用默认程序打开”：用 macOS 的 open 命令（execFile，不经过 shell，路径放在 -- 之后）。
+// 只有 macOS 有：别的系统界面服务不起 open，回 501，网页也不显示这两个按钮（shared/server-info.ts）。
 // 优先用原文件（原路径还在、是普通文件、还在会话允许的文件夹里——先 realpath 再判断），否则用守护进程存的副本。
 // 只有白名单扩展名（shared/preview.ts 的 OPEN_ALLOWED_EXTENSIONS：文档、媒体、纯文本）的才许“用默认程序打开”；
 // 别的和带可执行权限的文件只许显示（打开可能直接运行）。
@@ -17,6 +18,9 @@ export const runOpenCommand: RunOpen = (args) =>
 
 /** 没找到能用的文件（原文件、副本都没了）。 */
 export class OpenTargetMissing extends Error {}
+/** 这台机器不能显示或打开文件（不是 macOS）。 */
+export class FileActionsUnavailable extends Error {}
+export const FILE_ACTIONS_UNAVAILABLE_MESSAGE = "这台服务器不能在桌面上显示或打开文件，请用“下载”";
 /** 这个文件只许显示，不许打开（扩展名不在白名单里、或有可执行权限）。 */
 export class OpenNotAllowed extends Error {}
 

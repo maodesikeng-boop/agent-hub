@@ -6,7 +6,8 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
-   buildSessionSettings,
+  buildReadonlyPolicy,
+  buildSessionSettings,
   workerWriteScope,
   RELAUNCH_NOTE,
   type AgentSessionPatch,
@@ -86,8 +87,8 @@ export interface FakeCodexTurnScript {
   };
   /** 额度通知。 */
   rateLimits?: {
-    primary?: { usedPercent: number; resetsAt: number };
-    secondary?: { usedPercent: number; resetsAt: number };
+    primary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
+    secondary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
   };
   /** 结束状态，默认 completed。 */
   status?: "completed" | "interrupted" | "failed";
@@ -569,6 +570,7 @@ function makeCodexHarness(
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
+      if (readonly) files.readonly = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir });
       return files;
     },
     env: {
@@ -686,8 +688,8 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
               total: { inputTokens: 120, cachedInputTokens: 30, outputTokens: 45 },
             },
             rateLimits: {
-              primary: { usedPercent: 35, resetsAt: 1793619600 },
-              secondary: { usedPercent: 60, resetsAt: 1793646000 },
+              primary: { usedPercent: 35, windowDurationMins: 300, resetsAt: 1793619600 },
+              secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: 1793646000 },
             },
           },
         ],

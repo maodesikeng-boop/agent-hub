@@ -4,11 +4,15 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
+import { AGENT_VENDORS } from "./vendors.ts";
 import {
   MAX_UNIX_SOCKET_PATH_BYTES,
   assertSocketPathFits,
+  VENDOR_FALLBACK_PATHS,
   defaultAgyFallbackPaths,
+  defaultClaudeFallbackPaths,
   defaultCodexFallbackPaths,
+  linuxInstallDirs,
   personaFilePath,
   projectWorktreesDir,
   resolveExecutable,
@@ -85,6 +89,19 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES))).toThrow(/AGENT_HUB_HOME/);
   });
 
+  it("Linux：每家厂商都在官方安装目录里找（~/.local/bin 排第一），ChatGPT.app 那条不出现", () => {
+    expect(linuxInstallDirs("/home/u")).toEqual(["/home/u/.local/bin", "/home/u/.npm-global/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"]);
+    // 每家厂商都有兜底（VENDOR_FALLBACK_PATHS 的键就是 AGENT_VENDORS），命令名就是厂商编号
+    expect(Object.keys(VENDOR_FALLBACK_PATHS).toSorted()).toEqual([...AGENT_VENDORS].toSorted());
+    for (const vendor of AGENT_VENDORS) {
+      const found = VENDOR_FALLBACK_PATHS[vendor]("/home/u", "linux");
+      expect(found[0]).toBe(`/home/u/.local/bin/${vendor}`);
+      for (const dir of linuxInstallDirs("/home/u")) expect(found).toContain(`${dir}/${vendor}`);
+      expect(found.some((p) => p.includes(".app/"))).toBe(false);
+    }
+    expect(defaultCodexFallbackPaths("/home/u", "linux").at(-1)).toBe("/home/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex");
+  });
+
   it("resolveExecutable：显式路径原样返回；PATH 命中保持原样；否则按顺序回退候选路径", () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-paths-exec-"));
     try {
@@ -108,8 +125,9 @@ describe("paths：可执行文件与数据目录解析", () => {
       // 都不存在，保持原样
       expect(resolveExecutable("codex", pathDir, [fallback1])).toBe("codex");
 
-      expect(defaultAgyFallbackPaths("/Users/u")).toEqual(["/Users/u/.local/bin/agy"]);
-      expect(defaultCodexFallbackPaths("/Users/u")).toEqual([
+      expect(defaultAgyFallbackPaths("/Users/u", "darwin")).toEqual(["/Users/u/.local/bin/agy"]);
+      expect(defaultClaudeFallbackPaths("/Users/u", "darwin")).toEqual([]);
+      expect(defaultCodexFallbackPaths("/Users/u", "darwin")).toEqual([
         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
       ]);

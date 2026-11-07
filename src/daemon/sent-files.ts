@@ -70,11 +70,16 @@ export const SENSITIVE_HOME_PATHS: readonly string[] = [
   ".claude.json",
   "Library/Keychains",
   "Library/Cookies",
+  // Linux：登录钥匙环（Secret Service，agy 的登录令牌也在里面）、浏览器的 cookie 和密码库
+  ".local/share/keyrings",
+  ".config/google-chrome",
+  ".config/chromium",
+  ".mozilla",
   ".zsh_history",
   ".bash_history",
 ];
-/** 同上，系统里的（macOS 上 /etc 是 /private/etc 的符号链接，两个都写）。 */
-export const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db"];
+/** 同上，系统里的（macOS 上 /etc 是 /private/etc 的符号链接，两个都写；/proc 里有进程的环境变量，只有 Linux 有）。 */
+export const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db", "/proc"];
 
 /** 一个会话能分享哪些文件。路径都可以没 realpath 过，比对前统一 realpath。 */
 export interface ShareScope {

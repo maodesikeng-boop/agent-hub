@@ -106,6 +106,13 @@ describe("createFolderPicker", () => {
     });
   });
 
+  it("这台机器不能弹原生对话框（不是 macOS、没传 run）：501，不去起 osascript", async () => {
+    await expect(createFolderPicker({ available: false, homeDir: HOME }).pick()).rejects.toMatchObject({
+      statusCode: 501,
+      message: PICK_FOLDER_UNAVAILABLE_MESSAGE,
+    });
+  });
+
   it("别的错且 stderr 是空的（被信号结束）：原因里写信号，不带整条命令", async () => {
     const run: RunOsascript = async () => {
       throw osascriptError({ signal: "SIGKILL", stderr: "" });

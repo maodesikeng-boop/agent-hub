@@ -2,6 +2,8 @@
 import {
   AGENT_VENDORS,
   askOf,
+  DEFAULT_AGENT_VENDOR,
+  QUOTA_WINDOWS,
   VENDOR_SPECS,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
@@ -110,10 +112,7 @@ export function isWaitingForQuota(session: SessionState | null, now: number = Da
 /** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
 export const QUOTA_WARNING_PERCENT = 80;
 
-/**
- * 有额度数据的厂商（shared/vendors.ts 的 VendorSpec.quota）。会话还没有“哪家厂商”这个字段，现在的额度都是 Claude 的；
- * 以后加厂商：在 vendors.ts 里写上它的 quota，并让 quotaUsage 按会话的厂商分开取。
- */
+/** 有额度数据的厂商（shared/vendors.ts 的 VendorSpec.quota）；加厂商只在那里写。 */
 const QUOTA_VENDORS = AGENT_VENDORS.flatMap((id) => {
   const quota = VENDOR_SPECS[id].quota;
   return quota === undefined ? [] : [{ id, ...quota }];
@@ -135,7 +134,7 @@ export interface QuotaWindowUsage {
 export interface QuotaVendor {
   id: string;
   name: string;
-  /** 有数据的窗口，按 QUOTA_VENDORS 里的顺序。 */
+  /** 有数据的窗口，按厂商 quota.windows 里的顺序。 */
   windows: QuotaWindowUsage[];
   /** 额度用完了（isQuotaExhausted，取最近一次事件的那个会话）。 */
   exhausted: boolean;
@@ -162,7 +161,8 @@ const newerWindow = (a: SessionState, b: SessionState | null, key: string): bool
 };
 
 /**
- * m3-plan 2.7：每个会话每一轮都有 rate_limit_event。每个窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
+ * m3-plan 2.7：每个会话每一轮都有额度事件（Claude 的 rate_limit_event、codex 的 account/rateLimits/updated）。
+ * 每家厂商只看自己的会话（各家的窗口长度、重置时间不通用，混着挑会把别家的时间显示到这家头上）；每个窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
  * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
  * 过了 resetsAt 的窗口已经重置：显示 0%、没有重置时间、不标快用完（新窗口的数据要等下一条事件才来）；不是已用完。
  * now 是毫秒；网页用 useRerenderAt 在每个重置时间点重新渲染，所以页面不动也会变。
@@ -171,9 +171,11 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
-    for (const { key, label, short } of spec.windows) {
+    const sessions = state.sessions.filter((s) => (s.vendor ?? DEFAULT_AGENT_VENDOR) === spec.id);
+    for (const key of spec.windows) {
+      const { label, short } = QUOTA_WINDOWS[key];
       let best: SessionState | null = null;
-      for (const s of state.sessions) {
+      for (const s of sessions) {
         const w = s.rateLimit?.windows[key];
         if (w !== undefined && Number.isFinite(w.utilization) && newerWindow(s, best, key)) best = s;
       }
@@ -195,7 +197,7 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
     }
     if (windows.length === 0) continue;
     let latest: SessionState | null = null;
-    for (const s of state.sessions) if (s.rateLimit !== null && newerSession(s, latest)) latest = s;
+    for (const s of sessions) if (s.rateLimit !== null && newerSession(s, latest)) latest = s;
     vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit, now) });
   }
   return vendors;

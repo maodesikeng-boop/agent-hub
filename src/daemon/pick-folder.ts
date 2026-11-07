@@ -1,10 +1,11 @@
 // 替网页弹 macOS 原生的“选择文件夹”（浏览器自带的选文件夹拿不到绝对路径，守护进程就跑在用户这台 Mac 上）。
+// 只有 macOS 有：别的系统（Linux 服务器）回 501，网页不显示“选择…”，用户手填路径（shared/server-info.ts）。
 // 起 osascript 的逻辑都在这里；执行函数可注入，测试里不会真的弹窗。
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { PICK_FOLDER_TIMEOUT_MS } from "../shared/index.ts";
+import { PICK_FOLDER_TIMEOUT_MS, serverInfoFor } from "../shared/index.ts";
 
 /** 对话框上的提示语。 */
 const PICK_FOLDER_PROMPT = "选择主文件夹";
@@ -44,13 +45,15 @@ export class PickFolderError extends Error {
 }
 
 export const PICK_FOLDER_BUSY_MESSAGE = "已经有一个选择文件夹的窗口开着了，先在那个窗口里选完或取消";
-export const PICK_FOLDER_UNAVAILABLE_MESSAGE = "这台电脑上没有 osascript，不能弹出选择文件夹的窗口（只支持 macOS），请直接输入路径";
+export const PICK_FOLDER_UNAVAILABLE_MESSAGE = "这台服务器不能弹出选择文件夹的窗口（只有 macOS 可以），请直接输入路径";
 
 export interface FolderPickerOptions {
   run?: RunOsascript;
   timeoutMs?: number;
   /** 没给起始文件夹或它不可用时的起点。 */
   homeDir?: string;
+  /** 这台机器能不能弹原生对话框（默认只有 macOS）。false 且没传 run：pick 直接 501。传了 run（测试）不看它。 */
+  available?: boolean;
 }
 
 export interface FolderPicker {
@@ -80,10 +83,12 @@ export function createFolderPicker(options: FolderPickerOptions = {}): FolderPic
   const run = options.run ?? runOsascript;
   const timeoutMs = options.timeoutMs ?? PICK_FOLDER_TIMEOUT_MS;
   const homeDir = options.homeDir ?? homedir();
+  const available = options.run !== undefined || (options.available ?? serverInfoFor(process.platform).folderPicker);
   let open = false;
 
   return {
     async pick(startDir) {
+      if (!available) throw new PickFolderError(501, PICK_FOLDER_UNAVAILABLE_MESSAGE);
       if (open) throw new PickFolderError(409, PICK_FOLDER_BUSY_MESSAGE);
       open = true;
       try {

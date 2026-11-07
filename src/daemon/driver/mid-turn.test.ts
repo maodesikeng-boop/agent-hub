@@ -21,8 +21,16 @@ function harness(turns: FakeTurn[], extra: Partial<FakeScript> = {}, driver: Rec
   return h;
 }
 
-/** 放行卡在 waitFile 上的那一步。 */
-const release = (t: Harness, name: string) => writeFileSync(join(t.dir, name), "");
+/**
+ * 放行卡在 waitFile 上的那一步。先等假 claude 把驱动层已经写给它的 user 行都收到（它收到才记日志）：
+ * 假 claude 每 20ms 看一次放行文件，放行得比它读到中途写入的行还早，那一行就赶不上“工具跑完取走”，变成单独的下一轮。
+ * 机器忙（CI 的 Linux 机器上几个测试一起跑）时进程调度晚几十毫秒就会这样；等不到（有的消息还排在驱动层的队列里）最多等 1 秒就放行。
+ */
+const release = async (t: Harness, name: string) => {
+  const delivered = t.of("message.delivered").reduce((n, e) => n + e.messageIds.length, 0);
+  for (let waited = 0; userLines(t).length < delivered && waited < 1000; waited += 5) await realSleep(5);
+  writeFileSync(join(t.dir, name), "");
+};
 const gate = (t: Harness | string, name?: string) => ({ waitFile: join(typeof t === "string" ? t : t.dir, name ?? "go") });
 
 /** 写进去的 user 行（原始 JSON）。 */
@@ -52,7 +60,7 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
       [[2], true],
     ]);
     expect(t.of("message.processing").map((e) => e.messageIds)).toEqual([[1]]);
-    release(t, "go");
+    await release(t, "go");
     const ended = await t.waitFor("turn.ended");
     expect(ended).toMatchObject({ ok: true, messageIds: [1, 2] });
     expect(t.of("message.processing").map((e) => e.messageIds)).toEqual([[1], [2]]);
@@ -73,7 +81,7 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     await t.waitFor("agent.text");
     await expect(t.driver.send(s.id, user(2, "再告诉我 2+2"))).resolves.toEqual({ kind: "written", midTurn: true });
     await expect(t.driver.send(s.id, user(3, "最后一句带 PINEAPPLE"))).resolves.toEqual({ kind: "written", midTurn: true });
-    release(t, "go");
+    await release(t, "go");
     expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1, 2, 3] });
     expect(t.stdinTexts()).toEqual(["开始", "再告诉我 2+2", "最后一句带 PINEAPPLE"]);
     expect(t.stdinTexts().some((x) => x.includes("用户连发了"))).toBe(false);
@@ -89,7 +97,7 @@ describe("中途写入：当前工具跑完就被同一轮取走", () => {
     await t.driver.send(s.id, user(1, "讲个故事"));
     await t.waitFor("message.processing");
     await expect(t.driver.send(s.id, user(2, "最后加一行 ACK"))).resolves.toEqual({ kind: "written", midTurn: true });
-    release(t, "go");
+    await release(t, "go");
     const first = await t.waitFor("turn.ended");
     expect(first.messageIds).toEqual([1]);
     const second = await t.waitFor("turn.ended", () => true, 2);
@@ -137,7 +145,7 @@ describe("不支持时退回排队", () => {
     await expect(t.driver.send(s.id, user(2, "/compact"))).resolves.toEqual({ kind: "queued" });
     // 前面排着命令：后面的普通消息也排在它后面，不插队
     await expect(t.driver.send(s.id, user(3, "之后再说"))).resolves.toEqual({ kind: "queued" });
-    release(t, "go");
+    await release(t, "go");
     await t.waitFor("turn.ended", () => true, 3);
     expect(t.stdinTexts()).toEqual(["开始", "/compact", "之后再说"]);
   });
@@ -197,7 +205,7 @@ describe("停止：写进去了还没被取走的标已取消，不重发", () =
     await t.driver.send(s.id, user(1, "开始"));
     await t.waitFor("agent.text");
     await t.driver.send(s.id, user(2, "插一句"));
-    release(t, "go");
+    await release(t, "go");
     await t.waitFor("message.processing", (e) => e.messageIds.includes(2));
     await t.driver.interrupt(s.id);
     expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1, 2], interrupted: true });
@@ -271,7 +279,7 @@ describe("崩溃、重启：只有写进去了还没开始处理的放回去重�
     await t.driver.send(s.id, user(1, "开始"));
     await t.waitFor("agent.text");
     await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
-    release(t, "go");
+    await release(t, "go");
     const exited = await t.waitFor("session.exited");
     expect(exited).toMatchObject({ reason: "crash", messageIds: [1], hadResult: false });
     expect(t.of("message.requeued")).toEqual([expect.objectContaining({ messageIds: [2] })]);
@@ -331,7 +339,7 @@ describe("停止碰上别的事（审查后补的）", () => {
     await t.waitFor("agent.text");
     await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
     const stopping = t.driver.interrupt(s.id);
-    release(t, "go");
+    await release(t, "go");
     await stopping;
     expect(await t.waitFor("session.exited")).toMatchObject({ reason: "crash", messageIds: [1] });
     expect(t.of("message.cancelled")).toEqual([expect.objectContaining({ messageIds: [2], reason: "stop" })]);
@@ -377,7 +385,7 @@ describe("不和别的机制搅在一起", () => {
     await t.driver.send(s.id, user(1, "开始"));
     await t.waitFor("turn.started");
     await expect(t.driver.send(s.id, user(2, "顺便看看这个"))).resolves.toEqual({ kind: "written", midTurn: true });
-    release(t, "go");
+    await release(t, "go");
     await t.waitFor("turn.ended", () => true, 2);
     expect(t.of("turn.started")).toHaveLength(1);
     expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [2]]);
@@ -394,7 +402,7 @@ describe("不和别的机制搅在一起", () => {
     await t.driver.send(s.id, user(1, "开始"));
     await t.waitFor("agent.text");
     await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
-    release(t, "go");
+    await release(t, "go");
     expect(await t.waitFor("turn.ended")).toMatchObject({ messageIds: [1, 2] });
     await realSleep(400);
     expect(t.of("session.exited")).toEqual([]);
@@ -410,7 +418,7 @@ describe("不和别的机制搅在一起", () => {
     t.launch.fingerprint = "v2";
     await expect(t.driver.send(s.id, user(2, "插一句"))).resolves.toEqual({ kind: "written", midTurn: true });
     expect(t.prepareCalls.get(s.id)).toBe(calls);
-    release(t, "go");
+    await release(t, "go");
     await t.waitFor("turn.ended");
     expect(t.argvs()).toHaveLength(1);
     await t.driver.send(s.id, user(3, "下一条"));
@@ -428,7 +436,7 @@ describe("不和别的机制搅在一起", () => {
     await t.waitFor("message.processing");
     await t.driver.send(s.id, user(2, "二"));
     const ending = t.driver.end(s.id);
-    release(t, "go");
+    await release(t, "go");
     await ending;
     expect(t.of("turn.ended").map((e) => e.messageIds)).toEqual([[1], [2]]);
     expect(t.of("session.exited")).toEqual([expect.objectContaining({ reason: "idle", messageIds: [] })]);

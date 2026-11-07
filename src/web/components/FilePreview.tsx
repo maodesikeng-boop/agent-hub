@@ -12,6 +12,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError, fetchFileBytes, postFileAction, type FileActionTarget } from "../client.ts";
 import { parseCsv } from "../csv.ts";
+import { useServerInfo } from "../server-info.tsx";
 import { highlightHtml } from "../highlight.ts";
 import { formatBytes } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
@@ -227,6 +228,8 @@ function PreviewContent({ file }: { file: PreviewFile }) {
   const [busy, setBusy] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{ text: string; error: boolean } | null>(null);
   const openAllowed = canOpenWithDefault(file.name);
+  // 服务端不是 macOS（Linux 服务器没有 Finder，也没有人坐在它的屏幕前）：不显示“在 Finder 中显示”“用默认程序打开”，只留“下载”
+  const fileActions = useServerInfo().fileActions;
 
   const run = async (action: FileAction) => {
     if (file.target === null) return;
@@ -290,7 +293,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
             下载
           </a>
         </Button>
-        {file.target !== null && (
+        {file.target !== null && fileActions && (
           <>
             <Button variant="outline" disabled={busy !== null} onClick={() => void run("reveal")}>
               <FolderSearch />

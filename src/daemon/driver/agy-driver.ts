@@ -49,7 +49,6 @@ import {
   checkWorkerToolViolation,
   detectAgyArgsConflict,
   finishAgyUsage,
-  isReadonlySettings,
   mergeUserTexts,
   observeAgyUsage,
   readSystemInstructions,
@@ -817,7 +816,7 @@ export class AgyDriver implements Driver {
 
     const args = buildAgyArgs(row, files, resume);
     const systemPrompt = readSystemInstructions(files.promptFile);
-    const readonly = isReadonlySettings(files.settingsFile);
+    const readonly = files.readonly !== undefined;
 
     // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱时记警告，按工具参数兜底检查
     const launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.#opts.log, `session ${st.id}`);
