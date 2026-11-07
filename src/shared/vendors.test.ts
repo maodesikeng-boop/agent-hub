@@ -65,12 +65,12 @@ describe("厂商清单", () => {
     expect(codex.label).toBe("Codex");
     expect(codex.backgroundCommands).toBe(false);
     expect(codex.models).toEqual([
-      { id: "gpt-5.4", label: "GPT-5.4" },
-      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      { id: "gpt-6-luna", label: "GPT-6-Luna" },
+      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
     ]);
     expect(codex.customModel).toBe(true);
-    expect(codex.customModelExample).toBe("如 gpt-5.4");
+    expect(codex.customModelExample).toBe("如 gpt-6-luna");
     expect(codex.efforts).toEqual(["low", "medium", "high", "xhigh"]);
     expect(codex.modelFlag).toBe("--model");
     expect(codex.effortFlag).toBe("-c");
@@ -164,7 +164,7 @@ describe("界面上的叫法", () => {
     expect(modelLabel("claude", "claude-haiku-5-5")).toBe("claude-haiku-5-5");
     expect(modelLabel("agy", "gemini-4-argon")).toBe("Gemini 4 Argon");
     expect(modelLabel("agy", "gemini-4-argon-medium")).toBe("Gemini 4 Argon");
-    expect(modelLabel("codex", "gpt-5.4-mini")).toBe("GPT-5.4 Mini");
+    expect(modelLabel("codex", "gpt-5.6-terra")).toBe("GPT-5.6-Terra");
   });
 
   it("modelLabel 给了名单：用名单里的名字", () => {
@@ -194,6 +194,7 @@ describe("模型名单", () => {
       source: "bundled",
       defaultEfforts: null,
       defaultModel: null,
+      defaultModelId: null,
       efforts: VENDOR_SPECS.claude.efforts,
       customModelExample: VENDOR_SPECS.claude.customModelExample,
       models: VENDOR_SPECS.claude.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),

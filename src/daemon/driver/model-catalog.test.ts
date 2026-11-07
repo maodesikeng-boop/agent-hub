@@ -242,6 +242,7 @@ describe("parseCodexModels：codex 报的模型名单", () => {
       ...bundledModelCatalog("codex"),
       source: "vendor",
       defaultModel: "GPT-5.4",
+      defaultModelId: "gpt-5.4",
       models: [
         {
           id: "gpt-5.4",

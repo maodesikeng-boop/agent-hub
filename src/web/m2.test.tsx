@@ -1256,6 +1256,7 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     models: [{ id: "fake-large", label: "Fake Large", description: null, efforts: null }],
     defaultEfforts: null,
     defaultModel: "Fake Large",
+    defaultModelId: "fake-large",
     efforts: ["quick", "deep"],
     customModelExample: null,
   };
