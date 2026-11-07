@@ -1036,7 +1036,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     const { argv, settings } = readonlyArgv(t);
     expect(argv[argv.indexOf("--mode") + 1]).toBe("plan");
     expect(settings.enableTerminalSandbox).toBe(false);
-    expect(settings.permissions.allow).toEqual(["read_file(*)", "command(*)", "read_url(*)"]);
+    expect(settings.permissions.allow).toEqual(["read_file(*)", "command(*)", "read_url(*)", "mcp(slack/read_channel)", "mcp(claude-ai/search)"]);
     expect(settings.permissions.deny).toContain("write_file(*)");
     expect(settings.permissions.deny).toContain("mcp(slack/send_message)");
     expect(settings.permissions.deny).toContain("mcp(jenkins/get_build)");
@@ -1156,6 +1156,26 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     expect(stdins[1]!.line).toContain("write_file");
     expect(stdins[1]!.line).toContain("被权限拒绝");
     expect(t.of("agent.text").map((e) => e.text)).toContain("换成只读的办法做完了");
+  });
+
+  it("被拒后自动补一轮（S4 实测的真实形状）：mcp 权限被自动拒、回复为空、status=SUCCESS → 补一轮，点名 CallMcpTool", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          { steps: [toolStep("call_mcp_tool", { ServerName: "rotest", ToolName: "ro_lookup" })], result: { response: "", deniedActions: [{ action: "mcp", display_name: "CallMcpTool" }] } },
+          { steps: [{ type: "text", deltas: ["换办法做完了"] }] },
+        ],
+      },
+    });
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "查一下"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended.ok).toBe(true);
+    expect(t.of("turn.ended")).toHaveLength(1);
+    const stdins = t.log().filter((e) => e.kind === "stdin");
+    expect(stdins).toHaveLength(2);
+    expect(stdins[1]!.line).toContain("CallMcpTool");
+    expect(t.of("agent.text").map((e) => e.text)).toContain("换办法做完了");
   });
 
   it("被拒后补一轮到上限就停：照常以空回复结束这一轮，不死循环", async () => {

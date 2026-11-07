@@ -53,16 +53,17 @@ describe("agyReadonlySettings", () => {
 });
 
 describe("agyConnectorRules：连接器按 readOnlyHint 拒（统一用 connectorToolAllowed）", () => {
-  it("没标、标了非只读、既只读又 destructive 的工具拒；只读的不拒；问不到清单的服务器整个拒", () => {
+  it("没标、标了非只读、既只读又 destructive 的工具拒；只读的不拒、显式写进 allow（agy 无头下没规则的 mcp 工具会被自动拒、整轮空回复）；问不到清单的服务器整个拒", () => {
     const { allow, deny } = agyConnectorRules(policy(), catalog);
-    expect(allow).toEqual([]);
+    expect(allow.sort()).toEqual(["mcp(claude-ai/search)", "mcp(slack/read_channel)"]);
     expect(deny.sort()).toEqual(["mcp(broken/*)", "mcp(jenkins/build_item)", "mcp(jenkins/get_build)", "mcp(slack/edit)", "mcp(slack/send_message)"]);
   });
 
   it("手动补充：没标记的工具放行（进 allow、不进 deny）；手动排除压过只读标记和补充", () => {
     const rules = agyConnectorRules(policy({ extraAllow: ["jenkins/get_build", "slack/send_message"], deny: ["slack/read_channel", "slack/send_message"] }), catalog);
-    expect(rules.allow).toEqual(["mcp(jenkins/get_build)", "mcp(slack/send_message)"]);
+    expect(rules.allow.sort()).toEqual(["mcp(claude-ai/search)", "mcp(jenkins/get_build)"]); // slack/send_message 又补充又排除：排除赢，不进 allow
     expect(rules.deny).toContain("mcp(slack/read_channel)");
+    expect(rules.allow).not.toContain("mcp(slack/read_channel)"); // 被手动排除的不进 allow
     expect(rules.deny).toContain("mcp(slack/send_message)"); // deny 压过 extraAllow
     expect(rules.deny).not.toContain("mcp(jenkins/get_build)");
     expect(rules.deny).toContain("mcp(jenkins/build_item)");
@@ -72,7 +73,13 @@ describe("agyConnectorRules：连接器按 readOnlyHint 拒（统一用 connecto
     const rules = agyConnectorRules(policy({ extraAllow: ["jenkins/*", "broken/*"] }), catalog);
     expect(rules.deny).not.toContain("mcp(jenkins/get_build)");
     expect(rules.deny).not.toContain("mcp(broken/*)");
-    expect(rules.allow).toEqual(["mcp(jenkins/*)", "mcp(broken/*)"]);
+    expect(rules.allow).toEqual(expect.arrayContaining(["mcp(jenkins/*)", "mcp(broken/*)", "mcp(slack/read_channel)"]));
+    expect(rules.allow.filter((r) => r === "mcp(jenkins/*)")).toHaveLength(1);
+  });
+
+  it("allow 里每条规则都不在 deny 里（只读的放行、非只读的拒，两边不重叠）", () => {
+    const { allow, deny } = agyConnectorRules(policy(), catalog);
+    expect(allow.filter((r) => deny.includes(r))).toEqual([]);
   });
 
   it("agyMcpRule：没有 / 的当整个服务器，全通配是 mcp(*)", () => {
@@ -139,6 +146,7 @@ describe("被拒后补一轮的文字", () => {
   it("denied_actions 的几种写法都能描述；空、没有是 []", () => {
     expect(describeDeniedAction("write_file")).toBe("write_file");
     expect(describeDeniedAction({ tool_name: "run_command", reason: "需要批准" })).toBe("run_command（需要批准）");
+    expect(describeDeniedAction({ action: "mcp", display_name: "CallMcpTool" })).toBe("CallMcpTool（需要 mcp 权限）"); // S4 实测的真实形状
     expect(describeDeniedAction({ foo: 1 })).toBe('{"foo":1}');
     expect(deniedActionsOf({ denied_actions: [{ name: "a" }, "b"] })).toEqual(["a", "b"]);
     expect(deniedActionsOf({ denied_actions: [] })).toEqual([]);

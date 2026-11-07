@@ -109,19 +109,25 @@ export interface AgyConnectorRules {
  * 连接器的 agy 规则：
  * - deny：手动排除的；清单里每个 connectorToolAllowed 不放行的工具（mcp(服务器/工具)）；问不到清单的服务器整个拒（除非补充清单里点名了它，
  *   那就只能放行点名的、别的看不见所以也拒不了——所以补充过的服务器要保证能问到清单）；
- * - allow：手动补充的（plan 模式下没标记的工具要批准，整轮会结束，所以要显式放行）。deny 压过 allow（设计 1.2 节实测）。
+ * - allow：放行的要显式写进来，不能只靠“没 deny”：agy 无头模式下 mcp 工具没有 allow 规则就要批准、批不了就自动拒绝，连 readOnlyHint 只读的也一样，
+ *   整轮提前结束、回复为空（2026-11-07 S4 实测：ro_lookup 也被拒）。所以清单里每个 connectorToolAllowed 放行的工具写一条 mcp(服务器/工具)，再加手动补充的（可以是 服务器/*）。
+ *   deny 压过 allow（设计 1.2 节实测）。
  */
 export function agyConnectorRules(policy: Pick<ReadonlyPolicy, "connectors">, catalog: AgyConnectorCatalog): AgyConnectorRules {
   const deny = new Set<string>(policy.connectors.deny.map(agyMcpRule));
+  const allow = new Set<string>(policy.connectors.extraAllow.map(agyMcpRule));
   for (const [server, tools] of Object.entries(catalog.servers)) {
     for (const [tool, annotations] of Object.entries(tools)) {
-      if (!connectorToolAllowed(policy, server, tool, annotations)) deny.add(agyMcpRule(`${server}/${tool}`));
+      const rule = agyMcpRule(`${server}/${tool}`);
+      if (connectorToolAllowed(policy, server, tool, annotations)) allow.add(rule);
+      else deny.add(rule);
     }
   }
   for (const server of catalog.unlistable) {
     if (!connectorToolAllowed(policy, server, "*", null)) deny.add(agyMcpRule(`${server}/*`));
   }
-  return { allow: policy.connectors.extraAllow.map(agyMcpRule), deny: [...deny] };
+  for (const rule of deny) allow.delete(rule); // 被手动排除的不写进 allow（deny 本来就压过，这里保持两边不重叠）
+  return { allow: [...allow], deny: [...deny] };
 }
 
 /** agy 的 --settings 内容（只读）：permissions 的放行、拒绝规则，关掉 agy 自带的终端沙箱（外层沙箱里不能嵌套，实测开着命令 exit 71）。 */
@@ -191,6 +197,8 @@ export function describeDeniedAction(action: unknown): string {
   if (typeof action === "string") return action;
   if (typeof action !== "object" || action === null) return String(action);
   const o = action as Record<string, unknown>;
+  // 真实形状（2026-11-07 S4 实测）：{ action: "mcp", display_name: "CallMcpTool" }，action 是缺的权限类别
+  if (typeof o.action === "string" && o.action !== "" && typeof o.display_name === "string" && o.display_name !== "") return `${o.display_name}（需要 ${o.action} 权限）`;
   for (const key of ["tool_name", "toolName", "name", "action", "tool", "command"]) {
     const v = o[key];
     if (typeof v === "string" && v !== "") {

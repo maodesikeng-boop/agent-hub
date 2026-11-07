@@ -264,7 +264,7 @@ bwrap --ro-bind / /                    # 整个文件系统只读
 
 ### 7.4 W3 agy 实现（Worker #138）
 
-- `daemon/driver/readonly-agy.ts`：翻译层。`--mode plan` + `--settings`（allow `read_file(*)`、`command(*)`、`read_url(*)`；deny `write_file(*)`、密钥 realpath、连接器规则；`enableTerminalSandbox:false`）；外层沙箱参数；被拒后补一轮的文字。
+- `daemon/driver/readonly-agy.ts`：翻译层。`--mode plan` + `--settings`（allow `read_file(*)`、`command(*)`、`read_url(*)`；deny `write_file(*)`、密钥 realpath、连接器规则：放行的工具（readOnlyHint 只读 + 补充清单）逐个写进 allow `mcp(服务器/工具)`，**不能只靠没 deny**——S4 实测 agy 无头下 mcp 工具没有 allow 规则就自动拒，连只读的 ro_lookup 也被拒、整轮空回复；非只读的写进 deny；`enableTerminalSandbox:false`）；外层沙箱参数；被拒后补一轮的文字。
 - `daemon/driver/write-scope.ts`：`readonlySeatbeltProfile`（哪里都不能写；放行设备文件、会话私有 TMPDIR、agy 运行时目录——**S4 实测要加 `bin/`**，agy 每次跑命令都重写里面的 agentapi 脚本——和通用缓存目录；密钥禁读：路径 subpath + 通配转正则）、`wrapInReadonlySeatbelt`。
 - **连接器怎么拦**（用 W1 的 `connectorToolAllowed`，补充/排除清单照用）：
   1. `daemon/driver/agy-connectors.ts`：读 `~/.gemini/config/mcp_config.json`，向每个 stdio / HTTP 服务器问 `tools/list` 拿 `readOnlyHint`（agy 自己的缓存不带 annotations）；结果按配置内容缓存 10 分钟、每个服务器最多等 10 秒，问不到（起不来、超时、要认证）、或只在 agy 缓存目录里出现的服务器整个当不可用；
