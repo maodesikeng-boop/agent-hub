@@ -17,3 +17,10 @@
     -不需要 合pr
     这是整体工作流程，你需要在rule a的规矩下完成，不同的功能，代码分别完成，整体分工你来规划，总效率达到最高
 
+
+## pstack 技能（只本项目）
+
+- 原版 pstack（backnotprop/pstack，MIT）@ `f104aa8`（2026-11-07 取的 main）的 `skills/` 原样放在 `.agents/skills/`，许可证在 `.agents/skills/PSTACK-LICENSE`。
+- 三家共用这一份：codex 和 agy 读 `<仓库>/.agents/skills/`；claude 读 `.claude/skills`，它是指向 `../.agents/skills` 的软链接。不写任何用户目录。
+- agy 里这些技能只能手打 `/技能名` 用（原版设了 disable-model-invocation，agy 不把它们列进模型的技能清单）。
+- 更新：重新 clone 原版，把 `skills/` 覆盖到 `.agents/skills/`（保留 `PSTACK-LICENSE`），在这里改提交号，提 PR。
