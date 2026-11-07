@@ -143,6 +143,11 @@ describe("createBrowserSessions", () => {
     expect(sessions.list()).toHaveLength(MAX_BROWSER_SESSIONS);
     expect(sessions.authenticate(first.token)).toBeNull();
     expect(sessions.authenticate(newest.token)).toEqual({ id: newest.id });
+    expect(newest.evicted).toEqual([first.id]);
+  });
+
+  it("没满时 evicted 是空的", () => {
+    expect(sessions.create({ userAgent: "A", entry: "x" }).evicted).toEqual([]);
   });
 
   it("重开库（守护进程重启）会话还在", () => {
@@ -434,7 +439,8 @@ describe("经界面服务的浏览器登录", () => {
       const link = ((await call("POST", API_PATHS.loginLinks, mine)).json() as LoginLinkResponse).url;
       await call("POST", API_PATHS.logoutAll, mine);
       expect((await app.inject({ method: "GET", url: `/auth?token=${TOKEN}`, headers: { host: HOST } })).statusCode).toBe(401);
-      expect((await app.inject({ method: "GET", url: new URL(link).pathname + new URL(link).search, headers: { host: HOST } })).statusCode).toBe(401);
+      const code = new URLSearchParams(new URL(link).hash.slice(1)).get("link");
+      expect((await app.inject({ method: "POST", url: "/auth", headers: { host: HOST, origin: ORIGIN, "content-type": "application/json" }, payload: JSON.stringify({ link: code }) })).statusCode).toBe(401);
       const again = await loginCookie(app, { token: rotated[0]!, port: PORT });
       expect((await call("GET", "/api/state", again)).statusCode).toBe(200);
     });
@@ -458,12 +464,46 @@ describe("经界面服务的浏览器登录", () => {
     });
   });
 
+  describe("会话满了挤掉最旧的：和“退出”走同一条路", () => {
+    const wsOf = (cookie: string) => app.injectWS("/api/ws", { headers: { host: HOST, origin: ORIGIN, cookie } });
+    const closeCode = (ws: { once(event: "close", cb: (code: number) => void): unknown }) => new Promise<number>((resolve) => ws.once("close", resolve));
+
+    it("被挤掉的浏览器：cookie 立刻 401，连着的 WebSocket 当场被关（1008），别的浏览器不受影响", async () => {
+      const oldest = await login(MAC_UA);
+      now += 1;
+      const second = await login(IPHONE_UA);
+      const oldestWs = await wsOf(oldest);
+      const secondWs = await wsOf(second);
+      const oldestClosed = closeCode(oldestWs);
+      let secondClosed = false;
+      void closeCode(secondWs).then(() => (secondClosed = true));
+      for (let i = 2; i < MAX_BROWSER_SESSIONS; i++) {
+        now += 1;
+        await login();
+      }
+      expect(await listSessions(second)).toHaveLength(MAX_BROWSER_SESSIONS);
+      expect((await call("GET", "/api/state", oldest)).statusCode).toBe(200);
+      // 第 101 个登录：最久没用的是 oldest，second 排在它后面（先让 second 比 oldest 更新鲜，免得并列）
+      now += SESSION_TOUCH_INTERVAL_MS;
+      expect((await call("GET", "/api/state", second)).statusCode).toBe(200);
+      now += 1;
+      await login();
+      expect(await oldestClosed).toBe(1008);
+      expect((await call("GET", "/api/state", oldest)).statusCode).toBe(401);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(secondClosed).toBe(false);
+      expect((await call("GET", "/api/state", second)).statusCode).toBe(200);
+      expect(await listSessions(second)).toHaveLength(MAX_BROWSER_SESSIONS);
+      secondWs.terminate();
+    });
+  });
+
   describe("二维码登录链接", () => {
     const makeLink = async (cookie: string, host = HOST) => (await call("POST", API_PATHS.loginLinks, cookie, { host })).json() as LoginLinkResponse;
-    const open = (link: LoginLinkResponse, headers: Record<string, string> = {}) => {
-      const url = new URL(link.url);
-      return app.inject({ method: "GET", url: url.pathname + url.search, headers: { host: HOST, ...headers } });
-    };
+    const codeOf = (link: LoginLinkResponse) => new URLSearchParams(new URL(link.url).hash.slice(1)).get("link")!;
+    /** 照浏览器那样用链接：# 片段不会发给服务器，落地页读出码再 POST /auth 兑换。 */
+    const open = (link: LoginLinkResponse, headers: Record<string, string> = {}, body: unknown = { link: codeOf(link) }) =>
+      app.inject({ method: "POST", url: new URL(link.url).pathname, headers: { host: HOST, origin: ORIGIN, "content-type": "application/json", ...headers }, payload: JSON.stringify(body) });
 
     it("201：返回入口上的完整链接（用请求的 Host）和 5 分钟后的过期时间；要登录", async () => {
       expect((await call("POST", API_PATHS.loginLinks, null)).statusCode).toBe(401);
@@ -471,16 +511,17 @@ describe("经界面服务的浏览器登录", () => {
       const res = await call("POST", API_PATHS.loginLinks, cookie);
       expect(res.statusCode).toBe(201);
       const body = res.json() as LoginLinkResponse;
-      expect(body.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/auth\\?link=[A-Za-z0-9_-]{43,}$`));
+      // 码在 # 片段里，不在 ? 查询参数里：片段不会随请求发给服务器，不进代理 / 访问日志 / Referer
+      expect(body.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/auth#link=[A-Za-z0-9_-]{43,}$`));
+      expect(body.url).not.toContain("?");
       expect(body.expiresAt).toBe(now + LOGIN_LINK_TTL_MS);
     });
 
-    it("手机打开链接就登录：302 回首页，发自己的会话 cookie（不是电脑的），列表里多一条手机", async () => {
+    it("手机打开链接就登录：POST /auth 兑换成功 204，发自己的会话 cookie（不是电脑的），列表里多一条手机", async () => {
       const mac = await login(MAC_UA);
       const link = await makeLink(mac);
       const res = await open(link, { "user-agent": IPHONE_UA });
-      expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toBe("/");
+      expect(res.statusCode).toBe(204);
       expect(res.headers["referrer-policy"]).toBe("no-referrer");
       const phone = String(res.headers["set-cookie"]).split(";")[0]!;
       expect(phone).not.toBe(mac);
@@ -492,14 +533,14 @@ describe("经界面服务的浏览器登录", () => {
     it("链接本身不进库明文，也不当会话令牌用", async () => {
       const mac = await login();
       const link = await makeLink(mac);
-      const code = new URL(link.url).searchParams.get("link")!;
+      const code = codeOf(link);
       expect(JSON.stringify(db.all("SELECT * FROM browser_sessions"))).not.toContain(code);
       expect((await call("GET", "/api/state", `${UI_COOKIE_NAME}_${PORT}=${code}`)).statusCode).toBe(401);
     });
 
     it("只能用一次：第二次打开 401，不设 cookie", async () => {
       const link = await makeLink(await login());
-      expect((await open(link)).statusCode).toBe(302);
+      expect((await open(link)).statusCode).toBe(204);
       const second = await open(link);
       expect(second.statusCode).toBe(401);
       expect(second.headers["set-cookie"]).toBeUndefined();
@@ -516,32 +557,98 @@ describe("经界面服务的浏览器登录", () => {
     it("过期前一刻还能用", async () => {
       const link = await makeLink(await login());
       now += LOGIN_LINK_TTL_MS - 1;
-      expect((await open(link)).statusCode).toBe(302);
+      expect((await open(link)).statusCode).toBe(204);
     });
 
-    it("链接不对、没带、带两次、和 token 一起带：401", async () => {
+    it("码不对、没带、不是字符串：401，不设 cookie，也没用掉真的链接", async () => {
       const link = await makeLink(await login());
-      const code = new URL(link.url).searchParams.get("link")!;
-      for (const url of ["/auth?link=nope", "/auth?link=", `/auth?link=${code}&link=${code}`, `/auth?link=${code}&token=wrong-token-0123456789abc`]) {
+      for (const body of [{ link: "nope" }, { link: "" }, {}, { link: 5 }, { link: [codeOf(link)] }, null]) {
+        const res = await open(link, {}, body);
+        expect(res.statusCode).toBe(401);
+        expect(res.headers["set-cookie"]).toBeUndefined();
+      }
+      expect((await open(link)).statusCode).toBe(204);
+    });
+
+    it("老的 /auth?link=<码> 不再认（码会进日志）：401，没用掉，也不设 cookie", async () => {
+      const link = await makeLink(await login());
+      const code = codeOf(link);
+      for (const url of [`/auth?link=${code}`, `/auth?link=${code}&link=${code}`, `/auth?link=${code}&token=${TOKEN}`, "/auth?link="]) {
         const res = await app.inject({ method: "GET", url, headers: { host: HOST } });
         expect(res.statusCode).toBe(401);
         expect(res.headers["set-cookie"]).toBeUndefined();
       }
-      // 上面都没用掉真的链接
-      expect((await open(link)).statusCode).toBe(302);
+      expect((await open(link)).statusCode).toBe(204);
+    });
+
+    it("跨站不行：Origin 不对或没带 403，链接没被用掉；Host 不对 403", async () => {
+      const link = await makeLink(await login());
+      expect((await open(link, { origin: "http://evil.example.com" })).statusCode).toBe(403);
+      expect((await app.inject({ method: "POST", url: "/auth", headers: { host: HOST, "content-type": "application/json" }, payload: JSON.stringify({ link: codeOf(link) }) })).statusCode).toBe(403);
+      expect((await open(link, { host: "evil.com:4000" })).statusCode).toBe(403);
+      expect((await open(link)).statusCode).toBe(204);
+    });
+
+    it("落地页（GET /auth 不带参数）：不要登录就能打开，读 # 片段、先清地址栏再 POST 兑换，不带 Referer，页面里没有任何码", async () => {
+      const link = await makeLink(await login());
+      const res = await app.inject({ method: "GET", url: new URL(link.url).pathname, headers: { host: HOST } });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toContain("text/html");
+      expect(res.headers["referrer-policy"]).toBe("no-referrer");
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.headers["set-cookie"]).toBeUndefined();
+      expect(res.body).toContain('<meta name="referrer" content="no-referrer">');
+      expect(res.body).toContain("location.hash");
+      expect(res.body).toContain('referrerPolicy: "no-referrer"');
+      expect(res.body).toContain('method: "POST"');
+      // 地址栏先清掉（replaceState），再发请求
+      expect(res.body.indexOf("history.replaceState")).toBeGreaterThan(-1);
+      expect(res.body.indexOf("history.replaceState")).toBeLessThan(res.body.indexOf("fetch("));
+      expect(res.body).not.toContain(codeOf(link));
+      // 打开落地页本身没用掉码
+      expect((await open(link)).statusCode).toBe(204);
+    });
+
+    it("服务器收到的请求里没有码：登录全程（发链接、落地页、兑换）的请求地址、Referer 都不含它", async () => {
+      const seen: string[] = [];
+      const spied = createUiServer({
+        ledger: new FakeLedger().asLedger(),
+        token: TOKEN,
+        staticDir: dir,
+        uploadsDir: join(dir, "uploads3"),
+        sentFilesDir: join(dir, "sent3"),
+        port: PORT,
+        db,
+        now: () => now,
+      });
+      spied.addHook("onRequest", async (req) => {
+        seen.push(`${req.method} ${req.raw.url} ${String(req.headers.referer ?? "")}`);
+      });
+      await spied.ready();
+      const cookie = await loginCookie(spied, { token: TOKEN, port: PORT });
+      const made = await spied.inject({ method: "POST", url: API_PATHS.loginLinks, headers: { host: HOST, cookie, origin: ORIGIN } });
+      const link = made.json() as LoginLinkResponse;
+      const code = codeOf(link);
+      // 浏览器打开 link.url：请求地址只有 /auth（片段不发），落地页再 POST /auth
+      await spied.inject({ method: "GET", url: new URL(link.url).pathname, headers: { host: HOST } });
+      const redeemed = await spied.inject({ method: "POST", url: "/auth", headers: { host: HOST, origin: ORIGIN, "content-type": "application/json" }, payload: JSON.stringify({ link: code }) });
+      expect(redeemed.statusCode).toBe(204);
+      expect(seen.length).toBeGreaterThanOrEqual(4);
+      expect(seen.join("\n")).not.toContain(code);
+      expect(redeemed.headers["set-cookie"]).toBeDefined();
+      await spied.close();
     });
 
     it("Host 不对：403，链接没被用掉", async () => {
       const link = await makeLink(await login());
-      const url = new URL(link.url);
-      expect((await app.inject({ method: "GET", url: url.pathname + url.search, headers: { host: "evil.com:4000" } })).statusCode).toBe(403);
-      expect((await open(link)).statusCode).toBe(302);
+      expect((await app.inject({ method: "GET", url: "/auth", headers: { host: "evil.com:4000" } })).statusCode).toBe(403);
+      expect((await open(link)).statusCode).toBe(204);
     });
 
     it("链接里的地址跟着请求走：经 https 来的（x-forwarded-proto）是 https", async () => {
       const cookie = await login();
       const res = await app.inject({ method: "POST", url: API_PATHS.loginLinks, headers: { host: HOST, cookie, origin: ORIGIN, "x-forwarded-proto": "https" } });
-      expect((res.json() as LoginLinkResponse).url).toMatch(new RegExp(`^https://127\\.0\\.0\\.1:${PORT}/auth\\?link=`));
+      expect((res.json() as LoginLinkResponse).url).toMatch(new RegExp(`^https://127\\.0\\.0\\.1:${PORT}/auth#link=`));
     });
   });
 });

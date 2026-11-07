@@ -79,6 +79,7 @@ import {
 } from "../open-file.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
+import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
 import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
 
@@ -354,6 +355,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     for (const [id, sockets] of socketsBySession) {
       if (sessionId !== undefined && id !== sessionId) continue;
       for (const socket of sockets) socket.close(WS_CLOSE_UNAUTHORIZED, "unauthorized");
+      socketsBySession.delete(id);
     }
   };
   /** 这次请求是哪个会话（认证钩子里认出来的）。 */
@@ -379,6 +381,18 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   /** 设（或清：value 空、maxAge 0）这个浏览器的会话 cookie。 */
   const sessionCookie = (req: FastifyRequest, value: string, maxAgeSeconds: number) =>
     `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}`;
+
+  /** 登录成功：开一个新会话、设 cookie。这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）；满了被挤掉的和被换掉的一样，走撤销的路（关 WebSocket）。 */
+  const startSession = (req: FastifyRequest, reply: FastifyReply) => {
+    const previous = sessions.authenticate(sessionToken(req));
+    if (previous !== null) {
+      sessions.revoke(previous.id);
+      closeSockets(previous.id);
+    }
+    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: req.headers.host ?? "" });
+    for (const id of session.evicted) closeSockets(id);
+    reply.header("set-cookie", sessionCookie(req, session.token, COOKIE_MAX_AGE_SECONDS)).header("referrer-policy", "no-referrer");
+  };
 
   const fail = (reply: FastifyReply, statusCode: number, error: string, code?: LedgerErrorCode) =>
     reply.code(statusCode).send((code === undefined ? { error } : { error, code }) satisfies ApiErrorBody);
@@ -477,20 +491,23 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
   // 路由放进插件里：@fastify/websocket 的 onRoute 钩子只管它注册完之后才定义的路由，直接写在根上会比它先定义。
   app.register(async (routes) => {
-    // 登录：?token=<主钥匙>（启动时打印的链接），或 ?link=<一次性登录链接的码>（电脑上“在手机上打开”的二维码）。两样一起带不算。
+    // 登录有两条路：
+    // - GET /auth?token=<主钥匙>：启动时打印的链接。
+    // - 二维码的一次性链接 `/auth#link=<码>`：码在 # 片段里不会发给服务器（不进代理、访问日志，也不进 Referer）。
+    //   GET /auth（不带参数）是读片段的落地页，页面再 POST /auth {link} 兑换。老的 /auth?link=<码> 不再认（码会进日志）。
     routes.get(API_PATHS.auth, async (req, reply) => {
       const { token, link } = req.query as { token?: unknown; link?: unknown };
-      const ok = (token === undefined) === (link === undefined) ? false : token !== undefined ? tokenEquals(expectedToken, token) : loginLinks.consume(link);
-      if (!ok) return fail(reply, 401, "unauthorized");
-      // 这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）
-      const previous = sessions.authenticate(sessionToken(req));
-      if (previous !== null) {
-        sessions.revoke(previous.id);
-        closeSockets(previous.id);
-      }
-      const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: req.headers.host ?? "" });
-      reply.header("set-cookie", sessionCookie(req, session.token, COOKIE_MAX_AGE_SECONDS)).header("referrer-policy", "no-referrer");
+      if (token === undefined && link === undefined) return reply.type("text/html; charset=utf-8").header("referrer-policy", "no-referrer").send(LOGIN_LINK_PAGE);
+      if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");
+      startSession(req, reply);
       return reply.redirect("/", 302);
+    });
+
+    routes.post(API_PATHS.auth, async (req, reply) => {
+      const link = (req.body as { link?: unknown } | null | undefined)?.link;
+      if (!loginLinks.consume(link)) return fail(reply, 401, "unauthorized");
+      startSession(req, reply);
+      return reply.code(204).send();
     });
 
     routes.get(API_PATHS.browserSessions, async (req): Promise<BrowserSessionsResponse> => {
@@ -522,7 +539,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const { code, expiresAt } = loginLinks.issue();
       // 链接用请求的 Host（用户现在就是从这个地址进来的）；前面还有一层 https 转发时它会带 x-forwarded-proto
       const scheme = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
-      return reply.code(201).send({ url: `${scheme}://${req.headers.host}/auth?link=${code}`, expiresAt } satisfies LoginLinkResponse);
+      return reply.code(201).send({ url: `${scheme}://${req.headers.host}/auth#${LOGIN_LINK_FRAGMENT_KEY}=${code}`, expiresAt } satisfies LoginLinkResponse);
     });
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, req.ip) }));

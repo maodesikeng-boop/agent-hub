@@ -23,8 +23,8 @@ const hashOf = (secret: string) => createHash("sha256").update(secret).digest("h
 export type StoredBrowserSession = Omit<BrowserSessionInfo, "current">;
 
 export interface BrowserSessions {
-  /** 新登录一个浏览器：返回要放进 cookie 的令牌（明文只此一次）和会话 id。满了挤掉最久没用的。 */
-  create(input: { userAgent: string; entry: string }): { id: string; token: string };
+  /** 新登录一个浏览器：返回要放进 cookie 的令牌（明文只此一次）和会话 id。满了挤掉最久没用的，被挤掉的 id 放在 evicted 里（调用方要当成被撤销处理：关它的 WebSocket）。 */
+  create(input: { userAgent: string; entry: string }): { id: string; token: string; evicted: string[] };
   /** 按 cookie 里的令牌找会话：认不出（没有、被退出了、太久没用）是 null。最后活动按 SESSION_TOUCH_INTERVAL_MS 更新。 */
   authenticate(token: string | undefined): { id: string } | null;
   /** 按最后活动从新到旧。 */
@@ -54,14 +54,15 @@ export function createBrowserSessions(db: Db, options: Clock = {}): BrowserSessi
       const id = randomBytes(16).toString("base64url");
       const token = newSecret();
       const at = now();
+      let evicted: string[] = [];
       db.transaction(() => {
         db.run("INSERT INTO browser_sessions (id, token_hash, user_agent, entry, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)", id, hashOf(token), cleanUserAgent(userAgent), entry, at, at);
-        db.run(
-          "DELETE FROM browser_sessions WHERE id IN (SELECT id FROM browser_sessions ORDER BY last_seen_at DESC, created_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
-          MAX_BROWSER_SESSIONS,
-        );
+        evicted = db
+          .all<{ id: string }>("SELECT id FROM browser_sessions ORDER BY last_seen_at DESC, created_at DESC, rowid DESC LIMIT -1 OFFSET ?", MAX_BROWSER_SESSIONS)
+          .map((r) => r.id);
+        for (const evictedId of evicted) db.run("DELETE FROM browser_sessions WHERE id = ?", evictedId);
       });
-      return { id, token };
+      return { id, token, evicted };
     },
     authenticate(token) {
       if (typeof token !== "string" || token === "") return null;
