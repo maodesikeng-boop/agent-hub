@@ -1,4 +1,4 @@
-// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（只读、没有 OS 沙箱时的可写范围兜底）、残留进程识别。
+// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly-agy.ts）、残留进程识别。
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -12,6 +12,7 @@ import {
   type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
+import { agyReadonlySettings, type AgyConnectorRules } from "./readonly-agy.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol.ts";
 import type { TurnUsage } from "./usage.ts";
 
@@ -21,7 +22,7 @@ export { buildChildEnv, lineUuid, mergeUserTexts, userContent };
 export const AGY_STREAM_ARGS: readonly string[] = ["--input-format", "stream-json", "--output-format", "stream-json"];
 /** 默认后台非交互权限参数。 */
 export const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];
-/** 只读 Worker（dontAsk）的权限参数。 */
+/** 只读 Worker 的权限参数（--settings 的规则另加，见 readonly-agy.ts）。 */
 export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
 /**
  * 关键：--print "" 必须带空字符串参数且放在最后（Go flag parser 若写 -p --input-format 会把 --input-format 吞成 prompt 参数）。
@@ -34,7 +35,7 @@ export const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "Direc
 /** 工具调用参数里表示命令行字符串的字段名（没有 OS 沙箱时兜底检查）。 */
 export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
 
-/** 只读 Worker 禁止调用的写文件工具集合；没有 OS 沙箱时，写类工具写到可写范围外也拦。 */
+/** 写文件的工具集合：没有 OS 沙箱时，写类工具写到可写范围外要拦。（只读 Worker 的写不在这里拦：deny 规则加外层只读沙箱。） */
 export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
@@ -51,7 +52,6 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写自己的工作目录";
-export const READONLY_WORKER_VIOLATION_MESSAGE = "只读 Worker 不能修改文件";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
@@ -59,18 +59,18 @@ const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
  * 构造 agy 启动参数：
  * - --input-format stream-json --output-format stream-json
  * - 恢复已有会话时传 --conversation <session.vendorSessionId>，首次启动不传
- * - 权限模式：只读传 --mode plan，默认传 --mode auto --dangerously-skip-permissions
+ * - 权限模式：只读传 --mode plan 加 --settings（permissions 规则，连接器的规则 connectors 由驱动先问清单生成），默认传 --mode auto --dangerously-skip-permissions
  * - 模型与思考程度：agentLaunchArgs({ vendor: "agy", model, effort })
  * - 附加目录：每个 addDirs 传 --add-dir <dir>
  * - 末尾固定传 --print ""
  */
-export function buildAgyArgs(session: AgentSessionRow, files: LaunchFiles, resume: boolean): string[] {
+export function buildAgyArgs(session: AgentSessionRow, files: LaunchFiles, resume: boolean, connectors?: AgyConnectorRules): string[] {
   const args: string[] = [...AGY_STREAM_ARGS];
   if (resume && session.vendorSessionId.trim() !== "") {
     args.push("--conversation", session.vendorSessionId);
   }
   if (files.readonly !== undefined) {
-    args.push(...AGY_PLAN_PERMISSION_ARGS);
+    args.push(...AGY_PLAN_PERMISSION_ARGS, "--settings", JSON.stringify(agyReadonlySettings(files.readonly, connectors)));
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
   }
@@ -237,7 +237,6 @@ export function buildAgySessionStartedEvent(
 export interface WorkerToolCheckInput {
   toolName: string;
   parameters: unknown;
-  readonly: boolean;
   /** 没有 OS 沙箱时要兜底检查的可写范围（agy-driver 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
   fallbackScope: WriteScope | null;
   cwd: string;
@@ -248,12 +247,12 @@ export interface WorkerToolCheckInput {
  * 1. 有 fallbackScope（没有 OS 沙箱）时：写类工具（AGY_WRITE_TOOLS）的路径参数落在可写范围外，或 CommandLine / command 会写到范围外
  *    → "Worker 在数据目录里只能写自己的工作目录"。只能看字面（shared/write-scope.ts 的 commandMayWriteOutsideScope）；
  *    macOS 上数据目录不能写由 OS 沙箱管（write-scope.ts），这里不查；
- * 2. 只读 Worker 调用写文件工具 → "只读 Worker 不能修改文件"；
- * 3. 合规返回 null。
+ * 2. 合规返回 null。
+ * 只读 Worker 的写不在这里拦（不再事后 SIGINT）：write_file 由 --settings 的 deny 规则拒，命令行和别的写由外层只读沙箱挡（readonly-agy.ts）。
  * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
-  const { toolName, parameters, readonly, fallbackScope, cwd } = input;
+  const { toolName, parameters, fallbackScope, cwd } = input;
   if (fallbackScope !== null && typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
     const params = parameters as Record<string, unknown>;
     for (const key of AGY_WRITE_TOOLS.has(toolName) ? AGY_PATH_PARAM_KEYS : []) {
@@ -265,7 +264,7 @@ export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | 
       if (typeof cmd === "string" && cmd.trim() !== "" && commandMayWriteOutsideScope(cmd, fallbackScope, cwd)) return WRITE_SCOPE_VIOLATION_MESSAGE;
     }
   }
-  return readonly && AGY_WRITE_TOOLS.has(toolName) ? READONLY_WORKER_VIOLATION_MESSAGE : null;
+  return null;
 }
 
 /**

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AGY_DENIED_CONTINUE_MAX,
   DriverError,
   EMPTY_TOKEN_USAGE,
   RELAUNCH_NOTE,
@@ -20,9 +21,10 @@ import {
   type WriteScope,
 } from "../../shared/index.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
+import type { AgyConnectorCatalog } from "./readonly-agy.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
-import { SANDBOX_EXEC } from "./write-scope.ts";
+import { SANDBOX_EXEC, type SpawnCommand } from "./write-scope.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -80,6 +82,8 @@ interface FakeAgyTurn {
     response?: string;
     usage?: Record<string, number>;
     error?: string;
+    /** result.denied_actions（agy 无头模式下遇到要批准的操作自动拒绝）。 */
+    deniedActions?: unknown[];
   };
 }
 
@@ -280,6 +284,7 @@ async function runTurn(userObj) {
       response: r.response !== undefined ? r.response : lastFullText,
       usage: r.usage || { input_tokens: 20, output_tokens: 10, thinking_tokens: 5, cache_read_tokens: 8 },
       ...(r.error ? { error: r.error } : {}),
+      ...(r.deniedActions ? { denied_actions: r.deniedActions } : {}),
     },
   });
   busy = false;
@@ -352,6 +357,8 @@ interface AgyTestHarness {
     personaRevision: (() => number) | null;
     /** 给了就当 LaunchFiles.writeScope（Worker 的可写范围）。 */
     writeScope: WriteScope | null;
+    /** 只读 Worker 起进程前问到的连接器清单。 */
+    catalog: AgyConnectorCatalog;
   };
   waitFor<T extends DriverEvent["type"]>(
     type: T,
@@ -394,6 +401,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     /** 给了就当 LaunchFiles.personaRevision（见 persona-fixture.ts）。 */
     personaRevision: null as (() => number) | null,
     writeScope: null as WriteScope | null,
+    catalog: { servers: {}, unlistable: [] } as AgyConnectorCatalog,
   };
 
   const driver = createAgyDriver({
@@ -429,6 +437,10 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       FAKE_AGY_SCRIPT: scriptFile,
       FAKE_AGY_STATE: dir,
     },
+    // 只读 Worker：不碰真的 MCP 配置、不真包 sandbox-exec（CI 的 Linux 没有；真沙箱的用例在 write-scope.test.ts）
+    connectorCatalog: async () => launch.catalog,
+    readonlySpawn: (base) => ({ ...base, osSandboxed: true }),
+    homeDir: dir,
     ...options.driver,
   });
 
@@ -621,26 +633,24 @@ describe("agy-protocol 纯函数", () => {
     expect(detectAgyArgsConflict("some other error")).toBeNull();
   });
 
-  it("checkWorkerToolViolation：只读 Worker 写文件被拦（含 sed_file、notebook_edit）；非只读 Worker 不拦", () => {
+  it("checkWorkerToolViolation：不再有只读分支（不事后 SIGINT）：写工具不拦，只读的写靠 deny 规则和外层沙箱", () => {
     const base = { parameters: {}, fallbackScope: null, cwd: "/w" };
-    for (const toolName of ["edit_file", "sed_file", "notebook_edit", "write_to_file"]) {
-      expect(checkWorkerToolViolation({ ...base, toolName, readonly: true })).toBe("只读 Worker 不能修改文件");
-      expect(checkWorkerToolViolation({ ...base, toolName, readonly: false })).toBeNull();
+    for (const toolName of ["edit_file", "sed_file", "notebook_edit", "write_to_file", "view_file"]) {
+      expect(checkWorkerToolViolation({ ...base, toolName })).toBeNull();
     }
-    expect(checkWorkerToolViolation({ ...base, toolName: "view_file", readonly: true })).toBeNull();
   });
 
   it("checkWorkerToolViolation：包进了 OS 沙箱（fallbackScope 是 null）时数据目录不在这里拦", () => {
     for (const toolName of ["write_to_file", "replace_file_content", "sed_file", "run_command"]) {
       const parameters = { TargetFile: "/Users/u/.agent-hub/state/x", CommandLine: "touch /Users/u/.agent-hub/state/x" };
-      expect(checkWorkerToolViolation({ toolName, parameters, readonly: false, fallbackScope: null, cwd: "/w" })).toBeNull();
+      expect(checkWorkerToolViolation({ toolName, parameters, fallbackScope: null, cwd: "/w" })).toBeNull();
     }
   });
 
   it("checkWorkerToolViolation：没有 OS 沙箱时兜底——写类工具的路径、命令行写到可写范围外就拦；读、写自己的工作目录、数据目录外不拦", () => {
     const cwd = "/Users/u/.agent-hub/worktrees/1/2";
     const fallbackScope = { dataDir: "/Users/u/.agent-hub", writableDirs: [cwd] };
-    const check = (toolName: string, parameters: Record<string, unknown>) => checkWorkerToolViolation({ toolName, parameters, readonly: false, fallbackScope, cwd });
+    const check = (toolName: string, parameters: Record<string, unknown>) => checkWorkerToolViolation({ toolName, parameters, fallbackScope, cwd });
     expect(check("write_to_file", { TargetFile: "/Users/u/.agent-hub/state/x" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
     expect(check("edit_file", { file_path: "../3/a.ts" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
     expect(check("run_command", { CommandLine: "cd /Users/u && cd .agent-hub/state && touch x" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
@@ -1001,34 +1011,229 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     }
   });
 
-  it("只读 Worker 启动带 --mode plan，试图调用写文件工具修改普通文件时被驱动层拦截并报错", async () => {
+  const FAKE_CATALOG: AgyConnectorCatalog = {
+    servers: {
+      slack: { send_message: { readOnlyHint: false, destructiveHint: true }, read_channel: { readOnlyHint: true } },
+      jenkins: { get_build: null },
+      "claude-ai": { search: { readOnlyHint: true } },
+    },
+    unlistable: ["broken"],
+  };
+  const readonlyArgv = (t: AgyTestHarness): { argv: string[]; settings: { permissions: { allow: string[]; deny: string[] }; enableTerminalSandbox: boolean } } => {
+    const [argv] = t.argvs();
+    return { argv: argv!, settings: JSON.parse(argv![argv!.indexOf("--settings") + 1]!) };
+  };
+  const toolStep = (name: string, parameters: Record<string, unknown>) => ({ type: "tool" as const, stepId: 2, name, parameters, durationMs: 2000 });
+
+  it("只读 Worker 启动：--mode plan、--settings 里放行读和命令、拒写文件，连接器里非只读的和问不到清单的服务器全拒；写工具调用不再被事后打断", async () => {
+    const t = makeAgyHarness({ script: { turns: [{ steps: [toolStep("edit_file", { Path: "src/app.ts" })] }] } });
+    t.launch.readonly = true;
+    t.launch.catalog = FAKE_CATALOG;
+
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "尝试改代码"));
+    const ended = await t.waitFor("turn.ended");
+    const { argv, settings } = readonlyArgv(t);
+    expect(argv[argv.indexOf("--mode") + 1]).toBe("plan");
+    expect(settings.enableTerminalSandbox).toBe(false);
+    expect(settings.permissions.allow).toEqual(["read_file(*)", "command(*)", "read_url(*)", "mcp(slack/read_channel)", "mcp(claude-ai/search)"]);
+    expect(settings.permissions.deny).toContain("write_file(*)");
+    expect(settings.permissions.deny).toContain("mcp(slack/send_message)");
+    expect(settings.permissions.deny).toContain("mcp(jenkins/get_build)");
+    expect(settings.permissions.deny).toContain("mcp(broken/*)");
+    expect(settings.permissions.deny).not.toContain("mcp(slack/read_channel)");
+    expect(settings.permissions.deny).not.toContain("mcp(claude-ai/search)");
+    expect(t.log().filter((e) => e.kind === "signal")).toEqual([]);
+    expect(ended.ok).toBe(true);
+  });
+
+  it("只读 Worker 调了非只读的连接器工具（call_mcp_tool 和 mcp_<服务器>_<工具> 两种形式）：马上 SIGINT，这一轮以 policy_violation 结束", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["call_mcp_tool", { ServerName: "slack", ToolName: "send_message", Arguments: { text: "hi" } }],
+      ["mcp_slack_send_message", { text: "hi" }],
+      ["call_mcp_tool", { ServerName: "jenkins", ToolName: "get_build" }],
+      ["call_mcp_tool", { ServerName: "newserver", ToolName: "anything" }],
+    ];
+    for (const [name, parameters] of cases) {
+      const t = makeAgyHarness({ script: { turns: [{ steps: [toolStep(name, parameters)] }] } });
+      t.launch.readonly = true;
+      t.launch.catalog = FAKE_CATALOG;
+      const s = t.addSession({ role: "worker", workerId: 12 });
+      await t.driver.send(s.id, user(1, "发条消息"));
+      const ended = await t.waitFor("turn.ended");
+      expect(ended.ok, name).toBe(false);
+      expect(ended.error?.subtype, name).toBe("policy_violation");
+      expect(ended.error?.message, name).toContain("只读的连接器工具");
+      expect(t.log().filter((e) => e.kind === "signal").length, name).toBeGreaterThan(0);
+      await t.cleanup();
+      activeHarness = undefined;
+    }
+  });
+
+  it("只读 Worker 调只读的连接器工具、内置读工具：不拦", async () => {
     const t = makeAgyHarness({
       script: {
         turns: [
           {
             steps: [
-              {
-                type: "tool",
-                stepId: 2,
-                name: "edit_file",
-                parameters: { Path: "src/app.ts" },
-                durationMs: 2000,
-              },
+              { ...toolStep("call_mcp_tool", { ServerName: "slack", ToolName: "read_channel" }), stepId: 2 },
+              { ...toolStep("mcp_claude_ai_search", { q: "x" }), stepId: 3 },
+              { ...toolStep("view_file", { AbsolutePath: "/etc/hosts" }), stepId: 4 },
+              { type: "text", deltas: ["好了"] },
             ],
           },
         ],
       },
     });
     t.launch.readonly = true;
-
+    t.launch.catalog = FAKE_CATALOG;
     const s = t.addSession({ role: "worker", workerId: 12 });
-    await t.driver.send(s.id, user(1, "尝试改代码"));
+    await t.driver.send(s.id, user(1, "查一下"));
     const ended = await t.waitFor("turn.ended");
-    const [argv] = t.argvs();
-    expect(argv![argv!.indexOf("--mode") + 1]).toBe("plan");
-    expect(ended.ok).toBe(false);
-    expect(ended.interrupted).toBe(false);
-    expect(ended.error?.message).toContain("只读 Worker 不能修改文件");
+    expect(ended.ok).toBe(true);
+    expect(t.log().filter((e) => e.kind === "signal")).toEqual([]);
+  });
+
+  it("非只读的 Worker 调任何连接器都不拦（只读才拦）", async () => {
+    const t = makeAgyHarness({ script: { turns: [{ steps: [toolStep("call_mcp_tool", { ServerName: "slack", ToolName: "send_message" }), { type: "text", deltas: ["发了"] }] }] } });
+    t.launch.catalog = FAKE_CATALOG;
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "发条消息"));
+    expect((await t.waitFor("turn.ended")).ok).toBe(true);
+    expect(t.argvs()[0]).not.toContain("--settings");
+  });
+
+  it("只读 Worker：TMPDIR 指到会话私有临时目录（进程退出后删掉），进程交给外层只读沙箱", async () => {
+    const wrapped: string[][] = [];
+    const t = makeAgyHarness({
+      script: { turns: [{ steps: [{ type: "text", deltas: ["好"] }] }] },
+      driver: {
+        readonlySpawn: (base, input) => {
+          wrapped.push([base.command, input.tmpDir, ...input.secretPaths.slice(0, 1)]);
+          return { ...base, osSandboxed: true };
+        },
+      },
+    });
+    t.launch.readonly = true;
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    expect(wrapped).toHaveLength(1);
+    const tmp = wrapped[0]![1]!;
+    expect(tmp).toContain("agent-hub-ro-");
+    expect(existsSync(tmp)).toBe(true);
+    await t.driver.end(s.id);
+    expect(existsSync(tmp)).toBe(false);
+  });
+
+  it("没有 OS 沙箱的机器上起只读 agy：直接报错说清原因，不起进程", async () => {
+    const t = makeAgyHarness({ driver: { readonlySpawn: (base) => ({ ...base, osSandboxed: false }) } });
+    t.launch.readonly = true;
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await expect(t.driver.send(s.id, user(1, "hi"))).rejects.toThrow(/需要 OS 沙箱/);
+    expect(t.argvs()).toEqual([]);
+  });
+
+  it("只读 agy 问连接器清单要起 stdio 服务器：走同一个 readonlySpawn 包沙箱、env 去掉 HUB_*；没有 OS 沙箱时不起服务器", async () => {
+    const marker = join(tmpdir(), `agy-probe-marker-${process.pid}-${Date.now()}`);
+    const wrapped: SpawnCommand[] = [];
+    const setup = (osSandboxed: boolean) => {
+      const t = makeAgyHarness({
+        driver: {
+          connectorCatalog: undefined, // 走真的探测
+          readonlySpawn: (base) => {
+            wrapped.push(base);
+            return { ...base, osSandboxed };
+          },
+        },
+      });
+      const cfgDir = join(t.dir, ".gemini", "config");
+      mkdirSync(cfgDir, { recursive: true });
+      const server = join(t.dir, "server.mjs");
+      writeFileSync(server, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ hub: process.env.HUB_TOKEN ?? null }));`);
+      writeFileSync(join(cfgDir, "mcp_config.json"), JSON.stringify({ mcpServers: { probe: { command: process.execPath, args: [server] } } }));
+      t.launch.readonly = true;
+      t.launch.env = { HUB_TOKEN: "worker-token" };
+      return t;
+    };
+    // 没有 OS 沙箱：不起探测进程，起 agy 也报错
+    const none = setup(false);
+    const s1 = none.addSession({ role: "worker", workerId: 12 });
+    await expect(none.driver.send(s1.id, user(1, "hi"))).rejects.toThrow(/需要 OS 沙箱/);
+    expect(existsSync(marker)).toBe(false);
+    // 有 OS 沙箱（这里的假沙箱原样跑）：探测进程经过 readonlySpawn，环境里没有 HUB_TOKEN
+    wrapped.length = 0;
+    const ok = setup(true);
+    const s2 = ok.addSession({ role: "worker", workerId: 13 });
+    await ok.driver.send(s2.id, user(1, "hi"));
+    await ok.waitFor("turn.ended");
+    expect(wrapped.some((b) => b.command === process.execPath)).toBe(true);
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({ hub: null });
+    rmSync(marker, { force: true });
+  });
+
+  it("被拒后自动补一轮：result 有 denied_actions 且回复为空 → 往同一个进程补一条“被拒了，换办法”，这一轮到补的那一轮出回复才结束；最多补 AGY_DENIED_CONTINUE_MAX 次", async () => {
+    const denied = [{ tool_name: "write_file" }];
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          { steps: [], result: { response: "", deniedActions: denied } },
+          { steps: [], result: { response: "", deniedActions: denied } },
+          { steps: [{ type: "text", deltas: ["换成只读的办法做完了"] }] },
+        ],
+      },
+    });
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "改个文件"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended.ok).toBe(true);
+    expect(ended.messageIds).toEqual([1]);
+    expect(t.of("turn.ended")).toHaveLength(1);
+    const stdins = t.log().filter((e) => e.kind === "stdin");
+    expect(stdins).toHaveLength(3);
+    expect(stdins[1]!.line).toContain("write_file");
+    expect(stdins[1]!.line).toContain("被权限拒绝");
+    expect(t.of("agent.text").map((e) => e.text)).toContain("换成只读的办法做完了");
+  });
+
+  it("被拒后自动补一轮（S4 实测的真实形状）：mcp 权限被自动拒、回复为空、status=SUCCESS → 补一轮，点名 CallMcpTool", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          { steps: [toolStep("call_mcp_tool", { ServerName: "rotest", ToolName: "ro_lookup" })], result: { response: "", deniedActions: [{ action: "mcp", display_name: "CallMcpTool" }] } },
+          { steps: [{ type: "text", deltas: ["换办法做完了"] }] },
+        ],
+      },
+    });
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "查一下"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended.ok).toBe(true);
+    expect(t.of("turn.ended")).toHaveLength(1);
+    const stdins = t.log().filter((e) => e.kind === "stdin");
+    expect(stdins).toHaveLength(2);
+    expect(stdins[1]!.line).toContain("CallMcpTool");
+    expect(t.of("agent.text").map((e) => e.text)).toContain("换办法做完了");
+  });
+
+  it("被拒后补一轮到上限就停：照常以空回复结束这一轮，不死循环", async () => {
+    const t = makeAgyHarness({ script: { defaultTurn: { steps: [], result: { response: "", deniedActions: ["command"] } } } });
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "做点事"));
+    await t.waitFor("turn.ended");
+    // 1 条原消息 + AGY_DENIED_CONTINUE_MAX 条补发
+    expect(t.log().filter((e) => e.kind === "stdin")).toHaveLength(1 + AGY_DENIED_CONTINUE_MAX);
+    expect(t.of("turn.ended")).toHaveLength(1);
+  });
+
+  it("没有 denied_actions、或回复不为空：不补", async () => {
+    const t = makeAgyHarness({ script: { turns: [{ steps: [], result: { response: "有回复", deniedActions: ["x"] } }, { steps: [], result: { response: "" } }] } });
+    const s = t.addSession({ role: "worker", workerId: 12 });
+    await t.driver.send(s.id, user(1, "a"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(2, "b"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.log().filter((e) => e.kind === "stdin")).toHaveLength(2);
   });
 });
 

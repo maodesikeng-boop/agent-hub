@@ -23,7 +23,7 @@ claude 自带沙箱、sandbox-exec、codex readOnly 全部 exit 71。脚本一�
   S6 只读沙箱里 hub 命令照常（hub.sock 能连）：claude 自带沙箱（allowUnixSockets）和外层只读 profile 各试一次；要在 hub 会话里跑（有 HUB_SOCK、HUB_TOKEN）
 
 模型调用是 LLM 驱动的（让它原样跑一个探针脚本），模型偶尔不照做会出「没拿到输出」的不通过，重跑一次即可；判断以磁盘和探针输出为准，不看模型的自述。
-外层只读 profile 在这里是设计 4.1 的参考写法；W3 把它做进 daemon/driver/write-scope.ts 之后，换成直接生成那一份再跑一遍。
+S4 的外层只读 profile 和 agy 的 --settings 是 daemon 里真正生成的那两份（node experiments/readonly/agy-launch.ts 打印）；S6 用的 profile 还是脚本里的参考写法。
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HOME = Path(os.path.realpath(os.path.expanduser("~")))
+REPO = Path(__file__).resolve().parents[2]
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 CODEX_FALLBACKS = [
     "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
@@ -534,17 +535,22 @@ def s4(ctx: Ctx, tools: dict, args) -> Result:
     if not args.no_mcp and not with_mcp:
         res.note("○ 没有 ~/.gemini/config/mcp_config.json，MCP 三步不测")
     try:
-        dirs, regexes = agy_runtime(HOME)
-        profile = readonly_profile(ctx, dirs, regexes)
+        # profile 和 --settings 直接用 daemon 里生成的那两份（src/daemon/driver/readonly-agy.ts、write-scope.ts），连接器清单按测试服务器的声明给：
+        # ro_lookup 只读、rw_save 非只读、plain_tool 没标记 → 生成的拒绝规则是 mcp(rotest/rw_save)、mcp(rotest/plain_tool)
+        catalog = {"servers": {"rotest": {"ro_lookup": {"readOnlyHint": True}, "rw_save": {"readOnlyHint": False, "destructiveHint": True}, "plain_tool": None}}, "unlistable": []}
+        gen = sh_run(["node", str(REPO / "experiments/readonly/agy-launch.ts"), str(HOME), str(ctx.tmpw), json.dumps(catalog)], timeout=60)
+        res.raw["agy_launch_stderr"] = gen.err
+        try:
+            generated = json.loads(gen.out)
+        except ValueError:
+            res.status = FAIL
+            res.note(f"✗ 生成不了 profile 和 settings（node experiments/readonly/agy-launch.ts 的输出不是 JSON）：{clip(gen.err or gen.out, 300)}")
+            return res
+        profile, agy_settings = generated["profile"], generated["settings"]
+        res.raw["generated_profile"], res.raw["generated_settings"] = profile, json.dumps(agy_settings, ensure_ascii=False)
         pfile = ctx.probes / "agy-readonly.sb"
         pfile.write_text(profile)
         q = shlex.quote
-        agy_settings = {
-            "permissions": {
-                "allow": ["read_file(*)", "command(*)", "read_url(*)"],
-                "deny": ["write_file(*)", f"read_file({ctx.outside / '.env'})", "mcp(rotest/rw_save)", "mcp(rotest/plain_tool)"],
-            }
-        }
         sfile = ctx.probes / "agy-settings.json"
         sfile.write_text(json.dumps(agy_settings, indent=2))
         o, n, w = str(ctx.outside), str(ctx.outside / "note.txt"), str(ctx.ws)

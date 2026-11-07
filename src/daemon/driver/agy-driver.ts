@@ -1,11 +1,14 @@
 // Antigravity (agy) 驱动层：每个会话一个 agy 进程（--input-format stream-json --output-format stream-json --print ""），
 // 管理待发队列（一轮一条、忙时用户连发合并、写入前校验）、首条消息系统提示词注入、init 会话 ID 持久化与 --conversation 恢复、
-// SIGINT 打断、Worker 记忆路径与只读工具安全拦截、空闲关闭与残留清理。
+// SIGINT 打断、没有 OS 沙箱时的可写范围兜底、只读 Worker 的连接器拦截、被拒后自动补一轮、空闲关闭与残留清理。
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CRASH_RECOVERY_NOTE,
   DriverError,
+  AGY_DENIED_CONTINUE_MAX,
   EMPTY_TOKEN_USAGE,
   IDLE_CLOSE_MS,
   INTERRUPT_GRACE_MS,
@@ -32,6 +35,7 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
+  type ReadonlyPolicy,
   type SessionExitReason,
   type SessionId,
   type TokenUsage,
@@ -54,7 +58,18 @@ import {
   readSystemInstructions,
 } from "./agy-protocol.ts";
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
-import { spawnInWriteScope } from "./write-scope.ts";
+import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./agy-connectors.ts";
+import {
+  EMPTY_AGY_CONNECTOR_CATALOG,
+  READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
+  agyConnectorRules,
+  agyReadonlySandboxInput,
+  checkAgyConnectorCall,
+  deniedActionsOf,
+  deniedContinueText,
+  type AgyConnectorCatalog,
+} from "./readonly-agy.ts";
+import { spawnInWriteScope, wrapInReadonlySeatbelt, type ReadonlySandboxInput, type ScopedSpawn, type SpawnCommand } from "./write-scope.ts";
 import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
@@ -114,7 +129,10 @@ interface Proc {
   /** 新进程第一条消息前面带的系统指令（agy 没有系统提示词参数），里面的性格设定是 personaRevision 那一版。 */
   systemPrompt: string | null;
   promptSent: boolean;
-  readonly: boolean;
+  /** 只读 Worker 的统一定义和这次启动时问到的连接器清单（兜底检查 checkAgyConnectorCall 用）；不是只读 null。 */
+  readonly: { policy: ReadonlyPolicy; catalog: AgyConnectorCatalog } | null;
+  /** 只读 Worker 的会话私有临时目录（进程退出时删）；不是只读 null。 */
+  tmpDir: string | null;
   /** 没有 OS 沙箱时要兜底检查的可写范围（checkWorkerToolViolation）；包进了沙箱、或项目经理是 null。 */
   fallbackScope: WriteScope | null;
   initSeen: boolean;
@@ -134,8 +152,10 @@ interface SessionState {
   selfTurn: boolean;
   turnInterrupted: boolean;
   stopRequested: boolean;
-  /** Worker 触发记忆或只读违规时的错误原因。 */
+  /** Worker 触发可写范围兜底或只读连接器违规时的错误原因。 */
   policyViolation: string | null;
+  /** 这一轮因为“被拒”没回复，已经自动补了几轮（AGY_DENIED_CONTINUE_MAX；用户发新消息重新数）。 */
+  deniedContinues: number;
   /** 内存里记录是否已经从 agy 收到过可恢复的 conversation_id。 */
   hasConversation: boolean;
   vendorSessionId: string;
@@ -183,6 +203,12 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
   claudePath?: string;
   /** 这个驱动对应的厂商实现，默认 vendors/ 里 agy 那份。 */
   composer?: VendorComposerBase;
+  /** 用户主目录（找 agy 的运行时目录和 MCP 配置），默认 os.homedir()。 */
+  homeDir?: string;
+  /** 只读 Worker：现在有哪些连接器、哪些工具标了只读（agy-connectors.ts）。默认读 agy 的 MCP 配置、向每个服务器问 tools/list；测试可以替换。 */
+  connectorCatalog?: () => Promise<AgyConnectorCatalog>;
+  /** 只读 Worker：把进程包进外层只读沙箱（默认 write-scope.ts 的 wrapInReadonlySeatbelt，只有 macOS 有）；测试可以替换。 */
+  readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 }
 
 export class AgyDriver implements Driver {
@@ -192,6 +218,7 @@ export class AgyDriver implements Driver {
   > &
     AgyDriverOptions;
   readonly #composer: VendorComposerBase;
+  #connectorCatalog: (() => Promise<AgyConnectorCatalog>) | null = null;
   readonly #sessions = new Map<SessionId, SessionState>();
   readonly #listeners = new Set<DriverEventListener>();
   #shuttingDown = false;
@@ -436,6 +463,7 @@ export class AgyDriver implements Driver {
         turnInterrupted: false,
         stopRequested: false,
         policyViolation: null,
+        deniedContinues: 0,
         hasConversation: false,
         vendorSessionId: "",
         stepTexts: new Map(),
@@ -653,6 +681,7 @@ export class AgyDriver implements Driver {
     st.turnInterrupted = false;
     st.stopRequested = false;
     st.policyViolation = null;
+    st.deniedContinues = 0;
     st.stepTexts.clear();
     st.seenToolSteps.clear();
     st.seenThinkingSteps.clear();
@@ -798,6 +827,25 @@ export class AgyDriver implements Driver {
     }, this.#opts.startTimeoutMs);
   }
 
+  /** 只读 Worker 起进程前问的连接器清单；问崩了（不该发生）当空清单：规则里没有 mcp 的拒绝，全靠工具开始调用时的兜底检查（清单里查不到的都当非只读，打断）。 */
+  async #catalogFor(policy: ReadonlyPolicy): Promise<AgyConnectorCatalog> {
+    // 问清单要起 stdio 服务器：和 Worker 同样包外层只读沙箱、用 Worker 的环境（去掉 HUB_*），没有 OS 沙箱就不问
+    const homeDir = this.#opts.homeDir ?? homedir();
+    const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlySeatbelt(base, input));
+    this.#connectorCatalog ??=
+      this.#opts.connectorCatalog ??
+      createAgyConnectorResolver({
+        homeDir,
+        launcher: createReadonlyProbeLauncher({ policy, homeDir, baseEnv: process.env, extraEnv: this.#opts.env, wrap }),
+      });
+    try {
+      return await this.#connectorCatalog();
+    } catch (error) {
+      this.#opts.log(`[agy] 问连接器清单失败，只读 Worker 靠兜底检查拦非只读的连接器：${errorMessage(error)}`);
+      return EMPTY_AGY_CONNECTOR_CATALOG;
+    }
+  }
+
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     let row = this.#store(st);
     let files = prepared;
@@ -814,15 +862,37 @@ export class AgyDriver implements Driver {
     this.#assertNotEnded(st);
     if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
 
-    const args = buildAgyArgs(row, files, resume);
     const systemPrompt = readSystemInstructions(files.promptFile);
-    const readonly = files.readonly !== undefined;
 
-    // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱时记警告，按工具参数兜底检查
-    const launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.#opts.log, `session ${st.id}`);
+    // 只读 Worker：先问清连接器哪些只读（拒绝规则要写进 --settings），再包外层只读沙箱（没有 OS 沙箱直接报错，设计第 8 节第 5 条）
+    const readonlyPolicy = files.readonly;
+    const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor(readonlyPolicy);
+    const args = buildAgyArgs(row, files, resume, readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog));
+    let tmpDir: string | null = null;
+    let launch: ScopedSpawn;
+    let childEnv = { ...this.#opts.env, ...files.env };
+    if (readonlyPolicy === undefined) {
+      // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱时记警告，按工具参数兜底检查
+      launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.#opts.log, `session ${st.id}`);
+    } else {
+      const home = realpathSync(this.#opts.homeDir ?? homedir());
+      const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlySeatbelt(base, input));
+      // 每个会话一个私有临时目录（TMPDIR 指到这，进程退出时删）：git、编译器、shell 要用，其余地方都不能写
+      const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
+      launch = wrap({ command: this.#agyPath, args }, agyReadonlySandboxInput({ homeDir: home, tmpDir: privateTmp, policy: readonlyPolicy }));
+      if (!launch.osSandboxed) {
+        rmSync(privateTmp, { recursive: true, force: true });
+        throw new DriverError("spawn_failed", READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
+      }
+      tmpDir = privateTmp;
+      childEnv = { ...childEnv, TMPDIR: privateTmp };
+    }
+    const removeTmp = () => {
+      if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });
+    };
     const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
-      env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
+      env: buildChildEnv(process.env, childEnv),
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
@@ -832,12 +902,14 @@ export class AgyDriver implements Driver {
         child.once("error", reject);
       });
     } catch (error) {
+      removeTmp();
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") throw new DriverError("claude_not_found", `${this.#agyPath}: ${errorMessage(error)}`);
       throw new DriverError("spawn_failed", `${this.#agyPath}: ${errorMessage(error)}`);
     }
     if (this.#shuttingDown) {
       killFreshGroup(child);
+      removeTmp();
       this.#assertRunning();
     }
 
@@ -856,8 +928,9 @@ export class AgyDriver implements Driver {
       personaLaunched: files.personaRevision ?? null,
       systemPrompt,
       promptSent: false,
-      readonly,
-      fallbackScope: launch.osSandboxed ? null : (files.writeScope ?? null),
+      readonly: readonlyPolicy === undefined || catalog === null ? null : { policy: readonlyPolicy, catalog },
+      tmpDir,
+      fallbackScope: readonlyPolicy === undefined && !launch.osSandboxed ? (files.writeScope ?? null) : null,
       initSeen: false,
       stderr: "",
       closing: null,
@@ -890,6 +963,7 @@ export class AgyDriver implements Driver {
 
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
+      removeTmp();
       if (proc.closing === "idle") termGroupAfterExit(child);
       const timer = setTimeout(() => {
         child.stdout.destroy();
@@ -1105,13 +1179,10 @@ export class AgyDriver implements Driver {
         });
 
         if (row?.role === "worker") {
-          const violation = checkWorkerToolViolation({
-            toolName,
-            parameters,
-            readonly: proc.readonly,
-            fallbackScope: proc.fallbackScope,
-            cwd: row.cwd,
-          });
+          // 连接器兜底：只读 Worker 调了不在放行范围的 MCP 工具，马上打断（规则是第一道，这里管规则没拦住的）
+          const violation =
+            checkWorkerToolViolation({ toolName, parameters, fallbackScope: proc.fallbackScope, cwd: row.cwd }) ??
+            (proc.readonly === null ? null : checkAgyConnectorCall(toolName, parameters, proc.readonly.policy, proc.readonly.catalog));
           if (violation !== null) {
             st.policyViolation = violation;
             this.#sigintForInterrupt(st, proc);
@@ -1150,6 +1221,7 @@ export class AgyDriver implements Driver {
 
     const finishedReason = typeof res.finished_reason === "string" ? res.finished_reason : null;
     const rawInterrupted = finishedReason === "interrupted" || st.turnInterrupted || st.stopRequested;
+    if (!rawInterrupted && this.#continueAfterDenial(st, proc, res, obj, at)) return;
     const written = st.inFlight;
     st.inFlight = null;
     st.selfTurn = false;
@@ -1210,13 +1282,7 @@ export class AgyDriver implements Driver {
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
 
-    const row = this.#row(st);
-    this.#cancelUsagePush(st);
-    const finalUsage = finishAgyUsage(st.turnUsage, row?.usage ?? EMPTY_TOKEN_USAGE, res.usage ?? obj.usage, st.lastLiveUsage);
-    st.lastLiveUsage = null;
-    const patch: AgentSessionPatch = { usage: finalUsage };
-    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
-    this.#update(st, patch);
+    this.#settleUsage(st, res, obj);
 
     this.#clearTimer(st, "interruptTimer");
     this.#emit(st.id, event);
@@ -1224,6 +1290,43 @@ export class AgyDriver implements Driver {
     this.#resolveInterrupt(st);
     this.#afterTurn(st, proc);
     this.#settled(st);
+  }
+
+  /** 一次 result 的用量结算：更新会话的累计、标记完成过一轮。 */
+  #settleUsage(st: SessionState, res: Record<string, unknown>, obj: Record<string, unknown>): void {
+    const row = this.#row(st);
+    this.#cancelUsagePush(st);
+    const finalUsage = finishAgyUsage(st.turnUsage, row?.usage ?? EMPTY_TOKEN_USAGE, res.usage ?? obj.usage, st.lastLiveUsage);
+    st.lastLiveUsage = null;
+    const patch: AgentSessionPatch = { usage: finalUsage };
+    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
+    this.#update(st, patch);
+  }
+
+  /**
+   * agy 无头模式下遇到“要批准”的操作会自动拒绝，常常整轮直接结束、回复为空（result.denied_actions 非空）。
+   * 这时不结束这一轮：往同一个进程补发一条“上一步被拒了，换办法继续”，还是原来那条消息的这一轮（最多 AGY_DENIED_CONTINUE_MAX 次，用户发新消息重新数）。
+   * 返回 true 表示已经补发、result 不再当这一轮的结束处理。
+   */
+  #continueAfterDenial(st: SessionState, proc: Proc, res: Record<string, unknown>, obj: Record<string, unknown>, at: number): boolean {
+    const denied = deniedActionsOf(res);
+    const status = typeof res.status === "string" ? res.status : "SUCCESS";
+    const blank = typeof res.response !== "string" || res.response.trim() === "";
+    if (denied.length === 0 || !blank || status !== "SUCCESS" || st.policyViolation !== null) return false;
+    if (st.inFlight === null || st.ended || proc.closing !== null || st.proc !== proc || this.#shuttingDown) return false;
+    if (st.deniedContinues >= AGY_DENIED_CONTINUE_MAX) return false;
+    const line = buildAgyUserLine(deniedContinueText(denied), [], this.#composer.buildUserContent);
+    if (checkAgyUserLine(line) !== null) return false;
+    st.deniedContinues++;
+    this.#flushStepTexts(st, at);
+    st.resultSeq++;
+    this.#settleUsage(st, res, obj);
+    st.stepTexts.clear();
+    st.seenToolSteps.clear();
+    st.seenThinkingSteps.clear();
+    st.hasTextSinceLastTool = false;
+    proc.child.stdin.write(line + "\n");
+    return true;
   }
 
   #onClose(st: SessionState, proc: Proc, code: number | null, signal: NodeJS.Signals | null, resolveExited: () => void): void {

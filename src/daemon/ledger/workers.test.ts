@@ -257,6 +257,19 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(workerEventOf(workerLines()[0]!)?.readonly).toBe(true);
   });
 
+  it("没有 OS 沙箱的机器上派只读 agy：直接报错说清原因（不建 Worker）；claude、codex 的只读、非只读的 agy 照派；有沙箱照派", () => {
+    repos.add(main);
+    ledger = createLedger(db, options({ osSandboxed: () => false }));
+    const before = tableCounts();
+    expectLedgerError(() => start({ vendor: "agy", readonly: true }), "invalid", /只读的 agy Worker 需要 OS 沙箱/);
+    expect(tableCounts()).toEqual(before);
+    expect(start({ vendor: "agy", readonly: false, title: "a" }).data.worker.readonly).toBe(false);
+    expect(start({ vendor: "codex", readonly: true, title: "b" }).data.worker.readonly).toBe(true);
+    expect(start({ vendor: "claude", readonly: true, title: "c" }).data.worker.readonly).toBe(true);
+    ledger = createLedger(db, options({ osSandboxed: () => true }));
+    expect(start({ vendor: "agy", readonly: true, title: "d" }).data.worker.readonly).toBe(true);
+  });
+
   it("跨厂商派 Worker（--vendor）：换厂商时未显式传 model/effort 用 null（不把 claude 模型继承给 agy/codex），按目标厂商校验", () => {
     repos.add(main);
     // 项目经理 lin 默认是 claude + claude-sonnet-5-5
