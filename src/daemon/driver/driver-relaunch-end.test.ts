@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DriverError, RELAUNCH_NOTE, type AgentSessionPatch } from "../../shared/index.ts";
-import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
+import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, waitUntil, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
 /** 测试里起的、要在最后确保结束的进程号。 */
@@ -42,26 +42,23 @@ function alive(pid: number): boolean {
 }
 
 /** 最多等 ms 毫秒，看它是不是不在了（被杀的孙进程由 launchd 收尸，要一小会儿）。 */
-async function goneWithin(pid: number, ms = 3_000): Promise<boolean> {
-  for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
-    if (!alive(pid)) return true;
-    await realSleep(25);
-  }
-  return !alive(pid);
+async function goneWithin(pid: number, ms = 10_000): Promise<boolean> {
+  return waitUntil("process to be gone", () => (alive(pid) ? undefined : true), ms).catch(() => false);
 }
 
 /** 等假 claude 记下它起的睡眠子进程。 */
 async function childPid(t: Harness): Promise<number> {
-  for (let i = 0; i < 200; i++) {
+  const pid = await waitUntil("fake claude to spawn its child", () => {
     const e = t.log().find((x) => x.kind === "child");
-    if (e?.kind === "child") {
-      leftovers.push(e.childPid);
-      return e.childPid;
-    }
-    await realSleep(25);
-  }
-  throw new Error("fake claude never spawned its child");
+    return e?.kind === "child" ? e.childPid : undefined;
+  });
+  leftovers.push(pid);
+  return pid;
 }
+
+/** 等假 claude 起来：它记下命令行的同一个同步段里就装好了 SIGINT 处理，所以这之后再发 SIGINT 才是被“处理”而不是被默认动作杀掉。 */
+const fakeClaudeStarted = (t: Harness, count = 1) =>
+  waitUntil("fake claude to start", () => (t.argvs().length >= count ? true : undefined));
 
 /** 包住 store.update：第一个满足 pred 的 patch 写进去之后调一次 fn（只调一次）。 */
 function onPatch(t: Harness, pred: (p: AgentSessionPatch) => boolean, fn: () => void): void {
@@ -813,7 +810,7 @@ describe("进程组", () => {
       const t = harness({ driver: { interruptGraceMs: 200 }, script: { ignoreSigint: true } });
       const s = t.addSession({ status: "running" });
       const stray = strayClaude(t, s.vendorSessionId, false);
-      for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(25);
+      await fakeClaudeStarted(t);
       t.store.update(s.id, { pid: stray.pid! });
       await t.driver.cleanupStale();
       expect(await goneWithin(stray.pid!)).toBe(true);
@@ -826,7 +823,7 @@ describe("进程组", () => {
       const s = t.addSession({ status: "running" });
       const other = strayClaude(t, "another-daemon-session", true);
       other.stdin!.write(line("hi"));
-      for (let i = 0; i < 200 && t.argvs().length === 0; i++) await realSleep(25);
+      await fakeClaudeStarted(t);
       expect(t.argvs()).toHaveLength(1);
       t.store.update(s.id, { pid: other.pid! });
       await t.driver.cleanupStale();
