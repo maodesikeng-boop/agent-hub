@@ -15,9 +15,20 @@ describe("骨架", () => {
     expect(pkg.devDependencies["@types/node"]).toMatch(/^\^24\./);
   });
 
-  it("pnpm check 分两份做类型检查，再跑测试", () => {
+  it("pnpm check 分三份做类型检查（守护进程、网页、Service Worker），再跑测试", () => {
     const pkg = readJson("package.json");
-    expect(pkg.scripts.check).toBe("tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && vitest run --reporter=dot");
+    expect(pkg.scripts.check).toBe(
+      "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && vitest run --reporter=dot",
+    );
+  });
+
+  it("Service Worker 那份只查 sw.ts，用 webworker 的类型，不带 DOM", () => {
+    const sw = readJson("src/web/tsconfig.sw.json");
+    expect(sw.files).toEqual(["sw.ts"]);
+    expect(sw.include).toEqual([]);
+    expect(sw.compilerOptions.lib).toContain("webworker");
+    expect(sw.compilerOptions.lib).not.toContain("dom");
+    expect(readJson("src/web/tsconfig.json").exclude).toContain("sw.ts");
   });
 
   it("守护进程和测试那份不带 DOM、不管 src/web；网页那份带 DOM", () => {

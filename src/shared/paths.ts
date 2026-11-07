@@ -23,6 +23,10 @@ export interface HubPaths {
   uiTokenFile: string;
   /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
   deviceFile: string;
+  /** state/push-vapid.json：Web Push 的 VAPID 密钥对（联机 P4，daemon/push/vapid.ts），0600，第一次启动生成，不进仓库。 */
+  pushVapidFile: string;
+  /** state/push-subscriptions.json：这台收到的推送订阅（手机 PWA、浏览器），0600。 */
+  pushSubscriptionsFile: string;
   launchDir: string;
   logsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
@@ -86,6 +90,8 @@ export function resolveHubPaths(
     lockFile: join(stateDir, "lock"),
     uiTokenFile: join(stateDir, "ui-token"),
     deviceFile: join(stateDir, "device.json"),
+    pushVapidFile: join(stateDir, "push-vapid.json"),
+    pushSubscriptionsFile: join(stateDir, "push-subscriptions.json"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),

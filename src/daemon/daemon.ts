@@ -75,6 +75,7 @@ import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 import { defaultDeviceName, loadOrCreateDevice } from "./device.ts";
+import { createPushService } from "./push/index.ts";
 import {
   createTailnetProbe,
   runTailscaleStatus,
@@ -394,6 +395,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const tailscaleCli = tailscaleCommand({ env });
     const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
     const serveTarget = serveTargetKind({ env });
+    // 推送提醒（联机 P4）：VAPID 密钥、订阅在 state/；按账本的变化判断要不要推。关的时候随账本订阅一起取消
+    const push = createPushService({
+      vapidFile: paths.pushVapidFile,
+      subscriptionsFile: paths.pushSubscriptionsFile,
+      ledger,
+      device,
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    parts.unsubscribe.push(() => push.close());
     parts.ui = await startUiServer({
       ledger,
       token,
@@ -408,6 +418,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       rotateToken,
       tailnet,
       serveTarget,
+      push,
       ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
     });
     const uiPort = parts.ui.port;
