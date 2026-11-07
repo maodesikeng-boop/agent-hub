@@ -124,7 +124,7 @@ function source(overrides: Partial<ForkSource> = {}): ForkSource {
       fingerprint: "fp",
     } as ForkSource["launch"],
     ...overrides,
-  } as ForkSource;
+  };
 }
 
 const noAbort = (): AbortSignal => new AbortController().signal;
@@ -320,7 +320,7 @@ describe("remove：先删复制那份，再关进程；幂等", () => {
 describe("forkSourceOf 给的 ForkSource 能直接用", () => {
   it("env 已去掉 HUB_*", () => {
     const row = { id: 1, vendor: "codex", vendorSessionId: "v", cwd: "/c", addDirs: [], model: null, effort: null } as unknown as AgentSessionRow;
-    const src = forkSourceOf(row, source().launch);
+    const src = forkSourceOf(row, source().launch, "/bin/codex");
     expect(src.launch.env[ENV_HUB_TOKEN]).toBeUndefined();
   });
 });

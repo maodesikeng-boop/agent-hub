@@ -161,12 +161,6 @@ function addUsage(total: TokenUsage, last: Json): TokenUsage {
   };
 }
 
-/**
- * 这家 CLI 的路径：ForkSource.executablePath（runner 按 paths.codexPath 填，用户可配、测试用假的）。
- * 字段由 #118 加进 ForkSource，合了之后这里直接用 src.executablePath、删掉这层。
- */
-const executablePathOf = (src: ForkSource): string => (src as ForkSource & { executablePath: string }).executablePath;
-
 export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
   const spawnProcess =
     options.spawnProcess ??
@@ -177,7 +171,7 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
   async function startServer(src: ForkSource): Promise<CodexRpc> {
     const launch = withoutHubEnv(src.launch);
     const env = withoutHubEnv({ ...launch, env: buildChildEnv(process.env, launch.env) }).env;
-    const child = spawnProcess(executablePathOf(src), buildCodexArgs(), { cwd: src.cwd, env });
+    const child = spawnProcess(src.executablePath, buildCodexArgs(), { cwd: src.cwd, env });
     const rpc = new CodexRpc(child);
     try {
       await new Promise<void>((resolve, reject) => {
@@ -190,7 +184,7 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       rpc.notify("initialized");
     } catch (error) {
       await rpc.close();
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${executablePathOf(src)}`);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${src.executablePath}`);
       throw error;
     }
     return rpc;
