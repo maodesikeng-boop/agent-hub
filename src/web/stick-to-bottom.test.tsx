@@ -52,13 +52,17 @@ function fakeLayout(el: HTMLElement, initial: { scrollHeight: number; clientHeig
 
 const messages: Message[] = [makeUserMessage({ id: 1, text: "看图" }), makeMessage({ id: 2, text: "![图](/files/a.png)" })];
 
-function setup() {
-  render(<MessageList messages={messages} pending={[]} agentOf={() => ({ name: "小林", avatarKey: 1 })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />);
+function setup(list: Message[] = messages) {
+  const view = render(<MessageList messages={list} pending={[]} agentOf={() => ({ name: "小林", avatarKey: 1 })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />);
   const log = screen.getByRole("log");
   const box = fakeLayout(log, { scrollHeight: 1000, clientHeight: 400 });
   log.scrollTop = 600;
   fireEvent.scroll(log);
-  return { log, box };
+  const rerender = (next: Message[]) =>
+    view.rerender(
+      <MessageList messages={next} pending={[]} agentOf={() => ({ name: "小林", avatarKey: 1 })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />,
+    );
+  return { log, box, rerender };
 }
 
 describe("贴底", () => {
@@ -111,5 +115,20 @@ describe("贴底", () => {
     box.scrollHeight = 1800;
     resize();
     expect(log.scrollTop).toBe(1400);
+  });
+
+  it("写交接的来往（不显示）进来不算新消息：不跟着滚；显示出来的消息照常算（审查 #113 第 6 条）", () => {
+    const { log, rerender } = setup();
+    // 跳到某条消息这类不经过滚动事件的位置变化：还贴着底，但人在看上面
+    log.scrollTop = 100;
+    const hidden = [
+      ...messages,
+      makeMessage({ id: 3, sender: "system", status: "processing", text: "【系统】请写交接", meta: { event: "handover.requested", sessionId: 1 } }),
+      makeMessage({ id: 4, text: "交接全文", meta: { handover: true } }),
+    ];
+    rerender(hidden);
+    expect(log.scrollTop).toBe(100);
+    rerender([...hidden, makeMessage({ id: 5, text: "新的回复" })]);
+    expect(log.scrollTop).toBe(600);
   });
 });

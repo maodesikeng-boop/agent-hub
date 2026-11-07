@@ -78,6 +78,7 @@ import {
 import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { TurnUsage } from "./usage.ts";
 import { spawnInWriteScope } from "./write-scope.ts";
 
@@ -93,7 +94,7 @@ interface Batch {
   messageIds: MessageId[];
   combinedText: string;
   /** persona：性格设定、模式改了的说明（persona-note.ts），没写成、codex 没读到时退回去。 */
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null };
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null; preamble: PreambleTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 会话正忙时用 turn/steer 在一轮中途交给 codex 的（不是 turn/start 开一轮的那条）。 */
@@ -119,7 +120,7 @@ interface Steer {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null, preamble: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -189,6 +190,8 @@ interface SessionState {
   written: Set<MessageId>;
   /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
   personaSeen: number | null;
+  /** 换代后的开场说明这个进程里带过了（还没等到账本记读到）；session-preamble.ts。 */
+  preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
   relaunchNote: boolean;
@@ -543,6 +546,7 @@ export class CodexDriver implements Driver {
         pending: [],
         written: new Set(),
         personaSeen: null,
+        preambleTaken: false,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -604,9 +608,11 @@ export class CodexDriver implements Driver {
    */
   #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
+    const preamble = this.#takeSessionPreamble(st);
     const persona = this.#takePersonaNote(st);
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona, preamble };
     const prefixes = [
+      preamble?.note ?? null,
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
@@ -624,6 +630,13 @@ export class CodexDriver implements Driver {
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
     batch.notes.persona?.restore();
+    batch.notes.preamble?.restore();
+  }
+
+  #takeSessionPreamble(st: SessionState): PreambleTaken | null {
+    return takeSessionPreamble(this.#opts.sessionPreamble, st.id, st, (error) =>
+      this.#internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
+    );
   }
 
   #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
@@ -764,7 +777,7 @@ export class CodexDriver implements Driver {
     this.#markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
     batch.processing = true;
-    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, at });
+    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, ...(batch.notes.preamble ? { preamble: true as const } : {}), at });
   }
 
   /** 这几条要重发（出错、崩溃、收回）：不再算写过；带着的性格设定说明也退回去，重发时再带（多带一次无害，漏了不行）。 */
@@ -772,6 +785,7 @@ export class CodexDriver implements Driver {
     for (const batch of batches) {
       for (const id of batch.messageIds) st.written.delete(id);
       batch.notes.persona?.restore();
+      batch.notes.preamble?.restore();
     }
   }
 
@@ -1545,6 +1559,7 @@ export class CodexDriver implements Driver {
     if (messageIds.length === 0) return;
     // codex 没读到带着的性格设定说明：退回去，下一条再带
     for (const b of missed) b.notes.persona?.restore();
+    for (const b of missed) b.notes.preamble?.restore();
     if (stopped) {
       this.#forgetWritten(st, missed.filter((b) => b.source === "system"));
       for (const event of untakenOnStopEvents(missed, at)) this.#emit(st.id, event);

@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Message, MessageId } from "../../shared/index.ts";
+import { isHandoverTraffic, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
@@ -65,7 +65,8 @@ export function MessageList({
 
   const items = groupMessages(messages);
   const busy = status != null;
-  const lastKey = `${messages.at(-1)?.id ?? 0}:${pending.length}:${busy}`;
+  // 只看显示出来的：写交接的来往（不显示）进来不算新消息
+  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
   const scrollToBottom = () => {

@@ -15,6 +15,7 @@ import {
   ENV_PORT,
   EXECUTOR_STOP_GRACE_MS,
   SCHEDULER_TICK_MS,
+  AUTO_RENEW_TICK_MS,
   checkModel,
   type ActionExecutor,
   type Driver,
@@ -49,6 +50,8 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
+import { vendorTranscriptPath } from "./driver/transcript.ts";
+import type { LedgerOptions } from "./ledger/ledger.ts";
 import {
   createSessionEndHandler,
   createSessionSendHandler,
@@ -72,6 +75,8 @@ export interface DaemonOptions {
   userHome: string;
   staticDir?: string;
   log?: (line: string) => void;
+  /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
+  autoRenew?: LedgerOptions["autoRenew"];
 }
 
 export interface RunningDaemon {
@@ -114,6 +119,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   // （agent 接口在 claude 都退出之后才关：最后一轮里 agent 还可能敲 hub；它要用账本，所以在库之前）
   const parts: {
     scheduler?: NodeJS.Timeout;
+    autoRenew?: NodeJS.Timeout;
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
@@ -134,8 +140,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, setup, executor, driver, models, commands, ui, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
+    if (autoRenew) clearInterval(autoRenew);
     parts.stopFileCleanup?.();
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
@@ -205,6 +212,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       worktreesDir,
       uploadsDir,
       sentFilesDir,
+      // 交接提示词里写上会话原始记录的路径
+      findTranscript: (ref) => vendorTranscriptPath(ref),
+      ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
+      log,
     });
     const sessions = createSessionStore(db);
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
@@ -226,7 +237,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
-    const launch = { store: sessions, log, prepareLaunch, personaNote };
+    // 换代后的新会话：开场说明 + 交接 + 最近原话拼在第一条写给它的消息前面（ledger/handover.ts）
+    const launch = { store: sessions, log, prepareLaunch, personaNote, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: {
@@ -312,6 +324,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runSchedules();
     parts.scheduler = setInterval(runSchedules, SCHEDULER_TICK_MS);
+    // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
+    const runAutoRenew = () => {
+      try {
+        ledger.runAutoRenew();
+      } catch (error) {
+        log(`${LOG_PREFIX} 自动换新会话出错：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    runAutoRenew();
+    parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
 
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);

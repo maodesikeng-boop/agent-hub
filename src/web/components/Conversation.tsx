@@ -2,7 +2,7 @@ import { Folder } from "lucide-react";
 import { useMemo } from "react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
 import { shortPath } from "../format.ts";
-import type { ConversationEntry } from "../selectors.ts";
+import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -68,6 +68,7 @@ export function Conversation({
   const id = view.conversation.id;
   const stop = useStop(session, () => onStop(id));
   const source = useMemo(() => conversationSource(id), [id]);
+  const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
@@ -106,7 +107,7 @@ export function Conversation({
       {notices}
       <div className="relative min-h-0 flex-1">
         <MessageList
-          messages={view.messages}
+          messages={messages}
           pending={pending}
           agentOf={() => agent}
           hasMore={view.hasMore}

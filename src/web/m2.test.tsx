@@ -1032,28 +1032,55 @@ describe("资料页：开新会话", () => {
     expect(within(group).getByRole("button", { name: "开始…" })).toBeEnabled();
   });
 
-  it("左栏的预览：交接请求、交接全文也只显示短的一句（审查 #35 第 6 条）", async () => {
+  /** 写交接那一轮 agent 的话（账本记了 meta.handover）。 */
+  const handoverText = (id: number, text: string, createdAt: number) => makeMessage({ id, conversationId: 1, text, meta: { handover: true }, createdAt });
+  const renewedLine = (id: number, text: string, createdAt: number) =>
+    makeSystemMessage({ id, conversationId: 1, text, createdAt, event: { event: "session.renewed", sessionId: 2, fromSessionId: 1, turnStartId: 30, auto: true } });
+
+  it("左栏：写交接的请求、交接全文、换代那一行都不进预览，也不把这个对话顶到最上面", async () => {
     const ws = await boot();
-    push(ws, messageChange(11, "message.created", request("queued")));
-    expect(within(nav()).getByText("已请项目经理写交接，写完换新会话")).toBeInTheDocument();
-    push(
-      ws,
-      messageChange(12, "message.created", makeSystemMessage({ id: 31, conversationId: 1, text: "【系统】这是新会话……交接全文", status: "queued", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1 } })),
-    );
-    expect(within(nav()).getByText("项目经理开了新会话（交接见上一条）")).toBeInTheDocument();
-    expect(within(nav()).queryByText(/交接全文|请写交接/)).not.toBeInTheDocument();
+    push(ws, messageChange(11, "message.created", { ...request("processing"), createdAt: 20_000, meta: { event: "handover.requested", sessionId: 1, auto: true } }));
+    push(ws, messageChange(12, "message.created", handoverText(31, "交接全文：暗号是蓝鲸", 21_000)));
+    push(ws, messageChange(13, "message.updated", { ...request("replied"), createdAt: 20_000 }));
+    push(ws, messageChange(14, "message.created", renewedLine(32, "交接全文：暗号是蓝鲸", 22_000)));
+    expect(within(nav()).getAllByRole("button").map((b) => b.textContent)).toEqual([expect.stringContaining("阿周在"), expect.stringContaining("小林在")]);
+    expect(within(nav()).queryByText(/交接|Handed off/)).not.toBeInTheDocument();
   });
 
-  it("对话里：交接请求和换代显示成短的一句", async () => {
-    const ws = await boot(makeSnapshot());
-    push(ws, messageChange(11, "message.created", request("queued")));
-    push(
-      ws,
-      messageChange(12, "message.created", makeSystemMessage({ id: 31, text: "【系统】这是新会话……交接全文", status: "queued", event: { event: "session.renewed", sessionId: 2, fromSessionId: 1 } })),
+  it("对话里：只多一条分隔线（Handed off to a new session），点开看交接全文；写交接的请求和回复都不显示；写交接时项目经理不显示在忙", async () => {
+    const user = userEvent.setup();
+    const ws = await boot(
+      makeSnapshot({
+        conversations: [makeConvSnapshot([makeUserMessage({ id: 1, text: "你好" }), makeMessage({ id: 2, text: "你好呀" })])],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle" })],
+      }),
     );
-    expect(within(log()).getByText("已请项目经理写交接，写完换新会话")).toBeInTheDocument();
-    expect(within(log()).getByText("项目经理开了新会话（交接见上一条）")).toBeInTheDocument();
+    push(ws, messageChange(11, "message.created", { ...request("processing"), meta: { event: "handover.requested", sessionId: 1, auto: true } }));
+    push(ws, sessionChange(12, makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "working", step: { type: "thinking" } })));
+    push(ws, messageChange(13, "message.created", handoverText(31, "交接全文：暗号是蓝鲸", 50_000)));
+    expect(within(log()).queryByText(/请写交接|交接全文/)).not.toBeInTheDocument();
+    expect(within(log()).queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+
+    // 写交接时用户发了一句：不显示“排队中”，项目经理显示在想（换完代马上处理）
+    push(ws, messageChange(14, "message.created", makeUserMessage({ id: 32, text: "换代时问的", status: "queued", createdAt: 51_000 })));
+    expect(within(log()).queryByText("排队中")).not.toBeInTheDocument();
+    expect(within(log()).getByRole("status")).toHaveTextContent("Thinking");
+
+    // 换代：分隔线出现在写交接开始的地方，换代时问的那句排在它下面
+    push(ws, messageChange(15, "message.updated", request("replied")));
+    push(ws, messageChange(16, "message.created", renewedLine(33, "交接全文：暗号是蓝鲸", 52_000)));
+    push(ws, sessionChange(17, makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle", generation: 1 })));
+    push(ws, sessionChange(18, makeSession({ sessionId: 2, conversationId: 1, pmId: 1, activity: "working", generation: 2 })));
+    const divider = within(log()).getByRole("button", { name: "Handed off to a new session" });
+    const asked = within(log()).getByText("换代时问的");
+    expect(divider.compareDocumentPosition(asked) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(log()).queryByText(/交接全文/)).not.toBeInTheDocument();
+    expect(within(log()).queryByText(/请写交接/)).not.toBeInTheDocument();
+    await user.click(divider);
+    expect(within(log()).getByText("交接全文：暗号是蓝鲸")).toBeInTheDocument();
+    await user.click(divider);
+    await waitFor(() => expect(within(log()).queryByText("交接全文：暗号是蓝鲸")).not.toBeInTheDocument());
   });
 });
 

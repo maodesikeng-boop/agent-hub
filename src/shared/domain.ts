@@ -419,24 +419,26 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * - schedule.failed：这一轮失败或会话起不来，“定时任务没跑成：名字：原因”，只给人看；messageId 是失败的那条 schedule.run 消息。
  * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
  *
- * 开新会话（资料页的按钮，见 ledger/handover.ts）的两条要发给 agent（status 从 queued 起照常走，source system），
- * text 是发给 agent 的全文，网页只显示 systemNoticeText 给的一句：
- * - handover.requested：发给旧会话（sessionId），让项目经理把交接写成这一轮的回复；
- * - session.renewed：发给新一代会话（sessionId），带上交接和最近几条原话；网页显示“项目经理开了新会话（交接见上一条）”。
- *   失败、被停止了原地重新排队（attempts 记重排了几次），最多 HANDOVER_RENEW_RETRIES 次；
- * - handover.failed：只给人看。交接那一轮没写成（没换代），或者新会话一直没接上交接（不再重排）。messageId 是那条 H / R，
- *   attempt 是它第几次没成（同一条重新排队后又没成，再发一条）。
+ * 开新会话（资料页的按钮，或对话太长时自动换，见 ledger/handover.ts）。用户看来是同一个对话，聊天里只多一条很淡的分隔线：
+ * - handover.requested：发给旧会话（sessionId，status 从 queued 起照常走，source system），text 是发给 agent 的全文，
+ *   让项目经理把交接写成这一轮的回复。网页不显示它，这一轮 agent 的文字、工具调用（meta.handover，见 isHandoverTraffic）也不显示；
+ *   auto：系统因为对话太长自动换的（不是用户点的）；
+ * - session.renewed：换代那一刻记的一行（sessionId 是新一代，status null，不单独发给 agent），text 是交接全文。
+ *   网页显示成分隔线，点开看交接。新会话不另开一轮：开场说明 + 交接 + 最近原话由驱动层拼在下一条真正写给它的消息前面
+ *   （DriverOptions.sessionPreamble）；turnStartId 是交接那一轮开始时库里最大的消息编号（之后来的消息排在分隔线下面）；
+ * - handover.failed：只给人看。用户点的开新会话那一轮没写成（没换代）。messageId 是那条 H，attempt 是它第几次没成。
+ *   自动换的没写成不提示，下次空闲再试。
  * - context.compacted：agent 压缩了上下文（用户发了 /compact，或者自动压缩；驱动层的 context.compacted），“已压缩上下文”，
  *   只给人看。发在这个会话所在的对话里（项目经理、Worker 的都有）；uuid 是 claude 那一行事件的，重放不会记两条。
- * H、R 的 meta 里账本还会记几个内部字段（turnStartId、attempts、settled，见 handover.ts），网页不用。
+ * H、R 的 meta 里账本还会记几个内部字段（requestedAt、settled、seen 等，见 handover.ts），网页不用。
  */
 export type SystemMessageMeta =
   | { event: "project.created"; projectId: ProjectId }
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
-  | { event: "handover.requested"; sessionId: SessionId }
-  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId }
+  | { event: "handover.requested"; sessionId: SessionId; auto?: boolean }
+  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId; turnStartId?: MessageId; auto?: boolean }
   | { event: "handover.failed"; messageId: MessageId; attempt: number }
   | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
@@ -466,16 +468,27 @@ export function systemEventOf(message: Pick<Message, "sender" | "meta">): System
   return isOneOf(SYSTEM_EVENTS, message.meta.event) ? (message.meta as SystemMessageMeta) : null;
 }
 
-/** 网页上系统消息显示的那一句：开新会话的两条显示固定的一句（text 是发给 agent 的全文），别的去掉开头的【系统】。 */
+/** 换新会话那条分隔线上的字（状态词用英文，docs/ui-standard.md 第 3、17 条）。 */
+export const SESSION_RENEWED_NOTICE = "Handed off to a new session";
+
+/** 网页上系统消息显示的那一句：换新会话显示固定的一句（text 是交接全文、发给 agent 的全文），别的去掉开头的【系统】。 */
 export function systemNoticeText(message: Pick<Message, "sender" | "meta" | "text">): string {
   switch (systemEventOf(message)?.event) {
     case "handover.requested":
-      return "已请项目经理写交接，写完换新会话";
     case "session.renewed":
-      return "项目经理开了新会话（交接见上一条）";
+      return SESSION_RENEWED_NOTICE;
     default:
       return stripSystemPrefix(message.text);
   }
+}
+
+/**
+ * 写交接的来往（不给用户看）：交接请求（handover.requested），和写交接那一轮 agent 的文字、工具调用（账本入库时在 meta 里记
+ * handover: true，见 ledger/messages.ts）。网页不显示、不算未读、不进左栏预览；交接全文在换代那条分隔线里点开看。
+ */
+export function isHandoverTraffic(message: Pick<Message, "sender" | "meta">): boolean {
+  if (message.sender === "agent") return message.meta?.handover === true;
+  return systemEventOf(message)?.event === "handover.requested";
 }
 
 /** 网页显示系统消息时去掉开头的【系统】。 */

@@ -57,6 +57,7 @@ import {
 import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
 import { spawnInWriteScope } from "./write-scope.ts";
 import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
+import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
@@ -74,7 +75,7 @@ interface Batch {
   prefixes: string[];
   rawLine?: string;
   /** persona：性格设定、模式改了的说明（persona-note.ts），没写成时退回去。 */
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null };
+  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null; preamble: PreambleTaken | null };
   delivered: boolean;
   processing: boolean;
   /** 用户的（几条拼成一条的也是）还是系统的；不写是用户的（测试直接写的那行）。停止时没取走的，用户的取消、系统的收回。 */
@@ -83,7 +84,7 @@ interface Batch {
 
 type ClosingReason = "idle" | "interrupt" | "shutdown";
 
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null };
+const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null, preamble: null };
 
 type StartupOutcome =
   | { kind: "ok" }
@@ -155,6 +156,8 @@ interface SessionState {
   written: Set<MessageId>;
   /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
   personaSeen: number | null;
+  /** 换代后的开场说明这个进程里带过了（还没等到账本记读到）；session-preamble.ts。 */
+  preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
   relaunchNote: boolean;
@@ -445,6 +448,7 @@ export class AgyDriver implements Driver {
         pending: [],
         written: new Set(),
         personaSeen: null,
+        preambleTaken: false,
         recoveryNote: false,
         crashNote: false,
         relaunchNote: false,
@@ -507,9 +511,11 @@ export class AgyDriver implements Driver {
     }
     // 性格设定改了的说明只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼系统指令）
     const proc = st.proc && !st.proc.closing ? st.proc : null;
+    const preamble = this.#takeSessionPreamble(st);
     const persona = proc ? this.#takePersonaNote(st) : null;
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona };
+    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona, preamble };
     const notePrefixes = [
+      preamble?.note ?? null,
       notes.recovery ? RESTART_RECOVERY_NOTE : null,
       notes.crash ? CRASH_RECOVERY_NOTE : null,
       notes.relaunch ? RELAUNCH_NOTE : null,
@@ -535,6 +541,13 @@ export class AgyDriver implements Driver {
     if (batch.notes.crash) st.crashNote = true;
     if (batch.notes.relaunch) st.relaunchNote = true;
     batch.notes.persona?.restore();
+    batch.notes.preamble?.restore();
+  }
+
+  #takeSessionPreamble(st: SessionState): PreambleTaken | null {
+    return takeSessionPreamble(this.#opts.sessionPreamble, st.id, st, (error) =>
+      this.#internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
+    );
   }
 
   #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
@@ -659,6 +672,7 @@ export class AgyDriver implements Driver {
   #forgetWritten(st: SessionState, batch: Batch | null): void {
     for (const id of batch?.messageIds ?? []) st.written.delete(id);
     batch?.notes.persona?.restore();
+    batch?.notes.preamble?.restore();
   }
 
   #afterTurn(st: SessionState, proc: Proc): void {
@@ -935,7 +949,7 @@ export class AgyDriver implements Driver {
     this.#markDelivered(st, batch);
     if (batch.processing || batch.messageIds.length === 0) return;
     batch.processing = true;
-    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, at });
+    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, ...(batch.notes.preamble ? { preamble: true as const } : {}), at });
   }
 
   #conversationIdOf(st: SessionState): string {
@@ -1306,6 +1320,8 @@ export class AgyDriver implements Driver {
   #releaseOnStop(st: SessionState, batch: Batch, at: number): void {
     const source = batch.source ?? "user";
     if (source === "system") this.#forgetWritten(st, batch);
+    // 用户的那条标已取消、不重发，但带着的换代开场说明 agent 没看到：退回去，下一行再带
+    else batch.notes.preamble?.restore();
     for (const event of untakenOnStopEvents([{ messageIds: batch.messageIds, source }], at)) this.#emit(st.id, event);
   }
 

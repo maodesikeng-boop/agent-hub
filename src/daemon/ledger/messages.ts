@@ -98,6 +98,16 @@ export function createLedgerMessages(
   ) => {
     if (session.conversationId === null) return;
     const t = now();
+    // 项目经理在写交接（这个会话的交接请求开始处理后的那一轮，meta.writing，ledger/handover.ts）：这一轮的文字、工具调用记 handover，
+    // 网页不显示。按请求自己记的标记认，不看它现在的状态：超时被标了已停止、驱动层那一轮还在写的，照样不显示
+    const handoverTurn =
+      session.role === "pm" &&
+      db.get(
+        `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
+           AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
+        session.id,
+      ) !== undefined;
+    const meta = handoverTurn ? { ...fields.meta, handover: true } : fields.meta;
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, collapsed, dedupe_key, status, created_at, updated_at)
        VALUES (?, ?, ?, 'agent', ?, ?, ?, ?, ?, NULL, ?, ?)
@@ -107,7 +117,7 @@ export function createLedgerMessages(
       session.workerId,
       fields.kind,
       fields.text,
-      fields.meta === null ? null : JSON.stringify(fields.meta),
+      meta === null ? null : JSON.stringify(meta),
       fields.kind === "tool" ? 1 : 0,
       fields.dedupeKey,
       t,

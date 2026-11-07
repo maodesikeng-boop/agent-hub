@@ -19,6 +19,7 @@ import {
 import { createCodexDriver, type CodexDriver, type CodexDriverOptions } from "./codex-driver.ts";
 import { buildSandboxPolicy, decideFileChangeApproval, extractFileChangePaths } from "./codex-protocol.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
+import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
 
 class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
@@ -1768,5 +1769,39 @@ describe("codex-protocol 可写范围纯函数", () => {
     expect(buildSandboxPolicy(session, false, scope, true)).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
     expect(buildSandboxPolicy(session, true, scope, true)).toEqual({ type: "readOnly", networkAccess: true });
     expect(buildSandboxPolicy(session, false, scope, false)).toEqual({ type: "workspaceWrite", networkAccess: true, writableRoots: [session.cwd, "/x"] });
+  });
+});
+
+describe("CodexDriver 换代后的开场说明（session-preamble.ts）", () => {
+  /** 交给 codex 的每一条（turn/start、turn/steer）的文字。 */
+  const inputs = (t: CodexTestHarness) =>
+    t
+      .rpcIn()
+      .filter((r) => r.method === "turn/start" || r.method === "turn/steer")
+      .map((r) => (r.params as { input: Array<{ text: string }> }).input[0]!.text);
+
+  it("第一条写进去的前面带一次，之后不带；带着它的那一行处理中带 preamble 标记", async () => {
+    const ledger = fakePreambleLedger();
+    const t = makeCodexHarness({ driver: { sessionPreamble: ledger.sessionPreamble } });
+    ledger.watch(t.driver);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "接着说"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, { messageIds: [2], source: "system", text: "汇报" });
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(inputs(t)).toEqual([`${PREAMBLE}\n\n接着说`, "汇报"]);
+    expect(t.of("message.processing").map((e) => e.preamble ?? false)).toEqual([true, false]);
+  });
+
+  it("命令那一行不带，留给下一条", async () => {
+    const ledger = fakePreambleLedger();
+    const t = makeCodexHarness({ driver: { sessionPreamble: ledger.sessionPreamble } });
+    ledger.watch(t.driver);
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "/compact"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(inputs(t).at(-1)).toBe(`${PREAMBLE}\n\n二`);
   });
 });

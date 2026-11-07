@@ -22,20 +22,20 @@ export async function runRenewSession(outcomes: Outcome[], only: (name: string) 
     const res = await fetch(smoke.client.base + API_PATHS.renewSession(pmId), { method: "POST", headers: smoke.client.headers() });
     expect(res.status === 202, `POST renew-session 回 ${res.status}`);
     const { messageId } = (await res.json()) as RenewSessionResponse;
+    // 换代：新会话不另开一轮，开场说明 + 交接拼在下一条（下面的提问）前面
     const next = await waitUntil(
-      "新一代会话的第一条回完",
+      "换成新一代会话",
       async () => {
         const session = await smoke.currentSession(conversationId);
-        if (session.generation < 2) return undefined;
-        const state = await smoke.client.state();
-        const renewed = state.conversations
-          .find((c) => c.conversation.id === conversationId)!
-          .messages.find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed");
-        return renewed?.status === "replied" ? session : undefined;
+        return session.generation >= 2 ? session : undefined;
       },
       TURN_MS * 2,
     );
-    const handover = (await smoke.repliesAfter(conversationId, messageId))[0] ?? "";
+    const state = await smoke.client.state();
+    const handover =
+      state.conversations.find((c) => c.conversation.id === conversationId)!.messages.find((m) => (m.meta as { event?: string } | null)?.event === "session.renewed")
+        ?.text ?? "";
+    expect(messageId > 0 && handover !== "", "换代那一行没有交接全文");
     const newVendor = smoke.sessionRow(next.sessionId).vendorSessionId;
     expect(newVendor !== oldVendor, "换代后还是同一个 claude 会话 ID");
 
