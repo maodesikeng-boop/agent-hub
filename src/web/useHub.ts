@@ -88,6 +88,7 @@ export function useHub() {
   useEffect(() => {
     if (!ready) return;
     return openChangeStream({
+      reportPresence: true,
       getSince: () => seqRef.current,
       onStatus: (status) => {
         streamStatus.current = status;

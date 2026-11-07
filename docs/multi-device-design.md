@@ -225,3 +225,11 @@ P0 接口约定（小，先合）
 | P7 | `docs/linux.md` 更新（删掉“不能用 serve”）、新增“联机设置”文档（Tailscale 设置、key 过期、配对步骤）、`HANDOVER.md`；真机验收 | 全部 | 低 |
 
 第一批可以同时派 4 个 Worker：P1、P3、P5、P6（P0 很小，可以由派 P1 的 Worker 先做完合掉，其他人基于它开工）。第二批 P2、P4。
+
+### P4 实现说明（2026-11-07）
+
+- 规则：`shared/reminders.ts`（等你、等你确定、停稳 3 秒的 `ReminderTracker`、tag、推送标题）。网页的 `selectors.ts` / `notify.ts` 从这里取；网页的 hook 还是自己的定时器（P3 正在改它），P3 合了以后可以换成 `ReminderTracker`。
+- 守护进程：`daemon/push/`。VAPID 密钥 `state/push-vapid.json`、订阅 `state/push-subscriptions.json`（都是 0600，不进仓库）。订阅没进 sqlite：量很小，也免得和 P2 / P6 抢迁移编号。
+- 前台：网页在入口那条 WebSocket 上每 30 秒（和切前后台时）报 `presence`；任何一个网页在前台（75 秒内报过 visible）就不推。订阅了推送的浏览器退到后台时网页自己不弹，由推送提醒。
+- 跨设备（等 P2）：`PushService.watch(device)` 给每台已配对设备建一个 watcher，P2 用设备令牌开 `/api/state` + `/api/ws?since=`，按 `reset` / `apply` 喂进去；标题带设备名，网址带 `#/d/<设备>/`。
+- 图标：`scripts/render-icons.ts` 生成 `src/web/public/icons/`；`/sw.js` 由 vite 单独打包（`tsconfig.sw.json` 单独做类型检查）。

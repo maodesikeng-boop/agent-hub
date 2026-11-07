@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import { ENV_DEV_DAEMON_PORT } from "./src/shared/limits.ts";
 import { PRODUCT_NAME } from "./src/shared/names.ts";
+import { webManifest } from "./src/web/pwa-manifest.ts";
 
 // 只管 src/web：守护进程只发打包好的 dist/ 静态文件。
 // 开发时（pnpm dev）：先起守护进程，把它的端口设到 AGENT_HUB_DAEMON_PORT，再跑 vite；
@@ -36,12 +37,36 @@ const productName: Plugin = {
   transformIndexHtml: (html) => html.replaceAll("%PRODUCT_NAME%", PRODUCT_NAME),
 };
 
+/**
+ * 加到主屏幕、推送（联机 P4）：/manifest.webmanifest 由 pwa-manifest.ts 生成（名字跟着 names.ts）；Service Worker（sw.ts）
+ * 单独打包成根目录的 /sw.js（范围要是 /，文件名不能带哈希）。开发模式只出 manifest，不注册 Service Worker（pwa.ts）。
+ */
+const MANIFEST_FILE = "manifest.webmanifest";
+const pwa: Plugin = {
+  name: "pwa",
+  configureServer(server) {
+    server.middlewares.use(`/${MANIFEST_FILE}`, (_req, res) => {
+      res.setHeader("content-type", "application/manifest+json");
+      res.end(JSON.stringify(webManifest()));
+    });
+  },
+  generateBundle() {
+    this.emitFile({ type: "asset", fileName: MANIFEST_FILE, source: `${JSON.stringify(webManifest(), null, 2)}\n` });
+  },
+};
+
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), tailwindcss(), productName],
+  plugins: [react(), tailwindcss(), productName, pwa],
+  // Service Worker（sw.ts）不引 names.ts（会被拆成共享的 chunk，普通 Service Worker 不能 import），产品名从这里填
+  define: { __PRODUCT_NAME__: JSON.stringify(PRODUCT_NAME) },
   build: {
     outDir: "../../dist/web",
     emptyOutDir: true,
+    rolldownOptions: {
+      input: { index: "src/web/index.html", sw: "src/web/sw.ts" },
+      output: { entryFileNames: (chunk) => (chunk.name === "sw" ? "sw.js" : "assets/[name]-[hash].js") },
+    },
   },
   server: {
     proxy: target
