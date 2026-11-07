@@ -910,10 +910,10 @@ describe("POST /api/messages/:id/retry 重试失败的消息", () => {
 });
 
 describe("POST /api/pms/:id/renew-session 开新会话", () => {
-  it("调 ledger.renewSession，202 返回交接请求的消息编号", async () => {
+  it("调 ledger.renewSession，202 返回这次交接的编号", async () => {
     const res = await call("POST", "/api/pms/3/renew-session");
     expect(res.statusCode).toBe(202);
-    expect(res.json()).toEqual({ messageId: 50 });
+    expect(res.json()).toEqual({ handoverId: 50 });
     expect(ledger.renewed).toEqual([3]);
   });
 

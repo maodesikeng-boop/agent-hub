@@ -1702,14 +1702,22 @@ describe("项目经理开新会话（ledger/handover.ts）时 Worker 的汇报",
     ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds, durationMs: 10, at: now });
   }
 
-  it("换代前交给旧会话；写交接时压着，换代后改发给新会话；之后的直接给新会话。Worker 照常干活", () => {
+  it("换代前交给旧会话；交接写好、小林还在忙这一轮时压着，换代后改发给新会话；之后的直接给新会话。Worker 照常干活", () => {
     const worker = start({ noWorktree: true }).data.worker;
     const task = taskMessage(worker);
     runTurn(worker, [task.id], report("做完了", "第一轮"));
     const before = workerLines().at(-1)!;
     expect(before.sessionId).toBe(lin.sessionId);
+    pmTurn(lin.sessionId, [before.id], "收到");
 
-    const request = ledger.renewSession(lin.pmId).messageId;
+    // 后台写交接：跑腿的领走、复制好；小林这时在忙一轮，交接写好了先等着
+    ledger.renewSession(lin.pmId);
+    const job = ledger.claimHandover()!;
+    ledger.handoverForked(job.handoverId, { kind: "native", ref: { forker: "fake", handle: { forkId: "f" } } });
+    const busy = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "busy", text: "在吗" }).messageId;
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [busy], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [busy], at: now });
+    ledger.handoverWritten(job.handoverId, { text: "交接：Worker 在改 X", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 } });
     hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "再改改" });
     const again = messagesIn(worker.workerConversationId).at(-1)!;
     runTurn(worker, [again.id], report("做完了", "第二轮"));
@@ -1717,7 +1725,7 @@ describe("项目经理开新会话（ledger/handover.ts）时 Worker 的汇报",
     expect(during).toMatchObject({ sessionId: lin.sessionId, status: "queued" });
     expect(ledger.waitsForHandover(during.id)).toBe(true);
 
-    pmTurn(lin.sessionId, [request], "交接：Worker 在改 X");
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [busy], durationMs: 10, at: now });
     const g2 = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? AND generation = 2", lin.conversationId)!.id;
     expect(ledger.getMessage(during.id)).toMatchObject({ sessionId: g2, status: "queued" });
     expect(listActions(db).find((a) => a.type === "session.send" && a.params.messageId === during.id)!.params).toEqual({ sessionId: g2, messageId: during.id, source: "system" });

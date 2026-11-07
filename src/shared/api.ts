@@ -31,7 +31,7 @@ export const API_PATHS = {
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   /** POST，没有请求体 → EditPersonaResponse。 */
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
-  /** POST，没有请求体 → 202 RenewSessionResponse：开新会话（先让项目经理写交接，回完换代，见 ledger/handover.ts）。 */
+  /** POST，没有请求体 → 202 RenewSessionResponse：开新会话（后台写交接，写好后换代，见 ledger/handover.ts）。 */
   renewSession: (pmId: PmId) => `/api/pms/${pmId}/renew-session`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
@@ -226,9 +226,9 @@ export interface FilesResponse {
   truncated: boolean;
 }
 
-/** POST /api/pms/:id/renew-session → 202：交接请求那条系统消息的编号（连点返回同一条）。之后照常从 WebSocket 推。 */
+/** POST /api/pms/:id/renew-session → 202：这次交接的编号（handovers 那一行，连点返回同一个）。换代后照常从 WebSocket 推分隔线。 */
 export interface RenewSessionResponse {
-  messageId: MessageId;
+  handoverId: number;
 }
 
 /** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */

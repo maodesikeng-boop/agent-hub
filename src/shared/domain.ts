@@ -371,7 +371,7 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
       case "session.renewed":
         return meta.sessionId;
       case "handover.failed":
-        return `${meta.messageId}.${meta.attempt}`;
+        return meta.handoverId !== undefined ? `h${meta.handoverId}` : `${meta.messageId}.${meta.attempt}`;
       case "schedule.created":
       case "schedule.removed":
         return meta.scheduleId;
@@ -419,15 +419,16 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * - schedule.failed：这一轮失败或会话起不来，“定时任务没跑成：名字：原因”，只给人看；messageId 是失败的那条 schedule.run 消息。
  * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
  *
- * 开新会话（资料页的按钮，或对话太长时自动换，见 ledger/handover.ts）。用户看来是同一个对话，聊天里只多一条很淡的分隔线：
- * - handover.requested：发给旧会话（sessionId，status 从 queued 起照常走，source system），text 是发给 agent 的全文，
+ * 开新会话（资料页的按钮，或对话太长时自动换，见 ledger/handover.ts、docs/background-handover-design.md）。用户看来是同一个对话，
+ * 聊天里只多一条很淡的分隔线。平常是复制一份项目经理的会话在后台写交接（不发消息）；厂商复制不了时才退回本会话写交接（H）：
+ * - handover.requested：本会话写交接时发给旧会话（sessionId，status 从 queued 起照常走，source system），text 是发给 agent 的全文，
  *   让项目经理把交接写成这一轮的回复。网页不显示它，这一轮 agent 的文字、工具调用（meta.handover，见 isHandoverTraffic）也不显示；
  *   auto：系统因为对话太长自动换的（不是用户点的）；
- * - session.renewed：换代那一刻记的一行（sessionId 是新一代，status null，不单独发给 agent），text 是交接全文。
- *   网页显示成分隔线，点开看交接。新会话不另开一轮：开场说明 + 交接 + 最近原话由驱动层拼在下一条真正写给它的消息前面
- *   （DriverOptions.sessionPreamble）；turnStartId 是交接那一轮开始时库里最大的消息编号（之后来的消息排在分隔线下面）；
- * - handover.failed：只给人看。用户点的开新会话那一轮没写成（没换代）。messageId 是那条 H，attempt 是它第几次没成。
- *   自动换的没写成不提示，下次空闲再试。
+ * - session.renewed：换代那一刻记的一行（sessionId 是新一代，status null，不单独发给 agent），text 是交接全文，handoverId 是 handovers 那一行。
+ *   网页显示成分隔线，点开看交接。新会话不另开一轮：换代时定稿的开场说明（交接 + 原话）由驱动层拼在下一条真正写给它的消息前面
+ *   （DriverOptions.sessionPreamble）；turnStartId 只有本会话写交接才有：交接那一轮开始时库里最大的消息编号（之后来的消息排在分隔线下面）；
+ * - handover.failed：只给人看。用户点的开新会话没写成（没换代）。handoverId 是那一行（老数据是 messageId：那条 H，attempt 是它第几次没成）。
+ *   自动换的没写成不提示，按退避再试。
  * - context.compacted：agent 压缩了上下文（用户发了 /compact，或者自动压缩；驱动层的 context.compacted），“已压缩上下文”，
  *   只给人看。发在这个会话所在的对话里（项目经理、Worker 的都有）；uuid 是 claude 那一行事件的，重放不会记两条。
  * H、R 的 meta 里账本还会记几个内部字段（requestedAt、settled、seen 等，见 handover.ts），网页不用。
@@ -438,8 +439,8 @@ export type SystemMessageMeta =
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
   | { event: "handover.requested"; sessionId: SessionId; auto?: boolean }
-  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId; turnStartId?: MessageId; auto?: boolean }
-  | { event: "handover.failed"; messageId: MessageId; attempt: number }
+  | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId; turnStartId?: MessageId; auto?: boolean; handoverId?: number }
+  | { event: "handover.failed"; messageId?: MessageId; handoverId?: number; attempt: number }
   | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }

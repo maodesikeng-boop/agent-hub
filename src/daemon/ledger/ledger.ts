@@ -6,7 +6,7 @@
 // - persona.ts：项目经理、性格设定和性格设定文件；
 // - projects.ts：项目（每个项目经理最多一个，挂在它唯一的对话上）、文件夹；
 // - hub-commands.ts：hub 命令；
-// - handover.ts：开新会话（写交接、换代）；
+// - handover.ts：换新会话（后台写交接的状态机、换代；跑腿的在 daemon/handover/runner.ts）；
 // - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
 // - steps.ts、worker-view.ts：会话一步一步干了什么（session_steps）、hub worker show / log 怎么讲给项目经理；
 // - schedules.ts：定时任务（M6）：hub schedule 命令、到点往项目经理的对话发消息、这一轮没跑成的记录；
@@ -82,7 +82,8 @@ export interface LedgerOptions {
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；冒烟测试改小。 */
   autoRenew?: HandoverOptions["autoRenew"];
   /** 写守护进程日志（目前只有自动换新会话试满了次数时写一条）；不给不写。 */
-  log?: (line: string) => void;  /** 有交接可以领了（后台写交接）：守护进程接到 daemon/handover/runner.ts 的 wake；不给什么都不做。 */
+  log?: (line: string) => void;
+  /** 有交接可以领了（后台写交接）：守护进程接到 daemon/handover/runner.ts 的 wake；不给什么都不做。 */
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
 }
 
@@ -110,7 +111,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
   // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）
-  const messages = createLedgerMessages(ctx, sessions, sentFiles, { assertUserCanPost: (id) => assertWorkerOpenForUser(db, id) });
+  // 用户发了消息、项目经理正在本会话写交接：停掉那一轮（handover.ts；handover 在下面建，这里只在调用时用）
+  const messages = createLedgerMessages(ctx, sessions, sentFiles, {
+    assertUserCanPost: (id) => assertWorkerOpenForUser(db, id),
+    afterUserPost: (p, id) => handover.userPostedIn(p, id),
+  });
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files);
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
@@ -191,10 +196,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       });
     },
     refreshSessionState: sessions.refreshSessionState,
-    // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑）
+    // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），
+    // 上次还在复制、写的交接记失败重新排队（handover.ts）
     recoverAfterRestart() {
       const recovered = sessions.recoverAfterRestart();
       workers.recoverWorktrees();
+      handover.recoverAfterRestart();
       return recovered;
     },
 
@@ -231,6 +238,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     waitsForHandover: handover.waitsForHandover,
     runAutoRenew: handover.runAutoRenew,
     sessionPreamble: handover.sessionPreamble,
+    claimHandover: handover.claimHandover,
+    handoverForked: handover.handoverForked,
+    handoverWritten: handover.handoverWritten,
+    handoverFailed: handover.handoverFailed,
+    handoverCleaned: handover.handoverCleaned,
+    uncleanedHandovers: handover.uncleanedHandovers,
 
     hubCall: hub.hubCall,
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
