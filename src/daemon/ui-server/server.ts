@@ -36,6 +36,8 @@ import {
   sentFileMime,
   sentFilesOf,
   serverInfoFor,
+  isLoopbackAddress,
+  serverInfoForClient,
   TAILSCALE_USER_LOGIN_HEADER,
   utf8Bytes,
   type AgentVendor,
@@ -383,6 +385,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     tailnetRequests.set(req.raw, self.dnsName);
   });
 
+  /**
+   * 判断“浏览器在不在这台机器上”用的地址（serverInfoForClient）。经 serve 来的也是从 127.0.0.1（macOS）或 socket 进来，
+   * 但浏览器在别的设备上：当成没有地址（不是本机）。
+   */
+  const clientAddress = (req: FastifyRequest) => (tailnetRequests.has(req.raw) ? undefined : req.ip);
+
   // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
   // 会改状态的请求和 WebSocket 握手必须带同源的 Origin（http://<host>:<实际端口>），没带也拒绝；GET 不查。
   app.addHook("onRequest", async (req, reply) => {
@@ -488,7 +496,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.redirect("/", 302);
     });
 
-    routes.get(API_PATHS.state, async (): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfo }));
+    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, clientAddress(req)) }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       const refresh = (req.query as { refresh?: unknown }).refresh === "1";
@@ -541,6 +549,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return fail(reply, 500, "没能打开这个文件");
       }
     };
+    // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
+    const requireLocal = (req: FastifyRequest): void => {
+      if (!isLoopbackAddress(clientAddress(req))) throw new FileActionsUnavailable();
+    };
     const parseAction = (raw: unknown): FileAction | null => ((FILE_ACTIONS as readonly unknown[]).includes(raw) ? (raw as FileAction) : null);
 
     routes.post("/api/messages/:id/files/:index/:action", async (req, reply) => {
@@ -551,8 +563,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");
       const copy = resolveUpload(sentFilesDir, file.id);
       const sessionId = message.sessionId;
-      return doFileAction(reply, () =>
-        performFileAction(
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(
           act,
           {
             original: file.path,
@@ -561,8 +574,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             name: file.name,
           },
           runOpen,
-        ),
-      );
+        );
+      });
     });
 
     routes.post("/api/attachments/:id/:action", async (req, reply) => {
@@ -570,9 +583,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const act = parseAction(action);
       const attachment = resolveUpload(uploadsDir, String(id ?? ""));
       if (act === null || attachment === null) return fail(reply, 404, "not_found");
-      return doFileAction(reply, () =>
-        performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen),
-      );
+      return doFileAction(reply, async () => {
+        requireLocal(req);
+        return performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen);
+      });
     });
 
     routes.post("/api/conversations/:id/stop", async (req, reply) => {

@@ -160,6 +160,8 @@ export type FakeLogEntry =
   | { kind: "stdin"; pid: number; line: string }
   | { kind: "signal"; pid: number; signal: string }
   | { kind: "stdin_closed"; pid: number }
+  /** 信号处理器装好了（argv 记得早，之后到这里还有一段启动代码；要发信号的测试等这一条）。 */
+  | { kind: "ready"; pid: number }
   | { kind: "exit"; pid: number; code: number }
   | { kind: "orphan"; pid: number; orphanPid: number }
   | { kind: "child"; pid: number; childPid: number }
@@ -703,6 +705,8 @@ process.on("SIGINT", () => {
   }
   exit(0);
 });
+
+log({ kind: "ready", pid: process.pid });
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", onLine);

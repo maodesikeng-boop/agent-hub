@@ -1,13 +1,13 @@
 // 联机 P1：经 tailscale serve 进来的请求（docs/multi-device-design.md 第 3.1、3.3 节）。
 // Host 白名单加本机的 tailnet 名字；Origin 是 https://<名字>；cookie 加 Secure；serve 带来的身份头必须是设备主人。
 // 本机 127.0.0.1 直连照旧只看 cookie。身份头不能代替 cookie。
-import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { API_PATHS, UI_COOKIE_NAME } from "../../shared/index.ts";
+import { API_PATHS, UI_COOKIE_NAME, serverInfoFor } from "../../shared/index.ts";
 import type { TailnetSelf } from "../platform/index.ts";
 import { FakeLedger } from "./fake-ledger.ts";
 import { createUiServer, startUiServer, type RunningUiServer } from "./server.ts";
@@ -123,6 +123,19 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
     expect(ledger.listenerCount).toBe(1);
     socket.terminate();
     await expect(app.injectWS(API_PATHS.ws, { headers: { ...VIA_SERVE, "tailscale-user-login": "x@y.z" } as Record<string, string> })).rejects.toThrow(/403/);
+  });
+
+  it("经 serve 来的（serve 从 127.0.0.1 转发）不算浏览器在本机：不给“在 Finder 中显示”，接口 501", async () => {
+    const id = "0123456789abcdef";
+    mkdirSync(join(root, "uploads", id), { recursive: true });
+    writeFileSync(join(root, "uploads", id, "a.pdf"), "x");
+    await app.close();
+    app = createUiServer({ ...options("tcp"), port: PORT, serverInfo: serverInfoFor("darwin"), runOpen: async () => {} });
+    await app.ready();
+    expect((await call("GET", API_PATHS.state, VIA_SERVE)).json().server.fileActions).toBe(false);
+    expect((await call("GET", API_PATHS.state, LOCAL)).json().server.fileActions).toBe(true);
+    expect((await call("POST", API_PATHS.attachmentAction(id, "reveal"), VIA_SERVE)).statusCode).toBe(501);
+    expect((await call("POST", API_PATHS.attachmentAction(id, "reveal"), LOCAL)).statusCode).toBe(200);
   });
 
   it("经 serve（https）登录的 cookie 带 Secure；本机 http 的不带", async () => {

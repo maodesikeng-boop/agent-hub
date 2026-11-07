@@ -35,7 +35,7 @@ export const RIGHT_RAIL_ID = "right-rail";
  * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“已收工 N ›” 14px，第二行 13px（行高 18px）。图标 16px 线条（stroke 1.5）。
  * 行：左右 8px 内边距、负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 32px。
  */
-const ROW = "flex w-[calc(100%+1rem)] cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW = "flex w-[calc(100%+1rem)] pointer-coarse:min-h-11 cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
 /** 空闲 Worker 的小圆点颜色：跟着最近一次汇报（worker-status.ts 的 tone），和汇报气泡头像上的色点一样；没汇报是灰。 */
@@ -79,12 +79,12 @@ function useCollapsedGroups() {
  */
 function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = false, trailing }: { id: string; bodyId: string; children: React.ReactNode; count: number; collapsed: boolean; onToggle: () => void; dot?: boolean; trailing?: React.ReactNode }) {
   const title = (
-    <h2 id={id} className={cn("h-8 text-[13px] font-normal text-foreground", trailing && "min-w-0 flex-1")}>
+    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-[13px] font-normal text-foreground", trailing && "min-w-0 flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
         aria-controls={bodyId}
-        className="-mx-2 flex h-8 w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-xl px-2 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="-mx-2 flex h-8 pointer-coarse:h-11 w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-xl px-2 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={onToggle}
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
@@ -123,7 +123,7 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
 /** “Show more / Show less”，“已收工 N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 items-center text-[14px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-[14px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );

@@ -82,7 +82,7 @@ export function BarButton({ className, ...props }: ComponentProps<"button">) {
       type="button"
       {...props}
       className={cn(
-        "inline-flex size-7 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+        "touch-target inline-flex size-7 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
         className,
       )}
     />
