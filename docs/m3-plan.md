@@ -175,6 +175,7 @@
 ### 2.7 额度
 
 - 会话顶栏显示“5 小时额度已用 N% · 7 天 N%”。数据是现成的，每个会话每一轮都有 `rate_limit_event`；每个窗口取最新的值（重置时间晚的，同一窗口里用量高的），不按会话的 lastEventAt 选。过了 resetsAt 的窗口显示 0%（没有新事件之前不知道新窗口的重置时间），页面到点自己重新渲染（`useRerenderAt`）。
+  - 2026-11-07 起各家分开取：每家厂商只看自己的会话，窗口定义（长度、名字）统一在 `src/shared/vendors.ts` 的 `QUOTA_WINDOWS`，各家用 `VendorSpec.quota` 选要显示的窗口。codex 的 `account/rateLimits/updated` 只带窗口长度（`windowDurationMins`）不带名字，按长度归类，不按 primary / secondary 的位置（有的账号 primary 是 30 天窗口）。agy 的事件流里没有额度，只有另起进程 `agy -p "/usage"` 才查得到，没有接。
 - 顶栏同时显示“N 个 Worker 在跑”。
 - 不做按 Worker 统计花了多少：`total_cost_usd` 是本地估算，订阅账号不按钱算，意义不大。
 
