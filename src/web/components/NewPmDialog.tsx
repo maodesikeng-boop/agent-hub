@@ -11,6 +11,7 @@ import {
 } from "../../shared/index.ts";
 import { postCreatePm, postPickFolder } from "../client.ts";
 import { errorText, nameError } from "../format.ts";
+import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
@@ -30,6 +31,8 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
+  // 服务端不是 macOS（弹不出原生对话框）：不显示“选择…”，只留手填路径的输入框
+  const canPick = useServerInfo().folderPicker;
 
   // 表单校验（docs/ui-standard.md 第 9 条）：空着“创建”是灰的不报错；填得不对在那一行下面写原因
   const cleanName = normalizeName(name);
@@ -99,10 +102,12 @@ function NewPmForm({ onCreated }: { onCreated: (conversationId: ConversationId) 
                   className="w-[240px] min-w-0"
                   onChange={(e) => setFolder(e.target.value)}
                 />
-                <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
-                  {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
-                  选择…
-                </Button>
+                {canPick && (
+                  <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
+                    {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    选择…
+                  </Button>
+                )}
               </>
             )}
           </SettingsRow>

@@ -25,7 +25,7 @@ import {
   type PostUserMessageResult,
   type ScheduleRecord,
   type SessionId,
-  type StateSnapshot,
+  type LedgerSnapshot,
   type Unsubscribe,
 } from "../../shared/index.ts";
 
@@ -122,7 +122,7 @@ export class FakeLedger {
   readonly renewed: PmId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
-  snapshotValue: StateSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
+  snapshotValue: LedgerSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
   /** getMessage 能取到的消息（测试自己放）。 */
   readonly storedMessages = new Map<MessageId, Message>();
   /** sentFileAllows 的判断，默认都允许。 */
@@ -249,7 +249,7 @@ export class FakeLedger {
     return { handoverId: 50 };
   }
 
-  snapshot(): StateSnapshot {
+  snapshot(): LedgerSnapshot {
     this.check();
     return { ...this.snapshotValue, seq: this.seq };
   }

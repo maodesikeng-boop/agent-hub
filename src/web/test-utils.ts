@@ -1,5 +1,6 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
+import { serverInfoFor } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   Attachment,
@@ -249,6 +250,7 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
     sessions: [],
     health: [],
     schedules: [],
+    server: serverInfoFor("darwin"),
     ...over,
   };
 }

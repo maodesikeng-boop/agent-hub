@@ -2,8 +2,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { API_PATHS, MAX_PREVIEW_CSV_ROWS, MAX_PREVIEW_TEXT_BYTES, sentFileMime, type FileActionResponse } from "../shared/index.ts";
+import { API_PATHS, MAX_PREVIEW_CSV_ROWS, MAX_PREVIEW_TEXT_BYTES, sentFileMime, serverInfoFor, type FileActionResponse } from "../shared/index.ts";
 import { FilePreview, type PreviewFile } from "./components/FilePreview.tsx";
+import { ServerInfoProvider } from "./server-info.tsx";
 
 const highlight = vi.hoisted(() => vi.fn());
 vi.mock("./highlight.ts", () => ({ highlightHtml: highlight }));
@@ -233,6 +234,17 @@ describe("三个按钮", () => {
 
   it("没有 target（找不到对应的消息）：只有下载", () => {
     show(file("a.pdf", { target: null }));
+    expect(screen.getByRole("link", { name: /下载/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Finder/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /默认程序/ })).toBeNull();
+  });
+
+  it("服务端不是 macOS（Linux 服务器）：没有“在 Finder 中显示”“用默认程序打开”，只有下载", () => {
+    render(
+      <ServerInfoProvider value={serverInfoFor("linux")}>
+        <FilePreview file={file("a.pdf")} open onOpenChange={() => {}} />
+      </ServerInfoProvider>,
+    );
     expect(screen.getByRole("link", { name: /下载/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Finder/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /默认程序/ })).toBeNull();

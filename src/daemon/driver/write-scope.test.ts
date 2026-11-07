@@ -46,6 +46,8 @@ describe("spawnInWriteScope", () => {
       expect(lines, vendor).toHaveLength(1);
       expect(lines[0]).toContain("session 3");
       expect(lines[0]).toContain("警告");
+      expect(lines[0]).toContain("linux");
+      expect(lines[0]).toContain("退回到规则兜底");
       expect(lines[0]).toContain(WRITE_SCOPE_ENFORCERS[vendor].fallback);
     }
   });
