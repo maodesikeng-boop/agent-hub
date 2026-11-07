@@ -591,6 +591,10 @@ describe("提示词：Worker（M3）", () => {
     expect(WORKER_RULES).toContain("不要用厂商自带的子代理");
     for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(WORKER_RULES).toContain(tool);
     expect(WORKER_RULES).toContain("建议项目经理多派几个 Worker");
+    expect(WORKER_RULES).toContain("等别人时直接结束这一轮");
+    expect(WORKER_RULES).toContain("不要自己设定时器");
+    expect(WORKER_RULES).toContain("不要自己设定时器、定时唤醒，也不要 sleep 轮询");
+    expect(WORKER_RULES).toContain("项目经理会发消息叫你");
   });
 
   it("在主文件夹里：写明主文件夹和附加文件夹，没有分支", () => {
