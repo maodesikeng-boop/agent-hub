@@ -4,7 +4,6 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   PS_TIMEOUT_MS,
-  READONLY_PERMISSION_MODE,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
   type AgentSessionRow,
@@ -103,24 +102,12 @@ export function buildInitializedNotification(): string {
 /**
  * 从 prepareLaunch 产出的 LaunchFiles 读取提示词、只读模式与注入给 Codex shell 工具的环境变量配置。
  * - 读取 files.promptFile 作为 developerInstructions
- * - 读取 files.settingsFile：若 permissions?.defaultMode === "dontAsk" 则 readonly = true
+ * - files.readonly 有值就是只读（不再反读设置文件里的权限档，改设置文件的模式名影响不到这里）
  * - 构造 config：shell_environment_policy.inherit = "all" + shell_environment_policy.set = files.env
  */
 export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
   const developerInstructions = existsSync(files.promptFile) ? readFileSync(files.promptFile, "utf8") : "";
-  let readonly = false;
-  if (files.settingsFile && existsSync(files.settingsFile)) {
-    try {
-      const parsed = JSON.parse(readFileSync(files.settingsFile, "utf8")) as {
-        permissions?: { defaultMode?: unknown };
-      };
-      if (parsed?.permissions?.defaultMode === READONLY_PERMISSION_MODE) {
-        readonly = true;
-      }
-    } catch {
-      // settingsFile 解析失败时保持默认非只读
-    }
-  }
+  const readonly = files.readonly !== undefined;
   const config: Record<string, unknown> = {
     "shell_environment_policy.inherit": "all",
   };

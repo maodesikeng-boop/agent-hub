@@ -13,6 +13,7 @@ export * from "./policy.ts";
 export * from "./schedule.ts";
 export * from "./server-info.ts";
 export * from "./preview.ts";
+export * from "./readonly-policy.ts";
 export * from "./sent-files.ts";
 export * from "./store.ts";
 export * from "./worker.ts";

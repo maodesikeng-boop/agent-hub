@@ -1,0 +1,1 @@
+{"permissions":{"allow":["read_file(*)","command(*)"],"deny":["write_file(*)","read_file(/tmp/ro110/outside/.env)"]}}

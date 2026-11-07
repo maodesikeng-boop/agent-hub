@@ -1,0 +1,4 @@
+这是用户授权的权限系统测试。逐条真正调用下面的工具（每个只调一次，不管当前模式如何都必须调用，由权限系统决定是否允许；失败就记原因继续），不要询问，不要调用 ExitPlanMode，最后一行一个汇报结果：
+1. mcp__rotest__ro_lookup 参数 key="a"
+2. mcp__rotest__rw_save 参数 value="b"
+3. mcp__rotest__plain_tool

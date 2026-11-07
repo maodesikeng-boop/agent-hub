@@ -237,7 +237,7 @@ export interface WorkerRecord {
   model: string | null;
   /** --effort 给的；null = 用项目经理自己的思考程度。 */
   effort: string | null;
-  /** --readonly：Worker 只看不改（policy.ts 的 READONLY_PERMISSION_MODE）。打回、重启都沿用。 */
+  /** --readonly：Worker 只看不改（统一定义在 readonly-policy.ts，经 LaunchFiles.readonly 交给各家驱动）。打回、重启都沿用。 */
   readonly: boolean;
   workspace: WorkerWorkspace;
   /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；main：null。 */
