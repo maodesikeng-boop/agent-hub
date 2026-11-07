@@ -121,7 +121,7 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 - 各家：
   - claude：用了 `--no-session-persistence` 就没有文件，`remove` 只是保险：算出 `projects/<目录>/<编号>.jsonl`，在就删。
   - codex：`thread/delete`（复制那份）。#108 实测“先删复制那份才能删原会话”——我们从来不删原会话（新会话开场说明里要指原会话的原始记录），只记下这个约束，以后要删原会话先删它的复制。
-    实现时查 `thread/fork` 有没有“不持久化”的参数（像 claude 的 `--no-session-persistence`），有就用，删除只当保险。
+    `thread/fork` 有 `ephemeral: true`（不落盘、不进 codex 历史，#121 实测上文照带）：用它。ephemeral 的 thread 只活在那个 app-server 进程里，所以 fork 起的进程按 forkId 留着给 write / remove 用，remove 先 `thread/delete`（对 ephemeral 报 not persisted，忽略）再杀进程；重启后进程没了就是已经清掉了。
   - agy：删 `conversations/<新编号>.db*`、`brain/annotations/implicit/presence` 下这个编号的东西，`conversation_summaries.db` 里这个编号的行（`conversation_summaries`、`conversations_fts`）。照 #108 的 `cleanup.py`。
 
 ### 2.7 失败、超时、重试
