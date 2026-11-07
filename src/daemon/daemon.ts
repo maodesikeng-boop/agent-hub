@@ -73,7 +73,7 @@ import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
-import { loadOrCreateUiToken, loginUrl, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
+import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 import { defaultDeviceName, loadOrCreateDevice } from "./device.ts";
 import {
   createTailnetProbe,
@@ -383,6 +383,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const quota = createFetchedQuota({
       query: agyQuotaSpec && (() => queryFetchedQuota({ path: agyPath, spec: agyQuotaSpec, cwd: options.userHome })),
     });
+    // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
+    const rotateToken = () => {
+      const next = rotateUiToken(paths.uiTokenFile);
+      log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
+      return next;
+    };
     // 联机：设备身份；本机 tailnet 名字（后台问，不拖慢启动）；serve 转发目标（Linux 另听 run/ui.sock）
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const tailscaleCli = tailscaleCommand({ env });
@@ -398,6 +404,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       models,
       quota,
       composer,
+      db,
+      rotateToken,
       tailnet,
       serveTarget,
       ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),

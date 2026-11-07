@@ -274,11 +274,32 @@ export const SHUTDOWN_TOTAL_MS = 30_000;
 export const AGENT_API_CLOSE_MS = 3_000;
 
 /**
- * 界面登录后设的 cookie（HttpOnly、SameSite=Strict）。值就是界面用户令牌：
- * 令牌第一次启动时随机生成，存在数据目录的 state/ui-token（权限 UI_TOKEN_FILE_MODE），之后每次启动读同一个，
- * 所以守护进程重启后旧 cookie 仍然有效。删掉这个文件再启动就换新令牌，旧 cookie 全部失效。
+ * 界面登录后设的 cookie 名的前缀（HttpOnly、SameSite=Strict）。值是随机的会话令牌（每个浏览器一条，库里只存它的 sha256，
+ * 见 daemon/ui-server/sessions.ts），不是界面用户令牌。界面用户令牌（state/ui-token）只当“主钥匙”：用来登录、生成登录链接，
+ * 全部退出时换掉。守护进程重启后会话还在（存在库里）。
+ * cookie 按主机名存、不分端口：同一个浏览器里 127.0.0.1:4317（本机）和 127.0.0.1:4318（ssh -L 转来的东京）会互相顶掉，
+ * 所以名字带上网址里的端口（uiCookieName），各用各的。
  */
 export const UI_COOKIE_NAME = "agent_hub_ui";
+
+/** 这次请求的 cookie 名：Host 头里有端口就是 `agent_hub_ui_<端口>`，没有（默认端口，如 https 的 443）就是 UI_COOKIE_NAME。 */
+export function uiCookieName(hostHeader: string | undefined): string {
+  const port = /:(\d{1,5})$/.exec(hostHeader ?? "")?.[1];
+  return port === undefined ? UI_COOKIE_NAME : `${UI_COOKIE_NAME}_${port}`;
+}
+
+/** 登录 cookie 的有效期：一年（距最后一次活动）。过了这么久没用的会话删掉。 */
+export const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+/** 会话的“最后活动”最多隔这么久写一次库（每个请求都写会白白吵库）。 */
+export const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
+/** 最多同时留多少个浏览器登录；满了新登录会挤掉最久没用的。 */
+export const MAX_BROWSER_SESSIONS = 100;
+/** 记下的 User-Agent 最多多少个字符。 */
+export const MAX_USER_AGENT_CHARS = 300;
+/** 二维码登录链接几分钟有效，用一次就失效。 */
+export const LOGIN_LINK_TTL_MS = 5 * 60 * 1000;
+/** 同时有效的登录链接最多几个（每个都在内存里；多了新的会挤掉最早的）。 */
+export const MAX_PENDING_LOGIN_LINKS = 20;
 /** state/ui-token 的权限：只有自己能读写。启动时发现权限更宽要改回来。 */
 export const UI_TOKEN_FILE_MODE = 0o600;
 

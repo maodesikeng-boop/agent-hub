@@ -5,13 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { API_PATHS, UI_COOKIE_NAME, isLoopbackAddress, serverInfoFor, serverInfoForClient } from "../../shared/index.ts";
+import { API_PATHS, isLoopbackAddress, serverInfoFor, serverInfoForClient } from "../../shared/index.ts";
+import { openTestDb } from "../store/test-helpers.ts";
 import { FakeLedger } from "./fake-ledger.ts";
 import { createUiServer } from "./server.ts";
+import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const PORT = 4000;
-const HEADERS = { host: `127.0.0.1:${PORT}`, cookie: `${UI_COOKIE_NAME}=${TOKEN}`, origin: `http://127.0.0.1:${PORT}` };
+const db = openTestDb();
+const HEADERS = { host: `127.0.0.1:${PORT}`, cookie: testLogin(db, PORT).cookie(), origin: `http://127.0.0.1:${PORT}` };
 const ID = "0123456789abcdef";
 
 let root: string;
@@ -29,6 +32,7 @@ beforeAll(async () => {
     uploadsDir,
     sentFilesDir: join(root, "sent-files"),
     port: PORT,
+    db,
     serverInfo: serverInfoFor("linux"),
   });
   await app.ready();
@@ -36,6 +40,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  db.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -88,6 +93,7 @@ describe("浏览器和守护进程不在同一台机器（macOS 服务端，请�
       uploadsDir: join(root, "uploads"),
       sentFilesDir: join(root, "sent-files"),
       port: PORT,
+      db,
       serverInfo: mac,
       runOpen: async () => {
         throw new Error("不该被调用");

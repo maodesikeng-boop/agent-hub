@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import {
   API_PATHS,
+  uiCookieName,
   ENV_AGY,
   ENV_CLAUDE,
   ENV_CODEX,
@@ -220,9 +221,9 @@ export class Client {
     return new Client(daemon.port, setCookie.split(";", 1)[0]!);
   }
 
-  /** 同一个 cookie 换一个端口（守护进程重启后）。 */
+  /** 同一个会话换一个端口（守护进程重启后）：会话在库里，重启后还认；cookie 名带端口，所以名字跟着换。 */
   withPort(port: number): Client {
-    return new Client(port, this.cookie);
+    return new Client(port, `${uiCookieName(`127.0.0.1:${port}`)}=${this.cookie.slice(this.cookie.indexOf("=") + 1)}`);
   }
 
   headers(extra: Record<string, string> = {}): Record<string, string> {
