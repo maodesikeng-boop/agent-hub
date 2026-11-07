@@ -54,7 +54,9 @@ export interface ChartRenderer {
  * 比如：`mermaid: { load: () => import("./mermaid.ts"), zoomOnClick: true, sourceLanguage: "mermaid" }`。
  * 不认 `vega`（完整 Vega 能写信号、事件、数据请求，面太大），也不猜 `json` 代码块是不是图表。
  */
-export const CHART_RENDERERS: Record<string, ChartRenderer> = {};
+export const CHART_RENDERERS: Record<string, ChartRenderer> = {
+  mermaid: { load: () => import("./mermaid.ts"), zoomOnClick: true, sourceLanguage: "mermaid" },
+};
 
 export function isChartLanguage(language: string): boolean {
   return Object.hasOwn(CHART_RENDERERS, language.toLowerCase());
