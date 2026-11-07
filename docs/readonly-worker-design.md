@@ -270,6 +270,7 @@ bwrap --ro-bind / /                    # 整个文件系统只读
   1. `daemon/driver/agy-connectors.ts`：读 `~/.gemini/config/mcp_config.json`，向每个 stdio / HTTP 服务器问 `tools/list` 拿 `readOnlyHint`（agy 自己的缓存不带 annotations）；结果按配置内容缓存 10 分钟、每个服务器最多等 10 秒，问不到（起不来、超时、要认证）、或只在 agy 缓存目录里出现的服务器整个当不可用；
   2. 起进程前生成 deny 规则 `mcp(<服务器>/<工具>)`（不只读的工具，不可用的服务器 `mcp(<服务器>/*)`），补充的写进 allow；
   3. 兜底：驱动在工具开始调用时 `checkAgyConnectorCall`（`call_mcp_tool` 看 `ServerName`/`ToolName`，`mcp_<服务器>_<工具>` 按清单反查），不放行的马上 SIGINT、这一轮以 policy_violation 结束；清单里查不到的当没标记。注意这是事后的：规则没拦住的本地写由外层沙箱挡，远程的靠规则那一层——S4 要确认 `mcp(rotest/rw_save)` 对直接露出的 `mcp_rotest_rw_save` 形式确实生效（上一次跑的脚本里写了这条 deny 但 rw_save 照样被调用了，`call_mcp_tool` 形式的 deny 是实测有效的）。
+- **agy 登录在钥匙串里**（S4 第二次实测：只读 profile 禁读 `~/Library/Keychains` → agy 报 “Authentication required”、整轮空回复）：agy 的外层沙箱不禁读 `Library/Keychains`（`AGY_READABLE_SECRET_HOME_PATHS`），写照旧不放；代价是只读 agy 的命令行能读到（加密的）钥匙串文件，权限规则那层仍拒读。通用密钥清单（第 5 节）本身不变，别的厂商不受影响。
 - 删了只读的 SIGINT 分支（`checkWorkerToolViolation` 不再认只读；没有 OS 沙箱时的可写范围兜底分支留着）。
 - 驱动：result 里 `denied_actions` 非空、回复为空、成功结束 → 往同一个进程补发“上一步被拒了，换办法”，还算原来那条消息的这一轮，最多 `AGY_DENIED_CONTINUE_MAX`（3）次，用户发新消息重新数；只读和非只读都生效。
 - 没有 OS 沙箱：`hub worker start --vendor agy --readonly` 在账本里直接报错（`LedgerContext.osSandboxed`），驱动起进程时也报错（`READONLY_AGY_NEEDS_SANDBOX_MESSAGE`）。

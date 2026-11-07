@@ -31,6 +31,13 @@ export const AGY_RUNTIME_FILES_LEGACY: readonly string[] = ["conversation_summar
 /** 通用缓存目录，相对用户主目录（设计第 8 节第 3 条：放开，uv、npx 这类 MCP 服务器要写）。 */
 export const READONLY_CACHE_DIRS: readonly string[] = [".cache", "Library/Caches", ".npm"];
 
+/**
+ * 通用禁读清单里、agy 自己要读的路径，相对用户主目录：agy 的 Google 登录存在 macOS 钥匙串里（Go keyring，程序自己打开 ~/Library/Keychains 里的文件再问 securityd），
+ * 外层沙箱禁读它 agy 就报 “Authentication required” 整轮没回复（2026-11-07 S4 实测）。所以只对 agy 的外层沙箱放开读，写照旧不放（钥匙串的写由 securityd 做，不在本进程）。
+ * 代价：只读 agy 的命令行能读到钥匙串文件（内容是加密的，取明文要 securityd 授权，无头下过不了）；agy 的权限规则那层仍然拒读。
+ */
+export const AGY_READABLE_SECRET_HOME_PATHS: readonly string[] = ["Library/Keychains"];
+
 function trimSlash(p: string): string {
   return p.replace(/\/+$/, "");
 }
@@ -63,11 +70,12 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
   const home = trimSlash(real(input.homeDir));
   const cli = `${home}/.gemini/antigravity-cli`;
   const legacy = `${home}/.gemini/antigravity`;
+  const needed = new Set(AGY_READABLE_SECRET_HOME_PATHS.map((d) => `${home}/${d}`));
   return {
     tmpDir: real(input.tmpDir),
     writableDirs: [...AGY_RUNTIME_DIRS.map((d) => `${cli}/${d}`), ...READONLY_CACHE_DIRS.map((d) => `${home}/${d}`)],
     writableFileRegexes: [...AGY_RUNTIME_FILES.map((f) => fileRegex(`${cli}/${f}`)), ...AGY_RUNTIME_FILES_LEGACY.map((f) => fileRegex(`${legacy}/${f}`))],
-    secretPaths: input.policy.secretPaths.map(real),
+    secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(trimSlash(p))),
     secretGlobs: [...input.policy.secretGlobs],
   };
 }

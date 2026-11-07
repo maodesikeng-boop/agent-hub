@@ -128,6 +128,9 @@ describe("agyReadonlySandboxInput", () => {
     expect(input.writableDirs.some((d) => d.endsWith("/config") || d.endsWith("settings.json"))).toBe(false);
     expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/conversation_summaries\\.db[^/]*$");
     expect(input.secretPaths).toContain("/Users/u/.ssh");
+    // agy 的登录在钥匙串里：沙箱不能禁读它（否则 Authentication required），其余密钥照禁
+    expect(input.secretPaths).not.toContain("/Users/u/Library/Keychains");
+    expect(input.secretPaths).toContain("/Users/u/.aws");
     expect(input.secretGlobs).toContain("**/.env");
   });
 });
