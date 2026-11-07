@@ -1,43 +1,5 @@
-// 守护进程入口（pnpm start）：启动，打印登录链接；Ctrl+C 或 SIGTERM 按顺序关机，退出码 0（出错或超过总上限 SHUTDOWN_TOTAL_MS 是 1）。
-// 已有守护进程在跑时报错退出，退出码 1。启动和关闭顺序见 daemon.ts。
+// 守护进程入口（pnpm start）。启动、关闭、退出码见 entry.ts。
 import { homedir } from "node:os";
-import { LOG_PREFIX, PRODUCT_NAME, SHUTDOWN_TOTAL_MS } from "../shared/index.ts";
-import { startDaemon } from "./daemon.ts";
-import { stopWithinLimit } from "./shutdown.ts";
-import { DaemonAlreadyRunningError } from "./store/index.ts";
+import { runDaemonProcess } from "./entry.ts";
 
-async function main(): Promise<void> {
-  let daemon;
-  try {
-    daemon = await startDaemon({ userHome: homedir() });
-  } catch (error) {
-    if (error instanceof DaemonAlreadyRunningError) {
-      console.error(`${LOG_PREFIX} ${error.message}，不再启动第二个。`);
-    } else {
-      console.error(`${LOG_PREFIX} 启动失败：`, error);
-    }
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`${PRODUCT_NAME} 已启动，数据目录 ${daemon.paths.home}`);
-  console.log(`在浏览器里打开：${daemon.url}`);
-
-  let signals = 0;
-  const onSignal = (signal: NodeJS.Signals) => {
-    signals++;
-    if (signals > 1) {
-      console.error(`${LOG_PREFIX} 又收到 ${signal}，不等了，直接退出。`);
-      process.exit(1);
-    }
-    console.error(`${LOG_PREFIX} 收到 ${signal}，正在关闭……`);
-    // 整个关机有总上限 SHUTDOWN_TOTAL_MS，超了记日志、退出码 1
-    void stopWithinLimit(() => daemon.stop(), SHUTDOWN_TOTAL_MS, (line) => console.error(line)).then((code) => {
-      if (code === 0) console.error(`${LOG_PREFIX} 已关闭。`);
-      process.exit(code);
-    });
-  };
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-}
-
-await main();
+await runDaemonProcess({ userHome: homedir() });

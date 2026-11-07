@@ -101,6 +101,18 @@ export const API_PATHS = {
   peerDevices: "/api/peer/devices",
   /** POST，没有请求体 → 204：对方把本机移除了，本机也删掉它的记录。 */
   peerUnpair: "/api/peer/unpair",
+  /**
+   * POST（PeerInviteRequest）→ 201 DeviceInviteResponse：已配对的设备替第三台要一个邀请码（介绍用，见 peerIntroductions）。
+   * 邀请码只给 deviceId 那台用；它是本机移除过的设备、或邀请码被锁住时 → 403。
+   */
+  peerInvites: "/api/peer/invites",
+  /**
+   * POST（PeerIntroductionRequest）→ PeerIntroductionResponse：请本机把它介绍给本机已配对的另一台。本机去那台要一个邀请码交回来，
+   * 请求方再拿它去那台 peerPair。“第三台配一次就全通”靠它；谁去配对按设备编号定（小的那台），不会两边同时配。
+   */
+  peerIntroductions: "/api/peer/introductions",
+  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再同步给所有已配对的设备。 */
+  peerName: "/api/peer/name",
 
   // ---- 联机：推送（只在“提醒设备”上用，手机 PWA 装在哪个来源就是哪台） ----
 
@@ -407,6 +419,16 @@ export const TAILSCALE_USER_LOGIN_HEADER = "tailscale-user-login";
 /** 设备 → 设备的请求带上自己的设备编号（和 Bearer 设备令牌一起查）。 */
 export const PEER_DEVICE_HEADER = "x-agent-hub-device";
 
+/**
+ * 只给浏览器用、设备令牌不能访问的接口（入口自己的：设备管理、浏览器登录、推送订阅）。新加这类接口要加进来。
+ * 设备令牌也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
+ */
+export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/"];
+
+/** 入口转发的 WebSocket 因为对方连不上（握手失败、心跳没回）被关时的状态码和原因。网页按断线重连处理。 */
+export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;
+export const DEVICE_OFFLINE_REASON = "device_offline";
+
 /** GET /api/devices 里的一台。 */
 export interface DeviceInfo {
   id: DeviceId;
@@ -467,6 +489,22 @@ export interface PeerPairResponse {
 /** PUT /api/peer/devices：发送方已配对的全部设备（含它自己）。 */
 export interface PeerDeviceListRequest {
   devices: PeerDevice[];
+}
+
+/** POST /api/peer/invites：邀请码给哪台用。 */
+export interface PeerInviteRequest {
+  deviceId: DeviceId;
+}
+
+/** POST /api/peer/introductions：请对方把本机介绍给它已配对的 deviceId。 */
+export interface PeerIntroductionRequest {
+  deviceId: DeviceId;
+}
+
+/** 那台是谁（对方记的）和它给的邀请码（10 分钟、一次性），请求方拿去那台 POST /api/peer/pair。 */
+export interface PeerIntroductionResponse {
+  device: PeerDevice;
+  code: string;
 }
 
 // ---- 联机：推送（第 6.2 节） ----

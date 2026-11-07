@@ -369,3 +369,28 @@ export const TAILNET_PROBE_OK_TTL_MS = 5 * 60_000;
 export const TAILNET_PROBE_FAIL_TTL_MS = 30_000;
 /** 联机：跑一次 tailscale status --json 最多等多久。 */
 export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;
+
+// ---- 联机：设备配对、转发（daemon/peers/，docs/multi-device-design.md 第 3.2 节） ----
+/** 邀请码：随机 128 位，10 分钟内、只能用一次。 */
+export const PEER_INVITE_BYTES = 16;
+export const PEER_INVITE_TTL_MS = 10 * 60_000;
+/** 同一台来配对的设备（按它报的设备编号）邀请码错这么多次：锁住这一台，直到用户在本机重新生成邀请码。别的设备不受影响。 */
+export const PEER_INVITE_MAX_FAILURES = 5;
+/** 错误次数最多记这么多台来源，满了丢最早的（只在内存里）。 */
+export const PEER_INVITE_FAILURE_SOURCES = 1_000;
+/** 设备令牌：随机 32 字节（base64url 43 个字符）。对方的只存 sha256。 */
+export const PEER_TOKEN_BYTES = 32;
+/** 应邀配对后对方一直没来确认（它那边没存下来）：这么久后丢掉这条“待确认”。 */
+export const PEER_PENDING_TTL_MS = PEER_INVITE_TTL_MS;
+/** 记住移除过的设备（不让同步、介绍又把它配回来），最多这么多条，满了丢最早的。 */
+export const MAX_REMOVED_PEERS = 100;
+/** 设备清单最多这么多台（对方发来的清单超过就拒绝）。 */
+export const MAX_PEERS = 100;
+/** 设备之间的控制请求（配对、同步、移除、介绍、改名）最多等多久。 */
+export const PEER_REQUEST_TIMEOUT_MS = 10_000;
+/** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。响应体（下载）不限时。 */
+export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
+/** 转发 WebSocket：连对方最多等多久。 */
+export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
+/** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
+export const PEER_WS_PING_MS = 5_000;
