@@ -92,11 +92,12 @@ describe("forkSourceOf：账本给的会话 + prepareLaunch 的结果", () => {
   const launch: LaunchFiles = { promptFile: "/p.md", env: { [ENV_HUB_TOKEN]: "t", PATH: "/bin" }, fingerprint: "fp" };
 
   it("照抄会话的编号、目录、模型、思考程度，凭证去掉；addDirs 是新数组", () => {
-    const src = forkSourceOf(session, launch);
+    const src = forkSourceOf(session, launch, "/bin/codex");
     expect(src).toEqual({
       sessionId: 7,
       vendor: "codex",
       vendorSessionId: "v-7",
+      executablePath: "/bin/codex",
       cwd: "/code/foo",
       addDirs: ["/code/bar"],
       model: "gpt-5.5",
@@ -107,6 +108,6 @@ describe("forkSourceOf：账本给的会话 + prepareLaunch 的结果", () => {
   });
 
   it("厂商不认识 → ForkUnsupportedError", () => {
-    expect(() => forkSourceOf({ ...session, vendor: "someone-new" }, launch)).toThrow(ForkUnsupportedError);
+    expect(() => forkSourceOf({ ...session, vendor: "someone-new" }, launch, "/bin/x")).toThrow(ForkUnsupportedError);
   });
 });
