@@ -86,8 +86,8 @@ export interface FakeCodexTurnScript {
   };
   /** 额度通知。 */
   rateLimits?: {
-    primary?: { usedPercent: number; resetsAt: number };
-    secondary?: { usedPercent: number; resetsAt: number };
+    primary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
+    secondary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
   };
   /** 结束状态，默认 completed。 */
   status?: "completed" | "interrupted" | "failed";
@@ -686,8 +686,8 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
               total: { inputTokens: 120, cachedInputTokens: 30, outputTokens: 45 },
             },
             rateLimits: {
-              primary: { usedPercent: 35, resetsAt: 1793619600 },
-              secondary: { usedPercent: 60, resetsAt: 1793646000 },
+              primary: { usedPercent: 35, windowDurationMins: 300, resetsAt: 1793619600 },
+              secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: 1793646000 },
             },
           },
         ],

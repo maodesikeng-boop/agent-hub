@@ -55,7 +55,7 @@ describe("厂商清单", () => {
     expect(agy.effortInModelId).toBe(true);
     expect(agy.modelFlag).toBe("--model");
     expect(agy.effortFlag).toBe("--effort");
-    expect(agy.quotaWindows).toEqual({ five_hour: "5 小时", seven_day: "7 天" });
+    expect(agy.quota).toBeUndefined();
     expect(agy.composer.compactCommand).toBe("compact");
     for (const cmd of ["clear", "resume", "logout", "login", "model", "effort", "mode", "update", "doctor", "color", "focus"]) {
       expect(agy.composer.blockedCommands[cmd], cmd).toBeTruthy();
@@ -74,7 +74,8 @@ describe("厂商清单", () => {
     expect(codex.efforts).toEqual(["low", "medium", "high", "xhigh"]);
     expect(codex.modelFlag).toBe("--model");
     expect(codex.effortFlag).toBe("-c");
-    expect(codex.quotaWindows).toEqual({ five_hour: "5 小时", seven_day: "7 天" });
+    expect(codex.quota).toEqual({ name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] });
+    expect(VENDOR_SPECS.claude.quota?.windows).toEqual(["five_hour", "seven_day"]);
     expect(codex.composer.compactCommand).toBe("compact");
     for (const cmd of ["clear", "new", "resume", "fork", "login", "logout", "model", "approvals", "permissions", "sandbox", "quit", "exit"]) {
       expect(codex.composer.blockedCommands[cmd], cmd).toBeTruthy();

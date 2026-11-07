@@ -13,6 +13,8 @@ import {
   type RateLimitInfo,
   type RateLimitWindow,
   type WriteScope,
+  type QuotaWindowKey,
+  windowKeyByMinutes,
 } from "../../shared/index.ts";
 
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -416,38 +418,37 @@ export function parseCodexTokenUsage(
   };
 }
 
-function parseCodexWindow(raw: unknown): RateLimitWindow | null {
+/** 一个窗口 → [额度窗口的键, 窗口]；缺用量或重置时间、窗口长度不认识的返回 null（见 QUOTA_WINDOWS，不按位置猜）。 */
+function parseCodexWindow(raw: unknown): [QuotaWindowKey, RateLimitWindow] | null {
   if (typeof raw !== "object" || raw === null) return null;
   const w = raw as Record<string, unknown>;
   if (typeof w.usedPercent !== "number" || !Number.isFinite(w.usedPercent)) return null;
   if (typeof w.resetsAt !== "number" || !Number.isFinite(w.resetsAt)) return null;
+  const key = windowKeyByMinutes(typeof w.windowDurationMins === "number" ? w.windowDurationMins : null);
+  if (key === null) return null;
   const utilization = w.usedPercent / 100;
-  const status = utilization >= 1 ? "rejected" : "allowed";
-  return {
-    utilization,
-    resetsAt: w.resetsAt,
-    status,
-  };
+  return [key, { utilization, resetsAt: w.resetsAt, status: utilization >= 1 ? "rejected" : "allowed" }];
 }
 
 /**
- * 解析 account/rateLimits/updated 的 rateLimits（primary -> five_hour, secondary -> seven_day）为 RateLimitInfo。
+ * 解析 account/rateLimits/updated 的 rateLimits（primary、secondary）为 RateLimitInfo：每个窗口按 windowDurationMins 归到
+ * QUOTA_WINDOWS 的键上（不按 primary / secondary 的位置：有的账号 primary 是 30 天窗口）。
+ * 整体的 resetsAt：有窗口用完（rejected）就取用完的窗口里最晚恢复的（要等它们都恢复），没有就取最先重置的。
  */
 export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null {
   if (typeof rateLimits !== "object" || rateLimits === null) return null;
   const rl = rateLimits as { primary?: unknown; secondary?: unknown };
   const windows: Record<string, RateLimitWindow> = {};
-  const fiveHour = parseCodexWindow(rl.primary);
-  if (fiveHour) windows.five_hour = fiveHour;
-  const sevenDay = parseCodexWindow(rl.secondary);
-  if (sevenDay) windows.seven_day = sevenDay;
-  if (Object.keys(windows).length === 0) return null;
-
-  const rejected = Object.values(windows).some((w) => w.status === "rejected");
-  const resetsAt = fiveHour?.resetsAt ?? sevenDay?.resetsAt ?? null;
+  for (const raw of [rl.primary, rl.secondary]) {
+    const parsed = parseCodexWindow(raw);
+    if (parsed) windows[parsed[0]] = parsed[1];
+  }
+  const all = Object.values(windows);
+  if (all.length === 0) return null;
+  const rejected = all.filter((w) => w.status === "rejected");
   return {
-    status: rejected ? "rejected" : "allowed",
-    resetsAt,
+    status: rejected.length > 0 ? "rejected" : "allowed",
+    resetsAt: rejected.length > 0 ? Math.max(...rejected.map((w) => w.resetsAt)) : Math.min(...all.map((w) => w.resetsAt)),
     windows,
   };
 }
