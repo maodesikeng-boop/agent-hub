@@ -1967,6 +1967,67 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(activity()).toBe("idle");
   });
 
+  /** 守护进程被杀后重启（没走关机，驱动层的 session.exited 没来）：新开账本、跑重启恢复。 */
+  const restart = () => {
+    ledger = createLedger(db, options());
+    ledger.onActionEnqueued((x) => enqueued.push(x));
+    return ledger.recoverAfterRestart();
+  };
+  const deliveredText = () =>
+    ledger.getMessage(enqueued.filter((a) => a.type === "session.send").map((a) => (a.params as { messageId: number }).messageId).at(-1)!)!.text;
+
+  it("在等后台命令时守护进程被杀：重启后补一次汇报（说明后台命令因重启中断，带它最后一轮的内容），只补一次", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    expect(reports()).toEqual([]);
+    restart();
+    expect(reports().map((m) => [workerEventOf(m)!.event, workerEventOf(m)!.status, workerEventOf(m)!.summary])).toEqual([["report", "done", "等 CI"]]);
+    expect(deliveredText()).toContain("重启");
+    expect(deliveredText()).toContain("等 CI");
+    expect(enqueued.filter((a) => a.type === "session.send").map((a) => (a.params as { sessionId: number }).sessionId)).toEqual([lin.sessionId]);
+    expect(activity()).toBe("idle");
+    restart();
+    expect(reports()).toHaveLength(1);
+  });
+
+  it("后台命令跑完了、叫醒那一轮还没来就被杀：重启后照样补一次", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    background(0);
+    restart();
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI"]);
+    expect(deliveredText()).toContain("重启");
+  });
+
+  it("叫醒那一轮已经汇报过：重启后不再补", () => {
+    firstTurnWithBackground();
+    background(0);
+    wakeTurn("wake", report("做完了", "CI 过了"));
+    restart();
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["CI 过了"]);
+  });
+
+  it("关机时已经按 session.exited 交代过：重启后不再补", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    ledger.applyDriverEvent(sessionId, { type: "session.exited", reason: "shutdown", exitCode: 0, signal: null, hadResult: true, messageIds: [], at: now });
+    expect(reports()).toHaveLength(1);
+    restart();
+    expect(reports()).toHaveLength(1);
+  });
+
+  it("等的时候收工、进程还没退守护进程就被杀：重启后不补（项目经理自己收的工）", () => {
+    firstTurnWithBackground();
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    restart();
+    expect(reports()).toEqual([]);
+  });
+
+  it("重启后它又接着干（补发的汇报之后又一轮）：照常汇报，不再当成在等后台命令", () => {
+    firstTurnWithBackground(report("做完了", "等 CI"));
+    restart();
+    const again = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "重跑 CI" }).data.messageId;
+    runTurn(worker, [again], report("做完了", "重跑过了"));
+    expect(reports().map((m) => workerEventOf(m)!.summary)).toEqual(["等 CI", "重跑过了"]);
+  });
+
   it("项目经理的会话有后台命令：照旧回到空闲（不显示在等后台命令）", () => {
     ledger.applyDriverEvent(lin.sessionId, { type: "turn.started", at: now });
     ledger.applyDriverEvent(lin.sessionId, { type: "background.changed", count: 1, at: now });
