@@ -55,7 +55,7 @@ describe("厂商清单", () => {
     expect(agy.effortInModelId).toBe(true);
     expect(agy.modelFlag).toBe("--model");
     expect(agy.effortFlag).toBe("--effort");
-    expect(agy.quota).toBeUndefined();
+    expect(agy.quota?.fetched?.args).toEqual(["-p", "/usage"]);
     expect(agy.composer.compactCommand).toBe("compact");
     for (const cmd of ["clear", "resume", "logout", "login", "model", "effort", "mode", "update", "doctor", "color", "focus"]) {
       expect(agy.composer.blockedCommands[cmd], cmd).toBeTruthy();

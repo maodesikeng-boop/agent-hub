@@ -18,6 +18,7 @@ import {
   pendingOf,
   quotaResetTimes,
   quotaUsage,
+  hasFetchedQuotaSession,
   sessionOf,
   visibleSessionOf,
   workerLineOf,
@@ -229,6 +230,7 @@ export function App() {
         asking={reminders.asking}
         notify={reminders.notify}
         quota={quotaUsage(state)}
+        quotaFetchable={hasFetchedQuotaSession(state)}
         drawerOpen={narrow && drawerOpen}
         onCloseDrawer={closeDrawer}
         onSelect={select}

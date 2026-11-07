@@ -1522,6 +1522,20 @@ describe("同时上传的个数", () => {
   });
 });
 
+describe("GET /api/quota（额度）", () => {
+  it("没接来源：回空；接了：原样回", async () => {
+    expect((await call("GET", "/api/quota")).json()).toEqual({ groups: [] });
+    const value = { groups: [{ id: "gemini", name: "Gemini", windows: { five_hour: { utilization: 0.25, resetsAt: 1, status: "allowed" } } }] };
+    const other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, quota: { get: async () => value } });
+    try {
+      const res = await other.inject({ method: "GET", url: "/api/quota", headers: { host: HOST, cookie: COOKIE } });
+      expect(res.json()).toEqual(value);
+    } finally {
+      await other.close();
+    }
+  });
+});
+
 describe("GET /api/models（模型名单）", () => {
   const vendorCatalog = {
     ...bundledModelCatalog("claude"),

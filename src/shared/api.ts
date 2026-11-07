@@ -12,11 +12,12 @@ import type {
   Project,
   ProjectFolder,
   ProjectId,
+  RateLimitWindow,
   SessionState,
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
-import type { AgentVendor, ModelCatalog } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
 
@@ -47,6 +48,8 @@ export const API_PATHS = {
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
   /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回。 */
   models: "/api/models",
+  /** GET → QuotaResponse：事件流里没有额度的厂商（agy）的额度；服务端缓存 FETCHED_QUOTA_FRESH_MS，没装、查失败的没有那一块。 */
+  quota: "/api/quota",
   /**
    * POST（PickFolderRequest → PickFolderResponse）：守护进程在这台 Mac 上弹原生的“选择文件夹”，等用户选完才回。
    * 取消、超时回 path null（不是错误）；同时已经有一个对话框 409；起不来 osascript 回中文原因。
@@ -200,6 +203,11 @@ export interface SetScheduleEnabledRequest {
 /** GET /api/models：每家厂商一份模型名单（按 AGENT_VENDORS 的顺序）。问不到厂商时是打包的名单，不报错。 */
 export interface ModelsResponse {
   catalogs: ModelCatalog[];
+}
+
+/** GET /api/quota：一组一块（厂商分组），窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。 */
+export interface QuotaResponse {
+  groups: Array<{ id: string; name: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
 }
 
 /** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给；builtin：厂商自带的命令（用户自己的命令、skill 不带这个字段）。 */

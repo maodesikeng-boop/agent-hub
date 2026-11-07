@@ -8,6 +8,7 @@ import {
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
   isHandoverTraffic,
+  isAgentVendor,
   isQuotaExhausted,
   systemEventOf,
   systemNoticeText,
@@ -19,6 +20,9 @@ import {
   type Pm,
   type PmId,
   type Project,
+  type QuotaResponse,
+  type QuotaWindowKey,
+  type RateLimitWindow,
   type ProjectFolder,
   type SessionId,
   type SessionState,
@@ -147,6 +151,21 @@ const newerSession = (a: SessionState, b: SessionState | null): boolean =>
 /** resetsAt（Unix 秒）已经到了或过了；不是正的有限数（脏数据）当没到。 */
 const isReset = (resetsAt: number, now: number): boolean => Number.isFinite(resetsAt) && resetsAt > 0 && resetsAt * 1000 <= now;
 
+/** 一个窗口的显示数据。过了 resetsAt 的窗口已经重置：0%、没有重置时间、不标快用完。 */
+function windowUsage(key: QuotaWindowKey, window: RateLimitWindow, now: number, warningStatus: string | undefined): QuotaWindowUsage {
+  const { label, short } = QUOTA_WINDOWS[key];
+  if (isReset(window.resetsAt, now)) return { key, label, short, percent: 0, resetsAt: null, warning: false };
+  const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
+  return {
+    key,
+    label,
+    short,
+    percent,
+    resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,
+    warning: window.status === warningStatus || percent >= QUOTA_WARNING_PERCENT,
+  };
+}
+
 /**
  * 同一个窗口里 a 的值比 b 新。不能看会话的 lastEventAt：网页里它只在会话状态变了才跟着推过来，旧会话收尾也会把它刷新，
  * 会让重置前的旧值盖住重置后的新值。所以：重置时间晚的是新窗口；同一个窗口里用量只增不减，高的是新的；都一样才看 lastEventAt。
@@ -181,19 +200,7 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
       }
       const window = best?.rateLimit?.windows[key];
       if (window === undefined) continue;
-      if (isReset(window.resetsAt, now)) {
-        windows.push({ key, label, short, percent: 0, resetsAt: null, warning: false });
-        continue;
-      }
-      const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
-      windows.push({
-        key,
-        label,
-        short,
-        percent,
-        resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,
-        warning: window.status === spec.warningStatus || percent >= QUOTA_WARNING_PERCENT,
-      });
+      windows.push(windowUsage(key, window, now, spec.warningStatus));
     }
     if (windows.length === 0) continue;
     let latest: SessionState | null = null;
@@ -201,6 +208,35 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
     vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit, now) });
   }
   return vendors;
+}
+
+/**
+ * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，shared/vendors.ts 的 quota.fetched）→ 浮层里的块：
+ * 每一组一块（“厂商名 · 组名”），窗口按 QUOTA_WINDOWS 的顺序；认不出的组跳过。
+ */
+export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
+  const blocks: QuotaVendor[] = [];
+  for (const id of AGENT_VENDORS) {
+    const quota = VENDOR_SPECS[id].quota;
+    if (quota?.fetched === undefined) continue;
+    for (const group of res.groups) {
+      if (!quota.fetched.groups.some((g) => g.key === group.id)) continue;
+      const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
+        const window = group.windows[key];
+        return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
+      });
+      if (windows.length > 0) blocks.push({ id: group.id, name: `${quota.name} · ${group.name}`, windows, exhausted: false });
+    }
+  }
+  return blocks;
+}
+
+/** 有会话用着“额度要按需查”的厂商：左下角的额度按钮要在，用户才打得开面板。 */
+export function hasFetchedQuotaSession(state: HubState): boolean {
+  return state.sessions.some((s) => {
+    const vendor = s.vendor ?? DEFAULT_AGENT_VENDOR;
+    return isAgentVendor(vendor) && VENDOR_SPECS[vendor].quota?.fetched !== undefined;
+  });
 }
 
 /**

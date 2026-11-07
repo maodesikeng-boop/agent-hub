@@ -3,11 +3,11 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledModelCatalog } from "../shared/index.ts";
-import type { Message, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import type { Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { COMPACT_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
-import { isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount, workerPhaseOf } from "./selectors.ts";
+import { fetchedQuotaUsage, isWaitingForQuota, listConversations, quotaUsage, runningWorkerCount, workerPhaseOf } from "./selectors.ts";
 import { initialState, reducer } from "./state.ts";
 import {
   FakeApi,
@@ -433,6 +433,57 @@ describe("左下角的额度", () => {
   const T_BEFORE_RESET = (1_793_619_600 - 3600) * 1000;
   beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now: T_BEFORE_RESET }));
   afterEach(() => void vi.useRealTimers());
+
+  describe("按需查的额度（agy）", () => {
+    const agySession = () => makeSession({ sessionId: 9, conversationId: 30, vendor: "agy", lastEventAt: 5 });
+    const agyWorker = () => withWorker({ sessions: [agySession()] });
+    const claudeAndAgy = () =>
+      withWorker({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1, rateLimit: quota(0.37, 0.59), lastEventAt: 5 }), agySession()] });
+    const reply = {
+      groups: [
+        { id: "gemini", name: "Gemini", windows: { five_hour: win(0.25), seven_day: win(0.5, { resetsAt: 1_793_646_000 }) } },
+        { id: "claude_gpt", name: "Claude 和 GPT", windows: { five_hour: win(0.9) } },
+      ],
+    };
+    const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
+
+    it("打开面板才问；问到的每一组一块，窗口各一行；不改左下角按钮", async () => {
+      const user = userEvent.setup();
+      await boot(claudeAndAgy());
+      api.quota = () => ({ status: 200, body: reply });
+      expect(ask()).toBe(0);
+      await user.click(badge());
+      const gemini = await screen.findByRole("region", { name: "Antigravity · Gemini" });
+      expect(within(gemini).getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "25");
+      expect(within(gemini).getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "50");
+      expect(within(screen.getByRole("region", { name: "Antigravity · Claude 和 GPT" })).getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "90");
+      expect(ask()).toBe(1);
+      expect(badge()).toHaveTextContent("5h 37%");
+    });
+
+    it("没有别家的事件额度、有 agy 会话：按钮也在（写“额度”），打开后显示 agy 的", async () => {
+      const user = userEvent.setup();
+      await boot(agyWorker());
+      api.quota = () => ({ status: 200, body: reply });
+      await user.click(badge());
+      expect(await screen.findByRole("region", { name: "Antigravity · Gemini" })).toBeInTheDocument();
+    });
+
+    it("查失败或没有：不显示 agy 那块，别家的照常", async () => {
+      const user = userEvent.setup();
+      await boot(claudeAndAgy());
+      await user.click(badge());
+      await waitFor(() => expect(ask()).toBe(1));
+      expect(screen.getByRole("region", { name: "Claude" })).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: /Antigravity/ })).not.toBeInTheDocument();
+    });
+
+    it("没有任何额度来源（没有事件额度、没有 agy 会话）：不显示按钮，也不问", async () => {
+      await boot();
+      expect(screen.queryByRole("button", { name: /额度/ })).not.toBeInTheDocument();
+      expect(ask()).toBe(0);
+    });
+  });
 
   it("右上角没有额度和“N 个 Worker 在跑”了", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
@@ -1076,6 +1127,28 @@ describe("selectors", () => {
       { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", short: "5h", percent: 30, resetsAt: 7, warning: false }] },
     ]);
     expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
+  });
+
+  it("fetchedQuotaUsage：服务端回的每一组是一块（厂商名 · 组名），窗口按 5 小时、7 天；已过重置时间的算 0%", () => {
+    const res: QuotaResponse = {
+      groups: [
+        { id: "gemini", name: "Gemini", windows: { seven_day: { utilization: 0.1, resetsAt: 9_000, status: "allowed" }, five_hour: { utilization: 0.85, resetsAt: 5_000, status: "allowed" } } },
+        { id: "不认识的组", name: "x", windows: { five_hour: { utilization: 0.5, resetsAt: 9_000, status: "allowed" } } },
+      ],
+    };
+    expect(fetchedQuotaUsage(res, 0)).toEqual([
+      {
+        id: "gemini",
+        name: "Antigravity · Gemini",
+        exhausted: false,
+        windows: [
+          { key: "five_hour", label: "5 小时", short: "5h", percent: 85, resetsAt: 5_000, warning: true },
+          { key: "seven_day", label: "7 天", short: "7d", percent: 10, resetsAt: 9_000, warning: false },
+        ],
+      },
+    ]);
+    expect(fetchedQuotaUsage(res, 6_000_000)[0]!.windows[0]).toMatchObject({ percent: 0, resetsAt: null, warning: false });
+    expect(fetchedQuotaUsage({ groups: [] }, 0)).toEqual([]);
   });
 
   // 真实数据（2026-11-07 21:04）：codex 会话的 30 天窗口 resetsAt 1796193545（12/2 14:39）比 claude 会话的 5 小时窗口 1794070800 晚，
