@@ -27,6 +27,7 @@ import {
   type WorkspaceProbe,
 } from "../../shared/index.ts";
 import { MAX_UNIX_SOCKET_PATH_BYTES } from "../../shared/paths.ts";
+import { createModelCatalogs } from "../driver/model-catalog.ts";
 import { FakeHubLedger } from "./fake-ledger.ts";
 import { createAgentApi, startAgentApi, type RunningAgentApi } from "./server.ts";
 import { createSessionTokens } from "./tokens.ts";
@@ -298,6 +299,48 @@ describe("agent api over inject", () => {
       await call("worker.start", { title: "修 X", task: "任务", noWorktree: true });
       expect(asked).toEqual(["codex"]);
       expect(ledger.contexts).toEqual([{ vendorStatus: { vendor: "codex", availability: "signed_out", device: "东京" } }, {}]);
+    });
+
+    it("带 --vendor、这家重问一直不回：预算内就带着“没登录”交给账本，不是请求超时；很快回 available 的照常派", async () => {
+      const codexQuery = [() => Promise.resolve({ models: [], account: { account: null, requiresOpenaiAuth: true } }), () => new Promise<never>(() => {})];
+      const hangingCatalogs = createModelCatalogs({
+        sources: {
+          codex: {
+            parse: () => null,
+            query: () => codexQuery.shift()?.() ?? Promise.resolve({ models: [], account: { account: { type: "chatgpt" } } }),
+            availabilityOf: (raw) => ((raw as { account: { account: unknown } }).account.account === null ? "signed_out" : "available"),
+          },
+        },
+        ensureUsableBudgetMs: 50,
+        log: () => {},
+      });
+      await hangingCatalogs.list();
+      await app.close();
+      app = createAgentApi({ ledger, tokens, deviceName: () => "东京", vendorUsable: (vendor) => hangingCatalogs.ensureUsable(vendor), requestTimeoutMs: 2_000, timeoutCheckMs: 50 });
+      await app.ready();
+      const started = Date.now();
+      const res = await call("worker.start", { title: "修 X", task: "任务", noWorktree: true, vendor: "codex" });
+      expect(res.statusCode).toBe(200);
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(ledger.contexts).toEqual([{ vendorStatus: { vendor: "codex", availability: "signed_out", device: "东京" } }]);
+      hangingCatalogs.close();
+
+      const fast = createModelCatalogs({
+        sources: {
+          codex: {
+            parse: () => null,
+            query: async () => ({ models: [], account: { account: { type: "chatgpt" } } }),
+            availabilityOf: () => "available",
+          },
+        },
+        log: () => {},
+      });
+      await fast.list();
+      await app.close();
+      app = createAgentApi({ ledger, tokens, deviceName: () => "东京", vendorUsable: (vendor) => fast.ensureUsable(vendor) });
+      await app.ready();
+      await call("worker.start", { title: "修 Y", task: "任务", noWorktree: true, vendor: "codex" });
+      expect(ledger.contexts[1]).toEqual({ vendorStatus: { vendor: "codex", availability: "available", device: "东京" } });
     });
 
     it("探的时候令牌作废了：401，不调账本", async () => {

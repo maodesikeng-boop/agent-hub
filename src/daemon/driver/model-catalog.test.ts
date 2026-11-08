@@ -800,6 +800,36 @@ describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一
     expect(gone.calls()).toBe(0);
   });
 
+  it("ensureUsable 的重问有时间预算：预算内没问完就按现在的状态回，重问在后台接着跑，下一次看得到新结果；同一家同时只跑一个", async () => {
+    let calls = 0;
+    let finish: (raw: unknown) => void = () => {};
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: (raw) => parseCodexModels((raw as { models?: unknown })?.models),
+          query: () => {
+            calls++;
+            return calls === 1 ? Promise.resolve(signedOut) : new Promise((resolve) => (finish = resolve));
+          },
+          availabilityOf: codexAvailability,
+        },
+      },
+      ensureUsableBudgetMs: 30,
+      log: () => {},
+    });
+    await catalogs.list();
+    expect(catalogs.availability("codex")).toBe("signed_out");
+    const started = Date.now();
+    expect(await catalogs.ensureUsable("codex")).toBe("signed_out");
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(await catalogs.ensureUsable("codex")).toBe("signed_out");
+    expect(calls).toBe(2);
+    finish(signedIn);
+    await expect.poll(() => catalogs.availability("codex")).toBe("available");
+    expect(await catalogs.ensureUsable("codex")).toBe("available");
+    expect(calls).toBe(2);
+  });
+
   it("report：真跑的结果直接更新状态（不用等缓存过期）", async () => {
     const t = setup({ answers: [signedIn], availabilityOf: codexAvailability });
     await t.catalogs.list();
