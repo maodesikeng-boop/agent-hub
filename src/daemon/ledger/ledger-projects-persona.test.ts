@@ -679,16 +679,17 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
   });
 
-  it("资料页换厂商：登记手动交接、换代前 pms.vendor 和旧会话不变、不沿用旧厂商的 model/effort、交接期间可继续改新厂商下的设置，撤销或改回旧厂商时清回 NULL", () => {
+  it("资料页换厂商：空闲时当场秒切（不沿用旧厂商的 model/effort）；在忙时登记 direct 交接、期间可继续改新厂商设置，改回旧厂商或撤销时标 abandoned", () => {
     let wakes = 0;
     ledger = createLedger(db, options({ onHandoverClaimable: () => wakes++ }));
     ledger.editPersona(lin.pmId, { model: "opus", effort: "max" }, { kind: "user" });
     expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "claude", model: "opus", effort: "max", switchingToVendor: null });
 
-    // 换到 codex（不传 model / effort 时默认取 null，不能沿用 claude 的 opus / max）
+    // 1. 旧会话在忙（有后台任务）时换到 codex（不传 model / effort 时默认取 null，不能沿用 claude 的 opus / max）
+    ledger.applyDriverEvent(lin.sessionId, { type: "background.changed", at: now, count: 1 });
     changes = [];
     const switched = ledger.editPersona(lin.pmId, { vendor: "codex" }, { kind: "user" });
-    expect(wakes).toBe(1);
+    expect(wakes).toBe(0);
     expect(switched.change).toMatchObject({
       vendorBefore: "claude",
       vendorAfter: "codex",
@@ -710,8 +711,9 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       effort: "max",
     });
     expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "opus", effort: "max" });
-    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
-      status: "queued",
+    expect(db.get("SELECT status, method, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "ready",
+      method: "direct",
       auto: 0,
       to_vendor: "codex",
       to_model: null,
@@ -721,7 +723,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       "你改了小林的设置（厂商：Claude Code → Codex，模型：Opus → 默认，思考程度：max → 默认）",
     );
 
-    // 换厂商交接期间继续改新厂商下的模型、思考程度和正文
+    // 换厂商等待期间继续改新厂商下的模型、思考程度和正文
     const refined = ledger.editPersona(lin.pmId, { model: "gpt-6-luna", effort: "high", text: "新习惯" }, { kind: "user" });
     expect(refined.change).toMatchObject({
       vendorBefore: "codex",
@@ -747,15 +749,16 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       default_model: "opus",
       effort: "max",
     });
-    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
-      status: "queued",
+    expect(db.get("SELECT status, method, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "ready",
+      method: "direct",
       auto: 0,
       to_vendor: "codex",
       to_model: "gpt-6-luna",
       to_effort: "high",
     });
 
-    // 改回旧厂商（或撤销）：活跃交接行的三列清回 NULL，pms 与旧会话同步更新
+    // 改回旧厂商（或撤销）：direct 交接行直接标 abandoned，pms 与旧会话同步更新
     const back = ledger.editPersona(lin.pmId, { vendor: "claude", model: "haiku", effort: "low" }, { kind: "user" });
     expect(back.persona).toMatchObject({
       vendor: "claude",
@@ -769,12 +772,29 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       effort: "low",
     });
     expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "haiku", effort: "low" });
-    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
-      status: "queued",
-      auto: 0,
+    expect(db.get("SELECT status, method, failure_reason, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "abandoned",
+      method: "direct",
+      failure_reason: "user_message",
       to_vendor: null,
       to_model: null,
       to_effort: null,
+    });
+
+    // 2. 空闲时换厂商：当场在同一事务秒切
+    ledger.applyDriverEvent(lin.sessionId, { type: "background.changed", at: now, count: 0 });
+    const instant = ledger.editPersona(lin.pmId, { vendor: "codex" }, { kind: "user" });
+    expect(wakes).toBe(0);
+    expect(instant.persona).toMatchObject({
+      vendor: "codex",
+      model: null,
+      effort: null,
+      switchingToVendor: null,
+    });
+    expect(db.get("SELECT vendor, default_model, effort FROM pms WHERE id = ?", lin.pmId)).toEqual({
+      vendor: "codex",
+      default_model: null,
+      effort: null,
     });
   });
 
