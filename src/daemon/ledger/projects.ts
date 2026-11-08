@@ -51,7 +51,7 @@ export function createLedgerProjects(
   const { db, now } = ctx;
   const { currentSession } = sessions;
   const { insertSystemMessage } = messages;
-  const { requirePm, privateConversation, validName } = persona;
+  const { requirePm, assertPmNotArchived, privateConversation, validName } = persona;
   const { userHome, resolveFolder, worktreesDir } = files;
 
   /** 这个项目经理进行中的项目（最多一个，数据库有部分唯一索引）。 */
@@ -119,6 +119,7 @@ export function createLedgerProjects(
 
   const createProjectIn = (p: Pending, input: CreateProjectInput) => {
     const pm = requirePm(input.pmId);
+    assertPmNotArchived(pm.id);
     const existing = activeProjectOf(pm.id);
     if (existing !== null) {
       throw fail("conflict", `${ONE_PROJECT_PER_PM}。${pm.name}现在管的是“${existing.name}”（${projectCard(existing).mainFolder}）`);
@@ -160,6 +161,7 @@ export function createLedgerProjects(
   };
 
   const attachIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.attach">): HubResult<"project.attach"> => {
+    assertPmNotArchived(caller.pmId);
     const project = requireProject(caller.pmId);
     const path = resolveFolder(args.folder);
     if (db.get("SELECT 1 AS x FROM project_folders WHERE project_id = ? AND path = ? AND removed_at IS NULL", project.id, path) !== undefined) {
@@ -184,6 +186,7 @@ export function createLedgerProjects(
   };
 
   const detachIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.detach">): HubResult<"project.detach"> => {
+    assertPmNotArchived(caller.pmId);
     const project = requireProject(caller.pmId);
     const path = realpathOrLiteral(args.folder, userHome);
     const row = db.get<ProjectFolderDbRow>(
@@ -210,6 +213,7 @@ export function createLedgerProjects(
    * 不推变化、不发系统消息、不改会话（提示词里不显示它，项目经理的会话不重启）；下一个建 worktree 的 Worker 起生效。
    */
   const setupIn = (caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.setup">): HubResult<"project.setup"> => {
+    assertPmNotArchived(caller.pmId);
     const project = requireProject(caller.pmId);
     let command: string | null = null;
     if (args.command !== null) {

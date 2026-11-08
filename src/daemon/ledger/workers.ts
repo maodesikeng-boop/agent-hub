@@ -169,7 +169,7 @@ export function createLedgerWorkers(
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, liveOf, updateLive } = sessions;
   const { transition, stopIn } = messages;
-  const { pmRow } = persona;
+  const { pmRow, assertPmNotArchived } = persona;
   const { activeProjectOf, projectCard, syncSessionFolders } = projects;
   const { worktreesDir } = options;
   /**
@@ -332,6 +332,7 @@ export function createLedgerWorkers(
     args: HubArgs<"worker.start">,
     context: HubCallContext,
   ): HubResult<"worker.start"> => {
+    assertPmNotArchived(caller.pmId);
     const project = activeProjectOf(caller.pmId);
     if (project === null) throw fail("invalid", `你还没有项目，没法派 Worker：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
     const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
@@ -441,6 +442,7 @@ export function createLedgerWorkers(
   };
 
   const sendIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.send">): HubResult<"worker.send"> => {
+    assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
     if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
     // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
@@ -463,6 +465,7 @@ export function createLedgerWorkers(
   };
 
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
+    assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
     if (worker.status === "ended") {
       return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
@@ -483,6 +486,29 @@ export function createLedgerWorkers(
         : "";
     const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
     return { text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${cleanup}`, data: { worker: toWorkerRecord(ended) } };
+  };
+
+  /** 归档项目经理时结束它下面所有 status = 'open' 的 Worker。 */
+  const endOpenWorkersIn = (p: Pending, pmId: PmId) => {
+    const openWorkers = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id", pmId);
+    const t = now();
+    for (const w of openWorkers) {
+      const session = workerSession(w.id);
+      const queued = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", w.worker_conversation_id);
+      for (const { id } of queued) transition(p, id, "stopped");
+      const interrupted = !notStarted(w) && stopIn(p, { ...session, conversationId: w.worker_conversation_id });
+      if (interrupted) endInterrupted.add(session.id);
+      if (!interrupted && !notStarted(w) && (queued.length > 0 || session.status === "running")) {
+        p.stops.push({ conversationId: w.worker_conversation_id, sessionId: session.id });
+      }
+      awaitingBackground.take(session.id);
+      db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", t, w.id);
+      db.run("UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND status != 'ended'", t, session.id);
+      const ended = workerRow(w.id)!;
+      enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
+      updateLive(p, session.id, idle);
+      insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
+    }
   };
 
   const list = (caller: AgentSessionRow & { pmId: PmId }): HubResult<"worker.list"> => {
@@ -881,6 +907,7 @@ export function createLedgerWorkers(
     startIn,
     sendIn,
     endIn,
+    endOpenWorkersIn,
     list,
     status,
     afterDriverEvent,

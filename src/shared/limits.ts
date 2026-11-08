@@ -470,3 +470,10 @@ export const TUNNEL_DETAIL_MAX_CHARS = 200;
 export const TUNNEL_ADMIN_TIMEOUT_MS = 30_000;
 /** 管理 socket 收的请求体上限。 */
 export const TUNNEL_ADMIN_MAX_BODY_BYTES = 16 * 1024;
+
+// ---- 项目经理归档（migrations/0016_pm_archives.sql、daemon/ledger/persona.ts）----
+/** 项目经理归档后保留多少天，到期由守护进程清理该 PM 的全部账本与内部磁盘数据。 */
+export const PM_ARCHIVE_RETENTION_DAYS = 7;
+export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** 每小时巡检一次到期归档 PM。 */
+export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;

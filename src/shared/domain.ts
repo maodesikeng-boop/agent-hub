@@ -144,6 +144,8 @@ export interface Pm {
    */
   personaFile: string | null;
   createdAt: number;
+  /** 归档时间（毫秒时间戳）；未归档是 null。归档满 7 天后守护进程自动删除该 PM 全部数据。 */
+  archivedAt?: number | null;
 }
 
 /**

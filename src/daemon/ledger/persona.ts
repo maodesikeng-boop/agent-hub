@@ -1,9 +1,9 @@
 // 账本里的项目经理和性格设定：建项目经理（不含项目，见 ledger.ts 的 createPm）、看和改性格设定、撤销、
 // 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, utf8Bytes } from "../../shared/domain.ts";
-import type { AgentSessionRow, ConversationId, PersonaChange, PersonaChangeId, PmId, PmMode, SessionId } from "../../shared/domain.ts";
+import type { AgentSessionRow, ConversationId, PersonaChange, PersonaChangeId, Pm, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import type {
   CreatePmInput,
   CreatePmResult,
@@ -14,7 +14,7 @@ import type {
   PersonaView,
   SyncPersonaFilesResult,
 } from "../../shared/ledger.ts";
-import { MAX_NAME_CHARS, MAX_PERSONA_BYTES, MAX_REASON_CHARS, PERSONA_CHANGES_LIMIT } from "../../shared/limits.ts";
+import { MAX_NAME_CHARS, MAX_PERSONA_BYTES, MAX_REASON_CHARS, PERSONA_CHANGES_LIMIT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
 import {
   AGENT_VENDORS,
   DEFAULT_AGENT_VENDOR,
@@ -109,6 +109,9 @@ export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 export interface PersonaHandoverHooks {
   switchVendorIn?: (p: Pending, conversationId: ConversationId, agent: AgentSetting) => void;
   clearVendorSwitchIn?: (conversationId: ConversationId) => void;
+  cancelHandoverIn?: (p: Pending, conversationId: ConversationId) => void;
+  endOpenWorkersIn?: (p: Pending, pmId: PmId) => void;
+  pauseSchedulesIn?: (p: Pending, pmId: PmId) => void;
 }
 
 export function createLedgerPersona(
@@ -123,7 +126,20 @@ export function createLedgerPersona(
   const { insertSystemMessage } = messages;
   const { pmHomeRoot, personasDir, writeFile } = files;
 
-  const pmRow = (id: PmId): PmDbRow | null => db.get<PmDbRow>("SELECT * FROM pms WHERE id = ?", id) ?? null;
+  const pmRow = (id: PmId): PmDbRow | null =>
+    db.get<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.id = ?", id) ?? null;
+
+  const isPmArchived = (pmId: PmId): boolean =>
+    db.get("SELECT 1 AS x FROM pm_archives WHERE pm_id = ?", pmId) !== undefined;
+
+  const assertPmNotArchived = (pmId: PmId): void => {
+    if (isPmArchived(pmId)) throw fail("conflict", "这个项目经理已归档，请先恢复");
+  };
+
+  const assertConversationNotArchived = (conversationId: ConversationId): void => {
+    const row = db.get<{ pm_id: number | null }>("SELECT pm_id FROM conversations WHERE id = ?", conversationId);
+    if (row?.pm_id != null) assertPmNotArchived(row.pm_id);
+  };
 
   const requirePm = (id: PmId): PmDbRow => {
     const row = pmRow(id);
@@ -330,6 +346,7 @@ export function createLedgerPersona(
   /** 校验并改性格设定（editPersona、hub persona.edit），在调用方的事务里。 */
   const editPersonaChecked = (p: Pending, pmId: PmId, input: EditPersonaInput, editor: PersonaEditor): PersonaChange | null => {
     const pm = requirePm(pmId);
+    assertPmNotArchived(pmId);
     const touchesAgent = input.vendor !== undefined || input.model !== undefined || input.effort !== undefined;
     if (input.text === undefined && input.mode === undefined && !touchesAgent) {
       throw fail("invalid", "新的性格设定正文、模式、厂商、模型、思考程度至少给一个");
@@ -410,7 +427,14 @@ export function createLedgerPersona(
     const mode = validMode(input.mode);
     validPersonaText(input.persona);
     const agent = validAgent({ vendor: input.vendor ?? DEFAULT_AGENT_VENDOR, model: input.defaultModel, effort: input.effort });
-    if (db.get("SELECT 1 AS x FROM pms WHERE name = ?", name) !== undefined) {
+    const dup = db.get<{ id: number; archived_at: number | null }>(
+      "SELECT p.id, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.name = ?",
+      name,
+    );
+    if (dup !== undefined) {
+      if (dup.archived_at !== null) {
+        throw fail("conflict", `已经有一个叫“${name}”的项目经理（已归档），请换个名字或先恢复它`);
+      }
       throw fail("conflict", `已经有一个叫“${name}”的项目经理了，换个名字`);
     }
     const t = now();
@@ -445,6 +469,7 @@ export function createLedgerPersona(
   const revertPersonaChange = (changeId: PersonaChangeId): EditPersonaResult => {
     const row = db.get<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE id = ?", changeId);
     if (row === undefined) throw fail("not_found", `没有编号 ${changeId} 的修改记录`);
+    assertPmNotArchived(row.pm_id);
     const change = write((p) => {
       const latest = db.get<{ id: number }>("SELECT id FROM persona_changes WHERE pm_id = ? ORDER BY id DESC LIMIT 1", row.pm_id)!;
       if (latest.id !== row.id) throw fail("conflict", "只能撤销最近一次修改");
@@ -467,7 +492,7 @@ export function createLedgerPersona(
   const syncPersonaFiles = (): SyncPersonaFilesResult => {
     const result: SyncPersonaFilesResult = { recordedPmIds: [], rewrittenPmIds: [] };
     if (personasDir === undefined) return result;
-    for (const pm of db.all<PmDbRow>("SELECT * FROM pms ORDER BY id")) {
+    for (const pm of db.all<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id ORDER BY p.id")) {
       const outcome = syncPersonaFile(pm);
       if (outcome === "recorded") result.recordedPmIds.push(pm.id);
       else if (outcome === "rewritten") result.rewrittenPmIds.push(pm.id);
@@ -475,9 +500,211 @@ export function createLedgerPersona(
     return result;
   };
 
+  const archivePm = (pmId: PmId): Pm => {
+    const existing = requirePm(pmId);
+    if (existing.archived_at !== null && existing.archived_at !== undefined) {
+      return toPm(existing);
+    }
+    return write((p) => {
+      const current = requirePm(pmId);
+      if (current.archived_at !== null && current.archived_at !== undefined) {
+        return toPm(current);
+      }
+      const t = now();
+      db.run("INSERT INTO pm_archives (pm_id, archived_at) VALUES (?, ?)", pmId, t);
+      const conv = privateConversation(pmId);
+      if (conv !== null) {
+        const queued = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", conv.id);
+        for (const { id } of queued) {
+          messages.transition(p, id, "stopped");
+        }
+        const session = sessions.currentSession(conv.id);
+        if (session !== null) {
+          const stopped = messages.stopIn(p, { ...session, conversationId: conv.id });
+          if (!stopped && (queued.length > 0 || session.status === "running")) {
+            p.stops.push({ conversationId: conv.id, sessionId: session.id });
+          }
+        }
+        hooks.cancelHandoverIn?.(p, conv.id);
+      }
+      hooks.endOpenWorkersIn?.(p, pmId);
+      hooks.pauseSchedulesIn?.(p, pmId);
+      const pm = toPm(pmRow(pmId)!);
+      p.changes.push({ type: "pm.updated", data: { pm } });
+      return pm;
+    });
+  };
+
+  const unarchivePm = (pmId: PmId): Pm => {
+    const existing = requirePm(pmId);
+    if (existing.archived_at === null || existing.archived_at === undefined) {
+      return toPm(existing);
+    }
+    return write((p) => {
+      const current = requirePm(pmId);
+      if (current.archived_at === null || current.archived_at === undefined) {
+        return toPm(current);
+      }
+      db.run("DELETE FROM pm_archives WHERE pm_id = ?", pmId);
+      const pm = toPm(pmRow(pmId)!);
+      p.changes.push({ type: "pm.updated", data: { pm } });
+      return pm;
+    });
+  };
+
+  const purgeExpiredArchivedPms = (nowMs: number = now()): PmId[] => {
+    const cutoff = nowMs - PM_ARCHIVE_RETENTION_MS;
+    const expired = db
+      .all<{ pm_id: number }>("SELECT pm_id FROM pm_archives WHERE archived_at <= ? ORDER BY pm_id", cutoff)
+      .map((r) => r.pm_id);
+    if (expired.length === 0) return [];
+
+    return write((p) => {
+      const purged: PmId[] = [];
+      const inList = (ids: number[]) => (ids.length === 0 ? "(NULL)" : `(${ids.join(",")})`);
+
+      for (const pmId of expired) {
+        const arch = db.get<{ pm_id: number }>("SELECT pm_id FROM pm_archives WHERE pm_id = ? AND archived_at <= ?", pmId, cutoff);
+        if (arch === undefined) continue;
+        purged.push(pmId);
+
+        const projectIds = db
+          .all<{ id: number }>(
+            "SELECT id FROM projects WHERE pm_id = ? OR conversation_id IN (SELECT id FROM conversations WHERE pm_id = ?) ORDER BY id",
+            pmId,
+            pmId,
+          )
+          .map((r) => r.id);
+
+        const workerRows = db.all<{ id: number; pm_conversation_id: number; worker_conversation_id: number }>(
+          `SELECT id, pm_conversation_id, worker_conversation_id FROM workers WHERE pm_id = ? OR project_id IN ${inList(projectIds)} ORDER BY id`,
+          pmId,
+        );
+        const workerIds = workerRows.map((w) => w.id);
+
+        const convSet = new Set<number>();
+        for (const r of db.all<{ id: number }>("SELECT id FROM conversations WHERE pm_id = ?", pmId)) convSet.add(r.id);
+        for (const r of db.all<{ conversation_id: number }>("SELECT conversation_id FROM projects WHERE pm_id = ?", pmId)) convSet.add(r.conversation_id);
+        for (const w of workerRows) {
+          convSet.add(w.pm_conversation_id);
+          convSet.add(w.worker_conversation_id);
+        }
+        const conversationIds = [...convSet];
+
+        const sessionSet = new Set<number>();
+        for (const r of db.all<{ id: number }>(
+          `SELECT id FROM agent_sessions WHERE pm_id = ? OR conversation_id IN ${inList(conversationIds)} OR worker_id IN ${inList(workerIds)}`,
+          pmId,
+        )) {
+          sessionSet.add(r.id);
+        }
+        const sessionIds = [...sessionSet];
+
+        const messageSet = new Set<number>();
+        for (const r of db.all<{ id: number }>(
+          `SELECT id FROM messages WHERE conversation_id IN ${inList(conversationIds)} OR session_id IN ${inList(sessionIds)} OR worker_id IN ${inList(workerIds)}`,
+        )) {
+          messageSet.add(r.id);
+        }
+        const messageIds = [...messageSet];
+
+        const scheduleIds = db.all<{ id: number }>("SELECT id FROM schedules WHERE pm_id = ? ORDER BY id", pmId).map((r) => r.id);
+
+        for (const convId of conversationIds) {
+          hooks.cancelHandoverIn?.(p, convId);
+        }
+
+        if (sessionIds.length > 0) {
+          db.run(`DELETE FROM session_steps WHERE session_id IN ${inList(sessionIds)}`);
+          db.run(`DELETE FROM worker_background_waits WHERE session_id IN ${inList(sessionIds)}`);
+          db.run(`DELETE FROM session_persona_seen WHERE session_id IN ${inList(sessionIds)}`);
+          db.run(`DELETE FROM hub_calls WHERE session_id IN ${inList(sessionIds)}`);
+        }
+        if (conversationIds.length > 0 || sessionIds.length > 0) {
+          db.run(
+            `DELETE FROM handovers WHERE conversation_id IN ${inList(conversationIds)} OR from_session_id IN ${inList(sessionIds)} OR to_session_id IN ${inList(sessionIds)}`,
+          );
+        }
+        db.run(
+          `DELETE FROM handoffs WHERE from_pm_id = ? OR to_pm_id = ? OR project_id IN ${inList(projectIds)} OR from_session_id IN ${inList(sessionIds)} OR to_session_id IN ${inList(sessionIds)}`,
+          pmId,
+          pmId,
+        );
+        db.run(
+          `UPDATE persona_changes SET revert_of = NULL WHERE pm_id = ? OR session_id IN ${inList(sessionIds)} OR revert_of IN (SELECT id FROM persona_changes WHERE pm_id = ? OR session_id IN ${inList(sessionIds)})`,
+          pmId,
+          pmId,
+        );
+        db.run(`DELETE FROM persona_changes WHERE pm_id = ? OR session_id IN ${inList(sessionIds)}`, pmId);
+
+        db.run("DELETE FROM schedules WHERE pm_id = ?", pmId);
+        for (const scheduleId of scheduleIds) {
+          p.changes.push({ type: "schedule.removed", data: { scheduleId } });
+        }
+
+        if (sessionIds.length > 0 || workerIds.length > 0 || messageIds.length > 0) {
+          db.run(
+            `DELETE FROM actions WHERE CASE WHEN json_valid(params) THEN
+               json_extract(params, '$.sessionId') IN ${inList(sessionIds)}
+               OR json_extract(params, '$.workerId') IN ${inList(workerIds)}
+               OR json_extract(params, '$.messageId') IN ${inList(messageIds)}
+             ELSE 0 END`,
+          );
+        }
+
+        db.run(
+          `DELETE FROM workers WHERE pm_id = ? OR project_id IN ${inList(projectIds)} OR pm_conversation_id IN ${inList(conversationIds)} OR worker_conversation_id IN ${inList(conversationIds)}`,
+          pmId,
+        );
+        if (conversationIds.length > 0 || sessionIds.length > 0 || workerIds.length > 0) {
+          db.run(
+            `DELETE FROM messages WHERE conversation_id IN ${inList(conversationIds)} OR session_id IN ${inList(sessionIds)} OR worker_id IN ${inList(workerIds)}`,
+          );
+        }
+        if (projectIds.length > 0) {
+          db.run(`DELETE FROM project_folders WHERE project_id IN ${inList(projectIds)}`);
+        }
+        db.run(`DELETE FROM projects WHERE pm_id = ? OR conversation_id IN ${inList(conversationIds)}`, pmId);
+        if (sessionIds.length > 0) {
+          db.run(`DELETE FROM agent_sessions WHERE id IN ${inList(sessionIds)}`);
+          for (const sid of sessionIds) ctx.pushed.delete(sid);
+        }
+        if (conversationIds.length > 0) {
+          db.run(`DELETE FROM conversations WHERE id IN ${inList(conversationIds)}`);
+        }
+        db.run("DELETE FROM pm_archives WHERE pm_id = ?", pmId);
+        db.run("DELETE FROM pms WHERE id = ?", pmId);
+
+        p.after.push(() => {
+          if (personasDir !== undefined) {
+            rmSync(personaFilePath(personasDir, pmId), { recursive: true, force: true });
+          }
+          rmSync(join(pmHomeRoot, String(pmId)), { recursive: true, force: true });
+          for (const projectId of projectIds) {
+            rmSync(join(files.worktreesDir, String(projectId)), { recursive: true, force: true });
+          }
+          if (files.launchDir !== undefined) {
+            for (const sid of sessionIds) {
+              rmSync(join(files.launchDir, `session-${sid}`), { recursive: true, force: true });
+            }
+          }
+          if (files.setupLogsDir !== undefined) {
+            for (const wid of workerIds) {
+              rmSync(join(files.setupLogsDir, `worker-${wid}.log`), { recursive: true, force: true });
+            }
+          }
+        });
+      }
+      return purged;
+    });
+  };
+
   return {
     pmRow,
     requirePm,
+    isPmArchived,
+    assertPmNotArchived,
+    assertConversationNotArchived,
     pmSession,
     privateConversation,
     validName,
@@ -489,5 +716,8 @@ export function createLedgerPersona(
     createPmIn,
     revertPersonaChange,
     syncPersonaFiles,
+    archivePm,
+    unarchivePm,
+    purgeExpiredArchivedPms,
   };
 }

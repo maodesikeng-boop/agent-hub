@@ -35,7 +35,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   const { db, now, write, enqueue } = ctx;
   const { currentSession } = sessions;
   const { getMessage, insertSystemMessage } = messages;
-  const { privateConversation } = persona;
+  const { privateConversation, assertPmNotArchived } = persona;
 
   const scheduleRow = (id: ScheduleId): ScheduleDbRow | null => db.get<ScheduleDbRow>("SELECT * FROM schedules WHERE id = ?", id) ?? null;
 
@@ -61,6 +61,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   // ---- hub schedule …（只给项目经理，见 shared/hub.ts 的 HUB_COMMAND_ROLES）----
 
   const addIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.add">): HubResult<"schedule.add"> => {
+    assertPmNotArchived(caller.pmId);
     const name = typeof args.name === "string" ? normalizeName(args.name, MAX_SCHEDULE_NAME_CHARS) : null;
     if (name === null) throw fail("invalid", `定时任务的名字不能是空的，也不能带换行等控制字符，最多 ${MAX_SCHEDULE_NAME_CHARS} 个字符`);
     // 【】是标题的括号（【定时任务：名字（原定 09:00）】），名字里有会让项目经理分不清标题到哪结束
@@ -124,6 +125,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   };
 
   const pauseIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.pause">): HubResult<"schedule.pause"> => {
+    assertPmNotArchived(caller.pmId);
     const row = ownSchedule(caller.pmId, args.scheduleId);
     if (row.enabled === 1) {
       db.run("UPDATE schedules SET enabled = 0, updated_at = ? WHERE id = ?", now(), row.id);
@@ -132,7 +134,16 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     return { text: `定时任务 #${row.id}“${row.name}”已暂停，恢复用 ${HUB_COMMAND} schedule resume ${row.id}。`, data: { schedule: toSchedule(scheduleRow(row.id)!) } };
   };
 
+  const pauseAllForPmIn = (p: Pending, pmId: PmId) => {
+    const enabled = db.all<{ id: number }>("SELECT id FROM schedules WHERE pm_id = ? AND enabled = 1 ORDER BY id", pmId);
+    if (enabled.length === 0) return;
+    const t = now();
+    db.run("UPDATE schedules SET enabled = 0, updated_at = ? WHERE pm_id = ? AND enabled = 1", t, pmId);
+    for (const { id } of enabled) pushUpdated(p, id);
+  };
+
   const resumeIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.resume">): HubResult<"schedule.resume"> => {
+    assertPmNotArchived(caller.pmId);
     const row = ownSchedule(caller.pmId, args.scheduleId);
     if (row.enabled === 0) {
       const t = now();
@@ -144,6 +155,7 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   };
 
   const removeIn = (p: Pending, caller: { pmId: PmId }, args: HubArgs<"schedule.remove">): HubResult<"schedule.remove"> => {
+    assertPmNotArchived(caller.pmId);
     const row = ownSchedule(caller.pmId, args.scheduleId);
     db.run("DELETE FROM schedules WHERE id = ?", row.id);
     p.changes.push({ type: "schedule.removed", data: { scheduleId: row.id } });
@@ -202,7 +214,13 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
   /** 调度器每 SCHEDULER_TICK_MS 调一次（守护进程启动时也调一次）：到点的在一个事务里各发一条。 */
   const runDueSchedules = (nowMs: number) => {
     write((p) => {
-      for (const row of db.all<ScheduleDbRow>("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY id", nowMs)) {
+      for (const row of db.all<ScheduleDbRow>(
+        `SELECT s.* FROM schedules s
+         LEFT JOIN pm_archives a ON a.pm_id = s.pm_id
+         WHERE s.enabled = 1 AND s.next_run_at <= ? AND a.pm_id IS NULL
+         ORDER BY s.id`,
+        nowMs,
+      )) {
         runOne(p, row, nowMs);
       }
     });
@@ -263,5 +281,5 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
 
   const all = (): ScheduleRecord[] => db.all<ScheduleDbRow>("SELECT * FROM schedules ORDER BY id").map(toSchedule);
 
-  return { addIn, addForUser, setEnabledForUser, removeForUser, list, pauseIn, resumeIn, removeIn, runDueSchedules, afterDriverEvent, actionFailedIn, all };
+  return { addIn, addForUser, setEnabledForUser, removeForUser, list, pauseIn, pauseAllForPmIn, resumeIn, removeIn, runDueSchedules, afterDriverEvent, actionFailedIn, all };
 }

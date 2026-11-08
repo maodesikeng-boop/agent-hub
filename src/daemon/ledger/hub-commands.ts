@@ -47,7 +47,7 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
 ) {
   const { db, now, write } = ctx;
-  const { pmRow, pmSession, getPersona, editPersonaChecked } = persona;
+  const { pmRow, pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
   const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn, setupIn } = projects;
 
   const runHub = (
@@ -120,6 +120,7 @@ export function createLedgerHubCommands(
       case "worker.search":
         return workerView.search(caller, args as HubArgs<"worker.search">);
       case "ask": {
+        assertPmNotArchived(caller.pmId);
         const { text } = args as HubArgs<"ask">;
         if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
         const message = messages.insertAskMessage(p, caller, text);
