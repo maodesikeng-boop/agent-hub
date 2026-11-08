@@ -70,9 +70,16 @@ describe("单个退出", () => {
     expect(onSignedOut).not.toHaveBeenCalled();
   });
 
-  it("退自己：发 DELETE 之后回到登录页（刷新）", async () => {
+  it("退自己（这个浏览器）：先变确认态（确认退出 / 取消），点取消恢复，点确认退出才发 DELETE 并回到登录页", async () => {
     await show();
-    fireEvent.click(within(rowOf("Mac Chrome")).getByRole("button", { name: /^退出/ }));
+    const mine = rowOf("Mac Chrome");
+    fireEvent.click(within(mine).getByRole("button", { name: /^退出/ }));
+    expect(api.callsTo("DELETE", /^\/api\/sessions\/mac$/)).toHaveLength(0);
+    expect(onSignedOut).not.toHaveBeenCalled();
+    fireEvent.click(within(mine).getByRole("button", { name: "取消" }));
+    expect(within(mine).getByRole("button", { name: /^退出/ })).toBeInTheDocument();
+    fireEvent.click(within(mine).getByRole("button", { name: /^退出/ }));
+    fireEvent.click(within(mine).getByRole("button", { name: "确认退出" }));
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
     expect(api.callsTo("DELETE", /^\/api\/sessions\/mac$/)).toHaveLength(1);
   });

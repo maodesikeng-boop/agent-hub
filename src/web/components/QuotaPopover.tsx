@@ -51,19 +51,25 @@ function Ring({ percent }: { percent: number }) {
  */
 export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
   const [fetched, setFetched] = useState<QuotaVendor[]>([]);
+  const [loading, setLoading] = useState(false);
   const client = useClient();
   const head = quota[0];
   const window = head?.windows[0];
   if (!window && !fetchable) return null;
   const blocks = [...quota, ...fetched];
-  const exhausted = quota.some((vendor) => vendor.exhausted);
+  const exhausted =
+    quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
   const onOpenChange = (open: boolean) => {
     if (!open || !fetchable) return;
-    client.fetchQuota().then(
-      (res) => setFetched(fetchedQuotaUsage(res)),
-      () => setFetched([]),
-    );
+    setLoading(true);
+    client
+      .fetchQuota()
+      .then(
+        (res) => setFetched(fetchedQuotaUsage(res)),
+        () => setFetched([]),
+      )
+      .finally(() => setLoading(false));
   };
   return (
     <Popover onOpenChange={onOpenChange}>
@@ -84,10 +90,11 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
             <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>
               <h3 className="text-[13.5px] font-medium text-muted-foreground">{vendor.name}</h3>
               {vendor.windows.map((w) => (
-                <WindowRow key={w.key} window={w} exhausted={vendor.exhausted} />
+                <WindowRow key={w.key} window={w} exhausted={vendor.exhausted || w.percent >= 100} />
               ))}
             </section>
           ))}
+          {loading && fetched.length === 0 && <p className="text-xs text-muted-foreground">Loading…</p>}
         </div>
       </PopoverContent>
     </Popover>

@@ -7,9 +7,9 @@ import { formatCount } from "../shared/count-format.ts";
 export { formatCount };
 
 export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
-  queued: "排队中",
+  queued: "Queued",
   delivered: "已送达",
-  processing: "处理中",
+  processing: "Working…",
   replied: "已回复",
   stopped: "已停止",
   failed: "失败",

@@ -172,11 +172,11 @@ describe("左栏", () => {
 });
 
 describe("提示条", () => {
-  it("“重连中”：没有阴影和描边，靠左放在对话列里", async () => {
+  it("“Reconnecting…”：没有阴影和描边，靠左放在对话列里", async () => {
     const ws = await boot();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => ws.drop());
-    const pill = screen.getByText("重连中").parentElement!;
+    const pill = screen.getByText("Reconnecting…").parentElement!;
     expect(pill.className).not.toMatch(/shadow|ring-/);
     expect(pill.parentElement).toHaveClass("chat-column", "items-start");
     vi.useRealTimers();

@@ -223,7 +223,7 @@ export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()):
         const window = group.windows[key];
         return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
       });
-      if (windows.length > 0) blocks.push({ id: group.id, name: `${quota.name} · ${group.name}`, windows, exhausted: false });
+      if (windows.length > 0) blocks.push({ id: group.id, name: `${quota.name} · ${group.name}`, windows, exhausted: windows.some((w) => w.percent >= 100) });
     }
   }
   return blocks;

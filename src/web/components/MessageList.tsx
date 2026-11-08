@@ -1,10 +1,10 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isHandoverTraffic, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
-import { EmptyConversation, MessageBubble, PendingBubble, TurnView, type AgentIdentity, type MessageActions } from "./Messages.tsx";
+import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
 /** 离底部不到这么多像素算“在底部”，内容变高、新消息来了跟着滚。 */
 const STICK_DISTANCE_PX = 80;
@@ -64,6 +64,7 @@ export function MessageList({
   const prevPendingCount = useRef(pending.length);
 
   const items = groupMessages(messages);
+  const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null;
   // 只看显示出来的：写交接的来往（不显示）进来不算新消息
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m))?.id ?? 0}:${pending.length}:${busy}`;
@@ -158,7 +159,17 @@ export function MessageList({
             if (item.kind === "turn") {
               const first = item.work[0] ?? item.parts[0]!;
               const turnStatus = rideOnTurn && index === items.length - 1 ? status : undefined;
-              return <TurnView key={item.key} turn={item} identity={agentOf(first)} status={turnStatus} actions={actions} highlightId={highlightId} />;
+              return (
+                <TurnView
+                  key={item.key}
+                  turn={item}
+                  identity={agentOf(first)}
+                  status={turnStatus}
+                  actions={actions}
+                  highlightId={highlightId}
+                  revertedChanges={revertedChanges}
+                />
+              );
             }
             const { message } = item;
             // Worker 对话里项目经理连说几句：只有第一句带头像
@@ -172,6 +183,7 @@ export function MessageList({
                 head={head}
                 actions={actions}
                 highlighted={message.id === highlightId}
+                revertedChanges={revertedChanges}
               />
             );
           })}
