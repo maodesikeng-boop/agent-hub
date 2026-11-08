@@ -461,12 +461,31 @@ describe("左下角的额度", () => {
       expect(badge()).toHaveTextContent("5h 37%");
     });
 
-    it("没有别家的事件额度、有 agy 会话：按钮也在（写“额度”），打开后显示 agy 的", async () => {
+    it("没有别家的事件额度、有 agy 会话：按钮也在（写“额度”），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
       const user = userEvent.setup();
       await boot(agyWorker());
-      api.quota = () => ({ status: 200, body: reply });
+      const gate = deferred<{ status: number; body: unknown }>();
+      api.quota = () => gate.promise;
       await user.click(badge());
+      expect(await screen.findByText("Loading…")).toHaveClass("text-xs", "text-muted-foreground");
+      gate.resolve({ status: 200, body: reply });
       expect(await screen.findByRole("region", { name: "Antigravity · Gemini" })).toBeInTheDocument();
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    it("现查厂商（agy）某个窗口耗尽（100% 已用 / 0% 剩余）：顶栏按钮也变成红色“额度用完”", async () => {
+      const user = userEvent.setup();
+      await boot(claudeAndAgy());
+      api.quota = () => ({
+        status: 200,
+        body: {
+          groups: [{ id: "gemini", name: "Gemini", windows: { five_hour: win(1) } }],
+        },
+      });
+      await user.click(badge());
+      await screen.findByRole("region", { name: "Antigravity · Gemini" });
+      expect(badge()).toHaveTextContent("额度用完");
+      expect(badge()).toHaveClass("text-danger");
     });
 
     it("查失败或没有：不显示 agy 那块，别家的照常", async () => {
@@ -801,14 +820,14 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(endedToggle()).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("各状态：Stopping…、Setting up…（主色）；不认识的 activity 当在忙", async () => {
+  it("各状态：Stopping…、Running setup…（主色）；不认识的 activity 当在忙", async () => {
     const stopping = makeSession({ sessionId: 3, conversationId: 30, activity: "stopping" });
     const preparing = makeSession({ sessionId: 4, conversationId: 31, activity: "preparing" });
     const unknown = makeSession({ sessionId: 6, conversationId: 40, activity: "bogus" as SessionState["activity"] });
     await boot(crowd({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), stopping, preparing, makeSession({ sessionId: 5, conversationId: 32, status: "ended" }), unknown] }));
     // 在忙的（准备中）排在前面
-    expect(rows()).toEqual(["写文档Setting up…", "修 XStopping…"]);
-    expect(within(workerGroup()).getByText("Setting up…")).toHaveClass("text-primary");
+    expect(rows()).toEqual(["写文档Running setup…", "修 XStopping…"]);
+    expect(within(workerGroup()).getByText("Running setup…")).toHaveClass("text-primary");
     await userEvent.setup().click(within(nav()).getByRole("button", { name: /老马/ }));
     expect(rows()).toEqual(["老马的活Working…"]);
   });
@@ -1302,7 +1321,7 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(box()).toHaveValue("");
     const mine = within(section).getByText("顺便改 README").closest("article")!;
     expect(mine).toHaveAttribute("data-side", "right");
-    expect(within(mine).getByText("排队中")).toBeInTheDocument();
+    expect(within(mine).getByText("Queued")).toBeInTheDocument();
     const clientId = (call.body as { clientId: string }).clientId;
     push(
       ws,
@@ -1311,7 +1330,7 @@ describe("在 Worker 页面直接对它说话", () => {
     gate.resolve({ status: 200, body: { messageId: 40 } });
     await act(async () => {});
     expect(within(section).getAllByText("顺便改 README")).toHaveLength(1);
-    expect(within(within(section).getByText("顺便改 README").closest("article")!).getByText("排队中")).toBeInTheDocument();
+    expect(within(within(section).getByText("顺便改 README").closest("article")!).getByText("Queued")).toBeInTheDocument();
   });
 
   it("我说的靠右、项目经理说的靠左带它的名字，两种署名分得清", async () => {

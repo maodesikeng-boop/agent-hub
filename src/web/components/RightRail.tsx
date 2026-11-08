@@ -7,21 +7,22 @@ import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import type { WorkerEntry } from "../selectors.ts";
+import { STEP_TEXT } from "../step-labels.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-/** 会话 activity → 状态词（英文，docs/ui-standard.md 第 12 条）。以后有新的 activity 只在这里加一行。 */
+/** 会话 activity → 状态词（英文，复用 step-labels.ts，docs/ui-standard.md 第 12 条）。以后有新的 activity 只在这里加一行。 */
 const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
-  working: "Working…",
-  stopping: "Stopping…",
-  preparing: "Setting up…",
-  background: "Waiting…",
+  working: `${STEP_TEXT.working}…`,
+  stopping: `${STEP_TEXT.stopping}…`,
+  preparing: `${STEP_TEXT.preparing}…`,
+  background: `${STEP_TEXT.background}…`,
   idle: "Idle",
 };
 /** 这几种算“在忙”（状态词和小圆点用主色，列表排在前面）：干活中、准备中（在跑项目的准备命令）、在等后台命令跑完；不认识的 activity 也当在忙。 */
 const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing", "background"]);
-const UNKNOWN_ACTIVITY_TEXT = "Working…";
+const UNKNOWN_ACTIVITY_TEXT = `${STEP_TEXT.working}…`;
 const ENDED_TEXT = "Ended";
 /** 每组默认只列几条，多了出一行 Show more（照 Claude desktop 的右栏）。 */
 export const RIGHT_RAIL_VISIBLE_ROWS = 3;

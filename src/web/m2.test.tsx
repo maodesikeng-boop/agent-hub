@@ -485,7 +485,7 @@ describe("系统消息", () => {
     const text = within(log()).getByText("已挂上文件夹 /x");
     expect(text.closest("[data-notice]")).toHaveAttribute("data-side", "left");
     expect(within(log()).queryByText(/【系统】/)).not.toBeInTheDocument();
-    expect(within(log()).queryByText("排队中")).not.toBeInTheDocument();
+    expect(within(log()).queryByText("Queued")).not.toBeInTheDocument();
     expect(text.closest("[data-status]")).toBeNull();
   });
 
@@ -558,10 +558,29 @@ describe("撤销性格设定修改", () => {
     };
     push(ws, messageChange(11, "message.created", changed(3, 42)));
     await user.click(within(log()).getByRole("button", { name: "撤销" }));
-    expect(within(log()).getByRole("button", { name: "撤销中" })).toBeDisabled();
+    expect(within(log()).getByRole("button", { name: "Reverting…" })).toBeDisabled();
     release();
     await within(log()).findByText("已撤销");
     expect(api.callsTo("POST", /revert$/)).toHaveLength(1);
+  });
+
+  it("后续消息里已经有 revertOf 指向它的 persona.changed：直接显示“已撤销”，刷新或切对话不丢", async () => {
+    await boot(
+      makeSnapshot({
+        conversations: [
+          makeConvSnapshot([
+            changed(3, 42),
+            makeSystemMessage({
+              id: 4,
+              text: "已撤销小林的上一次性格设定修改",
+              event: { event: "persona.changed", pmId: 1, personaChangeId: 43, revertOf: 42 },
+            }),
+          ]),
+        ],
+      }),
+    );
+    expect(within(log()).getByText("已撤销")).toBeInTheDocument();
+    expect(within(log()).getAllByRole("button", { name: "撤销" })).toHaveLength(1);
   });
 });
 
@@ -1114,9 +1133,9 @@ describe("资料页：开新会话", () => {
     expect(within(log()).queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
 
-    // 写交接时用户发了一句：不显示“排队中”，项目经理显示在想（换完代马上处理）
+    // 写交接时用户发了一句：不显示“Queued”，项目经理显示在想（换完代马上处理）
     push(ws, messageChange(14, "message.created", makeUserMessage({ id: 32, text: "换代时问的", status: "queued", createdAt: 51_000 })));
-    expect(within(log()).queryByText("排队中")).not.toBeInTheDocument();
+    expect(within(log()).queryByText("Queued")).not.toBeInTheDocument();
     expect(within(log()).getByRole("status")).toHaveTextContent("Thinking");
 
     // 换代：分隔线出现在写交接开始的地方，换代时问的那句排在它下面
@@ -1152,7 +1171,7 @@ describe("重试失败的消息", () => {
     expect(within(log()).getByRole("button", { name: "重试中" })).toBeDisabled();
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     expect(within(log()).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(log()).getByText("排队中")).toBeInTheDocument();
+    expect(within(log()).getByText("Queued")).toBeInTheDocument();
     expect(within(log()).queryByText("Claude 没能启动")).not.toBeInTheDocument();
     expect(within(log()).getAllByRole("article")).toHaveLength(1);
   });

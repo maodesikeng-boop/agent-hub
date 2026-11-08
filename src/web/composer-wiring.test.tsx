@@ -105,7 +105,7 @@ describe("任何接口回 401：直接切到登录界面，不弹报错", () => 
     await boot();
     api.postMessage = () => ({ status: 401, body: { error: "unauthorized" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByText("请用守护进程在终端里打印的链接打开")).toBeInTheDocument();
+    expect(await screen.findByText(/还没有登录/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/登录过期了/)).toBeNull();
   });

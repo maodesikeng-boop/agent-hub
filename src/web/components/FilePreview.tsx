@@ -19,6 +19,7 @@ import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { formatBytes } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
+import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 /** 预览窗要的一个文件。url 是取文件的接口地址（文件卡片、下载用同一个）；target 是“在 Finder 中显示 / 默认程序打开”的对象，没有就不显示这两个按钮。 */
@@ -143,7 +144,7 @@ function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
+    const timer = setTimeout(() => setCopied(false), COPIED_RESET_MS);
     return () => clearTimeout(timer);
   }, [copied]);
 

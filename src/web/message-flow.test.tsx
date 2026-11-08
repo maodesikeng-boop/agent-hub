@@ -363,7 +363,7 @@ describe("消息状态：只在排队、失败、停止时出现", () => {
   });
 
   it("排队中、已停止", () => {
-    expect(statuses([makeUserMessage({ id: 1, status: "queued" }), makeUserMessage({ id: 2, status: "stopped" })])).toEqual(["排队中", "已停止"]);
+    expect(statuses([makeUserMessage({ id: 1, status: "queued" }), makeUserMessage({ id: 2, status: "stopped" })])).toEqual(["Queued", "已停止"]);
   });
 
   it("已取消（一轮中途写给 agent、它还没读到就停了）：和已停止一样灰色一行，不能重试", () => {

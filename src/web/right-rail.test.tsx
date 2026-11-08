@@ -75,10 +75,10 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary");
   });
 
-  it("在等后台命令跑完的 Worker：状态词 Waiting…，算在忙（强调色、色点、排在前面）", () => {
+  it("在等后台命令跑完的 Worker：状态词 Waiting for background command…，算在忙（强调色、色点、排在前面）", () => {
     renderRail({ workers: [worker(41), worker(42), worker(43), worker(44, { activity: "background", tone: "success" })], openWorkerId: null });
     const row = within(workerGroup()).getByRole("button", { name: /活 44/ });
-    expect(within(row).getByText("Waiting…")).toHaveClass("text-primary");
+    expect(within(row).getByText("Waiting for background command…")).toHaveClass("text-primary");
     expect(within(row).getByTestId("status-dot")).toHaveClass("bg-primary");
     expect(within(workerGroup()).getAllByRole("button", { name: /活 \d+/ })[0]).toBe(row);
   });

@@ -48,7 +48,7 @@ export function Notices({ health, reconnecting, offline = null, listFailed = fal
       {reconnecting && (
         <div className={cn(PILL, "bg-muted text-muted-foreground")} data-severity="info">
           <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
-          <span className="font-semibold">重连中</span>
+          <span className="font-semibold">Reconnecting…</span>
         </div>
       )}
     </div>
