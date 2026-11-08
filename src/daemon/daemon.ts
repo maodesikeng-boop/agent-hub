@@ -2,15 +2,18 @@
 // 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
 // - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
 //   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 后台写交接的跑腿的（补清上次没清掉的复制会话）
-//   → 界面令牌、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：调度器 → 后台写交接的跑腿的（取消在写的、清理复制会话）→ 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
+//   → 界面令牌、设备身份和配对、ssh 隧道和管理 socket、界面服务。
+// - 关机（启动到哪一步就关到哪一步）：调度器 → 后台写交接的跑腿的（取消在写的、清理复制会话）→ 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 隧道管理 socket、ssh 隧道 → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
 // 用到的超时都在 src/shared/limits.ts。
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
   DEFAULT_PM_MODE,
+  DEFAULT_PEER_ENTRY_PORT,
   DEFAULT_UI_PORT,
   DEFAULT_AGENT_VENDOR,
   ENV_DEFAULT_MODEL,
@@ -77,6 +80,7 @@ import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type Runni
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
+import { createTunnelService, startTunnelAdmin, type RunningTunnelAdmin, type TunnelService } from "./tunnel/index.ts";
 import {
   createTailnetProbe,
   runTailscaleStatus,
@@ -151,6 +155,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     commands?: CommandCatalogs;
     ui?: RunningUiServer;
     peers?: Peers;
+    tunnel?: TunnelService;
+    tunnelAdmin?: RunningTunnelAdmin;
     agentApi?: RunningAgentApi;
     db?: Db;
     lock?: DirLock;
@@ -165,7 +171,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, peers, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
@@ -189,6 +195,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (driver) await step("claude", () => driver.shutdown());
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
+    // 隧道：先关管理 socket（不再收命令），再停 ssh 子进程
+    if (tunnelAdmin) await step("隧道管理 socket", () => tunnelAdmin.close());
+    if (tunnel) await step("隧道", () => tunnel.close());
     // 先停设备之间在途的请求，再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
     peers?.close();
     if (ui) await step("界面服务", () => ui.close());
@@ -429,6 +438,40 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.peers = peers;
+    // ssh 隧道（docs/hub-tunnel-design.md 第 6、7 节）：连入方起 ssh 子进程看着它；中心分槽位、出邀请码。
+    // 隧道命令（src/tunnel/）经 run/admin.sock 找它，要带界面令牌（每次现读 state/ui-token：全部退出换了令牌也跟着变）
+    const tunnel = createTunnelService({
+      paths: {
+        tableFile: paths.tunnelsFile,
+        keyFile: join(paths.tunnelDir, "id_ed25519"),
+        knownHostsFile: join(paths.tunnelDir, "known_hosts"),
+        pidFile: join(paths.tunnelDir, "ssh.pid"),
+        peerSocket: paths.peerSock,
+        hubSocket: paths.tunnelHubSock,
+      },
+      entryPort: DEFAULT_PEER_ENTRY_PORT,
+      // 邀请码绑槽位归块 B；现在先用本机的邀请码（10 分钟、用一次）
+      createInvite: () => peers.createInvite(),
+    });
+    parts.tunnel = tunnel;
+    tunnel.onChange((status) => {
+      if (status !== null) log(`${LOG_PREFIX} 隧道：${status.state}${status.detail ? `（${status.detail}）` : ""}`);
+    });
+    await tunnel.start();
+    const sha = (value: string) => createHash("sha256").update(value).digest();
+    parts.tunnelAdmin = await startTunnelAdmin({
+      runDir: paths.runDir,
+      socketPath: paths.adminSock,
+      authorize: (given) => {
+        try {
+          return timingSafeEqual(sha(given), sha(readFileSync(paths.uiTokenFile, "utf8").trim()));
+        } catch {
+          return false;
+        }
+      },
+      service: tunnel,
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
     parts.ui = await startUiServer({
       ledger,
       token,
@@ -445,6 +488,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       serveTarget,
       push,
       peers,
+      tunnel,
       ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
     });
     const uiPort = parts.ui.port;

@@ -17,6 +17,7 @@ import type {
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
@@ -163,10 +164,12 @@ export interface StateSnapshot {
   schedules: ScheduleRecord[];
   /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
   server: ServerInfo;
+  /** 连入方 ssh 隧道的状态（daemon/tunnel/，界面服务补上的）：没配隧道不带，没连过中心是 null。内部值，网页怎么说由块 E 定。 */
+  tunnel?: TunnelStatus | null;
 }
 
-/** 账本给出的快照：界面服务在 /api/state 里再补上 server。 */
-export type LedgerSnapshot = Omit<StateSnapshot, "server">;
+/** 账本给出的快照：界面服务在 /api/state 里再补上 server、tunnel。 */
+export type LedgerSnapshot = Omit<StateSnapshot, "server" | "tunnel">;
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
 export interface MessagesPage {

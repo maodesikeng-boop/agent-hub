@@ -353,6 +353,11 @@ export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 
 /** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
+/**
+ * 设备入口（docs/hub-tunnel-design.md 第 4 节）在中心（东京）上听的 TCP 端口，只听 127.0.0.1。连入设备经 ssh -L 连到它；
+ * 隧道用户读不了守护进程的 socket，所以中心用端口。连入方用 unix socket（paths.ts 的 peerSock）。
+ */
+export const DEFAULT_PEER_ENTRY_PORT = 4319;
 
 /** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
 export const MAX_API_RETRY_ERROR_CHARS = 200;
@@ -413,3 +418,29 @@ export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
 export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
 /** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
 export const PEER_WS_PING_MS = 5_000;
+
+// ───────────── ssh 隧道（docs/hub-tunnel-design.md 第 3、6、7 节）─────────────
+/** 中心给连入设备分的 -R 端口（槽位）：从这个起往上取最小的空的，一台一个。 */
+export const TUNNEL_FIRST_SLOT_PORT = 4401;
+/** 槽位端口最大到这个（最多 99 台连入设备）。 */
+export const TUNNEL_LAST_SLOT_PORT = 4499;
+/** ssh 断了以后第一次等多久再连；每失败一次翻倍。 */
+export const TUNNEL_BACKOFF_MIN_MS = 1_000;
+/** 退避封顶。 */
+export const TUNNEL_BACKOFF_MAX_MS = 60_000;
+/** 连上后稳定这么久再断，退避从头算（也开始一个新的“退避周期”：提前重连又能用一次）。 */
+export const TUNNEL_STABLE_MS = 60_000;
+/** ssh 心跳：每隔几秒一次（ServerAliveInterval，秒）。东京那边 sshd 片段的 ClientAliveInterval 用同一个数。 */
+export const TUNNEL_ALIVE_INTERVAL_S = 15;
+/** 心跳几次没回就断（ServerAliveCountMax）：15 × 3 = 45 秒内发现断线。 */
+export const TUNNEL_ALIVE_COUNT_MAX = 3;
+/** ssh 连中心最多等几秒（ConnectTimeout）。 */
+export const TUNNEL_CONNECT_TIMEOUT_S = 15;
+/** 停隧道：SIGTERM 之后等这么久还没退就 SIGKILL。 */
+export const TUNNEL_STOP_GRACE_MS = 3_000;
+/** 隧道状态里留 ssh 最后一行报错，最多这么多字符。 */
+export const TUNNEL_DETAIL_MAX_CHARS = 200;
+/** 隧道命令等守护进程的管理 socket 回话最多多久。 */
+export const TUNNEL_ADMIN_TIMEOUT_MS = 30_000;
+/** 管理 socket 收的请求体上限。 */
+export const TUNNEL_ADMIN_MAX_BODY_BYTES = 16 * 1024;
