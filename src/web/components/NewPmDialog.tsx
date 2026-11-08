@@ -15,7 +15,7 @@ import {
 import type { HubClient } from "../client.ts";
 import { DeviceScope, useClient } from "../device-scope.tsx";
 import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
-import { errorText, nameError } from "../format.ts";
+import { errorText, nameError, errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { useModelCatalog } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
@@ -45,9 +45,9 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
   const [persona, setPersona] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<ErrorLike | null>(null);
   // 服务端不是 macOS（弹不出原生对话框）：不显示“选择…”，只留手填路径的输入框
   const canPick = useServerInfo().folderPicker;
 
@@ -163,8 +163,8 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
         </Collapsible>
       </DialogBody>
       {error && (
-        <p role="alert" className="px-4 text-[13.5px] text-danger [overflow-wrap:anywhere]">
-          {error}
+        <p role="alert" title={errorTitle(error)} className="px-4 text-[13.5px] text-danger [overflow-wrap:anywhere]">
+          {errorLine(error)}
         </p>
       )}
       <DialogFooter>

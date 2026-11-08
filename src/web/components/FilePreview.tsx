@@ -10,11 +10,12 @@ import {
   sentFileMime,
   type FileAction,
 } from "../../shared/index.ts";
-import { ApiError, fetchFileBytes, type FileActionTarget } from "../client.ts";
+import { fetchFileBytes, type FileActionTarget } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { parseCsv } from "../csv.ts";
 import { useServerInfo } from "../server-info.tsx";
 import { highlightHtml } from "../highlight.ts";
+import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { formatBytes } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
@@ -228,7 +229,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
   const kind = previewKindOf(file.name, mime);
   const { pending, failed, controls, note, body } = usePreviewBody(file, kind);
   const [busy, setBusy] = useState<FileAction | null>(null);
-  const [result, setResult] = useState<{ text: string; error: boolean } | null>(null);
+  const [result, setResult] = useState<{ text: ErrorLike; error: boolean } | null>(null);
   const openAllowed = canOpenWithDefault(file.name);
   // 服务端不是 macOS、或浏览器不在服务端这台机器上（服务端按请求来源定 fileActions）：不显示“在 Finder 中显示”“用默认程序打开”，只留“下载”
   const fileActions = useServerInfo().fileActions;
@@ -241,7 +242,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
       const response = await client.postFileAction(file.target, action);
       if (response.target === "copy" && file.target.kind === "sent") setResult({ text: COPY_NOTICE, error: false });
     } catch (error) {
-      setResult({ text: error instanceof ApiError ? error.message : "没能打开这个文件", error: true });
+      setResult({ text: errorText(error), error: true });
     } finally {
       setBusy(null);
     }
@@ -315,7 +316,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
         )}
         {controls}
         <span role="status" className="ml-auto text-[13.5px] text-muted-foreground">
-          {result !== null ? <span className={result.error ? "text-danger" : undefined}>{result.text}</span> : note}
+          {result !== null ? <span className={result.error ? "text-danger" : undefined} title={errorTitle(result.text)}>{errorLine(result.text)}</span> : note}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border">{content}</div>

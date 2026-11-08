@@ -1,5 +1,6 @@
 // 界面上的文字：状态名、错误、时间。
 import { MAX_NAME_CHARS, type MessageStatus, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
+import { GENERIC_ERROR_TEXT } from "../shared/errors.ts";
 import { ApiError } from "./client.ts";
 import { formatCount } from "../shared/count-format.ts";
 
@@ -87,10 +88,42 @@ export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
   hands_on: "小事直接在项目文件夹里改，大活再派 Worker",
 };
 
-/** 接口出错给用户看的话：服务端的原因原样显示，连不上就说连不上。 */
-export function errorText(err: unknown): string {
-  if (err instanceof ApiError) return err.status === 0 ? "连不上守护进程" : err.message;
-  return "出错了";
+/** 出错显示的三样：text 出了什么事，hint 怎么办（可以没有），raw 原文（只放 title，悬停才看得到）。数据都来自 shared/errors.ts 的 humanize。 */
+export interface ErrorInfo {
+  text: string;
+  hint?: string;
+  raw: string;
+}
+
+/** 接口出错给用户看的：ApiError 带着 humanize 的结果；别的异常只说“出错了”，原文进 raw。 */
+export function errorText(err: unknown): ErrorInfo {
+  if (err instanceof ApiError) return { text: err.message, ...(err.hint === undefined ? {} : { hint: err.hint }), raw: err.raw };
+  return { text: GENERIC_ERROR_TEXT, raw: err instanceof Error ? err.message : "" };
+}
+
+/** 抛给“显示提示的那一层”（输入框上方的提示）的错：message 是显示的那一行，info 带着 hint 和 raw。 */
+export class ErrorNotice extends Error {
+  readonly info: ErrorInfo;
+  constructor(info: ErrorInfo) {
+    super(info.hint === undefined ? info.text : `${info.text}，${info.hint}`);
+    this.name = "ErrorNotice";
+    this.info = info;
+  }
+}
+
+/** 界面上的一行错误：本地校验的一句话（字符串），或接口错误（带 hint 和 raw）。 */
+export type ErrorLike = string | ErrorInfo;
+
+/** 显示的那一行：text 后面接 hint。 */
+export function errorLine(error: ErrorLike): string {
+  if (typeof error === "string") return error;
+  return error.hint === undefined ? error.text : `${error.text.replace(/[。.]$/, "")}，${error.hint}`;
+}
+
+/** 放进 title 的原文：没有、或和显示的一样就不放。 */
+export function errorTitle(error: ErrorLike): string | undefined {
+  if (typeof error === "string" || error.raw === "" || error.raw === errorLine(error)) return undefined;
+  return error.raw;
 }
 
 export const ACTOR_LABELS: Readonly<Record<PersonaChange["actor"], string>> = {

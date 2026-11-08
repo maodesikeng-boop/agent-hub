@@ -11,6 +11,7 @@ import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar, type SidebarGroup } from "./components/Sidebar.tsx";
 import { useDevices } from "./device-hub.ts";
 import { DeviceScope } from "./device-scope.tsx";
+import { errorTitle } from "./format.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, routeDeviceOf } from "./devices.ts";
 import {
   failingHealth,
@@ -149,7 +150,8 @@ export function App() {
   if (local.state.phase === "error") {
     return (
       <div className={FULLPAGE}>
-        <p>连不上守护进程</p>
+        <p title={local.state.loadError ? errorTitle(local.state.loadError) : undefined}>{local.state.loadError?.text ?? "连不上守护进程"}</p>
+        {local.state.loadError?.hint && <p>{local.state.loadError.hint}</p>}
         <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>重试</Button>
       </div>
     );

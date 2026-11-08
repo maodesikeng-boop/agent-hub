@@ -142,6 +142,8 @@ describe("首屏", () => {
     installFakeWebSocket();
     render(<App />);
     expect(await screen.findByText("连不上守护进程")).toBeInTheDocument();
+    expect(screen.getByText("看守护进程有没有在跑")).toBeInTheDocument();
+    expect(screen.getByText("连不上守护进程")).toHaveAttribute("title", "Failed to fetch");
     expect(FakeWebSocket.instances).toHaveLength(0);
     api.state = () => ({ status: 200, body: defaultSnapshot() });
     await user.click(screen.getByRole("button", { name: "重试" }));
@@ -155,7 +157,7 @@ describe("首屏", () => {
     api.install();
     installFakeWebSocket();
     render(<App />);
-    expect(await screen.findByText("连不上守护进程")).toBeInTheDocument();
+    expect(await screen.findByText("出错了（500）")).toHaveAttribute("title", "boom"); // 英文原文只在悬停的 title 里
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
 });

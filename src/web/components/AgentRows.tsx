@@ -11,6 +11,7 @@ import {
   isSelectable,
   type ModelCatalog,
 } from "../../shared/index.ts";
+import type { ErrorLike } from "../format.ts";
 import { useModelCatalog, useVendorChoices, vendorOptionLabel } from "../models.tsx";
 import { Input, Select } from "../ui/input.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
@@ -80,7 +81,7 @@ export function AgentRows({
   value: AgentDraft;
   onChange: (draft: AgentDraft, row: AgentRowKey) => void;
   disabled?: boolean;
-  errors?: Partial<Record<AgentRowKey, string | null>>;
+  errors?: Partial<Record<AgentRowKey, ErrorLike | null>>;
   customAction?: ReactNode;
   onCustomSubmit?: () => void;
 }) {

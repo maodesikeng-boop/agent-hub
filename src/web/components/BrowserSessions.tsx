@@ -7,6 +7,7 @@ import { describeUserAgent, formatAgo, formatCountdown } from "../browser-sessio
 import { ApiError, deleteBrowserSession, fetchBrowserSessions, postLoginLink, postLogoutAll } from "../client.ts";
 import { Button } from "../ui/button.tsx";
 import { QrCode } from "./QrCode.tsx";
+import { errorText, type ErrorLike } from "../format.ts";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 /** 二维码显示期间，每隔多久刷新一次列表（手机扫码登录上了，二维码就收起来）。 */
@@ -16,22 +17,20 @@ const CONFIRM_TIMEOUT_MS = 5000;
 /** 倒计时每秒走一次。 */
 const COUNTDOWN_TICK_MS = 1000;
 
-const reasonOf = (err: unknown) => (err instanceof ApiError ? err.message : "操作失败");
-
 /** 退出自己、全部退出之后：刷新页面，接口回 401，页面显示登录提示。 */
 const reloadPage = () => location.reload();
 
 export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSignedOut?: () => void }) {
   const [sessions, setSessions] = useState<BrowserSessionInfo[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<ErrorLike | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, ErrorLike>>({});
+  const [busy, setBusy] = useState<ErrorLike | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
-  const [allError, setAllError] = useState<string | null>(null);
+  const [allError, setAllError] = useState<ErrorLike | null>(null);
   // 二维码：link 是现在显示的那个（null 没显示）；linkBusy 是正在生成；baseline 是生成时已有的浏览器，多出来就是手机登录上了
   const [link, setLink] = useState<LoginLinkResponse | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<ErrorLike | null>(null);
   const [baseline, setBaseline] = useState<ReadonlySet<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
 
@@ -40,7 +39,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
       setSessions((await fetchBrowserSessions()).sessions);
       setLoadError(null);
     } catch (err) {
-      setLoadError(reasonOf(err));
+      setLoadError(errorText(err));
     }
   }, []);
 
@@ -83,7 +82,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
     } catch (err) {
       // 别处已经把它退了：当作成功
       if (!(err instanceof ApiError && err.status === 404)) {
-        setRowErrors((errors) => ({ ...errors, [session.id]: reasonOf(err) }));
+        setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
         setBusy(null);
         return;
       }
@@ -99,7 +98,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
     try {
       await postLogoutAll();
     } catch (err) {
-      setAllError(reasonOf(err));
+      setAllError(errorText(err));
       setBusy(null);
       setConfirmingAll(false);
       return;
@@ -115,7 +114,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
       setBaseline(new Set(sessions?.map((s) => s.id)));
       setLink(await postLoginLink());
     } catch (err) {
-      setLinkError(reasonOf(err));
+      setLinkError(errorText(err));
     } finally {
       setLinkBusy(false);
     }
@@ -131,7 +130,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
         )}
         {loadError !== null && (
           <div className="px-4 py-3">
-            <RowError>{loadError}</RowError>
+            <RowError error={loadError} />
           </div>
         )}
         {sessions?.map((session) => {
@@ -177,7 +176,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
         )}
         {linkError !== null && (
           <div className="px-4 py-3">
-            <RowError>{linkError}</RowError>
+            <RowError error={linkError} />
           </div>
         )}
         <SettingsRow label="所有浏览器" error={allError}>
