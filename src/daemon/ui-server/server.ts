@@ -986,6 +986,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         peers: opts.peers,
         peerOf,
         trackSocket,
+        onChange: broadcastResync,
         ...(opts.peerProxy ? { proxy: opts.peerProxy } : {}),
       });
     }
