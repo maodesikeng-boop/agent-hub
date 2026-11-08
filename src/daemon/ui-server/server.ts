@@ -588,6 +588,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     // 经 serve 来的是 https：加 Secure。本机 http://127.0.0.1 不能加（浏览器会丢掉这个 cookie）
     `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}${contextOf(req)?.rule.secureCookie ? "; Secure" : ""}`;
 
+  /** tailscale serve/funnel 转发到 unix socket 时会把 Host 改写成 localhost，真实外部 Host 放在 X-Forwarded-Host。 */
+  const proxySocketHost = (req: FastifyRequest): string => {
+    const raw = (req.headers.host ?? "").toLowerCase();
+    const forwarded = typeof req.headers["x-forwarded-host"] === "string"
+      ? req.headers["x-forwarded-host"].split(",", 1)[0]?.trim().toLowerCase()
+      : undefined;
+    return raw === "localhost" && forwarded ? forwarded : raw;
+  };
+
   /** 登录成功：开一个新会话、设 cookie。这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）；满了被挤掉的和被换掉的一样，走撤销的路（关 WebSocket）。 */
   const startSession = (req: FastifyRequest, reply: FastifyReply, sessionOpts?: { viaPublic?: boolean; clientIp?: string }) => {
     const previous = sessions.authenticate(sessionToken(req));
@@ -595,7 +604,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       sessions.revoke(previous.id);
       closeSockets(previous.id);
     }
-    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: req.headers.host ?? "" }, sessionOpts);
+    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: proxySocketHost(req) }, sessionOpts);
     for (const id of session.evicted) closeSockets(id);
     const maxAgeSeconds = sessionOpts?.viaPublic ? PUBLIC_SESSION_MAX_AGE_MS / 1000 : COOKIE_MAX_AGE_SECONDS;
     reply.header("set-cookie", sessionCookie(req, session.token, maxAgeSeconds)).header("referrer-policy", "no-referrer");
@@ -639,7 +648,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       listeners: [serveListener],
       host: (req) => {
         const self = opts.tailnet?.current() ?? null;
-        const host = (req.headers.host ?? "").toLowerCase();
+        const host = proxySocketHost(req);
         if (self === null || (host !== self.dnsName && host !== self.dnsName + HTTPS_DEFAULT_PORT_SUFFIX)) return null;
         const login = req.headers[TAILSCALE_USER_LOGIN_HEADER];
         if (self.owner === null || typeof login !== "string" || login.trim().toLowerCase() !== self.owner) return "forbidden_identity";
@@ -669,7 +678,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       host: (req) => {
         if (!publicEntryState.enabled || !publicEntryState.hostname) return null;
         const expected = publicEntryState.hostname.toLowerCase();
-        const host = (req.headers.host ?? "").toLowerCase();
+        const host = proxySocketHost(req);
         if (host !== expected && host !== expected + HTTPS_DEFAULT_PORT_SUFFIX) return null;
         return { kind: "public", hostname: expected };
       },
