@@ -136,6 +136,9 @@ interface Row {
   conversation_id: number;
   from_session_id: number;
   to_session_id: number | null;
+  to_vendor: string | null;
+  to_model: string | null;
+  to_effort: string | null;
   auto: number;
   method: string | null;
   status: string;
@@ -932,5 +935,208 @@ describe("开场说明里的原话（账本查询）", () => {
     expect(reports).not.toContain("#7");
     expect(reports).not.toContain("#113");
     expect(ledger.getMessage(held)!.status).toBe("queued");
+  });
+});
+
+describe("给已有项目经理换厂商", () => {
+  it("交接提示词、换代（新厂商、新模型、不抄旧厂商额度、更新 pms 并推 pm.updated）、开场说明多出一句", () => {
+    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
+    createSessionStore(db).update(firstSession, { rateLimit: info });
+    const asked = post("之前聊的");
+    turn(firstSession, [asked], ["之前的回答"]);
+
+    const changes: string[] = [];
+    ledger.onChange((c) => {
+      if (c.type === "pm.updated") changes.push(`${c.data.pm.vendor}:${c.data.pm.defaultModel}:${c.data.pm.effort}`);
+    });
+
+    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
+    expect(changes).toEqual(["claude:opus:null"]);
+    expect(rows()).toMatchObject([{ status: "queued", auto: 0, to_vendor: "codex", to_model: "gpt-6-luna", to_effort: "high" }]);
+
+    const job = ledger.claimHandover()!;
+    expect(job.prompt).toContain(
+      "新会话换成 Codex（codex），别写只有 Claude Code（claude）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
+    );
+
+    changes.length = 0;
+    forkAndWrite(job, "交接：换到 codex 接着干");
+
+    const [, g2] = sessions();
+    const next = createSessionStore(db).get(g2!.id)!;
+    expect(next).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "high",
+      rateLimit: null,
+    });
+    expect(changes).toEqual(["codex:gpt-6-luna:high"]);
+    expect(ledger.snapshot().pms.find((p) => p.id === pmId)).toMatchObject({
+      vendor: "codex",
+      defaultModel: "gpt-6-luna",
+      effort: "high",
+    });
+    expect(ledger.getPersona(pmId)).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "high",
+      switchingToVendor: null,
+    });
+
+    const preamble = ledger.sessionPreamble(g2!.id)!;
+    expect(preamble).toContain("上一个会话是 Claude Code（claude），提到的工具名按你自己的工具理解。");
+    expect(preamble).toContain(`上一个会话的原始记录：${TRANSCRIPT}（要查原话可以去翻）`);
+  });
+
+  it("从 agy 换到别家：开场说明里原始记录写成“格式是 agy 的，读不了，只看交接和原话”；本会话写交接兜底提示词也带换厂商说明", () => {
+    const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon", effort: "high" });
+    ledger.editPersona(agyPm.pm.id, { vendor: "claude" }, { kind: "user" });
+    const job = ledger.claimHandover()!;
+    expect(job.prompt).toContain(
+      "新会话换成 Claude Code（claude），别写只有 Antigravity（agy）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
+    );
+    // 退回本会话写交接兜底
+    ledger.handoverFailed(job.handoverId, { kind: "unsupported", detail: "agy-copy: fail" });
+    ledger.runAutoRenew();
+    const req = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? ORDER BY id", agyPm.conversation.id).map((r) => ledger.getMessage(r.id)!).find((m) => systemEventOf(m)?.event === "handover.requested")!;
+    expect(req.text).toContain(
+      "新会话换成 Claude Code（claude），别写只有 Antigravity（agy）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
+    );
+    turn(agyPm.sessionId, [req.id], ["agy 写的交接"]);
+    const g2 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", agyPm.conversation.id)[1]!.id;
+    const preamble = ledger.sessionPreamble(g2)!;
+    expect(preamble).toContain("上一个会话是 Antigravity（agy），提到的工具名按你自己的工具理解。");
+    expect(preamble).toContain("上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话");
+    expect(preamble).not.toContain(TRANSCRIPT);
+  });
+
+  it("失败回退：提示“换到 <新厂商> 没成：<原因>，还在用 <旧厂商>”，推 pm.updated，getPersona 回到旧厂商且 switchingToVendor 为 null，可再次点", () => {
+    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", switchingToVendor: "codex" });
+    const job = ledger.claimHandover()!;
+    let pmUpdates = 0;
+    ledger.onChange((c) => {
+      if (c.type === "pm.updated") pmUpdates++;
+    });
+
+    const raw = 'API Error: 529 {"type":"overloaded_error"}';
+    ledger.handoverFailed(job.handoverId, { kind: "error", detail: raw });
+    expect(notices()).toEqual(["换到 Codex 没成：Claude 服务繁忙，稍后重试，还在用 Claude Code"]);
+    expect(pmUpdates).toBe(1);
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+
+    // 可再次发起换厂商；未知原因时用 HANDOVER_NOT_WRITTEN_TEXT
+    ledger.editPersona(pmId, { vendor: "agy" }, { kind: "user" });
+    const job2 = ledger.claimHandover()!;
+    ledger.handoverFailed(job2.handoverId, { kind: "timeout", detail: "" });
+    expect(notices().at(-1)).toBe(`换到 Antigravity 没成：${HANDOVER_NOT_WRITTEN_TEXT}，还在用 Claude Code`);
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+  });
+
+  it("重启、关机、用户消息打断等不算次数的失败重排时保留 to_vendor 三列", () => {
+    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "low" }, { kind: "user" });
+    const job1 = ledger.claimHandover()!;
+    ledger.handoverForked(job1.handoverId, { kind: "native", ref: REF });
+    // 重启恢复
+    ledger = open();
+    ledger.recoverAfterRestart();
+    expect(rows().at(-1)).toMatchObject({
+      status: "queued",
+      auto: 0,
+      to_vendor: "codex",
+      to_model: "gpt-6-luna",
+      to_effort: "low",
+    });
+    expect(ledger.getPersona(pmId)).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "low",
+      switchingToVendor: "codex",
+    });
+
+    // 本会话写交接被用户消息打断
+    const job2 = ledger.claimHandover()!;
+    ledger.handoverFailed(job2.handoverId, { kind: "unsupported", detail: "" });
+    ledger.runAutoRenew();
+    const req = requests()[0]!.id;
+    turnStart(firstSession, [req]);
+    const msg = post("打断一下");
+    turnEnd(firstSession, [req], ["半截"], "interrupted");
+    expect(rows().at(-1)).toMatchObject({
+      status: "queued",
+      auto: 0,
+      to_vendor: "codex",
+      to_model: "gpt-6-luna",
+      to_effort: "low",
+    });
+    turn(firstSession, [msg], ["回完用户"]);
+    const job3 = ledger.claimHandover()!;
+    forkAndWrite(job3, "终于写完");
+    expect(createSessionStore(db).get(sessions()[1]!.id)).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "low",
+    });
+  });
+
+  it("与自动换会话撞上：合并到同一行；已 ready 且旧会话空闲时当场换代；换代前撤销时清回 NULL 按普通换会话走完", () => {
+    // 1. 自动交接正在 writing 时发起换厂商，再撤销：交接照常按旧厂商走完
+    reachThreshold();
+    const job1 = ledger.claimHandover()!;
+    ledger.handoverForked(job1.handoverId, { kind: "native", ref: REF });
+    const { change } = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toMatchObject({
+      id: job1.handoverId,
+      auto: 0,
+      status: "writing",
+      to_vendor: "codex",
+      to_model: "gpt-6-luna",
+      to_effort: null,
+    });
+    // 换代前撤销
+    ledger.revertPersonaChange(change!.id);
+    expect(rows()[0]).toMatchObject({
+      id: job1.handoverId,
+      auto: 0,
+      status: "writing",
+      to_vendor: null,
+      to_model: null,
+      to_effort: null,
+    });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+    ledger.handoverWritten(job1.handoverId, { text: "普通换会话交接", usage: USAGE });
+    const g2 = sessions()[1]!.id;
+    expect(createSessionStore(db).get(g2)).toMatchObject({ vendor: "claude", model: "opus" });
+
+    // 2. 自动交接已经 ready（因为有后台任务没换），后台任务结束后但在 runAutoRenew 之前用户点换厂商：当场完成换代
+    reachThreshold(g2);
+    const job2 = ledger.claimHandover()!;
+    ledger.applyDriverEvent(g2, { type: "background.changed", at: now, count: 1 });
+    forkAndWrite(job2, "已写好的交接");
+    expect(rows().at(-1)!.status).toBe("ready");
+    // 设一个直接把后台任务计数清回 0 但还没调 trySwitch 的情形（或模拟 ready 且空闲时改厂商）：
+    // 先在有后台任务时改厂商 -> 合并到 ready 行但还不换；随后再改或空闲时直接换
+    db.run("UPDATE handovers SET status = 'ready' WHERE id = ?", job2.handoverId);
+    // 让旧会话空闲且无后台任务：先清掉后台任务但把 row 保持 ready 来测试 editPersona 里直接触发 trySwitch
+    ledger.applyDriverEvent(g2, { type: "background.changed", at: now, count: 0 });
+    // 上面 background.changed 已经把 job2 换到了 g3；我们在 g3 上造一行 ready 且空闲的交接行
+    const g3 = sessions()[2]!.id;
+    reachThreshold(g3);
+    const job3 = ledger.claimHandover()!;
+    const busy = post("忙一下");
+    turnStart(g3, [busy]);
+    forkAndWrite(job3, "早就写好的交接");
+    expect(rows().at(-1)!.status).toBe("ready");
+    // 假设旧会话已经回到 idle 但还没触发 trySwitch（例如重启后尚未跑 runAutoRenew）
+    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", busy);
+    ledger = open();
+    expect(rows().at(-1)!.status).toBe("ready");
+    const res = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-5.6-terra", effort: "medium" }, { kind: "user" });
+    expect(rows().at(-1)!.status).toBe("switched");
+    const g4 = sessions()[3]!.id;
+    expect(createSessionStore(db).get(g4)).toMatchObject({ vendor: "codex", model: "gpt-5.6-terra", effort: "medium" });
+    expect(res.persona).toMatchObject({ vendor: "codex", model: "gpt-5.6-terra", effort: "medium", switchingToVendor: null });
+    expect(ledger.sessionPreamble(g4)).toContain("上一个会话是 Claude Code（claude），提到的工具名按你自己的工具理解。");
   });
 });
