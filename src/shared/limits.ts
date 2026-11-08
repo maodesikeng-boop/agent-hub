@@ -5,6 +5,12 @@ export const MESSAGE_PAGE_SIZE = 100;
 
 /** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
+/** 一次 git 调用最多等多久（毫秒）；超了就 SIGKILL 掉 git。调用时可以用 timeoutMs 改。 */
+export const GIT_TIMEOUT_MS = 30_000;
+/** git 输出最多收多少字节（status 遇到大量没跟踪的文件会很长）。 */
+export const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+/** gh 输出最多收多少字节（hub worker show 查 PR 用）。 */
+export const GH_MAX_BUFFER_BYTES = 1024 * 1024;
 
 // ---- hub worker show / log（ledger/steps.ts、ledger/worker-view.ts）----
 /** 每个会话在 session_steps 里最多留多少条（一轮结束时把更老的删掉）。 */
@@ -161,6 +167,8 @@ export const MAX_SENT_FILE_BYTES = 50 * 1024 * 1024;
 export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
 /** 一条消息最多处理几个文件链接（按出现顺序，多出来的照普通链接显示）。 */
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
+/** 存发出文件副本时一次从文件句柄读多少字节（daemon/sent-files.ts）。 */
+export const SENT_FILE_COPY_CHUNK_BYTES = 1024 * 1024;
 
 // ---- 预览窗（web/components/FilePreview.tsx）----
 

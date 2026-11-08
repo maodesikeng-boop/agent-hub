@@ -39,6 +39,7 @@ import {
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
   MAX_SENT_FILES_TOTAL_BYTES,
+  SENT_FILE_COPY_CHUNK_BYTES,
   localLinksOf,
   locationFallbackPaths,
   sentFileMime,
@@ -74,8 +75,8 @@ export interface ShareScope {
   dataExceptions: string[];
 }
 
-/** 拷贝时一次读多少。 */
-const COPY_CHUNK_BYTES = 1024 * 1024;
+export { SENT_FILE_COPY_CHUNK_BYTES };
+export const COPY_CHUNK_BYTES = SENT_FILE_COPY_CHUNK_BYTES;
 /** 拷了一半的副本先放在这种名字的目录里，拷完改名成编号；守护进程启动时清掉残留的（prepareSentFilesDir）。 */
 const PARTIAL_PREFIX = ".partial-";
 

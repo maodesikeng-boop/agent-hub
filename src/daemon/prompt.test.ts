@@ -22,9 +22,9 @@ import {
   type SetupOutcome,
   type VendorSpec,
 } from "../shared/index.ts";
-import { HUB_USAGE } from "../hub/cli.ts";
+import { HUB_COMMAND_SPECS, HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
-import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, WORKER_SEND_MAX_TOKENS } from "../shared/limits.ts";
+import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, WORKER_LOG_DEFAULT_STEPS, WORKER_SEND_MAX_TOKENS } from "../shared/limits.ts";
 import { mergeUserTexts } from "./driver/protocol.ts";
 import {
   AGENTS_NOTE,
@@ -548,20 +548,46 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("hub 用法有 hub worker 的四个命令，和 shared/hub.ts 的命令表对得上", () => {
+  it("hub 用法有 hub worker 的命令，和 shared/hub.ts、hub/cli.ts 的 HUB_COMMAND_SPECS 及关键参数对得上", () => {
     for (const sub of [
       `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin`,
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,
       `${hub} worker show <编号>`,
-      `${hub} worker log <编号> [--last N]`,
+      `\`${hub} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总`,
       `${hub} ask --stdin`,
     ]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
-    // 命令表里的每个命令都写进了用法
+    // 命令表里的每个命令都写进了两份用法（防漂移）
     for (const command of HUB_COMMANDS) expect(HUB_USAGE_PROMPT).toContain(`${HUB_COMMAND} ${command.replace(".", " ")}`);
+    for (const spec of HUB_COMMAND_SPECS) {
+      expect(HUB_USAGE).toContain(`${HUB_COMMAND} ${spec.cli}`);
+      expect(HUB_USAGE_PROMPT).toContain(`${HUB_COMMAND} ${spec.cli}`);
+    }
+    for (const flag of [
+      "--stdin",
+      "--clear",
+      "--mode",
+      "--reason",
+      "--title",
+      "--vendor",
+      "--model",
+      "--effort",
+      "--readonly",
+      "--no-worktree",
+      "--task",
+      "--report",
+      "--limit",
+      "--last",
+      "--stats",
+      "--daily",
+      "--every",
+    ]) {
+      expect(HUB_USAGE).toContain(flag);
+      expect(HUB_USAGE_PROMPT).toContain(flag);
+    }
   });
 });
 

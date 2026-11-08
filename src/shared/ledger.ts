@@ -25,7 +25,7 @@ import type {
   Unsubscribe,
 } from "./domain.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
-import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr } from "./hub.ts";
+import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
@@ -307,8 +307,10 @@ export type WorkspaceProbe =
 export interface HubCallContext {
   /** worker.start 没带 noWorktree 时必须有（主文件夹是 workerStartFolder 给的那个），否则不用。 */
   workspace?: WorkspaceProbe;
-  /** worker.show：这个 Worker 分支上的 PR；查不到或没有就没有这一项。 */
-  pr?: WorkerPr;
+  /** worker.show：这个 Worker 分支上的 PR（或查不了的原因）；没有 PR 就没有这一项（或为 null）。 */
+  pr?: WorkerPrProbeResult;
+  /** worker.show：查 PR 失败的原因（可选简写，同 pr: { unavailable }）。 */
+  prError?: string | null;
   /** worker.show：这个 Worker 的会话在厂商那边的原始记录文件；找不到就是 null（show 写“找不到”）。 */
   transcript?: string | null;
   /** worker.start 带 --vendor 时：这家在这台设备（device 是设备名）上能不能用；没装、没登录账本拒绝派。 */

@@ -440,13 +440,16 @@ describe("原始记录：厂商自己存的会话文件在哪", () => {
 });
 
 describe("PR、分支", () => {
-  it("agent 接口查到的 PR 写一行；没有就不写", () => {
+  it("agent 接口查到的 PR 写一行；查不了写原因；没有就不写", () => {
     const w = startWorker("claude");
     expect(show(w).text).not.toContain("PR #");
+    expect(show(w).text).not.toContain("PR 查不了");
+    expect(show(w, lin.sessionId, { pr: null }).text).not.toContain("PR ");
     expect(show(w, lin.sessionId, { pr: { number: 97, state: "OPEN", url: "https://github.com/o/r/pull/97" } }).text).toContain(
       "PR #97（开着）https://github.com/o/r/pull/97",
     );
     expect(show(w, lin.sessionId, { pr: { number: 97, state: "MERGED", url: "u" } }).text).toContain("PR #97（已合并）u");
+    expect(show(w, lin.sessionId, { pr: { unavailable: "gh 超时" } }).text).toContain("PR 查不了（gh 超时）");
   });
 
   it("worktree 的 Worker 写分支和 worktree 路径", () => {

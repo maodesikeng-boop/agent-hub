@@ -6,7 +6,7 @@
 // 只写给项目经理看的话；Worker 的命令行、回复里的密钥、令牌入库前已经遮掉（steps.ts、redact.ts）。
 import type { AgentSessionRow, SessionId, WorkerRecord } from "../../shared/domain.ts";
 import { formatCount } from "../../shared/count-format.ts";
-import type { HubArgs, HubResult, WorkerLogStep, WorkerPr } from "../../shared/hub.ts";
+import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
@@ -208,7 +208,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
         ? `分支 ${worker.branch}，worktree ${worker.worktree_path}`
         : `在项目主文件夹里干活（没有单独的分支和 worktree）`,
     );
-    if (context.pr !== undefined) lines.push(prLine(context.pr));
+    if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));
+    else if (context.prError) lines.push(`PR 查不了（${context.prError}）`);
     lines.push(`原始记录：${context.transcript ?? "找不到"}`);
 
     return { text: lines.join("\n"), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
@@ -298,6 +299,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 }
 
 const PR_STATE_LABELS: Readonly<Record<string, string>> = { OPEN: "开着", MERGED: "已合并", CLOSED: "已关闭" };
-function prLine(pr: WorkerPr): string {
+function prLine(pr: NonNullable<WorkerPrProbeResult>): string {
+  if ("unavailable" in pr) return `PR 查不了（${pr.unavailable}）`;
   return `PR #${pr.number}（${PR_STATE_LABELS[pr.state] ?? pr.state}）${pr.url}`;
 }
