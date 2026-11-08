@@ -129,13 +129,15 @@ export function sessionPreambleText(options: {
 }): string {
   const why = options.auto ? "上一个会话对话太长，系统自动给你换了这个新会话" : "用户点了开新会话（上一个会话太长了）";
   const switchedVendor = options.fromVendor !== undefined && options.toVendor !== undefined && options.fromVendor !== options.toVendor;
-  const vendorNote = switchedVendor ? `上一个会话是 ${vendorLabel(options.fromVendor!)}（${options.fromVendor}），提到的工具名按你自己的工具理解。` : "";
+  const reasonLine = switchedVendor
+    ? `用户把你的厂商从 ${vendorLabel(options.fromVendor!)}（${options.fromVendor}）换成了 ${vendorLabel(options.toVendor!)}（${options.toVendor}），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。`
+    : `${why}，上一个会话写完交接后换成了你；用户那边还是同一个对话，不用跟用户提换会话的事。`;
   const transcript =
     switchedVendor && options.fromVendor === "agy" && options.toVendor !== "agy"
       ? "上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话"
       : transcriptLine(options.transcriptPath);
   const parts = [
-    `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${why}，上一个会话写完交接后换成了你；用户那边还是同一个对话，不用跟用户提换会话的事。${vendorNote}
+    `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${reasonLine}
 下面是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
 不用回复“已接上”：读完直接处理这段说明后面的那条消息。`,
     `## 交接\n\n${options.handover.trim() === "" ? "（上一个会话没有写交接）" : options.handover}`,
@@ -369,14 +371,14 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     queue.delete(row.conversation_id);
   };
 
-  /** 原话：这个对话里（upTo 含）用户（已回复的）和项目经理（不含写交接那几轮）的文字，从新到旧，一页一页倒着走索引，调用方够数就不再取。 */
+  /** 原话：这个对话里（upTo 含）用户（已回复、失败或停止的）和项目经理（不含写交接那几轮）的文字，从新到旧，一页一页倒着走索引，调用方够数就不再取。 */
   function* recentRows(conversationId: ConversationId, upTo = Number.MAX_SAFE_INTEGER - 1): Generator<RecentMessage> {
     let before = upTo + 1;
     for (;;) {
       const rows = db.all<MessageDbRow & { generation: number | null }>(
         `SELECT m.*, s.generation AS generation FROM messages m LEFT JOIN agent_sessions s ON s.id = m.session_id
          WHERE m.conversation_id = ? AND m.id < ? AND m.kind = 'text'
-           AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status = 'replied'))
+           AND ((m.sender = 'agent' AND ${NOT_HANDOVER_TURN}) OR (m.sender = 'user' AND m.status IN ('replied', 'failed', 'stopped')))
          ORDER BY m.id DESC LIMIT ?`,
         conversationId,
         before,
@@ -387,6 +389,21 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       before = rows.at(-1)!.id;
     }
   }
+
+  /** 对话最近一份已写好的交接（换厂商直接转交时复用，不调旧厂商重写）。 */
+  const latestHandoverOf = (conversationId: ConversationId): { text: string; cutMessageId: number } => {
+    const row = db.get<{ text: string; cut_message_id: number | null }>(
+      "SELECT text, cut_message_id FROM handovers WHERE conversation_id = ? AND status = 'switched' AND text IS NOT NULL AND trim(text) != '' ORDER BY id DESC LIMIT 1",
+      conversationId,
+    );
+    if (row !== undefined) return { text: row.text, cutMessageId: row.cut_message_id ?? 0 };
+    const msg = db.get<{ id: number; text: string }>(
+      `SELECT id, text FROM messages WHERE conversation_id = ? AND ${IS_R} AND trim(text) != '' ORDER BY id DESC LIMIT 1`,
+      conversationId,
+    );
+    if (msg !== undefined) return { text: msg.text, cutMessageId: msg.id };
+    return { text: "", cutMessageId: 0 };
+  };
 
   /** 切点之后交给了项目经理（不是还压着）的 Worker 汇报：每条一行目录。 */
   const reportsAfter = (conversationId: ConversationId, cut: MessageId): string[] =>
@@ -412,7 +429,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     const conversationId = row.conversation_id;
     const cut = row.cut_message_id ?? 0;
     const { picked, postCutChars } = pickRecent(recentRows(conversationId), cut, HANDOVER_RECENT_CHARS);
-    if (postCutChars > HANDOVER_POST_CUT_MAX_CHARS) {
+    if (row.method !== "direct" && row.to_vendor === null && postCutChars > HANDOVER_POST_CUT_MAX_CHARS) {
       failRow(p, row, withDetail(HANDOVER_REASONS.postCut, `${postCutChars} 字`));
       return false;
     }
@@ -522,7 +539,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       db.run(
         "UPDATE handovers SET fork_ref = ?, method = ?, status = ?, updated_at = ? WHERE id = ?",
         JSON.stringify(fork.ref),
-        fork.kind,
+        writing ? fork.kind : (row.method ?? fork.kind),
         writing ? "writing" : row.status,
         now(),
         handoverId,
@@ -591,33 +608,95 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       return { handoverId: insertRow(p, currentSession(conversation.id)!, false).id };
     });
 
-  /** 资料页换厂商（或在换厂商交接期间改新厂商下的模型、思考程度）：没有活跃交接就登记一行手动交接，已有就并进去；已 ready 则尝试当场换代。 */
+  /**
+   * 资料页换厂商（或在换厂商交接期间改新厂商下的模型、思考程度）：
+   * 绝不让旧会话去写交接，而是复用最近一份已有交接（如有）+ 原话直接标 ready，并在同一事务尝试当场换代。
+   */
   const switchVendorIn = (p: Pending, conversationId: ConversationId, agent: AgentSetting): void => {
+    const session = currentSession(conversationId);
+    if (session === null) return;
     const active = activeOf(conversationId);
-    if (active === undefined) {
-      const session = currentSession(conversationId);
-      if (session !== null) {
-        insertRow(p, session, false, { to_vendor: agent.vendor, to_model: agent.model, to_effort: agent.effort });
+    if (active !== undefined) {
+      if (active.status === "ready" && (active.text ?? "").trim() !== "") {
+        const updated = db.get<HandoverDbRow>(
+          "UPDATE handovers SET to_vendor = ?, to_model = ?, to_effort = ?, auto = 0, updated_at = ? WHERE id = ? RETURNING *",
+          agent.vendor,
+          agent.model,
+          agent.effort,
+          now(),
+          active.id,
+        )!;
+        queue.add(conversationId);
+        trySwitch(p, updated);
+        return;
       }
+      if (active.method === "in_session") {
+        const request = requestOf(session);
+        if (request !== undefined) {
+          if (request.status === "queued") {
+            transition(p, request.id, "stopped");
+          } else if (request.status === "delivered" || request.status === "processing") {
+            endWriting(request);
+            p.stops.push({ conversationId, sessionId: session.id });
+          }
+        }
+      }
+      const prev = latestHandoverOf(conversationId);
+      const t = now();
+      const updated = db.get<HandoverDbRow>(
+        `UPDATE handovers
+            SET status = 'ready', method = 'direct', auto = 0,
+                to_vendor = ?, to_model = ?, to_effort = ?,
+                cut_message_id = ?, text = ?, ready_at = ?, updated_at = ?
+          WHERE id = ? RETURNING *`,
+        agent.vendor,
+        agent.model,
+        agent.effort,
+        prev.cutMessageId,
+        prev.text,
+        t,
+        t,
+        active.id,
+      )!;
+      queue.add(conversationId);
+      trySwitch(p, updated);
       return;
     }
-    const updated = db.get<HandoverDbRow>(
-      "UPDATE handovers SET to_vendor = ?, to_model = ?, to_effort = ?, auto = 0, updated_at = ? WHERE id = ? RETURNING *",
+    const prev = latestHandoverOf(conversationId);
+    const t = now();
+    const row = db.get<HandoverDbRow>(
+      `INSERT INTO handovers (conversation_id, from_session_id, auto, method, status, to_vendor, to_model, to_effort, cut_message_id, text, ready_at, created_at, updated_at)
+       VALUES (?, ?, 0, 'direct', 'ready', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      conversationId,
+      session.id,
       agent.vendor,
       agent.model,
       agent.effort,
-      now(),
-      active.id,
+      prev.cutMessageId,
+      prev.text,
+      t,
+      t,
+      t,
     )!;
-    if (updated.status === "ready") trySwitch(p, updated);
+    queue.add(conversationId);
+    trySwitch(p, row);
   };
 
-  /** 换厂商交接期间改回旧厂商或撤销：把活跃交接行的 to_vendor 三列清回 NULL（照常作为普通换会话走完）。 */
+  /** 换厂商交接期间改回旧厂商或撤销：direct 行直接作废取消；原已有交接行的把 to_vendor 三列清回 NULL（照常作为普通换会话走完）。 */
   const clearVendorSwitchIn = (conversationId: ConversationId): void => {
     const active = activeOf(conversationId);
-    if (active !== undefined && active.to_vendor !== null) {
-      db.run("UPDATE handovers SET to_vendor = NULL, to_model = NULL, to_effort = NULL, updated_at = ? WHERE id = ?", now(), active.id);
+    if (active === undefined || active.to_vendor === null) return;
+    if (active.method === "direct") {
+      db.run(
+        "UPDATE handovers SET status = 'abandoned', failure_reason = ?, to_vendor = NULL, to_model = NULL, to_effort = NULL, updated_at = ? WHERE id = ?",
+        HANDOVER_REASONS.userMessage,
+        now(),
+        active.id,
+      );
+      queue.delete(conversationId);
+      return;
     }
+    db.run("UPDATE handovers SET to_vendor = NULL, to_model = NULL, to_effort = NULL, updated_at = ? WHERE id = ?", now(), active.id);
   };
 
   // ---- 兜底：本会话写交接（H）----
@@ -899,7 +978,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
       const live = liveOf(session.id);
       if (row.status === "ready") {
-        if (t - (row.ready_at ?? row.updated_at) >= HANDOVER_READY_MAX_MS) write((p) => failRow(p, row, HANDOVER_REASONS.stale));
+        if (row.method !== "direct" && t - (row.ready_at ?? row.updated_at) >= HANDOVER_READY_MAX_MS) write((p) => failRow(p, row, HANDOVER_REASONS.stale));
         else if (live.activity === "idle" && (live.backgroundTasks ?? 0) === 0) write((p) => trySwitch(p, row));
         continue;
       }
