@@ -22,8 +22,14 @@ describe("describeFailure：错误分类", () => {
   });
 
   it("没能启动：驱动层的启动错误码", () => {
-    expect(describeFailure("claude_not_found: spawn claude ENOENT")).toMatchObject({ kind: "start", text: "Claude 没能启动" });
+    expect(describeFailure("spawn_failed: x", { vendor: "codex" })).toMatchObject({ kind: "start", text: "Codex 没能启动" });
     expect(describeFailure("start_timeout")).toMatchObject({ kind: "start" });
+  });
+
+  it("找不到程序：按错误码里的厂商说“找不到 X”，不是一律 claude", () => {
+    expect(describeFailure("claude_not_found: spawn claude ENOENT")).toMatchObject({ kind: "missing", text: "找不到 Claude" });
+    expect(describeFailure("codex_not_found: /x/codex: spawn ENOENT")).toMatchObject({ kind: "missing", text: "找不到 Codex" });
+    expect(describeFailure("agy_not_found: /x/agy: spawn ENOENT", { vendor: "agy" })).toMatchObject({ kind: "missing", text: "找不到 Antigravity" });
   });
 
   it("未知：默认写“出错了”；要原样的（已经是给人看的话）传 raw", () => {

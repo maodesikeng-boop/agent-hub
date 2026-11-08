@@ -30,6 +30,7 @@ import {
   systemNoticeText,
   workerEventOf,
   workerLineText,
+  type AgentVendor,
   type ConversationId,
   type Message,
   type MessageId,
@@ -67,6 +68,8 @@ export interface MessageActions {
   onRetryMessage: (messageId: MessageId) => void;
   /** 撤销失败就 reject（ApiError，409 是“不是最近一次”）。 */
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
+  /** 这个对话现在用的厂商（出错时的那句话按它说哪家，不从原文猜）；不知道是 undefined。 */
+  vendorOf?: (conversationId: ConversationId) => AgentVendor | undefined;
 }
 
 const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
@@ -355,7 +358,9 @@ function SystemNotice({ message, actions, inTurn = false }: { message: Message; 
     case "schedule.failed": {
       // “定时任务没跑成：名字：原因”：原因写成人话，原文放 title
       const prefix = `定时任务没跑成：${event.name}：`;
-      const reason = text.startsWith(prefix) ? describeFailure(text.slice(prefix.length), { unknown: "raw" }).text : null;
+      const reason = text.startsWith(prefix)
+        ? describeFailure(text.slice(prefix.length), { unknown: "raw", vendor: actions.vendorOf?.(message.conversationId) }).text
+        : null;
       return (
         <NoticeLine icon={CircleX} danger title={text} inTurn={inTurn}>
           <span>{reason === null ? text : `定时任务「${event.name}」没跑成：${reason}`}</span>
@@ -392,11 +397,11 @@ const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-
  * 状态是头像右下角的一个小色点（workerStatusOf），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
  * 给项目经理的汇报原文不显示。
  */
-function WorkerSpeech({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
+function WorkerSpeech({ line, onOpen, vendor }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"]; vendor?: AgentVendor }) {
   const { tone, label } = workerStatusOf(line);
   const failed = line.event !== "report";
   const summary = line.summary?.trim() ?? "";
-  const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw" }) : null;
+  const body = failed && summary !== "" ? describeFailure(summary, { unknown: "raw", vendor }) : null;
   const text = body ? body.text : summary;
   return (
     <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
@@ -419,8 +424,12 @@ function WorkerSpeech({ line, onOpen }: { line: WorkerMessageMeta; onOpen: Messa
 }
 
 /** 项目经理对话里 Worker 的那些行：汇报是 Worker 的发言，派出、收工、你对它说的是很淡的一行（点开 Worker）。 */
-function WorkerItem({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
-  if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") return <WorkerSpeech line={line} onOpen={onOpen} />;
+function WorkerItem({ line, actions }: { line: WorkerMessageMeta; actions: MessageActions }) {
+  const onOpen = actions.onOpenWorker;
+  if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
+    // Worker 的失败原因按 Worker 自己的厂商说（可能和项目经理不是同一家）
+    return <WorkerSpeech line={line} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
+  }
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
       <button type="button" className={cn(TEXT_BUTTON, "text-left")} onClick={() => onOpen(line.workerConversationId)}>
@@ -448,7 +457,7 @@ export function MessageBubble({
   highlighted?: boolean;
 }) {
   const workerLine = workerEventOf(message);
-  if (workerLine) return <WorkerItem line={workerLine} onOpen={actions.onOpenWorker} />;
+  if (workerLine) return <WorkerItem line={workerLine} actions={actions} />;
   if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
   if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
   // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
@@ -482,6 +491,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       <DeliveryStatus
         status={message.status}
         reason={message.failureReason}
+        vendor={actions.vendorOf?.(message.conversationId)}
         retry={message.status === "failed" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
       />
     </article>
@@ -497,16 +507,19 @@ const RETRY_BUTTON = "touch-target cursor-pointer font-medium text-muted-foregro
 function DeliveryStatus({
   status,
   reason,
+  vendor,
   retry,
 }: {
   status: Message["status"];
   reason: string | null;
+  /** 这个对话用的厂商（出错的那句话说哪家）。 */
+  vendor?: AgentVendor;
   /** 服务端标了失败的用户消息才有“重试”。 */
   retry?: { phase: RetryPhase | undefined; onRetry: () => void };
 }) {
   if (status === null || !SHOWN_STATUSES.has(status)) return null;
   const failed = status === "failed";
-  const failure = failed && reason ? describeFailure(reason) : null;
+  const failure = failed && reason ? describeFailure(reason, { vendor }) : null;
   return (
     <div className={cn(DELIVERY_ROW, failed ? "text-danger" : "text-muted-foreground")} data-status={status} data-delivery>
       {status === "queued" && <Clock className="size-3.5 shrink-0" aria-hidden="true" />}

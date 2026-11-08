@@ -49,7 +49,7 @@ export const API_PATHS = {
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
   /** GET：按副本编号取 agent 发出的文件（shared/sent-files.ts）。图片（含 svg）内联，别的当下载；支持 Range。 */
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
-  /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回。 */
+  /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回；?refresh=unusable 只重问这台设备上不能用的那几家。 */
   models: "/api/models",
   /** GET → QuotaResponse：事件流里没有额度的厂商（agy）的额度；服务端缓存 FETCHED_QUOTA_FRESH_MS，没装、查失败的没有那一块。 */
   quota: "/api/quota",
@@ -257,6 +257,9 @@ export interface AddScheduleRequest {
 export interface SetScheduleEnabledRequest {
   enabled: boolean;
 }
+
+/** GET /api/models?refresh=unusable：只重问这台设备上现在不能用（没登录、没装）的厂商。 */
+export const REFRESH_UNUSABLE = "unusable";
 
 /** GET /api/models：每家厂商一份模型名单（按 AGENT_VENDORS 的顺序）。问不到厂商时是打包的名单，不报错。 */
 export interface ModelsResponse {

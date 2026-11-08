@@ -33,7 +33,7 @@ import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
 import { MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -332,6 +332,10 @@ export function createLedgerWorkers(
     if (args.vendor !== undefined) {
       if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
       vendor = args.vendor;
+      // 这台设备上没装、没登录（agent 接口查过，没登录的先重问过一次）：不派，说清楚是哪台、怎么登录
+      const status = context.vendorStatus;
+      const unusable = status?.vendor === vendor ? vendorUnavailableMessage(vendor, status.availability, status.device) : null;
+      if (unusable !== null) throw fail("invalid", unusable);
     }
     const givenModel = typeof args.model === "string" ? args.model.trim() || null : null;
     const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : null;

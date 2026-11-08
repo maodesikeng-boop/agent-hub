@@ -17,11 +17,14 @@ import {
   VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
+  isSelectable,
   splitEffortSuffix,
   truncateChars,
   type AgentVendor,
   type CatalogModel,
   type ModelCatalog,
+  type VendorAvailability,
+  vendorFailureOf,
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { forceKill } from "./process.ts";
@@ -407,7 +410,9 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
           finish(null, parsed.value);
           return;
         }
-        finish(new Error(`agy 没回有效 JSON（${label}）${stderr.trim() ? `：${stderr.trim()}` : ""}`));
+        // 没登录时 agy 退出码也是 0，打印的是一段话（不是 JSON）：原话带上，判断登录状态要看它
+        const said = `${stdout.trim().slice(-STDERR_TAIL_CHARS)} ${stderr.trim()}`.trim();
+        finish(new Error(`agy 没回有效 JSON（${label}）${said ? `：${said}` : ""}`));
         return;
       }
       finish(new Error(`agy 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`));
@@ -425,8 +430,17 @@ export function queryAgySkills(options: AgyModelQueryOptions): Promise<unknown> 
   return runAgyJsonCommand(options, AGY_SKILLS_QUERY_ARGS, "skills");
 }
 
-function queryCodexAppServer(options: CodexModelQueryOptions, method: string, params: Record<string, unknown>): Promise<unknown> {
+/** app-server 里要问的一条：optional 的出错了给 undefined，不让整个查询失败。 */
+interface CodexCall {
+  method: string;
+  params: Record<string, unknown>;
+  optional?: boolean;
+}
+
+/** 起一个 `codex app-server`，initialize → initialized 之后按顺序发 calls，全部回了按顺序返回各自的结果。 */
+function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly CodexCall[]): Promise<unknown[]> {
   const { codexPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
+  const label = calls.map((c) => c.method).join("、");
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
     const child = spawn(codexPath, [...CODEX_APP_SERVER_ARGS], {
@@ -438,8 +452,10 @@ function queryCodexAppServer(options: CodexModelQueryOptions, method: string, pa
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    const results: unknown[] = new Array(calls.length);
+    let pending = calls.length;
     const exited = () => child.exitCode !== null || child.signalCode !== null;
-    const finish = (error: Error | null, result?: unknown) => {
+    const finish = (error: Error | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -455,11 +471,13 @@ function queryCodexAppServer(options: CodexModelQueryOptions, method: string, pa
         killTimer.unref();
         child.once("exit", () => clearTimeout(killTimer));
       }
-      resolve(result);
+      resolve(results);
     };
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
-    const timer = setTimeout(() => finish(new Error(`codex 超时（${timeoutMs} ms 没回 ${method}）`)), timeoutMs);
+    const timer = setTimeout(() => finish(new Error(`codex 超时（${timeoutMs} ms 没回 ${label}）`)), timeoutMs);
+    const errorText = (error: unknown) =>
+      typeof (error as { message?: unknown })?.message === "string" ? (error as { message: string }).message : JSON.stringify(error);
 
     child.once("error", (error) => finish(new Error(`${codexPath}: ${error.message}`)));
     child.stdin.on("error", () => {});
@@ -468,7 +486,7 @@ function queryCodexAppServer(options: CodexModelQueryOptions, method: string, pa
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
-      setTimeout(() => finish(new Error(`codex 没回 ${method} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
+      setTimeout(() => finish(new Error(`codex 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
     createInterface({ input: child.stdout }).on("line", (line) => {
       let obj: unknown;
@@ -478,75 +496,174 @@ function queryCodexAppServer(options: CodexModelQueryOptions, method: string, pa
         return;
       }
       if (typeof obj !== "object" || obj === null) return;
-      const o = obj as { id?: unknown; result?: unknown; error?: { message?: unknown } | unknown };
+      const o = obj as { id?: unknown; result?: unknown; error?: unknown };
       if (o.id === 1 && o.error !== undefined) {
-        const msg = typeof (o.error as { message?: unknown })?.message === "string" ? (o.error as { message: string }).message : JSON.stringify(o.error);
-        finish(new Error(`codex 回了错误：${msg}`));
+        finish(new Error(`codex 回了错误：${errorText(o.error)}`));
         return;
       }
-      if (o.id !== 2) return;
+      // 第 i 条用的编号是 i + 2（1 是 initialize）
+      const index = typeof o.id === "number" ? o.id - 2 : -1;
+      const call = calls[index];
+      if (call === undefined || index in results) return;
       if (o.error !== undefined) {
-        const msg = typeof (o.error as { message?: unknown })?.message === "string" ? (o.error as { message: string }).message : JSON.stringify(o.error);
-        finish(new Error(`codex 回了错误：${msg}`));
-        return;
+        if (!call.optional) {
+          finish(new Error(`codex 回了错误：${errorText(o.error)}`));
+          return;
+        }
+        results[index] = undefined;
+      } else {
+        const res = o.result;
+        results[index] = typeof res === "object" && res !== null && Array.isArray((res as { data?: unknown }).data) ? (res as { data: unknown[] }).data : (res ?? {});
       }
-      const res = o.result;
-      const data = typeof res === "object" && res !== null && Array.isArray((res as { data?: unknown }).data) ? (res as { data: unknown[] }).data : res;
-      finish(null, data ?? {});
+      pending -= 1;
+      if (pending === 0) finish(null);
     });
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: CODEX_CLIENT_INFO } })}\n`);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method, params })}\n`);
+    calls.forEach((call, i) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: i + 2, method: call.method, params: call.params })}\n`));
   });
 }
 
 /** 起 `codex app-server --listen stdio://`，发 initialize → initialized → model/list，返回模型列表数据。 */
-export function queryCodexModels(options: CodexModelQueryOptions): Promise<unknown> {
-  return queryCodexAppServer(options, "model/list", {});
+export async function queryCodexModels(options: CodexModelQueryOptions): Promise<unknown> {
+  return (await queryCodexAppServer(options, [{ method: "model/list", params: {} }]))[0];
+}
+
+/**
+ * 模型名单那次查询（守护进程用这个）：同一个 app-server 里多问一条 account/read 看登录状态，不另起进程。
+ * account/read 出错（老版本没有）不影响名单，account 是 undefined。
+ */
+export async function queryCodexCatalog(options: CodexModelQueryOptions): Promise<{ models: unknown; account: unknown }> {
+  const [models, account] = await queryCodexAppServer(options, [
+    { method: "model/list", params: {} },
+    { method: "account/read", params: {}, optional: true },
+  ]);
+  return { models, account };
 }
 
 /** 起 `codex app-server --listen stdio://`，发 initialize → initialized → skills/list，返回 skills 数据。 */
-export function queryCodexSkills(options: CodexModelQueryOptions): Promise<unknown> {
+export async function queryCodexSkills(options: CodexModelQueryOptions): Promise<unknown> {
   const cwds = [options.cwd, ...(options.addDirs ?? [])];
-  return queryCodexAppServer(options, "skills/list", { cwds });
+  return (await queryCodexAppServer(options, [{ method: "skills/list", params: { cwds } }]))[0];
+}
+
+/** `claude auth status --json` 的固定参数。 */
+export const CLAUDE_AUTH_STATUS_ARGS: readonly string[] = ["auth", "status", "--json"];
+
+/**
+ * claude 的补充判断（initialize 回应里看不出登录时才用）：跑 `claude auth status --json`，看 loggedIn。
+ * 不会失败：找不到程序是 not_installed，超时、认不出是 unknown。
+ */
+export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise<VendorAvailability> {
+  const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve("unknown");
+    const child = spawn(claudePath, [...CLAUDE_AUTH_STATUS_ARGS], {
+      cwd,
+      env: buildChildEnv(options.env ?? process.env, undefined),
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end();
+    child.stderr.resume();
+    let stdout = "";
+    let settled = false;
+    const finish = (result: VendorAvailability) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (child.exitCode === null && child.signalCode === null) void forceKill(child);
+      resolve(result);
+    };
+    const onAbort = () => finish("unknown");
+    signal?.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => finish("unknown"), timeoutMs);
+    child.once("error", (error) => finish((error as NodeJS.ErrnoException).code === "ENOENT" ? "not_installed" : "unknown"));
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.once("close", () => {
+      const parsed = parseJsonOutput(stdout);
+      const loggedIn = parsed.ok ? (parsed.value as { loggedIn?: unknown } | null)?.loggedIn : undefined;
+      finish(loggedIn === true ? "available" : loggedIn === false ? "signed_out" : "unknown");
+    });
+  });
+}
+
+/**
+ * 一家厂商的名单从哪来、怎么看它在这台设备上能不能用（各家的实现在 daemon/vendors/<厂商>.ts，按 AGENT_VENDORS 登记在
+ * vendors/index.ts 的 createVendorCatalogSources）。登录状态从名单那次查询的回应里看，不另起进程。
+ */
+export interface VendorCatalogSource {
+  /** 问一次（起进程），返回原样的回应。 */
+  query: (signal: AbortSignal) => Promise<unknown>;
+  /** 回应 → 名单；认不出是 null（用打包的）。 */
+  parse: (raw: unknown) => ModelCatalog | null;
+  /** 问到了：同一次回应里的登录状态。不写当 available。 */
+  availabilityOf?: (raw: unknown) => VendorAvailability;
+  /** 没问到：从错误看。不写按通用的认（defaultAvailabilityOfError）。 */
+  availabilityOfError?: (error: unknown) => VendorAvailability;
+  /** 上面两步给 unknown 时的补充判断（读凭证文件、跑自带的状态命令）。 */
+  confirm?: (signal: AbortSignal) => Promise<VendorAvailability>;
+  /** 装没装（只查文件在不在，每次要都查）。不写当装了。 */
+  installed?: () => boolean;
+}
+
+/** 没问到时通用的认法：程序不存在 → 没装；报错是认证类（VENDOR_FAILURE_SIGNS 的 auth）→ 没登录；别的认不出。 */
+export function defaultAvailabilityOfError(vendor: AgentVendor, error: unknown): VendorAvailability {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\bENOENT\b/.test(message)) return "not_installed";
+  return vendorFailureOf(message, vendor)?.kind === "auth" ? "signed_out" : "unknown";
 }
 
 export interface ModelCatalogsOptions {
-  /** 问一次 claude，返回 initialize 回应里的 models（守护进程接 queryClaudeModels）。 */
-  queryClaude: (signal: AbortSignal) => Promise<unknown>;
-  /** 问一次 agy，返回 models 的回应（守护进程接 queryAgyModels）。没传就不问，直接用打包的。 */
-  queryAgy?: (signal: AbortSignal) => Promise<unknown>;
-  /** 问一次 codex，返回 model/list 的回应（守护进程接 queryCodexModels）。没传就不问，直接用打包的。 */
-  queryCodex?: (signal: AbortSignal) => Promise<unknown>;
+  /** 每家厂商的来源（守护进程接 vendors/index.ts 的 createVendorCatalogSources）。没给的厂商不问，直接用打包的、状态 unknown。 */
+  sources: Partial<Record<AgentVendor, VendorCatalogSource>>;
   now?: () => number;
   log?: (line: string) => void;
 }
 
 export interface ModelCatalogs {
-  /** 每家厂商一份（按 AGENT_VENDORS 的顺序），不会失败。refresh：不管新不新都重新问一次，问完再回。 */
-  list(options?: { refresh?: boolean }): Promise<ModelCatalog[]>;
+  /**
+   * 每家厂商一份（按 AGENT_VENDORS 的顺序），带这台设备上的状态，不会失败。
+   * refresh：true 不管新不新都重新问一次；"unusable" 只重问现在不能用（没登录、没装）的那几家。都是问完再回。
+   */
+  list(options?: { refresh?: boolean | "unusable" }): Promise<ModelCatalog[]>;
   /** 现在缓存着的那份（不问厂商、不等），还没问到过是 null。账本写系统消息时用。 */
   current(vendor: AgentVendor): ModelCatalog | null;
+  /** 现在的状态（不问厂商、不等；装没装每次查文件）。提示词用。 */
+  availability(vendor: AgentVendor): VendorAvailability;
+  /** hub worker start 用：现在不能用的先重问这一家一次（等它问完），再给状态；能用的不问。 */
+  ensureUsable(vendor: AgentVendor): Promise<VendorAvailability>;
+  /** 真跑的结果（会话起来了、认证失败、找不到程序）直接更新状态，不用等缓存过期。 */
+  report(vendor: AgentVendor, availability: VendorAvailability): void;
   /** 关机：取消在问的那次，之后不再问。 */
   close(): void;
 }
 
 interface VendorCatalogSlot {
   readonly vendor: AgentVendor;
-  readonly query: ((signal: AbortSignal) => Promise<unknown>) | undefined;
-  readonly parse: (raw: unknown) => ModelCatalog | null;
+  readonly source: VendorCatalogSource | undefined;
   cached: ModelCatalog | null;
   cachedAt: number;
+  /** 上次问出来的状态，还没问过是 null。 */
+  availability: VendorAvailability | null;
+  /** 上次没问到、或问出来不能用的时候（之后隔 MODEL_CATALOG_RETRY_MS 才再问）。 */
   failedAt: number | null;
   inflight: Promise<void> | null;
 }
 
 /**
- * 模型名单的缓存（三家厂商各自独立缓存、并行查询）：
- * - 没配查询函数的厂商：不发请求，直接回打包的名单，current 返回 null；
+ * 模型名单和厂商状态的缓存（每家厂商各自独立缓存、并行查询；状态和名单同一次问、同一个缓存）：
+ * - 没配来源的厂商：不发请求，直接回打包的名单、状态 unknown，current 返回 null；
+ * - 没装（只查文件）：不问，状态 not_installed；装上以后下次要时就问；
  * - 还没问到过：第一次要时问，等它问完（同时来的几次只问一次）；
  * - 问到了：直接给；超过 MODEL_CATALOG_FRESH_MS 就在后台再问，先给旧的；后台没问到继续用旧的；
- * - 没问到：用打包的名单，MODEL_CATALOG_RETRY_MS 之后有人要时再问。
+ * - 没问到、或问出来不能用（没登录）：名单用打包的（问到了就用问到的），MODEL_CATALOG_RETRY_MS 之后有人要时再问。
+ * 不轮询：都是有人要时才问。
  */
 export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalogs {
   const now = options.now ?? Date.now;
@@ -554,84 +671,94 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   let closed = false;
   const controller = new AbortController();
 
-  const slots: Record<AgentVendor, VendorCatalogSlot> = {
-    claude: {
-      vendor: "claude",
-      query: options.queryClaude,
-      parse: parseInitializeModels,
-      cached: null,
-      cachedAt: 0,
-      failedAt: null,
-      inflight: null,
-    },
-    agy: {
-      vendor: "agy",
-      query: options.queryAgy,
-      parse: parseAgyModels,
-      cached: null,
-      cachedAt: 0,
-      failedAt: null,
-      inflight: null,
-    },
-    codex: {
-      vendor: "codex",
-      query: options.queryCodex,
-      parse: parseCodexModels,
-      cached: null,
-      cachedAt: 0,
-      failedAt: null,
-      inflight: null,
-    },
+  const slots = Object.fromEntries(
+    AGENT_VENDORS.map((vendor): [AgentVendor, VendorCatalogSlot] => [
+      vendor,
+      { vendor, source: options.sources[vendor], cached: null, cachedAt: 0, availability: null, failedAt: null, inflight: null },
+    ]),
+  ) as Record<AgentVendor, VendorCatalogSlot>;
+
+  const installed = (slot: VendorCatalogSlot) => slot.source?.installed?.() ?? true;
+  const settle = (slot: VendorCatalogSlot, availability: VendorAvailability) => {
+    slot.availability = availability;
+    if (!isSelectable(availability)) slot.failedAt = now();
   };
 
   const ask = (slot: VendorCatalogSlot): Promise<void> => {
-    if (!slot.query) return Promise.resolve();
-    const query = slot.query;
+    const source = slot.source;
+    if (!source) return Promise.resolve();
     slot.inflight ??= (async () => {
-      let reason: string;
+      if (!installed(slot)) return; // 没装不问（状态看 installed，每次都查）
+      let availability: VendorAvailability;
+      let reason: string | null = null;
       try {
-        const catalog = slot.parse(await query(controller.signal));
+        const raw = await source.query(controller.signal);
+        availability = source.availabilityOf?.(raw) ?? "available";
+        const catalog = source.parse(raw);
         if (catalog !== null) {
           slot.cached = catalog;
           slot.cachedAt = now();
           slot.failedAt = null;
-          return;
+        } else {
+          reason = "回的名单是空的或者认不出";
         }
-        reason = "回的名单是空的或者认不出";
       } catch (error) {
         reason = error instanceof Error ? error.message : String(error);
+        availability = source.availabilityOfError?.(error) ?? defaultAvailabilityOfError(slot.vendor, error);
       }
-      slot.failedAt = now();
-      if (!closed) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}），先用打包的`);
+      if (availability === "unknown" && source.confirm && !closed) availability = await source.confirm(controller.signal);
+      if (reason !== null) {
+        slot.failedAt = now();
+        if (!closed) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}），先用打包的`);
+      }
+      settle(slot, availability);
     })().finally(() => {
       slot.inflight = null;
     });
     return slot.inflight;
   };
 
-  const catalogOf = async (slot: VendorCatalogSlot, refresh: boolean): Promise<ModelCatalog> => {
-    if (!slot.query) return bundledModelCatalog(slot.vendor);
-    if (closed) return slot.cached ?? bundledModelCatalog(slot.vendor);
-    if (refresh) await ask(slot);
+  const availabilityOf = (slot: VendorCatalogSlot): VendorAvailability => {
+    if (!slot.source) return "unknown";
+    if (!installed(slot)) return "not_installed";
+    return slot.availability ?? "unknown";
+  };
+  const retryDue = (slot: VendorCatalogSlot) => slot.failedAt === null || now() - slot.failedAt >= MODEL_CATALOG_RETRY_MS;
+  const result = (slot: VendorCatalogSlot): ModelCatalog => ({ ...(slot.cached ?? bundledModelCatalog(slot.vendor)), availability: availabilityOf(slot) });
+
+  const catalogOf = async (slot: VendorCatalogSlot, refresh: boolean | "unusable"): Promise<ModelCatalog> => {
+    if (!slot.source || closed || !installed(slot)) return result(slot);
+    const usable = slot.availability === null || isSelectable(slot.availability);
+    if (refresh === true || (refresh === "unusable" && !usable)) await ask(slot);
     else if (slot.cached === null) {
-      if (slot.inflight || slot.failedAt === null || now() - slot.failedAt >= MODEL_CATALOG_RETRY_MS) await ask(slot);
-    } else if (
-      !slot.inflight &&
-      now() - slot.cachedAt >= MODEL_CATALOG_FRESH_MS &&
-      (slot.failedAt === null || now() - slot.failedAt >= MODEL_CATALOG_RETRY_MS)
-    ) {
+      if (slot.inflight || slot.availability === null || retryDue(slot)) await ask(slot);
+    } else if (!slot.inflight && (now() - slot.cachedAt >= MODEL_CATALOG_FRESH_MS || !usable) && retryDue(slot)) {
       void ask(slot);
     }
-    return slot.cached ?? bundledModelCatalog(slot.vendor);
+    return result(slot);
   };
 
   return {
     async list(opts = {}) {
-      const refresh = opts.refresh === true;
+      const refresh = opts.refresh ?? false;
       return Promise.all(AGENT_VENDORS.map((vendor) => catalogOf(slots[vendor], refresh)));
     },
     current(vendor) {
       return slots[vendor]?.cached ?? null;
+    },
+    availability(vendor) {
+      return availabilityOf(slots[vendor]);
+    },
+    async ensureUsable(vendor) {
+      const slot = slots[vendor];
+      if (slot.source && !closed && installed(slot) && !isSelectable(availabilityOf(slot))) await ask(slot);
+      return availabilityOf(slot);
+    },
+    report(vendor, availability) {
+      const slot = slots[vendor];
+      if (slot.availability === availability) return;
+      slot.availability = availability;
+      slot.failedAt = isSelectable(availability) ? null : now();
     },
     close() {
       closed = true;

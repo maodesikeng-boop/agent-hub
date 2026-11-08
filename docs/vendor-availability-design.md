@@ -37,17 +37,20 @@ export const isSelectable = (a: VendorAvailability) => a === "available" || a ==
 
 ## 3. 判断：各家写在各自模块里
 
-`daemon/vendors/<厂商>.ts` 各导出一个 `availability` 对象（接口在 `vendors/types.ts`），`vendors/index.ts` 用
-`satisfies Record<AgentVendor, VendorAvailabilityProbe>` 登记——加厂商漏写编译不过；别处只按 `AGENT_VENDORS` 遍历，不写厂商名。
+`daemon/vendors/<厂商>.ts` 各导出一个纯函数的 `<厂商>CatalogProbe` 和起进程的 `create<厂商>CatalogSource`（claude 的在
+`claude-catalog.ts`：`claude.ts` 给账本用，不能引入起进程的代码），`vendors/index.ts` 的 `VENDORS` 用 `satisfies Record<AgentVendor, …>`
+登记——加厂商漏写编译不过；别处只按 `AGENT_VENDORS` 遍历，不写厂商名。实际接口（`vendors/types.ts`、`driver/model-catalog.ts`）：
 
 ```ts
-interface VendorAvailabilityProbe {
-  /** 名单查询成功时，从同一次回应里看登录状态（没有登录信息返回 "unknown"）。 */
-  fromCatalogResponse(raw: unknown): VendorAvailability;
-  /** 名单查询失败时，从错误看：ENOENT → not_installed；认证类报错 → signed_out；别的 → unknown。 */
-  fromQueryError(error: unknown): VendorAvailability;
-  /** 可选：查询之外的便宜判断（读凭证文件 / 跑自带状态命令），只在上面两步给 unknown 时才用。 */
-  confirm?(signal: AbortSignal): Promise<VendorAvailability>;
+interface VendorCatalogProbe {          // 各家纯函数（vendors/types.ts）
+  parse(raw: unknown): ModelCatalog | null;
+  availabilityOf(raw: unknown): VendorAvailability;           // 问到了：同一次回应里看，看不出是 unknown
+  availabilityOfError?(error: unknown): VendorAvailability;  // 没问到：不写按通用的（ENOENT → 没装，认证类 → 没登录）
+}
+interface VendorCatalogSource extends VendorCatalogProbe {  // 加上起进程的（driver/model-catalog.ts）
+  query(signal): Promise<unknown>;
+  confirm?(signal): Promise<VendorAvailability>;  // 上面给 unknown 时的补充（读凭证文件 / 状态命令）
+  installed?(): boolean;                           // findExecutable，只查文件
 }
 ```
 
@@ -57,10 +60,10 @@ interface VendorAvailabilityProbe {
 |---|---|---|---|
 | claude | 起 claude 发 initialize | 回应里有 `account`（实测有 email、organization）→ available；没有 → 交给补充 | `claude auth status --json`（实测回 `loggedIn`，没登录退出码非 0） |
 | codex | 起 `codex app-server` 发 model/list | 同一个进程多发一条 `account/read`，回 `account: null` → signed_out | 读 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）在不在，不起进程 |
-| agy | 起 `agy … models` | 成功回名单 → available；报错里带认证字样（复用 `VENDOR_FAILURE_SIGNS` 的 auth 规则）→ signed_out | 无（agy 没有状态命令，本机没法验证没登录时的输出，见第 8 节） |
+| agy | 起 `agy … models` | 成功回名单 → available；没登录时退出码也是 0、打印一段话不是 JSON（东京实测 `Error: Please sign in to view available models. …`），所以按“解析不出名单、原话里有 sign in”判 signed_out | 无（agy 没有状态命令） |
 
-“没装”不起进程：新加 `findExecutable(cmd, PATH, fallbackPaths): string | null`（`shared/paths.ts`，`resolveExecutable`
-的“找不到返回 null”版），只查文件在不在，微秒级。每次 `list()` 都先查一遍：用户装好后不用重启守护进程就能看到。
+“没装”不起进程：新加 `findExecutable(cmd, PATH, fallbackPaths): string | null`（`shared/paths.ts`），`resolveExecutable`
+直接建在它上面（同一份候选路径，PATH 里没有、候选路径里有也算装了，如 ChatGPT.app 里带的 codex；候选路径加了 `~/Applications`），只查文件在不在。每次 `list()` 都先查一遍：用户装好后不用重启守护进程就能看到。
 查询时 spawn 报 ENOENT 也判 not_installed（PATH 变了的情况）。
 
 ## 4. 性能
@@ -76,9 +79,8 @@ interface VendorAvailabilityProbe {
 
 ## 5. 用户登录完怎么刷新
 
-1. **网页**：现在每台设备整页只拉一次名单。改成：打开厂商下拉 / 新建项目经理弹窗时，如果这台有 signed_out 的厂商，
-   带 `?refresh=signed_out` 再拉一次——守护进程只重问那几家（不是全部），一次几秒。灰掉的那一项旁边不加说明文字，
-   状态词悬停提示写“在这台设备的终端里登录后重新打开”。（`?refresh=1` 全部重问的现有参数不变。）
+1. **网页**：打开厂商下拉时（`pointerdown` / `focus`），如果这台有不能用的厂商，**在后台**带 `?refresh=unusable` 再拉一次——
+   守护进程只重问那几家。下拉立刻按缓存打开、不等，回来了再更新那几项；同一台同时只发一次。（`?refresh=1` 不变。）
 2. **真跑的结果反过来更新状态**（免费信号）：会话起来、收到第一条 init → 这家标 available；会话失败被
    `vendorFailureOf` 判成 `auth` → 标 signed_out；spawn ENOENT → not_installed。这样不用等缓存过期。
 3. 5 分钟重问（第 4 节）兜底。
@@ -95,18 +97,22 @@ interface VendorAvailabilityProbe {
 ### 7.1 网页
 - `useModelCatalogs()` 返回含 `availability` 的名单；新加 `useVendorOptions(current?: AgentVendor)`：过滤掉 `!isListed`，
   但保留 `current`；下拉项 `disabled = !isSelectable`，后面标 `AVAILABILITY_LABELS`。新建项目经理、换模型、Worker 相关的下拉都改用它。
-- 新建项目经理的默认厂商：默认的那家不可选时，取第一家可选的；一家都不可选（东京现在这样）→ 下拉全灰、创建按钮禁用，
-  按钮旁不加解释文字，靠下拉里的状态词说明。
-- 额度面板：`QUOTA_VENDORS` 再过滤“这台设备上 isListed 且 isSelectable，或已有这家会话”。
+- 新建项目经理：选着的厂商（默认那家、或换了设备之前选的）这台用不了，**不悄悄换掉**（删掉了原来的 `VendorGuard`），
+  下拉里标状态词、“创建”禁用，用户自己换；不加解释文字。下拉文字是 `Codex (Not signed in)`（原生 option 不能分样式）。
+- 失败的那句话（`web/errors.ts`）：新增一类 `missing`“找不到 <厂商>”；顶部提醒（`Notices`）改用 `describeFailure`，删掉
+  `format.ts` 写死“claude …”的旧表，认不出的原样显示不加粗；消息里的失败原因传对话自己的厂商（`MessageActions.vendorOf`）。
+  健康状态按模块记、不属于某个会话，厂商靠错误码（`codex_not_found`）认。
+- 额度面板：不用改。它本来就只显示有会话数据的厂商（`quotaUsage` 按会话的额度事件，agy 的按需查也要有 agy 会话才出现），
+  没装、没登录的厂商没有会话，自然不出现；已经在用这家的老会话照常显示，正是“例外”要的。
 - 样式按 `docs/ui-standard.md`：灰掉用标准里的禁用色；状态词用次要文字色、同一行右对齐。标准里没有“下拉项禁用 + 状态词”就先补进标准。
 
 ### 7.2 后台
-- `hub worker start --vendor` / 账本 `workers.ts:333`、资料页改厂商 `persona.ts:85`：在 `isAgentVendor` 之后加一步
-  `checkVendorUsable(vendor)`（读缓存 + 查文件，不等查询）：not_installed → “这台设备没装 codex”；
-  signed_out → 先重问这一家（一次，最多 `MODEL_CATALOG_TIMEOUT_MS`），仍是 signed_out 才报“这台设备的 codex 没登录”。
-  不写 `--vendor`（沿用项目经理自己的厂商）不查。CLI 的 `--vendor` 帮助文字不改（CLI 不知道守护进程的状态，由守护进程报错）。
-- 提示词：`buildPmWorkerPrompt(specs, availability)`，厂商列表和 `--vendor a|b` 只列 `isSelectable` 的；
-  `PM_WORKER_PROMPT` 常量删掉，在 `buildLaunchPrompt` 里按 `LaunchContext` 带进来的状态算。
+- `hub worker start --vendor`：agent 接口在调账本之前（异步）问 `ModelCatalogs.ensureUsable(vendor)`——不能用的先重问这一家一次，
+  结果连同设备名放进 `HubCallContext.vendorStatus`，账本（`workers.ts`）照它拒绝：“这台设备（东京）没装 codex” /
+  “这台设备（东京）的 codex 没登录：先在这台设备的终端里跑 `codex login` 登录，再派”（登录命令在 `VENDOR_SPECS[厂商].loginCommand`）。
+  不写 `--vendor` 不查。资料页改厂商（`persona.ts`）只从网页来，网页不让选不能用的，后台不另查。
+- 提示词：`LaunchContext.vendorAvailability`（`launch.ts` 从缓存填，不等查询），`buildLaunchPrompt` 的厂商列表和
+  `buildHubUsagePrompt(vendors)` 的 `--vendor a|b` 只列 `isSelectable` 的。
   状态变了**不**为它重启项目经理会话（fingerprint 只在下次正常重启时变），避免登录一下就打断正在干活的项目经理。
 
 ## 8. 多设备
@@ -117,6 +123,8 @@ interface VendorAvailabilityProbe {
 
 ## 9. 测试（先写会失败的）
 
+截图：`docs/screenshots/vendor-availability/`（真守护进程 + 真 CLI：agy 指向不存在的路径，codex 用空的 `CODEX_HOME`）。
+
 - `shared/vendors.test.ts`：`isListed` / `isSelectable`；`AVAILABILITY_LABELS` 每个状态都有项。
 - `daemon/driver/model-catalog.test.ts`：claude 回应有 / 没有 `account`；codex 的 `account/read` 回 null；agy 报认证错；
   spawn ENOENT → not_installed；signed_out 5 分钟内不重问、之后有人要再问；`refresh: "signed_out"` 只重问那几家；
@@ -125,4 +133,4 @@ interface VendorAvailabilityProbe {
 - `daemon/prompt.test.ts`：没装、没登录的不进厂商列表和 `--vendor` 列表。
 - 账本 / handlers：`worker start --vendor codex` 在没装时报“这台设备没装 codex”。
 - `codex-driver.test.ts`、`agy-driver.test.ts`：ENOENT 抛 `codex_not_found` / `agy_not_found`。
-- 网页：下拉过滤和灰掉（组件测试）；截图两张放 `docs/screenshots/`：一家没装被藏、一家没登录灰掉。
+- 网页（`m2.test.tsx`、`devices.test.tsx`）：没装不列、没登录灰掉；打开下拉后台重问不等；选着的用不了不换掉、“创建”灰。

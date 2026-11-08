@@ -15,6 +15,7 @@ import {
   linuxInstallDirs,
   personaFilePath,
   projectWorktreesDir,
+  findExecutable,
   resolveExecutable,
   resolveHubPaths,
   resolvePaths,
@@ -102,6 +103,29 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(defaultCodexFallbackPaths("/home/u", "linux").at(-1)).toBe("/home/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex");
   });
 
+  it("findExecutable：找到返回路径（PATH 命中是命令名，候选路径命中是那个绝对路径），找不到返回 null；显式路径看文件在不在", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-paths-find-"));
+    try {
+      const pathDir = join(dir, "path-bin");
+      const fallback = join(dir, "app", "codex");
+      mkdirSync(pathDir, { recursive: true });
+      mkdirSync(join(dir, "app"), { recursive: true });
+      // PATH 里没有、候选路径里也没有：没装
+      expect(findExecutable("codex", pathDir, [fallback])).toBeNull();
+      // PATH 里没有、候选路径里有（macOS 上 ChatGPT.app 里带的 codex）：算装了
+      writeFileSync(fallback, "");
+      expect(findExecutable("codex", pathDir, [fallback])).toBe(fallback);
+      // PATH 里有：命令名
+      writeFileSync(join(pathDir, "codex"), "");
+      expect(findExecutable("codex", pathDir, [fallback])).toBe("codex");
+      // 显式路径
+      expect(findExecutable(fallback, undefined, [])).toBe(fallback);
+      expect(findExecutable(join(dir, "nope"), undefined, [])).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("resolveExecutable：显式路径原样返回；PATH 命中保持原样；否则按顺序回退候选路径", () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-paths-exec-"));
     try {
@@ -129,6 +153,8 @@ describe("paths：可执行文件与数据目录解析", () => {
       expect(defaultClaudeFallbackPaths("/Users/u", "darwin")).toEqual([]);
       expect(defaultCodexFallbackPaths("/Users/u", "darwin")).toEqual([
         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        // ChatGPT 装在用户目录的 ~/Applications 里也要找得到，不然判成没装
+        "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
       ]);
     } finally {

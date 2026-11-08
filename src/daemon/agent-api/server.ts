@@ -33,6 +33,7 @@ import { assertSocketPathFits } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { WorkerPr } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
+import { isAgentVendor, type AgentVendor, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -55,6 +56,13 @@ export interface AgentApiOptions {
    * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。
    */
   findTranscript?: (ref: TranscriptRef) => string | null;
+  /**
+   * hub worker start --vendor 选的这家在这台设备上能不能用（不能用的先重问一次，守护进程接 ModelCatalogs.ensureUsable）。
+   * 不给就不查（都当能用）。
+   */
+  vendorUsable?: (vendor: AgentVendor) => Promise<VendorAvailability>;
+  /** 这台设备的名字（不能用时报错里写）。 */
+  deviceName?: () => string;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -248,9 +256,17 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const transcript = ref === null ? null : findTranscript(ref);
       return { ...(pr === null ? {} : { pr }), transcript };
     }
-    if (command !== "worker.start" || body.noWorktree === true) return {};
+    if (command !== "worker.start") return {};
+    const context: HubCallContext = {};
+    // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
+    if (opts.vendorUsable && isAgentVendor(body.vendor)) {
+      const vendor = body.vendor;
+      context.vendorStatus = { vendor, availability: await opts.vendorUsable(vendor), device: opts.deviceName?.() ?? "" };
+    }
+    if (body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);
-    return folder === null ? {} : { workspace: await probeWorkspace(folder) };
+    if (folder !== null) context.workspace = await probeWorkspace(folder);
+    return context;
   };
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({

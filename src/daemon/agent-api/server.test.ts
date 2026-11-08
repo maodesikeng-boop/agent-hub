@@ -281,6 +281,25 @@ describe("agent api over inject", () => {
       expect(ledger.contexts).toEqual([{}, {}, {}]);
     });
 
+    it("带 --vendor：先问守护进程这家在这台设备上能不能用（不能用的会先重问一次），结果连同设备名交给账本；不带不问", async () => {
+      const asked: string[] = [];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        deviceName: () => "东京",
+        vendorUsable: async (vendor) => {
+          asked.push(vendor);
+          return "signed_out";
+        },
+      });
+      await app.ready();
+      await call("worker.start", { title: "修 X", task: "任务", noWorktree: true, vendor: "codex" });
+      await call("worker.start", { title: "修 X", task: "任务", noWorktree: true });
+      expect(asked).toEqual(["codex"]);
+      expect(ledger.contexts).toEqual([{ vendorStatus: { vendor: "codex", availability: "signed_out", device: "东京" } }, {}]);
+    });
+
     it("探的时候令牌作废了：401，不调账本", async () => {
       ledger.startFolder = "/code/foo";
       await withProbe(async () => {

@@ -11,7 +11,7 @@ import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens } from "../shared/index.ts";
+import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
@@ -39,6 +39,8 @@ export interface LaunchPreparerOptions {
   hubBinDir: string;
   /** 接在 hubBinDir 后面的 PATH，默认守护进程自己的 process.env.PATH。 */
   basePath?: string;
+  /** 这台设备上各家厂商的状态（缓存里的，不等查询）：项目经理提示词只列能选的。不给就全列。 */
+  vendorAvailability?: () => VendorAvailabilityMap;
 }
 
 function realpathOr(path: string): string {
@@ -68,7 +70,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
   const basePath = options.basePath ?? process.env.PATH ?? "";
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
-    const ctx = getLaunchContext(session.id);
+    const ctx = { ...getLaunchContext(session.id), vendorAvailability: options.vendorAvailability?.() };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);

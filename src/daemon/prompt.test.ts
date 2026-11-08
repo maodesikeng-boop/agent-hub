@@ -753,6 +753,23 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     expect(note).not.toContain("# 性格设定");
   });
 
+  it("这台设备上没装、没登录的厂商不进“能用的厂商”和 --vendor 列表；认不出的照列", () => {
+    const ctx = projectContext({ vendorAvailability: { claude: "available", agy: "signed_out", codex: "not_installed" } });
+    const prompt = buildLaunchPrompt(ctx, dir);
+    expect(prompt).toContain("能用的厂商有 `claude`");
+    expect(prompt).not.toContain("`agy`（");
+    expect(prompt).not.toContain("`codex`（");
+    expect(prompt).toContain("[--vendor claude]");
+    const unknown = buildLaunchPrompt(projectContext({ vendorAvailability: { agy: "unknown" } }), dir);
+    expect(unknown).toContain("`agy`（");
+    expect(unknown).toContain("[--vendor claude|agy|codex]");
+  });
+
+  it("厂商状态变了不改 fingerprint（不为它重启项目经理会话）", () => {
+    const ctx = projectContext();
+    expect(buildFingerprintPrompt({ ...ctx, vendorAvailability: { codex: "signed_out" } }, dir)).toBe(buildFingerprintPrompt(ctx, dir));
+  });
+
   it("算 fingerprint 的提示词不含性格设定和模式：改了不变；文件夹变了照样变", () => {
     const ctx = projectContext();
     const base = buildFingerprintPrompt(ctx, dir);

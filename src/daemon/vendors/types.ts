@@ -2,7 +2,7 @@
 // 不认识哪家厂商；后台按对话的会话那一行的 vendor 找到实现（vendors/index.ts）。
 // 纯数据（隐藏名单、拦下时的原因、命令开头的字符）在 shared/vendors.ts 的 VENDOR_SPECS[vendor].composer；要写代码的在这里。
 // 加一家厂商要动的地方见 vendors/index.ts 开头。
-import type { AgentVendor, ComposerCommand } from "../../shared/index.ts";
+import type { AgentVendor, ComposerCommand, ModelCatalog, VendorAvailability } from "../../shared/index.ts";
 
 /** 在哪儿问命令列表：会话的工作目录和附加文件夹（项目里的命令、skill 跟着目录走）。 */
 export interface CommandsTarget {
@@ -42,4 +42,28 @@ export interface VendorComposer extends VendorComposerBase {
    * 返回通用形状，没去掉隐藏的；问不到（没装、超时、报错、回的认不出）Promise 失败，带原因。
    */
   queryCommands(target: CommandsTarget, signal: AbortSignal): Promise<ComposerCommand[]>;
+}
+
+/**
+ * 模型名单那次查询里怎么看这家（纯函数，不起进程）：解析名单、看这台设备上登没登录（docs/vendor-availability-design.md 第 3 节）。
+ * 起进程问的部分在各家的 create<厂商>CatalogSource。
+ */
+export interface VendorCatalogProbe {
+  /** 回应 → 名单；认不出是 null（用打包的）。 */
+  parse(raw: unknown): ModelCatalog | null;
+  /** 问到了：同一次回应里的登录状态，看不出是 unknown。 */
+  availabilityOf(raw: unknown): VendorAvailability;
+  /** 没问到：从错误看。不写按通用的认（model-catalog.ts 的 defaultAvailabilityOfError）。 */
+  availabilityOfError?(error: unknown): VendorAvailability;
+}
+
+/** 起进程问名单要的东西（守护进程给）。 */
+export interface VendorCatalogSourceOptions {
+  /** 可执行文件（resolveExecutable 解析过的）。 */
+  path: string;
+  /** 在哪个目录问：用户主目录（codex 也从这里找 ~/.codex）。 */
+  cwd: string;
+  /** 装没装（findExecutable，只查文件）。 */
+  installed: () => boolean;
+  env?: NodeJS.ProcessEnv;
 }

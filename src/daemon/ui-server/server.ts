@@ -10,6 +10,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, ty
 import {
   AGENT_VENDORS,
   API_PATHS,
+  REFRESH_UNUSABLE,
   ConversationNotFoundError,
   LEDGER_ERROR_HTTP_STATUS,
   LedgerRequestError,
@@ -115,7 +116,7 @@ export interface UiServerOptions {
   port?: number;
   logger?: boolean;
   /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
-  models?: { list(options?: { refresh?: boolean }): Promise<ModelCatalog[]> };
+  models?: { list(options?: { refresh?: boolean | "unusable" }): Promise<ModelCatalog[]> };
   /** 事件流里没有额度的厂商的额度（daemon/quota/fetched-quota.ts 的 createFetchedQuota）。不给就回空。 */
   quota?: { get(): Promise<QuotaResponse> };
   /**
@@ -658,7 +659,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, clientAddress(req)) }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
-      const refresh = (req.query as { refresh?: unknown }).refresh === "1";
+      // ?refresh=1 全部重问；?refresh=unusable 只重问这台设备上没登录（没装）的那几家（网页打开厂商下拉时在后台发）
+      const query = (req.query as { refresh?: unknown }).refresh;
+      const refresh = query === "1" ? true : query === REFRESH_UNUSABLE ? REFRESH_UNUSABLE : false;
       return { catalogs: opts.models ? await opts.models.list({ refresh }) : AGENT_VENDORS.map((v) => bundledModelCatalog(v)) };
     });
 

@@ -247,3 +247,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
 
 /** 一轮慢慢回：先等 ms 毫秒再回 text。 */
 export const slowTurn = (ms: number, text = "done") => ({ steps: [{ sleepMs: ms }, { text }] });
+
+/** 东京实测：agy 没登录时 `agy --output-format json models` 的原样输出（退出码 0，不是 JSON）。 */
+export const AGY_SIGNED_OUT_STDOUT =
+  "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.\n";

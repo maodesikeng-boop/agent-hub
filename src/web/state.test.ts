@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
-import { describeError, formatTime } from "./format.ts";
+import { formatTime } from "./format.ts";
 import { CHANGE_TYPES, type ScheduleRecord } from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
@@ -190,19 +190,6 @@ describe("parseServerMessage", () => {
 describe("reconnectDelay", () => {
   it("1、2、4、8 秒，最多 10 秒", () => {
     expect([0, 1, 2, 3, 4, 20].map(reconnectDelay)).toEqual([1000, 2000, 4000, 8000, 10000, 10000]);
-  });
-});
-
-describe("describeError", () => {
-  it("认识的错误码显示中文，细节分开", () => {
-    expect(describeError("claude_not_found: spawn claude ENOENT")).toEqual({
-      label: "找不到 claude",
-      detail: "spawn claude ENOENT",
-    });
-    expect(describeError("start_timeout")).toEqual({ label: "claude 启动超时", detail: "" });
-  });
-  it("不认识的原样", () => {
-    expect(describeError("disk full: /tmp")).toEqual({ label: "disk full: /tmp", detail: "" });
   });
 });
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
+  AVAILABILITY_LABELS,
+  VENDOR_AVAILABILITIES,
+  isListed,
+  isSelectable,
+  notFoundCode,
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   VENDOR_FAILURE_SIGNS,
@@ -193,6 +198,7 @@ describe("模型名单", () => {
       vendor: "claude",
       label: VENDOR_SPECS.claude.label,
       source: "bundled",
+      availability: "unknown",
       defaultEfforts: null,
       defaultModel: null,
       defaultModelId: null,
@@ -263,8 +269,8 @@ describe("VENDOR_FAILURE_SIGNS：错误特征匹配", () => {
         expect(signs.context.test(sample), `${vendor} context: ${sample}`).toBe(true);
       }
     }
-    expect(vendorFailureOf("agy_not_found: spawn agy ENOENT")).toEqual({ kind: "start", serviceName: "Antigravity" });
-    expect(vendorFailureOf("codex_not_found: spawn codex ENOENT")).toEqual({ kind: "start", serviceName: "Codex" });
+    expect(vendorFailureOf("agy_not_found: spawn agy ENOENT")).toEqual({ kind: "missing", serviceName: "Antigravity" });
+    expect(vendorFailureOf("codex_not_found: spawn codex ENOENT")).toEqual({ kind: "missing", serviceName: "Codex" });
   });
 
   it("vendorFailureOf：支持显式传 vendor 或按原文里的厂商特征词归属 serviceName", () => {
@@ -294,5 +300,29 @@ describe("VENDOR_FAILURE_SIGNS：错误特征匹配", () => {
       kind: "context",
       serviceName: "Codex",
     });
+  });
+});
+
+describe("厂商在这台设备上能不能用", () => {
+  it("没装的不列；没登录的列出来但不能选；能用、认不出的能选", () => {
+    expect(VENDOR_AVAILABILITIES.filter(isListed)).toEqual(["available", "signed_out", "unknown"]);
+    expect(VENDOR_AVAILABILITIES.filter(isSelectable)).toEqual(["available", "unknown"]);
+  });
+
+  it("不能选的状态有英文状态词，能选的没有", () => {
+    for (const a of VENDOR_AVAILABILITIES) expect(AVAILABILITY_LABELS[a] === null).toBe(isSelectable(a));
+    expect(AVAILABILITY_LABELS.signed_out).toBe("Not signed in");
+    expect(AVAILABILITY_LABELS.not_installed).toBe("Not installed");
+  });
+
+  it("打包的名单状态是认不出（当能用）", () => {
+    for (const v of AGENT_VENDORS) expect(bundledModelCatalog(v).availability).toBe("unknown");
+  });
+
+  it("找不到程序的错误码按厂商，认得出是哪家", () => {
+    for (const v of AGENT_VENDORS) {
+      expect(notFoundCode(v)).toBe(`${v}_not_found`);
+      expect(vendorFailureOf(`${notFoundCode(v)}: /x/${v}: spawn ENOENT`)?.kind).toBe("missing");
+    }
   });
 });

@@ -395,7 +395,7 @@ describe("消息状态", () => {
       }),
     );
     const [a, b] = bubbles() as [HTMLElement, HTMLElement];
-    expect(within(a).getByText("Claude 没能启动")).toHaveAttribute("title", "claude_not_found: spawn claude ENOENT");
+    expect(within(a).getByText("找不到 Claude")).toHaveAttribute("title", "claude_not_found: spawn claude ENOENT");
     expect(within(b).getByText("出错了")).toHaveAttribute("title", "某个没见过的原因");
   });
 
@@ -899,7 +899,23 @@ describe("health", () => {
         health: [makeHealth({ module: "driver", consecutiveFailures: 1, lastError: "claude_not_found: spawn claude ENOENT" })],
       }),
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("找不到 claude");
+    expect(screen.getByRole("alert")).toHaveTextContent("找不到 Claude");
+  });
+
+  it("找不到 codex：按错误码里的厂商说；认不出的原因原样显示、不加粗", async () => {
+    await boot(
+      makeSnapshot({
+        health: [
+          makeHealth({ module: "driver", consecutiveFailures: 1, lastError: "codex_not_found: /x/codex: spawn ENOENT" }),
+          makeHealth({ module: "agent-api", consecutiveFailures: 1, lastError: "disk full: /tmp" }),
+        ],
+      }),
+    );
+    const [missing, unknown] = screen.getAllByRole("alert");
+    expect(missing).toHaveTextContent("找不到 Codex");
+    expect(missing).not.toHaveTextContent("claude");
+    expect(unknown).toHaveTextContent("disk full: /tmp");
+    expect(unknown!.querySelector(".font-semibold")).toBeNull();
   });
 
   it("health.updated 实时显示；成功一次清空后消失", async () => {
@@ -909,7 +925,7 @@ describe("health", () => {
       ws,
       healthChange(11, makeHealth({ consecutiveFailures: 1, lastError: "claude_not_found: spawn claude ENOENT" })),
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("找不到 claude");
+    expect(screen.getByRole("alert")).toHaveTextContent("找不到 Claude");
     push(ws, healthChange(12, makeHealth({ consecutiveFailures: 0, lastError: null })));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -929,7 +945,7 @@ describe("health", () => {
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(2);
     expect(screen.getByText("disk full")).toBeInTheDocument();
-    expect(screen.getByText("claude 启动超时")).toBeInTheDocument();
+    expect(screen.getByText("Claude 没能启动")).toBeInTheDocument();
   });
 });
 
