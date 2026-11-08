@@ -1,6 +1,6 @@
 // 联机 P4：守护进程按变化流判断要不要推（规则同网页，shared/reminders.ts）；网页在前台看着时不推。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WAITING_SETTLE_MS, type Change, type Message, type PushPayload, type StateSnapshot } from "../../shared/index.ts";
+import { REMINDER_EVALUATE_DELAY_MS, WAITING_SETTLE_MS, type Change, type Message, type PushPayload, type StateSnapshot } from "../../shared/index.ts";
 import { makeConvSnapshot, makeMessage, makePm, makeSession, makeSnapshot, makeUserMessage } from "../../shared/test-helpers.ts";
 import { createPresenceBoard, type PresenceBoard } from "./presence.ts";
 import { createReminderWatcher } from "./watcher.ts";
@@ -45,7 +45,7 @@ afterEach(() => {
 describe("createReminderWatcher", () => {
   it("hub ask：一来就推一次，标题“设备 · 项目经理：等你确定”，不带正文", async () => {
     watcher.apply(ask(2));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     expect(pushed).toEqual([{ title: "东京 · 小林：等你确定", url: "/#/c/1", tag: `${DEVICE.id}:ask-pm-1` }]);
     watcher.apply(change({ type: "message.updated", data: { message: makeMessage({ id: 2, meta: { needsUser: true } }) } }));
     await vi.advanceTimersByTimeAsync(WAITING_SETTLE_MS * 2);
@@ -55,7 +55,8 @@ describe("createReminderWatcher", () => {
   it("等你：停稳 3 秒才推；没停稳又忙起来就不推", async () => {
     watcher.apply(reply(2));
     watcher.apply(idle());
-    await vi.advanceTimersByTimeAsync(WAITING_SETTLE_MS - 1);
+    // 先等 REMINDER_EVALUATE_DELAY_MS 才第一次判断，停稳的 3 秒从那时算起
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS + WAITING_SETTLE_MS - 1);
     expect(pushed).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(pushed).toEqual([{ title: "东京 · 小林：等你", url: "/#/c/1", tag: `${DEVICE.id}:pm-1` }]);
@@ -85,12 +86,12 @@ describe("createReminderWatcher", () => {
     const page = {};
     presence.report(page, { type: "presence", visible: true, deviceId: null, conversationId: 7 });
     watcher.apply(ask(2));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     expect(pushed).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(PRESENCE_STALE_MS + 1);
     watcher.apply(ask(3));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     expect(pushed).toHaveLength(1);
   });
 
@@ -99,14 +100,14 @@ describe("createReminderWatcher", () => {
     presence.report(page, { type: "presence", visible: true, deviceId: null, conversationId: null });
     presence.report(page, { type: "presence", visible: false, deviceId: null, conversationId: null });
     watcher.apply(ask(2));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     expect(pushed).toHaveLength(1);
 
     const other = {};
     presence.report(other, { type: "presence", visible: true, deviceId: null, conversationId: null });
     presence.remove(other);
     watcher.apply(ask(3));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     expect(pushed).toHaveLength(2);
   });
 
@@ -115,7 +116,7 @@ describe("createReminderWatcher", () => {
     presence.report(page, { type: "presence", visible: true, deviceId: null, conversationId: 1 });
     watcher.apply(reply(2));
     watcher.apply(idle());
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     presence.report(page, { type: "presence", visible: false, deviceId: null, conversationId: 1 });
     watcher.apply(change({ type: "health.updated", data: { health: { module: "driver", consecutiveFailures: 0, lastError: null, updatedAt: Date.now() } } }));
     await vi.advanceTimersByTimeAsync(WAITING_SETTLE_MS * 2);
@@ -124,7 +125,7 @@ describe("createReminderWatcher", () => {
 
   it("重新拉快照（变化流补不齐）：已经推过的不再推，断线期间来的新提问照推", async () => {
     watcher.apply(ask(2));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REMINDER_EVALUATE_DELAY_MS);
     const snap = snapshot();
     snap.seq = 50;
     snap.conversations[0]!.messages.push(makeMessage({ id: 2, meta: { needsUser: true } }), makeMessage({ id: 3, meta: { needsUser: true } }));

@@ -38,7 +38,7 @@ describe("Service Worker：只缓存网页外壳，不缓存接口", () => {
     shellRequestKind(over.method ?? "GET", `${over.origin ?? ORIGIN}${path}`, ORIGIN, over.mode ?? "cors");
 
   it("接口、登录、别的设备的转发、WebSocket：不管（不缓存）", () => {
-    for (const path of [API_PATHS.state, `${API_PATHS.ws}?since=3`, API_PATHS.pushKey, "/auth?token=x", "/d/0f0e0d0c-0b0a-4908-8706-050403020100/api/state"]) {
+    for (const path of ["/api", "/api/", API_PATHS.state, `${API_PATHS.ws}?since=3`, API_PATHS.pushKey, "/auth?token=x", "/d/0f0e0d0c-0b0a-4908-8706-050403020100/api/state"]) {
       expect(kind(path), path).toBeNull();
     }
   });

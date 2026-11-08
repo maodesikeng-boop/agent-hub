@@ -11,7 +11,7 @@ export const PRECACHE = ["/"];
 /** page：先走网络，连不上用缓存的页面；asset：文件名带哈希，先用缓存；static：先走网络，连不上用缓存；null：不管。 */
 export type ShellRequestKind = "page" | "asset" | "static" | null;
 
-const NEVER_CACHE = [/^\/api\//, /^\/auth(?:$|\/)/, /^\/d\//];
+const NEVER_CACHE = [/^\/api(?:$|\/)/, /^\/auth(?:$|\/)/, /^\/d\//];
 
 export function shellRequestKind(method: string, url: string, origin: string, mode: RequestMode): ShellRequestKind {
   if (method !== "GET") return null;

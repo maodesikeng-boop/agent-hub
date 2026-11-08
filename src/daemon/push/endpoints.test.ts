@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import { isAllowedPushEndpoint, PUSH_ENDPOINT_HOSTS } from "./endpoints.ts";
 
 describe("isAllowedPushEndpoint", () => {
-  it("名单内：FCM、Mozilla、Apple、Windows（*.notify.windows.com 任意子域）", () => {
+  it("名单内：FCM、Mozilla、Apple（*.push.apple.com 任意子域）、Windows（*.notify.windows.com 任意子域）", () => {
     for (const url of [
       "https://fcm.googleapis.com/fcm/send/abc",
       "https://updates.push.services.mozilla.com/wpush/v2/abc",
       "https://web.push.apple.com/QAbc",
+      "https://api.push.apple.com/3/device/abc",
       "https://db5p.notify.windows.com/?token=abc",
       "https://wns2-par02p.notify.windows.com/w/?token=abc",
       "https://FCM.googleapis.com/x",
@@ -32,6 +33,11 @@ describe("isAllowedPushEndpoint", () => {
       "https://evilnotify.windows.com/x",
       "https://x.notify.windows.com.evil.com/x",
       "https://web.push.apple.com./x",
+      "https://push.apple.com/x",
+      "https://push.apple.com.evil.com/x",
+      "https://evilpush.apple.com/x",
+      "https://web.push.apple.com.evil.com/x",
+      "https://www.apple.com/x",
       "ftp://fcm.googleapis.com/x",
       "not a url",
       "",
@@ -41,6 +47,6 @@ describe("isAllowedPushEndpoint", () => {
   });
 
   it("名单就是这四项", () => {
-    expect([...PUSH_ENDPOINT_HOSTS]).toEqual(["fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com", "*.notify.windows.com"]);
+    expect([...PUSH_ENDPOINT_HOSTS]).toEqual(["fcm.googleapis.com", "updates.push.services.mozilla.com", "*.push.apple.com", "*.notify.windows.com"]);
   });
 });

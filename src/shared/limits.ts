@@ -135,6 +135,10 @@ export const PRESENCE_STALE_MS = 75_000;
 export const PUSH_TTL_SECONDS = 24 * 60 * 60;
 /** 一次推送请求最多等多久。 */
 export const PUSH_SEND_TIMEOUT_MS = 10_000;
+/** 推送服务临时失败（网络错误、5xx、429）后隔多久重试，只重试一次。 */
+export const PUSH_RETRY_DELAY_MS = 30_000;
+/** 账本来了和提醒有关的变化后，等多久再判断要不要推：流式输出时一串变化合成一次，不用每条都把所有对话扫一遍。 */
+export const REMINDER_EVALUATE_DELAY_MS = 300;
 /** 一台最多存多少条订阅，超了丢最早的（每个浏览器一条，正常用不到）。 */
 export const MAX_PUSH_SUBSCRIPTIONS = 20;
 /** 订阅里 endpoint 最长多少字符（推送服务的网址，实际 200 左右）。 */

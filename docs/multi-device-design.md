@@ -141,7 +141,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 - **别吵**：网页开着并且在前台看着的时候不推。浏览器每 30 秒在 WebSocket 上报一次“前台 / 后台 + 正在看哪个对话”，提醒设备据此跳过。（iOS 要求每条推送都必须显示出来，所以只能在服务端少发，不能在 Service Worker 里吞。）
 - **只推标题**（第 9 节拍板）：只推“东京 · 项目 A：等你确定”，不带正文，也不做开关。
 - **点通知**：打开 `/#/d/<设备>/c/<对话>`；Tailscale 没连上时显示 6.1 的提示。iOS 的 Tailscale 可以开“按需连接”，基本不用手动开。
-- **实现**：服务端用 `web-push`（npm，新依赖）；订阅存库，推送服务回 404/410 就删订阅。提醒设备要能出公网访问 `*.push.apple.com`、`fcm.googleapis.com`（东京默认可以）。订阅的 endpoint 只收已知推送服务的主机（`daemon/push/endpoints.ts`：`fcm.googleapis.com`、`updates.push.services.mozilla.com`、`web.push.apple.com`、`*.notify.windows.com`），名单外的 400，状态文件里已存的加载时丢掉（防 SSRF）。推送接口和 WebSocket 前台上报只给入口本机已登录的浏览器，设备令牌来的一律拒。
+- **实现**：服务端用 `web-push`（npm，新依赖）；订阅存库，推送服务回 404/410 就删订阅，临时失败（网络错误、5xx、429）隔 30 秒重试一次。提醒设备要能出公网访问 `*.push.apple.com`、`fcm.googleapis.com`（东京默认可以）。订阅的 endpoint 只收已知推送服务的主机（`daemon/push/endpoints.ts`：`fcm.googleapis.com`、`updates.push.services.mozilla.com`、`*.push.apple.com`、`*.notify.windows.com`），名单外的 400，状态文件里已存的加载时丢掉（防 SSRF）。推送接口和 WebSocket 前台上报只给入口本机已登录的浏览器，设备令牌来的一律拒。
 - 备选（不推荐，列着备用）：ntfy / Bark / Telegram 机器人。好处是不用装 PWA；坏处是多一个第三方、正文过第三方。
 
 ### 6.3 小屏布局要点（按 docs/ui-standard.md，先补标准再改界面）

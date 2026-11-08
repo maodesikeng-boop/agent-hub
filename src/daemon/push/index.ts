@@ -55,6 +55,7 @@ export function createPushService(opts: {
     close() {
       unsubscribe();
       local.close();
+      sender.close();
     },
   };
 }

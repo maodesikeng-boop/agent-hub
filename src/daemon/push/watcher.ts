@@ -7,6 +7,7 @@ import {
   reminderPayload,
   reminderStateFrom,
   waitingConversations,
+  REMINDER_EVALUATE_DELAY_MS,
   type Change,
   type ConversationId,
   type LastSeen,
@@ -50,9 +51,9 @@ export function createReminderWatcher(opts: { device: ReminderDevice; presence: 
       if (payload !== null) opts.notify(payload);
     }
   };
-  // 同一个事务里一串变化只算一次
+  // 一串变化（流式输出时一秒几十条）合成一次：第一条来了等 REMINDER_EVALUATE_DELAY_MS，这段时间里的都算进去
   const schedule = () => {
-    if (pending === undefined && !closed) pending = setTimeout(evaluate, 0);
+    if (pending === undefined && !closed) pending = setTimeout(evaluate, REMINDER_EVALUATE_DELAY_MS);
   };
 
   return {
@@ -66,8 +67,10 @@ export function createReminderWatcher(opts: { device: ReminderDevice; presence: 
       if (state === null) return;
       const next = applyReminderChange(state, change);
       if (next === state) return;
+      // 和提醒无关的变化类型（applyReminderChange 只更新 seq）：seq 照记，不触发判断
+      const relevant = next.pms !== state.pms || next.conversations !== state.conversations || next.sessions !== state.sessions;
       state = next;
-      schedule();
+      if (relevant) schedule();
     },
     close() {
       closed = true;

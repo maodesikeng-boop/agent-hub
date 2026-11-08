@@ -1,9 +1,9 @@
 // 推送订阅的 endpoint 白名单（联机 P4）：守护进程会往订阅里的 endpoint 发请求，只收已知推送服务的主机，
 // 否则任何能登录的页面（或被篡改的状态文件）都能让它去请求内网、本机的任意 https 地址（SSRF）。
-// 出处见 PR #141 描述：FCM（Chrome / Edge / Android）、Mozilla autopush（Firefox）、Apple（Safari / 主屏网页）、WNS（Windows）。
+// 出处见 PR #141 描述：FCM（Chrome / Edge / Android）、Mozilla autopush（Firefox）、Apple（Safari / 主屏网页，文档写的是 *.push.apple.com）、WNS（Windows）。
 // 要加推送服务就改这一处。"*." 开头 = 任意（至少一级）子域。
 
-export const PUSH_ENDPOINT_HOSTS: readonly string[] = ["fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com", "*.notify.windows.com"];
+export const PUSH_ENDPOINT_HOSTS: readonly string[] = ["fcm.googleapis.com", "updates.push.services.mozilla.com", "*.push.apple.com", "*.notify.windows.com"];
 
 const WILDCARD_PREFIX = "*.";
 
