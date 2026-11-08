@@ -5,24 +5,23 @@
 // 格式对不上（没有库、没有 trajectory_meta、编号对不上或不是 UUID、agy 说找不到这个对话）一律抛 ForkUnsupportedError，账本退回“本会话写交接”。
 import { spawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 import { DB_BUSY_TIMEOUT_MS, agentLaunchArgs } from "../../shared/index.ts";
 import type { TokenUsage } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
+import { agyCliDataDir, agyDataPaths } from "../../shared/paths.ts";
 import { AGY_PLAN_PERMISSION_ARGS, AGY_PRINT_ARGS, AGY_STREAM_ARGS, buildAgyUserLine, buildChildEnv, detectAgyArgsConflict, parseAgyUsage } from "../driver/agy-protocol.ts";
 import { forceKill, killFreshGroup } from "../driver/process.ts";
 import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
 /** agy 的数据目录（对话库、brain、摘要库都在里面）；和 driver/transcript.ts 找对话库用的是同一个位置。 */
-export const AGY_DATA_DIR = join(homedir(), ".gemini", "antigravity-cli");
+export const AGY_DATA_DIR = agyCliDataDir();
 /** 会话编号、轨迹编号的样子：36 个字符的 UUID。换编号要同长，所以不是这个样子就当格式不认识。 */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 除了 conversations/ 和 brain/，agy 还会在这几个目录下按编号放东西（目录、<编号>.xxx 文件）。remove 一并删。 */
 const ID_SUBDIRS = ["brain", "annotations", "implicit", "presence"] as const;
-const SUMMARY_DB = "conversation_summaries.db";
 /** 摘要库里按会话编号存行的表（照 #108 的 cleanup.py）。 */
 const SUMMARY_TABLES = ["conversation_summaries", "conversations_fts"] as const;
 /** write 出错时带进错误消息的标准错误结尾长度。 */
@@ -101,7 +100,7 @@ function replaceInAllCells(db: DatabaseSync, replacements: ReadonlyArray<readonl
 
 /** 摘要库里删这个编号的行；没有这个库、没有这两张表（格式变了）都算没有。 */
 function removeSummaryRows(root: string, id: string): void {
-  const file = join(root, SUMMARY_DB);
+  const file = agyDataPaths(root).summaryDb;
   if (!existsSync(file)) return;
   const db = new DatabaseSync(file, { timeout: DB_BUSY_TIMEOUT_MS });
   try {
@@ -153,8 +152,8 @@ function buildForkArgs(src: ForkSource, forkId: string): string[] {
 }
 
 export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker {
-  const root = options.root ?? AGY_DATA_DIR;
-  const conversationFile = (id: string) => join(root, "conversations", `${id}.db`);
+  const paths = agyDataPaths(options.root ?? AGY_DATA_DIR);
+  const { root } = paths;
 
   return {
     id: "agy-copy",
@@ -163,13 +162,13 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
     async fork(src: ForkSource, signal: AbortSignal): Promise<ForkHandle> {
       const srcId = src.vendorSessionId;
       if (!isUuid(srcId)) throw new ForkUnsupportedError(`agy 会话编号不是 UUID 的样子：${srcId}`);
-      const srcFile = conversationFile(srcId);
+      const srcFile = paths.conversationDb(srcId);
       if (!existsSync(srcFile)) throw new ForkUnsupportedError(`找不到 agy 对话库：${srcFile}`);
       signal.throwIfAborted();
 
       const newId = crypto.randomUUID();
-      const dstFile = conversationFile(newId);
-      const dstBrain = join(root, "brain", newId);
+      const dstFile = paths.conversationDb(newId);
+      const dstBrain = paths.brainDir(newId);
       try {
         const from = new DatabaseSync(srcFile, { readOnly: true, timeout: DB_BUSY_TIMEOUT_MS });
         try {
@@ -188,7 +187,8 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
           db.close();
         }
         chmodSync(dstFile, 0o600);
-        if (existsSync(join(root, "brain", srcId))) cpSync(join(root, "brain", srcId), dstBrain, { recursive: true });
+        const srcBrain = paths.brainDir(srcId);
+        if (existsSync(srcBrain)) cpSync(srcBrain, dstBrain, { recursive: true });
       } catch (error) {
         removeDbFiles(dstFile);
         rmSync(dstBrain, { recursive: true, force: true });
@@ -237,16 +237,16 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
     async remove(fork: ForkHandle): Promise<void> {
       const id = fork.forkId;
       if (!isUuid(id)) throw new Error(`agy 复制那份的编号不是 UUID 的样子，不删：${id}`);
-      const where = fork.extra?.root ?? root;
-      removeDbFiles(join(where, "conversations", `${id}.db`));
+      const wherePaths = agyDataPaths(fork.extra?.root ?? root);
+      removeDbFiles(wherePaths.conversationDb(id));
       for (const sub of ID_SUBDIRS) {
-        const dir = join(where, sub);
+        const dir = wherePaths.subDir(sub);
         if (!existsSync(dir)) continue;
         for (const name of readdirSync(dir)) {
           if (name === id || name.startsWith(`${id}.`)) rmSync(join(dir, name), { recursive: true, force: true });
         }
       }
-      removeSummaryRows(where, id);
+      removeSummaryRows(wherePaths.root, id);
     },
   };
 }

@@ -17,6 +17,7 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { agyCliDataDir, agyDataPaths } from "../../shared/paths.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
 export interface TranscriptRef {
@@ -122,7 +123,7 @@ export function codexTranscriptPath(ref: TranscriptRef, roots: TranscriptRoots =
 export function agyTranscriptPath(ref: TranscriptRef, roots: TranscriptRoots = {}): string | null {
   const id = ref.vendorSessionId;
   if (!safeId(id)) return null;
-  const file = join(roots.home ?? homedir(), ".gemini", "antigravity-cli", "conversations", `${id}.db`);
+  const file = agyDataPaths(agyCliDataDir(roots.home)).conversationDb(id);
   return isFile(file) ? file : null;
 }
 

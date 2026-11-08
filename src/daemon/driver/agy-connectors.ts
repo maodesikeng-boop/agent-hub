@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "no
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
+import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../../shared/paths.ts";
 import { buildChildEnv } from "./protocol.ts";
 import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly-agy.ts";
 import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "./write-scope.ts";
@@ -220,7 +221,7 @@ export const listMcpTools: ListMcpTools = (name, spec, timeoutMs, launcher) =>
 /** agy 的 MCP 配置：{ mcpServers: { <名字>: <启动方式> } }；读不了或格式不对当空。 */
 export function readAgyMcpServers(homeDir: string, readFile: (path: string) => string = (p) => readFileSync(p, "utf8")): Record<string, McpServerSpec> {
   try {
-    const parsed: unknown = JSON.parse(readFile(join(homeDir, ".gemini", "config", "mcp_config.json")));
+    const parsed: unknown = JSON.parse(readFile(agyHomePaths(homeDir).mcpConfigFile));
     const servers = isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers : {};
     return Object.fromEntries(Object.entries(servers).filter((e): e is [string, McpServerSpec] => isRecord(e[1])));
   } catch {
@@ -231,7 +232,7 @@ export function readAgyMcpServers(homeDir: string, readFile: (path: string) => s
 /** agy 缓存过工具定义的服务器名（~/.gemini/antigravity-cli/mcp/<名字>/）：配置里没有的也算知道有。 */
 export function readAgyCachedMcpServerNames(homeDir: string, listDir: (path: string) => string[] = (p) => readdirSync(p)): string[] {
   try {
-    return listDir(join(homeDir, ".gemini", "antigravity-cli", "mcp"));
+    return listDir(agyDataPaths(agyCliDataDir(homeDir)).mcpCacheDir);
   } catch {
     return [];
   }

@@ -270,15 +270,16 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     }
   });
 
-  it("严禁使用厂商自带的 subagent：点名内置工具，一律用 hub worker start 派 Worker，只读调研加 --readonly", () => {
+  it("严禁使用厂商自带的 subagent：点名各家内置工具（含 invoke_subagent）与厂商 label，一律用 hub worker start 派 Worker，只读调研加 --readonly", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).toContain("严禁使用厂商自带的 subagent");
-    for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(PM_WORKER_PROMPT).toContain(tool);
+    expect(PM_WORKER_PROMPT).toContain("Claude Code/Antigravity/Codex");
+    for (const tool of ["`Agent`", "`Task`", "`invoke_subagent`", "`spawn_agent`"]) expect(PM_WORKER_PROMPT).toContain(tool);
     expect(PM_WORKER_PROMPT).toContain(`一律用 \`${hub} worker start\` 派 Worker`);
     expect(PM_WORKER_PROMPT).toContain("只读调研加 `--readonly`");
   });
 
-  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 agy/codex/gemini", () => {
+  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 claude/agy/codex", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
       expect(prompt).toContain("**用别家的模型**");
@@ -288,7 +289,8 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       }
       expect(prompt).toContain(`${hub} worker start --vendor <厂商> --model <模型>`);
       expect(prompt).toContain("不写 `--vendor`");
-      for (const cli of ["`agy`", "`codex`", "`gemini`"]) expect(prompt).toContain(cli);
+      for (const cli of ["`claude`", "`agy`", "`codex`"]) expect(prompt).toContain(cli);
+      expect(prompt).not.toContain("`gemini`");
     }
     const specs = VENDOR_SPECS as Record<string, VendorSpec>;
     specs.acme = {
@@ -338,12 +340,13 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       expect(PM_BACKGROUND_COMMAND_NOTE).toContain(word);
     }
     expect(PM_DELEGATE_LONG_COMMAND_NOTE).toContain("要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话");
-    // 由 VENDOR_SPECS 的 backgroundCommands 能力字段决定，不写死厂商名
+    // 由 VENDOR_SPECS 的 backgroundCommands 与 backgroundCommandTool 能力字段决定，不写死厂商名或工具名
     const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true };
+    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true, backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`" };
     try {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", vendor: "acme" as AgentVendor, persona: "x" } }), dir);
-      expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
+      expect(prompt).toContain("用后台运行（如 `run_command` 的 `WaitMsBeforeAsync`）");
+      expect(prompt).not.toContain("run_in_background");
       expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
     } finally {
       delete specs.acme;
@@ -380,9 +383,11 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       expect(WORKER_BLOCKING_WAIT_NOTE).toContain(word);
     }
     const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true };
+    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true, backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`" };
     try {
-      expect(buildWorkerPrompt({ ...workerContext(), vendor: "acme" as AgentVendor }, dir)).toContain(WORKER_BACKGROUND_COMMAND_NOTE);
+      const acmePrompt = buildWorkerPrompt({ ...workerContext(), vendor: "acme" as AgentVendor }, dir);
+      expect(acmePrompt).toContain("用后台运行（如 `run_command` 的 `WaitMsBeforeAsync`）");
+      expect(acmePrompt).not.toContain("run_in_background");
     } finally {
       delete specs.acme;
     }
@@ -621,11 +626,11 @@ describe("提示词：Worker（M3）", () => {
     }
   });
 
-  it("不要用厂商自带的子代理：点名内置工具，需要并行就在汇报里建议项目经理多派 Worker（只加提示词，不拦工具）", () => {
+  it("不要用厂商自带的子代理：点名内置工具（含 invoke_subagent），需要并行就在汇报里建议项目经理多派 Worker（只加提示词，不拦工具）", () => {
     const prompt = buildWorkerPrompt(workerContext(), dir);
     expect(prompt).toContain(WORKER_RULES);
     expect(WORKER_RULES).toContain("不要用厂商自带的子代理");
-    for (const tool of ["`Agent`", "`Task`", "`spawn_agent`"]) expect(WORKER_RULES).toContain(tool);
+    for (const tool of ["`Agent`", "`Task`", "`invoke_subagent`", "`spawn_agent`"]) expect(WORKER_RULES).toContain(tool);
     expect(WORKER_RULES).toContain("建议项目经理多派几个 Worker");
     expect(WORKER_RULES).toContain("等别人时直接结束这一轮");
     expect(WORKER_RULES).toContain("不要自己设定时器");
