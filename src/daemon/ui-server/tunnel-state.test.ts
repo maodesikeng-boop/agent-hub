@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { API_PATHS, PEER_DEVICE_HEADER } from "../../shared/index.ts";
 import type { TunnelStatus } from "../../shared/tunnel.ts";
+import { TunnelInputError } from "../tunnel/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { Db } from "../store/index.ts";
 import { FakeLedger } from "./fake-ledger.ts";
@@ -21,12 +23,24 @@ let db: Db;
 let app: FastifyInstance;
 let cookie: string;
 let status: TunnelStatus | null;
+let lastConnectedCode: string | null;
+let retryCalls: number;
 const listeners = new Set<(s: TunnelStatus | null) => void>();
 const tunnel = {
   status: () => status,
   onChange: (l: (s: TunnelStatus | null) => void) => {
     listeners.add(l);
     return () => void listeners.delete(l);
+  },
+  connect: async (code: string): Promise<TunnelStatus> => {
+    if (!code.startsWith("ahtun1_")) throw new TunnelInputError("连接码格式不对");
+    lastConnectedCode = code;
+    status = { state: "connecting", since: 10, retryAt: null, detail: null };
+    return status;
+  },
+  retry: () => {
+    retryCalls++;
+    status = { state: "connecting", since: 20, retryAt: null, detail: null };
   },
 };
 
@@ -36,6 +50,8 @@ beforeEach(async () => {
   db = openTestDb();
   cookie = testLogin(db, PORT).cookie();
   status = null;
+  lastConnectedCode = null;
+  retryCalls = 0;
 });
 afterEach(async () => {
   await app.close();
@@ -86,5 +102,63 @@ describe("/api/state 的 tunnel", () => {
     ws.terminate();
     await new Promise((r) => setTimeout(r, 50));
     expect(listeners.size).toBe(0);
+  });
+});
+
+describe("/api/devices/tunnel/connect 与 /api/devices/tunnel/retry", () => {
+  const postHeaders = () => ({ host: HOST, origin: ORIGIN, cookie, "content-type": "application/json" });
+
+  it("没配隧道时回 404", async () => {
+    await start(false);
+    const res1 = await app.inject({ method: "POST", url: API_PATHS.tunnelConnect, headers: postHeaders(), payload: JSON.stringify({ code: "ahtun1_x" }) });
+    expect(res1.statusCode).toBe(404);
+    const res2 = await app.inject({ method: "POST", url: API_PATHS.tunnelRetry, headers: postHeaders(), payload: "{}" });
+    expect(res2.statusCode).toBe(404);
+  });
+
+  it("connect 调 tunnel.connect 并返回 status；TunnelInputError 回 400 中文原因", async () => {
+    await start(true);
+    const ok = await app.inject({
+      method: "POST",
+      url: API_PATHS.tunnelConnect,
+      headers: postHeaders(),
+      payload: JSON.stringify({ code: "ahtun1_abc" }),
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(lastConnectedCode).toBe("ahtun1_abc");
+    expect(ok.json()).toEqual({ status: { state: "connecting", since: 10, retryAt: null, detail: null } });
+
+    const bad = await app.inject({
+      method: "POST",
+      url: API_PATHS.tunnelConnect,
+      headers: postHeaders(),
+      payload: JSON.stringify({ code: "bad_code" }),
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json()).toEqual({ code: "invalid", error: "连接码格式不对" });
+  });
+
+  it("retry 调 tunnel.retry 并返回当前 status", async () => {
+    await start(true);
+    const res = await app.inject({
+      method: "POST",
+      url: API_PATHS.tunnelRetry,
+      headers: postHeaders(),
+      payload: "{}",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(retryCalls).toBe(1);
+    expect(res.json()).toEqual({ status: { state: "connecting", since: 20, retryAt: null, detail: null } });
+  });
+
+  it("挂在 /api/devices/ 下：设备令牌不可访问", async () => {
+    await start(true);
+    const res = await app.inject({
+      method: "POST",
+      url: API_PATHS.tunnelConnect,
+      headers: { host: HOST, authorization: "Bearer some-token", [PEER_DEVICE_HEADER]: "00000000-0000-4000-8000-000000000001" },
+      payload: JSON.stringify({ code: "ahtun1_abc" }),
+    });
+    expect(res.statusCode).toBe(401);
   });
 });

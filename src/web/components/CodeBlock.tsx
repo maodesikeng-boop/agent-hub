@@ -59,7 +59,7 @@ export function useHighlightedHtml(code: string, language: string): string | nul
   return done.html.replace(/(<\/code>\s*<\/pre>\s*)$/, `${tail}$1`);
 }
 
-async function copyText(text: string): Promise<void> {
+export async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
     return;

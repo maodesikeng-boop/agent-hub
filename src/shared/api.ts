@@ -94,6 +94,10 @@ export const API_PATHS = {
   device: (id: DeviceId) => `/api/devices/${id}`,
   /** POST，没有请求体 → 201 DeviceInviteResponse：邀请别的设备加入本机（邀请码 128 位随机、10 分钟、只能用一次）。 */
   deviceInvites: "/api/devices/invites",
+  /** POST（TunnelConnectRequest）→ TunnelStatusResponse：连入方贴入 ahtun1_ 连接码连向中心。 */
+  tunnelConnect: "/api/devices/tunnel/connect",
+  /** POST，空对象或无请求体 → TunnelStatusResponse：立刻重试当前隧道连接。 */
+  tunnelRetry: "/api/devices/tunnel/retry",
 
   // ---- 联机：设备 → 设备（带 Authorization: Bearer <设备令牌>、PEER_DEVICE_HEADER；只经 tailscale serve 进来，还要过身份头） ----
 
@@ -472,6 +476,16 @@ export interface DeviceInviteResponse {
   code: string;
   url: string | null;
   expiresAt: number;
+}
+
+/** POST /api/devices/tunnel/connect：贴入 ahtun1_ 连接码连向中心。 */
+export interface TunnelConnectRequest {
+  code: string;
+}
+
+/** POST /api/devices/tunnel/connect 与 /api/devices/tunnel/retry 的响应。 */
+export interface TunnelStatusResponse {
+  status: TunnelStatus | null;
 }
 
 /** 设备之间互相告知的“谁是谁”（不带令牌）。 */

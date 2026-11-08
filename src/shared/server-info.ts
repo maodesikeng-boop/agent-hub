@@ -11,6 +11,8 @@ export interface ServerInfo {
    * false：网页隐藏这两个按钮。手机或别的电脑看这台 Mac 上的项目时是 false。
    */
   fileActions: boolean;
+  /** 本机仓库根目录（仅请求来自回环地址时返回，供“连到中心”向导拼 join 命令；远程访问不暴露本机路径）。 */
+  repoDir?: string;
 }
 
 /**
@@ -28,7 +30,13 @@ export function isLoopbackAddress(address: string | undefined): boolean {
   return address === "::1" || /^(::ffff:)?127\./i.test(address);
 }
 
-/** 给这个请求的浏览器看的 ServerInfo：fileActions 还要浏览器和守护进程在同一台机器（“同一台机器才显示”的唯一判断）。 */
+/** 给这个请求的浏览器看的 ServerInfo：fileActions 和 repoDir 还要浏览器和守护进程在同一台机器（“同一台机器才显示”的唯一判断）。 */
 export function serverInfoForClient(info: ServerInfo, remoteAddress: string | undefined): ServerInfo {
-  return { ...info, fileActions: info.fileActions && isLoopbackAddress(remoteAddress) };
+  const sameMachine = isLoopbackAddress(remoteAddress);
+  const { repoDir, ...rest } = info;
+  return {
+    ...rest,
+    fileActions: info.fileActions && sameMachine,
+    ...(sameMachine && repoDir !== undefined ? { repoDir } : {}),
+  };
 }

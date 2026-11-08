@@ -281,7 +281,16 @@ export function App() {
         waiting={reminders.waiting}
         asking={reminders.asking}
         notify={reminders.notify}
-        devices={fleet.managed ? { devices: fleet.devices, onChanged: () => void fleet.refresh() } : null}
+        devices={
+          fleet.managed
+            ? {
+                devices: fleet.devices,
+                ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
+                ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
+                onChanged: () => void fleet.refresh(),
+              }
+            : null
+        }
         quota={quotaUsage(state)}
         quotaFetchable={hasFetchedQuotaSession(state)}
         drawerOpen={narrow && drawerOpen}

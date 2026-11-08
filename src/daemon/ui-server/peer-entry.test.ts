@@ -42,7 +42,7 @@ function tempDir(): string {
   return dir;
 }
 
-async function device(peerEntry: { socket: string } | { port: number }): Promise<TestDevice> {
+async function device(peerEntry: { socket?: string; port?: number }): Promise<TestDevice> {
   const d = await startTestDevice({ seed: [peer], serverOptions: { serverInfo }, peerEntry });
   cleanups.push(() => d.close());
   return d;
@@ -250,6 +250,20 @@ describe("旁路 socket 和 hub.sock 走同一套准备", () => {
     expect(lstatSync(socket).isSocket()).toBe(true);
     await device({ socket });
     expect((await send({ socketPath: socket }, "GET", API_PATHS.state, deviceAuth)).status).toBe(200);
+  });
+});
+
+describe("设备入口同时听 socket 与 TCP 端口（Linux 既可做中心也可做连入方）", () => {
+  it("传 { socket, port } 时两边都听且都按设备入口规则走，关闭后两边都停", async () => {
+    const socketPath = join(tempDir(), "peer.sock");
+    const d = await device({ socket: socketPath, port: 0 });
+    const port = d.server.peerEntryPort;
+    expect(port).toBeGreaterThan(0);
+    expect(statSync(socketPath).mode & 0o777).toBe(0o600);
+    expect((await send({ socketPath }, "GET", API_PATHS.state, deviceAuth)).status).toBe(200);
+    expect((await send({ port: port! }, "GET", API_PATHS.state, deviceAuth)).status).toBe(200);
+    await d.stop();
+    expect(() => statSync(socketPath)).toThrow();
   });
 });
 

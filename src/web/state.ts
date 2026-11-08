@@ -18,6 +18,7 @@ import {
   type ServerInfo,
   type SessionState,
   type StateSnapshot,
+  type TunnelStatus,
 } from "../shared/index.ts";
 import type { ErrorInfo } from "./format.ts";
 import type { ConnectionStatus } from "./connection.ts";
@@ -75,6 +76,8 @@ export interface HubState {
   schedules: ScheduleRecord[];
   /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
+  /** 连入方 ssh 隧道状态（来自 /api/state 的 tunnel）。 */
+  tunnel?: TunnelStatus | null;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
@@ -220,8 +223,9 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     conversations[c.conversation.id] = { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
+  const { tunnel: _oldTunnel, ...base } = withoutLoadError(state);
   return {
-    ...withoutLoadError(state),
+    ...base,
     phase: "ready",
     seq: snapshot.seq,
     pms: snapshot.pms,
@@ -232,6 +236,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     server: snapshot.server,
+    ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
     pending: dropConfirmed(state.pending, all),
     older: {},
     retry: keepStillFailed(state.retry, all),

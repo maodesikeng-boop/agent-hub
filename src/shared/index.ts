@@ -19,6 +19,7 @@ export * from "./readonly-policy.ts";
 export * from "./reminders.ts";
 export * from "./sent-files.ts";
 export * from "./store.ts";
+export * from "./tunnel.ts";
 export * from "./worker.ts";
 export * from "./vendors.ts";
 export * from "./write-scope.ts";

@@ -38,6 +38,8 @@ import {
   type RenewSessionResponse,
   type RetryMessageResponse,
   type StateSnapshot,
+  type TunnelConnectRequest,
+  type TunnelStatusResponse,
 } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
 
@@ -222,6 +224,8 @@ export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) =>
   request<DeviceInfo>(API_PATHS.device(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
 export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.deviceInvites);
+export const postTunnelConnect = (code: string) => postJson<TunnelStatusResponse>(API_PATHS.tunnelConnect, { code } satisfies TunnelConnectRequest);
+export const postTunnelRetry = () => postJson<TunnelStatusResponse>(API_PATHS.tunnelRetry, {});
 
 /** 已登录的浏览器（设置里的列表）。 */
 export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {

@@ -80,9 +80,10 @@ describe("浏览器和守护进程不在同一台机器（macOS 服务端，请�
     for (const a of ["192.168.1.5", "10.0.0.2", "::ffff:10.0.0.2", "fe80::1", "", undefined]) expect(isLoopbackAddress(a), String(a)).toBe(false);
   });
 
-  it("serverInfoForClient：回环才保留 fileActions", () => {
-    expect(serverInfoForClient(mac, "127.0.0.1").fileActions).toBe(true);
-    expect(serverInfoForClient(mac, "192.168.1.5")).toEqual({ ...mac, fileActions: false });
+  it("serverInfoForClient：回环才保留 fileActions 和 repoDir", () => {
+    const macWithRepo = { ...mac, repoDir: "/Users/me/agent-hub" };
+    expect(serverInfoForClient(macWithRepo, "127.0.0.1")).toEqual({ ...mac, fileActions: true, repoDir: "/Users/me/agent-hub" });
+    expect(serverInfoForClient(macWithRepo, "192.168.1.5")).toEqual({ ...mac, fileActions: false });
   });
 
   it("/api/state 按请求来源：本机 true，别的机器 false", async () => {
