@@ -7,6 +7,7 @@
 // - 这一轮失败或发不出去（会话起不来）：记 failed，对话里写一条“定时任务没跑成：名字：原因”。网页的“等你”提醒看的是对话停下来、
 //   最后一条不是用户发的，所以这条消息就会弹出现有的通知（src/web/notify.ts），不另做通知。
 import type { AnyActionRow } from "../../shared/actions.ts";
+import { describeFailure } from "../../shared/errors.ts";
 import { normalizeName, systemMessageDedupeKey, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, MessageId, PmId, SystemMessageMeta } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
@@ -215,15 +216,15 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     if (row === undefined || row.status !== "failed" || row.meta === null) return;
     const meta = JSON.parse(row.meta) as SystemMessageMeta;
     if (meta.event !== "schedule.run") return;
-    const failedMeta: SystemMessageMeta = { event: "schedule.failed", scheduleId: meta.scheduleId, name: meta.name, messageId };
-    if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(row.conversation_id, failedMeta)) !== undefined) return;
     const reason = row.failure_reason ?? NO_REASON;
+    const failedMeta: SystemMessageMeta = { event: "schedule.failed", scheduleId: meta.scheduleId, name: meta.name, messageId, rawReason: reason };
+    if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(row.conversation_id, failedMeta)) !== undefined) return;
     const schedule = scheduleRow(meta.scheduleId);
     if (schedule !== null && schedule.last_message_id === messageId) {
       db.run("UPDATE schedules SET last_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?", reason, now(), schedule.id);
       pushUpdated(p, schedule.id);
     }
-    insertSystemMessage(p, row.conversation_id, failedMeta, `定时任务没跑成：${meta.name}：${reason}`);
+    insertSystemMessage(p, row.conversation_id, failedMeta, `定时任务没跑成：${meta.name}：${describeFailure(reason, { unknown: "raw" }).text}`);
   };
 
   /** applyDriverEvent 的同一个事务里、消息状态改完之后调：这一轮处理的消息里有失败的定时消息。 */
