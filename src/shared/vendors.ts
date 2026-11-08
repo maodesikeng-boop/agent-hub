@@ -116,6 +116,22 @@ function cap(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+/**
+ * 各家厂商的凭据和配置目录（相对用户主目录），以 AGENT_VENDORS 为键：加厂商不写这里就编译不过。
+ * - dirs：整个目录（或文件）。分享文件时一律禁（daemon/sent-files.ts 的 SENSITIVE_HOME_PATHS）；
+ * - readonlySecrets：只读 Worker 禁读的具体文件（readonly-policy.ts 的 READONLY_SECRET_HOME_PATHS，粒度比 dirs 细：
+ *   会话记录、日志留给排查读），必须在 dirs 里面。
+ * 2026-11-08 核对：~/.claude.json 存账号和 MCP 登录信息，~/.claude/.credentials.json 是 claude 的令牌（macOS 上在钥匙串时没有这个文件）；
+ * ~/.codex/auth.json 是 codex 的令牌，~/.codex/.credentials.json 是 MCP OAuth 令牌的备用文件（keyring 不可用时，见 codex-rs/rmcp-client/src/oauth.rs）；
+ * agy 的数据在 ~/.gemini（antigravity、antigravity-cli；macOS 上登录令牌在钥匙串 Library/Keychains，Linux 在钥匙环），
+ * oauth_creds.json 是 gemini 系的令牌文件，mcp-oauth-tokens.json 是 MCP OAuth 令牌（gemini-cli docs/tools/mcp-server.md）。
+ */
+export const VENDOR_HOME_PATHS: Readonly<Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[] }>> = {
+  claude: { dirs: [".claude", ".claude.json"], readonlySecrets: [".claude.json", ".claude/.credentials.json"] },
+  agy: { dirs: [".gemini"], readonlySecrets: [".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"] },
+  codex: { dirs: [".codex"], readonlySecrets: [".codex/auth.json", ".codex/.credentials.json"] },
+};
+
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   claude: {
     label: "Claude Code",
