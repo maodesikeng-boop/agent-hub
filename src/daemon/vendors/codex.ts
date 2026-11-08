@@ -1,7 +1,10 @@
 // OpenAI Codex 的输入框实现：
 // - 命令列表：`codex app-server` 的 `skills/list` RPC 返回的 skills（过滤 enabled === false），加上内置 /compact；
 // - Codex 的 skill 触发语法是 `$<skill>`：用户在输入框输 `/<skill>`（除 `/compact` 外）时，buildUserContent 把开头的 `/<skill>` 改写为 `$<skill>`；
-// - 隐藏名单与拦截原因在 shared/vendors.ts 的 VENDOR_SPECS.codex.composer。
+// - 隐藏名单与拦截原因在 shared/vendors.ts 的 VENDOR_SPECS.codex.composer；
+// - 模型名单和登录状态：同一个 app-server 里问 model/list 和 account/read（文件末尾）。
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   COMMANDS_QUERY_TIMEOUT_MS,
   MAX_COMMANDS,
@@ -10,11 +13,18 @@ import {
   VENDOR_SPECS,
   truncateChars,
   type ComposerCommand,
+  type VendorAvailability,
 } from "../../shared/index.ts";
-import { queryCodexSkills, type CodexModelQueryOptions } from "../driver/model-catalog.ts";
+import {
+  parseCodexModels,
+  queryCodexCatalog,
+  queryCodexSkills,
+  type CodexModelQueryOptions,
+  type VendorCatalogSource,
+} from "../driver/model-catalog.ts";
 import { userContent } from "../driver/protocol.ts";
 import { createSpecComposerBase } from "./claude.ts";
-import type { CommandsTarget, VendorComposer, VendorComposerBase } from "./types.ts";
+import type { CommandsTarget, VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
 
 export { queryCodexSkills, type CodexModelQueryOptions as CodexSkillsQueryOptions };
 
@@ -144,5 +154,58 @@ export function createCodexComposer(options?: CodexComposerOptions): VendorCompo
       if (commands === null) throw new Error("codex skills/list 回应里没有可识别的列表");
       return commands;
     },
+  };
+}
+
+// ---- 模型名单和登录状态（docs/vendor-availability-design.md 第 3 节）----
+
+/** 同一个 app-server 里 account/read 的回应：有账号能用；account 为 null 且要 OpenAI 登录是没登录；没问到说不清。 */
+export const codexCatalogProbe: VendorCatalogProbe = {
+  parse: (raw) => parseCodexModels((raw as { models?: unknown } | null)?.models),
+  availabilityOf(raw) {
+    const read = (raw as { account?: unknown } | null)?.account;
+    if (typeof read !== "object" || read === null || !("account" in read)) return "unknown";
+    const { account, requiresOpenaiAuth } = read as { account: unknown; requiresOpenaiAuth?: unknown };
+    if (typeof account === "object" && account !== null) return "available";
+    return requiresOpenaiAuth === false ? "available" : "signed_out";
+  },
+};
+
+/** config.toml 顶层的 cli_auth_credentials_store（一行 key = "值"，到第一个 [表] 为止）；没写、读不了是 null。 */
+function codexCredentialsStore(codexHome: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(codexHome, "config.toml"), "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) return null;
+    const match = /^cli_auth_credentials_store\s*=\s*(?:"([^"]*)"|'([^']*)')/u.exec(trimmed);
+    if (match) return match[1] ?? match[2] ?? null;
+  }
+  return null;
+}
+
+/**
+ * 补充判断（老版本没有 account/read、或名单超时时）：codex 登录后默认写 $CODEX_HOME/auth.json（默认 ~/.codex/auth.json），先看它在不在；
+ * 不在时看 $CODEX_HOME/config.toml 的 cli_auth_credentials_store：官方文档（https://developers.openai.com/codex/auth#credential-storage）
+ * 取值 file（默认）| keyring | auto | ephemeral；keyring、auto 把凭据放进系统钥匙串，auth.json 本来就不在，说不清（unknown，当能用）；
+ * 没写、file 等别的值才是没登录。只读这两个文件，不起进程。
+ */
+export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: string): VendorAvailability {
+  const codexHome = env.CODEX_HOME?.trim() || join(homeDir, ".codex");
+  if (existsSync(join(codexHome, "auth.json"))) return "available";
+  const store = codexCredentialsStore(codexHome);
+  return store === "keyring" || store === "auto" ? "unknown" : "signed_out";
+}
+
+export function createCodexCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
+  return {
+    ...codexCatalogProbe,
+    query: (signal) => queryCodexCatalog({ codexPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
+    confirm: async () => codexAuthFileAvailability(options.env ?? process.env, options.cwd),
+    installed: options.installed,
   };
 }

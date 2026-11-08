@@ -313,7 +313,7 @@ describe("系统行", () => {
         event: { event: "schedule.failed", scheduleId: 1, name: "日报", messageId: 9 },
       }),
     ]);
-    const text = screen.getByText(/定时任务「日报」没跑成：Claude 没能启动/);
+    const text = screen.getByText(/定时任务「日报」没跑成：找不到 Claude/);
     expect(text.closest("[title]")).toHaveAttribute("title", "定时任务没跑成：日报：claude_not_found: spawn claude ENOENT");
   });
 

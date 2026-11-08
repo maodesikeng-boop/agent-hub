@@ -21,8 +21,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_SENT_FILE_BYTES, MAX_SENT_FILES_PER_MESSAGE, MAX_SENT_FILES_TOTAL_BYTES, type SentFile } from "../shared/index.ts";
-import { SENSITIVE_HOME_PATHS, copyFromFd, isShareable, prepareSentFilesDir, sentFileId, shareLinkedFiles, type ShareScope } from "./sent-files.ts";
+import {
+  MAX_SENT_FILE_BYTES,
+  MAX_SENT_FILES_PER_MESSAGE,
+  MAX_SENT_FILES_TOTAL_BYTES,
+  READONLY_SECRET_HOME_PATHS,
+  type SentFile,
+} from "../shared/index.ts";
+import { SENSITIVE_HOME_PATHS, copyFromFd, isShareable, prepareSentFilesDir, sentFileId, sensitivePathsOf, shareLinkedFiles, type ShareScope } from "./sent-files.ts";
 
 let base: string;
 /** 假的用户目录：.ssh/id_rsa、.agent-hub/（数据目录）。 */
@@ -191,6 +197,17 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
       ".password-store/a.gpg",
       ".claude/settings.json",
       ".claude.json",
+      ".codex/auth.json",
+      ".gemini/oauth_creds.json",
+      ".gemini/antigravity-cli/state_5.sqlite",
+      ".gemini/mcp-oauth-tokens.json",
+      ".codex/.credentials.json",
+      ".azure/accessTokens.json",
+      ".config/hub",
+      ".local/share/keyrings/login.keyring",
+      ".config/google-chrome/Default/Cookies",
+      ".config/chromium/Default/Cookies",
+      ".mozilla/firefox/p/cookies.sqlite",
       "Library/Keychains/login.keychain-db",
       "Library/Cookies/Cookies.binarycookies",
       ".zsh_history",
@@ -209,6 +226,21 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     // 清单外的照常
     write(join(home, "notes.md"));
     expect(share("[n](~/notes.md)", homeScope)[0]!.status).toBe("saved");
+  });
+
+  it("防漂移：只读禁读的每一项（相对主目录）都被分享禁用名单覆盖", () => {
+    const covered = (rel: string) => SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`));
+    for (const rel of READONLY_SECRET_HOME_PATHS) expect(covered(rel), rel).toBe(true);
+  });
+
+  it("sensitivePathsOf：整份清单只在这里 realpath（主目录是符号链接时按它指向的地方），isShareable 可以直接吃算好的清单", () => {
+    const linkedHome = join(base, "home-link");
+    symlinkSync(home, linkedHome);
+    const sensitive = sensitivePathsOf(linkedHome);
+    expect(sensitive).toContain(join(realpathSync.native(home), ".ssh"));
+    expect(sensitive).toContain(realpathSync.native("/etc"));
+    const key = realpathSync.native(join(home, ".ssh", "id_rsa"));
+    expect(isShareable(key, { ...scope, roots: [home], userHome: linkedHome }, sensitive)).toBe(false);
   });
 
   it(".git/config，以及经符号链接进 .git 的", () => {

@@ -7,7 +7,7 @@ import { uiCookieName, type DeviceId, type DeviceInfo } from "../../shared/index
 import type { TailnetSelf } from "../platform/index.ts";
 import { migrate, openDatabase, type Db } from "../store/index.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
-import { startUiServer, type RunningUiServer, type UiServerOptions } from "../ui-server/server.ts";
+import { startUiServer, type PeerEntryListen, type RunningUiServer, type UiServerOptions } from "../ui-server/server.ts";
 import { createBrowserSessions } from "../ui-server/sessions.ts";
 import { createPeers, type Peers } from "./service.ts";
 import type { PeerRecord } from "./store.ts";
@@ -45,6 +45,8 @@ export interface TestDeviceOptions {
   serverOptions?: Partial<UiServerOptions>;
   /** 启动前写进 peers.json 的设备（比如指向一个假的上游）。 */
   seed?: PeerRecord[];
+  /** 另开设备入口（ui-server/server.ts 的 startUiServer）。 */
+  peerEntry?: PeerEntryListen;
 }
 
 export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<TestDevice> {
@@ -82,6 +84,7 @@ export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<Tes
       sentFilesDir: join(dir, "sent-files"),
       peers: current,
       ...(opts.tailnet !== undefined ? { tailnet: { current: () => opts.tailnet ?? null } } : {}),
+      ...(opts.peerEntry !== undefined ? { peerEntry: opts.peerEntry } : {}),
       ...opts.serverOptions,
     });
   let server = await start(0, peers);

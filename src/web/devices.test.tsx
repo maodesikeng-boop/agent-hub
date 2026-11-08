@@ -279,7 +279,10 @@ describe("跨设备的等你确定", () => {
 describe("新建项目经理选设备", () => {
   it("默认当前看的那台；选了别的设备就用那台的模型名单，发到那台，建好跳过去", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"));
-    fleet.remote.models = () => ({ status: 200, body: { catalogs: [bundledModelCatalog("codex")] } });
+    fleet.remote.models = () => ({
+      status: 200,
+      body: { catalogs: [{ ...bundledModelCatalog("claude"), availability: "not_installed" }, bundledModelCatalog("agy"), { ...bundledModelCatalog("codex"), availability: "not_installed" }].reverse() },
+    });
     await boot(fleet);
     await within(nav()).findByRole("button", { name: /阿青/ });
     await userEvent.click(screen.getByRole("button", { name: "新建项目经理" }));
@@ -288,13 +291,17 @@ describe("新建项目经理选设备", () => {
     expect(device).toHaveValue("");
     await userEvent.selectOptions(device, TOKYO);
     await userEvent.click(within(dialog).getByRole("button", { name: /更多设置/ }));
-    // 东京只装了 codex：厂商只有一家，显示名字不给下拉
-    await waitFor(() => expect(within(dialog).queryByRole("combobox", { name: "厂商" })).toBeNull());
+    // 东京没装 claude、codex：选着的 claude 不悄悄换掉，标状态词，“创建”是灰的；没装的 codex 不列
+    const vendor = await within(dialog).findByRole("combobox", { name: "厂商" });
+    await waitFor(() => expect(vendor).toHaveDisplayValue("Claude Code (Not installed)"));
+    expect(within(vendor).getAllByRole("option").map((o) => o.textContent)).toEqual(["Antigravity", "Claude Code (Not installed)"]);
     expect(fleet.remote.callsTo("GET", /^\/api\/models$/).length).toBeGreaterThan(0);
     await userEvent.type(within(dialog).getByRole("textbox", { name: "名字" }), "东京新人");
+    expect(within(dialog).getByRole("button", { name: "创建" })).toBeDisabled();
+    await userEvent.selectOptions(vendor, "Antigravity");
     await userEvent.click(within(dialog).getByRole("button", { name: "创建" }));
     await waitFor(() => expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)).toHaveLength(1));
-    expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)[0]!.body).toMatchObject({ name: "东京新人", vendor: "codex" });
+    expect(fleet.remote.callsTo("POST", /^\/api\/pms$/)[0]!.body).toMatchObject({ name: "东京新人", vendor: "agy" });
     expect(fleet.local.callsTo("POST", /^\/api\/pms$/)).toHaveLength(0);
     await waitFor(() => expect(window.location.hash).toBe(`#/d/${TOKYO}/c/50`));
   });

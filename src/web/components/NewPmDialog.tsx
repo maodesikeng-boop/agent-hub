@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_SETTING,
   MAX_PERSONA_BYTES,
   DEFAULT_PM_MODE,
+  isSelectable,
   normalizeName,
   utf8Bytes,
   type ConversationId,
@@ -15,7 +16,7 @@ import type { HubClient } from "../client.ts";
 import { DeviceScope, useClient } from "../device-scope.tsx";
 import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { errorText, nameError } from "../format.ts";
-import { useModelCatalogs } from "../models.tsx";
+import { useModelCatalog } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -24,20 +25,6 @@ import { Input, Select, Textarea } from "../ui/input.tsx";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-
-/**
- * 两台以上设备时才有：换了设备（各台装的 CLI 不一样），选着的厂商那台没有就换成那台的第一家。
- * 只有一台时不放它（不在打开表单时就拉模型名单，和没有联机时一样）。
- */
-function VendorGuard({ vendor, onMissing }: { vendor: AgentVendor; onMissing: (vendor: AgentVendor) => void }) {
-  const catalogs = useModelCatalogs();
-  const missing = !catalogs.some((c) => c.vendor === vendor);
-  const first = catalogs[0]?.vendor;
-  useEffect(() => {
-    if (missing && first !== undefined) onMissing(first);
-  }, [missing, first, onMissing]);
-  return null;
-}
 
 /** 新建项目经理时能选的一台设备。 */
 export interface NewPmDevice {
@@ -69,7 +56,9 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
   const nameProblem = nameError(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
   const agentResult = settingOf(agent);
-  const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && !busy;
+  // 选着的厂商这台设备用不了（没装、没登录）：不悄悄换掉（换了设备也保留原来的选择），下拉里标状态词，“创建”是灰的
+  const vendorUsable = isSelectable(useModelCatalog(agent.vendor).availability);
+  const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
 
   // 守护进程弹原生的“选择文件夹”：选中填进输入框；取消（path 为 null）输入框不变；出错在这一行下面写原因
   const pickFolder = async () => {
@@ -114,7 +103,6 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
   return (
     <DialogForm onSubmit={(e) => void submit(e)}>
       <DialogBody>
-        {deviceRow && <VendorGuard vendor={agent.vendor} onMissing={(vendor) => setAgent(draftOf({ ...DEFAULT_AGENT_SETTING, vendor }))} />}
         <SettingsGroup>
           {deviceRow}
           <SettingsRow label="名字" error={nameProblem}>

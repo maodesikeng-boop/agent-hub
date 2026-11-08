@@ -8,9 +8,10 @@ import {
   splitModelEffort,
   type AgentSetting,
   type AgentVendor,
+  isSelectable,
   type ModelCatalog,
 } from "../../shared/index.ts";
-import { useModelCatalog, useModelCatalogs } from "../models.tsx";
+import { useModelCatalog, useVendorChoices, vendorOptionLabel } from "../models.tsx";
 import { Input, Select } from "../ui/input.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
@@ -60,7 +61,8 @@ function withModel(draft: AgentDraft, modelChoice: string, catalog: ModelCatalog
 /**
  * 厂商、模型、思考程度三行（放在 SettingsGroup 里）；模型选“自定义”时下面多一行填模型名。新建项目经理和资料页共用。
  * 选项全从模型名单来（models.tsx，docs/ui-standard.md 第 9 条），这里不写死厂商的东西：
- * - 厂商：只有一家时只显示名字（只读），两家以上是下拉；
+ * - 厂商：只有一家时只显示名字（只读），两家以上是下拉；这台设备上没装的不列（现在选着的那家总在），没登录的灰掉、
+ *   后面标英文状态词（docs/vendor-availability-design.md）；打开下拉时在后台重问不能用的那几家，下拉不等；
  * - 模型：厂商自己报的名单（拉不到用打包的），“默认”写出实际用的模型；存着的模型不在名单里时单独列一项“自定义：模型名”；
  *   这家能填完整模型名才有“自定义”；
  * - 思考程度：按选的模型给的档位，没说用这家的通用档位；只有一档（agy 的 GPT-OSS）或没有档位时整行不显示。
@@ -82,7 +84,7 @@ export function AgentRows({
   customAction?: ReactNode;
   onCustomSubmit?: () => void;
 }) {
-  const catalogs = useModelCatalogs();
+  const { options: vendors, refreshUnusable } = useVendorChoices(value.vendor);
   const catalog = useModelCatalog(value.vendor);
   const result = settingOf(value);
   // 刚选了“自定义”：光标放进模型名输入框（打开页面时不抢焦点）
@@ -95,7 +97,7 @@ export function AgentRows({
   }, [focusCustom]);
 
   const setVendor = (vendor: string) => {
-    const next = catalogs.find((c) => c.vendor === vendor);
+    const next = vendors.find((c) => c.vendor === vendor);
     if (next === undefined || vendor === value.vendor) return;
     // 换了厂商：模型、思考程度回到默认（别家的不一定有）
     onChange({ vendor: next.vendor, modelChoice: "", customModel: "", effort: "" }, "vendor");
@@ -108,16 +110,24 @@ export function AgentRows({
     <>
       <SettingsRow label="厂商" error={errors.vendor}>
         {(id) =>
-          catalogs.length > 1 ? (
-            <Select id={id} variant="plain" value={value.vendor} disabled={disabled} onChange={(e) => setVendor(e.target.value)}>
-              {catalogs.map((c) => (
-                <option key={c.vendor} value={c.vendor}>
-                  {c.label}
+          vendors.length > 1 ? (
+            <Select
+              id={id}
+              variant="plain"
+              value={value.vendor}
+              disabled={disabled}
+              onPointerDown={refreshUnusable}
+              onFocus={refreshUnusable}
+              onChange={(e) => setVendor(e.target.value)}
+            >
+              {vendors.map((c) => (
+                <option key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
+                  {vendorOptionLabel(c)}
                 </option>
               ))}
             </Select>
           ) : (
-            <ReadonlyValue id={id}>{catalog.label}</ReadonlyValue>
+            <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
           )
         }
       </SettingsRow>

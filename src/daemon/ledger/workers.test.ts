@@ -11,6 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
+import type { VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
@@ -143,10 +144,10 @@ function actionsOf(type: AnyActionRow["type"]) {
 }
 
 /** 像 agent 接口那样：没带 noWorktree 就先探主文件夹（workerStartFolder），把结果交给 hubCall。 */
-function start(args: Partial<HubArgs<"worker.start">> = {}, caller: SessionId = lin.sessionId) {
+function start(args: Partial<HubArgs<"worker.start">> = {}, caller: SessionId = lin.sessionId, extra: HubCallContext = {}) {
   const full = { title: "修 X", task: "把 X 修好，测试要过", ...args };
   const folder = full.noWorktree === true ? null : ledger.workerStartFolder(caller);
-  const context: HubCallContext = folder === null ? {} : { workspace: probeOf(folder) };
+  const context: HubCallContext = { ...(folder === null ? {} : { workspace: probeOf(folder) }), ...extra };
   return ledger.hubCall(caller, "worker.start", full, context);
 }
 
@@ -289,6 +290,15 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expectLedgerError(() => start({ vendor: "codex", effort: "max" }), "invalid", /思考程度只能是 low、medium、high、xhigh/);
     // 非法厂商
     expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", /厂商只能是 claude、agy、codex/);
+  });
+
+  it("--vendor 选的厂商这台设备没装、没登录：报清楚是哪台、怎么登录，不派；能用、认不出的照派", () => {
+    repos.add(main);
+    const on = (availability: VendorAvailability) => ({ vendorStatus: { vendor: "codex" as const, availability, device: "东京" } });
+    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("not_installed")), "invalid", /^这台设备（东京）没装 codex$/);
+    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("signed_out")), "invalid", /这台设备（东京）的 codex 没登录.*`codex login`/);
+    expect(start({ vendor: "codex", title: "a" }, lin.sessionId, on("available")).data.worker.id).toBeGreaterThan(0);
+    expect(start({ vendor: "codex", title: "b" }, lin.sessionId, on("unknown")).data.worker.id).toBeGreaterThan(0);
   });
 
   it("agy 两种写法存成一样：--model gemini-4-argon-high（完整 ID，老用法）和 --model gemini-4-argon --effort high 都是 模型 gemini-4-argon + 思考程度 high", () => {

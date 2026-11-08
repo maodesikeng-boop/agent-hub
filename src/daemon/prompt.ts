@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AGENT_VENDORS,
+  isSelectable,
   ALL_EFFORTS,
   DEFAULT_AGENT_VENDOR,
   ENV_SETUP_ROOT_PATH,
@@ -34,7 +35,7 @@ import {
   WORKER_REPORT_FORMAT,
   WORKER_SEND_MAX_TOKENS,
 } from "../shared/index.ts";
-import type { LaunchContext, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
+import type { AgentVendor, LaunchContext, VendorAvailabilityMap, PersonaUpdate, PmMode, ProjectCard, SetupOutcome, VendorSpec, WorkerRecord } from "../shared/index.ts";
 import { cleanTerminalText } from "./setup/index.ts";
 
 export const DEFAULT_PM_NAME = "项目经理";
@@ -118,6 +119,11 @@ export function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec
     .join("、");
 }
 
+/** 这台设备上能选的厂商（docs/vendor-availability-design.md）：没装、没登录的不列；没给状态的（还没问过）当能用。 */
+export function selectableVendors(availability: VendorAvailabilityMap = {}): AgentVendor[] {
+  return AGENT_VENDORS.filter((vendor) => isSelectable(availability[vendor] ?? "unknown"));
+}
+
 /**
  * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
  * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
@@ -146,7 +152,11 @@ export const PM_WORKER_PROMPT = buildPmWorkerPrompt();
  * 给人看的另有一份：hub/cli.ts 的 HUB_USAGE。改一份，记得改另一份。Worker 的见 WORKER_HUB_USAGE_PROMPT。
  * 日报：用户要才建，四段的写法就在 schedule add 那一行里。
  */
-export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
+export const HUB_USAGE_PROMPT = buildHubUsagePrompt();
+
+/** hub 用法；vendors 是 --vendor 能选的厂商（默认全部，项目经理启动时按这台设备上能选的）。 */
+export function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
+  return `# 系统命令 ${HUB}
 
 直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
@@ -159,7 +169,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} persona show\`：查看当前的性格设定和模式
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`${HUB} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
+  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
   - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
   - \`${HUB} worker list\`：查看所有 Worker 的状态、分支、目录和模型
@@ -171,6 +181,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - **定时任务**
   - \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）
   - \`${HUB} schedule list\` / \`${HUB} schedule pause <编号>\` / \`${HUB} schedule resume <编号>\` / \`${HUB} schedule remove <编号>\`：查看、暂停、恢复、删除定时任务`;
+}
 
 /** 发文件给用户（项目经理、Worker 共用）：只说能力。守护进程发出时存副本，网页显示图片和文件卡片（daemon/sent-files.ts）。 */
 export const SHARE_FILES_NOTE =
@@ -337,11 +348,12 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
 }
 
 /**
- * 算 fingerprint 用的提示词：性格设定、模式换成固定的（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。
+ * 算 fingerprint 用的提示词：性格设定、模式换成固定的、厂商状态不算（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。
  */
 export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
-  return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] } }, cwd);
+  // 这台设备上厂商的状态也不算：登录一下不该打断正在干活的项目经理（没登录的靠 hub worker start 的报错兜底）
+  return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] }, vendorAvailability: undefined }, cwd);
 }
 
 /**
@@ -352,13 +364,14 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   const vendor = ctx.pm.vendor ?? DEFAULT_AGENT_VENDOR;
   const backgroundCommands = VENDOR_SPECS[vendor]?.backgroundCommands ?? true;
+  const vendors = selectableVendors(ctx.vendorAvailability);
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
     buildPmModePrompt(ctx.pm.mode, backgroundCommands),
     PM_MEMORY_PROMPT,
-    buildPmWorkerPrompt(),
-    HUB_USAGE_PROMPT,
+    buildPmWorkerPrompt(Object.fromEntries(Object.entries(VENDOR_SPECS).filter(([v]) => isSelectable(ctx.vendorAvailability?.[v as AgentVendor] ?? "unknown")))),
+    buildHubUsagePrompt(vendors),
   ];
   const persona = personaSection(ctx.pm.persona);
   if (persona !== null) parts.push(persona);

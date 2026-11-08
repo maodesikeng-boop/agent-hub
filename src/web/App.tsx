@@ -1,7 +1,7 @@
 import { Loader2, PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccentScope } from "./lib/accent-scope.tsx";
-import type { ConversationId, MessageId, PersonaChangeId, PmId } from "../shared/index.ts";
+import { isAgentVendor, type ConversationId, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
@@ -177,6 +177,10 @@ export function App() {
     onOpenWorker: openWorkerConversation,
     onRevertPersona: async (changeId: PersonaChangeId) => {
       await hub.client.postRevertPersonaChange(changeId);
+    },
+    vendorOf: (id: ConversationId) => {
+      const vendor = sessionOf(state, id)?.vendor;
+      return isAgentVendor(vendor) ? vendor : undefined;
     },
   };
 

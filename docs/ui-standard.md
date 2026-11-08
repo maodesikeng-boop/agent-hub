@@ -131,6 +131,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 多选一：一行一个选项，名字 + 一句说明；右边一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点，悬停 `bg-sidebar-hover`。
 - 厂商、模型、思考程度（`AgentRows`）的选项全从模型名单拿（`useModelCatalogs`，名单的厂商名、通用思考程度、能不能自定义来自 `src/shared/vendors.ts`，模型来自厂商自己报的 `model-catalog`），页面里不写死厂商、模型名。
   - 只有一家厂商：厂商一行只显示厂商名（只读值），不放下拉。两家以上才是下拉。
+  - 这台设备上的状态（`docs/vendor-availability-design.md`）：没装的不列；没登录的照列，原生 `option` 设 `disabled`（系统灰掉），文字是“厂商名 (英文状态词)”，如 `Codex (Not signed in)`、`Claude Code (Not installed)`（原生选项不能分样式，括号是唯一能用的写法）。现在选着的那家总在，哪怕没装（换了设备也不悄悄换掉），这时“创建”是灰的，不加说明文字。打开下拉不等任何请求，没登录的那几家在后台重问，回来了再更新。截图见 `docs/screenshots/vendor-availability/`。
   - 思考程度只有一档（或这个模型没有档位）时，这一行整个不显示。Antigravity 照它软件的做法：模型下拉只列不带档位的模型（Gemini 4 Argon、Claude Opus 5.5……），档位（low、medium、high）在思考程度下拉里，存的时候拼回完整模型 ID（`docs/model-catalog.md` 的 agy 一节）；老数据里存的完整 ID 显示成“模型 + 档位”。
   - 模型选“默认”时显示实际用的模型：“Opus 5.5（默认）”（名单里报了默认是哪个时）；不知道才只写“默认”。
 - 改了马上存的设置（下拉、多选一）：不放保存按钮，先显示新值，失败退回并在那一行下面写原因（`RowError`）。长文本（性格设定）改了才在组标题右边出现小号“保存”。

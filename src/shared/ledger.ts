@@ -27,7 +27,8 @@ import type {
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
-import type { AgentVendor } from "./vendors.ts";
+import { API_ERRORS } from "./errors.ts";
+import type { AgentVendor, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -40,12 +41,12 @@ import type { AgentVendor } from "./vendors.ts";
 export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict"] as const;
 export type LedgerErrorCode = (typeof LEDGER_ERROR_CODES)[number];
 
-/** 界面服务和 agent 接口都这样映射。 */
+/** 界面服务和 agent 接口都这样映射；状态码从 API_ERRORS 来，不在这里另写一份。 */
 export const LEDGER_ERROR_HTTP_STATUS: Readonly<Record<LedgerErrorCode, number>> = {
-  invalid: 400,
-  not_found: 404,
-  forbidden: 403,
-  conflict: 409,
+  invalid: API_ERRORS.invalid.status,
+  not_found: API_ERRORS.not_found.status,
+  forbidden: API_ERRORS.forbidden.status,
+  conflict: API_ERRORS.conflict.status,
 };
 
 export class LedgerRequestError extends Error {
@@ -229,6 +230,8 @@ export interface LaunchContext {
   worker: WorkerRecord | null;
   /** 这个会话自己的厂商：Worker 给（可能和项目经理不是同一家，提示词按它写长命令怎么等）；项目经理的看 pm.vendor。 */
   vendor?: AgentVendor;
+  /** 这台设备上各家厂商的状态（启动时缓存里的，launch.ts 填）：项目经理提示词只列能选的；不算进 fingerprint。 */
+  vendorAvailability?: VendorAvailabilityMap;
 }
 
 /**
@@ -304,6 +307,8 @@ export interface HubCallContext {
   pr?: WorkerPr;
   /** worker.show：这个 Worker 的会话在厂商那边的原始记录文件；找不到就是 null（show 写“找不到”）。 */
   transcript?: string | null;
+  /** worker.start 带 --vendor 时：这家在这台设备（device 是设备名）上能不能用；没装、没登录账本拒绝派。 */
+  vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability; device: string };
 }
 
 /** 后台写交接时跑腿的（daemon/handover/runner.ts）用的几个方法见 LedgerHandoverWork（shared/handover.ts）。 */

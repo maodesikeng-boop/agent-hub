@@ -1,15 +1,12 @@
 // agent 接口（设计第 4.2、8.1、8.2 节；m2-plan 第 3 节接口约定第 4 条）：第二个 Fastify 实例，只监听 Unix socket run/hub.sock。
 // 按会话令牌认人，按 JSON Schema 查请求体的形状和长度，再交给账本的 hubCall。规格见 shared/hub.ts 的注释。
-import { chmodSync, lstatSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
-import { createConnection } from "node:net";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_MAX_BODY_BYTES,
   HUB_REQUEST_TIMEOUT_MS,
-  HUB_SOCKET_PROBE_MS,
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
@@ -29,10 +26,11 @@ import {
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
-import { assertSocketPathFits } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import { listenOnRunSocket } from "../run-socket.ts";
 import type { WorkerPr } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
+import { isAgentVendor, type AgentVendor, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -55,6 +53,13 @@ export interface AgentApiOptions {
    * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。
    */
   findTranscript?: (ref: TranscriptRef) => string | null;
+  /**
+   * hub worker start --vendor 选的这家在这台设备上能不能用（不能用的先重问一次，守护进程接 ModelCatalogs.ensureUsable）。
+   * 不给就不查（都当能用）。
+   */
+  vendorUsable?: (vendor: AgentVendor) => Promise<VendorAvailability>;
+  /** 这台设备的名字（不能用时报错里写）。 */
+  deviceName?: () => string;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -65,8 +70,6 @@ export interface AgentApiOptions {
   timeoutCheckMs?: number;
 }
 
-const RUN_DIR_MODE = 0o700;
-const SOCKET_MODE = 0o600;
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
 
 // ---- 请求体的规格 ----
@@ -248,9 +251,17 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const transcript = ref === null ? null : findTranscript(ref);
       return { ...(pr === null ? {} : { pr }), transcript };
     }
-    if (command !== "worker.start" || body.noWorktree === true) return {};
+    if (command !== "worker.start") return {};
+    const context: HubCallContext = {};
+    // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
+    if (opts.vendorUsable && isAgentVendor(body.vendor)) {
+      const vendor = body.vendor;
+      context.vendorStatus = { vendor, availability: await opts.vendorUsable(vendor), device: opts.deviceName?.() ?? "" };
+    }
+    if (body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);
-    return folder === null ? {} : { workspace: await probeWorkspace(folder) };
+    if (folder !== null) context.workspace = await probeWorkspace(folder);
+    return context;
   };
   const requestTimeoutMs = opts.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS;
   const app = Fastify({
@@ -341,57 +352,17 @@ export interface RunningAgentApi {
   close(): Promise<void>;
 }
 
-/** 试连一次：连得上返回 true；ECONNREFUSED、ENOENT（没人监听）返回 false；别的错原样抛。 */
-function socketIsLive(socketPath: string): Promise<boolean> {
-  return new Promise((done, fail) => {
-    const socket = createConnection(socketPath);
-    const finish = (result: boolean | Error) => {
-      socket.destroy();
-      if (result instanceof Error) fail(result);
-      else done(result);
-    };
-    socket.setTimeout(HUB_SOCKET_PROBE_MS, () => finish(true));
-    socket.once("connect", () => finish(true));
-    socket.once("error", (err: NodeJS.ErrnoException) => {
-      finish(err.code === "ECONNREFUSED" || err.code === "ENOENT" ? false : err);
-    });
-  });
-}
-
-/** 残留的 socket（上次没正常关）删掉；还有人在监听就拒绝启动；那里是别的东西就报错，不替用户删。 */
-async function removeStaleSocket(socketPath: string): Promise<void> {
-  let stat;
-  try {
-    stat = lstatSync(socketPath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw err;
-  }
-  if (!stat.isSocket()) throw new Error(`agent 接口的 socket 路径上已经有别的东西，不是 socket：${socketPath}。请确认后手动移走。`);
-  if (await socketIsLive(socketPath)) throw new Error(`已有守护进程在跑：${socketPath} 上有人在监听，不能再启动一个。`);
-  unlinkSync(socketPath);
-}
-
 /**
- * 建 run/（0700）、realpath、查路径长度、删残留 socket、listen、socket 改成 0600。
- * listen 和 chmod 之间 socket 短暂是 umask 给的权限，但 run/ 已经是 0700，别人进不来。
+ * 在 hubSock 上听（准备和失败收尾见 ../run-socket.ts 的 listenOnRunSocket）：run/ 建好并改成 0700，hub.sock 听上后改成 0600。
  * socket 文件在、但试连连不上，才当残留删掉；连得上说明有活实例，拒绝启动。
  */
 export async function startAgentApi(opts: AgentApiListenOptions): Promise<RunningAgentApi> {
   if (resolve(dirname(opts.hubSock)) !== resolve(opts.runDir)) throw new Error(`hubSock must be directly inside runDir: ${opts.hubSock}`);
-  mkdirSync(opts.runDir, { recursive: true, mode: RUN_DIR_MODE });
-  chmodSync(opts.runDir, RUN_DIR_MODE);
-  const socketPath = join(realpathSync.native(opts.runDir), basename(opts.hubSock));
-  assertSocketPathFits(socketPath);
-  await removeStaleSocket(socketPath);
-
   const app = createAgentApi(opts);
-  try {
-    await app.listen({ path: socketPath });
-    chmodSync(socketPath, SOCKET_MODE);
-  } catch (err) {
-    await app.close();
-    throw err;
-  }
+  const socketPath = await listenOnRunSocket(
+    opts.hubSock,
+    (path) => app.listen({ path }).then(() => undefined),
+    () => app.close(),
+  );
   return { app, socketPath, close: () => app.close() };
 }

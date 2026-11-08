@@ -40,6 +40,7 @@ import {
   type TokenUsage,
   type Unsubscribe,
   type WriteScope,
+  notFoundCode,
 } from "../../shared/index.ts";
 import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
 import {
@@ -975,7 +976,7 @@ export class CodexDriver implements Driver {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        throw new DriverError("claude_not_found", `${this.#codexPath}: ${errorMessage(error)}`);
+        throw new DriverError(notFoundCode("codex"), `${this.#codexPath}: ${errorMessage(error)}`);
       }
       throw new DriverError("spawn_failed", `${this.#codexPath}: ${errorMessage(error)}`);
     }

@@ -1839,3 +1839,14 @@ describe("CodexDriver 换代后的开场说明（session-preamble.ts）", () => 
     expect(inputs(t).at(-1)).toBe(`${PREAMBLE}\n\n二`);
   });
 });
+
+describe("找不到 codex 程序", () => {
+  it("send 抛可重试的 DriverError(codex_not_found)，不是 claude_not_found", async () => {
+    const t = makeCodexHarness({ driver: { codexPath: "/nonexistent/codex" } });
+    activeHarness = t;
+    const s = t.addSession();
+    const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe("codex_not_found");
+    expect((err as { retryable?: boolean }).retryable).toBe(true);
+  });
+});

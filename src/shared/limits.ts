@@ -219,6 +219,8 @@ export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
 export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
+/** codex app-server 里可有可无的那条（模型名单那次顺带问的 account/read）：必需的都回了以后最多再等多久，老版本不回就不等。 */
+export const CODEX_OPTIONAL_RPC_GRACE_MS = 1_000;
 /** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
 export const MAX_CATALOG_MODELS = 50;
 export const MAX_CATALOG_LABEL_CHARS = 80;
@@ -287,6 +289,14 @@ export const HUB_SOCKET_PROBE_MS = 1_000;
  * 要比 HUB_CLI_TIMEOUT_MS 短得多：git 卡住时这一次派活报错，不能拖到 hub 那边报“可能已执行”。
  */
 export const GIT_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * agent 接口：hub worker start --vendor 选的这家现在不能用时，当场重问一次（ModelCatalogs.ensureUsable）最多等多久；
+ * 没问完就按现在的状态回答（重问在后台接着跑，下一次调用看得到新结果）。
+ * 整个请求受 HUB_REQUEST_TIMEOUT_MS 限制，后面还要探 git（最多两次 git，各 GIT_PROBE_TIMEOUT_MS），所以取
+ * HUB_REQUEST_TIMEOUT_MS − 2 × GIT_PROBE_TIMEOUT_MS − 1 秒余量 = 4 秒：重问再慢，git 也卡住，也在请求上限之内回到项目经理。
+ * 问一次名单要 MODEL_CATALOG_TIMEOUT_MS（15 秒），所以这个预算比一次完整的重问短，卡住时会走“按现在的状态回答”。
+ */
+export const VENDOR_RECHECK_BUDGET_MS = HUB_REQUEST_TIMEOUT_MS - 2 * GIT_PROBE_TIMEOUT_MS - 1_000;
 /** hub 命令：连上之后多久没动静算守护进程没回应。 */
 export const HUB_CLI_TIMEOUT_MS = 30_000;
 /** hub 命令：--stdin 多久没收到数据就放弃。 */

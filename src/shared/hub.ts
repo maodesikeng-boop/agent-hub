@@ -22,6 +22,7 @@ import type {
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
+import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
 import type { LedgerErrorCode } from "./ledger.ts";
 
@@ -299,8 +300,8 @@ export type HubErrorCode = LedgerErrorCode | "unauthorized" | "internal";
 
 export const HUB_ERROR_HTTP_STATUS: Readonly<Record<HubErrorCode, number>> = {
   ...LEDGER_ERROR_HTTP_STATUS,
-  unauthorized: 401,
-  internal: 500,
+  unauthorized: API_ERRORS.unauthorized.status,
+  internal: API_ERRORS.internal.status,
 };
 
 /** 应答体。message 是给 agent 看的一句中文，hub 原样打印。 */

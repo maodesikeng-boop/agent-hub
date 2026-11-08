@@ -27,6 +27,7 @@ import {
   type MessageId,
   type MessagesPage,
   type ModelsResponse,
+  type REFRESH_UNUSABLE,
   type PickFolderRequest,
   type PickFolderResponse,
   type PostMessageRequest,
@@ -138,8 +139,12 @@ export function createClient(device: DeviceId | null) {
     putScheduleEnabled: (scheduleId: ScheduleId, enabled: boolean) =>
       putJson<ScheduleRecord>(at(API_PATHS.schedule(scheduleId)), { enabled } satisfies SetScheduleEnabledRequest),
     deleteSchedule: (scheduleId: ScheduleId) => request<void>(at(API_PATHS.schedule(scheduleId)), { method: "DELETE" }),
-    /** 每家厂商的模型名单（服务端问不到厂商时是打包的）。每台设备装的 CLI 不一样，名单按设备取。 */
-    fetchModels: () => request<ModelsResponse>(at(API_PATHS.models)),
+    /**
+     * 每家厂商的模型名单和这台设备上的状态（服务端问不到厂商时是打包的）。每台设备装的 CLI 不一样，名单按设备取。
+     * refresh: REFRESH_UNUSABLE 让服务端只重问不能用的那几家。
+     */
+    fetchModels: (options: { refresh?: typeof REFRESH_UNUSABLE } = {}) =>
+      request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models)),
     /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota)),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),

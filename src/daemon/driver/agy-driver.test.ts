@@ -1520,3 +1520,15 @@ describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
     expect(t.of("message.processing").map((e) => e.preamble ?? false)).toEqual([true, false]);
   });
 });
+
+describe("找不到 agy 程序", () => {
+  it("send 抛可重试的 DriverError(agy_not_found)，不是 claude_not_found", async () => {
+    const t = makeAgyHarness({ driver: { agyPath: "/nonexistent/agy" } });
+    activeHarness = t;
+    const s = t.addSession();
+    const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DriverError);
+    expect((err as DriverError).code).toBe("agy_not_found");
+    expect((err as DriverError).retryable).toBe(true);
+  });
+});

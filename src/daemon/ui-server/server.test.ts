@@ -1568,8 +1568,8 @@ describe("GET /api/models（模型名单）", () => {
     expect(res.json()).toEqual({ catalogs: AGENT_VENDORS.map(bundledModelCatalog) });
   });
 
-  it("接了：原样回；?refresh=1 让它重新问", async () => {
-    const calls: Array<{ refresh?: boolean }> = [];
+  it("接了：原样回；?refresh=1 让它重新问；?refresh=unusable 只重问不能用的那几家", async () => {
+    const calls: Array<{ refresh?: boolean | "unusable" }> = [];
     const other = createUiServer({
       db,
       ledger: ledger.asLedger(),
@@ -1590,7 +1590,8 @@ describe("GET /api/models（模型名单）", () => {
       const res = await other.inject({ method: "GET", url: "/api/models", headers });
       expect(res.json()).toEqual({ catalogs: [vendorCatalog] });
       await other.inject({ method: "GET", url: "/api/models?refresh=1", headers });
-      expect(calls).toEqual([{ refresh: false }, { refresh: true }]);
+      await other.inject({ method: "GET", url: "/api/models?refresh=unusable", headers });
+      expect(calls).toEqual([{ refresh: false }, { refresh: true }, { refresh: "unusable" }]);
     } finally {
       await other.close();
     }
