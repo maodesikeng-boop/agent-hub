@@ -1,6 +1,6 @@
 // 假的多设备后端（联机 P3）：真转发（P2）还没做时，拿它看网页的多设备界面、截图。只有假数据，不起 agent、不写盘。
 // 用法：
-//   node test/fake-devices/main.ts --port 4999 --devices two     # one：只有本机；two：本机 + 东京；
+//   node test/fake-devices/main.ts --port 4999 --devices two     # one：只有本机；two：本机 + 东京；fail：设备清单一直回 500；
 //   AGENT_HUB_DAEMON_PORT=4999 pnpm dev                          # 再开 vite，打开它给的网址
 //   curl -X POST http://127.0.0.1:4999/__fake/offline            # 让东京掉线（关 WebSocket，之后的请求 502 device_offline）
 //   curl -X POST http://127.0.0.1:4999/__fake/online             # 东京恢复
@@ -107,7 +107,7 @@ const tokyoSockets = new Set<{ close(): void }>();
 const app = Fastify();
 await app.register(websocket);
 
-app.get(API_PATHS.devices, async () => ({ devices }));
+app.get(API_PATHS.devices, async (_req, reply) => (values.devices === "fail" ? reply.code(500).send({ error: "boom" }) : { devices }));
 app.post("/__fake/offline", async () => {
   tokyoOnline = false;
   for (const socket of tokyoSockets) socket.close();
