@@ -58,7 +58,17 @@ import {
   observeAgyUsage,
   readSystemInstructions,
 } from "./agy-protocol.ts";
-import { forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import {
+  forceKill,
+  forceKillTree,
+  killFreshGroup,
+  signalChild,
+  signalPid,
+  signalTarget,
+  streamClosed,
+  termGroupAfterExit,
+  waitForExit,
+} from "./process.ts";
 import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./agy-connectors.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
@@ -70,7 +80,14 @@ import {
   deniedContinueText,
   type AgyConnectorCatalog,
 } from "./readonly-agy.ts";
-import { spawnInWriteScope, wrapInReadonlySeatbelt, type ReadonlySandboxInput, type ScopedSpawn, type SpawnCommand } from "./write-scope.ts";
+import {
+  scanSecretGlobs,
+  spawnInWriteScope,
+  wrapInReadonlyOsSandbox,
+  type ReadonlySandboxInput,
+  type ScopedSpawn,
+  type SpawnCommand,
+} from "./write-scope.ts";
 import { personaSeenAtStart, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
@@ -208,7 +225,7 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
   homeDir?: string;
   /** 只读 Worker：现在有哪些连接器、哪些工具标了只读（agy-connectors.ts）。默认读 agy 的 MCP 配置、向每个服务器问 tools/list；测试可以替换。 */
   connectorCatalog?: () => Promise<AgyConnectorCatalog>;
-  /** 只读 Worker：把进程包进外层只读沙箱（默认 write-scope.ts 的 wrapInReadonlySeatbelt，只有 macOS 有）；测试可以替换。 */
+  /** 只读 Worker：把进程包进外层只读沙箱（默认 write-scope.ts 的 wrapInReadonlyOsSandbox，支持 macOS seatbelt 与 Linux bubblewrap）；测试可以替换。 */
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 }
 
@@ -220,6 +237,7 @@ export class AgyDriver implements Driver {
     AgyDriverOptions;
   readonly #composer: VendorComposerBase;
   #connectorCatalog: (() => Promise<AgyConnectorCatalog>) | null = null;
+  #latestReadonlyPolicy: ReadonlyPolicy | null = null;
   readonly #sessions = new Map<SessionId, SessionState>();
   readonly #listeners = new Set<DriverEventListener>();
   #shuttingDown = false;
@@ -407,15 +425,13 @@ export class AgyDriver implements Driver {
       if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
       if (st.stopRequested && this.#busy(st)) {
         proc.closing = "interrupt";
-        if (proc.child.pid !== undefined) signalPid(proc.child.pid, "SIGINT");
-        else proc.child.kill("SIGINT");
+        signalChild(proc.child, "SIGINT");
         continue;
       }
       const wasIdle = proc.closing === "idle" || (!this.#busy(st) && proc.initSeen);
       proc.closing = "shutdown";
       if (wasIdle) proc.child.stdin.end();
-      else if (proc.child.pid !== undefined) signalPid(proc.child.pid, "SIGINT");
-      else proc.child.kill("SIGINT");
+      else signalChild(proc.child, "SIGINT");
     }
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
@@ -442,8 +458,11 @@ export class AgyDriver implements Driver {
     if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
     const pgid = await agyOfSession(pid, row.vendorSessionId);
     if (pgid !== null) {
-      signalPid(pid, "SIGINT");
-      if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
+      const target = signalTarget(pid);
+      if (target !== null) signalPid(target, "SIGINT");
+      if (await waitForExit(pid, this.#opts.interruptGraceMs)) {
+        if (pgid === pid) termGroupAfterExit({ pid });
+      } else {
         await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
       }
@@ -733,8 +752,7 @@ export class AgyDriver implements Driver {
     const grace = this.#opts.interruptGraceMs;
     clearKillTimer(proc);
     proc.killTimer = setTimeout(() => {
-      if (proc.child.pid !== undefined) signalPid(proc.child.pid, "SIGINT");
-      else proc.child.kill("SIGINT");
+      signalChild(proc.child, "SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
         this.#forceKill(st, proc);
@@ -745,8 +763,7 @@ export class AgyDriver implements Driver {
   #sigintForInterrupt(st: SessionState, proc: Proc): void {
     if (st.proc !== proc || proc.closing) return;
     proc.closing = "interrupt";
-    if (proc.child.pid !== undefined) signalPid(proc.child.pid, "SIGINT");
-    else proc.child.kill("SIGINT");
+    signalChild(proc.child, "SIGINT");
     this.#clearTimer(st, "interruptTimer");
     st.interruptTimer = setTimeout(() => {
       st.interruptTimer = null;
@@ -832,12 +849,20 @@ export class AgyDriver implements Driver {
   async #catalogFor(policy: ReadonlyPolicy): Promise<AgyConnectorCatalog> {
     // 问清单要起 stdio 服务器：和 Worker 同样包外层只读沙箱、用 Worker 的环境（去掉 HUB_*），没有 OS 沙箱就不问
     const homeDir = this.#opts.homeDir ?? homedir();
-    const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlySeatbelt(base, input));
+    const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
+    this.#latestReadonlyPolicy = policy;
     this.#connectorCatalog ??=
       this.#opts.connectorCatalog ??
       createAgyConnectorResolver({
         homeDir,
-        launcher: createReadonlyProbeLauncher({ policy, homeDir, baseEnv: process.env, extraEnv: this.#opts.env, wrap }),
+        launcher: (base, extraEnv) =>
+          createReadonlyProbeLauncher({
+            policy: this.#latestReadonlyPolicy ?? policy,
+            homeDir,
+            baseEnv: process.env,
+            extraEnv: this.#opts.env,
+            wrap,
+          })(base, extraEnv),
       });
     try {
       return await this.#connectorCatalog();
@@ -865,19 +890,37 @@ export class AgyDriver implements Driver {
 
     const systemPrompt = readSystemInstructions(files.promptFile);
 
-    // 只读 Worker：先问清连接器哪些只读（拒绝规则要写进 --settings），再包外层只读沙箱（没有 OS 沙箱直接报错，设计第 8 节第 5 条）
-    const readonlyPolicy = files.readonly;
+    // 只读 Worker：先扫描一次 [row.cwd, ...row.addDirs] 下的 secretGlobs 并入 secretPaths（连接器探测与 agyReadonlySandboxInput 复用同一次结果），
+    // 再问清连接器哪些只读（拒绝规则要写进 --settings），最后包外层只读沙箱（没有 OS 沙箱直接报错，设计第 8 节第 5 条）
+    const readonlyPolicy: ReadonlyPolicy | undefined =
+      files.readonly === undefined
+        ? undefined
+        : {
+            ...files.readonly,
+            secretPaths: [
+              ...new Set([
+                ...files.readonly.secretPaths,
+                ...scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs),
+              ]),
+            ],
+          };
+    const effectiveFiles: LaunchFiles = readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
     const catalog = readonlyPolicy === undefined ? null : await this.#catalogFor(readonlyPolicy);
-    const args = buildAgyArgs(row, files, resume, readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog));
+    const args = buildAgyArgs(
+      row,
+      effectiveFiles,
+      resume,
+      readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog),
+    );
     let tmpDir: string | null = null;
     let launch: ScopedSpawn;
     let childEnv = { ...this.#opts.env, ...files.env };
     if (readonlyPolicy === undefined) {
-      // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱时记警告，按工具参数兜底检查
+      // Worker 的可写范围：包一层 OS 沙箱（write-scope.ts），编辑工具和 shell 都在里面；没有 OS 沙箱直接报错拒绝启动
       launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.#opts.log, `session ${st.id}`);
     } else {
       const home = realpathSync(this.#opts.homeDir ?? homedir());
-      const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlySeatbelt(base, input));
+      const wrap = this.#opts.readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
       // 每个会话一个私有临时目录（TMPDIR 指到这，进程退出时删）：git、编译器、shell 要用，其余地方都不能写
       const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
       launch = wrap({ command: this.#agyPath, args }, agyReadonlySandboxInput({ homeDir: home, tmpDir: privateTmp, policy: readonlyPolicy }));

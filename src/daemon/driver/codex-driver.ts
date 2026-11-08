@@ -72,7 +72,9 @@ import {
   forceKill,
   forceKillTree,
   killFreshGroup,
+  signalChild,
   signalPid,
+  signalTarget,
   streamClosed,
   termGroupAfterExit,
   waitForExit,
@@ -82,7 +84,7 @@ import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { TurnUsage } from "./usage.ts";
-import { spawnInWriteScope } from "./write-scope.ts";
+import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "./write-scope.ts";
 
 interface PendingEntry {
   messageIds: MessageId[];
@@ -236,11 +238,14 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   composer?: VendorComposerBase;
   /** 按哪个系统落实 Worker 的可写范围（write-scope.ts 的 spawnInWriteScope），默认本机；测试用。 */
   platform?: NodeJS.Platform;
+  /** Worker 的可写范围包装（默认 spawnInWriteScope）；测试可注入。 */
+  writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
 }
 
 export class CodexDriver implements Driver {
   readonly #codexPath: string;
   readonly #platform: NodeJS.Platform;
+  readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #opts: Required<
     Pick<
       DriverOptions,
@@ -256,10 +261,11 @@ export class CodexDriver implements Driver {
   #requestSeq = 0;
   #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, composer, platform, defaultModel, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, composer, platform, writeScopeSpawn, defaultModel, ...options }: CodexDriverOptions) {
     this.#defaultModel = defaultModel ?? (async () => null);
     this.#codexPath = codexPath ?? claudePath ?? "codex";
     this.#platform = platform ?? process.platform;
+    this.#writeScopeSpawn = writeScopeSpawn;
     this.#composer = composer ?? composerBaseOf("codex")!;
     this.#opts = {
       idleCloseMs: IDLE_CLOSE_MS,
@@ -497,13 +503,13 @@ export class CodexDriver implements Driver {
       if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
       if (st.stopRequested && this.#busy(st)) {
         proc.closing = "interrupt";
-        proc.child.kill("SIGINT");
+        signalChild(proc.child, "SIGINT");
         continue;
       }
       const wasIdle = proc.closing === "idle" || (!this.#busy(st) && proc.initSeen);
       proc.closing = "shutdown";
       if (wasIdle) proc.child.stdin.end();
-      else proc.child.kill("SIGINT");
+      else signalChild(proc.child, "SIGINT");
     }
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
@@ -532,8 +538,11 @@ export class CodexDriver implements Driver {
     if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
     const pgid = await codexOfSession(pid);
     if (pgid !== null) {
-      signalPid(pid, "SIGINT");
-      if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
+      const target = signalTarget(pid);
+      if (target !== null) signalPid(target, "SIGINT");
+      if (await waitForExit(pid, this.#opts.interruptGraceMs)) {
+        if (pgid === pid) termGroupAfterExit({ pid });
+      } else {
         await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
       }
@@ -841,7 +850,7 @@ export class CodexDriver implements Driver {
     const grace = this.#opts.interruptGraceMs;
     clearKillTimer(proc);
     proc.killTimer = setTimeout(() => {
-      proc.child.kill("SIGINT");
+      signalChild(proc.child, "SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
         this.#forceKill(st, proc);
@@ -852,7 +861,7 @@ export class CodexDriver implements Driver {
   #sigintForInterrupt(st: SessionState, proc: Proc): void {
     if (st.proc !== proc || proc.closing) return;
     proc.closing = "interrupt";
-    proc.child.kill("SIGINT");
+    signalChild(proc.child, "SIGINT");
     clearKillTimer(proc);
     proc.killTimer = setTimeout(() => {
       proc.killTimer = null;
@@ -958,10 +967,13 @@ export class CodexDriver implements Driver {
     const defaultModel = row.model === null ? await this.#defaultModel().catch(() => null) : null;
     this.#assertRunning();
     this.#assertNotEnded(st);
-    // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时记警告，
-    // 靠 codex 自己的沙箱和审批兜底。只读 Worker 不包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
+    // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时直接报错拒绝启动。
+    // 只读 Worker 不在这里包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
-    const launch = spawnInWriteScope("codex", { command: this.#codexPath, args: buildCodexArgs() }, wrapScope, this.#opts.log, `session ${st.id}`, this.#platform);
+    const baseSpawn: SpawnCommand = { command: this.#codexPath, args: buildCodexArgs() };
+    const launch = this.#writeScopeSpawn
+      ? this.#writeScopeSpawn(baseSpawn, wrapScope)
+      : spawnInWriteScope("codex", baseSpawn, wrapScope, this.#opts.log, `session ${st.id}`, this.#platform);
     const child = spawn(launch.command, launch.args, {
       cwd: row.cwd,
       env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),

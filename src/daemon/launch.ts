@@ -25,8 +25,8 @@ export interface LaunchPreparerOptions {
   stateDir: string;
   /** 用户主目录（只读策略的密钥清单用），默认本机的 homedir；测试可以指定。会 realpath。 */
   homeDir?: string;
-  /** Worker 会不会包进 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定。 */
-  osSandboxed?: boolean;
+  /** Worker 会不会包进 OS 沙箱，默认按本机每次启动时查询（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定布尔或回调。 */
+  osSandboxed?: boolean | (() => boolean);
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
   /** 账本的 getLaunchContext。 */
@@ -66,10 +66,10 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
-  const osSandboxed = options.osSandboxed ?? osSandboxAvailable();
   const basePath = options.basePath ?? process.env.PATH ?? "";
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
+    const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const ctx = { ...getLaunchContext(session.id), vendorAvailability: options.vendorAvailability?.() };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });

@@ -25,6 +25,7 @@ const MUST_HAVE_HINT: readonly ErrorCode[] = [
   "network",
   "port_in_use",
   "bad_port",
+  "sandbox_unavailable",
   "git_failed",
   "internal",
 ];

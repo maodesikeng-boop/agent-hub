@@ -1,7 +1,7 @@
 // 端到端测试的零件：在临时数据目录里起真的守护进程（node src/daemon/main.ts），claude 换成假 claude；
 // 用 HTTP + cookie 登录、发消息、拉状态，用 WebSocket 收推送。
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
@@ -51,7 +51,37 @@ export async function waitUntil<T>(what: string, fn: () => Promise<T | undefined
   }
 }
 
+/** Linux bwrap 内层假 claude 用 1_000_001+ 的合成 pid 并持有 fake-proc-<pid> 的打开 fd：在宿主机 /proc/<pid>/fd 里定位其真实宿主机 pid。 */
+function hostPidOfFake(fakePid: number): number | null {
+  if (process.platform !== "linux") return null;
+  const suffix = `/fake-proc-${fakePid}`;
+  let procs: string[];
+  try {
+    procs = readdirSync("/proc");
+  } catch {
+    return null;
+  }
+  for (const entry of procs) {
+    if (!/^\d+$/.test(entry)) continue;
+    let fds: string[];
+    try {
+      fds = readdirSync(`/proc/${entry}/fd`);
+    } catch {
+      continue;
+    }
+    for (const fd of fds) {
+      try {
+        if (readlinkSync(`/proc/${entry}/fd/${fd}`).endsWith(suffix)) return Number(entry);
+      } catch {
+        // fd 已关闭或无权限
+      }
+    }
+  }
+  return null;
+}
+
 export function isAlive(pid: number): boolean {
+  if (pid >= 1_000_000) return hostPidOfFake(pid) !== null;
   try {
     process.kill(pid, 0);
     return true;
@@ -194,7 +224,16 @@ export function makeEnv(): E2eEnv {
       for (const child of running) child.kill("SIGKILL");
       await sleep(50);
       // 万一有假 claude 留下（测试失败时），也结束掉
-      for (const { pid } of this.argvs()) if (isAlive(pid)) process.kill(pid, "SIGKILL");
+      for (const { pid } of this.argvs()) {
+        const realPid = pid >= 1_000_000 ? hostPidOfFake(pid) : isAlive(pid) ? pid : null;
+        if (realPid !== null) {
+          try {
+            process.kill(realPid, "SIGKILL");
+          } catch {
+            // 已经退出
+          }
+        }
+      }
       rmSync(dir, { recursive: true, force: true });
     },
   };

@@ -577,8 +577,8 @@ function makeCodexHarness(
       FAKE_CODEX_SCRIPT: scriptFile,
       ...(options.probeInDataDir ? { FAKE_CODEX_PROBE: join(dataDir, options.probeInDataDir) } : {}),
     },
-    // 默认按没有 OS 沙箱的系统跑（codex 自己的沙箱加审批兜底），跟本机是不是 macOS 无关；真包沙箱的用例自己传 darwin
-    platform: "linux",
+    // 默认在协议单测里模拟不包外层进程沙箱（测 codex 自己的沙箱参数与审批逻辑），免得受宿主/嵌套沙箱影响；真包沙箱的用例传 writeScopeSpawn: undefined
+    writeScopeSpawn: (base) => ({ ...base, osSandboxed: false }),
     ...options.driver,
   });
 
@@ -1234,7 +1234,7 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
   });
 
   it.runIf(process.platform === "darwin")("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
-    const t = makeCodexHarness({ dataDirName: "home", probeInDataDir: "probe.txt", driver: { platform: "darwin" } });
+    const t = makeCodexHarness({ dataDirName: "home", probeInDataDir: "probe.txt", driver: { platform: "darwin", writeScopeSpawn: undefined } });
     const probe = join(t.dir, "home", "probe.txt");
     const worker = t.addSession({ role: "worker", workerId: 7 });
     await t.driver.send(worker.id, user(1, "干活"));

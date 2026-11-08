@@ -31,7 +31,7 @@
 // - 参数里有 --fork-session（后台写交接复制那份）：标准输入是纯文本提示词，关掉后当一条用户消息跑一轮，回完退出。
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -194,6 +194,25 @@ export const INTERRUPT_TOOL_TEXT = "[Request interrupted by user for tool use]";
 
 const logFile = process.env.FAKE_CLAUDE_LOG;
 const stateDir = process.env.FAKE_CLAUDE_STATE || (logFile ? dirname(logFile) : undefined);
+/**
+ * Linux bwrap（--unshare-pid）内层 CLI 的 process.pid 恒为 2：
+ * 为避免多个沙箱内 Worker 在日志里的 pid 撞车或与宿主机 PID 2（kthreadd）混淆，
+ * 当 process.pid <= 2 且有 stateDir 时用 O_CREAT|O_EXCL 原子分配 1_000_001+ 的唯一进程标识并保持 fd 打开（退出后内核自动关闭 fd）。
+ */
+const myPid: number = (() => {
+  if (process.pid > 2 || !stateDir) return process.pid;
+  mkdirSync(stateDir, { recursive: true });
+  for (let n = 1_000_001; ; n++) {
+    try {
+      const fd = openSync(join(stateDir, `fake-proc-${n}`), "wx");
+      (globalThis as Record<string, unknown>).__fakeClaudeHoldFd = fd;
+      return n;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      return process.pid;
+    }
+  }
+})();
 const topScript: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
   ? (JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) as FakeScript)
   : {};
@@ -237,7 +256,7 @@ function emit(event: Record<string, unknown>): void {
 }
 
 function exit(code: number): never {
-  log({ kind: "exit", pid: process.pid, code });
+  log({ kind: "exit", pid: myPid, code });
   process.exit(code);
 }
 
@@ -284,13 +303,13 @@ function nextTurnIndex(): number {
 // --- 参数 ---
 
 const argv = process.argv.slice(2);
-log({ kind: "argv", pid: process.pid, argv, cwd: process.cwd() });
+log({ kind: "argv", pid: myPid, argv, cwd: process.cwd() });
 if (process.env.FAKE_CLAUDE_PROBE) {
   try {
     writeFileSync(process.env.FAKE_CLAUDE_PROBE, "probe");
-    log({ kind: "probe", pid: process.pid, ok: true });
+    log({ kind: "probe", pid: myPid, ok: true });
   } catch (error) {
-    log({ kind: "probe", pid: process.pid, ok: false, code: (error as NodeJS.ErrnoException).code });
+    log({ kind: "probe", pid: myPid, ok: false, code: (error as NodeJS.ErrnoException).code });
   }
 }
 
@@ -298,10 +317,10 @@ if (process.env.FAKE_CLAUDE_PROBE) {
 const LOGGED_ENV = ["HUB_TOKEN", "HUB_SOCK", "PATH", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"] as const;
 log({
   kind: "env",
-  pid: process.pid,
+  pid: myPid,
   env: Object.fromEntries(LOGGED_ENV.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]!]]))),
 });
-log({ kind: "script", pid: process.pid, role, session: sessionScriptIndex });
+log({ kind: "script", pid: myPid, role, session: sessionScriptIndex });
 
 function argValue(name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -337,7 +356,7 @@ if (resumeId !== undefined && (script.rejectSessionArgs || !sessionExists(resume
 function spawnChild({ sleepSec, detached = false }: ChildSpec): void {
   const child = spawn("sleep", [String(sleepSec)], { stdio: "ignore", detached });
   child.unref();
-  log({ kind: "child", pid: process.pid, childPid: child.pid ?? -1 });
+  log({ kind: "child", pid: myPid, childPid: child.pid ?? -1 });
 }
 
 if (script.spawnChildOnStart !== undefined) {
@@ -531,7 +550,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
     } else if ("spawnOrphan" in step) {
       const orphan = spawn("sleep", [String(step.spawnOrphan.sleepSec)], { stdio: ["ignore", "inherit", "inherit"], detached: true });
       orphan.unref();
-      log({ kind: "orphan", pid: process.pid, orphanPid: orphan.pid ?? -1 });
+      log({ kind: "orphan", pid: myPid, orphanPid: orphan.pid ?? -1 });
     } else if ("spawnChild" in step) {
       spawnChild(step.spawnChild);
     } else if ("backgroundTasks" in step) {
@@ -540,7 +559,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
       assistant([{ type: "tool_use", id, name: "Bash", input: { command: step.bash } }]);
       const { exitCode, output } = await runShell(step.bash);
-      log({ kind: "bash", pid: process.pid, command: step.bash, exitCode, output });
+      log({ kind: "bash", pid: myPid, command: step.bash, exitCode, output });
       if (aborted()) break;
       emit({
         type: "user",
@@ -638,7 +657,7 @@ function onLine(line: string): void {
     rawPromptLines.push(line);
     return;
   }
-  log({ kind: "stdin", pid: process.pid, line });
+  log({ kind: "stdin", pid: myPid, line });
   let obj: unknown;
   try {
     obj = JSON.parse(line);
@@ -703,7 +722,7 @@ function onLine(line: string): void {
 }
 
 process.on("SIGINT", () => {
-  log({ kind: "signal", pid: process.pid, signal: "SIGINT" });
+  log({ kind: "signal", pid: myPid, signal: "SIGINT" });
   if (script.ignoreSigint) return;
   if (busy) {
     turnSeq++;
@@ -713,12 +732,12 @@ process.on("SIGINT", () => {
   exit(0);
 });
 
-log({ kind: "ready", pid: process.pid });
+log({ kind: "ready", pid: myPid });
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", onLine);
 rl.on("close", () => {
-  log({ kind: "stdin_closed", pid: process.pid });
+  log({ kind: "stdin_closed", pid: myPid });
   if (script.ignoreStdinEnd) {
     setInterval(() => {}, 60_000); // 标准输入关了事件循环也不空，一直活着
     return;
@@ -726,7 +745,7 @@ rl.on("close", () => {
   stdinClosed = true;
   if (rawPromptMode) {
     const content: UserContent[] = [{ type: "text", text: rawPromptLines.join("\n") }];
-    log({ kind: "stdin", pid: process.pid, line: JSON.stringify({ type: "user", message: { role: "user", content } }) });
+    log({ kind: "stdin", pid: myPid, line: JSON.stringify({ type: "user", message: { role: "user", content } }) });
     void runTurn(content);
     return;
   }

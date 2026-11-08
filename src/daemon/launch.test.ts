@@ -218,11 +218,27 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(pm.sandbox.enabled).toBeUndefined();
   });
 
-  it("没有 OS 沙箱的机器（不是 macOS）：不关 claude 自带的沙箱，state/ 的拒绝规则照样有", async () => {
+  it("没有 OS 沙箱的机器（不是 macOS）：不关 claude 自带的沙箱，state/ 的拒绝规则照样有；跑完配置脚本沙箱就绪后无需重建 preparer 立即生效", async () => {
     contexts.set(9, workerContext());
-    const worker = JSON.parse(readFileSync((await make(undefined, false)(row(9, dir, "worker"))).settingsFile!, "utf8"));
-    expect(worker.sandbox.enabled).toBeUndefined();
-    expect(worker.permissions.deny).toEqual([stateDirDenyRule(join(dir, "state"))]);
+    let sandboxReady = false;
+    const prepare = createLaunchPreparer({
+      launchDir,
+      dataDir: dir,
+      stateDir: join(dir, "state"),
+      osSandboxed: () => sandboxReady,
+      worktreesDir,
+      getLaunchContext: (id) => contexts.get(id)!,
+      tokens,
+      hubSock,
+      hubBinDir: "/agent-hub/run/bin",
+    });
+    const before = JSON.parse(readFileSync((await prepare(row(9, dir, "worker"))).settingsFile!, "utf8"));
+    expect(before.sandbox.enabled).toBeUndefined();
+    expect(before.permissions.deny).toEqual([stateDirDenyRule(join(dir, "state"))]);
+
+    sandboxReady = true;
+    const after = JSON.parse(readFileSync((await prepare(row(9, dir, "worker"))).settingsFile!, "utf8"));
+    expect(after.sandbox.enabled).toBe(false);
   });
 
   it("claude 只读 Worker：设置文件是只读翻译（沙箱 denyWrite 盖住工作目录和 add-dir 的真实路径）；进程不包外层沙箱（没有 writeScope）；开关变了 fingerprint 跟着变", async () => {

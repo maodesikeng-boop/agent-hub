@@ -70,7 +70,18 @@ import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
-import { claudeOfSession, forceKill, forceKillTree, killFreshGroup, signalPid, streamClosed, termGroupAfterExit, waitForExit } from "./process.ts";
+import {
+  claudeOfSession,
+  forceKill,
+  forceKillTree,
+  killFreshGroup,
+  signalChild,
+  signalPid,
+  signalTarget,
+  streamClosed,
+  termGroupAfterExit,
+  waitForExit,
+} from "./process.ts";
 import { spawnInWriteScope } from "./write-scope.ts";
 import { ClaudeReadonlyGate } from "./claude-readonly.ts";
 
@@ -512,13 +523,13 @@ export class ClaudeDriver implements Driver {
       // 用户的停止还没收尾（控制消息没回应、或者回了还没等到 result）：照停止处理，消息标已停止，不当关机打断留着重发
       if (st.stopRequested && this.#busy(st)) {
         proc.closing = "interrupt";
-        proc.child.kill("SIGINT");
+        signalChild(proc.child, "SIGINT");
         continue;
       }
       const wasIdle = proc.closing === "idle" || (!this.#busy(st) && proc.initSeen);
       proc.closing = "shutdown";
       if (wasIdle) proc.child.stdin.end();
-      else proc.child.kill("SIGINT");
+      else signalChild(proc.child, "SIGINT");
     }
     if (procs.length > 0) {
       const all = Promise.all(procs.map((p) => p.exited));
@@ -546,8 +557,11 @@ export class ClaudeDriver implements Driver {
     if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
     const pgid = await claudeOfSession(pid, row.vendorSessionId);
     if (pgid !== null) {
-      signalPid(pid, "SIGINT");
-      if (!(await waitForExit(pid, this.#opts.interruptGraceMs))) {
+      const target = signalTarget(pid);
+      if (target !== null) signalPid(target, "SIGINT");
+      if (await waitForExit(pid, this.#opts.interruptGraceMs)) {
+        if (pgid === pid) termGroupAfterExit({ pid });
+      } else {
         // 只有它自己是进程组长（我们 detached 起的）才按组杀；不是的话按组杀会连累同组的别的进程
         await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
@@ -850,7 +864,7 @@ export class ClaudeDriver implements Driver {
     const grace = this.#opts.interruptGraceMs;
     clearKillTimer(proc);
     proc.killTimer = setTimeout(() => {
-      proc.child.kill("SIGINT");
+      signalChild(proc.child, "SIGINT");
       proc.killTimer = setTimeout(() => {
         proc.killTimer = null;
         this.#forceKill(st, proc);
@@ -862,7 +876,7 @@ export class ClaudeDriver implements Driver {
     if (st.proc !== proc || proc.closing) return;
     // SIGINT 会结束这一轮然后整个进程退出（M0 实测），下次 --resume。不用 SIGTERM。
     proc.closing = "interrupt";
-    proc.child.kill("SIGINT");
+    signalChild(proc.child, "SIGINT");
   }
 
   // --- 启动 ---
