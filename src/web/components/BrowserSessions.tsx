@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserSessionInfo, LoginLinkResponse } from "../../shared/index.ts";
 import { describeUserAgent, formatAgo, formatCountdown } from "../browser-sessions.ts";
-import { ApiError, deleteBrowserSession, fetchBrowserSessions, postLoginLink, postLogoutAll } from "../client.ts";
+import { ApiError, deleteBrowserSession, fetchBrowserSessions, postApproveBrowserSession, postLoginLink, postLogoutAll } from "../client.ts";
 import { Button } from "../ui/button.tsx";
 import { QrCode } from "./QrCode.tsx";
 import { errorText, type ErrorLike } from "../format.ts";
@@ -24,7 +24,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
   const [sessions, setSessions] = useState<BrowserSessionInfo[] | null>(null);
   const [loadError, setLoadError] = useState<ErrorLike | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, ErrorLike>>({});
-  const [busy, setBusy] = useState<ErrorLike | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [confirmingSelf, setConfirmingSelf] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [allError, setAllError] = useState<ErrorLike | null>(null);
@@ -82,7 +82,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
   }, [link, sessions, baseline]);
 
   const exit = async (session: BrowserSessionInfo) => {
-    setBusy(session.id);
+    setBusy(`exit:${session.id}`);
     setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
     try {
       await deleteBrowserSession(session.id);
@@ -98,6 +98,20 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
     setBusy(null);
     if (session.current) return onSignedOut();
     setSessions((list) => list?.filter((s) => s.id !== session.id) ?? null);
+  };
+
+  const approve = async (session: BrowserSessionInfo) => {
+    setBusy(`approve:${session.id}`);
+    setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
+    try {
+      await postApproveBrowserSession(session.id);
+    } catch (err) {
+      setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
+      setBusy(null);
+      return;
+    }
+    setBusy(null);
+    setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, status: "active" } : s)) ?? null);
   };
 
   const exitAll = async () => {
@@ -141,46 +155,66 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             <RowError error={loadError} />
           </div>
         )}
-        {sessions?.map((session) => {
-          const name = describeUserAgent(session.userAgent);
-          const ago = formatAgo(session.lastSeenAt, now);
-          const confirming = session.current && confirmingSelf;
-          return (
-            <SettingsRow key={session.id} label={name} detail={session.current ? `这个浏览器 · ${ago}` : ago} error={rowErrors[session.id]}>
-              {(id) =>
-                confirming ? (
-                  <>
-                    <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
-                      取消
-                    </Button>
+        {sessions
+          ?.toSorted((a, b) => (a.status === "pending_approval" ? 0 : 1) - (b.status === "pending_approval" ? 0 : 1))
+          .map((session) => {
+            const name = describeUserAgent(session.userAgent);
+            const ago = formatAgo(session.lastSeenAt, now);
+            const pending = session.status === "pending_approval";
+            const confirming = session.current && confirmingSelf;
+            const detail = (
+              <span className="inline-flex items-center gap-3">
+                {session.current && <span>这个浏览器</span>}
+                {pending && <span>待批准</span>}
+                {session.viaPublic && <span>经公网</span>}
+                <span>{ago}</span>
+              </span>
+            );
+            return (
+              <SettingsRow key={session.id} label={name} detail={detail} error={rowErrors[session.id]}>
+                {(id) =>
+                  pending ? (
+                    <>
+                      <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => void exit(session)}>
+                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}拒绝
+                      </Button>
+                      <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => void approve(session)}>
+                        {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}允许
+                      </Button>
+                    </>
+                  ) : confirming ? (
+                    <>
+                      <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
+                        取消
+                      </Button>
+                      <Button
+                        id={id}
+                        variant="ghost"
+                        size="sm"
+                        aria-label="确认退出"
+                        disabled={busy !== null}
+                        className="text-danger hover:text-danger"
+                        onClick={() => void exit(session)}
+                      >
+                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
+                      </Button>
+                    </>
+                  ) : (
                     <Button
                       id={id}
                       variant="ghost"
                       size="sm"
-                      aria-label="确认退出"
+                      aria-label={`退出 ${name}`}
                       disabled={busy !== null}
-                      className="text-danger hover:text-danger"
-                      onClick={() => void exit(session)}
+                      onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
                     >
-                      {busy === session.id && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
+                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}退出
                     </Button>
-                  </>
-                ) : (
-                  <Button
-                    id={id}
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`退出 ${name}`}
-                    disabled={busy !== null}
-                    onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
-                  >
-                    {busy === session.id && <Loader2 className="animate-spin" aria-hidden="true" />}退出
-                  </Button>
-                )
-              }
-            </SettingsRow>
-          );
-        })}
+                  )
+                }
+              </SettingsRow>
+            );
+          })}
       </SettingsGroup>
 
       <SettingsGroup label="登录">

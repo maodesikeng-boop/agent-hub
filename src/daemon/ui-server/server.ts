@@ -501,7 +501,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   }
   const currentPublicEntryStatus = (): PublicEntryStatus => ({
     enabled: publicEntryState.enabled,
-    hostname: publicEntryState.hostname,
+    hostname: publicEntryState.hostname ?? opts.tailnet?.current()?.dnsName?.toLowerCase() ?? null,
     funnelCommand: funnelCommandFor(opts.publicSock ?? resolve(ROOT_DIR, "../.agent-hub/run/public.sock")),
   });
   const wsSenders = new Set<(message: WsServerMessage) => void>();

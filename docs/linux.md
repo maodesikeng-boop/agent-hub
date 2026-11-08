@@ -98,6 +98,19 @@ ssh -N -L 4317:127.0.0.1:4317 <用户>@<服务器>
 
 不想对公网暴露 SSH：用 Tailscale 把两台机器放进同一个私有网络，再照上面的命令 ssh 到服务器的 tailnet 名字（或 `tailscale ssh`），服务器上关掉公网的 22。出处：<https://tailscale.com/docs/features/tailscale-ssh>、<https://tailscale.com/docs/reference/ssh-over-tailscale>。注意：不要用 `tailscale serve` / 反向代理直接把网页端口转出去——请求的 `Host` 会变成 tailnet 名字，被上面的校验拒绝；要用就走 SSH 隧道。
 
+### 手机公网访问：开启免费 Tailscale Funnel 与 iPhone 主屏 App
+
+需要让手机在公网（5G / 任意 Wi-Fi，手机与 Mac 均无需安装或开启 Tailscale VPN）访问并接收 iOS 锁屏推送时，走守护进程独立的 `run/public.sock` 公网入口与 Tailscale Funnel（`docs/mac-app-and-mobile-design.md` 第 2 节）：
+
+1. **开启公网入口**：在已登录电脑打开“设置 → 设备 → 公网入口”，确认公网域名（如 `tokyo.tailnet.ts.net`）并点**“开启”**，守护进程开始监听 `~/.agent-hub/run/public.sock`（权限 `0600`）。
+2. **东京运行一次 Funnel 命令**：复制设置页给出的命令，在东京服务器终端执行：
+   ```sh
+   sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock
+   ```
+   （若首次使用 Funnel，按终端输出的链接开启 tailnet 的 Funnel 权限即可。出处：<https://tailscale.com/kb/1223/funnel>。）
+3. **iPhone 扫码与电脑批准**：在已登录电脑打开“设置 → 登录 → 在手机上登录”点“显示二维码”；用 iPhone 系统相机扫码（Safari 打开 `https://<tokyo>.<tailnet>.ts.net/auth#link=…`，显示“已扫码，请在已登录的电脑上点「允许」完成登录…”），在电脑“设置 → 已登录的浏览器”顶部点**“允许”**，手机即自动进入首页。
+4. **添加到主屏幕与开启推送**：在 iPhone Safari 底部点“分享”→**“添加到主屏幕”**→“添加”；从手机主屏幕打开 `Agent Hub` 全屏图标，点左下角“设置”打开**“通知”**开关并在系统弹窗点“允许”，即可收到端到端加密的 iOS 原生锁屏推送。
+
 ## 6. Worker 可写范围：Linux 上暂时只有“规则”
 
 macOS 上整个 Worker 进程包在 `sandbox-exec` 里，数据目录强制不可写。Linux 上没有这层：起 Worker 不会报错、不会被拦，只在日志里记一条警告（`[write-scope] …警告：这台机器（linux）还没有 OS 沙箱…退回到规则兜底，不是强制的`），每家退回到自己的规则：

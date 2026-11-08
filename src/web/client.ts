@@ -6,6 +6,7 @@ import {
   type AddDeviceRequest,
   type ArchivePmResponse,
   type Attachment,
+  type AuthStatusResponse,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
   type ConversationId,
@@ -35,9 +36,11 @@ import {
   type PersonaResponse,
   type PmId,
   type PostMessageResponse,
+  type PublicEntryStatus,
   type QuotaResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
+  type SetPublicEntryRequest,
   type StateSnapshot,
   type TunnelConnectRequest,
   type TunnelStatusResponse,
@@ -231,10 +234,21 @@ export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id)
 export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.deviceInvites);
 export const postTunnelConnect = (code: string) => postJson<TunnelStatusResponse>(API_PATHS.tunnelConnect, { code } satisfies TunnelConnectRequest);
 export const postTunnelRetry = () => postJson<TunnelStatusResponse>(API_PATHS.tunnelRetry, {});
+export const putPublicEntry = (body: SetPublicEntryRequest): Promise<PublicEntryStatus> => putJson<PublicEntryStatus>(API_PATHS.publicEntry, body);
+
+/** 查询当前浏览器的登录状态（active / pending_approval / unauthenticated）。 */
+export function fetchAuthStatus(): Promise<AuthStatusResponse> {
+  return request<AuthStatusResponse>(API_PATHS.authStatus);
+}
 
 /** 已登录的浏览器（设置里的列表）。 */
 export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {
   return request<BrowserSessionsResponse>(API_PATHS.browserSessions);
+}
+
+/** 已登录设备批准公网待批准（pending_approval）的浏览器会话。 */
+export function postApproveBrowserSession(id: string): Promise<void> {
+  return postJson<void>(API_PATHS.approveBrowserSession(id));
 }
 
 /** 退出一个浏览器（可以是自己）。 */

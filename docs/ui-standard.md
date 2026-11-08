@@ -245,6 +245,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 最上面一组“等你确定”（标题样式同组头的字）汇总所有设备没回答的提问，每行名字后面隔 8px 写设备名（12px 灰，不用“·”），那台离线、没连上过时这一行也 `opacity-60`；“等你”只在各组里标。标签页标题的数字是所有设备的合计。
   - 别的设备离线：对话顶上一条提示（同“重连中”的灰底胶囊，`WifiOff` 图标）“东京离线，显示的是 3 分钟前的内容”；输入框整个不可用，占位写“东京离线，暂时不能发消息”。重连中（断了不到 30 秒）照常能打字，发送按钮等连上。从没连上过：主区居中“还没连上这台设备”+ 一行排查提示（13.5px 灰）。
   - 新建项目经理弹窗第一行“设备”（`Select plain`，默认当前看的那台，离线的不能选）；设置弹窗多一组“设备”（组标题右边“邀请”“添加”两个 ghost `sm` 按钮；每台一行：名字，下面系统 + 本机 / 状态，右边改名、移除图标按钮，移除要二次确认）。网址前面加 `#/d/<设备编号>`，入口本机不加。
+  - **公网入口与待批准浏览器会话（`docs/mac-app-and-mobile-design.md` 第 2.2 节）**：设置弹窗“设备”下设“公网入口”分组，提供“公网域名”输入框（占位 `如 tokyo.tailnet.ts.net`）与“开启 / 关闭”按钮；开启时在行下显示当前生效的 `https://<公网域名>`，并展示“Funnel 命令”行（等宽代码块 + `outline` `sm`“复制命令”按钮）。“已登录的浏览器”分组将 `pending_approval` 待批准会话排在最前，行下用 `gap-3` 分开显示“待批准”“经公网”与时间（不用“·”拼接），右侧提供 `ghost` `sm`“拒绝”与“允许”按钮；已批准的公网会话行下保留“经公网”标注。
 - **Mac 原生桌面应用（`html[data-macos-app="true"]`，`docs/mac-app-and-mobile-design.md` 第 1.3 节）**：无边框透明标题栏下，窗口左上角红黄绿交通灯占宽 `72px`、高 `28px`，只在 `styles.css` 定义 `--macos-traffic-lights-width`（默认 `0px`，`html[data-macos-app="true"]` 下 `72px`）和 `--macos-traffic-lights-height`（默认 `0px`，`html[data-macos-app="true"]` 下 `28px`）。
   - 宽屏展开左栏（或窄屏打开左栏抽屉）时，左栏顶部内边距为 `calc(var(--safe-top) + var(--macos-traffic-lights-height))`，搜索框自动下移 `28px` 避开红黄绿；
   - 窄屏（`1100px` 以下）收起左栏时，`.chat-main` 的 `--header-gutter-start` 设为 `calc(1.25rem + var(--macos-traffic-lights-width))`，资料页顶栏与设备等待页顶栏左内边距同样加上 `var(--macos-traffic-lights-width)`，使左上角按钮向右让出 `72px` 不与红黄绿重叠；

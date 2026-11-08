@@ -43,11 +43,12 @@ async function show() {
 const rowOf = (name: string) => screen.getByText(name).closest("[data-slot='settings-row']") as HTMLElement;
 
 describe("已登录的浏览器列表", () => {
-  it("每个浏览器一行：名字是“设备 浏览器”，下面是最后活动；自己这一行标出来", async () => {
+  it("每个浏览器一行：名字是“设备 浏览器”，下面是最后活动；自己这一行标出来，不用 · 拼接", async () => {
     await show();
     const mine = rowOf("Mac Chrome");
     expect(within(mine).getByText(/这个浏览器/)).toBeInTheDocument();
     expect(within(mine).getByText(/刚刚/)).toBeInTheDocument();
+    expect(mine.textContent).not.toContain("·");
     const phone = rowOf("iPhone Safari");
     expect(within(phone).getByText("5 分钟前")).toBeInTheDocument();
     expect(within(phone).queryByText(/这个浏览器/)).not.toBeInTheDocument();
@@ -57,6 +58,43 @@ describe("已登录的浏览器列表", () => {
     api.browserSessions = () => ({ status: 401, body: { error: "unauthorized" } });
     render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("登录过期了，重新登录");
+  });
+
+  it("待批准（pending_approval）浏览器会话排在最前，展示“允许”与“拒绝”按钮；点“允许”调 POST /api/sessions/:id/approve 后变为已登录并标出“经公网”", async () => {
+    list = [
+      session({ id: "mac", current: true }),
+      session({ id: "phone-pending", userAgent: IPHONE, status: "pending_approval", viaPublic: true, lastSeenAt: Date.now() - 60_000 }),
+    ];
+    await show();
+    const region = screen.getByRole("region", { name: "已登录的浏览器" });
+    const rows = region.querySelectorAll("[data-slot='settings-row']");
+    // pending_approval 排在第一行
+    expect(rows[0]).toHaveTextContent("iPhone Safari");
+    expect(rows[0]).toHaveTextContent("待批准");
+    expect(rows[0]).toHaveTextContent("经公网");
+    expect(rows[0]!.textContent).not.toContain("·");
+
+    const phoneRow = rowOf("iPhone Safari");
+    expect(within(phoneRow).getByRole("button", { name: "拒绝" })).toBeInTheDocument();
+    const approveBtn = within(phoneRow).getByRole("button", { name: "允许" });
+    fireEvent.click(approveBtn);
+
+    await waitFor(() => expect(api.callsTo("POST", /^\/api\/sessions\/phone-pending\/approve$/)).toHaveLength(1));
+    await waitFor(() => expect(within(phoneRow).queryByText("待批准")).not.toBeInTheDocument());
+    expect(within(phoneRow).getByText("经公网")).toBeInTheDocument();
+    expect(within(phoneRow).getByRole("button", { name: /^退出/ })).toBeInTheDocument();
+  });
+
+  it("待批准（pending_approval）会话点“拒绝”调 DELETE /api/sessions/:id 并从列表移除", async () => {
+    list = [
+      session({ id: "mac", current: true }),
+      session({ id: "phone-pending", userAgent: IPHONE, status: "pending_approval", viaPublic: true }),
+    ];
+    await show();
+    const phoneRow = rowOf("iPhone Safari");
+    fireEvent.click(within(phoneRow).getByRole("button", { name: "拒绝" }));
+    await waitFor(() => expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument());
+    expect(api.callsTo("DELETE", /^\/api\/sessions\/phone-pending$/)).toHaveLength(1);
   });
 });
 
