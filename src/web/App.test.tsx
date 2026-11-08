@@ -408,12 +408,47 @@ describe("消息状态", () => {
     expect(bubbles()).toHaveLength(3);
   });
 
-  it("系统消息是靠左很淡的一行，不是气泡", async () => {
+  it("系统消息是靠左很淡的一行，不是气泡；schedule.failed 和 handover.failed 的 meta.rawReason 在 [data-notice] 的 title 上", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, sender: "system", text: "已建工单" })));
     const notice = within(log()).getByText("已建工单").closest("[data-notice]");
     expect(notice).toHaveAttribute("data-side", "left");
     expect(notice).toHaveClass("text-xs", "text-muted-foreground");
+
+    push(
+      ws,
+      messageChange(
+        12,
+        "message.created",
+        makeMessage({
+          id: 4,
+          sender: "system",
+          text: "定时任务没跑成：日报：Claude 服务繁忙，稍后重试",
+          meta: { event: "schedule.failed", scheduleId: 1, name: "日报", messageId: 9, rawReason: 'API Error: 529 {"type":"overloaded_error"}' },
+        }),
+      ),
+    );
+    push(
+      ws,
+      messageChange(
+        13,
+        "message.created",
+        makeMessage({
+          id: 5,
+          sender: "system",
+          text: "交接没写成，没换会话：Claude 服务繁忙，稍后重试",
+          meta: { event: "handover.failed", handoverId: 2, attempt: 1, rawReason: 'API Error: 529 {"type":"overloaded_error"}' },
+        }),
+      ),
+    );
+    expect(within(log()).getByText("定时任务「日报」没跑成：Claude 服务繁忙，稍后重试").closest("[data-notice]")).toHaveAttribute(
+      "title",
+      'API Error: 529 {"type":"overloaded_error"}',
+    );
+    expect(within(log()).getByText("交接没写成，没换会话：Claude 服务繁忙，稍后重试").closest("[data-notice]")).toHaveAttribute(
+      "title",
+      'API Error: 529 {"type":"overloaded_error"}',
+    );
   });
 
   it("别的对话的消息不出现在当前对话，但更新左栏预览", async () => {
