@@ -77,15 +77,15 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
   const server = createServer(async (req, res) => {
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
-    if (token === "" || !opts.authorize(token)) return send(res, 401, { error: "unauthorized" });
+    if (token === "" || !opts.authorize(token)) return send(res, 401, { error: "令牌不对：要用跑守护进程的那个用户跑隧道命令" });
     const route = routes[`${req.method} ${new URL(req.url ?? "/", "http://admin").pathname}`];
-    if (route === undefined) return send(res, 404, { error: "not_found" });
+    if (route === undefined) return send(res, 404, { error: "守护进程没有这个接口（两边代码版本不一样？）" });
     try {
       send(res, 200, await route(await readBody(req)));
     } catch (error) {
       if (error instanceof BadRequest || error instanceof TunnelInputError) return send(res, 400, { error: error.message });
       opts.log?.(`隧道管理接口出错：${error instanceof Error ? error.message : String(error)}`);
-      send(res, 500, { error: error instanceof Error ? error.message : "internal_error" });
+      send(res, 500, { error: `守护进程出错：${error instanceof Error ? error.message : String(error)}` });
     }
   });
 
