@@ -1,8 +1,6 @@
 // Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly-agy.ts）、残留进程识别。
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
-  PS_TIMEOUT_MS,
   agentLaunchArgs,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
@@ -15,6 +13,7 @@ import {
 import { agyReadonlySettings, type AgyConnectorRules } from "./readonly-agy.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol.ts";
 import type { TurnUsage } from "./usage.ts";
+import { runPs } from "./process.ts";
 
 export { buildChildEnv, lineUuid, mergeUserTexts, userContent };
 
@@ -53,7 +52,6 @@ export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
 
 export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写自己的工作目录";
 
-const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
 /**
  * 构造 agy 启动参数：
@@ -271,16 +269,13 @@ export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | 
  * 用 ps 检查 pid 是否为残留的 agy 进程（命令行含 agy 且含 `--input-format stream-json` 或 `vendorSessionId`）。
  * 是的话返回其进程组号 pgid，否则返回 null。
  */
-export function agyOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], PS_OPTIONS, (error, stdout) => {
-      if (error) return resolve(null);
-      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-      if (!match) return resolve(null);
-      const command = match[2]!;
-      const hasSession = vendorSessionId.trim() !== "" && command.includes(vendorSessionId);
-      const hasStreamFlag = command.includes("--input-format stream-json");
-      resolve(/\bagy\b/i.test(command) && (hasStreamFlag || hasSession) ? Number(match[1]) : null);
-    });
-  });
+export async function agyOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
+  const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]);
+  if (stdout === null) return null;
+  const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+  if (!match) return null;
+  const command = match[2]!;
+  const hasSession = vendorSessionId.trim() !== "" && command.includes(vendorSessionId);
+  const hasStreamFlag = command.includes("--input-format stream-json");
+  return /\bagy\b/i.test(command) && (hasStreamFlag || hasSession) ? Number(match[1]) : null;
 }

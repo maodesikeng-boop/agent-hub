@@ -6,6 +6,20 @@ import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
 /** ps 卡住时不能一直等：超时直接 SIGKILL 掉 ps，当它跑不了。 */
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
+/**
+ * 跑 ps，成功给 stdout；跑不了（退出码非 0、超时、起不来）给 null。
+ * Node 对 EPERM 这类错误是同步抛出的，不走回调，所以 execFile 本身也要包起来。
+ */
+export function runPs(args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      execFile("ps", args, PS_OPTIONS, (error, stdout) => resolve(error ? null : stdout));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export function streamClosed(stream: Readable): Promise<void> {
   return new Promise((resolve) => {
     if (stream.closed) resolve();
@@ -17,16 +31,13 @@ export function streamClosed(stream: Readable): Promise<void> {
  * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
  * 是的话返回它的进程组号，不是（或者不在了）返回 null。
  */
-export function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], PS_OPTIONS, (error, stdout) => {
-      if (error) return resolve(null); // 进程不在了：ps 退出码 1
-      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-      if (!match) return resolve(null);
-      const command = match[2]!;
-      resolve(/claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null);
-    });
-  });
+export async function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
+  const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]); // null：进程不在了（ps 退出码 1）或 ps 跑不了
+  if (stdout === null) return null;
+  const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+  if (!match) return null;
+  const command = match[2]!;
+  return /claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null;
 }
 
 /** 同一个 child 正在进行的强制结束（关机和空闲关闭、启动超时撞在一起时复用）。 */
@@ -172,10 +183,9 @@ export function killTargets(rows: PsRow[], rootPid: number, ownPgid: number | nu
   return targets;
 }
 
-function psTable(): Promise<PsRow[] | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid="], PS_OPTIONS, (error, stdout) => resolve(error ? null : parsePs(stdout)));
-  });
+async function psTable(): Promise<PsRow[] | null> {
+  const stdout = await runPs(["-A", "-o", "pid=,ppid=,pgid="]);
+  return stdout === null ? null : parsePs(stdout);
 }
 
 export function isAlive(pid: number): boolean {
