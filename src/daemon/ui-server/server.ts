@@ -4,7 +4,7 @@
 // 设备入口（docs/hub-tunnel-design.md 第 4 节）：ssh 隧道只接到另听的这一个（startUiServer 的 peerEntry），只认设备令牌。
 // 几种入口各认什么、查什么，见 Entry 和 createUiServer 里的 entryRules。
 import { createHash, timingSafeEqual } from "node:crypto";
-import { chmodSync, createReadStream, existsSync, lstatSync, unlinkSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
@@ -87,6 +87,7 @@ import {
   runOpenCommand,
   type RunOpen,
 } from "../open-file.ts";
+import { listenOnRunSocket } from "../run-socket.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
@@ -167,7 +168,6 @@ const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** serve 的 https 默认端口：Host 可能带上 :443。 */
 const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
-const SIDE_SOCKET_MODE = 0o600;
 
 /**
  * 守护进程在哪听：界面端口（127.0.0.1 TCP）、serve 的 socket（Linux 上 tailscale serve 转来，startUiServer 的 serveSocket）、
@@ -590,6 +590,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (typeof entry === "string") return fail(reply, 403, entry);
     const rule = entryRules[entry.kind];
     const path = pathOf(req);
+    // 过了入口检查后的所有回应（含认不出设备令牌的 401）都不许缓存。
+    reply.header("cache-control", "no-store");
 
     // 设备之间：带了 Authorization 就按设备令牌认。认不出一律 401 peer_unauthorized，对方据此知道本机已经不认它了。
     // 没配联机（没给 peers）、入口不认设备令牌，也是 401。
@@ -603,7 +605,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     } else if (rule.identities.includes("invite") && req.method === "POST" && path === API_PATHS.peerPair) {
       identity = { kind: "invite" };
     }
-    reply.header("cache-control", "no-store");
 
     // 设备令牌、不认 cookie 的入口：只能碰 /api/ 下不是入口专用的
     if ((identity.kind === "deviceToken" || !rule.browserPaths) && !inDeviceScope(path)) return fail(reply, 403, "forbidden_peer");
@@ -1002,17 +1003,9 @@ export type PeerEntryListen = { socket: string } | { port: number };
 
 /**
  * 另起一个 HTTP 服务听 Unix socket 或 127.0.0.1 的端口：收到的请求（含 WebSocket 握手）记下是从哪听到的，交给同一个 Fastify 处理。
- * socket：残留的 socket 文件直接删（调用方拿着数据目录锁，不会有另一个守护进程在听），那里是别的东西就报错；听上之后改成 0600。
+ * socket：准备和 hub.sock 同一套（run-socket.ts 的 listenOnRunSocket）：run/ 0700、残留的死 socket 删掉、有活监听者就拒绝、听上之后改成 0600。
  */
 async function listenSide(app: FastifyInstance, listener: Exclude<Listener, "uiPort">, at: { socket: string } | { port: number }): Promise<Server> {
-  if ("socket" in at) {
-    try {
-      if (!lstatSync(at.socket).isSocket()) throw new Error(`界面服务的 socket 路径上已经有别的东西，不是 socket：${at.socket}。请确认后手动移走。`);
-      unlinkSync(at.socket);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-  }
   const server = createServer((req, res) => {
     listenerOf.set(req, listener);
     app.routing(req, res);
@@ -1021,16 +1014,23 @@ async function listenSide(app: FastifyInstance, listener: Exclude<Listener, "uiP
     listenerOf.set(req, listener);
     app.server.emit("upgrade", req, socket, head);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    const done = () => {
-      server.off("error", reject);
-      resolve();
-    };
-    if ("socket" in at) server.listen(at.socket, done);
-    else server.listen(at.port, "127.0.0.1", done);
-  });
-  if ("socket" in at) chmodSync(at.socket, SIDE_SOCKET_MODE);
+  const listenTo = (listen: (done: () => void) => void) =>
+    new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      listen(() => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+  if ("socket" in at) {
+    await listenOnRunSocket(
+      at.socket,
+      (path) => listenTo((done) => server.listen(path, done)),
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    );
+  } else {
+    await listenTo((done) => server.listen(at.port, "127.0.0.1", done));
+  }
   return server;
 }
 
