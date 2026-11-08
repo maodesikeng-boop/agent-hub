@@ -435,3 +435,29 @@ export const PEER_WS_PING_MS = 5_000;
 // ---- 防闲置睡眠（daemon/platform/sleep.ts） ----
 /** 有会话在跑时起防闲置睡眠进程（macOS 的 caffeinate）；全部回到空闲后等这么久（2 分钟）再结束，免得两轮之间来回起停。 */
 export const SLEEP_INHIBIT_GRACE_MS = 120_000;
+
+// ───────────── ssh 隧道（docs/hub-tunnel-design.md 第 3、6、7 节）─────────────
+/** 中心给连入设备分的 -R 端口（槽位）：从这个起往上取最小的空的，一台一个。 */
+export const TUNNEL_FIRST_SLOT_PORT = 4401;
+/** 槽位端口最大到这个（最多 99 台连入设备）。 */
+export const TUNNEL_LAST_SLOT_PORT = 4499;
+/** ssh 断了以后第一次等多久再连；每失败一次翻倍。 */
+export const TUNNEL_BACKOFF_MIN_MS = 1_000;
+/** 退避封顶。 */
+export const TUNNEL_BACKOFF_MAX_MS = 60_000;
+/** 连上后稳定这么久再断，退避从头算（也开始一个新的“退避周期”：提前重连又能用一次）。 */
+export const TUNNEL_STABLE_MS = 60_000;
+/** ssh 心跳：每隔几秒一次（ServerAliveInterval，秒）。东京那边 sshd 片段的 ClientAliveInterval 用同一个数。 */
+export const TUNNEL_ALIVE_INTERVAL_S = 15;
+/** 心跳几次没回就断（ServerAliveCountMax）：15 × 3 = 45 秒内发现断线。 */
+export const TUNNEL_ALIVE_COUNT_MAX = 3;
+/** ssh 连中心最多等几秒（ConnectTimeout）。 */
+export const TUNNEL_CONNECT_TIMEOUT_S = 15;
+/** 停隧道：SIGTERM 之后等这么久还没退就 SIGKILL。 */
+export const TUNNEL_STOP_GRACE_MS = 3_000;
+/** 隧道状态里留 ssh 最后一行报错，最多这么多字符。 */
+export const TUNNEL_DETAIL_MAX_CHARS = 200;
+/** 隧道命令等守护进程的管理 socket 回话最多多久。 */
+export const TUNNEL_ADMIN_TIMEOUT_MS = 30_000;
+/** 管理 socket 收的请求体上限。 */
+export const TUNNEL_ADMIN_MAX_BODY_BYTES = 16 * 1024;

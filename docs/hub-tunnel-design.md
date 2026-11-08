@@ -1,6 +1,6 @@
 # 联机方案（二）：东京当中心，设备用 SSH 连入；手机走东京公网 HTTPS
 
-状态：方案，待拍板（第 12 节）。接着 `docs/multi-device-design.md`（下称“联机方案”），P2 配对 / 转发（`daemon/peers/`）已合。
+状态：已定（第 12 节；第二期域名等用户定）。块 C、D 已实现（#179）。接着 `docs/multi-device-design.md`（下称“联机方案”），P2 配对 / 转发（`daemon/peers/`）已合。
 不改的：数据不动、入口转发 `/d/<设备>/api/*`、设备令牌、每个浏览器一条会话（联机方案第 2、3 节）全部照旧；Tailscale 连法保留为可选。
 
 ## 0. 目标和不做的
@@ -41,7 +41,7 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
 每台连入设备一把**专用密钥**（守护进程生成 `state/tunnel/id_ed25519`，0600，无口令，只用于这条隧道）。东京上：
 
 1. 专用系统用户 `agenthub-tunnel`（shell 是 `/usr/sbin/nologin`、无家目录写权限）。不用 `ubuntu`：OpenSSH 的 `permitopen` / `permitlisten` 只管 TCP，管不到 unix socket 转发；换成别的用户后，即使开了 socket 转发，它也读不了 `ubuntu` 名下 0600 的 `run/hub.sock`、`run/ui.sock`。
-2. 公钥一行（文件放 `/etc/ssh/agent-hub-tunnel/authorized_keys`，root 所有，隧道用户改不了）：
+2. 公钥一行（文件放 `/etc/ssh/agent-hub-tunnel/authorized_keys`，root 所有、0644，隧道用户改不了）。按行尾注释 `agent-hub:<设备名>` 认是哪台的；同一把钥匙、同一个端口不许给两台（sshd 用第一条对得上的行）：
    ```
    restrict,port-forwarding,permitlisten="4401",permitopen="127.0.0.1:4319",command="/usr/sbin/nologin" ssh-ed25519 AAAA… agent-hub:mac
    ```
@@ -67,8 +67,15 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
      ClientAliveInterval 15
      ClientAliveCountMax 3
    ```
-   `GatewayPorts no` 让 `-R` 只听回环；`ClientAlive*` 让东京 45 秒内清掉死掉的旧连接（不然 Mac 重连时 4401 还被旧连接占着）。改完 `sshd -t` 校验再 `systemctl reload ssh`。
+   实际写的片段比上面多两行：`AuthorizedKeysCommand none`（主配置若给所有用户配了 AuthorizedKeysCommand，比如 EC2 Instance Connect，隧道用户不走它）、`PubkeyAuthentication yes`。
+   `GatewayPorts no` 让 `-R` 只听回环；`ClientAlive*` 让东京 45 秒内清掉死掉的旧连接（不然 Mac 重连时 4401 还被旧连接占着）。
+   改片段的步骤（`scripts/tunnel-sshd.sh`）：
+   - 改前、改后各跑一次 `sshd -T -C user=<管理员>,host=x,addr=203.0.113.1`（管理员默认 `$SUDO_USER`，不是就 `ubuntu`），比对管理员用户的实际配置；变了就撤回片段、报错。
+   - 再用同样的 `sshd -T` 看隧道用户：`forcecommand`、`authorizedkeysfile`、`permitopen`、`allowstreamlocalforwarding no`、`permittty no`、`gatewayports no` 都在，才算片段真的生效（主配置要 Include `sshd_config.d`）；不在也撤回、报错。
+   - `sshd -t` 校验通过才 reload：有 systemd 用 `systemctl try-reload-or-restart ssh.service`（Ubuntu 24.04 的 ssh.service 按需起，没在跑就不用管），否则给 `/run/sshd.pid` 发 SIGHUP。
+   - 重复跑收敛：用户、片段、钥匙行都按现状比对，已经对的不动（文件不重写）；写片段前留一个 `/etc/ssh/agent-hub-tunnel/.reload-pending`，reload 成功才删，所以“写了片段还没 reload”中断后再跑一次会补上 reload。
 4. 验收（实现块 D）：在一次性 Ubuntu 24.04 容器里跑 sshd，验证这把钥匙：能 `-R 4401`、`-L →4319`；`-R 4402`、`-L →4318`、`-L →22`、`-L` 到 unix socket、要 shell、要 PTY 全部失败。
+   脚本 `scripts/verify-tunnel-sshd.sh`（要本机 docker、node），改 sshd 配置或 ssh 参数后重跑。它还验：连入方用 `ssh-args.ts` 拼出的参数真连；改片段前后 `sshd -T` 比对；同一条加设备命令连跑两遍配置不变（文件 inode、修改时间不动）；待 reload、片段被删、钥匙行被改时再跑能补齐；主配置不 Include 时撤回；旧 `hub.sock` 留着能重连（不带 `StreamLocalBindUnlink` 会失败）；删设备断现存会话、再删不变。
 
 ## 4. 第一期：隧道请求的信任边界
 
@@ -93,7 +100,7 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
   - 连入方（Mac）：`hub: { host, user, sshPort: 22, hostKey, listenPort: 4401, hubEntryPort: 4319, deviceId: null | "<东京编号>" }`。
 - 设备记录加 `transport: "tailscale" | "ssh-tunnel"`。`ssh-tunnel` 的设备 `url` 为空，转发时按设备编号查隧道表得到“东京：`127.0.0.1:<slot.port>`；Mac：`run/tunnel/hub.sock`”。`normalizePeerUrl` 不改：对方发来的网址仍然只认 ts.net（测试入口另认回环）。
 - 配对怎么改：
-  1. 东京上 `hub-device tunnel add --name mac --pubkey …`（第 7 节）分配槽位 4401，同时生成一个**绑定该槽位**的邀请码（沿用 `invites.ts`：随机 128 位、10 分钟、用一次）。
+  1. 东京上 `tunnel add --name mac --pubkey …`（第 7 节）由守护进程分配槽位 4401，同时生成一个**绑定该槽位**的邀请码（现在先出本机普通邀请码，绑槽位归块 B）（沿用 `invites.ts`：随机 128 位、10 分钟、用一次）。
   2. Mac 拿到连接码（含邀请码）后起 ssh，经 `-L` 调东京 `POST /api/peer/pair`。东京按**邀请码**把 Mac 的设备编号写进槽位 4401，不看请求里的网址；Mac 这边把东京编号写进 `hub.deviceId`。
   3. 之后的清单同步、介绍里出现的 `ssh-tunnel` 设备：不传地址；收到的一方只有在本机隧道表里有对应槽位时才能连它，否则只显示“经中心可见”（块 F）。
 - 为什么另一台已配对设备 B 冒充不了 Mac：
@@ -109,34 +116,56 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
 - 命令（只读本方案生成的文件，忽略用户 `~/.ssh/config`）：
   ```
   ssh -N -T -F /dev/null -i state/tunnel/id_ed25519 -o IdentitiesOnly=yes -o IdentityAgent=none
-      -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=state/tunnel/known_hosts
-      -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3
-      -R 4401:<run/peer.sock> -L <run/tunnel/hub.sock>:127.0.0.1:4319 agenthub-tunnel@<host>
+      -o PreferredAuthentications=publickey -o BatchMode=yes
+      -o StrictHostKeyChecking=yes -o UserKnownHostsFile=state/tunnel/known_hosts -o GlobalKnownHostsFile=/dev/null
+      -o HostKeyAlias=agent-hub-hub -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no
+      -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes
+      -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -o LogLevel=DEBUG1
+      -p 22 -R 4401:<run/peer.sock> -L <run/tunnel/hub.sock>:127.0.0.1:4319 agenthub-tunnel@<host>
   ```
-  `-F /dev/null` 连系统 ssh_config 也不读（ssh(1)：命令行给了配置文件就不读系统那份），免得用户配置里的 ProxyCommand、ControlMaster 混进来。东京主机公钥钉死在 `state/tunnel/known_hosts`（来自连接码）。参数拼装集中在一处（`daemon/tunnel/ssh-args.ts`）。
-- 退避：子进程退出就重连，1→2→4…→60 秒封顶，连上稳定 60 秒后清零。`/d/<东京>` 转发连不上时立刻提前重连一次（省得等退避）。
-- 状态：`connecting | connected | retrying(下次时间) | auth_failed | hostkey_mismatch`。看 ssh 的 stderr 分类：`Permission denied` → `auth_failed`、`REMOTE HOST IDENTIFICATION HAS CHANGED` → `hostkey_mismatch`，这两种不自动重试，网页上给“重试”按钮和原因；`remote port forwarding failed`（东京旧连接还占着 4401）→ 正常退避，45 秒内东京清掉旧连接。
+  `-F /dev/null` 连系统 ssh_config 也不读（ssh(1)：命令行给了配置文件就不读系统那份），免得用户配置里的 ProxyCommand、ControlMaster 混进来。东京主机公钥钉死在 `state/tunnel/known_hosts`（来自连接码），按固定别名 `agent-hub-hub` 记（`HostKeyAlias`），跟连的是 IP 还是域名无关。参数拼装只在一处（`daemon/tunnel/ssh-args.ts`，快照测试）。
+  - `StreamLocalBindUnlink=yes`：ssh 退出时不删 `-L` 建的 `run/tunnel/hub.sock`，下次再建同一个 socket 会失败，配上 `ExitOnForwardFailure` 就一直重连失败；这个选项让 ssh 建之前先删旧的。容器验收里有这一条。
+  - `LogLevel=DEBUG1`：两条转发都建好时 ssh 只在 debug1 里说 `remote forward success for: listen 4401`，靠这一行判断连上（`-R` 是最后建的）。stderr 只按行看，不存（只留最后一行非 debug 的报错当原因）。
+- 退避：子进程退出就重连，1→2→4…→60 秒封顶，连上稳定 60 秒后清零。
+- 提前重连：守护进程留一个入口 `TunnelService.reconnectNow()`，块 B 的转发在 `/d/<东京>` 连不上时调。**一个退避周期里最多提前一次**——退避周期从断开算起，到连上稳定 60 秒（退避清零）为止；免得每个失败的请求都触发重连。在等退避时调：取消定时器马上连；显示连着时调（比如刚睡醒，ssh 还没发现断了）：杀掉旧的马上连；正在连、`auth_failed`、`hostkey_mismatch` 时不做。
+- 状态：`connecting | connected | retrying(下次时间) | auth_failed | hostkey_mismatch`，**只是内部值**，原样进 `/api/state` 的 `tunnel`（`{ state, since, retryAt, detail }`，`detail` 是 ssh 最后一行报错原文）；界面上怎么说由块 E 定。状态一变给每条 WebSocket 发 `resync`，网页重拉快照（不常变，不轮询）。看 ssh 的 stderr 分类：`Permission denied` → `auth_failed`、`REMOTE HOST IDENTIFICATION HAS CHANGED` / `Host key verification failed` → `hostkey_mismatch`，这两种不自动重试，等用户点重试（`TunnelService.retry()`）或重新连；`remote port forwarding failed`（东京旧连接还占着 4401）→ 正常退避，45 秒内东京清掉旧连接。
+- 停止：SIGTERM，3 秒不退 SIGKILL。子进程号记在 `state/tunnel/ssh.pid`；守护进程被强杀留下的 ssh 还占着东京的槽位端口，下次启动时按这个文件找到（命令行里有本机钥匙路径才算）并结束它。
 - 各种情况：
   - **Mac 睡眠**：TCP 断，东京 45 秒内清掉 Mac 的会话，东京网页里 Mac 显示离线（现有 WebSocket 5 秒 ping 更早发现）。醒来后 ssh 自己 45 秒内发现（或 ssh 直接因网络错误退出），守护进程重连，通常醒来几秒到一分钟恢复。
   - **东京重启**：ssh 退出，Mac 按退避重连；东京守护进程由 systemd 拉起。重启期间 Mac 网页里东京离线，不影响本机。
   - **网络切换**（Wi-Fi ↔ 热点）：老 TCP 死掉，同上；ssh 不支持连接迁移，靠重连。
-- 验收（块 C）：用假 ssh（测试里的脚本按指定退出码 / stderr 退出）测退避、状态分类、停止时杀子进程；参数拼装做快照测试；手动：关 Wi-Fi 30 秒再开，一分钟内恢复。
+- 验收（块 C）：用假 ssh（`daemon/tunnel/test-fake-ssh.mjs`，按剧本的退出码 / stderr 退出）测退避、状态分类、提前重连、停止时杀子进程；参数拼装做快照测试；容器里验旧 socket 留着也能重连；手动：关 Wi-Fi 30 秒再开，一分钟内恢复。
 
 ## 7. 第一期：设置步骤
 
-用户最少要做的（加 Mac）：
+命令分两半，分开放：
 
-1. Mac 网页：设置 → 设备 → “连到中心（SSH）”，填东京地址 `18.179.111.112`。守护进程生成专用密钥，显示一条命令（带公钥）：
-   ```
-   ssh -i ~/.ssh/lightsail-tokyo.pem ubuntu@18.179.111.112 'sudo agent-hub hub-device tunnel add --name mac --pubkey "ssh-ed25519 AAAA…"'
-   ```
-   用户在 Mac 终端里粘贴运行（用已有的管理员密钥代装；守护进程不读、不存管理员密钥）。
-2. 这条命令在东京上：第一次时建 `agenthub-tunnel` 用户、写 sshd 片段并校验重载；追加公钥行；分配槽位；输出一行**连接码**（地址、东京主机公钥指纹、槽位端口、设备入口端口、邀请码）。
-3. 用户把连接码贴回 Mac 网页 → 起隧道 → 自动配对 → 设备列表出现东京。
+| 哪一半 | 放哪 | 做什么 |
+|---|---|---|
+| 要 root 的 | `scripts/tunnel-sshd.sh`（bash，东京上由下面的命令 `sudo -n` 调） | 只做三件事：建 `agenthub-tunnel` 用户、写 sshd 片段（第 3 节的比对、校验、reload）、写 / 删钥匙行。删钥匙行时顺带结束这台现存的 ssh 会话（删行不会断已建立的连接；替 `-R` 听槽位端口的是那条会话的进程，按 `ss -tlnp` 找、只杀隧道用户的；root 没有 CAP_SYS_PTRACE 看不到进程号时退回结束隧道用户的全部会话，别的设备 1 秒退避后自己连回来） |
+| 守护进程的 | `daemon/tunnel/`，经本机管理 socket `run/admin.sock` | 生成专用钥匙；东京上分槽位、出邀请码（存 `state/tunnels.json`）；Mac 上收连接码、钉主机公钥、起 ssh |
+| 命令本身 | `node <代码目录>/src/tunnel/main.ts <子命令>`（下称 `tunnel`） | 用户在终端里跑，把上面两半串起来；管理员 ssh 也在这里（用户终端里），守护进程不读、不存管理员钥匙 |
 
-- 以后加第三台（Linux）：同样两步，槽位 4402。东京和它直连；Mac 看它等块 F（第 2 节）。
-- 移除：东京网页或 `tunnel remove --name mac`：删公钥行、槽位、设备记录，并结束那条现存的 ssh 会话（删公钥不会断已建立的连接，按槽位端口找到 sshd 进程结束它）。设备令牌同时作废，应用层也立刻拒。
-- 换钥匙：连入方“重新生成密钥”→ 重做第 1–2 步（`tunnel add` 对同名槽位替换公钥行，保留端口和设备编号）。
+- 管理 socket：`run/` 0700、socket 0600，另外要带界面令牌（命令读 `state/ui-token`，所以要用跑守护进程的那个用户跑；agent 读不到 `state/`）。接口：`POST /tunnel/key`、`/tunnel/connect`、`/tunnel/slots`、`/tunnel/slots/remove`，`GET /tunnel/status`。
+- **连接码**：一行，`ahtun1_` + base64url(JSON)。只有 `[A-Za-z0-9_-]`，贴进终端、网页不用加引号；`1` 是格式版本，改格式换前缀。JSON：`{ host, sshPort, user: "agenthub-tunnel", hostKey: "ssh-ed25519 …", listenPort: 4401, entryPort: 4319, invite }`。地址以 `-` 开头、主机公钥不是 ed25519 等都不认（`shared/tunnel.ts`）。
+
+加 Mac：
+
+1. Mac 上粘一条命令（网页向导，块 E，只显示这条命令；跑完设备自动出现）：
+   ```
+   node ~/agent-hub/src/tunnel/main.ts join -i ~/.ssh/lightsail-tokyo.pem ubuntu@18.179.111.112
+   ```
+   （`~/agent-hub` 是 Mac 上的代码目录，向导按守护进程实际位置写；`--name` 默认取本机名，`-p` 改 ssh 端口，`--remote-dir` 改东京上的代码目录，默认东京用户主目录下的 `agent-hub`。）它在本机做三件事：
+   - 让本机守护进程生成专用钥匙（`state/tunnel/id_ed25519`，已有就沿用），拿回公钥；
+   - 用用户自己的管理员钥匙 `ssh` 到东京，跑 `node agent-hub/src/tunnel/main.ts add --name <名> --host <地址> --ssh-port 22 --pubkey '<公钥>'`（地址、端口先用 `ssh -G` 解析，用户写的是 `~/.ssh/config` 里的别名也行）；
+   - 东京那条在标准输出打的连接码，直接交给本机守护进程（`POST /tunnel/connect`）→ 钉主机公钥、记中心、起隧道 →（块 B）自动配对 → 设备列表出现东京。
+2. 东京上的 `add`（用有免密 sudo 的管理员用户跑）：守护进程分槽位（同名保留端口）、出邀请码 → `sudo -n scripts/tunnel-sshd.sh add-key …` → 读 `/etc/ssh/ssh_host_ed25519_key.pub` → 标准输出只打一行连接码（进度都在标准错误）。
+3. 兜底（`add` 在别的机器上跑的）：Mac 上 `tunnel key` 打印专用公钥，拿去东京跑 `add`，再把连接码交回来：`tunnel connect <连接码>`（网页向导以后也留“贴连接码”的入口，走同一个 `POST /tunnel/connect`）。
+
+- 重复跑收敛：`join`、`add`、`remove` 跑两次结果一样；中途失败（比如东京写了片段还没 reload、sudo 失败）修好后重跑同一条命令就补齐。
+- 以后加第三台（Linux）：同样一条 `join`，槽位 4402。东京和它直连；Mac 看它等块 F（第 2 节）。
+- 移除：东京上 `tunnel remove --name mac`：先 `sudo` 删钥匙行、结束这台现存的 ssh 会话，再让守护进程收回槽位。设备记录、设备令牌作废归块 B（槽位的 `deviceId`）；东京网页上的移除按钮归块 E。
+- 换钥匙：连入方 `tunnel key --regenerate`，再跑一次 `join`（`add` 对同名槽位替换钥匙行，保留端口和设备编号，并断掉旧钥匙的会话）。
 
 ## 8. 统一：连法定义在一处
 
@@ -170,7 +199,7 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
 - **失败限流**（必做）：`/auth` 兑换失败每 IP 每分钟 5 次、全局每小时 30 次，超了公网登录锁 15 分钟并写日志。
 - **会话期限**：公网登录的会话 30 天不活动失效（本机会话不变）；“已登录的浏览器”里标出“经公网”。
 - **passkey（Face ID）**（推荐，第二期后半）：首次批准后提示注册；会话过期后用 passkey 重新登录，不用再找电脑扫码。需要域名（见 9.1）。
-- **一键关闭**：设置 → 设备 → “公网入口”开关：关掉时守护进程停止听 `public.sock`（Caddy 回 502）并让经公网的会话全部下线；ssh 上东京也能 `hub-device public off`。
+- **一键关闭**：设置 → 设备 → “公网入口”开关：关掉时守护进程停止听 `public.sock`（Caddy 回 502）并让经公网的会话全部下线；ssh 上东京也能用命令关（名字到块 G 再定，可并进 `src/tunnel/` 那套命令）。
 - **推送的边界**（PR #141 / #166）：推送订阅仍是 `ENTRY_ONLY_API_PREFIXES`，只给“本机已登录浏览器”。手机经公网登录的会话就是东京本机的会话，所以手机在东京订阅、东京发推送；设备令牌碰不到推送接口，公网入口不新增身份种类。
 
 ### 9.4 Web Push 和主屏 App
@@ -192,8 +221,8 @@ iOS 16.4 起，网页推送只给“添加到主屏幕”的网页 App：要 HTT
 |---|---|---|---|
 | A 设备入口 | `server.ts` 加 `peerSocket` / `peerPort` 监听和 `viaPeerEntry` 分流（第 4 节） | 无 | 第 4 节测试；现有测试全过 |
 | B 隧道表 + 传输解析 | `tunnels.json`、`transport` 字段、`resolvePeerTarget`、`proxy.ts` 走 unix socket、邀请码绑槽位、同步不传隧道地址 | A 的入口名（先约定） | 冒充测试：B 设备报 Mac 编号 409、报回环网址被拒、清单里的隧道地址被忽略；两个守护进程经 socket 互转 HTTP + WS |
-| C ssh 监督 | `daemon/tunnel/`：参数拼装、子进程、退避、状态分类、进 `/api/state` | 无 | 假 ssh 脚本测退避和分类；参数快照 |
-| D 东京端命令 | `hub-device tunnel add/remove`：建用户、sshd 片段、公钥行、槽位、连接码；结束旧会话 | 无 | Ubuntu 24.04 容器里第 3 节第 4 条全部通过 |
+| C ssh 监督 | `daemon/tunnel/`：参数拼装（`ssh-args.ts`）、子进程和退避（`supervisor.ts`）、状态分类、提前重连入口、进 `/api/state` | 无 | 假 ssh 脚本测退避、分类、提前重连、停止杀子进程；参数快照；容器里旧 socket 留着也能重连 |
+| D 两头的命令 | `src/tunnel/`（`join`、`key`、`connect`、`add`、`remove`）+ `scripts/tunnel-sshd.sh`（root：用户、sshd 片段、钥匙行、断旧会话）+ 守护进程的槽位、邀请码、连接码（`daemon/tunnel/service.ts`、`run/admin.sock`） | 无 | `scripts/verify-tunnel-sshd.sh`：Ubuntu 24.04 容器里第 3 节第 4 条全部通过，加 `sshd -T` 比对、重复跑收敛 |
 | E 网页 | 设置 → 设备：连法标签、隧道状态、“连到中心”向导（显示命令、贴连接码）、错误原因和重试 | B、C 的接口 | 按 `docs/ui-standard.md` 截图；断网 / 鉴权失败两种状态截图 |
 | F 中心中转（以后） | 东京允许连入设备经它访问别的连入设备（`/d/` 一跳） | B | 三台互看；中转只到已配对设备 |
 | G 公网入口 | `public.sock`、Host/Origin/Secure、拒设备令牌、待批准会话、限流、会话期限、开关 | A | 每条加固各一个测试 |
@@ -202,12 +231,12 @@ iOS 16.4 起，网页推送只给“添加到主屏幕”的网页 App：要 HTT
 
 第一期 A、C、D 可以同时开工，B 接 A，E 最后；第二期 G 和 H 并行，I 在后。
 
-## 12. 要用户拍板的事
+## 12. 已定
 
-1. **东京用专用用户 `agenthub-tunnel` + sshd 片段**（实现时要改东京 sshd 配置一次）。推荐：是。只靠 `ubuntu` 用户的 authorized_keys 挡不住 unix socket 转发。
-2. **ssh 由守护进程看着**，不用 launchd / systemd。推荐：是（状态进网页、两个系统一份代码）。
-3. **公钥怎么装到东京**：网页显示一条命令，用户用管理员密钥自己跑。推荐：是；守护进程不读管理员密钥。
-4. **第一期只做两台直连**，第三台经中心中转（块 F）以后做。推荐：是；手机 / 东京当入口照样能看全部。
-5. **第二期域名**：推荐买域名（约 10–15 美元 / 年）+ Lightsail 开 443 + Caddy；不想花钱就用东京 Tailscale Funnel。
-6. **公网新浏览器要已登录设备批准 + 失败限流**：推荐必做；passkey 放第二期后半。
-7. **公网会话 30 天不活动失效**：推荐 30 天。
+1. **东京用专用用户 `agenthub-tunnel` + sshd 片段**（实现时要改东京 sshd 配置一次）：按推荐，是。只靠 `ubuntu` 用户的 authorized_keys 挡不住 unix socket 转发。
+2. **ssh 由守护进程看着**，不用 launchd / systemd：按推荐，是（状态进网页、两个系统一份代码）。
+3. **公钥怎么装到东京**：按推荐，用户用管理员钥匙自己跑命令，守护进程不读管理员钥匙；改成 Mac 上只粘一条 `join` 命令（第 7 节），另留贴连接码兜底。
+4. **第一期只做两台直连**，第三台经中心中转（块 F）以后做：按推荐，是。
+5. **第二期域名**：**等用户定**。推荐买域名（约 10–15 美元 / 年）+ Lightsail 开 443 + Caddy；不想花钱就用东京 Tailscale Funnel。
+6. **公网新浏览器要已登录设备批准 + 失败限流**：按推荐，必做；passkey 放第二期后半。
+7. **公网会话 30 天不活动失效**：按推荐，30 天。

@@ -29,6 +29,14 @@ export interface HubPaths {
   pushSubscriptionsFile: string;
   /** state/peers.json：已配对的设备和设备令牌（联机，daemon/peers/store.ts），权限 0600。对方的令牌只存 sha256。 */
   peersFile: string;
+  /** state/tunnels.json：ssh 隧道表（docs/hub-tunnel-design.md 第 5 节，daemon/tunnel/table.ts），0600。中心记槽位，连入方记中心。 */
+  tunnelsFile: string;
+  /** state/tunnel/：连入方的专用钥匙 id_ed25519（0600）、钉死中心主机公钥的 known_hosts、ssh 子进程号文件。 */
+  tunnelDir: string;
+  /** run/tunnel/hub.sock：连入方 ssh -L 建的 socket（0600），转到中心的设备入口。 */
+  tunnelHubSock: string;
+  /** run/admin.sock：本机管理 socket（0600，还要带界面令牌），隧道命令（src/tunnel/）经它找守护进程。 */
+  adminSock: string;
   launchDir: string;
   logsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
@@ -100,6 +108,10 @@ export function resolveHubPaths(
     pushVapidFile: join(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: join(stateDir, "push-subscriptions.json"),
     peersFile: join(stateDir, "peers.json"),
+    tunnelsFile: join(stateDir, "tunnels.json"),
+    tunnelDir: join(stateDir, "tunnel"),
+    tunnelHubSock: join(home, "run", "tunnel", "hub.sock"),
+    adminSock: join(home, "run", "admin.sock"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),

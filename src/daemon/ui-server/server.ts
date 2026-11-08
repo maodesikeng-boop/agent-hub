@@ -93,6 +93,7 @@ import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
 import { peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
+import type { TunnelStatus } from "../../shared/tunnel.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
 import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
@@ -153,6 +154,11 @@ export interface UiServerOptions {
   peers?: Peers;
   /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
   peerProxy?: PeerRoutesOptions["proxy"];
+  /**
+   * ssh 隧道（daemon/tunnel/，docs/hub-tunnel-design.md 第 6 节）：状态原样进 /api/state 的 tunnel（没连过中心是 null）；
+   * 状态一变给每条 WebSocket 发 resync，网页重拉快照。不给 = /api/state 不带 tunnel。
+   */
+  tunnel?: { status(): TunnelStatus | null; onChange(listener: (status: TunnelStatus | null) => void): () => void };
 }
 
 /** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
@@ -772,7 +778,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     }
 
-    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, clientAddress(req)) }));
+    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({
+      ...ledger.snapshot(),
+      server: serverInfoForClient(serverInfo, clientAddress(req)),
+      ...(opts.tunnel ? { tunnel: opts.tunnel.status() } : {}),
+    }));
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       // ?refresh=1 全部重问；?refresh=unusable 只重问这台设备上没登录（没装）的那几家（网页打开厂商下拉时在后台发）
@@ -961,6 +971,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
+      // 隧道状态不在账本的变化流里：变了让网页重拉快照（不常变：连上、断开、重连）
+      if (opts.tunnel) {
+        const offTunnel = opts.tunnel.onChange(() => send({ type: "resync" }));
+        socket.once("close", offTunnel);
+        socket.once("error", offTunnel);
+      }
       // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。设备令牌来的（别的设备直连或转发来的浏览器）不收：
       // 前台状态只属于入口本机已登录的浏览器（跟 /api/push/* 一样）
       if (push !== undefined && sessionOf(req) !== undefined) {
