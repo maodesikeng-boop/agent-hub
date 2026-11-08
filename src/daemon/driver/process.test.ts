@@ -1,13 +1,13 @@
 // 强制结束杀到 claude 的所有后代（冒烟 S10c）：真 claude 的 Bash 工具把命令放进它自己的新进程组，
 // 只按 claude 的进程组杀会把命令留成孤儿。这里先单测“给一张进程表，算出要杀什么”，再用假 claude 起一个
 // 放在新进程组里的子进程，走一遍驱动层每条 SIGKILL 的路径。
-import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PS_TIMEOUT_MS } from "../../shared/index.ts";
-import { forceKill, forceKillTree, killTargets, parsePs, type PsRow } from "./process.ts";
+import { forceKill, forceKillTree, killTargets, parsePs, signalChild, signalTarget, termGroupAfterExit, type PsRow } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 describe("parsePs", () => {
@@ -138,7 +138,16 @@ function pgidOf(pid: number): Promise<number> {
   });
 }
 
-describe("强制结束：claude 起在新进程组里的子进程也要没了", () => {
+const canRunPs = (() => {
+  try {
+    execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+describe.runIf(canRunPs)("强制结束：claude 起在新进程组里的子进程也要没了", () => {
   it("关机超过宽限期", async () => {
     const t = harness({
       driver: { shutdownGraceMs: 200 },
@@ -206,13 +215,18 @@ function detachedSleep120(): number {
   return child.pid!;
 }
 
-/** 进程状态（ps 的 stat 列，比如 S、T）；不在了返回空串。 */
+/** 进程状态（ps 的 stat 列，比如 S、T）；不在了或嵌套沙箱下调不了 /bin/ps 返回空串。 */
 function statOf(pid: number): Promise<string> {
   return new Promise((resolve) => {
-    const ps = spawn("/bin/ps", ["-o", "stat=", "-p", String(pid)]);
-    let out = "";
-    ps.stdout.on("data", (d) => (out += d));
-    ps.on("close", () => resolve(out.trim()));
+    try {
+      const ps = spawn("/bin/ps", ["-o", "stat=", "-p", String(pid)]);
+      let out = "";
+      ps.stdout.on("data", (d) => (out += d));
+      ps.on("error", () => resolve(""));
+      ps.on("close", () => resolve(out.trim()));
+    } catch {
+      resolve("");
+    }
   });
 }
 
@@ -296,5 +310,107 @@ setTimeout(() => process.exit(0), 200);`;
     expect(forceKill(child)).toBe(first);
     await first;
     expect(await goneWithin(child.pid!)).toBe(true);
+  });
+});
+
+describe("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透与进程组清理）", () => {
+  function writeProcEntry(
+    procRoot: string,
+    pid: number,
+    entry: { exe?: string; symlinkExe?: boolean; children?: number[]; nspid?: number[] },
+  ): void {
+    const pDir = join(procRoot, String(pid));
+    const taskDir = join(pDir, "task", String(pid));
+    mkdirSync(taskDir, { recursive: true });
+    if (entry.exe !== undefined) {
+      if (entry.symlinkExe) symlinkSync(entry.exe, join(pDir, "exe"));
+      else writeFileSync(join(pDir, "exe"), entry.exe);
+    }
+    if (entry.children !== undefined) {
+      writeFileSync(join(taskDir, "children"), entry.children.join(" ") + "\n");
+    }
+    if (entry.nspid !== undefined) {
+      writeFileSync(join(pDir, "status"), `Name:\tproc\nPid:\t${pid}\nNSpid:\t${entry.nspid.join("\t")}\n`);
+    }
+  }
+
+  it("非 Linux 平台或 pid 不是 bwrap：直接返回原 pid；pid <= 1 返回 null", () => {
+    const procRoot = mkdtempSync(join(tmpdir(), "fake-proc-"));
+    try {
+      writeProcEntry(procRoot, 500, { exe: "/usr/bin/bwrap", symlinkExe: true, children: [501] });
+      expect(signalTarget(500, "darwin", procRoot)).toBe(500);
+      expect(signalTarget(1, "linux", procRoot)).toBeNull();
+      expect(signalTarget(0, "linux", procRoot)).toBeNull();
+
+      writeProcEntry(procRoot, 600, { exe: "/usr/bin/node", symlinkExe: true, children: [601] });
+      expect(signalTarget(600, "linux", procRoot)).toBe(600);
+      // /proc/<pid> 不存在（例如单测里的假 pid）也按非 bwrap 原样返回 pid
+      expect(signalTarget(999, "linux", procRoot)).toBe(999);
+    } finally {
+      rmSync(procRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("Linux 上 pid 是外层 bwrap（B -> I -> C）：沿 children 找出 NSpid 末位为 2 的内层 CLI 进程 C；找不到返回 null", () => {
+    const procRoot = mkdtempSync(join(tmpdir(), "fake-proc-"));
+    try {
+      // B(700) -> I(701, NSpid: 701 1) -> C(702, NSpid: 702 2) -> W(703, NSpid: 703 3)
+      writeProcEntry(procRoot, 700, { exe: "/usr/bin/bwrap", symlinkExe: true, children: [701], nspid: [700] });
+      writeProcEntry(procRoot, 701, { exe: "/usr/bin/bwrap", symlinkExe: true, children: [702], nspid: [701, 1] });
+      writeProcEntry(procRoot, 702, { exe: "/usr/bin/claude", symlinkExe: true, children: [703], nspid: [702, 2] });
+      writeProcEntry(procRoot, 703, { exe: "/bin/sleep", symlinkExe: true, children: [], nspid: [703, 3] });
+      expect(signalTarget(700, "linux", procRoot)).toBe(702);
+
+      // C 尚未 fork 或已退出（只有 B -> I）时返回 null，避免误向 B 发 SIGINT
+      writeProcEntry(procRoot, 800, { exe: "/usr/bin/bwrap", children: [801], nspid: [800] });
+      writeProcEntry(procRoot, 801, { exe: "/usr/bin/bwrap", children: [], nspid: [801, 1] });
+      expect(signalTarget(800, "linux", procRoot)).toBeNull();
+    } finally {
+      rmSync(procRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("signalChild：有 pid 时对 signalTarget 发信号（target 为 null 不发）；无 pid 时退回 child.kill", () => {
+    const procRoot = mkdtempSync(join(tmpdir(), "fake-proc-"));
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      writeProcEntry(procRoot, 700, { exe: "/usr/bin/bwrap", children: [701], nspid: [700] });
+      writeProcEntry(procRoot, 701, { exe: "/usr/bin/bwrap", children: [702], nspid: [701, 1] });
+      writeProcEntry(procRoot, 702, { exe: "/usr/bin/claude", children: [], nspid: [702, 2] });
+
+      const killFn = vi.fn(() => true);
+      signalChild({ pid: 700, kill: killFn }, "SIGINT", "linux", procRoot);
+      expect(spy).toHaveBeenCalledWith(702, "SIGINT");
+      expect(killFn).not.toHaveBeenCalled();
+
+      spy.mockClear();
+      writeProcEntry(procRoot, 800, { exe: "/usr/bin/bwrap", children: [], nspid: [800] });
+      signalChild({ pid: 800, kill: killFn }, "SIGINT", "linux", procRoot);
+      expect(spy).not.toHaveBeenCalled();
+      expect(killFn).not.toHaveBeenCalled();
+
+      signalChild({ pid: undefined, kill: killFn }, "SIGINT", "linux", procRoot);
+      expect(killFn).toHaveBeenCalledWith("SIGINT");
+    } finally {
+      spy.mockRestore();
+      rmSync(procRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("termGroupAfterExit：macOS 只发 SIGTERM；Linux 先发 SIGTERM 再补发 SIGKILL 终结 namespace PID 1 的 bwrap", () => {
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      termGroupAfterExit({ pid: 500 }, "darwin");
+      expect(spy.mock.calls).toEqual([[-500, "SIGTERM"]]);
+
+      spy.mockClear();
+      termGroupAfterExit({ pid: 500 }, "linux");
+      expect(spy.mock.calls).toEqual([
+        [-500, "SIGTERM"],
+        [-500, "SIGKILL"],
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

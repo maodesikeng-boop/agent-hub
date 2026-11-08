@@ -19,20 +19,20 @@ macOS 沙箱不能嵌套：已经在沙箱里的进程再起 `sandbox-exec` 报 
 
 审批（codex 的 `decideCommandApproval`、`decideFileChangeApproval`）照样按范围判断，在 macOS 上只是多一道，漏了也写不进数据目录。
 
-## 别的系统（没有 sandbox-exec，以后上 Linux 服务器）
+## Linux：整个进程包进 bubblewrap (`bwrap`)
 
-不包进程，**起 Worker 时记一条警告日志**（`[write-scope] … 警告：这台机器没有 OS 沙箱`），不报错、不拦 Worker。各家用兜底，能拦多少拦多少，不比加可写范围之前松：
+Linux 上同样由外层 OS 沙箱（`bwrap`）强制执行（详细设计见 `docs/linux-sandbox-design.md`）：
 
-- claude：设置文件里 `state/` 的拒绝规则 `Edit(//<state>/**)`（`policy.ts` 的 `stateDirDenyRule`）。只管编辑工具，管不住 shell。
-- agy：按工具参数和命令行字面检查（`agy-protocol.ts` 的 `checkWorkerToolViolation`），范围是整个数据目录（之前只查 `state/`）。
-- codex：自己的 `workspace-write` 沙箱，`writableRoots` 去掉数据目录里不能写的；要越出沙箱的命令、改沙箱外文件的审批按范围拒（含 apply_patch 改名的目标 `move_path`、`grantRoot`）。
+- **普通 Worker（`bwrapArgs`）**：`--unshare-user --disable-userns --unshare-pid --proc /proc --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> --ro-bind <dataDir> <dataDir> --bind <writableDir> <writableDir> ...`
+  - 数据目录只读挂载，再把 Worker 自己的可写目录可写绑定回去；
+  - `--unshare-pid --proc /proc` 隐藏沙箱外进程（防读 `/proc/<外部pid>/environ` 偷令牌）并让外层 `bwrap` 退出时由内核自动清掉整个 PID namespace 的残留后代；
+  - `--perms 0700 --tmpfs /run/user/<uid>` 遮住宿主机 systemd user / D-Bus socket，防止借宿主机用户服务代跑写穿；
+  - `--disable-userns` 禁止沙箱内再建嵌套 userns 重新挂载。
+- **只读 Worker**：
+  - claude、codex 继续用各自自带的只读沙箱（claude 用 `bubblewrap + socat`，codex 用 `bwrap + Landlock + seccomp`）；
+  - agy 外层套只读 `bwrap`（`readonlyBwrapArgs`）：`--ro-bind / /`，仅放开私有 `tmpDir`、运行时目录/已存在的匹配文件与缓存目录可写，存在的敏感目录用 `--tmpfs` 遮空、敏感文件（含启动时 `scanSecretGlobs` 在 `cwd` 与 `addDirs` 扫出的 `.env` 等）用 `--ro-bind /dev/null` 遮空。
+- **Ubuntu 24.04+ 一次性配置**：首次部署或 CI 跑 `sudo scripts/linux-sandbox-setup.sh`（装 `bubblewrap`、`socat` 并配置 `/etc/apparmor.d/bwrap` 放行 userns）。`osSandboxAvailable` 只缓存 `true`、不缓存 `false`，配置完成后无需重启守护进程即可派 Worker。
 
-### 字面检查的已知局限（没有 OS 沙箱时）
+## 沙箱不可用时：一律拒绝启动 Worker（不留规则兜底）
 
-命令行检查是 `shared/write-scope.ts` 的 `commandMayWriteOutsideScope`：按 `;`、`&&`、`||`、`|`、`&`、换行拆成一段段，跟着 `cd`、`pushd` 换工作目录（`cd -`、`popd`、带变量的 `cd` 之后看不出在哪，之后的写命令一律算越界），每段看工作目录和每个词落没落在范围外。看不出来的：
-
-- 路径不写在命令行上：变量（`D=~/.agent-hub; touch $D/x`）、`$(...)`、脚本文件里拼出来的路径、`python -c` 里拼的字符串；
-- 软链接：工作目录里一个指向数据目录的链接，按字面在范围内；
-- 命令自己换目录（`git -C`、`make -C` 带相对路径以外的写法、程序内部 `chdir`）。
-
-所以 Linux 上可写范围只是“尽量拦”，要真管住得换成那边的 OS 沙箱（如 bubblewrap / Landlock），到时候在 `WRITE_SCOPE_ENFORCERS` 里加。
+无论普通 Worker 还是只读 Worker、无论哪家厂商，只要当前机器 OS 沙箱未就绪（`!osSandboxAvailable()`），派活（`workers.ts` 的 `startIn`）与驱动层起进程（`spawnInWriteScope` / 只读 agy）**一律直接报错拒绝启动**，并给出修复命令 `sudo scripts/linux-sandbox-setup.sh`，不再退回工具参数或命令行字面规则兜底。

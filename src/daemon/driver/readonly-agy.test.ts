@@ -138,6 +138,7 @@ describe("connectorProbeSandboxInput：探测 MCP 服务器用的只读沙箱", 
     const input = connectorProbeSandboxInput({ homeDir: "/Users/u", tmpDir: "/tmp/probe-1", policy: policy(), realpath: (p) => p });
     expect(input.tmpDir).toBe("/tmp/probe-1");
     expect(input.writableDirs).toEqual(READONLY_CACHE_DIRS.map((d) => `/Users/u/${d}`));
+    expect(input.writableFileGlobs).toEqual([]);
     expect(input.writableFileRegexes).toEqual([]);
     expect(input.secretPaths).toContain("/Users/u/.ssh");
     expect(input.secretPaths).toContain("/Users/u/Library/Keychains");
@@ -156,6 +157,9 @@ describe("agyReadonlySandboxInput", () => {
     // bin/、mcp/ 不整个放开：只有 agentapi 脚本、MCP 工具定义缓存的文件（两层）可写
     expect(input.writableDirs).not.toContain("/Users/u/.gemini/antigravity-cli/bin");
     expect(input.writableDirs).not.toContain("/Users/u/.gemini/antigravity-cli/mcp");
+    expect(input.writableFileGlobs).toContain("/Users/u/.gemini/antigravity-cli/bin/agentapi*");
+    expect(input.writableFileGlobs).toContain("/Users/u/.gemini/antigravity-cli/mcp/*");
+    expect(input.writableFileGlobs).toContain("/Users/u/.gemini/antigravity-cli/mcp/*/*");
     expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/bin/agentapi[^/]*$");
     expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/mcp/[^/]*$");
     expect(input.writableFileRegexes).toContain("^/Users/u/\\.gemini/antigravity-cli/mcp/[^/]*/[^/]*$");
