@@ -101,6 +101,9 @@ importers:
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.3.4
@@ -126,6 +129,9 @@ importers:
       '@types/web-push':
         specifier: ^3.6.4
         version: 3.6.4
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
       '@vitejs/plugin-react':
         specifier: ^6.2.1
         version: 6.2.1(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0))
@@ -1032,6 +1038,9 @@ packages:
 
   '@types/web-push@3.6.4':
     resolution: {integrity: sha512-GnJmSr40H3RAnj0s34FNTcJi1hmWFV5KXugE0mYWnYhgTAHLJ/dJKAwDmvPJYMke0RplY2XE9LnM4hqSqKIjhQ==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -3678,6 +3687,10 @@ snapshots:
   '@types/unist@3.0.3': {}
 
   '@types/web-push@3.6.4':
+    dependencies:
+      '@types/node': 24.19.2
+
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 24.19.2
 

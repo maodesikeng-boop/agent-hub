@@ -84,6 +84,7 @@ describe("骨架", () => {
 describe("各块的入口文件", () => {
   const entries = [
     "src/daemon/main.ts",
+    "src/daemon/entry.ts",
     "src/daemon/store/index.ts",
     "src/daemon/ledger/index.ts",
     "src/daemon/actions/index.ts",

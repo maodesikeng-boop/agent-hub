@@ -40,6 +40,9 @@ import {
   isLoopbackAddress,
   serverInfoForClient,
   TAILSCALE_USER_LOGIN_HEADER,
+  DEVICE_PROXY_PREFIX,
+  ENTRY_ONLY_API_PREFIXES,
+  PEER_DEVICE_HEADER,
   utf8Bytes,
   type AgentVendor,
   type ApiErrorBody,
@@ -85,6 +88,7 @@ import {
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
+import { peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
 import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
@@ -138,6 +142,13 @@ export interface UiServerOptions {
   };
   /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
   serveTarget?: ServeTargetKind;
+  /**
+   * 联机（daemon/peers/）：已配对的设备、设备令牌、入口转发。不给 = 没有 /api/devices、/api/peer/*、/d/，带设备令牌的请求一律 401。
+   * 设备令牌（Authorization: Bearer + x-agent-hub-device）能访问的：/api/ 下除了 ENTRY_ONLY_API_PREFIXES 的；不能用 /d/、/auth。
+   */
+  peers?: Peers;
+  /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
+  peerProxy?: PeerRoutesOptions["proxy"];
 }
 
 /** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
@@ -385,6 +396,18 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   };
   /** 这次请求是哪个会话（认证钩子里认出来的）。 */
   const sessionOf = new WeakMap<FastifyRequest, string>();
+  /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。设备令牌来的没有会话，不记。 */
+  const trackSocket = (req: FastifyRequest, socket: { close(code?: number, reason?: string): void; once(event: "close", fn: () => void): unknown }) => {
+    const sessionId = sessionOf.get(req);
+    if (sessionId === undefined) return;
+    const sockets = socketsBySession.get(sessionId) ?? new Set();
+    sockets.add(socket);
+    socketsBySession.set(sessionId, sockets);
+    socket.once("close", () => {
+      sockets.delete(socket);
+      if (sockets.size === 0 && socketsBySession.get(sessionId) === sockets) socketsBySession.delete(sessionId);
+    });
+  };
   const folderPicker = opts.folderPicker ?? createFolderPicker({ available: serverInfo.folderPicker });
   const app = Fastify({ logger: opts.logger ?? false });
 
@@ -458,11 +481,31 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
    */
   const clientAddress = (req: FastifyRequest) => (tailnetRequests.has(req.raw) ? undefined : req.ip);
 
+  /** 带设备令牌来的请求（别的设备、或别的设备转发来的浏览器请求）→ 是哪台。 */
+  const peerRequests = new WeakMap<IncomingMessage, PeerRecord>();
+  // 设备之间：带了 Authorization 就按设备令牌认（经 serve 来的还要过上面的主人检查）。认不出一律 401 peer_unauthorized，
+  // 对方据此知道本机已经不认它了。没配联机（没给 peers）也是 401。
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.headers.authorization === undefined) return;
+    const peer = opts.peers?.authenticate(req.headers[PEER_DEVICE_HEADER], req.headers.authorization) ?? null;
+    if (peer === null) return fail(reply, 401, "peer_unauthorized");
+    peerRequests.set(req.raw, peer);
+  });
+  /** 是不是 WebSocket 握手（本机的 /api/ws，和转发的 /d/<设备>/api/ws）。 */
+  const isUpgrade = (req: FastifyRequest) => (req.headers.upgrade ?? "").toLowerCase() === "websocket";
+  // 握手被这里的钩子拒了（401、403、404）：@fastify/websocket 自己的钩子排在后面没跑到，不会替它关连接；
+  // 回完响应把连接断掉，不然这条连接一直挂着（关机时还要等它）。
+  app.addHook("onResponse", async (req) => {
+    if (isUpgrade(req)) req.raw.socket.destroy();
+  });
+
   // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
   // 会改状态的请求和 WebSocket 握手必须带同源的 Origin（http://<host>:<实际端口>），没带也拒绝；GET 不查。
+  // 设备之间的请求不查：设备令牌不像 cookie 会被浏览器自动带上，借不了；配对凭邀请码，也不是浏览器发的。
   app.addHook("onRequest", async (req, reply) => {
     const path = req.url.split("?", 1)[0] ?? "";
-    if (SAFE_METHODS.has(req.method) && path !== API_PATHS.ws) return;
+    if (SAFE_METHODS.has(req.method) && path !== API_PATHS.ws && !isUpgrade(req)) return;
+    if (peerRequests.has(req.raw) || path === API_PATHS.peerPair) return;
     // 经 serve 来的：只认 https://<本机 tailnet 名字>（serve 是 443，浏览器不写端口）
     const tailnetName = tailnetRequests.get(req.raw);
     if (tailnetName !== undefined) {
@@ -475,11 +518,19 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (match === null || port === undefined || match[1] !== String(port)) return fail(reply, 403, "forbidden_origin");
   });
 
-  // /api/ 下（含 WebSocket 握手）一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
+  // /api/ 下（含 WebSocket 握手）和转发 /d/ 一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
+  // 设备令牌：只能访问 /api/ 下不是入口专用的（ENTRY_ONLY_API_PREFIXES），不能借本机的转发（/d/）去别的设备。
+  // /api/peer/ 只认设备令牌（pair 凭邀请码，不要令牌），浏览器 cookie 不行。
   app.addHook("onRequest", async (req, reply) => {
     reply.header("cache-control", "no-store");
     const path = req.url.split("?", 1)[0] ?? "";
-    if (path.startsWith("/api/") && !isAuthenticated(req)) return fail(reply, 401, "unauthorized");
+    if (peerRequests.has(req.raw)) {
+      if (!path.startsWith("/api/") || ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix))) return fail(reply, 403, "forbidden_peer");
+      return;
+    }
+    if (path === API_PATHS.peerPair) return;
+    if (path.startsWith("/api/peer/")) return fail(reply, 401, "peer_unauthorized");
+    if ((path.startsWith("/api/") || path.startsWith(`${DEVICE_PROXY_PREFIX}/`)) && !isAuthenticated(req)) return fail(reply, 401, "unauthorized");
   });
 
   app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError, req, reply) => {
@@ -603,6 +654,16 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const origin = tailnetName !== undefined ? `https://${tailnetName}` : `${req.headers["x-forwarded-proto"] === "https" ? "https" : "http"}://${req.headers.host}`;
       return reply.code(201).send({ url: `${origin}/auth#${LOGIN_LINK_FRAGMENT_KEY}=${code}`, expiresAt } satisfies LoginLinkResponse);
     });
+
+    // 联机：设备管理、设备之间、入口转发（daemon/peers/routes.ts）
+    if (opts.peers !== undefined) {
+      routes.register(peerRoutes, {
+        peers: opts.peers,
+        peerOf: (req) => peerRequests.get(req.raw),
+        trackSocket,
+        ...(opts.peerProxy ? { proxy: opts.peerProxy } : {}),
+      });
+    }
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({ ...ledger.snapshot(), server: serverInfoForClient(serverInfo, clientAddress(req)) }));
 
@@ -801,17 +862,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         socket.once("close", forget);
         socket.once("error", forget);
       }
-      // 记下这条连接属于哪个会话：那个会话被退出时当场关掉
-      const sessionId = sessionOf.get(req);
-      if (sessionId !== undefined) {
-        const sockets = socketsBySession.get(sessionId) ?? new Set();
-        sockets.add(socket);
-        socketsBySession.set(sessionId, sockets);
-        socket.once("close", () => {
-          sockets.delete(socket);
-          if (sockets.size === 0 && socketsBySession.get(sessionId) === sockets) socketsBySession.delete(sessionId);
-        });
-      }
+      trackSocket(req, socket);
 
       if (since === undefined) return; // 不带 since：只推之后的新变化
       if (typeof since !== "string" || !NON_NEGATIVE_INT.test(since)) return send({ type: "resync" });

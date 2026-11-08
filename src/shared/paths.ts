@@ -27,6 +27,8 @@ export interface HubPaths {
   pushVapidFile: string;
   /** state/push-subscriptions.json：这台收到的推送订阅（手机 PWA、浏览器），0600。 */
   pushSubscriptionsFile: string;
+  /** state/peers.json：已配对的设备和设备令牌（联机，daemon/peers/store.ts），权限 0600。对方的令牌只存 sha256。 */
+  peersFile: string;
   launchDir: string;
   logsDir: string;
   /** state/logs/setup/：worktree 准备命令的输出，一个 Worker 一个文件（见 workerSetupLogPath）。 */
@@ -92,6 +94,7 @@ export function resolveHubPaths(
     deviceFile: join(stateDir, "device.json"),
     pushVapidFile: join(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: join(stateDir, "push-subscriptions.json"),
+    peersFile: join(stateDir, "peers.json"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),

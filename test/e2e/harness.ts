@@ -27,6 +27,8 @@ import {
 } from "../../src/shared/index.ts";
 
 export const MAIN = new URL("../../src/daemon/main.ts", import.meta.url).pathname;
+/** 认本机回环网址当设备网址的测试入口（联机端到端，同机两个守护进程互相配对）。 */
+export const LOOPBACK_MAIN = new URL("./loopback-daemon.ts", import.meta.url).pathname;
 export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
 
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
@@ -75,7 +77,8 @@ export interface E2eEnv {
   fakeDir: string;
   /** 换剧本：下一次假 claude 起进程时生效。 */
   setScript(script: FakeScript): void;
-  start(options?: { claudePath?: string; env?: Record<string, string> }): Promise<RunningDaemon>;
+  /** main：换守护进程入口（默认 MAIN）。 */
+  start(options?: { claudePath?: string; env?: Record<string, string>; main?: string }): Promise<RunningDaemon>;
   /** 起一个预期马上退出的守护进程（比如第二个），返回退出码和输出。 */
   runToExit(): Promise<{ code: number | null; stdout: string; stderr: string }>;
   log(): FakeLogEntry[];
@@ -122,8 +125,8 @@ export function makeEnv(): E2eEnv {
     ...extra,
   });
 
-  const spawnDaemon = (claudePath: string, extra?: Record<string, string>) => {
-    const child = spawn(process.execPath, [MAIN], { env: baseEnv(claudePath, extra), stdio: ["ignore", "pipe", "pipe"] });
+  const spawnDaemon = (claudePath: string, extra?: Record<string, string>, main = MAIN) => {
+    const child = spawn(process.execPath, [main], { env: baseEnv(claudePath, extra), stdio: ["ignore", "pipe", "pipe"] });
     running.add(child);
     let out = "";
     let err = "";
@@ -152,7 +155,7 @@ export function makeEnv(): E2eEnv {
     fakeDir,
     setScript: (script) => writeFileSync(scriptFile, JSON.stringify(script)),
     async start(options = {}) {
-      const d = spawnDaemon(options.claudePath ?? FAKE_CLAUDE, options.env);
+      const d = spawnDaemon(options.claudePath ?? FAKE_CLAUDE, options.env, options.main);
       const match = await Promise.race([
         waitUntil("login url", () => LOGIN_URL.exec(d.out()) ?? undefined, 15_000),
         d.exited.then(({ code }) => {
