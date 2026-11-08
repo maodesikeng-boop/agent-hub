@@ -10,6 +10,7 @@ import {
   type ApiErrorBody,
   type ApiErrorCode,
   type DeviceInfo,
+  type PeerTransport,
   type PushPayload,
   type WsClientMessage,
 } from "./index.ts";
@@ -66,7 +67,14 @@ describe("联机接口类型", () => {
   });
 
   it("设备清单一项", () => {
-    expectTypeOf<DeviceInfo>().toEqualTypeOf<{ id: string; name: string; platform: string; self: boolean; url: string | null }>();
+    expectTypeOf<DeviceInfo>().toEqualTypeOf<{
+      id: string;
+      name: string;
+      platform: string;
+      self: boolean;
+      url: string | null;
+      transport?: PeerTransport;
+    }>();
   });
 
   it("网页 → 服务端的 WebSocket 消息只有前台上报", () => {

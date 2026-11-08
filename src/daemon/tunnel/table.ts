@@ -119,3 +119,50 @@ export function removeSlot(table: TunnelTable, name: string): { table: TunnelTab
   if (removed === null) return { table, removed: null };
   return { table: { ...table, slots: table.slots.filter((s) => s.name !== name) }, removed };
 }
+
+/** 中心配对成功：把来配对的 deviceId 写进对应 slotPort 的槽位。若该槽位之前绑了别的旧 deviceId，返回 previousDeviceId 供调用方清掉。 */
+export function bindSlotDevice(
+  table: TunnelTable,
+  port: number,
+  deviceId: string,
+): { table: TunnelTable; slot: TunnelSlot | null; previousDeviceId: string | null } {
+  const current = table.slots.find((s) => s.port === port) ?? null;
+  if (current === null) return { table, slot: null, previousDeviceId: null };
+  const previousDeviceId = current.deviceId !== null && current.deviceId !== deviceId ? current.deviceId : null;
+  const updated: TunnelSlot = { ...current, deviceId };
+  const slots = table.slots.map((s) => {
+    if (s.port === port) return updated;
+    if (s.deviceId === deviceId) return { ...s, deviceId: null };
+    return s;
+  });
+  return { table: { ...table, slots }, slot: updated, previousDeviceId };
+}
+
+/** 连入方配对成功：把中心的 deviceId 写进 hub.deviceId 并清掉已用掉的 hub.invite。 */
+export function bindHubDevice(
+  table: TunnelTable,
+  deviceId: string,
+): { table: TunnelTable; previousDeviceId: string | null } {
+  if (table.hub === null) return { table, previousDeviceId: null };
+  const previousDeviceId = table.hub.deviceId !== null && table.hub.deviceId !== deviceId ? table.hub.deviceId : null;
+  return {
+    table: { ...table, hub: { ...table.hub, deviceId, invite: null } },
+    previousDeviceId,
+  };
+}
+
+/** 从 peers 移除设备时同步清掉槽位或 hub 上的 deviceId（保留槽位端口和钥匙指纹）。 */
+export function clearTunnelDevice(table: TunnelTable, deviceId: string): { table: TunnelTable; changed: boolean } {
+  let changed = false;
+  const slots = table.slots.map((s) => {
+    if (s.deviceId !== deviceId) return s;
+    changed = true;
+    return { ...s, deviceId: null };
+  });
+  let hub = table.hub;
+  if (hub !== null && hub.deviceId === deviceId) {
+    changed = true;
+    hub = { ...hub, deviceId: null };
+  }
+  return changed ? { table: { ...table, slots, hub }, changed: true } : { table, changed: false };
+}

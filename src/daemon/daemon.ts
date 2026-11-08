@@ -488,6 +488,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         return allowLoopbackPeers && listeningPort !== undefined ? `http://127.0.0.1:${listeningPort}` : null;
       },
       allowLoopback: allowLoopbackPeers,
+      tunnelsFile: paths.tunnelsFile,
+      hubSocket: paths.tunnelHubSock,
+      reconnectTunnel: () => parts.tunnel?.reconnectNow() ?? false,
       log,
     });
     parts.peers = peers;
@@ -503,12 +506,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         hubSocket: paths.tunnelHubSock,
       },
       entryPort: DEFAULT_PEER_ENTRY_PORT,
-      // 邀请码绑槽位归块 B；现在先用本机的邀请码（10 分钟、用一次）
-      createInvite: () => peers.createInvite(),
+      createInvite: (slotPort) => peers.createTunnelInvite(slotPort),
+      onRemoveDevice: (deviceId) => peers.removeByTunnelSlot(deviceId),
     });
     parts.tunnel = tunnel;
     tunnel.onChange((status) => {
       if (status !== null) log(`${LOG_PREFIX} 隧道：${status.state}${status.detail ? `（${status.detail}）` : ""}`);
+      if (status?.state === "connected") peers.onTunnelConnected();
     });
     await tunnel.start();
     const sha = (value: string) => createHash("sha256").update(value).digest();

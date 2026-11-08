@@ -9,7 +9,7 @@ import { encodeConnectionCode, type TunnelStatus } from "../../shared/tunnel.ts"
 import { TunnelInputError, createTunnelService, type TunnelServiceOptions } from "./service.ts";
 import { buildSshArgs } from "./ssh-args.ts";
 import type { TunnelSupervisor } from "./supervisor.ts";
-import { loadTunnelTable } from "./table.ts";
+import { bindSlotDevice, loadTunnelTable, saveTunnelTable } from "./table.ts";
 
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 const PUB_MAC = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU agent-hub";
@@ -120,10 +120,14 @@ describe("中心：槽位和邀请码", () => {
     expect(loadTunnelTable(paths.tableFile).slots.map((s) => s.name)).toEqual(["mac"]);
   });
 
-  it("删设备：回端口；再删回 null", () => {
-    const svc = service();
+  it("删设备：回端口；槽位绑了 deviceId 时触发 onRemoveDevice；再删回 null", () => {
+    const removedDevices: string[] = [];
+    const svc = service({ onRemoveDevice: (id) => removedDevices.push(id) });
     svc.addSlot({ name: "mac", publicKey: PUB_MAC });
+    const table = loadTunnelTable(paths.tableFile);
+    saveTunnelTable(paths.tableFile, bindSlotDevice(table, TUNNEL_FIRST_SLOT_PORT, "device-mac-1").table);
     expect(svc.removeSlot("mac")).toEqual({ port: TUNNEL_FIRST_SLOT_PORT });
+    expect(removedDevices).toEqual(["device-mac-1"]);
     expect(svc.removeSlot("mac")).toBeNull();
     expect(loadTunnelTable(paths.tableFile).slots).toEqual([]);
   });

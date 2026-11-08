@@ -15,12 +15,22 @@
 // pending 的意思是“对方可能还没存下本机”：这时只收它的请求，不主动找它（不同步、不转发、不在设备列表里）。
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { MAX_REMOVED_PEERS, isDeviceId, normalizeName, type DeviceId, type PeerDevice } from "../../shared/index.ts";
+import {
+  MAX_REMOVED_PEERS,
+  isDeviceId,
+  isRemotePeerTransportKind,
+  normalizeName,
+  type DeviceId,
+  type PeerDevice,
+  type RemotePeerTransportKind,
+} from "../../shared/index.ts";
 import { PEER_TOKEN_PATTERN } from "./tokens.ts";
 
 export type PeerState = "pending" | "paired";
 
 export interface PeerRecord extends PeerDevice {
+  /** 连法：不写默认 tailscale；ssh-tunnel 的设备 url 存 ""，转发地址永远从本机隧道表取。 */
+  transport?: RemotePeerTransportKind;
   state: PeerState;
   /** 进入当前状态的时间（毫秒）：pending 按它过期。 */
   since: number;
@@ -50,6 +60,7 @@ function isRecord(value: unknown): value is PeerRecord {
     normalizeName(r.name) !== null &&
     isPlatform(r.platform) &&
     typeof r.url === "string" &&
+    (r.transport === undefined || isRemotePeerTransportKind(r.transport)) &&
     (r.state === "pending" || r.state === "paired") &&
     typeof r.since === "number" &&
     typeof r.inboundTokenSha256 === "string" &&
