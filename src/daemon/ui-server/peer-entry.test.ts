@@ -2,8 +2,10 @@
 // 只认设备令牌（POST /api/peer/pair 凭邀请码），cookie 完全不看；/auth、静态文件、/d/、入口专用接口一律 403；
 // 不查 Host、Origin；算“不是本机”，不出 Finder 按钮。连入方听 unix socket（0600），中心听 TCP 127.0.0.1。
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
-import { request } from "node:http";
+import { spawnSync } from "node:child_process";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { request, type IncomingHttpHeaders } from "node:http";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,6 +50,7 @@ async function device(peerEntry: { socket: string } | { port: number }): Promise
 
 interface Res {
   status: number;
+  headers: IncomingHttpHeaders;
   body: string;
 }
 
@@ -65,7 +68,7 @@ function send(at: { socketPath: string } | { port: number }, method: string, pat
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
       },
     );
     req.on("error", reject);
@@ -188,6 +191,65 @@ describe("设备入口：TCP 127.0.0.1（中心）", () => {
     const url = `ws://127.0.0.1:${port}${API_PATHS.ws}`;
     expect(await openWs(url, browser)).toBe(401);
     expect(await openWs(url, deviceAuth)).toBe("open");
+  });
+});
+
+describe("认错设备令牌的 401 也带 no-store", () => {
+  const wrongAuth = { authorization: `Bearer ${newPeerToken()}`, [PEER_DEVICE_HEADER]: peer.id };
+
+  it("设备入口（unix socket 和 TCP）", async () => {
+    const socketPath = join(tempDir(), "peer.sock");
+    await device({ socket: socketPath });
+    const socketRes = await send({ socketPath }, "GET", API_PATHS.state, wrongAuth);
+    expect(socketRes.status).toBe(401);
+    expect(socketRes.headers["cache-control"]).toBe("no-store");
+    const byPort = await device({ port: 0 });
+    const portRes = await send({ port: byPort.server.peerEntryPort ?? 0 }, "GET", API_PATHS.state, wrongAuth);
+    expect(portRes.status).toBe(401);
+    expect(portRes.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("界面端口", async () => {
+    const d = await device({ port: 0 });
+    const res = await send({ port: d.port }, "GET", API_PATHS.state, { ...wrongAuth, host: `127.0.0.1:${d.port}` });
+    expect(res.status).toBe(401);
+    expect(res.headers["cache-control"]).toBe("no-store");
+  });
+});
+
+describe("旁路 socket 和 hub.sock 走同一套准备", () => {
+  /** run/ 事先是 0755，peer.sock 放在里面。 */
+  function runDir0755(): { runDir: string; socket: string } {
+    const runDir = join(tempDir(), "run");
+    mkdirSync(runDir, { mode: 0o755 });
+    chmodSync(runDir, 0o755);
+    return { runDir, socket: join(runDir, "peer.sock") };
+  }
+
+  it("run/ 事先是 0755：启动后 run/ 是 0700、peer.sock 是 0600", async () => {
+    const { runDir, socket } = runDir0755();
+    await device({ socket });
+    expect(statSync(runDir).mode & 0o777).toBe(0o700);
+    expect(statSync(socket).mode & 0o777).toBe(0o600);
+  });
+
+  it("peer.sock 上已有活的监听者：拒绝启动，不动它", async () => {
+    const { socket } = runDir0755();
+    const other = createServer((s) => s.end());
+    await new Promise<void>((resolve) => other.listen(socket, resolve));
+    cleanups.push(() => new Promise<void>((resolve) => other.close(() => resolve())));
+    await expect(startTestDevice({ seed: [peer], peerEntry: { socket } })).rejects.toThrow(/已有守护进程在跑/);
+    expect(lstatSync(socket).isSocket()).toBe(true);
+  });
+
+  it("peer.sock 是残留的死 socket：删掉后正常启动", async () => {
+    const { socket } = runDir0755();
+    // 另一个进程 listen 之后不 close 直接退出：socket 文件留在盘上，没人监听
+    const child = spawnSync(process.execPath, ["-e", `require("node:net").createServer().listen(${JSON.stringify(socket)}, () => process.exit(0))`], { encoding: "utf8" });
+    expect(child.status).toBe(0);
+    expect(lstatSync(socket).isSocket()).toBe(true);
+    await device({ socket });
+    expect((await send({ socketPath: socket }, "GET", API_PATHS.state, deviceAuth)).status).toBe(200);
   });
 });
 
