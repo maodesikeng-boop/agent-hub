@@ -38,28 +38,28 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import {
-  defaultAgyFallbackPaths,
-  defaultClaudeFallbackPaths,
-  defaultCodexFallbackPaths,
   findExecutable,
-  resolveExecutable,
   VENDOR_FALLBACK_PATHS,
   resolveHubPaths,
+  resolveVendorExecutables,
   workerSetupLogPath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
-import { createVendorCatalogSources, createVendorComposers, type VendorCatalogSourceOptions } from "./vendors/index.ts";
+import {
+  DAEMON_VENDORS,
+  createVendorCatalogSources,
+  createVendorDrivers,
+  type VendorCatalogSourceOptions,
+  type VendorComposer,
+  type VendorDriverDeps,
+} from "./vendors/index.ts";
 import { createWorkspaceFiles } from "./workspace-files.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import {
-  createAgyDriver,
-  createClaudeDriver,
-  createCodexDriver,
   createModelCatalogs,
   createMultiVendorDriver,
-  queryClaudeInitialize,
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
@@ -142,9 +142,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
-  const claudePath = resolveExecutable(paths.claudePath, env.PATH, defaultClaudeFallbackPaths(options.userHome));
-  const agyPath = resolveExecutable(paths.agyPath, env.PATH, defaultAgyFallbackPaths(options.userHome));
-  const codexPath = resolveExecutable(paths.codexPath, env.PATH, defaultCodexFallbackPaths(options.userHome));
+  const executables = resolveVendorExecutables(paths, env.PATH, options.userHome);
+  const executablePaths = Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, executables[vendor].path])) as Record<AgentVendor, string>;
   const port = parsePort(env[ENV_PORT]);
 
   // 启动到哪一步，关机就关到哪一步；顺序固定：准备命令 → 执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
@@ -200,7 +199,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         }
       });
     }
-    if (driver) await step("claude", () => driver.shutdown());
+    if (driver) await step("驱动层", () => driver.shutdown());
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
     // 隧道：先关管理 socket（不再收命令），再停 ssh 子进程
@@ -246,11 +245,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
     // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
     // 账本写系统消息时用它缓存着的显示名
-    const executables: Record<AgentVendor, { cmd: string; path: string }> = {
-      claude: { cmd: paths.claudePath, path: claudePath },
-      agy: { cmd: paths.agyPath, path: agyPath },
-      codex: { cmd: paths.codexPath, path: codexPath },
-    };
     const models = createModelCatalogs({
       sources: createVendorCatalogSources(
         Object.fromEntries(
@@ -328,26 +322,31 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const launch = { store: sessions, log, prepareLaunch, personaNote, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
-      drivers: {
-        claude: createClaudeDriver({ claudePath, ...launch }),
-        agy: createAgyDriver({ agyPath, ...launch }),
-        codex: createCodexDriver({
-          codexPath,
-          ...launch,
-          // 没选模型时用名单里 codex 报的默认（名单有缓存，不是每次起会话都问）
-          defaultModel: async () => (await models.list()).find((c) => c.vendor === "codex")?.defaultModelId ?? null,
-        }),
-      },
+      drivers: createVendorDrivers(
+        Object.fromEntries(
+          AGENT_VENDORS.map((vendor) => [
+            vendor,
+            {
+              executablePath: executables[vendor].path,
+              ...launch,
+              ...(VENDOR_SPECS[vendor].explicitDefaultModel
+                ? {
+                    // 没选模型时用名单里厂商报的默认（名单有缓存，不是每次起会话都问）
+                    defaultModel: async () => (await models.list()).find((c) => c.vendor === vendor)?.defaultModelId ?? null,
+                  }
+                : {}),
+            },
+          ]),
+        ) as Record<AgentVendor, VendorDriverDeps>,
+      ),
     });
     parts.driver = driver;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
     // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个对应厂商 CLI 在会话的目录里问；会话中途推来的新名单直接更新缓存
     const commands = createCommandCatalogs({
-      vendors: createVendorComposers({
-        claude: { claudePath, queryInitialize: queryClaudeInitialize },
-        agy: { agyPath },
-        codex: { codexPath },
-      }),
+      vendors: Object.fromEntries(
+        AGENT_VENDORS.map((vendor) => [vendor, DAEMON_VENDORS[vendor].createComposer({ executablePath: executables[vendor].path })]),
+      ) as Record<AgentVendor, VendorComposer>,
       queryRunning: (sessionId) => driver.queryCommands(sessionId),
       log,
     });
@@ -439,7 +438,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
     // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
     // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
-    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths: { claude: claudePath, codex: codexPath, agy: agyPath }, log });
+    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths, log });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
 
@@ -448,10 +447,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
-    // 额度：agy 的只能另起进程问，网页打开额度面板时才问（缓存 5 分钟）
-    const agyQuotaSpec = VENDOR_SPECS.agy.quota?.fetched;
+    // 额度：事件流里没有额度的厂商只能另起进程问，网页打开额度面板时才问（缓存 5 分钟）
+    const fetchedQuotaVendor = AGENT_VENDORS.find((v) => VENDOR_SPECS[v].quota?.fetched !== undefined);
+    const fetchedQuotaSpec = fetchedQuotaVendor !== undefined ? VENDOR_SPECS[fetchedQuotaVendor].quota?.fetched : undefined;
     const quota = createFetchedQuota({
-      query: agyQuotaSpec && (() => queryFetchedQuota({ path: agyPath, spec: agyQuotaSpec, cwd: options.userHome })),
+      query:
+        fetchedQuotaVendor !== undefined && fetchedQuotaSpec !== undefined
+          ? () => queryFetchedQuota({ path: executables[fetchedQuotaVendor].path, spec: fetchedQuotaSpec, cwd: options.userHome })
+          : undefined,
     });
     // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
     const rotateToken = () => {
