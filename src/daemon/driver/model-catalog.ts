@@ -481,8 +481,12 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
     const onAbort = () => finish(new Error("cancelled"));
     signal?.addEventListener("abort", onAbort);
     const timer = setTimeout(() => finish(new Error(`codex 超时（${timeoutMs} ms 没回 ${label}）`)), timeoutMs);
-    const errorText = (error: unknown) =>
-      typeof (error as { message?: unknown })?.message === "string" ? (error as { message: string }).message : JSON.stringify(error);
+    // 失败原因只取 message，不把整个错误对象 JSON.stringify 进去（用户看到的话里不出现 `{"`）
+    const errorText = (error: unknown) => {
+      const { message, code } = (typeof error === "object" && error !== null ? error : {}) as { message?: unknown; code?: unknown };
+      if (typeof message === "string" && message !== "") return message;
+      return typeof code === "number" || typeof code === "string" ? `未知错误（错误码 ${code}）` : "未知错误";
+    };
 
     child.once("error", (error) => finish(new Error(`${codexPath}: ${error.message}`)));
     child.stdin.on("error", () => {});

@@ -20,6 +20,7 @@
 // H 的 meta 里另记几个字段（只有这里用）：handoverId、requestedAt、startedAt 和 turnStartId（H 开始处理的时间、那时库里最大的消息编号）、
 // writing（agent 正在写交接的那一轮，见 messages.ts）、abandoned（超时请驱动层停掉了）、interruptedBy（用户发消息打断的）。R 的 meta 另记 seen。
 import { agentTextOf } from "../../shared/attachments.ts";
+import { describeFailure } from "../../shared/errors.ts";
 import { systemEventOf, systemMessageDedupeKey, workerEventOf } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
@@ -304,7 +305,15 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       if (stillCurrent(session)) insertRow(p, session, true);
       return;
     }
-    insertSystemMessage(p, row.conversation_id, { event: "handover.failed", handoverId: row.id, attempt: 1 }, HANDOVER_NOT_WRITTEN_TEXT);
+    const detail = kind === HANDOVER_REASONS.error || kind === HANDOVER_REASONS.failed ? reason.slice(kind.length + 1).trim() : "";
+    // 认得出的失败（繁忙、额度、断网……）才补一句人话；认不出的不写“出错了”凑数，原文照样存进 meta
+    const failure = detail === "" ? undefined : describeFailure(detail);
+    insertSystemMessage(
+      p,
+      row.conversation_id,
+      { event: "handover.failed", handoverId: row.id, attempt: 1, ...(detail === "" ? {} : { rawReason: detail }) },
+      failure === undefined || failure.kind === "unknown" ? HANDOVER_NOT_WRITTEN_TEXT : `${HANDOVER_NOT_WRITTEN_TEXT}：${failure.text}`,
+    );
     // 不马上接着自动试：对话够长的话，下一轮结束时照常进队列
     queue.delete(row.conversation_id);
   };

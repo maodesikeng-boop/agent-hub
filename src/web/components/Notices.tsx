@@ -1,6 +1,6 @@
 import { Loader2, TriangleAlert, WifiOff } from "lucide-react";
 import { HEALTH_FAILURE_THRESHOLD, type HealthEntry } from "../../shared/index.ts";
-import { describeFailure } from "../errors.ts";
+import { describeFailure } from "../../shared/errors.ts";
 import { cn } from "../lib/utils.ts";
 
 // 只用底色，不加阴影和描边（docs/ui-standard.md 第 4 条）

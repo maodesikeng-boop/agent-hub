@@ -579,10 +579,20 @@ describe("没成：失败、超时、空文字、退避", () => {
     expect(ledger.claimHandover()).not.toBeNull();
   });
 
+  it("没成的原因是厂商原文：对话里提示写成人话，原文存在 meta.rawReason", () => {
+    ledger.renewSession(pmId);
+    const job = ledger.claimHandover()!;
+    const raw = 'API Error: 529 {"type":"overloaded_error"}';
+    ledger.handoverFailed(job.handoverId, { kind: "error", detail: raw });
+    expect(notices()).toEqual([`${HANDOVER_NOT_WRITTEN_TEXT}：Claude 服务繁忙，稍后重试`]);
+    const message = messages().find((m) => systemEventOf(m)?.event === "handover.failed")!;
+    expect(message.meta).toMatchObject({ rawReason: raw });
+  });
+
   it("手动的没成：对话里提示一句，不自动重试；对不上的报告静默忽略", () => {
     ledger.renewSession(pmId);
     const job = ledger.claimHandover()!;
-    ledger.handoverFailed(job.handoverId, { kind: "error", detail: "x" });
+    ledger.handoverFailed(job.handoverId, { kind: "timeout", detail: "" });
     expect(notices()).toEqual([HANDOVER_NOT_WRITTEN_TEXT]);
     expect(rows()).toHaveLength(1);
     ledger.handoverFailed(job.handoverId, { kind: "error", detail: "又报一次" });
@@ -810,7 +820,7 @@ describe("手动开新会话（renewSession）", () => {
     const job = ledger.claimHandover()!;
     expect(ledger.renewSession(pmId).handoverId).toBe(job.handoverId);
     expect(rows()).toMatchObject([{ auto: 0, status: "forking" }]);
-    ledger.handoverFailed(job.handoverId, { kind: "error", detail: "x" });
+    ledger.handoverFailed(job.handoverId, { kind: "timeout", detail: "" });
     expect(notices()).toEqual([HANDOVER_NOT_WRITTEN_TEXT]);
   });
 });

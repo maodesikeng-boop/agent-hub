@@ -416,7 +416,7 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * - schedule.created / removed（M6）：项目经理用 hub schedule add / remove 建了、删了定时任务，只给人看；
  * - schedule.run：到点了，这一条要交给项目经理（status 从 queued 起，登记 session.send，source system），text 以
  *   “【定时任务：名字（原定 09:00）】”开头，后面是任务说明；catchUp 是补跑（睡眠、守护进程没开错过的，只补一次）；
- * - schedule.failed：这一轮失败或会话起不来，“定时任务没跑成：名字：原因”，只给人看；messageId 是失败的那条 schedule.run 消息。
+ * - schedule.failed：这一轮失败或会话起不来，“定时任务没跑成：名字：原因”，只给人看；messageId 是失败的那条 schedule.run 消息；rawReason 是失败原因原文（正文是人话）。
  * 网页显示时一律过一遍 stripSystemPrefix（老数据里发给过 agent 的带【系统】），不显示投递状态。
  *
  * 开新会话（资料页的按钮，或对话太长时自动换，见 ledger/handover.ts、docs/background-handover-design.md）。用户看来是同一个对话，
@@ -427,7 +427,7 @@ export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
  * - session.renewed：换代那一刻记的一行（sessionId 是新一代，status null，不单独发给 agent），text 是交接全文，handoverId 是 handovers 那一行。
  *   网页显示成分隔线，点开看交接。新会话不另开一轮：换代时定稿的开场说明（交接 + 原话）由驱动层拼在下一条真正写给它的消息前面
  *   （DriverOptions.sessionPreamble）；turnStartId 只有本会话写交接才有：交接那一轮开始时库里最大的消息编号（之后来的消息排在分隔线下面）；
- * - handover.failed：只给人看。用户点的开新会话没写成（没换代）。handoverId 是那一行（老数据是 messageId：那条 H，attempt 是它第几次没成）。
+ * - handover.failed：只给人看。用户点的开新会话没写成（没换代）。rawReason 是厂商原文（正文只写人话，原文留着排查）。handoverId 是那一行（老数据是 messageId：那条 H，attempt 是它第几次没成）。
  *   自动换的没写成不提示，按退避再试。
  * - context.compacted：agent 压缩了上下文（用户发了 /compact，或者自动压缩；驱动层的 context.compacted），“已压缩上下文”，
  *   只给人看。发在这个会话所在的对话里（项目经理、Worker 的都有）；uuid 是 claude 那一行事件的，重放不会记两条。
@@ -440,11 +440,11 @@ export type SystemMessageMeta =
   | { event: "persona.changed"; pmId: PmId; personaChangeId: PersonaChangeId; revertOf: PersonaChangeId | null }
   | { event: "handover.requested"; sessionId: SessionId; auto?: boolean }
   | { event: "session.renewed"; sessionId: SessionId; fromSessionId: SessionId; turnStartId?: MessageId; auto?: boolean; handoverId?: number }
-  | { event: "handover.failed"; messageId?: MessageId; handoverId?: number; attempt: number }
+  | { event: "handover.failed"; messageId?: MessageId; handoverId?: number; attempt: number; rawReason?: string }
   | { event: "schedule.created"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
-  | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId }
+  | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null };
 
 /**
