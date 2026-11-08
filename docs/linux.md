@@ -118,3 +118,4 @@ macOS 上整个 Worker 进程包在 `sandbox-exec` 里，数据目录强制不�
 | CLI 查找 | `PATH`；codex 另看 ChatGPT.app 里带的 | `PATH`，再 `~/.local/bin`、`~/.npm-global/bin`、`/usr/local/bin`、Linuxbrew |
 | agent 接口 socket 路径上限 | 103 字节 | 107 字节（用同一个更保守的 103，不放宽） |
 | 发给用户的文件，不许分享的路径 | 另含 `Library/Keychains` 等 | 另含 `~/.local/share/keyrings`、浏览器配置、`/proc` |
+| 防闲置睡眠 | 有会话在干活时起 `/usr/bin/caffeinate -i -w <守护进程 pid>`，全闲下来 2 分钟后结束（合盖用电池照样会睡，macOS 强制） | 无（服务器常开；以后支持 Linux 笔记本再加 `systemd-inhibit`） |

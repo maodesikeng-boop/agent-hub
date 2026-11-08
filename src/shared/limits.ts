@@ -431,3 +431,7 @@ export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
 export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
 /** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
 export const PEER_WS_PING_MS = 5_000;
+
+// ---- 防闲置睡眠（daemon/platform/sleep.ts） ----
+/** 有会话在跑时起防闲置睡眠进程（macOS 的 caffeinate）；全部回到空闲后等这么久（2 分钟）再结束，免得两轮之间来回起停。 */
+export const SLEEP_INHIBIT_GRACE_MS = 120_000;
