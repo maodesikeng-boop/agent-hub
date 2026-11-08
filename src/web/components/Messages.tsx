@@ -362,14 +362,14 @@ function SystemNotice({ message, actions, inTurn = false }: { message: Message; 
         ? describeFailure(text.slice(prefix.length), { unknown: "raw", vendor: actions.vendorOf?.(message.conversationId) }).text
         : null;
       return (
-        <NoticeLine icon={CircleX} danger title={text} inTurn={inTurn}>
+        <NoticeLine icon={CircleX} danger title={event.rawReason ?? text} inTurn={inTurn}>
           <span>{reason === null ? text : `定时任务「${event.name}」没跑成：${reason}`}</span>
         </NoticeLine>
       );
     }
     case "handover.failed":
       return (
-        <NoticeLine icon={CircleX} danger inTurn={inTurn}>
+        <NoticeLine icon={CircleX} danger title={event.rawReason} inTurn={inTurn}>
           <span>{text}</span>
         </NoticeLine>
       );

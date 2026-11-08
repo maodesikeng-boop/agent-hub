@@ -309,6 +309,16 @@ describe("T7 失败记失败，对话里有说明", () => {
     expect(failure!.text).toBe("定时任务没跑成：日报：Claude 服务繁忙，稍后重试");
     expect(failure!.text).not.toContain("{");
     expect(failure!.meta).toMatchObject({ rawReason: raw });
+
+    // 认不出的 JSON 原文（{ 开头）：正文写“出错了”，不把 JSON 拼进正文，rawReason 保留原文
+    now = local(5, 9);
+    ledger.runDueSchedules(now);
+    const unknownJson = '{"type":"error","message":"mystery"}';
+    ledger.onActionFailed(sendActions().at(-1)!, unknownJson);
+    const second = notesIn("schedule.failed")[1]!;
+    expect(second.text).toBe("定时任务没跑成：日报：出错了");
+    expect(second.text).not.toContain("{");
+    expect(second.meta).toMatchObject({ rawReason: unknownJson });
   });
 
   it("被用户停止的不算失败；不是定时任务发的失败消息不碰", () => {

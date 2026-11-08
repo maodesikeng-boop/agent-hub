@@ -136,6 +136,6 @@ export function describeFailure(raw: string, options: { unknown?: "generic" | "r
   // 网络断了排在厂商的“服务繁忙”前面：“Connection error” 不是对方忙
   if (NETWORK.test(raw) && vendor?.kind !== "start" && vendor?.kind !== "missing") return { kind: "network", text: TEXT.network(""), raw };
   if (vendor) return { kind: vendor.kind, text: TEXT[vendor.kind](vendor.serviceName), raw };
-  const text = options.unknown === "raw" && raw.trim() !== "" ? raw : UNKNOWN_TEXT;
+  const text = options.unknown === "raw" && raw.trim() !== "" && !raw.trimStart().startsWith("{") ? raw : UNKNOWN_TEXT;
   return { kind: "unknown", text, raw };
 }

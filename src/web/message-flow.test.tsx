@@ -305,16 +305,36 @@ describe("系统行", () => {
     expect(run.compareDocumentPosition(heads(container)[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("定时任务没跑成：很淡的一行，原因写成人话，原文在 title", () => {
+  it("定时任务没跑成、换会话失败：很淡的一行，原因写成人话，meta.rawReason 在 [data-notice] 的 title（老数据回退到 text）", () => {
     list([
       makeSystemMessage({
         id: 1,
         text: "定时任务没跑成：日报：claude_not_found: spawn claude ENOENT",
         event: { event: "schedule.failed", scheduleId: 1, name: "日报", messageId: 9 },
       }),
+      makeSystemMessage({
+        id: 2,
+        text: "定时任务没跑成：巡检：Claude 服务繁忙，稍后重试",
+        event: { event: "schedule.failed", scheduleId: 2, name: "巡检", messageId: 10, rawReason: 'API Error: 529 {"type":"overloaded_error"}' },
+      }),
+      makeSystemMessage({
+        id: 3,
+        text: "交接没写成，没换会话：Claude 服务繁忙，稍后重试",
+        event: { event: "handover.failed", handoverId: 5, attempt: 1, rawReason: 'API Error: 529 {"type":"overloaded_error"}' },
+      }),
     ]);
-    const text = screen.getByText(/定时任务「日报」没跑成：找不到 Claude/);
-    expect(text.closest("[title]")).toHaveAttribute("title", "定时任务没跑成：日报：claude_not_found: spawn claude ENOENT");
+    expect(screen.getByText(/定时任务「日报」没跑成：找不到 Claude/).closest("[data-notice]")).toHaveAttribute(
+      "title",
+      "定时任务没跑成：日报：claude_not_found: spawn claude ENOENT",
+    );
+    expect(screen.getByText(/定时任务「巡检」没跑成：Claude 服务繁忙，稍后重试/).closest("[data-notice]")).toHaveAttribute(
+      "title",
+      'API Error: 529 {"type":"overloaded_error"}',
+    );
+    expect(screen.getByText("交接没写成，没换会话：Claude 服务繁忙，稍后重试").closest("[data-notice]")).toHaveAttribute(
+      "title",
+      'API Error: 529 {"type":"overloaded_error"}',
+    );
   });
 
   it("一轮结束后的系统行不并进这一轮：排在复制和时间后面", () => {

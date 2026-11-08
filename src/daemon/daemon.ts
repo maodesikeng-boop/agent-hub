@@ -86,11 +86,13 @@ import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
 import { createTunnelService, startTunnelAdmin, type RunningTunnelAdmin, type TunnelService } from "./tunnel/index.ts";
 import {
+  createSleepInhibitor,
   createTailnetProbe,
   runTailscaleStatus,
   serveCommandLine,
   serveTargetKind,
   tailscaleCommand,
+  type SleepInhibitor,
   type TailnetProbe,
 } from "./platform/index.ts";
 
@@ -165,6 +167,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     db?: Db;
     lock?: DirLock;
     stopFileCleanup?: () => void;
+    sleepInhibitor?: SleepInhibitor;
     unsubscribe: Unsubscribe[];
   } = { unsubscribe: [] };
   const step = async (what: string, fn: () => unknown) => {
@@ -178,6 +181,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
+    parts.sleepInhibitor?.stop();
     // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
     if (handoverRunner) {
       await step("后台写交接", async () => {
@@ -281,6 +285,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     const sessions = createSessionStore(db);
+    // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）
+    const sleepInhibitor = createSleepInhibitor();
+    parts.sleepInhibitor = sleepInhibitor;
+    parts.unsubscribe.push(
+      ledger.onChange((change) => {
+        if (change.type === "session.status") sleepInhibitor.onSessionStatus(change.data.session);
+      }),
+    );
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
     //    令牌只有这一份：agent 接口认人、prepareLaunch 发、session.end 处理函数作废，用的都是它
     const tokens = createSessionTokens();

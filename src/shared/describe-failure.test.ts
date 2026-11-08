@@ -32,9 +32,19 @@ describe("describeFailure：错误分类", () => {
     expect(describeFailure("agy_not_found: /x/agy: spawn ENOENT", { vendor: "agy" })).toMatchObject({ kind: "missing", text: "找不到 Antigravity" });
   });
 
-  it("未知：默认写“出错了”；要原样的（已经是给人看的话）传 raw", () => {
+  it("未知：默认写“出错了”；要原样的（已经是给人看的话）传 raw，认不出的 JSON 原文仍写“出错了”", () => {
     expect(describeFailure("disk full: /tmp")).toEqual({ kind: "unknown", text: "出错了", raw: "disk full: /tmp" });
     expect(describeFailure("被停止了", { unknown: "raw" })).toEqual({ kind: "unknown", text: "被停止了", raw: "被停止了" });
+    expect(describeFailure('{"type":"error","message":"mystery"}', { unknown: "raw" })).toEqual({
+      kind: "unknown",
+      text: "出错了",
+      raw: '{"type":"error","message":"mystery"}',
+    });
+    expect(describeFailure('  {"error":"weird"}', { unknown: "raw" })).toEqual({
+      kind: "unknown",
+      text: "出错了",
+      raw: '  {"error":"weird"}',
+    });
     expect(describeFailure("")).toMatchObject({ kind: "unknown", text: "出错了" });
   });
 });
