@@ -39,7 +39,7 @@ import {
   type WorkerMessageMeta,
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
-import { describeFailure } from "../errors.ts";
+import { describeFailure } from "../../shared/errors.ts";
 import { errorLine, errorTitle, formatTime, STATUS_LABELS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";

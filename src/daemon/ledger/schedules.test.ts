@@ -272,8 +272,8 @@ describe("T7 失败记失败，对话里有说明", () => {
     expect(failure).toMatchObject({
       sender: "system",
       status: null,
-      text: "定时任务没跑成：日报：claude_not_found: 没找到 claude",
-      meta: { event: "schedule.failed", scheduleId: schedule.id, name: "日报", messageId: run.id },
+      text: "定时任务没跑成：日报：找不到 Claude",
+      meta: { event: "schedule.failed", scheduleId: schedule.id, name: "日报", messageId: run.id, rawReason: "claude_not_found: 没找到 claude" },
     });
     expect(notesIn("schedule.failed")).toHaveLength(1);
     // 对话最后一条是系统消息、不是用户发的：网页现有的“等你”通知会弹（见 src/web/notify.ts）
@@ -296,6 +296,19 @@ describe("T7 失败记失败，对话里有说明", () => {
     expect(row(schedule.id)).toMatchObject({ lastStatus: "failed", lastError: expect.stringContaining("出错了") });
     expect(notesIn("schedule.failed")).toHaveLength(1);
     expect(notesIn("schedule.failed")[0]!.text).toMatch(/^定时任务没跑成：日报：.*出错了/);
+  });
+
+  it("失败原因是厂商原文（含 JSON）：正文是人话，不带原文；原文存在 meta.rawReason", () => {
+    add();
+    now = local(4, 9);
+    ledger.runDueSchedules(now);
+    const run = runsIn()[0]!;
+    const raw = 'error_during_execution: API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}';
+    failTurn(run.id, { subtype: "error_during_execution", message: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}' });
+    const [failure] = notesIn("schedule.failed");
+    expect(failure!.text).toBe("定时任务没跑成：日报：Claude 服务繁忙，稍后重试");
+    expect(failure!.text).not.toContain("{");
+    expect(failure!.meta).toMatchObject({ rawReason: raw });
   });
 
   it("被用户停止的不算失败；不是定时任务发的失败消息不碰", () => {
