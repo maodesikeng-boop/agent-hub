@@ -674,6 +674,7 @@ export function createLedgerPersona(
         }
         db.run("DELETE FROM pm_archives WHERE pm_id = ?", pmId);
         db.run("DELETE FROM pms WHERE id = ?", pmId);
+        p.changes.push({ type: "pm.removed", data: { pmId } });
 
         p.after.push(() => {
           if (personasDir !== undefined) {

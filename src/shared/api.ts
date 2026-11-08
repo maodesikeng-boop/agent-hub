@@ -40,6 +40,10 @@ export const API_PATHS = {
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
   /** POST，没有请求体 → 202 RenewSessionResponse：开新会话（后台写交接，写好后换代，见 ledger/handover.ts）。 */
   renewSession: (pmId: PmId) => `/api/pms/${pmId}/renew-session`,
+  /** POST，没有请求体 → ArchivePmResponse：归档项目经理。 */
+  archivePm: (id: PmId) => `/api/pms/${id}/archive`,
+  /** POST，没有请求体 → ArchivePmResponse：恢复已归档的项目经理。 */
+  unarchivePm: (id: PmId) => `/api/pms/${id}/unarchive`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
   /**
@@ -316,6 +320,11 @@ export interface RenewSessionResponse {
   handoverId: number;
 }
 
+/** POST /api/pms/:id/archive、POST /api/pms/:id/unarchive 的响应。 */
+export interface ArchivePmResponse {
+  pm: Pm;
+}
+
 /** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */
 export interface RetryMessageResponse {
   messageId: MessageId;
@@ -344,6 +353,7 @@ export const CHANGE_TYPES = [
   "health.updated",
   "pm.created",
   "pm.updated",
+  "pm.removed",
   "project.created",
   "folders.updated",
   "conversation.created",
@@ -362,6 +372,8 @@ export interface ChangeDataMap {
   "pm.created": { pm: Pm };
   /** 模式、名字等变了（改性格设定只改了正文也推，资料页据此重新拉 persona）。 */
   "pm.updated": { pm: Pm };
+  /** 归档已满 7 天被到期清理删除。 */
+  "pm.removed": { pmId: PmId };
   "project.created": { project: Project };
   /** 某个项目没移除的文件夹整个换成这一份（挂、移除、建项目时）。 */
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };

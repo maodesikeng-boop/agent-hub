@@ -169,7 +169,9 @@ const ledgerCalls = () =>
   ledger.reverted.length +
   ledger.retried.length +
   ledger.scheduleCalls.length +
-  ledger.renewed.length;
+  ledger.renewed.length +
+  ledger.archived.length +
+  ledger.unarchived.length;
 
 describe("没登录", () => {
   const apiRequests: Array<[Method, string, unknown?]> = [
@@ -610,6 +612,8 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["DELETE schedule", "DELETE", "/api/schedules/1"],
   ["POST retry", "POST", "/api/messages/1/retry"],
   ["POST renew-session", "POST", "/api/pms/1/renew-session"],
+  ["POST archive", "POST", "/api/pms/1/archive"],
+  ["POST unarchive", "POST", "/api/pms/1/unarchive"],
 ];
 
 /** 每个新接口都被这三道检查拦：Host、Origin（会改状态的请求都查，包括 PUT）、cookie。 */
@@ -946,6 +950,35 @@ describe("POST /api/pms/:id/renew-session 开新会话", () => {
     const res = await call("POST", "/api/pms/3/renew-session");
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "没有编号 3 的项目经理", code: "not_found" });
+  });
+});
+
+describe("POST /api/pms/:id/archive 与 /api/pms/:id/unarchive 归档与恢复项目经理", () => {
+  it("archive 调 ledger.archivePm，200 返回 { pm }", async () => {
+    const res = await call("POST", "/api/pms/3/archive");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ pm: { id: 3, archivedAt: 1_000 } });
+    expect(ledger.archived).toEqual([3]);
+  });
+
+  it("unarchive 调 ledger.unarchivePm，200 返回 { pm }", async () => {
+    const res = await call("POST", "/api/pms/3/unarchive");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ pm: { id: 3, archivedAt: null } });
+    expect(ledger.unarchived).toEqual([3]);
+  });
+
+  it.each(["abc", "0", "-1", "1.5"])("编号 %s 不是正整数 → 400，不调账本", async (id) => {
+    expect((await call("POST", `/api/pms/${id}/archive`)).statusCode).toBe(400);
+    expect((await call("POST", `/api/pms/${id}/unarchive`)).statusCode).toBe(400);
+    expect(ledger.archived).toEqual([]);
+    expect(ledger.unarchived).toEqual([]);
+  });
+
+  it("项目经理不存在 → 404", async () => {
+    ledger.failWith = new LedgerRequestError("not_found", "没有编号 3 的项目经理");
+    expect((await call("POST", "/api/pms/3/archive")).statusCode).toBe(404);
+    expect((await call("POST", "/api/pms/3/unarchive")).statusCode).toBe(404);
   });
 });
 

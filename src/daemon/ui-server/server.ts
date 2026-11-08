@@ -49,6 +49,7 @@ import {
   PEER_DEVICE_HEADER,
   utf8Bytes,
   type AgentVendor,
+  type ArchivePmResponse,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
   type CommandsResponse,
@@ -975,6 +976,16 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/pms/:id/renew-session", async (req, reply) => {
       const result = ledger.renewSession(parseId((req.params as { id?: unknown }).id, "pm id"));
       return reply.code(202).send({ handoverId: result.handoverId } satisfies RenewSessionResponse);
+    });
+
+    routes.post("/api/pms/:id/archive", async (req): Promise<ArchivePmResponse> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      return { pm: ledger.archivePm(pmId) };
+    });
+
+    routes.post("/api/pms/:id/unarchive", async (req): Promise<ArchivePmResponse> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      return { pm: ledger.unarchivePm(pmId) };
     });
 
     routes.post("/api/messages/:id/retry", async (req, reply) => {

@@ -21,6 +21,7 @@ import {
   ENV_TAILNET_OWNER,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
+  PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   VENDOR_SPECS,
   AUTO_RENEW_TICK_MS,
@@ -152,6 +153,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const parts: {
     scheduler?: NodeJS.Timeout;
     autoRenew?: NodeJS.Timeout;
+    archiveCleanup?: NodeJS.Timeout;
     handoverRunner?: HandoverRunner;
     setup?: SetupRunner;
     executor?: ActionExecutor;
@@ -177,9 +179,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, archiveCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
+    if (archiveCleanup) clearInterval(archiveCleanup);
     parts.sleepInhibitor?.stop();
     // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
     if (handoverRunner) {
@@ -269,6 +272,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       personasDir: paths.personasDir,
       dataHome: paths.home,
       worktreesDir,
+      launchDir: paths.launchDir,
+      setupLogsDir: paths.setupLogsDir,
       uploadsDir,
       sentFilesDir,
       // 交接提示词里写上会话原始记录的路径
@@ -426,6 +431,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runSchedules();
     parts.scheduler = setInterval(runSchedules, SCHEDULER_TICK_MS);
+    // 到期归档项目经理：启动时先清一次，之后每 PM_ARCHIVE_CLEANUP_INTERVAL_MS 清一次
+    const purgeArchivedPms = () => {
+      try {
+        const purged = ledger.purgeExpiredArchivedPms(Date.now());
+        if (purged.length > 0) log(`${LOG_PREFIX} 已清理到期归档项目经理：${purged.join(", ")}`);
+      } catch (error) {
+        log(`${LOG_PREFIX} 清理到期归档项目经理出错：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    purgeArchivedPms();
+    parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
     const runAutoRenew = () => {
       try {

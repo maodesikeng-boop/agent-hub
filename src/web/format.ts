@@ -1,5 +1,5 @@
 // 界面上的文字：状态名、错误、时间。
-import { MAX_NAME_CHARS, type MessageStatus, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
+import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type MessageStatus, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT } from "../shared/errors.ts";
 import { ApiError } from "./client.ts";
 import { formatCount } from "../shared/count-format.ts";
@@ -140,4 +140,11 @@ export function formatAgo(ms: number, now: number = Date.now()): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
   return `${Math.floor(hours / 24)} 天前`;
+}
+
+/** 归档项目经理距离 7 天自动删除还剩几天（向上取整，最少显示“1 天后删除”）。 */
+export function formatArchiveRemaining(archivedAt: number, now: number = Date.now()): string {
+  const remainingMs = Math.max(0, archivedAt + PM_ARCHIVE_RETENTION_MS - now);
+  const days = Math.max(1, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+  return `${days} 天后删除`;
 }

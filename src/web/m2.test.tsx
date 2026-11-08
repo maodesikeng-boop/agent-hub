@@ -1513,3 +1513,115 @@ describe("资料页打开时左栏选中它的项目经理", () => {
     expect(inNav(/小林/)).not.toHaveAttribute("aria-current", "true");
   });
 });
+
+describe("归档与恢复项目经理（左栏已归档分组、聊天页归档条、资料页归档确认与恢复）", () => {
+  it("左栏：已归档 PM 默认收进“已归档”分组，展开显示剩余删除天数（不标等你/等你确定），搜索或选中时自动展开；默认打开未归档对话", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+    await boot({
+      ...twoPms(),
+      pms: [
+        makePm({ id: 1, name: "小林", archivedAt: null }),
+        makePm({ id: 2, name: "阿周", archivedAt: now - 2 * 24 * 60 * 60 * 1000 }),
+      ],
+    });
+
+    // 默认优先落在未归档的“小林”，尽管阿周的最后一条消息更新
+    expect(screen.getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    expect(within(nav).getByRole("button", { name: /小林/ })).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: /阿周/ })).not.toBeInTheDocument();
+
+    const archiveToggle = within(nav).getByRole("button", { name: /已归档/ });
+    expect(archiveToggle).toHaveAttribute("aria-expanded", "false");
+    expect(archiveToggle).toHaveTextContent("1");
+
+    // 点击展开“已归档”
+    await user.click(archiveToggle);
+    expect(archiveToggle).toHaveAttribute("aria-expanded", "true");
+    const zhouRow = within(nav).getByRole("button", { name: /阿周/ });
+    expect(zhouRow).toHaveTextContent("5 天后删除");
+    expect(zhouRow).not.toHaveTextContent("等你");
+
+    // 收起后通过搜索自动展开
+    await user.click(archiveToggle);
+    expect(within(nav).queryByRole("button", { name: /阿周/ })).not.toBeInTheDocument();
+    const search = screen.getByRole("searchbox", { name: "搜索" });
+    await user.type(search, "阿周");
+    expect(within(nav).getByRole("button", { name: /阿周/ })).toBeInTheDocument();
+    await user.clear(search);
+  });
+
+  it("聊天页：已归档 PM 底部不显示输入框，显示归档状态条与“恢复”按钮；点恢复调 unarchive 接口", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+    await boot({
+      ...twoPms(),
+      pms: [
+        makePm({ id: 1, name: "小林", archivedAt: null }),
+        makePm({ id: 2, name: "阿周", archivedAt: now }),
+      ],
+    });
+
+    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    await user.click(within(nav).getByRole("button", { name: /已归档/ }));
+    await user.click(within(nav).getByRole("button", { name: /阿周/ }));
+
+    const main = screen.getByRole("main");
+    expect(screen.queryByPlaceholderText("给 阿周 发消息")).not.toBeInTheDocument();
+    expect(within(main).getByText("7 天后删除")).toBeInTheDocument();
+    const restoreBtn = within(main).getByRole("button", { name: "恢复" });
+
+    api.unarchivePm = () => {
+      const restored = makePm({ id: 2, name: "阿周", archivedAt: null });
+      push(FakeWebSocket.last, changeOf(20, "pm.updated", { pm: restored }));
+      return { status: 200, body: { pm: restored } };
+    };
+    await user.click(restoreBtn);
+    expect(api.callsTo("POST", /^\/api\/pms\/2\/unarchive$/)).toHaveLength(1);
+    expect(await screen.findByPlaceholderText("给 阿周 发消息")).toBeInTheDocument();
+  });
+
+  it("资料页：未归档 PM 在会话组可点“归档…”弹出确认窗，确认后归档并返回对话页；已归档 PM 顶部显示“归档状态”与恢复，隐藏会话组", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+    await boot();
+
+    await user.click(inNav(/小林/));
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    const page = await screen.findByRole("region", { name: "小林 的资料" });
+    await within(page).findByRole("textbox", { name: "性格设定" });
+
+    const sessionGroup = groupIn(page, "会话");
+    await user.click(within(sessionGroup).getByRole("button", { name: "归档…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "归档项目经理？" });
+    expect(dialog).toHaveTextContent("不会删除你的项目代码文件夹");
+
+    api.archivePm = () => {
+      const archived = makePm({ id: 1, name: "小林", archivedAt: now });
+      push(FakeWebSocket.last, changeOf(21, "pm.updated", { pm: archived }));
+      return { status: 200, body: { pm: archived } };
+    };
+    await user.click(within(dialog).getByRole("button", { name: "归档" }));
+    expect(api.callsTo("POST", /^\/api\/pms\/1\/archive$/)).toHaveLength(1);
+
+    // 归档成功后回到对话页，再进入小林的资料页验证已归档状态
+    await waitFor(() => expect(screen.queryByRole("region", { name: "小林 的资料" })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    const archivedPage = await screen.findByRole("region", { name: "小林 的资料" });
+    expect(within(archivedPage).queryByRole("region", { name: "会话" })).not.toBeInTheDocument();
+    const archiveStatusGroup = within(archivedPage).getByRole("region", { name: "归档状态" });
+    expect(archiveStatusGroup).toHaveTextContent("7 天后删除，不会删除你的项目代码文件夹");
+
+    api.unarchivePm = () => {
+      const restored = makePm({ id: 1, name: "小林", archivedAt: null });
+      push(FakeWebSocket.last, changeOf(22, "pm.updated", { pm: restored }));
+      return { status: 200, body: { pm: restored } };
+    };
+    await user.click(within(archiveStatusGroup).getByRole("button", { name: "恢复" }));
+    expect(api.callsTo("POST", /^\/api\/pms\/1\/unarchive$/)).toHaveLength(1);
+    expect(await within(archivedPage).findByRole("region", { name: "会话" })).toBeInTheDocument();
+  });
+});

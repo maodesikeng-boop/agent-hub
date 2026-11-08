@@ -1,7 +1,7 @@
 import { ChevronRight, Plus, Search, Settings } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
-import { formatTime } from "../format.ts";
+import { formatArchiveRemaining, formatTime } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
 import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
@@ -41,14 +41,17 @@ function EntryButton({
   device?: string;
   onSelect: () => void;
 }) {
-  // 右边只放一个标注：等你确定 > 等你 > 时间（在忙不另加标记）
-  const tag = asking ? (
-    <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-medium text-background">等你确定</span>
-  ) : waiting ? (
-    <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-medium text-foreground">等你</span>
-  ) : entry.lastMessage ? (
-    <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
-  ) : null;
+  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定 > 等你 > 时间（在忙不另加标记）
+  const tag =
+    entry.pm?.archivedAt != null ? (
+      <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
+    ) : asking ? (
+      <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-medium text-background">等你确定</span>
+    ) : waiting ? (
+      <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-medium text-foreground">等你</span>
+    ) : entry.lastMessage ? (
+      <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
+    ) : null;
   return (
     <button
       type="button"
@@ -150,6 +153,7 @@ export function Sidebar({
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
+  const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
   const grouped = groups.length > 1;
   const row = (group: SidebarGroup, entry: ConversationEntry, device?: string) => {
     const key = conversationKey(group.key, entry.id);
@@ -163,6 +167,39 @@ export function Sidebar({
         device={device}
         onSelect={() => onSelect({ device: group.key, id: entry.id })}
       />
+    );
+  };
+  const renderGroupEntries = (group: SidebarGroup) => {
+    const matched = group.entries.filter((entry) => matches(entry, query));
+    const activeEntries = matched.filter((entry) => entry.pm?.archivedAt == null);
+    const archivedEntries = matched.filter((entry) => entry.pm?.archivedAt != null);
+    const activeInArchived = active !== null && active.device === group.key && archivedEntries.some((entry) => entry.id === active.id);
+    const showArchived = archivedOpen.has(group.key) || query.trim() !== "" || activeInArchived;
+    return (
+      <>
+        {activeEntries.map((entry) => row(group, entry))}
+        {archivedEntries.length > 0 && (
+          <div className="pt-1">
+            <button
+              type="button"
+              aria-expanded={showArchived}
+              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-[13.5px] font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() =>
+                setArchivedOpen((prev) => {
+                  const next = new Set(prev);
+                  if (!next.delete(group.key)) next.add(group.key);
+                  return next;
+                })
+              }
+            >
+              <span>已归档</span>
+              <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
+              <span className="ml-auto text-xs font-normal tabular-nums">{archivedEntries.length}</span>
+            </button>
+            {showArchived && <div className="mt-1 space-y-1">{archivedEntries.map((entry) => row(group, entry))}</div>}
+          </div>
+        )}
+      </>
     );
   };
   // 跨设备的“等你确定”汇总（联机第 4.2 节）：只放提问，“等你”只在各组里标；按左栏的顺序
@@ -234,12 +271,12 @@ export function Sidebar({
                     })
                   }
                 >
-                  {group.entries.filter((entry) => matches(entry, query)).map((entry) => row(group, entry))}
+                  {renderGroupEntries(group)}
                 </DeviceGroup>
               ))}
             </>
           ) : (
-            groups.flatMap((group) => group.entries.filter((entry) => matches(entry, query)).map((entry) => row(group, entry)))
+            groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)
           )}
         </nav>
         <div className="flex items-center gap-1 px-3 py-3">
