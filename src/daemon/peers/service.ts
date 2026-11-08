@@ -24,11 +24,23 @@ import {
   type PeerDevice,
   type PeerIntroductionResponse,
   type PeerPairResponse,
+  type PeerTransport,
 } from "../../shared/index.ts";
+import { API_ERRORS, humanize } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import { bindHubDevice, bindSlotDevice, clearTunnelDevice, loadTunnelTable, saveTunnelTable } from "../tunnel/table.ts";
 import { createInviteBook, type InviteBook } from "./invites.ts";
+import type { ProxyTarget } from "./proxy.ts";
 import { isPlatform, openPeerStore, type PeerRecord, type PeerStore } from "./store.ts";
 import { PEER_TOKEN_PATTERN, matchesHash, newPeerToken, sha256Hex } from "./tokens.ts";
+import {
+  createUnixHttpPool,
+  findTunnelRoute,
+  resolvePeerTarget,
+  type ProcNetCheckOptions,
+  type ResolvedPeerTarget,
+  type UnixHttpPool,
+} from "./transport.ts";
 import { normalizePeerUrl } from "./url.ts";
 
 /** 对方拒了本机的设备令牌时回的 error（它已经不认本机了）。 */
@@ -47,14 +59,15 @@ export class PeerError extends Error {
 }
 
 const invalid = (message: string) => new PeerError(400, message, "invalid");
-const notFound = () => new PeerError(404, "没有这台设备", "not_found");
-export const offline = (name?: string) => new PeerError(502, `连不上${name === undefined ? "那台设备" : `“${name}”`}：对方可能关机、睡眠或没开 Tailscale`, "device_offline");
+const notFound = () => new PeerError(404, API_ERRORS.device_not_found.text, "device_not_found");
+export const offline = (name?: string) =>
+  new PeerError(502, name === undefined ? API_ERRORS.device_offline.text : `连不上“${name}”`, "device_offline");
 
 /** 请求体：必须是 JSON 对象，只许出现 allowed 里的字段。 */
 function objectBody(body: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("body must be a JSON object");
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("请求体必须是 JSON 对象");
   const extra = Object.keys(body).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) throw invalid(`unknown field: ${extra[0]}`);
+  if (extra.length > 0) throw invalid(`不认识的字段：${extra[0]}`);
   return body as Record<string, unknown>;
 }
 
@@ -80,6 +93,16 @@ export interface PeersOptions {
   selfUrl: () => string | null;
   /** 认不认本机回环网址：只有测试（DaemonOptions.allowLoopbackPeers、test-helpers）开。 */
   allowLoopback: boolean;
+  /** state/tunnels.json（ssh 隧道表）。 */
+  tunnelsFile?: string;
+  /** 连入方 ssh -L 的 unix socket（run/tunnel/hub.sock）。 */
+  hubSocket?: string;
+  /** 连入方访问中心失败时触发一次提前重连（TunnelService.reconnectNow）。 */
+  reconnectTunnel?: () => unknown;
+  /** Linux 槽位端口监听者 UID 校验选项（测试可注入）。 */
+  procNet?: ProcNetCheckOptions;
+  /** Unix socket HTTP Agent 池（测试可注入，默认内部维护）。 */
+  unixPool?: UnixHttpPool;
   fetch?: typeof fetch;
   now?: () => number;
   log?: (line: string) => void;
@@ -89,11 +112,17 @@ export interface Peers {
   readonly selfId: DeviceId;
   /** GET /api/devices：本机排第一，后面是已配对的（pending 的不算）。 */
   list(): DeviceInfo[];
-  /** 转发目标：已配对的才有。 */
-  target(id: string): { name: string; url: string; token: string } | null;
+  /** 转发目标：已配对且能解析出连法目标的才有。 */
+  target(id: string): ProxyTarget | null;
   /** 带设备令牌来的请求：X-Agent-Hub-Device + Authorization: Bearer。认得回那台的记录（pending 的顺手确认），不认得回 null。 */
   authenticate(deviceHeader: unknown, authorization: unknown): PeerRecord | null;
   createInvite(): DeviceInviteResponse;
+  /** 中心给指定槽位端口发一次性隧道配对邀请码（10 分钟有效）。 */
+  createTunnelInvite(slotPort: number): { code: string; expiresAt: number };
+  /** 连入方 ssh 隧道连上中心时调用：若还有未消费的 hub.invite 则自动经 hub.sock 完成配对，已配对则同步一次清单。 */
+  onTunnelConnected(): void;
+  /** 中心移除槽位时联动移除绑定的设备记录（作废设备令牌）。 */
+  removeByTunnelSlot(deviceId: DeviceId): void;
   /** POST /api/devices：本机去和那台配对。 */
   add(body: unknown): Promise<DeviceInfo>;
   /** POST /api/peer/pair：应邀配对。 */
@@ -131,10 +160,11 @@ export function createPeers(opts: PeersOptions): Peers {
   let selfName = opts.device.name;
   const store: PeerStore = openPeerStore(opts.file, now);
   const invites: InviteBook = createInviteBook({ now });
+  const unixPool: UnixHttpPool = opts.unixPool ?? createUnixHttpPool();
   const closing = new AbortController();
   const background = new Set<Promise<unknown>>();
-  /** 正在配对（介绍）的设备：同一台不同时发两次。 */
-  const pairing = new Set<DeviceId>();
+  /** 正在配对（介绍或隧道自动配对）的设备：同一台不同时发两次。 */
+  const pairing = new Set<string>();
 
   const run = (what: string, task: () => Promise<unknown>) => {
     const p = task()
@@ -153,32 +183,106 @@ export function createPeers(opts: PeersOptions): Peers {
     return store.list().filter((r) => r.state === "paired");
   };
 
+  const resolveRecordTarget = (r: PeerRecord): ResolvedPeerTarget | null =>
+    resolvePeerTarget(r.id, {
+      record: r,
+      tunnels: opts.tunnelsFile,
+      hubSocket: opts.hubSocket,
+      procNet: opts.procNet,
+    });
+
+  const isRoutable = (r: PeerRecord): boolean => {
+    if (r.transport === "ssh-tunnel") {
+      return findTunnelRoute(r.id, opts.tunnelsFile, opts.hubSocket) !== null;
+    }
+    return r.url !== "";
+  };
+
+  const isHubPeer = (deviceId: DeviceId): boolean => {
+    const route = findTunnelRoute(deviceId, opts.tunnelsFile, opts.hubSocket);
+    return route?.role === "hub";
+  };
+
+  const clearTunnelBinding = (deviceId: DeviceId, options: { closeSocket?: boolean } = {}) => {
+    if (opts.tunnelsFile === undefined) return;
+    const table = loadTunnelTable(opts.tunnelsFile);
+    if ((options.closeSocket ?? true) && table.hub?.deviceId === deviceId && opts.hubSocket !== undefined) {
+      unixPool.closeSocket(opts.hubSocket);
+    }
+    const cleared = clearTunnelDevice(table, deviceId);
+    if (cleared.changed) {
+      saveTunnelTable(opts.tunnelsFile, cleared.table);
+    }
+  };
+
   const selfDevice = (): PeerDevice => {
     const url = opts.selfUrl();
     if (url === null) throw new PeerError(409, "这台还没有 tailnet 网址：先装好 Tailscale 并登录，再配对", "conflict");
     return { id: selfId, name: selfName, platform, url };
   };
-  const selfInfo = (): DeviceInfo => ({ id: selfId, name: selfName, platform, self: true, url: opts.selfUrl() });
-  const infoOf = (r: PeerRecord): DeviceInfo => ({ id: r.id, name: r.name, platform: r.platform, self: false, url: r.url });
-  const deviceOf = (r: PeerRecord): PeerDevice => ({ id: r.id, name: r.name, platform: r.platform, url: r.url });
+  const peerTransportOf = (r: PeerRecord): PeerTransport => {
+    if (r.transport === "ssh-tunnel") {
+      const route = findTunnelRoute(r.id, opts.tunnelsFile, opts.hubSocket);
+      return { kind: "ssh-tunnel", role: route?.role ?? "spoke" };
+    }
+    return { kind: "tailscale", url: r.url };
+  };
+  const selfInfo = (): DeviceInfo => ({
+    id: selfId,
+    name: selfName,
+    platform,
+    self: true,
+    url: opts.selfUrl(),
+    transport: { kind: "local" },
+  });
+  const infoOf = (r: PeerRecord): DeviceInfo => ({
+    id: r.id,
+    name: r.name,
+    platform: r.platform,
+    self: false,
+    url: r.transport === "ssh-tunnel" ? null : r.url,
+    transport: peerTransportOf(r),
+  });
+  const deviceOf = (r: PeerRecord): PeerDevice => ({
+    id: r.id,
+    name: r.name,
+    platform: r.platform,
+    url: r.transport === "ssh-tunnel" ? "" : r.url,
+  });
 
   /** 设备之间的控制请求。连不上、超时 → device_offline。 */
-  const call = async (url: string, path: string, init: { method: string; token?: string; body?: unknown }) => {
+  const call = async (
+    target: ResolvedPeerTarget,
+    path: string,
+    init: { method: string; token?: string; body?: unknown; onNetworkError?: () => void },
+  ) => {
     const headers: Record<string, string> = { [PEER_DEVICE_HEADER]: selfId };
     if (init.token !== undefined) headers.authorization = `Bearer ${init.token}`;
     if (init.body !== undefined) headers["content-type"] = "application/json";
+    const signal = AbortSignal.any([AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS), closing.signal]);
+    const bodyText = init.body === undefined ? undefined : JSON.stringify(init.body);
     let res: Response;
     let text: string;
     try {
-      res = await fetchImpl(url + path, {
-        method: init.method,
-        headers,
-        redirect: "manual",
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-        signal: AbortSignal.any([AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS), closing.signal]),
-      });
+      if (target.kind === "unix") {
+        res = await unixPool.fetch(target.socketPath, path, {
+          method: init.method,
+          headers,
+          ...(bodyText === undefined ? {} : { body: bodyText }),
+          signal,
+        });
+      } else {
+        res = await fetchImpl(target.origin + path, {
+          method: init.method,
+          headers,
+          redirect: "manual",
+          ...(bodyText === undefined ? {} : { body: bodyText }),
+          signal,
+        });
+      }
       text = await res.text();
     } catch {
+      init.onNetworkError?.();
       throw offline();
     }
     let body: unknown = null;
@@ -193,27 +297,41 @@ export function createPeers(opts: PeersOptions): Peers {
 
   /** 带本机令牌找已配对的那台。对方说不认本机了：本机也删掉它，回 404。 */
   const callPeer = async (peer: PeerRecord, path: string, init: { method: string; body?: unknown }) => {
+    const resolved = resolveRecordTarget(peer);
+    if (resolved === null) {
+      if (isHubPeer(peer.id)) opts.reconnectTunnel?.();
+      throw offline(peer.name);
+    }
     let result;
     try {
-      result = await call(peer.url, path, { ...init, token: peer.outboundToken });
+      result = await call(resolved, path, {
+        ...init,
+        token: peer.outboundToken,
+        onNetworkError: () => {
+          if (isHubPeer(peer.id)) opts.reconnectTunnel?.();
+        },
+      });
     } catch (error) {
       throw error instanceof PeerError && error.code === "device_offline" ? offline(peer.name) : error;
     }
     if (result.status === 401 && result.error === PEER_UNAUTHORIZED) {
       forget(peer.id);
-      throw new PeerError(404, `“${peer.name}”已经把这台移除了`, "not_found");
+      throw new PeerError(404, `“${peer.name}”已经把这台移除了`, "device_not_found");
     }
     return result;
   };
 
   const forget = (id: DeviceId) => {
-    if (store.remove(id)) log(`${LOG_PREFIX} 联机：对方已经不认这台了，删掉 ${id}`);
+    if (store.remove(id)) {
+      clearTunnelBinding(id);
+      log(`${LOG_PREFIX} 联机：对方已经不认这台了，删掉 ${id}`);
+    }
   };
 
   const announce = () => {
-    const url = opts.selfUrl();
     const targets = paired();
-    if (url === null || targets.length === 0) return;
+    if (targets.length === 0) return;
+    const url = opts.selfUrl() ?? "";
     const devices = [{ id: selfId, name: selfName, platform, url }, ...targets.map(deviceOf)];
     for (const peer of targets) {
       run(`把设备清单同步给“${peer.name}”`, async () => {
@@ -227,9 +345,12 @@ export function createPeers(opts: PeersOptions): Peers {
   const pairWith = async (url: string, code: string, expectedId?: DeviceId): Promise<PeerRecord> => {
     const me = selfDevice();
     const tokenForThem = newPeerToken();
-    const res = await call(url, API_PATHS.peerPair, { method: "POST", body: { inviteCode: code, device: me, token: tokenForThem } });
+    const res = await call({ kind: "tcp", origin: url }, API_PATHS.peerPair, {
+      method: "POST",
+      body: { inviteCode: code, device: me, token: tokenForThem },
+    });
     if (res.status >= 500) throw offline();
-    if (res.status !== 200) throw invalid(res.error ?? `对方拒绝了配对（HTTP ${res.status}）`);
+    if (res.status !== 200) throw invalid(humanize(res.body, res.status).text);
     const body = res.body as { device?: unknown; token?: unknown } | null;
     const them = parsePeerDevice(body?.device, opts.allowLoopback);
     if (them === null || typeof body?.token !== "string" || !PEER_TOKEN_PATTERN.test(body.token)) throw invalid("对方回的配对信息不对");
@@ -241,6 +362,7 @@ export function createPeers(opts: PeersOptions): Peers {
       name: them.name,
       platform: them.platform,
       url,
+      transport: "tailscale",
       state: "paired",
       since: now(),
       inboundTokenSha256: sha256Hex(tokenForThem),
@@ -251,6 +373,71 @@ export function createPeers(opts: PeersOptions): Peers {
     log(`${LOG_PREFIX} 联机：和“${record.name}”（${record.id}）配好了`);
     announce();
     return record;
+  };
+
+  /** 连入方通过 run/tunnel/hub.sock 自动与中心完成配对。 */
+  const pairOverTunnel = () => {
+    if (opts.tunnelsFile === undefined || opts.hubSocket === undefined) return;
+    const table = loadTunnelTable(opts.tunnelsFile);
+    if (table.hub === null) return;
+    const inviteCode = table.hub.invite;
+    if (inviteCode === null || inviteCode === "") {
+      if (table.hub.deviceId !== null) announce();
+      return;
+    }
+    const lockKey = `tunnel:${inviteCode}`;
+    if (pairing.has(lockKey)) return;
+    pairing.add(lockKey);
+    const hubSocket = opts.hubSocket;
+    const tunnelsFile = opts.tunnelsFile;
+    run("经 ssh 隧道和中心自动配对", async () => {
+      try {
+        const me: PeerDevice = { id: selfId, name: selfName, platform, url: opts.selfUrl() ?? "" };
+        const tokenForThem = newPeerToken();
+        const res = await call(
+          { kind: "unix", socketPath: hubSocket },
+          API_PATHS.peerPair,
+          {
+            method: "POST",
+            body: { inviteCode, device: me, token: tokenForThem },
+            onNetworkError: () => opts.reconnectTunnel?.(),
+          },
+        );
+        if (res.status >= 500) throw offline();
+        if (res.status !== 200) throw invalid(humanize(res.body, res.status).text);
+        const body = res.body as { device?: unknown; token?: unknown } | null;
+        const them = parsePeerDevice(body?.device, opts.allowLoopback);
+        if (them === null || typeof body?.token !== "string" || !PEER_TOKEN_PATTERN.test(body.token)) {
+          throw invalid("对方回的配对信息不对");
+        }
+        if (them.id === selfId) throw invalid("这是本机自己，不用配对");
+
+        const latestTable = loadTunnelTable(tunnelsFile);
+        const bound = bindHubDevice(latestTable, them.id);
+        if (bound.previousDeviceId !== null) {
+          store.remove(bound.previousDeviceId, { tombstone: false });
+        }
+        saveTunnelTable(tunnelsFile, bound.table);
+
+        const record: PeerRecord = {
+          id: them.id,
+          name: them.name,
+          platform: them.platform,
+          url: "",
+          transport: "ssh-tunnel",
+          state: "paired",
+          since: now(),
+          inboundTokenSha256: sha256Hex(tokenForThem),
+          outboundToken: body.token,
+        };
+        store.clearRemoved(record.id);
+        store.put(record);
+        log(`${LOG_PREFIX} 联机：经隧道和中心“${record.name}”（${record.id}）配好了`);
+        announce();
+      } finally {
+        pairing.delete(lockKey);
+      }
+    });
   };
 
   /** 请 via 把本机介绍给 targetId，拿到邀请码后直接去配对。 */
@@ -299,7 +486,16 @@ export function createPeers(opts: PeersOptions): Peers {
 
     target(id) {
       const record = isDeviceId(id) ? paired().find((r) => r.id === id) : undefined;
-      return record === undefined ? null : { name: record.name, url: record.url, token: record.outboundToken };
+      if (record === undefined || !isRoutable(record)) return null;
+      const hubPeer = isHubPeer(record.id);
+      return {
+        name: record.name,
+        url: record.url,
+        token: record.outboundToken,
+        resolve: () => resolveRecordTarget(record),
+        onOffline: hubPeer ? () => opts.reconnectTunnel?.() : undefined,
+        unixPool,
+      };
     },
 
     authenticate(deviceHeader, authorization) {
@@ -325,6 +521,23 @@ export function createPeers(opts: PeersOptions): Peers {
       return { code: invite.code, url: opts.selfUrl(), expiresAt: invite.expiresAt };
     },
 
+    createTunnelInvite(slotPort) {
+      const invite = invites.create({ slotPort })!;
+      return { code: invite.code, expiresAt: invite.expiresAt };
+    },
+
+    onTunnelConnected() {
+      pairOverTunnel();
+    },
+
+    removeByTunnelSlot(deviceId) {
+      const peer = store.get(deviceId);
+      if (peer === undefined) return;
+      store.remove(peer.id);
+      clearTunnelBinding(peer.id);
+      log(`${LOG_PREFIX} 联机：槽位移除联动删掉“${peer.name}”（${peer.id}）`);
+    },
+
     async add(body) {
       const raw = objectBody(body, ["url", "code"]);
       const url = normalizePeerUrl(raw.url, opts.allowLoopback);
@@ -336,10 +549,11 @@ export function createPeers(opts: PeersOptions): Peers {
     acceptPair(body) {
       const raw = objectBody(body, ["inviteCode", "device", "token"]);
       const them = parsePeerDevice(raw.device, opts.allowLoopback);
-      if (them === null || them.url === null) throw invalid("device 不对（网址要是 https://<机器>.<tailnet>.ts.net）");
+      const rawUrl = typeof raw.device === "object" && raw.device !== null ? (raw.device as Record<string, unknown>).url : undefined;
+      const hasNonEmptyBadUrl = rawUrl !== "" && rawUrl !== null && rawUrl !== undefined && them?.url === null;
+      if (them === null || hasNonEmptyBadUrl) throw invalid("device 不对（网址要是 https://<机器>.<tailnet>.ts.net）");
       if (typeof raw.token !== "string" || !PEER_TOKEN_PATTERN.test(raw.token)) throw invalid("token 不对");
       if (them.id === selfId) throw invalid("这是本机自己，不用配对");
-      const me = selfDevice();
       const consumed = invites.consume(raw.inviteCode, them.id);
       if (!consumed.ok) {
         throw new PeerError(
@@ -348,15 +562,56 @@ export function createPeers(opts: PeersOptions): Peers {
           "forbidden",
         );
       }
-      // 用户亲手发的邀请码：以前移除过也重新认；替别的设备要的（介绍）要求不是移除过的（发邀请码时查过，这里再查一次），
-      // 而且发起介绍的那台现在还配着
-      if (consumed.by !== "user") {
+      const isTunnelInvite = typeof consumed.by === "object" && "slotPort" in consumed.by;
+      if (!isTunnelInvite && them.url === null) {
+        throw invalid("device 不对（网址要是 https://<机器>.<tailnet>.ts.net）");
+      }
+      const me = isTunnelInvite
+        ? { id: selfId, name: selfName, platform, url: opts.selfUrl() ?? "" }
+        : selfDevice();
+
+      // 用户亲手发的邀请码或绑槽位的隧道邀请码：以前移除过也重新认；替别的设备要的（介绍）要求不是移除过的，且发起介绍的那台还配着
+      if (typeof consumed.by === "object" && "via" in consumed.by) {
         const { via } = consumed.by;
         if (store.isRemoved(them.id)) throw new PeerError(403, "这台设备已经被移除了", "forbidden");
         if (!paired().some((r) => r.id === via)) throw new PeerError(403, "介绍这台的设备已经不在了", "forbidden");
       }
-      // 编号已经有了（配好的或没过期的待确认）：不覆盖，免得别的设备报这个编号把它的网址、令牌换掉
       prunePending();
+
+      if (typeof consumed.by === "object" && "slotPort" in consumed.by) {
+        const { slotPort } = consumed.by;
+        if (opts.tunnelsFile === undefined) throw new PeerError(403, "本机未启用隧道槽位", "forbidden");
+        const table = loadTunnelTable(opts.tunnelsFile);
+        const slot = table.slots.find((s) => s.port === slotPort);
+        if (slot === undefined) throw new PeerError(403, "邀请码对应的隧道槽位已不存在", "forbidden");
+        const existing = store.get(them.id);
+        // 编号已经有了且不是同一槽位重新配对：拒绝覆盖，防止别的槽位或设备冒充已有设备编号
+        if (existing !== undefined && slot.deviceId !== them.id) {
+          throw new PeerError(409, "这台设备已经配对过：要重新配对，先在这边把它移除", "conflict");
+        }
+        const bound = bindSlotDevice(table, slotPort, them.id);
+        if (bound.previousDeviceId !== null) {
+          store.remove(bound.previousDeviceId, { tombstone: false });
+        }
+        saveTunnelTable(opts.tunnelsFile, bound.table);
+        store.clearRemoved(them.id);
+        const tokenForThem = newPeerToken();
+        store.put({
+          id: them.id,
+          name: them.name,
+          platform: them.platform,
+          url: "",
+          transport: "ssh-tunnel",
+          state: "pending",
+          since: now(),
+          inboundTokenSha256: sha256Hex(tokenForThem),
+          outboundToken: raw.token,
+        });
+        log(`${LOG_PREFIX} 联机：“${them.name}”（${them.id}）经隧道槽位 ${slotPort} 来配对，等它确认`);
+        return { device: me, token: tokenForThem };
+      }
+
+      // 编号已经有了（配好的或没过期的待确认）：不覆盖，免得别的设备报这个编号把它的网址、令牌换掉
       if (store.get(them.id) !== undefined) throw new PeerError(409, "这台设备已经配对过：要重新配对，先在这边把它移除", "conflict");
       if (consumed.by === "user") store.clearRemoved(them.id);
       const tokenForThem = newPeerToken();
@@ -364,7 +619,8 @@ export function createPeers(opts: PeersOptions): Peers {
         id: them.id,
         name: them.name,
         platform: them.platform,
-        url: them.url,
+        url: them.url!,
+        transport: "tailscale",
         state: "pending",
         since: now(),
         inboundTokenSha256: sha256Hex(tokenForThem),
@@ -376,25 +632,29 @@ export function createPeers(opts: PeersOptions): Peers {
 
     receiveDeviceList(from, body) {
       const raw = objectBody(body, ["devices"]);
-      if (!Array.isArray(raw.devices) || raw.devices.length > MAX_PEERS) throw invalid("devices must be an array");
+      if (!Array.isArray(raw.devices) || raw.devices.length > MAX_PEERS) throw invalid("devices 必须是数组");
       const devices = raw.devices.map((d) => parsePeerDevice(d, opts.allowLoopback));
       if (devices.some((d) => d === null)) throw invalid("devices 里有不对的设备");
       const sender = store.get(from);
       if (sender === undefined) return;
       for (const d of devices as Array<Omit<PeerDevice, "url"> & { url: string | null }>) {
         if (d.id === from) {
-          // 只认它说它自己的（名字、系统、网址）；别人的网址不收，免得被指到别处去
-          store.update(from, { name: d.name, platform: d.platform, ...(d.url === null ? {} : { url: d.url }) });
+          // 隧道设备的地址只来自本机隧道表，永远不从对方发来的清单里取
+          const allowUrlUpdate = sender.transport !== "ssh-tunnel" && d.url !== null;
+          store.update(from, { name: d.name, platform: d.platform, ...(allowUrlUpdate ? { url: d.url! } : {}) });
           continue;
         }
         if (d.id === selfId || store.get(d.id) !== undefined || store.isRemoved(d.id) || d.url === null) continue;
-        // 编号小的去配
-        if (selfId < d.id) introduceVia(sender, d.id);
+        // 编号小的去配（两边都得有 tailnet 网址才能直接介绍配对；隧道设备 url 为空已在上面跳过）
+        if (selfId < d.id && opts.selfUrl() !== null) introduceVia(sender, d.id);
       }
     },
 
     receiveUnpair(from) {
-      if (store.remove(from)) log(`${LOG_PREFIX} 联机：对方（${from}）把这台移除了，这边也删掉`);
+      if (store.remove(from)) {
+        clearTunnelBinding(from);
+        log(`${LOG_PREFIX} 联机：对方（${from}）把这台移除了，这边也删掉`);
+      }
     },
 
     inviteFor(from, body) {
@@ -414,6 +674,9 @@ export function createPeers(opts: PeersOptions): Peers {
       const raw = objectBody(body, ["deviceId"]);
       if (typeof raw.deviceId !== "string" || raw.deviceId === from) throw notFound();
       const target = requirePaired(raw.deviceId);
+      if (target.transport === "ssh-tunnel" || target.url === "") {
+        throw new PeerError(403, "隧道连接的设备不支持直接介绍配对", "forbidden");
+      }
       const res = await callPeer(target, API_PATHS.peerInvites, { method: "POST", body: { deviceId: from } });
       const code = (res.body as { code?: unknown } | null)?.code;
       if (res.status !== 201 || typeof code !== "string") throw new PeerError(res.status >= 500 ? 502 : 403, res.error ?? `HTTP ${res.status}`);
@@ -436,12 +699,20 @@ export function createPeers(opts: PeersOptions): Peers {
       if (id === selfId) throw invalid("不能移除本机");
       const peer = isDeviceId(id) ? store.get(id) : undefined;
       if (peer === undefined) throw notFound();
+      const targetBeforeRemove = resolveRecordTarget(peer);
       store.remove(peer.id);
+      clearTunnelBinding(peer.id, { closeSocket: targetBeforeRemove?.kind !== "unix" });
       log(`${LOG_PREFIX} 联机：移除了“${peer.name}”（${peer.id}）`);
       // 通知对方也删；它离线就只删本机，它上线后来访会被拒（401），它那边自己删
-      run(`通知“${peer.name}”移除`, async () => {
-        await call(peer.url, API_PATHS.peerUnpair, { method: "POST", token: peer.outboundToken });
-      });
+      if (targetBeforeRemove !== null) {
+        run(`通知“${peer.name}”移除`, async () => {
+          try {
+            await call(targetBeforeRemove, API_PATHS.peerUnpair, { method: "POST", token: peer.outboundToken });
+          } finally {
+            if (targetBeforeRemove.kind === "unix") unixPool.closeSocket(targetBeforeRemove.socketPath);
+          }
+        });
+      }
     },
 
     forget,
@@ -453,6 +724,7 @@ export function createPeers(opts: PeersOptions): Peers {
 
     close() {
       closing.abort();
+      unixPool.closeAll();
     },
   };
 }

@@ -43,7 +43,14 @@ describe("配对", () => {
 
     const res = await a.browser(API_PATHS.devices, { method: "POST", body: { url: invite.url, code: invite.code } });
     expect(res.status).toBe(201);
-    expect((await res.json()) as DeviceInfo).toEqual({ id: b.id, name: "tokyo", platform: process.platform, self: false, url: b.url });
+    expect((await res.json()) as DeviceInfo).toEqual({
+      id: b.id,
+      name: "tokyo",
+      platform: process.platform,
+      self: false,
+      url: b.url,
+      transport: { kind: "tailscale", url: b.url },
+    });
     await settle([a, b]);
 
     const listA = ((await (await a.browser(API_PATHS.devices)).json()) as { devices: DeviceInfo[] }).devices;

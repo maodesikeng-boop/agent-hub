@@ -16,6 +16,7 @@ import type {
   SessionState,
 } from "./domain.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
+import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
@@ -202,8 +203,8 @@ export interface ApiErrorBody {
   code?: ApiErrorCode;
 }
 
-/** 账本的错误码，加上联机的：device_offline = 入口转发时连不上那台设备（502），网页据此显示离线，不弹错。 */
-export type ApiErrorCode = LedgerErrorCode | "device_offline";
+/** 账本的错误码，加上联机的：device_offline = 入口转发时连不上那台设备（502），网页据此显示离线，不弹错；device_not_found = 没有这台设备（404）。 */
+export type ApiErrorCode = LedgerErrorCode | "device_offline" | "device_not_found";
 
 // ---- M2：项目经理、性格设定、重试 ----
 // 请求体由界面服务按 JSON Schema 校验（多余字段拒绝），长度上限见 limits.ts；业务校验在账本。
@@ -444,8 +445,10 @@ export interface DeviceInfo {
   platform: string;
   /** 是不是入口本机。 */
   self: boolean;
-  /** 那台的 tailnet 网址（https://<机器>.<tailnet>.ts.net），没有 Tailscale 的本机是 null。 */
+  /** 那台的 tailnet 网址（https://<机器>.<tailnet>.ts.net），没有 Tailscale 的本机或隧道设备是 null。 */
   url: string | null;
+  /** 这台设备的连法（本机 / tailscale / ssh-tunnel）。 */
+  transport?: PeerTransport;
 }
 
 /** GET /api/devices。在线状态不在这里：由网页到这台设备的 WebSocket 状态得出。 */
@@ -477,6 +480,7 @@ export interface PeerDevice {
   name: string;
   platform: string;
   url: string;
+  transport?: RemotePeerTransportKind;
 }
 
 /** POST /api/peer/pair：已有设备带着自己的身份、邀请码，和发给新设备用的设备令牌（32 字节随机，base64url）。 */

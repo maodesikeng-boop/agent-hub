@@ -9,6 +9,7 @@ export * from "./hub.ts";
 export * from "./ledger.ts";
 export * from "./limits.ts";
 export * from "./names.ts";
+export * from "./peer-transport.ts";
 export * from "./policy.ts";
 export * from "./schedule.ts";
 export * from "./secret-paths.ts";

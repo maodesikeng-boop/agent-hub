@@ -3,3 +3,17 @@ export { startTunnelAdmin, type RunningTunnelAdmin, type TunnelAdminOptions } fr
 export { TunnelInputError, createTunnelService, type TunnelService, type TunnelServiceOptions } from "./service.ts";
 export { buildSshArgs, type TunnelSshConfig } from "./ssh-args.ts";
 export { createTunnelSupervisor, type TunnelSupervisor } from "./supervisor.ts";
+export {
+  bindHubDevice,
+  bindSlotDevice,
+  clearTunnelDevice,
+  emptyTunnelTable,
+  keyFingerprint,
+  loadTunnelTable,
+  removeSlot,
+  saveTunnelTable,
+  upsertSlot,
+  type TunnelHub,
+  type TunnelSlot,
+  type TunnelTable,
+} from "./table.ts";

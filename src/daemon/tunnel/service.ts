@@ -29,6 +29,8 @@ export interface TunnelServiceOptions {
   entryPort: number;
   /** 给某个槽位出一个邀请码（绑槽位由块 B 做；现在接 peers 的邀请码）。 */
   createInvite(slotPort: number): { code: string; expiresAt: number };
+  /** 中心收回槽位时，若该槽位绑了 deviceId，同步从 peers 移除该设备（作废设备令牌）。 */
+  onRemoveDevice?: (deviceId: string) => void;
   sshCommand?: string;
   keygenCommand?: string;
   /** 起一个 ssh 监督（测试换成假的）。默认 createTunnelSupervisor。 */
@@ -182,6 +184,7 @@ export function createTunnelService(opts: TunnelServiceOptions): TunnelService {
       const result = removeSlot(loadTunnelTable(paths.tableFile), name);
       if (result.removed === null) return null;
       saveTunnelTable(paths.tableFile, result.table);
+      if (result.removed.deviceId !== null) opts.onRemoveDevice?.(result.removed.deviceId);
       return { port: result.removed.port };
     },
     close: () => serial(stopTunnel),
