@@ -116,6 +116,20 @@ function cap(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+/**
+ * 各家厂商的凭据和配置目录（相对用户主目录），以 AGENT_VENDORS 为键：加厂商不写这里就编译不过。
+ * - dirs：整个目录（或文件）。分享文件时一律禁（daemon/sent-files.ts 的 SENSITIVE_HOME_PATHS）；
+ * - readonlySecrets：只读 Worker 禁读的具体文件（readonly-policy.ts 的 READONLY_SECRET_HOME_PATHS，粒度比 dirs 细：
+ *   会话记录、日志留给排查读），必须在 dirs 里面。
+ * 2026-11-08 按本机核对：~/.claude 有 .credentials.json 之类、~/.claude.json 存账号和 MCP 登录信息；~/.codex/auth.json 是 codex 的令牌；
+ * agy 的数据在 ~/.gemini（antigravity、antigravity-cli，macOS 上令牌在钥匙串 Library/Keychains，Linux 在钥匙环），oauth_creds.json 是 gemini 系的令牌文件。
+ */
+export const VENDOR_HOME_PATHS: Readonly<Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[] }>> = {
+  claude: { dirs: [".claude", ".claude.json"], readonlySecrets: [".claude/.credentials.json"] },
+  agy: { dirs: [".gemini"], readonlySecrets: [".gemini/oauth_creds.json"] },
+  codex: { dirs: [".codex"], readonlySecrets: [".codex/auth.json"] },
+};
+
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   claude: {
     label: "Claude Code",

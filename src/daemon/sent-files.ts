@@ -33,6 +33,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import {
+  AGENT_VENDORS,
   LOG_PREFIX,
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
@@ -44,12 +45,13 @@ import {
   type MdNode,
   type SentFile,
   type SentFileStatus,
+  VENDOR_HOME_PATHS,
 } from "../shared/index.ts";
 import { resolveUpload, sanitizeFileName } from "./uploads.ts";
 
 /**
  * 不管允许的文件夹怎么配（项目文件夹是 ~ 或 /、附加了家目录），这些始终不能分享：家目录下的凭据、密钥、钥匙串、
- * 浏览器 cookie、shell 历史、claude 自己的配置。写家目录下的相对路径，比对时 realpath（是符号链接的按它指向的地方）。
+ * 浏览器 cookie、shell 历史、各家厂商（claude、codex、agy）的整个配置目录（取自 vendors.ts 的 VENDOR_HOME_PATHS）。写家目录下的相对路径，比对时 realpath（是符号链接的按它指向的地方）。
  */
 export const SENSITIVE_HOME_PATHS: readonly string[] = [
   ".ssh",
@@ -66,8 +68,7 @@ export const SENSITIVE_HOME_PATHS: readonly string[] = [
   ".npmrc",
   ".pypirc",
   ".password-store",
-  ".claude",
-  ".claude.json",
+  ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].dirs),
   "Library/Keychains",
   "Library/Cookies",
   // Linux：登录钥匙环（Secret Service，agy 的登录令牌也在里面）、浏览器的 cookie 和密码库

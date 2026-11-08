@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AGENT_VENDORS, VENDOR_HOME_PATHS } from "./vendors.ts";
 import { READONLY_SECRET_GLOBS, READONLY_SECRET_HOME_PATHS, buildReadonlyPolicy, connectorToolAllowed, type ReadonlyPolicy } from "./readonly-policy.ts";
 
 const policy = (connectors: Partial<ReadonlyPolicy["connectors"]> = {}) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });
@@ -48,10 +49,18 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     expect(p.secretPaths).toContain("/Users/u/.ssh");
     expect(p.secretPaths).toContain("/Users/u/.config/gh");
     expect(p.secretPaths).toContain("/Users/u/.codex/auth.json");
+    expect(p.secretPaths).toContain("/Users/u/.claude/.credentials.json");
+    expect(p.secretPaths).toContain("/Users/u/.gemini/oauth_creds.json");
     expect(p.secretPaths).toContain("/Users/u/Library/Keychains");
     expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/ui-token");
     expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length + 1);
     expect(p.secretPaths.every((x) => x.startsWith("/") && !x.includes("~"))).toBe(true);
+  });
+
+  it("厂商那部分取自 VENDOR_HOME_PATHS 的 readonlySecrets", () => {
+    for (const vendor of AGENT_VENDORS) {
+      for (const f of VENDOR_HOME_PATHS[vendor].readonlySecrets) expect(READONLY_SECRET_HOME_PATHS, f).toContain(f);
+    }
   });
 
   it("hub.sqlite 和日志不在禁读里（排查要读：库里没有现行令牌，查证见 readonly-policy.ts）；通配含 .env 和私钥", () => {

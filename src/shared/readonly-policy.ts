@@ -4,6 +4,8 @@
 // 都从 LaunchFiles.readonly（这里的 ReadonlyPolicy）读，不再去反读 claude 的设置文件。
 // 纯字符串处理、不用 node 模块；路径一律传已经 realpath 过的（macOS 上 /var 是 /private/var，沙箱和 agy 的规则按真实路径比）。
 
+import { AGENT_VENDORS, VENDOR_HOME_PATHS } from "./vendors.ts";
+
 /** 连接器工具的声明（MCP 规范的 annotations，服务器自报）。没有 annotations 当没标记。 */
 export interface ConnectorToolAnnotations {
   readOnlyHint?: boolean;
@@ -38,9 +40,8 @@ export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
   ".git-credentials",
   ".npmrc",
   ".pypirc",
-  ".codex/auth.json",
-  ".claude/.credentials.json",
-  ".gemini/oauth_creds.json",
+  // 各家厂商的令牌文件取自 vendors.ts 的 VENDOR_HOME_PATHS（和分享禁用名单同一份）
+  ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].readonlySecrets),
   "Library/Keychains",
 ];
 

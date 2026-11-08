@@ -21,7 +21,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_SENT_FILE_BYTES, MAX_SENT_FILES_PER_MESSAGE, MAX_SENT_FILES_TOTAL_BYTES, type SentFile } from "../shared/index.ts";
+import {
+  AGENT_VENDORS,
+  MAX_SENT_FILE_BYTES,
+  MAX_SENT_FILES_PER_MESSAGE,
+  MAX_SENT_FILES_TOTAL_BYTES,
+  READONLY_SECRET_HOME_PATHS,
+  VENDOR_HOME_PATHS,
+  type SentFile,
+} from "../shared/index.ts";
 import { SENSITIVE_HOME_PATHS, copyFromFd, isShareable, prepareSentFilesDir, sentFileId, shareLinkedFiles, type ShareScope } from "./sent-files.ts";
 
 let base: string;
@@ -191,6 +199,9 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
       ".password-store/a.gpg",
       ".claude/settings.json",
       ".claude.json",
+      ".codex/auth.json",
+      ".gemini/oauth_creds.json",
+      ".gemini/antigravity-cli/state_5.sqlite",
       "Library/Keychains/login.keychain-db",
       "Library/Cookies/Cookies.binarycookies",
       ".zsh_history",
@@ -209,6 +220,14 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     // 清单外的照常
     write(join(home, "notes.md"));
     expect(share("[n](~/notes.md)", homeScope)[0]!.status).toBe("saved");
+  });
+
+  it("每家厂商的整个凭据/配置目录都不能分享；只读禁读的每一项也都在分享禁用名单里（只改一份会失败）", () => {
+    for (const vendor of AGENT_VENDORS) {
+      for (const dir of VENDOR_HOME_PATHS[vendor].dirs) expect(SENSITIVE_HOME_PATHS, `${vendor}:${dir}`).toContain(dir);
+    }
+    const covered = (rel: string) => SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`));
+    for (const rel of READONLY_SECRET_HOME_PATHS) expect(covered(rel), rel).toBe(true);
   });
 
   it(".git/config，以及经符号链接进 .git 的", () => {
