@@ -119,6 +119,22 @@ describe("只有一台", () => {
     const devices = await screen.findByRole("region", { name: "设备" });
     expect(within(devices).getByText("Mac")).toBeInTheDocument();
   });
+
+  it("入口本机收到 resync 时自动重新拉 GET /api/devices，把新配对的设备加进界面并连上", async () => {
+    const fleet = new Fleet(onePm("小林"), onePm("阿青"), [mac]);
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+    expect(sockets("tokyo")).toHaveLength(0);
+
+    fleet.devices = [mac, tokyo];
+    act(() => lastSocket("local").push({ type: "resync" }));
+
+    await waitFor(() => expect(sockets("tokyo")).toHaveLength(1));
+    act(() => lastSocket("tokyo").open());
+    expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
+    expect(groupHeader("Mac")).toBeInTheDocument();
+    expect(groupHeader("东京")).toBeInTheDocument();
+  });
 });
 
 describe("两台", () => {

@@ -35,11 +35,13 @@ export class DeviceHub {
   readonly key: DeviceKey;
   readonly client: HubClient;
   private readonly onChange: () => void;
+  private readonly onResync: (() => void) | undefined;
 
-  constructor(key: DeviceKey, client: HubClient, onChange: () => void) {
+  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void) {
     this.key = key;
     this.client = client;
     this.onChange = onChange;
+    this.onResync = onResync;
   }
 
   private get remote(): boolean {
@@ -121,6 +123,7 @@ export class DeviceHub {
 
   /** 重新拉快照；拉的时候到的变化先存着，快照之后的再补上。拉不到就一直重试。 */
   private async resync(first: Change[] = []): Promise<void> {
+    this.onResync?.();
     if (this.buffer) {
       this.buffer.push(...first);
       return;
@@ -312,7 +315,12 @@ export class DevicesStore {
 
   constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor) {
     this.clientFor = clientFor;
-    this.hubs.set(LOCAL_DEVICE, new DeviceHub(LOCAL_DEVICE, this.clientFor(LOCAL_DEVICE), this.changed));
+    this.hubs.set(
+      LOCAL_DEVICE,
+      new DeviceHub(LOCAL_DEVICE, this.clientFor(LOCAL_DEVICE), this.changed, () => {
+        if (this.running) void this.refresh();
+      }),
+    );
     this.snapshot = this.build();
   }
 

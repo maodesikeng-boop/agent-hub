@@ -17,6 +17,8 @@ export interface PeerRoutesOptions {
   trackSocket: (req: FastifyRequest, socket: WebSocket) => void;
   /** 转发的可调项：fetch、WebSocket 心跳间隔（测试里换）。 */
   proxy?: Pick<ProxyContext, "fetch" | "pingMs">;
+  /** 设备列表或名字变化后通知（如给已连的 WebSocket 推 resync）。 */
+  onChange?: () => void;
 }
 
 const fail = (reply: FastifyReply, error: PeerError) =>
@@ -42,29 +44,49 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
 
   // ---- 浏览器 → 入口：管设备 ----
   app.get(API_PATHS.devices, async (): Promise<DevicesResponse> => ({ devices: peers.list() }));
-  app.post(API_PATHS.devices, async (req, reply) => reply.code(201).send(await peers.add(req.body)));
+  app.post(API_PATHS.devices, async (req, reply) => {
+    const added = await peers.add(req.body);
+    opts.onChange?.();
+    return reply.code(201).send(added);
+  });
   app.post(API_PATHS.deviceInvites, async (_req, reply) => reply.code(201).send(peers.createInvite()));
-  app.patch("/api/devices/:id", async (req) => peers.rename(idParam(req), req.body));
+  app.patch("/api/devices/:id", async (req) => {
+    const renamed = await peers.rename(idParam(req), req.body);
+    opts.onChange?.();
+    return renamed;
+  });
   app.delete("/api/devices/:id", async (req, reply) => {
     peers.remove(idParam(req));
+    opts.onChange?.();
     return reply.code(204).send();
   });
 
   // ---- 设备 → 设备 ----
-  app.post(API_PATHS.peerPair, async (req) => peers.acceptPair(req.body));
+  app.post(API_PATHS.peerPair, async (req) => {
+    const paired = peers.acceptPair(req.body);
+    opts.onChange?.();
+    return paired;
+  });
   app.put(API_PATHS.peerDevices, async (req, reply) => {
     peers.receiveDeviceList(requirePeer(req).id, req.body);
+    opts.onChange?.();
     return reply.code(204).send();
   });
   app.post(API_PATHS.peerUnpair, async (req, reply) => {
     peers.receiveUnpair(requirePeer(req).id);
+    opts.onChange?.();
     return reply.code(204).send();
   });
   app.post(API_PATHS.peerInvites, async (req, reply) => reply.code(201).send(peers.inviteFor(requirePeer(req).id, req.body)));
-  app.post(API_PATHS.peerIntroductions, async (req) => peers.introduce(requirePeer(req).id, req.body));
+  app.post(API_PATHS.peerIntroductions, async (req) => {
+    const introduced = await peers.introduce(requirePeer(req).id, req.body);
+    opts.onChange?.();
+    return introduced;
+  });
   app.put(API_PATHS.peerName, async (req, reply) => {
     requirePeer(req);
     peers.renameSelf(req.body);
+    opts.onChange?.();
     return reply.code(204).send();
   });
 
@@ -80,7 +102,14 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
       const target = split === null ? null : peers.target(split.device);
       return split === null || target === null ? null : { target, rest: split.rest, id: split.device };
     };
-    const contextFor = (id: string): ProxyContext => ({ ...opts.proxy, selfId: peers.selfId, forget: () => peers.forget(id) });
+    const contextFor = (id: string): ProxyContext => ({
+      ...opts.proxy,
+      selfId: peers.selfId,
+      forget: () => {
+        peers.forget(id);
+        opts.onChange?.();
+      },
+    });
 
     // WebSocket（/d/<设备>/api/ws?since=）：握手前先查设备，不认识就 404，不升级
     proxy.get(
