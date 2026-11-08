@@ -1,9 +1,12 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
-import type { AgentVendor } from "./vendors.ts";
+import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, type AgentVendor } from "./vendors.ts";
+
+export { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL };
 
 export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
@@ -210,6 +213,32 @@ export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: stri
   agy: defaultAgyFallbackPaths,
   codex: defaultCodexFallbackPaths,
 };
+
+/** agy CLI 的数据根目录（~/.gemini/antigravity-cli）。 */
+export function agyCliDataDir(userHome: string = homedir()): string {
+  return join(userHome, AGY_CLI_HOME_REL);
+}
+
+/** agy 数据目录下的各子路径。 */
+export function agyDataPaths(root: string = agyCliDataDir()) {
+  return {
+    root,
+    conversationDb: (id: string) => join(root, "conversations", `${id}.db`),
+    brainDir: (id: string) => join(root, "brain", id),
+    mcpCacheDir: join(root, "mcp"),
+    summaryDb: join(root, "conversation_summaries.db"),
+    subDir: (sub: string) => join(root, sub),
+  };
+}
+
+/** agy 在用户主目录下的专属路径。 */
+export function agyHomePaths(userHome: string = homedir()) {
+  return {
+    cliDir: agyCliDataDir(userHome),
+    legacyDir: join(userHome, AGY_LEGACY_HOME_REL),
+    mcpConfigFile: join(userHome, AGY_MCP_CONFIG_REL),
+  };
+}
 
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {

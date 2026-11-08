@@ -8,6 +8,7 @@ import {
   notFoundCode,
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
+  READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
   VENDOR_FAILURE_SIGNS,
   VENDOR_HOME_PATHS,
   VENDOR_SPECS,
@@ -15,6 +16,7 @@ import {
   checkAgentSetting,
   checkEffort,
   checkModel,
+  handoverTokenThresholdOf,
   isAgentVendor,
   bundledModelCatalog,
   defaultModelOption,
@@ -22,10 +24,12 @@ import {
   modelChoiceOf,
   modelLabel,
   modelShortLabel,
+  readonlyNeedsSandboxMessage,
   vendorFailureOf,
   type ModelCatalog,
+  type VendorSpec,
 } from "./vendors.ts";
-import { MAX_MODEL_CHARS } from "./limits.ts";
+import { AUTO_RENEW_CONTEXT_TOKENS, ENV_AGY, ENV_CLAUDE, ENV_CODEX, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 describe("厂商清单", () => {
   it("支持 claude、agy、codex 三家厂商，默认 claude", () => {
@@ -43,10 +47,24 @@ describe("厂商清单", () => {
     expect(claude.customModel).toBe(true);
     expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(claude.backgroundCommands).toBe(true);
+    expect(claude.cliCommand).toBe("claude");
+    expect(claude.envVar).toBe(ENV_CLAUDE);
+    expect(claude.subagentTools).toEqual(["Agent", "Task"]);
+    expect(claude.backgroundCommandTool).toBe("Bash 工具的 `run_in_background`");
+    expect(claude.readonlyMode).toBe("settings");
+    expect(claude.explicitDefaultModel).toBe(false);
+    expect(claude.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
 
     const agy = VENDOR_SPECS.agy;
     expect(agy.label).toBe("Antigravity");
     expect(agy.backgroundCommands).toBe(false);
+    expect(agy.cliCommand).toBe("agy");
+    expect(agy.envVar).toBe(ENV_AGY);
+    expect(agy.subagentTools).toEqual(["invoke_subagent"]);
+    expect(agy.backgroundCommandTool).toBe("`run_command` 的 `WaitMsBeforeAsync`");
+    expect(agy.readonlyMode).toBe("os_sandbox");
+    expect(agy.explicitDefaultModel).toBe(false);
+    expect(agy.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
     // 模型不带档位，档位另外列（agy-effort.test.ts 里有更细的）
     expect(agy.models.map((m) => [m.id, m.label])).toEqual([
       ["gemini-4-argon", "Gemini 4 Argon"],
@@ -70,6 +88,13 @@ describe("厂商清单", () => {
     const codex = VENDOR_SPECS.codex;
     expect(codex.label).toBe("Codex");
     expect(codex.backgroundCommands).toBe(false);
+    expect(codex.cliCommand).toBe("codex");
+    expect(codex.envVar).toBe(ENV_CODEX);
+    expect(codex.subagentTools).toEqual(["spawn_agent"]);
+    expect(codex.backgroundCommandTool).toBe("后台命令参数");
+    expect(codex.readonlyMode).toBe("driver");
+    expect(codex.explicitDefaultModel).toBe(true);
+    expect(codex.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
     expect(codex.models).toEqual([
       { id: "gpt-6-luna", label: "GPT-6-Luna" },
       { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
@@ -93,6 +118,27 @@ describe("厂商清单", () => {
     expect(isAgentVendor("agy")).toBe(true);
     expect(isAgentVendor("codex")).toBe(true);
     for (const v of ["gemini", "", "Claude", null, 1]) expect(isAgentVendor(v)).toBe(false);
+  });
+
+  it("handoverTokenThresholdOf 与 readonlyNeedsSandboxMessage 按声明表返回", () => {
+    expect(HANDOVER_TOKEN_THRESHOLD).toBe(200_000);
+    expect(AUTO_RENEW_CONTEXT_TOKENS).toBe(HANDOVER_TOKEN_THRESHOLD);
+    for (const v of AGENT_VENDORS) expect(handoverTokenThresholdOf(v)).toBe(HANDOVER_TOKEN_THRESHOLD);
+    expect(handoverTokenThresholdOf("unknown")).toBe(HANDOVER_TOKEN_THRESHOLD);
+
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    specs.acme = { ...VENDOR_SPECS.agy, cliCommand: "acme", handoverTokenThreshold: 120_000 };
+    try {
+      expect(handoverTokenThresholdOf("acme")).toBe(120_000);
+      expect(readonlyNeedsSandboxMessage("acme" as "agy")).toContain("只读的 acme Worker 需要 OS 沙箱");
+    } finally {
+      delete specs.acme;
+    }
+
+    expect(readonlyNeedsSandboxMessage("agy")).toBe(READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
+    expect(READONLY_AGY_NEEDS_SANDBOX_MESSAGE).toBe(
+      "只读的 agy Worker 需要 OS 沙箱（目前只有 macOS 有）：agy 没有自带的只读命令行，没有外层沙箱它的命令行写文件挡不住。这台机器上请改用 claude 或 codex 的只读 Worker。",
+    );
   });
 });
 

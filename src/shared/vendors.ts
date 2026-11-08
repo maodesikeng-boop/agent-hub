@@ -1,7 +1,7 @@
 // 厂商清单：每家厂商打包的模型名单、哪些思考程度、对应的命令行参数。网页（下拉）和后台（校验、启动参数）都从这里读，
 // 加厂商只改这一个文件（问厂商要模型名单的代码在 daemon/driver/model-catalog.ts）。“默认”一律是 null，表示不传对应的参数，用厂商自己的默认。
 // agent_sessions.vendor、pms.vendor 存的就是这里的厂商编号。
-import { MAX_MODEL_CHARS } from "./limits.ts";
+import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 export const AGENT_VENDORS = ["claude", "agy", "codex"] as const;
 export type AgentVendor = (typeof AGENT_VENDORS)[number];
@@ -34,6 +34,9 @@ export interface FetchedQuotaSpec {
   groups: readonly { key: string; name: string; match: string }[];
   windows: Readonly<Record<string, QuotaWindowKey>>;
 }
+
+/** 只读 Worker 落实方式：settings=写进 claude settings.json 原生沙箱；driver=驱动层原生参数；os_sandbox=依赖外层 OS 沙箱。 */
+export type VendorReadonlyMode = "settings" | "driver" | "os_sandbox";
 
 export interface VendorSpec {
   /** 界面上的名字。 */
@@ -70,6 +73,20 @@ export interface VendorSpec {
    * - codex（false）：命令跑完不会自己开新一轮叫醒 agent（nohup & 等后台命令也看不到状态）。
    */
   backgroundCommands: boolean;
+  /** CLI 命令名（默认可执行文件名，也用于提示词禁直接调 CLI 的列表）。 */
+  cliCommand: string;
+  /** 覆盖可执行文件路径的环境变量名（ENV_CLAUDE / ENV_AGY / ENV_CODEX）。 */
+  envVar: string;
+  /** 厂商内置子代理工具名（提示词里严禁直接调用的列表）。 */
+  subagentTools: readonly string[];
+  /** 后台运行长命令的工具写法说明（如 "Bash 工具的 `run_in_background`"）；用于拼提示词。 */
+  backgroundCommandTool: string;
+  /** 只读 Worker 落实方式。 */
+  readonlyMode: VendorReadonlyMode;
+  /** 未选模型时是否需把 ModelCatalog.defaultModelId 显式传给驱动（codex 为 true）。 */
+  explicitDefaultModel?: boolean;
+  /** 项目经理自动换新会话的上下文 token 阈值（默认 HANDOVER_TOKEN_THRESHOLD = 200_000）。 */
+  handoverTokenThreshold: number;
   /** 输入框的命令（纯数据；用它的代码在 daemon/vendors/）。 */
   composer: ComposerSpec;
 }
@@ -160,6 +177,13 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     },
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
     backgroundCommands: true,
+    cliCommand: "claude",
+    envVar: ENV_CLAUDE,
+    subagentTools: ["Agent", "Task"],
+    backgroundCommandTool: "Bash 工具的 `run_in_background`",
+    readonlyMode: "settings",
+    explicitDefaultModel: false,
+    handoverTokenThreshold: HANDOVER_TOKEN_THRESHOLD,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",
@@ -231,6 +255,13 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     },
     // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
     backgroundCommands: false,
+    cliCommand: "agy",
+    envVar: ENV_AGY,
+    subagentTools: ["invoke_subagent"],
+    backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`",
+    readonlyMode: "os_sandbox",
+    explicitDefaultModel: false,
+    handoverTokenThreshold: HANDOVER_TOKEN_THRESHOLD,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",
@@ -265,6 +296,13 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     },
     // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）
     backgroundCommands: false,
+    cliCommand: "codex",
+    envVar: ENV_CODEX,
+    subagentTools: ["spawn_agent"],
+    backgroundCommandTool: "后台命令参数",
+    readonlyMode: "driver",
+    explicitDefaultModel: true,
+    handoverTokenThreshold: HANDOVER_TOKEN_THRESHOLD,
     composer: {
       commandPrefix: "/",
       compactCommand: "compact",
@@ -482,6 +520,63 @@ export function effortLabel(effort: string | null): string {
 
 export function vendorLabel(vendor: string): string {
   return isAgentVendor(vendor) ? VENDOR_SPECS[vendor].label : vendor;
+}
+
+/** 项目经理自动换新会话的上下文 token 阈值：认识的厂商返回声明表里的，否则默认 HANDOVER_TOKEN_THRESHOLD。 */
+export function handoverTokenThresholdOf(vendor: string): number {
+  const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendor];
+  return spec?.handoverTokenThreshold ?? HANDOVER_TOKEN_THRESHOLD;
+}
+
+/** 没有 OS 沙箱时派只读 Worker 的报错（按厂商声明表生成）。 */
+export function readonlyNeedsSandboxMessage(vendor: AgentVendor): string {
+  const cmd = VENDOR_SPECS[vendor]?.cliCommand ?? vendor;
+  const others = AGENT_VENDORS.filter((v) => v !== vendor && VENDOR_SPECS[v].readonlyMode !== "os_sandbox")
+    .map((v) => VENDOR_SPECS[v].cliCommand)
+    .join(" 或 ");
+  return `只读的 ${cmd} Worker 需要 OS 沙箱（目前只有 macOS 有）：${cmd} 没有自带的只读命令行，没有外层沙箱它的命令行写文件挡不住。这台机器上请改用 ${others} 的只读 Worker。`;
+}
+
+/** 没有 OS 沙箱时派只读 agy 的报错（保留导出兼容尚未改的调用处）。 */
+export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE = readonlyNeedsSandboxMessage("agy");
+
+// ---- AGY 数据目录与厂商专属路径（供 shared/paths.ts 与 shared/index.ts 共用，纯字符串不引 node 模块）----
+
+export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
+export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
+export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
+
+function defaultUserHome(): string {
+  return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.HOME ?? "";
+}
+
+function joinRel(base: string, ...parts: string[]): string {
+  const cleanBase = base.replace(/\/+$/, "");
+  const cleanParts = parts.map((p) => p.replace(/^\/+|\/+$/g, "")).filter(Boolean);
+  return cleanBase === "" ? cleanParts.join("/") : [cleanBase, ...cleanParts].join("/");
+}
+
+export function agyCliDataDir(userHome: string = defaultUserHome()): string {
+  return joinRel(userHome, AGY_CLI_HOME_REL);
+}
+
+export function agyDataPaths(root: string = agyCliDataDir()) {
+  return {
+    root,
+    conversationDb: (id: string) => joinRel(root, "conversations", `${id}.db`),
+    brainDir: (id: string) => joinRel(root, "brain", id),
+    mcpCacheDir: joinRel(root, "mcp"),
+    summaryDb: joinRel(root, "conversation_summaries.db"),
+    subDir: (sub: string) => joinRel(root, sub),
+  };
+}
+
+export function agyHomePaths(userHome: string = defaultUserHome()) {
+  return {
+    cliDir: agyCliDataDir(userHome),
+    legacyDir: joinRel(userHome, AGY_LEGACY_HOME_REL),
+    mcpConfigFile: joinRel(userHome, AGY_MCP_CONFIG_REL),
+  };
 }
 
 // ---- 这台设备上能不能用（docs/vendor-availability-design.md）----

@@ -20,6 +20,7 @@ import {
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
+import { VENDOR_SPECS, type VendorSpec } from "../../shared/vendors.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db, SqlValue } from "../store/index.ts";
@@ -253,6 +254,37 @@ describe("进队列：这一轮结束时用量到门槛", () => {
     setContext(firstSession, 100);
     turn(firstSession, [id], ["你好呀"]);
     expect(rows()).toHaveLength(1);
+  });
+
+  it("按会话厂商的 handoverTokenThreshold 判断自动换会话（turn.ended、启动重建 queue 与 runAutoRenew）", () => {
+    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
+    const originalAgy = specs.agy!;
+    specs.agy = { ...originalAgy, handoverTokenThreshold: 80_000 };
+    try {
+      const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon" });
+      const agyConv = agyPm.conversation.id;
+      const agySession = agyPm.sessionId;
+
+      // 80_000 对 claude（200_000）没到门槛，但对 agy（80_000）到了门槛
+      const claudeMsg = post("claude 消息", conversationId);
+      setContext(firstSession, 80_000);
+      turn(firstSession, [claudeMsg], ["claude 回复"]);
+      expect(rows(conversationId)).toHaveLength(0);
+
+      const agyMsg = post("agy 消息", agyConv);
+      setContext(agySession, 80_000);
+      turn(agySession, [agyMsg], ["agy 回复"]);
+      expect(rows(agyConv)).toMatchObject([{ status: "queued", auto: 1, from_session_id: agySession }]);
+
+      // 启动重建 queue：删掉 handovers 行后重启，按会话厂商的阈值重建并由 runAutoRenew 登记
+      db.run("DELETE FROM handovers");
+      ledger = open();
+      ledger.runAutoRenew();
+      expect(rows(conversationId)).toHaveLength(0);
+      expect(rows(agyConv)).toMatchObject([{ status: "queued", auto: 1, from_session_id: agySession }]);
+    } finally {
+      specs.agy = originalAgy;
+    }
   });
 
   it("队列空：runAutoRenew、claimHandover 一条 SQL 都不跑", () => {

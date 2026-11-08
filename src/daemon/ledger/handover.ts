@@ -27,7 +27,6 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { ForkRef, ForkerKind, HandoverCleanJob, HandoverFailure, HandoverId, HandoverJob, HandoverStatus } from "../../shared/handover.ts";
 import {
-  AUTO_RENEW_CONTEXT_TOKENS,
   AUTO_RENEW_IDLE_MS,
   AUTO_RENEW_MAX_ATTEMPTS,
   AUTO_RENEW_RETRY_BACKOFF_MS,
@@ -37,7 +36,7 @@ import {
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
-import { vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { handoverTokenThresholdOf, vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
 import { workerLineText } from "../../shared/worker.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -229,7 +228,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const { getMessage, insertSystemMessage, transition } = messages;
   const { pmRow, requirePm, privateConversation } = persona;
   const findTranscript = options.findTranscript ?? (() => null);
-  const contextTokens = options.autoRenew?.contextTokens ?? AUTO_RENEW_CONTEXT_TOKENS;
+  const thresholdOf = (vendor: string) => options.autoRenew?.contextTokens ?? handoverTokenThresholdOf(vendor);
   const idleMs = options.autoRenew?.idleMs ?? AUTO_RENEW_IDLE_MS;
   const timeoutMs = options.autoRenew?.timeoutMs ?? HANDOVER_TIMEOUT_MS;
   const log = options.log ?? (() => {});
@@ -240,14 +239,17 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
    * 进：turn.ended 时到门槛、手动开新会话；出：换代了、这一代试满了、会话结束了。
    */
   const queue = new Set<ConversationId>();
-  for (const { id } of db.all<{ id: number }>(
-    `SELECT conversation_id AS id FROM agent_sessions
-       WHERE role = 'pm' AND conversation_id IS NOT NULL AND status NOT IN ('ended', 'broken')
-         AND CASE WHEN json_valid(token_usage) THEN json_extract(token_usage, '$.context') END >= ?
-     UNION SELECT conversation_id FROM handovers WHERE ${ACTIVE}`,
-    contextTokens,
-  ))
+  for (const row of db.all<{ id: number; vendor: string; context: number | null }>(
+    `SELECT conversation_id AS id, vendor,
+            CASE WHEN json_valid(token_usage) THEN json_extract(token_usage, '$.context') END AS context
+       FROM agent_sessions
+       WHERE role = 'pm' AND conversation_id IS NOT NULL AND status NOT IN ('ended', 'broken')`,
+  )) {
+    if ((row.context ?? 0) >= thresholdOf(row.vendor)) queue.add(row.id);
+  }
+  for (const { id } of db.all<{ id: number }>(`SELECT conversation_id AS id FROM handovers WHERE ${ACTIVE}`)) {
     queue.add(id);
+  }
 
   const metaOf = (row: Pick<MessageDbRow, "meta">): HandoverMeta => JSON.parse(row.meta!) as HandoverMeta;
   const setMeta = (id: MessageId, meta: HandoverMeta) => db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), id);
@@ -307,7 +309,11 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
 
   /** 这一代还能自动换：对话够长、会话还在用、试的次数没满。 */
   const autoAllowed = (session: AgentSessionRow) =>
-    session.role === "pm" && session.usage.context >= contextTokens && session.status !== "ended" && session.status !== "broken" && attemptsOf(session.id).counted < AUTO_RENEW_MAX_ATTEMPTS;
+    session.role === "pm" &&
+    session.usage.context >= thresholdOf(session.vendor) &&
+    session.status !== "ended" &&
+    session.status !== "broken" &&
+    attemptsOf(session.id).counted < AUTO_RENEW_MAX_ATTEMPTS;
 
   /** 是这个对话现在的这一代、还在用。 */
   const stillCurrent = (session: AgentSessionRow | null): session is AgentSessionRow =>
@@ -796,7 +802,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       return;
     }
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
-    if (!queue.has(conversationId) && (event.type !== "turn.ended" || session.usage.context < contextTokens)) return;
+    if (!queue.has(conversationId) && (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
     // 本会话写交接：那一轮结束、进程退出时写交接到此为止；H 没成就记失败；正常写完就换代
     const request = inSessionOf(conversationId) === undefined ? undefined : requestOf(session);
     if (request !== undefined && event.type !== "driver.error") endWriting(request);
