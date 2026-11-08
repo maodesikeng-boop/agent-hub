@@ -565,6 +565,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       push,
       peers,
       tunnel,
+      publicSock: paths.publicSock,
+      publicEntryFile: paths.publicEntryFile,
       peerEntry: {
         socket: paths.peerSock,
         ...(process.platform === "linux" ? { port: port === 0 ? 0 : DEFAULT_PEER_ENTRY_PORT } : {}),

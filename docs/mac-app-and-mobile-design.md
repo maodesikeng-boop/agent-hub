@@ -239,14 +239,15 @@ iPhone 主屏 Web App (5G / 任意 Wi-Fi，不装 Tailscale)
 公网暴露面下，万一一次性登录链接 `/auth#link=<码>` 被截屏或剪贴板泄露，单靠链接本身不够安全。加上**已登录设备二次批准**：
 
 1. **数据库表扩展（迁移 `0017_public_entry.sql`）**：
-   在 `browser_sessions` 表新增三个字段：
+   新建附属表 `browser_session_public`（采用 `CREATE TABLE IF NOT EXISTS` 保证迁移重跑幂等）：
    ```sql
-   ALTER TABLE browser_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
-   ALTER TABLE browser_sessions ADD COLUMN via_public INTEGER NOT NULL DEFAULT 0;
-   ALTER TABLE browser_sessions ADD COLUMN client_ip TEXT NOT NULL DEFAULT '';
+   CREATE TABLE IF NOT EXISTS browser_session_public (
+     session_id TEXT PRIMARY KEY REFERENCES browser_sessions (id) ON DELETE CASCADE,
+     status     TEXT NOT NULL,
+     client_ip  TEXT NOT NULL
+   ) STRICT;
    ```
-   - `status`：`'active'`（已生效）或 `'pending_approval'`（公网扫码后待已登录设备批准）；
-   - `via_public`：`0`（本机或 tailnet 登录）或 `1`（经 `public.sock` 公网入口登录）。
+   - 凡在 `browser_session_public` 中有记录的会话即为 `viaPublic = true`，其 `status` 为 `'pending_approval' | 'active'`；不在该表中的会话即普通本机/tailnet 会话（`viaPublic = false, status = 'active'`）。
 2. **兑换与拦截流程**：
    - 本机 `loopback` 或 `tailnet` 入口兑换登录链接：直接创建 `status = 'active'` 会话（保持现有体验不变）；
    - **公网 `public` 入口**调用 `POST /auth { link }` 兑换一次性链接（注：公网入口**禁止** `GET /auth?token=` 主钥匙直登，只允许一次性 `#link=`）：

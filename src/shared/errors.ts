@@ -15,6 +15,8 @@ export const API_ERRORS = {
   forbidden_origin: { status: 403, text: "请求来源不对，已拦下", hint: "直接在 agent hub 页面里操作" },
   forbidden_identity: { status: 403, text: "这台设备的主人不是你", hint: "换成这台设备主人的账号" },
   forbidden_peer: { status: 403, text: "别的设备不能调这个接口" },
+  session_pending_approval: { status: 403, text: "等待已登录设备批准登录", hint: "在已登录的设备上点「允许」" },
+  public_auth_locked: { status: 429, text: "公网登录尝试过多，已锁定 15 分钟后再试" },
   peer_unauthorized: { status: 401, text: "这台设备没有配对或已被移除", hint: "到设备页重新配对" },
   device_not_found: { status: 404, text: "没有这台设备", hint: "到设备页刷新设备清单" },
   device_offline: { status: 502, text: "那台设备连不上", hint: "看那台设备开没开机、联没联网" },
