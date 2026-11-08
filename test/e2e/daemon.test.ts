@@ -99,7 +99,8 @@ describe("W5 组装 + 端到端", () => {
     const prompt = readFileSync(promptFile, "utf8");
     expect(prompt).toContain(`你是用户的项目经理“${DEFAULT_PM_NAME}”`);
     expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
-    expect(prompt).toContain(HUB_USAGE_PROMPT);
+    // hub 用法里 --vendor 只列这台设备上能用的厂商（看机器装了哪些），比到那里为止
+    expect(prompt).toContain(HUB_USAGE_PROMPT.slice(0, HUB_USAGE_PROMPT.indexOf("[--vendor ")));
     expect(prompt).not.toContain("# 性格设定");
     // pm-home 里没有 CLAUDE.md：不加“先读 AGENTS.md”
     expect(prompt).not.toContain(AGENTS_NOTE);

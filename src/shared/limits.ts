@@ -200,6 +200,8 @@ export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
 export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
+/** codex app-server 里可有可无的那条（模型名单那次顺带问的 account/read）：必需的都回了以后最多再等多久，老版本不回就不等。 */
+export const CODEX_OPTIONAL_RPC_GRACE_MS = 1_000;
 /** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
 export const MAX_CATALOG_MODELS = 50;
 export const MAX_CATALOG_LABEL_CHARS = 80;

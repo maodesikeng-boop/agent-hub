@@ -480,6 +480,15 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       if (msg.method === "account/read") out({ jsonrpc: "2.0", id: msg.id, error: { message: "unknown method" } });
     `);
     expect(await queryCodexCatalog({ codexPath: noAccountPath, cwd: dir })).toEqual({ models: REAL_CODEX_MODELS, account: undefined });
+
+    // 老版本对不认识的方法根本不回：名单照样拿到，不等到整个查询超时
+    const silentPath = fakeCodex(`
+      if (msg.id === 1) out({ jsonrpc: "2.0", id: 1, result: {} });
+      if (msg.method === "model/list") out({ jsonrpc: "2.0", id: msg.id, result: { data: ${JSON.stringify(REAL_CODEX_MODELS)} } });
+    `);
+    const started = Date.now();
+    expect(await queryCodexCatalog({ codexPath: silentPath, cwd: dir, timeoutMs: 10_000 })).toEqual({ models: REAL_CODEX_MODELS, account: undefined });
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it("queryClaudeAuthStatus：跑 claude auth status --json，loggedIn 真假对应能用 / 没登录，认不出是 unknown", async () => {

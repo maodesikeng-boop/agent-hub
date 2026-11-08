@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   AGENT_VENDORS,
+  CODEX_OPTIONAL_RPC_GRACE_MS,
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
@@ -454,11 +455,14 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
     let killTimer: NodeJS.Timeout | undefined;
     const results: unknown[] = new Array(calls.length);
     let pending = calls.length;
+    let requiredPending = calls.filter((c) => !c.optional).length;
+    let graceTimer: NodeJS.Timeout | undefined;
     const exited = () => child.exitCode !== null || child.signalCode !== null;
     const finish = (error: Error | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
         void forceKill(child);
@@ -516,7 +520,10 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
         results[index] = typeof res === "object" && res !== null && Array.isArray((res as { data?: unknown }).data) ? (res as { data: unknown[] }).data : (res ?? {});
       }
       pending -= 1;
+      if (!call.optional) requiredPending -= 1;
       if (pending === 0) finish(null);
+      // 必需的都回了：可有可无的（老版本不认识的方法可能根本不回）只再等一会儿，没回就是 undefined
+      else if (requiredPending === 0) graceTimer ??= setTimeout(() => finish(null), CODEX_OPTIONAL_RPC_GRACE_MS);
     });
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: CODEX_CLIENT_INFO } })}\n`);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`);
