@@ -270,6 +270,14 @@ export const HUB_SOCKET_PROBE_MS = 1_000;
  * 要比 HUB_CLI_TIMEOUT_MS 短得多：git 卡住时这一次派活报错，不能拖到 hub 那边报“可能已执行”。
  */
 export const GIT_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * agent 接口：hub worker start --vendor 选的这家现在不能用时，当场重问一次（ModelCatalogs.ensureUsable）最多等多久；
+ * 没问完就按现在的状态回答（重问在后台接着跑，下一次调用看得到新结果）。
+ * 整个请求受 HUB_REQUEST_TIMEOUT_MS 限制，后面还要探 git（最多两次 git，各 GIT_PROBE_TIMEOUT_MS），所以取
+ * HUB_REQUEST_TIMEOUT_MS − 2 × GIT_PROBE_TIMEOUT_MS − 1 秒余量 = 4 秒：重问再慢，git 也卡住，也在请求上限之内回到项目经理。
+ * 问一次名单要 MODEL_CATALOG_TIMEOUT_MS（15 秒），所以这个预算比一次完整的重问短，卡住时会走“按现在的状态回答”。
+ */
+export const VENDOR_RECHECK_BUDGET_MS = HUB_REQUEST_TIMEOUT_MS - 2 * GIT_PROBE_TIMEOUT_MS - 1_000;
 /** hub 命令：连上之后多久没动静算守护进程没回应。 */
 export const HUB_CLI_TIMEOUT_MS = 30_000;
 /** hub 命令：--stdin 多久没收到数据就放弃。 */

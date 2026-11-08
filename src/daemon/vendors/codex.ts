@@ -3,7 +3,7 @@
 // - Codex 的 skill 触发语法是 `$<skill>`：用户在输入框输 `/<skill>`（除 `/compact` 外）时，buildUserContent 把开头的 `/<skill>` 改写为 `$<skill>`；
 // - 隐藏名单与拦截原因在 shared/vendors.ts 的 VENDOR_SPECS.codex.composer；
 // - 模型名单和登录状态：同一个 app-server 里问 model/list 和 account/read（文件末尾）。
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   COMMANDS_QUERY_TIMEOUT_MS,
@@ -171,10 +171,34 @@ export const codexCatalogProbe: VendorCatalogProbe = {
   },
 };
 
-/** 补充判断（老版本没有 account/read 时）：codex 登录后写 $CODEX_HOME/auth.json（默认 ~/.codex/auth.json），只看文件在不在，不起进程。 */
+/** config.toml 顶层的 cli_auth_credentials_store（一行 key = "值"，到第一个 [表] 为止）；没写、读不了是 null。 */
+function codexCredentialsStore(codexHome: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(codexHome, "config.toml"), "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) return null;
+    const match = /^cli_auth_credentials_store\s*=\s*(?:"([^"]*)"|'([^']*)')/u.exec(trimmed);
+    if (match) return match[1] ?? match[2] ?? null;
+  }
+  return null;
+}
+
+/**
+ * 补充判断（老版本没有 account/read、或名单超时时）：codex 登录后默认写 $CODEX_HOME/auth.json（默认 ~/.codex/auth.json），先看它在不在；
+ * 不在时看 $CODEX_HOME/config.toml 的 cli_auth_credentials_store：官方文档（https://developers.openai.com/codex/auth#credential-storage）
+ * 取值 file（默认）| keyring | auto | ephemeral；keyring、auto 把凭据放进系统钥匙串，auth.json 本来就不在，说不清（unknown，当能用）；
+ * 没写、file 等别的值才是没登录。只读这两个文件，不起进程。
+ */
 export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: string): VendorAvailability {
   const codexHome = env.CODEX_HOME?.trim() || join(homeDir, ".codex");
-  return existsSync(join(codexHome, "auth.json")) ? "available" : "signed_out";
+  if (existsSync(join(codexHome, "auth.json"))) return "available";
+  const store = codexCredentialsStore(codexHome);
+  return store === "keyring" || store === "auto" ? "unknown" : "signed_out";
 }
 
 export function createCodexCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {

@@ -15,6 +15,7 @@ import {
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
   MODEL_CATALOG_TIMEOUT_MS,
+  VENDOR_RECHECK_BUDGET_MS,
   VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
@@ -631,6 +632,8 @@ export interface ModelCatalogsOptions {
   sources: Partial<Record<AgentVendor, VendorCatalogSource>>;
   now?: () => number;
   log?: (line: string) => void;
+  /** ensureUsable 的重问最多等多久，默认 VENDOR_RECHECK_BUDGET_MS；测试里调小。 */
+  ensureUsableBudgetMs?: number;
 }
 
 export interface ModelCatalogs {
@@ -643,7 +646,10 @@ export interface ModelCatalogs {
   current(vendor: AgentVendor): ModelCatalog | null;
   /** 现在的状态（不问厂商、不等；装没装每次查文件）。提示词用。 */
   availability(vendor: AgentVendor): VendorAvailability;
-  /** hub worker start 用：现在不能用的先重问这一家一次（等它问完），再给状态；能用的不问。 */
+  /**
+   * hub worker start 用：现在不能用的先重问这一家一次，再给状态；能用的不问。最多等 VENDOR_RECHECK_BUDGET_MS，
+   * 没问完就按现在的状态回，重问在后台接着跑（下一次调用看得到新结果）。
+   */
   ensureUsable(vendor: AgentVendor): Promise<VendorAvailability>;
   /** 真跑的结果（会话起来了、认证失败、找不到程序）直接更新状态，不用等缓存过期。 */
   report(vendor: AgentVendor, availability: VendorAvailability): void;
@@ -675,6 +681,7 @@ interface VendorCatalogSlot {
 export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalogs {
   const now = options.now ?? Date.now;
   const log = options.log ?? (() => {});
+  const ensureUsableBudgetMs = options.ensureUsableBudgetMs ?? VENDOR_RECHECK_BUDGET_MS;
   let closed = false;
   const controller = new AbortController();
 
@@ -758,7 +765,15 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     },
     async ensureUsable(vendor) {
       const slot = slots[vendor];
-      if (slot.source && !closed && installed(slot) && !isSelectable(availabilityOf(slot))) await ask(slot);
+      if (slot.source && !closed && installed(slot) && !isSelectable(availabilityOf(slot))) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, ensureUsableBudgetMs);
+        });
+        // ask 自己不会失败；没等完就放着它跑（inflight 还在，下一次调用接着用同一个）
+        await Promise.race([ask(slot), timedOut]);
+        clearTimeout(timer);
+      }
       return availabilityOf(slot);
     },
     report(vendor, availability) {
