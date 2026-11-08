@@ -104,10 +104,20 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     expect(css).toMatch(/--safe-top:\s*env\(safe-area-inset-top, 0px\)/);
     expect(css).toMatch(/--safe-bottom:\s*env\(safe-area-inset-bottom, 0px\)/);
     expect(css).toMatch(/\.chat-main\s*\{[^}]*padding-top:\s*var\(--safe-top\)[^}]*padding-bottom:\s*var\(--safe-bottom\)/s);
-    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).toMatch(/pt-\[var\(--safe-top\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[var\(--safe-top\)\]/);
+    expect(readFileSync("src/web/components/Sidebar.tsx", "utf8")).toMatch(
+      /pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\][^"]*pb-\[var\(--safe-bottom\)\]|pb-\[var\(--safe-bottom\)\][^"]*pt-\[calc\(var\(--safe-top\)\+var\(--macos-traffic-lights-height\)\)\]/,
+    );
     for (const file of ["Sidebar", "Conversation", "WorkerConversation", "PmProfile", "Composer"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8"), `${file} 不直接写 env(`).not.toContain("env(");
     }
+  });
+
+  it("Mac 桌面应用（第 16 条）：红黄绿交通灯安全区变量在 styles.css 集中定义，窄屏顶栏自动让出 72px", () => {
+    expect(css).toMatch(/--macos-traffic-lights-width:\s*0px;/);
+    expect(css).toMatch(/--macos-traffic-lights-height:\s*0px;/);
+    expect(css).toMatch(/html\[data-macos-app="true"\]\s*\{[^}]*--macos-traffic-lights-width:\s*72px;[^}]*--macos-traffic-lights-height:\s*28px;/s);
+    const narrow = mediaBlock(/@media \(max-width: 1100px\)/);
+    expect(narrow).toMatch(/html\[data-macos-app="true"\]\s+\.chat-main\s*\{[^}]*--header-gutter-start:\s*calc\(1\.25rem \+ var\(--macos-traffic-lights-width\)\);/s);
   });
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {

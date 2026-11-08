@@ -19,6 +19,7 @@ import {
   makeSnapshot,
   makeUserMessage,
   makeWorkerConversation,
+  messageChange,
   sessionChange,
 } from "./test-utils.ts";
 
@@ -244,5 +245,122 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(header.className).toContain("pl-[var(--header-gutter-start)]");
     expect(header.className).toContain("pr-[var(--header-gutter-end)]");
     expect(header.className).not.toContain("chat-left");
+  });
+});
+
+describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.macosApp;
+    delete window.webkit;
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("data-macos-app='true' 下左栏与各顶栏带 data-window-drag 及红黄绿交通灯避让类名", async () => {
+    document.documentElement.dataset.macosApp = "true";
+    const user = userEvent.setup();
+    await boot();
+
+    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    expect(sidebar.className).toContain("pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))]");
+    const searchInput = within(sidebar).getByRole("searchbox", { name: "搜索" });
+    expect(searchInput.closest("[data-window-drag]")).not.toBeNull();
+
+    const convHeader = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
+    expect(convHeader).toHaveAttribute("data-window-drag");
+    expect(convHeader.className).toContain("pl-[var(--header-gutter-start)]");
+
+    // 切到资料页检查顶栏
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    const profileBackBtn = screen.getByRole("button", { name: "返回" });
+    const profileHeader = profileBackBtn.closest("header")!;
+    expect(profileHeader).toHaveAttribute("data-window-drag");
+    expect(profileHeader.className).toContain("max-[1100px]:pl-[calc(1.5rem+var(--macos-traffic-lights-width))]");
+
+    // 切到 Worker 对话页检查顶栏
+    act(() => {
+      window.history.replaceState(null, "", "/#/w/30");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const workerHeader = screen.getByRole("heading", { level: 1, name: "修 X" }).closest("header")!;
+    expect(workerHeader).toHaveAttribute("data-window-drag");
+    expect(workerHeader.className).toContain("pl-[var(--header-gutter-start)]");
+  });
+
+  it("webkit.messageHandlers.hubStatus 随状态变化事件驱动上报 runningWorkers、askingCount、waitingCount", async () => {
+    document.documentElement.dataset.macosApp = "true";
+    const postHubStatus = vi.fn();
+    window.webkit = {
+      messageHandlers: {
+        hubStatus: { postMessage: postHubStatus },
+      },
+    };
+
+    const ws = await boot();
+    expect(postHubStatus).toHaveBeenLastCalledWith({ runningWorkers: 0, askingCount: 0, waitingCount: 0 });
+
+    // Worker 30 开始干活 -> runningWorkers = 1
+    push(
+      ws,
+      sessionChange(
+        11,
+        makeSession({ sessionId: 30, conversationId: 30, pmId: 1, status: "running", activity: "working" }),
+      ),
+    );
+    expect(postHubStatus).toHaveBeenLastCalledWith({ runningWorkers: 1, askingCount: 0, waitingCount: 0 });
+
+    // 对话 2 收到一条等你确定的提问 -> askingCount = 1
+    push(
+      ws,
+      messageChange(
+        12,
+        "message.created",
+        makeMessage({ id: 99, conversationId: 2, text: "需要确认部署吗？", meta: { needsUser: true }, dedupeKey: "ask:2:99" }),
+      ),
+    );
+    expect(postHubStatus).toHaveBeenLastCalledWith({ runningWorkers: 1, askingCount: 1, waitingCount: 0 });
+  });
+
+  it("webkit.messageHandlers.windowDrag：点 [data-window-drag] 空白处触发拖拽或双击缩放，点按钮或输入框不触发", async () => {
+    document.documentElement.dataset.macosApp = "true";
+    const postWindowDrag = vi.fn();
+    window.webkit = {
+      messageHandlers: {
+        windowDrag: { postMessage: postWindowDrag },
+      },
+    };
+
+    await boot();
+    const convHeader = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
+
+    // 单击顶栏标题/空白区域 -> 触发拖拽（doubleClick: false）
+    act(() => {
+      convHeader.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }));
+    });
+    expect(postWindowDrag).toHaveBeenCalledTimes(1);
+    expect(postWindowDrag).toHaveBeenLastCalledWith({ doubleClick: false });
+
+    // 双击顶栏空白区域 -> 触发缩放（doubleClick: true）
+    act(() => {
+      convHeader.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 2 }));
+    });
+    expect(postWindowDrag).toHaveBeenCalledTimes(2);
+    expect(postWindowDrag).toHaveBeenLastCalledWith({ doubleClick: true });
+
+    // 右键点击不触发
+    act(() => {
+      convHeader.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2, detail: 1 }));
+    });
+    expect(postWindowDrag).toHaveBeenCalledTimes(2);
+
+    // 点击顶栏里的头像按钮、左栏里的搜索输入框或新建按钮 -> 不触发拖拽
+    const avatarBtn = screen.getByRole("button", { name: "查看 小林 的资料" });
+    const searchInput = screen.getByRole("searchbox", { name: "搜索" });
+    const newPmBtn = screen.getByRole("button", { name: "新建项目经理" });
+    for (const interactive of [avatarBtn, searchInput, newPmBtn]) {
+      act(() => {
+        interactive.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }));
+      });
+    }
+    expect(postWindowDrag).toHaveBeenCalledTimes(2);
   });
 });
