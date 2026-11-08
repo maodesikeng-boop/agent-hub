@@ -26,6 +26,7 @@ import {
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
+import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { WorkerPr } from "../../shared/hub.ts";
@@ -230,6 +231,74 @@ function send(reply: FastifyReply, response: HubResponse): FastifyReply {
   return reply.code(response.ok ? 200 : HUB_ERROR_HTTP_STATUS[response.code]).send(response);
 }
 
+// ---- 请求体校验没过：按 schema 的错拼中文，写出字段名（英文原文只进日志）----
+
+/** ajv 报错里用到的几项（Fastify 的 err.validation）。 */
+interface SchemaIssue {
+  keyword: string;
+  instancePath: string;
+  params: Record<string, unknown>;
+}
+
+const TYPE_NAMES: Record<string, string> = { string: "文字", integer: "整数", number: "数字", boolean: "true 或 false", object: "对象（JSON）", array: "列表", null: "null" };
+
+const fieldOf = (issue: SchemaIssue): string => issue.instancePath.replace(/^\//, "").replaceAll("/", ".");
+
+/** 一条 schema 错 → 一句中文（不含“参数不对：”前缀）。 */
+function describeIssue(issue: SchemaIssue, all: readonly SchemaIssue[]): string {
+  const field = fieldOf(issue);
+  const target = field === "" ? "请求体" : field;
+  const params = issue.params;
+  switch (issue.keyword) {
+    case "required": {
+      // anyOf（几个里至少给一个）会连报每个分支的 required：合成一句“缺 a 或 b”
+      const missing = all.filter((i) => i.keyword === "required" && fieldOf(i) === field).map((i) => String(i.params.missingProperty));
+      return `缺 ${[...new Set(missing)].join(" 或 ")}`;
+    }
+    case "additionalProperties":
+      return `多了 ${String(params.additionalProperty)}`;
+    case "type": {
+      const names = String(params.type).split(",").map((t) => TYPE_NAMES[t] ?? t);
+      return `${target}${field === "" ? "" : " "}必须是${names.join("或")}`;
+    }
+    case "minLength":
+      return params.limit === 1 ? `${target} 不能是空的` : `${target} 不能少于 ${String(params.limit)} 个字`;
+    case "maxLength":
+      return `${target} 不能超过 ${String(params.limit)} 个字`;
+    case "minimum":
+      return `${target} 不能小于 ${String(params.limit)}`;
+    case "enum":
+      return `${target} 只能是 ${(params.allowedValues as unknown[]).join("、")}`;
+    default:
+      return `${target} 的值不对`;
+  }
+}
+
+function describeValidation(issues: readonly SchemaIssue[]): string {
+  // anyOf / oneOf 自己那一条没有字段信息，看它前面具体的几条
+  const first = issues.find((i) => i.keyword !== "anyOf" && i.keyword !== "oneOf") ?? issues[0];
+  return first === undefined ? "请求内容不对" : describeIssue(first, issues);
+}
+
+/** Fastify 自己的 4xx（JSON 坏了、内容类型不对、网址解不开……）→ 一句中文。 */
+function describeFramework(err: FastifyError): string {
+  switch (err.code) {
+    case "FST_ERR_CTP_INVALID_MEDIA_TYPE":
+      return "请求的内容类型必须是 application/json";
+    case "FST_ERR_CTP_EMPTY_JSON_BODY":
+      return "请求体是空的，要给一个 JSON 对象";
+    case "FST_ERR_CTP_INVALID_CONTENT_LENGTH":
+      return "请求体的长度和声明的不一致";
+    case "FST_ERR_BAD_URL":
+      return "网址里有解不开的编码";
+    default:
+      return err instanceof SyntaxError || err.code === "FST_ERR_CTP_INVALID_JSON_BODY" ? "请求体不是合法的 JSON" : "请求的格式不对";
+  }
+}
+
+/** HubError、LedgerRequestError 的 message 是写给人的中文业务原因，原样回给 agent（和异常原文不是一回事）。 */
+const reasonOf = (err: HubError | LedgerRequestError): string => err.message;
+
 function fail(reply: FastifyReply, code: HubErrorCode, message: string): FastifyReply {
   return send(reply, { ok: false, code, message });
 }
@@ -277,7 +346,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false } },
     // 路由之前的错（URL 解不开……）：onRequest 还没跑，也按 HubResponse 回 invalid。
     frameworkErrors: (err, _req, reply) => {
-      void fail(reply, "invalid", `参数不对：${err.message}`);
+      void fail(reply, "invalid", `参数不对：${describeFramework(err)}`);
     },
   });
   const authOf = new WeakMap<FastifyRequest, { sessionId: SessionId; token: string }>();
@@ -302,18 +371,26 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   });
 
   app.setErrorHandler((err: FastifyError | HubError | LedgerRequestError, req, reply) => {
-    if (err instanceof HubError || err instanceof LedgerRequestError) return fail(reply, err.code, err.message);
+    if (err instanceof HubError || err instanceof LedgerRequestError) return fail(reply, err.code, reasonOf(err));
     if ((err as FastifyError).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
       return fail(reply, "invalid", `参数不对：请求体不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
     }
-    if ((err as FastifyError).validation !== undefined) return fail(reply, "invalid", `参数不对：${err.message}`);
+    const validation = (err as FastifyError).validation;
+    if (validation !== undefined) {
+      req.log.info({ err }, "agent-api request body rejected");
+      return fail(reply, "invalid", `参数不对：${describeValidation(validation as unknown as SchemaIssue[])}`);
+    }
     const status = (err as FastifyError).statusCode;
-    // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。
-    if (status !== undefined && status >= 400 && status < 500) return fail(reply, "invalid", `参数不对：${err.message}`);
+    // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。英文原文只进日志。
+    if (status !== undefined && status >= 400 && status < 500) {
+      req.log.info({ err }, "agent-api request rejected by fastify");
+      return fail(reply, "invalid", `参数不对：${describeFramework(err as FastifyError)}`);
+    }
+    // 意外的错：原文、堆栈只进日志和接口健康状态；agent 只看到 internal 那句话
     req.log.error({ err }, "agent-api request failed");
     opts.log?.(`${LOG_PREFIX} hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
     reportHealth(err.message);
-    return fail(reply, "internal", err.message);
+    return fail(reply, "internal", API_ERRORS.internal.text);
   });
 
   app.setNotFoundHandler((req, reply) => fail(reply, "invalid", `未知命令：${req.method} ${req.url.split("?", 1)[0]}`));

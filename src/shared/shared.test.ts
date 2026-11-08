@@ -411,8 +411,8 @@ describe("M2：动作", () => {
 
 describe("M2：账本错误", () => {
   it("四种错误码，两个服务都映射成同样的 HTTP 状态", () => {
-    expect(LEDGER_ERROR_CODES).toEqual(["invalid", "not_found", "forbidden", "conflict"]);
-    expect(LEDGER_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409 });
+    expect(LEDGER_ERROR_CODES).toEqual(["invalid", "not_found", "forbidden", "conflict", "git_failed"]);
+    expect(LEDGER_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409 });
     const e = new LedgerRequestError("conflict", "项目名 foo 已经有了");
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe("LedgerRequestError");
@@ -495,11 +495,11 @@ describe("M2：agent 接口", () => {
   });
 
   it("退出码：0 成功，1 系统拒绝，2 用法不对，3 连不上", () => {
-    expect(HUB_EXIT).toEqual({ ok: 0, rejected: 1, usage: 2, unreachable: 3 });
+    expect(HUB_EXIT).toEqual({ ok: 0, rejected: 1, usage: 2, unreachable: 3, internal: 4 });
   });
 
-  it("错误码到 HTTP 状态：账本的四种 + 令牌不对 + 守护进程自己出错", () => {
-    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, unauthorized: 401, internal: 500 });
+  it("错误码到 HTTP 状态：账本的五种 + 令牌不对 + 守护进程自己出错", () => {
+    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409, unauthorized: 401, internal: 500 });
   });
 
   it("应答按 ok 收窄", () => {

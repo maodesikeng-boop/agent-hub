@@ -76,6 +76,7 @@ import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
+import { StartupError } from "./startup-error.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
@@ -116,7 +117,7 @@ export interface RunningDaemon {
 function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw === "") return DEFAULT_UI_PORT;
   const port = Number(raw);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error(`${ENV_PORT} must be a port number, got ${raw}`);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new StartupError("bad_port", `现在是 ${raw}`);
   return port;
 }
 
@@ -507,6 +508,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
   } catch (error) {
     await shutdown();
+    // 界面端口被占（再开一个守护进程、别的程序占着）：换成带 port_in_use 的错，终端上只打一句话；原文留在 cause 里写日志
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE" && typeof (error as { port?: unknown }).port === "number") {
+      throw new StartupError("port_in_use", String((error as { port: number }).port), { cause: error });
+    }
     throw error;
   }
 }

@@ -32,7 +32,7 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
+import { GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
@@ -140,6 +140,13 @@ export function assertWorkerOpenForUser(db: Db, conversationId: ConversationId):
   if (worker === undefined) return;
   if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再给它发消息`);
   if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
+}
+
+/** git 的输出里挑出原因：第一条 fatal: / error: 开头的行，没有就取最后一个非空行，截到 GIT_REASON_MAX_CHARS 字。 */
+function gitReasonLine(output: string): string {
+  const lines = output.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  const reason = lines.find((l) => /^(fatal|error):/.test(l)) ?? lines.at(-1) ?? "没有给出原因";
+  return [...reason.replace(/。$/, "")].slice(0, GIT_REASON_MAX_CHARS).join("");
 }
 
 /** 给 agent 看的一句“在哪干活”。 */
@@ -312,9 +319,12 @@ export function createLedgerWorkers(
 
   // ---- hub worker …（只给项目经理，见 shared/hub.ts 的 HUB_COMMAND_ROLES）----
 
-  /** git 没跑成时拒绝派活的话（m3-plan 第 2.6 节：不默默改成在主文件夹里干）。 */
-  const gitFailed = (error: string) =>
-    new Error(`git 没跑成：${error}。可以重试；或者加 --no-worktree，明确让 Worker 在主文件夹里干。`);
+  /**
+   * git 没跑成时拒绝派活的话（m3-plan 第 2.6 节：不默默改成在主文件夹里干）。409 git_failed，不算接口故障。
+   * 原因取输出里第一条 fatal: 或 error: 开头的行，没有就取最后一个非空行（第一行常是 “Preparing worktree…” 这类进度），截到 GIT_REASON_MAX_CHARS 字。
+   */
+  const gitFailed = (output: string) =>
+    fail("git_failed", `git 没跑成：${gitReasonLine(output)}。可以重试；或者加 --no-worktree，明确让 Worker 在主文件夹里干。`);
 
   const startIn = (
     p: Pending,
