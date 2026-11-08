@@ -158,16 +158,37 @@ describe("左栏", () => {
     expect(preview).toHaveClass("block", "text-[13.5px]");
   });
 
-  it("左下角：“我”的头像用颜色变量；额度、设置、新建都是同一种 ghost 按钮（没有底色、不是胶囊底）", async () => {
-    await boot();
-    const me = screen.getByText("我", { selector: "span[aria-hidden]" });
-    expect(me).toHaveClass("bg-me", "text-me-foreground");
-    expect(me.className).not.toMatch(/emerald/);
-    for (const name of ["设置", "新建项目经理"]) {
-      const button = screen.getByRole("button", { name });
+  it("左栏底部：不渲染“我”头像与文字；左侧放额度入口，右侧设置按钮 ml-auto 固定靠右；额度、设置、新建都是同一种 ghost 按钮", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    expect(within(sidebar).queryByText("我")).not.toBeInTheDocument();
+    const settingsBtn = within(sidebar).getByRole("button", { name: "设置" });
+    expect(settingsBtn).toHaveClass("ml-auto");
+    push(
+      ws,
+      sessionChange(
+        11,
+        makeSession({
+          sessionId: 1,
+          conversationId: 1,
+          pmId: 1,
+          lastEventAt: 5,
+          rateLimit: {
+            status: "allowed",
+            resetsAt: null,
+            windows: { five_hour: { utilization: 0.37, resetsAt: Math.floor(Date.now() / 1000) + 3600, status: "allowed" } },
+          },
+        }),
+      ),
+    );
+    const quotaBtn = within(sidebar).getByRole("button", { name: "5 小时额度已用 37%" });
+    for (const button of [quotaBtn, settingsBtn, screen.getByRole("button", { name: "新建项目经理" })]) {
       expect(button).toHaveClass("text-muted-foreground", "hover:bg-accent");
       expect(button.className).not.toMatch(/(^|\s)bg-/);
     }
+    await user.click(settingsBtn);
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
   });
 });
 

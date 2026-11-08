@@ -280,14 +280,8 @@ export function Sidebar({
           )}
         </nav>
         <div className="flex items-center gap-1 px-3 py-3">
-          <span className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-me text-xs font-semibold text-me-foreground" aria-hidden="true">
-              我
-            </span>
-            <span className="truncate text-[15px] font-medium">我</span>
-          </span>
           <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-          <Button variant="ghost" size="icon-sm" aria-label="设置" onClick={() => setSettingsOpen(true)}>
+          <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="设置" onClick={() => setSettingsOpen(true)}>
             <Settings aria-hidden="true" />
           </Button>
         </div>
