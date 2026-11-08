@@ -1,6 +1,7 @@
 // 分组列表（docs/ui-standard.md 第 9 条；资料页、新建项目经理、全局设置共用）：组标题在框外，框里一行一项，左边名字、右边控件。
 // 颜色、圆角、字号跟左栏一致：浅灰底（bg-sidebar）、rounded-2xl、15px；文字左边和组标题都对齐在框内 16px（px-4）。
 import { useId, type ReactNode } from "react";
+import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 
 /**
@@ -35,7 +36,7 @@ export function SettingsRow({
 }: {
   label: string;
   detail?: ReactNode;
-  error?: string | null;
+  error?: ErrorLike | null;
   wide?: boolean;
   children: (id: string) => ReactNode;
 }) {
@@ -51,7 +52,7 @@ export function SettingsRow({
         </div>
         <div className={cn("flex min-w-0 items-center justify-end gap-2", !wide && "shrink-0")}>{children(id)}</div>
       </div>
-      {error && <RowError>{error}</RowError>}
+      {error && <RowError error={error} />}
     </div>
   );
 }
@@ -65,11 +66,11 @@ export function ReadonlyValue({ id, children }: { id?: string; children: ReactNo
   );
 }
 
-/** 行下面的错误。 */
-export function RowError({ children }: { children: ReactNode }) {
+/** 行下面的错误：接口错误传 error（text 后面接 hint，raw 放 title），自己写的一句话传 children。 */
+export function RowError({ error, children }: { error?: ErrorLike; children?: ReactNode }) {
   return (
-    <p role="alert" className="mt-1 text-[13.5px] text-danger [overflow-wrap:anywhere]">
-      {children}
+    <p role="alert" title={error === undefined ? undefined : errorTitle(error)} className="mt-1 text-[13.5px] text-danger [overflow-wrap:anywhere]">
+      {error === undefined ? children : errorLine(error)}
     </p>
   );
 }

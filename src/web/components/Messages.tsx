@@ -39,8 +39,8 @@ import {
   type WorkerMessageMeta,
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
-import { describeFailure } from "../errors.ts";
-import { formatTime, STATUS_LABELS } from "../format.ts";
+import { describeFailure } from "../../shared/errors.ts";
+import { errorLine, errorTitle, formatTime, STATUS_LABELS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
@@ -543,7 +543,8 @@ function DeliveryStatus({
 export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; onRetry: (clientId: string) => void }) {
   const failed = pending.phase === "failed";
   const filesGone = failed && pending.failure === "attachments_missing";
-  const rejected = failed && pending.failure === "rejected" && pending.reason !== undefined;
+  const reason = failed && pending.failure === "rejected" ? pending.reason : undefined;
+  const rejected = reason !== undefined;
   const noRetry = filesGone || rejected;
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
@@ -555,7 +556,9 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
       <AttachmentList attachments={pending.attachments} />
       <div className={cn(DELIVERY_ROW, failed ? "text-danger" : "text-muted-foreground")} data-status={failed ? "failed" : "queued"} data-delivery>
         {failed ? <X className="size-3.5 shrink-0" aria-hidden="true" /> : <Clock className="size-3.5 shrink-0" aria-hidden="true" />}
-        <span className="min-w-0 [overflow-wrap:anywhere]">{filesGone ? "文件已不在，请重新添加" : rejected ? pending.reason : failed ? "发送失败" : STATUS_LABELS.queued}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]" title={reason === undefined ? undefined : errorTitle(reason)}>
+          {filesGone ? "文件已不在，请重新添加" : reason !== undefined ? errorLine(reason) : failed ? "发送失败" : STATUS_LABELS.queued}
+        </span>
         {failed && !noRetry && (
           <button type="button" className={RETRY_BUTTON} onClick={() => onRetry(pending.clientId)}>
             重试

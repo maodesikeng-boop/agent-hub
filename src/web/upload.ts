@@ -9,8 +9,8 @@ import {
   UPLOAD_CLIENT_CONCURRENCY,
   type Attachment,
 } from "../shared/index.ts";
-import { ApiError, localClient, type HubClient } from "./client.ts";
-import { errorText, newClientId } from "./format.ts";
+import { localClient, type HubClient } from "./client.ts";
+import { ErrorNotice, errorText, newClientId, type ErrorLike } from "./format.ts";
 
 /** 待发的文件。key 只用来区分列表项（同名文件可以有好几个）。 */
 export interface StagedFile {
@@ -55,10 +55,10 @@ export function stageFiles(current: StagedFile[], incoming: File[]): { files: St
   return { files, notice: problems.length === 0 ? null : problems.join("；") };
 }
 
-/** 一个文件传失败了，给用户看的话：带文件名；服务端的中文原因原样用，连不上说连不上，服务端出错不露英文代码。 */
-function uploadFailure(name: string, err: unknown): Error {
-  const reason = err instanceof ApiError && err.status >= 500 ? `服务出错了（${err.status}）` : errorText(err);
-  return new Error(`「${name}」上传失败：${reason}`);
+/** 一个文件传失败了，给用户看的话：带文件名，原因和怎么办都来自 errorText（不露英文代码）。 */
+function uploadFailure(name: string, err: unknown): ErrorNotice {
+  const reason = errorText(err);
+  return new ErrorNotice({ ...reason, text: `「${name}」上传失败：${reason.text}` });
 }
 
 /**
@@ -91,7 +91,7 @@ export interface StagedFiles {
   /** 正在上传、发送：发送键、文字框、加减文件都锁住。 */
   busy: boolean;
   /** 给用户看的提示（加文件被拒、上传失败），下一次操作清掉。 */
-  notice: string | null;
+  notice: ErrorLike | null;
   add: (incoming: File[]) => void;
   remove: (key: string) => void;
   /** 发出去之后只去掉这几个文件（提交时那一份），传的时候新加的不动。 */
@@ -106,7 +106,7 @@ export interface StagedFiles {
 interface Slot {
   files: StagedFile[];
   busy: boolean;
-  notice: string | null;
+  notice: ErrorLike | null;
 }
 const EMPTY_SLOT: Slot = { files: [], busy: false, notice: null };
 
@@ -142,7 +142,7 @@ export function useStagingStore<K extends string | number>() {
         if (result === undefined) return;
         update(key, (s) => ({ ...s, busy: true }));
         result
-          .catch((err: unknown) => update(key, (s) => ({ ...s, notice: err instanceof Error ? err.message : "上传失败" })))
+          .catch((err: unknown) => update(key, (s) => ({ ...s, notice: err instanceof ErrorNotice ? err.info : err instanceof Error ? err.message : "上传失败" })))
           .finally(() => update(key, (s) => ({ ...s, busy: false })));
       },
     };

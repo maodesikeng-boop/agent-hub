@@ -58,7 +58,7 @@ describe("发送时上传", () => {
     );
     const ok = await uploadFiles([file("甲.txt"), file("乙.txt")]);
     expect(ok.map((a) => a.name)).toEqual(["甲.txt", "乙.txt"]);
-    await expect(uploadFiles([file("甲.txt"), file("坏.txt")])).rejects.toThrow("「坏.txt」上传失败：服务出错了（500）");
+    await expect(uploadFiles([file("甲.txt"), file("坏.txt")])).rejects.toThrow("「坏.txt」上传失败：守护进程出了意外的错，已记进日志，重试一次；还不行看日志");
   });
 });
 

@@ -69,7 +69,11 @@ afterEach(() => {
 
 const fence = (lang: string, body = "graph TD\n  A --> B") => `\`\`\`${lang}\n${body}\n\`\`\``;
 const chartOf = (container: HTMLElement) => container.querySelector<HTMLElement>("[data-chart]");
-const rendered = (container: HTMLElement) => waitFor(() => expect(chartOf(container)?.querySelector("svg[data-fake]")).not.toBeNull());
+const rendered = (container: HTMLElement) =>
+  waitFor(() => {
+    expect(chartOf(container)?.querySelector("svg[data-fake]")).not.toBeNull();
+    expect(chartOf(container)?.querySelector("[data-chart-loading]")).toBeNull();
+  });
 
 describe("图表块：分流", () => {
   it("1. mermaid 闭合：出现 data-chart 外壳，不再是普通代码块；语言名和各个按钮都在", async () => {

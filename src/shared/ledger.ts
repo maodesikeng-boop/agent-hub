@@ -35,10 +35,11 @@ import type { AgentVendor, VendorAvailability, VendorAvailabilityMap } from "./v
  * - invalid：参数不对（名字空、文件夹不存在、主文件夹不能移除……）；
  * - not_found：要找的东西没有（项目、项目经理、消息、修改记录）；
  * - forbidden：管不着（不是项目经理的会话、改别人的性格设定）；
- * - conflict：和现在的状态冲突（重名、已经有项目了、不是最近一次修改、消息不是失败状态）。
+ * - conflict：和现在的状态冲突（重名、已经有项目了、不是最近一次修改、消息不是失败状态）；
+ * - git_failed：用户仓库里的 git 没跑成（派 Worker 时探主文件夹），message 带原因行，409。
  * message 是给人看的一句中文，agent 也看得懂，界面和 hub 原样显示。
  */
-export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict"] as const;
+export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict", "git_failed"] as const;
 export type LedgerErrorCode = (typeof LEDGER_ERROR_CODES)[number];
 
 /** 界面服务和 agent 接口都这样映射；状态码从 API_ERRORS 来，不在这里另写一份。 */
@@ -47,6 +48,7 @@ export const LEDGER_ERROR_HTTP_STATUS: Readonly<Record<LedgerErrorCode, number>>
   not_found: API_ERRORS.not_found.status,
   forbidden: API_ERRORS.forbidden.status,
   conflict: API_ERRORS.conflict.status,
+  git_failed: API_ERRORS.git_failed.status,
 };
 
 export class LedgerRequestError extends Error {

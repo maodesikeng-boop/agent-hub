@@ -44,7 +44,7 @@ const daemonNonTestTs = daemonTs.filter((path) => !isTest(path));
 const webTsx = listFiles("src/web", (path) => path.endsWith(".tsx"));
 
 const SERVER = "src/daemon/ui-server/server.ts";
-const AGENT_API = "src/daemon/agent-api/server.ts";
+const AGENT_API = "src/daemon/agent-api/server.ts"; // 只用在“扫得到文件”那条
 const WEB = "src/web/components";
 
 const RULES: Rule[] = [
@@ -88,27 +88,21 @@ const RULES: Rule[] = [
     name: "回给人的不许是 err.message（fail 的第三参）",
     files: daemonTs,
     pattern: /fail\(reply, [^,]+, (err|error)\.message/,
-    expected: 7,
+    expected: 5,
     allowed: [
       { file: SERVER, line: "if (err instanceof PickFolderError) return fail(reply, err.statusCode, err.message);" },
       { file: SERVER, line: 'if (err instanceof UploadError) return fail(reply, err.statusCode, err.message, err.statusCode === 400 ? "invalid" : undefined);' },
       { file: SERVER, line: "if (err instanceof LedgerRequestError) return fail(reply, LEDGER_ERROR_HTTP_STATUS[err.code], err.message, err.code);" },
       { file: SERVER, line: 'if (status === 400) return fail(reply, 400, err.message, "invalid");' },
       { file: SERVER, line: "if (status !== undefined && status >= 400 && status < 500) return fail(reply, status, err.message);" },
-      { file: AGENT_API, line: "if (err instanceof HubError || err instanceof LedgerRequestError) return fail(reply, err.code, err.message);" },
-      { file: AGENT_API, line: 'return fail(reply, "internal", err.message);' },
     ],
   },
   {
     name: "组件不许直接显示 err.message",
     files: webTsx,
     pattern: /(err|error)\.message/,
-    expected: 5,
+    expected: 1,
     allowed: [
-      { file: `${WEB}/BrowserSessions.tsx`, line: 'const reasonOf = (err: unknown) => (err instanceof ApiError ? err.message : "操作失败");' },
-      { file: `${WEB}/FilePreview.tsx`, line: 'setResult({ text: error instanceof ApiError ? error.message : "没能打开这个文件", error: true });' },
-      { file: `${WEB}/PmProfile.tsx`, line: "errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.message } : {}}" },
-      { file: `${WEB}/PmProfile.tsx`, line: "<RowError>{modeSave.error.message}</RowError>" },
       {
         file: `${WEB}/ChartBlock.tsx`,
         line: "chartCache.set(key, { ok: false, message: error instanceof Error ? error.message : String(error) });",

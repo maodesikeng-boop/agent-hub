@@ -646,7 +646,7 @@ describe("新接口的 Host、Origin、cookie 检查", () => {
 
 /** 账本抛 LedgerRequestError：按 LEDGER_ERROR_HTTP_STATUS 映射，error 是它的 message，code 是它的 code。 */
 describe("账本拒绝请求时的 HTTP 状态", () => {
-  const STATUS: Record<LedgerErrorCode, number> = { invalid: 400, not_found: 404, forbidden: 403, conflict: 409 };
+  const STATUS: Record<LedgerErrorCode, number> = { invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409 };
   const CASES = NEW_ENDPOINTS.flatMap(([name, method, url, body]) =>
     LEDGER_ERROR_CODES.map((code) => [name, code, method, url, body] as const),
   );

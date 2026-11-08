@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, PRODUCT_NAME, type SessionTokens } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
+import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
 import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
@@ -593,7 +594,24 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(r.stderr).not.toContain("bad\ntoken");
     });
 
-    it("an unexpected exception becomes one line and exit 2, no stack", async () => {
+    it("不认识的参数、缺值、布尔参数带值：中文，不带 node 的英文原文", async () => {
+      const cases: [string[], string][] = [
+        [["status", "--foo"], "不认识的参数 --foo"],
+        [["status", "-x"], "不认识的参数 -x"],
+        [["project", "create", "--name"], "--name 后面要跟一个值"],
+        [["project", "create", "--name", "--folder", "/x"], "--name 后面要跟一个值"],
+        [["persona", "edit", "--stdin=1"], "--stdin 不带值"],
+      ];
+      for (const [argv, expected] of cases) {
+        const r = await hub(argv);
+        expect(r.code, argv.join(" ")).toBe(HUB_EXIT.usage);
+        expect(r.stderr, argv.join(" ")).toContain(`${cmd}：${expected}`);
+        expect(r.stderr, argv.join(" ")).not.toMatch(/Unknown|option|argument|ambiguous|positional/i);
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("an unexpected exception becomes one Chinese line and exit 4 (not 2), no stack, no exception text", async () => {
       let stderr = "";
       const code = await runHubSafely({
         argv: ["persona", "edit", "--stdin"],
@@ -605,8 +623,10 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
         stdout: { write: () => true },
         stderr: { write: (s: string) => void (stderr += s) },
       });
-      expect(code).toBe(HUB_EXIT.usage);
-      expect(stderr).toBe(`${cmd}：出了意外的错：stdin exploded\n`);
+      expect(code).toBe(HUB_EXIT.internal);
+      expect(HUB_EXIT.internal).toBe(4);
+      expect(stderr).toBe(`${cmd}：出了意外的错，这条命令没有跑完。重试一次；还不行，把现象告诉用户\n`);
+      expect(stderr).not.toContain("stdin exploded");
       expect(ledger.calls).toHaveLength(0);
     });
 
@@ -649,7 +669,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
   });
 
   describe("unreachable daemon (exit 3)", () => {
-    const UNREACHABLE = new RegExp(`连不上 ${PRODUCT_NAME}`);
+    const UNREACHABLE = /连不上守护进程/;
     const MAYBE_EXECUTED = new RegExp(`请求可能已经执行，请先用 \`${cmd} status\` 确认`);
 
     it("HUB_SOCK points at a missing file", async () => {
@@ -673,6 +693,16 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(r.stderr).toMatch(UNREACHABLE);
       // afterEach 会再关一次，换一个能关的
       running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run2"), hubSock: join(dir, "run2", "hub.sock") });
+    });
+
+    it("守护进程没开：只打 network 那句话和 hint，不打 ENOENT、ECONNREFUSED 这类系统码", async () => {
+      for (const sock of [join(dir, "nope.sock"), join(dir, "plain")]) {
+        writeFileSync(join(dir, "plain"), "");
+        const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: sock } });
+        expect(r.code).toBe(HUB_EXIT.unreachable);
+        expect(r.stderr).toBe(`${LOCAL_ERRORS.network.text}。${LOCAL_ERRORS.network.hint}\n`);
+        expect(r.stderr).not.toMatch(/ENOENT|ECONNREFUSED|ENOTSOCK|ECONN|EACCES/);
+      }
     });
 
     it("unreachable is not reported as maybe-executed", async () => {

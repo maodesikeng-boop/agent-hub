@@ -15,7 +15,7 @@ import {
   type ScheduleRecord,
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
-import { errorText, nameError } from "../format.ts";
+import { errorText, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Select, Textarea } from "../ui/input.tsx";
 import { Switch } from "../ui/switch.tsx";
@@ -25,7 +25,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
   const client = useClient();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const run = async (call: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -90,7 +90,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   const [unit, setUnit] = useState<Unit>("hours");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
 
   // 每一行自己的错：空着不算错（只是不能保存），填了不对才写
   const nameProblem = nameError(name, MAX_SCHEDULE_NAME_CHARS) ?? (/[【】]/.test(name) ? "名字里不能有“【”“】”" : null);
@@ -164,7 +164,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
         )}
       </div>
       <div className="px-4 py-3">
-        {error && <RowError>{error}</RowError>}
+        {error && <RowError error={error} />}
         <div className={error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             取消

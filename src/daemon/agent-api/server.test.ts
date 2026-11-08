@@ -26,6 +26,7 @@ import {
   type SessionTokens,
   type WorkspaceProbe,
 } from "../../shared/index.ts";
+import { API_ERRORS } from "../../shared/errors.ts";
 import { MAX_UNIX_SOCKET_PATH_BYTES } from "../../shared/paths.ts";
 import { createModelCatalogs } from "../driver/model-catalog.ts";
 import { FakeHubLedger } from "./fake-ledger.ts";
@@ -208,7 +209,7 @@ describe("agent api over inject", () => {
       ledger.failWith = new Error("database is locked");
       const failed = await call("status", {});
       expect(failed.statusCode).toBe(500);
-      expect(failed.json()).toEqual({ ok: false, code: "internal", message: "database is locked" });
+      expect(failed.json()).toEqual({ ok: false, code: "internal", message: API_ERRORS.internal.text });
       ledger.failWith = null;
       const ok = await call("status", {});
       expect(ok.statusCode).toBe(200);
@@ -232,11 +233,22 @@ describe("agent api over inject", () => {
       await logged.close();
     });
 
-    it("maps any other ledger error to 500 internal with the original message", async () => {
-      ledger.failWith = new Error("database is locked");
+    it("maps any other ledger error to 500 internal: the answer is the table's sentence, never the exception text", async () => {
+      ledger.failWith = new Error("SQLITE_BUSY: database is locked at /secret/path");
       const res = await call("status", {});
       expect(res.statusCode).toBe(500);
-      expect(res.json()).toEqual({ ok: false, code: "internal", message: "database is locked" });
+      expect(res.json()).toEqual({ ok: false, code: "internal", message: API_ERRORS.internal.text });
+      expect(res.body).not.toMatch(/SQLITE|locked|secret/);
+      // 原文只进 reportHealth（和日志）
+      expect(ledger.healthReports).toEqual([["agent-api", "SQLITE_BUSY: database is locked at /secret/path"]]);
+    });
+
+    it("git_failed（账本说 git 没跑成）：409，原因原样给项目经理，不记接口故障", async () => {
+      ledger.failWith = new LedgerRequestError("git_failed", "git 没跑成：fatal: not a git repository");
+      const res = await call("worker.start", VALID_ARGS["worker.start"]);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, code: "git_failed", message: "git 没跑成：fatal: not a git repository" });
+      expect(ledger.healthReports).toEqual([]);
     });
   });
 
@@ -434,6 +446,41 @@ describe("agent api over inject", () => {
 
     it("wrong method → invalid", async () => {
       await expectInvalid(await app.inject({ method: "GET", url: hubPath("status"), headers: { authorization: `Bearer ${tokenA}` } }));
+    });
+
+    it("参数错的话是中文，写出字段名，不带英文原文", async () => {
+      const message = async (command: string, body: unknown) => {
+        const res = await call(command, body);
+        expect(res.statusCode).toBe(400);
+        const answer = res.json() as { code: string; message: string };
+        expect(answer.code).toBe("invalid");
+        expect(answer.message).not.toMatch(/[A-Za-z]{4,} [A-Za-z]{2,}/); // 没有英文句子（字段名、值除外）
+        return answer.message;
+      };
+      expect(await message("worker.start", { task: "x" })).toBe("参数不对：缺 title");
+      expect(await message("project.create", { name: "foo", folder: "/x", extra: 1 })).toBe("参数不对：多了 extra");
+      expect(await message("project.create", { name: 123, folder: "/x" })).toBe("参数不对：name 必须是文字");
+      expect(await message("worker.send", { workerId: "3", text: "x" })).toBe("参数不对：workerId 必须是整数");
+      expect(await message("project.create", { name: "", folder: "/x" })).toBe("参数不对：name 不能是空的");
+      expect(await message("worker.send", { workerId: 0, text: "x" })).toBe("参数不对：workerId 不能小于 1");
+      expect(await message("persona.edit", { mode: "boss" })).toBe("参数不对：mode 只能是 manage_only、hands_on");
+      expect(await message("persona.edit", {})).toBe("参数不对：缺 text 或 mode");
+      expect(await message("status", [])).toBe("参数不对：请求体必须是对象（JSON）");
+      expect(await message("project.create", { name: "n".repeat(MAX_NAME_CHARS + 1), folder: "/x" })).toBe(
+        `参数不对：name 不能超过 ${MAX_NAME_CHARS} 个字`,
+      );
+    });
+
+    it("JSON 坏了、内容类型不对、网址解不开：也是中文，不带英文原文", async () => {
+      const bad = async (res: Awaited<ReturnType<typeof call>>) => {
+        expect(res.statusCode).toBe(400);
+        const message = (res.json() as { message: string }).message;
+        expect(message).toMatch(/^参数不对：/);
+        expect(message.replace(/JSON|application\/json/g, "")).not.toMatch(/[A-Za-z]{4,}/);
+      };
+      await bad(await call("status", "{not json", tokenA, { "content-type": "application/json" }));
+      await bad(await call("status", "hello", tokenA, { "content-type": "text/plain" }));
+      await bad(await app.inject({ method: "POST", url: "/v1/%", payload: {} }));
     });
 
     it("missing required parameters → invalid", async () => {

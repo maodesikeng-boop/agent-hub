@@ -512,6 +512,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     await expect(queryCodexModels({ codexPath: errPath, cwd: dir })).rejects.toThrow(/model list unavailable/);
     await expectGone("codex-pid");
   });
+
+  it("queryCodexModels：错误对象没有 message 时，失败原因里不出现整个 JSON", async () => {
+    const errPath = fakeCodex(`
+      if (msg.id === 2) out({ jsonrpc: "2.0", id: 2, error: { code: -32601 } });
+    `);
+    const failure = await queryCodexModels({ codexPath: errPath, cwd: dir }).catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("codex 回了错误：未知错误（错误码 -32601）");
+    expect((failure as Error).message).not.toContain("{");
+  });
 });
 
 describe("createModelCatalogs：问一次、缓存、过期再问、问不到用打包的", () => {
