@@ -95,6 +95,9 @@ describe("VENDOR_HOME_PATHS：厂商的凭据和配置目录", () => {
   it("每家都有，且只读禁读的文件都在它自己的目录里", () => {
     expect(Object.keys(VENDOR_HOME_PATHS).sort()).toEqual([...AGENT_VENDORS].sort());
     expect(VENDOR_HOME_PATHS.claude.dirs).toEqual(expect.arrayContaining([".claude", ".claude.json"]));
+    expect(VENDOR_HOME_PATHS.claude.readonlySecrets).toContain(".claude.json");
+    expect(VENDOR_HOME_PATHS.codex.readonlySecrets).toContain(".codex/.credentials.json");
+    expect(VENDOR_HOME_PATHS.agy.readonlySecrets).toContain(".gemini/mcp-oauth-tokens.json");
     expect(VENDOR_HOME_PATHS.codex.dirs).toContain(".codex");
     expect(VENDOR_HOME_PATHS.agy.dirs).toContain(".gemini");
     for (const vendor of AGENT_VENDORS) {

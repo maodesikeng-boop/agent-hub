@@ -34,6 +34,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import {
   AGENT_VENDORS,
+  CREDENTIAL_HOME_PATHS,
   LOG_PREFIX,
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
@@ -50,35 +51,11 @@ import {
 import { resolveUpload, sanitizeFileName } from "./uploads.ts";
 
 /**
- * 不管允许的文件夹怎么配（项目文件夹是 ~ 或 /、附加了家目录），这些始终不能分享：家目录下的凭据、密钥、钥匙串、
- * 浏览器 cookie、shell 历史、各家厂商（claude、codex、agy）的整个配置目录（取自 vendors.ts 的 VENDOR_HOME_PATHS）。写家目录下的相对路径，比对时 realpath（是符号链接的按它指向的地方）。
+ * 不管允许的文件夹怎么配（项目文件夹是 ~ 或 /、附加了家目录），这些始终不能分享：凭据清单（shared/secret-paths.ts，只读 Worker 也禁读）
+ * + 各家厂商（claude、codex、agy）的整个配置目录（vendors.ts 的 VENDOR_HOME_PATHS.dirs，会话记录也不给网页看）。
+ * 写家目录下的相对路径，比对时 realpath（是符号链接的按它指向的地方）。
  */
-export const SENSITIVE_HOME_PATHS: readonly string[] = [
-  ".ssh",
-  ".aws",
-  ".azure",
-  ".gnupg",
-  ".netrc",
-  ".git-credentials",
-  ".config/gh",
-  ".config/gcloud",
-  ".config/hub",
-  ".kube",
-  ".docker",
-  ".npmrc",
-  ".pypirc",
-  ".password-store",
-  ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].dirs),
-  "Library/Keychains",
-  "Library/Cookies",
-  // Linux：登录钥匙环（Secret Service，agy 的登录令牌也在里面）、浏览器的 cookie 和密码库
-  ".local/share/keyrings",
-  ".config/google-chrome",
-  ".config/chromium",
-  ".mozilla",
-  ".zsh_history",
-  ".bash_history",
-];
+export const SENSITIVE_HOME_PATHS: readonly string[] = [...CREDENTIAL_HOME_PATHS, ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].dirs)];
 /** 同上，系统里的（macOS 上 /etc 是 /private/etc 的符号链接，两个都写；/proc 里有进程的环境变量，只有 Linux 有）。 */
 export const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db", "/proc"];
 
@@ -133,16 +110,25 @@ function realList(paths: readonly string[]): string[] {
   return paths.map((p) => realOrNull(p) ?? p);
 }
 
+/** 敏感路径清单（SENSITIVE_HOME_PATHS 放到这个主目录下 + SENSITIVE_SYSTEM_PATHS）realpath 之后的样子；一次分享只算一次，传给 isShareable。 */
+export function sensitivePathsOf(userHome: string): string[] {
+  const home = realOrNull(userHome) ?? userHome;
+  return [...realList(SENSITIVE_HOME_PATHS.map((p) => join(home, p))), ...realList(SENSITIVE_SYSTEM_PATHS)];
+}
+
 /**
- * realpath 之后的路径能不能分享：不在敏感路径清单里（SENSITIVE_HOME_PATHS、SENSITIVE_SYSTEM_PATHS）、不在任何 .git/ 里；
- * 在数据目录里的只认 dataExceptions；其余要在某个允许的文件夹里。
+ * realpath 之后的路径能不能分享：不在敏感路径清单里（sensitivePathsOf）、不在任何 .git/ 里；
+ * 在数据目录里的只认 dataExceptions；其余要在某个允许的文件夹里。sensitive 不传就现算（单个路径判断用）；一条消息里判断多个链接时算一次传下去。
  * 边界：硬链接查不出来（项目里一个硬链接指向 ~/.ssh/id_rsa 的同一个 inode，路径看着在项目里）。不拦：agent 本来就有 shell，
- * 能把任何文件 cp 进项目再发；这里防的是误发、被诱导写出敏感路径，不是防 agent 本身。
+ * 能把任何文件 cp 进项目再发；这里防的是误发、被诱导写出敏感路径，不是防 agent 本身。也不查 nlink：nlink>1 会误拦 pnpm 硬链接出来的
+ * node_modules 文件，又拦不住 cp。
  */
-export function isShareable(real: string, scope: Pick<ShareScope, "roots" | "dataHome" | "dataExceptions" | "userHome">): boolean {
+export function isShareable(
+  real: string,
+  scope: Pick<ShareScope, "roots" | "dataHome" | "dataExceptions" | "userHome">,
+  sensitive: readonly string[] = sensitivePathsOf(scope.userHome),
+): boolean {
   if (real.split(sep).includes(".git")) return false;
-  const home = realOrNull(scope.userHome) ?? scope.userHome;
-  const sensitive = [...realList(SENSITIVE_HOME_PATHS.map((p) => join(home, p))), ...realList(SENSITIVE_SYSTEM_PATHS)];
   if (sensitive.some((dir) => within(real, dir))) return false;
   const reals = (paths: string[]) => paths.map(realOrNull).filter((p): p is string => p !== null);
   const dataHome = realOrNull(scope.dataHome);
@@ -223,16 +209,16 @@ function existingPathOf(href: string, local: LocalHref, scope: Pick<ShareScope, 
 }
 
 /** 处理一个链接：判断、开、拷。budget 是这条消息还能拷多少字节。 */
-function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope): Outcome {
+function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope, sensitive: readonly string[]): Outcome {
   const real = realOrNull(path);
-  if (real === null) return local.kind !== "relative" && isShareable(looseRealpath(path), scope) ? reject("missing") : { status: "skip" };
+  if (real === null) return local.kind !== "relative" && isShareable(looseRealpath(path), scope, sensitive) ? reject("missing") : { status: "skip" };
   let before: Stats;
   try {
     before = statSync(real);
   } catch {
     return { status: "skip" };
   }
-  if (!isShareable(real, scope)) return before.isFile() ? reject("not_allowed") : { status: "skip" };
+  if (!isShareable(real, scope, sensitive)) return before.isFile() ? reject("not_allowed") : { status: "skip" };
   if (!before.isFile()) return reject("not_file", before);
   let fd: number;
   try {
@@ -279,6 +265,8 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
 export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
   const files: SentFile[] = [];
   let used = 0;
+  // 敏感清单这条消息里只 realpath 一次（不跨消息缓存：符号链接、主目录随时可能变）
+  const sensitive = sensitivePathsOf(scope.userHome);
   for (const { href, local } of localLinksOf(markdown.parse(text) as MdNode)) {
     if (files.length === MAX_SENT_FILES_PER_MESSAGE) break;
     const path = existingPathOf(href, local, scope);
@@ -286,7 +274,7 @@ export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
     let outcome: Outcome;
     try {
       mkdirSync(scope.sentFilesDir, { recursive: true, mode: 0o700 });
-      outcome = shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope);
+      outcome = shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope, sensitive);
     } catch (error) {
       console.error(`${LOG_PREFIX} sent file failed: ${path}:`, error);
       outcome = reject("unreadable");
