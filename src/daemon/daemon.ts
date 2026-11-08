@@ -25,6 +25,10 @@ import {
   type ActionExecutor,
   type Driver,
   type Unsubscribe,
+  AGENT_VENDORS,
+  isAgentVendor,
+  vendorFailureOf,
+  type AgentVendor,
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
@@ -34,14 +38,16 @@ import {
   defaultAgyFallbackPaths,
   defaultClaudeFallbackPaths,
   defaultCodexFallbackPaths,
+  findExecutable,
   resolveExecutable,
+  VENDOR_FALLBACK_PATHS,
   resolveHubPaths,
   workerSetupLogPath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
-import { createVendorComposers } from "./vendors/index.ts";
+import { createVendorCatalogSources, createVendorComposers, type VendorCatalogSourceOptions } from "./vendors/index.ts";
 import { createWorkspaceFiles } from "./workspace-files.ts";
 import { createSessionTokens, installHubShim, startAgentApi, type RunningAgentApi } from "./agent-api/index.ts";
 import {
@@ -50,10 +56,7 @@ import {
   createCodexDriver,
   createModelCatalogs,
   createMultiVendorDriver,
-  queryAgyModels,
   queryClaudeInitialize,
-  queryClaudeModels,
-  queryCodexModels,
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
@@ -226,12 +229,27 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dataDir = realpathSync.native(paths.home);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
-    // 模型名单：第一次有人要（网页打开资料页、新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；
+    // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
+    // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
     // 账本写系统消息时用它缓存着的显示名
+    const executables: Record<AgentVendor, { cmd: string; path: string }> = {
+      claude: { cmd: paths.claudePath, path: claudePath },
+      agy: { cmd: paths.agyPath, path: agyPath },
+      codex: { cmd: paths.codexPath, path: codexPath },
+    };
     const models = createModelCatalogs({
-      queryClaude: (signal) => queryClaudeModels({ claudePath, cwd: options.userHome, signal }),
-      queryAgy: (signal) => queryAgyModels({ agyPath, cwd: options.userHome, signal }),
-      queryCodex: (signal) => queryCodexModels({ codexPath, cwd: options.userHome, signal }),
+      sources: createVendorCatalogSources(
+        Object.fromEntries(
+          AGENT_VENDORS.map((vendor) => [
+            vendor,
+            {
+              path: executables[vendor].path,
+              cwd: options.userHome,
+              installed: () => findExecutable(executables[vendor].cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](options.userHome)) !== null,
+            },
+          ]),
+        ) as Record<AgentVendor, VendorCatalogSourceOptions>,
+      ),
       log,
     });
     parts.models = models;
@@ -256,7 +274,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
     //    令牌只有这一份：agent 接口认人、prepareLaunch 发、session.end 处理函数作废，用的都是它
     const tokens = createSessionTokens();
-    const agentApi = await startAgentApi({ ledger, tokens, runDir: paths.runDir, hubSock: paths.hubSock, log });
+    // 联机：设备身份（hub worker start 报“这台设备没装 codex”时写设备名）
+    const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
+    const agentApi = await startAgentApi({
+      ledger,
+      tokens,
+      runDir: paths.runDir,
+      hubSock: paths.hubSock,
+      log,
+      vendorUsable: (vendor) => models.ensureUsable(vendor),
+      deviceName: () => device.name,
+    });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
     const prepareLaunch = createLaunchPreparer({
@@ -269,6 +297,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
       hubSock: agentApi.socketPath,
       hubBinDir: paths.hubBinDir,
+      // 项目经理提示词里“能用的厂商”只列这台设备上能用的（只看缓存，不等查询）
+      vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
@@ -305,6 +335,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         if (event.type !== "commands.changed") return;
         const session = sessions.get(sessionId);
         if (session) commands.update(session, event.commands);
+      }),
+    );
+    // 真跑的结果反过来更新这台设备上厂商的状态（不用等名单缓存过期）：会话起来了就是能用，一轮因为没登录失败就是没登录
+    parts.unsubscribe.push(
+      driver.onEvent((sessionId, event) => {
+        const vendor = sessions.get(sessionId)?.vendor;
+        if (!isAgentVendor(vendor)) return;
+        if (event.type === "session.started") models.report(vendor, "available");
+        else if (event.type === "turn.ended" && !event.ok && event.error && vendorFailureOf(event.error.message, vendor)?.kind === "auth") {
+          models.report(vendor, "signed_out");
+        }
       }),
     );
 
@@ -396,8 +437,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
       return next;
     };
-    // 联机：设备身份；本机 tailnet 名字（后台问，不拖慢启动）；serve 转发目标（Linux 另听 run/ui.sock）
-    const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
+    // 联机：本机 tailnet 名字（后台问，不拖慢启动）；serve 转发目标（Linux 另听 run/ui.sock）。设备身份在前面 agent 接口之前就读了
     const tailscaleCli = tailscaleCommand({ env });
     const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
     const serveTarget = serveTargetKind({ env });

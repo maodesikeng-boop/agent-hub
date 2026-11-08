@@ -235,6 +235,10 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (req.method === "account/read") {
+    out({ jsonrpc: "2.0", id: req.id, result: { account: { type: "chatgpt", email: "fake@example.com" }, requiresOpenaiAuth: true } });
+    return;
+  }
   if (req.method === "skills/list") {
     out({
       jsonrpc: "2.0",

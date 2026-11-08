@@ -42,6 +42,7 @@ import {
   type SessionExitReason,
   type SessionId,
   type Unsubscribe,
+  notFoundCode,
 } from "../../shared/index.ts";
 import {
   MID_TURN_CAPABILITIES,
@@ -976,7 +977,7 @@ export class ClaudeDriver implements Driver {
       });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") throw new DriverError("claude_not_found", `${this.#opts.claudePath}: ${errorMessage(error)}`);
+      if (code === "ENOENT") throw new DriverError(notFoundCode("claude"), `${this.#opts.claudePath}: ${errorMessage(error)}`);
       throw new DriverError("spawn_failed", `${this.#opts.claudePath}: ${errorMessage(error)}`);
     }
     // 等 spawn 的这一会儿可能已经开始关机：shutdown 看不到这个进程，自己结束它

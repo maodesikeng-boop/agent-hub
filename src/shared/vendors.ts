@@ -38,6 +38,8 @@ export interface FetchedQuotaSpec {
 export interface VendorSpec {
   /** 界面上的名字。 */
   label: string;
+  /** 在终端里登录这家要跑的命令（没登录时报错里告诉用户）。 */
+  loginCommand: string;
   /** 打包的模型名单（问不到厂商时用）：id 原样传给 modelFlag，label 是界面上的名字。 */
   models: readonly { id: string; label: string; efforts?: readonly string[] }[];
   /** 能不能填完整模型名（下拉里的“自定义”）。 */
@@ -135,6 +137,7 @@ export const VENDOR_HOME_PATHS: Readonly<Record<AgentVendor, { dirs: readonly st
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   claude: {
     label: "Claude Code",
+    loginCommand: "claude auth login",
     models: [
       { id: "fable", label: "Fable" },
       { id: "opus", label: "Opus" },
@@ -186,6 +189,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   },
   agy: {
     label: "Antigravity",
+    loginCommand: "agy",
     // 2026-11-06 `agy models` 的实际内容去掉档位后的样子（docs/model-catalog.md）；拿不到名单时兜底
     models: [
       { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: AGY_EFFORTS },
@@ -240,6 +244,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   },
   codex: {
     label: "Codex",
+    loginCommand: "codex login",
     models: [
       { id: "gpt-6-luna", label: "GPT-6-Luna" },
       { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
@@ -393,6 +398,8 @@ export interface ModelCatalog {
   label: string;
   /** vendor：厂商自己报的；bundled：打包在程序里的（厂商没装、超时、报错时）。 */
   source: "vendor" | "bundled";
+  /** 这家在这台设备上能不能用（跟名单一起问、一起缓存，见 docs/vendor-availability-design.md）。 */
+  availability: VendorAvailability;
   /** 不含“默认”（默认 = 不传参数，界面自己加在最前面）。 */
   models: readonly CatalogModel[];
   /** 选“默认”时支持的思考程度，null = 没说。 */
@@ -415,6 +422,7 @@ export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
     vendor,
     label: spec.label,
     source: "bundled",
+    availability: "unknown",
     models,
     defaultEfforts: null,
     defaultModel: null,
@@ -476,12 +484,60 @@ export function vendorLabel(vendor: string): string {
   return isAgentVendor(vendor) ? VENDOR_SPECS[vendor].label : vendor;
 }
 
+// ---- 这台设备上能不能用（docs/vendor-availability-design.md）----
+// 每台设备、每家厂商一个状态，只在这里定义；各家怎么判断在 daemon/vendors/<厂商>.ts，跟模型名单一起问、一起缓存。
+
+/** available：能用；not_installed：没装；signed_out：没登录；unknown：认不出（当能用）。 */
+export const VENDOR_AVAILABILITIES = ["available", "not_installed", "signed_out", "unknown"] as const;
+export type VendorAvailability = (typeof VENDOR_AVAILABILITIES)[number];
+
+/** 每家厂商在一台设备上的状态；没有的那家当 unknown。 */
+export type VendorAvailabilityMap = Partial<Record<AgentVendor, VendorAvailability>>;
+
+/** 界面上的英文状态词；能选的不显示。 */
+export const AVAILABILITY_LABELS: Readonly<Record<VendorAvailability, string | null>> = {
+  available: null,
+  unknown: null,
+  not_installed: "Not installed",
+  signed_out: "Not signed in",
+};
+
+/** 列不列出来（下拉、额度）：没装的不列。 */
+export function isListed(availability: VendorAvailability): boolean {
+  return availability !== "not_installed";
+}
+
+/** 能不能选（下拉能选、提示词里列、hub worker start 放行）：能用、认不出的能。 */
+export function isSelectable(availability: VendorAvailability): boolean {
+  return availability === "available" || availability === "unknown";
+}
+
+export function isVendorAvailability(value: unknown): value is VendorAvailability {
+  return typeof value === "string" && (VENDOR_AVAILABILITIES as readonly string[]).includes(value);
+}
+
+/** 不能用时给人看的一句（hub worker start 报错用）；能用返回 null。device 是设备名。 */
+export function vendorUnavailableMessage(vendor: AgentVendor, availability: VendorAvailability, device: string): string | null {
+  if (availability === "not_installed") return `这台设备（${device}）没装 ${vendor}`;
+  if (availability === "signed_out") {
+    return `这台设备（${device}）的 ${vendor} 没登录：先在这台设备的终端里跑 \`${VENDOR_SPECS[vendor].loginCommand}\` 登录，再派`;
+  }
+  return null;
+}
+
+/** 找不到这家程序的驱动错误码（codex_not_found……），按厂商生成，不手写。 */
+export type VendorNotFoundCode = `${AgentVendor}_not_found`;
+export function notFoundCode(vendor: AgentVendor): VendorNotFoundCode {
+  return `${vendor}_not_found`;
+}
+export const VENDOR_NOT_FOUND_CODES: readonly VendorNotFoundCode[] = AGENT_VENDORS.map(notFoundCode);
+
 // ---- 出错的特征 ----
 // 失败原因（消息的 failureReason、Worker 这一轮没做完的原因、定时任务没跑成的原因）是厂商给的原文。网页按通用的类型
 // 出一句人话（web/errors.ts），各家的错误长什么样只写在这里。网络断了这类和厂商无关的特征在 web/errors.ts。
 
-/** 失败的通用类型：服务繁忙、额度用完、网络断了、没能启动。认不出来的是 unknown（web/errors.ts）。 */
-export type FailureKind = "busy" | "quota" | "network" | "start" | "auth" | "context";
+/** 失败的通用类型：服务繁忙、额度用完、网络断了、找不到程序、没能启动。认不出来的是 unknown（web/errors.ts）。 */
+export type FailureKind = "busy" | "quota" | "network" | "missing" | "start" | "auth" | "context";
 
 export interface VendorFailureSigns {
   /** 出错的话里称呼这家的服务：“Claude 服务繁忙”。 */
@@ -509,7 +565,8 @@ export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSig
     context: COMMON_CONTEXT_PATTERN,
     signs: [
       // 驱动层起不来 claude 的错误码（daemon/driver）
-      { kind: "start", pattern: /^(claude_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "missing", pattern: /^claude_not_found\b/ },
+      { kind: "start", pattern: /^(spawn_failed|start_timeout)\b/ },
       { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
       { kind: "busy", pattern: COMMON_BUSY_PATTERN },
       { kind: "auth", pattern: COMMON_AUTH_PATTERN },
@@ -522,7 +579,8 @@ export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSig
     quota: COMMON_QUOTA_PATTERN,
     context: COMMON_CONTEXT_PATTERN,
     signs: [
-      { kind: "start", pattern: /^(agy_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "missing", pattern: /^agy_not_found\b/ },
+      { kind: "start", pattern: /^(spawn_failed|start_timeout)\b/ },
       { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
       { kind: "busy", pattern: COMMON_BUSY_PATTERN },
       { kind: "auth", pattern: COMMON_AUTH_PATTERN },
@@ -535,7 +593,8 @@ export const VENDOR_FAILURE_SIGNS: Readonly<Record<AgentVendor, VendorFailureSig
     quota: COMMON_QUOTA_PATTERN,
     context: COMMON_CONTEXT_PATTERN,
     signs: [
-      { kind: "start", pattern: /^(codex_not_found|spawn_failed|start_timeout)\b/ },
+      { kind: "missing", pattern: /^codex_not_found\b/ },
+      { kind: "start", pattern: /^(spawn_failed|start_timeout)\b/ },
       { kind: "quota", pattern: COMMON_QUOTA_PATTERN },
       { kind: "busy", pattern: COMMON_BUSY_PATTERN },
       { kind: "auth", pattern: COMMON_AUTH_PATTERN },

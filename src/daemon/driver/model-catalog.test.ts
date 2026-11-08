@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MODEL_CATALOG_FRESH_MS, MODEL_CATALOG_RETRY_MS, bundledModelCatalog, type ModelCatalog } from "../../shared/index.ts";
+import { MODEL_CATALOG_FRESH_MS, MODEL_CATALOG_RETRY_MS, bundledModelCatalog, type ModelCatalog, type VendorAvailability } from "../../shared/index.ts";
 import {
   createModelCatalogs,
   parseAgyModels,
@@ -10,9 +10,13 @@ import {
   parseInitializeModels,
   queryAgyModels,
   queryClaudeModels,
+  queryClaudeAuthStatus,
+  queryCodexCatalog,
   queryCodexModels,
+  type VendorCatalogSource,
 } from "./model-catalog.ts";
 import { isAlive } from "./process.ts";
+import { AGY_SIGNED_OUT_STDOUT } from "./test-helpers.ts";
 
 /** 本机 claude 2.1.314 对 initialize 的回应里 models 的前几项（原样，没有账号信息）。 */
 const REAL_MODELS = [
@@ -451,6 +455,56 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     expect(sent.map((m) => m.method)).toEqual(["initialize", "initialized", "model/list"]);
   });
 
+  it("queryAgyModels：agy 没登录（退出码 0、打印的不是 JSON）：失败，原因里带上它打印的话", async () => {
+    const agyPath = fakeAgy(`process.stdout.write(${JSON.stringify(AGY_SIGNED_OUT_STDOUT)}); process.exit(0);`);
+    await expect(queryAgyModels({ agyPath, cwd: dir })).rejects.toThrow(/Please sign in to view available models/);
+  });
+
+  it("queryCodexCatalog：同一个 app-server 里问 model/list 和 account/read；account/read 出错不影响名单", async () => {
+    const account = { account: null, requiresOpenaiAuth: true };
+    const okPath = fakeCodex(`
+      if (msg.id === 1) out({ jsonrpc: "2.0", id: 1, result: {} });
+      if (msg.method === "model/list") out({ jsonrpc: "2.0", id: msg.id, result: { data: ${JSON.stringify(REAL_CODEX_MODELS)} } });
+      if (msg.method === "account/read") {
+        fs.writeFileSync(${JSON.stringify(join(dir, "codex-lines.json"))}, JSON.stringify(lines));
+        out({ jsonrpc: "2.0", id: msg.id, result: ${JSON.stringify(account)} });
+      }
+    `);
+    expect(await queryCodexCatalog({ codexPath: okPath, cwd: dir })).toEqual({ models: REAL_CODEX_MODELS, account });
+    const sent = JSON.parse(readFileSync(join(dir, "codex-lines.json"), "utf8")) as Array<{ method?: string }>;
+    expect(sent.map((m) => m.method)).toEqual(["initialize", "initialized", "model/list", "account/read"]);
+
+    const noAccountPath = fakeCodex(`
+      if (msg.id === 1) out({ jsonrpc: "2.0", id: 1, result: {} });
+      if (msg.method === "model/list") out({ jsonrpc: "2.0", id: msg.id, result: { data: ${JSON.stringify(REAL_CODEX_MODELS)} } });
+      if (msg.method === "account/read") out({ jsonrpc: "2.0", id: msg.id, error: { message: "unknown method" } });
+    `);
+    expect(await queryCodexCatalog({ codexPath: noAccountPath, cwd: dir })).toEqual({ models: REAL_CODEX_MODELS, account: undefined });
+
+    // 老版本对不认识的方法根本不回：名单照样拿到，不等到整个查询超时
+    const silentPath = fakeCodex(`
+      if (msg.id === 1) out({ jsonrpc: "2.0", id: 1, result: {} });
+      if (msg.method === "model/list") out({ jsonrpc: "2.0", id: msg.id, result: { data: ${JSON.stringify(REAL_CODEX_MODELS)} } });
+    `);
+    const started = Date.now();
+    expect(await queryCodexCatalog({ codexPath: silentPath, cwd: dir, timeoutMs: 10_000 })).toEqual({ models: REAL_CODEX_MODELS, account: undefined });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("queryClaudeAuthStatus：跑 claude auth status --json，loggedIn 真假对应能用 / 没登录，认不出是 unknown", async () => {
+    const write = (body: string) => {
+      const path = join(dir, "claude-auth");
+      writeFileSync(path, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(join(dir, "auth-argv.json"))}, JSON.stringify(process.argv.slice(2)));\n${body}\n`);
+      chmodSync(path, 0o755);
+      return path;
+    };
+    expect(await queryClaudeAuthStatus({ claudePath: write(`console.log(JSON.stringify({ loggedIn: true })); process.exit(0);`), cwd: dir })).toBe("available");
+    expect(JSON.parse(readFileSync(join(dir, "auth-argv.json"), "utf8"))).toEqual(["auth", "status", "--json"]);
+    expect(await queryClaudeAuthStatus({ claudePath: write(`console.log(JSON.stringify({ loggedIn: false })); process.exit(1);`), cwd: dir })).toBe("signed_out");
+    expect(await queryClaudeAuthStatus({ claudePath: write(`console.log("??"); process.exit(2);`), cwd: dir })).toBe("unknown");
+    expect(await queryClaudeAuthStatus({ claudePath: join(dir, "nope"), cwd: dir })).toBe("not_installed");
+  });
+
   it("queryCodexModels：RPC 返回错误或超时时失败并清理进程", async () => {
     const errPath = fakeCodex(`
       if (msg.id === 2) out({ jsonrpc: "2.0", id: 2, error: { message: "model list unavailable" } });
@@ -472,12 +526,17 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     const pending: Array<() => void> = [];
     let gated = false;
     const catalogs = createModelCatalogs({
-      queryClaude: async () => {
-        calls.push(now);
-        if (gated) await new Promise<void>((resolve) => pending.push(resolve));
-        const answer = answers.shift();
-        if (answer instanceof Error) throw answer;
-        return answer;
+      sources: {
+        claude: {
+          parse: parseInitializeModels,
+          query: async () => {
+            calls.push(now);
+            if (gated) await new Promise<void>((resolve) => pending.push(resolve));
+            const answer = answers.shift();
+            if (answer instanceof Error) throw answer;
+            return answer;
+          },
+        },
       },
       now: () => now,
       log: (line) => logs.push(line),
@@ -525,9 +584,9 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
   });
 
   it("问不到（claude 不存在、超时、报错）、回的是脏数据：用打包的名单，不报错；记一行日志", async () => {
-    for (const answer of [new Error("spawn claude ENOENT"), new Error("超时"), [{ value: "a b" }], "garbage"]) {
+    for (const answer of [new Error("超时"), [{ value: "a b" }], "garbage"]) {
       const t = setup([answer]);
-      expect(claudeOf(await t.catalogs.list())).toEqual(bundledModelCatalog("claude"));
+      expect({ ...claudeOf(await t.catalogs.list()), availability: "unknown" }).toEqual(bundledModelCatalog("claude"));
       expect(t.logs).toHaveLength(1);
     }
   });
@@ -566,13 +625,18 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
   it("close：在问的那次取消，之后不再问", async () => {
     let aborted = false;
     const catalogs = createModelCatalogs({
-      queryClaude: (signal) =>
-        new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () => {
-            aborted = true;
-            reject(new Error("aborted"));
-          });
-        }),
+      sources: {
+        claude: {
+          parse: parseInitializeModels,
+          query: (signal) =>
+            new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => {
+                aborted = true;
+                reject(new Error("aborted"));
+              });
+            }),
+        },
+      },
       log: () => {},
     });
     const listing = catalogs.list();
@@ -587,13 +651,21 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     const codexAnswers: Array<unknown | Error> = [new Error("codex not ready"), REAL_CODEX_MODELS];
     const logs: string[] = [];
     const catalogs = createModelCatalogs({
-      queryClaude: async () => REAL_MODELS,
-      queryAgy: async () => ({ command: { data: { models: REAL_AGY_MODELS.map((m) => ({ ...m, currently_selected: m.id === "gemini-4-argon-medium" })) } } }),
-      queryCodex: async () => {
-        codexCalls++;
-        const next = codexAnswers.shift();
-        if (next instanceof Error) throw next;
-        return next;
+      sources: {
+        claude: { parse: parseInitializeModels, query: async () => REAL_MODELS },
+        agy: {
+          parse: parseAgyModels,
+          query: async () => ({ command: { data: { models: REAL_AGY_MODELS.map((m) => ({ ...m, currently_selected: m.id === "gemini-4-argon-medium" })) } } }),
+        },
+        codex: {
+          parse: parseCodexModels,
+          query: async () => {
+            codexCalls++;
+            const next = codexAnswers.shift();
+            if (next instanceof Error) throw next;
+            return next;
+          },
+        },
       },
       now: () => now,
       log: (line) => logs.push(line),
@@ -604,6 +676,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(agyOf(first).source).toBe("vendor");
     expect(agyOf(first).defaultModel).toBe("Gemini 4 Argon");
     expect(codexOf(first)).toEqual(bundledModelCatalog("codex"));
+    expect(claudeOf(first).availability).toBe("available");
     expect(catalogs.current("claude")?.source).toBe("vendor");
     expect(catalogs.current("agy")?.source).toBe("vendor");
     expect(catalogs.current("codex")).toBeNull();
@@ -620,5 +693,154 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(codexOf(second).source).toBe("vendor");
     expect(codexOf(second).defaultModel).toBe("GPT-5.4");
     expect(catalogs.current("codex")?.defaultModel).toBe("GPT-5.4");
+  });
+});
+
+describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一起问、一起缓存）", () => {
+  const of = (catalogs: ModelCatalog[], vendor: string) => catalogs.find((c) => c.vendor === vendor)!;
+
+  function setup(source: Partial<VendorCatalogSource> & { answers?: Array<unknown | Error> }) {
+    let now = 5_000_000;
+    let calls = 0;
+    const answers = source.answers ?? [];
+    const catalogs = createModelCatalogs({
+      sources: {
+        claude: { parse: parseInitializeModels, query: async () => REAL_MODELS },
+        codex: {
+          parse: (raw) => parseCodexModels((raw as { models?: unknown })?.models),
+          query: async () => {
+            calls++;
+            const answer = answers.length > 1 ? answers.shift() : answers[0];
+            if (answer instanceof Error) throw answer;
+            return answer;
+          },
+          ...source,
+        },
+      },
+      now: () => now,
+      log: () => {},
+    });
+    return { catalogs, calls: () => calls, advance: (ms: number) => (now += ms) };
+  }
+  const signedOut = { models: REAL_CODEX_MODELS, account: null };
+  const signedIn = { models: REAL_CODEX_MODELS, account: { type: "chatgpt" } };
+  const codexAvailability = (raw: unknown): VendorAvailability => ((raw as { account?: unknown }).account === null ? "signed_out" : "available");
+
+  it("没装（只查文件，不起进程）：not_installed，用打包的名单；装上以后下次要时就问", async () => {
+    let installed = false;
+    const t = setup({ answers: [signedIn], installed: () => installed });
+    const first = of(await t.catalogs.list(), "codex");
+    expect(first.availability).toBe("not_installed");
+    expect(t.calls()).toBe(0);
+    expect(t.catalogs.availability("codex")).toBe("not_installed");
+    installed = true;
+    expect(t.catalogs.availability("codex")).toBe("unknown");
+    expect(of(await t.catalogs.list(), "codex").availability).toBe("available");
+    expect(t.calls()).toBe(1);
+  });
+
+  it("起进程报 ENOENT：not_installed", async () => {
+    const t = setup({ answers: [new Error("/x/codex: spawn /x/codex ENOENT")] });
+    expect(of(await t.catalogs.list(), "codex").availability).toBe("not_installed");
+  });
+
+  it("查询失败、报错里是认证的话：signed_out（默认按 VENDOR_FAILURE_SIGNS 的 auth 认）；别的错是 unknown", async () => {
+    expect(of(await setup({ answers: [new Error("Please sign in to view available models")] }).catalogs.list(), "codex").availability).toBe("signed_out");
+    expect(of(await setup({ answers: [new Error("超时")] }).catalogs.list(), "codex").availability).toBe("unknown");
+  });
+
+  it("名单问到了、回应里说没登录：名单照用厂商的，状态 signed_out；5 分钟内不再问，之后有人要时在后台再问", async () => {
+    const t = setup({ answers: [signedOut, signedIn], availabilityOf: codexAvailability });
+    const first = of(await t.catalogs.list(), "codex");
+    expect(first.source).toBe("vendor");
+    expect(first.availability).toBe("signed_out");
+    await t.catalogs.list();
+    expect(t.calls()).toBe(1);
+    t.advance(MODEL_CATALOG_RETRY_MS);
+    await t.catalogs.list();
+    expect(t.calls()).toBe(2);
+    await expect.poll(async () => of(await t.catalogs.list(), "codex").availability).toBe("available");
+  });
+
+  it("refresh: \"unusable\"：只重问不能用的那几家，等问完再回；能用的不问", async () => {
+    let claudeCalls = 0;
+    const answers = [signedOut, signedIn];
+    const catalogs = createModelCatalogs({
+      sources: {
+        claude: { parse: parseInitializeModels, query: async () => (claudeCalls++, REAL_MODELS) },
+        codex: { parse: (raw) => parseCodexModels((raw as { models?: unknown }).models), query: async () => answers.shift(), availabilityOf: codexAvailability },
+      },
+      log: () => {},
+    });
+    expect(of(await catalogs.list(), "codex").availability).toBe("signed_out");
+    expect(of(await catalogs.list({ refresh: "unusable" }), "codex").availability).toBe("available");
+    expect(claudeCalls).toBe(1);
+    expect(answers).toHaveLength(0);
+  });
+
+  it("回应说不清（unknown）时才用补充判断（confirm）", async () => {
+    let confirms = 0;
+    const t = setup({ answers: [signedIn], availabilityOf: () => "unknown", confirm: async () => (confirms++, "signed_out") });
+    expect(of(await t.catalogs.list(), "codex").availability).toBe("signed_out");
+    expect(confirms).toBe(1);
+    const sure = setup({ answers: [signedIn], availabilityOf: () => "available", confirm: async () => (confirms++, "signed_out") });
+    expect(of(await sure.catalogs.list(), "codex").availability).toBe("available");
+    expect(confirms).toBe(1);
+  });
+
+  it("ensureUsable：不能用的先重问这一家一次再给结果；能用的不问；没装的不问", async () => {
+    const t = setup({ answers: [signedOut, signedIn], availabilityOf: codexAvailability });
+    await t.catalogs.list();
+    expect(await t.catalogs.ensureUsable("codex")).toBe("available");
+    expect(t.calls()).toBe(2);
+    expect(await t.catalogs.ensureUsable("codex")).toBe("available");
+    expect(t.calls()).toBe(2);
+    const gone = setup({ answers: [signedIn], installed: () => false });
+    expect(await gone.catalogs.ensureUsable("codex")).toBe("not_installed");
+    expect(gone.calls()).toBe(0);
+  });
+
+  it("ensureUsable 的重问有时间预算：预算内没问完就按现在的状态回，重问在后台接着跑，下一次看得到新结果；同一家同时只跑一个", async () => {
+    let calls = 0;
+    let finish: (raw: unknown) => void = () => {};
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: (raw) => parseCodexModels((raw as { models?: unknown })?.models),
+          query: () => {
+            calls++;
+            return calls === 1 ? Promise.resolve(signedOut) : new Promise((resolve) => (finish = resolve));
+          },
+          availabilityOf: codexAvailability,
+        },
+      },
+      ensureUsableBudgetMs: 30,
+      log: () => {},
+    });
+    await catalogs.list();
+    expect(catalogs.availability("codex")).toBe("signed_out");
+    const started = Date.now();
+    expect(await catalogs.ensureUsable("codex")).toBe("signed_out");
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(await catalogs.ensureUsable("codex")).toBe("signed_out");
+    expect(calls).toBe(2);
+    finish(signedIn);
+    await expect.poll(() => catalogs.availability("codex")).toBe("available");
+    expect(await catalogs.ensureUsable("codex")).toBe("available");
+    expect(calls).toBe(2);
+  });
+
+  it("report：真跑的结果直接更新状态（不用等缓存过期）", async () => {
+    const t = setup({ answers: [signedIn], availabilityOf: codexAvailability });
+    await t.catalogs.list();
+    t.catalogs.report("codex", "signed_out");
+    expect(t.catalogs.availability("codex")).toBe("signed_out");
+    expect(of(await t.catalogs.list(), "codex").availability).toBe("signed_out");
+  });
+
+  it("没配查询的厂商：打包的名单，状态 unknown（当能用）", async () => {
+    const t = setup({ answers: [signedIn] });
+    expect(of(await t.catalogs.list(), "agy").availability).toBe("unknown");
+    expect(t.catalogs.availability("agy")).toBe("unknown");
   });
 });

@@ -133,14 +133,13 @@ export function resolvePaths(
 }
 
 /**
- * 解析厂商可执行文件路径：
- * - 如果 `cmd` 含有 `/`（显式路径），直接返回 `cmd`；
- * - 如果 `envPath`（`PATH`）中的某个目录下存在 `cmd`（`existsSync(join(dir, cmd))`），返回 `cmd`（保持原样）；
- * - 否则按顺序检查 `fallbackPaths`，如果某个候选路径 `existsSync(candidate)` 为真，返回该绝对路径；
- * - 都不存在则返回 `cmd`。
+ * 找厂商可执行文件，找不到返回 null（“这台设备没装”就靠它，只查文件在不在、不起进程）：
+ * - `cmd` 含有 `/`（显式路径）：文件在就返回 `cmd`；
+ * - `envPath`（`PATH`）中的某个目录下存在 `cmd`：返回 `cmd`（保持原样）；
+ * - 否则按顺序检查 `fallbackPaths`，第一个存在的候选路径返回该绝对路径。
  */
-export function resolveExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
-  if (cmd.includes("/")) return cmd;
+export function findExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
+  if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
   if (envPath) {
     for (const dir of envPath.split(delimiter)) {
       if (dir && existsSync(join(dir, cmd))) return cmd;
@@ -149,7 +148,12 @@ export function resolveExecutable(cmd: string, envPath: string | undefined, fall
   for (const candidate of fallbackPaths) {
     if (existsSync(candidate)) return candidate;
   }
-  return cmd;
+  return null;
+}
+
+/** 解析厂商可执行文件路径（启动时用）：同 findExecutable，找不到（含显式路径不存在）原样返回 `cmd`。 */
+export function resolveExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
+  return findExecutable(cmd, envPath, fallbackPaths) ?? cmd;
 }
 
 /**
@@ -175,10 +179,13 @@ export function defaultAgyFallbackPaths(userHome: string, platform: string = pro
   return platform === "darwin" ? [home] : [home, ...linuxInstallDirs(userHome).map((dir) => join(dir, "agy"))];
 }
 
-/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）：macOS 先看 ChatGPT.app 里带的，别的系统看 linuxInstallDirs。 */
+/** ChatGPT.app 里带的 codex（相对 Applications 目录）：装在 /Applications 或用户目录的 ~/Applications 都要找。 */
+const CHATGPT_APP_CODEX = "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+
+/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）：macOS 先看 ChatGPT.app 里带的（/Applications、~/Applications），别的系统看 linuxInstallDirs。 */
 export function defaultCodexFallbackPaths(userHome: string, platform: string = process.platform): string[] {
   const plugin = join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex");
-  if (platform === "darwin") return ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex", plugin];
+  if (platform === "darwin") return [join("/Applications", CHATGPT_APP_CODEX), join(userHome, "Applications", CHATGPT_APP_CODEX), plugin];
   return [...linuxInstallDirs(userHome).map((dir) => join(dir, "codex")), plugin];
 }
 

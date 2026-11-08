@@ -11,9 +11,16 @@ import {
   truncateChars,
   type ComposerCommand,
 } from "../../shared/index.ts";
-import { queryAgySkills, type AgyModelQueryOptions } from "../driver/model-catalog.ts";
+import {
+  defaultAvailabilityOfError,
+  parseAgyModels,
+  queryAgyModels,
+  queryAgySkills,
+  type AgyModelQueryOptions,
+  type VendorCatalogSource,
+} from "../driver/model-catalog.ts";
 import { createSpecComposerBase } from "./claude.ts";
-import type { CommandsTarget, VendorComposer, VendorComposerBase } from "./types.ts";
+import type { CommandsTarget, VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
 
 export { queryAgySkills, type AgyModelQueryOptions as AgySkillsQueryOptions };
 
@@ -107,5 +114,28 @@ export function createAgyComposer(options?: AgyComposerOptions): VendorComposer 
       if (commands === null) throw new Error("agy skills 回应里没有可识别的列表");
       return commands;
     },
+  };
+}
+
+// ---- 模型名单和登录状态（docs/vendor-availability-design.md 第 3 节）----
+
+/** 没登录时 agy 退出码是 0、打印一段话（东京实测：“Error: Please sign in to view available models. …”），不是 JSON。 */
+const AGY_SIGNED_OUT_PATTERN = /sign in/i;
+
+/** agy 没有状态命令：问到名单就是能用；没问到、原话里有 sign in 是没登录。 */
+export const agyCatalogProbe: VendorCatalogProbe = {
+  parse: parseAgyModels,
+  availabilityOf: () => "available",
+  availabilityOfError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return AGY_SIGNED_OUT_PATTERN.test(message) ? "signed_out" : defaultAvailabilityOfError("agy", error);
+  },
+};
+
+export function createAgyCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
+  return {
+    ...agyCatalogProbe,
+    query: (signal) => queryAgyModels({ agyPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
+    installed: options.installed,
   };
 }

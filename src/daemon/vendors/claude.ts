@@ -110,3 +110,4 @@ export function createClaudeComposer(options: ClaudeComposerOptions): VendorComp
     },
   };
 }
+

@@ -393,11 +393,13 @@ describe("新建项目经理", () => {
   it("网络断了：显示错误，不关表单", async () => {
     const user = userEvent.setup();
     await boot();
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    await user.type(screen.getByRole("textbox", { name: "名字" }), "阿明");
+    // 打开表单时会拉一次模型名单（“创建”要看选着的厂商这台能不能用），拉完再让下一次请求断网
+    await waitFor(() => expect(api.calls.some((c) => c.path === "/api/models")).toBe(true));
     api.fetch.mockImplementationOnce(async () => {
       throw new TypeError("Failed to fetch");
     });
-    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
-    await user.type(screen.getByRole("textbox", { name: "名字" }), "阿明");
     await user.click(screen.getByRole("button", { name: "创建" }));
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -1107,7 +1109,7 @@ describe("重试失败的消息", () => {
   it("失败的消息有“重试”：点了发 POST retry，按钮变“重试中”，推回排队中后按钮和原因都没了", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    expect(within(log()).getByText("Claude 没能启动")).toBeInTheDocument();
+    expect(within(log()).getByText("找不到 Claude")).toBeInTheDocument();
     await user.click(within(log()).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/messages\/5\/retry$/)).toHaveLength(1));
     expect(api.callsTo("POST", /retry$/)[0]?.body).toBeUndefined();
@@ -1267,6 +1269,7 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     vendor: "fakeco" as AgentVendor,
     label: "FakeCo Agent",
     source: "vendor",
+    availability: "available",
     models: [{ id: "fake-large", label: "Fake Large", description: null, efforts: null }],
     defaultEfforts: null,
     defaultModel: "Fake Large",
@@ -1315,6 +1318,66 @@ describe("选项从厂商配置来（模型名单），页面不写死", () => {
     const model = within(groupIn(page, "模型")).getByRole("combobox", { name: "模型" });
     await waitFor(() => expect(model).toHaveDisplayValue("Opus 5.5（默认）"));
     expect(optionsOf(model)[0]).toBe("Opus 5.5（默认）");
+  });
+});
+
+describe("这台设备上没装、没登录的厂商（docs/vendor-availability-design.md）", () => {
+  const codex = (availability: ModelCatalog["availability"]): ModelCatalog => ({ ...bundledModelCatalog("codex"), availability });
+  const agy = (availability: ModelCatalog["availability"]): ModelCatalog => ({ ...bundledModelCatalog("agy"), availability });
+  const openDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "更多设置" }));
+    return { dialog, group: within(dialog).getByRole("region", { name: "模型" }) };
+  };
+  const optionNamed = (select: HTMLElement, text: string) => within(select).getAllByRole("option").find((o) => o.textContent === text)! as HTMLOptionElement;
+
+  it("没装的不出现；没登录的灰掉、后面标 Not signed in", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.models = () => ({ status: 200, body: { catalogs: [CLAUDE_CATALOG, agy("not_installed"), codex("signed_out")] } });
+    const { group } = await openDialog(user);
+    const vendor = await within(group).findByRole("combobox", { name: "厂商" });
+    expect(optionsOf(vendor)).toEqual(["Claude Code", "Codex (Not signed in)"]);
+    expect(optionNamed(vendor, "Codex (Not signed in)").disabled).toBe(true);
+    expect(optionNamed(vendor, "Claude Code").disabled).toBe(false);
+  });
+
+  it("打开厂商下拉时在后台只重问不能用的（?refresh=unusable），下拉不等；登录好了回来就能选", async () => {
+    const user = userEvent.setup();
+    await boot();
+    let release: () => void = () => {};
+    api.models = () => {
+      const last = api.calls.filter((c) => c.path === "/api/models").at(-1);
+      if (last?.query.get("refresh") !== "unusable") return { status: 200, body: { catalogs: [CLAUDE_CATALOG, codex("signed_out")] } };
+      return new Promise((resolve) => {
+        release = () => resolve({ status: 200, body: { catalogs: [CLAUDE_CATALOG, codex("available")] } });
+      });
+    };
+    const { group } = await openDialog(user);
+    const vendor = await within(group).findByRole("combobox", { name: "厂商" });
+    await user.click(vendor);
+    await waitFor(() => expect(api.calls.filter((c) => c.path === "/api/models" && c.query.get("refresh") === "unusable")).toHaveLength(1));
+    // 还没回来：下拉照旧可用，没登录那项还是灰的
+    expect(vendor).toBeEnabled();
+    expect(optionNamed(vendor, "Codex (Not signed in)").disabled).toBe(true);
+    release();
+    await waitFor(() => expect(optionsOf(vendor)).toEqual(["Claude Code", "Codex"]));
+    expect(optionNamed(vendor, "Codex").disabled).toBe(false);
+  });
+
+  it("选着的厂商这台用不了（换了设备、或默认那家没登录）：不悄悄换掉，标状态词，“创建”是灰的", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.models = () => ({ status: 200, body: { catalogs: [{ ...CLAUDE_CATALOG, availability: "not_installed" }, codex("available")] } });
+    const { dialog, group } = await openDialog(user);
+    await user.type(within(dialog).getByRole("textbox", { name: "名字" }), "小王");
+    const vendor = await within(group).findByRole("combobox", { name: "厂商" });
+    await waitFor(() => expect(vendor).toHaveDisplayValue("Claude Code (Not installed)"));
+    expect(optionsOf(vendor)).toEqual(["Claude Code (Not installed)", "Codex"]);
+    expect(within(dialog).getByRole("button", { name: "创建" })).toBeDisabled();
+    await user.selectOptions(vendor, "Codex");
+    expect(within(dialog).getByRole("button", { name: "创建" })).toBeEnabled();
   });
 });
 

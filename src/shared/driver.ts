@@ -5,6 +5,7 @@ import type { ReadonlyPolicy } from "./readonly-policy.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
+import { VENDOR_NOT_FOUND_CODES } from "./vendors.ts";
 
 export type { AgentStep, AgentStepInput } from "./domain.ts";
 
@@ -290,7 +291,7 @@ export interface SessionExitedEvent extends DriverEventBase {
 
 export const DRIVER_ERROR_CODES = [
   "start_timeout", // 启动 60 秒没有 init
-  "claude_not_found", // 找不到 claude 程序
+  ...VENDOR_NOT_FOUND_CODES, // 找不到这家的程序（claude_not_found、codex_not_found……，按厂商生成）
   "spawn_failed", // 其他原因起不来
   "invalid_input", // 写入前校验没过，没写
   "bad_output_line", // 输出了一行不是 JSON 的东西，已跳过
@@ -306,7 +307,7 @@ export type DriverErrorCode = (typeof DRIVER_ERROR_CODES)[number];
  */
 export const RETRYABLE_DRIVER_ERRORS: readonly DriverErrorCode[] = [
   "start_timeout",
-  "claude_not_found",
+  ...VENDOR_NOT_FOUND_CODES,
   "spawn_failed",
   "start_args_conflict",
 ];
