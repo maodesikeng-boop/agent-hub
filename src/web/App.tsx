@@ -37,6 +37,18 @@ import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
+const DRAG_INTERACTIVE_SELECTOR = 'button, a, input, textarea, select, [role="button"], [data-no-drag]';
+
+declare global {
+  interface Window {
+    webkit?: {
+      messageHandlers?: {
+        hubStatus?: { postMessage: (payload: { runningWorkers: number; askingCount: number; waitingCount: number }) => void };
+        windowDrag?: { postMessage: (payload: { doubleClick: boolean }) => void };
+      };
+    };
+  }
+}
 
 /** 用户手动收起右栏后记住（docs/ui-standard.md 第 12 条）：存 "closed"；再手动展开就删掉。 */
 export const RIGHT_RAIL_KEY = "agent-hub.rightRail";
@@ -117,6 +129,37 @@ export function App() {
   const activeId = profile ? null : (active?.id ?? null);
   const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
   const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
+  const runningWorkers = useMemo(
+    () =>
+      fleet.devices.reduce(
+        (sum, d) =>
+          d.state.phase !== "ready"
+            ? sum
+            : sum +
+              Object.values(d.state.conversations).filter(
+                ({ conversation }) => conversation.kind === "worker" && (sessionOf(d.state, conversation.id)?.activity ?? "idle") !== "idle",
+              ).length,
+        0,
+      ),
+    [fleet.devices],
+  );
+  const askingCount = reminders.asking.size;
+  const waitingCount = reminders.waiting.size;
+  useEffect(() => {
+    window.webkit?.messageHandlers?.hubStatus?.postMessage({ runningWorkers, askingCount, waitingCount });
+  }, [runningWorkers, askingCount, waitingCount]);
+
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target || !target.closest("[data-window-drag]")) return;
+      if (target.closest(DRAG_INTERACTIVE_SELECTOR)) return;
+      window.webkit?.messageHandlers?.windowDrag?.postMessage({ doubleClick: e.detail === 2 });
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, []);
 
   // 网址没写（第一次打开）：落到第一个对话，并把网址改成它（不记历史）。默认选中的那个就固定在网址里，
   // 之后别的对话来了新消息排到前面也不会跳走。写了但找不到的（刚建好、服务端的变化还没到；或者编号不对）先显示第一个，网址不动，
@@ -144,7 +187,7 @@ export function App() {
   }
   if (local.state.phase === "unauthorized") {
     return (
-      <div className={FULLPAGE}>
+      <div className={FULLPAGE} data-testid="unauthenticated">
         <p>还没有登录。在电脑上打开终端启动时打印的登录链接；手机可到已登录电脑的「设置 → 在手机上登录」扫码</p>
       </div>
     );
@@ -309,7 +352,7 @@ export function App() {
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
         {deviceWaiting ? (
           <>
-            {leading && <div className="flex h-16 shrink-0 items-center px-3">{leading}</div>}
+            <header data-window-drag className="flex h-16 shrink-0 items-center px-3 max-[1100px]:pl-[calc(0.75rem+var(--macos-traffic-lights-width))]">{leading}</header>
             {deviceWaiting}
           </>
         ) : profile ? (

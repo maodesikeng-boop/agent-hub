@@ -222,11 +222,14 @@ export function Sidebar({
         aria-label="左栏"
         data-drawer={drawerOpen ? "open" : "closed"}
         className={cn(
-          "flex w-[300px] shrink-0 flex-col bg-sidebar pt-[var(--safe-top)] pb-[var(--safe-bottom)] max-[1100px]:fixed max-[1100px]:inset-y-0 max-[1100px]:left-0 max-[1100px]:z-30",
+          "flex w-[300px] shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)] max-[1100px]:fixed max-[1100px]:inset-y-0 max-[1100px]:left-0 max-[1100px]:z-30",
           !drawerOpen && "max-[1100px]:hidden",
         )}
       >
-        <div className="flex h-16 shrink-0 items-center gap-2 px-3">
+        <div
+          data-window-drag
+          className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
+        >
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input

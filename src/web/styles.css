@@ -66,8 +66,22 @@
   /* 安全区（docs/ui-standard.md 第 19 条）：主屏 App 全屏时刘海和底部横条的高度；电脑上是 0。组件里不直接写 env()，用这两个变量 */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Mac 原生桌面应用（docs/ui-standard.md 第 16 条）：窗口左上角红黄绿交通灯按钮的安全避让宽高，浏览器里是 0 */
+  --macos-traffic-lights-width: 0px;
+  --macos-traffic-lights-height: 0px;
 
   color-scheme: light;
+}
+
+html[data-macos-app="true"] {
+  --macos-traffic-lights-width: 72px;
+  --macos-traffic-lights-height: 28px;
+}
+
+@media (max-width: 1100px) {
+  html[data-macos-app="true"] .chat-main {
+    --header-gutter-start: calc(1.25rem + var(--macos-traffic-lights-width));
+  }
 }
 
 html,
