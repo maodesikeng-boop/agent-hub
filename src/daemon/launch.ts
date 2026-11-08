@@ -10,8 +10,8 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, VENDOR_SPECS, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
+import type { AgentSessionRow, AgentVendor, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
@@ -79,7 +79,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
     // claude 的只读 Worker 用自带沙箱落实（writeGuard native，设计第 2.3 节）：设置文件换成只读翻译，进程不再包外层沙箱（macOS 沙箱不能嵌套）。
     // 别家的设置文件驱动不读，照普通 Worker 生成；它们的只读翻译在各自驱动层。
-    const nativeReadonly = readonlyPolicy !== undefined && session.vendor === "claude";
+    const nativeReadonly = readonlyPolicy !== undefined && VENDOR_SPECS[session.vendor as AgentVendor]?.readonlyMode === "settings";
     const settings = JSON.stringify(
       buildSessionSettings({
         role,

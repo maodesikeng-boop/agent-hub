@@ -25,6 +25,7 @@ import {
   resolveExecutable,
   resolveHubPaths,
   resolvePaths,
+  resolveVendorExecutables,
   workerSetupLogPath,
   workerWorktreePath,
 } from "./paths.ts";
@@ -199,6 +200,32 @@ describe("paths：可执行文件与数据目录解析", () => {
         "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
       ]);
+
+      // resolveVendorExecutables：按 AGENT_VENDORS 循环解析三家厂商的 cmd 与 path
+      const userHome = join(dir, "home");
+      const localAgy = join(userHome, ".local", "bin", "agy");
+      mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
+      writeFileSync(localAgy, "");
+      writeFileSync(join(pathDir, "codex"), "");
+      const resolved = resolveVendorExecutables(
+        { claudePath: "/explicit/claude", agyPath: "agy", codexPath: "codex" },
+        pathDir,
+        userHome,
+        "darwin",
+      );
+      expect(resolved).toEqual({
+        claude: { cmd: "/explicit/claude", path: "/explicit/claude" },
+        agy: { cmd: "agy", path: "agy" },
+        codex: { cmd: "codex", path: "codex" },
+      });
+      // 当 PATH 里没有 agy 时，回退到 ~/.local/bin/agy
+      const resolvedFallback = resolveVendorExecutables(
+        { claudePath: "claude", agyPath: "agy", codexPath: "codex" },
+        "/empty-path",
+        userHome,
+        "darwin",
+      );
+      expect(resolvedFallback.agy).toEqual({ cmd: "agy", path: localAgy });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

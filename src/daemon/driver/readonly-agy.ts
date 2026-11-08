@@ -7,6 +7,7 @@
 // 没有 OS 沙箱的机器上派只读 agy 直接报错（设计第 8 节第 5 条）：没有外层沙箱，命令行写文件挡不住。
 import { realpathSync } from "node:fs";
 import {
+  agyHomePaths,
   connectorToolAllowed,
   type ConnectorToolAnnotations,
   type ReadonlyPolicy,
@@ -74,8 +75,7 @@ function fileRegex(path: string): string {
 export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string; policy: ReadonlyPolicy; realpath?: (p: string) => string }): ReadonlySandboxInput {
   const real = input.realpath ?? realpathOrSelf;
   const home = trimSlash(real(input.homeDir));
-  const cli = `${home}/.gemini/antigravity-cli`;
-  const legacy = `${home}/.gemini/antigravity`;
+  const { cliDir: cli, legacyDir: legacy } = agyHomePaths(home);
   const needed = new Set(AGY_READABLE_SECRET_HOME_PATHS.map((d) => `${home}/${d}`));
   const writableFileGlobs = [...AGY_RUNTIME_FILES.map((f) => `${cli}/${f}`), ...AGY_RUNTIME_FILES_LEGACY.map((f) => `${legacy}/${f}`)];
   return {

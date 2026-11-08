@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
-import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, type AgentVendor } from "./vendors.ts";
+import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, AGENT_VENDORS, type AgentVendor } from "./vendors.ts";
 
 export { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL };
 
@@ -213,6 +213,27 @@ export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: stri
   agy: defaultAgyFallbackPaths,
   codex: defaultCodexFallbackPaths,
 };
+
+export interface VendorExecutable {
+  cmd: string;
+  path: string;
+}
+
+/** 按 AGENT_VENDORS 循环解析各家厂商可执行文件路径（cmd 为配置的命令或路径，path 为结合 PATH 与兜底候选路径解析后的结果）。 */
+export function resolveVendorExecutables(
+  paths: Pick<HubPaths, `${AgentVendor}Path`>,
+  envPath: string | undefined,
+  userHome: string,
+  platform: string = process.platform,
+): Record<AgentVendor, VendorExecutable> {
+  return Object.fromEntries(
+    AGENT_VENDORS.map((vendor) => {
+      const cmd = paths[`${vendor}Path`];
+      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+      return [vendor, { cmd, path }];
+    }),
+  ) as Record<AgentVendor, VendorExecutable>;
+}
 
 /** agy CLI 的数据根目录（~/.gemini/antigravity-cli）。 */
 export function agyCliDataDir(userHome: string = homedir()): string {
