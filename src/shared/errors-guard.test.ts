@@ -49,31 +49,6 @@ const WEB = "src/web/components";
 
 const RULES: Rule[] = [
   {
-    // B 块把 fail() 改成只收 ApiErrorCode 后，这条由类型检查保证，B 里顺手删掉这条规则。
-    name: "守护进程 fail 第三参不许是英文码",
-    files: daemonTs,
-    pattern: /fail\(reply, [0-9a-zA-Z_.[\]]+, "[a-z_]+"/,
-    expected: 16,
-    allowed: [
-      { file: SERVER, line: 'if (peer === null) return fail(reply, 401, "peer_unauthorized");' },
-      { file: SERVER, line: 'if ((identity.kind === "deviceToken" || !rule.browserPaths) && !inDeviceScope(path)) return fail(reply, 403, "forbidden_peer");' },
-      { file: SERVER, line: 'if (identity.kind === "none" && !rule.identities.includes("cookie")) return fail(reply, 401, "peer_unauthorized");' },
-      { file: SERVER, line: 'if (unsafe && rule.origin !== null && !rule.origin(req.headers.origin ?? "", entry)) return fail(reply, 403, "forbidden_origin");' },
-      { file: SERVER, line: 'if (session === null) return fail(reply, 401, "unauthorized");' },
-      { file: SERVER, line: 'if (path.startsWith("/api/peer/")) return fail(reply, 401, "peer_unauthorized");' },
-      { file: SERVER, line: 'return fail(reply, 500, "internal_error");' },
-      { file: SERVER, line: 'app.setNotFoundHandler((_req, reply) => fail(reply, 404, "not_found"));' },
-      { file: SERVER, line: 'if (attachment === null) return fail(reply, 404, "not_found");' },
-      { file: SERVER, line: 'if (copy === null) return fail(reply, 404, "not_found");' },
-      { file: SERVER, line: 'if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");' },
-      { file: SERVER, line: 'if (!loginLinks.consume(link)) return fail(reply, 401, "unauthorized");' },
-      { file: SERVER, line: 'if (!sessions.revoke(id)) return fail(reply, 404, "not_found");' },
-      { file: SERVER, line: 'if (error instanceof OpenTargetMissing) return fail(reply, 404, "not_found");' },
-      { file: SERVER, line: 'if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");' },
-      { file: SERVER, line: 'if (act === null || attachment === null) return fail(reply, 404, "not_found");' },
-    ],
-  },
-  {
     name: "应答体不许直接 error: 英文码（*.test.ts 除外）",
     files: daemonNonTestTs,
     pattern: /error: "[a-z_]+"/,
@@ -88,14 +63,8 @@ const RULES: Rule[] = [
     name: "回给人的不许是 err.message（fail 的第三参）",
     files: daemonTs,
     pattern: /fail\(reply, [^,]+, (err|error)\.message/,
-    expected: 5,
-    allowed: [
-      { file: SERVER, line: "if (err instanceof PickFolderError) return fail(reply, err.statusCode, err.message);" },
-      { file: SERVER, line: 'if (err instanceof UploadError) return fail(reply, err.statusCode, err.message, err.statusCode === 400 ? "invalid" : undefined);' },
-      { file: SERVER, line: "if (err instanceof LedgerRequestError) return fail(reply, LEDGER_ERROR_HTTP_STATUS[err.code], err.message, err.code);" },
-      { file: SERVER, line: 'if (status === 400) return fail(reply, 400, err.message, "invalid");' },
-      { file: SERVER, line: "if (status !== undefined && status >= 400 && status < 500) return fail(reply, status, err.message);" },
-    ],
+    expected: 0,
+    allowed: [],
   },
   {
     name: "组件不许直接显示 err.message",

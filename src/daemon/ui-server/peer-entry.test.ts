@@ -153,7 +153,7 @@ describe("设备入口：unix socket（连入方）", () => {
     const { at } = await setup();
     const res = await send(at, "GET", API_PATHS.state, { ...deviceAuth, authorization: `Bearer ${newPeerToken()}` });
     expect(res.status).toBe(401);
-    expect(JSON.parse(res.body)).toMatchObject({ error: "peer_unauthorized" });
+    expect(JSON.parse(res.body)).toEqual({ code: "peer_unauthorized", error: "这台设备没有配对或已被移除" });
   });
 
   it("POST /api/peer/pair 不要设备令牌（凭邀请码，邀请码不对由配对自己回）；GET 照样 401", async () => {

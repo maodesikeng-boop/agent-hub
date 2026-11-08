@@ -14,7 +14,6 @@ import {
   API_PATHS,
   REFRESH_UNUSABLE,
   ConversationNotFoundError,
-  LEDGER_ERROR_HTTP_STATUS,
   LedgerRequestError,
   MAX_MESSAGE_BYTES,
   MAX_MODEL_CHARS,
@@ -48,7 +47,6 @@ import {
   PEER_DEVICE_HEADER,
   utf8Bytes,
   type AgentVendor,
-  type ApiErrorBody,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
   type CommandsResponse,
@@ -61,7 +59,6 @@ import {
   type FileAction,
   type FileActionResponse,
   type Ledger,
-  type LedgerErrorCode,
   type ModelCatalog,
   type ModelsResponse,
   type QuotaResponse,
@@ -76,6 +73,7 @@ import {
   type StateSnapshot,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import {
@@ -236,6 +234,18 @@ const pathOf = (req: FastifyRequest) => req.url.split("?", 1)[0] ?? "";
 /** 设备令牌能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
 const inDeviceScope = (path: string) => path.startsWith("/api/") && !ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix));
 
+const STATUS_TO_CODE: Readonly<Record<number, ApiErrorCode>> = {
+  400: "invalid",
+  401: "unauthorized",
+  403: "forbidden",
+  404: "not_found",
+  409: "conflict",
+  413: "too_large",
+  429: "busy",
+  501: "unavailable",
+};
+const codeOfStatus = (status: number): ApiErrorCode => STATUS_TO_CODE[status] ?? "internal";
+
 class HttpError extends Error {
   readonly statusCode: number;
   constructor(statusCode: number, message: string) {
@@ -353,7 +363,7 @@ function parseAttachmentIds(value: unknown): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.some((id) => typeof id !== "string")) throw new HttpError(400, "attachmentIds must be an array of strings");
   const ids = [...new Set(value as string[])];
-  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new HttpError(400, ATTACHMENTS_TOO_MANY_MESSAGE);
+  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new LedgerRequestError("invalid", ATTACHMENTS_TOO_MANY_MESSAGE);
   return ids;
 }
 
@@ -513,8 +523,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     reply.header("set-cookie", sessionCookie(req, session.token, COOKIE_MAX_AGE_SECONDS)).header("referrer-policy", "no-referrer");
   };
 
-  const fail = (reply: FastifyReply, statusCode: number, error: string, code?: LedgerErrorCode) =>
-    reply.code(statusCode).send((code === undefined ? { error } : { error, code }) satisfies ApiErrorBody);
+  const fail = (reply: FastifyReply, code: ApiErrorCode, reason?: string) =>
+    reply.code(API_ERRORS[code].status).send(errorBody(code, reason));
 
   const serveTarget = opts.serveTarget ?? "tcp";
   /** tailscale serve 转到哪：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机（本机别的进程连端口伪造不了 serve 流量）。 */
@@ -594,7 +604,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   // 每个请求（含 WebSocket 握手）进来先定入口，再按入口的规则认身份、查 Origin、限路径。
   app.addHook("onRequest", async (req, reply) => {
     const entry = resolveEntry(req);
-    if (typeof entry === "string") return fail(reply, 403, entry);
+    if (typeof entry === "string") return fail(reply, entry);
     const rule = entryRules[entry.kind];
     const path = pathOf(req);
     // 过了入口检查后的所有回应（含认不出设备令牌的 401）都不许缓存。
@@ -607,29 +617,29 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const peer = rule.identities.includes("deviceToken")
         ? (opts.peers?.authenticate(req.headers[PEER_DEVICE_HEADER], req.headers.authorization) ?? null)
         : null;
-      if (peer === null) return fail(reply, 401, "peer_unauthorized");
+      if (peer === null) return fail(reply, "peer_unauthorized");
       identity = { kind: "deviceToken", peer };
     } else if (rule.identities.includes("invite") && req.method === "POST" && path === API_PATHS.peerPair) {
       identity = { kind: "invite" };
     }
 
     // 设备令牌、不认 cookie 的入口：只能碰 /api/ 下不是入口专用的
-    if ((identity.kind === "deviceToken" || !rule.browserPaths) && !inDeviceScope(path)) return fail(reply, 403, "forbidden_peer");
-    if (identity.kind === "none" && !rule.identities.includes("cookie")) return fail(reply, 401, "peer_unauthorized");
+    if ((identity.kind === "deviceToken" || !rule.browserPaths) && !inDeviceScope(path)) return fail(reply, "forbidden_peer");
+    if (identity.kind === "none" && !rule.identities.includes("cookie")) return fail(reply, "peer_unauthorized");
 
     if (identity.kind === "none") {
       // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
       // 会改状态的请求和 WebSocket 握手必须带同源的 Origin，没带也拒绝；GET 不查。
       // 设备令牌、配对不查：设备令牌不像 cookie 会被浏览器自动带上，借不了；配对凭邀请码，也不是浏览器发的。
       const unsafe = !SAFE_METHODS.has(req.method) || path === API_PATHS.ws || isUpgrade(req);
-      if (unsafe && rule.origin !== null && !rule.origin(req.headers.origin ?? "", entry)) return fail(reply, 403, "forbidden_origin");
+      if (unsafe && rule.origin !== null && !rule.origin(req.headers.origin ?? "", entry)) return fail(reply, "forbidden_origin");
 
       // /api/ 下（含 WebSocket 握手）和转发 /d/ 一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
       // /api/peer/ 只认设备令牌（pair 凭邀请码），浏览器 cookie 不行。
-      if (path.startsWith("/api/peer/")) return fail(reply, 401, "peer_unauthorized");
+      if (path.startsWith("/api/peer/")) return fail(reply, "peer_unauthorized");
       if (path.startsWith("/api/") || path.startsWith(`${DEVICE_PROXY_PREFIX}/`)) {
         const session = sessions.authenticate(sessionToken(req));
-        if (session === null) return fail(reply, 401, "unauthorized");
+        if (session === null) return fail(reply, "unauthorized");
         identity = { kind: "cookie", sessionId: session.id };
       }
     }
@@ -646,22 +656,25 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   });
 
   app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError, req, reply) => {
-    if (err instanceof PickFolderError) return fail(reply, err.statusCode, err.message);
-    if (err instanceof ConversationNotFoundError) return fail(reply, 404, err.code);
-    if (err instanceof UploadError) return fail(reply, err.statusCode, err.message, err.statusCode === 400 ? "invalid" : undefined);
-    // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口的 413 照旧）
-    if ((err as FastifyError).statusCode === 413 && (req.url.split("?", 1)[0] ?? "") === API_PATHS.uploads) {
-      return fail(reply, 413, UPLOAD_TOO_LARGE_MESSAGE);
-    }
-    if (err instanceof LedgerRequestError) return fail(reply, LEDGER_ERROR_HTTP_STATUS[err.code], err.message, err.code);
+    const reason = err.message;
+    if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
+    if (err instanceof ConversationNotFoundError) return fail(reply, "not_found");
+    if (err instanceof UploadError) return fail(reply, codeOfStatus(err.statusCode), reason);
+    if (err instanceof LedgerRequestError) return fail(reply, err.code, reason);
     const status = (err as FastifyError).statusCode;
-    // 请求体校验没过（含 JSON 解析失败）一律 400 + code "invalid"，和账本拒绝的 invalid 同形，网页统一处理。
-    if (status === 400) return fail(reply, 400, err.message, "invalid");
-    if (status !== undefined && status >= 400 && status < 500) return fail(reply, status, err.message);
+    // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
+    if (status === 413) {
+      return fail(reply, "too_large", pathOf(req) === API_PATHS.uploads ? UPLOAD_TOO_LARGE_MESSAGE : undefined);
+    }
+    // 请求体校验没过（含 JSON 解析失败、HttpError）英文原文只记日志，对外统一回默认中文。
+    if (status !== undefined && status >= 400 && status < 500) {
+      req.log.warn({ err }, "ui-server bad request");
+      return fail(reply, codeOfStatus(status));
+    }
     req.log.error({ err }, "ui-server request failed");
-    return fail(reply, 500, "internal_error");
+    return fail(reply, "internal");
   });
-  app.setNotFoundHandler((_req, reply) => fail(reply, 404, "not_found"));
+  app.setNotFoundHandler((_req, reply) => fail(reply, "not_found"));
 
   app.register(fastifyWebsocket);
   if (ownedDb !== undefined) app.addHook("onClose", async () => ownedDb.close());
@@ -677,7 +690,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     let activeUploads = 0;
     uploads.addHook("onRequest", async (req, reply) => {
       if (req.method !== "POST") return;
-      if (activeUploads >= MAX_CONCURRENT_UPLOADS) return fail(reply, 429, UPLOAD_BUSY_MESSAGE);
+      if (activeUploads >= MAX_CONCURRENT_UPLOADS) return fail(reply, "busy", UPLOAD_BUSY_MESSAGE);
       activeUploads++;
       reply.raw.once("close", () => {
         activeUploads--;
@@ -692,7 +705,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     // 地址里的文件名只是给浏览器看的（取文件只认编号），用通配：命名参数 Fastify 默认最多 100 个字符，长文件名会 404
     uploads.get("/api/uploads/:id/*", async (req, reply) => {
       const attachment = resolveUpload(uploadsDir, String((req.params as { id?: unknown }).id ?? ""));
-      if (attachment === null) return fail(reply, 404, "not_found");
+      if (attachment === null) return fail(reply, "not_found");
       // 预览窗（?inline=1）按扩展名认类型：上传时只认图片，pdf、html 之类也要能放进 iframe
       const mime = wantsPreview(req) ? sentFileMime(attachment.name) : attachment.mime;
       return sendStoredFile(req, reply, { ...attachment, mime });
@@ -702,7 +715,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   // agent 发给用户的文件的副本（daemon/sent-files.ts）：和上传的文件同一个布局，同一套查找和响应头；类型按 sentFileMime（svg 算图片）
   app.get("/api/sent-files/:id/*", async (req, reply) => {
     const copy = resolveUpload(sentFilesDir, String((req.params as { id?: unknown }).id ?? ""));
-    if (copy === null) return fail(reply, 404, "not_found");
+    if (copy === null) return fail(reply, "not_found");
     return sendStoredFile(req, reply, { ...copy, mime: sentFileMime(copy.name) });
   });
 
@@ -721,14 +734,14 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.get(API_PATHS.auth, async (req, reply) => {
       const { token, link } = req.query as { token?: unknown; link?: unknown };
       if (token === undefined && link === undefined) return reply.type("text/html; charset=utf-8").header("referrer-policy", "no-referrer").send(LOGIN_LINK_PAGE);
-      if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, 401, "unauthorized");
+      if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, "unauthorized");
       startSession(req, reply);
       return reply.redirect("/", 302);
     });
 
     routes.post(API_PATHS.auth, async (req, reply) => {
       const link = (req.body as { link?: unknown } | null | undefined)?.link;
-      if (!loginLinks.consume(link)) return fail(reply, 401, "unauthorized");
+      if (!loginLinks.consume(link)) return fail(reply, "unauthorized");
       startSession(req, reply);
       return reply.code(204).send();
     });
@@ -740,7 +753,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.delete("/api/sessions/:id", async (req, reply) => {
       const id = String((req.params as { id?: unknown }).id ?? "");
-      if (!sessions.revoke(id)) return fail(reply, 404, "not_found");
+      if (!sessions.revoke(id)) return fail(reply, "not_found");
       closeSockets(id);
       // 退的是自己：顺手把浏览器里的 cookie 清掉
       if (id === sessionOf(req)) reply.header("set-cookie", sessionCookie(req, "", 0));
@@ -816,7 +829,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const { clientId, text, attachmentIds } = parsePostBody(req.body);
       // 附件按编号从磁盘重新算（路径、名字、大小），不信请求里的任何别的东西
       const attachments = attachmentIds.map((id) => resolveUpload(uploadsDir, id) ?? undefined);
-      if (attachments.some((a) => a === undefined)) throw new HttpError(400, ATTACHMENTS_MISSING_MESSAGE);
+      if (attachments.some((a) => a === undefined)) throw new LedgerRequestError("invalid", ATTACHMENTS_MISSING_MESSAGE);
       return ledger.postUserMessage({
         conversationId,
         clientId,
@@ -830,11 +843,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       try {
         return await run();
       } catch (error) {
-        if (error instanceof OpenTargetMissing) return fail(reply, 404, "not_found");
-        if (error instanceof OpenNotAllowed) return fail(reply, 403, OPEN_NOT_ALLOWED_MESSAGE);
-        if (error instanceof FileActionsUnavailable) return fail(reply, 501, FILE_ACTIONS_UNAVAILABLE_MESSAGE);
+        if (error instanceof OpenTargetMissing) return fail(reply, "not_found");
+        if (error instanceof OpenNotAllowed) return fail(reply, "forbidden", OPEN_NOT_ALLOWED_MESSAGE);
+        if (error instanceof FileActionsUnavailable) return fail(reply, "unavailable", FILE_ACTIONS_UNAVAILABLE_MESSAGE);
         console.error("ui-server open failed:", error);
-        return fail(reply, 500, "没能打开这个文件");
+        return fail(reply, "internal", "没能打开这个文件");
       }
     };
     // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
@@ -848,7 +861,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const act = parseAction(action);
       const message = typeof id === "string" && POSITIVE_INT.test(id) ? ledger.getMessage(Number(id)) : null;
       const file = message === null || typeof index !== "string" || !NON_NEGATIVE_INT.test(index) ? undefined : sentFilesOf(message)[Number(index)];
-      if (act === null || message === null || file === undefined || file.id === null) return fail(reply, 404, "not_found");
+      if (act === null || message === null || file === undefined || file.id === null) return fail(reply, "not_found");
       const copy = resolveUpload(sentFilesDir, file.id);
       const sessionId = message.sessionId;
       return doFileAction(reply, async () => {
@@ -870,7 +883,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const { id, action } = req.params as Record<string, unknown>;
       const act = parseAction(action);
       const attachment = resolveUpload(uploadsDir, String(id ?? ""));
-      if (act === null || attachment === null) return fail(reply, 404, "not_found");
+      if (act === null || attachment === null) return fail(reply, "not_found");
       return doFileAction(reply, async () => {
         requireLocal(req);
         return performFileAction(act, { original: null, isAllowed: () => false, copy: attachment.path, name: attachment.name }, runOpen);
@@ -948,13 +961,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       routes.get(API_PATHS.pushKey, async (): Promise<PushKeyResponse> => ({ publicKey: push.publicKey }));
       routes.post(API_PATHS.pushSubscriptions, async (req, reply) => {
         const subscription = parseSubscription(req.body);
-        if (subscription === null) return fail(reply, 400, "订阅内容不对", "invalid");
+        if (subscription === null) return fail(reply, "invalid", "订阅内容不对");
         push.subscribe(subscription);
         return reply.code(204).send();
       });
       routes.post(API_PATHS.pushUnsubscribe, async (req, reply) => {
         const { endpoint } = (req.body ?? {}) as { endpoint?: unknown };
-        if (typeof endpoint !== "string") return fail(reply, 400, "endpoint 不对", "invalid");
+        if (typeof endpoint !== "string") return fail(reply, "invalid", "endpoint 不对");
         push.unsubscribe(endpoint);
         return reply.code(204).send();
       });
