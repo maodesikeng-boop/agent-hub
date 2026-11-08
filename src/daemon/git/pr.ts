@@ -22,11 +22,15 @@ export function parsePrList(stdout: string): WorkerPr | null {
 
 export function probePr(cwd: string, branch: string, timeoutMs: number = WORKER_PR_PROBE_TIMEOUT_MS): Promise<WorkerPr | null> {
   return new Promise((done) => {
-    execFile(
-      "gh",
-      ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", PR_FIELDS],
-      { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" } },
-      (error, stdout) => done(error === null ? parsePrList(stdout) : null),
-    );
+    try {
+      execFile(
+        "gh",
+        ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", PR_FIELDS],
+        { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" } },
+        (error, stdout) => done(error === null ? parsePrList(stdout) : null),
+      );
+    } catch {
+      done(null); // EPERM 这类错误 execFile 是同步抛的，不走回调
+    }
   });
 }
