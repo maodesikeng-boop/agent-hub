@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, type PmMode } from "../shared/domain.ts";
+import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
 import {
   HUB_CLI_STDIN_IDLE_MS,
@@ -90,11 +91,29 @@ export const HUB_USAGE = `用法：
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
 
-const UNREACHABLE_MESSAGE = `连不上 ${PRODUCT_NAME}，守护进程可能没在跑`;
+/** 守护进程没开：只说 network 那句话和怎么办，不带 ENOENT、ECONNREFUSED 这类系统码。 */
+const UNREACHABLE_MESSAGE = `${LOCAL_ERRORS.network.text}。${LOCAL_ERRORS.network.hint}`;
+/** hub 自己出了意外的错（退出码 internal）：不打堆栈和异常原文。 */
+const INTERNAL_MESSAGE = "出了意外的错，这条命令没有跑完。重试一次；还不行，把现象告诉用户";
+/** post 里超时的原因；别的原因是系统码（ECONNRESET 之类），不打给人看。 */
+const TIMEOUT_REASON = "超时";
 const NO_ANSWER_MESSAGE = `请求已经发给 ${PRODUCT_NAME}，但没等到回应`;
 const MAYBE_EXECUTED_HINT = `请求可能已经执行，请先用 \`${hub} status\` 确认，别直接重试`;
 
 class UsageError extends Error {}
+
+/** node 的 parseArgs 报错（英文）→ 中文，按 err.code 分；认不出的给一句通用的话，原文不外送。 */
+function describeParseError(err: unknown): string {
+  const code = (err as { code?: unknown }).code;
+  const message = err instanceof Error ? err.message : "";
+  const quoted = /'(-[^'\s<]+)/.exec(message)?.[1] ?? "";
+  if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") return `不认识的参数 ${quoted}`;
+  if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+    return message.includes("does not take an argument") ? `${quoted} 不带值` : `${quoted} 后面要跟一个值`;
+  }
+  if (code === "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL") return "多了不认识的参数";
+  return "参数的写法不对";
+}
 
 type Options = {
   name?: string;
@@ -206,7 +225,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       },
     });
   } catch (err) {
-    throw new UsageError((err as Error).message);
+    throw new UsageError(describeParseError(err));
   }
   const values = parsed.values as Options;
   const [group, action, ...rest] = parsed.positionals;
@@ -474,7 +493,7 @@ function post(socketPath: string, path: string, token: string, payload: string, 
     // 请求整个交给了内核才算“已发出”：之后再出错，守护进程可能已经收到并执行了。
     req.on("finish", () => (sent = true));
     req.on("timeout", () => {
-      finish(lost("超时"));
+      finish(lost(TIMEOUT_REASON));
       req.destroy();
     });
     req.on("error", (err: NodeJS.ErrnoException) => finish(lost(err.code ?? err.message)));
@@ -526,13 +545,13 @@ export async function runHub(io: HubIo): Promise<number> {
   }
 
   const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
-  if (outcome.kind === "not-sent") return usage(`请求没发出去：${outcome.reason}`);
+  if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
   if (outcome.kind === "unreachable") {
-    io.stderr.write(`${UNREACHABLE_MESSAGE}（${outcome.reason}）\n`);
+    io.stderr.write(`${UNREACHABLE_MESSAGE}\n`);
     return HUB_EXIT.unreachable;
   }
   if (outcome.kind === "no-answer") {
-    io.stderr.write(`${NO_ANSWER_MESSAGE}（${outcome.reason}）。${MAYBE_EXECUTED_HINT}\n`);
+    io.stderr.write(`${NO_ANSWER_MESSAGE}${outcome.reason === TIMEOUT_REASON ? `（${TIMEOUT_REASON}）` : ""}。${MAYBE_EXECUTED_HINT}\n`);
     return HUB_EXIT.unreachable;
   }
 
@@ -555,13 +574,12 @@ export async function runHub(io: HubIo): Promise<number> {
   return HUB_EXIT.rejected;
 }
 
-/** 入口用：runHub 之外的意外异常也只打一句话、退出码 2，不打堆栈。 */
+/** 入口用：runHub 之外的意外异常也只打一句话、退出码 internal（4），不打堆栈和异常原文。 */
 export async function runHubSafely(io: HubIo): Promise<number> {
   try {
     return await runHub(io);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    io.stderr.write(`${hub}：出了意外的错：${message.split("\n", 1)[0]}\n`);
-    return HUB_EXIT.usage;
+  } catch {
+    io.stderr.write(`${hub}：${INTERNAL_MESSAGE}\n`);
+    return HUB_EXIT.internal;
   }
 }

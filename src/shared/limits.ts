@@ -3,6 +3,9 @@
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
 
+/** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
+export const GIT_REASON_MAX_CHARS = 200;
+
 // ---- hub worker show / log（ledger/steps.ts、ledger/worker-view.ts）----
 /** 每个会话在 session_steps 里最多留多少条（一轮结束时把更老的删掉）。 */
 export const SESSION_STEPS_KEEP = 1_000;

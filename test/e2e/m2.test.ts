@@ -7,7 +7,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_PATHS, ENV_DEFAULT_MODEL, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, PRODUCT_NAME, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_DEFAULT_MODEL, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { LOCAL_ERRORS } from "../../src/shared/errors.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
   Client,
@@ -560,7 +561,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 
-  it("守护进程没开：关掉守护进程后用同样的环境变量跑 hub status，退出码 3，提示连不上 agent-hub", async () => {
+  it("守护进程没开：关掉守护进程后用同样的环境变量跑 hub status，退出码 3，提示连不上守护进程", async () => {
     env = makeEnv();
     const { daemon, client, privateId } = await boot();
     await warmUp(client, privateId);
@@ -569,7 +570,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
     const result = await env.runHub(proc!.pid, ["status"]);
     expect(result.code).toBe(3);
-    expect(result.stderr).toContain(`连不上 ${PRODUCT_NAME}`);
+    expect(result.stderr).toContain(LOCAL_ERRORS.network.text);
   });
 
   it("重试：找不到 claude 导致消息失败；修好路径重启后点重试，排队中 → 已送达 → 已回复，不多出消息", { timeout: 60_000 }, async () => {

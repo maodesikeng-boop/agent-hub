@@ -9,7 +9,7 @@ import { askOf, workerEventOf } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, WorkerRecord } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
-import { LedgerRequestError } from "../../shared/ledger.ts";
+import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
@@ -372,7 +372,18 @@ describe("派活：在主文件夹里干", () => {
     expect(sessionRow(workerSessionId(worker.id)).addDirs).toEqual([extra]);
   });
 
-  it("git 没跑成（超时、找不到 git、Xcode 许可证……）：报错说清楚原因和 --no-worktree，不默默改成在主文件夹里干，什么都没写", () => {
+  it.each([
+    ["Preparing worktree (new branch 'x')\nfatal: not a git repository (or any of the parent directories): .git\n", "fatal: not a git repository (or any of the parent directories): .git"],
+    ["Preparing worktree\nerror: pathspec 'x' did not match\nfatal: later", "error: pathspec 'x' did not match"],
+    ["Preparing worktree\n\n  Please agree to the Xcode license  \n\n", "Please agree to the Xcode license"],
+    [`fatal: ${"长".repeat(300)}`, `fatal: ${"长".repeat(193)}`],
+  ])("git 没跑成：原因取第一条 fatal:/error: 行，没有就取最后一个非空行，截到 200 字（%#）", (output, reason) => {
+    repos.add(main);
+    gitFails = output;
+    expect(() => start()).toThrow(new LedgerRequestError("git_failed", `git 没跑成：${reason}。可以重试；或者加 --no-worktree，明确让 Worker 在主文件夹里干。`));
+  });
+
+  it("git 没跑成（超时、找不到 git、Xcode 许可证……）：409 git_failed，原因说清楚、提示 --no-worktree，不默默改成在主文件夹里干，什么都没写", () => {
     repos.add(main);
     gitFails = "git 超过 5 秒没有结束，已中止（git rev-parse --verify --quiet HEAD）。";
     const before = tableCounts();
@@ -382,13 +393,14 @@ describe("派活：在主文件夹里干", () => {
     } catch (error) {
       caught = error;
     }
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught).not.toBeInstanceOf(LedgerRequestError);
+    expect(caught).toBeInstanceOf(LedgerRequestError);
+    expect((caught as LedgerRequestError).code).toBe("git_failed");
+    expect(LEDGER_ERROR_HTTP_STATUS.git_failed).toBe(409);
     expect((caught as Error).message).toContain("git 没跑成");
     expect((caught as Error).message).toContain("超过 5 秒");
     expect((caught as Error).message).toContain("--no-worktree");
     expect(tableCounts()).toEqual(before);
-    expect(db.get("SELECT ok, error_code FROM hub_calls ORDER BY id DESC LIMIT 1")).toEqual({ ok: 0, error_code: "internal" });
+    expect(db.get("SELECT ok, error_code FROM hub_calls ORDER BY id DESC LIMIT 1")).toEqual({ ok: 0, error_code: "git_failed" });
     // 明确选主文件夹就不看 git
     expect(start({ noWorktree: true }).data.worker.workspace).toBe("main");
   });

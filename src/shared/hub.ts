@@ -314,9 +314,10 @@ export type HubResponse<C extends HubCommand = HubCommand> =
  * - ok：成功，打印 text；
  * - rejected：系统拒绝（任何 ok: false 的应答，包括 unauthorized、internal），打印 message；
  * - usage：用法不对（未知子命令、缺参数、没设 HUB_TOKEN 或 HUB_SOCK），打印用法；
- * - unreachable：连不上守护进程（socket 不存在、拒绝连接、超时），打印“连不上 agent-hub，守护进程可能没在跑”。
+ * - unreachable：连不上守护进程（socket 不存在、拒绝连接、超时），打印“连不上守护进程”和怎么办；
+ * - internal：hub 自己出了意外的错（不是用法的问题），打印一句中文，不打堆栈和异常原文。
  */
-export const HUB_EXIT = { ok: 0, rejected: 1, usage: 2, unreachable: 3 } as const;
+export const HUB_EXIT = { ok: 0, rejected: 1, usage: 2, unreachable: 3, internal: 4 } as const;
 
 /** 会话令牌：32 字节随机数，base64url。 */
 export const HUB_TOKEN_BYTES = 32;
