@@ -36,6 +36,7 @@ export interface PmDbRow {
   /** 上次成功写入性格设定文件的内容哈希。只有账本用，不进 Pm。 */
   persona_file_hash: string | null;
   created_at: number;
+  archived_at?: number | null;
 }
 
 export interface ProjectDbRow {
@@ -162,6 +163,7 @@ export function toPm(row: PmDbRow): Pm {
     effort: row.effort,
     personaFile: row.persona_file,
     createdAt: row.created_at,
+    archivedAt: row.archived_at ?? null,
   };
 }
 

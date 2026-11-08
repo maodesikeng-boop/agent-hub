@@ -228,7 +228,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, updateLive, liveOf } = sessions;
   const { getMessage, insertSystemMessage, transition } = messages;
-  const { pmRow, requirePm, privateConversation } = persona;
+  const { pmRow, requirePm, isPmArchived, assertPmNotArchived, privateConversation } = persona;
   const findTranscript = options.findTranscript ?? (() => null);
   const thresholdOf = (vendor: string) => options.autoRenew?.contextTokens ?? handoverTokenThresholdOf(vendor);
   const idleMs = options.autoRenew?.idleMs ?? AUTO_RENEW_IDLE_MS;
@@ -242,10 +242,11 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
    */
   const queue = new Set<ConversationId>();
   for (const row of db.all<{ id: number; vendor: string; context: number | null }>(
-    `SELECT conversation_id AS id, vendor,
-            CASE WHEN json_valid(token_usage) THEN json_extract(token_usage, '$.context') END AS context
-       FROM agent_sessions
-       WHERE role = 'pm' AND conversation_id IS NOT NULL AND status NOT IN ('ended', 'broken')`,
+    `SELECT s.conversation_id AS id, s.vendor,
+            CASE WHEN json_valid(s.token_usage) THEN json_extract(s.token_usage, '$.context') END AS context
+       FROM agent_sessions s
+       LEFT JOIN pm_archives a ON a.pm_id = s.pm_id
+       WHERE s.role = 'pm' AND s.conversation_id IS NOT NULL AND s.status NOT IN ('ended', 'broken') AND a.pm_id IS NULL`,
   )) {
     if ((row.context ?? 0) >= thresholdOf(row.vendor)) queue.add(row.id);
   }
@@ -312,6 +313,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   /** 这一代还能自动换：对话够长、会话还在用、试的次数没满。 */
   const autoAllowed = (session: AgentSessionRow) =>
     session.role === "pm" &&
+    (session.pmId === null || !isPmArchived(session.pmId)) &&
     session.usage.context >= thresholdOf(session.vendor) &&
     session.status !== "ended" &&
     session.status !== "broken" &&
@@ -598,6 +600,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const renewSession = (pmId: PmId): { handoverId: HandoverId } =>
     write((p) => {
       requirePm(pmId);
+      assertPmNotArchived(pmId);
       const conversation = privateConversation(pmId)!;
       const active = activeOf(conversation.id);
       if (active !== undefined) {
@@ -607,6 +610,28 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
       return { handoverId: insertRow(p, currentSession(conversation.id)!, false).id };
     });
+
+  /** 归档项目经理时放弃进行中的切换，并从切换队列移除。 */
+  const cancelHandoverIn = (p: Pending, conversationId: ConversationId): void => {
+    const active = activeOf(conversationId);
+    if (active !== undefined) {
+      if (active.method === "in_session") {
+        const session = getAgentSession(db, active.from_session_id);
+        const request = session === null ? undefined : requestOf(session);
+        if (request !== undefined) {
+          endWriting(request);
+          if (request.status === "queued") transition(p, request.id, "stopped");
+        }
+      }
+      db.run(
+        "UPDATE handovers SET status = 'abandoned', failure_reason = 'archived', updated_at = ? WHERE id = ?",
+        now(),
+        active.id,
+      );
+    }
+    queue.delete(conversationId);
+    p.after.push(() => queue.delete(conversationId));
+  };
 
   /**
    * 资料页换厂商（或在换厂商交接期间改新厂商下的模型、思考程度）：
@@ -1007,6 +1032,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
 
   return {
     renewSession,
+    cancelHandoverIn,
     switchVendorIn,
     clearVendorSwitchIn,
     waitsForHandover,

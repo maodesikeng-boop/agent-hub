@@ -81,6 +81,8 @@ export interface LedgerFiles {
   personasDir: string | undefined;
   /** worktrees/ 的根目录（LedgerOptions.worktreesDir 补上默认值）。 */
   worktreesDir: string;
+  launchDir?: string;
+  setupLogsDir?: string;
   userHome: string;
   resolveFolder: ResolveFolder;
   writeFile: (file: string, content: string) => void;

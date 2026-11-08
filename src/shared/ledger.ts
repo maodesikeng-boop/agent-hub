@@ -539,6 +539,12 @@ export interface Ledger extends LedgerHandoverWork {
   recoverAfterRestart(): { resentMessageIds: MessageId[]; requeuedMessageIds: MessageId[]; recoveredSessionIds: SessionId[] };
   /** 新建项目经理（界面；第一次启动没有项目经理时组装代码也调它）。见 CreatePmResult。 */
   createPm(input: CreatePmInput): CreatePmResult;
+  /** 归档项目经理：停掉正在跑的会话与切换、结束所有打开的 Worker、暂停所有定时任务；已归档则幂等返回。 */
+  archivePm?(pmId: PmId): Pm;
+  /** 恢复已归档的项目经理；未归档则幂等返回。 */
+  unarchivePm?(pmId: PmId): Pm;
+  /** 清理归档已满 7 天（archivedAt <= nowMs - PM_ARCHIVE_RETENTION_MS）的项目经理及其全部账本与内部磁盘数据，返回被删除的 PmId 列表。 */
+  purgeExpiredArchivedPms?(nowMs?: number): PmId[];
   /**
    * 调度器（M6，组装代码每 SCHEDULER_TICK_MS 调一次，启动时也调一次）：在一个事务里，对每个 next_run_at <= nowMs 的、没暂停的定时任务：
    * 上一条定时消息（last_message_id）还在排队、已送达、处理中 → 记 skipped，不发；否则往项目经理的对话写一条 schedule.run 消息

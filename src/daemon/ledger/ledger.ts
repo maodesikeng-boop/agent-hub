@@ -15,6 +15,7 @@
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
+import type { Pm, PmId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
@@ -39,7 +40,11 @@ import { createLedgerSteps } from "./steps.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
 import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./workers.ts";
 
-export type SqliteLedger = Ledger;
+export interface SqliteLedger extends Ledger {
+  archivePm(pmId: PmId): Pm;
+  unarchivePm(pmId: PmId): Pm;
+  purgeExpiredArchivedPms(nowMs?: number): PmId[];
+}
 
 export interface LedgerOptions {
   now?: () => number;
@@ -67,6 +72,10 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
+  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM 时删除 session-<sessionId> 目录。 */
+  launchDir?: string;
+  /** state/logs/setup/（HubPaths.setupLogsDir）：清理到期归档 PM 时删除 worker-<workerId>.log。 */
+  setupLogsDir?: string;
   /** agent 发给用户的文件存副本的地方（HubPaths.sentFilesDir），默认 <dataHome>/sent-files。 */
   sentFilesDir?: string;
   /** 聊天框上传的文件（HubPaths.uploadsDir），默认 <dataHome>/uploads：agent 也能把它们发回给用户。 */
@@ -98,6 +107,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     pmHomeRoot: options.pmHomeRoot,
     personasDir: options.personasDir,
     worktreesDir: options.worktreesDir ?? join(dataHome, "worktrees"),
+    launchDir: options.launchDir,
+    setupLogsDir: options.setupLogsDir,
     userHome,
     resolveFolder: options.resolveFolder ?? createResolveFolder({ dataHome, userHome }),
     writeFile: options.writeFileAtomic ?? defaultWriteFileAtomic,
@@ -112,16 +123,22 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userHome,
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
-  // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）
+  // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）；已归档的项目经理也不收
   // 用户发了消息、项目经理正在本会话写交接：停掉那一轮（handover.ts；handover 在下面建，这里只在调用时用）
   const messages = createLedgerMessages(ctx, sessions, sentFiles, {
-    assertUserCanPost: (id) => assertWorkerOpenForUser(db, id),
+    assertUserCanPost: (id) => {
+      persona.assertConversationNotArchived(id);
+      assertWorkerOpenForUser(db, id);
+    },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
   });
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
+    cancelHandoverIn: (p, conversationId) => handover.cancelHandoverIn(p, conversationId),
+    endOpenWorkersIn: (p, pmId) => workers.endOpenWorkersIn(p, pmId),
+    pauseSchedulesIn: (p, pmId) => schedules.pauseAllForPmIn(p, pmId),
   });
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
@@ -161,7 +178,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         });
       return {
         seq: log.seq,
-        pms: db.all<PmDbRow>("SELECT * FROM pms ORDER BY id").map(toPm),
+        pms: db.all<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id ORDER BY p.id").map(toPm),
         projects: db.all<ProjectDbRow>("SELECT * FROM projects WHERE status = 'active' ORDER BY id").map(toProject),
         folders: db
           .all<ProjectFolderDbRow>(
@@ -212,6 +229,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     createPm,
+    archivePm: persona.archivePm,
+    unarchivePm: persona.unarchivePm,
+    purgeExpiredArchivedPms: persona.purgeExpiredArchivedPms,
 
     getMessage: messages.getMessage,
     sentFileAllows(sessionId, realPath) {

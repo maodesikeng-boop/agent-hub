@@ -176,7 +176,9 @@ export function createLedgerSessions(ctx: LedgerContext) {
         `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
          JOIN agent_sessions s ON s.id = m.session_id
          LEFT JOIN workers w ON w.id = s.worker_id
-         WHERE (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
+         LEFT JOIN pm_archives pa ON pa.pm_id = COALESCE(s.pm_id, w.pm_id)
+         WHERE pa.pm_id IS NULL
+           AND (w.id IS NULL OR (w.status = 'open' AND (w.workspace = 'main' OR w.base_commit IS NOT NULL)))
            AND (
              m.status IN ('delivered', 'processing')
              -- 排队中的已有活动动作就不用管；已送达、处理中的总要再登记一次，把参数改成 resend
