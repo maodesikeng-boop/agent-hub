@@ -2,25 +2,24 @@
 // “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import type { ConversationId } from "../shared/index.ts";
+import { WAITING_SETTLE_MS, notificationTag, type ConversationId } from "../shared/index.ts";
 import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
 import { stripMarkdown } from "./plainText.ts";
+import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
 import { listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
 import type { HubState } from "./state.ts";
 
-/** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
-export const WAITING_SETTLE_MS = 3_000;
+// 规则（等你、等你确定、停稳 3 秒、tag）在 shared/reminders.ts，和守护进程的推送共用
+export { WAITING_SETTLE_MS };
 
 /** 用户上次看每个对话的时间存在这个 localStorage 键里。 */
 export const LAST_SEEN_KEY = `${PRODUCT_NAME}:lastSeen`;
 
-/** 通知的 tag：同一个项目经理只留最新的一条。 */
-const notificationTag = (pmId: number | null, conversationId: ConversationId) => (pmId === null ? `conversation-${conversationId}` : `pm-${pmId}`);
-
 /** 用户有没有开通知，存在这个 localStorage 键里（"1" 开，"0" 关）；没有值或值不认识就看浏览器的授权。 */
 export const NOTIFY_ENABLED_KEY = `${PRODUCT_NAME}:notifyEnabled`;
 
-export type NotifyPermission = NotificationPermission | "unsupported";
+/** install：iPhone / iPad 的 Safari 里，要先“添加到主屏幕”、从主屏打开才能开通知（联机 P4）。 */
+export type NotifyPermission = NotificationPermission | "unsupported" | "install";
 
 /** 左栏设置面板里“通知”开关要的东西。 */
 export interface NotifySettings {
@@ -93,6 +92,7 @@ function useForeground(): boolean {
 }
 
 function currentPermission(): NotifyPermission {
+  if (pushSupport() === "needs-home-screen") return "install";
   return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 }
 
@@ -160,6 +160,8 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   const announce = useCallback((ref: ConversationRef, ask?: string) => {
     const { devices, viewing, foreground, onOpen, notifyEnabled } = latest.current;
     if (foreground && viewing !== null && viewing.device === ref.device && viewing.id === ref.id) return;
+    // 这个浏览器订阅了推送：退到后台时由守护进程推（联机 P4），这里不再弹，免得同一条两遍
+    if (!foreground && hasPushSubscription()) return;
     if (!notifyEnabled || currentPermission() !== "granted") return;
     const device = devices.find((d) => d.key === ref.device);
     const entry = device && listConversations(device.state).find((e) => e.id === ref.id);
@@ -249,11 +251,17 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     document.title = reminded > 0 ? `(${reminded}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [reminded]);
 
-  /** 拨通知开关；浏览器要求申请权限由用户的操作触发，所以只在拨的时候申请。 */
+  // 开着通知的：把这个浏览器的推送订阅再交给守护进程一次（守护进程的数据目录换过、订阅被删过也能回来）。已经订阅过的不会弹授权
+  useEffect(() => {
+    if (notifyEnabled) void subscribePush();
+  }, [notifyEnabled]);
+
+  /** 拨通知开关；浏览器要求申请权限由用户的操作触发，所以只在拨的时候申请。打开时顺带订阅推送（网页关了也能收到），关掉时退订。 */
   const setEnabled = useCallback(async (on: boolean) => {
     if (!on) {
       saveNotifyPref(false);
       setNotifyPref(false);
+      void unsubscribePush();
       return;
     }
     if (currentPermission() === "default") {
@@ -267,6 +275,7 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     const granted = currentPermission() === "granted";
     saveNotifyPref(granted);
     setNotifyPref(granted);
+    if (granted) await subscribePush();
   }, []);
 
   const notify: NotifySettings = { permission, enabled: notifyEnabled, setEnabled };
