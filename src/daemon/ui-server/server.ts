@@ -852,8 +852,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
-      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略
-      if (push !== undefined) {
+      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。设备令牌来的（别的设备直连或转发来的浏览器）不收：
+      // 前台状态只属于入口本机已登录的浏览器（跟 /api/push/* 一样）
+      if (push !== undefined && !peerRequests.has(req.raw)) {
         socket.on("message", (data: Buffer, isBinary: boolean) => {
           const message = isBinary ? null : parsePresence(data.toString("utf8"));
           if (message !== null) push.presence.report(socket, message);
