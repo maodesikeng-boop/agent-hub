@@ -57,16 +57,26 @@ export function needsAgentsNote(cwd: string): boolean {
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
 /** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
-export const PM_BACKGROUND_COMMAND_NOTE =
-  "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。";
+export function buildPmBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+  return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 ${tool}），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。`;
+}
+export const PM_BACKGROUND_COMMAND_NOTE = buildPmBackgroundCommandNote();
 
 /** 不能把命令放后台叫醒自己的厂商（VENDOR_SPECS[vendor].backgroundCommands 为 false，见 docs/mid-turn-messages.md 第 10 节）：长命令派给 Worker 去等。 */
 export const PM_DELEGATE_LONG_COMMAND_NOTE =
   "- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。";
 
-/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 VENDOR_SPECS 的 backgroundCommands 决定）。 */
-export function buildPmModePrompt(mode: PmMode, backgroundCommands = true): string {
-  const commandNote = backgroundCommands ? PM_BACKGROUND_COMMAND_NOTE : PM_DELEGATE_LONG_COMMAND_NOTE;
+/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 VENDOR_SPECS 的 backgroundCommands 与 backgroundCommandTool 决定）。 */
+export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
+  const commandNote =
+    typeof vendorOrBackgroundCommands === "boolean"
+      ? vendorOrBackgroundCommands
+        ? PM_BACKGROUND_COMMAND_NOTE
+        : PM_DELEGATE_LONG_COMMAND_NOTE
+      : (() => {
+          const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendorOrBackgroundCommands] ?? VENDOR_SPECS[DEFAULT_AGENT_VENDOR];
+          return spec.backgroundCommands ? buildPmBackgroundCommandNote(spec.backgroundCommandTool) : PM_DELEGATE_LONG_COMMAND_NOTE;
+        })();
   if (mode === "manage_only") {
     return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
 
@@ -124,6 +134,22 @@ export function selectableVendors(availability: VendorAvailabilityMap = {}): Age
   return AGENT_VENDORS.filter((vendor) => isSelectable(availability[vendor] ?? "unknown"));
 }
 
+/** 汇总去重各家厂商内置子代理工具名（用于项目经理和 Worker 提示词）。 */
+export function formatSubagentTools(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
+  const tools = [...new Set(Object.values(specs).flatMap((spec) => spec.subagentTools ?? []))];
+  return tools.map((tool) => `\`${tool}\``).join("、");
+}
+
+function formatSubagentLabels(specs: Readonly<Record<string, Pick<VendorSpec, "label">>> = VENDOR_SPECS): string {
+  return Object.values(specs)
+    .map((spec) => spec.label)
+    .join("/");
+}
+
+function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
+  return [...new Set(vendors.map((v) => VENDOR_SPECS[v].cliCommand))].map((cmd) => `\`${cmd}\``).join("、");
+}
+
 /**
  * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
  * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
@@ -131,8 +157,8 @@ export function selectableVendors(availability: VendorAvailabilityMap = {}): Age
 export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
   return `# 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 Claude/Codex 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`spawn_agent\` 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`agy\`、\`codex\`、\`gemini\` 这类工具。
+- **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
 - **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
@@ -236,7 +262,7 @@ export function personaUpdateNote(update: PersonaUpdate): string | null {
   const full: Array<{ what: string; body: string }> = [];
   if (mode !== null) {
     if (mode.bySelf) self.push("模式");
-    else full.push({ what: "模式", body: buildPmModePrompt(mode.mode, VENDOR_SPECS[update.vendor]?.backgroundCommands ?? true) });
+    else full.push({ what: "模式", body: buildPmModePrompt(mode.mode, update.vendor) });
   }
   if (persona !== null) {
     if (persona.bySelf) self.push("性格设定");
@@ -259,26 +285,32 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 /** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
-export const WORKER_RULES = `# 你的规矩
+export function buildWorkerRules(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
+  return `# 你的规矩
 
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
-- 不要用厂商自带的子代理（如 \`Agent\`、\`Task\`、\`spawn_agent\` 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。
+- 不要用厂商自带的子代理（如 ${formatSubagentTools(specs)} 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。
 - **等别人时直接结束这一轮**：等别的 PR 合、等项目经理通知这类要等别人的事，直接结束这一轮并汇报，不要自己设定时器、定时唤醒，也不要 sleep 轮询；轮到你时项目经理会发消息叫你。（等 CI 用一条会自己等到出结果的命令，如 \`gh pr checks <号> --watch\`。）`;
+}
+export const WORKER_RULES = buildWorkerRules();
 
 /**
  * Worker 的长命令（VENDOR_SPECS[厂商].backgroundCommands 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
  * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
  */
-export const WORKER_BACKGROUND_COMMAND_NOTE =
-  "- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 Bash 工具的 `run_in_background`），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。";
+export function buildWorkerBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+  return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。`;
+}
+export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();
 
 /** 不能把命令放后台叫醒自己的厂商（backgroundCommands 为 false）：一条命令等到底，别轮询，也别放后台（跑完没人叫醒它，汇报会早发）。 */
 export const WORKER_BLOCKING_WAIT_NOTE =
   "- **等长命令用一条命令等到底**：等 CI 之类，用一条会一直等到结束的命令（如 `gh pr checks <PR 号> --watch`），不要 sleep 后反复查状态，每查一次都要多花一步；也不要把命令放后台（跑完不会叫醒你）。";
 
 /** “你的规矩”：通用的几条，加上按厂商能不能放后台叫醒写的长命令那一条。 */
-function workerRulesSection(backgroundCommands: boolean): string {
-  return `${WORKER_RULES}\n${backgroundCommands ? WORKER_BACKGROUND_COMMAND_NOTE : WORKER_BLOCKING_WAIT_NOTE}`;
+function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
+  const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendor] ?? VENDOR_SPECS[DEFAULT_AGENT_VENDOR];
+  return `${buildWorkerRules()}\n${spec.backgroundCommands ? buildWorkerBackgroundCommandNote(spec.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
 }
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
@@ -334,13 +366,13 @@ ${WORKER_REPORT_FORMAT}
 export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
   const { worker, project } = ctx;
   if (worker === null || project === null) throw new Error(`session ${ctx.sessionId} is a worker session without worker or project`);
-  const backgroundCommands = VENDOR_SPECS[ctx.vendor ?? DEFAULT_AGENT_VENDOR]?.backgroundCommands ?? true;
+  const vendor = ctx.vendor ?? DEFAULT_AGENT_VENDOR;
   const parts = [
     workerRoleSection(ctx, worker),
     `# 你的任务\n\n${worker.task.trim()}`,
     workerWorkspaceSection(project, worker),
     workerReportSection(),
-    workerRulesSection(backgroundCommands),
+    workerRulesSection(vendor),
     WORKER_HUB_USAGE_PROMPT,
   ];
   if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
@@ -363,12 +395,11 @@ export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string): string 
 export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   const vendor = ctx.pm.vendor ?? DEFAULT_AGENT_VENDOR;
-  const backgroundCommands = VENDOR_SPECS[vendor]?.backgroundCommands ?? true;
   const vendors = selectableVendors(ctx.vendorAvailability);
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    buildPmModePrompt(ctx.pm.mode, backgroundCommands),
+    buildPmModePrompt(ctx.pm.mode, vendor),
     PM_MEMORY_PROMPT,
     buildPmWorkerPrompt(Object.fromEntries(Object.entries(VENDOR_SPECS).filter(([v]) => isSelectable(ctx.vendorAvailability?.[v as AgentVendor] ?? "unknown")))),
     buildHubUsagePrompt(vendors),

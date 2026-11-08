@@ -10,8 +10,8 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, VENDOR_SPECS, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, buildSessionSettings, sessionEnv, workerWriteScope } from "../shared/index.ts";
+import type { AgentSessionRow, AgentVendor, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
@@ -25,8 +25,8 @@ export interface LaunchPreparerOptions {
   stateDir: string;
   /** 用户主目录（只读策略的密钥清单用），默认本机的 homedir；测试可以指定。会 realpath。 */
   homeDir?: string;
-  /** Worker 会不会包进 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定。 */
-  osSandboxed?: boolean;
+  /** Worker 会不会包进 OS 沙箱，默认按本机每次启动时查询（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定布尔或回调。 */
+  osSandboxed?: boolean | (() => boolean);
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
   /** 账本的 getLaunchContext。 */
@@ -66,10 +66,10 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
-  const osSandboxed = options.osSandboxed ?? osSandboxAvailable();
   const basePath = options.basePath ?? process.env.PATH ?? "";
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
+    const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const ctx = { ...getLaunchContext(session.id), vendorAvailability: options.vendorAvailability?.() };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
@@ -79,7 +79,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
     // claude 的只读 Worker 用自带沙箱落实（writeGuard native，设计第 2.3 节）：设置文件换成只读翻译，进程不再包外层沙箱（macOS 沙箱不能嵌套）。
     // 别家的设置文件驱动不读，照普通 Worker 生成；它们的只读翻译在各自驱动层。
-    const nativeReadonly = readonlyPolicy !== undefined && session.vendor === "claude";
+    const nativeReadonly = readonlyPolicy !== undefined && VENDOR_SPECS[session.vendor as AgentVendor]?.readonlyMode === "settings";
     const settings = JSON.stringify(
       buildSessionSettings({
         role,

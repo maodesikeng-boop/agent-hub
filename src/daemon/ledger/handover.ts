@@ -27,7 +27,6 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { ForkRef, ForkerKind, HandoverCleanJob, HandoverFailure, HandoverId, HandoverJob, HandoverStatus } from "../../shared/handover.ts";
 import {
-  AUTO_RENEW_CONTEXT_TOKENS,
   AUTO_RENEW_IDLE_MS,
   AUTO_RENEW_MAX_ATTEMPTS,
   AUTO_RENEW_RETRY_BACKOFF_MS,
@@ -37,7 +36,7 @@ import {
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
-import type { AgentVendor } from "../../shared/vendors.ts";
+import { handoverTokenThresholdOf, vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
 import { workerLineText } from "../../shared/worker.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -45,7 +44,7 @@ import { pickRecent, recentText } from "./handover-recent.ts";
 import type { RecentMessage } from "./handover-recent.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
-import { toMessage } from "./rows.ts";
+import { toMessage, toPm } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
@@ -73,7 +72,13 @@ const transcriptLine = (path: string | null) =>
  * 交接提示词。照 Claude Code 压缩上下文的提示词的写法（先讲后果，再分节写），换成项目经理的场景。auto：系统因为对话太长自动换的。
  * forked：发给复制出来的那一份（后台写交接，平常都是）；否则发给项目经理会话本身（兜底的本会话写交接）。
  */
-export function handoverRequestText(options: { auto: boolean; transcriptPath: string | null; forked: boolean }): string {
+export function handoverRequestText(options: {
+  auto: boolean;
+  transcriptPath: string | null;
+  forked: boolean;
+  fromVendor?: string;
+  toVendor?: string | null;
+}): string {
   const why = options.auto
     ? "你的对话太长了，系统要自动给你换一个新会话——这是系统定的，不是用户要换；用户看不到这里，也不知道换会话的事。"
     : "用户要给你换一个新会话（现在的上下文太长了）。";
@@ -81,6 +86,10 @@ export function handoverRequestText(options: { auto: boolean; transcriptPath: st
     ? `【系统】这是从你的会话复制出来的一份，只用来写交接：${why}用户看不到这里；这里没有 hub 凭证，不要调用工具，直接把交接写成这一轮的回复。`
     : `【系统】${why}这一轮请写一份交接，直接写成这一轮的回复。`;
   const only = options.forked ? "这一轮只写交接：不调用工具、不回复用户、不派活。" : "这一轮只写交接：不回复用户、不派活、不做别的事。";
+  const vendorNote =
+    options.toVendor != null && options.fromVendor !== undefined && options.toVendor !== options.fromVendor
+      ? `\n新会话换成 ${vendorLabel(options.toVendor)}（${options.toVendor}），别写只有 ${vendorLabel(options.fromVendor)}（${options.fromVendor}）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。`
+      : "";
   return `${opening}
 
 这份交接会替换掉你现在的全部上下文。新会话手里只有：
@@ -89,7 +98,7 @@ export function handoverRequestText(options: { auto: boolean; transcriptPath: st
 - 交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话（写交接期间又聊的也会全部带上）；
 - 能搜的账本：${SEARCH_COMMANDS}（派过的活、Worker 的汇报都在里面）；
 - ${transcriptLine(options.transcriptPath)}。
-交接里漏掉的，新会话连去找都不会知道要去找。所以要写的是理解，不是流水账：用户想做成什么、为什么，定了什么，试过和否掉了什么，做到哪了，下一步是什么。
+交接里漏掉的，新会话连去找都不会知道要去找。所以要写的是理解，不是流水账：用户想做成什么、为什么，定了什么，试过和否掉了什么，做到哪了，下一步是什么。${vendorNote}
 
 按下面几节写：
 1. 用户要做成什么、为什么：用户明确提过的每个要求和背后的用意，写细。
@@ -109,11 +118,25 @@ ${only}`;
  * 新会话第一条消息前面的开场说明（换代时定稿，驱动层拼在那条消息最前面，见 DriverOptions.sessionPreamble）：
  * 说明 + 交接 + 原话（handover-recent.ts 拼好的）+ 交接之后到的 Worker 汇报目录（每条一行，不带全文）。
  */
-export function sessionPreambleText(options: { auto: boolean; handover: string; recent: string; reports: string[]; transcriptPath: string | null }): string {
+export function sessionPreambleText(options: {
+  auto: boolean;
+  handover: string;
+  recent: string;
+  reports: string[];
+  transcriptPath: string | null;
+  fromVendor?: string;
+  toVendor?: string;
+}): string {
   const why = options.auto ? "上一个会话对话太长，系统自动给你换了这个新会话" : "用户点了开新会话（上一个会话太长了）";
+  const switchedVendor = options.fromVendor !== undefined && options.toVendor !== undefined && options.fromVendor !== options.toVendor;
+  const vendorNote = switchedVendor ? `上一个会话是 ${vendorLabel(options.fromVendor!)}（${options.fromVendor}），提到的工具名按你自己的工具理解。` : "";
+  const transcript =
+    switchedVendor && options.fromVendor === "agy" && options.toVendor !== "agy"
+      ? "上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话"
+      : transcriptLine(options.transcriptPath);
   const parts = [
-    `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${why}，上一个会话写完交接后换成了你；用户那边还是同一个对话，不用跟用户提换会话的事。
-下面是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcriptLine(options.transcriptPath)}。
+    `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${why}，上一个会话写完交接后换成了你；用户那边还是同一个对话，不用跟用户提换会话的事。${vendorNote}
+下面是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
 不用回复“已接上”：读完直接处理这段说明后面的那条消息。`,
     `## 交接\n\n${options.handover.trim() === "" ? "（上一个会话没有写交接）" : options.handover}`,
     `## 最近的原话\n\n${options.recent === "" ? "（没有）" : options.recent}`,
@@ -156,6 +179,9 @@ interface HandoverDbRow {
   conversation_id: ConversationId;
   from_session_id: SessionId;
   to_session_id: SessionId | null;
+  to_vendor: string | null;
+  to_model: string | null;
+  to_effort: string | null;
   auto: number;
   method: string | null;
   status: HandoverStatus;
@@ -200,9 +226,9 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, updateLive, liveOf } = sessions;
   const { getMessage, insertSystemMessage, transition } = messages;
-  const { requirePm, privateConversation } = persona;
+  const { pmRow, requirePm, privateConversation } = persona;
   const findTranscript = options.findTranscript ?? (() => null);
-  const contextTokens = options.autoRenew?.contextTokens ?? AUTO_RENEW_CONTEXT_TOKENS;
+  const thresholdOf = (vendor: string) => options.autoRenew?.contextTokens ?? handoverTokenThresholdOf(vendor);
   const idleMs = options.autoRenew?.idleMs ?? AUTO_RENEW_IDLE_MS;
   const timeoutMs = options.autoRenew?.timeoutMs ?? HANDOVER_TIMEOUT_MS;
   const log = options.log ?? (() => {});
@@ -213,14 +239,17 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
    * 进：turn.ended 时到门槛、手动开新会话；出：换代了、这一代试满了、会话结束了。
    */
   const queue = new Set<ConversationId>();
-  for (const { id } of db.all<{ id: number }>(
-    `SELECT conversation_id AS id FROM agent_sessions
-       WHERE role = 'pm' AND conversation_id IS NOT NULL AND status NOT IN ('ended', 'broken')
-         AND CASE WHEN json_valid(token_usage) THEN json_extract(token_usage, '$.context') END >= ?
-     UNION SELECT conversation_id FROM handovers WHERE ${ACTIVE}`,
-    contextTokens,
-  ))
+  for (const row of db.all<{ id: number; vendor: string; context: number | null }>(
+    `SELECT conversation_id AS id, vendor,
+            CASE WHEN json_valid(token_usage) THEN json_extract(token_usage, '$.context') END AS context
+       FROM agent_sessions
+       WHERE role = 'pm' AND conversation_id IS NOT NULL AND status NOT IN ('ended', 'broken')`,
+  )) {
+    if ((row.context ?? 0) >= thresholdOf(row.vendor)) queue.add(row.id);
+  }
+  for (const { id } of db.all<{ id: number }>(`SELECT conversation_id AS id FROM handovers WHERE ${ACTIVE}`)) {
     queue.add(id);
+  }
 
   const metaOf = (row: Pick<MessageDbRow, "meta">): HandoverMeta => JSON.parse(row.meta!) as HandoverMeta;
   const setMeta = (id: MessageId, meta: HandoverMeta) => db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), id);
@@ -254,13 +283,22 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   };
 
   /** 登记一行 queued（调之前这个对话没有不在终态的行），提交后叫醒跑腿的。 */
-  const insertRow = (p: Pending, session: AgentSessionRow, auto: boolean): HandoverDbRow => {
+  const insertRow = (
+    p: Pending,
+    session: AgentSessionRow,
+    auto: boolean,
+    target?: { to_vendor: string | null; to_model: string | null; to_effort: string | null },
+  ): HandoverDbRow => {
     const t = now();
     const row = db.get<HandoverDbRow>(
-      "INSERT INTO handovers (conversation_id, from_session_id, auto, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?) RETURNING *",
+      `INSERT INTO handovers (conversation_id, from_session_id, auto, status, to_vendor, to_model, to_effort, created_at, updated_at)
+       VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?) RETURNING *`,
       session.conversationId,
       session.id,
       auto ? 1 : 0,
+      target?.to_vendor ?? null,
+      target?.to_model ?? null,
+      target?.to_effort ?? null,
       t,
       t,
     )!;
@@ -271,7 +309,11 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
 
   /** 这一代还能自动换：对话够长、会话还在用、试的次数没满。 */
   const autoAllowed = (session: AgentSessionRow) =>
-    session.role === "pm" && session.usage.context >= contextTokens && session.status !== "ended" && session.status !== "broken" && attemptsOf(session.id).counted < AUTO_RENEW_MAX_ATTEMPTS;
+    session.role === "pm" &&
+    session.usage.context >= thresholdOf(session.vendor) &&
+    session.status !== "ended" &&
+    session.status !== "broken" &&
+    attemptsOf(session.id).counted < AUTO_RENEW_MAX_ATTEMPTS;
 
   /** 是这个对话现在的这一代、还在用。 */
   const stillCurrent = (session: AgentSessionRow | null): session is AgentSessionRow =>
@@ -292,7 +334,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     );
     const session = getAgentSession(db, row.from_session_id);
     if (UNCOUNTED.has(kind)) {
-      if (stillCurrent(session)) insertRow(p, session, row.auto === 1);
+      if (stillCurrent(session)) insertRow(p, session, row.auto === 1, row);
       return;
     }
     if (row.auto === 1) {
@@ -308,12 +350,21 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     const detail = kind === HANDOVER_REASONS.error || kind === HANDOVER_REASONS.failed ? reason.slice(kind.length + 1).trim() : "";
     // 认得出的失败（繁忙、额度、断网……）才补一句人话；认不出的不写“出错了”凑数，原文照样存进 meta
     const failure = detail === "" ? undefined : describeFailure(detail);
+    const noticeText =
+      row.to_vendor !== null
+        ? `换到 ${vendorLabel(row.to_vendor)} 没成：${failure === undefined || failure.kind === "unknown" ? HANDOVER_NOT_WRITTEN_TEXT : failure.text}，还在用 ${vendorLabel(session?.vendor ?? "")}`
+        : failure === undefined || failure.kind === "unknown"
+          ? HANDOVER_NOT_WRITTEN_TEXT
+          : `${HANDOVER_NOT_WRITTEN_TEXT}：${failure.text}`;
     insertSystemMessage(
       p,
       row.conversation_id,
       { event: "handover.failed", handoverId: row.id, attempt: 1, ...(detail === "" ? {} : { rawReason: detail }) },
-      failure === undefined || failure.kind === "unknown" ? HANDOVER_NOT_WRITTEN_TEXT : `${HANDOVER_NOT_WRITTEN_TEXT}：${failure.text}`,
+      noticeText,
     );
+    if (row.to_vendor !== null && session?.pmId != null) {
+      p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(session.pmId)!) } });
+    }
     // 不马上接着自动试：对话够长的话，下一轮结束时照常进队列
     queue.delete(row.conversation_id);
   };
@@ -366,20 +417,27 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       return false;
     }
     const auto = row.auto === 1;
+    const vendor = (row.to_vendor ?? old.vendor) as AgentVendor;
+    const model = row.to_vendor !== null ? row.to_model : old.model;
+    const effort = row.to_vendor !== null ? row.to_effort : old.effort;
     const next = insertSession(p, {
       conversationId,
       pmId: old.pmId,
       cwd: old.cwd,
       addDirs: old.addDirs,
       generation: old.generation + 1,
-      vendor: old.vendor as AgentVendor,
-      model: old.model,
-      effort: old.effort,
+      vendor,
+      model,
+      effort,
     });
-    // 旧会话刚报额度用完的话，新会话也要知道，不然第一条立刻撞上额度失败
-    if (old.rateLimit !== null) {
+    // 旧会话刚报额度用完的话，同厂商的新会话也要知道，不然第一条立刻撞上额度失败；跨厂商不抄
+    if (vendor === old.vendor && old.rateLimit !== null) {
       db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", JSON.stringify(old.rateLimit), next.id);
       updateLive(p, next.id, () => {});
+    }
+    if (row.to_vendor !== null && old.pmId !== null) {
+      db.run("UPDATE pms SET vendor = ?, default_model = ?, effort = ? WHERE id = ?", vendor, model, effort, old.pmId);
+      p.changes.push({ type: "pm.updated", data: { pm: toPm(pmRow(old.pmId)!) } });
     }
     enqueue(p, { type: "session.end", params: { sessionId: old.id, generation: old.generation } });
     insertSystemMessage(
@@ -395,7 +453,15 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       enqueue(p, { type: "session.send", params: { sessionId: next.id, messageId: message.id, source: message.sender === "user" || message.sender === "pm" ? "user" : "system" } });
       p.changes.push({ type: "message.updated", data: { message: getMessage(message.id)! } });
     }
-    const preamble = sessionPreambleText({ auto, handover, recent: recentText(picked), reports: reportsAfter(conversationId, cut), transcriptPath: transcriptOf(old) });
+    const preamble = sessionPreambleText({
+      auto,
+      handover,
+      recent: recentText(picked),
+      reports: reportsAfter(conversationId, cut),
+      transcriptPath: transcriptOf(old),
+      fromVendor: old.vendor,
+      toVendor: next.vendor,
+    });
     // 预先起好新会话的进程（只起进程，不预读）：第一条回复不用等进程启动
     enqueue(p, { type: "session.start", params: { sessionId: next.id, generation: next.generation } });
     const t = now();
@@ -436,7 +502,13 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
         if (inFlightTo(session)) continue;
         db.run("UPDATE handovers SET status = 'forking', cut_message_id = ?, started_at = ?, updated_at = ? WHERE id = ?", maxMessageId(), t, t, row.id);
         const auto = row.auto === 1;
-        return { handoverId: row.id, conversationId, session, auto, prompt: handoverRequestText({ auto, transcriptPath: transcriptOf(session), forked: true }) };
+        return {
+          handoverId: row.id,
+          conversationId,
+          session,
+          auto,
+          prompt: handoverRequestText({ auto, transcriptPath: transcriptOf(session), forked: true, fromVendor: session.vendor, toVendor: row.to_vendor }),
+        };
       }
       return null;
     });
@@ -519,6 +591,35 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       return { handoverId: insertRow(p, currentSession(conversation.id)!, false).id };
     });
 
+  /** 资料页换厂商（或在换厂商交接期间改新厂商下的模型、思考程度）：没有活跃交接就登记一行手动交接，已有就并进去；已 ready 则尝试当场换代。 */
+  const switchVendorIn = (p: Pending, conversationId: ConversationId, agent: AgentSetting): void => {
+    const active = activeOf(conversationId);
+    if (active === undefined) {
+      const session = currentSession(conversationId);
+      if (session !== null) {
+        insertRow(p, session, false, { to_vendor: agent.vendor, to_model: agent.model, to_effort: agent.effort });
+      }
+      return;
+    }
+    const updated = db.get<HandoverDbRow>(
+      "UPDATE handovers SET to_vendor = ?, to_model = ?, to_effort = ?, auto = 0, updated_at = ? WHERE id = ? RETURNING *",
+      agent.vendor,
+      agent.model,
+      agent.effort,
+      now(),
+      active.id,
+    )!;
+    if (updated.status === "ready") trySwitch(p, updated);
+  };
+
+  /** 换厂商交接期间改回旧厂商或撤销：把活跃交接行的 to_vendor 三列清回 NULL（照常作为普通换会话走完）。 */
+  const clearVendorSwitchIn = (conversationId: ConversationId): void => {
+    const active = activeOf(conversationId);
+    if (active !== undefined && active.to_vendor !== null) {
+      db.run("UPDATE handovers SET to_vendor = NULL, to_model = NULL, to_effort = NULL, updated_at = ? WHERE id = ?", now(), active.id);
+    }
+  };
+
   // ---- 兜底：本会话写交接（H）----
 
   /** 这一代会话的交接请求（每一代最多一条，没成的同一条重新排队）。 */
@@ -540,7 +641,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
   const requestIn = (p: Pending, session: AgentSessionRow, row: HandoverDbRow) => {
     const t = now();
     const auto = row.auto === 1;
-    const text = handoverRequestText({ auto, transcriptPath: transcriptOf(session), forked: false });
+    const text = handoverRequestText({ auto, transcriptPath: transcriptOf(session), forked: false, fromVendor: session.vendor, toVendor: row.to_vendor });
     const meta: HandoverMeta = { event: "handover.requested", sessionId: session.id, handoverId: row.id, ...(auto ? { auto: true } : {}), requestedAt: t };
     const existing = requestOf(session);
     if (existing === undefined) {
@@ -701,7 +802,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       return;
     }
     if (event.type !== "turn.ended" && event.type !== "session.exited" && event.type !== "driver.error") return;
-    if (!queue.has(conversationId) && (event.type !== "turn.ended" || session.usage.context < contextTokens)) return;
+    if (!queue.has(conversationId) && (event.type !== "turn.ended" || session.usage.context < thresholdOf(session.vendor))) return;
     // 本会话写交接：那一轮结束、进程退出时写交接到此为止；H 没成就记失败；正常写完就换代
     const request = inSessionOf(conversationId) === undefined ? undefined : requestOf(session);
     if (request !== undefined && event.type !== "driver.error") endWriting(request);
@@ -748,7 +849,15 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     const old = meta.fromSessionId === undefined ? null : getAgentSession(db, meta.fromSessionId);
     const upTo = meta.turnStartId ?? row.id;
     const { picked } = pickRecent(recentRows(session.conversationId, upTo), upTo, HANDOVER_RECENT_CHARS);
-    return sessionPreambleText({ auto: meta.auto === true, handover: row.text, recent: recentText(picked), reports: [], transcriptPath: old === null ? null : transcriptOf(old) });
+    return sessionPreambleText({
+      auto: meta.auto === true,
+      handover: row.text,
+      recent: recentText(picked),
+      reports: [],
+      transcriptPath: old === null ? null : transcriptOf(old),
+      fromVendor: old?.vendor,
+      toVendor: session.vendor,
+    });
   };
 
   /**
@@ -819,6 +928,8 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
 
   return {
     renewSession,
+    switchVendorIn,
+    clearVendorSwitchIn,
     waitsForHandover,
     afterDriverEvent,
     actionFailedIn,

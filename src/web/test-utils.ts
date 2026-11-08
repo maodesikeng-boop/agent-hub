@@ -1,6 +1,6 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
-import { serverInfoFor } from "../shared/index.ts";
+import { DEFAULT_AGENT_VENDOR, serverInfoFor } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   Attachment,
@@ -35,7 +35,7 @@ export function makePm(over: Partial<Pm> = {}): Pm {
     name: "项目经理",
     avatarFile: null,
     mode: "manage_only",
-    vendor: "claude",
+    vendor: DEFAULT_AGENT_VENDOR,
     defaultModel: null,
     effort: null,
     personaFile: null,
@@ -166,8 +166,8 @@ export function makePersonaChange(over: Partial<PersonaChange> = {}): PersonaCha
     textAfter: "新设定",
     modeBefore: "manage_only",
     modeAfter: "manage_only",
-    vendorBefore: "claude",
-    vendorAfter: "claude",
+    vendorBefore: DEFAULT_AGENT_VENDOR,
+    vendorAfter: DEFAULT_AGENT_VENDOR,
     modelBefore: null,
     modelAfter: null,
     effortBefore: null,
@@ -184,7 +184,7 @@ export function makePersonaView(over: Partial<PersonaView> = {}): PersonaView {
     pmId: 1,
     text: "# 性格设定\n\n说大白话",
     mode: "manage_only",
-    vendor: "claude",
+    vendor: DEFAULT_AGENT_VENDOR,
     model: null,
     effort: null,
     changes: [],

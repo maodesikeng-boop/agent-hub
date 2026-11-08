@@ -3,13 +3,13 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MAX_COMMAND_DESCRIPTION_CHARS, VENDOR_SPECS, type ComposerCommand } from "../../shared/index.ts";
+import { AGENT_VENDORS, MAX_COMMAND_DESCRIPTION_CHARS, VENDOR_SPECS, type ComposerCommand } from "../../shared/index.ts";
 import { queryClaudeInitialize } from "../driver/model-catalog.ts";
 import { FAKE_CLAUDE } from "../driver/test-helpers.ts";
 import { agyComposerBase, createAgyComposer, parseAgyCommands } from "./agy.ts";
 import { claudeComposerBase, createClaudeComposer, parseClaudeCommands } from "./claude.ts";
 import { codexComposerBase, createCodexComposer, parseCodexCommands, rewriteCodexSkillCommand } from "./codex.ts";
-import { composerBaseOf, createVendorComposers } from "./index.ts";
+import { DAEMON_VENDORS, composerBaseOf, createVendorComposers } from "./index.ts";
 
 const c = claudeComposerBase;
 
@@ -168,6 +168,19 @@ describe("厂商接口的完整性", () => {
     expect(typeof composers.agy.queryCommands).toBe("function");
     expect(typeof composers.codex.queryCommands).toBe("function");
     expect(composers.claude.buildUserContent(["x"], "/y")).toEqual(composerBaseOf("claude")!.buildUserContent(["x"], "/y"));
+  });
+
+  it("DAEMON_VENDORS 汇总全部 AGENT_VENDORS 的 base、createComposer、probe、catalog、createDriver", () => {
+    for (const vendor of AGENT_VENDORS) {
+      const mod = DAEMON_VENDORS[vendor];
+      expect(mod.base.vendor).toBe(vendor);
+      expect(typeof mod.createComposer).toBe("function");
+      expect(typeof mod.probe.parse).toBe("function");
+      expect(typeof mod.catalog).toBe("function");
+      expect(typeof mod.createDriver).toBe("function");
+      const composer = mod.createComposer({ executablePath: vendor });
+      expect(composer.vendor).toBe(vendor);
+    }
   });
 });
 

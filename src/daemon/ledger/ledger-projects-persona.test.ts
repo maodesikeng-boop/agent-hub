@@ -670,8 +670,112 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       "forbidden",
       /只能由用户在资料页改/,
     );
+    expectLedgerError(
+      () => ledger.editPersona(lin.pmId, { vendor: "codex" }, { kind: "session", sessionId: lin.sessionId }),
+      "forbidden",
+      /只能由用户在资料页改/,
+    );
     expect(tableCounts()).toEqual(before);
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
+  });
+
+  it("资料页换厂商：登记手动交接、换代前 pms.vendor 和旧会话不变、不沿用旧厂商的 model/effort、交接期间可继续改新厂商下的设置，撤销或改回旧厂商时清回 NULL", () => {
+    let wakes = 0;
+    ledger = createLedger(db, options({ onHandoverClaimable: () => wakes++ }));
+    ledger.editPersona(lin.pmId, { model: "opus", effort: "max" }, { kind: "user" });
+    expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "claude", model: "opus", effort: "max", switchingToVendor: null });
+
+    // 换到 codex（不传 model / effort 时默认取 null，不能沿用 claude 的 opus / max）
+    changes = [];
+    const switched = ledger.editPersona(lin.pmId, { vendor: "codex" }, { kind: "user" });
+    expect(wakes).toBe(1);
+    expect(switched.change).toMatchObject({
+      vendorBefore: "claude",
+      vendorAfter: "codex",
+      modelBefore: "opus",
+      modelAfter: null,
+      effortBefore: "max",
+      effortAfter: null,
+    });
+    expect(switched.persona).toMatchObject({
+      vendor: "codex",
+      model: null,
+      effort: null,
+      switchingToVendor: "codex",
+    });
+    // 换代前 pms 表和当前旧会话保持旧厂商和旧模型
+    expect(db.get("SELECT vendor, default_model, effort FROM pms WHERE id = ?", lin.pmId)).toEqual({
+      vendor: "claude",
+      default_model: "opus",
+      effort: "max",
+    });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "opus", effort: "max" });
+    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "queued",
+      auto: 0,
+      to_vendor: "codex",
+      to_model: null,
+      to_effort: null,
+    });
+    expect(messagesIn(lin.conversationId).at(-1)!.text).toBe(
+      "你改了小林的设置（厂商：Claude Code → Codex，模型：Opus → 默认，思考程度：max → 默认）",
+    );
+
+    // 换厂商交接期间继续改新厂商下的模型、思考程度和正文
+    const refined = ledger.editPersona(lin.pmId, { model: "gpt-6-luna", effort: "high", text: "新习惯" }, { kind: "user" });
+    expect(refined.change).toMatchObject({
+      vendorBefore: "codex",
+      vendorAfter: "codex",
+      modelBefore: null,
+      modelAfter: "gpt-6-luna",
+      effortBefore: null,
+      effortAfter: "high",
+      textBefore: "小林的习惯",
+      textAfter: "新习惯",
+    });
+    expect(refined.persona).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "high",
+      text: "新习惯",
+      switchingToVendor: "codex",
+    });
+    // pms 的 persona 更新了，但 vendor / default_model / effort 仍保持旧厂商
+    expect(db.get("SELECT persona, vendor, default_model, effort FROM pms WHERE id = ?", lin.pmId)).toEqual({
+      persona: "新习惯",
+      vendor: "claude",
+      default_model: "opus",
+      effort: "max",
+    });
+    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "queued",
+      auto: 0,
+      to_vendor: "codex",
+      to_model: "gpt-6-luna",
+      to_effort: "high",
+    });
+
+    // 改回旧厂商（或撤销）：活跃交接行的三列清回 NULL，pms 与旧会话同步更新
+    const back = ledger.editPersona(lin.pmId, { vendor: "claude", model: "haiku", effort: "low" }, { kind: "user" });
+    expect(back.persona).toMatchObject({
+      vendor: "claude",
+      model: "haiku",
+      effort: "low",
+      switchingToVendor: null,
+    });
+    expect(db.get("SELECT vendor, default_model, effort FROM pms WHERE id = ?", lin.pmId)).toEqual({
+      vendor: "claude",
+      default_model: "haiku",
+      effort: "low",
+    });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "haiku", effort: "low" });
+    expect(db.get("SELECT status, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
+      status: "queued",
+      auto: 0,
+      to_vendor: null,
+      to_model: null,
+      to_effort: null,
+    });
   });
 
   it("老库里不合规的模型名不锁死别的保存：改性格设定、工作方式、只改思考程度都行，模型不动；改模型时才查", () => {

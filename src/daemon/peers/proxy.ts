@@ -21,6 +21,9 @@ import {
   type ApiErrorBody,
 } from "../../shared/index.ts";
 import { PEER_UNAUTHORIZED } from "./service.ts";
+import { createUnixHttpPool, type ResolvedPeerTarget, type UnixHttpPool } from "./transport.ts";
+
+const defaultUnixPool = createUnixHttpPool();
 
 /** 转发给对方的请求头（小写）。别的都不带。 */
 const FORWARD_REQUEST_HEADERS = ["accept", "content-type", "range", "if-range", "if-none-match", "if-modified-since"];
@@ -41,9 +44,15 @@ const reasonOf = (reason: Buffer) => reason.subarray(0, 123).toString("utf8");
 
 export interface ProxyTarget {
   name: string;
-  /** 已配对设备存着的网址（origin）。 */
+  /** 已配对设备存着的网址（origin）；隧道设备为 ""。 */
   url: string;
   token: string;
+  /** 解析实际传输目标（TCP origin 或 unix socket；中心槽位端口在此做 UID 校验，不过回 null）。不给则按 url 走 TCP。 */
+  resolve?: () => ResolvedPeerTarget | null;
+  /** 连不上时回调（连入方访问中心失败时触发 tunnel.reconnectNow()）。 */
+  onOffline?: () => void;
+  /** unix socket HTTP 连接池（由 peers 统一管理复用与关闭）。 */
+  unixPool?: UnixHttpPool;
 }
 
 /**
@@ -68,8 +77,13 @@ export function splitProxyUrl(rawUrl: string): { device: string; rest: string } 
 
 const authHeaders = (target: ProxyTarget, selfId: string) => ({ authorization: `Bearer ${target.token}`, [PEER_DEVICE_HEADER]: selfId });
 
+function resolveEndpoint(target: ProxyTarget): ResolvedPeerTarget | null {
+  if (target.resolve !== undefined) return target.resolve();
+  return target.url !== "" ? { kind: "tcp", origin: target.url } : null;
+}
+
 function offlineBody(name: string): ApiErrorBody {
-  return { error: `连不上“${name}”：对方可能关机、睡眠或没开 Tailscale`, code: "device_offline" };
+  return { error: `连不上“${name}”`, code: "device_offline" };
 }
 
 /** 对方回 401 peer_unauthorized：它已经不认本机了。 */
@@ -87,12 +101,18 @@ export interface ProxyContext {
   /** 对方说不认本机了：本机也删掉它。 */
   forget: () => void;
   fetch?: typeof fetch;
+  unixPool?: UnixHttpPool;
   /** WebSocket 心跳间隔，默认 PEER_WS_PING_MS。 */
   pingMs?: number;
 }
 
 /** 转发一个 HTTP 请求。请求体原样流过去（上传不在入口落地），响应体原样流回来。 */
 export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target: ProxyTarget, rest: string, ctx: ProxyContext): Promise<FastifyReply> {
+  const endpoint = resolveEndpoint(target);
+  if (endpoint === null) {
+    target.onOffline?.();
+    return reply.code(502).send(offlineBody(target.name));
+  }
   const headers: Record<string, string> = { ...authHeaders(target, ctx.selfId), "accept-encoding": "identity" };
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = req.headers[name];
@@ -113,15 +133,20 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   reply.raw.once("close", onClientGone);
   let res: Response;
   try {
-    res = await (ctx.fetch ?? fetch)(target.url + rest, {
+    const init = {
       method: req.method,
       headers,
       redirect: "manual",
       signal: controller.signal,
       ...(hasBody ? { body: Readable.toWeb(req.raw) as ReadableStream<Uint8Array>, duplex: "half" } : {}),
-    } as RequestInit);
+    } as RequestInit;
+    res =
+      endpoint.kind === "unix"
+        ? await (ctx.unixPool ?? target.unixPool ?? defaultUnixPool).fetch(endpoint.socketPath, rest, init)
+        : await (ctx.fetch ?? fetch)(endpoint.origin + rest, init);
   } catch {
     reply.raw.off("close", onClientGone);
+    target.onOffline?.();
     return reply.code(502).send(offlineBody(target.name));
   } finally {
     clearTimeout(timer);
@@ -132,7 +157,7 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
     reply.raw.off("close", onClientGone);
     if (isPeerUnauthorized(res.status, text)) {
       ctx.forget();
-      return reply.code(404).send({ error: `“${target.name}”已经把这台移除了`, code: "not_found" } satisfies ApiErrorBody);
+      return reply.code(404).send({ error: `“${target.name}”已经把这台移除了`, code: "device_not_found" } satisfies ApiErrorBody);
     }
     return reply.code(401).type("application/json").send(text);
   }
@@ -155,7 +180,22 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
  * 连不上、对方心跳没回：用 DEVICE_OFFLINE_WS_CLOSE_CODE 关浏览器那条（网页按断线重连，重连时 /d/ 的请求回 502 就显示离线）。
  */
 export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest: string, ctx: ProxyContext): void {
-  const url = target.url.replace(/^http/, "ws") + rest;
+  const closeDownstream = (code: number, reason: string) => {
+    if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.close(code, reason);
+  };
+  let reportedOffline = false;
+  const notifyOffline = () => {
+    if (reportedOffline) return;
+    reportedOffline = true;
+    target.onOffline?.();
+  };
+  const endpoint = resolveEndpoint(target);
+  if (endpoint === null) {
+    notifyOffline();
+    closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
+    return;
+  }
+  const url = endpoint.kind === "unix" ? `ws+unix://${endpoint.socketPath}:${rest}` : endpoint.origin.replace(/^http/, "ws") + rest;
   const upstream = new WebSocket(url, {
     headers: authHeaders(target, ctx.selfId),
     handshakeTimeout: PEER_WS_CONNECT_TIMEOUT_MS,
@@ -167,9 +207,6 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
   let heartbeat: NodeJS.Timeout | undefined;
   let alive = true;
 
-  const closeDownstream = (code: number, reason: string) => {
-    if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.close(code, reason);
-  };
   const stop = () => {
     if (heartbeat !== undefined) clearInterval(heartbeat);
     heartbeat = undefined;
@@ -196,6 +233,7 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
       if (!alive) {
         stop();
         upstream.terminate();
+        notifyOffline();
         closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
         return;
       }
@@ -233,11 +271,15 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
   });
   upstream.on("error", () => {
     stop();
-    if (!rejected) closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
+    if (!rejected) {
+      notifyOffline();
+      closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
+    }
   });
   upstream.once("close", (code: number, reason: Buffer) => {
     stop();
     if (rejected) return;
+    if (code === 1006) notifyOffline();
     // 1006 = 连接断了没有关闭帧：对方掉线
     closeDownstream(code === 1006 ? DEVICE_OFFLINE_WS_CLOSE_CODE : sendableCode(code, 1000), code === 1006 ? DEVICE_OFFLINE_REASON : reasonOf(reason));
   });

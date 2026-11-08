@@ -11,6 +11,7 @@ import { startUiServer, type PeerEntryListen, type RunningUiServer, type UiServe
 import { createBrowserSessions } from "../ui-server/sessions.ts";
 import { createPeers, type Peers } from "./service.ts";
 import type { PeerRecord } from "./store.ts";
+import type { ProcNetCheckOptions, UnixHttpPool } from "./transport.ts";
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -21,6 +22,8 @@ export interface TestDevice {
   url: string;
   dir: string;
   peersFile: string;
+  tunnelsFile: string;
+  hubSocket: string;
   peers: Peers;
   ledger: FakeLedger;
   server: RunningUiServer;
@@ -41,6 +44,15 @@ export interface TestDeviceOptions {
   now?: () => number;
   /** 经 serve 进来时认的 tailnet 名字和主人。 */
   tailnet?: TailnetSelf | null;
+  /** 默认 true；测生产环境拒回环网址时传 false。 */
+  allowLoopback?: boolean;
+  /** 覆盖本机自报网址（如没装 Tailscale 的隧道设备传 () => null）。 */
+  selfUrl?: () => string | null;
+  tunnelsFile?: string;
+  hubSocket?: string;
+  reconnectTunnel?: () => unknown;
+  procNet?: ProcNetCheckOptions;
+  unixPool?: UnixHttpPool;
   fetch?: typeof fetch;
   serverOptions?: Partial<UiServerOptions>;
   /** 启动前写进 peers.json 的设备（比如指向一个假的上游）。 */
@@ -54,6 +66,8 @@ export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<Tes
   const id = randomUUID();
   const name = opts.name ?? `dev-${id.slice(0, 4)}`;
   const peersFile = join(dir, "state", "peers.json");
+  const tunnelsFile = opts.tunnelsFile ?? join(dir, "state", "tunnels.json");
+  const hubSocket = opts.hubSocket ?? join(dir, "run", "hub.sock");
   if (opts.seed !== undefined) {
     mkdirSync(dirname(peersFile), { recursive: true });
     writeFileSync(peersFile, JSON.stringify({ version: 1, devices: opts.seed, removed: [] }), { mode: 0o600 });
@@ -62,13 +76,19 @@ export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<Tes
   const db: Db = openDatabase(":memory:");
   migrate(db);
   let port = 0;
+  const allowLoopback = opts.allowLoopback ?? true;
   const makePeers = () =>
     createPeers({
       file: peersFile,
       device: { id, name },
       saveName: () => {},
-      selfUrl: () => (port === 0 ? null : `http://127.0.0.1:${port}`),
-      allowLoopback: true,
+      selfUrl: opts.selfUrl ?? (() => (port === 0 ? null : `http://127.0.0.1:${port}`)),
+      allowLoopback,
+      tunnelsFile,
+      hubSocket,
+      ...(opts.reconnectTunnel ? { reconnectTunnel: opts.reconnectTunnel } : {}),
+      ...(opts.procNet ? { procNet: opts.procNet } : {}),
+      ...(opts.unixPool ? { unixPool: opts.unixPool } : {}),
       ...(opts.now ? { now: opts.now } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
@@ -99,6 +119,8 @@ export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<Tes
     url: base,
     dir,
     peersFile,
+    tunnelsFile,
+    hubSocket,
     get peers() {
       return peers;
     },

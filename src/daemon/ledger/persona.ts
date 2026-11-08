@@ -3,7 +3,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, utf8Bytes } from "../../shared/domain.ts";
-import type { AgentSessionRow, PersonaChange, PersonaChangeId, PmId, PmMode, SessionId } from "../../shared/domain.ts";
+import type { AgentSessionRow, ConversationId, PersonaChange, PersonaChangeId, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import type {
   CreatePmInput,
   CreatePmResult,
@@ -84,9 +84,14 @@ function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }): 
 function nextAgent(current: AgentSetting, input: EditPersonaInput): AgentSetting {
   if (input.vendor !== undefined && !isAgentVendor(input.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
   const vendor = input.vendor ?? current.vendor;
-  // 思考程度写在模型 ID 里的厂商（agy）：现在存的可能是带档位的完整 ID（老数据），先拆成 模型 + 思考程度再改
+  // 换了厂商时模型和思考程度默认取 null（不能沿用旧厂商的）；没换厂商且是 agy 老数据（完整 ID）时先拆成 模型 + 思考程度再改
   const touched = input.model !== undefined || input.effort !== undefined;
-  const from = touched && vendor === current.vendor ? splitModelEffort(vendor, current.model, current.effort) : { model: current.model, effort: current.effort };
+  const from =
+    vendor !== current.vendor
+      ? { model: null, effort: null }
+      : touched
+        ? splitModelEffort(vendor, current.model, current.effort)
+        : { model: current.model, effort: current.effort };
   const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
   const effort = input.effort === undefined ? from.effort : optionalSetting(input.effort, "思考程度");
   const problem =
@@ -101,8 +106,18 @@ function nextAgent(current: AgentSetting, input: EditPersonaInput): AgentSetting
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
 
+export interface PersonaHandoverHooks {
+  switchVendorIn?: (p: Pending, conversationId: ConversationId, agent: AgentSetting) => void;
+  clearVendorSwitchIn?: (conversationId: ConversationId) => void;
+}
 
-export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions, messages: LedgerMessages, files: LedgerFiles) {
+export function createLedgerPersona(
+  ctx: LedgerContext,
+  sessions: LedgerSessions,
+  messages: LedgerMessages,
+  files: LedgerFiles,
+  hooks: PersonaHandoverHooks = {},
+) {
   const { db, now, write } = ctx;
   const { insertSession } = sessions;
   const { insertSystemMessage } = messages;
@@ -162,6 +177,8 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
 
   const getPersona = (pmId: PmId): PersonaView => {
     const pm = requirePm(pmId);
+    const active = switchingHandover(pmId);
+    const agent = active !== null ? { vendor: active.to_vendor as AgentVendor, model: active.to_model, effort: active.to_effort } : agentOf(pm);
     const changes = db
       .all<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE pm_id = ? ORDER BY id DESC LIMIT ?", pmId, PERSONA_CHANGES_LIMIT)
       .map(toPersonaChange);
@@ -169,10 +186,29 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
       pmId,
       text: pm.persona ?? "",
       mode: pm.mode as PmMode,
-      ...agentOf(pm),
+      ...agent,
+      switchingToVendor: active !== null ? (active.to_vendor as AgentVendor) : null,
       changes,
       revertableChangeId: changes[0]?.id ?? null,
     };
+  };
+
+  /** 正在换厂商的那一行交接（未完成且 to_vendor 非空）。 */
+  const switchingHandover = (pmId: PmId): { to_vendor: string; to_model: string | null; to_effort: string | null } | null => {
+    const conv = privateConversation(pmId);
+    if (conv === null) return null;
+    return (
+      db.get<{ to_vendor: string; to_model: string | null; to_effort: string | null }>(
+        "SELECT to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ? AND status IN ('queued', 'forking', 'writing', 'ready') AND to_vendor IS NOT NULL",
+        conv.id,
+      ) ?? null
+    );
+  };
+
+  /** 当前生效的厂商、模型、思考程度：正在换厂商时取活跃交接行的目标值，否则取 pms 表。 */
+  const effectiveAgent = (pm: PmDbRow): AgentSetting => {
+    const active = switchingHandover(pm.id);
+    return active !== null ? { vendor: active.to_vendor as AgentVendor, model: active.to_model, effort: active.to_effort } : agentOf(pm);
   };
 
   /** 这个项目经理最新一条修改记录的编号（拼提示词时记下，见 LaunchContext 的 personaRevision），没改过是 0。 */
@@ -218,27 +254,34 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
   ): PersonaChange | null => {
     const textBefore = pm.persona ?? "";
     const modeBefore = pm.mode as PmMode;
-    const agentBefore = agentOf(pm);
+    const agentBefore = effectiveAgent(pm);
     const agentChanged = !sameAgent(agentBefore, next.agent);
     if (revertOf === null && next.text === textBefore && next.mode === modeBefore && !agentChanged && pm.persona !== null) return null;
     const t = now();
-    db.run(
-      "UPDATE pms SET persona = ?, mode = ?, vendor = ?, default_model = ?, effort = ? WHERE id = ?",
-      next.text,
-      next.mode,
-      next.agent.vendor,
-      next.agent.model,
-      next.agent.effort,
-      pm.id,
-    );
-    if (agentChanged) {
+    const conversationId = privateConversation(pm.id)?.id;
+    const switchingVendor = next.agent.vendor !== (pm.vendor as AgentVendor);
+    if (switchingVendor) {
+      db.run("UPDATE pms SET persona = ?, mode = ? WHERE id = ?", next.text, next.mode, pm.id);
+    } else {
       db.run(
-        "UPDATE agent_sessions SET model = ?, effort = ?, updated_at = ? WHERE pm_id = ? AND role = 'pm'",
+        "UPDATE pms SET persona = ?, mode = ?, vendor = ?, default_model = ?, effort = ? WHERE id = ?",
+        next.text,
+        next.mode,
+        next.agent.vendor,
         next.agent.model,
         next.agent.effort,
-        t,
         pm.id,
       );
+      if (agentChanged) {
+        db.run(
+          "UPDATE agent_sessions SET model = ?, effort = ?, updated_at = ? WHERE pm_id = ? AND role = 'pm'",
+          next.agent.model,
+          next.agent.effort,
+          t,
+          pm.id,
+        );
+      }
+      if (conversationId !== undefined) hooks.clearVendorSwitchIn?.(conversationId);
     }
     const change = toPersonaChange(
       db.get<PersonaChangeDbRow>(
@@ -276,9 +319,9 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     else if (editor.actor === "pm") text = `${pm.name}改了自己的做事习惯${modeNote}${reasonNote}`;
     else if (editor.actor === "file") text = `发现${pm.name}的性格设定文件被手改过，已按文件更新`;
     else text = `你改了${pm.name}的${what}${modeNote}${reasonNote}`;
-    const conversationId = privateConversation(pm.id)?.id;
     if (conversationId !== undefined) {
       insertSystemMessage(p, conversationId, { event: "persona.changed", pmId: pm.id, personaChangeId: change.id, revertOf }, text);
+      if (switchingVendor) hooks.switchVendorIn?.(p, conversationId, next.agent);
     }
     p.after.push(() => persistPersonaFile(pm.id, next.text));
     return change;
@@ -294,10 +337,8 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
     if (touchesAgent && editor.actor === "pm") throw fail("forbidden", "厂商、模型、思考程度只能由用户在资料页改");
     if (input.text !== undefined) validPersonaText(input.text);
     const mode = input.mode === undefined ? (pm.mode as PmMode) : validMode(input.mode);
-    const current = agentOf(pm);
+    const current = effectiveAgent(pm);
     const agent = touchesAgent ? nextAgent(current, input) : current;
-    // 一个会话只属于一家：换厂商要开新会话（现在只有一家，走不到这里）
-    if (agent.vendor !== current.vendor) throw fail("invalid", "还不支持给已有的项目经理换厂商，请新建一个项目经理");
     const reason = input.reason?.trim() || null;
     if (reason !== null && [...reason].length > MAX_REASON_CHARS) throw fail("invalid", `理由最多 ${MAX_REASON_CHARS} 个字`);
     return editPersonaIn(p, pm, { text: input.text ?? pm.persona ?? "", mode, agent, reason }, editor);
@@ -359,7 +400,7 @@ export function createLedgerPersona(ctx: LedgerContext, sessions: LedgerSessions
       persistPersonaFile(pm.id, pm.persona);
       return "rewritten";
     }
-    write((p) => editPersonaIn(p, pm, { text: content, mode: pm.mode as PmMode, agent: agentOf(pm), reason: null }, { actor: "file" }));
+    write((p) => editPersonaIn(p, pm, { text: content, mode: pm.mode as PmMode, agent: effectiveAgent(pm), reason: null }, { actor: "file" }));
     return "recorded";
   };
 

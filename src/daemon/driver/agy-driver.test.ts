@@ -1172,6 +1172,46 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     rmSync(marker, { force: true });
   });
 
+  it("只读 agy 启动前扫一次 [cwd, ...addDirs] 下的 secretGlobs 并入 secretPaths，连接器探测与 agy 外层沙箱及 --settings 共用同一份结果", async () => {
+    const seenSecrets: string[][] = [];
+    const t = makeAgyHarness({
+      driver: {
+        connectorCatalog: undefined,
+        readonlySpawn: (base, input) => {
+          seenSecrets.push(input.secretPaths);
+          return { ...base, osSandboxed: true };
+        },
+      },
+    });
+    const cfgDir = join(t.dir, ".gemini", "config");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "mcp_config.json"),
+      JSON.stringify({ mcpServers: { probe: { command: process.execPath, args: ["-e", "process.exit(0)"] } } }),
+    );
+    const extraDir = join(realpathSync.native(t.dir), "extra-dir");
+    mkdirSync(extraDir, { recursive: true });
+    const envInCwd = join(realpathSync.native(t.dir), "work", ".env");
+    const envInAddDir = join(extraDir, ".env.production");
+    mkdirSync(join(realpathSync.native(t.dir), "work"), { recursive: true });
+    writeFileSync(envInCwd, "A=1");
+    writeFileSync(envInAddDir, "B=2");
+
+    t.launch.readonly = true;
+    const s = t.addSession({ role: "worker", workerId: 14, cwd: join(realpathSync.native(t.dir), "work"), addDirs: [extraDir] });
+    await t.driver.send(s.id, user(1, "hi"));
+    await t.waitFor("turn.ended");
+    // 第一次是连接器探测，第二次是 agy 本身：两次拿到的 secretPaths 都包含扫出来的 .env 与 .env.production
+    expect(seenSecrets.length).toBe(2);
+    for (const secrets of seenSecrets) {
+      expect(secrets).toContain(envInCwd);
+      expect(secrets).toContain(envInAddDir);
+    }
+    const { settings } = readonlyArgv(t);
+    expect(settings.permissions.deny).toContain(`read_file(${envInCwd})`);
+    expect(settings.permissions.deny).toContain(`read_file(${envInAddDir})`);
+  });
+
   it("被拒后自动补一轮：result 有 denied_actions 且回复为空 → 往同一个进程补一条“被拒了，换办法”，这一轮到补的那一轮出回复才结束；最多补 AGY_DENIED_CONTINUE_MAX 次", async () => {
     const denied = [{ tool_name: "write_file" }];
     const t = makeAgyHarness({

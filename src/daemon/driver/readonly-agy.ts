@@ -7,15 +7,18 @@
 // 没有 OS 沙箱的机器上派只读 agy 直接报错（设计第 8 节第 5 条）：没有外层沙箱，命令行写文件挡不住。
 import { realpathSync } from "node:fs";
 import {
+  agyHomePaths,
   connectorToolAllowed,
   type ConnectorToolAnnotations,
   type ReadonlyPolicy,
 } from "../../shared/index.ts";
-import type { ReadonlySandboxInput } from "./write-scope.ts";
+import {
+  WORKER_NEEDS_OS_SANDBOX_MESSAGE,
+  type ReadonlySandboxInput,
+} from "./write-scope.ts";
 
-/** 没有 OS 沙箱时派只读 agy 的报错（派活和驱动启动两处都用）。 */
-export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE =
-  "只读的 agy Worker 需要 OS 沙箱（目前只有 macOS 有）：agy 没有自带的只读命令行，没有外层沙箱它的命令行写文件挡不住。这台机器上请改用 claude 或 codex 的只读 Worker。";
+/** 没有 OS 沙箱时派只读 agy 的报错（派活和驱动启动两处都用；现已统一为所有 Worker 均需 OS 沙箱）。 */
+export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE = WORKER_NEEDS_OS_SANDBOX_MESSAGE;
 
 /** 只读 agy 放行的内置工具：读文件、跑命令、读网页（命令里的写由外层沙箱挡）。 */
 export const AGY_READONLY_ALLOW_RULES: readonly string[] = ["read_file(*)", "command(*)", "read_url(*)"];
@@ -66,19 +69,20 @@ function fileRegex(path: string): string {
 }
 
 /**
- * 外层只读沙箱的参数（write-scope.ts 的 readonlySeatbeltProfile 吃它）：
+ * 外层只读沙箱的参数（write-scope.ts 的 readonlySeatbeltProfile / readonlyBwrapArgs 吃它）：
  * 可写的只有会话私有临时目录、agy 运行时目录和文件、通用缓存目录；密钥禁读。路径都 realpath 过。
  */
 export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string; policy: ReadonlyPolicy; realpath?: (p: string) => string }): ReadonlySandboxInput {
   const real = input.realpath ?? realpathOrSelf;
   const home = trimSlash(real(input.homeDir));
-  const cli = `${home}/.gemini/antigravity-cli`;
-  const legacy = `${home}/.gemini/antigravity`;
+  const { cliDir: cli, legacyDir: legacy } = agyHomePaths(home);
   const needed = new Set(AGY_READABLE_SECRET_HOME_PATHS.map((d) => `${home}/${d}`));
+  const writableFileGlobs = [...AGY_RUNTIME_FILES.map((f) => `${cli}/${f}`), ...AGY_RUNTIME_FILES_LEGACY.map((f) => `${legacy}/${f}`)];
   return {
     tmpDir: real(input.tmpDir),
     writableDirs: [...AGY_RUNTIME_DIRS.map((d) => `${cli}/${d}`), ...READONLY_CACHE_DIRS.map((d) => `${home}/${d}`)],
-    writableFileRegexes: [...AGY_RUNTIME_FILES.map((f) => fileRegex(`${cli}/${f}`)), ...AGY_RUNTIME_FILES_LEGACY.map((f) => fileRegex(`${legacy}/${f}`))],
+    writableFileGlobs,
+    writableFileRegexes: writableFileGlobs.map(fileRegex),
     secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(trimSlash(p))),
     secretGlobs: [...input.policy.secretGlobs],
   };
@@ -94,6 +98,7 @@ export function connectorProbeSandboxInput(input: { homeDir: string; tmpDir: str
   return {
     tmpDir: real(input.tmpDir),
     writableDirs: READONLY_CACHE_DIRS.map((d) => `${home}/${d}`),
+    writableFileGlobs: [],
     writableFileRegexes: [],
     secretPaths: input.policy.secretPaths.map(real),
     secretGlobs: [...input.policy.secretGlobs],

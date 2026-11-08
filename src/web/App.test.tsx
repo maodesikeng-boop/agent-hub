@@ -143,6 +143,7 @@ describe("首屏", () => {
     render(<App />);
     expect(await screen.findByText("连不上守护进程")).toBeInTheDocument();
     expect(screen.getByText("看守护进程有没有在跑")).toBeInTheDocument();
+    expect(screen.getByText(/如果服务还没启动，在项目目录下运行 pnpm start/)).toBeInTheDocument();
     expect(screen.getByText("连不上守护进程")).toHaveAttribute("title", "Failed to fetch");
     expect(FakeWebSocket.instances).toHaveLength(0);
     api.state = () => ({ status: 200, body: defaultSnapshot() });
@@ -163,20 +164,20 @@ describe("首屏", () => {
 });
 
 describe("没登录", () => {
-  it("/api/state 返回 401：提示用终端里打印的链接打开，不连 WebSocket", async () => {
+  it("/api/state 返回 401：提示用终端里打印的链接打开或手机扫码，不连 WebSocket", async () => {
     api = new FakeApi(defaultSnapshot());
     api.state = () => ({ status: 401, body: { error: "unauthorized" } });
     api.install();
     installFakeWebSocket();
     render(<App />);
-    expect(await screen.findByText("请用守护进程在终端里打印的链接打开")).toBeInTheDocument();
+    expect(await screen.findByText("还没有登录。在电脑上打开终端启动时打印的登录链接；手机可到已登录电脑的「设置 → 在手机上登录」扫码")).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 });
 
 describe("发送", () => {
-  it("输入文字按 Enter：POST 带新的 clientId；消息马上出现，标“排队中”", async () => {
+  it("输入文字按 Enter：POST 带新的 clientId；消息马上出现，标“Queued”", async () => {
     const user = userEvent.setup();
     await boot();
     const gate = deferred<{ status: number; body: unknown }>();
@@ -189,7 +190,7 @@ describe("发送", () => {
     const mine = bubbles().at(-1);
     expect(mine).toHaveTextContent("帮我看看进度");
     expect(mine).toHaveAttribute("data-side", "right");
-    expect(within(mine as HTMLElement).getByText("排队中")).toBeInTheDocument();
+    expect(within(mine as HTMLElement).getByText("Queued")).toBeInTheDocument();
     expect(box()).toHaveValue("");
     gate.resolve({ status: 200, body: { messageId: 3 } });
   });
@@ -262,7 +263,7 @@ describe("发送", () => {
       ),
     );
     expect(bubbles()).toHaveLength(3);
-    expect(within(bubbles()[2] as HTMLElement).getByText("排队中")).toBeInTheDocument();
+    expect(within(bubbles()[2] as HTMLElement).getByText("Queued")).toBeInTheDocument();
   });
 
   it("真消息先于 POST 响应到达，也不重复", async () => {
@@ -286,7 +287,7 @@ describe("发送", () => {
     expect(bubbles()).toHaveLength(3);
   });
 
-  it("发送失败（500）：标“发送失败”有“重试”；重试用同一个 clientId，成功后恢复“排队中”", async () => {
+  it("发送失败（500）：标“发送失败”有“重试”；重试用同一个 clientId，成功后恢复“Queued”", async () => {
     const user = userEvent.setup();
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
@@ -300,7 +301,7 @@ describe("发送", () => {
     await waitFor(() => expect(screen.queryByText("发送失败")).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
     expect(bubbles()).toHaveLength(3);
-    expect(within(bubbles()[2] as HTMLElement).getByText("排队中")).toBeInTheDocument();
+    expect(within(bubbles()[2] as HTMLElement).getByText("Queued")).toBeInTheDocument();
   });
 
   it("发送时网络断了：同样标“发送失败”，可以重试", async () => {
@@ -356,7 +357,7 @@ describe("发送", () => {
 });
 
 describe("消息状态", () => {
-  it("message.updated：同一条消息的标记跟着变（排队中 → 送达后不再显示），不多出新消息", async () => {
+  it("message.updated：同一条消息的标记跟着变（Queued → 送达后不再显示），不多出新消息", async () => {
     const ws = await boot(
       makeSnapshot({
         pms: [makePm({ id: 1, name: "小林" })],
@@ -364,7 +365,7 @@ describe("消息状态", () => {
       }),
     );
     const mine = () => bubbles()[0] as HTMLElement;
-    expect(within(mine()).getByText("排队中")).toBeInTheDocument();
+    expect(within(mine()).getByText("Queued")).toBeInTheDocument();
     // 已送达、处理中、已回复都不显示（docs/ui-standard.md 第 17 条）
     push(ws, messageChange(11, "message.updated", makeUserMessage({ id: 1, text: "查一下", status: "delivered" })));
     expect(mine().querySelector("[data-delivery]")).toBeNull();
@@ -744,14 +745,14 @@ describe("等额度", () => {
 });
 
 describe("断线重连", () => {
-  it("WebSocket 断开显示“重连中”；重连带上最后的 seq；补齐后没有重复消息", async () => {
+  it("WebSocket 断开显示“Reconnecting…”；重连带上最后的 seq；补齐后没有重复消息", async () => {
     const ws = await boot();
     expect(ws.since).toBe(10);
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, text: "第三条" })));
     push(ws, messageChange(12, "message.created", makeMessage({ id: 4, text: "第四条" })));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => ws.drop());
-    expect(screen.getByText("重连中")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(1);
     act(() => {
       vi.advanceTimersByTime(30_000);
@@ -760,9 +761,9 @@ describe("断线重连", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     const next = FakeWebSocket.last;
     expect(next.since).toBe(12);
-    expect(screen.getByText("重连中")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     act(() => next.open());
-    expect(screen.queryByText("重连中")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reconnecting…")).not.toBeInTheDocument();
     // 补齐：服务端重发 12（已经有了）再给新的 13
     push(next, messageChange(12, "message.created", makeMessage({ id: 4, text: "第四条" })));
     push(next, messageChange(13, "message.created", makeMessage({ id: 5, text: "第五条" })));
@@ -782,7 +783,7 @@ describe("断线重连", () => {
       act(() => FakeWebSocket.last.drop());
     }
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(9);
-    expect(screen.getByText("重连中")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     // 间隔有上限：再等 10 秒一定有新的连接
     const before = FakeWebSocket.instances.length;
     act(() => {
@@ -877,13 +878,13 @@ describe("补不齐", () => {
     expect(within(log()).getAllByText("已经包含在快照里")).toHaveLength(1);
   });
 
-  it("resync 时拉快照失败：显示“重连中”，之后重试成功恢复", async () => {
+  it("resync 时拉快照失败：显示“Reconnecting…”，之后重试成功恢复", async () => {
     const ws = await boot();
     api.state = () => ({ status: 500, body: { error: "boom" } });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     push(ws, { type: "resync" });
     await act(async () => {});
-    expect(screen.getByText("重连中")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     api.state = () => ({
       status: 200,
       body: makeSnapshot({ seq: 60, conversations: [makeConvSnapshot([makeMessage({ id: 8, text: "恢复了" })])] }),
@@ -893,14 +894,14 @@ describe("补不齐", () => {
     });
     vi.useRealTimers();
     await findInLog("恢复了");
-    expect(screen.queryByText("重连中")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reconnecting…")).not.toBeInTheDocument();
   });
 
   it("resync 时 /api/state 返回 401：提示重新打开链接", async () => {
     const ws = await boot();
     api.state = () => ({ status: 401, body: { error: "unauthorized" } });
     push(ws, { type: "resync" });
-    expect(await screen.findByText("请用守护进程在终端里打印的链接打开")).toBeInTheDocument();
+    expect(await screen.findByText(/还没有登录/)).toBeInTheDocument();
   });
 
   it("收到不认识的对话里的消息：重新拉快照", async () => {

@@ -143,7 +143,7 @@ export function App() {
   if (local.state.phase === "unauthorized") {
     return (
       <div className={FULLPAGE}>
-        <p>请用守护进程在终端里打印的链接打开</p>
+        <p>还没有登录。在电脑上打开终端启动时打印的登录链接；手机可到已登录电脑的「设置 → 在手机上登录」扫码</p>
       </div>
     );
   }
@@ -152,6 +152,7 @@ export function App() {
       <div className={FULLPAGE}>
         <p title={local.state.loadError ? errorTitle(local.state.loadError) : undefined}>{local.state.loadError?.text ?? "连不上守护进程"}</p>
         {local.state.loadError?.hint && <p>{local.state.loadError.hint}</p>}
+        <p className="text-[13.5px] text-muted-foreground">如果服务还没启动，在项目目录下运行 pnpm start</p>
         <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>重试</Button>
       </div>
     );

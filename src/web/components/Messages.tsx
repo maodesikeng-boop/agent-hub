@@ -50,6 +50,7 @@ import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export interface AgentIdentity {
@@ -176,7 +177,7 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
+    const timer = setTimeout(() => setCopied(false), COPIED_RESET_MS);
     return () => clearTimeout(timer);
   }, [copied]);
   const copy = () => {
@@ -194,6 +195,16 @@ function CopyButton({ text }: { text: string }) {
 
 type Turn = Extract<RenderItem, { kind: "turn" }>;
 
+/** 对话里已经被后续修改（revertOf 指向它）撤销过的性格设定修改编号。 */
+export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<PersonaChangeId> {
+  const ids = new Set<PersonaChangeId>();
+  for (const m of messages) {
+    const event = systemEventOf(m);
+    if (event?.event === "persona.changed" && event.revertOf !== null) ids.add(event.revertOf);
+  }
+  return ids;
+}
+
 /**
  * agent 的一轮回复：开头一次头像 + 名字；操作合成一行；文字和夹在中间的系统行按顺序排；跑完最下面是复制和时间。
  * status：这一轮还在跑时的状态（AgentStatus），那一行挪到最下面；没在跑是 undefined。
@@ -204,23 +215,30 @@ export function TurnView({
   status,
   actions,
   highlightId,
+  revertedChanges,
 }: {
   turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
   identity: AgentIdentity;
   status?: React.ReactNode;
   actions: MessageActions;
   highlightId?: MessageId | null;
+  revertedChanges?: ReadonlySet<PersonaChangeId>;
 }) {
   const running = status != null;
   const texts = turn.parts.filter((m) => m.sender === "agent");
   const lastText = texts.at(-1);
+  const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
   return (
     <div className="mt-6 flex flex-col first:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
       <AgentHead identity={identity} />
       <div className="flex flex-col gap-2.5">
         {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
         {turn.parts.map((m) =>
-          m.sender === "agent" ? <AgentText key={m.id} message={m} highlighted={m.id === highlightId} /> : <SystemNotice key={m.id} message={m} actions={actions} inTurn />,
+          m.sender === "agent" ? (
+            <AgentText key={m.id} message={m} highlighted={m.id === highlightId} />
+          ) : (
+            <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
+          ),
         )}
         {running && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
         {!running && lastText && (
@@ -237,9 +255,17 @@ export function TurnView({
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 
 /** 撤销按钮：只有项目经理改了性格设定的系统消息有。只有最近一次能撤销，别的服务端回 409。 */
-function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRevert: MessageActions["onRevertPersona"] }) {
+function RevertButton({
+  changeId,
+  reverted = false,
+  onRevert,
+}: {
+  changeId: PersonaChangeId;
+  reverted?: boolean;
+  onRevert: MessageActions["onRevertPersona"];
+}) {
   const [phase, setPhase] = useState<RevertPhase>("idle");
-  if (phase === "done") return <span>已撤销</span>;
+  if (reverted || phase === "done") return <span>已撤销</span>;
   const revert = () => {
     setPhase("busy");
     onRevert(changeId).then(
@@ -257,7 +283,7 @@ function RevertButton({ changeId, onRevert }: { changeId: PersonaChangeId; onRev
         disabled={phase === "busy"}
         onClick={revert}
       >
-        {phase === "busy" ? "撤销中" : "撤销"}
+        {phase === "busy" ? "Reverting…" : "撤销"}
       </button>
     </>
   );
@@ -347,7 +373,17 @@ function SessionRenewed({ text, handover }: { text: string; handover: string }) 
 }
 
 /** 系统消息：到点的定时任务、换新会话是可点开的一行，别的都是很淡的一行（去掉发给 agent 时加的【系统】，不显示投递状态）。 */
-function SystemNotice({ message, actions, inTurn = false }: { message: Message; actions: MessageActions; inTurn?: boolean }) {
+function SystemNotice({
+  message,
+  actions,
+  revertedChanges,
+  inTurn = false,
+}: {
+  message: Message;
+  actions: MessageActions;
+  revertedChanges?: ReadonlySet<PersonaChangeId>;
+  inTurn?: boolean;
+}) {
   const event = systemEventOf(message);
   const text = systemNoticeText(message);
   switch (event?.event) {
@@ -377,7 +413,11 @@ function SystemNotice({ message, actions, inTurn = false }: { message: Message; 
       return (
         <NoticeLine icon={UserPen} inTurn={inTurn}>
           <span>{text}</span>
-          <RevertButton changeId={event.personaChangeId} onRevert={actions.onRevertPersona} />
+          <RevertButton
+            changeId={event.personaChangeId}
+            reverted={revertedChanges?.has(event.personaChangeId)}
+            onRevert={actions.onRevertPersona}
+          />
         </NoticeLine>
       );
     default:
@@ -449,16 +489,18 @@ export function MessageBubble({
   head,
   actions,
   highlighted = false,
+  revertedChanges,
 }: {
   message: Message;
   identity: AgentIdentity;
   head: boolean;
   actions: MessageActions;
   highlighted?: boolean;
+  revertedChanges?: ReadonlySet<PersonaChangeId>;
 }) {
   const workerLine = workerEventOf(message);
   if (workerLine) return <WorkerItem line={workerLine} actions={actions} />;
-  if (message.sender === "system") return <SystemNotice message={message} actions={actions} />;
+  if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
   if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
   // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
   return (

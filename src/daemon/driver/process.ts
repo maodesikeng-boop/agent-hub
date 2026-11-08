@@ -1,5 +1,7 @@
-// 管 claude 进程的小函数：强制结束（连同所有后代的进程组）、看进程在不在、等它退出、用 ps 认残留的 claude。
+// 管 claude 进程的小函数：强制结束（连同所有后代的进程组）、看进程在不在、等它退出、用 ps 认残留的 claude、Linux bwrap 穿透发信号。
 import { execFile, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFileSync, readlinkSync } from "node:fs";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
 
@@ -72,10 +74,102 @@ export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
 
 /**
  * claude（或 worktree 准备命令，都是 detached 起的）自己正常退出的这一刻，给它原来的进程组补一个 SIGTERM，清掉同组留下的子进程。
+ * Linux 上 bwrap 开了 --unshare-pid 后 namespace PID 1 的 bwrap init 进程对非 SIGKILL 信号免疫，同组补发一次 SIGKILL 让它立即退出，
+ * 内核随即对整个 PID namespace 发 SIGKILL 清空残留后台进程（docs/linux-sandbox-design.md 第 5.3 节）。
  * 只在确认退出时发这一次，不延迟再发，免得进程号被复用后误杀。
  */
-export function termGroupAfterExit(child: Pick<ChildProcess, "pid">): void {
-  if (child.pid !== undefined && child.pid > 1) signalPid(-child.pid, "SIGTERM");
+export function termGroupAfterExit(child: Pick<ChildProcess, "pid">, platform: NodeJS.Platform = process.platform): void {
+  if (child.pid !== undefined && child.pid > 1) {
+    signalPid(-child.pid, "SIGTERM");
+    if (platform === "linux") signalPid(-child.pid, "SIGKILL");
+  }
+}
+
+function readProcExe(procRoot: string, pid: number): string | null {
+  const exePath = join(procRoot, String(pid), "exe");
+  try {
+    return readlinkSync(exePath).trim();
+  } catch {
+    try {
+      return readFileSync(exePath, "utf8").trim();
+    } catch {
+      return null;
+    }
+  }
+}
+
+function readProcChildren(procRoot: string, pid: number): number[] {
+  const candidates = [join(procRoot, String(pid), "task", String(pid), "children"), join(procRoot, String(pid), "children")];
+  for (const file of candidates) {
+    try {
+      const raw = readFileSync(file, "utf8").trim();
+      if (raw === "") return [];
+      return raw
+        .split(/\s+/)
+        .map((s) => Number(s))
+        .filter((n) => Number.isInteger(n) && n > 1);
+    } catch {
+      // 尝试候选路径或进程已退出
+    }
+  }
+  return [];
+}
+
+function isInnerNamespaceCli(procRoot: string, pid: number): boolean {
+  try {
+    const status = readFileSync(join(procRoot, String(pid), "status"), "utf8");
+    const match = /^NSpid:\s+(.+)$/m.exec(status);
+    if (!match) return false;
+    const tokens = match[1]!.trim().split(/\s+/);
+    return tokens.length >= 2 && tokens[tokens.length - 1] === "2";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解析优雅信号（SIGINT 等）的实际目标 PID（docs/linux-sandbox-design.md 第 2.4、5.2 节）：
+ * - 非 Linux 平台或 pid 本身不是 bwrap（如 PM 或未包 bwrap 的进程）直接返回 pid；
+ * - Linux 上若 pid 是外层 bwrap（B），B 会因收到 SIGINT 提前以 143 退出并丢弃内层退出码，因此沿 /proc/<p>/task/<p>/children
+ *   查找 /proc/<c>/status 中 NSpid 末位为 2 的内层 CLI 进程（C）返回；若 C 尚未 fork 或已退出则返回 null（不误杀 B）。
+ */
+export function signalTarget(pid: number, platform: NodeJS.Platform = process.platform, procRoot = "/proc"): number | null {
+  if (!Number.isInteger(pid) || pid <= 1) return null;
+  if (platform !== "linux") return pid;
+  const exe = readProcExe(procRoot, pid);
+  if (exe === null || !/(^|\/)bwrap(\s|$)/.test(exe)) return pid;
+  const seen = new Set<number>([pid]);
+  const queue: number[] = [pid];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const childPid of readProcChildren(procRoot, cur)) {
+      if (seen.has(childPid)) continue;
+      seen.add(childPid);
+      if (isInnerNamespaceCli(procRoot, childPid)) return childPid;
+      queue.push(childPid);
+    }
+  }
+  return null;
+}
+
+/**
+ * 给驱动起的子进程发优雅信号（SIGINT 等）：有 pid 时通过 signalTarget 穿透 Linux bwrap 发给内层 CLI，否则退回 child.kill(signal)。
+ */
+export function signalChild(
+  child: Pick<ChildProcess, "pid" | "kill">,
+  signal: NodeJS.Signals,
+  platform: NodeJS.Platform = process.platform,
+  procRoot = "/proc",
+): void {
+  if (child.pid !== undefined) {
+    const target = signalTarget(child.pid, platform, procRoot);
+    if (target === null) return;
+    if (target !== child.pid) {
+      signalPid(target, signal);
+      return;
+    }
+  }
+  child.kill(signal);
 }
 
 /** 找后代最多看几轮：每轮把新找到的组先 SIGSTOP 住，直到没有新的。 */

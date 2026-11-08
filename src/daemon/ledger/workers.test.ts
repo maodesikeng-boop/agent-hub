@@ -57,6 +57,7 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     dataHome,
     worktreesDir,
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
+    osSandboxed: () => true,
     ...extra,
   };
 }
@@ -258,16 +259,24 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     expect(workerEventOf(workerLines()[0]!)?.readonly).toBe(true);
   });
 
-  it("没有 OS 沙箱的机器上派只读 agy：直接报错说清原因（不建 Worker）；claude、codex 的只读、非只读的 agy 照派；有沙箱照派", () => {
+  it("没有 OS 沙箱的机器上派任何 Worker（不论普通还是只读、不论哪家厂商）一律直接报错拒绝启动；有沙箱照派", () => {
     repos.add(main);
     ledger = createLedger(db, options({ osSandboxed: () => false }));
     const before = tableCounts();
-    expectLedgerError(() => start({ vendor: "agy", readonly: true }), "invalid", /只读的 agy Worker 需要 OS 沙箱/);
+    for (const vendor of ["claude", "codex", "agy"] as const) {
+      for (const readonly of [false, true] as const) {
+        expectLedgerError(
+          () => start({ vendor, readonly, title: `${vendor}-${readonly}` }),
+          "invalid",
+          /需要 OS 沙箱.*sudo scripts\/linux-sandbox-setup\.sh/,
+        );
+      }
+    }
     expect(tableCounts()).toEqual(before);
+    ledger = createLedger(db, options({ osSandboxed: () => true }));
     expect(start({ vendor: "agy", readonly: false, title: "a" }).data.worker.readonly).toBe(false);
     expect(start({ vendor: "codex", readonly: true, title: "b" }).data.worker.readonly).toBe(true);
     expect(start({ vendor: "claude", readonly: true, title: "c" }).data.worker.readonly).toBe(true);
-    ledger = createLedger(db, options({ osSandboxed: () => true }));
     expect(start({ vendor: "agy", readonly: true, title: "d" }).data.worker.readonly).toBe(true);
   });
 

@@ -6,6 +6,7 @@ import {
   effortsFor,
   modelChoiceOf,
   splitModelEffort,
+  vendorLabel,
   type AgentSetting,
   type AgentVendor,
   isSelectable,
@@ -74,6 +75,7 @@ export function AgentRows({
   value,
   onChange,
   disabled,
+  switchingToVendor,
   errors = {},
   customAction,
   onCustomSubmit,
@@ -81,6 +83,7 @@ export function AgentRows({
   value: AgentDraft;
   onChange: (draft: AgentDraft, row: AgentRowKey) => void;
   disabled?: boolean;
+  switchingToVendor?: AgentVendor | null;
   errors?: Partial<Record<AgentRowKey, ErrorLike | null>>;
   customAction?: ReactNode;
   onCustomSubmit?: () => void;
@@ -109,14 +112,18 @@ export function AgentRows({
   const customError = !result.ok ? result.error : null;
   return (
     <>
-      <SettingsRow label="厂商" error={errors.vendor}>
+      <SettingsRow
+        label="厂商"
+        detail={switchingToVendor != null ? `正在换到 ${vendorLabel(switchingToVendor)}…` : undefined}
+        error={errors.vendor}
+      >
         {(id) =>
           vendors.length > 1 ? (
             <Select
               id={id}
               variant="plain"
               value={value.vendor}
-              disabled={disabled}
+              disabled={disabled || switchingToVendor != null}
               onPointerDown={refreshUnusable}
               onFocus={refreshUnusable}
               onChange={(e) => setVendor(e.target.value)}

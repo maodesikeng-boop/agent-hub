@@ -6,8 +6,9 @@ import { cn } from "../lib/utils.ts";
 /** 不上色的语言写法：和没写语言一样，直接纯文本。 */
 const PLAIN_LANGUAGES = new Set(["text", "txt", "plain", "plaintext"]);
 /** 流式输出时，内容停多久才重新上色（毫秒）。 */
+const INITIAL_HIGHLIGHT_MS = 0;
 const HIGHLIGHT_DEBOUNCE_MS = 120;
-const COPIED_RESET_MS = 1500;
+export const COPIED_RESET_MS = 1500;
 
 /** 代码块的语言：fence 上写的第一个词（remark 给 <code> 的 class 是 language-xxx）。 */
 export function languageOf(className: string | undefined): string {
@@ -43,7 +44,7 @@ export function useHighlightedHtml(code: string, language: string): string | nul
         (html) => alive && setDone({ code, html }),
         () => {},
       );
-    }, done === null ? 0 : HIGHLIGHT_DEBOUNCE_MS);
+    }, done === null ? INITIAL_HIGHLIGHT_MS : HIGHLIGHT_DEBOUNCE_MS);
     return () => {
       alive = false;
       clearTimeout(timer);

@@ -25,6 +25,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
   const [loadError, setLoadError] = useState<ErrorLike | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, ErrorLike>>({});
   const [busy, setBusy] = useState<ErrorLike | null>(null);
+  const [confirmingSelf, setConfirmingSelf] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [allError, setAllError] = useState<ErrorLike | null>(null);
   // 二维码：link 是现在显示的那个（null 没显示）；linkBusy 是正在生成；baseline 是生成时已有的浏览器，多出来就是手机登录上了
@@ -47,7 +48,13 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
     void refresh();
   }, [refresh]);
 
-  // 点了“全部退出”没再点确认：几秒后退回去（Safari 点按钮不聚焦，失去焦点的退回对它不起作用）
+  // 点了“退出（当前浏览器）”或“全部退出”没再点确认：几秒后退回去（Safari 点按钮不聚焦，失去焦点的退回对它不起作用）
+  useEffect(() => {
+    if (!confirmingSelf) return;
+    const timer = setTimeout(() => setConfirmingSelf(false), CONFIRM_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [confirmingSelf]);
+
   useEffect(() => {
     if (!confirmingAll) return;
     const timer = setTimeout(() => setConfirmingAll(false), CONFIRM_TIMEOUT_MS);
@@ -84,6 +91,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
       if (!(err instanceof ApiError && err.status === 404)) {
         setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
         setBusy(null);
+        if (session.current) setConfirmingSelf(false);
         return;
       }
     }
@@ -136,13 +144,40 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
         {sessions?.map((session) => {
           const name = describeUserAgent(session.userAgent);
           const ago = formatAgo(session.lastSeenAt, now);
+          const confirming = session.current && confirmingSelf;
           return (
             <SettingsRow key={session.id} label={name} detail={session.current ? `这个浏览器 · ${ago}` : ago} error={rowErrors[session.id]}>
-              {(id) => (
-                <Button id={id} variant="ghost" size="sm" aria-label={`退出 ${name}`} disabled={busy !== null} onClick={() => void exit(session)}>
-                  {busy === session.id && <Loader2 className="animate-spin" aria-hidden="true" />}退出
-                </Button>
-              )}
+              {(id) =>
+                confirming ? (
+                  <>
+                    <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
+                      取消
+                    </Button>
+                    <Button
+                      id={id}
+                      variant="ghost"
+                      size="sm"
+                      aria-label="确认退出"
+                      disabled={busy !== null}
+                      className="text-danger hover:text-danger"
+                      onClick={() => void exit(session)}
+                    >
+                      {busy === session.id && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    id={id}
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`退出 ${name}`}
+                    disabled={busy !== null}
+                    onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
+                  >
+                    {busy === session.id && <Loader2 className="animate-spin" aria-hidden="true" />}退出
+                  </Button>
+                )
+              }
             </SettingsRow>
           );
         })}

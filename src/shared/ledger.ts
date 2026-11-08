@@ -162,6 +162,8 @@ export interface PersonaView {
   vendor: AgentVendor;
   model: string | null;
   effort: string | null;
+  /** 正在换厂商时（handovers 有未完成且 to_vendor 非空的行）是目标厂商，否则 null。 */
+  switchingToVendor?: AgentVendor | null;
   /** 修改记录，新的在前，最多 PERSONA_CHANGES_LIMIT 条。 */
   changes: PersonaChange[];
   /** 能撤销的那一条（最近一条）的编号；没有修改记录是 null。 */
@@ -171,8 +173,8 @@ export interface PersonaView {
 /**
  * text、mode、vendor、model、effort 至少给一个；text 是新的完整正文，不超过 MAX_PERSONA_BYTES；reason 不超过 MAX_REASON_CHARS。
  * vendor、model、effort（资料页的 Agent 一栏）按厂商清单校验，model、effort 给 null 是改回默认；只有界面上的用户能改
- * （项目经理用 hub persona edit 带这几样 → forbidden）。改了之后这个项目经理的会话（agent_sessions.model、effort）跟着改，
- * 驱动层在下一条消息前按新参数 --resume 重启。换厂商要开新会话，现在只有一家，不会发生。
+ * （项目经理用 hub persona edit 带这几样 → forbidden）。改了模型、思考程度之后这个项目经理的会话（agent_sessions.model、effort）跟着改，
+ * 驱动层在下一条消息前按新参数 --resume 重启；换了厂商会触发后台写交接换新会话，换代时再更新 pms。
  */
 export interface EditPersonaInput {
   text?: string;

@@ -6,7 +6,13 @@ import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import { AGENT_VENDORS } from "./vendors.ts";
 import {
+  AGY_CLI_HOME_REL,
+  AGY_LEGACY_HOME_REL,
+  AGY_MCP_CONFIG_REL,
   MAX_UNIX_SOCKET_PATH_BYTES,
+  agyCliDataDir,
+  agyDataPaths,
+  agyHomePaths,
   assertSocketPathFits,
   VENDOR_FALLBACK_PATHS,
   defaultAgyFallbackPaths,
@@ -19,9 +25,11 @@ import {
   resolveExecutable,
   resolveHubPaths,
   resolvePaths,
+  resolveVendorExecutables,
   workerSetupLogPath,
   workerWorktreePath,
 } from "./paths.ts";
+import * as sharedIndex from "./index.ts";
 
 describe("paths：可执行文件与数据目录解析", () => {
   it("环境变量名常量：AGENT_HUB_CLAUDE / AGENT_HUB_AGY / AGENT_HUB_CODEX", () => {
@@ -88,6 +96,41 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(workerSetupLogPath("/l", 7)).toBe("/l/worker-7.log");
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES - 1))).not.toThrow();
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES))).toThrow(/AGENT_HUB_HOME/);
+  });
+
+  it("agyDataPaths / agyHomePaths：集中拼接 AGY 数据目录与主目录路径，并在 shared/index.ts 导出", () => {
+    expect(AGY_CLI_HOME_REL).toBe(".gemini/antigravity-cli");
+    expect(AGY_LEGACY_HOME_REL).toBe(".gemini/antigravity");
+    expect(AGY_MCP_CONFIG_REL).toBe(".gemini/config/mcp_config.json");
+    expect(sharedIndex.AGY_CLI_HOME_REL).toBe(AGY_CLI_HOME_REL);
+    expect(sharedIndex.AGY_LEGACY_HOME_REL).toBe(AGY_LEGACY_HOME_REL);
+    expect(sharedIndex.AGY_MCP_CONFIG_REL).toBe(AGY_MCP_CONFIG_REL);
+
+    expect(agyCliDataDir("/Users/u")).toBe("/Users/u/.gemini/antigravity-cli");
+    expect(sharedIndex.agyCliDataDir("/Users/u")).toBe("/Users/u/.gemini/antigravity-cli");
+
+    const homePaths = agyHomePaths("/Users/u");
+    expect(homePaths).toEqual({
+      cliDir: "/Users/u/.gemini/antigravity-cli",
+      legacyDir: "/Users/u/.gemini/antigravity",
+      mcpConfigFile: "/Users/u/.gemini/config/mcp_config.json",
+    });
+    expect(sharedIndex.agyHomePaths("/Users/u")).toEqual(homePaths);
+
+    const dataPaths = agyDataPaths("/Users/u/.gemini/antigravity-cli");
+    expect(dataPaths.root).toBe("/Users/u/.gemini/antigravity-cli");
+    expect(dataPaths.conversationDb("conv-1")).toBe("/Users/u/.gemini/antigravity-cli/conversations/conv-1.db");
+    expect(dataPaths.brainDir("conv-1")).toBe("/Users/u/.gemini/antigravity-cli/brain/conv-1");
+    expect(dataPaths.mcpCacheDir).toBe("/Users/u/.gemini/antigravity-cli/mcp");
+    expect(dataPaths.summaryDb).toBe("/Users/u/.gemini/antigravity-cli/conversation_summaries.db");
+    expect(dataPaths.subDir("presence")).toBe("/Users/u/.gemini/antigravity-cli/presence");
+
+    const indexDataPaths = sharedIndex.agyDataPaths("/Users/u/.gemini/antigravity-cli");
+    expect(indexDataPaths.conversationDb("conv-1")).toBe(dataPaths.conversationDb("conv-1"));
+    expect(indexDataPaths.brainDir("conv-1")).toBe(dataPaths.brainDir("conv-1"));
+    expect(indexDataPaths.mcpCacheDir).toBe(dataPaths.mcpCacheDir);
+    expect(indexDataPaths.summaryDb).toBe(dataPaths.summaryDb);
+    expect(indexDataPaths.subDir("presence")).toBe(dataPaths.subDir("presence"));
   });
 
   it("Linux：每家厂商都在官方安装目录里找（~/.local/bin 排第一），ChatGPT.app 那条不出现", () => {
@@ -157,6 +200,32 @@ describe("paths：可执行文件与数据目录解析", () => {
         "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
       ]);
+
+      // resolveVendorExecutables：按 AGENT_VENDORS 循环解析三家厂商的 cmd 与 path
+      const userHome = join(dir, "home");
+      const localAgy = join(userHome, ".local", "bin", "agy");
+      mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
+      writeFileSync(localAgy, "");
+      writeFileSync(join(pathDir, "codex"), "");
+      const resolved = resolveVendorExecutables(
+        { claudePath: "/explicit/claude", agyPath: "agy", codexPath: "codex" },
+        pathDir,
+        userHome,
+        "darwin",
+      );
+      expect(resolved).toEqual({
+        claude: { cmd: "/explicit/claude", path: "/explicit/claude" },
+        agy: { cmd: "agy", path: "agy" },
+        codex: { cmd: "codex", path: "codex" },
+      });
+      // 当 PATH 里没有 agy 时，回退到 ~/.local/bin/agy
+      const resolvedFallback = resolveVendorExecutables(
+        { claudePath: "claude", agyPath: "agy", codexPath: "codex" },
+        "/empty-path",
+        userHome,
+        "darwin",
+      );
+      expect(resolvedFallback.agy).toEqual({ cmd: "agy", path: localAgy });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
