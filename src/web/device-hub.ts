@@ -280,6 +280,8 @@ export interface DevicesSnapshot {
   managed: boolean;
   /** 设备清单拉过了（拉到或确定拉不到）；之前网址里写的别的设备还认不出来。 */
   listed: boolean;
+  /** 第一次拉设备清单就失败、手上没有旧清单，正在按退避重试：先只显示本机，界面提示一句。 */
+  listFailed: boolean;
 }
 
 /** 设备清单 + 每台一个 DeviceHub。只有入口本机一台时，界面和没有联机时一样。 */
@@ -290,6 +292,9 @@ export class DevicesStore {
   private snapshot: DevicesSnapshot;
   private readonly listeners = new Set<() => void>();
   private running = false;
+  private listTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 设备清单连续拉失败的次数（退避用）；拉到或 404 归零。 */
+  private listAttempt = 0;
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
 
@@ -326,6 +331,7 @@ export class DevicesStore {
       selfId: this.infos?.find((d) => d.self)?.id ?? null,
       managed: this.managed,
       listed: this.infos !== null,
+      listFailed: this.infos === null && this.listAttempt > 0,
     };
   }
 
@@ -341,20 +347,33 @@ export class DevicesStore {
 
   dispose(): void {
     this.running = false;
+    clearTimeout(this.listTimer);
     for (const hub of this.hubs.values()) hub.dispose();
   }
 
-  /** 重新拉设备清单（打开网页时，设置里加、改、删设备之后）：新来的设备开连接，没了的关掉。拉不到就当只有本机。 */
+  /** 重新拉设备清单（打开网页时，设置里加、改、删设备之后）：新来的设备开连接，没了的关掉。
+   * 404（守护进程没开联机）当只有本机；别的错误保留上一份清单和 managed，按退避自动重试。 */
   refresh = async (): Promise<void> => {
-    let infos: readonly DeviceInfo[] | null = null;
+    clearTimeout(this.listTimer);
+    let infos: readonly DeviceInfo[];
     try {
       infos = (await fetchDevices()).devices;
-    } catch {
-      // 404：守护进程还没有联机；别的错：先只显示本机，下次刷新再说
+    } catch (err) {
+      if (!this.running) return;
+      if (err instanceof ApiError && err.status === 404) {
+        this.listAttempt = 0;
+        this.managed = false;
+        this.setDevices([]);
+        return;
+      }
+      this.listTimer = setTimeout(() => void this.refresh(), reconnectDelay(this.listAttempt++));
+      this.changed();
+      return;
     }
     if (!this.running) return;
-    this.managed = infos !== null;
-    this.setDevices(infos ?? []);
+    this.listAttempt = 0;
+    this.managed = true;
+    this.setDevices(infos);
   };
 
   /** 换一份设备清单（测试和假数据也从这里进）。 */
