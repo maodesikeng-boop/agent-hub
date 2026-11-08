@@ -99,9 +99,8 @@ function readDefaultProcNet(): string[] {
  * 必须至少有一条 0A 监听行，且所有该端口 0A 行的 uid 都等于 expectedUid（agenthub-tunnel）。
  */
 export function verifySlotListenerUid(port: number, opts?: ProcNetCheckOptions): boolean {
-  const injected = opts?.readProcNet !== undefined || opts?.expectedUid !== undefined;
   const platform = opts?.platform ?? process.platform;
-  if (!injected && platform !== "linux") return true;
+  if (opts?.readProcNet === undefined && platform !== "linux") return true;
 
   const uid = (opts?.expectedUid ?? resolveTunnelUserUid)();
   if (uid === null || !Number.isInteger(uid) || uid < 0) return false;

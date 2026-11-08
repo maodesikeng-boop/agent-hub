@@ -530,11 +530,13 @@ describe("端到端 socket 自动配对、双向 HTTP/WS 互转、Agent 复用�
     const unixPool = createUnixHttpPool();
     let reconnectCalls = 0;
 
-    // 东京（中心）：不配 Tailscale（selfUrl: null），设备入口监听 TCP（port: 0 自动分配）
+    // 东京（中心）：不配 Tailscale（selfUrl: null），设备入口监听 TCP（port: 0 自动分配）。
+    // 在 Linux CI 上 rBridge 由当前测试进程监听，expectedUid 设为当前进程 uid 以通过真实 /proc/net/tcp 校验。
     const tokyo = await device({
       name: "tokyo",
       selfUrl: () => null,
       peerEntry: { port: 0 },
+      procNet: { expectedUid: () => process.getuid?.() ?? 0 },
     });
     const tokyoEntryPort = tokyo.server.peerEntryPort!;
     expect(tokyoEntryPort).toBeGreaterThan(0);
