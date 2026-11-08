@@ -534,9 +534,9 @@ export const VENDOR_NOT_FOUND_CODES: readonly VendorNotFoundCode[] = AGENT_VENDO
 
 // ---- 出错的特征 ----
 // 失败原因（消息的 failureReason、Worker 这一轮没做完的原因、定时任务没跑成的原因）是厂商给的原文。网页按通用的类型
-// 出一句人话（web/errors.ts），各家的错误长什么样只写在这里。网络断了这类和厂商无关的特征在 web/errors.ts。
+// 出一句人话（shared/errors.ts），各家的错误长什么样只写在这里。网络断了这类和厂商无关的特征在 shared/errors.ts。
 
-/** 失败的通用类型：服务繁忙、额度用完、网络断了、找不到程序、没能启动。认不出来的是 unknown（web/errors.ts）。 */
+/** 失败的通用类型：服务繁忙、额度用完、网络断了、找不到程序、没能启动。认不出来的是 unknown（shared/errors.ts）。 */
 export type FailureKind = "busy" | "quota" | "network" | "missing" | "start" | "auth" | "context";
 
 export interface VendorFailureSigns {

@@ -1,6 +1,8 @@
 // 用户看到的报错：一张表，网页、hub 命令行、agent 接口、联机转发都从这里出话（docs/user-facing-errors-design.md）。
-// 表是模块常量，humanize 只查表，不发请求、不轮询。厂商启动失败的人话在 #164 的 describeFailure，合了之后挪进这个文件。
+// 表是模块常量，humanize 只查表，不发请求、不轮询。厂商失败的人话（describeFailure）在文件末尾，是第二张表。
 // 暂时不从 index.ts 导出：api.ts 里还有旧的 ApiErrorBody / ApiErrorCode（B 块改完界面服务后删掉，再接进 index.ts），要用先 import 这个文件。
+
+import { vendorFailureOf, type AgentVendor, type FailureKind } from "./vendors.ts";
 
 /** 接口错误：会出现在 HTTP 应答里，status 必填。text 是一句中文；hint 是“怎么办”，只写跟连法无关的话。 */
 export const API_ERRORS = {
@@ -96,4 +98,44 @@ export function humanize(body: unknown, status: number): HumanError {
     }
   }
   return { code: null, text: `${GENERIC_ERROR_TEXT}（${status}）`, raw };
+}
+
+// ---- 厂商失败：agent 厂商的错误原文 → 一句人话（docs/ui-standard.md 第 17 条）。各家的错误特征在 vendors.ts（VENDOR_FAILURE_SIGNS）。----
+
+export type FailureCategory = FailureKind | "unknown";
+
+export interface Failure {
+  kind: FailureCategory;
+  /** 给人看的一句话。 */
+  text: string;
+  /** 原始错误，放 title。 */
+  raw: string;
+}
+
+/** 网络断了：Node 的网络错误码和常见说法，哪家厂商都一样。 */
+const NETWORK = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|socket hang up|fetch failed|network error|connection error|unable to connect/i;
+
+const TEXT: Readonly<Record<FailureKind, (serviceName: string) => string>> = {
+  busy: (name) => `${name} 服务繁忙，稍后重试`,
+  quota: (name) => `${name} 额度用完了`,
+  network: () => "网络断了，稍后重试",
+  missing: (name) => `找不到 ${name}`,
+  start: (name) => `${name} 没能启动`,
+  auth: (name) => `${name} 未登录或鉴权失败`,
+  context: (name) => `${name} 上下文超长`,
+};
+
+const UNKNOWN_TEXT = "出错了";
+
+/**
+ * 原始错误 → 一句人话。认不出来的默认写“出错了”；原因本来就可能是给人看的话（Worker 这一轮没做完、定时任务没跑成）时
+ * 传 unknown: "raw"，认不出来就原样显示。
+ */
+export function describeFailure(raw: string, options: { unknown?: "generic" | "raw"; vendor?: AgentVendor } = {}): Failure {
+  const vendor = vendorFailureOf(raw, options.vendor);
+  // 网络断了排在厂商的“服务繁忙”前面：“Connection error” 不是对方忙
+  if (NETWORK.test(raw) && vendor?.kind !== "start" && vendor?.kind !== "missing") return { kind: "network", text: TEXT.network(""), raw };
+  if (vendor) return { kind: vendor.kind, text: TEXT[vendor.kind](vendor.serviceName), raw };
+  const text = options.unknown === "raw" && raw.trim() !== "" ? raw : UNKNOWN_TEXT;
+  return { kind: "unknown", text, raw };
 }
