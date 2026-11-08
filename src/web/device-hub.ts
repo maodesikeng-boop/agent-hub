@@ -145,6 +145,8 @@ export class DeviceHub {
     if (this.closeStream) return;
     this.closeStream = openChangeStream({
       url: (since) => this.client.changeStreamUrl(since),
+      // 前台上报只发给入口本机（联机 P4）
+      reportPresence: !this.remote,
       getSince: () => this.seq,
       onStatus: (status) => {
         this.streamStatus = status;

@@ -141,7 +141,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 - **别吵**：网页开着并且在前台看着的时候不推。浏览器每 30 秒在 WebSocket 上报一次“前台 / 后台 + 正在看哪个对话”，提醒设备据此跳过。（iOS 要求每条推送都必须显示出来，所以只能在服务端少发，不能在 Service Worker 里吞。）
 - **只推标题**（第 9 节拍板）：只推“东京 · 项目 A：等你确定”，不带正文，也不做开关。
 - **点通知**：打开 `/#/d/<设备>/c/<对话>`；Tailscale 没连上时显示 6.1 的提示。iOS 的 Tailscale 可以开“按需连接”，基本不用手动开。
-- **实现**：服务端用 `web-push`（npm，新依赖）；订阅存库，推送服务回 404/410 就删订阅。提醒设备要能出公网访问 `*.push.apple.com`、`fcm.googleapis.com`（东京默认可以）。
+- **实现**：服务端用 `web-push`（npm，新依赖）；订阅存库，推送服务回 404/410 就删订阅，临时失败（网络错误、5xx、429）隔 30 秒重试一次。提醒设备要能出公网访问 `*.push.apple.com`、`fcm.googleapis.com`（东京默认可以）。订阅的 endpoint 只收已知推送服务的主机（`daemon/push/endpoints.ts`：`fcm.googleapis.com`、`updates.push.services.mozilla.com`、`*.push.apple.com`、`*.notify.windows.com`），名单外的 400，状态文件里已存的加载时丢掉（防 SSRF）。推送接口和 WebSocket 前台上报只给入口本机已登录的浏览器，设备令牌来的一律拒。
 - 备选（不推荐，列着备用）：ntfy / Bark / Telegram 机器人。好处是不用装 PWA；坏处是多一个第三方、正文过第三方。
 
 ### 6.3 小屏布局要点（按 docs/ui-standard.md，先补标准再改界面）
@@ -236,3 +236,11 @@ P0 接口约定（小，先合）
 | P7 | `docs/linux.md` 更新（删掉“不能用 serve”）、新增“联机设置”文档（Tailscale 设置、key 过期、配对步骤）、`HANDOVER.md`；真机验收 | 全部 | 低 |
 
 第一批可以同时派 4 个 Worker：P1、P3、P5、P6（P0 很小，可以由派 P1 的 Worker 先做完合掉，其他人基于它开工）。第二批 P2、P4。
+
+### P4 实现说明（2026-11-07）
+
+- 规则：`shared/reminders.ts`（等你、等你确定、停稳 3 秒的 `ReminderTracker`、tag、推送标题）。网页的 `selectors.ts` / `notify.ts` 从这里取；网页的 hook（P3 改成了多设备）还是自己的定时器，以后可以换成 `ReminderTracker`。
+- 守护进程：`daemon/push/`。VAPID 密钥 `state/push-vapid.json`、订阅 `state/push-subscriptions.json`（都是 0600，不进仓库）。订阅没进 sqlite：量很小，也免得和 P2 / P6 抢迁移编号。
+- 前台：网页在入口那条 WebSocket 上每 30 秒（和切前后台时）报 `presence`；任何一个网页在前台（75 秒内报过 visible）就不推。订阅了推送的浏览器退到后台时网页自己不弹，由推送提醒。
+- 跨设备（等 P2）：`PushService.watch(device)` 给每台已配对设备建一个 watcher，P2 用设备令牌开 `/api/state` + `/api/ws?since=`，按 `reset` / `apply` 喂进去；标题带设备名，网址带 `#/d/<设备>/`。
+- 图标：`scripts/render-icons.ts` 生成 `src/web/public/icons/`；`/sw.js` 由 vite 单独打包（`tsconfig.sw.json` 单独做类型检查）。
