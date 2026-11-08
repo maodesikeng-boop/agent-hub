@@ -881,7 +881,7 @@ describe("清理复制那份", () => {
 });
 
 describe("开场说明里的原话（账本查询）", () => {
-  it("只取用户和项目经理的文字：不取工具、Worker 汇报、系统消息、写交接那几轮，用户没回复的不带", () => {
+  it("只取用户和项目经理的文字：不取工具、Worker 汇报、系统消息、写交接那几轮，用户已结束的（已回复、失败、停止）都带，还压着没回的不带", () => {
     const asked = post("问一句");
     turnStart(firstSession, [asked]);
     ledger.applyDriverEvent(firstSession, { type: "agent.tool", at: now, uuid: `u${++uuid}`, toolUseId: "t1", name: "Bash", input: { command: "echo 工具输出" } });
@@ -901,9 +901,9 @@ describe("开场说明里的原话（账本查询）", () => {
     const held = post("压着没回的");
     turnEnd(firstSession, [busy], ["正在聊的回答"]);
     const recent = ledger.sessionPreamble(sessions()[1]!.id)!.split("## 最近的原话")[1]!;
-    expect(recent).toContain("用户：问一句\n\n你：答一句\n\n你：收到汇报");
+    expect(recent).toContain("用户：问一句\n\n你：答一句\n\n你：收到汇报\n\n用户：没发成的");
     expect(recent).toContain("用户：正在聊的\n\n你：正在聊的回答");
-    for (const absent of ["echo", "汇报全文 XYZ", "没发成的", "压着没回的", "交接正文"]) expect(recent).not.toContain(absent);
+    for (const absent of ["echo", "汇报全文 XYZ", "压着没回的", "交接正文"]) expect(recent).not.toContain(absent);
     expect(ledger.getMessage(held)!.status).toBe("queued");
   });
 
@@ -971,9 +971,7 @@ describe("开场说明里的原话（账本查询）", () => {
 });
 
 describe("给已有项目经理换厂商", () => {
-  it("交接提示词、换代（新厂商、新模型、不抄旧厂商额度、更新 pms 并推 pm.updated）、开场说明多出一句", () => {
-    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
-    createSessionStore(db).update(firstSession, { rateLimit: info });
+  it("空闲时在资料页换厂商：当场在同一事务秒切（pms 立即变新厂商、建新会话、switchingToVendor 为 null、0 次旧厂商调用）", () => {
     const asked = post("之前聊的");
     turn(firstSession, [asked], ["之前的回答"]);
 
@@ -981,20 +979,26 @@ describe("给已有项目经理换厂商", () => {
     ledger.onChange((c) => {
       if (c.type === "pm.updated") changes.push(`${c.data.pm.vendor}:${c.data.pm.defaultModel}:${c.data.pm.effort}`);
     });
+    wakes = 0;
 
-    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
-    expect(changes).toEqual(["claude:opus:null"]);
-    expect(rows()).toMatchObject([{ status: "queued", auto: 0, to_vendor: "codex", to_model: "gpt-6-luna", to_effort: "high" }]);
-
-    const job = ledger.claimHandover()!;
-    expect(job.prompt).toContain(
-      "新会话换成 Codex（codex），别写只有 Claude Code（claude）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
-    );
-
-    changes.length = 0;
-    forkAndWrite(job, "交接：换到 codex 接着干");
+    const res = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
+    expect(wakes).toBe(0);
+    expect(ledger.claimHandover()).toBeNull();
 
     const [, g2] = sessions();
+    expect(g2).toBeDefined();
+    expect(rows()).toMatchObject([
+      {
+        status: "switched",
+        method: "direct",
+        auto: 0,
+        from_session_id: firstSession,
+        to_session_id: g2!.id,
+        to_vendor: "codex",
+        to_model: "gpt-6-luna",
+        to_effort: "high",
+      },
+    ]);
     const next = createSessionStore(db).get(g2!.id)!;
     expect(next).toMatchObject({
       vendor: "codex",
@@ -1002,11 +1006,17 @@ describe("给已有项目经理换厂商", () => {
       effort: "high",
       rateLimit: null,
     });
-    expect(changes).toEqual(["codex:gpt-6-luna:high"]);
+    expect(changes.at(-1)).toBe("codex:gpt-6-luna:high");
     expect(ledger.snapshot().pms.find((p) => p.id === pmId)).toMatchObject({
       vendor: "codex",
       defaultModel: "gpt-6-luna",
       effort: "high",
+    });
+    expect(res.persona).toMatchObject({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "high",
+      switchingToVendor: null,
     });
     expect(ledger.getPersona(pmId)).toMatchObject({
       vendor: "codex",
@@ -1016,159 +1026,165 @@ describe("给已有项目经理换厂商", () => {
     });
 
     const preamble = ledger.sessionPreamble(g2!.id)!;
-    expect(preamble).toContain("上一个会话是 Claude Code（claude），提到的工具名按你自己的工具理解。");
+    expect(preamble).toContain(
+      "用户把你的厂商从 Claude Code（claude）换成了 Codex（codex），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。",
+    );
+    expect(preamble).not.toContain("上一个会话写完交接后换成了你");
+    expect(preamble).toContain("## 交接\n\n（上一个会话没有写交接）");
+    expect(preamble).toContain("用户：之前聊的\n\n你：之前的回答");
     expect(preamble).toContain(`上一个会话的原始记录：${TRANSCRIPT}（要查原话可以去翻）`);
   });
 
-  it("从 agy 换到别家：开场说明里原始记录写成“格式是 agy 的，读不了，只看交接和原话”；本会话写交接兜底提示词也带换厂商说明", () => {
+  it("从 agy 换到别家：当场秒切，开场说明里原始记录写成“格式是 agy 的，读不了，只看交接和原话”", () => {
     const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon", effort: "high" });
-    ledger.editPersona(agyPm.pm.id, { vendor: "claude" }, { kind: "user" });
-    const job = ledger.claimHandover()!;
-    expect(job.prompt).toContain(
-      "新会话换成 Claude Code（claude），别写只有 Antigravity（agy）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
-    );
-    // 退回本会话写交接兜底
-    ledger.handoverFailed(job.handoverId, { kind: "unsupported", detail: "agy-copy: fail" });
-    ledger.runAutoRenew();
-    const req = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? ORDER BY id", agyPm.conversation.id).map((r) => ledger.getMessage(r.id)!).find((m) => systemEventOf(m)?.event === "handover.requested")!;
-    expect(req.text).toContain(
-      "新会话换成 Claude Code（claude），别写只有 Antigravity（agy）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。",
-    );
-    turn(agyPm.sessionId, [req.id], ["agy 写的交接"]);
+    const msg = post("agy 聊了一句", agyPm.conversation.id);
+    turn(agyPm.sessionId, [msg], ["agy 回了一句"]);
+
+    const res = ledger.editPersona(agyPm.pm.id, { vendor: "claude" }, { kind: "user" });
+    expect(res.persona).toMatchObject({ vendor: "claude", switchingToVendor: null });
+    expect(ledger.claimHandover()).toBeNull();
+
     const g2 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", agyPm.conversation.id)[1]!.id;
     const preamble = ledger.sessionPreamble(g2)!;
-    expect(preamble).toContain("上一个会话是 Antigravity（agy），提到的工具名按你自己的工具理解。");
+    expect(preamble).toContain(
+      "用户把你的厂商从 Antigravity（agy）换成了 Claude Code（claude），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。",
+    );
     expect(preamble).toContain("上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话");
     expect(preamble).not.toContain(TRANSCRIPT);
   });
 
-  it("失败回退：提示“换到 <新厂商> 没成：<原因>，还在用 <旧厂商>”，推 pm.updated，getPersona 回到旧厂商且 switchingToVendor 为 null，可再次点", () => {
-    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
-    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", switchingToVendor: "codex" });
-    const job = ledger.claimHandover()!;
-    let pmUpdates = 0;
-    ledger.onChange((c) => {
-      if (c.type === "pm.updated") pmUpdates++;
-    });
+  it("旧厂商额度用光（rate_limit 已满、上一条用户消息 failed）时换厂商：当场秒切，带上一份已有交接、超长原话（含 failed 用户消息）与 Worker 汇报目录", () => {
+    const early = post("第一代问题");
+    turn(firstSession, [early], ["第一代回答"]);
+    const { g2 } = renewNow("上一份交接：已完成阶段一");
 
-    const raw = 'API Error: 529 {"type":"overloaded_error"}';
-    ledger.handoverFailed(job.handoverId, { kind: "error", detail: raw });
-    expect(notices()).toEqual(["换到 Codex 没成：Claude 服务繁忙，稍后重试，还在用 Claude Code"]);
-    expect(pmUpdates).toBe(1);
-    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+    // 在第二代聊了超过 HANDOVER_POST_CUT_MAX_CHARS 的原话（直接换厂商不因 post_cut 作废），并收到一条 Worker 汇报
+    const longChat = post("长对话");
+    turn(g2, [longChat], ["甲".repeat(HANDOVER_POST_CUT_MAX_CHARS + 100)]);
+    const workerMsg = report(g2, "Worker 42 汇报正文", 42);
+    turn(g2, [workerMsg], ["收到 42"]);
 
-    // 可再次发起换厂商；未知原因时用 HANDOVER_NOT_WRITTEN_TEXT
-    ledger.editPersona(pmId, { vendor: "agy" }, { kind: "user" });
-    const job2 = ledger.claimHandover()!;
-    ledger.handoverFailed(job2.handoverId, { kind: "timeout", detail: "" });
-    expect(notices().at(-1)).toBe(`换到 Antigravity 没成：${HANDOVER_NOT_WRITTEN_TEXT}，还在用 Claude Code`);
-    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+    // 用户刚发一条消息，撞上旧厂商额度耗尽（turn.ended ok: false -> 消息 status = 'failed'）
+    const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
+    createSessionStore(db).update(g2, { rateLimit: info });
+    const failedMsg = post("刚发出去撞上额度用完的这句话");
+    turn(g2, [failedMsg], [], "failed");
+    expect(ledger.getMessage(failedMsg)!.status).toBe("failed");
+
+    // 换厂商：当场秒切到 g3
+    const res = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
+    expect(res.persona).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", switchingToVendor: null });
+    expect(ledger.claimHandover()).toBeNull();
+
+    const g3 = sessions()[2]!.id;
+    const next = createSessionStore(db).get(g3)!;
+    expect(next).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", rateLimit: null });
+
+    const preamble = ledger.sessionPreamble(g3)!;
+    expect(preamble).toContain("## 交接\n\n上一份交接：已完成阶段一");
+    const recent = preamble.split("## 最近的原话")[1]!;
+    expect(recent).toContain("用户：刚发出去撞上额度用完的这句话");
+    expect(recent).toContain("用户：长对话");
+    expect(preamble).toContain("## 交接之后到的 Worker 汇报（交接里没有，只列目录）\n\n- #42「Worker 42」做完了，全文 `hub worker show 42 --report`");
   });
 
-  it("重启、关机、用户消息打断等不算次数的失败重排时保留 to_vendor 三列", () => {
-    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "low" }, { kind: "user" });
-    const job1 = ledger.claimHandover()!;
-    ledger.handoverForked(job1.handoverId, { kind: "native", ref: REF });
-    // 重启恢复
-    ledger = open();
-    ledger.recoverAfterRestart();
-    expect(rows().at(-1)).toMatchObject({
-      status: "queued",
-      auto: 0,
-      to_vendor: "codex",
-      to_model: "gpt-6-luna",
-      to_effort: "low",
-    });
-    expect(ledger.getPersona(pmId)).toMatchObject({
-      vendor: "codex",
-      model: "gpt-6-luna",
-      effort: "low",
-      switchingToVendor: "codex",
-    });
+  it("旧厂商正在忙（working 或有 backgroundTasks）时换厂商：不调旧厂商写交接，switchingToVendor 为新厂商；中途可撤销（abandoned）；这一轮结束（含报错结束）立即切到新厂商", () => {
+    // 1. 旧会话正在 working 时换厂商，中途点撤销：直接 abandoned 取消
+    const busy1 = post("在忙第一轮");
+    turnStart(firstSession, [busy1]);
+    const { change } = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+    expect(ledger.claimHandover()).toBeNull();
+    expect(rows()).toMatchObject([{ status: "ready", method: "direct", to_vendor: "codex", to_model: "gpt-6-luna" }]);
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", switchingToVendor: "codex" });
 
-    // 本会话写交接被用户消息打断
-    const job2 = ledger.claimHandover()!;
-    ledger.handoverFailed(job2.handoverId, { kind: "unsupported", detail: "" });
+    ledger.revertPersonaChange(change!.id);
+    expect(rows()).toMatchObject([{ status: "abandoned", method: "direct", failure_reason: "user_message", to_vendor: null }]);
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
+    turnEnd(firstSession, [busy1], ["第一轮回完"]);
+    expect(sessions()).toHaveLength(1);
+
+    // 2. 旧会话正在 working 时换厂商，期间改新厂商思考程度、又排了一条消息，随后旧会话报错结束（ok: false）：立即切到新厂商
+    const busy2 = post("在忙但马上报错的一轮");
+    turnStart(firstSession, [busy2]);
+    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+    ledger.editPersona(pmId, { effort: "high" }, { kind: "user" });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", switchingToVendor: "codex" });
+    const queuedMsg = post("等切换后新厂商处理的");
+    expect(ledger.waitsForHandover(queuedMsg)).toBe(true);
+
+    turnEnd(firstSession, [busy2], [], "failed");
+    const [, g2] = sessions();
+    expect(g2).toBeDefined();
+    expect(createSessionStore(db).get(g2!.id)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high" });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", switchingToVendor: null });
+    expect(ledger.getMessage(queuedMsg)).toMatchObject({ status: "queued", sessionId: g2!.id });
+    expect(ledger.sessionPreamble(g2!.id)!.split("## 最近的原话")[1]).toContain("用户：在忙但马上报错的一轮");
+
+    // 3. 旧会话有后台任务（backgroundTasks > 0）时换厂商：等后台任务归零立即切
+    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 1 });
+    ledger.editPersona(pmId, { vendor: "agy", model: "gemini-4-argon", effort: "medium" }, { kind: "user" });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "medium", switchingToVendor: "agy" });
+    expect(sessions()).toHaveLength(2);
+    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 0 });
+    expect(sessions()).toHaveLength(3);
+    expect(createSessionStore(db).get(sessions()[2]!.id)).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "medium" });
+    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "agy", switchingToVendor: null });
+  });
+
+  it("与自动换会话撞上：未写完的直接改为 direct 秒切（in_session 的停止 H）；已 ready 有交接文本的复用该文本切换，撤销时清回 NULL", () => {
+    // 1. 自动交接正在 in_session 写交接时用户点换厂商：请求停掉 H、改成 direct，那一轮停下后立即切到新厂商
+    reachThreshold();
+    const job1 = ledger.claimHandover()!;
+    ledger.handoverFailed(job1.handoverId, { kind: "unsupported", detail: "" });
+    now += AUTO_RENEW_IDLE_MS;
     ledger.runAutoRenew();
     const req = requests()[0]!.id;
     turnStart(firstSession, [req]);
-    const msg = post("打断一下");
-    turnEnd(firstSession, [req], ["半截"], "interrupted");
-    expect(rows().at(-1)).toMatchObject({
-      status: "queued",
-      auto: 0,
-      to_vendor: "codex",
-      to_model: "gpt-6-luna",
-      to_effort: "low",
-    });
-    turn(firstSession, [msg], ["回完用户"]);
-    const job3 = ledger.claimHandover()!;
-    forkAndWrite(job3, "终于写完");
-    expect(createSessionStore(db).get(sessions()[1]!.id)).toMatchObject({
-      vendor: "codex",
-      model: "gpt-6-luna",
-      effort: "low",
-    });
-  });
+    stops.length = 0;
 
-  it("与自动换会话撞上：合并到同一行；已 ready 且旧会话空闲时当场换代；换代前撤销时清回 NULL 按普通换会话走完", () => {
-    // 1. 自动交接正在 writing 时发起换厂商，再撤销：交接照常按旧厂商走完
-    reachThreshold();
-    const job1 = ledger.claimHandover()!;
-    ledger.handoverForked(job1.handoverId, { kind: "native", ref: REF });
-    const { change } = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toMatchObject({
-      id: job1.handoverId,
+    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
+    expect(stops).toEqual([{ conversationId, sessionId: firstSession }]);
+    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "ready", method: "direct", to_vendor: "codex", to_model: "gpt-6-luna" });
+
+    turnEnd(firstSession, [req], ["半截交接"], "interrupted");
+    const [, g2] = sessions();
+    expect(g2).toBeDefined();
+    expect(createSessionStore(db).get(g2!.id)).toMatchObject({ vendor: "codex", model: "gpt-6-luna" });
+    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "switched", method: "direct", to_session_id: g2!.id });
+
+    // 2. 自动交接已经 ready 且有写好的交接文本（因后台任务未换）：换厂商时复用该文本，换代前撤销则清回 NULL 按普通换会话走完
+    reachThreshold(g2!.id);
+    const job2 = ledger.claimHandover()!;
+    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 1 });
+    forkAndWrite(job2, "刚好写好的现成交接");
+    expect(rows().at(-1)).toMatchObject({ id: job2.handoverId, status: "ready", method: "native" });
+
+    const { change } = ledger.editPersona(pmId, { vendor: "claude", model: "opus" }, { kind: "user" });
+    expect(rows().at(-1)).toMatchObject({
+      id: job2.handoverId,
+      status: "ready",
+      method: "native",
       auto: 0,
-      status: "writing",
-      to_vendor: "codex",
-      to_model: "gpt-6-luna",
-      to_effort: null,
+      to_vendor: "claude",
+      to_model: "opus",
     });
-    // 换代前撤销
+
+    // 换代前撤销：清回 NULL，保留已写好的交接
     ledger.revertPersonaChange(change!.id);
-    expect(rows()[0]).toMatchObject({
-      id: job1.handoverId,
-      auto: 0,
-      status: "writing",
+    expect(rows().at(-1)).toMatchObject({
+      id: job2.handoverId,
+      status: "ready",
+      method: "native",
       to_vendor: null,
       to_model: null,
       to_effort: null,
     });
-    expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
-    ledger.handoverWritten(job1.handoverId, { text: "普通换会话交接", usage: USAGE });
-    const g2 = sessions()[1]!.id;
-    expect(createSessionStore(db).get(g2)).toMatchObject({ vendor: "claude", model: "opus" });
 
-    // 2. 自动交接已经 ready（因为有后台任务没换），后台任务结束后但在 runAutoRenew 之前用户点换厂商：当场完成换代
-    reachThreshold(g2);
-    const job2 = ledger.claimHandover()!;
-    ledger.applyDriverEvent(g2, { type: "background.changed", at: now, count: 1 });
-    forkAndWrite(job2, "已写好的交接");
-    expect(rows().at(-1)!.status).toBe("ready");
-    // 设一个直接把后台任务计数清回 0 但还没调 trySwitch 的情形（或模拟 ready 且空闲时改厂商）：
-    // 先在有后台任务时改厂商 -> 合并到 ready 行但还不换；随后再改或空闲时直接换
-    db.run("UPDATE handovers SET status = 'ready' WHERE id = ?", job2.handoverId);
-    // 让旧会话空闲且无后台任务：先清掉后台任务但把 row 保持 ready 来测试 editPersona 里直接触发 trySwitch
-    ledger.applyDriverEvent(g2, { type: "background.changed", at: now, count: 0 });
-    // 上面 background.changed 已经把 job2 换到了 g3；我们在 g3 上造一行 ready 且空闲的交接行
+    // 再点换厂商，然后后台任务归零：带着现成交接切到新厂商
+    ledger.editPersona(pmId, { vendor: "claude", model: "opus", effort: "high" }, { kind: "user" });
+    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 0 });
     const g3 = sessions()[2]!.id;
-    reachThreshold(g3);
-    const job3 = ledger.claimHandover()!;
-    const busy = post("忙一下");
-    turnStart(g3, [busy]);
-    forkAndWrite(job3, "早就写好的交接");
-    expect(rows().at(-1)!.status).toBe("ready");
-    // 假设旧会话已经回到 idle 但还没触发 trySwitch（例如重启后尚未跑 runAutoRenew）
-    db.run("UPDATE messages SET status = 'replied' WHERE id = ?", busy);
-    ledger = open();
-    expect(rows().at(-1)!.status).toBe("ready");
-    const res = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-5.6-terra", effort: "medium" }, { kind: "user" });
-    expect(rows().at(-1)!.status).toBe("switched");
-    const g4 = sessions()[3]!.id;
-    expect(createSessionStore(db).get(g4)).toMatchObject({ vendor: "codex", model: "gpt-5.6-terra", effort: "medium" });
-    expect(res.persona).toMatchObject({ vendor: "codex", model: "gpt-5.6-terra", effort: "medium", switchingToVendor: null });
-    expect(ledger.sessionPreamble(g4)).toContain("上一个会话是 Claude Code（claude），提到的工具名按你自己的工具理解。");
+    expect(createSessionStore(db).get(g3)).toMatchObject({ vendor: "claude", model: "opus", effort: "high" });
+    expect(ledger.sessionPreamble(g3)).toContain("## 交接\n\n刚好写好的现成交接");
   });
 });
