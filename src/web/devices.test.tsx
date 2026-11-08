@@ -366,4 +366,114 @@ describe("设置 → 设备", () => {
     await userEvent.keyboard("{Escape}");
     expect(await within(nav()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
   });
+
+  it("设备行显示连法标签（SSH 隧道 / Tailscale），不用 · 拼接", async () => {
+    const fleet = new Fleet(
+      onePm("小林"),
+      onePm("阿青"),
+      [
+        { ...mac, transport: { kind: "local" } },
+        { ...tokyo, transport: { kind: "ssh-tunnel", role: "hub" } },
+      ],
+    );
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /阿青/ });
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const devices = await screen.findByRole("region", { name: "设备" });
+    const rows = within(devices).getAllByTestId("device-row");
+    expect(rows[0]).not.toHaveTextContent("SSH 隧道");
+    expect(rows[0]).not.toHaveTextContent("Tailscale");
+    expect(rows[1]).toHaveTextContent("SSH 隧道");
+    expect(rows[1]!.textContent).not.toContain("·");
+  });
+
+  it("隧道状态行展示 5 种状态、title 放英文原文、重试按钮调 /api/devices/tunnel/retry", async () => {
+    const localSnap: StateSnapshot = {
+      ...onePm("小林"),
+      tunnel: { state: "retrying", since: 1, retryAt: 2, detail: "Connection refused" },
+    };
+    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+    const fetchMock = vi.mocked(fetch);
+    const inner = fetchMock.getMockImplementation()!;
+    let retried = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/devices/tunnel/retry" && init?.method === "POST") {
+        retried++;
+        return Response.json({ status: { state: "connecting", since: 3, retryAt: null, detail: null } });
+      }
+      return inner(input, init);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const devices = await screen.findByRole("region", { name: "设备" });
+    const tunnelRow = within(devices).getByTestId("tunnel-row");
+    const statusSpan = within(tunnelRow).getByText("Retrying…");
+    expect(statusSpan).toHaveAttribute("title", "Connection refused");
+    expect(tunnelRow).not.toHaveTextContent("Connection refused");
+    await userEvent.click(within(tunnelRow).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(retried).toBe(1));
+  });
+
+  it.each([
+    ["connecting", "Connecting…", false],
+    ["connected", "Connected", false],
+    ["auth_failed", "密钥被拒绝", true],
+    ["hostkey_mismatch", "服务器指纹变了", true],
+  ] as const)("隧道状态 %s 显示 %s（带重试=%s）", async (state, expectedText, hasRetry) => {
+    const localSnap: StateSnapshot = {
+      ...onePm("小林"),
+      tunnel: { state, since: 1, retryAt: null, detail: "Permission denied (publickey)." },
+    };
+    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const devices = await screen.findByRole("region", { name: "设备" });
+    const tunnelRow = within(devices).getByTestId("tunnel-row");
+    expect(within(tunnelRow).getByText(expectedText)).toBeInTheDocument();
+    expect(within(tunnelRow).queryByRole("button", { name: "重试" }) !== null).toBe(hasRetry);
+  });
+
+  it("“连到中心”向导：展示带 repoDir 的 join 命令、贴连接码调 /api/devices/tunnel/connect，错码显示中文错误", async () => {
+    const localSnap: StateSnapshot = {
+      ...onePm("小林"),
+      server: { ...onePm("小林").server, repoDir: "/Users/me/agent-hub" },
+      tunnel: null,
+    };
+    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+    const fetchMock = vi.mocked(fetch);
+    const inner = fetchMock.getMockImplementation()!;
+    const connectedCodes: string[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/devices/tunnel/connect" && init?.method === "POST") {
+        const { code } = JSON.parse(String(init.body)) as { code: string };
+        connectedCodes.push(code);
+        if (!code.startsWith("ahtun1_")) {
+          return Response.json({ code: "invalid", error: "连接码格式不对" }, { status: 400 });
+        }
+        return Response.json({ status: { state: "connecting", since: 10, retryAt: null, detail: null } });
+      }
+      return inner(input, init);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const devices = await screen.findByRole("region", { name: "设备" });
+    expect(within(devices).queryByTestId("tunnel-row")).toBeNull();
+
+    await userEvent.click(within(devices).getByRole("button", { name: "连到中心" }));
+    const panel = await screen.findByRole("region", { name: "连到中心" });
+    expect(panel).toHaveTextContent("node /Users/me/agent-hub/src/tunnel/main.ts join -i ~/.ssh/<密钥> ubuntu@<服务器IP>");
+
+    const codeInput = within(panel).getByRole("textbox", { name: "连接码" });
+    await userEvent.type(codeInput, "bad_code{Enter}");
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("连接码格式不对");
+
+    await userEvent.clear(codeInput);
+    await userEvent.type(codeInput, "ahtun1_valid_code");
+    await userEvent.click(screen.getByRole("button", { name: "连接" }));
+    await waitFor(() => expect(connectedCodes).toEqual(["bad_code", "ahtun1_valid_code"]));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "连到中心" })).toBeNull());
+  });
 });

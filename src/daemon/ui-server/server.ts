@@ -6,6 +6,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -71,6 +73,8 @@ import {
   type RetryMessageResponse,
   type ServerInfo,
   type StateSnapshot,
+  type TunnelStatus,
+  type TunnelStatusResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
@@ -91,7 +95,7 @@ import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
 import { peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
-import type { TunnelStatus } from "../../shared/tunnel.ts";
+import { TunnelInputError } from "../tunnel/index.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
 import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
@@ -154,10 +158,18 @@ export interface UiServerOptions {
   peerProxy?: PeerRoutesOptions["proxy"];
   /**
    * ssh 隧道（daemon/tunnel/，docs/hub-tunnel-design.md 第 6 节）：状态原样进 /api/state 的 tunnel（没连过中心是 null）；
-   * 状态一变给每条 WebSocket 发 resync，网页重拉快照。不给 = /api/state 不带 tunnel。
+   * 状态一变给每条 WebSocket 发 resync，网页重拉快照。不给 = /api/state 不带 tunnel，/api/devices/tunnel/* 回 404。
    */
-  tunnel?: { status(): TunnelStatus | null; onChange(listener: (status: TunnelStatus | null) => void): () => void };
+  tunnel?: {
+    status(): TunnelStatus | null;
+    onChange(listener: (status: TunnelStatus | null) => void): () => void;
+    connect?(code: string): Promise<TunnelStatus>;
+    retry?(): void;
+  };
 }
+
+/** 仓库根目录（供本机向导拼 node <repoDir>/src/tunnel/main.ts join 命令）。 */
+export const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
 const COOKIE_MAX_AGE_SECONDS = SESSION_MAX_AGE_MS / 1000;
@@ -442,7 +454,7 @@ function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Att
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
-  const serverInfo = opts.serverInfo ?? serverInfoFor(process.platform);
+  const serverInfo = opts.serverInfo ?? { ...serverInfoFor(process.platform), repoDir: ROOT_DIR };
   // 默认的 open 只有 macOS 上有；不是 macOS 又没注入假的：回 501，不去起一个不存在的 open
   const runOpen: RunOpen =
     opts.runOpen ??
@@ -655,12 +667,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError | TunnelInputError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ConversationNotFoundError) return fail(reply, "not_found");
     if (err instanceof UploadError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof LedgerRequestError) return fail(reply, err.code, reason);
+    if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
     // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
     if (status === 413) {
@@ -790,6 +803,20 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         ...(opts.peerProxy ? { proxy: opts.peerProxy } : {}),
       });
     }
+
+    routes.post(API_PATHS.tunnelConnect, async (req, reply) => {
+      if (!opts.tunnel?.connect) return fail(reply, "not_found");
+      const raw = parseObjectBody(req.body, ["code"]);
+      if (typeof raw.code !== "string") throw new HttpError(400, "code must be a string");
+      return { status: await opts.tunnel.connect(raw.code) } satisfies TunnelStatusResponse;
+    });
+
+    routes.post(API_PATHS.tunnelRetry, async (req, reply) => {
+      if (!opts.tunnel?.retry) return fail(reply, "not_found");
+      parseObjectBody(req.body ?? {}, []);
+      opts.tunnel.retry();
+      return { status: opts.tunnel.status() } satisfies TunnelStatusResponse;
+    });
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({
       ...ledger.snapshot(),
@@ -1030,8 +1057,8 @@ export interface RunningUiServer {
   close(): Promise<void>;
 }
 
-/** 设备入口听哪：连入方用 unix socket（paths.ts 的 peerSock，0600），中心用 TCP 127.0.0.1（limits.ts 的 DEFAULT_PEER_ENTRY_PORT，0 = 系统分配）。 */
-export type PeerEntryListen = { socket: string } | { port: number };
+/** 设备入口听哪：连入方用 unix socket（paths.ts 的 peerSock，0600），中心用 TCP 127.0.0.1（limits.ts 的 DEFAULT_PEER_ENTRY_PORT，0 = 系统分配）；Linux 同时听两个。 */
+export type PeerEntryListen = { socket?: string; port?: number };
 
 /**
  * 另起一个 HTTP 服务听 Unix socket 或 127.0.0.1 的端口：收到的请求（含 WebSocket 握手）记下是从哪听到的，交给同一个 Fastify 处理。
@@ -1080,8 +1107,11 @@ export async function startUiServer(opts: UiServerOptions & { port: number; serv
   let peerEntryPort: number | undefined;
   try {
     if (opts.serveSocket !== undefined) sideServers.push(await listenSide(app, "serveSocket", { socket: opts.serveSocket }));
-    if (opts.peerEntry !== undefined) {
-      const peerServer = await listenSide(app, "peerEntry", opts.peerEntry);
+    if (opts.peerEntry?.socket !== undefined) {
+      sideServers.push(await listenSide(app, "peerEntry", { socket: opts.peerEntry.socket }));
+    }
+    if (opts.peerEntry?.port !== undefined) {
+      const peerServer = await listenSide(app, "peerEntry", { port: opts.peerEntry.port });
       sideServers.push(peerServer);
       const peerAddr = peerServer.address();
       if (peerAddr !== null && typeof peerAddr === "object") peerEntryPort = peerAddr.port;

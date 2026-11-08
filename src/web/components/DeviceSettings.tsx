@@ -1,21 +1,39 @@
-// 设置 → 设备（docs/multi-device-design.md 第 3.2、4.2 节）：设备列表（名字、系统、在线状态）、邀请、添加、改名、移除。
+// 设置 → 设备（docs/multi-device-design.md 第 3.2、4.2 节，docs/hub-tunnel-design.md 第 8 节）：设备列表（名字、系统、连法、在线状态）、连到中心、邀请、添加、改名、移除。
 // 这些都是入口自己的接口（不转发），一律走 client.ts 里入口本机的那几个函数；改完让外面重新拉设备清单。
 import { Loader2, Pencil, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { normalizeName, type DeviceId, type DeviceInviteResponse } from "../../shared/index.ts";
-import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite } from "../client.ts";
+import { useEffect, useRef, useState } from "react";
+import {
+  PEER_TRANSPORT_SPECS,
+  normalizeName,
+  type DeviceId,
+  type DeviceInviteResponse,
+  type TunnelState,
+  type TunnelStatus,
+} from "../../shared/index.ts";
+import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite, postTunnelConnect, postTunnelRetry } from "../client.ts";
 import { platformLabel, type DeviceView } from "../devices.ts";
 import { errorText, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
+import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
 import { StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-/** 设置弹窗要的：所有设备（入口本机第一），改了之后重新拉清单。 */
+/** 设置弹窗要的：所有设备（入口本机第一）、本机隧道状态与仓库路径，改了之后重新拉清单。 */
 export interface DeviceSettings {
   devices: readonly DeviceView[];
+  tunnel?: TunnelStatus | null;
+  repoDir?: string;
   onChanged: () => void;
 }
+
+const TUNNEL_STATE_SPECS: Record<TunnelState, { text: string; canRetry: boolean }> = {
+  connecting: { text: "Connecting…", canRetry: false },
+  connected: { text: "Connected", canRetry: false },
+  retrying: { text: "Retrying…", canRetry: true },
+  auth_failed: { text: "密钥被拒绝", canRetry: true },
+  hostkey_mismatch: { text: "服务器指纹变了", canRetry: true },
+};
 
 function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: boolean) => void }) {
   const [name, setName] = useState(device.info.name);
@@ -112,6 +130,9 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
         detail={
           <span className="flex items-center gap-3">
             <span>{platformLabel(info.platform)}</span>
+            {!info.self && info.transport && info.transport.kind !== "local" && (
+              <span>{PEER_TRANSPORT_SPECS[info.transport.kind].label}</span>
+            )}
             {info.self ? (
               <span>本机</span>
             ) : (
@@ -245,16 +266,134 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-/** 设置弹窗里的“设备”一组，下面按需展开“邀请”或“添加”。 */
-export function DevicesSection({ devices, onChanged }: DeviceSettings) {
-  const [panel, setPanel] = useState<"invite" | "add" | null>(null);
-  const toggle = (next: "invite" | "add") => setPanel((p) => (p === next ? null : next));
+/** 本机到中心的 ssh 隧道状态行（docs/hub-tunnel-design.md 第 8 节）。报错英文原文只放 title。 */
+function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ErrorLike | null>(null);
+  const spec = TUNNEL_STATE_SPECS[tunnel.state];
+  const retry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postTunnelRetry();
+      onChanged();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-testid="tunnel-row">
+      <SettingsRow
+        label="中心隧道"
+        error={error}
+        detail={<span title={tunnel.detail ?? undefined}>{spec.text}</span>}
+      >
+        {() =>
+          spec.canRetry ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => void retry()}>
+              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              重试
+            </Button>
+          ) : null
+        }
+      </SettingsRow>
+    </div>
+  );
+}
+
+/** 连到中心（SSH 隧道）：给出带本机仓库路径的 join 命令，或贴入 ahtun1_ 连接码连接。 */
+function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: () => void }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ErrorLike | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+
+  const command = `node ${repoDir ?? "~/agent-hub"}/src/tunnel/main.ts join -i ~/.ssh/<密钥> ubuntu@<服务器IP>`;
+  const ready = code.trim() !== "" && !busy;
+
+  const copy = () => {
+    void copyText(command).then(() => {
+      setCopied(true);
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
+    });
+  };
+
+  const submit = async () => {
+    if (!ready) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await postTunnelConnect(code.trim());
+      setCode("");
+      onConnected();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      className="grid gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <SettingsGroup title="连到中心">
+        <SettingsRow
+          label="终端命令"
+          detail={<code className="block break-all font-mono text-[13.5px] select-all">{command}</code>}
+        >
+          {(id) => (
+            <Button id={id} type="button" variant="outline" size="sm" onClick={copy}>
+              {copied ? "已复制" : "复制"}
+            </Button>
+          )}
+        </SettingsRow>
+        <SettingsRow label="连接码" error={error}>
+          {(id) => (
+            <Input
+              id={id}
+              value={code}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="ahtun1_…"
+              className="w-[240px] font-mono"
+              onChange={(e) => setCode(e.target.value)}
+            />
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+      <div className="flex justify-end">
+        <Button type="submit" disabled={!ready}>
+          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          连接
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** 设置弹窗里的“设备”一组，下面按需展开“连到中心”、“邀请”或“添加”。 */
+export function DevicesSection({ devices, tunnel, repoDir, onChanged }: DeviceSettings) {
+  const [panel, setPanel] = useState<"tunnel" | "invite" | "add" | null>(null);
+  const toggle = (next: "tunnel" | "invite" | "add") => setPanel((p) => (p === next ? null : next));
   return (
     <>
       <SettingsGroup
         title="设备"
         action={
           <span className="flex gap-2">
+            <Button variant="ghost" size="sm" aria-expanded={panel === "tunnel"} onClick={() => toggle("tunnel")}>
+              连到中心
+            </Button>
             <Button variant="ghost" size="sm" aria-expanded={panel === "invite"} onClick={() => toggle("invite")}>
               邀请
             </Button>
@@ -267,7 +406,17 @@ export function DevicesSection({ devices, onChanged }: DeviceSettings) {
         {devices.map((device) => (
           <DeviceRow key={device.key} device={device} onChanged={onChanged} />
         ))}
+        {tunnel !== null && tunnel !== undefined && <TunnelRow tunnel={tunnel} onChanged={onChanged} />}
       </SettingsGroup>
+      {panel === "tunnel" && (
+        <TunnelPanel
+          {...(repoDir !== undefined ? { repoDir } : {})}
+          onConnected={() => {
+            setPanel(null);
+            onChanged();
+          }}
+        />
+      )}
       {panel === "invite" && <InvitePanel />}
       {panel === "add" && (
         <AddPanel

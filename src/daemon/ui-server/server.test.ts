@@ -31,7 +31,7 @@ import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { Db } from "../store/index.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
-import { createUiServer, startUiServer } from "./server.ts";
+import { ROOT_DIR, createUiServer, startUiServer } from "./server.ts";
 import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
@@ -386,7 +386,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     };
     const res = await call("GET", "/api/state");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
+    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
     expect(res.headers["cache-control"]).toBe("no-store");
   });
 
@@ -403,7 +403,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     const body = (await call("GET", "/api/state")).json();
     expect(body.projects).toEqual([project]);
     expect(body.folders).toHaveLength(2);
-    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
+    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
   });
 
   it("?before= 把对话编号和消息编号原样交给账本，返回它给的页", async () => {
@@ -561,7 +561,7 @@ describe("Worker 的对话（M3，kind worker）：界面服务不另设接口�
       ...ledger.snapshotValue,
       conversations: [{ conversation: workerConversation, messages: [{ ...makeMessage(6, 30), sender: "pm", workerId: 3 }, line], hasMore: false }],
     };
-    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: serverInfoFor(process.platform) });
+    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
   });
 
   it("按会话翻页、点停止：和项目经理的对话一样", async () => {
