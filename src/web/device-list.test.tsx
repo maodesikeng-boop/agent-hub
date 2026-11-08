@@ -112,11 +112,11 @@ describe("设备清单拉不到", () => {
     store.dispose();
   });
 
-  it("界面：第一次就拉不到时显示“设备清单没拉到 重试中”，拉到后消失", async () => {
+  it("界面：第一次就拉不到时显示“暂时看不到其他设备 Retrying…”，拉到后消失", async () => {
     installFetch([500, [mac]]);
     render(<App />);
-    expect(await screen.findByText("设备清单没拉到")).toBeInTheDocument();
-    expect(screen.getByText("重试中")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText("设备清单没拉到")).toBeNull(), { timeout: 3000 });
+    expect(await screen.findByText("暂时看不到其他设备")).toBeInTheDocument();
+    expect(screen.getByText("Retrying…")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("暂时看不到其他设备")).toBeNull(), { timeout: 3000 });
   });
 });
