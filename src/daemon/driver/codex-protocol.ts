@@ -1,9 +1,7 @@
 // OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
 // 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 可写范围 / 只读模式的审批判定。
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
-  PS_TIMEOUT_MS,
   connectorToolAllowed,
   commandMayWriteOutsideScope,
   scopeAllowsWrite,
@@ -18,23 +16,20 @@ import {
   type QuotaWindowKey,
   windowKeyByMinutes,
 } from "../../shared/index.ts";
+import { runPs } from "./process.ts";
 
-const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
 /**
  * 用 ps 检查 pid 对应的进程命令行是否为残留的 `codex app-server`。
  * 是则返回其进程组号 pgid，否则（或进程已不存在）返回 null。
  */
-export function codexOfSession(pid: number): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=,command=", "-p", String(pid)], PS_OPTIONS, (error, stdout) => {
-      if (error) return resolve(null);
-      const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-      if (!match) return resolve(null);
-      const command = match[2]!;
-      resolve(/codex/i.test(command) && /app-server/i.test(command) ? Number(match[1]) : null);
-    });
-  });
+export async function codexOfSession(pid: number): Promise<number | null> {
+  const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]);
+  if (stdout === null) return null;
+  const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+  if (!match) return null;
+  const command = match[2]!;
+  return /codex/i.test(command) && /app-server/i.test(command) ? Number(match[1]) : null;
 }
 
 /** Codex App-Server 固定启动参数（M0 实测验证）。 */
