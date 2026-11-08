@@ -1,5 +1,6 @@
 // WebSocket 变化推送：断了自动重连（间隔 1、2、4… 秒，最多 10 秒），重连时带上最后收到的 seq。
-import { CHANGE_TYPES, type WsServerMessage } from "../shared/index.ts";
+import { CHANGE_TYPES, type WsClientMessage, type WsServerMessage } from "../shared/index.ts";
+import { startPresence } from "./presence.ts";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting";
 
@@ -10,6 +11,8 @@ export interface ChangeStreamHandlers {
   getSince(): number;
   onMessage(message: WsServerMessage): void;
   onStatus(status: ConnectionStatus): void;
+  /** 在这条连接上报前台状态（presence.ts）：只给入口本机的那条（联机 P4），别的设备的转发不报。 */
+  reportPresence?: boolean;
 }
 
 const BASE_DELAY_MS = 1_000;
@@ -41,6 +44,7 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   let closed = false;
+  let stopPresence: (() => void) | undefined;
 
   const connect = () => {
     timer = undefined;
@@ -49,12 +53,22 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
     ws.onopen = () => {
       attempt = 0;
       handlers.onStatus("open");
+      if (handlers.reportPresence) {
+        stopPresence?.();
+        stopPresence = startPresence((message) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message satisfies WsClientMessage));
+        });
+      }
     };
     ws.onmessage = (ev) => {
       const message = parseServerMessage(ev.data);
       if (message) handlers.onMessage(message);
     };
     ws.onclose = () => {
+      if (socket === ws) {
+        stopPresence?.();
+        stopPresence = undefined;
+      }
       if (closed || socket !== ws) return;
       socket = null;
       handlers.onStatus("reconnecting");
@@ -67,6 +81,7 @@ export function openChangeStream(handlers: ChangeStreamHandlers): () => void {
 
   return () => {
     closed = true;
+    stopPresence?.();
     if (timer !== undefined) clearTimeout(timer);
     const ws = socket;
     socket = null;

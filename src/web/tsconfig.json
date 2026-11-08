@@ -5,5 +5,5 @@
     "types": []
   },
   "include": ["."],
-  "exclude": []
+  "exclude": ["sw.ts"]
 }

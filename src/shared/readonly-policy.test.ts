@@ -48,10 +48,21 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     expect(p.secretPaths).toContain("/Users/u/.ssh");
     expect(p.secretPaths).toContain("/Users/u/.config/gh");
     expect(p.secretPaths).toContain("/Users/u/.codex/auth.json");
+    expect(p.secretPaths).toContain("/Users/u/.claude/.credentials.json");
+    expect(p.secretPaths).toContain("/Users/u/.gemini/oauth_creds.json");
     expect(p.secretPaths).toContain("/Users/u/Library/Keychains");
     expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/ui-token");
     expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length + 1);
     expect(p.secretPaths.every((x) => x.startsWith("/") && !x.includes("~"))).toBe(true);
+  });
+
+  it("凭据清单（和分享共用）和厂商的令牌文件都在禁读里", () => {
+    const secrets = [
+      ".azure", ".config/hub", ".password-store", "Library/Cookies", ".local/share/keyrings", ".config/google-chrome", ".config/chromium", ".mozilla", ".zsh_history", ".bash_history",
+      ".claude.json", ".claude/.credentials.json", ".codex/auth.json", ".codex/.credentials.json", ".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json",
+    ];
+    const p = policy();
+    for (const rel of secrets) expect(p.secretPaths, rel).toContain(`/Users/u/${rel}`);
   });
 
   it("hub.sqlite 和日志不在禁读里（排查要读：库里没有现行令牌，查证见 readonly-policy.ts）；通配含 .env 和私钥", () => {
