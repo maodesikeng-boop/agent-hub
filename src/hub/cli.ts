@@ -43,40 +43,173 @@ const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 /** 命令名（names.ts 的 HUB_COMMAND），下面的用法和报错里用。 */
 const hub = HUB_COMMAND;
 
-/** hub 用法，给人看（hub help、用法不对时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
-export const HUB_USAGE = `用法：
-  ${hub} status                                              我是谁、我的项目和文件夹
-  ${hub} project create --folder <主文件夹> [--name <名>] [--description <说明>]
-                                                          建项目（一个项目经理只管一个项目）
-  ${hub} project attach <文件夹>                             给项目挂上附加文件夹
-  ${hub} project detach <文件夹>                             从项目上移除附加文件夹
-  ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
+export interface HubCommandSpec {
+  command: HubCommand;
+  group: string;
+  action?: string;
+  /** 命令行写法，如 "project create"、"status"、"worker log"。 */
+  cli: string;
+  /** HUB_USAGE 里该命令对应的用法行（含缩进）。 */
+  usage: string;
+}
+
+/** 结构化命令规格表：生成 HUB_USAGE、按命令打印简短用法、以及单测防漂移守卫共用。 */
+export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
+  {
+    command: "status",
+    group: "status",
+    cli: "status",
+    usage: `  ${hub} status                                              我是谁、我的项目和文件夹`,
+  },
+  {
+    command: "project.create",
+    group: "project",
+    action: "create",
+    cli: "project create",
+    usage: `  ${hub} project create --folder <主文件夹> [--name <名>] [--description <说明>]
+                                                          建项目（一个项目经理只管一个项目）`,
+  },
+  {
+    command: "project.attach",
+    group: "project",
+    action: "attach",
+    cli: "project attach",
+    usage: `  ${hub} project attach <文件夹>                             给项目挂上附加文件夹`,
+  },
+  {
+    command: "project.detach",
+    group: "project",
+    action: "detach",
+    cli: "project detach",
+    usage: `  ${hub} project detach <文件夹>                             从项目上移除附加文件夹`,
+  },
+  {
+    command: "project.setup",
+    group: "project",
+    action: "setup",
+    cli: "project setup",
+    usage: `  ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
                                                           给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工。
                                                           用守护进程的 $SHELL -c 跑，标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
                                                           能用 AGENT_HUB_ROOT_PATH（主文件夹）、AGENT_HUB_WORKTREE_PATH。
-                                                          别把密钥写进命令：原文会出现在日志和失败附注里
-  ${hub} persona show
-  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
-  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
-                                                          派一个 Worker，任务说明从标准输入读
-  ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做
-  ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话
-  ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度
-  ${hub} worker show <编号> [--task | --report [N]]            一个 Worker 现在的情况：状态、在干什么、这一轮和上一轮、进程、分支和 PR；
-                                                          --task 只出任务说明原文，--report [N] 只出第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写就是最新一轮）
-  ${hub} worker search <关键词…> [--limit N]                   在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜：关键词都要包含，
-                                                          中文按子串、英文不分大小写；一处一行，最新的在前（默认 ${WORKER_SEARCH_DEFAULT_LIMIT} 条，最多 ${WORKER_SEARCH_MAX_LIMIT}）
-  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
-                                                          --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时
-  ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
-                                                          会单独提醒用户，不会被别的消息刷掉
-  ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
+                                                          别把密钥写进命令：原文会出现在日志和失败附注里`,
+  },
+  {
+    command: "persona.show",
+    group: "persona",
+    action: "show",
+    cli: "persona show",
+    usage: `  ${hub} persona show`,
+  },
+  {
+    command: "persona.edit",
+    group: "persona",
+    action: "edit",
+    cli: "persona edit",
+    usage: `  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]`,
+  },
+  {
+    command: "worker.start",
+    group: "worker",
+    action: "start",
+    cli: "worker start",
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
+                                                          派一个 Worker，任务说明从标准输入读`,
+  },
+  {
+    command: "worker.send",
+    group: "worker",
+    action: "send",
+    cli: "worker send",
+    usage: `  ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做`,
+  },
+  {
+    command: "worker.end",
+    group: "worker",
+    action: "end",
+    cli: "worker end",
+    usage: `  ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话`,
+  },
+  {
+    command: "worker.list",
+    group: "worker",
+    action: "list",
+    cli: "worker list",
+    usage: `  ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度`,
+  },
+  {
+    command: "worker.show",
+    group: "worker",
+    action: "show",
+    cli: "worker show",
+    usage: `  ${hub} worker show <编号> [--task | --report [N]]            一个 Worker 现在的情况：状态、在干什么、这一轮和上一轮、进程、分支和 PR；
+                                                          --task 只出任务说明原文，--report [N] 只出第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写就是最新一轮）`,
+  },
+  {
+    command: "worker.search",
+    group: "worker",
+    action: "search",
+    cli: "worker search",
+    usage: `  ${hub} worker search <关键词…> [--limit N]                   在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜：关键词都要包含，
+                                                          中文按子串、英文不分大小写；一处一行，最新的在前（默认 ${WORKER_SEARCH_DEFAULT_LIMIT} 条，最多 ${WORKER_SEARCH_MAX_LIMIT}）`,
+  },
+  {
+    command: "worker.log",
+    group: "worker",
+    action: "log",
+    cli: "worker log",
+    usage: `  ${hub} worker log <编号> [--last N | --stats]                它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}，最多 ${WORKER_LOG_MAX_STEPS}），一行一步：调了什么工具、思考了多久、回复、一轮怎么结束；
+                                                          --stats 不列步骤，只出一张汇总：步数、各类动作次数、读得最多的文件、重复最多的命令、思考和等工具的用时`,
+  },
+  {
+    command: "ask",
+    group: "ask",
+    cli: "ask",
+    usage: `  ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
+                                                          会单独提醒用户，不会被别的消息刷掉`,
+  },
+  {
+    command: "schedule.add",
+    group: "schedule",
+    action: "add",
+    cli: "schedule add",
+    usage: `  ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
                                                           建定时任务：到点把任务说明（从标准输入读）发到我自己的对话里。
-                                                          --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）
-  ${hub} schedule list                                       我的定时任务：频率、下次运行、上次结果
-  ${hub} schedule pause <编号>                                 暂停
-  ${hub} schedule resume <编号>                                恢复（从现在算下一次）
-  ${hub} schedule remove <编号>                                删除
+                                                          --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）`,
+  },
+  {
+    command: "schedule.list",
+    group: "schedule",
+    action: "list",
+    cli: "schedule list",
+    usage: `  ${hub} schedule list                                       我的定时任务：频率、下次运行、上次结果`,
+  },
+  {
+    command: "schedule.pause",
+    group: "schedule",
+    action: "pause",
+    cli: "schedule pause",
+    usage: `  ${hub} schedule pause <编号>                                 暂停`,
+  },
+  {
+    command: "schedule.resume",
+    group: "schedule",
+    action: "resume",
+    cli: "schedule resume",
+    usage: `  ${hub} schedule resume <编号>                                恢复（从现在算下一次）`,
+  },
+  {
+    command: "schedule.remove",
+    group: "schedule",
+    action: "remove",
+    cli: "schedule remove",
+    usage: `  ${hub} schedule remove <编号>                                删除`,
+  },
+];
+
+/** hub 用法，给人看（hub help、未知顶层命令或环境变量缺失时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
+export const HUB_USAGE = `用法：
+${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -90,6 +223,18 @@ export const HUB_USAGE = `用法：
   EOF
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
+
+/** 当第一个词已认出命令组（或进一步认出子命令）时，只输出对应那几行用法 + help 提示；否则输出完整 HUB_USAGE。 */
+export function commandUsageFor(argv: readonly string[]): string {
+  const group = argv[0];
+  if (group === undefined) return HUB_USAGE;
+  const groupSpecs = HUB_COMMAND_SPECS.filter((s) => s.group === group);
+  if (groupSpecs.length === 0) return HUB_USAGE;
+  const action = argv[1];
+  const actionSpecs = action !== undefined ? groupSpecs.filter((s) => s.action === action) : [];
+  const matched = actionSpecs.length > 0 ? actionSpecs : groupSpecs;
+  return `用法：\n${matched.map((s) => s.usage).join("\n")}\n（完整用法运行 ${hub} help）\n`;
+}
 
 /** 守护进程没开：只说 network 那句话和怎么办，不带 ENOENT、ECONNREFUSED 这类系统码。 */
 const UNREACHABLE_MESSAGE = `${LOCAL_ERRORS.network.text}。${LOCAL_ERRORS.network.hint}`;
@@ -506,9 +651,9 @@ function line(text: string): string {
 }
 
 export async function runHub(io: HubIo): Promise<number> {
-  const usage = (reason: string) => {
+  const usage = (reason: string, full = false) => {
     io.stderr.write(line(`${hub}：${reason}`));
-    io.stderr.write(HUB_USAGE);
+    io.stderr.write(full ? HUB_USAGE : commandUsageFor(io.argv));
     return HUB_EXIT.usage;
   };
 
@@ -527,9 +672,9 @@ export async function runHub(io: HubIo): Promise<number> {
 
   const token = io.env[ENV_HUB_TOKEN];
   const socketPath = io.env[ENV_HUB_SOCK];
-  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`);
-  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_NAME} 发的令牌`);
-  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`);
+  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`, true);
+  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_NAME} 发的令牌`, true);
+  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`, true);
 
   const body: Record<string, unknown> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {

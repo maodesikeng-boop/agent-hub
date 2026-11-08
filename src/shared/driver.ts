@@ -414,8 +414,9 @@ export interface Driver {
    */
   send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult>;
   /**
-   * 先写 interrupt 控制消息，5 秒没回应发 SIGINT。已写给 agent、还没被取走的消息一律出 message.cancelled（reason stop），
-   * 不自动重发（停止时厂商会接着跑、静默丢掉还是进程没了，差别由驱动层抹平）。
+   * 打断当前正在跑的一轮（三家协议差异由各自驱动抹平：Claude 先发 `interrupt` 控制消息再等宽限期发 `SIGINT`；
+   * Codex 先发 `turn/interrupt` 再等宽限期发 `SIGINT`；Antigravity CLI 无流式打断控制消息，直接发优雅 `SIGINT` 再等宽限期强杀）。
+   * 已写给 agent、还没被取走的消息一律出 message.cancelled（reason stop），不自动重发（停止时厂商会接着跑、静默丢掉还是进程没了，差别由驱动层抹平）。
    */
   interrupt(sessionId: SessionId): Promise<void>;
   /**

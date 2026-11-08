@@ -29,7 +29,7 @@ import {
 import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
-import type { WorkerPr } from "../../shared/hub.ts";
+import type { WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { isAgentVendor, type AgentVendor, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
@@ -46,9 +46,9 @@ export interface AgentApiOptions {
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
   /**
    * hub worker show 之前异步查 Worker 分支上的 PR（同上，事务里不做 I/O），结果作为 HubCallContext.pr。
-   * 查不到（没装 gh、没登录、没网、超时、没有 PR）返回 null，show 就不写 PR 这一行。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
+   * 没有 PR 返回 null（show 不写 PR 行）；gh 查不了返回 { unavailable: 原因 }（show 显示“PR 查不了（原因）”）。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
    */
-  probePr?: (cwd: string, branch: string) => Promise<WorkerPr | null>;
+  probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
   /**
    * hub worker show 之前找这个 Worker 会话在厂商那边的原始记录文件，结果作为 HubCallContext.transcript。
    * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。

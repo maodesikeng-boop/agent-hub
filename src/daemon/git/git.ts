@@ -4,12 +4,9 @@ import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
-import { GIT_PROBE_TIMEOUT_MS } from "../../shared/limits.ts";
+import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
 
-/** 一次 git 调用最多等多久（毫秒）；超了就 SIGKILL 掉 git。调用时可以用 timeoutMs 改。 */
-export const GIT_TIMEOUT_MS = 30_000;
-/** git 输出最多收多少字节（status 遇到大量没跟踪的文件会很长）。 */
-export const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+export { GIT_MAX_BUFFER_BYTES, GIT_TIMEOUT_MS };
 
 /**
  * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：

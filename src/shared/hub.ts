@@ -239,7 +239,8 @@ export interface WorkerLogStep {
 
 /**
  * hub worker show 之前 agent 接口异步查到的这个 Worker 的 PR（gh pr list --head <分支>）：
- * 查不到（没装 gh、没登录、没网、超时、没有 PR）就没有。账本的事务里不做 I/O。
+ * 没有 PR 时返回 null（show 不写 PR 行）；gh 查不了（没装、没登录、超时、报错）时返回 { unavailable: 原因 }（show 显示“PR 查不了（原因）”）。
+ * 账本的事务里不做 I/O。
  */
 export interface WorkerPr {
   number: number;
@@ -247,6 +248,8 @@ export interface WorkerPr {
   state: string;
   url: string;
 }
+
+export type WorkerPrProbeResult = WorkerPr | { unavailable: string } | null;
 
 /** 各命令成功时的 data。text 是给 agent 看的一两句中文，data 给程序用。 */
 export interface HubDataMap {

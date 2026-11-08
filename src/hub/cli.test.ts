@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { runHub, runHubSafely, type HubIo } from "./cli.ts";
+import { HUB_USAGE, runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
 import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
 import { installHubShim } from "../daemon/agent-api/shim.ts";
@@ -634,6 +634,46 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const r = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: "" } });
       expect(r.code).toBe(HUB_EXIT.usage);
       expect(r.stderr).toContain(ENV_HUB_SOCK);
+    });
+
+    it("已知命令参数错只打印对应命令（或命令组）用法 + hub help 提示，不打印无关命令；未知顶层命令或环境变量缺失打印完整 HUB_USAGE", async () => {
+      const workerStartErr = await hub(["worker", "start", "--stdin"], { stdin: stdinOf("任务") });
+      expect(workerStartErr.code).toBe(HUB_EXIT.usage);
+      expect(workerStartErr.stderr).toContain(`${cmd}：${cmd} worker start 要 --title <标题>`);
+      expect(workerStartErr.stderr).toContain(`${cmd} worker start --title`);
+      expect(workerStartErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(workerStartErr.stderr).not.toContain(`${cmd} schedule add`);
+      expect(workerStartErr.stderr).not.toContain(`${cmd} worker log`);
+
+      const workerGroupErr = await hub(["worker", "fire", "3"]);
+      expect(workerGroupErr.code).toBe(HUB_EXIT.usage);
+      expect(workerGroupErr.stderr).toContain(`${cmd} worker start --title`);
+      expect(workerGroupErr.stderr).toContain(`${cmd} worker log <编号>`);
+      expect(workerGroupErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(workerGroupErr.stderr).not.toContain(`${cmd} schedule add`);
+      expect(workerGroupErr.stderr).not.toContain(`${cmd} project create`);
+
+      const askErr = await hub(["ask"]);
+      expect(askErr.code).toBe(HUB_EXIT.usage);
+      expect(askErr.stderr).toContain(`${cmd} ask --stdin`);
+      expect(askErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
+      expect(askErr.stderr).not.toContain(`${cmd} worker start`);
+
+      const helpOut = await hub(["help"]);
+      expect(helpOut.code).toBe(HUB_EXIT.ok);
+      expect(helpOut.stdout).toBe(HUB_USAGE);
+
+      const unknownTop = await hub(["frobnicate"]);
+      expect(unknownTop.code).toBe(HUB_EXIT.usage);
+      expect(unknownTop.stderr).toContain(HUB_USAGE);
+
+      const emptyArgv = await hub([]);
+      expect(emptyArgv.code).toBe(HUB_EXIT.usage);
+      expect(emptyArgv.stderr).toContain(HUB_USAGE);
+
+      const missingToken = await hub(["worker", "list"], { env: { ...env, [ENV_HUB_TOKEN]: "" } });
+      expect(missingToken.code).toBe(HUB_EXIT.usage);
+      expect(missingToken.stderr).toContain(HUB_USAGE);
     });
   });
 
