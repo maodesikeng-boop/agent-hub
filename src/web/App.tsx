@@ -159,7 +159,7 @@ export function App() {
   // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link } = deviceNotices(current);
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
-  const notices = <Notices health={failingHealth(state)} reconnecting={reconnecting} offline={offline} />;
+  const notices = <Notices health={failingHealth(state)} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
   const here = routeDeviceOf(current.key);
   const keyOf = (id: ConversationId) => conversationKey(current.key, id);
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;

@@ -68,6 +68,7 @@ import {
   type PickFolderResponse,
   type PmMode,
   type PostMessageResponse,
+  type PushKeyResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
   type ServerInfo,
@@ -90,6 +91,8 @@ import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
 import { peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
+import { parsePresence, type PresenceBoard } from "../push/presence.ts";
+import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
 import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
 import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
@@ -132,6 +135,13 @@ export interface UiServerOptions {
   serverInfo?: ServerInfo;
   /** 本机的 tailnet 名字和主人（daemon/platform/tailnet.ts 的探测，读缓存）。不给 = 只认本机 127.0.0.1，和联机之前一样。 */
   tailnet?: { current(): TailnetSelf | null };
+  /** 推送（联机 P4，daemon/push/）：订阅接口和 WebSocket 上的前台上报。不给 = 推送接口 404，上报忽略。 */
+  push?: {
+    publicKey: string;
+    subscribe(subscription: PushSubscriptionRecord): void;
+    unsubscribe(endpoint: string): void;
+    presence: PresenceBoard;
+  };
   /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
   serveTarget?: ServeTargetKind;
   /**
@@ -918,6 +928,24 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(202).send({ messageId: result.messageId } satisfies RetryMessageResponse);
     });
 
+    // 推送订阅（联机 P4）：只在开了推送的服务上有
+    const push = opts.push;
+    if (push !== undefined) {
+      routes.get(API_PATHS.pushKey, async (): Promise<PushKeyResponse> => ({ publicKey: push.publicKey }));
+      routes.post(API_PATHS.pushSubscriptions, async (req, reply) => {
+        const subscription = parseSubscription(req.body);
+        if (subscription === null) return fail(reply, 400, "订阅内容不对", "invalid");
+        push.subscribe(subscription);
+        return reply.code(204).send();
+      });
+      routes.post(API_PATHS.pushUnsubscribe, async (req, reply) => {
+        const { endpoint } = (req.body ?? {}) as { endpoint?: unknown };
+        if (typeof endpoint !== "string") return fail(reply, 400, "endpoint 不对", "invalid");
+        push.unsubscribe(endpoint);
+        return reply.code(204).send();
+      });
+    }
+
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
       // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
       const sinceValues = new URL(req.url, "http://localhost").searchParams.getAll("since");
@@ -929,6 +957,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
+      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。设备令牌来的（别的设备直连或转发来的浏览器）不收：
+      // 前台状态只属于入口本机已登录的浏览器（跟 /api/push/* 一样）
+      if (push !== undefined && !peerRequests.has(req.raw)) {
+        socket.on("message", (data: Buffer, isBinary: boolean) => {
+          const message = isBinary ? null : parsePresence(data.toString("utf8"));
+          if (message !== null) push.presence.report(socket, message);
+        });
+        const forget = () => push.presence.remove(socket);
+        socket.once("close", forget);
+        socket.once("error", forget);
+      }
       trackSocket(req, socket);
 
       if (since === undefined) return; // 不带 since：只推之后的新变化

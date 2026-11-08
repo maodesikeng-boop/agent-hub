@@ -1,4 +1,13 @@
-// 从 HubState 算出界面要用的东西。
+// 从 HubState 算出界面要用的东西。提醒规则（等你、等你确定）在 shared/reminders.ts，和守护进程的推送共用，这里转出去。
+export {
+  isQuietMessage,
+  pendingAsks,
+  runningWorkerCount,
+  sessionOf,
+  visibleSessionOf,
+  waitingConversations,
+  type LastSeen,
+} from "../shared/reminders.ts";
 import {
   AGENT_VENDORS,
   askOf,
@@ -28,6 +37,12 @@ import {
   type SessionState,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
+import {
+  isQuietMessage,
+  renewingIn,
+  runningWorkerCount,
+  sessionOf,
+} from "../shared/reminders.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
 import type { HubState, PendingMessage } from "./state.ts";
@@ -46,14 +61,6 @@ export interface ConversationEntry {
   project: Project | null;
   /** 项目没移除的文件夹，主文件夹在前。没有项目是空的。 */
   folders: ProjectFolder[];
-}
-
-/**
- * 换新会话的那几条（写交接的来往、换代那条分隔线）：用户没说话、项目经理也没对用户说话，不进左栏预览、不改排序、不算未读。
- * 见 shared/domain.ts 的 isHandoverTraffic。
- */
-export function isQuietMessage(message: Message): boolean {
-  return isHandoverTraffic(message) || systemEventOf(message)?.event === "session.renewed";
 }
 
 /** 预览用最后一条文字消息；一条文字都没有就用最后一条。换新会话的那几条不算。 */
@@ -97,15 +104,6 @@ export function previewText(entry: ConversationEntry): string {
   // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
   if (last.sender === "system") return systemNoticeText(last);
   return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
-}
-
-/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。 */
-export function sessionOf(state: HubState, conversationId: ConversationId): SessionState | null {
-  let current: SessionState | null = null;
-  for (const s of state.sessions) {
-    if (s.conversationId === conversationId && (current === null || s.generation > current.generation)) current = s;
-  }
-  return current;
 }
 
 /** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）；已经过了 resetsAt 的不算，Claude 要等下一条事件才会更新它。 */
@@ -253,14 +251,6 @@ export function quotaResetTimes(state: HubState): number[] {
   return [...times].sort((a, b) => a - b);
 }
 
-/** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
-export function runningWorkerCount(state: HubState, pmId: PmId): number {
-  return Object.values(state.conversations).filter(
-    ({ conversation }) =>
-      conversation.kind === "worker" && conversation.pmId === pmId && (sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle",
-  ).length;
-}
-
 /**
  * Worker 现在能不能接用户的话（右边栏和 Worker 页面共用，和账本 workers.ts 的 assertWorkerOpenForUser 同一个意思）：
  * - ended：收工了：项目经理的会话里有 ended / worktree_failed 那一行（项目经理 worker end 后会话要等这一轮跑完才 ended），
@@ -376,45 +366,6 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
   return null;
 }
 
-/** 每个对话用户上次看的时间（毫秒）；没看过的没有。存在 localStorage，见 notify.ts。 */
-export type LastSeen = Record<ConversationId, number | undefined>;
-
-/** 还没处理完的消息状态：排队中、已送达、处理中。 */
-const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
-
-/**
- * 在“等你”的对话（m4-plan 2.2，不含“停稳 3 秒”，那个在 notify.ts）：对话自己和它派的 Worker 的会话都是 idle，
- * 没有排队、已送达、处理中的消息，最后一条不是用户发的，并且用户上次看之后又有了新消息。Worker 自己的对话不算。
- * 换新会话那一轮不算（交接请求在路上、写交接时会话在忙，按 visibleSessionOf 的口径）：不然换一次会话，
- * 对话会先退出“等你”再回来，同一条没看的回复又弹一次通知。
- */
-export function waitingConversations(state: HubState, lastSeen: LastSeen): ConversationId[] {
-  return Object.values(state.conversations)
-    .filter(({ conversation, messages }) => {
-      if (conversation.kind === "worker") return false;
-      const last = messages.findLast((m) => !isQuietMessage(m));
-      if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
-      if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status) && !isHandoverTraffic(m))) return false;
-      if (pendingOf(state, conversation.id).some((p) => p.phase === "sending")) return false;
-      if ((visibleSessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
-      return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
-    })
-    .map(({ conversation }) => conversation.id);
-}
-
-/**
- * 对话里还在等用户确定的 hub ask（M5）：守护进程还没标成已回答（meta.answered，用户在这个对话里发了消息就标上，
- * 见 ledger/messages.ts）。用户刚发出、服务端还没确认的消息也先当回答了，不等推送。从老到新。
- */
-export function pendingAsks(state: HubState, conversationId: ConversationId): Message[] {
-  const view = state.conversations[conversationId];
-  if (!view || pendingOf(state, conversationId).some((p) => p.phase !== "failed")) return [];
-  return view.messages.filter((m) => {
-    const meta = askOf(m);
-    return meta !== null && meta.answered !== true;
-  });
-}
-
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {
   return state.pending.filter((p) => p.conversationId === conversationId);
 }
@@ -425,34 +376,6 @@ export function pendingOf(state: HubState, conversationId: ConversationId): Pend
  */
 export function isRenewing(state: HubState, conversationId: ConversationId): boolean {
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
-}
-
-function renewingIn(messages: Message[]): boolean {
-  return messages.some((m) => systemEventOf(m)?.event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status));
-}
-
-/**
- * 网页显示用的会话状态（状态行、停止键）：写交接那一轮不给用户看，当空闲；那期间有交给项目经理的话在等（用户的、Worker 汇报），
- * 显示成在想（Thinking…），和平时它马上开始处理一样，换完代就真的开始处理。
- */
-export function visibleSessionOf(state: HubState, conversationId: ConversationId): SessionState | null {
-  const session = sessionOf(state, conversationId);
-  const messages = state.conversations[conversationId]?.messages ?? [];
-  if (session === null || !inHandoverTurn(messages, session.sessionId)) return session;
-  const waiting =
-    messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingOf(state, conversationId).some((p) => p.phase === "sending");
-  const quiet = { currentTool: null, apiRetry: null };
-  return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
-}
-
-/**
- * 会话现在的状态属于写交接那一轮：交接请求还没结果；或者交给这个会话的最后一条就是交接请求（那一轮刚结束，
- * 账本一条一条推变化，交接请求先变成已回复、会话后变空闲，中间这一下也算）。
- */
-function inHandoverTurn(messages: Message[], sessionId: SessionId): boolean {
-  if (renewingIn(messages)) return true;
-  const last = messages.findLast((m) => m.sessionId === sessionId && m.status !== null);
-  return last !== undefined && systemEventOf(last)?.event === "handover.requested";
 }
 
 /** 网页显示用的消息：写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。 */

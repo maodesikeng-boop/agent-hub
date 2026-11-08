@@ -125,6 +125,25 @@ export const MAX_UPLOAD_EXTENSION_BYTES = 16;
 /** 存到磁盘上的文件名最多多少字节（UTF-8；APFS、ext4 的单个文件名上限是 255）；超了截断，扩展名尽量留着。 */
 export const MAX_UPLOAD_NAME_BYTES = 120;
 
+// ---- 推送提醒（联机 P4，docs/multi-device-design.md 第 6.2 节；规则在 shared/reminders.ts）----
+
+/** 网页多久在 WebSocket 上报一次“前台 / 后台、正在看哪个对话”（切前台、后台、换对话时马上报）。 */
+export const PRESENCE_REPORT_MS = 30_000;
+/** 守护进程认一条上报多久：过了就当那个网页不在前台了（网页被冻住、断网时不会再报）。 */
+export const PRESENCE_STALE_MS = 75_000;
+/** 推送服务替离线的手机留多久（秒）：超过就丢，提醒过时了。 */
+export const PUSH_TTL_SECONDS = 24 * 60 * 60;
+/** 一次推送请求最多等多久。 */
+export const PUSH_SEND_TIMEOUT_MS = 10_000;
+/** 推送服务临时失败（网络错误、5xx、429）后隔多久重试，只重试一次。 */
+export const PUSH_RETRY_DELAY_MS = 30_000;
+/** 账本来了和提醒有关的变化后，等多久再判断要不要推：流式输出时一串变化合成一次，不用每条都把所有对话扫一遍。 */
+export const REMINDER_EVALUATE_DELAY_MS = 300;
+/** 一台最多存多少条订阅，超了丢最早的（每个浏览器一条，正常用不到）。 */
+export const MAX_PUSH_SUBSCRIPTIONS = 20;
+/** 订阅里 endpoint 最长多少字符（推送服务的网址，实际 200 左右）。 */
+export const MAX_PUSH_ENDPOINT_CHARS = 2_048;
+
 // ---- agent 发给用户的文件（回复里的 Markdown 链接指向本机文件，发出时存副本，见 daemon/sent-files.ts）----
 
 /** 上传的文件和发出文件的副本留多少天：目录修改时间超过这么久的，守护进程启动时和之后每天清一次。 */
