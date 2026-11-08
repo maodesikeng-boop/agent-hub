@@ -103,12 +103,8 @@ const RULES: Rule[] = [
     name: "组件不许直接显示 err.message",
     files: webTsx,
     pattern: /(err|error)\.message/,
-    expected: 5,
+    expected: 1,
     allowed: [
-      { file: `${WEB}/BrowserSessions.tsx`, line: 'const reasonOf = (err: unknown) => (err instanceof ApiError ? err.message : "操作失败");' },
-      { file: `${WEB}/FilePreview.tsx`, line: 'setResult({ text: error instanceof ApiError ? error.message : "没能打开这个文件", error: true });' },
-      { file: `${WEB}/PmProfile.tsx`, line: "errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.message } : {}}" },
-      { file: `${WEB}/PmProfile.tsx`, line: "<RowError>{modeSave.error.message}</RowError>" },
       {
         file: `${WEB}/ChartBlock.tsx`,
         line: "chartCache.set(key, { ok: false, message: error instanceof Error ? error.message : String(error) });",

@@ -6,6 +6,8 @@ import { FakeApi, makeSnapshot } from "../test-utils.ts";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { qrModules } from "./QrCode.tsx";
 
+/** 老服务端回 { error: "internal_error" } 时网页显示的话：中文 + 怎么办（shared/errors.ts 的表）。 */
+const INTERNAL = "守护进程出了意外的错，已记进日志，重试一次；还不行看日志";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
@@ -54,7 +56,7 @@ describe("已登录的浏览器列表", () => {
   it("读不出来（比如没登录）：框里一行说原因，不是空白", async () => {
     api.browserSessions = () => ({ status: 401, body: { error: "unauthorized" } });
     render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("unauthorized");
+    expect(await screen.findByRole("alert")).toHaveTextContent("登录过期了，重新登录");
   });
 });
 
@@ -80,7 +82,9 @@ describe("单个退出", () => {
     await show();
     const row = rowOf("iPhone Safari");
     fireEvent.click(within(row).getByRole("button", { name: /^退出/ }));
-    expect(await within(row).findByRole("alert")).toHaveTextContent("internal_error");
+    const alert = await within(row).findByRole("alert");
+    expect(alert).toHaveTextContent(INTERNAL);
+    expect(alert).toHaveAttribute("title", "internal_error"); // 英文码只在悬停的 title 里
     expect(within(row).getByRole("button", { name: /^退出/ })).toBeEnabled();
   });
 
@@ -118,7 +122,7 @@ describe("全部退出", () => {
     await show();
     fireEvent.click(screen.getByRole("button", { name: "全部退出" }));
     fireEvent.click(screen.getByRole("button", { name: "确认全部退出" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("internal_error");
+    expect(await screen.findByRole("alert")).toHaveTextContent(INTERNAL);
     expect(onSignedOut).not.toHaveBeenCalled();
   });
 });
@@ -189,7 +193,7 @@ describe("在手机上打开", () => {
     api.loginLink = () => ({ status: 500, body: { error: "internal_error" } });
     await show();
     fireEvent.click(screen.getByRole("button", { name: "显示二维码" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("internal_error");
+    expect(await screen.findByRole("alert")).toHaveTextContent(INTERNAL);
     expect(screen.queryByRole("img", { name: "登录二维码" })).not.toBeInTheDocument();
   });
 });

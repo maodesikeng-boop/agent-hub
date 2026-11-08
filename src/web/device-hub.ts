@@ -3,10 +3,10 @@
 // 每台各跑各的 seq、resync、重连：一台断了只补那一台，不拖累别的。
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type DeviceInfo, type MessageId, userMessageDedupeKey } from "../shared/index.ts";
-import { ApiError, createClient, fetchDevices, localClient, type HubClient } from "./client.ts";
+import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
-import { newClientId } from "./format.ts";
+import { ErrorNotice, errorText, newClientId } from "./format.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
 
@@ -30,6 +30,7 @@ export class DeviceHub {
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
   private closeStream: (() => void) | null = null;
   private loadAttempt = 0;
+  private offUnauthorized: (() => void) | null = null;
 
   readonly key: DeviceKey;
   readonly client: HubClient;
@@ -72,11 +73,21 @@ export class DeviceHub {
 
   start(): void {
     this.alive = true;
+    // 任何接口回 401（不只是拉快照）：入口本机直接切到登录界面，不弹报错
+    if (!this.remote) {
+      this.offUnauthorized = onUnauthorized(() => {
+        if (!this.alive) return;
+        this.buffer = null;
+        this.dispatch({ type: "loadFailed", unauthorized: true });
+      });
+    }
     void this.load();
   }
 
   dispose(): void {
     this.alive = false;
+    this.offUnauthorized?.();
+    this.offUnauthorized = null;
     clearTimeout(this.timer);
     clearTimeout(this.offlineTimer);
     this.stopStream();
@@ -100,7 +111,7 @@ export class DeviceHub {
     } catch (err) {
       if (!this.alive) return;
       const unauthorized = err instanceof ApiError && err.status === 401;
-      if (!this.remote || this.state.phase === "loading") this.dispatch({ type: "loadFailed", unauthorized });
+      if (!this.remote || this.state.phase === "loading") this.dispatch({ type: "loadFailed", unauthorized, error: errorText(err) });
       if (this.remote && !unauthorized) this.timer = setTimeout(() => void this.load(), reconnectDelay(this.loadAttempt++));
     }
   }
@@ -180,13 +191,14 @@ export class DeviceHub {
       // 400：服务端拒绝了这条消息（同一个 clientId 重发还是会被拦，重试永远不会成功）：带的文件找不到了要重新添加，
       // 别的原因（比如手打了不能用的命令）把服务端的 error 原样显示
       const rejected = err instanceof ApiError && err.status === 400;
-      const missing = rejected && err.message === ATTACHMENTS_MISSING_MESSAGE;
+      const reason = errorText(err);
+      const missing = rejected && reason.text === ATTACHMENTS_MISSING_MESSAGE;
       if (this.alive) {
         this.dispatch({
           type: "pendingPhase",
           clientId,
           phase: "failed",
-          ...(missing ? { failure: "attachments_missing" as const } : rejected ? { failure: "rejected" as const, reason: err.message } : {}),
+          ...(missing ? { failure: "attachments_missing" as const } : rejected ? { failure: "rejected" as const, reason } : {}),
         });
       }
     }
@@ -205,7 +217,7 @@ export class DeviceHub {
   send = (conversationId: ConversationId, text: string): void => this.post(conversationId, text, []);
 
   /**
-   * 先发、等接口回应再显示（以 / 开头的消息：手打的命令可能被拦）：被拦（400，Error.message 是原因）reject，什么都没留下，
+   * 先发、等接口回应再显示（以 / 开头的消息：手打的命令可能被拦）：被拦（400，ErrorNotice 带着原因）reject，什么都没留下，
    * 输入框那边显示原因、原文不动；发出去了就显示成排队中；网络、服务出错和普通消息一样变成可重试的待发消息。
    */
   sendChecked = async (conversationId: ConversationId, text: string): Promise<void> => {
@@ -214,7 +226,7 @@ export class DeviceHub {
     try {
       await this.client.postMessage(conversationId, { clientId, text });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) throw new Error(err.message);
+      if (err instanceof ApiError && err.status === 400) throw new ErrorNotice(errorText(err));
       if (this.alive) this.dispatch({ type: "pendingAdd", pending: { ...pending, phase: "failed" } });
       return;
     }

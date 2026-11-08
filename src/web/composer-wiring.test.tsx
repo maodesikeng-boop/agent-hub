@@ -44,6 +44,17 @@ describe("手打被拦的命令", () => {
     expect(box()).not.toHaveAttribute("readonly"); // 能接着改
   });
 
+  it("老服务端只回英文码：显示中文 + 怎么办，英文码只在 title 里", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.postMessage = () => ({ status: 400, body: { error: "not_found" } });
+    await user.type(box(), "/clear{Enter}");
+    const reason = await screen.findByRole("alert");
+    expect(reason).toHaveTextContent("要找的东西不在了，刷新页面再试");
+    expect(reason).toHaveAttribute("title", "not_found");
+    expect(reason).not.toHaveTextContent("not_found");
+  });
+
   it("发出去了才清空输入框，消息照常显示成排队中", async () => {
     const user = userEvent.setup();
     await boot();
@@ -85,6 +96,18 @@ describe("手打被拦的命令", () => {
     expect(box().value).toBe("");
     expect(await screen.findByText("你好")).toBeInTheDocument();
     release();
+  });
+});
+
+describe("任何接口回 401：直接切到登录界面，不弹报错", () => {
+  it("发消息回 401：整页换成登录提示，没有报错提示", async () => {
+    const user = userEvent.setup();
+    await boot();
+    api.postMessage = () => ({ status: 401, body: { error: "unauthorized" } });
+    await user.type(box(), "你好{Enter}");
+    expect(await screen.findByText("请用守护进程在终端里打印的链接打开")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/登录过期了/)).toBeNull();
   });
 });
 

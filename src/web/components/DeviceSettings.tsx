@@ -5,7 +5,7 @@ import { useState } from "react";
 import { normalizeName, type DeviceId, type DeviceInviteResponse } from "../../shared/index.ts";
 import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite } from "../client.ts";
 import { platformLabel, type DeviceView } from "../devices.ts";
-import { errorText, nameError } from "../format.ts";
+import { errorText, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { StatusDot, StatusText } from "./DeviceBadges.tsx";
@@ -20,7 +20,7 @@ export interface DeviceSettings {
 function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: boolean) => void }) {
   const [name, setName] = useState(device.info.name);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const clean = normalizeName(name);
   const problem = nameError(name);
   const save = async () => {
@@ -68,7 +68,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
           保存
         </Button>
       </div>
-      {(problem ?? error) && <RowError>{problem ?? error}</RowError>}
+      {(problem ?? error) && <RowError error={problem ?? error ?? undefined} />}
     </form>
   );
 }
@@ -77,7 +77,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const { info } = device;
   if (renaming) {
     return (
@@ -156,7 +156,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
 function InvitePanel() {
   const [invite, setInvite] = useState<DeviceInviteResponse | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const create = async () => {
     setBusy(true);
     setError(null);
@@ -202,7 +202,7 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const ready = url.trim() !== "" && code.trim() !== "" && !busy;
   const submit = async () => {
     if (!ready) return;

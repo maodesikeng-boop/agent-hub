@@ -19,6 +19,7 @@ import {
   type SessionState,
   type StateSnapshot,
 } from "../shared/index.ts";
+import type { ErrorInfo } from "./format.ts";
 import type { ConnectionStatus } from "./connection.ts";
 
 /** 网页自己先显示出来、服务端还没回真消息的用户消息。 */
@@ -35,8 +36,8 @@ export interface PendingMessage {
    * rejected 服务端拒绝了这条消息（400），原因在 reason，同一条重发还是会被拦。其他失败（断网、5xx）不写，可以重试。
    */
   failure?: "attachments_missing" | "rejected";
-  /** failure 是 rejected 时服务端给的原因（中文，原样显示）。 */
-  reason?: string;
+  /** failure 是 rejected 时服务端给的原因（中文）；hint 接在后面，raw 放 title。 */
+  reason?: ErrorInfo;
   createdAt: number;
 }
 
@@ -56,6 +57,8 @@ export type Phase = "loading" | "ready" | "error" | "unauthorized";
 
 export interface HubState {
   phase: Phase;
+  /** phase 是 error 时拉快照为什么失败（显示“连不上守护进程”和怎么办）；别的时候没有。 */
+  loadError?: ErrorInfo;
   connection: ConnectionStatus;
   /** 已经处理到的最后一个 seq。 */
   seq: number;
@@ -99,14 +102,14 @@ export const initialState: HubState = {
 export type HubAction =
   | { type: "loading" }
   | { type: "loaded"; snapshot: StateSnapshot }
-  | { type: "loadFailed"; unauthorized: boolean }
+  | { type: "loadFailed"; unauthorized: boolean; error?: ErrorInfo }
   | { type: "change"; change: Change }
   | { type: "connection"; status: ConnectionStatus }
   | { type: "olderStart"; conversationId: ConversationId }
   | { type: "olderDone"; conversationId: ConversationId; messages: Message[]; hasMore: boolean }
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
-  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: string }
+  | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: ErrorInfo }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -206,6 +209,11 @@ function keepStillFailed(retry: HubState["retry"], messages: Message[]): HubStat
   return Object.fromEntries(Object.entries(retry).filter(([id]) => failed.has(Number(id))));
 }
 
+function withoutLoadError(state: HubState): HubState {
+  const { loadError: _loadError, ...rest } = state;
+  return rest;
+}
+
 function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   const conversations: Record<ConversationId, ConversationView> = {};
   for (const c of snapshot.conversations) {
@@ -213,7 +221,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   return {
-    ...state,
+    ...withoutLoadError(state),
     phase: "ready",
     seq: snapshot.seq,
     pms: snapshot.pms,
@@ -236,8 +244,11 @@ export function reducer(state: HubState, action: HubAction): HubState {
       return { ...state, phase: "loading" };
     case "loaded":
       return fromSnapshot(state, action.snapshot);
-    case "loadFailed":
-      return { ...state, phase: action.unauthorized ? "unauthorized" : state.phase === "ready" ? "ready" : "error" };
+    case "loadFailed": {
+      const { loadError: _old, ...rest } = state;
+      const phase = action.unauthorized ? "unauthorized" : state.phase === "ready" ? "ready" : "error";
+      return { ...rest, phase, ...(phase === "error" && action.error ? { loadError: action.error } : {}) };
+    }
     case "change":
       return applyChange(state, action.change);
     case "connection":

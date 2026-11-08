@@ -25,7 +25,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
-import { ACTOR_LABELS, errorText, formatTime, shortPath } from "../format.ts";
+import { ACTOR_LABELS, errorLine, errorText, errorTitle, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -37,7 +37,7 @@ import { ModeRows } from "./ModeRows.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-type Load = { phase: "loading" } | { phase: "error"; message: string } | { phase: "ready"; persona: PersonaView };
+type Load = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase: "ready"; persona: PersonaView };
 
 /** 性格设定：进页面拉一次；rev 变了（pm.updated，别处改了）重新拉。 */
 function usePersona(pmId: number, rev: number) {
@@ -48,7 +48,7 @@ function usePersona(pmId: number, rev: number) {
     let alive = true;
     client.fetchPersona(pmId).then(
       (persona) => alive && setLoad({ phase: "ready", persona }),
-      (err: unknown) => alive && setLoad((prev) => (prev.phase === "ready" ? prev : { phase: "error", message: errorText(err) })),
+      (err: unknown) => alive && setLoad((prev) => (prev.phase === "ready" ? prev : { phase: "error", info: errorText(err) })),
     );
     return () => {
       alive = false;
@@ -143,7 +143,7 @@ function agentPatch(next: AgentSetting, saved: AgentSetting): EditPersonaRequest
 function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
   const client = useClient();
   const [draft, setDraft] = useState<T | null>(null);
-  const [error, setError] = useState<{ key: K; message: string } | null>(null);
+  const [error, setError] = useState<{ key: K; info: ErrorInfo } | null>(null);
   const seq = useRef(0);
   const save = (next: T, key: K, body: EditPersonaRequest | null) => {
     setDraft(next);
@@ -163,7 +163,7 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
       (err: unknown) => {
         if (!aliveRef.current || mine !== seq.current) return;
         setDraft(null);
-        setError({ key, message: errorText(err) });
+        setError({ key, info: errorText(err) });
       },
     );
   };
@@ -217,12 +217,12 @@ function PmEditor({
   // 性格设定：null = 没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
   const [draftText, setDraftText] = useState<string | null>(null);
   const [busy, setBusy] = useState<"text" | "revert" | null>(null);
-  const [errors, setErrors] = useState<Partial<Record<"text" | "revert", string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<"text" | "revert", ErrorLike>>>({});
   const text = draftText ?? persona.text;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const textDirty = text !== persona.text;
 
-  const run = async (what: "text" | "revert", call: () => Promise<PersonaView>, reset: () => void, failText?: (err: unknown) => string) => {
+  const run = async (what: "text" | "revert", call: () => Promise<PersonaView>, reset: () => void, failText?: (err: unknown) => ErrorLike) => {
     setBusy(what);
     setErrors((e) => ({ ...e, [what]: undefined }));
     try {
@@ -257,7 +257,7 @@ function PmEditor({
         <AgentRows
           value={agent}
           onChange={changeAgent}
-          errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.message } : {}}
+          errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.info } : {}}
           onCustomSubmit={saveCustom}
           customAction={
             customDirty && (
@@ -272,7 +272,7 @@ function PmEditor({
         <ModeRows label="工作方式" value={mode} onChange={(m) => modeSave.save(m, "mode", m === persona.mode ? {} : { mode: m })} />
         {modeSave.error && (
           <div className="px-4 py-2.5">
-            <RowError>{modeSave.error.message}</RowError>
+            <RowError error={modeSave.error.info} />
           </div>
         )}
       </SettingsGroup>
@@ -316,14 +316,14 @@ function PmEditor({
         />
         {(tooLong || errors.text) && (
           <div className="px-4 py-2.5">
-            <RowError>{tooLong ? "性格设定太长" : errors.text}</RowError>
+            {tooLong ? <RowError>性格设定太长</RowError> : errors.text !== undefined && <RowError error={errors.text} />}
           </div>
         )}
       </SettingsGroup>
       <SettingsGroup title="修改记录">
         {errors.revert && (
           <div className="px-4 py-2.5">
-            <RowError>{errors.revert}</RowError>
+            <RowError error={errors.revert} />
           </div>
         )}
         {persona.changes.length === 0 ? (
@@ -354,7 +354,7 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
   const client = useClient();
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
   const confirm = async () => {
     setConfirming(false);
     setSending(true);
@@ -440,8 +440,8 @@ export function PmProfile({
           )}
           {load.phase === "error" && (
             <div className="flex items-center justify-center gap-3">
-              <p role="alert" className="text-danger">
-                {load.message}
+              <p role="alert" title={errorTitle(load.info)} className="text-danger">
+                {errorLine(load.info)}
               </p>
               <Button variant="outline" size="sm" onClick={retry}>
                 重试

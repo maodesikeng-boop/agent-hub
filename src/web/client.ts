@@ -4,7 +4,6 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
-  type ApiErrorBody,
   type Attachment,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
@@ -40,31 +39,57 @@ import {
   type RetryMessageResponse,
   type StateSnapshot,
 } from "../shared/index.ts";
+import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
 
-/** 服务端回了非 2xx。status 0 表示根本没连上（服务没开、网断了）。 */
+/** 服务端回了非 2xx，或根本没连上。text/hint/raw 都来自 humanize（docs/user-facing-errors-design.md），message 就是 text；组件用 format.ts 的 errorText 拿来显示。 */
 export class ApiError extends Error {
+  /** HTTP 状态码；0 表示根本没连上（服务没开、网断了）。 */
   readonly status: number;
-  constructor(status: number, message: string) {
-    super(message);
+  /** 错误码表里的码；认不出是 null。 */
+  readonly code: ErrorCode | null;
+  readonly hint: string | undefined;
+  /** 原文（服务端给的 error、非 JSON 的应答文本、或浏览器自己的错误），只放 title。 */
+  readonly raw: string;
+  constructor(status: number, human: HumanError) {
+    super(human.text);
     this.name = "ApiError";
     this.status = status;
+    this.code = human.code;
+    this.hint = human.hint;
+    this.raw = human.raw;
   }
 }
 
 /** 请求体超过界面服务的上限（1 MB）时 Fastify 回 413，响应里没有 code，原因是英文；统一换成中文。 */
 const TOO_LARGE_MESSAGE = "内容太大，发不出去（最多 1 MB）";
 
-/** 非 2xx 响应给用户看的原因：413 固定一句；有 { error } 就原样用；别的（空体、不是 JSON、error 不是字符串）说“请求失败（状态码）”。 */
-async function failureMessage(res: Response): Promise<string> {
-  if (res.status === 413) return TOO_LARGE_MESSAGE;
+/** 任何接口回 401 都说明网页没登录（或登录过期）：通知这里登记的人（入口本机的 hub）切到登录界面。设备没配对（peer_unauthorized）是另一回事，照常显示。 */
+const unauthorizedListeners = new Set<() => void>();
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListeners.add(listener);
+  return () => unauthorizedListeners.delete(listener);
+}
+
+/** fetch 本身抛错（Failed to fetch、断网）：一律当 network。 */
+function networkError(err: unknown): ApiError {
+  const raw = err instanceof Error ? err.message : "";
+  return new ApiError(0, { code: "network", ...LOCAL_ERRORS.network, raw });
+}
+
+/** 非 2xx 响应 → ApiError：应答体是 JSON 就按 JSON，不是就把文本当 body，都交给 humanize。 */
+async function failure(res: Response): Promise<ApiError> {
+  const text = await res.text().catch(() => "");
+  let body: unknown = text;
   try {
-    const body = (await res.json()) as Partial<ApiErrorBody> | null;
-    const error = body?.error;
-    if (typeof error === "string" && error !== "") return error;
+    body = JSON.parse(text);
   } catch {
-    // 响应体不是 JSON
+    // 响应体不是 JSON：humanize 收文本
   }
-  return `请求失败（${res.status}）`;
+  let human = humanize(body, res.status);
+  if (res.status === 413 && human.code === null && human.text.startsWith(GENERIC_ERROR_TEXT)) human = { ...human, code: "too_large", text: TOO_LARGE_MESSAGE };
+  const err = new ApiError(res.status, human);
+  if (res.status === 401 && err.code !== "peer_unauthorized") for (const listener of unauthorizedListeners) listener();
+  return err;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -72,9 +97,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(path, { credentials: "same-origin", ...init });
   } catch (err) {
-    throw new ApiError(0, err instanceof Error ? err.message : "网络错误");
+    throw networkError(err);
   }
-  if (!res.ok) throw new ApiError(res.status, await failureMessage(res));
+  if (!res.ok) throw await failure(res);
   const text = await res.text();
   return (text === "" ? undefined : JSON.parse(text)) as T;
 }
@@ -124,7 +149,7 @@ export function createClient(device: DeviceId | null) {
           body: file,
         });
       } catch (err) {
-        if (err instanceof ApiError && err.status === 413) throw new ApiError(413, UPLOAD_TOO_LARGE_MESSAGE);
+        if (err instanceof ApiError && err.status === 413) throw new ApiError(413, { code: "too_large", text: UPLOAD_TOO_LARGE_MESSAGE, raw: err.raw });
         throw err;
       }
     },
@@ -227,9 +252,9 @@ export async function fetchFileBytes(url: string, maxBytes: number | null): Prom
   try {
     res = await fetch(url, { credentials: "same-origin", ...(maxBytes === null ? {} : { headers: { range: `bytes=0-${maxBytes - 1}` } }) });
   } catch (err) {
-    throw new ApiError(0, err instanceof Error ? err.message : "网络错误");
+    throw networkError(err);
   }
-  if (!res.ok) throw new ApiError(res.status, await failureMessage(res));
+  if (!res.ok) throw await failure(res);
   const bytes = await res.arrayBuffer();
   return maxBytes === null || bytes.byteLength <= maxBytes ? bytes : bytes.slice(0, maxBytes);
 }

@@ -2,7 +2,7 @@ import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
-import { byteLength } from "../format.ts";
+import { byteLength, errorLine, errorTitle } from "../format.ts";
 import { formatBytes, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
@@ -141,8 +141,8 @@ export function Composer({
           </ul>
         )}
         {notice !== null && (
-          <p role="alert" className="px-5 pt-2.5 text-[13px] text-danger">
-            {notice}
+          <p role="alert" title={errorTitle(notice)} className="px-5 pt-2.5 text-[13px] text-danger">
+            {errorLine(notice)}
           </p>
         )}
         <textarea
