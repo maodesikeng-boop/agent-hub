@@ -349,6 +349,20 @@ export const LOGIN_LINK_TTL_MS = 5 * 60 * 1000;
 export const MAX_PENDING_LOGIN_LINKS = 20;
 /** state/ui-token 的权限：只有自己能读写。启动时发现权限更宽要改回来。 */
 export const UI_TOKEN_FILE_MODE = 0o600;
+/** 公网入口会话的不活动有效期：30 天（本机与 tailnet 会话为 SESSION_MAX_AGE_MS = 365 天）。 */
+export const PUBLIC_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/** 公网扫码后待已登录设备批准的会话超时：10 分钟未批准自动作废。 */
+export const PENDING_SESSION_TTL_MS = 10 * 60 * 1000;
+/** 公网 /auth 失败限流：单 IP 每分钟最多失败 5 次。 */
+export const PUBLIC_AUTH_IP_MAX_FAILURES = 5;
+export const PUBLIC_AUTH_IP_WINDOW_MS = 60_000;
+/** 公网 /auth 失败限流：全局每小时最多失败 30 次。 */
+export const PUBLIC_AUTH_GLOBAL_MAX_FAILURES = 30;
+export const PUBLIC_AUTH_GLOBAL_WINDOW_MS = 3_600_000;
+/** 公网 /auth 触发任一失败阈值后的锁定时长：15 分钟。 */
+export const PUBLIC_AUTH_LOCKOUT_MS = 15 * 60_000;
+/** 公网 /auth 按 IP 限流桶数量上限（防公网扫描撑大内存）。 */
+export const MAX_PUBLIC_AUTH_IP_BUCKETS = 1_000;
 
 /** 环境变量。 */
 export const ENV_HOME = "AGENT_HUB_HOME";

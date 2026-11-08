@@ -69,7 +69,7 @@ describe("createBrowserSessions", () => {
 
   it("认令牌：对的返回会话 id；错的、空的、非字符串、令牌的哈希本身都认不出", () => {
     const { id, token } = sessions.create({ userAgent: "A", entry: "x" });
-    expect(sessions.authenticate(token)).toEqual({ id });
+    expect(sessions.authenticate(token)).toEqual({ id, status: "active", viaPublic: false });
     expect(sessions.authenticate(`${token}x`)).toBeNull();
     expect(sessions.authenticate(token.slice(0, -1))).toBeNull();
     expect(sessions.authenticate("")).toBeNull();
@@ -83,7 +83,7 @@ describe("createBrowserSessions", () => {
     const b = sessions.create({ userAgent: "B", entry: "x" });
     expect(sessions.revoke(a.id)).toBe(true);
     expect(sessions.authenticate(a.token)).toBeNull();
-    expect(sessions.authenticate(b.token)).toEqual({ id: b.id });
+    expect(sessions.authenticate(b.token)).toEqual({ id: b.id, status: "active", viaPublic: false });
     expect(sessions.revoke(a.id)).toBe(false);
     expect(sessions.revoke("nope")).toBe(false);
   });
@@ -104,7 +104,7 @@ describe("createBrowserSessions", () => {
     now += 1000;
     const list = sessions.list();
     expect(list.map((s) => s.id)).toEqual([b.id, a.id]);
-    expect(list[0]).toEqual({ id: b.id, userAgent: "B", createdAt: 1_001_000, lastSeenAt: 1_001_000 });
+    expect(list[0]).toEqual({ id: b.id, userAgent: "B", createdAt: 1_001_000, lastSeenAt: 1_001_000, status: "active", viaPublic: false });
   });
 
   it("最后活动：隔不到间隔不写库，超过间隔才更新", () => {
@@ -142,7 +142,7 @@ describe("createBrowserSessions", () => {
     const newest = sessions.create({ userAgent: "newest", entry: "x" });
     expect(sessions.list()).toHaveLength(MAX_BROWSER_SESSIONS);
     expect(sessions.authenticate(first.token)).toBeNull();
-    expect(sessions.authenticate(newest.token)).toEqual({ id: newest.id });
+    expect(sessions.authenticate(newest.token)).toEqual({ id: newest.id, status: "active", viaPublic: false });
     expect(newest.evicted).toEqual([first.id]);
   });
 
@@ -153,7 +153,7 @@ describe("createBrowserSessions", () => {
   it("重开库（守护进程重启）会话还在", () => {
     const { id, token } = sessions.create({ userAgent: "A", entry: "x" });
     const again = createBrowserSessions(db, { now: () => now });
-    expect(again.authenticate(token)).toEqual({ id });
+    expect(again.authenticate(token)).toEqual({ id, status: "active", viaPublic: false });
   });
 });
 
@@ -348,7 +348,7 @@ describe("经界面服务的浏览器登录", () => {
       const body = (await call("GET", API_PATHS.browserSessions, cookie)).body;
       expect(body).not.toContain(cookie.split("=")[1]!);
       expect(body).not.toContain("hash");
-      expect(Object.keys(JSON.parse(body).sessions[0]).sort()).toEqual(["createdAt", "current", "id", "lastSeenAt", "userAgent"]);
+      expect(Object.keys(JSON.parse(body).sessions[0]).sort()).toEqual(["createdAt", "current", "id", "lastSeenAt", "status", "userAgent", "viaPublic"]);
     });
 
     it("退出别的浏览器：204，那个浏览器马上 401（接口、WebSocket 都是），自己不受影响", async () => {

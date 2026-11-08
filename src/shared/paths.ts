@@ -34,6 +34,8 @@ export interface HubPaths {
   peersFile: string;
   /** state/tunnels.json：ssh 隧道表（docs/hub-tunnel-design.md 第 5 节，daemon/tunnel/table.ts），0600。中心记槽位，连入方记中心。 */
   tunnelsFile: string;
+  /** state/public-entry.json：公网入口配置 { enabled, hostname }（0600，daemon/ui-server/public-entry.ts）。 */
+  publicEntryFile: string;
   /** state/tunnel/：连入方的专用钥匙 id_ed25519（0600）、钉死中心主机公钥的 known_hosts、ssh 子进程号文件。 */
   tunnelDir: string;
   /** run/tunnel/hub.sock：连入方 ssh -L 建的 socket（0600），转到中心的设备入口。 */
@@ -56,6 +58,8 @@ export interface HubPaths {
   hubSock: string;
   /** run/ui.sock：界面服务另听的 socket，权限 0600，只给 tailscale serve 转发用（Linux，见 daemon/platform/tailscale.ts）。 */
   uiSock: string;
+  /** run/public.sock：公网入口 Unix socket，权限 0600，只给 Tailscale Funnel 或公网反代转发（daemon/ui-server/server.ts）。 */
+  publicSock: string;
   /**
    * run/peer.sock：设备入口（docs/hub-tunnel-design.md 第 4 节），权限 0600。连入方（Mac、以后的 Linux）的 ssh -R 把中心来的请求转到这里；
    * 这里只认设备令牌。中心（东京）不用它，听 TCP 127.0.0.1:DEFAULT_PEER_ENTRY_PORT。
@@ -112,6 +116,7 @@ export function resolveHubPaths(
     pushSubscriptionsFile: join(stateDir, "push-subscriptions.json"),
     peersFile: join(stateDir, "peers.json"),
     tunnelsFile: join(stateDir, "tunnels.json"),
+    publicEntryFile: join(stateDir, "public-entry.json"),
     tunnelDir: join(stateDir, "tunnel"),
     tunnelHubSock: join(home, "run", "tunnel", "hub.sock"),
     adminSock: join(home, "run", "admin.sock"),
@@ -123,6 +128,7 @@ export function resolveHubPaths(
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
     uiSock: join(home, "run", "ui.sock"),
+    publicSock: join(home, "run", "public.sock"),
     peerSock: join(home, "run", "peer.sock"),
     hubBinDir: join(home, "run", "bin"),
     worktreesDir: join(home, "worktrees"),
