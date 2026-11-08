@@ -84,7 +84,7 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
     async (host) => {
       const res = await call("GET", API_PATHS.state, { ...VIA_SERVE, host });
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toEqual({ error: "forbidden_host" });
+      expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 agent hub" });
     },
   );
 
@@ -92,7 +92,7 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
     for (const login of ["friend@example.com", undefined, ""]) {
       const res = await call("GET", API_PATHS.state, { ...VIA_SERVE, "tailscale-user-login": login });
       expect(res.statusCode, String(login)).toBe(403);
-      expect(res.json()).toEqual({ error: "forbidden_identity" });
+      expect(res.json()).toEqual({ code: "forbidden_identity", error: "这台设备的主人不是你" });
     }
     expect((await call("GET", "/", { ...VIA_SERVE, cookie: undefined, "tailscale-user-login": "friend@example.com" })).statusCode).toBe(403);
     const auth = await call("GET", `${API_PATHS.auth}?token=${TOKEN}`, { ...VIA_SERVE, cookie: undefined, "tailscale-user-login": "x@y.z" });
@@ -128,7 +128,7 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
     for (const bad of [`http://${NAME}`, "https://other.tail1234.ts.net", `https://${NAME}:4000`, `http://127.0.0.1:${PORT}`, undefined]) {
       const res = await stop(bad);
       expect(res.statusCode, String(bad)).toBe(403);
-      expect(res.json()).toEqual({ error: "forbidden_origin" });
+      expect(res.json()).toEqual({ code: "forbidden_origin", error: "请求来源不对，已拦下" });
     }
     expect(ledger.stopped).toHaveLength(1);
     // 本机直连时 https://<tailnet> 的 Origin 不算同源

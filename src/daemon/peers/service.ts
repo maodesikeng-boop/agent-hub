@@ -292,7 +292,8 @@ export function createPeers(opts: PeersOptions): Peers {
       body = null;
     }
     const error = typeof (body as { error?: unknown } | null)?.error === "string" ? (body as { error: string }).error : null;
-    return { status: res.status, body, error };
+    const code = typeof (body as { code?: unknown } | null)?.code === "string" ? (body as { code: string }).code : null;
+    return { status: res.status, body, error, code };
   };
 
   /** 带本机令牌找已配对的那台。对方说不认本机了：本机也删掉它，回 404。 */
@@ -314,7 +315,7 @@ export function createPeers(opts: PeersOptions): Peers {
     } catch (error) {
       throw error instanceof PeerError && error.code === "device_offline" ? offline(peer.name) : error;
     }
-    if (result.status === 401 && result.error === PEER_UNAUTHORIZED) {
+    if (result.status === 401 && (result.code === PEER_UNAUTHORIZED || result.error === PEER_UNAUTHORIZED)) {
       forget(peer.id);
       throw new PeerError(404, `“${peer.name}”已经把这台移除了`, "device_not_found");
     }

@@ -3,6 +3,7 @@
 // 这里注册在 server.ts 的路由插件里（@fastify/websocket 之后）。
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
+import { API_ERRORS } from "../../shared/errors.ts";
 import { API_PATHS, type ApiErrorBody, type DevicesResponse } from "../../shared/index.ts";
 import { proxyHttp, proxyWebSocket, splitProxyUrl, type ProxyContext, type ProxyTarget } from "./proxy.ts";
 import { PeerError, type Peers } from "./service.ts";
@@ -21,7 +22,8 @@ export interface PeerRoutesOptions {
 const fail = (reply: FastifyReply, error: PeerError) =>
   reply.code(error.statusCode).send((error.code === undefined ? { error: error.message } : { error: error.message, code: error.code }) satisfies ApiErrorBody);
 
-const notFound = (reply: FastifyReply) => reply.code(404).send({ error: "not_found", code: "not_found" } satisfies ApiErrorBody);
+const notFound = (reply: FastifyReply) =>
+  reply.code(404).send({ error: API_ERRORS.device_not_found.text, code: "device_not_found" } satisfies ApiErrorBody);
 
 export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions): Promise<void> {
   const { peers } = opts;

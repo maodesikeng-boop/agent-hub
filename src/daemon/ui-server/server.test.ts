@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
   ConversationNotFoundError,
@@ -193,7 +193,7 @@ describe("没登录", () => {
   it.each(apiRequests)("没 cookie：%s %s 返回 401，不碰账本", async (method, url, body) => {
     const res = await call(method, url, { cookie: null, body, origin: ORIGIN });
     expect(res.statusCode).toBe(401);
-    expect(res.json()).toEqual({ error: "unauthorized" });
+    expect(res.json()).toEqual({ code: "unauthorized", error: "登录过期了" });
     expect(ledger.posted).toEqual([]);
     expect(ledger.stopped).toEqual([]);
     expect(ledgerCalls()).toEqual(0);
@@ -242,7 +242,7 @@ describe("防 DNS 重绑定", () => {
   ])("Host %j：403", async (host) => {
     const res = await call("GET", "/api/state", { host });
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: "forbidden_host" });
+    expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 agent hub" });
   });
 
   it("没 cookie 又是错 Host：先 403（Host 在认证前查）", async () => {
@@ -308,7 +308,7 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
   it.each(badOrigins)("POST 发消息：Origin 是%s → 403，不碰账本", async (_name, origin) => {
     const res = await post(origin);
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: "forbidden_origin" });
+    expect(res.json()).toEqual({ code: "forbidden_origin", error: "请求来源不对，已拦下" });
     expect(ledger.posted).toEqual([]);
   });
 
@@ -326,7 +326,7 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
   it("POST 没带 Origin：403（浏览器发同源 POST 一定带）", async () => {
     const res = await post(null);
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ error: "forbidden_origin" });
+    expect(res.json()).toEqual({ code: "forbidden_origin", error: "请求来源不对，已拦下" });
     expect(ledger.posted).toEqual([]);
     const stop = await call("POST", "/api/conversations/1/stop", { origin: null });
     expect(stop.statusCode).toBe(403);
@@ -432,13 +432,13 @@ describe("GET /api/state 和 /messages?before=", () => {
   it("对话不存在：404", async () => {
     const res = await call("GET", "/api/conversations/99/messages?before=3");
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "conversation_not_found" });
+    expect(res.json()).toEqual({ code: "not_found", error: "要找的东西不在了" });
   });
 
   it("翻页时对话不存在（包括老的项目群）：404", async () => {
     const res = await call("GET", "/api/conversations/99/messages?before=5");
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "conversation_not_found" });
+    expect(res.json()).toEqual({ code: "not_found", error: "要找的东西不在了" });
   });
 });
 
@@ -499,24 +499,24 @@ describe("发消息 POST /api/conversations/:id/messages", () => {
   it.each(bad)("请求体不对（%s）：400，不调账本", async (_name, body) => {
     const res = await call("POST", "/api/conversations/1/messages", { rawBody: JSON.stringify(body) });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toHaveProperty("error");
+    expect(res.json()).toEqual({ code: "invalid", error: "请求内容不对" });
     expect(ledger.posted).toEqual([]);
   });
 
-  it("整个请求体超过 1 MB：413，响应是 { error }，没有 code 字段；不调账本", async () => {
+  it("整个请求体超过 1 MB：413，响应是中文 too_large，不透传 Fastify 英文原文；不调账本", async () => {
     const res = await call("POST", "/api/conversations/1/messages", {
       rawBody: JSON.stringify({ clientId: "c", text: "hi", pad: " ".repeat(1024 * 1024 + 1) }),
     });
     expect(res.statusCode).toBe(413);
-    const body = res.json();
-    expect(typeof body.error).toBe("string");
-    expect(body).not.toHaveProperty("code");
+    expect(res.json()).toEqual({ code: "too_large", error: "内容太大，发不出去" });
     expect(ledger.posted).toEqual([]);
   });
 
-  it("body 不是合法 JSON：400，不调账本", async () => {
+  it("body 不是合法 JSON：400，应答是中文且不含英文异常原文，不调账本", async () => {
     const res = await call("POST", "/api/conversations/1/messages", { rawBody: "{not json" });
     expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ code: "invalid", error: "请求内容不对" });
+    expect(res.body).not.toMatch(/JSON|Unexpected|SyntaxError/i);
     expect(ledger.posted).toEqual([]);
   });
 
@@ -535,15 +535,21 @@ describe("发消息 POST /api/conversations/:id/messages", () => {
   it("对话不存在（账本抛 ConversationNotFoundError）：404", async () => {
     const res = await call("POST", "/api/conversations/99/messages", { body: { clientId: "c", text: "hi" } });
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "conversation_not_found" });
+    expect(res.json()).toEqual({ code: "not_found", error: "要找的东西不在了" });
   });
 
-  it("账本别的错误：500，不泄露内部信息", async () => {
-    ledger.failWith = new Error("SQLITE_BUSY: secret internals");
-    const res = await call("POST", "/api/conversations/1/messages", { body: { clientId: "c", text: "hi" } });
-    expect(res.statusCode).toBe(500);
-    expect(res.json()).toEqual({ error: "internal_error" });
-    expect(res.body).not.toContain("SQLITE");
+  it("账本别的错误：500，不泄露内部信息，且日志有记录", async () => {
+    const errorSpy = vi.spyOn(Object.getPrototypeOf(app.log), "error");
+    try {
+      ledger.failWith = new Error("SQLITE_BUSY: secret internals");
+      const res = await call("POST", "/api/conversations/1/messages", { body: { clientId: "c", text: "hi" } });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ code: "internal", error: "守护进程出了意外的错，已记进日志" });
+      expect(res.body).not.toContain("SQLITE");
+      expect(errorSpy).toHaveBeenCalledWith({ err: ledger.failWith }, "ui-server request failed");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -578,7 +584,7 @@ describe("停止 POST /api/conversations/:id/stop", () => {
   it("对话不存在：404", async () => {
     const res = await call("POST", "/api/conversations/99/stop");
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "conversation_not_found" });
+    expect(res.json()).toEqual({ code: "not_found", error: "要找的东西不在了" });
     expect(ledger.stopped).toEqual([]);
   });
 
@@ -612,7 +618,7 @@ describe("新接口的 Host、Origin、cookie 检查", () => {
     for (const origin of ["http://evil.example.com", "http://127.0.0.1:4001", "null", "", null]) {
       const res = await call(method, url, { origin, body });
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toEqual({ error: "forbidden_origin" });
+      expect(res.json()).toEqual({ code: "forbidden_origin", error: "请求来源不对，已拦下" });
     }
     expect(ledgerCalls()).toBe(0);
   });
@@ -621,7 +627,7 @@ describe("新接口的 Host、Origin、cookie 检查", () => {
     expect((await call(method, url, { host: "evil.com:4000", body })).statusCode).toBe(403);
     const res = await call(method, url, { cookie: null, body });
     expect(res.statusCode).toBe(401);
-    expect(res.json()).toEqual({ error: "unauthorized" });
+    expect(res.json()).toEqual({ code: "unauthorized", error: "登录过期了" });
     expect(ledgerCalls()).toBe(0);
   });
 
@@ -672,7 +678,7 @@ describe("账本拒绝请求时的 HTTP 状态", () => {
     for (const [, method, url, body] of NEW_ENDPOINTS) {
       const res = await call(method, url, { body });
       expect(res.statusCode).toBe(500);
-      expect(res.json()).toEqual({ error: "internal_error" });
+      expect(res.json()).toEqual({ code: "internal", error: "守护进程出了意外的错，已记进日志" });
     }
   });
 
@@ -963,7 +969,7 @@ describe("静态文件", () => {
   it("不存在的文件：404，JSON", async () => {
     const res = await call("GET", "/nope.js", { cookie: null });
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "not_found" });
+    expect(res.json()).toEqual({ code: "not_found", error: "要找的东西不在了" });
   });
 
   it("静态目录不存在：服务照常起，/ 返回 404，API 仍可用", async () => {
@@ -1249,7 +1255,7 @@ describe("POST /api/uploads", () => {
     const before = readdirSync(uploadsDir).length;
     const res = await upload("big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
     expect(res.statusCode).toBe(413);
-    expect(res.json()).toEqual({ error: "文件太大，单个文件最多 20 MB" });
+    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 20 MB" });
     expect(readdirSync(uploadsDir)).toHaveLength(before);
   });
 
@@ -1501,7 +1507,7 @@ describe("同时上传的个数", () => {
       const headers = { origin: `http://127.0.0.1:${running.port}`, cookie: login.cookie(running.port), "content-type": "application/octet-stream" };
       const refused = await fetch(url, { method: "POST", headers, body: "x" });
       expect(refused.status).toBe(429);
-      expect(await refused.json()).toEqual({ error: "同时上传的文件太多了，稍等一下再试" });
+      expect(await refused.json()).toEqual({ code: "busy", error: "同时上传的文件太多了，稍等一下再试" });
       expect(await open[0]!.finish()).toBe(200);
       expect((await fetch(url, { method: "POST", headers, body: "x" })).status).toBe(200);
       for (const u of open.slice(1)) expect(await u.finish()).toBe(200);
@@ -1725,17 +1731,17 @@ describe("POST /api/pick-folder（选主文件夹）", () => {
     };
     let res = await pick();
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ error: "已经有一个窗口" });
+    expect(res.json()).toEqual({ code: "conflict", error: "已经有一个窗口" });
     pickResult = async () => {
       throw new PickFolderError(501, "没有 osascript");
     };
     res = await pick();
     expect(res.statusCode).toBe(501);
-    expect(res.json()).toEqual({ error: "没有 osascript" });
+    expect(res.json()).toEqual({ code: "unavailable", error: "没有 osascript" });
     pickResult = async () => {
       throw new PickFolderError(500, "弹不出窗口：boom");
     };
-    expect((await pick()).json()).toEqual({ error: "弹不出窗口：boom" });
+    expect((await pick()).json()).toEqual({ code: "internal", error: "弹不出窗口：boom" });
   });
 
   it("请求体不合法：400；多余字段 400", async () => {

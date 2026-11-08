@@ -90,7 +90,8 @@ function offlineBody(name: string): ApiErrorBody {
 const isPeerUnauthorized = (status: number, body: string) => {
   if (status !== 401) return false;
   try {
-    return (JSON.parse(body) as { error?: unknown }).error === PEER_UNAUTHORIZED;
+    const parsed = JSON.parse(body) as { code?: unknown; error?: unknown };
+    return parsed.code === PEER_UNAUTHORIZED || parsed.error === PEER_UNAUTHORIZED;
   } catch {
     return false;
   }

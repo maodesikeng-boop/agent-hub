@@ -247,7 +247,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 17. 消息流（对话里的消息列表）
 
-组件在 `src/web/components/MessageList.tsx`、`Messages.tsx`，分组在 `selectors.ts` 的 `groupMessages`，状态词在 `step-labels.ts`，出错的说法在 `errors.ts`。思路是**把过程藏起来**：默认只显示结论和状态，过程点开才看。
+组件在 `src/web/components/MessageList.tsx`、`Messages.tsx`，分组在 `selectors.ts` 的 `groupMessages`，状态词在 `step-labels.ts`，出错的说法在 `src/shared/errors.ts`。思路是**把过程藏起来**：默认只显示结论和状态，过程点开才看。
 
 - **字号只有三档**：正文 15px；名字、“Worked for”这一行、可点开的系统行 13.5px；时间、消息状态、很淡的系统行、操作明细 12px（`text-xs`）。不用 12.5px、13px。
 - **一轮回复一个头像**：用户（或项目经理、Worker 汇报、到点的定时任务）说一句之后，agent 接下来的所有东西算一轮，只在开头出一次“头像 24px + 名字（13.5px、500、灰）”。头像旁不放状态、不加“·”。
@@ -267,7 +267,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 排队中（时钟，`Queued`）：只用在还在我们自己队列里的消息上（agent 不支持一轮中途收消息、进程还没起来、前面是命令）；一轮中途已经交给 agent、它还没读到的是已送达，不显示。
   - 已停止（实心方块）：agent 读到过，这一轮被停止了。已取消（`Ban` 图标）：点停止时 agent 还没看到的用户消息（还在排队的，或一轮中途交给了 agent、它还没读到的），agent 没看到过，不自动重发。两个都是灰色（`text-muted-foreground`），没有“重试”。
   - 已取消的气泡整体变淡（`opacity-60`，和收工的 Worker 一样），一眼看得出这句没发出去；字照样能选中，用户想再发就自己复制。
-- **出错**：写用户看得懂的中文，说清“出了什么事”和“该怎么办”（“连不上守护进程，看守护进程有没有在跑”“Claude 服务繁忙，稍后重试”），原始错误放 `title`（悬停才看得到）；后面跟“重试”。**接口出错的说法只在 `src/shared/errors.ts` 的错误码表**（`API_ERRORS`、`LOCAL_ERRORS`），网页一律经 `humanize`（`format.ts` 的 `errorText`、`errorLine`、`errorTitle` 包了一层）显示：text 后面接 hint，raw 放 `title`；不显示英文码、`err.message`、浏览器的 “Failed to fetch”；任何接口回 401 直接切到登录界面，不弹报错。厂商运行失败的分类和说法在 `src/web/errors.ts`，按通用的类型分（服务繁忙、额度用完、网络断了、没能启动、未知），厂商的错误特征在 `src/shared/vendors.ts`。
+- **出错**：写用户看得懂的中文，说清“出了什么事”和“该怎么办”（“连不上守护进程，看守护进程有没有在跑”“Claude 服务繁忙，稍后重试”），原始错误放 `title`（悬停才看得到）；后面跟“重试”。**错误码与文案统一定义在 `src/shared/errors.ts`**（`API_ERRORS`、`LOCAL_ERRORS`、`describeFailure`）：接口出错网页一律经 `humanize`（`format.ts` 的 `errorText`、`errorLine`、`errorTitle` 包了一层）显示，text 后面接 hint，raw 放 `title`，不显示英文码、`err.message`、浏览器的 “Failed to fetch”；任何接口回 401 直接切到登录界面，不弹报错。厂商运行失败的分类和说法经 `describeFailure` 按通用的类型分（服务繁忙、额度用完、网络断了、没能启动、未知），厂商的错误特征在 `src/shared/vendors.ts`。
 - **贴底**：打开对话、刷新、图片加载完、内容变高时，原本在底部的继续贴底（`ResizeObserver`）；往上翻了就不拉回去。消息区始终延伸到输入框上沿，高度不随“回到底部”出现和消失而变，文字正常滚动，没有渐隐、没有硬切的一条。
   - **“回到底部”**：只在往上翻了（离底部 80px 以上）时出现，一个图标按钮（`secondary` 浅灰底、`icon-sm` 32px，无描边、无阴影、不带字），浮在输入框上方一点（`bottom-3`）、消息列的水平正中（照 t3code 的 Scroll to end）；外层 `pointer-events-none`，只有按钮能点。回到底部这一条就收起。内联图片固定 240px 高占位（第 15 条），加载前后不跳。
 - **空对话**：消息区中间是 agent 的头像（48px）、名字（17px、600）和一句“还没有消息”（13.5px 灰）。
