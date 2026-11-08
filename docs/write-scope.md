@@ -23,7 +23,7 @@ macOS 沙箱不能嵌套：已经在沙箱里的进程再起 `sandbox-exec` 报 
 
 Linux 上同样由外层 OS 沙箱（`bwrap`）强制执行（详细设计见 `docs/linux-sandbox-design.md`）：
 
-- **普通 Worker（`bwrapArgs`）**：`--unshare-user --disable-userns --unshare-pid --proc /proc --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> --ro-bind <dataDir> <dataDir> --bind <writableDir> <writableDir> ...`
+- **普通 Worker（`bwrapArgs`）**：`--unshare-user --disable-userns --unshare-pid --bind / / --proc /proc --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> --ro-bind <dataDir> <dataDir> --bind <writableDir> <writableDir> ...`
   - 数据目录只读挂载，再把 Worker 自己的可写目录可写绑定回去；
   - `--unshare-pid --proc /proc` 隐藏沙箱外进程（防读 `/proc/<外部pid>/environ` 偷令牌）并让外层 `bwrap` 退出时由内核自动清掉整个 PID namespace 的残留后代；
   - `--perms 0700 --tmpfs /run/user/<uid>` 遮住宿主机 systemd user / D-Bus socket，防止借宿主机用户服务代跑写穿；

@@ -53,10 +53,10 @@ fi
 # 3) 验证 bwrap 沙箱（若通过 sudo 调用则切回原普通用户验证非特权 userns）
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
   TARGET_UID="$(id -u "$SUDO_USER")"
-  sudo -u "$SUDO_USER" bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \
-    --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs "/run/user/${TARGET_UID}" -- /bin/true
+  sudo -u "$SUDO_USER" bwrap --unshare-user --disable-userns --unshare-pid \
+    --bind / / --proc /proc --dev-bind /dev /dev --perms 0700 --tmpfs "/run/user/${TARGET_UID}" -- /bin/true
 else
-  bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \
-    --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs "/run/user/$(id -u)" -- /bin/true
+  bwrap --unshare-user --disable-userns --unshare-pid \
+    --bind / / --proc /proc --dev-bind /dev /dev --perms 0700 --tmpfs "/run/user/$(id -u)" -- /bin/true
 fi
 echo "bwrap-ok"

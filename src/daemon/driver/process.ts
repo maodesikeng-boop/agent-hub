@@ -163,8 +163,11 @@ export function signalChild(
 ): void {
   if (child.pid !== undefined) {
     const target = signalTarget(child.pid, platform, procRoot);
-    if (target !== null) signalPid(target, signal);
-    return;
+    if (target === null) return;
+    if (target !== child.pid) {
+      signalPid(target, signal);
+      return;
+    }
   }
   child.kill(signal);
 }

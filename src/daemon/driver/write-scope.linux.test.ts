@@ -266,6 +266,9 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
             steps: [{ spawnChild: { sleepSec: 30, detached: true } }, { text: "done" }],
           },
         ],
+        defaultTurn: {
+          steps: [{ spawnChild: { sleepSec: 30, detached: true } }, { text: "done" }],
+        },
       },
     });
     const dataDir = join(realpathSync.native(h.dir), "home");

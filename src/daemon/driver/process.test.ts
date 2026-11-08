@@ -389,6 +389,10 @@ describe("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透�
       expect(spy).not.toHaveBeenCalled();
       expect(killFn).not.toHaveBeenCalled();
 
+      signalChild({ pid: 600, kill: killFn }, "SIGINT", "linux", procRoot);
+      expect(killFn).toHaveBeenCalledWith("SIGINT");
+      killFn.mockClear();
+
       signalChild({ pid: undefined, kill: killFn }, "SIGINT", "linux", procRoot);
       expect(killFn).toHaveBeenCalledWith("SIGINT");
     } finally {
