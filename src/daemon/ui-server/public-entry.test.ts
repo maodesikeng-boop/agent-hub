@@ -692,4 +692,58 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
       await freshServer.close();
     }
   });
+
+  it("场景 10：tailscale funnel --bg unix:... 将 Host 改写为 localhost 并通过 X-Forwarded-Host 传真实域名时全链路放行", async () => {
+    const funnelHost = "tokyo.tailnet.ts.net";
+    const funnelOrigin = `https://${funnelHost}`;
+    const configRes = await localCall("PUT", API_PATHS.publicEntry, { enabled: true, hostname: funnelHost });
+    expect(configRes.statusCode).toBe(200);
+
+    // Host: localhost + X-Forwarded-Host: evil.com（或缺失）仍返回 403 forbidden_host
+    for (const badForwarded of ["evil.com", undefined]) {
+      const badRes = await sendViaSocket(publicSock, "GET", API_PATHS.auth, {
+        headers: { host: "localhost", "x-forwarded-host": badForwarded },
+      });
+      expect(badRes.status, String(badForwarded)).toBe(403);
+      expect(badRes.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 agent hub" });
+    }
+
+    // 1. GET /auth（Host: localhost + X-Forwarded-Host: tokyo.tailnet.ts.net）→ 200
+    const landingRes = await sendViaSocket(publicSock, "GET", API_PATHS.auth, {
+      headers: { host: "localhost", "x-forwarded-host": funnelHost },
+    });
+    expect(landingRes.status).toBe(200);
+
+    // 2. POST /auth（Origin: https://tokyo.tailnet.ts.net）→ 202 待批准，且会话 entry 记录真实外部域名
+    const { code } = await issueLinkCode();
+    const authRes = await sendViaSocket(publicSock, "POST", API_PATHS.auth, {
+      headers: {
+        host: "localhost",
+        "x-forwarded-host": funnelHost,
+        origin: funnelOrigin,
+        "user-agent": "iPhone Safari",
+        "x-forwarded-for": "203.0.113.55",
+      },
+      body: { link: code },
+    });
+    expect(authRes.status).toBe(202);
+    expect(authRes.json()).toEqual({ status: "pending_approval" });
+    const setCookie = String(authRes.headers["set-cookie"]);
+    expect(setCookie).toMatch(new RegExp(`^${UI_COOKIE_NAME}=`));
+    const phoneCookie = setCookie.split(";")[0]!;
+
+    const row = db.get<{ entry: string }>(
+      "SELECT s.entry FROM browser_sessions s JOIN browser_session_public p ON p.session_id = s.id",
+    );
+    expect(row?.entry).toBe(funnelHost);
+
+    // 3. 批准后 GET /api/state（Host: localhost + X-Forwarded-Host: tokyo.tailnet.ts.net）→ 200
+    const pendingId = ((await localCall("GET", API_PATHS.browserSessions)).json() as BrowserSessionsResponse).sessions.find((s) => s.viaPublic)!.id;
+    expect((await localCall("POST", API_PATHS.approveBrowserSession(pendingId))).statusCode).toBe(204);
+
+    const stateRes = await sendViaSocket(publicSock, "GET", API_PATHS.state, {
+      headers: { host: "localhost", "x-forwarded-host": funnelHost, cookie: phoneCookie },
+    });
+    expect(stateRes.status).toBe(200);
+  });
 });

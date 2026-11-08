@@ -243,7 +243,7 @@ describe("serve 转发到 Unix socket（Linux）", () => {
 
   function viaSocket(headers: Headers): Promise<number> {
     return new Promise((resolve, reject) => {
-      const req = request({ socketPath, path: API_PATHS.state, headers: headers as Record<string, string> }, (res) => {
+      const req = request({ socketPath, path: API_PATHS.state, headers: headers as Record<string, string>, agent: false }, (res) => {
         res.resume();
         resolve(res.statusCode ?? 0);
       });
@@ -260,6 +260,11 @@ describe("serve 转发到 Unix socket（Linux）", () => {
     expect(await viaSocket(VIA_SERVE)).toBe(200);
     expect(await viaSocket({ ...VIA_SERVE, "tailscale-user-login": "friend@example.com" })).toBe(403);
     expect(await viaSocket({ ...LOCAL, host: `127.0.0.1:${running.port}` })).toBe(403);
+  });
+
+  it("socket 上：tailscale serve --bg unix:... 将 Host 改写为 localhost 并带 X-Forwarded-Host 时正常放行", async () => {
+    expect(await viaSocket({ ...VIA_SERVE, host: "localhost", "x-forwarded-host": NAME })).toBe(200);
+    expect(await viaSocket({ ...VIA_SERVE, host: "localhost", "x-forwarded-host": "evil.com" })).toBe(403);
   });
 
   it("TCP 端口上：只认本机 Host，tailnet 名字不认（本机别的进程连端口伪造不了 serve 流量）", async () => {
