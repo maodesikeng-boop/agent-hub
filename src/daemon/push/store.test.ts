@@ -13,7 +13,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const sub = (n: number) => ({ endpoint: `https://push.example.com/send/${n}`, keys: { p256dh: `BPk${n}`, auth: `au${n}` } });
+const sub = (n: number) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${n}`, keys: { p256dh: `BPk${n}`, auth: `au${n}` } });
 
 describe("VAPID 密钥", () => {
   it("第一次生成、0600；之后读出来不变", () => {
@@ -42,9 +42,19 @@ describe("推送订阅", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(createSubscriptionStore(file).list()).toEqual([{ ...sub(1), keys: { p256dh: "new", auth: "new" } }, sub(2)]);
     store.remove(sub(1).endpoint);
-    store.remove("https://push.example.com/none");
+    store.remove("https://fcm.googleapis.com/fcm/send/none");
     expect(createSubscriptionStore(file).list()).toEqual([sub(2)]);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ subscriptions: [sub(2)] });
+  });
+
+  it("文件里已存的名单外订阅：加载时丢掉（名单内的留着）；之后写文件时一并清掉", () => {
+    const file = join(dir, "subs.json");
+    const evil = { endpoint: "https://169.254.169.254/latest", keys: { p256dh: "x", auth: "y" } };
+    writeFileSync(file, JSON.stringify({ subscriptions: [evil, sub(1), { ...evil, endpoint: "https://push.example.com/a" }] }));
+    const store = createSubscriptionStore(file);
+    expect(store.list()).toEqual([sub(1)]);
+    store.add(sub(2));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ subscriptions: [sub(1), sub(2)] });
   });
 
   it("最多存 MAX_PUSH_SUBSCRIPTIONS 条，超了丢最早的", () => {
@@ -55,10 +65,11 @@ describe("推送订阅", () => {
     expect(list[0]).toEqual(sub(1));
   });
 
-  it("请求体校验：只收 https 的 endpoint 和两把钥匙，多的字段（expirationTime）丢掉", () => {
+  it("请求体校验：只收推送服务的 https endpoint 和两把钥匙，多的字段（expirationTime）丢掉", () => {
     expect(parseSubscription({ ...sub(1), expirationTime: null })).toEqual(sub(1));
-    expect(parseSubscription({ ...sub(1), endpoint: "http://push.example.com/x" })).toBeNull();
-    expect(parseSubscription({ ...sub(1), endpoint: "https://" + "a".repeat(3000) })).toBeNull();
+    expect(parseSubscription({ ...sub(1), endpoint: "http://fcm.googleapis.com/x" })).toBeNull();
+    expect(parseSubscription({ ...sub(1), endpoint: "https://push.example.com/x" })).toBeNull();
+    expect(parseSubscription({ ...sub(1), endpoint: "https://fcm.googleapis.com/" + "a".repeat(3000) })).toBeNull();
     expect(parseSubscription({ endpoint: sub(1).endpoint })).toBeNull();
     expect(parseSubscription({ ...sub(1), keys: { p256dh: "x", auth: 1 } })).toBeNull();
     expect(parseSubscription("nope")).toBeNull();

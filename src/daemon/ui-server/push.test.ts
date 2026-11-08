@@ -69,6 +69,19 @@ describe("推送订阅接口", () => {
     expect(store.list()).toEqual([]);
   });
 
+  it("名单外的 endpoint（不是已知推送服务的主机）：400 invalid，不存；名单内的 Windows、Mozilla 照常 204", async () => {
+    for (const endpoint of ["https://evil.example.com/x", "https://127.0.0.1:9/x", "https://fcm.googleapis.com.evil.com/x"]) {
+      const res = await post(API_PATHS.pushSubscriptions, { ...SUB, endpoint });
+      expect(res.statusCode, endpoint).toBe(400);
+      expect(res.json().code).toBe("invalid");
+    }
+    expect(store.list()).toEqual([]);
+    for (const endpoint of ["https://db5p.notify.windows.com/?token=a", "https://updates.push.services.mozilla.com/wpush/v2/a"]) {
+      expect((await post(API_PATHS.pushSubscriptions, { ...SUB, endpoint })).statusCode, endpoint).toBe(204);
+    }
+    expect(store.list()).toHaveLength(2);
+  });
+
   it("不合格的订阅：400 invalid（http 的 endpoint、缺钥匙）", async () => {
     for (const body of [{ ...SUB, endpoint: "http://evil.local/x" }, { endpoint: SUB.endpoint }, { endpoint: 1 }]) {
       const res = await post(API_PATHS.pushSubscriptions, body);

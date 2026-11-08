@@ -3,6 +3,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { MAX_PUSH_ENDPOINT_CHARS, MAX_PUSH_SUBSCRIPTIONS, type PushSubscribeRequest } from "../../shared/index.ts";
+import { isAllowedPushEndpoint } from "./endpoints.ts";
 
 export type PushSubscriptionRecord = PushSubscribeRequest;
 
@@ -18,23 +19,15 @@ const FILE_MODE = 0o600;
 /** 钥匙是 base64url，p256dh 65 字节、auth 16 字节，编码后都在 100 字符以内。 */
 const KEY_PATTERN = /^[A-Za-z0-9_=-]{1,200}$/;
 
-/** POST /api/push/subscriptions 的请求体 → 订阅；不合格是 null。只收 https 的 endpoint（推送服务都是 https）。 */
+/** POST /api/push/subscriptions 的请求体 → 订阅；不合格是 null。endpoint 只收已知推送服务的主机（endpoints.ts；守护进程会往它发请求，不能是任意地址）。状态文件加载时同样过这一关。 */
 export function parseSubscription(body: unknown): PushSubscriptionRecord | null {
   if (typeof body !== "object" || body === null) return null;
   const { endpoint, keys } = body as { endpoint?: unknown; keys?: unknown };
-  if (typeof endpoint !== "string" || endpoint.length > MAX_PUSH_ENDPOINT_CHARS || !isHttpsUrl(endpoint)) return null;
+  if (typeof endpoint !== "string" || endpoint.length > MAX_PUSH_ENDPOINT_CHARS || !isAllowedPushEndpoint(endpoint)) return null;
   if (typeof keys !== "object" || keys === null) return null;
   const { p256dh, auth } = keys as { p256dh?: unknown; auth?: unknown };
   if (typeof p256dh !== "string" || !KEY_PATTERN.test(p256dh) || typeof auth !== "string" || !KEY_PATTERN.test(auth)) return null;
   return { endpoint, keys: { p256dh, auth } };
-}
-
-function isHttpsUrl(value: string): boolean {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function load(file: string): PushSubscriptionRecord[] {
