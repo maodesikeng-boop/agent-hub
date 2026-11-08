@@ -1,5 +1,5 @@
 import { ChevronRight, Plus, Search, Settings } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
@@ -276,7 +276,7 @@ export function Sidebar({
               ))}
             </>
           ) : (
-            groups.map((group) => <div key={group.key} className="space-y-1">{renderGroupEntries(group)}</div>)
+            groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)
           )}
         </nav>
         <div className="flex items-center gap-1 px-3 py-3">
