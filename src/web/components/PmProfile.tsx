@@ -257,6 +257,7 @@ function PmEditor({
         <AgentRows
           value={agent}
           onChange={changeAgent}
+          switchingToVendor={persona.switchingToVendor}
           errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.info } : {}}
           onCustomSubmit={saveCustom}
           customAction={
@@ -449,7 +450,9 @@ export function PmProfile({
             </div>
           )}
           {load.phase === "ready" && <PmEditor pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
-          {load.phase === "ready" && <RenewSessionGroup pmId={pm.id} renewing={renewing} />}
+          {load.phase === "ready" && (
+            <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} />
+          )}
         </div>
       </div>
     </section>

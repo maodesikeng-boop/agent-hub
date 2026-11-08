@@ -119,7 +119,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
   });
   const { page } = messages;
-  const persona = createLedgerPersona(ctx, sessions, messages, files);
+  const persona = createLedgerPersona(ctx, sessions, messages, files, {
+    switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
+    clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
+  });
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
   const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew, log: options.log, onHandoverClaimable: options.onHandoverClaimable });

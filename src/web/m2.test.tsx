@@ -1001,6 +1001,42 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ model: "claude-opus-5-5" });
   });
+
+  it("换厂商：显示“正在换到 Codex…”，厂商下拉与“开新会话”按钮禁用；收到 pm.updated 后恢复", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    let view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });
+    api.getPersona = () => ({ status: 200, body: view });
+    api.putPersona = (_id, body) => {
+      const nextVendor = body.vendor ?? view.vendor;
+      view = {
+        ...view,
+        vendor: nextVendor,
+        model: body.model === undefined ? view.model : body.model,
+        effort: body.effort === undefined ? view.effort : body.effort,
+        switchingToVendor: nextVendor,
+      };
+      return { status: 200, body: { changed: true, persona: view } };
+    };
+    const page = await open(user);
+    const agent = groupIn(page, "模型");
+    const sessionGroup = groupIn(page, "会话");
+    await user.selectOptions(combo(page, "厂商"), "Codex");
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "codex", model: null, effort: null });
+    expect(await within(agent).findByText("正在换到 Codex…")).toBeInTheDocument();
+    expect(combo(page, "厂商")).toBeDisabled();
+    expect(combo(page, "模型")).toBeEnabled();
+    expect(within(sessionGroup).getByRole("button", { name: "Handing off…" })).toBeDisabled();
+
+    // 换厂商失败回退：服务端推 pm.updated，重新拉 persona 回到 claude 且 switchingToVendor 为 null
+    view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });
+    push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林", vendor: "claude" }) }));
+    await waitFor(() => expect(within(agent).queryByText("正在换到 Codex…")).not.toBeInTheDocument());
+    expect(combo(page, "厂商")).toHaveDisplayValue("Claude Code");
+    expect(combo(page, "厂商")).toBeEnabled();
+    expect(within(sessionGroup).getByRole("button", { name: "开始…" })).toBeEnabled();
+  });
 });
 
 describe("资料页：开新会话", () => {
