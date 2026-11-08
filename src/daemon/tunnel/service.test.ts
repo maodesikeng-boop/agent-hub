@@ -110,11 +110,14 @@ describe("中心：槽位和邀请码", () => {
     ]);
   });
 
-  it("名字、公钥不合格：TunnelInputError，表不动", () => {
+  it("名字、公钥不合格或别的设备已用同一把公钥：TunnelInputError，表不动", () => {
     const svc = service();
     expect(() => svc.addSlot({ name: "-mac", publicKey: PUB_MAC })).toThrow(TunnelInputError);
     expect(() => svc.addSlot({ name: "mac", publicKey: "ssh-rsa AAAA" })).toThrow(TunnelInputError);
     expect(existsSync(paths.tableFile)).toBe(false);
+    svc.addSlot({ name: "mac", publicKey: PUB_MAC });
+    expect(() => svc.addSlot({ name: "linux", publicKey: PUB_MAC })).toThrow(TunnelInputError);
+    expect(loadTunnelTable(paths.tableFile).slots.map((s) => s.name)).toEqual(["mac"]);
   });
 
   it("删设备：回端口；再删回 null", () => {

@@ -7,9 +7,9 @@
 //   GET  /tunnel/status                               → { status }
 //   POST /tunnel/slots         { name, publicKey }    → { port, entryPort, invite, expiresAt }
 //   POST /tunnel/slots/remove  { name }               → { removed: { port } | null }
-import { chmodSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TUNNEL_ADMIN_MAX_BODY_BYTES } from "../../shared/limits.ts";
+import { listenOnRunSocket } from "../run-socket.ts";
 import { TunnelInputError, type TunnelService } from "./service.ts";
 
 export interface TunnelAdminOptions {
@@ -35,13 +35,15 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > TUNNEL_ADMIN_MAX_BODY_BYTES) {
+        chunks.length = 0;
+        req.resume();
         reject(new BadRequest("请求太大"));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (size > TUNNEL_ADMIN_MAX_BODY_BYTES) return;
       const text = Buffer.concat(chunks).toString("utf8");
       if (text === "") return resolve({});
       try {
@@ -78,9 +80,9 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     if (token === "" || !opts.authorize(token)) return send(res, 401, { error: "令牌不对：要用跑守护进程的那个用户跑隧道命令" });
-    const route = routes[`${req.method} ${new URL(req.url ?? "/", "http://admin").pathname}`];
-    if (route === undefined) return send(res, 404, { error: "守护进程没有这个接口（两边代码版本不一样？）" });
     try {
+      const route = routes[`${req.method} ${new URL(req.url ?? "/", "http://admin").pathname}`];
+      if (route === undefined) return send(res, 404, { error: "守护进程没有这个接口（两边代码版本不一样？）" });
       send(res, 200, await route(await readBody(req)));
     } catch (error) {
       if (error instanceof BadRequest || error instanceof TunnelInputError) return send(res, 400, { error: error.message });
@@ -89,25 +91,22 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
     }
   });
 
-  mkdirSync(opts.runDir, { recursive: true, mode: 0o700 });
-  chmodSync(opts.runDir, 0o700);
-  // 上次没删掉的 socket（守护进程被强杀）：是 socket 才删
-  try {
-    if (lstatSync(opts.socketPath).isSocket()) unlinkSync(opts.socketPath);
-  } catch {
-    // 没有
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(opts.socketPath, () => resolve());
-  });
-  chmodSync(opts.socketPath, 0o600);
-  return {
-    socketPath: opts.socketPath,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
+  const close = () =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+  const socketPath = await listenOnRunSocket(
+    opts.socketPath,
+    (path) =>
+      new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(path, () => {
+          server.off("error", reject);
+          resolve();
+        });
       }),
-  };
+    close,
+  );
+  return { socketPath, close };
 }

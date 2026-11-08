@@ -8,10 +8,9 @@ import { promisify } from "node:util";
 import { decodeConnectionCode, isTunnelName, parseEd25519PublicKey, type TunnelStatus } from "../../shared/tunnel.ts";
 import { buildSshArgs, knownHostsLine } from "./ssh-args.ts";
 import { createTunnelSupervisor, killStaleSsh, type TunnelSupervisor } from "./supervisor.ts";
-import { keyFingerprint, loadTunnelTable, removeSlot, saveTunnelTable, upsertSlot, type TunnelHub } from "./table.ts";
+import { TunnelInputError, keyFingerprint, loadTunnelTable, removeSlot, saveTunnelTable, upsertSlot, type TunnelHub } from "./table.ts";
 
-/** 调用方给的东西不对（名字、公钥、连接码）：管理 socket 回 400，消息给人看。 */
-export class TunnelInputError extends Error {}
+export { TunnelInputError };
 
 export interface TunnelServicePaths {
   tableFile: string;
@@ -110,7 +109,6 @@ export function createTunnelService(opts: TunnelServiceOptions): TunnelService {
     supervisor = next;
     offSupervisor = next.onChange(emit);
     next.start();
-    emit();
   }
 
   function writeKnownHosts(hostKey: string) {

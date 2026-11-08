@@ -5,6 +5,7 @@ import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { TUNNEL_ADMIN_MAX_BODY_BYTES } from "../../shared/limits.ts";
 import { startTunnelAdmin, type RunningTunnelAdmin } from "./admin.ts";
 import { TunnelInputError, type TunnelService } from "./service.ts";
 
@@ -75,11 +76,15 @@ describe("管理 socket", () => {
     expect(calls[0]![1]).toEqual({ regenerate: true });
   });
 
-  it("输入不对 400 带原因；坏 JSON 400；没有的接口 404", async () => {
+  it("输入不对 400 带原因；坏 JSON、超限请求体 400；没有的接口 404", async () => {
     const sock = await start();
     expect(await call(sock, "POST", "/tunnel/slots", { name: "bad", publicKey: "x" })).toEqual({ status: 400, body: { error: "名字不合格" } });
     expect((await call(sock, "POST", "/tunnel/slots", { name: 1 })).status).toBe(400);
     expect((await call(sock, "POST", "/tunnel/connect", "not an object")).status).toBe(400);
+    expect(await call(sock, "POST", "/tunnel/slots", { name: "mac", publicKey: "x".repeat(TUNNEL_ADMIN_MAX_BODY_BYTES) })).toEqual({
+      status: 400,
+      body: { error: "请求太大" },
+    });
     expect((await call(sock, "POST", "/nope", {})).status).toBe(404);
   });
 });

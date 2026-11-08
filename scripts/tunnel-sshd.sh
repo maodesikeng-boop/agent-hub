@@ -102,10 +102,15 @@ reload_sshd() {
   fi
 }
 
-# 撤回片段：恢复改之前的样子（原来没有就删掉）
+# 撤回片段：恢复改之前的样子（原来没有就删掉，连同待 reload 标记和临时备份一起清）
 restore_snippet() {
   local backup="$1"
-  if [ -n "$backup" ]; then cp -p "$backup" "$SNIPPET"; else rm -f "$SNIPPET"; fi
+  if [ -n "$backup" ]; then
+    cp -p "$backup" "$SNIPPET"
+    rm -f "$backup"
+  else
+    rm -f "$SNIPPET" "$RELOAD_PENDING"
+  fi
 }
 
 ensure_snippet() {
@@ -142,6 +147,7 @@ ensure_snippet() {
         die "片段没作用到 $TUNNEL_USER 上（sshd -T 里没有“$want”）：sshd_config 要 Include /etc/ssh/sshd_config.d/*.conf，已撤回"
       fi
     done
+    rm -f "$backup"
     log "写了 sshd 片段 $SNIPPET（管理员用户 $ADMIN_USER 的配置没变）"
   else
     "$SSHD" -t || die "sshd -t 校验不过"

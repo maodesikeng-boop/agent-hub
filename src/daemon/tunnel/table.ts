@@ -9,6 +9,9 @@ import { dirname } from "node:path";
 import { TUNNEL_FIRST_SLOT_PORT, TUNNEL_LAST_SLOT_PORT } from "../../shared/limits.ts";
 import { isPort, isTunnelHost, isTunnelName, isTunnelUser, parseEd25519PublicKey } from "../../shared/tunnel.ts";
 
+/** 调用方给的东西不对（名字、公钥、连接码、重复公钥、槽位满）：管理 socket 回 400，消息给人看。 */
+export class TunnelInputError extends Error {}
+
 export interface TunnelSlot {
   name: string;
   port: number;
@@ -93,8 +96,10 @@ export function saveTunnelTable(file: string, table: TunnelTable): void {
   renameSync(tmp, file);
 }
 
-/** 加 / 更新一个槽位：同名保留端口和设备编号、换钥匙指纹；新名字取最小的空端口。changed：表变没变。端口用完了抛。 */
+/** 加 / 更新一个槽位：同名保留端口和设备编号、换钥匙指纹；新名字取最小的空端口。changed：表变没变。重复公钥或端口用完了抛 TunnelInputError。 */
 export function upsertSlot(table: TunnelTable, name: string, fingerprint: string): { table: TunnelTable; slot: TunnelSlot; changed: boolean } {
+  const other = table.slots.find((s) => s.name !== name && s.keyFingerprint === fingerprint);
+  if (other !== undefined) throw new TunnelInputError(`这把公钥已经给 ${other.name} 用了`);
   const existing = table.slots.find((s) => s.name === name);
   if (existing !== undefined) {
     if (existing.keyFingerprint === fingerprint) return { table, slot: existing, changed: false };
@@ -104,7 +109,7 @@ export function upsertSlot(table: TunnelTable, name: string, fingerprint: string
   const used = new Set(table.slots.map((s) => s.port));
   let port = TUNNEL_FIRST_SLOT_PORT;
   while (used.has(port)) port++;
-  if (port > TUNNEL_LAST_SLOT_PORT) throw new Error(`没有空的槽位了（${TUNNEL_FIRST_SLOT_PORT}–${TUNNEL_LAST_SLOT_PORT} 都用了）`);
+  if (port > TUNNEL_LAST_SLOT_PORT) throw new TunnelInputError(`没有空的槽位了（${TUNNEL_FIRST_SLOT_PORT}–${TUNNEL_LAST_SLOT_PORT} 都用了）`);
   const slot: TunnelSlot = { name, port, keyFingerprint: fingerprint, deviceId: null };
   return { table: { ...table, slots: [...table.slots, slot] }, slot, changed: true };
 }

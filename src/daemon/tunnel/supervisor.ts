@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import {
+  PS_TIMEOUT_MS,
   TUNNEL_BACKOFF_MAX_MS,
   TUNNEL_BACKOFF_MIN_MS,
   TUNNEL_DETAIL_MAX_CHARS,
@@ -83,6 +84,7 @@ export function createTunnelSupervisor(opts: TunnelSupervisorOptions): TunnelSup
     if (!stable()) return;
     failures = 0;
     earlyUsed = false;
+    connectedAt = null;
   };
 
   function writePid(pid: number | undefined) {
@@ -225,7 +227,7 @@ export async function killStaleSsh(pidFile: string, marker: string): Promise<voi
   // 问不到（ps 起不来、进程没了）就不杀
   const command = await new Promise<string>((resolve) => {
     try {
-      execFile("ps", ["-o", "command=", "-p", String(pid)], (error, stdout) => resolve(error ? "" : stdout));
+      execFile("ps", ["-o", "command=", "-p", String(pid)], { timeout: PS_TIMEOUT_MS }, (error, stdout) => resolve(error ? "" : stdout));
     } catch {
       resolve("");
     }

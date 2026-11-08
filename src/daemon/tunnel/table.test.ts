@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TUNNEL_FIRST_SLOT_PORT, TUNNEL_LAST_SLOT_PORT } from "../../shared/limits.ts";
-import { emptyTunnelTable, keyFingerprint, loadTunnelTable, removeSlot, saveTunnelTable, upsertSlot } from "./table.ts";
+import { TunnelInputError, emptyTunnelTable, keyFingerprint, loadTunnelTable, removeSlot, saveTunnelTable, upsertSlot } from "./table.ts";
 
 const KEY_A = "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 const KEY_B = "AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU";
+const KEY_C = "AAAAC3NzaC1lZDI1NTE5AAAAIChsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU";
 
 describe("槽位", () => {
   it("从 4401 起取最小的空端口；同名再加保留端口、换钥匙指纹；表不变就是同一个对象内容", () => {
@@ -24,10 +25,18 @@ describe("槽位", () => {
     table = b.table;
     expect(b.slot.port).toBe(TUNNEL_FIRST_SLOT_PORT + 1);
     // 换钥匙：端口不变
-    const rekey = upsertSlot(table, "mac", keyFingerprint(KEY_B));
+    const rekey = upsertSlot(table, "mac", keyFingerprint(KEY_C));
     expect(rekey.slot.port).toBe(TUNNEL_FIRST_SLOT_PORT);
-    expect(rekey.slot.keyFingerprint).toBe(keyFingerprint(KEY_B));
+    expect(rekey.slot.keyFingerprint).toBe(keyFingerprint(KEY_C));
     expect(rekey.changed).toBe(true);
+  });
+
+  it("不同设备名用同一把公钥抛 TunnelInputError", () => {
+    let table = upsertSlot(emptyTunnelTable(), "mac", keyFingerprint(KEY_A)).table;
+    table = upsertSlot(table, "linux", keyFingerprint(KEY_B)).table;
+    expect(() => upsertSlot(table, "pi", keyFingerprint(KEY_A))).toThrow(TunnelInputError);
+    expect(() => upsertSlot(table, "pi", keyFingerprint(KEY_A))).toThrow("这把公钥已经给 mac 用了");
+    expect(() => upsertSlot(table, "mac", keyFingerprint(KEY_B))).toThrow(TunnelInputError);
   });
 
   it("换钥匙保留设备编号（块 B 写的）", () => {
@@ -47,10 +56,10 @@ describe("槽位", () => {
     expect(upsertSlot(table, "pi", "SHA256:c").slot.port).toBe(TUNNEL_FIRST_SLOT_PORT);
   });
 
-  it("端口用完了抛", () => {
+  it("端口用完了抛 TunnelInputError", () => {
     let table = emptyTunnelTable();
-    for (let port = TUNNEL_FIRST_SLOT_PORT; port <= TUNNEL_LAST_SLOT_PORT; port++) table = upsertSlot(table, `d${port}`, "SHA256:x").table;
-    expect(() => upsertSlot(table, "one-more", "SHA256:y")).toThrow();
+    for (let port = TUNNEL_FIRST_SLOT_PORT; port <= TUNNEL_LAST_SLOT_PORT; port++) table = upsertSlot(table, `d${port}`, `SHA256:${port}`).table;
+    expect(() => upsertSlot(table, "one-more", "SHA256:y")).toThrow(TunnelInputError);
   });
 
   it("钥匙指纹和 ssh-keygen -lf 一样：SHA256:<base64 不带 =>", () => {

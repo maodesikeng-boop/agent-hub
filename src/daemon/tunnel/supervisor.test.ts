@@ -225,6 +225,8 @@ describe("提前重连（给转发用：/d/<中心> 连不上时调）", () => {
     clock += TUNNEL_STABLE_MS;
     expect(s.reconnectNow()).toBe(true);
     await spawned(3);
+    await until(s, "connected");
+    expect(s.reconnectNow()).toBe(false);
   });
 
   it("正在连、鉴权失败、主机公钥不对时不提前", async () => {

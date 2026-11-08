@@ -195,7 +195,7 @@ in_container() {
   sed -i 's|^Include /etc/ssh/sshd_config.d/\*.conf|#&|' /etc/ssh/sshd_config
   rm -f "$SNIPPET"
   if add_mac 2>/tmp/noinclude.log; then fail "没 Include 也成功了"; fi
-  [ ! -e "$SNIPPET" ] && pass "撤回了片段（$(grep 失败 /tmp/noinclude.log)）" || fail "片段没撤回"
+  [ ! -e "$SNIPPET" ] && [ ! -e "$PENDING" ] && pass "撤回了片段（$(grep 失败 /tmp/noinclude.log)）" || fail "片段没撤回"
   cp /root/sshd_config.bak /etc/ssh/sshd_config
   add_mac 2>/dev/null
   [ "$(admin_config)" = "$baseline" ] && pass "恢复后再跑：补齐，sshd -T 比对通过" || fail "恢复后不对"
