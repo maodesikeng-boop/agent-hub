@@ -41,6 +41,11 @@ export interface HubPaths {
   hubSock: string;
   /** run/ui.sock：界面服务另听的 socket，权限 0600，只给 tailscale serve 转发用（Linux，见 daemon/platform/tailscale.ts）。 */
   uiSock: string;
+  /**
+   * run/peer.sock：设备入口（docs/hub-tunnel-design.md 第 4 节），权限 0600。连入方（Mac、以后的 Linux）的 ssh -R 把中心来的请求转到这里；
+   * 这里只认设备令牌。中心（东京）不用它，听 TCP 127.0.0.1:DEFAULT_PEER_ENTRY_PORT。
+   */
+  peerSock: string;
   /** run/bin/：守护进程生成的 hub 外壳所在目录，放在 claude 的 PATH 最前面。 */
   hubBinDir: string;
   /**
@@ -97,6 +102,7 @@ export function resolveHubPaths(
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
     uiSock: join(home, "run", "ui.sock"),
+    peerSock: join(home, "run", "peer.sock"),
     hubBinDir: join(home, "run", "bin"),
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),

@@ -334,6 +334,11 @@ export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
 
 /** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
+/**
+ * 设备入口（docs/hub-tunnel-design.md 第 4 节）在中心（东京）上听的 TCP 端口，只听 127.0.0.1。连入设备经 ssh -L 连到它；
+ * 隧道用户读不了守护进程的 socket，所以中心用端口。连入方用 unix socket（paths.ts 的 peerSock）。
+ */
+export const DEFAULT_PEER_ENTRY_PORT = 4319;
 
 /** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
 export const MAX_API_RETRY_ERROR_CHARS = 200;
