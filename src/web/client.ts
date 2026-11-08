@@ -4,6 +4,7 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
+  type ArchivePmResponse,
   type Attachment,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
@@ -175,6 +176,8 @@ export function createClient(device: DeviceId | null) {
     /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota)),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
+    postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
+    postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
     postRetryMessage: (messageId: MessageId) => postJson<RetryMessageResponse>(at(API_PATHS.retryMessage(messageId))),
     postFileAction: (target: FileActionTarget, action: FileAction) => {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
@@ -210,6 +213,8 @@ export const {
   fetchModels,
   fetchQuota,
   postRenewSession,
+  postArchivePm,
+  postUnarchivePm,
   postRetryMessage,
   postFileAction,
   changeStreamUrl,

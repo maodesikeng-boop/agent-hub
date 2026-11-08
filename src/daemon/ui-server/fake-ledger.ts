@@ -20,6 +20,7 @@ import {
   type PersonaChange,
   type PersonaChangeId,
   type PersonaView,
+  type Pm,
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
@@ -120,6 +121,8 @@ export class FakeLedger {
   /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
   readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
   readonly renewed: PmId[] = [];
+  readonly archived: PmId[] = [];
+  readonly unarchived: PmId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: LedgerSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
@@ -249,6 +252,40 @@ export class FakeLedger {
     return { handoverId: 50 };
   }
 
+  archivePm(pmId: PmId): Pm {
+    this.check();
+    this.archived.push(pmId);
+    return {
+      id: pmId,
+      name: `pm-${pmId}`,
+      avatarFile: null,
+      mode: "manage_only",
+      vendor: "claude",
+      defaultModel: null,
+      effort: null,
+      personaFile: null,
+      createdAt: 1,
+      archivedAt: 1_000,
+    };
+  }
+
+  unarchivePm(pmId: PmId): Pm {
+    this.check();
+    this.unarchived.push(pmId);
+    return {
+      id: pmId,
+      name: `pm-${pmId}`,
+      avatarFile: null,
+      mode: "manage_only",
+      vendor: "claude",
+      defaultModel: null,
+      effort: null,
+      personaFile: null,
+      createdAt: 1,
+      archivedAt: null,
+    };
+  }
+
   snapshot(): LedgerSnapshot {
     this.check();
     return { ...this.snapshotValue, seq: this.seq };
@@ -297,6 +334,9 @@ export class FakeLedger {
       refreshSessionState: unused("refreshSessionState"),
       recoverAfterRestart: unused("recoverAfterRestart"),
       createPm: (i) => this.createPm(i),
+      archivePm: (p) => this.archivePm(p),
+      unarchivePm: (p) => this.unarchivePm(p),
+      purgeExpiredArchivedPms: unused("purgeExpiredArchivedPms"),
       getMessage: (id) => this.storedMessages.get(id) ?? null,
       sentFileAllows: (s, p) => this.sentFileAllows(s, p),
       onActionFailed: unused("onActionFailed"),

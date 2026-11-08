@@ -55,6 +55,12 @@ function pendingIn(state: Pick<ReminderState, "pending">, conversationId: Conver
   return state.pending.filter((p) => p.conversationId === conversationId);
 }
 
+function isPmArchived(state: Pick<ReminderState, "pms">, pmId: PmId | null): boolean {
+  if (pmId === null) return false;
+  const pm = state.pms.find((p) => p.id === pmId);
+  return pm?.archivedAt != null;
+}
+
 /**
  * 在“等你”的对话（m4-plan 2.2，不含“停稳 3 秒”，那个在 ReminderTracker）：对话自己和它派的 Worker 的会话都是 idle，
  * 没有排队、已送达、处理中的消息，最后一条不是用户发的，并且用户上次看之后又有了新消息。Worker 自己的对话不算。
@@ -65,6 +71,7 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
   return Object.values(state.conversations)
     .filter(({ conversation, messages }) => {
       if (conversation.kind === "worker") return false;
+      if (isPmArchived(state, conversation.pmId)) return false;
       const last = messages.findLast((m) => !isQuietMessage(m));
       if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
       if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status) && !isHandoverTraffic(m))) return false;
@@ -81,7 +88,7 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
  */
 export function pendingAsks(state: ReminderState, conversationId: ConversationId): Message[] {
   const view = state.conversations[conversationId];
-  if (!view || pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return [];
+  if (!view || isPmArchived(state, view.conversation.pmId) || pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return [];
   return view.messages.filter((m) => {
     const meta = askOf(m);
     return meta !== null && meta.answered !== true;
@@ -231,6 +238,13 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
     case "pm.created":
     case "pm.updated":
       return { ...next, pms: upsertBy(state.pms, change.data.pm, (a, b) => a.id === b.id) };
+    case "pm.removed": {
+      const { pmId } = change.data;
+      const conversations = Object.fromEntries(
+        Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
+      );
+      return { ...next, pms: state.pms.filter((p) => p.id !== pmId), conversations };
+    }
     case "conversation.created": {
       const { conversation } = change.data;
       if (state.conversations[conversation.id]) return next;

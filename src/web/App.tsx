@@ -104,7 +104,8 @@ export function App() {
         : route.view === "worker"
           ? entries.find((e) => e.pm !== null && e.pm.id === workerView?.conversation.pmId)
           : entries.find((e) => e.pm?.id === route.pmId);
-  const active = routedEntry ?? entries[0] ?? null;
+  const firstUnarchived = entries.find((e) => e.pm?.archivedAt == null) ?? entries[0];
+  const active = routedEntry ?? firstUnarchived ?? null;
   const select = useCallback(
     (ref: ConversationRef) => {
       setDrawerOpen(false);
@@ -120,13 +121,14 @@ export function App() {
   // 网址没写（第一次打开）：落到第一个对话，并把网址改成它（不记历史）。默认选中的那个就固定在网址里，
   // 之后别的对话来了新消息排到前面也不会跳走。写了但找不到的（刚建好、服务端的变化还没到；或者编号不对）先显示第一个，网址不动，
   // 对话到了自然切过去
-  const defaultId = route === null ? (entries[0]?.id ?? null) : null;
+  const defaultId = route === null ? (firstUnarchived?.id ?? null) : null;
   useEffect(() => {
     if (defaultId !== null) replace({ view: "conversation", id: defaultId });
   }, [defaultId, replace]);
   // 网址写的设备清单里没有（编号不对、已经移除了）：回到入口本机
   const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
-  const localFirst = local.state.phase === "ready" ? (listConversations(local.state)[0]?.id ?? null) : null;
+  const localEntries = local.state.phase === "ready" ? listConversations(local.state) : [];
+  const localFirst = (localEntries.find((e) => e.pm?.archivedAt == null) ?? localEntries[0])?.id ?? null;
   useEffect(() => {
     if (unknownDevice && localFirst !== null) replace({ view: "conversation", id: localFirst });
   }, [unknownDevice, localFirst, replace]);

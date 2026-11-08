@@ -319,6 +319,14 @@ export class FakeApi {
   };
   retryMessage: (messageId: number) => Reply | Promise<Reply> = (messageId) => ({ status: 202, body: { messageId } });
   renewSession: (pmId: number) => Reply | Promise<Reply> = () => ({ status: 202, body: { handoverId: 99 } });
+  archivePm: (pmId: number) => Reply | Promise<Reply> = (pmId) => ({
+    status: 200,
+    body: { pm: makePm({ id: pmId, archivedAt: 1_000 }) },
+  });
+  unarchivePm: (pmId: number) => Reply | Promise<Reply> = (pmId) => ({
+    status: 200,
+    body: { pm: makePm({ id: pmId, archivedAt: null }) },
+  });
   /** GET /api/sessions。默认：只有这一个浏览器。 */
   browserSessions: () => Reply | Promise<Reply> = () => ({
     status: 200,
@@ -383,6 +391,10 @@ export class FakeApi {
     if (sched && method === "DELETE") return jsonResponse(await this.removeSchedule(Number(sched[1])));
     const renew = /^\/api\/pms\/(\d+)\/renew-session$/.exec(url.pathname);
     if (renew && method === "POST") return jsonResponse(await this.renewSession(Number(renew[1])));
+    const archive = /^\/api\/pms\/(\d+)\/archive$/.exec(url.pathname);
+    if (archive && method === "POST") return jsonResponse(await this.archivePm(Number(archive[1])));
+    const unarchive = /^\/api\/pms\/(\d+)\/unarchive$/.exec(url.pathname);
+    if (unarchive && method === "POST") return jsonResponse(await this.unarchivePm(Number(unarchive[1])));
     const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);
     if (retry && method === "POST") return jsonResponse(await this.retryMessage(Number(retry[1])));
     // 文件接口的 HEAD（卡片探测文件是否已被清理）：假后端里文件都在

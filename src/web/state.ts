@@ -180,6 +180,21 @@ export function applyChange(state: HubState, change: Change): HubState {
         personaRev: { ...state.personaRev, [pm.id]: (state.personaRev[pm.id] ?? 0) + 1 },
       };
     }
+    case "pm.removed": {
+      const { pmId } = change.data;
+      const removedProjectIds = new Set(state.projects.filter((p) => p.pmId === pmId).map((p) => p.id));
+      const conversations = Object.fromEntries(
+        Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
+      );
+      return {
+        ...next,
+        pms: state.pms.filter((p) => p.id !== pmId),
+        projects: state.projects.filter((p) => p.pmId !== pmId),
+        folders: state.folders.filter((f) => !removedProjectIds.has(f.projectId)),
+        conversations,
+        schedules: state.schedules.filter((s) => s.pmId !== pmId),
+      };
+    }
     case "project.created":
       return { ...next, projects: upsertBy(state.projects, change.data.project, (a, b) => a.id === b.id) };
     case "folders.updated": {

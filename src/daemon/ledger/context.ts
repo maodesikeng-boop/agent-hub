@@ -34,6 +34,7 @@ export interface Pending {
 const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "pm.created": 0,
   "pm.updated": 0,
+  "pm.removed": 0,
   "project.created": 1,
   "conversation.created": 2,
   "session.created": 3,

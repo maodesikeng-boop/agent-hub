@@ -1,10 +1,11 @@
 import { Folder } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
-import { shortPath } from "../format.ts";
+import { errorText, formatArchiveRemaining, shortPath, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
+import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import type { StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
@@ -13,8 +14,44 @@ import { Composer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
+import { RowError } from "./SettingsList.tsx";
 import { useStop } from "../useStop.ts";
 import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
+
+function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
+  const client = useClient();
+  const [unarchiving, setUnarchiving] = useState(false);
+  const [error, setError] = useState<ErrorLike | null>(null);
+  const unarchive = async () => {
+    setUnarchiving(true);
+    setError(null);
+    try {
+      await client.postUnarchivePm(pmId);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setUnarchiving(false);
+    }
+  };
+  return (
+    <div className="rounded-2xl bg-sidebar px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 text-[15px]">
+          <span>已归档</span>
+          <span className="text-[13.5px] text-muted-foreground">{formatArchiveRemaining(archivedAt)}</span>
+        </div>
+        <Button variant="outline" size="sm" disabled={unarchiving} onClick={() => void unarchive()}>
+          {unarchiving ? "Restoring…" : "恢复"}
+        </Button>
+      </div>
+      {error && (
+        <div className="mt-2">
+          <RowError error={error} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Conversation({
   entry,
@@ -127,17 +164,21 @@ export function Conversation({
         />
       </div>
       <div className="chat-column w-full shrink-0 pb-5">
-        <Composer
-          autoFocus
-          value={draft}
-          placeholder={`给 ${entry.name} 发消息`}
-          staging={staging}
-          stop={stop}
-          link={link}
-          source={source}
-          onChange={(v) => onDraftChange(id, v)}
-          onSend={(text, files) => onSend(id, text, files)}
-        />
+        {entry.pm?.archivedAt != null ? (
+          <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
+        ) : (
+          <Composer
+            autoFocus
+            value={draft}
+            placeholder={`给 ${entry.name} 发消息`}
+            staging={staging}
+            stop={stop}
+            link={link}
+            source={source}
+            onChange={(v) => onDraftChange(id, v)}
+            onSend={(text, files) => onSend(id, text, files)}
+          />
+        )}
       </div>
     </FileDropZone>
   );

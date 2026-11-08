@@ -25,7 +25,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
-import { ACTOR_LABELS, errorLine, errorText, errorTitle, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
+import { ACTOR_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -348,14 +348,49 @@ function PmEditor({
 }
 
 /**
- * “会话”一组：开新会话。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
+ * 已归档项目经理顶部的“归档状态”一组：显示剩余删除天数与“恢复”按钮。
+ */
+function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: number }) {
+  const client = useClient();
+  const [unarchiving, setUnarchiving] = useState(false);
+  const [unarchiveError, setUnarchiveError] = useState<ErrorLike | null>(null);
+  const unarchive = async () => {
+    setUnarchiving(true);
+    setUnarchiveError(null);
+    try {
+      await client.postUnarchivePm(pmId);
+    } catch (err) {
+      setUnarchiveError(errorText(err));
+    } finally {
+      setUnarchiving(false);
+    }
+  };
+  return (
+    <SettingsGroup label="归档状态">
+      <SettingsRow label="已归档" detail={`${formatArchiveRemaining(archivedAt)}，不会删除你的项目代码文件夹`} error={unarchiveError}>
+        {() => (
+          <Button variant="outline" disabled={unarchiving} onClick={() => void unarchive()}>
+            {unarchiving && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {unarchiving ? "Restoring…" : "恢复"}
+          </Button>
+        )}
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * “会话”一组：开新会话、归档项目经理。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
  * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
  */
-function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean }) {
+function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renewing: boolean; onArchived: () => void }) {
   const client = useClient();
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<ErrorLike | null>(null);
   const confirm = async () => {
     setConfirming(false);
     setSending(true);
@@ -366,6 +401,19 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
       setError(errorText(err));
     } finally {
       setSending(false);
+    }
+  };
+  const confirmArchive = async () => {
+    setConfirmingArchive(false);
+    setArchiving(true);
+    setArchiveError(null);
+    try {
+      await client.postArchivePm(pmId);
+      onArchived();
+    } catch (err) {
+      setArchiveError(errorText(err));
+    } finally {
+      setArchiving(false);
     }
   };
   const busy = renewing || sending;
@@ -380,6 +428,14 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
           </Button>
         )}
       </SettingsRow>
+      <SettingsRow label="归档项目经理" detail="停止会话和定时任务，7 天后删除数据" error={archiveError}>
+        {() => (
+          <Button variant="outline" disabled={archiving} onClick={() => setConfirmingArchive(true)}>
+            {archiving && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {archiving ? "Archiving…" : "归档…"}
+          </Button>
+        )}
+      </SettingsRow>
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent title="开新会话？" className="max-w-[440px]">
           <p>项目经理先写一份交接，写完换一个新会话接着干。聊天记录都还在。</p>
@@ -388,6 +444,17 @@ function RenewSessionGroup({ pmId, renewing }: { pmId: number; renewing: boolean
               <Button variant="outline">取消</Button>
             </DialogClose>
             <Button onClick={() => void confirm()}>开新会话</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={confirmingArchive} onOpenChange={setConfirmingArchive}>
+        <DialogContent title="归档项目经理？" className="max-w-[440px]">
+          <p>归档后会立即停止当前会话、结束未收工的 Worker 并暂停定时任务。7 天内可随时恢复；7 天后永久删除该项目的聊天与内部数据，不会删除你的项目代码文件夹。</p>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">取消</Button>
+            </DialogClose>
+            <Button onClick={() => void confirmArchive()}>归档</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -433,6 +500,7 @@ export function PmProfile({
             <h1 className="mt-4 text-[22px] leading-tight font-semibold tracking-tight">{pm.name}</h1>
             {project && <p className="mt-1 text-[13.5px] text-muted-foreground">{project.name}</p>}
           </header>
+          {pm.archivedAt != null && <ArchiveStatusGroup key={pm.id} pmId={pm.id} archivedAt={pm.archivedAt} />}
           {load.phase === "loading" && (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -450,8 +518,8 @@ export function PmProfile({
             </div>
           )}
           {load.phase === "ready" && <PmEditor pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
-          {load.phase === "ready" && (
-            <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} />
+          {load.phase === "ready" && pm.archivedAt == null && (
+            <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} onArchived={onBack} />
           )}
         </div>
       </div>

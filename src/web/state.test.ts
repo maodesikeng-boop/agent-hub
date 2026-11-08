@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
-import { formatTime } from "./format.ts";
-import { CHANGE_TYPES, type ScheduleRecord } from "../shared/index.ts";
+import { formatArchiveRemaining, formatTime } from "./format.ts";
+import { CHANGE_TYPES, PM_ARCHIVE_RETENTION_MS, applyReminderChange, pendingAsks, reminderStateFrom, waitingConversations, type ScheduleRecord } from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
@@ -416,5 +416,57 @@ describe("定时任务（M6）：快照带上，变化实时更新", () => {
     expect(s.schedules.map((x) => x.id)).toEqual([2]);
     // 重新拉快照以快照为准
     expect(reducer(s, { type: "loaded", snapshot: makeSnapshot({ schedules: [] }) }).schedules).toEqual([]);
+  });
+});
+
+describe("归档项目经理状态与提醒（pm.removed、formatArchiveRemaining、提醒过滤）", () => {
+  it("formatArchiveRemaining：向上取整剩余天数，最少显示 1 天后删除", () => {
+    const t0 = 1_000_000;
+    expect(formatArchiveRemaining(t0, t0)).toBe("7 天后删除");
+    expect(formatArchiveRemaining(t0, t0 + 4 * 24 * 60 * 60 * 1000)).toBe("3 天后删除");
+    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS - 1_000)).toBe("1 天后删除");
+    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS + 10_000)).toBe("1 天后删除");
+  });
+
+  it("applyChange 处理 pm.removed：移除该 PM 及其项目、文件夹、对话、定时任务，不影响其他 PM", () => {
+    const s0 = loaded({
+      pms: [makePm({ id: 1, name: "小林", archivedAt: 1000 }), makePm({ id: 2, name: "阿周" })],
+      projects: [makeProject({ id: 10, pmId: 1, conversationId: 1 }), makeProject({ id: 20, pmId: 2, conversationId: 2 })],
+      folders: [makeFolder({ id: 100, projectId: 10, path: "/lin" }), makeFolder({ id: 200, projectId: 20, path: "/zhou" })],
+      conversations: [
+        makeConvSnapshot([makeMessage({ id: 1, conversationId: 1 })], { conversation: { id: 1, pmId: 1 } }),
+        makeConvSnapshot([], { conversation: { id: 30, kind: "worker", pmId: 1 } }),
+        makeConvSnapshot([makeMessage({ id: 2, conversationId: 2 })], { conversation: { id: 2, pmId: 2 } }),
+      ],
+      schedules: [
+        { id: 1, pmId: 1, name: "s1", kind: "daily", atTime: "09:00", everyMinutes: null, prompt: "p", enabled: false, nextRunAt: 1, lastRunAt: null, lastStatus: null, lastError: null, lastMessageId: null, createdAt: 1, updatedAt: 1 },
+        { id: 2, pmId: 2, name: "s2", kind: "daily", atTime: "09:00", everyMinutes: null, prompt: "p", enabled: true, nextRunAt: 1, lastRunAt: null, lastStatus: null, lastError: null, lastMessageId: null, createdAt: 1, updatedAt: 1 },
+      ],
+    });
+    const s1 = applyChange(s0, changeOf(11, "pm.removed", { pmId: 1 }));
+    expect(s1.pms.map((p) => p.id)).toEqual([2]);
+    expect(s1.projects.map((p) => p.id)).toEqual([20]);
+    expect(s1.folders.map((f) => f.id)).toEqual([200]);
+    expect(Object.keys(s1.conversations).map(Number)).toEqual([2]);
+    expect(s1.schedules.map((s) => s.id)).toEqual([2]);
+  });
+
+  it("已归档 PM 的对话不计入 waitingConversations 和 pendingAsks；applyReminderChange 处理 pm.removed", () => {
+    const askMsg = makeMessage({ id: 1, conversationId: 1, sender: "agent", createdAt: 5_000, meta: { needsUser: true } });
+    const sActive = loaded({
+      pms: [makePm({ id: 1, name: "小林", archivedAt: null })],
+      conversations: [makeConvSnapshot([askMsg], { conversation: { id: 1, pmId: 1 } })],
+    });
+    expect(waitingConversations(sActive, {})).toEqual([1]);
+    expect(pendingAsks(sActive, 1)).toHaveLength(1);
+
+    const sArchived = applyChange(sActive, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林", archivedAt: 6_000 }) }));
+    expect(waitingConversations(sArchived, {})).toEqual([]);
+    expect(pendingAsks(sArchived, 1)).toEqual([]);
+
+    const r0 = reminderStateFrom(makeSnapshot({ pms: [makePm({ id: 1 }), makePm({ id: 2 })], conversations: [makeConvSnapshot([askMsg], { conversation: { id: 1, pmId: 1 } })] }));
+    const r1 = applyReminderChange(r0, changeOf(11, "pm.removed", { pmId: 1 }));
+    expect(r1.pms.map((p) => p.id)).toEqual([2]);
+    expect(r1.conversations[1]).toBeUndefined();
   });
 });

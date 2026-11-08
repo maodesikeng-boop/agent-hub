@@ -485,11 +485,16 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
       ),
     ).toBe(false);
 
-    // 推送了 schedule.removed
+    // 推送了 schedule.removed 与 pm.removed
     expect(changes).toContainEqual({
       seq: expect.any(Number),
       type: "schedule.removed",
       data: { scheduleId: schedLin.id },
+    });
+    expect(changes).toContainEqual({
+      seq: expect.any(Number),
+      type: "pm.removed",
+      data: { pmId: lin.pmId },
     });
 
     // 验证内部目录和文件已删除
