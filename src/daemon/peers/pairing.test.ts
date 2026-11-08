@@ -123,7 +123,7 @@ describe("配对", () => {
       b.server.app.inject({ method: "POST", url: API_PATHS.peerPair, headers: { host: dnsName, "tailscale-user-login": login, "content-type": "application/json" }, payload: body });
     const stranger = await viaServe("friend@example.com");
     expect(stranger.statusCode).toBe(403);
-    expect(stranger.json()).toEqual({ error: "forbidden_identity" });
+    expect(stranger.json()).toEqual({ code: "forbidden_identity", error: "这台设备的主人不是你" });
     const owner = await viaServe("me@example.com");
     expect(owner.statusCode).toBe(200);
     expect((owner.json() as PeerPairResponse).device.id).toBe(b.id);
@@ -233,7 +233,7 @@ describe("设备令牌", () => {
     ] as const) {
       const res = await asPeer(b, API_PATHS.state, from, t);
       expect(res.status, `${from} ${t}`).toBe(401);
-      expect(await res.json()).toEqual({ error: "peer_unauthorized" });
+      expect(await res.json()).toEqual({ code: "peer_unauthorized", error: "这台设备没有配对或已被移除" });
     }
   });
 

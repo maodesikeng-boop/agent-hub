@@ -52,10 +52,8 @@ const RULES: Rule[] = [
     name: "应答体不许直接 error: 英文码（*.test.ts 除外）",
     files: daemonNonTestTs,
     pattern: /error: "[a-z_]+"/,
-    expected: 2,
+    expected: 1,
     allowed: [
-      // B 块（联机）：统一成 device_not_found 后删掉。
-      { file: "src/daemon/peers/routes.ts", line: 'const notFound = (reply: FastifyReply) => reply.code(404).send({ error: "not_found", code: "not_found" } satisfies ApiErrorBody);' },
       { file: "src/daemon/ledger/handover.ts", line: 'error: "error",', permanent: "别的枚举（交接单状态 error），不是应答体" },
     ],
   },
