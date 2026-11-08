@@ -7,10 +7,11 @@ import {
   normalizeName,
   type DeviceId,
   type DeviceInviteResponse,
+  type PublicEntryStatus,
   type TunnelState,
   type TunnelStatus,
 } from "../../shared/index.ts";
-import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite, postTunnelConnect, postTunnelRetry } from "../client.ts";
+import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite, postTunnelConnect, postTunnelRetry, putPublicEntry } from "../client.ts";
 import { platformLabel, type DeviceView } from "../devices.ts";
 import { errorText, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
@@ -19,10 +20,11 @@ import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
 import { StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-/** 设置弹窗要的：所有设备（入口本机第一）、本机隧道状态与仓库路径，改了之后重新拉清单。 */
+/** 设置弹窗要的：所有设备（入口本机第一）、本机隧道状态、公网入口状态与仓库路径，改了之后重新拉清单。 */
 export interface DeviceSettings {
   devices: readonly DeviceView[];
   tunnel?: TunnelStatus | null;
+  publicEntry?: PublicEntryStatus;
   repoDir?: string;
   onChanged: () => void;
 }
@@ -381,8 +383,112 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
   );
 }
 
-/** 设置弹窗里的“设备”一组，下面按需展开“连到中心”、“邀请”或“添加”。 */
-export function DevicesSection({ devices, tunnel, repoDir, onChanged }: DeviceSettings) {
+const DEFAULT_PUBLIC_ENTRY: PublicEntryStatus = {
+  enabled: false,
+  hostname: null,
+  funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
+};
+
+/** 公网入口开关与 Tailscale Funnel 命令向导（docs/mac-app-and-mobile-design.md 第 2.2 节）。 */
+function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEntryStatus; onChanged: () => void }) {
+  const initial = publicEntry ?? DEFAULT_PUBLIC_ENTRY;
+  const [entry, setEntry] = useState<PublicEntryStatus>(initial);
+  const [hostname, setHostname] = useState(initial.hostname ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ErrorLike | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+
+  useEffect(() => {
+    if (publicEntry !== undefined) {
+      setEntry(publicEntry);
+      setHostname(publicEntry.hostname ?? "");
+    }
+  }, [publicEntry]);
+
+  const toggle = async () => {
+    if (busy) return;
+    const nextEnabled = !entry.enabled;
+    const trimmed = hostname.trim();
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await putPublicEntry({
+        enabled: nextEnabled,
+        ...(trimmed !== "" ? { hostname: trimmed } : {}),
+      });
+      setEntry(next);
+      if (next.hostname !== null) setHostname(next.hostname);
+      onChanged();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = () => {
+    void copyText(entry.funnelCommand).then(() => {
+      setCopied(true);
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
+    });
+  };
+
+  return (
+    <SettingsGroup title="公网入口" label="公网入口">
+      <SettingsRow
+        label="公网域名"
+        detail={
+          entry.enabled && entry.hostname ? (
+            <span className="font-mono text-[13.5px] select-all">{`https://${entry.hostname}`}</span>
+          ) : undefined
+        }
+        error={error}
+      >
+        {(id) => (
+          <>
+            <Input
+              id={id}
+              value={hostname}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="如 tokyo.tailnet.ts.net"
+              className="w-[180px] font-mono"
+              onChange={(e) => setHostname(e.target.value)}
+            />
+            <Button
+              type="button"
+              variant={entry.enabled ? "outline" : "default"}
+              size="sm"
+              disabled={busy}
+              onClick={() => void toggle()}
+            >
+              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {entry.enabled ? "关闭" : "开启"}
+            </Button>
+          </>
+        )}
+      </SettingsRow>
+      {entry.enabled && (
+        <SettingsRow
+          label="Funnel 命令"
+          detail={<code className="block break-all font-mono text-[13.5px] select-all">{entry.funnelCommand}</code>}
+        >
+          {(id) => (
+            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "已复制" : "复制命令"} onClick={copy}>
+              {copied ? "已复制" : "复制命令"}
+            </Button>
+          )}
+        </SettingsRow>
+      )}
+    </SettingsGroup>
+  );
+}
+
+/** 设置弹窗里的“设备”一组，下面按需展开“连到中心”、“邀请”或“添加”，以及“公网入口”分组。 */
+export function DevicesSection({ devices, tunnel, publicEntry, repoDir, onChanged }: DeviceSettings) {
   const [panel, setPanel] = useState<"tunnel" | "invite" | "add" | null>(null);
   const toggle = (next: "tunnel" | "invite" | "add") => setPanel((p) => (p === next ? null : next));
   return (
@@ -426,6 +532,9 @@ export function DevicesSection({ devices, tunnel, repoDir, onChanged }: DeviceSe
           }}
         />
       )}
+      <PublicEntrySection {...(publicEntry !== undefined ? { publicEntry } : {})} onChanged={onChanged} />
     </>
   );
 }
+
+export { DevicesSection as DeviceSettingsSection };

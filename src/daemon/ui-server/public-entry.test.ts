@@ -642,4 +642,54 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
     });
     expect(viaTailnet.statusCode).toBe(401);
   });
+
+  it("场景 9：/auth 落地页包含 202 待批准提示与 /api/auth/status 轮询跳转逻辑，以及 429 锁定提示；未保存前 /api/state 也返回默认 publicEntry", async () => {
+    const landing = await sendViaSocket(publicSock, "GET", API_PATHS.auth, {
+      headers: { host: PUBLIC_HOST },
+    });
+    expect(landing.status).toBe(200);
+    expect(landing.body).toContain("res.status === 204");
+    expect(landing.body).toContain("res.status === 202");
+    expect(landing.body).toContain("已扫码，请在已登录的电脑上点「允许」完成登录…");
+    expect(landing.body).toContain("/api/auth/status");
+    expect(landing.body).toContain('data.status === "active"');
+    expect(landing.body).toContain('data.status === "unauthenticated"');
+    expect(landing.body).toContain("登录未获批准或已超时，请回电脑上重新生成二维码。");
+    expect(landing.body).toContain("res.status === 429");
+    expect(landing.body).toContain("公网登录尝试过多，已锁定 15 分钟后再试。");
+
+    // 还没保存过 public-entry.json 时，/api/state 也返回默认 publicEntry（hostname 默认取 tailnet.dnsName）
+    const freshFile = join(root, "state", "unconfigured-public-entry.json");
+    const freshSock = join(root, "run", "unconfigured-public.sock");
+    const freshServer = await startUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      port: 0,
+      staticDir: join(root, "no-static"),
+      uploadsDir: join(root, "uploads"),
+      sentFilesDir: join(root, "sent"),
+      db,
+      now: () => now,
+      serverInfo: serverInfoFor("darwin"),
+      tailnet: { current: () => ({ dnsName: PUBLIC_HOST, owner: TAILNET_OWNER }) },
+      publicSock: freshSock,
+      publicEntryFile: freshFile,
+    });
+    try {
+      const freshCookie = await loginCookie(freshServer.app, { token: TOKEN, port: freshServer.port, userAgent: "Mac" });
+      const res = await freshServer.app.inject({
+        method: "GET",
+        url: API_PATHS.state,
+        headers: { host: `127.0.0.1:${freshServer.port}`, cookie: freshCookie },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as StateSnapshot).publicEntry).toEqual({
+        enabled: false,
+        hostname: PUBLIC_HOST,
+        funnelCommand: `sudo tailscale funnel --bg unix:${freshSock}`,
+      });
+    } finally {
+      await freshServer.close();
+    }
+  });
 });

@@ -476,4 +476,60 @@ describe("设置 → 设备", () => {
     await waitFor(() => expect(connectedCodes).toEqual(["bad_code", "ahtun1_valid_code"]));
     await waitFor(() => expect(screen.queryByRole("region", { name: "连到中心" })).toBeNull());
   });
+
+  it("“公网入口”分组：可填写域名并开启/关闭（调 PUT /api/devices/public-entry）、展示生效地址与 Funnel 命令并支持复制", async () => {
+    const funnelCmd = "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock";
+    const localSnap: StateSnapshot = {
+      ...onePm("小林"),
+      publicEntry: {
+        enabled: false,
+        hostname: "tokyo.tail1234.ts.net",
+        funnelCommand: funnelCmd,
+      },
+    };
+    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
+    await boot(fleet);
+    await within(nav()).findByRole("button", { name: /小林/ });
+
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const publicRegion = await screen.findByRole("region", { name: "公网入口" });
+    const hostInput = within(publicRegion).getByRole("textbox", { name: "公网域名" });
+    expect(hostInput).toHaveValue("tokyo.tail1234.ts.net");
+    expect(hostInput).toHaveAttribute("placeholder", "如 tokyo.tailnet.ts.net");
+    expect(within(publicRegion).queryByText(funnelCmd)).toBeNull();
+
+    // 修改域名并点击“开启”
+    await userEvent.clear(hostInput);
+    await userEvent.type(hostInput, "custom.tail1234.ts.net");
+    await userEvent.click(within(publicRegion).getByRole("button", { name: "开启" }));
+
+    await waitFor(() => expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)).toHaveLength(1));
+    expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)[0]!.body).toEqual({
+      enabled: true,
+      hostname: "custom.tail1234.ts.net",
+    });
+
+    // 开启后展示 https://<hostname>、Funnel 命令与“复制命令”按钮，按钮变为“关闭”
+    expect(await within(publicRegion).findByText("https://custom.tail1234.ts.net")).toBeInTheDocument();
+    expect(within(publicRegion).getByText(funnelCmd)).toBeInTheDocument();
+    const copyBtn = within(publicRegion).getByRole("button", { name: "复制命令" });
+    await userEvent.click(copyBtn);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(funnelCmd));
+    expect(await within(publicRegion).findByRole("button", { name: "已复制" })).toBeInTheDocument();
+
+    // 点击“关闭”
+    await userEvent.click(within(publicRegion).getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)).toHaveLength(2));
+    expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)[1]!.body).toMatchObject({
+      enabled: false,
+    });
+    await waitFor(() => expect(within(publicRegion).queryByText(funnelCmd)).toBeNull());
+    expect(within(publicRegion).getByRole("button", { name: "开启" })).toBeInTheDocument();
+  });
 });

@@ -14,6 +14,7 @@ import {
   type PmId,
   type Project,
   type ProjectFolder,
+  type PublicEntryStatus,
   type ScheduleRecord,
   type ServerInfo,
   type SessionState,
@@ -78,6 +79,8 @@ export interface HubState {
   server: ServerInfo;
   /** 连入方 ssh 隧道状态（来自 /api/state 的 tunnel）。 */
   tunnel?: TunnelStatus | null;
+  /** 公网入口状态（来自 /api/state 的 publicEntry）。 */
+  publicEntry?: PublicEntryStatus;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
@@ -238,7 +241,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     conversations[c.conversation.id] = { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
-  const { tunnel: _oldTunnel, ...base } = withoutLoadError(state);
+  const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);
   return {
     ...base,
     phase: "ready",
@@ -252,6 +255,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     schedules: snapshot.schedules,
     server: snapshot.server,
     ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
+    ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),
     pending: dropConfirmed(state.pending, all),
     older: {},
     retry: keepStillFailed(state.retry, all),

@@ -1,6 +1,6 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
-import { DEFAULT_AGENT_VENDOR, serverInfoFor } from "../shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, serverInfoFor } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   Attachment,
@@ -21,6 +21,7 @@ import type {
   Project,
   ProjectFolder,
   SessionState,
+  SetPublicEntryRequest,
   StateSnapshot,
   SystemMessageMeta,
   WorkerMessageMeta,
@@ -327,17 +328,30 @@ export class FakeApi {
     status: 200,
     body: { pm: makePm({ id: pmId, archivedAt: null }) },
   });
+  /** GET /api/auth/status。 */
+  authStatus: () => Reply | Promise<Reply> = () => ({ status: 200, body: { status: "active" } });
   /** GET /api/sessions。默认：只有这一个浏览器。 */
   browserSessions: () => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { sessions: [{ id: "s1", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36", createdAt: 0, lastSeenAt: Date.now(), current: true }] },
   });
+  /** POST /api/sessions/:id/approve。 */
+  approveBrowserSession: (id: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   /** DELETE /api/sessions/:id。 */
   deleteBrowserSession: (id: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   /** POST /api/sessions/logout-all。 */
   logoutAll: () => Reply | Promise<Reply> = () => ({ status: 204 });
   /** POST /api/login-links。 */
   loginLink: () => Reply | Promise<Reply> = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth#link=fake-code", expiresAt: Date.now() + 300_000 } });
+  /** PUT /api/devices/public-entry。 */
+  putPublicEntry: (body: SetPublicEntryRequest) => Reply | Promise<Reply> = (body) => ({
+    status: 200,
+    body: {
+      enabled: body.enabled,
+      hostname: body.hostname ?? "tokyo.tailnet.ts.net",
+      funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
+    },
+  });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** GET /api/quota。默认 404：不显示那一块。 */
@@ -372,11 +386,15 @@ export class FakeApi {
       }
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
     }
+    if (method === "GET" && url.pathname === API_PATHS.authStatus) return jsonResponse(await this.authStatus());
     if (method === "GET" && url.pathname === "/api/sessions") return jsonResponse(await this.browserSessions());
     if (method === "POST" && url.pathname === "/api/sessions/logout-all") return jsonResponse(await this.logoutAll());
     if (method === "POST" && url.pathname === "/api/login-links") return jsonResponse(await this.loginLink());
+    const approveSession = /^\/api\/sessions\/([^/]+)\/approve$/.exec(url.pathname);
+    if (approveSession && method === "POST") return jsonResponse(await this.approveBrowserSession(decodeURIComponent(approveSession[1]!)));
     const browserSession = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (browserSession && method === "DELETE") return jsonResponse(await this.deleteBrowserSession(decodeURIComponent(browserSession[1]!)));
+    if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);

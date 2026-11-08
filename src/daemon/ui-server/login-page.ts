@@ -4,6 +4,9 @@
 /** 登录链接里 # 片段的键：`#link=<码>`。 */
 export const LOGIN_LINK_FRAGMENT_KEY = "link";
 
+/** 公网扫码进入待批准（pending_approval）后，轮询 /api/auth/status 的间隔（毫秒）。 */
+const AUTH_STATUS_POLL_MS = 2000;
+
 export const LOGIN_LINK_PAGE = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -31,8 +34,30 @@ export const LOGIN_LINK_PAGE = `<!doctype html>
     credentials: "same-origin",
     referrerPolicy: "no-referrer"
   }).then(function (res) {
-    if (res.ok) location.replace("/");
-    else msg.textContent = "登录链接已失效或已用过，请回电脑上重新生成二维码。";
+    if (res.status === 204) {
+      location.replace("/");
+    } else if (res.status === 202) {
+      msg.textContent = "已扫码，请在已登录的电脑上点「允许」完成登录…";
+      var timer = setInterval(function () {
+        fetch("/api/auth/status", { credentials: "same-origin", referrerPolicy: "no-referrer" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (!data) return;
+            if (data.status === "active") {
+              clearInterval(timer);
+              location.replace("/");
+            } else if (data.status === "unauthenticated") {
+              clearInterval(timer);
+              msg.textContent = "登录未获批准或已超时，请回电脑上重新生成二维码。";
+            }
+          })
+          .catch(function () {});
+      }, ${AUTH_STATUS_POLL_MS});
+    } else if (res.status === 429) {
+      msg.textContent = "公网登录尝试过多，已锁定 15 分钟后再试。";
+    } else {
+      msg.textContent = "登录链接已失效或已用过，请回电脑上重新生成二维码。";
+    }
   }).catch(function () {
     msg.textContent = "连不上 Agent Hub，请检查网络后重新扫码。";
   });

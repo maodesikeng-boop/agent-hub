@@ -331,6 +331,7 @@ export function App() {
             ? {
                 devices: fleet.devices,
                 ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
+                ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
                 ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
                 onChanged: () => void fleet.refresh(),
               }
