@@ -27,6 +27,7 @@ import type {
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor } from "./vendors.ts";
 
 /**
@@ -40,12 +41,12 @@ import type { AgentVendor } from "./vendors.ts";
 export const LEDGER_ERROR_CODES = ["invalid", "not_found", "forbidden", "conflict"] as const;
 export type LedgerErrorCode = (typeof LEDGER_ERROR_CODES)[number];
 
-/** 界面服务和 agent 接口都这样映射。 */
+/** 界面服务和 agent 接口都这样映射；状态码从 API_ERRORS 来，不在这里另写一份。 */
 export const LEDGER_ERROR_HTTP_STATUS: Readonly<Record<LedgerErrorCode, number>> = {
-  invalid: 400,
-  not_found: 404,
-  forbidden: 403,
-  conflict: 409,
+  invalid: API_ERRORS.invalid.status,
+  not_found: API_ERRORS.not_found.status,
+  forbidden: API_ERRORS.forbidden.status,
+  conflict: API_ERRORS.conflict.status,
 };
 
 export class LedgerRequestError extends Error {

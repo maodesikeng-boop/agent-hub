@@ -54,7 +54,7 @@ describe("错误码表", () => {
   });
 
   it("该带“怎么办”的码都有 hint", () => {
-    const table: Record<string, { hint?: string }> = { ...API_ERRORS, ...LOCAL_ERRORS };
+    const table: Record<string, { text: string; hint?: string }> = { ...API_ERRORS, ...LOCAL_ERRORS };
     for (const code of MUST_HAVE_HINT) expect(table[code]?.hint, code).toBeTruthy();
   });
 
@@ -88,12 +88,16 @@ describe("errorBody", () => {
   });
 
   it("只收接口错误码，不收本地错误码", () => {
-    // @ts-expect-error network 是本地错误，不可能被当成 HTTP 应答发出去
-    errorBody("network");
-    // @ts-expect-error 不在表里的码
-    errorBody("internal_error");
-    // @ts-expect-error 状态码不是错误码
-    errorBody(404);
+    // 只做类型检查，不调用：这些写法编译不过。
+    const _typeOnly = () => {
+      // @ts-expect-error network 是本地错误，不可能被当成 HTTP 应答发出去
+      errorBody("network");
+      // @ts-expect-error 不在表里的码
+      errorBody("internal_error");
+      // @ts-expect-error 状态码不是错误码
+      errorBody(404);
+    };
+    expect(_typeOnly).toBeTypeOf("function");
   });
 });
 
