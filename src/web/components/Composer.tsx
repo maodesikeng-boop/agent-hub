@@ -1,10 +1,11 @@
-import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, CircleAlert, FileText, Info, Paperclip, Square, X } from "lucide-react";
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
-import { formatBytes, type DraftSlot, type StagedFiles } from "../upload.ts";
+import { cn } from "../lib/utils.ts";
+import { formatBytes, readDropped, useNoticeAutoHide, type ComposerNotice, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
 import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
@@ -17,6 +18,32 @@ function StopButton({ stop }: { stop: StopControl }) {
     <Button size="icon" aria-label="停止" disabled={stop.stopping} onClick={stop.onStop}>
       <Square className="size-4 fill-current" aria-hidden="true" />
     </Button>
+  );
+}
+
+/** 待发文件、提示条右边的小 ×。 */
+const CHIP_CLOSE_CLASS =
+  "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50";
+
+/**
+ * 输入框上方的提示条：浅灰底、没有描边，左边一个小图标，右边 ×。加文件被拒的是灰字；发送失败的图标是红色、字是前景色。
+ * 图标和字从框内 20px 开始，和待发文件、输入的文字对齐。
+ */
+function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: () => void }) {
+  const failed = notice.kind === "failed";
+  const Icon = failed ? CircleAlert : Info;
+  return (
+    <div
+      role="alert"
+      title={errorTitle(notice.message)}
+      className="mx-3 mt-3 flex items-center gap-2 rounded-xl bg-sidebar py-1 pr-1 pl-2 text-[13.5px] leading-snug text-muted-foreground"
+    >
+      <Icon className={cn("size-3.5 shrink-0", failed && "text-danger")} aria-hidden="true" />
+      <span className={cn("min-w-0 flex-1", failed && "text-foreground")}>{errorLine(notice.message)}</span>
+      <button type="button" aria-label="关闭提示" className={CHIP_CLOSE_CLASS} onClick={onDismiss}>
+        <X className="size-3.5" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -69,6 +96,7 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
+  useNoticeAutoHide(staging);
   const tooLong = value.length * 3 > MAX_MESSAGE_BYTES && byteLength(value) > MAX_MESSAGE_BYTES;
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
@@ -136,24 +164,14 @@ export function Composer({
                 <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="min-w-0 truncate">{file.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                <button
-                  type="button"
-                  aria-label={`去掉 ${file.name}`}
-                  disabled={busy}
-                  className="touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
-                  onClick={() => staging.remove(key)}
-                >
+                <button type="button" aria-label={`去掉 ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
                   <X className="size-3.5" aria-hidden="true" />
                 </button>
               </li>
             ))}
           </ul>
         )}
-        {notice !== null && (
-          <p role="alert" title={errorTitle(notice)} className="px-5 pt-2.5 text-[13px] text-danger">
-            {errorLine(notice)}
-          </p>
-        )}
+        {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
         <textarea
           ref={ref}
           rows={1}
@@ -172,14 +190,14 @@ export function Composer({
           onChange={(e) => {
             setCursor(e.target.selectionStart);
             onChange(e.target.value);
+            if (notice !== null) staging.dismissNotice(); // 开始打字就不再挂着旧提示
           }}
           onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
           onPaste={(e) => {
-            // 粘贴截图或复制来的文件：加进待发列表；纯文字照常粘进去
-            const pasted = Array.from(e.clipboardData.files);
-            if (pasted.length === 0) return;
+            // 粘贴截图或复制来的文件（文件夹会往里读）：加进待发列表；纯文字照常粘进去
+            if (e.clipboardData.files.length === 0) return;
             e.preventDefault();
-            staging.add(pasted);
+            readDropped(e.clipboardData, staging.add);
           }}
           onKeyDown={(e) => {
             // 弹出列表开着：↑↓ 选、Enter / Tab 确定（Enter 不发送）、Esc 关；没有匹配时 Enter 照常发送

@@ -569,3 +569,40 @@ export function setForeground(foreground: boolean): void {
   window.dispatchEvent(new Event(foreground ? "focus" : "blur"));
   document.dispatchEvent(new Event("visibilitychange"));
 }
+
+// ---- 拖放、粘贴的假数据（jsdom 没有 DataTransfer 和 FileSystemEntry） ----
+
+type FakeEntry = Pick<FileSystemEntry, "name" | "isFile" | "isDirectory">;
+
+/** 文件夹里的一个文件。 */
+export function fakeFileEntry(file: File): FakeEntry {
+  return { name: file.name, isFile: true, isDirectory: false, file: (ok: (f: File) => void) => ok(file) } as FakeEntry;
+}
+
+/** 一个文件夹：readEntries 像浏览器一样分批给（每批 batch 项），最后给空数组；broken 时读就报错。 */
+export function fakeFolderEntry(name: string, children: FakeEntry[], { batch = 100, broken = false } = {}): FakeEntry {
+  const createReader = () => {
+    let next = 0;
+    return {
+      readEntries: (ok: (entries: FakeEntry[]) => void, fail: (err: DOMException) => void) =>
+        queueMicrotask(() => {
+          if (broken) return fail(new DOMException("不让读", "NotReadableError"));
+          ok(children.slice(next, next + batch));
+          next += batch;
+        }),
+    };
+  };
+  return { name, isFile: false, isDirectory: true, createReader } as FakeEntry;
+}
+
+/** 拖进来、粘进来的数据：每一项是一个文件（File）或一个文件夹（fakeFolderEntry）。files 里文件夹是 0 字节的空名文件，和 macOS 上的浏览器一样。 */
+export function fakeDropData(things: (File | FakeEntry)[]): { files: FileList; items: DataTransferItemList; types: string[] } {
+  const asFile = (t: File | FakeEntry) => (t instanceof File ? t : new File([], t.name));
+  const items = things.map((t) => ({
+    kind: "file",
+    type: "",
+    getAsFile: () => asFile(t),
+    webkitGetAsEntry: () => (t instanceof File ? fakeFileEntry(t) : t),
+  }));
+  return { files: things.map(asFile) as unknown as FileList, items: items as unknown as DataTransferItemList, types: ["Files"] };
+}

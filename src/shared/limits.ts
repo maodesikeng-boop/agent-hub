@@ -132,6 +132,8 @@ export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 /** 一条消息最多带几个文件。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+/** 拖进来的文件夹最多看多少项（文件和子文件夹都算）：误拖一个大项目文件夹时不把整棵树都翻一遍。 */
+export const MAX_DROPPED_FOLDER_ENTRIES = 1_000;
 /** 服务端同时在收的上传最多几个（超出的回 429，不收）：每个上传整个读进内存，不限的话一次拖一堆大文件会撑爆。 */
 export const MAX_CONCURRENT_UPLOADS = 4;
 /** 网页一条消息的文件同时最多传几个（要小于 MAX_CONCURRENT_UPLOADS，留出别的页面的余地）。 */
