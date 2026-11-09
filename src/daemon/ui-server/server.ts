@@ -411,8 +411,8 @@ const tunnelConnectBodySchema = z.object({ code: z.string() }).strict();
 const emptyObjectBodySchema = z.object({}).strict();
 const addScheduleBodySchema = z
   .object({
-    name: z.unknown(),
-    prompt: z.unknown(),
+    name: z.unknown().optional(),
+    prompt: z.unknown().optional(),
     daily: z.unknown().optional(),
     everyMinutes: z.unknown().optional(),
   })

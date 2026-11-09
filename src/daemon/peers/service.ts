@@ -85,7 +85,7 @@ const peerDeviceRawSchema = z.object({
     .transform((s) => normalizeName(s))
     .refine((v): v is string => v !== null),
   platform: z.custom<PeerDevice["platform"]>((v) => isPlatform(v)),
-  url: z.unknown(),
+  url: z.unknown().optional(),
 });
 
 /** 对方发来的设备身份：编号、名字、系统要合规；网址按 normalizePeerUrl（不认的回 null，调用方决定怎么办）。 */
@@ -108,7 +108,7 @@ const nameBodySchema = z.object({
 });
 
 const addBodySchema = z.object({
-  url: z.unknown(),
+  url: z.unknown().optional(),
   code: z
     .string({ error: "请填那台设备给的邀请码" })
     .max(MAX_INVITE_CODE_CHARS, "请填那台设备给的邀请码")
@@ -117,8 +117,8 @@ const addBodySchema = z.object({
 });
 
 const acceptPairBodySchema = z.object({
-  inviteCode: z.unknown(),
-  device: z.unknown(),
+  inviteCode: z.unknown().optional(),
+  device: z.unknown().optional(),
   token: z.string({ error: "token 不对" }).regex(PEER_TOKEN_PATTERN, "token 不对"),
 });
 
@@ -127,16 +127,16 @@ const deviceListBodySchema = z.object({
 });
 
 const deviceIdBodySchema = z.object({
-  deviceId: z.unknown(),
+  deviceId: z.unknown().optional(),
 });
 
 const pairResponseBodySchema = z.object({
-  device: z.unknown(),
+  device: z.unknown().optional(),
   token: z.string().regex(PEER_TOKEN_PATTERN),
 });
 
 const introductionResponseBodySchema = z.object({
-  device: z.unknown(),
+  device: z.unknown().optional(),
   code: z.string(),
 });
 
