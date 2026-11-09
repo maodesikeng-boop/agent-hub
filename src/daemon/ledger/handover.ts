@@ -49,7 +49,7 @@ import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
 /** 找会话的原始记录（厂商自己存的文件，driver/transcript.ts 的 vendorTranscriptPath）；找不到是 null。 */
-export type FindTranscript = (ref: { vendor: string; vendorSessionId: string; cwd: string }) => string | null;
+type FindTranscript = (ref: { vendor: string; vendorSessionId: string; cwd: string }) => string | null;
 
 export interface HandoverOptions {
   /** 默认都找不到（只给测试）；守护进程传 vendorTranscriptPath。 */
@@ -72,7 +72,7 @@ const transcriptLine = (path: string | null) =>
  * 交接提示词。照 Claude Code 压缩上下文的提示词的写法（先讲后果，再分节写），换成项目经理的场景。auto：系统因为对话太长自动换的。
  * forked：发给复制出来的那一份（后台写交接，平常都是）；否则发给项目经理会话本身（兜底的本会话写交接）。
  */
-export function handoverRequestText(options: {
+function handoverRequestText(options: {
   auto: boolean;
   transcriptPath: string | null;
   forked: boolean;
@@ -118,7 +118,7 @@ ${only}`;
  * 新会话第一条消息前面的开场说明（换代时定稿，驱动层拼在那条消息最前面，见 DriverOptions.sessionPreamble）：
  * 说明 + 交接 + 原话（handover-recent.ts 拼好的）+ 交接之后到的 Worker 汇报目录（每条一行，不带全文）。
  */
-export function sessionPreambleText(options: {
+function sessionPreambleText(options: {
   auto: boolean;
   handover: string;
   recent: string;
@@ -158,7 +158,7 @@ export const HANDOVER_NOT_WRITTEN_TEXT = "交接没写成，没换会话";
  * 不算失败次数：restart（守护进程重启时还在复制、写）、shutdown（关机时跑腿的取消了）、user_message（本会话写交接时用户发了消息，停掉了）、
  * stale（ready 放太久）、post_cut（切点之后聊得太多，交接太旧）。其余算一次（handover_empty、error、timeout、failed、stopped）。
  */
-export const HANDOVER_REASONS = {
+const HANDOVER_REASONS = {
   empty: HANDOVER_EMPTY_REASON,
   error: "error",
   timeout: "timeout",
@@ -221,8 +221,6 @@ const IS_R = "sender = 'system' AND kind = 'text' AND json_extract(meta, '$.even
 const NOT_HANDOVER_TURN = "COALESCE(json_extract(CASE WHEN json_valid(m.meta) THEN m.meta END, '$.handover'), 0) != 1";
 /** 原话一页取几条（倒着走索引，够数就停）。 */
 const RECENT_PAGE = 100;
-
-export type LedgerHandover = ReturnType<typeof createLedgerHandover>;
 
 export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSessions, messages: LedgerMessages, persona: LedgerPersona, options: HandoverOptions = {}) {
   const { db, now, write, enqueue } = ctx;

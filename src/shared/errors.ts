@@ -105,7 +105,7 @@ export function humanize(body: unknown, status: number): HumanError {
 
 // ---- 厂商失败：agent 厂商的错误原文 → 一句人话（docs/ui-standard.md 第 17 条）。各家的错误特征在 vendors.ts（VENDOR_FAILURE_SIGNS）。----
 
-export type FailureCategory = FailureKind | "unknown";
+type FailureCategory = FailureKind | "unknown";
 
 export interface Failure {
   kind: FailureCategory;

@@ -4,18 +4,13 @@ export {
   serveCommandLine,
   serveTargetKind,
   tailscaleCommand,
-  type ServeTarget,
   type ServeTargetKind,
 } from "./tailscale.ts";
-export { createTailnetProbe, parseTailscaleStatus, runTailscaleStatus, type TailnetProbe, type TailnetProbeOptions, type TailnetSelf } from "./tailnet.ts";
+export { createTailnetProbe, parseTailscaleStatus, runTailscaleStatus, type TailnetProbe, type TailnetSelf } from "./tailnet.ts";
 export {
   MACOS_CAFFEINATE_BIN,
   SLEEP_INHIBIT_COMMANDS,
   createSleepInhibitor,
-  defaultSpawnSleepInhibitor,
-  type SleepInhibitCommand,
   type SleepInhibitProcess,
   type SleepInhibitor,
-  type SleepInhibitorOptions,
-  type SpawnSleepInhibitor,
 } from "./sleep.ts";

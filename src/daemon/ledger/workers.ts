@@ -55,9 +55,9 @@ import { idle } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
-export const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
+const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
 /** 这一轮被用户停止时那一行的原因。 */
-export const TURN_STOPPED = "被停止了";
+const TURN_STOPPED = "被停止了";
 /** 这一轮出错、又没有错误信息时的原因。 */
 const TURN_FAILED = "这一轮出错了";
 /** 用户的话算 Worker 已收到的状态（user_message 那一行只给这些发）。 */
@@ -67,7 +67,7 @@ const RECEIVED_STATUSES: ReadonlySet<string> = new Set(["delivered", "processing
  * idle：后台命令超过 WORKER_BACKGROUND_HOLD_MAX_MS 没结束，驱动层到点关的；shutdown：守护进程关了；
  * restart：守护进程没走关机就没了（被杀、崩溃），重启后补发（recoverBackgroundWaits）。
  */
-export function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {
+function backgroundKilledNote(reason: "idle" | "shutdown" | "restart"): string {
   const resend = `要它重跑或接着做用 ${HUB_COMMAND} worker send。`;
   if (reason === "restart") {
     return `【系统】这个 Worker 在等放到后台的命令时守护进程重启了，命令随旧进程中断（跑没跑完、结果它都没看到）；下面是它中断前最后一轮的回复。${resend}`;

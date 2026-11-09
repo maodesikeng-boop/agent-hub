@@ -33,7 +33,7 @@ export async function codexOfSession(pid: number): Promise<number | null> {
 }
 
 /** Codex App-Server 固定启动参数（M0 实测验证）。 */
-export const CODEX_APP_SERVER_ARGS = ["app-server", "--listen", "stdio://"] as const;
+const CODEX_APP_SERVER_ARGS = ["app-server", "--listen", "stdio://"] as const;
 
 /** 客户端信息（initialize 握手用）。 */
 export const CODEX_CLIENT_INFO = {
@@ -43,7 +43,7 @@ export const CODEX_CLIENT_INFO = {
 } as const;
 
 /** 工具类 item.type 枚举。 */
-export const CODEX_TOOL_ITEM_TYPES = [
+const CODEX_TOOL_ITEM_TYPES = [
   "commandExecution",
   "fileChange",
   "mcpToolCall",
@@ -62,7 +62,7 @@ export interface CodexLaunchConfig {
 }
 
 /** 只读 Worker 的 codex 权限 profile 名（config 里 default_permissions 指向它）。 */
-export const CODEX_READONLY_PROFILE = "hub_readonly";
+const CODEX_READONLY_PROFILE = "hub_readonly";
 
 export type CodexSandboxPolicy =
   | { type: "readOnly"; networkAccess: true }
@@ -379,7 +379,7 @@ export function extractFileChangePaths(source: Record<string, unknown>): string[
 }
 
 /** 根据 item/started 的 item 构造 agent.tool 事件的 input。 */
-export function buildCodexToolInput(item: Record<string, unknown>): Record<string, unknown> {
+function buildCodexToolInput(item: Record<string, unknown>): Record<string, unknown> {
   switch (item.type) {
     case "commandExecution":
       return {

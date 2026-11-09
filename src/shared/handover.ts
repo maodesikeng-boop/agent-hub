@@ -18,8 +18,6 @@ export const ACTIVE_HANDOVER_STATUSES: readonly HandoverStatus[] = ["queued", "f
 
 /** 复制的办法：native 厂商自带（claude --fork-session、codex thread/fork）；copy 自己造的（agy 拷库，靠没公开的格式）。 */
 export type ForkerKind = "native" | "copy";
-/** handovers.method：用的哪个办法（排查用）。in_session 是清单走完都不支持时的兜底：本会话写交接 + 用户一发消息就打断。 */
-export type HandoverMethod = ForkerKind | "in_session";
 
 /** 复制那份的身份，由厂商的 SessionForker.fork 给。remove 只拿得到它（重启后从 fork_ref 读回来），清理要用的路径等都放进 extra。 */
 export interface ForkHandle {

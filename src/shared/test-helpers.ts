@@ -7,7 +7,7 @@ export function makePm(over: Partial<Pm> = {}): Pm {
   return { id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1_000, ...over };
 }
 
-export function makeConversation(over: Partial<Conversation> = {}): Conversation {
+function makeConversation(over: Partial<Conversation> = {}): Conversation {
   return { id: 1, kind: "pm", pmId: 1, projectId: null, title: "项目经理", createdAt: 1_000, ...over };
 }
 

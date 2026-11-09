@@ -17,9 +17,9 @@ import { ForkUnsupportedError, withoutHubEnv } from "./forker.ts";
 import type { ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
 /** 复制那份的权限：只读、从不问（只写交接，用不着工具；codex 本来就不走缓存，收紧不影响）。 */
-export const CODEX_FORK_SANDBOX = "read-only";
-export const CODEX_FORK_APPROVAL_POLICY = "never";
-export const CODEX_FORK_SANDBOX_POLICY = { type: "readOnly", networkAccess: true } as const;
+const CODEX_FORK_SANDBOX = "read-only";
+const CODEX_FORK_APPROVAL_POLICY = "never";
+const CODEX_FORK_SANDBOX_POLICY = { type: "readOnly", networkAccess: true } as const;
 /** fork_ref 里 forker 的 id（发布后不改）。 */
 export const CODEX_NATIVE_FORKER_ID = "codex-native";
 /** 正在干活的 app-server 进程多久没退出就强杀。 */

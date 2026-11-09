@@ -3,7 +3,7 @@
 import { CHART_MAX_SOURCE_CHARS, type ChartTheme } from "./registry.ts";
 
 /** Mermaid 一张图最多多少条连线。 */
-export const MERMAID_MAX_EDGES = 500;
+const MERMAID_MAX_EDGES = 500;
 
 /** 按序轮着取分类色（系列比颜色多时从头再来）。 */
 const categoryColor = (theme: ChartTheme, index: number): string => theme.categoryColors[index % theme.categoryColors.length]!;
@@ -117,7 +117,7 @@ export function mermaidThemeVariables(theme: ChartTheme): Record<string, string>
  * 标签文字过 DOMPurify 时只留文字排版用的标签。mermaid 默认的配置会留下 <img src>：渲染时它被放进页面，浏览器立刻去取图
  *（agent 写的内容就能让页面往任意地址发请求），所以用白名单，图片、框架、链接、样式都不要。
  */
-export const MERMAID_LABEL_SANITIZE = {
+const MERMAID_LABEL_SANITIZE = {
   ALLOWED_TAGS: ["b", "i", "u", "s", "em", "strong", "code", "sub", "sup", "small", "br", "span"],
   ALLOWED_ATTR: ["class"],
 };

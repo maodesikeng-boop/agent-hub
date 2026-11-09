@@ -37,7 +37,7 @@ function deniedSetupEnv(name: string): boolean {
 }
 
 /** 用哪个 shell 跑：用户的 $SHELL（-c，不是登录 shell），没有就 /bin/sh。 */
-export function setupShell(env: Record<string, string | undefined>): string {
+function setupShell(env: Record<string, string | undefined>): string {
   return env.SHELL || "/bin/sh";
 }
 

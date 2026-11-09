@@ -70,7 +70,7 @@ export async function pmWithFolder(smoke: Smoke, name: string, folder: string, m
 }
 
 /** 项目经理对话里那几行（kind worker）。 */
-export async function workerLines(smoke: Smoke, pmConversationId: number): Promise<WorkerMessageMeta[]> {
+async function workerLines(smoke: Smoke, pmConversationId: number): Promise<WorkerMessageMeta[]> {
   return messagesOf(await smoke.client.state(), pmConversationId).flatMap((m) => {
     const meta = workerEventOf(m);
     return meta === null ? [] : [meta];
@@ -103,7 +103,7 @@ export async function waitSettled(smoke: Smoke, conversationId: number): Promise
 
 export type WorkerDbRow = { id: number; worker_conversation_id: number; readonly: number; workspace: string; branch: string | null; worktree_path: string | null; status: string };
 export const workers = (smoke: Smoke) => smoke.query<WorkerDbRow>("SELECT * FROM workers ORDER BY id");
-export const sessionIdOf = (smoke: Smoke, conversationId: number) =>
+const sessionIdOf = (smoke: Smoke, conversationId: number) =>
   smoke.query<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation DESC LIMIT 1", conversationId)[0]!.id;
 
 /** 这一会话 Worker 的回复文字（合起来）。 */

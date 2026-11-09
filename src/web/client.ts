@@ -6,7 +6,6 @@ import {
   type AddDeviceRequest,
   type ArchivePmResponse,
   type Attachment,
-  type AuthStatusResponse,
   type BrowserSessionsResponse,
   type LoginLinkResponse,
   type ConversationId,
@@ -199,29 +198,7 @@ export type HubClient = ReturnType<typeof createClient>;
 /** 入口本机。设备清单、配对这些入口自己的接口也只走它。 */
 export const localClient: HubClient = createClient(null);
 
-export const {
-  fetchState,
-  fetchOlderMessages,
-  postMessage,
-  postUpload,
-  postStop,
-  postCreatePm,
-  postPickFolder,
-  fetchPersona,
-  putPersona,
-  postRevertPersonaChange,
-  postAddSchedule,
-  putScheduleEnabled,
-  deleteSchedule,
-  fetchModels,
-  fetchQuota,
-  postRenewSession,
-  postArchivePm,
-  postUnarchivePm,
-  postRetryMessage,
-  postFileAction,
-  changeStreamUrl,
-} = localClient;
+export const { fetchState, postMessage, postUpload } = localClient;
 
 // ---- 入口自己的：设备清单（不转发） ----
 
@@ -235,11 +212,6 @@ export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.d
 export const postTunnelConnect = (code: string) => postJson<TunnelStatusResponse>(API_PATHS.tunnelConnect, { code } satisfies TunnelConnectRequest);
 export const postTunnelRetry = () => postJson<TunnelStatusResponse>(API_PATHS.tunnelRetry, {});
 export const putPublicEntry = (body: SetPublicEntryRequest): Promise<PublicEntryStatus> => putJson<PublicEntryStatus>(API_PATHS.publicEntry, body);
-
-/** 查询当前浏览器的登录状态（active / pending_approval / unauthenticated）。 */
-export function fetchAuthStatus(): Promise<AuthStatusResponse> {
-  return request<AuthStatusResponse>(API_PATHS.authStatus);
-}
 
 /** 已登录的浏览器（设置里的列表）。 */
 export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {

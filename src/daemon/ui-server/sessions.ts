@@ -24,24 +24,24 @@ type Clock = { now?: () => number };
 const newSecret = () => randomBytes(32).toString("base64url");
 const hashOf = (secret: string) => createHash("sha256").update(secret).digest("hex");
 
-export interface CreateBrowserSessionOptions {
+interface CreateBrowserSessionOptions {
   viaPublic?: boolean;
   clientIp?: string;
 }
 
-export interface CreateBrowserSessionInput extends CreateBrowserSessionOptions {
+interface CreateBrowserSessionInput extends CreateBrowserSessionOptions {
   userAgent: string;
   entry: string;
 }
 
-export interface AuthenticatedBrowserSession {
+interface AuthenticatedBrowserSession {
   id: string;
   status: BrowserSessionStatus;
   viaPublic: boolean;
 }
 
 /** 列表里的一条（没有 current：那取决于是谁在问）。 */
-export interface StoredBrowserSession extends Omit<BrowserSessionInfo, "current" | "status" | "viaPublic"> {
+interface StoredBrowserSession extends Omit<BrowserSessionInfo, "current" | "status" | "viaPublic"> {
   status: BrowserSessionStatus;
   viaPublic: boolean;
 }

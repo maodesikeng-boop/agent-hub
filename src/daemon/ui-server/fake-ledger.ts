@@ -70,7 +70,7 @@ export function makeMessage(id: number, conversationId: number, text = `m${id}`)
   };
 }
 
-export function makePersonaChange(id = 1, pmId = 1): PersonaChange {
+function makePersonaChange(id = 1, pmId = 1): PersonaChange {
   return {
     id,
     pmId,
@@ -92,7 +92,7 @@ export function makePersonaChange(id = 1, pmId = 1): PersonaChange {
   };
 }
 
-export function makePersonaView(pmId: PmId, changes: PersonaChange[] = []): PersonaView {
+function makePersonaView(pmId: PmId, changes: PersonaChange[] = []): PersonaView {
   return {
     pmId,
     text: "性格设定正文",

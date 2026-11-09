@@ -5,11 +5,11 @@ import { MAX_SCHEDULE_EVERY_MINUTES, MIN_SCHEDULE_EVERY_MINUTES } from "./limits
 
 export type ScheduleId = number;
 
-export const SCHEDULE_KINDS = ["daily", "interval"] as const;
+const SCHEDULE_KINDS = ["daily", "interval"] as const;
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 
 /** sent：已发给项目经理；skipped：到点时上一条还没处理完；failed：这一轮失败或会话起不来（原因在 lastError）。 */
-export const SCHEDULE_STATUSES = ["sent", "skipped", "failed"] as const;
+const SCHEDULE_STATUSES = ["sent", "skipped", "failed"] as const;
 export type ScheduleStatus = (typeof SCHEDULE_STATUSES)[number];
 
 /** 一个定时任务（schedules 表的一行）。时间都是毫秒时间戳。 */

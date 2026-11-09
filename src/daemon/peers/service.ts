@@ -60,7 +60,7 @@ export class PeerError extends Error {
 
 const invalid = (message: string) => new PeerError(400, message, "invalid");
 const notFound = () => new PeerError(404, API_ERRORS.device_not_found.text, "device_not_found");
-export const offline = (name?: string) =>
+const offline = (name?: string) =>
   new PeerError(502, name === undefined ? API_ERRORS.device_offline.text : `连不上“${name}”`, "device_offline");
 
 /** 请求体：必须是 JSON 对象，只许出现 allowed 里的字段。 */

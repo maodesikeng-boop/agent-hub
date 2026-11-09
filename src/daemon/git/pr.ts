@@ -5,8 +5,6 @@ import { execFile } from "node:child_process";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import { GH_MAX_BUFFER_BYTES, WORKER_PR_PROBE_TIMEOUT_MS } from "../../shared/limits.ts";
 
-export { GH_MAX_BUFFER_BYTES };
-
 const PR_FIELDS = "number,state,url";
 
 /** 同一个分支开过几次 PR 取最近的一个（gh 按创建时间倒序）。 */

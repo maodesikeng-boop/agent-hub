@@ -56,7 +56,7 @@ export interface WorktreeCreateParams {
   workerId: WorkerId;
 }
 
-export interface ActionParamsMap {
+interface ActionParamsMap {
   "session.start": SessionStartParams;
   "session.send": SessionSendParams;
   "session.end": SessionEndParams;

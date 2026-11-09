@@ -11,7 +11,7 @@ import { waitForStatus } from "../e2e/harness.ts";
 import { MODEL, Smoke, expect, scenario, type Outcome } from "./kit.ts";
 
 /** 纯红色的 PNG（宽高各 16 像素），不依赖任何图片库。 */
-export function redPng(size = 16): Buffer {
+function redPng(size = 16): Buffer {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;

@@ -7,8 +7,6 @@ import { createSubscriptionStore, type PushSubscriptionRecord } from "./subscrip
 import { loadOrCreateVapidKeys } from "./vapid.ts";
 import { createReminderWatcher, type ReminderWatcher } from "./watcher.ts";
 
-export { createPresenceBoard, type PresenceBoard } from "./presence.ts";
-
 export interface PushService {
   publicKey: string;
   subscribe(subscription: PushSubscriptionRecord): void;

@@ -26,7 +26,7 @@ export interface TranscriptRef {
   cwd: string;
 }
 
-export interface TranscriptRoots {
+interface TranscriptRoots {
   /** 用户目录，默认 os.homedir()；测试用。 */
   home?: string;
   /** 环境变量，默认 process.env（CLAUDE_CONFIG_DIR、CODEX_HOME）。 */

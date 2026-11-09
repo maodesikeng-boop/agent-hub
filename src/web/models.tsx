@@ -92,7 +92,7 @@ function complete(catalog: ModelCatalog): ModelCatalog {
 const BUNDLED: readonly ModelCatalog[] = AGENT_VENDORS.map((v) => bundledModelCatalog(v));
 
 /** 所有厂商的名单（厂商下拉的选项）。拉到之前、拉到的是空的用打包的。没有 Provider（单独渲染组件时）就只用打包的。 */
-export function useModelCatalogs(): readonly ModelCatalog[] {
+function useModelCatalogs(): readonly ModelCatalog[] {
   const store = useContext(CatalogContext);
   const client = useClient();
   useEffect(() => store?.load(client), [store, client]);

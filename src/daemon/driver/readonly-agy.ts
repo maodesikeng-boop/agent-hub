@@ -21,9 +21,9 @@ import {
 export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE = WORKER_NEEDS_OS_SANDBOX_MESSAGE;
 
 /** 只读 agy 放行的内置工具：读文件、跑命令、读网页（命令里的写由外层沙箱挡）。 */
-export const AGY_READONLY_ALLOW_RULES: readonly string[] = ["read_file(*)", "command(*)", "read_url(*)"];
+const AGY_READONLY_ALLOW_RULES: readonly string[] = ["read_file(*)", "command(*)", "read_url(*)"];
 /** 只读 agy 直接拒的内置工具：写文件。显式 deny 只报错、不结束这一轮（设计 1.2 节实测）。 */
-export const AGY_READONLY_DENY_RULES: readonly string[] = ["write_file(*)"];
+const AGY_READONLY_DENY_RULES: readonly string[] = ["write_file(*)"];
 
 /** agy 运行时要写的子目录，相对 ~/.gemini/antigravity-cli（只放子目录和具体文件，不放 settings.json、config/）。 */
 export const AGY_RUNTIME_DIRS: readonly string[] = ["conversations", "brain", "cache", "log", "presence", "updater", "crashes", "annotations", "implicit"];
@@ -32,9 +32,9 @@ export const AGY_RUNTIME_DIRS: readonly string[] = ["conversations", "brain", "c
  * - bin/agentapi*：run_command 每次重写这个脚本（S4 实测不放命令全挂）；同目录的 webm_encoder 等二进制不放开，免得命令行把它们换掉；
  * - mcp/*、mcp/星/*：agy 缓存 MCP 工具定义和说明（mcp/<服务器>/<工具>.json、instructions.md），只放两层，不放整个子树。
  */
-export const AGY_RUNTIME_FILES: readonly string[] = ["cli.log", "conversation_summaries.db*", "jetbox_summaries_proto.pb", "last_check.timestamp", "bin/agentapi*", "mcp/*", "mcp/*/*"];
+const AGY_RUNTIME_FILES: readonly string[] = ["cli.log", "conversation_summaries.db*", "jetbox_summaries_proto.pb", "last_check.timestamp", "bin/agentapi*", "mcp/*", "mcp/*/*"];
 /** 同上，相对 ~/.gemini/antigravity。 */
-export const AGY_RUNTIME_FILES_LEGACY: readonly string[] = ["conversation_summaries.db*", "agyhub_summaries_proto.pb"];
+const AGY_RUNTIME_FILES_LEGACY: readonly string[] = ["conversation_summaries.db*", "agyhub_summaries_proto.pb"];
 /** 通用缓存目录，相对用户主目录（设计第 8 节第 3 条：放开，uv、npx 这类 MCP 服务器要写）。 */
 export const READONLY_CACHE_DIRS: readonly string[] = [".cache", "Library/Caches", ".npm"];
 
@@ -43,14 +43,14 @@ export const READONLY_CACHE_DIRS: readonly string[] = [".cache", "Library/Caches
  * 外层沙箱禁读它 agy 就报 “Authentication required” 整轮没回复（2026-11-07 S4 实测）。所以只对 agy 的外层沙箱放开读，写照旧不放（钥匙串的写由 securityd 做，不在本进程）。
  * 代价：只读 agy 的命令行能读到钥匙串文件（内容是加密的，取明文要 securityd 授权，无头下过不了）；agy 的权限规则那层仍然拒读。
  */
-export const AGY_READABLE_SECRET_HOME_PATHS: readonly string[] = ["Library/Keychains"];
+const AGY_READABLE_SECRET_HOME_PATHS: readonly string[] = ["Library/Keychains"];
 
 function trimSlash(p: string): string {
   return p.replace(/\/+$/, "");
 }
 
 /** realpath 没有这个路径（还没建、不存在）就原样用。agy 的规则按真实路径比（/tmp → /private/tmp）。 */
-export function realpathOrSelf(path: string): string {
+function realpathOrSelf(path: string): string {
   try {
     return realpathSync(path);
   } catch {
@@ -59,7 +59,7 @@ export function realpathOrSelf(path: string): string {
 }
 
 /** 正则里的元字符前面加反斜杠。 */
-export function escapeRegex(s: string): string {
+function escapeRegex(s: string): string {
   return s.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
 }
 
@@ -180,7 +180,7 @@ function mcpFlatName(server: string, tool: string): string {
 }
 
 /** 连接器调用的违规说明；没有违规 null。 */
-export function connectorViolationMessage(server: string, tool: string): string {
+function connectorViolationMessage(server: string, tool: string): string {
   return `只读 Worker 只能用只读的连接器工具，${server}/${tool} 不是（没标 readOnlyHint 或没在放行清单里）`;
 }
 

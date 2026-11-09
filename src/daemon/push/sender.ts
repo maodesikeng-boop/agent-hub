@@ -8,7 +8,7 @@ import type { VapidKeys } from "./vapid.ts";
 /** VAPID 的联系方式：推送服务出问题时找谁（必须是 mailto: 或 https:）。 */
 const VAPID_SUBJECT = "https://github.com/maodesikeng-boop/agent-hub";
 
-export interface SendOptions {
+interface SendOptions {
   vapidDetails: { subject: string; publicKey: string; privateKey: string };
   TTL: number;
   urgency: "high";

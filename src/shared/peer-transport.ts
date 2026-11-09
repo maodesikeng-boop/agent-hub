@@ -1,6 +1,6 @@
 // 设备连法声明（docs/hub-tunnel-design.md 第 5、8 节）：每种连法的名字、能力集中在这里，网页和守护进程共用。
 
-export const PEER_TRANSPORT_KINDS = ["local", "tailscale", "ssh-tunnel"] as const;
+const PEER_TRANSPORT_KINDS = ["local", "tailscale", "ssh-tunnel"] as const;
 export type PeerTransportKind = (typeof PEER_TRANSPORT_KINDS)[number];
 
 /** 远端设备的连法（写进 state/peers.json 的 transport 字段；不写时默认 tailscale）。 */

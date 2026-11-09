@@ -6,8 +6,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
 import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
 
-export { GIT_MAX_BUFFER_BYTES, GIT_TIMEOUT_MS };
-
 /**
  * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：
  * 仓库配置里的 `core.fsmonitor` 指到脚本的话，git 读索引时会执行它（审查实测），所以每次都用 `-c core.fsmonitor=false` 盖掉；
@@ -16,7 +14,7 @@ export { GIT_MAX_BUFFER_BYTES, GIT_TIMEOUT_MS };
 export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
 export const GIT_READONLY_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
-export interface GitOptions {
+interface GitOptions {
   /** 一次 git 调用的超时（毫秒），默认 GIT_TIMEOUT_MS。 */
   timeoutMs?: number;
 }

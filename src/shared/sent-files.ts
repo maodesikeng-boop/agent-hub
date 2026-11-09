@@ -13,7 +13,7 @@ import { FALLBACK_MIME, isImageMime, mimeOfFileName } from "./attachments.ts";
  * - too_large：单个超过 MAX_SENT_FILE_BYTES，或这条消息的合计超过 MAX_SENT_FILES_TOTAL_BYTES；unreadable：读不了（没权限、拷贝出错）。
  * 没存副本的不拷任何东西，网页的卡片显示原因（SENT_FILE_REASONS）。
  */
-export const SENT_FILE_STATUSES = ["saved", "missing", "not_allowed", "not_file", "too_large", "unreadable"] as const;
+const SENT_FILE_STATUSES = ["saved", "missing", "not_allowed", "not_file", "too_large", "unreadable"] as const;
 export type SentFileStatus = (typeof SENT_FILE_STATUSES)[number];
 
 /** 文件被定期清理删掉后（取文件接口 404），卡片和图片显示这个。 */

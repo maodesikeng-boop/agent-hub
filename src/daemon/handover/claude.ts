@@ -18,7 +18,7 @@ import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
 /** 这个办法在 fork_ref 里的名字，发布后不改。 */
-export const CLAUDE_FORKER_ID = "claude-native";
+const CLAUDE_FORKER_ID = "claude-native";
 
 /** 固定的启动参数：-p 一次性、stream-json 才拿得到每个请求的上下文大小（--verbose 是它的前提）。提示词走标准输入，不进参数。 */
 const CLAUDE_FORK_FIXED_ARGS: readonly string[] = ["-p", "--output-format", "stream-json", "--verbose"];
@@ -40,7 +40,7 @@ export function claudeProjectDirName(cwd: string): string {
 }
 
 /** 复制那份的命令行参数。launch.env 里已经没有 HUB_*（forkSourceOf 去掉了）。settings 是 forkSettingsJson 的结果。 */
-export function buildClaudeForkArgs(src: ForkSource, forkId: string, persist: boolean, settings: string): string[] {
+function buildClaudeForkArgs(src: ForkSource, forkId: string, persist: boolean, settings: string): string[] {
   const args = [...CLAUDE_FORK_FIXED_ARGS, "--resume", src.vendorSessionId, "--fork-session", "--session-id", forkId];
   if (!persist) args.push(NO_PERSISTENCE_ARG);
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
@@ -50,7 +50,7 @@ export function buildClaudeForkArgs(src: ForkSource, forkId: string, persist: bo
 }
 
 /** 读项目经理的设置文件（没有就当空），叠上禁写三层，转成 --settings 的 JSON。读不了、不是 JSON 对象就抛：不能不带禁写就跑。 */
-export async function forkSettingsJson(settingsFile: string | undefined): Promise<string> {
+async function forkSettingsJson(settingsFile: string | undefined): Promise<string> {
   if (!settingsFile) return JSON.stringify(buildForkSettings({}));
   let base: unknown;
   try {

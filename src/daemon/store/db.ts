@@ -6,7 +6,7 @@ import { DB_BUSY_TIMEOUT_MS, MAX_CACHED_STATEMENTS } from "../../shared/limits.t
 
 export type SqlValue = null | number | bigint | string | Uint8Array;
 
-export interface RunResult {
+interface RunResult {
   changes: number;
   lastInsertRowid: number;
 }

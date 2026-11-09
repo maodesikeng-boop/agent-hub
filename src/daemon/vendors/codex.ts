@@ -27,10 +27,8 @@ import { userContent } from "../driver/protocol.ts";
 import { createSpecComposerBase } from "./claude.ts";
 import type { CommandsTarget, VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
 
-export { queryCodexSkills, type CodexModelQueryOptions as CodexSkillsQueryOptions };
-
 /** codex 常用内置可用斜杠命令（非隐藏命令）。 */
-export const CODEX_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
+const CODEX_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
 

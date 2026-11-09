@@ -8,7 +8,7 @@
  * - retrying：ssh 退出了，等退避到 retryAt 再连；
  * - auth_failed / hostkey_mismatch：钥匙不认 / 主机公钥对不上，不自动重试，等用户点重试或重新连。
  */
-export const TUNNEL_STATES = ["connecting", "connected", "retrying", "auth_failed", "hostkey_mismatch"] as const;
+const TUNNEL_STATES = ["connecting", "connected", "retrying", "auth_failed", "hostkey_mismatch"] as const;
 export type TunnelState = (typeof TUNNEL_STATES)[number];
 
 export interface TunnelStatus {

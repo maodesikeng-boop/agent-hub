@@ -536,5 +536,3 @@ export function DevicesSection({ devices, tunnel, publicEntry, repoDir, onChange
     </>
   );
 }
-
-export { DevicesSection as DeviceSettingsSection };

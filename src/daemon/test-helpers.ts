@@ -36,7 +36,7 @@ export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchConte
 }
 
 /** Worker（M3）的记录：项目 foo 的 Worker #5，在 worktree 里干活。 */
-export function workerRecord(over: Partial<WorkerRecord> = {}): WorkerRecord {
+function workerRecord(over: Partial<WorkerRecord> = {}): WorkerRecord {
   return {
     id: 5,
     projectId: 1,

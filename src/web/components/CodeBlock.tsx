@@ -33,7 +33,7 @@ const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "
  * 流式输出时 code 一直在变：每次变化停 HIGHLIGHT_DEBOUNCE_MS 才重新上色；等的时候保留上一版的颜色，
  * 新来的尾巴先用纯文本接在后面（只对“在原来内容后面追加”这种情况），不闪回灰色。
  */
-export function useHighlightedHtml(code: string, language: string): string | null {
+function useHighlightedHtml(code: string, language: string): string | null {
   const [done, setDone] = useState<{ code: string; html: string } | null>(null);
   const enabled = language !== "" && !PLAIN_LANGUAGES.has(language.toLowerCase());
   useEffect(() => {
