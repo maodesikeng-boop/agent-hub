@@ -236,6 +236,12 @@ export function App() {
   const railPm = active?.pm?.id ?? null;
   const railWorkers = useMemo(() => (railPm === null ? [] : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : []), [state.conversations, state.pms, state.pending, active?.id]);
+  // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
+  const { offline, link: rawLink } = deviceNotices(current);
+  const link = useMemo(
+    () => (rawLink === null ? null : { readOnly: rawLink.readOnly, waiting: rawLink.waiting }),
+    [rawLink?.readOnly, rawLink?.waiting],
+  );
 
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
@@ -265,8 +271,6 @@ export function App() {
   }
 
   const view = active ? state.conversations[active.id] : undefined;
-  // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
-  const { offline, link } = deviceNotices(current);
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
   const notices = <Notices health={health} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;

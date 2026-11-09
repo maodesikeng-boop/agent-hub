@@ -93,6 +93,41 @@ describe("applyChange", () => {
     // 已主动翻页的对话保留全部已加载消息
     expect(s.conversations[2]?.messages).toHaveLength(total + 2);
   });
+
+  it("olderStart 在途期间收到实时新消息不截断头部，随后 olderDone 返回时消息连续无断层", () => {
+    let s = loaded({
+      seq: 0,
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1 }, hasMore: false })],
+    });
+    const total = MAX_LIVE_MESSAGES + 25;
+    let seq = 0;
+    for (let i = 1; i <= total; i++) {
+      s = applyChange(s, messageChange(++seq, "message.created", makeToolMessage({ id: i, conversationId: 1 })));
+    }
+    // 此时保留的是 26..225，用户向上滚动触发 olderStart（before = 26）
+    expect(s.conversations[1]?.messages[0]?.id).toBe(26);
+    s = reducer(s, { type: "olderStart", conversationId: 1 });
+    expect(s.older[1]).toBe("loading");
+
+    // olderDone 返回前收到实时新消息 226..228，头部不得截断
+    for (let i = total + 1; i <= total + 3; i++) {
+      s = applyChange(s, messageChange(++seq, "message.created", makeToolMessage({ id: i, conversationId: 1 })));
+    }
+    expect(s.conversations[1]?.messages[0]?.id).toBe(26);
+    expect(s.conversations[1]?.messages.at(-1)?.id).toBe(228);
+    expect(s.conversations[1]?.messages).toHaveLength(MAX_LIVE_MESSAGES + 3);
+
+    // 随后 olderDone 返回 1..25，合并后 1..228 连续无丢失
+    const earlier = Array.from({ length: 25 }, (_, idx) => makeToolMessage({ id: idx + 1, conversationId: 1 }));
+    s = reducer(s, {
+      type: "olderDone",
+      conversationId: 1,
+      messages: earlier,
+      hasMore: false,
+    });
+    expect(s.conversations[1]?.messages.map((m) => m.id)).toEqual(Array.from({ length: 228 }, (_, idx) => idx + 1));
+    expect(s.conversations[1]?.hasMore).toBe(false);
+  });
 });
 
 describe("loaded", () => {

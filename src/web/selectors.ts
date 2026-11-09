@@ -406,11 +406,21 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
 }
 
 const NO_PENDING: PendingMessage[] = [];
+const pendingByConversationCache = new WeakMap<readonly PendingMessage[], Map<ConversationId, PendingMessage[]>>();
 
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {
   if (state.pending.length === 0) return NO_PENDING;
+  let byConv = pendingByConversationCache.get(state.pending);
+  if (byConv === undefined) {
+    byConv = new Map();
+    pendingByConversationCache.set(state.pending, byConv);
+  }
+  let cached = byConv.get(conversationId);
+  if (cached !== undefined) return cached;
   const filtered = state.pending.filter((p) => p.conversationId === conversationId);
-  return filtered.length === 0 ? NO_PENDING : filtered;
+  cached = filtered.length === 0 ? NO_PENDING : filtered;
+  byConv.set(conversationId, cached);
+  return cached;
 }
 
 /**

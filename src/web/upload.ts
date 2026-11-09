@@ -1,7 +1,7 @@
 // 聊天框的上传逻辑（和输入框组件分开，哪个输入框都能用：项目经理的聊天框、以后别的对话的输入框）：
 // 加文件时的检查（stageFiles）、发送时上传（uploadFiles）、待发文件 + 提示 + 发送中状态按对话存的 hook（useStagingStore）。
 // 上传接口本身不绑定接收方（见 shared/api.ts 的 API_PATHS.uploads），发消息时再带上上传编号。
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ATTACHMENTS_TOO_MANY_MESSAGE,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -162,7 +162,7 @@ export function useStagingStore<K extends string | number>() {
     [update],
   );
 
-  return { of };
+  return useMemo(() => ({ of }), [of]);
 }
 
 /** 一个对话的草稿槽：只通知订阅了这个对话的输入框重渲染，打字不会引起 App / 消息列表重渲染。 */
@@ -213,5 +213,5 @@ export function useDraftStore<K extends string | number>() {
     return slot;
   }, []);
 
-  return { of };
+  return useMemo(() => ({ of }), [of]);
 }

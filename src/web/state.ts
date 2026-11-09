@@ -83,7 +83,7 @@ export interface HubState {
   publicEntry?: PublicEntryStatus;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
-  /** 用户主动翻过页（olderDone）的对话：不再按 MAX_LIVE_MESSAGES 自动截断顶部旧消息；重拉快照时重置。 */
+  /** 用户主动翻过页（olderStart / olderDone）的对话：不再按 MAX_LIVE_MESSAGES 自动截断顶部旧消息；重拉快照时重置。 */
   olderLoaded?: Record<ConversationId, boolean | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
   retry: Record<MessageId, RetryPhase | undefined>;
@@ -163,7 +163,10 @@ export function applyChange(state: HubState, change: Change): HubState {
       const view = state.conversations[message.conversationId];
       if (!view) return next; // 不认识的对话，device-hub.ts 会重新拉快照
       const updated = upsertMessage(view.messages, message);
-      const trim = !state.olderLoaded?.[message.conversationId] && updated.length > MAX_LIVE_MESSAGES;
+      const trim =
+        !state.olderLoaded?.[message.conversationId] &&
+        state.older[message.conversationId] !== "loading" &&
+        updated.length > MAX_LIVE_MESSAGES;
       const messages = trim ? updated.slice(-MAX_LIVE_MESSAGES) : updated;
       return {
         ...next,
@@ -289,7 +292,11 @@ export function reducer(state: HubState, action: HubAction): HubState {
     case "connection":
       return { ...state, connection: action.status };
     case "olderStart":
-      return { ...state, older: { ...state.older, [action.conversationId]: "loading" } };
+      return {
+        ...state,
+        older: { ...state.older, [action.conversationId]: "loading" },
+        olderLoaded: { ...state.olderLoaded, [action.conversationId]: true },
+      };
     case "olderFailed":
       return { ...state, older: { ...state.older, [action.conversationId]: "error" } };
     case "olderDone": {

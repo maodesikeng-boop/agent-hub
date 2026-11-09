@@ -160,6 +160,9 @@ export function Composer({
           placeholder={placeholder}
           readOnly={busy}
           disabled={disabled}
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
           className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
           value={value}
           aria-autocomplete={source ? "list" : undefined}
