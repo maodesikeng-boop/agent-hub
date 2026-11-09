@@ -11,6 +11,7 @@ import {
   truncateChars,
   type ComposerCommand,
 } from "../../shared/index.ts";
+import { vendorCatalogFingerprint } from "../../shared/paths.ts";
 import {
   defaultAvailabilityOfError,
   parseAgyModels,
@@ -137,5 +138,6 @@ export function createAgyCatalogSource(options: VendorCatalogSourceOptions): Ven
     ...agyCatalogProbe,
     query: (signal) => queryAgyModels({ agyPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
     installed: options.installed,
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("agy", options.path, options.env ?? process.env, options.cwd)),
   };
 }

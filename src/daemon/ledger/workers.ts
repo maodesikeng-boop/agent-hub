@@ -351,10 +351,11 @@ export function createLedgerWorkers(
     }
     const givenModel = typeof args.model === "string" ? args.model.trim() || null : null;
     const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : null;
-    const badSetting = checkModel(vendor, givenModel) ?? checkEffort(vendor, givenEffort) ?? checkModelEffort(vendor, givenModel, givenEffort);
+    const catalog = ctx.modelCatalog(vendor);
+    const badSetting = checkModel(vendor, givenModel) ?? checkEffort(vendor, givenEffort, catalog) ?? checkModelEffort(vendor, givenModel, givenEffort, catalog);
     if (badSetting !== null) throw fail("invalid", badSetting);
     // 思考程度写在模型 ID 里的厂商（agy）：--model gemini-4-argon-high 和 --model gemini-4-argon --effort high 存成一样的 模型 + 思考程度
-    const { model, effort } = splitModelEffort(vendor, givenModel, givenEffort);
+    const { model, effort } = splitModelEffort(vendor, givenModel, givenEffort, catalog);
     const readonly = args.readonly === true;
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);

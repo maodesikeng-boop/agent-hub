@@ -245,6 +245,11 @@ export const MAX_CATALOG_DESCRIPTION_CHARS = 200;
 export const MODEL_CATALOG_FRESH_MS = 6 * 60 * 60_000;
 /** 模型名单：没问到（claude 没装、超时、报错）时，隔多久才再问。 */
 export const MODEL_CATALOG_RETRY_MS = 5 * 60_000;
+/**
+ * 模型名单：同一家厂商的 stat 指纹（可执行文件 + 本地凭据/模型缓存文件）多久内不重算。list()/ensureUsable() 高频调用、
+ * 命中缓存时直接用上次的结果，不碰磁盘；代价是本地文件变了最多晚这么久才发现。
+ */
+export const MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS = 3_000;
 // ---- 输入框的“/”命令和“@”文件（daemon/commands-catalog.ts、daemon/workspace-files.ts）----
 
 /** 命令列表：问正在跑的会话（再发一次 initialize，实测约 10 毫秒）最多等多久，超时当问不到。 */

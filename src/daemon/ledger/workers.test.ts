@@ -289,14 +289,14 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
       model: null,
       effort: null,
     });
-    const codexWorker = start({ vendor: "codex", model: "gpt-5.4", effort: "xhigh" }).data.worker;
+    const codexWorker = start({ vendor: "codex", model: "gpt-6.1-sol", effort: "ultra" }).data.worker;
     expect(sessionRow(workerSessionId(codexWorker.id))).toMatchObject({
       vendor: "codex",
-      model: "gpt-5.4",
-      effort: "xhigh",
+      model: "gpt-6.1-sol",
+      effort: "ultra",
     });
-    // codex 不支持 effort max
-    expectLedgerError(() => start({ vendor: "codex", effort: "max" }), "invalid", /思考程度只能是 low、medium、high、xhigh/);
+    // codex 不支持未知的 effort
+    expectLedgerError(() => start({ vendor: "codex", effort: "extreme" }), "invalid", /思考程度只能是 low、medium、high、xhigh、max、ultra/);
     // 非法厂商
     expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", /厂商只能是 claude、agy、codex/);
   });

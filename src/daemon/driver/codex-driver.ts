@@ -487,7 +487,7 @@ export class CodexDriver implements Driver {
   }
 
   queryCommands(_sessionId: SessionId): Promise<ComposerCommand[] | null> {
-    return Promise.resolve([]);
+    return Promise.resolve(null);
   }
 
   async shutdown(): Promise<void> {

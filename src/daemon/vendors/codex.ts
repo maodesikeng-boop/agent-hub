@@ -15,6 +15,7 @@ import {
   type ComposerCommand,
   type VendorAvailability,
 } from "../../shared/index.ts";
+import { codexHomeDir, vendorCatalogFingerprint } from "../../shared/paths.ts";
 import {
   parseCodexModels,
   queryCodexCatalog,
@@ -195,7 +196,7 @@ function codexCredentialsStore(codexHome: string): string | null {
  * 没写、file 等别的值才是没登录。只读这两个文件，不起进程。
  */
 export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: string): VendorAvailability {
-  const codexHome = env.CODEX_HOME?.trim() || join(homeDir, ".codex");
+  const codexHome = codexHomeDir(env, homeDir);
   if (existsSync(join(codexHome, "auth.json"))) return "available";
   const store = codexCredentialsStore(codexHome);
   return store === "keyring" || store === "auto" ? "unknown" : "signed_out";
@@ -207,5 +208,6 @@ export function createCodexCatalogSource(options: VendorCatalogSourceOptions): V
     query: (signal) => queryCodexCatalog({ codexPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
     confirm: async () => codexAuthFileAvailability(options.env ?? process.env, options.cwd),
     installed: options.installed,
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("codex", options.path, options.env ?? process.env, options.cwd)),
   };
 }

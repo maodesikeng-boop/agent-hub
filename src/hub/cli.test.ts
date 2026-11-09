@@ -152,19 +152,19 @@ describe("hub cli", () => {
     });
 
     it("worker start --effort sends the level; any level from the vendor list is accepted", async () => {
-      for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+      for (const level of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
         expect((await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
       expect(ledger.calls.map((c) => c.args)).toEqual(
-        ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
+        ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
       );
     });
 
     it("worker start --effort with a level not in the list is a usage error", async () => {
-      for (const level of ["ultra", "LOW", ""]) {
+      for (const level of ["turbo", "LOW", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
-        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max");
+        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max、ultra");
       }
       expect(ledger.calls).toHaveLength(0);
     });
