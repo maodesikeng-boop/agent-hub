@@ -1,5 +1,5 @@
 // OpenAI Codex App-Server 驱动层测试：覆盖握手、流式事件、恢复回退、打断与 Worker 记忆保护审批。
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -1233,7 +1233,11 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     ]);
   });
 
-  it.runIf(process.platform === "darwin")("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
+  it.runIf(
+    process.platform === "darwin" &&
+      spawnSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "ignore" })
+        .status === 0,
+  )("macOS：Worker 的进程包进 sandbox-exec（数据目录写不了），turn 用 externalSandbox；项目经理、只读 Worker 不包", async () => {
     const t = makeCodexHarness({ dataDirName: "home", probeInDataDir: "probe.txt", driver: { platform: "darwin", writeScopeSpawn: undefined } });
     const probe = join(t.dir, "home", "probe.txt");
     const worker = t.addSession({ role: "worker", workerId: 7 });
@@ -1390,10 +1394,18 @@ describe("CodexDriver 跨轮 item.id 防撞车与残留进程清理", () => {
     expect(stalePid).toBeGreaterThan(0);
 
     const s = t.addSession({ pid: stalePid, status: "running" });
-    await t.driver.cleanupStale();
+    try {
+      await t.driver.cleanupStale();
 
-    expect(t.store.get(s.id)!.pid).toBeNull();
-    expect(t.store.get(s.id)!.status).toBe("idle");
+      expect(t.store.get(s.id)!.pid).toBeNull();
+      expect(t.store.get(s.id)!.status).toBe("idle");
+    } finally {
+      try {
+        process.kill(stalePid, "SIGKILL");
+      } catch {
+        // 已退出
+      }
+    }
   });
 });
 
