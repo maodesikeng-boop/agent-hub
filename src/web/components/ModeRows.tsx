@@ -39,9 +39,8 @@ export function ModeRows({
       onValueChange={(v) => onChange(v as PmMode)}
       disabled={disabled}
       aria-label={label}
-      className="divide-y divide-border"
     >
-      {PM_MODES.map((mode) => {
+      {PM_MODES.map((mode, idx) => {
         const id = `${prefix}-${mode}`;
         return (
           <RadioGroupPrimitive.Item
@@ -49,7 +48,10 @@ export function ModeRows({
             value={mode}
             aria-labelledby={`${id}-label`}
             aria-describedby={`${id}-detail`}
-            className="flex w-full cursor-pointer items-center gap-4 px-4 py-3 text-left outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:opacity-50"
+            className={cn(
+              "flex w-full cursor-pointer items-center gap-4 px-4 py-3 text-left outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:opacity-50",
+              idx > 0 && "border-t border-border",
+            )}
           >
             <span className="min-w-0 flex-1">
               <span id={`${id}-label`} className="block text-[15px]">
