@@ -1,5 +1,5 @@
 // AgyDriver 与 agy-protocol 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import {
   RELAUNCH_NOTE,
   RESEND_NOTE,
   RESTART_RECOVERY_NOTE,
+  backgroundTasksKilledNote,
   buildReadonlyPolicy,
   type AgentSessionPatch,
   type AgentSessionRow,
@@ -38,6 +39,27 @@ import {
 
 const realSetTimeout = globalThis.setTimeout;
 const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+
+const canRunSandboxExec =
+  process.platform === "darwin" &&
+  existsSync(SANDBOX_EXEC) &&
+  (() => {
+    try {
+      execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+const canRunPs = (() => {
+  try {
+    execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
@@ -72,10 +94,21 @@ interface FakeAgyTurn {
   holdUserInput?: string;
   steps?: Array<
     | { type: "text"; stepId?: number; deltas: string[]; usage?: Record<string, number>; omitDone?: boolean }
-    | { type: "tool"; stepId?: number; name: string; parameters?: Record<string, unknown>; durationMs?: number }
+    | {
+        type: "tool";
+        stepId?: number;
+        name: string;
+        parameters?: Record<string, unknown>;
+        durationMs?: number;
+        background?: boolean;
+        omitDone?: boolean;
+        doneAfterResultMs?: number;
+      }
+    | { type: "backgroundTasks"; tasks: Array<string | Record<string, unknown>> | "malformed" }
     | { type: "sleep"; ms: number }
     | { type: "waitFile"; path: string }
   >;
+  backgroundTasksAfter?: Array<{ afterMs: number; tasks: Array<string | Record<string, unknown>> | "malformed" }>;
   result?: {
     status?: "SUCCESS" | "ERROR";
     finishedReason?: string | null;
@@ -242,6 +275,13 @@ async function runTurn(userObj) {
           },
         });
       }
+    } else if (step.type === "backgroundTasks") {
+      const entry = (t) => (typeof t === "string" ? { task_id: t, description: "fake task " + t } : t);
+      emit({
+        event: "background_tasks_changed",
+        conversation_id: conversationId,
+        ...(step.tasks === "malformed" ? {} : { tasks: step.tasks.map(entry) }),
+      });
     } else if (step.type === "tool") {
       const sid = step.stepId ?? stepCounter++;
       emit({
@@ -252,6 +292,7 @@ async function runTurn(userObj) {
           step_type: "tool",
           state: "ACTIVE",
           tool_name: step.name,
+          ...(step.background ? { background: true } : {}),
           tool_info: { parameters: step.parameters ?? {} },
         },
       });
@@ -259,17 +300,33 @@ async function runTurn(userObj) {
         await sleep(step.durationMs);
       }
       if (interrupted) return;
-      emit({
-        event: "step_update",
-        step_update: {
-          conversation_id: conversationId,
-          step_index: sid,
-          step_type: "tool",
-          state: "DONE",
-          tool_name: step.name,
-          tool_info: { parameters: step.parameters ?? {} },
-        },
-      });
+      if (step.doneAfterResultMs) {
+        setTimeout(() => {
+          emit({
+            event: "step_update",
+            step_update: {
+              conversation_id: conversationId,
+              step_index: sid,
+              step_type: "tool",
+              state: "DONE",
+              tool_name: step.name,
+              tool_info: { parameters: step.parameters ?? {} },
+            },
+          });
+        }, step.doneAfterResultMs);
+      } else if (!step.omitDone) {
+        emit({
+          event: "step_update",
+          step_update: {
+            conversation_id: conversationId,
+            step_index: sid,
+            step_type: "tool",
+            state: "DONE",
+            tool_name: step.name,
+            tool_info: { parameters: step.parameters ?? {} },
+          },
+        });
+      }
     }
   }
 
@@ -287,6 +344,16 @@ async function runTurn(userObj) {
       ...(r.deniedActions ? { denied_actions: r.deniedActions } : {}),
     },
   });
+  for (const ev of turn.backgroundTasksAfter || []) {
+    const entry = (t) => (typeof t === "string" ? { task_id: t, description: "fake task " + t } : t);
+    setTimeout(() => {
+      emit({
+        event: "background_tasks_changed",
+        conversation_id: conversationId,
+        ...(ev.tasks === "malformed" ? {} : { tasks: ev.tasks.map(entry) }),
+      });
+    }, ev.afterMs);
+  }
   busy = false;
   if (inbox.length > 0) {
     const next = inbox.shift();
@@ -991,7 +1058,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
     expect(t.log().some((e) => e.kind === "signal" && e.signal === "SIGINT")).toBe(false);
   });
 
-  it.runIf(process.platform === "darwin" && existsSync(SANDBOX_EXEC))("Worker 的可写范围：进程包在 OS 沙箱里，数据目录写不成，这一轮照常跑完；项目经理不包", async () => {
+  it.runIf(canRunSandboxExec)("Worker 的可写范围：进程包在 OS 沙箱里，数据目录写不成，这一轮照常跑完；项目经理不包", async () => {
     for (const [role, scoped] of [["worker", true], ["pm", false]] as const) {
       const t = makeAgyHarness();
       const dataDir = join(realpathSync.native(t.dir), "home");
@@ -1298,7 +1365,7 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
     await expect(t.driver.send(s.id, user(2, "再发一条"))).rejects.toMatchObject({ code: "session_ended" });
   });
 
-  it("cleanupStale：清理 vendor === 'agy' 的残留进程并将 pid 清零、status 置 idle", async () => {
+  it.runIf(canRunPs)("cleanupStale：清理 vendor === 'agy' 的残留进程并将 pid 清零、status 置 idle", async () => {
     const t = makeAgyHarness();
     // 启动一个带 "agy" 与 "--input-format stream-json" 参数的残留子进程
     const child = spawn(
@@ -1570,5 +1637,132 @@ describe("找不到 agy 程序", () => {
     expect(err).toBeInstanceOf(DriverError);
     expect((err as DriverError).code).toBe("agy_not_found");
     expect((err as DriverError).retryable).toBe(true);
+  });
+});
+
+describe("7. 后台任务跟踪与 background.changed 事件", () => {
+  const IDLE = 150;
+  const HOLD = 1200;
+
+  it("收到 background_tasks_changed 时发射 background.changed 事件，非数组 tasks 忽略", async () => {
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD },
+      script: {
+        turns: [
+          {
+            steps: [{ type: "text", deltas: ["开始"] }],
+            backgroundTasksAfter: [
+              { afterMs: 20, tasks: ["a"] },
+              { afterMs: 50, tasks: "malformed" },
+              { afterMs: 80, tasks: ["a", "b"] },
+              { afterMs: 120, tasks: [] },
+            ],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    await t.waitFor("turn.ended");
+    await t.waitFor("background.changed", (e) => e.count === 0, 1);
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 2, 0]);
+  });
+
+  it("存在后台任务时不触发 idleCloseMs 空闲关闭，清零后才开始算空闲并关闭", async () => {
+    const CLEAR = 350;
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD },
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "backgroundTasks", tasks: [{ task_id: "bg1", description: "sleep 30" }] },
+              { type: "text", deltas: ["已放后台"] },
+            ],
+            backgroundTasksAfter: [{ afterMs: CLEAR, tasks: [] }],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "跑后台任务"));
+    const ended = await t.waitFor("turn.ended");
+    await realSleep(IDLE * 2);
+    expect(t.of("session.exited")).toEqual([]);
+    expect(t.driver.isRunning(s.id)).toBe(true);
+
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "idle", exitCode: 0 });
+    expect(exited.at - ended.at).toBeGreaterThanOrEqual(CLEAR + IDLE - 60);
+    expect(exited.at - ended.at).toBeLessThan(HOLD);
+  });
+
+  it("工具步骤跨轮未完成（ACTIVE 未 DONE）或显式后台命令：自动跟踪并发射 background.changed，DONE 后清零", async () => {
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD },
+      script: {
+        turns: [
+          {
+            steps: [
+              {
+                type: "tool",
+                stepId: 7,
+                name: "run_command",
+                parameters: { CommandLine: "pnpm test", IsDaemon: true },
+                doneAfterResultMs: 250,
+              },
+              { type: "text", deltas: ["已在后台启动"] },
+            ],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "启动后台命令"));
+    await t.waitFor("turn.ended");
+    expect(t.of("background.changed").map((e) => e.count)).toContain(1);
+    await t.waitFor("background.changed", (e) => e.count === 0, 1);
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 0]);
+  });
+
+  it("空闲但只剩后台任务时调 interrupt()：关闭进程并在下一轮消息前注入 stopped 说明；设置变更重启时注入 relaunch 说明", async () => {
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: 60_000, backgroundHoldMaxMs: 60_000 },
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "backgroundTasks", tasks: [{ task_id: "ci", description: "等 CI" }] },
+              { type: "text", deltas: ["一"] },
+            ],
+          },
+          {
+            steps: [
+              { type: "backgroundTasks", tasks: [{ task_id: "build", description: "跑构建" }] },
+              { type: "text", deltas: ["二"] },
+            ],
+          },
+          {
+            steps: [{ type: "text", deltas: ["三"] }],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "一"));
+    await t.waitFor("turn.ended");
+    await t.driver.interrupt(s.id);
+    const exited = await t.waitFor("session.exited");
+    expect(exited).toMatchObject({ reason: "interrupt", messageIds: [] });
+
+    await t.driver.send(s.id, user(2, "二"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.stdinBlocks()[1]).toContain(backgroundTasksKilledNote("stopped", ["等 CI"]));
+
+    t.launch.fingerprint = "fp-v2";
+    await t.driver.send(s.id, user(3, "三"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinBlocks()[2]).toContain(RELAUNCH_NOTE);
+    expect(t.stdinBlocks()[2]).toContain(backgroundTasksKilledNote("relaunch", ["跑构建"]));
   });
 });

@@ -1,34 +1,13 @@
-// OpenAI Codex App-Server 驱动层：管理 `codex app-server --listen stdio://` 子进程生命周期、
-// JSON-RPC 2.0 握手（initialize → initialized → thread/start 或 thread/resume 失败自动回退）、
+// OpenAI Codex App-Server 驱动层：公共会话状态机（待发队列、用量节流、启动/空闲/打断定时器、前缀说明注入与回退等）继承自 BaseSessionDriver；
+// 本文件负责 `codex app-server --listen stdio://` JSON-RPC 2.0 握手（initialize → initialized → thread/start 或 thread/resume 失败自动回退）、
 // 轮次发送（turn/start）、流式事件映射（agent.thinking / agent.tool / agent.tool_result / agent.text 聚合）、
-// 用量与限额更新、反向 RPC 审批拦截（Worker 记忆保护与只读模式）以及优雅打断（turn/interrupt）。
-// 一轮中途交给 agent（docs/mid-turn-messages.md 第 8、9 节）：忙时用 turn/steer，回执成功算已送达，userMessage item 出来算处理中；
-// 报错（no active turn to steer 等）退回自己的队列；这一轮结束都没读到的收回（message.requeued），停止时标已取消。
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+// 用量与限额更新、反向 RPC 审批拦截（Worker 记忆保护与只读模式）、一轮中途 turn/steer 与优雅打断（turn/interrupt）。
 import {
-  CRASH_RECOVERY_NOTE,
   DriverError,
   EMPTY_TOKEN_USAGE,
-  IDLE_CLOSE_MS,
-  INTERRUPT_GRACE_MS,
-  KILL_WAIT_MS,
-  LAST_EVENT_WRITE_MS,
-  RELAUNCH_NOTE,
-  RESEND_NOTE,
-  RESTART_RECOVERY_NOTE,
-  RUNNING_COMMANDS_TIMEOUT_MS,
-  SHUTDOWN_GRACE_MS,
-  START_TIMEOUT_MS,
-  STDERR_TAIL_CHARS,
-  STDIO_DRAIN_MS,
-  USAGE_PUSH_MS,
   type AgentSessionPatch,
   type AgentSessionRow,
-  type ComposerCommand,
-  type Driver,
   type DriverEvent,
-  type DriverEventListener,
   type DriverOptions,
   type DriverSendInput,
   type DriverSendResult,
@@ -37,12 +16,21 @@ import {
   type MessageSource,
   type SessionExitReason,
   type SessionId,
-  type TokenUsage,
-  type Unsubscribe,
   type WriteScope,
-  notFoundCode,
 } from "../../shared/index.ts";
-import { composerBaseOf, type VendorComposerBase } from "../vendors/index.ts";
+import { type VendorComposerBase } from "../vendors/index.ts";
+import {
+  BaseSessionDriver,
+  NO_NOTES,
+  createBaseSessionState,
+  entryParts,
+  type BaseBatch,
+  type BaseProc,
+  type BaseSessionState,
+  type BatchNotes,
+  type PendingEntry,
+  type StartupOutcome,
+} from "./base-driver.ts";
 import {
   buildCodexArgs,
   buildInitializeRequest,
@@ -58,8 +46,8 @@ import {
   codexUserMessageText,
   combineCodexTurnText,
   decideCommandApproval,
-  decideMcpElicitation,
   decideFileChangeApproval,
+  decideMcpElicitation,
   extractFileChangePaths,
   isCodexToolItemType,
   parseCodexRateLimits,
@@ -68,39 +56,12 @@ import {
   readCodexLaunchConfig,
   type CodexLaunchConfig,
 } from "./codex-protocol.ts";
-import {
-  forceKill,
-  forceKillTree,
-  killFreshGroup,
-  signalChild,
-  signalPid,
-  signalTarget,
-  streamClosed,
-  termGroupAfterExit,
-  waitForExit,
-} from "./process.ts";
-import { buildChildEnv, lineUuid, mergeUserTexts } from "./protocol.ts";
-import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
-import { CODEX_RESUME_REBAKES, personaSeenAtStart, personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
-import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
-import { TurnUsage } from "./usage.ts";
+import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "./persona-note.ts";
+import { lineUuid } from "./protocol.ts";
 import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "./write-scope.ts";
 
-interface PendingEntry {
-  messageIds: MessageId[];
-  source: MessageSource;
-  text: string;
-  prefixes: string[];
-  resend: boolean;
-}
-
-interface Batch {
-  messageIds: MessageId[];
+interface Batch extends BaseBatch {
   combinedText: string;
-  /** persona：性格设定、模式改了的说明（persona-note.ts），没写成、codex 没读到时退回去。 */
-  notes: { recovery: boolean; crash: boolean; relaunch: boolean; persona: PersonaNoteTaken | null; preamble: PreambleTaken | null };
-  delivered: boolean;
-  processing: boolean;
   /** 会话正忙时用 turn/steer 在一轮中途交给 codex 的（不是 turn/start 开一轮的那条）。 */
   midTurn: boolean;
   /** 出过它的 userMessage item：codex 取走了（模型看到了）。 */
@@ -109,8 +70,6 @@ interface Batch {
   turnDone: boolean;
   /** steer 的回执还没到时用户点了停止：回执来了按停止处理（用户的标已取消，系统的退回待发队列、停止后照常发）。 */
   stopped: boolean;
-  /** 用户的（几条拼成一条的也是）还是系统的：停止时没读到的，用户的取消、系统的收回（stop-untaken.ts）。 */
-  source: MessageSource;
 }
 
 /** 一次 turn/steer 的结果：written 收下了（已送达）；queued 没收下，已经放回待发队列最前面；cancelled 停止时被取消了。 */
@@ -122,38 +81,9 @@ interface Steer {
   resolve: (outcome: SteerOutcome) => void;
 }
 
-type ClosingReason = "idle" | "interrupt" | "shutdown";
-
-const NO_NOTES: Batch["notes"] = { recovery: false, crash: false, relaunch: false, persona: null, preamble: null };
-
-type StartupOutcome =
-  | { kind: "ok" }
-  | {
-      kind: "failed";
-      exitCode: number | null;
-      signal: string | null;
-      stderr: string;
-      timedOut: boolean;
-      errorMessage?: string;
-    }
-  | { kind: "closed"; reason: ClosingReason };
-
-interface LaunchSnapshot {
-  fingerprint: string;
-  cwd: string;
-  addDirs: string[];
-  model: string | null;
-  effort: string | null;
-}
-
 type RpcPhase = "initialize" | "thread_resume" | "thread_start" | "turn_start" | "turn_interrupt" | "turn_steer";
 
-interface Proc {
-  child: ChildProcessWithoutNullStreams;
-  resume: boolean;
-  launched: LaunchSnapshot;
-  /** 这次拼进 developerInstructions 的性格设定是哪一版（LaunchFiles.personaRevision）：线程建好或恢复好时定 agent 看到的版本（persona-note.ts）。 */
-  personaLaunched: number | null;
+interface Proc extends BaseProc<StartupOutcome> {
   launchConfig: CodexLaunchConfig;
   /** 会话没选模型时 thread/start、thread/resume 显式带的（CodexDriverOptions.defaultModel），null 不带。 */
   defaultModel: string | null;
@@ -168,54 +98,17 @@ interface Proc {
    */
   fileChangePaths: Map<string, string[]>;
   threadId: string | null;
-  initSeen: boolean;
-  stderr: string;
-  closing: ClosingReason | null;
-  startTimedOut: boolean;
-  killTimer: NodeJS.Timeout | null;
   pendingRpcs: Map<number | string, RpcPhase>;
   /** 在等回执的 turn/steer：请求编号 → 那一行、原来的待发项和交回结果（#settleSteer）。进程退出时都按没收下处理。 */
   steers: Map<number | string, Steer>;
-  ready: Promise<StartupOutcome>;
-  resolveReady: (o: StartupOutcome) => void;
-  exited: Promise<void>;
 }
 
-interface SessionState {
-  id: SessionId;
-  proc: Proc | null;
-  /** 交给 codex、还没收尾的：turn/start 开这一轮的那条（最多一条），加上这一轮 steer 进去的（midTurn）。 */
-  inFlight: Batch[];
-  selfTurn: boolean;
+interface SessionState extends BaseSessionState<Proc, Batch> {
   activeTurnId: string | null;
   /** 单调递增的轮次计数，保证跨轮或重启后即使 codex 复用 item.id，发出的事件 uuid 依然绝对唯一。 */
   turnSeq: number;
-  turnInterrupted: boolean;
-  stopRequested: boolean;
-  pending: PendingEntry[];
-  written: Set<MessageId>;
-  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比（persona-note.ts）。 */
-  personaSeen: number | null;
-  /** 换代后的开场说明这个进程里带过了（还没等到账本记读到）；session-preamble.ts。 */
-  preambleTaken: boolean;
-  recoveryNote: boolean;
-  crashNote: boolean;
-  relaunchNote: boolean;
-  ended: boolean;
-  ending: Promise<void> | null;
-  settleWaiters: Array<() => void>;
-  starting: Promise<void> | null;
-  startTimer: NodeJS.Timeout | null;
-  idleTimer: NodeJS.Timeout | null;
-  interruptTimer: NodeJS.Timeout | null;
   interruptRequestId: number | string | null;
-  interruptWaiters: Array<() => void>;
-  lastEventWrite: number;
-  turnUsage: TurnUsage;
   lastTurnResultUsage: Record<string, number> | null;
-  usageLatest: TokenUsage | null;
-  usagePushedAt: number;
-  usageTimer: NodeJS.Timeout | null;
   /** 按 itemId 缓存当前轮的 agentMessage 增量文本，在 item/completed 或 turn/completed 时一次性发出完整 agent.text。 */
   agentMessageBuffers: Map<string, string>;
   /** 当前轮已经发过 agent.text 的 itemId 集合，避免重复发送。 */
@@ -242,92 +135,40 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
   writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
 }
 
-export class CodexDriver implements Driver {
+export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   readonly #codexPath: string;
   readonly #platform: NodeJS.Platform;
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
-  readonly #opts: Required<
-    Pick<
-      DriverOptions,
-      "idleCloseMs" | "interruptGraceMs" | "startTimeoutMs" | "shutdownGraceMs" | "commandsTimeoutMs" | "log"
-    >
-  > &
-    Omit<DriverOptions, "claudePath">;
-  readonly #composer: VendorComposerBase;
   readonly #defaultModel: () => Promise<string | null>;
-  readonly #sessions = new Map<SessionId, SessionState>();
-  readonly #listeners = new Set<DriverEventListener>();
-  #shuttingDown = false;
-  #requestSeq = 0;
-  #reportingListenerError = false;
 
-  constructor({ codexPath, claudePath, composer, platform, writeScopeSpawn, defaultModel, ...options }: CodexDriverOptions) {
+  constructor({ codexPath, claudePath, platform, writeScopeSpawn, defaultModel, ...options }: CodexDriverOptions) {
+    super("codex", options);
     this.#defaultModel = defaultModel ?? (async () => null);
     this.#codexPath = codexPath ?? claudePath ?? "codex";
     this.#platform = platform ?? process.platform;
     this.#writeScopeSpawn = writeScopeSpawn;
-    this.#composer = composer ?? composerBaseOf("codex")!;
-    this.#opts = {
-      idleCloseMs: IDLE_CLOSE_MS,
-      interruptGraceMs: INTERRUPT_GRACE_MS,
-      startTimeoutMs: START_TIMEOUT_MS,
-      shutdownGraceMs: SHUTDOWN_GRACE_MS,
-      commandsTimeoutMs: RUNNING_COMMANDS_TIMEOUT_MS,
-      log: (line: string) => console.error(line),
-      ...options,
+  }
+
+  protected createSessionState(id: SessionId): SessionState {
+    return {
+      ...createBaseSessionState<Proc, Batch>(id),
+      activeTurnId: null,
+      turnSeq: 0,
+      interruptRequestId: null,
+      lastTurnResultUsage: null,
+      agentMessageBuffers: new Map(),
+      emittedMessageIds: new Set(),
+      emittedThinkingIds: new Set(),
     };
   }
 
-  onEvent(listener: DriverEventListener): Unsubscribe {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
-  isRunning(sessionId: SessionId): boolean {
-    const proc = this.#sessions.get(sessionId)?.proc;
-    return Boolean(proc && !proc.closing);
-  }
-
-  async start(sessionId: SessionId): Promise<void> {
-    this.#assertRunning();
-    const st = this.#state(sessionId);
-    this.#assertNotEnded(st);
-    for (;;) {
-      if (st.starting) return st.starting;
-      this.#assertNotEnded(st);
-      const proc = st.proc;
-      if (proc?.closing) {
-        await proc.exited;
-        this.#assertRunning();
-        continue;
-      }
-      if (proc) {
-        if (proc.initSeen || st.inFlight.length > 0) return;
-        const batch = this.#takeBatch(st);
-        return batch ? this.#runStartup(st, batch, proc) : undefined;
-      }
-      const batch = this.#takeBatch(st);
-      if (batch) return this.#runStartup(st, batch, null);
-      const promise: Promise<void> = this.#spawnAndHandshake(st, this.#resumeFor(st), null)
-        .then((p) => {
-          this.#abortIfStopped(st, p);
-          this.#armIdle(st, p);
-        })
-        .finally(() => {
-          if (st.starting === promise) st.starting = null;
-        });
-      st.starting = promise;
-      return promise;
-    }
-  }
-
   async send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult> {
-    this.#assertRunning();
-    const st = this.#state(sessionId);
-    this.#assertNotEnded(st);
+    this.assertRunning();
+    const st = this.state(sessionId);
+    this.assertNotEnded(st);
     const ids = input.messageIds;
     if (ids.length === 0) {
-      this.#invalidInput(st, "messageIds 是空的", ids);
+      this.invalidInput(st, "messageIds 是空的", ids);
       return { kind: "rejected" };
     }
     if (ids.every((id) => st.written.has(id))) return { kind: "written" };
@@ -341,10 +182,10 @@ export class CodexDriver implements Driver {
     const parts = entryParts(entry);
     const problem = checkCodexTurnText(combineCodexTurnText(parts.text, parts.prefixes));
     if (problem) {
-      this.#invalidInput(st, problem, ids);
+      this.invalidInput(st, problem, ids);
       return { kind: "rejected" };
     }
-    if (!this.#isPending(st, ids)) {
+    if (!this.isPending(st, ids)) {
       if (input.recovery) st.recoveryNote = true;
       // 忙着：用 turn/steer 交给正在跑的这一轮；codex 不收（这一轮正好结束等）就退回待发队列
       const proc = st.proc;
@@ -359,7 +200,7 @@ export class CodexDriver implements Driver {
         st.pending.push(entry);
       }
     }
-    await this.#pump(st);
+    await this.pump(st);
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
@@ -373,30 +214,33 @@ export class CodexDriver implements Driver {
       proc.threadId !== null &&
       st.activeTurnId !== null &&
       !proc.closing &&
-      !this.#shuttingDown &&
-      this.#busy(st) &&
+      !this.shuttingDown &&
+      this.busy(st) &&
       st.starting === null &&
       !st.stopRequested &&
       st.pending.length === 0 &&
-      !this.#composer.isCommand(entry.text)
+      !this.composer.isCommand(entry.text)
     );
   }
 
   /** 发 turn/steer，等回执（结果见 #settleSteer）。 */
   #steer(st: SessionState, proc: Proc, batch: Batch, entry: PendingEntry): Promise<SteerOutcome> {
-    const reqId = ++this.#requestSeq;
+    const reqId = ++this.requestSeq;
     st.inFlight.push(batch);
-    this.#clearTimer(st, "idleTimer");
+    this.clearTimer(st, "idleTimer");
     return new Promise<SteerOutcome>((resolve) => {
       const steer: Steer = { batch, entry, resolve };
       proc.steers.set(reqId, steer);
       proc.pendingRpcs.set(reqId, "turn_steer");
-      proc.child.stdin.write(buildTurnSteerRequest(reqId, proc.threadId!, st.activeTurnId!, batch.combinedText) + "\n", (err) => {
-        if (!err || !proc.steers.has(reqId)) return;
-        proc.steers.delete(reqId);
-        proc.pendingRpcs.delete(reqId);
-        this.#settleSteer(st, steer, false);
-      });
+      proc.child.stdin.write(
+        buildTurnSteerRequest(reqId, proc.threadId!, st.activeTurnId!, batch.combinedText) + "\n",
+        (err) => {
+          if (!err || !proc.steers.has(reqId)) return;
+          proc.steers.delete(reqId);
+          proc.pendingRpcs.delete(reqId);
+          this.#settleSteer(st, steer, false);
+        },
+      );
     });
   }
 
@@ -408,13 +252,13 @@ export class CodexDriver implements Driver {
   #settleSteer(st: SessionState, steer: Steer, accepted: boolean): void {
     const { batch } = steer;
     if (accepted && !batch.turnDone) {
-      this.#markDelivered(st, batch);
+      this.markDelivered(st, batch);
       steer.resolve("written");
       return;
     }
-    this.#dropBatch(st, batch);
+    this.dropBatch(st, batch);
     if (batch.stopped && batch.source === "user") {
-      this.#emit(st.id, { type: "message.cancelled", messageIds: batch.messageIds, reason: "stop", at: Date.now() });
+      this.emit(st.id, { type: "message.cancelled", messageIds: batch.messageIds, reason: "stop", at: Date.now() });
       steer.resolve("cancelled");
       return;
     }
@@ -422,57 +266,20 @@ export class CodexDriver implements Driver {
     steer.resolve("queued");
   }
 
-  end(sessionId: SessionId): Promise<void> {
-    const st = this.#state(sessionId);
-    if (st.ending) return st.ending;
-    st.ended = true;
-    st.pending = [];
-    st.recoveryNote = false;
-    st.crashNote = false;
-    st.relaunchNote = false;
-    this.#clearTimer(st, "idleTimer");
-    st.ending = this.#finishEnd(st);
-    return st.ending;
-  }
-
-  async #finishEnd(st: SessionState): Promise<void> {
-    for (;;) {
-      if (st.starting) {
-        await st.starting.catch(() => {});
-        continue;
-      }
-      const proc = st.proc;
-      if (proc && this.#busy(st) && !proc.closing) {
-        await new Promise<void>((resolve) => st.settleWaiters.push(resolve));
-        continue;
-      }
-      break;
-    }
-    const proc = st.proc;
-    if (proc) {
-      this.#clearTimer(st, "idleTimer");
-      if (!proc.closing) this.#closeStdin(st, proc, "idle");
-      await proc.exited;
-    }
-    this.#update(st, { status: "ended", pid: null });
-  }
-
   async interrupt(sessionId: SessionId): Promise<void> {
-    const st = this.#sessions.get(sessionId);
+    const st = this.sessions.get(sessionId);
     if (!st) return;
     // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
-    const { kept, dropped } = dropUserEntries(st.pending);
-    st.pending = kept;
-    if (dropped.length > 0) this.#emit(st.id, { type: "message.cancelled", messageIds: dropped, reason: "stop", at: Date.now() });
+    this.dropPendingUsers(st);
     const proc = st.proc;
-    if (!proc || !this.#busy(st) || proc.closing) return;
+    if (!proc || !this.busy(st) || proc.closing) return;
     st.stopRequested = true;
     st.turnInterrupted = true;
     // steer 了、回执还没到的：回执到了也按停止处理，不退回队列再发（#settleSteer）
     for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
-      const reqId = ++this.#requestSeq;
+      const reqId = ++this.requestSeq;
       st.interruptRequestId = reqId;
       if (proc.threadId && st.activeTurnId) {
         proc.pendingRpcs.set(reqId, "turn_interrupt");
@@ -480,279 +287,54 @@ export class CodexDriver implements Driver {
       }
       st.interruptTimer = setTimeout(() => {
         st.interruptTimer = null;
-        this.#sigintForInterrupt(st, proc);
-      }, this.#opts.interruptGraceMs);
+        this.sigintForInterrupt(st, proc, "killTimer");
+      }, this.opts.interruptGraceMs);
     }
     return done;
   }
 
-  queryCommands(_sessionId: SessionId): Promise<ComposerCommand[] | null> {
-    return Promise.resolve(null);
+  protected override filterStaleRow(row: AgentSessionRow): boolean {
+    return row.vendor === "codex";
   }
 
-  async shutdown(): Promise<void> {
-    this.#shuttingDown = true;
-    const procs: Proc[] = [];
-    for (const st of this.#sessions.values()) {
-      this.#clearTimer(st, "idleTimer");
-      this.#clearTimer(st, "interruptTimer");
-      const proc = st.proc;
-      if (!proc) continue;
-      procs.push(proc);
-      clearKillTimer(proc);
-      if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
-      if (st.stopRequested && this.#busy(st)) {
-        proc.closing = "interrupt";
-        signalChild(proc.child, "SIGINT");
-        continue;
-      }
-      const wasIdle = proc.closing === "idle" || (!this.#busy(st) && proc.initSeen);
-      proc.closing = "shutdown";
-      if (wasIdle) proc.child.stdin.end();
-      else signalChild(proc.child, "SIGINT");
-    }
-    if (procs.length > 0) {
-      const all = Promise.all(procs.map((p) => p.exited));
-      if ((await within(all, this.#opts.shutdownGraceMs)) === "timeout") {
-        await Promise.all(procs.map((p) => forceKill(p.child)));
-        await within(all, KILL_WAIT_MS);
-      }
-    }
+  protected identifyStaleProcess(pid: number, _row: AgentSessionRow): Promise<number | null> {
+    return codexOfSession(pid);
   }
 
-  async cleanupStale(): Promise<void> {
-    let rows: AgentSessionRow[];
-    try {
-      rows = this.#opts.store.listWithProcess();
-    } catch (error) {
-      throw new DriverError("internal_error", `listWithProcess failed: ${errorMessage(error)}`);
-    }
-    const codexRows = rows.filter((row) => row.vendor === "codex");
-    await Promise.all(codexRows.map((row) => this.#cleanupStaleRow(row)));
+  protected takeBatch(st: SessionState): Batch | null {
+    const taken = this.takePendingEntryBatch(st);
+    if (!taken) return null;
+    return this.#batchOf(st, taken.body, taken.messageIds, taken.command, taken.source);
   }
 
-  async #cleanupStaleRow(row: AgentSessionRow): Promise<void> {
-    if (row.vendor !== "codex") return;
-    const pid = row.pid;
-    if (pid === null) return;
-    if (this.#sessions.get(row.id)?.proc?.child.pid === pid) return;
-    const pgid = await codexOfSession(pid);
-    if (pgid !== null) {
-      const target = signalTarget(pid);
-      if (target !== null) signalPid(target, "SIGINT");
-      if (await waitForExit(pid, this.#opts.interruptGraceMs)) {
-        if (pgid === pid) termGroupAfterExit({ pid });
-      } else {
-        await forceKillTree(pid, pgid === pid);
-        await waitForExit(pid, KILL_WAIT_MS);
-      }
-    }
-    this.#update(this.#state(row.id), { pid: null, status: row.status === "ended" ? "ended" : "idle" });
-  }
-
-  // --- 队列与批次调度 ---
-
-  #state(id: SessionId): SessionState {
-    let st = this.#sessions.get(id);
-    if (!st) {
-      st = {
-        id,
-        proc: null,
-        inFlight: [],
-        selfTurn: false,
-        activeTurnId: null,
-        turnSeq: 0,
-        turnInterrupted: false,
-        stopRequested: false,
-        pending: [],
-        written: new Set(),
-        personaSeen: null,
-        preambleTaken: false,
-        recoveryNote: false,
-        crashNote: false,
-        relaunchNote: false,
-        ended: false,
-        ending: null,
-        settleWaiters: [],
-        starting: null,
-        startTimer: null,
-        idleTimer: null,
-        interruptTimer: null,
-        interruptRequestId: null,
-        interruptWaiters: [],
-        lastEventWrite: 0,
-        turnUsage: new TurnUsage(),
-        lastTurnResultUsage: null,
-        usageLatest: null,
-        usagePushedAt: 0,
-        usageTimer: null,
-        agentMessageBuffers: new Map(),
-        emittedMessageIds: new Set(),
-        emittedThinkingIds: new Set(),
-      };
-      this.#sessions.set(id, st);
-    }
-    return st;
-  }
-
-  #isPending(st: SessionState, ids: MessageId[]): boolean {
-    const covers = (batchIds: MessageId[]) => ids.every((id) => batchIds.includes(id));
-    if (st.inFlight.some((b) => covers(b.messageIds))) return true;
-    return st.pending.some((e) => covers(e.messageIds));
-  }
-
-  #takeBatch(st: SessionState): Batch | null {
-    let body: { prefixes: string[]; text: string } | null = null;
-    let messageIds: MessageId[] = [];
-    let command = false;
-    const users = st.pending.filter((e) => e.source === "user");
-    if (users.length > 0) {
-      const isCommand = (e: PendingEntry) => this.#composer.isCommand(e.text);
-      const firstCommand = users.findIndex(isCommand);
-      command = firstCommand === 0;
-      const take = command ? users.slice(0, 1) : firstCommand === -1 ? users : users.slice(0, firstCommand);
-      st.pending = st.pending.filter((e) => !take.includes(e));
-      body = take.length === 1 ? entryParts(take[0]!) : mergeUserTexts(take.map(flatEntryText));
-      messageIds = take.flatMap((e) => e.messageIds);
-    } else if (st.pending.length > 0) {
-      const entry = st.pending.shift()!;
-      body = entryParts(entry);
-      messageIds = entry.messageIds;
-    }
-    if (body === null) return null;
-    return this.#batchOf(st, body, messageIds, command, users.length > 0 ? "user" : "system");
-  }
-
-  /**
-   * 拼一条：不是命令的话把恢复、崩溃、重启、性格设定改了的说明加在最前面（加一次就清掉）。
-   * 性格设定的和会话记着的比（thread/resume 起的进程按不换说明算，所以没有进程时也要比，见 persona-note.ts）。
-   */
-  #batchOf(st: SessionState, body: { prefixes: string[]; text: string }, messageIds: MessageId[], command: boolean, source: MessageSource): Batch {
+  #batchOf(
+    st: SessionState,
+    body: { prefixes: string[]; text: string },
+    messageIds: MessageId[],
+    command: boolean,
+    source: MessageSource,
+  ): Batch {
     if (command) return newBatch(messageIds, combineCodexTurnText(body.text, body.prefixes), NO_NOTES, source);
-    const preamble = this.#takeSessionPreamble(st);
-    const persona = this.#takePersonaNote(st);
-    const notes = { recovery: st.recoveryNote, crash: st.crashNote, relaunch: st.relaunchNote, persona, preamble };
-    const prefixes = [
-      preamble?.note ?? null,
-      notes.recovery ? RESTART_RECOVERY_NOTE : null,
-      notes.crash ? CRASH_RECOVERY_NOTE : null,
-      notes.relaunch ? RELAUNCH_NOTE : null,
-      persona?.note ?? null,
-    ].filter((p): p is string => p !== null);
-    st.recoveryNote = false;
-    st.crashNote = false;
-    st.relaunchNote = false;
+    const { notes, prefixes } = this.takeNotesPrefixes(st);
     return newBatch(messageIds, combineCodexTurnText(body.text, [...prefixes, ...body.prefixes]), notes, source);
   }
 
-  #dropBatch(st: SessionState, batch: Batch): void {
-    st.inFlight = st.inFlight.filter((b) => b !== batch);
-    if (batch.notes.recovery) st.recoveryNote = true;
-    if (batch.notes.crash) st.crashNote = true;
-    if (batch.notes.relaunch) st.relaunchNote = true;
-    batch.notes.persona?.restore();
-    batch.notes.preamble?.restore();
-  }
-
-  #takeSessionPreamble(st: SessionState): PreambleTaken | null {
-    return takeSessionPreamble(this.#opts.sessionPreamble, st.id, st, (error) =>
-      this.#internalError(st.id, `sessionPreamble failed, writing without it: ${errorMessage(error)}`),
-    );
-  }
-
-  #takePersonaNote(st: SessionState): PersonaNoteTaken | null {
-    // 守护进程重启后第一次：从会话那一行读
-    if (st.personaSeen === null) st.personaSeen = personaSeenFromRow(this.#row(st));
-    return takePersonaNote(
-      this.#opts.personaNote,
-      st.id,
-      st,
-      (revision) => this.#update(st, { personaRevision: revision }),
-      (error) => this.#internalError(st.id, `personaNote failed, writing without it: ${errorMessage(error)}`),
-    );
-  }
-
-  #setPersonaSeen(st: SessionState, revision: number | null): void {
-    if (revision === null || revision === st.personaSeen) return;
-    st.personaSeen = revision;
-    this.#update(st, { personaRevision: revision });
-  }
-
-  async #pump(st: SessionState): Promise<void> {
-    for (;;) {
-      this.#assertRunning();
-      this.#assertNotEnded(st);
-      if (st.starting) return;
-      const proc = st.proc;
-      if (proc?.closing) {
-        await proc.exited;
-        continue;
-      }
-      if (proc && this.#busy(st)) return;
-      if (st.pending.length === 0) return;
-      if (proc) {
-        await this.#deliverNext(st, proc);
-        continue;
-      }
-      const batch = this.#takeBatch(st);
-      if (!batch) return;
-      return this.#runStartup(st, batch, null);
-    }
-  }
-
-  #deliverNext(st: SessionState, proc: Proc): Promise<void> {
-    const run = async () => {
-      this.#clearTimer(st, "idleTimer");
-      let files: LaunchFiles | null = null;
-      try {
-        files = await this.#opts.prepareLaunch(this.#store(st));
-      } catch (error) {
-        this.#internalError(
-          st.id,
-          `prepareLaunch before writing failed, keeping the running process: ${errorMessage(error)}`,
-        );
-      }
-      this.#assertRunning();
-      if (st.ended || st.proc !== proc || proc.closing || this.#busy(st)) return;
-      const row = files ? this.#row(st) : null;
-      if (files && row && launchChanged(proc.launched, row, files.fingerprint)) {
-        this.#closeStdin(st, proc, "idle");
-        await proc.exited;
-        this.#assertRunning();
-        if (st.ended) return;
-        st.relaunchNote = true;
-        const batch = this.#takeBatch(st);
-        if (batch) await this.#startup(st, batch, null, files);
-        return;
-      }
-      const batch = this.#takeBatch(st);
-      if (!batch) return;
-      if (proc.initSeen) await this.#writeBatch(st, proc, batch);
-      else await this.#startup(st, batch, proc, null);
-    };
-    const promise: Promise<void> = run().finally(() => {
-      if (st.starting === promise) st.starting = null;
-    });
-    st.starting = promise;
-    return promise;
-  }
-
-  async #writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
+  protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     const problem = checkCodexTurnText(batch.combinedText);
     if (problem) {
-      this.#invalidInput(st, problem, batch.messageIds);
-      this.#afterTurn(st, proc);
+      this.invalidInput(st, problem, batch.messageIds);
+      this.afterTurn(st, proc);
       return;
     }
-    const row = this.#row(st);
+    const row = this.row(st);
     const threadId = proc.threadId ?? row?.vendorSessionId;
     if (!threadId) {
-      this.#invalidInput(st, "缺少 threadId", batch.messageIds);
-      this.#afterTurn(st, proc);
+      this.invalidInput(st, "缺少 threadId", batch.messageIds);
+      this.afterTurn(st, proc);
       return;
     }
-    this.#clearTimer(st, "idleTimer");
-    // 启动时已经放进去了（#startup），空闲时写的是新的
+    this.clearTimer(st, "idleTimer");
+    // 启动时已经放进去了（startup），空闲时写的是新的
     if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     st.turnSeq += 1;
     st.turnInterrupted = false;
@@ -762,7 +344,7 @@ export class CodexDriver implements Driver {
     st.emittedThinkingIds.clear();
     st.lastTurnResultUsage = null;
 
-    const reqId = ++this.#requestSeq;
+    const reqId = ++this.requestSeq;
     proc.pendingRpcs.set(reqId, "turn_start");
     const line = buildTurnStartRequest(reqId, {
       threadId,
@@ -779,137 +361,62 @@ export class CodexDriver implements Driver {
     });
     await new Promise<void>((resolve) => {
       proc.child.stdin.write(line + "\n", (err) => {
-        if (!err) this.#markDelivered(st, batch);
+        if (!err) this.markDelivered(st, batch);
         resolve();
       });
     });
   }
 
-  #markDelivered(st: SessionState, batch: Batch): void {
-    if (batch.delivered) return;
-    batch.delivered = true;
-    for (const id of batch.messageIds) st.written.add(id);
-    if (batch.messageIds.length > 0) {
-      this.#emit(st.id, { type: "message.delivered", messageIds: batch.messageIds, ...(batch.midTurn ? { midTurn: true as const } : {}), at: Date.now() });
-    }
-  }
-
-  #markProcessing(st: SessionState, batch: Batch, at: number): void {
-    this.#markDelivered(st, batch);
-    if (batch.processing || batch.messageIds.length === 0) return;
-    batch.processing = true;
-    this.#emit(st.id, { type: "message.processing", messageIds: batch.messageIds, ...(batch.notes.preamble ? { preamble: true as const } : {}), at });
-  }
-
-  /** 这几条要重发（出错、崩溃、收回）：不再算写过；带着的性格设定说明也退回去，重发时再带（多带一次无害，漏了不行）。 */
-  #forgetWritten(st: SessionState, batches: Batch[]): void {
-    for (const batch of batches) {
-      for (const id of batch.messageIds) st.written.delete(id);
-      batch.notes.persona?.restore();
-      batch.notes.preamble?.restore();
-    }
-  }
-
-  #afterTurn(st: SessionState, proc: Proc): void {
-    if (st.proc !== proc || proc.closing || this.#shuttingDown || st.ended || this.#busy(st)) return;
-    if (st.pending.length > 0) void this.#deliverNext(st, proc).catch(() => {});
-    else this.#armIdle(st, proc);
-  }
-
-  #busy(st: SessionState): boolean {
-    return st.inFlight.length > 0 || st.selfTurn;
-  }
-
   /** 这一轮结束后还在等 steer 的回执，现在等到了、不忙了：补上 turn/completed 时因为还忙没做的收尾。 */
   #idleAfterSteer(st: SessionState, proc: Proc): void {
-    // 只剩回执要等时点的停止（没有轮可打断，只起了 SIGINT 的计时）：到这里就停完了
-    this.#clearTimer(st, "interruptTimer");
+    this.clearTimer(st, "interruptTimer");
     st.stopRequested = false;
     st.turnInterrupted = false;
-    this.#resolveInterrupt(st);
-    this.#afterTurn(st, proc);
-    this.#settled(st);
+    this.resolveInterrupt(st);
+    this.afterTurn(st, proc);
+    this.settled(st);
   }
 
-  #settled(st: SessionState): void {
-    for (const w of st.settleWaiters.splice(0)) w();
+  protected override resolveInterrupt(st: SessionState): void {
+    st.interruptRequestId = null;
+    super.resolveInterrupt(st);
   }
 
-  #armIdle(st: SessionState, proc: Proc): void {
-    this.#clearTimer(st, "idleTimer");
-    st.idleTimer = setTimeout(() => {
-      st.idleTimer = null;
-      if (st.proc !== proc || proc.closing || this.#busy(st) || st.pending.length > 0 || st.starting || st.ended) return;
-      this.#closeStdin(st, proc, "idle");
-    }, this.#opts.idleCloseMs);
+  protected resumeFor(st: SessionState): boolean {
+    return this.store(st).hasCompletedTurn;
   }
 
-  #closeStdin(st: SessionState, proc: Proc, reason: ClosingReason): void {
-    proc.closing = reason;
-    proc.child.stdin.end();
-    const grace = this.#opts.interruptGraceMs;
-    clearKillTimer(proc);
-    proc.killTimer = setTimeout(() => {
-      signalChild(proc.child, "SIGINT");
-      proc.killTimer = setTimeout(() => {
-        proc.killTimer = null;
-        this.#forceKill(st, proc);
-      }, grace);
-    }, grace);
+  protected spawnIdleProcess(st: SessionState, resume: boolean): Promise<Proc> {
+    return this.#spawnAndHandshake(st, resume, null);
   }
 
-  #sigintForInterrupt(st: SessionState, proc: Proc): void {
-    if (st.proc !== proc || proc.closing) return;
-    proc.closing = "interrupt";
-    signalChild(proc.child, "SIGINT");
-    clearKillTimer(proc);
-    proc.killTimer = setTimeout(() => {
-      proc.killTimer = null;
-      this.#forceKill(st, proc);
-    }, this.#opts.interruptGraceMs);
-  }
-
-  // --- 启动与握手 ---
-
-  #resumeFor(st: SessionState): boolean {
-    return this.#store(st).hasCompletedTurn;
-  }
-
-  #runStartup(st: SessionState, batch: Batch, existing: Proc | null): Promise<void> {
-    const promise: Promise<void> = this.#startup(st, batch, existing, null).finally(() => {
-      if (st.starting === promise) st.starting = null;
-    });
-    st.starting = promise;
-    return promise;
-  }
-
-  #startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
+  protected startup(st: SessionState, batch: Batch, existing: Proc | null, files: LaunchFiles | null): Promise<void> {
     st.inFlight = [batch];
     st.turnInterrupted = false;
     st.stopRequested = false;
     const run = async () => {
       try {
-        const resume = existing?.resume ?? this.#resumeFor(st);
+        const resume = existing?.resume ?? this.resumeFor(st);
         const proc = existing ?? (await this.#spawn(st, resume, files));
-        this.#abortIfStopped(st, proc);
-        this.#clearTimer(st, "idleTimer");
+        this.abortIfStopped(st, proc);
+        this.clearTimer(st, "idleTimer");
         st.inFlight = [batch];
-        this.#armStartTimer(st, proc);
+        this.armStartTimer(st, proc);
         const outcome = await proc.ready;
         if (outcome.kind === "ok") {
-          await this.#writeBatch(st, proc, batch);
+          await this.writeBatch(st, proc, batch);
           return;
         }
         if (outcome.kind === "closed") {
           if (outcome.reason === "interrupt") return;
           throw new DriverError(
             "spawn_failed",
-            this.#shuttingDown ? "driver is shutting down" : `closed before thread ready (${outcome.reason})`,
+            this.shuttingDown ? "driver is shutting down" : `closed before thread ready (${outcome.reason})`,
           );
         }
-        throw startupError(outcome, this.#opts.startTimeoutMs);
+        throw startupError(outcome, this.opts.startTimeoutMs);
       } catch (error) {
-        this.#dropBatch(st, batch);
+        this.dropBatch(st, batch);
         throw error;
       }
     };
@@ -918,98 +425,41 @@ export class CodexDriver implements Driver {
 
   async #spawnAndHandshake(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const proc = await this.#spawn(st, resume, prepared);
-    this.#armStartTimer(st, proc);
+    this.armStartTimer(st, proc);
     const outcome = await proc.ready;
     if (outcome.kind === "ok") return proc;
     if (outcome.kind === "closed") {
       throw new DriverError(
         "spawn_failed",
-        this.#shuttingDown ? "driver is shutting down" : `closed before thread ready (${outcome.reason})`,
+        this.shuttingDown ? "driver is shutting down" : `closed before thread ready (${outcome.reason})`,
       );
     }
-    throw startupError(outcome, this.#opts.startTimeoutMs);
-  }
-
-  #abortIfStopped(st: SessionState, proc: Proc): void {
-    this.#assertRunning();
-    if (!st.ended) return;
-    if (!proc.closing) this.#closeStdin(st, proc, "idle");
-    throw new DriverError("session_ended", `session ${st.id} has been ended`);
-  }
-
-  #armStartTimer(st: SessionState, proc: Proc): void {
-    if (st.startTimer || proc.initSeen) return;
-    st.startTimer = setTimeout(() => {
-      st.startTimer = null;
-      if (st.proc !== proc || proc.initSeen) return;
-      proc.startTimedOut = true;
-      this.#forceKill(st, proc);
-    }, this.#opts.startTimeoutMs);
+    throw startupError(outcome, this.opts.startTimeoutMs);
   }
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
-    let row = this.#store(st);
-    let files = prepared;
-    if (!files) {
-      try {
-        files = await this.#opts.prepareLaunch(row);
-      } catch (error) {
-        if (error instanceof DriverError && error.code === "session_ended") throw error;
-        throw new DriverError("spawn_failed", `prepareLaunch failed: ${errorMessage(error)}`);
-      }
-      row = this.#store(st);
-    }
-    this.#assertRunning();
-    this.#assertNotEnded(st);
-    if (!existsSync(row.cwd)) throw new DriverError("spawn_failed", `working directory does not exist: ${row.cwd}`);
-
+    const { row, files } = await this.resolveLaunchFiles(st, prepared);
     const launchConfig = readCodexLaunchConfig(files);
     const defaultModel = row.model === null ? await this.#defaultModel().catch(() => null) : null;
-    this.#assertRunning();
-    this.#assertNotEnded(st);
+    this.assertRunning();
+    this.assertNotEnded(st);
     // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时直接报错拒绝启动。
     // 只读 Worker 不在这里包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
     const baseSpawn: SpawnCommand = { command: this.#codexPath, args: buildCodexArgs() };
     const launch = this.#writeScopeSpawn
       ? this.#writeScopeSpawn(baseSpawn, wrapScope)
-      : spawnInWriteScope("codex", baseSpawn, wrapScope, this.#opts.log, `session ${st.id}`, this.#platform);
-    const child = spawn(launch.command, launch.args, {
-      cwd: row.cwd,
-      env: buildChildEnv(process.env, { ...this.#opts.env, ...files.env }),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-      });
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        throw new DriverError(notFoundCode("codex"), `${this.#codexPath}: ${errorMessage(error)}`);
-      }
-      throw new DriverError("spawn_failed", `${this.#codexPath}: ${errorMessage(error)}`);
-    }
-    if (this.#shuttingDown) {
-      killFreshGroup(child);
-      this.#assertRunning();
-    }
-
-    let resolveReady!: (o: StartupOutcome) => void;
-    let resolveExited!: () => void;
+      : spawnInWriteScope("codex", baseSpawn, wrapScope, this.opts.log, `session ${st.id}`, this.#platform);
+    const child = await this.spawnDetachedChild(
+      this.#codexPath,
+      launch.command,
+      launch.args,
+      row.cwd,
+      files.env,
+    );
+    const { baseProc, resolveExited } = this.createBaseProc<StartupOutcome>(child, resume, row, files);
     const proc: Proc = {
-      child,
-      resume,
-      launched: {
-        fingerprint: files.fingerprint,
-        cwd: row.cwd,
-        addDirs: [...row.addDirs],
-        model: row.model,
-        effort: row.effort,
-      },
-      personaLaunched: files.personaRevision ?? null,
+      ...baseProc,
       launchConfig,
       defaultModel,
       readonly: launchConfig.readonly,
@@ -1017,92 +467,26 @@ export class CodexDriver implements Driver {
       osSandboxed: launch.osSandboxed,
       fileChangePaths: new Map(),
       threadId: resume ? row.vendorSessionId : null,
-      initSeen: false,
-      stderr: "",
-      closing: null,
-      startTimedOut: false,
-      killTimer: null,
       pendingRpcs: new Map(),
       steers: new Map(),
-      ready: new Promise((resolve) => (resolveReady = resolve)),
-      resolveReady: (o) => resolveReady(o),
-      exited: new Promise((resolve) => (resolveExited = resolve)),
     };
-    st.proc = proc;
-    this.#update(st, { pid: child.pid ?? null });
-
-    child.on("error", () => {});
-    child.stdin.on("error", () => {});
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL_CHARS);
-    });
-
-    let buffered = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      buffered += chunk;
-      for (let nl = buffered.indexOf("\n"); nl >= 0; nl = buffered.indexOf("\n")) {
-        const line = buffered.slice(0, nl);
-        buffered = buffered.slice(nl + 1);
-        this.#handleLine(st, proc, line);
-      }
-    });
-
-    const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
-    child.once("exit", (code, signal) => {
-      if (proc.closing === "idle") termGroupAfterExit(child);
-      const timer = setTimeout(() => {
-        child.stdout.destroy();
-        child.stderr.destroy();
-      }, STDIO_DRAIN_MS);
-      void drained.then(() => {
-        clearTimeout(timer);
-        if (buffered !== "") this.#handleLine(st, proc, buffered);
-        buffered = "";
-        this.#onClose(st, proc, code, signal, resolveExited);
-      });
-    });
-
+    this.attachChildProcess(st, proc, resolveExited);
     // 发送握手第 1 步：initialize
-    const initId = ++this.#requestSeq;
+    const initId = ++this.requestSeq;
     proc.pendingRpcs.set(initId, "initialize");
     child.stdin.write(buildInitializeRequest(initId) + "\n");
-
     return proc;
   }
 
   // --- JSON-RPC 2.0 输出处理 ---
 
-  #handleLine(st: SessionState, proc: Proc, rawLine: string): void {
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    try {
-      this.#onLine(st, proc, line);
-    } catch (error) {
-      this.#internalError(st.id, `handling output line failed: ${errorMessage(error)}`);
-    }
-  }
-
-  #onLine(st: SessionState, proc: Proc, line: string): void {
-    if (line.trim() === "") return;
-    let obj: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("not an object");
-      obj = parsed as Record<string, unknown>;
-    } catch {
-      this.#emit(st.id, {
-        type: "driver.error",
-        code: "bad_output_line",
-        message: `bad_output_line: ${line.slice(0, 200)}`,
-        at: Date.now(),
-      });
-      return;
-    }
-
-    const at = Date.now();
-    this.#touch(st, at);
-
+  protected onParsedLine(
+    st: SessionState,
+    proc: Proc,
+    obj: Record<string, unknown>,
+    line: string,
+    at: number,
+  ): void {
     const hasId = obj.id !== undefined && obj.id !== null;
     const hasMethod = typeof obj.method === "string" && obj.method !== "";
 
@@ -1150,19 +534,19 @@ export class CodexDriver implements Driver {
             timedOut: false,
             errorMessage: typeof errorObj.message === "string" ? errorObj.message : "initialize failed",
           });
-          this.#forceKill(st, proc);
+          this.forceKillProc(st, proc);
           return;
         }
         // 第 2 步：发 initialized 通知
         proc.child.stdin.write(buildInitializedNotification() + "\n");
         // 第 3 步：建立或恢复线程
-        const row = this.#row(st);
+        const row = this.row(st);
         const sessionInfo = {
           vendorSessionId: row?.vendorSessionId ?? proc.threadId ?? "",
           cwd: row?.cwd ?? proc.launched.cwd,
           model: row?.model ?? proc.launched.model ?? proc.defaultModel,
         };
-        const nextId = ++this.#requestSeq;
+        const nextId = ++this.requestSeq;
         if (proc.resume) {
           proc.pendingRpcs.set(nextId, "thread_resume");
           proc.child.stdin.write(buildThreadResumeRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
@@ -1178,12 +562,12 @@ export class CodexDriver implements Driver {
           // thread/resume 报错（如 not found / no rollout found）：自动回退发 thread/start 开启新线程
           proc.resume = false;
           proc.threadId = null;
-          const row = this.#row(st);
+          const row = this.row(st);
           const sessionInfo = {
             cwd: row?.cwd ?? proc.launched.cwd,
             model: row?.model ?? proc.launched.model ?? proc.defaultModel,
           };
-          const startId = ++this.#requestSeq;
+          const startId = ++this.requestSeq;
           proc.pendingRpcs.set(startId, "thread_start");
           proc.child.stdin.write(buildThreadStartRequest(startId, sessionInfo, proc.launchConfig) + "\n");
           return;
@@ -1192,12 +576,11 @@ export class CodexDriver implements Driver {
           typeof resultObj?.thread === "object" && resultObj.thread !== null
             ? (resultObj.thread as Record<string, unknown>)
             : null;
-        const threadId =
-          typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
+        const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
         const model =
           typeof thread?.model === "string" && thread.model !== ""
             ? thread.model
-            : (this.#row(st)?.model ?? proc.launched.model);
+            : (this.row(st)?.model ?? proc.launched.model);
         this.#completeThreadHandshake(st, proc, threadId, model, true, at);
         return;
       }
@@ -1212,19 +595,18 @@ export class CodexDriver implements Driver {
             timedOut: false,
             errorMessage: typeof errorObj.message === "string" ? errorObj.message : "thread/start failed",
           });
-          this.#forceKill(st, proc);
+          this.forceKillProc(st, proc);
           return;
         }
         const thread =
           typeof resultObj?.thread === "object" && resultObj.thread !== null
             ? (resultObj.thread as Record<string, unknown>)
             : null;
-        const threadId =
-          typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
+        const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
         const model =
           typeof thread?.model === "string" && thread.model !== ""
             ? thread.model
-            : (this.#row(st)?.model ?? proc.launched.model);
+            : (this.row(st)?.model ?? proc.launched.model);
         this.#completeThreadHandshake(st, proc, threadId, model, false, at);
         return;
       }
@@ -1234,20 +616,20 @@ export class CodexDriver implements Driver {
         proc.steers.delete(id);
         if (!steer) return;
         // 没收下：no active turn to steer、turn id 对不上
-        if (errorObj) this.#opts.log(`[driver] session ${st.id}: turn/steer 没收下：${String(errorObj.message ?? "")}`);
+        if (errorObj) this.logSession(st.id, `turn/steer 没收下：${String(errorObj.message ?? "")}`);
         this.#settleSteer(st, steer, !errorObj);
         // 这一轮已经结束、只在等这个回执：现在才算闲下来（end 在等、待发队列要接着发、停止要收尾）
-        if (!this.#busy(st)) this.#idleAfterSteer(st, proc);
+        if (!this.busy(st)) this.#idleAfterSteer(st, proc);
         return;
       }
 
       case "turn_start": {
         if (errorObj) {
           const batches = st.inFlight.splice(0);
-          for (const batch of batches) this.#markProcessing(st, batch, at);
-          this.#forgetWritten(st, batches);
+          for (const batch of batches) this.markProcessing(st, batch, at);
+          this.forgetWritten(st, batches);
           const errMsg = typeof errorObj.message === "string" ? errorObj.message : "turn/start failed";
-          this.#emit(st.id, {
+          this.emit(st.id, {
             type: "turn.ended",
             ok: false,
             interrupted: false,
@@ -1256,8 +638,8 @@ export class CodexDriver implements Driver {
             error: { subtype: "turn_start_error", message: errMsg },
             at,
           });
-          this.#afterTurn(st, proc);
-          this.#settled(st);
+          this.afterTurn(st, proc);
+          this.settled(st);
           return;
         }
         const turn =
@@ -1267,14 +649,14 @@ export class CodexDriver implements Driver {
         const turnId = typeof turn?.id === "string" && turn.id !== "" ? turn.id : null;
         if (turnId) st.activeTurnId = turnId;
         const opening = st.inFlight.find((b) => !b.midTurn);
-        if (opening) this.#markProcessing(st, opening, at);
+        if (opening) this.markProcessing(st, opening, at);
         return;
       }
 
       case "turn_interrupt": {
         if (errorObj) {
-          this.#clearTimer(st, "interruptTimer");
-          this.#sigintForInterrupt(st, proc);
+          this.clearTimer(st, "interruptTimer");
+          this.sigintForInterrupt(st, proc, "killTimer");
         }
         return;
       }
@@ -1289,27 +671,24 @@ export class CodexDriver implements Driver {
     resumed: boolean,
     at: number,
   ): void {
-    if (threadId) {
-      proc.threadId = threadId;
-    }
+    if (threadId) proc.threadId = threadId;
     if (proc.initSeen) return;
     proc.initSeen = true;
     proc.resume = resumed;
+    this.markHealthy(st.id);
     // 线程好了才定 agent 看到的性格设定：thread/start（包括 resume 失败退回的）是这次拼的；thread/resume 见 persona-note.ts
-    this.#setPersonaSeen(st, personaSeenAtStart(st, this.#row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
-    this.#clearTimer(st, "startTimer");
+    this.setPersonaSeen(st, personaSeenAtStart(st, this.row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
+    this.clearTimer(st, "startTimer");
 
     const patch: AgentSessionPatch = {
       status: "running",
       lastEventAt: at,
       ...(proc.threadId ? { vendorSessionId: proc.threadId } : {}),
     };
-    const row = this.#row(st);
-    if (row && row.hasCompletedTurn !== resumed) {
-      patch.hasCompletedTurn = resumed;
-    }
-    this.#update(st, patch);
-    this.#emit(st.id, {
+    const row = this.row(st);
+    if (row && row.hasCompletedTurn !== resumed) patch.hasCompletedTurn = resumed;
+    this.update(st, patch);
+    this.emit(st.id, {
       type: "session.started",
       resumed,
       model,
@@ -1339,7 +718,7 @@ export class CodexDriver implements Driver {
         const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : null;
         if (threadId) {
           proc.threadId = threadId;
-          this.#update(st, { vendorSessionId: threadId });
+          this.update(st, { vendorSessionId: threadId });
         }
         return;
       }
@@ -1353,12 +732,12 @@ export class CodexDriver implements Driver {
         if (turnId) st.activeTurnId = turnId;
         const opening = st.inFlight.find((b) => !b.midTurn);
         if (opening) {
-          this.#markProcessing(st, opening, at);
+          this.markProcessing(st, opening, at);
         } else if (!st.selfTurn && st.proc === proc) {
           st.selfTurn = true;
           st.turnSeq += 1;
-          this.#clearTimer(st, "idleTimer");
-          this.#emit(st.id, { type: "turn.started", at });
+          this.clearTimer(st, "idleTimer");
+          this.emit(st.id, { type: "turn.started", at });
         }
         return;
       }
@@ -1380,16 +759,14 @@ export class CodexDriver implements Driver {
         }
         if (item.type === "agentMessage") {
           const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
-          if (!st.agentMessageBuffers.has(itemId)) {
-            st.agentMessageBuffers.set(itemId, "");
-          }
+          if (!st.agentMessageBuffers.has(itemId)) st.agentMessageBuffers.set(itemId, "");
           return;
         }
         if (isCodexToolItemType(item.type)) {
           const rawId = typeof item.id === "string" && item.id !== "" ? item.id : null;
           if (item.type === "fileChange" && rawId) proc.fileChangePaths.set(rawId, extractFileChangePaths(item));
           const toolEv = rawId ? parseCodexToolStarted(item, at, this.#scopedUuid(st, rawId)) : null;
-          if (toolEv) this.#emit(st.id, toolEv);
+          if (toolEv) this.emit(st.id, toolEv);
         }
         return;
       }
@@ -1428,15 +805,13 @@ export class CodexDriver implements Driver {
           const fullText = typeof item.text === "string" && item.text !== "" ? item.text : buffered;
           if (fullText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
             st.emittedMessageIds.add(itemId);
-            this.#emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: fullText, at });
+            this.emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: fullText, at });
           }
           return;
         }
         if (isCodexToolItemType(item.type)) {
           const id = typeof item.id === "string" && item.id !== "" ? item.id : null;
-          if (id) {
-            this.#emit(st.id, { type: "agent.tool_result", toolUseIds: [id], at });
-          }
+          if (id) this.emit(st.id, { type: "agent.tool_result", toolUseIds: [id], at });
         }
         return;
       }
@@ -1445,17 +820,17 @@ export class CodexDriver implements Driver {
         const parsed = parseCodexTokenUsage(params.tokenUsage, st.activeTurnId);
         if (!parsed) return;
         st.lastTurnResultUsage = parsed.resultUsage;
-        const row = this.#row(st);
+        const row = this.row(st);
         const live = row ? st.turnUsage.observe(parsed.observeObj, row.usage) : null;
-        if (live) this.#pushUsage(st, live);
+        if (live) this.pushUsage(st, live);
         return;
       }
 
       case "account/rateLimits/updated": {
         const info = parseCodexRateLimits(params.rateLimits);
         if (!info) return;
-        this.#update(st, { rateLimit: info });
-        this.#emit(st.id, { type: "rate_limit", info, at });
+        this.update(st, { rateLimit: info });
+        this.emit(st.id, { type: "rate_limit", info, at });
         return;
       }
 
@@ -1476,7 +851,7 @@ export class CodexDriver implements Driver {
     const batch = waiting.find((b) => b.combinedText === text) ?? waiting[0];
     if (!batch) return;
     batch.echoed = true;
-    if (batch.midTurn) this.#markProcessing(st, batch, at);
+    if (batch.midTurn) this.markProcessing(st, batch, at);
   }
 
   /** 将当前轮序号与 turnId 拼进 itemId，保证跨轮或重启后即使 codex 复用 itemId，发出的 uuid 也永不冲突。 */
@@ -1488,7 +863,7 @@ export class CodexDriver implements Driver {
   #emitThinkingOnce(st: SessionState, itemId: string, at: number): void {
     if (st.emittedThinkingIds.has(itemId)) return;
     st.emittedThinkingIds.add(itemId);
-    this.#emit(st.id, { type: "agent.thinking", uuid: this.#scopedUuid(st, itemId), at });
+    this.emit(st.id, { type: "agent.thinking", uuid: this.#scopedUuid(st, itemId), at });
   }
 
   #onTurnCompleted(st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
@@ -1498,7 +873,7 @@ export class CodexDriver implements Driver {
     for (const [itemId, bufferedText] of st.agentMessageBuffers.entries()) {
       if (bufferedText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
         st.emittedMessageIds.add(itemId);
-        this.#emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: bufferedText, at });
+        this.emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: bufferedText, at });
       }
     }
     st.agentMessageBuffers.clear();
@@ -1513,7 +888,7 @@ export class CodexDriver implements Driver {
     st.inFlight = unacked;
     st.selfTurn = false;
     st.activeTurnId = null;
-    for (const batch of settled) this.#markProcessing(st, batch, at);
+    for (const batch of settled) this.markProcessing(st, batch, at);
 
     const turn =
       typeof params.turn === "object" && params.turn !== null
@@ -1535,9 +910,7 @@ export class CodexDriver implements Driver {
       durationMs: null,
       at,
     };
-    if (proc.closing === "shutdown" && (!ok || interrupted)) {
-      event.shutdown = true;
-    }
+    if (proc.closing === "shutdown" && (!ok || interrupted)) event.shutdown = true;
     if (!ok) {
       const turnErr =
         typeof turn.error === "object" && turn.error !== null
@@ -1548,14 +921,16 @@ export class CodexDriver implements Driver {
           ? turnErr.message
           : status;
       event.error = { subtype: status, message: errMsg };
-      this.#forgetWritten(st, settled);
+      this.forgetWritten(st, settled);
+    } else {
+      this.markHealthy(st.id);
     }
 
     st.turnInterrupted = false;
     st.stopRequested = false;
 
-    const row = this.#row(st);
-    this.#cancelUsagePush(st);
+    const row = this.row(st);
+    this.cancelUsagePush(st);
     const patch: AgentSessionPatch = {};
     if (st.lastTurnResultUsage) {
       patch.usage = st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, st.lastTurnResultUsage);
@@ -1563,38 +938,15 @@ export class CodexDriver implements Driver {
     } else {
       st.turnUsage.reset();
     }
-    if (row?.hasCompletedTurn === false) {
-      patch.hasCompletedTurn = true;
-    }
-    if (Object.keys(patch).length > 0) {
-      this.#update(st, patch);
-    }
+    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
+    if (Object.keys(patch).length > 0) this.update(st, patch);
 
-    this.#clearTimer(st, "interruptTimer");
-    this.#emit(st.id, event);
-    this.#releaseMissed(st, missed, interrupted, at);
-    this.#resolveInterrupt(st);
-    this.#afterTurn(st, proc);
-    this.#settled(st);
-  }
-
-  /**
-   * steer 收下了、codex 没读到就不再处理的（这一轮结束、进程没了）：停止时用户的标已取消、系统的收回（stop-untaken.ts）；
-   * 不是停止的都收回，让账本重新登记发送。
-   */
-  #releaseMissed(st: SessionState, missed: Batch[], stopped: boolean, at: number): void {
-    const messageIds = missed.flatMap((b) => b.messageIds);
-    if (messageIds.length === 0) return;
-    // codex 没读到带着的性格设定说明：退回去，下一条再带
-    for (const b of missed) b.notes.persona?.restore();
-    for (const b of missed) b.notes.preamble?.restore();
-    if (stopped) {
-      this.#forgetWritten(st, missed.filter((b) => b.source === "system"));
-      for (const event of untakenOnStopEvents(missed, at)) this.#emit(st.id, event);
-      return;
-    }
-    this.#forgetWritten(st, missed);
-    this.#emit(st.id, { type: "message.requeued", messageIds, at });
+    this.clearTimer(st, "interruptTimer");
+    this.emit(st.id, event);
+    this.releaseUntaken(st, missed, interrupted, at);
+    this.resolveInterrupt(st);
+    this.afterTurn(st, proc);
+    this.settled(st);
   }
 
   #onServerRequest(
@@ -1607,7 +959,7 @@ export class CodexDriver implements Driver {
   ): void {
     const params =
       typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
-    const row = this.#row(st);
+    const row = this.row(st);
     const context = {
       readonly: proc.readonly,
       writeScope: proc.writeScope,
@@ -1622,12 +974,18 @@ export class CodexDriver implements Driver {
       }
       case "item/fileChange/requestApproval": {
         const itemId = typeof params.itemId === "string" ? params.itemId : "";
-        const decision = decideFileChangeApproval({ ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] }, context);
+        const decision = decideFileChangeApproval(
+          { ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] },
+          context,
+        );
         proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
         return;
       }
       case "mcpServer/elicitation/request": {
-        const answer = decideMcpElicitation(params, { readonly: proc.readonly, policy: proc.launchConfig.readonlyPolicy });
+        const answer = decideMcpElicitation(params, {
+          readonly: proc.readonly,
+          policy: proc.launchConfig.readonlyPolicy,
+        });
         proc.child.stdin.write(buildJsonRpcResponse(id, answer) + "\n");
         return;
       }
@@ -1642,7 +1000,7 @@ export class CodexDriver implements Driver {
     }
   }
 
-  #onClose(
+  protected onProcessClose(
     st: SessionState,
     proc: Proc,
     code: number | null,
@@ -1650,25 +1008,17 @@ export class CodexDriver implements Driver {
     resolveExited: () => void,
   ): void {
     try {
-      if (st.proc === proc) st.proc = null;
-      clearKillTimer(proc);
-      this.#clearTimer(st, "startTimer");
-      this.#clearTimer(st, "idleTimer");
-      this.#clearTimer(st, "interruptTimer");
-      this.#flushUsage(st);
-      st.turnUsage.reset();
+      const at = this.beginProcessClose(st, proc);
       st.lastTurnResultUsage = null;
       st.agentMessageBuffers.clear();
       st.emittedMessageIds.clear();
       st.emittedThinkingIds.clear();
-      this.#update(st, { pid: null, status: "idle", lastEventAt: Date.now() });
-      const at = Date.now();
       const steers = [...proc.steers.values()];
       proc.steers.clear();
       for (const steer of steers) this.#settleSteer(st, steer, false);
       if (!proc.initSeen) {
         if (proc.closing === null) {
-          this.#forgetWritten(st, st.inFlight);
+          this.forgetWritten(st, st.inFlight);
           proc.resolveReady({
             kind: "failed",
             exitCode: code,
@@ -1676,7 +1026,7 @@ export class CodexDriver implements Driver {
             stderr: proc.stderr,
             timedOut: proc.startTimedOut,
           });
-          this.#emit(st.id, {
+          this.emit(st.id, {
             type: "session.exited",
             reason: "startup_failed",
             exitCode: code,
@@ -1687,7 +1037,7 @@ export class CodexDriver implements Driver {
           });
           return;
         }
-        if (proc.closing === "interrupt") for (const batch of st.inFlight) this.#markDelivered(st, batch);
+        if (proc.closing === "interrupt") for (const batch of st.inFlight) this.markDelivered(st, batch);
         proc.resolveReady({ kind: "closed", reason: proc.closing });
       }
       const batches = proc.initSeen || proc.closing === "interrupt" ? st.inFlight : [];
@@ -1700,13 +1050,13 @@ export class CodexDriver implements Driver {
       const taken = batches.filter((b) => !missed.includes(b));
       if (taken.length > 0 && reason === "crash") {
         st.crashNote = true;
-        this.#forgetWritten(st, taken);
+        this.forgetWritten(st, taken);
       }
       // 点了停止、turn/interrupt 还没结果时进程没了（崩溃也算）：没读到的照停止处理，用户的不收回重发
       const stopped = reason === "interrupt" || st.stopRequested;
       st.interruptRequestId = null;
       st.stopRequested = false;
-      this.#emit(st.id, {
+      this.emit(st.id, {
         type: "session.exited",
         reason,
         exitCode: code,
@@ -1715,140 +1065,11 @@ export class CodexDriver implements Driver {
         messageIds: taken.flatMap((b) => b.messageIds),
         at,
       });
-      this.#releaseMissed(st, missed, stopped, at);
+      this.releaseUntaken(st, missed, stopped, at);
     } finally {
-      this.#resolveInterrupt(st);
+      this.resolveInterrupt(st);
       resolveExited();
-      this.#settled(st);
-    }
-  }
-
-  // --- 内部辅助 ---
-
-  #resolveInterrupt(st: SessionState): void {
-    st.interruptRequestId = null;
-    for (const w of st.interruptWaiters.splice(0)) w();
-  }
-
-  #invalidInput(st: SessionState, problem: string, messageIds: MessageId[]): void {
-    this.#emit(st.id, {
-      type: "driver.error",
-      code: "invalid_input",
-      message: `invalid_input: ${problem}`,
-      messageIds,
-      at: Date.now(),
-    });
-  }
-
-  #forceKill(st: SessionState, proc: Proc): void {
-    forceKill(proc.child).catch((error: unknown) =>
-      this.#internalError(st.id, `force kill failed: ${errorMessage(error)}`),
-    );
-  }
-
-  #internalError(sessionId: SessionId, detail: string): void {
-    this.#emit(sessionId, {
-      type: "driver.error",
-      code: "internal_error",
-      message: `internal_error: ${detail}`,
-      at: Date.now(),
-    });
-  }
-
-  #store(st: SessionState): AgentSessionRow {
-    let row: AgentSessionRow | null;
-    try {
-      row = this.#opts.store.get(st.id);
-    } catch (error) {
-      throw new DriverError("internal_error", `reading agent session ${st.id} failed: ${errorMessage(error)}`);
-    }
-    if (!row) throw new DriverError("internal_error", `no agent session ${st.id}`);
-    return row;
-  }
-
-  #row(st: SessionState): AgentSessionRow | null {
-    try {
-      return this.#store(st);
-    } catch (error) {
-      this.#internalError(st.id, errorMessage(error));
-      return null;
-    }
-  }
-
-  #update(st: SessionState, patch: AgentSessionPatch): void {
-    if (patch.lastEventAt !== undefined && patch.lastEventAt !== null) st.lastEventWrite = patch.lastEventAt;
-    try {
-      this.#opts.store.update(st.id, patch);
-    } catch (error) {
-      this.#internalError(st.id, `updating agent session ${st.id} failed: ${errorMessage(error)}`);
-    }
-  }
-
-  #pushUsage(st: SessionState, usage: TokenUsage): void {
-    st.usageLatest = usage;
-    const wait = USAGE_PUSH_MS - (Date.now() - st.usagePushedAt);
-    if (wait <= 0) this.#flushUsage(st);
-    else if (st.usageTimer === null) {
-      st.usageTimer = setTimeout(() => this.#flushUsage(st), wait);
-      st.usageTimer.unref();
-    }
-  }
-
-  #flushUsage(st: SessionState): void {
-    const usage = st.usageLatest;
-    this.#cancelUsagePush(st);
-    if (usage === null) return;
-    st.usagePushedAt = Date.now();
-    this.#update(st, { usage });
-  }
-
-  #cancelUsagePush(st: SessionState): void {
-    if (st.usageTimer) clearTimeout(st.usageTimer);
-    st.usageTimer = null;
-    st.usageLatest = null;
-  }
-
-  #touch(st: SessionState, at: number): void {
-    if (at - st.lastEventWrite >= LAST_EVENT_WRITE_MS) this.#update(st, { lastEventAt: at });
-  }
-
-  #clearTimer(st: SessionState, key: "startTimer" | "idleTimer" | "interruptTimer"): void {
-    const timer = st[key];
-    if (timer) clearTimeout(timer);
-    st[key] = null;
-  }
-
-  #emit(sessionId: SessionId, event: DriverEvent): void {
-    for (const listener of [...this.#listeners]) {
-      try {
-        listener(sessionId, event);
-      } catch (error) {
-        this.#listenerFailed(sessionId, event, error);
-      }
-    }
-  }
-
-  #listenerFailed(sessionId: SessionId, event: DriverEvent, error: unknown): void {
-    const detail = `listener threw on ${event.type}: ${errorMessage(error)}`;
-    if (this.#reportingListenerError) {
-      console.error(`[driver] session ${sessionId}: ${detail}`);
-      return;
-    }
-    this.#reportingListenerError = true;
-    try {
-      this.#internalError(sessionId, detail);
-    } finally {
-      this.#reportingListenerError = false;
-    }
-  }
-
-  #assertRunning(): void {
-    if (this.#shuttingDown) throw new DriverError("spawn_failed", "driver is shutting down");
-  }
-
-  #assertNotEnded(st: SessionState): void {
-    if (st.ended || this.#store(st).status === "ended") {
-      throw new DriverError("session_ended", `session ${st.id} has been ended`);
+      this.settled(st);
     }
   }
 }
@@ -1857,21 +1078,24 @@ export function createCodexDriver(options: CodexDriverOptions): CodexDriver {
   return new CodexDriver(options);
 }
 
-function newBatch(messageIds: MessageId[], combinedText: string, notes: Batch["notes"], source: MessageSource): Batch {
-  return { messageIds, combinedText, notes, delivered: false, processing: false, midTurn: false, echoed: false, turnDone: false, stopped: false, source };
-}
-
-function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {
-  return { prefixes: entry.resend ? [RESEND_NOTE, ...entry.prefixes] : entry.prefixes, text: entry.text };
-}
-
-function flatEntryText(entry: PendingEntry): string {
-  const text = [...entry.prefixes, entry.text].join("\n");
-  return entry.resend ? `${RESEND_NOTE}\n\n${text}` : text;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function newBatch(
+  messageIds: MessageId[],
+  combinedText: string,
+  notes: BatchNotes,
+  source: MessageSource,
+): Batch {
+  return {
+    messageIds,
+    combinedText,
+    notes,
+    delivered: false,
+    processing: false,
+    midTurn: false,
+    echoed: false,
+    turnDone: false,
+    stopped: false,
+    source,
+  };
 }
 
 function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, startTimeoutMs: number): DriverError {
@@ -1879,32 +1103,4 @@ function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, star
   const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
   const detail = outcome.errorMessage ?? outcome.stderr.trim();
   return new DriverError("spawn_failed", `codex exited before thread ready (${how})${detail ? `: ${detail}` : ""}`);
-}
-
-function clearKillTimer(proc: Proc): void {
-  if (proc.killTimer) clearTimeout(proc.killTimer);
-  proc.killTimer = null;
-}
-
-async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "timeout"> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), ms);
-  });
-  try {
-    return await Promise.race([promise.then(() => "done" as const), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
-  return (
-    launched.fingerprint !== fingerprint ||
-    launched.cwd !== row.cwd ||
-    launched.model !== row.model ||
-    launched.effort !== row.effort ||
-    launched.addDirs.length !== row.addDirs.length ||
-    launched.addDirs.some((d, i) => d !== row.addDirs[i])
-  );
 }
