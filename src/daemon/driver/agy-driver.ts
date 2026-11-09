@@ -90,6 +90,13 @@ interface Proc extends BaseProc<AgyStartupOutcome> {
   fallbackScope: WriteScope | null;
 }
 
+interface TrackedToolStep {
+  task_id: string;
+  description: string;
+  /** 是否已作为后台任务上报（显式后台命令或轮结束时仍未 DONE 的工具步骤）。 */
+  promoted: boolean;
+}
+
 interface SessionState extends BaseSessionState<Proc, Batch> {
   /** Worker 触发可写范围兜底或只读连接器违规时的错误原因。 */
   policyViolation: string | null;
@@ -102,8 +109,10 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   stepTexts: Map<string, string>;
   /** 当前轮已经发出过 ACTIVE 事件的工具 step_id。 */
   seenToolSteps: Set<string>;
-  /** 正在运行、尚未收到 DONE 的工具步骤（用于跟踪跨轮/后台命令并同步到 background）。 */
-  activeToolSteps: Map<string, { task_id: string; description: string }>;
+  /** agy 通过 background_tasks_changed 等事件显式上报的后台任务（task_id → 任务项）。 */
+  reportedTasks: Map<string, { task_id: string; description: string }>;
+  /** 正在运行、尚未收到 DONE 的工具步骤（用于跟踪跨轮/后台命令并与 reportedTasks 取并集同步到 background）。 */
+  activeToolSteps: Map<string, TrackedToolStep>;
   /** 当前轮已经发出过 thinking 事件的 step_id。 */
   seenThinkingSteps: Set<string>;
   /** 自上一次工具调用（或轮开始）以来是否已经发出过 agent.text。 */
@@ -154,6 +163,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       vendorSessionId: "",
       stepTexts: new Map(),
       seenToolSteps: new Set(),
+      reportedTasks: new Map(),
       activeToolSteps: new Map(),
       seenThinkingSteps: new Set(),
       hasTextSinceLastTool: false,
@@ -462,6 +472,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       tmpDir,
       fallbackScope: readonlyPolicy === undefined && !launch.osSandboxed ? (files.writeScope ?? null) : null,
     };
+    st.reportedTasks.clear();
     st.activeToolSteps.clear();
     this.attachChildProcess(st, proc, resolveExited, removeTmp);
     return proc;
@@ -485,17 +496,45 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         this.#onStepUpdate(st, proc, obj, at);
         return;
       case "background_tasks_changed":
-        this.onBackgroundTasksChanged(st, proc, extractAgyBackgroundTasks(obj));
+        this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(obj));
         return;
       case "system":
         if (obj.subtype === "background_tasks_changed") {
-          this.onBackgroundTasksChanged(st, proc, extractAgyBackgroundTasks(obj));
+          this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(obj));
         }
         return;
       case "result":
         this.#onResult(st, proc, obj, at);
         return;
     }
+  }
+
+  #onReportedBackgroundTasks(st: SessionState, proc: Proc, rawTasks: unknown): void {
+    if (!Array.isArray(rawTasks)) return;
+    const next = new Map<string, { task_id: string; description: string }>();
+    for (const t of rawTasks) {
+      if (typeof t !== "object" || t === null) continue;
+      const { task_id: id, ambient, description } = t as {
+        task_id?: unknown;
+        ambient?: unknown;
+        description?: unknown;
+      };
+      if (typeof id === "string" && id !== "" && ambient !== true) {
+        next.set(id, { task_id: id, description: typeof description === "string" ? description : "" });
+      }
+    }
+    st.reportedTasks = next;
+    this.#syncBackgroundTasks(st, proc);
+  }
+
+  #syncBackgroundTasks(st: SessionState, proc: Proc): void {
+    const merged = new Map<string, { task_id: string; description: string }>(st.reportedTasks);
+    for (const step of st.activeToolSteps.values()) {
+      if (step.promoted && !merged.has(step.task_id)) {
+        merged.set(step.task_id, { task_id: step.task_id, description: step.description });
+      }
+    }
+    this.onBackgroundTasksChanged(st, proc, [...merged.values()]);
   }
 
   #conversationIdOf(st: SessionState): string {
@@ -580,7 +619,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       "tasks" in su ||
       "background_tasks" in su
     ) {
-      this.onBackgroundTasksChanged(st, proc, extractAgyBackgroundTasks(su));
+      this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(su));
       if (stepType === "background_tasks" || stepType === "background_tasks_changed") return;
     }
 
@@ -651,15 +690,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
       if (su.state === "ACTIVE" || !st.seenToolSteps.has(stepId)) {
         st.seenToolSteps.add(stepId);
-        if (su.state === "ACTIVE") {
-          st.activeToolSteps.set(stepId, {
-            task_id: stepId,
-            description: extractToolDescription(toolName, parameters),
-          });
-          if (isExplicitBackgroundToolStep(su, toolName, parameters)) {
-            this.onBackgroundTasksChanged(st, proc, [...st.activeToolSteps.values()]);
-          }
-        }
         const row = this.row(st);
         const convId = this.#conversationIdOf(st);
 
@@ -680,9 +710,20 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
               : checkAgyConnectorCall(toolName, parameters, proc.readonly.policy, proc.readonly.catalog));
           if (violation !== null) {
             st.policyViolation = violation;
-            st.activeToolSteps.delete(stepId);
             this.sigintForInterrupt(st, proc, "interruptTimer");
             return;
+          }
+        }
+
+        if (su.state === "ACTIVE") {
+          const promoted = isExplicitBackgroundToolStep(su, toolName, parameters);
+          st.activeToolSteps.set(stepId, {
+            task_id: stepId,
+            description: extractToolDescription(toolName, parameters),
+            promoted,
+          });
+          if (promoted) {
+            this.#syncBackgroundTasks(st, proc);
           }
         }
       }
@@ -693,9 +734,10 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         su.state === "CANCELLED" ||
         su.state === "ERROR"
       ) {
-        const hadActive = st.activeToolSteps.delete(stepId);
-        if (hadActive && st.background.active) {
-          this.onBackgroundTasksChanged(st, proc, [...st.activeToolSteps.values()]);
+        const removed = st.activeToolSteps.get(stepId);
+        st.activeToolSteps.delete(stepId);
+        if (removed?.promoted) {
+          this.#syncBackgroundTasks(st, proc);
         }
         if (su.state === "DONE") {
           this.emit(st.id, {
@@ -728,7 +770,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
 
     if ("tasks" in res || "background_tasks" in res) {
-      this.onBackgroundTasksChanged(st, proc, extractAgyBackgroundTasks(res));
+      this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(res));
     }
 
     const finishedReason = typeof res.finished_reason === "string" ? res.finished_reason : null;
@@ -768,13 +810,29 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
     const interrupted = violation !== null ? false : rawInterrupted;
     const status = typeof res.status === "string" ? res.status : "SUCCESS";
-    const ok = violation === null && !interrupted && (status === "SUCCESS" || hadFinalText);
+    const ok = violation === null && !interrupted && (status === "SUCCESS" || (finishedReason === null && hadFinalText));
 
     // 轮结束时仍有 ACTIVE 且未 DONE 的工具步骤（如 run_command 转后台运行）：同步为后台任务
-    if (ok && st.activeToolSteps.size > 0 && st.background.count !== st.activeToolSteps.size) {
-      this.onBackgroundTasksChanged(st, proc, [...st.activeToolSteps.values()]);
-    } else if (!ok) {
+    if (ok && st.activeToolSteps.size > 0) {
+      let newlyPromoted = false;
+      for (const step of st.activeToolSteps.values()) {
+        if (!step.promoted) {
+          step.promoted = true;
+          newlyPromoted = true;
+        }
+      }
+      if (newlyPromoted) {
+        this.#syncBackgroundTasks(st, proc);
+      }
+    } else if (!ok && st.activeToolSteps.size > 0) {
+      let hadPromoted = false;
+      for (const step of st.activeToolSteps.values()) {
+        if (step.promoted) hadPromoted = true;
+      }
       st.activeToolSteps.clear();
+      if (hadPromoted) {
+        this.#syncBackgroundTasks(st, proc);
+      }
     }
 
     const event: DriverEvent = {
@@ -869,6 +927,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     try {
       const at = this.beginProcessClose(st, proc);
       st.lastLiveUsage = null;
+      st.reportedTasks.clear();
       st.activeToolSteps.clear();
 
       if (!proc.initSeen) {

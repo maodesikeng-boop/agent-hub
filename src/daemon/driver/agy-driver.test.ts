@@ -1791,4 +1791,139 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     await expect(t.driver.send(s.id, user(1, "帮我查一下"))).resolves.toEqual({ kind: "written" });
     expect(t.stdinBlocks()).toHaveLength(1);
   });
+
+  it("P1 真失败：无文本 + status=ERROR → ok=false", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [{ steps: [], result: { status: "ERROR", finishedReason: "error", error: "boom", response: "" } }],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: false, error: { subtype: "error", message: "boom" } });
+  });
+
+  it("P2 真失败：文本→工具→finished_reason=error → 应 ok=false", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "text", deltas: ["我先查一下"] },
+              { type: "tool", name: "run_command", parameters: { CommandLine: "ls" } },
+            ],
+            result: { status: "ERROR", finishedReason: "error", error: "http2: GOAWAY" },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    expect((await t.waitFor("turn.ended")).ok).toBe(false);
+  });
+
+  it("P3 真失败：文本后（没调工具）就 finished_reason=error → 应 ok=false", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [{ type: "text", deltas: ["我先看看代码，"] }],
+            result: { status: "ERROR", finishedReason: "error", error: "http2: GOAWAY", response: "" },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    expect((await t.waitFor("turn.ended")).ok).toBe(false);
+  });
+
+  it("P4 真失败：文本→工具→status=ERROR、finishedReason=null、response 为空 → 应 ok=false", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "text", deltas: ["我先查一下"] },
+              { type: "tool", name: "run_command", parameters: { CommandLine: "ls" } },
+            ],
+            result: { status: "ERROR", error: "boom", response: "" },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    expect((await t.waitFor("turn.ended")).ok).toBe(false);
+  });
+
+  it("P5 agy 报的后台任务与 activeToolSteps 并集跟踪：下一轮普通工具或额外后台工具 DONE 后不覆盖已上报任务", async () => {
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD },
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "backgroundTasks", tasks: [{ task_id: "bg1", description: "sleep 30" }] },
+              { type: "text", deltas: ["已放后台"] },
+            ],
+          },
+          {
+            steps: [
+              {
+                type: "tool",
+                stepId: 9,
+                name: "run_command",
+                parameters: { CommandLine: "pnpm dev", IsDaemon: true },
+              },
+              { type: "text", deltas: ["额外后台工具完成"] },
+            ],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(2, "y"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 2, 1]);
+  });
+
+  it("P5b agy 报的后台任务不被下一轮普通工具 DONE 清零，仍按 backgroundHoldMaxMs 保活并在到点关闭后带 hold_max 说明", async () => {
+    const t = makeAgyHarness({
+      driver: { idleCloseMs: 150, backgroundHoldMaxMs: 3000 },
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "backgroundTasks", tasks: [{ task_id: "bg1", description: "sleep 30" }] },
+              { type: "text", deltas: ["已放后台"] },
+            ],
+          },
+          {
+            steps: [
+              { type: "tool", name: "view_file", parameters: { path: "a" } },
+              { type: "text", deltas: ["看完了"] },
+            ],
+          },
+          {
+            steps: [{ type: "text", deltas: ["好"] }],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "x"));
+    await t.waitFor("turn.ended");
+    await t.driver.send(s.id, user(2, "y"));
+    const ended2 = await t.waitFor("turn.ended", undefined, 2);
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1]);
+    const exited = await t.waitFor("session.exited");
+    expect(exited.at - ended2.at).toBeGreaterThan(2500);
+    await t.driver.send(s.id, user(3, "z"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.stdinBlocks().at(-1)).toContain(backgroundTasksKilledNote("hold_max", ["sleep 30"]));
+  });
 });
