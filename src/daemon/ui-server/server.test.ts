@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1820,5 +1821,76 @@ describe("定时任务 POST /api/pms/:id/schedules、PUT、DELETE /api/schedules
     const res = await call("DELETE", "/api/schedules/4", { origin: ORIGIN });
     expect(res.statusCode).toBe(204);
     expect(ledger.scheduleCalls).toEqual([{ call: "remove", args: [4] }]);
+  });
+});
+
+describe("HTTP gzip 压缩", () => {
+  it("GET /api/state：Accept-Encoding 支持 gzip 时返回 gzip 压缩体、Content-Length 和 Vary: Accept-Encoding；不支持或 q=0 时返回明文", async () => {
+    const messages = Array.from({ length: 20 }, (_, i) => makeMessage(100 + i, 1, `大段历史消息内容-${i}-${"重复文本".repeat(100)}`));
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      conversations: [{ conversation: { id: 1, kind: "pm", pmId: 1, projectId: null, title: "小林", createdAt: 1 }, messages, hasMore: false }],
+    };
+    const plain = await app.inject({
+      method: "GET",
+      url: "/api/state",
+      headers: { host: HOST, cookie: COOKIE, "accept-encoding": "identity" },
+    });
+    expect(plain.statusCode).toBe(200);
+    expect(plain.headers["content-encoding"]).toBeUndefined();
+    expect(plain.headers.vary).toContain("Accept-Encoding");
+
+    const qZero = await app.inject({
+      method: "GET",
+      url: "/api/state",
+      headers: { host: HOST, cookie: COOKIE, "accept-encoding": "gzip;q=0, identity;q=1" },
+    });
+    expect(qZero.statusCode).toBe(200);
+    expect(qZero.headers["content-encoding"]).toBeUndefined();
+
+    const compressed = await app.inject({
+      method: "GET",
+      url: "/api/state",
+      headers: { host: HOST, cookie: COOKIE, "accept-encoding": " deflate, gzip;q=0.9, br " },
+    });
+    expect(compressed.statusCode).toBe(200);
+    expect(compressed.headers["content-encoding"]).toBe("gzip");
+    expect(compressed.headers.vary).toContain("Accept-Encoding");
+    expect(Number(compressed.headers["content-length"])).toBe(compressed.rawPayload.length);
+    expect(compressed.rawPayload.length).toBeLessThan(plain.rawPayload.length / 4);
+    const decoded = JSON.parse(gunzipSync(compressed.rawPayload).toString("utf8"));
+    expect(decoded).toEqual(plain.json());
+  });
+
+  it("存储文件下载（含 Range 和内联预览 html/svg）：即使客户端带 Accept-Encoding: gzip 也不压缩，保留 Accept-Ranges 与原始字节长度", async () => {
+    const body = "<h1>标题</h1>".repeat(50);
+    const up = await app.inject({
+      method: "POST",
+      url: "/api/uploads?name=page.html",
+      headers: { host: HOST, cookie: COOKIE, origin: ORIGIN, "content-type": "text/html" },
+      payload: Buffer.from(body, "utf8"),
+    });
+    expect(up.statusCode).toBe(200);
+    const { id } = up.json() as { id: string };
+
+    const full = await app.inject({
+      method: "GET",
+      url: `/api/uploads/${id}/page.html?inline=1`,
+      headers: { host: HOST, cookie: COOKIE, "accept-encoding": "gzip" },
+    });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers["content-encoding"]).toBeUndefined();
+    expect(full.headers["accept-ranges"]).toBe("bytes");
+    expect(Number(full.headers["content-length"])).toBe(Buffer.byteLength(body, "utf8"));
+    expect(full.body).toBe(body);
+
+    const ranged = await app.inject({
+      method: "GET",
+      url: `/api/uploads/${id}/page.html`,
+      headers: { host: HOST, cookie: COOKIE, "accept-encoding": "gzip", range: "bytes=0-3" },
+    });
+    expect(ranged.statusCode).toBe(206);
+    expect(ranged.headers["content-encoding"]).toBeUndefined();
+    expect(ranged.rawPayload).toEqual(Buffer.from(body, "utf8").subarray(0, 4));
   });
 });

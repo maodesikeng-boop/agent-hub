@@ -162,6 +162,19 @@ export function applyChange(state: HubState, change: Change): HubState {
       const { message } = change.data;
       const view = state.conversations[message.conversationId];
       if (!view) return next; // 不认识的对话，device-hub.ts 会重新拉快照
+      // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
+      if (
+        view.conversation.kind === "worker" &&
+        view.messages.length === 0 &&
+        view.hasMore &&
+        state.older[message.conversationId] !== "loading"
+      ) {
+        return {
+          ...next,
+          pending: dropConfirmed(state.pending, [message]),
+          retry: dropRetryIfSettled(state.retry, message),
+        };
+      }
       const updated = upsertMessage(view.messages, message);
       const trim =
         !state.olderLoaded?.[message.conversationId] &&
@@ -251,7 +264,11 @@ function withoutLoadError(state: HubState): HubState {
 function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   const conversations: Record<ConversationId, ConversationView> = {};
   for (const c of snapshot.conversations) {
-    conversations[c.conversation.id] = { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
+    const prev = state.conversations[c.conversation.id];
+    conversations[c.conversation.id] =
+      c.messages.length === 0 && c.hasMore && prev && prev.messages.length > 0
+        ? { ...prev, conversation: c.conversation }
+        : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);

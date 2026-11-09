@@ -271,8 +271,7 @@ export class DeviceHub {
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];
     if (!view?.hasMore || this.olderInFlight.has(conversationId)) return;
-    const before = oldestMessageId(view);
-    if (before === null) return;
+    const before = oldestMessageId(view) ?? Number.MAX_SAFE_INTEGER;
     this.olderInFlight.add(conversationId);
     this.dispatch({ type: "olderStart", conversationId });
     try {

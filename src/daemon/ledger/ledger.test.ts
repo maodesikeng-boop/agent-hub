@@ -855,6 +855,26 @@ describe("snapshot 和翻页", () => {
     expect(ledger.snapshot().conversations[0]?.hasMore).toBe(false);
     expect(() => ledger.messagesBefore(999, 10)).toThrow(ConversationNotFoundError);
   });
+
+  it("工具消息对外裁剪 meta.input（防大文件 Write/Edit 撑爆快照），数据库原样保留", () => {
+    ev({
+      type: "agent.tool",
+      at: 2,
+      uuid: "u-tool-slim",
+      toolUseId: "t-slim",
+      name: "Write",
+      input: { file_path: "src/huge.ts", content: "x".repeat(50_000) },
+    });
+    const rawMeta = db.get<{ meta: string }>("SELECT meta FROM messages WHERE kind = 'tool'")!.meta;
+    expect(JSON.parse(rawMeta)).toEqual({
+      toolUseId: "t-slim",
+      name: "Write",
+      input: { file_path: "src/huge.ts", content: "x".repeat(50_000) },
+    });
+    const exposed = ledger.snapshot().conversations[0]!.messages.find((m) => m.kind === "tool")!;
+    expect(exposed.text).toBe("Write: src/huge.ts");
+    expect(exposed.meta).toEqual({ toolUseId: "t-slim", name: "Write" });
+  });
 });
 
 describe("changesSince", () => {

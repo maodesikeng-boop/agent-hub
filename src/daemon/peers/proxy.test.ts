@@ -3,10 +3,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { API_PATHS, DEVICE_OFFLINE_REASON, DEVICE_OFFLINE_WS_CLOSE_CODE, PEER_DEVICE_HEADER, type WsServerMessage } from "../../shared/index.ts";
-import { splitProxyUrl } from "./proxy.ts";
+import { acceptsGzip, splitProxyUrl } from "./proxy.ts";
 import type { PeerRecord } from "./store.ts";
 import { pair, settle, sleep, startTestDevice, type TestDevice } from "./test-helpers.ts";
 import { newPeerToken, sha256Hex } from "./tokens.ts";
@@ -223,6 +224,62 @@ describe("HTTP 转发", () => {
     const res = await a.browser(`/d/${peer.id}/api/state`);
     expect(res.status).toBe(404);
     expect(a.records()).toEqual([]);
+  });
+
+  it("acceptsGzip：识别 gzip、x-gzip、q 权重与 * 通配", () => {
+    expect(acceptsGzip(undefined)).toBe(false);
+    expect(acceptsGzip("identity")).toBe(false);
+    expect(acceptsGzip("deflate, br")).toBe(false);
+    expect(acceptsGzip("gzip, deflate, br")).toBe(true);
+    expect(acceptsGzip("x-gzip;q=0.5")).toBe(true);
+    expect(acceptsGzip("gzip;q=0, identity;q=1")).toBe(false);
+    expect(acceptsGzip("gzip;q=0, *;q=1")).toBe(false);
+    expect(acceptsGzip("*;q=0.8")).toBe(true);
+    expect(acceptsGzip("*;q=0")).toBe(false);
+  });
+
+  it("跨设备转发支持 gzip：客户端支持 gzip 时向上游传 accept-encoding: gzip，下游收到 gzip 压缩流与沙箱头", async () => {
+    const bigPayload = JSON.stringify({ seq: 42, text: "跨设备状态快照压缩测试-".repeat(500) });
+    const up = await fakeUpstream((s, res) => {
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      if (s.headers["accept-encoding"] === "gzip") {
+        const gz = gzipSync(Buffer.from(bigPayload, "utf8"));
+        res.setHeader("content-encoding", "gzip");
+        res.setHeader("content-length", String(gz.length));
+        res.end(gz);
+      } else {
+        res.end(bigPayload);
+      }
+    });
+    const peer = record(up.url);
+    const a = await entryWith(peer);
+
+    const rawWire = await new Promise<{ statusCode: number; headers: IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port: a.port,
+          path: `/d/${peer.id}/api/state`,
+          headers: { host: `127.0.0.1:${a.port}`, cookie: a.cookie, "accept-encoding": "gzip" },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve({ statusCode: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(up.seen[0]!.headers["accept-encoding"]).toBe("gzip");
+    expect(rawWire.statusCode).toBe(200);
+    expect(rawWire.headers["content-encoding"]).toBe("gzip");
+    expect(rawWire.headers.vary).toContain("Accept-Encoding");
+    expect(rawWire.headers["content-security-policy"]).toBe("sandbox; default-src 'none'");
+    expect(rawWire.headers["x-content-type-options"]).toBe("nosniff");
+    expect(rawWire.body.length).toBeLessThan(Buffer.byteLength(bigPayload, "utf8") / 5);
+    expect(gunzipSync(rawWire.body).toString("utf8")).toBe(bigPayload);
   });
 });
 

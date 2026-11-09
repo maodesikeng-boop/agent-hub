@@ -9,6 +9,7 @@
 //   对方回的东西是在入口的来源下显示的，不能让它在入口的来源里跑脚本、借浏览器的 cookie 访问入口本机。
 // - 设备令牌来的请求不能用 /d/（server.ts 的认证钩子拦）：别的设备不能借本机的转发去第三台。
 import { Readable } from "node:stream";
+import { gunzipSync } from "node:zlib";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { WebSocket } from "ws";
 import {
@@ -107,6 +108,49 @@ export interface ProxyContext {
   pingMs?: number;
 }
 
+/** 可开启 HTTP gzip 压缩的 MIME 类型（不含二进制与流媒体）。 */
+const COMPRESSIBLE_CONTENT_TYPES = new Set([
+  "application/json",
+  "text/html",
+  "text/plain",
+  "text/css",
+  "text/javascript",
+  "application/javascript",
+  "image/svg+xml",
+]);
+
+export function isCompressibleType(contentType: unknown): boolean {
+  if (typeof contentType !== "string") return false;
+  const essence = contentType.split(";", 1)[0]!.trim().toLowerCase();
+  return COMPRESSIBLE_CONTENT_TYPES.has(essence) || essence.endsWith("+json");
+}
+
+/** 客户端 Accept-Encoding 是否允许 gzip（考虑 q=0 显式拒绝与 * 通配）。 */
+export function acceptsGzip(header: string | string[] | undefined): boolean {
+  if (header === undefined) return false;
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  let wildcard: boolean | null = null;
+  for (const item of raw.split(",")) {
+    const [namePart, ...params] = item.split(";");
+    const coding = namePart?.trim().toLowerCase() ?? "";
+    if (coding !== "gzip" && coding !== "x-gzip" && coding !== "*") continue;
+    let allowed = true;
+    for (const param of params) {
+      const eq = param.indexOf("=");
+      if (eq !== -1 && param.slice(0, eq).trim().toLowerCase() === "q") {
+        const q = Number(param.slice(eq + 1).trim());
+        if (Number.isNaN(q) || q <= 0) allowed = false;
+      }
+    }
+    if (coding === "gzip" || coding === "x-gzip") return allowed;
+    wildcard = allowed;
+  }
+  return wildcard ?? false;
+}
+
+const isGzipBuffer = (buf: Buffer | null): boolean =>
+  buf !== null && buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+
 /** 转发一个 HTTP 请求。请求体原样流过去（上传不在入口落地），响应体原样流回来。 */
 export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target: ProxyTarget, rest: string, ctx: ProxyContext): Promise<FastifyReply> {
   const endpoint = resolveEndpoint(target);
@@ -114,7 +158,8 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
     target.onOffline?.();
     return reply.code(502).send(offlineBody(target.name));
   }
-  const headers: Record<string, string> = { ...authHeaders(target, ctx.selfId), "accept-encoding": "identity" };
+  const wantGzip = req.headers.range === undefined && acceptsGzip(req.headers["accept-encoding"]);
+  const headers: Record<string, string> = { ...authHeaders(target, ctx.selfId), "accept-encoding": wantGzip ? "gzip" : "identity" };
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = req.headers[name];
     if (typeof value === "string") headers[name] = value;
@@ -154,7 +199,13 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   }
 
   if (res.status === 401) {
-    const text = await res.text().catch(() => "");
+    const raw = Buffer.from(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
+    let text = "";
+    try {
+      text = (isGzipBuffer(raw) ? gunzipSync(raw) : raw).toString("utf8");
+    } catch {
+      text = raw.toString("utf8");
+    }
     reply.raw.off("close", onClientGone);
     if (isPeerUnauthorized(res.status, text)) {
       ctx.forget();
@@ -172,8 +223,33 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   reply
     .header("content-security-policy", type === "text/html" ? CSP_HTML : type === "image/svg+xml" ? CSP_SVG : CSP_DEFAULT)
     .header("x-content-type-options", "nosniff");
-  // 响应体流完之前浏览器走了，onClientGone 停掉上游
-  return res.body === null ? reply.send() : reply.send(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]));
+  if (res.body === null) return reply.send();
+  if (
+    res.headers.get("content-encoding")?.trim().toLowerCase() === "gzip" ||
+    (res.status !== 206 &&
+      res.headers.get("accept-ranges") === null &&
+      res.headers.get("content-range") === null &&
+      isCompressibleType(type))
+  ) {
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(await res.arrayBuffer());
+    } catch {
+      reply.raw.off("close", onClientGone);
+      target.onOffline?.();
+      return reply.code(502).send(offlineBody(target.name));
+    }
+    reply.raw.off("close", onClientGone);
+    if (isGzipBuffer(buf)) {
+      reply.header("content-encoding", "gzip").header("vary", "Accept-Encoding").header("content-length", buf.length);
+    } else {
+      // fetch（undici）已自动解压响应体或上游回明文：去掉上游旧的 content-length，交由外层 server.ts 的 onSend 统一按需 gzip 并设精确 Content-Length
+      reply.removeHeader("content-length");
+    }
+    return reply.send(buf);
+  }
+  // 大文件 / Range 响应体流式转回；流完之前浏览器走了，onClientGone 停掉上游
+  return reply.send(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]));
 }
 
 /**

@@ -168,9 +168,22 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): LedgerSnapshot {
+      // 已开工或已收工的 Worker 对话不在初始 /api/state 里预塞消息（只带 hasMore 标记，点开详情时按需拉取；
+      // 还在准备 worktree 的 Worker 保留首条 queued 任务说明供前端判断 preparing），避免几百个 Worker 撑爆初始快照。
+      const preparingWorkerConversations = new Set(
+        db
+          .all<{ worker_conversation_id: number }>(
+            "SELECT worker_conversation_id FROM workers WHERE status != 'ended' AND workspace = 'worktree' AND base_commit IS NULL",
+          )
+          .map((r) => r.worker_conversation_id),
+      );
       const conversations: ConversationSnapshot[] = db
         .all<ConversationDbRow>("SELECT * FROM conversations WHERE kind != 'project_group' ORDER BY id")
         .map((row) => {
+          if (row.kind === "worker" && !preparingWorkerConversations.has(row.id)) {
+            const hasMore = Boolean(db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id));
+            return { conversation: toConversation(row), messages: [], hasMore };
+          }
           const { messages, hasMore } = page(
             db.all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?", row.id, MESSAGE_PAGE_SIZE + 1),
           );
