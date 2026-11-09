@@ -220,8 +220,9 @@ export function createLedgerWorkers(
 
   const workerRow = (id: WorkerId): WorkerDbRow | null => db.get<WorkerDbRow>("SELECT * FROM workers WHERE id = ?", id) ?? null;
   const projectRow = (id: number): ProjectDbRow => db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", id)!;
-  /** Worker 的会话（一个 Worker 一个）。 */
-  const workerSession = (workerId: WorkerId): AgentSessionRow => currentSession(workerRow(workerId)!.worker_conversation_id)!;
+  /** Worker 的会话（一个 Worker 一个）。已有行直接传，省一次查 workers 表。 */
+  const workerSession = (worker: WorkerId | WorkerDbRow): AgentSessionRow =>
+    currentSession((typeof worker === "number" ? workerRow(worker)! : worker).worker_conversation_id)!;
   const mainFolderOf = (projectId: number): string => projectCard(projectRow(projectId)).mainFolder;
 
   /** 项目经理管着的 Worker：不存在 → not_found；不是它派的 → forbidden。 */
@@ -311,7 +312,7 @@ export function createLedgerWorkers(
 
   /** 起 Worker 的会话、把任务说明发给它（主文件夹里干的派活时就做，worktree 的建好了再做）。 */
   const enqueueFirstTurn = (p: Pending, worker: WorkerDbRow) => {
-    const session = workerSession(worker.id);
+    const session = workerSession(worker);
     const task = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id))!;
     enqueue(p, { type: "session.start", params: { sessionId: session.id, generation: session.generation } });
     enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: task.id, source: "user" } });
@@ -448,7 +449,7 @@ export function createLedgerWorkers(
     // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
     if (notStarted(worker)) throw fail("conflict", `Worker 还在准备，等它开工后再发（Worker #${worker.id} 在建 worktree 或跑项目的准备命令）`);
     const text = validTask(args.text, "要发给 Worker 的话");
-    const session = workerSession(worker.id);
+    const session = workerSession(worker);
     // 和用户在网页上手打一样：隐藏的命令（/clear 会换会话 ID，之后接回的是旧对话）不发，hub 退出码 1 打印原因（原因由厂商实现给）
     const blocked = ctx.commandBlockReason(session, text);
     if (blocked !== null) throw fail("invalid", blocked);
@@ -470,7 +471,7 @@ export function createLedgerWorkers(
     if (worker.status === "ended") {
       return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
     }
-    const session = workerSession(worker.id);
+    const session = workerSession(worker);
     // 正在跑（一轮没结束、或有排队待送的消息）：先走和网页“停止”同一条打断路径（messages.ts 的 stopIn）。还没开工的在准备中，没有这一轮
     const interrupted = !notStarted(worker) && stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
     if (interrupted) endInterrupted.add(session.id);
@@ -493,7 +494,7 @@ export function createLedgerWorkers(
     const openWorkers = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id", pmId);
     const t = now();
     for (const w of openWorkers) {
-      const session = workerSession(w.id);
+      const session = workerSession(w);
       const queued = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", w.worker_conversation_id);
       for (const { id } of queued) transition(p, id, "stopped");
       const interrupted = !notStarted(w) && stopIn(p, { ...session, conversationId: w.worker_conversation_id });
@@ -515,10 +516,10 @@ export function createLedgerWorkers(
     const rows = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
     if (rows.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
     const lines = rows.map((w) => {
-      const where = w.workspace === "worktree" ? `worktree ${w.worktree_path}（分支 ${w.branch}）` : "主文件夹";
-      const state = w.status === "ended" ? "已收工" : liveOf(workerSession(w.id).id).activity === "preparing" ? "准备中" : "进行中";
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
-      const session = workerSession(w.id);
+      const session = workerSession(w);
+      const where = w.workspace === "worktree" ? `worktree ${w.worktree_path}（分支 ${w.branch}）` : "主文件夹";
+      const state = w.status === "ended" ? "已收工" : liveOf(session.id).activity === "preparing" ? "准备中" : "进行中";
       const shown = agentSettingOf(ctx, session);
       const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
       return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;

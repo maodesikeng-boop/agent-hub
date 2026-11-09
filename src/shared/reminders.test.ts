@@ -99,6 +99,22 @@ describe("applyReminderChange：守护进程按变化流维护一份状态", () 
     expect(state.conversations[2]!.messages.length).toBeLessThanOrEqual(200);
     expect(state.conversations[2]!.messages.at(-1)?.id).toBe(399);
   });
+
+  it("Worker 对话不保存消息：Worker 发消息不会更换 conversations 引用（避免守护进程推送白算）", () => {
+    const snap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: [
+        makeConvSnapshot([ask({ id: 99, conversationId: 30 })], { conversation: makeWorkerConversation() }),
+      ],
+    });
+    const state = reminderStateFrom(snap);
+    expect(state.conversations[30]?.messages).toEqual([]);
+    expect(pendingAsks(state, 30)).toEqual([]);
+    const afterCreate = applyReminderChange(state, change({ type: "message.created", data: { message: makeMessage({ id: 101, conversationId: 30 }) } }));
+    expect(afterCreate.conversations).toBe(state.conversations);
+    const afterUpdate = applyReminderChange(afterCreate, change({ type: "message.updated", data: { message: makeMessage({ id: 101, conversationId: 30, text: "改" }) } }));
+    expect(afterUpdate.conversations).toBe(state.conversations);
+  });
 });
 
 describe("ReminderTracker：停稳 3 秒、提问一来就提醒、刚开始时本来就有的不提醒", () => {

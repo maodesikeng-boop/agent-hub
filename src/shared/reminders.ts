@@ -34,13 +34,25 @@ export function isQuietMessage(message: Message): boolean {
   return isHandoverTraffic(message) || systemEventOf(message)?.event === "session.renewed";
 }
 
-/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。 */
+const sessionByConversationCache = new WeakMap<
+  readonly SessionState[],
+  { length: number; map: Map<ConversationId, SessionState> }
+>();
+
+/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。按 sessions 数组引用缓存 Map，避免 O(C × S) 反复线性扫描。 */
 export function sessionOf(state: Pick<ReminderState, "sessions">, conversationId: ConversationId): SessionState | null {
-  let current: SessionState | null = null;
-  for (const s of state.sessions) {
-    if (s.conversationId === conversationId && (current === null || s.generation > current.generation)) current = s;
+  let cached = sessionByConversationCache.get(state.sessions);
+  if (!cached || cached.length !== state.sessions.length) {
+    const map = new Map<ConversationId, SessionState>();
+    for (const s of state.sessions) {
+      if (s.conversationId === null) continue;
+      const prev = map.get(s.conversationId);
+      if (prev === undefined || s.generation > prev.generation) map.set(s.conversationId, s);
+    }
+    cached = { length: state.sessions.length, map };
+    sessionByConversationCache.set(state.sessions, cached);
   }
-  return current;
+  return cached.map.get(conversationId) ?? null;
 }
 
 /** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
@@ -88,16 +100,23 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
  */
 export function pendingAsks(state: ReminderState, conversationId: ConversationId): Message[] {
   const view = state.conversations[conversationId];
-  if (!view || isPmArchived(state, view.conversation.pmId) || pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return [];
+  if (!view || view.conversation.kind === "worker" || isPmArchived(state, view.conversation.pmId) || pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return [];
   return view.messages.filter((m) => {
     const meta = askOf(m);
     return meta !== null && meta.answered !== true;
   });
 }
 
-/** 所有对话里还在等用户确定的提问。 */
+/** 所有对话里还在等用户确定的提问（Worker 对话没有 hub ask，直接跳过）。 */
 export function allPendingAsks(state: ReminderState): { conversationId: ConversationId; message: Message }[] {
-  return Object.keys(state.conversations).flatMap((key) => pendingAsks(state, Number(key)).map((message) => ({ conversationId: Number(key), message })));
+  const out: { conversationId: ConversationId; message: Message }[] = [];
+  for (const { conversation } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker") continue;
+    for (const message of pendingAsks(state, conversation.id)) {
+      out.push({ conversationId: conversation.id, message });
+    }
+  }
+  return out;
 }
 
 /**
@@ -197,12 +216,17 @@ export class ReminderTracker<K> {
 
 // ---- 守护进程那份状态 ----
 
-/** 从快照（/api/state 或账本的 snapshot）起一份。 */
+/** 从快照（/api/state 或账本的 snapshot）起一份。提醒规则不看 Worker 自己对话里的消息，不留它们省内存。 */
 export function reminderStateFrom(snapshot: Pick<LedgerSnapshot, "seq" | "pms" | "conversations" | "sessions">): ReminderState {
   return {
     seq: snapshot.seq,
     pms: snapshot.pms,
-    conversations: Object.fromEntries(snapshot.conversations.map(({ conversation, messages }) => [conversation.id, { conversation, messages }])),
+    conversations: Object.fromEntries(
+      snapshot.conversations.map(({ conversation, messages }) => [
+        conversation.id,
+        { conversation, messages: conversation.kind === "worker" ? [] : messages },
+      ]),
+    ),
     sessions: snapshot.sessions,
     pending: [],
   };
@@ -229,7 +253,7 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
     case "message.updated": {
       const { message } = change.data;
       const view = state.conversations[message.conversationId];
-      if (!view) return next;
+      if (!view || view.conversation.kind === "worker") return next;
       return { ...next, conversations: { ...state.conversations, [message.conversationId]: { ...view, messages: upsertRecent(view.messages, message) } } };
     }
     case "session.status":

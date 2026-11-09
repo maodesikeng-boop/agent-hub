@@ -175,13 +175,12 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     if (!started || stopping) return;
     const t = now();
     try {
-      // 结果没写进去（写库失败）而停在 running 的行：改回 pending，下面照常再取
-      const running = [...inFlight.keys()];
-      db.run(
-        `UPDATE actions SET status = 'pending', updated_at = ? WHERE status = 'running' AND id NOT IN (${running.map(() => "?").join(", ")})`,
-        t,
-        ...running,
-      );
+      // 结果没写进去（写库失败）而停在 running 的行：改回 pending，下面照常再取（平时没有孤立 running 行时不发 UPDATE，也不动态拼 SQL）
+      for (const { id } of db.all<{ id: number }>("SELECT id FROM actions WHERE status = 'running'")) {
+        if (!inFlight.has(id)) {
+          db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE id = ?", t, id);
+        }
+      }
       for (const raw of db.all<ActionDbRow>(DUE_SQL, t)) {
         if (inFlight.size >= concurrency) break;
         let row: AnyActionRow;

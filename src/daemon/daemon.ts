@@ -384,8 +384,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
     const synced = ledger.syncPersonaFiles();
     if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
-    // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件）
-    if (ledger.snapshot().pms.length === 0) {
+    // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件；只查 pms 表有没有行，不拉全量 snapshot）
+    if (db.get("SELECT 1 AS x FROM pms LIMIT 1") === undefined) {
       let defaultModel = env[ENV_DEFAULT_MODEL]?.trim() || undefined;
       // 不合规的模型名不让第一次启动失败：忽略，按默认
       const badModel = defaultModel === undefined ? null : checkModel(DEFAULT_AGENT_VENDOR, defaultModel);
