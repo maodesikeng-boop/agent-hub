@@ -555,8 +555,9 @@ describe("提示词：项目经理（M3）", () => {
   it("hub 用法有 hub worker 的命令，和 shared/hub.ts、hub/cli.ts 的 HUB_COMMAND_SPECS 及关键参数对得上", () => {
     for (const sub of [
       `\`${hub} models [--vendor ${AGENT_VENDORS.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）`,
-      `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin`,
-      `${hub} worker send <编号> --stdin`,
+      `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin`,
+      `${hub} worker send <编号> [--max-time <时长>] --stdin`,
+      `${hub} worker max-time <编号> <时长>`,
       `${hub} worker end <编号>`,
       `${hub} worker list`,
       `${hub} worker show <编号>`,

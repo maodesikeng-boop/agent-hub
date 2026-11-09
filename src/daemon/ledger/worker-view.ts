@@ -4,11 +4,12 @@
 // - 后台任务个数：驱动层的 background.changed（只有 claude 有这个信号，别家不显示这一项）；
 // - 动作文案、数字和用时的写法：和网页同一套（shared/step-labels.ts、shared/count-format.ts）。
 // 只写给项目经理看的话；Worker 的命令行、回复里的密钥、令牌入库前已经遮掉（steps.ts、redact.ts）。
-import type { AgentSessionRow, SessionId, WorkerRecord } from "../../shared/domain.ts";
+import type { AgentSessionRow, ConversationId, SessionId, WorkerRecord } from "../../shared/domain.ts";
 import { formatCount } from "../../shared/count-format.ts";
 import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { formatDurationShort } from "../../shared/schedule.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
 import { agentEffortOf, effortLabel, vendorLabel } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
@@ -99,11 +100,12 @@ export interface WorkerViewDeps {
   /** 在 worktree 里干活、还没开工（workers.ts 的 notStarted）。 */
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
+  turnMaxTimeOf?: (workerConversationId: ConversationId) => { maxTimeMs: number; startedAt: number } | null;
 }
 
 export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, deps: WorkerViewDeps) {
   const { now } = ctx;
-  const { ownWorker, workerSession, notStarted, liveOf } = deps;
+  const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
   /** 状态：已收工、准备中、在等后台命令、在干活、空闲等验收。 */
@@ -185,9 +187,18 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
       lines.push(`现在：${doing}${stalled ? `（超过 ${formatDuration(WORKER_STALL_HINT_MS)} 没动静，可能卡住了）` : ""}`);
     }
 
+    const maxTime = turnMaxTimeOf?.(worker.worker_conversation_id) ?? null;
+    const maxTimeSummary =
+      maxTime === null
+        ? ""
+        : t - maxTime.startedAt < maxTime.maxTimeMs
+          ? `最大时间 ${formatDurationShort(maxTime.maxTimeMs)}，剩余 ${formatDuration(maxTime.maxTimeMs - (t - maxTime.startedAt))}`
+          : `最大时间 ${formatDurationShort(maxTime.maxTimeMs)}，已超时`;
     if (current !== null && worker.status !== "ended") {
       const ran = current.startedAt === null ? "" : `跑了 ${formatDuration(t - current.startedAt)}，`;
-      lines.push(`这一轮${ran}走了 ${toolCount(current)} 步`);
+      lines.push(`这一轮${ran}走了 ${toolCount(current)} 步${maxTimeSummary ? `（${maxTimeSummary}）` : ""}`);
+    } else if (maxTimeSummary && worker.status !== "ended" && !notStarted(worker)) {
+      lines.push(`这一轮：${maxTimeSummary}`);
     }
     if (lastEnded?.end) {
       const seconds = turnSeconds(lastEnded);

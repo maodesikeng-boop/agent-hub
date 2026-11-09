@@ -2,10 +2,10 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
-import { askOf, workerEventOf } from "../../shared/domain.ts";
+import { askOf, isSilentTriggerMessage, systemEventOf, workerEventOf } from "../../shared/domain.ts";
 import type { ConversationId, Message, MessageId, PmId, SessionId, WorkerId, WorkerRecord } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
@@ -93,6 +93,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  ledger.close();
   db.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -2048,6 +2050,7 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
 
   /** 守护进程被杀后重启（没走关机，驱动层的 session.exited 没来）：新开账本、跑重启恢复。 */
   const restart = () => {
+    ledger.close();
     ledger = createLedger(db, options());
     ledger.onActionEnqueued((x) => enqueued.push(x));
     return ledger.recoverAfterRestart();
@@ -2205,5 +2208,111 @@ describe("查看各厂商可用的模型（hub models）", () => {
     expect(ledger.sessionRole(999_999)).toBeNull();
     expectLedgerError(() => hub(lin.sessionId, "models", { vendor: "gemini" as never }), "invalid", /厂商只能是/);
     expectLedgerError(() => hub(workerSessionId(worker.id), "models", {}), "forbidden");
+  });
+});
+
+describe("Worker 最大时间（--max-time）超时静默唤醒项目经理", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  const maxTimeWakeMessages = () =>
+    messagesIn(lin.conversationId).filter((m) => systemEventOf(m)?.event === "worker.max_time_exceeded");
+
+  it("在 maxTimeMs 内完成一轮时，计时器立即销毁，不发送任何超时消息", () => {
+    const worker = start({ noWorktree: true, maxTimeMs: 60_000 }).data.worker;
+    now += 30_000;
+    vi.advanceTimersByTime(30_000);
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "按时搞定"));
+    now += 120_000;
+    vi.advanceTimersByTime(120_000);
+    expect(maxTimeWakeMessages()).toEqual([]);
+  });
+
+  it("超过 maxTimeMs 仍未结束时，自动向所属项目经理发一次静默唤醒消息，且 Worker 本身不被打断可继续完成汇报", () => {
+    const worker = start({ noWorktree: true, maxTimeMs: 20 * 60_000 }).data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const taskId = taskMessage(worker).id;
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [taskId], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [taskId], at: now });
+    enqueued = [];
+
+    now += 20 * 60_000 - 1;
+    vi.advanceTimersByTime(20 * 60_000 - 1);
+    expect(maxTimeWakeMessages()).toEqual([]);
+
+    now += 1;
+    vi.advanceTimersByTime(1);
+    const wakes = maxTimeWakeMessages();
+    expect(wakes).toHaveLength(1);
+    const wake = wakes[0]!;
+    expect(isSilentTriggerMessage(wake)).toBe(true);
+    expect(systemEventOf(wake)).toEqual({
+      event: "worker.max_time_exceeded",
+      workerId: worker.id,
+      workerConversationId: worker.workerConversationId,
+      maxTimeMs: 20 * 60_000,
+    });
+    expect(wake.text).toContain(`【Worker #${worker.id} · 修 X 已超过最大时间（20m）】`);
+    expect(wake.text).toContain(`hub worker show ${worker.id}`);
+    expect(wake.text).toContain(`hub worker log ${worker.id} --last 15`);
+    expect(enqueued).toEqual([
+      expect.objectContaining({
+        type: "session.send",
+        params: { sessionId: lin.sessionId, messageId: wake.id, source: "system" },
+      }),
+    ]);
+
+    // 同一轮绝不重复刷屏
+    now += 60 * 60_000;
+    vi.advanceTimersByTime(60 * 60_000);
+    expect(maxTimeWakeMessages()).toHaveLength(1);
+
+    // Worker 本身继续运行不被打断，随后完成汇报正常送达 PM
+    ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid: "u-done", text: report("做完了", "超时但收尾完成"), at: now });
+    ledger.applyDriverEvent(sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [taskId], durationMs: 50, at: now });
+    expect(workerLines().map((m) => [workerEventOf(m)?.event, workerEventOf(m)?.summary])).toContainEqual(["report", "超时但收尾完成"]);
+  });
+
+  it("hub worker send 发起新一轮时按新的 maxTimeMs 启动计时器；hub worker max-time 可对正在跑的 Worker 续期", () => {
+    const worker = start({ noWorktree: true, maxTimeMs: 30_000 }).data.worker;
+    runTurn(worker, [taskMessage(worker).id], report("有问题", "第一轮"));
+
+    const sendId = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "继续修", maxTimeMs: 20_000 }).data.messageId;
+    const sessionId = workerSessionId(worker.id);
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [sendId], at: now });
+    ledger.applyDriverEvent(sessionId, { type: "message.processing", messageIds: [sendId], at: now });
+
+    // 跑了 15s 后项目经理续期到 60s
+    now += 15_000;
+    vi.advanceTimersByTime(15_000);
+    expect(maxTimeWakeMessages()).toEqual([]);
+    const extended = hub(lin.sessionId, "worker.max-time", { workerId: worker.id, maxTimeMs: 60_000 });
+    expect(extended.text).toContain("1m");
+
+    // 原来的 20s 到点时不会触发
+    now += 10_000;
+    vi.advanceTimersByTime(10_000);
+    expect(maxTimeWakeMessages()).toEqual([]);
+
+    // 续期后的 60s 到点时触发一次
+    now += 50_000;
+    vi.advanceTimersByTime(50_000);
+    expect(maxTimeWakeMessages()).toHaveLength(1);
+    expect(maxTimeWakeMessages()[0]!.text).toContain("已超过最大时间（1m）");
+  });
+
+  it("Worker 被 end 收工、空闲或时长非法时，清理计时器或报清晰中文错误", () => {
+    const worker = start({ noWorktree: true, maxTimeMs: 30_000 }).data.worker;
+    hub(lin.sessionId, "worker.end", { workerId: worker.id });
+    now += 60_000;
+    vi.advanceTimersByTime(60_000);
+    expect(maxTimeWakeMessages()).toEqual([]);
+
+    expectLedgerError(() => hub(lin.sessionId, "worker.max-time", { workerId: worker.id, maxTimeMs: 60_000 }), "conflict", /已经收工/);
+    const idleWorker = start({ title: "空闲", noWorktree: true }).data.worker;
+    runTurn(idleWorker, [taskMessage(idleWorker).id], report("做完了", "闲下来"));
+    expectLedgerError(() => hub(lin.sessionId, "worker.max-time", { workerId: idleWorker.id, maxTimeMs: 60_000 }), "conflict", /当前没有正在运行的一轮/);
+    expectLedgerError(() => start({ noWorktree: true, maxTimeMs: 5_000 }), "invalid", /最短 10 秒/);
   });
 });

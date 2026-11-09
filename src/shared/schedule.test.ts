@@ -1,11 +1,16 @@
 // 定时任务的频率解析、下一次、标题（src/shared/schedule.ts）。时间都按本机本地时间，用 new Date(年, 月, 日, 时, 分) 造，和时区无关。
 import { describe, expect, it } from "vitest";
+import { DEFAULT_WORKER_MAX_TIME_MS, MAX_WORKER_MAX_TIME_MS, MIN_WORKER_MAX_TIME_MS } from "./limits.ts";
 import {
   checkEveryMinutes,
+  checkWorkerMaxTimeMs,
+  formatDurationShort,
   nextDailyRun,
   nextRunAfter,
   parseDailyTime,
+  parseDurationMs,
   parseEvery,
+  parseWorkerMaxTime,
   scheduleLabel,
   scheduledTimeText,
   scheduleRunTitle,
@@ -32,6 +37,44 @@ describe("parseEvery / checkEveryMinutes", () => {
     expect(checkEveryMinutes(7 * 24 * 60 + 1)).toMatch(/最长 7 天/);
     expect(checkEveryMinutes(20.5)).toMatch(/整数/);
     expect(checkEveryMinutes("30")).toMatch(/整数/);
+  });
+});
+
+describe("parseDurationMs / parseWorkerMaxTime / formatDurationShort", () => {
+  it("支持 30s、15m、2h、1h30m 等人类可读时长，默认兜底 30m", () => {
+    expect(DEFAULT_WORKER_MAX_TIME_MS).toBe(30 * 60 * 1000);
+    expect(parseDurationMs("30s")).toBe(30_000);
+    expect(parseDurationMs("15m")).toBe(15 * 60_000);
+    expect(parseDurationMs("2h")).toBe(2 * 3_600_000);
+    expect(parseDurationMs("1h30m")).toBe(90 * 60_000);
+    expect(parseDurationMs("1h15m30s")).toBe(3_600_000 + 15 * 60_000 + 30_000);
+    expect(parseWorkerMaxTime("30s")).toEqual({ ok: true, maxTimeMs: 30_000 });
+    expect(parseWorkerMaxTime("15m")).toEqual({ ok: true, maxTimeMs: 15 * 60_000 });
+    expect(parseWorkerMaxTime("2h")).toEqual({ ok: true, maxTimeMs: 2 * 3_600_000 });
+    expect(parseWorkerMaxTime("1h30m")).toEqual({ ok: true, maxTimeMs: 90 * 60_000 });
+  });
+
+  it("非法格式、小于 10 秒、超过 24 小时报中文错误", () => {
+    for (const bad of ["", "0s", "30", "1.5m", "-5m", "05m", "30m1h", "2d", "abc", "15m "]) {
+      expect(parseDurationMs(bad)).toBeNull();
+      const parsed = parseWorkerMaxTime(bad);
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toMatch(/格式不对/);
+    }
+    expect(parseWorkerMaxTime("9s")).toEqual({ ok: false, error: expect.stringMatching(/最短 10 秒/) });
+    expect(parseWorkerMaxTime("25h")).toEqual({ ok: false, error: expect.stringMatching(/最长 24 小时/) });
+    expect(checkWorkerMaxTimeMs(MIN_WORKER_MAX_TIME_MS)).toBeNull();
+    expect(checkWorkerMaxTimeMs(MAX_WORKER_MAX_TIME_MS)).toBeNull();
+    expect(checkWorkerMaxTimeMs(MIN_WORKER_MAX_TIME_MS - 1)).toMatch(/最短 10 秒/);
+    expect(checkWorkerMaxTimeMs(MAX_WORKER_MAX_TIME_MS + 1)).toMatch(/最长 24 小时/);
+    expect(checkWorkerMaxTimeMs(10_000.5)).toMatch(/整数/);
+  });
+
+  it("formatDurationShort 格式化成简短人类可读时长", () => {
+    expect(formatDurationShort(30_000)).toBe("30s");
+    expect(formatDurationShort(30 * 60_000)).toBe("30m");
+    expect(formatDurationShort(2 * 3_600_000)).toBe("2h");
+    expect(formatDurationShort(90 * 60_000)).toBe("1h30m");
   });
 });
 

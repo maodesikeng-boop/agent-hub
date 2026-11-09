@@ -18,6 +18,7 @@ import {
   attachmentsOf,
   exhaustRateLimitInfo,
   isHandoverTraffic,
+  isSilentTriggerMessage,
   isAgentVendor,
   isQuotaExhausted,
   systemEventOf,
@@ -609,10 +610,14 @@ export function isRenewing(state: HubState, conversationId: ConversationId): boo
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
-/** 网页显示用的消息：写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。 */
+/**
+ * 网页显示用的消息：过滤掉静默唤醒项目经理的内部触发消息（worker.max_time_exceeded，只隐藏触发消息本身，保留项目经理随后的回复）；
+ * 写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。
+ */
 export function visibleMessages(messages: Message[]): Message[] {
-  if (!renewingIn(messages)) return messages;
-  return messages.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
+  const filtered = messages.some(isSilentTriggerMessage) ? messages.filter((m) => !isSilentTriggerMessage(m)) : messages;
+  if (!renewingIn(filtered)) return filtered;
+  return filtered.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
 }
 
 /** 有错误的健康项（成功一次后 lastError 会被清成 null）。 */
@@ -634,6 +639,8 @@ export type RenderItem =
 type FlowRole =
   /** 交给 agent 的一句（一轮的开头）：用户、项目经理（Worker 对话里）、Worker 的汇报和用户对它说的话、到点的定时任务。 */
   | "input"
+  /** 静默交给 agent 的内部触发消息（如 worker.max_time_exceeded）：切开前后两轮，但自身不在网页渲染成气泡。 */
+  | "silent_input"
   /** 换新会话的分隔线：前后的回合各归各的，单独一行；不算交给 agent 的话。 */
   | "divider"
   /** agent 自己说的、调的工具：在一轮里。 */
@@ -648,6 +655,7 @@ const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run"]);
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
 function flowRole(message: Message): FlowRole {
+  if (isSilentTriggerMessage(message)) return "silent_input";
   const line = workerEventOf(message);
   if (line) return INPUT_WORKER_EVENTS.has(line.event) ? "input" : "work";
   if (message.sender === "user" || message.sender === "pm") return "input";
@@ -702,6 +710,11 @@ export function groupMessages(all: Message[]): RenderItem[] {
 
   for (const message of messages) {
     const role = flowRole(message);
+    if (role === "silent_input") {
+      close();
+      lastInputAt = message.createdAt;
+      continue;
+    }
     if (role === "divider") {
       close();
       items.push({ kind: "message", message });

@@ -283,6 +283,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
       log,
     });
+    parts.unsubscribe.push(() => ledger.close());
     const sessions = createSessionStore(db);
     // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）
     const sleepInhibitor = createSleepInhibitor();

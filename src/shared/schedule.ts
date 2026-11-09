@@ -1,7 +1,8 @@
 // 定时任务（M6）：到点往某个项目经理自己的对话发一条系统消息、照常交给它。这里放形状、频率的解析和算下一次的规则，前后端都能引。
 // 只有两种频率：每天 HH:MM（本机本地时间）、每隔 N 分钟/小时（最短 MIN_SCHEDULE_EVERY_MINUTES）。下一次一律从“现在”算，
 // 不从原定时间往后推；睡眠、守护进程没开错过的，醒来只补跑一次（账本的 runDueSchedules）。
-import { MAX_SCHEDULE_EVERY_MINUTES, MIN_SCHEDULE_EVERY_MINUTES } from "./limits.ts";
+import { WORKER_MAX_TIME_ERRORS } from "./errors.ts";
+import { MAX_SCHEDULE_EVERY_MINUTES, MAX_WORKER_MAX_TIME_MS, MIN_SCHEDULE_EVERY_MINUTES, MIN_WORKER_MAX_TIME_MS } from "./limits.ts";
 
 export type ScheduleId = number;
 
@@ -38,18 +39,64 @@ export interface ScheduleRecord {
 
 const DAILY_TIME = /^([01][0-9]|2[0-3]):([0-5][0-9])$/;
 const EVERY = /^([1-9][0-9]*)([mh])$/;
+const DURATION = /^(?:([1-9][0-9]*)h)?(?:([1-9][0-9]*)m)?(?:([1-9][0-9]*)s)?$/;
 
 /** "HH:MM"（24 小时制，两位数）→ 原样返回；不合法 null。 */
 export function parseDailyTime(raw: string): string | null {
   return DAILY_TIME.test(raw) ? raw : null;
 }
 
+/**
+ * 人类可读时长（"30s"、"15m"、"2h"、"1h30m"、"1m30s"）→ 毫秒数；写法不对返回 null。
+ * 范围由调用方（如 checkWorkerMaxTimeMs）查。
+ */
+export function parseDurationMs(raw: string): number | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  const match = DURATION.exec(raw);
+  if (match === null) return null;
+  const hours = match[1] === undefined ? 0 : Number(match[1]);
+  const minutes = match[2] === undefined ? 0 : Number(match[2]);
+  const seconds = match[3] === undefined ? 0 : Number(match[3]);
+  const ms = ((hours * 60 + minutes) * 60 + seconds) * 1_000;
+  return ms > 0 && Number.isSafeInteger(ms) ? ms : null;
+}
+
+/** 毫秒数 → 紧凑时长文本（"30s"、"15m"、"2h"、"1h30m"）。 */
+export function formatDurationShort(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1_000));
+  if (totalSeconds === 0) return "0s";
+  const h = Math.floor(totalSeconds / 3_600);
+  const m = Math.floor((totalSeconds % 3_600) / 60);
+  const s = totalSeconds % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0) parts.push(`${s}s`);
+  return parts.join("");
+}
+
+/** Worker 最大时间（毫秒）合不合规；不合规返回给人看的中文原因，合规 null。 */
+export function checkWorkerMaxTimeMs(ms: unknown): string | null {
+  if (typeof ms !== "number" || !Number.isInteger(ms)) return WORKER_MAX_TIME_ERRORS.nonInteger;
+  if (ms < MIN_WORKER_MAX_TIME_MS) return WORKER_MAX_TIME_ERRORS.tooShort;
+  if (ms > MAX_WORKER_MAX_TIME_MS) return WORKER_MAX_TIME_ERRORS.tooLong;
+  return null;
+}
+
+/** 解析并校验命令行 `--max-time <时长> `（如 "30s"、"15m"、"2h"、"1h30m"）。 */
+export function parseWorkerMaxTime(raw: string): { ok: true; maxTimeMs: number } | { ok: false; error: string } {
+  const ms = parseDurationMs(raw);
+  if (ms === null) return { ok: false, error: WORKER_MAX_TIME_ERRORS.format };
+  const rangeError = checkWorkerMaxTimeMs(ms);
+  if (rangeError !== null) return { ok: false, error: rangeError };
+  return { ok: true, maxTimeMs: ms };
+}
+
 /** hub 命令行的 "30m"、"2h" → 分钟数；写法不对 null。范围由 checkEveryMinutes 查。 */
 export function parseEvery(raw: string): number | null {
-  const match = EVERY.exec(raw);
-  if (match === null) return null;
-  const minutes = Number(match[1]) * (match[2] === "h" ? 60 : 1);
-  return Number.isSafeInteger(minutes) ? minutes : null;
+  if (!EVERY.test(raw)) return null;
+  const ms = parseDurationMs(raw);
+  return ms === null ? null : ms / 60_000;
 }
 
 /** 分钟数合不合规；不合规返回给人看的原因，合规 null。 */

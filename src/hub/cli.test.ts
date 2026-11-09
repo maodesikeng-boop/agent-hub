@@ -206,6 +206,32 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "worker.send", args: { workerId: 3, text: "再改一下" } }]);
     });
 
+    it("worker start / send --max-time and worker max-time parse human durations and reject invalid ones", async () => {
+      expect(
+        (await hub(["worker", "start", "--title", "修 X", "--max-time", "15m", "--stdin"], { stdin: stdinOf("任务") })).code,
+      ).toBe(0);
+      expect(
+        (await hub(["worker", "send", "3", "--max-time", "1h30m", "--stdin"], { stdin: stdinOf("继续") })).code,
+      ).toBe(0);
+      expect((await hub(["worker", "max-time", "3", "45m"])).code).toBe(0);
+      expect(ledger.calls.map((c) => ({ command: c.command, args: c.args }))).toEqual([
+        { command: "worker.start", args: { title: "修 X", maxTimeMs: 15 * 60_000, task: "任务" } },
+        { command: "worker.send", args: { workerId: 3, maxTimeMs: 90 * 60_000, text: "继续" } },
+        { command: "worker.max-time", args: { workerId: 3, maxTimeMs: 45 * 60_000 } },
+      ]);
+
+      ledger.calls.length = 0;
+      for (const bad of ["abc", "5s", "25h", ""]) {
+        const r1 = await hub(["worker", "start", "--title", "修 X", "--max-time", bad, "--stdin"], { stdin: stdinOf("任务") });
+        expect(r1.code).toBe(HUB_EXIT.usage);
+        const r2 = await hub(["worker", "send", "3", "--max-time", bad, "--stdin"], { stdin: stdinOf("继续") });
+        expect(r2.code).toBe(HUB_EXIT.usage);
+        const r3 = await hub(["worker", "max-time", "3", bad]);
+        expect(r3.code).toBe(HUB_EXIT.usage);
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("ask --stdin sends the text", async () => {
       expect((await hub(["ask", "--stdin"], { stdin: stdinOf("用 A 还是 B？\n") })).code).toBe(0);
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask", args: { text: "用 A 还是 B？" } }]);
@@ -330,7 +356,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} models [--vendor claude|agy|codex] [--refresh]`, `${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max|ultra", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
+      for (const usage of [`${cmd} models [--vendor claude|agy|codex] [--refresh]`, `${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max|ultra", "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });

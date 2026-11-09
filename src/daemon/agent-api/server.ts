@@ -132,6 +132,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       // 取值由账本按项目经理那家的清单查（vendors.ts），这里只管形状
       effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      // maxTimeMs 的范围（MIN_WORKER_MAX_TIME_MS 到 MAX_WORKER_MAX_TIME_MS）由账本查，报中文原因
+      maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
       noWorktree: { type: "boolean" },
     },
@@ -140,7 +142,13 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["workerId", "text"],
-    properties: { workerId: workerIdField, text: taskField },
+    properties: { workerId: workerIdField, text: taskField, maxTimeMs: { type: "integer" } },
+  },
+  "worker.max-time": {
+    type: "object",
+    additionalProperties: false,
+    required: ["workerId", "maxTimeMs"],
+    properties: { workerId: workerIdField, maxTimeMs: { type: "integer" } },
   },
   "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
   "worker.list": noArgs,
