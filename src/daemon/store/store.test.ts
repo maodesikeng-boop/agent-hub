@@ -115,6 +115,33 @@ describe("打开存储和迁移", () => {
       db.close();
     }
   });
+
+  it("0018_indexes.sql：高频按 session_id、worker_id、project_id 查表都走索引（不退化为全表 SCAN），回退 user_version 重跑幂等", () => {
+    const db = openDatabase(":memory:");
+    try {
+      migrate(db);
+      const planOf = (sql: string) => db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`).map((r) => r.detail).join(" | ");
+      expect(
+        planOf(
+          `SELECT 1 AS x FROM messages WHERE session_id = 1 AND sender = 'system' AND kind = 'text'
+           AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
+        ),
+      ).toContain("USING INDEX messages_session");
+      expect(planOf("SELECT max(id) AS id FROM messages WHERE session_id = 1 AND sender = 'agent' AND id > 10")).toContain("messages_session");
+      expect(planOf("SELECT id FROM messages WHERE session_id = 1 AND status = 'processing'")).toContain("USING INDEX messages_session");
+      expect(
+        planOf("SELECT id, text, created_at FROM messages WHERE worker_id = 1 AND kind = 'worker' AND json_extract(meta, '$.event') = 'report' ORDER BY id"),
+      ).toContain("USING INDEX messages_worker");
+      expect(planOf("SELECT id FROM agent_sessions WHERE worker_id = 1 AND status != 'ended'")).toContain("USING INDEX agent_sessions_worker");
+      expect(planOf("SELECT id FROM workers WHERE project_id = 1 LIMIT 1")).toContain("workers_project");
+
+      db.exec("PRAGMA user_version = 8");
+      expect(() => migrate(db)).not.toThrow();
+      expect(db.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(LATEST);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("数据库封装", () => {

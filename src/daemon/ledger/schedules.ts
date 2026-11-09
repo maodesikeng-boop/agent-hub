@@ -211,8 +211,19 @@ export function createLedgerSchedules(ctx: LedgerContext, sessions: LedgerSessio
     settle(p, row, nowMs, { status: "sent", messageId: inserted.id });
   };
 
-  /** 调度器每 SCHEDULER_TICK_MS 调一次（守护进程启动时也调一次）：到点的在一个事务里各发一条。 */
+  /** 调度器每 SCHEDULER_TICK_MS 调一次（守护进程启动时也调一次）：到点的在一个事务里各发一条。没到点的不进写事务，不抢 SQLite 写锁。 */
   const runDueSchedules = (nowMs: number) => {
+    if (
+      db.get(
+        `SELECT 1 AS x FROM schedules s
+         LEFT JOIN pm_archives a ON a.pm_id = s.pm_id
+         WHERE s.enabled = 1 AND s.next_run_at <= ? AND a.pm_id IS NULL
+         LIMIT 1`,
+        nowMs,
+      ) === undefined
+    ) {
+      return;
+    }
     write((p) => {
       for (const row of db.all<ScheduleDbRow>(
         `SELECT s.* FROM schedules s

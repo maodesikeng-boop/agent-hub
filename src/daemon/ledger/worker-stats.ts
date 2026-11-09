@@ -49,6 +49,18 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
   let waitTimed = 0;
 
   for (const rows of sessions) {
+    const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      if (r.kind === "tool_result") {
+        let list = resultsByUseId.get(r.tool_use_id);
+        if (list === undefined) {
+          list = [];
+          resultsByUseId.set(r.tool_use_id, list);
+        }
+        list.push({ row: r, index: i });
+      }
+    }
     let open = false;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
@@ -81,7 +93,7 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
           const summary = row.summary ?? "";
           if (category === "read" && summary.startsWith(READ_PREFIX) && fileOf(summary) !== NO_FILE_NAME) bump(files, fileOf(summary));
           if (category === "command" && summary.startsWith(COMMAND_PREFIX)) bump(commands, summary.slice(COMMAND_PREFIX.length));
-          const back = rows.slice(i + 1).find((r) => r.kind === "tool_result" && r.tool_use_id === row.tool_use_id);
+          const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
           if (back !== undefined) {
             waitMs += back.at - row.at;
             waitTimed++;

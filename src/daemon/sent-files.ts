@@ -264,11 +264,14 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
  * 返回 meta.files；一个都不算返回空数组。不抛错：单个文件出错记成 unreadable。
  */
 export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
+  if (!text.includes("](") && !text.includes("<")) return [];
+  const links = localLinksOf(markdown.parse(text) as MdNode);
+  if (links.length === 0) return [];
   const files: SentFile[] = [];
   let used = 0;
   // 敏感清单这条消息里只 realpath 一次（不跨消息缓存：符号链接、主目录随时可能变）
   const sensitive = sensitivePathsOf(scope.userHome);
-  for (const { href, local } of localLinksOf(markdown.parse(text) as MdNode)) {
+  for (const { href, local } of links) {
     if (files.length === MAX_SENT_FILES_PER_MESSAGE) break;
     const path = existingPathOf(href, local, scope);
     const name = sanitizeFileName(basename(path));

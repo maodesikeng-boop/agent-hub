@@ -52,6 +52,7 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
 
   /** 回复里有本机文件链接就存副本、返回 { files }；没有返回 null（meta 照旧是 null）。出了意外只记日志，消息照样入库。 */
   const metaFor = (session: AgentSessionRow, text: string): AgentTextMeta | null => {
+    if (!text.includes("](") && !text.includes("<")) return null;
     try {
       const files = shareLinkedFiles(text, scopeFor(session));
       return files.length === 0 ? null : { files };

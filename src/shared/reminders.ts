@@ -34,24 +34,25 @@ export function isQuietMessage(message: Message): boolean {
   return isHandoverTraffic(message) || systemEventOf(message)?.event === "session.renewed";
 }
 
-const sessionIndexCache = new WeakMap<readonly SessionState[], Map<ConversationId, SessionState>>();
+const sessionByConversationCache = new WeakMap<
+  readonly SessionState[],
+  { length: number; map: Map<ConversationId, SessionState> }
+>();
 
-function sessionIndexOf(sessions: readonly SessionState[]): Map<ConversationId, SessionState> {
-  let map = sessionIndexCache.get(sessions);
-  if (map !== undefined) return map;
-  map = new Map<ConversationId, SessionState>();
-  for (const s of sessions) {
-    if (s.conversationId === null) continue;
-    const prev = map.get(s.conversationId);
-    if (prev === undefined || s.generation > prev.generation) map.set(s.conversationId, s);
-  }
-  sessionIndexCache.set(sessions, map);
-  return map;
-}
-
-/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。 */
+/** 这个对话的当前会话：generation 最大的那一代。不按会话编号、不按推送先后。按 sessions 数组引用缓存 Map，避免 O(C × S) 反复线性扫描。 */
 export function sessionOf(state: Pick<ReminderState, "sessions">, conversationId: ConversationId): SessionState | null {
-  return sessionIndexOf(state.sessions).get(conversationId) ?? null;
+  let cached = sessionByConversationCache.get(state.sessions);
+  if (!cached || cached.length !== state.sessions.length) {
+    const map = new Map<ConversationId, SessionState>();
+    for (const s of state.sessions) {
+      if (s.conversationId === null) continue;
+      const prev = map.get(s.conversationId);
+      if (prev === undefined || s.generation > prev.generation) map.set(s.conversationId, s);
+    }
+    cached = { length: state.sessions.length, map };
+    sessionByConversationCache.set(state.sessions, cached);
+  }
+  return cached.map.get(conversationId) ?? null;
 }
 
 /** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
@@ -125,9 +126,16 @@ export function pendingAsks(state: ReminderState, conversationId: ConversationId
   return unansweredAsksIn(view.messages);
 }
 
-/** 所有对话里还在等用户确定的提问。 */
+/** 所有对话里还在等用户确定的提问（Worker 对话没有 hub ask，直接跳过）。 */
 export function allPendingAsks(state: ReminderState): { conversationId: ConversationId; message: Message }[] {
-  return Object.keys(state.conversations).flatMap((key) => pendingAsks(state, Number(key)).map((message) => ({ conversationId: Number(key), message })));
+  const out: { conversationId: ConversationId; message: Message }[] = [];
+  for (const { conversation } of Object.values(state.conversations)) {
+    if (conversation.kind === "worker") continue;
+    for (const message of pendingAsks(state, conversation.id)) {
+      out.push({ conversationId: conversation.id, message });
+    }
+  }
+  return out;
 }
 
 /**
@@ -227,12 +235,17 @@ export class ReminderTracker<K> {
 
 // ---- 守护进程那份状态 ----
 
-/** 从快照（/api/state 或账本的 snapshot）起一份。 */
+/** 从快照（/api/state 或账本的 snapshot）起一份。提醒规则不看 Worker 自己对话里的消息，不留它们省内存。 */
 export function reminderStateFrom(snapshot: Pick<LedgerSnapshot, "seq" | "pms" | "conversations" | "sessions">): ReminderState {
   return {
     seq: snapshot.seq,
     pms: snapshot.pms,
-    conversations: Object.fromEntries(snapshot.conversations.map(({ conversation, messages }) => [conversation.id, { conversation, messages }])),
+    conversations: Object.fromEntries(
+      snapshot.conversations.map(({ conversation, messages }) => [
+        conversation.id,
+        { conversation, messages: conversation.kind === "worker" ? [] : messages },
+      ]),
+    ),
     sessions: snapshot.sessions,
     pending: [],
   };
@@ -265,7 +278,7 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
     case "message.updated": {
       const { message } = change.data;
       const view = state.conversations[message.conversationId];
-      if (!view) return next;
+      if (!view || view.conversation.kind === "worker") return next;
       return { ...next, conversations: { ...state.conversations, [message.conversationId]: { ...view, messages: upsertRecent(view.messages, message) } } };
     }
     case "session.status":

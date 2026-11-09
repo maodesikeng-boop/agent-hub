@@ -26,8 +26,8 @@ final class DaemonSupervisor {
         URL(string: "http://127.0.0.1:\(port)")!
     }
 
-    var stateURL: URL {
-        URL(string: "http://127.0.0.1:\(port)/api/state")!
+    var probeURL: URL {
+        URL(string: "http://127.0.0.1:\(port)/api/auth/status")!
     }
 
     var cookieName: String {
@@ -51,9 +51,9 @@ final class DaemonSupervisor {
         return token.isEmpty ? nil : token
     }
 
-    /// 探测 http://127.0.0.1:4317/api/state（超时 500ms）；只要返回任何 HTTP 状态码（如 200 或 401）说明已在运行。
+    /// 探测 http://127.0.0.1:4317/api/auth/status（超时 500ms，轻量无需查库）；只要返回任何 HTTP 状态码说明已在运行。
     func probe(completion: @escaping (Bool) -> Void) {
-        var request = URLRequest(url: stateURL)
+        var request = URLRequest(url: probeURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 0.5
         request.cachePolicy = .reloadIgnoringLocalCacheData
