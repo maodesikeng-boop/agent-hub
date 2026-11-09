@@ -80,12 +80,31 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
       return words.every((w) => lower.includes(w));
     };
 
+    const rows = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
+    const reportsByWorker = new Map<number, ReportRow[]>();
+    if (rows.length > 0) {
+      for (const r of db.all<ReportRow & { worker_id: number }>(
+        `SELECT m.worker_id, m.id, m.text, m.created_at FROM messages m
+         JOIN workers w ON w.id = m.worker_id
+         WHERE w.pm_id = ? AND m.kind = 'worker' AND json_extract(m.meta, '$.event') = 'report'
+         ORDER BY m.id`,
+        caller.pmId,
+      )) {
+        let list = reportsByWorker.get(r.worker_id);
+        if (list === undefined) {
+          list = [];
+          reportsByWorker.set(r.worker_id, list);
+        }
+        list.push(r);
+      }
+    }
+
     const found: Array<{ at: number; order: number; hit: WorkerSearchHit }> = [];
-    for (const w of db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId)) {
+    for (const w of rows) {
       const base = { workerId: w.id, title: w.title, status: w.status === "ended" ? "已收工" : "进行中" };
       if (matches(w.title)) found.push({ at: w.created_at, order: 0, hit: { ...base, where: "title", snippet: snippetOf(w.title, words) } });
       if (matches(w.task)) found.push({ at: w.created_at, order: 1, hit: { ...base, where: "task", snippet: snippetOf(w.task, words) } });
-      reportsOf(w.id).forEach((r, i) => {
+      (reportsByWorker.get(w.id) ?? []).forEach((r, i) => {
         const body = reportBody(w, r.text);
         if (matches(body)) found.push({ at: r.created_at, order: 2 + i, hit: { ...base, where: "report", report: i + 1, snippet: snippetOf(body, words) } });
       });

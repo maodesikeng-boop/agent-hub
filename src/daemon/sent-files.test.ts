@@ -427,6 +427,22 @@ describe("边界", () => {
     prepareSentFilesDir(sentDir);
     expect(copies()).toEqual([file!.id]);
   });
+
+  it("没有本机文件链接的普通文字或纯外链：不跑敏感路径 realpathSync", () => {
+    const getter = Object.getOwnPropertyDescriptor(scope, "userHome");
+    let reads = 0;
+    const lazyScope: ShareScope = {
+      ...scope,
+      get userHome() {
+        reads++;
+        return scope.userHome;
+      },
+    };
+    expect(share("这是一段普通消息，没有任何链接。", lazyScope)).toEqual([]);
+    expect(share("外链 [GitHub](https://github.com/example/repo) 也不需要查本机路径", lazyScope)).toEqual([]);
+    expect(reads).toBe(0);
+    void getter;
+  });
 });
 
 describe("链接后面带行号", () => {

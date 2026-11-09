@@ -95,7 +95,7 @@ export function agentSettingOf(ctx: Pick<LedgerContext, "modelShortLabel">, sess
 
 export interface WorkerViewDeps {
   ownWorker: (pmId: number, workerId: number) => WorkerDbRow;
-  workerSession: (workerId: number) => AgentSessionRow;
+  workerSession: (worker: number | WorkerDbRow) => AgentSessionRow;
   /** 在 worktree 里干活、还没开工（workers.ts 的 notStarted）。 */
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
@@ -157,7 +157,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     // 原文：只出正文，不加别的
     if (args.task === true) return { text: worker.task, data: { worker: toWorkerRecord(worker) as WorkerRecord } };
     if (args.report !== undefined) return { text: workerSearch.reportText(worker, args.report), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
-    const session = workerSession(worker.id);
+    const session = workerSession(worker);
     const live = liveOf(session.id);
     const turns = turnsOf(steps.rows(session.id));
     const last = turns.at(-1);
@@ -218,18 +218,33 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   /** log 的一行：时间 + 动作。 */
   const logSteps = (rows: StepRow[], open: boolean): WorkerLogStep[] => {
     const t = now();
+    const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
+    let lastTurnEndedIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      if (r.kind === "tool_result") {
+        let list = resultsByUseId.get(r.tool_use_id);
+        if (list === undefined) {
+          list = [];
+          resultsByUseId.set(r.tool_use_id, list);
+        }
+        list.push({ row: r, index: i });
+      } else if (r.kind === "turn_ended") {
+        lastTurnEndedIndex = i;
+      }
+    }
     const out: WorkerLogStep[] = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
       switch (row.kind) {
         case "tool": {
-          const back = rows.slice(i + 1).find((r) => r.kind === "tool_result" && r.tool_use_id === row.tool_use_id);
+          const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
           const what = clipText(row.summary ?? row.name ?? "");
           let tail = "";
           if (back !== undefined) {
             const ms = back.at - row.at;
             if (ms >= 1_000) tail = `（用了 ${formatDuration(ms)}）`;
-          } else if (open && !rows.slice(i + 1).some((r) => r.kind === "turn_ended")) {
+          } else if (open && i > lastTurnEndedIndex) {
             tail = `（还在跑，已 ${formatDuration(t - row.at)}）`;
           } else {
             tail = "（没等到结果）";
@@ -283,7 +298,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (!Number.isSafeInteger(last) || last < 1 || last > WORKER_LOG_MAX_STEPS) {
       throw fail("invalid", `--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
     }
-    const session = workerSession(worker.id);
+    const session = workerSession(worker);
     const rows = steps.rows(session.id);
     const open = liveOf(session.id).activity !== "idle" && steps.openTurn(session.id) !== null;
     const shown = logSteps(rows, open).slice(-last);
