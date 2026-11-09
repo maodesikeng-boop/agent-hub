@@ -15,14 +15,14 @@ permissions:
 
 jobs:
   check:
-    # macOS 是开发机、Ubuntu 是服务器：typecheck 和 test:ci 两边都跑。fail-fast 关掉，一边挂了另一边照样跑完，两边的结果都能看到。
+    # Mac 测试在开发机本地跑；云端 CI 只跑 Ubuntu，并按 4 路 shard 并行分片 + 缓存 node_modules 提速。
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
-    name: check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+        shard: [1/4, 2/4, 3/4, 4/4]
+    name: check (ubuntu ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -33,25 +33,37 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('pnpm-lock.yaml') }}
+
       # pnpm 10 does not run dependency install scripts unless approved
       # (onlyBuiltDependencies); none are approved here.
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
 
-      - run: pnpm typecheck
+      - name: Typecheck
+        if: matrix.shard == '1/4'
+        run: pnpm typecheck
 
       - name: Setup Linux bubblewrap sandbox
-        if: runner.os == 'Linux'
         run: sudo bash scripts/linux-sandbox-setup.sh
 
       # 不用 pnpm check：它的 dot reporter 在 CI 里跑整套时看不到点、失败汇总和统计（只剩 stderr），
       # 一条用例失败也只看到 exit code 1。test:ci 用 verbose + github-actions，失败写成注解。
-      - run: pnpm test:ci
+      - run: pnpm test:ci --shard=${{ matrix.shard }}
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: vitest-junit-${{ matrix.os }}
+          name: vitest-junit-ubuntu-${{ strategy.job-index }}
           path: vitest-junit.xml
           if-no-files-found: ignore
 
-      - run: pnpm build
+      - name: Build
+        if: matrix.shard == '1/4'
+        run: pnpm build
