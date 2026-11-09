@@ -81,10 +81,11 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(700);
   });
 
-  it("贴底时没有“回到底部”，消息区没有渐隐蒙版", () => {
+  it("贴底时没有“回到底部”，消息区没有渐隐蒙版，内容底部留白 pb-12 补偿输入框向上叠盖的 26px", () => {
     const { log } = setup();
     expect(log.className).not.toContain("fade");
     expect(log).not.toHaveAttribute("data-away");
+    expect((log.firstElementChild as HTMLElement).className).toContain("pb-12");
     expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
   });
 
@@ -106,6 +107,7 @@ describe("贴底", () => {
     expect(holder.className).toContain("messages");
     expect(holder.className).toContain("justify-center");
     expect(holder.className).toContain("absolute");
+    expect(holder.className).toContain("bottom-9");
     expect(holder.className).toContain("pointer-events-none");
     expect(back.className).toContain("pointer-events-auto");
     fireEvent.click(back);

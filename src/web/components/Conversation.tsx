@@ -168,7 +168,7 @@ export function Conversation({
           statusAgent={agent}
         />
       </div>
-      <div className="chat-column w-full shrink-0 pb-5">
+      <div className="chat-column pointer-events-none relative z-10 -mt-[26px] w-full shrink-0 pb-5 *:pointer-events-auto">
         {entry.pm?.archivedAt != null ? (
           <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
         ) : (

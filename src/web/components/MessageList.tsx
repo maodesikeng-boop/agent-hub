@@ -143,7 +143,7 @@ export function MessageList({
   return (
     <div className="relative flex h-full flex-col">
       <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
-        <div className="flex min-h-full flex-col pt-4 pb-6" ref={contentRef}>
+        <div className="flex min-h-full flex-col pt-4 pb-12" ref={contentRef}>
           {hasMore && (
             <button
               type="button"
@@ -195,7 +195,7 @@ export function MessageList({
       </div>
       {/* 往上翻了：“回到底部”浮在输入框上方一点、消息列水平正中（照 t3code 的 Scroll to end）；消息区高度不变，文字照常滚动。回到底部就收起，贴底接着贴 */}
       {away && (
-        <div className="messages pointer-events-none absolute inset-x-0 bottom-3 flex justify-center" data-back-to-bottom>
+        <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
           <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="回到底部" title="回到底部" onClick={scrollToBottom}>
             <ChevronDown aria-hidden="true" />
           </Button>
