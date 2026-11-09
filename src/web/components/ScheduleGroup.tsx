@@ -9,13 +9,12 @@ import {
   MAX_TASK_BYTES,
   checkEveryMinutes,
   parseDailyTime,
-  scheduleLabel,
   scheduledTimeText,
   utf8Bytes,
   type ScheduleRecord,
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
-import { errorText, nameError, type ErrorLike } from "../format.ts";
+import { errorText, formatSchedule, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input, Select, Textarea } from "../ui/input.tsx";
 import { Switch } from "../ui/switch.tsx";
@@ -45,11 +44,11 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
       detail={
         // 各项各自一段、用间距隔开（不用逗号拼）；上次成功、跳过、还没跑过都不用管，只有失败才写
         <span className="flex flex-wrap gap-x-3 tabular-nums">
-          <span>{scheduleLabel(schedule)}</span>
-          <span>{schedule.enabled ? `下次 ${scheduledTimeText(schedule.nextRunAt, now)}` : "已暂停"}</span>
+          <span>{formatSchedule(schedule)}</span>
+          <span>{schedule.enabled ? `Next ${scheduledTimeText(schedule.nextRunAt, now)}` : "Paused"}</span>
           {schedule.lastStatus === "failed" && (
             <span className="text-danger" title={schedule.lastError ?? undefined}>
-              上次失败
+              Last run failed
             </span>
           )}
         </span>
@@ -59,17 +58,17 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
         confirming ? (
           <>
             <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
-              取消
+              Cancel
             </Button>
             <Button size="sm" disabled={busy} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              确认删除
+              Delete
             </Button>
           </>
         ) : (
           <>
-            <Switch id={id} aria-label={`${schedule.name} 运行中`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
-            <Button variant="ghost" size="icon-sm" aria-label={`删除 ${schedule.name}`} disabled={busy} onClick={() => setConfirming(true)}>
+            <Switch id={id} aria-label={`${schedule.name} enabled`} checked={schedule.enabled} disabled={busy} onCheckedChange={(on) => void run(() => client.putScheduleEnabled(schedule.id, on))} />
+            <Button variant="ghost" size="icon-sm" aria-label={`Delete ${schedule.name}`} disabled={busy} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden="true" />
             </Button>
           </>
@@ -93,17 +92,17 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   const [error, setError] = useState<ErrorLike | null>(null);
 
   // 每一行自己的错：空着不算错（只是不能保存），填了不对才写
-  const nameProblem = nameError(name, MAX_SCHEDULE_NAME_CHARS) ?? (/[【】]/.test(name) ? "名字里不能有“【”“】”" : null);
+  const nameProblem = nameError(name, MAX_SCHEDULE_NAME_CHARS) ?? (/[【】]/.test(name) ? "Name can't contain 【 or 】" : null);
   const minutes = /^[0-9]+$/.test(every.trim()) ? Number(every.trim()) * (unit === "hours" ? 60 : 1) : NaN;
   const freqEmpty = kind === "daily" ? time.trim() === "" : every.trim() === "";
   const freqProblem = freqEmpty
     ? null
     : kind === "daily"
       ? parseDailyTime(time.trim()) === null
-        ? "时间要写成 HH:MM，比如 09:00"
+        ? "Use HH:MM, like 09:00"
         : null
       : checkEveryMinutes(minutes);
-  const promptProblem = utf8Bytes(prompt) > MAX_TASK_BYTES ? "要它做什么写得太长了" : null;
+  const promptProblem = utf8Bytes(prompt) > MAX_TASK_BYTES ? "Task is too long" : null;
   const canSave = name.trim() !== "" && nameProblem === null && !freqEmpty && freqProblem === null && prompt.trim() !== "" && promptProblem === null && !busy;
 
   const save = async () => {
@@ -122,24 +121,24 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
 
   return (
     <>
-      <SettingsRow label="名字" error={nameProblem}>
+      <SettingsRow label="Name" error={nameProblem}>
         {(id) => <Input id={id} className="w-60" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
       </SettingsRow>
-      <SettingsRow label="频率" error={freqProblem}>
+      <SettingsRow label="Repeat" error={freqProblem}>
         {(id) => (
           <>
-            <Select id={id} aria-label="频率" value={kind} onChange={(e) => setKind(e.target.value as "daily" | "interval")}>
-              <option value="daily">每天</option>
-              <option value="interval">每隔</option>
+            <Select id={id} aria-label="Repeat" value={kind} onChange={(e) => setKind(e.target.value as "daily" | "interval")}>
+              <option value="daily">Daily at</option>
+              <option value="interval">Every</option>
             </Select>
             {kind === "daily" ? (
-              <Input aria-label="时间" className="w-24 tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
+              <Input aria-label="Time" className="w-24 tabular-nums" placeholder="09:00" value={time} aria-invalid={freqProblem !== null} onChange={(e) => setTime(e.target.value)} />
             ) : (
               <>
-                <Input aria-label="间隔" inputMode="numeric" className="w-20 tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
-                <Select aria-label="单位" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
-                  <option value="minutes">分钟</option>
-                  <option value="hours">小时</option>
+                <Input aria-label="Interval" inputMode="numeric" className="w-20 tabular-nums" value={every} aria-invalid={freqProblem !== null} onChange={(e) => setEvery(e.target.value)} />
+                <Select aria-label="Unit" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
                 </Select>
               </>
             )}
@@ -149,8 +148,8 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
       {/* 框里的多行输入是一整行：没有边框和拖拽角，跟着内容长高；名字放占位符 */}
       <div data-slot="settings-row">
         <Textarea
-          aria-label="要它做什么"
-          placeholder="要它做什么"
+          aria-label="Task"
+          placeholder="Task"
           rows={3}
           className="block max-h-[40vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 field-sizing-content focus-visible:ring-0"
           value={prompt}
@@ -167,11 +166,11 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
         {error && <RowError error={error} />}
         <div className={error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
-            取消
+            Cancel
           </Button>
           <Button disabled={!canSave} onClick={() => void save()}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-            保存
+            Save
           </Button>
         </div>
       </div>
@@ -183,7 +182,7 @@ export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: Sc
   const [adding, setAdding] = useState(false);
   const full = schedules.length >= MAX_SCHEDULES_PER_PM;
   return (
-    <SettingsGroup title="定时任务">
+    <SettingsGroup title="Schedules">
       {schedules.map((s) => (
         <ScheduleItem key={s.id} schedule={s} />
       ))}
@@ -198,8 +197,8 @@ export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: Sc
           onClick={() => setAdding(true)}
         >
           <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
-          <span className={full ? "text-muted-foreground" : undefined}>新建</span>
-          {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`已满 ${MAX_SCHEDULES_PER_PM} 个`}</span>}
+          <span className={full ? "text-muted-foreground" : undefined}>New</span>
+          {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
         </button>
       )}
     </SettingsGroup>

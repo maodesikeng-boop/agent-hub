@@ -132,7 +132,7 @@ export function previewText(entry: ConversationEntry): string {
   // 只发了文件没写字的用户消息：写文件名
   const files = attachmentsOf(last);
   let result: string;
-  if (last.text.trim() === "" && files.length > 0) result = `[文件] ${files.map((f) => f.name).join("、")}`;
+  if (last.text.trim() === "" && files.length > 0) result = `[File] ${files.map((f) => f.name).join(", ")}`;
   // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
   else if (last.sender === "system") result = systemNoticeText(last);
   else result = last.sender === "agent" ? stripMarkdown(last.text) : last.text;
@@ -156,8 +156,7 @@ const QUOTA_VENDORS = AGENT_VENDORS.flatMap((id) => {
 
 export interface QuotaWindowUsage {
   key: string;
-  label: string;
-  /** 左下角按钮上的简写（5h、7d）。 */
+  /** 窗口名（5h、7d），左下角按钮和浮层共用。 */
   short: string;
   /** 已用的百分比，四舍五入的整数，夹在 0 到 100 之间。 */
   percent: number;
@@ -185,12 +184,11 @@ const isReset = (resetsAt: number, now: number): boolean => Number.isFinite(rese
 
 /** 一个窗口的显示数据。过了 resetsAt 的窗口已经重置：0%、没有重置时间、不标快用完。 */
 function windowUsage(key: QuotaWindowKey, window: RateLimitWindow, now: number, warningStatus: string | undefined): QuotaWindowUsage {
-  const { label, short } = QUOTA_WINDOWS[key];
-  if (isReset(window.resetsAt, now)) return { key, label, short, percent: 0, resetsAt: null, warning: false };
+  const { short } = QUOTA_WINDOWS[key];
+  if (isReset(window.resetsAt, now)) return { key, short, percent: 0, resetsAt: null, warning: false };
   const percent = Math.round(Math.min(1, Math.max(0, window.utilization)) * 100);
   return {
     key,
-    label,
     short,
     percent,
     resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,

@@ -62,10 +62,10 @@ function twoPms(busy: boolean): StateSnapshot {
   });
 }
 
-const nav = () => screen.getByRole("navigation", { name: "对话列表" });
+const nav = () => screen.getByRole("navigation", { name: "Conversations" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
 const hasName = (name: string) => within(nav()).queryByRole("button", { name: new RegExp(name) }) !== null;
-const hasMark = (name: string) => within(row(name)).queryByRole("img", { name: "等你" }) !== null;
+const hasMark = (name: string) => within(row(name)).queryByRole("img", { name: "Your turn" }) !== null;
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 /** 老马停下来，说了一句新的话。 */
@@ -104,10 +104,10 @@ describe("左栏和标题", () => {
     wait(1);
     expect(hasMark("老马")).toBe(true);
     // 左栏不属于任何项目经理：标签是中性色，不带主色
-    expect(within(row("老马")).getByRole("img", { name: "等你" }).className).not.toMatch(/primary/);
+    expect(within(row("老马")).getByRole("img", { name: "Your turn" }).className).not.toMatch(/primary/);
     // 只有绿点，不写“等你”两个字
-    expect(within(row("老马")).getByRole("img", { name: "等你" })).toHaveClass("size-2", "rounded-full", "bg-status-active");
-    expect(within(row("老马")).queryByText("等你")).toBeNull();
+    expect(within(row("老马")).getByRole("img", { name: "Your turn" })).toHaveClass("size-2", "rounded-full", "bg-status-active");
+    expect(within(row("老马")).queryByText("Your turn")).toBeNull();
     expect(hasMark("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
 
@@ -133,7 +133,7 @@ describe("通知和点通知", () => {
     laoMaFinishes(ws, 11);
     wait(WAITING_SETTLE_MS);
     expect(FakeNotification.instances).toHaveLength(1);
-    expect(FakeNotification.last.title).toBe("老马 等你");
+    expect(FakeNotification.last.title).toBe("老马: Your turn");
     expect(FakeNotification.last.options.body).toBe("老马又做完了一件");
     expect(FakeNotification.last.options.tag).toBe("pm-2");
 
@@ -165,7 +165,7 @@ describe("通知和点通知", () => {
     act(() => ws.push(sessionChange(13, makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle" }))));
     act(() => ws.push(messageChange(14, "message.created", makeMessage({ id: 3, text: "小林也好了", createdAt: Date.now() }))));
     wait(WAITING_SETTLE_MS);
-    expect(FakeNotification.instances.map((n) => n.title)).toEqual(["老马 等你", "小林 等你"]);
+    expect(FakeNotification.instances.map((n) => n.title)).toEqual(["老马: Your turn", "小林: Your turn"]);
   });
 });
 
@@ -200,10 +200,10 @@ describe("网页重开", () => {
 
 /** 点齿轮，拿到设置面板里的“通知”开关。 */
 function openSettings() {
-  fireEvent.click(screen.getByRole("button", { name: "设置" }));
-  return screen.getByRole("dialog", { name: "设置" });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  return screen.getByRole("dialog", { name: "Settings" });
 }
-const notifySwitch = () => within(screen.getByRole("dialog", { name: "设置" })).getByRole("switch", { name: "通知" });
+const notifySwitch = () => within(screen.getByRole("dialog", { name: "Settings" })).getByRole("switch", { name: "Notifications" });
 
 describe("设置面板里的通知开关", () => {
   it("左栏底部只有齿轮，没有“开启通知”和“＋ 项目经理”；点齿轮打开设置", async () => {
@@ -299,8 +299,8 @@ describe("设置面板里的通知开关", () => {
   });
 });
 
-describe("搜索", () => {
-  const search = () => screen.getByRole("searchbox", { name: "搜索" });
+describe("Search", () => {
+  const search = () => screen.getByRole("searchbox", { name: "Search" });
   const names = () => within(nav()).queryAllByRole("button").map((b) => b.textContent ?? "");
   const type = (value: string) => fireEvent.change(search(), { target: { value } });
   const withProjects = () => {
@@ -315,7 +315,7 @@ describe("搜索", () => {
   it("顶部是搜索框和“新建项目经理”，没有产品名", async () => {
     await boot(withProjects());
     expect(search()).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建项目经理" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New project manager" })).toBeInTheDocument();
     expect(screen.queryByText(PRODUCT_NAME)).not.toBeInTheDocument();
   });
 
@@ -379,7 +379,7 @@ describe("搜索", () => {
   it("“＋”打开新建项目经理的对话框", async () => {
     await boot(withProjects());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "新建项目经理" }));
+    fireEvent.click(screen.getByRole("button", { name: "New project manager" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

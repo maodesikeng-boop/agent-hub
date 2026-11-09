@@ -58,14 +58,14 @@ function twoPms(lin: Message[], ma: Message[] = [makeUserMessage({ id: 21, conve
 }
 
 const QUESTION = "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B：单栏信息流";
-const rail = () => screen.queryByRole("complementary", { name: "右栏" });
+const rail = () => screen.queryByRole("complementary", { name: "Side panel" });
 /** 右栏里的“等你确定”组；没有是 null。 */
-const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^等你确定/ }));
+const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("region", { name: /^Needs You/ }));
 /** 提问的行（不含组标题的收起按钮、同一行右边的整栏开关和 Show more）。 */
 const askRows = () => within(asksGroup()!).getAllByRole("button").filter((b) => !b.closest("h2") && b.getAttribute("aria-controls") !== "right-rail" && b.textContent !== "Show more");
-const nav = () => screen.getByRole("navigation", { name: "对话列表" });
+const nav = () => screen.getByRole("navigation", { name: "Conversations" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
-const hasTag = (name: string) => within(row(name)).queryByLabelText("等你确定") !== null;
+const hasTag = (name: string) => within(row(name)).queryByLabelText("Needs You") !== null;
 const askedByOldMa = () => twoPms([makeUserMessage({ id: 1, text: "小林说话了", createdAt: 20_000 })], [ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 })]);
 const answered = (over: Partial<Message> & Pick<Message, "id">) => ask({ ...over, meta: { needsUser: true, answered: true } });
 
@@ -93,14 +93,14 @@ describe("右栏的“等你确定”", () => {
     expect(rail()).not.toBeInTheDocument();
     unmountApp();
     await boot(twoPms([ask({ id: 1, text: QUESTION }), ask({ id: 2, text: "再问一个" })]));
-    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent(/^等你确定$/);
+    expect(within(asksGroup()!).getByRole("heading")).toHaveTextContent(/^Needs You$/);
     expect(askRows().map((b) => b.textContent)).toEqual(["用 方案 A 还是方案 B？", "再问一个"]);
   });
 
   it("对话顶部没有横条，也没有“知道了”按钮", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
     expect(screen.queryByRole("button", { name: "知道了" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("main")).queryByRole("button", { name: /等你确定/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("button", { name: /Needs You/ })).not.toBeInTheDocument();
   });
 
   it("点一行：在右栏里展开全文（Markdown），对话滚到那条消息并高亮；再点收起", async () => {
@@ -122,7 +122,7 @@ describe("右栏的“等你确定”", () => {
 
   it("那条消息上不另挂“等你确定”标签（细节藏起来，提问在别处列着）", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
-    expect(within(document.querySelector('[data-message-id="1"]') as HTMLElement).queryByText("等你确定")).not.toBeInTheDocument();
+    expect(within(document.querySelector('[data-message-id="1"]') as HTMLElement).queryByText("Needs You")).not.toBeInTheDocument();
   });
 
   it("有新 Worker 消息和新的普通消息进来，提问还在", async () => {
@@ -215,11 +215,11 @@ describe("左栏标签和标题数字", () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
     // 左栏不属于任何项目经理：实心的绿色小圆点（size-2 rounded-full bg-status-active），不显示“等你确定”中文胶囊
-    const dot = within(row("老马")).getByLabelText("等你确定");
+    const dot = within(row("老马")).getByLabelText("Needs You");
     expect(dot).toHaveClass("size-2", "rounded-full", "bg-status-active");
-    expect(dot).toHaveAttribute("title", "等你确定");
+    expect(dot).toHaveAttribute("title", "Needs You");
     expect(dot).toHaveTextContent("");
-    expect(within(row("老马")).queryByText("等你确定")).toBeNull();
+    expect(within(row("老马")).queryByText("Needs You")).toBeNull();
     expect(hasTag("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
     // 老马还在干活（Worker 在跑也一样）：照样显示
@@ -241,7 +241,7 @@ describe("左栏标签和标题数字", () => {
   it("同一个项目经理又“等你”又有提问：只算一个，行上只显示“等你确定”", async () => {
     // 老马停稳了、最后一条是 agent 的话（提问本身），所以也算“等你”
     await boot(askedByOldMa());
-    expect(within(row("老马")).queryByText("等你")).not.toBeInTheDocument();
+    expect(within(row("老马")).queryByText("Your turn")).not.toBeInTheDocument();
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 
@@ -253,14 +253,14 @@ describe("左栏标签和标题数字", () => {
   });
 });
 
-describe("通知", () => {
+describe("Notifications", () => {
   it("新的提问进来立刻弹“<名字> 等你确定”，不用等停稳，正文是问题；点通知打开那个对话", async () => {
     const focus = vi.spyOn(window, "focus").mockImplementation(() => {});
     const ws = await boot(twoPms([makeUserMessage({ id: 1, text: "小林说话了" })]));
     act(() => ws.push(sessionChange(11, makeSession({ sessionId: 2, conversationId: 2, pmId: 2, activity: "working" }))));
     act(() => ws.push(messageChange(12, "message.created", ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: Date.now() }))));
     expect(FakeNotification.instances).toHaveLength(1);
-    expect(FakeNotification.last.title).toBe("老马 等你确定");
+    expect(FakeNotification.last.title).toBe("老马: Needs You");
     expect(FakeNotification.last.options.body).toBe(stripMarkdown(QUESTION));
     act(() => FakeNotification.last.onclick?.());
     expect(focus).toHaveBeenCalledOnce();

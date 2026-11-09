@@ -8,14 +8,14 @@ export type AgentVendor = (typeof AGENT_VENDORS)[number];
 export const DEFAULT_AGENT_VENDOR: AgentVendor = "claude";
 
 /**
- * 额度窗口的统一定义：厂商报的窗口按长度（分钟）归到这些键上，label 是浮层里的全名，short 是左下角按钮上的简写。
+ * 额度窗口的统一定义：厂商报的窗口按长度（分钟）归到这些键上，short 是界面上的窗口名（左下角按钮和浮层共用，界面外壳用英文）。
  * 厂商只报“第一个、第二个窗口”不报名字的（codex 的 primary / secondary），按 windowKeyByMinutes 用长度认，不按位置认：
  * 同一个位置在不同账号上长度不一样（同一个 primary，有的账号是 5 小时，有的是 30 天）。加新长度的窗口只改这里。
  */
 export const QUOTA_WINDOWS = {
-  five_hour: { durationMins: 300, label: "5 小时", short: "5h" },
-  seven_day: { durationMins: 7 * 24 * 60, label: "7 天", short: "7d" },
-  thirty_day: { durationMins: 30 * 24 * 60, label: "30 天", short: "30d" },
+  five_hour: { durationMins: 300, short: "5h" },
+  seven_day: { durationMins: 7 * 24 * 60, short: "7d" },
+  thirty_day: { durationMins: 30 * 24 * 60, short: "30d" },
 } as const;
 export type QuotaWindowKey = keyof typeof QUOTA_WINDOWS;
 

@@ -4,7 +4,7 @@
 // 键：入口本机是 LOCAL_DEVICE（""，不是合法的 UUID，不会和真设备撞）；别的设备是它的 DeviceId。
 // 只有一台（入口本机）时界面和没有联机时一模一样：所有“按设备”的显示都看 devices.length > 1。
 import type { ConversationId, DeviceId, DeviceInfo } from "../shared/index.ts";
-import { formatAgo } from "./format.ts";
+import { formatAgo, JUST_NOW } from "./format.ts";
 import type { HubState } from "./state.ts";
 
 export type DeviceKey = DeviceId | typeof LOCAL_DEVICE;
@@ -84,7 +84,7 @@ export function platformLabel(platform: string): string {
 
 /** 还没拉到设备清单（或者守护进程还没有联机）时，入口本机的样子。 */
 export function placeholderSelf(platform: string): DeviceInfo {
-  return { id: LOCAL_DEVICE, name: "本机", platform, self: true, url: null };
+  return { id: LOCAL_DEVICE, name: "This computer", platform, self: true, url: null };
 }
 
 /**
@@ -95,7 +95,8 @@ export function deviceNotices(device: Pick<DeviceView, "key" | "info" | "status"
   if (device.key === LOCAL_DEVICE) return { offline: null, link: null };
   const { name } = device.info;
   const ago = formatAgo(device.lastOnlineAt ?? now, now);
-  const offline = device.status !== "offline" ? null : ago === "刚刚" ? `${name}离线，显示的是刚断线时的内容` : `${name}离线，显示的是 ${ago}的内容`;
-  const link = { readOnly: isReadOnly(device.status) ? `${name}离线，暂时不能发消息` : null, waiting: !canSend(device.status) };
+  const offline =
+    device.status !== "offline" ? null : ago === JUST_NOW ? `${name} is offline. Showing content from when it disconnected` : `${name} is offline. Showing content from ${ago}`;
+  const link = { readOnly: isReadOnly(device.status) ? `${name} is offline. Can't send messages right now` : null, waiting: !canSend(device.status) };
   return { offline, link };
 }

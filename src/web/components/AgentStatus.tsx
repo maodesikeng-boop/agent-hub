@@ -40,7 +40,7 @@ export function AgentStatus({ session }: { session: SessionState | null }) {
     text = describeStep(session?.step);
   }
   return (
-    <span role="status" aria-label="状态" data-busy={animated} className={animated ? "status-shimmer" : undefined}>
+    <span role="status" aria-label="Status" data-busy={animated} className={animated ? "status-shimmer" : undefined}>
       {text}
       {animated && <Dots />}
     </span>

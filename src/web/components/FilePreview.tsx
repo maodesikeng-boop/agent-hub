@@ -34,8 +34,8 @@ export interface PreviewFile {
 /** 放进 iframe、播放器、<img> 的地址：?inline=1 让服务端把 pdf、html 内联发（daemon/ui-server/server.ts）。 */
 const inlineUrl = (url: string) => `${url}?inline=1`;
 
-const OPEN_BLOCKED_TITLE = "这个类型打开可能会直接运行，只能在 Finder 中显示";
-const COPY_NOTICE = "原文件已经不在了，显示的是发出时存的副本";
+const OPEN_BLOCKED_TITLE = "This file type may run when opened, so it can only be shown in Finder";
+const COPY_NOTICE = "The original file is gone. Showing the copy saved when it was sent";
 const MB = 1024 * 1024;
 
 type TextState = { status: "loading" } | { status: "error" } | { status: "ready"; text: string; truncated: boolean };
@@ -131,7 +131,7 @@ function Centered({ children }: { children: React.ReactNode }) {
   return <div className="flex h-full items-center justify-center p-6 text-muted-foreground">{children}</div>;
 }
 
-const rowsLabel = (total: number, shown: number) => (total > shown ? `共 ${total} 行，只显示前 ${shown} 行` : `共 ${total} 行`);
+const rowsLabel = (total: number, shown: number) => (total > shown ? `${total} rows, showing the first ${shown}` : `${total} ${total === 1 ? "row" : "rows"}`);
 
 /** 内容区和工具栏上跟类型有关的部分（源码切换、复制、截断说明）。 */
 function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf>) {
@@ -162,12 +162,12 @@ function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf
   if (isText && textState.status === "ready") {
     const { text, truncated } = textState;
     const showCode = kind === "code" || source;
-    if (truncated) note = `文件较大，只显示前 ${MAX_PREVIEW_TEXT_BYTES / MB} MB`;
+    if (truncated) note = `Large file, showing the first ${MAX_PREVIEW_TEXT_BYTES / MB} MB`;
     controls = (
       <>
         {kind === "markdown" && (
           <Button variant="outline" onClick={() => setSource((v) => !v)}>
-            {source ? "渲染" : "源码"}
+            {source ? "Preview" : "Source"}
           </Button>
         )}
         {showCode && (
@@ -179,7 +179,7 @@ function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf
             }}
           >
             {copied ? <Check /> : <Copy />}
-            {copied ? "已复制" : "复制"}
+            {copied ? "Copied" : "Copy"}
           </Button>
         )}
       </>
@@ -255,13 +255,13 @@ function PreviewContent({ file }: { file: PreviewFile }) {
     content = (
       <Centered>
         <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        <span className="ml-2 text-minor">加载中</span>
+        <span className="ml-2 text-minor">Loading…</span>
       </Centered>
     );
   } else if (failed) {
     content = (
       <Centered>
-        <span className="text-minor text-danger">读不了这个文件</span>
+        <span className="text-minor text-danger">Can't read this file</span>
       </Centered>
     );
   } else if (kind === "pdf") {
@@ -294,14 +294,14 @@ function PreviewContent({ file }: { file: PreviewFile }) {
         <Button asChild variant="outline">
           <a href={file.url} download={file.name}>
             <Download />
-            下载
+            Download
           </a>
         </Button>
         {file.target !== null && fileActions && (
           <>
             <Button variant="outline" disabled={busy !== null} onClick={() => void run("reveal")}>
               <FolderSearch />
-              在 Finder 中显示
+              Show in Finder
             </Button>
             <Button
               variant="outline"
@@ -311,7 +311,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
               onClick={() => void run("open")}
             >
               <ExternalLink />
-              用默认程序打开
+              Open
             </Button>
           </>
         )}

@@ -247,14 +247,14 @@ export function App() {
     return (
       <div className={FULLPAGE}>
         <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-        <p>加载中</p>
+        <p>Loading…</p>
       </div>
     );
   }
   if (local.state.phase === "unauthorized") {
     return (
       <div className={FULLPAGE} data-testid="unauthenticated">
-        <p>还没有登录。在电脑上打开终端启动时打印的登录链接；手机可到已登录电脑的「设置 → 在手机上登录」扫码</p>
+        <p>Not signed in. On your computer, open the sign-in link printed in the terminal at startup. On a phone, scan the code from Settings → Security &amp; Access → Sign in on phone on a signed-in computer</p>
       </div>
     );
   }
@@ -263,8 +263,8 @@ export function App() {
       <div className={FULLPAGE}>
         <p title={local.state.loadError ? errorTitle(local.state.loadError) : undefined}>{local.state.loadError?.text ?? "连不上守护进程"}</p>
         {local.state.loadError?.hint && <p>{local.state.loadError.hint}</p>}
-        <p className="text-minor text-muted-foreground">如果服务还没启动，在项目目录下运行 pnpm start</p>
-        <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>重试</Button>
+        <p className="text-minor text-muted-foreground">If the service isn't running, run pnpm start in the project folder</p>
+        <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>
       </div>
     );
   }
@@ -323,12 +323,12 @@ export function App() {
     state.phase === "ready" ? null : current.status === "connecting" ? (
       <div className={FULLPAGE}>
         <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-        <p>加载中</p>
+        <p>Loading…</p>
       </div>
     ) : (
       <div className={FULLPAGE}>
-        <p>还没连上这台设备</p>
-        <p className="text-minor text-muted-foreground">看看 Tailscale 开了没，{current.info.name}上的守护进程在不在</p>
+        <p>Not connected to this computer yet</p>
+        <p className="text-minor text-muted-foreground">Check that Tailscale is on and the daemon is running on {current.info.name}</p>
       </div>
     );
 
@@ -388,7 +388,8 @@ export function App() {
             title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
             readonly={workerLine?.readonly ?? false}
             phase={workerPhaseOf(state, openWorker)}
-            pm={{ name: workerPmEntry?.name ?? "项目经理", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
+            pm={{ name: workerPmEntry?.name ?? "Project manager", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
+            meta={railWorkers.find((w) => w.conversationId === openWorker)}
             view={workerView}
             pending={pendingOf(state, openWorker)}
             session={sessionOf(state, openWorker)}
@@ -432,7 +433,7 @@ export function App() {
         ) : (
           <>
             {notices}
-            <div className="flex flex-1 items-center justify-center text-muted-foreground">还没有对话</div>
+            <div className="flex flex-1 items-center justify-center text-muted-foreground">No conversations yet</div>
           </>
         )}
       </main>

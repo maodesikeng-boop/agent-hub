@@ -15,7 +15,7 @@ afterEach(() => {
   delete document.documentElement.dataset.uiScale;
 });
 
-describe("界面大小", () => {
+describe("Interface scale", () => {
   it("没存过、存坏了都按默认的“大”", () => {
     expect(DEFAULT_UI_SCALE).toBe("lg");
     expect(readUiScale()).toBe("lg");
@@ -28,17 +28,17 @@ describe("界面大小", () => {
   it("设置 → 通用 → 外观：紧凑 / 标准 / 大 / 特大，默认选“大”；点了马上改根字号档位并记住", async () => {
     const user = userEvent.setup();
     render(<SettingsDialog open onOpenChange={() => {}} notify={notify} />);
-    const group = screen.getByRole("radiogroup", { name: "界面大小" });
+    const group = screen.getByRole("radiogroup", { name: "Interface scale" });
     const options = within(group).getAllByRole("radio");
-    expect(options.map((o) => o.textContent)).toEqual(["紧凑", "标准", "大", "特大"]);
-    expect(within(group).getByRole("radio", { name: "大" })).toHaveAttribute("aria-checked", "true");
+    expect(options.map((o) => o.textContent)).toEqual(["Compact", "Default", "Large", "XL"]);
+    expect(within(group).getByRole("radio", { name: "Large" })).toHaveAttribute("aria-checked", "true");
 
-    await user.click(within(group).getByRole("radio", { name: "特大" }));
+    await user.click(within(group).getByRole("radio", { name: "XL" }));
     expect(document.documentElement.dataset.uiScale).toBe("xl");
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("xl");
-    expect(within(group).getByRole("radio", { name: "特大" })).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("radio", { name: "XL" })).toHaveAttribute("aria-checked", "true");
 
-    await user.click(within(group).getByRole("radio", { name: "紧凑" }));
+    await user.click(within(group).getByRole("radio", { name: "Compact" }));
     expect(document.documentElement.dataset.uiScale).toBe("sm");
     expect(localStorage.getItem(UI_SCALE_KEY)).toBe("sm");
   });

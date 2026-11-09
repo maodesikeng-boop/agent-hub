@@ -16,12 +16,12 @@ export function StatusDot({ status }: { status: DeviceStatus }) {
 
 /** 状态词和时间：在线、连接中不写；重连中；离线（断开过的再写多久以前）。 */
 export function StatusText({ status, lastOnlineAt, online = false }: { status: DeviceStatus; lastOnlineAt: number | null; online?: boolean }) {
-  if (status === "online") return online ? <span>在线</span> : null;
+  if (status === "online") return online ? <span>Online</span> : null;
   if (status === "connecting") return null;
-  if (status === "reconnecting") return <span>重连中</span>;
+  if (status === "reconnecting") return <span>Reconnecting</span>;
   return (
     <span className="flex items-center gap-2">
-      <span>离线</span>
+      <span>Offline</span>
       {status === "offline" && lastOnlineAt !== null && <span className="tabular-nums">{formatAgo(lastOnlineAt)}</span>}
     </span>
   );

@@ -1,8 +1,8 @@
 import { ChevronRight, MessageCircleQuestionMark, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_AGENT_VENDOR, agentEffortOf, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
+import { DEFAULT_AGENT_VENDOR, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
-import { formatContext, formatTokenDetail, NO_DATA } from "../format.ts";
+import { cleanPieceTitle, DEFAULT_CHOICE, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
@@ -24,21 +24,24 @@ const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
 /** 这几种算“在忙”（状态词和小圆点用主色，列表排在前面）：干活中、准备中（在跑项目的准备命令）、在等后台命令跑完；不认识的 activity 也当在忙。 */
 const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing", "background"]);
 const UNKNOWN_ACTIVITY_TEXT = `${STEP_TEXT.working}…`;
-const ENDED_TEXT = "Ended";
 /** 每组默认只列几条，多了出一行 Show more（照 Claude desktop 的右栏）。 */
 export const RIGHT_RAIL_VISIBLE_ROWS = 3;
 
-const statusText = (worker: WorkerEntry) => (worker.ended ? ENDED_TEXT : (ACTIVITY_TEXT[worker.activity] ?? UNKNOWN_ACTIVITY_TEXT));
+/** 没收工的 Piece 的状态词；收工的在 Completed 组里，不写状态词。 */
+const statusText = (worker: WorkerEntry) => ACTIVITY_TEXT[worker.activity] ?? UNKNOWN_ACTIVITY_TEXT;
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !(worker.activity in ACTIVITY_TEXT));
 
 const RIGHT_RAIL_ID = "right-rail";
 
 /**
- * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“已收工 N ›” 14px，第二行 13px（行高 18px）。图标 16px 线条（stroke 1.5）。
- * 行：左右 8px 内边距、负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 32px。
+ * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“Completed N ›” 14px。图标 16px 线条（stroke 1.5）。
+ * 行：左右 10px 内边距、同样多的负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 36px，留出呼吸感。
  */
-const ROW_BASE = "flex w-[calc(100%+1rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW_BASE = "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 const ROW = cn(ROW_BASE, "gap-3");
+/** 列表项（提问、Piece）的悬停 / 选中底：当前项目经理水果色的极淡果冻底（styles.css 的 --color-jelly）。 */
+const ITEM_HOVER = "hover:bg-jelly-hover";
+const ITEM_SELECTED = "bg-jelly";
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
 /** 空闲 Worker 的小圆点颜色：跟着最近一次汇报（worker-status.ts 的 tone），和汇报气泡头像上的色点一样；没汇报是灰。 */
@@ -105,7 +108,7 @@ function GroupTitle({
         type="button"
         aria-expanded={!collapsed}
         aria-controls={bodyId}
-        className="-mx-2 flex h-8 pointer-coarse:h-11 w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-xl px-2 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="-mx-2.5 flex h-8 pointer-coarse:h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={onToggle}
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
@@ -135,13 +138,13 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
       inert={collapsed}
       className={cn("grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none", collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]")}
     >
-      {/* 高度过渡要 overflow-hidden；行向两边伸出 8px（ROW 的 -mx-2），键盘聚焦圈再 2px，所以这层也向两边多留 12px（-mx-3 px-3），圆角和圈才不会被剪成方的 */}
+      {/* 高度过渡要 overflow-hidden；行向两边伸出 10px（ROW 的 -mx-2.5），键盘聚焦圈再 2px，所以这层也向两边多留 12px（-mx-3 px-3），圆角和圈才不会被剪成方的 */}
       <div className="-mx-3 min-h-0 overflow-hidden px-3">{children}</div>
     </div>
   );
 }
 
-/** “Show more / Show less”，“已收工 N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
+/** “Show more / Show less”，“Completed N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
     <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-label text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
@@ -164,13 +167,13 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
   const summary = askSummary(ask.text);
   return (
     <li>
-      <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : "hover:bg-sidebar-hover")} onClick={onToggle}>
+      <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : ITEM_HOVER)} onClick={onToggle}>
         <MessageCircleQuestionMark className={cn(ROW_ICON, "mt-0.5")} strokeWidth={ICON_STROKE} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-label leading-5">{summary}</span>
         <ChevronRight className={cn(ROW_ICON, "mt-0.5 size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
       </button>
       {open && (
-        <div className="-mx-2 rounded-b-xl bg-sidebar px-2 pb-3 text-small">
+        <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-small">
           <div className="pl-7">
             <Markdown text={ask.text} messageId={ask.id} />
           </div>
@@ -180,46 +183,57 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
   );
 }
 
-/**
- * 一个 Piece 一行（信息靠层次区分，不用符号拼接）：每行左侧不放图标，只展示标题、状态、模型与 context 信息，
- * 第一行标题 + 右边英文状态词；第二行小一号灰字：模型、思考程度（有才显示）、现在的对话长度（“158K context”），之间用间距隔开。context 悬停看累计明细。收工的淡一些。
- */
-function WorkerRow({
-  worker,
-  active,
-  onOpen,
-}: {
-  worker: WorkerEntry;
-  active: boolean;
-  avatarKey?: number;
-  onOpen: () => void;
-}) {
+/** Piece 的模型、思考程度（有才有）、现在的对话长度（“158K context”，没记录是 null）：右栏行的悬停提示和 Piece 对话顶栏（PieceMeta）共用。 */
+function usePieceMeta(worker: WorkerEntry): { model: string | null; effort: string | null; context: string | null } {
   const vendor = isAgentVendor(worker.vendor) ? worker.vendor : DEFAULT_AGENT_VENDOR;
   const catalog = useModelCatalog(vendor);
-  const busy = isBusy(worker);
   const context = formatContext(worker.usage);
   // 老数据里 agy 的模型可能是带档位的完整 ID：档位从 ID 里取，和资料页一样显示成 模型 + 思考程度
-  const effort = agentEffortOf(vendor, worker.model ?? null, worker.effort ?? null);
+  const model = worker.model ?? null;
+  const effort = agentEffortOf(vendor, model, worker.effort ?? null);
+  return {
+    model: worker.vendor === undefined ? null : model === null ? (catalog.defaultModel ?? DEFAULT_CHOICE) : modelShortLabel(vendor, model, catalog),
+    effort: effort || null,
+    context: context !== NO_DATA ? context : null,
+  };
+}
+
+/** Piece 对话顶栏右边的一行小字：模型、思考程度、对话长度，之间用间距隔开（不用符号拼接）；context 悬停看累计明细。都没有就不显示。 */
+export function PieceMeta({ worker }: { worker: WorkerEntry }) {
+  const { model, effort, context } = usePieceMeta(worker);
+  if (model === null && effort === null && context === null) return null;
+  return (
+    <span data-testid="piece-meta" className="flex shrink-0 items-baseline gap-3 text-xs text-muted-foreground max-[720px]:hidden">
+      {model !== null && <span>{model}</span>}
+      {effort !== null && <span className="shrink-0">{effort}</span>}
+      {context !== null && (
+        <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
+          {context}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 一个 Piece 一行（docs/ui-standard.md 第 12 条）：只有一行，标题（去掉“界面：”这类分类前缀）+ 右边英文状态词；收工的行不写状态词（组名已经是 Completed）。
+ * 模型、思考程度、现在的对话长度不常驻显示，放进整行的悬停提示（title，第一行是完整标题），点进 Piece 的对话顶栏也能看到（PieceMeta）。收工的淡一些。
+ */
+function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: boolean; onOpen: () => void }) {
+  const meta = usePieceMeta(worker);
+  const hint = [worker.title, meta.model, meta.effort, meta.context].filter((line): line is string => line !== null).join("\n");
   return (
     <button
       type="button"
       aria-current={active ? "true" : undefined}
-      className={cn(ROW_BASE, "flex-col items-stretch gap-0.5", active ? "bg-sidebar-active" : "hover:bg-sidebar-hover", worker.ended && "opacity-60")}
+      aria-label={worker.title}
+      title={hint}
+      className={cn(ROW, "items-baseline justify-between", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
-      <span className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-label leading-5">{worker.title}</span>
-        <span className={cn("shrink-0 text-small", busy ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
-      </span>
-      <span data-testid="worker-meta" className="flex items-baseline gap-3 text-small leading-4.5 text-muted-foreground">
-        {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
-        {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
-        {(context !== NO_DATA || (worker.vendor === undefined && !effort)) && (
-          <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
-            {context}
-          </span>
-        )}
-      </span>
+      {/* 收工的只把字调淡，选中的果冻底照样是完整的颜色 */}
+      <span className={cn("min-w-0 truncate text-label leading-5", worker.ended && "opacity-60")}>{cleanPieceTitle(worker.title)}</span>
+      {!worker.ended && <span className={cn("shrink-0 text-small", isBusy(worker) ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>}
     </button>
   );
 }
@@ -243,7 +257,7 @@ export function RightRailToggle({
     <Button
       variant="ghost"
       size="icon"
-      aria-label={open ? "收起右栏" : attention ? "展开右栏（有等你确定的事）" : "展开右栏"}
+      aria-label={open ? "Hide side panel" : attention ? "Show side panel (needs you)" : "Show side panel"}
       aria-expanded={open}
       aria-controls={RIGHT_RAIL_ID}
       className={cn("relative shrink-0", open && "text-foreground")}
@@ -275,7 +289,7 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
   );
 }
 
-/** 收工的 Piece 收成一行“已收工 N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Piece 时自动展开，当前那行看得见。 */
+/** 收工的 Piece 收成一行“Completed N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Piece 时自动展开，当前那行看得见。行里不再写 Ended。 */
 function EndedWorkers({
   workers,
   openWorkerId,
@@ -283,7 +297,6 @@ function EndedWorkers({
 }: {
   workers: WorkerEntry[];
   openWorkerId: ConversationId | null;
-  avatarKey?: number;
   onOpenWorker: (id: ConversationId) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -294,7 +307,7 @@ function EndedWorkers({
   return (
     <>
       <MoreToggle expanded={open} onClick={() => setOpen((v) => !v)}>
-        已收工 <span className="-ml-2 text-xs tabular-nums">{workers.length}</span>
+        Completed <span className="-ml-2 text-xs tabular-nums">{workers.length}</span>
         <ChevronRight className={cn("-ml-1.5 size-3.5 shrink-0 self-center transition-transform", open && "rotate-90")} aria-hidden="true" />
       </MoreToggle>
       {open && (
@@ -311,7 +324,7 @@ function EndedWorkers({
 }
 
 /**
- * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：只有两组，“等你确定”（这个项目经理还没回答的 hub ask）和 Worker
+ * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：只有两组，Needs You（这个项目经理还没回答的 hub ask）和 Pieces
  * （它派的：在忙的排前面，最多列 3 条，多了 Show more；收工的收成最下面一行）。组之间一条细分隔线。layout：side 是和对话并排的一栏
  * （推开对话），右栏开关（toggle）放在第一组标题的同一行右边，内容从最顶上开始；top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
@@ -358,14 +371,14 @@ export function RightRail({
   return (
     <aside
       id={RIGHT_RAIL_ID}
-      aria-label="右栏"
+      aria-label="Side panel"
       className={cn("flex shrink-0 flex-col bg-background", side ? "w-80 border-l border-border" : "max-h-[40dvh] border-b border-border")}
     >
       <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
           <section aria-labelledby="rail-asks" className="py-3">
             <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot trailing={side ? toggle : undefined}>
-              等你确定
+              {NEEDS_YOU}
             </GroupTitle>
             <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
               <ul>

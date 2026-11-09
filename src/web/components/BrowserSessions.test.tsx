@@ -36,11 +36,11 @@ afterEach(() => {
 });
 
 /** “已登录的浏览器”那一组的标题行（折叠开关）。 */
-const toggle = () => screen.getByRole("button", { name: /^已登录的浏览器/ });
+const toggle = () => screen.getByRole("button", { name: /^Signed-in browsers/ });
 
 /** 等列表拿到（标题行出现个数），收着就点开。 */
 async function expandSessions() {
-  await waitFor(() => expect(toggle()).toHaveTextContent(/\d+ 个/));
+  await waitFor(() => expect(toggle()).toHaveTextContent(/\d+$/));
   if (toggle().getAttribute("aria-expanded") === "false") fireEvent.click(toggle());
 }
 
@@ -55,15 +55,15 @@ const rowOf = (name: string) => screen.getByText(name).closest("[data-slot='sett
 describe("已登录的浏览器列表", () => {
   it("默认收起：只剩标题行“已登录的浏览器 2 个”，看不到浏览器；点开才列出（左边电脑、手机图标），再点收起", async () => {
     render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
-    await waitFor(() => expect(toggle()).toHaveTextContent("2 个"));
+    await waitFor(() => expect(toggle()).toHaveTextContent(/2$/));
     expect(toggle()).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "全部退出" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out all" })).not.toBeInTheDocument();
     fireEvent.click(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
     expect(rowOf("Mac Chrome").querySelector("svg.lucide-monitor")).not.toBeNull();
     expect(rowOf("iPhone Safari").querySelector("svg.lucide-smartphone")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "全部退出" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out all" })).toBeInTheDocument();
     fireEvent.click(toggle());
     expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument();
   });
@@ -71,16 +71,16 @@ describe("已登录的浏览器列表", () => {
   it("每个浏览器一行：名字是“设备 浏览器”，下面是最后活动；自己这一行标出来，不用 · 拼接", async () => {
     await show();
     const mine = rowOf("Mac Chrome");
-    expect(within(mine).getByText(/这个浏览器/)).toBeInTheDocument();
-    expect(within(mine).getByText(/刚刚/)).toBeInTheDocument();
+    expect(within(mine).getByText(/This browser/)).toBeInTheDocument();
+    expect(within(mine).getByText(/just now/)).toBeInTheDocument();
     expect(mine.textContent).not.toContain("·");
     const phone = rowOf("iPhone Safari");
-    expect(within(phone).getByText("5 分钟前")).toBeInTheDocument();
-    expect(within(phone).queryByText(/这个浏览器/)).not.toBeInTheDocument();
-    const region = screen.getByRole("region", { name: "已登录的浏览器" });
-    expect(within(region).getByRole("button", { name: "全部退出" })).toBeInTheDocument();
+    expect(within(phone).getByText("5m ago")).toBeInTheDocument();
+    expect(within(phone).queryByText(/This browser/)).not.toBeInTheDocument();
+    const region = screen.getByRole("region", { name: "Signed-in browsers" });
+    expect(within(region).getByRole("button", { name: "Sign out all" })).toBeInTheDocument();
     // 扫码登录不藏：在框外单独一组，收不起来
-    expect(within(screen.getByRole("region", { name: "手机扫码登录" })).getByRole("button", { name: "显示二维码" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Sign in on phone" })).getByRole("button", { name: "Show QR code" })).toBeInTheDocument();
   });
 
   it("读不出来（比如没登录）：自己展开，框里一行说原因，不是空白", async () => {
@@ -99,23 +99,23 @@ describe("已登录的浏览器列表", () => {
     // 有待批准的：不用点，自己展开
     await screen.findByText("iPhone Safari");
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    const region = screen.getByRole("region", { name: "已登录的浏览器" });
+    const region = screen.getByRole("region", { name: "Signed-in browsers" });
     const rows = region.querySelectorAll("[data-slot='settings-row']");
     // pending_approval 排在第一行
     expect(rows[0]).toHaveTextContent("iPhone Safari");
-    expect(rows[0]).toHaveTextContent("待批准");
-    expect(rows[0]).toHaveTextContent("经公网");
+    expect(rows[0]).toHaveTextContent("Pending approval");
+    expect(rows[0]).toHaveTextContent("Via public access");
     expect(rows[0]!.textContent).not.toContain("·");
 
     const phoneRow = rowOf("iPhone Safari");
-    expect(within(phoneRow).getByRole("button", { name: "拒绝" })).toBeInTheDocument();
-    const approveBtn = within(phoneRow).getByRole("button", { name: "允许" });
+    expect(within(phoneRow).getByRole("button", { name: "Deny" })).toBeInTheDocument();
+    const approveBtn = within(phoneRow).getByRole("button", { name: "Allow" });
     fireEvent.click(approveBtn);
 
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/sessions\/phone-pending\/approve$/)).toHaveLength(1));
-    await waitFor(() => expect(within(phoneRow).queryByText("待批准")).not.toBeInTheDocument());
-    expect(within(phoneRow).getByText("经公网")).toBeInTheDocument();
-    expect(within(phoneRow).getByRole("button", { name: /^退出/ })).toBeInTheDocument();
+    await waitFor(() => expect(within(phoneRow).queryByText("Pending approval")).not.toBeInTheDocument());
+    expect(within(phoneRow).getByText("Via public access")).toBeInTheDocument();
+    expect(within(phoneRow).getByRole("button", { name: /^Sign out/ })).toBeInTheDocument();
   });
 
   it("待批准（pending_approval）会话点“拒绝”调 DELETE /api/sessions/:id 并从列表移除", async () => {
@@ -125,7 +125,7 @@ describe("已登录的浏览器列表", () => {
     ];
     await show();
     const phoneRow = rowOf("iPhone Safari");
-    fireEvent.click(within(phoneRow).getByRole("button", { name: "拒绝" }));
+    fireEvent.click(within(phoneRow).getByRole("button", { name: "Deny" }));
     await waitFor(() => expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument());
     expect(api.callsTo("DELETE", /^\/api\/sessions\/phone-pending$/)).toHaveLength(1);
   });
@@ -134,7 +134,7 @@ describe("已登录的浏览器列表", () => {
 describe("单个退出", () => {
   it("退别的浏览器：发 DELETE，那一行消失，别的不动，页面不刷新", async () => {
     await show();
-    fireEvent.click(within(rowOf("iPhone Safari")).getByRole("button", { name: /^退出/ }));
+    fireEvent.click(within(rowOf("iPhone Safari")).getByRole("button", { name: /^Sign out/ }));
     await waitFor(() => expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument());
     expect(api.callsTo("DELETE", /^\/api\/sessions\/phone$/)).toHaveLength(1);
     expect(screen.getByText("Mac Chrome")).toBeInTheDocument();
@@ -144,13 +144,13 @@ describe("单个退出", () => {
   it("退自己（这个浏览器）：先变确认态（确认退出 / 取消），点取消恢复，点确认退出才发 DELETE 并回到登录页", async () => {
     await show();
     const mine = rowOf("Mac Chrome");
-    fireEvent.click(within(mine).getByRole("button", { name: /^退出/ }));
+    fireEvent.click(within(mine).getByRole("button", { name: /^Sign out/ }));
     expect(api.callsTo("DELETE", /^\/api\/sessions\/mac$/)).toHaveLength(0);
     expect(onSignedOut).not.toHaveBeenCalled();
-    fireEvent.click(within(mine).getByRole("button", { name: "取消" }));
-    expect(within(mine).getByRole("button", { name: /^退出/ })).toBeInTheDocument();
-    fireEvent.click(within(mine).getByRole("button", { name: /^退出/ }));
-    fireEvent.click(within(mine).getByRole("button", { name: "确认退出" }));
+    fireEvent.click(within(mine).getByRole("button", { name: "Cancel" }));
+    expect(within(mine).getByRole("button", { name: /^Sign out/ })).toBeInTheDocument();
+    fireEvent.click(within(mine).getByRole("button", { name: /^Sign out/ }));
+    fireEvent.click(within(mine).getByRole("button", { name: "Confirm sign out" }));
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
     expect(api.callsTo("DELETE", /^\/api\/sessions\/mac$/)).toHaveLength(1);
   });
@@ -159,47 +159,47 @@ describe("单个退出", () => {
     api.deleteBrowserSession = () => ({ status: 500, body: { error: "internal_error" } });
     await show();
     const row = rowOf("iPhone Safari");
-    fireEvent.click(within(row).getByRole("button", { name: /^退出/ }));
+    fireEvent.click(within(row).getByRole("button", { name: /^Sign out/ }));
     const alert = await within(row).findByRole("alert");
     expect(alert).toHaveTextContent(INTERNAL);
     expect(alert).toHaveAttribute("title", "internal_error"); // 英文码只在悬停的 title 里
-    expect(within(row).getByRole("button", { name: /^退出/ })).toBeEnabled();
+    expect(within(row).getByRole("button", { name: /^Sign out/ })).toBeEnabled();
   });
 
   it("别人已经把它退了（404）：这一行也消失，不报错", async () => {
     api.deleteBrowserSession = () => ({ status: 404, body: { error: "not_found" } });
     await show();
-    fireEvent.click(within(rowOf("iPhone Safari")).getByRole("button", { name: /^退出/ }));
+    fireEvent.click(within(rowOf("iPhone Safari")).getByRole("button", { name: /^Sign out/ }));
     await waitFor(() => expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
-describe("全部退出", () => {
+describe("Sign out all", () => {
   it("点一下只是变成“确认全部退出”，不发请求；再点才发，然后回到登录页", async () => {
     await show();
-    fireEvent.click(screen.getByRole("button", { name: "全部退出" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out all" }));
     expect(api.callsTo("POST", /logout-all/)).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "确认全部退出" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm sign out all" }));
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
     expect(api.callsTo("POST", /^\/api\/sessions\/logout-all$/)).toHaveLength(1);
   });
 
   it("点了又点别处（失去焦点）：退回“全部退出”，没发请求", async () => {
     await show();
-    const button = screen.getByRole("button", { name: "全部退出" });
+    const button = screen.getByRole("button", { name: "Sign out all" });
     button.focus();
     fireEvent.click(button);
-    fireEvent.blur(screen.getByRole("button", { name: "确认全部退出" }));
-    expect(screen.getByRole("button", { name: "全部退出" })).toBeInTheDocument();
+    fireEvent.blur(screen.getByRole("button", { name: "Confirm sign out all" }));
+    expect(screen.getByRole("button", { name: "Sign out all" })).toBeInTheDocument();
     expect(api.callsTo("POST", /logout-all/)).toHaveLength(0);
   });
 
   it("失败：写原因，不刷新", async () => {
     api.logoutAll = () => ({ status: 500, body: { error: "internal_error" } });
     await show();
-    fireEvent.click(screen.getByRole("button", { name: "全部退出" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认全部退出" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm sign out all" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(INTERNAL);
     expect(onSignedOut).not.toHaveBeenCalled();
   });
@@ -208,8 +208,8 @@ describe("全部退出", () => {
 describe("在手机上打开", () => {
   it("点“显示二维码”：发 POST，显示二维码和倒计时 5:00；二维码是图（有名字）", async () => {
     await show();
-    fireEvent.click(screen.getByRole("button", { name: "显示二维码" }));
-    const qr = await screen.findByRole("img", { name: "登录二维码" });
+    fireEvent.click(screen.getByRole("button", { name: "Show QR code" }));
+    const qr = await screen.findByRole("img", { name: "Sign-in QR code" });
     expect(qr.querySelectorAll("path").length).toBeGreaterThan(0);
     expect(api.callsTo("POST", /^\/api\/login-links$/)).toHaveLength(1);
     expect(screen.getByText(/^[45]:\d\d$/)).toBeInTheDocument();
@@ -225,7 +225,7 @@ describe("在手机上打开", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    fireEvent.click(screen.getByRole("button", { name: "显示二维码" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show QR code" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -238,13 +238,13 @@ describe("在手机上打开", () => {
       await vi.advanceTimersByTimeAsync(300_000);
     });
     expect(Date.now() - start).toBeGreaterThanOrEqual(300_000);
-    expect(screen.getByText("已过期")).toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: "登录二维码" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    expect(screen.getByText("Expired")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Sign-in QR code" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByRole("img", { name: "登录二维码" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Sign-in QR code" })).toBeInTheDocument();
     expect(api.callsTo("POST", /^\/api\/login-links$/)).toHaveLength(2);
   });
 
@@ -254,17 +254,17 @@ describe("在手机上打开", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    fireEvent.click(screen.getByRole("button", { name: "显示二维码" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show QR code" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByRole("img", { name: "登录二维码" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Sign-in QR code" })).toBeInTheDocument();
     list = [...list, session({ id: "new", userAgent: IPHONE.replace("18_0", "18_1") })];
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
-    expect(screen.queryByRole("img", { name: "登录二维码" })).not.toBeInTheDocument();
-    expect(toggle()).toHaveTextContent("3 个");
+    expect(screen.queryByRole("img", { name: "Sign-in QR code" })).not.toBeInTheDocument();
+    expect(toggle()).toHaveTextContent(/3$/);
     fireEvent.click(toggle());
     expect(screen.getAllByText("iPhone Safari").length).toBe(2);
   });
@@ -272,9 +272,9 @@ describe("在手机上打开", () => {
   it("生成失败：写原因，没有二维码", async () => {
     api.loginLink = () => ({ status: 500, body: { error: "internal_error" } });
     await show();
-    fireEvent.click(screen.getByRole("button", { name: "显示二维码" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show QR code" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(INTERNAL);
-    expect(screen.queryByRole("img", { name: "登录二维码" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Sign-in QR code" })).not.toBeInTheDocument();
   });
 });
 

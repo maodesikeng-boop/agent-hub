@@ -15,7 +15,7 @@ const MAX_HEIGHT_PX = 180;
 /** “停止”键：和发送键同一个按钮（同位置、同大小），图标是方块；正在停止时不可点。 */
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="停止" disabled={stop.stopping} onClick={stop.onStop}>
+    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop}>
       <Square className="size-4 fill-current" aria-hidden="true" />
     </Button>
   );
@@ -40,7 +40,7 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
     >
       <Icon className={cn("size-3.5 shrink-0", failed && "text-danger")} aria-hidden="true" />
       <span className={cn("min-w-0 flex-1", failed && "text-foreground")}>{errorLine(notice.message)}</span>
-      <button type="button" aria-label="关闭提示" className={CHIP_CLOSE_CLASS} onClick={onDismiss}>
+      <button type="button" aria-label="Dismiss" className={CHIP_CLOSE_CLASS} onClick={onDismiss}>
         <X className="size-3.5" aria-hidden="true" />
       </button>
     </div>
@@ -158,13 +158,13 @@ export function Composer({
       {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)]">
         {files.length > 0 && (
-          <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-5 pt-3">
+          <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
             {files.map(({ key, file }) => (
               <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
                 <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="min-w-0 truncate">{file.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                <button type="button" aria-label={`去掉 ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
+                <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
                   <X className="size-3.5" aria-hidden="true" />
                 </button>
               </li>
@@ -175,7 +175,7 @@ export function Composer({
         <textarea
           ref={ref}
           rows={1}
-          aria-label="输入消息"
+          aria-label="Message"
           placeholder={placeholder}
           readOnly={busy}
           disabled={disabled}
@@ -217,22 +217,22 @@ export function Composer({
             type="file"
             multiple
             hidden
-            aria-label="选择文件"
+            aria-label="Choose files"
             onChange={(e) => {
               staging.add(Array.from(e.target.files ?? []));
               e.target.value = ""; // 清掉，同一个文件还能再选
             }}
           />
-          <Button variant="ghost" size="icon" aria-label="添加文件" disabled={busy || disabled} onClick={() => picker.current?.click()}>
+          <Button variant="ghost" size="icon" aria-label="Add files" disabled={busy || disabled} onClick={() => picker.current?.click()}>
             <Paperclip className="size-5" aria-hidden="true" />
           </Button>
           <div className="ml-auto flex items-center gap-2">
-            {tooLong && <span className="text-small text-danger">消息太长</span>}
-            {stop?.failed && showStop && <span className="text-minor text-danger">停止失败</span>}
+            {tooLong && <span className="text-small text-danger">Message too long</span>}
+            {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="发送" disabled={!canSend} onClick={submit}>
+              <Button size="icon" aria-label="Send" disabled={!canSend} onClick={submit}>
                 <ArrowUp className="size-5" aria-hidden="true" />
               </Button>
             )}

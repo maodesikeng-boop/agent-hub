@@ -4,7 +4,7 @@
 export const UI_SCALES = ["sm", "md", "lg", "xl"] as const;
 export type UiScale = (typeof UI_SCALES)[number];
 
-export const UI_SCALE_LABELS: Readonly<Record<UiScale, string>> = { sm: "紧凑", md: "标准", lg: "大", xl: "特大" };
+export const UI_SCALE_LABELS: Readonly<Record<UiScale, string>> = { sm: "Compact", md: "Default", lg: "Large", xl: "XL" };
 
 /** 默认“大”：用户要整体再大一点。 */
 export const DEFAULT_UI_SCALE: UiScale = "lg";

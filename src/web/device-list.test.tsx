@@ -76,7 +76,7 @@ describe("设备清单拉不到", () => {
     const store = started();
     await waitFor(() => expect(names(store)).toHaveLength(2));
     await store.refresh();
-    expect(names(store)).toEqual(["本机"]);
+    expect(names(store)).toEqual(["This computer"]);
     expect(store.getSnapshot().managed).toBe(false);
     store.dispose();
   });
@@ -104,7 +104,7 @@ describe("设备清单拉不到", () => {
     installFetch([500, [mac, tokyo]]);
     const store = started();
     await waitFor(() => expect(store.getSnapshot().listFailed).toBe(true));
-    expect(names(store)).toEqual(["本机"]);
+    expect(names(store)).toEqual(["This computer"]);
     expect(store.getSnapshot().managed).toBe(false);
     await waitFor(() => expect(names(store)).toEqual(["Mac", "东京"]), { timeout: 3000 });
     expect(store.getSnapshot().listFailed).toBe(false);
@@ -115,8 +115,8 @@ describe("设备清单拉不到", () => {
   it("界面：第一次就拉不到时显示“暂时看不到其他设备 Retrying…”，拉到后消失", async () => {
     installFetch([500, [mac]]);
     render(<App />);
-    expect(await screen.findByText("暂时看不到其他设备")).toBeInTheDocument();
+    expect(await screen.findByText("Can't see other devices right now")).toBeInTheDocument();
     expect(screen.getByText("Retrying…")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText("暂时看不到其他设备")).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(screen.queryByText("Can't see other devices right now")).toBeNull(), { timeout: 3000 });
   });
 });

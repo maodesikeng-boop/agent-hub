@@ -1,7 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import type { ConversationId, Message, SessionState } from "../../shared/index.ts";
-import type { WorkerPhase } from "../selectors.ts";
+import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
@@ -14,6 +14,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
 import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
+import { PieceMeta } from "./RightRail.tsx";
 
 /**
  * 点开项目经理会话里的 Worker 那一行看到的：这个 Worker 自己的对话。用户可以直接对它说话，输入框、草稿、乐观显示、
@@ -24,6 +25,7 @@ export function WorkerConversation({
   readonly,
   phase,
   pm,
+  meta,
   view,
   pending,
   session,
@@ -47,6 +49,8 @@ export function WorkerConversation({
   phase: WorkerPhase;
   /** 派它的项目经理：返回按钮上的名字，也是 Worker 对话里项目经理那些话（任务、打回）的署名。 */
   pm: { name: string; avatarKey: number };
+  /** 右栏里这个 Piece 的那一项：顶栏右边显示它的模型、思考程度、对话长度；找不到不显示。 */
+  meta?: WorkerEntry;
   /** 找不到（还没同步过来）是 undefined。 */
   view: ConversationView | undefined;
   pending: PendingMessage[];
@@ -89,19 +93,20 @@ export function WorkerConversation({
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
-        <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={`Back to ${pm.name}`} onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
         <Avatar colorKey={identity.avatarKey} size={34} neutral />
         <h1 className="min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
-        {readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">只读</span>}
+        {readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
         <span className="flex-1" />
+        {meta && <PieceMeta worker={meta} />}
         {toolbar}
       </header>
       {top}
       {notices}
       {view === undefined ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">找不到这个 Piece 的对话</div>
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">Piece not found</div>
       ) : (
         <>
           <div className="relative min-h-0 flex-1">
@@ -123,7 +128,7 @@ export function WorkerConversation({
               <DraftComposer
                 autoFocus
                 draft={draft}
-                placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
+                placeholder={phase === "preparing" ? `${title} is setting up…` : `Message ${title}…`}
                 disabled={phase === "preparing"}
                 stop={stop}
                 link={link}

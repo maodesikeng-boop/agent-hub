@@ -14,9 +14,9 @@ export type { DeviceSettings };
 
 /** 开关打不开的原因，能打开的没有。 */
 const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
-  denied: "浏览器拦下了，到网站设置里允许通知",
-  unsupported: "这个浏览器不支持通知",
-  install: "先在 Safari 里“添加到主屏幕”，从主屏图标打开再开",
+  denied: "Blocked by the browser. Allow notifications in site settings",
+  unsupported: "This browser doesn't support notifications",
+  install: "In Safari, tap Add to Home Screen, then open the app from its icon",
 };
 
 const UI_SCALE_OPTIONS = UI_SCALES.map((value) => ({ value, label: UI_SCALE_LABELS[value] }));
@@ -25,11 +25,11 @@ const UI_SCALE_OPTIONS = UI_SCALES.map((value) => ({ value, label: UI_SCALE_LABE
 function UiScaleRow() {
   const [scale, setScale] = useState<UiScale>(readUiScale);
   return (
-    <SettingsRow label="界面大小">
+    <SettingsRow label="Interface scale">
       {(id) => (
         <Segmented
           id={id}
-          label="界面大小"
+          label="Interface scale"
           value={scale}
           options={UI_SCALE_OPTIONS}
           onChange={(next) => {
@@ -46,9 +46,9 @@ type SectionId = "general" | "computers" | "security";
 
 /** 左栏的分类（照 Grok Bot 设置页）：顺序就是左栏从上到下；“电脑”只在守护进程支持联机时有。 */
 const SECTIONS: readonly { id: SectionId; label: string; icon: LucideIcon }[] = [
-  { id: "general", label: "通用", icon: Settings },
-  { id: "computers", label: "电脑", icon: Monitor },
-  { id: "security", label: "登录与安全", icon: Shield },
+  { id: "general", label: "General", icon: Settings },
+  { id: "computers", label: "Computers", icon: Monitor },
+  { id: "security", label: "Security & Access", icon: Shield },
 ];
 
 /**
@@ -70,16 +70,16 @@ export function SettingsDialog({
   const content: Record<SectionId, ReactNode> = {
     general: (
       <>
-        <SettingsGroup title="外观">
+        <SettingsGroup title="Appearance">
           <UiScaleRow />
         </SettingsGroup>
-        <SettingsGroup label="通知">
+        <SettingsGroup label="Notifications">
           {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
-          <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
+          <SettingsRow label="Notifications" detail={NOTIFY_BLOCKED[notify.permission]}>
             {(id) => (
               <Switch
                 id={id}
-                aria-label="通知"
+                aria-label="Notifications"
                 checked={notify.enabled}
                 disabled={NOTIFY_BLOCKED[notify.permission] !== undefined}
                 onCheckedChange={(on) => void notify.setEnabled(on)}
@@ -100,11 +100,11 @@ export function SettingsDialog({
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="设置" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
+      <DialogContent title="Settings" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
         <Tabs defaultValue={devices !== null ? "computers" : "general"} orientation="vertical" className="flex min-h-0 flex-1 flex-col sm:flex-row">
           {/* 窄屏：一排横着的分类（只有字，放得下三个），右边让出关闭按钮的位置 */}
           <TabsList
-            aria-label="设置分类"
+            aria-label="Settings categories"
             className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-sidebar py-3 pr-14 pl-3 sm:w-48 sm:flex-col sm:overflow-x-visible sm:border-r sm:border-b-0 sm:px-3 sm:py-4"
           >
             {sections.map(({ id, label, icon: Icon }) => (

@@ -129,7 +129,7 @@ function AskCard({
       <div className="w-full min-w-0 text-body leading-relaxed font-medium">
         <Markdown text={card.question} files={files} messageId={messageId} />
       </div>
-      <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="选项">
+      <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
         {card.options.map((opt, i) => {
           const isChosen = chosen === opt;
           return (
@@ -253,7 +253,7 @@ function CopyButton({ text }: { text: string }) {
     );
   };
   return (
-    <Button variant="ghost" size="icon-sm" className="-ml-2 size-7" aria-label={copied ? "已复制" : "复制"} title={copied ? "已复制" : "复制"} onClick={copy}>
+    <Button variant="ghost" size="icon-sm" className="-ml-2 size-7" aria-label={copied ? "Copied" : "Copy"} title={copied ? "Copied" : "Copy"} onClick={copy}>
       {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
     </Button>
   );
@@ -365,7 +365,7 @@ function RevertButton({
   onRevert: MessageActions["onRevertPersona"];
 }) {
   const [phase, setPhase] = useState<RevertPhase>("idle");
-  if (reverted || phase === "done") return <span>已撤销</span>;
+  if (reverted || phase === "done") return <span>Undone</span>;
   const revert = () => {
     setPhase("busy");
     onRevert(changeId).then(
@@ -375,15 +375,15 @@ function RevertButton({
   };
   return (
     <>
-      {phase === "conflict" && <span className="text-danger">只能撤销最近一次</span>}
-      {phase === "error" && <span className="text-danger">撤销失败</span>}
+      {phase === "conflict" && <span className="text-danger">Only the latest change can be undone</span>}
+      {phase === "error" && <span className="text-danger">Couldn't undo</span>}
       <button
         type="button"
         className="touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60"
         disabled={phase === "busy"}
         onClick={revert}
       >
-        {phase === "busy" ? "Reverting…" : "撤销"}
+        {phase === "busy" ? "Undoing…" : "Undo"}
       </button>
     </>
   );
@@ -760,7 +760,7 @@ export function EmptyConversation({ identity }: { identity?: AgentIdentity }) {
       {identity && <Avatar colorKey={identity.avatarKey} size={48} neutral={identity.neutral} />}
       <div className="flex flex-col items-center gap-0.5">
         {identity && <div className="text-title font-semibold">{identity.name}</div>}
-        <div className={SECONDARY}>还没有消息</div>
+        <div className={SECONDARY}>No messages yet</div>
       </div>
     </div>
   );

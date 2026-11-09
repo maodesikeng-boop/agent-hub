@@ -36,11 +36,11 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
     <div className="rounded-2xl bg-sidebar px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-body">
-          <span>已归档</span>
+          <span>Archived</span>
           <span className="text-minor text-muted-foreground">{formatArchiveRemaining(archivedAt)}</span>
         </div>
         <Button variant="outline" size="sm" disabled={unarchiving} onClick={() => void unarchive()}>
-          {unarchiving ? "Restoring…" : "恢复"}
+          {unarchiving ? "Restoring…" : "Restore"}
         </Button>
       </div>
       {error && (
@@ -127,7 +127,7 @@ export function Conversation({
         {entry.pm ? (
           <button
             type="button"
-            aria-label={`查看 ${entry.pm.name} 的资料`}
+            aria-label={`View ${entry.pm.name}'s profile`}
             className="touch-target cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
@@ -166,7 +166,7 @@ export function Conversation({
           <DraftComposer
             autoFocus
             draft={draft}
-            placeholder={`给 ${entry.name} 发消息`}
+            placeholder={`Message ${entry.name}…`}
             staging={staging}
             stop={stop}
             link={link}

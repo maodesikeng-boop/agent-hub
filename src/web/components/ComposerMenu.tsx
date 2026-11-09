@@ -4,8 +4,8 @@ import type { MenuItem, MenuState } from "../composer-suggest.ts";
 import { cn } from "../lib/utils.ts";
 
 const KIND_TEXT = {
-  command: { label: "命令", empty: "没有匹配的命令" },
-  file: { label: "文件", empty: "没有匹配的文件" },
+  command: { label: "Commands", empty: "No matching commands" },
+  file: { label: "Files", empty: "No matching files" },
 } as const;
 
 /**

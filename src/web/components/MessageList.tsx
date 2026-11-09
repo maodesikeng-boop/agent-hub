@@ -149,7 +149,7 @@ export const MessageList = memo(function MessageList({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
+      <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
         <div className="flex min-h-full flex-col pt-4 pb-12" ref={contentRef}>
           {hasMore && (
             <button
@@ -158,7 +158,7 @@ export const MessageList = memo(function MessageList({
               disabled={older === "loading"}
               onClick={loadOlder}
             >
-              {older === "error" ? "加载失败，点击重试" : older === "loading" ? "加载中" : "加载更早的消息"}
+              {older === "error" ? "Couldn't load. Click to retry" : older === "loading" ? "Loading…" : "Load earlier messages"}
             </button>
           )}
           {empty && <EmptyConversation identity={statusAgent} />}
@@ -203,7 +203,7 @@ export const MessageList = memo(function MessageList({
       {/* 往上翻了：“回到底部”浮在输入框上方一点、消息列水平正中（照 t3code 的 Scroll to end）；消息区高度不变，文字照常滚动。回到底部就收起，贴底接着贴 */}
       {away && (
         <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
-          <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="回到底部" title="回到底部" onClick={scrollToBottom}>
+          <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>
             <ChevronDown aria-hidden="true" />
           </Button>
         </div>

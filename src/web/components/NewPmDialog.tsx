@@ -105,12 +105,12 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
       <DialogBody>
         <SettingsGroup>
           {deviceRow}
-          <SettingsRow label="名字" error={nameProblem}>
+          <SettingsRow label="Name" error={nameProblem}>
             {(id) => (
               <Input id={id} value={name} autoFocus autoComplete="off" className="w-60" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
             )}
           </SettingsRow>
-          <SettingsRow label="主文件夹" error={pickError}>
+          <SettingsRow label="Main folder" error={pickError}>
             {(id) => (
               <>
                 <Input
@@ -118,36 +118,36 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
                   value={folder}
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="可选"
+                  placeholder="Optional"
                   className="w-60 min-w-0"
                   onChange={(e) => setFolder(e.target.value)}
                 />
                 {canPick && (
                   <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
                     {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
-                    选择…
+                    Choose…
                   </Button>
                 )}
               </>
             )}
           </SettingsRow>
         </SettingsGroup>
-        <SettingsGroup title="工作方式">
-          <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
+        <SettingsGroup title="Mode">
+          <ModeRows label="Mode" value={mode} onChange={setMode} disabled={busy} />
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
           <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
-            更多设置
+            More settings
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3 grid gap-6">
-            <SettingsGroup label="模型">
+            <SettingsGroup label="Model">
               <AgentRows value={agent} onChange={setAgent} disabled={busy} />
             </SettingsGroup>
-            <SettingsGroup title="性格设定">
+            <SettingsGroup title="Persona">
               <Textarea
-                aria-label="性格设定"
-                placeholder="可选"
+                aria-label="Persona"
+                placeholder="Optional"
                 rows={4}
                 className="block max-h-[60vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0"
                 value={persona}
@@ -155,7 +155,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
               />
               {personaTooLong && (
                 <div className="px-4 py-2.5">
-                  <RowError>性格设定太长</RowError>
+                  <RowError>Persona is too long</RowError>
                 </div>
               )}
             </SettingsGroup>
@@ -170,7 +170,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
       <DialogFooter>
         <Button type="submit" disabled={!canSubmit}>
           {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          {busy ? "Creating…" : "创建"}
+          {busy ? "Creating…" : "Create"}
         </Button>
       </DialogFooter>
     </DialogForm>
@@ -193,7 +193,7 @@ export function NewPmDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="新建项目经理">
+      <DialogContent title="New project manager">
         <DevicePicker devices={devices} defaultDevice={defaultDevice} onCreated={onCreated} />
       </DialogContent>
     </Dialog>
@@ -213,7 +213,7 @@ function DevicePicker({
   const device = devices.find((d) => d.key === key) ?? devices[0]!;
   const deviceRow =
     devices.length > 1 ? (
-      <SettingsRow label="设备">
+      <SettingsRow label="Device">
         {(id) => (
           <Select id={id} variant="plain" value={device.key} onChange={(e) => setKey(e.target.value)}>
             {devices.map((d) => (

@@ -57,11 +57,11 @@ describe("按类型选渲染方式", () => {
     show(file("说明.md", { mime: "text/markdown" }));
     expect(await screen.findByRole("heading", { level: 1, name: "标题" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 }).closest("[data-preview-markdown]")!.className).toContain("max-w-[72ch]");
-    await user.click(screen.getByRole("button", { name: "源码" }));
+    await user.click(screen.getByRole("button", { name: "Source" }));
     expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
     await waitFor(() => expect(highlight).toHaveBeenCalledWith(textBody, "markdown"));
     expect(document.querySelector("[data-preview-code]")).toHaveTextContent("# 标题");
-    await user.click(screen.getByRole("button", { name: "渲染" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     expect(await screen.findByRole("heading", { level: 1, name: "标题" })).toBeInTheDocument();
   });
 
@@ -94,15 +94,15 @@ describe("按类型选渲染方式", () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     show(file("a.json"));
-    await user.click(await screen.findByRole("button", { name: "复制" }));
+    await user.click(await screen.findByRole("button", { name: "Copy" }));
     expect(writeText).toHaveBeenCalledWith('{"a":1}');
-    expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("大文本：超过 1 MB 只取前 1 MB（Range 请求），写明只显示前 1 MB；服务端不理 Range 也只显示前 1 MB", async () => {
     textBody = "a".repeat(MAX_PREVIEW_TEXT_BYTES + 500);
     show(file("big.txt", { size: MAX_PREVIEW_TEXT_BYTES + 500 }));
-    await screen.findByText(/只显示前 1 MB/);
+    await screen.findByText(/showing the first 1 MB/);
     expect(calls[0]!.headers.range).toBe(`bytes=0-${MAX_PREVIEW_TEXT_BYTES - 1}`);
     await waitFor(() => expect(document.querySelector("[data-preview-code] .line")!.textContent!.trimEnd().length).toBe(MAX_PREVIEW_TEXT_BYTES));
   });
@@ -123,7 +123,7 @@ describe("按类型选渲染方式", () => {
     expect(table.querySelector("thead th")!.className).toContain("sticky");
     expect(table.closest("[data-preview-table]")!.className).toContain("overflow-auto");
     expect(within(table).getAllByRole("row")).toHaveLength(MAX_PREVIEW_CSV_ROWS + 1);
-    expect(screen.getByText("共 2500 行，只显示前 1000 行")).toBeInTheDocument();
+    expect(screen.getByText("2500 rows, showing the first 1000")).toBeInTheDocument();
     expect(calls[0]!.headers.range).toBeUndefined();
   });
 
@@ -132,7 +132,7 @@ describe("按类型选渲染方式", () => {
     show(file("t.tsv"));
     const table = await screen.findByRole("table");
     expect(within(table).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1", "2"]);
-    expect(screen.getByText("共 1 行")).toBeInTheDocument();
+    expect(screen.getByText("1 row")).toBeInTheDocument();
   });
 
   it("PDF：iframe 放浏览器自带的查看器，地址带 ?inline=1，不加 sandbox 属性（加了 Chrome 渲染不出）", () => {
@@ -170,71 +170,71 @@ describe("按类型选渲染方式", () => {
   it("其他类型：只有文件信息和按钮，不发请求", () => {
     show(file("a.zip", { size: 2048 }));
     expect(screen.getByText("2.0 KB")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /在 Finder 中显示/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Show in Finder/ })).toBeInTheDocument();
     expect(calls).toEqual([]);
   });
 
   it("读文件失败：写原因", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
     show(file("a.txt"));
-    expect(await screen.findByText(/读不了这个文件/)).toBeInTheDocument();
+    expect(await screen.findByText(/Can't read this file/)).toBeInTheDocument();
   });
 });
 
 describe("三个按钮", () => {
   it("下载：链接到文件，带 download", () => {
     show(file("报告.pdf"));
-    const link = screen.getByRole("link", { name: /下载/ });
+    const link = screen.getByRole("link", { name: /Download/ });
     expect(link).toHaveAttribute("href", API_PATHS.sentFile(ID, "报告.pdf"));
     expect(link).toHaveAttribute("download", "报告.pdf");
   });
 
   it("在 Finder 中显示、用默认程序打开：POST 对应接口", async () => {
     show(file("报告.pdf"));
-    await user.click(screen.getByRole("button", { name: /在 Finder 中显示/ }));
-    await user.click(screen.getByRole("button", { name: /用默认程序打开/ }));
+    await user.click(screen.getByRole("button", { name: /Show in Finder/ }));
+    await user.click(screen.getByRole("button", { name: /^Open$/ }));
     expect(calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual([API_PATHS.sentFileAction(5, 0, "reveal"), API_PATHS.sentFileAction(5, 0, "open")]);
   });
 
   it("上传的附件：走附件接口", async () => {
     show(file("a.pdf", { target: { kind: "upload", id: ID } }));
-    await user.click(screen.getByRole("button", { name: /用默认程序打开/ }));
+    await user.click(screen.getByRole("button", { name: /^Open$/ }));
     expect(calls.at(-1)!.url).toBe(API_PATHS.attachmentAction(ID, "open"));
   });
 
   it("不在白名单里的类型（.sh、.py、.terminal、没有扩展名）：“用默认程序打开”点不了，“在 Finder 中显示”可以；白名单里的都能点", async () => {
     for (const name of ["run.sh", "a.py", "a.terminal", "a.fileloc", "noext"]) {
       const { unmount } = show(file(name));
-      expect(screen.getByRole("button", { name: /用默认程序打开/ }), name).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^Open$/ }), name).toBeDisabled();
       unmount();
     }
     for (const name of ["a.pdf", "A.DOCX", "a.txt"]) {
       const { unmount } = show(file(name));
-      expect(screen.getByRole("button", { name: /用默认程序打开/ }), name).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Open$/ }), name).toBeEnabled();
       unmount();
     }
     show(file("run.sh"));
-    await user.click(screen.getByRole("button", { name: /在 Finder 中显示/ }));
+    await user.click(screen.getByRole("button", { name: /Show in Finder/ }));
     expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/reveal"))).toBe(true);
   });
 
   it("服务端拒绝：把原因写出来", async () => {
     actionReply = { status: 403, body: { error: "这个类型打开可能会直接运行，只能在 Finder 中显示" } };
     show(file("tool.pdf"));
-    await user.click(screen.getByRole("button", { name: /用默认程序打开/ }));
+    await user.click(screen.getByRole("button", { name: /^Open$/ }));
     expect(await screen.findByText("这个类型打开可能会直接运行，只能在 Finder 中显示")).toBeInTheDocument();
   });
 
   it("用的是副本时说一声", async () => {
     actionReply = { body: { target: "copy" } };
     show(file("a.pdf"));
-    await user.click(screen.getByRole("button", { name: /在 Finder 中显示/ }));
-    expect(await screen.findByText("原文件已经不在了，显示的是发出时存的副本")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Show in Finder/ }));
+    expect(await screen.findByText("The original file is gone. Showing the copy saved when it was sent")).toBeInTheDocument();
   });
 
   it("没有 target（找不到对应的消息）：只有下载", () => {
     show(file("a.pdf", { target: null }));
-    expect(screen.getByRole("link", { name: /下载/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Download/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Finder/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /默认程序/ })).toBeNull();
   });
@@ -245,7 +245,7 @@ describe("三个按钮", () => {
         <FilePreview file={file("a.pdf")} open onOpenChange={() => {}} />
       </ServerInfoProvider>,
     );
-    expect(screen.getByRole("link", { name: /下载/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Download/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Finder/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /默认程序/ })).toBeNull();
   });
@@ -253,7 +253,7 @@ describe("三个按钮", () => {
   it("标题是文件名，关闭按钮在", () => {
     show(file("报告.pdf"));
     expect(screen.getByRole("dialog", { name: "报告.pdf" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "关闭" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   });
 });

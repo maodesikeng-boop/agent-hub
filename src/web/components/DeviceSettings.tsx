@@ -34,8 +34,8 @@ const TUNNEL_STATE_SPECS: Record<TunnelState, { text: string; canRetry: boolean 
   connecting: { text: "Connecting…", canRetry: false },
   connected: { text: "Connected", canRetry: false },
   retrying: { text: "Retrying…", canRetry: true },
-  auth_failed: { text: "密钥被拒绝", canRetry: true },
-  hostkey_mismatch: { text: "服务器指纹变了", canRetry: true },
+  auth_failed: { text: "Key rejected", canRetry: true },
+  hostkey_mismatch: { text: "Server fingerprint changed", canRetry: true },
 };
 
 function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: boolean) => void }) {
@@ -67,7 +67,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
     >
       <div className="flex min-h-9 items-center gap-2">
         <Input
-          aria-label="设备名"
+          aria-label="Device name"
           value={name}
           autoFocus
           autoComplete="off"
@@ -82,11 +82,11 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
           }}
         />
         <Button type="button" variant="outline" size="sm" onClick={() => onDone(false)}>
-          取消
+          Cancel
         </Button>
         <Button type="submit" size="sm" disabled={clean === null || busy}>
           {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          保存
+          Save
         </Button>
       </div>
       {(problem ?? error) && <RowError error={problem ?? error ?? undefined} />}
@@ -140,7 +140,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
             {!info.self && info.transport && info.transport.kind !== "local" && (
               <span>{PEER_TRANSPORT_SPECS[info.transport.kind].label}</span>
             )}
-            {info.self ? <span>本机</span> : <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />}
+            {info.self ? <span>This computer</span> : <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />}
           </span>
         }
       >
@@ -148,20 +148,20 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
           confirming ? (
             <>
               <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
-                取消
+                Cancel
               </Button>
               <Button size="sm" disabled={busy} onClick={() => void remove(info.id)}>
                 {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-                确认移除
+                Remove
               </Button>
             </>
           ) : (
             <span className="-mr-2 flex items-center gap-1">
-              <Button variant="ghost" size="icon-sm" aria-label={`给 ${info.name} 改名`} onClick={() => setRenaming(true)}>
+              <Button variant="ghost" size="icon-sm" aria-label={`Rename ${info.name}`} onClick={() => setRenaming(true)}>
                 <Pencil aria-hidden="true" />
               </Button>
               {!info.self && (
-                <Button variant="ghost" size="icon-sm" aria-label={`移除 ${info.name}`} onClick={() => setConfirming(true)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Remove ${info.name}`} onClick={() => setConfirming(true)}>
                   <Trash2 aria-hidden="true" />
                 </Button>
               )}
@@ -190,8 +190,8 @@ function InvitePanel() {
     }
   };
   return (
-    <SettingsGroup title="邀请别的设备">
-      <SettingsRow label="邀请码" error={error}>
+    <SettingsGroup title="Invite a computer">
+      <SettingsRow label="Invite code" error={error}>
         {(id) =>
           invite ? (
             <span id={id} className="font-mono text-body select-all">
@@ -200,16 +200,16 @@ function InvitePanel() {
           ) : (
             <Button id={id} size="sm" variant="outline" disabled={busy} onClick={() => void create()}>
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              生成
+              Generate
             </Button>
           )
         }
       </SettingsRow>
       {invite && (
-        <SettingsRow label="本机网址" wide>
+        <SettingsRow label="This computer's URL" wide>
           {(id) => (
             <span id={id} className="truncate font-mono text-minor text-muted-foreground select-all" title={invite.url ?? undefined}>
-              {invite.url ?? "还没装 Tailscale"}
+              {invite.url ?? "Tailscale isn't installed"}
             </span>
           )}
         </SettingsRow>
@@ -247,17 +247,17 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
         void submit();
       }}
     >
-      <SettingsGroup title="添加设备">
-        <SettingsRow label="网址">
+      <SettingsGroup title="Add a computer">
+        <SettingsRow label="URL">
           {(id) => <Input id={id} value={url} autoComplete="off" spellCheck={false} placeholder="https://…ts.net" className="w-60" onChange={(e) => setUrl(e.target.value)} />}
         </SettingsRow>
-        <SettingsRow label="邀请码" error={error}>
+        <SettingsRow label="Invite code" error={error}>
           {(id) => <Input id={id} value={code} autoComplete="off" spellCheck={false} className="w-60 font-mono" onChange={(e) => setCode(e.target.value)} />}
         </SettingsRow>
         <div className="flex justify-end px-4 py-2.5">
           <Button type="submit" size="sm" disabled={!ready}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-            添加
+            Add
           </Button>
         </div>
       </SettingsGroup>
@@ -285,7 +285,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
   return (
     <div data-testid="tunnel-row">
       <SettingsRow
-        label="中心隧道"
+        label="Hub tunnel"
         error={error}
         detail={<span title={tunnel.detail ?? undefined}>{spec.text}</span>}
       >
@@ -293,7 +293,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
           spec.canRetry ? (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => void retry()}>
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              重试
+              Retry
             </Button>
           ) : null
         }
@@ -311,7 +311,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
 
-  const command = `node ${repoDir ?? "~/agent-hub"}/src/tunnel/main.ts join -i ~/.ssh/<密钥> ubuntu@<服务器IP>`;
+  const command = `node ${repoDir ?? "~/agent-hub"}/src/tunnel/main.ts join -i ~/.ssh/<key> ubuntu@<server-ip>`;
   const ready = code.trim() !== "" && !busy;
 
   const copy = () => {
@@ -344,18 +344,18 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
         void submit();
       }}
     >
-      <SettingsGroup title="连到中心">
+      <SettingsGroup title="Connect to hub">
         <SettingsRow
-          label="终端命令"
+          label="Terminal command"
           detail={<code className="block break-all font-mono text-minor select-all">{command}</code>}
         >
           {(id) => (
             <Button id={id} type="button" variant="outline" size="sm" onClick={copy}>
-              {copied ? "已复制" : "复制"}
+              {copied ? "Copied" : "Copy"}
             </Button>
           )}
         </SettingsRow>
-        <SettingsRow label="连接码" error={error}>
+        <SettingsRow label="Connection code" error={error}>
           {(id) => (
             <>
               <Input
@@ -369,7 +369,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
               />
               <Button type="submit" disabled={!ready}>
                 {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-                连接
+                Connect
               </Button>
             </>
           )}
@@ -433,9 +433,9 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
   };
 
   return (
-    <CollapsibleGroup title="公网入口" summary={entry.enabled ? "On" : "Off"} defaultOpen={entry.enabled || entry.hostname !== null}>
+    <CollapsibleGroup title="Public access" summary={entry.enabled ? "On" : "Off"} defaultOpen={entry.enabled || entry.hostname !== null}>
       <SettingsRow
-        label="公网域名"
+        label="Public domain"
         detail={
           entry.enabled && entry.hostname ? (
             <span className="font-mono text-minor select-all">{`https://${entry.hostname}`}</span>
@@ -450,7 +450,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               value={hostname}
               autoComplete="off"
               spellCheck={false}
-              placeholder="如 tokyo.tailnet.ts.net"
+              placeholder="e.g. tokyo.tailnet.ts.net"
               className="w-60 font-mono"
               onChange={(e) => setHostname(e.target.value)}
             />
@@ -461,19 +461,19 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               onClick={() => void toggle()}
             >
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {entry.enabled ? "关闭" : "开启"}
+              {entry.enabled ? "Turn off" : "Turn on"}
             </Button>
           </>
         )}
       </SettingsRow>
       {entry.enabled && (
         <SettingsRow
-          label="Funnel 命令"
+          label="Funnel command"
           detail={<code className="block break-all font-mono text-minor select-all">{entry.funnelCommand}</code>}
         >
           {(id) => (
-            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "已复制" : "复制命令"} onClick={copy}>
-              {copied ? "已复制" : "复制命令"}
+            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "Copied" : "Copy command"} onClick={copy}>
+              {copied ? "Copied" : "Copy command"}
             </Button>
           )}
         </SettingsRow>
@@ -507,11 +507,11 @@ export function ComputersSection({ devices, tunnel, repoDir, onChanged }: Omit<D
     <>
       <div className="grid gap-3">
         <SettingsGroup
-          title="你的电脑"
+          title="This computer"
           action={
             <span className="-mr-3 flex items-center gap-1">
               <PanelButton panel="tunnel" current={panel} onToggle={toggle}>
-                连到中心
+                Connect to hub
               </PanelButton>
             </span>
           }
@@ -525,20 +525,20 @@ export function ComputersSection({ devices, tunnel, repoDir, onChanged }: Omit<D
       </div>
       <div className="grid gap-3">
         <SettingsGroup
-          title="已连上的电脑"
+          title="Connected computers"
           action={
             <span className="-mr-3 flex items-center gap-1">
               <PanelButton panel="invite" current={panel} onToggle={toggle}>
-                邀请
+                Invite
               </PanelButton>
               <PanelButton panel="add" current={panel} onToggle={toggle}>
-                添加
+                Add
               </PanelButton>
             </span>
           }
         >
           {others.length === 0 ? (
-            <p className="px-4 py-3 text-body text-muted-foreground">还没有别的电脑</p>
+            <p className="px-4 py-3 text-body text-muted-foreground">No other computers yet</p>
           ) : (
             others.map((device) => <DeviceRow key={device.key} device={device} onChanged={onChanged} />)
           )}

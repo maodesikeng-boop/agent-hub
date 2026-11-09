@@ -159,20 +159,20 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
 
   return (
     <>
-      <SettingsGroup label="手机扫码登录">
-        <SettingsRow label="在手机上登录" error={linkError}>
+      <SettingsGroup label="Sign in on phone">
+        <SettingsRow label="Sign in on phone" error={linkError}>
           {(id) => (
             <Button
               id={id}
               variant="ghost"
               size="sm"
-              aria-label={link === null ? "显示二维码" : "隐藏"}
+              aria-label={link === null ? "Show QR code" : "Hide"}
               disabled={linkBusy}
               className="-mr-3"
               onClick={() => (link === null ? linkMutation.mutate() : setLink(null))}
             >
               {linkBusy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {link === null ? "显示二维码" : "隐藏"}
+              {link === null ? "Show QR code" : "Hide"}
             </Button>
           )}
         </SettingsRow>
@@ -180,14 +180,14 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
           <div className="flex flex-col items-center gap-3 px-4 py-4">
             {expired ? (
               <>
-                <p className="text-body text-muted-foreground">已过期</p>
+                <p className="text-body text-muted-foreground">Expired</p>
                 <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => linkMutation.mutate()}>
-                  重新生成
+                  Regenerate
                 </Button>
               </>
             ) : (
               <>
-                <QrCode text={link.url} label="登录二维码" className="size-40 rounded-xl" />
+                <QrCode text={link.url} label="Sign-in QR code" className="size-40 rounded-xl" />
                 <p className="text-body text-muted-foreground tabular-nums">{formatCountdown(link.expiresAt - now)}</p>
               </>
             )}
@@ -195,13 +195,13 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
         )}
       </SettingsGroup>
       <CollapsibleGroup
-        title="已登录的浏览器"
-        summary={sessions === null ? undefined : `${sessions.length} 个`}
+        title="Signed-in browsers"
+        summary={sessions === null ? undefined : String(sessions.length)}
         defaultOpen={hasPending || loadError !== null}
       >
         {sessions === null && loadError === null && (
           <div className="flex min-h-13 items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="加载中" />
+            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Loading" />
           </div>
         )}
         {loadError !== null && (
@@ -219,9 +219,9 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             const KindIcon = KIND_ICONS[userAgentKind(session.userAgent)];
             const detail = (
               <span className="inline-flex items-center gap-3">
-                {session.current && <span>这个浏览器</span>}
-                {pending && <span>待批准</span>}
-                {session.viaPublic && <span>经公网</span>}
+                {session.current && <span>This browser</span>}
+                {pending && <span>Pending approval</span>}
+                {session.viaPublic && <span>Via public access</span>}
                 <span>{ago}</span>
               </span>
             );
@@ -230,28 +230,28 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
                 {(id) =>
                   pending ? (
                     <span className="-mr-3 flex items-center gap-1">
-                      <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => exitMutation.mutate(session)}>
-                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}拒绝
+                      <Button variant="ghost" size="sm" aria-label="Deny" disabled={busy !== null} onClick={() => exitMutation.mutate(session)}>
+                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Deny
                       </Button>
-                      <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => approveMutation.mutate(session)}>
-                        {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}允许
+                      <Button id={id} variant="ghost" size="sm" aria-label="Allow" disabled={busy !== null} onClick={() => approveMutation.mutate(session)}>
+                        {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Allow
                       </Button>
                     </span>
                   ) : confirming ? (
                     <span className="-mr-3 flex items-center gap-1">
                       <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
-                        取消
+                        Cancel
                       </Button>
                       <Button
                         id={id}
                         variant="ghost"
                         size="sm"
-                        aria-label="确认退出"
+                        aria-label="Confirm sign out"
                         disabled={busy !== null}
                         className="text-danger hover:text-danger"
                         onClick={() => exitMutation.mutate(session)}
                       >
-                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
+                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Sign out
                       </Button>
                     </span>
                   ) : (
@@ -259,32 +259,32 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
                       id={id}
                       variant="ghost"
                       size="sm"
-                      aria-label={`退出 ${name}`}
+                      aria-label={`Sign out ${name}`}
                       disabled={busy !== null}
                       className="-mr-3"
                       onClick={() => (session.current ? setConfirmingSelf(true) : exitMutation.mutate(session))}
                     >
-                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}退出
+                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Sign out
                     </Button>
                   )
                 }
               </SettingsRow>
             );
           })}
-        <SettingsRow label="所有浏览器" error={allError}>
+        <SettingsRow label="All browsers" error={allError}>
           {(id) => (
             <Button
               id={id}
               variant="ghost"
               size="sm"
-              aria-label={confirmingAll ? "确认全部退出" : "全部退出"}
+              aria-label={confirmingAll ? "Confirm sign out all" : "Sign out all"}
               disabled={busy !== null}
               className={confirmingAll ? "-mr-3 text-danger hover:text-danger" : "-mr-3"}
               onClick={() => (confirmingAll ? exitAllMutation.mutate() : setConfirmingAll(true))}
               onBlur={() => setConfirmingAll(false)}
             >
               {busy === "all" && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {confirmingAll ? "确认全部退出" : "全部退出"}
+              {confirmingAll ? "Confirm sign out all" : "Sign out all"}
             </Button>
           )}
         </SettingsRow>

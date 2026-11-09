@@ -83,10 +83,10 @@ function deferred<T>() {
 }
 
 function nav() {
-  return screen.getByRole("navigation", { name: "对话列表" });
+  return screen.getByRole("navigation", { name: "Conversations" });
 }
 function log() {
-  return screen.getByRole("log", { name: "消息" });
+  return screen.getByRole("log", { name: "Messages" });
 }
 
 /**
@@ -213,7 +213,7 @@ describe("那一行", () => {
   });
 });
 
-describe("左栏", () => {
+describe("Sidebar", () => {
   it("不显示 Worker 的对话", async () => {
     await boot();
     expect(within(nav()).getAllByRole("button")).toHaveLength(1);
@@ -296,9 +296,9 @@ describe("点开 Worker", () => {
     const ws = await boot();
     await user.click(workerButton());
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } })));
-    const status = screen.getByRole("status", { name: "状态" });
+    const status = screen.getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Running command");
-    await user.click(screen.getByRole("button", { name: "停止" }));
+    await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
@@ -320,8 +320,8 @@ describe("点开 Worker", () => {
         }),
       ),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Retrying 5/10");
-    await user.click(screen.getByRole("button", { name: "停止" }));
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Retrying 5/10");
+    await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
@@ -331,10 +331,10 @@ describe("点开 Worker", () => {
     const ws = await boot();
     await user.click(workerButton());
     push(ws, sessionChange(11, makeSession({ sessionId: 2, conversationId: 30, status: "idle", activity: "preparing" })));
-    const status = screen.getByRole("status", { name: "状态" });
+    const status = screen.getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Running setup");
     expect(status).toHaveAttribute("data-busy", "true");
-    await user.click(screen.getByRole("button", { name: "停止" }));
+    await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/30/stop");
   });
@@ -362,7 +362,7 @@ describe("点开 Worker", () => {
     );
     api.older = () => ({ status: 200, body: { messages: [makeMessage({ id: 5, conversationId: 30, workerId: 3, text: "早先的话" })], hasMore: false } });
     await user.click(workerButton());
-    await user.click(screen.getByRole("button", { name: "加载更早的消息" }));
+    await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
     await waitFor(() => expect(screen.getByText("早先的话")).toBeInTheDocument());
     const call = api.callsTo("GET", /\/messages$/)[0];
     expect(call?.path).toBe("/api/conversations/30/messages");
@@ -380,7 +380,7 @@ describe("点开 Worker", () => {
       }),
     );
     await user.click(workerButton());
-    expect(screen.getByText("还没有消息")).toBeInTheDocument();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
   });
 
   it("找不到这个 Worker 的对话：写出来，能回去", async () => {
@@ -391,8 +391,8 @@ describe("点开 Worker", () => {
       }),
     );
     await user.click(workerButton());
-    expect(screen.getByText("找不到这个 Piece 的对话")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    expect(screen.getByText("Piece not found")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
   });
 
@@ -400,7 +400,7 @@ describe("点开 Worker", () => {
     const user = userEvent.setup();
     await boot();
     await user.click(workerButton());
-    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
     await user.click(workerButton());
     await user.click(within(nav()).getByRole("button", { name: /小林/ }));
@@ -418,7 +418,7 @@ describe("点开 Worker", () => {
       }),
     );
     await user.click(workerButton());
-    expect(within(screen.getByRole("region", { name: "Piece 修 X" })).getByText("只读")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Piece 修 X" })).getByText("Read-only")).toBeInTheDocument();
   });
 });
 
@@ -428,7 +428,7 @@ describe("左下角的额度", () => {
   const quota = (five: number, seven: number) => limit({ five_hour: win(five), seven_day: win(seven, { resetsAt: 1_793_646_000 }) });
   const withQuota = (rateLimit: RateLimitInfo) =>
     withWorker({ sessions: [makeSession({ conversationId: 1, pmId: 1, rateLimit, lastEventAt: 5 })] });
-  const badge = () => screen.getByRole("button", { name: /额度/ });
+  const badge = () => screen.getByRole("button", { name: /usage/i });
   // 样例里的重置时间（1_793_619_600、1_793_646_000）要在“现在”之后，不然窗口算已重置
   const T_BEFORE_RESET = (1_793_619_600 - 3600) * 1000;
   beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now: T_BEFORE_RESET }));
@@ -454,18 +454,18 @@ describe("左下角的额度", () => {
       expect(ask()).toBe(0);
       await user.click(badge());
       const gemini = await screen.findByRole("region", { name: "Antigravity · Gemini" });
-      expect(within(gemini).getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "25");
-      expect(within(gemini).getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "50");
-      expect(within(screen.getByRole("region", { name: "Antigravity · Claude 和 GPT" })).getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "90");
+      expect(within(gemini).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
+      expect(within(gemini).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "50");
+      expect(within(screen.getByRole("region", { name: "Antigravity · Claude 和 GPT" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "90");
       expect(ask()).toBe(1);
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 37%");
+      expect(badge()).toHaveAccessibleName("5h usage 37%");
       expect(badge().textContent).toBe("");
     });
 
     it("没有别家的事件额度、有 agy 会话：按钮也在（只显示圆环图标，不带旁白文字），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
       const user = userEvent.setup();
       await boot(agyWorker());
-      expect(badge()).toHaveAccessibleName("额度");
+      expect(badge()).toHaveAccessibleName("Usage");
       expect(badge().textContent).toBe("");
       const gate = deferred<{ status: number; body: unknown }>();
       api.quota = () => gate.promise;
@@ -487,7 +487,7 @@ describe("左下角的额度", () => {
       });
       await user.click(badge());
       await screen.findByRole("region", { name: "Antigravity · Gemini" });
-      expect(badge()).toHaveAccessibleName("额度已用完");
+      expect(badge()).toHaveAccessibleName("Usage limit reached");
       expect(badge().textContent).toBe("");
       expect(badge()).toHaveClass("text-danger");
     });
@@ -503,7 +503,7 @@ describe("左下角的额度", () => {
 
     it("没有任何额度来源（没有事件额度、没有 agy 会话）：不显示按钮，也不问", async () => {
       await boot();
-      expect(screen.queryByRole("button", { name: /额度/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /usage/i })).not.toBeInTheDocument();
       expect(ask()).toBe(0);
     });
   });
@@ -516,14 +516,14 @@ describe("左下角的额度", () => {
 
   it("还没有额度数据：不显示", async () => {
     await boot();
-    expect(screen.queryByRole("button", { name: /额度/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /usage/i })).not.toBeInTheDocument();
   });
 
   it("只渲染干净的圆环图标按钮（无旁白文字），保留 aria-label 与 title；和设置按钮同一种 ghost icon-sm 按钮，不是胶囊底色", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
     expect(badge().textContent).toBe("");
-    expect(badge()).toHaveAccessibleName("5 小时额度已用 37%");
-    expect(badge()).toHaveAttribute("title", "5 小时额度已用 37%");
+    expect(badge()).toHaveAccessibleName("5h usage 37%");
+    expect(badge()).toHaveAttribute("title", "5h usage 37%");
     expect(badge()).not.toHaveClass("text-warn-foreground", "text-danger");
     expect(badge()).toHaveClass("size-8", "text-muted-foreground", "hover:bg-accent");
     expect(badge().className).not.toMatch(/(^|\s)bg-/);
@@ -533,7 +533,7 @@ describe("左下角的额度", () => {
   it("推 session.status 带来新的额度：跟着变", async () => {
     const ws = await boot(withQuota(quota(0.37, 0.59)));
     push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
-    expect(badge()).toHaveAccessibleName("5 小时额度已用 40%");
+    expect(badge()).toHaveAccessibleName("5h usage 40%");
     expect(badge().textContent).toBe("");
   });
 
@@ -553,35 +553,35 @@ describe("左下角的额度", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       clock(RESET - 600);
       await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 99%");
+      expect(badge()).toHaveAccessibleName("5h usage 99%");
       expect(badge()).toHaveClass("text-warn-foreground");
       advance(599);
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 99%");
+      expect(badge()).toHaveAccessibleName("5h usage 99%");
       advance(2);
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
+      expect(badge()).toHaveAccessibleName("5h usage 0%");
       expect(badge()).not.toHaveClass("text-warn-foreground");
       await user.click(badge());
-      expect(screen.getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "0");
-      expect(screen.getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "31");
-      expect(screen.getAllByText(/重置/)).toHaveLength(1); // 只剩 7 天窗口的
+      expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "0");
+      expect(screen.getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "31");
+      expect(screen.getAllByText(/Resets/)).toHaveLength(1); // 只剩 7 天窗口的
     });
 
     it("重置后新的 rate_limit_event 一到（新 resetsAt）：马上显示新窗口的值", async () => {
       clock(RESET - 600);
       const ws = await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
       advance(601);
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
+      expect(badge()).toHaveAccessibleName("5h usage 0%");
       push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: rl(0.03, NEXT_RESET), lastEventAt: 9 })));
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 3%");
+      expect(badge()).toHaveAccessibleName("5h usage 3%");
     });
 
     it("用完了（已用完）：到了 resetsAt 自己恢复正常状态", async () => {
       clock(RESET - 600);
       await boot(withQuota(rl(1, RESET, "rejected")));
-      expect(badge()).toHaveAccessibleName("额度已用完");
+      expect(badge()).toHaveAccessibleName("Usage limit reached");
       expect(badge().textContent).toBe("");
       advance(601);
-      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
+      expect(badge()).toHaveAccessibleName("5h usage 0%");
       expect(badge()).not.toHaveClass("text-danger");
     });
   });
@@ -599,8 +599,8 @@ describe("左下角的额度", () => {
 
   it("用完了（rejected）：只渲染红色圆环图标，不显示“额度用完”或百分比旁白文字", async () => {
     await boot(withQuota(limit({ five_hour: win(1, { status: "rejected" }) }, "rejected")));
-    expect(badge()).toHaveAccessibleName("额度已用完");
-    expect(badge()).toHaveAttribute("title", "额度已用完");
+    expect(badge()).toHaveAccessibleName("Usage limit reached");
+    expect(badge()).toHaveAttribute("title", "Usage limit reached");
     expect(badge().textContent).toBe("");
     expect(badge()).toHaveClass("text-danger");
   });
@@ -612,50 +612,50 @@ describe("左下角的额度", () => {
     await user.click(badge());
     const group = screen.getByRole("region", { name: "Claude" });
     expect(within(group).getByRole("heading", { name: "Claude" })).toBeInTheDocument();
-    const five = within(group).getByRole("progressbar", { name: "5 小时额度" });
+    const five = within(group).getByRole("progressbar", { name: "5h usage" });
     expect(five).toHaveAttribute("aria-valuenow", "37");
-    expect(within(group).getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "59");
+    expect(within(group).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "59");
     expect(within(group).getByText("37%")).toBeInTheDocument();
     expect(within(group).getByText("59%")).toBeInTheDocument();
-    expect(within(group).getByText(`${formatQuotaReset(1_793_619_600)} 重置`)).toBeInTheDocument();
-    expect(within(group).getByText(`${formatQuotaReset(1_793_646_000)} 重置`)).toBeInTheDocument();
+    expect(within(group).getByText(`Resets ${formatQuotaReset(1_793_619_600)}`)).toBeInTheDocument();
+    expect(within(group).getByText(`Resets ${formatQuotaReset(1_793_646_000)}`)).toBeInTheDocument();
     expect(within(group).getAllByRole("progressbar")).toHaveLength(2);
   });
 
   it("只有一个窗口有数据：标识显示它，小窗口里只有一行", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ seven_day: win(0.2) })));
-    expect(badge()).toHaveAccessibleName("7 天额度已用 20%");
+    expect(badge()).toHaveAccessibleName("7d usage 20%");
     expect(badge().textContent).toBe("");
     await user.click(badge());
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);
-    expect(screen.getByRole("progressbar", { name: "7 天额度" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "7d usage" })).toBeInTheDocument();
   });
 
   it("脏数据：超过 1 夹成 100%，负数夹成 0%，没有重置时间的不显示重置", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ five_hour: win(1.7, { resetsAt: 0 }), seven_day: win(-0.3) })));
-    expect(badge()).toHaveAccessibleName("5 小时额度已用 100%");
+    expect(badge()).toHaveAccessibleName("5h usage 100%");
     expect(badge()).toHaveClass("text-warn-foreground");
     await user.click(badge());
-    expect(screen.getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "100");
-    expect(screen.getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "0");
-    expect(screen.getAllByText(/重置/)).toHaveLength(1);
+    expect(screen.getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getAllByText(/Resets/)).toHaveLength(1);
   });
 });
 
 describe("右栏（等你确定和 Worker，推开对话）", () => {
-  const toggle = () => screen.queryByRole("button", { name: /右栏/ });
-  const rail = () => screen.queryByRole("complementary", { name: "右栏" });
+  const toggle = () => screen.queryByRole("button", { name: /side panel/ });
+  const rail = () => screen.queryByRole("complementary", { name: "Side panel" });
   const workerGroup = () => within(rail()!).getByRole("region", { name: /^Pieces/ });
-  /** 每个 Worker 行第一行的字：标题 + 状态。 */
+  /** 每个 Piece 行（只有一行）的字：标题 + 状态；收工的只有标题。 */
   const rows = () =>
     within(workerGroup())
       .getAllByRole("button")
-      .filter((b) => b.querySelector('[data-testid="worker-meta"]') !== null)
-      .map((b) => b.querySelector('[data-testid="worker-meta"]')!.previousElementSibling!.textContent);
+      .filter((b) => b.closest("li") !== null)
+      .map((b) => b.textContent);
   /** 最下面的“已收工 N ›”一行；没有收工的 Worker 就没有。 */
-  const endedToggle = () => within(workerGroup()).queryByRole("button", { name: /^已收工/ });
+  const endedToggle = () => within(workerGroup()).queryByRole("button", { name: /^Completed/ });
   /** 小林（对话 1）派了 30 修 X、31 写文档、32 查日志；老马（对话 2）派了 40 老马的活。 */
   const crowd = (over: Partial<StateSnapshot> = {}) =>
     withWorker({
@@ -713,7 +713,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
         ],
       }),
     );
-    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["等你确定", "Pieces"]);
+    expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Needs You", "Pieces"]);
     cleanup();
     await boot(crowd());
     expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Pieces"]);
@@ -723,7 +723,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const user = userEvent.setup();
     await boot(crowd());
     const header = screen.getByRole("heading", { name: "小林" }).closest("header")!;
-    expect(within(rail()!).getByRole("button", { name: "收起右栏" })).toBe(toggle());
+    expect(within(rail()!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
     expect(within(header).queryByRole("button", { name: /右栏/ })).not.toBeInTheDocument();
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
     expect(toggle()).toHaveClass("text-foreground", "hover:bg-accent");
@@ -731,11 +731,11 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(toggle()).toHaveTextContent("");
     await user.click(toggle()!);
     expect(rail()).not.toBeInTheDocument();
-    expect(within(header).getByRole("button", { name: "展开右栏" })).toBe(toggle());
+    expect(within(header).getByRole("button", { name: "Show side panel" })).toBe(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle()!);
     expect(rail()).toBeInTheDocument();
-    expect(within(rail()!).getByRole("button", { name: "收起右栏" })).toBe(toggle());
+    expect(within(rail()!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
   });
 
   it("手动收起后记住：刷新后还是收着；之后来了新的 Worker 也不自己弹开", async () => {
@@ -784,15 +784,15 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle"]);
     expect(within(workerGroup()).queryByRole("button", { name: /查日志/ })).not.toBeInTheDocument();
     const toggleEnded = endedToggle()!;
-    expect(toggleEnded).toHaveTextContent("已收工 1");
+    expect(toggleEnded).toHaveTextContent("Completed 1");
     expect(toggleEnded).toHaveAttribute("aria-expanded", "false");
     expect(within(toggleEnded).getByText("1")).toHaveClass("tabular-nums");
     expect(workerGroup().querySelector("[data-group-body] > div")!.lastElementChild).toBe(toggleEnded);
     await user.click(toggleEnded);
     expect(toggleEnded).toHaveAttribute("aria-expanded", "true");
-    expect(rows()).toEqual(["修 XWorking…", "写文档Idle", "查日志Ended"]);
-    expect(within(workerGroup()).getByRole("button", { name: /查日志/ })).toHaveClass("opacity-60");
-    expect(within(workerGroup()).getByRole("button", { name: /修 X/ })).not.toHaveClass("opacity-60");
+    expect(rows()).toEqual(["修 XWorking…", "写文档Idle", "查日志"]);
+    expect(within(within(workerGroup()).getByRole("button", { name: /查日志/ })).getByText("查日志")).toHaveClass("opacity-60");
+    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).not.toHaveClass("opacity-60");
     await user.click(toggleEnded);
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle"]);
     expect(within(workerGroup()).getByText("Working…")).toHaveClass("text-primary");
@@ -817,7 +817,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     );
     expect(rows()).toEqual(["修 XWorking…"]);
     expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Pieces"]);
-    expect(endedToggle()).toHaveTextContent("已收工 30");
+    expect(endedToggle()).toHaveTextContent("Completed 30");
   });
 
   it("打开一个已收工的 Worker 的对话：已收工那一行自动展开，当前那行看得见", async () => {
@@ -856,9 +856,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       }),
     );
     expect(rows()).toEqual(["修 XIdle"]);
-    expect(endedToggle()).toHaveTextContent("已收工 2");
+    expect(endedToggle()).toHaveTextContent("Completed 2");
     await userEvent.setup().click(endedToggle()!);
-    expect(rows()).toEqual(["修 XIdle", "查日志Ended", "写文档Ended"]);
+    expect(rows()).toEqual(["修 XIdle", "查日志", "写文档"]);
   });
 
   describe("模型、思考程度、token", () => {
@@ -870,21 +870,20 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
           makeSession({ sessionId: 3, conversationId: 30, status: "running", activity: "working", ...over }),
         ],
       });
-    const metaOf = () => within(workerGroup()).getByRole("button", { name: /修 X/ }).querySelector('[data-testid="worker-meta"]')!;
+    /** 右栏那一行的悬停提示里，标题后面的几项。 */
+    const metaOf = () => within(workerGroup()).getByRole("button", { name: /修 X/ }).getAttribute("title")!.split("\n").slice(1);
 
-    it("第二行：模型的显示名（模型目录里的名字）、思考程度、现在的对话长度（158K context 这样，不是累计 token）；不写厂商，也没有“·”；小一号灰字", async () => {
+    it("右栏的行只有一行：模型的显示名（模型目录里的名字）、思考程度、现在的对话长度收在悬停提示里；不写厂商，也没有“·”", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
       const row = within(workerGroup()).getByRole("button", { name: /修 X/ });
-      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
-      expect(row).not.toHaveTextContent("Claude Code");
-      expect(row).not.toHaveTextContent("·");
-      expect(metaOf()).toHaveClass("text-small", "leading-4.5", "text-muted-foreground");
-      expect(within(row).getByText("117K context")).toHaveClass("tabular-nums");
+      expect(metaOf()).toEqual(["Sonnet", "high", "117K context"]);
+      expect(row).toHaveTextContent(/^修 XWorking…$/);
+      expect(row.getAttribute("title")).not.toMatch(/Claude Code|·/);
     });
 
-    it("默认模型显示“默认”；没设思考程度就不显示这一项", async () => {
+    it("默认模型显示“默认”；没设思考程度就不列这一项", async () => {
       await boot(withAgent({ vendor: "claude", model: null, effort: null, usage }));
-      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["默认", "117K context"]);
+      expect(metaOf()).toEqual(["Default", "117K context"]);
     });
 
     it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），就写它，不写“默认”", async () => {
@@ -895,27 +894,30 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       render(<App />);
       await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
       act(() => FakeWebSocket.last.open());
-      await waitFor(() => expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Opus 5.5", "117K context"]));
+      await waitFor(() => expect(metaOf()).toEqual(["Opus 5.5", "117K context"]));
     });
 
-    it("老服务端没带厂商、模型、用量：不显示模型，对话长度显示“—”而不是 0", async () => {
+    it("老服务端没带厂商、模型、用量：提示里只有标题，不放“—”也不放 0", async () => {
       await boot(withAgent({}));
-      expect([...metaOf().children].map((c) => c.textContent)).toEqual(["—"]);
+      expect(metaOf()).toEqual([]);
     });
 
-    it("悬停 context 显示明细（累计的各项，英文单位）", async () => {
-      await boot(withAgent({ vendor: "claude", model: "sonnet", usage }));
-      expect(within(workerGroup()).getByText("117K context")).toHaveAttribute(
+    it("点进 Piece 的对话：顶栏右边一行小字写模型、思考程度、对话长度；悬停 context 看明细（累计的各项，英文单位）", async () => {
+      await boot(withAgent({ vendor: "claude", model: "sonnet", effort: "high", usage }));
+      await userEvent.setup().click(within(workerGroup()).getByRole("button", { name: /修 X/ }));
+      const meta = within(screen.getByRole("region", { name: "Piece 修 X" })).getByTestId("piece-meta");
+      expect([...meta.children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
+      expect(meta).toHaveClass("text-xs", "text-muted-foreground", "gap-3");
+      expect(within(meta).getByText("117K context")).toHaveAttribute(
         "title",
         ["Context 117,000 tokens", "Cumulative so far", "Input 392 tokens", "Cache read 47,000,000 tokens", "Cache write 448,354 tokens", "Output 154,408 tokens"].join("\n"),
       );
     });
 
-    it("标题和模型超长时截断，不撑破", async () => {
+    it("标题超长时截断，不撑破", async () => {
       await boot(withAgent({ vendor: "claude", model: "sonnet", usage }));
       const row = within(workerGroup()).getByRole("button", { name: /修 X/ });
       expect(within(row).getByText("修 X")).toHaveClass("truncate");
-      expect(within(row).getByText("Sonnet")).toHaveClass("truncate");
     });
   });
 
@@ -928,7 +930,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(window.location.hash).toBe("#/w/30");
     expect(rail()).toBeInTheDocument();
     expect(row(/修 X/)).toHaveAttribute("aria-current", "true");
-    expect(row(/修 X/)).toHaveClass("bg-sidebar-active");
+    // 选中是当前项目经理水果色的极淡果冻底
+    expect(row(/修 X/)).toHaveClass("bg-jelly");
     // 选中只靠底色，标题字重不变
     expect(within(row(/修 X/)).getByText("修 X")).not.toHaveClass("font-semibold");
     expect(row(/写文档/)).not.toHaveAttribute("aria-current");
@@ -955,13 +958,13 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const ws = await boot(crowd());
     push(ws, sessionChange(11, makeSession({ sessionId: 4, conversationId: 31, status: "running", activity: "working" })));
     expect(rows()).toEqual(["修 XWorking…", "写文档Working…"]);
-    expect(endedToggle()).toHaveTextContent("已收工 1");
+    expect(endedToggle()).toHaveTextContent("Completed 1");
     push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 50, conversationId: 1, line: { workerConversationId: 30, event: "ended" } })));
     expect(rows()).toEqual(["写文档Working…"]);
-    expect(endedToggle()).toHaveTextContent("已收工 2");
+    expect(endedToggle()).toHaveTextContent("Completed 2");
     await userEvent.setup().click(endedToggle()!);
-    expect(rows()).toEqual(["写文档Working…", "修 XEnded", "查日志Ended"]);
-    expect(within(workerGroup()).getByRole("button", { name: /修 X/ })).toHaveClass("opacity-60");
+    expect(rows()).toEqual(["写文档Working…", "修 X", "查日志"]);
+    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).toHaveClass("opacity-60");
   });
 
   it("第一个 Worker 一派出来，右栏自己展开", async () => {
@@ -980,11 +983,11 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       const user = userEvent.setup();
       await boot(onlyEnded());
       expect(rail()).not.toBeInTheDocument();
-      expect(within(header()).getByRole("button", { name: "展开右栏" })).toBeInTheDocument();
+      expect(within(header()).getByRole("button", { name: "Show side panel" })).toBeInTheDocument();
       await user.click(toggle()!);
       expect(rail()).toBeInTheDocument();
-      expect(endedToggle()).toHaveTextContent("已收工 1");
-      expect(within(rail()!).getByRole("button", { name: "收起右栏" })).toBe(toggle());
+      expect(endedToggle()).toHaveTextContent("Completed 1");
+      expect(within(rail()!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
       await user.click(toggle()!);
       expect(rail()).not.toBeInTheDocument();
       expect(localStorage.getItem("agent-hub.rightRail")).toBe("closed");
@@ -1007,7 +1010,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       cleanup();
       const ws2 = await boot(onlyEnded());
       push(ws2, messageChange(12, "message.created", makeMessage({ id: 9, conversationId: 1, text: "用 A 还是 B？", meta: { needsUser: true } })));
-      expect(within(rail()!).getByRole("region", { name: /^等你确定/ })).toBeInTheDocument();
+      expect(within(rail()!).getByRole("region", { name: /^Needs You/ })).toBeInTheDocument();
     });
 
     it("在干活的 Worker 都收工了：右栏自己收起，开关还在", async () => {
@@ -1025,11 +1028,11 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     await boot(crowd());
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
-    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
-    expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
+    expect(within(sidebar).queryByRole("searchbox", { name: "Search" })).toBeNull();
     // 顶栏没有 PanelLeft 抽屉按钮
-    expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Conversations" })).not.toBeInTheDocument();
     // 列表居中显示各项目经理头像按钮（size-13 rounded-2xl）
     const avatarButtons = within(nav()).getAllByRole("button");
     expect(avatarButtons.length).toBeGreaterThan(0);
@@ -1038,18 +1041,18 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     }
     // 点头像切换对话
     await user.click(within(nav()).getByRole("button", { name: /老马/ }));
-    expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("bg-sidebar-active");
+    expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("bg-jelly");
     // 底部 3 个 icon-sm 按钮：新建项目经理、QuotaPopover、设置
-    expect(within(sidebar).getByRole("button", { name: "新建项目经理" })).toHaveClass("touch-target");
-    expect(within(sidebar).getByRole("button", { name: "设置" })).toHaveClass("touch-target");
+    expect(within(sidebar).getByRole("button", { name: "New project manager" })).toHaveClass("touch-target");
+    expect(within(sidebar).getByRole("button", { name: "Settings" })).toHaveClass("touch-target");
   });
 
   it("宽屏为 300px 完整左栏带搜索框，没有拉左栏的抽屉按钮", async () => {
     await boot(crowd());
-    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     expect(sidebar).toHaveClass("w-75");
-    expect(within(sidebar).getByRole("searchbox", { name: "搜索" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
+    expect(within(sidebar).getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Conversations" })).not.toBeInTheDocument();
   });
 
   it("太窄（720px 以下）：右栏不自动展开；点开关出现在顶栏下面（main 里、把消息往下推），不浮着；点一行打开 Worker 就收起", async () => {
@@ -1061,7 +1064,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     const main = screen.getByRole("main");
     expect(main).toContainElement(rail());
     // 这一档右栏在顶栏下面，开关留在顶栏右边
-    expect(within(screen.getByRole("heading", { name: "小林" }).closest("header")!).getByRole("button", { name: "收起右栏" })).toBe(toggle());
+    expect(within(screen.getByRole("heading", { name: "小林" }).closest("header")!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
     expect(rail()!.className).not.toMatch(/fixed|absolute/);
     expect(rail()).toHaveClass("max-h-[40dvh]", "border-b");
     expect(within(main).getByRole("textbox")).toBeVisible();
@@ -1154,7 +1157,7 @@ describe("selectors", () => {
       }),
     );
     expect(quotaUsage(state, 0)).toEqual([
-      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", short: "5h", percent: 30, resetsAt: 7, warning: false }] },
+      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", short: "5h", percent: 30, resetsAt: 7, warning: false }] },
     ]);
     expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
   });
@@ -1172,8 +1175,8 @@ describe("selectors", () => {
         name: "Antigravity · Gemini",
         exhausted: false,
         windows: [
-          { key: "five_hour", label: "5 小时", short: "5h", percent: 85, resetsAt: 5_000, warning: true },
-          { key: "seven_day", label: "7 天", short: "7d", percent: 10, resetsAt: 9_000, warning: false },
+          { key: "five_hour", short: "5h", percent: 85, resetsAt: 5_000, warning: true },
+          { key: "seven_day", short: "7d", percent: 10, resetsAt: 9_000, warning: false },
         ],
       },
     ]);
@@ -1205,8 +1208,8 @@ describe("selectors", () => {
       }),
     );
     expect(quotaUsage(state, 0)).toEqual([
-      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", label: "5 小时", short: "5h", percent: 6, resetsAt: 1_794_070_800, warning: false }] },
-      { id: "codex", name: "Codex", exhausted: false, windows: [{ key: "thirty_day", label: "30 天", short: "30d", percent: 19, resetsAt: 1_796_193_545, warning: false }] },
+      { id: "claude", name: "Claude", exhausted: false, windows: [{ key: "five_hour", short: "5h", percent: 6, resetsAt: 1_794_070_800, warning: false }] },
+      { id: "codex", name: "Codex", exhausted: false, windows: [{ key: "thirty_day", short: "30d", percent: 19, resetsAt: 1_796_193_545, warning: false }] },
     ]);
   });
 
@@ -1301,8 +1304,8 @@ describe("selectors", () => {
         name: "Codex",
         exhausted: true,
         windows: [
-          { key: "five_hour", label: "5 小时", short: "5h", percent: 100, resetsAt: 1_794_219_196, warning: true },
-          { key: "seven_day", label: "7 天", short: "7d", percent: 16, resetsAt: 1_794_805_996, warning: false },
+          { key: "five_hour", short: "5h", percent: 100, resetsAt: 1_794_219_196, warning: true },
+          { key: "seven_day", short: "7d", percent: 16, resetsAt: 1_794_805_996, warning: false },
         ],
       },
     ]);
@@ -1328,18 +1331,18 @@ describe("selectors", () => {
 
     it("重置前：照常显示 99%、带重置时间、快用完", () => {
       const state = stateOf([makeSession({ sessionId: 18, conversationId: 30, lastEventAt: 100, rateLimit: rl(0.99, RESET, 0.31, "allowed_warning") })]);
-      expect(five(state, before)).toEqual({ key: "five_hour", label: "5 小时", short: "5h", percent: 99, resetsAt: RESET, warning: true });
+      expect(five(state, before)).toEqual({ key: "five_hour", short: "5h", percent: 99, resetsAt: RESET, warning: true });
     });
 
     it("过了 resetsAt 还没有新事件：5 小时窗口算已重置，显示 0%、没有重置时间、不标快用完；7 天窗口不受影响", () => {
       const state = stateOf([makeSession({ sessionId: 18, conversationId: 30, lastEventAt: 100, rateLimit: rl(0.99, RESET, 0.31, "allowed_warning") })]);
-      expect(five(state, after)).toEqual({ key: "five_hour", label: "5 小时", short: "5h", percent: 0, resetsAt: null, warning: false });
+      expect(five(state, after)).toEqual({ key: "five_hour", short: "5h", percent: 0, resetsAt: null, warning: false });
       expect(quotaUsage(state, after)[0]!.windows.find((w) => w.key === "seven_day")).toMatchObject({ percent: 31, resetsAt: SEVEN_DAY_RESET });
     });
 
     it("重置后第一条新事件到了（新 resetsAt、utilization 0）：显示新窗口的值和新的重置时间", () => {
       const state = stateOf([makeSession({ sessionId: 1, conversationId: 1, lastEventAt: 200, rateLimit: rl(0, NEXT_RESET, 0.31) })]);
-      expect(five(state, after)).toEqual({ key: "five_hour", label: "5 小时", short: "5h", percent: 0, resetsAt: NEXT_RESET, warning: false });
+      expect(five(state, after)).toEqual({ key: "five_hour", short: "5h", percent: 0, resetsAt: NEXT_RESET, warning: false });
     });
 
     it("旧会话（重置前的 99%，lastEventAt 更新）和新会话（重置后的 3%）并存：取新窗口的，不按 lastEventAt 选", () => {
@@ -1414,12 +1417,12 @@ describe("在 Worker 页面直接对它说话", () => {
     const ws = await boot(snapshot);
     await user.click(workerButton());
     const section = screen.getByRole("region", { name: "Piece 修 X" });
-    return { user, ws, section, box: () => within(section).getByRole("textbox", { name: "输入消息" }) };
+    return { user, ws, section, box: () => within(section).getByRole("textbox", { name: "Message" }) };
   }
 
   it("有和项目经理页面一样的输入框；回车发到 Worker 的对话，先乐观显示成我的气泡，真消息到了不重复", async () => {
     const { user, ws, section, box } = await openWorker();
-    expect(box()).toHaveAttribute("placeholder", "给 修 X 发消息");
+    expect(box()).toHaveAttribute("placeholder", "Message 修 X…");
     const gate = deferred<{ status: number; body: unknown }>();
     api.postMessage = () => gate.promise;
     await user.type(box(), "顺便改 README{Enter}");
@@ -1466,7 +1469,7 @@ describe("在 Worker 页面直接对它说话", () => {
   it("草稿按对话分开：Worker 页面打了一半回到项目经理，项目经理的输入框是空的；再回来草稿还在", async () => {
     const { user, box } = await openWorker();
     await user.type(box(), "写了一半");
-    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(within(screen.getByRole("region", { name: "小林" })).getByRole("textbox")).toHaveValue("");
     await user.click(workerButton());
     expect(box()).toHaveValue("写了一半");
@@ -1494,9 +1497,9 @@ describe("在 Worker 页面直接对它说话", () => {
     push(ws, messageChange(12, "message.created", makeWorkerLine({ id: 20, conversationId: 1, line: { event: "ended" } })));
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
     // 只剩收工的 Worker：右栏自己收起，点开关才看
-    await userEvent.setup().click(screen.getByRole("button", { name: "展开右栏" }));
-    const aside = screen.getByRole("complementary", { name: "右栏" });
-    expect(within(aside).getByRole("button", { name: /^已收工 1/ })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Show side panel" }));
+    const aside = screen.getByRole("complementary", { name: "Side panel" });
+    expect(within(aside).getByRole("button", { name: /^Completed 1/ })).toBeInTheDocument();
   });
 
   it("建 worktree 失败（worktree_failed 那一行）：不显示输入框", async () => {
@@ -1517,24 +1520,24 @@ describe("在 Worker 页面直接对它说话", () => {
       }),
     );
     expect(box()).toBeDisabled();
-    expect(box()).toHaveAttribute("placeholder", "修 X 还在准备");
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(box()).toHaveAttribute("placeholder", "修 X is setting up…");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     push(ws, messageChange(11, "message.updated", makeMessage({ id: 10, conversationId: 30, sender: "pm", status: "delivered", text: "任务：修 X" })));
     expect(box()).toBeEnabled();
-    expect(box()).toHaveAttribute("placeholder", "给 修 X 发消息");
+    expect(box()).toHaveAttribute("placeholder", "Message 修 X…");
   });
 
   it("和项目经理页面一样能带文件：回形针选文件，先上传、再发到 Worker 的对话；草稿和待发文件按对话分开", async () => {
     const { user, section, box } = await openWorker();
     await user.type(box(), "看这个");
-    await user.upload(within(section).getByLabelText("选择文件") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
-    expect(within(within(section).getByRole("list", { name: "待发送的文件" })).getByText("日志.txt")).toBeInTheDocument();
+    await user.upload(within(section).getByLabelText("Choose files") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
+    expect(within(within(section).getByRole("list", { name: "Files to send" })).getByText("日志.txt")).toBeInTheDocument();
     // 回到项目经理：它的输入框上没有这份待发文件
-    await user.click(screen.getByRole("button", { name: "返回 小林" }));
-    expect(within(screen.getByRole("region", { name: "小林" })).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
+    expect(within(screen.getByRole("region", { name: "小林" })).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument();
     await user.click(workerButton());
     const again = screen.getByRole("region", { name: "Piece 修 X" });
-    await user.click(within(again).getByRole("button", { name: "发送" }));
+    await user.click(within(again).getByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
     const call = api.callsTo("POST", /messages$/)[0]!;
     expect(call.path).toBe("/api/conversations/30/messages");
@@ -1544,14 +1547,14 @@ describe("在 Worker 页面直接对它说话", () => {
 
   it("切对话不重复发：Worker 页面带文件发出去以后回到项目经理再发，只多一条发给项目经理的、不带那份文件，也不再上传", async () => {
     const { user, section, box } = await openWorker();
-    await user.upload(within(section).getByLabelText("选择文件") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
+    await user.upload(within(section).getByLabelText("Choose files") as HTMLInputElement, [new File(["内容"], "日志.txt", { type: "text/plain" })]);
     await user.type(box(), "看这个{Enter}");
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
-    await waitFor(() => expect(within(section).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "返回 小林" }));
+    await waitFor(() => expect(within(section).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     const pm = screen.getByRole("region", { name: "小林" });
-    expect(within(pm).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
-    await user.type(within(pm).getByRole("textbox", { name: "输入消息" }), "收到了吗{Enter}");
+    expect(within(pm).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument();
+    await user.type(within(pm).getByRole("textbox", { name: "Message" }), "收到了吗{Enter}");
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
     const [toWorker, toPm] = api.callsTo("POST", /messages$/);
     expect(toWorker!.path).toBe("/api/conversations/30/messages");
@@ -1561,8 +1564,8 @@ describe("在 Worker 页面直接对它说话", () => {
     // 再回 Worker：输入框和待发列表是空的
     await user.click(workerButton());
     const again = screen.getByRole("region", { name: "Piece 修 X" });
-    expect(within(again).getByRole("textbox", { name: "输入消息" })).toHaveValue("");
-    expect(within(again).queryByRole("list", { name: "待发送的文件" })).not.toBeInTheDocument();
+    expect(within(again).getByRole("textbox", { name: "Message" })).toHaveValue("");
+    expect(within(again).queryByRole("list", { name: "Files to send" })).not.toBeInTheDocument();
   });
 
   it("还在准备时加文件按钮也不可用", async () => {
@@ -1576,7 +1579,7 @@ describe("在 Worker 页面直接对它说话", () => {
         ],
       }),
     );
-    expect(within(section).getByRole("button", { name: "添加文件" })).toBeDisabled();
+    expect(within(section).getByRole("button", { name: "Add files" })).toBeDisabled();
   });
 
   it("服务端拒收（409，收工那一刻正好发出去）或断网：左边红色感叹号，点了重发", async () => {

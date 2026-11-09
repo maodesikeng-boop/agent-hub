@@ -55,7 +55,7 @@ function push(ws: FakeWebSocket, msg: WsServerMessage) {
 }
 
 function log() {
-  return screen.getByRole("log", { name: "消息" });
+  return screen.getByRole("log", { name: "Messages" });
 }
 
 function bubbles() {
@@ -68,7 +68,7 @@ async function findInLog(text: string) {
 }
 
 function box() {
-  return screen.getByRole("textbox", { name: "输入消息" });
+  return screen.getByRole("textbox", { name: "Message" });
 }
 
 function deferred<T>() {
@@ -93,7 +93,7 @@ describe("首屏", () => {
   it("左栏有项目经理和最后一条消息；点开看到消息，用户的靠右，agent 的靠左带名字", async () => {
     const user = userEvent.setup();
     await boot();
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     const item = within(nav).getByRole("button", { name: /小林/ });
     expect(item).toHaveTextContent("我在，有什么要做的？");
     await user.click(item);
@@ -107,12 +107,12 @@ describe("首屏", () => {
 
   it("没有对话：显示空态", async () => {
     await boot(makeSnapshot({ pms: [], conversations: [] }));
-    expect(screen.getByText("还没有对话")).toBeInTheDocument();
+    expect(screen.getByText("No conversations yet")).toBeInTheDocument();
   });
 
   it("对话里还没有消息：显示空态，输入框照常能用", async () => {
     await boot(makeSnapshot({ conversations: [makeConvSnapshot([])] }));
-    expect(screen.getByText("还没有消息")).toBeInTheDocument();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
     expect(box()).toBeEnabled();
   });
 
@@ -126,10 +126,10 @@ describe("首屏", () => {
     api.install();
     installFakeWebSocket();
     render(<App />);
-    expect(screen.getByText("加载中")).toBeInTheDocument();
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
     gate.resolve();
-    await screen.findByRole("log", { name: "消息" });
-    expect(screen.queryByText("加载中")).not.toBeInTheDocument();
+    await screen.findByRole("log", { name: "Messages" });
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
   it("拉不到数据（服务没开）：显示错误和重试，重试成功后进入首屏", async () => {
@@ -143,12 +143,12 @@ describe("首屏", () => {
     render(<App />);
     expect(await screen.findByText("连不上守护进程")).toBeInTheDocument();
     expect(screen.getByText("看守护进程有没有在跑")).toBeInTheDocument();
-    expect(screen.getByText(/如果服务还没启动，在项目目录下运行 pnpm start/)).toBeInTheDocument();
+    expect(screen.getByText(/If the service isn't running, run pnpm start in the project folder/)).toBeInTheDocument();
     expect(screen.getByText("连不上守护进程")).toHaveAttribute("title", "Failed to fetch");
     expect(FakeWebSocket.instances).toHaveLength(0);
     api.state = () => ({ status: 200, body: defaultSnapshot() });
-    await user.click(screen.getByRole("button", { name: "重试" }));
-    await screen.findByRole("log", { name: "消息" });
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByRole("log", { name: "Messages" });
     expect(screen.queryByText("连不上守护进程")).not.toBeInTheDocument();
   });
 
@@ -159,7 +159,7 @@ describe("首屏", () => {
     installFakeWebSocket();
     render(<App />);
     expect(await screen.findByText("出错了（500）")).toHaveAttribute("title", "boom"); // 英文原文只在悬停的 title 里
-    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });
 
@@ -170,13 +170,13 @@ describe("没登录", () => {
     api.install();
     installFakeWebSocket();
     render(<App />);
-    expect(await screen.findByText("还没有登录。在电脑上打开终端启动时打印的登录链接；手机可到已登录电脑的「设置 → 在手机上登录」扫码")).toBeInTheDocument();
+    expect(await screen.findByText("Not signed in. On your computer, open the sign-in link printed in the terminal at startup. On a phone, scan the code from Settings → Security & Access → Sign in on phone on a signed-in computer")).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 });
 
-describe("发送", () => {
+describe("Send", () => {
   it("输入文字按 Enter：POST 带新的 clientId；消息马上出现，标“Queued”", async () => {
     const user = userEvent.setup();
     await boot();
@@ -224,17 +224,17 @@ describe("发送", () => {
   it("空白文字不发送，发送按钮不可点", async () => {
     const user = userEvent.setup();
     await boot();
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await user.type(box(), "   {Enter}");
     expect(api.callsTo("POST", /messages$/)).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("超过 100 KB：不发送，提示太长", async () => {
     await boot();
     fireEvent.change(box(), { target: { value: "字".repeat(Math.ceil(MAX_MESSAGE_BYTES / 3) + 1) } });
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-    expect(screen.getByText("消息太长")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByText("Message too long")).toBeInTheDocument();
     fireEvent.keyDown(box(), { key: "Enter" });
     expect(api.callsTo("POST", /messages$/)).toHaveLength(0);
   });
@@ -243,7 +243,7 @@ describe("发送", () => {
     const user = userEvent.setup();
     await boot();
     await user.type(box(), "你好呀");
-    await user.click(screen.getByRole("button", { name: "发送" }));
+    await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
   });
 
@@ -348,7 +348,7 @@ describe("发送", () => {
       }),
     );
     await user.type(box(), "写到一半");
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     await user.click(within(nav).getByRole("button", { name: /阿周/ }));
     expect(box()).toHaveValue("");
     await user.click(within(nav).getByRole("button", { name: /小林/ }));
@@ -471,7 +471,7 @@ describe("消息状态", () => {
     );
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3, conversationId: 2, text: "阿周的新消息" })));
     expect(within(log()).queryByText("阿周的新消息")).not.toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     expect(within(nav).getByRole("button", { name: /阿周/ })).toHaveTextContent("阿周的新消息");
   });
 });
@@ -518,24 +518,24 @@ describe("消息流里的状态和输入框里的停止", () => {
   it("推 session.status 为运行中：消息流里有状态，输入框的发送键变停止，点“停止”发出 POST /stop", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Status" })).not.toBeInTheDocument();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Bash", input: {} } })));
-    const line = screen.getByRole("status", { name: "状态" });
+    const line = screen.getByRole("status", { name: "Status" });
     expect(line).toHaveTextContent("Running command");
-    expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "停止" }));
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
     expect(api.callsTo("POST", /stop$/)[0]?.path).toBe("/api/conversations/1/stop");
     // 真界面服务对“声明 JSON 却没有请求体”回 400，假后端照着做；停止请求要被接受
-    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeDisabled());
-    expect(screen.queryByText("停止失败")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled());
+    expect(screen.queryByText("Couldn't stop")).not.toBeInTheDocument();
   });
 
   it("状态条已不存在：状态只在消息列表里（这一轮最下面），输入框旁边没有", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "thinking" } })));
-    const status = screen.getByRole("status", { name: "状态" });
+    const status = screen.getByRole("status", { name: "Status" });
     expect(log()).toContainElement(status);
     expect(status.closest("[data-work-line]")).not.toBeNull();
     expect(screen.getAllByRole("status")).toHaveLength(1);
@@ -547,10 +547,10 @@ describe("消息流里的状态和输入框里的停止", () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
     await user.type(box(), "补一句");
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
   });
 
   it("agent 这一轮还没出回复：消息列表底部先出“头像 名字”和一行状态，这一轮结束就消失", async () => {
@@ -559,33 +559,33 @@ describe("消息流里的状态和输入框里的停止", () => {
       conversations: [makeConvSnapshot([makeUserMessage({ id: 1, text: "查一下", status: "processing", createdAt: 5_000 })], { conversation: { id: 1, pmId: 1, title: "小林" } })],
     }));
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working", step: { type: "thinking" } })));
-    const turn = within(log()).getByRole("status", { name: "状态" }).closest("[data-turn]") as HTMLElement;
+    const turn = within(log()).getByRole("status", { name: "Status" }).closest("[data-turn]") as HTMLElement;
     expect(turn.querySelector("[data-slot='agent-head']")).toHaveTextContent(/^小林$/);
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Thinking");
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Thinking");
     push(ws, sessionChange(12, makeSession({ status: "running", activity: "working", step: { type: "tool_use", name: "Skill", input: { skill: "frontend-rules" } } })));
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Loading skill frontend-rules");
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Loading skill frontend-rules");
     push(ws, messageChange(13, "message.created", makeMessage({ id: 2, text: "好的", createdAt: 6_000 })));
-    expect(within(log()).getByText("好的").closest("[data-turn]")).toContainElement(screen.getByRole("status", { name: "状态" }));
+    expect(within(log()).getByText("好的").closest("[data-turn]")).toContainElement(screen.getByRole("status", { name: "Status" }));
     push(ws, sessionChange(14, makeSession({ status: "running", activity: "idle" })));
-    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Status" })).not.toBeInTheDocument();
   });
 
   it("没有 step（老服务端）时只写“Working”", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Working");
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Working");
   });
 
   it("首屏就在干活：消息流里的状态和停止按钮直接有", async () => {
     await boot(makeSnapshot({ conversations: [makeConvSnapshot([])], sessions: [makeSession({ activity: "working" })] }));
-    expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
   });
 
   it("正在停：显示“Stopping”，停止按钮不可点", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "stopping" })));
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Stopping");
-    expect(screen.getByRole("button", { name: "停止" })).toBeDisabled();
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Stopping");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
   });
 
   it("点停止后到服务端确认前，按钮不能再点第二次", async () => {
@@ -594,8 +594,8 @@ describe("消息流里的状态和输入框里的停止", () => {
     const gate = deferred<{ status: number }>();
     api.stop = () => gate.promise;
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
-    await user.click(screen.getByRole("button", { name: "停止" }));
-    expect(screen.getByRole("button", { name: "停止" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
     gate.resolve({ status: 202 });
     await act(async () => {});
     expect(api.callsTo("POST", /stop$/)).toHaveLength(1);
@@ -606,24 +606,24 @@ describe("消息流里的状态和输入框里的停止", () => {
     const ws = await boot();
     api.stop = () => ({ status: 500, body: { error: "boom" } });
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
-    await user.click(screen.getByRole("button", { name: "停止" }));
-    expect(await screen.findByText("停止失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Couldn't stop")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
 
   it("回到空闲：状态没有了，停止键变回发送键", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ status: "running", activity: "working" })));
     push(ws, sessionChange(12, makeSession({ status: "idle", activity: "idle" })));
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Status" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
   it("别的对话的会话状态不影响当前对话", async () => {
     const ws = await boot();
     push(ws, sessionChange(11, makeSession({ sessionId: 7, conversationId: 99, activity: "working" })));
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
 });
 
@@ -634,7 +634,7 @@ describe("网络出错重试", () => {
       activity: "working",
       apiRetry: { attempt, maxRetries: 10, retryAt: Date.now() + 30_000, errorStatus: null, error: "unknown", ...over },
     });
-  const statusLine = () => screen.getByRole("status", { name: "状态" });
+  const statusLine = () => screen.getByRole("status", { name: "Status" });
 
   it("session.status 带重试信息：状态行写“Retrying 3/10”和倒计时，停止照常能点", async () => {
     const user = userEvent.setup();
@@ -643,7 +643,7 @@ describe("网络出错重试", () => {
     expect(statusLine()).toHaveTextContent("Retrying 3/10");
     expect(statusLine()).toHaveTextContent(/in \d+s/);
     expect(statusLine()).not.toHaveTextContent("Working");
-    await user.click(screen.getByRole("button", { name: "停止" }));
+    await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.callsTo("POST", /stop$/)).toHaveLength(1));
   });
 
@@ -701,7 +701,7 @@ describe("网络出错重试", () => {
       "title",
       "没发出去：网络断了，稍后重试，点击重发\nAPI Error: Unable to connect to API (ConnectionRefused)",
     );
-    expect(screen.queryByRole("status", { name: "状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Status" })).not.toBeInTheDocument();
   });
 });
 
@@ -719,7 +719,7 @@ describe("等额度", () => {
         }),
       ),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Usage limit reached");
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Usage limit reached");
   });
 
   it("额度状态是 allowed：不显示“Usage limit reached”", async () => {
@@ -744,8 +744,8 @@ describe("等额度", () => {
         sessions: [makeSession({ rateLimit: { status: "rejected", resetsAt: null, windows: {} } })],
       }),
     );
-    expect(screen.getByRole("status", { name: "状态" })).toHaveTextContent("Usage limit reached");
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Usage limit reached");
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
 });
 
@@ -906,7 +906,7 @@ describe("补不齐", () => {
     const ws = await boot();
     api.state = () => ({ status: 401, body: { error: "unauthorized" } });
     push(ws, { type: "resync" });
-    expect(await screen.findByText(/还没有登录/)).toBeInTheDocument();
+    expect(await screen.findByText(/Not signed in/)).toBeInTheDocument();
   });
 
   it("收到不认识的对话里的消息：重新拉快照", async () => {
@@ -923,7 +923,7 @@ describe("补不齐", () => {
       }),
     });
     push(ws, messageChange(11, "message.created", makeMessage({ id: 9, conversationId: 2 })));
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     expect(await within(nav).findByRole("button", { name: /阿周/ })).toBeInTheDocument();
   });
 
@@ -1022,7 +1022,7 @@ describe("往上滚加载更早的消息", () => {
       expect.stringContaining("第 102 条"),
     ]);
     // 没有更多了：不再请求，按钮消失
-    expect(screen.queryByRole("button", { name: "加载更早的消息" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
     fireEvent.scroll(log(), { target: { scrollTop: 0 } });
     expect(api.callsTo("GET", /messages$/)).toHaveLength(1);
   });
@@ -1031,9 +1031,9 @@ describe("往上滚加载更早的消息", () => {
     const user = userEvent.setup();
     await boot(pagedSnapshot());
     api.older = () => older([100], true);
-    await user.click(screen.getByRole("button", { name: "加载更早的消息" }));
+    await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
     expect(await screen.findByText("第 100 条")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "加载更早的消息" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load earlier messages" })).toBeInTheDocument();
   });
 
   it("加载过程中重复滚动只发一次请求", async () => {
@@ -1053,7 +1053,7 @@ describe("往上滚加载更早的消息", () => {
     await boot(pagedSnapshot());
     api.older = () => ({ status: 500, body: { error: "boom" } });
     fireEvent.scroll(log(), { target: { scrollTop: 0 } });
-    const retry = await screen.findByRole("button", { name: "加载失败，点击重试" });
+    const retry = await screen.findByRole("button", { name: "Couldn\'t load. Click to retry" });
     api.older = () => older([100], false);
     await user.click(retry);
     expect(await screen.findByText("第 100 条")).toBeInTheDocument();
@@ -1111,9 +1111,9 @@ describe("自动滚到底", () => {
     mockLayout(1200, 400);
     push(ws, messageChange(11, "message.created", makeMessage({ id: 3 })));
     expect(log().scrollTop).toBe(100);
-    await user.click(screen.getByRole("button", { name: "回到底部" }));
+    await user.click(screen.getByRole("button", { name: "Scroll to bottom" }));
     expect(log().scrollTop).toBe(1200);
-    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
   });
 
   it("自己发消息时一定滚到底，即使正在往上翻", async () => {
@@ -1144,7 +1144,7 @@ describe("多个对话", () => {
         ],
       }),
     );
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     const items = within(nav).getAllByRole("button");
     expect(items[0]).toHaveTextContent("阿周");
     expect(items[1]).toHaveTextContent("小林");
@@ -1162,7 +1162,7 @@ describe("多个对话", () => {
         ],
       }),
     );
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     expect(within(nav).getByRole("button")).toHaveTextContent("最后的话");
     expect(within(nav).getByRole("button")).not.toHaveTextContent("Bash: ls");
   });
@@ -1174,7 +1174,7 @@ describe("多个对话", () => {
         conversations: [makeConvSnapshot([], { conversation: { id: 3, kind: "assistant", pmId: null, title: "总助" } })],
       }),
     );
-    const nav = screen.getByRole("navigation", { name: "对话列表" });
+    const nav = screen.getByRole("navigation", { name: "Conversations" });
     expect(within(nav).getByRole("button")).toHaveTextContent("总助");
   });
 });

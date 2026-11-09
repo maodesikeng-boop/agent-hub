@@ -556,10 +556,10 @@ describe("定时任务（M6）：快照带上，变化实时更新", () => {
 describe("归档项目经理状态与提醒（pm.removed、formatArchiveRemaining、提醒过滤）", () => {
   it("formatArchiveRemaining：向上取整剩余天数，最少显示 1 天后删除", () => {
     const t0 = 1_000_000;
-    expect(formatArchiveRemaining(t0, t0)).toBe("7 天后删除");
-    expect(formatArchiveRemaining(t0, t0 + 4 * 24 * 60 * 60 * 1000)).toBe("3 天后删除");
-    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS - 1_000)).toBe("1 天后删除");
-    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS + 10_000)).toBe("1 天后删除");
+    expect(formatArchiveRemaining(t0, t0)).toBe("Deletes in 7d");
+    expect(formatArchiveRemaining(t0, t0 + 4 * 24 * 60 * 60 * 1000)).toBe("Deletes in 3d");
+    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS - 1_000)).toBe("Deletes in 1d");
+    expect(formatArchiveRemaining(t0, t0 + PM_ARCHIVE_RETENTION_MS + 10_000)).toBe("Deletes in 1d");
   });
 
   it("applyChange 处理 pm.removed：移除该 PM 及其项目、文件夹、对话、定时任务，不影响其他 PM", () => {

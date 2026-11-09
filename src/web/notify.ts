@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_NAME } from "../shared/names.ts";
 import { WAITING_SETTLE_MS, notificationTag, type ConversationId } from "../shared/index.ts";
 import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
+import { NEEDS_YOU, YOUR_TURN } from "./format.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
 import { listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
@@ -180,7 +181,7 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     const prefix = devices.length > 1 ? `${device.name} · ` : "";
     const tag = `${ref.device === LOCAL_DEVICE ? "" : `${ref.device}:`}${notificationTag(entry.pm?.id ?? null, ref.id)}`;
     try {
-      const notification = new Notification(`${prefix}${entry.name} ${ask === undefined ? "等你" : "等你确定"}`, {
+      const notification = new Notification(`${prefix}${entry.name}: ${ask === undefined ? YOUR_TURN : NEEDS_YOU}`, {
         body: ask === undefined ? previewText(entry) : stripMarkdown(ask),
         tag: ask === undefined ? tag : `ask-${tag}`,
       });

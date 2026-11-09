@@ -6,8 +6,6 @@ import {
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   MAX_PERSONA_BYTES,
-  PM_MODE_LABELS,
-  effortLabel,
   isAgentVendor,
   modelLabel,
   splitModelEffort,
@@ -26,7 +24,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
-import { ACTOR_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
+import { ACTOR_LABELS, DEFAULT_CHOICE, MODE_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -80,17 +78,17 @@ function usePersona(pmId: number, rev: number) {
 }
 
 function describeChange(change: PersonaChange, catalog: ModelCatalog): string {
-  if (change.revertOf !== null) return "撤销了一次修改";
+  if (change.revertOf !== null) return "undid a change";
   const parts: string[] = [];
-  if (change.textBefore !== change.textAfter) parts.push("改了性格设定");
-  if (change.modeBefore !== change.modeAfter) parts.push(`模式改成${PM_MODE_LABELS[change.modeAfter]}`);
-  if (change.vendorBefore !== change.vendorAfter) parts.push(`厂商改成${vendorLabel(change.vendorAfter)}`);
+  if (change.textBefore !== change.textAfter) parts.push("edited the persona");
+  if (change.modeBefore !== change.modeAfter) parts.push(`set mode to ${MODE_LABELS[change.modeAfter]}`);
+  if (change.vendorBefore !== change.vendorAfter) parts.push(`set provider to ${vendorLabel(change.vendorAfter)}`);
   // 老数据里 agy 的模型是带档位的完整 ID：拆成 模型 + 思考程度，各写各的
   const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore);
   const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter);
-  if (before.model !== after.model) parts.push(`模型改成${modelLabel(change.vendorAfter, after.model, catalog)}`);
-  if (before.effort !== after.effort) parts.push(`思考程度改成${effortLabel(after.effort)}`);
-  return parts.join("，") || "改了设置";
+  if (before.model !== after.model) parts.push(`set model to ${after.model === null ? DEFAULT_CHOICE : modelLabel(change.vendorAfter, after.model, catalog)}`);
+  if (before.effort !== after.effort) parts.push(`set effort to ${after.effort ?? DEFAULT_CHOICE}`);
+  return parts.join(", ") || "changed settings";
 }
 
 function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChange; revertable: boolean; busy: boolean; onRevert: () => void }) {
@@ -103,13 +101,13 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
         <div className="min-w-0 flex-1">
           <div className="text-body">
             <span className="font-medium">{ACTOR_LABELS[change.actor]}</span> {describeChange(change, catalog)}
-            {change.reason && <span>：{change.reason}</span>}
+            {change.reason && <span>: {change.reason}</span>}
           </div>
           <div className="text-xs text-muted-foreground tabular-nums">{formatTime(change.createdAt)}</div>
         </div>
         {revertable && (
           <Button variant="outline" size="sm" disabled={busy} onClick={onRevert}>
-            撤销
+            Undo
           </Button>
         )}
       </div>
@@ -117,14 +115,14 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
         <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
-            查看改动
+            View changes
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 grid gap-2 sm:grid-cols-2">
-            {(["改之前", "改之后"] as const).map((label) => (
+            {(["Before", "After"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
                 <pre className="max-h-60 overflow-auto rounded-xl bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
-                  {label === "改之前" ? change.textBefore : change.textAfter}
+                  {label === "Before" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
             ))}
@@ -267,7 +265,7 @@ function PmEditor({
   const textError: ErrorLike | undefined = textMutation.error ? errorText(textMutation.error) : undefined;
   const revertError: ErrorLike | undefined = revertMutation.error
     ? revertMutation.error instanceof ApiError && revertMutation.error.status === 409
-      ? "只能撤销最近一次"
+      ? "Only the latest change can be undone"
       : errorText(revertMutation.error)
     : undefined;
   const saveText = () => textMutation.mutate();
@@ -276,7 +274,7 @@ function PmEditor({
   return (
     <>
       {/* 头部下面第一组，头部就是它的标题，不另写组名 */}
-      <SettingsGroup label="模型">
+      <SettingsGroup label="Model">
         <AgentRows
           value={agent}
           onChange={changeAgent}
@@ -286,14 +284,14 @@ function PmEditor({
           customAction={
             customDirty && (
               <Button onClick={saveCustom}>
-                保存
+                Save
               </Button>
             )
           }
         />
       </SettingsGroup>
-      <SettingsGroup title="工作方式">
-        <ModeRows label="工作方式" value={mode} onChange={(m) => modeSave.save(m, "mode", m === persona.mode ? {} : { mode: m })} />
+      <SettingsGroup title="Mode">
+        <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, "mode", m === persona.mode ? {} : { mode: m })} />
         {modeSave.error && (
           <div className="px-4 py-2.5">
             <RowError error={modeSave.error.info} />
@@ -301,15 +299,15 @@ function PmEditor({
         )}
       </SettingsGroup>
       {folders.length > 0 && (
-        <SettingsGroup title="文件夹">
-          <ul aria-label="文件夹" className="divide-y divide-border">
+        <SettingsGroup title="Folders">
+          <ul aria-label="Folders" className="divide-y divide-border">
             {folders.map((f) => (
               <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-body">{folderName(f.path)}</div>
                   <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
                 </div>
-                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">主文件夹</span>}
+                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
               </li>
             ))}
           </ul>
@@ -317,19 +315,19 @@ function PmEditor({
       )}
       <ScheduleGroup pmId={pm.id} schedules={schedules} />
       <SettingsGroup
-        title="性格设定"
+        title="Persona"
         action={
           textDirty && (
             <Button size="sm" disabled={tooLong || busy !== null} onClick={saveText}>
               {busy === "text" && <Loader2 className="animate-spin" aria-hidden="true" />}
-              保存
+              Save
             </Button>
           )
         }
       >
         <Textarea
-          aria-label="性格设定"
-          placeholder="还没有性格设定"
+          aria-label="Persona"
+          placeholder="No persona yet"
           rows={1}
           className={cn(
             "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
@@ -340,21 +338,21 @@ function PmEditor({
         />
         {(tooLong || textError) && (
           <div className="px-4 py-2.5">
-            {tooLong ? <RowError>性格设定太长</RowError> : textError !== undefined && <RowError error={textError} />}
+            {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
           </div>
         )}
       </SettingsGroup>
       {/* 修改记录会越攒越多：默认收起，标题行带条数，点开才列出来 */}
-      <CollapsibleGroup title="修改记录" summary={`${persona.changes.length} 条`}>
+      <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
         {revertError && (
           <div className="px-4 py-2.5">
             <RowError error={revertError} />
           </div>
         )}
         {persona.changes.length === 0 ? (
-          <p className="px-4 py-3 text-body text-muted-foreground">还没有修改</p>
+          <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
         ) : (
-          <ul aria-label="修改记录" className="divide-y divide-border">
+          <ul aria-label="History" className="divide-y divide-border">
             {persona.changes.map((change) => (
               <ChangeRow
                 key={change.id}
@@ -390,12 +388,12 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
     }
   };
   return (
-    <SettingsGroup label="归档状态">
-      <SettingsRow label="已归档" detail={`${formatArchiveRemaining(archivedAt)}，不会删除你的项目代码文件夹`} error={unarchiveError}>
+    <SettingsGroup label="Archive status">
+      <SettingsRow label="Archived" detail={`${formatArchiveRemaining(archivedAt)}. Your project folder stays untouched`} error={unarchiveError}>
         {() => (
           <Button variant="outline" disabled={unarchiving} onClick={() => void unarchive()}>
             {unarchiving && <Loader2 className="animate-spin" aria-hidden="true" />}
-            {unarchiving ? "Restoring…" : "恢复"}
+            {unarchiving ? "Restoring…" : "Restore"}
           </Button>
         )}
       </SettingsRow>
@@ -442,43 +440,43 @@ function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renew
   };
   const busy = renewing || sending;
   return (
-    <SettingsGroup title="会话">
+    <SettingsGroup title="Session">
       {/* 行名说是什么，按钮说做什么（不重复）；“…”表示点了还要确认。在换的时候是状态，用英文 */}
-      <SettingsRow label="开新会话" detail="项目经理先写交接，聊天记录都在" error={error}>
+      <SettingsRow label="New session" detail="The project manager writes a handoff first. Chat history stays" error={error}>
         {() => (
           <Button variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-            {busy ? "Handing off…" : "开始…"}
+            {busy ? "Handing off…" : "Start…"}
           </Button>
         )}
       </SettingsRow>
-      <SettingsRow label="归档项目经理" detail="停止会话和定时任务，7 天后删除数据" error={archiveError}>
+      <SettingsRow label="Archive project manager" detail="Stops the session and schedules. Data is deleted after 7 days" error={archiveError}>
         {() => (
           <Button variant="outline" disabled={archiving} onClick={() => setConfirmingArchive(true)}>
             {archiving && <Loader2 className="animate-spin" aria-hidden="true" />}
-            {archiving ? "Archiving…" : "归档…"}
+            {archiving ? "Archiving…" : "Archive…"}
           </Button>
         )}
       </SettingsRow>
       <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent title="开新会话？" className="max-w-110">
-          <p>项目经理先写一份交接，写完换一个新会话接着干。聊天记录都还在。</p>
+        <DialogContent title="Start a new session?" className="max-w-110">
+          <p>The project manager writes a handoff, then continues in a fresh session. Your chat history stays.</p>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">取消</Button>
+              <Button variant="outline">Cancel</Button>
             </DialogClose>
-            <Button onClick={() => void confirm()}>开新会话</Button>
+            <Button onClick={() => void confirm()}>New session</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={confirmingArchive} onOpenChange={setConfirmingArchive}>
-        <DialogContent title="归档项目经理？" className="max-w-110">
-          <p>归档后会立即停止当前会话、结束未收工的 Piece 并暂停定时任务。7 天内可随时恢复；7 天后永久删除该项目的聊天与内部数据，不会删除你的项目代码文件夹。</p>
+        <DialogContent title="Archive project manager?" className="max-w-110">
+          <p>Archiving stops the current session, ends unfinished Pieces and pauses schedules. You can restore it within 7 days. After that, its chat and internal data are deleted for good. Your project folder stays untouched.</p>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">取消</Button>
+              <Button variant="outline">Cancel</Button>
             </DialogClose>
-            <Button onClick={() => void confirmArchive()}>归档</Button>
+            <Button onClick={() => void confirmArchive()}>Archive</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -509,11 +507,11 @@ export function PmProfile({
   onBack: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
-  const label = `${pm.name} 的资料`;
+  const label = `${pm.name}'s profile`;
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
       <header data-window-drag className="flex h-16 shrink-0 items-center px-6">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
       </header>
@@ -528,7 +526,7 @@ export function PmProfile({
           {load.phase === "loading" && (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              加载中
+              Loading…
             </div>
           )}
           {load.phase === "error" && (
@@ -537,7 +535,7 @@ export function PmProfile({
                 {errorLine(load.info)}
               </p>
               <Button variant="outline" size="sm" onClick={retry}>
-                重试
+                Retry
               </Button>
             </div>
           )}

@@ -41,7 +41,7 @@ export function Notices({ health, reconnecting, offline = null, listFailed = fal
       {listFailed && (
         <div className={cn(PILL, "bg-muted text-muted-foreground")} role="status" data-severity="info">
           <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
-          <span className="font-semibold">暂时看不到其他设备</span>
+          <span className="font-semibold">Can't see other devices right now</span>
           <span>Retrying…</span>
         </div>
       )}

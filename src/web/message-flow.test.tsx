@@ -115,7 +115,7 @@ describe("一轮回复只出一次头像", () => {
     expect(heads(container)).toHaveLength(1);
     const notice = screen.getByText("项目经理改了性格设定").closest("[data-notice]")!;
     expect(notice.compareDocumentPosition(screen.getByText("改好了")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(notice as HTMLElement).getByRole("button", { name: "撤销" })).toBeInTheDocument();
+    expect(within(notice as HTMLElement).getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 });
 
@@ -125,11 +125,11 @@ describe("正在跑和跑完", () => {
     const lines = workLines(container);
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toHaveTextContent("Worked for");
-    const status = within(lines[0]!).getByRole("status", { name: "状态" });
+    const status = within(lines[0]!).getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Running command...");
     // 在最后一段文字下面
     expect(screen.getByText("派好了").compareDocumentPosition(lines[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     await userEvent.click(within(lines[0]!).getByRole("button"));
     expect(container).toHaveTextContent("Bash: hub worker start");
   });
@@ -350,7 +350,7 @@ describe("系统行", () => {
 
   it("一轮结束后的系统行不并进这一轮：排在复制和时间后面", () => {
     const { container } = list([makeUserMessage({ id: 1, text: "hi" }), makeMessage({ id: 2, text: "好" }), makeSystemMessage({ id: 3, text: "挂上了文件夹" })]);
-    const copy = screen.getByRole("button", { name: "复制" });
+    const copy = screen.getByRole("button", { name: "Copy" });
     expect(copy.compareDocumentPosition(screen.getByText("挂上了文件夹")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(heads(container)).toHaveLength(1);
   });
@@ -402,21 +402,21 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
   });
 });
 
-describe("复制", () => {
+describe("Copy", () => {
   it("每一轮回复下面：复制按钮 + 时间；复制拿到的是这一轮文字的 Markdown 原文", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     list(turn());
-    const copy = screen.getByRole("button", { name: "复制" });
+    const copy = screen.getByRole("button", { name: "Copy" });
     expect(copy.parentElement).toHaveTextContent(/\d{1,2}[:/]\d{1,2}/);
     fireEvent.click(copy);
     expect(writeText).toHaveBeenCalledWith("先派了一个。\n\n**派好了**\n\n- 修登录页");
-    expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("每一轮各有一个复制", () => {
     list([...turn(), makeUserMessage({ id: 8, text: "再来" }), makeMessage({ id: 9, text: "好" })]);
-    expect(screen.getAllByRole("button", { name: "复制" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
   });
 });
 
@@ -437,7 +437,7 @@ describe("老数据、空对话、字号", () => {
     const { container } = list([]);
     const empty = container.querySelector("[data-empty]") as HTMLElement;
     expect(empty).toHaveTextContent("小林");
-    expect(empty).toHaveTextContent("还没有消息");
+    expect(empty).toHaveTextContent("No messages yet");
     expect((empty.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("3rem");
   });
 
@@ -457,7 +457,7 @@ describe("Worker 回复末尾的汇报块", () => {
     const { container } = list([makeMessage({ id: 1, text: raw })]);
     expect(container).not.toHaveTextContent("=== 汇报");
     expect(container.querySelectorAll(".markdown li")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "复制" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     expect(writeText).toHaveBeenCalledWith(raw);
   });
 });

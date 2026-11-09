@@ -18,7 +18,7 @@ import { cn } from "../lib/utils.ts";
 import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
 import { BarButton, CodeBody, CodeView, CopyCodeButton } from "./CodeBlock.tsx";
 
-const TOO_LONG_TEXT = `图表源码太长（超过 ${CHART_MAX_SOURCE_CHARS.toLocaleString("en-US")} 字），没有渲染`;
+const TOO_LONG_TEXT = `Chart source is too long (over ${CHART_MAX_SOURCE_CHARS.toLocaleString("en-US")} characters), not rendered`;
 
 /** 离视口 CHART_VIEWPORT_MARGIN 以内才返回 true，之后一直是 true。没有 IntersectionObserver 的环境当作一直在视口里。 */
 function useNearViewport(ref: { current: Element | null }, enabled: boolean): boolean {
@@ -149,11 +149,11 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
           <span data-chart-lang className="md-code-lang">
             {language}
           </span>
-          <BarButton aria-label="查看源码" aria-pressed={showSource} onClick={() => setShowSource((v) => !v)}>
+          <BarButton aria-label="View source" aria-pressed={showSource} onClick={() => setShowSource((v) => !v)}>
             <ToggleIcon className="size-3.5" />
           </BarButton>
           {ok && !showSource && (
-            <BarButton aria-label="放大" onClick={() => setZoomed(true)}>
+            <BarButton aria-label="Zoom" onClick={() => setZoomed(true)}>
               <Maximize2 className="size-3.5" />
             </BarButton>
           )}
@@ -182,7 +182,7 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
       </div>
       {entry?.ok === true && (
         <Dialog open={zoomed} onOpenChange={setZoomed}>
-          <DialogContent title="图表" className="h-[90dvh] w-[min(96vw,1400px)] max-w-none">
+          <DialogContent title="Chart" className="h-[90dvh] w-[min(96vw,1400px)] max-w-none">
             <DialogBody className="overflow-auto">
               <ZoomedSvg svg={entry.svg} />
             </DialogBody>

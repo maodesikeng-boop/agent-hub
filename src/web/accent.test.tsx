@@ -27,7 +27,7 @@ const two = () =>
   });
 
 /** 往上找第一个设了 --primary 的祖先。 */
-const nav = () => screen.getByRole("navigation", { name: "对话列表" });
+const nav = () => screen.getByRole("navigation", { name: "Conversations" });
 const scopeOf = (el: HTMLElement) => el.closest<HTMLElement>("[data-accent]");
 
 describe("强调色跟着项目经理", () => {
