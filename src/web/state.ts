@@ -261,14 +261,26 @@ function withoutLoadError(state: HubState): HubState {
   return rest;
 }
 
+/**
+ * 旧状态里这个对话已经收工了吗（至少有一个会话，且全部 ended）？
+ * 已收工的 Worker 不会再出新消息，网页手里的消息就是全的；还在跑的，断线期间可能又出了消息（比如最终回复）。
+ */
+function endedBefore(state: HubState, conversationId: ConversationId): boolean {
+  const sessions = state.sessions.filter((s) => s.conversationId === conversationId);
+  return sessions.length > 0 && sessions.every((s) => s.status === "ended");
+}
+
 function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   const conversations: Record<ConversationId, ConversationView> = {};
   for (const c of snapshot.conversations) {
     const prev = state.conversations[c.conversation.id];
-    conversations[c.conversation.id] =
-      c.messages.length === 0 && c.hasMore && prev && prev.messages.length > 0
-        ? { ...prev, conversation: c.conversation }
-        : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
+    // 快照省略了消息（已收工的 Worker 只带 hasMore）：只有旧状态里就已收工、按需加载过的消息才保留；
+    // 断线前还在跑、断线期间收工的，旧消息可能缺最终回复，换成快照的空列表 + hasMore，让 MessageList 重新拉最新一页。
+    const keepLoaded =
+      c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
+    conversations[c.conversation.id] = keepLoaded
+      ? { ...prev, conversation: c.conversation }
+      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);
