@@ -65,7 +65,7 @@ const asksGroup = () => (rail() === null ? null : within(rail()!).queryByRole("r
 const askRows = () => within(asksGroup()!).getAllByRole("button").filter((b) => !b.closest("h2") && b.getAttribute("aria-controls") !== "right-rail" && b.textContent !== "Show more");
 const nav = () => screen.getByRole("navigation", { name: "对话列表" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
-const hasTag = (name: string) => within(row(name)).queryByText("等你确定") !== null;
+const hasTag = (name: string) => within(row(name)).queryByLabelText("等你确定") !== null;
 const askedByOldMa = () => twoPms([makeUserMessage({ id: 1, text: "小林说话了", createdAt: 20_000 })], [ask({ id: 22, conversationId: 2, text: QUESTION, createdAt: 9_000 })]);
 const answered = (over: Partial<Message> & Pick<Message, "id">) => ask({ ...over, meta: { needsUser: true, answered: true } });
 
@@ -211,11 +211,15 @@ describe("跳到提问只生效一次", () => {
 });
 
 describe("左栏标签和标题数字", () => {
-  it("有提问的项目经理那一行显示“等你确定”；标题数字算上；守护进程标成已回答后都消失", async () => {
+  it("有提问的项目经理那一行显示极简无字圆点指示器（不显示中文胶囊）；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
-    // 左栏不属于任何项目经理：实心的前景色（深底白字），不带主色
-    expect(within(row("老马")).getByText("等你确定")).toHaveClass("bg-foreground", "text-background");
+    // 左栏不属于任何项目经理：实心的前景色小圆点（size-2 rounded-full bg-foreground），不显示“等你确定”中文胶囊
+    const dot = within(row("老马")).getByLabelText("等你确定");
+    expect(dot).toHaveClass("size-2", "rounded-full", "bg-foreground");
+    expect(dot).toHaveAttribute("title", "等你确定");
+    expect(dot).toHaveTextContent("");
+    expect(within(row("老马")).queryByText("等你确定")).toBeNull();
     expect(hasTag("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
     // 老马还在干活（Worker 在跑也一样）：照样显示
