@@ -98,7 +98,9 @@ describe("右栏：照 Claude desktop 的样子", () => {
     fireEvent.click(within(workerGroup()).getByRole("button", { name: /^Completed/ }));
     const ended = screen.getByRole("button", { name: /活 36/ });
     expect(ended).toHaveTextContent(/^活 36$/);
-    expect(ended).toHaveClass("opacity-60");
+    // 只把字调淡，选中时果冻底不跟着变淡
+    expect(within(ended).getByText("活 36")).toHaveClass("opacity-60");
+    expect(ended).not.toHaveClass("opacity-60");
     expect(within(workerGroup()).queryByText("Ended")).toBeNull();
   });
 
@@ -258,7 +260,7 @@ describe("右栏：只列几条", () => {
     expect(buttons(workerGroup())).toHaveLength(2);
     await user.click(ended);
     expect(buttons(workerGroup())).toHaveLength(32);
-    expect(within(workerGroup()).getByRole("button", { name: /活 100/ })).toHaveClass("opacity-60");
+    expect(within(within(workerGroup()).getByRole("button", { name: /活 100/ })).getByText("活 100")).toHaveClass("opacity-60");
   });
 
   it("点一行打开那个 Worker", async () => {

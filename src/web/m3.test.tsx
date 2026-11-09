@@ -791,8 +791,8 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     await user.click(toggleEnded);
     expect(toggleEnded).toHaveAttribute("aria-expanded", "true");
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle", "查日志"]);
-    expect(within(workerGroup()).getByRole("button", { name: /查日志/ })).toHaveClass("opacity-60");
-    expect(within(workerGroup()).getByRole("button", { name: /修 X/ })).not.toHaveClass("opacity-60");
+    expect(within(within(workerGroup()).getByRole("button", { name: /查日志/ })).getByText("查日志")).toHaveClass("opacity-60");
+    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).not.toHaveClass("opacity-60");
     await user.click(toggleEnded);
     expect(rows()).toEqual(["修 XWorking…", "写文档Idle"]);
     expect(within(workerGroup()).getByText("Working…")).toHaveClass("text-primary");
@@ -964,7 +964,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(endedToggle()).toHaveTextContent("Completed 2");
     await userEvent.setup().click(endedToggle()!);
     expect(rows()).toEqual(["写文档Working…", "修 X", "查日志"]);
-    expect(within(workerGroup()).getByRole("button", { name: /修 X/ })).toHaveClass("opacity-60");
+    expect(within(within(workerGroup()).getByRole("button", { name: /修 X/ })).getByText("修 X")).toHaveClass("opacity-60");
   });
 
   it("第一个 Worker 一派出来，右栏自己展开", async () => {

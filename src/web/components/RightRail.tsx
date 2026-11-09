@@ -203,8 +203,8 @@ export function PieceMeta({ worker }: { worker: WorkerEntry }) {
   const { model, effort, context } = usePieceMeta(worker);
   if (model === null && effort === null && context === null) return null;
   return (
-    <span data-testid="piece-meta" className="flex min-w-0 shrink items-baseline gap-3 text-xs text-muted-foreground max-[720px]:hidden">
-      {model !== null && <span className="min-w-0 truncate">{model}</span>}
+    <span data-testid="piece-meta" className="flex shrink-0 items-baseline gap-3 text-xs text-muted-foreground max-[720px]:hidden">
+      {model !== null && <span>{model}</span>}
       {effort !== null && <span className="shrink-0">{effort}</span>}
       {context !== null && (
         <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
@@ -228,10 +228,11 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       aria-current={active ? "true" : undefined}
       aria-label={worker.title}
       title={hint}
-      className={cn(ROW, "items-baseline justify-between", active ? ITEM_SELECTED : ITEM_HOVER, worker.ended && "opacity-60")}
+      className={cn(ROW, "items-baseline justify-between", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
-      <span className="min-w-0 truncate text-label leading-5">{cleanPieceTitle(worker.title)}</span>
+      {/* 收工的只把字调淡，选中的果冻底照样是完整的颜色 */}
+      <span className={cn("min-w-0 truncate text-label leading-5", worker.ended && "opacity-60")}>{cleanPieceTitle(worker.title)}</span>
       {!worker.ended && <span className={cn("shrink-0 text-small", isBusy(worker) ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>}
     </button>
   );

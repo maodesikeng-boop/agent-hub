@@ -221,7 +221,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
   - Piece 行：**只有一行**，左侧不放机器人图标：标题（14px 前景色，`truncate`）+ 右边英文状态词（13px：Working… / Stopping… / Running setup… / Waiting for background command… / Idle，在忙用强调色并加流光 `.status-shimmer`（第 14 条），其余灰）。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。
   - **标题去掉机械前缀**：列表里显示的标题去掉开头的分类前缀（“界面：”“修复：”“功能：”……，`format.ts` 的 `cleanPieceTitle`，前缀表只在那一处），直接露出任务名；读屏名字（`aria-label`）和悬停提示保留完整标题。
-  - 收工的行 `opacity-60`，**右边不写 Ended**（整组就叫 Completed，每行再写一遍是噪音），只有标题。点一行打开它的对话。
+  - 收工的行标题字 `opacity-60`（只淡字，选中时果冻底不跟着淡），**右边不写 Ended**（整组就叫 Completed，每行再写一遍是噪音），只有标题。点一行打开它的对话。
 - **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
   - Pieces：没收工的最多列 3 条，**在忙的排前面**（其余按派出的顺序）；多了，下面一行灰色的 **Show more**（14px、`text-muted-foreground`，没有底色和胶囊，悬停变前景色、`bg-sidebar-hover`），点开展开全部，同一处变成 Show less。正开着的 Piece 在被收起的那几条里时自动展开。
   - “等你确定”：同样最多 3 条，多了 Show more。
