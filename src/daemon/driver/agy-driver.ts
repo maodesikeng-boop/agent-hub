@@ -742,6 +742,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     if (batch) this.markProcessing(st, batch, at);
 
     this.#flushStepTexts(st, at);
+    const hadFinalText = st.hasTextSinceLastTool || (typeof res.response === "string" && res.response.trim() !== "");
 
     const turnNo = ++st.resultSeq;
     if (
@@ -767,7 +768,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
     const interrupted = violation !== null ? false : rawInterrupted;
     const status = typeof res.status === "string" ? res.status : "SUCCESS";
-    const ok = violation === null && status === "SUCCESS" && !interrupted;
+    const ok = violation === null && !interrupted && (status === "SUCCESS" || hadFinalText);
 
     // 轮结束时仍有 ACTIVE 且未 DONE 的工具步骤（如 run_command 转后台运行）：同步为后台任务
     if (ok && st.activeToolSteps.size > 0 && st.background.count !== st.activeToolSteps.size) {

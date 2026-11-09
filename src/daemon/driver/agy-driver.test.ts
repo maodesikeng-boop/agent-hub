@@ -1765,4 +1765,30 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     expect(t.stdinBlocks()[2]).toContain(RELAUNCH_NOTE);
     expect(t.stdinBlocks()[2]).toContain(backgroundTasksKilledNote("relaunch", ["跑构建"]));
   });
+
+  it("长会话历史残留网络报错：本轮已正常输出 agent_response 文本但 result 带 status=ERROR（如 GOAWAY）时，turn.ended 仍判为 ok=true 且不清空 written", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [{ type: "text", stepId: 1, deltas: ["工具已跑完，这是最终回复"] }],
+            result: {
+              status: "ERROR",
+              error: "http2: server sent GOAWAY and closed the connection; LastStreamID=51",
+              response: "",
+            },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, user(1, "帮我查一下"))).resolves.toEqual({ kind: "written" });
+    const ended = await t.waitFor("turn.ended");
+    expect(ended).toMatchObject({ ok: true, interrupted: false, messageIds: [1] });
+    expect(ended.error).toBeUndefined();
+    expect(t.of("agent.text").map((e) => e.text)).toEqual(["工具已跑完，这是最终回复"]);
+    // written 集合未被 forgetWritten 清掉：重复 send 同一 messageId 直接幂等返回 written，不会再次写入子进程
+    await expect(t.driver.send(s.id, user(1, "帮我查一下"))).resolves.toEqual({ kind: "written" });
+    expect(t.stdinBlocks()).toHaveLength(1);
+  });
 });
