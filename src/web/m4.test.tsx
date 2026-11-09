@@ -65,7 +65,7 @@ function twoPms(busy: boolean): StateSnapshot {
 const nav = () => screen.getByRole("navigation", { name: "对话列表" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
 const hasName = (name: string) => within(nav()).queryByRole("button", { name: new RegExp(name) }) !== null;
-const hasMark = (name: string) => within(row(name)).queryByText("等你") !== null;
+const hasMark = (name: string) => within(row(name)).queryByRole("img", { name: "等你" }) !== null;
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 /** 老马停下来，说了一句新的话。 */
@@ -104,7 +104,10 @@ describe("左栏和标题", () => {
     wait(1);
     expect(hasMark("老马")).toBe(true);
     // 左栏不属于任何项目经理：标签是中性色，不带主色
-    expect(within(row("老马")).getByText("等你").className).not.toMatch(/primary/);
+    expect(within(row("老马")).getByRole("img", { name: "等你" }).className).not.toMatch(/primary/);
+    // 只有绿点，不写“等你”两个字
+    expect(within(row("老马")).getByRole("img", { name: "等你" })).toHaveClass("size-2", "rounded-full", "bg-status-active");
+    expect(within(row("老马")).queryByText("等你")).toBeNull();
     expect(hasMark("小林")).toBe(false);
     expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
 

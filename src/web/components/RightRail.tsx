@@ -88,7 +88,6 @@ function GroupTitle({
   collapsed,
   onToggle,
   dot = false,
-  icon,
   trailing,
 }: {
   id: string;
@@ -98,11 +97,10 @@ function GroupTitle({
   collapsed: boolean;
   onToggle: () => void;
   dot?: boolean;
-  icon?: React.ReactNode;
   trailing?: React.ReactNode;
 }) {
   const title = (
-    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-[13px] font-normal text-foreground", trailing && "min-w-0 flex-1")}>
+    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-small font-normal text-foreground", trailing && "min-w-0 flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
@@ -111,7 +109,6 @@ function GroupTitle({
         onClick={onToggle}
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
-        {icon}
         {children}
         {collapsed && <span className="text-xs font-normal text-muted-foreground tabular-nums">{count}</span>}
         <Play className={cn("size-2.5 shrink-0 fill-current text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")} aria-hidden="true" />
@@ -147,7 +144,7 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
 /** “Show more / Show less”，“已收工 N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-[14px] text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-label text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );
@@ -169,11 +166,11 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
     <li>
       <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : "hover:bg-sidebar-hover")} onClick={onToggle}>
         <MessageCircleQuestionMark className={cn(ROW_ICON, "mt-0.5")} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-[14px] leading-5">{summary}</span>
+        <span className="min-w-0 flex-1 truncate text-label leading-5">{summary}</span>
         <ChevronRight className={cn(ROW_ICON, "mt-0.5 size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
       </button>
       {open && (
-        <div className="-mx-2 rounded-b-xl bg-sidebar px-2 pb-3 text-[13px]">
+        <div className="-mx-2 rounded-b-xl bg-sidebar px-2 pb-3 text-small">
           <div className="pl-7">
             <Markdown text={ask.text} messageId={ask.id} />
           </div>
@@ -211,10 +208,10 @@ function WorkerRow({
       onClick={onOpen}
     >
       <span className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-[14px] leading-5">{worker.title}</span>
-        <span className={cn("shrink-0 text-[13px]", busy ? "text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
+        <span className="min-w-0 truncate text-label leading-5">{worker.title}</span>
+        <span className={cn("shrink-0 text-small", busy ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
       </span>
-      <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
+      <span data-testid="worker-meta" className="flex items-baseline gap-3 text-small leading-4.5 text-muted-foreground">
         {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
         {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
         {(context !== NO_DATA || (worker.vendor === undefined && !effort)) && (
@@ -252,7 +249,7 @@ export function RightRailToggle({
       className={cn("relative shrink-0", open && "text-foreground")}
       onClick={onToggle}
     >
-      <Avatar colorKey={avatarKey} size={22} neutral />
+      <Avatar colorKey={avatarKey} size={26} neutral />
       {!open && attention && <span className="absolute top-2 right-2 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
     </Button>
   );
@@ -362,7 +359,7 @@ export function RightRail({
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="右栏"
-      className={cn("flex shrink-0 flex-col bg-background", side ? "w-[320px] border-l border-border" : "max-h-[40dvh] border-b border-border")}
+      className={cn("flex shrink-0 flex-col bg-background", side ? "w-80 border-l border-border" : "max-h-[40dvh] border-b border-border")}
     >
       <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
@@ -388,7 +385,6 @@ export function RightRail({
               count={live.length}
               collapsed={groups.collapsed.workers === true}
               onToggle={() => groups.toggle("workers")}
-              icon={<Avatar colorKey={avatarKey} size={16} neutral />}
               trailing={side && asks.length === 0 ? toggle : undefined}
             >
               Pieces

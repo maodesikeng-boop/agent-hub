@@ -59,7 +59,7 @@ export function FileCard({
         </span>
       )}
       <span className="min-w-0 text-left">
-        <span className="block max-w-[200px] truncate text-[13.5px] font-medium">{name}</span>
+        <span className="block max-w-50 truncate text-minor font-medium">{name}</span>
         <span className="block text-xs text-muted-foreground">{expired ? FILE_EXPIRED_TEXT : detail}</span>
       </span>
     </>

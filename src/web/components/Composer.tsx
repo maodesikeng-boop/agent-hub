@@ -36,7 +36,7 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
     <div
       role="alert"
       title={errorTitle(notice.message)}
-      className="mx-3 mt-3 flex items-center gap-2 rounded-xl bg-sidebar py-1 pr-1 pl-2 text-[13.5px] leading-snug text-muted-foreground"
+      className="mx-3 mt-3 flex items-center gap-2 rounded-xl bg-sidebar py-1 pr-1 pl-2 text-minor leading-snug text-muted-foreground"
     >
       <Icon className={cn("size-3.5 shrink-0", failed && "text-danger")} aria-hidden="true" />
       <span className={cn("min-w-0 flex-1", failed && "text-foreground")}>{errorLine(notice.message)}</span>
@@ -160,7 +160,7 @@ export function Composer({
         {files.length > 0 && (
           <ul aria-label="待发送的文件" className="flex flex-wrap gap-2 px-5 pt-3">
             {files.map(({ key, file }) => (
-              <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-[13.5px]">
+              <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
                 <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="min-w-0 truncate">{file.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
@@ -182,7 +182,7 @@ export function Composer({
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"
-          className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-[15px] leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
+          className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
           value={value}
           aria-autocomplete={source ? "list" : undefined}
           aria-controls={suggest.menu ? menuId : undefined}
@@ -227,8 +227,8 @@ export function Composer({
             <Paperclip className="size-5" aria-hidden="true" />
           </Button>
           <div className="ml-auto flex items-center gap-2">
-            {tooLong && <span className="text-[13px] text-danger">消息太长</span>}
-            {stop?.failed && showStop && <span className="text-[13.5px] text-danger">停止失败</span>}
+            {tooLong && <span className="text-small text-danger">消息太长</span>}
+            {stop?.failed && showStop && <span className="text-minor text-danger">停止失败</span>}
             {showStop ? (
               <StopButton stop={stop} />
             ) : (

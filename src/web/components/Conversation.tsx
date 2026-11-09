@@ -1,7 +1,6 @@
-import { Folder } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
-import { errorText, formatArchiveRemaining, shortPath, type ErrorLike } from "../format.ts";
+import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
@@ -36,9 +35,9 @@ function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }
   return (
     <div className="rounded-2xl bg-sidebar px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 text-[15px]">
+        <div className="flex items-center gap-3 text-body">
           <span>已归档</span>
-          <span className="text-[13.5px] text-muted-foreground">{formatArchiveRemaining(archivedAt)}</span>
+          <span className="text-minor text-muted-foreground">{formatArchiveRemaining(archivedAt)}</span>
         </div>
         <Button variant="outline" size="sm" disabled={unarchiving} onClick={() => void unarchive()}>
           {unarchiving ? "Restoring…" : "恢复"}
@@ -138,17 +137,7 @@ export function Conversation({
           <Avatar colorKey={entry.avatarKey} size={34} />
         )}
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[17px] leading-snug font-semibold">{entry.name}</h1>
-          {entry.folders.length > 0 && (
-            <ul aria-label="文件夹" className="flex min-w-0 flex-wrap gap-x-4 gap-y-0.5 text-[13.5px] leading-snug text-muted-foreground">
-              {entry.folders.map((f) => (
-                <li key={f.id} className="flex min-w-0 items-center gap-1.5" title={f.path}>
-                  <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{shortPath(f.path)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <h1 className="truncate text-title leading-snug font-semibold">{entry.name}</h1>
         </div>
         {toolbar}
       </header>
@@ -170,7 +159,7 @@ export function Conversation({
           statusAgent={agent}
         />
       </div>
-      <div className="chat-column pointer-events-none relative z-10 -mt-[26px] w-full shrink-0 pb-5 *:pointer-events-auto">
+      <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 pb-5 *:pointer-events-auto">
         {entry.pm?.archivedAt != null ? (
           <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
         ) : (

@@ -4,7 +4,7 @@ import { describeFailure } from "../../shared/errors.ts";
 import { cn } from "../lib/utils.ts";
 
 // 只用底色，不加阴影和描边（docs/ui-standard.md 第 4 条）
-const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full px-4 py-2 text-[13.5px]";
+const PILL = "flex w-fit max-w-full items-center gap-2 rounded-full px-4 py-2 text-minor";
 
 /**
  * 顶部的提醒：守护进程报告的问题（比如找不到 claude）、断线重连、别的设备离线（offline 是那一句，联机第 4.3 节；不报错弹窗）。

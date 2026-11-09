@@ -18,7 +18,7 @@ export const buttonVariants = cva(
       },
       size: {
         default: "h-9 rounded-[var(--radius-btn)] px-4 text-sm",
-        sm: "h-8 rounded-[var(--radius-btn)] px-3 text-[13px]",
+        sm: "h-8 rounded-[var(--radius-btn)] px-3 text-small",
         icon: "size-9 rounded-[var(--radius-btn)]",
         "icon-sm": "size-8 rounded-[var(--radius-btn)]",
       },

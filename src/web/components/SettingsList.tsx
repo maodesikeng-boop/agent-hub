@@ -14,7 +14,7 @@ const GROUP_SHELL = "overflow-hidden rounded-2xl border border-border bg-backgro
 const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
 
 /** 组标题：13.5px、500、灰。 */
-const GROUP_TITLE = "text-[13.5px] font-medium text-muted-foreground";
+const GROUP_TITLE = "text-minor font-medium text-muted-foreground";
 
 /**
  * 一组：小号灰色标题（可以没有）+ 白底细框，框里的直接子元素之间有细分隔线。
@@ -71,9 +71,9 @@ export function CollapsibleGroup({
     <section aria-label={title}>
       <Collapsible open={open} onOpenChange={setOpen} className={GROUP_SHELL}>
         <h2>
-          <CollapsibleTrigger className="group flex min-h-[52px] w-full cursor-pointer items-center gap-4 px-4 py-2 text-left text-[15px] transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
+          <CollapsibleTrigger className="group flex min-h-13 w-full cursor-pointer items-center gap-4 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
             <span className="min-w-0 flex-1 truncate">{title}</span>
-            {summary !== undefined && <span className="shrink-0 text-[13.5px] text-muted-foreground tabular-nums">{summary}</span>}
+            {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
             <ChevronDown
               className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
               aria-hidden="true"
@@ -113,10 +113,10 @@ export function SettingsRow({
         <div className={cn("flex min-w-0 items-center gap-3", wide && "shrink-0")}>
           {icon && <span className="flex shrink-0 text-muted-foreground [&_svg]:size-4 [&_svg]:stroke-[1.5]">{icon}</span>}
           <div className="min-w-0">
-            <label htmlFor={id} className="block text-[15px]">
+            <label htmlFor={id} className="block text-body">
               {label}
             </label>
-            {detail && <div className="text-[13.5px] leading-snug text-muted-foreground">{detail}</div>}
+            {detail && <div className="text-minor leading-snug text-muted-foreground">{detail}</div>}
           </div>
         </div>
         <div className={cn("flex min-w-0 items-center justify-end gap-2", !wide && "shrink-0")}>{children(id)}</div>
@@ -129,7 +129,7 @@ export function SettingsRow({
 /** 行右边的只读值（厂商只有一家时的厂商名）：15px 灰。 */
 export function ReadonlyValue({ id, children }: { id?: string; children: ReactNode }) {
   return (
-    <span id={id} className="truncate text-[15px] text-muted-foreground">
+    <span id={id} className="truncate text-body text-muted-foreground">
       {children}
     </span>
   );
@@ -138,7 +138,7 @@ export function ReadonlyValue({ id, children }: { id?: string; children: ReactNo
 /** 行下面的错误：接口错误传 error（text 后面接 hint，raw 放 title），自己写的一句话传 children。 */
 export function RowError({ error, children }: { error?: ErrorLike; children?: ReactNode }) {
   return (
-    <p role="alert" title={error === undefined ? undefined : errorTitle(error)} className="mt-1 text-[13.5px] text-danger [overflow-wrap:anywhere]">
+    <p role="alert" title={error === undefined ? undefined : errorTitle(error)} className="mt-1 text-minor text-danger [overflow-wrap:anywhere]">
       {error === undefined ? children : errorLine(error)}
     </p>
   );

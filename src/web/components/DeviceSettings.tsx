@@ -194,7 +194,7 @@ function InvitePanel() {
       <SettingsRow label="邀请码" error={error}>
         {(id) =>
           invite ? (
-            <span id={id} className="font-mono text-[15px] select-all">
+            <span id={id} className="font-mono text-body select-all">
               {invite.code}
             </span>
           ) : (
@@ -208,7 +208,7 @@ function InvitePanel() {
       {invite && (
         <SettingsRow label="本机网址" wide>
           {(id) => (
-            <span id={id} className="truncate font-mono text-[13.5px] text-muted-foreground select-all" title={invite.url ?? undefined}>
+            <span id={id} className="truncate font-mono text-minor text-muted-foreground select-all" title={invite.url ?? undefined}>
               {invite.url ?? "还没装 Tailscale"}
             </span>
           )}
@@ -249,10 +249,10 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
     >
       <SettingsGroup title="添加设备">
         <SettingsRow label="网址">
-          {(id) => <Input id={id} value={url} autoComplete="off" spellCheck={false} placeholder="https://…ts.net" className="w-[240px]" onChange={(e) => setUrl(e.target.value)} />}
+          {(id) => <Input id={id} value={url} autoComplete="off" spellCheck={false} placeholder="https://…ts.net" className="w-60" onChange={(e) => setUrl(e.target.value)} />}
         </SettingsRow>
         <SettingsRow label="邀请码" error={error}>
-          {(id) => <Input id={id} value={code} autoComplete="off" spellCheck={false} className="w-[240px] font-mono" onChange={(e) => setCode(e.target.value)} />}
+          {(id) => <Input id={id} value={code} autoComplete="off" spellCheck={false} className="w-60 font-mono" onChange={(e) => setCode(e.target.value)} />}
         </SettingsRow>
         <div className="flex justify-end px-4 py-2.5">
           <Button type="submit" size="sm" disabled={!ready}>
@@ -347,7 +347,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
       <SettingsGroup title="连到中心">
         <SettingsRow
           label="终端命令"
-          detail={<code className="block break-all font-mono text-[13.5px] select-all">{command}</code>}
+          detail={<code className="block break-all font-mono text-minor select-all">{command}</code>}
         >
           {(id) => (
             <Button id={id} type="button" variant="outline" size="sm" onClick={copy}>
@@ -364,7 +364,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
                 autoComplete="off"
                 spellCheck={false}
                 placeholder="ahtun1_…"
-                className="w-[240px] font-mono"
+                className="w-60 font-mono"
                 onChange={(e) => setCode(e.target.value)}
               />
               <Button type="submit" disabled={!ready}>
@@ -438,7 +438,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
         label="公网域名"
         detail={
           entry.enabled && entry.hostname ? (
-            <span className="font-mono text-[13.5px] select-all">{`https://${entry.hostname}`}</span>
+            <span className="font-mono text-minor select-all">{`https://${entry.hostname}`}</span>
           ) : undefined
         }
         error={error}
@@ -451,7 +451,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               autoComplete="off"
               spellCheck={false}
               placeholder="如 tokyo.tailnet.ts.net"
-              className="w-[240px] font-mono"
+              className="w-60 font-mono"
               onChange={(e) => setHostname(e.target.value)}
             />
             <Button
@@ -469,7 +469,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
       {entry.enabled && (
         <SettingsRow
           label="Funnel 命令"
-          detail={<code className="block break-all font-mono text-[13.5px] select-all">{entry.funnelCommand}</code>}
+          detail={<code className="block break-all font-mono text-minor select-all">{entry.funnelCommand}</code>}
         >
           {(id) => (
             <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "已复制" : "复制命令"} onClick={copy}>
@@ -538,7 +538,7 @@ export function ComputersSection({ devices, tunnel, repoDir, onChanged }: Omit<D
           }
         >
           {others.length === 0 ? (
-            <p className="px-4 py-3 text-[15px] text-muted-foreground">还没有别的电脑</p>
+            <p className="px-4 py-3 text-body text-muted-foreground">还没有别的电脑</p>
           ) : (
             others.map((device) => <DeviceRow key={device.key} device={device} onChanged={onChanged} />)
           )}

@@ -82,7 +82,7 @@ describe("手打被拦的命令", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "/compact{Enter}");
-    expect(await screen.findByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
     expect(box().value).toBe("");
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -114,14 +114,14 @@ describe("任何接口回 401：直接切到登录界面，不弹报错", () => 
 describe("发消息被后台拒绝（400 invalid）", () => {
   const REASON = "消息里有不能发的内容";
 
-  it("不管是不是 / 开头：原因写在那条消息下面，没有“重试”（同一条重发也还是会被拦）", async () => {
+  it("不管是不是 / 开头：左边红色感叹号只是标记（不能点，同一条重发也还是会被拦），原因在它的名字和 title 里", async () => {
     const user = userEvent.setup();
     await boot();
     api.postMessage = () => ({ status: 400, body: { error: REASON, code: "invalid" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByText(REASON)).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: `没发出去：${REASON}` })).toHaveAttribute("title", expect.stringContaining(REASON));
     expect(screen.getByText("你好")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).toBeNull();
     expect(screen.queryByText("发送失败")).toBeNull();
     expect(api.callsTo("POST", /\/messages$/)).toHaveLength(1);
   });
@@ -131,8 +131,8 @@ describe("发消息被后台拒绝（400 invalid）", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByText("发送失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
   });
 });
 

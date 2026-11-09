@@ -425,52 +425,26 @@ describe("新建项目经理", () => {
 });
 
 describe("对话顶栏", () => {
-  it("有项目：顶栏有项目经理的名字和文件夹（主文件夹在前）；点头像打开资料页", async () => {
+  it("有项目：顶栏只有头像和名字，不放文件夹；点头像打开资料页，文件夹在资料页里（主文件夹在前）", async () => {
     const user = userEvent.setup();
     await boot();
     await user.click(inNav(/小林/));
-    expect(screen.getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-    const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
-    expect(folders.map((f) => f.textContent)).toEqual(["/work/foo", "/work/docs"]);
+    const header = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header") as HTMLElement;
+    expect(within(header).queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
+    expect(header).not.toHaveTextContent("/work/foo");
     await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
-    expect(screen.getByRole("region", { name: "小林 的资料" })).toBeInTheDocument();
+    const profile = screen.getByRole("region", { name: "小林 的资料" });
+    const folders = within(within(profile).getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
+    expect(folders[0]).toHaveTextContent("/work/foo");
+    expect(folders[1]).toHaveTextContent("/work/docs");
   });
 
-  it("顶栏的文件夹路径：用户目录写成 ~，title 放全路径；别的路径原样", async () => {
-    const user = userEvent.setup();
-    await boot(
-      makeSnapshot({
-        ...twoPms(),
-        folders: [
-          makeFolder({ id: 1, projectId: 1, path: "/Users/zhang/agent-hub", isMain: true }),
-          makeFolder({ id: 2, projectId: 1, path: "/work/docs", isMain: false }),
-        ],
-      }),
-    );
-    await user.click(inNav(/小林/));
-    const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
-    expect(folders.map((f) => f.textContent)).toEqual(["~/agent-hub", "/work/docs"]);
-    expect(folders.map((f) => f.getAttribute("title"))).toEqual(["/Users/zhang/agent-hub", "/work/docs"]);
-    expect(screen.getByRole("list", { name: "文件夹" })).toHaveClass("text-[13.5px]");
-  });
-
-  it("还没有项目：顶栏没有文件夹列表", async () => {
-    await boot();
-    expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
-  });
-
-  it("在会话里建项目、挂上和移除文件夹：推 project.created、folders.updated，顶栏马上跟着变", async () => {
+  it("在会话里建项目、挂上文件夹：顶栏照样不显示文件夹", async () => {
     const ws = await boot();
     push(ws, changeOf(11, "project.created", { project: makeProject({ id: 2, name: "bar", pmId: 2, conversationId: 2 }) }));
     push(ws, changeOf(12, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" })] }));
-    const list = () => within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem").map((f) => f.textContent);
-    expect(list()).toEqual(["/work/bar"]);
-    push(ws, changeOf(13, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" }), makeFolder({ id: 6, projectId: 2, path: "/work/more", isMain: false })] }));
-    expect(list()).toEqual(["/work/bar", "/work/more"]);
-    // 别的项目的文件夹不动
-    push(ws, changeOf(14, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 1, projectId: 1, path: "/work/foo" })] }));
-    expect(list()).toEqual(["/work/bar", "/work/more"]);
+    expect(screen.queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
+    expect(screen.queryByText("/work/bar")).not.toBeInTheDocument();
   });
 
   it("agent 的消息署项目经理的名字；输入框提示发给它", async () => {
@@ -1186,14 +1160,14 @@ describe("重试失败的消息", () => {
   it("失败的消息有“重试”：点了发 POST retry，按钮变“重试中”，推回排队中后按钮和原因都没了", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    expect(within(log()).getByText("找不到 Claude")).toBeInTheDocument();
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" }).getAttribute("title")).toContain("找不到 Claude");
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/messages\/5\/retry$/)).toHaveLength(1));
     expect(api.callsTo("POST", /retry$/)[0]?.body).toBeUndefined();
-    expect(within(log()).getByRole("button", { name: "重试中" })).toBeDisabled();
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeDisabled();
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     expect(within(log()).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(log()).getByText("Queued")).toBeInTheDocument();
+    expect(within(log()).queryByText("Queued")).toBeNull();
     expect(within(log()).queryByText("Claude 没能启动")).not.toBeInTheDocument();
     expect(within(log()).getAllByRole("article")).toHaveLength(1);
   });
@@ -1202,13 +1176,13 @@ describe("重试失败的消息", () => {
     const user = userEvent.setup();
     await boot(snapshotWith(failed({ id: 5 })));
     api.retryMessage = () => ({ status: 409, body: { error: "这条消息不能重试", code: "conflict" } });
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
-    expect(await within(log()).findByText("重试失败")).toBeInTheDocument();
-    expect(within(log()).getByRole("button", { name: "重试" })).toBeEnabled();
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
+    await waitFor(() => expect(within(log()).getByRole("button", { name: "没发出去，点击重发" }).getAttribute("title")).toContain("重发失败"));
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeEnabled();
     api.retryMessage = (id) => ({ status: 202, body: { messageId: id } });
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(api.callsTo("POST", /retry$/)).toHaveLength(2));
-    expect(within(log()).queryByText("重试失败")).not.toBeInTheDocument();
+    await waitFor(() => expect(within(log()).queryByTitle(/重发失败/)).toBeNull());
   });
 
   it("没失败的用户消息（排队中、已回复）没有“重试”", async () => {
@@ -1222,17 +1196,18 @@ describe("重试失败的消息", () => {
         ],
       }),
     );
-    expect(within(log()).queryByRole("button", { name: /重试/ })).not.toBeInTheDocument();
+    expect(within(log()).queryByRole("button", { name: /重发/ })).not.toBeInTheDocument();
+    expect(within(log()).queryByText(/Queued|已停止/)).toBeNull();
   });
 
   it("重试后又失败：重新出现“重试”，不卡在“重试中”", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     push(ws, messageChange(12, "message.updated", failed({ id: 5, failureReason: "spawn_failed: x" })));
-    expect(within(log()).getByRole("button", { name: "重试" })).toBeEnabled();
-    expect(within(log()).getByText("Claude 没能启动")).toHaveAttribute("title", "spawn_failed: x");
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeEnabled();
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toHaveAttribute("title", "没发出去：Claude 没能启动，点击重发\nspawn_failed: x");
   });
 
   it("网页自己没发出去的消息的“重试”照旧（用同一个 clientId 重发，不走 retry 接口）", async () => {
@@ -1240,7 +1215,7 @@ describe("重试失败的消息", () => {
     await boot(makeSnapshot());
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(screen.getByRole("textbox", { name: "输入消息" }), "你好{Enter}");
-    await user.click(await within(log()).findByRole("button", { name: "重试" }));
+    await user.click(await within(log()).findByRole("button", { name: "没发出去，点击重发" }));
     expect(api.callsTo("POST", /\/retry$/)).toHaveLength(0);
     expect(api.callsTo("POST", /\/messages$/)).toHaveLength(2);
   });

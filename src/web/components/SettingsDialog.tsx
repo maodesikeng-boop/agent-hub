@@ -1,7 +1,9 @@
 import { Monitor, Settings, Shield, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { NotifySettings } from "../notify.ts";
+import { readUiScale, saveUiScale, UI_SCALE_LABELS, UI_SCALES, type UiScale } from "../ui-scale.ts";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
+import { Segmented } from "../ui/segmented.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
@@ -16,6 +18,29 @@ const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
   unsupported: "这个浏览器不支持通知",
   install: "先在 Safari 里“添加到主屏幕”，从主屏图标打开再开",
 };
+
+const UI_SCALE_OPTIONS = UI_SCALES.map((value) => ({ value, label: UI_SCALE_LABELS[value] }));
+
+/** 界面大小：点了马上整页跟着变（字号、头像、间距），记在这台浏览器上。 */
+function UiScaleRow() {
+  const [scale, setScale] = useState<UiScale>(readUiScale);
+  return (
+    <SettingsRow label="界面大小">
+      {(id) => (
+        <Segmented
+          id={id}
+          label="界面大小"
+          value={scale}
+          options={UI_SCALE_OPTIONS}
+          onChange={(next) => {
+            setScale(next);
+            saveUiScale(next);
+          }}
+        />
+      )}
+    </SettingsRow>
+  );
+}
 
 type SectionId = "general" | "computers" | "security";
 
@@ -44,20 +69,25 @@ export function SettingsDialog({
 }) {
   const content: Record<SectionId, ReactNode> = {
     general: (
-      <SettingsGroup label="通知">
-        {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
-        <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
-          {(id) => (
-            <Switch
-              id={id}
-              aria-label="通知"
-              checked={notify.enabled}
-              disabled={NOTIFY_BLOCKED[notify.permission] !== undefined}
-              onCheckedChange={(on) => void notify.setEnabled(on)}
-            />
-          )}
-        </SettingsRow>
-      </SettingsGroup>
+      <>
+        <SettingsGroup title="外观">
+          <UiScaleRow />
+        </SettingsGroup>
+        <SettingsGroup label="通知">
+          {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
+          <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
+            {(id) => (
+              <Switch
+                id={id}
+                aria-label="通知"
+                checked={notify.enabled}
+                disabled={NOTIFY_BLOCKED[notify.permission] !== undefined}
+                onCheckedChange={(on) => void notify.setEnabled(on)}
+              />
+            )}
+          </SettingsRow>
+        </SettingsGroup>
+      </>
     ),
     computers: devices && <ComputersSection {...devices} />,
     security: (
@@ -70,7 +100,7 @@ export function SettingsDialog({
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="设置" titleClassName="sr-only" className="h-[min(560px,calc(100%-48px))] max-w-[780px] gap-0 p-0">
+      <DialogContent title="设置" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
         <Tabs defaultValue={devices !== null ? "computers" : "general"} orientation="vertical" className="flex min-h-0 flex-1 flex-col sm:flex-row">
           {/* 窄屏：一排横着的分类（只有字，放得下三个），右边让出关闭按钮的位置 */}
           <TabsList
@@ -81,7 +111,7 @@ export function SettingsDialog({
               <TabsTrigger
                 key={id}
                 value={id}
-                className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
+                className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-body whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
               >
                 <Icon className="size-4 shrink-0 stroke-[1.5] max-sm:hidden" aria-hidden="true" />
                 {label}
@@ -91,7 +121,7 @@ export function SettingsDialog({
           {sections.map(({ id, label }) => (
             // 分类名固定在上面（右边让出关闭按钮），只有下面的分组滚；上下左右多留 4px 再收回，聚焦的圈不被裁掉
             <TabsContent key={id} value={id} className="flex min-h-0 flex-1 flex-col outline-none">
-              <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-[17px] font-semibold">{label}</h2>
+              <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-title font-semibold">{label}</h2>
               <div className="grid min-h-0 flex-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
             </TabsContent>
           ))}

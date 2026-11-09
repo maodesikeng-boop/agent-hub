@@ -146,7 +146,7 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {
     const coarse = mediaBlock(/@media \(pointer: coarse\)/);
-    expect(coarse).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*16px/);
+    expect(coarse).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*max\(16px, var\(--text-body\)\)/);
     // 16px 只在触屏规则里，不改电脑上的 15px
     expect(css.replace(coarse, "")).not.toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size/);
   });
@@ -182,5 +182,14 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     for (const file of ["Messages", "RightRail", "Sidebar", "Composer", "Conversation"]) {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
     }
+  });
+
+  it("在忙的状态词流光：只用字本身的颜色，减少动态效果时不动", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toMatch(/background-clip: text/);
+    expect(rule).toMatch(/animation: status-shimmer/);
+    expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
   });
 });

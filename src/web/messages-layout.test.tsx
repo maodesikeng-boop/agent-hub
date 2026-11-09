@@ -37,10 +37,10 @@ describe("agent 消息布局", () => {
     expect(name.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("头像缩小到 24px", () => {
+  it("头像 26px（标准档，按根字号缩放）", () => {
     const { container } = agent("你好");
     const avatar = container.querySelector("[data-slot='avatar']") as HTMLElement;
-    expect(avatar.style.width).toBe("24px");
+    expect(avatar.style.width).toBe("1.625rem");
   });
 
   it("正文不带气泡底色和圆角气泡", () => {

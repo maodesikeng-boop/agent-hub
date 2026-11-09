@@ -101,7 +101,7 @@ function CsvView({ rows }: { rows: string[][] }) {
   const [head = [], ...body] = rows;
   return (
     <div data-preview-table className="h-full overflow-auto">
-      <table className="min-w-full border-separate border-spacing-0 text-left text-[13.5px]">
+      <table className="min-w-full border-separate border-spacing-0 text-left text-minor">
         <thead>
           <tr>
             {head.map((cell, i) => (
@@ -203,8 +203,8 @@ function OtherInfo({ file }: { file: PreviewFile }) {
     <Centered>
       <div className="flex flex-col items-center gap-2">
         <FileText className="size-10" aria-hidden="true" />
-        <span className="text-[15px] font-medium text-foreground">{file.name}</span>
-        {file.size !== null && <span className="text-[13.5px]">{formatBytes(file.size)}</span>}
+        <span className="text-body font-medium text-foreground">{file.name}</span>
+        {file.size !== null && <span className="text-minor">{formatBytes(file.size)}</span>}
       </div>
     </Centered>
   );
@@ -255,13 +255,13 @@ function PreviewContent({ file }: { file: PreviewFile }) {
     content = (
       <Centered>
         <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        <span className="ml-2 text-[13.5px]">加载中</span>
+        <span className="ml-2 text-minor">加载中</span>
       </Centered>
     );
   } else if (failed) {
     content = (
       <Centered>
-        <span className="text-[13.5px] text-danger">读不了这个文件</span>
+        <span className="text-minor text-danger">读不了这个文件</span>
       </Centered>
     );
   } else if (kind === "pdf") {
@@ -275,7 +275,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
   } else if (kind === "audio") {
     content = (
       <Centered>
-        <audio src={src} controls className="w-full max-w-[560px]" />
+        <audio src={src} controls className="w-full max-w-140" />
       </Centered>
     );
   } else if (kind === "image") {
@@ -316,7 +316,7 @@ function PreviewContent({ file }: { file: PreviewFile }) {
           </>
         )}
         {controls}
-        <span role="status" className="ml-auto text-[13.5px] text-muted-foreground">
+        <span role="status" className="ml-auto text-minor text-muted-foreground">
           {result !== null ? <span className={result.error ? "text-danger" : undefined} title={errorTitle(result.text)}>{errorLine(result.text)}</span> : note}
         </span>
       </div>

@@ -5,7 +5,7 @@ import { useAccentContainer } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
 
 // 弹窗（docs/ui-standard.md 第 10 条）：rounded-2xl、p-6、内容之间 gap-6；标题 17px 半粗在左上，关闭按钮右上；
-// 底部按钮放 DialogFooter（靠右，主按钮在最右）。宽度三档：简单设置 max-w-[440px]，表单默认 520px，双栏的全局设置 780px（SettingsDialog）。
+// 底部按钮放 DialogFooter（靠右，主按钮在最右）。宽度三档：简单设置 max-w-110，表单默认 520px，双栏的全局设置 780px（SettingsDialog）。
 // 弹窗自己不滚：内容可能超过一屏的放进 DialogBody（只有它滚），标题和 DialogFooter 一直在视野里。
 export const Dialog = DialogPrimitive.Root;
 export const DialogClose = DialogPrimitive.Close;
@@ -29,12 +29,12 @@ export function DialogContent({
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-2xl border border-border bg-background p-6 outline-none",
+          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-2xl border border-border bg-background p-6 outline-none",
           className,
         )}
         {...props}
       >
-        <DialogPrimitive.Title className={cn("shrink-0 text-[17px] font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
+        <DialogPrimitive.Title className={cn("shrink-0 text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
         {children}
         <DialogPrimitive.Close
           aria-label="关闭"

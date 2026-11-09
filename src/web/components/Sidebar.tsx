@@ -42,17 +42,14 @@ function EntryButton({
   device?: string;
   onSelect: () => void;
 }) {
-  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定圆点 > 等你 > 时间（在忙不另加标记）
+  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定圆点 > 等你圆点 > 时间（在忙不另加标记）。圆点不带字，名字只给读屏和悬停
   const tag =
     entry.pm?.archivedAt != null ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
       <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="flex items-center gap-1.5 text-xs font-medium text-status-active">
-        <span className="size-1.5 rounded-full bg-status-active" aria-hidden="true" />
-        等你
-      </span>
+      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
     ) : entry.lastMessage ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
@@ -70,7 +67,7 @@ function EntryButton({
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-            <span className={cn("truncate text-[15px] font-medium", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
+            <span className={cn("truncate text-body font-medium", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
             {device && (
               <span data-testid="entry-device" title={device} className="min-w-0 truncate text-xs text-muted-foreground">
                 {device}
@@ -80,7 +77,7 @@ function EntryButton({
           {tag && <span className="flex shrink-0 items-center">{tag}</span>}
         </span>
         {/* 没有消息也占一行的高度，每行一样高 */}
-        <span className="mt-0.5 block truncate text-[13.5px] text-muted-foreground">{previewText(entry) || " "}</span>
+        <span className="mt-0.5 block truncate text-minor text-muted-foreground">{previewText(entry) || " "}</span>
       </span>
     </button>
   );
@@ -150,7 +147,7 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
       <button
         type="button"
         aria-expanded={open}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-[13.5px] font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-minor font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={onToggle}
       >
         <span className="truncate">{group.name}</span>
@@ -247,7 +244,7 @@ export function Sidebar({
             <button
               type="button"
               aria-expanded={showArchived}
-              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-[13.5px] font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-minor font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
               onClick={() =>
                 setArchivedOpen((prev) => {
                   const next = new Set(prev);
@@ -277,7 +274,7 @@ export function Sidebar({
       aria-label="左栏"
       className={cn(
         "flex shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
-        narrow ? "w-[72px] border-r border-border" : "w-[300px]",
+        narrow ? "w-18 border-r border-border" : "w-75",
       )}
     >
       {narrow ? (
@@ -337,7 +334,7 @@ export function Sidebar({
               <>
                 {reminded.length > 0 && (
                   <section aria-label="等你确定" className="mb-2">
-                    <h2 className="flex h-8 items-center px-3 text-[13.5px] font-medium text-muted-foreground">等你确定</h2>
+                    <h2 className="flex h-8 items-center px-3 text-minor font-medium text-muted-foreground">等你确定</h2>
                     <div className="mt-1 space-y-1">
                       {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
                       {reminded.map(({ group, entry }) => (

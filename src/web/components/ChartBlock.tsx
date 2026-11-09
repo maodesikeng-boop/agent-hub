@@ -57,7 +57,7 @@ const firstLine = (message: string) => message.split("\n", 1)[0]!.trim();
 function FailedChart({ language, source, message }: { language: string; source: string; message: string }) {
   return (
     <div data-chart-failed className="md-chart-failed">
-      <div data-chart-error title={message} className="mb-1.5 flex items-center gap-2 text-[13.5px] text-danger">
+      <div data-chart-error title={message} className="mb-1.5 flex items-center gap-2 text-minor text-danger">
         <AlertCircle className="size-3.5 shrink-0" />
         <span className="truncate">{firstLine(message)}</span>
       </div>

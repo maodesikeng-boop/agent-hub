@@ -267,7 +267,7 @@ describe("点开 Worker", () => {
     expect(within(section).getByText("再改一下").closest("[data-head]")).toHaveAttribute("data-head", "true");
     expect(within(section).queryByText("已回复")).not.toBeInTheDocument();
     expect(within(section).queryByText("发送失败")).not.toBeInTheDocument();
-    expect(within(section).queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument();
     expect(within(section).queryByText(/^(已送达|处理中|排队中|失败)/)).not.toBeInTheDocument();
   });
 
@@ -698,7 +698,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(aside.parentElement).toBe(main.parentElement);
     const classes = aside.className.split(" ");
     expect(classes.some((c) => /(^|:)(fixed|absolute)$/.test(c))).toBe(false);
-    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-[320px]", "border-l"]));
+    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-80", "border-l"]));
     expect(aside.className).not.toMatch(/shadow|rounded/);
     expect(within(main).getByRole("heading", { name: "小林" })).toBeInTheDocument();
     expect(within(main).getByRole("textbox")).toBeVisible();
@@ -754,7 +754,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
   });
 
-  it("Piece 行状态展示：在忙的是强调色，空闲的是灰色；Pieces 标题左侧展示 16px 水果果瓣", async () => {
+  it("Piece 行状态展示：在忙的是强调色，空闲的是灰色；Pieces 标题左侧不放水果果瓣", async () => {
     await boot(
       crowd({
         conversations: [
@@ -775,9 +775,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     );
     expect(within(workerGroup()).getByText("Working…")).toHaveClass("text-primary");
     expect(within(workerGroup()).getAllByText("Idle")[0]).toHaveClass("text-muted-foreground");
-    const avatar = workerGroup().querySelector("h2 button > [data-neutral='true']");
-    expect(avatar).toBeInTheDocument();
-    expect(avatar).toHaveStyle({ width: "16px", height: "16px" });
+    expect(workerGroup().querySelector("h2 [data-neutral='true']")).toBeNull();
   });
 
   it("Worker 一行一个：标题和状态（英文状态词）；干活的、Idle 的照常列出，收工的收成最下面一行“已收工 N ›”，点开才展开，展开后淡一些", async () => {
@@ -880,7 +878,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
       expect(row).not.toHaveTextContent("Claude Code");
       expect(row).not.toHaveTextContent("·");
-      expect(metaOf()).toHaveClass("text-[13px]", "leading-[18px]", "text-muted-foreground");
+      expect(metaOf()).toHaveClass("text-small", "leading-4.5", "text-muted-foreground");
       expect(within(row).getByText("117K context")).toHaveClass("tabular-nums");
     });
 
@@ -1028,7 +1026,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveClass("w-[72px]", "border-r", "border-border", "bg-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
     expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
     // 顶栏没有 PanelLeft 抽屉按钮
     expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
@@ -1049,7 +1047,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
   it("宽屏为 300px 完整左栏带搜索框，没有拉左栏的抽屉按钮", async () => {
     await boot(crowd());
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveClass("w-[300px]");
+    expect(sidebar).toHaveClass("w-75");
     expect(within(sidebar).getByRole("searchbox", { name: "搜索" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
   });
@@ -1432,7 +1430,7 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(box()).toHaveValue("");
     const mine = within(section).getByText("顺便改 README").closest("article")!;
     expect(mine).toHaveAttribute("data-side", "right");
-    expect(within(mine).getByText("Queued")).toBeInTheDocument();
+    expect(within(mine).queryByText("Queued")).toBeNull();
     const clientId = (call.body as { clientId: string }).clientId;
     push(
       ws,
@@ -1441,7 +1439,7 @@ describe("在 Worker 页面直接对它说话", () => {
     gate.resolve({ status: 200, body: { messageId: 40 } });
     await act(async () => {});
     expect(within(section).getAllByText("顺便改 README")).toHaveLength(1);
-    expect(within(within(section).getByText("顺便改 README").closest("article")!).getByText("Queued")).toBeInTheDocument();
+    expect(within(within(section).getByText("顺便改 README").closest("article")!).queryByText("Queued")).toBeNull();
   });
 
   it("我说的靠右、项目经理说的靠左带它的名字，两种署名分得清", async () => {
@@ -1581,17 +1579,17 @@ describe("在 Worker 页面直接对它说话", () => {
     expect(within(section).getByRole("button", { name: "添加文件" })).toBeDisabled();
   });
 
-  it("服务端拒收（409，收工那一刻正好发出去）或断网：标“发送失败”，可以重试", async () => {
+  it("服务端拒收（409，收工那一刻正好发出去）或断网：左边红色感叹号，点了重发", async () => {
     const { user, section, box } = await openWorker();
     api.postMessage = () => ({ status: 409, body: { error: "Worker #3 已经收工了，不能再给它发消息", code: "conflict" } });
     await user.type(box(), "还在吗{Enter}");
-    expect(await within(section).findByText("发送失败")).toBeInTheDocument();
+    expect(await within(section).findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
     api.postMessage = () => {
       throw new TypeError("Failed to fetch");
     };
-    await user.click(within(section).getByRole("button", { name: "重试" }));
+    await user.click(within(section).getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
-    expect(await within(section).findByText("发送失败")).toBeInTheDocument();
+    expect(await within(section).findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
   });
 
   it("已收工的历史 Worker 对话（初始快照 messages 为空、hasMore 为 true）：点开详情时自动按需拉取历史消息并展示", async () => {

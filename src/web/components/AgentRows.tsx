@@ -178,7 +178,7 @@ export function AgentRows({
                 spellCheck={false}
                 placeholder={catalog.customModelExample ?? undefined}
                 aria-invalid={customError !== null}
-                className="w-[240px]"
+                className="w-60"
                 onChange={(e) => onChange(withModel({ ...value, customModel: e.target.value }, CUSTOM_MODEL, catalog), "model")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing && onCustomSubmit) {

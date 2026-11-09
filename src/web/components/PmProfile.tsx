@@ -101,7 +101,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
     <li className="px-4 py-3">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[15px]">
+          <div className="text-body">
             <span className="font-medium">{ACTOR_LABELS[change.actor]}</span> {describeChange(change, catalog)}
             {change.reason && <span>：{change.reason}</span>}
           </div>
@@ -115,15 +115,15 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
       </div>
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-[13.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             查看改动
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 grid gap-2 sm:grid-cols-2">
             {(["改之前", "改之后"] as const).map((label) => (
               <div key={label} className="min-w-0">
-                <div className="mb-1 text-[13.5px] font-medium text-muted-foreground">{label}</div>
-                <pre className="max-h-60 overflow-auto rounded-xl bg-muted p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <div className="mb-1 text-minor font-medium text-muted-foreground">{label}</div>
+                <pre className="max-h-60 overflow-auto rounded-xl bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "改之前" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
@@ -306,8 +306,8 @@ function PmEditor({
             {folders.map((f) => (
               <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[15px]">{folderName(f.path)}</div>
-                  <div className="truncate text-[13.5px] leading-snug text-muted-foreground">{shortPath(f.path)}</div>
+                  <div className="truncate text-body">{folderName(f.path)}</div>
+                  <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
                 </div>
                 {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">主文件夹</span>}
               </li>
@@ -332,8 +332,8 @@ function PmEditor({
           placeholder="还没有性格设定"
           rows={1}
           className={cn(
-            "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-[15px] field-sizing-content focus-visible:ring-0",
-            text === "" ? "text-[15px]" : "font-mono text-[13.5px]",
+            "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
+            text === "" ? "text-body" : "font-mono text-minor",
           )}
           value={text}
           onChange={(e) => setDraftText(e.target.value)}
@@ -352,7 +352,7 @@ function PmEditor({
           </div>
         )}
         {persona.changes.length === 0 ? (
-          <p className="px-4 py-3 text-[15px] text-muted-foreground">还没有修改</p>
+          <p className="px-4 py-3 text-body text-muted-foreground">还没有修改</p>
         ) : (
           <ul aria-label="修改记录" className="divide-y divide-border">
             {persona.changes.map((change) => (
@@ -461,7 +461,7 @@ function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renew
         )}
       </SettingsRow>
       <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent title="开新会话？" className="max-w-[440px]">
+        <DialogContent title="开新会话？" className="max-w-110">
           <p>项目经理先写一份交接，写完换一个新会话接着干。聊天记录都还在。</p>
           <DialogFooter>
             <DialogClose asChild>
@@ -472,7 +472,7 @@ function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renew
         </DialogContent>
       </Dialog>
       <Dialog open={confirmingArchive} onOpenChange={setConfirmingArchive}>
-        <DialogContent title="归档项目经理？" className="max-w-[440px]">
+        <DialogContent title="归档项目经理？" className="max-w-110">
           <p>归档后会立即停止当前会话、结束未收工的 Piece 并暂停定时任务。7 天内可随时恢复；7 天后永久删除该项目的聊天与内部数据，不会删除你的项目代码文件夹。</p>
           <DialogFooter>
             <DialogClose asChild>
@@ -518,11 +518,11 @@ export function PmProfile({
         </Button>
       </header>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pb-12">
-        <div className="mx-auto grid max-w-[640px] gap-6">
+        <div className="mx-auto grid max-w-160 gap-6">
           <header className="flex flex-col items-center pb-2 text-center">
             <Avatar colorKey={pm.id} size={64} />
-            <h1 className="mt-4 text-[22px] leading-tight font-semibold tracking-tight">{pm.name}</h1>
-            {project && <p className="mt-1 text-[13.5px] text-muted-foreground">{project.name}</p>}
+            <h1 className="mt-4 text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
+            {project && <p className="mt-1 text-minor text-muted-foreground">{project.name}</p>}
           </header>
           {pm.archivedAt != null && <ArchiveStatusGroup key={pm.id} pmId={pm.id} archivedAt={pm.archivedAt} />}
           {load.phase === "loading" && (

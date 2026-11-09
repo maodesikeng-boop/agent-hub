@@ -24,7 +24,7 @@ export function Switch({
     >
       <span
         aria-hidden="true"
-        className={cn("pointer-events-none block size-4 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-[18px]" : "translate-x-0.5")}
+        className={cn("pointer-events-none block size-4 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-4.5" : "translate-x-0.5")}
       />
     </button>
   );
