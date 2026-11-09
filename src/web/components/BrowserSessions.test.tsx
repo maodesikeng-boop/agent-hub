@@ -52,6 +52,9 @@ describe("已登录的浏览器列表", () => {
     const phone = rowOf("iPhone Safari");
     expect(within(phone).getByText("5 分钟前")).toBeInTheDocument();
     expect(within(phone).queryByText(/这个浏览器/)).not.toBeInTheDocument();
+    const region = screen.getByRole("region", { name: "已登录的浏览器" });
+    expect(within(region).getByRole("button", { name: "显示二维码" })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "全部退出" })).toBeInTheDocument();
   });
 
   it("读不出来（比如没登录）：框里一行说原因，不是空白", async () => {

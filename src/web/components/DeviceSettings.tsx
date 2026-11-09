@@ -58,7 +58,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
   };
   return (
     <form
-      className="px-4 py-2"
+      className="py-2.5"
       onSubmit={(e) => {
         e.preventDefault();
         void save();
@@ -158,7 +158,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
               </Button>
             </>
           ) : (
-            <>
+            <span className="-mr-2 flex items-center gap-1">
               <Button variant="ghost" size="icon-sm" aria-label={`给 ${info.name} 改名`} onClick={() => setRenaming(true)}>
                 <Pencil aria-hidden="true" />
               </Button>
@@ -167,7 +167,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
                   <Trash2 aria-hidden="true" />
                 </Button>
               )}
-            </>
+            </span>
           )
         }
       </SettingsRow>
@@ -192,7 +192,7 @@ function InvitePanel() {
     }
   };
   return (
-    <SettingsGroup title="邀请别的设备">
+    <SettingsGroup variant="card" title="邀请别的设备">
       <SettingsRow label="邀请码" error={error}>
         {(id) =>
           invite ? (
@@ -244,26 +244,25 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
   };
   return (
     <form
-      className="grid gap-2"
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
       }}
     >
-      <SettingsGroup title="添加设备">
+      <SettingsGroup variant="card" title="添加设备">
         <SettingsRow label="网址">
           {(id) => <Input id={id} value={url} autoComplete="off" spellCheck={false} placeholder="https://…ts.net" className="w-[240px]" onChange={(e) => setUrl(e.target.value)} />}
         </SettingsRow>
         <SettingsRow label="邀请码" error={error}>
           {(id) => <Input id={id} value={code} autoComplete="off" spellCheck={false} className="w-[240px] font-mono" onChange={(e) => setCode(e.target.value)} />}
         </SettingsRow>
+        <div className="flex justify-end px-4 py-2.5">
+          <Button type="submit" size="sm" disabled={!ready}>
+            {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            添加
+          </Button>
+        </div>
       </SettingsGroup>
-      <div className="flex justify-end">
-        <Button type="submit" disabled={!ready}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          添加
-        </Button>
-      </div>
     </form>
   );
 }
@@ -342,13 +341,12 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
 
   return (
     <form
-      className="grid gap-2"
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
       }}
     >
-      <SettingsGroup title="连到中心">
+      <SettingsGroup variant="card" title="连到中心">
         <SettingsRow
           label="终端命令"
           detail={<code className="block break-all font-mono text-[13.5px] select-all">{command}</code>}
@@ -361,24 +359,24 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
         </SettingsRow>
         <SettingsRow label="连接码" error={error}>
           {(id) => (
-            <Input
-              id={id}
-              value={code}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="ahtun1_…"
-              className="w-[240px] font-mono"
-              onChange={(e) => setCode(e.target.value)}
-            />
+            <>
+              <Input
+                id={id}
+                value={code}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="ahtun1_…"
+                className="w-[240px] font-mono"
+                onChange={(e) => setCode(e.target.value)}
+              />
+              <Button type="submit" disabled={!ready}>
+                {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+                连接
+              </Button>
+            </>
           )}
         </SettingsRow>
       </SettingsGroup>
-      <div className="flex justify-end">
-        <Button type="submit" disabled={!ready}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          连接
-        </Button>
-      </div>
     </form>
   );
 }
@@ -455,13 +453,12 @@ function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEn
               autoComplete="off"
               spellCheck={false}
               placeholder="如 tokyo.tailnet.ts.net"
-              className="w-[180px] font-mono"
+              className="w-[240px] font-mono"
               onChange={(e) => setHostname(e.target.value)}
             />
             <Button
               type="button"
-              variant={entry.enabled ? "outline" : "default"}
-              size="sm"
+              variant="outline"
               disabled={busy}
               onClick={() => void toggle()}
             >
@@ -491,47 +488,50 @@ function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEn
 export function DevicesSection({ devices, tunnel, publicEntry, repoDir, onChanged }: DeviceSettings) {
   const [panel, setPanel] = useState<"tunnel" | "invite" | "add" | null>(null);
   const toggle = (next: "tunnel" | "invite" | "add") => setPanel((p) => (p === next ? null : next));
+  const actionBtn = "aria-expanded:bg-accent aria-expanded:text-foreground";
   return (
     <>
-      <SettingsGroup
-        title="设备"
-        action={
-          <span className="flex gap-2">
-            <Button variant="ghost" size="sm" aria-expanded={panel === "tunnel"} onClick={() => toggle("tunnel")}>
-              连到中心
-            </Button>
-            <Button variant="ghost" size="sm" aria-expanded={panel === "invite"} onClick={() => toggle("invite")}>
-              邀请
-            </Button>
-            <Button variant="ghost" size="sm" aria-expanded={panel === "add"} onClick={() => toggle("add")}>
-              添加
-            </Button>
-          </span>
-        }
-      >
-        {devices.map((device) => (
-          <DeviceRow key={device.key} device={device} onChanged={onChanged} />
-        ))}
-        {tunnel !== null && tunnel !== undefined && <TunnelRow tunnel={tunnel} onChanged={onChanged} />}
-      </SettingsGroup>
-      {panel === "tunnel" && (
-        <TunnelPanel
-          {...(repoDir !== undefined ? { repoDir } : {})}
-          onConnected={() => {
-            setPanel(null);
-            onChanged();
-          }}
-        />
-      )}
-      {panel === "invite" && <InvitePanel />}
-      {panel === "add" && (
-        <AddPanel
-          onAdded={() => {
-            setPanel(null);
-            onChanged();
-          }}
-        />
-      )}
+      <div className="grid gap-3">
+        <SettingsGroup
+          title="设备"
+          action={
+            <span className="-mr-3 flex items-center gap-1">
+              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "tunnel"} onClick={() => toggle("tunnel")}>
+                连到中心
+              </Button>
+              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "invite"} onClick={() => toggle("invite")}>
+                邀请
+              </Button>
+              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "add"} onClick={() => toggle("add")}>
+                添加
+              </Button>
+            </span>
+          }
+        >
+          {devices.map((device) => (
+            <DeviceRow key={device.key} device={device} onChanged={onChanged} />
+          ))}
+          {tunnel !== null && tunnel !== undefined && <TunnelRow tunnel={tunnel} onChanged={onChanged} />}
+        </SettingsGroup>
+        {panel === "tunnel" && (
+          <TunnelPanel
+            {...(repoDir !== undefined ? { repoDir } : {})}
+            onConnected={() => {
+              setPanel(null);
+              onChanged();
+            }}
+          />
+        )}
+        {panel === "invite" && <InvitePanel />}
+        {panel === "add" && (
+          <AddPanel
+            onAdded={() => {
+              setPanel(null);
+              onChanged();
+            }}
+          />
+        )}
+      </div>
       <PublicEntrySection {...(publicEntry !== undefined ? { publicEntry } : {})} onChanged={onChanged} />
     </>
   );
