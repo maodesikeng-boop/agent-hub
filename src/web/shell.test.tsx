@@ -248,7 +248,7 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(value(column, "padding-right")).toBeUndefined();
   });
 
-  it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter", async () => {
+  it("主区套 chat-main；顶栏不跟着列居中：标题在左上、按钮在右上，边距是顶栏自己的 gutter；底部输入框外层向上叠盖 26px 避免顶部圆角外侧水平硬切", async () => {
     await boot();
     const main = screen.getByRole("main");
     expect(main).toHaveClass("chat-main");
@@ -256,6 +256,16 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(header.className).toContain("pl-[var(--header-gutter-start)]");
     expect(header.className).toContain("pr-[var(--header-gutter-end)]");
     expect(header.className).not.toContain("chat-left");
+
+    const convComposerCol = screen.getByPlaceholderText("给 小林 发消息").closest(".chat-column")!;
+    expect(convComposerCol).toHaveClass("-mt-[26px]", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
+
+    act(() => {
+      window.history.replaceState(null, "", "/#/w/30");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const workerComposerCol = screen.getByPlaceholderText("给 修 X 发消息").closest(".chat-column")!;
+    expect(workerComposerCol).toHaveClass("-mt-[26px]", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
   });
 });
 
