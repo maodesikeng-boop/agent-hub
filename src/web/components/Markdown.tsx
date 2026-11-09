@@ -1,11 +1,10 @@
-import { createContext, useContext, useMemo, useState, type ComponentProps } from "react";
+import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough/parseOnly";
 import remarkGfm from "remark-gfm";
 import {
-  SENT_FILE_REASONS,
   isSentImage,
   linkNodesOf,
   parseLocalHref,
@@ -16,14 +15,13 @@ import {
 } from "../../shared/index.ts";
 import { isChartLanguage } from "../charts/registry.ts";
 import { CHART_CLOSED_ATTR, remarkChartBlocks } from "../charts/remark-chart-blocks.ts";
-import { formatBytes } from "../upload.ts";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
 import { ChartBlock } from "./ChartBlock.tsx";
 import { codeElementOf, codeSource, CodeBlock, languageOf } from "./CodeBlock.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
 import { useClient } from "../device-scope.tsx";
 
-/** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或文件卡片。 */
+/** 对上 meta.files 的图片、链接，在 hast 上带这个属性（值是 files 里的下标），渲染时换成内联图片或行内文件链接。 */
 const SENT_FILE_ATTR = "data-sent-file";
 
 /**
@@ -109,20 +107,35 @@ function InlineSentImage({ alt, file, preview }: { alt: string; file: SentFile; 
   );
 }
 
+/** 行内文件链接按钮：保留链接写的文字（含内嵌 `<code>`），点开预览窗；不在挂载时发 HEAD 请求探测 404（预览窗打开时自己处理）。 */
+function SentFileLink({ preview, children }: { preview: PreviewFile; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" data-file-link onClick={() => setOpen(true)}>
+        {children}
+      </button>
+      <FilePreview file={preview} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
 /**
  * agent 发来的一个文件。图片语法 `![]()`（inline）写的、存了副本的图片：内联（固定 240px 高、最宽 320px，加载前后高度不变，点开看大图）；
- * 别的都是卡片：普通链接写的图片带缩略图，点了看大图；其他文件点了看预览；没存下来的写原因。大图和预览是同一个预览窗。
+ * 已保存副本的普通链接 `[文字](路径)`（以及指向非图片文件的 `![]()`）：渲染成行内蓝色链接按钮（保留原本的文字），点开预览窗；
+ * 没存下副本（如指向目录、没找到文件等）：直接显示原本的文字，不画卡片、不显示原因、不发请求。
  */
-function SentFileView({ sent, inline, alt }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string }) {
+function SentFileView({ sent, inline, alt, children }: { sent: NonNullable<ReturnType<typeof useSentFile>>; inline: boolean; alt?: string; children?: ReactNode }) {
   const { file, index, messageId } = sent;
   const client = useClient();
+  const label = inline ? alt || file.name : children;
   if (file.status === "saved" && file.id !== null) {
     const url = client.url(sentFileUrl({ id: file.id, name: file.name }));
     const preview = previewOf(file, url, index, messageId);
     if (inline && isSentImage(file)) return <InlineSentImage alt={alt || file.name} file={file} preview={preview} />;
-    return <FileCard name={file.name} mime={file.mime} detail={file.size === null ? "" : formatBytes(file.size)} preview={preview} className="my-1.5 w-fit max-w-full" />;
+    return <SentFileLink preview={preview}>{label}</SentFileLink>;
   }
-  return <FileCard name={file.name} mime={file.mime} detail={SENT_FILE_REASONS[file.status as Exclude<SentFile["status"], "saved">]} className="my-1.5 w-fit max-w-full" />;
+  return <>{label}</>;
 }
 
 function withoutNode<T extends object>(props: T): Omit<T, "node"> {
@@ -130,10 +143,16 @@ function withoutNode<T extends object>(props: T): Omit<T, "node"> {
   return rest;
 }
 
-/** 链接一律在新窗口打开；noopener noreferrer 防止新页面拿到当前页面的 window。对上 meta.files 的换成文件卡片。 */
+/** 链接一律在新窗口打开；noopener noreferrer 防止新页面拿到当前页面的 window。对上 meta.files 的换成行内文件链接（未存副本时只留文字）。 */
 function Link(props: ComponentProps<"a">) {
   const sent = useSentFile(props);
-  if (sent !== undefined) return <SentFileView sent={sent} inline={false} />;
+  if (sent !== undefined) {
+    return (
+      <SentFileView sent={sent} inline={false}>
+        {props.children}
+      </SentFileView>
+    );
+  }
   return <a {...withoutNode(props)} target="_blank" rel="noopener noreferrer" />;
 }
 
