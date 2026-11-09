@@ -493,7 +493,7 @@ export function PmProfile({
           <ArrowLeft aria-hidden="true" />
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-12">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pb-12">
         <div className="mx-auto grid max-w-[640px] gap-6">
           <header className="flex flex-col items-center pb-2 text-center">
             <Avatar colorKey={pm.id} size={64} />
