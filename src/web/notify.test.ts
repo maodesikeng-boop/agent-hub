@@ -367,7 +367,7 @@ describe("弹通知", () => {
     expect(FakeNotification.instances).toHaveLength(0);
     s.wait(1);
     expect(FakeNotification.instances).toHaveLength(1);
-    expect(FakeNotification.last.title).toBe("小林 等你");
+    expect(FakeNotification.last.title).toBe("小林: Your turn");
     expect(FakeNotification.last.options.body).toBe("做完了，你看看");
     expect(FakeNotification.last.options.tag).toBe("pm-1");
     // 再等也不会重复弹
@@ -385,7 +385,7 @@ describe("弹通知", () => {
     // 老马：另一个 tag
     s.update(apply(activity(again, 2, 2, "idle", 2), messageChange(0, "message.created", makeMessage({ id: 21, conversationId: 2, createdAt: T0 + 2 }))));
     s.wait(WAITING_SETTLE_MS);
-    expect(FakeNotification.last.title).toBe("老马 等你");
+    expect(FakeNotification.last.title).toBe("老马: Your turn");
     expect(FakeNotification.last.options.tag).toBe("pm-2");
   });
 

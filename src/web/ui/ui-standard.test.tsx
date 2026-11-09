@@ -58,8 +58,8 @@ describe("界面标准：共用组件", () => {
   });
 
   it("开关：精致尺寸 h-5 w-9（滑块 size-4），带 touch-target 与中性键盘焦点圈", () => {
-    render(<Switch aria-label="通知" checked={false} onCheckedChange={() => {}} />);
-    const sw = screen.getByRole("switch", { name: "通知" });
+    render(<Switch aria-label="Notifications" checked={false} onCheckedChange={() => {}} />);
+    const sw = screen.getByRole("switch", { name: "Notifications" });
     expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5", "w-9", "touch-target", "focus-visible:ring-ring/50"]));
     expect(sw.firstElementChild).toHaveClass("size-4");
   });

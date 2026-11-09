@@ -44,9 +44,9 @@ describe("图片内联", () => {
     await userEvent.click(img.closest("button")!);
     const dialog = screen.getByRole("dialog", { name: "shot.png" });
     expect(within(dialog).getByRole("img", { name: "shot.png" })).toHaveAttribute("src", `${url}?inline=1`);
-    expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("href", url);
-    expect(within(dialog).getByRole("button", { name: /在 Finder 中显示/ })).toBeEnabled();
-    expect(within(dialog).getByRole("button", { name: /用默认程序打开/ })).toBeEnabled();
+    expect(within(dialog).getByRole("link", { name: /Download/ })).toHaveAttribute("href", url);
+    expect(within(dialog).getByRole("button", { name: /Show in Finder/ })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: /^Open$/ })).toBeEnabled();
   });
 
   it("几张图：各自显示，对得上各自的副本", () => {
@@ -95,7 +95,7 @@ describe("行内文件链接", () => {
       await userEvent.click(screen.getByRole("button", { name: "报告" }));
       const dialog = screen.getByRole("dialog", { name: "报告.pdf" });
       expect(within(dialog).getByTitle("报告.pdf")).toHaveAttribute("src", `${API_PATHS.sentFile("0000000000000001", "报告.pdf")}?inline=1`);
-      expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("download", "报告.pdf");
+      expect(within(dialog).getByRole("link", { name: /Download/ })).toHaveAttribute("download", "报告.pdf");
     } finally {
       vi.unstubAllGlobals();
     }

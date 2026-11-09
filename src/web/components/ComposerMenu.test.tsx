@@ -27,7 +27,7 @@ function Harness({ src, onSend = () => {}, initial = "" }: { src: ComposerSource
   return <Composer value={value} placeholder="发消息" staging={store.of(1)} source={src} onChange={setValue} onSend={onSend} />;
 }
 
-const box = () => screen.getByRole("textbox", { name: "输入消息" }) as HTMLTextAreaElement;
+const box = () => screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
 const options = () => screen.queryAllByRole("option");
 const active = () => options().find((o) => o.getAttribute("aria-selected") === "true");
 let user: ReturnType<typeof userEvent.setup>;
@@ -40,7 +40,7 @@ describe("输入框 / 命令列表", () => {
   it("1 空输入框打 / 弹出列表，第一行高亮", async () => {
     render(<Harness src={source()} />);
     await user.type(box(), "/");
-    expect(await screen.findByRole("listbox", { name: "命令" })).toBeInTheDocument();
+    expect(await screen.findByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     expect(options().map((o) => o.textContent)).toEqual(["/review复查改动", "/compact压缩上下文", "/context看上下文用了多少"]);
     expect(active()).toBe(options()[0]);
   });
@@ -57,9 +57,9 @@ describe("输入框 / 命令列表", () => {
   it("3 /usr/bin 打到第二个 / 时列表关掉", async () => {
     render(<Harness src={source()} />);
     await user.type(box(), "/usr");
-    expect(await screen.findByText("没有匹配的命令")).toBeInTheDocument(); // 列表开着，只是没有匹配
+    expect(await screen.findByText("No matching commands")).toBeInTheDocument(); // 列表开着，只是没有匹配
     await user.type(box(), "/");
-    expect(screen.queryByText("没有匹配的命令")).toBeNull();
+    expect(screen.queryByText("No matching commands")).toBeNull();
   });
 
   it("4 打 /comp 实时筛选，名字开头命中的排前面", async () => {
@@ -136,7 +136,7 @@ describe("输入框 / 命令列表", () => {
     const onSend = vi.fn();
     render(<Harness src={source()} onSend={onSend} />);
     await user.type(box(), "/zzz");
-    expect(await screen.findByText("没有匹配的命令")).toBeInTheDocument();
+    expect(await screen.findByText("No matching commands")).toBeInTheDocument();
     expect(options()).toHaveLength(0);
     await user.keyboard("{Enter}");
     expect(onSend).toHaveBeenCalledWith("/zzz", []);
@@ -212,7 +212,7 @@ describe("输入框 @ 文件列表", () => {
     render(<Harness src={source({ files })} />);
     await user.type(box(), "@");
     await wait();
-    expect(screen.getByRole("listbox", { name: "文件" })).toBeInTheDocument();
+    expect(screen.getByRole("listbox", { name: "Files" })).toBeInTheDocument();
     const [first, second] = options();
     expect(first).toHaveTextContent("App.tsx");
     expect(first).toHaveTextContent("src/web");
@@ -250,7 +250,7 @@ describe("输入框 @ 文件列表", () => {
     render(<Harness src={source({ files: filesOf() })} />);
     await user.type(box(), "@zzz");
     await wait();
-    expect(screen.getByText("没有匹配的文件")).toBeInTheDocument();
+    expect(screen.getByText("No matching files")).toBeInTheDocument();
   });
 
   it("接着打字等 120ms 没再打才发请求", async () => {

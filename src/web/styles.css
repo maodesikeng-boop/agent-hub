@@ -26,6 +26,10 @@
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
   --color-status-active: var(--status-active);
+  /* 水果果冻底（docs/ui-standard.md 第 4 条）：列表行选中 bg-jelly、悬停 hover:bg-jelly-hover，是水果强调色掺透明的极淡底。
+     颜色取行上的 --jelly（左栏的行设成该项目经理的 accent），没设就用 --primary（会话里就是当前项目经理的 accent）。浓度只在这里改 */
+  --color-jelly: color-mix(in srgb, var(--jelly, var(--primary)) 10%, transparent);
+  --color-jelly-hover: color-mix(in srgb, var(--jelly, var(--primary)) 5%, transparent);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
 }

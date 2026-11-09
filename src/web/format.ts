@@ -1,5 +1,6 @@
-// 界面上的文字：状态名、错误、时间。
-import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
+// 界面上的文字：状态名、错误、时间。界面外壳的字用英文（docs/ui-standard.md 第 3 条）。
+import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type PersonaChange, type PmMode, type ScheduleRecord, type TokenUsage } from "../shared/index.ts";
+import type { ModelCatalog } from "../shared/vendors.ts";
 import { GENERIC_ERROR_TEXT } from "../shared/errors.ts";
 import { ApiError } from "./client.ts";
 import { formatCount } from "../shared/count-format.ts";
@@ -33,8 +34,29 @@ export function formatTokens(count: number): string {
   return `${formatCount(count)} ${count === 1 ? "token" : "tokens"}`;
 }
 
+/** 没指定模型、思考程度时界面上的写法（shared/vendors.ts 的 modelLabel 等给命令行用，写的是中文“默认”）。 */
+export const DEFAULT_CHOICE = "Default";
+
+/** 模型下拉里“默认”那一项：知道默认是哪个模型就写出来（“Opus 5.5 (default)”），不知道只写“Default”。 */
+export function defaultModelText(catalog: ModelCatalog): string {
+  return catalog.defaultModel === null ? DEFAULT_CHOICE : `${catalog.defaultModel} (default)`;
+}
+
+/** 两种“轮到你”的叫法：项目经理用 hub ask 问了你（Needs You），对话停稳了在等你（Your turn）。左栏、右栏、通知共用。 */
+export const NEEDS_YOU = "Needs You";
+export const YOUR_TURN = "Your turn";
+
 /** 没有数据时占位的字。 */
 export const NO_DATA = "—";
+
+/** Piece 标题开头的机械分类前缀（“界面：”“修复：”……）：右栏列表里去掉，直接露出任务名。要认新的前缀只改这里。 */
+const PIECE_TITLE_PREFIX = /^(?:界面|修复|功能|素材|排查|设计|重构|测试|清理|优化|文档)\s*[:：]\s*/;
+
+/** 展示用的 Piece 标题：去掉开头的分类前缀；去掉后什么都不剩就原样返回。 */
+export function cleanPieceTitle(title: string): string {
+  const cleaned = title.replace(PIECE_TITLE_PREFIX, "");
+  return cleaned === "" ? title : cleaned;
+}
 
 /** 这个会话现在的对话长度（最近一次请求的 input + 缓存读 + 缓存写，TokenUsage.context）：“158K context”；没有记录显示“—”。 */
 export function formatContext(usage: TokenUsage): string {
@@ -64,9 +86,16 @@ export function newClientId(): string {
  */
 export function nameError(raw: string, maxChars: number = MAX_NAME_CHARS): string | null {
   const name = raw.trim();
-  if ([...name].length > maxChars) return `名字最多 ${maxChars} 个字`;
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return "名字里不能有换行";
+  if ([...name].length > maxChars) return `Name can be at most ${maxChars} characters`;
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return "Name can't contain line breaks";
   return null;
+}
+
+/** 定时任务的频率（界面用英文；shared 的 scheduleLabel 是给命令行和提示词的中文）：“Daily 09:00”“Every 2h”“Every 30 min”。 */
+export function formatSchedule(schedule: Pick<ScheduleRecord, "kind" | "atTime" | "everyMinutes">): string {
+  if (schedule.kind === "daily") return `Daily ${schedule.atTime}`;
+  const minutes = schedule.everyMinutes ?? 0;
+  return minutes % 60 === 0 ? `Every ${minutes / 60}h` : `Every ${minutes} min`;
 }
 
 /** 给人看的路径：用户目录写成 ~（/Users/名字、/home/名字），别的原样。 */
@@ -74,10 +103,16 @@ export function shortPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
-/** 单选下面的一句说明（名字就用 PM_MODE_LABELS）：说清这种模式怎么干活，不加括号、不写“推荐”（docs/ui-standard.md 第 3 条措辞）。 */
+/** 界面上两种模式的叫法（新建项目经理的单选、资料页、修改记录）。shared 的 PM_MODE_LABELS 是写进提示词的中文名，界面不用它。 */
+export const MODE_LABELS: Readonly<Record<PmMode, string>> = {
+  manage_only: "Orchestrate",
+  hands_on: "Hands-on",
+};
+
+/** 单选下面的一句说明：说清这种模式怎么干活，不加括号、不写“推荐”（docs/ui-standard.md 第 3 条措辞）。 */
 export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
-  manage_only: "拆任务、派 Piece 去做，自己负责验收",
-  hands_on: "小事直接在项目文件夹里改，大活再派 Piece",
+  manage_only: "Breaks work into Pieces and reviews the results",
+  hands_on: "Makes small edits directly, sends bigger work to Pieces",
 };
 
 /** 出错显示的三样：text 出了什么事，hint 怎么办（可以没有），raw 原文（只放 title，悬停才看得到）。数据都来自 shared/errors.ts 的 humanize。 */
@@ -119,24 +154,25 @@ export function errorTitle(error: ErrorLike): string | undefined {
 }
 
 export const ACTOR_LABELS: Readonly<Record<PersonaChange["actor"], string>> = {
-  user: "你",
-  pm: "项目经理",
-  file: "手改文件",
+  user: "You",
+  pm: "Project manager",
+  file: "File edit",
 };
 
-/** 多久以前（设备离线时“3 分钟前”）：不到 1 分钟是“刚刚”，不到 1 小时按分钟，不到 1 天按小时，再久按天。 */
+/** 多久以前（设备离线时“3m ago”）：不到 1 分钟是“just now”，不到 1 小时按分钟，不到 1 天按小时，再久按天。 */
+export const JUST_NOW = "just now";
 export function formatAgo(ms: number, now: number = Date.now()): string {
   const minutes = Math.floor(Math.max(0, now - ms) / 60_000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 1) return JUST_NOW;
+  if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** 归档项目经理距离 7 天自动删除还剩几天（向上取整，最少显示“1 天后删除”）。 */
+/** 归档项目经理距离 7 天自动删除还剩几天（向上取整，最少显示“Deletes in 1d”）。 */
 export function formatArchiveRemaining(archivedAt: number, now: number = Date.now()): string {
   const remainingMs = Math.max(0, archivedAt + PM_ARCHIVE_RETENTION_MS - now);
   const days = Math.max(1, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
-  return `${days} 天后删除`;
+  return `Deletes in ${days}d`;
 }

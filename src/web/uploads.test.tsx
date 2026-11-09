@@ -42,11 +42,11 @@ function defaultSnapshot(): StateSnapshot {
   });
 }
 
-const box = () => screen.getByRole("textbox", { name: "输入消息" });
-const sendButton = () => screen.getByRole("button", { name: "发送" });
-const picker = () => screen.getByLabelText("选择文件") as HTMLInputElement;
-const log = () => screen.getByRole("log", { name: "消息" });
-const pendingList = () => screen.queryByRole("list", { name: "待发送的文件" });
+const box = () => screen.getByRole("textbox", { name: "Message" });
+const sendButton = () => screen.getByRole("button", { name: "Send" });
+const picker = () => screen.getByLabelText("Choose files") as HTMLInputElement;
+const log = () => screen.getByRole("log", { name: "Messages" });
+const pendingList = () => screen.queryByRole("list", { name: "Files to send" });
 const conversation = () => screen.getByRole("region", { name: "小林" });
 
 function file(name: string, content = "内容", type = "text/plain"): File {
@@ -106,7 +106,7 @@ describe("选文件（回形针）", () => {
     await boot();
     await user.upload(picker(), [file("image.png", "1", "image/png"), file("image.png", "2", "image/png")]);
     expect(within(pendingList() as HTMLElement).getAllByText("image.png")).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "去掉 image.png" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Remove image.png" })).toHaveLength(2);
   });
 
   it("文件名里带 ../、非 ASCII：原样交给上传接口（服务端清理），列表照常显示", async () => {
@@ -124,13 +124,13 @@ describe("待发文件", () => {
     const user = userEvent.setup();
     await boot();
     await user.upload(picker(), [file("a.txt"), file("b.txt")]);
-    await user.click(screen.getByRole("button", { name: "去掉 a.txt" }));
+    await user.click(screen.getByRole("button", { name: "Remove a.txt" }));
     expect(within(pendingList() as HTMLElement).queryByText("a.txt")).toBeNull();
     await user.type(box(), "只发 b{Enter}");
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(api.uploads.map((u) => u.name)).toEqual(["b.txt"]);
     await user.upload(picker(), file("c.txt"));
-    await user.click(screen.getByRole("button", { name: "去掉 c.txt" }));
+    await user.click(screen.getByRole("button", { name: "Remove c.txt" }));
     expect(pendingList()).toBeNull();
   });
 
@@ -158,12 +158,12 @@ describe("拖放", () => {
   it("文件拖到对话区上：出现“松手添加文件”的高亮；松手：加入待发列表，高亮消失", async () => {
     await boot();
     const area = conversation();
-    expect(screen.queryByText("松手添加文件")).toBeNull();
+    expect(screen.queryByText("Drop to add files")).toBeNull();
     fireEvent.dragEnter(area, dragData([file("拖来的.png", "x", "image/png")]));
     fireEvent.dragOver(area, dragData([file("拖来的.png", "x", "image/png")]));
-    expect(screen.getByText("松手添加文件")).toBeInTheDocument();
+    expect(screen.getByText("Drop to add files")).toBeInTheDocument();
     fireEvent.drop(area, dragData([file("拖来的.png", "x", "image/png"), file("拖来的.txt")]));
-    expect(screen.queryByText("松手添加文件")).toBeNull();
+    expect(screen.queryByText("Drop to add files")).toBeNull();
     const list = within(pendingList() as HTMLElement);
     expect(list.getByText("拖来的.png")).toBeInTheDocument();
     expect(list.getByText("拖来的.txt")).toBeInTheDocument();
@@ -173,16 +173,16 @@ describe("拖放", () => {
     await boot();
     const area = conversation();
     fireEvent.dragEnter(area, dragData([file("a.txt")]));
-    expect(screen.getByText("松手添加文件")).toBeInTheDocument();
+    expect(screen.getByText("Drop to add files")).toBeInTheDocument();
     fireEvent.dragLeave(area, dragData([file("a.txt")]));
-    expect(screen.queryByText("松手添加文件")).toBeNull();
+    expect(screen.queryByText("Drop to add files")).toBeNull();
     expect(pendingList()).toBeNull();
   });
 
   it("拖的不是文件（比如选中的文字）：不高亮", async () => {
     await boot();
     fireEvent.dragEnter(conversation(), { dataTransfer: { files: [], types: ["text/plain"] } });
-    expect(screen.queryByText("松手添加文件")).toBeNull();
+    expect(screen.queryByText("Drop to add files")).toBeNull();
   });
 
   it("拖放的文件也要过大小检查", async () => {
@@ -235,11 +235,11 @@ describe("发出之后", () => {
     expect(within(mine).queryByRole("img", { name: "报告.pdf" })).toBeNull();
     // 点文件卡片打开预览窗：下载链接指向上传接口，在 Finder 中显示走附件接口
     await user.click(within(mine).getByRole("button", { name: /报告\.pdf/ }));
-    expect(within(screen.getByRole("dialog", { name: "报告.pdf" })).getByRole("link", { name: /下载/ })).toHaveAttribute(
+    expect(within(screen.getByRole("dialog", { name: "报告.pdf" })).getByRole("link", { name: /Download/ })).toHaveAttribute(
       "href",
       "/api/uploads/0000000000000002/%E6%8A%A5%E5%91%8A.pdf",
     );
-    expect(screen.getByRole("button", { name: /在 Finder 中显示/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Show in Finder/ })).toBeInTheDocument();
   });
 
   it("刚发出还没收到服务端推回时，图片也先显示缩略图", async () => {
@@ -441,7 +441,7 @@ describe("上传过程中", () => {
     await user.keyboard("{Enter}");
     expect(api.uploads).toHaveLength(1);
     // 传的时候不能再去掉或添加文件
-    expect(screen.getByRole("button", { name: "去掉 a.txt" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove a.txt" })).toBeDisabled();
     finish();
     await waitFor(() => expect(posts()).toHaveLength(1));
     await waitFor(() => expect(box()).toHaveValue(""));
@@ -516,7 +516,7 @@ describe("上传没完时切走对话再切回来", () => {
     expect(box()).toHaveAttribute("readonly");
     expect(box()).toHaveValue("慢慢传");
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("button", { name: "去掉 a.txt" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove a.txt" })).toBeDisabled();
     expect(api.uploads).toHaveLength(1);
 
     finish();
@@ -584,7 +584,7 @@ describe("只发文件的消息在左栏和通知里的预览", () => {
         ],
       }),
     );
-    expect(screen.getByText("[文件] 报告.pdf、图.png")).toBeInTheDocument();
+    expect(screen.getByText("[File] 报告.pdf, 图.png")).toBeInTheDocument();
   });
 });
 

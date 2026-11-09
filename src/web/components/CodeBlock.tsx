@@ -97,7 +97,7 @@ export function CopyCodeButton({ code }: { code: string }) {
   const Icon = copied ? Check : Copy;
   return (
     <BarButton
-      aria-label={copied ? "已复制" : "复制代码"}
+      aria-label={copied ? "Copied" : "Copy code"}
       onClick={() => {
         void copyText(code).then(() => {
           setCopied(true);

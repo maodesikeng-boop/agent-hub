@@ -86,7 +86,7 @@ describe("贴底", () => {
     expect(log.className).not.toContain("fade");
     expect(log).not.toHaveAttribute("data-away");
     expect((log.firstElementChild as HTMLElement).className).toContain("pb-12");
-    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
   });
 
   it("用户往上翻了：内容变高不拉回去，“回到底部”浮在消息列水平正中（浅灰底、没有描边和阴影、不带字），点了回到底部", () => {
@@ -96,7 +96,7 @@ describe("贴底", () => {
     box.scrollHeight = 1500;
     resize();
     expect(log.scrollTop).toBe(100);
-    const back = screen.getByRole("button", { name: "回到底部" });
+    const back = screen.getByRole("button", { name: "Scroll to bottom" });
     expect(back.className).not.toMatch(/shadow|border/);
     expect(back.className).toContain("bg-secondary");
     expect(back).toHaveTextContent("");
@@ -112,7 +112,7 @@ describe("贴底", () => {
     expect(back.className).toContain("pointer-events-auto");
     fireEvent.click(back);
     expect(log.scrollTop).toBe(1100);
-    expect(screen.queryByRole("button", { name: "回到底部" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
     // 回到底部后又贴底
     box.scrollHeight = 1800;
     resize();

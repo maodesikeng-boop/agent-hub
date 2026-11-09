@@ -14,12 +14,12 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-3 text-body">
-        <span>{window.label}</span>
+        <span>{window.short}</span>
         <span className={cn("tabular-nums", exhausted ? "text-danger" : window.warning && "text-warn-foreground")}>{window.percent}%</span>
       </div>
       <div
         role="progressbar"
-        aria-label={`${window.label}额度`}
+        aria-label={`${window.short} usage`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={window.percent}
@@ -30,7 +30,7 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
           style={{ width: `${window.percent}%` }}
         />
       </div>
-      {window.resetsAt !== null && <span className="text-minor text-muted-foreground tabular-nums">{formatQuotaReset(window.resetsAt)} 重置</span>}
+      {window.resetsAt !== null && <span className="text-minor text-muted-foreground tabular-nums">Resets {formatQuotaReset(window.resetsAt)}</span>}
     </div>
   );
 }
@@ -80,7 +80,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
   const exhausted =
     quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
-  const label = exhausted ? "额度已用完" : window ? `${window.label}额度已用 ${window.percent}%` : "额度";
+  const label = exhausted ? "Usage limit reached" : window ? `${window.short} usage ${window.percent}%` : "Usage";
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -94,7 +94,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
           <Ring percent={exhausted ? 100 : (window?.percent ?? 0)} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" aria-label="额度">
+      <PopoverContent side="top" align="end" aria-label="Usage">
         <div className="grid gap-5">
           {blocks.map((vendor) => (
             <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>

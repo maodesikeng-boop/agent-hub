@@ -91,7 +91,7 @@ export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
   const client = useClient();
   if (attachments.length === 0) return null;
   return (
-    <ul aria-label="附件" className="mt-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
+    <ul aria-label="Attachments" className="mt-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
       {attachments.map((a) => (
         <li key={a.id} className="min-w-0">
           <FileCard

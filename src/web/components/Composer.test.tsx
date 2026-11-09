@@ -42,8 +42,8 @@ const setup = (over: Partial<StagedFiles> = {}) =>
 describe("Composer 布局", () => {
   it("回形针和发送键同尺寸、同圆角；回形针是不带底色的 ghost 图标按钮（悬停才有浅底）", () => {
     setup();
-    const attach = screen.getByRole("button", { name: "添加文件" });
-    const send = screen.getByRole("button", { name: "发送" });
+    const attach = screen.getByRole("button", { name: "Add files" });
+    const send = screen.getByRole("button", { name: "Send" });
     expect(attach).toHaveClass("text-muted-foreground", "hover:bg-accent");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
     for (const cls of ["size-9", "rounded-[var(--radius-btn)]"]) {
@@ -54,21 +54,21 @@ describe("Composer 布局", () => {
 
   it("文字区占满整行，按钮行在它下面，回形针在左、发送在右", () => {
     setup();
-    const box = screen.getByRole("textbox", { name: "输入消息" });
+    const box = screen.getByRole("textbox", { name: "Message" });
     expect(box).toHaveClass("w-full");
-    const row = screen.getByRole("button", { name: "添加文件" }).parentElement as HTMLElement;
+    const row = screen.getByRole("button", { name: "Add files" }).parentElement as HTMLElement;
     expect(row).not.toContainElement(box);
     expect(box.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const attach = screen.getByRole("button", { name: "添加文件" });
-    const send = screen.getByRole("button", { name: "发送" });
+    const attach = screen.getByRole("button", { name: "Add files" });
+    const send = screen.getByRole("button", { name: "Send" });
     expect(attach.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(send.parentElement).toHaveClass("ml-auto");
   });
 
   it("待发文件列表在文字上方，和文字同样的左边距", () => {
     setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
-    const list = screen.getByRole("list", { name: "待发送的文件" });
-    const box = screen.getByRole("textbox", { name: "输入消息" });
+    const list = screen.getByRole("list", { name: "Files to send" });
+    const box = screen.getByRole("textbox", { name: "Message" });
     expect(list.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(list).toHaveClass("px-5");
     expect(box).toHaveClass("px-5");
@@ -78,19 +78,19 @@ describe("Composer 布局", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
     expect(frame.className).not.toMatch(/(focus|primary|ring)/);
-    expect(screen.getByRole("textbox", { name: "输入消息" }).className).not.toMatch(/(primary|ring)/);
+    expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/(primary|ring)/);
   });
 
   it("发送中：文字框只读，两个按钮都锁住", () => {
     setup({ busy: true });
-    expect(screen.getByRole("textbox", { name: "输入消息" })).toHaveAttribute("readonly");
-    expect(screen.getByRole("button", { name: "添加文件" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Add files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("继续往后打字时不把 height 先重置成 auto（避免多行时每次按键触发整页同步回流），删字或清空时才重置", () => {
     const { rerender } = render(<Composer value="第一行" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
-    const box = screen.getByRole("textbox", { name: "输入消息" }) as HTMLTextAreaElement;
+    const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
     box.style.height = "80px";
     Object.defineProperty(box, "scrollHeight", {
       configurable: true,
@@ -104,7 +104,7 @@ describe("Composer 布局", () => {
 
   it("文字框关闭系统自动拼写检查、自动纠错与自动大写（防 macOS AppleSpell 同步扫描卡顿）", () => {
     setup();
-    const box = screen.getByRole("textbox", { name: "输入消息" });
+    const box = screen.getByRole("textbox", { name: "Message" });
     expect(box).toHaveAttribute("spellcheck", "false");
     expect(box).toHaveAttribute("autocorrect", "off");
     expect(box).toHaveAttribute("autocapitalize", "off");
@@ -143,7 +143,7 @@ describe("Composer 布局", () => {
     const displayTextSpy = vi.spyOn(messagesModule, "displayText");
     const attachmentsSpy = vi.spyOn(shared, "attachmentsOf");
 
-    const box = screen.getByRole("textbox", { name: "输入消息" });
+    const box = screen.getByRole("textbox", { name: "Message" });
     await user.type(box, "正在输入一段长文字测试延迟");
     expect(parseSpy).not.toHaveBeenCalled();
     expect(workedForSpy).not.toHaveBeenCalled();
@@ -182,10 +182,10 @@ describe("Composer 提示条", () => {
       expect(alert).toHaveClass("bg-sidebar", "rounded-xl", "text-muted-foreground");
       expect(alert).toHaveTextContent("「空.txt」是空文件，没有加入");
 
-      screen.getByRole("button", { name: "关闭提示" }).click();
+      screen.getByRole("button", { name: "Dismiss" }).click();
       expect(dismissNotice).toHaveBeenCalledTimes(1);
 
-      fireEvent.change(screen.getByRole("textbox", { name: "输入消息" }), { target: { value: "新内容" } });
+      fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "新内容" } });
       expect(dismissNotice).toHaveBeenCalledTimes(2);
 
       act(() => vi.advanceTimersByTime(NOTICE_AUTO_HIDE_MS - 1));

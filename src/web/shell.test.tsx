@@ -53,7 +53,7 @@ function three(): StateSnapshot {
   });
 }
 
-const nav = () => screen.getByRole("navigation", { name: "对话列表" });
+const nav = () => screen.getByRole("navigation", { name: "Conversations" });
 const row = (name: string) => within(nav()).getByRole("button", { name: new RegExp(name) });
 const title = () => screen.getByRole("main").querySelector("h1")?.textContent;
 
@@ -64,7 +64,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("网址", () => {
+describe("URL", () => {
   it("routeHash / parseRoute 来回一致；认不出来的是 null", () => {
     for (const route of [{ view: "conversation", id: 12 }, { view: "worker", id: 30 }, { view: "profile", pmId: 3 }] as const) {
       expect(parseRoute(routeHash(route))).toEqual(route);
@@ -118,7 +118,7 @@ describe("网址", () => {
   it("点顶栏头像打开资料页：网址是 #/pm/<编号>", async () => {
     const user = userEvent.setup();
     await boot();
-    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    await user.click(screen.getByRole("button", { name: "View 小林\'s profile" }));
     expect(window.location.hash).toBe("#/pm/1");
   });
 });
@@ -127,18 +127,22 @@ describe("焦点", () => {
   it("打开、切换对话时焦点在输入框里", async () => {
     const user = userEvent.setup();
     await boot();
-    await waitFor(() => expect(screen.getByPlaceholderText("给 小林 发消息")).toHaveFocus());
+    await waitFor(() => expect(screen.getByPlaceholderText("Message 小林…")).toHaveFocus());
     await user.click(row("老马"));
-    expect(screen.getByPlaceholderText("给 老马 发消息")).toHaveFocus();
+    expect(screen.getByPlaceholderText("Message 老马…")).toHaveFocus();
   });
 });
 
-describe("左栏", () => {
+describe("Sidebar", () => {
   it("选中的对话：只靠底色 bg-sidebar-active 表示，名字字重不变（都是 500，不加粗）", async () => {
     await boot();
     const name = (label: string) => within(row(label)).getByText(label);
     expect(row("小林")).toHaveAttribute("aria-current", "true");
-    expect(row("小林")).toHaveClass("bg-sidebar-active");
+    expect(row("小林")).toHaveClass("bg-jelly");
+    // 果冻底的颜色是这个项目经理水果的 accent（styles.css 的 --color-jelly 取行上的 --jelly）
+    expect(row("小林").style.getPropertyValue("--jelly")).toMatch(/^#[0-9a-f]{6}$/);
+    expect(row("老马")).toHaveClass("hover:bg-jelly-hover");
+    expect(row("老马").className).not.toMatch(/bg-sidebar-active/);
     expect(name("小林")).toHaveClass("font-medium");
     expect(name("小林")).not.toHaveClass("font-semibold");
     expect(name("老马")).toHaveClass("font-medium");
@@ -163,9 +167,9 @@ describe("左栏", () => {
   it("左栏底部：不渲染“我”头像与文字；左侧放额度入口，右侧设置按钮 ml-auto 固定靠右；额度、设置、新建都是同一种 ghost 按钮", async () => {
     const user = userEvent.setup();
     const ws = await boot();
-    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     expect(within(sidebar).queryByText("我")).not.toBeInTheDocument();
-    const settingsBtn = within(sidebar).getByRole("button", { name: "设置" });
+    const settingsBtn = within(sidebar).getByRole("button", { name: "Settings" });
     expect(settingsBtn).toHaveClass("ml-auto");
     push(
       ws,
@@ -184,13 +188,13 @@ describe("左栏", () => {
         }),
       ),
     );
-    const quotaBtn = within(sidebar).getByRole("button", { name: "5 小时额度已用 37%" });
-    for (const button of [quotaBtn, settingsBtn, screen.getByRole("button", { name: "新建项目经理" })]) {
+    const quotaBtn = within(sidebar).getByRole("button", { name: "5h usage 37%" });
+    for (const button of [quotaBtn, settingsBtn, screen.getByRole("button", { name: "New project manager" })]) {
       expect(button).toHaveClass("text-muted-foreground", "hover:bg-accent");
       expect(button.className).not.toMatch(/(^|\s)bg-/);
     }
     await user.click(settingsBtn);
-    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
   });
 
   it("左栏对话列表带 sidebar-list 边缘渐变遮罩与 pb-3 底部内边距，与顶部搜索栏和底部栏柔和过渡", async () => {
@@ -258,14 +262,14 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(header.className).toContain("pr-[var(--header-gutter-end)]");
     expect(header.className).not.toContain("chat-left");
 
-    const convComposerCol = screen.getByPlaceholderText("给 小林 发消息").closest(".chat-column")!;
+    const convComposerCol = screen.getByPlaceholderText("Message 小林…").closest(".chat-column")!;
     expect(convComposerCol).toHaveClass("-mt-6.5", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
 
     act(() => {
       window.history.replaceState(null, "", "/#/w/30");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
-    const workerComposerCol = screen.getByPlaceholderText("给 修 X 发消息").closest(".chat-column")!;
+    const workerComposerCol = screen.getByPlaceholderText("Message 修 X…").closest(".chat-column")!;
     expect(workerComposerCol).toHaveClass("-mt-6.5", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
   });
 });
@@ -282,9 +286,9 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     const user = userEvent.setup();
     await boot();
 
-    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     expect(sidebar.className).toContain("pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))]");
-    const searchInput = within(sidebar).getByRole("searchbox", { name: "搜索" });
+    const searchInput = within(sidebar).getByRole("searchbox", { name: "Search" });
     expect(searchInput.closest("[data-window-drag]")).not.toBeNull();
 
     const convHeader = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header")!;
@@ -292,8 +296,8 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     expect(convHeader.className).toContain("pl-[var(--header-gutter-start)]");
 
     // 切到资料页检查顶栏
-    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
-    const profileBackBtn = screen.getByRole("button", { name: "返回" });
+    await user.click(screen.getByRole("button", { name: "View 小林\'s profile" }));
+    const profileBackBtn = screen.getByRole("button", { name: "Back" });
     const profileHeader = profileBackBtn.closest("header")!;
     expect(profileHeader).toHaveAttribute("data-window-drag");
     expect(profileHeader.className).toContain("px-6");
@@ -376,9 +380,9 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     expect(postWindowDrag).toHaveBeenCalledTimes(2);
 
     // 点击顶栏里的头像按钮、左栏里的搜索输入框或新建按钮 -> 不触发拖拽
-    const avatarBtn = screen.getByRole("button", { name: "查看 小林 的资料" });
-    const searchInput = screen.getByRole("searchbox", { name: "搜索" });
-    const newPmBtn = screen.getByRole("button", { name: "新建项目经理" });
+    const avatarBtn = screen.getByRole("button", { name: "View 小林\'s profile" });
+    const searchInput = screen.getByRole("searchbox", { name: "Search" });
+    const newPmBtn = screen.getByRole("button", { name: "New project manager" });
     for (const interactive of [avatarBtn, searchInput, newPmBtn]) {
       act(() => {
         interactive.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }));
@@ -408,24 +412,24 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     const user = userEvent.setup();
     await boot();
 
-    const messageLog = screen.getByRole("log", { name: "消息" });
+    const messageLog = screen.getByRole("log", { name: "Messages" });
     expect(messageLog).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
 
-    const sidebarNav = screen.getByRole("navigation", { name: "对话列表" });
+    const sidebarNav = screen.getByRole("navigation", { name: "Conversations" });
     expect(sidebarNav).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
 
-    const rightRail = screen.getByRole("complementary", { name: "右栏" });
+    const rightRail = screen.getByRole("complementary", { name: "Side panel" });
     const rightRailScroller = rightRail.firstElementChild as HTMLElement;
     expect(rightRailScroller).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
 
-    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
-    const dialog = screen.getByRole("dialog", { name: "新建项目经理" });
+    await user.click(screen.getByRole("button", { name: "New project manager" }));
+    const dialog = screen.getByRole("dialog", { name: "New project manager" });
     const dialogBody = dialog.querySelector('[data-slot="dialog-body"]') as HTMLElement;
     expect(dialogBody).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
-    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
 
-    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
-    const profileRegion = screen.getByRole("region", { name: "小林 的资料" });
+    await user.click(screen.getByRole("button", { name: "View 小林\'s profile" }));
+    const profileRegion = screen.getByRole("region", { name: "小林\'s profile" });
     const profileScroller = profileRegion.querySelector(".overflow-y-auto") as HTMLElement;
     expect(profileScroller).toHaveClass("overflow-x-hidden", "overscroll-y-contain");
   });
@@ -442,13 +446,13 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
       dispatchEvent: vi.fn(),
     }));
     await boot();
-    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
-    expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "对话列表" })).toBeNull();
-    const navEl = screen.getByRole("navigation", { name: "对话列表" });
+    expect(within(sidebar).queryByRole("searchbox", { name: "Search" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Conversations" })).toBeNull();
+    const navEl = screen.getByRole("navigation", { name: "Conversations" });
     expect(within(navEl).getByRole("button", { name: /小林/ })).toHaveClass("size-13", "rounded-2xl");
-    expect(within(sidebar).getByRole("button", { name: "新建项目经理" })).toBeInTheDocument();
-    expect(within(sidebar).getByRole("button", { name: "设置" })).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "New project manager" })).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
 });

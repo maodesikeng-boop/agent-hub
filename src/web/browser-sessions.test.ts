@@ -26,8 +26,8 @@ describe("describeUserAgent", () => {
   });
 
   it("认不出（空、curl、乱码）：只给认得出的那一半；都认不出是“未知浏览器”", () => {
-    expect(describeUserAgent("")).toBe("未知浏览器");
-    expect(describeUserAgent("curl/8.4.0")).toBe("未知浏览器");
+    expect(describeUserAgent("")).toBe("Unknown browser");
+    expect(describeUserAgent("curl/8.4.0")).toBe("Unknown browser");
     expect(describeUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe("Mac");
     expect(describeUserAgent("Mozilla/5.0 Firefox/132.0")).toBe("Firefox");
   });
@@ -53,15 +53,15 @@ describe("userAgentKind（行左边的电脑 / 手机图标）", () => {
 describe("formatAgo", () => {
   const now = 10 * 24 * 3600_000;
   it.each([
-    [0, "刚刚"],
-    [59_000, "刚刚"],
-    [60_000, "1 分钟前"],
-    [59 * 60_000, "59 分钟前"],
-    [3600_000, "1 小时前"],
-    [23 * 3600_000, "23 小时前"],
-    [24 * 3600_000, "1 天前"],
-    [9 * 24 * 3600_000, "9 天前"],
-    [-5000, "刚刚"],
+    [0, "just now"],
+    [59_000, "just now"],
+    [60_000, "1m ago"],
+    [59 * 60_000, "59m ago"],
+    [3600_000, "1h ago"],
+    [23 * 3600_000, "23h ago"],
+    [24 * 3600_000, "1d ago"],
+    [9 * 24 * 3600_000, "9d ago"],
+    [-5000, "just now"],
   ])("%d 毫秒前 → %s", (ago, text) => {
     expect(formatAgo(now - ago, now)).toBe(text);
   });

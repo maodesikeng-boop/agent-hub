@@ -1,9 +1,10 @@
 import { ChevronRight, Plus, Search, Settings } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
-import { formatArchiveRemaining, formatTime } from "../format.ts";
+import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
 import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
+import { paletteOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
@@ -12,6 +13,10 @@ import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
 import { SettingsDialog, type DeviceSettings } from "./SettingsDialog.tsx";
+
+/** 行的果冻底（docs/ui-standard.md 第 4 条）：选中、悬停是这个项目经理水果色的极淡底，颜色经 --jelly 交给 styles.css 的 bg-jelly。 */
+const jellyOf = (avatarKey: number) => ({ "--jelly": paletteOf(avatarKey).accent }) as React.CSSProperties;
+const JELLY_ROW = (active: boolean) => (active ? "bg-jelly" : "hover:bg-jelly-hover");
 
 /** 左栏的一组：一台设备和它的项目经理。只有一组时不显示组头（和没有联机时一样）。 */
 export interface SidebarGroup {
@@ -47,9 +52,9 @@ function EntryButton({
     entry.pm?.archivedAt != null ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
-      <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
+      <span role="img" aria-label={NEEDS_YOU} title={NEEDS_YOU} data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
+      <span role="img" aria-label={YOUR_TURN} title={YOUR_TURN} data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
     ) : entry.lastMessage ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
@@ -59,8 +64,9 @@ function EntryButton({
       aria-current={active ? "true" : undefined}
       className={cn(
         "flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
+        JELLY_ROW(active),
       )}
+      style={jellyOf(entry.avatarKey)}
       onClick={onSelect}
     >
       <Avatar colorKey={entry.avatarKey} size={44} />
@@ -103,8 +109,9 @@ function NarrowEntryButton({
       title={entry.name}
       className={cn(
         "relative flex size-13 shrink-0 items-center justify-center rounded-2xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
+        JELLY_ROW(active),
       )}
+      style={jellyOf(entry.avatarKey)}
       onClick={onSelect}
     >
       <span className="relative">
@@ -112,16 +119,16 @@ function NarrowEntryButton({
         {asking ? (
           <span
             role="img"
-            aria-label="等你确定"
-            title="等你确定"
+            aria-label={NEEDS_YOU}
+            title={NEEDS_YOU}
             data-testid="asking-indicator"
             className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
           />
         ) : waiting ? (
           <span
             role="img"
-            aria-label="等你"
-            title="等你"
+            aria-label={YOUR_TURN}
+            title={YOUR_TURN}
             data-testid="waiting-indicator"
             className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
           />
@@ -253,7 +260,7 @@ export function Sidebar({
                 })
               }
             >
-              <span>已归档</span>
+              <span>Archived</span>
               <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
               <span className="ml-auto text-xs font-normal tabular-nums">{archivedEntries.length}</span>
             </button>
@@ -271,7 +278,7 @@ export function Sidebar({
   return (
     <aside
       id="sidebar"
-      aria-label="左栏"
+      aria-label="Sidebar"
       className={cn(
         "flex shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
         narrow ? "w-18 border-r border-border" : "w-75",
@@ -282,7 +289,7 @@ export function Sidebar({
           <div data-window-drag className="h-3 shrink-0" />
           <nav
             className="sidebar-list flex flex-1 flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto overscroll-y-contain px-0 pt-1 pb-3"
-            aria-label="对话列表"
+            aria-label="Conversations"
           >
             {narrowEntries.map(({ group, entry }) => {
               const key = conversationKey(group.key, entry.id);
@@ -299,11 +306,11 @@ export function Sidebar({
             })}
           </nav>
           <div className="flex shrink-0 flex-col items-center gap-2 py-3">
-            <Button variant="ghost" size="icon-sm" aria-label="新建项目经理" onClick={onNewPm}>
+            <Button variant="ghost" size="icon-sm" aria-label="New project manager" onClick={onNewPm}>
               <Plus aria-hidden="true" />
             </Button>
             <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-            <Button variant="ghost" size="icon-sm" aria-label="设置" onClick={() => setSettingsOpen(true)}>
+            <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
               <Settings aria-hidden="true" />
             </Button>
           </div>
@@ -318,23 +325,23 @@ export function Sidebar({
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
               <Input
                 type="search"
-                aria-label="搜索"
-                placeholder="搜索"
+                aria-label="Search"
+                placeholder="Search"
                 className="h-9 border-transparent bg-sidebar-active pl-9"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <Button variant="ghost" size="icon" className="shrink-0" aria-label="新建项目经理" onClick={onNewPm}>
+            <Button variant="ghost" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
               <Plus aria-hidden="true" />
             </Button>
           </div>
-          <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="对话列表">
+          <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="Conversations">
             {grouped ? (
               <>
                 {reminded.length > 0 && (
-                  <section aria-label="等你确定" className="mb-2">
-                    <h2 className="flex h-8 items-center px-3 text-minor font-medium text-muted-foreground">等你确定</h2>
+                  <section aria-label={NEEDS_YOU} className="mb-2">
+                    <h2 className="flex h-8 items-center px-3 text-minor font-medium text-muted-foreground">{NEEDS_YOU}</h2>
                     <div className="mt-1 space-y-1">
                       {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
                       {reminded.map(({ group, entry }) => (
@@ -368,7 +375,7 @@ export function Sidebar({
           </nav>
           <div className="flex items-center gap-1 px-3 py-3">
             <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-            <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="设置" onClick={() => setSettingsOpen(true)}>
+            <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
               <Settings aria-hidden="true" />
             </Button>
           </div>

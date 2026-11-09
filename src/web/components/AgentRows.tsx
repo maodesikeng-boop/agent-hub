@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CUSTOM_MODEL,
   checkModel,
-  defaultModelOption,
   effortsFor,
   modelChoiceOf,
   splitModelEffort,
@@ -12,7 +11,7 @@ import {
   isSelectable,
   type ModelCatalog,
 } from "../../shared/index.ts";
-import type { ErrorLike } from "../format.ts";
+import { DEFAULT_CHOICE, defaultModelText, type ErrorLike } from "../format.ts";
 import { useModelCatalog, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
 import { Input, Select } from "../ui/input.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
@@ -114,8 +113,8 @@ export function AgentRows({
   return (
     <>
       <SettingsRow
-        label="厂商"
-        detail={switchingToVendor != null ? `正在换到 ${vendorLabel(switchingToVendor)}…` : undefined}
+        label="Provider"
+        detail={switchingToVendor != null ? `Switching to ${vendorLabel(switchingToVendor)}…` : undefined}
         error={errors.vendor}
       >
         {(id) =>
@@ -140,7 +139,7 @@ export function AgentRows({
           )
         }
       </SettingsRow>
-      <SettingsRow label="模型" error={errors.model}>
+      <SettingsRow label="Model" error={errors.model}>
         {(id) => (
           <Select
             id={id}
@@ -154,19 +153,19 @@ export function AgentRows({
               if (e.target.value === CUSTOM_MODEL) setFocusCustom(true);
             }}
           >
-            <option value="">{defaultModelOption(catalog)}</option>
+            <option value="">{defaultModelText(catalog)}</option>
             {catalog.models.map((m) => (
               <option key={m.id} value={m.id} title={m.description ?? undefined}>
                 {m.label}
               </option>
             ))}
-            {unlisted && <option value={choice}>自定义：{choice}</option>}
-            {catalog.customModelExample !== null && <option value={CUSTOM_MODEL}>自定义</option>}
+            {unlisted && <option value={choice}>Custom: {choice}</option>}
+            {catalog.customModelExample !== null && <option value={CUSTOM_MODEL}>Custom</option>}
           </Select>
         )}
       </SettingsRow>
       {choice === CUSTOM_MODEL && (
-        <SettingsRow label="模型名" error={customError}>
+        <SettingsRow label="Model name" error={customError}>
           {(id) => (
             <>
               <Input
@@ -194,10 +193,10 @@ export function AgentRows({
       )}
       {/* 这个模型只有一档（或没有档位）时没得选，不显示下拉 */}
       {efforts.length > 1 && (
-        <SettingsRow label="思考程度" error={errors.effort}>
+        <SettingsRow label="Effort" error={errors.effort}>
           {(id) => (
             <Select id={id} variant="plain" value={value.effort} disabled={disabled} onChange={(e) => onChange({ ...value, effort: e.target.value }, "effort")}>
-              <option value="">默认</option>
+              <option value="">{DEFAULT_CHOICE}</option>
               {efforts.map((e) => (
                 <option key={e} value={e}>
                   {e}

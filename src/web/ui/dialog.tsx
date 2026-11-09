@@ -37,7 +37,7 @@ export function DialogContent({
         <DialogPrimitive.Title className={cn("shrink-0 text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
         {children}
         <DialogPrimitive.Close
-          aria-label="关闭"
+          aria-label="Close"
           className="absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <X className="size-4" aria-hidden="true" />

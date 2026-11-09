@@ -29,7 +29,7 @@ describe("AgentStatus：消息流里的状态", () => {
 
   it("干活：按 step 显示，后面带省略号（装饰，读屏不读），整句流光", () => {
     const { container } = render(<AgentStatus session={working({ step: { type: "thinking" } })} />);
-    const status = screen.getByRole("status", { name: "状态" });
+    const status = screen.getByRole("status", { name: "Status" });
     expect(status).toHaveTextContent("Thinking...");
     const dots = container.querySelector("[aria-hidden='true']") as HTMLElement;
     expect(dots).toHaveTextContent("...");
@@ -63,7 +63,7 @@ describe("AgentStatus：消息流里的状态", () => {
     expect(text(makeSession({ rateLimit: rejected }))).toMatch(/^Usage limit reached, resets .+$/);
     expect(text(working({ step: { type: "thinking" }, rateLimit: rejected }))).toMatch(/^Usage limit reached/);
     expect(text(makeSession({ rateLimit: { ...rejected, resetsAt: null } }))).toBe("Usage limit reached");
-    expect(screen.getAllByRole("status", { name: "状态" }).at(-1)).not.toHaveClass("status-shimmer");
+    expect(screen.getAllByRole("status", { name: "Status" }).at(-1)).not.toHaveClass("status-shimmer");
     expect(hasAgentStatus(makeSession({ rateLimit: { status: "allowed_warning", resetsAt: null, windows: {} } }))).toBe(false);
   });
 });
@@ -90,7 +90,7 @@ function list(messages: ReturnType<typeof makeMessage>[], over: { pending?: Pend
 }
 
 const heads = (container: HTMLElement) => Array.from(container.querySelectorAll("[data-slot='agent-head']")) as HTMLElement[];
-const statusLine = () => screen.getByRole("status", { name: "状态" }).closest("[data-work-line]") as HTMLElement;
+const statusLine = () => screen.getByRole("status", { name: "Status" }).closest("[data-work-line]") as HTMLElement;
 
 describe("MessageList：状态在这一轮最下面", () => {
   it("这一轮还没出回复（最后一条是用户的消息）：底部先出一轮“头像 名字”，下面一行状态", () => {
@@ -180,8 +180,8 @@ describe("Composer：发送键和停止键", () => {
   it("忙 + 输入框是空的：发送键换成“停止”，同一个位置、同样大小；点它调停止", async () => {
     const stop = stopControl();
     composer("", stop);
-    expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
-    const button = screen.getByRole("button", { name: "停止" });
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Stop" });
     expect(button).toBeEnabled();
     expect(button).toHaveClass("size-9", "rounded-[var(--radius-btn)]");
     expect(button.parentElement).toHaveClass("ml-auto");
@@ -192,61 +192,61 @@ describe("Composer：发送键和停止键", () => {
 
   it("停止键和发送键的外观一样（只是图标不同）", () => {
     const { unmount } = composer("", undefined);
-    const sendClass = screen.getByRole("button", { name: "发送" }).className;
+    const sendClass = screen.getByRole("button", { name: "Send" }).className;
     unmount();
     composer("", stopControl());
-    expect(screen.getByRole("button", { name: "停止" }).className).toBe(sendClass);
+    expect(screen.getByRole("button", { name: "Stop" }).className).toBe(sendClass);
   });
 
   it("忙 + 有字：变回“发送”，发出去照常排队", async () => {
     const onSend = vi.fn();
     composer("再补一句", stopControl(), {}, onSend);
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSend).toHaveBeenCalledWith("再补一句", []);
   });
 
   it("忙 + 只有空白：还是“停止”", () => {
     composer("   \n ", stopControl());
-    expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
   });
 
   it("忙 + 有待发文件（没有字）：发送", () => {
     composer("", stopControl(), { files: [{ key: "a", file: new File(["x"], "a.txt") }] });
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it("空闲：发送（输入框空着时不可点）", () => {
     composer("", stopControl({ busy: false }));
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("没传 stop（不管停止的页面）：永远是发送", () => {
     composer("", undefined);
-    expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
   it("正在停止：停止键不可点", () => {
     composer("", stopControl({ stopping: true }));
-    expect(screen.getByRole("button", { name: "停止" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
   });
 
   it("停止失败：显示“停止失败”，键恢复可点；有内容时（发送）不显示", () => {
     const { unmount } = composer("", stopControl({ failed: true }));
-    expect(screen.getByText("停止失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
+    expect(screen.getByText("Couldn't stop")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
     unmount();
     composer("字", stopControl({ failed: true }));
-    expect(screen.queryByText("停止失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't stop")).not.toBeInTheDocument();
   });
 
   it("忙 + 空输入时按回车不发送也不停止", async () => {
     const onSend = vi.fn();
     const stop = stopControl();
     composer("", stop, {}, onSend);
-    await userEvent.type(screen.getByRole("textbox", { name: "输入消息" }), "{Enter}");
+    await userEvent.type(screen.getByRole("textbox", { name: "Message" }), "{Enter}");
     expect(onSend).not.toHaveBeenCalled();
     expect(stop.onStop).not.toHaveBeenCalled();
   });

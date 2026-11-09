@@ -1,8 +1,8 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import { Check } from "lucide-react";
 import { useId } from "react";
-import { PM_MODES, PM_MODE_LABELS, type PmMode } from "../../shared/index.ts";
-import { MODE_OPTION_DETAILS } from "../format.ts";
+import { PM_MODES, type PmMode } from "../../shared/index.ts";
+import { MODE_LABELS, MODE_OPTION_DETAILS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 
 /** 多选一的标记（docs/ui-standard.md 第 9 条）：20px 的圆，没选中是灰边空心，选中是主色实心里一个白色粗勾。 */
@@ -55,7 +55,7 @@ export function ModeRows({
           >
             <span className="min-w-0 flex-1">
               <span id={`${id}-label`} className="block text-body">
-                {PM_MODE_LABELS[mode]}
+                {MODE_LABELS[mode]}
               </span>
               <span id={`${id}-detail`} className="block text-minor leading-snug text-muted-foreground">
                 {MODE_OPTION_DETAILS[mode]}

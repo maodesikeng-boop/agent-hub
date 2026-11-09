@@ -1,5 +1,5 @@
 // 设置里“已登录的浏览器”要显示的文字（纯函数）。
-const UNKNOWN_BROWSER = "未知浏览器";
+const UNKNOWN_BROWSER = "Unknown browser";
 
 /** 从 User-Agent 认出设备和浏览器，显示成“iPhone Safari”；只认得出一半就只写那一半，都认不出是“未知浏览器”。 */
 export function describeUserAgent(userAgent: string): string {
@@ -43,10 +43,10 @@ export function userAgentKind(userAgent: string): "phone" | "tablet" | "computer
 /** 最后活动离现在多久：刚刚 / N 分钟前 / N 小时前 / N 天前。 */
 export function formatAgo(ms: number, now: number = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - ms) / 1000));
-  if (seconds < 60) return "刚刚";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} 小时前`;
-  return `${Math.floor(seconds / 86_400)} 天前`;
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86_400)}d ago`;
 }
 
 /** 登录链接还剩多久：“4:33”（不足一秒按一秒算，到 0 才是 0:00）。 */

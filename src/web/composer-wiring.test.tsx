@@ -16,10 +16,10 @@ async function boot() {
   render(<App />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.last.open());
-  await screen.findByRole("textbox", { name: "输入消息" });
+  await screen.findByRole("textbox", { name: "Message" });
 }
 
-const box = () => screen.getByRole("textbox", { name: "输入消息" }) as HTMLTextAreaElement;
+const box = () => screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
 const BLOCKED = "/clear 会换掉对话的会话，请在资料页点“开新会话”";
 
 beforeEach(() => {
@@ -105,7 +105,7 @@ describe("任何接口回 401：直接切到登录界面，不弹报错", () => 
     await boot();
     api.postMessage = () => ({ status: 401, body: { error: "unauthorized" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByText(/还没有登录/)).toBeInTheDocument();
+    expect(await screen.findByText(/Not signed in/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/登录过期了/)).toBeNull();
   });

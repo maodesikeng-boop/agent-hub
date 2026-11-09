@@ -83,9 +83,9 @@ describe("图表块：分流", () => {
     expect(container.querySelector("[data-md-code]")).toBeNull();
     expect(chart.querySelector("[data-chart-lang]")).toHaveTextContent("mermaid");
     const bar = within(chart);
-    expect(bar.getByRole("button", { name: "查看源码" })).toHaveAttribute("aria-pressed", "false");
-    expect(bar.getByRole("button", { name: "放大" })).toBeInTheDocument();
-    expect(bar.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(bar.getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
+    expect(bar.getByRole("button", { name: "Zoom" })).toBeInTheDocument();
+    expect(bar.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
     expect(renderFake).toHaveBeenCalledTimes(1);
     expect(renderFake.mock.calls[0]![0]).toBe("graph TD\n  A --> B");
   });
@@ -183,7 +183,7 @@ describe("图表块：失败", () => {
 
   it("6. 源码超过上限：不调用渲染器，代码块 + 错误", () => {
     const { container } = render(<Markdown text={fence("mermaid", "A".repeat(CHART_MAX_SOURCE_CHARS + 1))} />);
-    expect(container.querySelector("[data-chart-error]")).toHaveTextContent("图表源码太长");
+    expect(container.querySelector("[data-chart-error]")).toHaveTextContent("Chart source is too long");
     expect(container.querySelector("[data-md-code]")).not.toBeNull();
     expect(renderFake).not.toHaveBeenCalled();
     expect(load).not.toHaveBeenCalled();
@@ -295,15 +295,15 @@ describe("图表块：源码切换、放大、复制", () => {
     const chart = chartOf(container)!;
     expect(highlight).not.toHaveBeenCalled();
 
-    await user.click(within(chart).getByRole("button", { name: "查看源码" }));
-    expect(within(chart).getByRole("button", { name: "查看源码" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(chart).getByRole("button", { name: "View source" }));
+    expect(within(chart).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(chart.querySelector(".tok")).not.toBeNull());
     expect(highlight).toHaveBeenCalledWith("graph TD\n  A --> B", "mermaid");
     expect(chart.querySelector("[data-chart-body]")).toHaveAttribute("hidden");
     expect(chart.querySelector("[data-chart-source]")).toHaveTextContent("graph TD");
-    expect(within(chart).queryByRole("button", { name: "放大" })).toBeNull();
+    expect(within(chart).queryByRole("button", { name: "Zoom" })).toBeNull();
 
-    await user.click(within(chart).getByRole("button", { name: "查看源码" }));
+    await user.click(within(chart).getByRole("button", { name: "View source" }));
     expect(chart.querySelector("[data-chart-source]")).toBeNull();
     expect(chart.querySelector("[data-chart-body]")).not.toHaveAttribute("hidden");
     expect(chart.querySelector("[data-chart-body] svg[data-fake]")).not.toBeNull();
@@ -315,7 +315,7 @@ describe("图表块：源码切换、放大、复制", () => {
     const user = userEvent.setup();
     const { container } = render(<Markdown text={fence("vega-lite", '{"mark": "bar"}')} />);
     await rendered(container);
-    await user.click(screen.getByRole("button", { name: "查看源码" }));
+    await user.click(screen.getByRole("button", { name: "View source" }));
     await waitFor(() => expect(highlight).toHaveBeenCalledWith('{"mark": "bar"}', "json"));
     expect(container.querySelector("[data-chart-lang]")).toHaveTextContent("vega-lite");
   });
@@ -325,7 +325,7 @@ describe("图表块：源码切换、放大、复制", () => {
     const body = "graph TD\n  A[开始] --> B{判断}\n  B -->|是| C\n";
     const { container } = render(<Markdown text={fence("mermaid", body.trimEnd())} />);
     await rendered(container);
-    await user.click(within(chartOf(container)!).getByRole("button", { name: "复制代码" }));
+    await user.click(within(chartOf(container)!).getByRole("button", { name: "Copy code" }));
     expect(await navigator.clipboard.readText()).toBe(body.trimEnd());
   });
 
@@ -333,7 +333,7 @@ describe("图表块：源码切换、放大、复制", () => {
     const user = userEvent.setup();
     const { container } = render(<Markdown text={fence("mermaid")} />);
     await rendered(container);
-    await user.click(screen.getByRole("button", { name: "放大" }));
+    await user.click(screen.getByRole("button", { name: "Zoom" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog.querySelector("svg[data-fake]")).not.toBeNull();
     await user.keyboard("{Escape}");
@@ -350,7 +350,7 @@ describe("图表块：源码切换、放大、复制", () => {
     await rendered(container);
     await user.click(container.querySelector("[data-chart-body]")!);
     expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "放大" }));
+    await user.click(screen.getByRole("button", { name: "Zoom" }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 });

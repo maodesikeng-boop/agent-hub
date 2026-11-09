@@ -56,7 +56,7 @@ describe("代码块", () => {
 
   it("没写语言：不写语言名、不上色，也有复制按钮，代码照常显示", async () => {
     const { container } = render(<Markdown text={"```\npnpm test\n```"} />);
-    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
     expect(container.querySelector("[data-md-code-lang]")).toBeNull();
     expect(container.querySelector("[data-md-code] code")).toHaveTextContent("pnpm test");
     expect(highlight).not.toHaveBeenCalled();
@@ -75,16 +75,16 @@ describe("代码块", () => {
   it("复制按钮拿到的是代码原文（不含语言名、末尾多余的换行）", async () => {
     const user = userEvent.setup();
     render(<Markdown text={"```py\nif x:\n    print('a')\n\n# end\n```"} />);
-    await user.click(screen.getByRole("button", { name: "复制代码" }));
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
     expect(await navigator.clipboard.readText()).toBe("if x:\n    print('a')\n\n# end");
-    expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("上过色之后复制，拿到的还是原文", async () => {
     const user = userEvent.setup();
     const { container } = render(<Markdown text={"```ts\nlet a = 1 < 2;\n```"} />);
     await waitFor(() => expect(container.querySelector(".tok")).not.toBeNull());
-    await user.click(screen.getByRole("button", { name: "复制代码" }));
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
     expect(await navigator.clipboard.readText()).toBe("let a = 1 < 2;");
   });
 
