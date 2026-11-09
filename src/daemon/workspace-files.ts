@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { LRUCache } from "lru-cache";
 import {
   MAX_FILE_QUERY_CHARS,
   MAX_FILE_RESULTS,
@@ -177,12 +178,12 @@ export function createWorkspaceFiles(options: WorkspaceFilesOptions = {}): Works
   const now = options.now ?? Date.now;
   const freshMs = options.freshMs ?? WORKSPACE_FILES_FRESH_MS;
   const maxCaches = options.maxCaches ?? MAX_WORKSPACE_FILE_CACHES;
-  /** Map 的顺序就是新旧：存的时候挪到最后，满了删最前面（最旧）的。 */
-  const cache = new Map<string, { list: FileList; at: number }>();
+  /** LRU 缓存：存的时候更新顺序，满了自动淘汰最旧的。 */
+  const cache = new LRUCache<string, { list: FileList; at: number }>({ max: Math.max(1, maxCaches) });
   const inflight = new Map<string, Promise<FileList>>();
 
   const listOf = async (root: string): Promise<FileList> => {
-    const hit = cache.get(root);
+    const hit = cache.peek(root);
     if (hit && now() - hit.at < freshMs) return hit.list;
     let pending = inflight.get(root);
     if (!pending) {
@@ -191,9 +192,7 @@ export function createWorkspaceFiles(options: WorkspaceFilesOptions = {}): Works
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       })
         .then((list) => {
-          cache.delete(root);
           cache.set(root, { list, at: now() });
-          while (cache.size > maxCaches) cache.delete(cache.keys().next().value!);
           return list;
         })
         .finally(() => inflight.delete(root));

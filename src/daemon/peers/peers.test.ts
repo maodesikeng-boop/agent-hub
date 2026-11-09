@@ -1,7 +1,9 @@
 // 设备配对、改名、移除、对端同步或失联遗忘时，向已连接的浏览器 WebSocket 推 { type: "resync" }。
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS } from "../../shared/index.ts";
 import { pair, settle, startTestDevice, type TestDevice } from "./test-helpers.ts";
+import { newPeerToken } from "./tokens.ts";
 
 const devices: TestDevice[] = [];
 async function device(opts: Parameters<typeof startTestDevice>[0] = {}) {
@@ -81,5 +83,28 @@ describe("设备变更推送 resync", () => {
     expect(wsA.messages).toContainEqual({ type: "resync" });
 
     wsA.ws.terminate();
+  });
+
+  it("省略可选校验字段时保留业务错误码：/api/peer/pair 缺 inviteCode 回 403 forbidden，introduce 缺 deviceId 回 404 device_not_found", async () => {
+    const a = await device({ name: "mac" });
+    const b = await device({ name: "tokyo" });
+    await pair(a, b);
+    await settle([a, b]);
+
+    const pairRes = await fetch(a.url + API_PATHS.peerPair, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        device: { id: randomUUID(), name: "remote", platform: "linux", url: "http://127.0.0.1:9999" },
+        token: newPeerToken(),
+      }),
+    });
+    expect(pairRes.status).toBe(403);
+    expect(await pairRes.json()).toMatchObject({ code: "forbidden" });
+
+    await expect(a.peers.introduce(b.id, {})).rejects.toMatchObject({
+      statusCode: 404,
+      code: "device_not_found",
+    });
   });
 });

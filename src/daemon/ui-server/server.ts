@@ -7,12 +7,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { createGzip, gzipSync } from "node:zlib";
+import fastifyCompress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { z } from "zod";
 import {
   AGENT_VENDORS,
   API_PATHS,
@@ -21,7 +21,6 @@ import {
   LedgerRequestError,
   MAX_MESSAGE_BYTES,
   MAX_MODEL_CHARS,
-  MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
@@ -32,7 +31,6 @@ import {
   MAX_UPLOAD_BYTES,
   PM_MODES,
   PUBLIC_SESSION_MAX_AGE_MS,
-  isAgentVendor,
   SESSION_MAX_AGE_MS,
   uiCookieName,
   UPLOAD_BUSY_MESSAGE,
@@ -51,7 +49,6 @@ import {
   ENTRY_ONLY_API_PREFIXES,
   PEER_DEVICE_HEADER,
   utf8Bytes,
-  type AgentVendor,
   type ArchivePmResponse,
   type AuthStatusResponse,
   type BrowserSessionStatus,
@@ -101,7 +98,7 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
-import { acceptsGzip, isCompressibleType, peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
+import { isCompressibleType, peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
 import { TunnelInputError } from "../tunnel/index.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
@@ -200,19 +197,6 @@ const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** serve 的 https 默认端口：Host 可能带上 :443。 */
 const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
-
-function appendVaryAcceptEncoding(reply: FastifyReply): void {
-  const existing = reply.getHeader("vary");
-  if (existing === undefined) {
-    reply.header("vary", "Accept-Encoding");
-    return;
-  }
-  const value = Array.isArray(existing) ? existing.join(", ") : String(existing);
-  const parts = value.split(",").map((s) => s.trim().toLowerCase());
-  if (!parts.includes("accept-encoding") && !parts.includes("*")) {
-    reply.header("vary", `${value}, Accept-Encoding`);
-  }
-}
 
 /**
  * 守护进程在哪听：界面端口（127.0.0.1 TCP）、serve 的 socket（Linux 上 tailscale serve 转来，startUiServer 的 serveSocket）、
@@ -316,117 +300,129 @@ function readCookie(header: string | undefined, name: string): string | undefine
   return undefined;
 }
 
+function parseWithSchema<T>(schema: z.ZodType<T>, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) {
+    throw new HttpError(400, parsed.error.issues[0]?.message ?? "invalid request");
+  }
+  return parsed.data;
+}
+
+const positiveIntIdSchema = z
+  .string()
+  .regex(POSITIVE_INT)
+  .transform(Number)
+  .refine(Number.isSafeInteger, "must be a safe integer");
+
 function parseId(raw: unknown, what: string): number {
-  if (typeof raw !== "string" || !POSITIVE_INT.test(raw) || !Number.isSafeInteger(Number(raw))) {
+  const parsed = positiveIntIdSchema.safeParse(raw);
+  if (!parsed.success) {
     throw new HttpError(400, `${what} must be a positive integer`);
   }
-  return Number(raw);
+  return parsed.data;
 }
 
-/** 新接口的请求体：必须是 JSON 对象，只许出现 allowed 里的字段（多余字段拒绝）。 */
-function parseObjectBody(body: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "body must be a JSON object");
-  const extra = Object.keys(body).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) throw new HttpError(400, `unknown field: ${extra[0]}`);
-  return body as Record<string, unknown>;
-}
+const boundedBytesSchema = (maxBytes: number, what: string) =>
+  z.string().refine((s) => utf8Bytes(s) <= maxBytes, `${what} must be at most ${maxBytes} bytes`);
 
-function requireName(value: unknown, what: string): string {
-  if (typeof value !== "string" || normalizeName(value) === null) {
-    throw new HttpError(400, `${what} must be a non-empty string of at most ${MAX_NAME_CHARS} characters without control characters`);
-  }
-  return value;
-}
+const boundedCharsSchema = (maxChars: number, what: string) =>
+  z.string().refine((s) => [...s].length <= maxChars, `${what} must be at most ${maxChars} characters`);
 
-function requireMode(value: unknown): PmMode {
-  if (typeof value !== "string" || !(PM_MODES as readonly string[]).includes(value)) {
-    throw new HttpError(400, `mode must be one of ${PM_MODES.join(", ")}`);
-  }
-  return value as PmMode;
-}
+const nameSchema = z.string().refine((s) => normalizeName(s) !== null, "invalid name");
+const modeSchema = z.enum(PM_MODES);
+const vendorSchema = z.enum(AGENT_VENDORS);
+const optionalSettingSchema = (what: string) => boundedCharsSchema(MAX_MODEL_CHARS, what).nullable();
 
-function requireBoundedBytes(value: unknown, what: string, maxBytes: number): string {
-  if (typeof value !== "string") throw new HttpError(400, `${what} must be a string`);
-  if (utf8Bytes(value) > maxBytes) throw new HttpError(400, `${what} must be at most ${maxBytes} bytes`);
-  return value;
-}
-
-function requireBoundedChars(value: unknown, what: string, maxChars: number): string {
-  if (typeof value !== "string") throw new HttpError(400, `${what} must be a string`);
-  if ([...value].length > maxChars) throw new HttpError(400, `${what} must be at most ${maxChars} characters`);
-  return value;
-}
-
-/** 厂商：清单里的编号。 */
-function requireVendor(value: unknown): AgentVendor {
-  if (!isAgentVendor(value)) throw new HttpError(400, `vendor must be one of ${AGENT_VENDORS.join(", ")}`);
-  return value;
-}
-
-/** 模型、思考程度：字符串或 null（默认）。取值对不对由账本按厂商清单查，原因原样回给网页。 */
-function optionalSetting(value: unknown, what: string): string | null {
-  return value === null ? null : requireBoundedChars(value, what, MAX_MODEL_CHARS);
-}
+const createPmBodySchema = z
+  .object({
+    name: nameSchema,
+    mode: modeSchema,
+    persona: boundedBytesSchema(MAX_PERSONA_BYTES, "persona"),
+    vendor: vendorSchema.optional(),
+    defaultModel: optionalSettingSchema("defaultModel").optional(),
+    effort: optionalSettingSchema("effort").optional(),
+    // 主文件夹可选；给了就必须是个非空路径（存不存在、是不是目录由账本查）
+    folder: boundedBytesSchema(MAX_PATH_BYTES, "folder")
+      .refine((s) => s.trim() !== "" && !s.includes("\u0000"), "folder must be a non-empty path")
+      .optional(),
+  })
+  .strict();
 
 function parseCreatePmBody(body: unknown): CreatePmRequest {
-  const raw = parseObjectBody(body, ["name", "mode", "vendor", "defaultModel", "effort", "persona", "folder"]);
-  const input: CreatePmRequest = {
-    name: requireName(raw.name, "name"),
-    mode: requireMode(raw.mode),
-    persona: requireBoundedBytes(raw.persona, "persona", MAX_PERSONA_BYTES),
+  const raw = parseWithSchema(createPmBodySchema, body);
+  return {
+    name: raw.name,
+    mode: raw.mode,
+    persona: raw.persona,
+    ...(raw.vendor !== undefined ? { vendor: raw.vendor } : {}),
+    ...(raw.defaultModel !== undefined ? { defaultModel: raw.defaultModel } : {}),
+    ...(raw.effort !== undefined ? { effort: raw.effort } : {}),
+    ...(raw.folder !== undefined ? { folder: raw.folder } : {}),
   };
-  if (raw.vendor !== undefined) input.vendor = requireVendor(raw.vendor);
-  if (raw.defaultModel !== undefined) input.defaultModel = optionalSetting(raw.defaultModel, "defaultModel");
-  if (raw.effort !== undefined) input.effort = optionalSetting(raw.effort, "effort");
-  // 主文件夹可选；给了就必须是个非空路径（存不存在、是不是目录由账本查）
-  if (raw.folder !== undefined) {
-    const folder = requireBoundedBytes(raw.folder, "folder", MAX_PATH_BYTES);
-    if (folder.trim() === "" || folder.includes("\u0000")) throw new HttpError(400, "folder must be a non-empty path");
-    input.folder = folder;
-  }
-  return input;
 }
+
+const editPersonaBodySchema = z
+  .object({
+    text: boundedBytesSchema(MAX_PERSONA_BYTES, "text").optional(),
+    mode: modeSchema.optional(),
+    vendor: vendorSchema.optional(),
+    model: optionalSettingSchema("model").optional(),
+    effort: optionalSettingSchema("effort").optional(),
+    reason: boundedCharsSchema(MAX_REASON_CHARS, "reason").optional(),
+  })
+  .strict()
+  .refine(
+    (v) => v.text !== undefined || v.mode !== undefined || v.vendor !== undefined || v.model !== undefined || v.effort !== undefined,
+    "one of text, mode, vendor, model, effort is required",
+  );
 
 function parseEditPersonaBody(body: unknown): EditPersonaRequest {
-  const fields = ["text", "mode", "vendor", "model", "effort"];
-  const raw = parseObjectBody(body, [...fields, "reason"]);
-  if (fields.every((f) => raw[f] === undefined)) throw new HttpError(400, `one of ${fields.join(", ")} is required`);
-  const input: EditPersonaRequest = {};
-  if (raw.text !== undefined) input.text = requireBoundedBytes(raw.text, "text", MAX_PERSONA_BYTES);
-  if (raw.mode !== undefined) input.mode = requireMode(raw.mode);
-  if (raw.vendor !== undefined) input.vendor = requireVendor(raw.vendor);
-  if (raw.model !== undefined) input.model = optionalSetting(raw.model, "model");
-  if (raw.effort !== undefined) input.effort = optionalSetting(raw.effort, "effort");
-  if (raw.reason !== undefined) input.reason = requireBoundedChars(raw.reason, "reason", MAX_REASON_CHARS);
-  return input;
+  const raw = parseWithSchema(editPersonaBodySchema, body);
+  return {
+    ...(raw.text !== undefined ? { text: raw.text } : {}),
+    ...(raw.mode !== undefined ? { mode: raw.mode } : {}),
+    ...(raw.vendor !== undefined ? { vendor: raw.vendor } : {}),
+    ...(raw.model !== undefined ? { model: raw.model } : {}),
+    ...(raw.effort !== undefined ? { effort: raw.effort } : {}),
+    ...(raw.reason !== undefined ? { reason: raw.reason } : {}),
+  };
 }
 
-/** 请求体里的 attachmentIds：字符串数组，去重，最多 MAX_ATTACHMENTS_PER_MESSAGE 个。没写就是空。 */
-function parseAttachmentIds(value: unknown): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((id) => typeof id !== "string")) throw new HttpError(400, "attachmentIds must be an array of strings");
-  const ids = [...new Set(value as string[])];
-  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new LedgerRequestError("invalid", ATTACHMENTS_TOO_MANY_MESSAGE);
-  return ids;
-}
+const postMessageBodySchema = z.object({
+  clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+  text: z.string(),
+  attachmentIds: z.array(z.string()).optional(),
+});
 
 function parsePostBody(body: unknown): { clientId: string; text: string; attachmentIds: string[] } {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "body must be a JSON object");
-  const { clientId, text, attachmentIds } = body as Record<string, unknown>;
-  if (typeof clientId !== "string" || clientId.length === 0 || clientId.length > MAX_CLIENT_ID_LENGTH) {
-    throw new HttpError(400, `clientId must be a non-empty string of at most ${MAX_CLIENT_ID_LENGTH} characters`);
-  }
-  const ids = parseAttachmentIds(attachmentIds);
+  const { clientId, text, attachmentIds: rawIds } = parseWithSchema(postMessageBodySchema, body);
+  const ids = [...new Set(rawIds ?? [])];
+  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new LedgerRequestError("invalid", ATTACHMENTS_TOO_MANY_MESSAGE);
   // 只发文件的时候文字可以是空的
-  if (typeof text !== "string" || (text.trim().length === 0 && ids.length === 0)) throw new HttpError(400, "text must not be empty");
+  if (text.trim().length === 0 && ids.length === 0) throw new HttpError(400, "text must not be empty");
   if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
     throw new HttpError(400, `text must be at most ${MAX_MESSAGE_BYTES} bytes`);
   }
   return { clientId, text, attachmentIds: ids };
 }
 
+const publicEntryBodySchema = z.object({ enabled: z.boolean(), hostname: z.string().nullable().optional() }).strict();
+const tunnelConnectBodySchema = z.object({ code: z.string() }).strict();
+const emptyObjectBodySchema = z.object({}).strict();
+const addScheduleBodySchema = z
+  .object({
+    name: z.unknown().optional(),
+    prompt: z.unknown().optional(),
+    daily: z.unknown().optional(),
+    everyMinutes: z.unknown().optional(),
+  })
+  .strict();
+const setScheduleEnabledBodySchema = z.object({ enabled: z.boolean() }).strict();
+const pickFolderBodySchema = z.object({ startDir: boundedBytesSchema(MAX_PATH_BYTES, "startDir").optional() }).strict();
+const pushUnsubscribeBodySchema = z.object({ endpoint: z.string() });
+
 /** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带、认不出、无效是 null（发整个文件），超出文件是 "unsatisfiable"。 */
-export function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
+function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
   const match = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (match === null || (match[1] === "" && match[2] === "")) return null;
   if (match[1] === "") {
@@ -461,6 +457,7 @@ const HTML_PREVIEW_CSP = "sandbox allow-scripts";
  * 例外：预览窗带 ?inline=1 取的 pdf 内联（CSP 不变，实测浏览器自带查看器在这样的响应里能渲染），html 内联并换成 HTML_PREVIEW_CSP。
  */
 function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Attachment, "name" | "path" | "size" | "mime">) {
+  req.headers["x-no-compression"] = "1";
   const preview = wantsPreview(req);
   const inline = isImageMime(file.mime) || (preview && (file.mime === "application/pdf" || file.mime === "text/html"));
   // 预览 html 是页面：没写 charset 的中文页面会按 Latin-1 显示成乱码，所以明说 UTF-8
@@ -786,39 +783,23 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   /** 判断“浏览器在不在这台机器上”用的地址（serverInfoForClient）。不算本机的入口当成没有地址。 */
   const clientAddress = (req: FastifyRequest) => (contextOf(req)?.rule.sameMachine ? req.ip : undefined);
 
-  // 对 JSON 与文本响应按需开启 gzip 压缩（包含 /api/state 及 /d/<device>/api/* 转发的响应），不碰支持 Range 的存储文件下载。
+  // 对可压缩的 JSON 与文本响应标记 Vary: Accept-Encoding（具体压缩由 @fastify/compress 处理，支持 Range 的存储文件下载除外）。
   app.addHook("onSend", async (req, reply, payload) => {
     if (
-      payload === null ||
-      payload === undefined ||
-      req.method === "HEAD" ||
-      reply.statusCode === 204 ||
-      reply.statusCode === 205 ||
-      reply.statusCode === 206 ||
-      reply.statusCode === 304 ||
-      reply.getHeader("accept-ranges") !== undefined ||
-      reply.getHeader("content-range") !== undefined ||
-      !isCompressibleType(reply.getHeader("content-type"))
+      payload !== null &&
+      payload !== undefined &&
+      req.method !== "HEAD" &&
+      !req.headers["x-no-compression"] &&
+      reply.statusCode !== 204 &&
+      reply.statusCode !== 205 &&
+      reply.statusCode !== 206 &&
+      reply.statusCode !== 304 &&
+      reply.getHeader("accept-ranges") === undefined &&
+      reply.getHeader("content-range") === undefined &&
+      isCompressibleType(reply.getHeader("content-type"))
     ) {
-      return payload;
-    }
-    appendVaryAcceptEncoding(reply);
-    if (reply.getHeader("content-encoding") !== undefined || !acceptsGzip(req.headers["accept-encoding"])) {
-      return payload;
-    }
-    if (typeof payload === "string" || Buffer.isBuffer(payload)) {
-      const raw = typeof payload === "string" ? Buffer.from(payload, "utf8") : payload;
-      if (raw.length === 0) return payload;
-      const compressed = gzipSync(raw);
-      reply.header("content-encoding", "gzip").header("content-length", compressed.length);
-      return compressed;
-    }
-    if (payload instanceof Readable) {
-      reply.header("content-encoding", "gzip");
-      reply.removeHeader("content-length");
-      const gz = createGzip();
-      payload.on("error", (err) => gz.destroy(err));
-      return payload.pipe(gz);
+      const existing = reply.getHeader("vary");
+      reply.header("vary", existing === undefined ? "Accept-Encoding" : `${String(existing)}, Accept-Encoding`);
     }
     return payload;
   });
@@ -851,6 +832,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   });
   app.setNotFoundHandler((_req, reply) => fail(reply, "not_found"));
 
+  app.register(fastifyCompress, {
+    global: true,
+    threshold: 1024,
+    encodings: ["gzip", "deflate"],
+    customTypes: isCompressibleType,
+  });
   app.register(fastifyWebsocket);
   app.addHook("onReady", async () => {
     if (publicEntryState.enabled && publicEntryState.hostname !== null) {
@@ -1005,11 +992,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.put(API_PATHS.publicEntry, async (req): Promise<PublicEntryStatus> => {
-      const raw = parseObjectBody(req.body, ["enabled", "hostname"]);
-      if (typeof raw.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
-      if (raw.hostname !== undefined && raw.hostname !== null && typeof raw.hostname !== "string") {
-        throw new HttpError(400, "hostname must be a string or null");
-      }
+      const raw = parseWithSchema(publicEntryBodySchema, req.body);
       const givenHostname = typeof raw.hostname === "string" ? normalizePublicHostname(raw.hostname) : null;
       if (givenHostname === "invalid") throw new LedgerRequestError("invalid", "公网域名格式不对");
 
@@ -1045,14 +1028,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.post(API_PATHS.tunnelConnect, async (req, reply) => {
       if (!opts.tunnel?.connect) return fail(reply, "not_found");
-      const raw = parseObjectBody(req.body, ["code"]);
-      if (typeof raw.code !== "string") throw new HttpError(400, "code must be a string");
+      const raw = parseWithSchema(tunnelConnectBodySchema, req.body);
       return { status: await opts.tunnel.connect(raw.code) } satisfies TunnelStatusResponse;
     });
 
     routes.post(API_PATHS.tunnelRetry, async (req, reply) => {
       if (!opts.tunnel?.retry) return fail(reply, "not_found");
-      parseObjectBody(req.body ?? {}, []);
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
       opts.tunnel.retry();
       return { status: opts.tunnel.status() } satisfies TunnelStatusResponse;
     });
@@ -1185,7 +1167,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     // 定时任务卡片：校验和写库都在账本里（同 hub schedule），这里只认请求体的形状
     routes.post("/api/pms/:id/schedules", async (req, reply) => {
       const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
-      const raw = parseObjectBody(req.body, ["name", "prompt", "daily", "everyMinutes"]);
+      const raw = parseWithSchema(addScheduleBodySchema, req.body);
       const schedule = ledger.addSchedule(pmId, {
         name: raw.name as string,
         prompt: raw.prompt as string,
@@ -1196,8 +1178,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.put("/api/schedules/:id", async (req) => {
-      const raw = parseObjectBody(req.body, ["enabled"]);
-      if (typeof raw.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
+      const raw = parseWithSchema(setScheduleEnabledBodySchema, req.body);
       return ledger.setScheduleEnabled(parseId((req.params as { id?: unknown }).id, "schedule id"), raw.enabled);
     });
 
@@ -1207,9 +1188,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.post(API_PATHS.pickFolder, async (req): Promise<PickFolderResponse> => {
-      const raw = parseObjectBody(req.body ?? {}, ["startDir"]);
-      const startDir = raw.startDir === undefined ? undefined : requireBoundedBytes(raw.startDir, "startDir", MAX_PATH_BYTES);
-      return { path: await folderPicker.pick(startDir) };
+      const raw = parseWithSchema(pickFolderBodySchema, req.body ?? {});
+      return { path: await folderPicker.pick(raw.startDir) };
     });
 
     routes.post("/api/pms/:id/renew-session", async (req, reply) => {
@@ -1243,9 +1223,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
       routes.post(API_PATHS.pushUnsubscribe, async (req, reply) => {
-        const { endpoint } = (req.body ?? {}) as { endpoint?: unknown };
-        if (typeof endpoint !== "string") return fail(reply, "invalid", "endpoint 不对");
-        push.unsubscribe(endpoint);
+        const parsed = pushUnsubscribeBodySchema.safeParse(req.body);
+        if (!parsed.success) return fail(reply, "invalid", "endpoint 不对");
+        push.unsubscribe(parsed.data.endpoint);
         return reply.code(204).send();
       });
     }

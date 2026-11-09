@@ -1,6 +1,7 @@
 // 本机在 tailnet 里叫什么、主人是谁（docs/multi-device-design.md 第 3.3 节）：问 tailscale status --json，结果缓存。
 // 界面服务每个请求都要用（Host 白名单、身份头），所以 current() 是同步的、只读缓存；过期了在后台再问一次，同时最多一个在跑。
 import { execFile } from "node:child_process";
+import { LRUCache } from "lru-cache";
 import {
   ENV_TAILNET_NAME,
   ENV_TAILNET_OWNER,
@@ -72,9 +73,7 @@ export function createTailnetProbe(opts: TailnetProbeOptions): TailnetProbe {
     return { current: () => fixed, refresh: async () => fixed };
   }
 
-  let cached: TailnetSelf | null = null;
-  /** 上次问完的时间；null = 还没问过。 */
-  let checkedAt: number | null = null;
+  const cache = new LRUCache<"self", { value: TailnetSelf | null; checkedAt: number }>({ max: 1 });
   let inflight: Promise<TailnetSelf | null> | null = null;
 
   const withOverrides = (probed: TailnetSelf | null): TailnetSelf | null => {
@@ -88,18 +87,22 @@ export function createTailnetProbe(opts: TailnetProbeOptions): TailnetProbe {
       .run()
       .then(parseTailscaleStatus, () => null)
       .then((result) => {
-        cached = withOverrides(result);
-        checkedAt = now();
+        const value = withOverrides(result);
+        cache.set("self", { value, checkedAt: now() });
         inflight = null;
-        return cached;
+        return value;
       }));
 
-  const stale = () => checkedAt === null || now() - checkedAt > (cached === null ? failTtl : okTtl);
+  const stale = () => {
+    const entry = cache.get("self");
+    if (entry === undefined) return true;
+    return now() - entry.checkedAt > (entry.value === null ? failTtl : okTtl);
+  };
 
   return {
     current() {
       if (stale()) void probe();
-      return cached;
+      return cache.get("self")?.value ?? null;
     },
     refresh: () => inflight ?? probe(),
   };

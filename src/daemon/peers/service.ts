@@ -9,6 +9,7 @@
 // 再拿邀请码直接和 X 配对。编号大的那台什么也不做，等对方来。所以同一对设备不会两边同时发起配对。
 //
 // 不轮询：只在配对、确认、改名、启动时同步一次；对方离线就算了，它上线启动时会同步过来。
+import { z } from "zod";
 import {
   API_PATHS,
   MAX_PEERS,
@@ -63,22 +64,81 @@ const notFound = () => new PeerError(404, API_ERRORS.device_not_found.text, "dev
 const offline = (name?: string) =>
   new PeerError(502, name === undefined ? API_ERRORS.device_offline.text : `连不上“${name}”`, "device_offline");
 
-/** 请求体：必须是 JSON 对象，只许出现 allowed 里的字段。 */
-function objectBody(body: unknown, allowed: readonly string[]): Record<string, unknown> {
+/** 用 zod strict schema 校验请求体：必须是 JSON 对象且只许出现 schema 定义的字段。 */
+function parseStrictBody<T extends z.ZodRawShape>(schema: z.ZodObject<T>, body: unknown): z.infer<z.ZodObject<T>> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("请求体必须是 JSON 对象");
-  const extra = Object.keys(body).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) throw invalid(`不认识的字段：${extra[0]}`);
-  return body as Record<string, unknown>;
+  const parsed = schema.strict().safeParse(body);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    if (issue?.code === "unrecognized_keys") {
+      throw invalid(`不认识的字段：${issue.keys[0]}`);
+    }
+    throw invalid(issue?.message ?? "请求体必须是 JSON 对象");
+  }
+  return parsed.data;
 }
+
+const peerDeviceRawSchema = z.object({
+  id: z.string().refine((s) => isDeviceId(s)),
+  name: z
+    .string()
+    .transform((s) => normalizeName(s))
+    .refine((v): v is string => v !== null),
+  platform: z.custom<PeerDevice["platform"]>((v) => isPlatform(v)),
+  url: z.unknown().optional(),
+});
 
 /** 对方发来的设备身份：编号、名字、系统要合规；网址按 normalizePeerUrl（不认的回 null，调用方决定怎么办）。 */
 function parsePeerDevice(value: unknown, allowLoopback: boolean): (Omit<PeerDevice, "url"> & { url: string | null }) | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { id, name, platform, url } = value as Record<string, unknown>;
-  const normalized = typeof name === "string" ? normalizeName(name) : null;
-  if (typeof id !== "string" || !isDeviceId(id) || normalized === null || !isPlatform(platform)) return null;
-  return { id, name: normalized, platform, url: normalizePeerUrl(url, allowLoopback) };
+  const parsed = peerDeviceRawSchema.safeParse(value);
+  if (!parsed.success) return null;
+  return {
+    id: parsed.data.id,
+    name: parsed.data.name,
+    platform: parsed.data.platform,
+    url: normalizePeerUrl(parsed.data.url, allowLoopback),
+  };
 }
+
+const nameBodySchema = z.object({
+  name: z
+    .string({ error: "名字不能为空，也不能太长" })
+    .transform((s) => normalizeName(s))
+    .refine((v): v is string => v !== null, "名字不能为空，也不能太长"),
+});
+
+const addBodySchema = z.object({
+  url: z.unknown().optional(),
+  code: z
+    .string({ error: "请填那台设备给的邀请码" })
+    .max(MAX_INVITE_CODE_CHARS, "请填那台设备给的邀请码")
+    .transform((s) => s.trim())
+    .refine((s) => s !== "", "请填那台设备给的邀请码"),
+});
+
+const acceptPairBodySchema = z.object({
+  inviteCode: z.unknown().optional(),
+  device: z.unknown().optional(),
+  token: z.string({ error: "token 不对" }).regex(PEER_TOKEN_PATTERN, "token 不对"),
+});
+
+const deviceListBodySchema = z.object({
+  devices: z.array(z.unknown(), { error: "devices 必须是数组" }).max(MAX_PEERS, "devices 必须是数组"),
+});
+
+const deviceIdBodySchema = z.object({
+  deviceId: z.unknown().optional(),
+});
+
+const pairResponseBodySchema = z.object({
+  device: z.unknown().optional(),
+  token: z.string().regex(PEER_TOKEN_PATTERN),
+});
+
+const introductionResponseBodySchema = z.object({
+  device: z.unknown().optional(),
+  code: z.string(),
+});
 
 export interface PeersOptions {
   /** state/peers.json。 */
@@ -352,9 +412,9 @@ export function createPeers(opts: PeersOptions): Peers {
     });
     if (res.status >= 500) throw offline();
     if (res.status !== 200) throw invalid(humanize(res.body, res.status).text);
-    const body = res.body as { device?: unknown; token?: unknown } | null;
-    const them = parsePeerDevice(body?.device, opts.allowLoopback);
-    if (them === null || typeof body?.token !== "string" || !PEER_TOKEN_PATTERN.test(body.token)) throw invalid("对方回的配对信息不对");
+    const parsedBody = pairResponseBodySchema.safeParse(res.body);
+    const them = parsedBody.success ? parsePeerDevice(parsedBody.data.device, opts.allowLoopback) : null;
+    if (!parsedBody.success || them === null) throw invalid("对方回的配对信息不对");
     if (them.id === selfId) throw invalid("这是本机自己，不用配对");
     if (expectedId !== undefined && them.id !== expectedId) throw invalid("对方不是要配对的那台设备");
     // 网址用本机实际连上的那个（对方自报的只做参考）
@@ -367,7 +427,7 @@ export function createPeers(opts: PeersOptions): Peers {
       state: "paired",
       since: now(),
       inboundTokenSha256: sha256Hex(tokenForThem),
-      outboundToken: body.token,
+      outboundToken: parsedBody.data.token,
     };
     store.clearRemoved(record.id);
     store.put(record);
@@ -406,9 +466,9 @@ export function createPeers(opts: PeersOptions): Peers {
         );
         if (res.status >= 500) throw offline();
         if (res.status !== 200) throw invalid(humanize(res.body, res.status).text);
-        const body = res.body as { device?: unknown; token?: unknown } | null;
-        const them = parsePeerDevice(body?.device, opts.allowLoopback);
-        if (them === null || typeof body?.token !== "string" || !PEER_TOKEN_PATTERN.test(body.token)) {
+        const parsedBody = pairResponseBodySchema.safeParse(res.body);
+        const them = parsedBody.success ? parsePeerDevice(parsedBody.data.device, opts.allowLoopback) : null;
+        if (!parsedBody.success || them === null) {
           throw invalid("对方回的配对信息不对");
         }
         if (them.id === selfId) throw invalid("这是本机自己，不用配对");
@@ -429,7 +489,7 @@ export function createPeers(opts: PeersOptions): Peers {
           state: "paired",
           since: now(),
           inboundTokenSha256: sha256Hex(tokenForThem),
-          outboundToken: body.token,
+          outboundToken: parsedBody.data.token,
         };
         store.clearRemoved(record.id);
         store.put(record);
@@ -449,11 +509,11 @@ export function createPeers(opts: PeersOptions): Peers {
       try {
         const res = await callPeer(via, API_PATHS.peerIntroductions, { method: "POST", body: { deviceId: targetId } });
         if (res.status !== 200) throw new Error(res.error ?? `HTTP ${res.status}`);
-        const body = res.body as { device?: unknown; code?: unknown } | null;
-        const target = parsePeerDevice(body?.device, opts.allowLoopback);
-        if (target === null || target.id !== targetId || target.url === null || typeof body?.code !== "string") throw new Error("介绍回来的信息不对");
+        const parsedBody = introductionResponseBodySchema.safeParse(res.body);
+        const target = parsedBody.success ? parsePeerDevice(parsedBody.data.device, opts.allowLoopback) : null;
+        if (!parsedBody.success || target === null || target.id !== targetId || target.url === null) throw new Error("介绍回来的信息不对");
         if (store.get(targetId) !== undefined || store.isRemoved(targetId)) return;
-        await pairWith(target.url, body.code, targetId);
+        await pairWith(target.url, parsedBody.data.code, targetId);
       } finally {
         pairing.delete(targetId);
       }
@@ -466,12 +526,7 @@ export function createPeers(opts: PeersOptions): Peers {
     return record;
   };
 
-  const parseName = (body: unknown): string => {
-    const raw = objectBody(body, ["name"]);
-    const name = typeof raw.name === "string" ? normalizeName(raw.name) : null;
-    if (name === null) throw invalid("名字不能为空，也不能太长");
-    return name;
-  };
+  const parseName = (body: unknown): string => parseStrictBody(nameBodySchema, body).name;
 
   const renameSelf = (body: unknown): DeviceInfo => {
     selfName = parseName(body);
@@ -540,20 +595,25 @@ export function createPeers(opts: PeersOptions): Peers {
     },
 
     async add(body) {
-      const raw = objectBody(body, ["url", "code"]);
-      const url = normalizePeerUrl(raw.url, opts.allowLoopback);
+      if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("请求体必须是 JSON 对象");
+      const extra = Object.keys(body).filter((k) => k !== "url" && k !== "code");
+      if (extra.length > 0) throw invalid(`不认识的字段：${extra[0]}`);
+      const url = normalizePeerUrl((body as { url?: unknown }).url, opts.allowLoopback);
       if (url === null) throw invalid("设备网址要是那台的 tailnet 网址：https://<机器>.<tailnet>.ts.net");
-      if (typeof raw.code !== "string" || raw.code.trim() === "" || raw.code.length > MAX_INVITE_CODE_CHARS) throw invalid("请填那台设备给的邀请码");
-      return infoOf(await pairWith(url, raw.code.trim()));
+      const raw = parseStrictBody(addBodySchema, body);
+      return infoOf(await pairWith(url, raw.code));
     },
 
     acceptPair(body) {
-      const raw = objectBody(body, ["inviteCode", "device", "token"]);
-      const them = parsePeerDevice(raw.device, opts.allowLoopback);
-      const rawUrl = typeof raw.device === "object" && raw.device !== null ? (raw.device as Record<string, unknown>).url : undefined;
+      if (typeof body !== "object" || body === null || Array.isArray(body)) throw invalid("请求体必须是 JSON 对象");
+      const extra = Object.keys(body).filter((k) => k !== "inviteCode" && k !== "device" && k !== "token");
+      if (extra.length > 0) throw invalid(`不认识的字段：${extra[0]}`);
+      const rawDevice = (body as { device?: unknown }).device;
+      const them = parsePeerDevice(rawDevice, opts.allowLoopback);
+      const rawUrl = typeof rawDevice === "object" && rawDevice !== null ? (rawDevice as Record<string, unknown>).url : undefined;
       const hasNonEmptyBadUrl = rawUrl !== "" && rawUrl !== null && rawUrl !== undefined && them?.url === null;
       if (them === null || hasNonEmptyBadUrl) throw invalid("device 不对（网址要是 https://<机器>.<tailnet>.ts.net）");
-      if (typeof raw.token !== "string" || !PEER_TOKEN_PATTERN.test(raw.token)) throw invalid("token 不对");
+      const raw = parseStrictBody(acceptPairBodySchema, body);
       if (them.id === selfId) throw invalid("这是本机自己，不用配对");
       const consumed = invites.consume(raw.inviteCode, them.id);
       if (!consumed.ok) {
@@ -632,8 +692,7 @@ export function createPeers(opts: PeersOptions): Peers {
     },
 
     receiveDeviceList(from, body) {
-      const raw = objectBody(body, ["devices"]);
-      if (!Array.isArray(raw.devices) || raw.devices.length > MAX_PEERS) throw invalid("devices 必须是数组");
+      const raw = parseStrictBody(deviceListBodySchema, body);
       const devices = raw.devices.map((d) => parsePeerDevice(d, opts.allowLoopback));
       if (devices.some((d) => d === null)) throw invalid("devices 里有不对的设备");
       const sender = store.get(from);
@@ -659,7 +718,7 @@ export function createPeers(opts: PeersOptions): Peers {
     },
 
     inviteFor(from, body) {
-      const raw = objectBody(body, ["deviceId"]);
+      const raw = parseStrictBody(deviceIdBodySchema, body);
       if (typeof raw.deviceId !== "string" || !isDeviceId(raw.deviceId) || raw.deviceId === selfId || raw.deviceId === from) {
         throw invalid("deviceId 不对");
       }
@@ -672,7 +731,7 @@ export function createPeers(opts: PeersOptions): Peers {
     },
 
     async introduce(from, body) {
-      const raw = objectBody(body, ["deviceId"]);
+      const raw = parseStrictBody(deviceIdBodySchema, body);
       if (typeof raw.deviceId !== "string" || raw.deviceId === from) throw notFound();
       const target = requirePaired(raw.deviceId);
       if (target.transport === "ssh-tunnel" || target.url === "") {

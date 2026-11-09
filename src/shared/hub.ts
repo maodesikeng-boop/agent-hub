@@ -203,7 +203,7 @@ export interface ProjectCard {
 }
 
 /** 项目经理调 hub status。 */
-export interface PmHubStatus {
+interface PmHubStatus {
   role: "pm";
   pm: { id: PmId; name: string; mode: PmMode };
   sessionId: SessionId;
@@ -259,7 +259,7 @@ export interface WorkerPr {
 export type WorkerPrProbeResult = WorkerPr | { unavailable: string } | null;
 
 /** hub models 返回的单个模型项。 */
-export interface HubModelEntry {
+interface HubModelEntry {
   id: string;
   label: string;
   efforts: string[];
@@ -280,7 +280,7 @@ export interface HubVendorModels {
 }
 
 /** 各命令成功时的 data。text 是给 agent 看的一两句中文，data 给程序用。 */
-export interface HubDataMap {
+interface HubDataMap {
   /** 按 role 收窄。 */
   status: PmHubStatus | WorkerHubStatus;
   "project.create": { project: Project; mainFolder: ProjectFolder };

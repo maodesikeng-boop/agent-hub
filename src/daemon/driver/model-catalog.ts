@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { LRUCache } from "lru-cache";
 import {
   AGENT_VENDORS,
   ALL_EFFORTS,
@@ -40,11 +41,11 @@ const DEFAULT_VALUE = "default";
 /** 失败原因里带多少标准错误。 */
 const STDERR_TAIL_CHARS = 500;
 /** agy 查模型名单的固定参数。 */
-export const AGY_MODELS_QUERY_ARGS: readonly string[] = ["--output-format", "json", "models"];
+const AGY_MODELS_QUERY_ARGS: readonly string[] = ["--output-format", "json", "models"];
 /** agy 查可用 skills 的固定参数。 */
-export const AGY_SKILLS_QUERY_ARGS: readonly string[] = ["-p", "/skills", "--output-format", "json"];
+const AGY_SKILLS_QUERY_ARGS: readonly string[] = ["-p", "/skills", "--output-format", "json"];
 /** codex 起 app-server 的固定参数。 */
-export const CODEX_APP_SERVER_ARGS: readonly string[] = ["app-server", "--listen", "stdio://"];
+const CODEX_APP_SERVER_ARGS: readonly string[] = ["app-server", "--listen", "stdio://"];
 const CODEX_CLIENT_INFO = { name: "agent-hub", version: "0.1.0" } as const;
 
 function nonEmptyString(value: unknown): string | null {
@@ -592,7 +593,7 @@ export async function queryCodexSkills(options: CodexModelQueryOptions): Promise
 }
 
 /** `claude auth status --json` 的固定参数。 */
-export const CLAUDE_AUTH_STATUS_ARGS: readonly string[] = ["auth", "status", "--json"];
+const CLAUDE_AUTH_STATUS_ARGS: readonly string[] = ["auth", "status", "--json"];
 
 /**
  * claude 的补充判断（initialize 回应里看不出登录时才用）：跑 `claude auth status --json`，看 loggedIn。
@@ -730,23 +731,22 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   let closed = false;
   const controller = new AbortController();
 
-  const slots = Object.fromEntries(
-    AGENT_VENDORS.map((vendor): [AgentVendor, VendorCatalogSlot] => [
+  const slots = new LRUCache<AgentVendor, VendorCatalogSlot>({ max: AGENT_VENDORS.length });
+  for (const vendor of AGENT_VENDORS) {
+    slots.set(vendor, {
       vendor,
-      {
-        vendor,
-        source: options.sources[vendor],
-        cached: null,
-        cachedAt: 0,
-        availability: null,
-        failedAt: null,
-        fingerprint: null,
-        fingerprintSeen: null,
-        fingerprintCheckedAt: 0,
-        inflight: null,
-      },
-    ]),
-  ) as Record<AgentVendor, VendorCatalogSlot>;
+      source: options.sources[vendor],
+      cached: null,
+      cachedAt: 0,
+      availability: null,
+      failedAt: null,
+      fingerprint: null,
+      fingerprintSeen: null,
+      fingerprintCheckedAt: 0,
+      inflight: null,
+    });
+  }
+  const slotOf = (vendor: AgentVendor): VendorCatalogSlot => slots.get(vendor)!;
 
   const installed = (slot: VendorCatalogSlot) => slot.source?.installed?.() ?? true;
   /** 现在的指纹：force 或过了冷却期才真算（stat 磁盘），否则用上次算的。没配指纹是 null。 */
@@ -833,16 +833,16 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     async list(opts = {}) {
       const refresh = opts.refresh ?? false;
       const vendors = opts.vendor !== undefined ? [opts.vendor] : AGENT_VENDORS;
-      return Promise.all(vendors.map((vendor) => catalogOf(slots[vendor], refresh)));
+      return Promise.all(vendors.map((vendor) => catalogOf(slotOf(vendor), refresh)));
     },
     current(vendor) {
-      return slots[vendor]?.cached ?? null;
+      return slotOf(vendor)?.cached ?? null;
     },
     availability(vendor) {
-      return availabilityOf(slots[vendor]);
+      return availabilityOf(slotOf(vendor));
     },
     async ensureUsable(vendor) {
-      const slot = slots[vendor];
+      const slot = slotOf(vendor);
       if (slot.source && !closed && installed(slot) && (!isSelectable(availabilityOf(slot)) || fingerprintChanged(slot))) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timedOut = new Promise<void>((resolve) => {
@@ -855,7 +855,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       return availabilityOf(slot);
     },
     report(vendor, availability) {
-      const slot = slots[vendor];
+      const slot = slotOf(vendor);
       if (slot.availability === availability) return;
       slot.availability = availability;
       slot.failedAt = isSelectable(availability) ? null : now();

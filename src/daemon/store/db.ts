@@ -2,6 +2,7 @@
 // 接口真变了，换成 better-sqlite3 只改这里。其他代码只用下面的 Db。
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
+import { LRUCache } from "lru-cache";
 import { DB_BUSY_TIMEOUT_MS, MAX_CACHED_STATEMENTS } from "../../shared/limits.ts";
 
 export type SqlValue = null | number | bigint | string | Uint8Array;
@@ -33,19 +34,16 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
   raw.exec("PRAGMA journal_mode = WAL");
   // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
   raw.exec("PRAGMA synchronous = NORMAL");
-  /** Map 的顺序就是新旧：用到就挪到最后，超过 MAX_CACHED_STATEMENTS 删最前面（最久没用）的。 */
-  const statements = new Map<string, StatementSync>();
+  /** 预编译语句 LRU 缓存：命中自动刷新顺序，超过 MAX_CACHED_STATEMENTS 自动淘汰最久没用的。 */
+  const stmtCache = new LRUCache<string, StatementSync>({ max: Math.max(1, maxStatements) });
   let depth = 0;
 
   const prepare = (sql: string): StatementSync => {
-    let stmt = statements.get(sql);
+    let stmt = stmtCache.get(sql);
     if (stmt === undefined) {
       stmt = raw.prepare(sql);
-      if (statements.size >= maxStatements) statements.delete(statements.keys().next().value!);
-    } else {
-      statements.delete(sql);
+      stmtCache.set(sql, stmt);
     }
-    statements.set(sql, stmt);
     return stmt;
   };
 
@@ -82,7 +80,7 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
       return depth > 0;
     },
     close() {
-      statements.clear();
+      stmtCache.clear();
       raw.close();
     },
   };

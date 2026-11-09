@@ -39,7 +39,7 @@ const CSP_SVG = `${CSP_DEFAULT}; style-src 'unsafe-inline'`;
 /** 浏览器 → 对方的 WebSocket 关闭码：ws 不让发 1005、1006、1015（只表示“没有关闭帧”），换成正常关闭。 */
 const sendableCode = (code: number, fallback: number) => (code === 1000 || (code >= 1001 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999) ? code : fallback);
 /** 对方已经不认本机了（它把本机移除了）：浏览器那条用这个码关。 */
-export const WS_CLOSE_NOT_FOUND = 4404;
+const WS_CLOSE_NOT_FOUND = 4404;
 /** 关闭原因最多 123 字节。 */
 const reasonOf = (reason: Buffer) => reason.subarray(0, 123).toString("utf8");
 
@@ -243,12 +243,13 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
     if (isGzipBuffer(buf)) {
       reply.header("content-encoding", "gzip").header("vary", "Accept-Encoding").header("content-length", buf.length);
     } else {
-      // fetch（undici）已自动解压响应体或上游回明文：去掉上游旧的 content-length，交由外层 server.ts 的 onSend 统一按需 gzip 并设精确 Content-Length
+      // fetch（undici）已自动解压响应体或上游回明文：去掉上游旧的 content-length，交由外层 server.ts 的 @fastify/compress 统一按需压缩
       reply.removeHeader("content-length");
     }
     return reply.send(buf);
   }
   // 大文件 / Range 响应体流式转回；流完之前浏览器走了，onClientGone 停掉上游
+  req.headers["x-no-compression"] = "1";
   return reply.send(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]));
 }
 

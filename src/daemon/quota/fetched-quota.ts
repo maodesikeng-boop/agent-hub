@@ -1,6 +1,7 @@
 // 事件流里没有额度的厂商（agy）的额度：用户打开额度面板时另起一次性进程问一次（agy -p "/usage"，不耗额度），结果缓存 FETCHED_QUOTA_FRESH_MS。
 // 不在后台定时问；没装、问失败、输出认不出来都回空（网页不显示那一块），空结果只记 FETCHED_QUOTA_RETRY_MS。哪家、怎么问、分几组由 shared/vendors.ts 的 quota.fetched 定。
 import { execFile } from "node:child_process";
+import { LRUCache } from "lru-cache";
 import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, FETCHED_QUOTA_TIMEOUT_MS, type FetchedQuotaSpec, type QuotaResponse } from "../../shared/index.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
@@ -53,17 +54,18 @@ export interface FetchedQuota {
 
 export function createFetchedQuota(options: { query: (() => Promise<QuotaResponse>) | undefined; now?: () => number }): FetchedQuota {
   const now = options.now ?? Date.now;
-  let cached: { at: number; ttl: number; value: QuotaResponse } | null = null;
+  const cache = new LRUCache<"quota", { at: number; ttl: number; value: QuotaResponse }>({ max: 1 });
   let inflight: Promise<QuotaResponse> | null = null;
   return {
     get() {
       if (options.query === undefined) return Promise.resolve(EMPTY);
-      if (cached !== null && now() - cached.at < cached.ttl) return Promise.resolve(cached.value);
+      const cached = cache.get("quota");
+      if (cached !== undefined && now() - cached.at < cached.ttl) return Promise.resolve(cached.value);
       inflight ??= options
         .query()
         .catch(() => EMPTY)
         .then((value) => {
-          cached = { at: now(), ttl: value.groups.length > 0 ? FETCHED_QUOTA_FRESH_MS : FETCHED_QUOTA_RETRY_MS, value };
+          cache.set("quota", { at: now(), ttl: value.groups.length > 0 ? FETCHED_QUOTA_FRESH_MS : FETCHED_QUOTA_RETRY_MS, value });
           inflight = null;
           return value;
         });

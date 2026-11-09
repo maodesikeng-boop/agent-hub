@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { LRUCache } from "lru-cache";
 import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../../shared/paths.ts";
 import { buildChildEnv } from "./protocol.ts";
@@ -289,15 +290,16 @@ export function createAgyConnectorResolver(options: AgyConnectorResolverOptions 
   const now = options.now ?? Date.now;
   const readServers = options.readServers ?? ((h) => readAgyMcpServers(h));
   const cachedNames = options.cachedServerNames ?? ((h) => readAgyCachedMcpServerNames(h));
-  let cached: { key: string; at: number; ttl: number; value: Promise<AgyConnectorCatalog> } | null = null;
+  const cache = new LRUCache<string, { at: number; ttl: number; value: Promise<AgyConnectorCatalog> }>({ max: 1 });
   return () => {
     const servers = readServers(homeDir);
     const names = cachedNames(homeDir);
     const key = JSON.stringify([servers, names]);
-    if (cached !== null && cached.key === key && now() - cached.at < cached.ttl) return cached.value;
+    const cached = cache.get(key);
+    if (cached !== undefined && now() - cached.at < cached.ttl) return cached.value;
     const value = buildAgyConnectorCatalog(servers, names, listTools, timeoutMs, options.launcher);
-    const entry = { key, at: now(), ttl: cacheMs, value };
-    cached = entry;
+    const entry = { at: now(), ttl: cacheMs, value };
+    cache.set(key, entry);
     void value.then(
       (catalog) => {
         if (catalog.unlistable.some((name) => Object.hasOwn(servers, name))) entry.ttl = retryMs;
