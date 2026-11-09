@@ -1,5 +1,5 @@
 import { ChevronRight, Plus, Search, Settings } from "lucide-react";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
@@ -7,6 +7,7 @@ import { previewText, type ConversationEntry, type QuotaVendor } from "../select
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
+import { NARROW_QUERY, useMediaQuery } from "../useMediaQuery.ts";
 import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
@@ -82,6 +83,55 @@ function EntryButton({
   );
 }
 
+function NarrowEntryButton({
+  entry,
+  active,
+  waiting,
+  asking,
+  onSelect,
+}: {
+  entry: ConversationEntry;
+  active: boolean;
+  waiting: boolean;
+  asking: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-current={active ? "true" : undefined}
+      title={entry.name}
+      className={cn(
+        "relative flex size-13 shrink-0 items-center justify-center rounded-2xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
+      )}
+      onClick={onSelect}
+    >
+      <span className="relative">
+        <Avatar colorKey={entry.avatarKey} size={40} />
+        {asking ? (
+          <span
+            role="img"
+            aria-label="等你确定"
+            title="等你确定"
+            data-testid="asking-indicator"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-foreground"
+          />
+        ) : waiting ? (
+          <span
+            role="img"
+            aria-label="等你"
+            title="等你"
+            data-testid="waiting-indicator"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-foreground/40"
+          />
+        ) : null}
+      </span>
+      <span className="sr-only">{entry.name}</span>
+    </button>
+  );
+}
+
 const noop = () => {};
 
 /** 按项目经理的名字和项目名筛，不区分大小写，前后空格不算。 */
@@ -116,7 +166,7 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
 /**
  * 左栏：每个项目经理一行（头像、名字、最后一条消息），点进去就是它唯一的那个对话。
  * 两台以上设备时按设备分组（组头可以折叠），最上面一组汇总所有设备的“等你确定”，每行带设备名；只有一台时和没有联机时一模一样。
- * 窄屏（1100px 以下）收成抽屉（docs/ui-standard.md 第 16 条）：drawerOpen 时盖在左边，点遮罩、按 Esc、选了对话都收起。
+ * 窄屏（1100px 以下）收紧为常驻在左侧的 72px 垂直头像窄栏（docs/ui-standard.md 第 16 条）。
  */
 export function Sidebar({
   groups,
@@ -127,8 +177,9 @@ export function Sidebar({
   devices = null,
   quota,
   quotaFetchable = false,
-  drawerOpen = false,
-  onCloseDrawer = noop,
+  narrow: propNarrow,
+  drawerOpen: _drawerOpen = false,
+  onCloseDrawer: _onCloseDrawer = noop,
   onSelect,
   onNewPm,
 }: {
@@ -144,17 +195,27 @@ export function Sidebar({
   quota: QuotaVendor[];
   /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
   quotaFetchable?: boolean;
-  /** 窄屏时抽屉拉出来了（宽屏不看它）。 */
+  narrow?: boolean;
   drawerOpen?: boolean;
   onCloseDrawer?: () => void;
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
 }) {
+  const queryNarrow = useMediaQuery(NARROW_QUERY);
+  const narrow = propNarrow ?? queryNarrow;
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
   const grouped = groups.length > 1;
+
+  const hasUnarchived = groups.some((g) => g.entries.some((e) => e.pm?.archivedAt == null));
+  const narrowEntries = groups.flatMap((group) =>
+    group.entries
+      .filter((entry) => (hasUnarchived ? entry.pm?.archivedAt == null || (active !== null && active.device === group.key && active.id === entry.id) : true))
+      .map((entry) => ({ group, entry })),
+  );
+
   const row = (group: SidebarGroup, entry: ConversationEntry, device?: string) => {
     const key = conversationKey(group.key, entry.id);
     return (
@@ -206,90 +267,114 @@ export function Sidebar({
   const reminded = grouped
     ? groups.flatMap((group) => group.entries.filter((e) => matches(e, query) && asking.has(conversationKey(group.key, e.id))).map((entry) => ({ group, entry })))
     : [];
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseDrawer();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [drawerOpen, onCloseDrawer]);
+
   return (
-    <>
-      {drawerOpen && <div className="fixed inset-0 z-20 bg-black/30 min-[1101px]:hidden" aria-hidden="true" data-testid="drawer-backdrop" onClick={onCloseDrawer} />}
-      <aside
-        id="sidebar"
-        aria-label="左栏"
-        data-drawer={drawerOpen ? "open" : "closed"}
-        className={cn(
-          "flex w-[300px] shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)] max-[1100px]:fixed max-[1100px]:inset-y-0 max-[1100px]:left-0 max-[1100px]:z-30",
-          !drawerOpen && "max-[1100px]:hidden",
-        )}
-      >
-        <div
-          data-window-drag
-          className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
-        >
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input
-              type="search"
-              aria-label="搜索"
-              placeholder="搜索"
-              className="h-9 border-transparent bg-sidebar-active pl-9"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+    <aside
+      id="sidebar"
+      aria-label="左栏"
+      className={cn(
+        "flex shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
+        narrow ? "w-[72px] border-r border-border" : "w-[300px]",
+      )}
+    >
+      {narrow ? (
+        <>
+          <div data-window-drag className="h-3 shrink-0" />
+          <nav
+            className="sidebar-list flex flex-1 flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto overscroll-y-contain px-0 pt-1 pb-3"
+            aria-label="对话列表"
+          >
+            {narrowEntries.map(({ group, entry }) => {
+              const key = conversationKey(group.key, entry.id);
+              return (
+                <NarrowEntryButton
+                  key={key}
+                  entry={entry}
+                  active={active !== null && active.device === group.key && active.id === entry.id}
+                  waiting={waiting.has(key)}
+                  asking={asking.has(key)}
+                  onSelect={() => onSelect({ device: group.key, id: entry.id })}
+                />
+              );
+            })}
+          </nav>
+          <div className="flex shrink-0 flex-col items-center gap-2 py-3">
+            <Button variant="ghost" size="icon-sm" aria-label="新建项目经理" onClick={onNewPm}>
+              <Plus aria-hidden="true" />
+            </Button>
+            <QuotaPopover quota={quota} fetchable={quotaFetchable} />
+            <Button variant="ghost" size="icon-sm" aria-label="设置" onClick={() => setSettingsOpen(true)}>
+              <Settings aria-hidden="true" />
+            </Button>
           </div>
-          <Button variant="ghost" size="icon" className="shrink-0" aria-label="新建项目经理" onClick={onNewPm}>
-            <Plus aria-hidden="true" />
-          </Button>
-        </div>
-        <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="对话列表">
-          {grouped ? (
-            <>
-              {reminded.length > 0 && (
-                <section aria-label="等你确定" className="mb-2">
-                  <h2 className="flex h-8 items-center px-3 text-[13.5px] font-medium text-muted-foreground">等你确定</h2>
-                  <div className="mt-1 space-y-1">
-                    {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
-                    {reminded.map(({ group, entry }) => (
-                      <div key={conversationKey(group.key, entry.id)} data-readonly={isReadOnly(group.status)} className={cn(isReadOnly(group.status) && "opacity-60")}>
-                        {row(group, entry, group.name)}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {groups.map((group) => (
-                <DeviceGroup
-                  key={group.key}
-                  group={group}
-                  open={!collapsed.has(group.key)}
-                  onToggle={() =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (!next.delete(group.key)) next.add(group.key);
-                      return next;
-                    })
-                  }
-                >
-                  {renderGroupEntries(group)}
-                </DeviceGroup>
-              ))}
-            </>
-          ) : (
-            groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)
-          )}
-        </nav>
-        <div className="flex items-center gap-1 px-3 py-3">
-          <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-          <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="设置" onClick={() => setSettingsOpen(true)}>
-            <Settings aria-hidden="true" />
-          </Button>
-        </div>
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} devices={devices} />
-      </aside>
-    </>
+        </>
+      ) : (
+        <>
+          <div
+            data-window-drag
+            className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
+          >
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                type="search"
+                aria-label="搜索"
+                placeholder="搜索"
+                className="h-9 border-transparent bg-sidebar-active pl-9"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <Button variant="ghost" size="icon" className="shrink-0" aria-label="新建项目经理" onClick={onNewPm}>
+              <Plus aria-hidden="true" />
+            </Button>
+          </div>
+          <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="对话列表">
+            {grouped ? (
+              <>
+                {reminded.length > 0 && (
+                  <section aria-label="等你确定" className="mb-2">
+                    <h2 className="flex h-8 items-center px-3 text-[13.5px] font-medium text-muted-foreground">等你确定</h2>
+                    <div className="mt-1 space-y-1">
+                      {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
+                      {reminded.map(({ group, entry }) => (
+                        <div key={conversationKey(group.key, entry.id)} data-readonly={isReadOnly(group.status)} className={cn(isReadOnly(group.status) && "opacity-60")}>
+                          {row(group, entry, group.name)}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+                {groups.map((group) => (
+                  <DeviceGroup
+                    key={group.key}
+                    group={group}
+                    open={!collapsed.has(group.key)}
+                    onToggle={() =>
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (!next.delete(group.key)) next.add(group.key);
+                        return next;
+                      })
+                    }
+                  >
+                    {renderGroupEntries(group)}
+                  </DeviceGroup>
+                ))}
+              </>
+            ) : (
+              groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)
+            )}
+          </nav>
+          <div className="flex items-center gap-1 px-3 py-3">
+            <QuotaPopover quota={quota} fetchable={quotaFetchable} />
+            <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="设置" onClick={() => setSettingsOpen(true)}>
+              <Settings aria-hidden="true" />
+            </Button>
+          </div>
+        </>
+      )}
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} devices={devices} />
+    </aside>
   );
 }

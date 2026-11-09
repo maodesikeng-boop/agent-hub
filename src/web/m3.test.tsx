@@ -1020,32 +1020,36 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     });
   });
 
-  it("窄屏（1100px 以下）：右栏照样推开对话；左栏收成抽屉，顶栏最左边的按钮拉出来，选了对话、按 Esc、点遮罩都收起", async () => {
+  it("窄屏（1100px 以下）：右栏照样推开对话；左栏收紧为常驻在左侧的 72px 垂直头像窄栏，隐藏搜索框，居中列出项目经理头像，没有顶栏抽屉按钮", async () => {
     media(NARROW_QUERY);
     const user = userEvent.setup();
     await boot(crowd());
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveAttribute("data-drawer", "closed");
-    expect(sidebar).toHaveClass("max-[1100px]:hidden", "max-[1100px]:fixed");
-    const open = screen.getByRole("button", { name: "对话列表" });
-    expect(open.closest("header")).not.toBeNull();
-    await user.click(open);
-    expect(sidebar).toHaveAttribute("data-drawer", "open");
-    expect(sidebar).not.toHaveClass("max-[1100px]:hidden");
+    expect(sidebar).toHaveClass("w-[72px]", "border-r", "border-border", "bg-sidebar");
+    expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
+    // 顶栏没有 PanelLeft 抽屉按钮
+    expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
+    // 列表居中显示各项目经理头像按钮（size-13 rounded-2xl）
+    const avatarButtons = within(nav()).getAllByRole("button");
+    expect(avatarButtons.length).toBeGreaterThan(0);
+    for (const btn of avatarButtons) {
+      expect(btn).toHaveClass("size-13", "rounded-2xl");
+    }
+    // 点头像切换对话
     await user.click(within(nav()).getByRole("button", { name: /老马/ }));
-    expect(sidebar).toHaveAttribute("data-drawer", "closed");
-    await user.click(screen.getByRole("button", { name: "对话列表" }));
-    await user.keyboard("{Escape}");
-    expect(sidebar).toHaveAttribute("data-drawer", "closed");
-    await user.click(screen.getByRole("button", { name: "对话列表" }));
-    await user.click(screen.getByTestId("drawer-backdrop"));
-    expect(sidebar).toHaveAttribute("data-drawer", "closed");
+    expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("bg-sidebar-active");
+    // 底部 3 个 icon-sm 按钮：新建项目经理、QuotaPopover、设置
+    expect(within(sidebar).getByRole("button", { name: "新建项目经理" })).toHaveClass("touch-target");
+    expect(within(sidebar).getByRole("button", { name: "设置" })).toHaveClass("touch-target");
   });
 
-  it("宽屏没有拉左栏的按钮", async () => {
+  it("宽屏为 300px 完整左栏带搜索框，没有拉左栏的抽屉按钮", async () => {
     await boot(crowd());
+    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    expect(sidebar).toHaveClass("w-[300px]");
+    expect(within(sidebar).getByRole("searchbox", { name: "搜索" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
   });
 

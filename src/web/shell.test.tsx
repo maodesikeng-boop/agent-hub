@@ -8,6 +8,7 @@ import type { StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { formatTime } from "./format.ts";
 import { parseRoute, routeHash } from "./route.ts";
+import { NARROW_QUERY } from "./useMediaQuery.ts";
 import {
   FakeApi,
   FakeWebSocket,
@@ -295,7 +296,8 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     const profileBackBtn = screen.getByRole("button", { name: "返回" });
     const profileHeader = profileBackBtn.closest("header")!;
     expect(profileHeader).toHaveAttribute("data-window-drag");
-    expect(profileHeader.className).toContain("max-[1100px]:pl-[calc(1.5rem+var(--macos-traffic-lights-width))]");
+    expect(profileHeader.className).toContain("px-6");
+    expect(profileHeader.className).not.toContain("max-[1100px]:pl");
 
     // 切到 Worker 对话页检查顶栏
     act(() => {
@@ -426,5 +428,27 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     const profileRegion = screen.getByRole("region", { name: "小林 的资料" });
     const profileScroller = profileRegion.querySelector(".overflow-y-auto") as HTMLElement;
     expect(profileScroller).toHaveClass("overflow-x-hidden", "overscroll-y-contain");
+  });
+
+  it("窄屏下左栏收紧为 72px 垂直头像窄栏，隐藏搜索框，居中列出各项目经理头像，没有顶栏抽屉按钮", async () => {
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === NARROW_QUERY,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    await boot();
+    const sidebar = screen.getByRole("complementary", { name: "左栏" });
+    expect(sidebar).toHaveClass("w-[72px]", "border-r", "border-border", "bg-sidebar");
+    expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "对话列表" })).toBeNull();
+    const navEl = screen.getByRole("navigation", { name: "对话列表" });
+    expect(within(navEl).getByRole("button", { name: /小林/ })).toHaveClass("size-13", "rounded-2xl");
+    expect(within(sidebar).getByRole("button", { name: "新建项目经理" })).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "设置" })).toBeInTheDocument();
   });
 });

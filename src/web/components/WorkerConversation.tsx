@@ -56,7 +56,7 @@ export function WorkerConversation({
   /** 还没发的文件（和项目经理页面同一套，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
-  leading: React.ReactNode;
+  leading?: React.ReactNode;
   /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
   /** 太窄时放在顶栏下面的右栏。 */

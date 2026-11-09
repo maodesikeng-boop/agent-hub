@@ -512,7 +512,7 @@ export function PmProfile({
   const label = `${pm.name} 的资料`;
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
-      <header data-window-drag className="flex h-16 shrink-0 items-center px-6 max-[1100px]:pl-[calc(1.5rem+var(--macos-traffic-lights-width))]">
+      <header data-window-drag className="flex h-16 shrink-0 items-center px-6">
         <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>

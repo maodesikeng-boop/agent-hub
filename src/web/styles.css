@@ -80,12 +80,6 @@ html[data-macos-app="true"] {
   --macos-traffic-lights-height: 28px;
 }
 
-@media (max-width: 1100px) {
-  html[data-macos-app="true"] .chat-main {
-    --header-gutter-start: calc(1.25rem + var(--macos-traffic-lights-width));
-  }
-}
-
 html,
 body,
 #root {

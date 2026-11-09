@@ -4,7 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationId, Message } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
-import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RightRail } from "./components/RightRail.tsx";
+import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import type { WorkerEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
 
@@ -24,13 +24,14 @@ const busy = (id: number) => worker(id, { activity: "working" });
 const done = (id: number) => worker(id, { ended: true });
 const ask = (id: number): Message => makeMessage({ id, text: `问题 ${id}`, meta: { needsUser: true } });
 
-function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; onOpenWorker?: (id: ConversationId) => void } = {}) {
+function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; avatarKey?: number; onOpenWorker?: (id: ConversationId) => void } = {}) {
   render(
     <RightRail
       asks={props.asks ?? []}
       workers={props.workers ?? []}
       openWorkerId={props.openWorkerId ?? null}
       layout="side"
+      avatarKey={props.avatarKey ?? 0}
       onOpenAsk={() => {}}
       onOpenWorker={props.onOpenWorker ?? (() => {})}
     />,
@@ -63,14 +64,15 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(screen.getByRole("complementary", { name: "右栏" }).innerHTML).not.toMatch(/shadow|bg-sidebar(?!-)/);
   });
 
-  it("Worker 行：16px 线条图标 + 14px 标题 + 右边英文状态词；一行 32px 的紧凑行（icon 在最左）", () => {
-    renderRail({ workers: [busy(30)] });
+  it("Worker 行：16px 水果果瓣图标 + 14px 标题 + 右边英文状态词；一行 32px 的紧凑行（icon 在最左）", () => {
+    renderRail({ workers: [busy(30)], avatarKey: 2 });
     const row = within(workerGroup()).getByRole("button", { name: /活 30/ });
     expect(row).toHaveClass("px-2", "-mx-2", "gap-3", "rounded-xl");
     expect(row.className).not.toMatch(/rounded-2xl|py-2(\s|$)/);
-    const icon = row.querySelector("svg")!;
-    expect(icon).toHaveClass("size-4");
-    expect(row.firstElementChild!.contains(icon)).toBe(true);
+    const avatar = row.querySelector("[data-neutral='true']")!;
+    expect(avatar).toBeInTheDocument();
+    expect(avatar).toHaveStyle({ width: "16px", height: "16px" });
+    expect(row.firstElementChild!.contains(avatar)).toBe(true);
     expect(within(row).getByText("活 30")).toHaveClass("text-[14px]", "truncate");
     expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary");
   });
@@ -97,7 +99,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(dot(/活 34/)).toHaveClass("bg-danger");
     // 又在干活了：看现在的状态，不看上一次汇报
     expect(dot(/活 35/)).toHaveClass("bg-primary");
-    expect(dot(/活 30/)!.parentElement!.querySelector("svg")).toHaveClass("text-muted-foreground");
+    expect(dot(/活 30/)!.parentElement!.querySelector("[data-neutral='true']")).toBeInTheDocument();
     // 收工的在“已收工”里，没展开时看不到
     expect(screen.queryByRole("button", { name: /活 36/ })).toBeNull();
   });
@@ -352,5 +354,21 @@ describe("右栏：每组可以收起", () => {
     expect(title).toHaveAttribute("aria-expanded", "false");
     await user.keyboard(" ");
     expect(title).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+describe("RightRailToggle: 切了的水果 Worker 果瓣图标", () => {
+  it("开关使用当前项目经理对应水果切出的 Worker 果瓣（Avatar neutral 22px）", () => {
+    render(<RightRailToggle visible open={false} attention={false} avatarKey={3} onToggle={() => {}} />);
+    const button = screen.getByRole("button", { name: "展开右栏" });
+    const avatar = button.querySelector("[data-neutral='true']");
+    expect(avatar).toBeInTheDocument();
+    expect(avatar).toHaveStyle({ width: "22px", height: "22px" });
+  });
+
+  it("有等你确定且收起时右上角显示 6px 强调色小圆点", () => {
+    render(<RightRailToggle visible open={false} attention={true} avatarKey={1} onToggle={() => {}} />);
+    const button = screen.getByRole("button", { name: /有等你确定的事/ });
+    expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
   });
 });

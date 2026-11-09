@@ -1,4 +1,4 @@
-import { Bot, ChevronRight, MessageCircleQuestionMark, PanelRight, Play } from "lucide-react";
+import { ChevronRight, MessageCircleQuestionMark, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_AGENT_VENDOR, agentEffortOf, effortLabel, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
@@ -10,6 +10,7 @@ import type { WorkerEntry } from "../selectors.ts";
 import { STEP_TEXT } from "../step-labels.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
+import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 /** 会话 activity → 状态词（英文，复用 step-labels.ts，docs/ui-standard.md 第 12 条）。以后有新的 activity 只在这里加一行。 */
@@ -164,7 +165,17 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
  * 一个 Worker 一行（信息靠层次区分，不用符号拼接）：左边线条图标（右下角一个小色点表示状态：在忙强调色、空闲的跟着最近一次汇报的状态色、收工没有），
  * 第一行标题 + 右边英文状态词；第二行小一号灰字：模型、思考程度（有才显示）、现在的对话长度（“158K context”），之间用间距隔开。context 悬停看累计明细。收工的淡一些。
  */
-function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: boolean; onOpen: () => void }) {
+function WorkerRow({
+  worker,
+  active,
+  avatarKey = 0,
+  onOpen,
+}: {
+  worker: WorkerEntry;
+  active: boolean;
+  avatarKey?: number;
+  onOpen: () => void;
+}) {
   const vendor = isAgentVendor(worker.vendor) ? worker.vendor : DEFAULT_AGENT_VENDOR;
   const catalog = useModelCatalog(vendor);
   const busy = isBusy(worker);
@@ -179,7 +190,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       onClick={onOpen}
     >
       <span className="relative mt-0.5 size-4 shrink-0">
-        <Bot className={ROW_ICON} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <Avatar colorKey={avatarKey} size={16} neutral />
         {!worker.ended && (
           <span
             data-testid="status-dot"
@@ -208,7 +219,19 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
 }
 
 /** 右栏开关：ghost 图标按钮，右栏展开时在右栏第一组标题的同一行右边，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
-export function RightRailToggle({ visible, open, attention, onToggle }: { visible: boolean; open: boolean; attention: boolean; onToggle: () => void }) {
+export function RightRailToggle({
+  visible,
+  open,
+  attention,
+  avatarKey = 0,
+  onToggle,
+}: {
+  visible: boolean;
+  open: boolean;
+  attention: boolean;
+  avatarKey?: number;
+  onToggle: () => void;
+}) {
   if (!visible) return null;
   return (
     <Button
@@ -220,7 +243,7 @@ export function RightRailToggle({ visible, open, attention, onToggle }: { visibl
       className={cn("relative shrink-0", open && "text-foreground")}
       onClick={onToggle}
     >
-      <PanelRight aria-hidden="true" />
+      <Avatar colorKey={avatarKey} size={22} neutral />
       {!open && attention && <span className="absolute top-2 right-2 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
     </Button>
   );
@@ -247,7 +270,17 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
 }
 
 /** 收工的 Worker 收成一行“已收工 N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Worker 时自动展开，当前那行看得见。 */
-function EndedWorkers({ workers, openWorkerId, onOpenWorker }: { workers: WorkerEntry[]; openWorkerId: ConversationId | null; onOpenWorker: (id: ConversationId) => void }) {
+function EndedWorkers({
+  workers,
+  openWorkerId,
+  avatarKey = 0,
+  onOpenWorker,
+}: {
+  workers: WorkerEntry[];
+  openWorkerId: ConversationId | null;
+  avatarKey?: number;
+  onOpenWorker: (id: ConversationId) => void;
+}) {
   const [open, setOpen] = useState(false);
   const activeEnded = workers.some((w) => w.conversationId === openWorkerId);
   useEffect(() => {
@@ -263,7 +296,7 @@ function EndedWorkers({ workers, openWorkerId, onOpenWorker }: { workers: Worker
         <ul>
           {workers.map((worker) => (
             <li key={worker.conversationId}>
-              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} avatarKey={avatarKey} onOpen={() => onOpenWorker(worker.conversationId)} />
             </li>
           ))}
         </ul>
@@ -283,6 +316,7 @@ export function RightRail({
   openWorkerId,
   layout,
   toggle,
+  avatarKey = 0,
   onOpenAsk,
   onOpenWorker,
 }: {
@@ -293,6 +327,8 @@ export function RightRail({
   layout: "side" | "top";
   /** side：放在右栏顶部的开关（RightRailToggle）。 */
   toggle?: React.ReactNode;
+  /** 所属项目经理的水果颜色编号，用于显示 Worker 自然果瓣头像。 */
+  avatarKey?: number;
   /** 点开一个提问：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
@@ -345,12 +381,12 @@ export function RightRail({
               <ul>
                 {shownLive.shown.map((worker) => (
                   <li key={worker.conversationId}>
-                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} avatarKey={avatarKey} onOpen={() => onOpenWorker(worker.conversationId)} />
                   </li>
                 ))}
               </ul>
               <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
+              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} avatarKey={avatarKey} onOpenWorker={onOpenWorker} />}
             </GroupBody>
           </section>
         )}
