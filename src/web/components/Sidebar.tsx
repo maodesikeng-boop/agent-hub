@@ -245,7 +245,7 @@ export function Sidebar({
             <Plus aria-hidden="true" />
           </Button>
         </div>
-        <nav className={cn("flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1", !grouped && "space-y-1")} aria-label="对话列表">
+        <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="对话列表">
           {grouped ? (
             <>
               {reminded.length > 0 && (
