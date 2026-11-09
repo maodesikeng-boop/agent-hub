@@ -231,7 +231,6 @@ export function App() {
   const handleLoadOlder = useCallback((id: ConversationId) => void hub.loadOlder(id), [hub]);
   const openProfile = useCallback((pmId: PmId) => navigate({ view: "profile", pmId, ...here }), [navigate, here]);
   const health = useMemo(() => failingHealth(state), [state.health]);
-  const quota = useMemo(() => quotaUsage(state), [state.sessions]);
   const quotaFetchable = useMemo(() => hasFetchedQuotaSession(state), [state.sessions]);
   const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
   const railPm = active?.pm?.id ?? null;
@@ -355,7 +354,7 @@ export function App() {
               }
             : null
         }
-        quota={quota}
+        quota={quotaUsage(state)}
         quotaFetchable={quotaFetchable}
         drawerOpen={narrow && drawerOpen}
         onCloseDrawer={closeDrawer}
