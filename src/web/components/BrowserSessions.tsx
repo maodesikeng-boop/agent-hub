@@ -1,13 +1,15 @@
 // 设置里的“已登录的浏览器”（联机 P6，docs/multi-device-design.md 第 3.4 节）：每个浏览器一行，能单个退出；
 // “在手机上登录”显示一次性登录链接的二维码（5 分钟、用一次）；“全部退出”换主钥匙、清所有会话。
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { BrowserSessionInfo, LoginLinkResponse } from "../../shared/index.ts";
 import { describeUserAgent, formatAgo, formatCountdown } from "../browser-sessions.ts";
 import { ApiError, deleteBrowserSession, fetchBrowserSessions, postApproveBrowserSession, postLoginLink, postLogoutAll } from "../client.ts";
+import { errorText, type ErrorLike } from "../format.ts";
+import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { QrCode } from "./QrCode.tsx";
-import { errorText, type ErrorLike } from "../format.ts";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 /** 二维码显示期间，每隔多久刷新一次列表（手机扫码登录上了，二维码就收起来）。 */
@@ -17,36 +19,33 @@ const CONFIRM_TIMEOUT_MS = 5000;
 /** 倒计时每秒走一次。 */
 const COUNTDOWN_TICK_MS = 1000;
 
+const BROWSER_SESSIONS_QUERY_KEY = ["browser-sessions"] as const;
+
 /** 退出自己、全部退出之后：刷新页面，接口回 401，页面显示登录提示。 */
 const reloadPage = () => location.reload();
 
 export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSignedOut?: () => void }) {
-  const [sessions, setSessions] = useState<BrowserSessionInfo[] | null>(null);
-  const [loadError, setLoadError] = useState<ErrorLike | null>(null);
+  const qc = useHubQueryClient();
   const [rowErrors, setRowErrors] = useState<Record<string, ErrorLike>>({});
-  const [busy, setBusy] = useState<string | null>(null);
   const [confirmingSelf, setConfirmingSelf] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
-  const [allError, setAllError] = useState<ErrorLike | null>(null);
-  // 二维码：link 是现在显示的那个（null 没显示）；linkBusy 是正在生成；baseline 是生成时已有的浏览器，多出来就是手机登录上了
+  // 二维码：link 是现在显示的那个（null 没显示）；baseline 是生成时已有的浏览器，多出来就是手机登录上了
   const [link, setLink] = useState<LoginLinkResponse | null>(null);
-  const [linkBusy, setLinkBusy] = useState(false);
-  const [linkError, setLinkError] = useState<ErrorLike | null>(null);
   const [baseline, setBaseline] = useState<ReadonlySet<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
 
-  const refresh = useCallback(async () => {
-    try {
-      setSessions((await fetchBrowserSessions()).sessions);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(errorText(err));
-    }
-  }, []);
+  const expired = link !== null && now >= link.expiresAt;
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const { data: sessions = null, error: queryError } = useQuery(
+    {
+      queryKey: BROWSER_SESSIONS_QUERY_KEY,
+      queryFn: async () => (await fetchBrowserSessions()).sessions,
+      staleTime: 0,
+      refetchInterval: link !== null && !expired ? SESSIONS_POLL_MS : false,
+    },
+    qc,
+  );
+  const loadError: ErrorLike | null = queryError ? errorText(queryError) : null;
 
   // 点了“退出（当前浏览器）”或“全部退出”没再点确认：几秒后退回去（Safari 点按钮不聚焦，失去焦点的退回对它不起作用）
   useEffect(() => {
@@ -61,9 +60,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
     return () => clearTimeout(timer);
   }, [confirmingAll]);
 
-  const expired = link !== null && now >= link.expiresAt;
-
-  // 二维码在显示：倒计时每秒走一次；定时刷新列表，手机登录上了（多出一个浏览器）就收起来
+  // 二维码在显示：倒计时每秒走一次；手机登录上了（多出一个浏览器）就收起来
   useEffect(() => {
     if (link === null) return;
     setNow(Date.now());
@@ -72,75 +69,87 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
   }, [link]);
 
   useEffect(() => {
-    if (link === null || expired) return;
-    const poll = setInterval(() => void refresh(), SESSIONS_POLL_MS);
-    return () => clearInterval(poll);
-  }, [link, expired, refresh]);
-
-  useEffect(() => {
     if (link !== null && sessions?.some((s) => !baseline.has(s.id))) setLink(null);
   }, [link, sessions, baseline]);
 
-  const exit = async (session: BrowserSessionInfo) => {
-    setBusy(`exit:${session.id}`);
-    setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
-    try {
-      await deleteBrowserSession(session.id);
-    } catch (err) {
-      // 别处已经把它退了：当作成功
-      if (!(err instanceof ApiError && err.status === 404)) {
+  const exitMutation = useMutation(
+    {
+      mutationFn: async (session: BrowserSessionInfo) => {
+        try {
+          await deleteBrowserSession(session.id);
+        } catch (err) {
+          // 别处已经把它退了：当作成功
+          if (!(err instanceof ApiError && err.status === 404)) throw err;
+        }
+      },
+      onMutate: (session) => {
+        setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
+      },
+      onSuccess: (_data, session) => {
+        if (session.current) {
+          onSignedOut();
+          return;
+        }
+        qc.setQueryData<BrowserSessionInfo[]>(BROWSER_SESSIONS_QUERY_KEY, (list) => list?.filter((s) => s.id !== session.id));
+      },
+      onError: (err, session) => {
         setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
-        setBusy(null);
         if (session.current) setConfirmingSelf(false);
-        return;
-      }
-    }
-    setBusy(null);
-    if (session.current) return onSignedOut();
-    setSessions((list) => list?.filter((s) => s.id !== session.id) ?? null);
-  };
+      },
+    },
+    qc,
+  );
 
-  const approve = async (session: BrowserSessionInfo) => {
-    setBusy(`approve:${session.id}`);
-    setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
-    try {
-      await postApproveBrowserSession(session.id);
-    } catch (err) {
-      setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
-      setBusy(null);
-      return;
-    }
-    setBusy(null);
-    setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, status: "active" } : s)) ?? null);
-  };
+  const approveMutation = useMutation(
+    {
+      mutationFn: (session: BrowserSessionInfo) => postApproveBrowserSession(session.id),
+      onMutate: (session) => {
+        setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
+      },
+      onSuccess: (_data, session) => {
+        qc.setQueryData<BrowserSessionInfo[]>(BROWSER_SESSIONS_QUERY_KEY, (list) =>
+          list?.map((s) => (s.id === session.id ? { ...s, status: "active" } : s)),
+        );
+      },
+      onError: (err, session) => {
+        setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
+      },
+    },
+    qc,
+  );
 
-  const exitAll = async () => {
-    setBusy("all");
-    setAllError(null);
-    try {
-      await postLogoutAll();
-    } catch (err) {
-      setAllError(errorText(err));
-      setBusy(null);
-      setConfirmingAll(false);
-      return;
-    }
-    setBusy(null);
-    onSignedOut();
-  };
+  const exitAllMutation = useMutation(
+    {
+      mutationFn: () => postLogoutAll(),
+      onSuccess: () => onSignedOut(),
+      onError: () => setConfirmingAll(false),
+    },
+    qc,
+  );
 
-  const showLink = async () => {
-    setLinkBusy(true);
-    setLinkError(null);
-    try {
-      setBaseline(new Set(sessions?.map((s) => s.id)));
-      setLink(await postLoginLink());
-    } catch (err) {
-      setLinkError(errorText(err));
-    } finally {
-      setLinkBusy(false);
-    }
-  };
+  const linkMutation = useMutation(
+    {
+      mutationFn: () => postLoginLink(),
+      onMutate: () => {
+        setBaseline(new Set(sessions?.map((s) => s.id)));
+      },
+      onSuccess: (created) => {
+        setLink(created);
+      },
+    },
+    qc,
+  );
+
+  const busy = exitMutation.isPending
+    ? `exit:${exitMutation.variables.id}`
+    : approveMutation.isPending
+      ? `approve:${approveMutation.variables.id}`
+      : exitAllMutation.isPending
+        ? "all"
+        : null;
+  const allError: ErrorLike | null = exitAllMutation.error ? errorText(exitAllMutation.error) : null;
+  const linkBusy = linkMutation.isPending;
+  const linkError: ErrorLike | null = linkMutation.error ? errorText(linkMutation.error) : null;
 
   return (
     <SettingsGroup title="已登录的浏览器">
@@ -174,10 +183,10 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
               {(id) =>
                 pending ? (
                   <span className="-mr-3 flex items-center gap-1">
-                    <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => void exit(session)}>
+                    <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => exitMutation.mutate(session)}>
                       {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}拒绝
                     </Button>
-                    <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => void approve(session)}>
+                    <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => approveMutation.mutate(session)}>
                       {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}允许
                     </Button>
                   </span>
@@ -193,7 +202,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
                       aria-label="确认退出"
                       disabled={busy !== null}
                       className="text-danger hover:text-danger"
-                      onClick={() => void exit(session)}
+                      onClick={() => exitMutation.mutate(session)}
                     >
                       {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
                     </Button>
@@ -206,7 +215,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
                     aria-label={`退出 ${name}`}
                     disabled={busy !== null}
                     className="-mr-3"
-                    onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
+                    onClick={() => (session.current ? setConfirmingSelf(true) : exitMutation.mutate(session))}
                   >
                     {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}退出
                   </Button>
@@ -224,7 +233,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             aria-label={link === null ? "显示二维码" : "隐藏"}
             disabled={linkBusy}
             className="-mr-3"
-            onClick={() => (link === null ? void showLink() : setLink(null))}
+            onClick={() => (link === null ? linkMutation.mutate() : setLink(null))}
           >
             {linkBusy && <Loader2 className="animate-spin" aria-hidden="true" />}
             {link === null ? "显示二维码" : "隐藏"}
@@ -236,7 +245,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
           {expired ? (
             <>
               <p className="text-[15px] text-muted-foreground">已过期</p>
-              <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => void showLink()}>
+              <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => linkMutation.mutate()}>
                 重新生成
               </Button>
             </>
@@ -257,7 +266,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             aria-label={confirmingAll ? "确认全部退出" : "全部退出"}
             disabled={busy !== null}
             className={confirmingAll ? "-mr-3 text-danger hover:text-danger" : "-mr-3"}
-            onClick={() => (confirmingAll ? void exitAll() : setConfirmingAll(true))}
+            onClick={() => (confirmingAll ? exitAllMutation.mutate() : setConfirmingAll(true))}
             onBlur={() => setConfirmingAll(false)}
           >
             {busy === "all" && <Loader2 className="animate-spin" aria-hidden="true" />}

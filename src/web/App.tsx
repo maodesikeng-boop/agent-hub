@@ -1,3 +1,4 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Loader2, PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccentScope } from "./lib/accent-scope.tsx";
@@ -13,6 +14,7 @@ import { useDevices } from "./device-hub.ts";
 import { DeviceScope } from "./device-scope.tsx";
 import { errorTitle } from "./format.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, routeDeviceOf } from "./devices.ts";
+import { useHubQueryClient } from "./query-client.ts";
 import {
   failingHealth,
   isRenewing,
@@ -69,6 +71,7 @@ const saveRailClosed = (closed: boolean) => {
 };
 
 export function App() {
+  const qc = useHubQueryClient();
   const fleet = useDevices();
   const { route, navigate, replace } = useRoute();
   // 网址里的设备（没写是入口本机）；清单里没有（还没拉到、编号不对）先看入口本机
@@ -338,6 +341,7 @@ export function App() {
     );
 
   return (
+    <QueryClientProvider client={qc}>
     <DeviceScope client={hub.client} server={state.server}>
     <ModelCatalogProvider>
     <div className="relative flex h-full">
@@ -449,5 +453,6 @@ export function App() {
     </div>
     </ModelCatalogProvider>
     </DeviceScope>
+    </QueryClientProvider>
   );
 }

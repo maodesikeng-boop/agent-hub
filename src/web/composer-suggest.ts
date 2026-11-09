@@ -2,10 +2,12 @@
 // 触发规则在 composer-trigger.ts（纯函数），列表的样子在 components/ComposerMenu.tsx，这里不认识具体厂商：
 // 命令列表和要插入的文字都由后台给（GET /api/conversations/:id/commands 和 files?q=）。
 // 拿不到列表（后台问不到、请求失败）一律不弹、不报错，输入框照常能发。
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { API_PATHS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
 import { type ComposerTrigger, detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { useHubQueryClient } from "./query-client.ts";
 
 /** 接着打字，等这么久没再打才去后台搜文件。 */
 export const FILE_SEARCH_DEBOUNCE_MS = 120;
@@ -14,6 +16,18 @@ export const FILE_SEARCH_DEBOUNCE_MS = 120;
 export interface ComposerSource {
   commands: (signal: AbortSignal) => Promise<ComposerCommand[]>;
   files: (query: string, signal: AbortSignal) => Promise<FilesResponse>;
+}
+
+let nextSourceId = 1;
+const sourceIds = new WeakMap<ComposerSource, number>();
+function sourceKeyOf(source: ComposerSource | undefined): number {
+  if (!source) return 0;
+  let id = sourceIds.get(source);
+  if (id === undefined) {
+    id = nextSourceId++;
+    sourceIds.set(source, id);
+  }
+  return id;
 }
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
@@ -82,6 +96,8 @@ export function useComposerSuggest({
   enabled: boolean;
   onReplace: (text: string, cursor: number) => void;
 }): ComposerSuggest {
+  const qc = useHubQueryClient();
+  const srcKey = sourceKeyOf(source);
   const detected = useMemo(() => (enabled && source !== undefined ? detectComposerTrigger(value, cursor) : null), [enabled, source, value, cursor]);
 
   // Esc 关掉的那个触发（按种类和起点认）：同一处接着打字不再弹，换个地方打 / 或 @ 又弹
@@ -93,46 +109,61 @@ export function useComposerSuggest({
   }, [detected]);
 
   // 命令列表：每次在开头打 / 都重新问一次（列表会变），拿到之前沿用上一份；问不到就当没有
-  const [commands, setCommands] = useState<{ source: ComposerSource; list: ComposerCommand[] } | null>(null);
-  const commandOpen = trigger?.kind === "command";
-  useEffect(() => {
-    if (!commandOpen || source === undefined) return;
-    const abort = new AbortController();
-    source
-      .commands(abort.signal)
-      .then((list) => {
-        if (!abort.signal.aborted) setCommands({ source, list });
-      })
-      .catch(() => {
-        if (!abort.signal.aborted) setCommands(null);
-      });
-    return () => abort.abort();
-  }, [commandOpen, source]);
+  const commandOpen = trigger?.kind === "command" && source !== undefined;
+  const { data: commands = null } = useQuery(
+    {
+      queryKey: ["composer-commands", srcKey] as const,
+      queryFn: async ({ signal }) => {
+        try {
+          const list = await source!.commands(signal);
+          return { source: source!, list };
+        } catch {
+          return null;
+        }
+      },
+      enabled: commandOpen,
+      staleTime: 0,
+      placeholderData: keepPreviousData,
+    },
+    qc,
+  );
 
   // 文件：等 120ms 没再打字才发；再打字时旧请求作废，后发先回也不会把旧结果显示出来
-  const [files, setFiles] = useState<{ source: ComposerSource; query: string; entries: FileEntry[] } | null>(null);
+  const filesKey = useMemo(() => ["composer-files", srcKey] as const, [srcKey]);
+  const { data: files = null } = useQuery<{ source: ComposerSource; query: string; entries: FileEntry[] } | null>(
+    {
+      queryKey: filesKey,
+      queryFn: () => null,
+      enabled: false,
+    },
+    qc,
+  );
   const fileQuery = trigger?.kind === "file" ? trigger.query : null;
   useEffect(() => {
     if (fileQuery === null || source === undefined) {
-      setFiles(null);
+      qc.setQueryData(filesKey, null);
       return;
     }
     const abort = new AbortController();
     const timer = setTimeout(() => {
-      source
-        .files(fileQuery, abort.signal)
+      void qc
+        .fetchQuery({
+          queryKey: ["composer-files-search", srcKey, fileQuery] as const,
+          queryFn: () => source.files(fileQuery, abort.signal),
+          staleTime: 0,
+        })
         .then((result) => {
-          if (!abort.signal.aborted) setFiles({ source, query: fileQuery, entries: result.entries });
+          if (!abort.signal.aborted) qc.setQueryData(filesKey, { source, query: fileQuery, entries: result.entries });
         })
         .catch(() => {
-          if (!abort.signal.aborted) setFiles(null);
+          if (!abort.signal.aborted) qc.setQueryData(filesKey, null);
         });
     }, FILE_SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [fileQuery, source]);
+  }, [fileQuery, source, srcKey, filesKey, qc]);
 
   // 列表内容；null 就是不弹
   const content = useMemo((): { kind: ComposerTrigger["kind"]; items: MenuItem[] } | null => {

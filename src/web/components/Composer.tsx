@@ -1,5 +1,6 @@
 import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
@@ -229,6 +230,6 @@ export const DraftComposer = memo(function DraftComposer({
   draft,
   ...rest
 }: Omit<ComponentProps<typeof Composer>, "value" | "onChange"> & { draft: DraftSlot }) {
-  const value = useSyncExternalStore(draft.subscribe, draft.get);
+  const value = useStore(draft.store);
   return <Composer value={value} onChange={draft.set} {...rest} />;
 });
