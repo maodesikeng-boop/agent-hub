@@ -37,7 +37,8 @@ const RIGHT_RAIL_ID = "right-rail";
  * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“已收工 N ›” 14px，第二行 13px（行高 18px）。图标 16px 线条（stroke 1.5）。
  * 行：左右 8px 内边距、负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 32px。
  */
-const ROW = "flex w-[calc(100%+1rem)] pointer-coarse:min-h-11 cursor-pointer gap-3 -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW_BASE = "flex w-[calc(100%+1rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2 rounded-xl px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW = cn(ROW_BASE, "gap-3");
 const ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 const ICON_STROKE = 1.5;
 /** 空闲 Worker 的小圆点颜色：跟着最近一次汇报（worker-status.ts 的 tone），和汇报气泡头像上的色点一样；没汇报是灰。 */
@@ -79,7 +80,27 @@ function useCollapsedGroups() {
  * 收起时标题后面带这一组的个数（12px），还有几条没处理看得出来。和整栏的开关（RightRailToggle）是两回事。
  * trailing：同一行右边放的东西（并排的右栏里第一组放整栏的开关，这样顶上不多占一行）。
  */
-function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = false, trailing }: { id: string; bodyId: string; children: React.ReactNode; count: number; collapsed: boolean; onToggle: () => void; dot?: boolean; trailing?: React.ReactNode }) {
+function GroupTitle({
+  id,
+  bodyId,
+  children,
+  count,
+  collapsed,
+  onToggle,
+  dot = false,
+  icon,
+  trailing,
+}: {
+  id: string;
+  bodyId: string;
+  children: React.ReactNode;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  dot?: boolean;
+  icon?: React.ReactNode;
+  trailing?: React.ReactNode;
+}) {
   const title = (
     <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-[13px] font-normal text-foreground", trailing && "min-w-0 flex-1")}>
       <button
@@ -90,6 +111,7 @@ function GroupTitle({ id, bodyId, children, count, collapsed, onToggle, dot = fa
         onClick={onToggle}
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
+        {icon}
         {children}
         {collapsed && <span className="text-xs font-normal text-muted-foreground tabular-nums">{count}</span>}
         <Play className={cn("size-2.5 shrink-0 fill-current text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")} aria-hidden="true" />
@@ -162,13 +184,12 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
 }
 
 /**
- * 一个 Worker 一行（信息靠层次区分，不用符号拼接）：左边线条图标（右下角一个小色点表示状态：在忙强调色、空闲的跟着最近一次汇报的状态色、收工没有），
+ * 一个 Piece 一行（信息靠层次区分，不用符号拼接）：每行左侧不放图标，只展示标题、状态、模型与 context 信息，
  * 第一行标题 + 右边英文状态词；第二行小一号灰字：模型、思考程度（有才显示）、现在的对话长度（“158K context”），之间用间距隔开。context 悬停看累计明细。收工的淡一些。
  */
 function WorkerRow({
   worker,
   active,
-  avatarKey = 0,
   onOpen,
 }: {
   worker: WorkerEntry;
@@ -186,33 +207,21 @@ function WorkerRow({
     <button
       type="button"
       aria-current={active ? "true" : undefined}
-      className={cn(ROW, "items-start", active ? "bg-sidebar-active" : "hover:bg-sidebar-hover", worker.ended && "opacity-60")}
+      className={cn(ROW_BASE, "flex-col items-stretch gap-0.5", active ? "bg-sidebar-active" : "hover:bg-sidebar-hover", worker.ended && "opacity-60")}
       onClick={onOpen}
     >
-      <span className="relative mt-0.5 size-4 shrink-0">
-        <Avatar colorKey={avatarKey} size={16} neutral />
-        {!worker.ended && (
-          <span
-            data-testid="status-dot"
-            className={cn("absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background", busy ? "bg-primary" : TONE_DOT[worker.tone])}
-            aria-hidden="true"
-          />
-        )}
+      <span className="flex items-baseline justify-between gap-3">
+        <span className="min-w-0 truncate text-[14px] leading-5">{worker.title}</span>
+        <span className={cn("shrink-0 text-[13px]", busy ? "text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
       </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate text-[14px] leading-5">{worker.title}</span>
-          <span className={cn("shrink-0 text-[13px]", busy ? "text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
-        </span>
-        <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
-          {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
-          {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
-          {(context !== NO_DATA || (worker.vendor === undefined && !effort)) && (
-            <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
-              {context}
-            </span>
-          )}
-        </span>
+      <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
+        {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}
+        {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
+        {(context !== NO_DATA || (worker.vendor === undefined && !effort)) && (
+          <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
+            {context}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -269,11 +278,10 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
   );
 }
 
-/** 收工的 Worker 收成一行“已收工 N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Worker 时自动展开，当前那行看得见。 */
+/** 收工的 Piece 收成一行“已收工 N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Piece 时自动展开，当前那行看得见。 */
 function EndedWorkers({
   workers,
   openWorkerId,
-  avatarKey = 0,
   onOpenWorker,
 }: {
   workers: WorkerEntry[];
@@ -296,7 +304,7 @@ function EndedWorkers({
         <ul>
           {workers.map((worker) => (
             <li key={worker.conversationId}>
-              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} avatarKey={avatarKey} onOpen={() => onOpenWorker(worker.conversationId)} />
+              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
             </li>
           ))}
         </ul>
@@ -374,19 +382,27 @@ export function RightRail({
         )}
         {workers.length > 0 && (
           <section aria-labelledby="rail-workers" className="py-3">
-            <GroupTitle id="rail-workers" bodyId="rail-workers-body" count={live.length} collapsed={groups.collapsed.workers === true} onToggle={() => groups.toggle("workers")} trailing={side && asks.length === 0 ? toggle : undefined}>
-              Worker
+            <GroupTitle
+              id="rail-workers"
+              bodyId="rail-workers-body"
+              count={live.length}
+              collapsed={groups.collapsed.workers === true}
+              onToggle={() => groups.toggle("workers")}
+              icon={<Avatar colorKey={avatarKey} size={16} neutral />}
+              trailing={side && asks.length === 0 ? toggle : undefined}
+            >
+              Pieces
             </GroupTitle>
             <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
               <ul>
                 {shownLive.shown.map((worker) => (
                   <li key={worker.conversationId}>
-                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} avatarKey={avatarKey} onOpen={() => onOpenWorker(worker.conversationId)} />
+                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
                   </li>
                 ))}
               </ul>
               <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} avatarKey={avatarKey} onOpenWorker={onOpenWorker} />}
+              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
             </GroupBody>
           </section>
         )}

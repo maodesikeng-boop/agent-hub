@@ -47,9 +47,12 @@ function EntryButton({
     entry.pm?.archivedAt != null ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
-      <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-foreground" />
+      <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-medium text-foreground">等你</span>
+      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="flex items-center gap-1.5 text-xs font-medium text-status-active">
+        <span className="size-1.5 rounded-full bg-status-active" aria-hidden="true" />
+        等你
+      </span>
     ) : entry.lastMessage ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
@@ -115,7 +118,7 @@ function NarrowEntryButton({
             aria-label="等你确定"
             title="等你确定"
             data-testid="asking-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-foreground"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
           />
         ) : waiting ? (
           <span
@@ -123,7 +126,7 @@ function NarrowEntryButton({
             aria-label="等你"
             title="等你"
             data-testid="waiting-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-foreground/40"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
           />
         ) : null}
       </span>

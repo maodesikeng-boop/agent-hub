@@ -86,7 +86,7 @@ export function WorkerConversation({
   const handleSend = useCallback((text: string, files: File[]) => (id === undefined ? undefined : onSend(id, text, files)), [onSend, id]);
   const statusNode = useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [session]);
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
+    <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         <Button variant="ghost" size="icon" aria-label={`返回 ${pm.name}`} onClick={onBack}>
@@ -101,7 +101,7 @@ export function WorkerConversation({
       {top}
       {notices}
       {view === undefined ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">找不到这个 Worker 的对话</div>
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">找不到这个 Piece 的对话</div>
       ) : (
         <>
           <div className="relative min-h-0 flex-1">

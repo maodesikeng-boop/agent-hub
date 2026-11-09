@@ -385,7 +385,7 @@ export function App() {
         ) : openWorker !== null ? (
           <WorkerConversation
             key={keyOf(openWorker)}
-            title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
+            title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
             readonly={workerLine?.readonly ?? false}
             phase={workerPhaseOf(state, openWorker)}
             pm={{ name: workerPmEntry?.name ?? "项目经理", avatarKey: workerPmEntry?.avatarKey ?? 0 }}

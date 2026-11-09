@@ -83,7 +83,7 @@ describe("一轮回复只出一次头像", () => {
     expect(container).toHaveTextContent("Bash: hub worker start");
     expect(container).toHaveTextContent("Bash: hub schedule add");
     expect(container).toHaveTextContent("已建定时任务：每天 09:00，日报");
-    await userEvent.click(screen.getByRole("button", { name: "Worker「修登录页」已派出" }));
+    await userEvent.click(screen.getByRole("button", { name: "Piece「修登录页」已派出" }));
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
@@ -185,7 +185,7 @@ describe("Worker 的发言", () => {
       expect(user.className).toContain(cls);
     }
     expect(bubble.className).toContain("hover:");
-    expect(row.innerHTML).not.toContain("Worker「");
+    expect(row.innerHTML).not.toContain("Piece「");
     await userEvent.click(bubble);
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
@@ -287,13 +287,13 @@ describe("系统行", () => {
   it("不在一轮里的派出、收工：很淡的一行，点开 Worker", async () => {
     const onOpenWorker = vi.fn();
     list([makeUserMessage({ id: 1, text: "hi" }), makeWorkerLine({ id: 2, line: { event: "ended" } })], { actions: actions({ onOpenWorker }) });
-    await userEvent.click(screen.getByRole("button", { name: "Worker「修 X」已收工" }));
+    await userEvent.click(screen.getByRole("button", { name: "Piece「修 X」已收工" }));
     expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 
   it("你直接对 Worker 说的话：很淡的一行，不另起项目经理的头像", () => {
     const { container } = list([makeWorkerLine({ id: 1, line: { event: "user_message", summary: "顺便改 README" } })]);
-    expect(screen.getByRole("button", { name: "Worker「修 X」你对它说：顺便改 README" }).closest("[data-notice]")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Piece「修 X」你对它说：顺便改 README" }).closest("[data-notice]")).not.toBeNull();
     expect(heads(container)).toHaveLength(0);
   });
 

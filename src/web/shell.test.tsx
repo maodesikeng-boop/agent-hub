@@ -91,7 +91,7 @@ describe("网址", () => {
   it("刷新：Worker 的对话、资料页也回到原来那个", async () => {
     window.history.replaceState(null, "", "/#/w/30");
     await boot();
-    expect(screen.getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
     // 左栏高亮派它的项目经理
     expect(row("小林")).toHaveAttribute("aria-current", "true");
   });
