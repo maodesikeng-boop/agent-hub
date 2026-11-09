@@ -94,7 +94,7 @@ describe("agent 消息的 Markdown", () => {
     const { container } = agentSays(
       '<img src="x" onerror="window.__pwned = 1"><script>window.__pwned = 2</script>\n\n<b>粗</b> <a href="https://evil.example">钓鱼</a>',
     );
-    expect(container.querySelector("img, script, b")).toBeNull();
+    expect(container.querySelector("img:not([data-slot='avatar'] img), script, b")).toBeNull();
     expect(container.querySelector('a[href="https://evil.example"]')).toBeNull();
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
     // 当字面文字显示，用户看得到发生了什么

@@ -63,13 +63,13 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 ## 4. 颜色
 
 - **强调色（`--primary` / `--primary-foreground`）跟着当前会话的项目经理走，没有固定的粉色。**
-  - **来源**：`src/web/lib/palette.ts` 的 `PALETTE` 一处，头像的团子颜色（`blob`）和强调色（`accent` + 文字色 `accentForeground`）共用这一份，按项目经理的编号（头像的 `colorKey`）轮着取。别处不写颜色值。
+  - **来源**：`src/web/lib/palette.ts` 的 `PALETTE`（8 种水果配色）一处，项目经理的完整水果横切面头像（`slice`）、Worker 的自然果瓣头像（`wedge`）、水果主色（`blob`）和强调色（`accent` + 文字色 `accentForeground`）共用这一份，按项目经理的编号（头像的 `colorKey`）轮着取。别处不写颜色值。
   - **谁在里面**：项目经理的对话、它的 Worker 的对话、它的资料页、右栏，外面包一层 `AccentScope`（`lib/accent-scope.tsx`，`display: contents`），在这层上设好 `--primary` 和 `--primary-foreground`，里面的组件照常写 `bg-primary text-primary-foreground`，不自己算颜色。会话里打开的弹窗（如资料页的“开新会话？”）也渲染进这层，颜色跟着。**左栏、设置弹窗、新建项目经理弹窗、加载页不在里面**，`:root` 里的 `--primary` 是中性的前景色 `#18181b`，所以不用单独处理。
   - **用在哪**：主按钮（一屏最多一个：创建、保存、发送、停止；悬停用 `hover:brightness-90` 变深，不用透明度，对比度只升不降）、选中态（单选行的勾、开关打开）、右栏“等你确定”组标题前的小圆点和收起时右栏开关上的圆点、右栏 Worker 行里在忙的状态词（Working… 等）和图标右下角的小圆点、用户自己的气泡（`bg-bubble-me` 就是 `--primary`）、拖文件进输入框时的虚线框。
   - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、发送失败的“重试”这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框（拖文件的虚线框除外）。
   - **左栏的标注是中性色**：“等你确定”（比“等你”醒目）是实心前景色的小圆点（`size-2 rounded-full bg-foreground`，8px，不写中文、不加胶囊，悬停 `title` 和 `aria-label` 标“等你确定”），“等你”是浅灰底深字（`bg-foreground/10 text-foreground`）；靠深浅与形态区分轻重，不靠颜色。
-  - **对比度**：强调色同时当“白字的底色”和“白底上的文字色”，所以每种颜色对白色的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。头像的团子是明亮的原色（不放文字），`accent` 是同一个色相深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
-- 头像底色：项目经理的团子按 key 轮着取（`PALETTE.blob`，`Avatar.tsx`），不写死 Tailwind 色板里的颜色。
+  - **对比度**：强调色同时当“白字的底色”和“白底上的文字色”，所以每种颜色对白色的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。水果主色 `blob` 是明亮的原色（不放文字），`accent` 是与水果同色系深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
+- 头像（`Avatar.tsx`）：项目经理用完整水果横切面（`PALETTE.slice`），它派出的 Worker 用从这片水果上顺着果络剥下的一瓣（`PALETTE.wedge`，`neutral` 为 `true`，`colorKey` 传所属项目经理的 `avatarKey`）。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白）；左栏、设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`。
   - 分隔线：一律 1px `border-border` / `divide-border`（分组框里行与行之间也是它）。
@@ -269,10 +269,10 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 正在跑：这一行挪到这一轮最下面，写英文状态（`Thinking…`、`Running command…`、`Reading a.ts…`，文案见 `step-labels.ts`），省略号有淡入淡出；有操作时同样能点开看明细。跑完回到名字下面，变成 `Worked for …`。
   - 这一轮的文字按顺序排在下面（`hub ask` 问你的那条不另挂“等你确定”标签，右栏列着，点过去高亮这一条）；跑完后最下面一行是复制按钮（图标按钮 `icon-sm`，复制这一轮所有文字的 Markdown 原文，点了换成勾）和结束时间（12px 灰，`tabular-nums`）。
   - **`hub ask` 选项卡片**：当 `hub ask` 带选项（显式传 `--option` 或正文中紧接 2～10 项单行 Markdown 列表）时，在对话流中渲染为圆角边框卡片（`rounded-2xl border border-border bg-background p-4`），顶部为问题标题（15px、`font-medium`），下方为 A/B/C/D 选项行（左 `size-6 rounded-xl border border-border bg-sidebar` 字母徽标 + 右 15px 文字，整行 `rounded-xl`，悬停 `hover:bg-sidebar-hover`）；未回答时点击任一选项行直接将该选项作为用户消息发出，已回答后变只读并高亮所选项（`bg-sidebar-active`）。
-- **Worker 的发言**（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：是一个靠左的**消息气泡**，头像和名字在气泡上面（和 agent 一样一个 24px 中性灰团子 `Avatar neutral` + 名字 13.5px、500、灰，名字是 Worker 的标题），气泡里是汇报摘要。`WorkerSpeech`（`Messages.tsx`），状态和颜色的对应在 `worker-status.ts`。
-  - **气泡**：圆角、内边距和用户气泡同一套（`BUBBLE`：`rounded-[22px] px-4 py-2.5`，15px），底色永远是中性浅灰 `--bubble-agent`，和项目经理自己的正文（没有气泡）、用户的粉色气泡一眼分得开。整个气泡是一个按钮，点开 Worker 的完整对话；悬停底色加深一点点（掺 5% 前景色），键盘聚焦有中性的圈。
+- **Worker 的发言**（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：是一个靠左的**消息气泡**，头像和名字在气泡上面（和 agent 一样一个 24px 所属项目经理对应水果切出的果瓣头像 `Avatar neutral` + 名字 13.5px、500、灰，名字是 Worker 的标题），气泡里是汇报摘要。`WorkerSpeech`（`Messages.tsx`），状态和颜色的对应在 `worker-status.ts`。
+  - **气泡**：圆角、内边距和用户气泡同一套（`BUBBLE`：`rounded-[22px] px-4 py-2.5`，15px），底色永远是中性浅灰 `--bubble-agent`，和项目经理自己的正文（没有气泡）、用户的强调色气泡一眼分得开。整个气泡是一个按钮，点开 Worker 的完整对话；悬停底色加深一点点（掺 5% 前景色），键盘聚焦有中性的圈。
   - **状态用小色点，不写字**：头像右下角一个 10px 的圆点（白色 2px 描边，`bg-success` / `bg-caution` / `bg-danger`，不写死色值）：做完了绿、有问题黄、放弃了和出错红；没按格式的、没有状态的没有点。“做完了 / 有问题 / 放弃了 / 出错”这几个字不显示，放在气泡的 `title`，`aria-label` 是“标题，状态：摘要”。状态和颜色的对应在 `worker-status.ts` 的 `workerStatusOf`。
-  - Worker 自己的对话里它的头像同样是中性灰，项目经理说的话是项目经理的头像 + 名字。Worker 对话顶栏、右栏 Worker 行的状态是运行状态（Working… / Idle / Ended，第 12 条），不是汇报的结果，不用这套颜色。
+  - Worker 自己的对话里它的顶栏与消息头像同样是所属项目经理对应水果的一瓣，项目经理说的话是项目经理的完整水果横切面头像 + 名字。Worker 对话顶栏、右栏 Worker 行的状态是运行状态（Working… / Idle / Ended，第 12 条），不是汇报的结果，不用这套颜色。
 - **系统行**：
   - 不单独显示：派出 Worker、Worker 收工、项目经理建删定时任务——它们是项目经理这一轮的操作，收在 `Worked for` 里（不在任何一轮里时才显示成很淡的一行）。
   - 很淡的一行：建项目、挂上 / 移除文件夹、改性格设定（带“撤销”）、交接失败、定时任务没跑成、你直接对 Worker 说的话。靠左和正文对齐，12px 灰，前面一个 14px 图标，没有底色、不居中、不用胶囊；出错的图标用 `text-danger`。

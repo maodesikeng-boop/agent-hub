@@ -76,8 +76,8 @@ export function WorkerConversation({
   const client = useClient();
   const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
-  // Worker 统一用中性灰的头像（docs/ui-standard.md 第 17 条）
-  const identity = useMemo(() => ({ name: title, avatarKey: id ?? 0, neutral: true }), [title, id]);
+  // Worker 头像用所属项目经理对应水果切下的一瓣（docs/ui-standard.md 第 17 条）
+  const identity = useMemo(() => ({ name: title, avatarKey: pm.avatarKey, neutral: true }), [title, pm.avatarKey]);
   const pmIdentity = useMemo(() => ({ name: pm.name, avatarKey: pm.avatarKey }), [pm.name, pm.avatarKey]);
   const agentOf = useCallback((message: Message) => (message.sender === "pm" ? pmIdentity : identity), [pmIdentity, identity]);
   const handleLoadOlder = useCallback(() => {

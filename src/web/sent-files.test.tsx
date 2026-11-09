@@ -19,10 +19,13 @@ function agentSays(text: string, files: SentFile[] | null, extra: Partial<Parame
   );
 }
 
-/** 页面上所有会让浏览器发请求的地址（img 的 src）和链接地址。 */
+/** 消息正文里（不含头像 data-slot="avatar"）的图片元素。 */
+const bodyImgs = (container: HTMLElement) => [...container.querySelectorAll<HTMLImageElement>("img:not([data-slot='avatar'] img)")];
+
+/** 页面上所有会让浏览器发请求的地址（消息正文 img 的 src）和链接地址。 */
 function urls(container: HTMLElement) {
   return {
-    src: [...container.querySelectorAll("img")].map((img) => img.getAttribute("src")),
+    src: bodyImgs(container).map((img) => img.getAttribute("src")),
     href: [...container.querySelectorAll("a")].map((a) => a.getAttribute("href")),
   };
 }
@@ -62,7 +65,7 @@ describe("图片内联", () => {
 
   it("svg 也当图片，只用 <img> 加载（脚本在 <img> 里不执行）", () => {
     const { container } = agentSays("![图](/tmp/a.svg)", [sent({ href: "/tmp/a.svg", name: "a.svg", mime: "image/svg+xml" })]);
-    expect(container.querySelector("img")).toHaveAttribute("src", API_PATHS.sentFile("0123456789abcdef", "a.svg"));
+    expect(bodyImgs(container)[0]).toHaveAttribute("src", API_PATHS.sentFile("0123456789abcdef", "a.svg"));
     expect(container.querySelector("iframe, object, embed")).toBeNull();
   });
 });
@@ -141,7 +144,7 @@ describe("老消息、没对上的链接", () => {
 
   it("file:// 写的图片在老消息里也不发请求", () => {
     const { container } = agentSays("![x](file:///tmp/a.png)", null);
-    expect(container.querySelector("img")).toBeNull();
+    expect(bodyImgs(container)).toHaveLength(0);
     expect(container).toHaveTextContent("x");
   });
 
@@ -209,7 +212,7 @@ describe("文件已过期（副本被定期清理）", () => {
     const file = sent({ href: "/tmp/shot.png", name: "shot.png" });
     const { container } = agentSays("![截图](/tmp/shot.png)", [file]);
     fireEvent.error(screen.getByRole("img", { name: "截图" }));
-    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(bodyImgs(container)).toHaveLength(0);
     expect(within(container.querySelector("[data-file-card]") as HTMLElement).getByText("文件已过期")).toBeInTheDocument();
   });
 });
