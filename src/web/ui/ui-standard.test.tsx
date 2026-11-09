@@ -137,12 +137,11 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     }
   });
 
-  it("Mac 桌面应用（第 16 条）：红黄绿交通灯安全区变量在 styles.css 集中定义，窄屏顶栏自动让出 72px", () => {
+  it("Mac 桌面应用（第 16 条）：红黄绿交通灯安全区变量在 styles.css 集中定义，左栏常驻避让红黄绿，顶栏无需额外让出 72px", () => {
     expect(css).toMatch(/--macos-traffic-lights-width:\s*0px;/);
     expect(css).toMatch(/--macos-traffic-lights-height:\s*0px;/);
     expect(css).toMatch(/html\[data-macos-app="true"\]\s*\{[^}]*--macos-traffic-lights-width:\s*72px;[^}]*--macos-traffic-lights-height:\s*28px;/s);
-    const narrow = mediaBlock(/@media \(max-width: 1100px\)/);
-    expect(narrow).toMatch(/html\[data-macos-app="true"\]\s+\.chat-main\s*\{[^}]*--header-gutter-start:\s*calc\(1\.25rem \+ var\(--macos-traffic-lights-width\)\);/s);
+    expect(css).not.toMatch(/@media \(max-width: 1100px\)\s*\{[^}]*html\[data-macos-app="true"\]/s);
   });
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {

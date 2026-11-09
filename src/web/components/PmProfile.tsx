@@ -473,7 +473,7 @@ function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renew
       </Dialog>
       <Dialog open={confirmingArchive} onOpenChange={setConfirmingArchive}>
         <DialogContent title="归档项目经理？" className="max-w-[440px]">
-          <p>归档后会立即停止当前会话、结束未收工的 Worker 并暂停定时任务。7 天内可随时恢复；7 天后永久删除该项目的聊天与内部数据，不会删除你的项目代码文件夹。</p>
+          <p>归档后会立即停止当前会话、结束未收工的 Piece 并暂停定时任务。7 天内可随时恢复；7 天后永久删除该项目的聊天与内部数据，不会删除你的项目代码文件夹。</p>
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline">取消</Button>
@@ -512,7 +512,7 @@ export function PmProfile({
   const label = `${pm.name} 的资料`;
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
-      <header data-window-drag className="flex h-16 shrink-0 items-center px-6 max-[1100px]:pl-[calc(1.5rem+var(--macos-traffic-lights-width))]">
+      <header data-window-drag className="flex h-16 shrink-0 items-center px-6">
         <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>

@@ -86,8 +86,8 @@ export function shortPath(path: string): string {
 
 /** 单选下面的一句说明（名字就用 PM_MODE_LABELS）：说清这种模式怎么干活，不加括号、不写“推荐”（docs/ui-standard.md 第 3 条措辞）。 */
 export const MODE_OPTION_DETAILS: Readonly<Record<PmMode, string>> = {
-  manage_only: "拆任务、派 Worker 去做，自己负责验收",
-  hands_on: "小事直接在项目文件夹里改，大活再派 Worker",
+  manage_only: "拆任务、派 Piece 去做，自己负责验收",
+  hands_on: "小事直接在项目文件夹里改，大活再派 Piece",
 };
 
 /** 出错显示的三样：text 出了什么事，hint 怎么办（可以没有），raw 原文（只放 title，悬停才看得到）。数据都来自 shared/errors.ts 的 humanize。 */

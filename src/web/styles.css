@@ -25,6 +25,7 @@
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
+  --color-status-active: var(--status-active);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
 }
@@ -57,6 +58,7 @@
   --danger: #d92d20;
   --danger-soft: #feeeec;
   --success: #16a34a;
+  --status-active: var(--success);
   /* 黄色的状态色（Worker 汇报“有问题”的色点）：--warn 是提示条的浅底，圆点要深一点 */
   --caution: #dba10b;
   /* Markdown 链接固定蓝色（取 palette.ts 中“蓝”的 accent，对白底对比度 ≥ 4.5:1） */
@@ -78,12 +80,6 @@
 html[data-macos-app="true"] {
   --macos-traffic-lights-width: 72px;
   --macos-traffic-lights-height: 28px;
-}
-
-@media (max-width: 1100px) {
-  html[data-macos-app="true"] .chat-main {
-    --header-gutter-start: calc(1.25rem + var(--macos-traffic-lights-width));
-  }
 }
 
 html,

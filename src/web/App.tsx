@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Loader2, PanelLeft } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccentScope } from "./lib/accent-scope.tsx";
 import { isAgentVendor, type ConversationId, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
@@ -88,9 +88,6 @@ export function App() {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
-  /** 窄屏时左栏抽屉拉出来了。 */
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   /** 用户手动收起了右栏（记住）。 */
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
@@ -124,7 +121,6 @@ export function App() {
   const active = routedEntry ?? firstUnarchived ?? null;
   const select = useCallback(
     (ref: ConversationRef) => {
-      setDrawerOpen(false);
       navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) });
     },
     [navigate],
@@ -303,16 +299,12 @@ export function App() {
     if (active && openWorker !== null) navigate({ view: "conversation", id: active.id, ...here });
     setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
   };
+  const avatarKey = active?.avatarKey ?? 0;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
-  const railToggle = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} onToggle={toggleRail} />;
+  const railToggle = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={toggleRail} />;
   const toolbar = railOpen && !compact ? null : railToggle;
-  const leading = narrow ? (
-    <Button variant="ghost" size="icon" className="shrink-0" aria-label="对话列表" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
-      <PanelLeft aria-hidden="true" />
-    </Button>
-  ) : null;
   const rail = railOpen ? (
-    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
+    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} avatarKey={avatarKey} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
   ) : null;
   const top = compact ? rail : null;
 
@@ -364,11 +356,9 @@ export function App() {
         }
         quota={quotaUsage(state)}
         quotaFetchable={quotaFetchable}
-        drawerOpen={narrow && drawerOpen}
-        onCloseDrawer={closeDrawer}
+        narrow={narrow}
         onSelect={select}
         onNewPm={() => {
-          setDrawerOpen(false);
           setCreating(true);
         }}
       />
@@ -378,7 +368,7 @@ export function App() {
       <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
         {deviceWaiting ? (
           <>
-            <header data-window-drag className="flex h-16 shrink-0 items-center px-3 max-[1100px]:pl-[calc(0.75rem+var(--macos-traffic-lights-width))]">{leading}</header>
+            <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
             {deviceWaiting}
           </>
         ) : profile ? (
@@ -395,7 +385,7 @@ export function App() {
         ) : openWorker !== null ? (
           <WorkerConversation
             key={keyOf(openWorker)}
-            title={workerLine?.title ?? workerView?.conversation.title ?? "Worker"}
+            title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
             readonly={workerLine?.readonly ?? false}
             phase={workerPhaseOf(state, openWorker)}
             pm={{ name: workerPmEntry?.name ?? "项目经理", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
@@ -405,7 +395,6 @@ export function App() {
             older={state.older[openWorker]}
             draft={drafts.of(keyOf(openWorker))}
             staging={staging.of(keyOf(openWorker))}
-            leading={leading}
             toolbar={toolbar}
             top={top}
             notices={notices}
@@ -427,7 +416,6 @@ export function App() {
             older={state.older[active.id]}
             draft={drafts.of(keyOf(active.id))}
             staging={staging.of(keyOf(active.id))}
-            leading={leading}
             toolbar={toolbar}
             top={top}
             notices={notices}

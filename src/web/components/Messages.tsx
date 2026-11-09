@@ -201,7 +201,7 @@ function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: M
     return (
       <li>
         <button type="button" className={cn(TEXT_BUTTON, "text-left [overflow-wrap:anywhere]")} onClick={() => onOpenWorker(line.workerConversationId)}>
-          {workerLineText(line)}
+          {workerLineText(line).replace(/^Worker/, "Piece")}
         </button>
       </li>
     );
@@ -584,7 +584,7 @@ function WorkerItem({ line, avatarKey, actions }: { line: WorkerMessageMeta; ava
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
       <button type="button" className={cn(TEXT_BUTTON, "text-left")} onClick={() => onOpen(line.workerConversationId)}>
-        {workerLineText(line)}
+        {workerLineText(line).replace(/^Worker/, "Piece")}
       </button>
     </NoticeLine>
   );

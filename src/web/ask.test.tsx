@@ -166,9 +166,9 @@ describe("右栏的“等你确定”", () => {
     snapshot.conversations.push(makeConvSnapshot([makeMessage({ id: 40, conversationId: 30, text: "在干活" })], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "修 X" }) }));
     await boot(snapshot);
     fireEvent.click(within(rail()!).getByRole("button", { name: /修 X/ }));
-    expect(screen.getByRole("region", { name: "Worker 修 X" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
     fireEvent.click(askRows()[0]!);
-    expect(screen.queryByRole("region", { name: "Worker 修 X" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Piece 修 X" })).not.toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('[data-message-id="1"]')).toHaveAttribute("data-highlighted", "true"));
   });
 });
@@ -214,9 +214,9 @@ describe("左栏标签和标题数字", () => {
   it("有提问的项目经理那一行显示极简无字圆点指示器（不显示中文胶囊）；标题数字算上；守护进程标成已回答后都消失", async () => {
     const ws = await boot(askedByOldMa());
     expect(hasTag("老马")).toBe(true);
-    // 左栏不属于任何项目经理：实心的前景色小圆点（size-2 rounded-full bg-foreground），不显示“等你确定”中文胶囊
+    // 左栏不属于任何项目经理：实心的绿色小圆点（size-2 rounded-full bg-status-active），不显示“等你确定”中文胶囊
     const dot = within(row("老马")).getByLabelText("等你确定");
-    expect(dot).toHaveClass("size-2", "rounded-full", "bg-foreground");
+    expect(dot).toHaveClass("size-2", "rounded-full", "bg-status-active");
     expect(dot).toHaveAttribute("title", "等你确定");
     expect(dot).toHaveTextContent("");
     expect(within(row("老马")).queryByText("等你确定")).toBeNull();

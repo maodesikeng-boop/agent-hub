@@ -84,7 +84,7 @@ export function Conversation({
   /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
-  leading: React.ReactNode;
+  leading?: React.ReactNode;
   /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
   /** 太窄时放在顶栏下面的右栏。 */
