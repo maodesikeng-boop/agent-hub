@@ -76,6 +76,9 @@ import type {
   SetupOutcome,
 } from "./index.ts";
 import {
+  ASK_MAX_OPTION_CHARS,
+  ASK_MAX_OPTIONS,
+  ASK_MIN_OPTIONS,
   CONVERSATION_KINDS,
   HUB_COMMAND_ROLES,
   MAX_TASK_BYTES,
@@ -86,9 +89,12 @@ import {
   WORKER_EVENTS,
   WORKER_MESSAGE_KIND,
   MAX_MESSAGE_BYTES,
+  askOf,
+  extractAskCard,
   hubCommandAllowed,
   normalizeWorkerTitle,
   truncateChars,
+  validateAskOptions,
   workerEventOf,
   workerMessageDedupeKey,
 } from "./index.ts";
@@ -827,5 +833,77 @@ describe("agent 发给用户的文件：认本机路径（sent-files.ts）", () 
     expect(sentFileMime("a.pdf")).toBe("application/pdf");
     expect(sentFileMime("a.html")).toBe("text/html");
     expect(sentFileMime("a.exe")).toBe("application/octet-stream");
+  });
+});
+
+describe("hub ask 选项卡片（askOf、validateAskOptions、extractAskCard）", () => {
+  it("askOf：保留非空字符串数组 options，忽略非字符串或空数组", () => {
+    expect(askOf({ sender: "agent", meta: { needsUser: true } })).toEqual({ needsUser: true });
+    expect(askOf({ sender: "agent", meta: { needsUser: true, answered: true, options: ["甲", "乙"] } })).toEqual({
+      needsUser: true,
+      answered: true,
+      options: ["甲", "乙"],
+    });
+    expect(askOf({ sender: "agent", meta: { needsUser: true, options: [] } })).toEqual({ needsUser: true });
+    expect(askOf({ sender: "agent", meta: { needsUser: true, options: ["甲", 123] } })).toEqual({ needsUser: true });
+  });
+
+  it("validateAskOptions：2～10 个，去首尾空白，非空、无换行或控制字符、不超过 200 字符", () => {
+    expect(validateAskOptions(["只有一个"])).toEqual({ ok: false, error: `选项至少要给 ${ASK_MIN_OPTIONS} 个` });
+    expect(validateAskOptions(Array.from({ length: ASK_MAX_OPTIONS + 1 }, (_, i) => `选项 ${i}`))).toEqual({
+      ok: false,
+      error: `选项最多 ${ASK_MAX_OPTIONS} 个`,
+    });
+    expect(validateAskOptions(["  甲  ", "乙"])).toEqual({ ok: true, options: ["甲", "乙"] });
+    expect(validateAskOptions(["甲", "   "])).toEqual({ ok: false, error: expect.stringContaining("不能为空") });
+    expect(validateAskOptions(["甲", "乙\n丙"])).toEqual({ ok: false, error: expect.stringContaining("换行或控制字符") });
+    expect(validateAskOptions(["甲", "x".repeat(ASK_MAX_OPTION_CHARS + 1)])).toEqual({
+      ok: false,
+      error: expect.stringContaining(`${ASK_MAX_OPTION_CHARS}`),
+    });
+  });
+
+  it("extractAskCard：支持显式 meta.options 与 Markdown 列表自动提取，顺序 A/B/C 前缀自动去掉", () => {
+    expect(
+      extractAskCard({
+        sender: "agent",
+        meta: { needsUser: true, options: ["审一个 PR / 分支", "审本地代码路径"] },
+        text: "  你想审什么？  ",
+      }),
+    ).toEqual({
+      question: "你想审什么？",
+      options: ["审一个 PR / 分支", "审本地代码路径"],
+      answered: false,
+    });
+
+    expect(
+      extractAskCard({
+        sender: "agent",
+        meta: { needsUser: true, answered: true },
+        text: "用 **方案 A** 还是方案 B？\n\n- A：保留三栏\n- B：单栏信息流",
+      }),
+    ).toEqual({
+      question: "用 **方案 A** 还是方案 B？",
+      options: ["保留三栏", "单栏信息流"],
+      answered: true,
+    });
+
+    expect(
+      extractAskCard({
+        sender: "agent",
+        meta: { needsUser: true },
+        text: "请选择环境：\n1. A. 预发环境\n2. B: 生产环境",
+      }),
+    ).toEqual({
+      question: "请选择环境：",
+      options: ["预发环境", "生产环境"],
+      answered: false,
+    });
+
+    // 纯文本提问、只有 1 项列表、列表后还有段落、非 ask 消息 → null
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "再问一个" })).toBeNull();
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 只有一项" })).toBeNull();
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 选项一\n- 选项二\n\n补充说明" })).toBeNull();
+    expect(extractAskCard({ sender: "agent", meta: null, text: "问题\n- 选项一\n- 选项二" })).toBeNull();
   });
 });

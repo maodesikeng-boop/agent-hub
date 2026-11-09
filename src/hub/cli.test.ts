@@ -211,6 +211,38 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask", args: { text: "用 A 还是 B？" } }]);
     });
 
+    it("ask --option collects multiple options and validates count and content", async () => {
+      const r = await hub(["ask", "--option", " 审一个 PR / 分支 ", "--option", "审本地代码路径", "--stdin"], {
+        stdin: stdinOf("你想审什么？\n"),
+      });
+      expect(r.code).toBe(0);
+      expect(ledger.calls).toEqual([
+        {
+          sessionId: 42,
+          command: "ask",
+          args: { text: "你想审什么？", options: ["审一个 PR / 分支", "审本地代码路径"] },
+        },
+      ]);
+
+      ledger.calls.length = 0;
+      const oneOpt = await hub(["ask", "--option", "只有一个", "--stdin"], { stdin: stdinOf("问") });
+      expect(oneOpt.code).toBe(HUB_EXIT.usage);
+      expect(oneOpt.stderr).toContain("选项至少要给 2 个");
+
+      const elevenOpts = await hub(
+        ["ask", ...Array.from({ length: 11 }, (_, i) => ["--option", `选项${i}`]).flat(), "--stdin"],
+        { stdin: stdinOf("问") },
+      );
+      expect(elevenOpts.code).toBe(HUB_EXIT.usage);
+      expect(elevenOpts.stderr).toContain("选项最多 10 个");
+
+      for (const bad of ["   ", "带\n换行", "x".repeat(201)]) {
+        const res = await hub(["ask", "--option", "好选项", "--option", bad, "--stdin"], { stdin: stdinOf("问") });
+        expect(res.code).toBe(HUB_EXIT.usage);
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it.each([[["ask"]], [["ask", "--text", "x"]], [["ask", "3", "--stdin"]], [["ask", "--title", "x", "--stdin"]]])(
       "usage error: hub %j",
       async (argv) => {
@@ -298,7 +330,7 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask --stdin`]) {
+      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });
@@ -655,7 +687,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
 
       const askErr = await hub(["ask"]);
       expect(askErr.code).toBe(HUB_EXIT.usage);
-      expect(askErr.stderr).toContain(`${cmd} ask --stdin`);
+      expect(askErr.stderr).toContain(`${cmd} ask [--option <选项>...] --stdin`);
       expect(askErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
       expect(askErr.stderr).not.toContain(`${cmd} worker start`);
 

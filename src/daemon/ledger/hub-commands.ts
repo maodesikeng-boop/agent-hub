@@ -1,7 +1,7 @@
 // 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
 // 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
 // worker.* 和 Worker 调的 status 在 workers.ts（worker.show、worker.log 在 worker-view.ts）；schedule.* 在 schedules.ts。
-import { PM_MODE_LABELS } from "../../shared/domain.ts";
+import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard } from "../../shared/hub.ts";
@@ -121,9 +121,15 @@ export function createLedgerHubCommands(
         return workerView.search(caller, args as HubArgs<"worker.search">);
       case "ask": {
         assertPmNotArchived(caller.pmId);
-        const { text } = args as HubArgs<"ask">;
+        const { text, options } = args as HubArgs<"ask">;
         if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
-        const message = messages.insertAskMessage(p, caller, text);
+        let normalizedOptions: string[] | undefined;
+        if (options !== undefined) {
+          const checked = validateAskOptions(options);
+          if (!checked.ok) throw fail("invalid", checked.error);
+          normalizedOptions = checked.options;
+        }
+        const message = messages.insertAskMessage(p, caller, text, normalizedOptions);
         return { text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。", data: { messageId: message.id } };
       }
       case "schedule.add":

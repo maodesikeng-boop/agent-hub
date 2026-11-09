@@ -232,4 +232,22 @@ describe("持久化", () => {
     db.run("UPDATE messages SET meta = '{\"needsUser\":true,\"dismissed\":true}' WHERE id = ?", a);
     expect(askOf(ledger.getMessage(a)!)).toEqual({ needsUser: true, answered: true });
   });
+
+  it("带 options 的 hub ask 入库保留 options，回答后 answered 与 options 都在；不合法的 options 被拒", () => {
+    const id = ledger.hubCall(lin.sessionId, "ask", {
+      text: "你想审什么？",
+      options: [" 审一个 PR / 分支 ", "审本地代码路径"],
+    }).data.messageId;
+    expect(askOf(ledger.getMessage(id)!)).toEqual({
+      needsUser: true,
+      options: ["审一个 PR / 分支", "审本地代码路径"],
+    });
+    post(lin.conversationId, "审一个 PR / 分支");
+    expect(askOf(ledger.getMessage(id)!)).toEqual({
+      needsUser: true,
+      answered: true,
+      options: ["审一个 PR / 分支", "审本地代码路径"],
+    });
+    expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "问", options: ["只有一个"] })).toThrow(/选项至少要给 2 个/);
+  });
 });

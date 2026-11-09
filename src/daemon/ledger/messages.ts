@@ -130,15 +130,16 @@ export function createLedgerMessages(
   };
 
   /** hub ask：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
-  const insertAskMessage = (p: Pending, session: AgentSessionRow, text: string): Message => {
+  const insertAskMessage = (p: Pending, session: AgentSessionRow, text: string, options?: string[]): Message => {
     const t = now();
+    const meta: AskMeta = options && options.length > 0 ? { needsUser: true, options } : { needsUser: true };
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
        VALUES (?, ?, 'agent', 'text', ?, ?, ?, ?, ?) RETURNING *`,
       session.conversationId,
       session.id,
       text,
-      JSON.stringify({ needsUser: true } satisfies AskMeta),
+      JSON.stringify(meta),
       `ask:${session.id}:${randomUUID()}`,
       t,
       t,
