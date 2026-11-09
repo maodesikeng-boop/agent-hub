@@ -476,15 +476,16 @@ export function validateAskOptions(raw: readonly string[]): AskOptionsValidation
   return { ok: true, options };
 }
 
-const ASK_LIST_ITEM_RE = /^(?:[-*]|\d+\.)\s+(.+)$/;
+const ASK_LIST_ITEM_RE = /^(?:(?:[-*]|\d+\.)\s+)?([A-Z](?:\.\s+|：|:\s).*)$/;
 
-function stripSequentialLetterPrefixes(items: readonly string[]): string[] {
+/** 每项都以顺序字母 A/B/C... 开头才去掉前缀返回选项，否则 null（普通列表不当单选题）。 */
+function stripSequentialLetterPrefixes(items: readonly string[]): string[] | null {
   const stripped: string[] = [];
   for (let i = 0; i < items.length; i++) {
     const letter = String.fromCharCode(65 + i);
     const match = new RegExp(`^${letter}(?:\\.\\s+|：\\s*|: \\s*)(.+)$`).exec(items[i]!);
     const rest = match?.[1]?.trim();
-    if (!rest) return [...items];
+    if (!rest) return null;
     stripped.push(rest);
   }
   return stripped;
@@ -494,8 +495,9 @@ function stripSequentialLetterPrefixes(items: readonly string[]): string[] {
  * 提取 `hub ask` 可点击选项卡片的数据：
  * 1. 先调 `askOf(message)`，若为 null 则返回 null；
  * 2. 若 `ask.options` 存在且长度 ≥ 2：返回 `{ question: message.text.trim(), options: ask.options, answered: ask.answered === true }`；
- * 3. 若未显式传 `options`，自动识别 Markdown 列表：开头一段非空问题文本 + 紧接着的 2～10 行单行列表项（`- xxx`、`* xxx` 或 `1. xxx`），
- *    后面没有其他正文段落；若列表项本身以 `A. `、`A：`、`A: ` 开头且顺序正好是 A/B/C...，去掉该前缀；
+ * 3. 若未显式传 `options`：开头一段非空问题文本 + 紧接着的 2～10 行单行选项，每行都必须显式以顺序字母
+ *    `A. `/`A：`/`A: ` 开头（可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；
+ *    普通 `- xxx`/`1. xxx` 列表（如列出几项配置请用户确认）不是单选题，返回 null，走普通 Markdown 渲染；
  * 4. 其他纯文本提问返回 null。
  */
 export function extractAskCard(
@@ -532,11 +534,9 @@ export function extractAskCard(
     if (!item || [...item].length > ASK_MAX_OPTION_CHARS) return null;
     rawItems.push(item);
   }
-  return {
-    question,
-    options: stripSequentialLetterPrefixes(rawItems),
-    answered,
-  };
+  const options = stripSequentialLetterPrefixes(rawItems);
+  if (options === null) return null;
+  return { question, options, answered };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
