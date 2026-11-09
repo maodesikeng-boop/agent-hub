@@ -57,7 +57,7 @@ import { Markdown } from "./Markdown.tsx";
 export interface AgentIdentity {
   name: string;
   avatarKey: number;
-  /** Worker：中性灰的头像（不按编号配色）。 */
+  /** Worker：所属项目经理水果切下的一瓣果肉头像。 */
   neutral?: boolean;
 }
 
@@ -538,7 +538,17 @@ const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-
  * 状态是头像右下角的一个小色点（workerStatusOf），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
  * 给项目经理的汇报原文不显示。
  */
-function WorkerSpeech({ line, onOpen, vendor }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"]; vendor?: AgentVendor }) {
+function WorkerSpeech({
+  line,
+  avatarKey,
+  onOpen,
+  vendor,
+}: {
+  line: WorkerMessageMeta;
+  avatarKey: number;
+  onOpen: MessageActions["onOpenWorker"];
+  vendor?: AgentVendor;
+}) {
   const { tone, label } = workerStatusOf(line);
   const failed = line.event !== "report";
   const summary = line.summary?.trim() ?? "";
@@ -546,7 +556,7 @@ function WorkerSpeech({ line, onOpen, vendor }: { line: WorkerMessageMeta; onOpe
   const text = body ? body.text : summary;
   return (
     <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
-      <AgentHead identity={{ name: line.title, avatarKey: line.workerId, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
+      <AgentHead identity={{ name: line.title, avatarKey, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
       <button
         type="button"
         data-bubble
@@ -565,11 +575,11 @@ function WorkerSpeech({ line, onOpen, vendor }: { line: WorkerMessageMeta; onOpe
 }
 
 /** 项目经理对话里 Worker 的那些行：汇报是 Worker 的发言，派出、收工、你对它说的是很淡的一行（点开 Worker）。 */
-function WorkerItem({ line, actions }: { line: WorkerMessageMeta; actions: MessageActions }) {
+function WorkerItem({ line, avatarKey, actions }: { line: WorkerMessageMeta; avatarKey: number; actions: MessageActions }) {
   const onOpen = actions.onOpenWorker;
   if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
     // Worker 的失败原因按 Worker 自己的厂商说（可能和项目经理不是同一家）
-    return <WorkerSpeech line={line} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
+    return <WorkerSpeech line={line} avatarKey={avatarKey} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
   }
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
@@ -601,7 +611,7 @@ export const MessageBubble = memo(
     revertedChanges?: ReadonlySet<PersonaChangeId>;
   }) {
     const workerLine = workerEventOf(message);
-    if (workerLine) return <WorkerItem line={workerLine} actions={actions} />;
+    if (workerLine) return <WorkerItem line={workerLine} avatarKey={identity.avatarKey} actions={actions} />;
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
     // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子

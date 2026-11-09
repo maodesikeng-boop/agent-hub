@@ -250,8 +250,8 @@ describe("Worker 的发言", () => {
     expect(heads(container)).toHaveLength(3);
   });
 
-  it("Worker 对话里：项目经理的话是项目经理的头像 + 名字，Worker 自己是中性头像", () => {
-    const worker: AgentIdentity = { name: "修 X", avatarKey: 30, neutral: true };
+  it("Worker 对话里：项目经理的话是项目经理的水果切片头像 + 名字，Worker 自己是对应水果的果瓣头像", () => {
+    const worker: AgentIdentity = { name: "修 X", avatarKey: pm.avatarKey, neutral: true };
     const { container } = list([makeMessage({ id: 1, sender: "pm", text: "任务：修 X", status: "replied" }), makeMessage({ id: 2, text: "好的" })], {
       agentOf: (m) => (m.sender === "pm" ? pm : worker),
     });
@@ -259,6 +259,17 @@ describe("Worker 的发言", () => {
     expect(all.map((h) => h.textContent)).toEqual(["小林", "修 X"]);
     expect(all[0]!.querySelector("[data-slot='avatar']")).not.toHaveAttribute("data-neutral");
     expect(all[1]!.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
+    const pmImg = all[0]!.querySelector("img") as HTMLImageElement;
+    const workerImg = all[1]!.querySelector("img") as HTMLImageElement;
+    expect(pmImg.getAttribute("src")).toContain("orange.webp");
+    expect(workerImg.getAttribute("src")).toContain("orange_wedge.webp");
+  });
+
+  it("项目经理对话里 Worker 汇报的头像使用所属项目经理的水果果瓣（而非按 workerId 取）", () => {
+    const { container } = list([report()]);
+    const row = container.querySelector("[data-worker-report]") as HTMLElement;
+    const img = row.querySelector("[data-slot='avatar'] img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toContain("orange_wedge.webp");
   });
 });
 

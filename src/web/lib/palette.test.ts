@@ -5,11 +5,14 @@ import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf }
 const WHITE = "#ffffff";
 
 describe("颜色表", () => {
-  it("有 6 种颜色，名字、头像色、强调色都不重复", () => {
-    expect(PALETTE).toHaveLength(6);
-    expect(new Set(PALETTE.map((c) => c.name)).size).toBe(6);
-    expect(new Set(PALETTE.map((c) => c.blob)).size).toBe(6);
-    expect(new Set(PALETTE.map((c) => c.accent)).size).toBe(6);
+  it("有 8 种水果配色，名字、fruit 标识、切片与果瓣素材、主色、强调色都不重复", () => {
+    expect(PALETTE).toHaveLength(8);
+    expect(new Set(PALETTE.map((c) => c.name)).size).toBe(8);
+    expect(new Set(PALETTE.map((c) => c.fruit)).size).toBe(8);
+    expect(new Set(PALETTE.map((c) => c.slice)).size).toBe(8);
+    expect(new Set(PALETTE.map((c) => c.wedge)).size).toBe(8);
+    expect(new Set(PALETTE.map((c) => c.blob)).size).toBe(8);
+    expect(new Set(PALETTE.map((c) => c.accent)).size).toBe(8);
   });
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：强调色上的文字、白底上的链接和状态词，对比度都 ≥ 4.5:1（WCAG 1.4.3 AA）", (_name, c) => {
@@ -21,10 +24,10 @@ describe("颜色表", () => {
     expect(contrastRatio(c.accentForeground, darken(c.accent, 0.9))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("按 key 轮着取，负数和超过 6 的都能取到", () => {
+  it("按 key 轮着取，负数和超过 8 的都能取到", () => {
     expect(paletteOf(0)).toBe(PALETTE[0]);
-    expect(paletteOf(6)).toBe(PALETTE[0]);
-    expect(paletteOf(7)).toBe(PALETTE[1]);
+    expect(paletteOf(8)).toBe(PALETTE[0]);
+    expect(paletteOf(9)).toBe(PALETTE[1]);
     expect(paletteOf(-1)).toBe(PALETTE[1]);
   });
 
@@ -43,8 +46,8 @@ describe("颜色表", () => {
     for (const color of CHART_CATEGORY_COLORS) expect(PALETTE.map((c) => c.accent)).toContain(color);
   });
 
-  it.each(CHART_CATEGORY_COLORS.map((c) => [c] as const))("图表分类色 %s：对白底 ≥ 3:1（WCAG 1.4.11 图形元素）", (color) => {
-    expect(contrastRatio(color, WHITE)).toBeGreaterThanOrEqual(3);
+  it.each(CHART_CATEGORY_COLORS.map((c) => [c] as const))("图表分类色 %s：对白底 ≥ 4.5:1（同时满足 WCAG 1.4.3 与 1.4.11）", (color) => {
+    expect(contrastRatio(color, WHITE)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("对比度公式：黑白 21:1，同色 1:1", () => {

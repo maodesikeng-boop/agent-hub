@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { Button } from "./button.tsx";
 import { Input, Select, Textarea } from "./input.tsx";
 import { Switch } from "./switch.tsx";
+import { Avatar } from "../components/Avatar.tsx";
+import { PALETTE } from "../lib/palette.ts";
 
 const classOf = (el: HTMLElement) => el.className.split(/\s+/);
 
@@ -60,6 +62,21 @@ describe("界面标准：共用组件", () => {
     const sw = screen.getByRole("switch", { name: "通知" });
     expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5", "w-9", "touch-target", "focus-visible:ring-ring/50"]));
     expect(sw.firstElementChild).toHaveClass("size-4");
+  });
+
+  it("头像（第 17 条）：项目经理渲染完整水果切片（slice），Worker（neutral）渲染对应水果切下的果瓣（wedge）", () => {
+    const { container } = render(
+      <>
+        <Avatar colorKey={0} size={44} />
+        <Avatar colorKey={0} size={24} neutral />
+      </>,
+    );
+    const avatars = container.querySelectorAll("[data-slot='avatar']");
+    expect(avatars).toHaveLength(2);
+    expect(avatars[0]).not.toHaveAttribute("data-neutral");
+    expect(avatars[1]).toHaveAttribute("data-neutral", "true");
+    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.slice);
+    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.wedge);
   });
 
   it("--ring 是中性灰，不是主色", () => {
