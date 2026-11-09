@@ -2079,18 +2079,10 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(ledger.snapshot().sessions.find((s) => s.sessionId === lin.sessionId)?.activity).toBe("idle");
   });
 
-  it("初始快照瘦身：未开工（preparing）的 Worker 对话保留首条 queued 任务说明；开工或收工后 messages 为空且 hasMore 为 true，按需通过 messagesBefore 拉取", () => {
-    repos.add(main);
-    const preparingWorker = start({ title: "建树中", task: "排队任务" }).data.worker;
-    const preparingSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === preparingWorker.workerConversationId)!;
-    expect(preparingSnap.messages).toHaveLength(1);
-    expect(preparingSnap.messages[0]?.status).toBe("queued");
-    expect(preparingSnap.hasMore).toBe(false);
-
+  it("初始快照瘦身：未收工的 Worker 对话带初始消息；已收工的 Worker 对话 messages 为空且 hasMore 为 true，按需通过 messagesBefore 拉取", () => {
     runTurn(worker, [taskMessage(worker).id], report("做完了", "搞定"));
-    const startedSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
-    expect(startedSnap.messages).toEqual([]);
-    expect(startedSnap.hasMore).toBe(true);
+    const openSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
+    expect(openSnap.messages.length).toBeGreaterThan(0);
 
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
     const endedSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
@@ -2098,7 +2090,7 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(endedSnap.hasMore).toBe(true);
 
     const onDemand = ledger.messagesBefore(worker.workerConversationId, Number.MAX_SAFE_INTEGER);
-    expect(onDemand.messages.length).toBeGreaterThan(0);
+    expect(onDemand.messages.map((m) => m.id)).toEqual(openSnap.messages.map((m) => m.id));
     expect(onDemand.hasMore).toBe(false);
   });
 });
