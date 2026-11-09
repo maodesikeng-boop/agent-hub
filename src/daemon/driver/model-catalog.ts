@@ -7,11 +7,13 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   AGENT_VENDORS,
+  ALL_EFFORTS,
   CODEX_OPTIONAL_RPC_GRACE_MS,
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
+  MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
   MODEL_CATALOG_TIMEOUT_MS,
@@ -20,6 +22,7 @@ import {
   bundledModelCatalog,
   checkModel,
   isSelectable,
+  mergeCatalogEfforts,
   splitEffortSuffix,
   truncateChars,
   type AgentVendor,
@@ -67,6 +70,7 @@ export function parseInitializeModels(raw: unknown): ModelCatalog | null {
   // “默认”实际用哪个模型：default 那项的 resolvedModel，对上名单里哪项（同一个 resolvedModel）就用它的名字
   let defaultResolved: string | null = null;
   const labelOfResolved = new Map<string, string>();
+  const effortsOfResolved = new Map<string, string[]>();
   for (const item of raw) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
@@ -81,18 +85,24 @@ export function parseInitializeModels(raw: unknown): ModelCatalog | null {
     if (checkModel("claude", id) !== null || models.some((m) => m.id === id)) continue;
     const description = nonEmptyString(entry.description);
     const label = truncateChars(nonEmptyString(entry.displayName) ?? id, MAX_CATALOG_LABEL_CHARS);
-    if (resolved !== null && !labelOfResolved.has(resolved)) labelOfResolved.set(resolved, label);
+    const efforts = effortsOf(entry);
+    if (resolved !== null) {
+      if (!labelOfResolved.has(resolved)) labelOfResolved.set(resolved, label);
+      if (efforts !== null && !effortsOfResolved.has(resolved)) effortsOfResolved.set(resolved, efforts);
+    }
     models.push({
       id,
       label,
       description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
-      efforts: effortsOf(entry),
+      efforts,
     });
     if (models.length === MAX_CATALOG_MODELS) break;
   }
   if (models.length === 0) return null;
+  if (defaultEfforts === null && defaultResolved !== null) defaultEfforts = effortsOfResolved.get(defaultResolved) ?? null;
   const defaultModel = defaultResolved === null ? null : (labelOfResolved.get(defaultResolved) ?? truncateChars(defaultResolved, MAX_CATALOG_LABEL_CHARS));
-  return { ...bundledModelCatalog("claude"), source: "vendor", models, defaultEfforts, defaultModel };
+  const efforts = mergeCatalogEfforts(VENDOR_SPECS.claude.efforts, models, defaultEfforts);
+  return { ...bundledModelCatalog("claude"), source: "vendor", efforts, models, defaultEfforts, defaultModel };
 }
 
 function extractAgyModels(raw: unknown): unknown[] | null {
@@ -118,19 +128,20 @@ function splitLabelTier(label: string): { base: string; tier: string } | null {
 /**
  * `agy --output-format json models` 的输出 → 名单。支持完整外层对象 `{ command: { data: { models: [...] } } }` 或直接传数组。
  * agy 把思考程度写在模型 ID 里（gemini-4-argon-high / 名字 Gemini 4 Argon (High)），按 Antigravity 软件的做法拆成
- * “模型 + 思考程度”：ID 末尾是 VENDOR_SPECS.agy.efforts 里的档位词（-low、-medium、-high），并且名字末尾括号里是同一个词，
- * 才拆（不看模型名，agy 出新模型照样拆）；同一个不带档位的模型下各档位合成一项，efforts 按清单里的顺序。
+ * “模型 + 思考程度”：ID 末尾是已知档位词（low、medium、high 及 ALL_EFFORTS 里的扩展档位），并且名字末尾括号里是同一个词，
+ * 才拆（不看模型名，agy 出新模型或新档位照样拆）；同一个不带档位的模型下各档位合成一项，efforts 按清单里的顺序。
  * 拆不开的（不带档位、对不上）原样留着，efforts 是空的：界面不出思考程度下拉，启动时原样传 ID。
- * 若 `currently_selected === true` 则将其不带档位的名字记为 `defaultModel`。
+ * 若 `currently_selected === true` 则将其不带档位的名字记为 `defaultModel`，并将其支持的档位赋给 `defaultEfforts`。
  */
 export function parseAgyModels(raw: unknown): ModelCatalog | null {
   const list = extractAgyModels(raw);
   if (list === null) return null;
-  const tiers = VENDOR_SPECS.agy.efforts;
+  const tiers = [...VENDOR_SPECS.agy.efforts, ...ALL_EFFORTS.filter((e) => !VENDOR_SPECS.agy.efforts.includes(e))];
   // 不带档位的模型（按第一次出现的顺序）→ 名字、说明、报了哪些档位
   const found = new Map<string, { label: string; description: string | null; efforts: Set<string> }>();
   const seen = new Set<string>();
   let defaultModel: string | null = null;
+  let defaultBaseId: string | null = null;
   for (const item of list) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
@@ -143,13 +154,19 @@ export function parseAgyModels(raw: unknown): ModelCatalog | null {
     const tiered = idSplit !== null && labelSplit !== null && labelSplit.tier === idSplit.effort;
     const baseId = tiered ? idSplit.base : id;
     const label = truncateChars(tiered ? labelSplit.base : fullLabel, MAX_CATALOG_LABEL_CHARS);
-    if (entry.currently_selected === true || entry.isDefault === true) defaultModel ??= label;
+    if ((entry.currently_selected === true || entry.isDefault === true) && defaultModel === null) {
+      defaultModel = label;
+      defaultBaseId = baseId;
+    }
+    const rawDesc = nonEmptyString(entry.description);
+    const description = rawDesc === null ? null : truncateChars(rawDesc, MAX_CATALOG_DESCRIPTION_CHARS);
     let model = found.get(baseId);
     if (model === undefined) {
       if (found.size === MAX_CATALOG_MODELS) continue;
-      const description = nonEmptyString(entry.description);
-      model = { label, description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS), efforts: new Set() };
+      model = { label, description, efforts: new Set() };
       found.set(baseId, model);
+    } else if (model.description === null && description !== null) {
+      model.description = description;
     }
     if (tiered) model.efforts.add(idSplit.effort);
   }
@@ -160,7 +177,9 @@ export function parseAgyModels(raw: unknown): ModelCatalog | null {
     description: m.description,
     efforts: tiers.filter((t) => m.efforts.has(t)),
   }));
-  return { ...bundledModelCatalog("agy"), source: "vendor", models, defaultModel };
+  const defaultEfforts = defaultBaseId === null ? null : (models.find((m) => m.id === defaultBaseId)?.efforts ?? null);
+  const efforts = mergeCatalogEfforts(VENDOR_SPECS.agy.efforts, models, defaultEfforts);
+  return { ...bundledModelCatalog("agy"), source: "vendor", efforts, models, defaultEfforts, defaultModel };
 }
 
 function extractCodexModels(raw: unknown): unknown[] | null {
@@ -179,14 +198,20 @@ function extractCodexModels(raw: unknown): unknown[] | null {
 }
 
 function codexEffortsOf(entry: Record<string, unknown>): string[] | null {
-  if (Array.isArray(entry.supportedReasoningEfforts)) {
+  const levels = Array.isArray(entry.supportedReasoningEfforts)
+    ? entry.supportedReasoningEfforts
+    : Array.isArray(entry.supported_reasoning_levels)
+      ? entry.supported_reasoning_levels
+      : null;
+  if (levels !== null) {
     const out: string[] = [];
-    for (const item of entry.supportedReasoningEfforts) {
+    for (const item of levels) {
       const effort =
         typeof item === "string"
           ? nonEmptyString(item)
           : typeof item === "object" && item !== null
-            ? nonEmptyString((item as Record<string, unknown>).reasoningEffort)
+            ? (nonEmptyString((item as Record<string, unknown>).reasoningEffort) ??
+              nonEmptyString((item as Record<string, unknown>).effort))
             : null;
       if (effort !== null && !out.includes(effort)) out.push(effort);
     }
@@ -196,8 +221,8 @@ function codexEffortsOf(entry: Record<string, unknown>): string[] | null {
 }
 
 /**
- * `codex app-server` 的 `model/list` 回应 → 名单。跳过 `hidden === true` 的项；
- * 从 `supportedReasoningEfforts` 提取思考程度；`isDefault === true` 记为 `defaultModel`。
+ * `codex app-server` 的 `model/list` 回应（或 `models_cache.json`）→ 名单。跳过 `hidden === true` / `visibility === "hide"` 的项；
+ * 从 `supportedReasoningEfforts` 提取思考程度；`isDefault === true` 记为 `defaultModel`、`defaultModelId` 与 `defaultEfforts`。
  */
 export function parseCodexModels(raw: unknown): ModelCatalog | null {
   const list = extractCodexModels(raw);
@@ -205,28 +230,35 @@ export function parseCodexModels(raw: unknown): ModelCatalog | null {
   const models: CatalogModel[] = [];
   let defaultModel: string | null = null;
   let defaultModelId: string | null = null;
+  let defaultEfforts: string[] | null = null;
   for (const item of list) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
-    if (entry.hidden === true) continue;
-    const id = typeof entry.id === "string" ? entry.id : typeof entry.model === "string" ? entry.model : null;
+    if (entry.hidden === true || entry.visibility === "hide" || entry.visibility === "none") continue;
+    const id = nonEmptyString(entry.id) ?? nonEmptyString(entry.model) ?? nonEmptyString(entry.slug);
     if (id === null || checkModel("codex", id) !== null || models.some((m) => m.id === id)) continue;
-    const label = truncateChars(nonEmptyString(entry.displayName) ?? nonEmptyString(entry.label) ?? id, MAX_CATALOG_LABEL_CHARS);
+    const label = truncateChars(
+      nonEmptyString(entry.displayName) ?? nonEmptyString(entry.display_name) ?? nonEmptyString(entry.label) ?? id,
+      MAX_CATALOG_LABEL_CHARS,
+    );
     const description = nonEmptyString(entry.description);
+    const efforts = codexEffortsOf(entry);
     if (entry.isDefault === true && defaultModelId === null) {
       defaultModel = label;
       defaultModelId = id;
+      defaultEfforts = efforts;
     }
     models.push({
       id,
       label,
       description: description === null ? null : truncateChars(description, MAX_CATALOG_DESCRIPTION_CHARS),
-      efforts: codexEffortsOf(entry),
+      efforts,
     });
     if (models.length === MAX_CATALOG_MODELS) break;
   }
   if (models.length === 0) return null;
-  return { ...bundledModelCatalog("codex"), source: "vendor", models, defaultModel, defaultModelId };
+  const efforts = mergeCatalogEfforts(VENDOR_SPECS.codex.efforts, models, defaultEfforts);
+  return { ...bundledModelCatalog("codex"), source: "vendor", efforts, models, defaultEfforts, defaultModel, defaultModelId };
 }
 
 export interface ClaudeModelQueryOptions {
@@ -622,6 +654,8 @@ export interface VendorCatalogSource {
   confirm?: (signal: AbortSignal) => Promise<VendorAvailability>;
   /** 装没装（只查文件在不在，每次要都查）。不写当装了。 */
   installed?: () => boolean;
+  /** 可执行文件及本地凭据/模型缓存文件的轻量 stat 指纹（不起进程）。变化时立即刷新缓存。 */
+  fingerprint?: () => string;
 }
 
 /** 没问到时通用的认法：程序不存在 → 没装；报错是认证类（VENDOR_FAILURE_SIGNS 的 auth）→ 没登录；别的认不出。 */
@@ -670,6 +704,11 @@ interface VendorCatalogSlot {
   availability: VendorAvailability | null;
   /** 上次没问到、或问出来不能用的时候（之后隔 MODEL_CATALOG_RETRY_MS 才再问）。 */
   failedAt: number | null;
+  /** 上次查询后可执行文件与本地配置/凭据/模型缓存文件的 stat 指纹。 */
+  fingerprint: string | null;
+  /** 最近一次算出来的指纹和算的时间（MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内直接用它，不再 stat）。 */
+  fingerprintSeen: string | null;
+  fingerprintCheckedAt: number;
   inflight: Promise<void> | null;
 }
 
@@ -678,7 +717,9 @@ interface VendorCatalogSlot {
  * - 没配来源的厂商：不发请求，直接回打包的名单、状态 unknown，current 返回 null；
  * - 没装（只查文件）：不问，状态 not_installed；装上以后下次要时就问；
  * - 还没问到过：第一次要时问，等它问完（同时来的几次只问一次）；
- * - 问到了：直接给；超过 MODEL_CATALOG_FRESH_MS 就在后台再问，先给旧的；后台没问到继续用旧的；
+ * - 问到了：直接给；若可执行文件或本地凭据/模型缓存文件 stat 指纹变了（刚登录、换号、CLI 升级或 models_cache.json 更新）则立即重问；
+ *   指纹 MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内只算一次（高频调用命中缓存时不碰磁盘）；
+ *   超过 MODEL_CATALOG_FRESH_MS 在后台再问，先给旧的；后台没问到继续用旧的；
  * - 没问到、或问出来不能用（没登录）：名单用打包的（问到了就用问到的），MODEL_CATALOG_RETRY_MS 之后有人要时再问。
  * 不轮询：都是有人要时才问。
  */
@@ -692,11 +733,37 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   const slots = Object.fromEntries(
     AGENT_VENDORS.map((vendor): [AgentVendor, VendorCatalogSlot] => [
       vendor,
-      { vendor, source: options.sources[vendor], cached: null, cachedAt: 0, availability: null, failedAt: null, inflight: null },
+      {
+        vendor,
+        source: options.sources[vendor],
+        cached: null,
+        cachedAt: 0,
+        availability: null,
+        failedAt: null,
+        fingerprint: null,
+        fingerprintSeen: null,
+        fingerprintCheckedAt: 0,
+        inflight: null,
+      },
     ]),
   ) as Record<AgentVendor, VendorCatalogSlot>;
 
   const installed = (slot: VendorCatalogSlot) => slot.source?.installed?.() ?? true;
+  /** 现在的指纹：force 或过了冷却期才真算（stat 磁盘），否则用上次算的。没配指纹是 null。 */
+  const fingerprintOf = (slot: VendorCatalogSlot, force: boolean): string | null => {
+    const compute = slot.source?.fingerprint;
+    if (!compute) return null;
+    if (force || slot.fingerprintSeen === null || now() - slot.fingerprintCheckedAt >= MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS) {
+      slot.fingerprintSeen = compute();
+      slot.fingerprintCheckedAt = now();
+    }
+    return slot.fingerprintSeen;
+  };
+  const fingerprintChanged = (slot: VendorCatalogSlot): boolean => {
+    if (slot.fingerprint === null) return false;
+    const current = fingerprintOf(slot, false);
+    return current !== null && current !== slot.fingerprint;
+  };
   const settle = (slot: VendorCatalogSlot, availability: VendorAvailability) => {
     slot.availability = availability;
     if (!isSelectable(availability)) slot.failedAt = now();
@@ -706,7 +773,10 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     const source = slot.source;
     if (!source) return Promise.resolve();
     slot.inflight ??= (async () => {
-      if (!installed(slot)) return; // 没装不问（状态看 installed，每次都查）
+      if (!installed(slot)) {
+        slot.fingerprint = fingerprintOf(slot, true);
+        return; // 没装不问（状态看 installed，每次都查）
+      }
       let availability: VendorAvailability;
       let reason: string | null = null;
       try {
@@ -729,6 +799,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
         slot.failedAt = now();
         if (!closed) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}），先用打包的`);
       }
+      slot.fingerprint = fingerprintOf(slot, true);
       settle(slot, availability);
     })().finally(() => {
       slot.inflight = null;
@@ -746,8 +817,10 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
 
   const catalogOf = async (slot: VendorCatalogSlot, refresh: boolean | "unusable"): Promise<ModelCatalog> => {
     if (!slot.source || closed || !installed(slot)) return result(slot);
+    const changed = fingerprintChanged(slot);
+    if (changed) slot.failedAt = null;
     const usable = slot.availability === null || isSelectable(slot.availability);
-    if (refresh === true || (refresh === "unusable" && !usable)) await ask(slot);
+    if (refresh === true || (refresh === "unusable" && !usable) || changed) await ask(slot);
     else if (slot.cached === null) {
       if (slot.inflight || slot.availability === null || retryDue(slot)) await ask(slot);
     } else if (!slot.inflight && (now() - slot.cachedAt >= MODEL_CATALOG_FRESH_MS || !usable) && retryDue(slot)) {
@@ -769,7 +842,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     },
     async ensureUsable(vendor) {
       const slot = slots[vendor];
-      if (slot.source && !closed && installed(slot) && !isSelectable(availabilityOf(slot))) {
+      if (slot.source && !closed && installed(slot) && (!isSelectable(availabilityOf(slot)) || fingerprintChanged(slot))) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timedOut = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, ensureUsableBudgetMs);

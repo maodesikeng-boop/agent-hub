@@ -88,6 +88,54 @@ describe("createAgyConnectorResolver：缓存", () => {
     await resolve();
     expect(calls).toBe(4); // 配置变了：a、b 各问一次
   });
+
+  it("有服务器没问到（偶发超时）：清单只记 retryMs，过了重新问，问到了照常记 cacheMs", async () => {
+    let calls = 0;
+    let t = 0;
+    const resolve = createAgyConnectorResolver({
+      homeDir: "/h",
+      cacheMs: 10_000,
+      retryMs: 1_000,
+      now: () => t,
+      readServers: () => ({ a: { command: "x" } }),
+      cachedServerNames: () => [],
+      listTools: async () => {
+        if (calls++ === 0) throw new Error("timeout");
+        return [{ name: "t" }];
+      },
+    });
+    expect((await resolve()).unlistable).toEqual(["a"]);
+    t = 999;
+    await resolve();
+    expect(calls).toBe(1);
+    t = 1_000;
+    expect((await resolve()).servers).toEqual({ a: { t: null } });
+    expect(calls).toBe(2);
+    t = 1_000 + 9_999;
+    await resolve();
+    expect(calls).toBe(2);
+  });
+
+  it("只是 agy 缓存过、配置里没有的服务器进 unlistable：不算没问到，照常记 cacheMs", async () => {
+    let calls = 0;
+    let t = 0;
+    const resolve = createAgyConnectorResolver({
+      homeDir: "/h",
+      cacheMs: 10_000,
+      retryMs: 1_000,
+      now: () => t,
+      readServers: () => ({ a: { command: "x" } }),
+      cachedServerNames: () => ["plugin-only"],
+      listTools: async () => {
+        calls++;
+        return [{ name: "t" }];
+      },
+    });
+    expect((await resolve()).unlistable).toEqual(["plugin-only"]);
+    t = 5_000;
+    await resolve();
+    expect(calls).toBe(1);
+  });
 });
 
 describe("listMcpTools：真的起 stdio 服务器问 tools/list", () => {

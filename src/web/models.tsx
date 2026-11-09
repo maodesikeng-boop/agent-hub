@@ -21,21 +21,25 @@ import { useClient } from "./device-scope.tsx";
 interface CatalogStore {
   /** 按设备（client.device，入口本机是 null 的键 ""）拉到的名单。 */
   catalogs: Readonly<Record<string, ModelCatalog[] | undefined>>;
-  /** 第一次有组件要时调；每台只拉一次（拉失败了下次有组件要时再拉）。 */
+  /** 有组件挂载或打开模型/厂商下拉时调；冷却时间（MODEL_CATALOG_REVALIDATE_MS）内不重复拉，超过则在后台重拉。 */
   load(client: HubClient): void;
   /** 这台有不能用的厂商时，在后台只重问那几家（用户可能刚登录好）；同一台同时只问一次，不让谁等。 */
   refreshUnusable(client: HubClient): void;
 }
 
+/** 前端重新拉取 /api/models 的最小间隔（毫秒）：挂载配置界面或打开下拉时若距上次拉取已超此间隔则在后台重拉。 */
+export const MODEL_CATALOG_REVALIDATE_MS = 5_000;
+
 const CatalogContext = createContext<CatalogStore | null>(null);
 
 const catalogKey = (client: HubClient) => client.device ?? "";
 
-export function ModelCatalogProvider({ children }: { children: ReactNode }) {
+export function ModelCatalogProvider({ children, now = Date.now }: { children: ReactNode; now?: () => number }) {
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog[] | undefined>>({});
   const [store] = useState(() => {
     const loading = new Set<string>();
     const loaded = new Set<string>();
+    const loadedAt = new Map<string, number>();
     const refreshing = new Set<string>();
     const save = (key: string, res: ModelsResponse) => {
       const list = Array.isArray(res?.catalogs) ? res.catalogs.map(complete) : [];
@@ -43,17 +47,21 @@ export function ModelCatalogProvider({ children }: { children: ReactNode }) {
     };
     const load = (client: HubClient) => {
       const key = catalogKey(client);
-      if (loading.has(key) || loaded.has(key)) return;
+      const last = loadedAt.get(key);
+      if (loading.has(key) || refreshing.has(key) || (loaded.has(key) && last !== undefined && now() - last < MODEL_CATALOG_REVALIDATE_MS)) return;
       loading.add(key);
-      client.fetchModels().then(
-        (res) => {
-          loaded.add(key);
-          save(key, res);
-        },
-        () => {
+      loadedAt.set(key, now());
+      client
+        .fetchModels()
+        .then(
+          (res) => save(key, res),
+          () => {},
+        )
+        .finally(() => {
           loading.delete(key);
-        },
-      );
+          loaded.add(key);
+          loadedAt.set(key, now());
+        });
     };
     const refreshUnusable = (client: HubClient) => {
       const key = catalogKey(client);
@@ -62,7 +70,10 @@ export function ModelCatalogProvider({ children }: { children: ReactNode }) {
       client
         .fetchModels({ refresh: REFRESH_UNUSABLE })
         .then(
-          (res) => save(key, res),
+          (res) => {
+            loadedAt.set(key, now());
+            save(key, res);
+          },
           () => {},
         )
         .finally(() => refreshing.delete(key));
@@ -94,6 +105,13 @@ export function useModelCatalog(vendor: AgentVendor): ModelCatalog {
   return useModelCatalogs().find((c) => c.vendor === vendor) ?? bundledModelCatalog(vendor);
 }
 
+/** 打开模型下拉时调：距上次拉取满冷却时间就在后台重拉一次 /api/models（本机模型缓存或凭据更新后立即可见）。 */
+export function useRevalidateModels(): () => void {
+  const store = useContext(CatalogContext);
+  const client = useClient();
+  return () => store?.load(client);
+}
+
 /** 下拉里厂商那一项的文字：不能用的后面带英文状态词（Codex (Not signed in)）。 */
 export function vendorOptionLabel(catalog: ModelCatalog): string {
   const status = AVAILABILITY_LABELS[catalog.availability];
@@ -102,7 +120,7 @@ export function vendorOptionLabel(catalog: ModelCatalog): string {
 
 /**
  * 厂商下拉的选项：这台设备上没装的不列，但现在选着的那家总在（没装也显示，标状态词）。
- * refreshUnusable：打开下拉时调，有不能用的就在后台重问那几家，回来了更新选项，下拉不等。
+ * refreshUnusable：打开下拉时调，有不能用的就在后台重问那几家，全可用时按冷却间隔后台重拉名单，下拉不等。
  */
 export function useVendorChoices(current: AgentVendor): { options: readonly ModelCatalog[]; refreshUnusable: () => void } {
   const store = useContext(CatalogContext);
@@ -112,5 +130,11 @@ export function useVendorChoices(current: AgentVendor): { options: readonly Mode
   const options = catalogs.some((c) => c.vendor === current) ? catalogs : [...catalogs, bundledModelCatalog(current)];
   const listed = options.filter((c) => isListed(c.availability) || c.vendor === current);
   const anyUnusable = catalogs.some((c) => !isSelectable(c.availability));
-  return { options: listed, refreshUnusable: () => anyUnusable && store?.refreshUnusable(client) };
+  return {
+    options: listed,
+    refreshUnusable: () => {
+      if (anyUnusable) store?.refreshUnusable(client);
+      else store?.load(client);
+    },
+  };
 }

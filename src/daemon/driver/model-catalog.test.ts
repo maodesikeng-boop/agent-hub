@@ -1,8 +1,16 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MODEL_CATALOG_FRESH_MS, MODEL_CATALOG_RETRY_MS, bundledModelCatalog, type ModelCatalog, type VendorAvailability } from "../../shared/index.ts";
+import {
+  MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
+  MODEL_CATALOG_FRESH_MS,
+  MODEL_CATALOG_RETRY_MS,
+  bundledModelCatalog,
+  type ModelCatalog,
+  type VendorAvailability,
+} from "../../shared/index.ts";
+import { createCodexCatalogSource } from "../vendors/codex.ts";
 import {
   createModelCatalogs,
   parseAgyModels,
@@ -113,10 +121,11 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
     } satisfies ModelCatalog);
   });
 
-  it("“默认”实际用的模型：default 那项的 resolvedModel 对上名单里哪个就用它的名字；对不上用 resolvedModel 原样；没有 resolvedModel 是 null", () => {
+  it("“默认”实际用的模型：default 那项的 resolvedModel 对上名单里哪个就用它的名字；若 default 未单列思考程度则沿用 resolvedModel 对应模型的思考程度", () => {
     const def = (resolvedModel?: string) => ({ value: "default", ...(resolvedModel ? { resolvedModel } : {}) });
-    const opus = { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5" };
+    const opus = { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportedEffortLevels: ["low", "high", "max"] };
     expect(parseInitializeModels([def("claude-opus-5-5"), opus])?.defaultModel).toBe("Opus 5.5");
+    expect(parseInitializeModels([def("claude-opus-5-5"), opus])?.defaultEfforts).toEqual(["low", "high", "max"]);
     expect(parseInitializeModels([opus, def("claude-opus-5-5")])?.defaultModel).toBe("Opus 5.5");
     expect(parseInitializeModels([def("claude-sonnet-9"), opus])?.defaultModel).toBe("claude-sonnet-9");
     expect(parseInitializeModels([def(), opus])?.defaultModel).toBeNull();
@@ -217,12 +226,14 @@ describe("parseAgyModels：agy 报的模型名单（按 Antigravity 软件的做
     ]);
   });
 
-  it("currently_selected 的那项记成默认模型，名字不带档位", () => {
+  it("currently_selected 的那项记成默认模型（名字不带档位），并把该模型支持的档位赋给 defaultEfforts；后续档位带的 description 能补上", () => {
     const catalog = parseAgyModels([
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
-      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", currently_selected: true },
+      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", description: "Balanced reasoning", currently_selected: true },
     ]);
     expect(catalog?.defaultModel).toBe("Gemini 4 Argon");
+    expect(catalog?.defaultEfforts).toEqual(["low", "medium"]);
+    expect(catalog?.models[0]?.description).toBe("Balanced reasoning");
   });
 
   it("过滤非法模型名和重复项；无效或空返回 null", () => {
@@ -240,13 +251,14 @@ describe("parseAgyModels：agy 报的模型名单（按 Antigravity 软件的做
 });
 
 describe("parseCodexModels：codex 报的模型名单", () => {
-  it("跳过 hidden === true，提取 supportedReasoningEfforts 和 isDefault", () => {
+  it("跳过 hidden === true，提取 supportedReasoningEfforts（含 max、ultra）和 isDefault（含 defaultEfforts）", () => {
     const catalog = parseCodexModels({ data: REAL_CODEX_MODELS });
     expect(catalog).toEqual({
       ...bundledModelCatalog("codex"),
       source: "vendor",
       defaultModel: "GPT-5.4",
       defaultModelId: "gpt-5.4",
+      defaultEfforts: ["low", "medium", "high", "xhigh"],
       models: [
         {
           id: "gpt-5.4",
@@ -264,8 +276,47 @@ describe("parseCodexModels：codex 报的模型名单", () => {
     } satisfies ModelCatalog);
   });
 
+  it("兼容 models_cache.json 原始字段（slug、display_name、visibility === 'hide'、supported_reasoning_levels）并保留 max/ultra 档位", () => {
+    const catalog = parseCodexModels({
+      models: [
+        {
+          slug: "gpt-6.1-sol",
+          display_name: "GPT-6.1-Sol",
+          description: "Flagship model",
+          visibility: "list",
+          isDefault: true,
+          supported_reasoning_levels: [
+            { effort: "low" },
+            { effort: "medium" },
+            { effort: "high" },
+            { effort: "xhigh" },
+            { effort: "max" },
+            { effort: "ultra" },
+          ],
+        },
+        {
+          slug: "gpt-hidden",
+          display_name: "Hidden",
+          visibility: "hide",
+        },
+      ],
+    });
+    expect(catalog?.defaultModel).toBe("GPT-6.1-Sol");
+    expect(catalog?.defaultModelId).toBe("gpt-6.1-sol");
+    expect(catalog?.defaultEfforts).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(catalog?.models).toEqual([
+      {
+        id: "gpt-6.1-sol",
+        label: "GPT-6.1-Sol",
+        description: "Flagship model",
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    ]);
+  });
+
   it("全部 hidden 或无效时返回 null", () => {
     expect(parseCodexModels([{ id: "gpt-5.4", hidden: true }])).toBeNull();
+    expect(parseCodexModels([{ slug: "gpt-5.4", visibility: "hide" }])).toBeNull();
     expect(parseCodexModels(null)).toBeNull();
     expect(parseCodexModels({})).toBeNull();
   });
@@ -703,6 +754,155 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(codexOf(second).source).toBe("vendor");
     expect(codexOf(second).defaultModel).toBe("GPT-5.4");
     expect(catalogs.current("codex")?.defaultModel).toBe("GPT-5.4");
+  });
+
+  it("fingerprint 变化（本机凭据或 models_cache.json 更新）：不必等 6 小时，过了指纹冷却期下次 list() 立即重问并回新模型", async () => {
+    let now = 3_000_000;
+    let fp = "v1";
+    let calls = 0;
+    const answers = [
+      [{ id: "gpt-6-luna", displayName: "GPT-6-Luna", isDefault: true, supportedReasoningEfforts: ["low", "high", "max"] }],
+      [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", isDefault: true, supportedReasoningEfforts: ["low", "high", "max", "ultra"] }],
+    ];
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: parseCodexModels,
+          fingerprint: () => fp,
+          query: async () => {
+            calls++;
+            return answers.shift();
+          },
+        },
+      },
+      now: () => now,
+    });
+
+    const first = codexOf(await catalogs.list());
+    expect(first.models.map((m) => m.id)).toEqual(["gpt-6-luna"]);
+    expect(first.defaultEfforts).toEqual(["low", "high", "max"]);
+    expect(calls).toBe(1);
+
+    // 指纹没变、时间没过：直接给缓存，不重问
+    await catalogs.list();
+    expect(calls).toBe(1);
+
+    // 本机 ~/.codex/models_cache.json 或凭据更新导致指纹变化：过了冷却期（几秒，远不到 6 小时）就立即重问并拿到新列表
+    fp = "v2";
+    now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+    const second = codexOf(await catalogs.list());
+    expect(calls).toBe(2);
+    expect(second.models.map((m) => m.id)).toEqual(["gpt-6.1-sol"]);
+    expect(second.defaultEfforts).toEqual(["low", "high", "max", "ultra"]);
+  });
+
+  it("指纹冷却：命中缓存时 MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内 list()/ensureUsable() 再多次也不重算指纹（不碰磁盘）；过了冷却期只算一次", async () => {
+    let now = 4_000_000;
+    let fp = "v1";
+    let fingerprintCalls = 0;
+    let calls = 0;
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: parseCodexModels,
+          fingerprint: () => {
+            fingerprintCalls++;
+            return fp;
+          },
+          query: async () => {
+            calls++;
+            return REAL_CODEX_MODELS;
+          },
+        },
+      },
+      now: () => now,
+    });
+
+    await catalogs.list();
+    expect(calls).toBe(1);
+    // 问完记一次指纹
+    expect(fingerprintCalls).toBe(1);
+
+    // 冷却期内：高频调用全部命中缓存，指纹一次都不算；文件变了也要等冷却期过了才看到
+    fp = "v2";
+    for (let i = 0; i < 50; i++) {
+      await catalogs.list();
+      expect(await catalogs.ensureUsable("codex")).toBe("available");
+      now += Math.floor((MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS - 1) / 50);
+    }
+    expect(fingerprintCalls).toBe(1);
+    expect(calls).toBe(1);
+
+    // 过了冷却期：算一次，发现变了就重问（重问完再记一次）
+    now = 4_000_000 + MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+    await catalogs.list();
+    expect(calls).toBe(2);
+    expect(fingerprintCalls).toBe(3);
+
+    // 刚重问完又进冷却期：接着调不再算
+    await catalogs.list();
+    await catalogs.ensureUsable("codex");
+    expect(fingerprintCalls).toBe(3);
+
+    // 冷却期过了、指纹没变：只算一次、不重问
+    now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+    await catalogs.list();
+    await catalogs.list();
+    expect(fingerprintCalls).toBe(4);
+    expect(calls).toBe(2);
+  });
+
+  it("codex 自定义 CODEX_HOME：其下 auth.json / models_cache.json 变了，缓存自动失效重问（指纹跟认证判断看同一处）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-catalog-codex-home-"));
+    try {
+      const home = join(dir, "home");
+      const codexHome = join(dir, "custom-codex");
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      mkdirSync(codexHome, { recursive: true });
+      const bin = join(dir, "codex");
+      writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
+      let now = 6_000_000;
+      let calls = 0;
+      const source = createCodexCatalogSource({ path: bin, cwd: home, installed: () => true, env: { PATH: "", CODEX_HOME: codexHome } });
+      const catalogs = createModelCatalogs({
+        sources: {
+          codex: {
+            ...source,
+            query: async () => {
+              calls++;
+              return REAL_CODEX_MODELS;
+            },
+          },
+        },
+        now: () => now,
+      });
+
+      await catalogs.list();
+      expect(calls).toBe(1);
+      // 认证判断看的也是 CODEX_HOME：还没有 auth.json → 没登录
+      expect(await source.confirm!(new AbortController().signal)).toBe("signed_out");
+
+      // 默认 ~/.codex 下的变化不算
+      writeFileSync(join(home, ".codex", "auth.json"), "{}");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(1);
+
+      // CODEX_HOME 下登录（写 auth.json）：重问
+      writeFileSync(join(codexHome, "auth.json"), "{\"token\":\"a\"}");
+      expect(await source.confirm!(new AbortController().signal)).toBe("available");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(2);
+
+      // CODEX_HOME 下 models_cache.json 更新：再重问
+      writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[]}");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

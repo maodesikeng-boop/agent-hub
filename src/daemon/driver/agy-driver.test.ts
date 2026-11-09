@@ -1278,17 +1278,17 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
 });
 
 describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () => {
-  it("queryCommands 返回 []，isRunning、end、shutdown 正常运作", async () => {
+  it("queryCommands 返回 null（交由 commands-catalog 走 vendor.queryCommands 查 skills），isRunning、end、shutdown 正常运作", async () => {
     const t = makeAgyHarness();
     const s = t.addSession();
 
     expect(t.driver.isRunning(s.id)).toBe(false);
-    await expect(t.driver.queryCommands(s.id)).resolves.toEqual([]);
+    await expect(t.driver.queryCommands(s.id)).resolves.toBeNull();
 
     await t.driver.send(s.id, user(1, "你好"));
     await t.waitFor("turn.ended");
     expect(t.driver.isRunning(s.id)).toBe(true);
-    await expect(t.driver.queryCommands(s.id)).resolves.toEqual([]);
+    await expect(t.driver.queryCommands(s.id)).resolves.toBeNull();
 
     await t.driver.end(s.id);
     expect(t.driver.isRunning(s.id)).toBe(false);

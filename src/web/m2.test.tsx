@@ -4,6 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_NAME_RULE, VENDOR_SPECS, bundledModelCatalog, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
+import { MODEL_CATALOG_REVALIDATE_MS } from "./models.tsx";
 import {
   FakeApi,
   FakeWebSocket,
@@ -1419,6 +1420,41 @@ describe("这台设备上没装、没登录的厂商（docs/vendor-availability-
     release();
     await waitFor(() => expect(optionsOf(vendor)).toEqual(["Claude Code", "Codex"]));
     expect(optionNamed(vendor, "Codex").disabled).toBe(false);
+  });
+
+  it("距上次拉取满冷却间隔后点开模型下拉：后台重拉 /api/models 并更新新发布的模型列表", async () => {
+    const user = userEvent.setup();
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await boot();
+      let calls = 0;
+      const updatedCatalog: ModelCatalog = {
+        ...CLAUDE_CATALOG,
+        models: [...CLAUDE_CATALOG.models, { id: "claude-opus-6", label: "Opus 6.0", description: null, efforts: ["low", "high", "max"] }],
+      };
+      api.models = () => {
+        calls++;
+        return { status: 200, body: { catalogs: [calls === 1 ? CLAUDE_CATALOG : updatedCatalog] } };
+      };
+      const { group } = await openDialog(user);
+      const model = await within(group).findByRole("combobox", { name: "模型" });
+      await waitFor(() => expect(optionsOf(model)).toContain("Opus 5.5"));
+      expect(optionsOf(model)).not.toContain("Opus 6.0");
+      expect(calls).toBe(1);
+
+      // 冷却时间内点模型下拉不重复发请求
+      await user.click(model);
+      expect(calls).toBe(1);
+
+      // 超过 MODEL_CATALOG_REVALIDATE_MS 后点模型下拉，后台重拉并显示新模型
+      now += MODEL_CATALOG_REVALIDATE_MS + 1;
+      await user.click(model);
+      await waitFor(() => expect(optionsOf(model)).toContain("Opus 6.0"));
+      expect(calls).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("选着的厂商这台用不了（换了设备、或默认那家没登录）：不悄悄换掉，标状态词，“创建”是灰的", async () => {

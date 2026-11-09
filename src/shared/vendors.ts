@@ -127,6 +127,14 @@ const CODEX_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker
 const CODEX_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 codex";
 const CODEX_SANDBOX_BLOCKED = "权限和沙箱由 agent-hub 管，这里不能用这个命令";
 
+/** codex 的思考程度：通用六档（luna 系到 max，其余支持到 ultra）。 */
+const CODEX_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
+const CODEX_MAX_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
+export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
+export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
+export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
+
 function blocked(reason: string, names: readonly string[]): Record<string, string> {
   return Object.fromEntries(names.map((name) => [name, reason]));
 }
@@ -139,16 +147,31 @@ function cap(word: string): string {
  * 各家厂商的凭据和配置目录（相对用户主目录），以 AGENT_VENDORS 为键：加厂商不写这里就编译不过。
  * - dirs：整个目录（或文件）。分享文件时一律禁（daemon/sent-files.ts 的 SENSITIVE_HOME_PATHS）；
  * - readonlySecrets：只读 Worker 禁读的具体文件（readonly-policy.ts 的 READONLY_SECRET_HOME_PATHS，粒度比 dirs 细：
- *   会话记录、日志留给排查读），必须在 dirs 里面。
+ *   会话记录、日志留给排查读），必须在 dirs 里面；
+ * - catalogWatchPaths：影响模型名单或登录状态的本地配置/凭据/缓存文件（必须在 dirs 里面），stat 指纹变化时立即刷新模型目录缓存。
  * 2026-11-08 核对：~/.claude.json 存账号和 MCP 登录信息，~/.claude/.credentials.json 是 claude 的令牌（macOS 上在钥匙串时没有这个文件）；
  * ~/.codex/auth.json 是 codex 的令牌，~/.codex/.credentials.json 是 MCP OAuth 令牌的备用文件（keyring 不可用时，见 codex-rs/rmcp-client/src/oauth.rs）；
  * agy 的数据在 ~/.gemini（antigravity、antigravity-cli；macOS 上登录令牌在钥匙串 Library/Keychains，Linux 在钥匙环），
  * oauth_creds.json 是 gemini 系的令牌文件，mcp-oauth-tokens.json 是 MCP OAuth 令牌（gemini-cli docs/tools/mcp-server.md）。
  */
-export const VENDOR_HOME_PATHS: Readonly<Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[] }>> = {
-  claude: { dirs: [".claude", ".claude.json"], readonlySecrets: [".claude.json", ".claude/.credentials.json"] },
-  agy: { dirs: [".gemini"], readonlySecrets: [".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"] },
-  codex: { dirs: [".codex"], readonlySecrets: [".codex/auth.json", ".codex/.credentials.json"] },
+export const VENDOR_HOME_PATHS: Readonly<
+  Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[]; catalogWatchPaths: readonly string[] }>
+> = {
+  claude: {
+    dirs: [".claude", ".claude.json"],
+    readonlySecrets: [".claude.json", ".claude/.credentials.json"],
+    catalogWatchPaths: [".claude.json", ".claude/.credentials.json", ".claude/settings.json"],
+  },
+  agy: {
+    dirs: [".gemini"],
+    readonlySecrets: [".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
+    catalogWatchPaths: [AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, ".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
+  },
+  codex: {
+    dirs: [".codex"],
+    readonlySecrets: [".codex/auth.json", ".codex/.credentials.json"],
+    catalogWatchPaths: [".codex/models_cache.json", ".codex/auth.json", ".codex/.credentials.json", ".codex/config.toml", ".codex/version.json"],
+  },
 };
 
 export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
@@ -168,12 +191,18 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
     quota: { name: "Claude", windows: ["five_hour", "seven_day"], warningStatus: "allowed_warning" },
-    // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m] → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M
+    // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m]、claude-3-5-sonnet-latest → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M、Sonnet 3.5
     shortModelName: (model) => {
-      const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model);
+      const m =
+        /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-(?:\d{8}|latest))?(?:\[(\d+[mk])\])?$/i.exec(model) ??
+        /^claude-(\d+)(?:-(\d{1,2}))?-([a-z]+)(?:-(?:\d{8}|latest))?(?:\[(\d+[mk])\])?$/i.exec(model);
       if (!m) return null;
-      const family = cap(m[1]!);
-      return [family, m[3] === undefined ? m[2] : `${m[2]}.${m[3]}`, m[4] ? "1M" : null].filter(Boolean).join(" ");
+      const isFamilyFirst = /^[a-z]+$/i.test(m[1]!);
+      const family = cap((isFamilyFirst ? m[1]! : m[3]!).toLowerCase());
+      const major = isFamilyFirst ? m[2]! : m[1]!;
+      const minor = isFamilyFirst ? m[3] : m[2];
+      const ctx = m[4] ? m[4].toUpperCase() : null;
+      return [family, minor === undefined ? major : `${major}.${minor}`, ctx].filter(Boolean).join(" ");
     },
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
     backgroundCommands: true,
@@ -245,10 +274,14 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     },
     // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B
     shortModelName: (model) => {
-      const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(model);
-      if (gemini) return `Gemini ${gemini[1]} ${cap(gemini[2]!)}`;
-      const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(model);
-      if (claude) return `Claude ${cap(claude[1]!)} ${claude[3] === undefined ? claude[2] : `${claude[2]}.${claude[3]}`}`;
+      const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z0-9]+(?:-[a-z0-9]+)*)$/i.exec(model);
+      if (gemini) return `Gemini ${gemini[1]} ${gemini[2]!.split("-").map((w) => cap(w.toLowerCase())).join(" ")}`;
+      const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-(?:\d{8}|latest))?(?:\[(\d+[mk])\])?$/i.exec(model);
+      if (claude) {
+        const ver = claude[3] === undefined ? claude[2]! : `${claude[2]}.${claude[3]}`;
+        const ctx = claude[4] ? ` ${claude[4].toUpperCase()}` : "";
+        return `Claude ${cap(claude[1]!.toLowerCase())} ${ver}${ctx}`;
+      }
       const gptOss = /^gpt-oss-(\d+b)$/i.exec(model);
       if (gptOss) return `GPT-OSS ${gptOss[1]!.toUpperCase()}`;
       return null;
@@ -276,23 +309,31 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
   codex: {
     label: "Codex",
     loginCommand: "codex login",
+    // 2026-11-09 `codex app-server` model/list 的实际可见列表及各自支持的思考程度；拿不到名单时兜底
     models: [
-      { id: "gpt-6-luna", label: "GPT-6-Luna" },
-      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
-      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
+      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: CODEX_EFFORTS },
+      { id: "gpt-6-astra", label: "GPT-6-Astra", efforts: CODEX_EFFORTS },
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: CODEX_EFFORTS },
+      { id: "gpt-6-sol", label: "GPT-6-Sol", efforts: CODEX_EFFORTS },
+      { id: "gpt-6-luna", label: "GPT-6-Luna", efforts: CODEX_MAX_EFFORTS },
+      { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", efforts: CODEX_EFFORTS },
+      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", efforts: CODEX_EFFORTS },
+      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", efforts: CODEX_MAX_EFFORTS },
     ],
     customModel: true,
-    customModelExample: "如 gpt-6-luna",
-    efforts: ["low", "medium", "high", "xhigh"],
+    customModelExample: "如 gpt-6.1-sol",
+    efforts: CODEX_EFFORTS,
     modelFlag: "--model",
     effortFlag: "-c",
     flags: { model: "--model", effort: "-c" },
     // account/rateLimits/updated 只带窗口长度、不带名字：长度见 QUOTA_WINDOWS（codex-protocol.ts 的 parseCodexRateLimits 按它归类），codex 自己不报“快用完”
     quota: { name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] },
     shortModelName: (model) => {
-      const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z]+))?$/.exec(model);
+      const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z0-9]+(?:-[a-z0-9]+)*))?$/i.exec(model);
       if (!gpt) return null;
-      return gpt[2] === undefined ? `GPT-${gpt[1]}` : `GPT-${gpt[1]} ${cap(gpt[2])}`;
+      return gpt[2] === undefined
+        ? `GPT-${gpt[1]}`
+        : `GPT-${gpt[1]} ${gpt[2].split("-").map((w) => cap(w.toLowerCase())).join(" ")}`;
     },
     // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）
     backgroundCommands: false,
@@ -348,21 +389,53 @@ export function checkModel(vendor: AgentVendor, model: string | null): string | 
   return MODEL_NAME.test(model) ? null : MODEL_NAME_RULE;
 }
 
-export function checkEffort(vendor: AgentVendor, effort: string | null): string | null {
-  if (effort === null || VENDOR_SPECS[vendor].efforts.includes(effort)) return null;
-  return `思考程度只能是 ${VENDOR_SPECS[vendor].efforts.join("、")}`;
+/** 把模型各自的档位和默认档位合并进厂商通用档位（保持通用档位顺序在前，新出现的动态档位按出现顺序追加）。 */
+export function mergeCatalogEfforts(
+  baseEfforts: readonly string[],
+  models: readonly { efforts: readonly string[] | null }[],
+  defaultEfforts: readonly string[] | null = null,
+): string[] {
+  const out = [...baseEfforts];
+  const add = (list: readonly string[] | null | undefined) => {
+    if (!list) return;
+    for (const effort of list) {
+      if (effort !== "" && !out.includes(effort)) out.push(effort);
+    }
+  };
+  add(defaultEfforts);
+  for (const model of models) add(model.efforts);
+  return out;
+}
+
+/** 厂商静态档位 + 动态模型名单里出现的档位（去重保序）。 */
+function allowedEffortsOf(vendor: AgentVendor, catalog?: ModelCatalog | null): readonly string[] {
+  const base = VENDOR_SPECS[vendor].efforts;
+  if (!catalog) return base;
+  return mergeCatalogEfforts([...base, ...catalog.efforts], catalog.models, catalog.defaultEfforts);
+}
+
+export function checkEffort(vendor: AgentVendor, effort: string | null, catalog?: ModelCatalog | null): string | null {
+  const allowed = allowedEffortsOf(vendor, catalog);
+  if (effort === null || allowed.includes(effort)) return null;
+  return `思考程度只能是 ${allowed.join("、")}`;
 }
 
 /**
- * 思考程度写在模型 ID 里的厂商（agy）：完整 ID 拆成 模型 + 思考程度。末尾是这家清单里的档位词（-low、-medium、-high）才拆；
+ * 思考程度写在模型 ID 里的厂商（agy）：完整 ID 拆成 模型 + 思考程度。末尾是这家清单里的档位词（-low、-medium、-high 等）才拆；
  * 不带档位的、默认（null）、别家厂商原样返回。ID 里的档位优先于另存的 effort（启动时 agy 认的就是 ID）。
  * 老数据里存的是完整 ID，界面、右栏用它显示成“模型 + 档位”。
  */
-export function splitModelEffort(vendor: AgentVendor, model: string | null, effort: string | null): { model: string | null; effort: string | null } {
+export function splitModelEffort(
+  vendor: AgentVendor,
+  model: string | null,
+  effort: string | null,
+  catalog?: ModelCatalog | null,
+): { model: string | null; effort: string | null } {
   // 网页的厂商来自名单，名单里可能有这里没有的厂商（测试里的假厂商），所以 spec 可能是 undefined
   const spec = VENDOR_SPECS[vendor] as VendorSpec | undefined;
   if (!spec?.effortInModelId || model === null) return { model, effort };
-  const split = splitEffortSuffix(model, spec.efforts);
+  const efforts = catalog ? allowedEffortsOf(vendor, catalog) : spec.efforts;
+  const split = splitEffortSuffix(model, efforts);
   return split === null ? { model, effort } : { model: split.base, effort: split.effort };
 }
 
@@ -375,20 +448,28 @@ export function splitEffortSuffix(id: string, efforts: readonly string[]): { bas
 }
 
 /** 完整 ID 里已经带了档位，另给的思考程度和它对不上（agy 会报 conflicts）：返回给人看的原因，否则 null。 */
-export function checkModelEffort(vendor: AgentVendor, model: string | null, effort: string | null): string | null {
+export function checkModelEffort(
+  vendor: AgentVendor,
+  model: string | null,
+  effort: string | null,
+  catalog?: ModelCatalog | null,
+): string | null {
   if (effort === null) return null;
-  const split = splitModelEffort(vendor, model, null);
+  const split = splitModelEffort(vendor, model, null, catalog);
   if (split.effort === null || split.effort === effort) return null;
   return `模型 ${model} 已经带了思考程度 ${split.effort}，和 ${effort} 对不上；请用不带档位的 ${split.model} 再选思考程度，或者去掉思考程度`;
 }
 
 /** 厂商、模型、思考程度一起查（vendor 可以是任何值）。 */
-export function checkAgentSetting(setting: { vendor: unknown; model: string | null; effort: string | null }): string | null {
+export function checkAgentSetting(
+  setting: { vendor: unknown; model: string | null; effort: string | null },
+  catalog?: ModelCatalog | null,
+): string | null {
   if (!isAgentVendor(setting.vendor)) return `厂商只能是 ${AGENT_VENDORS.join("、")}`;
   return (
     checkModel(setting.vendor, setting.model) ??
-    checkEffort(setting.vendor, setting.effort) ??
-    checkModelEffort(setting.vendor, setting.model, setting.effort)
+    checkEffort(setting.vendor, setting.effort, catalog) ??
+    checkModelEffort(setting.vendor, setting.model, setting.effort, catalog)
   );
 }
 
@@ -470,11 +551,13 @@ export function bundledModelCatalog(vendor: AgentVendor): ModelCatalog {
   };
 }
 
-/** 某个模型（null = 默认）能选的思考程度：名单里说了就按它（只留这家通用档位里有的，后台按通用档位校验），没说用通用档位。 */
+/** 某个模型（null = 默认）能选的思考程度：名单里说了就按它（按通用档位排序，并保留模型新增的动态档位），没说用通用档位。 */
 export function effortsFor(catalog: ModelCatalog, model: string | null): readonly string[] {
   const all = catalog.efforts;
   const listed = model === null ? catalog.defaultEfforts : (catalog.models.find((m) => m.id === model)?.efforts ?? null);
-  return listed === null ? all : all.filter((e) => listed.includes(e));
+  if (listed === null) return all;
+  const known = isAgentVendor(catalog.vendor) ? VENDOR_SPECS[catalog.vendor].efforts : all;
+  return [...all.filter((e) => listed.includes(e)), ...listed.filter((e) => !all.includes(e) && !known.includes(e))];
 }
 
 /** 模型下拉选中哪一项：默认是 ""，别的是模型名本身（名单里没有的，下拉里单独列一项“自定义：模型名”）。 */
@@ -488,7 +571,7 @@ export function modelLabel(vendor: AgentVendor, model: string | null, catalog: M
   const listed = catalog.models.find((m) => m.id === model);
   if (listed) return listed.label;
   // 老数据存的是带档位的完整 ID（agy）：只显示模型的名字，档位另外显示（agentEffortOf），不拼在一起
-  const bare = splitModelEffort(vendor, model, null).model!;
+  const bare = splitModelEffort(vendor, model, null, catalog).model!;
   return catalog.models.find((m) => m.id === bare)?.label ?? model;
 }
 
@@ -504,14 +587,14 @@ export function defaultModelOption(catalog: ModelCatalog): string {
 export function modelShortLabel(vendor: AgentVendor, model: string | null, catalog: ModelCatalog = bundledModelCatalog(vendor)): string {
   if (model === null) return catalog.defaultModel ?? "默认";
   // 带档位的完整 ID（老数据）只显示模型，档位另外显示（agentEffortOf）
-  const bare = splitModelEffort(vendor, model, null).model!;
+  const bare = splitModelEffort(vendor, model, null, catalog).model!;
   const label = modelLabel(vendor, bare, catalog);
   return label === bare ? (VENDOR_SPECS[vendor].shortModelName?.(bare) ?? bare) : label;
 }
 
 /** 列表里显示的思考程度：另存的，或者老数据里写在模型 ID 末尾的（ID 优先）。 */
-export function agentEffortOf(vendor: AgentVendor, model: string | null, effort: string | null): string | null {
-  return splitModelEffort(vendor, model, effort).effort;
+export function agentEffortOf(vendor: AgentVendor, model: string | null, effort: string | null, catalog?: ModelCatalog | null): string | null {
+  return splitModelEffort(vendor, model, effort, catalog).effort;
 }
 
 export function effortLabel(effort: string | null): string {
@@ -541,10 +624,6 @@ export function readonlyNeedsSandboxMessage(vendor: AgentVendor): string {
 export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE = readonlyNeedsSandboxMessage("agy");
 
 // ---- AGY 数据目录与厂商专属路径（供 shared/paths.ts 与 shared/index.ts 共用，纯字符串不引 node 模块）----
-
-export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
-export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
-export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
 
 function defaultUserHome(): string {
   return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.HOME ?? "";
