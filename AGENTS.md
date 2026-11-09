@@ -12,6 +12,11 @@
 - 界面按 `docs/ui-standard.md`：间距、圆角、字号、颜色、控件尺寸、聚焦态、对齐都照它；标准没覆盖的先补进标准再改界面。
 - GitHub 操作一律用 `GH_TOKEN="$(gh auth token --user maodesikeng-boop)" gh ...`（本机 gh 默认账号不是仓库协作者）。
 - 本机只跑 `pnpm typecheck` 和本次改到的相关测试文件，全量测试交给 CI。
+- 写或审缓存、状态快照、会随时间变多的列表，必查 4 件事（守卫测试见 `src/web/selectors-cache.test.ts`、`src/daemon/store/db-cache.test.ts`、`src/web/sw-rules-cache.test.ts`）：
+  1. 失效：底层文件、配置、数据变了要能感知；退出、删除要清掉；失败或空结果只短暂记（像 `FETCHED_QUOTA_RETRY_MS`），不当正常结果缓存几分钟到几小时。
+  2. 上限：按跑了一个月（300 个已收工 Worker、3 万条消息、5 万步日志）算，内存里的 Map/数组、单次接口响应、给 agent 的命令输出都要有上限（数写进 `src/shared/limits.ts`），大响应要压缩。
+  3. 前端引用稳定：selector、hook 输入没变就返回同一个引用（`WeakMap` 按输入对象缓存），不让 `memo` 的子组件每次都重画。
+  4. 验证：用 pstack 的 `perf-issue`、`benchmark-checklist`、`blast-radius` 量出改前改后的数字，写进 PR。
 - rule a:你不做事，只汇报，拆任务，派任务。 派的模型思考程度你根据任务难度来决定(除非你直接回答，做事效率更高，或者用户意图是让你回答，用户的意图永远是优先的)
 - 整体工作流程 先讲清楚边界，tdd，测试，提pr，判断要不要审查
     -需要 审查，修改，回到判断要不要审查

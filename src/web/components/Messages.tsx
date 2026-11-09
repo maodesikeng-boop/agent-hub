@@ -275,7 +275,10 @@ function sameIdentity(a: AgentIdentity, b: AgentIdentity): boolean {
   return a === b || (a.name === b.name && a.avatarKey === b.avatarKey && a.neutral === b.neutral);
 }
 
-/** 对话里已经被后续修改（revertOf 指向它）撤销过的性格设定修改编号。 */
+/** 上一次算出的撤销清单：内容一样就还给这一份，来一条新消息不会让每一轮的 TurnView、MessageBubble（比的是引用）都重画。 */
+let lastReverted: ReadonlySet<PersonaChangeId> = EMPTY_REVERTED;
+
+/** 对话里已经被后续修改（revertOf 指向它）撤销过的性格设定修改编号。内容和上次一样时返回上次那个 Set。 */
 export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<PersonaChangeId> {
   let ids: Set<PersonaChangeId> | null = null;
   for (const m of messages) {
@@ -285,7 +288,10 @@ export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<Per
       ids.add(event.revertOf);
     }
   }
-  return ids ?? EMPTY_REVERTED;
+  if (ids === null) return EMPTY_REVERTED;
+  if (ids.size === lastReverted.size && [...ids].every((id) => lastReverted.has(id))) return lastReverted;
+  lastReverted = ids;
+  return ids;
 }
 
 /**

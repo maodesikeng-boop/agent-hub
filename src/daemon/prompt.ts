@@ -200,7 +200,7 @@ export function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VEND
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
   - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
-  - \`${HUB} worker list\`：查看所有 Worker 的状态、分支、目录和模型
+  - \`${HUB} worker list\`：查看进行中和最近收工的 Worker 的状态、分支、目录和模型（更早收工的用 worker search / show 查）
   - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
   - \`${HUB} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总
   - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）

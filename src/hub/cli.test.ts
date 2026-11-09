@@ -161,7 +161,7 @@ describe("hub cli", () => {
     });
 
     it("worker start --effort with a level not in the list is a usage error", async () => {
-      for (const level of ["bogus", "LOW", ""]) {
+      for (const level of ["turbo", "LOW", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
         expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max、ultra");

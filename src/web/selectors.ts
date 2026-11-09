@@ -75,8 +75,25 @@ function previewMessage(messages: Message[]): Message | null {
   return fallback;
 }
 
-/** 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。 */
+/** listConversations 的结果按 conversations 这个对象记着；pms、projects、folders 也是同一份才算命中。 */
+const conversationListCache = new WeakMap<
+  HubState["conversations"],
+  { pms: HubState["pms"]; projects: HubState["projects"]; folders: HubState["folders"]; entries: ConversationEntry[] }
+>();
+
+/**
+ * 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。
+ * 用到的几份数据都没变时返回上次那个数组（App 每次渲染都给别的设备调一次，通知也调）。
+ */
 export function listConversations(state: HubState): ConversationEntry[] {
+  const hit = conversationListCache.get(state.conversations);
+  if (hit !== undefined && hit.pms === state.pms && hit.projects === state.projects && hit.folders === state.folders) return hit.entries;
+  const entries = computeConversationList(state);
+  conversationListCache.set(state.conversations, { pms: state.pms, projects: state.projects, folders: state.folders, entries });
+  return entries;
+}
+
+function computeConversationList(state: HubState): ConversationEntry[] {
   return Object.values(state.conversations)
     .filter((view) => view.conversation.kind !== "worker")
     .map((view): ConversationEntry => {
@@ -363,8 +380,33 @@ function latestTones(state: HubState, pmId: PmId): Map<ConversationId, WorkerTon
   return tones;
 }
 
-/** 这个项目经理派的 Worker：进行中的在前，收工的在后；进行中的按派出的顺序（对话编号），收工的最近收工的在前（没有收工那一行的按对话编号倒序，排在有的后面）。 */
+/** workersOf 的结果：conversations → sessions → 项目经理编号。两份都没变才命中，换了的那份连同结果一起被回收。 */
+const workersCache = new WeakMap<HubState["conversations"], WeakMap<HubState["sessions"], Map<PmId, WorkerEntry[]>>>();
+
+/**
+ * 这个项目经理派的 Worker：进行中的在前，收工的在后；进行中的按派出的顺序（对话编号），收工的最近收工的在前（没有收工那一行的按对话编号倒序，排在有的后面）。
+ * conversations、sessions 都没变时返回上次那个数组。
+ */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
+  let bySessions = workersCache.get(state.conversations);
+  if (bySessions === undefined) {
+    bySessions = new WeakMap();
+    workersCache.set(state.conversations, bySessions);
+  }
+  let byPm = bySessions.get(state.sessions);
+  if (byPm === undefined) {
+    byPm = new Map();
+    bySessions.set(state.sessions, byPm);
+  }
+  let entries = byPm.get(pmId);
+  if (entries === undefined) {
+    entries = computeWorkers(state, pmId);
+    byPm.set(pmId, entries);
+  }
+  return entries;
+}
+
+function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
   const endedLines = endedByLine(state, pmId);
   const tones = latestTones(state, pmId);
   return Object.values(state.conversations)
@@ -490,13 +532,15 @@ function placeHandovers(all: Message[]): Message[] {
   const shown = all.filter((m) => !isHandoverTraffic(m));
   const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
   if (dividers.length === 0) return shown;
-  let rest = shown.filter((m) => !dividers.includes(m));
+  // 用 Set 判断“是不是分隔线”“是不是被压着的”：长对话（翻过页、几千条）里换代多次时，includes 每条都扫一遍会变成 O(N×H)
+  const isDivider = new Set(dividers);
+  let rest = shown.filter((m) => !isDivider.has(m));
   for (const divider of dividers) {
     const { sessionId, turnStartId } = divider.meta as { sessionId: number; turnStartId?: number };
     const after = turnStartId ?? divider.id;
-    const held = rest.filter((m) => m.id <= after && m.sessionId === sessionId);
-    rest = rest.filter((m) => !held.includes(m));
-    const at = rest.findIndex((m) => m.id > after && systemEventOf(m)?.event !== "session.renewed");
+    const held = new Set(rest.filter((m) => m.id <= after && m.sessionId === sessionId));
+    if (held.size > 0) rest = rest.filter((m) => !held.has(m));
+    const at = rest.findIndex((m) => m.id > after && !isDivider.has(m));
     rest.splice(at === -1 ? rest.length : at, 0, divider, ...held);
   }
   return rest;

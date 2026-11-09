@@ -1,13 +1,15 @@
 /// <reference lib="webworker" />
 // Service Worker（/sw.js，范围 /；联机 P4，第 6.1、6.2 节）：缓存网页外壳、显示推送、点通知打开对话。
 // 单独打包成 /sw.js（vite.config.ts），类型检查用 tsconfig.sw.json（webworker 的类型和 dom 的放不到一起）。
-import { PRECACHE, SHELL_CACHE, parsePushPayload, shellRequestKind, type OpenUrlMessage } from "./sw-rules.ts";
+import { PRECACHE, SHELL_CACHE, parsePushPayload, shellRequestKind, staleAssetUrls, type OpenUrlMessage } from "./sw-rules.ts";
 
 declare const self: ServiceWorkerGlobalScope;
 /** 产品名（shared/names.ts），vite.config.ts 打包时填进来。 */
 declare const __PRODUCT_NAME__: string;
 
 const ICON = "/icons/icon-192.png";
+/** 页面在缓存里的键。 */
+const PAGE_KEY = "/";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -40,6 +42,30 @@ async function networkFirst(request: Request, fallback: string | Request): Promi
   }
 }
 
+/** 删掉被换掉的旧打包文件、超出上限的最早缓存的打包文件（sw-rules.ts 的 staleAssetUrls）。 */
+async function pruneStaleAssets(cache: Cache, next: Response): Promise<void> {
+  const stale = staleAssetUrls((await cache.keys()).map((r) => r.url), await next.text());
+  await Promise.all(stale.map((url) => cache.delete(url)));
+}
+
+/** 页面：先走网络，存成 /，顺带清掉旧的打包文件；连不上用缓存的。 */
+async function pageNetworkFirst(event: FetchEvent): Promise<Response> {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const response = await fetch(event.request);
+    if (response.ok) {
+      const forPrune = response.clone();
+      await cache.put(PAGE_KEY, response.clone());
+      event.waitUntil(pruneStaleAssets(cache, forPrune).catch(() => {}));
+    }
+    return response;
+  } catch (err) {
+    const cached = await cache.match(PAGE_KEY);
+    if (cached) return cached;
+    throw err;
+  }
+}
+
 async function cacheFirst(request: Request): Promise<Response> {
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(request);
@@ -54,7 +80,7 @@ self.addEventListener("fetch", (event) => {
   const kind = shellRequestKind(request.method, request.url, self.location.origin, request.mode);
   if (kind === null) return;
   // 页面只有一个（/），带不带查询参数都存成 /
-  if (kind === "page") event.respondWith(networkFirst(request, "/"));
+  if (kind === "page") event.respondWith(pageNetworkFirst(event));
   else if (kind === "asset") event.respondWith(cacheFirst(request));
   else event.respondWith(networkFirst(request, request));
 });

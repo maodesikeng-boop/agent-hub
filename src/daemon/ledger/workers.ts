@@ -32,7 +32,7 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS } from "../../shared/limits.ts";
+import { GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
@@ -513,9 +513,17 @@ export function createLedgerWorkers(
     }
   };
 
+  /**
+   * 进行中的全列；已收工的只列最近收工的 WORKER_LIST_RECENT_ENDED 个（派了几百个以后全列会把几十 KB 塞进项目经理的上下文），更早的写一句怎么查。
+   * “最近收工”按收工时间（workers.updated_at：收工时写，收工后不再改），同一时刻编号大的算后收工；不按编号，长任务的小编号刚收工也要列出来。
+   * 选出来以后和进行中的一起按编号排。
+   */
   const list = (caller: AgentSessionRow & { pmId: PmId }): HubResult<"worker.list"> => {
-    const rows = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
-    if (rows.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
+    const all = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
+    if (all.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
+    const endedLatestFirst = all.filter((w) => w.status === "ended").sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);
+    const hidden = new Set(endedLatestFirst.slice(WORKER_LIST_RECENT_ENDED));
+    const rows = hidden.size === 0 ? all : all.filter((w) => !hidden.has(w));
     const lines = rows.map((w) => {
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
       const session = workerSession(w);
@@ -525,6 +533,9 @@ export function createLedgerWorkers(
       const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
       return `#${w.id} ${w.title} · ${state} · ${where} · ${setting}${w.readonly === 1 ? " · 只读" : ""}`;
     });
+    if (hidden.size > 0) {
+      lines.push(`（另有 ${hidden.size} 个更早收工的 Worker 没列出：用 \`${HUB_COMMAND} worker search <关键词>\` 搜，或 \`${HUB_COMMAND} worker show <编号>\` 看）`);
+    }
     return { text: `你派出的 Worker：\n${lines.join("\n")}`, data: { workers: rows.map(toWorkerRecord) } };
   };
 

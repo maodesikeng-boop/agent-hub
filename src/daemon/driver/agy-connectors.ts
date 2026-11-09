@@ -4,12 +4,12 @@
 //   ~/.gemini/antigravity-cli/mcp/<服务器>/ 里有缓存、但配置里找不到的服务器（插件带的）问不到，记为不可用（整个拒）；
 // - 问不到清单的（起不来、超时、要 OAuth 认证）一律当不可用：只读 Worker 里拒，不放行未知的东西；
 // - 起 stdio 服务器问清单也是在跑第三方代码：必须和只读 Worker 同样包在外层只读沙箱里、环境变量用 Worker 那份（去掉 HUB_*）；没有 OS 沙箱就不问（该服务器整个当不可用）；
-// - 不在启动路径上做重活：结果按配置内容缓存 AGY_CONNECTOR_CACHE_MS，同一时刻多个会话共用一次查询；每个服务器最多等 AGY_CONNECTOR_LIST_TIMEOUT_MS。
+// - 不在启动路径上做重活：结果按配置内容缓存 AGY_CONNECTOR_CACHE_MS（有服务器没问到的只记 AGY_CONNECTOR_RETRY_MS），同一时刻多个会话共用一次查询；每个服务器最多等 AGY_CONNECTOR_LIST_TIMEOUT_MS。
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
+import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../../shared/paths.ts";
 import { buildChildEnv } from "./protocol.ts";
 import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly-agy.ts";
@@ -245,6 +245,8 @@ export interface AgyConnectorResolverOptions {
   launcher?: McpProbeLauncher;
   timeoutMs?: number;
   cacheMs?: number;
+  /** 有服务器没问到时清单记多久（默认 AGY_CONNECTOR_RETRY_MS，不超过 cacheMs）。 */
+  retryMs?: number;
   now?: () => number;
   readServers?: (homeDir: string) => Record<string, McpServerSpec>;
   cachedServerNames?: (homeDir: string) => string[];
@@ -276,24 +278,32 @@ export async function buildAgyConnectorCatalog(
 
 /**
  * 给驱动用的清单解析器：每次调用返回现在的清单。结果按配置内容缓存（配置变了、过期了才重新问），
- * 并发的调用共用同一次查询。
+ * 并发的调用共用同一次查询。有配置里的服务器没问到（超时、报错）时只记 retryMs：偶发失败不会让那个服务器被整个拒上 cacheMs。
  */
 export function createAgyConnectorResolver(options: AgyConnectorResolverOptions = {}): () => Promise<AgyConnectorCatalog> {
   const homeDir = options.homeDir ?? homedir();
   const listTools = options.listTools ?? listMcpTools;
   const timeoutMs = options.timeoutMs ?? AGY_CONNECTOR_LIST_TIMEOUT_MS;
   const cacheMs = options.cacheMs ?? AGY_CONNECTOR_CACHE_MS;
+  const retryMs = Math.min(options.retryMs ?? AGY_CONNECTOR_RETRY_MS, cacheMs);
   const now = options.now ?? Date.now;
   const readServers = options.readServers ?? ((h) => readAgyMcpServers(h));
   const cachedNames = options.cachedServerNames ?? ((h) => readAgyCachedMcpServerNames(h));
-  let cached: { key: string; at: number; value: Promise<AgyConnectorCatalog> } | null = null;
+  let cached: { key: string; at: number; ttl: number; value: Promise<AgyConnectorCatalog> } | null = null;
   return () => {
     const servers = readServers(homeDir);
     const names = cachedNames(homeDir);
     const key = JSON.stringify([servers, names]);
-    if (cached !== null && cached.key === key && now() - cached.at < cacheMs) return cached.value;
+    if (cached !== null && cached.key === key && now() - cached.at < cached.ttl) return cached.value;
     const value = buildAgyConnectorCatalog(servers, names, listTools, timeoutMs, options.launcher);
-    cached = { key, at: now(), value };
+    const entry = { key, at: now(), ttl: cacheMs, value };
+    cached = entry;
+    void value.then(
+      (catalog) => {
+        if (catalog.unlistable.some((name) => Object.hasOwn(servers, name))) entry.ttl = retryMs;
+      },
+      () => {},
+    );
     return value;
   };
 }

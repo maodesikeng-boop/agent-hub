@@ -141,7 +141,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "list",
     cli: "worker list",
-    usage: `  ${hub} worker list                                         我派出去的 Worker：状态、在哪干活、模型和思考程度`,
+    usage: `  ${hub} worker list                                         我派出去的 Worker（进行中的和最近收工的）：状态、在哪干活、模型和思考程度`,
   },
   {
     command: "worker.show",
