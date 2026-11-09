@@ -15,6 +15,7 @@ import {
   type ComposerCommand,
   type VendorAvailability,
 } from "../../shared/index.ts";
+import { vendorCatalogFingerprint } from "../../shared/paths.ts";
 import {
   parseCodexModels,
   queryCodexCatalog,
@@ -207,5 +208,6 @@ export function createCodexCatalogSource(options: VendorCatalogSourceOptions): V
     query: (signal) => queryCodexCatalog({ codexPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
     confirm: async () => codexAuthFileAvailability(options.env ?? process.env, options.cwd),
     installed: options.installed,
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("codex", options.path, (options.env ?? process.env).PATH, options.cwd)),
   };
 }

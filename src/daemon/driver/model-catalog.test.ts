@@ -113,10 +113,11 @@ describe("parseInitializeModels：claude 报的模型名单", () => {
     } satisfies ModelCatalog);
   });
 
-  it("“默认”实际用的模型：default 那项的 resolvedModel 对上名单里哪个就用它的名字；对不上用 resolvedModel 原样；没有 resolvedModel 是 null", () => {
+  it("“默认”实际用的模型：default 那项的 resolvedModel 对上名单里哪个就用它的名字；若 default 未单列思考程度则沿用 resolvedModel 对应模型的思考程度", () => {
     const def = (resolvedModel?: string) => ({ value: "default", ...(resolvedModel ? { resolvedModel } : {}) });
-    const opus = { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5" };
+    const opus = { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportedEffortLevels: ["low", "high", "max"] };
     expect(parseInitializeModels([def("claude-opus-5-5"), opus])?.defaultModel).toBe("Opus 5.5");
+    expect(parseInitializeModels([def("claude-opus-5-5"), opus])?.defaultEfforts).toEqual(["low", "high", "max"]);
     expect(parseInitializeModels([opus, def("claude-opus-5-5")])?.defaultModel).toBe("Opus 5.5");
     expect(parseInitializeModels([def("claude-sonnet-9"), opus])?.defaultModel).toBe("claude-sonnet-9");
     expect(parseInitializeModels([def(), opus])?.defaultModel).toBeNull();
@@ -217,12 +218,14 @@ describe("parseAgyModels：agy 报的模型名单（按 Antigravity 软件的做
     ]);
   });
 
-  it("currently_selected 的那项记成默认模型，名字不带档位", () => {
+  it("currently_selected 的那项记成默认模型（名字不带档位），并把该模型支持的档位赋给 defaultEfforts；后续档位带的 description 能补上", () => {
     const catalog = parseAgyModels([
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
-      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", currently_selected: true },
+      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", description: "Balanced reasoning", currently_selected: true },
     ]);
     expect(catalog?.defaultModel).toBe("Gemini 4 Argon");
+    expect(catalog?.defaultEfforts).toEqual(["low", "medium"]);
+    expect(catalog?.models[0]?.description).toBe("Balanced reasoning");
   });
 
   it("过滤非法模型名和重复项；无效或空返回 null", () => {
@@ -240,13 +243,14 @@ describe("parseAgyModels：agy 报的模型名单（按 Antigravity 软件的做
 });
 
 describe("parseCodexModels：codex 报的模型名单", () => {
-  it("跳过 hidden === true，提取 supportedReasoningEfforts 和 isDefault", () => {
+  it("跳过 hidden === true，提取 supportedReasoningEfforts（含 max、ultra）和 isDefault（含 defaultEfforts）", () => {
     const catalog = parseCodexModels({ data: REAL_CODEX_MODELS });
     expect(catalog).toEqual({
       ...bundledModelCatalog("codex"),
       source: "vendor",
       defaultModel: "GPT-5.4",
       defaultModelId: "gpt-5.4",
+      defaultEfforts: ["low", "medium", "high", "xhigh"],
       models: [
         {
           id: "gpt-5.4",
@@ -264,8 +268,47 @@ describe("parseCodexModels：codex 报的模型名单", () => {
     } satisfies ModelCatalog);
   });
 
+  it("兼容 models_cache.json 原始字段（slug、display_name、visibility === 'hide'、supported_reasoning_levels）并保留 max/ultra 档位", () => {
+    const catalog = parseCodexModels({
+      models: [
+        {
+          slug: "gpt-6.1-sol",
+          display_name: "GPT-6.1-Sol",
+          description: "Flagship model",
+          visibility: "list",
+          isDefault: true,
+          supported_reasoning_levels: [
+            { effort: "low" },
+            { effort: "medium" },
+            { effort: "high" },
+            { effort: "xhigh" },
+            { effort: "max" },
+            { effort: "ultra" },
+          ],
+        },
+        {
+          slug: "gpt-hidden",
+          display_name: "Hidden",
+          visibility: "hide",
+        },
+      ],
+    });
+    expect(catalog?.defaultModel).toBe("GPT-6.1-Sol");
+    expect(catalog?.defaultModelId).toBe("gpt-6.1-sol");
+    expect(catalog?.defaultEfforts).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(catalog?.models).toEqual([
+      {
+        id: "gpt-6.1-sol",
+        label: "GPT-6.1-Sol",
+        description: "Flagship model",
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    ]);
+  });
+
   it("全部 hidden 或无效时返回 null", () => {
     expect(parseCodexModels([{ id: "gpt-5.4", hidden: true }])).toBeNull();
+    expect(parseCodexModels([{ slug: "gpt-5.4", visibility: "hide" }])).toBeNull();
     expect(parseCodexModels(null)).toBeNull();
     expect(parseCodexModels({})).toBeNull();
   });
@@ -703,6 +746,45 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(codexOf(second).source).toBe("vendor");
     expect(codexOf(second).defaultModel).toBe("GPT-5.4");
     expect(catalogs.current("codex")?.defaultModel).toBe("GPT-5.4");
+  });
+
+  it("fingerprint 变化（本机凭据或 models_cache.json 更新）：不必等 6 小时，下次 list() 立即重问并回新模型", async () => {
+    const now = 3_000_000;
+    let fp = "v1";
+    let calls = 0;
+    const answers = [
+      [{ id: "gpt-6-luna", displayName: "GPT-6-Luna", isDefault: true, supportedReasoningEfforts: ["low", "high", "max"] }],
+      [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", isDefault: true, supportedReasoningEfforts: ["low", "high", "max", "ultra"] }],
+    ];
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: parseCodexModels,
+          fingerprint: () => fp,
+          query: async () => {
+            calls++;
+            return answers.shift();
+          },
+        },
+      },
+      now: () => now,
+    });
+
+    const first = codexOf(await catalogs.list());
+    expect(first.models.map((m) => m.id)).toEqual(["gpt-6-luna"]);
+    expect(first.defaultEfforts).toEqual(["low", "high", "max"]);
+    expect(calls).toBe(1);
+
+    // 指纹没变、时间没过：直接给缓存，不重问
+    await catalogs.list();
+    expect(calls).toBe(1);
+
+    // 本机 ~/.codex/models_cache.json 或凭据更新导致指纹变化：即使刚过去 0 毫秒也立即重问并拿到新列表
+    fp = "v2";
+    const second = codexOf(await catalogs.list());
+    expect(calls).toBe(2);
+    expect(second.models.map((m) => m.id)).toEqual(["gpt-6.1-sol"]);
+    expect(second.defaultEfforts).toEqual(["low", "high", "max", "ultra"]);
   });
 });
 

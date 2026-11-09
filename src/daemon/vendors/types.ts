@@ -65,5 +65,7 @@ export interface VendorCatalogSourceOptions {
   cwd: string;
   /** 装没装（findExecutable，只查文件）。 */
   installed: () => boolean;
+  /** 可执行文件及本地凭据/模型缓存文件的轻量 stat 指纹。 */
+  fingerprint?: () => string;
   env?: NodeJS.ProcessEnv;
 }

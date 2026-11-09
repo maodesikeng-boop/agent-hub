@@ -95,14 +95,21 @@ describe("厂商清单", () => {
     expect(codex.readonlyMode).toBe("driver");
     expect(codex.explicitDefaultModel).toBe(true);
     expect(codex.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
+    const fullEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
+    const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
     expect(codex.models).toEqual([
-      { id: "gpt-6-luna", label: "GPT-6-Luna" },
-      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
-      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
+      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: fullEfforts },
+      { id: "gpt-6-astra", label: "GPT-6-Astra", efforts: fullEfforts },
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: fullEfforts },
+      { id: "gpt-6-sol", label: "GPT-6-Sol", efforts: fullEfforts },
+      { id: "gpt-6-luna", label: "GPT-6-Luna", efforts: maxEfforts },
+      { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", efforts: fullEfforts },
+      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", efforts: fullEfforts },
+      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", efforts: maxEfforts },
     ]);
     expect(codex.customModel).toBe(true);
-    expect(codex.customModelExample).toBe("如 gpt-6-luna");
-    expect(codex.efforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(codex.customModelExample).toBe("如 gpt-6.1-sol");
+    expect(codex.efforts).toEqual(fullEfforts);
     expect(codex.modelFlag).toBe("--model");
     expect(codex.effortFlag).toBe("-c");
     expect(codex.quota).toEqual({ name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] });
@@ -143,18 +150,21 @@ describe("厂商清单", () => {
 });
 
 describe("VENDOR_HOME_PATHS：厂商的凭据和配置目录", () => {
-  it("每家都有，且只读禁读的文件都在它自己的目录里", () => {
+  it("每家都有，且只读禁读的文件与缓存指纹监听文件都在它自己的目录里", () => {
     expect(Object.keys(VENDOR_HOME_PATHS).sort()).toEqual([...AGENT_VENDORS].sort());
     expect(VENDOR_HOME_PATHS.claude.dirs).toEqual(expect.arrayContaining([".claude", ".claude.json"]));
     expect(VENDOR_HOME_PATHS.claude.readonlySecrets).toContain(".claude.json");
     expect(VENDOR_HOME_PATHS.codex.readonlySecrets).toContain(".codex/.credentials.json");
+    expect(VENDOR_HOME_PATHS.codex.catalogWatchPaths).toContain(".codex/models_cache.json");
     expect(VENDOR_HOME_PATHS.agy.readonlySecrets).toContain(".gemini/mcp-oauth-tokens.json");
     expect(VENDOR_HOME_PATHS.codex.dirs).toContain(".codex");
     expect(VENDOR_HOME_PATHS.agy.dirs).toContain(".gemini");
     for (const vendor of AGENT_VENDORS) {
-      const { dirs, readonlySecrets } = VENDOR_HOME_PATHS[vendor];
+      const { dirs, readonlySecrets, catalogWatchPaths } = VENDOR_HOME_PATHS[vendor];
       expect(dirs.length, vendor).toBeGreaterThan(0);
+      expect(catalogWatchPaths.length, vendor).toBeGreaterThan(0);
       for (const f of readonlySecrets) expect(dirs.some((d) => f === d || f.startsWith(`${d}/`)), `${vendor}:${f}`).toBe(true);
+      for (const f of catalogWatchPaths) expect(dirs.some((d) => f === d || f.startsWith(`${d}/`)), `${vendor}:watch:${f}`).toBe(true);
     }
   });
 });
@@ -176,7 +186,7 @@ describe("取值校验", () => {
     }
   });
 
-  it("思考程度：null（默认）和各厂商清单里的档位行，别的不行", () => {
+  it("思考程度：null（默认）、各厂商清单里的档位以及动态 ModelCatalog 报出的新档位行，别的不行", () => {
     for (const e of [null, "low", "medium", "high", "xhigh", "max"]) {
       expect(checkEffort("claude", e)).toBeNull();
     }
@@ -186,17 +196,21 @@ describe("取值校验", () => {
       expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
     }
     for (const e of ["xhigh", "max"]) expect(checkEffort("agy", e)).toBe("思考程度只能是 low、medium、high");
-    for (const e of [null, "low", "medium", "high", "xhigh"]) {
+    for (const e of [null, "low", "medium", "high", "xhigh", "max", "ultra"]) {
       expect(checkEffort("codex", e)).toBeNull();
     }
-    expect(checkEffort("codex", "max")).toBe("思考程度只能是 low、medium、high、xhigh");
+    expect(checkEffort("codex", "hyper")).toBe("思考程度只能是 low、medium、high、xhigh、max、ultra");
+    // 若动态 ModelCatalog 返回了厂商新增的档位，不应被静态列表误拦
+    expect(checkEffort("claude", "ultra", catalog)).toBeNull();
   });
 
-  it("checkAgentSetting：厂商不对、模型不对、思考程度不对各报各的", () => {
+  it("checkAgentSetting：厂商不对、模型不对、思考程度不对各报各的；支持传入动态 ModelCatalog", () => {
     expect(checkAgentSetting({ vendor: "claude", model: "haiku", effort: "low" })).toBeNull();
     expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toBeNull();
-    expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "xhigh" })).toBeNull();
-    expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "max" })).toBe("思考程度只能是 low、medium、high、xhigh");
+    expect(checkAgentSetting({ vendor: "codex", model: "gpt-6.1-sol", effort: "ultra" })).toBeNull();
+    expect(checkAgentSetting({ vendor: "codex", model: "gpt-6-luna", effort: "max" })).toBeNull();
+    expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "hyper" })).toBe("思考程度只能是 low、medium、high、xhigh、max、ultra");
+    expect(checkAgentSetting({ vendor: "claude", model: "claude-opus-4-6", effort: "ultra" }, catalog)).toBeNull();
     expect(checkAgentSetting({ vendor: "unknown", model: null, effort: null })).toBe("厂商只能是 claude、agy、codex");
     expect(checkAgentSetting({ vendor: "claude", model: "a b", effort: null })).toMatch(/模型/);
     expect(checkAgentSetting({ vendor: "claude", model: null, effort: "huge" })).toMatch(/思考程度/);
@@ -282,8 +296,8 @@ describe("模型名单", () => {
     expect(effortsFor(other, null)).toEqual(["low", "high"]);
   });
 
-  it("effortsFor：名单里写了按它（只留通用档位里有的），没写或不在名单里用通用档位；默认看 defaultEfforts", () => {
-    expect(effortsFor(catalog, "claude-opus-4-6")).toEqual(["low", "high", "max"]);
+  it("effortsFor：名单里写了按它（按通用档位排序，且不截断模型动态返回的新档位），没写或不在名单里用通用档位；默认看 defaultEfforts", () => {
+    expect(effortsFor(catalog, "claude-opus-4-6")).toEqual(["low", "high", "max", "ultra"]);
     expect(effortsFor(catalog, "claude-haiku-4-5")).toEqual(VENDOR_SPECS.claude.efforts);
     expect(effortsFor(catalog, "old")).toEqual([]);
     expect(effortsFor(catalog, "not-listed")).toEqual(VENDOR_SPECS.claude.efforts);
@@ -299,6 +313,8 @@ describe("modelShortLabel 与 shortModelName", () => {
     expect(modelShortLabel("claude", "claude-sonnet-5-5")).toBe("Sonnet 5.5");
     expect(modelShortLabel("claude", "claude-opus-4-1-20250805")).toBe("Opus 4.1");
     expect(modelShortLabel("claude", "claude-sonnet-5-5[1m]")).toBe("Sonnet 5.5 1M");
+    expect(modelShortLabel("claude", "claude-opus-5-5-latest[2m]")).toBe("Opus 5.5 2M");
+    expect(modelShortLabel("claude", "claude-3-5-sonnet-20241022")).toBe("Sonnet 3.5");
     expect(modelShortLabel("claude", "claude-haiku-5")).toBe("Haiku 5");
     expect(modelShortLabel("claude", "us.anthropic.claude-haiku-5-5:0")).toBe("us.anthropic.claude-haiku-5-5:0");
     expect(modelShortLabel("claude", null, { ...bundledModelCatalog("claude"), defaultModel: "Opus 5.5" })).toBe("Opus 5.5");
@@ -307,7 +323,9 @@ describe("modelShortLabel 与 shortModelName", () => {
   it("agy 與 codex 的 shortModelName", () => {
     expect(VENDOR_SPECS.agy.shortModelName?.("gemini-4-argon")).toBe("Gemini 4 Argon");
     expect(VENDOR_SPECS.agy.shortModelName?.("gemini-3.8-flash")).toBe("Gemini 3.8 Flash");
+    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-2.5-flash-lite")).toBe("Gemini 2.5 Flash Lite");
     expect(VENDOR_SPECS.agy.shortModelName?.("claude-opus-5-5")).toBe("Claude Opus 5.5");
+    expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-5-5[1m]")).toBe("Claude Sonnet 5.5 1M");
     expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-5-5")).toBe("Claude Sonnet 5.5");
     expect(VENDOR_SPECS.agy.shortModelName?.("gpt-oss-120b")).toBe("GPT-OSS 120B");
     expect(VENDOR_SPECS.agy.shortModelName?.("custom-unknown-model")).toBeNull();
@@ -315,6 +333,8 @@ describe("modelShortLabel 与 shortModelName", () => {
     expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.4")).toBe("GPT-5.4");
     expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
     expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
+    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.3-codex-spark")).toBe("GPT-5.3 Codex Spark");
+    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-6.1-sol")).toBe("GPT-6.1 Sol");
     expect(VENDOR_SPECS.codex.shortModelName?.("custom-unknown-model")).toBeNull();
   });
 });

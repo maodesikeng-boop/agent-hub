@@ -13,7 +13,7 @@ import {
   type ModelCatalog,
 } from "../../shared/index.ts";
 import type { ErrorLike } from "../format.ts";
-import { useModelCatalog, useVendorChoices, vendorOptionLabel } from "../models.tsx";
+import { useModelCatalog, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
 import { Input, Select } from "../ui/input.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
@@ -90,6 +90,7 @@ export function AgentRows({
 }) {
   const { options: vendors, refreshUnusable } = useVendorChoices(value.vendor);
   const catalog = useModelCatalog(value.vendor);
+  const revalidateModels = useRevalidateModels();
   const result = settingOf(value);
   // 刚选了“自定义”：光标放进模型名输入框（打开页面时不抢焦点）
   const customRef = useRef<HTMLInputElement>(null);
@@ -146,6 +147,8 @@ export function AgentRows({
             variant="plain"
             value={choice}
             disabled={disabled}
+            onPointerDown={revalidateModels}
+            onFocus={revalidateModels}
             onChange={(e) => {
               onChange(withModel(value, e.target.value, catalog), "model");
               if (e.target.value === CUSTOM_MODEL) setFocusCustom(true);

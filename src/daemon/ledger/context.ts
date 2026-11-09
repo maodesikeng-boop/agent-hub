@@ -63,6 +63,8 @@ export interface LedgerContext {
   write<T>(fn: (p: Pending) => T): T;
   enqueue(p: Pending, action: NewAction): void;
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
+  /** 现在缓存着的模型名单（ModelCatalogs.current），还没问到是 null。 */
+  modelCatalog(vendor: AgentVendor): ModelCatalog | null;
   /** 系统消息、hub 输出里的模型名：用缓存着的模型名单里的名字（“Opus 4.6”），没有名单用打包的，都没有原样。 */
   modelLabel(vendor: AgentVendor, model: string | null): string;
   /** 和网页右栏的 Worker 行同一个写法（vendors.ts 的 modelShortLabel）：Opus 5.5、Sonnet 5.5；默认写厂商说的实际模型。hub worker show 用。 */
@@ -170,15 +172,16 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     p.changes.push({ type: "health.updated", data: { health: toHealth(updated) } });
   };
 
+  const modelCatalog = (vendor: AgentVendor) => options.modelCatalog?.(vendor) ?? null;
   const label = (vendor: AgentVendor, model: string | null) => {
-    const catalog = options.modelCatalog?.(vendor) ?? null;
+    const catalog = modelCatalog(vendor);
     return catalog === null ? modelLabel(vendor, model) : modelLabel(vendor, model, catalog);
   };
   const shortLabel = (vendor: AgentVendor, model: string | null) => {
-    const catalog = options.modelCatalog?.(vendor) ?? null;
+    const catalog = modelCatalog(vendor);
     return catalog === null ? modelShortLabel(vendor, model) : modelShortLabel(vendor, model, catalog);
   };
   const commandBlockReason = (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string) =>
     composerBaseOf(session.vendor)?.blockReason(text, options.knownCommands?.(session) ?? null) ?? null;
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
+  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelCatalog, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
 }

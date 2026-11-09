@@ -1,5 +1,6 @@
 // Claude Code 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节）。单独一个文件：claude.ts 给账本用，
 // 不能引入起进程的代码（claude.test.ts 查），起进程问名单的在这里。
+import { vendorCatalogFingerprint } from "../../shared/paths.ts";
 import { parseInitializeModels, queryClaudeAuthStatus, queryClaudeInitialize, type VendorCatalogSource } from "../driver/model-catalog.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "./types.ts";
 
@@ -22,5 +23,6 @@ export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): 
     query: (signal) => queryClaudeInitialize({ ...query, signal }),
     confirm: (signal) => queryClaudeAuthStatus({ ...query, signal }),
     installed: options.installed,
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("claude", options.path, (options.env ?? process.env).PATH, options.cwd)),
   };
 }

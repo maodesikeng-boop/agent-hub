@@ -69,39 +69,41 @@ function optionalSetting(value: unknown, what: string): string | null {
 }
 
 /** 建项目经理：厂商、模型、思考程度全查。不对抛 invalid，原因来自厂商清单。 */
-function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }): AgentSetting {
+function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }, catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>): AgentSetting {
   const setting = { vendor: raw.vendor, model: optionalSetting(raw.model, "模型"), effort: optionalSetting(raw.effort, "思考程度") };
-  const problem = checkAgentSetting(setting);
+  const catalog = isAgentVendor(setting.vendor) ? (catalogOf?.(setting.vendor) ?? null) : null;
+  const problem = checkAgentSetting(setting, catalog);
   if (problem !== null) throw fail("invalid", problem);
   const { vendor, model, effort } = setting as AgentSetting;
-  return { vendor, ...splitModelEffort(vendor, model, effort) };
+  return { vendor, ...splitModelEffort(vendor, model, effort, catalog) };
 }
 
 /**
  * 资料页改：只查这次给了的那几项，没给的沿用现在的值、不查。老库里可能有不合规的模型名（0006 之前只限长度），
  * 不能因为它改不了性格设定、工作方式、思考程度。
  */
-function nextAgent(current: AgentSetting, input: EditPersonaInput): AgentSetting {
+function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>): AgentSetting {
   if (input.vendor !== undefined && !isAgentVendor(input.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
   const vendor = input.vendor ?? current.vendor;
+  const catalog = catalogOf?.(vendor) ?? null;
   // 换了厂商时模型和思考程度默认取 null（不能沿用旧厂商的）；没换厂商且是 agy 老数据（完整 ID）时先拆成 模型 + 思考程度再改
   const touched = input.model !== undefined || input.effort !== undefined;
   const from =
     vendor !== current.vendor
       ? { model: null, effort: null }
       : touched
-        ? splitModelEffort(vendor, current.model, current.effort)
+        ? splitModelEffort(vendor, current.model, current.effort, catalog)
         : { model: current.model, effort: current.effort };
   const model = input.model === undefined ? from.model : optionalSetting(input.model, "模型");
   const effort = input.effort === undefined ? from.effort : optionalSetting(input.effort, "思考程度");
   const problem =
     (input.model !== undefined ? checkModel(vendor, model) : null) ??
-    (input.effort !== undefined ? checkEffort(vendor, effort) : null) ??
+    (input.effort !== undefined ? checkEffort(vendor, effort, catalog) : null) ??
     // 这次明确给了完整 ID 又明确给了对不上的思考程度才报错；只改其中一项时沿用的那项让位给改的
-    (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort) : null);
+    (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort, catalog) : null);
   if (problem !== null) throw fail("invalid", problem);
   return input.model !== undefined && input.effort === undefined
-    ? { vendor, ...splitModelEffort(vendor, model, effort) }
+    ? { vendor, ...splitModelEffort(vendor, model, effort, catalog) }
     : { vendor, model, effort };
 }
 export type LedgerPersona = ReturnType<typeof createLedgerPersona>;
@@ -355,7 +357,7 @@ export function createLedgerPersona(
     if (input.text !== undefined) validPersonaText(input.text);
     const mode = input.mode === undefined ? (pm.mode as PmMode) : validMode(input.mode);
     const current = effectiveAgent(pm);
-    const agent = touchesAgent ? nextAgent(current, input) : current;
+    const agent = touchesAgent ? nextAgent(current, input, ctx.modelCatalog) : current;
     const reason = input.reason?.trim() || null;
     if (reason !== null && [...reason].length > MAX_REASON_CHARS) throw fail("invalid", `理由最多 ${MAX_REASON_CHARS} 个字`);
     return editPersonaIn(p, pm, { text: input.text ?? pm.persona ?? "", mode, agent, reason }, editor);
@@ -426,7 +428,7 @@ export function createLedgerPersona(
     const name = validName(input.name, "项目经理");
     const mode = validMode(input.mode);
     validPersonaText(input.persona);
-    const agent = validAgent({ vendor: input.vendor ?? DEFAULT_AGENT_VENDOR, model: input.defaultModel, effort: input.effort });
+    const agent = validAgent({ vendor: input.vendor ?? DEFAULT_AGENT_VENDOR, model: input.defaultModel, effort: input.effort }, ctx.modelCatalog);
     const dup = db.get<{ id: number; archived_at: number | null }>(
       "SELECT p.id, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.name = ?",
       name,
