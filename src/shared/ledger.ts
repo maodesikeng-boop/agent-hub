@@ -434,6 +434,11 @@ export interface Ledger extends LedgerHandoverWork {
    */
   hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>, context?: HubCallContext): HubResult<C>;
   /**
+   * agent 接口在异步准备（如 models.list、探 git）之前调（只读）：这个会话的角色；会话不存在或数据不完整 → null。
+   * 用来在触发外部进程探测前先按 hubCommandAllowed 判断权限，无权限的直接跳过探测交由 hubCall 报 forbidden。
+   */
+  sessionRole(sessionId: SessionId): AgentRole | null;
+  /**
    * agent 接口在 worker.start 之前调（只读）：要探 git 的那个文件夹，就是这个会话所属项目经理的项目主文件夹。
    * 不是项目经理的会话、还没有项目 → null（不用探，hubCall 自己会报 forbidden、invalid）。
    */

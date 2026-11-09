@@ -454,6 +454,27 @@ describe("agent api over inject", () => {
       expect(ledger.contexts[0]?.modelCatalogs).toHaveLength(3);
       expect(ledger.contexts[1]?.modelCatalogs?.map((c) => c.vendor)).toEqual(["claude"]);
     });
+
+    it("Worker 调用 models（带 refresh: true）被 403 forbidden 拒绝，且不触发 models.list 探测", async () => {
+      const listCalls: unknown[] = [];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        models: {
+          list: async (opts) => {
+            listCalls.push(opts);
+            return [];
+          },
+        },
+      });
+      await app.ready();
+      ledger.sessionRoles.set(22, "worker");
+      const res = await call("models", { refresh: true }, tokenB);
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ ok: false, code: "forbidden", message: expect.any(String) });
+      expect(listCalls).toHaveLength(0);
+    });
   });
 
   describe("request body", () => {

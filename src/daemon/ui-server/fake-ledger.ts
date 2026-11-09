@@ -372,6 +372,7 @@ export class FakeLedger {
         this.scheduleCalls.push({ call: "remove", args: [id] });
       },
       hubCall: unused("hubCall"),
+      sessionRole: unused("sessionRole"),
       workerStartFolder: unused("workerStartFolder"),
       workerPrTarget: unused("workerPrTarget"),
       workerTranscriptTarget: unused("workerTranscriptTarget"),

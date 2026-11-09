@@ -2185,6 +2185,9 @@ describe("查看各厂商可用的模型（hub models）", () => {
 
   it("不认识的 --vendor → invalid；Worker 调用 → forbidden", () => {
     const worker = start({ noWorktree: true }).data.worker;
+    expect(ledger.sessionRole(lin.sessionId)).toBe("pm");
+    expect(ledger.sessionRole(workerSessionId(worker.id))).toBe("worker");
+    expect(ledger.sessionRole(999_999)).toBeNull();
     expectLedgerError(() => hub(lin.sessionId, "models", { vendor: "gemini" as never }), "invalid", /厂商只能是/);
     expectLedgerError(() => hub(workerSessionId(worker.id), "models", {}), "forbidden");
   });
