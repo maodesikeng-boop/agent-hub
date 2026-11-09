@@ -207,7 +207,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总
   - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）
   - \`${HUB} worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
-  - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；有明确选项时可用 \`--option\` 让用户直接点选）
+  - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；要给用户可点击的单选选项时传 \`--option <选项>\`（至少 2 个），或每项以 \`A. \`/\`B. \` 开头；只是列出几项配置请用户确认时直接写普通列表，不会变成选项）
 - **定时任务**
   - \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）
   - \`${HUB} schedule list\` / \`${HUB} schedule pause <编号>\` / \`${HUB} schedule resume <编号>\` / \`${HUB} schedule remove <编号>\`：查看、暂停、恢复、删除定时任务`;

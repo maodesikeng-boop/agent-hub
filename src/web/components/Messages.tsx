@@ -151,7 +151,9 @@ function AskCard({
               <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
                 {String.fromCharCode(65 + i)}
               </span>
-              <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere]">{opt}</span>
+              <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] [&_p]:m-0">
+                <Markdown text={opt} files={files} messageId={messageId} />
+              </span>
             </button>
           );
         })}
