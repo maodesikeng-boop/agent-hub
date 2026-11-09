@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENTS_TOO_MANY_MESSAGE, MAX_ATTACHMENTS_PER_MESSAGE, MAX_UPLOAD_BYTES, UPLOAD_CLIENT_CONCURRENCY } from "../shared/index.ts";
-import { formatBytes, stageFiles, uploadFiles } from "./upload.ts";
+import { fakeDropData, fakeFileEntry, fakeFolderEntry } from "./test-utils.ts";
+import { formatBytes, readDropped, stageFiles, uploadFiles, type DroppedData } from "./upload.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -32,6 +33,64 @@ describe("加文件时检查", () => {
     const { files, notice } = stageFiles([], Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 3 }, (_, i) => file(`${i}.txt`)));
     expect(files).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
     expect(notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}，多出来的没有加入`);
+  });
+  it("readDropped 给的原因排在被拒文件的前面", () => {
+    const { notice } = stageFiles([], [new File([], "空.txt")], ["「素材」文件夹里没有文件，没有加入"]);
+    expect(notice).toBe("「素材」文件夹里没有文件，没有加入；「空.txt」是空文件，没有加入");
+  });
+});
+
+describe("读拖进来、粘进来的文件和文件夹", () => {
+  const read = (data: DroppedData) =>
+    new Promise<{ names: string[]; skipped: string[] }>((resolve) =>
+      readDropped(data, (files, skipped) => resolve({ names: files.map((f) => f.name), skipped })),
+    );
+
+  it("只有文件：同步交出去，不等", () => {
+    const deliver = vi.fn();
+    readDropped(fakeDropData([file("a.txt"), file("b.png")]), deliver);
+    expect(deliver).toHaveBeenCalledWith([expect.objectContaining({ name: "a.txt" }), expect.objectContaining({ name: "b.png" })], []);
+  });
+
+  it("没有 items（老浏览器）：照 files 交出去", () => {
+    const deliver = vi.fn();
+    readDropped({ files: [file("a.txt")] as unknown as FileList }, deliver);
+    expect(deliver).toHaveBeenCalledWith([expect.objectContaining({ name: "a.txt" })], []);
+  });
+
+  it("文件夹：往里读（含子文件夹，先上层），跳过 .DS_Store 这类隐藏文件，不当成空文件", async () => {
+    const assets = fakeFolderEntry("citrus_xiaohongshu_assets", [
+      fakeFileEntry(file(".DS_Store")),
+      fakeFolderEntry("封面", [fakeFileEntry(file("cover.png"))]),
+      fakeFileEntry(file("1.jpg")),
+      fakeFileEntry(file("2.jpg")),
+    ]);
+    expect(await read(fakeDropData([file("说明.txt"), assets]))).toEqual({ names: ["说明.txt", "1.jpg", "2.jpg", "cover.png"], skipped: [] });
+  });
+
+  it("readEntries 分批给：每一批都读到", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => fakeFileEntry(file(`${i}.txt`)));
+    const { names } = await read(fakeDropData([fakeFolderEntry("素材", many, { batch: 2 })]));
+    expect(names).toEqual(["0.txt", "1.txt", "2.txt", "3.txt", "4.txt"]);
+  });
+
+  it("空文件夹（只有隐藏文件也算）：说是空文件夹，不说是空文件", async () => {
+    const { names, skipped } = await read(fakeDropData([fakeFolderEntry("素材", [fakeFileEntry(file(".DS_Store"))])]));
+    expect(names).toEqual([]);
+    expect(skipped).toEqual(["「素材」文件夹里没有文件，没有加入"]);
+  });
+
+  it("读不出来的文件夹：说读不出来，别的照常加", async () => {
+    const { names, skipped } = await read(fakeDropData([fakeFolderEntry("锁着的", [], { broken: true }), file("a.txt")]));
+    expect(names).toEqual(["a.txt"]);
+    expect(skipped).toEqual(["「锁着的」文件夹读不出来，没有加入"]);
+  });
+
+  it(`文件很多的文件夹：读到比上限（${MAX_ATTACHMENTS_PER_MESSAGE} 个）多一个就停，好让 stageFiles 报“最多带几个”`, async () => {
+    const many = Array.from({ length: 50 }, (_, i) => fakeFileEntry(file(`${i}.txt`)));
+    const { names } = await read(fakeDropData([fakeFolderEntry("大文件夹", many)]));
+    expect(names).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE + 1);
+    expect(stageFiles([], names.map((n) => file(n))).notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}，多出来的没有加入`);
   });
 });
 

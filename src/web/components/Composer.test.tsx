@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import * as shared from "../../shared/index.ts";
@@ -20,7 +20,7 @@ import {
   messageChange,
   sessionChange,
 } from "../test-utils.ts";
-import type { StagedFiles } from "../upload.ts";
+import { NOTICE_AUTO_HIDE_MS, type StagedFiles } from "../upload.ts";
 import { Composer } from "./Composer.tsx";
 import * as messagesModule from "./Messages.tsx";
 
@@ -31,6 +31,7 @@ const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
   add: vi.fn(),
   remove: vi.fn(),
   removeSent: vi.fn(),
+  dismissNotice: vi.fn(),
   track: vi.fn(),
   ...over,
 });
@@ -170,3 +171,46 @@ describe("Composer 布局", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("Composer 提示条", () => {
+  it("加文件被拒（skipped）：浅灰底内联提示条，点 × 或打字立刻关闭，4 秒后自动消失", () => {
+    vi.useFakeTimers();
+    try {
+      const dismissNotice = vi.fn();
+      setup({ notice: { message: "「空.txt」是空文件，没有加入", kind: "skipped" }, dismissNotice });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveClass("bg-sidebar", "rounded-xl", "text-muted-foreground");
+      expect(alert).toHaveTextContent("「空.txt」是空文件，没有加入");
+
+      screen.getByRole("button", { name: "关闭提示" }).click();
+      expect(dismissNotice).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(screen.getByRole("textbox", { name: "输入消息" }), { target: { value: "新内容" } });
+      expect(dismissNotice).toHaveBeenCalledTimes(2);
+
+      act(() => vi.advanceTimersByTime(NOTICE_AUTO_HIDE_MS - 1));
+      expect(dismissNotice).toHaveBeenCalledTimes(2);
+      act(() => vi.advanceTimersByTime(1));
+      expect(dismissNotice).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("发送失败（failed）：正文前景色、红色图标，4 秒后不自动消失", () => {
+    vi.useFakeTimers();
+    try {
+      const dismissNotice = vi.fn();
+      setup({ notice: { message: "上传失败", kind: "failed" }, dismissNotice });
+      const alert = screen.getByRole("alert");
+      expect(alert.querySelector(".text-danger")).not.toBeNull();
+      expect(screen.getByText("上传失败")).toHaveClass("text-foreground");
+
+      act(() => vi.advanceTimersByTime(NOTICE_AUTO_HIDE_MS * 2));
+      expect(dismissNotice).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

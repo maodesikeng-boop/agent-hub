@@ -167,6 +167,7 @@ const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
   add: vi.fn(),
   remove: vi.fn(),
   removeSent: vi.fn(),
+  dismissNotice: vi.fn(),
   track: vi.fn(),
   ...over,
 });
