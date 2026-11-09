@@ -138,6 +138,6 @@ export function createAgyCatalogSource(options: VendorCatalogSourceOptions): Ven
     ...agyCatalogProbe,
     query: (signal) => queryAgyModels({ agyPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
     installed: options.installed,
-    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("agy", options.path, (options.env ?? process.env).PATH, options.cwd)),
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("agy", options.path, options.env ?? process.env, options.cwd)),
   };
 }

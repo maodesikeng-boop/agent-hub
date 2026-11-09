@@ -23,6 +23,6 @@ export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): 
     query: (signal) => queryClaudeInitialize({ ...query, signal }),
     confirm: (signal) => queryClaudeAuthStatus({ ...query, signal }),
     installed: options.installed,
-    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("claude", options.path, (options.env ?? process.env).PATH, options.cwd)),
+    fingerprint: options.fingerprint ?? (() => vendorCatalogFingerprint("claude", options.path, options.env ?? process.env, options.cwd)),
   };
 }

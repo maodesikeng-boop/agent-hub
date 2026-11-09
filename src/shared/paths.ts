@@ -257,30 +257,76 @@ export function resolveVendorExecutables(
   ) as Record<AgentVendor, VendorExecutable>;
 }
 
+/** codex 实际用的配置根目录：`CODEX_HOME`（去掉首尾空白后非空）优先，否则 `<主目录>/.codex`。认证判断、模型目录指纹都用它，保证看的是同一处。 */
+export function codexHomeDir(env: Record<string, string | undefined>, userHome: string): string {
+  return env.CODEX_HOME?.trim() || join(userHome, ".codex");
+}
+
+/**
+ * 配置根目录能被环境变量改位置的厂商（codex 的 CODEX_HOME）：catalogWatchPaths 里以默认相对目录 `rel` 开头的路径，
+ * 换到 `dir` 给出的实际目录下。别的厂商、别的路径照旧拼在用户主目录下。
+ */
+const VENDOR_CONFIG_HOME: Partial<
+  Record<AgentVendor, { rel: string; dir: (env: Record<string, string | undefined>, userHome: string) => string }>
+> = {
+  codex: { rel: ".codex", dir: codexHomeDir },
+};
+
+/** 某家厂商要盯的本地配置/凭据/模型缓存文件的绝对路径（VENDOR_HOME_PATHS 的 catalogWatchPaths，按 VENDOR_CONFIG_HOME 换实际目录）。 */
+export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string[] {
+  const override = VENDOR_CONFIG_HOME[vendor];
+  const base = override?.dir(env, userHome);
+  return VENDOR_HOME_PATHS[vendor].catalogWatchPaths.map((rel) =>
+    override && base && rel.startsWith(`${override.rel}/`) ? join(base, rel.slice(override.rel.length + 1)) : join(userHome, rel),
+  );
+}
+
+/**
+ * 指纹里可执行文件的真实路径缓存（键：命令 + PATH + 兜底路径）：找到一次以后只 stat 那一个文件，不再每次遍历 PATH；
+ * 那个文件没了（卸载、换位置）才重新找。没找到的不缓存（装上以后下次就能找到）。
+ */
+const locatedExecutables = new Map<string, string>();
+
+function statSignature(file: string): string | null {
+  try {
+    const st = statSync(file);
+    return `${file}:${Math.trunc(st.mtimeMs)}:${st.size}`;
+  } catch {
+    return null;
+  }
+}
+
+function executableSignature(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
+  const key = [cmd, envPath ?? "", ...fallbackPaths].join("\0");
+  const cached = locatedExecutables.get(key);
+  if (cached !== undefined) {
+    const sig = statSignature(cached);
+    if (sig !== null) return sig;
+    locatedExecutables.delete(key);
+  }
+  const exe = locateExecutableFile(cmd, envPath, fallbackPaths);
+  if (exe === null) return "-";
+  const sig = statSignature(exe);
+  if (sig === null) return `${exe}:missing`;
+  locatedExecutables.set(key, exe);
+  return sig;
+}
+
 /**
  * 厂商可执行文件及本地凭据/模型缓存文件的轻量 stat 指纹（不起子进程）。
- * 当 CLI 新安装/升级、切换账号登录或本地模型缓存（如 ~/.codex/models_cache.json）更新时，指纹变化触发模型目录缓存刷新。
+ * 当 CLI 新安装/升级、切换账号登录或本地模型缓存（如 $CODEX_HOME/models_cache.json）更新时，指纹变化触发模型目录缓存刷新。
+ * `env` 取 PATH 和厂商的配置目录变量（CODEX_HOME），跟起进程问名单、判断登录用的是同一份。
  */
 export function vendorCatalogFingerprint(
   vendor: AgentVendor,
   cmd: string,
-  envPath: string | undefined,
+  env: Record<string, string | undefined>,
   userHome: string,
   platform: string = process.platform,
 ): string {
-  const exe = locateExecutableFile(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
-  const files = [exe, ...VENDOR_HOME_PATHS[vendor].catalogWatchPaths.map((rel) => join(userHome, rel))];
-  return files
-    .map((file) => {
-      if (!file) return "-";
-      try {
-        const st = statSync(file);
-        return `${file}:${Math.trunc(st.mtimeMs)}:${st.size}`;
-      } catch {
-        return `${file}:missing`;
-      }
-    })
-    .join("|");
+  const exe = executableSignature(cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+  const files = vendorCatalogWatchFiles(vendor, userHome, env).map((file) => statSignature(file) ?? `${file}:missing`);
+  return [exe, ...files].join("|");
 }
 
 /** agy CLI 的数据根目录（~/.gemini/antigravity-cli）。 */

@@ -13,6 +13,7 @@ import {
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
+  MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
   MODEL_CATALOG_TIMEOUT_MS,
@@ -705,6 +706,9 @@ interface VendorCatalogSlot {
   failedAt: number | null;
   /** 上次查询后可执行文件与本地配置/凭据/模型缓存文件的 stat 指纹。 */
   fingerprint: string | null;
+  /** 最近一次算出来的指纹和算的时间（MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内直接用它，不再 stat）。 */
+  fingerprintSeen: string | null;
+  fingerprintCheckedAt: number;
   inflight: Promise<void> | null;
 }
 
@@ -714,6 +718,7 @@ interface VendorCatalogSlot {
  * - 没装（只查文件）：不问，状态 not_installed；装上以后下次要时就问；
  * - 还没问到过：第一次要时问，等它问完（同时来的几次只问一次）；
  * - 问到了：直接给；若可执行文件或本地凭据/模型缓存文件 stat 指纹变了（刚登录、换号、CLI 升级或 models_cache.json 更新）则立即重问；
+ *   指纹 MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内只算一次（高频调用命中缓存时不碰磁盘）；
  *   超过 MODEL_CATALOG_FRESH_MS 在后台再问，先给旧的；后台没问到继续用旧的；
  * - 没问到、或问出来不能用（没登录）：名单用打包的（问到了就用问到的），MODEL_CATALOG_RETRY_MS 之后有人要时再问。
  * 不轮询：都是有人要时才问。
@@ -728,13 +733,37 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   const slots = Object.fromEntries(
     AGENT_VENDORS.map((vendor): [AgentVendor, VendorCatalogSlot] => [
       vendor,
-      { vendor, source: options.sources[vendor], cached: null, cachedAt: 0, availability: null, failedAt: null, fingerprint: null, inflight: null },
+      {
+        vendor,
+        source: options.sources[vendor],
+        cached: null,
+        cachedAt: 0,
+        availability: null,
+        failedAt: null,
+        fingerprint: null,
+        fingerprintSeen: null,
+        fingerprintCheckedAt: 0,
+        inflight: null,
+      },
     ]),
   ) as Record<AgentVendor, VendorCatalogSlot>;
 
   const installed = (slot: VendorCatalogSlot) => slot.source?.installed?.() ?? true;
-  const fingerprintChanged = (slot: VendorCatalogSlot): boolean =>
-    slot.fingerprint !== null && slot.source?.fingerprint !== undefined && slot.source.fingerprint() !== slot.fingerprint;
+  /** 现在的指纹：force 或过了冷却期才真算（stat 磁盘），否则用上次算的。没配指纹是 null。 */
+  const fingerprintOf = (slot: VendorCatalogSlot, force: boolean): string | null => {
+    const compute = slot.source?.fingerprint;
+    if (!compute) return null;
+    if (force || slot.fingerprintSeen === null || now() - slot.fingerprintCheckedAt >= MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS) {
+      slot.fingerprintSeen = compute();
+      slot.fingerprintCheckedAt = now();
+    }
+    return slot.fingerprintSeen;
+  };
+  const fingerprintChanged = (slot: VendorCatalogSlot): boolean => {
+    if (slot.fingerprint === null) return false;
+    const current = fingerprintOf(slot, false);
+    return current !== null && current !== slot.fingerprint;
+  };
   const settle = (slot: VendorCatalogSlot, availability: VendorAvailability) => {
     slot.availability = availability;
     if (!isSelectable(availability)) slot.failedAt = now();
@@ -745,7 +774,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
     if (!source) return Promise.resolve();
     slot.inflight ??= (async () => {
       if (!installed(slot)) {
-        slot.fingerprint = source.fingerprint?.() ?? null;
+        slot.fingerprint = fingerprintOf(slot, true);
         return; // 没装不问（状态看 installed，每次都查）
       }
       let availability: VendorAvailability;
@@ -770,7 +799,7 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
         slot.failedAt = now();
         if (!closed) log(`${LOG_PREFIX} 没问到 ${slot.vendor} 的模型名单（${reason}），先用打包的`);
       }
-      slot.fingerprint = source.fingerprint?.() ?? null;
+      slot.fingerprint = fingerprintOf(slot, true);
       settle(slot, availability);
     })().finally(() => {
       slot.inflight = null;

@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import { AGENT_VENDORS } from "./vendors.ts";
@@ -22,14 +22,23 @@ import {
   personaFilePath,
   projectWorktreesDir,
   findExecutable,
+  codexHomeDir,
   resolveExecutable,
   resolveHubPaths,
   resolvePaths,
   resolveVendorExecutables,
+  vendorCatalogFingerprint,
+  vendorCatalogWatchFiles,
   workerSetupLogPath,
   workerWorktreePath,
 } from "./paths.ts";
 import * as sharedIndex from "./index.ts";
+
+// 原样转给真的 node:fs，只为数一数指纹算的时候碰了几次磁盘（existsSync / statSync）
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync), statSync: vi.fn(actual.statSync) };
+});
 
 describe("paths：可执行文件与数据目录解析", () => {
   it("环境变量名常量：AGENT_HUB_CLAUDE / AGENT_HUB_AGY / AGENT_HUB_CODEX", () => {
@@ -226,6 +235,107 @@ describe("paths：可执行文件与数据目录解析", () => {
         "darwin",
       );
       expect(resolvedFallback.agy).toEqual({ cmd: "agy", path: localAgy });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
+  const exe = (dir: string, name: string, body = "#!/bin/sh\n") => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), body, { mode: 0o755 });
+    return join(dir, name);
+  };
+
+  it("codex 的盯防文件跟着 CODEX_HOME 走（认证判断用的同一处）；没设或空白回到 ~/.codex；别家不受影响", () => {
+    expect(codexHomeDir({ CODEX_HOME: "/x/codex-home" }, "/home/u")).toBe("/x/codex-home");
+    expect(codexHomeDir({ CODEX_HOME: "  " }, "/home/u")).toBe(join("/home/u", ".codex"));
+    expect(codexHomeDir({}, "/home/u")).toBe(join("/home/u", ".codex"));
+    const files = vendorCatalogWatchFiles("codex", "/home/u", { CODEX_HOME: "/x/codex-home" });
+    expect(files).toContain(join("/x/codex-home", "auth.json"));
+    expect(files).toContain(join("/x/codex-home", "models_cache.json"));
+    expect(files.some((f) => f.startsWith(join("/home/u", ".codex")))).toBe(false);
+    expect(vendorCatalogWatchFiles("codex", "/home/u", {})).toContain(join("/home/u", ".codex", "auth.json"));
+    expect(vendorCatalogWatchFiles("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toContain(join("/home/u", ".claude.json"));
+  });
+
+  it("自定义 CODEX_HOME 下的 auth.json / models_cache.json 变了：指纹跟着变；~/.codex 下的变化不影响", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-fp-codex-"));
+    try {
+      const home = join(dir, "home");
+      const codexHome = join(dir, "custom-codex");
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      mkdirSync(codexHome, { recursive: true });
+      const bin = exe(join(dir, "bin"), "codex");
+      const env = { PATH: "", CODEX_HOME: codexHome };
+      const fp = () => vendorCatalogFingerprint("codex", bin, env, home, "linux");
+
+      const before = fp();
+      expect(before).toContain(join(codexHome, "auth.json"));
+      writeFileSync(join(home, ".codex", "auth.json"), "{\"default-home\":true}");
+      expect(fp()).toBe(before);
+
+      writeFileSync(join(codexHome, "auth.json"), "{\"token\":\"a\"}");
+      const loggedIn = fp();
+      expect(loggedIn).not.toBe(before);
+
+      writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[]}");
+      const cached = fp();
+      expect(cached).not.toBe(loggedIn);
+      writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[{\"slug\":\"gpt-6.1-sol\"}]}");
+      expect(fp()).not.toBe(cached);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("可执行文件找到一次就记住真实路径：之后只 stat 它、不再遍历 PATH（existsSync 0 次）；那个文件没了才重新找", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-fp-exe-"));
+    try {
+      const home = join(dir, "home");
+      mkdirSync(home, { recursive: true });
+      const pathDirs = Array.from({ length: 20 }, (_, i) => join(dir, `p${i}`));
+      const late = exe(pathDirs[19]!, "claude");
+      const env = { PATH: pathDirs.join(delimiter) };
+      const fp = () => vendorCatalogFingerprint("claude", "claude", env, home, "darwin");
+
+      expect(fp()).toContain(late);
+      const exists = vi.mocked(existsSync);
+      const stat = vi.mocked(statSync);
+      exists.mockClear();
+      stat.mockClear();
+      const again = fp();
+      expect(again).toContain(late);
+      expect(exists).not.toHaveBeenCalled();
+      // 只 stat 可执行文件那一个 + 盯防文件各一次
+      expect(stat).toHaveBeenCalledTimes(1 + vendorCatalogWatchFiles("claude", home, env).length);
+
+      // PATH 前面又装了一份：记住的那份还在，就还用它（不重扫）
+      const early = exe(pathDirs[0]!, "claude");
+      expect(fp()).toContain(late);
+      // 记住的那份没了：重新找，换成新的
+      rmSync(late);
+      expect(fp()).toContain(early);
+      expect(fp()).not.toContain(late);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("没找到可执行文件不记：装上以后下一次就能找到，指纹跟着变", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-fp-miss-"));
+    try {
+      const home = join(dir, "home");
+      mkdirSync(home, { recursive: true });
+      const bin = join(dir, "bin");
+      const env = { PATH: bin };
+      const fp = () => vendorCatalogFingerprint("agy", "agy", env, home, "darwin");
+      const missing = fp();
+      expect(missing.startsWith("-|")).toBe(true);
+      const installed = exe(bin, "agy");
+      expect(fp()).toContain(installed);
+      expect(fp()).not.toBe(missing);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,8 +1,16 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MODEL_CATALOG_FRESH_MS, MODEL_CATALOG_RETRY_MS, bundledModelCatalog, type ModelCatalog, type VendorAvailability } from "../../shared/index.ts";
+import {
+  MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
+  MODEL_CATALOG_FRESH_MS,
+  MODEL_CATALOG_RETRY_MS,
+  bundledModelCatalog,
+  type ModelCatalog,
+  type VendorAvailability,
+} from "../../shared/index.ts";
+import { createCodexCatalogSource } from "../vendors/codex.ts";
 import {
   createModelCatalogs,
   parseAgyModels,
@@ -748,8 +756,8 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(catalogs.current("codex")?.defaultModel).toBe("GPT-5.4");
   });
 
-  it("fingerprint 变化（本机凭据或 models_cache.json 更新）：不必等 6 小时，下次 list() 立即重问并回新模型", async () => {
-    const now = 3_000_000;
+  it("fingerprint 变化（本机凭据或 models_cache.json 更新）：不必等 6 小时，过了指纹冷却期下次 list() 立即重问并回新模型", async () => {
+    let now = 3_000_000;
     let fp = "v1";
     let calls = 0;
     const answers = [
@@ -779,12 +787,122 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     await catalogs.list();
     expect(calls).toBe(1);
 
-    // 本机 ~/.codex/models_cache.json 或凭据更新导致指纹变化：即使刚过去 0 毫秒也立即重问并拿到新列表
+    // 本机 ~/.codex/models_cache.json 或凭据更新导致指纹变化：过了冷却期（几秒，远不到 6 小时）就立即重问并拿到新列表
     fp = "v2";
+    now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
     const second = codexOf(await catalogs.list());
     expect(calls).toBe(2);
     expect(second.models.map((m) => m.id)).toEqual(["gpt-6.1-sol"]);
     expect(second.defaultEfforts).toEqual(["low", "high", "max", "ultra"]);
+  });
+
+  it("指纹冷却：命中缓存时 MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内 list()/ensureUsable() 再多次也不重算指纹（不碰磁盘）；过了冷却期只算一次", async () => {
+    let now = 4_000_000;
+    let fp = "v1";
+    let fingerprintCalls = 0;
+    let calls = 0;
+    const catalogs = createModelCatalogs({
+      sources: {
+        codex: {
+          parse: parseCodexModels,
+          fingerprint: () => {
+            fingerprintCalls++;
+            return fp;
+          },
+          query: async () => {
+            calls++;
+            return REAL_CODEX_MODELS;
+          },
+        },
+      },
+      now: () => now,
+    });
+
+    await catalogs.list();
+    expect(calls).toBe(1);
+    // 问完记一次指纹
+    expect(fingerprintCalls).toBe(1);
+
+    // 冷却期内：高频调用全部命中缓存，指纹一次都不算；文件变了也要等冷却期过了才看到
+    fp = "v2";
+    for (let i = 0; i < 50; i++) {
+      await catalogs.list();
+      expect(await catalogs.ensureUsable("codex")).toBe("available");
+      now += Math.floor((MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS - 1) / 50);
+    }
+    expect(fingerprintCalls).toBe(1);
+    expect(calls).toBe(1);
+
+    // 过了冷却期：算一次，发现变了就重问（重问完再记一次）
+    now = 4_000_000 + MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+    await catalogs.list();
+    expect(calls).toBe(2);
+    expect(fingerprintCalls).toBe(3);
+
+    // 刚重问完又进冷却期：接着调不再算
+    await catalogs.list();
+    await catalogs.ensureUsable("codex");
+    expect(fingerprintCalls).toBe(3);
+
+    // 冷却期过了、指纹没变：只算一次、不重问
+    now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+    await catalogs.list();
+    await catalogs.list();
+    expect(fingerprintCalls).toBe(4);
+    expect(calls).toBe(2);
+  });
+
+  it("codex 自定义 CODEX_HOME：其下 auth.json / models_cache.json 变了，缓存自动失效重问（指纹跟认证判断看同一处）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-catalog-codex-home-"));
+    try {
+      const home = join(dir, "home");
+      const codexHome = join(dir, "custom-codex");
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      mkdirSync(codexHome, { recursive: true });
+      const bin = join(dir, "codex");
+      writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
+      let now = 6_000_000;
+      let calls = 0;
+      const source = createCodexCatalogSource({ path: bin, cwd: home, installed: () => true, env: { PATH: "", CODEX_HOME: codexHome } });
+      const catalogs = createModelCatalogs({
+        sources: {
+          codex: {
+            ...source,
+            query: async () => {
+              calls++;
+              return REAL_CODEX_MODELS;
+            },
+          },
+        },
+        now: () => now,
+      });
+
+      await catalogs.list();
+      expect(calls).toBe(1);
+      // 认证判断看的也是 CODEX_HOME：还没有 auth.json → 没登录
+      expect(await source.confirm!(new AbortController().signal)).toBe("signed_out");
+
+      // 默认 ~/.codex 下的变化不算
+      writeFileSync(join(home, ".codex", "auth.json"), "{}");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(1);
+
+      // CODEX_HOME 下登录（写 auth.json）：重问
+      writeFileSync(join(codexHome, "auth.json"), "{\"token\":\"a\"}");
+      expect(await source.confirm!(new AbortController().signal)).toBe("available");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(2);
+
+      // CODEX_HOME 下 models_cache.json 更新：再重问
+      writeFileSync(join(codexHome, "models_cache.json"), "{\"models\":[]}");
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+      await catalogs.list();
+      expect(calls).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
