@@ -153,7 +153,9 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
     for (const name of ["默认", "小", "图标", "小图标"]) expect(classOf(screen.getByRole("button", { name }))).toContain("touch-target");
     expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
     expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
-    expect(readFileSync("src/web/components/Composer.tsx", "utf8")).toMatch(/className="touch-target [^"]*"\s+onClick=\{\(\) => staging\.remove/);
+    const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
+    expect(composerSrc).toMatch(/const CHIP_CLOSE_CLASS =\s*"touch-target [^"]*";/);
+    expect(composerSrc).toMatch(/className=\{CHIP_CLOSE_CLASS\}\s+onClick=\{\(\) => staging\.remove/);
   });
 
   it("右栏的行（一行挨一行）触屏下本身 44px 高，不用撑开的办法", () => {
