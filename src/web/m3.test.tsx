@@ -458,12 +458,15 @@ describe("左下角的额度", () => {
       expect(within(gemini).getByRole("progressbar", { name: "7 天额度" })).toHaveAttribute("aria-valuenow", "50");
       expect(within(screen.getByRole("region", { name: "Antigravity · Claude 和 GPT" })).getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "90");
       expect(ask()).toBe(1);
-      expect(badge()).toHaveTextContent("5h 37%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 37%");
+      expect(badge().textContent).toBe("");
     });
 
-    it("没有别家的事件额度、有 agy 会话：按钮也在（写“额度”），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
+    it("没有别家的事件额度、有 agy 会话：按钮也在（只显示圆环图标，不带旁白文字），打开后先显示 Loading…，拉到后显示 agy 的", async () => {
       const user = userEvent.setup();
       await boot(agyWorker());
+      expect(badge()).toHaveAccessibleName("额度");
+      expect(badge().textContent).toBe("");
       const gate = deferred<{ status: number; body: unknown }>();
       api.quota = () => gate.promise;
       await user.click(badge());
@@ -473,7 +476,7 @@ describe("左下角的额度", () => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
 
-    it("现查厂商（agy）某个窗口耗尽（100% 已用 / 0% 剩余）：顶栏按钮也变成红色“额度用完”", async () => {
+    it("现查厂商（agy）某个窗口耗尽（100% 已用 / 0% 剩余）：左下角圆环按钮变成红色，不显示“额度用完”文字", async () => {
       const user = userEvent.setup();
       await boot(claudeAndAgy());
       api.quota = () => ({
@@ -484,7 +487,8 @@ describe("左下角的额度", () => {
       });
       await user.click(badge());
       await screen.findByRole("region", { name: "Antigravity · Gemini" });
-      expect(badge()).toHaveTextContent("额度用完");
+      expect(badge()).toHaveAccessibleName("额度已用完");
+      expect(badge().textContent).toBe("");
       expect(badge()).toHaveClass("text-danger");
     });
 
@@ -515,12 +519,13 @@ describe("左下角的额度", () => {
     expect(screen.queryByRole("button", { name: /额度/ })).not.toBeInTheDocument();
   });
 
-  it("直接显示窗口简写和已用的百分比（5h 37%），平时不是醒目色；和设置按钮同一种 ghost 按钮，不是胶囊底色", async () => {
+  it("只渲染干净的圆环图标按钮（无旁白文字），保留 aria-label 与 title；和设置按钮同一种 ghost icon-sm 按钮，不是胶囊底色", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
-    expect(badge()).toHaveTextContent("5h 37%");
+    expect(badge().textContent).toBe("");
     expect(badge()).toHaveAccessibleName("5 小时额度已用 37%");
+    expect(badge()).toHaveAttribute("title", "5 小时额度已用 37%");
     expect(badge()).not.toHaveClass("text-warn-foreground", "text-danger");
-    expect(badge()).toHaveClass("text-muted-foreground", "hover:bg-accent");
+    expect(badge()).toHaveClass("size-8", "text-muted-foreground", "hover:bg-accent");
     expect(badge().className).not.toMatch(/(^|\s)bg-/);
     expect(badge().querySelector("svg")).toBeInTheDocument();
   });
@@ -528,7 +533,8 @@ describe("左下角的额度", () => {
   it("推 session.status 带来新的额度：跟着变", async () => {
     const ws = await boot(withQuota(quota(0.37, 0.59)));
     push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: quota(0.4, 0.6), lastEventAt: 9 })));
-    expect(badge()).toHaveTextContent("40%");
+    expect(badge()).toHaveAccessibleName("5 小时额度已用 40%");
+    expect(badge().textContent).toBe("");
   });
 
   describe("到了重置时间", () => {
@@ -547,12 +553,11 @@ describe("左下角的额度", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       clock(RESET - 600);
       await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
-      expect(badge()).toHaveTextContent("99%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 99%");
       expect(badge()).toHaveClass("text-warn-foreground");
       advance(599);
-      expect(badge()).toHaveTextContent("99%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 99%");
       advance(2);
-      expect(badge()).toHaveTextContent("0%");
       expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
       expect(badge()).not.toHaveClass("text-warn-foreground");
       await user.click(badge());
@@ -565,17 +570,18 @@ describe("左下角的额度", () => {
       clock(RESET - 600);
       const ws = await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
       advance(601);
-      expect(badge()).toHaveTextContent("0%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
       push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: rl(0.03, NEXT_RESET), lastEventAt: 9 })));
-      expect(badge()).toHaveTextContent("3%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 3%");
     });
 
-    it("用完了（已用完）：到了 resetsAt 自己变回百分比", async () => {
+    it("用完了（已用完）：到了 resetsAt 自己恢复正常状态", async () => {
       clock(RESET - 600);
       await boot(withQuota(rl(1, RESET, "rejected")));
-      expect(badge()).toHaveTextContent("额度用完");
+      expect(badge()).toHaveAccessibleName("额度已用完");
+      expect(badge().textContent).toBe("");
       advance(601);
-      expect(badge()).toHaveTextContent("0%");
+      expect(badge()).toHaveAccessibleName("5 小时额度已用 0%");
       expect(badge()).not.toHaveClass("text-danger");
     });
   });
@@ -588,13 +594,14 @@ describe("左下角的额度", () => {
     await boot(withQuota(limit({ five_hour: win(used, { status }) })));
     if (warn) expect(badge()).toHaveClass("text-warn-foreground");
     else expect(badge()).not.toHaveClass("text-warn-foreground");
-    expect(badge()).not.toHaveTextContent("用完");
+    expect(badge().textContent).toBe("");
   });
 
-  it("用完了（rejected）：显示“额度用完”，不是百分比；红字", async () => {
+  it("用完了（rejected）：只渲染红色圆环图标，不显示“额度用完”或百分比旁白文字", async () => {
     await boot(withQuota(limit({ five_hour: win(1, { status: "rejected" }) }, "rejected")));
-    expect(badge()).toHaveTextContent("额度用完");
-    expect(badge()).not.toHaveTextContent("%");
+    expect(badge()).toHaveAccessibleName("额度已用完");
+    expect(badge()).toHaveAttribute("title", "额度已用完");
+    expect(badge().textContent).toBe("");
     expect(badge()).toHaveClass("text-danger");
   });
 
@@ -618,7 +625,8 @@ describe("左下角的额度", () => {
   it("只有一个窗口有数据：标识显示它，小窗口里只有一行", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ seven_day: win(0.2) })));
-    expect(badge()).toHaveTextContent("20%");
+    expect(badge()).toHaveAccessibleName("7 天额度已用 20%");
+    expect(badge().textContent).toBe("");
     await user.click(badge());
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);
     expect(screen.getByRole("progressbar", { name: "7 天额度" })).toBeInTheDocument();
@@ -627,7 +635,7 @@ describe("左下角的额度", () => {
   it("脏数据：超过 1 夹成 100%，负数夹成 0%，没有重置时间的不显示重置", async () => {
     const user = userEvent.setup();
     await boot(withQuota(limit({ five_hour: win(1.7, { resetsAt: 0 }), seven_day: win(-0.3) })));
-    expect(badge()).toHaveTextContent("100%");
+    expect(badge()).toHaveAccessibleName("5 小时额度已用 100%");
     expect(badge()).toHaveClass("text-warn-foreground");
     await user.click(badge());
     expect(screen.getByRole("progressbar", { name: "5 小时额度" })).toHaveAttribute("aria-valuenow", "100");

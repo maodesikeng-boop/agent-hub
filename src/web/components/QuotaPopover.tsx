@@ -44,9 +44,9 @@ function Ring({ percent }: { percent: number }) {
 }
 
 /**
- * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 按钮，小圆环 + 第一个厂商的第一个窗口的简写和已用百分比（“5h 37%”），
- * 用完写“额度用完”；快用完、用完换颜色。点开按厂商分组看每个窗口。没有数据不显示。
- * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在（只写“额度”）；
+ * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 图标按钮（size="icon-sm"），只显示小圆环图标（无旁白文字），
+ * 快用完、用完换颜色，无障碍名称与悬停提示保留完整状态。点开按厂商分组看每个窗口。没有数据不显示。
+ * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在；
  * 每次点开向服务端要一次（服务端缓存 5 分钟），问不到、问失败就没有那几块。
  */
 export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
@@ -60,6 +60,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
   const exhausted =
     quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
+  const label = exhausted ? "额度已用完" : window ? `${window.label}额度已用 ${window.percent}%` : "额度";
   const onOpenChange = (open: boolean) => {
     if (!open || !fetchable) return;
     setLoading(true);
@@ -76,12 +77,12 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
-          aria-label={exhausted ? "额度已用完" : window ? `${window.label}额度已用 ${window.percent}%` : "额度"}
-          className={cn("shrink-0 gap-1.5 px-2.5 tabular-nums", exhausted ? "text-danger hover:text-danger" : warning && "text-warn-foreground hover:text-warn-foreground")}
+          size="icon-sm"
+          aria-label={label}
+          title={label}
+          className={cn("shrink-0", exhausted ? "text-danger hover:text-danger" : warning && "text-warn-foreground hover:text-warn-foreground")}
         >
           <Ring percent={exhausted ? 100 : (window?.percent ?? 0)} />
-          {exhausted ? "额度用完" : window ? `${window.short} ${window.percent}%` : "额度"}
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" aria-label="额度">
