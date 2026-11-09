@@ -41,12 +41,12 @@ function EntryButton({
   device?: string;
   onSelect: () => void;
 }) {
-  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定 > 等你 > 时间（在忙不另加标记）
+  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定圆点 > 等你 > 时间（在忙不另加标记）
   const tag =
     entry.pm?.archivedAt != null ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
-      <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-medium text-background">等你确定</span>
+      <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-foreground" />
     ) : waiting ? (
       <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs font-medium text-foreground">等你</span>
     ) : entry.lastMessage ? (
@@ -64,11 +64,11 @@ function EntryButton({
     >
       <Avatar colorKey={entry.avatarKey} size={44} />
       <span className="min-w-0 flex-1">
-        <span className="flex items-baseline justify-between gap-2">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-[15px] font-medium">{entry.name}</span>
+        <span className="flex items-center justify-between gap-2">
+          <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+            <span className={cn("truncate text-[15px] font-medium", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
             {device && (
-              <span data-testid="entry-device" className="shrink-0 text-xs text-muted-foreground">
+              <span data-testid="entry-device" title={device} className="min-w-0 truncate text-xs text-muted-foreground">
                 {device}
               </span>
             )}

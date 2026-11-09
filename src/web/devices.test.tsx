@@ -266,8 +266,15 @@ describe("跨设备的等你确定", () => {
     await boot(fleet);
     const summary = await within(nav()).findByRole("region", { name: "等你确定" });
     await waitFor(() => expect(within(summary).getAllByRole("button")).toHaveLength(2));
-    // 名字旁边标出是哪台设备（组里的同名条目不标）
-    expect(within(summary).getAllByTestId("entry-device").map((e) => e.textContent)).toEqual(["Mac", "东京"]);
+    // 名字旁边标出是哪台设备（组里的同名条目不标）；主名字保底 shrink-0 max-w-[70%]，设备名 min-w-0 truncate 防挤压遮挡
+    const summaryDevices = within(summary).getAllByTestId("entry-device");
+    expect(summaryDevices.map((e) => e.textContent)).toEqual(["Mac", "东京"]);
+    for (const devEl of summaryDevices) {
+      expect(devEl).toHaveClass("min-w-0", "truncate");
+      expect(devEl).not.toHaveClass("shrink-0");
+      expect(devEl.parentElement).toHaveClass("min-w-0", "flex-1", "overflow-hidden");
+      expect(devEl.previousElementSibling).toHaveClass("truncate", "max-w-[70%]", "shrink-0");
+    }
     expect(within(nav()).getAllByTestId("entry-device")).toHaveLength(2);
     expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
     await userEvent.click(within(summary).getByRole("button", { name: /阿青/ }));
@@ -277,7 +284,7 @@ describe("跨设备的等你确定", () => {
   it("只有一台时没有汇总", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
-    await within(nav()).findByText("等你确定");
+    await within(nav()).findByLabelText("等你确定");
     expect(within(nav()).queryByRole("region", { name: "等你确定" })).toBeNull();
   });
 
