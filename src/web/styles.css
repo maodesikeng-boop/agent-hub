@@ -59,6 +59,8 @@
   --success: #16a34a;
   /* 黄色的状态色（Worker 汇报“有问题”的色点）：--warn 是提示条的浅底，圆点要深一点 */
   --caution: #dba10b;
+  /* Markdown 链接固定蓝色（取 palette.ts 中“蓝”的 accent，对白底对比度 ≥ 4.5:1） */
+  --link: #2563eb;
   --radius-btn: 9999px;
   /* 顶栏两边的边距（照 t3code 的 --workspace-gutter：0.75rem，sm 以上 1.25rem）：标题在左上、按钮在右上，不跟着对话列居中 */
   --header-gutter-start: 1.25rem;
@@ -248,17 +250,39 @@ code {
   margin: 0 0.5em 0.15em 0;
   vertical-align: middle;
 }
-.markdown a {
-  color: var(--primary);
+.markdown a,
+.markdown [data-file-link] {
+  color: var(--link);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
-.markdown a:hover {
+.markdown a:hover,
+.markdown [data-file-link]:hover {
   text-decoration-color: currentColor;
 }
-/* agent 发来的文件卡片（Attachments.tsx 的 FileCard）：不要链接的颜色和下划线 */
+.markdown [data-file-link] {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.markdown [data-file-link]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 50%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.markdown a code,
+.markdown [data-file-link] code {
+  color: inherit;
+}
+/* agent 发来的内联图片过期回退卡片（Attachments.tsx 的 FileCard）：不要链接的颜色和下划线 */
 .markdown [data-file-card] {
   color: inherit;
   text-decoration: none;

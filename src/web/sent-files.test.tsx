@@ -1,5 +1,5 @@
-// agent 发来的文件：Markdown 里对上 meta.files 的图片内联、链接换成文件卡片；老消息照原样（shared/sent-files.ts、components/Markdown.tsx）。
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+// agent 发来的文件：Markdown 里对上 meta.files 的图片内联、链接换成蓝色行内文件链接（未存副本的只留文字）；老消息照原样（shared/sent-files.ts、components/Markdown.tsx）。
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { API_PATHS, SENT_FILE_REASONS, type SentFile } from "../shared/index.ts";
@@ -67,44 +67,64 @@ describe("图片内联", () => {
   });
 });
 
-describe("文件卡片", () => {
-  it("pdf、md、csv：链接换成卡片（文件名、大小），点了打开预览窗", async () => {
-    const files = [
-      sent({ href: "/p/报告.pdf", name: "报告.pdf", mime: "application/pdf", id: "0000000000000001", size: 1536 }),
-      sent({ href: "/p/说明.md", name: "说明.md", mime: "text/markdown", id: "0000000000000002" }),
-      sent({ href: "/p/数据.csv", name: "数据.csv", mime: "text/csv", id: "0000000000000003" }),
-    ];
-    agentSays("见 [报告](/p/报告.pdf)、[说明](/p/说明.md) 和 ![表](/p/数据.csv)", files);
-    expect(screen.getAllByRole("button").filter((b) => b.hasAttribute("data-file-card"))).toHaveLength(3);
-    expect(screen.getByRole("button", { name: /报告\.pdf/ })).toHaveTextContent("1.5 KB");
-    await userEvent.click(screen.getByRole("button", { name: /报告\.pdf/ }));
-    const dialog = screen.getByRole("dialog", { name: "报告.pdf" });
-    expect(within(dialog).getByTitle("报告.pdf")).toHaveAttribute("src", `${API_PATHS.sentFile("0000000000000001", "报告.pdf")}?inline=1`);
-    expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("download", "报告.pdf");
+describe("行内文件链接", () => {
+  it("pdf、md、代码文件、csv：链接渲染成行内 button[data-file-link] 保留原文字（含 code），没有文件卡片，点了打开预览窗，挂载时不发 HEAD 请求", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const files = [
+        sent({ href: "/p/报告.pdf", name: "报告.pdf", mime: "application/pdf", id: "0000000000000001", size: 1536 }),
+        sent({ href: "/p/说明.md", name: "说明.md", mime: "text/markdown", id: "0000000000000002" }),
+        sent({ href: "file:///p/daemon.ts#L100-L101", name: "daemon.ts", mime: "text/plain", id: "0000000000000003" }),
+        sent({ href: "/p/数据.csv", name: "数据.csv", mime: "text/csv", id: "0000000000000004" }),
+      ];
+      const { container } = agentSays(
+        "见 [报告](/p/报告.pdf)、[说明](/p/说明.md)、[`daemon.ts`](file:///p/daemon.ts#L100-L101) 和 ![表](/p/数据.csv)",
+        files,
+      );
+      expect(container.querySelectorAll("[data-file-card]")).toHaveLength(0);
+      const links = [...container.querySelectorAll("button[data-file-link]")];
+      expect(links.map((b) => b.textContent)).toEqual(["报告", "说明", "daemon.ts", "表"]);
+      expect(screen.getByRole("button", { name: "daemon.ts" }).querySelector("code")).toHaveTextContent("daemon.ts");
+      expect(container).not.toHaveTextContent("1.5 KB");
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("button", { name: "报告" }));
+      const dialog = screen.getByRole("dialog", { name: "报告.pdf" });
+      expect(within(dialog).getByTitle("报告.pdf")).toHaveAttribute("src", `${API_PATHS.sentFile("0000000000000001", "报告.pdf")}?inline=1`);
+      expect(within(dialog).getByRole("link", { name: /下载/ })).toHaveAttribute("download", "报告.pdf");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  it("普通链接写的图片：卡片带缩略图（不内联成大图），点了是预览窗里的大图，同一张图又用 ![]() 写了的照样内联", async () => {
+  it("普通链接写的图片：也是行内文件链接（不画卡片也不内联成大图），点了打开预览窗看大图；同一张图用 ![]() 写的照样内联", async () => {
     const file = sent({ href: "/tmp/c.png", name: "c.png" });
     const { container } = agentSays("![图](/tmp/c.png)（路径 [c.png](/tmp/c.png)）", [file]);
     const url = API_PATHS.sentFile(file.id!, "c.png");
-    const card = screen.getByRole("button", { name: /c\.png.*2\.0 KB/ });
-    expect(card).toHaveAttribute("data-file-card");
-    expect(card.querySelector("img")).toHaveAttribute("src", url);
-    expect(card.querySelector("img")?.className).toContain("size-10");
+    expect(container.querySelectorAll("[data-file-card]")).toHaveLength(0);
     expect(container.querySelectorAll("[data-sent-image]")).toHaveLength(1);
-    await userEvent.click(card);
+    const linkBtn = screen.getByRole("button", { name: "c.png" });
+    expect(linkBtn).toHaveAttribute("data-file-link");
+    await userEvent.click(linkBtn);
     expect(within(screen.getByRole("dialog")).getByRole("img", { name: "c.png" })).toHaveAttribute("src", `${url}?inline=1`);
   });
 
-  it("没存下来的：卡片写原因，不是链接，不发请求", () => {
+  it("没存下来的（missing、not_allowed、not_file、too_large、unreadable）：只显示链接文字，不显示原因、没有卡片、不发请求", () => {
     const statuses = ["missing", "not_allowed", "not_file", "too_large", "unreadable"] as const;
     const files = statuses.map((status, i) => sent({ href: `/x/${i}.pdf`, name: `${i}.pdf`, id: null, size: null, mime: "application/pdf", status }));
-    const { container } = agentSays(files.map((f, i) => `[${i}](${f.href})`).join("\n\n") + "\n\n![图](/x/img.png)", [
-      ...files,
-      sent({ href: "/x/img.png", name: "img.png", id: null, size: null, status: "not_allowed" }),
-    ]);
-    for (const status of statuses) expect(container).toHaveTextContent(SENT_FILE_REASONS[status]);
-    expect(container.querySelectorAll("[data-file-card]")).toHaveLength(6);
+    const { container } = agentSays(
+      files.map((f, i) => `[链接${i}](${f.href})`).join("、") + " 以及 [`/Users/x/dist`](file:///Users/x/dist) 和 ![图](/x/img.png)",
+      [
+        ...files,
+        sent({ href: "file:///Users/x/dist", name: "dist", id: null, size: null, mime: "application/octet-stream", status: "not_file" }),
+        sent({ href: "/x/img.png", name: "img.png", id: null, size: null, status: "not_allowed" }),
+      ],
+    );
+    for (const status of statuses) expect(container).not.toHaveTextContent(SENT_FILE_REASONS[status]);
+    expect(container).toHaveTextContent("链接0、链接1、链接2、链接3、链接4 以及 /Users/x/dist 和 图");
+    expect(container.querySelector("code")).toHaveTextContent("/Users/x/dist");
+    expect(container.querySelectorAll("[data-file-card], [data-file-link]")).toHaveLength(0);
     expect(urls(container)).toEqual({ src: [], href: [] });
   });
 });
@@ -145,7 +165,7 @@ describe("Worker 页面", () => {
 });
 
 describe("重渲染（WS 推送让父组件重画）", () => {
-  it("内联图和文件卡片不卸载重建：rerender 后还是同一个 DOM 节点", () => {
+  it("内联图和行内文件链接不卸载重建：rerender 后还是同一个 DOM 节点", () => {
     const text = "![图](/tmp/a.png)\n\n[报告](/tmp/b.pdf)";
     const files = () => [
       sent({ href: "/tmp/a.png", name: "a.png" }),
@@ -155,12 +175,13 @@ describe("重渲染（WS 推送让父组件重画）", () => {
     const bubble = () => <MessageBubble message={makeMessage({ id: 1, text, meta: { files: files() } })} identity={identity} head actions={actions} />;
     const { container, rerender } = render(bubble());
     const img = container.querySelector("img[alt='图']");
-    const card = container.querySelector("[data-file-card]");
+    const fileLink = container.querySelector("button[data-file-link]");
     expect(img).not.toBeNull();
+    expect(fileLink).not.toBeNull();
     rerender(bubble());
     rerender(bubble());
     expect(container.querySelector("img[alt='图']")).toBe(img);
-    expect(container.querySelector("[data-file-card]")).toBe(card);
+    expect(container.querySelector("button[data-file-link]")).toBe(fileLink);
   });
 });
 
@@ -190,32 +211,5 @@ describe("文件已过期（副本被定期清理）", () => {
     fireEvent.error(screen.getByRole("img", { name: "截图" }));
     expect(container.querySelectorAll("img")).toHaveLength(0);
     expect(within(container.querySelector("[data-file-card]") as HTMLElement).getByText("文件已过期")).toBeInTheDocument();
-  });
-
-  it("文件卡片：取文件返回 404 显示“文件已过期”，不再是按钮（点不开预览）；别的状态照常", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ status: 404 });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      const file = sent({ href: "/tmp/a.pdf", name: "a.pdf", mime: "application/pdf" });
-      const { container } = agentSays("[报告](/tmp/a.pdf)", [file]);
-      expect(await screen.findByText("文件已过期")).toBeInTheDocument();
-      expect(fetchMock).toHaveBeenCalledWith(API_PATHS.sentFile(file.id!, "a.pdf"), { method: "HEAD" });
-      expect(container.querySelectorAll("a, button")).toHaveLength(0);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("文件卡片：取文件正常（200）照常是能点开预览的按钮", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      const { container } = agentSays("[报告](/tmp/a.pdf)", [sent({ href: "/tmp/a.pdf", name: "a.pdf", mime: "application/pdf" })]);
-      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-      expect(screen.queryByText("文件已过期")).toBeNull();
-      expect(container.querySelectorAll("button[data-file-card]")).toHaveLength(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 });

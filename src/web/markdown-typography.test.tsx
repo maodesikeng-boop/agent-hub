@@ -149,3 +149,12 @@ describe("表格", () => {
     expect(css).toMatch(/\.markdown th,\s*\.markdown td\s*\{[^}]*text-align:\s*left/);
   });
 });
+
+describe("链接与行内文件链接样式", () => {
+  it("styles.css 定义 --link: #2563eb，.markdown a 与 [data-file-link] 统一用蓝色链接字，内嵌 code 继承链接颜色", () => {
+    const css = readFileSync(join(process.cwd(), "src/web/styles.css"), "utf8");
+    expect(css).toMatch(/--link:\s*#2563eb;/);
+    expect(css).toMatch(/\.markdown a,\s*\.markdown \[data-file-link\]\s*\{[^}]*color:\s*var\(--link\)/);
+    expect(css).toMatch(/\.markdown a code,\s*\.markdown \[data-file-link\] code\s*\{[^}]*color:\s*inherit/);
+  });
+});
