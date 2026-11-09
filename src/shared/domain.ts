@@ -739,6 +739,46 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
 }
 
 /**
+ * 标记额度已耗尽（如 Codex 一轮中途最后一次成功响应报 99%，紧接着下一条请求因 usage_limit_exceeded 失败、未再带 100% 响应头）：
+ * - 若已有窗口为 rejected 或 utilization >= 1，将其规整为 utilization >= 1 且 status="rejected"；
+ * - 否则将当前 utilization 最高（并列时取最早重置）的窗口置为 utilization=1、status="rejected"；
+ * - 顶层 status 置为 "rejected"，resetsAt 取所有 rejected 窗口里最晚恢复的时间。
+ */
+export function exhaustRateLimitInfo(info: RateLimitInfo | null | undefined): RateLimitInfo {
+  if (!info) return { status: RATE_LIMIT_REJECTED, resetsAt: null, windows: {} };
+  const windows: Record<string, RateLimitWindow> = {};
+  for (const [k, w] of Object.entries(info.windows)) {
+    if (w && Number.isFinite(w.utilization)) windows[k] = { ...w };
+  }
+  const entries = Object.entries(windows);
+  if (entries.length === 0) {
+    return { status: RATE_LIMIT_REJECTED, resetsAt: info.resetsAt, windows: {} };
+  }
+  const alreadyExhausted = entries.filter(([, w]) => w.status === RATE_LIMIT_REJECTED || w.utilization >= 1);
+  if (alreadyExhausted.length > 0) {
+    for (const [k, w] of alreadyExhausted) {
+      windows[k] = { ...w, utilization: Math.max(1, w.utilization), status: RATE_LIMIT_REJECTED };
+    }
+  } else {
+    let bestKey = entries[0]![0];
+    let bestWin = entries[0]![1];
+    for (const [k, w] of entries.slice(1)) {
+      if (w.utilization > bestWin.utilization || (w.utilization === bestWin.utilization && w.resetsAt < bestWin.resetsAt)) {
+        bestKey = k;
+        bestWin = w;
+      }
+    }
+    windows[bestKey] = { ...bestWin, utilization: 1, status: RATE_LIMIT_REJECTED };
+  }
+  const rejected = Object.values(windows).filter((w) => w.status === RATE_LIMIT_REJECTED);
+  return {
+    status: RATE_LIMIT_REJECTED,
+    resetsAt: rejected.length > 0 ? Math.max(...rejected.map((w) => w.resetsAt)) : info.resetsAt,
+    windows,
+  };
+}
+
+/**
  * 会话。项目经理的会话（role = pm）：conversationId 是项目经理的那个对话。
  * Worker 的会话（role = worker，M3）：conversationId 是 Worker 的对话，workerId 是它的 WorkerRecord，pmId 是 null；
  * cwd 是 worktree（不带附加文件夹）或主文件夹（addDirs 和项目经理的一样）。

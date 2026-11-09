@@ -1207,6 +1207,104 @@ describe("selectors", () => {
     ]);
   });
 
+  // 真实数据（2026-11-09 16:42）：
+  // 1) 旧会话 159（11-07，PR #170 前）把 30 天窗口 resetsAt 1796193546（12/2 14:39，距事件 592 小时）误写进 five_hour（26%）；
+  // 2) 旧会话 201（11-08，free 套餐）只有 thirty_day（40%，resetsAt 1796193546）；
+  // 3) 新会话 306、309（11-09，切到 plus 套餐）只有 five_hour（resetsAt 1794219196，18:13）和 seven_day（16%，resetsAt 1794805996，11/16 13:13）；
+  // 4) 16:37 会话 309（Worker #266，对话 275）因 5 小时额度耗尽 turn_failed（You’ve hit your usage limit ... try again at 6:13 PM.）。
+  it("quotaUsage：2026-11-09 真实数据：过滤跨度超出窗口时长的旧脏数据与旧套餐残留的 30 天窗口，并在会话因额度 turn_failed 时反映 100% 耗尽", () => {
+    const now = 1_794_213_754_000; // 2026-11-09 16:42:34
+    const state = loaded(
+      withWorker({
+        conversations: [
+          makeConvSnapshot(
+            [
+              makeWorkerLine({
+                id: 26171,
+                conversationId: 1,
+                createdAt: 1_794_213_423_022,
+                line: {
+                  workerId: 266,
+                  workerConversationId: 275,
+                  title: "审查 PR #196",
+                  event: "turn_failed",
+                  status: null,
+                  summary:
+                    "failed: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 6:13 PM.",
+                },
+              }),
+            ],
+            { conversation: { id: 1, pmId: 1, title: "小林" } },
+          ),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 275, pmId: 1, title: "审查 PR #196" }) }),
+        ],
+        sessions: [
+          makeSession({
+            sessionId: 159,
+            conversationId: 150,
+            vendor: "codex",
+            lastEventAt: 1_794_059_960_242,
+            rateLimit: {
+              status: "allowed",
+              resetsAt: 1_796_193_546,
+              windows: { five_hour: { utilization: 0.26, resetsAt: 1_796_193_546, status: "allowed" } },
+            },
+          }),
+          makeSession({
+            sessionId: 201,
+            conversationId: 190,
+            vendor: "codex",
+            lastEventAt: 1_794_118_727_948,
+            rateLimit: {
+              status: "allowed",
+              resetsAt: 1_796_193_546,
+              windows: { thirty_day: { utilization: 0.4, resetsAt: 1_796_193_546, status: "allowed" } },
+            },
+          }),
+          makeSession({
+            sessionId: 306,
+            conversationId: 272,
+            vendor: "codex",
+            lastEventAt: 1_794_212_831_606,
+            rateLimit: {
+              status: "allowed",
+              resetsAt: 1_794_219_196,
+              windows: {
+                five_hour: { utilization: 0.88, resetsAt: 1_794_219_196, status: "allowed" },
+                seven_day: { utilization: 0.14, resetsAt: 1_794_805_996, status: "allowed" },
+              },
+            },
+          }),
+          makeSession({
+            sessionId: 309,
+            conversationId: 275,
+            vendor: "codex",
+            lastEventAt: 1_794_213_440_509,
+            rateLimit: {
+              status: "allowed",
+              resetsAt: 1_794_219_196,
+              windows: {
+                five_hour: { utilization: 0.99, resetsAt: 1_794_219_196, status: "allowed" },
+                seven_day: { utilization: 0.16, resetsAt: 1_794_805_996, status: "allowed" },
+              },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(quotaUsage(state, now)).toEqual([
+      {
+        id: "codex",
+        name: "Codex",
+        exhausted: true,
+        windows: [
+          { key: "five_hour", label: "5 小时", short: "5h", percent: 100, resetsAt: 1_794_219_196, warning: true },
+          { key: "seven_day", label: "7 天", short: "7d", percent: 16, resetsAt: 1_794_805_996, warning: false },
+        ],
+      },
+    ]);
+  });
+
   // 真实日志（2026-11-04）：5 小时窗口 14:30 重置（resetsAt 1793773800），重置前 0.96~0.99；重置后第一条事件 14:3x 才带来新窗口 resetsAt 1793791800
   describe("quotaUsage：重置前后的真实序列", () => {
     const RESET = 1_793_773_800;

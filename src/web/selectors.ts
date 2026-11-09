@@ -12,15 +12,18 @@ import {
   askOf,
   DEFAULT_AGENT_VENDOR,
   QUOTA_WINDOWS,
+  VENDOR_FAILURE_SIGNS,
   VENDOR_SPECS,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
+  exhaustRateLimitInfo,
   isHandoverTraffic,
   isAgentVendor,
   isQuotaExhausted,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
+  type AgentVendor,
   type ConversationId,
   type HealthEntry,
   type Message,
@@ -30,6 +33,7 @@ import {
   type Project,
   type QuotaResponse,
   type QuotaWindowKey,
+  type RateLimitInfo,
   type RateLimitWindow,
   type ProjectFolder,
   type SessionId,
@@ -193,6 +197,102 @@ function windowUsage(key: QuotaWindowKey, window: RateLimitWindow, now: number, 
   };
 }
 
+/** Unix 秒时间戳的下界（2001-09-09），用来区分真实时间戳和单测里的 1、7、100 等小序号。 */
+const REAL_EPOCH_SEC = 1_000_000_000;
+/** 窗口重置时间距事件时间 / 当前时间的最大容差（1 小时，防时钟微偏）。 */
+const WINDOW_DURATION_TOLERANCE_SEC = 3600;
+
+/**
+ * 校验窗口数据是否合法：
+ * - utilization 必须是有限数；
+ * - 当 resetsAt 与参考时间（lastEventAt 或 now）都是真实 Unix 时间戳时，resetsAt 距参考时间的跨度不能超过该窗口自身的时长
+ *   （例如 PR #170 之前把 30 天窗口的 resetsAt 1796193546 误写进 five_hour，跨度达 592 小时，远超 5 小时上限）。
+ */
+function isValidQuotaWindow(key: QuotaWindowKey, w: RateLimitWindow | undefined, lastEventAt: number | null, nowMs: number): w is RateLimitWindow {
+  if (w === undefined || !Number.isFinite(w.utilization)) return false;
+  if (Number.isFinite(w.resetsAt) && w.resetsAt >= REAL_EPOCH_SEC) {
+    const maxSpanSec = QUOTA_WINDOWS[key].durationMins * 60 + WINDOW_DURATION_TOLERANCE_SEC;
+    if (lastEventAt !== null && lastEventAt >= REAL_EPOCH_SEC * 1000 && w.resetsAt - lastEventAt / 1000 > maxSpanSec) {
+      return false;
+    }
+    if (nowMs >= REAL_EPOCH_SEC * 1000 && w.resetsAt - nowMs / 1000 > maxSpanSec) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 查找该会话最近一次因额度耗尽（匹配厂商 quota 特征）而 turn_failed / failed 的毫秒时间戳：
+ * - 若会话所在对话的最后一条失败消息属于该会话且匹配 quota，取其 updatedAt；
+ * - 若会话是 Worker 对话，且其所属项目经理对话里该 Worker 的最新一行是 turn_failed 且匹配 quota，取该行的 createdAt。
+ */
+function sessionQuotaFailureAt(state: HubState, session: SessionState, vendor: AgentVendor): number | null {
+  if (session.conversationId === null) return null;
+  const quotaPattern = VENDOR_FAILURE_SIGNS[vendor].quota;
+  const convView = state.conversations[session.conversationId];
+  if (convView) {
+    for (let i = convView.messages.length - 1; i >= 0; i--) {
+      const m = convView.messages[i]!;
+      if (m.sessionId === session.sessionId && m.status === "failed" && typeof m.failureReason === "string" && quotaPattern.test(m.failureReason)) {
+        return m.updatedAt;
+      }
+    }
+    if (convView.conversation.kind === "worker" && convView.conversation.pmId !== null) {
+      const pmId = convView.conversation.pmId;
+      for (const { conversation, messages } of Object.values(state.conversations)) {
+        if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
+        const idx = pmWorkerIndexOf(messages);
+        const line = idx.latestLine.get(session.conversationId);
+        if (line?.event === "turn_failed" && typeof line.summary === "string" && quotaPattern.test(line.summary)) {
+          return idx.latestLineAt.get(session.conversationId) ?? null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** 过滤掉跨度超出窗口自身时长的脏窗口（仅看 rateLimit 自身，O(1)）。 */
+function sanitizeSessionWindows(
+  session: SessionState,
+  allowedKeys: readonly QuotaWindowKey[],
+  now: number,
+): SessionState {
+  if (session.rateLimit === null) return session;
+  const validWindows: Record<string, RateLimitWindow> = {};
+  for (const key of allowedKeys) {
+    const w = session.rateLimit.windows[key];
+    if (isValidQuotaWindow(key, w, session.lastEventAt, now)) {
+      validWindows[key] = w;
+    }
+  }
+  return {
+    ...session,
+    rateLimit: { ...session.rateLimit, windows: validWindows },
+  };
+}
+
+/** 若该会话在当前窗口周期内因额度耗尽失败（且尚未标 rejected），用 exhaustRateLimitInfo 将耗尽窗口规整为 100% rejected。 */
+function applySessionQuotaFailure(state: HubState, session: SessionState, vendor: AgentVendor): SessionState {
+  const rateLimit = session.rateLimit;
+  if (rateLimit === null || rateLimit.status === "rejected" || Object.keys(rateLimit.windows).length === 0) return session;
+  const failedAt = sessionQuotaFailureAt(state, session, vendor);
+  if (failedAt === null) return session;
+  const exhausted = exhaustRateLimitInfo(rateLimit);
+  const targetEntry = (Object.entries(exhausted.windows) as [QuotaWindowKey, RateLimitWindow][]).find(
+    ([k, w]) => w.status === "rejected" && rateLimit.windows[k]?.status !== "rejected",
+  );
+  if (!targetEntry) return session;
+  const [targetKey, targetWin] = targetEntry;
+  const durationSec = QUOTA_WINDOWS[targetKey].durationMins * 60;
+  const failedSec = failedAt / 1000;
+  if (targetWin.resetsAt > 0 && failedSec >= targetWin.resetsAt - durationSec && failedSec <= targetWin.resetsAt) {
+    return { ...session, rateLimit: exhausted };
+  }
+  return session;
+}
+
 /**
  * 同一个窗口里 a 的值比 b 新。不能看会话的 lastEventAt：网页里它只在会话状态变了才跟着推过来，旧会话收尾也会把它刷新，
  * 会让重置前的旧值盖住重置后的新值。所以：重置时间晚的是新窗口；同一个窗口里用量只增不减，高的是新的；都一样才看 lastEventAt。
@@ -206,9 +306,16 @@ const newerWindow = (a: SessionState, b: SessionState | null, key: string): bool
   return newerSession(a, b);
 };
 
+const quotaUsageCache = new WeakMap<
+  HubState["conversations"],
+  WeakMap<HubState["sessions"], { json: string; value: QuotaVendor[] }>
+>();
+
 /**
  * m3-plan 2.7：每个会话每一轮都有额度事件（Claude 的 rate_limit_event、codex 的 account/rateLimits/updated）。
- * 每家厂商只看自己的会话（各家的窗口长度、重置时间不通用，混着挑会把别家的时间显示到这家头上）；每个窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
+ * 每家厂商只看自己的会话（各家的窗口长度、重置时间不通用，混着挑会把别家的时间显示到这家头上）；
+ * 窗口集合以该厂商最新一个有合法窗口的会话为准（例如从 free 套餐的 30 天切到 plus 套餐的 5 小时 + 7 天后，不再把旧套餐残留的 30 天拼进来）；
+ * 每个当前有效窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
  * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
  * 过了 resetsAt 的窗口已经重置：显示 0%、没有重置时间、不标快用完（新窗口的数据要等下一条事件才来）；不是已用完。
  * now 是毫秒；网页用 useRerenderAt 在每个重置时间点重新渲染，所以页面不动也会变。
@@ -217,9 +324,24 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
     const windows: QuotaWindowUsage[] = [];
-    const sessions = state.sessions.filter((s) => (s.vendor ?? DEFAULT_AGENT_VENDOR) === spec.id);
-    for (const key of spec.windows) {
-      const { label, short } = QUOTA_WINDOWS[key];
+    const pickedRawWindows: RateLimitWindow[] = [];
+    const sessions = state.sessions
+      .filter((s) => (s.vendor ?? DEFAULT_AGENT_VENDOR) === spec.id)
+      .map((s) => sanitizeSessionWindows(s, spec.windows, now));
+    let latestIdx = -1;
+    let latestWithWindows: SessionState | null = null;
+    for (let i = 0; i < sessions.length; i++) {
+      const s = sessions[i]!;
+      if (s.rateLimit !== null && Object.keys(s.rateLimit.windows).length > 0 && newerSession(s, latestWithWindows)) {
+        latestWithWindows = s;
+        latestIdx = i;
+      }
+    }
+    if (latestWithWindows === null) continue;
+    latestWithWindows = applySessionQuotaFailure(state, latestWithWindows, spec.id);
+    sessions[latestIdx] = latestWithWindows;
+    const activeKeys = spec.windows.filter((key) => latestWithWindows!.rateLimit!.windows[key] !== undefined);
+    for (const key of activeKeys) {
       let best: SessionState | null = null;
       for (const s of sessions) {
         const w = s.rateLimit?.windows[key];
@@ -227,13 +349,25 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
       }
       const window = best?.rateLimit?.windows[key];
       if (window === undefined) continue;
+      pickedRawWindows.push(window);
       windows.push(windowUsage(key, window, now, spec.warningStatus));
     }
     if (windows.length === 0) continue;
     let latest: SessionState | null = null;
     for (const s of sessions) if (s.rateLimit !== null && newerSession(s, latest)) latest = s;
-    vendors.push({ id: spec.id, name: spec.name, windows, exhausted: isQuotaExhausted(latest?.rateLimit, now) });
+    const exhausted =
+      isQuotaExhausted(latest?.rateLimit, now) || pickedRawWindows.some((w) => !isReset(w.resetsAt, now) && w.status === "rejected");
+    vendors.push({ id: spec.id, name: spec.name, windows, exhausted });
   }
+  const json = JSON.stringify(vendors);
+  let bySessions = quotaUsageCache.get(state.conversations);
+  if (bySessions === undefined) {
+    bySessions = new WeakMap();
+    quotaUsageCache.set(state.conversations, bySessions);
+  }
+  const prev = bySessions.get(state.sessions);
+  if (prev !== undefined && prev.json === json) return prev.value;
+  bySessions.set(state.sessions, { json, value: vendors });
   return vendors;
 }
 
@@ -294,6 +428,7 @@ interface PmWorkerIndex {
   endedAt: ReadonlyMap<ConversationId, number>;
   tones: ReadonlyMap<ConversationId, WorkerTone>;
   latestLine: ReadonlyMap<ConversationId, WorkerMessageMeta>;
+  latestLineAt: ReadonlyMap<ConversationId, number>;
 }
 
 const pmWorkerIndexCache = new WeakMap<readonly Message[], PmWorkerIndex>();
@@ -304,16 +439,18 @@ function pmWorkerIndexOf(messages: readonly Message[]): PmWorkerIndex {
   const endedAt = new Map<ConversationId, number>();
   const tones = new Map<ConversationId, WorkerTone>();
   const latestLine = new Map<ConversationId, WorkerMessageMeta>();
+  const latestLineAt = new Map<ConversationId, number>();
   for (const message of messages) {
     const meta = workerEventOf(message);
     if (!meta) continue;
     latestLine.set(meta.workerConversationId, meta);
+    latestLineAt.set(meta.workerConversationId, message.createdAt);
     tones.set(meta.workerConversationId, workerStatusOf(meta).tone);
     if (meta.event === "ended" || meta.event === "worktree_failed") {
       endedAt.set(meta.workerConversationId, Math.max(endedAt.get(meta.workerConversationId) ?? 0, message.createdAt));
     }
   }
-  cached = { endedAt, tones, latestLine };
+  cached = { endedAt, tones, latestLine, latestLineAt };
   pmWorkerIndexCache.set(messages, cached);
   return cached;
 }

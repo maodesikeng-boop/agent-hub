@@ -826,6 +826,38 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
     });
     expect(t.of("rate_limit")[0]!.info).toEqual(updatedRow.rateLimit);
   });
+
+  it("一轮中途因额度耗尽失败（turn/completed 带 usage limit 错误）：把上一次 99% 的窗口更新为 100% rejected 并再发一条 rate_limit", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            rateLimits: {
+              primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: 1794219196 },
+              secondary: { usedPercent: 16, windowDurationMins: 10080, resetsAt: 1794805996 },
+            },
+            status: "failed",
+            errorMessage:
+              "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 6:13 PM.",
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "审查 PR"));
+    await t.waitFor("turn.ended");
+
+    const updatedRow = t.store.get(s.id)!;
+    expect(updatedRow.rateLimit).toEqual({
+      status: "rejected",
+      resetsAt: 1794219196,
+      windows: {
+        five_hour: { utilization: 1, resetsAt: 1794219196, status: "rejected" },
+        seven_day: { utilization: 0.16, resetsAt: 1794805996, status: "allowed" },
+      },
+    });
+    expect(t.of("rate_limit").at(-1)!.info).toEqual(updatedRow.rateLimit);
+  });
 });
 
 describe("CodexDriver 会话恢复与失败回退", () => {
