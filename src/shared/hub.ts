@@ -20,7 +20,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
-import type { AgentVendor } from "./vendors.ts";
+import type { AgentVendor, VendorAvailability } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -71,6 +71,7 @@ export const HUB_COMMANDS = [
   "worker.show",
   "worker.log",
   "worker.search",
+  "models",
   "ask",
   "schedule.add",
   "schedule.list",
@@ -99,6 +100,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.show": ["pm"],
   "worker.log": ["pm"],
   "worker.search": ["pm"],
+  models: ["pm"],
   ask: ["pm"],
   "schedule.add": ["pm"],
   "schedule.list": ["pm"],
@@ -163,6 +165,11 @@ export interface HubArgsMap {
    * `--stats`：不列步骤，汇总这个 Worker 所有会话里账本留着的全部步骤（steps 数组留空），不能和 last 一起用。
    */
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
+  /**
+   * `hub models [--vendor <厂商>] [--refresh]`：查看当前设备各厂商（或指定厂商）可用的模型、默认模型及每个模型支持的思考程度。
+   * `--refresh` 强制重新向本机 CLI 探测。
+   */
+  models: { vendor?: AgentVendor; refresh?: boolean };
   /**
    * `hub ask [--option <选项>...] --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
    * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的；options 是可选的选项列表（2～10 项）。
@@ -251,6 +258,27 @@ export interface WorkerPr {
 
 export type WorkerPrProbeResult = WorkerPr | { unavailable: string } | null;
 
+/** hub models 返回的单个模型项。 */
+export interface HubModelEntry {
+  id: string;
+  label: string;
+  efforts: string[];
+}
+
+/** hub models 返回的单个厂商模型目录摘要。 */
+export interface HubVendorModels {
+  vendor: AgentVendor;
+  label: string;
+  source: "vendor" | "bundled";
+  availability: VendorAvailability;
+  defaultModel: string | null;
+  defaultModelId: string | null;
+  defaultEffort: string | null;
+  defaultEfforts: string[];
+  efforts: string[];
+  models: HubModelEntry[];
+}
+
 /** 各命令成功时的 data。text 是给 agent 看的一两句中文，data 给程序用。 */
 export interface HubDataMap {
   /** 按 role 收窄。 */
@@ -274,6 +302,7 @@ export interface HubDataMap {
   /** steps：最近的几步，从旧到新，和 text 里的行一一对应。 */
   "worker.log": { worker: WorkerRecord; steps: WorkerLogStep[] };
   "worker.search": { hits: WorkerSearchHit[] };
+  models: { vendors: HubVendorModels[] };
   /** messageId：对话里那条带标记的消息。 */
   ask: { messageId: MessageId };
   "schedule.add": { schedule: ScheduleRecord };

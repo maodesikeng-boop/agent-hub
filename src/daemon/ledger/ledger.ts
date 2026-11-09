@@ -287,6 +287,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     uncleanedHandovers: handover.uncleanedHandovers,
 
     hubCall: hub.hubCall,
+    sessionRole: (sessionId) => {
+      const s = getAgentSession(db, sessionId);
+      if (s === null) return null;
+      if (s.role === "pm" && s.pmId === null) return null;
+      if (s.role === "worker" && s.workerId === null) return null;
+      return s.role;
+    },
     workerStartFolder: (sessionId) => workers.workerStartFolder(getAgentSession(db, sessionId)),
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),

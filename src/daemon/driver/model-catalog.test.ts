@@ -796,6 +796,27 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(second.defaultEfforts).toEqual(["low", "high", "max", "ultra"]);
   });
 
+  it("list({ vendor, refresh }) 只查并返回指定厂商，不重查其他厂商", async () => {
+    let claudeCalls = 0;
+    let codexCalls = 0;
+    const catalogs = createModelCatalogs({
+      sources: {
+        claude: { parse: parseInitializeModels, query: async () => (claudeCalls++, REAL_MODELS) },
+        codex: { parse: parseCodexModels, query: async () => (codexCalls++, REAL_CODEX_MODELS) },
+      },
+      log: () => {},
+    });
+    const onlyClaude = await catalogs.list({ vendor: "claude" });
+    expect(onlyClaude.map((c) => c.vendor)).toEqual(["claude"]);
+    expect(claudeCalls).toBe(1);
+    expect(codexCalls).toBe(0);
+
+    const refreshedClaude = await catalogs.list({ vendor: "claude", refresh: true });
+    expect(refreshedClaude.map((c) => c.vendor)).toEqual(["claude"]);
+    expect(claudeCalls).toBe(2);
+    expect(codexCalls).toBe(0);
+  });
+
   it("指纹冷却：命中缓存时 MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS 内 list()/ensureUsable() 再多次也不重算指纹（不碰磁盘）；过了冷却期只算一次", async () => {
     let now = 4_000_000;
     let fp = "v1";

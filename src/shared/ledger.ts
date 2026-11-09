@@ -28,7 +28,7 @@ import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
-import type { AgentVendor, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -315,6 +315,8 @@ export interface HubCallContext {
   transcript?: string | null;
   /** worker.start 带 --vendor 时：这家在这台设备（device 是设备名）上能不能用；没装、没登录账本拒绝派。 */
   vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability; device: string };
+  /** models：agent 接口按 --vendor / --refresh 异步查好的模型目录；不传时账本用缓存或打包目录兜底。 */
+  modelCatalogs?: readonly ModelCatalog[];
 }
 
 /** 后台写交接时跑腿的（daemon/handover/runner.ts）用的几个方法见 LedgerHandoverWork（shared/handover.ts）。 */
@@ -431,6 +433,11 @@ export interface Ledger extends LedgerHandoverWork {
    * 会话不存在或不是项目经理的会话 → forbidden。
    */
   hubCall<C extends HubCommand>(sessionId: SessionId, command: C, args: HubArgs<C>, context?: HubCallContext): HubResult<C>;
+  /**
+   * agent 接口在异步准备（如 models.list、探 git）之前调（只读）：这个会话的角色；会话不存在或数据不完整 → null。
+   * 用来在触发外部进程探测前先按 hubCommandAllowed 判断权限，无权限的直接跳过探测交由 hubCall 报 forbidden。
+   */
+  sessionRole(sessionId: SessionId): AgentRole | null;
   /**
    * agent 接口在 worker.start 之前调（只读）：要探 git 的那个文件夹，就是这个会话所属项目经理的项目主文件夹。
    * 不是项目经理的会话、还没有项目 → null（不用探，hubCall 自己会报 forbidden、invalid）。

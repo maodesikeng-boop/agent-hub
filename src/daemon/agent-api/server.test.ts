@@ -46,6 +46,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "project.setup": { command: "pnpm install --frozen-lockfile --ignore-scripts" },
   "persona.show": {},
   "persona.edit": { text: "新的性格设定", mode: "hands_on", reason: "用户要求" },
+  models: { vendor: "claude", refresh: true },
   "worker.start": { title: "修 X", task: "把 X 修好，测试要过", model: "claude-haiku-5-5", readonly: true, noWorktree: true },
   "worker.send": { workerId: 3, text: "再改一下" },
   "worker.end": { workerId: 3 },
@@ -427,6 +428,52 @@ describe("agent api over inject", () => {
         { vendor: "claude", vendorSessionId: "v-2", cwd: "/wt/1/5" },
       ]);
       expect(ledger.contexts).toEqual([{ transcript: "/vendor/v-1.jsonl" }, { transcript: null }, { transcript: null }]);
+    });
+  });
+
+  describe("hub models：调 hubCall 之前先异步取模型目录", () => {
+    it("把 refresh 和可选的 vendor 传给 models.list，拿到的目录作为 context.modelCatalogs 交给 hubCall", async () => {
+      const listCalls: unknown[] = [];
+      const fakeCatalogs = createModelCatalogs({ sources: {}, log: () => {} });
+      const snapshot = await fakeCatalogs.list();
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        models: {
+          list: async (opts) => {
+            listCalls.push(opts);
+            return opts?.vendor ? snapshot.filter((c) => c.vendor === opts.vendor) : snapshot;
+          },
+        },
+      });
+      await app.ready();
+      expect((await call("models", {})).statusCode).toBe(200);
+      expect((await call("models", { vendor: "claude", refresh: true })).statusCode).toBe(200);
+      expect(listCalls).toEqual([{ refresh: false }, { refresh: true, vendor: "claude" }]);
+      expect(ledger.contexts[0]?.modelCatalogs).toHaveLength(3);
+      expect(ledger.contexts[1]?.modelCatalogs?.map((c) => c.vendor)).toEqual(["claude"]);
+    });
+
+    it("Worker 调用 models（带 refresh: true）被 403 forbidden 拒绝，且不触发 models.list 探测", async () => {
+      const listCalls: unknown[] = [];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        models: {
+          list: async (opts) => {
+            listCalls.push(opts);
+            return [];
+          },
+        },
+      });
+      await app.ready();
+      ledger.sessionRoles.set(22, "worker");
+      const res = await call("models", { refresh: true }, tokenB);
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ ok: false, code: "forbidden", message: expect.any(String) });
+      expect(listCalls).toHaveLength(0);
     });
   });
 

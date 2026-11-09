@@ -676,10 +676,10 @@ export interface ModelCatalogsOptions {
 
 export interface ModelCatalogs {
   /**
-   * 每家厂商一份（按 AGENT_VENDORS 的顺序），带这台设备上的状态，不会失败。
+   * 每家厂商一份（按 AGENT_VENDORS 的顺序，或只查指定的 vendor），带这台设备上的状态，不会失败。
    * refresh：true 不管新不新都重新问一次；"unusable" 只重问现在不能用（没登录、没装）的那几家。都是问完再回。
    */
-  list(options?: { refresh?: boolean | "unusable" }): Promise<ModelCatalog[]>;
+  list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]>;
   /** 现在缓存着的那份（不问厂商、不等），还没问到过是 null。账本写系统消息时用。 */
   current(vendor: AgentVendor): ModelCatalog | null;
   /** 现在的状态（不问厂商、不等；装没装每次查文件）。提示词用。 */
@@ -832,7 +832,8 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
   return {
     async list(opts = {}) {
       const refresh = opts.refresh ?? false;
-      return Promise.all(AGENT_VENDORS.map((vendor) => catalogOf(slots[vendor], refresh)));
+      const vendors = opts.vendor !== undefined ? [opts.vendor] : AGENT_VENDORS;
+      return Promise.all(vendors.map((vendor) => catalogOf(slots[vendor], refresh)));
     },
     current(vendor) {
       return slots[vendor]?.cached ?? null;

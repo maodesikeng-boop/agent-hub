@@ -109,6 +109,12 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     usage: `  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]`,
   },
   {
+    command: "models",
+    group: "models",
+    cli: "models",
+    usage: `  ${hub} models [--vendor ${AGENT_VENDORS.join("|")}] [--refresh]               查看各厂商可用的模型和每个模型支持的思考程度（--refresh 重新探测）`,
+  },
+  {
     command: "worker.start",
     group: "worker",
     action: "start",
@@ -270,6 +276,7 @@ type Options = {
   reason?: string;
   title?: string;
   vendor?: string;
+  refresh?: boolean;
   model?: string;
   effort?: string;
   readonly?: boolean;
@@ -355,6 +362,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         reason: { type: "string" },
         title: { type: "string" },
         vendor: { type: "string" },
+        refresh: { type: "boolean" },
         model: { type: "string" },
         effort: { type: "string" },
         readonly: { type: "boolean" },
@@ -383,6 +391,17 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], "status");
     expectPositionals(parsed.positionals.slice(1), 0, "status");
     return { command: "status", body: {}, textSource: null };
+  }
+  if (group === "models") {
+    allowOnly(values, ["vendor", "refresh"], "models");
+    expectPositionals(parsed.positionals.slice(1), 0, "models");
+    if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
+      throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+    }
+    const body: Record<string, unknown> = {};
+    if (values.vendor !== undefined) body.vendor = values.vendor;
+    if (values.refresh === true) body.refresh = true;
+    return { command: "models", body, textSource: null };
   }
   if (group === "project" && action === "create") {
     allowOnly(values, ["name", "folder", "description"], "project create");

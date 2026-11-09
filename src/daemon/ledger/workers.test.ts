@@ -11,7 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
-import type { VendorAvailability } from "../../shared/vendors.ts";
+import type { ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
@@ -2127,5 +2127,83 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     const onDemand = ledger.messagesBefore(worker.workerConversationId, Number.MAX_SAFE_INTEGER);
     expect(onDemand.messages.map((m) => m.id)).toEqual(openSnap.messages.map((m) => m.id));
     expect(onDemand.hasMore).toBe(false);
+  });
+});
+
+describe("查看各厂商可用的模型（hub models）", () => {
+  it("列出全部或指定厂商的模型、可用状态、默认模型与每个模型的思考程度；不支持调节的写“不可调”", () => {
+    const customCatalogs: ModelCatalog[] = [
+      {
+        vendor: "claude",
+        label: "Claude Code",
+        source: "vendor",
+        availability: "available",
+        defaultModel: "Opus 5.6 (1M context)",
+        defaultModelId: "opus[1m]",
+        defaultEffort: "xhigh",
+        defaultEfforts: ["low", "medium", "high", "xhigh", "max"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        models: [
+          { id: "opus[1m]", label: "Opus 5.6 (1M context)", description: null, efforts: ["low", "medium", "high", "xhigh", "max"] },
+          { id: "haiku", label: "haiku", description: null, efforts: [] },
+        ],
+        customModelExample: "claude-opus-5-6",
+      },
+      {
+        vendor: "agy",
+        label: "Antigravity",
+        source: "bundled",
+        availability: "signed_out",
+        defaultModel: "gemini-4-argon",
+        defaultModelId: null,
+        defaultEffort: null,
+        defaultEfforts: null,
+        efforts: ["low", "medium", "high", "max"],
+        models: [{ id: "gemini-4-argon", label: "Gemini 4 Argon", description: null, efforts: ["low", "high"] }],
+        customModelExample: null,
+      },
+      {
+        vendor: "codex",
+        label: "Codex",
+        source: "bundled",
+        availability: "not_installed",
+        defaultModel: "gpt-5.4",
+        defaultModelId: null,
+        defaultEffort: null,
+        defaultEfforts: null,
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        models: [{ id: "gpt-5.4", label: "GPT-5.4", description: null, efforts: ["low", "medium", "high", "xhigh"] }],
+        customModelExample: null,
+      },
+    ];
+
+    const all = ledger.hubCall(lin.sessionId, "models", {}, { modelCatalogs: customCatalogs });
+    expect(all.data.vendors.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
+      ["claude", "available", "Opus 5.6 (1M context)", "xhigh"],
+      ["agy", "signed_out", "gemini-4-argon", null],
+      ["codex", "not_installed", "gpt-5.4", null],
+    ]);
+    expect(all.data.vendors[0]?.models).toEqual([
+      { id: "opus[1m]", label: "Opus 5.6 (1M context)", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "haiku", label: "haiku", efforts: [] },
+    ]);
+    expect(all.text).toContain("claude（Claude Code）· 状态: 可用 · 默认模型: opus[1m]（Opus 5.6 (1M context)） · 默认思考程度: xhigh");
+    expect(all.text).toContain("  - opus[1m]（Opus 5.6 (1M context)） · 思考程度: low, medium, high, xhigh, max");
+    expect(all.text).toContain("  - haiku · 思考程度: 不可调");
+    expect(all.text).toContain("agy（Antigravity）· 状态: 未登录 · 默认模型: gemini-4-argon · 默认思考程度: 默认");
+    expect(all.text).toContain("codex（Codex）· 状态: 未安装 · 默认模型: gpt-5.4 · 默认思考程度: 默认");
+
+    const single = ledger.hubCall(lin.sessionId, "models", { vendor: "claude" }, { modelCatalogs: customCatalogs });
+    expect(single.data.vendors.map((v) => v.vendor)).toEqual(["claude"]);
+    expect(single.text).not.toContain("agy（Antigravity）");
+  });
+
+  it("不认识的 --vendor → invalid；Worker 调用 → forbidden", () => {
+    const worker = start({ noWorktree: true }).data.worker;
+    expect(ledger.sessionRole(lin.sessionId)).toBe("pm");
+    expect(ledger.sessionRole(workerSessionId(worker.id))).toBe("worker");
+    expect(ledger.sessionRole(999_999)).toBeNull();
+    expectLedgerError(() => hub(lin.sessionId, "models", { vendor: "gemini" as never }), "invalid", /厂商只能是/);
+    expectLedgerError(() => hub(workerSessionId(worker.id), "models", {}), "forbidden");
   });
 });

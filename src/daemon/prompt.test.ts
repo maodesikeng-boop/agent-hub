@@ -431,6 +431,10 @@ describe("提示词：项目经理（M3）", () => {
   it("“只管理”写成派 Worker、验收；两种模式都有派 Worker 的说明和 hub worker 用法", () => {
     expect(PM_MODE_PROMPTS.manage_only).toContain(`${hub} worker start`);
     expect(PM_MODE_PROMPTS.manage_only).toContain("验收");
+    expect(PM_MODE_PROMPTS.manage_only).toContain(
+      "耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。",
+    );
+    expect(PM_WORKER_PROMPT).toContain(`（可用 \`${hub} models\` 查看完整实时模型与支持的思考档位）`);
     for (const ctx of [projectContext(), noProjectContext()]) {
       const prompt = buildLaunchPrompt(ctx, dir);
       expect(prompt).toContain(PM_WORKER_PROMPT);
@@ -550,6 +554,7 @@ describe("提示词：项目经理（M3）", () => {
 
   it("hub 用法有 hub worker 的命令，和 shared/hub.ts、hub/cli.ts 的 HUB_COMMAND_SPECS 及关键参数对得上", () => {
     for (const sub of [
+      `\`${hub} models [--vendor ${AGENT_VENDORS.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）`,
       `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin`,
       `${hub} worker send <编号> --stdin`,
       `${hub} worker end <编号>`,
@@ -573,6 +578,7 @@ describe("提示词：项目经理（M3）", () => {
       "--reason",
       "--title",
       "--vendor",
+      "--refresh",
       "--model",
       "--effort",
       "--readonly",
