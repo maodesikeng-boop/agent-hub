@@ -1,7 +1,8 @@
 // 把接口、WebSocket 和 state.ts 接起来，一台设备一个 DeviceHub：先拉快照，再按 seq 接着收变化；收到 resync 重新拉。
 // DevicesStore 管设备清单（GET /api/devices）和每台的 DeviceHub（Map，键见 devices.ts）；useDevices 是给 React 用的那一层。
 // 每台各跑各的 seq、resync、重连：一台断了只补那一台，不拖累别的。
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
+import { createStore, useStore, type StoreApi } from "zustand";
 import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type DeviceInfo, type MessageId, userMessageDedupeKey } from "../shared/index.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
@@ -17,7 +18,7 @@ type Action = Parameters<typeof reducer>[1];
 
 /** 一台设备的连接和状态。入口本机第一次拉快照失败时等用户点“重试”（整页提示）；别的设备自己按退避一直重试。 */
 export class DeviceHub {
-  state: HubState = initialState;
+  readonly store: StoreApi<HubState> = createStore<HubState>(() => initialState);
   readonly link: LinkHistory = { lastOnlineAt: null, disconnectedAt: null };
   /** 已经交给界面的最后一个 seq；重连时从它之后补。 */
   private seq = 0;
@@ -43,6 +44,16 @@ export class DeviceHub {
     this.onChange = onChange;
     this.onResync = onResync;
   }
+
+  get state(): HubState {
+    return this.store.getState();
+  }
+
+  set state(next: HubState) {
+    this.store.setState(next, true);
+  }
+
+  subscribe = (listener: (state: HubState, prevState: HubState) => void): (() => void) => this.store.subscribe(listener);
 
   private get remote(): boolean {
     return this.key !== LOCAL_DEVICE;
@@ -303,8 +314,7 @@ export class DevicesStore {
   private readonly hubs = new Map<DeviceKey, DeviceHub>();
   private infos: readonly DeviceInfo[] | null = null;
   private managed = false;
-  private snapshot: DevicesSnapshot;
-  private readonly listeners = new Set<() => void>();
+  readonly store: StoreApi<DevicesSnapshot>;
   private running = false;
   private listTimer: ReturnType<typeof setTimeout> | undefined;
   /** 设备清单连续拉失败的次数（退避用）；拉到或 404 归零。 */
@@ -320,19 +330,15 @@ export class DevicesStore {
         if (this.running) void this.refresh();
       }),
     );
-    this.snapshot = this.build();
+    this.store = createStore<DevicesSnapshot>(() => this.build());
   }
 
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
+  subscribe = (listener: (state: DevicesSnapshot, prevState: DevicesSnapshot) => void): (() => void) => this.store.subscribe(listener);
 
-  getSnapshot = (): DevicesSnapshot => this.snapshot;
+  getSnapshot = (): DevicesSnapshot => this.store.getState();
 
   private changed = (): void => {
-    this.snapshot = this.build();
-    for (const listener of this.listeners) listener();
+    this.store.setState(this.build(), true);
   };
 
   private build(): DevicesSnapshot {
@@ -426,6 +432,6 @@ export function useDevices() {
     store.start();
     return () => store.dispose();
   }, [store]);
-  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const snapshot = useStore(store.store);
   return { ...snapshot, hub: (key: DeviceKey) => store.hub(key), refresh: store.refresh };
 }

@@ -1,5 +1,6 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils.ts";
 import {
   CUSTOM_MODEL,
@@ -26,6 +27,7 @@ import {
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { ACTOR_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
+import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -42,23 +44,38 @@ type Load = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase
 /** 性格设定：进页面拉一次；rev 变了（pm.updated，别处改了）重新拉。 */
 function usePersona(pmId: number, rev: number) {
   const client = useClient();
-  const [load, setLoad] = useState<Load>({ phase: "loading" });
-  const [attempt, setAttempt] = useState(0);
+  const qc = useHubQueryClient();
+  const queryKey = useMemo(() => ["persona", client.device ?? "", pmId] as const, [client.device, pmId]);
+  const { data: persona, error, isFetching, refetch } = useQuery(
+    {
+      queryKey,
+      queryFn: () => client.fetchPersona(pmId),
+      staleTime: 0,
+    },
+    qc,
+  );
+  const prevRev = useRef(rev);
   useEffect(() => {
-    let alive = true;
-    client.fetchPersona(pmId).then(
-      (persona) => alive && setLoad({ phase: "ready", persona }),
-      (err: unknown) => alive && setLoad((prev) => (prev.phase === "ready" ? prev : { phase: "error", info: errorText(err) })),
-    );
-    return () => {
-      alive = false;
-    };
-  }, [pmId, rev, attempt]);
+    if (prevRev.current !== rev) {
+      prevRev.current = rev;
+      void refetch();
+    }
+  }, [rev, refetch]);
   const retry = useCallback(() => {
-    setLoad({ phase: "loading" });
-    setAttempt((n) => n + 1);
-  }, []);
-  const set = useCallback((persona: PersonaView) => setLoad({ phase: "ready", persona }), []);
+    void refetch();
+  }, [refetch]);
+  const set = useCallback(
+    (next: PersonaView) => {
+      qc.setQueryData(queryKey, next);
+    },
+    [qc, queryKey],
+  );
+  const load: Load =
+    persona !== undefined
+      ? { phase: "ready", persona }
+      : error && !isFetching
+        ? { phase: "error", info: errorText(error) }
+        : { phase: "loading" };
   return { load, retry, set };
 }
 
@@ -215,40 +232,46 @@ function PmEditor({
   };
 
   // 性格设定：null = 没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
+  const qc = useHubQueryClient();
   const [draftText, setDraftText] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"text" | "revert" | null>(null);
-  const [errors, setErrors] = useState<Partial<Record<"text" | "revert", ErrorLike>>>({});
   const text = draftText ?? persona.text;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const textDirty = text !== persona.text;
 
-  const run = async (what: "text" | "revert", call: () => Promise<PersonaView>, reset: () => void, failText?: (err: unknown) => ErrorLike) => {
-    setBusy(what);
-    setErrors((e) => ({ ...e, [what]: undefined }));
-    try {
-      const next = await call();
-      if (!aliveRef.current) return;
-      reset();
-      onUpdate(next);
-    } catch (err) {
-      if (aliveRef.current) setErrors((e) => ({ ...e, [what]: failText?.(err) ?? errorText(err) }));
-    } finally {
-      if (aliveRef.current) setBusy(null);
-    }
-  };
-  const saveText = () => void run("text", async () => (await client.putPersona(pm.id, { text })).persona, () => setDraftText(null));
-  const revert = (changeId: number) =>
-    void run(
-      "revert",
-      async () => (await client.postRevertPersonaChange(changeId)).persona,
-      // 撤销的结果回来后，本地没提交的输入已经没意义了
-      () => {
+  const textMutation = useMutation(
+    {
+      mutationFn: async () => (await client.putPersona(pm.id, { text })).persona,
+      onSuccess: (next) => {
+        if (!aliveRef.current) return;
+        setDraftText(null);
+        onUpdate(next);
+      },
+    },
+    qc,
+  );
+  const revertMutation = useMutation(
+    {
+      mutationFn: async (changeId: number) => (await client.postRevertPersonaChange(changeId)).persona,
+      onSuccess: (next) => {
+        if (!aliveRef.current) return;
+        // 撤销的结果回来后，本地没提交的输入已经没意义了
         agentSave.reset();
         modeSave.reset();
         setDraftText(null);
+        onUpdate(next);
       },
-      (err) => (err instanceof ApiError && err.status === 409 ? "只能撤销最近一次" : errorText(err)),
-    );
+    },
+    qc,
+  );
+  const busy = textMutation.isPending ? ("text" as const) : revertMutation.isPending ? ("revert" as const) : null;
+  const textError: ErrorLike | undefined = textMutation.error ? errorText(textMutation.error) : undefined;
+  const revertError: ErrorLike | undefined = revertMutation.error
+    ? revertMutation.error instanceof ApiError && revertMutation.error.status === 409
+      ? "只能撤销最近一次"
+      : errorText(revertMutation.error)
+    : undefined;
+  const saveText = () => textMutation.mutate();
+  const revert = (changeId: number) => revertMutation.mutate(changeId);
 
   return (
     <>
@@ -315,16 +338,16 @@ function PmEditor({
           value={text}
           onChange={(e) => setDraftText(e.target.value)}
         />
-        {(tooLong || errors.text) && (
+        {(tooLong || textError) && (
           <div className="px-4 py-2.5">
-            {tooLong ? <RowError>性格设定太长</RowError> : errors.text !== undefined && <RowError error={errors.text} />}
+            {tooLong ? <RowError>性格设定太长</RowError> : textError !== undefined && <RowError error={textError} />}
           </div>
         )}
       </SettingsGroup>
       <SettingsGroup title="修改记录">
-        {errors.revert && (
+        {revertError && (
           <div className="px-4 py-2.5">
-            <RowError error={errors.revert} />
+            <RowError error={revertError} />
           </div>
         )}
         {persona.changes.length === 0 ? (

@@ -1,10 +1,14 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
 import { fetchedQuotaUsage, type QuotaVendor, type QuotaWindowUsage } from "../selectors.ts";
 import { cn } from "../lib/utils.ts";
+import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+
+const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   return (
@@ -47,12 +51,28 @@ function Ring({ percent }: { percent: number }) {
  * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 图标按钮（size="icon-sm"），只显示小圆环图标（无旁白文字），
  * 快用完、用完换颜色，无障碍名称与悬停提示保留完整状态。点开按厂商分组看每个窗口。没有数据不显示。
  * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在；
- * 每次点开向服务端要一次（服务端缓存 5 分钟），问不到、问失败就没有那几块。
+ * 每次点开向服务端要一次（服务端缓存 5 分钟）并在打开期间定时刷新，问不到、问失败就没有那几块。
  */
 export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
-  const [fetched, setFetched] = useState<QuotaVendor[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
   const client = useClient();
+  const qc = useHubQueryClient();
+  const { data: fetched = [], isFetching: loading } = useQuery(
+    {
+      queryKey: ["quota", client.device ?? ""] as const,
+      queryFn: async () => {
+        try {
+          return fetchedQuotaUsage(await client.fetchQuota());
+        } catch {
+          return [];
+        }
+      },
+      enabled: open && fetchable,
+      staleTime: 0,
+      refetchInterval: open && fetchable ? QUOTA_REFETCH_INTERVAL_MS : false,
+    },
+    qc,
+  );
   const head = quota[0];
   const window = head?.windows[0];
   if (!window && !fetchable) return null;
@@ -61,19 +81,8 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
     quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
   const warning = quota.some((vendor) => vendor.windows[0]?.warning);
   const label = exhausted ? "额度已用完" : window ? `${window.label}额度已用 ${window.percent}%` : "额度";
-  const onOpenChange = (open: boolean) => {
-    if (!open || !fetchable) return;
-    setLoading(true);
-    client
-      .fetchQuota()
-      .then(
-        (res) => setFetched(fetchedQuotaUsage(res)),
-        () => setFetched([]),
-      )
-      .finally(() => setLoading(false));
-  };
   return (
-    <Popover onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"

@@ -55,7 +55,7 @@ export interface ConversationView {
   hasMore: boolean;
 }
 
-export type Phase = "loading" | "ready" | "error" | "unauthorized";
+type Phase = "loading" | "ready" | "error" | "unauthorized";
 
 export interface HubState {
   phase: Phase;
