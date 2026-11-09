@@ -76,9 +76,9 @@ export interface MessageActions {
   onAnswerAsk?: (text: string) => void;
 }
 
-const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
+const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
 /** 名字、Worked for、可点开的系统行：13.5px 灰。 */
-const SECONDARY = "text-[13.5px] text-muted-foreground";
+const SECONDARY = "text-minor text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
 const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
@@ -87,7 +87,7 @@ function AgentHead({ identity, dot }: { identity: AgentIdentity; dot?: Exclude<W
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
       <span className="relative flex shrink-0">
-        <Avatar colorKey={identity.avatarKey} size={24} neutral={identity.neutral} />
+        <Avatar colorKey={identity.avatarKey} size={26} neutral={identity.neutral} />
         {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
       </span>
       <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>
@@ -129,7 +129,7 @@ function AskCard({
   const disabled = answered || !onAnswerAsk;
   return (
     <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
-      <div className="w-full min-w-0 text-[15px] leading-relaxed font-medium">
+      <div className="w-full min-w-0 text-body leading-relaxed font-medium">
         <Markdown text={card.question} files={files} messageId={messageId} />
       </div>
       <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="选项">
@@ -154,7 +154,7 @@ function AskCard({
               <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
                 {String.fromCharCode(65 + i)}
               </span>
-              <span className="min-w-0 flex-1 text-[15px] [overflow-wrap:anywhere]">{opt}</span>
+              <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere]">{opt}</span>
             </button>
           );
         })}
@@ -186,7 +186,7 @@ const AgentText = memo(function AgentText({
       {askCard ? (
         <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
       ) : (
-        <div className="w-full min-w-0 text-[15px] leading-relaxed">
+        <div className="w-full min-w-0 text-body leading-relaxed">
           <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
         </div>
       )}
@@ -441,7 +441,7 @@ function NoticeLine({
 }) {
   return (
     <div className={cn("flex items-start gap-1.5 text-xs leading-5 text-muted-foreground", !inTurn && "mt-4")} data-side="left" data-notice title={title}>
-      <Icon className={cn("mt-[3px] size-3.5 shrink-0", danger && "text-danger")} aria-hidden="true" />
+      <Icon className={cn("mt-0.75 size-3.5 shrink-0", danger && "text-danger")} aria-hidden="true" />
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 [overflow-wrap:anywhere]">{children}</div>
     </div>
   );
@@ -737,7 +737,7 @@ export function EmptyConversation({ identity }: { identity?: AgentIdentity }) {
     <div className="m-auto flex flex-col items-center gap-3 py-10 text-center" data-empty>
       {identity && <Avatar colorKey={identity.avatarKey} size={48} neutral={identity.neutral} />}
       <div className="flex flex-col items-center gap-0.5">
-        {identity && <div className="text-[17px] font-semibold">{identity.name}</div>}
+        {identity && <div className="text-title font-semibold">{identity.name}</div>}
         <div className={SECONDARY}>还没有消息</div>
       </div>
     </div>

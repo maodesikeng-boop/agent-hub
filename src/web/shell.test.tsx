@@ -157,7 +157,7 @@ describe("左栏", () => {
     await boot();
     const preview = row("新来的").querySelector("span.block")!;
     expect(preview.textContent).toBe(" ");
-    expect(preview).toHaveClass("block", "text-[13.5px]");
+    expect(preview).toHaveClass("block", "text-minor");
   });
 
   it("左栏底部：不渲染“我”头像与文字；左侧放额度入口，右侧设置按钮 ml-auto 固定靠右；额度、设置、新建都是同一种 ghost 按钮", async () => {
@@ -259,14 +259,14 @@ describe("对话列的宽度（docs/ui-standard.md 第 8 条，照 t3code）", (
     expect(header.className).not.toContain("chat-left");
 
     const convComposerCol = screen.getByPlaceholderText("给 小林 发消息").closest(".chat-column")!;
-    expect(convComposerCol).toHaveClass("-mt-[26px]", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
+    expect(convComposerCol).toHaveClass("-mt-6.5", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
 
     act(() => {
       window.history.replaceState(null, "", "/#/w/30");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     const workerComposerCol = screen.getByPlaceholderText("给 修 X 发消息").closest(".chat-column")!;
-    expect(workerComposerCol).toHaveClass("-mt-[26px]", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
+    expect(workerComposerCol).toHaveClass("-mt-6.5", "relative", "z-10", "pointer-events-none", "*:pointer-events-auto");
   });
 });
 
@@ -443,7 +443,7 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     }));
     await boot();
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveClass("w-[72px]", "border-r", "border-border", "bg-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
     expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
     expect(screen.queryByRole("button", { name: "对话列表" })).toBeNull();
     const navEl = screen.getByRole("navigation", { name: "对话列表" });

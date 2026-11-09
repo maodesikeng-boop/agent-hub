@@ -13,7 +13,7 @@ export function PopoverContent({ className, sideOffset = 8, collisionPadding = 1
         data-slot="popover-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className={cn("z-50 w-[280px] rounded-2xl border border-border bg-background p-4 outline-none", className)}
+        className={cn("z-50 w-70 rounded-2xl border border-border bg-background p-4 outline-none", className)}
         {...props}
       />
     </PopoverPrimitive.Portal>

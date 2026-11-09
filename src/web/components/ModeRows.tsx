@@ -54,10 +54,10 @@ export function ModeRows({
             )}
           >
             <span className="min-w-0 flex-1">
-              <span id={`${id}-label`} className="block text-[15px]">
+              <span id={`${id}-label`} className="block text-body">
                 {PM_MODE_LABELS[mode]}
               </span>
-              <span id={`${id}-detail`} className="block text-[13.5px] leading-snug text-muted-foreground">
+              <span id={`${id}-detail`} className="block text-minor leading-snug text-muted-foreground">
                 {MODE_OPTION_DETAILS[mode]}
               </span>
             </span>

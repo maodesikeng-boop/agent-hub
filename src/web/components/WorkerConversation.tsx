@@ -93,7 +93,7 @@ export function WorkerConversation({
           <ArrowLeft aria-hidden="true" />
         </Button>
         <Avatar colorKey={identity.avatarKey} size={34} neutral />
-        <h1 className="min-w-0 truncate text-[17px] leading-snug font-semibold">{title}</h1>
+        <h1 className="min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
         {readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">只读</span>}
         <span className="flex-1" />
         {toolbar}
@@ -118,7 +118,7 @@ export function WorkerConversation({
               statusAgent={identity}
             />
           </div>
-          <div className="chat-column pointer-events-none relative z-10 -mt-[26px] w-full shrink-0 pb-5 *:pointer-events-auto empty:hidden">
+          <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 pb-5 *:pointer-events-auto empty:hidden">
             {phase !== "ended" && (
               <DraftComposer
                 autoFocus

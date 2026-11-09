@@ -5,7 +5,7 @@ import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
 const FIELD =
-  "w-full rounded-xl border border-border bg-background px-3 text-[15px] outline-none transition-colors placeholder:text-muted-foreground aria-invalid:border-danger disabled:cursor-default disabled:opacity-50";
+  "w-full rounded-xl border border-border bg-background px-3 text-body outline-none transition-colors placeholder:text-muted-foreground aria-invalid:border-danger disabled:cursor-default disabled:opacity-50";
 
 export function Input({ className, ...props }: React.ComponentProps<"input">) {
   return <input data-slot="input" className={cn(FIELD, "h-9", className)} {...props} />;
@@ -29,9 +29,9 @@ export function Select({ className, variant = "field", ...props }: React.Compone
         data-slot="select"
         className={cn(
           variant === "plain"
-            ? "field-sizing-content rounded-xl bg-transparent pr-8 pl-3 text-[15px] outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
+            ? "field-sizing-content rounded-xl bg-transparent pr-8 pl-3 text-body outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
             : cn(FIELD, "pr-8"),
-          "h-9 w-auto max-w-[260px] min-w-0 cursor-pointer appearance-none truncate",
+          "h-9 w-auto max-w-65 min-w-0 cursor-pointer appearance-none truncate",
           className,
         )}
         {...props}

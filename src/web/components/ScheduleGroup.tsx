@@ -123,7 +123,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   return (
     <>
       <SettingsRow label="名字" error={nameProblem}>
-        {(id) => <Input id={id} className="w-[240px]" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
+        {(id) => <Input id={id} className="w-60" autoComplete="off" value={name} aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />}
       </SettingsRow>
       <SettingsRow label="频率" error={freqProblem}>
         {(id) => (
@@ -194,7 +194,7 @@ export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: Sc
         <button
           type="button"
           disabled={full}
-          className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-[15px] transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
+          className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
           onClick={() => setAdding(true)}
         >
           <Plus className="size-4 text-muted-foreground" aria-hidden="true" />

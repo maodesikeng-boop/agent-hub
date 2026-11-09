@@ -446,12 +446,12 @@ describe("老数据、空对话、字号", () => {
     const empty = container.querySelector("[data-empty]") as HTMLElement;
     expect(empty).toHaveTextContent("小林");
     expect(empty).toHaveTextContent("还没有消息");
-    expect((empty.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("48px");
+    expect((empty.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("3rem");
   });
 
-  it("消息流里不用 12.5px、13px", () => {
+  it("消息流里不用 13px（右栏那一档）", () => {
     const { container } = list([...turn(), makeUserMessage({ id: 8, status: "queued" })], { hasMore: true });
-    expect(container.innerHTML).not.toMatch(/text-\[12\.5px\]|text-\[13px\]/);
+    expect(container.innerHTML).not.toMatch(/\btext-small\b/);
   });
 });
 

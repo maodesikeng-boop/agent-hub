@@ -44,18 +44,16 @@ const buttons = (group: HTMLElement) => within(group).getAllByRole("button").fil
 const titleButton = (group: HTMLElement) => within(group).getByRole("heading").querySelector("button")!;
 
 describe("右栏：照 Claude desktop 的样子", () => {
-  it("组标题：13px、前景色（不是灰色小标题）、展开时没有计数；“等你确定”前一个 6px 强调色圆点；Pieces 前 16px 水果果瓣", () => {
+  it("组标题：13px、前景色（不是灰色小标题）、展开时没有计数；“等你确定”前一个 6px 强调色圆点；Pieces 前不放果瓣（右栏只在开关上放一颗）", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30)] });
     for (const [name, group] of [["等你确定", asksGroup()], ["Pieces", workerGroup()]] as const) {
       const heading = within(group).getByRole("heading");
       expect(heading).toHaveTextContent(new RegExp(`^${name}$`));
-      expect(heading).toHaveClass("text-[13px]", "text-foreground");
+      expect(heading).toHaveClass("text-small", "text-foreground");
       expect(heading.className).not.toMatch(/muted-foreground/);
     }
     expect(asksGroup().querySelector("h2 button > span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
-    const avatar = workerGroup().querySelector("h2 button > [data-neutral='true']");
-    expect(avatar).toBeInTheDocument();
-    expect(avatar).toHaveStyle({ width: "16px", height: "16px" });
+    expect(workerGroup().querySelector("h2 [data-neutral='true']")).toBeNull();
   });
 
   it("组和组之间一条 1px 细分隔线（border-border），上下留白一样；没有框、没有阴影", () => {
@@ -72,8 +70,8 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(row).toHaveClass("px-2", "-mx-2", "rounded-xl");
     expect(row.className).not.toMatch(/rounded-2xl|py-2(\s|$)/);
     expect(row.querySelector("[data-neutral='true']")).toBeNull();
-    expect(within(row).getByText("活 30")).toHaveClass("text-[14px]", "truncate");
-    expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary", "status-shimmer");
+    expect(within(row).getByText("活 30")).toHaveClass("text-label", "truncate");
+    expect(within(row).getByText("Working…")).toHaveClass("text-small", "text-primary", "status-shimmer");
   });
 
   it("在等后台命令跑完的 Piece：状态词 Waiting for background command…，算在忙（强调色、排在前面）", () => {
@@ -102,7 +100,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(meta(/活 30/)).toHaveTextContent(/^—$/);
     expect([...meta(/活 31/).children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "158K context"]);
     expect(within(meta(/活 31/)).getByText("158K context")).toHaveClass("tabular-nums");
-    expect(meta(/活 31/)).toHaveClass("text-[13px]", "leading-[18px]", "text-muted-foreground", "gap-3");
+    expect(meta(/活 31/)).toHaveClass("text-small", "leading-4.5", "text-muted-foreground", "gap-3");
     expect(meta(/活 31/)).not.toHaveTextContent("·");
     expect(meta(/活 31/)).not.toHaveTextContent("tokens");
   });
@@ -214,7 +212,7 @@ describe("右栏：只列几条", () => {
     expect(names()).toEqual(["活 3", "活 5", "活 1"]);
     const more = screen.getByRole("button", { name: "Show more" });
     expect(more).toHaveAttribute("aria-expanded", "false");
-    expect(more).toHaveClass("text-[14px]", "text-muted-foreground", "hover:text-foreground");
+    expect(more).toHaveClass("text-label", "text-muted-foreground", "hover:text-foreground");
     expect(more.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
     await user.click(more);
     expect(names()).toEqual(["活 3", "活 5", "活 1", "活 2", "活 4"]);
@@ -244,7 +242,7 @@ describe("右栏：只列几条", () => {
     const ended = within(workerGroup()).getByRole("button", { name: /^已收工/ });
     expect(ended).toHaveTextContent("已收工 30");
     expect(ended).toHaveAttribute("aria-expanded", "false");
-    expect(ended).toHaveClass("text-[14px]", "text-muted-foreground", "hover:text-foreground");
+    expect(ended).toHaveClass("text-label", "text-muted-foreground", "hover:text-foreground");
     expect(ended.className).not.toMatch(/(^|\s)(bg-|border|rounded-full)/);
     expect(within(ended).getByText("30")).toHaveClass("tabular-nums");
     expect(buttons(workerGroup())).toHaveLength(2);
@@ -267,7 +265,7 @@ describe("右栏：提问行", () => {
     const row = within(asksGroup()).getByRole("button", { name: /问题 1/ });
     expect(row).toHaveClass("px-2", "-mx-2", "gap-3", "rounded-xl");
     expect(row.querySelector("svg")).toHaveClass("size-4");
-    expect(within(row).getByText("问题 1")).toHaveClass("text-[14px]", "truncate");
+    expect(within(row).getByText("问题 1")).toHaveClass("text-label", "truncate");
     expect(row).toHaveAttribute("aria-expanded", "false");
     await userEvent.setup().click(row);
     expect(row).toHaveAttribute("aria-expanded", "true");
@@ -350,12 +348,12 @@ describe("右栏：每组可以收起", () => {
 });
 
 describe("RightRailToggle: 切了的水果 Worker 果瓣图标", () => {
-  it("开关使用当前项目经理对应水果切出的 Worker 果瓣（Avatar neutral 22px）", () => {
+  it("开关使用当前项目经理对应水果切出的 Worker 果瓣（Avatar neutral 26px，按根字号缩放）", () => {
     render(<RightRailToggle visible open={false} attention={false} avatarKey={3} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "展开右栏" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
-    expect(avatar).toHaveStyle({ width: "22px", height: "22px" });
+    expect((avatar as HTMLElement).style.width).toBe("1.625rem");
   });
 
   it("有等你确定且收起时右上角显示 6px 强调色小圆点", () => {

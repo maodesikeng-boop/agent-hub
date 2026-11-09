@@ -425,52 +425,26 @@ describe("新建项目经理", () => {
 });
 
 describe("对话顶栏", () => {
-  it("有项目：顶栏有项目经理的名字和文件夹（主文件夹在前）；点头像打开资料页", async () => {
+  it("有项目：顶栏只有头像和名字，不放文件夹；点头像打开资料页，文件夹在资料页里（主文件夹在前）", async () => {
     const user = userEvent.setup();
     await boot();
     await user.click(inNav(/小林/));
-    expect(screen.getByRole("heading", { level: 1, name: "小林" })).toBeInTheDocument();
-    const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
-    expect(folders.map((f) => f.textContent)).toEqual(["/work/foo", "/work/docs"]);
+    const header = screen.getByRole("heading", { level: 1, name: "小林" }).closest("header") as HTMLElement;
+    expect(within(header).queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
+    expect(header).not.toHaveTextContent("/work/foo");
     await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
-    expect(screen.getByRole("region", { name: "小林 的资料" })).toBeInTheDocument();
+    const profile = screen.getByRole("region", { name: "小林 的资料" });
+    const folders = within(within(profile).getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
+    expect(folders[0]).toHaveTextContent("/work/foo");
+    expect(folders[1]).toHaveTextContent("/work/docs");
   });
 
-  it("顶栏的文件夹路径：用户目录写成 ~，title 放全路径；别的路径原样", async () => {
-    const user = userEvent.setup();
-    await boot(
-      makeSnapshot({
-        ...twoPms(),
-        folders: [
-          makeFolder({ id: 1, projectId: 1, path: "/Users/zhang/agent-hub", isMain: true }),
-          makeFolder({ id: 2, projectId: 1, path: "/work/docs", isMain: false }),
-        ],
-      }),
-    );
-    await user.click(inNav(/小林/));
-    const folders = within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem");
-    expect(folders.map((f) => f.textContent)).toEqual(["~/agent-hub", "/work/docs"]);
-    expect(folders.map((f) => f.getAttribute("title"))).toEqual(["/Users/zhang/agent-hub", "/work/docs"]);
-    expect(screen.getByRole("list", { name: "文件夹" })).toHaveClass("text-[13.5px]");
-  });
-
-  it("还没有项目：顶栏没有文件夹列表", async () => {
-    await boot();
-    expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
-  });
-
-  it("在会话里建项目、挂上和移除文件夹：推 project.created、folders.updated，顶栏马上跟着变", async () => {
+  it("在会话里建项目、挂上文件夹：顶栏照样不显示文件夹", async () => {
     const ws = await boot();
     push(ws, changeOf(11, "project.created", { project: makeProject({ id: 2, name: "bar", pmId: 2, conversationId: 2 }) }));
     push(ws, changeOf(12, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" })] }));
-    const list = () => within(screen.getByRole("list", { name: "文件夹" })).getAllByRole("listitem").map((f) => f.textContent);
-    expect(list()).toEqual(["/work/bar"]);
-    push(ws, changeOf(13, "folders.updated", { projectId: 2, folders: [makeFolder({ id: 5, projectId: 2, path: "/work/bar" }), makeFolder({ id: 6, projectId: 2, path: "/work/more", isMain: false })] }));
-    expect(list()).toEqual(["/work/bar", "/work/more"]);
-    // 别的项目的文件夹不动
-    push(ws, changeOf(14, "folders.updated", { projectId: 1, folders: [makeFolder({ id: 1, projectId: 1, path: "/work/foo" })] }));
-    expect(list()).toEqual(["/work/bar", "/work/more"]);
+    expect(screen.queryByRole("list", { name: "文件夹" })).not.toBeInTheDocument();
+    expect(screen.queryByText("/work/bar")).not.toBeInTheDocument();
   });
 
   it("agent 的消息署项目经理的名字；输入框提示发给它", async () => {

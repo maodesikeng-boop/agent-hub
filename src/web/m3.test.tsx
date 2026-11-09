@@ -698,7 +698,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(aside.parentElement).toBe(main.parentElement);
     const classes = aside.className.split(" ");
     expect(classes.some((c) => /(^|:)(fixed|absolute)$/.test(c))).toBe(false);
-    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-[320px]", "border-l"]));
+    expect(classes).toEqual(expect.arrayContaining(["shrink-0", "w-80", "border-l"]));
     expect(aside.className).not.toMatch(/shadow|rounded/);
     expect(within(main).getByRole("heading", { name: "小林" })).toBeInTheDocument();
     expect(within(main).getByRole("textbox")).toBeVisible();
@@ -754,7 +754,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
   });
 
-  it("Piece 行状态展示：在忙的是强调色，空闲的是灰色；Pieces 标题左侧展示 16px 水果果瓣", async () => {
+  it("Piece 行状态展示：在忙的是强调色，空闲的是灰色；Pieces 标题左侧不放水果果瓣", async () => {
     await boot(
       crowd({
         conversations: [
@@ -775,9 +775,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     );
     expect(within(workerGroup()).getByText("Working…")).toHaveClass("text-primary");
     expect(within(workerGroup()).getAllByText("Idle")[0]).toHaveClass("text-muted-foreground");
-    const avatar = workerGroup().querySelector("h2 button > [data-neutral='true']");
-    expect(avatar).toBeInTheDocument();
-    expect(avatar).toHaveStyle({ width: "16px", height: "16px" });
+    expect(workerGroup().querySelector("h2 [data-neutral='true']")).toBeNull();
   });
 
   it("Worker 一行一个：标题和状态（英文状态词）；干活的、Idle 的照常列出，收工的收成最下面一行“已收工 N ›”，点开才展开，展开后淡一些", async () => {
@@ -880,7 +878,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       expect([...metaOf().children].map((c) => c.textContent)).toEqual(["Sonnet", "high", "117K context"]);
       expect(row).not.toHaveTextContent("Claude Code");
       expect(row).not.toHaveTextContent("·");
-      expect(metaOf()).toHaveClass("text-[13px]", "leading-[18px]", "text-muted-foreground");
+      expect(metaOf()).toHaveClass("text-small", "leading-4.5", "text-muted-foreground");
       expect(within(row).getByText("117K context")).toHaveClass("tabular-nums");
     });
 
@@ -1028,7 +1026,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()!.closest("main")).toBeNull();
     expect(rail()!.className.split(" ").some((c) => /(fixed|absolute)$/.test(c))).toBe(false);
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveClass("w-[72px]", "border-r", "border-border", "bg-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
     expect(within(sidebar).queryByRole("searchbox", { name: "搜索" })).toBeNull();
     // 顶栏没有 PanelLeft 抽屉按钮
     expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
@@ -1049,7 +1047,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
   it("宽屏为 300px 完整左栏带搜索框，没有拉左栏的抽屉按钮", async () => {
     await boot(crowd());
     const sidebar = screen.getByRole("complementary", { name: "左栏" });
-    expect(sidebar).toHaveClass("w-[300px]");
+    expect(sidebar).toHaveClass("w-75");
     expect(within(sidebar).getByRole("searchbox", { name: "搜索" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "对话列表" })).not.toBeInTheDocument();
   });

@@ -107,7 +107,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
           {deviceRow}
           <SettingsRow label="名字" error={nameProblem}>
             {(id) => (
-              <Input id={id} value={name} autoFocus autoComplete="off" className="w-[240px]" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
+              <Input id={id} value={name} autoFocus autoComplete="off" className="w-60" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
             )}
           </SettingsRow>
           <SettingsRow label="主文件夹" error={pickError}>
@@ -119,7 +119,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
                   autoComplete="off"
                   spellCheck={false}
                   placeholder="可选"
-                  className="w-[240px] min-w-0"
+                  className="w-60 min-w-0"
                   onChange={(e) => setFolder(e.target.value)}
                 />
                 {canPick && (
@@ -136,7 +136,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
           <ModeRows label="工作方式" value={mode} onChange={setMode} disabled={busy} />
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-          <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-[13.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             更多设置
           </CollapsibleTrigger>
@@ -149,7 +149,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
                 aria-label="性格设定"
                 placeholder="可选"
                 rows={4}
-                className="block max-h-[60vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-[13.5px] placeholder:font-sans placeholder:text-[15px] field-sizing-content focus-visible:ring-0"
+                className="block max-h-[60vh] min-h-24 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-minor placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0"
                 value={persona}
                 onChange={(e) => setPersona(e.target.value)}
               />
@@ -163,7 +163,7 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
         </Collapsible>
       </DialogBody>
       {error && (
-        <p role="alert" title={errorTitle(error)} className="px-4 text-[13.5px] text-danger [overflow-wrap:anywhere]">
+        <p role="alert" title={errorTitle(error)} className="px-4 text-minor text-danger [overflow-wrap:anywhere]">
           {errorLine(error)}
         </p>
       )}

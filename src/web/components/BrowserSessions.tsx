@@ -180,7 +180,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
           <div className="flex flex-col items-center gap-3 px-4 py-4">
             {expired ? (
               <>
-                <p className="text-[15px] text-muted-foreground">已过期</p>
+                <p className="text-body text-muted-foreground">已过期</p>
                 <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => linkMutation.mutate()}>
                   重新生成
                 </Button>
@@ -188,7 +188,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             ) : (
               <>
                 <QrCode text={link.url} label="登录二维码" className="size-40 rounded-xl" />
-                <p className="text-[15px] text-muted-foreground tabular-nums">{formatCountdown(link.expiresAt - now)}</p>
+                <p className="text-body text-muted-foreground tabular-nums">{formatCountdown(link.expiresAt - now)}</p>
               </>
             )}
           </div>
@@ -200,7 +200,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
         defaultOpen={hasPending || loadError !== null}
       >
         {sessions === null && loadError === null && (
-          <div className="flex min-h-[52px] items-center justify-center">
+          <div className="flex min-h-13 items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="加载中" />
           </div>
         )}

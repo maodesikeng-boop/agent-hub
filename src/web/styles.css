@@ -30,6 +30,33 @@
   --font-mono: var(--font-code);
 }
 
+/* 字号档位（docs/ui-standard.md 第 3 条）：组件里写 text-title、text-body 这些，不写 text-[15px]。单位 rem，跟着根字号（界面大小）一起缩放；
+   注释里的 px 是“标准”档（根字号 16px）下的值。text-xs（12px）用 Tailwind 自带的 */
+@theme {
+  --text-display: 1.375rem; /* 22px 资料页头部的名字 */
+  --text-title: 1.0625rem; /* 17px 弹窗标题、对话顶栏的名字 */
+  --text-body: 0.9375rem; /* 15px 正文、行的名字、控件里的字 */
+  --text-label: 0.875rem; /* 14px 右栏行的名字、Show more */
+  --text-minor: 0.84375rem; /* 13.5px 组标题、次要文字 */
+  --text-small: 0.8125rem; /* 13px 右栏组标题和状态词、小号按钮 */
+}
+
+/* 界面大小（设置 → 通用 → 界面大小，ui-scale.ts）：只改根字号，字号（rem）、头像（Avatar 用 rem）、间距和控件（Tailwind 的 --spacing 是 rem）一起按比例缩放。
+   用百分比，浏览器自己调大了默认字号也跟着走；括号里是浏览器默认 16px 时的根字号。没设（还没读到设置）按默认的“大” */
+html,
+html[data-ui-scale="lg"] {
+  font-size: 109.375%; /* 17.5px 大（默认） */
+}
+html[data-ui-scale="sm"] {
+  font-size: 90.625%; /* 14.5px 紧凑 */
+}
+html[data-ui-scale="md"] {
+  font-size: 100%; /* 16px 标准 */
+}
+html[data-ui-scale="xl"] {
+  font-size: 118.75%; /* 19px 特大 */
+}
+
 :root {
   /* 字体栈只在这里定义（docs/ui-standard.md 第 13 条，照 Claude desktop 和 t3code 用系统字体）：英文字体全排在中文字体前面，
      英文和数字不会落到中文字体上，汉字在英文字体里没有字形，自动落到后面的苹方 / 冬青 / 雅黑。代码用等宽栈。 */
@@ -98,7 +125,7 @@ body,
 
 body {
   @apply bg-background text-foreground font-sans antialiased;
-  font-size: 15px;
+  font-size: var(--text-body);
   line-height: 1.6;
 }
 
@@ -362,23 +389,23 @@ code {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
-  height: 28px;
-  padding-inline: 8px 4px;
+  gap: 0.25rem;
+  height: 1.75rem;
+  padding-inline: 0.5rem 0.25rem;
 }
 .markdown .md-code-lang {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1;
 }
 .markdown .md-code-body,
 .markdown .md-code-body pre {
   margin: 0;
   overflow-x: auto;
-  padding: 0 16px 12px;
+  padding: 0 1rem 0.75rem;
   background: transparent !important;
   font-family: var(--font-code);
-  font-size: 13.5px;
+  font-size: var(--text-minor);
   line-height: 1.6;
 }
 .markdown .md-code-body pre {
@@ -401,10 +428,10 @@ code {
 }
 .markdown .md-chart-body {
   position: relative;
-  padding: 12px;
+  padding: 0.75rem;
   background: var(--background);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: var(--text-minor);
 }
 .markdown .md-chart-body[hidden] {
   display: none;
@@ -412,7 +439,7 @@ code {
 .markdown .md-chart-body svg {
   display: block;
   max-width: 100%;
-  max-height: 480px;
+  max-height: 30rem;
   margin-inline: auto;
 }
 .markdown [data-chart-source] {
@@ -440,7 +467,7 @@ code {
 .markdown th {
   border-bottom-color: #d4d4d8;
   color: var(--muted-foreground);
-  font-size: 13.5px;
+  font-size: var(--text-minor);
   font-weight: 500;
 }
 .markdown th:first-child,
@@ -458,11 +485,11 @@ code {
 /* 文件预览窗里的代码：每行一个 .line，行号用 CSS 计数（Shiki 的输出和纯文本回退都是这个结构） */
 .code-view {
   margin: 0;
-  padding: 12px 0;
+  padding: 0.75rem 0;
   width: max-content;
   min-width: 100%;
   font-family: var(--font-code);
-  font-size: 13px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 .code-view pre {
@@ -506,10 +533,10 @@ code {
     min-height: 44px;
     transform: translate(-50%, -50%);
   }
-  /* iOS 对小于 16px 的输入框聚焦时会自动放大页面；不在层里，盖得过组件里的 text-[15px] */
+  /* iOS 对小于 16px 的输入框聚焦时会自动放大页面；不在层里，盖得过组件里的 text-body。界面调大后比 16px 大就用正文字号 */
   input,
   textarea,
   select {
-    font-size: 16px;
+    font-size: max(16px, var(--text-body));
   }
 }

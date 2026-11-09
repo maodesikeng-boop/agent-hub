@@ -263,7 +263,7 @@ export function App() {
       <div className={FULLPAGE}>
         <p title={local.state.loadError ? errorTitle(local.state.loadError) : undefined}>{local.state.loadError?.text ?? "连不上守护进程"}</p>
         {local.state.loadError?.hint && <p>{local.state.loadError.hint}</p>}
-        <p className="text-[13.5px] text-muted-foreground">如果服务还没启动，在项目目录下运行 pnpm start</p>
+        <p className="text-minor text-muted-foreground">如果服务还没启动，在项目目录下运行 pnpm start</p>
         <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>重试</Button>
       </div>
     );
@@ -328,7 +328,7 @@ export function App() {
     ) : (
       <div className={FULLPAGE}>
         <p>还没连上这台设备</p>
-        <p className="text-[13.5px] text-muted-foreground">看看 Tailscale 开了没，{current.info.name}上的守护进程在不在</p>
+        <p className="text-minor text-muted-foreground">看看 Tailscale 开了没，{current.info.name}上的守护进程在不在</p>
       </div>
     );
 

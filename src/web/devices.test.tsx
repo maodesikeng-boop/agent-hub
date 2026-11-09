@@ -351,7 +351,7 @@ describe("设置 → 设备", () => {
     const mine = within(devices).getByRole("region", { name: "你的电脑" });
     const others = within(devices).getByRole("region", { name: "已连上的电脑" });
     for (const group of [mine, others]) {
-      expect(within(group).getByRole("heading")).toHaveClass("text-[13.5px]", "text-muted-foreground");
+      expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
       expect(group.lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
       expect(group.lastElementChild).not.toHaveClass("bg-sidebar");
     }
@@ -539,7 +539,7 @@ describe("设置 → 设备", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "设置" }));
     const dialog = await screen.findByRole("dialog", { name: "设置" });
-    expect(dialog).toHaveClass("max-w-[780px]");
+    expect(dialog).toHaveClass("max-w-195");
     await userEvent.click(within(dialog).getByRole("tab", { name: "登录与安全" }));
     // 填过域名：默认展开
     expect(within(dialog).getByRole("button", { name: /^公网入口/ })).toHaveAttribute("aria-expanded", "true");
@@ -547,7 +547,7 @@ describe("设置 → 设备", () => {
     const hostInput = within(publicRegion).getByRole("textbox", { name: "公网域名" });
     expect(hostInput).toHaveValue("tokyo.tail1234.ts.net");
     expect(hostInput).toHaveAttribute("placeholder", "如 tokyo.tailnet.ts.net");
-    expect(hostInput).toHaveClass("w-[240px]");
+    expect(hostInput).toHaveClass("w-60");
     const toggleBtn = within(publicRegion).getByRole("button", { name: "开启" });
     expect(toggleBtn).not.toHaveClass("bg-primary");
     expect(within(publicRegion).queryByText(funnelCmd)).toBeNull();

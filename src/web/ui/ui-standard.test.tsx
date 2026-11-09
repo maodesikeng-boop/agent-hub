@@ -146,7 +146,7 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
 
   it("触屏（pointer: coarse）下 input / textarea / select 一律 16px，防 iOS 聚焦放大；电脑上仍是组件自己的 15px", () => {
     const coarse = mediaBlock(/@media \(pointer: coarse\)/);
-    expect(coarse).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*16px/);
+    expect(coarse).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*max\(16px, var\(--text-body\)\)/);
     // 16px 只在触屏规则里，不改电脑上的 15px
     expect(css.replace(coarse, "")).not.toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size/);
   });

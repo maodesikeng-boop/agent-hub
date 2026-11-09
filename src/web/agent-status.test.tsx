@@ -157,7 +157,7 @@ describe("MessageList：状态在这一轮最下面", () => {
 
   it("状态文字是 13.5px 次要色", () => {
     list([makeUserMessage({ id: 1, text: "做点事" })]);
-    expect(statusLine()).toHaveClass("text-[13.5px]", "text-muted-foreground");
+    expect(statusLine()).toHaveClass("text-minor", "text-muted-foreground");
   });
 });
 

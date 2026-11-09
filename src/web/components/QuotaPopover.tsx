@@ -13,7 +13,7 @@ const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
   return (
     <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-3 text-[15px]">
+      <div className="flex items-baseline justify-between gap-3 text-body">
         <span>{window.label}</span>
         <span className={cn("tabular-nums", exhausted ? "text-danger" : window.warning && "text-warn-foreground")}>{window.percent}%</span>
       </div>
@@ -30,7 +30,7 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
           style={{ width: `${window.percent}%` }}
         />
       </div>
-      {window.resetsAt !== null && <span className="text-[13.5px] text-muted-foreground tabular-nums">{formatQuotaReset(window.resetsAt)} 重置</span>}
+      {window.resetsAt !== null && <span className="text-minor text-muted-foreground tabular-nums">{formatQuotaReset(window.resetsAt)} 重置</span>}
     </div>
   );
 }
@@ -98,7 +98,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
         <div className="grid gap-5">
           {blocks.map((vendor) => (
             <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>
-              <h3 className="text-[13.5px] font-medium text-muted-foreground">{vendor.name}</h3>
+              <h3 className="text-minor font-medium text-muted-foreground">{vendor.name}</h3>
               {vendor.windows.map((w) => (
                 <WindowRow key={w.key} window={w} exhausted={vendor.exhausted || w.percent >= 100} />
               ))}

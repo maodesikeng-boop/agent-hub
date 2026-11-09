@@ -35,7 +35,7 @@ export function ComposerMenu({
   return (
     <div className="mb-2 rounded-2xl border border-border bg-background p-1.5">
       {menu.items.length === 0 ? (
-        <p className="flex h-9 items-center px-3 text-[13.5px] text-muted-foreground">{text.empty}</p>
+        <p className="flex h-9 items-center px-3 text-minor text-muted-foreground">{text.empty}</p>
       ) : (
         <ul ref={listRef} id={id} role="listbox" aria-label={text.label} className="max-h-[calc(8*2.25rem)] overflow-y-auto">
           {menu.items.map((item, index) => (
@@ -51,7 +51,7 @@ export function ComposerMenu({
             >
               {menu.kind === "file" && <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               <span className={cn("min-w-0 truncate font-medium", menu.kind === "command" ? "max-w-[45%] shrink-0" : "shrink-0 max-w-[60%]")}>{item.label}</span>
-              {item.detail !== "" && <span className="min-w-0 flex-1 truncate text-[13.5px] text-muted-foreground">{item.detail}</span>}
+              {item.detail !== "" && <span className="min-w-0 flex-1 truncate text-minor text-muted-foreground">{item.detail}</span>}
             </li>
           ))}
         </ul>
