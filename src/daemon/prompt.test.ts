@@ -556,7 +556,7 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker list`,
       `${hub} worker show <编号>`,
       `\`${hub} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总`,
-      `${hub} ask --stdin`,
+      `${hub} ask [--option <选项>...] --stdin`,
     ]) {
       expect(HUB_USAGE_PROMPT).toContain(sub);
     }
@@ -582,6 +582,7 @@ describe("提示词：项目经理（M3）", () => {
       "--limit",
       "--last",
       "--stats",
+      "--option",
       "--daily",
       "--every",
     ]) {

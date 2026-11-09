@@ -569,11 +569,19 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("worker.list", { all: true }));
     });
 
-    it("hub ask：正文缺、空、超字节、多余字段 → invalid", async () => {
+    it("hub ask：正文缺、空、超字节、多余字段 → invalid；可选 options 数组转发给账本", async () => {
       await expectInvalid(await call("ask", {}));
       await expectInvalid(await call("ask", { text: "" }));
       await expectInvalid(await call("ask", { text: "问".repeat(Math.floor(MAX_TASK_BYTES / 3) + 1) }));
       await expectInvalid(await call("ask", { text: "问", workerId: 3 }));
+      await expectInvalid(await call("ask", { text: "问", options: "not-array" }));
+      await expectInvalid(await call("ask", { text: "问", options: [123] }));
+      expect((await call("ask", { text: "选哪个？", options: ["方案 A", "方案 B"] })).statusCode).toBe(200);
+      expect(ledger.calls.at(-1)).toEqual({
+        sessionId: 11,
+        command: "ask",
+        args: { text: "选哪个？", options: ["方案 A", "方案 B"] },
+      });
     });
 
     it("30 hub project setup：command 可以是多行字符串或 null（清除）；缺、类型不对、超字节 → invalid", async () => {

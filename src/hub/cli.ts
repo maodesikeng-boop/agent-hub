@@ -5,7 +5,7 @@ import { request, type ClientRequest } from "node:http";
 import { resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
-import { PM_MODES, type PmMode } from "../shared/domain.ts";
+import { PM_MODES, validateAskOptions, type PmMode } from "../shared/domain.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
 import {
@@ -165,8 +165,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     command: "ask",
     group: "ask",
     cli: "ask",
-    usage: `  ${hub} ask --stdin                                         向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
-                                                          会单独提醒用户，不会被别的消息刷掉`,
+    usage: `  ${hub} ask [--option <选项>...] --stdin                      向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
+                                                          有明确选项时用 --option（至少 2 个）让用户点选；会单独提醒用户，不会被别的消息刷掉`,
   },
   {
     command: "schedule.add",
@@ -282,6 +282,7 @@ type Options = {
   limit?: string;
   task?: boolean;
   report?: boolean;
+  option?: string[];
   help?: boolean;
 };
 
@@ -366,6 +367,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         limit: { type: "string" },
         task: { type: "boolean" },
         report: { type: "boolean" },
+        option: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -455,9 +457,15 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.end", body: { workerId: workerIdOf(rest[0], "worker end") }, textSource: null };
   }
   if (group === "ask") {
-    allowOnly(values, ["stdin"], "ask");
+    allowOnly(values, ["option", "stdin"], "ask");
     expectPositionals(parsed.positionals.slice(1), 0, "ask");
-    return { command: "ask", body: {}, textSource: requireStdin(values, "ask"), textField: "text" };
+    const body: Record<string, unknown> = {};
+    if (values.option !== undefined) {
+      const checked = validateAskOptions(values.option);
+      if (!checked.ok) throw new UsageError(checked.error);
+      body.options = checked.options;
+    }
+    return { command: "ask", body, textSource: requireStdin(values, "ask"), textField: "text" };
   }
   if (group === "worker" && action === "list") {
     allowOnly(values, [], "worker list");

@@ -1,7 +1,7 @@
 // 前后端、各块共用的数据形状。字段名和 migrations/ 里的列一一对应（驼峰 ↔ 下划线），例外在字段注释里写明。
 // 不用 enum（erasableSyntaxOnly）：取值用 `as const` 数组，类型从数组推出来。
 
-import { MAX_NAME_CHARS, MAX_WORKER_TITLE_CHARS } from "./limits.ts";
+import { ASK_MAX_OPTION_CHARS, ASK_MAX_OPTIONS, ASK_MIN_OPTIONS, MAX_NAME_CHARS, MAX_WORKER_TITLE_CHARS } from "./limits.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -453,13 +453,115 @@ export type SystemMessageMeta =
  * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；answered 是用户回答了——用户在这个项目经理的对话里
  * 发出一条消息时，守护进程在同一个事务里把之前没回答的都标上（ledger/messages.ts 的 postUserMessage），存在库里，刷新、重启、
  * 几个标签页都一致。老版本点“知道了”留下的 dismissed 读出来也当 answered（迁移 0009 已把老数据改成 answered）。
+ * options 是可选的选项列表（`hub ask --option ...` 传入），用于在网页渲染可点击的 A/B/C/D 选项卡片。
  */
-export type AskMeta = { needsUser: true; answered?: true };
+export type AskMeta = { needsUser: true; answered?: true; options?: string[] };
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
 export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null {
   if (message.sender !== "agent" || message.meta?.needsUser !== true) return null;
-  return message.meta.answered === true || message.meta.dismissed === true ? { needsUser: true, answered: true } : { needsUser: true };
+  const rawOptions = message.meta.options;
+  const options =
+    Array.isArray(rawOptions) && rawOptions.length > 0 && rawOptions.every((o): o is string => typeof o === "string")
+      ? rawOptions
+      : undefined;
+  const answered = message.meta.answered === true || message.meta.dismissed === true;
+  return {
+    needsUser: true,
+    ...(answered ? { answered: true } : {}),
+    ...(options !== undefined ? { options } : {}),
+  };
+}
+
+export type AskOptionsValidation = { ok: true; options: string[] } | { ok: false; error: string };
+
+/**
+ * 校验并规整 hub ask 的 --option 列表：
+ * 至少 ASK_MIN_OPTIONS（2）个、最多 ASK_MAX_OPTIONS（10）个；
+ * 每项去首尾空白后非空、不含换行与控制字符、不超过 ASK_MAX_OPTION_CHARS（200）个字符。
+ */
+export function validateAskOptions(raw: readonly string[]): AskOptionsValidation {
+  if (raw.length < ASK_MIN_OPTIONS) {
+    return { ok: false, error: `选项至少要给 ${ASK_MIN_OPTIONS} 个` };
+  }
+  if (raw.length > ASK_MAX_OPTIONS) {
+    return { ok: false, error: `选项最多 ${ASK_MAX_OPTIONS} 个` };
+  }
+  const options: string[] = [];
+  for (const item of raw) {
+    const normalized = normalizeName(item, ASK_MAX_OPTION_CHARS);
+    if (normalized === null) {
+      return {
+        ok: false,
+        error: `选项不能为空、不能含换行或控制字符，且不超过 ${ASK_MAX_OPTION_CHARS} 个字符`,
+      };
+    }
+    options.push(normalized);
+  }
+  return { ok: true, options };
+}
+
+const ASK_LIST_ITEM_RE = /^(?:[-*]|\d+\.)\s+(.+)$/;
+
+function stripSequentialLetterPrefixes(items: readonly string[]): string[] {
+  const stripped: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const letter = String.fromCharCode(65 + i);
+    const match = new RegExp(`^${letter}(?:\\.\\s+|：\\s*|: \\s*)(.+)$`).exec(items[i]!);
+    const rest = match?.[1]?.trim();
+    if (!rest) return [...items];
+    stripped.push(rest);
+  }
+  return stripped;
+}
+
+/**
+ * 提取 `hub ask` 可点击选项卡片的数据：
+ * 1. 先调 `askOf(message)`，若为 null 则返回 null；
+ * 2. 若 `ask.options` 存在且长度 ≥ 2：返回 `{ question: message.text.trim(), options: ask.options, answered: ask.answered === true }`；
+ * 3. 若未显式传 `options`，自动识别 Markdown 列表：开头一段非空问题文本 + 紧接着的 2～10 行单行列表项（`- xxx`、`* xxx` 或 `1. xxx`），
+ *    后面没有其他正文段落；若列表项本身以 `A. `、`A：`、`A: ` 开头且顺序正好是 A/B/C...，去掉该前缀；
+ * 4. 其他纯文本提问返回 null。
+ */
+export function extractAskCard(
+  message: Pick<Message, "sender" | "meta" | "text">,
+): { question: string; options: string[]; answered: boolean } | null {
+  const ask = askOf(message);
+  if (ask === null) return null;
+  const answered = ask.answered === true;
+  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
+    return { question: message.text.trim(), options: ask.options, answered };
+  }
+  const trimmed = message.text.trim();
+  if (trimmed === "") return null;
+  const lines = trimmed.split(/\r?\n/);
+  const firstListIdx = lines.findIndex((line) => ASK_LIST_ITEM_RE.test(line.trim()));
+  if (firstListIdx <= 0) return null;
+
+  let qEnd = firstListIdx;
+  while (qEnd > 0 && lines[qEnd - 1]!.trim() === "") {
+    qEnd--;
+  }
+  if (qEnd === 0) return null;
+  const questionLines = lines.slice(0, qEnd);
+  if (questionLines.some((line) => line.trim() === "")) return null;
+  const question = questionLines.join("\n").trim();
+  if (question === "") return null;
+
+  const listLines = lines.slice(firstListIdx);
+  if (listLines.length < ASK_MIN_OPTIONS || listLines.length > ASK_MAX_OPTIONS) return null;
+  const rawItems: string[] = [];
+  for (const line of listLines) {
+    const match = ASK_LIST_ITEM_RE.exec(line.trim());
+    const item = match?.[1]?.trim();
+    if (!item || [...item].length > ASK_MAX_OPTION_CHARS) return null;
+    rawItems.push(item);
+  }
+  return {
+    question,
+    options: stripSequentialLetterPrefixes(rawItems),
+    answered,
+  };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */

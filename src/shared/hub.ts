@@ -42,7 +42,7 @@ export const ENV_HUB_SOCK = "HUB_SOCK";
  * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
  * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
  * - `hub project setup --stdin | --clear`                 → project.setup：设置、清除项目的 worktree 准备命令
- * - `hub ask --stdin`                                    → ask：向用户提问（要用户拍板、确认、选择的事），正文是问题（Markdown）
+ * - `hub ask [--option <选项>...] --stdin`               → ask：向用户提问（要用户拍板、确认、选择的事），正文是问题（Markdown）
  * - `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin` → schedule.add：建定时任务（M6），任务说明从标准输入读
  * - `hub schedule list | pause <编号> | resume <编号> | remove <编号>` → schedule.list / pause / resume / remove：只能管自己的
  * - `hub persona show`                                   → persona.show
@@ -164,10 +164,10 @@ export interface HubArgsMap {
    */
   "worker.log": { workerId: WorkerId; last?: number; stats?: boolean };
   /**
-   * `hub ask --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
-   * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的。
+   * `hub ask [--option <选项>...] --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
+   * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的；options 是可选的选项列表（2～10 项）。
    */
-  ask: { text: string };
+  ask: { text: string; options?: string[] };
   /**
    * `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`（M6）：给自己建定时任务。name 按 normalizeName；
    * daily、everyMinutes 恰好给一个（HH:MM 本机本地时间；间隔最短 MIN_SCHEDULE_EVERY_MINUTES 分钟，hub 把 30m、2h 换成分钟数）；

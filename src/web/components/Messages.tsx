@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   attachmentsOf,
+  extractAskCard,
   REPORT_END,
   REPORT_START,
   sentFilesOf,
@@ -71,6 +72,8 @@ export interface MessageActions {
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
   /** 这个对话现在用的厂商（出错时的那句话按它说哪家，不从原文猜）；不知道是 undefined。 */
   vendorOf?: (conversationId: ConversationId) => AgentVendor | undefined;
+  /** 点选 `hub ask` 选项卡片里的某个选项：直接把该选项作为用户消息发出去。 */
+  onAnswerAsk?: (text: string) => void;
 }
 
 const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-[15px] leading-relaxed";
@@ -109,10 +112,70 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
+/** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
+function AskCard({
+  card,
+  files,
+  messageId,
+  onAnswerAsk,
+}: {
+  card: NonNullable<ReturnType<typeof extractAskCard>>;
+  files: ReturnType<typeof sentFilesOf>;
+  messageId: MessageId;
+  onAnswerAsk?: MessageActions["onAnswerAsk"];
+}) {
+  const [chosen, setChosen] = useState<string | null>(null);
+  const answered = card.answered || chosen !== null;
+  const disabled = answered || !onAnswerAsk;
+  return (
+    <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
+      <div className="w-full min-w-0 text-[15px] leading-relaxed font-medium">
+        <Markdown text={card.question} files={files} messageId={messageId} />
+      </div>
+      <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="选项">
+        {card.options.map((opt, i) => {
+          const isChosen = chosen === opt;
+          return (
+            <button
+              key={i}
+              type="button"
+              data-ask-option
+              disabled={disabled}
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default",
+                isChosen ? "bg-sidebar-active" : "hover:bg-sidebar-hover disabled:opacity-60",
+              )}
+              onClick={() => {
+                if (disabled) return;
+                setChosen(opt);
+                onAnswerAsk(opt);
+              }}
+            >
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
+                {String.fromCharCode(65 + i)}
+              </span>
+              <span className="min-w-0 flex-1 text-[15px] [overflow-wrap:anywhere]">{opt}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
-function AgentText({ message, highlighted }: { message: Message; highlighted: boolean }) {
+function AgentText({
+  message,
+  highlighted,
+  onAnswerAsk,
+}: {
+  message: Message;
+  highlighted: boolean;
+  onAnswerAsk?: MessageActions["onAnswerAsk"];
+}) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
+  const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
@@ -120,9 +183,13 @@ function AgentText({ message, highlighted }: { message: Message; highlighted: bo
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      <div className="w-full min-w-0 text-[15px] leading-relaxed">
-        <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
-      </div>
+      {askCard ? (
+        <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
+      ) : (
+        <div className="w-full min-w-0 text-[15px] leading-relaxed">
+          <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
+        </div>
+      )}
     </article>
   );
 }
@@ -235,7 +302,7 @@ export function TurnView({
         {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
         {turn.parts.map((m) =>
           m.sender === "agent" ? (
-            <AgentText key={m.id} message={m} highlighted={m.id === highlightId} />
+            <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} />
           ) : (
             <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
           ),
@@ -506,7 +573,7 @@ export function MessageBubble({
   return (
     <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
       {head && <AgentHead identity={identity} />}
-      <AgentText message={message} highlighted={highlighted} />
+      <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
     </div>
   );
 }

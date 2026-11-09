@@ -287,3 +287,73 @@ describe("通知", () => {
     expect(askRows()).toHaveLength(1);
   });
 });
+
+describe("对话流里的 A/B/C/D 选项卡片", () => {
+  it("带 meta.options 或 Markdown 列表（如 QUESTION）的 hub ask 渲染出 [data-ask-card] 与 A/B 选项按钮；普通提问照旧", async () => {
+    await boot(
+      twoPms([
+        ask({
+          id: 1,
+          text: "你想审什么？",
+          meta: { needsUser: true, options: ["审一个 PR / 分支", "审本地代码路径"] },
+        }),
+        ask({ id: 2, text: QUESTION }),
+        ask({ id: 3, text: "纯文本提问，没有选项" }),
+      ]),
+    );
+    const msg1 = document.querySelector('[data-message-id="1"]') as HTMLElement;
+    const card1 = msg1.querySelector("[data-ask-card]") as HTMLElement;
+    expect(card1).toBeInTheDocument();
+    expect(within(card1).getByText("你想审什么？")).toBeInTheDocument();
+    const opts1 = within(card1).getAllByRole("button");
+    expect(opts1.map((b) => [b.querySelector("span")?.textContent, b.querySelectorAll("span")[1]?.textContent])).toEqual([
+      ["A", "审一个 PR / 分支"],
+      ["B", "审本地代码路径"],
+    ]);
+
+    const msg2 = document.querySelector('[data-message-id="2"]') as HTMLElement;
+    const card2 = msg2.querySelector("[data-ask-card]") as HTMLElement;
+    expect(card2).toBeInTheDocument();
+    expect(within(card2).getByText("方案 A").tagName).toBe("STRONG");
+    const opts2 = within(card2).getAllByRole("button");
+    expect(opts2.map((b) => [b.querySelector("span")?.textContent, b.querySelectorAll("span")[1]?.textContent])).toEqual([
+      ["A", "保留三栏"],
+      ["B", "单栏信息流"],
+    ]);
+
+    const msg3 = document.querySelector('[data-message-id="3"]') as HTMLElement;
+    expect(msg3.querySelector("[data-ask-card]")).toBeNull();
+    expect(within(msg3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
+  });
+
+  it("点击某个选项按钮直接发送一条用户消息，且回答后选项按钮变为 disabled 并高亮所选项", async () => {
+    await boot(
+      twoPms([
+        ask({
+          id: 1,
+          text: "你想审什么？",
+          meta: { needsUser: true, options: ["审一个 PR / 分支", "审本地代码路径"] },
+        }),
+      ]),
+    );
+    const card = document.querySelector('[data-message-id="1"] [data-ask-card]') as HTMLElement;
+    const buttons = within(card).getAllByRole("button");
+    expect(buttons[0]).not.toBeDisabled();
+    expect(buttons[1]).not.toBeDisabled();
+
+    fireEvent.click(buttons[1]!);
+
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({ text: "审本地代码路径" }),
+        }),
+      ]),
+    );
+    expect(buttons[0]).toBeDisabled();
+    expect(buttons[1]).toBeDisabled();
+    expect(buttons[1]).toHaveClass("bg-sidebar-active");
+    await waitFor(() => expect(asksGroup()).toBeNull());
+  });
+});

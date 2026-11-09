@@ -111,6 +111,11 @@ export function Conversation({
   const client = useClient();
   const source = useMemo(() => conversationSource(id, client.url), [id, client]);
   const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
+  const archived = entry.pm?.archivedAt != null;
+  const messageActions = useMemo<MessageActions>(
+    () => (archived ? actions : { ...actions, onAnswerAsk: (text: string) => void onSend(id, text, []) }),
+    [actions, archived, id, onSend],
+  );
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = { name: entry.name, avatarKey: entry.avatarKey };
@@ -156,7 +161,7 @@ export function Conversation({
           older={older}
           onLoadOlder={() => onLoadOlder(id)}
           onRetry={onRetry}
-          actions={actions}
+          actions={messageActions}
           focus={focus}
           onFocusDone={onFocusDone}
           status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}

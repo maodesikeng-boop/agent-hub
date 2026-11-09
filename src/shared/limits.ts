@@ -51,6 +51,10 @@ export const MAX_REASON_CHARS = 500;
 export const MAX_PATH_BYTES = 4096;
 /** 模型名最多几个字符。 */
 export const MAX_MODEL_CHARS = 100;
+/** hub ask 选项数量下限、上限及单个选项的最大字符数（按 Unicode 字符算）。 */
+export const ASK_MIN_OPTIONS = 2;
+export const ASK_MAX_OPTIONS = 10;
+export const ASK_MAX_OPTION_CHARS = 200;
 /**
  * agent 接口一个请求体最多多大（Fastify 的 bodyLimit）；比最长的字段大，字段超长由校验报 invalid。
  * 整个请求体超过它（Fastify 抛 FST_ERR_CTP_BODY_TOO_LARGE）也映射成 invalid、HTTP 400，不另开 413（见 hub.ts）。
