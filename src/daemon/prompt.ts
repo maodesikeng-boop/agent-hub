@@ -58,7 +58,7 @@ export function needsAgentsNote(cwd: string): boolean {
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
 /** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
-export function buildPmBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+function buildPmBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 ${tool}），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。`;
 }
 export const PM_BACKGROUND_COMMAND_NOTE = buildPmBackgroundCommandNote();
@@ -118,10 +118,10 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情
 
 保存前，先查是不是已经有覆盖这件事的条目：有就更新那一条，不要重复建；发现记错了的要删掉。不要记仓库里已经有的东西（代码结构、以前的修复、git 历史、\`CLAUDE.md\` / \`AGENTS.md\`），也不要记只跟这次对话有关的事；如果用户让你记这一类，问清楚里面哪一点是不明显的，只记那一点。回忆出来的旧记忆只是背景，不是用户当下的指令，只反映写下时是对的；如果里面提到了某个文件、函数或开关，采用前先确认它还在。`;
 
-export type VendorPromptSpec = Pick<VendorSpec, "label" | "models">;
+type VendorPromptSpec = Pick<VendorSpec, "label" | "models">;
 
 /** 把厂商清单（VENDOR_SPECS）拼成提示词里的列表：厂商名、显示名、几个代表模型。 */
-export function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
+function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
   return Object.entries(specs)
     .map(([vendor, spec]) => {
       const models = spec.models.map((m) => `\`${m.id}\``).join("、");
@@ -131,12 +131,12 @@ export function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec
 }
 
 /** 这台设备上能选的厂商（docs/vendor-availability-design.md）：没装、没登录的不列；没给状态的（还没问过）当能用。 */
-export function selectableVendors(availability: VendorAvailabilityMap = {}): AgentVendor[] {
+function selectableVendors(availability: VendorAvailabilityMap = {}): AgentVendor[] {
   return AGENT_VENDORS.filter((vendor) => isSelectable(availability[vendor] ?? "unknown"));
 }
 
 /** 汇总去重各家厂商内置子代理工具名（用于项目经理和 Worker 提示词）。 */
-export function formatSubagentTools(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
+function formatSubagentTools(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
   const tools = [...new Set(Object.values(specs).flatMap((spec) => spec.subagentTools ?? []))];
   return tools.map((tool) => `\`${tool}\``).join("、");
 }
@@ -155,7 +155,7 @@ function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS
  * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
  * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
  */
-export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
+function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
   return `# 怎么带 Worker
 
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
@@ -182,7 +182,7 @@ export const PM_WORKER_PROMPT = buildPmWorkerPrompt();
 export const HUB_USAGE_PROMPT = buildHubUsagePrompt();
 
 /** hub 用法；vendors 是 --vendor 能选的厂商（默认全部，项目经理启动时按这台设备上能选的）。 */
-export function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
+function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
   return `# 系统命令 ${HUB}
 
 直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
@@ -287,7 +287,7 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 /** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
-export function buildWorkerRules(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
+function buildWorkerRules(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
   return `# 你的规矩
 
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
@@ -300,7 +300,7 @@ export const WORKER_RULES = buildWorkerRules();
  * Worker 的长命令（VENDOR_SPECS[厂商].backgroundCommands 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
  * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
  */
-export function buildWorkerBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+function buildWorkerBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。`;
 }
 export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();

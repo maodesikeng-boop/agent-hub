@@ -26,7 +26,7 @@ import {
 } from "../../shared/index.ts";
 import { PEER_TOKEN_PATTERN } from "./tokens.ts";
 
-export type PeerState = "pending" | "paired";
+type PeerState = "pending" | "paired";
 
 export interface PeerRecord extends PeerDevice {
   /** 连法：不写默认 tailscale；ssh-tunnel 的设备 url 存 ""，转发地址永远从本机隧道表取。 */

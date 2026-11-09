@@ -1,6 +1,7 @@
 // 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
 // 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
 // worker.* 和 Worker 调的 status 在 workers.ts（worker.show、worker.log 在 worker-view.ts）；schedule.* 在 schedules.ts。
+import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { hubCommandAllowed } from "../../shared/hub.ts";
@@ -20,6 +21,24 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerSchedules } from "./schedules.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
+
+const projectCreateArgsSchema = z.object({
+  folder: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+});
+
+const modelsArgsSchema = z.object({
+  vendor: z.custom<AgentVendor>(isAgentVendor).optional(),
+  refresh: z.boolean().optional(),
+});
+
+const askArgsSchema = z.object({
+  text: z.string().refine((s) => s.trim() !== ""),
+  options: z.custom<string[]>((v) => v !== undefined).optional(),
+});
+
+const recordArgsSchema = z.record(z.string(), z.unknown());
 
 /** status 里的一句“项目和文件夹”。 */
 function describeProject(card: ProjectCard | null): string {
@@ -124,7 +143,7 @@ export function createLedgerHubCommands(
         };
       }
       case "project.create": {
-        const a = args as HubArgs<"project.create">;
+        const a = projectCreateArgsSchema.parse(args);
         const { project, mainFolder } = createProjectIn(p, {
           pmId: caller.pmId,
           folder: a.folder,
@@ -168,10 +187,11 @@ export function createLedgerHubCommands(
       case "worker.search":
         return workerView.search(caller, args as HubArgs<"worker.search">);
       case "models": {
-        const a = args as HubArgs<"models">;
-        if (a.vendor !== undefined && !isAgentVendor(a.vendor)) {
+        const parsed = modelsArgsSchema.safeParse(args);
+        if (!parsed.success) {
           throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
         }
+        const a = parsed.data;
         const targetVendors: readonly AgentVendor[] = a.vendor !== undefined ? [a.vendor] : AGENT_VENDORS;
         const vendors = targetVendors.map((vendor) => {
           const catalog =
@@ -185,8 +205,9 @@ export function createLedgerHubCommands(
       }
       case "ask": {
         assertPmNotArchived(caller.pmId);
-        const { text, options } = args as HubArgs<"ask">;
-        if (typeof text !== "string" || text.trim() === "") throw fail("invalid", "要问用户的话不能是空的");
+        const parsed = askArgsSchema.safeParse(args);
+        if (!parsed.success) throw fail("invalid", "要问用户的话不能是空的");
+        const { text, options } = parsed.data;
         let normalizedOptions: string[] | undefined;
         if (options !== undefined) {
           const checked = validateAskOptions(options);
@@ -236,11 +257,12 @@ export function createLedgerHubCommands(
   };
 
   const recordHubCall = (sessionId: SessionId, command: string, args: unknown, ok: boolean, errorCode: string | null, result: string) => {
+    const parsedArgs = recordArgsSchema.safeParse(args);
     db.run(
       "INSERT INTO hub_calls (session_id, command, args, ok, error_code, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       sessionId,
       command,
-      JSON.stringify(summarizeArgs(typeof args === "object" && args !== null ? args : {})),
+      JSON.stringify(summarizeArgs(parsedArgs.success ? parsedArgs.data : {})),
       ok ? 1 : 0,
       errorCode,
       truncateField(result),

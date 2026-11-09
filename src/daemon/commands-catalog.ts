@@ -6,6 +6,7 @@
 // 返回前去掉厂商的隐藏名单（isHiddenCommand，只藏厂商自带的）。问不到一律空列表，不报错。
 // - 另起的进程同一时间最多 MAX_CONCURRENT_COMMAND_QUERIES 个，多的排队；缓存最多 MAX_COMMAND_CACHE_ENTRIES 份，多了淘汰最旧的；
 // - cached：只看缓存、不问（账本手打拦命令时用：缓存里这个名字是用户自己的就放行）。
+import { LRUCache } from "lru-cache";
 import {
   COMMANDS_FRESH_MS,
   COMMANDS_RETRY_MS,
@@ -65,8 +66,8 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
   const log = options.log ?? (() => {});
   const maxConcurrent = options.maxConcurrent ?? MAX_CONCURRENT_COMMAND_QUERIES;
   const maxEntries = options.maxEntries ?? MAX_COMMAND_CACHE_ENTRIES;
-  /** Map 的顺序就是新旧：store 时挪到最后，满了删最前面的。 */
-  const entries = new Map<string, Entry>();
+  /** LRU 缓存：满了自动淘汰最久未使用的。 */
+  const entries = new LRUCache<string, Entry>({ max: Math.max(1, maxEntries) });
   const controller = new AbortController();
   let closed = false;
   let active = 0;
@@ -90,24 +91,17 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
   const vendorOf = (vendor: string): VendorComposer | null =>
     Object.hasOwn(options.vendors, vendor) ? (options.vendors[vendor as AgentVendor] ?? null) : null;
 
-  /** 放到最后（最新），超过上限就删最前面（最旧）的。 */
-  const touch = (key: string, entry: Entry) => {
-    entries.delete(key);
-    entries.set(key, entry);
-    while (entries.size > maxEntries) entries.delete(entries.keys().next().value!);
-  };
-
   const entryOf = (key: string): Entry => {
     let entry = entries.get(key);
     if (!entry) {
       entry = { commands: null, at: 0, failedAt: null, inflight: null };
-      touch(key, entry);
+      entries.set(key, entry);
     }
     return entry;
   };
 
   const store = (key: string, entry: Entry, commands: ComposerCommand[]) => {
-    touch(key, entry);
+    entries.set(key, entry);
     entry.commands = commands;
     entry.at = now();
     entry.failedAt = null;
@@ -157,7 +151,7 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
       }
       return visible(vendor, entry.commands);
     },
-    cached: (request) => entries.get(keyOf(request))?.commands ?? null,
+    cached: (request) => entries.peek(keyOf(request))?.commands ?? null,
     update(request, commands) {
       if (closed || vendorOf(request.vendor) === null) return;
       const key = keyOf(request);
