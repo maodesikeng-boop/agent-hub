@@ -1,20 +1,10 @@
 // 界面上的文字：状态名、错误、时间。
-import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type MessageStatus, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
+import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type PersonaChange, type PmMode, type TokenUsage } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT } from "../shared/errors.ts";
 import { ApiError } from "./client.ts";
 import { formatCount } from "../shared/count-format.ts";
 
 export { formatCount };
-
-export const STATUS_LABELS: Readonly<Record<MessageStatus, string>> = {
-  queued: "Queued",
-  delivered: "已送达",
-  processing: "Working…",
-  replied: "已回复",
-  stopped: "已停止",
-  failed: "失败",
-  cancelled: "已取消",
-};
 
 const pad = (n: number) => String(n).padStart(2, "0");
 

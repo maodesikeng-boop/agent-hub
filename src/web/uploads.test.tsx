@@ -290,9 +290,9 @@ describe("发出之后", () => {
     api.postMessage = () => ({ status: 500, body: { error: "出错了" } });
     await user.upload(picker(), file("a.txt"));
     await user.type(box(), "带文件{Enter}");
-    await waitFor(() => expect(within(log()).getByText("发送失败")).toBeInTheDocument());
+    await waitFor(() => expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument());
     api.postMessage = () => ({ status: 200, body: { messageId: 9 } });
-    await user.click(screen.getByRole("button", { name: "重试" }));
+    await user.click(screen.getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(posts()).toHaveLength(2));
     expect(sentBody(1)).toEqual(sentBody(0));
     expect(api.uploads).toHaveLength(1);
@@ -589,7 +589,7 @@ describe("只发文件的消息在左栏和通知里的预览", () => {
 });
 
 describe("发消息时文件已经不在", () => {
-  it("服务端回“文件找不到了”：消息标发送失败，写“文件已不在，请重新添加”，没有重试按钮", async () => {
+  it("服务端回“文件找不到了”：左边红色感叹号只是标记（名字和 title 写“文件已不在，请重新添加”），不能点重发", async () => {
     const user = userEvent.setup();
     await boot();
     api.postMessage = () => ({ status: 400, body: { error: ATTACHMENTS_MISSING_MESSAGE, code: "invalid" } });
@@ -597,10 +597,10 @@ describe("发消息时文件已经不在", () => {
     await user.type(box(), "带文件{Enter}");
     const mine = await waitFor(() => {
       const last = within(log()).getAllByRole("article").at(-1) as HTMLElement;
-      expect(within(last).getByText("文件已不在，请重新添加")).toBeInTheDocument();
+      expect(within(last).getByRole("img", { name: "没发出去：文件已不在，请重新添加" })).toBeInTheDocument();
       return last;
     });
-    expect(within(mine).queryByRole("button", { name: "重试" })).toBeNull();
+    expect(within(mine).queryByRole("button", { name: "没发出去，点击重发" })).toBeNull();
     expect(mine).toHaveTextContent("带文件");
   });
 
@@ -610,6 +610,6 @@ describe("发消息时文件已经不在", () => {
     api.postMessage = () => ({ status: 500, body: { error: "x" } });
     await user.upload(picker(), file("a.txt"));
     await user.type(box(), "带文件{Enter}");
-    expect(await screen.findByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
   });
 });

@@ -1160,14 +1160,14 @@ describe("重试失败的消息", () => {
   it("失败的消息有“重试”：点了发 POST retry，按钮变“重试中”，推回排队中后按钮和原因都没了", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    expect(within(log()).getByText("找不到 Claude")).toBeInTheDocument();
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" }).getAttribute("title")).toContain("找不到 Claude");
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/messages\/5\/retry$/)).toHaveLength(1));
     expect(api.callsTo("POST", /retry$/)[0]?.body).toBeUndefined();
-    expect(within(log()).getByRole("button", { name: "重试中" })).toBeDisabled();
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeDisabled();
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     expect(within(log()).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(log()).getByText("Queued")).toBeInTheDocument();
+    expect(within(log()).queryByText("Queued")).toBeNull();
     expect(within(log()).queryByText("Claude 没能启动")).not.toBeInTheDocument();
     expect(within(log()).getAllByRole("article")).toHaveLength(1);
   });
@@ -1176,13 +1176,13 @@ describe("重试失败的消息", () => {
     const user = userEvent.setup();
     await boot(snapshotWith(failed({ id: 5 })));
     api.retryMessage = () => ({ status: 409, body: { error: "这条消息不能重试", code: "conflict" } });
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
-    expect(await within(log()).findByText("重试失败")).toBeInTheDocument();
-    expect(within(log()).getByRole("button", { name: "重试" })).toBeEnabled();
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
+    await waitFor(() => expect(within(log()).getByRole("button", { name: "没发出去，点击重发" }).getAttribute("title")).toContain("重发失败"));
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeEnabled();
     api.retryMessage = (id) => ({ status: 202, body: { messageId: id } });
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     await waitFor(() => expect(api.callsTo("POST", /retry$/)).toHaveLength(2));
-    expect(within(log()).queryByText("重试失败")).not.toBeInTheDocument();
+    await waitFor(() => expect(within(log()).queryByTitle(/重发失败/)).toBeNull());
   });
 
   it("没失败的用户消息（排队中、已回复）没有“重试”", async () => {
@@ -1196,17 +1196,18 @@ describe("重试失败的消息", () => {
         ],
       }),
     );
-    expect(within(log()).queryByRole("button", { name: /重试/ })).not.toBeInTheDocument();
+    expect(within(log()).queryByRole("button", { name: /重发/ })).not.toBeInTheDocument();
+    expect(within(log()).queryByText(/Queued|已停止/)).toBeNull();
   });
 
   it("重试后又失败：重新出现“重试”，不卡在“重试中”", async () => {
     const user = userEvent.setup();
     const ws = await boot(snapshotWith(failed({ id: 5 })));
-    await user.click(within(log()).getByRole("button", { name: "重试" }));
+    await user.click(within(log()).getByRole("button", { name: "没发出去，点击重发" }));
     push(ws, messageChange(11, "message.updated", failed({ id: 5, status: "queued", failureReason: null })));
     push(ws, messageChange(12, "message.updated", failed({ id: 5, failureReason: "spawn_failed: x" })));
-    expect(within(log()).getByRole("button", { name: "重试" })).toBeEnabled();
-    expect(within(log()).getByText("Claude 没能启动")).toHaveAttribute("title", "spawn_failed: x");
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeEnabled();
+    expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toHaveAttribute("title", "没发出去：Claude 没能启动，点击重发\nspawn_failed: x");
   });
 
   it("网页自己没发出去的消息的“重试”照旧（用同一个 clientId 重发，不走 retry 接口）", async () => {
@@ -1214,7 +1215,7 @@ describe("重试失败的消息", () => {
     await boot(makeSnapshot());
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(screen.getByRole("textbox", { name: "输入消息" }), "你好{Enter}");
-    await user.click(await within(log()).findByRole("button", { name: "重试" }));
+    await user.click(await within(log()).findByRole("button", { name: "没发出去，点击重发" }));
     expect(api.callsTo("POST", /\/retry$/)).toHaveLength(0);
     expect(api.callsTo("POST", /\/messages$/)).toHaveLength(2);
   });

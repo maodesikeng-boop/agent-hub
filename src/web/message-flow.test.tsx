@@ -356,57 +356,49 @@ describe("系统行", () => {
   });
 });
 
-describe("消息状态：只在排队、失败、停止时出现", () => {
-  const statuses = (messages: Message[]) => {
-    const { container } = list(messages);
-    return Array.from(container.querySelectorAll("article[data-side='right'] [data-delivery]")).map((el) => el.textContent);
-  };
+describe("消息状态（照微信）：不写字，只有没发出去左边一个红色感叹号", () => {
+  const UNSENT = "没发出去，点击重发";
+  const rightArticles = (container: HTMLElement) => Array.from(container.querySelectorAll("article[data-side='right']")) as HTMLElement[];
 
-  it("已送达、处理中、已回复：不显示", () => {
-    expect(
-      statuses([
-        makeUserMessage({ id: 1, status: "delivered" }),
-        makeUserMessage({ id: 2, status: "processing" }),
-        makeUserMessage({ id: 3, status: "replied" }),
-      ]),
-    ).toEqual([]);
-    expect(screen.queryByText("已回复")).not.toBeInTheDocument();
+  it("排队中、已送达、处理中、已回复、已停止、已取消：气泡下面和旁边都不写字", () => {
+    const { container } = list(
+      (["queued", "delivered", "processing", "replied", "stopped", "cancelled"] as const).map((status, i) => makeUserMessage({ id: i + 1, text: `第 ${i + 1} 句`, status })),
+    );
+    for (const article of rightArticles(container)) {
+      expect(article.querySelector("[data-unsent]")).toBeNull();
+      expect(article.textContent).toMatch(/^第 \d 句$/);
+    }
+    expect(screen.queryByText(/Queued|已停止|已取消|已回复/)).toBeNull();
   });
 
-  it("排队中、已停止", () => {
-    expect(statuses([makeUserMessage({ id: 1, status: "queued" }), makeUserMessage({ id: 2, status: "stopped" })])).toEqual(["Queued", "已停止"]);
+  it("已取消的气泡变淡，别的不变淡", () => {
+    const { container } = list([makeUserMessage({ id: 1, status: "cancelled" }), makeUserMessage({ id: 2, status: "stopped" }), makeUserMessage({ id: 3, status: "queued" })]);
+    const bubbles = Array.from(container.querySelectorAll("[data-bubble]"));
+    expect(bubbles[0]).toHaveClass("opacity-60");
+    for (const bubble of bubbles.slice(1)) expect(bubble).not.toHaveClass("opacity-60");
   });
 
-  it("已取消（一轮中途写给 agent、它还没读到就停了）：和已停止一样灰色一行，不能重试", () => {
-    const { container } = list([makeUserMessage({ id: 1, status: "cancelled" })]);
-    const row = container.querySelector("[data-delivery]") as HTMLElement;
-    expect(row).toHaveTextContent("已取消");
-    expect(row).toHaveAttribute("data-status", "cancelled");
-    expect(row).toHaveClass("text-muted-foreground");
-    expect(within(row).queryByRole("button")).toBeNull();
-    // 气泡变淡，一眼看得出没发出去；别的状态不变淡
-    expect(container.querySelector("[data-bubble]")).toHaveClass("opacity-60");
-  });
-
-  it("只有已取消的气泡变淡", () => {
-    const { container } = list([makeUserMessage({ id: 1, status: "stopped" }), makeUserMessage({ id: 2, status: "queued" })]);
-    for (const bubble of container.querySelectorAll("[data-bubble]")) expect(bubble).not.toHaveClass("opacity-60");
-  });
-
-  it("失败：一句人话 + 重试，原始错误在 title，不用“·”", () => {
+  it("失败：气泡左边、垂直居中一个红色感叹号按钮，点了重发；人话和原始错误在 title，不另起一行", () => {
     const raw = "error_during_execution: API Error: 529 Overloaded";
-    const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: raw })]);
-    const row = container.querySelector("[data-delivery]") as HTMLElement;
-    expect(row).toHaveTextContent("Claude 服务繁忙，稍后重试");
-    expect(row).not.toHaveTextContent("error_during_execution");
-    expect(row.textContent).not.toContain("·");
-    expect(within(row).getByText("Claude 服务繁忙，稍后重试")).toHaveAttribute("title", raw);
-    expect(within(row).getByRole("button", { name: "重试" })).toBeInTheDocument();
+    const onRetryMessage = vi.fn();
+    const { container } = render(
+      <MessageList messages={[makeUserMessage({ id: 1, text: "查一下", status: "failed", failureReason: raw })]} pending={[]} agentOf={() => pm} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions({ onRetryMessage })} />,
+    );
+    const [article] = rightArticles(container);
+    const mark = within(article!).getByRole("button", { name: UNSENT });
+    expect(mark).toHaveAttribute("title", `没发出去：Claude 服务繁忙，稍后重试，点击重发\n${raw}`);
+    expect(article).toHaveTextContent(/^!查一下$/);
+    const row = mark.parentElement as HTMLElement;
+    expect(row).toHaveClass("flex", "items-center", "justify-end");
+    expect(row.firstElementChild).toBe(mark);
+    expect(mark.querySelector("span")).toHaveClass("size-5", "rounded-full", "bg-danger", "text-white");
+    fireEvent.click(mark);
+    expect(onRetryMessage).toHaveBeenCalledWith(1);
   });
 
-  it("失败没有原因（老数据）：写“发送失败”", () => {
+  it("失败没有原因（老数据）：只有感叹号，title 是“没发出去，点击重发”", () => {
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: null })]);
-    expect(container.querySelector("[data-delivery]")).toHaveTextContent("发送失败");
+    expect(within(rightArticles(container)[0]!).getByRole("button", { name: UNSENT })).toHaveAttribute("title", UNSENT);
   });
 });
 

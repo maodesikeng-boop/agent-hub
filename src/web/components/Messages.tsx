@@ -2,7 +2,6 @@
 // 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
 import {
   Archive,
-  Ban,
   CalendarClock,
   Check,
   ChevronRight,
@@ -15,9 +14,7 @@ import {
   Info,
   MessageSquare,
   RefreshCw,
-  Square,
   UserPen,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
@@ -41,7 +38,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorTitle, formatTime, STATUS_LABELS } from "../format.ts";
+import { errorLine, errorTitle, formatTime } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
@@ -633,100 +630,123 @@ export const MessageBubble = memo(
 
 function UserBubble({ message, actions }: { message: Message; actions: MessageActions }) {
   const attachments = attachmentsOf(message);
+  const failed = message.status === "failed";
+  const failure = failed && message.failureReason ? describeFailure(message.failureReason, { vendor: actions.vendorOf?.(message.conversationId) }) : null;
+  const phase = actions.retry[message.id];
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
-      {/* 只发文件没写字的消息没有文字气泡 */}
-      {(message.text !== "" || attachments.length === 0) && (
-        <div
-          data-bubble
-          className={cn(
-            BUBBLE,
-            "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
-            // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
-            message.status === "cancelled" && "opacity-60",
-          )}
-        >
-          {message.text}
-        </div>
-      )}
-      <AttachmentList attachments={attachments} />
-      <DeliveryStatus
-        status={message.status}
-        reason={message.failureReason}
-        vendor={actions.vendorOf?.(message.conversationId)}
-        retry={message.status === "failed" ? { phase: actions.retry[message.id], onRetry: () => actions.onRetryMessage(message.id) } : undefined}
-      />
+      <SentBody
+        unsent={
+          failed ? (
+            <UnsentMark reason={failure?.text} raw={failure?.raw} retrying={phase === "retrying"} retryFailed={phase === "error"} onRetry={() => actions.onRetryMessage(message.id)} />
+          ) : null
+        }
+      >
+        {/* 只发文件没写字的消息没有文字气泡 */}
+        {(message.text !== "" || attachments.length === 0) && (
+          <div
+            data-bubble
+            className={cn(
+              BUBBLE,
+              "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
+              // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
+              message.status === "cancelled" && "opacity-60",
+            )}
+          >
+            {message.text}
+          </div>
+        )}
+        <AttachmentList attachments={attachments} />
+      </SentBody>
     </article>
   );
 }
 
-/** 用户消息下面只在这几种状态显示一行；已送达、处理中、已回复不显示。 */
-const SHOWN_STATUSES = new Set<Message["status"]>(["queued", "failed", "stopped", "cancelled"]);
-
-const DELIVERY_ROW = "mt-1 flex items-center gap-1.5 pr-1 text-xs";
-const RETRY_BUTTON = "touch-target cursor-pointer font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:no-underline disabled:opacity-60";
-
-function DeliveryStatus({
-  status,
-  reason,
-  vendor,
-  retry,
-}: {
-  status: Message["status"];
-  reason: string | null;
-  /** 这个对话用的厂商（出错的那句话说哪家）。 */
-  vendor?: AgentVendor;
-  /** 服务端标了失败的用户消息才有“重试”。 */
-  retry?: { phase: RetryPhase | undefined; onRetry: () => void };
-}) {
-  if (status === null || !SHOWN_STATUSES.has(status)) return null;
-  const failed = status === "failed";
-  const failure = failed && reason ? describeFailure(reason, { vendor }) : null;
+/**
+ * 用户消息的气泡 + 附件；没发出去时左边一个红色感叹号（照微信），垂直居中。
+ * 排队、已停止、已取消这些都不写字（docs/ui-standard.md 第 17 条），只有“没发出去”这一种标记。
+ */
+function SentBody({ unsent, children }: { unsent: React.ReactNode; children: React.ReactNode }) {
+  if (!unsent) return children;
   return (
-    <div className={cn(DELIVERY_ROW, failed ? "text-danger" : "text-muted-foreground")} data-status={status} data-delivery>
-      {status === "queued" && <Clock className="size-3.5 shrink-0" aria-hidden="true" />}
-      {status === "stopped" && <Square className="size-3 shrink-0 fill-current" aria-hidden="true" />}
-      {status === "cancelled" && <Ban className="size-3.5 shrink-0" aria-hidden="true" />}
-      {failed && <X className="size-3.5 shrink-0" aria-hidden="true" />}
-      {failed ? <span title={failure?.raw}>{failure ? failure.text : "发送失败"}</span> : <span>{STATUS_LABELS[status]}</span>}
-      {retry && (
-        <>
-          {retry.phase === "error" && <span>重试失败</span>}
-          <button type="button" className={RETRY_BUTTON} disabled={retry.phase === "retrying"} onClick={retry.onRetry}>
-            {retry.phase === "retrying" ? "重试中" : "重试"}
-          </button>
-        </>
-      )}
+    <div className="flex w-full items-center justify-end gap-2">
+      {unsent}
+      {/* 感叹号紧挨着气泡：这一列宽度跟内容走，最宽是原来气泡的 80%，里面的气泡不再另算 80% */}
+      <div className="flex max-w-[80%] min-w-0 flex-col items-end [&>[data-bubble]]:max-w-full">{children}</div>
     </div>
   );
 }
 
-/** 网页先显示出来、服务端还没确认的用户消息。 */
+const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs leading-none font-semibold text-white";
+const UNSENT_LABEL = "没发出去";
+
+/**
+ * 没发出去的红色感叹号（照微信）：能重发的是按钮，点了重发；重发也没用的（被拦、文件没了）只是标记。
+ * 原因（“网络断了，稍后重试”“文件已不在，请重新添加”）不另起一行，放在 title 和读屏名字里；原始错误放 title 第二行。
+ */
+function UnsentMark({
+  reason,
+  raw,
+  onRetry,
+  retrying = false,
+  retryFailed = false,
+}: {
+  reason?: string | undefined;
+  raw?: string | undefined;
+  onRetry?: () => void;
+  retrying?: boolean;
+  retryFailed?: boolean;
+}) {
+  const detail = [retryFailed ? "重发失败" : null, reason].filter(Boolean).join("，");
+  const rawLine = raw && raw !== reason ? `\n${raw}` : "";
+  const mark = (
+    <span className={UNSENT_DOT} aria-hidden="true">
+      !
+    </span>
+  );
+  if (!onRetry) {
+    const label = detail ? `${UNSENT_LABEL}：${detail}` : UNSENT_LABEL;
+    return (
+      <span role="img" aria-label={label} title={label + rawLine} data-unsent className="flex shrink-0">
+        {mark}
+      </span>
+    );
+  }
+  const label = `${UNSENT_LABEL}，点击重发`;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={(detail ? `${UNSENT_LABEL}：${detail}，点击重发` : label) + rawLine}
+      aria-busy={retrying || undefined}
+      disabled={retrying}
+      data-unsent
+      className="touch-target flex shrink-0 cursor-pointer rounded-full outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60"
+      onClick={onRetry}
+    >
+      {mark}
+    </button>
+  );
+}
+
+/** 网页先显示出来、服务端还没确认的用户消息：发送中不写字；没发出去左边红色感叹号。 */
 export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; onRetry: (clientId: string) => void }) {
   const failed = pending.phase === "failed";
   const filesGone = failed && pending.failure === "attachments_missing";
   const reason = failed && pending.failure === "rejected" ? pending.reason : undefined;
-  const rejected = reason !== undefined;
-  const noRetry = filesGone || rejected;
+  const noRetry = filesGone || reason !== undefined;
+  const reasonText = filesGone ? "文件已不在，请重新添加" : reason !== undefined ? errorLine(reason) : undefined;
+  const reasonRaw = reason !== undefined ? errorTitle(reason) : undefined;
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
-      {(pending.text !== "" || pending.attachments.length === 0) && (
-        <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
-          {pending.text}
-        </div>
-      )}
-      <AttachmentList attachments={pending.attachments} />
-      <div className={cn(DELIVERY_ROW, failed ? "text-danger" : "text-muted-foreground")} data-status={failed ? "failed" : "queued"} data-delivery>
-        {failed ? <X className="size-3.5 shrink-0" aria-hidden="true" /> : <Clock className="size-3.5 shrink-0" aria-hidden="true" />}
-        <span className="min-w-0 [overflow-wrap:anywhere]" title={reason === undefined ? undefined : errorTitle(reason)}>
-          {filesGone ? "文件已不在，请重新添加" : reason !== undefined ? errorLine(reason) : failed ? "发送失败" : STATUS_LABELS.queued}
-        </span>
-        {failed && !noRetry && (
-          <button type="button" className={RETRY_BUTTON} onClick={() => onRetry(pending.clientId)}>
-            重试
-          </button>
+      <SentBody unsent={failed ? <UnsentMark reason={reasonText} raw={reasonRaw} {...(noRetry ? {} : { onRetry: () => onRetry(pending.clientId) })} /> : null}>
+        {(pending.text !== "" || pending.attachments.length === 0) && (
+          <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
+            {pending.text}
+          </div>
         )}
-      </div>
+        <AttachmentList attachments={pending.attachments} />
+      </SentBody>
     </article>
   );
 }
