@@ -7,8 +7,11 @@ import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 
-/** 分组框的样子，只在这里写：白底、1px 浅边框、圆角，行间细线。 */
-const GROUP_BOX = "divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background";
+/** 分组框的外壳样子：白底、1px 浅边框、圆角。 */
+const GROUP_SHELL = "overflow-hidden rounded-2xl border border-border bg-background";
+
+/** 普通分组框：外壳 + 行间细线。 */
+const GROUP_BOX = `divide-y divide-border ${GROUP_SHELL}`;
 
 /** 组标题：13.5px、500、灰。 */
 const GROUP_TITLE = "text-[13.5px] font-medium text-muted-foreground";
@@ -66,7 +69,7 @@ export function CollapsibleGroup({
   }
   return (
     <section aria-label={title}>
-      <Collapsible open={open} onOpenChange={setOpen} className={GROUP_BOX}>
+      <Collapsible open={open} onOpenChange={setOpen} className={GROUP_SHELL}>
         <h2>
           <CollapsibleTrigger className="group flex min-h-[52px] w-full cursor-pointer items-center gap-4 px-4 py-2 text-left text-[15px] transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
             <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -77,7 +80,7 @@ export function CollapsibleGroup({
             />
           </CollapsibleTrigger>
         </h2>
-        <CollapsibleContent className="divide-y divide-border">{children}</CollapsibleContent>
+        <CollapsibleContent className="divide-y divide-border border-t border-border">{children}</CollapsibleContent>
       </Collapsible>
     </section>
   );
