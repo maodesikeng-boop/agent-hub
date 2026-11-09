@@ -1,9 +1,9 @@
 import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
-import { formatBytes, type StagedFiles } from "../upload.ts";
+import { formatBytes, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
 import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
@@ -68,7 +68,7 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const { files, busy, notice } = staging;
-  const tooLong = byteLength(value) > MAX_MESSAGE_BYTES;
+  const tooLong = value.length * 3 > MAX_MESSAGE_BYTES && byteLength(value) > MAX_MESSAGE_BYTES;
   const hasContent = value.trim() !== "" || files.length > 0;
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
@@ -95,11 +95,19 @@ export function Composer({
   }, []);
 
   // 输入框跟着内容长高，到上限后出滚动条
+  const prevValue = useRef<string | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT_PX)}px`;
+    const prev = prevValue.current;
+    prevValue.current = value;
+    // 在末尾追加文字时内容只会持平或变高，直接读 scrollHeight 即可，不先把 height 塌缩为 auto（避免多行时每次按键触发整页同步回流）；
+    // 首次挂载、删改文字或清空时才先设 auto 以便缩短高度。
+    if (prev === null || value === "" || !value.startsWith(prev)) {
+      el.style.height = "auto";
+    }
+    const nextHeight = `${Math.min(el.scrollHeight, MAX_HEIGHT_PX)}px`;
+    if (el.style.height !== nextHeight) el.style.height = nextHeight;
     if (pendingCursor.current !== null) {
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
@@ -212,3 +220,12 @@ export function Composer({
     </>
   );
 }
+
+/** 独立订阅单个对话草稿的输入框：打字只重渲染它自己，不牵连 App、左栏、右栏和消息流。 */
+export const DraftComposer = memo(function DraftComposer({
+  draft,
+  ...rest
+}: Omit<ComponentProps<typeof Composer>, "value" | "onChange"> & { draft: DraftSlot }) {
+  const value = useSyncExternalStore(draft.subscribe, draft.get);
+  return <Composer value={value} onChange={draft.set} {...rest} />;
+});

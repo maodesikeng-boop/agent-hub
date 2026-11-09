@@ -1,5 +1,5 @@
 import { Loader2, PanelLeft } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccentScope } from "./lib/accent-scope.tsx";
 import { isAgentVendor, type ConversationId, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import { Conversation } from "./components/Conversation.tsx";
@@ -30,7 +30,7 @@ import {
 } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
-import { useStagingStore } from "./upload.ts";
+import { useDraftStore, useStagingStore } from "./upload.ts";
 import { ModelCatalogProvider } from "./models.tsx";
 import { useRoute } from "./route.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
@@ -79,9 +79,10 @@ export function App() {
   const { state } = current;
   const remote = current.key !== LOCAL_DEVICE;
   // 额度到了重置时间自己变（左下角的百分比、状态行的“等额度”），不用刷新页面
-  useRerenderAt(quotaResetTimes(state));
+  const resetTimes = useMemo(() => quotaResetTimes(state), [state.sessions]);
+  useRerenderAt(resetTimes);
   /** 草稿、待发的文件按对话存，键带设备（devices.ts 的 conversationKey，各台的对话编号会撞）。 */
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
   /** 窄屏时左栏抽屉拉出来了。 */
@@ -100,7 +101,7 @@ export function App() {
 
   const clearFocus = useCallback(() => setFocus(null), []);
 
-  const entries = listConversations(state);
+  const entries = useMemo(() => listConversations(state), [state.conversations, state.pms, state.projects, state.folders]);
   const profilePm = route?.view === "profile" ? route.pmId : null;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
   // 网址写的 Worker 对话其实不是 Worker 的（手改的网址）：当没写
@@ -170,11 +171,72 @@ export function App() {
   }, [defaultId, replace]);
   // 网址写的设备清单里没有（编号不对、已经移除了）：回到入口本机
   const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
-  const localEntries = local.state.phase === "ready" ? listConversations(local.state) : [];
+  const localEntries = useMemo(
+    () => (local.state.phase === "ready" ? (local.key === current.key ? entries : listConversations(local.state)) : []),
+    [local.state, local.key, current.key, entries],
+  );
   const localFirst = (localEntries.find((e) => e.pm?.archivedAt == null) ?? localEntries[0])?.id ?? null;
   useEffect(() => {
     if (unknownDevice && localFirst !== null) replace({ view: "conversation", id: localFirst });
   }, [unknownDevice, localFirst, replace]);
+
+  const here = useMemo(() => routeDeviceOf(current.key), [current.key]);
+  const keyOf = useCallback((id: ConversationId) => conversationKey(current.key, id), [current.key]);
+  const openWorkerConversation = useCallback(
+    (id: ConversationId) => {
+      if (compact) setCompactRailOpen(false);
+      navigate({ view: "worker", id, ...here });
+    },
+    [compact, navigate, here],
+  );
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const actions = useMemo(
+    () => ({
+      retry: state.retry,
+      onRetryMessage: (messageId: number) => void hub.retryMessage(messageId),
+      onOpenWorker: openWorkerConversation,
+      onRevertPersona: async (changeId: PersonaChangeId) => {
+        await hub.client.postRevertPersonaChange(changeId);
+      },
+      vendorOf: (id: ConversationId) => {
+        const vendor = sessionOf(stateRef.current, id)?.vendor;
+        return isAgentVendor(vendor) ? vendor : undefined;
+      },
+    }),
+    [state.retry, hub, openWorkerConversation],
+  );
+  const send = useCallback(
+    (id: ConversationId, text: string, files: File[]) => {
+      const key = keyOf(id);
+      const slot = drafts.of(key);
+      // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
+      // 传失败了什么都不清（文字和文件都留着）
+      // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
+      if (files.length === 0 && text.startsWith("/")) {
+        return hub.sendChecked(id, text).then(() => slot.clearIfMatch(text));
+      }
+      if (files.length === 0) {
+        slot.set("");
+        hub.send(id, text);
+        return;
+      }
+      return hub.sendWithFiles(id, text, files).then(() => {
+        slot.clearIfMatch(text);
+        staging.of(key).removeSent(files);
+      });
+    },
+    [keyOf, drafts, hub, staging],
+  );
+  const handleLoadOlder = useCallback((id: ConversationId) => void hub.loadOlder(id), [hub]);
+  const openProfile = useCallback((pmId: PmId) => navigate({ view: "profile", pmId, ...here }), [navigate, here]);
+  const health = useMemo(() => failingHealth(state), [state.health]);
+  const quota = useMemo(() => quotaUsage(state), [state.sessions]);
+  const quotaFetchable = useMemo(() => hasFetchedQuotaSession(state), [state.sessions]);
+  const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
+  const railPm = active?.pm?.id ?? null;
+  const railWorkers = useMemo(() => (railPm === null ? [] : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
+  const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : []), [state.conversations, state.pms, state.pending, active?.id]);
 
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
@@ -207,58 +269,14 @@ export function App() {
   // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link } = deviceNotices(current);
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
-  const notices = <Notices health={failingHealth(state)} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
-  const here = routeDeviceOf(current.key);
-  const keyOf = (id: ConversationId) => conversationKey(current.key, id);
+  const notices = <Notices health={health} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
   const created = (device: string, conversationId: ConversationId) => {
     setCreating(false);
     select({ device, id: conversationId });
   };
-  const openWorkerConversation = (id: ConversationId) => {
-    if (compact) setCompactRailOpen(false);
-    navigate({ view: "worker", id, ...here });
-  };
-  const actions = {
-    retry: state.retry,
-    onRetryMessage: (messageId: number) => void hub.retryMessage(messageId),
-    onOpenWorker: openWorkerConversation,
-    onRevertPersona: async (changeId: PersonaChangeId) => {
-      await hub.client.postRevertPersonaChange(changeId);
-    },
-    vendorOf: (id: ConversationId) => {
-      const vendor = sessionOf(state, id)?.vendor;
-      return isAgentVendor(vendor) ? vendor : undefined;
-    },
-  };
-
-  // 项目经理页面和 Worker 页面共用：草稿按对话分开，发出去就清空
-  const setDraft = (id: ConversationId, value: string) => setDrafts((d) => ({ ...d, [keyOf(id)]: value }));
-  const send = (id: ConversationId, text: string, files: File[]) => {
-    const key = keyOf(id);
-    // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
-    // 传失败了什么都不清（文字和文件都留着）
-    // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
-    if (files.length === 0 && text.startsWith("/")) {
-      return hub.sendChecked(id, text).then(() => setDrafts((d) => (d[key]?.trim() === text ? { ...d, [key]: "" } : d)));
-    }
-    if (files.length === 0) {
-      setDraft(id, "");
-      hub.send(id, text);
-      return;
-    }
-    return hub.sendWithFiles(id, text, files).then(() => {
-      setDrafts((d) => (d[key]?.trim() === text ? { ...d, [key]: "" } : d));
-      staging.of(key).removeSent(files);
-    });
-  };
-
-  const workerLine = openWorker === null ? null : workerLineOf(state, openWorker);
   const workerPmEntry = active;
   // 右栏列的是当前打开的项目经理（Worker 的对话也算它）的“等你确定”和 Worker
-  const railPm = active?.pm?.id ?? null;
-  const railWorkers = railPm === null ? [] : workersOf(state, railPm);
-  const railAsks = active ? pendingAsks(state, active.id) : [];
   const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0);
   // 有要关心的事才自动出来：有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
   const railNeedsYou = !profile && (railAsks.length > 0 || railWorkers.some((w) => !w.ended));
@@ -337,8 +355,8 @@ export function App() {
               }
             : null
         }
-        quota={quotaUsage(state)}
-        quotaFetchable={hasFetchedQuotaSession(state)}
+        quota={quota}
+        quotaFetchable={quotaFetchable}
         drawerOpen={narrow && drawerOpen}
         onCloseDrawer={closeDrawer}
         onSelect={select}
@@ -378,18 +396,17 @@ export function App() {
             pending={pendingOf(state, openWorker)}
             session={sessionOf(state, openWorker)}
             older={state.older[openWorker]}
-            draft={drafts[keyOf(openWorker)] ?? ""}
+            draft={drafts.of(keyOf(openWorker))}
             staging={staging.of(keyOf(openWorker))}
             leading={leading}
             toolbar={toolbar}
             top={top}
             notices={notices}
             onBack={() => workerPmEntry && select({ device: current.key, id: workerPmEntry.id })}
-            onDraftChange={setDraft}
             onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
-            onLoadOlder={(id) => void hub.loadOlder(id)}
+            onLoadOlder={handleLoadOlder}
             actions={actions}
             link={link}
           />
@@ -401,21 +418,20 @@ export function App() {
             pending={pendingOf(state, active.id)}
             session={visibleSessionOf(state, active.id)}
             older={state.older[active.id]}
-            draft={drafts[keyOf(active.id)] ?? ""}
+            draft={drafts.of(keyOf(active.id))}
             staging={staging.of(keyOf(active.id))}
             leading={leading}
             toolbar={toolbar}
             top={top}
             notices={notices}
-            onDraftChange={setDraft}
             onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
-            onLoadOlder={(id) => void hub.loadOlder(id)}
+            onLoadOlder={handleLoadOlder}
             actions={actions}
             focus={focus}
             onFocusDone={clearFocus}
-            onOpenProfile={(pmId: PmId) => navigate({ view: "profile", pmId, ...here })}
+            onOpenProfile={openProfile}
             link={link}
           />
         ) : (

@@ -3,7 +3,7 @@ import { parseServerMessage, reconnectDelay } from "./connection.ts";
 import { formatArchiveRemaining, formatTime } from "./format.ts";
 import { CHANGE_TYPES, PM_ARCHIVE_RETENTION_MS, applyReminderChange, pendingAsks, reminderStateFrom, waitingConversations, type ScheduleRecord } from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
-import { applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
+import { MAX_LIVE_MESSAGES, applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
   changeOf,
   makeConvSnapshot,
@@ -64,6 +64,34 @@ describe("applyChange", () => {
     const s0 = loaded();
     const s1 = applyChange(s0, messageChange(11, "message.created", makeMessage({ id: 5, conversationId: 99 })));
     expect(s1.conversations).toBe(s0.conversations);
+  });
+
+  it("长时间运行累积消息：未翻页的对话最多保留最近 MAX_LIVE_MESSAGES 条并标记 hasMore，已翻页的对话不截断", () => {
+    let s = loaded({
+      seq: 0,
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 1, pmId: 1 }, hasMore: false }),
+        makeConvSnapshot([makeMessage({ id: 10, conversationId: 2 })], { conversation: { id: 2, pmId: 1 }, hasMore: true }),
+      ],
+    });
+    // 对话 2 翻过页
+    s = reducer(s, {
+      type: "olderDone",
+      conversationId: 2,
+      messages: [makeMessage({ id: 1, conversationId: 2 })],
+      hasMore: false,
+    });
+    const total = MAX_LIVE_MESSAGES + 25;
+    let seq = 0;
+    for (let i = 1; i <= total; i++) {
+      s = applyChange(s, messageChange(++seq, "message.created", makeToolMessage({ id: i, conversationId: 1 })));
+      s = applyChange(s, messageChange(++seq, "message.created", makeToolMessage({ id: 10 + i, conversationId: 2 })));
+    }
+    expect(s.conversations[1]?.messages).toHaveLength(MAX_LIVE_MESSAGES);
+    expect(s.conversations[1]?.messages[0]?.id).toBe(26);
+    expect(s.conversations[1]?.hasMore).toBe(true);
+    // 已主动翻页的对话保留全部已加载消息
+    expect(s.conversations[2]?.messages).toHaveLength(total + 2);
   });
 });
 

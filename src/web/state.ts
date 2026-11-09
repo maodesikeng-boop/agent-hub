@@ -83,9 +83,14 @@ export interface HubState {
   publicEntry?: PublicEntryStatus;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
+  /** 用户主动翻过页（olderDone）的对话：不再按 MAX_LIVE_MESSAGES 自动截断顶部旧消息；重拉快照时重置。 */
+  olderLoaded?: Record<ConversationId, boolean | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
   retry: Record<MessageId, RetryPhase | undefined>;
 }
+
+/** 未主动翻页的对话在内存中保留的最近消息上限（与 shared/reminders.ts 的 MIRROR_MESSAGES_PER_CONVERSATION 对齐），超出后标记 hasMore 供向上翻页，防止长时间运行无限膨胀。 */
+export const MAX_LIVE_MESSAGES = 200;
 
 export const initialState: HubState = {
   phase: "loading",
@@ -121,8 +126,10 @@ export type HubAction =
 
 /** 按编号插入或替换一条消息，保持从小到大。 */
 export function upsertMessage(messages: Message[], message: Message): Message[] {
+  const last = messages.at(-1);
+  if (last === undefined || message.id > last.id) return [...messages, message];
+  if (message.id === last.id) return messages.with(messages.length - 1, message);
   const index = messages.findIndex((m) => m.id >= message.id);
-  if (index === -1) return [...messages, message];
   if (messages[index]?.id === message.id) return messages.with(index, message);
   return messages.toSpliced(index, 0, message);
 }
@@ -155,11 +162,14 @@ export function applyChange(state: HubState, change: Change): HubState {
       const { message } = change.data;
       const view = state.conversations[message.conversationId];
       if (!view) return next; // 不认识的对话，device-hub.ts 会重新拉快照
+      const updated = upsertMessage(view.messages, message);
+      const trim = !state.olderLoaded?.[message.conversationId] && updated.length > MAX_LIVE_MESSAGES;
+      const messages = trim ? updated.slice(-MAX_LIVE_MESSAGES) : updated;
       return {
         ...next,
         conversations: {
           ...state.conversations,
-          [message.conversationId]: { ...view, messages: upsertMessage(view.messages, message) },
+          [message.conversationId]: { ...view, messages, hasMore: view.hasMore || trim },
         },
         pending: dropConfirmed(state.pending, [message]),
         retry: dropRetryIfSettled(state.retry, message),
@@ -258,6 +268,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),
     pending: dropConfirmed(state.pending, all),
     older: {},
+    olderLoaded: {},
     retry: keepStillFailed(state.retry, all),
   };
 }
@@ -297,6 +308,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
           },
         },
         older: { ...state.older, [action.conversationId]: undefined },
+        olderLoaded: { ...state.olderLoaded, [action.conversationId]: true },
       };
     }
     case "pendingAdd":

@@ -1,5 +1,5 @@
 import { Folder } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, shortPath, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
@@ -7,10 +7,10 @@ import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { SessionState } from "../../shared/index.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
-import type { StagedFiles } from "../upload.ts";
+import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { conversationSource } from "../composer-suggest.ts";
 import { useClient } from "../device-scope.tsx";
-import { Composer, type ComposerLink } from "./Composer.tsx";
+import { DraftComposer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
@@ -65,7 +65,6 @@ export function Conversation({
   toolbar,
   top,
   notices,
-  onDraftChange,
   onSend,
   onRetry,
   onStop,
@@ -81,7 +80,7 @@ export function Conversation({
   pending: PendingMessage[];
   session: SessionState | null;
   older: OlderState | undefined;
-  draft: string;
+  draft: DraftSlot;
   /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
@@ -92,7 +91,6 @@ export function Conversation({
   top: React.ReactNode;
   /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
-  onDraftChange: (conversationId: ConversationId, value: string) => void;
   /** 只有文字：同步发出（返回 undefined）；带文件：返回 Promise，传完、发出才 resolve，失败 reject（Error.message 给用户看）。 */
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
@@ -118,7 +116,11 @@ export function Conversation({
   );
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
-  const agent = { name: entry.name, avatarKey: entry.avatarKey };
+  const agent = useMemo(() => ({ name: entry.name, avatarKey: entry.avatarKey }), [entry.name, entry.avatarKey]);
+  const agentOf = useCallback(() => agent, [agent]);
+  const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);
+  const handleSend = useCallback((text: string, files: File[]) => onSend(id, text, files), [onSend, id]);
+  const statusNode = useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [session]);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
@@ -156,15 +158,15 @@ export function Conversation({
         <MessageList
           messages={messages}
           pending={pending}
-          agentOf={() => agent}
+          agentOf={agentOf}
           hasMore={view.hasMore}
           older={older}
-          onLoadOlder={() => onLoadOlder(id)}
+          onLoadOlder={handleLoadOlder}
           onRetry={onRetry}
           actions={messageActions}
           focus={focus}
           onFocusDone={onFocusDone}
-          status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
+          status={statusNode}
           statusAgent={agent}
         />
       </div>
@@ -172,16 +174,15 @@ export function Conversation({
         {entry.pm?.archivedAt != null ? (
           <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
         ) : (
-          <Composer
+          <DraftComposer
             autoFocus
-            value={draft}
+            draft={draft}
             placeholder={`给 ${entry.name} 发消息`}
             staging={staging}
             stop={stop}
             link={link}
             source={source}
-            onChange={(v) => onDraftChange(id, v)}
-            onSend={(text, files) => onSend(id, text, files)}
+            onSend={handleSend}
           />
         )}
       </div>

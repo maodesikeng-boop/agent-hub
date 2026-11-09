@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionState } from "../shared/index.ts";
 
 /** 点“停止”之后：发出去了没、服务端接受了没。 */
@@ -16,23 +16,25 @@ export interface StopControl {
 export function useStop(session: SessionState | null, requestStop: (() => Promise<void>) | null): StopControl {
   const [phase, setPhase] = useState<StopPhase>("idle");
   const activity = session?.activity ?? "idle";
+  const requestStopRef = useRef(requestStop);
+  requestStopRef.current = requestStop;
 
   // 这一轮结束了，下一轮又能点“停止”
   useEffect(() => {
     if (activity === "idle") setPhase("idle");
   }, [activity]);
 
-  return {
-    busy: activity !== "idle",
-    stopping: activity === "stopping" || phase === "sending" || phase === "requested",
-    failed: phase === "failed",
-    onStop: () => {
-      if (requestStop === null) return;
-      setPhase("sending");
-      requestStop().then(
-        () => setPhase("requested"),
-        () => setPhase("failed"),
-      );
-    },
-  };
+  const onStop = useCallback(() => {
+    if (requestStopRef.current === null) return;
+    setPhase("sending");
+    requestStopRef.current().then(
+      () => setPhase("requested"),
+      () => setPhase("failed"),
+    );
+  }, []);
+
+  const busy = activity !== "idle";
+  const stopping = activity === "stopping" || phase === "sending" || phase === "requested";
+  const failed = phase === "failed";
+  return useMemo(() => ({ busy, stopping, failed, onStop }), [busy, stopping, failed, onStop]);
 }

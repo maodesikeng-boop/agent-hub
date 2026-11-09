@@ -57,8 +57,10 @@ export function formatTokenDetail(usage: TokenUsage): string {
   return [`Context ${n(usage.context)}`, "Cumulative so far", `Input ${n(usage.input)}`, `Cache read ${n(usage.cacheRead)}`, `Cache write ${n(usage.cacheWrite)}`, `Output ${n(usage.output)}`].join("\n");
 }
 
+const utf8Encoder = new TextEncoder();
+
 export function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
+  return utf8Encoder.encode(text).length;
 }
 
 export function newClientId(): string {

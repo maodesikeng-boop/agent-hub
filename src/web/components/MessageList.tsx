@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isHandoverTraffic, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
@@ -19,7 +19,7 @@ const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
  * 消息流（docs/ui-standard.md 第 17 条）：agent 的一轮回复一个头像，操作合成一行；打开、刷新、图片加载完、内容变高时，
  * 原本在底部的继续贴底（ResizeObserver），往上翻了就不拉回去。
  */
-export function MessageList({
+export const MessageList = memo(function MessageList({
   messages,
   pending,
   agentOf,
@@ -63,7 +63,7 @@ export function MessageList({
   const anchorHeight = useRef<number | null>(null);
   const prevPendingCount = useRef(pending.length);
 
-  const items = groupMessages(messages);
+  const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null;
   // 只看显示出来的：写交接的来往（不显示）进来不算新消息
@@ -203,4 +203,4 @@ export function MessageList({
       )}
     </div>
   );
-}
+});

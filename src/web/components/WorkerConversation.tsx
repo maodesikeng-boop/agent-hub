@@ -1,14 +1,14 @@
 import { ArrowLeft } from "lucide-react";
-import { useMemo } from "react";
-import type { ConversationId, SessionState } from "../../shared/index.ts";
+import { useCallback, useMemo } from "react";
+import type { ConversationId, Message, SessionState } from "../../shared/index.ts";
 import type { WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
-import type { StagedFiles } from "../upload.ts";
+import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { conversationSource } from "../composer-suggest.ts";
 import { useClient } from "../device-scope.tsx";
-import { Composer, type ComposerLink } from "./Composer.tsx";
+import { DraftComposer, type ComposerLink } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
@@ -35,7 +35,6 @@ export function WorkerConversation({
   top,
   notices,
   onBack,
-  onDraftChange,
   onSend,
   onRetry,
   onStop,
@@ -53,7 +52,7 @@ export function WorkerConversation({
   pending: PendingMessage[];
   session: SessionState | null;
   older: OlderState | undefined;
-  draft: string;
+  draft: DraftSlot;
   /** 还没发的文件（和项目经理页面同一套，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
@@ -64,7 +63,6 @@ export function WorkerConversation({
   top: React.ReactNode;
   notices: React.ReactNode;
   onBack: () => void;
-  onDraftChange: (conversationId: ConversationId, value: string) => void;
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
@@ -79,7 +77,14 @@ export function WorkerConversation({
   const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
   // Worker 统一用中性灰的头像（docs/ui-standard.md 第 17 条）
-  const identity = { name: title, avatarKey: id ?? 0, neutral: true };
+  const identity = useMemo(() => ({ name: title, avatarKey: id ?? 0, neutral: true }), [title, id]);
+  const pmIdentity = useMemo(() => ({ name: pm.name, avatarKey: pm.avatarKey }), [pm.name, pm.avatarKey]);
+  const agentOf = useCallback((message: Message) => (message.sender === "pm" ? pmIdentity : identity), [pmIdentity, identity]);
+  const handleLoadOlder = useCallback(() => {
+    if (id !== undefined) onLoadOlder(id);
+  }, [onLoadOlder, id]);
+  const handleSend = useCallback((text: string, files: File[]) => (id === undefined ? undefined : onSend(id, text, files)), [onSend, id]);
+  const statusNode = useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [session]);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Worker ${title}`} onFiles={(files) => phase === "open" && staging.add(files)}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
@@ -103,29 +108,28 @@ export function WorkerConversation({
             <MessageList
               messages={view.messages}
               pending={pending}
-              agentOf={(message) => (message.sender === "pm" ? pm : identity)}
+              agentOf={agentOf}
               hasMore={view.hasMore}
               older={older}
-              onLoadOlder={() => onLoadOlder(view.conversation.id)}
+              onLoadOlder={handleLoadOlder}
               onRetry={onRetry}
               actions={actions}
-              status={hasAgentStatus(session) ? <AgentStatus session={session} /> : null}
+              status={statusNode}
               statusAgent={identity}
             />
           </div>
           <div className="chat-column pointer-events-none relative z-10 -mt-[26px] w-full shrink-0 pb-5 *:pointer-events-auto empty:hidden">
             {phase !== "ended" && (
-              <Composer
+              <DraftComposer
                 autoFocus
-                value={draft}
+                draft={draft}
                 placeholder={phase === "preparing" ? `${title} 还在准备` : `给 ${title} 发消息`}
                 disabled={phase === "preparing"}
                 stop={stop}
                 link={link}
                 source={source}
-                onChange={(v) => onDraftChange(view.conversation.id, v)}
                 staging={staging}
-                onSend={(text, files) => onSend(view.conversation.id, text, files)}
+                onSend={handleSend}
               />
             )}
           </div>
