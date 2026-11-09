@@ -93,7 +93,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 | 输入框 | `h-9 px-3` | — | `Input` |
 | 下拉 | `h-9`，宽度跟内容，最宽 260px；分组行里改了马上存的用 `variant="plain"`（见第 9 条） | — | `Select` |
 | 多行输入 | 最少 `min-h-24`，在分组框里时去掉边框、跟着内容长高 | — | `Textarea` |
-| 开关 | `h-6 w-10` | — | `Switch` |
+| 开关 | `h-5 w-9`（滑块 `size-4`） | — | `Switch` |
 
 输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-[240px]`）。
 
@@ -126,6 +126,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 组标题在框外：13.5px、500、`text-muted-foreground`、`px-4`，和框之间 8px。没有标题的组直接是框（弹窗里的“名字 / 主文件夹”；资料页头部下面第一组厂商、模型、思考程度，头部就是它的标题），读屏名字用 `label`。
 - 框：`rounded-2xl bg-sidebar`，行与行之间 1px `divide-sidebar-active`，框外不加边框和阴影。
 - 行：`px-4 py-2`，内容最少 36px 高（`min-h-9`），所以一行是 52px；有说明小字的行 `py-3`，跟着长高。
+- **平铺分组（`variant="plain"`，全局设置弹窗 `SettingsDialog` 使用，照 Linear / Claude desktop）**：弹窗本身已有圆角白底外框，顶层分组不再套 `rounded-2xl bg-sidebar` 灰底块，组标题与行均不加 `px-4` 左右缩进，与弹窗标题左对齐（净宽 472px）；有标题的组在标题行下方加 1px `border-border` 细线（`border-b border-border pb-2`），组内各行之间用 1px `divide-border` 细线分隔（行 `py-2.5` / 有小字 `py-3`）。在平铺组内按需展开的向导子面板（“连到中心”“邀请别的设备”“添加设备”）和登录二维码区域使用 `rounded-2xl bg-sidebar` 浅灰内联卡片，与常驻平铺列表区分层级。
 - 输入框是白底带边框（`Input` 自带），和浅灰框分得开。
 - 下拉：改了马上存的设置行用 `Select variant="plain"`：没有边框和底色，字是前景色，右边一个上下箭头（`ChevronsUpDown`，灰），悬停、聚焦 `bg-sidebar-hover`，像 macOS 系统设置的弹出菜单。表单里和输入框并排的（定时任务的“每天 / 每隔”）用默认的带边框样式，和输入框一致。
 - 多选一：一行一个选项，名字 + 一句说明；右边一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点，悬停 `bg-sidebar-hover`。
@@ -152,7 +153,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 `DialogContent`（`src/web/ui/dialog.tsx`）：
 
 - `rounded-2xl border border-border bg-background p-6`，遮罩 `bg-black/30`。
-- 宽度两档：表单默认 520px；只有几个开关的简单设置 `className="max-w-[440px]"`。
+- 宽度两档：默认 520px（新建项目经理、全局设置）；二次确认等窄弹窗 `className="max-w-[440px]"`。
 - 结构从上到下：标题 → `DialogBody`（若干分组，`gap-6`）→ 错误提示（`px-4`，`text-danger`）→ `DialogFooter`。
 - **标题和底部按钮固定，只有中间滚动**：内容超过一屏（展开“更多设置”）时，`DialogBody` 自己滚，“创建”一直在视野里。表单弹窗把 `<form>` 做成 `DialogForm`（`flex min-h-0 flex-col`），里面放 `DialogBody` 和 `DialogFooter`。
 - 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。
@@ -244,8 +245,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 左栏按设备分组。组头 32px 高、`px-3`、`rounded-2xl`，左边设备名（13.5px、500、灰）+ 折叠箭头（`ChevronRight` 14px，展开转 90°），右边状态词（12px 灰：重连中；离线 + 多久以前，两项之间 `gap-2`，不用“·”）、状态点（8px 圆：在线 `--success`、重连中 `--caution`、其余 `bg-muted-foreground/40`）、系统图标（14px：Mac `Laptop`、Linux `Server`）。组之间 8px（`pt-2`）。离线、没连上过的整组 `opacity-60`。
   - 最上面一组“等你确定”（标题样式同组头的字）汇总所有设备没回答的提问，每行名字后面隔 8px 写设备名（12px 灰，不用“·”），那台离线、没连上过时这一行也 `opacity-60`；“等你”只在各组里标。标签页标题的数字是所有设备的合计。
   - 别的设备离线：对话顶上一条提示（同“重连中”的灰底胶囊，`WifiOff` 图标）“东京离线，显示的是 3 分钟前的内容”；输入框整个不可用，占位写“东京离线，暂时不能发消息”。重连中（断了不到 30 秒）照常能打字，发送按钮等连上。从没连上过：主区居中“还没连上这台设备”+ 一行排查提示（13.5px 灰）。
-  - 新建项目经理弹窗第一行“设备”（`Select plain`，默认当前看的那台，离线的不能选）；设置弹窗多一组“设备”（组标题右边“邀请”“添加”两个 ghost `sm` 按钮；每台一行：名字，下面系统 + 本机 / 状态，右边改名、移除图标按钮，移除要二次确认）。网址前面加 `#/d/<设备编号>`，入口本机不加。
-  - **公网入口与待批准浏览器会话（`docs/mac-app-and-mobile-design.md` 第 2.2 节）**：设置弹窗“设备”下设“公网入口”分组，提供“公网域名”输入框（占位 `如 tokyo.tailnet.ts.net`）与“开启 / 关闭”按钮；开启时在行下显示当前生效的 `https://<公网域名>`，并展示“Funnel 命令”行（等宽代码块 + `outline` `sm`“复制命令”按钮）。“已登录的浏览器”分组将 `pending_approval` 待批准会话排在最前，行下用 `gap-3` 分开显示“待批准”“经公网”与时间（不用“·”拼接），右侧提供 `ghost` `sm`“拒绝”与“允许”按钮；已批准的公网会话行下保留“经公网”标注。
+  - 新建项目经理弹窗第一行“设备”（`Select plain`，默认当前看的那台，离线的不能选）；设置弹窗多一组“设备”（组标题右边“连到中心”“邀请”“添加”三个 ghost `sm` 按钮，`-mr-3 gap-1`，展开态 `aria-expanded:bg-accent aria-expanded:text-foreground`；每台一行：名字，下面系统 + 本机 / 状态，右边改名、移除图标按钮，移除要二次确认）。网址前面加 `#/d/<设备编号>`，入口本机不加。
+  - **公网入口与待批准浏览器会话（`docs/mac-app-and-mobile-design.md` 第 2.2 节）**：设置弹窗“设备”下设“公网入口”分组，提供“公网域名”输入框（`w-[240px]`，占位 `如 tokyo.tailnet.ts.net`）与同高（36px）的 `outline`“开启 / 关闭”按钮；开启时在行下显示当前生效的 `https://<公网域名>`，并展示“Funnel 命令”行（等宽代码块 + `outline` `sm`“复制命令”按钮）。“已登录的浏览器”分组在同一平铺细线列表中将 `pending_approval` 待批准会话排在最前，行下用 `gap-3` 分开显示“待批准”“经公网”与时间（不用“·”拼接），右侧提供 `ghost` `sm`“拒绝”与“允许”按钮；已批准的公网会话行下保留“经公网”标注；列表底部接着“在手机上登录”与“所有浏览器”操作行。
 - **Mac 原生桌面应用（`html[data-macos-app="true"]`，`docs/mac-app-and-mobile-design.md` 第 1.3 节）**：无边框透明标题栏下，窗口左上角红黄绿交通灯占宽 `72px`、高 `28px`，只在 `styles.css` 定义 `--macos-traffic-lights-width`（默认 `0px`，`html[data-macos-app="true"]` 下 `72px`）和 `--macos-traffic-lights-height`（默认 `0px`，`html[data-macos-app="true"]` 下 `28px`）。
   - 宽屏展开左栏（或窄屏打开左栏抽屉）时，左栏顶部内边距为 `calc(var(--safe-top) + var(--macos-traffic-lights-height))`，搜索框自动下移 `28px` 避开红黄绿；
   - 窄屏（`1100px` 以下）收起左栏时，`.chat-main` 的 `--header-gutter-start` 设为 `calc(1.25rem + var(--macos-traffic-lights-width))`，资料页顶栏与设备等待页顶栏左内边距同样加上 `var(--macos-traffic-lights-width)`，使左上角按钮向右让出 `72px` 不与红黄绿重叠；

@@ -3,7 +3,7 @@ import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { DevicesSection, type DeviceSettings } from "./DeviceSettings.tsx";
-import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { SettingsGroup, SettingsRow, SettingsVariantProvider } from "./SettingsList.tsx";
 
 export type { DeviceSettings };
 
@@ -14,7 +14,7 @@ const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
   install: "先在 Safari 里“添加到主屏幕”，从主屏图标打开再开",
 };
 
-/** 全局设置：和资料页一样的分组行，以后加设置就加一行 SettingsRow。 */
+/** 全局设置（照 Linear / Claude desktop 的平铺分组列表，不套灰底肥皂块）：以后加设置就加一行 SettingsRow。 */
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -28,7 +28,7 @@ export function SettingsDialog({
   devices?: DeviceSettings | null;
 }) {
   const notifyGroup = (
-    <SettingsGroup>
+    <SettingsGroup label="通知">
       {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
       <SettingsRow label="通知" detail={NOTIFY_BLOCKED[notify.permission]}>
         {(id) => (
@@ -45,12 +45,14 @@ export function SettingsDialog({
   );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="设置" className="max-w-[440px]">
-        <DialogBody>
-          {notifyGroup}
-          {devices && <DevicesSection {...devices} />}
-          <BrowserSessionsSettings />
-        </DialogBody>
+      <DialogContent title="设置">
+        <SettingsVariantProvider value="plain">
+          <DialogBody>
+            {notifyGroup}
+            {devices && <DevicesSection {...devices} />}
+            <BrowserSessionsSettings />
+          </DialogBody>
+        </SettingsVariantProvider>
       </DialogContent>
     </Dialog>
   );

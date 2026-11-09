@@ -338,7 +338,10 @@ describe("设置 → 设备", () => {
     await boot(fleet);
     await within(nav()).findByRole("button", { name: /阿青/ });
     await userEvent.click(screen.getByRole("button", { name: "设置" }));
-    const devices = await screen.findByRole("region", { name: "设备" });
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const devices = await within(dialog).findByRole("region", { name: "设备" });
+    // 设置弹窗顶层分组采用平铺细分割线结构，不套 bg-sidebar 灰底肥皂块
+    expect(dialog.querySelector(".bg-sidebar")).toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Mac"), expect.stringContaining("东京")]);
     expect(rows[0]).toHaveTextContent("本机");
@@ -395,7 +398,10 @@ describe("设置 → 设备", () => {
     await boot(fleet);
     await within(nav()).findByRole("button", { name: /阿青/ });
     await userEvent.click(screen.getByRole("button", { name: "设置" }));
-    const devices = await screen.findByRole("region", { name: "设备" });
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    const devices = await within(dialog).findByRole("region", { name: "设备" });
+    // 设置弹窗顶层分组采用平铺细分割线结构，不套 bg-sidebar 灰底肥皂块
+    expect(dialog.querySelector(".bg-sidebar")).toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows[0]).not.toHaveTextContent("SSH 隧道");
     expect(rows[0]).not.toHaveTextContent("Tailscale");
@@ -514,10 +520,16 @@ describe("设置 → 设备", () => {
     });
 
     await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "设置" });
+    expect(dialog).toHaveClass("max-w-[520px]");
+    expect(dialog).not.toHaveClass("max-w-[440px]");
     const publicRegion = await screen.findByRole("region", { name: "公网入口" });
     const hostInput = within(publicRegion).getByRole("textbox", { name: "公网域名" });
     expect(hostInput).toHaveValue("tokyo.tail1234.ts.net");
     expect(hostInput).toHaveAttribute("placeholder", "如 tokyo.tailnet.ts.net");
+    expect(hostInput).toHaveClass("w-[240px]");
+    const toggleBtn = within(publicRegion).getByRole("button", { name: "开启" });
+    expect(toggleBtn).not.toHaveClass("bg-primary");
     expect(within(publicRegion).queryByText(funnelCmd)).toBeNull();
 
     // 修改域名并点击“开启”

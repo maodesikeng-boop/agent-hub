@@ -143,129 +143,128 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
   };
 
   return (
-    <>
-      <SettingsGroup title="已登录的浏览器">
-        {sessions === null && loadError === null && (
-          <div className="flex min-h-[52px] items-center justify-center px-4">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="加载中" />
-          </div>
-        )}
-        {loadError !== null && (
-          <div className="px-4 py-3">
-            <RowError error={loadError} />
-          </div>
-        )}
-        {sessions
-          ?.toSorted((a, b) => (a.status === "pending_approval" ? 0 : 1) - (b.status === "pending_approval" ? 0 : 1))
-          .map((session) => {
-            const name = describeUserAgent(session.userAgent);
-            const ago = formatAgo(session.lastSeenAt, now);
-            const pending = session.status === "pending_approval";
-            const confirming = session.current && confirmingSelf;
-            const detail = (
-              <span className="inline-flex items-center gap-3">
-                {session.current && <span>这个浏览器</span>}
-                {pending && <span>待批准</span>}
-                {session.viaPublic && <span>经公网</span>}
-                <span>{ago}</span>
-              </span>
-            );
-            return (
-              <SettingsRow key={session.id} label={name} detail={detail} error={rowErrors[session.id]}>
-                {(id) =>
-                  pending ? (
-                    <>
-                      <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => void exit(session)}>
-                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}拒绝
-                      </Button>
-                      <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => void approve(session)}>
-                        {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}允许
-                      </Button>
-                    </>
-                  ) : confirming ? (
-                    <>
-                      <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
-                        取消
-                      </Button>
-                      <Button
-                        id={id}
-                        variant="ghost"
-                        size="sm"
-                        aria-label="确认退出"
-                        disabled={busy !== null}
-                        className="text-danger hover:text-danger"
-                        onClick={() => void exit(session)}
-                      >
-                        {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
-                      </Button>
-                    </>
-                  ) : (
+    <SettingsGroup title="已登录的浏览器">
+      {sessions === null && loadError === null && (
+        <div className="flex min-h-[52px] items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="加载中" />
+        </div>
+      )}
+      {loadError !== null && (
+        <div className="py-3">
+          <RowError error={loadError} />
+        </div>
+      )}
+      {sessions
+        ?.toSorted((a, b) => (a.status === "pending_approval" ? 0 : 1) - (b.status === "pending_approval" ? 0 : 1))
+        .map((session) => {
+          const name = describeUserAgent(session.userAgent);
+          const ago = formatAgo(session.lastSeenAt, now);
+          const pending = session.status === "pending_approval";
+          const confirming = session.current && confirmingSelf;
+          const detail = (
+            <span className="inline-flex items-center gap-3">
+              {session.current && <span>这个浏览器</span>}
+              {pending && <span>待批准</span>}
+              {session.viaPublic && <span>经公网</span>}
+              <span>{ago}</span>
+            </span>
+          );
+          return (
+            <SettingsRow key={session.id} label={name} detail={detail} error={rowErrors[session.id]}>
+              {(id) =>
+                pending ? (
+                  <span className="-mr-3 flex items-center gap-1">
+                    <Button variant="ghost" size="sm" aria-label="拒绝" disabled={busy !== null} onClick={() => void exit(session)}>
+                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}拒绝
+                    </Button>
+                    <Button id={id} variant="ghost" size="sm" aria-label="允许" disabled={busy !== null} onClick={() => void approve(session)}>
+                      {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}允许
+                    </Button>
+                  </span>
+                ) : confirming ? (
+                  <span className="-mr-3 flex items-center gap-1">
+                    <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
+                      取消
+                    </Button>
                     <Button
                       id={id}
                       variant="ghost"
                       size="sm"
-                      aria-label={`退出 ${name}`}
+                      aria-label="确认退出"
                       disabled={busy !== null}
-                      onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
+                      className="text-danger hover:text-danger"
+                      onClick={() => void exit(session)}
                     >
-                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}退出
+                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}确认退出
                     </Button>
-                  )
-                }
-              </SettingsRow>
-            );
-          })}
-      </SettingsGroup>
-
-      <SettingsGroup label="登录">
-        <SettingsRow label="在手机上登录">
-          {(id) => (
-            <Button id={id} variant="ghost" size="sm" aria-label={link === null ? "显示二维码" : "隐藏"} disabled={linkBusy} onClick={() => (link === null ? void showLink() : setLink(null))}>
-              {linkBusy && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {link === null ? "显示二维码" : "隐藏"}
-            </Button>
-          )}
-        </SettingsRow>
-        {link !== null && (
-          <div className="flex flex-col items-center gap-3 px-4 py-4">
-            {expired ? (
-              <>
-                <p className="text-[15px] text-muted-foreground">已过期</p>
-                <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => void showLink()}>
-                  重新生成
-                </Button>
-              </>
-            ) : (
-              <>
-                <QrCode text={link.url} label="登录二维码" className="size-40 rounded-xl" />
-                <p className="text-[15px] text-muted-foreground tabular-nums">{formatCountdown(link.expiresAt - now)}</p>
-              </>
-            )}
-          </div>
+                  </span>
+                ) : (
+                  <Button
+                    id={id}
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`退出 ${name}`}
+                    disabled={busy !== null}
+                    className="-mr-3"
+                    onClick={() => (session.current ? setConfirmingSelf(true) : void exit(session))}
+                  >
+                    {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}退出
+                  </Button>
+                )
+              }
+            </SettingsRow>
+          );
+        })}
+      <SettingsRow label="在手机上登录" error={linkError}>
+        {(id) => (
+          <Button
+            id={id}
+            variant="ghost"
+            size="sm"
+            aria-label={link === null ? "显示二维码" : "隐藏"}
+            disabled={linkBusy}
+            className="-mr-3"
+            onClick={() => (link === null ? void showLink() : setLink(null))}
+          >
+            {linkBusy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {link === null ? "显示二维码" : "隐藏"}
+          </Button>
         )}
-        {linkError !== null && (
-          <div className="px-4 py-3">
-            <RowError error={linkError} />
-          </div>
-        )}
-        <SettingsRow label="所有浏览器" error={allError}>
-          {(id) => (
-            <Button
-              id={id}
-              variant="ghost"
-              size="sm"
-              aria-label={confirmingAll ? "确认全部退出" : "全部退出"}
-              disabled={busy !== null}
-              className={confirmingAll ? "text-danger hover:text-danger" : undefined}
-              onClick={() => (confirmingAll ? void exitAll() : setConfirmingAll(true))}
-              onBlur={() => setConfirmingAll(false)}
-            >
-              {busy === "all" && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {confirmingAll ? "确认全部退出" : "全部退出"}
-            </Button>
+      </SettingsRow>
+      {link !== null && (
+        <div className="my-2 flex flex-col items-center gap-3 rounded-2xl bg-sidebar px-4 py-4">
+          {expired ? (
+            <>
+              <p className="text-[15px] text-muted-foreground">已过期</p>
+              <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => void showLink()}>
+                重新生成
+              </Button>
+            </>
+          ) : (
+            <>
+              <QrCode text={link.url} label="登录二维码" className="size-40 rounded-xl" />
+              <p className="text-[15px] text-muted-foreground tabular-nums">{formatCountdown(link.expiresAt - now)}</p>
+            </>
           )}
-        </SettingsRow>
-      </SettingsGroup>
-    </>
+        </div>
+      )}
+      <SettingsRow label="所有浏览器" error={allError}>
+        {(id) => (
+          <Button
+            id={id}
+            variant="ghost"
+            size="sm"
+            aria-label={confirmingAll ? "确认全部退出" : "全部退出"}
+            disabled={busy !== null}
+            className={confirmingAll ? "-mr-3 text-danger hover:text-danger" : "-mr-3"}
+            onClick={() => (confirmingAll ? void exitAll() : setConfirmingAll(true))}
+            onBlur={() => setConfirmingAll(false)}
+          >
+            {busy === "all" && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {confirmingAll ? "确认全部退出" : "全部退出"}
+          </Button>
+        )}
+      </SettingsRow>
+    </SettingsGroup>
   );
 }

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Button } from "./button.tsx";
 import { Input, Select, Textarea } from "./input.tsx";
+import { Switch } from "./switch.tsx";
 
 const classOf = (el: HTMLElement) => el.className.split(/\s+/);
 
@@ -52,6 +53,13 @@ describe("界面标准：共用组件", () => {
     expect(classOf(screen.getByRole("button", { name: "小" }))).toContain("h-8");
     expect(classOf(screen.getByRole("button", { name: "图标" }))).toContain("size-9");
     expect(classOf(screen.getByRole("button", { name: "小图标" }))).toContain("size-8");
+  });
+
+  it("开关：精致尺寸 h-5 w-9（滑块 size-4），带 touch-target 与中性键盘焦点圈", () => {
+    render(<Switch aria-label="通知" checked={false} onCheckedChange={() => {}} />);
+    const sw = screen.getByRole("switch", { name: "通知" });
+    expect(classOf(sw)).toEqual(expect.arrayContaining(["h-5", "w-9", "touch-target", "focus-visible:ring-ring/50"]));
+    expect(sw.firstElementChild).toHaveClass("size-4");
   });
 
   it("--ring 是中性灰，不是主色", () => {
