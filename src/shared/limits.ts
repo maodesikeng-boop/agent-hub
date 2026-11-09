@@ -26,6 +26,8 @@ export const WORKER_SEARCH_MAX_LIMIT = 100;
 export const WORKER_SEARCH_CONTEXT_CHARS = 80;
 export const WORKER_SEARCH_MAX_KEYWORDS = 10;
 export const WORKER_SEARCH_MAX_KEYWORD_CHARS = 100;
+/** hub worker list：进行中的全列，已收工的只列最近收工的这么多个（几百个全列会把几十 KB 塞进项目经理的上下文），更早的用 hub worker search / show 查。 */
+export const WORKER_LIST_RECENT_ENDED = 20;
 /** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
 export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
 /** Worker 在干活、没有工具在跑、这么久没动静，hub worker show 提醒“可能卡住了”。 */
@@ -231,6 +233,8 @@ export const AGY_DENIED_CONTINUE_MAX = 3;
 export const AGY_CONNECTOR_LIST_TIMEOUT_MS = 10_000;
 /** agy 只读 Worker：各 MCP 服务器的工具清单缓存多久（配置变了马上失效）。 */
 export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
+/** agy 只读 Worker：有服务器没问到工具清单（超时、报错，那个服务器整个拒）时，清单只记这么久，偶发失败不会拒 10 分钟。 */
+export const AGY_CONNECTOR_RETRY_MS = 60_000;
 /** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
@@ -297,6 +301,11 @@ export const ACTION_POLL_INTERVAL_MS = 30_000;
 export const ACTION_CONCURRENCY = 4;
 /** 数据库：别的连接占着写锁时，最多忙等多久再报错（SQLite 的 busy timeout）。 */
 export const DB_BUSY_TIMEOUT_MS = 5_000;
+/**
+ * 数据库：按 SQL 原文缓存的预编译语句最多留几条，多了淘汰最久没用的。代码里写死的 SQL 约 400 条，全放得下；
+ * 把编号拼进 SQL 的（删项目经理时的 IN (...)）每次都是新原文，不设上限会一直攒着。
+ */
+export const MAX_CACHED_STATEMENTS = 1_000;
 /** 驱动层：错误信息里最多带多少个字符的标准错误（取最后这么多）。 */
 export const STDERR_TAIL_CHARS = 2_000;
 /** agent 接口：一个请求从连上到收完的上限，半截请求挂着不放，到点就断。 */
@@ -430,6 +439,8 @@ export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
 // ---- 额度（只能另起进程问的厂商，agy；daemon/quota/fetched-quota.ts）----
 /** 问到的额度缓存多久；用户打开额度面板时才问，期内再开直接用缓存。 */
 export const FETCHED_QUOTA_FRESH_MS = 5 * 60_000;
+/** 没问到（起不来、超时、报错）或问到了但一组都认不出时，只记这么久：偶发失败不会让面板空着 5 分钟，又不会每开一次面板就起一个进程。 */
+export const FETCHED_QUOTA_RETRY_MS = 30_000;
 /** 问一次最多等多久；超了当没有。 */
 export const FETCHED_QUOTA_TIMEOUT_MS = 30_000;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FETCHED_QUOTA_FRESH_MS, VENDOR_SPECS, type QuotaResponse } from "../../shared/index.ts";
+import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, VENDOR_SPECS, type QuotaResponse } from "../../shared/index.ts";
 import { createFetchedQuota, parseFetchedQuota, queryFetchedQuota } from "./fetched-quota.ts";
 
 const spec = VENDOR_SPECS.agy.quota!.fetched!;
@@ -83,11 +83,28 @@ describe("createFetchedQuota（缓存）", () => {
     expect(t.calls()).toBe(1);
   });
 
-  it("查失败：回空（不显示那一块），不抛；同样缓存 5 分钟", async () => {
-    const t = setup([new Error("没装")]);
+  it("查失败：回空（不显示那一块），不抛；只记 FETCHED_QUOTA_RETRY_MS，不当结果缓存 5 分钟；过了再问，问到了照常缓存", async () => {
+    const t = setup([new Error("偶发超时"), sample]);
     expect(await t.quota.get()).toEqual({ groups: [] });
     await t.quota.get();
     expect(t.calls()).toBe(1);
+    t.advance(FETCHED_QUOTA_RETRY_MS);
+    expect(await t.quota.get()).toEqual(sample);
+    expect(t.calls()).toBe(2);
+    t.advance(FETCHED_QUOTA_FRESH_MS - 1);
+    await t.quota.get();
+    expect(t.calls()).toBe(2);
+  });
+
+  it("问到了但一组都没认出来（输出变了、没登录）：也是空结果，只记 FETCHED_QUOTA_RETRY_MS", async () => {
+    const t = setup([{ groups: [] }, sample]);
+    expect(await t.quota.get()).toEqual({ groups: [] });
+    t.advance(FETCHED_QUOTA_RETRY_MS - 1);
+    await t.quota.get();
+    expect(t.calls()).toBe(1);
+    t.advance(1);
+    expect(await t.quota.get()).toEqual(sample);
+    expect(t.calls()).toBe(2);
   });
 
   it("没配查询（没装 agy）：回空", async () => {
