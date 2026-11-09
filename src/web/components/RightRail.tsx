@@ -130,9 +130,18 @@ function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolea
   );
 }
 
+/** 提问的第一行非空文字（去掉 Markdown）：找到就停，长提问不会每次渲染把每一行都跑一遍正则。 */
+function askSummary(text: string): string {
+  for (const line of text.split("\n")) {
+    const plain = stripMarkdown(line);
+    if (plain !== "") return plain;
+  }
+  return "";
+}
+
 /** 一个提问一行：去掉 Markdown 的第一行；点开在下面看全文，同时让对话滚到那条消息。 */
 function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle: () => void }) {
-  const summary = ask.text.split("\n").map(stripMarkdown).find((line) => line !== "") ?? "";
+  const summary = askSummary(ask.text);
   return (
     <li>
       <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : "hover:bg-sidebar-hover")} onClick={onToggle}>

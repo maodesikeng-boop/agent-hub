@@ -2,7 +2,7 @@
 // 接口真变了，换成 better-sqlite3 只改这里。其他代码只用下面的 Db。
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
-import { DB_BUSY_TIMEOUT_MS } from "../../shared/limits.ts";
+import { DB_BUSY_TIMEOUT_MS, MAX_CACHED_STATEMENTS } from "../../shared/limits.ts";
 
 export type SqlValue = null | number | bigint | string | Uint8Array;
 
@@ -26,12 +26,14 @@ export interface Db {
   close(): void;
 }
 
-/** 打开数据库：WAL、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。 */
-export function openDatabase(file: string): Db {
+/** 打开数据库：WAL、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。maxStatements 测试可以改小。 */
+export function openDatabase(file: string, options: { maxStatements?: number } = {}): Db {
+  const maxStatements = options.maxStatements ?? MAX_CACHED_STATEMENTS;
   const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: DB_BUSY_TIMEOUT_MS });
   raw.exec("PRAGMA journal_mode = WAL");
   // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
   raw.exec("PRAGMA synchronous = NORMAL");
+  /** Map 的顺序就是新旧：用到就挪到最后，超过 MAX_CACHED_STATEMENTS 删最前面（最久没用）的。 */
   const statements = new Map<string, StatementSync>();
   let depth = 0;
 
@@ -39,8 +41,11 @@ export function openDatabase(file: string): Db {
     let stmt = statements.get(sql);
     if (stmt === undefined) {
       stmt = raw.prepare(sql);
-      statements.set(sql, stmt);
+      if (statements.size >= maxStatements) statements.delete(statements.keys().next().value!);
+    } else {
+      statements.delete(sql);
     }
+    statements.set(sql, stmt);
     return stmt;
   };
 

@@ -23,6 +23,29 @@ export function shellRequestKind(method: string, url: string, origin: string, mo
   return "static";
 }
 
+/** 页面里引用的打包文件（/assets/…，去重）。 */
+export function assetPathsIn(html: string): Set<string> {
+  return new Set(Array.from(html.matchAll(/["'(]\/?(assets\/[^"'()\s?#]+)/g), (m) => `/${m[1]}`));
+}
+
+/**
+ * 打包文件名带哈希、先用缓存，同一个缓存名下每发一版就多一批，不删会一直攒（手机上几个月能攒几十 MB）。
+ * 拿到新页面时调：页面引用的打包文件和上次缓存的页面一样（没换版）不删；换了版（或者以前没缓存过页面），
+ * 缓存里不在新页面引用里的 /assets/ 都删掉。按需加载的块删了，下次用到时再从网络拿。
+ * cachedUrls 是缓存里所有请求的完整网址；返回要删的那些。
+ */
+export function staleAssetUrls(cachedUrls: readonly string[], previousHtml: string | null, nextHtml: string): string[] {
+  const next = assetPathsIn(nextHtml);
+  if (previousHtml !== null) {
+    const previous = assetPathsIn(previousHtml);
+    if (previous.size === next.size && [...next].every((p) => previous.has(p))) return [];
+  }
+  return cachedUrls.filter((url) => {
+    const { pathname } = new URL(url);
+    return pathname.startsWith("/assets/") && !next.has(pathname);
+  });
+}
+
 /**
  * 推送内容，和 shared/api.ts 的 PushPayload 一样（pwa.test.ts 核对）。这里不引 api.ts：Service Worker 单独做类型检查，
  * 没有 node 和 dom 的类型，api.ts 牵出来的文件过不了。
