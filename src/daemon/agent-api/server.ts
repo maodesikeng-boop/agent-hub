@@ -31,7 +31,7 @@ import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
-import { isAgentVendor, type AgentVendor, type VendorAvailability } from "../../shared/vendors.ts";
+import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -59,6 +59,10 @@ export interface AgentApiOptions {
    * 不给就不查（都当能用）。
    */
   vendorUsable?: (vendor: AgentVendor) => Promise<VendorAvailability>;
+  /**
+   * hub models 查询各厂商模型目录（守护进程接 ModelCatalogs）。不给就不预查，由账本用缓存或打包目录兜底。
+   */
+  models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
   /** 这台设备的名字（不能用时报错里写）。 */
   deviceName?: () => string;
   tokens: SessionTokens;
@@ -158,6 +162,14 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     additionalProperties: false,
     required: ["workerId"],
     properties: { workerId: workerIdField, last: { type: "integer" }, stats: { type: "boolean" } },
+  },
+  models: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      refresh: { type: "boolean" },
+    },
   },
   ask: {
     type: "object",
@@ -316,8 +328,14 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
-  /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR。 */
+  /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录。 */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
+    if (command === "models") {
+      if (!opts.models) return {};
+      const vendor = isAgentVendor(body.vendor) ? body.vendor : undefined;
+      if (body.vendor !== undefined && vendor === undefined) return {};
+      return { modelCatalogs: await opts.models.list({ refresh: body.refresh === true, ...(vendor ? { vendor } : {}) }) };
+    }
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
       const pr = target === null ? null : await probePr(target.cwd, target.branch);

@@ -786,6 +786,27 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
     expect(second.models.map((m) => m.id)).toEqual(["gpt-6.1-sol"]);
     expect(second.defaultEfforts).toEqual(["low", "high", "max", "ultra"]);
   });
+
+  it("list({ vendor, refresh }) 只查并返回指定厂商，不重查其他厂商", async () => {
+    let claudeCalls = 0;
+    let codexCalls = 0;
+    const catalogs = createModelCatalogs({
+      sources: {
+        claude: { parse: parseInitializeModels, query: async () => (claudeCalls++, REAL_MODELS) },
+        codex: { parse: parseCodexModels, query: async () => (codexCalls++, REAL_CODEX_MODELS) },
+      },
+      log: () => {},
+    });
+    const onlyClaude = await catalogs.list({ vendor: "claude" });
+    expect(onlyClaude.map((c) => c.vendor)).toEqual(["claude"]);
+    expect(claudeCalls).toBe(1);
+    expect(codexCalls).toBe(0);
+
+    const refreshedClaude = await catalogs.list({ vendor: "claude", refresh: true });
+    expect(refreshedClaude.map((c) => c.vendor)).toEqual(["claude"]);
+    expect(claudeCalls).toBe(2);
+    expect(codexCalls).toBe(0);
+  });
 });
 
 describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一起问、一起缓存）", () => {

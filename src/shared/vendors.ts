@@ -523,6 +523,8 @@ export interface ModelCatalog {
   models: readonly CatalogModel[];
   /** 选“默认”时支持的思考程度，null = 没说。 */
   defaultEfforts: readonly string[] | null;
+  /** “默认”的思考程度档位（若厂商有明确报出），没说是 null。 */
+  defaultEffort?: string | null;
   /** “默认”实际用的模型的名字（如 Opus 5.5），厂商没说是 null（界面只写“默认”）。 */
   defaultModel: string | null;
   /** 同上的模型 ID（codex 启动时显式传它：不传的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了）。厂商没说是 null。 */

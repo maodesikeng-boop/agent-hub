@@ -303,6 +303,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       runDir: paths.runDir,
       hubSock: paths.hubSock,
       log,
+      models,
       vendorUsable: (vendor) => models.ensureUsable(vendor),
       deviceName: () => device.name,
     });

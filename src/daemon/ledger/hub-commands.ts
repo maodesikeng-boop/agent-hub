@@ -4,10 +4,12 @@
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
 import { hubCommandAllowed } from "../../shared/hub.ts";
-import type { HubArgs, HubCommand, HubResult, ProjectCard } from "../../shared/hub.ts";
+import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
+import { AGENT_VENDORS, bundledModelCatalog, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
+import type { AgentVendor, ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -36,6 +38,52 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
 
 /** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
+
+const VENDOR_AVAILABILITY_TEXT: Readonly<Record<VendorAvailability, string>> = {
+  available: "可用",
+  unknown: "可用",
+  signed_out: "未登录",
+  not_installed: "未安装",
+};
+
+function toHubVendorModels(catalog: ModelCatalog): HubVendorModels {
+  return {
+    vendor: catalog.vendor,
+    label: catalog.label,
+    source: catalog.source,
+    availability: catalog.availability,
+    defaultModel: catalog.defaultModel,
+    defaultModelId: catalog.defaultModelId,
+    defaultEffort: catalog.defaultEffort ?? null,
+    defaultEfforts: [...effortsFor(catalog, null)],
+    efforts: [...catalog.efforts],
+    models: catalog.models.map((m) => ({
+      id: m.id,
+      label: m.label,
+      efforts: [...effortsFor(catalog, m.id)],
+    })),
+  };
+}
+
+function formatDefaultModelText(entry: HubVendorModels): string {
+  if (entry.defaultModelId !== null && entry.defaultModel !== null && entry.defaultModelId !== entry.defaultModel) {
+    return `${entry.defaultModelId}（${entry.defaultModel}）`;
+  }
+  return entry.defaultModelId ?? entry.defaultModel ?? "默认";
+}
+
+function formatVendorModelsBlock(entry: HubVendorModels): string {
+  const status = VENDOR_AVAILABILITY_TEXT[entry.availability] ?? "可用";
+  const defaultModel = formatDefaultModelText(entry);
+  const defaultEffort = entry.defaultEffort ?? "默认";
+  const header = `${entry.vendor}（${entry.label}）· 状态: ${status} · 默认模型: ${defaultModel} · 默认思考程度: ${defaultEffort}`;
+  const modelLines = entry.models.map((m) => {
+    const name = m.label && m.label !== m.id ? `${m.id}（${m.label}）` : m.id;
+    const effortText = m.efforts.length > 0 ? m.efforts.join(", ") : "不可调";
+    return `  - ${name} · 思考程度: ${effortText}`;
+  });
+  return [header, ...modelLines].join("\n");
+}
 
 export function createLedgerHubCommands(
   ctx: LedgerContext,
@@ -119,6 +167,22 @@ export function createLedgerHubCommands(
         return workerView.log(caller, args as HubArgs<"worker.log">);
       case "worker.search":
         return workerView.search(caller, args as HubArgs<"worker.search">);
+      case "models": {
+        const a = args as HubArgs<"models">;
+        if (a.vendor !== undefined && !isAgentVendor(a.vendor)) {
+          throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+        }
+        const targetVendors: readonly AgentVendor[] = a.vendor !== undefined ? [a.vendor] : AGENT_VENDORS;
+        const vendors = targetVendors.map((vendor) => {
+          const catalog =
+            context.modelCatalogs?.find((c) => c.vendor === vendor) ?? ctx.modelCatalog(vendor) ?? bundledModelCatalog(vendor);
+          return toHubVendorModels(catalog);
+        });
+        return {
+          text: vendors.map(formatVendorModelsBlock).join("\n\n"),
+          data: { vendors },
+        };
+      }
       case "ask": {
         assertPmNotArchived(caller.pmId);
         const { text, options } = args as HubArgs<"ask">;

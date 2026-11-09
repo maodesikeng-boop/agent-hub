@@ -28,7 +28,7 @@ import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
-import type { AgentVendor, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -315,6 +315,8 @@ export interface HubCallContext {
   transcript?: string | null;
   /** worker.start 带 --vendor 时：这家在这台设备（device 是设备名）上能不能用；没装、没登录账本拒绝派。 */
   vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability; device: string };
+  /** models：agent 接口按 --vendor / --refresh 异步查好的模型目录；不传时账本用缓存或打包目录兜底。 */
+  modelCatalogs?: readonly ModelCatalog[];
 }
 
 /** 后台写交接时跑腿的（daemon/handover/runner.ts）用的几个方法见 LedgerHandoverWork（shared/handover.ts）。 */

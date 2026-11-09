@@ -152,19 +152,19 @@ describe("hub cli", () => {
     });
 
     it("worker start --effort sends the level; any level from the vendor list is accepted", async () => {
-      for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+      for (const level of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
         expect((await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
       expect(ledger.calls.map((c) => c.args)).toEqual(
-        ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
+        ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
       );
     });
 
     it("worker start --effort with a level not in the list is a usage error", async () => {
-      for (const level of ["ultra", "LOW", ""]) {
+      for (const level of ["bogus", "LOW", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
-        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max");
+        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max、ultra");
       }
       expect(ledger.calls).toHaveLength(0);
     });
@@ -330,9 +330,35 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
+      for (const usage of [`${cmd} models [--vendor claude|agy|codex] [--refresh]`, `${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max|ultra", "--readonly", "--no-worktree", `${cmd} worker send <编号> --stdin`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
+    });
+  });
+
+  describe("hub models", () => {
+    it.each([
+      [["models"], {}],
+      [["models", "--vendor", "claude"], { vendor: "claude" }],
+      [["models", "--refresh"], { refresh: true }],
+      [["models", "--vendor", "agy", "--refresh"], { vendor: "agy", refresh: true }],
+    ] as const)("hub %j → models %j", async (argv, args) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "models", args }]);
+    });
+
+    it.each([
+      [["models", "--vendor", "gemini"]],
+      [["models", "--vendor", ""]],
+      [["models", "extra"]],
+      [["models", "--stdin"]],
+      [["models", "--readonly"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain(`${cmd} models [--vendor claude|agy|codex] [--refresh]`);
+      expect(ledger.calls).toHaveLength(0);
     });
   });
 

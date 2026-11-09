@@ -82,7 +82,7 @@ export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: Agen
     return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
 
 - **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
-- **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
+- **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。
 ${commandNote}
 - **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`;
   }
@@ -159,7 +159,7 @@ export function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptS
   return `# 怎么带 Worker
 
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
+- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}（可用 \`${HUB} models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
 - **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
@@ -196,6 +196,7 @@ export function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VEND
   - \`${HUB} persona show\`：查看当前的性格设定和模式
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
+  - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
   - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
