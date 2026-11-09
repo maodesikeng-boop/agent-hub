@@ -1,4 +1,4 @@
-// 设置里的“已登录的浏览器”（联机 P6）：列表、单个退出、全部退出（点两次）、在手机上打开（二维码 + 倒计时）。接口是假的。
+// 设置 → 登录与安全（联机 P6）：“已登录的浏览器”默认收起（有待批准的才展开）、列表、单个退出、全部退出（点两次）、在手机上打开（二维码 + 倒计时）。接口是假的。
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { BrowserSessionInfo } from "../../shared/index.ts";
@@ -35,14 +35,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** “已登录的浏览器”那一组的标题行（折叠开关）。 */
+const toggle = () => screen.getByRole("button", { name: /^已登录的浏览器/ });
+
+/** 等列表拿到（标题行出现个数），收着就点开。 */
+async function expandSessions() {
+  await waitFor(() => expect(toggle()).toHaveTextContent(/\d+ 个/));
+  if (toggle().getAttribute("aria-expanded") === "false") fireEvent.click(toggle());
+}
+
 async function show() {
   render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
+  await expandSessions();
   await screen.findByText("iPhone Safari");
 }
 
 const rowOf = (name: string) => screen.getByText(name).closest("[data-slot='settings-row']") as HTMLElement;
 
 describe("已登录的浏览器列表", () => {
+  it("默认收起：只剩标题行“已登录的浏览器 2 个”，看不到浏览器；点开才列出（左边电脑、手机图标），再点收起", async () => {
+    render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
+    await waitFor(() => expect(toggle()).toHaveTextContent("2 个"));
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "全部退出" })).not.toBeInTheDocument();
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(rowOf("Mac Chrome").querySelector("svg.lucide-monitor")).not.toBeNull();
+    expect(rowOf("iPhone Safari").querySelector("svg.lucide-smartphone")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "全部退出" })).toBeInTheDocument();
+    fireEvent.click(toggle());
+    expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument();
+  });
+
   it("每个浏览器一行：名字是“设备 浏览器”，下面是最后活动；自己这一行标出来，不用 · 拼接", async () => {
     await show();
     const mine = rowOf("Mac Chrome");
@@ -53,14 +78,16 @@ describe("已登录的浏览器列表", () => {
     expect(within(phone).getByText("5 分钟前")).toBeInTheDocument();
     expect(within(phone).queryByText(/这个浏览器/)).not.toBeInTheDocument();
     const region = screen.getByRole("region", { name: "已登录的浏览器" });
-    expect(within(region).getByRole("button", { name: "显示二维码" })).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: "全部退出" })).toBeInTheDocument();
+    // 扫码登录不藏：在框外单独一组，收不起来
+    expect(within(screen.getByRole("region", { name: "手机扫码登录" })).getByRole("button", { name: "显示二维码" })).toBeInTheDocument();
   });
 
-  it("读不出来（比如没登录）：框里一行说原因，不是空白", async () => {
+  it("读不出来（比如没登录）：自己展开，框里一行说原因，不是空白", async () => {
     api.browserSessions = () => ({ status: 401, body: { error: "unauthorized" } });
     render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("登录过期了，重新登录");
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
   });
 
   it("待批准（pending_approval）浏览器会话排在最前，展示“允许”与“拒绝”按钮；点“允许”调 POST /api/sessions/:id/approve 后变为已登录并标出“经公网”", async () => {
@@ -68,7 +95,10 @@ describe("已登录的浏览器列表", () => {
       session({ id: "mac", current: true }),
       session({ id: "phone-pending", userAgent: IPHONE, status: "pending_approval", viaPublic: true, lastSeenAt: Date.now() - 60_000 }),
     ];
-    await show();
+    render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
+    // 有待批准的：不用点，自己展开
+    await screen.findByText("iPhone Safari");
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
     const region = screen.getByRole("region", { name: "已登录的浏览器" });
     const rows = region.querySelectorAll("[data-slot='settings-row']");
     // pending_approval 排在第一行
@@ -234,6 +264,8 @@ describe("在手机上打开", () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
     expect(screen.queryByRole("img", { name: "登录二维码" })).not.toBeInTheDocument();
+    expect(toggle()).toHaveTextContent("3 个");
+    fireEvent.click(toggle());
     expect(screen.getAllByText("iPhone Safari").length).toBe(2);
   });
 

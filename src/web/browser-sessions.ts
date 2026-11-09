@@ -33,6 +33,13 @@ export function describeUserAgent(userAgent: string): string {
   return [device, browser].filter(Boolean).join(" ") || UNKNOWN_BROWSER;
 }
 
+/** 浏览器在哪种设备上（行左边的图标）：iPhone、Android 手机是 phone，iPad、Android 平板是 tablet，其余算电脑。 */
+export function userAgentKind(userAgent: string): "phone" | "tablet" | "computer" {
+  if (/iPad|Android(?!.*Mobile)/.test(userAgent)) return "tablet";
+  if (/iPhone|Android|Mobile/.test(userAgent)) return "phone";
+  return "computer";
+}
+
 /** 最后活动离现在多久：刚刚 / N 分钟前 / N 小时前 / N 天前。 */
 export function formatAgo(ms: number, now: number = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - ms) / 1000));

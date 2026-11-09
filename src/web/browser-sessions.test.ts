@@ -1,6 +1,6 @@
 // 设置里“已登录的浏览器”的文字：User-Agent 显示成“iPhone Safari”这样的名字，最后活动显示成“3 分钟前”，登录链接剩余时间显示成“4:32”。
 import { describe, expect, it } from "vitest";
-import { describeUserAgent, formatAgo, formatCountdown } from "./browser-sessions.ts";
+import { describeUserAgent, formatAgo, formatCountdown, userAgentKind } from "./browser-sessions.ts";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const IPHONE_CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1";
@@ -30,6 +30,23 @@ describe("describeUserAgent", () => {
     expect(describeUserAgent("curl/8.4.0")).toBe("未知浏览器");
     expect(describeUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe("Mac");
     expect(describeUserAgent("Mozilla/5.0 Firefox/132.0")).toBe("Firefox");
+  });
+});
+
+describe("userAgentKind（行左边的电脑 / 手机图标）", () => {
+  const ANDROID_TABLET = "Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  it.each([
+    [IPHONE, "phone"],
+    [IPHONE_CHROME, "phone"],
+    [ANDROID_CHROME, "phone"],
+    [IPAD, "tablet"],
+    [ANDROID_TABLET, "tablet"],
+    [MAC_CHROME, "computer"],
+    [WIN_EDGE, "computer"],
+    [LINUX_FIREFOX, "computer"],
+    ["", "computer"],
+  ] as const)("%s → %s", (ua, kind) => {
+    expect(userAgentKind(ua)).toBe(kind);
   });
 });
 
