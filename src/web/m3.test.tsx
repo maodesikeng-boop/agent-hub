@@ -1490,4 +1490,47 @@ describe("在 Worker 页面直接对它说话", () => {
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
     expect(await within(section).findByText("发送失败")).toBeInTheDocument();
   });
+
+  it("已收工的历史 Worker 对话（初始快照 messages 为空、hasMore 为 true）：点开详情时自动按需拉取历史消息并展示", async () => {
+    const user = userEvent.setup();
+    await boot(
+      withWorker({
+        sessions: [
+          makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }),
+          makeSession({ sessionId: 2, conversationId: 30, status: "ended", activity: "idle" }),
+        ],
+        conversations: [
+          makeConvSnapshot(
+            [
+              makeWorkerLine({ id: 2, conversationId: 1 }),
+              makeWorkerLine({ id: 3, conversationId: 1, line: { event: "ended", summary: "搞定" } }),
+            ],
+            {
+              conversation: { id: 1, pmId: 1, title: "小林" },
+            },
+          ),
+          makeConvSnapshot([], { conversation: makeWorkerConversation(), hasMore: true }),
+        ],
+      }),
+    );
+    api.older = (conversationId, before) => {
+      expect(conversationId).toBe(30);
+      expect(before).toBe(Number.MAX_SAFE_INTEGER);
+      return {
+        status: 200,
+        body: {
+          messages: [
+            makeMessage({ id: 10, conversationId: 30, sender: "pm", text: "任务：压缩状态快照" }),
+            makeMessage({ id: 11, conversationId: 30, sender: "agent", text: "已完成快照瘦身与 gzip 压缩" }),
+          ],
+          hasMore: false,
+        },
+      };
+    };
+    await user.click(workerButton());
+    const section = screen.getByRole("region", { name: "Worker 修 X" });
+    expect(await within(section).findByText("任务：压缩状态快照")).toBeInTheDocument();
+    expect(within(section).getByText("已完成快照瘦身与 gzip 压缩")).toBeInTheDocument();
+    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+  });
 });

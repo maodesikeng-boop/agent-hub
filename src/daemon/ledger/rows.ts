@@ -178,6 +178,17 @@ export function toConversation(row: ConversationDbRow): Conversation {
   };
 }
 
+function parseMessageMeta(kind: string, raw: string | null): Record<string, unknown> | null {
+  if (raw === null) return null;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  // 工具调用的摘要已在 text 里（summarizeToolCall），网页端不读 meta.input（Write/Edit 等可能带整份文件内容），对外消息去掉 input 免得撑爆快照。
+  if (kind === "tool" && "input" in parsed) {
+    const { input: _input, ...rest } = parsed;
+    return rest;
+  }
+  return parsed;
+}
+
 export function toMessage(row: MessageDbRow): Message {
   return {
     id: row.id,
@@ -187,7 +198,7 @@ export function toMessage(row: MessageDbRow): Message {
     sender: row.sender as MessageSender,
     kind: row.kind as MessageKind,
     text: row.text,
-    meta: row.meta === null ? null : (JSON.parse(row.meta) as Record<string, unknown>),
+    meta: parseMessageMeta(row.kind, row.meta),
     collapsed: row.collapsed === 1,
     dedupeKey: row.dedupe_key,
     status: row.status as MessageStatus | null,

@@ -348,6 +348,77 @@ describe("M2 新的变化类型", () => {
     // 重新拉快照整个换掉
     expect(reducer(s, { type: "loaded", snapshot: makeSnapshot({ seq: 30 }) }).projects).toEqual([]);
   });
+
+  it("已按需加载过消息的历史 Worker 对话，重拉快照（messages 为空且 hasMore 为 true）时保留已加载的消息；未加载前收到实时消息保持空列表等点开时一次拉齐", () => {
+    const workerConv = { id: 30, kind: "worker" as const, pmId: 1, projectId: 1, title: "修 X", createdAt: 1 };
+    const endedSession = makeSession({ sessionId: 2, conversationId: 30, status: "ended" });
+    const s0 = loaded({
+      conversations: [{ conversation: workerConv, messages: [], hasMore: true }],
+      sessions: [endedSession],
+    });
+    const liveMsg = makeMessage({ id: 102, conversationId: 30, text: "实时消息" });
+    const sBeforeLoad = applyChange(s0, messageChange(11, "message.created", liveMsg));
+    expect(sBeforeLoad.conversations[30]?.messages).toEqual([]);
+    expect(sBeforeLoad.conversations[30]?.hasMore).toBe(true);
+
+    const m1 = makeMessage({ id: 101, conversationId: 30, text: "历史消息" });
+    const s1 = reducer(sBeforeLoad, { type: "olderDone", conversationId: 30, messages: [m1, liveMsg], hasMore: false });
+    expect(s1.conversations[30]?.messages).toEqual([m1, liveMsg]);
+    expect(s1.conversations[30]?.hasMore).toBe(false);
+
+    const resynced = reducer(s1, {
+      type: "loaded",
+      snapshot: makeSnapshot({
+        seq: 50,
+        conversations: [{ conversation: workerConv, messages: [], hasMore: true }],
+        sessions: [endedSession],
+      }),
+    });
+    expect(resynced.conversations[30]?.messages).toEqual([m1, liveMsg]);
+    expect(resynced.conversations[30]?.hasMore).toBe(false);
+  });
+
+  it("断线前还在跑的 Worker，断线期间出了最终回复并收工：重拉快照（messages 为空、hasMore 为 true）丢掉缺最终回复的旧消息，等 MessageList 重新拉最新一页", () => {
+    const workerConv = { id: 30, kind: "worker" as const, pmId: 1, projectId: 1, title: "修 X", createdAt: 1 };
+    const [m1, m2] = [1, 2].map((id) => makeMessage({ id, conversationId: 30 }));
+    const s0 = loaded({
+      seq: 10,
+      conversations: [{ conversation: workerConv, messages: [m1!, m2!], hasMore: false }],
+      sessions: [makeSession({ sessionId: 2, conversationId: 30, status: "running" })],
+    });
+    expect(s0.conversations[30]?.messages.map((m) => m.id)).toEqual([1, 2]);
+
+    // 断线期间服务端多了 [3, 4] 并收工；快照对已收工 Worker 省略消息
+    const resynced = reducer(s0, {
+      type: "loaded",
+      snapshot: makeSnapshot({
+        seq: 50,
+        conversations: [{ conversation: workerConv, messages: [], hasMore: true }],
+        sessions: [makeSession({ sessionId: 2, conversationId: 30, status: "ended" })],
+      }),
+    });
+    expect(resynced.seq).toBe(50);
+    expect(resynced.conversations[30]?.messages).toEqual([]);
+    expect(resynced.conversations[30]?.hasMore).toBe(true);
+    expect(resynced.older[30]).toBeUndefined();
+
+    // MessageList 自动拉最新一页，拿到完整的 [1..4]
+    const [m3, m4] = [3, 4].map((id) => makeMessage({ id, conversationId: 30 }));
+    const started = reducer(resynced, { type: "olderStart", conversationId: 30 });
+    const done = reducer(started, { type: "olderDone", conversationId: 30, messages: [m1!, m2!, m3!, m4!], hasMore: false });
+    expect(done.conversations[30]?.messages.map((m) => m.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("没有会话记录的对话不算已收工：重拉快照省略消息时不保留旧消息", () => {
+    const workerConv = { id: 30, kind: "worker" as const, pmId: 1, projectId: 1, title: "修 X", createdAt: 1 };
+    const s0 = loaded({ conversations: [{ conversation: workerConv, messages: [makeMessage({ id: 1, conversationId: 30 })], hasMore: false }] });
+    const resynced = reducer(s0, {
+      type: "loaded",
+      snapshot: makeSnapshot({ seq: 50, conversations: [{ conversation: workerConv, messages: [], hasMore: true }] }),
+    });
+    expect(resynced.conversations[30]?.messages).toEqual([]);
+    expect(resynced.conversations[30]?.hasMore).toBe(true);
+  });
 });
 
 describe("重试失败的消息的状态", () => {

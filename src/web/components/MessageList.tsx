@@ -125,6 +125,13 @@ export const MessageList = memo(function MessageList({
     onLoadOlder();
   };
 
+  // 初始快照只带 hasMore、没带消息的历史对话（如已收工的 Worker）：点开时自动拉取最新一页。
+  useEffect(() => {
+    if (messages.length === 0 && hasMore && older === undefined) {
+      onLoadOlder();
+    }
+  }, [messages.length, hasMore, older, onLoadOlder]);
+
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;

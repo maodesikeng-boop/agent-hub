@@ -7,7 +7,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { createGzip, gzipSync } from "node:zlib";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -99,7 +101,7 @@ import { listenOnRunSocket } from "../run-socket.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
-import { peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
+import { acceptsGzip, isCompressibleType, peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
 import { TunnelInputError } from "../tunnel/index.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
@@ -198,6 +200,19 @@ const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** serve 的 https 默认端口：Host 可能带上 :443。 */
 const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
+
+function appendVaryAcceptEncoding(reply: FastifyReply): void {
+  const existing = reply.getHeader("vary");
+  if (existing === undefined) {
+    reply.header("vary", "Accept-Encoding");
+    return;
+  }
+  const value = Array.isArray(existing) ? existing.join(", ") : String(existing);
+  const parts = value.split(",").map((s) => s.trim().toLowerCase());
+  if (!parts.includes("accept-encoding") && !parts.includes("*")) {
+    reply.header("vary", `${value}, Accept-Encoding`);
+  }
+}
 
 /**
  * 守护进程在哪听：界面端口（127.0.0.1 TCP）、serve 的 socket（Linux 上 tailscale serve 转来，startUiServer 的 serveSocket）、
@@ -770,6 +785,43 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
   /** 判断“浏览器在不在这台机器上”用的地址（serverInfoForClient）。不算本机的入口当成没有地址。 */
   const clientAddress = (req: FastifyRequest) => (contextOf(req)?.rule.sameMachine ? req.ip : undefined);
+
+  // 对 JSON 与文本响应按需开启 gzip 压缩（包含 /api/state 及 /d/<device>/api/* 转发的响应），不碰支持 Range 的存储文件下载。
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (
+      payload === null ||
+      payload === undefined ||
+      req.method === "HEAD" ||
+      reply.statusCode === 204 ||
+      reply.statusCode === 205 ||
+      reply.statusCode === 206 ||
+      reply.statusCode === 304 ||
+      reply.getHeader("accept-ranges") !== undefined ||
+      reply.getHeader("content-range") !== undefined ||
+      !isCompressibleType(reply.getHeader("content-type"))
+    ) {
+      return payload;
+    }
+    appendVaryAcceptEncoding(reply);
+    if (reply.getHeader("content-encoding") !== undefined || !acceptsGzip(req.headers["accept-encoding"])) {
+      return payload;
+    }
+    if (typeof payload === "string" || Buffer.isBuffer(payload)) {
+      const raw = typeof payload === "string" ? Buffer.from(payload, "utf8") : payload;
+      if (raw.length === 0) return payload;
+      const compressed = gzipSync(raw);
+      reply.header("content-encoding", "gzip").header("content-length", compressed.length);
+      return compressed;
+    }
+    if (payload instanceof Readable) {
+      reply.header("content-encoding", "gzip");
+      reply.removeHeader("content-length");
+      const gz = createGzip();
+      payload.on("error", (err) => gz.destroy(err));
+      return payload.pipe(gz);
+    }
+    return payload;
+  });
 
   // 握手被这里的钩子拒了（401、403、404）：@fastify/websocket 自己的钩子排在后面没跑到，不会替它关连接；
   // 回完响应把连接断掉，不然这条连接一直挂着（关机时还要等它）。
