@@ -44,6 +44,7 @@ export interface SqliteLedger extends Ledger {
   archivePm(pmId: PmId): Pm;
   unarchivePm(pmId: PmId): Pm;
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
+  close(): void;
 }
 
 export interface LedgerOptions {
@@ -150,6 +151,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerSession: workers.workerSession,
     notStarted,
     liveOf: sessions.liveOf,
+    turnMaxTimeOf: workers.turnMaxTimeOf,
   });
   const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
@@ -164,7 +166,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
   return {
     postUserMessage: messages.postUserMessage,
-    requestStop: messages.requestStop,
+    requestStop(conversationId) {
+      workers.clearMaxTime(conversationId);
+      messages.requestStop(conversationId);
+    },
     composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): LedgerSnapshot {
@@ -311,5 +316,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onWorktreeCreated: workers.onWorktreeCreated,
 
     syncPersonaFiles: persona.syncPersonaFiles,
+    close(): void {
+      workers.clearAllMaxTime();
+    },
   };
 }

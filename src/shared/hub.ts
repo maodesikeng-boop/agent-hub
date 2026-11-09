@@ -66,6 +66,7 @@ export const HUB_COMMANDS = [
   "persona.edit",
   "worker.start",
   "worker.send",
+  "worker.max-time",
   "worker.end",
   "worker.list",
   "worker.show",
@@ -95,6 +96,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "persona.edit": ["pm"],
   "worker.start": ["pm"],
   "worker.send": ["pm"],
+  "worker.max-time": ["pm"],
   "worker.end": ["pm"],
   "worker.list": ["pm"],
   "worker.show": ["pm"],
@@ -134,15 +136,27 @@ export interface HubArgsMap {
   /** text：新的完整性格设定（不超过 MAX_PERSONA_BYTES）。text、mode 至少给一个。 */
   "persona.edit": { text?: string; mode?: PmMode; reason?: string };
   /**
-   * `hub worker start --title <标题> [--vendor <厂商>] [--model <模型>] [--effort <思考程度>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
+   * `hub worker start --title <标题> [--vendor <厂商>] [--model <模型>] [--effort <思考程度>] [--max-time <时长>] [--readonly] [--no-worktree] --stdin`（m3-plan 第 2.4 节）。
    * title 按 normalizeWorkerTitle（空的、带控制字符 → invalid；太长不报错，截断）；task 从标准输入读（--stdin 必须写，规则同 persona edit），不超过 MAX_TASK_BYTES、不能是空的；
    * model、effort 按目标厂商清单（vendors.ts）查，不给且同厂商 = 用项目经理会话现在的模型、思考程度；换厂商则默认 null。
+   * maxTimeMs：本轮最大容忍时间（毫秒，默认 DEFAULT_WORKER_MAX_TIME_MS = 30m），超时静默唤醒项目经理。
    * 账本同步判断在哪干活：主文件夹是有提交的 git 仓库、又没给 noWorktree → worktree，登记 worktree.create；
    * 否则 main，直接登记 Worker 的 session.start 和第一条 session.send。
    */
-  "worker.start": { title: string; task: string; vendor?: AgentVendor; model?: string; effort?: string; readonly?: boolean; noWorktree?: boolean };
-  /** `hub worker send <编号> --stdin`：打回或回答问题，发给同一个 Worker 会话。text 不超过 MAX_TASK_BYTES。 */
-  "worker.send": { workerId: WorkerId; text: string };
+  "worker.start": {
+    title: string;
+    task: string;
+    vendor?: AgentVendor;
+    model?: string;
+    effort?: string;
+    maxTimeMs?: number;
+    readonly?: boolean;
+    noWorktree?: boolean;
+  };
+  /** `hub worker send <编号> [--max-time <时长>] --stdin`：打回或回答问题，发给同一个 Worker 会话。text 不超过 MAX_TASK_BYTES。 */
+  "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
+  /** `hub worker max-time <编号> <时长>`：单独延时或更新正在运行的 Worker 本轮最大时间（从现在重新计时）。 */
+  "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
   /** `hub worker end <编号>`：结束 Worker 会话（登记 session.end），Worker 标 ended。worktree 由项目经理自己删。 */
   "worker.end": { workerId: WorkerId };
   /** `hub worker list`：我派出去的 Worker。 */
@@ -295,6 +309,7 @@ interface HubDataMap {
   "worker.start": { worker: WorkerRecord };
   /** messageId：Worker 对话里这条项目经理的话。 */
   "worker.send": { worker: WorkerRecord; messageId: MessageId };
+  "worker.max-time": { worker: WorkerRecord; maxTimeMs: number };
   "worker.end": { worker: WorkerRecord };
   /** 按编号从小到大，含已收工的。 */
   "worker.list": { workers: WorkerRecord[] };

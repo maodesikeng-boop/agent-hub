@@ -385,6 +385,7 @@ describe("M2：系统消息", () => {
       "session.renewed",
       "handover.failed",
       "context.compacted",
+      "worker.max_time_exceeded",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
@@ -484,6 +485,7 @@ describe("M2：agent 接口", () => {
       "persona.edit",
       "worker.start",
       "worker.send",
+      "worker.max-time",
       "worker.end",
       "worker.list",
       "worker.show",
@@ -764,6 +766,7 @@ describe("M3：hub 命令按角色放行", () => {
       "persona.edit": ["pm"],
       "worker.start": ["pm"],
       "worker.send": ["pm"],
+      "worker.max-time": ["pm"],
       "worker.end": ["pm"],
       "worker.list": ["pm"],
       "worker.show": ["pm"],

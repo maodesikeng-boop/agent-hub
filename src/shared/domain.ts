@@ -355,6 +355,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return meta.messageId;
       case "context.compacted":
         return `${meta.sessionId}:${meta.uuid}`;
+      case "worker.max_time_exceeded":
+        return `${meta.workerId}:${meta.maxTimeMs}`;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -377,6 +379,7 @@ export const SYSTEM_EVENTS = [
   "session.renewed",
   "handover.failed",
   "context.compacted",
+  "worker.max_time_exceeded",
 ] as const;
 
 /**
@@ -418,7 +421,8 @@ export type SystemMessageMeta =
   | { event: "schedule.removed"; scheduleId: ScheduleId; name: string }
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
-  | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null };
+  | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
+  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number };
 
 /**
  * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；answered 是用户回答了——用户在这个项目经理的对话里
@@ -565,6 +569,14 @@ export function systemNoticeText(message: Pick<Message, "sender" | "meta" | "tex
 export function isHandoverTraffic(message: Pick<Message, "sender" | "meta">): boolean {
   if (message.sender === "agent") return message.meta?.handover === true;
   return systemEventOf(message)?.event === "handover.requested";
+}
+
+/**
+ * 静默唤醒项目经理的内部触发消息本身（网页聊天流里只隐藏这条触发消息本身，不隐藏项目经理随后的正常回复！）：
+ * - worker.max_time_exceeded：Worker 这一轮超过最大时间仍未结束时发给项目经理的静默唤醒消息。
+ */
+export function isSilentTriggerMessage(message: Pick<Message, "sender" | "meta">): boolean {
+  return systemEventOf(message)?.event === "worker.max_time_exceeded";
 }
 
 /** 网页显示系统消息时去掉开头的【系统】。 */

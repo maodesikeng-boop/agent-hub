@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { agentTextOf } from "../../shared/attachments.ts";
-import { normalizeWorkerTitle, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
+import { normalizeWorkerTitle, systemMessageDedupeKey, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -23,6 +23,7 @@ import type {
   PmId,
   PmMode,
   SessionId,
+  SystemMessageMeta,
   WorkerEvent,
   WorkerId,
   WorkerLineStatus,
@@ -32,7 +33,8 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
+import { DEFAULT_WORKER_MAX_TIME_MS, GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
+import { checkWorkerMaxTimeMs, formatDurationShort } from "../../shared/schedule.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
@@ -189,6 +191,15 @@ export function createLedgerWorkers(
    */
   const endInterrupted = new Set<SessionId>();
   /**
+   * 每个 Worker 当前轮次的超时定时器（`Map<ConversationId, { timer: ReturnType<typeof setTimeout>; maxTimeMs: number; startedAt: number }>`）。
+   * - 启动/重置：`hub worker start` 启动第一轮、`hub worker send` 发起新一轮、`hub worker max-time` 续期、或排队消息开始执行新一轮时按指定的 `maxTimeMs`（默认 `DEFAULT_WORKER_MAX_TIME_MS`）启动；
+   * - 立即销毁：当该 Worker 这一轮结束（`report`、`turn_failed`）、被 `hub worker end` / 归档停止、或守护进程 `close()` 时，立即 `clearTimeout` 并从 Map 移除；
+   * - 超时触发：到点若该 Worker 仍处于运行中（in-flight），向所属项目经理对话发送一条静默唤醒消息（`worker.max_time_exceeded`），同一轮只触发一次，不打断 Worker。
+   */
+  const maxTimeTimers = new Map<ConversationId, { timer: ReturnType<typeof setTimeout>; maxTimeMs: number; startedAt: number }>();
+  /** 当前轮次设定的最大时间（含已触发但本轮尚未结束的，供 hub worker show 展示；一轮结束或收工时立即随定时器一起移除）。 */
+  const turnMaxTimes = new Map<ConversationId, { maxTimeMs: number; startedAt: number }>();
+  /**
    * 一轮正常结束时还有后台命令在跑（驱动层的 background.changed 记在 live.backgroundTasks，只有 claude 有）的 Worker 会话，
    * 记在 worker_background_waits（0014）。这一轮不算汇报（不然项目经理会先收到一份“做完了”），会话显示在等后台命令；
    * 命令跑完 claude 自己开一轮叫醒它，那一轮（或中间用户、项目经理的话开的轮）结束、而且没有后台命令了才汇报，
@@ -238,6 +249,111 @@ export function createLedgerWorkers(
     if (utf8Bytes(raw) > MAX_TASK_BYTES) throw fail("invalid", `${what}不能超过 ${MAX_TASK_BYTES} 字节`);
     return raw;
   };
+
+  const validMaxTimeMs = (raw: unknown): number => {
+    if (raw === undefined) return DEFAULT_WORKER_MAX_TIME_MS;
+    const bad = checkWorkerMaxTimeMs(raw);
+    if (bad !== null) throw fail("invalid", bad);
+    return raw as number;
+  };
+
+  const clearMaxTime = (workerConversationId: ConversationId) => {
+    const existing = maxTimeTimers.get(workerConversationId);
+    if (existing !== undefined) {
+      clearTimeout(existing.timer);
+      maxTimeTimers.delete(workerConversationId);
+    }
+    turnMaxTimes.delete(workerConversationId);
+  };
+
+  const clearAllMaxTime = () => {
+    for (const entry of maxTimeTimers.values()) clearTimeout(entry.timer);
+    maxTimeTimers.clear();
+    turnMaxTimes.clear();
+  };
+
+  const isWorkerInFlight = (worker: WorkerDbRow): boolean => {
+    const session = currentSession(worker.worker_conversation_id);
+    if (session !== null) {
+      const activity = liveOf(session.id).activity;
+      if (activity === "working" || activity === "background" || activity === "preparing") return true;
+      if (turnStarts.has(session.id) || awaitingBackground.get(session.id) !== undefined) return true;
+    }
+    return (
+      db.get(
+        "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND status IN ('queued', 'delivered', 'processing') LIMIT 1",
+        worker.worker_conversation_id,
+      ) !== undefined
+    );
+  };
+
+  const onMaxTimeExceeded = (
+    workerId: WorkerId,
+    workerConversationId: ConversationId,
+    timer: ReturnType<typeof setTimeout>,
+    maxTimeMs: number,
+    startedAt: number,
+  ) => {
+    const current = maxTimeTimers.get(workerConversationId);
+    if (current?.timer !== timer) return;
+    clearTimeout(timer);
+    maxTimeTimers.delete(workerConversationId);
+    try {
+      write((p) => {
+        const worker = workerRow(workerId);
+        if (worker === null || worker.status !== "open" || !isWorkerInFlight(worker)) {
+          turnMaxTimes.delete(workerConversationId);
+          return;
+        }
+        const pmSession = currentSession(worker.pm_conversation_id);
+        if (pmSession === null) return;
+        const t = now();
+        const label = formatDurationShort(maxTimeMs);
+        const text =
+          `【Worker #${worker.id} · ${worker.title} 已超过最大时间（${label}）】` +
+          `该 Worker 当前一轮已运行 ${label} 仍未结束（仍在运行中，未被停止）。` +
+          `请用 ${HUB_COMMAND} worker show ${worker.id} 和 ${HUB_COMMAND} worker log ${worker.id} --last 15 检查它是否在正常推进，并视情况告知用户、继续等待或停止换人。`;
+        const meta: SystemMessageMeta = {
+          event: "worker.max_time_exceeded",
+          workerId: worker.id,
+          workerConversationId: worker.worker_conversation_id,
+          maxTimeMs,
+        };
+        const row = db.get<MessageDbRow>(
+          `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'system', 'text', ?, ?, ?, 'queued', ?, ?)
+           ON CONFLICT (dedupe_key) DO NOTHING RETURNING *`,
+          worker.pm_conversation_id,
+          pmSession.id,
+          worker.id,
+          text,
+          JSON.stringify(meta),
+          `${systemMessageDedupeKey(worker.pm_conversation_id, meta)}:${startedAt}:${randomUUID()}`,
+          t,
+          t,
+        );
+        if (row === undefined) return;
+        p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
+        enqueue(p, { type: "session.send", params: { sessionId: pmSession.id, messageId: row.id, source: "system" } });
+      });
+    } catch {
+      turnMaxTimes.delete(workerConversationId);
+    }
+  };
+
+  const startMaxTime = (worker: Pick<WorkerDbRow, "id" | "worker_conversation_id">, maxTimeMs: number = DEFAULT_WORKER_MAX_TIME_MS) => {
+    clearMaxTime(worker.worker_conversation_id);
+    const startedAt = now();
+    const timer = setTimeout(() => {
+      onMaxTimeExceeded(worker.id, worker.worker_conversation_id, timer, maxTimeMs, startedAt);
+    }, maxTimeMs);
+    timer.unref?.();
+    maxTimeTimers.set(worker.worker_conversation_id, { timer, maxTimeMs, startedAt });
+    turnMaxTimes.set(worker.worker_conversation_id, { maxTimeMs, startedAt });
+  };
+
+  const turnMaxTimeOf = (workerConversationId: ConversationId): { maxTimeMs: number; startedAt: number } | null =>
+    turnMaxTimes.get(workerConversationId) ?? null;
 
   /**
    * 项目经理对话里那一行（WorkerMessageMeta）。deliver：要交给项目经理（report、turn_failed、worktree_failed、user_message），
@@ -339,6 +455,7 @@ export function createLedgerWorkers(
     const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     const task = validTask(args.task, "任务说明");
+    const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
     // 模型、思考程度按目标厂商清单查；同厂商不给就用项目经理会话现在的，换厂商不给就用 null
     let vendor = caller.vendor as AgentVendor;
     if (args.vendor !== undefined) {
@@ -433,6 +550,7 @@ export function createLedgerWorkers(
     } else {
       enqueueFirstTurn(p, worker);
     }
+    startMaxTime(worker, maxTimeMs);
 
     const notes = [`已派出 Worker #${id}“${title}”，${describeWorkspace(worker, card.mainFolder)}`];
     if (workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
@@ -445,6 +563,7 @@ export function createLedgerWorkers(
 
   const sendIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.send">): HubResult<"worker.send"> => {
     assertPmNotArchived(caller.pmId);
+    const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
     const worker = ownWorker(caller.pmId, args.workerId);
     if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，要接着做请重新派一个`);
     // 还没开工（在建 worktree、跑准备命令）：第一轮必须是任务说明，现在发的话会让会话提前起来
@@ -458,6 +577,7 @@ export function createLedgerWorkers(
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
     // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等
     const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
+    startMaxTime(worker, maxTimeMs);
     return {
       text: compactOnly
         ? `已发给 Worker #${worker.id}“${worker.title}”：这一轮只压缩上下文，不会有汇报，压缩完它就空闲了，不用等。`
@@ -466,9 +586,26 @@ export function createLedgerWorkers(
     };
   };
 
+  const maxTimeIn = (_p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.max-time">): HubResult<"worker.max-time"> => {
+    assertPmNotArchived(caller.pmId);
+    const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
+    const worker = ownWorker(caller.pmId, args.workerId);
+    if (worker.status === "ended") throw fail("conflict", `Worker #${worker.id} 已经收工了，不能再改最大时间`);
+    if (!notStarted(worker) && !isWorkerInFlight(worker)) {
+      throw fail("conflict", `Worker #${worker.id} 当前没有正在运行的一轮，发下一条时用 --max-time 指定即可`);
+    }
+    startMaxTime(worker, maxTimeMs);
+    const label = formatDurationShort(maxTimeMs);
+    return {
+      text: `已将 Worker #${worker.id}“${worker.title}”本轮最大时间设为 ${label}（从现在重新计时）。`,
+      data: { worker: toWorkerRecord(worker), maxTimeMs },
+    };
+  };
+
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
     assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
+    clearMaxTime(worker.worker_conversation_id);
     if (worker.status === "ended") {
       return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
     }
@@ -495,6 +632,7 @@ export function createLedgerWorkers(
     const openWorkers = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id", pmId);
     const t = now();
     for (const w of openWorkers) {
+      clearMaxTime(w.worker_conversation_id);
       const session = workerSession(w);
       const queued = db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' ORDER BY id", w.worker_conversation_id);
       for (const { id } of queued) transition(p, id, "stopped");
@@ -647,12 +785,22 @@ export function createLedgerWorkers(
   const flushAwaiting = (p: Pending, session: AgentSessionRow, event: Extract<DriverEvent, { type: "session.exited" }>, awaiting: BackgroundWait) => {
     endInterrupted.delete(session.id);
     const worker = workerRow(session.workerId!);
-    if (worker === null || worker.status === "ended") return;
+    if (worker === null) return;
+    clearMaxTime(worker.worker_conversation_id);
+    if (worker.status === "ended") return;
     const turnMessageId = lastAgentMessageId(session.id, awaiting.turnStart);
     if (turnMessageId === null) return;
     if (event.reason === "interrupt") return insertTurnFailed(p, worker, turnMessageId, [], TURN_STOPPED);
     if (event.reason === "crash" || event.reason === "startup_failed") return insertTurnFailed(p, worker, turnMessageId, [], exitFailureReason(event));
     insertReport(p, worker, turnMessageId, lastAgentText(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
+  };
+
+  const ensureTurnMaxTime = (workerId: WorkerId) => {
+    const worker = workerRow(workerId);
+    if (worker === null || worker.status !== "open") return;
+    if (!maxTimeTimers.has(worker.worker_conversation_id) && !turnMaxTimes.has(worker.worker_conversation_id)) {
+      startMaxTime(worker, DEFAULT_WORKER_MAX_TIME_MS);
+    }
   };
 
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
@@ -673,6 +821,7 @@ export function createLedgerWorkers(
         return;
       }
       turnStarts.set(session.id, maxMessageId());
+      ensureTurnMaxTime(session.workerId);
       insertUserMessageLines(p, session.workerId, event.messageIds);
       return;
     }
@@ -680,7 +829,10 @@ export function createLedgerWorkers(
       const taken = event.messageIds.filter((id) => midTurnWaiting.delete(id));
       if (taken.length === 0) return;
       // 没赶上上一轮（上一轮已经结束、turnStarts 删了）：claude 为它另起的这一轮从这里开始，不会再拿到上一轮的文字
-      if (!turnStarts.has(session.id)) turnStarts.set(session.id, maxMessageId());
+      if (!turnStarts.has(session.id)) {
+        turnStarts.set(session.id, maxMessageId());
+        ensureTurnMaxTime(session.workerId);
+      }
       insertUserMessageLines(p, session.workerId, taken);
       return;
     }
@@ -690,6 +842,7 @@ export function createLedgerWorkers(
     }
     if (event.type === "turn.started") {
       turnStarts.set(session.id, maxMessageId());
+      ensureTurnMaxTime(session.workerId);
       return;
     }
     const outcome = turnOutcome(event);
@@ -704,7 +857,10 @@ export function createLedgerWorkers(
     const turnStart = awaiting?.turnStart ?? turnStarts.get(session.id) ?? outcome.turnMessageId ?? 0;
     turnStarts.delete(session.id);
     // 收工时打断的这一轮：被停止了不再汇报（项目经理自己叫停的）
-    if (endInterrupted.delete(session.id) && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) return;
+    if (endInterrupted.delete(session.id) && outcome.event === "turn_failed" && outcome.reason === TURN_STOPPED) {
+      clearMaxTime(worker.worker_conversation_id);
+      return;
+    }
     // 正常结束、还有后台命令在跑：先不汇报，等命令跑完叫醒它、它再结束一轮（见 awaitingBackground）
     if (outcome.event === "report" && event.type === "turn.ended" && (liveOf(session.id).backgroundTasks ?? 0) > 0) {
       awaitingBackground.set(session.id, turnStart);
@@ -713,6 +869,7 @@ export function createLedgerWorkers(
       });
       return;
     }
+    clearMaxTime(worker.worker_conversation_id);
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId = outcome.turnMessageId ?? lastAgentMessageId(session.id, turnStart);
     if (turnMessageId === null) return;
@@ -822,6 +979,8 @@ export function createLedgerWorkers(
         p.changes.push({ type: "message.updated", data: { message: toMessage(row) } });
       }
       enqueueFirstTurn(p, worker);
+      const maxTimeMs = turnMaxTimes.get(worker.worker_conversation_id)?.maxTimeMs ?? DEFAULT_WORKER_MAX_TIME_MS;
+      startMaxTime(worker, maxTimeMs);
     });
   };
 
@@ -850,6 +1009,7 @@ export function createLedgerWorkers(
     if (action.type === "worktree.create") {
       const worker = workerRow(action.params.workerId);
       if (worker === null) return;
+      clearMaxTime(worker.worker_conversation_id);
       if (worker.status !== "ended") {
         db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", now(), worker.id);
         const session = workerSession(worker.id);
@@ -865,7 +1025,9 @@ export function createLedgerWorkers(
     const message = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", action.params.messageId);
     if (message === undefined || (message.sender !== "pm" && message.sender !== "user") || message.worker_id === null) return;
     const worker = workerRow(message.worker_id);
-    if (worker === null || worker.status === "ended") return;
+    if (worker === null) return;
+    clearMaxTime(worker.worker_conversation_id);
+    if (worker.status === "ended") return;
     insertTurnFailed(p, worker, message.id, [message.id], error);
   };
 
@@ -919,6 +1081,7 @@ export function createLedgerWorkers(
   return {
     startIn,
     sendIn,
+    maxTimeIn,
     endIn,
     endOpenWorkersIn,
     list,
@@ -937,5 +1100,9 @@ export function createLedgerWorkers(
     ownWorker,
     workerSession,
     launchContextFor,
+    clearMaxTime,
+    clearAllMaxTime,
+    turnMaxTimeOf,
+    maxTimeTimers,
   };
 }
