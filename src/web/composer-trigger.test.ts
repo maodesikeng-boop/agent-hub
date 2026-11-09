@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { type ComposerSource, FILE_SEARCH_DEBOUNCE_MS, useComposerSuggest } from "./composer-suggest.ts";
 import { detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { queryClient } from "./query-client.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("detectComposerTrigger：/ 命令", () => {
   it("整条消息开头的 / 触发，query 是后面打的字", () => {
@@ -107,5 +114,34 @@ describe("splitPath", () => {
     expect(splitPath("src/web/App.tsx")).toEqual({ name: "App.tsx", dir: "src/web" });
     expect(splitPath("README.md")).toEqual({ name: "README.md", dir: "" });
     expect(splitPath("/Users/me/a b.md")).toEqual({ name: "a b.md", dir: "/Users/me" });
+  });
+});
+
+describe("useComposerSuggest：@ 文件搜索缓存回收", () => {
+  it("连续多次不同搜索词触发 @ 文件搜索并卸载后，不在 QueryCache 中残留历史搜索条目", async () => {
+    vi.useFakeTimers();
+    const source: ComposerSource = {
+      commands: async () => [],
+      files: async (query) => ({
+        entries: Array.from({ length: 50 }, (_, i) => ({
+          root: "/repo",
+          path: `${query}/${i}.ts`,
+          insert: `@${query}/${i}.ts`,
+        })),
+        truncated: false,
+      }),
+    };
+    const hook = renderHook(
+      ({ value }) => useComposerSuggest({ value, cursor: value.length, source, enabled: true, onReplace: () => {} }),
+      { initialProps: { value: "@q0" } },
+    );
+    for (let i = 0; i < 120; i++) {
+      hook.rerender({ value: `@q${i}` });
+      await act(() => vi.advanceTimersByTimeAsync(FILE_SEARCH_DEBOUNCE_MS + 30));
+    }
+    expect(hook.result.current.menu?.items[0]?.insert).toBe("@q119/0.ts");
+    hook.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(queryClient.getQueryCache().findAll({ queryKey: ["composer-files-search"] })).toHaveLength(0);
   });
 });

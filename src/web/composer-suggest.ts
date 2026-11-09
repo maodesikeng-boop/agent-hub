@@ -151,6 +151,7 @@ export function useComposerSuggest({
           queryKey: ["composer-files-search", srcKey, fileQuery] as const,
           queryFn: () => source.files(fileQuery, abort.signal),
           staleTime: 0,
+          gcTime: 0,
         })
         .then((result) => {
           if (!abort.signal.aborted) qc.setQueryData(filesKey, { source, query: fileQuery, entries: result.entries });
