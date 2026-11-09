@@ -29,21 +29,44 @@ export function assetPathsIn(html: string): Set<string> {
 }
 
 /**
- * 打包文件名带哈希、先用缓存，同一个缓存名下每发一版就多一批，不删会一直攒（手机上几个月能攒几十 MB）。
- * 拿到新页面时调：页面引用的打包文件和上次缓存的页面一样（没换版）不删；换了版（或者以前没缓存过页面），
- * 缓存里不在新页面引用里的 /assets/ 都删掉。按需加载的块删了，下次用到时再从网络拿。
- * cachedUrls 是缓存里所有请求的完整网址；返回要删的那些。
+ * 外壳缓存里 /assets/ 最多留这么多个（兜底）：打包出来四百来个按需加载的块（代码高亮的各语言、画图的各种图），
+ * 平时只缓存用到过的几十个，留足余量，正常用不会碰到；只防几个月攒下来的旧版块无限变多。
+ * 不放 shared/limits.ts：sw.js 要打包成一个文件，引了页面也引的模块会被拆成共享块。
  */
-export function staleAssetUrls(cachedUrls: readonly string[], previousHtml: string | null, nextHtml: string): string[] {
+export const SHELL_ASSET_MAX = 100;
+
+/** 带哈希的打包文件（vite.config.ts：[name]-[hash].[ext]，哈希 8 位）的“同名”键：名字 + 扩展名；不带哈希的返回 null。 */
+function hashedStem(pathname: string): string | null {
+  const m = /^\/assets\/(.+)-[\w-]{8}\.(\w+)$/.exec(pathname);
+  return m === null ? null : `${m[1]}.${m[2]}`;
+}
+
+/**
+ * 打包文件名带哈希、先用缓存，同一个缓存名下每发一版就多一批，不删会一直攒（手机上几个月能攒几十 MB）。
+ * 拿到新页面时调，cachedUrls 是缓存里所有请求的完整网址（cache.keys() 的顺序，先缓存的在前）；返回要删的那些：
+ * 1. 换版：新页面引用了 index-<新哈希>.js，缓存里同名同扩展名、哈希不同的 index-<旧哈希>.js 删掉（入口文件每版都换）；
+ * 2. 兜底：剩下的 /assets/ 还超过 SHELL_ASSET_MAX 个，从最早缓存的删起，删到不超。
+ * 新页面引用的绝不删。入口 import 的块、CSS 引的字体不在页面里，也不和页面引用的同名，只会在第 2 条里按先来后到被删；
+ * 不带哈希的文件不算换版。删了的下次用到时再从网络拿。
+ */
+export function staleAssetUrls(cachedUrls: readonly string[], nextHtml: string, max: number = SHELL_ASSET_MAX): string[] {
   const next = assetPathsIn(nextHtml);
-  if (previousHtml !== null) {
-    const previous = assetPathsIn(previousHtml);
-    if (previous.size === next.size && [...next].every((p) => previous.has(p))) return [];
+  const replacedStems = new Set<string>();
+  for (const path of next) {
+    const stem = hashedStem(path);
+    if (stem !== null) replacedStems.add(stem);
   }
-  return cachedUrls.filter((url) => {
-    const { pathname } = new URL(url);
-    return pathname.startsWith("/assets/") && !next.has(pathname);
-  });
+  const assets = cachedUrls.map((url) => ({ url, path: new URL(url).pathname })).filter((a) => a.path.startsWith("/assets/") && !next.has(a.path));
+  const stale = new Set(assets.filter((a) => replacedStems.has(hashedStem(a.path) ?? "")).map((a) => a.url));
+  const keptCount = cachedUrls.filter((url) => new URL(url).pathname.startsWith("/assets/")).length - stale.size;
+  let over = keptCount - max;
+  for (const a of assets) {
+    if (over <= 0) break;
+    if (stale.has(a.url)) continue;
+    stale.add(a.url);
+    over--;
+  }
+  return assets.filter((a) => stale.has(a.url)).map((a) => a.url);
 }
 
 /**

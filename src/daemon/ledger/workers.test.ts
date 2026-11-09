@@ -961,7 +961,7 @@ describe("收工", () => {
     expect(hub(zhou.sessionId, "worker.list", {}).data.workers.map((w) => w.title)).toEqual(["丙"]);
   });
 
-  it(`worker.list 有上限：进行中的全列，已收工的只列编号最大的 ${WORKER_LIST_RECENT_ENDED} 个，更早的写一句怎么查（几百个已收工的不塞进上下文）`, () => {
+  it(`worker.list 有上限：进行中的全列，已收工的只列最近收工的 ${WORKER_LIST_RECENT_ENDED} 个（同一时刻收工按编号），更早的写一句怎么查（几百个已收工的不塞进上下文）`, () => {
     const open = start({ title: "还在干", noWorktree: true }).data.worker;
     const ended: WorkerRecord[] = [];
     for (let i = 0; i < WORKER_LIST_RECENT_ENDED + 3; i++) {
@@ -976,6 +976,24 @@ describe("收工", () => {
     expect(result.text).not.toContain(`#${ended[0]!.id} 旧活0`);
     expect(result.text).toContain(`另有 3 个更早收工的 Worker 没列出`);
     expect(result.text).toContain("worker search");
+  });
+
+  it("worker.list 乱序收工：小编号的长任务最后收工，按收工时间算最近的，它必须列出来（不按编号截）", () => {
+    const workers = Array.from({ length: WORKER_LIST_RECENT_ENDED + 1 }, (_, i) => start({ title: `活${i}`, noWorktree: true }).data.worker);
+    const [longTask, ...rest] = workers;
+    // #2～#21 先陆续收工，#1 最后收工
+    for (const w of rest) {
+      now += 1_000;
+      hub(lin.sessionId, "worker.end", { workerId: w.id });
+    }
+    now += 1_000;
+    hub(lin.sessionId, "worker.end", { workerId: longTask!.id });
+    const result = hub(lin.sessionId, "worker.list", {});
+    // 最早收工的 #2 被藏起来；刚收工的 #1 在，返回仍按编号升序
+    expect(result.data.workers.map((w) => w.id)).toEqual([longTask!.id, ...rest.slice(1).map((w) => w.id)]);
+    expect(result.text).toContain(`#${longTask!.id} 活0 · 已收工`);
+    expect(result.text).not.toContain(`#${rest[0]!.id} 活1 `);
+    expect(result.text).toContain(`另有 1 个更早收工的 Worker 没列出`);
   });
 });
 

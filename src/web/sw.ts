@@ -42,23 +42,21 @@ async function networkFirst(request: Request, fallback: string | Request): Promi
   }
 }
 
-/** 删掉旧版本的打包文件（sw-rules.ts 的 staleAssetUrls）。 */
-async function pruneStaleAssets(cache: Cache, previousHtml: string | null, next: Response): Promise<void> {
-  const stale = staleAssetUrls((await cache.keys()).map((r) => r.url), previousHtml, await next.text());
+/** 删掉被换掉的旧打包文件、超出上限的最早缓存的打包文件（sw-rules.ts 的 staleAssetUrls）。 */
+async function pruneStaleAssets(cache: Cache, next: Response): Promise<void> {
+  const stale = staleAssetUrls((await cache.keys()).map((r) => r.url), await next.text());
   await Promise.all(stale.map((url) => cache.delete(url)));
 }
 
-/** 页面：先走网络，存成 /，换了版顺带清掉旧的打包文件；连不上用缓存的。 */
+/** 页面：先走网络，存成 /，顺带清掉旧的打包文件；连不上用缓存的。 */
 async function pageNetworkFirst(event: FetchEvent): Promise<Response> {
   const cache = await caches.open(SHELL_CACHE);
   try {
     const response = await fetch(event.request);
     if (response.ok) {
-      // 先读出旧页面再覆盖：被覆盖的缓存项不保证还能读
-      const previousHtml = (await (await cache.match(PAGE_KEY))?.text()) ?? null;
       const forPrune = response.clone();
       await cache.put(PAGE_KEY, response.clone());
-      event.waitUntil(pruneStaleAssets(cache, previousHtml, forPrune).catch(() => {}));
+      event.waitUntil(pruneStaleAssets(cache, forPrune).catch(() => {}));
     }
     return response;
   } catch (err) {

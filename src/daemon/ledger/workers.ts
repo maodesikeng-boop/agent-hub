@@ -512,12 +512,16 @@ export function createLedgerWorkers(
     }
   };
 
-  /** 进行中的全列；已收工的只列编号最大的 WORKER_LIST_RECENT_ENDED 个（派了几百个以后全列会把几十 KB 塞进项目经理的上下文），更早的写一句怎么查。 */
+  /**
+   * 进行中的全列；已收工的只列最近收工的 WORKER_LIST_RECENT_ENDED 个（派了几百个以后全列会把几十 KB 塞进项目经理的上下文），更早的写一句怎么查。
+   * “最近收工”按收工时间（workers.updated_at：收工时写，收工后不再改），同一时刻编号大的算后收工；不按编号，长任务的小编号刚收工也要列出来。
+   * 选出来以后和进行中的一起按编号排。
+   */
   const list = (caller: AgentSessionRow & { pmId: PmId }): HubResult<"worker.list"> => {
     const all = db.all<WorkerDbRow>("SELECT * FROM workers WHERE pm_id = ? ORDER BY id", caller.pmId);
     if (all.length === 0) return { text: "你还没有派过 Worker。", data: { workers: [] } };
-    const ended = all.filter((w) => w.status === "ended");
-    const hidden = new Set(ended.slice(0, Math.max(0, ended.length - WORKER_LIST_RECENT_ENDED)));
+    const endedLatestFirst = all.filter((w) => w.status === "ended").sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);
+    const hidden = new Set(endedLatestFirst.slice(WORKER_LIST_RECENT_ENDED));
     const rows = hidden.size === 0 ? all : all.filter((w) => !hidden.has(w));
     const lines = rows.map((w) => {
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）

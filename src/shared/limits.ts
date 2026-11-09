@@ -26,7 +26,7 @@ export const WORKER_SEARCH_MAX_LIMIT = 100;
 export const WORKER_SEARCH_CONTEXT_CHARS = 80;
 export const WORKER_SEARCH_MAX_KEYWORDS = 10;
 export const WORKER_SEARCH_MAX_KEYWORD_CHARS = 100;
-/** hub worker list：进行中的全列，已收工的只列编号最大的这么多个（几百个全列会把几十 KB 塞进项目经理的上下文），更早的用 hub worker search / show 查。 */
+/** hub worker list：进行中的全列，已收工的只列最近收工的这么多个（几百个全列会把几十 KB 塞进项目经理的上下文），更早的用 hub worker search / show 查。 */
 export const WORKER_LIST_RECENT_ENDED = 20;
 /** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
 export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
