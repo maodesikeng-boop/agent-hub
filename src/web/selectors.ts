@@ -65,8 +65,14 @@ export interface ConversationEntry {
 
 /** 预览用最后一条文字消息；一条文字都没有就用最后一条。换新会话的那几条不算。 */
 function previewMessage(messages: Message[]): Message | null {
-  const shown = messages.filter((m) => !isQuietMessage(m));
-  return shown.findLast((m) => m.kind === "text") ?? shown.at(-1) ?? null;
+  let fallback: Message | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (isQuietMessage(m)) continue;
+    fallback ??= m;
+    if (m.kind === "text") return m;
+  }
+  return fallback;
 }
 
 /** 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。 */
@@ -94,16 +100,23 @@ export function listConversations(state: HubState): ConversationEntry[] {
     .toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id);
 }
 
+const previewTextCache = new WeakMap<Message, string>();
+
 /** agent 的消息是 Markdown，预览去掉符号；用户和系统消息本来就是纯文本。左栏的预览和通知的正文都用它。 */
 export function previewText(entry: ConversationEntry): string {
   const last = entry.lastMessage;
   if (!last) return "";
+  const cached = previewTextCache.get(last);
+  if (cached !== undefined) return cached;
   // 只发了文件没写字的用户消息：写文件名
   const files = attachmentsOf(last);
-  if (last.text.trim() === "" && files.length > 0) return `[文件] ${files.map((f) => f.name).join("、")}`;
+  let result: string;
+  if (last.text.trim() === "" && files.length > 0) result = `[文件] ${files.map((f) => f.name).join("、")}`;
   // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
-  if (last.sender === "system") return systemNoticeText(last);
-  return last.sender === "agent" ? stripMarkdown(last.text) : last.text;
+  else if (last.sender === "system") result = systemNoticeText(last);
+  else result = last.sender === "agent" ? stripMarkdown(last.text) : last.text;
+  previewTextCache.set(last, result);
+  return result;
 }
 
 /** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）；已经过了 resetsAt 的不算，Claude 要等下一条事件才会更新它。 */
@@ -261,23 +274,52 @@ export function quotaResetTimes(state: HubState): number[] {
  */
 export type WorkerPhase = "preparing" | "open" | "ended";
 
+interface PmWorkerIndex {
+  endedAt: ReadonlyMap<ConversationId, number>;
+  tones: ReadonlyMap<ConversationId, WorkerTone>;
+  latestLine: ReadonlyMap<ConversationId, WorkerMessageMeta>;
+}
+
+const pmWorkerIndexCache = new WeakMap<readonly Message[], PmWorkerIndex>();
+
+function pmWorkerIndexOf(messages: readonly Message[]): PmWorkerIndex {
+  let cached = pmWorkerIndexCache.get(messages);
+  if (cached !== undefined) return cached;
+  const endedAt = new Map<ConversationId, number>();
+  const tones = new Map<ConversationId, WorkerTone>();
+  const latestLine = new Map<ConversationId, WorkerMessageMeta>();
+  for (const message of messages) {
+    const meta = workerEventOf(message);
+    if (!meta) continue;
+    latestLine.set(meta.workerConversationId, meta);
+    tones.set(meta.workerConversationId, workerStatusOf(meta).tone);
+    if (meta.event === "ended" || meta.event === "worktree_failed") {
+      endedAt.set(meta.workerConversationId, Math.max(endedAt.get(meta.workerConversationId) ?? 0, message.createdAt));
+    }
+  }
+  cached = { endedAt, tones, latestLine };
+  pmWorkerIndexCache.set(messages, cached);
+  return cached;
+}
+
 /** 这个项目经理的会话里有“已收工”“建 worktree 失败”那一行的 Worker 对话，值是那一行的时间（有几行取最晚的）。 */
 function endedByLine(state: HubState, pmId: PmId | null): Map<ConversationId, number> {
   const ended = new Map<ConversationId, number>();
   for (const { conversation, messages } of Object.values(state.conversations)) {
     if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
-    for (const message of messages) {
-      const meta = workerEventOf(message);
-      if (meta && (meta.event === "ended" || meta.event === "worktree_failed")) {
-        ended.set(meta.workerConversationId, Math.max(ended.get(meta.workerConversationId) ?? 0, message.createdAt));
-      }
+    for (const [id, at] of pmWorkerIndexOf(messages).endedAt) {
+      ended.set(id, Math.max(ended.get(id) ?? 0, at));
     }
   }
   return ended;
 }
 
-function phaseOf(state: HubState, workerConversationId: ConversationId, endedLines: Map<ConversationId, number>): WorkerPhase {
-  const session = sessionOf(state, workerConversationId);
+function phaseOf(
+  state: HubState,
+  workerConversationId: ConversationId,
+  endedLines: ReadonlyMap<ConversationId, number>,
+  session: SessionState | null = sessionOf(state, workerConversationId),
+): WorkerPhase {
   if (endedLines.has(workerConversationId) || session?.status === "ended") return "ended";
   // 正在跑项目的准备命令（PR #47，会话 activity 是 preparing）
   if (session?.activity === "preparing") return "preparing";
@@ -314,9 +356,8 @@ function latestTones(state: HubState, pmId: PmId): Map<ConversationId, WorkerTon
   const tones = new Map<ConversationId, WorkerTone>();
   for (const { conversation, messages } of Object.values(state.conversations)) {
     if (conversation.kind === "worker" || conversation.pmId !== pmId) continue;
-    for (const message of messages) {
-      const meta = workerEventOf(message);
-      if (meta) tones.set(meta.workerConversationId, workerStatusOf(meta).tone);
+    for (const [id, tone] of pmWorkerIndexOf(messages).tones) {
+      tones.set(id, tone);
     }
   }
   return tones;
@@ -334,7 +375,7 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
         conversationId: conversation.id,
         title: conversation.title,
         activity: session?.activity ?? "idle",
-        ended: phaseOf(state, conversation.id, endedLines) === "ended",
+        ended: phaseOf(state, conversation.id, endedLines, session) === "ended",
         vendor: session?.vendor,
         model: session?.model,
         effort: session?.effort,
@@ -358,16 +399,28 @@ export function workerLineOf(state: HubState, workerConversationId: Conversation
   const pmId = state.conversations[workerConversationId]?.conversation.pmId;
   for (const view of Object.values(state.conversations)) {
     if (view.conversation.kind === "worker" || (pmId != null && view.conversation.pmId !== pmId)) continue;
-    for (const message of view.messages.toReversed()) {
-      const meta = workerEventOf(message);
-      if (meta?.workerConversationId === workerConversationId) return meta;
-    }
+    const found = pmWorkerIndexOf(view.messages).latestLine.get(workerConversationId);
+    if (found) return found;
   }
   return null;
 }
 
+const NO_PENDING: PendingMessage[] = [];
+const pendingByConversationCache = new WeakMap<readonly PendingMessage[], Map<ConversationId, PendingMessage[]>>();
+
 export function pendingOf(state: HubState, conversationId: ConversationId): PendingMessage[] {
-  return state.pending.filter((p) => p.conversationId === conversationId);
+  if (state.pending.length === 0) return NO_PENDING;
+  let byConv = pendingByConversationCache.get(state.pending);
+  if (byConv === undefined) {
+    byConv = new Map();
+    pendingByConversationCache.set(state.pending, byConv);
+  }
+  let cached = byConv.get(conversationId);
+  if (cached !== undefined) return cached;
+  const filtered = state.pending.filter((p) => p.conversationId === conversationId);
+  cached = filtered.length === 0 ? NO_PENDING : filtered;
+  byConv.set(conversationId, cached);
+  return cached;
 }
 
 /**

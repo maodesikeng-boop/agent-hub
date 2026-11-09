@@ -20,7 +20,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   attachmentsOf,
   extractAskCard,
@@ -164,7 +164,7 @@ function AskCard({
 }
 
 /** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
-function AgentText({
+const AgentText = memo(function AgentText({
   message,
   highlighted,
   onAnswerAsk,
@@ -192,7 +192,7 @@ function AgentText({
       )}
     </article>
   );
-}
+});
 
 /** Worked for 里的一步：工具原样（等宽）、派出 / 收工的 Worker（点开它的对话）、建删的定时任务。 */
 function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: MessageActions["onOpenWorker"] }) {
@@ -262,62 +262,90 @@ function CopyButton({ text }: { text: string }) {
 
 type Turn = Extract<RenderItem, { kind: "turn" }>;
 
+const EMPTY_REVERTED: ReadonlySet<PersonaChangeId> = new Set();
+
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function sameIdentity(a: AgentIdentity, b: AgentIdentity): boolean {
+  return a === b || (a.name === b.name && a.avatarKey === b.avatarKey && a.neutral === b.neutral);
+}
+
 /** 对话里已经被后续修改（revertOf 指向它）撤销过的性格设定修改编号。 */
 export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<PersonaChangeId> {
-  const ids = new Set<PersonaChangeId>();
+  let ids: Set<PersonaChangeId> | null = null;
   for (const m of messages) {
     const event = systemEventOf(m);
-    if (event?.event === "persona.changed" && event.revertOf !== null) ids.add(event.revertOf);
+    if (event?.event === "persona.changed" && event.revertOf !== null) {
+      ids ??= new Set<PersonaChangeId>();
+      ids.add(event.revertOf);
+    }
   }
-  return ids;
+  return ids ?? EMPTY_REVERTED;
 }
 
 /**
  * agent 的一轮回复：开头一次头像 + 名字；操作合成一行；文字和夹在中间的系统行按顺序排；跑完最下面是复制和时间。
  * status：这一轮还在跑时的状态（AgentStatus），那一行挪到最下面；没在跑是 undefined。
  */
-export function TurnView({
-  turn,
-  identity,
-  status,
-  actions,
-  highlightId,
-  revertedChanges,
-}: {
-  turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
-  identity: AgentIdentity;
-  status?: React.ReactNode;
-  actions: MessageActions;
-  highlightId?: MessageId | null;
-  revertedChanges?: ReadonlySet<PersonaChangeId>;
-}) {
-  const running = status != null;
-  const texts = turn.parts.filter((m) => m.sender === "agent");
-  const lastText = texts.at(-1);
-  const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
-  return (
-    <div className="mt-6 flex flex-col first:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
-      <AgentHead identity={identity} />
-      <div className="flex flex-col gap-2.5">
-        {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
-        {turn.parts.map((m) =>
-          m.sender === "agent" ? (
-            <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} />
-          ) : (
-            <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
-          ),
-        )}
-        {running && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
-        {!running && lastText && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-            <CopyButton text={texts.map((m) => m.text).join("\n\n")} />
-            <span>{formatTime(lastText.createdAt)}</span>
-          </div>
-        )}
+export const TurnView = memo(
+  function TurnView({
+    turn,
+    identity,
+    status,
+    actions,
+    highlightId,
+    revertedChanges,
+  }: {
+    turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
+    identity: AgentIdentity;
+    status?: React.ReactNode;
+    actions: MessageActions;
+    highlightId?: MessageId | null;
+    revertedChanges?: ReadonlySet<PersonaChangeId>;
+  }) {
+    const running = status != null;
+    const texts = turn.parts.filter((m) => m.sender === "agent");
+    const lastText = texts.at(-1);
+    const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
+    return (
+      <div className="mt-6 flex flex-col first:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
+        <AgentHead identity={identity} />
+        <div className="flex flex-col gap-2.5">
+          {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
+          {turn.parts.map((m) =>
+            m.sender === "agent" ? (
+              <AgentText key={m.id} message={m} highlighted={m.id === highlightId} onAnswerAsk={actions.onAnswerAsk} />
+            ) : (
+              <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
+            ),
+          )}
+          {running && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
+          {!running && lastText && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+              <CopyButton text={texts.map((m) => m.text).join("\n\n")} />
+              <span>{formatTime(lastText.createdAt)}</span>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+  (prev, next) =>
+    prev.turn.startedAt === next.turn.startedAt &&
+    prev.turn.endedAt === next.turn.endedAt &&
+    sameList(prev.turn.work, next.turn.work) &&
+    sameList(prev.turn.parts, next.turn.parts) &&
+    sameIdentity(prev.identity, next.identity) &&
+    prev.status === next.status &&
+    prev.actions === next.actions &&
+    prev.highlightId === next.highlightId &&
+    prev.revertedChanges === next.revertedChanges,
+);
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 
@@ -550,33 +578,42 @@ function WorkerItem({ line, actions }: { line: WorkerMessageMeta; actions: Messa
  * 单独显示的一条（不在一轮回复里的）：用户的气泡、Worker 对话里项目经理的话、Worker 的发言、系统行。
  * head：项目经理的话要不要带头像（上一条也是它说的就不带）。
  */
-export function MessageBubble({
-  message,
-  identity,
-  head,
-  actions,
-  highlighted = false,
-  revertedChanges,
-}: {
-  message: Message;
-  identity: AgentIdentity;
-  head: boolean;
-  actions: MessageActions;
-  highlighted?: boolean;
-  revertedChanges?: ReadonlySet<PersonaChangeId>;
-}) {
-  const workerLine = workerEventOf(message);
-  if (workerLine) return <WorkerItem line={workerLine} actions={actions} />;
-  if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
-  if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
-  // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
-  return (
-    <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
-      {head && <AgentHead identity={identity} />}
-      <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
-    </div>
-  );
-}
+export const MessageBubble = memo(
+  function MessageBubble({
+    message,
+    identity,
+    head,
+    actions,
+    highlighted = false,
+    revertedChanges,
+  }: {
+    message: Message;
+    identity: AgentIdentity;
+    head: boolean;
+    actions: MessageActions;
+    highlighted?: boolean;
+    revertedChanges?: ReadonlySet<PersonaChangeId>;
+  }) {
+    const workerLine = workerEventOf(message);
+    if (workerLine) return <WorkerItem line={workerLine} actions={actions} />;
+    if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
+    if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
+    // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
+    return (
+      <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
+        {head && <AgentHead identity={identity} />}
+        <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
+      </div>
+    );
+  },
+  (prev, next) =>
+    prev.message === next.message &&
+    sameIdentity(prev.identity, next.identity) &&
+    prev.head === next.head &&
+    prev.actions === next.actions &&
+    prev.highlighted === next.highlighted &&
+    prev.revertedChanges === next.revertedChanges,
+);
 
 function UserBubble({ message, actions }: { message: Message; actions: MessageActions }) {
   const attachments = attachmentsOf(message);

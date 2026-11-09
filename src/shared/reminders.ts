@@ -94,17 +94,36 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
     .map(({ conversation }) => conversation.id);
 }
 
+const unansweredAsksCache = new WeakMap<readonly Message[], Message[]>();
+const NO_MESSAGES: Message[] = [];
+
+function unansweredAsksIn(messages: readonly Message[]): Message[] {
+  let cached = unansweredAsksCache.get(messages);
+  if (cached !== undefined) return cached;
+  const found = messages.filter((m) => {
+    const meta = askOf(m);
+    return meta !== null && meta.answered !== true;
+  });
+  cached = found.length === 0 ? NO_MESSAGES : found;
+  unansweredAsksCache.set(messages, cached);
+  return cached;
+}
+
 /**
  * 对话里还在等用户确定的 hub ask（M5）：守护进程还没标成已回答（meta.answered，用户在这个对话里发了消息就标上，
  * 见 ledger/messages.ts）。用户刚发出、服务端还没确认的消息也先当回答了，不等推送。从老到新。
  */
 export function pendingAsks(state: ReminderState, conversationId: ConversationId): Message[] {
   const view = state.conversations[conversationId];
-  if (!view || view.conversation.kind === "worker" || isPmArchived(state, view.conversation.pmId) || pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return [];
-  return view.messages.filter((m) => {
-    const meta = askOf(m);
-    return meta !== null && meta.answered !== true;
-  });
+  if (
+    !view ||
+    view.conversation.kind === "worker" ||
+    isPmArchived(state, view.conversation.pmId) ||
+    pendingIn(state, conversationId).some((p) => p.phase !== "failed")
+  ) {
+    return NO_MESSAGES;
+  }
+  return unansweredAsksIn(view.messages);
 }
 
 /** 所有对话里还在等用户确定的提问（Worker 对话没有 hub ask，直接跳过）。 */
@@ -239,8 +258,14 @@ function upsertBy<T>(list: T[], item: T, same: (a: T, b: T) => boolean): T[] {
 
 /** 按编号插入或替换一条消息，保持从小到大，只留最近 MIRROR_MESSAGES_PER_CONVERSATION 条。 */
 function upsertRecent(messages: Message[], message: Message): Message[] {
-  const index = messages.findIndex((m) => m.id >= message.id);
-  const next = index === -1 ? [...messages, message] : messages[index]?.id === message.id ? messages.with(index, message) : messages.toSpliced(index, 0, message);
+  const last = messages.at(-1);
+  let next: Message[];
+  if (last === undefined || message.id > last.id) next = [...messages, message];
+  else if (message.id === last.id) next = messages.with(messages.length - 1, message);
+  else {
+    const index = messages.findIndex((m) => m.id >= message.id);
+    next = messages[index]?.id === message.id ? messages.with(index, message) : messages.toSpliced(index, 0, message);
+  }
   return next.length > MIRROR_MESSAGES_PER_CONVERSATION ? next.slice(-MIRROR_MESSAGES_PER_CONVERSATION) : next;
 }
 

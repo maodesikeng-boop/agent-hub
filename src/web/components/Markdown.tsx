@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
@@ -195,17 +195,24 @@ const NO_FILES: SentFile[] = [];
  * files：这条消息的 meta.files（agent 发来的文件），对上的图片内联、链接换成文件卡片；老消息没有，照原样显示。
  * messageId：这条消息的编号，预览窗用它找文件做“在 Finder 中显示”；预览窗里渲染 .md 文件时不带（没有这两个按钮的对象）。
  */
-export function Markdown({ text, files = NO_FILES, messageId }: { text: string; files?: SentFile[]; messageId?: number }) {
+export const Markdown = memo(function Markdown({ text, files = NO_FILES, messageId }: { text: string; files?: SentFile[]; messageId?: number }) {
   const client = useClient();
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkChartBlocks, remarkSentFiles(files, client.url)], [files, client]);
+  const remarkPlugins = useMemo(
+    () => [remarkGfm, remarkCjkFriendly, remarkCjkFriendlyGfmStrikethrough, remarkBreaks, remarkChartBlocks, remarkSentFiles(files, client.url)],
+    [files, client],
+  );
   const context = useMemo(() => ({ files, messageId }), [files, messageId]);
+  const rendered = useMemo(
+    () => (
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={COMPONENTS}>
+        {text}
+      </ReactMarkdown>
+    ),
+    [text, remarkPlugins],
+  );
   return (
     <SentFilesContext value={context}>
-      <div className="markdown">
-        <ReactMarkdown remarkPlugins={remarkPlugins} components={COMPONENTS}>
-          {text}
-        </ReactMarkdown>
-      </div>
+      <div className="markdown">{rendered}</div>
     </SentFilesContext>
   );
-}
+});

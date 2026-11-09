@@ -118,7 +118,15 @@ export interface ConversationRef {
  */
 export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: ConversationRef | null, onOpen: (ref: ConversationRef) => void) {
   const foreground = useForeground();
-  const [lastSeen, setLastSeen] = useState<Partial<Record<DeviceKey, LastSeen>>>({});
+  const lastSeenRef = useRef<Partial<Record<DeviceKey, LastSeen>>>({});
+  const getLastSeen = (device: DeviceKey): LastSeen => {
+    let seen = lastSeenRef.current[device];
+    if (seen === undefined) {
+      seen = loadLastSeen(device);
+      lastSeenRef.current[device] = seen;
+    }
+    return seen;
+  };
   const [permission, setPermission] = useState(currentPermission);
   const [notifyPref, setNotifyPref] = useState(loadNotifyPref);
   const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set());
@@ -130,19 +138,22 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   const viewingLastId = viewingId === null ? null : (viewingState?.conversations[viewingId]?.messages.at(-1)?.id ?? null);
   useEffect(() => {
     if (viewingDevice === null || viewingId === null || !foreground) return;
-    setLastSeen((prev) => {
-      const next = { ...(prev[viewingDevice] ?? loadLastSeen(viewingDevice)), [viewingId]: Date.now() };
-      saveLastSeen(viewingDevice, next);
-      return { ...prev, [viewingDevice]: next };
-    });
+    const next = { ...getLastSeen(viewingDevice), [viewingId]: Date.now() };
+    lastSeenRef.current[viewingDevice] = next;
+    saveLastSeen(viewingDevice, next);
   }, [viewingDevice, viewingId, foreground, viewingLastId]);
 
   const ready = devices.filter((d) => d.state.phase === "ready");
   // 入口本机的键是 ""，不能用 join 拼：用 JSON
   const readyKey = JSON.stringify(ready.map((d) => d.key));
   const candidates = useMemo(
-    () => ready.flatMap((d) => waitingConversations(d.state, lastSeen[d.key] ?? loadLastSeen(d.key)).map((id) => ({ device: d.key, key: conversationKey(d.key, id), id }))),
-    [devices, lastSeen],
+    () =>
+      ready.flatMap((d) => {
+        const seen = getLastSeen(d.key);
+        const effectiveSeen = foreground && d.key === viewingDevice && viewingId !== null ? { ...seen, [viewingId]: Date.now() } : seen;
+        return waitingConversations(d.state, effectiveSeen).map((id) => ({ device: d.key, key: conversationKey(d.key, id), id }));
+      }),
+    [devices, foreground, viewingDevice, viewingId],
   );
   const candidatesKey = candidates.map((c) => c.key).join(",");
 
@@ -224,7 +235,8 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
       ),
     [devices],
   );
-  const asking = useMemo<ReadonlySet<string>>(() => new Set(asks.map((a) => conversationKey(a.device, a.conversationId))), [asks]);
+  const askingKey = asks.map((a) => conversationKey(a.device, a.conversationId)).join(",");
+  const asking = useMemo<ReadonlySet<string>>(() => new Set(askingKey === "" ? [] : askingKey.split(",")), [askingKey]);
   const knownAsks = useRef(new Set<string>());
   const asksOpened = useRef(new Set<DeviceKey>());
   useEffect(() => {

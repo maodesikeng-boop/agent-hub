@@ -1,7 +1,7 @@
 // 聊天框的上传逻辑（和输入框组件分开，哪个输入框都能用：项目经理的聊天框、以后别的对话的输入框）：
 // 加文件时的检查（stageFiles）、发送时上传（uploadFiles）、待发文件 + 提示 + 发送中状态按对话存的 hook（useStagingStore）。
 // 上传接口本身不绑定接收方（见 shared/api.ts 的 API_PATHS.uploads），发消息时再带上上传编号。
-import { useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ATTACHMENTS_TOO_MANY_MESSAGE,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -116,37 +116,102 @@ const EMPTY_SLOT: Slot = { files: [], busy: false, notice: null };
  */
 export function useStagingStore<K extends string | number>() {
   const [slots, setSlots] = useState<Partial<Record<K, Slot>>>({});
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const cacheRef = useRef(new Map<K, { slot: Slot; staged: StagedFiles }>());
 
-  const update = (key: K, change: (slot: Slot) => Slot) => setSlots((all) => ({ ...all, [key]: change(all[key] ?? EMPTY_SLOT) }));
+  const update = useCallback((key: K, change: (slot: Slot) => Slot) => {
+    setSlots((all) => ({ ...all, [key]: change(all[key] ?? EMPTY_SLOT) }));
+  }, []);
 
-  const of = (key: K): StagedFiles => {
-    const slot = slots[key] ?? EMPTY_SLOT;
-    return {
-      files: slot.files,
-      busy: slot.busy,
-      notice: slot.notice,
-      add: (incoming) => {
-        if (slot.busy || incoming.length === 0) return;
-        update(key, (s) => {
-          const staged = stageFiles(s.files, incoming);
-          return { ...s, files: staged.files, notice: staged.notice };
-        });
+  const of = useCallback(
+    (key: K): StagedFiles => {
+      const slot = slotsRef.current[key] ?? EMPTY_SLOT;
+      const cached = cacheRef.current.get(key);
+      if (cached && cached.slot === slot) return cached.staged;
+      const staged: StagedFiles = {
+        files: slot.files,
+        busy: slot.busy,
+        notice: slot.notice,
+        add: (incoming) => {
+          const current = slotsRef.current[key] ?? EMPTY_SLOT;
+          if (current.busy || incoming.length === 0) return;
+          update(key, (s) => {
+            const next = stageFiles(s.files, incoming);
+            return { ...s, files: next.files, notice: next.notice };
+          });
+        },
+        remove: (fileKey) => {
+          const current = slotsRef.current[key] ?? EMPTY_SLOT;
+          if (current.busy) return;
+          update(key, (s) => ({ ...s, files: s.files.filter((f) => f.key !== fileKey), notice: null }));
+        },
+        removeSent: (sent) => update(key, (s) => ({ ...s, files: s.files.filter((f) => !sent.includes(f.file)) })),
+        track: (result) => {
+          update(key, (s) => (s.notice === null ? s : { ...s, notice: null }));
+          if (result === undefined) return;
+          update(key, (s) => ({ ...s, busy: true }));
+          result
+            .catch((err: unknown) => update(key, (s) => ({ ...s, notice: err instanceof ErrorNotice ? err.info : err instanceof Error ? err.message : "上传失败" })))
+            .finally(() => update(key, (s) => ({ ...s, busy: false })));
+        },
+      };
+      cacheRef.current.set(key, { slot, staged });
+      return staged;
+    },
+    [update],
+  );
+
+  return useMemo(() => ({ of }), [of]);
+}
+
+/** 一个对话的草稿槽：只通知订阅了这个对话的输入框重渲染，打字不会引起 App / 消息列表重渲染。 */
+export interface DraftSlot {
+  get: () => string;
+  set: (value: string) => void;
+  /** 发送成功后清理：如果草稿 trim 后仍等于刚发出的文字才清空，用户在中途改过的不动。 */
+  clearIfMatch: (trimmed: string) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+export function useDraftStore<K extends string | number>() {
+  const valuesRef = useRef(new Map<K, string>());
+  const listenersRef = useRef(new Map<K, Set<() => void>>());
+  const slotsRef = useRef(new Map<K, DraftSlot>());
+
+  const of = useCallback((key: K): DraftSlot => {
+    const existing = slotsRef.current.get(key);
+    if (existing) return existing;
+    const set = (value: string) => {
+      const prev = valuesRef.current.get(key) ?? "";
+      if (prev === value) return;
+      if (value === "") valuesRef.current.delete(key);
+      else valuesRef.current.set(key, value);
+      const subs = listenersRef.current.get(key);
+      if (subs) for (const fn of subs) fn();
+    };
+    const slot: DraftSlot = {
+      get: () => valuesRef.current.get(key) ?? "",
+      set,
+      clearIfMatch: (trimmed: string) => {
+        if ((valuesRef.current.get(key) ?? "").trim() === trimmed) set("");
       },
-      remove: (fileKey) => {
-        if (slot.busy) return;
-        update(key, (s) => ({ ...s, files: s.files.filter((f) => f.key !== fileKey), notice: null }));
-      },
-      removeSent: (sent) => update(key, (s) => ({ ...s, files: s.files.filter((f) => !sent.includes(f.file)) })),
-      track: (result) => {
-        update(key, (s) => ({ ...s, notice: null }));
-        if (result === undefined) return;
-        update(key, (s) => ({ ...s, busy: true }));
-        result
-          .catch((err: unknown) => update(key, (s) => ({ ...s, notice: err instanceof ErrorNotice ? err.info : err instanceof Error ? err.message : "上传失败" })))
-          .finally(() => update(key, (s) => ({ ...s, busy: false })));
+      subscribe: (listener: () => void) => {
+        let subs = listenersRef.current.get(key);
+        if (!subs) {
+          subs = new Set();
+          listenersRef.current.set(key, subs);
+        }
+        subs.add(listener);
+        return () => {
+          subs.delete(listener);
+          if (subs.size === 0) listenersRef.current.delete(key);
+        };
       },
     };
-  };
+    slotsRef.current.set(key, slot);
+    return slot;
+  }, []);
 
-  return { of };
+  return useMemo(() => ({ of }), [of]);
 }

@@ -1,7 +1,28 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import * as shared from "../../shared/index.ts";
+import { App } from "../App.tsx";
+import * as composerSuggest from "../composer-suggest.ts";
+import * as stepLabels from "../step-labels.ts";
+import {
+  FakeApi,
+  FakeWebSocket,
+  installFakeWebSocket,
+  makeConvSnapshot,
+  makeMessage,
+  makePm,
+  makeSession,
+  makeSnapshot,
+  makeToolMessage,
+  makeUserMessage,
+  makeWorkerConversation,
+  messageChange,
+  sessionChange,
+} from "../test-utils.ts";
 import type { StagedFiles } from "../upload.ts";
 import { Composer } from "./Composer.tsx";
+import * as messagesModule from "./Messages.tsx";
 
 const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
   files: [],
@@ -64,5 +85,88 @@ describe("Composer 布局", () => {
     expect(screen.getByRole("textbox", { name: "输入消息" })).toHaveAttribute("readonly");
     expect(screen.getByRole("button", { name: "添加文件" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  });
+
+  it("继续往后打字时不把 height 先重置成 auto（避免多行时每次按键触发整页同步回流），删字或清空时才重置", () => {
+    const { rerender } = render(<Composer value="第一行" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "输入消息" }) as HTMLTextAreaElement;
+    box.style.height = "80px";
+    Object.defineProperty(box, "scrollHeight", {
+      configurable: true,
+      get: () => (box.style.height === "auto" ? 36 : 80),
+    });
+    rerender(<Composer value="第一行继续打字" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(box.style.height).toBe("80px");
+    rerender(<Composer value="第一" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(box.style.height).toBe("36px");
+  });
+
+  it("文字框关闭系统自动拼写检查、自动纠错与自动大写（防 macOS AppleSpell 同步扫描卡顿）", () => {
+    setup();
+    const box = screen.getByRole("textbox", { name: "输入消息" });
+    expect(box).toHaveAttribute("spellcheck", "false");
+    expect(box).toHaveAttribute("autocorrect", "off");
+    expect(box).toHaveAttribute("autocapitalize", "off");
+  });
+
+  it("在 App 输入框打字以及后台 Worker 持续推事件时，不重渲染当前对话的 MessageList / TurnView / MessageBubble / Markdown", async () => {
+    const user = userEvent.setup();
+    const snap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: [
+        makeConvSnapshot(
+          [
+            makeUserMessage({ id: 1, text: "你好", status: "replied", createdAt: 1_000 }),
+            makeToolMessage({ id: 2, text: "Read App.tsx", createdAt: 3_000 }),
+            makeMessage({ id: 3, text: "**加粗回复** `code`", createdAt: 6_000 }),
+          ],
+          { conversation: { id: 1, pmId: 1, title: "小林" } },
+        ),
+        makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1 }) }),
+      ],
+      sessions: [
+        makeSession({ sessionId: 1, conversationId: 1, pmId: 1, activity: "idle" }),
+        makeSession({ sessionId: 2, conversationId: 30, activity: "working" }),
+      ],
+    });
+    const api = new FakeApi(snap);
+    api.install();
+    installFakeWebSocket();
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    await screen.findByText("加粗回复");
+
+    const parseSpy = vi.spyOn(shared, "linkNodesOf");
+    const workedForSpy = vi.spyOn(stepLabels, "workedFor");
+    const displayTextSpy = vi.spyOn(messagesModule, "displayText");
+    const attachmentsSpy = vi.spyOn(shared, "attachmentsOf");
+
+    const box = screen.getByRole("textbox", { name: "输入消息" });
+    await user.type(box, "正在输入一段长文字测试延迟");
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(workedForSpy).not.toHaveBeenCalled();
+    expect(displayTextSpy).not.toHaveBeenCalled();
+    expect(attachmentsSpy).not.toHaveBeenCalled();
+
+    // 后台 Worker 推送会话状态与消息变化，不应触发当前打开的 PM 对话重渲染 MessageList / TurnView / MessageBubble / DraftComposer
+    const suggestSpy = vi.spyOn(composerSuggest, "useComposerSuggest");
+    act(() => {
+      FakeWebSocket.last.push(sessionChange(10, makeSession({ sessionId: 2, conversationId: 30, activity: "working", step: { type: "thinking" } })));
+      FakeWebSocket.last.push(messageChange(11, "message.created", makeMessage({ id: 100, conversationId: 30, text: "worker step" })));
+    });
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(workedForSpy).not.toHaveBeenCalled();
+    expect(displayTextSpy).not.toHaveBeenCalled();
+    expect(attachmentsSpy).not.toHaveBeenCalled();
+    expect(suggestSpy).not.toHaveBeenCalled();
+
+    suggestSpy.mockRestore();
+    attachmentsSpy.mockRestore();
+    displayTextSpy.mockRestore();
+    workedForSpy.mockRestore();
+    parseSpy.mockRestore();
+    unmount();
+    vi.unstubAllGlobals();
   });
 });
