@@ -162,6 +162,7 @@ function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> =
 - **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}（可用 \`${HUB} models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
+- **按任务难度设最大时间（\`--max-time\`）**：派活（\`${HUB} worker start\`）或追问（\`${HUB} worker send\`）时可传 \`--max-time <时长>\`（如 \`15m\`、\`30m\`、\`1h\`，注意是**本轮最大容忍时间上限**而非平均预期时间，不传默认兜底 \`30m\`）。当 Worker 当前一轮超过该最大时间仍未结束时，系统会自动给你发一条静默唤醒消息（不打断 Worker），请你用 \`${HUB} worker show <编号>\` 和 \`${HUB} worker log <编号> --last 15\` 检查它是在正常收尾还是卡死；若仍在正常推进还需时间，可用 \`${HUB} worker max-time <编号> <时长>\` 单独续期。
 - **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
 - **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
 - **别反复打回对话很长的 Worker**：打回或追问之前，先用 \`${HUB} worker show <编号>\` 看它的对话长度；超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 就别再 send 给它，让它收工（\`${HUB} worker end\`），新派一个接手，任务说明里写清分支、已有的提交、还要改的点。审查意见多、要来回改好几轮的，也直接新派；只差一两步就完的（比如再推一次、回答一个问题），对话长也可以接着用。
@@ -197,8 +198,9 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
   - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明）
-  - \`${HUB} worker send <编号> --stdin\`：让该 Worker 接着改或回答它的问题
+  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
+  - \`${HUB} worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
   - \`${HUB} worker end <编号>\`：结束该 Worker 会话
   - \`${HUB} worker list\`：查看进行中和最近收工的 Worker 的状态、分支、目录和模型（更早收工的用 worker search / show 查）
   - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR

@@ -73,6 +73,26 @@ describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
     const state = reminderStateFrom(snapshot({ pm1: [ask({ id: 5 }), ask({ id: 6, meta: { needsUser: true, answered: true } })] }));
     expect(pendingAsks(state, 1).map((m) => m.id)).toEqual([5]);
   });
+
+  it("Worker 超时静默触发消息（worker.max_time_exceeded）算安静消息，不把会话标成异常或改变等你状态，PM 随后回复照常触发等你", () => {
+    const trigger = makeMessage({
+      id: 3,
+      sender: "system",
+      kind: "text",
+      status: "replied",
+      text: "【系统】【Worker #1 · 修 X 已超过最大时间（20m）】...",
+      meta: { event: "worker.max_time_exceeded", workerId: 1, workerConversationId: 30, maxTimeMs: 1_200_000 },
+      createdAt: T0 - 2_000,
+    });
+    // 只有用户消息 + 超时触发消息时，最后一条非静默消息仍是用户的，不算“等你”
+    const beforeReply = reminderStateFrom(snapshot({ pm1: [makeUserMessage({ id: 1, createdAt: T0 - 5_000 }), trigger] }));
+    expect(waitingConversations(beforeReply, {})).toEqual([]);
+
+    // PM 随后给用户回复了进展，且 Worker 也闲下来时，正常算“等你”
+    const pmReply = makeMessage({ id: 4, text: "我刚看了一眼 #1，它在收尾", createdAt: T0 - 1_000 });
+    const afterReply = reminderStateFrom(snapshot({ pm1: [makeUserMessage({ id: 1, createdAt: T0 - 5_000 }), trigger, pmReply] }));
+    expect(waitingConversations(afterReply, {})).toEqual([1]);
+  });
 });
 
 describe("applyReminderChange：守护进程按变化流维护一份状态", () => {

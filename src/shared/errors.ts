@@ -2,7 +2,16 @@
 // 表是模块常量，humanize 只查表，不发请求、不轮询。厂商失败的人话（describeFailure）在文件末尾，是第二张表。
 // 暂时不从 index.ts 导出：api.ts 里还有旧的 ApiErrorBody / ApiErrorCode（B 块改完界面服务后删掉，再接进 index.ts），要用先 import 这个文件。
 
+import { MAX_WORKER_MAX_TIME_MS, MIN_WORKER_MAX_TIME_MS } from "./limits.ts";
 import { vendorFailureOf, type AgentVendor, type FailureKind } from "./vendors.ts";
+
+/** Worker `--max-time` / `maxTimeMs` 在 CLI 与 API 边界的中文人话报错。 */
+export const WORKER_MAX_TIME_ERRORS = {
+  format: "--max-time 格式不对：请写 30s、15m、2h、1h30m 这样的时长（最短 10s，最长 24h）",
+  nonInteger: "最大时间要是整数毫秒",
+  tooShort: `最大时间最短 ${MIN_WORKER_MAX_TIME_MS / 1_000} 秒（10s）`,
+  tooLong: `最大时间最长 ${MAX_WORKER_MAX_TIME_MS / 3_600_000} 小时（24h）`,
+} as const;
 
 /** 接口错误：会出现在 HTTP 应答里，status 必填。text 是一句中文；hint 是“怎么办”，只写跟连法无关的话。 */
 export const API_ERRORS = {

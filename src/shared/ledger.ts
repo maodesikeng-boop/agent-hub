@@ -599,4 +599,6 @@ export interface Ledger extends LedgerHandoverWork {
    * 执行器改动作状态写库失败时记 "store"。
    */
   reportHealth(module: HealthModule, error: string | null): void;
+  /** 关机或测试结束时清理账本内部计时器（如 Worker 本轮最大时间计时器）。 */
+  close?(): void;
 }

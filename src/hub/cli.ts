@@ -20,7 +20,7 @@ import {
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
 import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
-import { checkEveryMinutes, parseDailyTime, parseEvery } from "../shared/schedule.ts";
+import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
 
 export interface HubIo {
@@ -119,15 +119,22 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "start",
     cli: "worker start",
-    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--readonly] [--no-worktree] --stdin
-                                                          派一个 Worker，任务说明从标准输入读`,
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin
+                                                          派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m）`,
   },
   {
     command: "worker.send",
     group: "worker",
     action: "send",
     cli: "worker send",
-    usage: `  ${hub} worker send <编号> --stdin                           打回或回答它的问题，同一个 Worker 接着做`,
+    usage: `  ${hub} worker send <编号> [--max-time <时长>] --stdin          打回或回答它的问题，同一个 Worker 接着做（--max-time 本轮最大容忍时间，默认 30m）`,
+  },
+  {
+    command: "worker.max-time",
+    group: "worker",
+    action: "max-time",
+    cli: "worker max-time",
+    usage: `  ${hub} worker max-time <编号> <时长>                       给正在运行的 Worker 单独延时/更新本轮最大时间（如 15m、30m、1h，从现在重新计时）`,
   },
   {
     command: "worker.end",
@@ -279,6 +286,7 @@ type Options = {
   refresh?: boolean;
   model?: string;
   effort?: string;
+  "max-time"?: string;
   readonly?: boolean;
   "no-worktree"?: boolean;
   clear?: boolean;
@@ -332,6 +340,12 @@ function idOf(raw: string | undefined, what: string, label: string): number {
 }
 const workerIdOf = (raw: string | undefined, what: string) => idOf(raw, what, " Worker ");
 
+function maxTimeMsOf(raw: string): number {
+  const parsed = parseWorkerMaxTime(raw);
+  if (!parsed.ok) throw new UsageError(parsed.error);
+  return parsed.maxTimeMs;
+}
+
 /** hub worker start、send，schedule add 的正文只从标准输入读。 */
 function requireStdin(values: Options, what: string): Parsed["textSource"] {
   if (values.stdin !== true) throw new UsageError(`${hub} ${what} 要 --stdin，正文从标准输入读`);
@@ -365,6 +379,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         refresh: { type: "boolean" },
         model: { type: "string" },
         effort: { type: "string" },
+        "max-time": { type: "string" },
         readonly: { type: "boolean" },
         "no-worktree": { type: "boolean" },
         clear: { type: "boolean" },
@@ -446,7 +461,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "persona.edit", body, textSource, textField: "text" };
   }
   if (group === "worker" && action === "start") {
-    allowOnly(values, ["title", "vendor", "model", "effort", "readonly", "no-worktree", "stdin"], "worker start");
+    allowOnly(values, ["title", "vendor", "model", "effort", "max-time", "readonly", "no-worktree", "stdin"], "worker start");
     expectPositionals(rest, 0, "worker start");
     if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
@@ -455,20 +470,30 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
       throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
     }
-    const textSource = requireStdin(values, "worker start");
     const body: Record<string, unknown> = { title: values.title };
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
     if (values.effort !== undefined) body.effort = values.effort;
+    if (values["max-time"] !== undefined) body.maxTimeMs = maxTimeMsOf(values["max-time"]);
     if (values.readonly === true) body.readonly = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
+    const textSource = requireStdin(values, "worker start");
     return { command: "worker.start", body, textSource, textField: "task" };
   }
   if (group === "worker" && action === "send") {
-    allowOnly(values, ["stdin"], "worker send");
+    allowOnly(values, ["max-time", "stdin"], "worker send");
     expectPositionals(rest, 1, "worker send");
     const workerId = workerIdOf(rest[0], "worker send");
-    return { command: "worker.send", body: { workerId }, textSource: requireStdin(values, "worker send"), textField: "text" };
+    const body: Record<string, unknown> = { workerId };
+    if (values["max-time"] !== undefined) body.maxTimeMs = maxTimeMsOf(values["max-time"]);
+    return { command: "worker.send", body, textSource: requireStdin(values, "worker send"), textField: "text" };
+  }
+  if (group === "worker" && action === "max-time") {
+    allowOnly(values, [], "worker max-time");
+    expectPositionals(rest, 2, "worker max-time");
+    const workerId = workerIdOf(rest[0], "worker max-time");
+    const maxTimeMs = maxTimeMsOf(rest[1] ?? "");
+    return { command: "worker.max-time", body: { workerId, maxTimeMs }, textSource: null };
   }
   if (group === "worker" && action === "end") {
     allowOnly(values, [], "worker end");

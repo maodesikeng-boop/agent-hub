@@ -176,6 +176,8 @@ export function createLedgerHubCommands(
         return workers.startIn(p, caller, args as HubArgs<"worker.start">, context);
       case "worker.send":
         return workers.sendIn(p, caller, args as HubArgs<"worker.send">);
+      case "worker.max-time":
+        return workers.maxTimeIn(p, caller, args as HubArgs<"worker.max-time">);
       case "worker.end":
         return workers.endIn(p, caller, args as HubArgs<"worker.end">);
       case "worker.list":

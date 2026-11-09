@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { isHandoverTraffic, type Message, type MessageId } from "../../shared/index.ts";
+import { isHandoverTraffic, isSilentTriggerMessage, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
@@ -66,8 +66,8 @@ export const MessageList = memo(function MessageList({
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null;
-  // 只看显示出来的：写交接的来往（不显示）进来不算新消息
-  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m))?.id ?? 0}:${pending.length}:${busy}`;
+  // 只看显示出来的：写交接的来往、静默唤醒触发消息（不显示）进来不算新消息
+  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
   const scrollToBottom = () => {

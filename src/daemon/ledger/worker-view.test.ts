@@ -54,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  ledger.close();
   db.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -392,6 +393,7 @@ describe("模型名、思考程度：和网页右栏、资料页一样的写法"
     const w = startWorker("claude");
     db.run("UPDATE agent_sessions SET model = NULL WHERE worker_id = ?", w);
     const text = withCatalog.hubCall(lin.sessionId, "worker.show", { workerId: w }, {}).text;
+    withCatalog.close();
     expect(text).toContain("模型 Opus 5.5，思考程度 默认");
   });
 });
@@ -768,5 +770,14 @@ describe("hub worker show --task / --report", () => {
     expectLedgerError(() => showTask(w, zhou.sessionId), "forbidden", /不是你派的/);
     expectLedgerError(() => showReport(w, 1, zhou.sessionId), "forbidden", /不是你派的/);
     expect(show(w).text).toContain(`Worker #${w}“R”：`);
+  });
+
+  it("show 展示本轮设定的最大时间与剩余时间，续期后同步更新", () => {
+    const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "限时", task: "x", noWorktree: true, maxTimeMs: 15 * 60_000 }, {}).data.worker.id;
+    startTurn(w);
+    advance(5 * 60_000);
+    expect(show(w).text).toContain("最大时间 15m，剩余 10m");
+    ledger.hubCall(lin.sessionId, "worker.max-time", { workerId: w, maxTimeMs: 45 * 60_000 }, {});
+    expect(show(w).text).toContain("最大时间 45m，剩余 45m");
   });
 });
