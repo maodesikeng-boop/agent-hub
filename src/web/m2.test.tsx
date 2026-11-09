@@ -66,6 +66,12 @@ function groupIn(page: HTMLElement, title: string): HTMLElement {
   return within(page).getByRole("region", { name: title });
 }
 
+/** 资料页的“修改记录”默认收起：收着就点开标题行。 */
+async function openChanges(page: HTMLElement) {
+  const header = within(groupIn(page, "修改记录")).getByRole("button", { name: /^修改记录/ });
+  if (header.getAttribute("aria-expanded") === "false") await userEvent.click(header);
+}
+
 /** 性格设定那一组的“保存”（改了才有）。 */
 function textSave(page: HTMLElement): HTMLElement | null {
   return within(groupIn(page, "性格设定")).queryByRole("button", { name: "保存" });
@@ -613,6 +619,15 @@ describe("资料页", () => {
     expect(folders[0]).toHaveTextContent("foo");
     expect(folders[0]).toHaveTextContent("主文件夹");
     expect(folders[1]).not.toHaveTextContent("主文件夹");
+    // 修改记录默认收起：白底细框里只有一行“修改记录 1 条”，点开才列出
+    const changesHeader = within(groupIn(page, "修改记录")).getByRole("button", { name: /^修改记录/ });
+    expect(changesHeader).toHaveAttribute("aria-expanded", "false");
+    expect(changesHeader).toHaveTextContent("1 条");
+    expect(within(page).queryByRole("list", { name: "修改记录" })).not.toBeInTheDocument();
+    expect(groupIn(page, "修改记录").firstElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
+    expect(groupIn(page, "修改记录").querySelector(".bg-sidebar, .bg-neutral-50")).toBeNull();
+    await openChanges(page);
+    expect(changesHeader).toHaveAttribute("aria-expanded", "true");
     const rows = within(within(page).getByRole("list", { name: "修改记录" })).getAllByRole("listitem");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("项目经理");
@@ -628,7 +643,9 @@ describe("资料页", () => {
     const groups = ["模型", "工作方式", "文件夹", "定时任务", "性格设定", "修改记录", "会话"];
     expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
     expect(within(groupIn(page, "模型")).queryByRole("heading")).not.toBeInTheDocument();
-    for (const title of groups.slice(1)) expect(within(groupIn(page, title)).getByRole("heading", { name: title })).toBeInTheDocument();
+    for (const title of groups.slice(1)) expect(within(groupIn(page, title)).getByRole("heading", { name: new RegExp(`^${title}`) })).toBeInTheDocument();
+    // 性格设定也是白底细框（框外小灰字标题），不是灰底色块
+    expect(groupIn(page, "性格设定").lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
     expect(within(page).queryByText("Agent")).not.toBeInTheDocument();
     expect(within(page).queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
   });
@@ -656,6 +673,7 @@ describe("资料页", () => {
     expect(box).toHaveClass("px-4");
     await waitFor(() => expect(box).toHaveValue("旧"));
     expect(textSave(page)).not.toBeInTheDocument();
+    await openChanges(page);
     expect(within(groupIn(page, "修改记录")).getByText("还没有修改")).toBeInTheDocument();
     await user.type(box, "了");
     expect(textSave(page)).toBeInTheDocument();
@@ -731,7 +749,9 @@ describe("资料页", () => {
     });
     const page = await pmChat(user);
     await waitFor(() => expect(within(page).getByRole("textbox", { name: "性格设定" })).toHaveValue("新"));
-    // 只有最近一次有撤销按钮
+    // 只有最近一次有撤销按钮（修改记录点开才看得到）
+    expect(within(page).queryByRole("button", { name: "撤销" })).not.toBeInTheDocument();
+    await openChanges(page);
     expect(within(page).getAllByRole("button", { name: "撤销" })).toHaveLength(1);
     await user.click(within(page).getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(api.callsTo("POST", /^\/api\/persona-changes\/5\/revert$/)).toHaveLength(1));
@@ -901,6 +921,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.selectOptions(combo(page, "思考程度"), "low");
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ effort: "low" });
+    await openChanges(page);
     const log = await within(page).findByRole("list", { name: "修改记录" });
     await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(2));
     expect(within(log).getAllByRole("listitem")[1]).toHaveTextContent("你 模型改成Fable 5.1");

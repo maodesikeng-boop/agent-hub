@@ -1,4 +1,5 @@
-// 设置 → 设备（docs/multi-device-design.md 第 3.2、4.2 节，docs/hub-tunnel-design.md 第 8 节）：设备列表（名字、系统、连法、在线状态）、连到中心、邀请、添加、改名、移除。
+// 设置 → 电脑（docs/multi-device-design.md 第 3.2、4.2 节，docs/hub-tunnel-design.md 第 8 节）：你的电脑（本机名字、系统、中心隧道）与已连上的电脑（名字、系统、连法、在线状态）、连到中心、邀请、添加、改名、移除；
+// 设置 → 登录与安全里的“公网入口”也在这里（没开时收起）。
 // 这些都是入口自己的接口（不转发），一律走 client.ts 里入口本机的那几个函数；改完让外面重新拉设备清单。
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -17,8 +18,8 @@ import { errorText, nameError, type ErrorLike } from "../format.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
-import { StatusDot, StatusText } from "./DeviceBadges.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
+import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 /** 设置弹窗要的：所有设备（入口本机第一）、本机隧道状态、公网入口状态与仓库路径，改了之后重新拉清单。 */
 export interface DeviceSettings {
@@ -58,7 +59,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
   };
   return (
     <form
-      className="py-2.5"
+      className="px-4 py-2"
       onSubmit={(e) => {
         e.preventDefault();
         void save();
@@ -128,21 +129,18 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
     <div data-testid="device-row">
       <SettingsRow
         label={info.name}
+        icon={<PlatformIcon platform={info.platform} />}
         error={error}
         detail={
           <span className="flex items-center gap-3">
-            <span>{platformLabel(info.platform)}</span>
+            <span className="flex items-center gap-2">
+              <StatusDot status={device.status} />
+              <span>{platformLabel(info.platform)}</span>
+            </span>
             {!info.self && info.transport && info.transport.kind !== "local" && (
               <span>{PEER_TRANSPORT_SPECS[info.transport.kind].label}</span>
             )}
-            {info.self ? (
-              <span>本机</span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <StatusDot status={device.status} />
-                <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />
-              </span>
-            )}
+            {info.self ? <span>本机</span> : <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />}
           </span>
         }
       >
@@ -192,7 +190,7 @@ function InvitePanel() {
     }
   };
   return (
-    <SettingsGroup variant="card" title="邀请别的设备">
+    <SettingsGroup title="邀请别的设备">
       <SettingsRow label="邀请码" error={error}>
         {(id) =>
           invite ? (
@@ -249,7 +247,7 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
         void submit();
       }}
     >
-      <SettingsGroup variant="card" title="添加设备">
+      <SettingsGroup title="添加设备">
         <SettingsRow label="网址">
           {(id) => <Input id={id} value={url} autoComplete="off" spellCheck={false} placeholder="https://…ts.net" className="w-[240px]" onChange={(e) => setUrl(e.target.value)} />}
         </SettingsRow>
@@ -346,7 +344,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
         void submit();
       }}
     >
-      <SettingsGroup variant="card" title="连到中心">
+      <SettingsGroup title="连到中心">
         <SettingsRow
           label="终端命令"
           detail={<code className="block break-all font-mono text-[13.5px] select-all">{command}</code>}
@@ -387,8 +385,8 @@ const DEFAULT_PUBLIC_ENTRY: PublicEntryStatus = {
   funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
 };
 
-/** 公网入口开关与 Tailscale Funnel 命令向导（docs/mac-app-and-mobile-design.md 第 2.2 节）。 */
-function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEntryStatus; onChanged: () => void }) {
+/** 公网入口开关与 Tailscale Funnel 命令向导（docs/mac-app-and-mobile-design.md 第 2.2 节）：没开、也没填过域名时收起成一行。 */
+export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEntryStatus; onChanged: () => void }) {
   const initial = publicEntry ?? DEFAULT_PUBLIC_ENTRY;
   const [entry, setEntry] = useState<PublicEntryStatus>(initial);
   const [hostname, setHostname] = useState(initial.hostname ?? "");
@@ -435,7 +433,7 @@ function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEn
   };
 
   return (
-    <SettingsGroup title="公网入口" label="公网入口">
+    <CollapsibleGroup title="公网入口" summary={entry.enabled ? "On" : "Off"} defaultOpen={entry.enabled || entry.hostname !== null}>
       <SettingsRow
         label="公网域名"
         detail={
@@ -480,59 +478,74 @@ function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEn
           )}
         </SettingsRow>
       )}
-    </SettingsGroup>
+    </CollapsibleGroup>
   );
 }
 
-/** 设置弹窗里的“设备”一组，下面按需展开“连到中心”、“邀请”或“添加”，以及“公网入口”分组。 */
-export function DevicesSection({ devices, tunnel, publicEntry, repoDir, onChanged }: DeviceSettings) {
-  const [panel, setPanel] = useState<"tunnel" | "invite" | "add" | null>(null);
-  const toggle = (next: "tunnel" | "invite" | "add") => setPanel((p) => (p === next ? null : next));
-  const actionBtn = "aria-expanded:bg-accent aria-expanded:text-foreground";
+type Panel = "tunnel" | "invite" | "add";
+
+/** 标题右边打开向导的小按钮：打开时 aria-expanded 浅底。 */
+function PanelButton({ panel, current, onToggle, children }: { panel: Panel; current: Panel | null; onToggle: (p: Panel) => void; children: string }) {
+  return (
+    <Button variant="ghost" size="sm" className="aria-expanded:bg-accent aria-expanded:text-foreground" aria-expanded={current === panel} onClick={() => onToggle(panel)}>
+      {children}
+    </Button>
+  );
+}
+
+/** 设置 → 电脑：“你的电脑”（本机、中心隧道，可连到中心）和“已连上的电脑”（别的设备，可邀请、添加），向导在各自组下面展开。 */
+export function ComputersSection({ devices, tunnel, repoDir, onChanged }: Omit<DeviceSettings, "publicEntry">) {
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const toggle = (next: Panel) => setPanel((p) => (p === next ? null : next));
+  const done = () => {
+    setPanel(null);
+    onChanged();
+  };
+  const mine = devices.filter((d) => d.info.self);
+  const others = devices.filter((d) => !d.info.self);
   return (
     <>
       <div className="grid gap-3">
         <SettingsGroup
-          title="设备"
+          title="你的电脑"
           action={
             <span className="-mr-3 flex items-center gap-1">
-              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "tunnel"} onClick={() => toggle("tunnel")}>
+              <PanelButton panel="tunnel" current={panel} onToggle={toggle}>
                 连到中心
-              </Button>
-              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "invite"} onClick={() => toggle("invite")}>
-                邀请
-              </Button>
-              <Button variant="ghost" size="sm" className={actionBtn} aria-expanded={panel === "add"} onClick={() => toggle("add")}>
-                添加
-              </Button>
+              </PanelButton>
             </span>
           }
         >
-          {devices.map((device) => (
+          {mine.map((device) => (
             <DeviceRow key={device.key} device={device} onChanged={onChanged} />
           ))}
           {tunnel !== null && tunnel !== undefined && <TunnelRow tunnel={tunnel} onChanged={onChanged} />}
         </SettingsGroup>
-        {panel === "tunnel" && (
-          <TunnelPanel
-            {...(repoDir !== undefined ? { repoDir } : {})}
-            onConnected={() => {
-              setPanel(null);
-              onChanged();
-            }}
-          />
-        )}
-        {panel === "invite" && <InvitePanel />}
-        {panel === "add" && (
-          <AddPanel
-            onAdded={() => {
-              setPanel(null);
-              onChanged();
-            }}
-          />
-        )}
+        {panel === "tunnel" && <TunnelPanel {...(repoDir !== undefined ? { repoDir } : {})} onConnected={done} />}
       </div>
-      <PublicEntrySection {...(publicEntry !== undefined ? { publicEntry } : {})} onChanged={onChanged} />
+      <div className="grid gap-3">
+        <SettingsGroup
+          title="已连上的电脑"
+          action={
+            <span className="-mr-3 flex items-center gap-1">
+              <PanelButton panel="invite" current={panel} onToggle={toggle}>
+                邀请
+              </PanelButton>
+              <PanelButton panel="add" current={panel} onToggle={toggle}>
+                添加
+              </PanelButton>
+            </span>
+          }
+        >
+          {others.length === 0 ? (
+            <p className="px-4 py-3 text-[15px] text-muted-foreground">还没有别的电脑</p>
+          ) : (
+            others.map((device) => <DeviceRow key={device.key} device={device} onChanged={onChanged} />)
+          )}
+        </SettingsGroup>
+        {panel === "invite" && <InvitePanel />}
+        {panel === "add" && <AddPanel onAdded={done} />}
+      </div>
     </>
   );
 }

@@ -37,7 +37,7 @@ import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from
 import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
-import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 type Load = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase: "ready"; persona: PersonaView };
 
@@ -123,7 +123,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
             {(["改之前", "改之后"] as const).map((label) => (
               <div key={label} className="min-w-0">
                 <div className="mb-1 text-[13.5px] font-medium text-muted-foreground">{label}</div>
-                <pre className="max-h-60 overflow-auto rounded-xl bg-background p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre className="max-h-60 overflow-auto rounded-xl bg-muted p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {label === "改之前" ? change.textBefore : change.textAfter}
                 </pre>
               </div>
@@ -192,7 +192,7 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
   return { draft, error, save, reset };
 }
 
-/** 模型、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后。项目名只在头部，这里不再列。 */
+/** 模型、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后（默认收起）。项目名只在头部，这里不再列。 */
 function PmEditor({
   pm,
   folders,
@@ -302,7 +302,7 @@ function PmEditor({
       </SettingsGroup>
       {folders.length > 0 && (
         <SettingsGroup title="文件夹">
-          <ul aria-label="文件夹" className="divide-y divide-sidebar-active">
+          <ul aria-label="文件夹" className="divide-y divide-border">
             {folders.map((f) => (
               <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -344,7 +344,8 @@ function PmEditor({
           </div>
         )}
       </SettingsGroup>
-      <SettingsGroup title="修改记录">
+      {/* 修改记录会越攒越多：默认收起，标题行带条数，点开才列出来 */}
+      <CollapsibleGroup title="修改记录" summary={`${persona.changes.length} 条`}>
         {revertError && (
           <div className="px-4 py-2.5">
             <RowError error={revertError} />
@@ -353,7 +354,7 @@ function PmEditor({
         {persona.changes.length === 0 ? (
           <p className="px-4 py-3 text-[15px] text-muted-foreground">还没有修改</p>
         ) : (
-          <ul aria-label="修改记录" className="divide-y divide-sidebar-active">
+          <ul aria-label="修改记录" className="divide-y divide-border">
             {persona.changes.map((change) => (
               <ChangeRow
                 key={change.id}
@@ -365,7 +366,7 @@ function PmEditor({
             ))}
           </ul>
         )}
-      </SettingsGroup>
+      </CollapsibleGroup>
     </>
   );
 }

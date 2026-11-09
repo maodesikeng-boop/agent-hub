@@ -39,7 +39,7 @@ export function ModeRows({
       onValueChange={(v) => onChange(v as PmMode)}
       disabled={disabled}
       aria-label={label}
-      className="divide-y divide-sidebar-active"
+      className="divide-y divide-border"
     >
       {PM_MODES.map((mode) => {
         const id = `${prefix}-${mode}`;
