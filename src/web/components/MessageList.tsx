@@ -142,7 +142,7 @@ export function MessageList({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="messages min-h-0 flex-1 overflow-y-auto" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
+      <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="消息" onScroll={onScroll}>
         <div className="flex min-h-full flex-col pt-4 pb-6" ref={contentRef}>
           {hasMore && (
             <button

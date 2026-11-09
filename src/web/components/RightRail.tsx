@@ -311,7 +311,7 @@ export function RightRail({
       aria-label="右栏"
       className={cn("flex shrink-0 flex-col bg-background", side ? "w-[320px] border-l border-border" : "max-h-[40dvh] border-b border-border")}
     >
-      <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-y-auto px-5", side ? "pb-4" : "py-1")}>
+      <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
           <section aria-labelledby="rail-asks" className="py-3">
             <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot trailing={side ? toggle : undefined}>

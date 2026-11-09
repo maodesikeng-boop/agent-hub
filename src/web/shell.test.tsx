@@ -364,3 +364,46 @@ describe("Mac 原生桌面应用适配（docs/ui-standard.md 第 16 条）", () 
     expect(postWindowDrag).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () => {
+  const css = readFileSync("src/web/styles.css", "utf8");
+  const body = (selector: string) => css.match(new RegExp(`(?:^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const value = (block: string, prop: string) => block.match(new RegExp(`${prop}:\\s*([^;]+);`))?.[1]?.replace(/\s+/g, " ").trim();
+
+  it("styles.css 锁定外层 html, body, #root 不随手势整页晃动，且 .messages 锁死横向溢出与纵向滚动链", () => {
+    const rootBlock = body("html,\\s*body,\\s*#root");
+    expect(value(rootBlock, "width")).toBe("100%");
+    expect(value(rootBlock, "overflow")).toBe("hidden");
+    expect(value(rootBlock, "overscroll-behavior")).toBe("none");
+
+    const messagesBlock = body("\\.messages");
+    expect(value(messagesBlock, "overflow-x")).toBe("hidden");
+    expect(value(messagesBlock, "overscroll-behavior-y")).toBe("contain");
+  });
+
+  it("主滚动区（消息区、左栏、右栏、资料页、弹窗）统一带 overflow-x-hidden 与 overscroll-y-contain", async () => {
+    const user = userEvent.setup();
+    await boot();
+
+    const messageLog = screen.getByRole("log", { name: "消息" });
+    expect(messageLog).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
+
+    const sidebarNav = screen.getByRole("navigation", { name: "对话列表" });
+    expect(sidebarNav).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
+
+    const rightRail = screen.getByRole("complementary", { name: "右栏" });
+    const rightRailScroller = rightRail.firstElementChild as HTMLElement;
+    expect(rightRailScroller).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
+
+    await user.click(screen.getByRole("button", { name: "新建项目经理" }));
+    const dialog = screen.getByRole("dialog", { name: "新建项目经理" });
+    const dialogBody = dialog.querySelector('[data-slot="dialog-body"]') as HTMLElement;
+    expect(dialogBody).toHaveClass("overflow-y-auto", "overflow-x-hidden", "overscroll-y-contain");
+    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+
+    await user.click(screen.getByRole("button", { name: "查看 小林 的资料" }));
+    const profileRegion = screen.getByRole("region", { name: "小林 的资料" });
+    const profileScroller = profileRegion.querySelector(".overflow-y-auto") as HTMLElement;
+    expect(profileScroller).toHaveClass("overflow-x-hidden", "overscroll-y-contain");
+  });
+});

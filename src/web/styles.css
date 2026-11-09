@@ -87,8 +87,11 @@ html[data-macos-app="true"] {
 html,
 body,
 #root {
+  width: 100%;
   height: 100%;
   margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 /* 手机上 vh 包含收起来的地址栏，底部会被挤出屏幕；dvh 跟着实际可见高度走（键盘弹起时配合 viewport 的 interactive-widget=resizes-content） */
 #root {
@@ -116,6 +119,10 @@ code {
   /* 顶栏从刘海下面开始，输入框在底部横条上面（第 19 条） */
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
+}
+.messages {
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
 }
 .messages,
 .chat-column {

@@ -299,7 +299,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 手机装到主屏当 App 用（`display: standalone`，全屏、有刘海和底部横条）。小屏的断点还是第 12、16 条那两档（1100px 以下左栏抽屉，720px 以下右栏到顶栏下面）；这一条补**触屏**的几条硬规则，数字只在 `src/web/styles.css` 和 `src/web/index.html` 一处。
 
-- **视口**：`<meta name="viewport">` 带 `viewport-fit=cover`（内容铺到刘海和横条底下）和 `interactive-widget=resizes-content`（键盘弹起时网页变矮，输入框贴在键盘上面，消息不被盖住）。整页高度用 `100dvh`（`#root`），不用 `100vh`（手机上它包含收起来的地址栏，底部会被挤出屏幕）。
+- **视口**：`<meta name="viewport">` 带 `viewport-fit=cover`（内容铺到刘海和横条底下）和 `interactive-widget=resizes-content`（键盘弹起时网页变矮，输入框贴在键盘上面，消息不被盖住）。整页高度用 `100dvh`（`#root`），不用 `100vh`（手机上它包含收起来的地址栏，底部会被挤出屏幕）。`html, body, #root` 设为 `overflow: hidden; overscroll-behavior: none;` 锁定应用外壳不随手势整页晃动；各内部纵向滚动区（消息区、左栏、右栏、资料页、弹窗）统一带 `overflow-x: hidden` 与 `overscroll-behavior-y: contain`，防止手指纵向滑动时左右晃动或滚动穿透。
 - **安全区**：`:root` 里 `--safe-top` / `--safe-bottom` 取 `env(safe-area-inset-top / bottom, 0px)`，不在组件里直接写 `env()`。
   - 主区 `.chat-main` 上下各垫一份：顶栏（对话、Worker、资料页）从刘海下面开始，输入框在横条上面。
   - 左栏抽屉（`fixed inset-y-0`）上下同样垫：顶上搜索行、底下“我”那一行都不压在刘海和横条上。
