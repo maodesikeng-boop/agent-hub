@@ -33,12 +33,14 @@
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.2.1",
     "jsdom": "^30.1.3",
+    "knip": "^6.44.2",
     "tailwindcss": "^4.3.4",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@fastify/compress": "^9.3.0",
     "@fastify/static": "^10.1.8",
     "@fastify/websocket": "^11.3.6",
     "@radix-ui/react-avatar": "^1.3.1",
@@ -47,10 +49,12 @@
     "@radix-ui/react-popover": "^1.3.1",
     "@radix-ui/react-radio-group": "^1.5.1",
     "@radix-ui/react-slot": "^1.5.0",
+    "@tanstack/react-query": "^5.107.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.17",
     "fastify": "^5.12.7",
+    "lru-cache": "^11.5.3",
     "lucide-react": "^1.66.0",
     "mermaid": "^12.3.0",
     "qrcode-generator": "^2.0.4",
@@ -70,6 +74,8 @@
     "vega-interpreter": "^2.3.2",
     "vega-lite": "^6.5.0",
     "web-push": "^3.6.7",
-    "ws": "^8.22.1"
+    "ws": "^8.22.1",
+    "zod": "^4.6.7",
+    "zustand": "^5.1.0"
   }
 }
