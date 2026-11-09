@@ -22,7 +22,7 @@ interface ReportRow {
 }
 
 /** 汇报原文：去掉交给项目经理时加的开头。 */
-export function reportBody(worker: Pick<WorkerDbRow, "id" | "title">, text: string): string {
+function reportBody(worker: Pick<WorkerDbRow, "id" | "title">, text: string): string {
   const head = `${workerReportHeader(worker.id, worker.title)}\n\n`;
   return text.startsWith(head) ? text.slice(head.length) : text;
 }

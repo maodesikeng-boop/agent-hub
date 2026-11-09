@@ -39,7 +39,7 @@ export function exitFailureReason(event: SessionExitedEvent): string {
  *   项目经理重启后照样收到，不用等用户提醒。
  * 用户自己发的照 M2 标已停止，用户自己再发。
  */
-export function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbRow, "sender">): boolean {
+function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbRow, "sender">): boolean {
   return session.role === "worker" || message.sender === "system";
 }
 

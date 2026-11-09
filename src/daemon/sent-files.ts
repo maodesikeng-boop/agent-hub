@@ -58,7 +58,7 @@ import { resolveUpload, sanitizeFileName } from "./uploads.ts";
  */
 export const SENSITIVE_HOME_PATHS: readonly string[] = [...CREDENTIAL_HOME_PATHS, ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].dirs)];
 /** 同上，系统里的（macOS 上 /etc 是 /private/etc 的符号链接，两个都写；/proc 里有进程的环境变量，只有 Linux 有）。 */
-export const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db", "/proc"];
+const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db", "/proc"];
 
 /** 一个会话能分享哪些文件。路径都可以没 realpath 过，比对前统一 realpath。 */
 export interface ShareScope {
@@ -75,8 +75,6 @@ export interface ShareScope {
   dataExceptions: string[];
 }
 
-export { SENT_FILE_COPY_CHUNK_BYTES };
-export const COPY_CHUNK_BYTES = SENT_FILE_COPY_CHUNK_BYTES;
 /** 拷了一半的副本先放在这种名字的目录里，拷完改名成编号；守护进程启动时清掉残留的（prepareSentFilesDir）。 */
 const PARTIAL_PREFIX = ".partial-";
 
@@ -173,7 +171,7 @@ export function copyFromFd(fd: number, stat: Stats, dest: string): { bytes: numb
   const hash = createHash("sha256");
   let position = 0;
   try {
-    const buffer = Buffer.allocUnsafe(Math.min(COPY_CHUNK_BYTES, Math.max(1, stat.size)));
+    const buffer = Buffer.allocUnsafe(Math.min(SENT_FILE_COPY_CHUNK_BYTES, Math.max(1, stat.size)));
     while (position < stat.size) {
       const n = readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - position), position);
       if (n === 0) break;

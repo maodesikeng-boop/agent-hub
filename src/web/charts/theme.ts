@@ -4,8 +4,8 @@ import { CHART_CATEGORY_COLORS } from "../lib/palette.ts";
 import type { ChartTheme } from "./registry.ts";
 
 /** 图里的字、坐标轴标签 px（ui-standard 第 15 条）。 */
-export const CHART_FONT_SIZE = 13.5;
-export const CHART_AXIS_FONT_SIZE = 12;
+const CHART_FONT_SIZE = 13.5;
+const CHART_AXIS_FONT_SIZE = 12;
 
 export function chartTheme(): ChartTheme {
   const style = getComputedStyle(document.documentElement);

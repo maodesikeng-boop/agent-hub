@@ -25,7 +25,7 @@ import type { ActionDbRow } from "./queue.ts";
 
 export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed">;
 
-export interface ActionExecutorOptions {
+interface ActionExecutorOptions {
   now?: () => number;
   /** 没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。默认 ACTION_POLL_INTERVAL_MS。 */
   pollIntervalMs?: number;

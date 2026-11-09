@@ -32,9 +32,9 @@ export interface SleepInhibitProcess {
   onExit?: (listener: () => void) => void;
 }
 
-export type SpawnSleepInhibitor = (command: string, args: string[]) => SleepInhibitProcess;
+type SpawnSleepInhibitor = (command: string, args: string[]) => SleepInhibitProcess;
 
-export const defaultSpawnSleepInhibitor: SpawnSleepInhibitor = (command, args) => {
+const defaultSpawnSleepInhibitor: SpawnSleepInhibitor = (command, args) => {
   const child = spawn(command, args, { stdio: "ignore" });
   child.unref();
   child.on("error", () => {});

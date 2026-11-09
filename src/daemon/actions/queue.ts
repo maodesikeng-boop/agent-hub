@@ -50,7 +50,7 @@ ON CONFLICT (type, dedupe_key) DO UPDATE SET
   updated_at      = excluded.updated_at
 RETURNING *`;
 
-export interface EnqueueResult {
+interface EnqueueResult {
   row: AnyActionRow;
   /** 新的一行，或者已结束的一行被重置成 pending；只更新了参数时是 false。 */
   enqueued: boolean;
@@ -74,7 +74,7 @@ export function listActions(db: Db): AnyActionRow[] {
   return db.all<ActionDbRow>("SELECT * FROM actions ORDER BY id").map(toActionRow);
 }
 
-export interface ActionStatusPatch {
+interface ActionStatusPatch {
   status: ActionStatus;
   attempts?: number;
   nextAttemptAt?: number;

@@ -34,7 +34,7 @@ export const WORKER_REPORT_FORMAT = `${REPORT_START}
 问题: <要项目经理回答什么、要问用户什么，或者建议改哪个记忆文件>
 ${REPORT_END}`;
 
-export interface WorkerReport {
+interface WorkerReport {
   status: WorkerReportStatus;
   summary: string;
   /** 写“无”是 null。 */

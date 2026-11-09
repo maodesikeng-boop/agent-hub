@@ -9,13 +9,11 @@ import { createAgyDriver } from "../driver/agy-driver.ts";
 import { createClaudeDriver } from "../driver/claude-driver.ts";
 import { createCodexDriver } from "../driver/codex-driver.ts";
 import { queryClaudeInitialize, type VendorCatalogSource } from "../driver/model-catalog.ts";
-import { agyCatalogProbe, agyComposerBase, createAgyCatalogSource, createAgyComposer, parseAgyCommands, queryAgySkills, type AgyComposerOptions } from "./agy.ts";
+import { agyCatalogProbe, agyComposerBase, createAgyCatalogSource, createAgyComposer, type AgyComposerOptions } from "./agy.ts";
 import { claudeCatalogProbe, createClaudeCatalogSource } from "./claude-catalog.ts";
 import {
   claudeComposerBase,
   createClaudeComposer,
-  createSpecComposerBase,
-  parseClaudeCommands,
   type ClaudeComposerOptions,
 } from "./claude.ts";
 import {
@@ -23,25 +21,12 @@ import {
   codexComposerBase,
   createCodexCatalogSource,
   createCodexComposer,
-  parseCodexCommands,
-  queryCodexSkills,
-  rewriteCodexSkillCommand,
   type CodexComposerOptions,
 } from "./codex.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
 
-export type { CommandsTarget, VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
-export { claudeComposerBase, createClaudeComposer, createSpecComposerBase, parseClaudeCommands, type ClaudeComposerOptions } from "./claude.ts";
-export { agyComposerBase, createAgyComposer, parseAgyCommands, queryAgySkills, type AgyComposerOptions, type AgySkillsQueryOptions } from "./agy.ts";
-export {
-  codexComposerBase,
-  createCodexComposer,
-  parseCodexCommands,
-  queryCodexSkills,
-  rewriteCodexSkillCommand,
-  type CodexComposerOptions,
-  type CodexSkillsQueryOptions,
-} from "./codex.ts";
+export type { VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
+export { claudeComposerBase } from "./claude.ts";
 
 export interface VendorDriverDeps extends Omit<DriverOptions, "claudePath"> {
   claudePath?: string;
@@ -49,7 +34,7 @@ export interface VendorDriverDeps extends Omit<DriverOptions, "claudePath"> {
   defaultModel?: () => Promise<string | null>;
 }
 
-export interface VendorComposerDeps {
+interface VendorComposerDeps {
   executablePath: string;
   env?: Record<string, string | undefined>;
   timeoutMs?: number;

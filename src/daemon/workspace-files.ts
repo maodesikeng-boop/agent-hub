@@ -29,7 +29,7 @@ export interface FileList {
 }
 
 /** 搜到的一个文件。 */
-export interface FileMatch {
+interface FileMatch {
   root: string;
   /** 相对 root 的路径。 */
   path: string;
@@ -169,7 +169,7 @@ export function fileScore(path: string, query: string): number | null {
 }
 
 /** 搜索词：截到 MAX_FILE_QUERY_CHARS、去首尾空白、小写。 */
-export function normalizeFileQuery(query: string): string {
+function normalizeFileQuery(query: string): string {
   return [...query].slice(0, MAX_FILE_QUERY_CHARS).join("").trim().toLowerCase();
 }
 

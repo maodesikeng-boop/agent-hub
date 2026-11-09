@@ -8,9 +8,9 @@ import { HUB_COMMAND } from "../../shared/names.ts";
 const BIN_DIR_MODE = 0o700;
 const SHIM_MODE = 0o700;
 
-export const DEFAULT_HUB_MAIN = fileURLToPath(new URL("../../hub/main.ts", import.meta.url));
+const DEFAULT_HUB_MAIN = fileURLToPath(new URL("../../hub/main.ts", import.meta.url));
 
-export interface HubShimOptions {
+interface HubShimOptions {
   /** run/bin/。 */
   binDir: string;
   /** 默认是跑守护进程的这个 Node。 */
@@ -24,7 +24,7 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function hubShimContent(nodePath: string, mainScript: string): string {
+function hubShimContent(nodePath: string, mainScript: string): string {
   return `#!/bin/sh\nexec ${shellQuote(nodePath)} ${shellQuote(mainScript)} "$@"\n`;
 }
 

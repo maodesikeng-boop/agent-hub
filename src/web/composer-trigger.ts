@@ -4,7 +4,7 @@
 
 import type { ComposerCommand } from "../shared/index.ts";
 
-export type ComposerTriggerKind = "command" | "file";
+type ComposerTriggerKind = "command" | "file";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;

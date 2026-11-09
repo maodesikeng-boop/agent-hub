@@ -10,7 +10,7 @@ import { HUB_CALL_FIELD_MAX_BYTES, MAX_PATH_BYTES } from "../../shared/limits.ts
 import { PRODUCT_NAME } from "../../shared/names.ts";
 
 /** 开头的 `~` 或 `~/` 换成 userHome；`~别人` 不展开。 */
-export function expandHome(path: string, userHome: string): string {
+function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
   return path;

@@ -1,6 +1,5 @@
 // 从 HubState 算出界面要用的东西。提醒规则（等你、等你确定）在 shared/reminders.ts，和守护进程的推送共用，这里转出去。
 export {
-  isQuietMessage,
   pendingAsks,
   runningWorkerCount,
   sessionOf,
@@ -142,7 +141,7 @@ export function isWaitingForQuota(session: SessionState | null, now: number = Da
 }
 
 /** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
-export const QUOTA_WARNING_PERCENT = 80;
+const QUOTA_WARNING_PERCENT = 80;
 
 /** 有额度数据的厂商（shared/vendors.ts 的 VendorSpec.quota）；加厂商只在那里写。 */
 const QUOTA_VENDORS = AGENT_VENDORS.flatMap((id) => {

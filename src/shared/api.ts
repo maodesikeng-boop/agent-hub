@@ -400,7 +400,7 @@ export type Change = {
 }[ChangeType];
 
 /** since 太旧补不齐（或比当前还大，比如守护进程重启过）时推它，网页重新拉 /api/state。 */
-export interface ResyncMessage {
+interface ResyncMessage {
   type: "resync";
 }
 
@@ -530,32 +530,10 @@ export interface PeerDevice {
   transport?: RemotePeerTransportKind;
 }
 
-/** POST /api/peer/pair：已有设备带着自己的身份、邀请码，和发给新设备用的设备令牌（32 字节随机，base64url）。 */
-export interface PeerPairRequest {
-  inviteCode: string;
-  device: PeerDevice;
-  token: string;
-}
-
 /** 新设备回自己的身份和发给对方用的设备令牌。双方都只存对方令牌的 sha256。 */
 export interface PeerPairResponse {
   device: PeerDevice;
   token: string;
-}
-
-/** PUT /api/peer/devices：发送方已配对的全部设备（含它自己）。 */
-export interface PeerDeviceListRequest {
-  devices: PeerDevice[];
-}
-
-/** POST /api/peer/invites：邀请码给哪台用。 */
-export interface PeerInviteRequest {
-  deviceId: DeviceId;
-}
-
-/** POST /api/peer/introductions：请对方把本机介绍给它已配对的 deviceId。 */
-export interface PeerIntroductionRequest {
-  deviceId: DeviceId;
 }
 
 /** 那台是谁（对方记的）和它给的邀请码（10 分钟、一次性），请求方拿去那台 POST /api/peer/pair。 */

@@ -3,7 +3,7 @@
 //
 // 键：入口本机是 LOCAL_DEVICE（""，不是合法的 UUID，不会和真设备撞）；别的设备是它的 DeviceId。
 // 只有一台（入口本机）时界面和没有联机时一模一样：所有“按设备”的显示都看 devices.length > 1。
-import { devicePath, type ConversationId, type DeviceId, type DeviceInfo } from "../shared/index.ts";
+import type { ConversationId, DeviceId, DeviceInfo } from "../shared/index.ts";
 import { formatAgo } from "./format.ts";
 import type { HubState } from "./state.ts";
 
@@ -33,11 +33,6 @@ export interface DeviceView {
   status: DeviceStatus;
   /** 最后一次连着的时间（毫秒）；从没连上过是 null。 */
   lastOnlineAt: number | null;
-}
-
-/** 一台设备的接口前缀：入口本机是 ""，别的是 /d/<设备编号>。 */
-export function deviceBase(key: DeviceKey): string {
-  return devicePath(key === LOCAL_DEVICE ? null : key, "");
 }
 
 /** 网址里的设备（undefined = 入口本机；写的是入口自己的编号也算本机）→ 表里的键。 */
@@ -75,7 +70,7 @@ export function isReadOnly(status: DeviceStatus): boolean {
 }
 
 /** 能发消息：只有连着的时候（重连中能打字，发送等连上）。 */
-export function canSend(status: DeviceStatus): boolean {
+function canSend(status: DeviceStatus): boolean {
   return status === "online";
 }
 

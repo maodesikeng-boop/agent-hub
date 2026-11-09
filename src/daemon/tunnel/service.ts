@@ -12,7 +12,7 @@ import { TunnelInputError, keyFingerprint, loadTunnelTable, removeSlot, saveTunn
 
 export { TunnelInputError };
 
-export interface TunnelServicePaths {
+interface TunnelServicePaths {
   tableFile: string;
   keyFile: string;
   knownHostsFile: string;
@@ -37,7 +37,7 @@ export interface TunnelServiceOptions {
   startSupervisor?: (args: readonly string[]) => TunnelSupervisor;
 }
 
-export interface TunnelSlotGrant {
+interface TunnelSlotGrant {
   port: number;
   entryPort: number;
   invite: string;

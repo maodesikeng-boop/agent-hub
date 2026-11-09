@@ -24,8 +24,8 @@ export const TURN_MS = 180_000;
 export { sleep, waitUntil };
 
 /** 转发脚本记下的 claude 输出放在 <数据目录>/streams/，文件名是会话 ID 的哈希（不让会话 ID 出现在 tee 的命令行里，查进程时认不错）。 */
-export const STREAMS_DIR = "streams";
-export const streamFileName = (vendorSessionId: string): string => `${createHash("sha1").update(vendorSessionId).digest("hex").slice(0, 16)}.jsonl`;
+const STREAMS_DIR = "streams";
+const streamFileName = (vendorSessionId: string): string => `${createHash("sha1").update(vendorSessionId).digest("hex").slice(0, 16)}.jsonl`;
 
 /**
  * 冒烟用的 claude 转发脚本（exec，进程号不变）：
@@ -364,5 +364,3 @@ export function expect(cond: unknown, message: string): asserts cond {
 export function looksLikeList(text: string): boolean {
   return text.split("\n").filter((l) => /^\s*([-*•]|\d+[.、)])\s+\S/.test(l)).length >= 2;
 }
-
-export type { StateSnapshot };

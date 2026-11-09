@@ -15,7 +15,7 @@ import {
 
 export { DriverSessionError } from "../../shared/index.ts";
 
-export interface MultiVendorDriverOptions {
+interface MultiVendorDriverOptions {
   store: SessionStore;
   drivers: Partial<Record<AgentVendor, Driver>>;
 }

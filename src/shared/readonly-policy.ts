@@ -45,13 +45,13 @@ export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
  *   只有 messages 的工具记录（text、meta）里留着别的守护进程（测试用）打印的登录链接 ?token=…，已经作废，不算。
  * 以后要在库里存令牌：先挪到 state/ 下单独的文件，再把文件名加到这里，别让只读 Worker 读到整库。
  */
-export const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token"];
+const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token"];
 
 /** 默认禁读的通配。 */
 export const READONLY_SECRET_GLOBS: readonly string[] = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*"];
 
 /** 连接器的手动补充/排除默认是空：标了 readOnlyHint 的自动放行，没标或标错的才往这里加一行（以后可以做成设置页）。 */
-export const READONLY_CONNECTORS: Readonly<ReadonlyPolicy["connectors"]> = { extraAllow: [], deny: [] };
+const READONLY_CONNECTORS: Readonly<ReadonlyPolicy["connectors"]> = { extraAllow: [], deny: [] };
 
 export interface ReadonlyPolicyInput {
   /** 用户主目录（realpath 过）。 */

@@ -6,7 +6,7 @@ import { MODE_OPTION_DETAILS } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 
 /** 多选一的标记（docs/ui-standard.md 第 9 条）：20px 的圆，没选中是灰边空心，选中是主色实心里一个白色粗勾。 */
-export function RadioMark({ checked }: { checked: boolean }) {
+function RadioMark({ checked }: { checked: boolean }) {
   return (
     <span
       aria-hidden="true"

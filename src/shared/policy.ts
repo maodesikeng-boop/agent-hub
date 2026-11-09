@@ -7,7 +7,7 @@ import { HUB_COMMAND } from "./names.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
 
 /** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
-export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
+const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
 
 /**
  * 默认档（用户 11-03 定的）：auto，分类器替人审每一步，项目经理和 Worker 一样。不加拒绝规则（11-04 起提示词里也不写死“先问用户”清单，由 agent 按项目的 AGENTS.md 判断）。
@@ -15,7 +15,7 @@ export const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
  */
 export const DEFAULT_PERMISSION_MODE = "auto";
 /** 取代 dontAsk 的只读档（default + 驱动接 can_use_tool）在 claude-readonly-settings.ts 的 CLAUDE_READONLY_PERMISSION_MODE。 */
-export type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof CLAUDE_READONLY_PERMISSION_MODE;
+type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof CLAUDE_READONLY_PERMISSION_MODE;
 
 /**
  * 系统数据目录 state/（数据库、令牌、性格设定）的 Edit 拒绝规则：Worker 都带上，是可写范围（write-scope.ts）的兜底——
@@ -37,7 +37,7 @@ export const WORKER_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_DISABL
 export type SessionRole = Extract<AgentRole, "pm" | "worker">;
 
 /** 只读 Worker 的 claude 翻译要的东西（claude-readonly-settings.ts）：统一策略，加这个会话工作目录和 add-dir 的真实路径（沙箱 denyWrite 盖住它们）。 */
-export interface SessionReadonlyInput {
+interface SessionReadonlyInput {
   policy: ReadonlyPolicy;
   denyWrite: string[];
 }

@@ -32,7 +32,7 @@ export interface McpListedTool {
 }
 
 /** 探测进程怎么起：命令已经包好外层只读沙箱、env 是 Worker 那份；cleanup 在进程结束后调（删私有临时目录）。 */
-export interface McpProbeLaunch {
+interface McpProbeLaunch {
   command: string;
   args: string[];
   env: Record<string, string>;

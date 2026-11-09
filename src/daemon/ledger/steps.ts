@@ -50,7 +50,7 @@ const ARG_KEYS = ["command", "CommandLine", "pattern", "url", "query", "path", "
  * 一次工具调用的一行：和网页状态行同一套文案（shared/step-labels.ts，三家的工具名都认）加最要紧的参数，
  * 比如“Running command: gh pr checks 90 --watch”“Reading a.ts”“Searching files: foo”。
  */
-export function toolLine(name: string, input: unknown): string {
+function toolLine(name: string, input: unknown): string {
   const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
   const label = describeStep(stepOfTool(name, input));
   if (PATH_KEYS.some((key) => typeof args[key] === "string" && oneLine(args[key] as string) !== "")) return label;

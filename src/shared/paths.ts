@@ -178,7 +178,7 @@ export function resolveExecutable(cmd: string, envPath: string | undefined, fall
 }
 
 /** 找厂商可执行文件在磁盘上的实际路径（供 stat 指纹检查安装/升级变化），找不到返回 null。 */
-export function locateExecutableFile(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
+function locateExecutableFile(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
   if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
   if (envPath) {
     for (const dir of envPath.split(delimiter)) {

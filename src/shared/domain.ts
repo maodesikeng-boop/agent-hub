@@ -13,9 +13,8 @@ export type MessageId = number;
 export type SessionId = number;
 export type ActionId = number;
 export type ProjectId = number;
-export type ProjectFolderId = number;
+type ProjectFolderId = number;
 export type PersonaChangeId = number;
-export type HubCallId = number;
 export type WorkerId = number;
 
 export type Unsubscribe = () => void;
@@ -59,7 +58,7 @@ export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
  * 账本只按这张表改状态；不合法的转换（包括同状态）一律忽略，不报错——
  * 比如重启后重发一条 processing 的消息，驱动层再出 message.delivered，它仍然是 processing。
  */
-export const MESSAGE_STATUS_TRANSITIONS: Readonly<Record<MessageStatus, readonly MessageStatus[]>> = {
+const MESSAGE_STATUS_TRANSITIONS: Readonly<Record<MessageStatus, readonly MessageStatus[]>> = {
   queued: ["delivered", "failed", "stopped", "cancelled"],
   delivered: ["processing", "stopped", "failed", "cancelled", "queued"],
   processing: ["replied", "stopped", "failed"],
@@ -94,11 +93,11 @@ export const MESSAGE_KINDS = ["text", "tool", "worker"] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 export const WORKER_MESSAGE_KIND = "worker" satisfies MessageKind;
 
-export const AGENT_ROLES = ["assistant", "pm", "worker"] as const;
+const AGENT_ROLES = ["assistant", "pm", "worker"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
 /** 空闲 / 运行中 / 已结束 / 坏了。 */
-export const SESSION_STATUSES = ["idle", "running", "ended", "broken"] as const;
+const SESSION_STATUSES = ["idle", "running", "ended", "broken"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 /**
@@ -114,12 +113,6 @@ export const DEFAULT_PM_MODE: PmMode = "manage_only";
 export const PM_MODE_LABELS: Readonly<Record<PmMode, string>> = {
   manage_only: "只管理",
   hands_on: "自己也干活",
-};
-
-/** 单选下面的一句说明。 */
-export const PM_MODE_DESCRIPTIONS: Readonly<Record<PmMode, string>> = {
-  manage_only: "推荐用于复杂项目：只讨论、拆任务，要动手先问你",
-  hands_on: "适合不复杂的项目：自己直接在项目文件夹里改",
 };
 
 /**
@@ -286,27 +279,6 @@ export interface PersonaChange {
   createdAt: number;
 }
 
-/**
- * 一次 hub 调用的记录（m2-plan 第 7 节第 9 条）。令牌不对、参数校验没过的请求到不了账本，不记。
- * 成功的和业务改动在同一个事务里写；失败的在回滚之后另起一个事务写。
- * 这里只是审计用的摘要：args 里每个字符串字段、以及 result，超过 HUB_CALL_FIELD_MAX_BYTES 就截断
- * （按 UTF-8 字节截在字符边界上，末尾加“…（截断，原长 N 字节）”）。性格设定的完整正文以 persona_changes 为准。
- */
-export interface HubCall {
-  id: HubCallId;
-  sessionId: SessionId;
-  /** HubCommand，如 "project.create"。 */
-  command: string;
-  /** 请求体参数（JSON）。 */
-  args: Record<string, unknown>;
-  ok: boolean;
-  /** 失败时的 LedgerErrorCode；成功是 null。 */
-  errorCode: string | null;
-  /** 成功时是返回的 text，失败时是 message。 */
-  result: string;
-  createdAt: number;
-}
-
 export interface Message {
   /** 自增，单调递增；“更早的消息”用它翻页。 */
   id: MessageId;
@@ -406,7 +378,6 @@ export const SYSTEM_EVENTS = [
   "handover.failed",
   "context.compacted",
 ] as const;
-export type SystemEvent = (typeof SYSTEM_EVENTS)[number];
 
 /**
  * 系统消息的 meta（sender 是 system、kind 是 text）。都发在项目经理的那个对话里，只给人看（status null，文字不带前缀）：
@@ -754,9 +725,8 @@ export interface AgentStepInput {
   SearchPath?: string;
 }
 
-export const RATE_LIMIT_ALLOWED = "allowed";
 /** 额度用完了。Claude 的 status 有 "allowed"、"allowed_warning"（快到了，照常干活）、"rejected"。 */
-export const RATE_LIMIT_REJECTED = "rejected";
+const RATE_LIMIT_REJECTED = "rejected";
 
 /**
  * 额度是不是用完了：只有 rejected 算。发消息的处理函数（等额度）和网页（状态行显示“等额度”）都用它，

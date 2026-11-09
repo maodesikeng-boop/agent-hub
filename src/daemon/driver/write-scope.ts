@@ -53,7 +53,7 @@ export interface WriteScopeEnforcer {
 
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 export const BWRAP = "bwrap";
-export const BWRAP_PROBE_TIMEOUT_MS = 3_000;
+const BWRAP_PROBE_TIMEOUT_MS = 3_000;
 
 /** OS 沙箱起不来时拒绝派 Worker / 起 Worker 进程的统一中文报错（含修复命令）。 */
 export const WORKER_NEEDS_OS_SANDBOX_MESSAGE =
@@ -171,7 +171,7 @@ const SEATBELT_DEVICE_WRITES =
   '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))';
 
 /** 路径里带 * 的（单层任意后缀/文件名，* 不跨 /）转成 sandbox-exec 的正则：^<路径>$，* → [^/]*。 */
-export function writableFileGlobRegex(glob: string): string {
+function writableFileGlobRegex(glob: string): string {
   return `^${glob.split("*").map(escapeRegexChar).join("[^/]*")}$`;
 }
 
@@ -386,7 +386,7 @@ export function readonlyBwrapArgs(
 export const SECRET_SCAN_MAX_ENTRIES = 20_000;
 export const SECRET_SCAN_MAX_MS = 200;
 export const SECRET_SCAN_MAX_MATCHES = 500;
-export const SECRET_SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([".git", "node_modules"]);
+const SECRET_SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([".git", "node_modules"]);
 
 export interface SecretScanLimits {
   maxEntries?: number;
@@ -553,11 +553,6 @@ export function wrapInReadonlyOsSandbox(
   return { ...backend.wrapReadonly(base, input, options), osSandboxed: true };
 }
 
-/** 兼容导出：等同于 wrapInOsSandbox。 */
-export const wrapInSeatbelt = wrapInOsSandbox;
-/** 兼容导出：等同于 wrapInReadonlyOsSandbox。 */
-export const wrapInReadonlySeatbelt = wrapInReadonlyOsSandbox;
-
 function osSandboxEnforcer(fallback: string, ownSandboxOffArgs: readonly string[] = []): WriteScopeEnforcer {
   return {
     spawnCommand: (base, scope, platform, options) => wrapInOsSandbox(base, scope, platform, { ...options, ownSandboxOffArgs }),
@@ -567,7 +562,7 @@ function osSandboxEnforcer(fallback: string, ownSandboxOffArgs: readonly string[
 }
 
 /** agy 关掉自带终端沙箱的参数。 */
-export const AGY_SANDBOX_OFF_ARGS: readonly string[] = ["--settings", JSON.stringify({ enableTerminalSandbox: false })];
+const AGY_SANDBOX_OFF_ARGS: readonly string[] = ["--settings", JSON.stringify({ enableTerminalSandbox: false })];
 
 export const WRITE_SCOPE_ENFORCERS: Readonly<Record<AgentVendor, WriteScopeEnforcer>> = {
   claude: osSandboxEnforcer("只剩设置文件里 state/ 的 Edit 拒绝规则（管编辑工具，管不住 shell）"),

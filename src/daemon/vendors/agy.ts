@@ -23,10 +23,8 @@ import {
 import { createSpecComposerBase } from "./claude.ts";
 import type { CommandsTarget, VendorCatalogProbe, VendorCatalogSourceOptions, VendorComposer, VendorComposerBase } from "./types.ts";
 
-export { queryAgySkills, type AgyModelQueryOptions as AgySkillsQueryOptions };
-
 /** agy 常用内置可用斜杠命令（非隐藏命令）。 */
-export const AGY_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
+const AGY_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
 

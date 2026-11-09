@@ -70,7 +70,7 @@ export function attachmentsOf(message: { meta: Record<string, unknown> | null })
 }
 
 /** 加在正文后面的说明。 */
-export const ATTACHMENTS_HEADING = "用户随消息附了下面的文件，完整路径如下，用读文件的工具按路径读取：";
+const ATTACHMENTS_HEADING = "用户随消息附了下面的文件，完整路径如下，用读文件的工具按路径读取：";
 
 /** 路径括在反引号里，划清边界；路径里自己有反引号时，外面的比里面最长的一串多一个（和 Markdown 行内代码一样）。 */
 function quotePath(path: string): string {

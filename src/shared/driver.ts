@@ -1,13 +1,13 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
 import type { ComposerCommand } from "./api.ts";
-import type { AgentSessionRow, AgentStep, AgentStepInput, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
+import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
 import { HUB_COMMAND } from "./names.ts";
 import { VENDOR_NOT_FOUND_CODES } from "./vendors.ts";
 
-export type { AgentStep, AgentStepInput } from "./domain.ts";
+export type { AgentStep } from "./domain.ts";
 
 export type MessageSource = "user" | "system";
 
@@ -95,7 +95,7 @@ export const CRASH_RECOVERY_NOTE = "【系统】你的进程上一轮意外退�
  * - 其他事件 uuid 可有可无，账本不靠它去重，靠消息状态只按 MESSAGE_STATUS_TRANSITIONS 走来保证重复无害。
  * `at` 是驱动层收到它的毫秒时间。
  */
-export interface DriverEventBase {
+interface DriverEventBase {
   uuid?: string;
   at: number;
 }
@@ -110,7 +110,7 @@ export interface DriverEventBase {
  * agent 的命令列表变了（claude 的 system/commands_changed，带完整名单）：已经换成通用形状，没去掉隐藏的。
  * 账本不管它；命令列表的缓存（daemon/commands-catalog.ts）用它更新。
  */
-export interface CommandsChangedEvent extends DriverEventBase {
+interface CommandsChangedEvent extends DriverEventBase {
   type: "commands.changed";
   commands: ComposerCommand[];
 }
@@ -119,7 +119,7 @@ export interface CommandsChangedEvent extends DriverEventBase {
  * 会话里的后台任务个数变了（claude 的 system/background_tasks_changed，count 是现在还在跑的个数）。
  * 只有 claude 有这个信号，别家不出这个事件。账本记在内存里，hub worker show 显示；不入库、不推给网页。
  */
-export interface BackgroundChangedEvent extends DriverEventBase {
+interface BackgroundChangedEvent extends DriverEventBase {
   type: "background.changed";
   count: number;
 }
@@ -128,7 +128,7 @@ export interface BackgroundChangedEvent extends DriverEventBase {
  * 上下文压缩完了（claude 的 system/compact_boundary：用户发了 /compact，或者 claude 自动压缩）。
  * 账本在对话里记一条“已压缩上下文”的系统消息；这一轮照常以 turn.ended 结束（/compact 没有文字回复）。
  */
-export interface ContextCompactedEvent extends DriverEventBase {
+interface ContextCompactedEvent extends DriverEventBase {
   type: "context.compacted";
   uuid: string;
   /** manual：用户发的 /compact；auto：claude 自己压缩的；认不出是 null。 */
@@ -146,7 +146,7 @@ export interface SessionStartedEvent extends DriverEventBase {
 }
 
 /** 写进标准输入成功（codex：turn/start、turn/steer 收下了）→ 已送达。 */
-export interface MessageDeliveredEvent extends DriverEventBase {
+interface MessageDeliveredEvent extends DriverEventBase {
   type: "message.delivered";
   messageIds: MessageId[];
   /** 会话正忙时在这一轮中途交给 agent 的（不是开一轮的那条）：账本不拿它当“这一轮从这里开始”。 */
@@ -154,7 +154,7 @@ export interface MessageDeliveredEvent extends DriverEventBase {
 }
 
 /** agent 取走了这些消息（claude 的 command_lifecycle started 或回显、codex 的 userMessage、agy 的 user_input）→ 处理中。 */
-export interface MessageProcessingEvent extends DriverEventBase {
+interface MessageProcessingEvent extends DriverEventBase {
   type: "message.processing";
   messageIds: MessageId[];
   /** 这一行前面带着换代后的开场说明（DriverOptions.sessionPreamble）：agent 读到了，账本记下，之后不再给。 */
@@ -165,7 +165,7 @@ export interface MessageProcessingEvent extends DriverEventBase {
  * 已写给 agent、agent 还没取走的消息不会再被处理了 → 已取消（账本 delivered → cancelled，不自动重发）：
  * reason 只有 stop：用户点了停止（三家统一：claude 带 cancel_queued 的打断、codex 的 turn/completed interrupted、agy 打断时进程退出）。
  */
-export interface MessageCancelledEvent extends DriverEventBase {
+interface MessageCancelledEvent extends DriverEventBase {
   type: "message.cancelled";
   messageIds: MessageId[];
   reason: "stop";
@@ -175,7 +175,7 @@ export interface MessageCancelledEvent extends DriverEventBase {
  * 已写给 agent、agent 还没取走的消息被驱动层收回（进程崩溃、关机，或这一轮没读它就结束了且厂商不自己排下一轮）：
  * agent 没看到过，账本放回排队中（delivered → queued）、重新登记 session.send，驱动层下次照常写（不加崩溃说明）。
  */
-export interface MessageRequeuedEvent extends DriverEventBase {
+interface MessageRequeuedEvent extends DriverEventBase {
   type: "message.requeued";
   messageIds: MessageId[];
 }
@@ -184,7 +184,7 @@ export interface MessageRequeuedEvent extends DriverEventBase {
  * claude 自己开了一轮（后台任务完成等，没有我们写的消息触发）：进程里已经有 init 了、手上又没有在途的消息时，这一轮的 init 就是它。
  * 这一轮结束时照常出 turn.ended，messageIds 是空的。
  */
-export interface TurnStartedEvent extends DriverEventBase {
+interface TurnStartedEvent extends DriverEventBase {
   type: "turn.started";
 }
 
@@ -192,7 +192,7 @@ export interface TurnStartedEvent extends DriverEventBase {
  * 子任务（Agent / Task 工具派出去的）里的事件，原始事件的 parent_tool_use_id 照抄过来；主 agent 自己的事件没有这个字段。
  * 账本照常入库，但不拿它改“在做什么”（那是主 agent 的状态）。
  */
-export interface SubtaskField {
+interface SubtaskField {
   parentToolUseId?: string;
 }
 
@@ -232,7 +232,7 @@ export interface AgentToolEvent extends DriverEventBase, SubtaskField {
  * - 否则（ok=false 且不是打断）→ failed，failureReason 取 error。
  * shutdown 的一轮（M3）：Worker 的消息不标，留着重启后接着做（见 ledger/messages.ts 的 applyEvent）。
  */
-export interface TurnEndedEvent extends DriverEventBase {
+interface TurnEndedEvent extends DriverEventBase {
   type: "turn.ended";
   ok: boolean;
   interrupted: boolean;
@@ -244,13 +244,13 @@ export interface TurnEndedEvent extends DriverEventBase {
   error?: { subtype: string; message: string };
 }
 
-export interface RateLimitEvent extends DriverEventBase {
+interface RateLimitEvent extends DriverEventBase {
   type: "rate_limit";
   info: RateLimitInfo;
 }
 
 /** system/api_retry：claude 因为网络出错、服务过载在自己重试。不改消息状态，只让会话状态带上重试信息，下一个正常事件清掉。 */
-export interface ApiRetryEvent extends DriverEventBase {
+interface ApiRetryEvent extends DriverEventBase {
   type: "api_retry";
   info: ApiRetryInfo;
 }
@@ -271,7 +271,7 @@ export function turnFailureReason(error: { subtype: string; message: string }): 
  * - crash：其他意外退出（这一轮没有 result）；
  * - startup_failed：没等到 init 就退出了（或者启动超时被结束）。
  */
-export const SESSION_EXIT_REASONS = ["idle", "interrupt", "shutdown", "crash", "startup_failed"] as const;
+const SESSION_EXIT_REASONS = ["idle", "interrupt", "shutdown", "crash", "startup_failed"] as const;
 export type SessionExitReason = (typeof SESSION_EXIT_REASONS)[number];
 
 /**
@@ -342,7 +342,7 @@ export class DriverSessionError extends DriverError {
  * - bad_output_line、internal_error 等：不带 messageIds，只记 health。
  * 可重试的错误（RETRYABLE_DRIVER_ERRORS）不出这个事件，messageIds 只给 invalid_input 这类用。
  */
-export interface DriverErrorEvent extends DriverEventBase {
+interface DriverErrorEvent extends DriverEventBase {
   type: "driver.error";
   code: DriverErrorCode;
   message: string;
@@ -368,8 +368,6 @@ export type DriverEvent =
   | CommandsChangedEvent
   | BackgroundChangedEvent
   | ContextCompactedEvent;
-
-export type DriverEventType = DriverEvent["type"];
 
 export type DriverEventListener = (sessionId: SessionId, event: DriverEvent) => void;
 

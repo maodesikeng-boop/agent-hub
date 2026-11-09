@@ -54,7 +54,7 @@ export function createSessionStartHandler(deps: Pick<HandlerDeps, "driver">): Ac
 }
 
 /** 额度用完（isQuotaExhausted）、而且知道什么时候恢复：返回还要等多久；否则 null。 */
-export function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, sessionId: number): number | null {
+function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, sessionId: number): number | null {
   const info = deps.sessions.get(sessionId)?.rateLimit;
   if (!info || !isQuotaExhausted(info) || info.resetsAt === null) return null;
   const wait = info.resetsAt * 1000 - (deps.now ?? Date.now)();

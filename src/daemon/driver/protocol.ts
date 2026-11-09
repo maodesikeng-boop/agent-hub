@@ -204,7 +204,7 @@ export function parseToolResults(obj: Record<string, unknown>, at: number): Agen
 }
 
 /** user 事件里的文字（content 可能是字符串，也可能是几段）。 */
-export function userTexts(obj: Record<string, unknown>): string[] {
+function userTexts(obj: Record<string, unknown>): string[] {
   const content = (obj.message as { content?: unknown } | undefined)?.content;
   if (typeof content === "string") return [content];
   if (!Array.isArray(content)) return [];

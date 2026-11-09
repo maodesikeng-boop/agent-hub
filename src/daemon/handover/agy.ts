@@ -17,7 +17,7 @@ import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
 /** agy 的数据目录（对话库、brain、摘要库都在里面）；和 driver/transcript.ts 找对话库用的是同一个位置。 */
-export const AGY_DATA_DIR = agyCliDataDir();
+const AGY_DATA_DIR = agyCliDataDir();
 /** 会话编号、轨迹编号的样子：36 个字符的 UUID。换编号要同长，所以不是这个样子就当格式不认识。 */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 除了 conversations/ 和 brain/，agy 还会在这几个目录下按编号放东西（目录、<编号>.xxx 文件）。remove 一并删。 */

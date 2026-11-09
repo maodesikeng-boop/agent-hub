@@ -30,7 +30,7 @@ export const RIGHT_RAIL_VISIBLE_ROWS = 3;
 const statusText = (worker: WorkerEntry) => (worker.ended ? ENDED_TEXT : (ACTIVITY_TEXT[worker.activity] ?? UNKNOWN_ACTIVITY_TEXT));
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !(worker.activity in ACTIVITY_TEXT));
 
-export const RIGHT_RAIL_ID = "right-rail";
+const RIGHT_RAIL_ID = "right-rail";
 
 /**
  * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“已收工 N ›” 14px，第二行 13px（行高 18px）。图标 16px 线条（stroke 1.5）。

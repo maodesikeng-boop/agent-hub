@@ -82,7 +82,7 @@ export function previewKindOf(name: string, mime: string): PreviewKind {
  * .app、.prefPane、.scpt、.jar、.sh/.zsh/.bash、.py 之类一双击就可能执行，黑名单列不全，所以反过来写。
  * html、htm 用默认浏览器打开（浏览器里的脚本在沙箱内）；svg 不放（可能带脚本）。带可执行权限的文件另由守护进程按权限位拦。
  */
-export const OPEN_ALLOWED_EXTENSIONS: readonly string[] = [
+const OPEN_ALLOWED_EXTENSIONS: readonly string[] = [
   "txt",
   "md",
   "csv",

@@ -5,9 +5,9 @@ import { PEER_INVITE_FAILURE_SOURCES, PEER_INVITE_MAX_FAILURES, PEER_INVITE_TTL_
 import { matchesHash, newInviteCode, sha256Hex } from "./tokens.ts";
 
 /** 邀请码是谁要的：user = 用户在本机点的；介绍 = 已配对的设备 via 替 for 要的（只给 for 用，via 还配着才有效）；slotPort = 中心给隧道槽位分的（绑槽位）。 */
-export type InviteFrom = "user" | { for: DeviceId; via: DeviceId } | { slotPort: number };
+type InviteFrom = "user" | { for: DeviceId; via: DeviceId } | { slotPort: number };
 
-export type ConsumeResult = { ok: true; by: InviteFrom } | { ok: false; reason: "invalid" | "locked" };
+type ConsumeResult = { ok: true; by: InviteFrom } | { ok: false; reason: "invalid" | "locked" };
 
 export interface InviteBook {
   /** by：user 或 slotPort 会解锁所有设备；介绍的，for 那台锁着时回 null。 */

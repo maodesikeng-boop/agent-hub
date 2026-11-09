@@ -51,7 +51,7 @@ declare global {
 }
 
 /** 用户手动收起右栏后记住（docs/ui-standard.md 第 12 条）：存 "closed"；再手动展开就删掉。 */
-export const RIGHT_RAIL_KEY = "agent-hub.rightRail";
+const RIGHT_RAIL_KEY = "agent-hub.rightRail";
 const loadRailClosed = () => {
   try {
     return localStorage.getItem(RIGHT_RAIL_KEY) === "closed";

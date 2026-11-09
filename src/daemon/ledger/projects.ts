@@ -28,7 +28,7 @@ export interface CreateProjectInput {
 }
 
 /** 已经有项目时的回答（用户 11-03 定的说法）。 */
-export const ONE_PROJECT_PER_PM = "一个项目经理只管一个项目，请新建一个项目经理";
+const ONE_PROJECT_PER_PM = "一个项目经理只管一个项目，请新建一个项目经理";
 
 /** 没给项目名、主文件夹的名字又用不了（主文件夹是 /、带换行等控制字符）时的项目名。 */
 export const DEFAULT_PROJECT_NAME = "未命名项目";

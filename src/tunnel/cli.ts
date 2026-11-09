@@ -19,9 +19,9 @@ import {
 /** 要 root 的那一半。中心上的代码目录里的这个文件（provision-linux.sh 装在 ~/agent-hub）。 */
 export const TUNNEL_ROOT_SCRIPT = fileURLToPath(new URL("../../scripts/tunnel-sshd.sh", import.meta.url));
 /** 中心上 sshd 的 ed25519 主机公钥（写进连接码，连入方钉进 known_hosts）。 */
-export const HOST_KEY_FILE = "/etc/ssh/ssh_host_ed25519_key.pub";
+const HOST_KEY_FILE = "/etc/ssh/ssh_host_ed25519_key.pub";
 /** join 在中心上跑的命令：node <代码目录>/src/tunnel/main.ts。代码目录默认相对中心用户的主目录（provision-linux.sh 的 APP_DIR_NAME）。 */
-export const DEFAULT_REMOTE_DIR = "agent-hub";
+const DEFAULT_REMOTE_DIR = "agent-hub";
 const REMOTE_ENTRY = "src/tunnel/main.ts";
 
 /** 守护进程的管理 socket 连不上（守护进程没在跑）。 */
@@ -45,7 +45,7 @@ export interface TunnelCliIo {
   hostname(): string;
 }
 
-export const TUNNEL_USAGE = `用法（node <代码目录>/src/tunnel/main.ts <子命令>）：
+const TUNNEL_USAGE = `用法（node <代码目录>/src/tunnel/main.ts <子命令>）：
 连入方（Mac）：
   join [-i <管理员私钥>] [-p <ssh 端口>] [--name <设备名>] [--remote-dir <中心上的代码目录>] <管理员@中心地址>
         一条命令连到中心：本机守护进程生成专用钥匙 → 用管理员钥匙 ssh 到中心跑 add → 连接码交给本机守护进程。
@@ -62,13 +62,13 @@ export const TUNNEL_USAGE = `用法（node <代码目录>/src/tunnel/main.ts <�
 class UsageError extends Error {}
 
 /** 单引号包起来给远端 shell；只有安全字符的原样。 */
-export function shellQuote(value: string): string {
+function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_./:@=+-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** 本机名 → 设备名：小写，去掉 .local 之类的后缀，别的字符换成 -。 */
-export function defaultDeviceName(hostname: string): string {
+function defaultDeviceName(hostname: string): string {
   const slug = hostname
     .toLowerCase()
     .split(".")[0]!

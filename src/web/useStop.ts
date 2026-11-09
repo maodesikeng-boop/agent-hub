@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionState } from "../shared/index.ts";
 
 /** 点“停止”之后：发出去了没、服务端接受了没。 */
-export type StopPhase = "idle" | "sending" | "requested" | "failed";
+type StopPhase = "idle" | "sending" | "requested" | "failed";
 
 /** 输入框的“停止”键要的东西：agent 在忙才能停；正在停（或刚点过、服务端还没确认）时按钮不可点；停止失败有提示。 */
 export interface StopControl {

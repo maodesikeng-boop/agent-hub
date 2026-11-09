@@ -3,8 +3,6 @@
 
 /** 源码超过这个字数不渲染，当普通代码块 + 一行错误；Mermaid 的 maxTextSize / maxEdges 同步设成这一档。 */
 export const CHART_MAX_SOURCE_CHARS = 50_000;
-/** 图块内最高多少 px：更高的等比缩到这个高度，点放大看原尺寸。 */
-export const CHART_MAX_INLINE_HEIGHT = 480;
 /** 还没渲染好（占位、转圈）时图区最小高度 px。 */
 export const CHART_MIN_HEIGHT = 160;
 /** 渲染结果缓存的条数（LRU）。 */

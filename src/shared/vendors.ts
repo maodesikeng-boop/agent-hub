@@ -36,7 +36,7 @@ export interface FetchedQuotaSpec {
 }
 
 /** 只读 Worker 落实方式：settings=写进 claude settings.json 原生沙箱；driver=驱动层原生参数；os_sandbox=依赖外层 OS 沙箱。 */
-export type VendorReadonlyMode = "settings" | "driver" | "os_sandbox";
+type VendorReadonlyMode = "settings" | "driver" | "os_sandbox";
 
 export interface VendorSpec {
   /** 界面上的名字。 */
@@ -95,7 +95,7 @@ export interface VendorSpec {
  * 输入框里“/”命令的厂商数据（docs/composer-commands.md 实测）。怎么问命令列表、`@` 文件怎么写、怎么拼写进 agent 的内容
  * 这些要写代码的，在 daemon/vendors/<厂商>.ts。
  */
-export interface ComposerSpec {
+interface ComposerSpec {
   /** 命令的开头：用户原文以它开头（前面不能有空格）才算命令。 */
   commandPrefix: string;
   /** 压缩上下文的命令名（不带开头的 /）：这一轮只压缩、不回话，项目经理发了它不会有汇报。 */
@@ -684,10 +684,6 @@ export function isListed(availability: VendorAvailability): boolean {
 /** 能不能选（下拉能选、提示词里列、hub worker start 放行）：能用、认不出的能。 */
 export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
-}
-
-export function isVendorAvailability(value: unknown): value is VendorAvailability {
-  return typeof value === "string" && (VENDOR_AVAILABILITIES as readonly string[]).includes(value);
 }
 
 /** 不能用时给人看的一句（hub worker start 报错用）；能用返回 null。device 是设备名。 */

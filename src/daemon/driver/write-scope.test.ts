@@ -28,8 +28,6 @@ import {
   spawnInWriteScope,
   wrapInOsSandbox,
   wrapInReadonlyOsSandbox,
-  wrapInReadonlySeatbelt,
-  wrapInSeatbelt,
   type ReadonlySandboxInput,
 } from "./write-scope.ts";
 
@@ -61,7 +59,7 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
     const linuxOpts = { available: true, uid: 1000, exists: () => true, realpath: (p: string) => p };
     const wrappedDarwin = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"], osSandboxed: true };
     const wrappedLinux = { command: BWRAP, args: bwrapArgs(base, scope, linuxOpts), osSandboxed: true };
-    expect(wrapInSeatbelt(base, scope, "darwin", darwinOpts)).toEqual(wrappedDarwin);
+    expect(wrapInOsSandbox(base, scope, "darwin", darwinOpts)).toEqual(wrappedDarwin);
     expect(wrapInOsSandbox(base, scope, "linux", linuxOpts)).toEqual(wrappedLinux);
     expect(wrapInOsSandbox(base, scope, "linux", { available: false })).toEqual({ ...base, osSandboxed: false });
     expect(wrapInOsSandbox(base, scope, "win32")).toEqual({ ...base, osSandboxed: false });
@@ -193,7 +191,7 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec", () => {
     mkdirSync(own, { recursive: true });
     mkdirSync(join(dataDir, "state"));
     mkdirSync(join(dataDir, "worktrees", "1", "3"));
-    const run = wrapInSeatbelt(
+    const run = wrapInOsSandbox(
       {
         command: "/bin/sh",
         args: [
@@ -282,13 +280,13 @@ describe("readonlySeatbeltProfile", () => {
     expect(secretGlobRegex("**/id_ed25519*")).toBe("/id_ed25519[^/]*$");
   });
 
-  it("wrapInReadonlySeatbelt / wrapInReadonlyOsSandbox：macOS 包 sandbox-exec，Linux 包 bwrap；沙箱不可用时原样返回、osSandboxed 是 false（调用方报错）", () => {
-    expect(wrapInReadonlySeatbelt(base, roInput, "darwin", { available: true })).toEqual({
+  it("wrapInReadonlyOsSandbox：macOS 包 sandbox-exec，Linux 包 bwrap；沙箱不可用时原样返回、osSandboxed 是 false（调用方报错）", () => {
+    expect(wrapInReadonlyOsSandbox(base, roInput, "darwin", { available: true })).toEqual({
       command: SANDBOX_EXEC,
       args: ["-p", readonlySeatbeltProfile(roInput), "/bin/agent", "--x", "y"],
       osSandboxed: true,
     });
-    expect(wrapInReadonlySeatbelt(base, roInput, "linux", { available: false })).toEqual({ ...base, osSandboxed: false });
+    expect(wrapInReadonlyOsSandbox(base, roInput, "linux", { available: false })).toEqual({ ...base, osSandboxed: false });
     expect(wrapInReadonlyOsSandbox(base, roInput, "win32")).toEqual({ ...base, osSandboxed: false });
   });
 });
@@ -480,7 +478,7 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
     writeFileSync(join(work, "note.txt"), "NOTE");
     writeFileSync(join(work, ".env"), "SECRET=1");
     writeFileSync(join(secretDir, "key"), "K");
-    const run = wrapInReadonlySeatbelt(
+    const run = wrapInReadonlyOsSandbox(
       {
         command: "/bin/sh",
         args: [

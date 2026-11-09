@@ -2,7 +2,7 @@
 // 三道：规格检查（出错能给用户一句明白话）、loader（vega 真去加载时一律拒绝）、缓存 SVG 的清洗。不 import vega，本身很小。
 
 /** 规格不合规：消息直接显示在图块上方那一行。 */
-export class ChartSpecError extends Error {}
+class ChartSpecError extends Error {}
 
 /** 这些键的子树是数据行（用户的数据列可以叫 url、href），不当规格检查。 */
 const DATA_KEYS = new Set(["values", "datasets"]);

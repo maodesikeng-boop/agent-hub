@@ -15,12 +15,12 @@ import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol
 import type { TurnUsage } from "./usage.ts";
 import { runPs } from "./process.ts";
 
-export { buildChildEnv, lineUuid, mergeUserTexts, userContent };
+export { buildChildEnv, mergeUserTexts };
 
 /** agy 多轮流式模式的固定协议参数。 */
 export const AGY_STREAM_ARGS: readonly string[] = ["--input-format", "stream-json", "--output-format", "stream-json"];
 /** 默认后台非交互权限参数。 */
-export const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];
+const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];
 /** 只读 Worker 的权限参数（--settings 的规则另加，见 readonly-agy.ts）。 */
 export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
 /**
@@ -29,13 +29,13 @@ export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
 /** 没有 OS 沙箱时（不是 macOS）兜底检查可写范围的路径字段名（只对写类工具检查，读不拦）。 */
-export const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath", "file_path", "path"] as const;
+const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath", "file_path", "path"] as const;
 
 /** 工具调用参数里表示命令行字符串的字段名（没有 OS 沙箱时兜底检查）。 */
-export const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
+const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
 
 /** 写文件的工具集合：没有 OS 沙箱时，写类工具写到可写范围外要拦。（只读 Worker 的写不在这里拦：deny 规则加外层只读沙箱。） */
-export const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
+const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
   "sed_file",
@@ -159,7 +159,7 @@ export function parseAgyUsage(usage: unknown): Omit<TokenUsage, "context"> {
 }
 
 /** 将 agy 的 usage 转为 TurnUsage 识别的字段格式。 */
-export function toClaudeUsageShape(usage: unknown): Record<string, number> | null {
+function toClaudeUsageShape(usage: unknown): Record<string, number> | null {
   if (typeof usage !== "object" || usage === null || Array.isArray(usage)) return null;
   const parsed = parseAgyUsage(usage);
   return {

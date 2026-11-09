@@ -26,10 +26,10 @@ import {
   type WsServerMessage,
 } from "../../src/shared/index.ts";
 
-export const MAIN = new URL("../../src/daemon/main.ts", import.meta.url).pathname;
+const MAIN = new URL("../../src/daemon/main.ts", import.meta.url).pathname;
 /** 认本机回环网址当设备网址的测试入口（联机端到端，同机两个守护进程互相配对）。 */
 export const LOOPBACK_MAIN = new URL("./loopback-daemon.ts", import.meta.url).pathname;
-export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
+const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
 
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
 
@@ -358,8 +358,6 @@ export function agentTexts(state: StateSnapshot, conversationId: number): string
     .filter((m) => m.sender === "agent" && m.kind === "text")
     .map((m) => m.text);
 }
-
-export type { Change };
 
 /** unix socket 路径有长度上限（macOS 103 字节）：系统临时目录太长时（macOS 的 $TMPDIR 经常很长）改用 /tmp。 */
 function shortTmp(): string {

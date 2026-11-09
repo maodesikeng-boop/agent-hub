@@ -27,7 +27,7 @@ const USER_CANCELED = "-128";
 /** 执行 osascript：成功给 stdout；失败（含超时被杀）抛出带 code / killed / stderr 的错误，和 execFile 一样。 */
 export type RunOsascript = (args: string[], options: { timeoutMs: number }) => Promise<{ stdout: string }>;
 
-export const runOsascript: RunOsascript = (args, { timeoutMs }) =>
+const runOsascript: RunOsascript = (args, { timeoutMs }) =>
   new Promise((resolvePromise, reject) => {
     execFile("osascript", args, { timeout: timeoutMs, encoding: "utf8" }, (err, stdout, stderr) => {
       if (err) return reject(Object.assign(err, { stderr }));
