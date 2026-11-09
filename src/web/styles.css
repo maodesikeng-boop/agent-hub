@@ -127,6 +127,41 @@ code {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
 }
+/* 在忙的状态词（Working…、Thinking…，docs/ui-standard.md 第 14 条）：照 Claude desktop 的 “Thinking” 流光，一道变淡的光从左往右扫过字。
+   只用文字本身的颜色（currentColor，右栏是强调色、消息流是灰），不加别的颜色；字用 -webkit-text-fill-color 透明，color 不动，
+   所以 currentColor 还是原来的字色。系统设了“减少动态效果”就是不动的原色字。时长、光带宽度只在这里改 */
+.status-shimmer {
+  --status-shimmer-duration: 2.2s;
+  background-image: linear-gradient(
+    90deg,
+    currentColor 0%,
+    currentColor 40%,
+    color-mix(in srgb, currentColor 35%, transparent) 50%,
+    currentColor 60%,
+    currentColor 100%
+  );
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: status-shimmer var(--status-shimmer-duration) ease-in-out infinite;
+}
+@keyframes status-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
 .messages,
 .chat-column {
   --chat-max: 46rem;

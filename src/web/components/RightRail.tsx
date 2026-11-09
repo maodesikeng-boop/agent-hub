@@ -212,7 +212,7 @@ function WorkerRow({
     >
       <span className="flex items-baseline justify-between gap-3">
         <span className="min-w-0 truncate text-[14px] leading-5">{worker.title}</span>
-        <span className={cn("shrink-0 text-[13px]", busy ? "text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
+        <span className={cn("shrink-0 text-[13px]", busy ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>
       </span>
       <span data-testid="worker-meta" className="flex items-baseline gap-3 text-[13px] leading-[18px] text-muted-foreground">
         {worker.vendor !== undefined && <span className="min-w-0 truncate">{modelShortLabel(vendor, worker.model ?? null, catalog)}</span>}

@@ -183,4 +183,13 @@ describe("界面标准：手机和小屏（第 19 条）", () => {
       expect(readFileSync(`src/web/components/${file}.tsx`, "utf8")).not.toMatch(/group-hover:(opacity|visible)|opacity-0/);
     }
   });
+
+  it("在忙的状态词流光：只用字本身的颜色，减少动态效果时不动", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    const rule = css.match(/\.status-shimmer \{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toMatch(/background-clip: text/);
+    expect(rule).toMatch(/animation: status-shimmer/);
+    expect(rule).not.toMatch(/#[0-9a-f]{3,6}\b|\brgba?\(|\bhsla?\(/i);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.status-shimmer \{\s*animation: none;/);
+  });
 });

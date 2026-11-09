@@ -42,17 +42,14 @@ function EntryButton({
   device?: string;
   onSelect: () => void;
 }) {
-  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定圆点 > 等你 > 时间（在忙不另加标记）
+  // 右边只放一个标注：已归档显示剩余删除天数；否则 等你确定圆点 > 等你圆点 > 时间（在忙不另加标记）。圆点不带字，名字只给读屏和悬停
   const tag =
     entry.pm?.archivedAt != null ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatArchiveRemaining(entry.pm.archivedAt)}</span>
     ) : asking ? (
       <span role="img" aria-label="等你确定" title="等你确定" data-testid="asking-indicator" className="size-2 rounded-full bg-status-active" />
     ) : waiting ? (
-      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="flex items-center gap-1.5 text-xs font-medium text-status-active">
-        <span className="size-1.5 rounded-full bg-status-active" aria-hidden="true" />
-        等你
-      </span>
+      <span role="img" aria-label="等你" title="等你" data-testid="waiting-indicator" className="size-2 shrink-0 rounded-full bg-status-active" />
     ) : entry.lastMessage ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;

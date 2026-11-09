@@ -73,7 +73,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(row.className).not.toMatch(/rounded-2xl|py-2(\s|$)/);
     expect(row.querySelector("[data-neutral='true']")).toBeNull();
     expect(within(row).getByText("活 30")).toHaveClass("text-[14px]", "truncate");
-    expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary");
+    expect(within(row).getByText("Working…")).toHaveClass("text-[13px]", "text-primary", "status-shimmer");
   });
 
   it("在等后台命令跑完的 Piece：状态词 Waiting for background command…，算在忙（强调色、排在前面）", () => {
@@ -91,6 +91,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show more" }));
     expect(within(screen.getByRole("button", { name: /活 30/ })).getByText("Working…")).toHaveClass("text-primary");
     expect(within(screen.getByRole("button", { name: /活 31/ })).getByText("Idle")).toHaveClass("text-muted-foreground");
+    expect(within(screen.getByRole("button", { name: /活 31/ })).getByText("Idle")).not.toHaveClass("status-shimmer");
     // 收工的在“已收工”里，没展开时看不到
     expect(screen.queryByRole("button", { name: /活 36/ })).toBeNull();
   });

@@ -9,17 +9,9 @@ export function hasAgentStatus(session: SessionState | null): boolean {
   return (session?.activity ?? "idle") !== "idle" || isWaitingForQuota(session);
 }
 
-/** 省略号：三个点依次淡入淡出（系统设了“减少动态效果”就不动）。 */
+/** 省略号（装饰，读屏不读）。动效只靠整句的流光（styles.css 的 .status-shimmer），点本身不另外动。 */
 function Dots() {
-  return (
-    <span aria-hidden="true">
-      {[0, 1, 2].map((i) => (
-        <span key={i} className="motion-safe:animate-pulse" style={{ animationDelay: `${i * 200}ms` }}>
-          .
-        </span>
-      ))}
-    </span>
-  );
+  return <span aria-hidden="true">...</span>;
 }
 
 /**
@@ -48,7 +40,7 @@ export function AgentStatus({ session }: { session: SessionState | null }) {
     text = describeStep(session?.step);
   }
   return (
-    <span role="status" aria-label="状态" data-busy={animated}>
+    <span role="status" aria-label="状态" data-busy={animated} className={animated ? "status-shimmer" : undefined}>
       {text}
       {animated && <Dots />}
     </span>

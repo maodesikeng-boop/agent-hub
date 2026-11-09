@@ -27,13 +27,13 @@ describe("AgentStatus：消息流里的状态", () => {
     expect(hasAgentStatus(null)).toBe(false);
   });
 
-  it("干活：按 step 显示，后面带省略号动效（装饰，读屏不读）", () => {
+  it("干活：按 step 显示，后面带省略号（装饰，读屏不读），整句流光", () => {
     const { container } = render(<AgentStatus session={working({ step: { type: "thinking" } })} />);
     const status = screen.getByRole("status", { name: "状态" });
     expect(status).toHaveTextContent("Thinking...");
     const dots = container.querySelector("[aria-hidden='true']") as HTMLElement;
     expect(dots).toHaveTextContent("...");
-    expect(dots.querySelectorAll(".animate-pulse, [class*='animate-pulse']")).toHaveLength(3);
+    expect(status).toHaveClass("status-shimmer");
   });
 
   it("没有 step（老服务端、刚开始）：Working", () => {
@@ -63,6 +63,7 @@ describe("AgentStatus：消息流里的状态", () => {
     expect(text(makeSession({ rateLimit: rejected }))).toMatch(/^Usage limit reached, resets .+$/);
     expect(text(working({ step: { type: "thinking" }, rateLimit: rejected }))).toMatch(/^Usage limit reached/);
     expect(text(makeSession({ rateLimit: { ...rejected, resetsAt: null } }))).toBe("Usage limit reached");
+    expect(screen.getAllByRole("status", { name: "状态" }).at(-1)).not.toHaveClass("status-shimmer");
     expect(hasAgentStatus(makeSession({ rateLimit: { status: "allowed_warning", resetsAt: null, windows: {} } }))).toBe(false);
   });
 });
