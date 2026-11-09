@@ -191,6 +191,17 @@ describe("左栏", () => {
     await user.click(settingsBtn);
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
   });
+
+  it("左栏对话列表带 sidebar-list 边缘渐变遮罩与 pb-3 底部内边距，与顶部搜索栏和底部栏柔和过渡", async () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    const block = css.match(/(?:^|\n)\.sidebar-list\s*\{([^}]*)\}/)?.[1] ?? "";
+    const gradient = "linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)";
+    expect(block).toContain(`-webkit-mask-image: ${gradient};`);
+    expect(block).toContain(`mask-image: ${gradient};`);
+
+    await boot();
+    expect(nav()).toHaveClass("sidebar-list", "pt-1", "pb-3");
+  });
 });
 
 describe("提示条", () => {

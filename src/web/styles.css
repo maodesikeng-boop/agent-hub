@@ -126,6 +126,11 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
+/* 左栏对话列表边缘渐变遮罩（docs/ui-standard.md 第 16 条）：滚动经过顶部搜索栏和底部栏时柔和渐隐，不硬切头像 */
+.sidebar-list {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
+}
 .messages,
 .chat-column {
   --chat-max: 46rem;
