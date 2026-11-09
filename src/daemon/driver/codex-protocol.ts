@@ -4,7 +4,9 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   connectorToolAllowed,
   commandMayWriteOutsideScope,
+  exhaustRateLimitInfo,
   scopeAllowsWrite,
+  VENDOR_FAILURE_SIGNS,
   type AgentSessionRow,
   type AgentToolEvent,
   type ConnectorToolAnnotations,
@@ -476,26 +478,51 @@ export function parseCodexTokenUsage(
   };
 }
 
-/** 一个窗口 → [额度窗口的键, 窗口]；缺用量或重置时间、窗口长度不认识的返回 null（见 QUOTA_WINDOWS，不按位置猜）。 */
+const CODEX_PRIMARY_LIMIT_ID = "codex";
+const CODEX_QUOTA_ERROR_CODES = new Set([
+  "usageLimitExceeded",
+  "rateLimitExceeded",
+  "usage_limit_exceeded",
+  "rate_limit_exceeded",
+]);
+
+/** 一个窗口 → [额度窗口的键, 窗口]；缺用量或重置时间、窗口长度不认识的返回 null（见 QUOTA_WINDOWS，不按位置猜）。兼容 camelCase 与 rollout 的 snake_case。 */
 function parseCodexWindow(raw: unknown): [QuotaWindowKey, RateLimitWindow] | null {
   if (typeof raw !== "object" || raw === null) return null;
   const w = raw as Record<string, unknown>;
-  if (typeof w.usedPercent !== "number" || !Number.isFinite(w.usedPercent)) return null;
-  if (typeof w.resetsAt !== "number" || !Number.isFinite(w.resetsAt)) return null;
-  const key = windowKeyByMinutes(typeof w.windowDurationMins === "number" ? w.windowDurationMins : null);
+  const usedPercent = typeof w.usedPercent === "number" ? w.usedPercent : w.used_percent;
+  const resetsAt = typeof w.resetsAt === "number" ? w.resetsAt : w.resets_at;
+  const durationMins = typeof w.windowDurationMins === "number" ? w.windowDurationMins : w.window_minutes;
+  if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) return null;
+  if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  const key = windowKeyByMinutes(typeof durationMins === "number" ? durationMins : null);
   if (key === null) return null;
-  const utilization = w.usedPercent / 100;
-  return [key, { utilization, resetsAt: w.resetsAt, status: utilization >= 1 ? "rejected" : "allowed" }];
+  const utilization = usedPercent / 100;
+  return [key, { utilization, resetsAt, status: utilization >= 1 ? "rejected" : "allowed" }];
 }
 
 /**
- * 解析 account/rateLimits/updated 的 rateLimits（primary、secondary）为 RateLimitInfo：每个窗口按 windowDurationMins 归到
- * QUOTA_WINDOWS 的键上（不按 primary / secondary 的位置：有的账号 primary 是 30 天窗口）。
- * 整体的 resetsAt：有窗口用完（rejected）就取用完的窗口里最晚恢复的（要等它们都恢复），没有就取最先重置的。
+ * 解析 account/rateLimits/updated（或 account/rateLimits/read、rollout 的 token_count.rate_limits）为 RateLimitInfo：
+ * - 只认主配额桶 limitId === "codex"（或未带 limitId 的单桶），忽略 "premium" 等专项附加桶，防止覆盖主额度；
+ * - 每个窗口按 windowDurationMins / window_minutes 归到 QUOTA_WINDOWS 的键上（不按 primary / secondary 的位置）；
+ * - 若带 rateLimitReachedType / spendControlReached / ordinaryUsageAllowed === false，将耗尽窗口规整为 100% rejected。
  */
 export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null {
   if (typeof rateLimits !== "object" || rateLimits === null) return null;
-  const rl = rateLimits as { primary?: unknown; secondary?: unknown };
+  const rawObj = rateLimits as Record<string, unknown>;
+  const byId =
+    typeof rawObj.rateLimitsByLimitId === "object" && rawObj.rateLimitsByLimitId !== null
+      ? (rawObj.rateLimitsByLimitId as Record<string, unknown>)
+      : null;
+  const rl =
+    byId && typeof byId[CODEX_PRIMARY_LIMIT_ID] === "object" && byId[CODEX_PRIMARY_LIMIT_ID] !== null
+      ? (byId[CODEX_PRIMARY_LIMIT_ID] as Record<string, unknown>)
+      : typeof rawObj.rateLimits === "object" && rawObj.rateLimits !== null
+        ? (rawObj.rateLimits as Record<string, unknown>)
+        : rawObj;
+  const limitId = typeof rl.limitId === "string" ? rl.limitId : typeof rl.limit_id === "string" ? rl.limit_id : null;
+  if (limitId !== null && limitId !== "" && limitId !== CODEX_PRIMARY_LIMIT_ID) return null;
+
   const windows: Record<string, RateLimitWindow> = {};
   for (const raw of [rl.primary, rl.secondary]) {
     const parsed = parseCodexWindow(raw);
@@ -504,11 +531,41 @@ export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null 
   const all = Object.values(windows);
   if (all.length === 0) return null;
   const rejected = all.filter((w) => w.status === "rejected");
-  return {
+  const base: RateLimitInfo = {
     status: rejected.length > 0 ? "rejected" : "allowed",
     resetsAt: rejected.length > 0 ? Math.max(...rejected.map((w) => w.resetsAt)) : Math.min(...all.map((w) => w.resetsAt)),
     windows,
   };
+  const reachedType =
+    typeof rl.rateLimitReachedType === "string"
+      ? rl.rateLimitReachedType
+      : typeof rl.rate_limit_reached_type === "string"
+        ? rl.rate_limit_reached_type
+        : null;
+  const spendReached = rl.spendControlReached === true || rl.spend_control_reached === true;
+  if ((reachedType !== null && reachedType !== "") || spendReached || rawObj.ordinaryUsageAllowed === false) {
+    return exhaustRateLimitInfo(base);
+  }
+  return base;
+}
+
+function isCodexQuotaError(turnError: unknown): boolean {
+  if (typeof turnError === "string") return VENDOR_FAILURE_SIGNS.codex.quota.test(turnError);
+  if (typeof turnError !== "object" || turnError === null) return false;
+  const err = turnError as Record<string, unknown>;
+  const code = err.codexErrorInfo ?? err.codex_error_info;
+  if (typeof code === "string" && CODEX_QUOTA_ERROR_CODES.has(code)) return true;
+  if (typeof code === "object" && code !== null && Object.keys(code).some((k) => CODEX_QUOTA_ERROR_CODES.has(k))) return true;
+  return typeof err.message === "string" && VENDOR_FAILURE_SIGNS.codex.quota.test(err.message);
+}
+
+/**
+ * 当 Codex 一轮因额度耗尽（usageLimitExceeded / rateLimitExceeded 或消息匹配 quota 特征）失败结束时，
+ * 将会话当前的 RateLimitInfo 标记为 rejected（耗尽窗口置为 100%）；非额度错误返回 null。
+ */
+export function exhaustCodexRateLimitOnTurnError(current: RateLimitInfo | null, turnError: unknown): RateLimitInfo | null {
+  if (!isCodexQuotaError(turnError)) return null;
+  return exhaustRateLimitInfo(current);
 }
 
 export interface CodexApprovalContext {

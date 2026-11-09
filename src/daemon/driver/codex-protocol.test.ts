@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
-import { codexReadonlyConfig, decideMcpElicitation, parseCodexRateLimits, readCodexLaunchConfig } from "./codex-protocol.ts";
+import { codexReadonlyConfig, decideMcpElicitation, exhaustCodexRateLimitOnTurnError, parseCodexRateLimits, readCodexLaunchConfig } from "./codex-protocol.ts";
 
 // 真实数据（2026-11-07，codex-cli 0.162 的 account/rateLimits/updated）：这个账号只有一个 30 天窗口（windowDurationMins 43200），放在 primary 里。
 describe("parseCodexRateLimits：窗口按 windowDurationMins 归类，不按 primary / secondary 的位置", () => {
@@ -27,6 +27,86 @@ describe("parseCodexRateLimits：窗口按 windowDurationMins 归类，不按 pr
   it("不知道窗口多长（windowDurationMins 是 null 或不认识）的窗口不显示，不猜", () => {
     expect(parseCodexRateLimits({ primary: { usedPercent: 10, windowDurationMins: null, resetsAt: 1793646000 }, secondary: null })).toBeNull();
     expect(parseCodexRateLimits({ primary: { usedPercent: 10, windowDurationMins: 77, resetsAt: 1793646000 }, secondary: null })).toBeNull();
+  });
+
+  // 真实数据（2026-11-09 16:37，~/.codex/sessions/2026/11/09/rollout-2026-11-09T16-36-39-01a1bf73-ca31-7e02-ad20-6aebce6a86a3.jsonl）：
+  // 第 39 行是 limit_id="codex"（5h 99%、7d 16%），455ms 后第 40 行是 limit_id="premium"，第 41 行 task_complete 报 usage_limit_exceeded（try again at 6:13 PM）。
+  it("2026-11-09 真实 rollout 事件：兼容 snake_case，忽略非 codex 的专项桶（如 premium），并在 usage_limit_exceeded 时把耗尽的 5 小时桶标为 100% rejected", () => {
+    const rolloutLine39RateLimits = {
+      limit_id: "codex",
+      limit_name: null,
+      primary: { used_percent: 99.0, window_minutes: 300, resets_at: 1794219196 },
+      secondary: { used_percent: 16.0, window_minutes: 10080, resets_at: 1794805996 },
+      credits: { has_credits: false, unlimited: false, balance: "0" },
+      individual_limit: null,
+      spend_control_reached: null,
+      plan_type: "plus",
+      rate_limit_reached_type: null,
+    };
+    const codexInfo = parseCodexRateLimits(rolloutLine39RateLimits);
+    expect(codexInfo).toEqual({
+      status: "allowed",
+      resetsAt: 1794219196,
+      windows: {
+        five_hour: { utilization: 0.99, resetsAt: 1794219196, status: "allowed" },
+        seven_day: { utilization: 0.16, resetsAt: 1794805996, status: "allowed" },
+      },
+    });
+
+    // 非 codex 的专项配额桶（即便带了窗口）也绝不能覆盖主额度 codex
+    expect(
+      parseCodexRateLimits({
+        limit_id: "premium",
+        limit_name: null,
+        primary: { used_percent: 26.0, window_minutes: 300, resets_at: 1796193546 },
+        secondary: null,
+      }),
+    ).toBeNull();
+    expect(
+      parseCodexRateLimits({
+        limitId: "premium",
+        primary: { usedPercent: 26, windowDurationMins: 300, resetsAt: 1796193546 },
+        secondary: null,
+      }),
+    ).toBeNull();
+
+    // 第 41 行 task_complete / turn/completed 的 usage_limit_exceeded 错误将 99% 的 5 小时窗口置为 100% rejected
+    const rolloutLine41Error = {
+      message:
+        "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 6:13 PM.",
+      codex_error_info: "usage_limit_exceeded",
+    };
+    expect(exhaustCodexRateLimitOnTurnError(codexInfo, rolloutLine41Error)).toEqual({
+      status: "rejected",
+      resetsAt: 1794219196,
+      windows: {
+        five_hour: { utilization: 1, resetsAt: 1794219196, status: "rejected" },
+        seven_day: { utilization: 0.16, resetsAt: 1794805996, status: "allowed" },
+      },
+    });
+
+    // account/rateLimits/read 返回 rateLimitReachedType="rate_limit_reached" 时直接标 rejected
+    expect(
+      parseCodexRateLimits({
+        ordinaryUsageAllowed: false,
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: 1794219196 },
+          secondary: { usedPercent: 16, windowDurationMins: 10080, resetsAt: 1794805996 },
+          rateLimitReachedType: "rate_limit_reached",
+        },
+      }),
+    ).toEqual({
+      status: "rejected",
+      resetsAt: 1794219196,
+      windows: {
+        five_hour: { utilization: 1, resetsAt: 1794219196, status: "rejected" },
+        seven_day: { utilization: 0.16, resetsAt: 1794805996, status: "allowed" },
+      },
+    });
+
+    // 普通非额度错误不改 rateLimit
+    expect(exhaustCodexRateLimitOnTurnError(codexInfo, { message: "command failed", codexErrorInfo: "sandboxError" })).toBeNull();
   });
 });
 

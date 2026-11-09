@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { Message, PersonaChangeId, SessionState } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
-import { groupMessages, listConversations, workersOf } from "./selectors.ts";
+import { groupMessages, listConversations, quotaUsage, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { changeOf, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
@@ -76,24 +76,28 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     };
     expect(medianMs(21, () => void workersOf(next(), 1))).toBeLessThan(10);
     expect(medianMs(21, () => void listConversations(next()))).toBeLessThan(10);
+    expect(medianMs(21, () => void quotaUsage(next(), 0))).toBeLessThan(10);
   });
 
   it("同一份 state 重复调用返回同一个数组（子组件按引用比较不会被击穿）", () => {
     const state = monthState();
     expect(workersOf(state, 1)).toBe(workersOf(state, 1));
     expect(listConversations(state)).toBe(listConversations(state));
+    expect(quotaUsage(state, 0)).toBe(quotaUsage(state, 0));
   });
 
   it("无关的变化（连接状态、待发消息）不换引用", () => {
     const state = monthState();
     const workers = workersOf(state, 1);
     const entries = listConversations(state);
+    const quota = quotaUsage(state, 0);
     const after = reducer(reducer(state, { type: "connection", status: "reconnecting" }), {
       type: "pendingAdd",
       pending: { clientId: "c1", conversationId: PM_CONVERSATION, text: "hi", attachments: [], phase: "sending", createdAt: 1 },
     });
     expect(workersOf(after, 1)).toBe(workers);
     expect(listConversations(after)).toBe(entries);
+    expect(quotaUsage(after, 0)).toBe(quota);
   });
 
   it("会话状态变了：workersOf 跟着变（缓存按 sessions 失效）", () => {

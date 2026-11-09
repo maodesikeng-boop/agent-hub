@@ -14,6 +14,7 @@ import {
   type LaunchFiles,
   type MessageId,
   type MessageSource,
+  type RateLimitInfo,
   type SessionExitReason,
   type SessionId,
   type WriteScope,
@@ -48,6 +49,7 @@ import {
   decideCommandApproval,
   decideFileChangeApproval,
   decideMcpElicitation,
+  exhaustCodexRateLimitOnTurnError,
   extractFileChangePaths,
   isCodexToolItemType,
   parseCodexRateLimits,
@@ -911,6 +913,8 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       at,
     };
     if (proc.closing === "shutdown" && (!ok || interrupted)) event.shutdown = true;
+    const row = this.row(st);
+    let exhaustedRateLimit: RateLimitInfo | null = null;
     if (!ok) {
       const turnErr =
         typeof turn.error === "object" && turn.error !== null
@@ -921,6 +925,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           ? turnErr.message
           : status;
       event.error = { subtype: status, message: errMsg };
+      exhaustedRateLimit = exhaustCodexRateLimitOnTurnError(row?.rateLimit ?? null, turnErr ?? errMsg);
       this.forgetWritten(st, settled);
     } else {
       this.markHealthy(st.id);
@@ -929,7 +934,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.turnInterrupted = false;
     st.stopRequested = false;
 
-    const row = this.row(st);
     this.cancelUsagePush(st);
     const patch: AgentSessionPatch = {};
     if (st.lastTurnResultUsage) {
@@ -939,7 +943,11 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.turnUsage.reset();
     }
     if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
+    if (exhaustedRateLimit !== null) patch.rateLimit = exhaustedRateLimit;
     if (Object.keys(patch).length > 0) this.update(st, patch);
+    if (exhaustedRateLimit !== null) {
+      this.emit(st.id, { type: "rate_limit", info: exhaustedRateLimit, at });
+    }
 
     this.clearTimer(st, "interruptTimer");
     this.emit(st.id, event);
