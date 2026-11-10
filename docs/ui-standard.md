@@ -133,7 +133,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 ## 7. 聚焦态
 
 - 统一中性，**不用主色，不加彩色光圈**。`--ring` 是中性灰（`#a1a1aa`），`ring-ring` 就是它。
-- 文字输入（聊天输入框、`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
+- 普通文字输入（`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
+- **聊天输入框聚焦态**：外沿出现很淡的强调色光晕（`box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent), 0 2px 10px rgba(0, 0, 0, 0.05)`），不加粗边框、不改边框颜色（保持 1px `border-border`），强调色取当前会话的项目经理 CSS 变量 `--primary`。
+- **聊天输入框发送键**：没有内容时是中性灰、不可点（`disabled`）；输入文字或添加待发文件后变为当前项目经理的强调色（水果色）且可点；在“从空变有内容”的那一下做一次 150ms 的轻微放大回弹（`composer-send-bounce`），打字过程中不重复播；系统开启 `prefers-reduced-motion: reduce` 时不播放。
 - 按钮、列表项、单选行、开关这类点的东西：键盘聚焦时显示 `focus-visible:ring-2 focus-visible:ring-ring/50`（单选行在框里，用 `ring-inset`）。只在键盘聚焦（`focus-visible`）时出现，鼠标点不出圈。
 - 不合规的输入：`aria-invalid` 时红边框（组件自带），原因写在那一行下面。
 

@@ -74,11 +74,49 @@ describe("Composer 布局", () => {
     expect(box).toHaveClass("px-5");
   });
 
-  it("获得焦点时外框不变（边框颜色、粗细都不变，也不带粉色），靠光标表示", () => {
+  it("获得焦点时外沿呈现很淡的强调色光晕，边框颜色与粗细不变，文字框自身无 focus ring", () => {
     const { container } = setup();
-    const frame = container.firstElementChild as HTMLElement;
-    expect(frame.className).not.toMatch(/(focus|primary|ring)/);
-    expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/(primary|ring)/);
+    const frame = container.querySelector(".composer-frame") as HTMLElement;
+    expect(frame).not.toBeNull();
+    // 聚焦光晕通过 .composer-frame:focus-within 统一管理，边框保持 1px border-border，不加粗、不改边框颜色
+    expect(frame).toHaveClass("composer-frame", "border", "border-border");
+    expect(frame.className).not.toMatch(/border-primary/);
+    expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/ring/);
+    const styleEl = container.querySelector("style");
+    expect(styleEl?.textContent).toMatch(/\.composer-frame:focus-within\s*\{[^}]*box-shadow:[^}]*color-mix\(in srgb, var\(--primary\) 14%, transparent\)/);
+  });
+
+  it("发送键状态：空输入且无附件时不可点（中性灰），有内容时变为强调色且可点，空变有内容时触发轻微回弹动效类", () => {
+    const { rerender } = render(<Composer value="" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toBeDisabled();
+    expect(send.className).not.toContain("composer-send-bounce");
+
+    // 从空变有内容：可点，并带回弹动效类
+    rerender(<Composer value="新输入" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(send).toBeEnabled();
+    expect(send.className).toContain("composer-send-bounce");
+
+    // 继续打字：可点，保持已触发状态，不重新抖动
+    rerender(<Composer value="新输入继续打字" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(send).toBeEnabled();
+
+    // 清空：恢复不可点，移除动效类
+    rerender(<Composer value="" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    expect(send).toBeDisabled();
+    expect(send.className).not.toContain("composer-send-bounce");
+
+    // 仅添加待发文件也是有内容：发送键可点
+    rerender(
+      <Composer
+        value=""
+        placeholder="发消息"
+        staging={staging({ files: [{ key: "f1", file: new File(["x"], "f.txt") }] })}
+        onChange={() => {}}
+        onSend={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it("发送中：文字框只读，两个按钮都锁住", () => {

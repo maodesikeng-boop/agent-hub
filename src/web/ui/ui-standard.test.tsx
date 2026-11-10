@@ -30,6 +30,14 @@ describe("界面标准：共用组件", () => {
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
   });
 
+  it("聊天输入框（Composer）：聚焦时外沿有淡淡的强调色光晕（box-shadow 3px 14%），空输入时发送键不可点，有内容时可点且为水果色", () => {
+    const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
+    expect(composerSrc).toContain("box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent)");
+    expect(composerSrc).toContain("composer-send-bounce");
+    expect(composerSrc).toMatch(/disabled=\{!canSend\}/);
+    expect(composerSrc).toMatch(/hasContent\s*&&\s*justBecameNonEmpty\.current/);
+  });
+
   it("下拉 plain（分组行里改了马上存的）：没有边框和底色，悬停、聚焦浅灰底，高 36px，不用主色", () => {
     render(
       <Select aria-label="行里的下拉" variant="plain">

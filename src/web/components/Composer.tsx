@@ -12,6 +12,29 @@ import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
+const COMPOSER_STYLES = `
+.composer-frame {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.15s ease-out;
+}
+.composer-frame:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent), 0 2px 10px rgba(0, 0, 0, 0.05);
+}
+.composer-send-bounce {
+  animation: composer-send-bounce 150ms ease-out;
+}
+@keyframes composer-send-bounce {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-send-bounce {
+    animation: none !important;
+  }
+}
+`;
+
 /** “停止”键：和发送键同一个按钮（同位置、同大小），图标是方块；正在停止时不可点。 */
 function StopButton({ stop }: { stop: StopControl }) {
   return (
@@ -102,6 +125,16 @@ export function Composer({
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
 
+  // 发送键从空变有内容时轻微放大回弹 150ms（打字过程中不重复播，prefers-reduced-motion 下不播）
+  const prevHasContent = useRef(hasContent);
+  const justBecameNonEmpty = useRef(false);
+  if (!prevHasContent.current && hasContent) {
+    justBecameNonEmpty.current = true;
+  } else if (!hasContent) {
+    justBecameNonEmpty.current = false;
+  }
+  prevHasContent.current = hasContent;
+
   // “/”“@” 弹出列表：光标位置要自己记（打字、点、方向键都会动它）；选中后文字换掉，光标放到空格后
   const [cursor, setCursor] = useState(0);
   const pendingCursor = useRef<number | null>(null);
@@ -155,8 +188,9 @@ export function Composer({
 
   return (
     <>
+      <style>{COMPOSER_STYLES}</style>
       {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
-      <div className="rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)]">
+      <div className="composer-frame rounded-[26px] border border-border bg-background">
         {files.length > 0 && (
           <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
             {files.map(({ key, file }) => (
@@ -182,7 +216,7 @@ export function Composer({
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"
-          className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
+          className="block min-h-9 w-full resize-none bg-transparent px-5 pt-3 pb-1 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [field-sizing:content]"
           value={value}
           aria-autocomplete={source ? "list" : undefined}
           aria-controls={suggest.menu ? menuId : undefined}
@@ -232,7 +266,13 @@ export function Composer({
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend} onClick={submit}>
+              <Button
+                size="icon"
+                aria-label="Send"
+                disabled={!canSend}
+                onClick={submit}
+                className={cn(hasContent && justBecameNonEmpty.current && "composer-send-bounce")}
+              >
                 <ArrowUp className="size-5" aria-hidden="true" />
               </Button>
             )}
