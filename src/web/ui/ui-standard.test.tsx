@@ -30,12 +30,17 @@ describe("界面标准：共用组件", () => {
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
   });
 
-  it("聊天输入框（Composer）：聚焦时外沿有淡淡的强调色光晕（box-shadow 3px 14%），空输入时发送键不可点，有内容时可点且为水果色", () => {
+  it("聊天输入框（Composer）：聚焦时外沿有淡淡的强调色光晕（Tailwind 类 3px 14%，不内联 <style>），空输入时发送键不可点，回弹动画在 styles.css，空/单行同一行、多行落到下一行", () => {
     const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
-    expect(composerSrc).toContain("box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent)");
+    expect(composerSrc).toContain("focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent),0_2px_10px_rgba(0,0,0,0.05)]");
+    expect(composerSrc).not.toContain("<style>");
     expect(composerSrc).toContain("composer-send-bounce");
     expect(composerSrc).toMatch(/disabled=\{!canSend\}/);
-    expect(composerSrc).toMatch(/hasContent\s*&&\s*justBecameNonEmpty\.current/);
+    expect(composerSrc).toMatch(/data-multiline=\{multiline\}/);
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/\.composer-send-bounce\s*\{\s*animation: composer-send-bounce 150ms/);
+    expect(css).toMatch(/@keyframes composer-send-bounce/);
+    expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-send-bounce\s*\{\s*animation: none/);
   });
 
   it("下拉 plain（分组行里改了马上存的）：没有边框和底色，悬停、聚焦浅灰底，高 36px，不用主色", () => {

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as shared from "../../shared/index.ts";
 import { App } from "../App.tsx";
 import * as composerSuggest from "../composer-suggest.ts";
@@ -39,6 +39,15 @@ const staging = (over: Partial<StagedFiles> = {}): StagedFiles => ({
 const setup = (over: Partial<StagedFiles> = {}) =>
   render(<Composer value="第一行\n第二行" placeholder="发消息" staging={staging(over)} onChange={() => {}} onSend={() => {}} />);
 
+// jsdom 没有 canvas：给量文字宽度的 getContext 一个假的（每个字 8px）
+const savedGetContext = HTMLCanvasElement.prototype.getContext;
+beforeEach(() => {
+  HTMLCanvasElement.prototype.getContext = (() => ({ font: "", measureText: (t: string) => ({ width: t.length * 8 }) })) as never;
+});
+afterEach(() => {
+  HTMLCanvasElement.prototype.getContext = savedGetContext;
+});
+
 describe("Composer 布局", () => {
   it("回形针和发送键同尺寸、同圆角；回形针是不带底色的 ghost 图标按钮（悬停才有浅底）", () => {
     setup();
@@ -52,38 +61,146 @@ describe("Composer 布局", () => {
     }
   });
 
-  it("文字区占满整行，按钮行在它下面，回形针在左、发送在右", () => {
-    setup();
+  it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
+    const { container } = render(<Composer value="" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    const frame = container.firstElementChild as HTMLElement;
+    expect(frame).toHaveAttribute("data-multiline", "false");
     const box = screen.getByRole("textbox", { name: "Message" });
-    expect(box).toHaveClass("w-full");
-    const row = screen.getByRole("button", { name: "Add files" }).parentElement as HTMLElement;
-    expect(row).not.toContainElement(box);
-    expect(box.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(attach.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(send.parentElement).toHaveClass("ml-auto");
+    expect(attach.parentElement).toBe(box.parentElement);
+    expect(send.parentElement?.parentElement).toBe(box.parentElement);
+    for (const el of [attach, box, send.parentElement as HTMLElement]) expect(el).toHaveClass("row-start-1");
+    expect(attach).toHaveClass("col-start-1");
+    expect(box).toHaveClass("col-start-2");
+    expect(send.parentElement).toHaveClass("col-start-3");
+    expect(box).toHaveClass("min-h-9"); // 文字区 36px，和按钮同高，整条约 48px
+    expect(attach.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("待发文件列表在文字上方，和文字同样的左边距", () => {
-    setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
-    const list = screen.getByRole("list", { name: "Files to send" });
+  it("有待发文件时按多行布局：文字区占满一行，回形针在左、发送在右落到下一行；文件小条在文字上方", () => {
+    const { container } = setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
+    expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
     const box = screen.getByRole("textbox", { name: "Message" });
+    const attach = screen.getByRole("button", { name: "Add files" });
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(box).toHaveClass("w-full", "col-span-3", "col-start-1", "row-start-1");
+    expect(attach).toHaveClass("col-start-1", "row-start-2");
+    expect(send.parentElement).toHaveClass("col-start-3", "row-start-2", "justify-self-end");
+    const list = screen.getByRole("list", { name: "Files to send" });
     expect(list.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(list).toHaveClass("px-5");
-    expect(box).toHaveClass("px-5");
   });
 
-  it("获得焦点时外沿呈现很淡的强调色光晕，边框颜色与粗细不变，文字框自身无 focus ring", () => {
+  it("待发文件列表和文字的左边距一致（文件条 20px，多行时文字区 12px + 外层 8px）", () => {
+    setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
+    expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-5");
+    const box = screen.getByRole("textbox", { name: "Message" });
+    expect(box).toHaveClass("px-3");
+    expect(box.parentElement).toHaveClass("px-2");
+  });
+
+  describe("单行 ⇄ 多行切换（按 scrollHeight 判断，jsdom 里用假的排版数据）", () => {
+    let style: HTMLStyleElement;
+    const proto = HTMLTextAreaElement.prototype;
+    beforeEach(() => {
+      style = document.createElement("style");
+      style.textContent = "textarea { line-height: 24px; padding-top: 6px; padding-bottom: 6px; }";
+      document.head.append(style);
+      // 一行 36px（24 + 上下内边距）；有换行符或超过 40 个字符就算多行（模拟窄栏里自动换行）
+      Object.defineProperty(proto, "scrollHeight", {
+        configurable: true,
+        get(this: HTMLTextAreaElement) {
+          const text = this.value;
+          return text.includes("\n") ? 60 : text.length > 40 ? 60 : 36;
+        },
+      });
+      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 600 });
+    });
+    afterEach(() => {
+      style.remove();
+      delete (proto as { scrollHeight?: number }).scrollHeight;
+      delete (proto as { clientWidth?: number }).clientWidth;
+    });
+    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />;
+
+    it("一行字仍是单行；有换行符或自动换行变多行，文字区占满一行、回形针和发送键落到下一行", () => {
+      const { container, rerender } = render(view("一行字"));
+      const frame = container.firstElementChild as HTMLElement;
+      const box = screen.getByRole("textbox", { name: "Message" });
+      expect(frame).toHaveAttribute("data-multiline", "false");
+      rerender(view("第一行\n第二行"));
+      expect(frame).toHaveAttribute("data-multiline", "true");
+      expect(box).toHaveClass("col-span-3", "row-start-1");
+      expect(screen.getByRole("button", { name: "Add files" })).toHaveClass("row-start-2");
+      expect(screen.getByRole("button", { name: "Send" }).parentElement).toHaveClass("row-start-2");
+      rerender(view("一".repeat(45)));
+      expect(frame).toHaveAttribute("data-multiline", "true");
+    });
+
+    it("切换时是同一个文字区节点（不重建，光标和焦点不丢）", () => {
+      const { rerender } = render(view("一行字"));
+      const box = screen.getByRole("textbox", { name: "Message" });
+      box.focus();
+      rerender(view("第一行\n第二行"));
+      expect(screen.getByRole("textbox", { name: "Message" })).toBe(box);
+      expect(box).toHaveFocus();
+    });
+
+    it("多行删回一行、放得进回形针和发送键中间时退回单行；清空也回单行", () => {
+      const { container, rerender } = render(view("第一行\n第二行"));
+      const frame = container.firstElementChild as HTMLElement;
+      expect(frame).toHaveAttribute("data-multiline", "true");
+      rerender(view("短"));
+      expect(frame).toHaveAttribute("data-multiline", "false");
+      rerender(view("第一行\n第二行"));
+      expect(frame).toHaveAttribute("data-multiline", "true");
+      rerender(view(""));
+      expect(frame).toHaveAttribute("data-multiline", "false");
+    });
+
+    it("宽度够一行、但放不进回形针和发送键中间的文字，留在多行（不来回切）", () => {
+      const { container, rerender } = render(view("第一行\n第二行"));
+      Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 100 });
+      rerender(view("一".repeat(30))); // 30 × 8 = 240 > 100
+      expect(container.firstElementChild).toHaveAttribute("data-multiline", "true");
+    });
+
+    it("切换布局时先把 height 重置成 auto 再量，不沿用旧布局的高度", () => {
+      const { rerender } = render(view("一行字"));
+      const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+      rerender(view("第一行\n第二行"));
+      expect(box.style.height).toBe("60px");
+      rerender(view("短"));
+      expect(box.style.height).toBe("36px");
+    });
+  });
+
+  it("停止键和发送键在同一个位置、同样大小（单行和多行都在按钮组里）", () => {
+    const stop = { busy: true, stopping: false, failed: false, onStop: vi.fn() };
+    for (const files of [[], [{ key: "a", file: new File(["x"], "a.txt") }]]) {
+      const { unmount } = render(
+        <Composer value="" placeholder="发消息" staging={staging({ files: [...files] })} stop={stop as never} onChange={() => {}} onSend={() => {}} />,
+      );
+      const btn = screen.queryByRole("button", { name: "Stop" });
+      if (files.length === 0) {
+        expect(btn).toHaveClass("size-9", "rounded-[var(--radius-btn)]");
+        expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
+      } else {
+        expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
+      }
+      unmount();
+    }
+  });
+
+  it("获得焦点时外沿呈现很淡的强调色光晕（Tailwind 类，不用内联 <style>），边框颜色与粗细不变，文字框自身无 focus ring", () => {
     const { container } = setup();
-    const frame = container.querySelector(".composer-frame") as HTMLElement;
-    expect(frame).not.toBeNull();
-    // 聚焦光晕通过 .composer-frame:focus-within 统一管理，边框保持 1px border-border，不加粗、不改边框颜色
-    expect(frame).toHaveClass("composer-frame", "border", "border-border");
+    const frame = container.firstElementChild as HTMLElement;
+    expect(frame).toHaveClass("border", "border-border");
     expect(frame.className).not.toMatch(/border-primary/);
+    expect(frame.className).toContain("focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent)");
     expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/ring/);
-    const styleEl = container.querySelector("style");
-    expect(styleEl?.textContent).toMatch(/\.composer-frame:focus-within\s*\{[^}]*box-shadow:[^}]*color-mix\(in srgb, var\(--primary\) 14%, transparent\)/);
+    expect(container.querySelector("style")).toBeNull();
   });
 
   it("发送键状态：空输入且无附件时不可点（中性灰），有内容时变为强调色且可点，空变有内容时触发轻微回弹动效类", () => {
@@ -127,16 +244,18 @@ describe("Composer 布局", () => {
   });
 
   it("继续往后打字时不把 height 先重置成 auto（避免多行时每次按键触发整页同步回流），删字或清空时才重置", () => {
-    const { rerender } = render(<Composer value="第一行" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    const files = [{ key: "a", file: new File(["x"], "a.txt") }]; // 有待发文件：始终多行布局，布局切换不会插进来
+    const view = (value: string) => <Composer value={value} placeholder="发消息" staging={staging({ files })} onChange={() => {}} onSend={() => {}} />;
+    const { rerender } = render(view("第一行"));
     const box = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
     box.style.height = "80px";
     Object.defineProperty(box, "scrollHeight", {
       configurable: true,
       get: () => (box.style.height === "auto" ? 36 : 80),
     });
-    rerender(<Composer value="第一行继续打字" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    rerender(view("第一行继续打字"));
     expect(box.style.height).toBe("80px");
-    rerender(<Composer value="第一" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={() => {}} />);
+    rerender(view("第一"));
     expect(box.style.height).toBe("36px");
   });
 
