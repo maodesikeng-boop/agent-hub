@@ -39,6 +39,7 @@ import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
+import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
 import {
   findExecutable,
   VENDOR_FALLBACK_PATHS,
@@ -155,6 +156,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     scheduler?: NodeJS.Timeout;
     autoRenew?: NodeJS.Timeout;
     archiveCleanup?: NodeJS.Timeout;
+    worktreeCleanup?: WorktreeCleanup;
     handoverRunner?: HandoverRunner;
     setup?: SetupRunner;
     executor?: ActionExecutor;
@@ -181,10 +183,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, archiveCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
+    if (worktreeCleanup) await step("worktree 自动清理", () => worktreeCleanup.stop());
     parts.sleepInhibitor?.stop();
     // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
     if (handoverRunner) {
@@ -455,6 +458,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
     parts.stopWorkerRetention = startWorkerRetention({ ledger, db, log });
+    // 已收工 Worker 的 worktree：启动时先清一轮，之后每 WORKTREE_CLEANUP_INTERVAL_MS 清一轮（分支保留）
+    parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, log });
     // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
     const runAutoRenew = () => {
       try {

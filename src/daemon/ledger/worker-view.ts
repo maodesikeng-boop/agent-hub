@@ -102,11 +102,13 @@ export interface WorkerViewDeps {
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
   turnMaxTimeOf?: (workerConversationId: ConversationId) => { maxTimeMs: number; startedAt: number } | null;
+  /** worktree 是否已被自动清理（workers.ts 的 isWorktreeCleaned）。 */
+  isWorktreeCleaned?: (worker: WorkerDbRow) => boolean;
 }
 
 export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, deps: WorkerViewDeps) {
   const { db, now } = ctx;
-  const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf } = deps;
+  const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf, isWorktreeCleaned } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
   /** 状态：已收工、准备中、在等后台命令、在干活、空闲等验收。 */
@@ -174,7 +176,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (args.report !== undefined) return { text: workerSearch.reportText(worker, args.report), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
     const session = workerSession(worker);
     const live = liveOf(session.id);
-    const turns = turnsOf(steps.rows(session.id));
+    const purged = purgedNote(worker);
+    const turns = purged === null ? turnsOf(steps.rows(session.id)) : [];
     const last = turns.at(-1);
     const current = last !== undefined && last.end === null ? last : null;
     const lastEnded = [...turns].reverse().find((turn) => turn.end !== null) ?? null;
@@ -213,7 +216,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     } else if (maxTimeSummary && worker.status !== "ended" && !notStarted(worker)) {
       lines.push(`这一轮：${maxTimeSummary}`);
     }
-    const purged = purgedNote(worker);
     if (lastEnded?.end) {
       const seconds = turnSeconds(lastEnded);
       const took = seconds === null ? "" : `，用了 ${formatDuration(seconds)}`;
@@ -230,7 +232,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 
     lines.push(
       worker.workspace === "worktree"
-        ? `分支 ${worker.branch}，worktree ${worker.worktree_path}`
+        ? `分支 ${worker.branch}，worktree ${worker.worktree_path}${isWorktreeCleaned?.(worker) ? "（已自动清理）" : ""}`
         : `在项目主文件夹里干活（没有单独的分支和 worktree）`,
     );
     if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));

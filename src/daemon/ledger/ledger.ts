@@ -15,7 +15,7 @@
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
-import type { ConversationId, MessageKind, Pm, PmId } from "../../shared/domain.ts";
+import type { ConversationId, MessageKind, Pm, PmId, WorkerId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
@@ -42,6 +42,7 @@ import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
 import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./workers.ts";
+import type { EndedWorktreeCandidate } from "./workers.ts";
 
 export interface SqliteLedger extends Ledger {
   archivePm(pmId: PmId): Pm;
@@ -49,6 +50,8 @@ export interface SqliteLedger extends Ledger {
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
   /** 已收工满保留期的 Worker：清一批它们对话里的大块数据（worker-retention.ts）。一个事务、最多 maxRows 行。 */
   purgeExpiredWorkerConversations(nowMs?: number, maxRows?: number): WorkerPurgeBatch;
+  listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
+  isWorkerCleanable(workerId: WorkerId): boolean;
   close(): void;
 }
 
@@ -158,6 +161,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     notStarted,
     liveOf: sessions.liveOf,
     turnMaxTimeOf: workers.turnMaxTimeOf,
+    isWorktreeCleaned: workers.isWorktreeCleaned,
   });
   const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
@@ -338,6 +342,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onWorktreeCreated: workers.onWorktreeCreated,
 
     syncPersonaFiles: persona.syncPersonaFiles,
+    listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,
+    isWorkerCleanable: workers.isWorkerCleanable,
     close(): void {
       workers.clearAllMaxTime();
     },
