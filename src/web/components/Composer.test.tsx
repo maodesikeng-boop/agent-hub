@@ -370,3 +370,55 @@ describe("Composer 提示条", () => {
   });
 });
 
+
+/** 换掉 matchMedia：pointer 是 fine（鼠标、触控板）还是 coarse（手指）。 */
+const stubPointer = (pointer: "fine" | "coarse") =>
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === `(pointer: ${pointer})`, addEventListener() {}, removeEventListener() {} }));
+
+describe("Composer 聚焦和 Enter（按主指针）", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const mount = (over: Partial<React.ComponentProps<typeof Composer>> = {}) => {
+    const onSend = vi.fn();
+    render(<Composer value="你好" placeholder="发消息" staging={staging()} onChange={() => {}} onSend={onSend} {...over} />);
+    return { onSend, box: screen.getByRole("textbox", { name: "Message" }) };
+  };
+
+  it("pointer: fine：出现时把焦点放进输入框", () => {
+    stubPointer("fine");
+    const { box } = mount({ autoFocus: true });
+    expect(box).toHaveFocus();
+  });
+
+  it("pointer: coarse（手机、iPad）：出现时不聚焦，不弹键盘", () => {
+    stubPointer("coarse");
+    const { box } = mount({ autoFocus: true });
+    expect(box).not.toHaveFocus();
+  });
+
+  it("pointer: fine：Enter 发送，Shift+Enter 不发送", () => {
+    stubPointer("fine");
+    const { onSend, box } = mount();
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("你好", []);
+  });
+
+  it("pointer: coarse：Enter 只换行（不拦截、不发送），发送键照常发送", () => {
+    stubPointer("coarse");
+    const { onSend, box } = mount();
+    const prevented = !fireEvent.keyDown(box, { key: "Enter" });
+    expect(prevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("你好", []);
+  });
+
+  it("输入法选字时的 Enter 不发送（电脑）", () => {
+    stubPointer("fine");
+    const { onSend, box } = mount();
+    fireEvent.keyDown(box, { key: "Enter", keyCode: 229 });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
