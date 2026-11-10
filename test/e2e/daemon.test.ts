@@ -361,7 +361,8 @@ describe("聊天框上传文件", () => {
     // 界面看到的还是用户写的原文，附件在 meta 里
     const shown = messageById(await client.state(), messageId);
     expect(shown?.text).toBe("看看这个");
-    expect(shown?.meta).toEqual({ attachments: [attachment] });
+    // 服务端确认送达后还带送达回执（这一条是 replied，网页只在 failed 时读它）
+    expect(shown?.meta).toEqual({ attachments: [attachment], deliveryConfirmed: true });
 
     // 只有文件没有文字
     const only = await fetch(client.base + API_PATHS.messages(conversationId), {
