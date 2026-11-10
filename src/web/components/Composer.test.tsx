@@ -193,7 +193,7 @@ describe("Composer 布局", () => {
     }
   });
 
-  it("聚焦态写在 styles.css 的 .composer-frame（边框微染水果色 + 柔和阴影，不套圈）：外框不带 ring / 实心描边类，边框粗细不变，文字框自身无 focus ring，不用内联 <style>", () => {
+  it("聚焦态写在 styles.css 的 .composer-frame（只多一团水果色模糊光晕，边框不变，不套圈）：外框不带 ring / 实心描边类，边框粗细不变，文字框自身无 focus ring，不用内联 <style>", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
     expect(frame).toHaveClass("composer-frame", "border", "border-border");
