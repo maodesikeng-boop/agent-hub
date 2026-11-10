@@ -2,6 +2,7 @@
 // 加厂商只改这一个文件（问厂商要模型名单的代码在 daemon/driver/model-catalog.ts）。“默认”一律是 null，表示不传对应的参数，用厂商自己的默认。
 // agent_sessions.vendor、pms.vendor 存的就是这里的厂商编号。
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
+import { PRODUCT_NAME } from "./names.ts";
 
 export const AGENT_VENDORS = ["claude", "agy", "codex"] as const;
 export type AgentVendor = (typeof AGENT_VENDORS)[number];
@@ -108,7 +109,7 @@ interface ComposerSpec {
 }
 
 // claude 的隐藏命令：按“为什么拦”分组，原因是给用户看的一句（docs/composer-commands.md 的 T1、T2、T7）
-const CLAUDE_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请用资料页的“开新会话”按钮";
+const CLAUDE_SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请用资料页的“开新会话”按钮`;
 const CLAUDE_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
 const CLAUDE_SETTINGS_BLOCKED = "这个命令会改 claude 自己的设置，这里不能用；要改请在终端里打开 claude";
 const CLAUDE_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 claude";
@@ -117,15 +118,15 @@ const CLAUDE_TERMINAL_BLOCKED = "这个命令只能在终端界面里用";
 /** agy 的思考程度：和 Antigravity 软件一样三档（实测 xhigh、max 被 agy 拒绝）。 */
 const AGY_EFFORTS: readonly string[] = ["low", "medium", "high"];
 
-const AGY_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const AGY_SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
 const AGY_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
 const AGY_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 agy";
 const AGY_TERMINAL_BLOCKED = "交互式命令不能在后台会话跑，请在终端界面里打开 agy";
 
-const CODEX_SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const CODEX_SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
 const CODEX_MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
 const CODEX_ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 codex";
-const CODEX_SANDBOX_BLOCKED = "权限和沙箱由 agent-hub 管，这里不能用这个命令";
+const CODEX_SANDBOX_BLOCKED = `权限和沙箱由 ${PRODUCT_NAME} 管，这里不能用这个命令`;
 
 /** codex 的思考程度：通用六档（luna 系到 max，其余支持到 ultra）。 */
 const CODEX_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultra"];

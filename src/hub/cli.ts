@@ -19,7 +19,7 @@ import {
   WORKER_SEARCH_DEFAULT_LIMIT,
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
-import { HUB_COMMAND, PRODUCT_NAME } from "../shared/names.ts";
+import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
 
@@ -255,7 +255,7 @@ const UNREACHABLE_MESSAGE = `${LOCAL_ERRORS.network.text}。${LOCAL_ERRORS.netwo
 const INTERNAL_MESSAGE = "出了意外的错，这条命令没有跑完。重试一次；还不行，把现象告诉用户";
 /** post 里超时的原因；别的原因是系统码（ECONNRESET 之类），不打给人看。 */
 const TIMEOUT_REASON = "超时";
-const NO_ANSWER_MESSAGE = `请求已经发给 ${PRODUCT_NAME}，但没等到回应`;
+const NO_ANSWER_MESSAGE = `请求已经发给 ${PRODUCT_ID}，但没等到回应`;
 const MAYBE_EXECUTED_HINT = `请求可能已经执行，请先用 \`${hub} status\` 确认，别直接重试`;
 
 class UsageError extends Error {}
@@ -724,9 +724,9 @@ export async function runHub(io: HubIo): Promise<number> {
 
   const token = io.env[ENV_HUB_TOKEN];
   const socketPath = io.env[ENV_HUB_SOCK];
-  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`, true);
-  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_NAME} 发的令牌`, true);
-  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_NAME} 启动的会话里用`, true);
+  if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
+  if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_ID} 发的令牌`, true);
+  if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
 
   const body: Record<string, unknown> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {
@@ -767,7 +767,7 @@ export async function runHub(io: HubIo): Promise<number> {
     io.stderr.write(line(r.message));
     return HUB_EXIT.rejected;
   }
-  io.stderr.write(`${PRODUCT_NAME} 的回答看不懂（HTTP ${outcome.status}）\n`);
+  io.stderr.write(`${PRODUCT_ID} 的回答看不懂（HTTP ${outcome.status}）\n`);
   return HUB_EXIT.rejected;
 }
 

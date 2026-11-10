@@ -7,7 +7,7 @@ import { utf8Bytes } from "../../shared/domain.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { ResolveFolder } from "../../shared/ledger.ts";
 import { HUB_CALL_FIELD_MAX_BYTES, MAX_PATH_BYTES } from "../../shared/limits.ts";
-import { PRODUCT_NAME } from "../../shared/names.ts";
+import { PRODUCT_ID } from "../../shared/names.ts";
 
 /** 开头的 `~` 或 `~/` 换成 userHome；`~别人` 不展开。 */
 function expandHome(path: string, userHome: string): string {
@@ -61,7 +61,7 @@ export function createResolveFolder(options: ResolveFolderOptions): ResolveFolde
     if (!statSync(real).isDirectory()) throw new LedgerRequestError("invalid", `这不是文件夹，是一个文件：${real}`);
     const dataHome = realpathOrLiteral(options.dataHome, userHome);
     if (real === dataHome || real.startsWith(dataHome.endsWith(sep) ? dataHome : dataHome + sep)) {
-      throw new LedgerRequestError("invalid", `不能用 ${PRODUCT_NAME} 自己的数据目录：${real}`);
+      throw new LedgerRequestError("invalid", `不能用 ${PRODUCT_ID} 自己的数据目录：${real}`);
     }
     return real;
   };

@@ -102,7 +102,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         contentController.add(self, name: "sendNotification")
         contentController.add(self, name: "activateWindow")
 
-        window.title = "Agent Hub"
+        window.title = "Fusa"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
@@ -231,7 +231,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         case "sendNotification":
             guard let body = message.body as? [String: Any] else { return }
             let id = body["id"] as? String ?? UUID().uuidString
-            let title = body["title"] as? String ?? "Agent Hub"
+            let title = body["title"] as? String ?? "Fusa"
             let text = body["body"] as? String ?? ""
             let tag = body["tag"] as? String ?? id
             postNativeNotification(id: id, title: title, body: text, tag: tag)

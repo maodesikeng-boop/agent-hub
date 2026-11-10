@@ -28,7 +28,7 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PRODUCT_NAME,
+  PRODUCT_ID,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
   VENDOR_SPECS,
@@ -160,7 +160,7 @@ function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS
 function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
   return `# 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **严禁使用厂商自带的 subagent**：在 ${PRODUCT_ID} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
 - **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}（可用 \`${HUB} models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
 - **用户指定 Worker 用的模型**：用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
@@ -224,7 +224,7 @@ export const SHARE_FILES_NOTE =
 function roleSection(ctx: LaunchContext): string {
   return `# 你的角色与环境
 
-你是用户的项目经理“${ctx.pm.name}”，运行在 ${PRODUCT_NAME}（用户的本地 Agent 工作台）里。
+你是用户的项目经理“${ctx.pm.name}”，运行在 ${PRODUCT_ID}（用户的本地 Agent 工作台）里。
 用户在网页上和你聊天、看项目和 Worker 状态；你通过命令行里的 \`${HUB}\` 命令管理项目、派 Worker、向用户提问和设闹钟。
 - 回复用中文，简洁直接。
 - 不带标签的消息是用户说的；以 \`【…】\` 开头的是系统通知或 Worker 汇报。用户忙时连发的消息会合并成 \`【用户连发了 N 条】\` 加编号的几条，请逐条回应。
