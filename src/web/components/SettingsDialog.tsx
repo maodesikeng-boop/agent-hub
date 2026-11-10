@@ -119,10 +119,11 @@ export function SettingsDialog({
             ))}
           </TabsList>
           {sections.map(({ id, label }) => (
-            // 分类名固定在上面（右边让出关闭按钮），只有下面的分组滚；上下左右多留 4px 再收回，聚焦的圈不被裁掉
-            <TabsContent key={id} value={id} className="flex min-h-0 flex-1 flex-col outline-none">
+            // 分类名固定在上面（右边让出关闭按钮），只有下面的分组滚；上下左右多留 4px 再收回，聚焦的圈不被裁掉。
+            // 宽度：右栏 min-w-0（横排时 flex 子项默认不会比内容窄，内容有长域名就把整栏撑出弹窗），分组那一列 grid-cols-1（= minmax(0,1fr)，列宽不跟内容走）
+            <TabsContent key={id} value={id} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
               <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-title font-semibold">{label}</h2>
-              <div className="grid min-h-0 flex-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
+              <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
             </TabsContent>
           ))}
         </Tabs>

@@ -218,6 +218,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 右栏：`p-6`，自己纵向滚动；最上面是分类名（17px、600，和下面的组隔 24px），下面若干分组（第 9 条），组之间 24px。关闭按钮照常在右上角。
   - 窄屏（640px 以下）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
   - 分类名固定在右栏顶上（右边 `pr-14` 让出关闭按钮），只有下面的分组滚动。
+  - **宽度不能被内容撑开**（任何宽度下行右边的按钮都完整可见）：右栏 `min-w-0`，分组那一列 `grid-cols-1`（= `minmax(0,1fr)`），带标题的分组（`SettingsGroup`）自己也 `grid-cols-1`；否则长域名、长路径这类放不下的内容会把右栏撑出弹窗，被 `overflow` 裁掉，右边的 Allow / Show 就点不到。`SettingsRow`：非 `wide` 的行 `flex-wrap`，左边 `min-w-32 flex-1`（名字 `truncate`，小字 `break-words`，小字里并排的几项自己 `flex-wrap`），右边控件 `ml-auto shrink-0 max-w-full`，放不下就换到下一行靠右；行里的输入框 `min-w-0` 跟着收窄。`wide` 的行不换行，控件自己截断。
 - 结构从上到下：标题 → `DialogBody`（若干分组，`gap-6`）→ 错误提示（`px-4`，`text-danger`）→ `DialogFooter`。
 - **标题和底部按钮固定，只有中间滚动**：内容超过一屏（展开“更多设置”）时，`DialogBody` 自己滚，“创建”一直在视野里。表单弹窗把 `<form>` 做成 `DialogForm`（`flex min-h-0 flex-col`），里面放 `DialogBody` 和 `DialogFooter`。
 - 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。
