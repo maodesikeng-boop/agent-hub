@@ -93,6 +93,7 @@ const COMMAND_TOOLS: Record<AgentVendor, (command: string) => { name: string; in
   claude: (command) => ({ name: "Bash", input: { command, description: "x" } }),
   codex: (command) => ({ name: "commandExecution", input: { command } }),
   agy: (command) => ({ name: "run_command", input: { CommandLine: command } }),
+  deepseek: (command) => ({ name: "bash", input: { command } }),
   pi: (command) => ({ name: "bash", input: { command } }),
 };
 
@@ -538,6 +539,12 @@ const OTHER_TOOLS: Partial<Record<AgentVendor, Record<"read" | "search" | "edit"
     search: (q) => ({ name: "find_by_name", input: { Pattern: q, SearchPath: "." } }),
     edit: (p) => ({ name: "replace_file_content", input: { TargetFile: p } }),
     web: (q) => ({ name: "search_web", input: { query: q } }),
+  },
+  deepseek: {
+    read: (p) => ({ name: "read", input: { file_path: p } }),
+    search: (q) => ({ name: "grep", input: { pattern: q } }),
+    edit: (p) => ({ name: "edit", input: { file_path: p } }),
+    web: (q) => ({ name: "web_search", input: { query: q } }),
   },
 };
 const runNamed = (workerId: WorkerId, tool: { name: string; input: unknown }, wait = 1_000) => {

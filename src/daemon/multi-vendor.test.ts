@@ -1,4 +1,5 @@
 // 多厂商守护进程集成单测：验证 startDaemon 组装 claude / agy / codex 三家模型目录、驱动分发、PM 对话与跨厂商派 Worker。
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +18,20 @@ import {
 } from "../shared/index.ts";
 import { Client, agentTexts, messagesOf, waitForStatus, waitUntil } from "../../test/e2e/harness.ts";
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
+import { SANDBOX_EXEC, osSandboxAvailable } from "./driver/write-scope.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
+
+const canNestOsSandbox =
+  process.platform === "darwin"
+    ? (() => {
+        try {
+          execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
+          return true;
+        } catch {
+          return false;
+        }
+      })()
+    : osSandboxAvailable();
 
 /** 只有 Worker 的提示词里有的一句（daemon/prompt.ts 的 buildWorkerPrompt）：假 agy、codex 靠它认出自己是 Worker。 */
 const WORKER_PROMPT_MARK = "# 你的任务";
@@ -296,7 +310,89 @@ rl.on("line", (line) => {
 `,
     );
 
-    return { claudePath, agyPath, codexPath };
+    const deepseekPath = writeExecutable(
+      join(binDir, "fake-dsh"),
+      `
+const { createInterface } = require("node:readline");
+const { randomUUID } = require("node:crypto");
+
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+let sessionId = "dsh-sess-" + randomUUID();
+
+const rl = createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        protocolVersion: 1,
+        agentInfo: { name: "fake-dsh", version: "0.2.2-rc.1" },
+        agentCapabilities: { loadSession: false, sessionCapabilities: { resume: {}, close: {} } },
+      },
+    });
+    return;
+  }
+  if (req.method === "session/new" || req.method === "session/resume") {
+    if (req.params?.sessionId) sessionId = req.params.sessionId;
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        ...(req.method === "session/new" ? { sessionId } : {}),
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "[\\"deepseek-official\\",\\"deepseek-v4-pro\\"]",
+            options: [{ value: "[\\"deepseek-official\\",\\"deepseek-v4-pro\\"]", name: "DeepSeek V4 Pro" }],
+          },
+          {
+            id: "reasoning_effort",
+            name: "Reasoning Effort",
+            category: "thought_level",
+            type: "select",
+            currentValue: "high",
+            options: [
+              { value: "off", name: "Off" },
+              { value: "low", name: "Low" },
+              { value: "high", name: "High" },
+              { value: "max", name: "Max" },
+            ],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "session/set_config_option") {
+    out({ jsonrpc: "2.0", id: req.id, result: { configOptions: [] } });
+    return;
+  }
+  if (req.method === "session/prompt") {
+    const blocks = (req.params?.prompt || []).map((b) => b.text || "");
+    const lastText = blocks[blocks.length - 1] || "";
+    const reply = "DeepSeek PM 收到：" + lastText;
+    out({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } } },
+    });
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { stopReason: "end_turn", usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } },
+    });
+  }
+});
+`,
+    );
+
+    return { claudePath, agyPath, codexPath, deepseekPath };
   }
 
   async function bootMultiVendorDaemon() {
@@ -305,7 +401,7 @@ rl.on("line", (line) => {
     const userHome = join(dir, "user-home");
     const hubHome = join(dir, "hub-home");
     mkdirSync(userHome, { recursive: true });
-    const { claudePath, agyPath, codexPath } = createFakeVendors(binDir, projectDir);
+    const { claudePath, agyPath, codexPath, deepseekPath } = createFakeVendors(binDir, projectDir);
 
     const cleanEnv: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(process.env)) {
@@ -319,6 +415,7 @@ rl.on("line", (line) => {
     cleanEnv[vendorSpec("claude").cli.envVar] = claudePath;
     cleanEnv[vendorSpec("agy").cli.envVar] = agyPath;
     cleanEnv[vendorSpec("codex").cli.envVar] = codexPath;
+    cleanEnv[vendorSpec("deepseek").cli.envVar] = deepseekPath;
 
     daemon = await startDaemon({ userHome, env: cleanEnv });
     const tokenMatch = /token=([A-Za-z0-9_-]+)/.exec(daemon.url);
@@ -349,9 +446,13 @@ rl.on("line", (line) => {
     expect(codexCat!.source).toBe("vendor");
     expect(codexCat!.models.some((m) => m.id === "gpt-5.4")).toBe(true);
     expect(codexCat!.defaultModel).toBe("GPT-5.4");
+
+    const deepseekCat = body.catalogs.find((c) => c.vendor === "deepseek");
+    expect(deepseekCat?.source).toBe("bundled");
+    expect(deepseekCat?.models.map((m) => m.id)).toEqual(["deepseek-v4-pro", "deepseek-flash"]);
   });
 
-  it("可创建 vendor 为 agy 和 codex 的 PM，发消息路由到对应驱动层并收到回复", async () => {
+  it("可创建 vendor 为 agy、codex、deepseek 的 PM，发消息路由到对应驱动层并收到回复", async () => {
     const { client } = await bootMultiVendorDaemon();
 
     const agyPm = await client.createPm({
@@ -377,9 +478,21 @@ rl.on("line", (line) => {
     const codexMsgId = await client.post(codexPm.conversationId, "你好小科");
     await waitForStatus(client, codexMsgId, "replied");
     expect(agentTexts(await client.state(), codexPm.conversationId)).toEqual(["Codex PM 收到：你好小科"]);
+
+    const deepseekPm = await client.createPm({
+      name: "小深PM",
+      mode: "hands_on",
+      vendor: "deepseek",
+      defaultModel: "deepseek-v4-pro",
+      effort: "high",
+      persona: "你是小深。",
+    });
+    const deepseekMsgId = await client.post(deepseekPm.conversationId, "你好小深");
+    await waitForStatus(client, deepseekMsgId, "replied");
+    expect(agentTexts(await client.state(), deepseekPm.conversationId)).toEqual(["DeepSeek PM 收到：你好小深"]);
   });
 
-  it("claude PM 可通过 hub worker start --vendor agy / codex 跨厂商派 Worker 并收到汇报", async () => {
+  it.skipIf(!canNestOsSandbox)("claude PM 可通过 hub worker start --vendor agy / codex 跨厂商派 Worker 并收到汇报", async () => {
     const { client } = await bootMultiVendorDaemon();
     const initial = await client.state();
     const claudeConvId = initial.conversations[0]!.conversation.id;

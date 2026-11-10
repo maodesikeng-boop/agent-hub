@@ -830,8 +830,9 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     const ctx = projectContext({ vendorAvailability: onlyClaude });
     const prompt = buildLaunchPrompt(ctx, dir);
     expect(prompt).toContain("能用的厂商有 `claude`");
-    expect(prompt).not.toContain("`agy`（");
-    expect(prompt).not.toContain("`codex`（");
+    for (const v of AGENT_VENDORS.filter((id) => id !== "claude")) {
+      expect(prompt).not.toContain(`\`${v}\`（`);
+    }
     expect(prompt).toContain("[--vendor claude]");
     const unknown = buildLaunchPrompt(projectContext({ vendorAvailability: { agy: "unknown" } }), dir);
     expect(unknown).toContain("`agy`（");

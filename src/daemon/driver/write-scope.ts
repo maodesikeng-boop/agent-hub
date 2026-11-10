@@ -178,6 +178,8 @@ export interface ReadonlySandboxInput {
   secretPaths: string[];
   /** 禁读的通配（任意目录下的 .env、id_rsa* 这种，写法见 readonly-policy.ts），seatbelt 转成正则。 */
   secretGlobs: string[];
+  /** 这家自己启动要读的凭据文件（如 $DSH_HOME/.env）：盖过 secretPaths、secretGlobs 放行读，写照样不行。 */
+  readableFiles?: string[];
 }
 
 /** 设备文件：写 /dev/null 这类要放行，不然 shell 重定向、终端都坏。 */
@@ -196,7 +198,8 @@ export function secretGlobRegex(glob: string): string {
 }
 
 /**
- * 只读的 sandbox-exec 规则（设计 4.1）：别的放行，哪里都不能写，再放行设备文件、会话私有临时目录、厂商运行时和缓存目录，最后密钥禁读（规则后面的压过前面的）。
+ * 只读的 sandbox-exec 规则（设计 4.1）：别的放行，哪里都不能写，再放行设备文件、会话私有临时目录、厂商运行时和缓存目录，
+ * 再密钥禁读，最后放行这家自己的凭据文件读（规则后面的压过前面的）。
  * 路径要是真实路径（沙箱按解析后的路径比）。
  */
 export function readonlySeatbeltProfile(input: ReadonlySandboxInput): string {
@@ -213,6 +216,7 @@ export function readonlySeatbeltProfile(input: ReadonlySandboxInput): string {
     ...fileRegexes.map((re) => `(allow file-write* (regex ${sbplRegex(re)}))`),
     ...input.secretPaths.map((p) => `(deny file-read* (subpath ${sbplString(p)}))`),
     ...input.secretGlobs.map((g) => `(deny file-read* (regex ${sbplRegex(secretGlobRegex(g))}))`),
+    ...(input.readableFiles ?? []).map((f) => `(allow file-read* (literal ${sbplString(f)}))`),
   ].join("\n");
 }
 
@@ -440,7 +444,7 @@ export function bwrapArgs(
 /**
  * 只读 Worker 的 bubblewrap 参数（docs/linux-sandbox-design.md 第 4.2 节）：
  * 全盘只读 --ro-bind / /，放行私有 tmpDir、writableDirs 与展开后的 writableFileGlobs，
- * 最后对 secretPaths 中已存在的目录挂 --tmpfs、已存在的文件挂 --ro-bind /dev/null。
+ * 最后对 secretPaths 中已存在的目录挂 --tmpfs、已存在的文件挂 --ro-bind /dev/null（readableFiles 跳过）。
  */
 export function readonlyBwrapArgs(
   base: SpawnCommand,
@@ -489,7 +493,7 @@ export function readonlyBwrapArgs(
     args.push("--bind", target, target);
   }
 
-  const seenSecrets = new Set<string>();
+  const seenSecrets = new Set<string>((input.readableFiles ?? []).map(real));
   for (const secret of input.secretPaths) {
     const target = real(secret);
     if (seenSecrets.has(target) || !exists(target)) continue;
