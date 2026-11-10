@@ -33,6 +33,7 @@ import {
   type BaseSessionState,
   type PendingEntry,
 } from "./base-driver.ts";
+import { claudeComposerBase } from "../../vendors/claude/composer.ts";
 
 interface DummyBatch extends BaseBatch {
   text: string;
@@ -65,8 +66,8 @@ function fakeChild(): ChildProcessWithoutNullStreams {
 }
 
 class DummyDriver extends BaseSessionDriver<DummyProc, DummyBatch, DummyState> {
-  constructor(options: BaseDriverOptions) {
-    super("claude", options);
+  constructor(options: Omit<BaseDriverOptions, "composer">) {
+    super("claude", { ...options, composer: claudeComposerBase });
   }
 
   protected createSessionState(id: SessionId): DummyState {

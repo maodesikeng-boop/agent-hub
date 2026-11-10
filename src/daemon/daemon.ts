@@ -361,8 +361,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               ...launch,
               ...(VENDOR_SPECS[vendor].explicitDefaultModel
                 ? {
-                    // 没选模型时用名单里厂商报的默认（名单有缓存，不是每次起会话都问）
-                    defaultModel: async () => (await models.list()).find((c) => c.vendor === vendor)?.defaultModelId ?? null,
+                    // 没选模型时用名单里厂商报的默认（名单有缓存，不是每次起会话都问；只问这一家，docs/vendor-plugin-design.md 1.7 第 1 条）
+                    defaultModel: async () => (await models.list({ vendor })).find((c) => c.vendor === vendor)?.defaultModelId ?? null,
                   }
                 : {}),
             },

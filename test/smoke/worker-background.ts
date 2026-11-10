@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workerEventOf, type SessionId, type WorkerMessageMeta } from "../../src/shared/index.ts";
 import { DEFAULT_STATIC_DIR } from "../../src/daemon/daemon.ts";
-import { createClaudeDriver } from "../../src/daemon/driver/index.ts";
+import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
 import { createLedger } from "../../src/daemon/ledger/index.ts";
 import { buildLaunchPrompt } from "../../src/daemon/prompt.ts";
 import { createSessionStore } from "../../src/daemon/store/index.ts";
@@ -51,7 +51,7 @@ async function withWorker(sleepSec: number, fn: (w: {
   const launchDir = join(dir, "launch");
   mkdirSync(launchDir, { recursive: true });
   const driver = createClaudeDriver({
-    claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
+    executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
     store,
     prepareLaunch: async (row) => {
       const promptFile = join(launchDir, `${row.id}.md`);

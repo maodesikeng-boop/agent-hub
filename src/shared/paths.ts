@@ -3,11 +3,17 @@ import { existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
+import type { VendorPathsModule } from "../vendors/daemon-types.ts";
+import { importVendorFile } from "../vendors/load.ts";
 import { AGENT_VENDORS, VENDOR_HOME_PATHS, vendorSpec, type AgentVendor } from "./vendors.ts";
 
-// 厂商专属路径在各家文件夹（docs/vendor-plugin-design.md 的 A7）；守护进程的调用方还从这里引，P3 搬家时改成直接引各家的
-export { agyCliDataDir, agyDataPaths, agyHomePaths } from "../vendors/agy/paths.ts";
-export { codexHomeDir } from "../vendors/codex/paths.ts";
+/**
+ * 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）。
+ * 放在厂商文件夹的 paths.ts 而不是 spec.ts：spec.ts 网页也打包，这些网页用不到。paths.ts 只引 node:* 和自家 spec.ts，不会绕回这里。
+ */
+const VENDOR_PATHS: Readonly<Record<AgentVendor, VendorPathsModule>> = Object.fromEntries(
+  await Promise.all(AGENT_VENDORS.map(async (vendor) => [vendor, (await importVendorFile(vendor, "paths.ts")) as VendorPathsModule])),
+) as Record<AgentVendor, VendorPathsModule>;
 
 export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
@@ -210,14 +216,14 @@ export function linuxInstallDirs(userHome: string): string[] {
 }
 
 /**
- * 每家厂商的兜底安装路径（spec 的 cli.fallbackPaths；没写的只认 PATH），以 AGENT_VENDORS 为键。
+ * 每家厂商的兜底安装路径（各家 paths.ts 的 fallbackPaths；没写的只认 PATH），以 AGENT_VENDORS 为键。
  * daemon.ts 按家调用，paths.test.ts 逐家核对。
  */
 export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = Object.fromEntries(
   AGENT_VENDORS.map((vendor) => [
     vendor,
     (userHome: string, platform: string = process.platform) =>
-      vendorSpec(vendor).cli.fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join }) ?? [],
+      VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join }) ?? [],
   ]),
 ) as Record<AgentVendor, (userHome: string, platform?: string) => string[]>;
 
@@ -248,10 +254,19 @@ export function resolveVendorExecutables(
  */
 export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string[] {
   const override = vendorSpec(vendor).home.configHome;
-  const base = override === undefined ? undefined : env[override.env]?.trim() || join(userHome, override.rel);
+  const base = vendorConfigHome(vendor, userHome, env);
   return VENDOR_HOME_PATHS[vendor].catalogWatchPaths.map((rel) =>
     override && base && rel.startsWith(`${override.rel}/`) ? join(base, rel.slice(override.rel.length + 1)) : join(userHome, rel),
   );
+}
+
+/**
+ * 配置根目录能被环境变量改位置的厂商（spec 的 home.configHome，如 codex 的 CODEX_HOME）实际用的目录：环境变量去掉首尾空白后非空优先，
+ * 否则 <主目录>/<rel>。没有 configHome 的厂商是 null。认证判断、模型目录指纹都用这条，保证看的是同一处。
+ */
+export function vendorConfigHome(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string | null {
+  const override = vendorSpec(vendor).home.configHome;
+  return override === undefined ? null : env[override.env]?.trim() || join(userHome, override.rel);
 }
 
 /**

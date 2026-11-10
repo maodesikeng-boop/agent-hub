@@ -388,7 +388,7 @@ export function handoverTokenThresholdOf(vendor: string): number {
 }
 
 // ---- 这台设备上能不能用（docs/vendor-availability-design.md）----
-// 每台设备、每家厂商一个状态，只在这里定义；各家怎么判断在 daemon/vendors/<厂商>.ts，跟模型名单一起问、一起缓存。
+// 每台设备、每家厂商一个状态，只在这里定义；各家怎么判断在 src/vendors/<厂商>/catalog.ts，跟模型名单一起问、一起缓存。
 
 /** available：能用；not_installed：没装；signed_out：没登录；unknown：认不出（当能用）。 */
 export const VENDOR_AVAILABILITIES = ["available", "not_installed", "signed_out", "unknown"] as const;

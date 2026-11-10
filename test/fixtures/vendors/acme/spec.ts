@@ -10,7 +10,6 @@ export default defineVendor({
     command: "acme",
     envVar: "AGENT_HUB_ACME",
     loginCommand: "acme login",
-    fallbackPaths: ({ linuxInstallDirs, join }) => linuxInstallDirs.map((dir) => join(dir, "acme")),
   },
   home: {
     dirs: [".acme"],

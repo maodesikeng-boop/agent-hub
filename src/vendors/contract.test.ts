@@ -1,25 +1,32 @@
 // 厂商契约测试（docs/vendor-plugin-design.md 5.3 节）：名单里每一家跑同一套静态检查，不起进程、不联网。
 // 只看 spec 的那一半在 test-helpers.ts 的 describeSpecContract（假厂商 acme 也跑它，见 acme-contract.test.ts）；
-// 守护进程侧（P3 前还在原位置）：登记表 DAEMON_VENDORS（src/daemon/vendors/index.ts）、FORKERS（src/daemon/handover/forkers.ts）、
-// vendorTranscriptPath（src/daemon/driver/transcript.ts）。
+// 守护进程侧（P3 搬进各家文件夹）：src/vendors/<id>/daemon.ts（daemon-registry.ts 按名单加载）、paths.ts；从它们推出来的
+// DAEMON_VENDORS（src/daemon/vendors/index.ts）、FORKERS（src/daemon/handover/forkers.ts）、vendorTranscriptPath（src/daemon/driver/transcript.ts）。
 // S9 定为：forker 的 id 所有厂商之间全局唯一（存进数据库 fork_ref，重启后靠它找回是哪个办法）。
 //
 // 还不能转正的（写成 it.todo，到那一步改成真断言）：
-// - S1 有 src/vendors/<id>/daemon.ts 且默认导出带 createDriver：P3。现在按现有位置查（DAEMON_VENDORS、src/daemon/vendors/<id>.ts）。
 // - S10 后半“readonly 为 os_sandbox 的厂商没有 OS 沙箱时派只读被拒”：现在代码对所有 Worker 一律要求 OS 沙箱
 //   （ledger/workers.ts 的 WORKER_NEEDS_OS_SANDBOX_MESSAGE，不分厂商，ledger 测试里测），没有按家的入口；P4 再定要不要按家。
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { vendorTranscriptPath } from "../daemon/driver/transcript.ts";
 import { FORKERS } from "../daemon/handover/forkers.ts";
 import { DAEMON_VENDORS } from "../daemon/vendors/index.ts";
+import { VENDOR_DAEMONS } from "./daemon-registry.ts";
 import { AGENT_VENDORS, VENDOR_AVAILABILITIES, VENDOR_HOME_PATHS, VENDOR_SPECS } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
-import { ROOT, browserUnsafeImports, describeSpecContract, importsOf, otherVendorDirImports } from "./test-helpers.ts";
+import { ROOT, browserUnsafeImports, describeSpecContract, importsOf, otherVendorDirImports, runtimeImportsDeep } from "./test-helpers.ts";
 
 const GARBAGE: readonly unknown[] = [null, undefined, "垃圾", 42, {}, [], { models: "x" }];
 const specFileOf = (id: string) => `src/vendors/${id}/spec.ts`;
+/** 运行时引了就会和 daemon-registry.ts 的顶层 await 绕成环（卡死）的文件：各家文件夹里只许 import type。 */
+const REGISTRY_DERIVED = ["src/vendors/daemon-registry.ts", "src/daemon/vendors/index.ts", "src/daemon/handover/forkers.ts", "src/daemon/driver/transcript.ts"];
+/** 一个文件夹下的 .ts（不含测试）。 */
+const sourcesIn = (dir: string) =>
+  readdirSync(join(ROOT, dir), { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".ts") && !e.name.endsWith(".test.ts"))
+    .map((e) => join(relative(ROOT, e.parentPath), e.name).split("\\").join("/"));
 
 describe("厂商名单", () => {
   it("S1 名单和文件夹一一对应：每个 id 有 src/vendors/<id>/spec.ts，registry.ts 引的就是它；没有名单外的厂商文件夹", async () => {
@@ -38,7 +45,7 @@ describe("厂商名单", () => {
 
   it("各登记表的键和名单一致", () => {
     expect([...AGENT_VENDORS]).toEqual(VENDOR_LIST.map((s) => s.id));
-    for (const table of [VENDOR_SPECS, VENDOR_HOME_PATHS, DAEMON_VENDORS, FORKERS]) {
+    for (const table of [VENDOR_SPECS, VENDOR_HOME_PATHS, VENDOR_DAEMONS, DAEMON_VENDORS, FORKERS]) {
       expect(Object.keys(table).sort()).toEqual([...AGENT_VENDORS].sort());
     }
   });
@@ -55,12 +62,31 @@ describe("厂商名单", () => {
     // 反向确认检查器不是空跑：守护进程路径文件引了 node:* 与各家文件夹，必须被抓出
     expect(browserUnsafeImports("src/shared/paths.ts").length).toBeGreaterThan(0);
     expect(browserUnsafeImports("src/vendors/agy/paths.ts").length).toBeGreaterThan(0);
-    expect(otherVendorDirImports("src/shared/paths.ts").map((i) => i.path)).toEqual(
-      expect.arrayContaining(["src/vendors/agy/paths.ts", "src/vendors/codex/paths.ts"]),
+    expect(otherVendorDirImports("src/daemon/driver/transcript.test.ts").map((i) => i.path)).toEqual(
+      expect.arrayContaining(["src/vendors/agy/transcript.ts", "src/vendors/codex/transcript.ts"]),
     );
   });
 
-  it.todo("S1 每个 id 有 src/vendors/<id>/daemon.ts，默认导出带 createDriver（P3）");
+  it("S1 每个 id 有 src/vendors/<id>/daemon.ts（默认导出带 createDriver）和 paths.ts，daemon-registry.ts 加载的就是它们", async () => {
+    for (const { id } of VENDOR_LIST) {
+      for (const file of ["daemon.ts", "paths.ts"]) expect(existsSync(join(ROOT, "src/vendors", id, file)), `${id}/${file}`).toBe(true);
+      const mod = (await import(`./${id}/daemon.ts`)) as { default: { createDriver?: unknown } };
+      expect(typeof mod.default.createDriver, id).toBe("function");
+      expect(VENDOR_DAEMONS[id]).toBe(mod.default);
+    }
+  });
+
+  it("各家文件夹不在运行时引按名单推出来的登记表（会和 daemon-registry.ts 的顶层 await 绕成环），也不引别家文件夹", () => {
+    for (const { id } of VENDOR_LIST) {
+      for (const file of sourcesIn(`src/vendors/${id}`)) {
+        const derived = runtimeImportsDeep(file).filter((i) => i.path !== null && REGISTRY_DERIVED.includes(i.path));
+        expect(derived.map((i) => `${i.from} -> ${i.spec}`), file).toEqual([]);
+        // 直接引的（经 shared/index.ts 引到名单里各家的 spec.ts 不算）
+        const other = importsOf(file).filter((i) => i.path !== null && /^src\/vendors\/[^_/][^/]*\//.test(i.path) && !i.path.startsWith(`src/vendors/${id}/`));
+        expect(other.map((i) => i.path), file).toEqual([]);
+      }
+    }
+  });
 });
 
 describeSpecContract(specFileOf);
@@ -69,12 +95,10 @@ describe.each(AGENT_VENDORS)("厂商契约（守护进程侧）：%s", (id) => {
   const spec = VENDOR_SPECS[id];
   const daemon = DAEMON_VENDORS[id];
 
-  it("S1（现有位置）守护进程侧有登记、有 createDriver；src/daemon/vendors/<id>.ts 存在", () => {
+  it("S1 推出来的登记表有 createDriver、输入框；输入框是这家的", () => {
     expect(typeof daemon.createDriver).toBe("function");
     expect(typeof daemon.createComposer).toBe("function");
-    expect(typeof daemon.catalog).toBe("function");
     expect(daemon.base.vendor).toBe(id);
-    expect(existsSync(join(ROOT, "src/daemon/vendors", `${id}.ts`))).toBe(true);
   });
 
   it("S6 压缩命令不会被拦、认得出是压缩", () => {

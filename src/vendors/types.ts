@@ -15,7 +15,7 @@ export interface FetchedQuotaSpec {
 
 /**
  * 输入框里“/”命令的厂商数据（docs/composer-commands.md 实测）。怎么问命令列表、`@` 文件怎么写、怎么拼写进 agent 的内容
- * 这些要写代码的，在 daemon/vendors/<厂商>.ts。
+ * 这些要写代码的，在 src/vendors/<厂商>/composer.ts。
  */
 export interface ComposerSpec {
   /** 命令的开头：用户原文以它开头（前面不能有空格）才算命令。 */
@@ -32,15 +32,6 @@ export interface ComposerSpec {
 /** 失败的通用类型：服务繁忙、额度用完、网络断了、找不到程序、没能启动。认不出来的是 unknown（shared/errors.ts）。 */
 export type FailureKind = "busy" | "quota" | "network" | "missing" | "start" | "auth" | "context";
 
-/** 算兜底安装路径时公共代码给的东西：spec 不引 node:path，拼路径用这里的 join（守护进程给的是 node:path 的）。 */
-interface FallbackPathsInput {
-  userHome: string;
-  platform: string;
-  /** Linux 上各家官方安装方式放可执行文件的目录（shared/paths.ts 的 linuxInstallDirs）。 */
-  linuxInstallDirs: readonly string[];
-  join: (...parts: string[]) => string;
-}
-
 interface VendorCapabilities {
   /**
    * 能不能把长命令放后台跑、跑完自动开新一轮叫醒 agent（见 docs/mid-turn-messages.md 第 10 节）。
@@ -51,6 +42,11 @@ interface VendorCapabilities {
   readonly: "settings" | "driver" | "os_sandbox";
   /** 未选模型时把名单里的默认模型（ModelCatalog.defaultModelId）显式传给驱动。不写 = false。 */
   explicitDefaultModel?: boolean;
+  /**
+   * 包进 OS 沙箱时加在命令行最前面、关掉这家自带沙箱的参数（macOS 沙箱不能嵌套；daemon/driver/write-scope.ts 的 WRITE_SCOPE_ENFORCERS 按它推）。
+   * 不写 = 不在命令行上关（claude 写在设置文件里、codex 用 sandboxPolicy）。
+   */
+  ownSandboxOffArgs?: readonly string[];
 }
 
 export interface VendorSpec<Id extends string = string> {
@@ -65,8 +61,6 @@ export interface VendorSpec<Id extends string = string> {
     envVar: string;
     /** 在终端里登录这家要跑的命令（没登录时报错里告诉用户）。 */
     loginCommand: string;
-    /** PATH 里找不到时按顺序去哪找。不写 = 只认 PATH。 */
-    fallbackPaths?: (input: FallbackPathsInput) => string[];
   };
   /**
    * 凭据和配置目录（相对用户主目录）：

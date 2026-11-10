@@ -10,19 +10,11 @@ import {
   type ModelCatalog,
   type VendorAvailability,
 } from "../../shared/index.ts";
-import { createCodexCatalogSource } from "../vendors/codex.ts";
-import {
-  createModelCatalogs,
-  parseAgyModels,
-  parseCodexModels,
-  parseInitializeModels,
-  queryAgyModels,
-  queryClaudeModels,
-  queryClaudeAuthStatus,
-  queryCodexCatalog,
-  queryCodexModels,
-  type VendorCatalogSource,
-} from "./model-catalog.ts";
+import { parseAgyModels, queryAgyModels } from "../../vendors/agy/catalog.ts";
+import { parseInitializeModels, queryClaudeAuthStatus, queryClaudeModels } from "../../vendors/claude/catalog.ts";
+import { parseCodexModels, queryCodexCatalog, queryCodexModels } from "../../vendors/codex/catalog.ts";
+import { createVendorCatalogSources } from "../vendors/index.ts";
+import { createModelCatalogs, type VendorCatalogSource } from "./model-catalog.ts";
 import { isAlive } from "./process.ts";
 import { AGY_SIGNED_OUT_STDOUT } from "./test-helpers.ts";
 
@@ -884,7 +876,9 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
       let now = 6_000_000;
       let calls = 0;
-      const source = createCodexCatalogSource({ path: bin, cwd: home, installed: () => true, env: { PATH: "", CODEX_HOME: codexHome } });
+      // 经守护进程的装配（createVendorCatalogSources）拿：指纹由它按通用规则补（spec 的 home.configHome）
+      const options = { path: bin, cwd: home, installed: () => true, env: { PATH: "", CODEX_HOME: codexHome } };
+      const source = createVendorCatalogSources({ claude: options, agy: options, codex: options }).codex!;
       const catalogs = createModelCatalogs({
         sources: {
           codex: {

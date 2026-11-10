@@ -17,8 +17,6 @@ export default defineVendor({
     command: "claude",
     envVar: ENV_CLAUDE,
     loginCommand: "claude auth login",
-    // macOS 上只认 PATH（沿用原来的行为），别的系统看官方安装目录
-    fallbackPaths: ({ platform, linuxInstallDirs, join }) => (platform === "darwin" ? [] : linuxInstallDirs.map((dir) => join(dir, "claude"))),
   },
   // 2026-11-08 核对：~/.claude.json 存账号和 MCP 登录信息，~/.claude/.credentials.json 是 claude 的令牌（macOS 上在钥匙串时没有这个文件）
   home: {

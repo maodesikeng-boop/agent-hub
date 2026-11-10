@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_VENDORS } from "../../shared/index.ts";
 import { AGY_SIGNED_OUT_STDOUT } from "../driver/test-helpers.ts";
-import { codexAuthFileAvailability } from "./codex.ts";
+import { codexAuthFileAvailability } from "../../vendors/codex/catalog.ts";
 import { VENDOR_CATALOG_PROBES } from "./index.ts";
 
 describe("各家怎么从名单那次查询里看登录状态", () => {

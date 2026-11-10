@@ -1,5 +1,5 @@
 // agy（Antigravity）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-// 要拼绝对路径的（数据目录下的会话库、MCP 配置文件）在同目录的 paths.ts。
+// 要拼绝对路径的（数据目录下的会话库、MCP 配置文件）和只给守护进程用的路径（PATH 里找不到时去哪找）在同目录的 paths.ts。
 import { ENV_AGY } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
@@ -24,10 +24,6 @@ export default defineVendor({
     command: "agy",
     envVar: ENV_AGY,
     loginCommand: "agy",
-    fallbackPaths: ({ userHome, platform, linuxInstallDirs, join }) => {
-      const home = join(userHome, ".local", "bin", "agy");
-      return platform === "darwin" ? [home] : [home, ...linuxInstallDirs.map((dir) => join(dir, "agy"))];
-    },
   },
   // 数据在 ~/.gemini（antigravity、antigravity-cli；macOS 上登录令牌在钥匙串 Library/Keychains，Linux 在钥匙环），
   // oauth_creds.json 是 gemini 系的令牌文件，mcp-oauth-tokens.json 是 MCP OAuth 令牌（gemini-cli docs/tools/mcp-server.md）
@@ -103,5 +99,7 @@ export default defineVendor({
     // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
     backgroundWake: false,
     readonly: "os_sandbox",
+    // 包进 OS 沙箱时关掉自带的终端沙箱（不能嵌套）
+    ownSandboxOffArgs: ["--settings", JSON.stringify({ enableTerminalSandbox: false })],
   },
 });

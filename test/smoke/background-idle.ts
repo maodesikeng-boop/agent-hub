@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type DriverEvent } from "../../src/shared/index.ts";
-import { createClaudeDriver } from "../../src/daemon/driver/index.ts";
+import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { waitUntil } from "../e2e/harness.ts";
 import { CLAUDE, MODEL, TURN_MS, expect, processTable, removeOwnClaudeProjects, scenario, writeClaudeWrapper, type Outcome } from "./kit.ts";
@@ -60,7 +60,7 @@ async function run(holdMaxMs: number | undefined): Promise<Run> {
   store.add(row);
   const driver = createClaudeDriver({
     // 单个 claude 进程跑完，不 --resume：不存会话记录
-    claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
+    executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }),
     store,
     prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }),
     idleCloseMs: IDLE_MS,

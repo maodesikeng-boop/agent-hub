@@ -43,13 +43,7 @@ interface Rule {
 const businessDaemonAndHubTs = [
   ...listFiles("src/daemon", isTs),
   ...listFiles("src/hub", isTs),
-].filter(
-  (path) =>
-    !isExcludedTestOrFake(path) &&
-    !path.startsWith("src/daemon/driver/") &&
-    !path.startsWith("src/daemon/vendors/") &&
-    !path.startsWith("src/daemon/handover/"),
-);
+].filter((path) => !isExcludedTestOrFake(path));
 
 /** agy 文件夹（src/vendors/agy/）以外的源码：agy 专属的路径字面量只许写在它自己的文件夹里。 */
 const srcOutsideAgyVendorDirTs = listFiles("src", isTs).filter((path) => !isExcludedTestOrFake(path) && !path.startsWith("src/vendors/agy/"));
@@ -144,8 +138,12 @@ describe("厂商声明表统一：扫描守卫规则", () => {
     expect(businessDaemonAndHubTs).toContain("src/daemon/ledger/workers.ts");
     expect(businessDaemonAndHubTs).toContain("src/hub/cli.ts");
     expect(srcOutsideAgyVendorDirTs.length).toBeGreaterThan(40);
-    expect(srcOutsideAgyVendorDirTs).toContain("src/daemon/driver/readonly-agy.ts");
-    expect(srcOutsideAgyVendorDirTs).toContain("src/daemon/handover/agy.ts");
+    // 驱动层、交接复制、守护进程侧登记表的通用部分（P3 后各家的都搬进了 src/vendors/<厂商>/）也受保护
+    expect(businessDaemonAndHubTs).toContain("src/daemon/driver/base-driver.ts");
+    expect(businessDaemonAndHubTs).toContain("src/daemon/handover/runner.ts");
+    expect(businessDaemonAndHubTs).toContain("src/daemon/vendors/index.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/daemon/driver/write-scope.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/vendors/claude/driver.ts");
     expect(srcOutsideAgyVendorDirTs).toContain("src/shared/paths.ts");
     expect(srcOutsideAgyVendorDirTs).toContain("src/shared/vendors.ts");
     expect(srcOutsideAgyVendorDirTs).toContain("src/vendors/claude/spec.ts");

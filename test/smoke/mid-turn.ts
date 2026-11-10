@@ -8,7 +8,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type AgentVendor, type Driver, type DriverEvent } from "../../src/shared/index.ts";
-import { createClaudeDriver, createCodexDriver } from "../../src/daemon/driver/index.ts";
+import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
+import { createCodexDriver } from "../../src/vendors/codex/driver.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { sleep, waitUntil } from "../e2e/harness.ts";
 import { CLAUDE, MODEL, TURN_MS, expect, removeOwnClaudeProjects, removeVendorRecordsOf, scenario, writeClaudeWrapper, type Outcome } from "./kit.ts";
@@ -67,7 +68,7 @@ function rig(vendor: AgentVendor): Rig {
   // claude 单个进程跑完、不 --resume：不存会话记录；codex 没法不存，closeRig 里删
   const common = { store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} };
   const driver: Driver =
-    vendor === "codex" ? createCodexDriver({ ...common, codexPath: CODEX }) : createClaudeDriver({ ...common, claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
+    vendor === "codex" ? createCodexDriver({ ...common, executablePath: CODEX }) : createClaudeDriver({ ...common, executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
   return { driver, events, sessionId: 1, dir, vendor, vendorSessionId, cwd };
