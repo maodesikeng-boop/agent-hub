@@ -209,6 +209,7 @@ code {
   --motion-tint: 300ms; /* 换项目经理时外壳底色、分割线淡变 */
   --motion-enter: 120ms; /* 新消息淡入上移 */
   --motion-switch: 200ms; /* 切换对话时头像、标题的 View Transition */
+  --motion-focus: 180ms; /* 聊天输入框聚焦、失焦时边框和阴影的过渡 */
 }
 /* 外壳底色跟着项目经理换：只给左栏、对话区、右栏这几个容器的底色和边框加过渡，不写 * { transition } */
 .tint-fade {
@@ -255,6 +256,26 @@ code {
   ::view-transition-old(*),
   ::view-transition-new(*) {
     animation: none !important;
+  }
+}
+/* 聊天输入框外框的阴影和聚焦态（Composer.tsx 的 FRAME_CLASS，docs/ui-standard.md 第 7 条）：平时一层轻阴影；聚焦像“亮起来”，不套圈。
+   边框还是 1px（只换颜色，框不跳）：中性灰加深一档，再掺 20% 强调色；阴影换成一层贴边的细影 + 一层大半径的柔影，
+   柔影的颜色是强调色压暗一半（不是纯强调色，红色系才不发粉），没有不带模糊的实心圈。强调色只取 --primary，数值只在这里改 */
+.composer-frame {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  transition:
+    border-color var(--motion-focus) ease-out,
+    box-shadow var(--motion-focus) ease-out;
+}
+.composer-frame:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 20%, color-mix(in srgb, var(--foreground) 16%, var(--border)));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 8px 26px -6px color-mix(in srgb, color-mix(in srgb, var(--primary) 50%, #000) 14%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-frame {
+    transition: none;
   }
 }
 /* 聊天输入框发送键从“空”变“有内容”时放大回弹一次（Composer.tsx 在那一下加上这个类，之后不循环）；系统设了“减少动态效果”就不播 */

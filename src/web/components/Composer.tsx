@@ -13,9 +13,8 @@ import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
-/** 聊天输入框外框：1px 中性灰边框 + 轻阴影；聚焦时外沿一圈很淡的强调色光晕（docs/ui-standard.md 第 7 条），边框不变 */
-const FRAME_CLASS =
-  "rounded-[26px] border border-border bg-background shadow-[0_2px_10px_rgba(0,0,0,0.05)] transition-shadow duration-150 ease-out focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent),0_2px_10px_rgba(0,0,0,0.05)] motion-reduce:transition-none";
+/** 聊天输入框外框：1px 中性灰边框；平时的轻阴影和聚焦态（边框微染强调色、阴影变深变柔，不套圈）都在 styles.css 的 .composer-frame（docs/ui-standard.md 第 7 条） */
+const FRAME_CLASS = "composer-frame rounded-[26px] border border-border bg-background";
 
 /** 回形针、文字区、按钮组在同一个网格里：单行时三者同一行；多行时文字区占满上一行，回形针和按钮组落到下一行（同一个文字区节点，不重建，光标不丢） */
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
