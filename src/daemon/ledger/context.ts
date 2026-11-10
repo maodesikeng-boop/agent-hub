@@ -37,6 +37,7 @@ const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "pm.removed": 0,
   "project.created": 1,
   "conversation.created": 2,
+  "conversation.purged": 2,
   "session.created": 3,
   "folders.updated": 4,
   "message.created": 5,

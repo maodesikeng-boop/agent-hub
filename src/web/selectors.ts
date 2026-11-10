@@ -502,10 +502,10 @@ function phaseOf(
   endedLines: ReadonlyMap<ConversationId, number>,
   session: SessionState | null = sessionOf(state, workerConversationId),
 ): WorkerPhase {
-  if (endedLines.has(workerConversationId) || session?.status === "ended") return "ended";
+  const view = state.conversations[workerConversationId];
+  if (endedLines.has(workerConversationId) || session?.status === "ended" || view?.conversation.purgedAt !== undefined) return "ended";
   // 正在跑项目的准备命令（PR #47，会话 activity 是 preparing）
   if (session?.activity === "preparing") return "preparing";
-  const view = state.conversations[workerConversationId];
   // 第一条是任务说明（翻页翻掉了说明早就发过了）
   const task = view?.hasMore === false ? view.messages[0] : undefined;
   return task?.sender === "pm" && task.status === "queued" ? "preparing" : "open";

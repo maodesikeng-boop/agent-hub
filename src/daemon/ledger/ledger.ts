@@ -38,6 +38,8 @@ import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerSteps } from "./steps.ts";
+import { createLedgerWorkerRetention } from "./worker-retention.ts";
+import type { WorkerPurgeBatch } from "./worker-retention.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
 import { assertWorkerOpenForUser, createLedgerWorkers, notStarted } from "./workers.ts";
 import type { EndedWorktreeCandidate } from "./workers.ts";
@@ -46,6 +48,8 @@ export interface SqliteLedger extends Ledger {
   archivePm(pmId: PmId): Pm;
   unarchivePm(pmId: PmId): Pm;
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
+  /** 已收工满保留期的 Worker：清一批它们对话里的大块数据（worker-retention.ts）。一个事务、最多 maxRows 行。 */
+  purgeExpiredWorkerConversations(nowMs?: number, maxRows?: number): WorkerPurgeBatch;
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
   close(): void;
@@ -150,6 +154,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew, log: options.log, onHandoverClaimable: options.onHandoverClaimable });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const steps = createLedgerSteps(ctx);
+  const workerRetention = createLedgerWorkerRetention(ctx, files);
   const workerView = createLedgerWorkerView(ctx, steps, {
     ownWorker: workers.ownWorker,
     workerSession: workers.workerSession,
@@ -199,13 +204,17 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const recentPage = (id: ConversationId) =>
         page(db.all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?", id, MESSAGE_PAGE_SIZE + 1));
       const conversations: ConversationSnapshot[] = db
-        .all<ConversationDbRow>("SELECT * FROM conversations WHERE kind != 'project_group' ORDER BY id")
+        .all<ConversationDbRow>(
+          `SELECT c.*, p.purged_at FROM conversations c LEFT JOIN conversation_purges p ON p.conversation_id = c.id
+           WHERE c.kind != 'project_group' ORDER BY c.id`,
+        )
         .map((row) => {
           const conversation = toConversation(row);
           const workerLine = row.kind === "worker" ? workerLines.get(row.id) : undefined;
           const summary = workerLine !== undefined ? { workerLine } : {};
           if (ended.has(row.id)) {
-            const hasMore = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id) !== undefined;
+            const hasMore =
+              row.purged_at == null && db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id) !== undefined;
             return { conversation, messages: [], hasMore, ...summary };
           }
           const { messages, hasMore } = recentPage(row.id);
@@ -268,6 +277,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     archivePm: persona.archivePm,
     unarchivePm: persona.unarchivePm,
     purgeExpiredArchivedPms: persona.purgeExpiredArchivedPms,
+    purgeExpiredWorkerConversations: workerRetention.purgeBatch,
 
     getMessage: messages.getMessage,
     sentFileAllows(sessionId, realPath) {

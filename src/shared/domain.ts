@@ -155,6 +155,8 @@ export interface Conversation {
   projectId: ProjectId | null;
   title: string;
   createdAt: number;
+  /** Worker 的对话：收工满 WORKER_RETENTION_DAYS 天后消息和步骤日志被清掉的时间；没清过没有这一项。 */
+  purgedAt?: number;
 }
 
 /**

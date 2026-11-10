@@ -88,6 +88,8 @@ export interface ConversationDbRow {
   project_id: number | null;
   title: string;
   created_at: number;
+  /** 只有快照的查询 LEFT JOIN conversation_purges 带上这一列（没清过是 null）。 */
+  purged_at?: number | null;
 }
 
 export interface MessageDbRow {
@@ -175,6 +177,8 @@ export function toConversation(row: ConversationDbRow): Conversation {
     projectId: row.project_id,
     title: row.title,
     createdAt: row.created_at,
+    // 只有被保留期清理过的 Worker 对话才带这一项（没清过不带，省得改老数据和测试里的对话对象）
+    ...(row.purged_at != null ? { purgedAt: row.purged_at } : {}),
   };
 }
 

@@ -272,6 +272,20 @@ export function applyChange(state: HubState, change: Change): HubState {
         conversations: { ...state.conversations, [conversation.id]: { conversation, messages: [], hasMore: false } },
       };
     }
+    case "conversation.purged": {
+      const { conversationId, purgedAt } = change.data;
+      const view = state.conversations[conversationId];
+      if (!view) return next;
+      const { [conversationId]: _older, ...older } = state.older;
+      return {
+        ...next,
+        conversations: {
+          ...state.conversations,
+          [conversationId]: { ...view, conversation: { ...view.conversation, purgedAt }, messages: [], hasMore: false },
+        },
+        ...(state.older[conversationId] !== undefined ? { older } : {}),
+      };
+    }
     case "session.created":
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
   }
@@ -365,7 +379,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       return { ...state, older: { ...state.older, [action.conversationId]: "error" } };
     case "olderDone": {
       const view = state.conversations[action.conversationId];
-      if (!view) return state;
+      if (!view || view.conversation.purgedAt !== undefined) return state;
       const known = new Set(view.messages.map((m) => m.id));
       const earlier = action.messages.filter((m) => !known.has(m.id));
       return {

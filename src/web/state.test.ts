@@ -318,6 +318,19 @@ describe("M2 新的变化类型", () => {
     expect(s2.conversations[2]?.messages).toHaveLength(1);
   });
 
+  it("conversation.purged：Worker 对话的消息清空、打上 purgedAt、没有更早的；不认识的对话只推进 seq；别的对话不动", () => {
+    const worker = { ...makeConvSnapshot([]).conversation, id: 30, kind: "worker" as const, pmId: 1, title: "修 X" };
+    const s0 = loaded({
+      conversations: [makeConvSnapshot([makeMessage({ id: 1 })]), { conversation: worker, messages: [makeMessage({ id: 5, conversationId: 30 })], hasMore: true }],
+    });
+    const s1 = applyChange(s0, changeOf(11, "conversation.purged", { conversationId: 30, purgedAt: 1234 }));
+    expect(s1.conversations[30]).toEqual({ conversation: { ...worker, purgedAt: 1234 }, messages: [], hasMore: false });
+    expect(s1.conversations[1]).toBe(s0.conversations[1]);
+    const s2 = applyChange(s1, changeOf(12, "conversation.purged", { conversationId: 99, purgedAt: 1 }));
+    expect(s2.seq).toBe(12);
+    expect(s2.conversations).toBe(s1.conversations);
+  });
+
   it("session.created：加入会话；同一个会话编号替换", () => {
     const s0 = loaded();
     const s1 = applyChange(s0, changeOf(11, "session.created", { session: makeSession({ sessionId: 5, conversationId: 1 }) }));
