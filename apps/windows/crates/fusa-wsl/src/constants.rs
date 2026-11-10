@@ -16,6 +16,9 @@ pub const GUEST_SCRIPT_WSL_DIR: &str = "/usr/local/libexec/fusa";
 /// 发行版内准备与自检脚本固定绝对路径。
 pub const GUEST_SCRIPT_WSL_PATH: &str = "/usr/local/libexec/fusa/wsl-provision-guest.sh";
 
+/// 发行版内受控后台起停与探活脚本固定绝对路径。
+pub const DAEMON_CTL_WSL_PATH: &str = "/usr/local/libexec/fusa/wsl-daemon-ctl.sh";
+
 /// 发行版内锁定的 Node 24 可执行文件绝对路径。
 pub const FUSA_NODE_WSL_PATH: &str = "/home/fusa/.local/share/fusa/node/bin/node";
 
@@ -25,11 +28,20 @@ pub const FUSA_PNPM_WSL_PATH: &str = "/home/fusa/.local/bin/pnpm";
 /// 发行版内守护进程 UI 认证令牌路径（仅供宿主侧内存读取兑换 Cookie）。
 pub const FUSA_UI_TOKEN_WSL_PATH: &str = "/home/fusa/.agent-hub/state/ui-token";
 
+/// 发行版内守护进程运行与状态根目录。
+pub const FUSA_AGENT_HUB_HOME_WSL_DIR: &str = "/home/fusa/.agent-hub";
+
 /// 发行版内用户项目主目录。
 pub const FUSA_PROJECTS_WSL_DIR: &str = "/home/fusa/projects";
 
 /// 发行版内后台版本包存放目录。
 pub const FUSA_RELEASES_WSL_DIR: &str = "/home/fusa/.local/share/fusa/releases";
+
+/// 发行版内当前生效后台版本软链接目录。
+pub const FUSA_CURRENT_RELEASE_WSL_DIR: &str = "/home/fusa/.local/share/fusa/releases/current";
+
+/// Windows 注册表当前用户 WSL 发行版列表子键路径（`HKCU` 下）。
+pub const LXSS_REGISTRY_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Lxss";
 
 /// 本地应用数据目录下的准备阶段状态标记文件名。
 pub const PROVISION_STATE_FILENAME: &str = "wsl-provision-state.json";
@@ -46,6 +58,10 @@ pub const ROOTFS_CACHE_SUBDIR: &str = "cache";
 /// 编译期内嵌的发行版内幂等初始化与隔离自检脚本（单一事实来源）。
 pub const EMBEDDED_GUEST_SCRIPT: &str =
     include_str!("../../../../../scripts/wsl-provision-guest.sh");
+
+/// 编译期内嵌的发行版内受控后台起停与探活脚本（单一事实来源）。
+pub const EMBEDDED_DAEMON_CTL_SCRIPT: &str =
+    include_str!("../../../../../scripts/wsl-daemon-ctl.sh");
 
 /// 锁定的官方 Ubuntu 24.04 LTS WSL2 rootfs 镜像元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]

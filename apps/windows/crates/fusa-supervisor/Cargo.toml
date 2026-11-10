@@ -1,0 +1,16 @@
+[package]
+name = "fusa-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-platform daemon lifecycle supervisor, dual probe, and log rotator for Windows WSL2 Fusa"
+
+[dependencies]
+fusa-wsl = { path = "../fusa-wsl" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

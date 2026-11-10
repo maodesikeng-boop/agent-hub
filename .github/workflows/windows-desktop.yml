@@ -1,0 +1,107 @@
+name: windows-desktop
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-desktop-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-nsis:
+    name: windows-desktop (windows-2022 unsigned-preview)
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web frontend assets
+        run: pnpm build
+
+      - name: Stage WSL backend release archive for Tauri resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='*.test.ts' \
+            --exclude='*.test.tsx' \
+            -czf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz \
+            package.json \
+            pnpm-lock.yaml \
+            tsconfig.json \
+            apps/desktop/contract.json \
+            scripts \
+            src \
+            dist
+
+      - name: Install Rust stable (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/windows -> target
+
+      - name: Run Rust workspace unit tests
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --manifest-path apps/windows/Cargo.toml --workspace --locked
+
+      - name: Build Tauri NSIS installer (unsigned-preview)
+        working-directory: apps/windows/crates/fusa-desktop
+        env:
+          CI: "true"
+        run: pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --ci -- --locked
+
+      - name: Label NSIS installer as unsigned-preview and generate SHA256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $nsisDir = "apps/windows/target/release/bundle/nsis"
+          $setupExe = Get-ChildItem -Path $nsisDir -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $setupExe) {
+            throw "NSIS installer executable not found under $nsisDir"
+          }
+
+          $cargoToml = Get-Content -Raw "apps/windows/Cargo.toml"
+          if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.1.0"
+          }
+
+          $outDir = "apps/windows/target/release/unsigned-preview-artifacts"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $previewName = "Fusa_${version}_x64-setup-unsigned-preview.exe"
+          $previewPath = Join-Path $outDir $previewName
+          Copy-Item -Path $setupExe.FullName -Destination $previewPath -Force
+
+          $hash = (Get-FileHash -Path $previewPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $previewName" | Set-Content -Encoding ascii -NoNewline:$false -Path "$previewPath.sha256"
+
+          $sizeMiB = [math]::Round((Get-Item $previewPath).Length / 1MB, 2)
+          Write-Host "Prepared $previewName ($sizeMiB MiB) sha256=$hash"
+
+      - name: Upload unsigned-preview NSIS installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusa-windows-x64-nsis-unsigned-preview
+          path: apps/windows/target/release/unsigned-preview-artifacts/*
+          if-no-files-found: error
+          retention-days: 14

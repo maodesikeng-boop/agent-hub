@@ -92,6 +92,13 @@ pub enum ProvisionError {
     #[error("检测到同名 WSL 发行版 `{distro_name}`，但未发现 Fusa 安装标记；为保护已有数据已停止导入，请先处理名称冲突")]
     DistroNameConflict { distro_name: String },
 
+    #[error("检测到同名 WSL 发行版 `{distro_name}` 的 Windows 注册表 BasePath 与本应用专属目录不符（期望: {expected}，实际: {actual}）；拒绝触碰非本应用创建的发行版")]
+    DistroBasePathMismatch {
+        distro_name: String,
+        expected: PathBuf,
+        actual: String,
+    },
+
     #[error("已登记的发行版 `{distro_name}` 当前 WSL 版本为 {version}（要求 WSL 2）")]
     UnsupportedWslVersion { distro_name: String, version: u8 },
 
