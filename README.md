@@ -2,17 +2,59 @@
 
 **English** | [中文](#中文)
 
-Agent Hub is a self-hosted web app that lets you run a small team of AI coding agents on your own machine: a **project manager** agent per project talks to you, splits the work, and dispatches tasks to **worker** agents, each working in its own git worktree. Every role can use a different vendor's official command-line agent under your own account.
+**Manage an entire project through a single conversation.**
+
+Agent Hub is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`, defined in [`src/shared/vendors.ts`](src/shared/vendors.ts) as `AGENT_VENDORS`) under your own account.
 
 ![Agent Hub home screen](docs/screenshots/readme-home.png)
 
+### Why a single conversation per project?
+
+When you work with multiple coding agents at once, the bottleneck quickly shifts from writing code to **managing agent sessions**: creating git worktrees, picking models, copying context between threads, watching terminals, checking whether an agent stalled, and reviewing diffs across half a dozen tabs.
+
+Existing multi-agent tools such as [Orca](https://github.com/stablyai/orca) ([docs](https://www.onorca.dev/docs)) and [T3 Code](https://github.com/pingdotgg/t3code) ([outside-agents docs](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)) are primarily designed around **giving you a workspace to open and watch multiple agent sessions and worktrees yourself**:
+- **[Orca](https://github.com/stablyai/orca)** is a desktop IDE for running multiple AI coding agents side by side, where each task gets its own git worktree, split-pane agent terminal, diff viewer, and browser tab (along with an `orca` CLI and experimental [orchestration commands](https://www.onorca.dev/docs/cli/orchestration) for spawning workers).
+- **[T3 Code](https://github.com/pingdotgg/t3code)** is a desktop, web, and mobile control surface for starting and managing agent threads across projects and optional git worktrees (along with [`t3 thread` CLI commands and an MCP server](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md) for outside agents).
+
+While you can also use those tools to have one agent spawn others, Agent Hub is designed from the ground up specifically for **"one conversation manages the whole project"**—the shape it has had since day one. You do not open or babysit individual worktree sessions yourself; the UI, context lifecycle, and sub-agent orchestration are all built to keep you in a single continuous conversation with your project's PM.
+
 It is built for **one person across multiple devices** (your Mac, a Linux server, your phone)—not a multi-user shared server.
 
-## Features
+## How it works
 
-- **Project managers & workers:** each role independently selects its vendor, model, and thinking effort level.
+### 1. A UI built around the PM conversation
+
+- **One project, one main chat:** The left sidebar ([`src/web/components/Sidebar.tsx`](src/web/components/Sidebar.tsx), `listConversations` in [`src/web/selectors.ts`](src/web/selectors.ts)) only lists Project Managers (`1 PM = 1 project`, [`src/daemon/ledger/projects.ts`](src/daemon/ledger/projects.ts)). Worker conversations never clutter the sidebar.
+- **Process collapsed by default, conclusions up front:** In the PM chat ([`src/web/components/Messages.tsx`](src/web/components/Messages.tsx)), the PM's intermediate tool calls and Worker dispatch/close events within a turn are folded into a single `Worked for Xs ›` line (`WorkLine` / `groupMessages` in [`src/web/selectors.ts`](src/web/selectors.ts)). When a Piece finishes a round, only a compact status dot and summary bubble (`WorkerSpeech`, capped at `WORKER_LINE_SUMMARY_CHARS = 120` characters in [`src/shared/limits.ts`](src/shared/limits.ts) and [`src/shared/worker.ts`](src/shared/worker.ts)) appear in the main conversation.
+- **On-demand drill-down:** Active Pieces, pending questions (`Needs You` from `hub ask`), and a collapsed-by-default `Completed` list live in the right rail ([`src/web/components/RightRail.tsx`](src/web/components/RightRail.tsx), or the bottom drawer [`src/web/mobile/PiecesDrawer.tsx`](src/web/mobile/PiecesDrawer.tsx) on mobile). You only click a summary bubble or Piece row to open its full execution log ([`src/web/components/WorkerConversation.tsx`](src/web/components/WorkerConversation.tsx)) when you want to look inside.
+
+### 2. Seamless context compaction & session renewal
+
+- **Automatic handover at `200,000` context tokens:** Because you stay in one conversation per project indefinitely, the PM's underlying CLI session will eventually fill up. When a PM session's context reaches **`200,000` tokens** (`HANDOVER_TOKEN_THRESHOLD = 200_000` / `AUTO_RENEW_CONTEXT_TOKENS` in [`src/shared/limits.ts`](src/shared/limits.ts), per-vendor `handoverTokenThreshold` in [`src/shared/vendors.ts`](src/shared/vendors.ts)), the ledger automatically queues a handover ([`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts), [docs/background-handover-design.md](docs/background-handover-design.md)).
+- **Non-blocking background fork:** A background runner ([`src/daemon/handover/runner.ts`](src/daemon/handover/runner.ts), `HANDOVER_CONCURRENCY = 2`) forks the PM session in the background ([`src/daemon/handover/claude.ts`](src/daemon/handover/claude.ts), [`codex.ts`](src/daemon/handover/codex.ts), [`agy.ts`](src/daemon/handover/agy.ts)) without `HUB_*` credentials and with writes blocked, generating a ~2,000-character structured handover while you continue chatting with the PM without interruption (if a vendor does not support session forking, it waits for `AUTO_RENEW_IDLE_MS = 20_000` ms of idle time and immediately yields if you send a message).
+- **Zero-interruption switch:** Between turns, the ledger switches to `generation + 1`, pre-warms the new CLI process, and prepends `sessionPreambleText` ([`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts)) to the next turn: the latest system prompt and persona memory (`PM_MEMORY_PROMPT` in [`src/daemon/prompt.ts`](src/daemon/prompt.ts)), the structured handover, up to **`30,000` characters** of verbatim user/PM messages before the fork point (`HANDOVER_RECENT_CHARS = 30_000` in [`src/shared/limits.ts`](src/shared/limits.ts), [`src/daemon/ledger/handover-recent.ts`](src/daemon/ledger/handover-recent.ts)) plus all verbatim messages after the fork point (up to `HANDOVER_POST_CUT_MAX_CHARS = 60_000`), a directory of Worker reports that arrived after the fork point, ledger search commands (`hub worker search`, `hub worker show`), and the previous session's raw transcript file path ([`src/daemon/driver/transcript.ts`](src/daemon/driver/transcript.ts)). In the UI, it remains the exact same conversation (`SessionRenewed` divider in [`src/web/components/Messages.tsx`](src/web/components/Messages.tsx)). Switching a PM's vendor on its profile page uses the same handover + verbatim-history transition (`switchVendorIn`).
+
+### 3. Sub-agent (Worker / Piece) orchestration & direct control
+
+- **`hub worker start` with isolated worktrees:** Vendor built-in sub-agent tools (`Agent`, `Task`, `invoke_subagent`, `spawn_agent`) are disabled in [`src/daemon/prompt.ts`](src/daemon/prompt.ts) (`buildPmWorkerPrompt`) so all sub-agents go through Agent Hub's ledger ([`src/daemon/ledger/workers.ts`](src/daemon/ledger/workers.ts)). Each Worker gets its own git worktree (`~/.agent-hub/worktrees/<project>/<worker>`) and branch `hub/<id>-<slug>` ([`src/shared/worker.ts`](src/shared/worker.ts), [`src/daemon/git/worktree.ts`](src/daemon/git/worktree.ts)), optional automatic worktree setup via `hub project setup` (`SETUP_TIMEOUT_MS = 10` minutes in [`src/shared/limits.ts`](src/shared/limits.ts), [`src/daemon/setup/setup.ts`](src/daemon/setup/setup.ts)), and per-worker selection of `--vendor`, `--model`, `--effort`, per-turn `--max-time` (default `DEFAULT_WORKER_MAX_TIME_MS = 30` minutes, range `10s`–`24h`, notifying the PM via `worker.max_time_exceeded` without killing the Worker), and `--readonly` sandbox mode ([`src/shared/readonly-policy.ts`](src/shared/readonly-policy.ts), [docs/readonly-worker-design.md](docs/readonly-worker-design.md)). The PM process mounts `worktrees/<project>/` via `--add-dir` to inspect Worker diffs directly.
+- **Talk directly to a Worker or pick who the PM dispatches:** You can open any Piece and send a message directly to that Worker—the Worker receives it tagged with `【用户直接对你说】` and the PM simultaneously receives a copy (`【用户直接对 Worker #N · … 说的话（Worker 已收到）】`, [`src/shared/worker.ts`](src/shared/worker.ts)) so the PM never loses track. In the PM composer, you can also type `/hub:worker` ([`src/web/worker-pick.ts`](src/web/worker-pick.ts), [docs/worker-pick-command.md](docs/worker-pick-command.md)) to specify the vendor, model, and thinking effort for Workers dispatched from that message (`【用户指定：这条消息里派的 Worker 用 --vendor …】`).
+
+### 4. Token saving & efficiency
+
+- **Keep heavy reads and tool noise out of the PM's context:** Quick questions and small edits are answered directly, while reading thousands of lines, investigating logs (`--readonly`), and multi-file edits are offloaded to Workers (`buildPmModePrompt` and `buildPmWorkerPrompt` in [`src/daemon/prompt.ts`](src/daemon/prompt.ts)). Bulky intermediate tool outputs stay inside short-lived Worker sessions instead of inflating the PM's context on every subsequent turn.
+- **Pick model and thinking effort by task difficulty:** Each PM and Worker independently sets `--vendor`, `--model`, and `--effort` (`low` / `medium` / `high` / `xhigh` / `max` in [`src/shared/vendors.ts`](src/shared/vendors.ts)). Routine edits or read-only checks can use faster/cheaper models and lower effort while reserving top reasoning models for planning and tricky debugging.
+- **Fixed Worker report format & layered on-demand inspection:** Every Worker turn ends with a structured `=== 汇报 ===` block (`状态 / 摘要 / 提交 / 测试 / 问题`, `WORKER_REPORT_FORMAT` in [`src/shared/worker.ts`](src/shared/worker.ts)), and only that block is delivered to the PM. To inspect a Worker without dumping its raw transcript into context, the PM queries layer by layer ([`src/daemon/ledger/worker-view.ts`](src/daemon/ledger/worker-view.ts), [`src/daemon/ledger/worker-stats.ts`](src/daemon/ledger/worker-stats.ts), [`src/shared/limits.ts`](src/shared/limits.ts)):
+  - `hub worker show <id>`: status, step count, stall warning after `WORKER_STALL_HINT_MS = 5` minutes without output, branch, and PR info.
+  - `hub worker log <id> [--last N | --stats]`: defaults to the last `WORKER_LOG_DEFAULT_STEPS = 20` steps (max `200`), clipping each step to `WORKER_VIEW_TEXT_MAX_CHARS = 100` characters; `--stats` summarizes step counts, elapsed time, and the top `WORKER_STATS_TOP = 3` most-read files and repeated commands.
+  - `hub worker list` & `hub worker search`: `hub worker list` caps ended Workers to the most recent `WORKER_LIST_RECENT_ENDED = 20`; older Workers are searched on demand via `hub worker search` (default `20` hits with `WORKER_SEARCH_CONTEXT_CHARS = 80` characters of context).
+- **`200,000`-token cap on Worker back-and-forth:** Once a Worker's context exceeds `WORKER_SEND_MAX_TOKENS = 200_000` tokens ([`src/shared/limits.ts`](src/shared/limits.ts), [`src/daemon/prompt.ts`](src/daemon/prompt.ts)) or requires multiple rounds of rework, the PM ends it (`hub worker end`) and starts a fresh Worker on the branch rather than paying to re-read a 200K+ context on every follow-up turn.
+- **~97% prompt cache reuse during background handover & tool-stripped preamble:** When Claude Code forks a PM session in the background ([`src/daemon/handover/claude.ts`](src/daemon/handover/claude.ts), `buildForkSettings` in [`src/shared/policy.ts`](src/shared/policy.ts)), it keeps the identical model, system prompt, and tool list (blocking writes via a `PreToolUse` hook and `dontAsk` rather than removing tools), reusing ~97% of the parent session's prompt cache ([docs/background-handover-design.md](docs/background-handover-design.md)). When the new session starts, `recentRows` ([`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts)) strips out all `kind = 'tool'` messages and full Worker reports, carrying over only the ~2,000-character handover, up to `30,000` characters of user/PM dialogue, and a 1-line index of recent Worker reports.
+- **Busy-turn message batching & mid-turn delivery:** Consecutive messages sent while an agent is busy are either streamed into the running turn (`msg_lifecycle_v1` in [`src/daemon/driver/base-driver.ts`](src/daemon/driver/base-driver.ts), [docs/mid-turn-messages.md](docs/mid-turn-messages.md)) or batched into a single `【用户连发了 N 条】` turn (`mergeUserTexts` in [`src/daemon/driver/protocol.ts`](src/daemon/driver/protocol.ts)), avoiding N separate full-context turns.
+- **Bounded initial state, lazy history loading, and idle process reaping:** `/api/state` returns at most `MESSAGE_PAGE_SIZE = 100` recent messages per active conversation and **`0` messages (`messages: []`, `hasMore: true`) for ended Worker conversations** (`snapshot` in [`src/daemon/ledger/ledger.ts`](src/daemon/ledger/ledger.ts), [`src/shared/limits.ts`](src/shared/limits.ts)), fetching history only when opened. Idle CLI processes are closed after `IDLE_CLOSE_MS = 10` minutes ([`src/shared/limits.ts`](src/shared/limits.ts), held up to `BACKGROUND_TASKS_HOLD_MAX_MS = 4h` for PM / `150m` for Worker when background commands are running) and resumed via `--resume` on the next message, while CLI model/command probes pass `--no-session-persistence --settings '{"disableAllHooks":true}' --strict-mcp-config` (`INITIALIZE_QUERY_ARGS` in [`src/daemon/driver/protocol.ts`](src/daemon/driver/protocol.ts)) and cache results (`MODEL_CATALOG_FRESH_MS = 6h`, `COMMANDS_FRESH_MS = 10m`, `FETCHED_QUOTA_FRESH_MS = 5m`).
+
+## Other features
+
 - **Currently supported agent CLIs:** Claude Code (`claude`), Antigravity (`agy`), and Codex (`codex`) (list defined in [`src/shared/vendors.ts`](src/shared/vendors.ts) as `AGENT_VENDORS`).
-- **Isolated git worktrees:** each worker runs in its own git worktree (`~/.agent-hub/worktrees/<project>/<worker>`); read-only workers are available for code review and investigation.
 - **Rich web UI:** works on desktop and mobile, installable as a PWA with optional Web Push notifications, Markdown rendering, syntax highlighting, Mermaid and Vega-Lite charts, and file uploads.
 - **Quota tracking:** displays usage quota windows for the supported vendors.
 - **Optional macOS desktop shell & multi-device view:** manage agents across your Mac and Linux machines from a single web page (see below).
@@ -127,15 +169,57 @@ Workers edit files and execute shell commands on your machine with your OS user'
 
 [English](#agent-hub) | **中文**
 
-Agent Hub 是一个自托管的个人多 Agent 协作网页应用：在你的电脑或服务器上，每个项目配一个**项目经理（PM）**负责与你沟通、拆分任务，再派给多个 **Worker** 在各自独立的 git worktree 里并行干活。每个角色都可以任选不同厂商的官方命令行 Agent，使用你自己的账号。
+**通过一个会话管理整个项目。**
+
+Agent Hub 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy`、`codex`，名单见 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `AGENT_VENDORS`），使用你自己的账号。
+
+### 为什么要“一个会话管住整个项目”？
+
+同时用多个编程 Agent 干活时，瓶颈很快就会从“写代码”变成**“管会话”**：建 git worktree、选模型、在不同会话之间来回贴背景、盯一堆终端看谁卡住了、在十几个标签页里挨个审 diff。
+
+市面上常见的多 Agent 工具（如 [Orca](https://github.com/stablyai/orca)（[文档](https://www.onorca.dev/docs)）、[T3 Code](https://github.com/pingdotgg/t3code)（[外部 Agent 文档](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)））主要是围绕**“让你自己开、自己盯每个 Agent 会话和 worktree”**设计的：
+- **[Orca](https://github.com/stablyai/orca)** 是并排运行多个 AI 编程 Agent 的桌面 IDE，每个任务有自己的 git worktree、分屏终端、diff 查看器和浏览器标签页（也提供 `orca` CLI 和实验性的[编排命令](https://www.onorca.dev/docs/cli/orchestration)来派子任务）。
+- **[T3 Code](https://github.com/pingdotgg/t3code)** 是跨桌面、网页和手机的 Agent 控制面板，用来在多个项目和可选的 git worktree 中启动、管理多条 Agent 线程（同时提供 [`t3 thread` CLI 与 MCP 服务](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)供外部 Agent 调用）。
+
+这些工具虽然也能拿来“让一个 Agent 派别的 Agent”，但 Agent Hub 从最早开始开发时就是专门按**“一个会话管住一个项目”**设计的：你不用自己去开、去盯每个 worktree 和终端，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
 它是为**一个人、多台设备**（你自己的 Mac、Linux 服务器、手机）设计的自用工具，不是多人共用的服务端。
 
-## 特性
+## 怎么做到的
 
-- **项目经理 + Worker 分工**：每个角色可独立选择厂商、模型与思考程度（effort）。
+### 1. 围绕“和项目经理聊天”设计的界面
+
+- **一个项目只有一条主线对话**：左侧栏（[`src/web/components/Sidebar.tsx`](src/web/components/Sidebar.tsx)、[`src/web/selectors.ts`](src/web/selectors.ts) 的 `listConversations`）只列项目经理（一个项目经理对应一个项目，见 [`src/daemon/ledger/projects.ts`](src/daemon/ledger/projects.ts)），Worker 的会话不会混进左侧列表。
+- **过程默认收起，主对话只看结论和状态**：在项目经理聊天流（[`src/web/components/Messages.tsx`](src/web/components/Messages.tsx)）里，项目经理每一轮的中间工具调用和派发/收工事件默认折成一行 `Worked for Xs ›`（`WorkLine` / [`src/web/selectors.ts`](src/web/selectors.ts) 的 `groupMessages`）。Piece 每做完一轮，主对话里只出现一个带状态圆点的简短汇报气泡（`WorkerSpeech`，摘要截断上限 `WORKER_LINE_SUMMARY_CHARS = 120` 字，见 [`src/shared/limits.ts`](src/shared/limits.ts)、[`src/shared/worker.ts`](src/shared/worker.ts)）。
+- **需要时再点开看过程**：正在干活的 `Pieces`、需要你拍板的问题（`Needs You`，来自 `hub ask`）和默认收起的 `Completed` 放在右侧栏（[`src/web/components/RightRail.tsx`](src/web/components/RightRail.tsx)，手机端为底部抽屉 [`src/web/mobile/PiecesDrawer.tsx`](src/web/mobile/PiecesDrawer.tsx)）。平时只看结论，想看某个 Piece 的具体步骤或直接插话时，点汇报气泡或右侧条目即可打开它的完整会话（[`src/web/components/WorkerConversation.tsx`](src/web/components/WorkerConversation.tsx)）。
+
+### 2. 无感的上下文压缩与自动换会话
+
+- **满 `200,000` Token 自动触发交接**：一个会话一直聊下去，底层 CLI 会话迟早会满。当项目经理会话的上下文达到 **`200,000` Token**（[`src/shared/limits.ts`](src/shared/limits.ts) 的 `HANDOVER_TOKEN_THRESHOLD = 200_000` / `AUTO_RENEW_CONTEXT_TOKENS`，各厂商阈值见 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `handoverTokenThreshold`）时，账本会自动排入交接任务（[`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts)，详见 [docs/background-handover-design.md](docs/background-handover-design.md)）。
+- **后台复制会话写交接，前台聊天不卡顿**：后台执行器（[`src/daemon/handover/runner.ts`](src/daemon/handover/runner.ts)，并发上限 `HANDOVER_CONCURRENCY = 2`）在后台复制当前项目经理会话（[`src/daemon/handover/claude.ts`](src/daemon/handover/claude.ts)、[`codex.ts`](src/daemon/handover/codex.ts)、[`agy.ts`](src/daemon/handover/agy.ts)），卸掉 `HUB_*` 凭据并拦截写入，在后台生成约 2,000 字的结构化交接文档；你这边继续跟项目经理聊天，完全不阻塞（若某厂商不支持复制会话，则等空闲满 `AUTO_RENEW_IDLE_MS = 20_000` 毫秒才在原会话写交接，期间你一发消息立即让路）。
+- **轮次间隙无缝切换**：在两轮对话之间，账本自动切到新一代会话（`generation + 1`）、预热新进程，并在新会话首轮自动拼入 `sessionPreambleText`（[`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts)）：最新系统提示词与性格记忆（[`src/daemon/prompt.ts`](src/daemon/prompt.ts) 的 `PM_MEMORY_PROMPT`）、结构化交接文档、切点前最多 **`30,000` 字**的双方对话原文（[`src/shared/limits.ts`](src/shared/limits.ts) 的 `HANDOVER_RECENT_CHARS = 30_000`、[`src/daemon/ledger/handover-recent.ts`](src/daemon/ledger/handover-recent.ts)）加切点后全部对话原文（上限 `HANDOVER_POST_CUT_MAX_CHARS = 60_000` 字）、切点后收到的 Worker 汇报目录、账本检索命令（`hub worker search`、`hub worker show`）以及上一代会话的原始记录文件路径（[`src/daemon/driver/transcript.ts`](src/daemon/driver/transcript.ts)）。网页上始终是同一个对话，只留一条可点开的 `Handed off to a new session ›` 分隔线（[`src/web/components/Messages.tsx`](src/web/components/Messages.tsx) 的 `SessionRenewed`）。在项目经理资料页中途切换厂商（`switchVendorIn`）也直接复用这套交接与最近对话衔接机制。
+
+### 3. 方便的子 Agent（Worker / Piece）管理
+
+- **`hub worker start` 与独立 git worktree**：项目经理提示词（[`src/daemon/prompt.ts`](src/daemon/prompt.ts) 的 `buildPmWorkerPrompt`）明确禁用厂商内置子代理工具（`Agent`、`Task`、`invoke_subagent`、`spawn_agent`），统一用 `hub worker start` 派活（[`src/daemon/ledger/workers.ts`](src/daemon/ledger/workers.ts)）。每个 Worker 拥有独立的 git worktree（`~/.agent-hub/worktrees/<项目>/<Worker>`）和分支 `hub/<id>-<slug>`（[`src/shared/worker.ts`](src/shared/worker.ts)、[`src/daemon/git/worktree.ts`](src/daemon/git/worktree.ts)），支持通过 `hub project setup` 配置建好 worktree 后自动跑准备脚本（超时 `SETUP_TIMEOUT_MS = 10` 分钟，见 [`src/shared/limits.ts`](src/shared/limits.ts)、[`src/daemon/setup/setup.ts`](src/daemon/setup/setup.ts)），并可按任务独立指定 `--vendor`、`--model`、`--effort`、单轮时限 `--max-time`（默认 `DEFAULT_WORKER_MAX_TIME_MS = 30` 分钟，范围 `10s`～`24h`，超时只发 `worker.max_time_exceeded` 唤醒项目经理，不强杀 Worker）和 `--readonly` 只读沙箱模式（[`src/shared/readonly-policy.ts`](src/shared/readonly-policy.ts)，详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。项目经理会话自动通过 `--add-dir` 挂载整个项目的 `worktrees/<项目>/` 目录，直接审阅各 Worker 的代码改动。
+- **用户可随时直接对 Worker 说话，或用 `/hub:worker` 指定派谁**：你可以随时点开任意 Piece 直接给该 Worker 发消息——Worker 收到带 `【用户直接对你说】` 标签的消息，项目经理也会同步收到副本（`【用户直接对 Worker #N · … 说的话（Worker 已收到）】`，见 [`src/shared/worker.ts`](src/shared/worker.ts)），两边信息不脱节。你也可以在项目经理输入框里用 `/hub:worker`（[`src/web/worker-pick.ts`](src/web/worker-pick.ts)，详见 [docs/worker-pick-command.md](docs/worker-pick-command.md)）直接选定这条消息派出的 Worker 用哪家厂商、哪个模型和思考档位（`【用户指定：这条消息里派的 Worker 用 --vendor …】`）。
+
+### 4. 省 Token 与提效率
+
+- **重活与大上下文外包给 Worker**：耗时短、花 Token 少的问题项目经理直接回，需要读几千行代码、查大日志（`--readonly`）或改多处文件的活交给 Worker（[`src/daemon/prompt.ts`](src/daemon/prompt.ts) 的 `buildPmModePrompt`、`buildPmWorkerPrompt`），大段中间工具输出留在用完即关的 Worker 会话里，不污染项目经理的上下文。
+- **按任务难度选模型与思考档位**：项目经理和每个 Worker 都可独立指定 `--vendor`、`--model` 和 `--effort`（`low` / `medium` / `high` / `xhigh` / `max`，见 [`src/shared/vendors.ts`](src/shared/vendors.ts)），简单机械活或只读排查用轻量模型和低档思考，复杂规划与疑难排查再用高档模型。
+- **固定汇报格式与分层按需查看**：Worker 每轮结尾固定输出 `=== 汇报 ===`（`状态 / 摘要 / 提交 / 测试 / 问题`，见 [`src/shared/worker.ts`](src/shared/worker.ts) 的 `WORKER_REPORT_FORMAT`），项目经理默认只收这段汇报。需要了解进展或排查卡住原因时，项目经理分层按需查看，不用把整份原始记录塞进上下文（[`src/daemon/ledger/worker-view.ts`](src/daemon/ledger/worker-view.ts)、[`src/daemon/ledger/worker-stats.ts`](src/daemon/ledger/worker-stats.ts)、[`src/shared/limits.ts`](src/shared/limits.ts)）：
+  - `hub worker show <id>`：看状态、步数、超过 `WORKER_STALL_HINT_MS = 5` 分钟无输出的卡住提示、分支与 PR。
+  - `hub worker log <id> [--last N | --stats]`：默认只看最近 `WORKER_LOG_DEFAULT_STEPS = 20` 步（上限 `200` 步），每步文本截断到 `WORKER_VIEW_TEXT_MAX_CHARS = 100` 字；`--stats` 汇总步数、耗时及读得最多的前 `WORKER_STATS_TOP = 3` 个文件与重复执行的命令。
+  - `hub worker list` 与 `hub worker search`：`hub worker list` 已收工的只列最近 `WORKER_LIST_RECENT_ENDED = 20` 个，更早的用 `hub worker search` 按关键词检索（默认返回 `20` 条，每条带 `WORKER_SEARCH_CONTEXT_CHARS = 80` 字上下文）。
+- **Worker 上下文超 `200,000` Token 不再反复追问**：当 Worker 上下文超过 `WORKER_SEND_MAX_TOKENS = 200_000` Token（[`src/shared/limits.ts`](src/shared/limits.ts)、[`src/daemon/prompt.ts`](src/daemon/prompt.ts)）或需要多轮大改时，项目经理直接 `hub worker end` 收工并另派新 Worker 接力，避免带着 20 万以上上下文每轮重复计费。
+- **后台交接复用约 97% 提示词缓存，新会话只带干货**：Claude Code 后台复制会话写交接时，保持模型、系统提示词和工具定义完全不变（通过 `PreToolUse` hook + `dontAsk` 拦截写操作，不增删工具，见 [`src/daemon/handover/claude.ts`](src/daemon/handover/claude.ts)、[`src/shared/policy.ts`](src/shared/policy.ts) 的 `buildForkSettings`），约 97% 输入直接命中原会话的 Prompt Cache（详见 [docs/background-handover-design.md](docs/background-handover-design.md)）。切到新会话时，`recentRows`（[`src/daemon/ledger/handover.ts`](src/daemon/ledger/handover.ts)）自动剔除所有 `kind = 'tool'` 工具记录和完整 Worker 汇报，只带约 2,000 字交接、最多 `30,000` 字双方对话原文和 1 行一条的近期 Worker 汇报目录。
+- **忙时连发自动合并与轮中插话**：Agent 忙时你连发的多条消息，支持轮中流式送达的直接塞进当前轮（[`src/daemon/driver/base-driver.ts`](src/daemon/driver/base-driver.ts) 的 `msg_lifecycle_v1`，见 [docs/mid-turn-messages.md](docs/mid-turn-messages.md)），其余合并成一条 `【用户连发了 N 条】` 一次性送达（[`src/daemon/driver/protocol.ts`](src/daemon/driver/protocol.ts) 的 `mergeUserTexts`），不拆成 N 轮重复跑完整上下文。
+- **初始快照裁剪、历史按需拉取与空闲进程回收**：`/api/state` 初始快照对活跃会话最多带最近 `MESSAGE_PAGE_SIZE = 100` 条消息，**已收工的 Worker 会话初始带 `0` 条消息**（`messages: []`、`hasMore: true`，点开时再分页拉取，见 [`src/daemon/ledger/ledger.ts`](src/daemon/ledger/ledger.ts) 的 `snapshot`、[`src/shared/limits.ts`](src/shared/limits.ts)）。空闲满 `IDLE_CLOSE_MS = 10` 分钟的 Agent 进程自动关闭回收（有后台任务时最多保活 `BACKGROUND_TASKS_HOLD_MAX_MS = 4` 小时 / Worker `150` 分钟），有新消息时按需 `--resume`；查询模型名单与斜杠命令的轻量探测带 `--no-session-persistence --settings '{"disableAllHooks":true}' --strict-mcp-config`（[`src/daemon/driver/protocol.ts`](src/daemon/driver/protocol.ts) 的 `INITIALIZE_QUERY_ARGS`）并缓存结果（模型 `MODEL_CATALOG_FRESH_MS = 6` 小时、命令 `COMMANDS_FRESH_MS = 10` 分钟、额度 `FETCHED_QUOTA_FRESH_MS = 5` 分钟）。
+
+## 其他特性
+
 - **目前支持的 Agent 命令行**（名单以 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `AGENT_VENDORS` 为准）：Claude Code（`claude`）、Antigravity（`agy`）、Codex（`codex`）。
-- **独立 git worktree**：每个 Worker 在自己的 git worktree 中工作；支持只读 Worker（用于代码审查与问题排查）。
 - **网页界面**：适配桌面与手机（可安装为手机主屏幕 PWA，支持可选的 Web Push 锁屏通知），支持 Markdown、代码高亮、Mermaid 与 Vega-Lite 图表、文件上传与预览。
 - **额度面板**：显示各支持厂商的用量窗口剩余比例与重置时间。
 - **可选的 macOS 原生应用外壳与多设备联机**：一个网页同时查看和操作多台设备（见下）。
