@@ -170,17 +170,15 @@ describe("hub cli", () => {
     });
 
     it("worker start --vendor sends the vendor; unknown vendor is a usage error", async () => {
-      for (const vendor of ["claude", "agy", "codex"]) {
+      for (const vendor of AGENT_VENDORS) {
         expect((await hub(["worker", "start", "--title", "修 X", "--vendor", vendor, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
-      expect(ledger.calls.map((c) => c.args)).toEqual(
-        ["claude", "agy", "codex"].map((vendor) => ({ title: "修 X", vendor, task: "任务" })),
-      );
+      expect(ledger.calls.map((c) => c.args)).toEqual(AGENT_VENDORS.map((vendor) => ({ title: "修 X", vendor, task: "任务" })));
       ledger.calls.length = 0;
       for (const bad of ["gemini", "CLAUDE", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--vendor", bad, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
-        expect(r.stderr).toContain("--vendor 只能是 claude、agy、codex");
+        expect(r.stderr).toContain(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
       }
       expect(ledger.calls).toHaveLength(0);
     });

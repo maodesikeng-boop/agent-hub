@@ -1,8 +1,9 @@
 // Pi 复制会话后台写交接（docs/vendors/pi.md 第 5 节）：
 // - `fork(src)` 生成全局唯一 UUID 作为复制会话编号（不常驻额外进程，零内存驻留）；
 // - `write(src, fork, prompt, signal)` 在剥离 HUB_* 环境变量后启动一次性 `pi --mode rpc --fork <原会话文件或ID> --session-id <forkId>`，
-//   附加 `--append-system-prompt <promptFile> --exclude-tools edit,write,bash,powershell --no-mcp` 及项目技能与模型参数，
-//   发送交接提示词，等待 `agent_settled` 后查询 `get_session_stats` 拿到精确上下文大小并关闭标准输入退出；
+//   附加 `--append-system-prompt <promptFile> --exclude-tools edit,write,bash,powershell --no-mcp --no-approve` 及项目技能与模型参数，
+//   发送交接提示词，等待 `agent_settled` 后查询 `get_session_stats` 拿到精确上下文大小并关闭标准输入，等进程退出（超时强制结束）再交回；
+//   取消、出错时连同进程组强制结束；
 //   若原会话未落盘（报 `No session found`），抛出 ForkUnsupportedError 由上层自动退回本会话内写交接；
 // - `remove(fork)` 清理复制出的会话 JSONL 文件（含进程崩溃或守护进程重启后的残留文件）。
 import { spawn, type ChildProcess } from "node:child_process";
@@ -10,13 +11,14 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { TokenUsage } from "../../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
+import { KILL_WAIT_MS } from "../../shared/limits.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
-import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "../../daemon/handover/forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
-import { buildPiSkillArgs } from "./composer.ts";
+import { PI_NO_PROJECT_TRUST_ARGS, buildPiSkillArgs } from "./composer.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS, PI_SESSION_STATS_TIMEOUT_MS } from "./limits.ts";
 import {
   addPiTokenCounts,
@@ -25,6 +27,7 @@ import {
   buildGetStateLine,
   buildPromptLine,
   extractPiAssistantBlocks,
+  isValidPiSessionId,
   parsePiSessionStats,
   parsePiTokenCounts,
   type PiRawTokenCounts,
@@ -54,7 +57,7 @@ function buildPiForkArgs(src: ForkSource, forkId: string, forkTarget: string): s
   if (src.launch.promptFile.trim() !== "") {
     args.push("--append-system-prompt", src.launch.promptFile);
   }
-  args.push(...buildPiSkillArgs(src.cwd, src.addDirs));
+  args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(src.cwd, src.addDirs));
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
   // 写交接禁止一切文件修改、命令执行与外部 MCP 调用
   args.push("--exclude-tools", "edit,write,bash,powershell", "--no-mcp");
@@ -104,6 +107,10 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
         { vendor: "pi", cwd: src.cwd, vendorSessionId: src.vendorSessionId },
         { home: options.homeDir, env: childEnv },
       );
+      // 找不到会话文件时按编号复制：编号要是 pi 认的样子（字母或数字开头），免得被当成命令行参数
+      if (transcript === null && !isValidPiSessionId(src.vendorSessionId)) {
+        throw new ForkUnsupportedError(`pi 会话编号不合法：${src.vendorSessionId}`);
+      }
       const forkTarget = transcript ?? src.vendorSessionId;
       const args = buildPiForkArgs(src, fork.forkId, forkTarget);
       const child = spawnProcess(src.executablePath, args, { cwd: src.cwd, env: childEnv });
@@ -120,6 +127,19 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
         let turnError: string | null = null;
         let waitingStats = false;
 
+        const exited = () => child.exitCode !== null || child.signalCode !== null;
+        /** 连同进程组和换了组的后代一起强制结束（取消、出错时；pi 可能还在跑这一轮、调模型）。 */
+        const stopChild = () => {
+          if (exited()) return;
+          if (child.pid === undefined) {
+            child.kill("SIGKILL");
+            return;
+          }
+          const killable = child as Parameters<typeof forceKill>[0];
+          killFreshGroup(killable);
+          void forceKill(killable);
+        };
+
         const finish = (err: Error | null, result?: ForkWriteResult) => {
           if (settled) return;
           settled = true;
@@ -127,10 +147,20 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
           signal.removeEventListener("abort", onAbort);
           child.stdin?.end();
           if (err) {
+            stopChild();
             reject(err);
-          } else {
-            resolve(result!);
+            return;
           }
+          // 关标准输入让它自己收尾退出；等它真退了再交回，免得接手的新会话起来时它还在写复制出的会话文件。KILL_WAIT_MS 内没退就强制结束
+          if (exited()) {
+            resolve(result!);
+            return;
+          }
+          const killTimer = setTimeout(stopChild, KILL_WAIT_MS);
+          child.once("exit", () => {
+            clearTimeout(killTimer);
+            resolve(result!);
+          });
         };
 
         const finalizeWithStats = (contextOverride: number | null) => {
@@ -148,14 +178,7 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
           finish(null, { text: texts.join("\n\n"), usage });
         };
 
-        const onAbort = () => {
-          if (child.pid !== undefined) {
-            killFreshGroup(child as Parameters<typeof killFreshGroup>[0]);
-          } else {
-            child.kill("SIGKILL");
-          }
-          finish(new Error("aborted"));
-        };
+        const onAbort = () => finish(new Error("aborted"));
         signal.addEventListener("abort", onAbort, { once: true });
 
         child.stdin?.on("error", () => {});

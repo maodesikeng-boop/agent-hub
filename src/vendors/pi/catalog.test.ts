@@ -95,6 +95,10 @@ describe("Pi 模型目录解析与探测（catalog.ts）", () => {
     const signedOutRaw = await source.query(new AbortController().signal);
     expect(source.availabilityOf?.(signedOutRaw)).toBe("signed_out");
     expect(source.parse(signedOutRaw)).toBeNull();
+    // 探测的工作目录可能是不信任的仓库：带 --no-approve，不加载项目 .pi/extensions
+    const argv = fake.readLogs().find((e) => e.kind === "argv")?.argv;
+    expect(argv).toContain("--no-approve");
+    expect(argv).not.toContain("--approve");
 
     // 2. 配置模型表格 → available + parse
     fake.updateScript({

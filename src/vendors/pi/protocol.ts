@@ -1,5 +1,5 @@
 // Pi RPC 常驻协议纯函数与辅助解析（docs/vendors/pi.md 第 4 节）：
-// - 启动参数组装：`--mode rpc --session-id <id>`、`--append-system-prompt <promptFile>`、显式 `--skill <dir>/.agents/skills`（不传 `--approve`）、
+// - 启动参数组装：`--mode rpc --session-id <id>`、`--append-system-prompt <promptFile>`、`--no-approve` 加显式 `--skill <dir>/.agents/skills`、
 //   只读 Worker 附加 `--exclude-tools edit,write --no-mcp`、模型与思考档位 `agentLaunchArgs`；
 // - RPC 请求行构造：`get_state`、`prompt`（含中途插话 `streamingBehavior: "steer"`）、`clear_queue`、`abort`、`compact`、`get_commands`、`get_session_stats`、
 //   阻塞扩展弹窗取消回应 `extension_ui_response`；
@@ -14,7 +14,7 @@ import {
   type TokenUsage,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
-import { buildPiSkillArgs } from "./composer.ts";
+import { PI_NO_PROJECT_TRUST_ARGS, buildPiSkillArgs } from "./composer.ts";
 import { PI_READONLY_CLI_ARGS } from "./readonly.ts";
 import piSpec from "./spec.ts";
 
@@ -36,7 +36,7 @@ export interface BuildPiArgsInput {
   sessionFile?: string | null;
 }
 
-/** 构造常驻 `pi --mode rpc` 命令行参数（严禁传 `--approve`，以免执行未信任项目的 `.pi/extensions`）。 */
+/** 构造常驻 `pi --mode rpc` 命令行参数（带 `--no-approve`、严禁传 `--approve`，以免执行未信任项目的 `.pi/extensions`）。 */
 export function buildPiArgs(input: BuildPiArgsInput): string[] {
   const { row, files, sessionId, sessionFile } = input;
   const args: string[] = ["--mode", "rpc"];
@@ -48,7 +48,7 @@ export function buildPiArgs(input: BuildPiArgsInput): string[] {
   if (files.promptFile.trim() !== "") {
     args.push("--append-system-prompt", files.promptFile);
   }
-  args.push(...buildPiSkillArgs(row.cwd, row.addDirs));
+  args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(row.cwd, row.addDirs));
   args.push(...agentLaunchArgs({ vendor: "pi", model: row.model, effort: row.effort }));
   if (files.readonly !== undefined) {
     args.push(...PI_READONLY_CLI_ARGS);

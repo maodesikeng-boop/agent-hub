@@ -2,7 +2,7 @@
 // 公共会话状态机继承自 BaseSessionDriver（底层按 `\n` 切分 JSONL，不使用 node:readline，天然避开 U+2028/U+2029 截断问题）；
 // 本文件负责 Pi 专有协议：
 // - 启动后 `get_state` 握手、会话 ID 持久化与恢复；
-// - `--append-system-prompt` 与显式 `--skill <dir>/.agents/skills`（不传 `--approve`）；
+// - `--append-system-prompt`、`--no-approve` 与显式 `--skill <dir>/.agents/skills`（不传 `--approve`）；
 // - 只读 Worker 附加 `--exclude-tools edit,write --no-mcp` 并包入外层只读 OS 沙箱；普通 Worker 包入 `spawnInWriteScope`；
 // - 多轮对话、忙时中途插话（`prompt` 带 `streamingBehavior: "steer"`）、手动 `/compact` 走 RPC `compact`；
 // - 优雅打断（先 `clear_queue` 再 `abort`，超时升级 SIGINT → SIGKILL 进程组）；

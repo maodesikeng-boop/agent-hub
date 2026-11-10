@@ -78,6 +78,8 @@ export interface FakePiScript {
   writeSessionFile?: boolean;
   /** 按轮次依次执行的剧本（超出长度取最后一项）。 */
   turns?: FakePiTurnScript[];
+  /** 标准输入关了也不退（模拟还在跑一轮、不理 EOF 的 pi，测调用方补杀进程组）。 */
+  ignoreStdinEnd?: boolean;
 }
 
 export interface FakePiLogEntry {
@@ -561,6 +563,10 @@ process.stdin.on("data", (chunk) => {
   }
 });
 process.stdin.on("end", () => {
+  if (script.ignoreStdinEnd) {
+    setInterval(() => {}, 1000);
+    return;
+  }
   process.exit(0);
 });
 `;

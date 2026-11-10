@@ -324,6 +324,45 @@ describe("审查后补的（PR #47）", () => {
     expect(base).toEqual(before);
   });
 
+  it("Pi 认的模型商密钥和专属令牌去掉；GH、AWS、NPM 的通用凭据和 *_BASE_URL 这类非密钥配置、仓库自己的 *_API_KEY 保留", () => {
+    const base = {
+      DEEPSEEK_API_KEY: "x",
+      openrouter_api_key: "x",
+      ANTHROPIC_OAUTH_TOKEN: "x",
+      COPILOT_GITHUB_TOKEN: "x",
+      HF_TOKEN: "x",
+      CLOUDFLARE_API_TOKEN: "x",
+      QWEN_TOKEN_PLAN_API_KEY: "x",
+      XIAOMI_TOKEN_PLAN_SGP_API_KEY: "x",
+      GH_TOKEN: "keep",
+      GITHUB_TOKEN: "keep",
+      NPM_TOKEN: "keep",
+      AWS_ACCESS_KEY_ID: "keep",
+      AWS_SECRET_ACCESS_KEY: "keep",
+      AWS_SESSION_TOKEN: "keep",
+      OPENAI_BASE_URL: "keep",
+      GOOGLE_GEMINI_BASE_URL: "keep",
+      DEEPSEEK_BASE_URL: "keep",
+      STRIPE_API_KEY: "keep",
+      PATH: "/bin",
+    };
+    expect(buildSetupEnv(base, { rootPath: "/r", worktreePath: "/w" })).toEqual({
+      GH_TOKEN: "keep",
+      GITHUB_TOKEN: "keep",
+      NPM_TOKEN: "keep",
+      AWS_ACCESS_KEY_ID: "keep",
+      AWS_SECRET_ACCESS_KEY: "keep",
+      AWS_SESSION_TOKEN: "keep",
+      OPENAI_BASE_URL: "keep",
+      GOOGLE_GEMINI_BASE_URL: "keep",
+      DEEPSEEK_BASE_URL: "keep",
+      STRIPE_API_KEY: "keep",
+      PATH: "/bin",
+      [ENV_SETUP_ROOT_PATH]: "/r",
+      [ENV_SETUP_WORKTREE_PATH]: "/w",
+    });
+  });
+
   it("R3 输出尾部：去掉 ANSI 序列和控制字符，\\r 只留最后一段（进度条），CRLF 照常是换行", async () => {
     const outcome = await run(
       "printf '\\033[31mred\\033[0m line\\r\\n'; printf 'progress 10%%\\rprogress 100%%\\n'; printf 'bell\\007 \\033]0;title\\007ok\\n'; printf 'tab\\there\\n'",

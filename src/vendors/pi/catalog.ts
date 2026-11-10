@@ -27,10 +27,12 @@ import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
+import { PI_NO_PROJECT_TRUST_ARGS } from "./composer.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS } from "./limits.ts";
 import spec from "./spec.ts";
 
-const PI_LIST_MODELS_ARGS: readonly string[] = ["--offline", "--list-models"];
+// --no-approve：探测的工作目录也可能是不信任的仓库，不带时项目 `.pi/extensions` 会在 --list-models 里执行（见 composer.ts 的 PI_NO_PROJECT_TRUST_ARGS）
+const PI_LIST_MODELS_ARGS: readonly string[] = ["--offline", ...PI_NO_PROJECT_TRUST_ARGS, "--list-models"];
 const NO_MODELS_RE = /^no models available\b/i;
 const HEADER_RE = /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/i;
 const DATE_SUFFIX_RE = /-(?:20\d{6}|\d{4}-\d{2}-\d{2})$/;
@@ -285,6 +287,7 @@ export function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ std
       detached: true,
     });
     trackChild(child, "probe:pi-list-models", { detached: true });
+    child.once("exit", () => termGroupAfterExit(child));
     child.stdin.on("error", () => {});
     child.stdin.end();
 
@@ -329,8 +332,8 @@ export function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ std
     child.stderr.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
-    child.once("exit", (code, sig) => {
-      termGroupAfterExit(child);
+    // 等 close（标准输出读完）再判：exit 时管道里可能还有没读到的几行，名单会被截掉
+    child.once("close", (code, sig) => {
       if (code === 0) {
         finish(null);
       } else {

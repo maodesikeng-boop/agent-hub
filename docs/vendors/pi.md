@@ -16,7 +16,7 @@
   - `models-store.json`：动态模型商拉取的模型列表本地缓存。
 - **父会话与凭据环境变量**：
   - Pi 运行命令工具时会注入 `AI_AGENT=pi` 等标识；清理父会话环境时剥离 `AI_AGENT`、`PI_CODING_AGENT`、`PI_SESSION_ID`、`PI_SESSION_FILE`、`PI_PROVIDER`、`PI_MODEL`、`PI_REASONING_LEVEL`。
-  - 支持 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`OPENROUTER_API_KEY` 等 30+ 模型商环境变量（`paths.ts` 通过前缀与 `/_API_KEY$/` 统一声明，由准备脚本剥离）。
+  - 支持 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`OPENROUTER_API_KEY` 等 30+ 模型商环境变量（`paths.ts` 按 `pi --help` 列出的名字精确声明，由准备脚本剥离；不用 `OPENAI_` 这类宽前缀和 `/_API_KEY$/` 通配，`*_BASE_URL` 和 `GH_TOKEN`、`AWS_SECRET_ACCESS_KEY`、`NPM_TOKEN` 等通用工程凭据照常传给准备脚本）。
 
 ---
 
@@ -52,6 +52,7 @@
   - `get_commands` 完整返回 `skill:demo-skill` 与 `skill:hidden-skill`（含 `disable-model-invocation: true` 的手打技能）；
   - 未信任的 `.pi/extensions/untrusted.ts` 与 `.pi/mcp.json` **依旧不加载、不执行**。
 - 当 `--skill` 指向不存在的目录时，实测 Pi 退出码仍为 `0` 且正常回应；实现上仅对已存在的 `<cwd>/.agents/skills`（及 `addDirs` 下的 `.agents/skills`）追加 `--skill`。
+- **光不传 `--approve` 不够，每次起 pi 都带 `--no-approve`**（2026-11-11 本机 pi 1.5.0 复测，PR #254 审查）：Pi 的信任判定顺序是命令行 `--approve`/`--no-approve` → 用户级扩展 → `~/.pi/agent/trust.json` 里本目录或**上级目录**存过的决定（就近生效）→ `defaultProjectTrust`。用户设了 `defaultProjectTrust: "always"` 或给上级目录存过信任时，不带 `--no-approve` 的 `pi --mode rpc` 和 `pi --offline --list-models` 都会执行仓库里的 `.pi/extensions/*.ts`；带上后扩展不执行，`--skill` 显式给的技能照常加载。常驻会话、命令列表探测、模型目录、写交接四处都带（`composer.ts` 的 `PI_NO_PROJECT_TRUST_ARGS`）。
 
 ### 3.2 DeepSeek 内置模型思考回传配置（设计文档第 9 节 #7）
 通过 `pi --mode rpc --offline` 调用 `get_available_models` 检查内置模型定义：

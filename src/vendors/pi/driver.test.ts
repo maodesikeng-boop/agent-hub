@@ -236,7 +236,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(ended.interrupted).toBe(false);
     expect(ended.messageIds).toEqual([101]);
 
-    // 校验启动参数：有 --mode rpc、--session-id、--append-system-prompt、--skill、--model、--thinking，绝无 --approve
+    // 校验启动参数：有 --mode rpc、--session-id、--append-system-prompt、--no-approve、--skill、--model、--thinking，绝无 --approve
     const argvLog = h.log().find((e) => e.kind === "argv")!;
     expect(argvLog.argv).toContain("--mode");
     expect(argvLog.argv).toContain("rpc");
@@ -250,6 +250,7 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(argvLog.argv).toContain("--thinking");
     expect(argvLog.argv).toContain("high");
     expect(argvLog.argv).not.toContain("--approve");
+    expect(argvLog.argv).toContain("--no-approve");
 
     // 校验事件完整且不重复
     expect(h.of("session.started")).toHaveLength(1);
@@ -486,6 +487,8 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(argvEntry.argv).toContain("--exclude-tools");
     expect(argvEntry.argv).toContain("edit,write");
     expect(argvEntry.argv).toContain("--no-mcp");
+    expect(argvEntry.argv).toContain("--no-approve");
+    expect(argvEntry.argv).not.toContain("--approve");
     expect(capturedInput).not.toBeNull();
     // Pi 自己的 auth.json / models.json 允许只读打开（不可写），别家的敏感路径仍在禁读列表
     expect(capturedInput!.secretPaths).not.toContain(join(h.dir, ".pi", "agent", "auth.json"));

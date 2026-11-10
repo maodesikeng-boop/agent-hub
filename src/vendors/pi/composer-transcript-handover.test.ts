@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { ForkUnsupportedError, type ForkSource } from "../../daemon/handover/forker.ts";
 import { buildPiSkillArgs, createPiComposer, parsePiCommands } from "./composer.ts";
@@ -62,6 +62,7 @@ describe("Pi 输入框命令与技能加载（composer.ts）", () => {
     expect(argvLog?.argv).toContain("--skill");
     expect(argvLog?.argv).toContain(join(dir, ".agents", "skills"));
     expect(argvLog?.argv).not.toContain("--approve");
+    expect(argvLog?.argv).toContain("--no-approve");
     expect(parsePiCommands("not-an-object")).toBeNull();
   });
 });
@@ -110,10 +111,17 @@ describe("Pi 会话记录路径与凭据环境变量（transcript.ts & paths.ts�
     expect(piSessionFiles({ vendor: "pi", cwd: root, vendorSessionId: "../evil" }, { env })).toEqual([]);
   });
 
-  it("paths.ts：声明 DEEPSEEK_API_KEY 及常见 *_API_KEY 剥离规则与安装命令", () => {
-    expect(piPaths.credentialEnv?.prefixes).toContain("DEEPSEEK_");
-    expect(piPaths.credentialEnv?.pattern?.test("OPENROUTER_API_KEY")).toBe(true);
-    expect(piPaths.credentialEnv?.pattern?.test("SAFE_VARIABLE")).toBe(false);
+  it("paths.ts：按名字精确列模型商密钥（含 DEEPSEEK_API_KEY），不用宽前缀误杀 *_BASE_URL 和通用工程凭据", () => {
+    const cred = piPaths.credentialEnv!;
+    const denied = (name: string) =>
+      (cred.names ?? []).includes(name) || (cred.prefixes ?? []).some((p) => name.startsWith(p)) || (cred.pattern?.test(name) ?? false);
+    for (const name of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "COPILOT_GITHUB_TOKEN", "HF_TOKEN", "CLOUDFLARE_API_TOKEN", "QWEN_TOKEN_PLAN_CN_API_KEY"]) {
+      expect(denied(name), name).toBe(true);
+    }
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "NPM_TOKEN", "OPENAI_BASE_URL", "GOOGLE_GEMINI_BASE_URL", "STRIPE_API_KEY", "SAFE_VARIABLE"]) {
+      expect(denied(name), name).toBe(false);
+    }
+    expect(cred.prefixes ?? []).toEqual([]);
     expect(piPaths.installCommand).toContain("pi.dev/install.sh");
   });
 });
@@ -197,6 +205,67 @@ describe("Pi 复制会话写交接（handover.ts）", () => {
 
     await forker.remove(handle);
     expect(existsSync(forkedFilesBefore[0]!)).toBe(false);
+  });
+
+  it("出错时连同进程组强制结束；成功时等 pi 退出（不理 EOF 就超时强杀）再交回；参数带 --no-approve", async () => {
+    const dir = makeTempDir();
+    const fake = writeFakePiBinary(dir, { ignoreStdinEnd: true, turns: [{ failPromptError: "model not configured" }] });
+    const env = { FAKE_PI_SCRIPT: fake.scriptPath, FAKE_PI_LOG: fake.logPath, PI_CODING_AGENT_DIR: join(dir, ".pi", "agent") };
+    const forker = createPiForker({ homeDir: dir, env });
+    const src: ForkSource = {
+      sessionId: 3,
+      vendor: "pi",
+      vendorSessionId: "src-sess-3",
+      cwd: dir,
+      addDirs: [],
+      model: null,
+      effort: null,
+      executablePath: fake.binPath,
+      launch: { promptFile: "", env: {}, fingerprint: "fp-kill" },
+    };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const pidOf = (nth: number) => fake.readLogs().filter((e) => e.kind === "argv")[nth]!.pid;
+
+    // prompt 被拒：pi 还活着（不理 EOF）也要立即补杀，不留孤儿
+    const failed = await forker.fork(src, new AbortController().signal);
+    await expect(forker.write(src, failed, "写交接", new AbortController().signal)).rejects.toThrow(/model not configured/);
+    const failedPid = pidOf(0);
+    await vi.waitFor(() => expect(alive(failedPid)).toBe(false), { timeout: 3_000 });
+    expect(fake.readLogs().find((e) => e.kind === "argv")?.argv).toContain("--no-approve");
+
+    // 正常写完：交回时进程已经退出
+    fake.updateScript({ ignoreStdinEnd: true, turns: [{ textDeltas: ["交接"], usage: { input: 1, output: 1 } }] });
+    const ok = await forker.fork(src, new AbortController().signal);
+    const written = await forker.write(src, ok, "写交接", new AbortController().signal);
+    expect(written.text).toBe("交接");
+    expect(alive(pidOf(1))).toBe(false);
+  });
+
+  it("找不到会话文件、编号又不像 pi 的编号（如以 - 开头）时不起进程，退回本会话交接", async () => {
+    const dir = makeTempDir();
+    const fake = writeFakePiBinary(dir, {});
+    const forker = createPiForker({ homeDir: dir, env: { FAKE_PI_SCRIPT: fake.scriptPath, FAKE_PI_LOG: fake.logPath } });
+    const src: ForkSource = {
+      sessionId: 4,
+      vendor: "pi",
+      vendorSessionId: "--approve",
+      cwd: dir,
+      addDirs: [],
+      model: null,
+      effort: null,
+      executablePath: fake.binPath,
+      launch: { promptFile: "", env: {}, fingerprint: "fp-bad" },
+    };
+    const handle = await forker.fork(src, new AbortController().signal);
+    await expect(forker.write(src, handle, "写交接", new AbortController().signal)).rejects.toBeInstanceOf(ForkUnsupportedError);
+    expect(fake.readLogs()).toEqual([]);
   });
 
   it("原会话未落盘报 No session found 时抛出 ForkUnsupportedError 以便回退本会话交接", async () => {
