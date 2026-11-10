@@ -206,6 +206,7 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       delete env[ENV_HUB_SOCK];
       const child = spawn(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
       trackChild(child, "handover:agy", { detached: true });
+      child.once("exit", () => termGroupAfterExit(child));
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -220,7 +221,6 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
         const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
           child.once("error", reject);
           child.once("close", (code, sig) => {
-            termGroupAfterExit(child);
             resolve({ code, signal: sig });
           });
           child.stdin.end(buildAgyUserLine(prompt) + "\n");

@@ -235,7 +235,10 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
 
     const exited = await new Promise<{ code: number | null; signal: NodeJS.Signals | null } | { error: Error }>((resolve) => {
       child.once("error", (error) => resolve({ error }));
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("exit", (code, signal) => {
+        termGroupAfterExit(child);
+        resolve({ code, signal });
+      });
     });
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onAbort);
@@ -243,7 +246,6 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
     if ("error" in exited) {
       return finish({ kind: "failed", exitCode: null, signal: null, error: `准备命令起不来：${exited.error.message}` });
     }
-    if (killedFor === null) termGroupAfterExit(child);
     if (killing !== null) await killing;
     const drain = setTimeout(() => {
       child.stdout.destroy();

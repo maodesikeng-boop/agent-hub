@@ -314,6 +314,43 @@ setTimeout(() => process.exit(0), 200);`;
 });
 
 describe("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透与进程组清理）", () => {
+  it("退出后的同组子进程即使忽略 SIGTERM，也被清掉", async () => {
+    const script = `const {spawn}=require('node:child_process');
+const bg=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000)"],{stdio:['ignore','ignore','ignore','ipc']});
+bg.once('message',()=>{console.log(bg.pid);process.exit(0)});`;
+    const parent = spawn(process.execPath, ["-e", script], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+    let output = "";
+    parent.stdout.on("data", (chunk) => { output += chunk; });
+    const timer = setTimeout(() => parent.kill("SIGKILL"), 3_000);
+    let pid: number | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        parent.once("exit", () => resolve());
+        parent.once("error", reject);
+      });
+      pid = Number(output.trim());
+      expect(pid).toBeGreaterThan(1);
+      expect(alive(pid)).toBe(true);
+      termGroupAfterExit(parent);
+      expect(await goneWithin(pid, 500)).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      if (pid !== undefined && pid > 1 && alive(pid)) signal(pid, "SIGKILL");
+    }
+  });
+
+  it("组已经不存在：吞掉 ESRCH，且不再对该组号发第二次信号", () => {
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    try {
+      expect(() => termGroupAfterExit({ pid: 500 })).not.toThrow();
+      expect(spy.mock.calls).toEqual([[-500, "SIGKILL"]]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   function writeProcEntry(
     procRoot: string,
     pid: number,
@@ -401,18 +438,12 @@ describe("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透�
     }
   });
 
-  it("termGroupAfterExit：macOS 只发 SIGTERM；Linux 先发 SIGTERM 再补发 SIGKILL 终结 namespace PID 1 的 bwrap", () => {
+  it("termGroupAfterExit：macOS / Linux 都只发一次 SIGKILL，避免两次信号之间复用空组号", () => {
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
     try {
-      termGroupAfterExit({ pid: 500 }, "darwin");
-      expect(spy.mock.calls).toEqual([[-500, "SIGTERM"]]);
+      termGroupAfterExit({ pid: 500 });
+      expect(spy.mock.calls).toEqual([[-500, "SIGKILL"]]);
 
-      spy.mockClear();
-      termGroupAfterExit({ pid: 500 }, "linux");
-      expect(spy.mock.calls).toEqual([
-        [-500, "SIGTERM"],
-        [-500, "SIGKILL"],
-      ]);
     } finally {
       spy.mockRestore();
     }

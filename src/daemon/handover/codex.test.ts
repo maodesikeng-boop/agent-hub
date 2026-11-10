@@ -1,16 +1,38 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { ForkUnsupportedError, forkSourceOf } from "./forker.ts";
 import type { ForkSource } from "./forker.ts";
 import { FORKERS } from "./forkers.ts";
 import { CODEX_FORKERS, CODEX_NATIVE_FORKER_ID, createCodexForker } from "./codex.ts";
 import type { AgentSessionRow } from "../../shared/domain.ts";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isAlive, termGroupAfterExit } from "../driver/process.ts";
+
+const FAKE_PID = 4242;
+
+// FakeServer 的 pid 是编的（4242）：不能真往 -4242 发信号，只记调用；真进程照调原实现
+vi.mock("../driver/process.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../driver/process.ts")>();
+  return {
+    ...actual,
+    signalPid: vi.fn((pid: number, signal: NodeJS.Signals) => {
+      if (Math.abs(pid) === FAKE_PID) return false;
+      return actual.signalPid(pid, signal);
+    }),
+    termGroupAfterExit: vi.fn((child?: { pid?: number }) => {
+      if (!child || child.pid === FAKE_PID) return;
+      actual.termGroupAfterExit(child);
+    }),
+  };
+});
+beforeEach(() => {
+  vi.mocked(termGroupAfterExit).mockClear();
+});
 
 type Json = Record<string, unknown>;
 type Handler = (params: Json, server: FakeServer) => Json | Error | "hang";
@@ -19,7 +41,7 @@ type Handler = (params: Json, server: FakeServer) => Json | Error | "hang";
 class FakeServer extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
-  readonly pid = 4242;
+  readonly pid = FAKE_PID;
   readonly requests: Array<{ method: string; params: Json }> = [];
   killed = false;
   spawnArgs: { command: string; args: string[]; cwd: string; env: Record<string, string> } | null = null;
@@ -194,6 +216,16 @@ describe("fork：app-server thread/fork", () => {
     expect((error as Error).message).toContain("network down");
     expect(b.server.killed).toBe(true);
   });
+
+  it("initialize 握手期间 abort：杀掉进程并抛错，不泄漏 app-server", async () => {
+    const { server, forker } = setup({ ...baseHandlers(), initialize: () => "hang" });
+    const controller = new AbortController();
+    const pending = forker.fork(source(), controller.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(server.killed).toBe(true);
+  });
 });
 
 describe("write：在复制那份上跑一轮", () => {
@@ -265,7 +297,7 @@ describe("write：在复制那份上跑一轮", () => {
     expect(server.requests.map((r) => r.method)).toContain("turn/interrupt");
   });
 
-  it("进程中途退出：抛错，不干等", async () => {
+  it("进程中途退出：抛错，不干等；随后 remove 正常收尾不抛错", async () => {
     const { server, forker } = setup({
       ...baseHandlers(),
       "turn/start": (_p, s) => {
@@ -276,6 +308,77 @@ describe("write：在复制那份上跑一轮", () => {
     const src = source();
     const handle = await forker.fork(src, noAbort());
     await expect(forker.write(src, handle, "x", noAbort())).rejects.toThrow(/退出/);
+    // 自己先退的也给它原来的进程组补信号，清掉它留下的子进程；之后 remove 直接收尾，不再发 thread/delete 或重复补信号
+    expect(vi.mocked(termGroupAfterExit).mock.calls).toEqual([[server]]);
+    await expect(forker.remove(handle)).resolves.toBeUndefined();
+    expect(server.requests.map((r) => r.method)).not.toContain("thread/delete");
+    expect(termGroupAfterExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("真进程（detached）：app-server 中途崩溃或 remove 正常关闭，同组残留子进程都被补杀", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codex-real-proc-"));
+    try {
+      const bin = join(dir, "fake-codex.mjs");
+      const pidFile = join(dir, "bg.pid");
+      writeFileSync(
+        bin,
+        `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const bg = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });
+writeFileSync(${JSON.stringify(pidFile)}, String(bg.pid));
+const send = (obj) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...obj }) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") send({ id: msg.id, result: {} });
+  else if (msg.method === "thread/fork") send({ id: msg.id, result: { thread: { id: "fork-real" } } });
+  else if (msg.method === "turn/start") {
+    if (process.env.CRASH_ON_TURN === "1") process.exit(1);
+    send({ id: msg.id, result: { turn: { id: "t1" } } });
+    send({ method: "turn/started", params: { turn: { id: "t1" } } });
+    send({ method: "item/completed", params: { item: { type: "agentMessage", text: "ok" } } });
+    send({ method: "turn/completed", params: { turn: { id: "t1", status: "completed", error: null } } });
+  } else if (msg.method === "thread/delete") {
+    send({ id: msg.id, error: { code: -32600, message: "not persisted" } });
+  }
+});
+`,
+      );
+      chmodSync(bin, 0o755);
+      const waitDead = async (pid: number) => {
+        const deadline = Date.now() + 3_000;
+        while (Date.now() < deadline && isAlive(pid)) await new Promise((r) => setTimeout(r, 20));
+        expect(isAlive(pid)).toBe(false);
+      };
+
+      const forker = createCodexForker();
+      const crashSrc = source({
+        executablePath: bin,
+        cwd: dir,
+        launch: { ...source().launch, env: { PATH: process.env.PATH ?? "", CRASH_ON_TURN: "1" } },
+      });
+      const h1 = await forker.fork(crashSrc, noAbort());
+      const bgPid1 = Number(readFileSync(pidFile, "utf8").trim());
+      expect(isAlive(bgPid1)).toBe(true);
+      await expect(forker.write(crashSrc, h1, "x", noAbort())).rejects.toThrow(/退出/);
+      await waitDead(bgPid1);
+      await expect(forker.remove(h1)).resolves.toBeUndefined();
+
+      const okSrc = source({
+        executablePath: bin,
+        cwd: dir,
+        launch: { ...source().launch, env: { PATH: process.env.PATH ?? "" } },
+      });
+      const h2 = await forker.fork(okSrc, noAbort());
+      const bgPid2 = Number(readFileSync(pidFile, "utf8").trim());
+      expect(isAlive(bgPid2)).toBe(true);
+      expect((await forker.write(okSrc, h2, "x", noAbort())).text).toBe("ok");
+      await forker.remove(h2);
+      await waitDead(bgPid2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("没有 fork 过的 handle（比如重启后）：抛错", async () => {
@@ -293,6 +396,7 @@ describe("remove：先删复制那份，再关进程；幂等", () => {
     expect(methods.at(-1)).toBe("thread/delete");
     expect(server.requests.at(-1)!.params).toEqual({ threadId: "fork-1" });
     expect(server.killed).toBe(true);
+    expect(vi.mocked(termGroupAfterExit).mock.calls).toEqual([[server]]);
   });
 
   it("没有这个 handle（进程早没了、重启后）：什么都不做，算成功；重复 remove 也行", async () => {

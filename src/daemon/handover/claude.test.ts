@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LaunchFiles } from "../../shared/driver.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { buildForkSettings } from "../../shared/policy.ts";
+import { isAlive } from "../driver/process.ts";
 import { createClaudeForker, claudeProjectDirName, CLAUDE_FORKERS } from "./claude.ts";
 import { ForkUnsupportedError, type ForkSource } from "./forker.ts";
 import { FORKERS } from "./forkers.ts";
@@ -22,12 +23,18 @@ function fakeClaude(): string {
   writeFileSync(
     path,
     `#!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 let stdin = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (stdin += c));
 process.stdin.on("end", () => {
   writeFileSync(process.env.FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env: process.env, stdin, cwd: process.cwd() }));
+  if (process.env.FAKE_BG_PID_FILE) {
+    const bg = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });
+    bg.unref();
+    writeFileSync(process.env.FAKE_BG_PID_FILE, String(bg.pid));
+  }
   const mode = process.env.FAKE_MODE ?? "ok";
   if (mode === "hang") { setInterval(() => {}, 1000); return; }
   if (mode === "fail") { process.stderr.write("boom"); process.exit(3); }
@@ -225,6 +232,22 @@ describe("write：claude -p --resume 原编号 --fork-session --no-session-persi
     const f = createClaudeForker();
     const src = source({ vendorSessionId: "" });
     await expect(f.write(src, await f.fork(src, never), "p", never)).rejects.toThrow(ForkUnsupportedError);
+  });
+
+  it("进程退出（正常或异常）时即使同组后台子进程还占着 stdout/stderr，也在 exit 时立即补杀进程组、不卡死 close", async () => {
+    const f = createClaudeForker();
+    const pidFile = join(dir, "bg.pid");
+    process.env.FAKE_BG_PID_FILE = pidFile;
+    try {
+      const r = await f.write(source(), await f.fork(source(), never), "p", never);
+      expect(r.text).toBe("交接正文");
+      const bgPid = Number(readFileSync(pidFile, "utf8").trim());
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline && isAlive(bgPid)) await new Promise((res) => setTimeout(res, 20));
+      expect(isAlive(bgPid)).toBe(false);
+    } finally {
+      delete process.env.FAKE_BG_PID_FILE;
+    }
   });
 });
 
