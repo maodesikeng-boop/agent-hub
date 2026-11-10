@@ -10,13 +10,9 @@ Agent Hub is a self-hosted web app built around one idea: **for each project, yo
 
 ### Why a single conversation per project?
 
-When you work with multiple coding agents at once, the bottleneck quickly shifts from writing code to **managing agent sessions**: creating git worktrees, picking models, copying context between threads, watching terminals, checking whether an agent stalled, and reviewing diffs across half a dozen tabs.
+When you run multiple coding agents in parallel, the bottleneck quickly shifts from writing code to **managing agent sessions**: creating git worktrees, picking models, copying background context between threads, watching terminals to see who stalled, and reviewing diffs across half a dozen tabs.
 
-Existing multi-agent tools such as [Orca](https://github.com/stablyai/orca) ([docs](https://www.onorca.dev/docs)) and [T3 Code](https://github.com/pingdotgg/t3code) ([outside-agents docs](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)) are primarily designed around **giving you a workspace to open and watch multiple agent sessions and worktrees yourself**:
-- **[Orca](https://github.com/stablyai/orca)** is a desktop IDE for running multiple AI coding agents side by side, where each task gets its own git worktree, split-pane agent terminal, diff viewer, and browser tab (along with an `orca` CLI and experimental [orchestration commands](https://www.onorca.dev/docs/cli/orchestration) for spawning workers).
-- **[T3 Code](https://github.com/pingdotgg/t3code)** is a desktop, web, and mobile control surface for starting and managing agent threads across projects and optional git worktrees (along with [`t3 thread` CLI commands and an MCP server](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md) for outside agents).
-
-While you can also use those tools to have one agent spawn others, Agent Hub is designed from the ground up specifically for **"one conversation manages the whole project"**—the shape it has had since day one. You do not open or babysit individual worktree sessions yourself; the UI, context lifecycle, and sub-agent orchestration are all built to keep you in a single continuous conversation with your project's PM.
+Agent Hub is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
 
 It is built for **one person across multiple devices** (your Mac, a Linux server, your phone)—not a multi-user shared server.
 
@@ -175,13 +171,9 @@ Agent Hub 是一个自托管的个人多 Agent 协作网页应用，核心设计
 
 ### 为什么要“一个会话管住整个项目”？
 
-同时用多个编程 Agent 干活时，瓶颈很快就会从“写代码”变成**“管会话”**：建 git worktree、选模型、在不同会话之间来回贴背景、盯一堆终端看谁卡住了、在十几个标签页里挨个审 diff。
+同时用多个编程 Agent 并行干活时，瓶颈很快就会从“写代码”变成**“管会话”**：建 git worktree、选模型、在不同会话之间来回贴背景、盯一堆终端看谁卡住了、在十几个标签页里挨个审 diff。
 
-市面上常见的多 Agent 工具（如 [Orca](https://github.com/stablyai/orca)（[文档](https://www.onorca.dev/docs)）、[T3 Code](https://github.com/pingdotgg/t3code)（[外部 Agent 文档](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)））主要是围绕**“让你自己开、自己盯每个 Agent 会话和 worktree”**设计的：
-- **[Orca](https://github.com/stablyai/orca)** 是并排运行多个 AI 编程 Agent 的桌面 IDE，每个任务有自己的 git worktree、分屏终端、diff 查看器和浏览器标签页（也提供 `orca` CLI 和实验性的[编排命令](https://www.onorca.dev/docs/cli/orchestration)来派子任务）。
-- **[T3 Code](https://github.com/pingdotgg/t3code)** 是跨桌面、网页和手机的 Agent 控制面板，用来在多个项目和可选的 git worktree 中启动、管理多条 Agent 线程（同时提供 [`t3 thread` CLI 与 MCP 服务](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md)供外部 Agent 调用）。
-
-这些工具虽然也能拿来“让一个 Agent 派别的 Agent”，但 Agent Hub 从最早开始开发时就是专门按**“一个会话管住一个项目”**设计的：你不用自己去开、去盯每个 worktree 和终端，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
+Agent Hub 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
 它是为**一个人、多台设备**（你自己的 Mac、Linux 服务器、手机）设计的自用工具，不是多人共用的服务端。
 
