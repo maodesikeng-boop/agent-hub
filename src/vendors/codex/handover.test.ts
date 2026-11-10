@@ -11,13 +11,13 @@ import type { AgentSessionRow } from "../../shared/domain.ts";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isAlive, termGroupAfterExit } from "../driver/process.ts";
+import { isAlive, termGroupAfterExit } from "../../daemon/driver/process.ts";
 
 const FAKE_PID = 4242;
 
 // FakeServer 的 pid 是编的（4242）：不能真往 -4242 发信号，只记调用；真进程照调原实现
-vi.mock("../driver/process.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../driver/process.ts")>();
+vi.mock("../../daemon/driver/process.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/driver/process.ts")>();
   return {
     ...actual,
     signalPid: vi.fn((pid: number, signal: NodeJS.Signals) => {
