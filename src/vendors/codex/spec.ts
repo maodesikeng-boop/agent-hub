@@ -1,16 +1,17 @@
 // codex 的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
 // 要拼绝对路径的（CODEX_HOME）在同目录的 paths.ts。
 import { ENV_CODEX } from "../../shared/limits.ts";
+import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
 /** 思考程度：通用六档（luna 系到 max，其余支持到 ultra）。 */
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const MAX_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
-const SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
 const MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
 const ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 codex";
-const SANDBOX_BLOCKED = "权限和沙箱由 agent-hub 管，这里不能用这个命令";
+const SANDBOX_BLOCKED = `权限和沙箱由 ${PRODUCT_NAME} 管，这里不能用这个命令`;
 
 /** ChatGPT.app 里带的 codex（相对 Applications 目录）：装在 /Applications 或用户目录的 ~/Applications 都要找。 */
 const CHATGPT_APP_CODEX = "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";

@@ -1,7 +1,7 @@
 // M4：判断“等你”、上次看的时间、弹通知。用假时钟、假的 Notification；网页的前台状态用 setForeground 模拟。
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Change, MessageStatus, SessionActivity, StateSnapshot } from "../shared/index.ts";
+import { PRODUCT_NAME, type Change, type MessageStatus, type SessionActivity, type StateSnapshot } from "../shared/index.ts";
 import { LAST_SEEN_KEY, NOTIFY_ENABLED_KEY, WAITING_SETTLE_MS, useWaitingReminders } from "./notify.ts";
 import { waitingConversations } from "./selectors.ts";
 import { applyChange, initialState, reducer, type HubState } from "./state.ts";
@@ -74,7 +74,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(T0);
   localStorage.clear();
-  document.title = "agent-hub";
+  document.title = PRODUCT_NAME;
   installFakeNotification("granted");
   setForeground(false);
 });
@@ -340,20 +340,22 @@ describe("网页重开", () => {
 });
 
 describe("标签页标题", () => {
-  it("标题是“(N) 产品名”；没有时没有括号", () => {
+  it("标题是“(N) 产品名”；没有时没有括号；存储键保持内部标识 agent-hub", () => {
+    expect(LAST_SEEN_KEY).toBe("agent-hub:lastSeen");
+    expect(NOTIFY_ENABLED_KEY).toBe("agent-hub:notifyEnabled");
     const busy = load(snapshot());
     const s = setup(busy);
-    expect(document.title).toBe("agent-hub");
+    expect(document.title).toBe(PRODUCT_NAME);
     const one = pmIdle(busy);
     s.update(one);
     s.wait(WAITING_SETTLE_MS);
-    expect(document.title).toBe("(1) agent-hub");
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
     const two = apply(activity(one, 2, 2, "idle", 2), messageChange(0, "message.created", makeMessage({ id: 21, conversationId: 2, createdAt: T0 - 1_000 })));
     s.update(two);
     s.wait(WAITING_SETTLE_MS);
-    expect(document.title).toBe("(2) agent-hub");
+    expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
     s.update(activity(two, 1, 1, "working", 1));
-    expect(document.title).toBe("(1) agent-hub");
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 });
 
@@ -477,7 +479,7 @@ describe("通知权限", () => {
     s.update(pmIdle(busy));
     s.wait(WAITING_SETTLE_MS);
     expect(FakeNotification.instances).toHaveLength(0);
-    expect(document.title).toBe("(1) agent-hub");
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 
   it("开关关掉后不弹，左栏和标题照常；再打开又能弹", async () => {
@@ -493,7 +495,7 @@ describe("通知权限", () => {
     s.wait(WAITING_SETTLE_MS);
     expect(FakeNotification.instances).toHaveLength(0);
     expect(s.waiting()).toEqual([1]);
-    expect(document.title).toBe("(1) agent-hub");
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
 
     await act(async () => {
       await s.result.current.notify.setEnabled(true);
@@ -554,6 +556,6 @@ describe("通知权限", () => {
     s.update(pmIdle(busy));
     s.wait(WAITING_SETTLE_MS);
     expect(s.waiting()).toEqual([1]);
-    expect(document.title).toBe("(1) agent-hub");
+    expect(document.title).toBe(`(1) ${PRODUCT_NAME}`);
   });
 });

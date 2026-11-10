@@ -611,6 +611,18 @@ describe("孤儿子进程", () => {
     expect(await goneWithin(child)).toBe(true);
   });
 
+  it("关机（空闲的关标准输入、正常退出）之后：睡眠子进程也不在了", async () => {
+    // Linux bwrap 下外层 bwrap 先退、namespace 的 PID 1 被后台子进程拖住，也靠这一下补的组信号清掉（write-scope.linux.test.ts 驱动层集成）
+    const t = harness({ script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const child = await childPid(t);
+    await t.waitFor("turn.ended");
+    await t.driver.shutdown();
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "shutdown", signal: null });
+    expect(await goneWithin(child)).toBe(true);
+  });
+
   it("空闲关闭之后：睡眠子进程也不在了", async () => {
     const t = harness({ driver: { idleCloseMs: 50 }, script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
     const s = t.addSession();
@@ -768,7 +780,7 @@ describe("进程组", () => {
     expect(await goneWithin(child)).toBe(true);
   });
 
-  it("正常停止仍然只给 claude 本身发 SIGINT：子进程不受这一下影响", async () => {
+  it("关机正常停止：SIGINT 只发给 claude 本身，它退出后再给原来的进程组补信号，子进程也不在了", async () => {
     const t = harness({ script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { sleepMs: 30_000 }] }] } });
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
@@ -776,8 +788,7 @@ describe("进程组", () => {
     await t.driver.shutdown();
     expect(signals(t)).toEqual(["SIGINT"]);
     expect(t.of("session.exited")[0]).toMatchObject({ reason: "shutdown", signal: null, exitCode: 0 });
-    await realSleep(100);
-    expect(alive(child)).toBe(true);
+    expect(await goneWithin(child)).toBe(true);
   });
 
   it("claude 在自己的进程组里（detached）：进程组号就是它自己的 pid", async () => {

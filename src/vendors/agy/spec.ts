@@ -1,6 +1,7 @@
 // agy（Antigravity）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
 // 要拼绝对路径的（数据目录下的会话库、MCP 配置文件）在同目录的 paths.ts。
 import { ENV_AGY } from "../../shared/limits.ts";
+import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
 /** agy 的数据目录、旧版数据目录、MCP 配置文件（相对用户主目录）。 */
@@ -11,7 +12,7 @@ export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
 /** 思考程度：和 Antigravity 软件一样三档（实测 xhigh、max 被 agy 拒绝）。 */
 const EFFORTS: readonly string[] = ["low", "medium", "high"];
 
-const SESSION_BLOCKED = "会话由 agent-hub 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮";
+const SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
 const MODEL_BLOCKED = "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）";
 const ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里打开 agy";
 const TERMINAL_BLOCKED = "交互式命令不能在后台会话跑，请在终端界面里打开 agy";

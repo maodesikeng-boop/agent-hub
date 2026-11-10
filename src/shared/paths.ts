@@ -23,6 +23,8 @@ export interface HubPaths {
   stateDir: string;
   dbFile: string;
   lockFile: string;
+  /** state/child-processes.json：守护进程起的子进程记账（pid + 启动时间 + 用途），下次启动按它回收残留（daemon/process-ledger.ts）。 */
+  childProcessesFile: string;
   /** 界面用户令牌，权限 0600，重启后沿用（见 limits.ts 的 UI_COOKIE_NAME）。 */
   uiTokenFile: string;
   /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
@@ -111,6 +113,7 @@ export function resolveHubPaths(
     stateDir,
     dbFile: join(stateDir, "hub.sqlite"),
     lockFile: join(stateDir, "lock"),
+    childProcessesFile: join(stateDir, "child-processes.json"),
     uiTokenFile: join(stateDir, "ui-token"),
     deviceFile: join(stateDir, "device.json"),
     pushVapidFile: join(stateDir, "push-vapid.json"),

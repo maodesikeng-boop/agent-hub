@@ -1,5 +1,6 @@
 // 二维码登录链接的落地页（联机 P6）：链接是 `/auth#link=<码>`。码放在 # 片段里，浏览器不会把它发给服务器，
 // 所以代理、访问日志、Referer 都看不到；这个页面自己读出片段，先把地址栏清掉，再 POST /auth 兑换，成功就回首页。
+import { PRODUCT_NAME } from "../../shared/names.ts";
 
 /** 登录链接里 # 片段的键：`#link=<码>`。 */
 export const LOGIN_LINK_FRAGMENT_KEY = "link";
@@ -13,7 +14,7 @@ export const LOGIN_LINK_PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<title>登录 Agent Hub</title>
+<title>登录 ${PRODUCT_NAME}</title>
 <style>
   body { margin: 0; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; font: 16px/1.5 system-ui, -apple-system, sans-serif; color: #1f2328; background: #fff; }
   @media (prefers-color-scheme: dark) { body { color: #e6edf3; background: #0d1117; } }
@@ -59,7 +60,7 @@ export const LOGIN_LINK_PAGE = `<!doctype html>
       msg.textContent = "登录链接已失效或已用过，请回电脑上重新生成二维码。";
     }
   }).catch(function () {
-    msg.textContent = "连不上 Agent Hub，请检查网络后重新扫码。";
+    msg.textContent = "连不上 ${PRODUCT_NAME}，请检查网络后重新扫码。";
   });
 })();
 </script>

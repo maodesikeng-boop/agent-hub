@@ -19,6 +19,7 @@ import {
 } from "../../shared/index.ts";
 import { forceKillTree, streamClosed, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
+import { trackChild } from "../process-ledger.ts";
 
 // ---- 不传给准备命令的环境变量（名单只在这里）----
 // 只去模型和 hub 的凭据：hub 的令牌和 socket（HUB_*）、守护进程的配置（AGENT_HUB_*）、Claude / Anthropic / Bedrock / Foundry 的
@@ -217,6 +218,7 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    trackChild(child, "setup:worktree-command", { detached: true });
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
 

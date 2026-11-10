@@ -10,6 +10,7 @@ import { LRUCache } from "lru-cache";
 import {
   COMMANDS_FRESH_MS,
   COMMANDS_RETRY_MS,
+  KILL_WAIT_MS,
   MAX_COMMAND_CACHE_ENTRIES,
   MAX_CONCURRENT_COMMAND_QUERIES,
   type AgentVendor, type ComposerCommand,
@@ -45,8 +46,8 @@ export interface CommandCatalogs {
   cached(request: Omit<CommandsRequest, "sessionId">): ComposerCommand[] | null;
   /** 会话推来了完整的新名单（驱动层的 commands.changed）。 */
   update(request: Omit<CommandsRequest, "sessionId">, commands: ComposerCommand[]): void;
-  /** 关机：取消在问的，之后不再问。 */
-  close(): void;
+  /** 关机：取消在问的并等它收尾（最多 KILL_WAIT_MS），之后不再问。 */
+  close(): Promise<void>;
 }
 
 interface Entry {
@@ -68,6 +69,7 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
   const maxEntries = options.maxEntries ?? MAX_COMMAND_CACHE_ENTRIES;
   /** LRU 缓存：满了自动淘汰最久未使用的。 */
   const entries = new LRUCache<string, Entry>({ max: Math.max(1, maxEntries) });
+  const inflight = new Set<Promise<void>>();
   const controller = new AbortController();
   let closed = false;
   let active = 0;
@@ -109,7 +111,8 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
 
   /** 另起一个进程问（同一个键同时只问一次）。 */
   const ask = (vendor: VendorComposer, request: CommandsRequest, key: string, entry: Entry): Promise<void> => {
-    entry.inflight ??= (async () => {
+    if (entry.inflight) return entry.inflight;
+    const running = (async () => {
       try {
         await acquire();
         try {
@@ -123,8 +126,11 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
       }
     })().finally(() => {
       entry.inflight = null;
+      inflight.delete(running);
     });
-    return entry.inflight;
+    entry.inflight = running;
+    inflight.add(running);
+    return running;
   };
 
   const visible = (vendor: VendorComposer, commands: ComposerCommand[] | null) =>
@@ -157,10 +163,20 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
       const key = keyOf(request);
       store(key, entryOf(key), commands);
     },
-    close() {
+    async close() {
       closed = true;
       controller.abort();
       for (const w of waiting.splice(0)) w.cancel();
+      if (inflight.size === 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled([...inflight]),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, KILL_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }

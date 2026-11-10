@@ -12,7 +12,9 @@ import {
   readCodexLaunchConfig,
   serializeJsonRpcLine,
 } from "../driver/codex-protocol.ts";
+import { signalPid, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
+import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "./forker.ts";
 import type { ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
@@ -86,9 +88,13 @@ class CodexRpc {
     const done = new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
     this.#child.stdin?.end();
     this.#child.kill("SIGTERM");
-    const timer = setTimeout(() => this.#child.kill("SIGKILL"), CLOSE_GRACE_MS);
+    const timer = setTimeout(() => {
+      if (this.#child.pid !== undefined && this.#child.pid > 1) signalPid(-this.#child.pid, "SIGKILL");
+      this.#child.kill("SIGKILL");
+    }, CLOSE_GRACE_MS);
     await done;
     clearTimeout(timer);
+    termGroupAfterExit(this.#child);
   }
 
   #write(payload: Json): void {
@@ -164,7 +170,11 @@ function addUsage(total: TokenUsage, last: Json): TokenUsage {
 export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
   const spawnProcess =
     options.spawnProcess ??
-    ((command, args, opts) => spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true }));
+    ((command, args, opts) => {
+      const child = spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true });
+      trackChild(child, "handover:codex", { detached: true });
+      return child;
+    });
   /** forkId → 复制那份所在的 app-server 进程（ephemeral 的 thread 只活在里面）。 */
   const servers = new Map<string, CodexRpc>();
 
