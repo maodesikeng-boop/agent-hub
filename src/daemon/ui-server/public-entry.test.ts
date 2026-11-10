@@ -327,7 +327,12 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
     // 未登录时查询 /api/auth/status 返回 unauthenticated
     const unauthStatus = await sendViaSocket(publicSock, "GET", API_PATHS.authStatus, { headers: { host: PUBLIC_HOST } });
     expect(unauthStatus.status).toBe(200);
-    expect(unauthStatus.json()).toEqual({ status: "unauthenticated" });
+    expect(unauthStatus.json()).toEqual({
+      status: "unauthenticated",
+      product: "fusa",
+      protocolVersion: 1,
+      instanceId: expect.any(String),
+    });
 
     // 2. 手机经公网兑换链接 → 202 pending_approval，电脑端收到 resync
     const authRes = await sendViaSocket(publicSock, "POST", API_PATHS.auth, {
@@ -361,7 +366,12 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
       headers: { host: PUBLIC_HOST, cookie: phoneCookie },
     });
     expect(pendingStatus.status).toBe(200);
-    expect(pendingStatus.json()).toEqual({ status: "pending_approval" });
+    expect(pendingStatus.json()).toEqual({
+      status: "pending_approval",
+      product: "fusa",
+      protocolVersion: 1,
+      instanceId: expect.any(String),
+    });
 
     for (const [method, path] of [
       ["GET", API_PATHS.state],
@@ -392,7 +402,12 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
       headers: { host: PUBLIC_HOST, cookie: phoneCookie },
     });
     expect(activeStatus.status).toBe(200);
-    expect(activeStatus.json()).toEqual({ status: "active" });
+    expect(activeStatus.json()).toEqual({
+      status: "active",
+      product: "fusa",
+      protocolVersion: 1,
+      instanceId: expect.any(String),
+    });
 
     const stateAfterApprove = await sendViaSocket(publicSock, "GET", API_PATHS.state, {
       headers: { host: PUBLIC_HOST, cookie: phoneCookie },
@@ -419,7 +434,12 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
       headers: { host: PUBLIC_HOST, cookie: cookie2 },
     });
     expect(expiredPending.status).toBe(200);
-    expect(expiredPending.json()).toEqual({ status: "unauthenticated" });
+    expect(expiredPending.json()).toEqual({
+      status: "unauthenticated",
+      product: "fusa",
+      protocolVersion: 1,
+      instanceId: expect.any(String),
+    });
 
     // 8. 满 MAX_BROWSER_SESSIONS（100）淘汰时：优先淘汰 pending_approval，绝不挤掉更老的 active 会话
     const store = createBrowserSessions(db, { now: () => now });
@@ -602,7 +622,12 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
     expect(existsSync(publicSock)).toBe(true);
     const probeAfterReenable = await sendViaSocket(publicSock, "GET", API_PATHS.authStatus, { headers: { host: PUBLIC_HOST } });
     expect(probeAfterReenable.status).toBe(200);
-    expect(probeAfterReenable.json()).toEqual({ status: "unauthenticated" });
+    expect(probeAfterReenable.json()).toEqual({
+      status: "unauthenticated",
+      product: "fusa",
+      protocolVersion: 1,
+      instanceId: expect.any(String),
+    });
 
     localWs.terminate();
   });

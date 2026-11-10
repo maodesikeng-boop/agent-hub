@@ -129,36 +129,70 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         loadHub()
     }
 
-    /// 免手输登录：先检查 httpCookieStore 是否已有 agent_hub_ui_4317 Cookie；有则直接加载 /，没有则读 state/ui-token 跳 /auth?token=。
+    /// 免手输登录：先经 `/api/auth/status` 严格核验 Fusa 身份与协议版本，通过后才检查或用本机 `state/ui-token` 经 `POST /auth` 兑换 Cookie。
+    /// 若端口被非 Fusa 服务或协议不兼容进程占用，直接展示冲突错误页，绝不加载未知服务或发送本机令牌。
     func loadHub() {
         isShowingErrorPage = false
-        let cookieName = supervisor.cookieName
-        webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+        supervisor.probeIdentity { [weak self] probeResult in
             guard let self = self else { return }
-            let hasSessionCookie = cookies.contains { cookie in
-                cookie.name == cookieName && (cookie.domain == "127.0.0.1" || cookie.domain == "localhost")
-            }
-            DispatchQueue.main.async {
-                if hasSessionCookie {
-                    self.webView.load(URLRequest(url: self.supervisor.baseURL))
-                } else {
-                    self.authenticateWithUiToken()
+            switch probeResult {
+            case .conflict(let reason):
+                DispatchQueue.main.async {
+                    self.showStartupError(reason)
+                }
+            case .unreachable:
+                DispatchQueue.main.async {
+                    self.showStartupError("后台服务尚未就绪（端口 \(self.supervisor.port) 无响应）")
+                }
+            case .verified:
+                let cookieName = self.supervisor.cookieName
+                self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+                    guard let self = self else { return }
+                    let hasSessionCookie = cookies.contains { cookie in
+                        cookie.name == cookieName && (cookie.domain == "127.0.0.1" || cookie.domain == "localhost")
+                    }
+                    DispatchQueue.main.async {
+                        if hasSessionCookie {
+                            self.webView.load(URLRequest(url: self.supervisor.baseURL))
+                        } else {
+                            self.authenticateWithUiToken()
+                        }
+                    }
                 }
             }
         }
     }
 
     private func authenticateWithUiToken() {
-        if !didAttemptTokenAuth, let token = supervisor.readUiToken(),
-           var components = URLComponents(url: supervisor.baseURL.appendingPathComponent("auth"), resolvingAgainstBaseURL: false) {
-            didAttemptTokenAuth = true
-            components.queryItems = [URLQueryItem(name: "token", value: token)]
-            if let authURL = components.url {
-                webView.load(URLRequest(url: authURL))
-                return
+        guard !didAttemptTokenAuth else {
+            webView.load(URLRequest(url: supervisor.baseURL))
+            return
+        }
+        didAttemptTokenAuth = true
+        supervisor.exchangeUiTokenForCookies { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure(let error):
+                self.showStartupError(error.localizedDescription)
+            case .success(let cookies):
+                guard !cookies.isEmpty else {
+                    self.webView.load(URLRequest(url: self.supervisor.baseURL))
+                    return
+                }
+                let cookieStore = self.webView.configuration.websiteDataStore.httpCookieStore
+                let group = DispatchGroup()
+                for cookie in cookies {
+                    group.enter()
+                    cookieStore.setCookie(cookie) {
+                        group.leave()
+                    }
+                }
+                group.notify(queue: .main) { [weak self] in
+                    guard let self = self else { return }
+                    self.webView.load(URLRequest(url: self.supervisor.baseURL))
+                }
             }
         }
-        webView.load(URLRequest(url: supervisor.baseURL))
     }
 
     func showStartupError(_ message: String) {
