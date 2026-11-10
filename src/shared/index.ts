@@ -22,5 +22,6 @@ export * from "./snapshot.ts";
 export * from "./store.ts";
 export * from "./tunnel.ts";
 export * from "./worker.ts";
+export * from "../vendors/registry.ts";
 export * from "./vendors.ts";
 export * from "./write-scope.ts";
