@@ -289,6 +289,10 @@ code {
     animation: none;
   }
 }
+/* 输入框外层的下边距（电脑默认 20px，和原来的 pb-5 一样）；手机外壳在这一处改数，组件里不带参数 */
+.composer-dock {
+  padding-bottom: 1.25rem;
+}
 .messages,
 .chat-column {
   --chat-max: 46rem;

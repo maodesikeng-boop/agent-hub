@@ -326,8 +326,107 @@ function CompletedGroup({
 }
 
 /**
- * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：三组，Needs You（这个项目经理还没回答的 hub ask）、Pieces
- * （它派的、没收工的：在忙的排前面，最多列 3 条，多了 Show more）和 Completed（收工的，默认收着）。组之间一条细分隔线。layout：side 是和对话并排的一栏
+ * 右栏的三组（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：Needs You（这个项目经理还没回答的 hub ask）、Pieces
+ * （它派的、没收工的：在忙的排前面，最多列 3 条，多了 Show more）和 Completed（收工的，默认收着）。组之间一条细分隔线，内容多了自己滚。
+ * 右栏（RightRail）和手机的底部抽屉共用这一段，外壳只管外框；className 加在滚动容器上（右栏用它定上下留白）。
+ * toggle：放在第一个显示的组标题同一行右边的右栏开关（RightRailToggle），只有并排的右栏给。
+ */
+export function RailGroups({
+  asks,
+  workers,
+  openWorkerId,
+  toggle,
+  className,
+  onOpenAsk,
+  onOpenWorker,
+}: {
+  asks: Message[];
+  workers: WorkerEntry[];
+  /** 正开着的 Worker 的对话。 */
+  openWorkerId: ConversationId | null;
+  toggle?: React.ReactNode;
+  className?: string;
+  /** 点开一个提问：对话滚到那条消息。 */
+  onOpenAsk: (messageId: MessageId) => void;
+  onOpenWorker: (conversationId: ConversationId) => void;
+}) {
+  const [openAsks, setOpenAsks] = useState<ReadonlySet<MessageId>>(new Set());
+  const toggleAsk = (id: MessageId) => {
+    const opening = !openAsks.has(id);
+    setOpenAsks((prev) => {
+      const next = new Set(prev);
+      if (opening) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    if (opening) onOpenAsk(id);
+  };
+  const live = useMemo(() => workers.filter((w) => !w.ended).toSorted((a, b) => Number(isBusy(b)) - Number(isBusy(a))), [workers]);
+  const ended = workers.filter((w) => w.ended);
+  const shownAsks = useLimited(asks, (ask) => openAsks.has(ask.id));
+  const shownLive = useLimited(live, (w) => w.conversationId === openWorkerId);
+  const groups = useCollapsedGroups();
+  return (
+    <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
+      {asks.length > 0 && (
+        <section aria-labelledby="rail-asks" className="tint-fade py-3">
+          <GroupTitle
+            id="rail-asks"
+            bodyId="rail-asks-body"
+            collapsed={groups.collapsed.asks === true}
+            onToggle={() => groups.toggle("asks")}
+            dot
+            trailing={toggle}
+          >
+            {NEEDS_YOU}
+          </GroupTitle>
+          <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
+            <ul>
+              {shownAsks.shown.map((ask) => (
+                <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
+              ))}
+            </ul>
+            <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
+          </GroupBody>
+        </section>
+      )}
+      {live.length > 0 && (
+        <section aria-labelledby="rail-workers" className="tint-fade py-3">
+          <GroupTitle
+            id="rail-workers"
+            bodyId="rail-workers-body"
+            collapsed={groups.collapsed.workers === true}
+            onToggle={() => groups.toggle("workers")}
+            trailing={asks.length === 0 ? toggle : undefined}
+          >
+            Pieces
+          </GroupTitle>
+          <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
+            <ul>
+              {shownLive.shown.map((worker) => (
+                <li key={worker.conversationId}>
+                  <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+                </li>
+              ))}
+            </ul>
+            <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
+          </GroupBody>
+        </section>
+      )}
+      {ended.length > 0 && (
+        <CompletedGroup
+          workers={ended}
+          openWorkerId={openWorkerId}
+          onOpenWorker={onOpenWorker}
+          trailing={asks.length === 0 && live.length === 0 ? toggle : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 对话右边的右栏（docs/ui-standard.md 第 12 条）：外壳（aside）里放 RailGroups。layout：side 是和对话并排的一栏
  * （推开对话），右栏开关（toggle）放在第一组标题的同一行右边，内容从最顶上开始；top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
 export function RightRail({
@@ -353,22 +452,6 @@ export function RightRail({
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
 }) {
-  const [openAsks, setOpenAsks] = useState<ReadonlySet<MessageId>>(new Set());
-  const toggleAsk = (id: MessageId) => {
-    const opening = !openAsks.has(id);
-    setOpenAsks((prev) => {
-      const next = new Set(prev);
-      if (opening) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-    if (opening) onOpenAsk(id);
-  };
-  const live = useMemo(() => workers.filter((w) => !w.ended).toSorted((a, b) => Number(isBusy(b)) - Number(isBusy(a))), [workers]);
-  const ended = workers.filter((w) => w.ended);
-  const shownAsks = useLimited(asks, (ask) => openAsks.has(ask.id));
-  const shownLive = useLimited(live, (w) => w.conversationId === openWorkerId);
-  const groups = useCollapsedGroups();
   const side = layout === "side";
   return (
     <aside
@@ -376,61 +459,15 @@ export function RightRail({
       aria-label="Side panel"
       className={cn("tint-fade flex shrink-0 flex-col bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
     >
-      <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
-        {asks.length > 0 && (
-          <section aria-labelledby="rail-asks" className="tint-fade py-3">
-            <GroupTitle
-              id="rail-asks"
-              bodyId="rail-asks-body"
-              collapsed={groups.collapsed.asks === true}
-              onToggle={() => groups.toggle("asks")}
-              dot
-              trailing={side ? toggle : undefined}
-            >
-              {NEEDS_YOU}
-            </GroupTitle>
-            <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
-              <ul>
-                {shownAsks.shown.map((ask) => (
-                  <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
-                ))}
-              </ul>
-              <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
-            </GroupBody>
-          </section>
-        )}
-        {live.length > 0 && (
-          <section aria-labelledby="rail-workers" className="tint-fade py-3">
-            <GroupTitle
-              id="rail-workers"
-              bodyId="rail-workers-body"
-              collapsed={groups.collapsed.workers === true}
-              onToggle={() => groups.toggle("workers")}
-              trailing={side && asks.length === 0 ? toggle : undefined}
-            >
-              Pieces
-            </GroupTitle>
-            <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
-              <ul>
-                {shownLive.shown.map((worker) => (
-                  <li key={worker.conversationId}>
-                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
-                  </li>
-                ))}
-              </ul>
-              <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-            </GroupBody>
-          </section>
-        )}
-        {ended.length > 0 && (
-          <CompletedGroup
-            workers={ended}
-            openWorkerId={openWorkerId}
-            onOpenWorker={onOpenWorker}
-            trailing={side && asks.length === 0 && live.length === 0 ? toggle : undefined}
-          />
-        )}
-      </div>
+      <RailGroups
+        asks={asks}
+        workers={workers}
+        openWorkerId={openWorkerId}
+        toggle={side ? toggle : undefined}
+        className={side ? "pb-4" : "py-1"}
+        onOpenAsk={onOpenAsk}
+        onOpenWorker={onOpenWorker}
+      />
     </aside>
   );
 }

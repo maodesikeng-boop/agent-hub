@@ -5,7 +5,18 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS } from "../shared/index.ts";
 import { App } from "./App.tsx";
-import { FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, makeUserMessage, messageChange } from "./test-utils.ts";
+import {
+  FakeApi,
+  FakeWebSocket,
+  installFakeWebSocket,
+  makeConvSnapshot,
+  makePm,
+  makeSession,
+  makeSnapshot,
+  makeUserMessage,
+  makeWorkerConversation,
+  messageChange,
+} from "./test-utils.ts";
 
 let api: FakeApi;
 
@@ -96,6 +107,44 @@ describe("手打被拦的命令", () => {
     expect(box().value).toBe("");
     expect(await screen.findByText("你好")).toBeInTheDocument();
     release();
+  });
+});
+
+describe("打开对话时聚焦输入框：只在用鼠标的设备（pointer: fine）", () => {
+  const pointer = (kind: "fine" | "coarse") =>
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === `(pointer: ${kind})`, addEventListener() {}, removeEventListener() {} }));
+  const open = async (hash: string, kind: "fine" | "coarse") => {
+    pointer(kind);
+    window.location.hash = hash;
+    api = new FakeApi(
+      makeSnapshot({
+        pms: [makePm({ id: 1, name: "小林" })],
+        conversations: [
+          makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+        ],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 31 })],
+      }),
+    );
+    api.install();
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    await screen.findByRole("textbox", { name: "Message" });
+  };
+  afterEach(() => {
+    window.location.hash = "";
+  });
+
+  it.each([["#/c/1", "项目经理的对话"], ["#/w/31", "Piece 的对话"]])("%s（%s）：鼠标设备焦点在输入框", async (hash) => {
+    await open(hash, "fine");
+    expect(box()).toHaveFocus();
+  });
+
+  it.each([["#/c/1", "项目经理的对话"], ["#/w/31", "Piece 的对话"]])("%s（%s）：触屏设备焦点不在输入框（不弹键盘）", async (hash) => {
+    await open(hash, "coarse");
+    expect(box()).not.toHaveFocus();
   });
 });
 

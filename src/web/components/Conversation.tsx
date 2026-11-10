@@ -160,7 +160,7 @@ export function Conversation({
           statusAgent={agent}
         />
       </div>
-      <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 pb-5 *:pointer-events-auto">
+      <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto">
         {entry.pm?.archivedAt != null ? (
           <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
         ) : (

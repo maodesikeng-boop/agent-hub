@@ -18,6 +18,8 @@ import { SettingsDialog, type DeviceSettings } from "./SettingsDialog.tsx";
 const jellyOf = (avatarKey: number) => ({ "--jelly": paletteOf(avatarKey).accent }) as React.CSSProperties;
 const JELLY_ROW = (active: boolean) => (active ? "bg-jelly" : "hover:bg-jelly-hover");
 
+export type SidebarLayout = "wide" | "rail" | "page";
+
 /** 左栏的一组：一台设备和它的项目经理。只有一组时不显示组头（和没有联机时一样）。 */
 export interface SidebarGroup {
   key: DeviceKey;
@@ -139,8 +141,6 @@ function NarrowEntryButton({
   );
 }
 
-const noop = () => {};
-
 /** 按项目经理的名字和项目名筛，不区分大小写，前后空格不算。 */
 function matches(entry: ConversationEntry, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -173,20 +173,20 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
 /**
  * 左栏：每个项目经理一行（头像、名字、最后一条消息），点进去就是它唯一的那个对话。
  * 两台以上设备时按设备分组（组头可以折叠），最上面一组汇总所有设备的“等你确定”，每行带设备名；只有一台时和没有联机时一模一样。
- * 窄屏（1100px 以下）收紧为常驻在左侧的 72px 垂直头像窄栏（docs/ui-standard.md 第 16 条）。
+ * layout 三档：wide 是 300px 宽栏，rail 是 72px 垂直头像窄栏（窄屏 1100px 以下，docs/ui-standard.md 第 16 条），page 是手机的整屏列表页（宽栏的内容、铺满、不显示选中）。
+ * 没传 layout 时按 narrow（再没有就按窗口宽度）在 wide 和 rail 里选。
  */
 export function Sidebar({
   groups,
-  active,
+  active: propActive,
   waiting,
   asking,
   notify,
   devices = null,
   quota,
   quotaFetchable = false,
+  layout: propLayout,
   narrow: propNarrow,
-  drawerOpen: _drawerOpen = false,
-  onCloseDrawer: _onCloseDrawer = noop,
   onSelect,
   onNewPm,
 }: {
@@ -202,14 +202,18 @@ export function Sidebar({
   quota: QuotaVendor[];
   /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
   quotaFetchable?: boolean;
+  /** 外壳指定的布局，优先于 narrow。 */
+  layout?: SidebarLayout;
+  /** 没传 layout 时：true 是 rail，false 是 wide；也没传就按窗口宽度。 */
   narrow?: boolean;
-  drawerOpen?: boolean;
-  onCloseDrawer?: () => void;
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
 }) {
   const queryNarrow = useMediaQuery(NARROW_QUERY);
-  const narrow = propNarrow ?? queryNarrow;
+  const layout: SidebarLayout = propLayout ?? ((propNarrow ?? queryNarrow) ? "rail" : "wide");
+  const narrow = layout === "rail";
+  // 整屏列表页是“选一个进去”，不标选中；其余布局不变
+  const active = layout === "page" ? null : propActive;
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
@@ -281,7 +285,7 @@ export function Sidebar({
       aria-label="Sidebar"
       className={cn(
         "tint-fade flex shrink-0 flex-col bg-surface-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
-        narrow ? "w-18 border-r border-line" : "w-75",
+        layout === "rail" ? "w-18 border-r border-line" : layout === "page" ? "w-full" : "w-75",
       )}
     >
       {narrow ? (

@@ -123,7 +123,7 @@ export function WorkerConversation({
               statusAgent={identity}
             />
           </div>
-          <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 pb-5 *:pointer-events-auto empty:hidden">
+          <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase !== "ended" && (
               <DraftComposer
                 autoFocus

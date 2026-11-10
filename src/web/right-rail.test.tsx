@@ -4,7 +4,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationId, Message } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
-import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RightRail, RightRailToggle } from "./components/RightRail.tsx";
+import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups, RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import { cleanPieceTitle } from "./format.ts";
 import type { WorkerEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
@@ -151,6 +151,27 @@ describe("右栏：照 Claude desktop 的样子", () => {
     expect(row).toHaveAttribute("title", "界面：右栏单行");
     expect(within(screen.getByRole("button", { name: "修复: 额度显示" })).getByText("额度显示")).toBeInTheDocument();
     expect(within(screen.getByRole("button", { name: "接手 #269：验证" })).getByText("接手 #269：验证")).toBeInTheDocument();
+  });
+});
+
+describe("RailGroups：右栏和手机抽屉共用的三组（不带 aside 外壳）", () => {
+  it("三组都在，没有 aside；className 加在滚动容器上；toggle 放在第一个显示的组标题同一行", () => {
+    render(
+      <RailGroups asks={[ask(1)]} workers={[busy(30), done(31)]} openWorkerId={null} toggle={<button type="button">开关</button>} className="pb-4" onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(within(asksGroup()).getByRole("button", { name: "开关" })).toBeInTheDocument();
+    expect(within(workerGroup()).queryByRole("button", { name: "开关" })).toBeNull();
+    expect(workerGroup()).toBeInTheDocument();
+    expect(completedGroup()).toBeInTheDocument();
+    expect(asksGroup().parentElement).toHaveClass("divide-y", "overflow-y-auto", "pb-4");
+  });
+
+  it("点 Piece 行回调 onOpenWorker", () => {
+    const onOpenWorker = vi.fn();
+    render(<RailGroups asks={[]} workers={[busy(30)]} openWorkerId={null} onOpenAsk={() => {}} onOpenWorker={onOpenWorker} />);
+    fireEvent.click(screen.getByRole("button", { name: "活 30" }));
+    expect(onOpenWorker).toHaveBeenCalledWith(30);
   });
 });
 

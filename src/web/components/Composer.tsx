@@ -13,6 +13,14 @@ import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
+/**
+ * 主指针是什么（docs/ui-standard.md 第 16 条、docs/mobile-ui-design.md 第 4 节）：fine 是鼠标、触控板，coarse 是手指（手机、iPad）。
+ * 只在要用时读一次（聚焦、按键），不订阅、不进渲染；没有 matchMedia 的环境（测试）当电脑。
+ */
+const POINTER_FINE = "(pointer: fine)";
+const POINTER_COARSE = "(pointer: coarse)";
+const pointerMatches = (query: string, fallback: boolean) => (typeof window.matchMedia === "function" ? window.matchMedia(query).matches : fallback);
+
 /** 聊天输入框外框：1px 中性灰边框；平时的轻阴影和聚焦态（只多一团强调色的模糊光晕，边框不变，不套圈）都在 styles.css 的 .composer-frame（docs/ui-standard.md 第 7 条） */
 const FRAME_CLASS = "composer-frame rounded-[26px] border border-border bg-background";
 
@@ -98,7 +106,7 @@ export function Composer({
   source?: ComposerSource;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
-  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放。 */
+  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放，触屏（不是鼠标）也不放，免得一进对话就弹键盘。 */
   autoFocus?: boolean;
 }) {
   // 设备离线：和“不能发”一样整个不可用，占位写原因，也不能停
@@ -149,7 +157,7 @@ export function Composer({
   });
 
   useEffect(() => {
-    if (autoFocus && !disabled) ref.current?.focus({ preventScroll: true });
+    if (autoFocus && !disabled && pointerMatches(POINTER_FINE, true)) ref.current?.focus({ preventScroll: true });
     // 只在出现时放一次；对话切换时整个页面换了一个（key），会重新放
   }, []);
 
@@ -278,6 +286,8 @@ export function Composer({
               }
               // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
               if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              // 触屏键盘没有 Shift：Enter 就是换行，只用发送键发
+              if (pointerMatches(POINTER_COARSE, false)) return;
               e.preventDefault();
               submit();
             }}
