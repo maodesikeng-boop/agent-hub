@@ -9,7 +9,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubCallContext, LedgerErrorCode, WorkspaceProbe } from "../../shared/ledger.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { WORKER_LOG_MAX_STEPS, WORKER_SEARCH_CONTEXT_CHARS, WORKER_SEARCH_DEFAULT_LIMIT, WORKER_SEARCH_MAX_LIMIT, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
-import { bundledModelCatalog } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, bundledModelCatalog, vendorSpec } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -88,11 +88,23 @@ const emit = (workerId: WorkerId, event: DriverEvent) => ledger.applyDriverEvent
 const at = () => ({ at: now });
 const advance = (ms: number) => void (now += ms);
 
-/** 各家的“跑命令”工具长什么样（驱动层原样交给账本的 name、input）。 */
+const findActionTool = (vendor: AgentVendor, target: string, fallback: string): string => {
+  const actions = vendorSpec(vendor).tools?.actions ?? {};
+  return Object.entries(actions).find(([, act]) => act === target)?.[0] ?? fallback;
+};
+
+/** 各家的“跑命令”工具长什么样（驱动层原样交给账本的 name、input；从 AGENT_VENDORS 动态派生以兼容并行厂商）。 */
 const COMMAND_TOOLS: Record<AgentVendor, (command: string) => { name: string; input: unknown }> = {
+  ...(Object.fromEntries(
+    AGENT_VENDORS.map((v) => [
+      v,
+      (command: string) => ({ name: findActionTool(v, "command", "bash"), input: { command } }),
+    ]),
+  ) as Record<AgentVendor, (command: string) => { name: string; input: unknown }>),
   claude: (command) => ({ name: "Bash", input: { command, description: "x" } }),
   codex: (command) => ({ name: "commandExecution", input: { command } }),
   agy: (command) => ({ name: "run_command", input: { CommandLine: command } }),
+  deepseek: (command) => ({ name: "bash", input: { command } }),
 };
 
 let seq = 0;
@@ -518,8 +530,19 @@ describe("留多少：只留最近的若干条", () => {
   });
 });
 
-/** 各家的“读文件”“搜索”“改文件”“上网”工具（驱动层原样交给账本的 name、input）。 */
+/** 各家的“读文件”“搜索”“改文件”“上网”工具（驱动层原样交给账本的 name、input；从 AGENT_VENDORS 动态派生以兼容并行厂商）。 */
 const OTHER_TOOLS: Record<AgentVendor, Record<"read" | "search" | "edit" | "web", (arg: string) => { name: string; input: unknown }>> = {
+  ...(Object.fromEntries(
+    AGENT_VENDORS.map((v) => [
+      v,
+      {
+        read: (p: string) => ({ name: findActionTool(v, "read", "read_file"), input: { path: p } }),
+        search: (q: string) => ({ name: findActionTool(v, "search", "grep"), input: { query: q } }),
+        edit: (p: string) => ({ name: findActionTool(v, "edit", "edit"), input: { path: p } }),
+        web: (q: string) => ({ name: findActionTool(v, "web_search", "web_search"), input: { query: q } }),
+      },
+    ]),
+  ) as Record<AgentVendor, Record<"read" | "search" | "edit" | "web", (arg: string) => { name: string; input: unknown }>>),
   claude: {
     read: (p) => ({ name: "Read", input: { file_path: p } }),
     search: (q) => ({ name: "Grep", input: { pattern: q } }),
@@ -537,6 +560,12 @@ const OTHER_TOOLS: Record<AgentVendor, Record<"read" | "search" | "edit" | "web"
     search: (q) => ({ name: "find_by_name", input: { Pattern: q, SearchPath: "." } }),
     edit: (p) => ({ name: "replace_file_content", input: { TargetFile: p } }),
     web: (q) => ({ name: "search_web", input: { query: q } }),
+  },
+  deepseek: {
+    read: (p) => ({ name: "read", input: { file_path: p } }),
+    search: (q) => ({ name: "grep", input: { pattern: q } }),
+    edit: (p) => ({ name: "edit", input: { file_path: p } }),
+    web: (q) => ({ name: "web_search", input: { query: q } }),
   },
 };
 const runNamed = (workerId: WorkerId, tool: { name: string; input: unknown }, wait = 1_000) => {

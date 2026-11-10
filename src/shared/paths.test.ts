@@ -17,19 +17,20 @@ vi.mock("node:fs", async (importOriginal) => {
 
 describe("paths：可执行文件与数据目录解析", () => {
   it("环境变量名不再是公共常量：各家的 envVar 在 spec 里，约定 AGENT_HUB_<大写编号>（契约 S3 逐家查）", () => {
-    expect(vendorSpec("claude").cli.envVar).toBe("AGENT_HUB_CLAUDE");
-    expect(vendorSpec("agy").cli.envVar).toBe("AGENT_HUB_AGY");
-    expect(vendorSpec("codex").cli.envVar).toBe("AGENT_HUB_CODEX");
+    for (const vendor of AGENT_VENDORS) {
+      expect(vendorSpec(vendor).cli.envVar).toBe(`AGENT_HUB_${vendor.toUpperCase()}`);
+    }
   });
 
   it("默认在用户目录下的 .agent-hub，各家默认找 PATH 里的同名可执行文件（spec 的 cli.command），按名单一家一项", () => {
     const paths = resolveHubPaths({}, "/Users/u");
     expect(paths.home).toBe(`/Users/u/${DATA_DIR_NAME}`);
-    expect(paths.vendorPaths).toEqual({ claude: "claude", agy: "agy", codex: "codex" });
+    expect(paths.vendorPaths).toEqual(Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command])));
     expect(Object.keys(paths.vendorPaths)).toEqual([...AGENT_VENDORS]);
   });
 
-  it("环境变量 AGENT_HUB_CLAUDE / AGENT_HUB_AGY / AGENT_HUB_CODEX 覆盖默认值，支持 ~ 展开", () => {
+  it("环境变量 AGENT_HUB_<VENDOR> 覆盖默认值，支持 ~ 展开", () => {
+    const defaults = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command]));
     const paths = resolveHubPaths(
       {
         [ENV_HOME]: "~/custom-hub",
@@ -40,10 +41,16 @@ describe("paths：可执行文件与数据目录解析", () => {
       "/Users/u",
     );
     expect(paths.home).toBe("/Users/u/custom-hub");
-    expect(paths.vendorPaths).toEqual({ claude: "/Users/u/bin/claude", agy: "/Users/u/bin/agy", codex: "/opt/homebrew/bin/codex" });
+    expect(paths.vendorPaths).toEqual({
+      ...defaults,
+      claude: "/Users/u/bin/claude",
+      agy: "/Users/u/bin/agy",
+      codex: "/opt/homebrew/bin/codex",
+    });
   });
 
   it("resolvePaths：支持 ResolvePathsInput，input.vendorPaths 优先于环境变量，且同样展开 ~", () => {
+    const defaults = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command]));
     const paths = resolvePaths({
       env: {
         AGENT_HUB_CLAUDE: "/env/claude",
@@ -53,7 +60,12 @@ describe("paths：可执行文件与数据目录解析", () => {
       userHome: "/Users/u",
       vendorPaths: { claude: "~/local/claude", agy: "~/local/agy", codex: "~/local/codex" },
     });
-    expect(paths.vendorPaths).toEqual({ claude: "/Users/u/local/claude", agy: "/Users/u/local/agy", codex: "/Users/u/local/codex" });
+    expect(paths.vendorPaths).toEqual({
+      ...defaults,
+      claude: "/Users/u/local/claude",
+      agy: "/Users/u/local/agy",
+      codex: "/Users/u/local/codex",
+    });
 
     const fromEnv = resolvePaths({
       env: {
@@ -62,7 +74,12 @@ describe("paths：可执行文件与数据目录解析", () => {
       },
       userHome: "/Users/u",
     });
-    expect(fromEnv.vendorPaths).toEqual({ claude: "claude", agy: "/env/agy", codex: "/Users/u/env/codex" });
+    expect(fromEnv.vendorPaths).toEqual({
+      ...defaults,
+      claude: "claude",
+      agy: "/env/agy",
+      codex: "/Users/u/env/codex",
+    });
   });
 
   it("辅助路径函数与 socket 长度检查", () => {
@@ -97,12 +114,13 @@ describe("paths：可执行文件与数据目录解析", () => {
 
   it("Linux：每家厂商都在官方安装目录里找（~/.local/bin 排第一），ChatGPT.app 那条不出现", () => {
     expect(linuxInstallDirs("/home/u")).toEqual(["/home/u/.local/bin", "/home/u/.npm-global/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"]);
-    // 每家厂商都有兜底（VENDOR_FALLBACK_PATHS 的键就是 AGENT_VENDORS），命令名就是厂商编号
+    // 每家厂商都有兜底（VENDOR_FALLBACK_PATHS 的键就是 AGENT_VENDORS），找的是各家 spec.cli.command
     expect(Object.keys(VENDOR_FALLBACK_PATHS).toSorted()).toEqual([...AGENT_VENDORS].toSorted());
     for (const vendor of AGENT_VENDORS) {
+      const cmd = vendorSpec(vendor).cli.command;
       const found = VENDOR_FALLBACK_PATHS[vendor]("/home/u", "linux");
-      expect(found[0]).toBe(`/home/u/.local/bin/${vendor}`);
-      for (const dir of linuxInstallDirs("/home/u")) expect(found).toContain(`${dir}/${vendor}`);
+      expect(found[0]).toBe(`/home/u/.local/bin/${cmd}`);
+      for (const dir of linuxInstallDirs("/home/u")) expect(found).toContain(`${dir}/${cmd}`);
       expect(found.some((p) => p.includes(".app/"))).toBe(false);
     }
     expect(VENDOR_FALLBACK_PATHS.codex("/home/u", "linux").at(-1)).toBe("/home/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex");
@@ -163,26 +181,28 @@ describe("paths：可执行文件与数据目录解析", () => {
         "/Users/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
       ]);
 
-      // resolveVendorExecutables：按 AGENT_VENDORS 循环解析三家厂商的 cmd 与 path
+      // resolveVendorExecutables：按 AGENT_VENDORS 循环解析各家厂商的 cmd 与 path
       const userHome = join(dir, "home");
       const localAgy = join(userHome, ".local", "bin", "agy");
       mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
       writeFileSync(localAgy, "");
       writeFileSync(join(pathDir, "codex"), "");
+      const defaultVendorPaths = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command])) as Record<(typeof AGENT_VENDORS)[number], string>;
       const resolved = resolveVendorExecutables(
-        { vendorPaths: { claude: "/explicit/claude", agy: "agy", codex: "codex" } },
+        { vendorPaths: { ...defaultVendorPaths, claude: "/explicit/claude", agy: "agy", codex: "codex" } },
         pathDir,
         userHome,
         "darwin",
       );
-      expect(resolved).toEqual({
+      expect(resolved).toMatchObject({
         claude: { cmd: "/explicit/claude", path: "/explicit/claude" },
         agy: { cmd: "agy", path: "agy" },
         codex: { cmd: "codex", path: "codex" },
       });
+      expect(Object.keys(resolved)).toEqual([...AGENT_VENDORS]);
       // 当 PATH 里没有 agy 时，回退到 ~/.local/bin/agy
       const resolvedFallback = resolveVendorExecutables(
-        { vendorPaths: { claude: "claude", agy: "agy", codex: "codex" } },
+        { vendorPaths: defaultVendorPaths },
         "/empty-path",
         userHome,
         "darwin",

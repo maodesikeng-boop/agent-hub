@@ -3,6 +3,7 @@ import type { AgentSessionRow, TokenUsage } from "../../shared/domain.ts";
 import type { LaunchFiles } from "../../shared/driver.ts";
 import type { ForkHandle, ForkerKind, HandoverCleanJob, HandoverFailure, HandoverId, HandoverJob, LedgerHandoverWork } from "../../shared/handover.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
+import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "../../shared/vendors.ts";
 import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkerRegistry, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 import { createHandoverRunner } from "./runner.ts";
@@ -102,9 +103,10 @@ function fakeForker(calls: string[], o: FakeForkerOptions = {}): SessionForker {
   };
 }
 
-const registryOf = (claude: SessionForker[], others: Partial<ForkerRegistry> = {}): ForkerRegistry => ({ claude, codex: [], agy: [], ...others });
+const EMPTY_REGISTRY = Object.fromEntries(AGENT_VENDORS.map((v) => [v, [] as readonly SessionForker[]])) as ForkerRegistry;
+const registryOf = (claude: SessionForker[], others: Partial<ForkerRegistry> = {}): ForkerRegistry => ({ ...EMPTY_REGISTRY, claude, ...others });
 
-const PATHS = { claude: "/bin/claude", codex: "/bin/codex", agy: "/bin/agy" };
+const PATHS = Object.fromEntries(AGENT_VENDORS.map((v) => [v, `/bin/${vendorSpec(v).cli.command}`])) as Readonly<Record<AgentVendor, string>>;
 const LAUNCH: LaunchFiles = { promptFile: "/p.md", env: { [ENV_HUB_TOKEN]: "t", [ENV_HUB_SOCK]: "/s", PATH: "/bin" }, fingerprint: "fp" };
 
 /** 一直等到 predicate 成立（事件循环轮几圈），超时抛错。 */

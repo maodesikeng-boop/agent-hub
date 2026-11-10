@@ -27,9 +27,7 @@ import {
   type Driver,
   type DriverEvent,
 } from "../../src/shared/index.ts";
-import { createAgyDriver } from "../../src/vendors/agy/driver.ts";
-import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
-import { createCodexDriver } from "../../src/vendors/codex/driver.ts";
+import { VENDOR_FALLBACK_PATHS, resolveExecutable } from "../../src/shared/paths.ts";
 import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { VENDOR_DAEMONS } from "../../src/vendors/daemon-registry.ts";
@@ -40,9 +38,32 @@ const CODEX = process.env.AGENT_HUB_CODEX || "/Applications/ChatGPT.app/Contents
 const CODEX_MODEL = process.env.AGENT_HUB_CODEX_MODEL || "gpt-5.6-luna";
 const AGY = process.env.AGENT_HUB_AGY || join(homedir(), ".local", "bin", "agy");
 const AGY_MODEL = process.env.AGENT_HUB_AGY_MODEL || "gemini-3.8-flash";
+const DEEPSEEK = process.env.AGENT_HUB_DEEPSEEK || resolveExecutable("dsh", process.env.PATH, VENDOR_FALLBACK_PATHS.deepseek(homedir()));
+const DEEPSEEK_MODEL = process.env.AGENT_HUB_DEEPSEEK_MODEL || "deepseek-flash";
 const TURN_TIMEOUT_MS = 600_000;
 
-const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL };
+const SMOKE_MODELS: Partial<Record<AgentVendor, string>> = {
+  claude: MODEL,
+  agy: AGY_MODEL,
+  codex: CODEX_MODEL,
+  deepseek: DEEPSEEK_MODEL,
+};
+
+function smokeModelOf(vendor: AgentVendor): string {
+  return SMOKE_MODELS[vendor] ?? vendorSpec(vendor).models.bundled[0]?.id ?? "";
+}
+
+function smokeExecutableOf(vendor: AgentVendor, dir: string): string {
+  if (vendor === "claude") return writeClaudeWrapper(dir, { claude: CLAUDE, persist: false });
+  const overrides: Partial<Record<AgentVendor, string>> = {
+    codex: CODEX,
+    agy: AGY,
+    deepseek: DEEPSEEK,
+  };
+  if (overrides[vendor] !== undefined) return overrides[vendor]!;
+  const spec = vendorSpec(vendor);
+  return process.env[spec.cli.envVar] || resolveExecutable(spec.cli.command, process.env.PATH, VENDOR_FALLBACK_PATHS[vendor](homedir()));
+}
 
 function task(dataDir: string, cwd: string, names: { edit: string; mkdir: string; echo: string }): string {
   return [
@@ -95,8 +116,8 @@ function rig(vendor: AgentVendor, hub: TestHub, osSandboxed = osSandboxAvailable
     cwd,
     addDirs: [],
     generation: 1,
-    model: MODELS[vendor],
-    effort: vendor === "agy" ? "low" : null,
+    model: smokeModelOf(vendor),
+    effort: vendor === "agy" || vendor === "deepseek" ? "low" : null,
     pid: null,
     status: "idle",
     hasCompletedTurn: false,
@@ -114,12 +135,10 @@ function rig(vendor: AgentVendor, hub: TestHub, osSandboxed = osSandboxAvailable
     prepareLaunch: async () => ({ promptFile, ...(settingsFile === undefined ? {} : { settingsFile }), env: { ...launch?.env, ...hub.workerEnv }, fingerprint: "", writeScope }),
     log: () => {},
   };
-  const driver: Driver =
-    vendor === "codex"
-      ? createCodexDriver({ ...common, executablePath: CODEX })
-      : vendor === "agy"
-        ? createAgyDriver({ ...common, executablePath: AGY })
-        : createClaudeDriver({ ...common, executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
+  const driver: Driver = VENDOR_DAEMONS[vendor].createDriver({
+    ...common,
+    executablePath: smokeExecutableOf(vendor, dir),
+  });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
   return { vendor, driver, store, events, dir, cwd };
@@ -153,7 +172,7 @@ async function writeScopeCase(outcomes: Outcome[], vendor: AgentVendor, hub: Tes
   const suffix = randomUUID().slice(0, 8);
   const names = { edit: `scope-edit-${suffix}`, mkdir: `scope-mkdir-${suffix}`, echo: `scope-echo-${suffix}` };
   const probes = [join(dataDir, names.edit), join(dataDir, names.mkdir), join(dataDir, `${names.echo}.txt`)];
-  await scenario(outcomes, `${name} ${vendorSpec(vendor).label}（${MODELS[vendor]}）Worker 写不了数据目录（编辑工具、shell），自己的工作目录和 hub 照常`, async () => {
+  await scenario(outcomes, `${name} ${vendorSpec(vendor).label}（${smokeModelOf(vendor)}）Worker 写不了数据目录（编辑工具、shell），自己的工作目录和 hub 照常`, async () => {
     expect(!probes.some(existsSync), `数据目录里已经有同名的了：${probes.join(" ")}`);
     await r.driver.send(1, { messageIds: [1], source: "user", text: task(dataDir, r.cwd, names) });
     await waitUntil("这一轮结束", () => r.events.find((e) => e.type === "turn.ended"), TURN_TIMEOUT_MS);
@@ -252,6 +271,45 @@ const S32_CASES: S32Case[] = [
         check: () => {
           expect(existsSync(join(r.cwd, "shell-ok.txt")), "工作目录里 shell 没写出 shell-ok.txt（claude 自带的沙箱没关掉？）");
           return "shell 在工作目录里照常写出 shell-ok.txt";
+        },
+      };
+    },
+  },
+  {
+    vendor: "deepseek",
+    name: "S32deepseek",
+    title: "DeepSeek Worker：--patch 设 danger-full-access 关掉 dsh 自带沙箱，外层 OS 沙箱里 shell 不报 exit 71、写不进 state/、worktree 里 git commit 照常",
+    prepare: (r, dataDir, suffix) => {
+      const stateDir = join(dataDir, "state");
+      const main = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-scope-ds-main-")));
+      const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+      git(main, "init", "-q");
+      writeFileSync(join(main, "README.md"), "x\n");
+      git(main, "add", "README.md");
+      git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+      const wt = join(r.cwd, "wt");
+      git(main, "worktree", "add", "-q", "-b", `scope-ds-${suffix}`, wt);
+      const probes = [join(stateDir, `scope-ds-state-${suffix}`)];
+      const text = [
+        "这是权限测试。按顺序做下面 3 件事，每件只试一次：被拒绝或报错就照实记下报错原文和退出码，不要换别的办法绕过。",
+        `1. 用 bash 运行：echo ok > ${join(r.cwd, "shell-ok.txt")}`,
+        `2. 用 bash 运行：touch ${probes[0]}`,
+        `3. 用 bash 运行：cd ${wt} && echo a > a.txt && git add a.txt && git -c user.name=t -c user.email=t@t commit -qm scope-ds-test && git log --oneline -1`,
+        "最后逐条汇报 1～3 的结果（成功还是失败，失败的报错原文和退出码）。",
+      ].join("\n");
+      return {
+        text,
+        probes,
+        check: (reply) => {
+          expect(!/exit (?:code )?71|sandbox_apply: Operation not permitted/i.test(reply), "dsh 自带沙箱未关掉，触发了嵌套沙箱 exit 71");
+          expect(existsSync(join(r.cwd, "shell-ok.txt")), "工作目录里 bash 没写出 shell-ok.txt");
+          const log = git(wt, "log", "--oneline", "-1");
+          expect(log.includes("scope-ds-test"), `worktree 里没提交上：${log.trim()}`);
+          return `bash 无嵌套冲突；git commit：${log.trim()}`;
+        },
+        cleanup: () => {
+          rmSync(wt, { recursive: true, force: true });
+          rmSync(main, { recursive: true, force: true });
         },
       };
     },
