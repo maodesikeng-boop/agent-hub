@@ -1077,7 +1077,9 @@ export abstract class BaseSessionDriver<
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
       onExitCleanup?.();
-      if (proc.closing === "idle" || (proc.closing === "interrupt" && !this.busy(st))) {
+      // 我们让它退的（空闲关闭、end、重启、关机，以及空闲时的停止）：确认退出这一刻给原来的进程组补信号，清掉它留下的子进程。
+      // 关机也要补：Linux bwrap 下外层先退，namespace 的 PID 1 会被后台子进程拖住，不补就一直留着，下次启动 cleanupStale 也认不出来
+      if (proc.closing === "idle" || proc.closing === "shutdown" || (proc.closing === "interrupt" && !this.busy(st))) {
         termGroupAfterExit(child);
       }
       const timer = setTimeout(() => {
