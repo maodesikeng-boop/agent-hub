@@ -4,9 +4,9 @@
 
 ## 1. 先弄清楚几件事
 
-- 守护进程只听 `127.0.0.1`（`daemon/ui-server/server.ts`），不能直接从别的电脑打开，也**不要**改成听 `0.0.0.0` 或在防火墙/安全组里开端口。从别的电脑用第 5 节的 SSH 隧道。
+- 守护进程只听 `127.0.0.1`（`src/daemon/ui-server/server.ts`），不能直接从别的电脑打开，也**不要**改成听 `0.0.0.0` 或在防火墙/安全组里开端口。从别的电脑用第 5 节的 SSH 隧道。
 - 网页的“选择…”（选文件夹）和“在 Finder 中显示 / 用默认程序打开”只有 macOS 上有：它们靠 `osascript`、`open` 在运行守护进程的机器的桌面上弹窗，Linux 服务器没有桌面。服务端把能力放在 `/api/state` 的 `server` 里，网页按它隐藏这些控件；主文件夹手填绝对路径，文件用“下载”。
-- Worker 可写范围（数据目录里只能写自己的工作目录）在 macOS 上由 `sandbox-exec` 强制，**Linux 上暂时没有 OS 沙箱，只有各家的“规则”兜底**（见第 6 节）。Linux 沙箱是另一个任务。
+- Worker 隔离（数据目录里普通 Worker 只能写自己的工作目录，只读 Worker 全盘禁写且禁读敏感凭据）在 Linux 上与 macOS 一样由 OS 沙箱强制执行：Linux 使用 `bubblewrap`（`bwrap`）包住进程（首次部署需跑一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`、`socat` 与 AppArmor）；若 OS 沙箱探测失败，守护进程直接拒绝派发和启动 Worker，不再退回规则兜底（见第 6 节）。
 
 ## 2. 装依赖
 
@@ -16,12 +16,13 @@
 
 **git**、**ps**：`sudo apt install git procps`（Ubuntu Server 默认就有；最小镜像/容器可能没有。守护进程用 `ps` 认残留进程、`git` 管 worktree）。
 
-取代码并装依赖：
+取代码、装依赖并完成 Worker 沙箱一次性配置：
 
 ```sh
-git clone <仓库地址> ~/agent-hub && cd ~/agent-hub
+git clone https://github.com/maodesikeng-boop/agent-hub.git ~/agent-hub && cd ~/agent-hub
 pnpm install --frozen-lockfile
-pnpm build        # 生成 dist/web（网页），之后 systemd 直接起守护进程，不用每次重新构建
+pnpm build                          # 生成 dist/web（网页），之后 systemd 直接起守护进程，不用每次重新构建
+sudo scripts/linux-sandbox-setup.sh # 一次性安装 bubblewrap + socat 并配置 AppArmor（见第 6 节）
 ```
 
 ## 3. 装各厂商 CLI 并登录
@@ -111,15 +112,20 @@ ssh -N -L 4317:127.0.0.1:4317 <用户>@<服务器>
 3. **iPhone 扫码与电脑批准**：在已登录电脑打开“设置 → 登录 → 在手机上登录”点“显示二维码”；用 iPhone 系统相机扫码（Safari 打开 `https://<tokyo>.<tailnet>.ts.net/auth#link=…`，显示“已扫码，请在已登录的电脑上点「允许」完成登录…”），在电脑“设置 → 已登录的浏览器”顶部点**“允许”**，手机即自动进入首页。
 4. **添加到主屏幕与开启推送**：在 iPhone Safari 底部点“分享”→**“添加到主屏幕”**→“添加”；从手机主屏幕打开 `Fusa` 全屏图标，点左下角“设置”打开**“通知”**开关并在系统弹窗点“允许”，即可收到端到端加密的 iOS 原生锁屏推送。
 
-## 6. Worker 可写范围：Linux 上暂时只有“规则”
+## 6. Worker 沙箱：Linux 上由 `bubblewrap`（`bwrap`）强制隔离
 
-macOS 上整个 Worker 进程包在 `sandbox-exec` 里，数据目录强制不可写。Linux 上没有这层：起 Worker 不会报错、不会被拦，只在日志里记一条警告（`[write-scope] …警告：这台机器（linux）还没有 OS 沙箱…退回到规则兜底，不是强制的`），每家退回到自己的规则：
+Linux 与 macOS 走同一套外层 OS 沙箱后端表（`src/daemon/driver/write-scope.ts` 的 `OS_SANDBOX_BACKENDS`），**不再退回提示词或命令行字面规则兜底**：
 
-- claude：设置文件里 `state/` 的 Edit 拒绝规则（只管编辑工具，管不住 shell）；
-- agy：按工具参数和命令行字面检查（看不出脚本里拼出来的路径）；
-- codex：codex 自己的 workspace-write 沙箱加审批按命令行字面检查。
+- **普通 Worker（`bwrapArgs`）**：整个 Worker 进程包进 `bwrap`（`--unshare-user --disable-userns --unshare-pid --bind / / --proc /proc --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid>`），先把数据目录（`~/.agent-hub`）以 `--ro-bind` 只读挂载保护 `state/` 与其他 Worker 目录，再把当前 Worker 自己的可写目录（worktree）以 `--bind` 可写挂回；同时隔离 `/proc`（隐藏沙箱外进程）、用空 `tmpfs` 遮住 `/run/user/<uid>`（防借宿主机 `systemd --user` / D-Bus 写穿）、加 `--disable-userns` 禁止嵌套新建 userns，并自动关闭各厂商 CLI 自带沙箱避免嵌套报错。与 macOS 一样，**数据目录之外不做写入限制**，Worker 仍以当前系统用户权限读写项目目录与外部路径。
+- **只读 Worker**：`claude` 与 `codex` 使用各自原生只读沙箱（`claude` 依赖 `bubblewrap` + `socat`，`codex` 使用自带 Linux 沙箱）；`agy` 包进外层只读 `bwrap`（`readonlyBwrapArgs`，全盘 `--ro-bind / /`，仅放行会话私有临时目录、运行时与缓存目录，已存在的敏感目录挂 `--tmpfs`、敏感文件及启动时 `scanSecretGlobs` 在 `cwd`/`addDirs` 扫出的 `.env` 等密钥文件挂 `--ro-bind /dev/null`）。
+- **Ubuntu 24.04+ 一次性初始化（`scripts/linux-sandbox-setup.sh`）**：Ubuntu 24.04 默认开启 `kernel.apparmor_restrict_unprivileged_userns=1`，未配 AppArmor profile 时非特权 `bwrap` 建 userns 会报 `Permission denied`。首次部署跑一次幂等脚本：
+  ```sh
+  sudo scripts/linux-sandbox-setup.sh
+  ```
+  脚本会自动安装 `bubblewrap` 与 `socat`，写入并加载 `/etc/apparmor.d/bwrap` 放行 `/usr/bin/bwrap` 的 `userns`，最后切回普通用户跑一次探测命令验证（输出 `bwrap-ok`）。
+- **探测失败一律阻断（无规则兜底）**：守护进程通过 `probeLinuxBwrap`（`osSandboxAvailable`）执行与真实启动一致的 `bwrap` 探测命令；若沙箱不可用，普通 Worker 与只读 Worker **一律报错拒绝派发和启动**，并提示执行 `sudo scripts/linux-sandbox-setup.sh`。探测结果**只缓存 `true`、不缓存 `false`**，管理员跑完配置脚本后无需重启 `agent-hub` 守护进程，下次派 Worker 即刻生效。项目经理（`scope === null`）不受沙箱限制。
 
-也就是说 Linux 上 Worker 理论上还能用 shell 写到自己工作目录以外（包括数据目录）。**不要在这台机器上放不能被 Worker 误碰的东西**，或者单独用一个只装这个服务的用户来跑。Linux 沙箱做好后这一节会更新。详细的限制见 `docs/write-scope.md`。
+完整设计与已知边界（如只读通配启动时扫描、勿在同用户下开不设防的外部 `tmux` socket 等）见 `docs/write-scope.md` 与 `docs/linux-sandbox-design.md`。
 
 ## 7. 跟 macOS 不一样的地方（汇总）
 
@@ -127,7 +133,7 @@ macOS 上整个 Worker 进程包在 `sandbox-exec` 里，数据目录强制不�
 | --- | --- | --- |
 | 选择文件夹（“选择…”） | 弹系统对话框（osascript） | 隐藏，手填绝对路径 |
 | 在 Finder 中显示 / 用默认程序打开 | `open` | 隐藏，用“下载” |
-| Worker 可写范围 | `sandbox-exec` 强制 | 只有规则，日志里有警告 |
+| Worker 沙箱 | `sandbox-exec` 强制（系统自带） | `bubblewrap`（`bwrap`）强制（首次需跑 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`、`socat` 与 AppArmor；不可用时拒绝起 Worker） |
 | CLI 查找 | `PATH`；codex 另看 ChatGPT.app 里带的 | `PATH`，再 `~/.local/bin`、`~/.npm-global/bin`、`/usr/local/bin`、Linuxbrew |
 | agent 接口 socket 路径上限 | 103 字节 | 107 字节（用同一个更保守的 103，不放宽） |
 | 发给用户的文件，不许分享的路径 | 另含 `Library/Keychains` 等 | 另含 `~/.local/share/keyrings`、浏览器配置、`/proc` |
