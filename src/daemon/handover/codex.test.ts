@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { ForkUnsupportedError, forkSourceOf } from "./forker.ts";
 import type { ForkSource } from "./forker.ts";
@@ -11,6 +11,14 @@ import type { AgentSessionRow } from "../../shared/domain.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { termGroupAfterExit } from "../driver/process.ts";
+
+// 假进程的 pid 是编的：不能真往 -pid 发信号（会打到本机碰巧同号的进程组），换成只记调用
+vi.mock("../driver/process.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../driver/process.ts")>()),
+  termGroupAfterExit: vi.fn(),
+}));
+beforeEach(() => vi.mocked(termGroupAfterExit).mockClear());
 
 type Json = Record<string, unknown>;
 type Handler = (params: Json, server: FakeServer) => Json | Error | "hang";
@@ -276,6 +284,10 @@ describe("write：在复制那份上跑一轮", () => {
     const src = source();
     const handle = await forker.fork(src, noAbort());
     await expect(forker.write(src, handle, "x", noAbort())).rejects.toThrow(/退出/);
+    // 自己先退的也给它原来的进程组补信号，清掉它留下的子进程；之后 remove 不再补
+    expect(vi.mocked(termGroupAfterExit).mock.calls).toEqual([[server]]);
+    await expect(forker.remove(handle)).rejects.toThrow(/退出/);
+    expect(termGroupAfterExit).toHaveBeenCalledTimes(1);
   });
 
   it("没有 fork 过的 handle（比如重启后）：抛错", async () => {
@@ -293,6 +305,7 @@ describe("remove：先删复制那份，再关进程；幂等", () => {
     expect(methods.at(-1)).toBe("thread/delete");
     expect(server.requests.at(-1)!.params).toEqual({ threadId: "fork-1" });
     expect(server.killed).toBe(true);
+    expect(vi.mocked(termGroupAfterExit).mock.calls).toEqual([[server]]);
   });
 
   it("没有这个 handle（进程早没了、重启后）：什么都不做，算成功；重复 remove 也行", async () => {

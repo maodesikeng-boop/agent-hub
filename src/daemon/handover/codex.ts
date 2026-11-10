@@ -55,7 +55,11 @@ class CodexRpc {
     this.exitedError.catch(() => {});
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => this.#onData(chunk));
-    child.once("exit", (code, signal) => this.#onExit(new Error(`codex app-server 退出了（code ${code}, signal ${signal}）`)));
+    child.once("exit", (code, signal) => {
+      // 不管是 close() 关的还是它自己先退的：确认退出这一刻给它原来的进程组（detached 起的，只有它和后代）补信号
+      termGroupAfterExit(child);
+      this.#onExit(new Error(`codex app-server 退出了（code ${code}, signal ${signal}）`));
+    });
     child.once("error", (error) => this.#onExit(error));
     child.stdin?.on("error", () => {});
   }
@@ -94,7 +98,6 @@ class CodexRpc {
     }, CLOSE_GRACE_MS);
     await done;
     clearTimeout(timer);
-    termGroupAfterExit(this.#child);
   }
 
   #write(payload: Json): void {
