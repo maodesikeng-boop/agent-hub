@@ -4,7 +4,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
-import { AGENT_VENDORS, vendorSpec } from "./vendors.ts";
+import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "./vendors.ts";
 import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "../vendors/agy/spec.ts";
 import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, VENDOR_FALLBACK_PATHS, linuxInstallDirs, personaFilePath, projectWorktreesDir, findExecutable, resolveExecutable, resolveHubPaths, resolvePaths, resolveVendorExecutables, vendorCatalogFingerprint, vendorCatalogWatchFiles, vendorConfigHome, workerSetupLogPath, workerWorktreePath } from "./paths.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../vendors/agy/paths.ts";
@@ -22,15 +22,16 @@ describe("paths：可执行文件与数据目录解析", () => {
     }
   });
 
+  const defaultVendorPaths = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command])) as Record<AgentVendor, string>;
+
   it("默认在用户目录下的 .agent-hub，各家默认找 PATH 里的同名可执行文件（spec 的 cli.command），按名单一家一项", () => {
     const paths = resolveHubPaths({}, "/Users/u");
     expect(paths.home).toBe(`/Users/u/${DATA_DIR_NAME}`);
-    expect(paths.vendorPaths).toEqual(Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command])));
+    expect(paths.vendorPaths).toEqual(defaultVendorPaths);
     expect(Object.keys(paths.vendorPaths)).toEqual([...AGENT_VENDORS]);
   });
 
   it("环境变量 AGENT_HUB_<VENDOR> 覆盖默认值，支持 ~ 展开", () => {
-    const defaults = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command]));
     const paths = resolveHubPaths(
       {
         [ENV_HOME]: "~/custom-hub",
@@ -42,7 +43,7 @@ describe("paths：可执行文件与数据目录解析", () => {
     );
     expect(paths.home).toBe("/Users/u/custom-hub");
     expect(paths.vendorPaths).toEqual({
-      ...defaults,
+      ...defaultVendorPaths,
       claude: "/Users/u/bin/claude",
       agy: "/Users/u/bin/agy",
       codex: "/opt/homebrew/bin/codex",
@@ -50,7 +51,6 @@ describe("paths：可执行文件与数据目录解析", () => {
   });
 
   it("resolvePaths：支持 ResolvePathsInput，input.vendorPaths 优先于环境变量，且同样展开 ~", () => {
-    const defaults = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command]));
     const paths = resolvePaths({
       env: {
         AGENT_HUB_CLAUDE: "/env/claude",
@@ -58,13 +58,14 @@ describe("paths：可执行文件与数据目录解析", () => {
         AGENT_HUB_CODEX: "/env/codex",
       },
       userHome: "/Users/u",
-      vendorPaths: { claude: "~/local/claude", agy: "~/local/agy", codex: "~/local/codex" },
+      vendorPaths: { ...defaultVendorPaths, claude: "~/local/claude", agy: "~/local/agy", codex: "~/local/codex", pi: "~/local/pi" },
     });
     expect(paths.vendorPaths).toEqual({
-      ...defaults,
+      ...defaultVendorPaths,
       claude: "/Users/u/local/claude",
       agy: "/Users/u/local/agy",
       codex: "/Users/u/local/codex",
+      pi: "/Users/u/local/pi",
     });
 
     const fromEnv = resolvePaths({
@@ -74,12 +75,7 @@ describe("paths：可执行文件与数据目录解析", () => {
       },
       userHome: "/Users/u",
     });
-    expect(fromEnv.vendorPaths).toEqual({
-      ...defaults,
-      claude: "claude",
-      agy: "/env/agy",
-      codex: "/Users/u/env/codex",
-    });
+    expect(fromEnv.vendorPaths).toEqual({ ...defaultVendorPaths, agy: "/env/agy", codex: "/Users/u/env/codex" });
   });
 
   it("辅助路径函数与 socket 长度检查", () => {
@@ -187,9 +183,9 @@ describe("paths：可执行文件与数据目录解析", () => {
       mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
       writeFileSync(localAgy, "");
       writeFileSync(join(pathDir, "codex"), "");
-      const defaultVendorPaths = Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).cli.command])) as Record<(typeof AGENT_VENDORS)[number], string>;
+      writeFileSync(join(pathDir, "pi"), "");
       const resolved = resolveVendorExecutables(
-        { vendorPaths: { ...defaultVendorPaths, claude: "/explicit/claude", agy: "agy", codex: "codex" } },
+        { vendorPaths: { ...defaultVendorPaths, claude: "/explicit/claude", agy: "agy", codex: "codex", pi: "pi" } },
         pathDir,
         userHome,
         "darwin",
@@ -198,6 +194,7 @@ describe("paths：可执行文件与数据目录解析", () => {
         claude: { cmd: "/explicit/claude", path: "/explicit/claude" },
         agy: { cmd: "agy", path: "agy" },
         codex: { cmd: "codex", path: "codex" },
+        pi: { cmd: "pi", path: "pi" },
       });
       expect(Object.keys(resolved)).toEqual([...AGENT_VENDORS]);
       // 当 PATH 里没有 agy 时，回退到 ~/.local/bin/agy

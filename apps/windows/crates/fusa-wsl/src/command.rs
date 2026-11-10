@@ -1,8 +1,8 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use crate::constants::{
-    FUSA_NODE_WSL_PATH, FUSA_UI_TOKEN_WSL_PATH, GUEST_SCRIPT_WSL_DIR, GUEST_SCRIPT_WSL_PATH,
-    WSL_EXE,
+    DAEMON_CTL_WSL_PATH, FUSA_NODE_WSL_PATH, FUSA_UI_TOKEN_WSL_PATH, GUEST_SCRIPT_WSL_DIR,
+    GUEST_SCRIPT_WSL_PATH, WSL_EXE,
 };
 use crate::error::CommandBuildError;
 
@@ -268,4 +268,55 @@ pub fn build_read_ui_token_cmd(
     linux_user: &str,
 ) -> Result<WslCommand, CommandBuildError> {
     build_exec_cmd(distro_name, linux_user, "/bin/cat", [FUSA_UI_TOKEN_WSL_PATH])
+}
+
+/// 通过 stdin 将受控起停脚本写入 `/usr/local/libexec/fusa/wsl-daemon-ctl.sh`。
+pub fn build_write_daemon_ctl_cmd(distro_name: &str) -> Result<WslCommand, CommandBuildError> {
+    build_exec_cmd(
+        distro_name,
+        "root",
+        "/usr/bin/tee",
+        [DAEMON_CTL_WSL_PATH],
+    )
+}
+
+/// 将受控起停脚本权限设为 `0755`（root 只写、普通用户只读可执行）。
+pub fn build_chmod_daemon_ctl_cmd(distro_name: &str) -> Result<WslCommand, CommandBuildError> {
+    build_exec_cmd(
+        distro_name,
+        "root",
+        "/bin/chmod",
+        ["0755", DAEMON_CTL_WSL_PATH],
+    )
+}
+
+/// 执行发行版内受控起停脚本子命令（如 `["probe", ...]`、`["run", ...]`、`["status", ...]`、`["signal", ...]`）。
+pub fn build_run_daemon_ctl_cmd<I, S>(
+    distro_name: &str,
+    linux_user: &str,
+    ctl_args: I,
+) -> Result<WslCommand, CommandBuildError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    build_exec_cmd(distro_name, linux_user, DAEMON_CTL_WSL_PATH, ctl_args)
+}
+
+/// 构造为用户拉起专用发行版交互式终端的命令：`wsl.exe --distribution <distro> --user <user> --cd ~`。
+/// 供用户在首次运行引导页自行执行厂商 CLI 登录，零 `sh -c` 拼接。
+pub fn build_interactive_login_cmd(
+    distro_name: &str,
+    linux_user: &str,
+) -> Result<WslCommand, CommandBuildError> {
+    validate_distro_name(distro_name)?;
+    validate_linux_user(linux_user)?;
+    WslCommand::base_wsl(vec![
+        OsString::from("--distribution"),
+        OsString::from(distro_name),
+        OsString::from("--user"),
+        OsString::from(linux_user),
+        OsString::from("--cd"),
+        OsString::from("~"),
+    ])
 }

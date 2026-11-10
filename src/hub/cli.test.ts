@@ -6,16 +6,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  AGENT_VENDORS,
-  ALL_EFFORTS,
-  ENV_HUB_SOCK,
-  ENV_HUB_TOKEN,
-  HUB_COMMAND,
-  HUB_EXIT,
-  LedgerRequestError,
-  type SessionTokens,
-} from "../shared/index.ts";
+import { AGENT_VENDORS, ALL_EFFORTS, ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { HUB_USAGE, runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
@@ -182,9 +173,7 @@ describe("hub cli", () => {
       for (const vendor of AGENT_VENDORS) {
         expect((await hub(["worker", "start", "--title", "修 X", "--vendor", vendor, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
-      expect(ledger.calls.map((c) => c.args)).toEqual(
-        AGENT_VENDORS.map((vendor) => ({ title: "修 X", vendor, task: "任务" })),
-      );
+      expect(ledger.calls.map((c) => c.args)).toEqual(AGENT_VENDORS.map((vendor) => ({ title: "修 X", vendor, task: "任务" })));
       ledger.calls.length = 0;
       for (const bad of ["gemini", "CLAUDE", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--vendor", bad, "--stdin"], { stdin: stdinOf("任务") });

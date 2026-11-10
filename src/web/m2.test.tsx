@@ -78,6 +78,9 @@ function textSave(page: HTMLElement): HTMLElement | null {
   return within(groupIn(page, "Persona")).queryByRole("button", { name: "Save" });
 }
 
+/** 厂商下拉应列出的显示名：按名单顺序逐家取（以后接入新厂商不用改这里）。 */
+const VENDOR_LABELS = AGENT_VENDORS.map((vendor) => vendorSpec(vendor).label);
+
 function optionsOf(select: HTMLElement): string[] {
   return within(select).getAllByRole("option").map((o) => o.textContent ?? "");
 }
@@ -241,9 +244,9 @@ describe("New project manager", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
     await user.click(within(dialog).getByRole("radio", { name: "Hands-on" }));
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
-    // 打包的名单按 AGENT_VENDORS 列全部厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
+    // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
     const vendor = within(dialog).getByRole("combobox", { name: "Provider" });
-    expect(optionsOf(vendor)).toEqual(AGENT_VENDORS.map((v) => vendorSpec(v).label));
+    expect(optionsOf(vendor)).toEqual(VENDOR_LABELS);
     expect(vendor).toHaveDisplayValue("Claude Code");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     const effort = within(dialog).getByRole("combobox", { name: "Effort" });
@@ -861,9 +864,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await boot();
     serve({ model: "haiku", effort: "xhigh" });
     const page = await open(user);
-    // 打包的名单按 AGENT_VENDORS 列全部厂商：显示厂商下拉（默认 Claude Code）
+    // 打包的名单列出名单里的每一家厂商：显示厂商下拉（默认 Claude Code）
     const vendor = combo(page, "Provider");
-    expect(optionsOf(vendor)).toEqual(AGENT_VENDORS.map((v) => vendorSpec(v).label));
+    expect(optionsOf(vendor)).toEqual(VENDOR_LABELS);
     expect(vendor).toHaveDisplayValue("Claude Code");
     expect(optionsOf(combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
     expect(combo(page, "Model")).toHaveDisplayValue("Haiku");

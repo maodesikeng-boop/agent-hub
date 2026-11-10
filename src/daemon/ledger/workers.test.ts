@@ -300,11 +300,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     // codex 不支持未知的 effort
     expectLedgerError(() => start({ vendor: "codex", effort: "extreme" }), "invalid", /思考程度只能是 low、medium、high、xhigh、max、ultra/);
     // 非法厂商
-    expectLedgerError(
-      () => start({ vendor: "unknown" as never }),
-      "invalid",
-      new RegExp(`厂商只能是 ${AGENT_VENDORS.join("、")}`),
-    );
+    expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", new RegExp(`厂商只能是 ${AGENT_VENDORS.join("、")}`));
   });
 
   it("--vendor 选的厂商这台设备没装、没登录：报清楚是哪台、怎么登录，不派；能用、认不出的照派", () => {
@@ -2220,11 +2216,13 @@ describe("查看各厂商可用的模型（hub models）", () => {
     ];
 
     const all = ledger.hubCall(lin.sessionId, "models", {}, { modelCatalogs: customCatalogs });
-    expect(all.data.vendors.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
+    // 名单里的每一家都列出（按名单顺序，以后接入新厂商不用改这里）；给了名单的三家用给的
+    expect(all.data.vendors.map((v) => v.vendor)).toEqual([...AGENT_VENDORS]);
+    const given = all.data.vendors.filter((v) => customCatalogs.some((c) => c.vendor === v.vendor));
+    expect(given.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
       ["claude", "available", "Opus 5.6 (1M context)", "xhigh"],
       ["agy", "signed_out", "gemini-4-argon", null],
       ["codex", "not_installed", "gpt-5.4", null],
-      ...AGENT_VENDORS.filter((v) => !["claude", "agy", "codex"].includes(v)).map((v) => [v, "unknown", null, null]),
     ]);
     expect(all.data.vendors[0]?.models).toEqual([
       { id: "opus[1m]", label: "Opus 5.6 (1M context)", efforts: ["low", "medium", "high", "xhigh", "max"] },

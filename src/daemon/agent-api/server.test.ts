@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   HUB_COMMANDS,
   HUB_MAX_BODY_BYTES,
   HUB_REQUEST_TIMEOUT_MS,
@@ -452,7 +453,7 @@ describe("agent api over inject", () => {
       expect((await call("models", {})).statusCode).toBe(200);
       expect((await call("models", { vendor: "claude", refresh: true })).statusCode).toBe(200);
       expect(listCalls).toEqual([{ refresh: false }, { refresh: true, vendor: "claude" }]);
-      expect(ledger.contexts[0]?.modelCatalogs).toHaveLength(3);
+      expect(ledger.contexts[0]?.modelCatalogs).toHaveLength(AGENT_VENDORS.length);
       expect(ledger.contexts[1]?.modelCatalogs?.map((c) => c.vendor)).toEqual(["claude"]);
     });
 

@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bootstrap-local-only",
+  "description": "Grants minimal bootstrap setup permissions strictly to the embedded local setup view; remote and 127.0.0.1 daemon pages receive zero Tauri IPC access.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-bootstrap-state",
+    "allow-install-wsl-component",
+    "allow-retry-bootstrap",
+    "allow-open-vendor-terminal",
+    "allow-open-logs",
+    "allow-enter-workspace"
+  ]
+}

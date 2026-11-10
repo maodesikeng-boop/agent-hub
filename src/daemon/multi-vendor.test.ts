@@ -409,6 +409,9 @@ rl.on("line", (line) => {
     }
     cleanEnv[ENV_HOME] = hubHome;
     cleanEnv[ENV_PORT] = "0";
+    for (const v of AGENT_VENDORS) {
+      cleanEnv[vendorSpec(v).cli.envVar] = join(binDir, `missing-${v}`);
+    }
     cleanEnv[vendorSpec("claude").cli.envVar] = claudePath;
     cleanEnv[vendorSpec("agy").cli.envVar] = agyPath;
     cleanEnv[vendorSpec("codex").cli.envVar] = codexPath;
@@ -425,7 +428,7 @@ rl.on("line", (line) => {
     return { client, projectDir };
   }
 
-  it("GET /api/models 按 AGENT_VENDORS 返回全部注册厂商的模型目录", async () => {
+  it("GET /api/models 按 AGENT_VENDORS 顺序返回各家厂商的模型目录", async () => {
     const { client } = await bootMultiVendorDaemon();
     const res = await client.get(API_PATHS.models);
     expect(res.status).toBe(200);

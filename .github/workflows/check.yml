@@ -37,8 +37,10 @@ jobs:
         id: cache-node-modules
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('pnpm-lock.yaml') }}
+          path: |
+            node_modules
+            !node_modules/.vite
+          key: node-modules-v2-${{ runner.os }}-node24-${{ hashFiles('pnpm-lock.yaml') }}
 
       # pnpm 10 does not run dependency install scripts unless approved
       # (onlyBuiltDependencies); none are approved here.
