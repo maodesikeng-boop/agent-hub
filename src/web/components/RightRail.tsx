@@ -321,15 +321,18 @@ function CompletedGroup({
       <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
         Completed
       </GroupTitle>
-      <GroupBody id="rail-completed-body" collapsed={!open}>
-        <ul>
-          {workers.map((worker) => (
-            <li key={worker.conversationId}>
-              <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
-            </li>
-          ))}
-        </ul>
-      </GroupBody>
+      {/* 已收工的会越来越多：收着时不挂载行（不跑每行的 usePieceMeta），点开才渲染 */}
+      {open && (
+        <GroupBody id="rail-completed-body" collapsed={false}>
+          <ul>
+            {workers.map((worker) => (
+              <li key={worker.conversationId}>
+                <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+              </li>
+            ))}
+          </ul>
+        </GroupBody>
+      )}
     </section>
   );
 }

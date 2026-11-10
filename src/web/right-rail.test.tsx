@@ -267,10 +267,27 @@ describe("右栏：只列几条", () => {
     expect(within(completedGroup()).getByRole("heading").textContent).not.toMatch(/\d/);
     expect(title).toHaveAttribute("aria-expanded", "false");
     expect(buttons(workerGroup())).toHaveLength(1);
-    expect(within(completedGroup()).queryByRole("button", { name: /活 100/ })).toBeNull();
+    expect(within(completedGroup()).queryByText("活 100")).toBeNull();
+    expect(completedGroup().querySelectorAll("li")).toHaveLength(0);
+    expect(document.getElementById("rail-completed-body")).toBeNull();
     await user.click(title);
     expect(buttons(completedGroup())).toHaveLength(30);
     expect(within(within(completedGroup()).getByRole("button", { name: /活 100/ })).getByText("活 100")).toHaveClass("opacity-60");
+  });
+
+  it("Completed 收着时不挂载已收工的行（300 个也一样），点开才渲染；300 个展开不到 1 秒", async () => {
+    const user = userEvent.setup();
+    renderRail({ workers: [busy(1), ...Array.from({ length: 300 }, (_, i) => done(1000 + i))] });
+    expect(completedGroup().querySelectorAll("li")).toHaveLength(0);
+    expect(screen.queryByText("活 1000")).toBeNull();
+    const t0 = performance.now();
+    await user.click(titleButton(completedGroup()));
+    const ms = performance.now() - t0;
+    console.log(`completed 300 rows expand: ${ms.toFixed(0)}ms`);
+    expect(completedGroup().querySelectorAll("li")).toHaveLength(300);
+    expect(ms).toBeLessThan(1000);
+    await user.click(titleButton(completedGroup()));
+    expect(completedGroup().querySelectorAll("li")).toHaveLength(0);
   });
 
   it("只有收工的（手动打开右栏）：只有 Completed 一组，开关放在它那一行", () => {

@@ -48,8 +48,6 @@
   --text-title: 1.0625rem; /* 17px 弹窗标题、对话顶栏的名字 */
   --text-body: 0.9375rem; /* 15px 正文、行的名字（左栏、右栏）、控件里的字 */
   --text-minor: 0.84375rem; /* 13.5px 次要文字、按钮里的字、状态词 */
-  /* 旧名，等于 text-minor：只剩输入框（Composer.tsx，另一个任务在改）还在用，那边换成 text-minor 后删掉 */
-  --text-small: 0.84375rem;
 }
 
 /* 界面大小（设置 → 通用 → 界面大小，ui-scale.ts）：只改根字号，字号（rem）、头像（Avatar 用 rem）、间距和控件（Tailwind 的 --spacing 是 rem）一起按比例缩放。
@@ -257,6 +255,20 @@ code {
   ::view-transition-old(*),
   ::view-transition-new(*) {
     animation: none !important;
+  }
+}
+/* 聊天输入框发送键从“空”变“有内容”时放大回弹一次（Composer.tsx 在那一下加上这个类，之后不循环）；系统设了“减少动态效果”就不播 */
+.composer-send-bounce {
+  animation: composer-send-bounce 150ms ease-out;
+}
+@keyframes composer-send-bounce {
+  50% {
+    transform: scale(1.12);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-send-bounce {
+    animation: none;
   }
 }
 .messages,

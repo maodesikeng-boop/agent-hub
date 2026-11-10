@@ -54,7 +54,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 正文、行的名字 | `text-body` | 15 |
 | 标题（对话顶栏、弹窗） | `text-title` | 17 |
 
-唯一的例外是资料页头部的名字 `text-display` 22px。定义只在 `styles.css` 的 `@theme`；没有 14px（原来的 `text-label` 已删）、13px：旧名 `text-small` 现在等于 13.5px，只剩输入框一处在用（另一任务改完后删）。名字登记在 `lib/utils.ts` 的 `FONT_SIZE_TOKENS`，`cn()` 才不会把它们当成颜色合并掉。Markdown 正文里的标题（第 15 条）、代码块的字号另算。
+唯一的例外是资料页头部的名字 `text-display` 22px。定义只在 `styles.css` 的 `@theme`；没有 14px（原来的 `text-label` 已删）、13px：旧名 `text-small` 已删（原来用它的地方现在写 `text-minor`）。名字登记在 `lib/utils.ts` 的 `FONT_SIZE_TOKENS`，`cn()` 才不会把它们当成颜色合并掉。Markdown 正文里的标题（第 15 条）、代码块的字号另算。
 
 | 用在哪 | 字号 | 字重 | 颜色 |
 | --- | --- | --- | --- |
@@ -113,13 +113,13 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
   - **颜色从哪来**：浓度和写法只在 `styles.css` 的 `--color-jelly` / `--color-jelly-hover` 一处；颜色取行上的 `--jelly`，没设就用 `--primary`。右栏在 `AccentScope` 里，不用设，跟着当前项目经理；左栏不在任何会话里，每行用 `style` 设 `--jelly` 为这个项目经理的 `paletteOf(avatarKey).accent`（`Sidebar.tsx` 的 `jellyOf`）。
   - 只用在“一行代表一个项目经理 / Piece / 提问”的列表项上；设置弹窗的分类、分组框里的行、下拉、分段选择、组标题和 Show more 这类控件照旧中性灰（`bg-sidebar-hover` / `bg-sidebar-active`）。选中只靠底色，字重不变。
 - **外壳底色掺一点水果色**：对话区（`main`，含资料页）和右栏、左栏的底色、三栏之间和右栏组之间的分割线，掺**当前打开的项目经理**的水果强调色，切换项目经理时 300ms 淡变；没有打开的项目经理时是原来的中性色。
-  - **变量**（只在 `styles.css` 改）：浓度在 `:root` 的 `--mix-*`：`--mix-chat` 2.5%（对话区、右栏）、`--mix-sidebar` 4%（左栏）、`--mix-line` 8%（分割线）、`--mix-bubble-me` 12%（用户气泡）。上限：底色 5%、分割线 10%，再多界面就发黄发粉（`palette.test.ts` 守着）。颜色是 `@theme` 的 `--color-surface-chat` / `--color-surface-sidebar` / `--color-line`（`color-mix(in srgb, var(--fruit) <比例>, <原来的中性色>)`），组件里写 `bg-surface-chat`、`bg-surface-sidebar`、`border-line` / `divide-line`，不各写各的 `color-mix`，也不在 React 里算颜色。
+  - **变量**（只在 `styles.css` 改）：浓度在 `:root` 的 `--mix-*`：`--mix-chat` 2.5%（对话区、右栏）、`--mix-sidebar` 3%（左栏；草莓在 4% 时偏粉）、`--mix-line` 8%（分割线）、`--mix-bubble-me` 12%（用户气泡）。上限：底色 5%、分割线 10%，再多界面就发黄发粉（`palette.test.ts` 守着）。颜色是 `@theme` 的 `--color-surface-chat` / `--color-surface-sidebar` / `--color-line`（`color-mix(in srgb, var(--fruit) <比例>, <原来的中性色>)`），组件里写 `bg-surface-chat`、`bg-surface-sidebar`、`border-line` / `divide-line`，不各写各的 `color-mix`，也不在 React 里算颜色。
   - **谁设 `--fruit`**：`lib/accent-scope.tsx` 的 `FruitTint`，包住整个外壳（左栏也在里面，`display: contents`），只设 `--fruit`，不动 `--primary`（左栏的强调色照旧中性）。
   - **淡变**：只有这几个容器（左栏、`main`、右栏和它的几组）带 `.tint-fade`（`background-color`、`border-color` 300ms，`--motion-tint`），不写 `* { transition }`；减弱动态效果时没有过渡。
 - 头像（`Avatar.tsx`）：项目经理用完整水果横切面（`PALETTE.slice`），它派出的 Worker 用从这片水果上顺着果络剥下的一瓣（`PALETTE.wedge`，`neutral` 为 `true`，`colorKey` 传所属项目经理的 `avatarKey`）。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白，外壳的对话区和右栏是上面的 `bg-surface-chat`）；左栏 `bg-surface-sidebar`，设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`（左栏、右栏的列表项除外，用上面的果冻底）。
-  - 分隔线：一律 1px `border-border` / `divide-border`（分组框里行与行之间也是它）。
+  - 分隔线分两种：**外壳**（三栏之间、右栏组之间、窄屏头像栏右边）用 1px `border-line` / `divide-line`（中性边框掺 8% 水果色，跟着项目经理变）；**白底的框和弹窗**（分组框、弹窗、popover、卡片、输入框，框里行与行之间）仍用 1px `border-border` / `divide-border`（纯中性色，不掺水果色）。
   - 次要文字 `text-muted-foreground`；错误 `text-danger`；警告 `bg-warn text-warn-foreground`。
   - 状态色（Worker 汇报头像右下角的小圆点，第 17 条）：做完了 `--success`、有问题 `--caution`、放弃了和出错 `--danger`，不用主色。
 - 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的强调色。
@@ -149,7 +149,10 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 ## 7. 聚焦态
 
 - 统一中性，**不用主色，不加彩色光圈**。`--ring` 是中性灰（`#a1a1aa`），`ring-ring` 就是它。
-- 文字输入（聊天输入框、`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
+- 普通文字输入（`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
+- **聊天输入框聚焦态**：外沿出现很淡的强调色光晕（Tailwind `focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent),0_2px_10px_rgba(0,0,0,0.05)]`，不写内联样式块），不加粗边框、不改边框颜色（保持 1px `border-border`），强调色取当前会话的项目经理 CSS 变量 `--primary`。
+- **聊天输入框的单行 / 多行**：空或只有一行字时，回形针、文字区、发送键（或停止键）在**同一行**，垂直居中，整条高 48px（标准档；36px 按钮 + 上下 5px + 1px 边框，随界面大小缩放）；文字超过一行（有换行符或自动换行）或有待发文件时，文字区占满上一行，回形针（左）和发送键（右）落到文字区**下面一行**（文件小条在最上面）。两种布局是同一个网格里的同一个文字区节点（只换网格位置），切换时不重建、光标和焦点不丢；高度判断在 `Composer.tsx` 调高度的 `useLayoutEffect` 里做（只读一次 `scrollHeight`，布尔值变了才重渲染），多行退回单行时用 canvas 量文字宽度、放得进回形针和发送键中间才退回（`composer-layout.ts`），避免来回切。
+- **聊天输入框发送键**：没有内容时是中性灰、不可点（`disabled`）；输入文字或添加待发文件后变为当前项目经理的强调色（水果色）且可点；在“从空变有内容”的那一下做一次 150ms 的轻微放大回弹（`composer-send-bounce`，`@keyframes` 在 `styles.css`），打字过程中不重复播；系统开启 `prefers-reduced-motion: reduce` 时不播放。
 - 按钮、列表项、单选行、开关这类点的东西：键盘聚焦时显示 `focus-visible:ring-2 focus-visible:ring-ring/50`（单选行在框里，用 `ring-inset`）。只在键盘聚焦（`focus-visible`）时出现，鼠标点不出圈。
 - 不合规的输入：`aria-invalid` 时红边框（组件自带），原因写在那一行下面。
 

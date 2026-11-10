@@ -184,7 +184,7 @@ describe("Composer：发送键和停止键", () => {
     const button = screen.getByRole("button", { name: "Stop" });
     expect(button).toBeEnabled();
     expect(button).toHaveClass("size-9", "rounded-[var(--radius-btn)]");
-    expect(button.parentElement).toHaveClass("ml-auto");
+    expect(button.parentElement).toHaveClass("col-start-3", "justify-self-end");
     expect(button.querySelector("svg")).toHaveClass("fill-current");
     await userEvent.click(button);
     expect(stop.onStop).toHaveBeenCalledTimes(1);
