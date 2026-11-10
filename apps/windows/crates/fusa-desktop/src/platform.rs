@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "windows"))]
+use std::process::Stdio;
 use fusa_wsl::{build_interactive_login_cmd, validate_local_app_data_dir};
 use url::Url;
 

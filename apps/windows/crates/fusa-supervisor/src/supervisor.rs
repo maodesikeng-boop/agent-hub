@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -128,6 +128,34 @@ impl ChildProxyHandle for StdChildProxyHandle {
             }
         }
     }
+}
+
+// Fixed-size reads also flush output that contains no newline.
+fn drain_stdout(mut reader: impl Read, log: &Mutex<RotatingLogWriter>) -> std::io::Result<()> {
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+        log.lock().unwrap().write_chunk(&buf[..n])?;
+    }
+}
+
+#[cfg(windows)]
+fn process_exit_waiter(child: &Child) -> std::io::Result<impl FnOnce() + Send> {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    let handle = child.as_handle().try_clone_to_owned()?;
+    Ok(move || {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+        }
+        // The owned duplicate remains valid even if cleanup reaps the Child.
+        unsafe {
+            WaitForSingleObject(handle.as_raw_handle(), u32::MAX);
+        }
+    })
 }
 
 /// WSL 守护进程运行时抽象（隔离所有 `wsl.exe` 调用，使 macOS 单测可 100% 注入模拟所有异常与慢停机场景）。
@@ -375,6 +403,12 @@ where
             })
         })?;
 
+        #[cfg(windows)]
+        let wait_for_exit = process_exit_waiter(&child).map_err(|source| SupervisorError::Io {
+            path: PathBuf::from("wsl.exe"),
+            source,
+        })?;
+
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let shared_child = Arc::new(Mutex::new(Some(child)));
@@ -382,19 +416,7 @@ where
         if let Some(stdout) = stdout_pipe {
             let log_clone = Arc::clone(&log_writer);
             thread::spawn(move || {
-                let mut reader = BufReader::new(stdout);
-                let mut buf = Vec::with_capacity(4096);
-                loop {
-                    buf.clear();
-                    match reader.read_until(b'\n', &mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            if let Ok(mut w) = log_clone.lock() {
-                                let _ = w.write_chunk(&buf);
-                            }
-                        }
-                    }
-                }
+                let _ = drain_stdout(stdout, &log_clone);
             });
         }
 
@@ -422,6 +444,8 @@ where
 
         let wait_child = Arc::clone(&shared_child);
         thread::spawn(move || {
+            #[cfg(windows)]
+            wait_for_exit();
             let exit_code = loop {
                 let polled = {
                     let mut guard = wait_child.lock().unwrap();
@@ -444,7 +468,10 @@ where
                 if polled.is_some() {
                     break polled;
                 }
+                #[cfg(not(windows))]
                 thread::sleep(Duration::from_millis(100));
+                #[cfg(windows)]
+                break None;
             };
             if let Some(j) = stderr_join {
                 let _ = j.join();
@@ -935,7 +962,8 @@ where
 
         if had_owned {
             let snap = self.snapshot();
-            if let Some(obs) = self.inner.lock().unwrap().observer.clone() {
+            let observer = self.inner.lock().unwrap().observer.clone();
+            if let Some(obs) = observer {
                 obs(snap);
             }
         }
@@ -967,7 +995,7 @@ where
             g.restart_generation = g.restart_generation.wrapping_add(1);
             let gen = g.restart_generation;
             g.session_cookie = None;
-            if g.ownership == DaemonOwnership::Owned && g.owned.is_some() {
+            if g.owned.is_some() {
                 g.state = SupervisorState::Stopping {
                     reason: StopReason::AppQuit,
                     generation: gen,
@@ -980,7 +1008,8 @@ where
         }
 
         let mid_snap = self.snapshot();
-        if let Some(obs) = self.inner.lock().unwrap().observer.clone() {
+        let observer = self.inner.lock().unwrap().observer.clone();
+        if let Some(obs) = observer {
             obs(mid_snap);
         }
 
@@ -1581,6 +1610,7 @@ where
         run_id: &str,
         proxy_exit_code: Option<i32>,
     ) {
+        let _op_guard = self.lifecycle_op_lock.lock().unwrap();
         {
             let g = self.inner.lock().unwrap();
             if g.shutdown_requested
@@ -1609,8 +1639,8 @@ where
             }
             g.owned.take()
         };
-        if let Some(mut entry) = taken {
-            entry.proxy_handle.cleanup_after_linux_exit();
+        if let Some(entry) = taken {
+            self.stop_owned_entry(entry);
         }
 
         let _ = self.record_crash_and_maybe_schedule_restart(generation, proxy_exit_code);
@@ -1687,7 +1717,8 @@ where
 
         self.log_supervisor_event(&format!("检测到自有守护进程崩溃：{menu_reason}"));
         let snap = self.snapshot();
-        if let Some(obs) = self.inner.lock().unwrap().observer.clone() {
+        let observer = self.inner.lock().unwrap().observer.clone();
+        if let Some(obs) = observer {
             obs(snap);
         }
 
@@ -1707,5 +1738,194 @@ where
         }
 
         menu_reason
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Runtime(Arc<AtomicUsize>);
+    impl DaemonRuntime for Runtime {
+        fn verify_distro_ownership(&self) -> Result<(), SupervisorError> {
+            Ok(())
+        }
+        fn is_distro_cold(&self) -> Result<bool, SupervisorError> {
+            Ok(false)
+        }
+        fn prepare_runtime_assets(&self) -> Result<bool, SupervisorError> {
+            Ok(false)
+        }
+        fn probe_guest_status(&self, _: u16, _: &DesktopContract) -> ProbeOutcome {
+            unreachable!()
+        }
+        fn spawn_owned_daemon(
+            &self,
+            _: &str,
+            _: u16,
+            _: Arc<Mutex<RotatingLogWriter>>,
+            _: Arc<Mutex<StderrTailCollector>>,
+            _: Box<dyn FnOnce(Option<i32>) + Send>,
+        ) -> Result<Box<dyn ChildProxyHandle>, SupervisorError> {
+            unreachable!()
+        }
+        fn query_owned_status(&self, _: &str) -> Result<OwnedLinuxStatus, SupervisorError> {
+            Ok(OwnedLinuxStatus::dead())
+        }
+        fn signal_owned_daemon(&self, _: &str, _: OwnedSignal) -> Result<bool, SupervisorError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+        fn read_ui_token(&self) -> Result<SecretUiToken, SupervisorError> {
+            unreachable!()
+        }
+    }
+    struct Proxy;
+    impl ChildProxyHandle for Proxy {
+        fn try_reap(&mut self) -> Option<i32> {
+            None
+        }
+        fn cleanup_after_linux_exit(&mut self) {}
+    }
+
+    #[test]
+    fn shutdown_during_start_preserves_lease_and_notifies_without_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let signals = Arc::new(AtomicUsize::new(0));
+        let sup = DaemonSupervisor::new(
+            DesktopContract::embedded().unwrap(),
+            4317,
+            dir.path(),
+            Runtime(signals.clone()),
+            UreqHostHttpClient,
+            SystemClock,
+        )
+        .unwrap();
+        {
+            let mut g = sup.inner.lock().unwrap();
+            g.owned = Some(OwnedDaemonEntry {
+                run_id: "starting".into(),
+                instance_id: None,
+                linux_pid: None,
+                linux_pgid: None,
+                generation: 1,
+                proxy_handle: Box::new(Proxy),
+            });
+            // Starting has not yet acquired public Owned status.
+            g.ownership = DaemonOwnership::None;
+        }
+        let weak = Arc::downgrade(&sup);
+        sup.set_observer(Arc::new(move |_| {
+            assert!(
+                weak.upgrade().unwrap().inner.try_lock().is_ok(),
+                "observer invoked under supervisor lock"
+            );
+        }));
+        sup.shutdown();
+        assert_eq!(
+            signals.load(Ordering::SeqCst),
+            1,
+            "starting lease must receive TERM"
+        );
+    }
+
+    #[test]
+    fn proxy_exit_cleans_owned_group_before_crash_transition() {
+        let dir = tempfile::tempdir().unwrap();
+        let signals = Arc::new(AtomicUsize::new(0));
+        let mut contract = DesktopContract::embedded().unwrap();
+        contract.max_crashes_in_window = 1;
+        let sup = DaemonSupervisor::new(
+            contract,
+            4317,
+            dir.path(),
+            Runtime(signals.clone()),
+            UreqHostHttpClient,
+            SystemClock,
+        )
+        .unwrap();
+        {
+            let mut g = sup.inner.lock().unwrap();
+            let generation = g.restart_generation;
+            g.auto_restart_enabled = true;
+            g.owned = Some(OwnedDaemonEntry {
+                run_id: "crashed".into(),
+                instance_id: None,
+                linux_pid: None,
+                linux_pgid: None,
+                generation,
+                proxy_handle: Box::new(Proxy),
+            });
+            g.state = SupervisorState::Running {
+                ownership: DaemonOwnership::Owned,
+                identity: DaemonIdentity {
+                    product: "fusa".into(),
+                    protocol_version: 1,
+                    instance_id: "old".into(),
+                    status: None,
+                },
+                port: 4317,
+                linux_pid: None,
+                linux_pgid: None,
+                generation,
+            };
+        }
+        let generation = sup.inner.lock().unwrap().restart_generation;
+        sup.on_owned_proxy_exited(generation, "crashed", Some(1));
+        assert_eq!(signals.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn newline_free_stdout_is_flushed_before_next_read_and_rotated() {
+        struct Output {
+            path: PathBuf,
+            reads: usize,
+        }
+        impl Read for Output {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.reads > 0 {
+                    assert!(std::fs::metadata(&self.path).unwrap().len() <= 4096);
+                    assert!(self.path.with_extension("log.1").exists());
+                }
+                self.reads += 1;
+                if self.reads > 3 {
+                    return Ok(0);
+                }
+                buf.fill(b'x');
+                Ok(buf.len())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stdout.log");
+        let log = Mutex::new(RotatingLogWriter::open(&path, 1024, 1).unwrap());
+        drain_stdout(
+            Output {
+                path: path.clone(),
+                reads: 0,
+            },
+            &log,
+        )
+        .unwrap();
+        assert_eq!(std::fs::metadata(path).unwrap().len(), 1024);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_exit_waiter_wakes_when_child_exits() {
+        let mut child = Command::new("cmd.exe")
+            .args(["/c", "exit", "7"])
+            .spawn()
+            .unwrap();
+        process_exit_waiter(&child).unwrap()();
+        assert_eq!(child.try_wait().unwrap().unwrap().code(), Some(7));
+    }
+
+    #[test]
+    fn bundled_contract_is_byte_identical() {
+        assert_eq!(
+            include_str!("../../fusa-desktop/resources/contract.json"),
+            crate::contract::EMBEDDED_DESKTOP_CONTRACT_JSON
+        );
     }
 }
