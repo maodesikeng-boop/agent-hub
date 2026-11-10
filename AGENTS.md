@@ -64,10 +64,7 @@
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
 
 **工程工具**
-- `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查（见下面“没看到使用”）。`@types/*`（node、react、react-dom、ws、web-push）：类型。
-
-**没看到使用**（只是报告，删不删用户定）
-- `knip`：没有 npm 脚本、CI、配置引用它。
+- `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push）：类型。
 
 **使用规则**
 - 要新功能，先查这一节有没有；没有再找行业成熟库；实在没有才自己写，并在 PR 里说明为什么。
