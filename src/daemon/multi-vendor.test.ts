@@ -18,19 +18,20 @@ import {
 } from "../shared/index.ts";
 import { Client, agentTexts, messagesOf, waitForStatus, waitUntil } from "../../test/e2e/harness.ts";
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
-import { SANDBOX_EXEC } from "./driver/write-scope.ts";
+import { SANDBOX_EXEC, osSandboxAvailable } from "./driver/write-scope.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 
-const canRunSandboxExec =
-  process.platform === "darwin" &&
-  (() => {
-    try {
-      execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+const canNestOsSandbox =
+  process.platform === "darwin"
+    ? (() => {
+        try {
+          execFileSync(SANDBOX_EXEC, ["-p", "(version 1)\n(allow default)", "/usr/bin/true"], { stdio: "ignore" });
+          return true;
+        } catch {
+          return false;
+        }
+      })()
+    : osSandboxAvailable();
 
 /** 只有 Worker 的提示词里有的一句（daemon/prompt.ts 的 buildWorkerPrompt）：假 agy、codex 靠它认出自己是 Worker。 */
 const WORKER_PROMPT_MARK = "# 你的任务";
@@ -309,6 +310,88 @@ rl.on("line", (line) => {
 `,
     );
 
+    const deepseekPath = writeExecutable(
+      join(binDir, "fake-dsh"),
+      `
+const { createInterface } = require("node:readline");
+const { randomUUID } = require("node:crypto");
+
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+let sessionId = "dsh-sess-" + randomUUID();
+
+const rl = createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        protocolVersion: 1,
+        agentInfo: { name: "fake-dsh", version: "0.2.2-rc.1" },
+        agentCapabilities: { loadSession: false, sessionCapabilities: { resume: {}, close: {} } },
+      },
+    });
+    return;
+  }
+  if (req.method === "session/new" || req.method === "session/resume") {
+    if (req.params?.sessionId) sessionId = req.params.sessionId;
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        ...(req.method === "session/new" ? { sessionId } : {}),
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "[\\"deepseek-official\\",\\"deepseek-v4-pro\\"]",
+            options: [{ value: "[\\"deepseek-official\\",\\"deepseek-v4-pro\\"]", name: "DeepSeek V4 Pro" }],
+          },
+          {
+            id: "reasoning_effort",
+            name: "Reasoning Effort",
+            category: "thought_level",
+            type: "select",
+            currentValue: "high",
+            options: [
+              { value: "off", name: "Off" },
+              { value: "low", name: "Low" },
+              { value: "high", name: "High" },
+              { value: "max", name: "Max" },
+            ],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "session/set_config_option") {
+    out({ jsonrpc: "2.0", id: req.id, result: { configOptions: [] } });
+    return;
+  }
+  if (req.method === "session/prompt") {
+    const blocks = (req.params?.prompt || []).map((b) => b.text || "");
+    const lastText = blocks[blocks.length - 1] || "";
+    const reply = "DeepSeek PM 收到：" + lastText;
+    out({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } } },
+    });
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { stopReason: "end_turn", usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } },
+    });
+  }
+});
+`,
+    );
+
     const cursorPath = writeExecutable(
       join(binDir, "fake-cursor"),
       `
@@ -317,7 +400,7 @@ const { randomUUID } = require("node:crypto");
 
 const argv = process.argv.slice(2);
 if (argv[0] === "models") {
-  process.stdout.write("Available models\\n\\nauto - Auto  (default)\\ncomposer-2.5 - Composer 2.5\\nclaude-opus-5-5-high - Claude Opus 5.5 1M High\\n");
+  process.stdout.write("Available models\\n\\nauto - Auto (current, default)\\ncomposer-2.5 - Composer 2.5\\ncomposer-2.5-fast - Composer 2.5 Fast\\nclaude-opus-5-5-high - Claude Opus 5.5 1M High\\n");
   process.exit(0);
 }
 if (argv[0] === "status") {
@@ -353,7 +436,7 @@ rl.on("line", (line) => {
             currentValue: "default[]",
             options: [
               { value: "default[]", name: "Auto" },
-              { value: "composer-2.5[fast=false]", name: "composer-2.5" },
+              { value: "composer-2.5[fast=true]", name: "composer-2.5" },
             ],
           },
         ],
@@ -392,7 +475,7 @@ rl.on("line", (line) => {
 `,
     );
 
-    return { claudePath, agyPath, codexPath, cursorPath };
+    return { claudePath, agyPath, codexPath, deepseekPath, cursorPath };
   }
 
   async function bootMultiVendorDaemon() {
@@ -401,7 +484,7 @@ rl.on("line", (line) => {
     const userHome = join(dir, "user-home");
     const hubHome = join(dir, "hub-home");
     mkdirSync(userHome, { recursive: true });
-    const { claudePath, agyPath, codexPath, cursorPath } = createFakeVendors(binDir, projectDir);
+    const { claudePath, agyPath, codexPath, deepseekPath, cursorPath } = createFakeVendors(binDir, projectDir);
 
     const cleanEnv: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(process.env)) {
@@ -409,13 +492,13 @@ rl.on("line", (line) => {
     }
     cleanEnv[ENV_HOME] = hubHome;
     cleanEnv[ENV_PORT] = "0";
-    // 先把全部注册厂商指向不存在的占位路径，避免单测误调宿主 PATH 里的真实 CLI（兼容并行的其他新厂商）
     for (const v of AGENT_VENDORS) {
       cleanEnv[vendorSpec(v).cli.envVar] = join(binDir, `missing-${v}`);
     }
     cleanEnv[vendorSpec("claude").cli.envVar] = claudePath;
     cleanEnv[vendorSpec("agy").cli.envVar] = agyPath;
     cleanEnv[vendorSpec("codex").cli.envVar] = codexPath;
+    cleanEnv[vendorSpec("deepseek").cli.envVar] = deepseekPath;
     cleanEnv[vendorSpec("cursor").cli.envVar] = cursorPath;
 
     daemon = await startDaemon({ userHome, env: cleanEnv });
@@ -436,28 +519,30 @@ rl.on("line", (line) => {
     const body = (await res.json()) as ModelsResponse;
     expect(body.catalogs.map((c) => c.vendor)).toEqual([...AGENT_VENDORS]);
 
-    const claudeCat = body.catalogs.find((c) => c.vendor === "claude")!;
-    const agyCat = body.catalogs.find((c) => c.vendor === "agy")!;
-    const codexCat = body.catalogs.find((c) => c.vendor === "codex")!;
-    const cursorCat = body.catalogs.find((c) => c.vendor === "cursor")!;
+    const [claudeCat, agyCat, codexCat] = body.catalogs;
+    expect(claudeCat!.source).toBe("vendor");
+    expect(claudeCat!.models.some((m) => m.id === "claude-sonnet-5-5")).toBe(true);
 
-    expect(claudeCat.source).toBe("vendor");
-    expect(claudeCat.models.some((m) => m.id === "claude-sonnet-5-5")).toBe(true);
+    expect(agyCat!.source).toBe("vendor");
+    expect(agyCat!.models.find((m) => m.id === "gemini-4-argon")?.efforts).toEqual(["high"]);
+    expect(agyCat!.defaultModel).toBe("Gemini 4 Argon");
 
-    expect(agyCat.source).toBe("vendor");
-    expect(agyCat.models.find((m) => m.id === "gemini-4-argon")?.efforts).toEqual(["high"]);
-    expect(agyCat.defaultModel).toBe("Gemini 4 Argon");
+    expect(codexCat!.source).toBe("vendor");
+    expect(codexCat!.models.some((m) => m.id === "gpt-5.4")).toBe(true);
+    expect(codexCat!.defaultModel).toBe("GPT-5.4");
 
-    expect(codexCat.source).toBe("vendor");
-    expect(codexCat.models.some((m) => m.id === "gpt-5.4")).toBe(true);
-    expect(codexCat.defaultModel).toBe("GPT-5.4");
+    const deepseekCat = body.catalogs.find((c) => c.vendor === "deepseek");
+    expect(deepseekCat?.source).toBe("bundled");
+    expect(deepseekCat?.models.map((m) => m.id)).toEqual(["deepseek-v4-pro", "deepseek-flash"]);
 
-    expect(cursorCat.source).toBe("vendor");
-    expect(cursorCat.models.some((m) => m.id === "composer-2.5")).toBe(true);
-    expect(cursorCat.defaultModel).toBe("Auto");
+    // cursor 名单按家族归并：composer-2.5 与 composer-2.5-fast 并成一项，默认固定 Auto
+    const cursorCat = body.catalogs.find((c) => c.vendor === "cursor");
+    expect(cursorCat?.source).toBe("vendor");
+    expect(cursorCat?.models.map((m) => m.id)).toEqual(["composer-2.5", "claude-opus-5-5"]);
+    expect(cursorCat?.defaultModel).toBe("Auto");
   });
 
-  it("可创建 vendor 为 agy、codex、cursor 的 PM，发消息路由到对应驱动层并收到回复", async () => {
+  it("可创建 vendor 为 agy、codex、deepseek、cursor 的 PM，发消息路由到对应驱动层并收到回复", async () => {
     const { client } = await bootMultiVendorDaemon();
 
     const agyPm = await client.createPm({
@@ -484,6 +569,18 @@ rl.on("line", (line) => {
     await waitForStatus(client, codexMsgId, "replied");
     expect(agentTexts(await client.state(), codexPm.conversationId)).toEqual(["Codex PM 收到：你好小科"]);
 
+    const deepseekPm = await client.createPm({
+      name: "小深PM",
+      mode: "hands_on",
+      vendor: "deepseek",
+      defaultModel: "deepseek-v4-pro",
+      effort: "high",
+      persona: "你是小深。",
+    });
+    const deepseekMsgId = await client.post(deepseekPm.conversationId, "你好小深");
+    await waitForStatus(client, deepseekMsgId, "replied");
+    expect(agentTexts(await client.state(), deepseekPm.conversationId)).toEqual(["DeepSeek PM 收到：你好小深"]);
+
     const cursorPm = await client.createPm({
       name: "小游PM",
       mode: "hands_on",
@@ -497,9 +594,7 @@ rl.on("line", (line) => {
     expect(agentTexts(await client.state(), cursorPm.conversationId)).toEqual(["Cursor PM 收到：你好小游"]);
   });
 
-  it.skipIf(process.platform === "darwin" && !canRunSandboxExec)(
-    "claude PM 可通过 hub worker start --vendor agy / codex 跨厂商派 Worker 并收到汇报",
-    async () => {
+  it.skipIf(!canNestOsSandbox)("claude PM 可通过 hub worker start --vendor agy / codex 跨厂商派 Worker 并收到汇报", async () => {
     const { client } = await bootMultiVendorDaemon();
     const initial = await client.state();
     const claudeConvId = initial.conversations[0]!.conversation.id;

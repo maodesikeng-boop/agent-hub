@@ -152,11 +152,11 @@ describe("hub cli", () => {
     });
 
     it("worker start --effort sends the level; any level from the vendor list is accepted", async () => {
-      for (const level of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+      for (const level of ALL_EFFORTS) {
         expect((await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
       expect(ledger.calls.map((c) => c.args)).toEqual(
-        ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({ title: "修 X", effort, task: "任务" })),
+        ALL_EFFORTS.map((effort) => ({ title: "修 X", effort, task: "任务" })),
       );
     });
 
@@ -164,7 +164,7 @@ describe("hub cli", () => {
       for (const level of ["turbo", "LOW", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
-        expect(r.stderr).toContain("--effort 只能是 low、medium、high、xhigh、max、ultra");
+        expect(r.stderr).toContain(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
       }
       expect(ledger.calls).toHaveLength(0);
     });

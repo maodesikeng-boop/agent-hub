@@ -130,7 +130,9 @@ describe("守护进程侧：acme 只写 createDriver，推出来的登记表都�
     const options = Object.fromEntries(AGENT_VENDORS.map((v) => [v, { path: v, cwd: "/tmp", installed: () => false }]));
     const sources = createVendorCatalogSources(options as Parameters<typeof createVendorCatalogSources>[0]);
     expect(sources[acme]).toBeUndefined();
-    expect(Object.keys(sources).toSorted()).toEqual(AGENT_VENDORS.filter((v) => v !== acme).toSorted());
+    expect(Object.keys(sources).toSorted()).toEqual(
+      AGENT_VENDORS.filter((v) => DAEMON_VENDORS[v].catalog !== null).toSorted(),
+    );
     expect(VENDOR_CATALOG_PROBES[acme].parse({ models: [] })).toBeNull();
     expect(VENDOR_CATALOG_PROBES[acme].availabilityOf({})).toBe("unknown");
   });

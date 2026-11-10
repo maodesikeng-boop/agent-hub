@@ -7,6 +7,7 @@
 // - 模型只经 `session/set_config_option` 选（家族名 -> options[] 里的预设值，未选模型用 Auto），每次新建/续接都显式设；
 // - 拦截 `cursor/ask_question`、`cursor/create_plan` 等私有阻塞请求立即返回双层 `{ outcome: { outcome: ... } }`，防常驻进程挂死；
 // - 只读 Worker OS 沙箱补充 `~/.cursor` 下必需可写的临时会话/缓存目录。
+import { mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { vendorFailureOf, type Driver, type DriverOptions } from "../../shared/index.ts";
@@ -33,6 +34,8 @@ import {
 } from "./limits.ts";
 
 const LAUNCH_ARGS = ["--trust", "--approve-mcps", "acp"] as const;
+/** 只读 Worker 里 ~/.cursor 下放行可写的运行时子目录（cli-config.json、mcp.json、hooks.json、auth.json 不放行）。 */
+const CURSOR_READONLY_RUNTIME_SUBDIRS = ["acp-sessions", "chats", "projects", "ai-tracking", "logs"] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -212,14 +215,12 @@ const cursorAcpConfig: AcpDriverConfig = {
   },
   extractToolUse: extractCursorToolUse,
   readonlySandbox: {
-    // cursor-agent 启动就往 projects/ 写，~/.cursor 本身只读时缺了它直接退出（实测），底座会先建好这些目录。
-    writableDirs: (homeDir) => [
-      join(homeDir, ".cursor", "acp-sessions"),
-      join(homeDir, ".cursor", "chats"),
-      join(homeDir, ".cursor", "projects"),
-      join(homeDir, ".cursor", "ai-tracking"),
-      join(homeDir, ".cursor", "logs"),
-    ],
+    // cursor-agent 启动就往 projects/ 写，~/.cursor 本身只读时缺了它直接退出（实测）；底座只放行已存在的目录，所以先建好。
+    writableDirs: (homeDir) => {
+      const dirs = CURSOR_READONLY_RUNTIME_SUBDIRS.map((sub) => join(homeDir, ".cursor", sub));
+      for (const dir of dirs) mkdirSync(dir, { recursive: true });
+      return dirs;
+    },
     writableFileGlobs: (homeDir) => [join(homeDir, ".cursor", "statsig-cache.json")],
   },
   timeouts: {

@@ -252,6 +252,8 @@ export const KILL_WAIT_MS = 2_000;
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
 export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
+/** 只读 DeepSeek Worker 起之前在沙箱外初始化 dsh 的 acp profile（`dsh --profile acp --dump-config`，实测 0.3 秒）最多等多久。 */
+export const DEEPSEEK_PROFILE_INIT_TIMEOUT_MS = 30_000;
 /** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
 export const MAX_CATALOG_MODELS = 50;
 export const MAX_CATALOG_LABEL_CHARS = 80;

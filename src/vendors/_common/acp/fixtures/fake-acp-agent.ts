@@ -66,6 +66,7 @@ export interface FakeAcpScript {
   resumeCapability?: boolean;
   closeCapability?: boolean;
   systemPromptCapability?: boolean;
+  additionalDirectoriesCapability?: boolean;
   requireAuth?: boolean;
   failAuth?: boolean;
   authMethods?: Array<{ id: string; name: string }>;
@@ -262,6 +263,7 @@ const app = agent({ name: "fake-acp-agent" })
           ...(script.resumeCapability ? { resume: {} } : {}),
           ...(script.closeCapability ? { close: {} } : {}),
           ...(script.systemPromptCapability ? { systemPrompt: {} } : {}),
+          ...(script.additionalDirectoriesCapability ? { additionalDirectories: {} } : {}),
         },
       },
     };

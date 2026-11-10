@@ -390,12 +390,16 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const first = await boot();
     const pm = await pmWithProject(first.client, dir);
     await first.client.post(pm.conversationId, "派个慢的 Worker");
-    const worker = await waitUntil("worker running", () => {
+    const { worker, task } = await waitUntil("worker running", () => {
       const [row] = workerRows();
       if (row?.worktree_path == null || !existsSync(join(row.worktree_path, "half.txt"))) return undefined;
-      return row;
+      const [msg] = query<{ id: number; status: string }>(
+        "SELECT id, status FROM messages WHERE conversation_id = ? AND sender = 'pm'",
+        row.worker_conversation_id,
+      );
+      if (msg?.status !== "processing") return undefined;
+      return { worker: row, task: msg };
     });
-    const task = query<{ id: number; status: string }>("SELECT id, status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker.worker_conversation_id)[0]!;
     expect(task.status).toBe("processing");
     const workerSessionId = sessionOf(await first.client.state(), worker.worker_conversation_id).sessionId;
     const [before] = procsOf(workerSessionId);

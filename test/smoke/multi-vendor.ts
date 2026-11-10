@@ -4,7 +4,7 @@
 //    hub status 通过 Unix socket 调通、流式文字和 turn.ended 完整落库；
 // 3. 建一个 codex 项目经理，发消息让它跑 `hub status` 并简短回复，验证真 codex app-server 握手、thread/start、turn/start、
 //    hub status 通过 Unix socket（含 shell_environment_policy.set 注入的 HUB_TOKEN/HUB_SOCK）调通、turn/completed 完整落库；
-// 4. 再各建一个 pi（RPC）和 cursor（ACP 常驻）项目经理，同样跑 `hub status` 并回复落库；
+// 4. 再各建一个 pi（RPC）、deepseek（dsh ACP）和 cursor（ACP 常驻）项目经理，同样跑 `hub status` 并回复落库；
 // 5. 干净关机（daemon.stop()），确认无残留进程。
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -201,8 +201,47 @@ try {
   });
   if (!piOk) keepDir = true;
 
-  // 场景 4：真 cursor 项目经理
-  const cursorOk = await scenario(outcomes, "MV4 真 cursor 项目经理：ACP 常驻握手、跑 hub status 并回复落库", async () => {
+  // 场景 4：真 deepseek 项目经理（dsh --profile acp）
+  const deepseekOk = await scenario(outcomes, "MV4 真 deepseek 项目经理：dsh ACP 握手、跑 hub status 并回复落库", async () => {
+    const created = await client.createPm({
+      name: "小深",
+      mode: "hands_on",
+      vendor: "deepseek",
+      defaultModel: "deepseek-flash",
+      effort: "low",
+      persona: "你是小深，回复极简。",
+    });
+    const chatId = created.conversationId;
+    const stateBefore = await client.state();
+    const sessionBefore = stateBefore.sessions.find((s) => s.conversationId === chatId);
+    expect(sessionBefore !== undefined, "找不到 deepseek PM 的会话");
+
+    const prompt = `请在 bash 中运行 \`${HUB_COMMAND} status\`，然后只用一句话回复你在输出里看到的项目经理名字（必须包含“小深”）。`;
+    const msgId = await client.post(chatId, prompt);
+    await waitForStatus(client, msgId, "replied", TURN_TIMEOUT_MS);
+
+    const stateAfter = await client.state();
+    const msgs = messagesOf(stateAfter, chatId);
+    const tools = msgs.filter((m) => m.id > msgId && m.sender === "agent" && m.kind === "tool");
+    const replies = agentTexts(stateAfter, chatId);
+    const combinedReply = replies.join("\n");
+
+    const row = readSessionRow(daemon.paths.dbFile, sessionBefore.sessionId);
+    if (row.pid !== null) trackedPids.add(row.pid);
+    if (row.vendor_session_id) trackedVendorIds.add(row.vendor_session_id);
+
+    expect(row.vendor === "deepseek", `vendor 应为 deepseek，实际为 ${row.vendor}`);
+    expect(row.vendor_session_id.trim() !== "", "vendor_session_id 为空");
+    expect(row.has_completed_turn === 1, `has_completed_turn 应为 1，实际为 ${row.has_completed_turn}`);
+    expect(tools.length > 0, "未记录到 deepseek 的工具调用");
+    expect(combinedReply.includes("小深"), `回复中未包含“小深”：${combinedReply}`);
+
+    return `sessionId=${row.id}，vendorSessionId=${row.vendor_session_id}，工具 ${tools.length} 次，回复：“${combinedReply.trim().slice(0, 80)}”`;
+  });
+  if (!deepseekOk) keepDir = true;
+
+  // 场景 5：真 cursor 项目经理
+  const cursorOk = await scenario(outcomes, "MV5 真 cursor 项目经理：ACP 常驻握手、跑 hub status 并回复落库", async () => {
     const modelsRes = await fetch(`http://127.0.0.1:${daemon.port}${API_PATHS.models}`, {
       headers: { Cookie: cookie },
     });
@@ -210,7 +249,7 @@ try {
     const { catalogs } = (await modelsRes.json()) as { catalogs: { vendor: string; source: string; models: { id: string }[] }[] };
     const cursorCatalog = catalogs.find((c) => c.vendor === "cursor");
     expect(cursorCatalog !== undefined && cursorCatalog.models.length > 0, "未拿到 cursor 模型名单");
-    const cursorModel = process.env.AGENT_HUB_CURSOR_MODEL || cursorCatalog.models.find((m) => m.id === "composer-2.5-fast")?.id || cursorCatalog.models[0]!.id;
+    const cursorModel = process.env.AGENT_HUB_CURSOR_MODEL || cursorCatalog.models.find((m) => m.id === "composer-2.5")?.id || cursorCatalog.models[0]!.id;
 
     const created = await client.createPm({
       name: "小游",
@@ -249,7 +288,7 @@ try {
   });
   if (!cursorOk) keepDir = true;
 } finally {
-  const stopOk = await scenario(outcomes, "MV5 干净关机：daemon.stop() 无残留进程", async () => {
+  const stopOk = await scenario(outcomes, "MV6 干净关机：daemon.stop() 无残留进程", async () => {
     await daemon.stop();
     const alivePids = [...trackedPids].filter(isAlive);
     const lines = psLines();
