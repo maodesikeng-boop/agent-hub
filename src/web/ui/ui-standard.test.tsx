@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Button } from "./button.tsx";
+import { Drawer, DrawerContent, DrawerTitle } from "./drawer.tsx";
 import { Input, Select, Textarea } from "./input.tsx";
 import { Switch } from "./switch.tsx";
 import { Avatar } from "../components/Avatar.tsx";
@@ -28,6 +29,23 @@ describe("界面标准：共用组件", () => {
     }
     expect(classOf(screen.getByRole("textbox", { name: "输入框" }))).toContain("h-9");
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
+  });
+
+  it("抽屉（第 10 条）：DrawerContent 是 rounded-t-2xl、border-t border-line、bg-surface-chat、最高 85dvh、底部垫安全区，遮罩 bg-black/30；顶上拖动条 36×4、纯装饰", () => {
+    render(
+      <Drawer open>
+        <DrawerContent>
+          <DrawerTitle>Pieces</DrawerTitle>
+        </DrawerContent>
+      </Drawer>,
+    );
+    const cls = classOf(screen.getByRole("dialog"));
+    for (const c of ["rounded-t-2xl", "border-t", "border-line", "bg-surface-chat", "max-h-[85dvh]", "pb-[var(--safe-bottom)]"]) expect(cls).toContain(c);
+    expect(classOf(document.querySelector<HTMLElement>('[data-slot="drawer-overlay"]')!)).toContain("bg-black/30");
+    const handle = screen.getByRole("dialog").querySelector<HTMLElement>('[aria-hidden="true"]')!;
+    for (const c of ["h-1", "w-9", "rounded-full", "bg-border", "my-2"]) expect(classOf(handle)).toContain(c);
+    // 进出动画是 vaul 自带的，仓库没装 tw-animate-css
+    expect(readFileSync("src/web/ui/drawer.tsx", "utf8")).not.toMatch(/animate-in|animate-out|fade-in|fade-out/);
   });
 
   it("聊天输入框（Composer）：聚焦时只多出强调色的纯模糊光晕（.composer-frame，边框不变，没有实心的圈和黑影，不内联 <style>），空输入时发送键不可点，回弹动画在 styles.css，空/单行同一行、多行落到下一行", () => {

@@ -223,6 +223,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。
 - 不写副标题和解释性的灰字；需要的说明放在行下面的小字里。
 
+**抽屉**（手机外壳里 Pieces 用，`DrawerContent`，`src/web/ui/drawer.tsx`，底层 `vaul`，只有 bottom 方向）：
+
+- 遮罩 `bg-black/30`（和弹窗一样）；内容 `rounded-t-2xl border-t border-line bg-surface-chat`，最高 `max-h-[85dvh]`，里面滚，底部垫 `pb-[var(--safe-bottom)]`。
+- 顶上拖动条 36×4（`h-1 w-9 rounded-full bg-border`），上下各 8px，纯装饰（`aria-hidden`）。
+- 读屏标题放 `DrawerTitle`，界面不要标题时 `className="sr-only"`。进出动画用 `vaul` 自带的，不另加动画类名。
+
 ## 11. 浮层（Popover）
 
 `PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。

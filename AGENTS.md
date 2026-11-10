@@ -55,9 +55,10 @@
 
 **UI 组件（`src/web/ui/`）**
 - 底层是 Radix（`@radix-ui/react-*`），样式照 shadcn/ui 的写法，但**仓库里没有 `components.json`，也没有 `@/` 别名**，所以 `shadcn add` 不能直接用（会要求先建 `components.json`）。
-- 已有：`button`（slot + cva）、`input`、`dialog`（Radix Dialog）、`popover`、`tabs`、`collapsible`、`avatar`、`switch`、`segmented`（Radix RadioGroup）。
+- 已有：`button`（slot + cva）、`input`、`dialog`（Radix Dialog）、`drawer`（底部抽屉，底层 `vaul`）、`popover`、`tabs`、`collapsible`、`avatar`、`switch`、`segmented`（Radix RadioGroup）。
+- `vaul`：底部抽屉（`src/web/ui/drawer.tsx`，只有这一个文件 import 它）。它已停更（作者 2025 年起标 unmaintained，最后一版 1.1.2），以后换 Base UI 的 Drawer（`@base-ui/react`）只改这一个文件，调用方不动。
 - `ModeRows.tsx` 直接用 `@radix-ui/react-radio-group`，没有单独的 `radio-group.tsx`。
-- 没装：`Drawer`（`vaul` 没装）、`Sheet`、`Select`、`Textarea`、`Tooltip`、`DropdownMenu`、`ScrollArea`、`Toast/Sonner` 等。`Dialog` 已装。
+- 没装：`Sheet`、`Select`、`Textarea`、`Tooltip`、`DropdownMenu`、`ScrollArea`、`Toast/Sonner` 等。`Dialog` 已装。
 - 要新增一个：先 `pnpm dlx shadcn@latest view <名字>` 看官方源码（不需要 `components.json`），再手工放进 `src/web/ui/<名字>.tsx`：import 改成相对路径（`../lib/utils.ts`），新依赖（如 `vaul`）用 `pnpm add`，样式按 `docs/ui-standard.md` 改。
 
 **测试**
