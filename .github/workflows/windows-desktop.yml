@@ -48,6 +48,7 @@ jobs:
               }
             }
           '
+          mkdir -p apps/windows/crates/fusa-desktop/resources
           tar \
             --exclude='*.test.ts' \
             --exclude='*.test.tsx' \
@@ -60,8 +61,9 @@ jobs:
             scripts \
             src \
             dist
-          tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz | grep -q '^migrations/.*\.sql$'
-          tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz | grep -q '^src/daemon/main\.ts$'
+          archive_entries="$(tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz)"
+          grep -Eq '^(\./)?migrations/.*\.sql$' <<<"$archive_entries"
+          grep -Eq '^(\./)?src/daemon/main\.ts$' <<<"$archive_entries"
 
       - name: Install Rust stable (MSVC)
         uses: dtolnay/rust-toolchain@stable
