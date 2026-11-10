@@ -10,7 +10,7 @@
 //   - codex：turn/start 的 sandboxPolicy 用 externalSandbox；只读 Worker 不包外层，照用 codex 自己的 readOnly 沙箱。
 // 详见 docs/write-scope.md 与 docs/linux-sandbox-design.md。
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { LOCAL_ERRORS } from "../../shared/errors.ts";
 import { AGENT_VENDORS, DriverError, vendorSpec, type AgentVendor, type WriteScope } from "../../shared/index.ts";
@@ -38,6 +38,10 @@ export interface OsSandboxWrapOptions {
   isDirectory?: (path: string) => boolean;
   /** 覆盖可写文件通配展开（默认 expandWritableFileGlobs，单测用）。 */
   expandGlobs?: (globs: readonly string[]) => string[];
+  /** 覆盖 /proc/self/mountinfo 内容（默认在真实系统读取，单测用）。 */
+  mountInfo?: string;
+  /** 覆盖当前进程环境变量以清理 WSL 互操作变量与 Windows PATH（默认 process.env，单测用）。 */
+  env?: NodeJS.ProcessEnv;
   /** 包进 OS 沙箱时加在命令行最前面、关掉这家自带沙箱的参数。 */
   ownSandboxOffArgs?: readonly string[];
 }
@@ -82,23 +86,34 @@ export function bwrapProbeArgs(uid: number = process.getuid?.() ?? 0): string[] 
 
 /** 只缓存 true，不缓存 false：管理员跑完 sudo scripts/linux-sandbox-setup.sh 后无需重启守护进程，下次起 Worker 即刻生效。 */
 let linuxSandboxCachedTrue = false;
+/** 注入的探测函数各自缓存 true，与真实探测的模块级缓存互不串（真机已探测成功不会让注入 false 的调用也返回 true）。 */
+let customProbeCachedTrue = new WeakSet<() => boolean>();
+
+function runProbe(probe: () => boolean): boolean {
+  try {
+    return probe();
+  } catch {
+    return false;
+  }
+}
+
+function realBwrapProbe(): boolean {
+  execFileSync(BWRAP, bwrapProbeArgs(), {
+    stdio: "ignore",
+    timeout: BWRAP_PROBE_TIMEOUT_MS,
+  });
+  return true;
+}
 
 function probeLinuxBwrap(customProbe?: () => boolean): boolean {
-  if (linuxSandboxCachedTrue) return true;
-  let ok = false;
-  try {
-    if (customProbe) {
-      ok = customProbe();
-    } else {
-      execFileSync(BWRAP, bwrapProbeArgs(), {
-        stdio: "ignore",
-        timeout: BWRAP_PROBE_TIMEOUT_MS,
-      });
-      ok = true;
-    }
-  } catch {
-    ok = false;
+  if (customProbe) {
+    if (customProbeCachedTrue.has(customProbe)) return true;
+    const ok = runProbe(customProbe);
+    if (ok) customProbeCachedTrue.add(customProbe);
+    return ok;
   }
+  if (linuxSandboxCachedTrue) return true;
+  const ok = runProbe(realBwrapProbe);
   if (ok) linuxSandboxCachedTrue = true;
   return ok;
 }
@@ -106,6 +121,7 @@ function probeLinuxBwrap(customProbe?: () => boolean): boolean {
 /** 重置 OS 沙箱可用性缓存（仅供单测用）。 */
 export function resetOsSandboxCacheForTest(): void {
   linuxSandboxCachedTrue = false;
+  customProbeCachedTrue = new WeakSet();
 }
 
 function realpathOrSelf(path: string): string {
@@ -263,6 +279,109 @@ export function expandWritableFileGlobs(globs: readonly string[], realpath: (p: 
   return results;
 }
 
+/** WSL2 专属宿主/跨发行版通道目录：若存在则用 0700 空 tmpfs 遮蔽，防止沙箱内借 interop socket 或跨实例共享目录逃逸。 */
+export const WSL_ISOLATED_DIRS: readonly string[] = ["/run/WSL", "/mnt/wsl", "/mnt/wslg"];
+
+/** WSL2 互操作环境变量：若残留则通过 bwrap --unsetenv 在沙箱内清除。 */
+export const WSL_SANITIZED_ENV_VARS: readonly string[] = ["WSL_INTEROP", "WSLENV"];
+
+function unescapeMountInfoPath(encoded: string): string {
+  return encoded.replace(/\\([0-7]{3})/g, (_m, oct: string) => String.fromCharCode(Number.parseInt(oct, 8)));
+}
+
+function readLinuxMountInfo(): string {
+  if (process.platform !== "linux") return "";
+  try {
+    return readFileSync("/proc/self/mountinfo", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 从 Linux /proc/self/mountinfo 解析出所有 WSL drvfs（Windows 盘）挂载点绝对路径。
+ * 常规 Linux（ext4/xfs/tmpfs 等）返回空数组，不误伤普通 /mnt 数据盘。
+ */
+export function parseWslDrvfsMounts(mountInfo: string): string[] {
+  if (!mountInfo) return [];
+  const mounts: string[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of mountInfo.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const sep = line.indexOf(" - ");
+    if (sep < 0) continue;
+    const leftFields = line.slice(0, sep).split(" ");
+    const rightFields = line.slice(sep + 3).split(" ");
+    const rawMountPoint = leftFields[4];
+    const fstype = rightFields[0] ?? "";
+    const mountSource = rightFields[1] ?? "";
+    const superOpts = rightFields[2] ?? "";
+    if (!rawMountPoint) continue;
+    const isDrvfs =
+      fstype === "drvfs" ||
+      mountSource === "drvfs" ||
+      /(?:^|,|;)aname=drvfs(?:$|,|;)/.test(superOpts);
+    if (!isDrvfs) continue;
+    const mountPoint = unescapeMountInfoPath(rawMountPoint);
+    if (!mountPoint.startsWith("/") || mountPoint === "/" || seen.has(mountPoint)) continue;
+    seen.add(mountPoint);
+    mounts.push(mountPoint);
+  }
+  return mounts;
+}
+
+/** 追加 WSL 遮蔽参数，返回被 tmpfs 遮蔽的目录（供后续 --bind 之后补遮嵌套在放行目录里的挂载）。 */
+function appendWslIsolationArgs(args: string[], options?: OsSandboxWrapOptions): string[] {
+  const real = options?.realpath ?? realpathOrSelf;
+  const exists = options?.exists ?? existsSync;
+  const rawMountInfo = options?.mountInfo ?? (options?.exists ? "" : readLinuxMountInfo());
+  const env = options?.env ?? process.env;
+
+  const seenMasked = new Set<string>();
+  const maskedDrvfs: string[] = [];
+  const maskDir = (dir: string, isDrvfs: boolean) => {
+    const target = real(dir);
+    if (seenMasked.has(target) || !exists(target)) return;
+    seenMasked.add(target);
+    args.push("--perms", "0700", "--tmpfs", target);
+    if (isDrvfs) maskedDrvfs.push(target);
+  };
+
+  for (const dir of WSL_ISOLATED_DIRS) maskDir(dir, false);
+  for (const mnt of parseWslDrvfsMounts(rawMountInfo)) maskDir(mnt, true);
+
+  for (const key of WSL_SANITIZED_ENV_VARS) {
+    if (env[key] !== undefined) {
+      args.push("--unsetenv", key);
+    }
+  }
+
+  if (maskedDrvfs.length > 0 && typeof env.PATH === "string") {
+    const segments = env.PATH.split(":");
+    const filtered = segments.filter(
+      (seg) => !maskedDrvfs.some((mnt) => seg === mnt || seg.startsWith(`${mnt}/`)),
+    );
+    if (filtered.length !== segments.length) {
+      args.push("--setenv", "PATH", filtered.join(":"));
+    }
+  }
+  return [...seenMasked];
+}
+
+/**
+ * bwrap 的 --bind / --ro-bind 递归带上源目录下的子挂载，会把前面 tmpfs 遮住的、嵌套在放行目录里的 WSL 通道或 drvfs 重新露出来。
+ * 所以在所有放行之后，对落在某个放行目录（严格子路径）里的遮蔽目录再遮一次；放行目录本身在遮蔽目录之下（如 /mnt/c/proj）时不受影响。
+ */
+function remaskNestedWslDirs(args: string[], masked: readonly string[], boundDirs: Iterable<string>): void {
+  const bound = [...boundDirs];
+  for (const dir of masked) {
+    if (bound.some((b) => dir.startsWith(b === "/" ? "/" : `${b}/`) && dir !== b)) {
+      args.push("--perms", "0700", "--tmpfs", dir);
+    }
+  }
+}
+
 /**
  * 普通 Worker 的 bubblewrap 参数（docs/linux-sandbox-design.md 第 4.2 节）：
  * 全盘读写绑定 + /dev 设备绑定 + /proc 隔离 + /run/user/<uid> 空 tmpfs，再把 dataDir 只读盖住，最后放行 writableDirs。
@@ -296,9 +415,13 @@ export function bwrapArgs(
     `/run/user/${uid}`,
   ];
 
+  const masked = appendWslIsolationArgs(args, options);
+
   const dataDir = real(scope.dataDir);
+  const bound: string[] = [];
   if (exists(dataDir)) {
     args.push("--ro-bind", dataDir, dataDir);
+    bound.push(dataDir);
   }
 
   const seenWritable = new Set<string>();
@@ -308,6 +431,7 @@ export function bwrapArgs(
     seenWritable.add(target);
     args.push("--bind", target, target);
   }
+  remaskNestedWslDirs(args, masked, [...bound, ...seenWritable]);
 
   args.push("--", base.command, ...ownSandboxOffArgs, ...base.args);
   return args;
@@ -347,6 +471,8 @@ export function readonlyBwrapArgs(
     `/run/user/${uid}`,
   ];
 
+  const masked = appendWslIsolationArgs(args, options);
+
   const seenBind = new Set<string>();
   for (const dir of [input.tmpDir, ...input.writableDirs]) {
     const target = real(dir);
@@ -354,6 +480,7 @@ export function readonlyBwrapArgs(
     seenBind.add(target);
     args.push("--bind", target, target);
   }
+  remaskNestedWslDirs(args, masked, seenBind);
 
   for (const file of expand(input.writableFileGlobs ?? [])) {
     const target = real(file);
