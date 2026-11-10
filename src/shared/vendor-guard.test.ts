@@ -6,7 +6,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS, AGY_CLI_HOME_REL, VENDOR_SPECS } from "./vendors.ts";
+import { AGY_CLI_HOME_REL } from "../vendors/agy/spec.ts";
+import { AGENT_VENDORS, VENDOR_SPECS } from "./vendors.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -50,12 +51,8 @@ const businessDaemonAndHubTs = [
     !path.startsWith("src/daemon/handover/"),
 );
 
-const srcNonPathDefTs = listFiles("src", isTs).filter(
-  (path) =>
-    !isExcludedTestOrFake(path) &&
-    path !== "src/shared/paths.ts" &&
-    path !== "src/shared/vendors.ts",
-);
+/** 厂商文件夹（src/vendors/<id>/）以外的源码：厂商专属的路径字面量只许写在各家文件夹里。 */
+const srcOutsideVendorDirsTs = listFiles("src", isTs).filter((path) => !isExcludedTestOrFake(path) && !path.startsWith("src/vendors/"));
 
 const promptTs = ["src/daemon/prompt.ts"];
 
@@ -111,8 +108,8 @@ const RULES: Rule[] = [
     expected: 0,
   },
   {
-    name: "AGY 数据目录字面量只许在路径定义处",
-    files: srcNonPathDefTs,
+    name: "AGY 数据目录字面量只许在 agy 的文件夹里",
+    files: srcOutsideVendorDirsTs,
     pattern: AGY_DATA_DIR_PATTERN,
     expected: 0,
   },
@@ -146,9 +143,11 @@ describe("厂商声明表统一：扫描守卫规则", () => {
     expect(businessDaemonAndHubTs).toContain("src/daemon/launch.ts");
     expect(businessDaemonAndHubTs).toContain("src/daemon/ledger/workers.ts");
     expect(businessDaemonAndHubTs).toContain("src/hub/cli.ts");
-    expect(srcNonPathDefTs.length).toBeGreaterThan(40);
-    expect(srcNonPathDefTs).toContain("src/daemon/driver/readonly-agy.ts");
-    expect(srcNonPathDefTs).toContain("src/daemon/handover/agy.ts");
+    expect(srcOutsideVendorDirsTs.length).toBeGreaterThan(40);
+    expect(srcOutsideVendorDirsTs).toContain("src/daemon/driver/readonly-agy.ts");
+    expect(srcOutsideVendorDirsTs).toContain("src/daemon/handover/agy.ts");
+    expect(srcOutsideVendorDirsTs).toContain("src/shared/paths.ts");
+    expect(srcOutsideVendorDirsTs).toContain("src/shared/vendors.ts");
   });
 
   it("规则正则能准确识别违例写法", () => {

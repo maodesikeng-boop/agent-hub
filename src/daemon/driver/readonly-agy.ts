@@ -7,11 +7,11 @@
 // 没有 OS 沙箱的机器上派只读 agy 直接报错（设计第 8 节第 5 条）：没有外层沙箱，命令行写文件挡不住。
 import { realpathSync } from "node:fs";
 import {
-  agyHomePaths,
   connectorToolAllowed,
   type ConnectorToolAnnotations,
   type ReadonlyPolicy,
 } from "../../shared/index.ts";
+import { agyHomePaths } from "../../shared/paths.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   type ReadonlySandboxInput,

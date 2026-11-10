@@ -5,19 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import { AGENT_VENDORS } from "./vendors.ts";
+import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "../vendors/agy/spec.ts";
 import {
-  AGY_CLI_HOME_REL,
-  AGY_LEGACY_HOME_REL,
-  AGY_MCP_CONFIG_REL,
   MAX_UNIX_SOCKET_PATH_BYTES,
   agyCliDataDir,
   agyDataPaths,
   agyHomePaths,
   assertSocketPathFits,
   VENDOR_FALLBACK_PATHS,
-  defaultAgyFallbackPaths,
-  defaultClaudeFallbackPaths,
-  defaultCodexFallbackPaths,
   linuxInstallDirs,
   personaFilePath,
   projectWorktreesDir,
@@ -32,7 +27,6 @@ import {
   workerSetupLogPath,
   workerWorktreePath,
 } from "./paths.ts";
-import * as sharedIndex from "./index.ts";
 
 // 原样转给真的 node:fs，只为数一数指纹算的时候碰了几次磁盘（existsSync / statSync）
 vi.mock("node:fs", async (importOriginal) => {
@@ -107,24 +101,17 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(() => assertSocketPathFits("/" + "a".repeat(MAX_UNIX_SOCKET_PATH_BYTES))).toThrow(/AGENT_HUB_HOME/);
   });
 
-  it("agyDataPaths / agyHomePaths：集中拼接 AGY 数据目录与主目录路径，并在 shared/index.ts 导出", () => {
+  it("agyDataPaths / agyHomePaths：AGY 数据目录与主目录路径只在 src/vendors/agy 拼，这里转出给守护进程", () => {
     expect(AGY_CLI_HOME_REL).toBe(".gemini/antigravity-cli");
     expect(AGY_LEGACY_HOME_REL).toBe(".gemini/antigravity");
     expect(AGY_MCP_CONFIG_REL).toBe(".gemini/config/mcp_config.json");
-    expect(sharedIndex.AGY_CLI_HOME_REL).toBe(AGY_CLI_HOME_REL);
-    expect(sharedIndex.AGY_LEGACY_HOME_REL).toBe(AGY_LEGACY_HOME_REL);
-    expect(sharedIndex.AGY_MCP_CONFIG_REL).toBe(AGY_MCP_CONFIG_REL);
 
     expect(agyCliDataDir("/Users/u")).toBe("/Users/u/.gemini/antigravity-cli");
-    expect(sharedIndex.agyCliDataDir("/Users/u")).toBe("/Users/u/.gemini/antigravity-cli");
-
-    const homePaths = agyHomePaths("/Users/u");
-    expect(homePaths).toEqual({
+    expect(agyHomePaths("/Users/u")).toEqual({
       cliDir: "/Users/u/.gemini/antigravity-cli",
       legacyDir: "/Users/u/.gemini/antigravity",
       mcpConfigFile: "/Users/u/.gemini/config/mcp_config.json",
     });
-    expect(sharedIndex.agyHomePaths("/Users/u")).toEqual(homePaths);
 
     const dataPaths = agyDataPaths("/Users/u/.gemini/antigravity-cli");
     expect(dataPaths.root).toBe("/Users/u/.gemini/antigravity-cli");
@@ -133,13 +120,6 @@ describe("paths：可执行文件与数据目录解析", () => {
     expect(dataPaths.mcpCacheDir).toBe("/Users/u/.gemini/antigravity-cli/mcp");
     expect(dataPaths.summaryDb).toBe("/Users/u/.gemini/antigravity-cli/conversation_summaries.db");
     expect(dataPaths.subDir("presence")).toBe("/Users/u/.gemini/antigravity-cli/presence");
-
-    const indexDataPaths = sharedIndex.agyDataPaths("/Users/u/.gemini/antigravity-cli");
-    expect(indexDataPaths.conversationDb("conv-1")).toBe(dataPaths.conversationDb("conv-1"));
-    expect(indexDataPaths.brainDir("conv-1")).toBe(dataPaths.brainDir("conv-1"));
-    expect(indexDataPaths.mcpCacheDir).toBe(dataPaths.mcpCacheDir);
-    expect(indexDataPaths.summaryDb).toBe(dataPaths.summaryDb);
-    expect(indexDataPaths.subDir("presence")).toBe(dataPaths.subDir("presence"));
   });
 
   it("Linux：每家厂商都在官方安装目录里找（~/.local/bin 排第一），ChatGPT.app 那条不出现", () => {
@@ -152,7 +132,7 @@ describe("paths：可执行文件与数据目录解析", () => {
       for (const dir of linuxInstallDirs("/home/u")) expect(found).toContain(`${dir}/${vendor}`);
       expect(found.some((p) => p.includes(".app/"))).toBe(false);
     }
-    expect(defaultCodexFallbackPaths("/home/u", "linux").at(-1)).toBe("/home/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex");
+    expect(VENDOR_FALLBACK_PATHS.codex("/home/u", "linux").at(-1)).toBe("/home/u/.codex/plugins/.plugin-appserver/codex-cli/bin/codex");
   });
 
   it("findExecutable：找到返回路径（PATH 命中是命令名，候选路径命中是那个绝对路径），找不到返回 null；显式路径看文件在不在", () => {
@@ -201,9 +181,9 @@ describe("paths：可执行文件与数据目录解析", () => {
       // 都不存在，保持原样
       expect(resolveExecutable("codex", pathDir, [fallback1])).toBe("codex");
 
-      expect(defaultAgyFallbackPaths("/Users/u", "darwin")).toEqual(["/Users/u/.local/bin/agy"]);
-      expect(defaultClaudeFallbackPaths("/Users/u", "darwin")).toEqual([]);
-      expect(defaultCodexFallbackPaths("/Users/u", "darwin")).toEqual([
+      expect(VENDOR_FALLBACK_PATHS.agy("/Users/u", "darwin")).toEqual(["/Users/u/.local/bin/agy"]);
+      expect(VENDOR_FALLBACK_PATHS.claude("/Users/u", "darwin")).toEqual([]);
+      expect(VENDOR_FALLBACK_PATHS.codex("/Users/u", "darwin")).toEqual([
         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         // ChatGPT 装在用户目录的 ~/Applications 里也要找得到，不然判成没装
         "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",

@@ -1,12 +1,13 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
-import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, AGENT_VENDORS, VENDOR_HOME_PATHS, type AgentVendor } from "./vendors.ts";
+import { AGENT_VENDORS, VENDOR_HOME_PATHS, vendorSpec, type AgentVendor } from "./vendors.ts";
 
-export { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL };
+// 厂商专属路径在各家文件夹（docs/vendor-plugin-design.md 的 A7）；守护进程的调用方还从这里引，P3 搬家时改成直接引各家的
+export { agyCliDataDir, agyDataPaths, agyHomePaths } from "../vendors/agy/paths.ts";
+export { codexHomeDir } from "../vendors/codex/paths.ts";
 
 export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
@@ -205,36 +206,17 @@ export function linuxInstallDirs(userHome: string): string[] {
   return [join(userHome, ".local", "bin"), join(userHome, ".npm-global", "bin"), "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
 }
 
-/** 本机 `claude` 的候选安装路径（当 `PATH` 里找不到时回退）：只有不是 macOS 才有（macOS 上沿用原来的行为：只认 `PATH`）。 */
-export function defaultClaudeFallbackPaths(userHome: string, platform: string = process.platform): string[] {
-  return platform === "darwin" ? [] : linuxInstallDirs(userHome).map((dir) => join(dir, "claude"));
-}
-
-/** 本机 `agy` 的默认候选安装路径（当 `PATH` 里找不到 `agy` 时回退）。 */
-export function defaultAgyFallbackPaths(userHome: string, platform: string = process.platform): string[] {
-  const home = join(userHome, ".local", "bin", "agy");
-  return platform === "darwin" ? [home] : [home, ...linuxInstallDirs(userHome).map((dir) => join(dir, "agy"))];
-}
-
-/** ChatGPT.app 里带的 codex（相对 Applications 目录）：装在 /Applications 或用户目录的 ~/Applications 都要找。 */
-const CHATGPT_APP_CODEX = "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
-
-/** 本机 `codex` 的默认候选安装路径（当 `PATH` 里找不到 `codex` 时回退）：macOS 先看 ChatGPT.app 里带的（/Applications、~/Applications），别的系统看 linuxInstallDirs。 */
-export function defaultCodexFallbackPaths(userHome: string, platform: string = process.platform): string[] {
-  const plugin = join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex");
-  if (platform === "darwin") return [join("/Applications", CHATGPT_APP_CODEX), join(userHome, "Applications", CHATGPT_APP_CODEX), plugin];
-  return [...linuxInstallDirs(userHome).map((dir) => join(dir, "codex")), plugin];
-}
-
 /**
- * 每家厂商的兜底安装路径。写成 Record<AgentVendor, …>：vendors.ts 加了厂商这里不补就过不了 typecheck，
- * 不会有哪家在 Linux 上忘了写查找位置（daemon.ts 按家调用，paths.test.ts 逐家核对）。
+ * 每家厂商的兜底安装路径（spec 的 cli.fallbackPaths；没写的只认 PATH），以 AGENT_VENDORS 为键。
+ * daemon.ts 按家调用，paths.test.ts 逐家核对。
  */
-export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = {
-  claude: defaultClaudeFallbackPaths,
-  agy: defaultAgyFallbackPaths,
-  codex: defaultCodexFallbackPaths,
-};
+export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = Object.fromEntries(
+  AGENT_VENDORS.map((vendor) => [
+    vendor,
+    (userHome: string, platform: string = process.platform) =>
+      vendorSpec(vendor).cli.fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join }) ?? [],
+  ]),
+) as Record<AgentVendor, (userHome: string, platform?: string) => string[]>;
 
 export interface VendorExecutable {
   cmd: string;
@@ -257,25 +239,13 @@ export function resolveVendorExecutables(
   ) as Record<AgentVendor, VendorExecutable>;
 }
 
-/** codex 实际用的配置根目录：`CODEX_HOME`（去掉首尾空白后非空）优先，否则 `<主目录>/.codex`。认证判断、模型目录指纹都用它，保证看的是同一处。 */
-export function codexHomeDir(env: Record<string, string | undefined>, userHome: string): string {
-  return env.CODEX_HOME?.trim() || join(userHome, ".codex");
-}
-
 /**
- * 配置根目录能被环境变量改位置的厂商（codex 的 CODEX_HOME）：catalogWatchPaths 里以默认相对目录 `rel` 开头的路径，
- * 换到 `dir` 给出的实际目录下。别的厂商、别的路径照旧拼在用户主目录下。
+ * 某家厂商要盯的本地配置/凭据/模型缓存文件的绝对路径（VENDOR_HOME_PATHS 的 catalogWatchPaths）。配置根目录能被环境变量改位置的
+ * （spec 的 home.configHome，如 codex 的 CODEX_HOME：去掉首尾空白后非空才算），以 rel 开头的路径换到那个目录下；别的照旧拼在用户主目录下。
  */
-const VENDOR_CONFIG_HOME: Partial<
-  Record<AgentVendor, { rel: string; dir: (env: Record<string, string | undefined>, userHome: string) => string }>
-> = {
-  codex: { rel: ".codex", dir: codexHomeDir },
-};
-
-/** 某家厂商要盯的本地配置/凭据/模型缓存文件的绝对路径（VENDOR_HOME_PATHS 的 catalogWatchPaths，按 VENDOR_CONFIG_HOME 换实际目录）。 */
 export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string[] {
-  const override = VENDOR_CONFIG_HOME[vendor];
-  const base = override?.dir(env, userHome);
+  const override = vendorSpec(vendor).home.configHome;
+  const base = override === undefined ? undefined : env[override.env]?.trim() || join(userHome, override.rel);
   return VENDOR_HOME_PATHS[vendor].catalogWatchPaths.map((rel) =>
     override && base && rel.startsWith(`${override.rel}/`) ? join(base, rel.slice(override.rel.length + 1)) : join(userHome, rel),
   );
@@ -327,32 +297,6 @@ export function vendorCatalogFingerprint(
   const exe = executableSignature(cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
   const files = vendorCatalogWatchFiles(vendor, userHome, env).map((file) => statSignature(file) ?? `${file}:missing`);
   return [exe, ...files].join("|");
-}
-
-/** agy CLI 的数据根目录（~/.gemini/antigravity-cli）。 */
-export function agyCliDataDir(userHome: string = homedir()): string {
-  return join(userHome, AGY_CLI_HOME_REL);
-}
-
-/** agy 数据目录下的各子路径。 */
-export function agyDataPaths(root: string = agyCliDataDir()) {
-  return {
-    root,
-    conversationDb: (id: string) => join(root, "conversations", `${id}.db`),
-    brainDir: (id: string) => join(root, "brain", id),
-    mcpCacheDir: join(root, "mcp"),
-    summaryDb: join(root, "conversation_summaries.db"),
-    subDir: (sub: string) => join(root, sub),
-  };
-}
-
-/** agy 在用户主目录下的专属路径。 */
-export function agyHomePaths(userHome: string = homedir()) {
-  return {
-    cliDir: agyCliDataDir(userHome),
-    legacyDir: join(userHome, AGY_LEGACY_HOME_REL),
-    mcpConfigFile: join(userHome, AGY_MCP_CONFIG_REL),
-  };
 }
 
 /** 项目经理的性格设定文件。 */

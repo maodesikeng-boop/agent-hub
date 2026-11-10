@@ -8,7 +8,6 @@ import {
   notFoundCode,
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
-  READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
   VENDOR_FAILURE_SIGNS,
   VENDOR_HOME_PATHS,
   VENDOR_SPECS,
@@ -24,7 +23,6 @@ import {
   modelChoiceOf,
   modelLabel,
   modelShortLabel,
-  readonlyNeedsSandboxMessage,
   vendorFailureOf,
   type ModelCatalog,
   type VendorSpec,
@@ -127,7 +125,7 @@ describe("厂商清单", () => {
     for (const v of ["gemini", "", "Claude", null, 1]) expect(isAgentVendor(v)).toBe(false);
   });
 
-  it("handoverTokenThresholdOf 与 readonlyNeedsSandboxMessage 按声明表返回", () => {
+  it("handoverTokenThresholdOf 按声明表返回", () => {
     expect(HANDOVER_TOKEN_THRESHOLD).toBe(200_000);
     expect(AUTO_RENEW_CONTEXT_TOKENS).toBe(HANDOVER_TOKEN_THRESHOLD);
     for (const v of AGENT_VENDORS) expect(handoverTokenThresholdOf(v)).toBe(HANDOVER_TOKEN_THRESHOLD);
@@ -137,15 +135,9 @@ describe("厂商清单", () => {
     specs.acme = { ...VENDOR_SPECS.agy, cliCommand: "acme", handoverTokenThreshold: 120_000 };
     try {
       expect(handoverTokenThresholdOf("acme")).toBe(120_000);
-      expect(readonlyNeedsSandboxMessage("acme" as "agy")).toContain("只读的 acme Worker 需要 OS 沙箱");
     } finally {
       delete specs.acme;
     }
-
-    expect(readonlyNeedsSandboxMessage("agy")).toBe(READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
-    expect(READONLY_AGY_NEEDS_SANDBOX_MESSAGE).toBe(
-      "只读的 agy Worker 需要 OS 沙箱（目前只有 macOS 有）：agy 没有自带的只读命令行，没有外层沙箱它的命令行写文件挡不住。这台机器上请改用 claude 或 codex 的只读 Worker。",
-    );
   });
 });
 
