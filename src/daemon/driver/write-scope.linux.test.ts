@@ -245,7 +245,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
         const exitPromise = new Promise<void>((resolve) => child.once("exit", () => resolve()));
         signalChild(child, "SIGINT", "linux");
         await exitPromise;
-        termGroupAfterExit(child, "linux");
+        termGroupAfterExit(child);
       } else {
         await forceKill(child);
       }
