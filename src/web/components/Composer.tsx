@@ -1,8 +1,9 @@
 import { ArrowUp, CircleAlert, FileText, Info, Paperclip, Square, X } from "lucide-react";
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
-import { MAX_MESSAGE_BYTES } from "../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
+import { WORKER_COMMAND } from "../composer-trigger.ts";
 import { fitsBetweenButtons, isWrapped } from "../composer-layout.ts";
 import { byteLength, errorLine, errorTitle } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -10,6 +11,7 @@ import { formatBytes, readDropped, useNoticeAutoHide, type ComposerNotice, type 
 import { Button } from "../ui/button.tsx";
 import type { StopControl } from "../useStop.ts";
 import { ComposerMenu, optionId } from "./ComposerMenu.tsx";
+import { useWorkerPickLabels, WorkerPickParts } from "./WorkerPickTag.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
@@ -45,6 +47,35 @@ function StopButton({ stop }: { stop: StopControl }) {
 /** 待发文件、提示条右边的小 ×。 */
 const CHIP_CLOSE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50";
+
+/** 点了不抢输入框的焦点（手机上软键盘不收起），和弹出列表的行一样；点击照常靠 onClick。 */
+const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
+
+/**
+ * /hub:worker 选完的标签（docs/ui-standard.md 第 18 条）：排在待发文件那一排最前面，样子照文件标签；
+ * 点标签本身重新选（onEdit），× 去掉（onRemove）。
+ */
+function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
+  const labels = useWorkerPickLabels(pick);
+  return (
+    <li className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
+      <button
+        type="button"
+        aria-label={`Worker model: ${labels.join(" ")}`}
+        disabled={disabled}
+        className="touch-target flex min-w-0 cursor-pointer items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
+        onPointerDown={keepFocus}
+        onMouseDown={keepFocus}
+        onClick={onEdit}
+      >
+        <WorkerPickParts labels={labels} />
+      </button>
+      <button type="button" aria-label="Remove" disabled={disabled} className={CHIP_CLOSE_CLASS} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={onRemove}>
+        <X className="size-3.5" aria-hidden="true" />
+      </button>
+    </li>
+  );
+}
 
 /**
  * 输入框上方的提示条：浅灰底、没有描边，左边一个小图标，右边 ×。加文件被拒的是灰字；发送失败的图标是红色、字是前景色。
@@ -86,6 +117,8 @@ export function Composer({
   value,
   placeholder: placeholderProp,
   staging,
+  workerPick = null,
+  onWorkerPick,
   stop: stopProp,
   source,
   onChange,
@@ -97,6 +130,10 @@ export function Composer({
   value: string;
   placeholder: string;
   staging: StagedFiles;
+  /** /hub:worker 选好的（标签显示它）；和文字一样由调用者按对话存（upload.ts 的 DraftSlot.pick）。 */
+  workerPick?: WorkerPick | null;
+  /** 选完、重选、点 × 时调；不给就不变标签，完整命令留在文字里。 */
+  onWorkerPick?: (pick: WorkerPick | null) => void;
   /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
@@ -134,7 +171,7 @@ export function Composer({
 
   // 单行 / 多行布局：文字超过一行（换行符或自动换行）、或有待发文件时是多行；由下面调高度的 useLayoutEffect 量出来，只在布尔值变化时才多渲染一次
   const [wrapped, setWrapped] = useState(false);
-  const multiline = wrapped || files.length > 0;
+  const multiline = wrapped || files.length > 0 || workerPick !== null;
   const layoutWas = useRef(multiline);
   const settledValue = useRef<string | null>(null);
   const attachRef = useRef<HTMLButtonElement>(null);
@@ -143,6 +180,8 @@ export function Composer({
   // “/”“@” 弹出列表：光标位置要自己记（打字、点、方向键都会动它）；选中后文字换掉，光标放到空格后
   const [cursor, setCursor] = useState(0);
   const pendingCursor = useRef<number | null>(null);
+  /** 点标签重选前光标在哪（原有文字里的位置）：选完回到这里。 */
+  const repickCaret = useRef<number | null>(null);
   const menuId = useId();
   const suggest = useComposerSuggest({
     source,
@@ -154,7 +193,37 @@ export function Composer({
       setCursor(at);
       onChange(text);
     },
+    // 最后一级选完：整段命令从文字里拿掉，换成标签（替换旧的）；光标回到原位（点标签重选前的位置，打字选的是命令原来的开头）
+    onPick:
+      onWorkerPick &&
+      ((pick, rest) => {
+        const at = Math.min(repickCaret.current ?? 0, rest.length);
+        repickCaret.current = null;
+        onWorkerPick(pick);
+        pendingCursor.current = at;
+        setCursor(at);
+        onChange(rest);
+      }),
   });
+
+  /** 点标签：在开头插入 /hub:worker 重新走一遍（原有文字另起一行接在后面，不被当成正在选的那一级），列表从厂商开始。 */
+  const repick = () => {
+    const el = ref.current;
+    const head = `/${WORKER_COMMAND} `;
+    const cmdPrefix = `/${WORKER_COMMAND}`;
+    if (value === cmdPrefix || value.startsWith(head) || value.startsWith(`${cmdPrefix}\n`)) {
+      const nl = value.indexOf("\n");
+      const rest = nl < 0 ? "" : value.slice(nl + 1);
+      onChange(rest === "" ? head : `${head}\n${rest}`);
+    } else {
+      repickCaret.current = el?.selectionStart ?? value.length;
+      onChange(value === "" ? head : `${head}\n${value}`);
+    }
+    suggest.reopen();
+    pendingCursor.current = head.length;
+    setCursor(head.length);
+    el?.focus({ preventScroll: true });
+  };
 
   useEffect(() => {
     if (autoFocus && !disabled && pointerMatches(POINTER_FINE, true)) ref.current?.focus({ preventScroll: true });
@@ -213,8 +282,19 @@ export function Composer({
     <>
       {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
-        {files.length > 0 && (
+        {(files.length > 0 || workerPick !== null) && (
           <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
+            {workerPick !== null && onWorkerPick && (
+              <WorkerPickChip
+                pick={workerPick}
+                disabled={busy || disabled}
+                onEdit={repick}
+                onRemove={() => {
+                  repickCaret.current = null;
+                  onWorkerPick(null);
+                }}
+              />
+            )}
             {files.map(({ key, file }) => (
               <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
                 <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -267,6 +347,7 @@ export function Composer({
             aria-controls={suggest.menu ? menuId : undefined}
             aria-activedescendant={suggest.menu && suggest.menu.items.length > 0 && suggest.menu.activeIndex >= 0 ? optionId(menuId, suggest.menu.activeIndex) : undefined}
             onChange={(e) => {
+              if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
               setCursor(e.target.selectionStart);
               onChange(e.target.value);
               if (notice !== null) staging.dismissNotice(); // 开始打字就不再挂着旧提示
@@ -315,5 +396,6 @@ export const DraftComposer = memo(function DraftComposer({
   ...rest
 }: Omit<ComponentProps<typeof Composer>, "value" | "onChange"> & { draft: DraftSlot }) {
   const value = useStore(draft.store);
-  return <Composer value={value} onChange={draft.set} {...rest} />;
+  const workerPick = useStore(draft.pick);
+  return <Composer value={value} onChange={draft.set} workerPick={workerPick} onWorkerPick={draft.setPick} {...rest} />;
 });

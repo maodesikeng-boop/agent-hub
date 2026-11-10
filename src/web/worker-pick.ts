@@ -2,7 +2,18 @@
 // 已选的几级和正在打的词，算出列表的行。不读 VENDOR_SPECS、不写任何厂商名或模型名：名单里有什么就列什么。
 // 规则：没装的厂商不列，没登录的列出来但不能选（和资料页一样）；模型只列名单里的，第一行 Default；
 // 思考程度只列这个模型支持的（effortsFor），第一行 Default，只有一档或没有档位就没有这一级。
-import { AVAILABILITY_LABELS, effortsFor, isListed, isSelectable, WORKER_PICK_CACHE_MAX, type ModelCatalog } from "../shared/index.ts";
+import {
+  AVAILABILITY_LABELS,
+  effortsFor,
+  isAgentVendor,
+  isListed,
+  isSelectable,
+  modelLabel,
+  vendorLabel,
+  WORKER_PICK_CACHE_MAX,
+  type ModelCatalog,
+  type WorkerPick,
+} from "../shared/index.ts";
 import type { MenuItem } from "./composer-suggest.ts";
 import { rankMatches, WORKER_ARG_LEVELS } from "./composer-trigger.ts";
 import { DEFAULT_CHOICE, defaultModelText } from "./format.ts";
@@ -89,4 +100,25 @@ export function workerPickRows(catalogs: readonly ModelCatalog[], args: readonly
   const rows = compute(catalogs, args, query);
   byInput.set(key, rows);
   return rows;
+}
+
+/** 选好的几级参数（文字里的 id，Default 是 "default"）换成发消息用的 WorkerPick；第一级不是认识的厂商返回 null。 */
+export function workerPickFromArgs(args: readonly string[]): WorkerPick | null {
+  const [vendor, model, effort] = args;
+  if (!isAgentVendor(vendor)) return null;
+  const pick = (value: string | undefined) => (value === undefined || value === WORKER_PICK_DEFAULT ? null : value);
+  return { vendor, model: pick(model), effort: pick(effort) };
+}
+
+/**
+ * 标签上显示的几项：厂商名、模型名（名单里的显示名，不在名单里的原样）、思考程度（原样，和列表一样）；Default（null）的项不显示。
+ * 名字取 catalogs（和列表同一份名单），这家不在名单里用打包的名字。
+ */
+export function workerPickLabels(pick: WorkerPick, catalogs: readonly ModelCatalog[]): string[] {
+  const catalog = catalogs.find((c) => c.vendor === pick.vendor);
+  return [
+    catalog?.label ?? vendorLabel(pick.vendor),
+    ...(pick.model === null ? [] : [catalog ? modelLabel(pick.vendor, pick.model, catalog) : pick.model]),
+    ...(pick.effort === null ? [] : [pick.effort]),
+  ];
 }

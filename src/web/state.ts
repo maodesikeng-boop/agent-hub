@@ -20,6 +20,7 @@ import {
   type SessionState,
   type StateSnapshot,
   type TunnelStatus,
+  type WorkerPick,
 } from "../shared/index.ts";
 import type { ErrorInfo } from "./format.ts";
 import type { ConnectionStatus } from "./connection.ts";
@@ -31,6 +32,8 @@ export interface PendingMessage {
   text: string;
   /** 已经传上去的文件（上传接口的响应）；没有文件是空数组。 */
   attachments: Attachment[];
+  /** 输入框 /hub:worker 选的（项目经理对话）；没选不写。重发带同一个。 */
+  workerPick?: WorkerPick;
   /** sending：POST 在路上或已成功等服务端推回；failed：POST 失败，可以重试。 */
   phase: "sending" | "failed";
   /**
