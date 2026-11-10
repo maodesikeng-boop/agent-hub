@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { API_PATHS, DEVICE_OFFLINE_REASON, DEVICE_OFFLINE_WS_CLOSE_CODE, PEER_DEVICE_HEADER, type WsServerMessage } from "../../shared/index.ts";
+import { API_PATHS, DEVICE_OFFLINE_REASON, DEVICE_OFFLINE_WS_CLOSE_CODE, PEER_DEVICE_HEADER, WS_HEARTBEAT_TEXT, type WsServerMessage } from "../../shared/index.ts";
 import { acceptsGzip, splitProxyUrl } from "./proxy.ts";
 import type { PeerRecord } from "./store.ts";
 import { pair, settle, sleep, startTestDevice, type TestDevice } from "./test-helpers.ts";
@@ -368,6 +368,47 @@ describe("WebSocket 转发", () => {
     await ws.opened;
     expect(await ws.closed).toEqual({ code: DEVICE_OFFLINE_WS_CLOSE_CODE, reason: DEVICE_OFFLINE_REASON });
     for (const client of wss.clients) client.terminate();
+  });
+
+  /** 假上游：握手成功；连上时 onConnection 决定发什么。 */
+  async function silentUpstream(onConnection: (socket: WebSocket) => void = () => {}) {
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((resolve) => wss.once("listening", resolve));
+    wss.on("connection", onConnection);
+    cleanups.push(() => new Promise<void>((resolve) => {
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => resolve());
+    }));
+    return record(`http://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+  }
+
+  it("入口自己给浏览器那条发心跳：对方什么都不发（老版本、没变化）也一样", async () => {
+    const peer = await silentUpstream();
+    const a = await entryWith(peer, { serverOptions: { peerProxy: { heartbeatMs: 40 } } });
+    const frames: string[] = [];
+    const ws = open(a, `/d/${peer.id}${API_PATHS.ws}`);
+    ws.socket.on("message", (data) => frames.push(String(data)));
+    await ws.opened;
+    await expect.poll(() => frames.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(frames)).toEqual(new Set([WS_HEARTBEAT_TEXT]));
+    ws.socket.close();
+  });
+
+  it("对方发来的心跳不转（一跳一份），别的照转", async () => {
+    const change = { seq: 1, type: "health.updated", data: { health: { key: "x", problem: null } } };
+    const peer = await silentUpstream((socket) => {
+      socket.send(WS_HEARTBEAT_TEXT);
+      socket.send(JSON.stringify(change));
+    });
+    const a = await entryWith(peer, { serverOptions: { peerProxy: { heartbeatMs: 60_000 } } });
+    const frames: string[] = [];
+    const ws = open(a, `/d/${peer.id}${API_PATHS.ws}`);
+    ws.socket.on("message", (data) => frames.push(String(data)));
+    await ws.opened;
+    await expect.poll(() => frames.length).toBe(1);
+    await sleep(50);
+    expect(frames).toEqual([JSON.stringify(change)]);
+    ws.socket.close();
   });
 
   it("握手 Origin 不同源：403（防跨站劫持 WebSocket）；未知设备 404 不升级", async () => {
