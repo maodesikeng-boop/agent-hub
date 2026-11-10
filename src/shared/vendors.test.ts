@@ -26,10 +26,12 @@ import {
   type ModelCatalog,
 } from "./vendors.ts";
 import { AUTO_RENEW_CONTEXT_TOKENS, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
+import { VENDOR_LIST } from "../vendors/registry.ts";
 
 describe("厂商清单", () => {
-  it("支持 claude、agy、codex 三家厂商，默认 claude", () => {
-    expect(AGENT_VENDORS).toEqual(["claude", "agy", "codex"]);
+  it("按 registry 导出厂商清单（含 claude、agy、codex、pi），默认 claude", () => {
+    expect(AGENT_VENDORS).toEqual(VENDOR_LIST.map((s) => s.id));
+    expect(AGENT_VENDORS).toContain("pi");
     expect(DEFAULT_AGENT_VENDOR).toBe("claude");
 
     const claude = vendorSpec("claude");
@@ -193,7 +195,7 @@ describe("取值校验", () => {
     expect(checkAgentSetting({ vendor: "codex", model: "gpt-6-luna", effort: "max" })).toBeNull();
     expect(checkAgentSetting({ vendor: "codex", model: "gpt-5.4", effort: "hyper" })).toBe("思考程度只能是 low、medium、high、xhigh、max、ultra");
     expect(checkAgentSetting({ vendor: "claude", model: "claude-opus-4-6", effort: "ultra" }, catalog)).toBeNull();
-    expect(checkAgentSetting({ vendor: "unknown", model: null, effort: null })).toBe("厂商只能是 claude、agy、codex");
+    expect(checkAgentSetting({ vendor: "unknown", model: null, effort: null })).toBe(`厂商只能是 ${AGENT_VENDORS.join("、")}`);
     expect(checkAgentSetting({ vendor: "claude", model: "a b", effort: null })).toMatch(/模型/);
     expect(checkAgentSetting({ vendor: "claude", model: null, effort: "huge" })).toMatch(/思考程度/);
   });

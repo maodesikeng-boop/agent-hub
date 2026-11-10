@@ -93,6 +93,7 @@ const COMMAND_TOOLS: Record<AgentVendor, (command: string) => { name: string; in
   claude: (command) => ({ name: "Bash", input: { command, description: "x" } }),
   codex: (command) => ({ name: "commandExecution", input: { command } }),
   agy: (command) => ({ name: "run_command", input: { CommandLine: command } }),
+  pi: (command) => ({ name: "bash", input: { command } }),
 };
 
 let seq = 0;
@@ -519,7 +520,7 @@ describe("留多少：只留最近的若干条", () => {
 });
 
 /** 各家的“读文件”“搜索”“改文件”“上网”工具（驱动层原样交给账本的 name、input）。 */
-const OTHER_TOOLS: Record<AgentVendor, Record<"read" | "search" | "edit" | "web", (arg: string) => { name: string; input: unknown }>> = {
+const OTHER_TOOLS: Partial<Record<AgentVendor, Record<"read" | "search" | "edit" | "web", (arg: string) => { name: string; input: unknown }>>> = {
   claude: {
     read: (p) => ({ name: "Read", input: { file_path: p } }),
     search: (q) => ({ name: "Grep", input: { pattern: q } }),
@@ -550,7 +551,7 @@ const stats = (workerId: WorkerId) => ledger.hubCall(lin.sessionId, "worker.log"
 describe.each(Object.keys(OTHER_TOOLS) as AgentVendor[])("%s 的 hub worker log --stats", (vendor) => {
   it("各类别计数、读得最多的文件、重复最多的命令、思考和等工具的用时、轮的结局", () => {
     const w = startWorker(vendor);
-    const t = OTHER_TOOLS[vendor];
+    const t = OTHER_TOOLS[vendor]!;
     startTurn(w);
     emit(w, { type: "agent.thinking", uuid: "t1", ...at() });
     advance(4_000);

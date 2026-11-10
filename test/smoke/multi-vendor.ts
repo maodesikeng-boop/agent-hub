@@ -159,8 +159,48 @@ try {
     return `sessionId=${row.id}，threadId=${row.vendor_session_id}，工具 ${tools.length} 次，回复：“${combinedReply.trim().slice(0, 80)}”`;
   });
   if (!codexOk) keepDir = true;
+
+  // 场景 3：真 pi 项目经理
+  const piOk = await scenario(outcomes, "MV3 真 pi 项目经理：RPC 握手、跑 hub status 并回复落库", async () => {
+    const piModel = process.env.AGENT_HUB_PI_MODEL || "deepseek/deepseek-flash";
+    const created = await client.createPm({
+      name: "小派",
+      mode: "hands_on",
+      vendor: "pi",
+      defaultModel: piModel,
+      effort: "low",
+      persona: "你是小派，回复极简。",
+    });
+    const chatId = created.conversationId;
+    const stateBefore = await client.state();
+    const sessionBefore = stateBefore.sessions.find((s) => s.conversationId === chatId);
+    expect(sessionBefore !== undefined, "找不到 pi PM 的会话");
+
+    const prompt = `请在 shell 中运行 \`${HUB_COMMAND} status\`，然后只用一句话回复你在输出里看到的项目经理名字（必须包含“小派”）。`;
+    const msgId = await client.post(chatId, prompt);
+    await waitForStatus(client, msgId, "replied", TURN_TIMEOUT_MS);
+
+    const stateAfter = await client.state();
+    const msgs = messagesOf(stateAfter, chatId);
+    const tools = msgs.filter((m) => m.id > msgId && m.sender === "agent" && m.kind === "tool");
+    const replies = agentTexts(stateAfter, chatId);
+    const combinedReply = replies.join("\n");
+
+    const row = readSessionRow(daemon.paths.dbFile, sessionBefore.sessionId);
+    if (row.pid !== null) trackedPids.add(row.pid);
+    if (row.vendor_session_id) trackedVendorIds.add(row.vendor_session_id);
+
+    expect(row.vendor === "pi", `vendor 应为 pi，实际为 ${row.vendor}`);
+    expect(row.vendor_session_id.trim() !== "", "vendor_session_id 为空");
+    expect(row.has_completed_turn === 1, `has_completed_turn 应为 1，实际为 ${row.has_completed_turn}`);
+    expect(tools.length > 0, "未记录到 pi 的工具调用");
+    expect(combinedReply.includes("小派"), `回复中未包含“小派”：${combinedReply}`);
+
+    return `sessionId=${row.id}，vendorSessionId=${row.vendor_session_id}，工具 ${tools.length} 次，回复：“${combinedReply.trim().slice(0, 80)}”`;
+  });
+  if (!piOk) keepDir = true;
 } finally {
-  const stopOk = await scenario(outcomes, "MV3 干净关机：daemon.stop() 无残留进程", async () => {
+  const stopOk = await scenario(outcomes, "MV4 干净关机：daemon.stop() 无残留进程", async () => {
     await daemon.stop();
     const alivePids = [...trackedPids].filter(isAlive);
     const lines = psLines();

@@ -34,7 +34,7 @@ describe("FORKERS：每家厂商一份办法清单", () => {
 describe("findForker：按 fork_ref 里记的 id 找回当初复制的那个办法（重启后清理用）", () => {
   it("找得到返回它；厂商不认识、id 不在清单里返回 null", () => {
     const a = fake("claude-native");
-    const registry: ForkerRegistry = { claude: [a], codex: [], agy: [] };
+    const registry = { ...(Object.fromEntries(AGENT_VENDORS.map((v) => [v, []])) as unknown as ForkerRegistry), claude: [a] };
     expect(findForker(registry, "claude", "claude-native")).toBe(a);
     expect(findForker(registry, "claude", "gone")).toBeNull();
     expect(findForker(registry, "codex", "claude-native")).toBeNull();
