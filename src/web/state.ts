@@ -1,8 +1,10 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
 // 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
+  isWorkerEndLine,
   serverInfoFor,
   userMessageDedupeKey,
+  workerEventOf,
   type Attachment,
   type Change,
   type ConversationId,
@@ -155,6 +157,24 @@ function dropRetryIfSettled(retry: HubState["retry"], message: Message): HubStat
   return rest;
 }
 
+/** 实时来的项目经理 Worker 行同步更新对应 Worker 对话的 workerLine 摘要，防止项目经理对话超出 MAX_LIVE_MESSAGES 截断后退回旧摘要。 */
+function advanceWorkerLine(
+  conversations: Record<ConversationId, ConversationView>,
+  message: Message,
+): Record<ConversationId, ConversationView> {
+  const line = workerEventOf(message);
+  if (line === null) return conversations;
+  const target = conversations[line.workerConversationId];
+  if (!target) return conversations;
+  const prev = target.workerLine;
+  const endedAt = isWorkerEndLine(line) ? Math.max(prev?.endedAt ?? 0, message.createdAt) : (prev?.endedAt ?? null);
+  const workerLine =
+    prev === undefined || message.id >= prev.messageId
+      ? { messageId: message.id, at: message.createdAt, line, endedAt }
+      : { ...prev, endedAt };
+  return { ...conversations, [line.workerConversationId]: { ...target, workerLine } };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -179,7 +199,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       }
       // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
-        return { ...next, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+        const conversations = advanceWorkerLine(state.conversations, message);
+        return { ...next, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
       }
       const updated = upsertMessage(view.messages, message);
       const trim =
@@ -187,12 +208,16 @@ export function applyChange(state: HubState, change: Change): HubState {
         state.older[message.conversationId] !== "loading" &&
         updated.length > MAX_LIVE_MESSAGES;
       const messages = trim ? updated.slice(-MAX_LIVE_MESSAGES) : updated;
-      return {
-        ...next,
-        conversations: {
+      const conversations = advanceWorkerLine(
+        {
           ...state.conversations,
           [message.conversationId]: { ...view, messages, hasMore: view.hasMore || trim },
         },
+        message,
+      );
+      return {
+        ...next,
+        conversations,
         pending: dropConfirmed(state.pending, [message]),
         retry: dropRetryIfSettled(state.retry, message),
       };

@@ -50,7 +50,8 @@ const mustKeep = (m: Message) => isUnansweredAsk(m) || isInFlight(m);
 export function snapshotWindowStart(messages: readonly Message[]): number {
   let start = Math.max(0, messages.length - SNAPSHOT_RECENT_MESSAGES);
   if (start === 0) return 0;
-  const lastLoud = messages.findLastIndex((m) => !isQuietMessage(m));
+  const lastPreview = messages.findLastIndex((m) => !isQuietMessage(m) && m.kind === "text" && m.workerId === null && m.sender !== "pm");
+  const lastLoud = lastPreview !== -1 ? lastPreview : messages.findLastIndex((m) => !isQuietMessage(m));
   if (lastLoud !== -1) start = Math.min(start, lastLoud);
   const firstKept = messages.findIndex(mustKeep);
   if (firstKept !== -1) start = Math.min(start, firstKept);

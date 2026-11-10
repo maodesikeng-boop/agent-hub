@@ -74,6 +74,11 @@ describe("初始快照的上限（一个月的量）", () => {
   it("300 个已收工的 Worker、3 万条消息：不带 Worker 的消息，项目经理对话只带最近几条，整份有上限，算得快", () => {
     const { pmConversation } = seedMonth();
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages")!.n).toBeGreaterThanOrEqual(30_000);
+    const plan = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id, kind, meta, created_at FROM messages WHERE kind = 'worker' ORDER BY id")
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(plan).toContain("USING INDEX messages_worker_lines");
     const t = performance.now();
     const snap = ledger.snapshot();
     const ms = performance.now() - t;

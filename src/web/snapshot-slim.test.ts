@@ -25,7 +25,7 @@ import {
   workerPhaseOf,
   workersOf,
 } from "./selectors.ts";
-import { applyChange, initialState, reducer, type HubState } from "./state.ts";
+import { applyChange, initialState, MAX_LIVE_MESSAGES, reducer, type HubState } from "./state.ts";
 import {
   makeConversation,
   makeMessage,
@@ -207,5 +207,36 @@ describe("首屏瘦身：初始快照少带消息，界面算出来的一样", (
     const next = applyChange(small, messageChange(small.seq + 1, "message.updated", older));
     expect(next.conversations[PM_CONV]!.messages).toBe(view.messages);
     expect(next.seq).toBe(small.seq + 1);
+  });
+
+  it("最后一条 text 消息后面跟了超过 20 条普通 tool / worker 消息：往前带到这条 text，左栏预览不退化成工具调用", () => {
+    const full = fullSnapshot();
+    const lastId = Math.max(...full.conversations.flatMap((c) => c.messages.map((m) => m.id)));
+    const trailingTools = Array.from({ length: 25 }, (_, i) => makeToolMessage({ id: lastId + 1 + i, conversationId: PM_CONV }));
+    const withTrailingTools: StateSnapshot = {
+      ...full,
+      conversations: full.conversations.map((c) => {
+        const messages = c.messages.map((m) => (m.meta?.needsUser === true ? { ...m, meta: { ...m.meta, answered: true } } : m));
+        return c.conversation.id === PM_CONV ? { ...c, messages: [...messages, ...trailingTools] } : { ...c, messages };
+      }),
+    };
+    const small = slim(withTrailingTools);
+    expect(derived(load(small))).toEqual(derived(load(withTrailingTools)));
+    expect(derived(load(small)).list[0]?.preview).toBe("最后一句给用户的话");
+  });
+
+  it("实时来的 Worker 新行之后项目经理对话又累积超过 MAX_LIVE_MESSAGES 条被截断：workerLine 摘要已同步更新，不会退回初始快照的旧状态", () => {
+    const full = fullSnapshot();
+    let id = Math.max(...full.conversations.flatMap((c) => c.messages.map((m) => m.id)));
+    let seq = full.seq;
+    let state = load(slim(full));
+    state = applyChange(state, messageChange(++seq, "message.created", line(++id, 31, "report", { status: "done", summary: "修好了" })));
+    state = applyChange(state, messageChange(++seq, "message.created", line(++id, 35, "ended")));
+    for (let i = 0; i < MAX_LIVE_MESSAGES + 10; i++) {
+      state = applyChange(state, messageChange(++seq, "message.created", makeToolMessage({ id: ++id, conversationId: PM_CONV })));
+    }
+    expect(workersOf(state, 1).find((w) => w.conversationId === 31)?.tone).toBe("success");
+    expect(workersOf(state, 1).find((w) => w.conversationId === 35)?.ended).toBe(true);
+    expect(workerPhaseOf(state, 35)).toBe("ended");
   });
 });
