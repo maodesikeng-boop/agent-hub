@@ -17,8 +17,8 @@ export const buttonVariants = cva(
         ghost: "text-muted-foreground hover:bg-accent hover:text-foreground",
       },
       size: {
-        default: "h-9 rounded-[var(--radius-btn)] px-4 text-sm",
-        sm: "h-8 rounded-[var(--radius-btn)] px-3 text-small",
+        default: "h-9 rounded-[var(--radius-btn)] px-4 text-minor",
+        sm: "h-8 rounded-[var(--radius-btn)] px-3 text-minor",
         icon: "size-9 rounded-[var(--radius-btn)]",
         "icon-sm": "size-8 rounded-[var(--radius-btn)]",
       },

@@ -49,7 +49,20 @@ describe("Interface scale", () => {
     expect(css).toMatch(/html\[data-ui-scale="sm"\]\s*\{\s*font-size:\s*90\.625%/);
     expect(css).toMatch(/html\[data-ui-scale="md"\]\s*\{\s*font-size:\s*100%/);
     expect(css).toMatch(/html\[data-ui-scale="xl"\]\s*\{\s*font-size:\s*118\.75%/);
-    for (const token of ["display", "title", "body", "label", "minor", "small"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
+    for (const token of ["display", "title", "body", "minor"]) expect(css).toMatch(new RegExp(`--text-${token}: [0-9.]+rem;`));
+  });
+
+  it("字号合成 4 档（12 / 13.5 / 15 / 17，docs/ui-standard.md 第 3 条）：没有 14px 的 text-label，旧名 text-small 已删", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    const rem = (token: string) => Number(new RegExp(`--text-${token}: ([0-9.]+)rem;`).exec(css)?.[1]) * 16;
+    expect([rem("minor"), rem("body"), rem("title")]).toEqual([13.5, 15, 17]);
+    expect(css).not.toMatch(/--text-small:/);
+    expect(css).not.toMatch(/--text-label:/);
+    for (const dir of ["src/web/components", "src/web/ui"]) {
+      for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx") && !f.includes(".test."))) {
+        expect(readFileSync(`${dir}/${file}`, "utf8"), file).not.toMatch(/\btext-(label|sm)\b/);
+      }
+    }
   });
 
   it("组件里不写死像素字号和宽度（text-[15px]、w-[240px]），不然界面大小管不到", () => {
@@ -69,6 +82,6 @@ describe("Interface scale", () => {
 
   it("自定义字号不会被 tailwind-merge 当成颜色吃掉", () => {
     expect(cn("text-body", "text-muted-foreground")).toBe("text-body text-muted-foreground");
-    expect(cn("text-body", "text-small")).toBe("text-small");
+    expect(cn("text-body", "text-minor")).toBe("text-minor");
   });
 });

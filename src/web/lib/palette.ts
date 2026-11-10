@@ -59,6 +59,11 @@ export function accentStyle(key: number): CSSProperties {
   return { "--primary": accent, "--primary-foreground": accentForeground } as CSSProperties;
 }
 
+/** 外壳底色掺的水果色（styles.css 的 `--color-surface-*`、`--color-line`）：只设 `--fruit`，不动 `--primary`，左栏里的强调色照旧是中性的。 */
+export function tintStyle(key: number): CSSProperties {
+  return { "--fruit": paletteOf(key).accent } as CSSProperties;
+}
+
 const channel = (hex: string, i: number) => {
   const v = parseInt(hex.slice(i, i + 2), 16) / 255;
   return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;

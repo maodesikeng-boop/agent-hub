@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AccentScope } from "./lib/accent-scope.tsx";
+import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { isAgentVendor, type ConversationId, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
@@ -337,6 +337,8 @@ export function App() {
     <DeviceScope client={hub.client} server={state.server}>
     <ModelCatalogProvider>
     <div className="relative flex h-full">
+      {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；强调色 --primary 只在下面的 AccentScope 里 */}
+      <FruitTint colorKey={active?.avatarKey ?? null}>
       <Sidebar
         groups={groups}
         active={sidebarActive === null ? null : { device: current.key, id: sidebarActive }}
@@ -365,7 +367,7 @@ export function App() {
       <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
       {/* 项目经理的会话（对话、它的 Worker、资料页、右栏）在它的强调色里；左栏和弹窗不在 */}
       <AccentScope colorKey={active?.avatarKey ?? null}>
-      <main className="chat-main flex min-h-0 min-w-0 flex-1 flex-col">
+      <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
         {deviceWaiting ? (
           <>
             <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
@@ -439,6 +441,7 @@ export function App() {
       </main>
       {!compact && rail}
       </AccentScope>
+      </FruitTint>
     </div>
     </ModelCatalogProvider>
     </DeviceScope>

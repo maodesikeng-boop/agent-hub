@@ -284,7 +284,7 @@ export function Composer({
             }}
           />
           <div ref={actionsRef} className={cn("flex items-center gap-2 justify-self-end", ACTIONS_CLASS[+multiline])}>
-            {tooLong && <span className="text-small text-danger">Message too long</span>}
+            {tooLong && <span className="text-minor text-danger">Message too long</span>}
             {stop?.failed && showStop && <span className="text-minor text-danger">Couldn't stop</span>}
             {showStop ? (
               <StopButton stop={stop} />

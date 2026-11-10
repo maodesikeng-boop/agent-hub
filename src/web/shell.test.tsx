@@ -134,7 +134,7 @@ describe("焦点", () => {
 });
 
 describe("Sidebar", () => {
-  it("选中的对话：只靠底色 bg-sidebar-active 表示，名字字重不变（都是 500，不加粗）", async () => {
+  it("选中的对话：只靠果冻底表示，名字字重不变（选中没选中都是 600）", async () => {
     await boot();
     const name = (label: string) => within(row(label)).getByText(label);
     expect(row("小林")).toHaveAttribute("aria-current", "true");
@@ -143,9 +143,8 @@ describe("Sidebar", () => {
     expect(row("小林").style.getPropertyValue("--jelly")).toMatch(/^#[0-9a-f]{6}$/);
     expect(row("老马")).toHaveClass("hover:bg-jelly-hover");
     expect(row("老马").className).not.toMatch(/bg-sidebar-active/);
-    expect(name("小林")).toHaveClass("font-medium");
-    expect(name("小林")).not.toHaveClass("font-semibold");
-    expect(name("老马")).toHaveClass("font-medium");
+    expect(name("小林")).toHaveClass("font-semibold");
+    expect(name("老马")).toHaveClass("font-semibold");
   });
 
   it("项目经理在忙：不另加标记，行右边照旧是时间", async () => {
@@ -447,7 +446,7 @@ describe("视口与滚动容器锁定（docs/ui-standard.md 第 19 条）", () =
     }));
     await boot();
     const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
-    expect(sidebar).toHaveClass("w-18", "border-r", "border-border", "bg-sidebar");
+    expect(sidebar).toHaveClass("w-18", "border-r", "border-line", "bg-surface-sidebar");
     expect(within(sidebar).queryByRole("searchbox", { name: "Search" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Conversations" })).toBeNull();
     const navEl = screen.getByRole("navigation", { name: "Conversations" });

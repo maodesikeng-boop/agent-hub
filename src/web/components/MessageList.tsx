@@ -1,9 +1,10 @@
 import { ChevronDown } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { isHandoverTraffic, isSilentTriggerMessage, type Message, type MessageId } from "../../shared/index.ts";
+import { isHandoverTraffic, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
+import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
 /** 离底部不到这么多像素算“在底部”，内容变高、新消息来了跟着滚。 */
@@ -146,6 +147,17 @@ export const MessageList = memo(function MessageList({
   const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
   const typing = busy && !rideOnTurn && statusAgent !== undefined;
   const empty = messages.length === 0 && pending.length === 0 && !busy && !hasMore;
+
+  // 对话打开之后新来的消息淡入一次（docs/ui-standard.md 第 14 条）：只看末尾几项，和历史有多长无关
+  const enterItemAt = (index: number): EnterItem => {
+    if (index >= items.length) {
+      const p = pending[index - items.length]!;
+      return { key: userMessageDedupeKey(p.conversationId, p.clientId), turn: false };
+    }
+    const item = items[index]!;
+    return item.kind === "turn" ? { key: item.key, turn: true } : { key: item.message.dedupeKey, turn: false };
+  };
+  useMessageEnter(contentRef, Number(hasMore) + Number(empty), items.length + pending.length, enterItemAt, typing, empty);
 
   return (
     <div className="relative flex h-full flex-col">

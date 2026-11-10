@@ -433,12 +433,12 @@ describe("老数据、空对话、字号", () => {
     expect(workLines(container)[0]).toHaveTextContent("Working...");
   });
 
-  it("空对话：头像、名字和“还没有消息”", () => {
+  it("空对话：120px 的头像、名字和“还没有消息”", () => {
     const { container } = list([]);
     const empty = container.querySelector("[data-empty]") as HTMLElement;
     expect(empty).toHaveTextContent("小林");
     expect(empty).toHaveTextContent("No messages yet");
-    expect((empty.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("3rem");
+    expect((empty.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("7.5rem");
   });
 
   it("消息流里不用 13px（右栏那一档）", () => {
