@@ -11,12 +11,12 @@ import {
   buildCodexArgs,
   readCodexLaunchConfig,
   serializeJsonRpcLine,
-} from "../driver/codex-protocol.ts";
-import { signalPid, termGroupAfterExit } from "../driver/process.ts";
-import { buildChildEnv } from "../driver/protocol.ts";
-import { trackChild } from "../process-ledger.ts";
-import { ForkUnsupportedError, withoutHubEnv } from "./forker.ts";
-import type { ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
+} from "./protocol.ts";
+import { signalPid, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { trackChild } from "../../daemon/process-ledger.ts";
+import { ForkUnsupportedError, withoutHubEnv } from "../../daemon/handover/forker.ts";
+import type { ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
 /** 复制那份的权限：只读、从不问（只写交接，用不着工具；codex 本来就不走缓存，收紧不影响）。 */
 const CODEX_FORK_SANDBOX = "read-only";

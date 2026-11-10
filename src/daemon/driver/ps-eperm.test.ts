@@ -9,9 +9,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { probePr } from "../git/pr.ts";
-import { agyOfSession } from "./agy-protocol.ts";
-import { codexOfSession } from "./codex-protocol.ts";
-import { claudeOfSession, forceKillTree } from "./process.ts";
+import { agyOfSession } from "../../vendors/agy/protocol.ts";
+import { codexOfSession } from "../../vendors/codex/protocol.ts";
+import { claudeOfSession } from "../../vendors/claude/protocol.ts";
+import { forceKillTree } from "./process.ts";
 
 afterEach(() => vi.restoreAllMocks());
 

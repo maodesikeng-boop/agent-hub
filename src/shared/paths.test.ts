@@ -6,27 +6,8 @@ import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import { AGENT_VENDORS } from "./vendors.ts";
 import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "../vendors/agy/spec.ts";
-import {
-  MAX_UNIX_SOCKET_PATH_BYTES,
-  agyCliDataDir,
-  agyDataPaths,
-  agyHomePaths,
-  assertSocketPathFits,
-  VENDOR_FALLBACK_PATHS,
-  linuxInstallDirs,
-  personaFilePath,
-  projectWorktreesDir,
-  findExecutable,
-  codexHomeDir,
-  resolveExecutable,
-  resolveHubPaths,
-  resolvePaths,
-  resolveVendorExecutables,
-  vendorCatalogFingerprint,
-  vendorCatalogWatchFiles,
-  workerSetupLogPath,
-  workerWorktreePath,
-} from "./paths.ts";
+import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, VENDOR_FALLBACK_PATHS, linuxInstallDirs, personaFilePath, projectWorktreesDir, findExecutable, resolveExecutable, resolveHubPaths, resolvePaths, resolveVendorExecutables, vendorCatalogFingerprint, vendorCatalogWatchFiles, vendorConfigHome, workerSetupLogPath, workerWorktreePath } from "./paths.ts";
+import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../vendors/agy/paths.ts";
 
 // 原样转给真的 node:fs，只为数一数指纹算的时候碰了几次磁盘（existsSync / statSync）
 vi.mock("node:fs", async (importOriginal) => {
@@ -229,9 +210,10 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
   };
 
   it("codex 的盯防文件跟着 CODEX_HOME 走（认证判断用的同一处）；没设或空白回到 ~/.codex；别家不受影响", () => {
-    expect(codexHomeDir({ CODEX_HOME: "/x/codex-home" }, "/home/u")).toBe("/x/codex-home");
-    expect(codexHomeDir({ CODEX_HOME: "  " }, "/home/u")).toBe(join("/home/u", ".codex"));
-    expect(codexHomeDir({}, "/home/u")).toBe(join("/home/u", ".codex"));
+    expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "/x/codex-home" })).toBe("/x/codex-home");
+    expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "  " })).toBe(join("/home/u", ".codex"));
+    expect(vendorConfigHome("codex", "/home/u", {})).toBe(join("/home/u", ".codex"));
+    expect(vendorConfigHome("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toBeNull();
     const files = vendorCatalogWatchFiles("codex", "/home/u", { CODEX_HOME: "/x/codex-home" });
     expect(files).toContain(join("/x/codex-home", "auth.json"));
     expect(files).toContain(join("/x/codex-home", "models_cache.json"));

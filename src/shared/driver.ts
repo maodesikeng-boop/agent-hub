@@ -502,8 +502,8 @@ export interface PersonaNote {
 }
 
 export interface DriverOptions {
-  /** claude 程序路径（AGENT_HUB_CLAUDE）。 */
-  claudePath: string;
+  /** 这家厂商的可执行文件（守护进程按 spec 的 cli.envVar、PATH 和兜底路径解析好的；docs/vendor-plugin-design.md 的 A10）。 */
+  executablePath: string;
   store: SessionStore;
   /**
    * 每次启动前调用，生成提示词和设置文件；两轮之间判断要不要重启时也调（见上面“两轮之间自动重启”）。

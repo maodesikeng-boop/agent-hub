@@ -1,4 +1,4 @@
-// 会话里有后台任务时不算闲着（background-tasks.ts + claude-driver.ts 的 #armIdle、#onBackgroundTasksChanged）：
+// 会话里有后台任务时不算闲着（background-tasks.ts + src/vendors/claude/driver.ts 的 #armIdle、#onBackgroundTasksChanged）：
 // 用假 claude 发 system/background_tasks_changed。事件的真实形状见 docs/m0-report.md“后台任务事件”。
 import { afterEach, describe, expect, it } from "vitest";
 import { BACKGROUND_TASKS_HOLD_MAX_MS, IDLE_CLOSE_MS, RELAUNCH_NOTE, backgroundTasksKilledNote } from "../../shared/index.ts";

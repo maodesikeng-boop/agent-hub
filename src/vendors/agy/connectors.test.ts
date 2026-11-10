@@ -13,7 +13,7 @@ import {
   readAgyMcpServers,
   type ListMcpTools,
   type McpProbeLauncher,
-} from "./agy-connectors.ts";
+} from "./connectors.ts";
 import { buildReadonlyPolicy } from "../../shared/index.ts";
 
 /** 测试用：不包沙箱、env 原样（真沙箱在 macOS CI 的 write-scope 用例里测）。 */

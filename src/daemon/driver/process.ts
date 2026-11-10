@@ -29,19 +29,6 @@ export function streamClosed(stream: Readable): Promise<void> {
   });
 }
 
-/**
- * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
- * 是的话返回它的进程组号，不是（或者不在了）返回 null。
- */
-export async function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
-  const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]); // null：进程不在了（ps 退出码 1）或 ps 跑不了
-  if (stdout === null) return null;
-  const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
-  if (!match) return null;
-  const command = match[2]!;
-  return /claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null;
-}
-
 /** 同一个 child 正在进行的强制结束（关机和空闲关闭、启动超时撞在一起时复用）。 */
 const killing = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
 

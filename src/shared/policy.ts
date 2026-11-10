@@ -108,7 +108,7 @@ export function sessionEnv(role: SessionRole): Readonly<Record<string, string>> 
 }
 
 /**
- * 后台写交接复制出来的那份 claude（daemon/handover/claude.ts）的 --settings：在项目经理的设置上叠三层，技术上不让它动任何东西
+ * 后台写交接复制出来的那份 claude（src/vendors/claude/handover.ts）的 --settings：在项目经理的设置上叠三层，技术上不让它动任何东西
  * （提示词里也说了“不调用工具”，这里不靠提示词）。不能改工具清单、模型、系统提示词（前缀变了吃不到缓存），所以只动权限和钩子。
  * 2026-11-07 真 claude 2.1.314 实测（复制那份让它 Write、Bash 写文件、Edit 改文件）：不加时三样都写成了；叠上这三层三样都被拦，
  * 连用户设置里放行过的 Bash(echo:*)、Write、Edit 也拦得住；第一个请求的缓存命中不加是 97.8%（读 77306/共 79020），叠上后 97.6%（77306/79231）。

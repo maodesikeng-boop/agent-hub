@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE, buildReadonlyPolicy, type AgentSessionRow, type LaunchFiles } from "../../shared/index.ts";
-import { buildAgyArgs } from "./agy-protocol.ts";
-import { readCodexLaunchConfig } from "./codex-protocol.ts";
+import { buildAgyArgs } from "../../vendors/agy/protocol.ts";
+import { readCodexLaunchConfig } from "../../vendors/codex/protocol.ts";
 
 let dir: string;
 beforeEach(() => {

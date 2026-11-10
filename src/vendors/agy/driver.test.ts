@@ -1,4 +1,4 @@
-// AgyDriver 与 agy-protocol 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
+// AgyDriver 与 protocol.ts 单元测试（TDD：覆盖协议纯函数、首轮完整流式交互、长连接复用与恢复、SIGINT 打断、Worker 安全拦截、生命周期管理）。
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,14 +21,14 @@ import {
   type SessionStore,
   type WriteScope,
 } from "../../shared/index.ts";
-import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
+import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./driver.ts";
 import { describeStep } from "../../shared/step-labels.ts";
-import { toolFinished, toolStarted, working, type LiveSession } from "../ledger/sessions.ts";
-import { stepOfTool } from "../ledger/tool-summary.ts";
-import type { AgyConnectorCatalog } from "./readonly-agy.ts";
-import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
-import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
-import { SANDBOX_EXEC, type SpawnCommand } from "./write-scope.ts";
+import { toolFinished, toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";
+import { stepOfTool } from "../../daemon/ledger/tool-summary.ts";
+import type { AgyConnectorCatalog } from "./readonly.ts";
+import { makePersonaFixture, type PersonaFixture } from "../../daemon/driver/persona-fixture.ts";
+import { fakePreambleLedger, PREAMBLE } from "../../daemon/driver/preamble-fixture.ts";
+import { SANDBOX_EXEC, type SpawnCommand } from "../../daemon/driver/write-scope.ts";
 import {
   buildAgyArgs,
   buildAgyUserLine,
@@ -38,7 +38,7 @@ import {
   detectAgyArgsConflict,
   formatSystemInstructions,
   parseAgyUsage,
-} from "./agy-protocol.ts";
+} from "./protocol.ts";
 
 const realSetTimeout = globalThis.setTimeout;
 const realSleep = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
@@ -500,7 +500,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
   };
 
   const driver = createAgyDriver({
-    agyPath: fakeAgyPath,
+    executablePath: fakeAgyPath,
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
@@ -1667,7 +1667,7 @@ describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
 
 describe("找不到 agy 程序", () => {
   it("send 抛可重试的 DriverError(agy_not_found)，不是 claude_not_found", async () => {
-    const t = makeAgyHarness({ driver: { agyPath: "/nonexistent/agy" } });
+    const t = makeAgyHarness({ driver: { executablePath: "/nonexistent/agy" } });
     const s = t.addSession();
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DriverError);

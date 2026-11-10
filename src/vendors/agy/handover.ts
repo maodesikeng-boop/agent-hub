@@ -10,12 +10,20 @@ import { DatabaseSync, backup } from "node:sqlite";
 import { DB_BUSY_TIMEOUT_MS, agentLaunchArgs } from "../../shared/index.ts";
 import type { TokenUsage } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
-import { agyCliDataDir, agyDataPaths } from "../../shared/paths.ts";
-import { AGY_PLAN_PERMISSION_ARGS, AGY_PRINT_ARGS, AGY_STREAM_ARGS, buildAgyUserLine, buildChildEnv, detectAgyArgsConflict, parseAgyUsage } from "../driver/agy-protocol.ts";
-import { forceKill, killFreshGroup, termGroupAfterExit } from "../driver/process.ts";
-import { trackChild } from "../process-ledger.ts";
-import { ForkUnsupportedError } from "./forker.ts";
-import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
+import { agyCliDataDir, agyDataPaths } from "./paths.ts";
+import {
+  AGY_PLAN_PERMISSION_ARGS,
+  AGY_PRINT_ARGS,
+  AGY_STREAM_ARGS,
+  buildAgyUserLine,
+  buildChildEnv,
+  detectAgyArgsConflict,
+  parseAgyUsage,
+} from "./protocol.ts";
+import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { trackChild } from "../../daemon/process-ledger.ts";
+import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
+import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
 /** agy 的数据目录（对话库、brain、摘要库都在里面）；和 driver/transcript.ts 找对话库用的是同一个位置。 */
 const AGY_DATA_DIR = agyCliDataDir();

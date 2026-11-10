@@ -15,7 +15,7 @@ import type {
 } from "../../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
-import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "./index.ts";
+import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "../../vendors/claude/driver.ts";
 
 export const FAKE_CLAUDE = new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url).pathname;
 
@@ -119,7 +119,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map(), writeScope: null, backgroundHoldMaxMs: null, readonly: null };
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
-    claudePath: FAKE_CLAUDE,
+    executablePath: FAKE_CLAUDE,
     store,
     prepareLaunch: async (session) => {
       prepareCalls.set(session.id, (prepareCalls.get(session.id) ?? 0) + 1);

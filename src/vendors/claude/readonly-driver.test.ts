@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildReadonlyPolicy } from "../../shared/index.ts";
 import type { FakeScript } from "../../../test/fake-claude/fake-claude.ts";
-import { makeHarness, realSleep, type Harness } from "./test-helpers.ts";
+import { makeHarness, realSleep, type Harness } from "../../daemon/driver/test-helpers.ts";
 
 let h: Harness | undefined;
 afterEach(async () => {

@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { COMMANDS_FRESH_MS, COMMANDS_RETRY_MS, type ComposerCommand } from "../shared/index.ts";
 import { createCommandCatalogs, type CommandsRequest } from "./commands-catalog.ts";
-import { claudeComposerBase, type VendorComposer } from "./vendors/index.ts";
+import { claudeComposerBase } from "../vendors/claude/composer.ts";
+import type { VendorComposer } from "./vendors/index.ts";
 
 const LIST: ComposerCommand[] = [
   { name: "x", description: "probe command x (project)", argumentHint: "word" },

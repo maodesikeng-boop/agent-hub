@@ -19,7 +19,8 @@ import {
   type SessionExitReason,
   type SessionId,
 } from "../../shared/index.ts";
-import { type VendorComposerBase } from "../vendors/index.ts";
+import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { claudeComposerBase } from "./composer.ts";
 import {
   BaseSessionDriver,
   NO_NOTES,
@@ -31,13 +32,13 @@ import {
   type BatchNotes,
   type PendingEntry,
   type StartupOutcome,
-} from "./base-driver.ts";
-import { ClaudeReadonlyGate } from "./claude-readonly.ts";
-import { personaSeenAtStart } from "./persona-note.ts";
-import { claudeOfSession } from "./process.ts";
+} from "../../daemon/driver/base-driver.ts";
+import { ClaudeReadonlyGate } from "./readonly.ts";
+import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import {
   MID_TURN_CAPABILITIES,
   buildClaudeArgs,
+  claudeOfSession,
   buildInitializeLine,
   buildInterruptLine,
   buildUserLine,
@@ -45,7 +46,6 @@ import {
   detectArgsConflict,
   interruptCancelled,
   isInterruptMarker,
-  lineUuid,
   parseApiRetry,
   parseAssistant,
   parseCapabilities,
@@ -53,7 +53,8 @@ import {
   parseRateLimit,
   parseToolResults,
 } from "./protocol.ts";
-import { spawnInWriteScope } from "./write-scope.ts";
+import { lineUuid } from "../../daemon/driver/protocol.ts";
+import { spawnInWriteScope } from "../../daemon/driver/write-scope.ts";
 
 /** 写进去（或正要写）的一行，等它的 result。 */
 interface Batch extends BaseBatch {
@@ -76,7 +77,7 @@ type MidTurnWrite = "written" | "cancelled" | "retry";
 type ClaudeStartupOutcome = StartupOutcome<ReturnType<typeof detectArgsConflict>>;
 
 interface Proc extends BaseProc<ClaudeStartupOutcome> {
-  /** 只读 Worker（LaunchFiles.readonly）才有：回 claude 的 can_use_tool 批准请求（claude-readonly.ts）。进程退出时 dispose。 */
+  /** 只读 Worker（LaunchFiles.readonly）才有：回 claude 的 can_use_tool 批准请求（readonly.ts）。进程退出时 dispose。 */
   readonlyGate: ClaudeReadonlyGate | null;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
@@ -89,7 +90,7 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
 }
 
 export interface ClaudeDriverOptions extends DriverOptions {
-  /** 这个驱动对应的厂商实现（命令的认法、写给 agent 的 content 怎么拼、命令列表怎么解析），默认 vendors/ 里 claude 那份。 */
+  /** 这个驱动对应的厂商实现（命令的认法、写给 agent 的 content 怎么拼、命令列表怎么解析），默认 composer.ts 的 claudeComposerBase。 */
   composer?: VendorComposerBase;
 }
 
@@ -97,8 +98,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   readonly #claudePath: string;
 
   constructor(options: ClaudeDriverOptions) {
-    super("claude", options);
-    this.#claudePath = options.claudePath;
+    super("claude", { ...options, composer: options.composer ?? claudeComposerBase });
+    this.#claudePath = options.executablePath;
   }
 
   protected createSessionState(id: SessionId): SessionState {

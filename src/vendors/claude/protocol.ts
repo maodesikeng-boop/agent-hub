@@ -1,5 +1,5 @@
 // 和 claude 的 stream-json 协议打交道的纯函数（设计第 7.2～7.4 节，事件形状照 docs/m0-report.md）。
-import { createHash } from "node:crypto";
+// 几家共用的（拼用户消息、子进程环境变量、去重 uuid、usage）在 src/daemon/driver/protocol.ts。
 import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../../shared/index.ts";
 import type {
   AgentSessionRow,
@@ -12,8 +12,9 @@ import type {
   LaunchFiles,
   RateLimitInfo,
   RateLimitWindow,
-  TokenUsage,
 } from "../../shared/index.ts";
+import { runPs } from "../../daemon/driver/process.ts";
+import { lineUuid, userContent } from "../../daemon/driver/protocol.ts";
 
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
@@ -29,17 +30,6 @@ export function buildUserLine(
   // uuid：claude 据它出这条消息的 command_lifecycle（docs/mid-turn-messages.md 第 2 节），不给就不出
   const line = { type: "user", ...(uuid === undefined ? {} : { uuid }), message: { role: "user", content: buildContent(prefixes, text) } };
   return escapeLineSeparators(JSON.stringify(line));
-}
-
-/**
- * 一条用户消息的 content（vendors/claude.ts 的 buildUserContent 就是它，驱动层经厂商接口调）：我们加的字每项一个 text 块在前，用户原文单独放最后一块。
- * claude 只看最后一个 text 块是不是以 / 开头，前面的块模型照样看得到（docs/composer-commands.md 的 T4）。
- * 空白的块不放（API 不收空的 text 块）；全是空白时留一块，写入前的校验会按“文字是空的”拒绝。
- */
-export function userContent(prefixes: readonly string[], text: string): Array<{ type: "text"; text: string }> {
-  const blocks = prefixes.filter((p) => p.trim() !== "");
-  if (text.trim() !== "" || blocks.length === 0) blocks.push(text);
-  return blocks.map((t) => ({ type: "text", text: t }));
 }
 
 function escapeLineSeparators(json: string): string {
@@ -130,22 +120,6 @@ export const INITIALIZE_QUERY_ARGS: readonly string[] = [
   JSON.stringify({ disableAllHooks: true }),
   "--strict-mcp-config",
 ];
-
-/**
- * 忙时用户连发的几条拼成一条（设计第 7.3 节）：“【用户连发了 N 条】”和每条（带编号）各一个 text 块，最后一条放 text。
- * 以命令开头的不拼（驱动层的 #takeBatch 挑），所以这里不用管命令。只有一条时原样。
- */
-export function mergeUserTexts(texts: string[]): { prefixes: string[]; text: string } {
-  if (texts.length === 1) return { prefixes: [], text: texts[0]! };
-  const items = texts.map((t, i) => `${i + 1}. ${t}`);
-  return { prefixes: [`【用户连发了 ${texts.length} 条】`, ...items.slice(0, -1)], text: items.at(-1)! };
-}
-
-/** 去重用的 uuid：原始事件有就照抄，没有就 `line:<原始那一行的 sha256 前 32 位>`（driver.ts 的约定）。 */
-export function lineUuid(obj: { uuid?: unknown }, rawLine: string): string {
-  if (typeof obj.uuid === "string" && obj.uuid !== "") return obj.uuid;
-  return `line:${createHash("sha256").update(rawLine).digest("hex").slice(0, 32)}`;
-}
 
 /** 子任务里的事件（Agent / Task 工具派出去的）带 parent_tool_use_id；主 agent 自己的是 null，没有就不加字段。 */
 function subtaskOf(obj: Record<string, unknown>): { parentToolUseId?: string } {
@@ -241,31 +215,6 @@ export function parseRateLimit(info: unknown): RateLimitInfo | null {
   };
 }
 
-const tokenCount = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
-
-/** claude 的 usage 对象（result.usage、assistant 的 message.usage）里的四个数，缺了或不是数字当 0。 */
-export function parseUsage(usage: unknown): Omit<TokenUsage, "context"> {
-  const u = typeof usage === "object" && usage !== null ? (usage as Record<string, unknown>) : {};
-  return {
-    input: tokenCount(u.input_tokens),
-    cacheRead: tokenCount(u.cache_read_input_tokens),
-    cacheWrite: tokenCount(u.cache_creation_input_tokens),
-    output: tokenCount(u.output_tokens),
-  };
-}
-
-/**
- * 一个 assistant 事件的上下文大小：这次请求的 input + 缓存读 + 缓存写。子 agent 的消息（parent_tool_use_id 不是 null）
- * 和没带 usage 的返回 null，不更新。
- */
-export function assistantContext(obj: Record<string, unknown>): number | null {
-  if (obj.parent_tool_use_id !== undefined && obj.parent_tool_use_id !== null) return null;
-  const usage = (obj.message as { usage?: unknown } | undefined)?.usage;
-  if (typeof usage !== "object" || usage === null) return null;
-  const { input, cacheRead, cacheWrite } = parseUsage(usage);
-  return input + cacheRead + cacheWrite;
-}
-
 /**
  * system/api_retry → ApiRetryInfo（at 是收到它的毫秒时间，retryAt = at + retry_delay_ms）。
  * attempt、max_retries 要是正整数，retry_delay_ms 要是不小于 0 的有限数，缺了或类型不对返回 null，调用方跳过；
@@ -312,40 +261,10 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
   args.push(...agentLaunchArgs({ vendor: session.vendor as AgentVendor, model: session.model, effort: session.effort }));
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
-  // 只读 Worker：default 模式下要批准的工具发 can_use_tool 控制请求给我们（driver/claude-readonly.ts 的 ClaudeReadonlyGate 回话）
+  // 只读 Worker：default 模式下要批准的工具发 can_use_tool 控制请求给我们（src/vendors/claude/readonly.ts 的 ClaudeReadonlyGate 回话）
   if (files.readonly) args.push("--permission-prompt-tool", CLAUDE_PERMISSION_PROMPT_TOOL);
   for (const dir of session.addDirs) args.push("--add-dir", dir);
   return args;
-}
-
-/**
- * 守护进程自己可能是在某个 Claude 会话里起的（开发时）。这些变量会让子 claude 以为自己是子会话，
- * 照 experiments/m0/claude_clean.sh 去掉。
- */
-const PARENT_SESSION_ENV = [
-  "CLAUDECODE",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_SESSION_ID",
-  "CLAUDE_CODE_CHILD_SESSION",
-  "CLAUDE_CODE_SESSION_ATTENDED",
-  "CLAUDE_PID",
-  "CLAUDE_CODE_MESSAGING_SOCKET",
-  "CLAUDE_CODE_MESSAGING_TOKEN",
-  "CLAUDE_AGENT_SDK_VERSION",
-  "CLAUDE_CODE_EXECPATH",
-  "CLAUDE_EFFORT",
-  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-  "T3CODE_THREAD_ID",
-  "T3CODE_CLI_PATH",
-];
-
-export function buildChildEnv(
-  base: Record<string, string | undefined>,
-  extra: Record<string, string> | undefined,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v !== undefined && !PARENT_SESSION_ENV.includes(k)) env[k] = v;
-  return { ...env, ...extra };
 }
 
 /** 标准错误里认出“参数选错”的两种报错（M0 实测）。 */
@@ -353,4 +272,17 @@ export function detectArgsConflict(stderr: string): "session_in_use" | "no_conve
   if (/Session ID \S+ is already in use/i.test(stderr)) return "session_in_use";
   if (/No conversation found/i.test(stderr)) return "no_conversation";
   return null;
+}
+
+/**
+ * 用 ps 看这个 pid 的命令行：是 claude，并且带着这个会话的 ID（pid 可能已经被别的进程复用）。
+ * 是的话返回它的进程组号，不是（或者不在了）返回 null。
+ */
+export async function claudeOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
+  const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]); // null：进程不在了（ps 退出码 1）或 ps 跑不了
+  if (stdout === null) return null;
+  const match = /^\s*(\d+)\s+(.*)$/s.exec(stdout.trim());
+  if (!match) return null;
+  const command = match[2]!;
+  return /claude/i.test(command) && command.includes(vendorSessionId) ? Number(match[1]) : null;
 }

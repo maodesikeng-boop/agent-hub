@@ -5,15 +5,12 @@ import { MAX_API_RETRY_ERROR_CHARS, buildReadonlyPolicy, type AgentSessionRow } 
 import {
   CLAUDE_PERMISSION_PROMPT_TOOL,
   buildClaudeArgs,
-  buildChildEnv,
   buildInterruptLine,
   buildUserLine,
   checkUserLine,
   detectArgsConflict,
   interruptCancelled,
   isInterruptMarker,
-  lineUuid,
-  mergeUserTexts,
   parseApiRetry,
   parseAssistant,
   parseCapabilities,
@@ -21,6 +18,7 @@ import {
   parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
+import { buildChildEnv, lineUuid, mergeUserTexts } from "../../daemon/driver/protocol.ts";
 
 describe("写进标准输入的一行", () => {
   it("固定结构：type=user、role=user、一段 text", () => {

@@ -1,4 +1,4 @@
-// agy 只读 Worker 的连接器清单（readonly-agy.ts 用它生成拒绝规则、做兜底检查）：
+// agy 只读 Worker 的连接器清单（readonly.ts 用它生成拒绝规则、做兜底检查）：
 // agy 的 init 和它缓存的工具定义都不带 annotations（设计 1.2 节），所以读 agy 的 MCP 配置，自己向每个服务器问一次 tools/list 拿 readOnlyHint。
 // - 配置：~/.gemini/config/mcp_config.json 的 mcpServers（stdio 有 command/args/env，远程有 url/serverUrl/httpUrl）；
 //   ~/.gemini/antigravity-cli/mcp/<服务器>/ 里有缓存、但配置里找不到的服务器（插件带的）问不到，记为不可用（整个拒）；
@@ -10,12 +10,18 @@ import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "no
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
-import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
-import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../../shared/paths.ts";
-import { buildChildEnv } from "./protocol.ts";
-import { trackChild } from "../process-ledger.ts";
-import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly-agy.ts";
-import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "./write-scope.ts";
+import {
+  AGY_CONNECTOR_CACHE_MS,
+  AGY_CONNECTOR_LIST_TIMEOUT_MS,
+  AGY_CONNECTOR_RETRY_MS,
+  type ConnectorToolAnnotations,
+  type ReadonlyPolicy,
+} from "../../shared/index.ts";
+import { agyCliDataDir, agyDataPaths, agyHomePaths } from "./paths.ts";
+import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { trackChild } from "../../daemon/process-ledger.ts";
+import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly.ts";
+import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "../../daemon/driver/write-scope.ts";
 
 /** MCP 服务器的启动方式（agy 的 mcp_config.json 里一项）。 */
 export interface McpServerSpec {

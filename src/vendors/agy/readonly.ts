@@ -3,7 +3,7 @@
 // 1. --mode plan + --settings 的 permissions 规则：放行读、命令、读网页，拒 write_file、读密钥、非只读的连接器工具（规则 mcp(<服务器>/<工具>)）；
 // 2. 外层只读 OS 沙箱（write-scope.ts 的 readonlySeatbeltProfile）：整个进程树哪里都写不了，会话私有临时目录和 agy 自己的运行时目录除外；
 // 3. 连接器兜底（checkAgyConnectorCall）：驱动看到 mcp 工具开始调用时，不在放行范围的马上打断（规则没拦住、清单里没有的服务器）。
-//    远程连接器（发 Slack、改工单）外层沙箱挡不住，所以连接器必须在调用前按 readOnlyHint 拦：清单从 MCP 服务器自己的 tools/list 拿（agy-connectors.ts）。
+//    远程连接器（发 Slack、改工单）外层沙箱挡不住，所以连接器必须在调用前按 readOnlyHint 拦：清单从 MCP 服务器自己的 tools/list 拿（connectors.ts）。
 // 没有 OS 沙箱的机器上派只读 agy 直接报错（设计第 8 节第 5 条）：没有外层沙箱，命令行写文件挡不住。
 import { realpathSync } from "node:fs";
 import {
@@ -11,11 +11,11 @@ import {
   type ConnectorToolAnnotations,
   type ReadonlyPolicy,
 } from "../../shared/index.ts";
-import { agyHomePaths } from "../../shared/paths.ts";
+import { agyHomePaths } from "./paths.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   type ReadonlySandboxInput,
-} from "./write-scope.ts";
+} from "../../daemon/driver/write-scope.ts";
 
 /** 没有 OS 沙箱时派只读 agy 的报错（派活和驱动启动两处都用；现已统一为所有 Worker 均需 OS 沙箱）。 */
 export const READONLY_AGY_NEEDS_SANDBOX_MESSAGE = WORKER_NEEDS_OS_SANDBOX_MESSAGE;
@@ -89,7 +89,7 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
 }
 
 /**
- * 探测连接器工具清单（agy-connectors.ts）起 stdio MCP 服务器时用的外层只读沙箱参数：和 Worker 同样的只读 profile 和密钥禁读，
+ * 探测连接器工具清单（connectors.ts）起 stdio MCP 服务器时用的外层只读沙箱参数：和 Worker 同样的只读 profile 和密钥禁读，
  * 但不放开 agy 的运行时目录（服务器不是 agy），只留会话私有临时目录和通用缓存目录（npx、uv 要写）。
  */
 export function connectorProbeSandboxInput(input: { homeDir: string; tmpDir: string; policy: ReadonlyPolicy; realpath?: (p: string) => string }): ReadonlySandboxInput {

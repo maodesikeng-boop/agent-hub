@@ -17,10 +17,10 @@ import {
   type SessionId,
   type SessionStore,
 } from "../../shared/index.ts";
-import { createCodexDriver, type CodexDriver, type CodexDriverOptions } from "./codex-driver.ts";
-import { buildSandboxPolicy, decideFileChangeApproval, extractFileChangePaths } from "./codex-protocol.ts";
-import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
-import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
+import { createCodexDriver, type CodexDriver, type CodexDriverOptions } from "./driver.ts";
+import { buildSandboxPolicy, decideFileChangeApproval, extractFileChangePaths } from "./protocol.ts";
+import { makePersonaFixture, type PersonaFixture } from "../../daemon/driver/persona-fixture.ts";
+import { fakePreambleLedger, PREAMBLE } from "../../daemon/driver/preamble-fixture.ts";
 
 class MemorySessionStore implements SessionStore {
   readonly rows = new Map<SessionId, AgentSessionRow>();
@@ -539,7 +539,7 @@ function makeCodexHarness(
   const readonlyMap = new Map<SessionId, boolean>();
 
   const driver = createCodexDriver({
-    codexPath: fakeCodexBin,
+    executablePath: fakeCodexBin,
     store,
     prepareLaunch: async (session) => {
       const launchDir = join(stateDir, "launch", String(session.id));
@@ -1891,7 +1891,7 @@ describe("CodexDriver 换代后的开场说明（session-preamble.ts）", () => 
 
 describe("找不到 codex 程序", () => {
   it("send 抛可重试的 DriverError(codex_not_found)，不是 claude_not_found", async () => {
-    const t = makeCodexHarness({ driver: { codexPath: "/nonexistent/codex" } });
+    const t = makeCodexHarness({ driver: { executablePath: "/nonexistent/codex" } });
     const s = t.addSession();
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe("codex_not_found");

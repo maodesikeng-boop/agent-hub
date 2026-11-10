@@ -1,4 +1,4 @@
-// 多厂商会话驱动公共底座：抽取 claude-driver / agy-driver / codex-driver 三家驱动共用的会话状态机与辅助机制：
+// 多厂商会话驱动公共底座：抽取各家驱动（src/vendors/<厂商>/driver.ts）共用的会话状态机与辅助机制：
 // - 待发消息队列项（PendingEntry）与排队用户消息合并、命令拆分、停止时取消/收回结算；
 // - 实时 token 用量节流上报器（USAGE_THROTTLE_MS 节流定时器、挂起刷新与取消）；
 // - 启动超时（startTimer）、空闲关闭（idleTimer，支持后台任务兜底延长）、打断超时（interruptTimer）、强杀升级（killTimer）统一生命周期管理；
@@ -44,9 +44,6 @@ import {
   type TokenUsage,
   type Unsubscribe,
 } from "../../shared/index.ts";
-import { agyComposerBase } from "../vendors/agy.ts";
-import { claudeComposerBase } from "../vendors/claude.ts";
-import { codexComposerBase } from "../vendors/codex.ts";
 import type { VendorComposerBase } from "../vendors/types.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
 import { personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
@@ -207,9 +204,9 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
   usageTimer: NodeJS.Timeout | null;
 }
 
-export type BaseDriverOptions = Omit<DriverOptions, "claudePath"> & {
-  claudePath?: string;
-  composer?: VendorComposerBase;
+export type BaseDriverOptions = Omit<DriverOptions, "executablePath"> & {
+  /** 这家的输入框实现（命令的认法、写给 agent 的 content 怎么拼）：各家驱动传自己的，基类不认识任何一家（docs/vendor-plugin-design.md 的 A11）。 */
+  composer: VendorComposerBase;
 };
 
 export type ResolvedBaseDriverOptions = Required<
@@ -224,7 +221,7 @@ export type ResolvedBaseDriverOptions = Required<
     | "log"
   >
 > &
-  BaseDriverOptions;
+  Omit<BaseDriverOptions, "composer">;
 
 export interface PendingBatchParts {
   body: { prefixes: string[]; text: string };
@@ -381,12 +378,7 @@ export abstract class BaseSessionDriver<
 
   protected constructor(vendor: AgentVendor, { composer, ...options }: BaseDriverOptions) {
     this.vendor = vendor;
-    this.composer =
-      composer ??
-      ({ claude: claudeComposerBase, agy: agyComposerBase, codex: codexComposerBase } satisfies Record<
-        AgentVendor,
-        VendorComposerBase
-      >)[vendor];
+    this.composer = composer;
     this.opts = {
       idleCloseMs: IDLE_CLOSE_MS,
       backgroundHoldMaxMs: BACKGROUND_TASKS_HOLD_MAX_MS,

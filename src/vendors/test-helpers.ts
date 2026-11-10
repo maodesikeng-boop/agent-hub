@@ -60,7 +60,7 @@ export function importsOf(file: string): ImportRef[] {
 }
 
 /** file 和它运行时经相对路径引到的所有文件里的运行时 import（跳过 import type）。 */
-function runtimeImportsDeep(file: string, seen = new Set<string>()): ImportRef[] {
+export function runtimeImportsDeep(file: string, seen = new Set<string>()): ImportRef[] {
   if (seen.has(file)) return [];
   seen.add(file);
   const own = importsOf(file).filter((i) => !i.typeOnly);

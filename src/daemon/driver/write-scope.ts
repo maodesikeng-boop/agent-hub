@@ -1,19 +1,19 @@
-// 把通用的 Worker 可写范围（shared/write-scope.ts）翻译成每家的机制。键是 AGENT_VENDORS：加厂商漏了这里编译不过，
-// 新厂商只要实现 WriteScopeEnforcer，再在驱动起进程时调 spawnInWriteScope（和下面三家一样）。
+// 把通用的 Worker 可写范围（shared/write-scope.ts）翻译成每家的机制。WRITE_SCOPE_ENFORCERS 按名单从 spec 推出来，
+// 新厂商只要在驱动起进程时调 spawnInWriteScope；要关自带沙箱的在 spec 的 capabilities.ownSandboxOffArgs 里写。
 // - macOS（sandbox-exec）与 Linux（bubblewrap，bwrap）走同一张后端表 OS_SANDBOX_BACKENDS：
 //   普通 Worker 把整个进程包进 OS 沙箱（数据目录只读/禁写、自己的工作目录放行），编辑工具、shell 命令及所有子进程都在里面；
 //   只读 Worker 的 agy（另两家有自己的只读沙箱）走 wrapInReadonlyOsSandbox（除私有临时目录、运行时与缓存目录外全盘只读，凭据与敏感文件禁读）。
 //   沙箱起不来时普通 Worker 与只读 Worker 一律拒绝启动（抛错并给出修复命令 sudo scripts/linux-sandbox-setup.sh），不再退回规则兜底。
 // - 已在 OS 沙箱里的进程不能再开自带沙箱：
 //   - claude：--settings 里写 sandbox.enabled: false（policy.ts 的 buildSessionSettings）。
-//   - agy：包了的进程加 --settings {"enableTerminalSandbox":false}（ownSandboxOffArgs）。
+//   - agy：包了的进程加 --settings {"enableTerminalSandbox":false}（agy 的 spec 的 capabilities.ownSandboxOffArgs）。
 //   - codex：turn/start 的 sandboxPolicy 用 externalSandbox；只读 Worker 不包外层，照用 codex 自己的 readOnly 沙箱。
 // 详见 docs/write-scope.md 与 docs/linux-sandbox-design.md。
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { LOCAL_ERRORS } from "../../shared/errors.ts";
-import { DriverError, type AgentVendor, type WriteScope } from "../../shared/index.ts";
+import { AGENT_VENDORS, DriverError, vendorSpec, type AgentVendor, type WriteScope } from "../../shared/index.ts";
 
 export interface SpawnCommand {
   command: string;
@@ -45,8 +45,6 @@ export interface OsSandboxWrapOptions {
 export interface WriteScopeEnforcer {
   /** 起厂商进程前调：返回实际要起的命令。scope 是 null（项目经理）时原样返回。 */
   spawnCommand(base: SpawnCommand, scope: WriteScope | null, platform?: NodeJS.Platform, options?: OsSandboxWrapOptions): ScopedSpawn;
-  /** 没有 OS 沙箱时这家原本的规则说明（仅作说明保留，现已一律拒绝无沙箱启动）。 */
-  fallback: string;
   /** 包进 OS 沙箱时加在命令行最前面、关掉这家自带沙箱的参数（不能嵌套，见文件头）。claude、codex 不在命令行上关（设置文件、sandboxPolicy）。 */
   ownSandboxOffArgs: readonly string[];
 }
@@ -150,7 +148,7 @@ export function seatbeltProfile(scope: WriteScope): string {
   return lines.join("\n");
 }
 
-/** 外层只读沙箱的参数（readonly-agy.ts 的 agyReadonlySandboxInput 按厂商生成）：路径都是 realpath 过的绝对路径。 */
+/** 外层只读沙箱的参数（src/vendors/agy/readonly.ts 的 agyReadonlySandboxInput 按厂商生成）：路径都是 realpath 过的绝对路径。 */
 export interface ReadonlySandboxInput {
   /** 这个会话自己的私有临时目录（TMPDIR 指到这，退出时删）。 */
   tmpDir: string;
@@ -539,7 +537,7 @@ export function wrapInOsSandbox(
 
 /**
  * 按平台把只读 Worker 的进程包进外层只读 OS 沙箱（darwin: sandbox-exec，linux: bwrap）；沙箱不可用时原样返回（osSandboxed: false，调用方报错）。
- * 厂商自带沙箱要在它自己的设置里关（readonly-agy.ts 的 agyReadonlySettings），这里不加参数。
+ * 厂商自带沙箱要在它自己的设置里关（src/vendors/agy/readonly.ts 的 agyReadonlySettings），这里不加参数。
  */
 export function wrapInReadonlyOsSandbox(
   base: SpawnCommand,
@@ -553,22 +551,17 @@ export function wrapInReadonlyOsSandbox(
   return { ...backend.wrapReadonly(base, input, options), osSandboxed: true };
 }
 
-function osSandboxEnforcer(fallback: string, ownSandboxOffArgs: readonly string[] = []): WriteScopeEnforcer {
+function osSandboxEnforcer(ownSandboxOffArgs: readonly string[] = []): WriteScopeEnforcer {
   return {
     spawnCommand: (base, scope, platform, options) => wrapInOsSandbox(base, scope, platform, { ...options, ownSandboxOffArgs }),
-    fallback,
     ownSandboxOffArgs,
   };
 }
 
-/** agy 关掉自带终端沙箱的参数。 */
-const AGY_SANDBOX_OFF_ARGS: readonly string[] = ["--settings", JSON.stringify({ enableTerminalSandbox: false })];
-
-export const WRITE_SCOPE_ENFORCERS: Readonly<Record<AgentVendor, WriteScopeEnforcer>> = {
-  claude: osSandboxEnforcer("只剩设置文件里 state/ 的 Edit 拒绝规则（管编辑工具，管不住 shell）"),
-  agy: osSandboxEnforcer("只剩按工具参数和命令行字面的检查（看不出脚本里拼出来的路径）", AGY_SANDBOX_OFF_ARGS),
-  codex: osSandboxEnforcer("只剩 codex 自己的 workspace-write 沙箱加审批按命令行字面的检查（看不出脚本里拼出来的路径）"),
-};
+/** 每家一律走外层 OS 沙箱，只差包进去时要不要关掉自带沙箱（spec 的 capabilities.ownSandboxOffArgs），按名单推出来。 */
+export const WRITE_SCOPE_ENFORCERS: Readonly<Record<AgentVendor, WriteScopeEnforcer>> = Object.fromEntries(
+  AGENT_VENDORS.map((vendor) => [vendor, osSandboxEnforcer(vendorSpec(vendor).capabilities.ownSandboxOffArgs)]),
+) as Record<AgentVendor, WriteScopeEnforcer>;
 
 /**
  * 驱动层起厂商进程都走这里：按这家的 enforcer 包好命令；

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RELAUNCH_NOTE } from "../../shared/index.ts";
 import type { FakeScript, FakeTurn } from "../../../test/fake-claude/fake-claude.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
-import { createClaudeDriver } from "./index.ts";
+import { createClaudeDriver } from "../../vendors/claude/driver.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 
 let h: Harness | undefined;
@@ -36,7 +36,7 @@ function harness(script: FakeScript = {}, driver: { idleCloseMs?: number } = {})
 function restartedDriver(t: Harness, f: PersonaFixture) {
   writeFileSync(join(t.dir, "prompt.md"), "你是项目经理。");
   const driver = createClaudeDriver({
-    claudePath: FAKE_CLAUDE,
+    executablePath: FAKE_CLAUDE,
     store: t.store,
     prepareLaunch: async () => ({ promptFile: join(t.dir, "prompt.md"), env: {}, fingerprint: "", personaRevision: f.revision() }),
     personaNote: f.personaNote,

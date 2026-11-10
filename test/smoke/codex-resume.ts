@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type DriverEvent } from "../../src/shared/index.ts";
-import { createCodexDriver } from "../../src/daemon/driver/index.ts";
+import { createCodexDriver } from "../../src/vendors/codex/driver.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { waitUntil } from "../e2e/harness.ts";
 import { TURN_MS, expect, removeVendorRecordsOf, scenario, type Outcome } from "./kit.ts";
@@ -49,7 +49,7 @@ async function trial(first: string, second: string): Promise<{ answer: string; r
   store.add(row);
   const run = async (secret: string, text: string) => {
     writeFileSync(promptFile, instructions(secret));
-    const driver = createCodexDriver({ codexPath: CODEX, store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} });
+    const driver = createCodexDriver({ executablePath: CODEX, store, prepareLaunch: async () => ({ promptFile, env: {}, fingerprint: "" }), log: () => {} });
     const events: DriverEvent[] = [];
     driver.onEvent((_id, e) => events.push(e));
     try {

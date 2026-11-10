@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
-import { checkAgyUserLine } from "../driver/agy-protocol.ts";
-import { ForkUnsupportedError } from "./forker.ts";
-import type { ForkSource } from "./forker.ts";
-import { FORKERS } from "./forkers.ts";
-import { AGY_FORKERS, createAgyCopyForker } from "./agy.ts";
+import { checkAgyUserLine } from "./protocol.ts";
+import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
+import type { ForkSource } from "../../daemon/handover/forker.ts";
+import { FORKERS } from "../../daemon/handover/forkers.ts";
+import { AGY_FORKERS, createAgyCopyForker } from "./handover.ts";
 
 const SRC_ID = "11111111-2222-4333-8444-555555555555";
 const OLD_TRAJ = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";

@@ -646,7 +646,7 @@ function badInput(message: string): never {
 }
 
 /**
- * 后台写交接复制那份（daemon/handover/claude.ts）：`claude -p --fork-session …`，没有 --input-format stream-json，
+ * 后台写交接复制那份（src/vendors/claude/handover.ts）：`claude -p --fork-session …`，没有 --input-format stream-json，
  * 提示词是标准输入的纯文本，关掉标准输入才算说完。收齐后当一条用户消息跑一轮（日志里记成一行 user，stdinTextsOf 能读），回完退出。
  */
 const rawPromptMode = argv.includes("--fork-session");

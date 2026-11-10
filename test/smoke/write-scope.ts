@@ -28,7 +28,9 @@ import {
   type DriverEvent,
 } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
-import { createAgyDriver, createClaudeDriver, createCodexDriver } from "../../src/daemon/driver/index.ts";
+import { createAgyDriver } from "../../src/vendors/agy/driver.ts";
+import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
+import { createCodexDriver } from "../../src/vendors/codex/driver.ts";
 import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { waitUntil } from "../e2e/harness.ts";
@@ -106,10 +108,10 @@ function rig(vendor: AgentVendor, dataDir: string, parent: string, osSandboxed =
   };
   const driver: Driver =
     vendor === "codex"
-      ? createCodexDriver({ ...common, codexPath: CODEX })
+      ? createCodexDriver({ ...common, executablePath: CODEX })
       : vendor === "agy"
-        ? createAgyDriver({ ...common, agyPath: AGY })
-        : createClaudeDriver({ ...common, claudePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
+        ? createAgyDriver({ ...common, executablePath: AGY })
+        : createClaudeDriver({ ...common, executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
   return { vendor, driver, store, events, dir, cwd };

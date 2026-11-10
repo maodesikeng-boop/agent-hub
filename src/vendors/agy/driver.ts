@@ -24,8 +24,9 @@ import {
   type TokenUsage,
   type WriteScope,
 } from "../../shared/index.ts";
-import { type VendorComposerBase } from "../vendors/index.ts";
-import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./agy-connectors.ts";
+import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { agyComposerBase } from "./composer.ts";
+import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./connectors.ts";
 import {
   agyOfSession,
   buildAgyArgs,
@@ -37,7 +38,7 @@ import {
   finishAgyUsage,
   observeAgyUsage,
   readSystemInstructions,
-} from "./agy-protocol.ts";
+} from "./protocol.ts";
 import {
   BaseSessionDriver,
   NO_NOTES,
@@ -49,8 +50,8 @@ import {
   type BaseSessionState,
   type PendingEntry,
   type StartupOutcome,
-} from "./base-driver.ts";
-import { personaSeenAtStart } from "./persona-note.ts";
+} from "../../daemon/driver/base-driver.ts";
+import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
   READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
@@ -60,7 +61,7 @@ import {
   deniedActionsOf,
   deniedContinueText,
   type AgyConnectorCatalog,
-} from "./readonly-agy.ts";
+} from "./readonly.ts";
 import {
   scanSecretGlobs,
   spawnInWriteScope,
@@ -68,7 +69,7 @@ import {
   type ReadonlySandboxInput,
   type ScopedSpawn,
   type SpawnCommand,
-} from "./write-scope.ts";
+} from "../../daemon/driver/write-scope.ts";
 
 interface Batch extends BaseBatch {
   text: string;
@@ -129,15 +130,14 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   lastLiveUsage: TokenUsage | null;
 }
 
-export interface AgyDriverOptions extends Omit<DriverOptions, "claudePath"> {
-  /** agy 可执行文件路径（优先取 agyPath，兼容传 claudePath，默认 "agy"）。 */
-  agyPath?: string;
-  claudePath?: string;
-  /** 这个驱动对应的厂商实现，默认 vendors/ 里 agy 那份。 */
+export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> {
+  /** agy 可执行文件路径，默认 "agy"。 */
+  executablePath?: string;
+  /** 这个驱动对应的厂商实现，默认 composer.ts 的 agyComposerBase。 */
   composer?: VendorComposerBase;
   /** 用户主目录（找 agy 的运行时目录和 MCP 配置），默认 os.homedir()。 */
   homeDir?: string;
-  /** 只读 Worker：现在有哪些连接器、哪些工具标了只读（agy-connectors.ts）。默认读 agy 的 MCP 配置、向每个服务器问 tools/list；测试可以替换。 */
+  /** 只读 Worker：现在有哪些连接器、哪些工具标了只读（connectors.ts）。默认读 agy 的 MCP 配置、向每个服务器问 tools/list；测试可以替换。 */
   connectorCatalog?: () => Promise<AgyConnectorCatalog>;
   /** 只读 Worker：把进程包进外层只读沙箱（默认 write-scope.ts 的 wrapInReadonlyOsSandbox，支持 macOS seatbelt 与 Linux bubblewrap）；测试可以替换。 */
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
@@ -152,8 +152,8 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   #latestReadonlyPolicy: ReadonlyPolicy | null = null;
 
   constructor(options: AgyDriverOptions) {
-    super("agy", options);
-    this.#agyPath = options.agyPath ?? options.claudePath ?? "agy";
+    super("agy", { ...options, composer: options.composer ?? agyComposerBase });
+    this.#agyPath = options.executablePath ?? "agy";
     this.#homeDir = options.homeDir;
     this.#customCatalog = options.connectorCatalog;
     this.#readonlySpawn = options.readonlySpawn;

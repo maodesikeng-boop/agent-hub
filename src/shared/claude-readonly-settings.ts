@@ -1,5 +1,5 @@
 // 只读 Worker 的 claude 翻译（docs/readonly-worker-design.md 第 2.3 节 claude 一列）：统一策略（readonly-policy.ts）→ --settings 里的权限规则和 claude 自带沙箱。
-// 做法：default 模式 + 驱动用 --permission-prompt-tool stdio 接 can_use_tool（driver/claude-readonly.ts 按 annotations 判断连接器工具）；
+// 做法：default 模式 + 驱动用 --permission-prompt-tool stdio 接 can_use_tool（src/vendors/claude/readonly.ts 按 annotations 判断连接器工具）；
 // 内置的读、搜、命令、上网放行，编辑工具拒绝；写不了的硬保证靠 claude 自带沙箱（writeGuard native，进程不再包外层沙箱，macOS 沙箱不能嵌套）。
 // 可调的东西都在这个文件：放行哪些内置工具、沙箱开哪些开关。纯字符串处理。
 import type { ReadonlyPolicy } from "./readonly-policy.ts";

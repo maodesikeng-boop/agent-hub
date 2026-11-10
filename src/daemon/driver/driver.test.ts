@@ -59,7 +59,7 @@ describe("首次启动参数", () => {
   });
 
   it("找不到 claude 程序：send 抛可重试的 DriverError(claude_not_found)", async () => {
-    const t = harness({ driver: { claudePath: "/nonexistent/claude" } });
+    const t = harness({ driver: { executablePath: "/nonexistent/claude" } });
     const s = t.addSession();
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DriverError);
@@ -398,7 +398,7 @@ describe("启动卡住", () => {
     const bin = join(t.dir, "broken-claude");
     writeFileSync(bin, "#!/bin/sh\necho boom >&2\nexit 2\n");
     chmodSync(bin, 0o755);
-    const t2 = makeHarness({ dir: t.dir, driver: { claudePath: bin } });
+    const t2 = makeHarness({ dir: t.dir, driver: { executablePath: bin } });
     try {
       const s = t2.addSession();
       const err = await t2.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
@@ -963,7 +963,7 @@ describe("参数冲突后的持久化", () => {
     const bin = join(t.dir, "port-claude");
     writeFileSync(bin, "#!/bin/sh\necho 'Error: port 8080 is already in use' >&2\nexit 1\n");
     chmodSync(bin, 0o755);
-    const t2 = makeHarness({ dir: t.dir, driver: { claudePath: bin } });
+    const t2 = makeHarness({ dir: t.dir, driver: { executablePath: bin } });
     try {
       const s = t2.addSession();
       await expect(t2.driver.send(s.id, user(1, "hi"))).rejects.toMatchObject({ code: "spawn_failed" });

@@ -18,7 +18,7 @@ import {
   type QuotaWindowKey,
   windowKeyByMinutes,
 } from "../../shared/index.ts";
-import { runPs } from "./process.ts";
+import { runPs } from "../../daemon/driver/process.ts";
 
 
 /**
@@ -598,7 +598,7 @@ export function decideCommandApproval(params: Record<string, unknown>, context: 
 
 /**
  * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）。真 codex 的审批参数只带 itemId，
- * 路径要调用方从这一条的 item/started 里补进 params.paths（codex-driver.ts 的 fileChangePaths）：
+ * 路径要调用方从这一条的 item/started 里补进 params.paths（driver.ts 的 fileChangePaths）：
  * - readonly 会话一律 decline；
  * - 有可写范围（Worker）：要改的文件（含改名的目标）在范围外，或者不知道改哪些文件，或者 grantRoot 在范围外 → decline
  *   （实测不补路径时一律同意，Worker 写进了数据目录）；

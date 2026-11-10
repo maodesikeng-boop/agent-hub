@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
-import { codexReadonlyConfig, decideMcpElicitation, exhaustCodexRateLimitOnTurnError, parseCodexRateLimits, readCodexLaunchConfig } from "./codex-protocol.ts";
+import {
+  codexReadonlyConfig,
+  decideMcpElicitation,
+  exhaustCodexRateLimitOnTurnError,
+  parseCodexRateLimits,
+  readCodexLaunchConfig,
+} from "./protocol.ts";
 
 // 真实数据（2026-11-07，codex-cli 0.162 的 account/rateLimits/updated）：这个账号只有一个 30 天窗口（windowDurationMins 43200），放在 primary 里。
 describe("parseCodexRateLimits：窗口按 windowDurationMins 归类，不按 primary / secondary 的位置", () => {

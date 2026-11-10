@@ -19,7 +19,8 @@ import {
   type SessionId,
   type WriteScope,
 } from "../../shared/index.ts";
-import { type VendorComposerBase } from "../vendors/index.ts";
+import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { codexComposerBase } from "./composer.ts";
 import {
   BaseSessionDriver,
   NO_NOTES,
@@ -31,7 +32,7 @@ import {
   type BatchNotes,
   type PendingEntry,
   type StartupOutcome,
-} from "./base-driver.ts";
+} from "../../daemon/driver/base-driver.ts";
 import {
   buildCodexArgs,
   buildInitializeRequest,
@@ -57,10 +58,10 @@ import {
   parseCodexToolStarted,
   readCodexLaunchConfig,
   type CodexLaunchConfig,
-} from "./codex-protocol.ts";
-import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "./persona-note.ts";
-import { lineUuid } from "./protocol.ts";
-import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "./write-scope.ts";
+} from "./protocol.ts";
+import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
+import { lineUuid } from "../../daemon/driver/protocol.ts";
+import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "../../daemon/driver/write-scope.ts";
 
 interface Batch extends BaseBatch {
   combinedText: string;
@@ -119,17 +120,16 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   emittedThinkingIds: Set<string>;
 }
 
-export interface CodexDriverOptions extends Omit<DriverOptions, "claudePath"> {
-  /** codex 可执行文件路径，默认 "codex"（若未传但传了 claudePath 则回退 claudePath）。 */
-  codexPath?: string;
-  claudePath?: string;
+export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"> {
+  /** codex 可执行文件路径，默认 "codex"。 */
+  executablePath?: string;
   /**
    * 会话没选模型（null = 默认）时 thread/start、thread/resume 显式带的模型：守护进程接模型名单里 codex 报的默认（有缓存）。
    * 不带的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了（实测 gpt-6-astra 报 model_not_found）。
    * 没传或回 null 就不带，交给 codex。不写进库：界面仍显示“默认”。
    */
   defaultModel?: () => Promise<string | null>;
-  /** 厂商命令与输入拼装器，默认 vendors/ 里的 codex。 */
+  /** 厂商命令与输入拼装器，默认 composer.ts 的 codexComposerBase。 */
   composer?: VendorComposerBase;
   /** 按哪个系统落实 Worker 的可写范围（write-scope.ts 的 spawnInWriteScope），默认本机；测试用。 */
   platform?: NodeJS.Platform;
@@ -143,10 +143,10 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #defaultModel: () => Promise<string | null>;
 
-  constructor({ codexPath, claudePath, platform, writeScopeSpawn, defaultModel, ...options }: CodexDriverOptions) {
-    super("codex", options);
+  constructor({ executablePath, platform, writeScopeSpawn, defaultModel, composer, ...options }: CodexDriverOptions) {
+    super("codex", { ...options, composer: composer ?? codexComposerBase });
     this.#defaultModel = defaultModel ?? (async () => null);
-    this.#codexPath = codexPath ?? claudePath ?? "codex";
+    this.#codexPath = executablePath ?? "codex";
     this.#platform = platform ?? process.platform;
     this.#writeScopeSpawn = writeScopeSpawn;
   }

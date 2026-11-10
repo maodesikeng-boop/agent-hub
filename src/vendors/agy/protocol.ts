@@ -1,4 +1,4 @@
-// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly-agy.ts）、残留进程识别。
+// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly.ts）、残留进程识别。
 import { existsSync, readFileSync } from "node:fs";
 import {
   agentLaunchArgs,
@@ -10,10 +10,10 @@ import {
   type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
-import { agyReadonlySettings, type AgyConnectorRules } from "./readonly-agy.ts";
-import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "./protocol.ts";
-import type { TurnUsage } from "./usage.ts";
-import { runPs } from "./process.ts";
+import { agyReadonlySettings, type AgyConnectorRules } from "./readonly.ts";
+import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "../../daemon/driver/protocol.ts";
+import type { TurnUsage } from "../../daemon/driver/usage.ts";
+import { runPs } from "../../daemon/driver/process.ts";
 
 export { buildChildEnv, mergeUserTexts };
 
@@ -21,7 +21,7 @@ export { buildChildEnv, mergeUserTexts };
 export const AGY_STREAM_ARGS: readonly string[] = ["--input-format", "stream-json", "--output-format", "stream-json"];
 /** 默认后台非交互权限参数。 */
 const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];
-/** 只读 Worker 的权限参数（--settings 的规则另加，见 readonly-agy.ts）。 */
+/** 只读 Worker 的权限参数（--settings 的规则另加，见 readonly.ts）。 */
 export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
 /**
  * 关键：--print "" 必须带空字符串参数且放在最后（Go flag parser 若写 -p --input-format 会把 --input-format 吞成 prompt 参数）。
@@ -235,7 +235,7 @@ export function buildAgySessionStartedEvent(
 export interface WorkerToolCheckInput {
   toolName: string;
   parameters: unknown;
-  /** 没有 OS 沙箱时要兜底检查的可写范围（agy-driver 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
+  /** 没有 OS 沙箱时要兜底检查的可写范围（driver.ts 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
   fallbackScope: WriteScope | null;
   cwd: string;
 }
@@ -246,7 +246,7 @@ export interface WorkerToolCheckInput {
  *    → "Worker 在数据目录里只能写自己的工作目录"。只能看字面（shared/write-scope.ts 的 commandMayWriteOutsideScope）；
  *    macOS 上数据目录不能写由 OS 沙箱管（write-scope.ts），这里不查；
  * 2. 合规返回 null。
- * 只读 Worker 的写不在这里拦（不再事后 SIGINT）：write_file 由 --settings 的 deny 规则拒，命令行和别的写由外层只读沙箱挡（readonly-agy.ts）。
+ * 只读 Worker 的写不在这里拦（不再事后 SIGINT）：write_file 由 --settings 的 deny 规则拒，命令行和别的写由外层只读沙箱挡（readonly.ts）。
  * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
  */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {

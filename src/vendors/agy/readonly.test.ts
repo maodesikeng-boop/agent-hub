@@ -14,7 +14,7 @@ import {
   deniedContinueText,
   describeDeniedAction,
   type AgyConnectorCatalog,
-} from "./readonly-agy.ts";
+} from "./readonly.ts";
 
 const policy = (connectors: Partial<ReadonlyPolicy["connectors"]> = {}): ReadonlyPolicy =>
   buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });

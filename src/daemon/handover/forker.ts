@@ -49,7 +49,7 @@ export interface SessionForker {
   remove(fork: ForkHandle): Promise<void>;
 }
 
-/** 办法清单，按优先顺序：厂商自带的放前面，自己造的放后面。键是 AGENT_VENDORS：加厂商漏了编译不过。空数组 = 只能本会话写交接。 */
+/** 办法清单，按优先顺序：厂商自带的放前面，自己造的放后面。键是 AGENT_VENDORS（forkers.ts 按名单推）。空数组 = 只能本会话写交接。 */
 export type ForkerRegistry = Readonly<Record<AgentVendor, readonly SessionForker[]>>;
 
 /** 按 fork_ref 里记的 forker id 找回办法（重启后清理用）；厂商不认识、清单里没有了返回 null。 */

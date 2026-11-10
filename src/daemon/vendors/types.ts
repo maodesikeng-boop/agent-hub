@@ -1,7 +1,7 @@
 // 厂商接口：输入框的“/”命令和“@”文件里跟厂商有关的部分。网页只认通用接口（shared/api.ts 的 ComposerCommand、FileEntry），
 // 不认识哪家厂商；后台按对话的会话那一行的 vendor 找到实现（vendors/index.ts）。
-// 纯数据（隐藏名单、拦下时的原因、命令开头的字符）在 shared/vendors.ts 的 VENDOR_SPECS[vendor].composer；要写代码的在这里。
-// 加一家厂商要动的地方见 vendors/index.ts 开头。
+// 纯数据（隐藏名单、拦下时的原因、命令开头的字符）在各家 spec.ts 的 composer；接口在这里，各家的实现在 src/vendors/<厂商>/composer.ts。
+// 加一家厂商要动的地方见 docs/vendor-plugin-design.md 第 8 节。
 import type { AgentVendor, ComposerCommand, ModelCatalog, VendorAvailability } from "../../shared/index.ts";
 
 /** 在哪儿问命令列表：会话的工作目录和附加文件夹（项目里的命令、skill 跟着目录走）。 */

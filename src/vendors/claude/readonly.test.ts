@@ -9,7 +9,7 @@ import {
   annotationsFromMcpStatus,
   mcpToolNameParts,
   normalizeMcpServerName,
-} from "./claude-readonly.ts";
+} from "./readonly.ts";
 
 const policy = (connectors?: Partial<ReadonlyPolicy["connectors"]>) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s", connectors });
 

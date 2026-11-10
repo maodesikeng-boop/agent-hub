@@ -12,11 +12,11 @@ import type { TokenUsage } from "../../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { buildForkSettings } from "../../shared/policy.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
-import { assistantContext, buildChildEnv, parseUsage } from "../driver/protocol.ts";
-import { killFreshGroup, termGroupAfterExit } from "../driver/process.ts";
-import { trackChild } from "../process-ledger.ts";
-import { ForkUnsupportedError } from "./forker.ts";
-import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
+import { assistantContext, buildChildEnv, parseUsage } from "../../daemon/driver/protocol.ts";
+import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { trackChild } from "../../daemon/process-ledger.ts";
+import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
+import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
 /** 这个办法在 fork_ref 里的名字，发布后不改。 */
 const CLAUDE_FORKER_ID = "claude-native";
