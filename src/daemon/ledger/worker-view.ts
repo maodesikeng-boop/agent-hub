@@ -101,11 +101,13 @@ export interface WorkerViewDeps {
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
   turnMaxTimeOf?: (workerConversationId: ConversationId) => { maxTimeMs: number; startedAt: number } | null;
+  /** worktree 是否已被自动清理（workers.ts 的 isWorktreeCleaned）。 */
+  isWorktreeCleaned?: (worker: WorkerDbRow) => boolean;
 }
 
 export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, deps: WorkerViewDeps) {
   const { now } = ctx;
-  const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf } = deps;
+  const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf, isWorktreeCleaned } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
   /** 状态：已收工、准备中、在等后台命令、在干活、空闲等验收。 */
@@ -216,7 +218,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 
     lines.push(
       worker.workspace === "worktree"
-        ? `分支 ${worker.branch}，worktree ${worker.worktree_path}`
+        ? `分支 ${worker.branch}，worktree ${worker.worktree_path}${isWorktreeCleaned?.(worker) ? "（已自动清理）" : ""}`
         : `在项目主文件夹里干活（没有单独的分支和 worktree）`,
     );
     if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));

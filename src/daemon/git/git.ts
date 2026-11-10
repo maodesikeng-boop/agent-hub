@@ -14,7 +14,7 @@ import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../.
 export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
 export const GIT_READONLY_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
-interface GitOptions {
+export interface GitOptions {
   /** 一次 git 调用的超时（毫秒），默认 GIT_TIMEOUT_MS。 */
   timeoutMs?: number;
 }
@@ -207,7 +207,7 @@ function findWorktree(entries: WorktreeEntry[], worktreePath: string): WorktreeE
 }
 
 /** realpath，路径还不存在时：找到最近的存在的上级，转成 realpath 后接上剩下的部分。 */
-function realpathLoose(path: string): string {
+export function realpathLoose(path: string): string {
   const absolute = resolve(path);
   try {
     return realpathSync(absolute);
@@ -215,4 +215,74 @@ function realpathLoose(path: string): string {
     const parent = dirname(absolute);
     return parent === absolute ? absolute : join(realpathLoose(parent), basename(absolute));
   }
+}
+
+/** 本地判断分支是否已合并时依次检查的目标主分支引用（兼顾远端 origin/main 与本地 main/master）。 */
+const MAIN_TARGET_REFS = [
+  "refs/remotes/origin/main",
+  "refs/heads/main",
+  "refs/remotes/origin/master",
+  "refs/heads/master",
+] as const;
+
+/**
+ * 本地判断 Worker 的分支 `refs/heads/<branch>` 是否已合并进主分支（`origin/main` 或 `main`）：
+ * - 账本 `workers` 表不持久化 PR 状态，且定期清理不能每轮调 GitHub API，因此用本地 git plumbing 判断；
+ * - 选 `git for-each-ref` + `git merge-base --is-ancestor` 而非 `git branch --merged`：
+ *   1. `merge-base --is-ancestor` 直接以退出码（0 = 是祖先，1 = 否）表达布尔结果，不依赖文本格式（`git branch --merged` 会带 `* `/`+ ` 前缀并枚举全部分支）；
+ *   2. 刚从主分支开出但未产生任何新提交的分支（`branchCommit === baseCommit`）天然是 `main` 的祖先，不能误判为“PR 已合并”，必须先比对 `baseCommit`；
+ *   3. 用一次 `for-each-ref` 同时取出分支与各候选主分支（`origin/main`、本地 `main` 等）的 SHA 并去重，最小化子进程调用次数。
+ */
+export async function isBranchMergedToMain(
+  repoFolder: string,
+  branch: string,
+  baseCommit: string | null = null,
+  options: GitOptions = {},
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const branchRef = `refs/heads/${branch}`;
+  const refsRun = await runGit(
+    repoFolder,
+    ["for-each-ref", "--format=%(refname) %(objectname)", branchRef, ...MAIN_TARGET_REFS],
+    timeoutMs,
+  );
+  if (refsRun.code !== 0) throw failed("git for-each-ref", refsRun);
+
+  let branchCommit: string | null = null;
+  const targetCommits = new Set<string>();
+  for (const line of refsRun.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const space = trimmed.lastIndexOf(" ");
+    if (space <= 0) continue;
+    const ref = trimmed.slice(0, space);
+    const sha = trimmed.slice(space + 1);
+    if (ref === branchRef) branchCommit = sha;
+    else targetCommits.add(sha);
+  }
+  if (branchCommit === null || targetCommits.size === 0) return false;
+  if (baseCommit !== null && branchCommit === baseCommit) return false;
+
+  for (const targetCommit of targetCommits) {
+    if (branchCommit === targetCommit) {
+      if (baseCommit !== null) return true;
+      continue;
+    }
+    const ancRun = await runGit(repoFolder, ["merge-base", "--is-ancestor", branchCommit, targetCommit], timeoutMs);
+    if (ancRun.code === 0) return true;
+    if (ancRun.code !== 1) throw failed("git merge-base --is-ancestor", ancRun);
+  }
+  return false;
+}
+
+/** 删掉指定的 worktree（不加 --force，有未提交改动或锁着时 git 会拒绝报错；分支保留）。 */
+export async function removeWorktree(repoFolder: string, worktreePath: string, options: GitOptions = {}): Promise<void> {
+  const run = await runGit(repoFolder, ["worktree", "remove", worktreePath], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git worktree remove", run);
+}
+
+/** 清理仓库里已经不存在的 worktree 登记（`git worktree prune`）。 */
+export async function pruneWorktrees(repoFolder: string, options: GitOptions = {}): Promise<void> {
+  const run = await runGit(repoFolder, ["worktree", "prune"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git worktree prune", run);
 }

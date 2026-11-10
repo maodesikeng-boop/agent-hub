@@ -4,7 +4,16 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addWorktree, GitError, hasUncommittedChanges, isRepoWithCommit, probeWorkspace } from "./index.ts";
+import {
+  addWorktree,
+  GitError,
+  hasUncommittedChanges,
+  isBranchMergedToMain,
+  isRepoWithCommit,
+  probeWorkspace,
+  pruneWorktrees,
+  removeWorktree,
+} from "./index.ts";
 
 /** 测试里自己用的 git：身份写死，不读用户的全局配置（也不会因为本机开了签名而卡住）。 */
 function git(cwd: string, ...args: string[]): string {
@@ -303,5 +312,68 @@ describe("probeWorkspace（agent 接口在 hub worker start 之前探主文件�
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
+  it("刚建好还没有新提交（等于 baseCommit）的分支不算已合并；有新提交且未合进 main 返回 false", async () => {
+    const repo = makeRepo("unmerged");
+    const wt = join(root, "wt", "1");
+    const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/1-feat" });
+    // 没任何新提交，等于 baseCommit → 不算已合并
+    expect(await isBranchMergedToMain(repo, "hub/1-feat", baseCommit)).toBe(false);
+
+    // 做了新提交，但还没合进 main → false
+    writeFileSync(join(wt, "feat.txt"), "new\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "add feat");
+    expect(await isBranchMergedToMain(repo, "hub/1-feat", baseCommit)).toBe(false);
+  });
+
+  it("分支通过 merge commit 或 fast-forward 合进本地 main 或 origin/main 后返回 true", async () => {
+    const repo = makeRepo("merged");
+    const wt1 = join(root, "wt", "1");
+    const { baseCommit: base1 } = await addWorktree({ repoFolder: repo, worktreePath: wt1, branch: "hub/1-ff" });
+    writeFileSync(join(wt1, "ff.txt"), "ff\n");
+    git(wt1, "add", "-A");
+    git(wt1, "commit", "-q", "-m", "ff commit");
+    // fast-forward 合进 main
+    git(repo, "merge", "--ff-only", "hub/1-ff");
+    expect(await isBranchMergedToMain(repo, "hub/1-ff", base1)).toBe(true);
+
+    // 第二个分支通过 --no-ff merge commit 合进 origin/main（本地 main 还没更新）
+    const wt2 = join(root, "wt", "2");
+    const { baseCommit: base2 } = await addWorktree({ repoFolder: repo, worktreePath: wt2, branch: "hub/2-noff" });
+    writeFileSync(join(wt2, "noff.txt"), "noff\n");
+    git(wt2, "add", "-A");
+    git(wt2, "commit", "-q", "-m", "noff commit");
+    const branchSha = git(wt2, "rev-parse", "HEAD");
+    // 模拟 origin/main 包含了该分支的提交
+    git(repo, "update-ref", "refs/remotes/origin/main", branchSha);
+    expect(await isBranchMergedToMain(repo, "hub/2-noff", base2)).toBe(true);
+  });
+
+  it("removeWorktree 删掉干净的 worktree 但保留分支；有未提交改动（不带 --force）时报错；pruneWorktrees 清理残留登记", async () => {
+    const repo = makeRepo("rm-wt");
+    const wtClean = join(root, "wt", "clean");
+    const wtDirty = join(root, "wt", "dirty");
+    await addWorktree({ repoFolder: repo, worktreePath: wtClean, branch: "hub/1-clean" });
+    await addWorktree({ repoFolder: repo, worktreePath: wtDirty, branch: "hub/2-dirty" });
+
+    // 干净的 worktree 可以正常删，分支仍保留
+    await removeWorktree(repo, wtClean);
+    expect(existsSync(wtClean)).toBe(false);
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-clean")).toContain("refs/heads/hub/1-clean");
+
+    // 有未提交改动（含未跟踪文件）时，不带 --force 的 git worktree remove 会失败且目录保留
+    writeFileSync(join(wtDirty, "untracked.txt"), "dirty\n");
+    await expect(removeWorktree(repo, wtDirty)).rejects.toThrow(GitError);
+    expect(existsSync(wtDirty)).toBe(true);
+
+    // 手动删掉目录后，pruneWorktrees 清理 git worktree list 里的残留项
+    rmSync(wtDirty, { recursive: true, force: true });
+    await pruneWorktrees(repo);
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("dirty");
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/2-dirty")).toContain("refs/heads/hub/2-dirty");
   });
 });

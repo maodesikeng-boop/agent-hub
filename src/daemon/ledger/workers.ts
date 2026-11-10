@@ -13,6 +13,7 @@
 // - Worker 会话的启动上下文。
 // 汇报格式、解析、那一行的写法、分支名在 shared/worker.ts；按角色放行的表在 shared/hub.ts；git 在 daemon/git/。
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { agentTextOf } from "../../shared/attachments.ts";
 import { normalizeWorkerTitle, systemMessageDedupeKey, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
@@ -33,7 +34,14 @@ import type {
 import { turnFailureReason, type DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubResult, WorkerHubStatus } from "../../shared/hub.ts";
 import type { HubCallContext, LaunchContext, SetupOutcome, WorktreeTask } from "../../shared/ledger.ts";
-import { DEFAULT_WORKER_MAX_TIME_MS, GIT_REASON_MAX_CHARS, MAX_TASK_BYTES, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
+import {
+  DEFAULT_WORKER_MAX_TIME_MS,
+  GIT_REASON_MAX_CHARS,
+  MAX_TASK_BYTES,
+  WORKER_BACKGROUND_HOLD_MAX_MS,
+  WORKER_LIST_RECENT_ENDED,
+  WORKTREE_RETENTION_DAYS,
+} from "../../shared/limits.ts";
 import { checkWorkerMaxTimeMs, formatDurationShort } from "../../shared/schedule.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
@@ -156,6 +164,17 @@ function describeWorkspace(worker: WorkerDbRow, mainFolder: string): string {
   return worker.workspace === "worktree"
     ? `在 worktree ${worker.worktree_path}（分支 ${worker.branch}）里干活`
     : `直接在项目的主文件夹 ${mainFolder} 里干活`;
+}
+
+/** 已收工、用 worktree 的 Worker，供后台 worktree 自动清理筛选候选。 */
+export interface EndedWorktreeCandidate {
+  workerId: WorkerId;
+  projectId: number;
+  repoFolder: string;
+  branch: string;
+  worktreePath: string;
+  baseCommit: string | null;
+  endedAt: number;
 }
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
@@ -621,7 +640,7 @@ export function createLedgerWorkers(
     insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
     const cleanup =
       ended.workspace === "worktree"
-        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：合并完用 git worktree remove ${ended.worktree_path} 删掉 worktree。`
+        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留）。`
         : "";
     const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
     return { text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${cleanup}`, data: { worker: toWorkerRecord(ended) } };
@@ -1035,13 +1054,59 @@ export function createLedgerWorkers(
     insertTurnFailed(p, worker, message.id, [message.id], error);
   };
 
-  /** agent 接口在 worker.show 之前查 PR 用：这个项目经理派的、在 worktree 里干活的 Worker 的 worktree 目录和分支；别的 null。 */
+  /** 已收工、建过 worktree 的 Worker 的 worktree 目录是否已被清理掉。 */
+  const isWorktreeCleaned = (worker: WorkerDbRow): boolean =>
+    worker.workspace === "worktree" &&
+    worker.status === "ended" &&
+    worker.base_commit !== null &&
+    worker.worktree_path !== null &&
+    existsSync(worktreesDir) &&
+    !existsSync(worker.worktree_path);
+
+  /** agent 接口在 worker.show 之前查 PR 用：这个项目经理派的、在 worktree 里干活的 Worker 的 worktree 目录（已清理则退回主文件夹）和分支；别的 null。 */
   const workerPrTarget = (session: AgentSessionRow | null, workerId: WorkerId): { cwd: string; branch: string } | null => {
     if (session === null || session.role !== "pm" || session.pmId === null) return null;
     const worker = workerRow(workerId);
     if (worker === null || worker.pm_id !== session.pmId || worker.workspace !== "worktree") return null;
     if (worker.worktree_path === null || worker.branch === null || worker.base_commit === null) return null;
-    return { cwd: worker.worktree_path, branch: worker.branch };
+    const cwd = isWorktreeCleaned(worker) ? mainFolderOf(worker.project_id) : worker.worktree_path;
+    return cwd === "" ? null : { cwd, branch: worker.branch };
+  };
+
+  /** 已收工、用 worktree 的 Worker 列表（供后台自动清理扫描候选）。 */
+  const listEndedWorktreeWorkers = (): EndedWorktreeCandidate[] =>
+    db
+      .all<{
+        id: number;
+        project_id: number;
+        branch: string;
+        worktree_path: string;
+        base_commit: string | null;
+        updated_at: number;
+        repo_folder: string;
+      }>(
+        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit, w.updated_at, f.path AS repo_folder
+         FROM workers w
+         JOIN project_folders f ON f.project_id = w.project_id AND f.is_main = 1 AND f.removed_at IS NULL
+         WHERE w.status = 'ended' AND w.workspace = 'worktree'
+           AND w.worktree_path IS NOT NULL AND w.branch IS NOT NULL
+         ORDER BY w.id`,
+      )
+      .map((r) => ({
+        workerId: r.id,
+        projectId: r.project_id,
+        repoFolder: r.repo_folder,
+        branch: r.branch,
+        worktreePath: r.worktree_path,
+        baseCommit: r.base_commit,
+        endedAt: r.updated_at,
+      }));
+
+  /** 清理前再次确认 Worker 仍已收工且没有正在跑的一轮。 */
+  const isWorkerCleanable = (workerId: WorkerId): boolean => {
+    const worker = workerRow(workerId);
+    if (worker === null || worker.status !== "ended" || worker.workspace !== "worktree") return false;
+    return !isWorkerInFlight(worker);
   };
 
   /**
@@ -1108,5 +1173,8 @@ export function createLedgerWorkers(
     clearAllMaxTime,
     turnMaxTimeOf,
     maxTimeTimers,
+    isWorktreeCleaned,
+    listEndedWorktreeWorkers,
+    isWorkerCleanable,
   };
 }

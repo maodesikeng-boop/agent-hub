@@ -545,6 +545,15 @@ export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 
 /** 每小时巡检一次到期归档 PM。 */
 export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
+// ---- Worker worktree 自动清理（daemon/worktree-cleanup.ts、daemon/ledger/workers.ts）----
+/** 已收工且无未提交改动的 Worker worktree 保留多少天（PR 已合并的不等，直接清；分支保留）。 */
+export const WORKTREE_RETENTION_DAYS = 3;
+export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
+export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+/** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
+export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
+
 // ---- 输入框 /hub:worker 选择列表（web/worker-pick.ts）----
 /** 同一份模型名单下按（级别、已选、筛选词）缓存的列表最多留几份；超了整份清掉重算（名单一换，旧的整份随 WeakMap 回收）。 */
 export const WORKER_PICK_CACHE_MAX = 64;
