@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledModelCatalog } from "../shared/index.ts";
+import { bundledModelCatalog, vendorSpec } from "../shared/index.ts";
 import type { AgentVendor, Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { COMPACT_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
@@ -1240,6 +1240,18 @@ describe("selectors", () => {
     ]);
     expect(fetchedQuotaUsage(res, 6_000_000)[0]!.windows[0]).toMatchObject({ percent: 0, resetsAt: null, warning: false });
     expect(fetchedQuotaUsage({ groups: [] }, 0)).toEqual([]);
+  });
+
+  it("新网页兼容旧后台不带 vendor 的 quota；旧网页按组 id 仍能读新响应", () => {
+    const windows = { five_hour: { utilization: 0.85, resetsAt: 5000, status: "allowed" as const } };
+    const legacy = { groups: [{ id: "gemini", name: "Gemini", windows }] };
+    const current: QuotaResponse = { groups: [{ vendor: "agy", id: "gemini", windows }] };
+    expect(fetchedQuotaUsage(legacy, 0)).toEqual(fetchedQuotaUsage(current, 0));
+    expect(fetchedQuotaUsage(legacy, 0)[0]).toMatchObject({ name: "Antigravity", group: "Gemini" });
+    // 旧网页只读取 id/windows，再从本地 spec 取组名。
+    const oldGroup = vendorSpec("agy").quota!.fetched!.groups.find((g) => g.key === current.groups[0]!.id);
+    expect(oldGroup?.name).toBe("Gemini");
+    expect(JSON.stringify(current).length).toBeLessThanOrEqual(JSON.stringify(legacy).length);
   });
 
   // 真实数据（2026-11-07 21:04）：codex 会话的 30 天窗口 resetsAt 1796193545（12/2 14:39）比 claude 会话的 5 小时窗口 1794070800 晚，

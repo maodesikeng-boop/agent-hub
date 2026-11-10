@@ -312,6 +312,7 @@ describe("审查后补的（PR #47）", () => {
       GOOGLE_GEMINI_BASE_URL: "keep",
       PATH: "/bin",
     };
+    const before = { ...base };
     expect(buildSetupEnv(base, { rootPath: "/r", worktreePath: "/w" })).toEqual({
       CODEX_HOME: "keep",
       OPENAI_BASE_URL: "keep",
@@ -320,6 +321,7 @@ describe("审查后补的（PR #47）", () => {
       [ENV_SETUP_ROOT_PATH]: "/r",
       [ENV_SETUP_WORKTREE_PATH]: "/w",
     });
+    expect(base).toEqual(before);
   });
 
   it("R3 输出尾部：去掉 ANSI 序列和控制字符，\\r 只留最后一段（进度条），CRLF 照常是换行", async () => {

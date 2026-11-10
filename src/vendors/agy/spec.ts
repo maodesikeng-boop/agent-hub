@@ -85,6 +85,8 @@ export default defineVendor({
     },
   },
   prompt: {
+    // 保留迁移前公共提示词的触发条件：CLAUDE.md 与 AGENTS.md 并存时提醒。
+    instructionFile: "CLAUDE.md",
     subagentTools: ["invoke_subagent"],
     backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`",
     vendorOnlyTools: "agy 的 `WaitMsBeforeAsync`",

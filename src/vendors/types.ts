@@ -127,7 +127,7 @@ export interface VendorSpec<Id extends string = string> {
     /** 后台运行长命令的工具写法说明（如 "Bash 工具的 `run_in_background`"）；用于拼提示词。 */
     backgroundCommandTool: string;
     /**
-     * 这家优先读、而且两个都有时会遮住 AGENTS.md 的说明文件（claude：CLAUDE.md）。只在它和 AGENTS.md 都在、它里面又没写 @AGENTS.md 时，
+     * 需要提醒先读 AGENTS.md 的说明文件（CLAUDE.md 沿用迁移前的条件）。只在它和 AGENTS.md 都在、它里面又没写 @AGENTS.md 时，
      * 提示词才加一句“先读 AGENTS.md”（daemon/prompt.ts 的 needsAgentsNote）。不写 = 这家自己读 AGENTS.md，不加。
      */
     instructionFile?: string;

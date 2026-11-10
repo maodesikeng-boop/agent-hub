@@ -372,7 +372,13 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
 export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
   for (const group of res.groups) {
-    const quota = isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
+    // 旧后台没有 vendor：只接受能唯一归属的组，避免未来两家同名时串额度。
+    const legacy = group.vendor === undefined
+      ? QUOTA_VENDORS.filter((v) => v.fetched?.groups.some((g) => g.key === group.id))
+      : [];
+    const quota = group.vendor === undefined
+      ? (legacy.length === 1 ? legacy[0] : undefined)
+      : isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
     const spec = quota?.fetched?.groups.find((g) => g.key === group.id);
     if (quota === undefined || spec === undefined) continue;
     const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {

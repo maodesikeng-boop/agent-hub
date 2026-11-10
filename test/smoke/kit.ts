@@ -111,8 +111,7 @@ export interface TestHub {
  */
 export async function startTestHub(): Promise<TestHub> {
   const dataDir = realpathSync.native(mkdtempSync(join(shortTmp(), "ah-hub-")));
-  const folder = join(dataDir, "project");
-  mkdirSync(folder, { recursive: true });
+  const folder = realpathSync.native(mkdtempSync(join(shortTmp(), "ah-project-")));
   const db = openTestDb();
   const ledger = createLedger(db, { pmHomeRoot: join(dataDir, "pm-home"), dataHome: dataDir, worktreesDir: join(dataDir, "worktrees") });
   const pm = ledger.createPm({ name: "冒烟", mode: "hands_on", persona: "", defaultModel: null });
@@ -132,6 +131,7 @@ export async function startTestHub(): Promise<TestHub> {
       await api.close();
       db.close();
       rmSync(dataDir, { recursive: true, force: true });
+      rmSync(folder, { recursive: true, force: true });
     },
   };
 }

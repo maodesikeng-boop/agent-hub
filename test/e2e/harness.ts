@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
+import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
 import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import {
   API_PATHS,
@@ -140,7 +141,7 @@ export function makeEnv(): E2eEnv {
   const running = new Set<ChildProcess>();
 
   // 在 agent 的会话里（比如 Worker）跑测试时，那家的父会话变量（含 Worker 才有的）会传下去，假 claude 就把项目经理也当成 Worker：去掉
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !PARENT_SESSION_ENV.includes(key)));
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !PARENT_SESSION_ENV.includes(key) && !(key in WORKER_ENV)));
   // 各家可执行文件按名单来：默认厂商用给的（假 claude），别家指到不存在的路径，免得起了这台机器上真装着的
   const baseEnv = (vendorPath: string, extra: Record<string, string> = {}) => ({
     ...inherited,

@@ -352,6 +352,17 @@ describe("开始复制（claimHandover）", () => {
     expect(ledger.claimHandover()).toBeNull();
   });
 
+  it.each(["claude", "agy", "codex"] as const)("A2 换厂商交接只举来源 %s 的专属工具", (vendor) => {
+    db.run("UPDATE agent_sessions SET vendor = ? WHERE id = ?", vendor, firstSession);
+    reachThreshold();
+    const target = vendor === "claude" ? "codex" : "claude";
+    db.run("UPDATE handovers SET to_vendor = ?", target);
+    const job = ledger.claimHandover()!;
+    expect(job.prompt).toContain(`（比如 ${vendorSpec(vendor).prompt.vendorOnlyTools}）`);
+    expect(job.prompt).toContain("写成要做的事和现在的状态");
+    expect(job.prompt).not.toContain(`（比如 ${vendorSpec(target).prompt.vendorOnlyTools}）`);
+  });
+
   it("旧会话在忙、有发给它还在路上的消息：不领，留在 queued；空闲了再领", () => {
     reachThreshold();
     const busy = post("在跑的");

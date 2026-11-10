@@ -65,6 +65,8 @@ export default defineVendor({
     },
   },
   prompt: {
+    // 保留迁移前公共提示词的触发条件：CLAUDE.md 与 AGENTS.md 并存时提醒。
+    instructionFile: "CLAUDE.md",
     subagentTools: ["spawn_agent"],
     backgroundCommandTool: "后台命令参数",
     vendorOnlyTools: "codex 的 apply_patch",

@@ -6,8 +6,7 @@ import type { VendorPathsModule } from "../daemon-types.ts";
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ platform, linuxInstallDirs, join }) => (platform === "darwin" ? [] : linuxInstallDirs.map((dir) => join(dir, "claude")));
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://claude.ai/install.sh | bash";
-// claude 给它起的子进程设的（照 experiments/m0/claude_clean.sh）；CLAUDE_CODE_DISABLE_AUTO_MEMORY 是我们给 Worker 设的（daemon.ts 的 launchFiles），
-// 在 Worker 里起守护进程时不能漏给项目经理
+// claude 给它起的子进程设的（照 experiments/m0/claude_clean.sh），保持迁移前名单。
 export const parentSessionEnv: VendorPathsModule["parentSessionEnv"] = [
   "CLAUDECODE",
   "CLAUDE_CODE_ENTRYPOINT",
@@ -21,7 +20,6 @@ export const parentSessionEnv: VendorPathsModule["parentSessionEnv"] = [
   "CLAUDE_CODE_EXECPATH",
   "CLAUDE_EFFORT",
   "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-  "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
 ];
 // 对照 https://code.claude.com/docs/en/env-vars（2026-11 核过）：ANTHROPIC_API_KEY、ANTHROPIC_AUTH_TOKEN、ANTHROPIC_AWS_API_KEY、
 // ANTHROPIC_FOUNDRY_API_KEY、ANTHROPIC_FOUNDRY_AUTH_TOKEN、AWS_BEARER_TOKEN_BEDROCK、CLAUDE_CODE_OAUTH_TOKEN、

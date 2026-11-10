@@ -86,7 +86,7 @@ describe("提示词", () => {
     expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(false);
   });
 
-  it("按这家的 prompt.instructionFile 判断（A14）：两个文件都有时 claude 的项目经理、Worker 加那一句，没写 instructionFile 的厂商不加", () => {
+  it("按这家的 prompt.instructionFile 判断（A14）：两个文件都有时各家项目经理、Worker 保留迁移前的提醒", () => {
     writeFileSync(join(dir, "AGENTS.md"), "# 规矩");
     writeFileSync(join(dir, "CLAUDE.md"), "# 说明");
     for (const vendor of AGENT_VENDORS) {

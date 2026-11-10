@@ -301,10 +301,10 @@ export interface ModelsResponse {
 
 /**
  * GET /api/quota：要按需查额度的几家合在一个响应里，一组一块（按名单顺序）。vendor + id 对上 spec 的 quota.fetched.groups[].key，
- * 组名、厂商名网页从 spec 取，不随响应发。窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。
+ * 组名、厂商名网页从 spec 取，不随响应发。旧后台的 vendor 可缺省，网页按唯一组 id 识别。窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。
  */
 export interface QuotaResponse {
-  groups: Array<{ vendor: AgentVendor; id: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
+  groups: Array<{ vendor?: AgentVendor; id: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
 }
 
 /** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给；builtin：厂商自带的命令（用户自己的命令、skill 不带这个字段）。 */
