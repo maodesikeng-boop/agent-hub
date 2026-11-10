@@ -22,6 +22,7 @@ import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
+import type { WorkerPick } from "./worker.ts";
 
 export const API_PATHS = {
   /**
@@ -203,6 +204,12 @@ export interface PostMessageRequest {
   clientId: string;
   text: string;
   attachmentIds?: string[];
+  /**
+   * 只在项目经理对话里有意义（别的对话带了 → 400 invalid）：用户在输入框用 /hub:worker 指定，回应这一条消息时派的 Worker 用这家厂商、模型、思考程度
+   * （model、effort 是 null 表示 Default，项目经理自己定）。服务端校验形状（shared/worker-pick-schema.ts 的 workerPickSchema），
+   * 不查这台设备现在能不能用；存进消息的 meta.workerPick，交给项目经理时原文前面加一块参数句子（workerPickNote）。
+   */
+  workerPick?: WorkerPick;
 }
 
 export interface PostMessageResponse {
@@ -298,6 +305,14 @@ export interface ComposerCommand {
   argumentHint?: string;
   builtin?: true;
 }
+
+/**
+ * agent-hub 自己的输入框命令（不是厂商的）：网页把它们加在“/”列表最前面，只在项目经理对话里出现，不进 daemon/commands-catalog。
+ * 名字用 hub: 前缀（和厂商插件的 插件:名字 同一个约定），不带开头的 /。
+ */
+export const HUB_COMPOSER_COMMANDS: readonly ComposerCommand[] = [
+  { name: "hub:worker", description: "Pick provider, model and effort for Workers" },
+];
 
 /** GET /api/conversations/:id/commands。 */
 export interface CommandsResponse {

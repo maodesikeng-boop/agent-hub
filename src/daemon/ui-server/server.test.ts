@@ -1484,6 +1484,42 @@ describe("POST 消息带附件", () => {
     expect(ledger.posted).toEqual([]);
   });
 
+  it("workerPick：校验过的原样交给账本（和附件互不影响）；不带就没有这个字段", async () => {
+    const workerPick = { vendor: "codex", model: "gpt-5.5", effort: "high" };
+    const res = await post({ clientId: "w1", text: "拆三个", workerPick });
+    expect(res.statusCode).toBe(200);
+    expect(ledger.posted[0]).toEqual({ conversationId: 1, clientId: "w1", text: "拆三个", workerPick });
+    const a = await uploaded("a.txt");
+    await post({ clientId: "w2", text: "带文件", workerPick: { vendor: "claude", model: null, effort: null }, attachmentIds: [a.id] });
+    expect(ledger.posted[1]).toMatchObject({ workerPick: { vendor: "claude", model: null, effort: null }, attachments: [a] });
+    await post({ clientId: "w3", text: "没带" });
+    expect(ledger.posted[2]).not.toHaveProperty("workerPick");
+  });
+
+  it("workerPick 形状不对（厂商不认识、模型名不合规、档位不是短字符串、缺字段、多字段、不是对象）：400，不调账本", async () => {
+    for (const workerPick of [
+      { vendor: "nope", model: null, effort: null },
+      { vendor: "codex", model: "bad model", effort: null },
+      { vendor: "codex", model: null, effort: "" },
+      { vendor: "codex", model: null, effort: "x".repeat(200) },
+      { vendor: "codex", model: null },
+      { vendor: "codex", model: null, effort: null, extra: true },
+      "codex",
+      null,
+    ]) {
+      const res = await post({ clientId: "bad", text: "hi", workerPick });
+      expect(res.statusCode, JSON.stringify(workerPick)).toBe(400);
+    }
+    expect(ledger.posted).toEqual([]);
+  });
+
+  it("不是项目经理的对话带 workerPick（账本说 invalid）：400 invalid；这台设备能不能用那家厂商不在这里查", async () => {
+    ledger.failWith = new LedgerRequestError("invalid", "workerPick 只能用在项目经理的对话里");
+    const res = await post({ clientId: "w4", text: "hi", workerPick: { vendor: "codex", model: null, effort: null } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: "invalid" });
+  });
+
   it("没有 attachmentIds 的老请求照旧：账本拿到的输入里没有 attachments 字段", async () => {
     await post({ clientId: "c5", text: "hi" });
     expect(ledger.posted[0]).toEqual({ conversationId: 1, clientId: "c5", text: "hi" });

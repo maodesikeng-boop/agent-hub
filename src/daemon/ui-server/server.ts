@@ -79,8 +79,10 @@ import {
   type StateSnapshot,
   type TunnelStatus,
   type TunnelStatusResponse,
+  type WorkerPick,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
@@ -392,10 +394,11 @@ const postMessageBodySchema = z.object({
   clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
   text: z.string(),
   attachmentIds: z.array(z.string()).optional(),
+  workerPick: workerPickSchema.optional(),
 });
 
-function parsePostBody(body: unknown): { clientId: string; text: string; attachmentIds: string[] } {
-  const { clientId, text, attachmentIds: rawIds } = parseWithSchema(postMessageBodySchema, body);
+function parsePostBody(body: unknown): { clientId: string; text: string; attachmentIds: string[]; workerPick?: WorkerPick } {
+  const { clientId, text, attachmentIds: rawIds, workerPick } = parseWithSchema(postMessageBodySchema, body);
   const ids = [...new Set(rawIds ?? [])];
   if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new LedgerRequestError("invalid", ATTACHMENTS_TOO_MANY_MESSAGE);
   // 只发文件的时候文字可以是空的
@@ -403,7 +406,7 @@ function parsePostBody(body: unknown): { clientId: string; text: string; attachm
   if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
     throw new HttpError(400, `text must be at most ${MAX_MESSAGE_BYTES} bytes`);
   }
-  return { clientId, text, attachmentIds: ids };
+  return { clientId, text, attachmentIds: ids, ...(workerPick !== undefined ? { workerPick } : {}) };
 }
 
 const publicEntryBodySchema = z.object({ enabled: z.boolean(), hostname: z.string().nullable().optional() }).strict();
@@ -1075,7 +1078,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.post("/api/conversations/:id/messages", async (req): Promise<PostMessageResponse> => {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
-      const { clientId, text, attachmentIds } = parsePostBody(req.body);
+      const { clientId, text, attachmentIds, workerPick } = parsePostBody(req.body);
       // 附件按编号从磁盘重新算（路径、名字、大小），不信请求里的任何别的东西
       const attachments = attachmentIds.map((id) => resolveUpload(uploadsDir, id) ?? undefined);
       if (attachments.some((a) => a === undefined)) throw new LedgerRequestError("invalid", ATTACHMENTS_MISSING_MESSAGE);
@@ -1084,6 +1087,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         clientId,
         text,
         ...(attachments.length > 0 ? { attachments: attachments as NonNullable<(typeof attachments)[number]>[] } : {}),
+        // 只校验形状；是不是项目经理的对话由账本查（invalid），这台设备能不能用那家厂商不查（hub worker start 会报）
+        ...(workerPick !== undefined ? { workerPick } : {}),
       });
     });
 
