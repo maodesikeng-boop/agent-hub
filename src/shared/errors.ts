@@ -39,6 +39,7 @@ export const API_ERRORS = {
 /** 本地错误：只在客户端、命令行、启动时用，没有 status，不可能被当成 HTTP 应答发出去。 */
 export const LOCAL_ERRORS = {
   network: { text: "连不上守护进程", hint: "看守护进程有没有在跑" },
+  timeout: { text: "请求超时", hint: "网络可能断了，稍后再试" },
   port_in_use: { text: "端口被占了", hint: "可能已经开了一个；或设 AGENT_HUB_PORT 换端口" },
   bad_port: { text: "AGENT_HUB_PORT 不是端口号", hint: "改成 0–65535 的整数" },
   sandbox_unavailable: { text: "这台机器的 OS 沙箱起不来，不能启动 Worker", hint: "Linux 上先跑一次 sudo scripts/linux-sandbox-setup.sh 配置 bubblewrap 与 AppArmor" },

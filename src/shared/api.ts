@@ -406,6 +406,17 @@ interface ResyncMessage {
 
 export type WsServerMessage = Change | ResyncMessage;
 
+/**
+ * 服务端每 WS_HEARTBEAT_MS 推一条，证明这条连接还通（daemon/ws-keepalive.ts）。网页的 connection.ts 收到只记“最后收到”的时间，
+ * 不交给界面，所以不在 WsServerMessage 里。入口转发时只发入口自己的，对方的那条丢掉（一跳一份）。
+ */
+export interface HeartbeatMessage {
+  type: "heartbeat";
+}
+
+/** 心跳在线上的样子：固定一串，收发两边按原文比，不用每条都解析。 */
+export const WS_HEARTBEAT_TEXT = JSON.stringify({ type: "heartbeat" } satisfies HeartbeatMessage);
+
 // ---- WebSocket：网页 → 服务端（联机 P4） ----
 
 /**

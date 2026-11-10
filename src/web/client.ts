@@ -1,6 +1,8 @@
 // 网页调用界面服务的接口。路径和数据形状都来自 src/shared/api.ts。
 import {
   API_PATHS,
+  API_REQUEST_TIMEOUT_MS,
+  SLOW_API_REQUEST_TIMEOUT_MS,
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
@@ -45,6 +47,7 @@ import {
   type TunnelStatusResponse,
 } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
+import { checkConnections } from "./connection.ts";
 
 /** 服务端回了非 2xx，或根本没连上。text/hint/raw 都来自 humanize（docs/user-facing-errors-design.md），message 就是 text；组件用 format.ts 的 errorText 拿来显示。 */
 export class ApiError extends Error {
@@ -81,6 +84,16 @@ function networkError(err: unknown): ApiError {
   return new ApiError(0, { code: "network", ...LOCAL_ERRORS.network, raw });
 }
 
+/**
+ * 请求或读响应体时出错：超时（AbortSignal.timeout 的 TimeoutError）报 timeout，别的当 network。
+ * 超时多半是连接静默断了（手机 VPN、NAT 丢了连接，请求挂在死连接上）：顺便让实时连接查一次，该重连就重连。
+ */
+function transportError(err: unknown): ApiError {
+  if (!(err instanceof DOMException && err.name === "TimeoutError")) return networkError(err);
+  checkConnections();
+  return new ApiError(0, { code: "timeout", ...LOCAL_ERRORS.timeout, raw: err.message });
+}
+
 /** 非 2xx 响应 → ApiError：应答体是 JSON 就按 JSON，不是就把文本当 body，都交给 humanize。 */
 async function failure(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => "");
@@ -97,26 +110,37 @@ async function failure(res: Response): Promise<ApiError> {
   return err;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** timeoutMs：从发出到读完响应体最多等多久（limits.ts）；null 不限时，只给上传、等用户操作的请求用。 */
+async function request<T>(path: string, init?: RequestInit, timeoutMs: number | null = API_REQUEST_TIMEOUT_MS): Promise<T> {
+  const timeout = timeoutMs === null ? {} : { signal: AbortSignal.timeout(timeoutMs) };
   let res: Response;
+  let text: string;
   try {
-    res = await fetch(path, { credentials: "same-origin", ...init });
+    res = await fetch(path, { credentials: "same-origin", ...init, ...timeout });
   } catch (err) {
-    throw networkError(err);
+    throw transportError(err);
   }
   if (!res.ok) throw await failure(res);
-  const text = await res.text();
+  try {
+    text = await res.text();
+  } catch (err) {
+    throw transportError(err);
+  }
   return (text === "" ? undefined : JSON.parse(text)) as T;
 }
 
-function postJson<T>(path: string, body?: unknown): Promise<T> {
+function postJson<T>(path: string, body?: unknown, timeoutMs: number | null = API_REQUEST_TIMEOUT_MS): Promise<T> {
   // 没有请求体就不声明 JSON：界面服务（Fastify）对“声明了 JSON 却是空的”回 400
-  if (body === undefined) return request<T>(path, { method: "POST" });
-  return request<T>(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  if (body === undefined) return request<T>(path, { method: "POST" }, timeoutMs);
+  return request<T>(
+    path,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    timeoutMs,
+  );
 }
 
 function putJson<T>(path: string, body: unknown): Promise<T> {
@@ -137,7 +161,8 @@ export function createClient(device: DeviceId | null) {
     device,
     /** 这台设备上的地址（文件链接、预览要用）。 */
     url: at,
-    fetchState: () => request<StateSnapshot>(at(API_PATHS.state)),
+    /** 快照在手机上可能要传一会儿：用长一点的超时。 */
+    fetchState: () => request<StateSnapshot>(at(API_PATHS.state), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchOlderMessages: (conversationId: ConversationId, before: MessageId) =>
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
@@ -148,11 +173,16 @@ export function createClient(device: DeviceId | null) {
      */
     postUpload: async (file: Blob, name: string): Promise<Attachment> => {
       try {
-        return await request<Attachment>(`${at(API_PATHS.uploads)}?name=${encodeURIComponent(name)}`, {
-          method: "POST",
-          headers: { "content-type": "application/octet-stream" },
-          body: file,
-        });
+        // 不限时：大文件在慢网上传多久都正常
+        return await request<Attachment>(
+          `${at(API_PATHS.uploads)}?name=${encodeURIComponent(name)}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/octet-stream" },
+            body: file,
+          },
+          null,
+        );
       } catch (err) {
         if (err instanceof ApiError && err.status === 413) throw new ApiError(413, { code: "too_large", text: UPLOAD_TOO_LARGE_MESSAGE, raw: err.raw });
         throw err;
@@ -160,8 +190,8 @@ export function createClient(device: DeviceId | null) {
     },
     postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
     postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),
-    /** 让守护进程弹出原生的“选择文件夹”。等用户选完才回；取消（或超时）是 path null。 */
-    postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body),
+    /** 让守护进程弹出原生的“选择文件夹”。等用户选完才回（不限时，服务端自己最多等 PICK_FOLDER_TIMEOUT_MS）；取消（或超时）是 path null。 */
+    postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body, null),
     fetchPersona: (pmId: PmId) => request<PersonaResponse>(at(API_PATHS.persona(pmId))),
     putPersona: (pmId: PmId, body: EditPersonaRequest) => putJson<EditPersonaResponse>(at(API_PATHS.persona(pmId)), body),
     postRevertPersonaChange: (changeId: PersonaChangeId) => postJson<EditPersonaResponse>(at(API_PATHS.revertPersonaChange(changeId))),
@@ -174,9 +204,9 @@ export function createClient(device: DeviceId | null) {
      * refresh: REFRESH_UNUSABLE 让服务端只重问不能用的那几家。
      */
     fetchModels: (options: { refresh?: typeof REFRESH_UNUSABLE } = {}) =>
-      request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models)),
-    /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。 */
-    fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota)),
+      request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。服务端可能要现问（最多 FETCHED_QUOTA_TIMEOUT_MS）。 */
+    fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
@@ -241,7 +271,7 @@ export function postLoginLink(): Promise<LoginLinkResponse> {
 /** 在 Finder 中显示 / 用默认程序打开的对象：agent 发来的文件（哪条消息的第几个）或聊天框上传的附件。 */
 export type FileActionTarget = { kind: "sent"; messageId: MessageId; index: number } | { kind: "upload"; id: string };
 
-/** 预览窗取文件内容：maxBytes 不是 null 时只要前这么多字节（Range；服务端不理 Range 也截到这么多）。 */
+/** 预览窗取文件内容：maxBytes 不是 null 时只要前这么多字节（Range；服务端不理 Range 也截到这么多）。文件可能大，不限时。 */
 export async function fetchFileBytes(url: string, maxBytes: number | null): Promise<ArrayBuffer> {
   let res: Response;
   try {
