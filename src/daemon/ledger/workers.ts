@@ -705,7 +705,11 @@ export function createLedgerWorkers(
    * 这一轮里有用户直接对 Worker 说的话：带上原文；标了失败的写明用户那边可以自己点重试（不用项目经理转告）。
    */
   const insertTurnFailed = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, messageIds: MessageId[], reason: string) => {
-    const lines = [`这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`];
+    const lines = [
+      reason === TURN_STOPPED
+        ? `用户亲手停了这一轮，它现在是停着的。用户没有明确说继续之前，不要用 ${HUB_COMMAND} worker send 叫醒它；先告诉用户它停了、现在是什么状态，由用户决定继续还是 ${HUB_COMMAND} worker end。`
+        : `这一轮没做完：${reason}。要它接着做用 ${HUB_COMMAND} worker send ${worker.id} --stdin，不要了用 ${HUB_COMMAND} worker end ${worker.id}。`,
+    ];
     for (const id of messageIds) {
       const message = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
       if (message === undefined || message.sender !== "user" || message.worker_id !== worker.id) continue;

@@ -501,7 +501,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(await client.stop(worker.worker_conversation_id)).toBe(202);
     const [line] = await waitLines(client, pm.conversationId, "turn_failed", 1);
     expect(line!.summary).toBe("被停止了");
-    await waitUntil("pm got the stop", () => (env.stdinTexts().some((t) => t.includes("【Worker #1 · 长活 的汇报】") && t.includes("被停止了")) ? true : undefined));
+    await waitUntil("pm got the stop", () => (env.stdinTexts().some((t) => t.includes("【Worker #1 · 长活 的汇报】") && t.includes("用户亲手停了这一轮")) ? true : undefined));
     expect(query<{ status: string }>("SELECT status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker.worker_conversation_id)).toEqual([
       { status: "stopped" },
     ]);
