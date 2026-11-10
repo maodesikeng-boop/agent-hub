@@ -18,6 +18,7 @@ import {
   ENV_TAILSCALE,
   HUB_COMMAND,
   WORKER_ENV,
+  WS_HEARTBEAT_TEXT,
   type Change,
   type CreatePmRequest,
   type CreatePmResponse,
@@ -324,7 +325,10 @@ export class Client {
     const url = `ws://127.0.0.1:${new URL(this.base).port}${API_PATHS.ws}${since === undefined ? "" : `?since=${since}`}`;
     const socket = new WebSocket(url, { headers: this.headers() });
     const messages: WsServerMessage[] = [];
-    socket.addEventListener("message", (e) => messages.push(JSON.parse(String(e.data)) as WsServerMessage));
+    // 心跳（每 WS_HEARTBEAT_MS 一条）只证明连接还通，不算推送
+    socket.addEventListener("message", (e) => {
+      if (String(e.data) !== WS_HEARTBEAT_TEXT) messages.push(JSON.parse(String(e.data)) as WsServerMessage);
+    });
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () => resolve());
       socket.addEventListener("error", () => reject(new Error("websocket error")));

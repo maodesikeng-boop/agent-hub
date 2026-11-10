@@ -1,7 +1,8 @@
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENTS_TOO_MANY_MESSAGE, MAX_ATTACHMENTS_PER_MESSAGE, MAX_UPLOAD_BYTES, UPLOAD_CLIENT_CONCURRENCY } from "../shared/index.ts";
 import { fakeDropData, fakeFileEntry, fakeFolderEntry } from "./test-utils.ts";
-import { formatBytes, readDropped, stageFiles, uploadFiles, type DroppedData } from "./upload.ts";
+import { formatBytes, readDropped, stageFiles, uploadFiles, useDraftStore, type DroppedData } from "./upload.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -157,5 +158,37 @@ describe("上传并发", () => {
     await expect(uploadFiles(Array.from({ length: 10 }, (_, i) => file(`f${i}.txt`)))).rejects.toThrow("f0.txt");
     await new Promise((r) => setTimeout(r, 50));
     expect(started.length).toBeLessThan(10);
+  });
+});
+
+describe("useDraftStore：发出或删除对话后回收空槽", () => {
+  it("有订阅时返回同一个 DraftSlot；发出清空且取消订阅后回收，删除对话（retain）也清掉", () => {
+    const { result } = renderHook(() => useDraftStore<string>());
+    const drafts = result.current;
+    const s1 = drafts.of("1");
+    const unsub = s1.store.subscribe(() => {});
+    expect(drafts.of("1")).toBe(s1);
+    s1.set("草稿");
+    s1.setPick({ vendor: "claude", model: "opus", effort: "high" });
+    unsub();
+    // 有内容或有标签时切走（无订阅）仍保留
+    expect(drafts.of("1")).toBe(s1);
+    expect(drafts.of("1").get()).toBe("草稿");
+    expect(drafts.of("1").getPick()).toEqual({ vendor: "claude", model: "opus", effort: "high" });
+
+    // 发出后清空，无订阅时自动从 Map 回收
+    s1.set("");
+    s1.setPick(null);
+    expect(drafts.of("1")).not.toBe(s1);
+
+    // 删除对话（retain）时，即使有未发草稿和标签也一并清掉
+    const s2 = drafts.of("2");
+    s2.set("未发");
+    s2.setPick({ vendor: "claude", model: null, effort: null });
+    act(() => drafts.retain((k) => k !== "2"));
+    const s2After = drafts.of("2");
+    expect(s2After).not.toBe(s2);
+    expect(s2After.get()).toBe("");
+    expect(s2After.getPick()).toBeNull();
   });
 });

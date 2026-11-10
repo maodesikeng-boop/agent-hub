@@ -210,10 +210,16 @@ export function Composer({
   const repick = () => {
     const el = ref.current;
     const head = `/${WORKER_COMMAND} `;
-    if (!value.startsWith(head)) {
+    const cmdPrefix = `/${WORKER_COMMAND}`;
+    if (value === cmdPrefix || value.startsWith(head) || value.startsWith(`${cmdPrefix}\n`)) {
+      const nl = value.indexOf("\n");
+      const rest = nl < 0 ? "" : value.slice(nl + 1);
+      onChange(rest === "" ? head : `${head}\n${rest}`);
+    } else {
       repickCaret.current = el?.selectionStart ?? value.length;
       onChange(value === "" ? head : `${head}\n${value}`);
     }
+    suggest.reopen();
     pendingCursor.current = head.length;
     setCursor(head.length);
     el?.focus({ preventScroll: true });
@@ -279,7 +285,15 @@ export function Composer({
         {(files.length > 0 || workerPick !== null) && (
           <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
             {workerPick !== null && onWorkerPick && (
-              <WorkerPickChip pick={workerPick} disabled={busy || disabled} onEdit={repick} onRemove={() => onWorkerPick(null)} />
+              <WorkerPickChip
+                pick={workerPick}
+                disabled={busy || disabled}
+                onEdit={repick}
+                onRemove={() => {
+                  repickCaret.current = null;
+                  onWorkerPick(null);
+                }}
+              />
             )}
             {files.map(({ key, file }) => (
               <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
@@ -333,6 +347,7 @@ export function Composer({
             aria-controls={suggest.menu ? menuId : undefined}
             aria-activedescendant={suggest.menu && suggest.menu.items.length > 0 && suggest.menu.activeIndex >= 0 ? optionId(menuId, suggest.menu.activeIndex) : undefined}
             onChange={(e) => {
+              if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
               setCursor(e.target.selectionStart);
               onChange(e.target.value);
               if (notice !== null) staging.dismissNotice(); // 开始打字就不再挂着旧提示

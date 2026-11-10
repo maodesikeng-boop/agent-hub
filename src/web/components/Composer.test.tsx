@@ -560,6 +560,29 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(tag()).toHaveAccessibleName("Worker model: Claude Code");
   });
 
+  it("点标签重选到一半或按 Esc 后再点标签：清掉半截参数、重开厂商列表，选完原有文字和光标位置保留", async () => {
+    const { box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录");
+    box.setSelectionRange(2, 2);
+    await user.click(tag());
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await user.keyboard("{Enter}"); // 选到模型级：/hub:worker claude \n修一下登录
+    await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
+    await user.keyboard("{Enter}"); // 选到档位级：/hub:worker claude default \n修一下登录
+    await waitFor(() => expect(labels()).toEqual(["Default", "low", "high"]));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    // 再点标签：清掉 claude default，重新打开厂商列表
+    await user.click(tag());
+    expect(box.value).toBe("/hub:worker \n修一下登录");
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await user.keyboard("{Enter}{Enter}{Enter}");
+    expect(box.value).toBe("修一下登录");
+    expect(box.selectionStart).toBe(2);
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code");
+  });
+
   it("再打一次 /hub:worker 也是替换，一条消息最多一个标签", async () => {
     const { box, user } = await boot();
     await pickHigh(user, box);
@@ -625,6 +648,26 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     const [first, second] = posts(api).map((c) => c.body as shared.PostMessageRequest);
     expect(second!.workerPick).toEqual({ vendor: "claude", model: "opus", effort: "high" });
     expect(second!.clientId).toBe(first!.clientId);
+  });
+
+  it("请求超时（TimeoutError）后重发：不丢 workerPick 和 clientId", async () => {
+    const { api, box, user } = await boot();
+    const baseFetch = api.fetch;
+    let failTimeout = true;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (failTimeout && String(input).endsWith("/messages") && init?.method === "POST") {
+        return Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      }
+      return baseFetch(input, init);
+    });
+    await pickHigh(user, box);
+    await user.type(box, "超时测试{Enter}");
+    const retry = await screen.findByRole("button", { name: "没发出去，点击重发" });
+    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
+    failTimeout = false;
+    await user.click(retry);
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]!.body).toMatchObject({ text: "超时测试", workerPick: { vendor: "claude", model: "opus", effort: "high" } });
   });
 
   it("发送被拦（/ 开头、400）：文字留着，标签也留着", async () => {

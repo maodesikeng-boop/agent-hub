@@ -23,6 +23,7 @@ import {
   makeUserMessage,
   messageChange,
   sessionChange,
+  stubRequestTimeouts,
 } from "./test-utils.ts";
 
 let api: FakeApi;
@@ -766,6 +767,20 @@ describe("资料页", () => {
     api.getPersona = () => ({ status: 500, body: { error: "boom" } });
     const page = await pmChat(user);
     expect(await within(page).findByRole("alert")).toBeInTheDocument();
+    api.getPersona = () => ({ status: 200, body: makePersonaView({ pmId: 1, text: "好了" }) });
+    await user.click(within(page).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(within(page).getByRole("textbox", { name: "Persona" })).toHaveValue("好了"));
+  });
+
+  it("请求挂住（连接静默断了）：超时后显示“请求超时”和重试，不一直 Loading；重试成功后显示正文", async () => {
+    const user = userEvent.setup();
+    const timeouts = stubRequestTimeouts();
+    await boot();
+    api.getPersona = () => new Promise(() => {});
+    const page = await pmChat(user);
+    expect(within(page).getByText("Loading…")).toBeInTheDocument();
+    act(() => timeouts.fire());
+    expect(await within(page).findByRole("alert")).toHaveTextContent("请求超时");
     api.getPersona = () => ({ status: 200, body: makePersonaView({ pmId: 1, text: "好了" }) });
     await user.click(within(page).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(within(page).getByRole("textbox", { name: "Persona" })).toHaveValue("好了"));

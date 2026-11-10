@@ -99,6 +99,7 @@ import {
 import { listenOnRunSocket } from "../run-socket.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
+import { keepAlive } from "../ws-keepalive.ts";
 import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
 import { isCompressibleType, peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
 import { TunnelInputError } from "../tunnel/index.ts";
@@ -164,6 +165,8 @@ export interface UiServerOptions {
   peers?: Peers;
   /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
   peerProxy?: PeerRoutesOptions["proxy"];
+  /** /api/ws 给浏览器发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS；测试调短。 */
+  wsHeartbeatMs?: number;
   /**
    * ssh 隧道（daemon/tunnel/，docs/hub-tunnel-design.md 第 6 节）：状态原样进 /api/state 的 tunnel（没连过中心是 null）；
    * 状态一变给每条 WebSocket 发 resync，网页重拉快照。不给 = /api/state 不带 tunnel，/api/devices/tunnel/* 回 404。
@@ -1268,6 +1271,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         socket.once("error", forget);
       }
       trackSocket(req, socket);
+      keepAlive(socket, opts.wsHeartbeatMs);
 
       if (since === undefined) return; // 不带 since：只推之后的新变化
       if (typeof since !== "string" || !NON_NEGATIVE_INT.test(since)) return send({ type: "resync" });

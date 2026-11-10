@@ -489,6 +489,25 @@ export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
 /** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
 export const PEER_WS_PING_MS = 5_000;
 
+// ---- 网页实时连接保活、请求超时（daemon/ws-keepalive.ts、web/connection.ts、web/client.ts）----
+// 手机 VPN、运营商 NAT 会把闲着的连接静默丢掉（不发 FIN/RST）：浏览器以为还连着，变化推不过来，请求挂在死连接上一直转圈。
+/**
+ * 服务端（本机 /api/ws 和入口转发的 /d/<设备>/api/ws）每隔这么久给浏览器那条发一条应用层心跳（api.ts 的 WS_HEARTBEAT_TEXT，
+ * 连帧头约 22 字节；浏览器的 JS 收不到协议层 ping），同时 ping 一次，上一次 ping 没回 pong 就断掉（死连接不再占着监听、前台状态）。
+ * 15 秒：短于常见 NAT、运营商、手机 VPN 的空闲回收（30 秒起），连接不会因“闲着”被丢；每条连接每 15 秒几十字节，和数据量无关。
+ */
+export const WS_HEARTBEAT_MS = 15_000;
+/** 心跳允许迟到多久（网络抖动、手机切后台时定时器被节流）。 */
+export const WS_HEARTBEAT_GRACE_MS = 5_000;
+/** 网页这么久（35 秒）没收到任何消息（含心跳）就当连接死了，主动关掉重连：错过两次心跳再加余量，偶尔丢一次不误判。 */
+export const WS_STALE_MS = 2 * WS_HEARTBEAT_MS + WS_HEARTBEAT_GRACE_MS;
+/** 切回前台、请求超时时查一次：超过一次心跳加余量（20 秒）没消息就不等判死，马上重连（重连带 since，只补漏掉的）。 */
+export const WS_CHECK_SILENCE_MS = WS_HEARTBEAT_MS + WS_HEARTBEAT_GRACE_MS;
+/** 网页普通接口请求最多等多久（含读完响应体）：正常几百毫秒到 1 秒多，15 秒是十倍以上的余量；超了报“请求超时”，界面给 Retry。上传、下载文件、选文件夹不限。 */
+export const API_REQUEST_TIMEOUT_MS = 15_000;
+/** 服务端自己要等外部进程的接口（额度、重问模型名单、斜杠命令）和快照（手机上可能大）：比服务端最长的等待（额度 30 秒、转发等响应头 30 秒）再多 5 秒，不抢在服务端前面放弃。 */
+export const SLOW_API_REQUEST_TIMEOUT_MS = Math.max(FETCHED_QUOTA_TIMEOUT_MS, PEER_PROXY_HEADERS_TIMEOUT_MS) + 5_000;
+
 // ---- 防闲置睡眠（daemon/platform/sleep.ts） ----
 /** 有会话在跑时起防闲置睡眠进程（macOS 的 caffeinate）；全部回到空闲后等这么久（2 分钟）再结束，免得两轮之间来回起停。 */
 export const SLEEP_INHIBIT_GRACE_MS = 120_000;

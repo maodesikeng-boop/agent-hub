@@ -153,7 +153,7 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
 
 1. Mac 上粘一条命令（网页向导，块 E，只显示这条命令；跑完设备自动出现）：
    ```
-   node ~/agent-hub/src/tunnel/main.ts join -i ~/.ssh/lightsail-tokyo.pem ubuntu@18.179.111.112
+   node ~/agent-hub/src/tunnel/main.ts join -i ~/.ssh/id_ed25519 ubuntu@203.0.113.10
    ```
    （`~/agent-hub` 是 Mac 上的代码目录，向导按守护进程实际位置写；`--name` 默认取本机名，`-p` 改 ssh 端口，`--remote-dir` 改东京上的代码目录，默认东京用户主目录下的 `agent-hub`。）它在本机做三件事：
    - 让本机守护进程生成专用钥匙（`state/tunnel/id_ed25519`，已有就沿用），拿回公钥；
@@ -179,8 +179,8 @@ Mac 浏览器 ─http://127.0.0.1:4317─▶ Mac 守护进程（入口）
 
 | 选项 | 费用 | 用户要做 | TLS 在哪解开 / 谁能看到明文 | 问题 |
 |---|---|---|---|---|
-| Let's Encrypt IP 证书（`https://18.179.111.112`） | 免费 | Lightsail 防火墙开 443 | 东京；只有东京 | 证书只有 160 小时，只能 http-01 / tls-alpn-01（<https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability>）；**WebAuthn 的 RP ID 必须是域名，passkey 用不了**；换 IP 推送订阅、主屏 App 全作废 |
-| sslip.io（`18-179-111-112.sslip.io`） | 免费 | 开 443 | 东京 | 域名的 DNS 归第三方：它改解析就能另签证书冒充（<https://sslip.io/>）；共享限额 |
+| Let's Encrypt IP 证书（`https://203.0.113.10`） | 免费 | Lightsail 防火墙开 443 | 东京；只有东京 | 证书只有 160 小时，只能 http-01 / tls-alpn-01（<https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability>）；**WebAuthn 的 RP ID 必须是域名，passkey 用不了**；换 IP 推送订阅、主屏 App 全作废 |
+| sslip.io（`203-0-113-10.sslip.io`） | 免费 | 开 443 | 东京 | 域名的 DNS 归第三方：它改解析就能另签证书冒充（<https://sslip.io/>）；共享限额 |
 | **买域名**（如 `hub.<你的域名>`） | 约 10–15 美元 / 年 | 买域名、加一条 A 记录、开 443 | 东京；只有东京 | 要买；之外最稳，passkey、推送绑自己的域名 |
 | Lightsail 分发（CloudFront） | 有免费额度，超出按月计费（<https://aws.amazon.com/lightsail/pricing/>） | 建分发，源站仍要对公网开端口 | **AWS 边缘**；AWS 能看到明文 | 多一跳、多一方看明文，没换来什么 |
 | 东京开 Tailscale Funnel | 免费 | 东京装登录 Tailscale，开 funnel | 东京（Funnel 中继只转加密流量）；端口只能 443/8443/10000（<https://tailscale.com/docs/features/tailscale-funnel>） | 测试版、带宽不公开；绑 Tailscale 账号；不用开 Lightsail 端口、不用买域名 |

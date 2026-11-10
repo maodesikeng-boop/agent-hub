@@ -20,6 +20,7 @@ import {
   MAX_REASON_CHARS,
   MAX_UPLOAD_BYTES,
   UI_COOKIE_NAME,
+  WS_HEARTBEAT_TEXT,
   uiCookieName,
   bundledModelCatalog,
   serverInfoFor,
@@ -1057,6 +1058,24 @@ describe("WebSocket /api/ws", () => {
     expect(client.received).toEqual([change]);
     expect(client.received[0]).toMatchObject({ seq: ledger.currentSeq, type: "health.updated" });
     client.ws.terminate();
+  });
+
+  it("连着就按间隔发应用层心跳（连接静默断了网页靠它发现）；变化照常推", async () => {
+    const other = createUiServer({ ledger: ledger.asLedger(), token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db, wsHeartbeatMs: 30 });
+    await other.ready();
+    const frames: string[] = [];
+    const ws = await other.injectWS(`/api/ws?since=${ledger.currentSeq}`, { headers: { host: HOST, origin: ORIGIN, cookie: COOKIE } }, {
+      onInit: (socket) => {
+        socket.on("message", (data: unknown) => frames.push(String(data)));
+        // injectWS 造的客户端不自动回 pong（浏览器会）
+        socket.on("ping", (data: Buffer) => socket.pong(data));
+      },
+    });
+    await expect.poll(() => frames.filter((f) => f === WS_HEARTBEAT_TEXT).length).toBeGreaterThanOrEqual(2);
+    ledger.emitHealthChange("x");
+    await expect.poll(() => frames.some((f) => f.includes('"health.updated"'))).toBe(true);
+    ws.terminate();
+    await other.close();
   });
 
   it("每条变化只推一次，seq 递增", async () => {

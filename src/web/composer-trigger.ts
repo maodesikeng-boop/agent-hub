@@ -72,7 +72,8 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
  * 点标签重选时原有文字是用换行接在命令后面的（Composer），这个换行一起拿掉。
  */
 export function removeLeadingCommand(text: string, end: number): string {
-  return text.slice(text[end] === " " || text[end] === "\n" ? end + 1 : end);
+  const afterSpace = text[end] === " " ? end + 1 : end;
+  return text.slice(text[afterSpace] === "\n" ? afterSpace + 1 : afterSpace);
 }
 
 /**

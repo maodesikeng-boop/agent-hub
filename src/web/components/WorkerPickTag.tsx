@@ -10,7 +10,7 @@ import { workerPickLabels } from "../worker-pick.ts";
 /** 标签上的几项（厂商名、模型名、思考程度）。名单只读缓存（和输入框列表同一份），不为它发请求，没拉到用打包的。 */
 export function useWorkerPickLabels(pick: WorkerPick): string[] {
   const catalogs = useModelCatalogs(false);
-  return useMemo(() => workerPickLabels(pick, catalogs), [pick, catalogs]);
+  return useMemo(() => workerPickLabels(pick, catalogs), [pick.vendor, pick.model, pick.effort, catalogs]);
 }
 
 /** Bot 图标 + 几项，gap-2 隔开，不用 “·”。 */

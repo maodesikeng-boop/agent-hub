@@ -159,6 +159,7 @@ describe("removeLeadingCommand", () => {
     const text = "/hub:worker claude opus high 修一下";
     expect(removeLeadingCommand(text, text.indexOf(" 修"))).toBe("修一下");
     expect(removeLeadingCommand("/hub:worker claude \n第一行\n第二行", 19)).toBe("第一行\n第二行");
+    expect(removeLeadingCommand("/hub:worker claude \n第一行\n第二行", 18)).toBe("第一行\n第二行");
     expect(removeLeadingCommand("/hub:worker claude", 18)).toBe("");
   });
 });

@@ -19,8 +19,10 @@ import {
   PEER_PROXY_HEADERS_TIMEOUT_MS,
   PEER_WS_CONNECT_TIMEOUT_MS,
   PEER_WS_PING_MS,
+  WS_HEARTBEAT_TEXT,
   type ApiErrorBody,
 } from "../../shared/index.ts";
+import { keepAlive } from "../ws-keepalive.ts";
 import { PEER_UNAUTHORIZED } from "./service.ts";
 import { createUnixHttpPool, type ResolvedPeerTarget, type UnixHttpPool } from "./transport.ts";
 
@@ -40,6 +42,9 @@ const CSP_SVG = `${CSP_DEFAULT}; style-src 'unsafe-inline'`;
 const sendableCode = (code: number, fallback: number) => (code === 1000 || (code >= 1001 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999) ? code : fallback);
 /** 对方已经不认本机了（它把本机移除了）：浏览器那条用这个码关。 */
 const WS_CLOSE_NOT_FOUND = 4404;
+/** 对方发来的心跳：入口自己给浏览器发（对方是老版本、不发也不影响），对方的这条不转。先比长度，别的消息不用逐字节比。 */
+const HEARTBEAT_FRAME = Buffer.from(WS_HEARTBEAT_TEXT);
+const isHeartbeat = (data: Buffer, isBinary: boolean) => !isBinary && data.length === HEARTBEAT_FRAME.length && data.equals(HEARTBEAT_FRAME);
 /** 关闭原因最多 123 字节。 */
 const reasonOf = (reason: Buffer) => reason.subarray(0, 123).toString("utf8");
 
@@ -106,6 +111,8 @@ export interface ProxyContext {
   unixPool?: UnixHttpPool;
   /** WebSocket 心跳间隔，默认 PEER_WS_PING_MS。 */
   pingMs?: number;
+  /** 给浏览器那条发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS。 */
+  heartbeatMs?: number;
 }
 
 /** 可开启 HTTP gzip 压缩的 MIME 类型（不含二进制与流媒体）。 */
@@ -256,8 +263,10 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
 /**
  * 转发一条 WebSocket：浏览器那条已经连上（downstream），这里连对方（带 since 原样转），消息原样双向转，关闭也双向转。
  * 连不上、对方心跳没回：用 DEVICE_OFFLINE_WS_CLOSE_CODE 关浏览器那条（网页按断线重连，重连时 /d/ 的请求回 502 就显示离线）。
+ * 两段各管各的保活：对方那段入口 ping（PEER_WS_PING_MS），浏览器那段入口发心跳（keepAlive），对方发来的心跳不转。
  */
 export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest: string, ctx: ProxyContext): void {
+  keepAlive(downstream, ctx.heartbeatMs);
   const closeDownstream = (code: number, reason: string) => {
     if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.close(code, reason);
   };
@@ -323,7 +332,7 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
     alive = true;
   });
   upstream.on("message", (data: Buffer, isBinary: boolean) => {
-    if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary: isBinary });
+    if (downstream.readyState === WebSocket.OPEN && !isHeartbeat(data, isBinary)) downstream.send(data, { binary: isBinary });
   });
   // 对方没接受握手（回了 HTTP 响应）：读完响应体再定怎么关浏览器那条，之后的 error、close 不再管
   let rejected = false;

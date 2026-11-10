@@ -165,6 +165,27 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   useEffect(() => {
     if (!awaitingCreated) setPendingCreated(null);
   }, [awaitingCreated]);
+  useEffect(() => {
+    const valid = new Set<string>();
+    const pendingDevicePrefixes = new Set<string>();
+    let keepLocalAll = false;
+    for (const d of fleet.devices) {
+      if (d.state.phase === "ready") {
+        for (const id of Object.keys(d.state.conversations)) valid.add(conversationKey(d.key, Number(id)));
+      } else if (d.key === LOCAL_DEVICE) {
+        keepLocalAll = true;
+      } else {
+        pendingDevicePrefixes.add(`${d.key}/`);
+      }
+    }
+    if (pendingCreated !== null) valid.add(conversationKey(pendingCreated.device, pendingCreated.id));
+    drafts.retain((k) => {
+      if (valid.has(k)) return true;
+      const slash = k.indexOf("/");
+      if (slash < 0) return keepLocalAll;
+      return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
+    });
+  }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
   const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
     (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
   useEffect(() => {

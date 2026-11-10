@@ -314,18 +314,44 @@ export interface DraftSlot {
 }
 
 export function useDraftStore<K extends string | number>() {
-  const slotsRef = useRef(new Map<K, DraftSlot>());
+  const slotsRef = useRef(new Map<K, { slot: DraftSlot; gc: () => void }>());
 
   const of = useCallback((key: K): DraftSlot => {
     const existing = slotsRef.current.get(key);
-    if (existing) return existing;
+    if (existing) return existing.slot;
+    for (const [k, prev] of slotsRef.current) {
+      if (k !== key) prev.gc();
+    }
     const store = createStore<string>(() => "");
+    const pick = createStore<WorkerPick | null>(() => null);
+    let subs = 0;
+    const gc = () => {
+      if (subs === 0 && store.getState() === "" && pick.getState() === null) {
+        slotsRef.current.delete(key);
+      }
+    };
+    const trackSub =
+      <T,>(rawSubscribe: StoreApi<T>["subscribe"]): StoreApi<T>["subscribe"] =>
+      (listener) => {
+        subs += 1;
+        const unsub = rawSubscribe(listener);
+        return () => {
+          unsub();
+          subs -= 1;
+          gc();
+        };
+      };
+    store.subscribe = trackSub(store.subscribe);
+    pick.subscribe = trackSub(pick.subscribe);
     const set = (value: string) => {
       if (store.getState() !== value) store.setState(value, true);
+      if (value !== "") slotsRef.current.set(key, entry);
+      else gc();
     };
-    const pick = createStore<WorkerPick | null>(() => null);
     const setPick = (next: WorkerPick | null) => {
       if (pick.getState() !== next) pick.setState(next, true);
+      if (next !== null) slotsRef.current.set(key, entry);
+      else gc();
     };
     const slot: DraftSlot = {
       store,
@@ -342,9 +368,17 @@ export function useDraftStore<K extends string | number>() {
         if (sent !== null && pick.getState() === sent) setPick(null);
       },
     };
-    slotsRef.current.set(key, slot);
+    const entry = { slot, gc };
+    slotsRef.current.set(key, entry);
     return slot;
   }, []);
 
-  return useMemo(() => ({ of }), [of]);
+  /** 对话删除后清掉它的草稿和标签。 */
+  const retain = useCallback((keep: (key: K) => boolean) => {
+    for (const key of slotsRef.current.keys()) {
+      if (!keep(key)) slotsRef.current.delete(key);
+    }
+  }, []);
+
+  return useMemo(() => ({ of, retain }), [of, retain]);
 }

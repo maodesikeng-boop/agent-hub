@@ -7,7 +7,7 @@ import { AdminUnavailableError, TUNNEL_ROOT_SCRIPT, runTunnelCli, type TunnelCli
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 const PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU agent-hub";
 const CODE = encodeConnectionCode({
-  host: "18.179.111.112",
+  host: "203.0.113.10",
   sshPort: 22,
   user: "agenthub-tunnel",
   hostKey: HOST_KEY,
@@ -43,7 +43,7 @@ function harness(opts: {
       if (text === undefined) throw Object.assign(new Error(`ENOENT ${path}`), { code: "ENOENT" });
       return text;
     },
-    hostname: () => "Yuxins-MacBook-Pro.local",
+    hostname: () => "dev-macbook-pro.local",
   });
   return { io, calls, out: () => stdout, err: () => stderr };
 }
@@ -56,7 +56,7 @@ describe("中心：add", () => {
       admin: (_m, path) => (path === "/tunnel/slots" ? { port: 4401, entryPort: 4319, invite: "Xy9_abcdefghijklmnopqr", expiresAt: 1 } : {}),
       files,
     });
-    const code = await runTunnelCli(h.io(["add", "--name", "mac", "--host", "18.179.111.112", "--pubkey", PUB]));
+    const code = await runTunnelCli(h.io(["add", "--name", "mac", "--host", "203.0.113.10", "--pubkey", PUB]));
     expect(code).toBe(0);
     expect(h.calls).toEqual([
       { kind: "admin", method: "POST", path: "/tunnel/slots", body: { name: "mac", publicKey: PUB } },
@@ -69,7 +69,7 @@ describe("中心：add", () => {
     const lines = h.out().trim().split("\n");
     expect(lines).toHaveLength(1);
     expect(decodeConnectionCode(lines[0]!)).toEqual({
-      host: "18.179.111.112",
+      host: "203.0.113.10",
       sshPort: 22,
       user: "agenthub-tunnel",
       hostKey: HOST_KEY,
@@ -91,7 +91,7 @@ describe("中心：add", () => {
       run: () => ({ code: 1, stdout: "" }),
       files,
     });
-    expect(await runTunnelCli(h.io(["add", "--name", "mac", "--host", "18.179.111.112", "--pubkey", PUB]))).toBe(1);
+    expect(await runTunnelCli(h.io(["add", "--name", "mac", "--host", "203.0.113.10", "--pubkey", PUB]))).toBe(1);
     expect(h.out()).toBe("");
     expect(h.err()).toMatch(/sudo/);
   });
@@ -103,7 +103,7 @@ describe("中心：add", () => {
       },
       files,
     });
-    expect(await runTunnelCli(h.io(["add", "--name", "mac", "--host", "18.179.111.112", "--pubkey", PUB]))).toBe(1);
+    expect(await runTunnelCli(h.io(["add", "--name", "mac", "--host", "203.0.113.10", "--pubkey", PUB]))).toBe(1);
     expect(h.calls.filter((c) => c.kind === "run")).toEqual([]);
     expect(h.err()).toMatch(/守护进程/);
   });
@@ -144,22 +144,22 @@ describe("连入方：join 一条命令", () => {
       admin: (_m, path) => (path === "/tunnel/key" ? { publicKey: PUB } : { status: { state: "connecting", since: 0, retryAt: null, detail: null } }),
       run: (_cmd, args) =>
         args.includes("-G")
-          ? { code: 0, stdout: "user ubuntu\nhostname 18.179.111.112\nport 22\nidentityfile ~/.ssh/id_ed25519\n" }
+          ? { code: 0, stdout: "user ubuntu\nhostname 203.0.113.10\nport 22\nidentityfile ~/.ssh/id_ed25519\n" }
           : { code: 0, stdout: `[tunnel] 一些提示\n${CODE}\n` },
     });
-    const code = await runTunnelCli(h.io(["join", "-i", "/Users/u/.ssh/lightsail-tokyo.pem", "ubuntu@tokyo"]));
+    const code = await runTunnelCli(h.io(["join", "-i", "/Users/u/.ssh/id_ed25519", "ubuntu@tokyo"]));
     expect(code).toBe(0);
     expect(h.calls).toEqual([
       { kind: "admin", method: "POST", path: "/tunnel/key", body: {} },
-      { kind: "run", cmd: "ssh", args: ["-i", "/Users/u/.ssh/lightsail-tokyo.pem", "-G", "ubuntu@tokyo"] },
+      { kind: "run", cmd: "ssh", args: ["-i", "/Users/u/.ssh/id_ed25519", "-G", "ubuntu@tokyo"] },
       {
         kind: "run",
         cmd: "ssh",
         args: [
           "-i",
-          "/Users/u/.ssh/lightsail-tokyo.pem",
+          "/Users/u/.ssh/id_ed25519",
           "ubuntu@tokyo",
-          `node agent-hub/src/tunnel/main.ts add --name yuxins-macbook-pro --host 18.179.111.112 --ssh-port 22 --pubkey 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU agent-hub'`,
+          `node agent-hub/src/tunnel/main.ts add --name dev-macbook-pro --host 203.0.113.10 --ssh-port 22 --pubkey 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU agent-hub'`,
         ],
       },
       { kind: "admin", method: "POST", path: "/tunnel/connect", body: { code: CODE } },
