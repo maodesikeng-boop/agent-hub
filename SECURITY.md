@@ -4,7 +4,7 @@
 
 ## Supported versions
 
-Agent Hub does not publish versioned releases yet (`package.json` version is `0.0.0`). Only the latest commit on `main` is supported, and security fixes land on `main`.
+Piece does not publish versioned releases yet (`package.json` version is `0.0.0`). Only the latest commit on `main` is supported, and security fixes land on `main`.
 
 - **In scope:** the daemon (`src/daemon`), the web UI (`src/web`), Worker write-scope and read-only enforcement (`src/shared/write-scope.ts`, `src/shared/readonly-policy.ts`, `src/daemon/driver/`), local and multi-device authentication (UI master token, browser sessions, peer device tokens, SSH tunnels, public entry), and the macOS desktop shell (`apps/macos`).
 - **Out of scope:** vulnerabilities inside the upstream vendor CLIs themselves (`claude`, `agy`, `codex`) or third-party dependencies (please report those upstream and let us know if a dependency bump is needed), and attacks that already have code execution as your OS user or physical access to an unlocked machine.
@@ -20,7 +20,7 @@ This is a personal open-source project maintained on a best-effort basis without
 
 ## Security boundaries (as implemented in code)
 
-Agent Hub is designed for **a single user running agents on their own machines under their own accounts**. It is not a multi-tenant service.
+Piece is designed for **a single user running agents on their own machines under their own accounts**. It is not a multi-tenant service.
 
 ### 1. Local web UI port and tokens (`src/daemon/ui-server/`)
 
@@ -55,7 +55,7 @@ Agent Hub is designed for **a single user running agents on their own machines u
 
 ## 支持范围
 
-Agent Hub 目前尚未发布带版本号的正式版（`package.json` 版本为 `0.0.0`），仅支持 `main` 分支的最新提交，安全修复直接合入 `main`。
+Piece 目前尚未发布带版本号的正式版（`package.json` 版本为 `0.0.0`），仅支持 `main` 分支的最新提交，安全修复直接合入 `main`。
 
 - **在支持范围内**：守护进程（`src/daemon`）、网页前端（`src/web`）、Worker 写入范围与只读沙箱机制（`src/shared/write-scope.ts`、`src/shared/readonly-policy.ts`、`src/daemon/driver/`）、本机与多设备认证（界面主令牌、浏览器会话、设备令牌、SSH 隧道、公网入口）以及 macOS 桌面外壳（`apps/macos`）。
 - **不在范围内**：各厂商官方 CLI（`claude`、`agy`、`codex`）自身的漏洞或第三方依赖自身的漏洞（请向上游报告；如需升级依赖版本可告知我们），以及攻击者已经在你的系统用户下执行任意代码或已物理接触未锁屏设备的情形。
@@ -71,7 +71,7 @@ Agent Hub 目前尚未发布带版本号的正式版（`package.json` 版本为 
 
 ## 安全边界（代码实际机制）
 
-Agent Hub 的安全模型是**单用户自用**（一个人在自己的多台设备上、使用自己的账号运行），不是多租户服务。
+Piece 的安全模型是**单用户自用**（一个人在自己的多台设备上、使用自己的账号运行），不是多租户服务。
 
 ### 1. 本机网页端口与令牌（`src/daemon/ui-server/`）
 

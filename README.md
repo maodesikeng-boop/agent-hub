@@ -1,18 +1,18 @@
-# Agent Hub
+# Piece
 
 **English** | [中文](#中文)
 
 **Manage an entire project through a single conversation.**
 
-Agent Hub is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
+Piece is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
 
-![Agent Hub home screen](docs/screenshots/readme-home.png)
+![Piece home screen](docs/screenshots/readme-home.png)
 
 ### Why a single conversation per project?
 
 When you run multiple coding agents in parallel, the bottleneck quickly shifts from writing code to **managing agent sessions**: creating git worktrees, picking models, copying background context between threads, watching terminals to see who stalled, and reviewing diffs across half a dozen tabs.
 
-Agent Hub is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
+Piece is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
 
 It is built for **one person across multiple devices** (your Mac, a Linux server, your phone)—not a multi-user shared server.
 
@@ -28,7 +28,7 @@ See [docs/prototype-design.md](docs/prototype-design.md) for details.
 
 ### 2. Seamless context compaction
 
-- **Automatic background handover at 200,000 tokens:** When a PM session's context reaches 200,000 tokens, Agent Hub forks the session in the background to write a ~2,000-character structured handover while you continue chatting with the PM without interruption.
+- **Automatic background handover at 200,000 tokens:** When a PM session's context reaches 200,000 tokens, Piece forks the session in the background to write a ~2,000-character structured handover while you continue chatting with the PM without interruption.
 - **Zero-interruption session switch:** Between turns, the PM switches to a fresh underlying session preloaded with its persona memory, the structured handover, up to 30,000 characters of recent verbatim dialogue before the fork point (plus all messages after it), and a directory of recent Worker reports. You stay in the exact same conversation in the UI, and switching a PM's vendor on its profile page uses the same handover transition.
 
 See [docs/background-handover-design.md](docs/background-handover-design.md) for details.
@@ -90,8 +90,8 @@ AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
 ## macOS app
 
 ```bash
-pnpm app:mac                              # builds build/Agent Hub.app
-bash scripts/build-mac-app.sh --install   # builds and copies to /Applications/Agent Hub.app
+pnpm app:mac                              # builds build/Piece.app
+bash scripts/build-mac-app.sh --install   # builds and copies to /Applications/Piece.app
 ```
 
 The macOS app (`apps/macos/`) is a lightweight native WebKit shell that supervises the local daemon. Building requires Xcode Command Line Tools (`swiftc`) and built web assets (`pnpm build`, or pass `--build-web` to `scripts/build-mac-app.sh`).
@@ -132,12 +132,12 @@ All environment variables are optional.
 
 ## Vendor terms & account risks
 
-Agent Hub does not call model provider APIs directly. Instead, it launches each vendor's **official command-line agent** on your machine, under **your own account**, in non-interactive/headless mode, and drives it automatically. Whether using an external orchestrator to drive the official CLI is permitted under your subscription or terms of service is for you to review and decide; this project does not grant permission or guarantee that your account will remain in good standing.
+Piece does not call model provider APIs directly. Instead, it launches each vendor's **official command-line agent** on your machine, under **your own account**, in non-interactive/headless mode, and drives it automatically. Whether using an external orchestrator to drive the official CLI is permitted under your subscription or terms of service is for you to review and decide; this project does not grant permission or guarantee that your account will remain in good standing.
 
 - **Google Antigravity:** Section 6 of the [Google Antigravity Additional Terms](https://antigravity.google/terms/) states:
   > "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts."
 
-  Google has not explicitly clarified whether driving the official `agy` CLI in headless mode from a local tool like Agent Hub falls under this prohibition. Treat it as a **risk of account suspension or termination** and decide for yourself.
+  Google has not explicitly clarified whether driving the official `agy` CLI in headless mode from a local tool like Piece falls under this prohibition. Treat it as a **risk of account suspension or termination** and decide for yourself.
 - **Claude Code:** Review and comply with Anthropic's terms and compliance docs: <https://code.claude.com/docs/en/legal-and-compliance>.
 - **Codex:** Review and comply with OpenAI's terms of use: <https://openai.com/policies/row-terms-of-use/>.
 
@@ -147,7 +147,7 @@ Vendor terms change over time; always check the latest official documents yourse
 
 Workers edit files and execute shell commands on your machine with your OS user's permissions. Understand the actual boundaries before running agents on important repositories or machines:
 
-- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Agent Hub data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`); `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. This is enforced by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS; `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup—see [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files, run arbitrary commands, and access the network just like any program you run.
+- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Piece data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`); `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. This is enforced by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS; `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup—see [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files, run arbitrary commands, and access the network just like any program you run.
 - **Read-only workers (`src/shared/readonly-policy.ts`):** Read-only workers can read files and run commands, and can only call read-only MCP connector tools (`readOnlyHint: true`). Sensitive paths are blocked from reading (`state/ui-token`, vendor credential files, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, etc., plus globs like `**/.env`, `**/.env.*`, `**/*.pem`, `**/*.key`, `**/id_rsa*`, `**/id_ed25519*`), and writes are blocked everywhere except a per-session private temporary directory (and required runtime/cache directories). Claude Code and Codex use their native read-only sandboxes; Antigravity is wrapped in the outer read-only OS sandbox. See [docs/readonly-worker-design.md](docs/readonly-worker-design.md).
 - **Project managers are not sandboxed.**
 - Do not expose the local daemon port (`4317`) to untrusted networks. To report a security vulnerability privately, see [SECURITY.md](SECURITY.md).
@@ -165,17 +165,17 @@ Workers edit files and execute shell commands on your machine with your OS user'
 
 # 中文
 
-[English](#agent-hub) | **中文**
+[English](#piece) | **中文**
 
 **通过一个会话管理整个项目。**
 
-Agent Hub 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
+Piece 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
 
 ### 为什么要“一个会话管住整个项目”？
 
 同时用多个编程 Agent 并行干活时，瓶颈很快就会从“写代码”变成**“管会话”**：建 git worktree、选模型、在不同会话之间来回贴背景、盯一堆终端看谁卡住了、在十几个标签页里挨个审 diff。
 
-Agent Hub 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
+Piece 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
 它是为**一个人、多台设备**（你自己的 Mac、Linux 服务器、手机）设计的自用工具，不是多人共用的服务端。
 
@@ -253,8 +253,8 @@ AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
 ## Mac 应用
 
 ```bash
-pnpm app:mac                              # 在 build/Agent Hub.app 生成应用
-bash scripts/build-mac-app.sh --install   # 同上，并复制到 /Applications/Agent Hub.app
+pnpm app:mac                              # 在 build/Piece.app 生成应用
+bash scripts/build-mac-app.sh --install   # 同上，并复制到 /Applications/Piece.app
 ```
 
 Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳，需要 Xcode 命令行工具（`swiftc`）以及构建好的前端网页（先跑 `pnpm build`，或加 `--build-web` 参数）。
@@ -295,7 +295,7 @@ Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳
 
 ## 厂商条款风险（使用前必读）
 
-Agent Hub 本身不直接请求任何模型 API，而是在你的电脑上、使用**你自己的账号**，以无头（非交互）模式调用各厂商的**官方命令行工具**并自动驱动它。这种用法是否符合你所用订阅套餐及各厂商的服务条款，需要你自行查阅并判断；本项目不替任何厂商下“允许”的结论，也不保证你的账号不会受到影响。
+Piece 本身不直接请求任何模型 API，而是在你的电脑上、使用**你自己的账号**，以无头（非交互）模式调用各厂商的**官方命令行工具**并自动驱动它。这种用法是否符合你所用订阅套餐及各厂商的服务条款，需要你自行查阅并判断；本项目不替任何厂商下“允许”的结论，也不保证你的账号不会受到影响。
 
 - **Google Antigravity**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条写明：
   > "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts."
