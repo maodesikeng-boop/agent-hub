@@ -5,7 +5,7 @@
 //   只读 Worker 的 agy（另两家有自己的只读沙箱）走 wrapInReadonlyOsSandbox（除私有临时目录、运行时与缓存目录外全盘只读，凭据与敏感文件禁读）。
 //   沙箱起不来时普通 Worker 与只读 Worker 一律拒绝启动（抛错并给出修复命令 sudo scripts/linux-sandbox-setup.sh），不再退回规则兜底。
 // - 已在 OS 沙箱里的进程不能再开自带沙箱：
-//   - claude：--settings 里写 sandbox.enabled: false（policy.ts 的 buildSessionSettings）。
+//   - claude：--settings 里写 sandbox.enabled: false（src/vendors/claude/settings.ts 的 buildSessionSettings）。
 //   - agy：包了的进程加 --settings {"enableTerminalSandbox":false}（agy 的 spec 的 capabilities.ownSandboxOffArgs）。
 //   - codex：turn/start 的 sandboxPolicy 用 externalSandbox；只读 Worker 不包外层，照用 codex 自己的 readOnly 沙箱。
 // 详见 docs/write-scope.md 与 docs/linux-sandbox-design.md。

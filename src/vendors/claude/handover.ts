@@ -1,7 +1,7 @@
 // claude 复制会话去后台写交接的办法（docs/background-handover-design.md 第 2.3、2.6 节）：
 // write 时直接 `claude -p --resume <原编号> --fork-session --no-session-persistence --session-id <复制那份的编号>`，
 // 模型、思考程度、--append-system-prompt-file、--add-dir 照项目经理的来（前缀不变才吃得到缓存）；
-// --settings 是项目经理的设置叠上禁写三层（shared/policy.ts 的 buildForkSettings：拦所有工具的钩子、dontAsk、Edit(//**) 拒绝），整段 JSON 传，
+// --settings 是项目经理的设置叠上禁写三层（settings.ts 的 buildForkSettings：拦所有工具的钩子、dontAsk、Edit(//**) 拒绝），整段 JSON 传，
 // 只动权限和钩子、不动工具清单，实测缓存不掉。不落盘所以没有要删的文件，remove 只是保险。fork 本身什么都不跑，只定编号。
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "../../shared/domain.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
-import { buildForkSettings } from "../../shared/policy.ts";
+import { buildForkSettings } from "./settings.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { assistantContext, buildChildEnv, parseUsage } from "../../daemon/driver/protocol.ts";
 import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";

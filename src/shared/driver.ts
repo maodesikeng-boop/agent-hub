@@ -291,7 +291,7 @@ export interface SessionExitedEvent extends DriverEventBase {
 
 export const DRIVER_ERROR_CODES = [
   "start_timeout", // 启动 60 秒没有 init
-  ...VENDOR_NOT_FOUND_CODES, // 找不到这家的程序（claude_not_found、codex_not_found……，按厂商生成）
+  ...VENDOR_NOT_FOUND_CODES, // 找不到这家的程序（<厂商>_not_found，按名单生成）
   "spawn_failed", // 其他原因起不来
   "invalid_input", // 写入前校验没过，没写
   "bad_output_line", // 输出了一行不是 JSON 的东西，已跳过
@@ -457,8 +457,8 @@ export interface Driver {
 export interface LaunchFiles {
   promptFile: string;
   /**
-   * --settings 的文件。M2 起项目经理的会话都有（M3 起 Worker 也有）：默认档、放行 `Bash(hub:*)` 和 hub.sock 的真实路径
-   * （内容见 policy.ts 的 buildSessionSettings）。
+   * 厂商的设置文件：只有要它的厂商（daemon.ts 写了 launchFiles 的）才有，如 claude 的 --settings：默认档、放行 `Bash(hub:*)`
+   * 和 hub.sock 的真实路径（src/vendors/claude/settings.ts 的 buildSessionSettings）。
    */
   settingsFile?: string;
   /**

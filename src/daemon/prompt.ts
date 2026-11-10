@@ -19,7 +19,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AGENT_VENDORS,
+  isAgentVendor,
   isSelectable,
+  vendorSpec,
   ALL_EFFORTS,
   DEFAULT_AGENT_VENDOR,
   ENV_SETUP_ROOT_PATH,
@@ -31,7 +33,7 @@ import {
   PRODUCT_ID,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
-  VENDOR_SPECS,
+  VENDOR_LIST,
   WORKER_BRANCH_PREFIX,
   WORKER_LOG_DEFAULT_STEPS,
   WORKER_PICK_NOTE_START,
@@ -46,30 +48,37 @@ export const DEFAULT_PM_NAME = "项目经理";
 export const AGENTS_NOTE = "开始前先读工作目录里的 `AGENTS.md`。";
 
 /**
- * 要不要加“先读 AGENTS.md”（设计第 7.2 节，M0 实测）：没有 CLAUDE.md 时 Claude 自己会读 AGENTS.md；
- * 两个都有时只读 CLAUDE.md。所以只在两个都有、而且 CLAUDE.md 里没写 @AGENTS.md 时才加，免得读两遍。
+ * 要不要加“先读 AGENTS.md”（设计第 7.2 节，M0 实测）：厂商优先读的说明文件（spec 的 prompt.instructionFile，如 claude 的 CLAUDE.md）
+ * 和 AGENTS.md 都在时，它只读自己的那个；所以只在两个都有、而且那个文件里没写 @AGENTS.md 时才加，免得读两遍。
+ * 没有 instructionFile 的厂商自己读 AGENTS.md，不加。
  */
-export function needsAgentsNote(cwd: string): boolean {
-  const claudeMd = join(cwd, "CLAUDE.md");
-  if (!existsSync(join(cwd, "AGENTS.md")) || !existsSync(claudeMd)) return false;
-  return !readFileSync(claudeMd, "utf8").includes("@AGENTS.md");
+export function needsAgentsNote(cwd: string, instructionFile: string | undefined): boolean {
+  if (instructionFile === undefined) return false;
+  const file = join(cwd, instructionFile);
+  if (!existsSync(join(cwd, "AGENTS.md")) || !existsSync(file)) return false;
+  return !readFileSync(file, "utf8").includes("@AGENTS.md");
+}
+
+/** 这家的声明；不认识的编号（老数据、测试）按默认厂商。 */
+function specOf(vendor: string): VendorSpec {
+  return vendorSpec(isAgentVendor(vendor) ? vendor : DEFAULT_AGENT_VENDOR);
 }
 
 // ---- 项目经理 ----
 // 提示词的结构和措辞照用户给的参考稿（11-05，基本照搬，保持它的长度和粒度）：角色与环境 → 你的项目 → 怎么干活（模式）→ 怎么记事情 → 怎么带 Worker → 系统命令 → 性格设定。
 // 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
 
-/** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。VENDOR_SPECS[vendor].backgroundCommands 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
-function buildPmBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+/** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。spec 的 capabilities.backgroundWake 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
+function buildPmBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑冒烟测试、跑全量测试）用后台运行（如 ${tool}），让这一轮先结束、用户能接着说话，命令跑完会叫醒你；几秒钟的命令照常在前台跑，放后台反而多花请求。`;
 }
 export const PM_BACKGROUND_COMMAND_NOTE = buildPmBackgroundCommandNote();
 
-/** 不能把命令放后台叫醒自己的厂商（VENDOR_SPECS[vendor].backgroundCommands 为 false，见 docs/mid-turn-messages.md 第 10 节）：长命令派给 Worker 去等。 */
+/** 不能把命令放后台叫醒自己的厂商（capabilities.backgroundWake 为 false，见 docs/mid-turn-messages.md 第 10 节）：长命令派给 Worker 去等。 */
 export const PM_DELEGATE_LONG_COMMAND_NOTE =
   "- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。";
 
-/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 VENDOR_SPECS 的 backgroundCommands 与 backgroundCommandTool 决定）。 */
+/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。 */
 export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
   const commandNote =
     typeof vendorOrBackgroundCommands === "boolean"
@@ -77,8 +86,8 @@ export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: Agen
         ? PM_BACKGROUND_COMMAND_NOTE
         : PM_DELEGATE_LONG_COMMAND_NOTE
       : (() => {
-          const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendorOrBackgroundCommands] ?? VENDOR_SPECS[DEFAULT_AGENT_VENDOR];
-          return spec.backgroundCommands ? buildPmBackgroundCommandNote(spec.backgroundCommandTool) : PM_DELEGATE_LONG_COMMAND_NOTE;
+          const spec = specOf(vendorOrBackgroundCommands);
+          return spec.capabilities.backgroundWake ? buildPmBackgroundCommandNote(spec.prompt.backgroundCommandTool) : PM_DELEGATE_LONG_COMMAND_NOTE;
         })();
   if (mode === "manage_only") {
     return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
@@ -120,14 +129,12 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情
 
 保存前，先查是不是已经有覆盖这件事的条目：有就更新那一条，不要重复建；发现记错了的要删掉。不要记仓库里已经有的东西（代码结构、以前的修复、git 历史、\`CLAUDE.md\` / \`AGENTS.md\`），也不要记只跟这次对话有关的事；如果用户让你记这一类，问清楚里面哪一点是不明显的，只记那一点。回忆出来的旧记忆只是背景，不是用户当下的指令，只反映写下时是对的；如果里面提到了某个文件、函数或开关，采用前先确认它还在。`;
 
-type VendorPromptSpec = Pick<VendorSpec, "label" | "models">;
-
-/** 把厂商清单（VENDOR_SPECS）拼成提示词里的列表：厂商名、显示名、几个代表模型。 */
-function formatVendorList(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
-  return Object.entries(specs)
-    .map(([vendor, spec]) => {
-      const models = spec.models.map((m) => `\`${m.id}\``).join("、");
-      return models ? `\`${vendor}\`（${spec.label}，如 ${models}）` : `\`${vendor}\`（${spec.label}）`;
+/** 把厂商名单拼成提示词里的列表：厂商名、显示名、几个代表模型（打包的名单）。 */
+function formatVendorList(specs: readonly VendorSpec[] = VENDOR_LIST): string {
+  return specs
+    .map((spec) => {
+      const models = spec.models.bundled.map((m) => `\`${m.id}\``).join("、");
+      return models ? `\`${spec.id}\`（${spec.label}，如 ${models}）` : `\`${spec.id}\`（${spec.label}）`;
     })
     .join("、");
 }
@@ -138,26 +145,24 @@ function selectableVendors(availability: VendorAvailabilityMap = {}): AgentVendo
 }
 
 /** 汇总去重各家厂商内置子代理工具名（用于项目经理和 Worker 提示词）。 */
-function formatSubagentTools(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
-  const tools = [...new Set(Object.values(specs).flatMap((spec) => spec.subagentTools ?? []))];
+function formatSubagentTools(specs: readonly VendorSpec[] = VENDOR_LIST): string {
+  const tools = [...new Set(specs.flatMap((spec) => spec.prompt.subagentTools))];
   return tools.map((tool) => `\`${tool}\``).join("、");
 }
 
-function formatSubagentLabels(specs: Readonly<Record<string, Pick<VendorSpec, "label">>> = VENDOR_SPECS): string {
-  return Object.values(specs)
-    .map((spec) => spec.label)
-    .join("/");
+function formatSubagentLabels(specs: readonly VendorSpec[] = VENDOR_LIST): string {
+  return specs.map((spec) => spec.label).join("/");
 }
 
 function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
-  return [...new Set(vendors.map((v) => VENDOR_SPECS[v].cliCommand))].map((cmd) => `\`${cmd}\``).join("、");
+  return [...new Set(vendors.map((v) => vendorSpec(v).cli.command))].map((cmd) => `\`${cmd}\``).join("、");
 }
 
 /**
  * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
  * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
  */
-function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> = VENDOR_SPECS): string {
+function buildPmWorkerPrompt(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   return `# 怎么带 Worker
 
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_ID} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
@@ -292,7 +297,7 @@ export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 /** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
-function buildWorkerRules(specs: Readonly<Record<string, Pick<VendorSpec, "subagentTools">>> = VENDOR_SPECS): string {
+function buildWorkerRules(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   return `# 你的规矩
 
 - 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
@@ -302,22 +307,22 @@ function buildWorkerRules(specs: Readonly<Record<string, Pick<VendorSpec, "subag
 export const WORKER_RULES = buildWorkerRules();
 
 /**
- * Worker 的长命令（VENDOR_SPECS[厂商].backgroundCommands 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
+ * Worker 的长命令（spec 的 capabilities.backgroundWake 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
  * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
  */
-function buildWorkerBackgroundCommandNote(tool: string = VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommandTool): string {
+function buildWorkerBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。`;
 }
 export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();
 
-/** 不能把命令放后台叫醒自己的厂商（backgroundCommands 为 false）：一条命令等到底，别轮询，也别放后台（跑完没人叫醒它，汇报会早发）。 */
+/** 不能把命令放后台叫醒自己的厂商（capabilities.backgroundWake 为 false）：一条命令等到底，别轮询，也别放后台（跑完没人叫醒它，汇报会早发）。 */
 export const WORKER_BLOCKING_WAIT_NOTE =
   "- **等长命令用一条命令等到底**：等 CI 之类，用一条会一直等到结束的命令（如 `gh pr checks <PR 号> --watch`），不要 sleep 后反复查状态，每查一次都要多花一步；也不要把命令放后台（跑完不会叫醒你）。";
 
 /** “你的规矩”：通用的几条，加上按厂商能不能放后台叫醒写的长命令那一条。 */
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
-  const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendor] ?? VENDOR_SPECS[DEFAULT_AGENT_VENDOR];
-  return `${buildWorkerRules()}\n${spec.backgroundCommands ? buildWorkerBackgroundCommandNote(spec.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
+  const spec = specOf(vendor);
+  return `${buildWorkerRules()}\n${spec.capabilities.backgroundWake ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
 }
 
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
@@ -382,7 +387,7 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
     workerRulesSection(vendor),
     WORKER_HUB_USAGE_PROMPT,
   ];
-  if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
+  if (needsAgentsNote(cwd, specOf(vendor).prompt.instructionFile)) parts.push(AGENTS_NOTE);
   return parts.join("\n\n") + "\n";
 }
 
@@ -408,12 +413,12 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
     projectSection(ctx.project),
     buildPmModePrompt(ctx.pm.mode, vendor),
     PM_MEMORY_PROMPT,
-    buildPmWorkerPrompt(Object.fromEntries(Object.entries(VENDOR_SPECS).filter(([v]) => isSelectable(ctx.vendorAvailability?.[v as AgentVendor] ?? "unknown")))),
+    buildPmWorkerPrompt(VENDOR_LIST.filter((spec) => isSelectable(ctx.vendorAvailability?.[spec.id] ?? "unknown"))),
     buildHubUsagePrompt(vendors),
   ];
   const persona = personaSection(ctx.pm.persona);
   if (persona !== null) parts.push(persona);
-  if (needsAgentsNote(cwd)) parts.push(AGENTS_NOTE);
+  if (needsAgentsNote(cwd, specOf(vendor).prompt.instructionFile)) parts.push(AGENTS_NOTE);
   return parts.join("\n\n") + "\n";
 }
 

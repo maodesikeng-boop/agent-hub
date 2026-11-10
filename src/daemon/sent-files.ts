@@ -33,7 +33,6 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import {
-  AGENT_VENDORS,
   CREDENTIAL_HOME_PATHS,
   LOG_PREFIX,
   MAX_SENT_FILE_BYTES,
@@ -47,16 +46,16 @@ import {
   type MdNode,
   type SentFile,
   type SentFileStatus,
-  VENDOR_HOME_PATHS,
+  VENDOR_LIST,
 } from "../shared/index.ts";
 import { resolveUpload, sanitizeFileName } from "./uploads.ts";
 
 /**
  * 不管允许的文件夹怎么配（项目文件夹是 ~ 或 /、附加了家目录），这些始终不能分享：凭据清单（shared/secret-paths.ts，只读 Worker 也禁读）
- * + 各家厂商（claude、codex、agy）的整个配置目录（vendors.ts 的 VENDOR_HOME_PATHS.dirs，会话记录也不给网页看）。
+ * + 名单里各家厂商的整个配置目录（spec 的 home.dirs，会话记录也不给网页看）。
  * 写家目录下的相对路径，比对时 realpath（是符号链接的按它指向的地方）。
  */
-export const SENSITIVE_HOME_PATHS: readonly string[] = [...CREDENTIAL_HOME_PATHS, ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].dirs)];
+export const SENSITIVE_HOME_PATHS: readonly string[] = [...CREDENTIAL_HOME_PATHS, ...VENDOR_LIST.flatMap((spec) => spec.home.dirs)];
 /** 同上，系统里的（macOS 上 /etc 是 /private/etc 的符号链接，两个都写；/proc 里有进程的环境变量，只有 Linux 有）。 */
 const SENSITIVE_SYSTEM_PATHS: readonly string[] = ["/etc", "/private/etc", "/private/var/db", "/proc"];
 

@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
-import { VENDOR_FAILURE_SIGNS, VENDOR_HOME_PATHS, agentLaunchArgs, checkModel, vendorFailureOf, type AgentVendor } from "../shared/vendors.ts";
+import { VENDOR_FAILURE_SIGNS, agentLaunchArgs, checkModel, vendorFailureOf, type AgentVendor } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
 import type { VendorSpec } from "./types.ts";
 
@@ -101,6 +101,17 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
       expect(new Set(commands).size).toBe(commands.length);
     });
 
+    it("S11 工具名到通用动作（tools.actions）：几家合成一张查，所以同一个名字在各家必须是同一个动作", () => {
+      const seen = new Map<string, { id: string; action: string }>();
+      for (const spec of list) {
+        for (const [name, action] of Object.entries(spec.tools?.actions ?? {})) {
+          const before = seen.get(name);
+          if (before !== undefined) expect(action, `${name}：${before.id} 是 ${before.action}，${spec.id} 是 ${action}`).toBe(before.action);
+          seen.set(name, { id: spec.id, action });
+        }
+      }
+    });
+
     it("S7 rawHint 认得出自家样例报错，且不会把别家的样例报错认成自己的", () => {
       for (const spec of list) {
         if (spec.failure.rawHint) {
@@ -138,7 +149,7 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
     });
 
     it("S5 readonlySecrets、catalogWatchPaths 都在 dirs 里面", () => {
-      const home = VENDOR_HOME_PATHS[vendor];
+      const { home } = spec;
       const inside = (p: string) => home.dirs.some((d) => p === d || p.startsWith(`${d}/`));
       for (const p of [...home.readonlySecrets, ...home.catalogWatchPaths]) expect(inside(p), p).toBe(true);
     });

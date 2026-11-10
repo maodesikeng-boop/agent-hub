@@ -9,8 +9,6 @@ import {
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   VENDOR_FAILURE_SIGNS,
-  VENDOR_HOME_PATHS,
-  VENDOR_SPECS,
   agentLaunchArgs,
   checkAgentSetting,
   checkEffort,
@@ -24,78 +22,78 @@ import {
   modelLabel,
   modelShortLabel,
   vendorFailureOf,
+  vendorSpec,
   type ModelCatalog,
-  type VendorSpec,
 } from "./vendors.ts";
-import { AUTO_RENEW_CONTEXT_TOKENS, ENV_AGY, ENV_CLAUDE, ENV_CODEX, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
+import { AUTO_RENEW_CONTEXT_TOKENS, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 describe("厂商清单", () => {
   it("支持 claude、agy、codex 三家厂商，默认 claude", () => {
     expect(AGENT_VENDORS).toEqual(["claude", "agy", "codex"]);
     expect(DEFAULT_AGENT_VENDOR).toBe("claude");
 
-    const claude = VENDOR_SPECS.claude;
+    const claude = vendorSpec("claude");
     expect(claude.label).toBe("Claude Code");
-    expect(claude.models.map((m) => [m.id, m.label])).toEqual([
+    expect(claude.models.bundled.map((m) => [m.id, m.label])).toEqual([
       ["fable", "Fable"],
       ["opus", "Opus"],
       ["sonnet", "Sonnet"],
       ["haiku", "Haiku"],
     ]);
-    expect(claude.customModel).toBe(true);
-    expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(claude.backgroundCommands).toBe(true);
-    expect(claude.cliCommand).toBe("claude");
-    expect(claude.envVar).toBe(ENV_CLAUDE);
-    expect(claude.subagentTools).toEqual(["Agent", "Task"]);
-    expect(claude.backgroundCommandTool).toBe("Bash 工具的 `run_in_background`");
-    expect(claude.readonlyMode).toBe("settings");
-    expect(claude.explicitDefaultModel).toBe(false);
-    expect(claude.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
+    expect(claude.models.customModel).toBe(true);
+    expect(claude.models.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(claude.capabilities.backgroundWake).toBe(true);
+    expect(claude.cli.command).toBe("claude");
+    expect(claude.cli.envVar).toBe("AGENT_HUB_CLAUDE");
+    expect(claude.prompt.subagentTools).toEqual(["Agent", "Task"]);
+    expect(claude.prompt.backgroundCommandTool).toBe("Bash 工具的 `run_in_background`");
+    expect(claude.capabilities.readonly).toBe("settings");
+    expect(claude.capabilities.explicitDefaultModel ?? false).toBe(false);
+    expect(handoverTokenThresholdOf("claude")).toBe(HANDOVER_TOKEN_THRESHOLD);
 
-    const agy = VENDOR_SPECS.agy;
+    const agy = vendorSpec("agy");
     expect(agy.label).toBe("Antigravity");
-    expect(agy.backgroundCommands).toBe(false);
-    expect(agy.cliCommand).toBe("agy");
-    expect(agy.envVar).toBe(ENV_AGY);
-    expect(agy.subagentTools).toEqual(["invoke_subagent"]);
-    expect(agy.backgroundCommandTool).toBe("`run_command` 的 `WaitMsBeforeAsync`");
-    expect(agy.readonlyMode).toBe("os_sandbox");
-    expect(agy.explicitDefaultModel).toBe(false);
-    expect(agy.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
+    expect(agy.capabilities.backgroundWake).toBe(false);
+    expect(agy.cli.command).toBe("agy");
+    expect(agy.cli.envVar).toBe("AGENT_HUB_AGY");
+    expect(agy.prompt.subagentTools).toEqual(["invoke_subagent"]);
+    expect(agy.prompt.backgroundCommandTool).toBe("`run_command` 的 `WaitMsBeforeAsync`");
+    expect(agy.capabilities.readonly).toBe("os_sandbox");
+    expect(agy.capabilities.explicitDefaultModel ?? false).toBe(false);
+    expect(handoverTokenThresholdOf("agy")).toBe(HANDOVER_TOKEN_THRESHOLD);
     // 模型不带档位，档位另外列（agy-effort.test.ts 里有更细的）
-    expect(agy.models.map((m) => [m.id, m.label])).toEqual([
+    expect(agy.models.bundled.map((m) => [m.id, m.label])).toEqual([
       ["gemini-4-argon", "Gemini 4 Argon"],
       ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["claude-opus-5-5", "Claude Opus 5.5"],
       ["claude-sonnet-5-5", "Claude Sonnet 5.5"],
       ["gpt-oss-120b", "GPT-OSS 120B"],
     ]);
-    expect(agy.customModel).toBe(true);
-    expect(agy.customModelExample).toBe("如 gemini-4-argon");
-    expect(agy.efforts).toEqual(["low", "medium", "high"]);
-    expect(agy.effortInModelId).toBe(true);
-    expect(agy.modelFlag).toBe("--model");
-    expect(agy.effortFlag).toBe("--effort");
+    expect(agy.models.customModel).toBe(true);
+    expect(agy.models.customModelExample).toBe("如 gemini-4-argon");
+    expect(agy.models.efforts).toEqual(["low", "medium", "high"]);
+    expect(agy.models.effortInModelId).toBe(true);
+    expect(agy.models.flags.model).toBe("--model");
+    expect(agy.models.flags.effort).toBe("--effort");
     expect(agy.quota?.fetched?.args).toEqual(["-p", "/usage"]);
     expect(agy.composer.compactCommand).toBe("compact");
     for (const cmd of ["clear", "resume", "logout", "login", "model", "effort", "mode", "update", "doctor", "color", "focus"]) {
       expect(agy.composer.blockedCommands[cmd], cmd).toBeTruthy();
     }
 
-    const codex = VENDOR_SPECS.codex;
+    const codex = vendorSpec("codex");
     expect(codex.label).toBe("Codex");
-    expect(codex.backgroundCommands).toBe(false);
-    expect(codex.cliCommand).toBe("codex");
-    expect(codex.envVar).toBe(ENV_CODEX);
-    expect(codex.subagentTools).toEqual(["spawn_agent"]);
-    expect(codex.backgroundCommandTool).toBe("后台命令参数");
-    expect(codex.readonlyMode).toBe("driver");
-    expect(codex.explicitDefaultModel).toBe(true);
-    expect(codex.handoverTokenThreshold).toBe(HANDOVER_TOKEN_THRESHOLD);
+    expect(codex.capabilities.backgroundWake).toBe(false);
+    expect(codex.cli.command).toBe("codex");
+    expect(codex.cli.envVar).toBe("AGENT_HUB_CODEX");
+    expect(codex.prompt.subagentTools).toEqual(["spawn_agent"]);
+    expect(codex.prompt.backgroundCommandTool).toBe("后台命令参数");
+    expect(codex.capabilities.readonly).toBe("driver");
+    expect(codex.capabilities.explicitDefaultModel ?? false).toBe(true);
+    expect(handoverTokenThresholdOf("codex")).toBe(HANDOVER_TOKEN_THRESHOLD);
     const fullEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
     const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
-    expect(codex.models).toEqual([
+    expect(codex.models.bundled).toEqual([
       { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: fullEfforts },
       { id: "gpt-6-astra", label: "GPT-6-Astra", efforts: fullEfforts },
       { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: fullEfforts },
@@ -105,13 +103,13 @@ describe("厂商清单", () => {
       { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", efforts: fullEfforts },
       { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", efforts: maxEfforts },
     ]);
-    expect(codex.customModel).toBe(true);
-    expect(codex.customModelExample).toBe("如 gpt-6.1-sol");
-    expect(codex.efforts).toEqual(fullEfforts);
-    expect(codex.modelFlag).toBe("--model");
-    expect(codex.effortFlag).toBe("-c");
+    expect(codex.models.customModel).toBe(true);
+    expect(codex.models.customModelExample).toBe("如 gpt-6.1-sol");
+    expect(codex.models.efforts).toEqual(fullEfforts);
+    expect(codex.models.flags.model).toBe("--model");
+    expect(codex.models.flags.effort).toBe("-c");
     expect(codex.quota).toEqual({ name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] });
-    expect(VENDOR_SPECS.claude.quota?.windows).toEqual(["five_hour", "seven_day"]);
+    expect(vendorSpec("claude").quota?.windows).toEqual(["five_hour", "seven_day"]);
     expect(codex.composer.compactCommand).toBe("compact");
     for (const cmd of ["clear", "new", "resume", "fork", "login", "logout", "model", "approvals", "permissions", "sandbox", "quit", "exit"]) {
       expect(codex.composer.blockedCommands[cmd], cmd).toBeTruthy();
@@ -131,28 +129,20 @@ describe("厂商清单", () => {
     for (const v of AGENT_VENDORS) expect(handoverTokenThresholdOf(v)).toBe(HANDOVER_TOKEN_THRESHOLD);
     expect(handoverTokenThresholdOf("unknown")).toBe(HANDOVER_TOKEN_THRESHOLD);
 
-    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = { ...VENDOR_SPECS.agy, cliCommand: "acme", handoverTokenThreshold: 120_000 };
-    try {
-      expect(handoverTokenThresholdOf("acme")).toBe(120_000);
-    } finally {
-      delete specs.acme;
-    }
   });
 });
 
-describe("VENDOR_HOME_PATHS：厂商的凭据和配置目录", () => {
+describe("spec 的 home：厂商的凭据和配置目录", () => {
   it("每家都有，且只读禁读的文件与缓存指纹监听文件都在它自己的目录里", () => {
-    expect(Object.keys(VENDOR_HOME_PATHS).sort()).toEqual([...AGENT_VENDORS].sort());
-    expect(VENDOR_HOME_PATHS.claude.dirs).toEqual(expect.arrayContaining([".claude", ".claude.json"]));
-    expect(VENDOR_HOME_PATHS.claude.readonlySecrets).toContain(".claude.json");
-    expect(VENDOR_HOME_PATHS.codex.readonlySecrets).toContain(".codex/.credentials.json");
-    expect(VENDOR_HOME_PATHS.codex.catalogWatchPaths).toContain(".codex/models_cache.json");
-    expect(VENDOR_HOME_PATHS.agy.readonlySecrets).toContain(".gemini/mcp-oauth-tokens.json");
-    expect(VENDOR_HOME_PATHS.codex.dirs).toContain(".codex");
-    expect(VENDOR_HOME_PATHS.agy.dirs).toContain(".gemini");
+    expect(vendorSpec("claude").home.dirs).toEqual(expect.arrayContaining([".claude", ".claude.json"]));
+    expect(vendorSpec("claude").home.readonlySecrets).toContain(".claude.json");
+    expect(vendorSpec("codex").home.readonlySecrets).toContain(".codex/.credentials.json");
+    expect(vendorSpec("codex").home.catalogWatchPaths).toContain(".codex/models_cache.json");
+    expect(vendorSpec("agy").home.readonlySecrets).toContain(".gemini/mcp-oauth-tokens.json");
+    expect(vendorSpec("codex").home.dirs).toContain(".codex");
+    expect(vendorSpec("agy").home.dirs).toContain(".gemini");
     for (const vendor of AGENT_VENDORS) {
-      const { dirs, readonlySecrets, catalogWatchPaths } = VENDOR_HOME_PATHS[vendor];
+      const { dirs, readonlySecrets, catalogWatchPaths } = vendorSpec(vendor).home;
       expect(dirs.length, vendor).toBeGreaterThan(0);
       expect(catalogWatchPaths.length, vendor).toBeGreaterThan(0);
       for (const f of readonlySecrets) expect(dirs.some((d) => f === d || f.startsWith(`${d}/`)), `${vendor}:${f}`).toBe(true);
@@ -263,18 +253,18 @@ const catalog: ModelCatalog = {
 };
 
 describe("模型名单", () => {
-  it("打包的名单：VENDOR_SPECS 里的模型，来源 bundled，都没写思考程度", () => {
+  it("打包的名单：spec 里的模型，来源 bundled，都没写思考程度", () => {
     expect(bundledModelCatalog("claude")).toEqual({
       vendor: "claude",
-      label: VENDOR_SPECS.claude.label,
+      label: vendorSpec("claude").label,
       source: "bundled",
       availability: "unknown",
       defaultEfforts: null,
       defaultModel: null,
       defaultModelId: null,
-      efforts: VENDOR_SPECS.claude.efforts,
-      customModelExample: VENDOR_SPECS.claude.customModelExample,
-      models: VENDOR_SPECS.claude.models.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),
+      efforts: vendorSpec("claude").models.efforts,
+      customModelExample: vendorSpec("claude").models.customModelExample,
+      models: vendorSpec("claude").models.bundled.map((m) => ({ id: m.id, label: m.label, description: null, efforts: null })),
     });
   });
 
@@ -290,11 +280,11 @@ describe("模型名单", () => {
 
   it("effortsFor：名单里写了按它（按通用档位排序，且不截断模型动态返回的新档位），没写或不在名单里用通用档位；默认看 defaultEfforts", () => {
     expect(effortsFor(catalog, "claude-opus-4-6")).toEqual(["low", "high", "max", "ultra"]);
-    expect(effortsFor(catalog, "claude-haiku-4-5")).toEqual(VENDOR_SPECS.claude.efforts);
+    expect(effortsFor(catalog, "claude-haiku-4-5")).toEqual(vendorSpec("claude").models.efforts);
     expect(effortsFor(catalog, "old")).toEqual([]);
-    expect(effortsFor(catalog, "not-listed")).toEqual(VENDOR_SPECS.claude.efforts);
+    expect(effortsFor(catalog, "not-listed")).toEqual(vendorSpec("claude").models.efforts);
     expect(effortsFor(catalog, null)).toEqual(["low", "high"]);
-    expect(effortsFor(bundledModelCatalog("claude"), null)).toEqual(VENDOR_SPECS.claude.efforts);
+    expect(effortsFor(bundledModelCatalog("claude"), null)).toEqual(vendorSpec("claude").models.efforts);
   });
 });
 
@@ -313,21 +303,21 @@ describe("modelShortLabel 与 shortModelName", () => {
   });
 
   it("agy 與 codex 的 shortModelName", () => {
-    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-4-argon")).toBe("Gemini 4 Argon");
-    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-3.8-flash")).toBe("Gemini 3.8 Flash");
-    expect(VENDOR_SPECS.agy.shortModelName?.("gemini-2.5-flash-lite")).toBe("Gemini 2.5 Flash Lite");
-    expect(VENDOR_SPECS.agy.shortModelName?.("claude-opus-5-5")).toBe("Claude Opus 5.5");
-    expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-5-5[1m]")).toBe("Claude Sonnet 5.5 1M");
-    expect(VENDOR_SPECS.agy.shortModelName?.("claude-sonnet-5-5")).toBe("Claude Sonnet 5.5");
-    expect(VENDOR_SPECS.agy.shortModelName?.("gpt-oss-120b")).toBe("GPT-OSS 120B");
-    expect(VENDOR_SPECS.agy.shortModelName?.("custom-unknown-model")).toBeNull();
+    expect(vendorSpec("agy").models.shortName?.("gemini-4-argon")).toBe("Gemini 4 Argon");
+    expect(vendorSpec("agy").models.shortName?.("gemini-3.8-flash")).toBe("Gemini 3.8 Flash");
+    expect(vendorSpec("agy").models.shortName?.("gemini-2.5-flash-lite")).toBe("Gemini 2.5 Flash Lite");
+    expect(vendorSpec("agy").models.shortName?.("claude-opus-5-5")).toBe("Claude Opus 5.5");
+    expect(vendorSpec("agy").models.shortName?.("claude-sonnet-5-5[1m]")).toBe("Claude Sonnet 5.5 1M");
+    expect(vendorSpec("agy").models.shortName?.("claude-sonnet-5-5")).toBe("Claude Sonnet 5.5");
+    expect(vendorSpec("agy").models.shortName?.("gpt-oss-120b")).toBe("GPT-OSS 120B");
+    expect(vendorSpec("agy").models.shortName?.("custom-unknown-model")).toBeNull();
 
-    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.4")).toBe("GPT-5.4");
-    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
-    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
-    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-5.3-codex-spark")).toBe("GPT-5.3 Codex Spark");
-    expect(VENDOR_SPECS.codex.shortModelName?.("gpt-6.1-sol")).toBe("GPT-6.1 Sol");
-    expect(VENDOR_SPECS.codex.shortModelName?.("custom-unknown-model")).toBeNull();
+    expect(vendorSpec("codex").models.shortName?.("gpt-5.4")).toBe("GPT-5.4");
+    expect(vendorSpec("codex").models.shortName?.("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
+    expect(vendorSpec("codex").models.shortName?.("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
+    expect(vendorSpec("codex").models.shortName?.("gpt-5.3-codex-spark")).toBe("GPT-5.3 Codex Spark");
+    expect(vendorSpec("codex").models.shortName?.("gpt-6.1-sol")).toBe("GPT-6.1 Sol");
+    expect(vendorSpec("codex").models.shortName?.("custom-unknown-model")).toBeNull();
   });
 });
 

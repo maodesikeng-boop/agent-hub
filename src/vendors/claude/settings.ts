@@ -1,10 +1,11 @@
-// 权限（m3-plan 第 2.1、2.2 节）：项目经理和 Worker 的 --settings 文件、Worker 多设的环境变量，都只在这里定。
+// claude 的权限（m3-plan 第 2.1、2.2 节）：项目经理和 Worker 的 --settings 文件、Worker 多设的环境变量，都只在这里定。
 // 以后想让 Worker 默认和项目经理不一样、加回某条拒绝规则、M4 加权限钩子，只改这个文件。
-// launch.ts 只调 buildSessionSettings 和 sessionEnv，两种角色走同一个函数。
-import type { AgentRole } from "./domain.ts";
-import { CLAUDE_READONLY_PERMISSION_MODE, claudeReadonlyPermissions, claudeReadonlySandbox, type ClaudeReadonlySandbox } from "./claude-readonly-settings.ts";
-import { HUB_COMMAND } from "./names.ts";
-import type { ReadonlyPolicy } from "./readonly-policy.ts";
+// 守护进程经 daemon.ts 的 launchFiles 调 buildSessionSettings 和 sessionEnv（daemon/launch.ts 每次启动前生成），两种角色走同一个函数；
+// 别家不读这个文件，不生成（docs/vendor-plugin-design.md 的 A15）。
+import type { SessionRole } from "../../shared/domain.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
+import type { ReadonlyPolicy } from "../../shared/readonly-policy.ts";
+import { CLAUDE_READONLY_PERMISSION_MODE, claudeReadonlyPermissions, claudeReadonlySandbox, type ClaudeReadonlySandbox } from "./readonly-settings.ts";
 
 /** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
 const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
@@ -14,7 +15,7 @@ const HUB_ALLOW_RULE = `Bash(${HUB_COMMAND}:*)`;
  * 写进设置文件的 permissions.defaultMode，内容进 fingerprint，改了下一条消息前自动重启。
  */
 export const DEFAULT_PERMISSION_MODE = "auto";
-/** 取代 dontAsk 的只读档（default + 驱动接 can_use_tool）在 claude-readonly-settings.ts 的 CLAUDE_READONLY_PERMISSION_MODE。 */
+/** 取代 dontAsk 的只读档（default + 驱动接 can_use_tool）在 readonly-settings.ts 的 CLAUDE_READONLY_PERMISSION_MODE。 */
 type PermissionMode = typeof DEFAULT_PERMISSION_MODE | typeof CLAUDE_READONLY_PERMISSION_MODE;
 
 /**
@@ -34,9 +35,7 @@ export function stateDirDenyRule(stateDir: string): string {
  */
 export const WORKER_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
 
-export type SessionRole = Extract<AgentRole, "pm" | "worker">;
-
-/** 只读 Worker 的 claude 翻译要的东西（claude-readonly-settings.ts）：统一策略，加这个会话工作目录和 add-dir 的真实路径（沙箱 denyWrite 盖住它们）。 */
+/** 只读 Worker 的 claude 翻译要的东西（readonly-settings.ts）：统一策略，加这个会话工作目录和 add-dir 的真实路径（沙箱 denyWrite 盖住它们）。 */
 interface SessionReadonlyInput {
   policy: ReadonlyPolicy;
   denyWrite: string[];
@@ -45,7 +44,7 @@ interface SessionReadonlyInput {
 export interface SessionSettingsInput {
   role: SessionRole;
   /**
-   * 只读 Worker 才给（claude 用自带沙箱落实只读，见 claude-readonly-settings.ts）；项目经理、普通 Worker 不给。
+   * 只读 Worker 才给（claude 用自带沙箱落实只读，见 readonly-settings.ts）；项目经理、普通 Worker 不给。
    * 给了就整个换成只读档：default 模式、放行读和命令、拒绝编辑工具、claude 自带沙箱，不再看 osSandboxed（这时进程不包外层沙箱，嵌套会 exit 71）。
    */
   readonly?: SessionReadonlyInput;
@@ -79,7 +78,7 @@ interface PlainSandbox {
  * - Worker 再加 autoMemoryEnabled: false 和 state/ 的拒绝规则（兜底，见 stateDirDenyRule）。数据目录不能写主要不靠设置文件：
  *   权限规则管不住 shell，由驱动层按 LaunchFiles.writeScope 落实（daemon/driver/write-scope.ts）；包进 OS 沙箱的 Worker
  *   再写 sandbox.enabled: false（--settings 压过用户和项目设置，用户自己开了 claude 的沙箱也关掉）；
- * - 只读 Worker（readonly）：权限和沙箱都换成 claude-readonly-settings.ts 翻译出来的（hub 的放行规则照加），不写 state/ 的规则（编辑工具本来就全拒）。
+ * - 只读 Worker（readonly）：权限和沙箱都换成 readonly-settings.ts 翻译出来的（hub 的放行规则照加），不写 state/ 的规则（编辑工具本来就全拒）。
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
@@ -102,7 +101,7 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
   return settings;
 }
 
-/** 这个角色启动时要多设的环境变量（launch.ts 盖在 HUB_TOKEN 等之上）。项目经理没有。 */
+/** 这个角色启动时要多设的环境变量（daemon/launch.ts 盖在 HUB_TOKEN 等之上）。项目经理没有。 */
 export function sessionEnv(role: SessionRole): Readonly<Record<string, string>> {
   return role === "worker" ? WORKER_ENV : {};
 }

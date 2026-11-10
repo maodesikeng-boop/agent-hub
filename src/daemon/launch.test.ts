@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_ENV, buildReadonlyPolicy, buildSessionSettings, stateDirDenyRule, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import { WORKER_ENV, buildSessionSettings, stateDirDenyRule } from "../vendors/claude/settings.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
@@ -265,12 +266,23 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 
-  it("agy 的只读 Worker：设置文件它不读，照普通 Worker 生成；可写范围照旧（外层沙箱是 agy 自己那条线）；LaunchFiles.readonly 照给", async () => {
+  it("agy 的只读 Worker：不写 launchFiles 的厂商不生成设置文件；可写范围照旧（外层沙箱是 agy 自己那条线）；LaunchFiles.readonly 照给", async () => {
     contexts.set(9, workerContext({ readonly: true }));
     const files = await make()({ ...row(9, dir, "worker"), vendor: "agy" });
-    expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
+    expect(files.settingsFile).toBeUndefined();
+    expect(existsSync(join(launchDir, "9", "settings.json"))).toBe(false);
     expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [] });
     expect(files.readonly).toBeDefined();
+  });
+
+  it("不写 launchFiles 的厂商（agy、codex）：不生成 claude 的设置文件、Worker 也不多设 claude 的环境变量；令牌、socket、PATH 照给（A15）", async () => {
+    contexts.set(9, workerContext());
+    for (const vendor of ["agy", "codex"] as const) {
+      const files = await make()({ ...row(9, dir, "worker"), vendor });
+      expect(files.settingsFile, vendor).toBeUndefined();
+      for (const key of Object.keys(WORKER_ENV)) expect(files.env[key], `${vendor}:${key}`).toBeUndefined();
+      expect(files.env).toMatchObject({ [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
+    }
   });
 
   it("只读 Worker：LaunchFiles.readonly 是统一策略（密钥清单按主目录和数据目录展开）；普通 Worker、项目经理没有", async () => {

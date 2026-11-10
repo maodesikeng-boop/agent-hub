@@ -9,7 +9,7 @@
 #   1. apt 装 git / 构建依赖 / bubblewrap / rsync 等；加 4GB swap；从 nodejs.org 装 Node ≥ package.json 的 engines；装 pnpm
 #   2. 代码：用本机 `git archive` 打包 → ssh 管道推过去，不碰 GitHub，服务器上不放任何令牌，也不是 git 仓库
 #   3. pnpm install --frozen-lockfile + pnpm build
-#   4. 装 claude / codex / agy 三家 CLI（各家官方安装脚本，装到 ~/.local/bin）。登录要人来做，脚本不碰凭据
+#   4. 装名单里各家的 CLI（各家 paths.ts 的 installCommand，各家官方安装脚本，装到 ~/.local/bin）。登录要人来做，脚本不碰凭据
 #   5. systemd 用户服务 agent-hub：只听 127.0.0.1、开机自启（loginctl enable-linger）。不开任何端口、不装 Tailscale、不动云上资源
 #
 # 要从别的电脑打开网页：ssh -N -L 端口:127.0.0.1:端口 用户@主机（本机端口必须等于服务器端口，界面会校验 Host/Origin 的端口）。
@@ -29,12 +29,6 @@ APP_DIR_NAME=agent-hub                 # 代码目录：~/agent-hub
 SERVICE_NAME=agent-hub
 NODE_MAJOR=24                          # 装哪个大版本；最低版本从 package.json 的 engines 读
 APT_PACKAGES=(git curl ca-certificates xz-utils build-essential python3 procps bubblewrap rsync)
-# 各家 CLI：名字|官方安装脚本。都装到 ~/.local/bin，不需要 root（出处见 docs/linux.md 第 3 节）
-CLI_INSTALLERS=(
-  "claude|https://claude.ai/install.sh|bash"
-  "codex|https://chatgpt.com/codex/install.sh|sh"
-  "agy|https://antigravity.google/cli/install.sh|bash"
-)
 READY_TIMEOUT_S=60                     # 起服务后等网页就绪的最长时间
 
 log() { printf '\033[1;34m[provision]\033[0m %s\n' "$*"; }
@@ -67,7 +61,7 @@ on_server() {
   step_pnpm "$manifest_dir"
   CODE_CHANGED=0 # step_code 置 1 表示有更新（不用返回值：被 || 调用的函数里 set -e 不生效，装失败会被吞掉）
   step_code "$app" "$incoming" "$sha"
-  step_clis
+  step_clis "$app"
   step_service "$app" "$port" "$CODE_CHANGED"
   step_report "$app" "$port"
 }
@@ -156,17 +150,22 @@ step_code() {
   CODE_CHANGED=1
 }
 
+# 名单里的各家 CLI，每家一行：编号 TAB 命令名 TAB 安装命令 TAB 登录命令。从代码里各家的声明读（scripts/print-vendors.ts），
+# 加厂商不用改这个脚本。安装命令都装到 ~/.local/bin，不需要 root（出处见 docs/linux.md 第 3 节）。
+vendor_lines() {
+  node "$1/scripts/print-vendors.ts"
+}
+
 step_clis() {
-  local entry name url shell tmp status=()
-  for entry in "${CLI_INSTALLERS[@]}"; do
-    IFS='|' read -r name url shell <<<"$entry"
-    if command -v "$name" >/dev/null 2>&1; then skip "$name 已装（$("$name" --version 2>&1 | head -n1)）"; continue; fi
-    log "装 ${name}（${url}）"
-    tmp=$(mktemp)
-    if curl -fsSL -o "$tmp" "$url" && "$shell" "$tmp" </dev/null; then :; else printf '\033[1;33m[provision] 警告：%s 装失败，其余步骤继续\033[0m\n' "$name"; fi
-    rm -f "$tmp"
+  local lines id cmd install login
+  lines=$(vendor_lines "$1") || die "读不了厂商名单（node $1/scripts/print-vendors.ts）"
+  while IFS=$'\t' read -r -u 3 id cmd install login; do
+    if command -v "$cmd" >/dev/null 2>&1; then skip "$cmd 已装（$("$cmd" --version 2>&1 </dev/null | head -n1)）"; continue; fi
+    if [ -z "$install" ]; then printf '\033[1;33m[provision] 警告：%s 没写安装命令，要手动装 %s\033[0m\n' "$id" "$cmd"; continue; fi
+    log "装 ${id}（${install}）"
+    if bash -o pipefail -c "$install" </dev/null; then :; else printf '\033[1;33m[provision] 警告：%s 装失败，其余步骤继续\033[0m\n' "$id"; fi
     hash -r
-  done
+  done 3<<<"$lines"
 }
 
 unit_text() {
@@ -231,13 +230,14 @@ step_report() {
   local pid; pid=$(systemctl --user show -p MainPID --value "$SERVICE_NAME")
   if [ "$pid" != 0 ]; then echo "守护进程 RSS：$(awk '/VmRSS/ {printf "%d MB", $2/1024}' "/proc/$pid/status")"; fi
   echo "── CLI ──"
-  local entry name
-  for entry in "${CLI_INSTALLERS[@]}"; do
-    name=${entry%%|*}
-    if command -v "$name" >/dev/null 2>&1; then echo "$name: $("$name" --version 2>&1 | head -n1)"; else echo "$name: 未安装"; fi
-  done
+  local lines id cmd install login logins=()
+  lines=$(vendor_lines "$app") || die "读不了厂商名单（node $app/scripts/print-vendors.ts）"
+  while IFS=$'\t' read -r -u 3 id cmd install login; do
+    if command -v "$cmd" >/dev/null 2>&1; then echo "$cmd: $("$cmd" --version 2>&1 </dev/null | head -n1)"; else echo "$cmd: 未安装"; fi
+    logins+=("$id: $login")
+  done 3<<<"$lines"
   echo "── 登录（要人来做，凭据只存在这台机器上）──"
-  echo "claude: claude        codex: codex login --device-auth        agy: agy"
+  printf '%s\n' "${logins[@]}"
   echo "界面令牌：cat ~/.agent-hub/state/ui-token（本机浏览器打开 http://127.0.0.1:$port/auth?token=<令牌>）"
 }
 

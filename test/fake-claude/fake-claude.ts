@@ -144,7 +144,7 @@ export interface FakeScript {
  * 顶层剧本照旧跨进程一起数。
  */
 export interface FakeSessionScript {
-  /** 角色：环境变量里有 Worker 才设的 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1（shared/policy.ts 的 WORKER_ENV）就是 worker，否则 pm。 */
+  /** 角色：环境变量里有 Worker 才设的 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1（src/vendors/claude/settings.ts 的 WORKER_ENV）就是 worker，否则 pm。 */
   role?: FakeRole;
   /** 工作目录等于它（两边都 realpath 过再比）。 */
   cwd?: string;
@@ -218,7 +218,7 @@ const myPid: number = (() => {
 const topScript: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
   ? (JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) as FakeScript)
   : {};
-/** Worker 的会话才有的环境变量（shared/policy.ts 的 WORKER_ENV），假 claude 靠它认角色。 */
+/** Worker 的会话才有的环境变量（src/vendors/claude/settings.ts 的 WORKER_ENV），假 claude 靠它认角色。 */
 const role: FakeRole = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1" ? "worker" : "pm";
 
 function realOrSelf(path: string): string {

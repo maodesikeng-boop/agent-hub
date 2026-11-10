@@ -8,7 +8,6 @@ import {
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
   MODEL_CATALOG_TIMEOUT_MS,
-  VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
   mergeCatalogEfforts,
@@ -17,6 +16,7 @@ import {
   type CatalogModel,
   type ModelCatalog,
 } from "../../shared/index.ts";
+import spec from "./spec.ts";
 import {
   STDERR_TAIL_CHARS,
   defaultAvailabilityOfError,
@@ -66,7 +66,7 @@ function splitLabelTier(label: string): { base: string; tier: string } | null {
 export function parseAgyModels(raw: unknown): ModelCatalog | null {
   const list = extractAgyModels(raw);
   if (list === null) return null;
-  const tiers = [...VENDOR_SPECS.agy.efforts, ...ALL_EFFORTS.filter((e) => !VENDOR_SPECS.agy.efforts.includes(e))];
+  const tiers = [...spec.models.efforts, ...ALL_EFFORTS.filter((e) => !spec.models.efforts.includes(e))];
   // 不带档位的模型（按第一次出现的顺序）→ 名字、说明、报了哪些档位
   const found = new Map<string, { label: string; description: string | null; efforts: Set<string> }>();
   const seen = new Set<string>();
@@ -108,7 +108,7 @@ export function parseAgyModels(raw: unknown): ModelCatalog | null {
     efforts: tiers.filter((t) => m.efforts.has(t)),
   }));
   const defaultEfforts = defaultBaseId === null ? null : (models.find((m) => m.id === defaultBaseId)?.efforts ?? null);
-  const efforts = mergeCatalogEfforts(VENDOR_SPECS.agy.efforts, models, defaultEfforts);
+  const efforts = mergeCatalogEfforts(spec.models.efforts, models, defaultEfforts);
   return { ...bundledModelCatalog("agy"), source: "vendor", efforts, models, defaultEfforts, defaultModel };
 }
 

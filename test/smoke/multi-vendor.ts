@@ -9,8 +9,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDaemon } from "../../src/daemon/daemon.ts";
+import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
-import { API_PATHS, ENV_HOME, ENV_PORT, HUB_COMMAND, WORKER_ENV } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_HOME, ENV_PORT, HUB_COMMAND } from "../../src/shared/index.ts";
 import { Client, agentTexts, isAlive, messagesOf, waitForStatus } from "../e2e/harness.ts";
 import { expect, psLines, removeOwnClaudeProjects, removeOwnVendorRecords, scenario, type Outcome } from "./kit.ts";
 
@@ -50,7 +51,7 @@ console.log(`multi-vendor smoke：临时数据目录 ${dir}`);
 
 const cleanEnv: Record<string, string | undefined> = {};
 for (const [k, v] of Object.entries(process.env)) {
-  if (!(k in WORKER_ENV)) cleanEnv[k] = v;
+  if (!PARENT_SESSION_ENV.includes(k)) cleanEnv[k] = v;
 }
 cleanEnv[ENV_HOME] = home;
 cleanEnv[ENV_PORT] = "0";

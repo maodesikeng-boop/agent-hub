@@ -5,20 +5,27 @@
 //   其余场景加 --no-session-persistence；收尾（finish）时删掉这次数据目录对应的 ~/.claude/projects/<目录名>/，只删自己这次产生的。
 //   原来驱动层写的 state/logs/sessions/ 没有了：转发脚本把 claude 的 stdout 另存一份在 <数据目录>/streams/，场景从那里读。
 // - 默认用小模型（AGENT_HUB_DEFAULT_MODEL，默认 claude-haiku-5-5），提示词都很短。
-// - claude 的路径：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。用户全局 ~/.claude 的设置照常生效。
+// - claude 的路径：claude spec 的 cli.envVar（AGENT_HUB_CLAUDE），默认 PATH 里的 claude。用户全局 ~/.claude 的设置照常生效。
+// - 只连自己起的测试后台：启动时清掉外部继承的 HUB_TOKEN / HUB_SOCK（clean-env.ts），在项目经理的会话里跑也不会连到真正在用的后台；
+//   不起整个守护进程、直接用驱动层的场景，要 Worker 能跑 hub 的用 startTestHub。
+import "../clean-env.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import claudeSpec from "../../src/vendors/claude/spec.ts";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
-import { codexTranscriptPath } from "../../src/vendors/codex/transcript.ts";
-import { ENV_DEFAULT_MODEL, type Message, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
+import { ENV_DEFAULT_MODEL, ENV_HUB_SOCK, ENV_HUB_TOKEN, type Message, type SessionId, type SessionState, type StateSnapshot } from "../../src/shared/index.ts";
+import { createSessionTokens, installHubShim, startAgentApi } from "../../src/daemon/agent-api/index.ts";
+import { vendorSessionFiles } from "../../src/daemon/driver/transcript.ts";
+import { createLedger, type SqliteLedger } from "../../src/daemon/ledger/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
-import { Client, agentTexts, makeEnv, messagesOf, sleep, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "../e2e/harness.ts";
+import { openTestDb } from "../../src/daemon/store/test-helpers.ts";
+import { Client, agentTexts, makeEnv, messagesOf, shortTmp, sleep, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "../e2e/harness.ts";
 
 export const MODEL = process.env[ENV_DEFAULT_MODEL] || "claude-haiku-5-5";
-export const CLAUDE = process.env.AGENT_HUB_CLAUDE || "claude";
+export const CLAUDE = process.env[claudeSpec.cli.envVar] || claudeSpec.cli.command;
 /** 真 claude 一轮最多等多久。 */
 export const TURN_MS = 180_000;
 
@@ -61,10 +68,9 @@ exec "$real" "\${flag[@]}" "$@" > >(tee -a "$streams/$key.jsonl")
 }
 
 /**
- * 删掉 codex、agy 为这次数据目录里的会话留在用户目录里的原始记录（它们起会话时没法不存）：只删账本里这次的会话 ID 对应的——
- * codex：<CODEX_HOME>/sessions/…/rollout-*-<thread id>.jsonl；agy：~/.gemini/antigravity-cli/ 下的 conversations/<id>.db（和 -wal、-shm）、
- * brain/<id>/、annotations/<id>.pbtxt。位置见 src/daemon/driver/transcript.ts。codex、agy 自己的索引（state_5.sqlite、history）里的行删不掉，也不动。
- * 返回删掉的路径。
+ * 删掉各家为这次数据目录里的会话留在用户目录里的原始记录（有的厂商起会话时没法不存）：只删账本里这次的会话 ID 对应的，
+ * 删哪些由各家 daemon.ts 的 sessionFiles 说（src/daemon/driver/transcript.ts 的 vendorSessionFiles，没写的厂商不删）。
+ * 厂商自己的索引（如 codex 的 state_5.sqlite、history）里的行删不掉，也不动。返回删掉的路径。
  */
 export function removeOwnVendorRecords(dbFile: string, home = homedir()): string[] {
   const db = openDatabase(dbFile);
@@ -83,20 +89,51 @@ export function removeVendorRecordsOf(rows: { vendor: string; vendor_session_id:
     rmSync(path, { recursive: true, force: true });
     removed.push(path);
   };
-  const agy = join(home, ".gemini", "antigravity-cli");
   for (const row of rows) {
-    const id = row.vendor_session_id;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) continue;
-    if (row.vendor === "codex") {
-      const file = codexTranscriptPath({ vendor: "codex", vendorSessionId: id, cwd: row.cwd }, { home });
-      if (file !== null) drop(file);
-    } else if (row.vendor === "agy") {
-      for (const suffix of ["", "-wal", "-shm"]) drop(join(agy, "conversations", `${id}.db${suffix}`));
-      drop(join(agy, "brain", id));
-      drop(join(agy, "annotations", `${id}.pbtxt`));
-    }
+    for (const path of vendorSessionFiles({ vendor: row.vendor, vendorSessionId: row.vendor_session_id, cwd: row.cwd }, { home })) drop(path);
   }
   return removed;
+}
+
+/** 不起守护进程的场景用的测试后台：临时数据目录里的真账本 + agent 接口（run/hub.sock）+ hub 外壳，派好一个 Worker。 */
+export interface TestHub {
+  /** 数据目录（realpath 过）：Worker 的可写范围按它算，worktrees/ 在它下面。 */
+  dataDir: string;
+  ledger: SqliteLedger;
+  /** 让 Worker 连这个测试后台的环境变量：它的 HUB_TOKEN、HUB_SOCK，PATH 最前面是这里的 hub 外壳。盖在驱动层继承的环境变量之上。 */
+  workerEnv: Record<string, string>;
+  close(): Promise<void>;
+}
+
+/**
+ * 起一个测试后台（docs 见本文件开头）：Worker 在里面跑 hub status 看到的是这里派的 Worker，不会连到真正在用的后台；
+ * 干净的终端里没有 HUB_TOKEN 也能跑。close 停掉 agent 接口、删掉数据目录和项目文件夹（项目文件夹不能放数据目录里，后台会拒绝）。
+ */
+export async function startTestHub(): Promise<TestHub> {
+  const dataDir = realpathSync.native(mkdtempSync(join(shortTmp(), "ah-hub-")));
+  const folder = realpathSync.native(mkdtempSync(join(shortTmp(), "ah-project-")));
+  const db = openTestDb();
+  const ledger = createLedger(db, { pmHomeRoot: join(dataDir, "pm-home"), dataHome: dataDir, worktreesDir: join(dataDir, "worktrees") });
+  const pm = ledger.createPm({ name: "冒烟", mode: "hands_on", persona: "", defaultModel: null });
+  ledger.hubCall(pm.sessionId, "project.create", { folder });
+  const worker = ledger.hubCall(pm.sessionId, "worker.start", { title: "冒烟", task: "冒烟测试用的 Worker", noWorktree: true }).data.worker;
+  const sessionId = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id as SessionId;
+  const tokens = createSessionTokens();
+  const runDir = join(dataDir, "run");
+  const api = await startAgentApi({ ledger, tokens, runDir, hubSock: join(runDir, "hub.sock") });
+  const binDir = join(runDir, "bin");
+  installHubShim({ binDir });
+  return {
+    dataDir,
+    ledger,
+    workerEnv: { [ENV_HUB_TOKEN]: tokens.issue(sessionId), [ENV_HUB_SOCK]: api.socketPath, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    async close() {
+      await api.close();
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(folder, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -154,7 +191,7 @@ export class Smoke {
 
   /** （重新）起守护进程，沿用同一个数据目录和 cookie。 */
   async start(): Promise<void> {
-    this.daemon = await this.env.start({ claudePath: this.claudePath, env: { [ENV_DEFAULT_MODEL]: MODEL } });
+    this.daemon = await this.env.start({ vendorPath: this.claudePath, env: { [ENV_DEFAULT_MODEL]: MODEL } });
     this.client = this.client ? this.client.withPort(this.daemon.port) : await Client.login(this.daemon);
   }
 

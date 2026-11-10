@@ -1,6 +1,5 @@
 // codex 的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
 // 只给守护进程用的路径（PATH 里找不到时去哪找）在同目录的 paths.ts。
-import { ENV_CODEX } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
@@ -18,7 +17,7 @@ export default defineVendor({
   label: "Codex",
   cli: {
     command: "codex",
-    envVar: ENV_CODEX,
+    envVar: "AGENT_HUB_CODEX",
     loginCommand: "codex login",
   },
   // auth.json 是 codex 的令牌，.credentials.json 是 MCP OAuth 令牌的备用文件（keyring 不可用时，见 codex-rs/rmcp-client/src/oauth.rs）
@@ -66,13 +65,27 @@ export default defineVendor({
     },
   },
   prompt: {
+    // 保留迁移前公共提示词的触发条件：CLAUDE.md 与 AGENTS.md 并存时提醒。
+    instructionFile: "CLAUDE.md",
     subagentTools: ["spawn_agent"],
     backgroundCommandTool: "后台命令参数",
+    vendorOnlyTools: "codex 的 apply_patch",
   },
   failure: {
     serviceName: "Codex",
     rawHint: /^codex_not_found\b|\bcodex\b|openai|chatgpt/i,
     rawHintPriority: 1,
+  },
+  tools: {
+    actions: {
+      commandExecution: "command",
+      exec_command: "command",
+      fileChange: "edit",
+      apply_patch: "edit",
+      webSearch: "web_search",
+      web_search: "web_search",
+      mcpToolCall: "connector",
+    },
   },
   capabilities: {
     // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）

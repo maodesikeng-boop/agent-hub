@@ -16,7 +16,7 @@ export interface HandoverRunnerOptions {
   /** 守护进程的 prepareLaunch（和驱动层用的同一个）：给旧会话拼提示词文件、设置文件、环境变量。 */
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   log: (line: string) => void;
-  /** 各家 CLI 的路径（paths.claudePath 等，用户可配、测试用假可执行文件）：拼 ForkSource.executablePath，厂商的办法一律用它起进程。 */
+  /** 各家 CLI 的路径（解析好的 HubPaths.vendorPaths，用户可配、测试用假可执行文件）：拼 ForkSource.executablePath，厂商的办法一律用它起进程。 */
   executablePaths: Readonly<Record<AgentVendor, string>>;
   /** 办法清单，默认 FORKERS；测试换假的。 */
   registry?: ForkerRegistry;

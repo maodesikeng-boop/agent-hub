@@ -1,6 +1,6 @@
 // 厂商声明的类型（docs/vendor-plugin-design.md 3.2 节）：每家在 src/vendors/<id>/spec.ts 填一份 VendorSpec，名单在 registry.ts。
 // 只放类型和纯函数：网页、hub 命令行、守护进程都引，不许 import node:*、src/daemon（契约测试 S2 查）。
-// 公共代码要的旧平铺字段（VENDOR_SPECS 的 cliCommand、modelFlag……）由 src/shared/vendors.ts 从这里派生，不在这里另存一份。
+// 公共代码一律按 vendorSpec(vendor) 读这里的分组字段（src/shared/vendors.ts），不再派生平铺的旧形状。
 import type { QuotaWindowKey } from "../shared/vendors.ts";
 
 /**
@@ -17,7 +17,7 @@ export interface FetchedQuotaSpec {
  * 输入框里“/”命令的厂商数据（docs/composer-commands.md 实测）。怎么问命令列表、`@` 文件怎么写、怎么拼写进 agent 的内容
  * 这些要写代码的，在 src/vendors/<厂商>/composer.ts。
  */
-export interface ComposerSpec {
+interface ComposerSpec {
   /** 命令的开头：用户原文以它开头（前面不能有空格）才算命令。 */
   commandPrefix: string;
   /** 压缩上下文的命令名（不带开头的 /）：这一轮只压缩、不回话，项目经理发了它不会有汇报。 */
@@ -31,6 +31,25 @@ export interface ComposerSpec {
 
 /** 失败的通用类型：服务繁忙、额度用完、网络断了、找不到程序、没能启动。认不出来的是 unknown（shared/errors.ts）。 */
 export type FailureKind = "busy" | "quota" | "network" | "missing" | "start" | "auth" | "context";
+
+/**
+ * 工具的通用动作（docs/vendor-plugin-design.md 的 A16）：状态文案、hub worker log --stats 的分类只认这些（shared/step-labels.ts），
+ * 不认厂商的工具名。各家在 spec 的 tools.actions 里把自己的工具名翻成它。
+ * read、edit、write 的文案带文件名（Reading a.ts）；web_search、web_fetch 都算“上网”类；connector：调用连接器（MCP）工具。
+ */
+export type ToolAction =
+  | "command"
+  | "read"
+  | "edit"
+  | "write"
+  | "search"
+  | "web_search"
+  | "web_fetch"
+  | "skill"
+  | "subagent"
+  | "todo"
+  | "tool_search"
+  | "connector";
 
 interface VendorCapabilities {
   /**
@@ -107,6 +126,13 @@ export interface VendorSpec<Id extends string = string> {
     subagentTools: readonly string[];
     /** 后台运行长命令的工具写法说明（如 "Bash 工具的 `run_in_background`"）；用于拼提示词。 */
     backgroundCommandTool: string;
+    /**
+     * 需要提醒先读 AGENTS.md 的说明文件（CLAUDE.md 沿用迁移前的条件）。只在它和 AGENTS.md 都在、它里面又没写 @AGENTS.md 时，
+     * 提示词才加一句“先读 AGENTS.md”（daemon/prompt.ts 的 needsAgentsNote）。不写 = 这家自己读 AGENTS.md，不加。
+     */
+    instructionFile?: string;
+    /** 换厂商写交接时举例“别写只有这家才有的工具用法”（daemon/ledger/handover.ts）。不写就不举例。 */
+    vendorOnlyTools?: string;
   };
   failure: {
     /** 出错的话里称呼这家的服务：“Claude 服务繁忙”。 */
@@ -119,7 +145,14 @@ export interface VendorSpec<Id extends string = string> {
   handover?: {
     /** 项目经理自动换新会话的上下文 token 阈值。不写 = HANDOVER_TOKEN_THRESHOLD。 */
     tokenThreshold?: number;
+    /** 原始记录别家能不能直接读（agy 的是 sqlite 库：false，换到别家时交接里不给路径）。不写 = true（纯文本）。 */
+    transcriptPortable?: boolean;
   };
+  /**
+   * 工具名（驱动层 agent.tool 事件里原样的名字）→ 通用动作（shared/step-labels.ts 按它出文案、分类）。几家的名单合在一起查，
+   * 所以同一个名字在各家要是同一个动作（契约测试查）。没列的工具显示“Using <名字>”，统计里按原名单独计数；mcp__ 开头的另按连接器认。
+   */
+  tools?: { actions: Readonly<Record<string, ToolAction>> };
   capabilities: VendorCapabilities;
 }
 

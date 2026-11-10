@@ -8,14 +8,10 @@ import { describe, expect, it } from "vitest";
 import { buildLaunchPrompt, buildWorkerPrompt } from "../daemon/prompt.ts";
 import { projectContext, workerContext } from "../daemon/test-helpers.ts";
 import { VENDOR_FALLBACK_PATHS } from "../shared/paths.ts";
-import {
-  AGENT_VENDORS,
-  VENDOR_FAILURE_SIGNS,
-  VENDOR_HOME_PATHS,
-  VENDOR_SPECS,
-  agentLaunchArgs,
-  type AgentVendor,
-} from "../shared/vendors.ts";
+import { HANDOVER_TOKEN_THRESHOLD } from "../shared/limits.ts";
+import { AGENT_VENDORS, VENDOR_FAILURE_SIGNS, agentLaunchArgs, type AgentVendor } from "../shared/vendors.ts";
+import { VENDOR_LIST } from "./registry.ts";
+import type { VendorSpec } from "./types.ts";
 
 const HOME = "<HOME>";
 const PLATFORMS = ["darwin", "linux"] as const;
@@ -31,6 +27,43 @@ function portable<T>(value: T): T {
 }
 
 const show = (v: string | null) => (v === null ? "null" : v === "" ? '""' : v);
+
+/**
+ * 迁移前的平铺形状（P1 时的 VENDOR_SPECS，P4 删掉了生产代码里的派生）：快照比的就是它，所以在这里照原样从 spec 拼出来，
+ * 字段、顺序和当时 shared/vendors.ts 的 flatSpec 一样。spec 里后来加的字段（cli.installCommand、tools……）不在里面。
+ */
+function flatSpec(spec: VendorSpec) {
+  const { cli, models, capabilities } = spec;
+  return {
+    label: spec.label,
+    loginCommand: cli.loginCommand,
+    models: models.bundled,
+    customModel: models.customModel,
+    customModelExample: models.customModelExample,
+    efforts: models.efforts,
+    ...(models.effortInModelId === undefined ? {} : { effortInModelId: models.effortInModelId }),
+    modelFlag: models.flags.model,
+    effortFlag: models.flags.effort,
+    flags: models.flags,
+    ...(spec.quota === undefined ? {} : { quota: spec.quota }),
+    ...(models.shortName === undefined ? {} : { shortModelName: models.shortName }),
+    backgroundCommands: capabilities.backgroundWake,
+    cliCommand: cli.command,
+    envVar: cli.envVar,
+    subagentTools: spec.prompt.subagentTools,
+    backgroundCommandTool: spec.prompt.backgroundCommandTool,
+    readonlyMode: capabilities.readonly,
+    explicitDefaultModel: capabilities.explicitDefaultModel ?? false,
+    handoverTokenThreshold: spec.handover?.tokenThreshold ?? HANDOVER_TOKEN_THRESHOLD,
+    composer: spec.composer,
+  };
+}
+
+const VENDOR_SPECS = Object.fromEntries(VENDOR_LIST.map((spec) => [spec.id, flatSpec(spec)])) as Record<AgentVendor, ReturnType<typeof flatSpec>>;
+/** 迁移前的 VENDOR_HOME_PATHS：spec 的 home 去掉 configHome。 */
+const VENDOR_HOME_PATHS = Object.fromEntries(
+  VENDOR_LIST.map(({ id, home }) => [id, { dirs: home.dirs, readonlySecrets: home.readonlySecrets, catalogWatchPaths: home.catalogWatchPaths }]),
+);
 
 /** 每家的模型取值：默认、空串、打包的、名单外的完整模型名，思考程度写在 ID 里的（agy）再加一个带档位的。 */
 function modelChoices(vendor: AgentVendor): (string | null)[] {

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AGENT_VENDORS, DriverError, VENDOR_SPECS } from "../../shared/index.ts";
+import { AGENT_VENDORS, DriverError } from "../../shared/index.ts";
 import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -45,9 +45,8 @@ const canRunSandboxExec =
   })();
 
 describe("WRITE_SCOPE_ENFORCERS", () => {
-  it("VENDOR_SPECS 里的每家都有", () => {
+  it("名单里的每家都有", () => {
     expect(Object.keys(WRITE_SCOPE_ENFORCERS).sort()).toEqual([...AGENT_VENDORS].sort());
-    expect(Object.keys(VENDOR_SPECS).sort()).toEqual([...AGENT_VENDORS].sort());
   });
 
   it("项目经理（没有可写范围）每家都原样起", () => {

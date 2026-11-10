@@ -1,27 +1,19 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
 import { existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { ENV_AGY, ENV_CLAUDE, ENV_CODEX, ENV_HOME } from "./limits.ts";
+import { ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
-import type { VendorPathsModule } from "../vendors/daemon-types.ts";
-import { importVendorFile } from "../vendors/load.ts";
-import { AGENT_VENDORS, VENDOR_HOME_PATHS, vendorSpec, type AgentVendor } from "./vendors.ts";
-
-/**
- * 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）。
- * 放在厂商文件夹的 paths.ts 而不是 spec.ts：spec.ts 网页也打包，这些网页用不到。paths.ts 只引 node:* 和自家 spec.ts，不会绕回这里。
- */
-const VENDOR_PATHS: Readonly<Record<AgentVendor, VendorPathsModule>> = Object.fromEntries(
-  await Promise.all(AGENT_VENDORS.map(async (vendor) => [vendor, (await importVendorFile(vendor, "paths.ts")) as VendorPathsModule])),
-) as Record<AgentVendor, VendorPathsModule>;
+// 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）
+import { VENDOR_PATHS } from "../vendors/paths-registry.ts";
+import { VENDOR_LIST } from "../vendors/registry.ts";
+import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "./vendors.ts";
 
 export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
   userHome?: string;
   home?: string;
-  claude?: string;
-  agy?: string;
-  codex?: string;
+  /** 各家可执行文件（优先于 spec 的 cli.envVar 环境变量），没给的家照常解析。 */
+  vendorPaths?: Partial<Record<AgentVendor, string>>;
 }
 
 export interface HubPaths {
@@ -61,7 +53,7 @@ export interface HubPaths {
   /** run/：只有守护进程在跑时才有内容，权限 0700（设计第 6.1 节）。 */
   runDir: string;
   /**
-   * run/hub.sock：agent 接口，权限 0600。写进环境变量和设置文件前要 realpath（见 policy.ts 的 buildSessionSettings）。
+   * run/hub.sock：agent 接口，权限 0600。写进环境变量和设置文件前要 realpath（见 src/vendors/claude/settings.ts 的 buildSessionSettings）。
    * macOS 上 Unix socket 路径最多 MAX_UNIX_SOCKET_PATH_BYTES 字节：agent 接口 listen 之前用 assertSocketPathFits 查 realpath 后的路径。
    */
   hubSock: string;
@@ -91,12 +83,8 @@ export interface HubPaths {
    * 原文件之后被删、被改，网页照样显示发出时的样子。
    */
   sentFilesDir: string;
-  /** claude 程序：AGENT_HUB_CLAUDE，默认 PATH 里的 claude。 */
-  claudePath: string;
-  /** agy 可执行文件（默认 "agy"，或 AGENT_HUB_AGY）。 */
-  agyPath: string;
-  /** codex 可执行文件（默认 "codex"，或 AGENT_HUB_CODEX）。 */
-  codexPath: string;
+  /** 各家可执行文件：spec 的 cli.envVar（AGENT_HUB_<大写编号>）给的路径，默认 cli.command（PATH 里找）。~ 开头的展开成用户主目录。 */
+  vendorPaths: Record<AgentVendor, string>;
 }
 
 function expandHome(raw: string, userHome: string): string {
@@ -144,9 +132,9 @@ export function resolveHubPaths(
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),
     sentFilesDir: join(home, "sent-files"),
-    claudePath: expandHome(input.claude || env[ENV_CLAUDE] || "claude", userHome),
-    agyPath: expandHome(input.agy || env[ENV_AGY] || "agy", userHome),
-    codexPath: expandHome(input.codex || env[ENV_CODEX] || "codex", userHome),
+    vendorPaths: Object.fromEntries(
+      VENDOR_LIST.map(({ id, cli }) => [id, expandHome(input.vendorPaths?.[id] || env[cli.envVar] || cli.command, userHome)]),
+    ) as Record<AgentVendor, string>,
   };
 }
 
@@ -234,14 +222,14 @@ export interface VendorExecutable {
 
 /** 按 AGENT_VENDORS 循环解析各家厂商可执行文件路径（cmd 为配置的命令或路径，path 为结合 PATH 与兜底候选路径解析后的结果）。 */
 export function resolveVendorExecutables(
-  paths: Pick<HubPaths, `${AgentVendor}Path`>,
+  paths: Pick<HubPaths, "vendorPaths">,
   envPath: string | undefined,
   userHome: string,
   platform: string = process.platform,
 ): Record<AgentVendor, VendorExecutable> {
   return Object.fromEntries(
     AGENT_VENDORS.map((vendor) => {
-      const cmd = paths[`${vendor}Path`];
+      const cmd = paths.vendorPaths[vendor];
       const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
       return [vendor, { cmd, path }];
     }),
@@ -249,13 +237,13 @@ export function resolveVendorExecutables(
 }
 
 /**
- * 某家厂商要盯的本地配置/凭据/模型缓存文件的绝对路径（VENDOR_HOME_PATHS 的 catalogWatchPaths）。配置根目录能被环境变量改位置的
+ * 某家厂商要盯的本地配置/凭据/模型缓存文件的绝对路径（spec 的 home.catalogWatchPaths）。配置根目录能被环境变量改位置的
  * （spec 的 home.configHome，如 codex 的 CODEX_HOME：去掉首尾空白后非空才算），以 rel 开头的路径换到那个目录下；别的照旧拼在用户主目录下。
  */
 export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string[] {
-  const override = vendorSpec(vendor).home.configHome;
+  const { configHome: override, catalogWatchPaths } = vendorSpec(vendor).home;
   const base = vendorConfigHome(vendor, userHome, env);
-  return VENDOR_HOME_PATHS[vendor].catalogWatchPaths.map((rel) =>
+  return catalogWatchPaths.map((rel) =>
     override && base && rel.startsWith(`${override.rel}/`) ? join(base, rel.slice(override.rel.length + 1)) : join(userHome, rel),
   );
 }

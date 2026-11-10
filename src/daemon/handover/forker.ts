@@ -14,7 +14,7 @@ export interface ForkSource {
   sessionId: SessionId;
   vendor: AgentVendor;
   vendorSessionId: string;
-  /** 这家 CLI 的可执行文件路径：runner 按 vendor 从 paths.claudePath / codexPath / agyPath 填（用户可配、测试用假的）。forker 一律用它起进程。 */
+  /** 这家 CLI 的可执行文件路径：runner 按 vendor 从解析好的 HubPaths.vendorPaths 填（用户可配、测试用假的）。forker 一律用它起进程。 */
   executablePath: string;
   cwd: string;
   addDirs: string[];

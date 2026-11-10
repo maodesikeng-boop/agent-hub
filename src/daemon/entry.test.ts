@@ -6,7 +6,8 @@ import { arch } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX, WORKER_ENV } from "../shared/index.ts";
+import { DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX } from "../shared/index.ts";
+import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 import { reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
@@ -22,7 +23,7 @@ describe("守护进程启动失败：终端上的输出", () => {
 
   const envOf = (name: string, port: string): Record<string, string | undefined> => {
     const env: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(process.env)) if (!(key in WORKER_ENV)) env[key] = value;
+    for (const [key, value] of Object.entries(process.env)) if (!PARENT_SESSION_ENV.includes(key)) env[key] = value;
     env[ENV_HOME] = join(dir, name);
     env[ENV_PORT] = port;
     return env;

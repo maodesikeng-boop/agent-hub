@@ -26,7 +26,7 @@ pnpm build        # 生成 dist/web（网页），之后 systemd 直接起守护
 
 ## 3. 装各厂商 CLI 并登录
 
-厂商清单以 `src/shared/vendors.ts` 的 `VENDOR_SPECS` 为准，现在是 claude、agy、codex；用哪家装哪家。**以守护进程所在的这个用户登录**（凭据存在这个用户的家目录里）。
+厂商清单以 `src/vendors/registry.ts` 的名单为准，现在是 claude、agy、codex；用哪家装哪家。`scripts/provision-linux.sh` 装的命令、最后提示的登录命令都读各家 `src/vendors/<厂商>/paths.ts` 的 `installCommand`、`headlessLoginCommand`（`node scripts/print-vendors.ts` 可以直接看）。**以守护进程所在的这个用户登录**（凭据存在这个用户的家目录里）。
 
 | 厂商 | 安装（Linux） | 登录 | 装到哪（守护进程会找） |
 | --- | --- | --- | --- |
