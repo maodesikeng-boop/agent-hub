@@ -2,7 +2,7 @@
 // agy 跑 `agy --output-format json models`；codex 起 `codex app-server --listen stdio://` 发 model/list）。
 // 第一次有人要（网页打开资料页、新建弹窗）时问一次并缓存，旧了在后台再问；问不到（没装、超时、报错、回的不对）
 // 用 vendors.ts 打包的名单，不报错。厂商相关的取值（思考程度、模型名规则）仍以 vendors.ts 为准。
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { LRUCache } from "lru-cache";
@@ -33,7 +33,8 @@ import {
   vendorFailureOf,
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
-import { forceKill } from "./process.ts";
+import { trackChild } from "../process-ledger.ts";
+import { forceKill, killFreshGroup } from "./process.ts";
 import { INITIALIZE_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
 
 /** claude 回应里“默认”那一项的 value：不进名单，它支持的思考程度给“默认”用。 */
@@ -283,6 +284,17 @@ export interface AgyModelQueryOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * 强制结束 child 连同后代，整组都发完 SIGKILL 之后才调 settle（失败、超时、取消都走这里）。
+ * forceKill 先 SIGSTOP 住、隔着异步的 ps 找后代、最后才 SIGKILL：不等它的话调用方（关机、测试收尾）拿到结果时进程组还停在 SIGSTOP，
+ * 调用方一退出就成了停住的孤儿。ps 起不来时 forceKill 自己退回只杀组；它整个出错就对刚起的组直接 SIGKILL 兜底。
+ */
+function killThenSettle(child: ChildProcessWithoutNullStreams, settle: () => void): void {
+  forceKill(child)
+    .catch(() => killFreshGroup(child))
+    .finally(settle);
+}
+
 export interface CodexModelQueryOptions {
   codexPath: string;
   cwd: string;
@@ -316,6 +328,7 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
+    trackChild(child, "probe:claude-initialize", { detached: true });
     const requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
@@ -327,8 +340,7 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        void forceKill(child);
-        reject(error);
+        killThenSettle(child, () => reject(error));
         return;
       }
       child.stdin.end();
@@ -401,6 +413,7 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
+    trackChild(child, "probe:agy", { detached: true });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -412,8 +425,7 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        void forceKill(child);
-        reject(error);
+        killThenSettle(child, () => reject(error));
         return;
       }
       if (!exited()) {
@@ -484,6 +496,7 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
+    trackChild(child, "probe:codex-app-server", { detached: true });
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -499,8 +512,7 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
       clearTimeout(graceTimer);
       signal?.removeEventListener("abort", onAbort);
       if (error) {
-        void forceKill(child);
-        reject(error);
+        killThenSettle(child, () => reject(error));
         return;
       }
       child.stdin.end();
@@ -609,6 +621,7 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
+    trackChild(child, "probe:claude-auth-status", { detached: true });
     child.stdin.on("error", () => {});
     child.stdin.end();
     child.stderr.resume();
@@ -619,8 +632,8 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      if (child.exitCode === null && child.signalCode === null) void forceKill(child);
-      resolve(result);
+      if (child.exitCode === null && child.signalCode === null) killThenSettle(child, () => resolve(result));
+      else resolve(result);
     };
     const onAbort = () => finish("unknown");
     signal?.addEventListener("abort", onAbort);
@@ -692,8 +705,8 @@ export interface ModelCatalogs {
   ensureUsable(vendor: AgentVendor): Promise<VendorAvailability>;
   /** 真跑的结果（会话起来了、认证失败、找不到程序）直接更新状态，不用等缓存过期。 */
   report(vendor: AgentVendor, availability: VendorAvailability): void;
-  /** 关机：取消在问的那次，之后不再问。 */
-  close(): void;
+  /** 关机：取消在问的那次并等它收尾（最多 KILL_WAIT_MS），之后不再问。 */
+  close(): Promise<void>;
 }
 
 interface VendorCatalogSlot {
@@ -860,9 +873,20 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       slot.availability = availability;
       slot.failedAt = isSelectable(availability) ? null : now();
     },
-    close() {
+    async close() {
       closed = true;
       controller.abort();
+      const pending = [...slots.values()].map((s) => s.inflight).filter((p): p is Promise<void> => p !== null);
+      if (pending.length === 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(pending),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, KILL_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }

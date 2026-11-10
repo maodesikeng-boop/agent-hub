@@ -14,6 +14,7 @@ import { buildForkSettings } from "../../shared/policy.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { assistantContext, buildChildEnv, parseUsage } from "../driver/protocol.ts";
 import { killFreshGroup, termGroupAfterExit } from "../driver/process.ts";
+import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
@@ -108,6 +109,7 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
       });
+      trackChild(child, "handover:claude", { detached: true });
       return new Promise<ForkWriteResult>((resolve, reject) => {
         let stdout = "";
         let stderr = "";
