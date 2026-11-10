@@ -3,21 +3,25 @@ pub mod constants;
 pub mod error;
 pub mod parser;
 pub mod provisioner;
+pub mod registry;
 pub mod runner;
 pub mod state;
 
 pub use command::{
-    build_chmod_guest_script_cmd, build_daemon_launch_cmd, build_exec_cmd, build_import_distro_cmd,
-    build_install_wsl_no_distro_cmd, build_list_verbose_cmd, build_prepare_guest_script_dir_cmd,
-    build_read_ui_token_cmd, build_run_guest_script_cmd, build_status_cmd,
-    build_terminate_distro_cmd, build_version_cmd, build_write_guest_script_cmd, WslCommand,
+    build_chmod_daemon_ctl_cmd, build_chmod_guest_script_cmd, build_daemon_launch_cmd,
+    build_exec_cmd, build_import_distro_cmd, build_install_wsl_no_distro_cmd,
+    build_interactive_login_cmd, build_list_verbose_cmd, build_prepare_guest_script_dir_cmd,
+    build_read_ui_token_cmd, build_run_daemon_ctl_cmd, build_run_guest_script_cmd,
+    build_status_cmd, build_terminate_distro_cmd, build_version_cmd, build_write_daemon_ctl_cmd,
+    build_write_guest_script_cmd, WslCommand,
 };
 pub use constants::{
-    DISTRO_INSTALL_SUBDIR, DISTRO_VHDX_FILENAME, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
-    FUSA_NODE_WSL_PATH, FUSA_PNPM_WSL_PATH, FUSA_PROJECTS_WSL_DIR, FUSA_RELEASES_WSL_DIR,
-    FUSA_ROOT_USER, FUSA_UI_TOKEN_WSL_PATH, GUEST_SCRIPT_WSL_DIR, GUEST_SCRIPT_WSL_PATH,
-    PINNED_UBUNTU_2404_ROOTFS, PinnedRootfsImage, PROVISION_STATE_FILENAME, ROOTFS_CACHE_SUBDIR,
-    WSL_EXE,
+    DAEMON_CTL_WSL_PATH, DISTRO_INSTALL_SUBDIR, DISTRO_VHDX_FILENAME, EMBEDDED_DAEMON_CTL_SCRIPT,
+    EMBEDDED_GUEST_SCRIPT, FUSA_AGENT_HUB_HOME_WSL_DIR, FUSA_CURRENT_RELEASE_WSL_DIR,
+    FUSA_DISTRO_NAME, FUSA_LINUX_USER, FUSA_NODE_WSL_PATH, FUSA_PNPM_WSL_PATH,
+    FUSA_PROJECTS_WSL_DIR, FUSA_RELEASES_WSL_DIR, FUSA_ROOT_USER, FUSA_UI_TOKEN_WSL_PATH,
+    GUEST_SCRIPT_WSL_DIR, GUEST_SCRIPT_WSL_PATH, LXSS_REGISTRY_SUBKEY, PINNED_UBUNTU_2404_ROOTFS,
+    PinnedRootfsImage, PROVISION_STATE_FILENAME, ROOTFS_CACHE_SUBDIR, WSL_EXE,
 };
 pub use error::{CommandBuildError, ProvisionError, SelfTestChecks, SelfTestFailureItem, SelfTestReport};
 pub use parser::{
@@ -25,7 +29,14 @@ pub use parser::{
     parse_wsl_list_verbose, parse_wsl_version_output, VendorGuideEntry, WslDistroEntry,
     WslDistroState, WslVersionInfo,
 };
-pub use provisioner::{validate_local_app_data_dir, ProvisionConfig, Provisioner, WslHostStatus};
+pub use provisioner::{
+    install_daemon_ctl_script, validate_local_app_data_dir, ProvisionConfig, Provisioner,
+    WslHostStatus,
+};
+pub use registry::{
+    normalize_windows_path_key, windows_base_paths_match, DistroRegistryInspector, RegistryLookup,
+    SystemRegistryInspector,
+};
 pub use runner::{
     compute_file_sha256_hex, verify_file_sha256, CommandOutput, CommandRunner, RootfsDownloader,
     StdCommandRunner, SystemCurlDownloader,
@@ -800,5 +811,140 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["ubuntu-part.wsl".to_string()]);
         assert_eq!(fs::read(cfg.cached_rootfs_path()).unwrap(), payload);
+    }
+
+    struct FakeRegistry(RegistryLookup);
+
+    impl DistroRegistryInspector for FakeRegistry {
+        fn lookup_distro_base_path(
+            &self,
+            _distro_name: &str,
+        ) -> Result<RegistryLookup, std::io::Error> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn lxss_registry_base_path_double_insurance_rejects_mismatched_distro_and_normalizes_verbatim_paths() {
+        // 1) Windows 路径规范化：\\?\ 长路径前缀、大小写、斜杠方向、尾部反斜杠均一致匹配，不同目录严格拒绝
+        assert!(windows_base_paths_match(
+            Path::new(r"C:\Users\Alice\AppData\Local\Fusa\distro"),
+            Path::new(r"\\?\c:\users\alice\AppData\Local\Fusa\distro\"),
+        ));
+        assert!(windows_base_paths_match(
+            Path::new("C:/Users/Alice/AppData/Local/Fusa/distro"),
+            Path::new(r"C:\Users\Alice\AppData\Local\Fusa\.\distro"),
+        ));
+        assert!(!windows_base_paths_match(
+            Path::new(r"C:\Users\Alice\AppData\Local\Fusa\distro"),
+            Path::new(r"\\?\D:\CustomWsl\Fusa"),
+        ));
+
+        // 2) 即使状态标记与本地残留 ext4.vhdx 同时存在，只要 Lxss 注册表 BasePath 指向别处或缺失，立即拦截！
+        let tmp = TempDir::new().unwrap();
+        let cfg = ProvisionConfig::new(tmp.path());
+        let mut ready = ProvisionState::new("Fusa");
+        ready.imported_by_fusa = true;
+        ready.self_test_passed = true;
+        ready.stage = ProvisionStage::Ready;
+        ready.save_atomic(tmp.path()).unwrap();
+        simulate_imported_vhdx(&cfg);
+
+        let r_mismatch = ScriptedRunner::new(vec![
+            ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)),
+            ok_out(encode_utf16le("默认版本: 2\r\n", false)),
+            ok_out(encode_utf16le("  Fusa    Running    2\r\n", false)),
+        ]);
+        let p_mismatch = Provisioner::with_registry_inspector(
+            cfg.clone(),
+            r_mismatch,
+            FakeDownloader::ok(Vec::new()),
+            FakeRegistry(RegistryLookup::Found {
+                base_path: Path::new(r"\\?\C:\Users\OtherLocation\CustomFusa").to_path_buf(),
+            }),
+        );
+        assert!(matches!(
+            p_mismatch.provision_until_ready().unwrap_err(),
+            ProvisionError::DistroBasePathMismatch { ref distro_name, .. } if distro_name == "Fusa"
+        ));
+        assert!(matches!(
+            p_mismatch.verify_distro_ownership().unwrap_err(),
+            ProvisionError::DistroBasePathMismatch { .. }
+        ));
+        // 仅执行 3 条只读探测命令，绝不运行自检或触碰非自有发行版
+        assert_eq!(p_mismatch.runner().calls().len(), 3);
+
+        // 3) Lxss 未找到同名项同样拦截
+        let p_missing_reg = Provisioner::with_registry_inspector(
+            cfg.clone(),
+            ScriptedRunner::new(Vec::new()),
+            FakeDownloader::ok(Vec::new()),
+            FakeRegistry(RegistryLookup::NotFound),
+        );
+        assert!(matches!(
+            p_missing_reg.verify_distro_ownership().unwrap_err(),
+            ProvisionError::DistroBasePathMismatch { .. }
+        ));
+
+        // 4) Lxss BasePath 与本应用 distro_install_dir 一致时放行并通过自检
+        let verbatim_expected = format!(r"\\?\{}\", cfg.distro_install_dir().display());
+        let r_match = ScriptedRunner::new(vec![
+            ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)),
+            ok_out(encode_utf16le("默认版本: 2\r\n", false)),
+            ok_out(encode_utf16le("  Fusa    Running    2\r\n", false)),
+            ok_out(sample_ok_self_test_json()),
+        ]);
+        let p_match = Provisioner::with_registry_inspector(
+            cfg,
+            r_match,
+            FakeDownloader::ok(Vec::new()),
+            FakeRegistry(RegistryLookup::Found {
+                base_path: Path::new(&verbatim_expected).to_path_buf(),
+            }),
+        );
+        p_match.verify_distro_ownership().unwrap();
+        let (st, report) = p_match.provision_until_ready().unwrap();
+        assert_eq!(st.stage, ProvisionStage::Ready);
+        assert!(report.ok);
+    }
+
+    #[test]
+    fn daemon_ctl_and_interactive_login_commands_use_array_args_without_shell_eval() {
+        assert!(EMBEDDED_DAEMON_CTL_SCRIPT.starts_with("#!/usr/bin/env bash\n"));
+
+        let ctl = build_run_daemon_ctl_cmd("Fusa", "fusa", ["probe", "--port", "4317"]).unwrap();
+        assert_eq!(
+            ctl.args_lossy(),
+            vec![
+                "--distribution",
+                "Fusa",
+                "--user",
+                "fusa",
+                "--exec",
+                DAEMON_CTL_WSL_PATH,
+                "probe",
+                "--port",
+                "4317",
+            ]
+        );
+
+        let login = build_interactive_login_cmd("Fusa", "fusa").unwrap();
+        assert_eq!(
+            login.args_lossy(),
+            vec!["--distribution", "Fusa", "--user", "fusa", "--cd", "~"]
+        );
+
+        let runner = ScriptedRunner::new(vec![
+            ok_out(Vec::new()),
+            ok_out(Vec::new()),
+            ok_out(Vec::new()),
+        ]);
+        install_daemon_ctl_script(&runner, "Fusa", "#!/usr/bin/env bash\r\necho ctl\r\n").unwrap();
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(
+            std::str::from_utf8(calls[1].stdin.as_deref().unwrap()).unwrap(),
+            "#!/usr/bin/env bash\necho ctl\n"
+        );
     }
 }

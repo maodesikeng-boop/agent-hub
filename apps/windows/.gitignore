@@ -1,1 +1,3 @@
 /target
+crates/fusa-desktop/gen
+crates/fusa-desktop/resources/fusa-release.tar.gz

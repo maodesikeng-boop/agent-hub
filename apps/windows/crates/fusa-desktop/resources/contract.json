@@ -1,0 +1,27 @@
+{
+  "product": "fusa",
+  "protocolVersion": 1,
+  "defaultPort": 4317,
+  "statusPath": "/api/auth/status",
+  "probeTimeoutMs": 500,
+  "pollIntervalMs": 150,
+  "startupBudgetMs": 15000,
+  "wslColdStartBudgetMs": 60000,
+  "stopGraceMs": 40000,
+  "crashBackoffMs": [1000, 2000, 4000, 8000, 16000, 30000],
+  "crashWindowMs": 60000,
+  "maxCrashesInWindow": 5,
+  "logRelativePath": "state/logs/desktop-daemon.log",
+  "logMaxBytes": 2097152,
+  "logRotatedFiles": 1,
+  "stderrTailMaxBytes": 4096,
+  "stderrSummaryMaxLines": 8,
+  "menuReasonMaxChars": 60,
+  "menuActions": [
+    "open_main_window",
+    "restart_daemon",
+    "open_logs",
+    "toggle_autostart",
+    "quit_app"
+  ]
+}

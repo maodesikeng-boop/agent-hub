@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-ui-scale="large">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fusa</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="setup-shell">
+      <div class="setup-column">
+        <header class="setup-header">
+          <h1 class="setup-title">Fusa</h1>
+        </header>
+
+        <section class="group-section" aria-labelledby="env-heading">
+          <h2 id="env-heading" class="group-heading">Environment</h2>
+          <div class="group-box">
+            <div class="group-row">
+              <div class="row-main">
+                <div class="status-line">
+                  <span id="status-dot" class="status-dot" data-tone="working" aria-hidden="true"></span>
+                  <span id="stage-title" class="row-title">Checking environment…</span>
+                </div>
+                <p id="stage-detail" class="row-detail">Preparing dedicated WSL2 runtime</p>
+              </div>
+              <div id="env-actions" class="row-actions">
+                <button id="btn-open-logs" type="button" class="btn btn-outline" hidden>Open logs</button>
+                <button id="btn-retry" type="button" class="btn btn-outline" hidden>Retry</button>
+                <button id="btn-install-wsl" type="button" class="btn btn-primary" hidden>Install WSL</button>
+              </div>
+            </div>
+            <div id="error-row" class="group-row error-row" hidden>
+              <p id="error-text" class="error-message" role="alert"></p>
+            </div>
+          </div>
+        </section>
+
+        <section id="providers-section" class="group-section" aria-labelledby="providers-heading" hidden>
+          <div class="group-header-bar">
+            <h2 id="providers-heading" class="group-heading">Providers</h2>
+            <div class="header-actions">
+              <button id="btn-open-terminal" type="button" class="btn btn-sm btn-outline">Open terminal</button>
+              <button id="btn-refresh-vendors" type="button" class="btn btn-sm btn-ghost">Refresh</button>
+            </div>
+          </div>
+          <div id="providers-list" class="group-box" role="list"></div>
+          <div class="footer-bar">
+            <button id="btn-continue" type="button" class="btn btn-primary">Continue</button>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
