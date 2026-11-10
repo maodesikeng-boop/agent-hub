@@ -30,7 +30,7 @@ describe("界面标准：共用组件", () => {
     expect(classOf(screen.getByRole("combobox", { name: "下拉" }))).toContain("h-9");
   });
 
-  it("聊天输入框（Composer）：聚焦时边框微染强调色、阴影变深变柔（.composer-frame，没有实心的圈，不内联 <style>），空输入时发送键不可点，回弹动画在 styles.css，空/单行同一行、多行落到下一行", () => {
+  it("聊天输入框（Composer）：聚焦时只多出强调色的纯模糊光晕（.composer-frame，边框不变，没有实心的圈和黑影，不内联 <style>），空输入时发送键不可点，回弹动画在 styles.css，空/单行同一行、多行落到下一行", () => {
     const composerSrc = readFileSync("src/web/components/Composer.tsx", "utf8");
     expect(composerSrc).toContain("composer-frame");
     expect(composerSrc).not.toContain("focus-within:");
@@ -43,24 +43,27 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/@keyframes composer-send-bounce/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-send-bounce\s*\{\s*animation: none/);
 
-    // 聚焦态：只动 border-color 和 box-shadow（边框粗细不变，不引起布局跳动），强调色只取 --primary
+    // 聚焦态：只动 box-shadow（边框颜色、粗细都不变，不引起布局跳动），光晕只用 --primary 掺透明
     expect(css).toMatch(/--motion-focus: 180ms;/);
     const rest = /\.composer-frame \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(rest).toMatch(/box-shadow: 0 2px 10px rgba\(0, 0, 0, 0\.05\);/);
-    expect(rest).toMatch(/transition:\s*border-color var\(--motion-focus\) ease-out,\s*box-shadow var\(--motion-focus\) ease-out;/);
+    expect(rest).toMatch(/transition: box-shadow var\(--motion-focus\) ease-out;/);
     const focus = /\.composer-frame:focus-within \{([^}]*)\}/.exec(css)?.[1] ?? "";
     const declared = [...focus.matchAll(/^\s*([a-z-]+):/gm)].map((m) => m[1]);
-    expect(declared).toEqual(["border-color", "box-shadow"]);
-    expect(focus).toMatch(/border-color: color-mix\(in srgb, var\(--primary\) 20%, color-mix\(in srgb, var\(--foreground\) 16%, var\(--border\)\)\);/);
-    // 阴影每一层都有模糊半径：没有 “0 0 0 3px” 那种实心的圈
+    expect(declared).toEqual(["box-shadow"]);
+    // 光晕每一层：偏移 0、模糊半径 ≥ 12px、没有 spread（不是硬圈）、颜色是 --primary 掺透明，不是黑色
     const shadow = /box-shadow:([^;]*);/.exec(focus)?.[1] ?? "";
     const layers = shadow
       .replace(/\([^()]*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)[^()]*)*\)/g, (fn) => fn.replaceAll(",", ";")) // 括号里的逗号不算分层
       .split(",")
       .map((l) => l.trim());
     expect(layers).toHaveLength(2);
-    for (const layer of layers) expect(Number(/^\S+ \S+ (\d+)px/.exec(layer)?.[1])).toBeGreaterThan(0);
-    expect(shadow).toContain("var(--primary)");
+    for (const layer of layers) {
+      const m = /^0 0 (\d+)px (color-mix\(.*\))$/.exec(layer);
+      expect(Number(m?.[1])).toBeGreaterThanOrEqual(12);
+      expect(m?.[2]).toContain("var(--primary)");
+    }
+    expect(shadow).not.toMatch(/#000|black|rgba?\(/);
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.composer-frame\s*\{\s*transition: none/);
   });
 
