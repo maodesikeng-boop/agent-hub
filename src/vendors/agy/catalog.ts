@@ -25,7 +25,7 @@ import {
   parseJsonOutput,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill } from "../../daemon/driver/process.ts";
+import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -131,6 +131,7 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
       detached: true,
     });
     trackChild(child, "probe:agy", { detached: true });
+    child.once("exit", () => termGroupAfterExit(child));
     let stdout = "";
     let stderr = "";
     let settled = false;

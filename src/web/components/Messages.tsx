@@ -636,13 +636,14 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
   const attachments = attachmentsOf(message);
   const workerPick = workerPickOf(message);
   const failed = message.status === "failed";
+  const delivered = message.meta?.deliveryConfirmed === true;
   const failure = failed && message.failureReason ? describeFailure(message.failureReason, { vendor: actions.vendorOf?.(message.conversationId) }) : null;
   const phase = actions.retry[message.id];
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={message.status ?? undefined} title={formatTime(message.createdAt)}>
       <SentBody
         unsent={
-          failed ? (
+          failed && !delivered ? (
             <UnsentMark reason={failure?.text} raw={failure?.raw} retrying={phase === "retrying"} retryFailed={phase === "error"} onRetry={() => actions.onRetryMessage(message.id)} />
           ) : null
         }
@@ -664,6 +665,17 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
         )}
         <AttachmentList attachments={attachments} />
       </SentBody>
+      {failed && delivered && (
+        <button
+          type="button"
+          className="touch-target text-minor text-muted-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
+          title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
+          disabled={phase === "retrying"}
+          onClick={() => actions.onRetryMessage(message.id)}
+        >
+          {phase === "retrying" ? "重试中" : phase === "error" ? "重试失败，再试" : "处理失败，重试"}
+        </button>
+      )}
     </article>
   );
 }

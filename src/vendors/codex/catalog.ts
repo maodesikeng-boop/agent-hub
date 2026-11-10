@@ -29,7 +29,7 @@ import {
   nonEmptyString,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill } from "../../daemon/driver/process.ts";
+import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -190,6 +190,7 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
+      termGroupAfterExit(child);
       setTimeout(() => finish(new Error(`codex 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
     createInterface({ input: child.stdout }).on("line", (line) => {

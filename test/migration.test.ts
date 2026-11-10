@@ -1345,17 +1345,16 @@ describe("0020_conversation_purges：从 0018 / 0019 的旧库升级", () => {
     expect(userVersion(db)).toBe(18);
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 18, to: LATEST_VERSION, applied: [19, 20] });
-    expect(LATEST_VERSION).toBe(20);
+    expect(migrate(db, migrationsUpTo(20))).toMatchObject({ from: 18, to: 20, applied: [19, 20] });
     for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
     expect(
       db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_worker_lines'"),
     ).toEqual({ n: 1 });
     expect(db.all("SELECT * FROM conversation_purges")).toEqual([]);
     db.exec("PRAGMA user_version = 18");
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 18, to: 20, applied: [19, 20] });
+    expect(migrate(db, migrationsUpTo(20))).toMatchObject({ from: 18, to: 20, applied: [19, 20] });
     db.exec("PRAGMA user_version = 19");
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 19, to: 20, applied: [20] });
+    expect(migrate(db, migrationsUpTo(20))).toMatchObject({ from: 19, to: 20, applied: [20] });
 
     // 外键与 ON DELETE CASCADE：不存在的对话被拒，删掉对话时自动跟着清
     expect(() => db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (99999, 100)")).toThrow(/FOREIGN KEY/);
@@ -1364,6 +1363,20 @@ describe("0020_conversation_purges：从 0018 / 0019 的旧库升级", () => {
     expect(db.all("SELECT * FROM conversation_purges")).toEqual([{ conversation_id: convId, purged_at: 123 }]);
     db.run("DELETE FROM conversations WHERE id = ?", convId);
     expect(db.all("SELECT * FROM conversation_purges")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+// ---- 0021_message_delivery_receipt ----
+
+describe("0021_message_delivery_receipt：从 0020 的旧库升级", () => {
+  it("只跑 0021；最新版本就是 0021；没碰过的表一个字不变", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(20));
+    const before = db.all("SELECT * FROM conversations ORDER BY rowid");
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 20, to: LATEST_VERSION, applied: [21] });
+    expect(LATEST_VERSION).toBe(21);
+    expect(db.all("SELECT * FROM conversations ORDER BY rowid")).toEqual(before);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

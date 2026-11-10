@@ -27,7 +27,7 @@ import {
   parseJsonOutput,
   type VendorCatalogSource,
 } from "../../daemon/driver/model-catalog.ts";
-import { forceKill } from "../../daemon/driver/process.ts";
+import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
@@ -152,6 +152,7 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
+      termGroupAfterExit(child);
       // 留一点时间把标准输出最后几行读完再判“没回就退出”
       setTimeout(() => finish(new Error(`claude 没回 initialize 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
@@ -190,6 +191,7 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
       detached: true,
     });
     trackChild(child, "probe:claude-auth-status", { detached: true });
+    child.once("exit", () => termGroupAfterExit(child));
     child.stdin.on("error", () => {});
     child.stdin.end();
     child.stderr.resume();

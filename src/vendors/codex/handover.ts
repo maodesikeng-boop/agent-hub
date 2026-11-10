@@ -45,6 +45,8 @@ class CodexRpc {
   #nextId = 0;
   #buffer = "";
   #exited: Error | null = null;
+  #processExited = false;
+  #closing: Promise<void> | null = null;
   /** 进程退出时 reject（write 等一轮的时候一起等它，进程中途没了就别干等）。 */
   readonly exitedError: Promise<never>;
   #rejectExited!: (error: Error) => void;
@@ -55,13 +57,25 @@ class CodexRpc {
     this.exitedError.catch(() => {});
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => this.#onData(chunk));
-    child.once("exit", (code, signal) => this.#onExit(new Error(`codex app-server 退出了（code ${code}, signal ${signal}）`)));
-    child.once("error", (error) => this.#onExit(error));
+    child.once("exit", (code, signal) => {
+      this.#processExited = true;
+      // 不管是 close() 关的还是它自己先退的：确认退出这一刻给它原来的进程组（detached 起的，只有它和后代）补信号
+      termGroupAfterExit(child);
+      this.#onExit(new Error(`codex app-server 退出了（code ${code}, signal ${signal}）`));
+    });
+    child.once("error", (error) => {
+      if (child.pid === undefined) this.#processExited = true;
+      this.#onExit(error);
+    });
     child.stdin?.on("error", () => {});
   }
 
   get exited(): boolean {
     return this.#exited !== null;
+  }
+
+  get closing(): boolean {
+    return this.#closing !== null;
   }
 
   request(method: string, params: Json): Promise<Json> {
@@ -84,17 +98,19 @@ class CodexRpc {
 
   /** 杀进程（先 SIGTERM，宽限后 SIGKILL）；幂等。 */
   async close(): Promise<void> {
-    if (this.#exited) return;
-    const done = new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
-    this.#child.stdin?.end();
-    this.#child.kill("SIGTERM");
-    const timer = setTimeout(() => {
-      if (this.#child.pid !== undefined && this.#child.pid > 1) signalPid(-this.#child.pid, "SIGKILL");
-      this.#child.kill("SIGKILL");
-    }, CLOSE_GRACE_MS);
-    await done;
-    clearTimeout(timer);
-    termGroupAfterExit(this.#child);
+    if (this.#processExited) return;
+    this.#closing ??= (async () => {
+      const done = new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
+      this.#child.stdin?.end();
+      this.#child.kill("SIGTERM");
+      const timer = setTimeout(() => {
+        if (this.#child.pid !== undefined && this.#child.pid > 1) signalPid(-this.#child.pid, "SIGKILL");
+        this.#child.kill("SIGKILL");
+      }, CLOSE_GRACE_MS);
+      await done;
+      clearTimeout(timer);
+    })();
+    return this.#closing;
   }
 
   #write(payload: Json): void {
@@ -178,12 +194,15 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
   /** forkId → 复制那份所在的 app-server 进程（ephemeral 的 thread 只活在里面）。 */
   const servers = new Map<string, CodexRpc>();
 
-  async function startServer(src: ForkSource): Promise<CodexRpc> {
+  async function startServer(src: ForkSource, signal: AbortSignal): Promise<CodexRpc> {
     const launch = withoutHubEnv(src.launch);
     const env = withoutHubEnv({ ...launch, env: buildChildEnv(process.env, launch.env) }).env;
     const child = spawnProcess(src.executablePath, buildCodexArgs(), { cwd: src.cwd, env });
     const rpc = new CodexRpc(child);
+    const onAbort = (): void => void rpc.close();
+    signal.addEventListener("abort", onAbort, { once: true });
     try {
+      if (signal.aborted) throw new Error("复制被取消");
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);
         child.once("error", reject);
@@ -196,6 +215,8 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       await rpc.close();
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ForkUnsupportedError(`找不到 codex：${src.executablePath}`);
       throw error;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
     }
     return rpc;
   }
@@ -206,10 +227,11 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
 
     async fork(src, signal): Promise<ForkHandle> {
       if (signal.aborted) throw new Error("复制被取消");
-      const rpc = await startServer(src);
+      const rpc = await startServer(src, signal);
       const onAbort = (): void => void rpc.close();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        if (signal.aborted) throw new Error("复制被取消");
         const launch = readCodexLaunchConfig(withoutHubEnv(src.launch));
         const result = await rpc.request("thread/fork", {
           threadId: src.vendorSessionId,
@@ -266,6 +288,10 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       };
       signal.addEventListener("abort", onAbort, { once: true });
       try {
+        if (signal.aborted) {
+          onAbort();
+          throw new Error("写交接被取消");
+        }
         await rpc.request("turn/start", {
           threadId: fork.forkId,
           input: [{ type: "text", text: prompt }],
@@ -287,11 +313,15 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       const rpc = servers.get(fork.forkId);
       servers.delete(fork.forkId);
       if (!rpc) return; // ephemeral 的 thread 随进程没了（重启后也是）
+      if (rpc.exited || rpc.closing) {
+        await rpc.close();
+        return;
+      }
       try {
         // 保险：万一这版 codex 没把它当 ephemeral 落了盘，就按“先删复制那份”的顺序删掉；ephemeral 的会报 not persisted，忽略
         await rpc.request("thread/delete", { threadId: fork.forkId });
       } catch (error) {
-        if (!(error instanceof Error) || !GONE_PATTERN.test(error.message)) {
+        if (!rpc.exited && !rpc.closing && (!(error instanceof Error) || !GONE_PATTERN.test(error.message))) {
           // 删不掉也要关进程；报给跑腿的记日志，下次启动再试
           await rpc.close();
           throw error;

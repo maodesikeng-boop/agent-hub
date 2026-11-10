@@ -623,6 +623,31 @@ describe("孤儿子进程", () => {
     expect(await goneWithin(child)).toBe(true);
   });
 
+  it("一轮中途停止、claude 没写 result 就退了（驱动层还算它在忙）之后：睡眠子进程也不在了", async () => {
+    const t = harness({
+      driver: { interruptGraceMs: 100 },
+      script: { ignoreControl: true, sigintNoResult: true, turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { sleepMs: 30_000 }] }] },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const child = await childPid(t);
+    await t.driver.interrupt(s.id);
+    expect(signals(t)).toEqual(["SIGINT"]);
+    expect(t.of("turn.ended")).toEqual([]);
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "interrupt", signal: null, exitCode: 0 });
+    expect(await goneWithin(child)).toBe(true);
+  });
+
+  it("一轮中途 claude 自己崩溃之后：睡眠子进程也不在了", async () => {
+    const t = harness({ script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { exit: 1 }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "hi"));
+    const child = await childPid(t);
+    await t.waitFor("session.exited");
+    expect(t.of("session.exited")[0]).toMatchObject({ reason: "crash", exitCode: 1, messageIds: [1] });
+    expect(await goneWithin(child)).toBe(true);
+  });
+
   it("空闲关闭之后：睡眠子进程也不在了", async () => {
     const t = harness({ driver: { idleCloseMs: 50 }, script: { turns: [{ steps: [{ spawnChild: { sleepSec: 30 } }, { text: "ok" }] }] } });
     const s = t.addSession();

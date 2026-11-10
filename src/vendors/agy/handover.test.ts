@@ -11,6 +11,7 @@ import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import type { ForkSource } from "../../daemon/handover/forker.ts";
 import { FORKERS } from "../../daemon/handover/forkers.ts";
 import { AGY_FORKERS, createAgyCopyForker } from "./handover.ts";
+import { isAlive } from "../../daemon/driver/process.ts";
 
 const SRC_ID = "11111111-2222-4333-8444-555555555555";
 const OLD_TRAJ = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -35,6 +36,7 @@ beforeEach(() => {
       'env > "$REC/env"',
       'pwd > "$REC/cwd"',
       'cat > "$REC/stdin"',
+      '[ -f "$REC/bg" ] && { sleep 30 & echo $! > "$REC/bg_pid"; }',
       '[ -f "$REC/hang" ] && sleep 30',
       '[ -f "$REC/err" ] && cat "$REC/err" >&2',
       'cat "$REC/out"',
@@ -337,6 +339,17 @@ describe("write：--conversation <新编号> 续跑一轮", () => {
     ac.abort(new Error("shutdown"));
     await expect(forker().write(source(), fakeHandle, "写", ac.signal)).rejects.toThrow("shutdown");
     expect(existsSync(join(rec, "args"))).toBe(false);
+  });
+
+  it("进程退出时即使同组后台子进程还占着 stdout/stderr，也在 exit 时立即补杀进程组、不卡死 close", async () => {
+    feed(result());
+    writeFileSync(join(rec, "bg"), "");
+    const out = await forker().write(source(), fakeHandle, "写", signal());
+    expect(out.text).toBe("交接正文");
+    const bgPid = Number(readFileSync(join(rec, "bg_pid"), "utf8").trim());
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && isAlive(bgPid)) await new Promise((r) => setTimeout(r, 20));
+    expect(isAlive(bgPid)).toBe(false);
   });
 });
 

@@ -194,12 +194,13 @@ src/vendors/
   claude/
     spec.ts            配置：纯数据 + 纯函数（shortModelName 等），不许 import node:*
     daemon.ts          export default defineVendorDaemon({...})
+    paths.ts           守护进程侧路径：fallbackPaths、配置目录等，避免 daemon.ts 与路径解析循环引用
     driver.ts protocol.ts process.ts      ← driver/claude-driver.ts、protocol.ts 的 claude 部分、process.ts:36-43
     catalog.ts composer.ts                ← vendors/claude.ts、claude-catalog.ts、model-catalog.ts 的 claude 部分
     handover.ts transcript.ts readonly.ts readonly-settings.ts
     *.test.ts
-  agy/      同上，另有 connectors.ts、paths.ts（agyDataPaths 唯一一份）
-  codex/    同上，另有 paths.ts（codexHomeDir）
+  agy/      同上，另有 connectors.ts；paths.ts 包含 agyDataPaths（唯一一份）
+  codex/    同上；paths.ts 使用 vendorConfigHome 解析配置目录
 ```
 
 公共代码留在原处，只认接口：`shared/vendors.ts`（`checkModel`、`agentLaunchArgs`、`modelLabel`……这些通用函数，改成读 `registry.ts`，导出名不变，调用方不动）、`daemon/driver/base-driver.ts`、`multi-driver.ts`、`model-catalog.ts`（只剩通用缓存引擎）、`write-scope.ts`（只剩通用 OS 沙箱）、`handover/forker.ts`、`runner.ts`、`transcript.ts`（只剩按家分发）。
@@ -531,6 +532,7 @@ src/vendors/foo/
   spec.ts          必需：defineVendor({ id: "foo", label, cli: { command: "foo", envVar: "AGENT_HUB_FOO", loginCommand }, home, models, composer, prompt, failure, handover, capabilities })
   daemon.ts        必需：export default defineVendorDaemon({ createDriver })；有就加 catalog / composer / quota / forkers / transcriptPath
   driver.ts        必需：实现 Driver（继承 BaseSessionDriver，只写 foo 的协议翻译）
+  paths.ts         有 fallbackPaths 或配置目录时提供；只在守护进程侧引用，不反向引用 daemon.ts/daemon-registry.ts
   protocol.ts      驱动用的纯函数（启动参数、事件解析）
   catalog.ts       可选：问模型名单和登录状态
   composer.ts      可选：问 "/" 命令列表

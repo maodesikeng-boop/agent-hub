@@ -110,6 +110,7 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
         detached: true,
       });
       trackChild(child, "handover:claude", { detached: true });
+      child.once("exit", () => termGroupAfterExit(child));
       return new Promise<ForkWriteResult>((resolve, reject) => {
         let stdout = "";
         let stderr = "";
@@ -130,7 +131,6 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
         child.stdin.on("error", () => {});
         child.once("error", (error) => finish(() => reject(new Error(`${src.executablePath}: ${error.message}`))));
         child.once("close", (code, sig) => {
-          termGroupAfterExit(child);
           finish(() => {
             if (code !== 0) return reject(new Error(`claude exit code ${code ?? sig}: ${stderr.trim()}`));
             try {

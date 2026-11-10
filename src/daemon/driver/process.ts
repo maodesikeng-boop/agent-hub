@@ -60,15 +60,15 @@ export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
 }
 
 /**
- * claude（或 worktree 准备命令，都是 detached 起的）自己正常退出的这一刻，给它原来的进程组补一个 SIGTERM，清掉同组留下的子进程。
- * Linux 上 bwrap 开了 --unshare-pid 后 namespace PID 1 的 bwrap init 进程对非 SIGKILL 信号免疫，同组补发一次 SIGKILL 让它立即退出，
+ * detached 起的命令退出后，给原进程组补一次 SIGKILL，包含忽略 SIGTERM 的后台进程。
+ * Linux 上 bwrap 开了 --unshare-pid 后 namespace PID 1 的 bwrap init 进程对非 SIGKILL 信号免疫，同组直接发 SIGKILL 让它立即退出，
  * 内核随即对整个 PID namespace 发 SIGKILL 清空残留后台进程（docs/linux-sandbox-design.md 第 5.3 节）。
- * 只在确认退出时发这一次，不延迟再发，免得进程号被复用后误杀。
+ * 每次只发一个信号，避免 TERM 清空组后再用可能已复用的组号发 KILL。
+ * 调用方必须保证组身份：exit 回调发生前 libuv 已回收子进程，立即调用也不能排除空组号已被复用。
  */
-export function termGroupAfterExit(child: Pick<ChildProcess, "pid">, platform: NodeJS.Platform = process.platform): void {
+export function termGroupAfterExit(child: Pick<ChildProcess, "pid">): void {
   if (child.pid !== undefined && child.pid > 1) {
-    signalPid(-child.pid, "SIGTERM");
-    if (platform === "linux") signalPid(-child.pid, "SIGKILL");
+    signalPid(-child.pid, "SIGKILL");
   }
 }
 

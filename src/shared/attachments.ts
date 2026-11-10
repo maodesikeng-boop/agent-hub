@@ -19,11 +19,13 @@ export interface Attachment {
 
 /**
  * 用户消息的 meta：有附件时有 attachments，输入框指定了派 Worker 的厂商、模型、思考程度时有 workerPick（shared/worker.ts）；
- * 两样都没有的用户消息 meta 还是 null（老消息就是这样）。
+ * 驱动确认送达后记录 deliveryConfirmed；尚未送达且没有选择、附件时 meta 是 null。
  */
 export interface UserMessageMeta {
   attachments?: Attachment[];
   workerPick?: WorkerPick;
+  /** 服务端驱动确认已交给 agent；执行失败不撤销送达回执，重发时清空。 */
+  deliveryConfirmed?: true;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
