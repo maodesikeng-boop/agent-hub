@@ -681,13 +681,28 @@ describe("出错、停止", () => {
     runTurn(worker, [taskMessage(worker).id], null, { ok: false, interrupted: true });
     expect(workerEventOf(lastLine())).toMatchObject({ event: "turn_failed", summary: "被停止了" });
     expect(lastLine().text.startsWith("【Worker #1 · 修 X 的汇报】")).toBe(true);
+    expect(lastLine().text).toContain("用户亲手停了这一轮，它现在是停着的。用户没有明确说继续之前，不要用 hub worker send 叫醒它；先告诉用户它停了、现在是什么状态，由用户决定继续还是 hub worker end。");
+    expect(lastLine().text).not.toContain("要它接着做用");
     expect(enqueued.map((a) => a.params)).toEqual([{ sessionId: lin.sessionId, messageId: lastLine().id, source: "system" }]);
   });
 
   it("这一轮出错（ok=false）：一行写明错误", () => {
     runTurn(worker, [taskMessage(worker).id], null, { ok: false, error: { subtype: "error_during_execution", message: "炸了" } });
     expect(workerEventOf(lastLine())).toMatchObject({ event: "turn_failed", summary: "error_during_execution: 炸了" });
-    expect(lastLine().text).toContain("炸了");
+    expect(lastLine().text).toContain("这一轮没做完：error_during_execution: 炸了。要它接着做用 hub worker send 1 --stdin，不要了用 hub worker end 1。");
+  });
+
+  it("用户停止 → 新文字；报错 → 旧文字", () => {
+    runTurn(worker, [taskMessage(worker).id], null, { ok: false, interrupted: true });
+    expect(lastLine().text).toBe(
+      "【Worker #1 · 修 X 的汇报】\n\n用户亲手停了这一轮，它现在是停着的。用户没有明确说继续之前，不要用 hub worker send 叫醒它；先告诉用户它停了、现在是什么状态，由用户决定继续还是 hub worker end。",
+    );
+
+    const worker2 = start().data.worker;
+    runTurn(worker2, [taskMessage(worker2).id], null, { ok: false, error: { subtype: "error_during_execution", message: "Boom" } });
+    expect(lastLine().text).toBe(
+      `【Worker #${worker2.id} · 修 X 的汇报】\n\n这一轮没做完：error_during_execution: Boom。要它接着做用 hub worker send ${worker2.id} --stdin，不要了用 hub worker end ${worker2.id}。`,
+    );
   });
 
   it("断网重试用完（result 是 success 但 is_error）：turn_failed 写 claude 给的原因，不带 “success:” 前缀", () => {

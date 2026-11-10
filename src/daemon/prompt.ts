@@ -167,7 +167,7 @@ function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> =
 - **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
 - **别反复打回对话很长的 Worker**：打回或追问之前，先用 \`${HUB} worker show <编号>\` 看它的对话长度；超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 就别再 send 给它，让它收工（\`${HUB} worker end\`），新派一个接手，任务说明里写清分支、已有的提交、还要改的点。审查意见多、要来回改好几轮的，也直接新派；只差一两步就完的（比如再推一次、回答一个问题），对话长也可以接着用。
 - **验收与收尾**：
-  - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
+  - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因；若为用户手动停止，未经用户明确要求切勿擅自叫醒，由用户决定）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
   - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
   - 要打回修改或回答它的问题，用 \`${HUB} worker send <编号> --stdin\`（原 Worker 会接着干）。
   - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（正在跑的一轮会先被打断；不会删 worktree，不再需要的你自己清理）。`;
