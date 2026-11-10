@@ -6,7 +6,7 @@ import { arch } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { ENV_HOME, ENV_PORT, LOG_PREFIX, WORKER_ENV } from "../shared/index.ts";
+import { DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX, WORKER_ENV } from "../shared/index.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 import { reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
@@ -150,12 +150,57 @@ describe("守护进程启动失败：终端上的输出", () => {
       });
 
       expect(result.code).toBe(1);
+      // 先正常关机再退出（不是直接 process.exit 留下子进程）
+      expect(result.stderr).toContain("先正常关机再退出");
       const expectedMsg = kind === "uncaughtException" ? "crash-by-uncaught" : "crash-by-rejection";
       expect(result.stderr).toContain(expectedMsg);
+      // 最后一行是一句话摘要（Mac 应用取标准错误最后一行做菜单里的崩溃原因，关机日志排在错误详情后面）
+      expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(`${LOG_PREFIX} 因 ${kind} 退出：Error: ${expectedMsg}`);
       const log = readFileSync(join(subHome, "state", "logs", "daemon.log"), "utf8");
       expect(log).toContain(expectedMsg);
       expect(log).toContain(kind);
     }
+  });
+
+  it("关机过程中又抛异常：两条都记日志，关机走完，退出码 1，不半路退出", async () => {
+    const subHome = home("sub-double");
+    const script = `
+      import { runDaemonProcess } from "./src/daemon/entry.ts";
+      const NO_TAILNET = { current: () => null, refresh: async () => null };
+      await runDaemonProcess({
+        userHome: ${JSON.stringify(userHome)},
+        env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
+        tailnet: NO_TAILNET,
+      });
+      setImmediate(() => {
+        setImmediate(() => { throw new Error("second-during-shutdown"); });
+        throw new Error("first-fatal");
+      });
+    `;
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+      child.on("error", reject);
+      child.on("exit", (code) => resolve({ code, stderr }));
+    });
+    expect(result.code).toBe(1);
+    const log = readFileSync(join(subHome, "state", "logs", "daemon.log"), "utf8");
+    expect(log).toContain("first-fatal");
+    expect(log).toContain("second-during-shutdown");
+    expect(result.stderr.match(/先正常关机再退出/g)).toHaveLength(1);
+  });
+
+  it("daemon.log 超过上限：改名成 .1 再写，磁盘上最多两份", () => {
+    const paths = resolveHubPaths({ [ENV_HOME]: join(dir, "rotate") }, userHome);
+    mkdirSync(paths.logsDir, { recursive: true });
+    const file = join(paths.logsDir, "daemon.log");
+    writeFileSync(file, "x".repeat(DAEMON_LOG_MAX_BYTES + 1));
+    reportFatalError(new Error("after-rotate"), "uncaughtException", paths, () => {});
+    expect(readFileSync(`${file}.1`, "utf8").length).toBe(DAEMON_LOG_MAX_BYTES + 1);
+    const fresh = readFileSync(file, "utf8");
+    expect(fresh).toContain("after-rotate");
+    expect(fresh.length).toBeLessThan(DAEMON_LOG_MAX_BYTES);
   });
 
   it.skipIf(process.platform !== "darwin")(

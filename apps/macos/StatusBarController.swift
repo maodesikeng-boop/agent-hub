@@ -111,7 +111,7 @@ final class StatusBarController: NSObject {
             if lastWaitingCount > 0 {
                 parts.append("\(lastWaitingCount) 项等你")
             }
-            summaryItem.title = parts.isEmpty ? "后台服务运行中" : parts.joined(separator: " · ")
+            summaryItem.title = parts.isEmpty ? "后台服务运行中" : parts.joined(separator: "，")
 
             if let button = statusItem.button {
                 if lastAskingCount > 0 {

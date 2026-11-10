@@ -79,7 +79,7 @@ apps/macos/
     ```bash
     node --experimental-strip-types src/daemon/main.ts
     ```
-  - 标准输出与标准错误追加写入 `~/.agent-hub/state/logs/desktop-daemon.log`（自动创建目录）；
+  - 标准输出与标准错误追加写入 `~/.agent-hub/state/logs/desktop-daemon.log`（自动创建目录）；每次拉起前超过 `SupervisorConfig.logMaxBytes`（2 MB）就改名成 `.log.1`（覆盖旧的），一次运行里写进去的也不超过它；
   - 启动子进程后每 150 ms 轮询一次 `http://127.0.0.1:4317/api/auth/status`（最多等 15 秒），一旦返回 HTTP 状态码即通知主窗口加载；若超时或进程提前退出，在原生窗口展示清晰错误提示。
 - **意外退出自动重启与崩溃记录**：
   - `DaemonSupervisor` 只对**自己拉起**的后台进程监听 `Process.terminationHandler`（外部终端 `pnpm start` 已在跑的进程只复用、不接管）；
@@ -170,8 +170,8 @@ document.documentElement.dataset.macosApp = "true";
   - 状态同步：直接复用 `WKWebView` 内已有的状态（网页变化时通过 `window.webkit.messageHandlers.hubStatus.postMessage({ runningWorkers, askingCount, waitingCount })` 通知原生壳，**不在原生壳另开轮询**）；
   - 菜单栏标题：有“等你确定”或正在跑的 Worker 时，图标旁显示简短数字标注（例如有提问或 Worker 在忙时显示数字，全空闲时只显示简洁图标），同时同步更新 Dock 图标右上角红点（`NSApp.dockTile.badgeLabel`：有“等你确定”或“等你”时显示对应数量，看完清零）；
   - 下拉菜单项：
-    1. 状态摘要行（禁用点击，如 `2 个 Worker 在跑 · 1 项等你确定`、`后台服务运行中`，或连续崩溃停止重试时的 `后台服务异常停止（连续崩溃 5 次，已停止重试）`）
-    2. 上次崩溃信息行（禁用点击，未发生崩溃时隐藏；发生过崩溃后显示 `上次崩溃：HH:mm:ss · <退出码/信号及错误摘要>`，悬停可看最近几行 `stderr`）
+    1. 状态摘要行（禁用点击，如 `2 个 Worker 在跑，1 项等你确定`、`后台服务运行中`，或连续崩溃停止重试时的 `后台服务异常停止（连续崩溃 5 次，已停止重试）`）
+    2. 上次崩溃信息行（禁用点击，未发生崩溃时隐藏；发生过崩溃后显示 `上次崩溃 HH:mm:ss，<退出码/信号及错误摘要>`（界面不用“·”拼接），悬停可看最近几行 `stderr`）
     3. 分隔线
     4. **打开主窗口**（快捷键 `⌘O`，把主窗口置前并激活应用）
     5. **重启后台服务**（向本机守护进程发 `SIGTERM` 等优雅关机后，由 `DaemonSupervisor` 重新拉起并刷新页面；主动重启不计入崩溃并重置连续崩溃计数）

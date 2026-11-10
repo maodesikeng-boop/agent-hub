@@ -31,6 +31,10 @@ enum SupervisorConfig {
     static let stderrTailMaxLines: Int = 8
     /// 菜单栏展示上次崩溃原因里单行摘要最大字符数
     static let menuReasonMaxChars: Int = 60
+
+    /// desktop-daemon.log 的大小上限（字节）：每次拉起前超过就改名成 .log.1（覆盖旧的），磁盘上最多两份；
+    /// 同一个进程一次运行里写进去的也不超过它（超了丢弃并留一句说明），日志不会无限变大
+    static let logMaxBytes: Int = 2 * 1024 * 1024
 }
 
 struct DaemonCrashRecord: Equatable {
@@ -48,7 +52,7 @@ struct DaemonCrashRecord: Equatable {
     }
 
     var menuTitle: String {
-        "上次崩溃：\(formattedTime) · \(menuSummaryReason)"
+        "上次崩溃 \(formattedTime)，\(menuSummaryReason)"
     }
 }
 
@@ -63,17 +67,26 @@ private final class ProcessStderrCollector {
     private let lock = NSLock()
     private var buffer = Data()
     private let maxBytes: Int
+    private let logMaxBytes: Int
     private let logHandle: FileHandle?
+    private var loggedBytes = 0
 
-    init(maxBytes: Int, logHandle: FileHandle?) {
+    init(maxBytes: Int, logMaxBytes: Int, logHandle: FileHandle?) {
         self.maxBytes = maxBytes
+        self.logMaxBytes = logMaxBytes
         self.logHandle = logHandle
     }
 
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
-        try? logHandle?.write(contentsOf: data)
         lock.lock()
+        if loggedBytes < logMaxBytes {
+            loggedBytes += data.count
+            try? logHandle?.write(contentsOf: data)
+            if loggedBytes >= logMaxBytes {
+                try? logHandle?.write(contentsOf: Data("\n[agent-hub] 这次运行的 stderr 超过日志上限，后面的不再写入文件。\n".utf8))
+            }
+        }
         buffer.append(data)
         if buffer.count > maxBytes {
             buffer.removeFirst(buffer.count - maxBytes)
@@ -110,6 +123,8 @@ final class DaemonSupervisor {
     private var lastCrashRecord: DaemonCrashRecord?
     private var state: DaemonSupervisorState = .running
     private var pendingRestartWorkItem: DispatchWorkItem?
+    /// 用户点“重启后台服务”后到旧进程退出这段时间：别的路径（退避重启、启动轮询）不许拉起新进程，免得和旧进程抢端口
+    private var isRestarting = false
     private let lock = NSLock()
 
     init() {
@@ -220,6 +235,7 @@ final class DaemonSupervisor {
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         recentCrashTimestamps.removeAll()
+        isRestarting = true
         let proc = spawnedProcess
         spawnedProcess = nil
         if let proc = proc {
@@ -231,6 +247,9 @@ final class DaemonSupervisor {
             proc.terminate()
         }
         waitForShutdown(process: proc, attemptsLeft: SupervisorConfig.shutdownPollMaxAttempts) { [weak self] in
+            self?.lock.lock()
+            self?.isRestarting = false
+            self?.lock.unlock()
             self?.ensureRunning(completion: completion)
         }
     }
@@ -344,6 +363,11 @@ final class DaemonSupervisor {
         let fm = FileManager.default
         let logDir = (logFilePath as NSString).deletingLastPathComponent
         try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+        if let size = (try? fm.attributesOfItem(atPath: logFilePath))?[.size] as? Int, size > SupervisorConfig.logMaxBytes {
+            let rotated = logFilePath + ".1"
+            try? fm.removeItem(atPath: rotated)
+            try? fm.moveItem(atPath: logFilePath, toPath: rotated)
+        }
         let fd = Darwin.open(logFilePath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         guard fd >= 0 else { return nil }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -357,8 +381,9 @@ final class DaemonSupervisor {
     }
 
     private func startDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
+        // 检查和拉起在同一把锁里做完：退避重启、启动轮询、手动重启几条路同时进来，也只会拉起一个后台
         lock.lock()
-        if isShuttingDown {
+        if isShuttingDown || isRestarting {
             lock.unlock()
             return
         }
@@ -367,26 +392,34 @@ final class DaemonSupervisor {
             pollUntilReady(process: existing, attemptsLeft: SupervisorConfig.startupPollMaxAttempts, completion: completion)
             return
         }
+        let spawned = spawnProcessLocked()
         lock.unlock()
 
+        switch spawned {
+        case .success(let process):
+            pollUntilReady(process: process, attemptsLeft: SupervisorConfig.startupPollMaxAttempts, completion: completion)
+        case .failure(let error):
+            DispatchQueue.main.async { completion(.failure(error)) }
+        }
+    }
+
+    /// 调用时必须已持有 lock：拉起子进程并登记到 spawnedProcess。登记要和 run() 在同一把锁里，
+    /// 这样 terminationHandler（在后台线程）最快也要等登记完才能处理退出，不会漏掉或错判。
+    private func spawnProcessLocked() -> Result<Process, Error> {
         guard let repoDir = resolveRepoDir() else {
-            let err = NSError(
+            return .failure(NSError(
                 domain: "AgentHub.DaemonSupervisor",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "找不到 Agent Hub 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"]
-            )
-            DispatchQueue.main.async { completion(.failure(err)) }
-            return
+            ))
         }
 
         guard let nodePath = resolveNodePath() else {
-            let err = NSError(
+            return .failure(NSError(
                 domain: "AgentHub.DaemonSupervisor",
                 code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "找不到 Node.js 可执行文件（需要 Node 24+，请检查 AGENT_HUB_NODE）"]
-            )
-            DispatchQueue.main.async { completion(.failure(err)) }
-            return
+            ))
         }
 
         let logHandle = openAppendLogHandle()
@@ -394,6 +427,7 @@ final class DaemonSupervisor {
         let readHandle = stderrPipe.fileHandleForReading
         let collector = ProcessStderrCollector(
             maxBytes: SupervisorConfig.stderrTailMaxBytes,
+            logMaxBytes: SupervisorConfig.logMaxBytes,
             logHandle: logHandle
         )
         let pipeLock = NSLock()
@@ -467,9 +501,8 @@ final class DaemonSupervisor {
 
         do {
             try process.run()
-            lock.lock()
             spawnedProcess = process
-            lock.unlock()
+            return .success(process)
         } catch {
             readHandle.readabilityHandler = nil
             pipeLock.lock()
@@ -477,11 +510,8 @@ final class DaemonSupervisor {
             try? readHandle.close()
             pipeLock.unlock()
             try? logHandle?.close()
-            DispatchQueue.main.async { completion(.failure(error)) }
-            return
+            return .failure(error)
         }
-
-        pollUntilReady(process: process, attemptsLeft: SupervisorConfig.startupPollMaxAttempts, completion: completion)
     }
 
     private func pollUntilReady(process: Process, attemptsLeft: Int, completion: @escaping (Result<Void, Error>) -> Void) {
