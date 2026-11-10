@@ -45,7 +45,7 @@ export default defineVendor({
   },
   // 2026-11-11 核对 @deepseek-ai/dsh@0.2.2-rc.1：
   // ~/.dsh/.credentials.yaml 存 API key 与网页登录 grant（0600），~/.dsh/.env 是备用环境变量文件；
-  // daemon.ts 不设 catalog（避免新建持久空会话探测模型），catalogWatchPaths 盯本地凭据与配置变更。
+  // catalog.ts 走零子进程本地凭据探测（绝不拉起 dsh 新建持久空会话），catalogWatchPaths 盯本地凭据与配置变更。
   home: {
     dirs: [DEEPSEEK_HOME_REL],
     readonlySecrets: [`${DEEPSEEK_HOME_REL}/.credentials.yaml`, `${DEEPSEEK_HOME_REL}/.env`],

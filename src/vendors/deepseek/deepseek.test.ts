@@ -3,7 +3,9 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isAlive, waitForExit } from "../../daemon/driver/process.ts";
+import { createModelCatalogs } from "../../daemon/driver/model-catalog.ts";
 import { MemorySessionStore, realSleep } from "../../daemon/driver/test-helpers.ts";
+import { DAEMON_VENDORS, createVendorCatalogSources } from "../../daemon/vendors/index.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   type ReadonlySandboxInput,
@@ -11,17 +13,21 @@ import {
 import { buildSetupEnv } from "../../daemon/setup/setup.ts";
 import { SENSITIVE_HOME_PATHS } from "../../daemon/sent-files.ts";
 import {
+  AGENT_VENDORS,
   DriverError,
   EMPTY_TOKEN_USAGE,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
+  MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   READONLY_SECRET_HOME_PATHS,
   agentLaunchArgs,
   buildReadonlyPolicy,
+  bundledModelCatalog,
   notFoundCode,
   vendorFailureOf,
   vendorSpec,
   type AgentSessionRow,
+  type AgentVendor,
   type Driver,
   type DriverEvent,
   type LaunchFiles,
@@ -32,6 +38,11 @@ import { vendorCatalogWatchFiles } from "../../shared/paths.ts";
 import { describeStep, toolCategory } from "../../shared/step-labels.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "../_common/acp/fixtures/fake-acp-agent.ts";
 import type { AcpDriverOptions } from "../_common/acp/index.ts";
+import {
+  createDeepSeekCatalogSource,
+  deepseekCatalogProbe,
+  hasDeepSeekLocalCredentials,
+} from "./catalog.ts";
 import deepseekDaemon from "./daemon.ts";
 import {
   DEEPSEEK_DEFAULT_PROVIDER,
@@ -944,5 +955,205 @@ rl.on("line", (line) => {
     // 用户自己在终端开的 dsh --profile acp（没有本会话的启动目录）不能当残留进程杀
     expect(matchesDeepSeekStaleProcess("/usr/local/bin/dsh --profile acp", crashRow, "/usr/local/bin/dsh")).toBe(false);
     expect(matchesDeepSeekStaleProcess("node /opt/homebrew/bin/dsh --profile acp --patch ./mine.yml", crashRow, "/opt/homebrew/bin/dsh")).toBe(false);
+  });
+});
+
+describe("deepseek 零子进程本地凭据与模型目录探测（catalog.ts + daemon.ts）", () => {
+  it("daemon.ts 登记 catalog；probe 识别合法探测结果返回打包目录，非法输入返回 null，错误分类委托 defaultAvailabilityOfError", () => {
+    expect(deepseekDaemon.catalog).toBeDefined();
+    expect(DAEMON_VENDORS.deepseek.catalog).not.toBeNull();
+    expect(DAEMON_VENDORS.deepseek.probe).toBe(deepseekCatalogProbe);
+
+    expect(deepseekCatalogProbe.parse({ hasCredentials: true })).toEqual(bundledModelCatalog("deepseek"));
+    expect(deepseekCatalogProbe.parse({ hasCredentials: false })).toEqual(bundledModelCatalog("deepseek"));
+    for (const invalid of [null, undefined, "bad", 42, {}, [], { models: [] }, { hasCredentials: "yes" }]) {
+      expect(deepseekCatalogProbe.parse(invalid)).toBeNull();
+      expect(deepseekCatalogProbe.availabilityOf(invalid)).toBe("unknown");
+    }
+
+    expect(deepseekCatalogProbe.availabilityOf({ hasCredentials: true })).toBe("available");
+    expect(deepseekCatalogProbe.availabilityOf({ hasCredentials: false })).toBe("signed_out");
+
+    expect(deepseekCatalogProbe.availabilityOfError!(new Error("spawn dsh ENOENT"))).toBe("not_installed");
+    expect(deepseekCatalogProbe.availabilityOfError!(new Error("HTTP 401 invalid_api_key"))).toBe("signed_out");
+    expect(deepseekCatalogProbe.availabilityOfError!(new Error("unexpected disk error"))).toBe("unknown");
+  });
+
+  it("覆盖未安装、已安装无凭据、DEEPSEEK_API_KEY、$DSH_HOME/.env、$DSH_HOME/.credentials.yaml 及不可信 <cwd>/.env 边界", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-dsh-catalog-")));
+    try {
+      const fakeHome = join(dir, "home");
+      const dshHome = join(dir, "dsh-home");
+      const untrustedCwd = join(dir, "untrusted-repo");
+      mkdirSync(fakeHome, { recursive: true });
+      mkdirSync(dshHome, { recursive: true });
+      mkdirSync(join(untrustedCwd, ".dsh"), { recursive: true });
+
+      // 不可信工作目录（含 <cwd>/.env 和 <cwd>/.dsh/.env）均写入虚假 key，绝不能影响全局登录态
+      writeFileSync(join(untrustedCwd, ".env"), "DEEPSEEK_API_KEY=sk-untrusted-cwd\n", "utf8");
+      writeFileSync(join(untrustedCwd, ".dsh", ".env"), "DEEPSEEK_API_KEY=sk-untrusted-nested\n", "utf8");
+      writeFileSync(
+        join(untrustedCwd, ".dsh", ".credentials.yaml"),
+        "refs:\n  deepseek-official: rec_evil\n",
+        "utf8",
+      );
+
+      // 1. 未安装 dsh：直接返回 not_installed，不起进程也不误报
+      const logs: string[] = [];
+      const uninstalledCatalogs = createModelCatalogs({
+        sources: {
+          deepseek: createDeepSeekCatalogSource({
+            path: "/nonexistent/dsh",
+            cwd: untrustedCwd,
+            installed: () => false,
+            env: { HOME: fakeHome, DSH_HOME: dshHome },
+          }),
+        },
+        log: (line) => logs.push(line),
+      });
+      expect(uninstalledCatalogs.availability("deepseek")).toBe("not_installed");
+      const [uninstalledItem] = await uninstalledCatalogs.list({ vendor: "deepseek" });
+      expect(uninstalledItem?.availability).toBe("not_installed");
+      expect(logs).toEqual([]);
+
+      // 2. 已安装但无任何凭据（即使 untrustedCwd 下有 .env）：返回 signed_out，缓存打包目录，不打警告日志
+      const checkAvailability = async (envOverride: NodeJS.ProcessEnv = {}) => {
+        const source = createDeepSeekCatalogSource({
+          path: "/nonexistent/never-spawned-dsh",
+          cwd: untrustedCwd,
+          installed: () => true,
+          env: { HOME: fakeHome, DSH_HOME: dshHome, ...envOverride },
+        });
+        const catalogs = createModelCatalogs({
+          sources: { deepseek: source },
+          log: (line) => logs.push(line),
+        });
+        const [item] = await catalogs.list({ vendor: "deepseek" });
+        expect(catalogs.current("deepseek")).toEqual(bundledModelCatalog("deepseek"));
+        return item!.availability;
+      };
+
+      expect(await checkAvailability()).toBe("signed_out");
+      expect(logs).toEqual([]);
+
+      // 3. 环境变量 DEEPSEEK_API_KEY：非空 -> available；纯空白 -> signed_out
+      expect(await checkAvailability({ DEEPSEEK_API_KEY: "sk-from-env" })).toBe("available");
+      expect(await checkAvailability({ DEEPSEEK_API_KEY: "   " })).toBe("signed_out");
+
+      // 4. $DSH_HOME/.env：空文件、注释、空值、空引号均为 signed_out；有效值（裸值、成对引号、export）为 available
+      const dshEnvFile = join(dshHome, ".env");
+      for (const emptySample of [
+        "",
+        "# DEEPSEEK_API_KEY=sk-commented\n",
+        "DEEPSEEK_API_KEY=\n",
+        "DEEPSEEK_API_KEY=   \n",
+        'DEEPSEEK_API_KEY=""\n',
+        "DEEPSEEK_API_KEY=''\n",
+        'DEEPSEEK_API_KEY="   " # empty\n',
+        "OTHER_KEY=sk-other\n",
+      ]) {
+        writeFileSync(dshEnvFile, emptySample, "utf8");
+        expect(await checkAvailability(), JSON.stringify(emptySample)).toBe("signed_out");
+      }
+
+      for (const validSample of [
+        "DEEPSEEK_API_KEY=sk-plain-123\n",
+        'DEEPSEEK_API_KEY="sk-double-quoted"\n',
+        "export DEEPSEEK_API_KEY='sk-single-quoted' # inline comment\n",
+      ]) {
+        writeFileSync(dshEnvFile, validSample, "utf8");
+        expect(await checkAvailability(), JSON.stringify(validSample)).toBe("available");
+      }
+      rmSync(dshEnvFile, { force: true });
+
+      // 5. $DSH_HOME/.credentials.yaml：空文件、空 {}、只有 version、空 refs/records、超 64 KiB 文件均为 signed_out；有效条目为 available
+      const credFile = join(dshHome, ".credentials.yaml");
+      for (const emptyYaml of [
+        "",
+        "# only comments\n",
+        "{}\n",
+        "version: 1\n",
+        "version: 1\nrefs: {}\nrecords: {}\n",
+        "version: 1\nrefs:\nrecords:\n",
+        'version: 1\nrecords:\n  rec_1:\n    secret: ""\n',
+        "# DEEPSEEK_API_KEY: sk-commented\n",
+        `version: 1\nrefs:\n  pad: ${"x".repeat(70 * 1024)}\n`,
+      ]) {
+        writeFileSync(credFile, emptyYaml, "utf8");
+        expect(await checkAvailability(), `empty/oversized yaml len=${emptyYaml.length}`).toBe("signed_out");
+      }
+
+      for (const validYaml of [
+        "version: 1\nrefs:\n  deepseek-official: rec_1\nrecords:\n  rec_1:\n    secret: sk-yaml-key\n",
+        "version: 1\nrefs: {}\nrecords:\n  oauth_grant:\n    accessToken: >-\n      eyJhbGciOiJIUzI1NiJ9.payload.sig\n",
+        '{"version":1,"refs":{"deepseek-official":"sk-json-subset"},"records":{}}\n',
+        "DEEPSEEK_API_KEY: sk-direct-yaml\n",
+      ]) {
+        writeFileSync(credFile, validYaml, "utf8");
+        expect(await checkAvailability(), validYaml).toBe("available");
+      }
+      expect(hasDeepSeekLocalCredentials({ HOME: fakeHome, DSH_HOME: dshHome })).toBe(true);
+      expect(logs).toEqual([]);
+
+      // 6. AbortSignal 已中止时拒绝查询，不读盘
+      const abortController = new AbortController();
+      abortController.abort();
+      const abortSource = createDeepSeekCatalogSource({
+        path: "/nonexistent/dsh",
+        cwd: fakeHome,
+        installed: () => true,
+        env: { HOME: fakeHome, DSH_HOME: dshHome },
+      });
+      await expect(abortSource.query(abortController.signal)).rejects.toThrow(/cancelled/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("写入 $DSH_HOME/.env 后，createModelCatalogs 经 vendorCatalogFingerprint 感知变化立即从 signed_out 刷新为 available", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-dsh-fp-")));
+    try {
+      const home = join(dir, "home");
+      const dshHome = join(dir, "custom-dsh");
+      mkdirSync(home, { recursive: true });
+      mkdirSync(dshHome, { recursive: true });
+      const fakeBin = join(dir, "dsh");
+      // 故意写成一旦被执行就退出码 99 的脚本，证明全程零子进程探测
+      writeFileSync(fakeBin, "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+
+      let now = 8_000_000;
+      const env: NodeJS.ProcessEnv = { PATH: "", HOME: home, DSH_HOME: dshHome };
+      const allOptions = Object.fromEntries(
+        AGENT_VENDORS.map((vendor) => [
+          vendor,
+          { path: fakeBin, cwd: home, installed: () => true, env },
+        ]),
+      ) as Record<AgentVendor, { path: string; cwd: string; installed: () => boolean; env: NodeJS.ProcessEnv }>;
+
+      const sources = createVendorCatalogSources(allOptions);
+      const logs: string[] = [];
+      const catalogs = createModelCatalogs({
+        sources: { deepseek: sources.deepseek! },
+        now: () => now,
+        log: (line) => logs.push(line),
+      });
+
+      // 初始无凭据 -> signed_out
+      const [initial] = await catalogs.list({ vendor: "deepseek" });
+      expect(initial?.availability).toBe("signed_out");
+      expect(catalogs.availability("deepseek")).toBe("signed_out");
+      expect(logs).toEqual([]);
+
+      // 用户写入 $DSH_HOME/.env，过指纹冷却期（远小于 MODEL_CATALOG_RETRY_MS 5 分钟）后立即感知变 available
+      writeFileSync(join(dshHome, ".env"), "DEEPSEEK_API_KEY=sk-live-login\n", { mode: 0o600 });
+      now += MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS;
+
+      const [updated] = await catalogs.list({ vendor: "deepseek" });
+      expect(updated?.availability).toBe("available");
+      expect(catalogs.availability("deepseek")).toBe("available");
+      expect(logs).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

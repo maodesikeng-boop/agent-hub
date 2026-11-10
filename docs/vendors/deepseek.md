@@ -111,7 +111,11 @@
   - 工作区里 dsh 还会自动读 `AGENTS.md`、`CLAUDE.md`、`.dsh/skills`、`.agents/skills`（只是提示词）；不读工作区级的 `cordis.patch.yml`、MCP 配置或钩子。MCP 服务器只来自 ACP `session/new` 的 `mcpServers`（驱动传 `[]`）。
 - **敏感路径与 worktree `setup` 环境变量剥离**：
   - `spec.home.readonlySecrets`: `[".dsh/.credentials.yaml", ".dsh/.env"]`（阻止其他厂商的只读 Worker 读取 DeepSeek 凭据）。
-  - `spec.home.catalogWatchPaths`: `[".dsh/.credentials.yaml", ".dsh/.env", ".dsh/cordis.patch.yml"]`（监听本地凭据与配置指纹，支持 `DSH_HOME` 重定向；`daemon.ts` 不设 `catalog` 以避免创建持久空会话）。
+  - `spec.home.catalogWatchPaths`: `[".dsh/.credentials.yaml", ".dsh/.env", ".dsh/cordis.patch.yml"]`（监听本地凭据与配置指纹，支持 `DSH_HOME` 重定向）。
+  - `catalog.ts`（零子进程本地凭据与模型目录探测）：`dsh` 没有离线列模型命令，若跑 ACP `session/new` 查 `configOptions` 会在磁盘创建持久空会话，因此 `catalog.ts` **绝不起任何 `dsh` 子进程**：
+    1. 未装 `dsh`（`options.installed() === false`）由通用目录引擎直接报告 `not_installed`；
+    2. 已装 `dsh` 时，`query()` 在 64 KiB 上限内只读检查进程环境变量 `DEEPSEEK_API_KEY`、`$DSH_HOME/.credentials.yaml`（非空 `refs` / `records` 或 `DEEPSEEK_API_KEY`）与 `$DSH_HOME/.env`（非注释非空 `DEEPSEEK_API_KEY=...`），**绝不读取不可信工作目录 `<cwd>/.env`**；
+    3. `parse()` 对合法探测结果返回 `bundledModelCatalog("deepseek")`（正常写入缓存，不打虚假警告日志），`availabilityOf()` 有凭据返回 `available`、无凭据返回 `signed_out`；一旦用户配置好 `~/.dsh/.env` 或 `.credentials.yaml`，`vendorCatalogFingerprint` 感知文件变更立即刷新为 `available`。
   - `paths.ts` `credentialEnv`: `names: ["DEEPSEEK_API_KEY"]`。dsh 只从这个变量取密钥（各处 `apiKeyEnv` 的默认值）；`DEEPSEEK_BASE_URL` 这类非密钥配置和 `GH_TOKEN`、`AWS_*`、`OPENAI_BASE_URL` 一样照常传给准备命令（`setup.test.ts` 的 A13）。
   - `paths.ts` `parentSessionEnv`: `["DSH_SHELL", "DSH_SESSION_ID", "DSH_PROFILE", "DSH_PROFILE_DIR"]`（来自 `@deepseek-ai/dsh-shell-env`，保留 `DSH_HOME` 不剥离）。
 - **会话持久化格式（`@deepseek-ai/dsh-session-persistence-jsonl`）**：
