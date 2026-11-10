@@ -159,27 +159,18 @@ private final class ProcessStderrCollector {
     private let lock = NSLock()
     private var buffer = Data()
     private let maxBytes: Int
-    private let logMaxBytes: Int
-    private let logHandle: FileHandle?
-    private var loggedBytes = 0
+    private let writeLog: (Data) -> Void
 
-    init(maxBytes: Int, logMaxBytes: Int, logHandle: FileHandle?) {
+    init(maxBytes: Int, writeLog: @escaping (Data) -> Void) {
         self.maxBytes = maxBytes
-        self.logMaxBytes = logMaxBytes
-        self.logHandle = logHandle
+        self.writeLog = writeLog
     }
 
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
+        writeLog(data)
         lock.lock()
-        if loggedBytes < logMaxBytes {
-            loggedBytes += data.count
-            try? logHandle?.write(contentsOf: data)
-            if loggedBytes >= logMaxBytes {
-                try? logHandle?.write(contentsOf: Data("\n[agent-hub] 这次运行的 stderr 超过日志上限，后面的不再写入文件。\n".utf8))
-            }
-        }
-        buffer.append(data)
+        buffer.append(data.suffix(maxBytes))
         if buffer.count > maxBytes {
             buffer.removeFirst(buffer.count - maxBytes)
         }
@@ -203,6 +194,14 @@ private final class ProcessStderrCollector {
     }
 }
 
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 final class DaemonSupervisor {
     private static let maxTrackedIntentionalPids = 64
 
@@ -215,6 +214,7 @@ final class DaemonSupervisor {
     var onConflictChange: ((String?) -> Void)?
 
     private let httpSession: URLSession
+    private var signalTokens: [ObjectIdentifier: audit_token_t] = [:]
     private var spawnedProcess: Process?
     private var ownedInstanceId: String?
     private var ownership: DaemonOwnership = .none
@@ -225,8 +225,12 @@ final class DaemonSupervisor {
     private var lastCrashRecord: DaemonCrashRecord?
     private var state: DaemonSupervisorState = .running
     private var pendingRestartWorkItem: DispatchWorkItem?
+    private var restartGeneration = UUID()
     /// 用户点“重启后台服务”后到旧进程退出这段时间：别的路径（退避重启、启动轮询）不许拉起新进程，免得和旧进程抢端口
     private var isRestarting = false
+    private var stoppingProcess: Process?
+    private var stopCompletions: [() -> Void] = []
+    private let logLock = NSLock()
     private let lock = NSLock()
 
     init(
@@ -261,7 +265,7 @@ final class DaemonSupervisor {
         sessionConfig.httpShouldSetCookies = false
         sessionConfig.timeoutIntervalForRequest = max(contract.probeTimeoutSeconds, 2.0)
         sessionConfig.timeoutIntervalForResource = 5.0
-        self.httpSession = URLSession(configuration: sessionConfig)
+        self.httpSession = URLSession(configuration: sessionConfig, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }
 
     deinit {
@@ -296,7 +300,7 @@ final class DaemonSupervisor {
     var currentPid: Int32? {
         lock.lock()
         defer { lock.unlock() }
-        guard let proc = spawnedProcess, proc.isRunning else { return nil }
+        guard let proc = spawnedProcess ?? stoppingProcess, proc.isRunning else { return nil }
         return proc.processIdentifier
     }
 
@@ -437,6 +441,11 @@ final class DaemonSupervisor {
             case .verified(let identity):
                 let nextOwnership: DaemonOwnership
                 self.lock.lock()
+                if self.isShuttingDown || self.isRestarting {
+                    self.lock.unlock()
+                    DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
+                    return
+                }
                 if let proc = self.spawnedProcess, proc.isRunning,
                    self.ownedInstanceId == nil || self.ownedInstanceId == identity.instanceId {
                     self.ownedInstanceId = identity.instanceId
@@ -473,6 +482,12 @@ final class DaemonSupervisor {
     /// - 若当前是外部兼容 Fusa 后台或未拥有任何子进程，绝不发送信号或阻塞等待外部进程退出。
     func restartDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
         lock.lock()
+        if isRestarting || isShuttingDown || stoppingProcess != nil {
+            lock.unlock()
+            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止，请稍后重试。"))) }
+            return
+        }
+        restartGeneration = UUID()
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         recentCrashTimestamps.removeAll()
@@ -484,6 +499,7 @@ final class DaemonSupervisor {
             return
         }
         isRestarting = true
+        stoppingProcess = ownedProc
         spawnedProcess = nil
         ownedInstanceId = nil
         ownership = .none
@@ -500,8 +516,17 @@ final class DaemonSupervisor {
             guard let self = self else { return }
             self.lock.lock()
             self.isRestarting = false
+            self.stoppingProcess = nil
+            let quitting = self.isShuttingDown
+            let waiters = self.stopCompletions
+            self.stopCompletions.removeAll()
             self.lock.unlock()
-            self.ensureRunning(completion: completion)
+            waiters.forEach { $0() }
+            if quitting {
+                completion(.failure(Self.makeError(code: 7, message: "应用正在退出。")))
+            } else {
+                self.ensureRunning(completion: completion)
+            }
         }
     }
 
@@ -510,10 +535,17 @@ final class DaemonSupervisor {
     func stopOwned(completion: @escaping () -> Void) {
         lock.lock()
         isShuttingDown = true
+        if stoppingProcess != nil {
+            stopCompletions.append(completion)
+            lock.unlock()
+            return
+        }
+        restartGeneration = UUID()
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         let proc = spawnedProcess
         let expectedInstanceId = ownedInstanceId
+        stoppingProcess = proc
         spawnedProcess = nil
         ownedInstanceId = nil
         ownership = .none
@@ -531,15 +563,23 @@ final class DaemonSupervisor {
         stopOwnedProcess(
             ownedProc,
             expectedInstanceId: expectedInstanceId,
-            graceSeconds: contract.stopGraceSeconds,
-            completion: completion
-        )
+            graceSeconds: contract.stopGraceSeconds
+        ) { [self] in
+            lock.lock()
+            stoppingProcess = nil
+            let waiters = stopCompletions
+            stopCompletions.removeAll()
+            lock.unlock()
+            completion()
+            waiters.forEach { $0() }
+        }
     }
 
     /// 同步停止入口（兼容测试及 applicationWillTerminate 兜底）：仅对本应用自己拉起的守护进程发 SIGTERM，绝不触碰外部进程。
     func stopIfOwned() {
         lock.lock()
         isShuttingDown = true
+        restartGeneration = UUID()
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         let proc = spawnedProcess
@@ -552,8 +592,32 @@ final class DaemonSupervisor {
         lock.unlock()
 
         if let proc = proc, proc.isRunning {
-            proc.terminate()
+            signalOwned(proc, SIGTERM)
         }
+    }
+
+    // The kernel checks the audit token's PID generation atomically with delivery.
+    // Never fall back to kill(pid): Foundation can reap the child between a check and kill.
+    private func signalOwned(_ process: Process, _ signal: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard process.isRunning, var token = signalTokens[ObjectIdentifier(process)] else { return }
+        _ = proc_signal_with_audittoken(&token, signal)
+    }
+
+    private static func signalToken(for process: Process) -> audit_token_t? {
+        var name: mach_port_name_t = 0
+        guard task_name_for_pid(mach_task_self_, process.processIdentifier, &name) == KERN_SUCCESS else { return nil }
+        defer { mach_port_deallocate(mach_task_self_, name) }
+        var token = audit_token_t()
+        var count = mach_msg_type_number_t(MemoryLayout<audit_token_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &token) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(name, task_flavor_t(TASK_AUDIT_TOKEN), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS, process.isRunning else { return nil }
+        return token
     }
 
     private func markIntentionalStopLocked(_ process: Process) {
@@ -571,7 +635,7 @@ final class DaemonSupervisor {
         completion: @escaping () -> Void
     ) {
         if process.isRunning {
-            process.terminate()
+            signalOwned(process, SIGTERM)
         }
         let deadline = Date().addingTimeInterval(graceSeconds)
         waitForOwnedShutdown(
@@ -591,10 +655,11 @@ final class DaemonSupervisor {
         if process.isRunning {
             if Date() >= deadline {
                 // 超出 40 秒优雅停止预算仍未退出：仅对本次自己拉起的该子进程发 SIGKILL
-                kill(process.processIdentifier, SIGKILL)
+                if process.isRunning {
+                    signalOwned(process, SIGKILL)
+                }
                 waitForReapAfterSigkill(
                     process: process,
-                    reapDeadline: Date().addingTimeInterval(2.0),
                     completion: completion
                 )
                 return
@@ -639,15 +704,14 @@ final class DaemonSupervisor {
 
     private func waitForReapAfterSigkill(
         process: Process,
-        reapDeadline: Date,
         completion: @escaping () -> Void
     ) {
-        if !process.isRunning || Date() >= reapDeadline {
+        if !process.isRunning {
             DispatchQueue.main.async { completion() }
             return
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.waitForReapAfterSigkill(process: process, reapDeadline: reapDeadline, completion: completion)
+            self?.waitForReapAfterSigkill(process: process, completion: completion)
         }
     }
 
@@ -675,7 +739,7 @@ final class DaemonSupervisor {
         }
         guard let product = dict["product"] as? String, product == contract.product else {
             return .conflict(
-                "端口 \(port) 已被其他服务占用（非 Fusa 后台），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
+                "端口 \(port) 已被其他服务或旧版 Fusa 后台占用，请先关闭旧后台或占用程序，再重试；也可更换 AGENT_HUB_PORT。"
             )
         }
         guard let versionNumber = dict["protocolVersion"] as? NSNumber,
@@ -695,8 +759,9 @@ final class DaemonSupervisor {
             return .conflict("端口 \(port) 上的服务缺少 Fusa 实例标识（instanceId），拒绝连接。")
         }
         let instanceId = rawInstanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instanceId.isEmpty else {
-            return .conflict("端口 \(port) 上的服务返回空实例标识（instanceId），拒绝连接。")
+        guard !instanceId.isEmpty, instanceId.utf8.count <= 128,
+              instanceId.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else {
+            return .conflict("端口 \(port) 上的服务返回无效实例标识（instanceId），拒绝连接。")
         }
         return .verified(DaemonIdentity(product: product, protocolVersion: version, instanceId: instanceId))
     }
@@ -769,7 +834,7 @@ final class DaemonSupervisor {
         try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
         if contract.logRotatedFiles > 0,
            let size = (try? fm.attributesOfItem(atPath: logFilePath))?[.size] as? Int,
-           size > contract.logMaxBytes {
+           size >= contract.logMaxBytes {
             for idx in stride(from: contract.logRotatedFiles, through: 1, by: -1) {
                 let dst = "\(logFilePath).\(idx)"
                 let src = idx == 1 ? logFilePath : "\(logFilePath).\(idx - 1)"
@@ -785,10 +850,21 @@ final class DaemonSupervisor {
     }
 
     private func appendToLogFile(_ text: String) {
-        guard let handle = openAppendLogHandle(),
-              let data = text.data(using: .utf8) else { return }
-        try? handle.write(contentsOf: data)
-        try? handle.close()
+        appendToLogFile(Data(text.utf8))
+    }
+
+    private func appendToLogFile(_ data: Data) {
+        logLock.lock()
+        defer { logLock.unlock() }
+        var offset = 0
+        while offset < data.count {
+            guard let handle = openAppendLogHandle() else { return }
+            let size = Int((try? handle.seekToEnd()) ?? 0)
+            let count = min(data.count - offset, max(1, contract.logMaxBytes - size))
+            try? handle.write(contentsOf: data.subdata(in: offset..<(offset + count)))
+            try? handle.close()
+            offset += count
+        }
     }
 
     private func startDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -796,6 +872,7 @@ final class DaemonSupervisor {
         lock.lock()
         if isShuttingDown || isRestarting {
             lock.unlock()
+            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
             return
         }
         let deadline = Date().addingTimeInterval(contract.startupBudgetSeconds)
@@ -832,13 +909,11 @@ final class DaemonSupervisor {
             ))
         }
 
-        let logHandle = openAppendLogHandle()
         let stderrPipe = Pipe()
         let readHandle = stderrPipe.fileHandleForReading
         let collector = ProcessStderrCollector(
             maxBytes: contract.stderrTailMaxBytes,
-            logMaxBytes: contract.logMaxBytes,
-            logHandle: logHandle
+            writeLog: { [weak self] data in self?.appendToLogFile(data) }
         )
         let pipeLock = NSLock()
         var pipeClosed = false
@@ -880,9 +955,17 @@ final class DaemonSupervisor {
         env["PATH"] = (extraPaths + [existingPath]).joined(separator: ":")
         process.environment = env
 
-        if let logHandle = logHandle {
-            process.standardOutput = logHandle
+        let stdoutPipe = Pipe()
+        let stdoutRead = stdoutPipe.fileHandleForReading
+        stdoutRead.readabilityHandler = { [weak self] handle in
+            pipeLock.lock()
+            defer { pipeLock.unlock() }
+            guard !pipeClosed else { return }
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            else { self?.appendToLogFile(data) }
         }
+        process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
         process.terminationHandler = { [weak self] terminatedProcess in
@@ -896,7 +979,7 @@ final class DaemonSupervisor {
                     _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
                 }
                 var buf = [UInt8](repeating: 0, count: 4096)
-                while true {
+                for _ in 0..<16 {
                     let n = Darwin.read(fd, &buf, buf.count)
                     if n > 0 {
                         collector.append(Data(buf[0..<n]))
@@ -906,13 +989,26 @@ final class DaemonSupervisor {
                 }
                 try? readHandle.close()
             }
+            stdoutRead.readabilityHandler = nil
+            let outFD = stdoutRead.fileDescriptor
+            let outFlags = fcntl(outFD, F_GETFL)
+            if outFlags >= 0 { _ = fcntl(outFD, F_SETFL, outFlags | O_NONBLOCK) }
+            var outBuffer = [UInt8](repeating: 0, count: 4096)
+            for _ in 0..<16 {
+                let n = Darwin.read(outFD, &outBuffer, outBuffer.count)
+                if n <= 0 { break }
+                self?.appendToLogFile(Data(outBuffer[0..<n]))
+            }
+            try? stdoutRead.close()
             pipeLock.unlock()
-            try? logHandle?.close()
             self?.handleProcessTerminated(terminatedProcess, stderrCollector: collector)
         }
 
         do {
             try process.run()
+            if let token = Self.signalToken(for: process) {
+                signalTokens[ObjectIdentifier(process)] = token
+            }
             spawnedProcess = process
             ownedInstanceId = nil
             return .success(process)
@@ -921,8 +1017,9 @@ final class DaemonSupervisor {
             pipeLock.lock()
             pipeClosed = true
             try? readHandle.close()
+            stdoutRead.readabilityHandler = nil
+            try? stdoutRead.close()
             pipeLock.unlock()
-            try? logHandle?.close()
             return .failure(error)
         }
     }
@@ -934,6 +1031,13 @@ final class DaemonSupervisor {
     ) {
         probeIdentity { [weak self] probeResult in
             guard let self = self else { return }
+            self.lock.lock()
+            let cancelled = self.isShuttingDown || self.isRestarting
+            self.lock.unlock()
+            if cancelled {
+                DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
+                return
+            }
             switch probeResult {
             case .verified(let identity):
                 let nextOwnership: DaemonOwnership
@@ -967,7 +1071,7 @@ final class DaemonSupervisor {
                 self.lock.unlock()
 
                 if process.isRunning {
-                    process.terminate()
+                    self.signalOwned(process, SIGTERM)
                 }
                 self.notifyOwnershipChange(.none)
                 self.notifyConflictChange(reason)
@@ -993,7 +1097,7 @@ final class DaemonSupervisor {
                     }
                     self.lock.unlock()
                     if process.isRunning {
-                        process.terminate()
+                        self.signalOwned(process, SIGTERM)
                     }
                     let budgetInt = Int(self.contract.startupBudgetSeconds.rounded())
                     let err = Self.makeError(
@@ -1015,6 +1119,7 @@ final class DaemonSupervisor {
         let now = Date()
 
         lock.lock()
+        signalTokens.removeValue(forKey: ObjectIdentifier(process))
         if spawnedProcess === process {
             spawnedProcess = nil
             ownedInstanceId = nil
@@ -1071,6 +1176,8 @@ final class DaemonSupervisor {
         }
         state = nextState
         let currentOwn = ownership
+        let generation = UUID()
+        restartGeneration = generation
         lock.unlock()
 
         writeCrashLog(
@@ -1088,11 +1195,10 @@ final class DaemonSupervisor {
 
         guard !shouldStopRetrying else { return }
 
-        var workItem: DispatchWorkItem!
-        workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, !workItem.isCancelled else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
             self.lock.lock()
-            if self.isShuttingDown {
+            if self.isShuttingDown || self.isRestarting || self.restartGeneration != generation {
                 self.lock.unlock()
                 return
             }
@@ -1103,6 +1209,10 @@ final class DaemonSupervisor {
         }
 
         lock.lock()
+        guard restartGeneration == generation, !isShuttingDown, !isRestarting else {
+            lock.unlock()
+            return
+        }
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = workItem
         lock.unlock()

@@ -18,8 +18,11 @@ func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {
     return condition()
 }
 
+var failureCleanup: (() -> Void)?
+
 func check(_ condition: @autoclosure () -> Bool, _ message: String, file: StaticString = #file, line: UInt = #line) {
     if !condition() {
+        failureCleanup?()
         fputs("FAIL [\(file):\(line)]: \(message)\n", stderr)
         exit(1)
     }
@@ -67,6 +70,8 @@ enum SupervisorTestsMain {
             }
             try? fm.removeItem(atPath: tempRoot)
         }
+
+        failureCleanup = cleanupAll
 
         guard CommandLine.arguments.count >= 3 else {
             fputs("Usage: SupervisorTests <repoDir> <nodePath>\n", stderr)
@@ -133,6 +138,7 @@ enum SupervisorTestsMain {
         import { createServer } from "node:http";
         import { appendFileSync, readFileSync } from "node:fs";
 
+        setInterval(() => { if (process.ppid === 1) process.exit(0); }, 100).unref();
         const port = Number(process.argv[2]);
         const modeFile = process.argv[3];
         const reqLog = process.argv[4];
@@ -147,6 +153,12 @@ enum SupervisorTestsMain {
               JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body }) + "\\n",
             );
             const mode = readFileSync(modeFile, "utf8").trim();
+            if (mode === "redirect" && req.url !== "/identity") {
+              res.writeHead(307, { location: "/identity" }); res.end(); return;
+            }
+            if (mode === "auth_redirect" && req.url === "/auth") {
+              res.writeHead(307, { location: "/stolen" }); res.end(); return;
+            }
             if (req.url === "/auth" && req.method === "POST" && mode === "fusa_v1") {
               const parsed = JSON.parse(body || "{}");
               if (parsed.token === expectedToken && req.headers.origin === `http://127.0.0.1:${port}`) {
@@ -160,7 +172,12 @@ enum SupervisorTestsMain {
               res.end(JSON.stringify({ error: "unauthorized" }));
               return;
             }
-            if (mode === "html200") {
+            if (["legacy", "empty_id", "bool_version"].includes(mode)) {
+              res.writeHead(200, { "content-type": "application/json" });
+              res.end(JSON.stringify(mode === "legacy" ? { status: "unauthenticated" } : {
+                product: "fusa", protocolVersion: mode === "bool_version" ? true : 1, instanceId: "   "
+              }));
+            } else if (mode === "html200") {
               res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
               res.end("<!doctype html><html><body>Some Other App</body></html>");
             } else if (mode === "json200_other") {
@@ -172,7 +189,7 @@ enum SupervisorTestsMain {
             } else if (mode === "fusa_v99") {
               res.writeHead(200, { "content-type": "application/json" });
               res.end(JSON.stringify({ status: "unauthenticated", product: "fusa", protocolVersion: 99, instanceId: "incompat-99" }));
-            } else if (mode === "fusa_v1") {
+            } else if (["fusa_v1", "redirect", "auth_redirect"].includes(mode)) {
               res.writeHead(200, { "content-type": "application/json" });
               res.end(JSON.stringify({ status: "unauthenticated", product: "fusa", protocolVersion: 1, instanceId: "ext-fusa-001" }));
             } else {
@@ -208,7 +225,7 @@ enum SupervisorTestsMain {
 
         // MARK: - 1. 端口被非 Fusa 服务或协议不兼容服务占用：报冲突、不发 token、不误杀
 
-        for mode in ["html200", "json200_other", "http401", "fusa_v99"] {
+        for mode in ["html200", "json200_other", "http401", "fusa_v99", "legacy", "empty_id", "bool_version", "redirect"] {
             try! mode.write(toFile: modeFilePath, atomically: true, encoding: .utf8)
             let sup = DaemonSupervisor(homeDir: conflictHome, port: mockPort)
             let bar = StatusBarController(onOpenMainWindow: {}, onRestartDaemon: {}, onQuitApp: {})
@@ -305,6 +322,14 @@ enum SupervisorTestsMain {
             }
         }
 
+        try! "auth_redirect".write(toFile: modeFilePath, atomically: true, encoding: .utf8)
+        var redirectDone = false
+        extSup.exchangeUiTokenForCookies { _ in redirectDone = true }
+        check(waitUntil(timeout: 3.0) { redirectDone }, "auth redirect must complete without forwarding")
+        let redirectLogs = try! String(contentsOfFile: requestsLogPath, encoding: .utf8)
+        check(!redirectLogs.contains("/stolen"), "POST token must never follow HTTP redirects")
+        try! "fusa_v1".write(toFile: modeFilePath, atomically: true, encoding: .utf8)
+
         // 对外部后台调用 restartDaemon / stopOwned / stopIfOwned：不阻塞、不接管、不杀进程
         let extRestartStart = Date()
         var extRestartDone = false
@@ -341,6 +366,7 @@ enum SupervisorTestsMain {
         import { randomUUID } from "node:crypto";
         import { appendFileSync } from "node:fs";
 
+        setInterval(() => { if (process.ppid === 1) process.exit(0); }, 100).unref();
         const port = Number(process.env.AGENT_HUB_PORT);
         const delayMs = Number(process.env.FAKE_SHUTDOWN_DELAY_MS || "5000");
         const hangForever = process.env.FAKE_HANG_FOREVER === "1";
@@ -363,6 +389,15 @@ enum SupervisorTestsMain {
         });
 
         server.listen(port, "127.0.0.1");
+        if (process.env.FAKE_NOISY === "1") {
+          const chunk = "x".repeat(65536);
+          let writes = 0;
+          const timer = setInterval(() => {
+            process.stdout.write(chunk);
+            process.stderr.write(chunk);
+            if (++writes >= 96) clearInterval(timer);
+          }, 5);
+        }
 
         let shuttingDown = false;
         process.on("SIGTERM", () => {
@@ -405,11 +440,19 @@ enum SupervisorTestsMain {
         // 重启时新进程改为 100ms 快速关闭，便于后续清理；正在跑的 pidA 仍保持 5000ms 慢关闭！
         setenv("FAKE_SHUTDOWN_DELAY_MS", "100", 1)
 
+        var heartbeat = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { heartbeat = true }
         let slowRestartBegan = Date()
         var slowRestartSucceeded = false
         ownedSup.restartDaemon { res in
             if case .success = res { slowRestartSucceeded = true }
         }
+        var duplicateFinished = false
+        ownedSup.restartDaemon { result in
+            if case .failure = result { duplicateFinished = true }
+        }
+        check(waitUntil(timeout: 1.0) { duplicateFinished && heartbeat }, "main queue must remain responsive and duplicate restart must finish")
+        check(ownedSup.currentPid == pidA, "stopping child must remain tracked")
         check(waitUntil(timeout: 20.0) { slowRestartSucceeded }, "slow restartDaemon timed out under 40s stopGraceMs")
         let slowRestartElapsed = Date().timeIntervalSince(slowRestartBegan)
 
@@ -434,14 +477,20 @@ enum SupervisorTestsMain {
         check(instanceIdB != instanceIdA, "instanceIdB must differ from instanceIdA")
 
         var cleanStopB = false
+        var restartDuringQuitFinished = false
+        ownedSup.restartDaemon { _ in restartDuringQuitFinished = true }
         ownedSup.stopOwned { cleanStopB = true }
         check(waitUntil(timeout: 5.0) { cleanStopB }, "stopOwned for pidB timed out")
         check(kill(pidB, 0) != 0, "pidB must be stopped")
+        check(restartDuringQuitFinished, "restart callback must finish when quitting")
+        pumpRunLoop(0.3)
+        check(ownedSup.currentPid == nil, "quit during restart must never spawn a replacement")
 
         // 验证卡死忽略 SIGTERM 时：超过 stopGraceMs 后仅对自己拉起的子进程发 SIGKILL
         let hungPort = findFreePort()
         setenv("AGENT_HUB_PORT", String(hungPort), 1)
         setenv("FAKE_HANG_FOREVER", "1", 1)
+        setenv("FAKE_NOISY", "1", 1)
 
         let shortStopContract = DesktopContract(
             product: decodedContract.product,
@@ -474,6 +523,13 @@ enum SupervisorTestsMain {
         hungSup.ensureRunning { if case .success = $0 { hungStarted = true } }
         check(waitUntil(timeout: 10.0) { hungStarted }, "hungSup failed to start")
         let hungPid = hungSup.currentPid!
+        pumpRunLoop(1.5)
+        for path in [hungSup.logFilePath, hungSup.logFilePath + ".1"] {
+            let size = (try? fm.attributesOfItem(atPath: path)[.size]) as? Int ?? -1
+            check(size > 0 && size <= decodedContract.logMaxBytes, "continuous stdout/stderr must rotate within 2 MiB: \(size)")
+        }
+        check(!fm.fileExists(atPath: hungSup.logFilePath + ".2"), "only one log backup allowed")
+        setenv("FAKE_NOISY", "0", 1)
 
         let hungStopStart = Date()
         var hungStopped = false

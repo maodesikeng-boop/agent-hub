@@ -145,17 +145,19 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
                     self.showStartupError("后台服务尚未就绪（端口 \(self.supervisor.port) 无响应）")
                 }
             case .verified:
-                let cookieName = self.supervisor.cookieName
-                self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
-                    guard let self = self else { return }
-                    let hasSessionCookie = cookies.contains { cookie in
-                        cookie.name == cookieName && (cookie.domain == "127.0.0.1" || cookie.domain == "localhost")
-                    }
-                    DispatchQueue.main.async {
-                        if hasSessionCookie {
-                            self.webView.load(URLRequest(url: self.supervisor.baseURL))
-                        } else {
-                            self.authenticateWithUiToken()
+                DispatchQueue.main.async { [self] in
+                    let cookieName = self.supervisor.cookieName
+                    self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+                        guard let self = self else { return }
+                        let hasSessionCookie = cookies.contains { cookie in
+                            cookie.name == cookieName && (cookie.domain == "127.0.0.1" || cookie.domain == "localhost")
+                        }
+                        DispatchQueue.main.async {
+                            if hasSessionCookie {
+                                self.webView.load(URLRequest(url: self.supervisor.baseURL))
+                            } else {
+                                self.authenticateWithUiToken()
+                            }
                         }
                     }
                 }
