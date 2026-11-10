@@ -20,6 +20,7 @@ import {
   AGENT_VENDORS,
   EMPTY_TOKEN_USAGE,
   ENV_HUB_SOCK,
+  bundledModelCatalog,
   vendorSpec,
   workerWriteScope,
   type AgentSessionRow,
@@ -27,9 +28,7 @@ import {
   type Driver,
   type DriverEvent,
 } from "../../src/shared/index.ts";
-import { createAgyDriver } from "../../src/vendors/agy/driver.ts";
 import { createClaudeDriver } from "../../src/vendors/claude/driver.ts";
-import { createCodexDriver } from "../../src/vendors/codex/driver.ts";
 import { osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import { VENDOR_DAEMONS } from "../../src/vendors/daemon-registry.ts";
@@ -40,9 +39,17 @@ const CODEX = process.env.AGENT_HUB_CODEX || "/Applications/ChatGPT.app/Contents
 const CODEX_MODEL = process.env.AGENT_HUB_CODEX_MODEL || "gpt-5.6-luna";
 const AGY = process.env.AGENT_HUB_AGY || join(homedir(), ".local", "bin", "agy");
 const AGY_MODEL = process.env.AGENT_HUB_AGY_MODEL || "gemini-3.8-flash";
+const CURSOR = process.env.AGENT_HUB_CURSOR || join(homedir(), ".local", "bin", "cursor-agent");
+const CURSOR_MODEL = process.env.AGENT_HUB_CURSOR_MODEL || "composer-2.5-fast";
 const TURN_TIMEOUT_MS = 600_000;
 
-const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL };
+const MODELS: Record<AgentVendor, string> = {
+  ...(Object.fromEntries(AGENT_VENDORS.map((v) => [v, bundledModelCatalog(v).models[0]?.id ?? ""])) as Record<AgentVendor, string>),
+  claude: MODEL,
+  agy: AGY_MODEL,
+  codex: CODEX_MODEL,
+  cursor: CURSOR_MODEL,
+};
 
 function task(dataDir: string, cwd: string, names: { edit: string; mkdir: string; echo: string }): string {
   return [
@@ -114,12 +121,18 @@ function rig(vendor: AgentVendor, hub: TestHub, osSandboxed = osSandboxAvailable
     prepareLaunch: async () => ({ promptFile, ...(settingsFile === undefined ? {} : { settingsFile }), env: { ...launch?.env, ...hub.workerEnv }, fingerprint: "", writeScope }),
     log: () => {},
   };
+  const execOverrides: Partial<Record<AgentVendor, string>> = {
+    codex: CODEX,
+    agy: AGY,
+    cursor: CURSOR,
+  };
   const driver: Driver =
-    vendor === "codex"
-      ? createCodexDriver({ ...common, executablePath: CODEX })
-      : vendor === "agy"
-        ? createAgyDriver({ ...common, executablePath: AGY })
-        : createClaudeDriver({ ...common, executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) });
+    vendor === "claude"
+      ? createClaudeDriver({ ...common, executablePath: writeClaudeWrapper(dir, { claude: CLAUDE, persist: false }) })
+      : VENDOR_DAEMONS[vendor].createDriver({
+          ...common,
+          executablePath: execOverrides[vendor] ?? (process.env[vendorSpec(vendor).cli.envVar] || vendorSpec(vendor).cli.command),
+        });
   const events: DriverEvent[] = [];
   driver.onEvent((_id, event) => events.push(event));
   return { vendor, driver, store, events, dir, cwd };

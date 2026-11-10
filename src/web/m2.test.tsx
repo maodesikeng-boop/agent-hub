@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NAME_RULE, bundledModelCatalog, vendorSpec, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { AGENT_VENDORS, MODEL_NAME_RULE, bundledModelCatalog, vendorSpec, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { MODEL_CATALOG_REVALIDATE_MS } from "./models.tsx";
 import {
@@ -241,9 +241,9 @@ describe("New project manager", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "阿明");
     await user.click(within(dialog).getByRole("radio", { name: "Hands-on" }));
     await user.click(within(dialog).getByRole("button", { name: "More settings" }));
-    // 打包的名单有三家厂商：显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
+    // 打包的名单按 AGENT_VENDORS 顺序显示厂商下拉（默认 Claude Code）；模型默认 / Fable / Opus / Sonnet / Haiku / 自定义；思考程度默认 / low～max
     const vendor = within(dialog).getByRole("combobox", { name: "Provider" });
-    expect(optionsOf(vendor)).toEqual(["Claude Code", "Antigravity", "Codex"]);
+    expect(optionsOf(vendor)).toEqual(AGENT_VENDORS.map((v) => vendorSpec(v).label));
     expect(vendor).toHaveDisplayValue("Claude Code");
     const model = within(dialog).getByRole("combobox", { name: "Model" });
     const effort = within(dialog).getByRole("combobox", { name: "Effort" });
@@ -861,9 +861,9 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await boot();
     serve({ model: "haiku", effort: "xhigh" });
     const page = await open(user);
-    // 打包的名单有三家厂商：显示厂商下拉（默认 Claude Code）
+    // 打包的名单按 AGENT_VENDORS 顺序显示厂商下拉（默认 Claude Code）
     const vendor = combo(page, "Provider");
-    expect(optionsOf(vendor)).toEqual(["Claude Code", "Antigravity", "Codex"]);
+    expect(optionsOf(vendor)).toEqual(AGENT_VENDORS.map((v) => vendorSpec(v).label));
     expect(vendor).toHaveDisplayValue("Claude Code");
     expect(optionsOf(combo(page, "Model"))).toEqual(["Default", "Fable", "Opus", "Sonnet", "Haiku", "Custom"]);
     expect(combo(page, "Model")).toHaveDisplayValue("Haiku");

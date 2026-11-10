@@ -823,7 +823,10 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
   });
 
   it("这台设备上没装、没登录的厂商不进“能用的厂商”和 --vendor 列表；认不出的照列", () => {
-    const ctx = projectContext({ vendorAvailability: { claude: "available", agy: "signed_out", codex: "not_installed" } });
+    const onlyClaudeAvailable = Object.fromEntries(
+      AGENT_VENDORS.map((v) => [v, v === "claude" ? "available" : v === "agy" ? "signed_out" : "not_installed"]),
+    );
+    const ctx = projectContext({ vendorAvailability: onlyClaudeAvailable });
     const prompt = buildLaunchPrompt(ctx, dir);
     expect(prompt).toContain("能用的厂商有 `claude`");
     expect(prompt).not.toContain("`agy`（");
@@ -831,7 +834,7 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     expect(prompt).toContain("[--vendor claude]");
     const unknown = buildLaunchPrompt(projectContext({ vendorAvailability: { agy: "unknown" } }), dir);
     expect(unknown).toContain("`agy`（");
-    expect(unknown).toContain("[--vendor claude|agy|codex]");
+    expect(unknown).toContain(`[--vendor ${AGENT_VENDORS.join("|")}]`);
   });
 
   it("厂商状态变了不改 fingerprint（不为它重启项目经理会话）", () => {

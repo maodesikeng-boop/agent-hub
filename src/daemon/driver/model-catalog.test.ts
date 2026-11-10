@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS,
   MODEL_CATALOG_FRESH_MS,
   MODEL_CATALOG_RETRY_MS,
   bundledModelCatalog,
+  type AgentVendor,
   type ModelCatalog,
   type VendorAvailability,
 } from "../../shared/index.ts";
@@ -878,7 +880,8 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       let calls = 0;
       // 经守护进程的装配（createVendorCatalogSources）拿：指纹由它按通用规则补（spec 的 home.configHome）
       const options = { path: bin, cwd: home, installed: () => true, env: { PATH: "", CODEX_HOME: codexHome } };
-      const source = createVendorCatalogSources({ claude: options, agy: options, codex: options }).codex!;
+      const allOptions = Object.fromEntries(AGENT_VENDORS.map((v) => [v, options])) as Record<AgentVendor, typeof options>;
+      const source = createVendorCatalogSources(allOptions).codex!;
       const catalogs = createModelCatalogs({
         sources: {
           codex: {

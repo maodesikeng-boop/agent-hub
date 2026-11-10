@@ -11,6 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
+import { AGENT_VENDORS } from "../../shared/vendors.ts";
 import type { ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
@@ -2216,10 +2217,12 @@ describe("查看各厂商可用的模型（hub models）", () => {
     ];
 
     const all = ledger.hubCall(lin.sessionId, "models", {}, { modelCatalogs: customCatalogs });
+    const restVendors = AGENT_VENDORS.filter((v) => !["claude", "agy", "codex"].includes(v)).map((v) => [v, "unknown", null, null]);
     expect(all.data.vendors.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
       ["claude", "available", "Opus 5.6 (1M context)", "xhigh"],
       ["agy", "signed_out", "gemini-4-argon", null],
       ["codex", "not_installed", "gpt-5.4", null],
+      ...restVendors,
     ]);
     expect(all.data.vendors[0]?.models).toEqual([
       { id: "opus[1m]", label: "Opus 5.6 (1M context)", efforts: ["low", "medium", "high", "xhigh", "max"] },
