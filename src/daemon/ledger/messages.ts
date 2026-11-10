@@ -87,10 +87,14 @@ export function createLedgerMessages(
     const message = getMessage(id);
     if (message === null || message.status === null || !canTransitionMessage(message.status, to)) return;
     db.run(
-      "UPDATE messages SET status = ?, failure_reason = ?, updated_at = ? WHERE id = ?",
+      `UPDATE messages SET status = ?, failure_reason = ?, updated_at = ?,
+         meta = CASE WHEN ? IN ('delivered', 'processing') THEN json_set(COALESCE(meta, '{}'), '$.deliveryConfirmed', json('true'))
+                     WHEN ? = 'queued' THEN json_remove(meta, '$.deliveryConfirmed') ELSE meta END WHERE id = ?`,
       to,
       to === "failed" ? reason : null,
       now(),
+      to,
+      to,
       id,
     );
     p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
@@ -450,7 +454,7 @@ export function createLedgerMessages(
       const session = currentSession(message.conversationId);
       if (session === null) throw new Error(`conversation ${message.conversationId} has no agent session`);
       db.run(
-        "UPDATE messages SET status = 'queued', failure_reason = NULL, session_id = ?, updated_at = ? WHERE id = ?",
+        "UPDATE messages SET status = 'queued', failure_reason = NULL, meta = json_remove(meta, '$.deliveryConfirmed'), session_id = ?, updated_at = ? WHERE id = ?",
         session.id,
         now(),
         messageId,
