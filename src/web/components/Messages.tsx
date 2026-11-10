@@ -28,6 +28,7 @@ import {
   systemNoticeText,
   workerEventOf,
   workerLineText,
+  workerPickOf,
   type AgentVendor,
   type ConversationId,
   type Message,
@@ -48,6 +49,7 @@ import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -632,6 +634,7 @@ export const MessageBubble = memo(
 
 function UserBubble({ message, actions }: { message: Message; actions: MessageActions }) {
   const attachments = attachmentsOf(message);
+  const workerPick = workerPickOf(message);
   const failed = message.status === "failed";
   const failure = failed && message.failureReason ? describeFailure(message.failureReason, { vendor: actions.vendorOf?.(message.conversationId) }) : null;
   const phase = actions.retry[message.id];
@@ -644,6 +647,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
           ) : null
         }
       >
+        {workerPick !== null && <WorkerPickTag pick={workerPick} className={PICK_TAG} />}
         {/* 只发文件没写字的消息没有文字气泡 */}
         {(message.text !== "" || attachments.length === 0) && (
           <div
@@ -663,6 +667,9 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
     </article>
   );
 }
+
+/** 用户气泡上方 /hub:worker 的只读标签：和气泡隔 6px（同附件和气泡的间距），靠右。 */
+const PICK_TAG = "mb-1.5 w-fit";
 
 /**
  * 用户消息的气泡 + 附件；没发出去时左边一个红色感叹号（照微信），垂直居中。
@@ -742,6 +749,7 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
       <SentBody unsent={failed ? <UnsentMark reason={reasonText} raw={reasonRaw} {...(noRetry ? {} : { onRetry: () => onRetry(pending.clientId) })} /> : null}>
+        {pending.workerPick && <WorkerPickTag pick={pending.workerPick} className={PICK_TAG} />}
         {(pending.text !== "" || pending.attachments.length === 0) && (
           <div data-bubble className={cn(BUBBLE, "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]")}>
             {pending.text}

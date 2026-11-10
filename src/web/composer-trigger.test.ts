@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ComposerSource, FILE_SEARCH_DEBOUNCE_MS, useComposerSuggest } from "./composer-suggest.ts";
 import { HUB_COMPOSER_COMMANDS } from "../shared/index.ts";
-import { detectComposerTrigger, insertSelection, rankCommands, rankMatches, splitPath, WORKER_COMMAND } from "./composer-trigger.ts";
+import { detectComposerTrigger, insertSelection, rankCommands, rankMatches, removeLeadingCommand, splitPath, WORKER_COMMAND } from "./composer-trigger.ts";
 import { queryClient } from "./query-client.ts";
 
 afterEach(() => {
@@ -151,6 +151,15 @@ describe("insertSelection", () => {
 
   it("带空格的路径照后台给的原样插入", () => {
     expect(insertSelection("@a", { start: 0, end: 2 }, '@"a b.md"')).toEqual({ text: '@"a b.md" ', cursor: 10 });
+  });
+});
+
+describe("removeLeadingCommand", () => {
+  it("拿掉开头到 end 的整段命令，连同后面一个空格或换行；后面没有就到末尾", () => {
+    const text = "/hub:worker claude opus high 修一下";
+    expect(removeLeadingCommand(text, text.indexOf(" 修"))).toBe("修一下");
+    expect(removeLeadingCommand("/hub:worker claude \n第一行\n第二行", 19)).toBe("第一行\n第二行");
+    expect(removeLeadingCommand("/hub:worker claude", 18)).toBe("");
   });
 });
 

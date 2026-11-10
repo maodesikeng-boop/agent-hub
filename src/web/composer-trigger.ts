@@ -68,6 +68,14 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
 }
 
 /**
+ * /hub:worker 选完：把开头的整段命令（到 end 为止，连同后面的一个空格或换行）从文字里拿掉，返回剩下的文字。
+ * 点标签重选时原有文字是用换行接在命令后面的（Composer），这个换行一起拿掉。
+ */
+export function removeLeadingCommand(text: string, end: number): string {
+  return text.slice(text[end] === " " || text[end] === "\n" ? end + 1 : end);
+}
+
+/**
  * 把 [start, end) 换成 insert 加一个空格，光标停在空格后。
  * 后面本来就是空格时吃掉它，不会变成两个空格。
  */

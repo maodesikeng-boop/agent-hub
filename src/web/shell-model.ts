@@ -204,16 +204,23 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
       // 传失败了什么都不清（文字和文件都留着）
       // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
+      // /hub:worker 选的标签：发出去才清（中途换过的不动），被拦、上传失败时和文字一起留着
+      const pick = slot.getPick();
       if (files.length === 0 && text.startsWith("/")) {
-        return hub.sendChecked(id, text).then(() => slot.clearIfMatch(text));
+        return hub.sendChecked(id, text, pick).then(() => {
+          slot.clearIfMatch(text);
+          slot.clearPickIfMatch(pick);
+        });
       }
       if (files.length === 0) {
         slot.set("");
-        hub.send(id, text);
+        slot.setPick(null);
+        hub.send(id, text, pick);
         return;
       }
-      return hub.sendWithFiles(id, text, files).then(() => {
+      return hub.sendWithFiles(id, text, files, pick).then(() => {
         slot.clearIfMatch(text);
+        slot.clearPickIfMatch(pick);
         staging.of(key).removeSent(files);
       });
     },

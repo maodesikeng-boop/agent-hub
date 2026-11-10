@@ -11,6 +11,7 @@ import {
   MAX_UPLOAD_BYTES,
   UPLOAD_CLIENT_CONCURRENCY,
   type Attachment,
+  type WorkerPick,
 } from "../shared/index.ts";
 import { localClient, type HubClient } from "./client.ts";
 import { ErrorNotice, errorText, newClientId, type ErrorLike } from "./format.ts";
@@ -294,7 +295,10 @@ export function useNoticeAutoHide({ notice, dismissNotice }: Pick<StagedFiles, "
   }, [notice]);
 }
 
-/** 一个对话的草稿槽：只通知订阅了这个对话的输入框重渲染，打字不会引起 App / 消息列表重渲染。 */
+/**
+ * 一个对话的草稿槽：只通知订阅了这个对话的输入框重渲染，打字不会引起 App / 消息列表重渲染。
+ * 文字和 /hub:worker 选的标签（pick，一条消息最多一个，没有是 null）各是一个 store：打字不通知标签，换标签不通知文字的订阅者。
+ */
 export interface DraftSlot {
   store: StoreApi<string>;
   get: () => string;
@@ -302,6 +306,11 @@ export interface DraftSlot {
   /** 发送成功后清理：如果草稿 trim 后仍等于刚发出的文字才清空，用户在中途改过的不动。 */
   clearIfMatch: (trimmed: string) => void;
   subscribe: (listener: () => void) => () => void;
+  pick: StoreApi<WorkerPick | null>;
+  getPick: () => WorkerPick | null;
+  setPick: (pick: WorkerPick | null) => void;
+  /** 发送成功后清理：标签还是发出去的那一个才清掉，中途换过的不动。 */
+  clearPickIfMatch: (sent: WorkerPick | null) => void;
 }
 
 export function useDraftStore<K extends string | number>() {
@@ -314,6 +323,10 @@ export function useDraftStore<K extends string | number>() {
     const set = (value: string) => {
       if (store.getState() !== value) store.setState(value, true);
     };
+    const pick = createStore<WorkerPick | null>(() => null);
+    const setPick = (next: WorkerPick | null) => {
+      if (pick.getState() !== next) pick.setState(next, true);
+    };
     const slot: DraftSlot = {
       store,
       get: () => store.getState(),
@@ -322,6 +335,12 @@ export function useDraftStore<K extends string | number>() {
         if (store.getState().trim() === trimmed) set("");
       },
       subscribe: (listener: () => void) => store.subscribe(listener),
+      pick,
+      getPick: () => pick.getState(),
+      setPick,
+      clearPickIfMatch: (sent) => {
+        if (sent !== null && pick.getState() === sent) setPick(null);
+      },
     };
     slotsRef.current.set(key, slot);
     return slot;
