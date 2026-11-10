@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { CircleGauge } from "lucide-react";
 import { useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
@@ -47,21 +48,10 @@ function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVend
   return sections;
 }
 
-/** 16px 的小圆环：已用的部分画成弧，颜色跟着文字走（currentColor）。 */
-function Ring({ percent }: { percent: number }) {
-  const r = 6;
-  const c = 2 * Math.PI * r;
-  return (
-    <svg viewBox="0 0 16 16" className="size-4 -rotate-90" aria-hidden="true">
-      <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity={0.2} strokeWidth={2} />
-      {percent > 0 && <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeDasharray={`${(c * percent) / 100} ${c}`} />}
-    </svg>
-  );
-}
-
 /**
- * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 图标按钮（size="icon-sm"），只显示小圆环图标（无旁白文字），
- * 快用完、用完换颜色，无障碍名称与悬停提示保留完整状态。点开按厂商分组看每个窗口。没有数据不显示。
+ * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 图标按钮（size="icon-sm"），使用 CircleGauge 线性图标，
+ * 与设置齿轮统一风格（单色不随用量填充或变色，与齿轮同色），无障碍名称与悬停提示保留完整状态。
+ * 用量只在点开的浮层里显示。没有数据不显示。
  * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在；
  * 每次点开向服务端要一次（服务端缓存 5 分钟）并在打开期间定时刷新，问不到、问失败就没有那几块。
  */
@@ -91,7 +81,6 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
   const blocks = [...quota, ...fetched];
   const exhausted =
     quota.some((vendor) => vendor.exhausted) || fetched.some((vendor) => vendor.exhausted || vendor.windows.some((w) => w.percent >= 100));
-  const warning = quota.some((vendor) => vendor.windows[0]?.warning);
   const label = exhausted ? "Usage limit reached" : window ? `${window.short} usage ${window.percent}%` : "Usage";
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -101,9 +90,9 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
           size="icon-sm"
           aria-label={label}
           title={label}
-          className={cn("shrink-0", exhausted ? "text-danger hover:text-danger" : warning && "text-warn-foreground hover:text-warn-foreground")}
+          className="shrink-0"
         >
-          <Ring percent={exhausted ? 100 : (window?.percent ?? 0)} />
+          <CircleGauge aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" aria-label="Usage">

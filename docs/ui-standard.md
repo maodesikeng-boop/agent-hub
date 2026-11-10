@@ -144,7 +144,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-60`）。
 
-**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）；要带字的（额度）用 `size="sm"`，同样没有底色。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
+**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
 
 ## 7. 聚焦态
 
@@ -238,7 +238,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **额度浮层**（左下角额度按钮点开，`QuotaPopover`）：
   - 结构：一家厂商一组，厂商名做组标题（13.5px、500、灰，组标题和内容之间 8px）；组与组之间 24px（`gap-6`）。按需查的厂商（Antigravity）分模型族（Gemini、Claude and GPT）：族名是组内一行小标题（12px `text-xs`、500、灰），各族之间 16px，族名和它的窗口之间 12px。**不用“·”拼厂商和模型族**（读屏：厂商是 `region`，模型族是 `group`）。
   - 一个窗口一行：左边窗口名（15px，`5h` / `7d`），右边已用百分比（15px，`tabular-nums`，不上色）；下面一条 6px 高的用量条（`h-1.5 rounded-full`，轨道 `bg-sidebar-active`）；条下面“Resets 17:11”（12px 灰，`tabular-nums`；不是今天的写“Resets 11/16 13:13”）。行内各层间隔 4px，窗口与窗口之间 12px。没有额外的底色块、胶囊、卡片，浮层本身就是容器。
-  - **用量条颜色**（只用 `styles.css` 现有变量，不另写色值；`QuotaPopover.tsx` 的 `USAGE_BAR_COLORS` 一处）：正常 `bg-foreground/40`（中性灰）；偏高（≥ 80%，或 Claude 自己报 allowed_warning）`bg-caution`（琥珀）；用满（100% 或厂商报 rejected）`bg-foreground`（前景色实心）。**用满不用红色**，不像报错；百分比文字三档都是前景色。左下角的圆环按钮保持原样（快用完 `text-warn-foreground`、用完 `text-danger`）。
+  - **用量条颜色**（只用 `styles.css` 现有变量，不另写色值；`QuotaPopover.tsx` 的 `USAGE_BAR_COLORS` 一处）：正常 `bg-foreground/40`（中性灰）；偏高（≥ 80%，或 Claude 自己报 allowed_warning）`bg-caution`（琥珀）；用满（100% 或厂商报 rejected）`bg-foreground`（前景色实心）。**用满不用红色**，不像报错；百分比文字三档都是前景色。左下角的额度图标按钮与设置齿轮保持同色同风格的单色线性图标，不随用量变色，用量只在弹层里看。
 
 ## 12. 右栏（Needs You、Pieces）
 
@@ -329,7 +329,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 因为左栏 `72px` 常驻在窗口最左侧（正好覆盖 `--macos-traffic-lights-width: 72px`），去掉 `styles.css` 中 `@media (max-width: 1100px)` 下给 `.chat-main` 额外加的 `--macos-traffic-lights-width` 偏移以及 `PmProfile.tsx` / `App.tsx` 顶栏的多余窄屏左内边距。右栏照样推开对话（第 12 条）。
 - **左栏的行**：选中、悬停是这个项目经理的水果果冻底（第 4 条），头像 44px，第一行名字 + 右边的标注（两侧 `items-center justify-between gap-2`，左侧标题区 `min-w-0 flex-1 overflow-hidden` 绝不溢出遮挡右侧标注），第二行消息预览；没有消息的行第二行留空但占一样的高度，每行一样高。右边的标注只放一个，优先级：“等你确定”圆点（8px `size-2 rounded-full bg-status-active`，无文字，`aria-label` / `title` 为“等你确定”） > “等你”圆点（同样 8px 绿点，无文字，`aria-label` / `title` 为“等你”） > 时间。项目经理在忙不另加标记，照旧显示时间。
 - **已归档项目经理**：左栏每个设备组内（或单设备列表底部）将已归档项目经理收进默认折叠的“已归档”分组（样式同设备组头，右侧标数量；搜索中或当前选中已归档对话时自动展开），行右侧标剩余删除天数（`Deletes in 7d`，`tabular-nums`，不标“等你”或“等你确定”）。聊天页底部输入框换成归档状态条（`rounded-2xl bg-sidebar px-4 py-3`：左侧“已归档”与剩余天数用 `gap-3` 分开，右侧 `outline` `sm`“恢复”按钮，进行中显示 `Restoring…`）。资料页在会话组提供“归档…”及二次确认弹窗（`max-w-110`）；已归档时顶部第一组显示归档状态与“恢复”按钮，隐藏会话组。
-- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `8px`、底部 `20px` 渐隐：`mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)`）与底部内边距 `pb-3`，使列表滚动经过底部栏和顶部搜索栏时柔和过渡、不硬切头像，滚到底部时最后一项完整显示在渐变区上方。额度按钮：一个 16px 的小圆环（已用的部分画成弧，平时前景色 60%，快用完 `text-warn-foreground`、用完 `text-danger`）+“5h 37%”这样的窗口名和百分比（`tabular-nums`），用完写“额度用完”；点开浮层看每个厂商、每个窗口的明细（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude and GPT）各一块，同在“Antigravity”这个厂商标题下，组名是小标题（第 11 条）；没装或查失败就没有这几块。
+- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `8px`、底部 `20px` 渐隐：`mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)`）与底部内边距 `pb-3`，使列表滚动经过底部栏和顶部搜索栏时柔和过渡、不硬切头像，滚到底部时最后一项完整显示在渐变区上方。额度按钮：与右侧设置齿轮保持统一风格的 `icon-sm` 单色线性图标按钮（`CircleGauge`，16px，平时 `text-muted-foreground`，悬停 `hover:text-foreground` 与浅底 `hover:bg-accent`），不随用量填充或变色，与设置齿轮同色同风格；无障碍名称与悬停提示保留完整状态（如“5h usage 37%”“Usage limit reached”），用量只在点开的浮层里显示（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude and GPT）各一块，同在“Antigravity”这个厂商标题下，组名是小标题（第 11 条）；没装或查失败就没有这几块。
 - **每个对话有自己的网址**：`#/c/<对话编号>`（项目经理的对话）、`#/w/<对话编号>`（Worker 的对话）、`#/pm/<项目经理编号>`（资料页）。点左栏、点 Worker、打开资料页都会改网址（能前进后退）；刷新后回到原来那个，找不到才回到第一个。
 - **焦点**：打开或切换对话时，用鼠标的设备（`pointer: fine`）把焦点放进输入框（输入框不可用时不放）；触屏（手机、iPad）不放，不弹键盘。
 - **多台设备（联机，`docs/multi-device-design.md` 第 4 节）**：只有一台时左栏、网址、弹窗和没有联机时一模一样。两台以上：
