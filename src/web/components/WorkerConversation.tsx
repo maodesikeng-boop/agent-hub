@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { useCallback, useMemo } from "react";
-import type { ConversationId, Message, SessionState } from "../../shared/index.ts";
+import { WORKER_RETENTION_DAYS, type ConversationId, type Message, type SessionState } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
@@ -113,20 +113,26 @@ export function WorkerConversation({
         <div className="flex flex-1 items-center justify-center text-muted-foreground">Piece not found</div>
       ) : (
         <>
-          <div className="relative min-h-0 flex-1">
-            <MessageList
-              messages={view.messages}
-              pending={pending}
-              agentOf={agentOf}
-              hasMore={view.hasMore}
-              older={older}
-              onLoadOlder={handleLoadOlder}
-              onRetry={onRetry}
-              actions={actions}
-              status={statusNode}
-              statusAgent={identity}
-            />
-          </div>
+          {view.conversation.purgedAt !== undefined ? (
+            <div role="status" className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-muted-foreground">
+              Conversation cleared after the {WORKER_RETENTION_DAYS}-day retention period
+            </div>
+          ) : (
+            <div className="relative min-h-0 flex-1">
+              <MessageList
+                messages={view.messages}
+                pending={pending}
+                agentOf={agentOf}
+                hasMore={view.hasMore}
+                older={older}
+                onLoadOlder={handleLoadOlder}
+                onRetry={onRetry}
+                actions={actions}
+                status={statusNode}
+                statusAgent={identity}
+              />
+            </div>
+          )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase !== "ended" && (
               <DraftComposer

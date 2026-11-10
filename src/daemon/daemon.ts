@@ -36,6 +36,7 @@ import {
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
+import { startWorkerRetention } from "./db-retention.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import {
@@ -168,6 +169,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     db?: Db;
     lock?: DirLock;
     stopFileCleanup?: () => void;
+    stopWorkerRetention?: () => void;
     sleepInhibitor?: SleepInhibitor;
     unsubscribe: Unsubscribe[];
   } = { unsubscribe: [] };
@@ -191,6 +193,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     parts.stopFileCleanup?.();
+    parts.stopWorkerRetention?.();
     if (setup) await step("准备命令", () => setup.shutdown());
     if (executor) {
       await step("执行器", async () => {
@@ -226,8 +229,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 1. 目录锁
     parts.lock = acquireLock(paths.lockFile);
     // 2. 开库并迁移
-    const { db } = openStore(paths);
+    const { db, autoVacuum } = openStore(paths);
     parts.db = db;
+    if (autoVacuum.converted) log(`${LOG_PREFIX} 账本数据库已改成增量回收模式（整库重建了一次${autoVacuum.backupFile ? `，重建前的备份：${autoVacuum.backupFile}` : ""}）`);
     // realpath 过的两个目录，账本和启动准备用同一份：
     // - dataDir：Worker 的可写范围（write-scope.ts）按真实路径匹配，沙箱认的是真实路径；
     // - stateDir：Worker 设置文件里 state/ 的兜底拒绝规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
@@ -444,6 +448,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
+    // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
+    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, log });
     // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
     const runAutoRenew = () => {
       try {

@@ -8,7 +8,8 @@ import type { AgentSessionRow, ConversationId, SessionId, WorkerRecord } from ".
 import { formatCount } from "../../shared/count-format.ts";
 import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
-import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_RETENTION_DAYS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 import { formatDurationShort } from "../../shared/schedule.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
 import { agentEffortOf, effortLabel, vendorLabel } from "../../shared/vendors.ts";
@@ -104,7 +105,7 @@ export interface WorkerViewDeps {
 }
 
 export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, deps: WorkerViewDeps) {
-  const { now } = ctx;
+  const { db, now } = ctx;
   const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
@@ -151,6 +152,18 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     }
     if (last?.kind === "text") return "在写回复";
     return "在想下一步";
+  };
+
+  /** 对话被保留期清掉的 Worker 的一句话说明（没清过是 null）：消息和步骤日志没了，任务说明、汇报、分支还在。 */
+  const purgedNote = (worker: WorkerDbRow): string | null => {
+    const purgedAt = db.get<{ purged_at: number | null }>("SELECT purged_at FROM conversation_purges WHERE conversation_id = ?", worker.worker_conversation_id)?.purged_at ?? null;
+    if (purgedAt === null) return null;
+    const d = new Date(purgedAt);
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return (
+      `对话已按保留期清理（收工满 ${WORKER_RETENTION_DAYS} 天，${day} 清的）：消息、步骤日志已删；` +
+      `任务说明和每轮汇报还在，用 \`${HUB_COMMAND} worker show ${worker.id} --task\` / \`--report\` 看，也能 \`${HUB_COMMAND} worker search\` 搜到`
+    );
   };
 
   const show = (caller: { pmId: number }, args: HubArgs<"worker.show">, context: HubCallContext): HubResult<"worker.show"> => {
@@ -222,6 +235,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));
     else if (context.prError) lines.push(`PR 查不了（${context.prError}）`);
     lines.push(`原始记录：${context.transcript ?? "找不到"}`);
+    const purged = purgedNote(worker);
+    if (purged !== null) lines.push(purged);
 
     return { text: lines.join("\n"), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
   };
@@ -296,6 +311,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
       .all<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", worker.worker_conversation_id)
       .map((s) => steps.rows(s.id));
     const name = `Worker #${worker.id}“${worker.title}”`;
+    const purged = purgedNote(worker);
+    if (purged !== null) return { text: `${name}：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
     const text = sessions.every((rows) => rows.length === 0)
       ? `${name}还没有记录到任何一步。`
       : `${name}账本里留着的全部步骤（${sessions.length} 个会话）：\n${workerStatsLines(sessions).join("\n")}`;
@@ -312,6 +329,8 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     const session = workerSession(worker);
     const rows = steps.rows(session.id);
     const open = liveOf(session.id).activity !== "idle" && steps.openTurn(session.id) !== null;
+    const purged = purgedNote(worker);
+    if (purged !== null) return { text: `Worker #${worker.id}“${worker.title}”：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
     const shown = logSteps(rows, open).slice(-last);
     const head = `Worker #${worker.id}“${worker.title}”最近 ${shown.length} 步（从旧到新）：`;
     const text =

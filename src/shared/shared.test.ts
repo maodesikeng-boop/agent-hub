@@ -461,6 +461,7 @@ describe("M2：界面接口", () => {
       "project.created",
       "folders.updated",
       "conversation.created",
+      "conversation.purged",
       "session.created",
       "schedule.updated",
       "schedule.removed",

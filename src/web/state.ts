@@ -238,6 +238,15 @@ export function applyChange(state: HubState, change: Change): HubState {
         conversations: { ...state.conversations, [conversation.id]: { conversation, messages: [], hasMore: false } },
       };
     }
+    case "conversation.purged": {
+      const { conversationId, purgedAt } = change.data;
+      const view = state.conversations[conversationId];
+      if (!view) return next;
+      return {
+        ...next,
+        conversations: { ...state.conversations, [conversationId]: { conversation: { ...view.conversation, purgedAt }, messages: [], hasMore: false } },
+      };
+    }
     case "session.created":
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
   }
