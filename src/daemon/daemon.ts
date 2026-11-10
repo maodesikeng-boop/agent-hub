@@ -229,9 +229,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 1. 目录锁
     parts.lock = acquireLock(paths.lockFile);
     // 2. 开库并迁移
-    const { db, autoVacuum } = openStore(paths);
+    const { db, migration, autoVacuum } = openStore(paths);
     parts.db = db;
-    if (autoVacuum.converted) log(`${LOG_PREFIX} 账本数据库已改成增量回收模式（整库重建了一次${autoVacuum.backupFile ? `，重建前的备份：${autoVacuum.backupFile}` : ""}）`);
+    const backupFile = autoVacuum.backupFile ?? migration.backupFile;
+    if (autoVacuum.converted) {
+      log(`${LOG_PREFIX} 账本数据库已改成增量回收模式（整库重建了一次${backupFile ? `，重建前的备份：${backupFile}` : ""}）`);
+    } else if (autoVacuum.error !== undefined) {
+      log(`${LOG_PREFIX} 账本数据库改成增量回收模式没成，本次跳过（不影响运行，下次启动再试）：${autoVacuum.error}`);
+    }
     // realpath 过的两个目录，账本和启动准备用同一份：
     // - dataDir：Worker 的可写范围（write-scope.ts）按真实路径匹配，沙箱认的是真实路径；
     // - stateDir：Worker 设置文件里 state/ 的兜底拒绝规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；

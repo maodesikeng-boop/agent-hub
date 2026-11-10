@@ -545,7 +545,7 @@ export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 
 /** 每小时巡检一次到期归档 PM。 */
 export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
-// ---- 已收工 Worker 的对话保留期（migrations/0019_conversation_purged.sql、daemon/ledger/worker-retention.ts、daemon/db-retention.ts）----
+// ---- 已收工 Worker 的对话保留期（migrations/0020_conversation_purges.sql、daemon/ledger/worker-retention.ts、daemon/db-retention.ts）----
 /** Worker 收工（workers.updated_at：收工时写，之后不再改）满这么多天，清掉它自己对话里的消息和步骤日志等；基本记录和项目经理对话里的汇报留着。 */
 export const WORKER_RETENTION_DAYS = 30;
 export const WORKER_RETENTION_MS = WORKER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -553,6 +553,8 @@ export const WORKER_RETENTION_MS = WORKER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 export const WORKER_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 /** 一批（一个事务、一次写锁）最多删多少行（消息、步骤日志等各表加起来）：删得少，锁库的时间就短。 */
 export const WORKER_PURGE_BATCH_ROWS = 500;
+/** 一批最多看几个候选 Worker（预算花完就停，多取没用；取少了下一批还会取）。 */
+export const WORKER_PURGE_CANDIDATES_PER_BATCH = 20;
 /** 一轮巡检最多删多少行：超了留给下一轮（批与批之间让出事件循环，别的请求照常进来）。按一个月 3 万条消息、5 万步日志算，一小时 5000 行一天能清 12 万行。 */
 export const WORKER_PURGE_ROUND_MAX_ROWS = 5_000;
 /** 增量回收数据库空间（PRAGMA incremental_vacuum）：每次最多回收多少页（4 KB 一页，1000 页约 4 MB）、一轮最多回收多少页。 */

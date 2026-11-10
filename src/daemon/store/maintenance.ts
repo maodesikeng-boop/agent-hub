@@ -27,22 +27,48 @@ export interface EnsureIncrementalOptions {
 }
 
 export interface EnsureIncrementalResult {
-  /** 这次把库重建成了 INCREMENTAL；本来就是（或没有文件的内存库）是 false。 */
+  /** 这次把库重建成了 INCREMENTAL；本来就是（或没有文件的内存库、或重建失败跳过）是 false。 */
   converted: boolean;
   backupFile?: string;
+  /** 重建失败（磁盘空间不足、别的进程占着锁等）时的原因：跳过本次重建，不挡住后台启动，下次启动再试。 */
+  error?: string;
 }
 
-/** 老库改成增量回收模式：先备份、再 PRAGMA auto_vacuum = INCREMENTAL + VACUUM。不能在事务里调。已经是 INCREMENTAL 什么都不做。 */
+/**
+ * 老库改成增量回收模式：先备份、再 PRAGMA auto_vacuum = INCREMENTAL + VACUUM。不能在事务里调。已经是 INCREMENTAL 什么都不做。
+ * 磁盘空间不足或被别的进程锁住时返回 `{ converted: false, error }`，不把库弄坏、也不挡住后台启动（下次启动再试）。
+ */
 export function ensureIncrementalVacuum(db: Db, options: EnsureIncrementalOptions = {}): EnsureIncrementalResult {
   if (db.inTransaction) throw new Error("ensureIncrementalVacuum() must not be called inside a transaction: VACUUM cannot run in one.");
-  if (autoVacuumMode(db) === AUTO_VACUUM_INCREMENTAL) return { converted: false };
+  const before = autoVacuumMode(db);
+  if (before === AUTO_VACUUM_INCREMENTAL) return { converted: false };
   // 内存库、临时库：没有文件可整理，也不用备份
   if (mainDbFile(db) === null) return { converted: false };
-  const backupFile = options.backup === false ? undefined : backupDatabase(db, userVersion(db), options.now ?? Date.now);
-  db.exec(`PRAGMA auto_vacuum = ${AUTO_VACUUM_INCREMENTAL}`);
-  db.exec("VACUUM");
-  if (autoVacuumMode(db) !== AUTO_VACUUM_INCREMENTAL) throw new Error("VACUUM did not switch the database to auto_vacuum = INCREMENTAL");
-  return { converted: true, ...(backupFile !== undefined ? { backupFile } : {}) };
+  let backupFile: string | undefined;
+  try {
+    backupFile = options.backup === false ? undefined : backupDatabase(db, userVersion(db), options.now ?? Date.now);
+    db.exec(`PRAGMA auto_vacuum = ${AUTO_VACUUM_INCREMENTAL}`);
+    db.exec("VACUUM");
+    if (autoVacuumMode(db) !== AUTO_VACUUM_INCREMENTAL) {
+      return {
+        converted: false,
+        ...(backupFile !== undefined ? { backupFile } : {}),
+        error: "VACUUM did not switch the database to auto_vacuum = INCREMENTAL",
+      };
+    }
+    return { converted: true, ...(backupFile !== undefined ? { backupFile } : {}) };
+  } catch (error) {
+    try {
+      db.exec(`PRAGMA auto_vacuum = ${before}`);
+    } catch {
+      // 还原 PRAGMA 失败不影响跳过
+    }
+    return {
+      converted: false,
+      ...(backupFile !== undefined ? { backupFile } : {}),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export interface ReclaimOptions {

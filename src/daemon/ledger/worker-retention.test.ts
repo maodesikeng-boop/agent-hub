@@ -190,8 +190,16 @@ describe("已收工 Worker 的对话保留期", () => {
     expect(purgedAt(open)).toBeNull();
   });
 
-  it("项目经理的对话不删：私聊消息、Worker 的汇报和已收工那一行都在，只清 Worker 自己的对话", () => {
+  it("项目经理与总助（assistant）的对话不删：私聊消息、Worker 的汇报和已收工那一行都在，只清 Worker 自己的对话", () => {
     ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "m1", text: "小林你好" });
+    // 总助对话（kind = 'assistant'，无 pm_id / project_id）
+    const assistantConv = db.get<{ id: number }>(
+      "INSERT INTO conversations (kind, title, created_at) VALUES ('assistant', '总助', 0) RETURNING id",
+    )!.id;
+    db.run(
+      "INSERT INTO messages (conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (?, 'user', 'text', '总助你好', 'assistant:1', 0, 0)",
+      assistantConv,
+    );
     const w = startWorker("修登录");
     const pmBefore = count("messages", "conversation_id = ?", lin.conversationId);
     expect(reportCount(w)).toBe(1);
@@ -201,10 +209,12 @@ describe("已收工 Worker 的对话保留期", () => {
 
     ledger.purgeExpiredWorkerConversations(endedAt + 365 * 24 * 60 * 60 * 1000);
     expect(count("messages", "conversation_id = ?", lin.conversationId)).toBe(pmWithEnded);
+    expect(count("messages", "conversation_id = ?", assistantConv)).toBe(1);
     expect(reportCount(w)).toBe(1);
     expect(count("messages", "conversation_id = ?", convOf(w))).toBe(0);
-    // 项目经理自己的会话、对话没有被打标记
+    // 项目经理与总助的会话、对话没有被打标记
     expect(count("conversation_purges", "conversation_id = ?", lin.conversationId)).toBe(0);
+    expect(count("conversation_purges", "conversation_id = ?", assistantConv)).toBe(0);
     expect(count("agent_sessions", "id = ?", lin.sessionId)).toBe(1);
   });
 
@@ -224,7 +234,7 @@ describe("已收工 Worker 的对话保留期", () => {
       const after = count("messages") + count("session_steps") + count("hub_calls") + count("handovers");
       // 一批最多 500 行（含顺手清的动作、小表）
       expect(before - after).toBeLessThanOrEqual(500);
-      expect(r.rows).toBeLessThanOrEqual(500 + 10);
+      expect(r.rows).toBeLessThanOrEqual(500);
       batches.push(r.rows);
       if (more && r.more) expect(purgedAt(big)).toBeNull();
       more = r.more;

@@ -25,7 +25,7 @@ export function openStore(paths: Pick<HubPaths, "stateDir" | "dbFile">, options:
   try {
     const migration = migrate(db, options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR);
     // 老库改成增量回收要整库重建一次：这次启动刚升级过的，迁移已经备份了；新库一开始就是增量回收，用不着备份
-    const autoVacuum = ensureIncrementalVacuum(db, { backup: migration.from > 0 && migration.backupFile === undefined });
+    const autoVacuum = ensureIncrementalVacuum(db, { backup: migration.backupFile === undefined });
     return { db, migration, autoVacuum };
   } catch (error) {
     db.close();

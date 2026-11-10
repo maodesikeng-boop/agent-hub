@@ -72,7 +72,16 @@ export function backupDatabase(db: Db, from: number, now: () => number): string 
   if (file === null) return undefined;
   let target = `${file}.bak-${from}-${backupStamp(now())}`;
   for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
-  db.run("VACUUM INTO ?", target);
+  try {
+    db.run("VACUUM INTO ?", target);
+  } catch (error) {
+    try {
+      rmSync(target, { force: true });
+    } catch {
+      // 清理半截备份失败不影响报错
+    }
+    throw error;
+  }
   pruneBackups(file, target);
   return target;
 }

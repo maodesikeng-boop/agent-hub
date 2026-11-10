@@ -118,6 +118,30 @@ describe("auto_vacuum 模式", () => {
     expect(autoVacuumMode(db)).toBe(2);
     expect(readdirSync(dir).filter((n) => n.includes(".bak-"))).toEqual([]);
   });
+
+  it("重建失败（如别的进程正占着写锁）：不抛错挡住启动、不弄坏库，等锁释放后下次能成", () => {
+    legacyDb(); // user_version 3, auto_vacuum = NONE
+    const holder = new DatabaseSync(file);
+    holder.exec("PRAGMA busy_timeout = 0");
+    holder.exec("BEGIN IMMEDIATE");
+    holder.exec("INSERT INTO blob_rows (body) VALUES ('locked')");
+    try {
+      db = openDatabase(file);
+      db.exec("PRAGMA busy_timeout = 10");
+      const failed = ensureIncrementalVacuum(db, { backup: false });
+      expect(failed.converted).toBe(false);
+      expect(failed.error).toMatch(/locked|busy/i);
+      expect(autoVacuumMode(db)).toBe(0);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+    expect(db!.get<{ n: number }>("SELECT count(*) AS n FROM blob_rows")?.n).toBe(400);
+    const ok = ensureIncrementalVacuum(db!, { backup: false });
+    expect(ok).toEqual({ converted: true });
+    expect(autoVacuumMode(db!)).toBe(2);
+    expect(db!.get<{ n: number }>("SELECT count(*) AS n FROM blob_rows")?.n).toBe(400);
+  });
 });
 
 describe("reclaimFreePages：空闲页分批还给文件系统", () => {

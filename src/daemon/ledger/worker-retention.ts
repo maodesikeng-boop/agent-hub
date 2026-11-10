@@ -13,7 +13,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ConversationId, SessionId, WorkerId } from "../../shared/domain.ts";
-import { WORKER_PURGE_BATCH_ROWS, WORKER_RETENTION_MS } from "../../shared/limits.ts";
+import { WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_CANDIDATES_PER_BATCH, WORKER_RETENTION_MS } from "../../shared/limits.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 
@@ -31,24 +31,31 @@ interface Candidate {
   conv: ConversationId;
 }
 
-/** 每批最多看几个候选 Worker（预算花完就停，多取没用；取少了下一批还会取）。 */
-const CANDIDATES_PER_BATCH = 20;
-
 const placeholders = (ids: readonly number[]) => (ids.length === 0 ? "(NULL)" : `(${ids.map(() => "?").join(",")})`);
 
 export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<LedgerFiles, "launchDir" | "setupLogsDir">) {
   const { db, now, write } = ctx;
 
   const sessionIdsOf = (c: Candidate): SessionId[] =>
-    db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ? OR conversation_id = ?", c.id, c.conv).map((r) => r.id);
+    db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE role = 'worker' AND (worker_id = ? OR conversation_id = ?)", c.id, c.conv).map((r) => r.id);
 
   /** 还有没做完的动作（排着的、在跑的：给它的消息、结束会话、建 worktree……）的 Worker：等做完再清。动作队列里没做完的很少，一次读完。 */
   const busyWorkers = (): number[] => {
     const ids = new Set<number>();
     const workerOfSession = (id: unknown) =>
-      typeof id === "number" ? db.get<{ worker_id: number | null }>("SELECT worker_id FROM agent_sessions WHERE id = ?", id)?.worker_id : undefined;
+      typeof id === "number"
+        ? db.get<{ worker_id: number | null }>(
+            "SELECT COALESCE(s.worker_id, w.id) AS worker_id FROM agent_sessions s LEFT JOIN workers w ON w.worker_conversation_id = s.conversation_id WHERE s.id = ?",
+            id,
+          )?.worker_id
+        : undefined;
     const workerOfMessage = (id: unknown) =>
-      typeof id === "number" ? db.get<{ worker_id: number | null }>("SELECT worker_id FROM messages WHERE id = ?", id)?.worker_id : undefined;
+      typeof id === "number"
+        ? db.get<{ worker_id: number | null }>(
+            "SELECT COALESCE(m.worker_id, w.id) AS worker_id FROM messages m LEFT JOIN workers w ON w.worker_conversation_id = m.conversation_id WHERE m.id = ?",
+            id,
+          )?.worker_id
+        : undefined;
     for (const { params } of db.all<{ params: string }>("SELECT params FROM actions WHERE status IN ('pending', 'running') AND json_valid(params)")) {
       const a = JSON.parse(params) as { workerId?: unknown; sessionId?: unknown; messageId?: unknown };
       for (const id of [typeof a.workerId === "number" ? a.workerId : undefined, workerOfSession(a.sessionId), workerOfMessage(a.messageId)]) {
@@ -58,12 +65,26 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     return [...ids];
   };
 
+  /** 快速判断现在有没有到期且还没清过的 Worker（一条只读查询，没有就不进写事务、也不扫 actions）。 */
+  const hasExpiredCandidate = (cutoff: number): boolean =>
+    db.get(
+      `SELECT 1 AS x FROM workers w
+        JOIN conversations c ON c.id = w.worker_conversation_id AND c.kind = 'worker'
+        WHERE w.status = 'ended' AND w.updated_at <= ?
+          AND w.worker_conversation_id != w.pm_conversation_id
+          AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
+        LIMIT 1`,
+      cutoff,
+    ) !== undefined;
+
   /** 到期、没清过、会话没在跑、没有没做完的动作的 Worker，先收工的在前。 */
   const eligible = (cutoff: number, limit: number): Candidate[] => {
     const busy = busyWorkers();
     return db.all<{ id: number; conv: number }>(
       `SELECT w.id, w.worker_conversation_id AS conv FROM workers w
+        JOIN conversations c ON c.id = w.worker_conversation_id AND c.kind = 'worker'
         WHERE w.status = 'ended' AND w.updated_at <= ?
+          AND w.worker_conversation_id != w.pm_conversation_id
           AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
           ${busy.length === 0 ? "" : `AND w.id NOT IN ${placeholders(busy)}`}
           AND NOT EXISTS (
@@ -83,17 +104,16 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
   /** 清一个 Worker，至多删 budget 行；全删完（并打上 purged_at）finished 是 true，预算花完还有剩的是 false。 */
   const purgeOne = (p: Pending, c: Candidate, budget: number, purgedAt: number): { rows: number; finished: boolean } => {
     const sessionIds = sessionIdsOf(c);
-    // 先删跑完了的动作：它们里的 messageId 要靠 messages 还在才查得到，所以赶在删消息之前（第一批就把全部消息对应的动作删光）
-    let rows = db.run(
-      `DELETE FROM actions WHERE status IN ('done', 'failed', 'abandoned') AND CASE WHEN json_valid(params) THEN
-         json_extract(params, '$.sessionId') IN ${placeholders(sessionIds)} OR json_extract(params, '$.workerId') = ?
-         OR json_extract(params, '$.messageId') IN (SELECT id FROM messages WHERE conversation_id = ?)
-       ELSE 0 END`,
-      ...sessionIds,
-      c.id,
-      c.conv,
-    ).changes;
+    // 先删跑完了的动作：它们里的 messageId 要靠 messages 还在才查得到，所以排在 messages 前面（actions 没删完绝不会开始删 messages）
     const heavy: Array<{ table: string; where: string; params: number[] }> = [
+      {
+        table: "actions",
+        where: `status IN ('done', 'failed', 'abandoned') AND CASE WHEN json_valid(params) THEN
+          json_extract(params, '$.sessionId') IN ${placeholders(sessionIds)} OR json_extract(params, '$.workerId') = ?
+          OR json_extract(params, '$.messageId') IN (SELECT id FROM messages WHERE conversation_id = ?)
+        ELSE 0 END`,
+        params: [...sessionIds, c.id, c.conv],
+      },
       { table: "messages", where: "conversation_id = ?", params: [c.conv] },
       { table: "session_steps", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
       { table: "hub_calls", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
@@ -102,8 +122,11 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
         where: `conversation_id = ? OR from_session_id IN ${placeholders(sessionIds)} OR to_session_id IN ${placeholders(sessionIds)}`,
         params: [c.conv, ...sessionIds, ...sessionIds],
       },
+      { table: "worker_background_waits", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
+      { table: "session_persona_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
     ];
-    let left = budget - rows;
+    let rows = 0;
+    let left = budget;
     for (const { table, where, params } of heavy) {
       if (left <= 0) return { rows, finished: false };
       const deleted = deleteChunk(table, where, params, left);
@@ -112,8 +135,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       if (deleted >= left) return { rows, finished: false };
       left -= deleted;
     }
-    rows += db.run(`DELETE FROM worker_background_waits WHERE session_id IN ${placeholders(sessionIds)}`, ...sessionIds).changes;
-    rows += db.run(`DELETE FROM session_persona_seen WHERE session_id IN ${placeholders(sessionIds)}`, ...sessionIds).changes;
     db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (?, ?)", c.conv, purgedAt);
     p.changes.push({ type: "conversation.purged", data: { conversationId: c.conv, purgedAt } });
     p.after.push(() => {
@@ -129,19 +150,29 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
    */
   const purgeBatch = (nowMs: number = now(), maxRows: number = WORKER_PURGE_BATCH_ROWS): WorkerPurgeBatch => {
     const cutoff = nowMs - WORKER_RETENTION_MS;
+    if (!hasExpiredCandidate(cutoff)) return { rows: 0, purged: [], more: false };
     const budget = Math.max(1, Math.floor(maxRows));
-    const result = write((p) => {
-      let rows = 0;
-      const purged: WorkerId[] = [];
-      for (const c of eligible(cutoff, CANDIDATES_PER_BATCH)) {
-        if (rows >= budget) break;
-        const one = purgeOne(p, c, budget - rows, nowMs);
-        rows += one.rows;
-        if (one.finished) purged.push(c.id);
+    const { rows, purged, candidatesCount } = write((p) => {
+      const candidates = eligible(cutoff, WORKER_PURGE_CANDIDATES_PER_BATCH);
+      let batchRows = 0;
+      const batchPurged: WorkerId[] = [];
+      for (const c of candidates) {
+        if (batchRows >= budget) break;
+        const one = purgeOne(p, c, budget - batchRows, nowMs);
+        batchRows += one.rows;
+        if (one.finished) batchPurged.push(c.id);
       }
-      return { rows, purged };
+      return { rows: batchRows, purged: batchPurged, candidatesCount: candidates.length };
     });
-    return { ...result, more: eligible(cutoff, 1).length > 0 };
+    const more =
+      candidatesCount === 0
+        ? false
+        : purged.length < candidatesCount
+          ? true
+          : candidatesCount < WORKER_PURGE_CANDIDATES_PER_BATCH
+            ? false
+            : eligible(cutoff, 1).length > 0;
+    return { rows, purged, more };
   };
 
   return { purgeBatch };

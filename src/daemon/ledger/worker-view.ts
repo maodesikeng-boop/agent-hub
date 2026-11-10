@@ -213,11 +213,12 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     } else if (maxTimeSummary && worker.status !== "ended" && !notStarted(worker)) {
       lines.push(`这一轮：${maxTimeSummary}`);
     }
+    const purged = purgedNote(worker);
     if (lastEnded?.end) {
       const seconds = turnSeconds(lastEnded);
       const took = seconds === null ? "" : `，用了 ${formatDuration(seconds)}`;
       lines.push(`上一轮：${outcomeText(lastEnded.end)}${took}，走了 ${toolCount(lastEnded)} 步`);
-    } else {
+    } else if (purged === null) {
       lines.push("上一轮：还没有");
     }
 
@@ -235,7 +236,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));
     else if (context.prError) lines.push(`PR 查不了（${context.prError}）`);
     lines.push(`原始记录：${context.transcript ?? "找不到"}`);
-    const purged = purgedNote(worker);
     if (purged !== null) lines.push(purged);
 
     return { text: lines.join("\n"), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
@@ -307,12 +307,12 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   /** --stats：所有换过代的会话里账本留着的全部步骤，汇成几行。 */
   const stats = (worker: WorkerDbRow, args: HubArgs<"worker.log">): HubResult<"worker.log"> => {
     if (args.last !== undefined) throw fail("invalid", "--stats 汇总全部步骤，不能和 --last 一起用");
-    const sessions = ctx.db
-      .all<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", worker.worker_conversation_id)
-      .map((s) => steps.rows(s.id));
     const name = `Worker #${worker.id}“${worker.title}”`;
     const purged = purgedNote(worker);
     if (purged !== null) return { text: `${name}：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
+    const sessions = ctx.db
+      .all<{ id: SessionId }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", worker.worker_conversation_id)
+      .map((s) => steps.rows(s.id));
     const text = sessions.every((rows) => rows.length === 0)
       ? `${name}还没有记录到任何一步。`
       : `${name}账本里留着的全部步骤（${sessions.length} 个会话）：\n${workerStatsLines(sessions).join("\n")}`;
@@ -326,11 +326,11 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     if (!Number.isSafeInteger(last) || last < 1 || last > WORKER_LOG_MAX_STEPS) {
       throw fail("invalid", `--last 要写 1 到 ${WORKER_LOG_MAX_STEPS} 之间的整数`);
     }
+    const purged = purgedNote(worker);
+    if (purged !== null) return { text: `Worker #${worker.id}“${worker.title}”：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
     const session = workerSession(worker);
     const rows = steps.rows(session.id);
     const open = liveOf(session.id).activity !== "idle" && steps.openTurn(session.id) !== null;
-    const purged = purgedNote(worker);
-    if (purged !== null) return { text: `Worker #${worker.id}“${worker.title}”：${purged}。`, data: { worker: toWorkerRecord(worker), steps: [] } };
     const shown = logSteps(rows, open).slice(-last);
     const head = `Worker #${worker.id}“${worker.title}”最近 ${shown.length} 步（从旧到新）：`;
     const text =

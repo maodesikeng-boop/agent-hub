@@ -1335,3 +1335,30 @@ describe("0015_browser_sessions：从 0014 的库升级", () => {
     expect(() => insert("b", "h1")).toThrow(/UNIQUE/);
   });
 });
+
+// ---- 0020_conversation_purges ----
+
+describe("0020_conversation_purges：从旧库升级", () => {
+  it("只加一张空的 conversation_purges 表，老数据一个字不变；对话删掉时自动级联删；再跑一遍也行", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(19));
+    const prevVersion = userVersion(db);
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: prevVersion, to: LATEST_VERSION });
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(20);
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(db.all("SELECT * FROM conversation_purges")).toEqual([]);
+    db.exec(`PRAGMA user_version = ${prevVersion}`);
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+
+    // 外键与 ON DELETE CASCADE：不存在的对话被拒，删掉对话时自动跟着清
+    expect(() => db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (99999, 100)")).toThrow(/FOREIGN KEY/);
+    const convId = db.get<{ id: number }>("INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', 1, 2, '临时', 0) RETURNING id")!.id;
+    db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (?, 123)", convId);
+    expect(db.all("SELECT * FROM conversation_purges")).toEqual([{ conversation_id: convId, purged_at: 123 }]);
+    db.run("DELETE FROM conversations WHERE id = ?", convId);
+    expect(db.all("SELECT * FROM conversation_purges")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

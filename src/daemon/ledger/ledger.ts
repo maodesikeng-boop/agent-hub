@@ -196,7 +196,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         )
         .map((row) => {
           if (endedWorkerConversations.has(row.id)) {
-            const hasMore = Boolean(db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id));
+            const hasMore = row.purged_at == null && Boolean(db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id));
             return { conversation: toConversation(row), messages: [], hasMore };
           }
           const { messages, hasMore } = page(
