@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^2.5.0
+        version: 2.5.0(zod@4.6.7)
       '@fastify/compress':
         specifier: ^9.3.0
         version: 9.3.0
@@ -182,6 +185,15 @@ packages:
 
   '@adobe/css-tools@4.5.0':
     resolution: {integrity: sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==}
+
+  '@agentclientprotocol/sdk@2.5.0':
+    resolution: {integrity: sha512-MFlXeIuwN6nZSK45SAsSnVjbLgQ2r4fnthoF1lQoGJP3PdaPRpOZeCF2Dds8S4cN8yZP5QbxB1bkJccGskmcYw==}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.4.0
+      zod: ^3.25.76 || ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/server':
+        optional: true
 
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
@@ -3222,6 +3234,10 @@ packages:
 snapshots:
 
   '@adobe/css-tools@4.5.0': {}
+
+  '@agentclientprotocol/sdk@2.5.0(zod@4.6.7)':
+    dependencies:
+      zod: 4.6.7
 
   '@antfu/install-pkg@2.1.0':
     dependencies:
