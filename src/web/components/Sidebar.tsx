@@ -174,7 +174,7 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
  * 左栏：每个项目经理一行（头像、名字、最后一条消息），点进去就是它唯一的那个对话。
  * 两台以上设备时按设备分组（组头可以折叠），最上面一组汇总所有设备的“等你确定”，每行带设备名；只有一台时和没有联机时一模一样。
  * layout 三档：wide 是 300px 宽栏，rail 是 72px 垂直头像窄栏（窄屏 1100px 以下，docs/ui-standard.md 第 16 条），page 是手机的整屏列表页（宽栏的内容、铺满、不显示选中）。
- * 没传 layout 时按 narrow（再没有就按窗口宽度）在 wide 和 rail 里选。
+ * 没传 layout 时按窗口宽度在 wide 和 rail 里选。
  */
 export function Sidebar({
   groups,
@@ -186,7 +186,6 @@ export function Sidebar({
   quota,
   quotaFetchable = false,
   layout: propLayout,
-  narrow: propNarrow,
   onSelect,
   onNewPm,
 }: {
@@ -202,15 +201,13 @@ export function Sidebar({
   quota: QuotaVendor[];
   /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
   quotaFetchable?: boolean;
-  /** 外壳指定的布局，优先于 narrow。 */
+  /** 外壳指定的布局。 */
   layout?: SidebarLayout;
-  /** 没传 layout 时：true 是 rail，false 是 wide；也没传就按窗口宽度。 */
-  narrow?: boolean;
   onSelect: (ref: ConversationRef) => void;
   onNewPm: () => void;
 }) {
   const queryNarrow = useMediaQuery(NARROW_QUERY);
-  const layout: SidebarLayout = propLayout ?? ((propNarrow ?? queryNarrow) ? "rail" : "wide");
+  const layout: SidebarLayout = propLayout ?? (queryNarrow ? "rail" : "wide");
   const narrow = layout === "rail";
   // 整屏列表页是“选一个进去”，不标选中；其余布局不变
   const active = layout === "page" ? null : propActive;

@@ -1,5 +1,10 @@
+import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
+import { MobileShell } from "./mobile/MobileShell.tsx";
+import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
+import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
@@ -10,7 +15,7 @@ import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { errorTitle } from "./format.ts";
-import { LOCAL_DEVICE } from "./devices.ts";
+import { LOCAL_DEVICE, routeDeviceOf } from "./devices.ts";
 import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
@@ -19,7 +24,12 @@ import { useShellModel } from "./shell-model.ts";
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
 
 export function App() {
-  const { qc, fleet, route, local, routedDevice, current, hub, state, content } = useShellModel({ autoSelect: true });
+  const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { replace, qc, fleet, route, local, routedDevice, current, hub, state, content } = useShellModel({ autoSelect: !mobile });
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [route, current.key, content?.railHasContent, mobile]);
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return (
@@ -94,11 +104,14 @@ export function App() {
   const notices = <Notices health={health} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
   const railToggle = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={toggleRail} />;
-  const toolbar = railOpen && !compact ? null : railToggle;
+  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
+  const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
+  const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
+  const leading = mobile ? <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
   const rail = railOpen ? (
     <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} avatarKey={avatarKey} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
   ) : null;
-  const top = compact ? rail : null;
+  const top = !mobile && compact ? rail : null;
 
   // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
   const deviceWaiting =
@@ -114,13 +127,7 @@ export function App() {
       </div>
     );
 
-  return (
-    <QueryClientProvider client={qc}>
-    <DeviceScope client={hub.client} server={state.server}>
-    <ModelCatalogProvider>
-    <div className="relative flex h-full">
-      {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；强调色 --primary 只在下面的 AccentScope 里 */}
-      <FruitTint colorKey={active?.avatarKey ?? null}>
+  const sidebar = (
       <Sidebar
         groups={groups}
         active={sidebarActive === null ? null : { device: current.key, id: sidebarActive }}
@@ -140,14 +147,14 @@ export function App() {
         }
         quota={quotaUsage(state)}
         quotaFetchable={quotaFetchable}
-        narrow={narrow}
+        layout={mobile ? "page" : narrow ? "rail" : "wide"}
         onSelect={select}
         onNewPm={() => {
           setCreating(true);
         }}
       />
-      <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
-      {/* 项目经理的会话（对话、它的 Worker、资料页、右栏）在它的强调色里；左栏和弹窗不在 */}
+  );
+  const chat = (
       <AccentScope colorKey={active?.avatarKey ?? null}>
       <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
         {deviceWaiting ? (
@@ -164,10 +171,12 @@ export function App() {
             schedules={state.schedules.filter((x) => x.pmId === profile.id)}
             rev={state.personaRev[profile.id] ?? 0}
             renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-            onBack={() => profileEntry && select({ device: current.key, id: profileEntry.id })}
+            onBack={mobile ? back : () => profileEntry && select({ device: current.key, id: profileEntry.id })}
           />
         ) : openWorker !== null ? (
           <WorkerConversation
+            mobile={mobile}
+            leading={leading}
             key={keyOf(openWorker)}
             title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
             readonly={workerLine?.readonly ?? false}
@@ -193,6 +202,8 @@ export function App() {
           />
         ) : active && view ? (
           <Conversation
+            mobile={mobile}
+            leading={leading}
             key={keyOf(active.id)}
             entry={active}
             view={view}
@@ -221,8 +232,19 @@ export function App() {
           </>
         )}
       </main>
-      {!compact && rail}
+      {!mobile && !compact && rail}
+      {mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} asks={railAsks} workers={railWorkers} openWorkerId={openWorker} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />}
       </AccentScope>
+  );
+  return (
+    <QueryClientProvider client={qc}>
+    <DeviceScope client={hub.client} server={state.server}>
+    <ModelCatalogProvider>
+    <div className="relative flex h-full">
+      {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；强调色 --primary 只在下面的 AccentScope 里 */}
+      <FruitTint colorKey={active?.avatarKey ?? null}>
+      <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
+      <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
       </FruitTint>
     </div>
     </ModelCatalogProvider>

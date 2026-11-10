@@ -627,3 +627,23 @@ describe("设置 → 设备", () => {
     expect(within(publicRegion).getByRole("button", { name: "Turn on" })).toBeInTheDocument();
   });
 });
+
+it("手机直达远端：清单及目标快照未到不误清路由，到达后仍清理真实无效编号", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("coarse"), addEventListener() {}, removeEventListener() {} }));
+  history.replaceState(null, "", `/#/d/${TOKYO}/c/999`);
+  const fleet = new Fleet(onePm("本机"), onePm("东京"));
+  let finishList!: (response: Response) => void;
+  let finishState!: (reply: { status: number; body: StateSnapshot }) => void;
+  fleet.remote.state = () => new Promise((resolve) => { finishState = resolve; });
+  fleet.install();
+  const original = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/api/devices") ? new Promise<Response>((resolve) => { finishList = resolve; }) : original(input, init));
+  installFakeWebSocket();
+  render(<App />);
+  await waitFor(() => expect(sockets("local")).toHaveLength(1));
+  expect(location.hash).toBe(`#/d/${TOKYO}/c/999`);
+  await act(async () => finishList(Response.json({ devices: [mac, tokyo] })));
+  expect(location.hash).toBe(`#/d/${TOKYO}/c/999`);
+  await act(async () => finishState({ status: 200, body: onePm("东京") }));
+  await waitFor(() => expect(location.hash).toBe(""));
+});

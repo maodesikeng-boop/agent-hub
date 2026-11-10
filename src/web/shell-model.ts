@@ -7,6 +7,7 @@ import { useHubQueryClient } from "./query-client.ts";
 import { failingHealth, listConversations, pendingAsks, quotaResetTimes, hasFetchedQuotaSession, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
+import { mobileBack } from "./mobile/back.ts";
 import { useRoute } from "./route.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
@@ -46,6 +47,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
   const { route, navigate, replace } = useRoute();
+  // HTTP 创建成功已确认编号有效（WebSocket 的变化可能晚到）；等所属对话同步完成或离开该路由后释放，仅保留一个槽。
+  const [pendingCreated, setPendingCreated] = useState<ConversationRef | null>(null);
   // 网址里的设备（没写是入口本机）；清单里没有（还没拉到、编号不对）先看入口本机
   const local = fleet.devices[0]!;
   const routedDevice = fleet.devices.find((d) => d.key === deviceKeyOf(route?.device, fleet.selfId));
@@ -90,12 +93,12 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
           ? entries.find((e) => e.pm !== null && e.pm.id === workerView?.conversation.pmId)
           : entries.find((e) => e.pm?.id === route.pmId);
   const firstUnarchived = entries.find((e) => e.pm?.archivedAt == null) ?? entries[0];
-  const active = routedEntry ?? firstUnarchived ?? null;
+  const active = routedEntry ?? (autoSelect ? firstUnarchived : null) ?? null;
   const select = useCallback(
     (ref: ConversationRef) => {
-      navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) });
+      navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) }, !autoSelect && route !== null);
     },
-    [navigate],
+    [navigate, autoSelect, route],
   );
   // 用户正开着的对话：资料页不算；打开着 Worker 的对话算它的项目经理的会话
   const activeId = profile ? null : (active?.id ?? null);
@@ -148,17 +151,34 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const localFirst = (localEntries.find((e) => e.pm?.archivedAt == null) ?? localEntries[0])?.id ?? null;
   useEffect(() => {
-    if (unknownDevice && localFirst !== null) replace({ view: "conversation", id: localFirst });
-  }, [unknownDevice, localFirst, replace]);
+    if (unknownDevice) {
+      if (!autoSelect) replace(null);
+      else if (localFirst !== null) replace({ view: "conversation", id: localFirst });
+    }
+  }, [unknownDevice, localFirst, replace, autoSelect]);
+
+  const shellReady = local.state.phase === "ready" &&
+    !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
+  const awaitingCreated = pendingCreated !== null && route?.view === "conversation" &&
+    route.id === pendingCreated.id && deviceKeyOf(route.device, fleet.selfId) === pendingCreated.device &&
+    routedEntry === undefined;
+  useEffect(() => {
+    if (!awaitingCreated) setPendingCreated(null);
+  }, [awaitingCreated]);
+  const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
+    (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
+  useEffect(() => {
+    if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);
+  }, [invalidMobileRoute, autoSelect, route, replace]);
 
   const here = useMemo(() => routeDeviceOf(current.key), [current.key]);
   const keyOf = useCallback((id: ConversationId) => conversationKey(current.key, id), [current.key]);
   const openWorkerConversation = useCallback(
     (id: ConversationId) => {
       if (compact) setCompactRailOpen(false);
-      navigate({ view: "worker", id, ...here });
+      navigate({ view: "worker", id, ...here }, !autoSelect && route?.view === "worker");
     },
-    [compact, navigate, here],
+    [compact, navigate, here, autoSelect, route?.view],
   );
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -215,10 +235,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
 
   // 保留 App 原来的提前返回边界：入口尚未就绪时不遍历列表。
-  const shellReady =
-    local.state.phase === "ready" &&
-    !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
-  const shared = { qc, fleet, route, local, routedDevice, current, hub, state };
+  const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
 
   const view = active ? state.conversations[active.id] : undefined;
@@ -226,6 +243,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
   const created = (device: string, conversationId: ConversationId) => {
     setCreating(false);
+    setPendingCreated({ device, id: conversationId });
     select({ device, id: conversationId });
   };
   const workerPmEntry = active;
@@ -247,7 +265,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     setRailPeek(closed || railNeedsYou ? null : railPm);
   };
   const openAsk = (messageId: MessageId) => {
-    if (active && openWorker !== null) navigate({ view: "conversation", id: active.id, ...here });
+    if (active && openWorker !== null) {
+      const parent = { view: "conversation", id: active.id, ...here } as const;
+      if (autoSelect) navigate(parent);
+      else mobileBack(parent, replace);
+    }
     setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
   };
   const avatarKey = active?.avatarKey ?? 0;

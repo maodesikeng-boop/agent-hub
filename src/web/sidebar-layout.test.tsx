@@ -1,4 +1,4 @@
-// 左栏的三档布局（Sidebar 的 layout）：wide 300px、rail 72px、page 手机整屏（铺满、不标选中）；layout 优先，没传时按 narrow。
+// 左栏的三档布局（Sidebar 的 layout）：wide 300px、rail 72px、page 手机整屏（铺满、不标选中）；layout 优先，没传时按窗口宽度。
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Sidebar, type SidebarLayout } from "./components/Sidebar.tsx";
@@ -11,7 +11,7 @@ const entry: ConversationEntry = { id: 1, name: "小林", avatarKey: 1, lastMess
 const groups = [{ key: "", name: "本机", platform: "darwin", status: "online" as const, lastOnlineAt: null, entries: [entry] }];
 const props = { waiting: new Set<string>(), asking: new Set<string>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
 
-const sidebar = (extra: { layout?: SidebarLayout; narrow?: boolean } = {}) => {
+const sidebar = (extra: { layout?: SidebarLayout } = {}) => {
   render(<Sidebar groups={groups} active={{ device: "", id: 1 }} onSelect={() => {}} {...props} {...extra} />);
   return screen.getByRole("complementary", { name: "Sidebar" });
 };
@@ -39,11 +39,7 @@ describe("Sidebar layout", () => {
     expect(row).not.toHaveClass("bg-jelly");
   });
 
-  it("没传 layout：narrow 决定（true 是 rail，false 是 wide）；传了 layout 就以它为准", () => {
-    expect(sidebar({ narrow: true })).toHaveClass("w-18");
-    cleanup();
-    expect(sidebar({ narrow: false })).toHaveClass("w-75");
-    cleanup();
-    expect(sidebar({ layout: "page", narrow: true })).toHaveClass("w-full");
+  it("没传 layout 时按媒体查询（默认宽屏）", () => {
+    expect(sidebar()).toHaveClass("w-75");
   });
 });
