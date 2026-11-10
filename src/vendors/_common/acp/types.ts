@@ -152,7 +152,7 @@ export interface AcpPermissionsConfig {
   allowOptionKinds?: readonly PermissionOptionKind[];
   /** 拒绝时优先选用的 option.kind 顺序（默认 ["reject_once", "reject_always"]）。 */
   rejectOptionKinds?: readonly PermissionOptionKind[];
-  /** 只读 Worker 下直接拒绝的 ToolKind 列表（默认 ["edit", "delete", "move"]）。 */
+  /** 只读 Worker 下直接拒绝的 ToolKind 列表（始终拒绝 edit/delete/move/execute 和非读取类 kind，此处只能追加拒绝）。 */
   writeToolKinds?: readonly ToolKind[];
   /** 只读 Worker 下额外视为写操作的工具名集合（不区分大小写精确匹配）。 */
   writeToolNames?: readonly string[];
@@ -162,7 +162,7 @@ export interface AcpPermissionsConfig {
     tool: string;
     annotations?: ConnectorToolAnnotations | null;
   } | null;
-  /** 厂商自定义权限裁决钩子：返回非 null 则直接采用，返回 null 则走通用策略。 */
+  /** 厂商自定义权限裁决钩子：通过只读安全检查后，返回非 null 则采用，返回 null 则走通用策略。 */
   decide?: (
     context: AcpPermissionDecisionContext,
   ) => RequestPermissionOutcome | null | Promise<RequestPermissionOutcome | null>;

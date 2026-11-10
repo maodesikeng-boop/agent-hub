@@ -17,6 +17,7 @@ import {
   EMPTY_TOKEN_USAGE,
   MAX_COMMANDS,
   MAX_MESSAGE_BYTES,
+  SESSION_STEPS_KEEP,
   agentLaunchArgs,
   buildReadonlyPolicy,
   notFoundCode,
@@ -63,6 +64,14 @@ interface AcpTestHarness {
   setReadonly(policy: ReadonlyPolicy | null): void;
   setFingerprint(fp: string): void;
   cleanup(): Promise<void>;
+}
+
+async function waitForLog(h: AcpTestHarness, event: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!h.logs().some((e) => e.event === event)) {
+    if (Date.now() >= deadline) throw new Error(`Missing fake ACP event: ${event}`);
+    await realSleep(10);
+  }
 }
 
 let nextSessionId = 100;
@@ -500,11 +509,106 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
 
     // 第三轮模拟 ignoreCancel：超时升级 SIGINT/SIGKILL 退出
     await h.driver.send(row.id, { messageIds: [34 as never], source: "user", text: "卡死不响应 cancel 的任务" });
-    await h.waitFor("message.processing", (e) => e.messageIds.includes(34 as never));
+    await h.waitFor("message.delivered", (e) => e.messageIds.includes(34 as never));
     await h.driver.interrupt(row.id);
 
     const exited = await h.waitFor("session.exited");
     expect(exited.reason).toBe("interrupt");
+  });
+
+  it.each(["initialize", "authenticate", "new"] as const)("%s 挂起时停止会收尾所有 Promise，且不谎报送达", async (phase) => {
+    const h = track(makeAcpHarness({
+      config: { authenticate: { enabled: true } },
+      script: {
+        hangOnInitialize: phase === "initialize",
+        hangOnAuthenticate: phase === "authenticate",
+        hangOnNew: phase === "new",
+      },
+      driverOptions: { interruptGraceMs: 40 },
+    }));
+    const row = h.addSession();
+    const sending = h.driver.send(row.id, { messageIds: [301 as never], source: "user", text: "pending" });
+    await waitForLog(h, phase === "new" ? "new_pending" : phase);
+    await h.driver.interrupt(row.id);
+    await sending;
+    expect(h.of("message.delivered")).toEqual([]);
+    expect(h.logs().filter((e) => e.event === "session/prompt")).toEqual([]);
+  });
+
+  it("空闲预热在 initialize 挂起时也能停止；end 在启动超时后可结束", async () => {
+    const h = track(makeAcpHarness({ script: { hangOnInitialize: true }, driverOptions: { interruptGraceMs: 40 } }));
+    const row = h.addSession();
+    const starting = h.driver.start(row.id).catch((error: unknown) => error);
+    await waitForLog(h, "initialize");
+    await h.driver.interrupt(row.id);
+    expect(await starting).toBeInstanceOf(DriverError);
+    expect(h.of("message.delivered")).toHaveLength(0);
+
+    const ending = track(makeAcpHarness({ script: { hangOnInitialize: true }, driverOptions: { startTimeoutMs: 1000 } }));
+    const pending = ending.addSession();
+    const sending = ending.driver.send(pending.id, { messageIds: [311 as never], source: "user", text: "init" }).catch((error: unknown) => error);
+    await waitForLog(ending, "initialize");
+    await ending.driver.end(pending.id);
+    expect(await sending).toBeInstanceOf(DriverError);
+    expect(ending.store.get(pending.id)!.status).toBe("ended");
+  });
+
+  it("取消响应晚于 SIGINT 时仍强杀忽略信号的进程，送达早于轮末", async () => {
+    const h = track(makeAcpHarness({
+      script: { ignoreSigint: true, cancelDelayMs: 150, turns: [{ waitForCancel: true }] },
+      driverOptions: { interruptGraceMs: 100 },
+    }));
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [302 as never], source: "user", text: "pending" });
+    expect(h.of("message.delivered")).toHaveLength(1);
+    expect(h.of("turn.ended")).toHaveLength(0);
+    await h.driver.interrupt(row.id);
+    await h.waitFor("turn.ended");
+    const exited = await h.waitFor("session.exited");
+    expect(exited.signal).toBe("SIGKILL");
+  });
+
+  it("恢复 RPC 不支持时先 load；同一会话跨进程的消息 UUID 不重复", async () => {
+    const h = track(makeAcpHarness({
+      script: { resumeCapability: true, resumeUnsupported: true, knownSessions: ["saved"] },
+    }));
+    const row = h.addSession({ vendorSessionId: "saved", hasCompletedTurn: true });
+    await h.driver.send(row.id, { messageIds: [303 as never], source: "user", text: "one" });
+    await h.waitFor("turn.ended");
+    h.setFingerprint("changed");
+    await h.driver.send(row.id, { messageIds: [304 as never], source: "user", text: "two" });
+    await h.waitFor("turn.ended", () => true, 2);
+    expect(h.of("session.started").every((e) => e.resumed)).toBe(true);
+    const ids = h.of("agent.text").map((e) => e.uuid);
+    expect(new Set(ids).size).toBe(2);
+    expect(h.logs().filter((e) => e.event === "session/load")).toHaveLength(2);
+  });
+
+  it("守护进程重启后恢复同一会话也不会重复 UUID", async () => {
+    const ids = [];
+    for (let i = 0; i < 2; i++) {
+      const h = track(makeAcpHarness({ script: { knownSessions: ["persisted"] } }));
+      const row = h.addSession({ vendorSessionId: "persisted", hasCompletedTurn: true });
+      await h.driver.send(row.id, { messageIds: [310 as never], source: "user", text: "reply" });
+      await h.waitFor("turn.ended");
+      ids.push(h.of("agent.text")[0]!.uuid);
+    }
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("无换行协议输出超限会强关；忙时待发队列有总字节上限", async () => {
+    const h = track(makeAcpHarness({ script: { turns: [{ unterminatedOutputBytes: MAX_MESSAGE_BYTES * 9 }] } }));
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [305 as never], source: "user", text: "overflow" });
+    await h.waitFor("session.exited");
+    expect(h.of("driver.error").some((e) => e.message.includes("frame exceeds"))).toBe(true);
+
+    const q = track(makeAcpHarness({ script: { turns: [{ waitForCancel: true }] } }));
+    const queuedRow = q.addSession();
+    await q.driver.send(queuedRow.id, { messageIds: [306 as never], source: "user", text: "busy" });
+    expect(await q.driver.send(queuedRow.id, { messageIds: [307 as never], source: "user", text: "x".repeat(MAX_MESSAGE_BYTES / 2 + 1) })).toEqual({ kind: "queued" });
+    expect(await q.driver.send(queuedRow.id, { messageIds: [308 as never], source: "user", text: "y".repeat(MAX_MESSAGE_BYTES / 2 + 1) })).toEqual({ kind: "rejected" });
+    await q.driver.interrupt(queuedRow.id);
   });
 
   it("resume（session/load 吞历史重放 vs 不吞重放、session/resume 直接续接、会话不存在回退 session/new）", async () => {
@@ -752,7 +856,7 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(outcomes["ro-mcp-readonly"]).toEqual({ outcome: "selected", optionId: "allow-always" });
     expect(outcomes["ro-mcp-unmarked"]).toEqual({ outcome: "selected", optionId: "reject-once" });
     expect(outcomes["ro-mcp-destructive"]).toEqual({ outcome: "selected", optionId: "reject-once" });
-    expect(outcomes["ro-exec-probe"]).toEqual({ outcome: "selected", optionId: "allow-always" });
+    expect(outcomes["ro-exec-probe"]).toEqual({ outcome: "selected", optionId: "reject-once" });
 
     if (canNestOsSandbox) {
       const probeLog = h.logs().find((e) => e.event === "probe_write");
@@ -925,6 +1029,57 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     }));
     const parsed = parseAcpAvailableCommands(manyCommands);
     expect(parsed).toHaveLength(MAX_COMMANDS);
+  });
+
+  it.each(["edit", "delete", "move", "execute", "other", undefined] as const)("只读 %s 默认拒绝，配置不能越过边界", async (kind) => {
+    const policy = buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy" });
+    const result = await decideAcpPermission({
+      request: {
+        sessionId: "s", toolCall: { toolCallId: "t", title: "tool", kind },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+      },
+      readonlyPolicy: policy, closing: false, signal: new AbortController().signal,
+    }, { writeToolKinds: [], rejectOptionKinds: ["allow_once"], decide: () => ({ outcome: "selected", optionId: "allow" }) });
+    expect(result).toEqual({ outcome: "cancelled" });
+  });
+
+  it("MCP 手动白名单也不能放行缺少 readOnlyHint 的请求", async () => {
+    const result = await decideAcpPermission({
+      request: {
+        sessionId: "s", toolCall: { toolCallId: "t", title: "mcp__docs__write", kind: "other" },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+      },
+      readonlyPolicy: buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy", connectors: { extraAllow: ["docs/*"] } }),
+      closing: false, signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ outcome: "cancelled" });
+  });
+
+  it("单个超大 Unicode chunk 分段后每条消息仍在字节上限内且内容完整", async () => {
+    const text = "你好🙂".repeat(MAX_MESSAGE_BYTES / 5);
+    const h = track(makeAcpHarness({ script: { turns: [{ textChunks: [text] }] } }));
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [309 as never], source: "user", text: "large chunk" });
+    await h.waitFor("turn.ended");
+    const chunks = h.of("agent.text").map((e) => e.text);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((c) => Buffer.byteLength(c) <= MAX_MESSAGE_BYTES)).toBe(true);
+  });
+
+  it("数千次工具调用后下一轮复用 toolCallId，生命周期仍各自完整", async () => {
+    const count = SESSION_STEPS_KEEP * 2;
+    const h = track(makeAcpHarness({ script: { turns: [
+      { toolCalls: Array.from({ length: count }, (_, i) => ({ toolCallId: `tool-${i}`, title: "read", kind: "read" })) },
+      { toolCalls: [{ toolCallId: "tool-0", title: "read", kind: "read" }] },
+    ] } }));
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [312 as never], source: "user", text: "many tools" });
+    await h.waitFor("turn.ended");
+    await h.driver.send(row.id, { messageIds: [313 as never], source: "user", text: "reuse" });
+    await h.waitFor("turn.ended", () => true, 2);
+    expect(h.of("agent.tool")).toHaveLength(count + 1);
+    expect(h.of("agent.tool_result")).toHaveLength(count + 1);
+    expect(new Set(h.of("agent.tool").map((e) => e.uuid)).size).toBe(count + 1);
   });
 
   it("分组式 SessionConfigSelectGroup 选项与取消态权限裁决", async () => {

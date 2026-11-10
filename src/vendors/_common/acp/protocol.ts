@@ -356,7 +356,7 @@ function isWriteToolCall(
   request: RequestPermissionRequest,
   cfg?: AcpPermissionsConfig,
 ): boolean {
-  const writeKinds = cfg?.writeToolKinds ?? DEFAULT_WRITE_TOOL_KINDS;
+  const writeKinds = [...DEFAULT_WRITE_TOOL_KINDS, ...(cfg?.writeToolKinds ?? [])];
   if (request.toolCall.kind && writeKinds.includes(request.toolCall.kind)) {
     return true;
   }
@@ -380,7 +380,7 @@ function isWriteToolCall(
  * - 只读 Worker（readonlyPolicy !== null）：
  *   1. MCP 连接器工具按 connectorToolAllowed 裁决（未标 readOnlyHint: true 的一律拒绝）；
  *   2. 写/改/删/移类工具一律拒绝；
- *   3. 只读读取、搜索、受外层只读 OS 沙箱约束的命令执行等放行。
+ *   3. 只读读取、搜索放行，其余未知操作默认拒绝。
  */
 export async function decideAcpPermission(
   context: AcpPermissionDecisionContext,
@@ -388,10 +388,6 @@ export async function decideAcpPermission(
 ): Promise<RequestPermissionOutcome> {
   if (context.closing || context.signal.aborted) {
     return { outcome: "cancelled" };
-  }
-  if (cfg?.decide) {
-    const custom = await cfg.decide(context);
-    if (custom !== null) return custom;
   }
   const { options } = context.request;
   if (options.length === 0) return { outcome: "cancelled" };
@@ -401,24 +397,30 @@ export async function decideAcpPermission(
 
   let allow = true;
   if (context.readonlyPolicy !== null) {
-    const mcp = cfg?.extractMcpTool
-      ? cfg.extractMcpTool(context.request)
-      : extractDefaultMcpTool(context.request);
+    const mcp = cfg?.extractMcpTool?.(context.request) ?? extractDefaultMcpTool(context.request);
     if (mcp !== null) {
-      allow = connectorToolAllowed(context.readonlyPolicy, mcp.server, mcp.tool, mcp.annotations ?? null);
-    } else if (isWriteToolCall(context.request, cfg)) {
-      allow = false;
+      allow = mcp.annotations?.readOnlyHint === true && mcp.annotations.destructiveHint !== true &&
+        connectorToolAllowed(context.readonlyPolicy, mcp.server, mcp.tool, mcp.annotations);
+    } else {
+      const kind = context.request.toolCall.kind;
+      allow = (kind === "read" || kind === "search") && !isWriteToolCall(context.request, cfg);
     }
+    // 明确的写操作不得被 MCP 元数据或厂商钩子覆盖。
+    if (isWriteToolCall(context.request, cfg) || context.request.toolCall.kind === "execute") allow = false;
+  }
+
+  if (allow && cfg?.decide) {
+    const custom = await cfg.decide(context);
+    if (context.signal.aborted) return { outcome: "cancelled" };
+    if (custom !== null) return custom;
   }
 
   if (allow) {
     const chosen =
-      selectOptionByKinds(options, allowKinds) ??
-      options.find((opt) => !rejectKinds.includes(opt.kind)) ??
-      options[0]!;
-    return { outcome: "selected", optionId: chosen.optionId };
+      selectOptionByKinds(options.filter((o) => DEFAULT_ALLOW_KINDS.includes(o.kind)), allowKinds);
+    return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
   }
-  const rejected = selectOptionByKinds(options, rejectKinds);
+  const rejected = selectOptionByKinds(options.filter((o) => DEFAULT_REJECT_KINDS.includes(o.kind)), rejectKinds);
   if (rejected) return { outcome: "selected", optionId: rejected.optionId };
   return { outcome: "cancelled" };
 }

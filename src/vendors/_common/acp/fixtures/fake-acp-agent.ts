@@ -41,6 +41,7 @@ export interface FakeAcpToolStep {
 export interface FakeAcpTurnScript {
   thoughtChunks?: string[];
   textChunks?: Array<string | { text: string; messageId?: string }>;
+  unterminatedOutputBytes?: number;
   toolCalls?: FakeAcpToolStep[];
   extensionRequests?: Array<{ method: string; params?: unknown }>;
   elicitation?: boolean;
@@ -85,6 +86,11 @@ export interface FakeAcpScript {
   };
   /** 启动后立即挂起不响应 initialize（测 start_timeout）。 */
   hangOnInitialize?: boolean;
+  hangOnAuthenticate?: boolean;
+  hangOnNew?: boolean;
+  resumeUnsupported?: boolean;
+  cancelDelayMs?: number;
+  ignoreSigint?: boolean;
   turns?: FakeAcpTurnScript[];
 }
 
@@ -227,7 +233,7 @@ writeLog({ event: "spawn", argv: process.argv.slice(2) });
 
 process.on("SIGINT", () => {
   writeLog({ event: "signal", signal: "SIGINT" });
-  process.exit(0);
+  if (!script.ignoreSigint) process.exit(0);
 });
 
 process.stdin.on("end", () => {
@@ -262,6 +268,7 @@ const app = agent({ name: "fake-acp-agent" })
   })
   .onRequest(methods.agent.authenticate, async (ctx) => {
     writeLog({ event: "authenticate", methodId: ctx.params.methodId });
+    if (script.hangOnAuthenticate) await new Promise(() => {});
     if (script.failAuth) {
       throw new RequestError(-32000, "Authentication rejected by fake agent");
     }
@@ -271,6 +278,10 @@ const app = agent({ name: "fake-acp-agent" })
   .onRequest(methods.agent.session.new, async (ctx) => {
     if (script.requireAuth && !authenticated) {
       throw new RequestError(-32000, "Authentication required before session/new");
+    }
+    if (script.hangOnNew) {
+      writeLog({ event: "new_pending" });
+      await new Promise(() => {});
     }
     sessionSeq += 1;
     const sessionId = `fake-sess-${process.pid}-${sessionSeq}`;
@@ -360,6 +371,7 @@ const app = agent({ name: "fake-acp-agent" })
   .onRequest(methods.agent.session.resume, async (ctx) => {
     const { sessionId } = ctx.params;
     writeLog({ event: "session/resume", sessionId, params: ctx.params });
+    if (script.resumeUnsupported) throw RequestError.methodNotFound("session/resume");
     if (script.resumeNotFound || !hasSavedSession(sessionId)) {
       throw new RequestError(-32002, `Resource not found: session ${sessionId}`);
     }
@@ -408,7 +420,10 @@ const app = agent({ name: "fake-acp-agent" })
   .onNotification(methods.agent.session.cancel, async (ctx) => {
     writeLog({ event: "session/cancel", sessionId: ctx.params.sessionId });
     const ctrl = activeTurnAbort.get(ctx.params.sessionId);
-    if (ctrl) ctrl.abort();
+    if (ctrl) {
+      if (script.cancelDelayMs) await new Promise((resolve) => setTimeout(resolve, script.cancelDelayMs));
+      ctrl.abort();
+    }
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
     const { sessionId, prompt } = ctx.params;
@@ -426,6 +441,10 @@ const app = agent({ name: "fake-acp-agent" })
     }
 
     try {
+      if (turnScript.unterminatedOutputBytes) {
+        process.stdout.write("x".repeat(turnScript.unterminatedOutputBytes));
+        await new Promise(() => {});
+      }
       if (turnScript.commandsUpdate) {
         await ctx.client.notify(methods.client.session.update, {
           sessionId,

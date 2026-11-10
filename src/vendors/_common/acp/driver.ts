@@ -3,6 +3,7 @@
 // - 完整握手流：initialize -> 可选 authenticate -> session/load（支持吞历史重放）或 session/resume（缺失自动回退 session/new）-> session/set_mode -> session/set_config_option（模型与思考档位两段式联动）；
 // - 完整对话生命周期：首轮系统提示词块注入、多轮复用、排队合并、session/cancel 正规打断（超时升级 SIGINT -> SIGKILL）、流式文本聚合、思考状态、工具调用生命周期、available_commands_update 命令同步、上下文与 token 用量更新、空闲关闭与残留清理；
 // - 内存与上限安全：流式拼接按 MAX_MESSAGE_BYTES 分段冲刷，单轮工具表按 SESSION_STEPS_KEEP 封顶并在轮末与退出时清空，命令缓存按 MAX_COMMANDS 封顶，进程退出关闭连接释放全部挂起请求，零后台轮询定时器。
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,11 +126,10 @@ interface AcpProc extends BaseProc<StartupOutcome> {
   acpConn: ClientConnection;
   acpReadableController: ReadableStreamDefaultController<AnyMessage> | null;
   streamEnded: boolean;
-  launchArgsUsed: string[];
+  processScope: string;
   readonlyPolicy: ReadonlyPolicy | null;
   initResponse: InitializeResponse | null;
   acpSessionId: string | null;
-  resumedActual: boolean;
   modes: SessionModeState | null;
   configOptions: SessionConfigOption[];
   swallowingReplay: boolean;
@@ -144,6 +144,7 @@ interface AcpProc extends BaseProc<StartupOutcome> {
   textMessageId: string | null;
   inThinkingRun: boolean;
   activeTools: Map<string, AcpTrackedToolCall>;
+  onPromptWritten: (() => void) | null;
 }
 
 interface AcpSessionState extends BaseSessionState<AcpProc, AcpBatch> {
@@ -226,6 +227,15 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     }
 
     if (!this.isPending(st, ids)) {
+      const queuedBytes = st.pending.reduce(
+        (n, e) => n + Buffer.byteLength(e.text) + e.prefixes.reduce((sum, p) => sum + Buffer.byteLength(p), 0),
+        0,
+      );
+      const entryBytes = Buffer.byteLength(entry.text) + entry.prefixes.reduce((n, p) => n + Buffer.byteLength(p), 0);
+      if (st.pending.length >= SESSION_STEPS_KEEP || queuedBytes + entryBytes > MAX_MESSAGE_BYTES) {
+        this.invalidInput(st, "ACP pending queue limit exceeded", ids);
+        return { kind: "rejected" };
+      }
       st.pending.push(entry);
       if (input.recovery) st.recoveryNote = true;
     }
@@ -244,7 +254,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       await stopBg;
       return;
     }
-    if (!this.busy(st)) return;
+    if (!this.busy(st) && proc.initSeen) return;
 
     st.stopRequested = true;
     st.turnInterrupted = true;
@@ -444,11 +454,19 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     const promptBlocks = buildAcpPromptBlocks(batch.userBlocks, systemBlock);
 
     const startedAt = Date.now();
-    this.markDelivered(st, batch);
-    this.markProcessing(st, batch, startedAt);
     this.update(st, { status: "running", lastEventAt: startedAt });
 
-    void this.#runPromptTurn(st, proc, batch, acpSessionId, promptBlocks, startedAt);
+    await new Promise<void>((resolve) => {
+      const onWritten = () => {
+        this.markDelivered(st, batch);
+        resolve();
+      };
+      proc.onPromptWritten = onWritten;
+      void this.#runPromptTurn(st, proc, batch, acpSessionId, promptBlocks, startedAt).finally(() => {
+        if (proc.onPromptWritten === onWritten) proc.onPromptWritten = null;
+        resolve();
+      });
+    });
   }
 
   async #spawnAndAwaitReady(
@@ -603,13 +621,27 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       },
     });
     const writable = new WritableStream<AnyMessage>({
-      write(message) {
-        if (child.stdin.destroyed || child.stdin.writableEnded) return;
+      write: (message) => {
+        if (child.stdin.destroyed || child.stdin.writableEnded) {
+          this.forceKillProc(st, proc);
+          throw new Error("ACP stdin is closed");
+        }
         const serialized = JSON.stringify(message)
           .replaceAll("\u2028", "\\u2028")
           .replaceAll("\u2029", "\\u2029");
-        return new Promise<void>((resolve) => {
-          child.stdin.write(`${serialized}\n`, () => resolve());
+        return new Promise<void>((resolve, reject) => {
+          child.stdin.write(`${serialized}\n`, (error) => {
+            if (error) {
+              this.forceKillProc(st, proc);
+              reject(error);
+              return;
+            }
+            if ("method" in message && message.method === "session/prompt") {
+              proc.onPromptWritten?.();
+              proc.onPromptWritten = null;
+            }
+            resolve();
+          });
         });
       },
     });
@@ -670,11 +702,10 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       acpConn,
       acpReadableController: readableController,
       streamEnded: false,
-      launchArgsUsed: rawLaunchArgs,
+      processScope: randomUUID(),
       readonlyPolicy: files.readonly ?? null,
       initResponse: null,
       acpSessionId: null,
-      resumedActual: false,
       modes: null,
       configOptions: [],
       swallowingReplay: false,
@@ -689,9 +720,32 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       textMessageId: null,
       inThinkingRun: false,
       activeTools: new Map(),
+      onPromptWritten: null,
     };
 
     this.attachChildProcess(st, proc, resolveExited, cleanupReadonlyTmp);
+    // 在公共行缓冲前检查协议帧，JSON 转义最多膨胀六倍，另留信封余量。
+    // 复用共享消息上限，避免无换行输出让公共 buffered 永久增长。
+    let partialLineBytes = 0;
+    let overflowed = false;
+    child.stdout.prependListener("data", (chunk: string) => {
+      if (overflowed) return;
+      let start = 0;
+      for (;;) {
+        const nl = chunk.indexOf("\n", start);
+        partialLineBytes += Buffer.byteLength(nl < 0 ? chunk.slice(start) : chunk.slice(start, nl));
+        if (partialLineBytes > MAX_MESSAGE_BYTES * 8) {
+          overflowed = true;
+          child.stdout.destroy();
+          this.reportError(st.id, "bad_output_line", "ACP protocol frame exceeds message limit");
+          this.forceKillProc(st, proc);
+          return;
+        }
+        if (nl < 0) break;
+        partialLineBytes = 0;
+        start = nl + 1;
+      }
+    });
     void this.#runHandshake(st, proc, launchCtx);
     return proc;
   }
@@ -759,51 +813,61 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           modeSetting === "resume" ||
           (modeSetting === "auto" && Boolean(init.agentCapabilities?.sessionCapabilities?.resume));
         const swallowReplay = continuation?.swallowReplayOnLoad !== false;
-        try {
-          if (useResumeRpc) {
-            const resumed = await proc.acpConn.agent.request(methods.agent.session.resume, {
+        const loadSaved = async () => {
+          proc.swallowingReplay = swallowReplay;
+          try {
+            const loaded = await proc.acpConn.agent.request(methods.agent.session.load, {
               sessionId: row.vendorSessionId,
               cwd: row.cwd,
               mcpServers,
               ...(additionalDirectories ? { additionalDirectories } : {}),
               ...(nativeSystemPrompt ? { systemPrompt: nativeSystemPrompt } : {}),
             });
+            // 确保同一 stdout 分片内排队的重放通知微任务在关闭 swallowingReplay 前执行完毕
+            await Promise.resolve();
+            await Promise.resolve();
+            if (!swallowReplay) {
+              const replayAt = Date.now();
+              this.#flushTextBuffer(st, proc, replayAt);
+              this.#closeOpenTools(st, proc, replayAt);
+            }
             sessionId = row.vendorSessionId;
-            modes = resumed.modes ?? null;
-            configOptions = [...(resumed.configOptions ?? [])];
+            modes = loaded.modes ?? null;
+            configOptions = [...(loaded.configOptions ?? [])];
             actuallyResumed = true;
-          } else {
-            proc.swallowingReplay = swallowReplay;
+          } finally {
+            proc.swallowingReplay = false;
+          }
+        };
+        try {
+          if (useResumeRpc) {
             try {
-              const loaded = await proc.acpConn.agent.request(methods.agent.session.load, {
+              const resumed = await proc.acpConn.agent.request(methods.agent.session.resume, {
                 sessionId: row.vendorSessionId,
                 cwd: row.cwd,
                 mcpServers,
                 ...(additionalDirectories ? { additionalDirectories } : {}),
                 ...(nativeSystemPrompt ? { systemPrompt: nativeSystemPrompt } : {}),
               });
-              // 确保同一 stdout 分片内排队的重放通知微任务在关闭 swallowingReplay 前执行完毕
-              await Promise.resolve();
-              await Promise.resolve();
-              if (!swallowReplay) {
-                const replayAt = Date.now();
-                this.#flushTextBuffer(st, proc, replayAt);
-                this.#closeOpenTools(st, proc, replayAt);
-              }
               sessionId = row.vendorSessionId;
-              modes = loaded.modes ?? null;
-              configOptions = [...(loaded.configOptions ?? [])];
+              modes = resumed.modes ?? null;
+              configOptions = [...(resumed.configOptions ?? [])];
               actuallyResumed = true;
-            } finally {
-              proc.swallowingReplay = false;
+            } catch (error) {
+              if (!(error instanceof RequestError) || error.code !== -32601 || !init.agentCapabilities?.loadSession) throw error;
+              await loadSaved();
             }
+          } else {
+            await loadSaved();
           }
         } catch (contErr) {
           proc.swallowingReplay = false;
           if (proc.closing !== null || proc.streamEnded || this.shuttingDown) {
             throw contErr;
           }
-          const allowFallback = continuation?.fallbackToNewOnFailure !== false;
+          const isMissing = this.#config.errors?.isSessionNotFoundError ?? defaultIsAcpSessionNotFoundError;
+          const unsupported = contErr instanceof RequestError && contErr.code === -32601;
+          const allowFallback = continuation?.fallbackToNewOnFailure !== false && (isMissing(contErr) || unsupported);
           if (!allowFallback) {
             throw contErr;
           }
@@ -827,7 +891,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       }
 
       proc.acpSessionId = sessionId;
-      proc.resumedActual = actuallyResumed;
       proc.modes = modes;
       proc.configOptions = configOptions;
       st.hasConversation = true;
@@ -878,6 +941,11 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         return;
       }
 
+      if (st.stopRequested) {
+        this.sigintForInterrupt(st, proc, "killTimer");
+        proc.resolveReady({ kind: "closed", reason: "interrupt" });
+        return;
+      }
       this.clearTimer(st, "startTimer");
       proc.initSeen = true;
       st.resumeHint = true;
@@ -996,6 +1064,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       if (proc.streamEnded || st.proc !== proc) return;
 
       const at = Date.now();
+      this.markProcessing(st, batch, at);
       this.#flushTextBuffer(st, proc, at);
       this.#closeOpenTools(st, proc, at);
 
@@ -1112,7 +1181,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     this.update(st, patch);
 
     this.clearTimer(st, "interruptTimer");
-    clearKillTimer(proc);
+    if (!proc.closing) clearKillTimer(proc);
     this.emit(st.id, event);
     this.resolveInterrupt(st);
     this.afterTurn(st, proc);
@@ -1135,7 +1204,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
 
   #scopedUuid(proc: AcpProc, suffix: string): string {
     const sid = proc.acpSessionId ?? "acp";
-    return `acp:${sid}:t${proc.turnSeq}:${suffix}`;
+    return `acp:${sid}:${proc.processScope}:t${proc.turnSeq}:${suffix}`;
   }
 
   #flushTextBuffer(st: AcpSessionState, proc: AcpProc, at: number): void {
@@ -1170,15 +1239,21 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     ) {
       this.#flushTextBuffer(st, proc, at);
     }
-    const deltaBytes = Buffer.byteLength(delta, "utf8");
-    if (proc.textBuffer !== "" && proc.textBufferBytes + deltaBytes > MAX_MESSAGE_BYTES) {
-      this.#flushTextBuffer(st, proc, at);
-    }
-    proc.textBuffer += delta;
-    proc.textBufferBytes += deltaBytes;
-    if (messageId !== null) proc.textMessageId = messageId;
-    if (proc.textBufferBytes >= MAX_MESSAGE_BYTES) {
-      this.#flushTextBuffer(st, proc, at);
+    const bytes = Buffer.from(delta, "utf8");
+    let offset = 0;
+    while (offset < bytes.length) {
+      let end = Math.min(bytes.length, offset + MAX_MESSAGE_BYTES - proc.textBufferBytes);
+      // UTF-8 续字节不能作为下一个分片的开头。
+      while (end < bytes.length && end > offset && (bytes[end]! & 0xc0) === 0x80) end--;
+      if (end === offset) {
+        this.#flushTextBuffer(st, proc, at);
+        continue;
+      }
+      proc.textBuffer += bytes.subarray(offset, end).toString("utf8");
+      proc.textBufferBytes += end - offset;
+      if (messageId !== null) proc.textMessageId = messageId;
+      offset = end;
+      if (proc.textBufferBytes >= MAX_MESSAGE_BYTES) this.#flushTextBuffer(st, proc, at);
     }
   }
 
@@ -1263,10 +1338,14 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
   ): void {
     if (st.proc !== proc || proc.streamEnded) return;
     const { update } = notification;
+    if (notification.sessionId !== proc.acpSessionId && proc.initSeen) return;
 
     if (proc.swallowingReplay && REPLAYED_HISTORY_SESSION_UPDATES.has(update.sessionUpdate)) {
       return;
     }
+
+    const batch = st.inFlight[0];
+    if (proc.initSeen && batch) this.markProcessing(st, batch, at);
 
     switch (update.sessionUpdate) {
       case "available_commands_update": {
@@ -1367,6 +1446,12 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
 
     if (proc.acpReadableController) {
       try {
+        if ((proc.acpReadableController.desiredSize ?? 0) <= -SESSION_STEPS_KEEP) {
+          this.reportError(st.id, "bad_output_line", "ACP incoming queue limit exceeded");
+          this.#closeAcpTransport(proc);
+          this.forceKillProc(st, proc);
+          return;
+        }
         proc.acpReadableController.enqueue(obj as unknown as AnyMessage);
       } catch {
         // 连接已关闭时忽略尾随消息
@@ -1376,6 +1461,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
 
   #closeAcpTransport(proc: AcpProc): void {
     proc.streamEnded = true;
+    proc.onPromptWritten = null;
     const ctrl = proc.acpReadableController;
     proc.acpReadableController = null;
     if (ctrl) {
@@ -1411,6 +1497,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
 
       const at = this.beginProcessClose(st, proc);
       st.cancelSent = false;
+      st.cachedCommands = null;
 
       if (!proc.initSeen) {
         if (proc.closing === null) {
@@ -1433,9 +1520,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
             at,
           });
           return;
-        }
-        if (proc.closing === "interrupt") {
-          for (const batch of st.inFlight) this.markDelivered(st, batch);
         }
         proc.resolveReady({ kind: "closed", reason: proc.closing });
       }
