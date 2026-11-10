@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
+import { AGENT_VENDORS, ALL_EFFORTS, ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { HUB_USAGE, runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
@@ -170,17 +170,15 @@ describe("hub cli", () => {
     });
 
     it("worker start --vendor sends the vendor; unknown vendor is a usage error", async () => {
-      for (const vendor of ["claude", "agy", "codex"]) {
+      for (const vendor of AGENT_VENDORS) {
         expect((await hub(["worker", "start", "--title", "修 X", "--vendor", vendor, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
       }
-      expect(ledger.calls.map((c) => c.args)).toEqual(
-        ["claude", "agy", "codex"].map((vendor) => ({ title: "修 X", vendor, task: "任务" })),
-      );
+      expect(ledger.calls.map((c) => c.args)).toEqual(AGENT_VENDORS.map((vendor) => ({ title: "修 X", vendor, task: "任务" })));
       ledger.calls.length = 0;
       for (const bad of ["gemini", "CLAUDE", ""]) {
         const r = await hub(["worker", "start", "--title", "修 X", "--vendor", bad, "--stdin"], { stdin: stdinOf("任务") });
         expect(r.code).toBe(HUB_EXIT.usage);
-        expect(r.stderr).toContain("--vendor 只能是 claude、agy、codex");
+        expect(r.stderr).toContain(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
       }
       expect(ledger.calls).toHaveLength(0);
     });
@@ -356,7 +354,9 @@ describe("hub cli", () => {
 
     it("the usage text lists the worker commands", async () => {
       const r = await hub(["--help"]);
-      for (const usage of [`${cmd} models [--vendor claude|agy|codex] [--refresh]`, `${cmd} worker start --title`, "--vendor claude|agy|codex", "--effort low|medium|high|xhigh|max|ultra", "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
+      const vendorUnion = AGENT_VENDORS.join("|");
+      const effortUnion = ALL_EFFORTS.join("|");
+      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
     });
@@ -383,7 +383,7 @@ describe("hub cli", () => {
     ])("usage error: hub %j", async (argv) => {
       const r = await hub([...argv]);
       expect(r.code).toBe(HUB_EXIT.usage);
-      expect(r.stderr).toContain(`${cmd} models [--vendor claude|agy|codex] [--refresh]`);
+      expect(r.stderr).toContain(`${cmd} models [--vendor ${AGENT_VENDORS.join("|")}] [--refresh]`);
       expect(ledger.calls).toHaveLength(0);
     });
   });
