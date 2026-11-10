@@ -757,7 +757,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(rail()).toBeInTheDocument();
   });
 
-  it("Piece 行不写状态词：在忙的标题带流光，空闲的静态；Pieces 标题不放水果果瓣头像（只有字后面的果瓣箭头）", async () => {
+  it("Piece 行不写状态词：在忙的标题带流光，空闲的静态；Pieces 标题不放水果果瓣头像（只有字后面的普通箭头）", async () => {
     await boot(
       crowd({
         conversations: [
@@ -780,7 +780,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(busyRows()).toEqual(["修 X"]);
     const heading = within(workerGroup()).getByRole("heading");
     expect(heading.querySelector("[data-neutral='true']")).toBeNull();
-    expect(heading.querySelectorAll("[data-wedge-arrow]")).toHaveLength(1);
+    expect(heading.querySelectorAll("button > svg")).toHaveLength(1);
     expect(heading.querySelector("button")!.firstChild).toHaveTextContent("Pieces");
   });
 

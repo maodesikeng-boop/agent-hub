@@ -41,14 +41,14 @@ function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWork
 const workerGroup = () => screen.getByRole("region", { name: /^Pieces/ });
 const asksGroup = () => screen.getByRole("region", { name: /^Needs You/ });
 const completedGroup = () => screen.getByRole("region", { name: /^Completed/ });
-/** 组标题后面的果瓣箭头（14px 圆角扇形 SVG）。 */
-const arrowOf = (group: HTMLElement) => within(group).getByRole("heading").querySelector<SVGElement>("[data-wedge-arrow]")!;
+/** 组标题后面的普通箭头（14px Lucide ChevronRight）。 */
+const arrowOf = (group: HTMLElement) => within(group).getByRole("heading").querySelector<SVGElement>("button > svg")!;
 /** 一组里的行和 Show more 之类的按钮（不含组标题那个收起按钮）。 */
 const buttons = (group: HTMLElement) => within(group).getAllByRole("button").filter((b) => !b.closest("h2"));
 const titleButton = (group: HTMLElement) => within(group).getByRole("heading").querySelector("button")!;
 
 describe("右栏：照 Claude desktop 的样子", () => {
-  it("三组标题（Needs You、Pieces、Completed）一模一样：12px、灰、500，不带个数；后面一个果瓣箭头；“等你确定”前一个 6px 强调色圆点", () => {
+  it("三组标题（Needs You、Pieces、Completed）一模一样：12px、灰、500，不带个数；后面一个普通箭头；“等你确定”前一个 6px 强调色圆点", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], avatarKey: 2 });
     const classes = new Set<string>();
     for (const [name, group] of [["Needs You", asksGroup()], ["Pieces", workerGroup()], ["Completed", completedGroup()]] as const) {
@@ -56,9 +56,9 @@ describe("右栏：照 Claude desktop 的样子", () => {
       expect(heading).toHaveTextContent(new RegExp(`^${name}$`));
       expect(heading).toHaveClass("text-xs", "font-medium", "text-muted-foreground");
       classes.add(heading.className);
-      // 标题里不放头像，只有字后面一个果瓣箭头
+      // 标题里不放头像，只有字后面一个普通箭头
       expect(heading.querySelector("[data-neutral='true']")).toBeNull();
-      expect(heading.querySelectorAll("[data-wedge-arrow]")).toHaveLength(1);
+      expect(heading.querySelectorAll("button > svg")).toHaveLength(1);
       expect(heading.querySelector("button")!.lastElementChild).toBe(arrowOf(group));
     }
     expect(classes.size).toBe(1);
@@ -326,16 +326,16 @@ describe("右栏：提问行", () => {
 describe("右栏：每组可以收起", () => {
   const body = (group: HTMLElement) => group.querySelector("[data-group-body]") as HTMLElement;
 
-  it("标题是按钮（aria-expanded），旁边一个果瓣箭头：展开时朝下、收起时朝右；点一下收起，只剩标题，再点展开", async () => {
+  it("标题是按钮（aria-expanded），旁边一个普通箭头：展开时朝下、收起时朝右；点一下收起，只剩标题，再点展开", async () => {
     const user = userEvent.setup();
     renderRail({ workers: [busy(30), worker(31)] });
     const title = titleButton(workerGroup());
     expect(title).toHaveAttribute("aria-expanded", "true");
-    // 扇形的尖本来朝下：展开不转，收起转 -90° 朝右
-    expect(arrowOf(workerGroup()).getAttribute("class")).not.toMatch(/rotate/);
+    // 展开朝下（rotate-90），收起朝右（无 rotate）
+    expect(arrowOf(workerGroup())).toHaveClass("rotate-90");
     await user.click(title);
     expect(title).toHaveAttribute("aria-expanded", "false");
-    expect(arrowOf(workerGroup())).toHaveClass("-rotate-90");
+    expect(arrowOf(workerGroup())).not.toHaveClass("rotate-90");
     // 收起：内容读屏和键盘都够不着（inert + aria-hidden），不再占高度（网格行 0fr）
     expect(body(workerGroup())).toHaveAttribute("aria-hidden", "true");
     expect(body(workerGroup())).toHaveAttribute("inert");
@@ -343,6 +343,7 @@ describe("右栏：每组可以收起", () => {
     expect(body(workerGroup()).className).toMatch(/grid-rows-\[0fr\]/);
     await user.click(title);
     expect(title).toHaveAttribute("aria-expanded", "true");
+    expect(arrowOf(workerGroup())).toHaveClass("rotate-90");
     expect(screen.getByRole("button", { name: /活 30/ })).toBeInTheDocument();
   });
 
@@ -354,14 +355,16 @@ describe("右栏：每组可以收起", () => {
     expect(cls).toMatch(/motion-reduce:transition-none/);
   });
 
-  it("果瓣箭头：14px、当前强调色（text-primary），三组共用同一个；转向 200ms 以内，减弱动效时关掉", () => {
+  it("普通箭头：14px、次要文字色（text-muted-foreground），三组共用同一个；转向 200ms 以内，减弱动效时关掉", () => {
     renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], avatarKey: 3 });
     const shapes = new Set<string>();
     for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
       const arrow = arrowOf(group);
       const cls = arrow.getAttribute("class")!;
-      expect(arrow).toHaveClass("size-3.5", "text-primary", "transition-transform", "motion-reduce:transition-none");
+      expect(arrow).toHaveClass("size-3.5", "text-muted-foreground", "transition-transform", "motion-reduce:transition-none");
       expect(cls).toMatch(/duration-(100|150|200)\b/);
+      // 不带水果强调色
+      expect(cls).not.toMatch(/text-primary/);
       shapes.add(arrow.innerHTML);
     }
     expect(shapes.size).toBe(1);
