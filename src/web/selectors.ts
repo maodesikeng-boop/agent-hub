@@ -365,6 +365,12 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   return vendors;
 }
 
+/** 旧后台的组不带 vendor：按组 id 找声明了它的那家，只认唯一归属的（以后两家同名组时不串额度）。 */
+function legacyFetchedQuota(id: string): (typeof QUOTA_VENDORS)[number] | undefined {
+  const owners = QUOTA_VENDORS.filter((v) => v.fetched?.groups.some((g) => g.key === id));
+  return owners.length === 1 ? owners[0] : undefined;
+}
+
 /**
  * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，各家 spec 的 quota.fetched；几家合在一个响应里，每组带 vendor）→ 浮层里的块：
  * 每一组一块（name 是厂商名，group 是组名，都按 vendor + 组的 id 从 spec 取），窗口按 QUOTA_WINDOWS 的顺序；认不出的厂商、组跳过。
@@ -372,13 +378,7 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
 export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
   for (const group of res.groups) {
-    // 旧后台没有 vendor：只接受能唯一归属的组，避免未来两家同名时串额度。
-    const legacy = group.vendor === undefined
-      ? QUOTA_VENDORS.filter((v) => v.fetched?.groups.some((g) => g.key === group.id))
-      : [];
-    const quota = group.vendor === undefined
-      ? (legacy.length === 1 ? legacy[0] : undefined)
-      : isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
+    const quota = group.vendor === undefined ? legacyFetchedQuota(group.id) : isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
     const spec = quota?.fetched?.groups.find((g) => g.key === group.id);
     if (quota === undefined || spec === undefined) continue;
     const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {

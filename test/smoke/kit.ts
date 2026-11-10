@@ -107,7 +107,7 @@ export interface TestHub {
 
 /**
  * 起一个测试后台（docs 见本文件开头）：Worker 在里面跑 hub status 看到的是这里派的 Worker，不会连到真正在用的后台；
- * 干净的终端里没有 HUB_TOKEN 也能跑。close 停掉 agent 接口、删掉数据目录。
+ * 干净的终端里没有 HUB_TOKEN 也能跑。close 停掉 agent 接口、删掉数据目录和项目文件夹（项目文件夹不能放数据目录里，后台会拒绝）。
  */
 export async function startTestHub(): Promise<TestHub> {
   const dataDir = realpathSync.native(mkdtempSync(join(shortTmp(), "ah-hub-")));

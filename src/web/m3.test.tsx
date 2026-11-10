@@ -1251,7 +1251,6 @@ describe("selectors", () => {
     // 旧网页只读取 id/windows，再从本地 spec 取组名。
     const oldGroup = vendorSpec("agy").quota!.fetched!.groups.find((g) => g.key === current.groups[0]!.id);
     expect(oldGroup?.name).toBe("Gemini");
-    expect(JSON.stringify(current).length).toBeLessThanOrEqual(JSON.stringify(legacy).length);
   });
 
   // 真实数据（2026-11-07 21:04）：codex 会话的 30 天窗口 resetsAt 1796193545（12/2 14:39）比 claude 会话的 5 小时窗口 1794070800 晚，

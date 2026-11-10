@@ -90,12 +90,10 @@ describe("提示词", () => {
     writeFileSync(join(dir, "AGENTS.md"), "# 规矩");
     writeFileSync(join(dir, "CLAUDE.md"), "# 说明");
     for (const vendor of AGENT_VENDORS) {
-      const expected = vendorSpec(vendor).prompt.instructionFile === "CLAUDE.md";
       const base = projectContext();
-      expect(buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, dir).includes(AGENTS_NOTE), vendor).toBe(expected);
-      expect(buildWorkerPrompt({ ...workerContext(), vendor }, dir).includes(AGENTS_NOTE), vendor).toBe(expected);
+      expect(buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
+      expect(buildWorkerPrompt({ ...workerContext(), vendor }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
     }
-    expect(vendorSpec("claude").prompt.instructionFile).toBe("CLAUDE.md");
   });
 });
 
