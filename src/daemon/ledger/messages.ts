@@ -100,6 +100,14 @@ export function createLedgerMessages(
     p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
   };
 
+  /**
+   * 用户消息这一轮出错了，但 agent 在这条消息之后最后说的是一段话（不是停在工具调用上）：用户已经看到回复，当作已回复，
+   * 不再给用户消息挂失败标记（项目经理对话里这一轮没有别的出错提示，挂了只会让人以为没答完）。
+   */
+  const endedWithReply = (sessionId: SessionId, id: MessageId) =>
+    getMessage(id)?.sender === "user" &&
+    db.get<{ kind: string }>("SELECT kind FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? ORDER BY id DESC LIMIT 1", sessionId, id)?.kind === "text";
+
   const insertAgentMessage = (
     p: Pending,
     session: AgentSessionRow,
@@ -269,7 +277,7 @@ export function createLedgerMessages(
         for (const id of event.messageIds) {
           if (event.shutdown === true && keptAfterShutdown(session, id)) continue;
           if (event.interrupted) transition(p, id, "stopped");
-          else if (event.ok) transition(p, id, "replied");
+          else if (event.ok || endedWithReply(sessionId, id)) transition(p, id, "replied");
           else transition(p, id, "failed", reason);
         }
         updateLive(p, sessionId, idle);

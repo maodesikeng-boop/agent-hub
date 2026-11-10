@@ -995,20 +995,53 @@ it("pm-home 目录已存在时 createPm 不报错", () => {
 });
 
 describe("送达回执独立于执行结果", () => {
-  it("已送达并回复后 GOAWAY：保留服务端回执，重试清掉回执，真正发不出去不带回执", () => {
+  const goaway = { subtype: "error", message: "http2: server sent GOAWAY" };
+
+  it("已送达后出错、没有回复：保留回执（网页不标“没发出去”），重试清掉回执，真正发不出去不带回执", () => {
     const id = post();
     ev({ type: "message.delivered", at: 1, messageIds: [id] });
     ev({ type: "message.processing", at: 2, messageIds: [id] });
-    ev({ type: "agent.text", at: 3, uuid: "reply-before-goaway", text: "收到，连接正常" });
-    ev({ type: "turn.ended", at: 4, ok: false, interrupted: false, messageIds: [id], durationMs: 3,
-      error: { subtype: "error", message: "http2: server sent GOAWAY" } });
+    ev({ type: "agent.tool", at: 3, uuid: "t1", toolUseId: "tool-1", name: "Bash", input: { command: "ls" } });
+    ev({ type: "turn.ended", at: 4, ok: false, interrupted: false, messageIds: [id], durationMs: 3, error: goaway });
     expect(ledger.getMessage(id)).toMatchObject({ status: "failed", meta: { deliveryConfirmed: true } });
-    expect(changes.filter(c => c.type === "message.updated").at(-1)).toMatchObject({ data: { message: { meta: { deliveryConfirmed: true } } } });
-    expect(ledger.snapshot().conversations.find(c => c.conversation.id === conversationId)?.messages.find(m => m.id === id)?.meta).toMatchObject({ deliveryConfirmed: true });
+    expect(changes.filter((c) => c.type === "message.updated").at(-1)).toMatchObject({ data: { message: { meta: { deliveryConfirmed: true } } } });
+    expect(ledger.snapshot().conversations.find((c) => c.conversation.id === conversationId)?.messages.find((m) => m.id === id)?.meta).toMatchObject({ deliveryConfirmed: true });
     ledger.retryMessage(id);
     expect(ledger.getMessage(id)?.meta?.deliveryConfirmed).toBeUndefined();
     ev({ type: "driver.error", at: 5, code: "invalid_input", message: "invalid_input: rejected", messageIds: [id] });
     expect(ledger.getMessage(id)).toMatchObject({ status: "failed" });
+    expect(ledger.getMessage(id)?.meta?.deliveryConfirmed).toBeUndefined();
+  });
+
+  it("出错的那一轮最后说的是一段话（回复完了才 GOAWAY）：标已回复，不留失败标记", () => {
+    const id = post();
+    ev({ type: "message.delivered", at: 1, messageIds: [id] });
+    ev({ type: "message.processing", at: 2, messageIds: [id] });
+    ev({ type: "agent.tool", at: 3, uuid: "t1", toolUseId: "tool-1", name: "Bash", input: { command: "ls" } });
+    ev({ type: "agent.text", at: 4, uuid: "reply", text: "收到，连接正常" });
+    ev({ type: "turn.ended", at: 5, ok: false, interrupted: false, messageIds: [id], durationMs: 3, error: goaway });
+    expect(ledger.getMessage(id)).toMatchObject({ status: "replied", failureReason: null, meta: { deliveryConfirmed: true } });
+  });
+
+  it("这一轮没有说过话，只有上一轮的回复：照常标失败", () => {
+    const first = post("c1", "第一句");
+    ev({ type: "message.delivered", at: 1, messageIds: [first] });
+    ev({ type: "message.processing", at: 2, messageIds: [first] });
+    ev({ type: "agent.text", at: 3, uuid: "r1", text: "第一句的回复" });
+    ev({ type: "turn.ended", at: 4, ok: true, interrupted: false, messageIds: [first], durationMs: 1 });
+    const second = post("c2", "第二句");
+    ev({ type: "message.delivered", at: 5, messageIds: [second] });
+    ev({ type: "message.processing", at: 6, messageIds: [second] });
+    ev({ type: "turn.ended", at: 7, ok: false, interrupted: false, messageIds: [second], durationMs: 1, error: goaway });
+    expect(ledger.getMessage(second)).toMatchObject({ status: "failed", meta: { deliveryConfirmed: true } });
+  });
+
+  it("排队中收回（requeued）清掉回执；打断、取消不影响状态规则", () => {
+    const id = post();
+    ev({ type: "message.delivered", at: 1, messageIds: [id] });
+    expect(ledger.getMessage(id)?.meta?.deliveryConfirmed).toBe(true);
+    ev({ type: "message.requeued", at: 2, messageIds: [id] });
+    expect(ledger.getMessage(id)).toMatchObject({ status: "queued" });
     expect(ledger.getMessage(id)?.meta?.deliveryConfirmed).toBeUndefined();
   });
 });
