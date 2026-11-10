@@ -1,7 +1,7 @@
 // 网页 selector 的缓存守卫：按“跑了一个月”的规模（300 个 Worker、3 万条消息）算，重算要快，输入没变要返回同一个引用，
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
-import type { Message, PersonaChangeId, SessionState } from "../shared/index.ts";
+import { workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
 import { groupMessages, listConversations, quotaUsage, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
@@ -117,6 +117,28 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(workers[0]).toMatchObject({ conversationId: newWorker, ended: false });
     const renamed = applyChange(withWorker, changeOf(withWorker.seq + 1, "pm.updated", { pm: makePm({ id: 1, name: "改了名" }) }));
     expect(listConversations(renamed)[0]!.name).toBe("改了名");
+  });
+
+  it("初始快照瘦身后的样子（Worker 对话不带消息、只挂最近一行的摘要，项目经理对话只带最近 20 条）：结果和全量一样，重算快，引用稳定", () => {
+    const full = monthState();
+    const conversations = Object.fromEntries(
+      Object.entries(full.conversations).map(([id, view]) => {
+        if (view.conversation.kind !== "worker") return [id, { ...view, messages: view.messages.slice(-20), hasMore: true }];
+        const lines = full.conversations[PM_CONVERSATION]!.messages.filter((m) => workerEventOf(m)?.workerConversationId === view.conversation.id);
+        const summary = workerLineSummaries(lines).get(view.conversation.id);
+        return [id, { conversation: view.conversation, messages: [], hasMore: true, ...(summary ? { workerLine: summary } : {}) }];
+      }),
+    );
+    let state: HubState = { ...full, conversations };
+    expect(totalMessages(state)).toBe(20);
+    expect(workersOf(state, 1)).toEqual(workersOf(full, 1));
+    expect(workersOf(state, 1)).toBe(workersOf(state, 1));
+    let seq = state.seq;
+    const next = () => {
+      state = applyChange(state, messageChange(++seq, "message.created", makeMessage({ id: 1_000_000 + seq, conversationId: PM_CONVERSATION })));
+      return state;
+    };
+    expect(medianMs(21, () => void workersOf(next(), 1))).toBeLessThan(10);
   });
 
   it("groupMessages：翻过页的长对话（3000 条、换了 30 次会话）也在几十毫秒以内（实测约 1.2 ms）；压着的消息排在分隔线后面", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { bundledModelCatalog, type AgentVendor, type ModelCatalog } from "../shared/index.ts";
 import { WORKER_PICK_CACHE_MAX } from "../shared/limits.ts";
-import { WORKER_PICK_DEFAULT, workerPickRows } from "./worker-pick.ts";
+import { WORKER_PICK_DEFAULT, workerPickFromArgs, workerPickLabels, workerPickRows } from "./worker-pick.ts";
 
 const catalog = (vendor: AgentVendor, over: Partial<ModelCatalog> = {}): ModelCatalog => ({ ...bundledModelCatalog(vendor), ...over });
 
@@ -124,5 +124,27 @@ describe("workerPickRows：引用稳定（WeakMap 按 catalogs 数组缓存）",
     const again = workerPickRows(list, [], "c");
     expect(again).toEqual(first);
     expect(again).not.toBe(first);
+  });
+});
+
+describe("workerPickFromArgs", () => {
+  it("文字里的 id 换成 WorkerPick：default 和没选到的级是 null；第一级不是认识的厂商返回 null", () => {
+    expect(workerPickFromArgs(["claude", "opus", "high"])).toEqual({ vendor: "claude", model: "opus", effort: "high" });
+    expect(workerPickFromArgs(["claude", WORKER_PICK_DEFAULT, WORKER_PICK_DEFAULT])).toEqual({ vendor: "claude", model: null, effort: null });
+    expect(workerPickFromArgs(["claude", "haiku"])).toEqual({ vendor: "claude", model: "haiku", effort: null });
+    expect(workerPickFromArgs(["nope", "x"])).toBeNull();
+  });
+});
+
+describe("workerPickLabels", () => {
+  it("厂商名、模型显示名、档位原样；Default 的项不显示", () => {
+    expect(workerPickLabels({ vendor: "claude", model: "opus", effort: "high" }, CATALOGS)).toEqual(["Claude Code", "Opus", "high"]);
+    expect(workerPickLabels({ vendor: "claude", model: null, effort: "high" }, CATALOGS)).toEqual(["Claude Code", "high"]);
+    expect(workerPickLabels({ vendor: "claude", model: null, effort: null }, CATALOGS)).toEqual(["Claude Code"]);
+  });
+
+  it("名单里没有的模型原样显示；名单里没有这家用打包的名字", () => {
+    expect(workerPickLabels({ vendor: "claude", model: "my-model", effort: null }, CATALOGS)).toEqual(["Claude Code", "my-model"]);
+    expect(workerPickLabels({ vendor: "codex", model: "x1", effort: null }, [])).toEqual([bundledModelCatalog("codex").label, "x1"]);
   });
 });

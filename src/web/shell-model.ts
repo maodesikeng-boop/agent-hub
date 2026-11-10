@@ -165,6 +165,27 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   useEffect(() => {
     if (!awaitingCreated) setPendingCreated(null);
   }, [awaitingCreated]);
+  useEffect(() => {
+    const valid = new Set<string>();
+    const pendingDevicePrefixes = new Set<string>();
+    let keepLocalAll = false;
+    for (const d of fleet.devices) {
+      if (d.state.phase === "ready") {
+        for (const id of Object.keys(d.state.conversations)) valid.add(conversationKey(d.key, Number(id)));
+      } else if (d.key === LOCAL_DEVICE) {
+        keepLocalAll = true;
+      } else {
+        pendingDevicePrefixes.add(`${d.key}/`);
+      }
+    }
+    if (pendingCreated !== null) valid.add(conversationKey(pendingCreated.device, pendingCreated.id));
+    drafts.retain((k) => {
+      if (valid.has(k)) return true;
+      const slash = k.indexOf("/");
+      if (slash < 0) return keepLocalAll;
+      return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
+    });
+  }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
   const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
     (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
   useEffect(() => {
@@ -204,16 +225,23 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
       // 传失败了什么都不清（文字和文件都留着）
       // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
+      // /hub:worker 选的标签：发出去才清（中途换过的不动），被拦、上传失败时和文字一起留着
+      const pick = slot.getPick();
       if (files.length === 0 && text.startsWith("/")) {
-        return hub.sendChecked(id, text).then(() => slot.clearIfMatch(text));
+        return hub.sendChecked(id, text, pick).then(() => {
+          slot.clearIfMatch(text);
+          slot.clearPickIfMatch(pick);
+        });
       }
       if (files.length === 0) {
         slot.set("");
-        hub.send(id, text);
+        slot.setPick(null);
+        hub.send(id, text, pick);
         return;
       }
-      return hub.sendWithFiles(id, text, files).then(() => {
+      return hub.sendWithFiles(id, text, files, pick).then(() => {
         slot.clearIfMatch(text);
+        slot.clearPickIfMatch(pick);
         staging.of(key).removeSent(files);
       });
     },

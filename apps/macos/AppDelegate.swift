@@ -33,6 +33,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         )
 
+        supervisor.onStateChange = { [weak self] state, lastCrash in
+            guard let self = self else { return }
+            self.statusBarController.updateDaemonState(state, lastCrash: lastCrash)
+            switch state {
+            case .running:
+                if self.windowController.isShowingErrorPage {
+                    self.windowController.reload()
+                }
+            case .restarting:
+                break
+            case .failed(let crashCount, let windowSeconds, let crash):
+                self.windowController.showStartupError(
+                    "后台服务在 \(Int(windowSeconds)) 秒内连续崩溃 \(crashCount) 次，已停止自动重启。\n\(crash.menuTitle)"
+                )
+            }
+        }
+
         windowController.showWindow()
         startAndLoad()
     }

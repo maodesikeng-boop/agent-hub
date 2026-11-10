@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as shared from "../../shared/index.ts";
@@ -443,17 +443,22 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     { ...shared.bundledModelCatalog("codex"), label: "Codex", availability: "not_installed" },
   ];
 
-  const boot = async (hash = "") => {
+  const boot = async (hash = "", messages: shared.Message[] = []) => {
     stubPointer("fine");
     window.location.hash = hash;
     const api = new FakeApi(
       makeSnapshot({
-        pms: [makePm({ id: 1, name: "小林" })],
+        pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "小王" })],
         conversations: [
-          makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot(messages, { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: { id: 2, pmId: 2, title: "小王" } }),
           makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
         ],
-        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 31 })],
+        sessions: [
+          makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }),
+          makeSession({ sessionId: 3, conversationId: 2, pmId: 2 }),
+          makeSession({ sessionId: 2, conversationId: 31 }),
+        ],
       }),
     );
     // 厂商命令接口在假后台里没有（404）：hub 命令照样出现
@@ -469,7 +474,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
   const labels = () => screen.queryAllByRole("option").map((o) => o.firstElementChild?.textContent);
   const posts = (api: FakeApi) => api.callsTo("POST", /\/messages$/);
 
-  it("Enter、Tab 一级一级选（不发送），没登录的厂商灰掉写 Not signed in，没装的不列；最后完整命令留在文字里", async () => {
+  it("Enter、Tab 一级一级选（不发送），没登录的厂商灰掉写 Not signed in，没装的不列；选完命令从文字里拿掉、变成标签", async () => {
     const { api, box, user } = await boot();
     await user.type(box, "/hub");
     expect(await screen.findByRole("option", { name: /\/hub:worker/ })).toBeInTheDocument();
@@ -492,9 +497,212 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     await user.type(box, "hi");
     expect(labels()).toEqual(["high"]);
     await user.keyboard("{Enter}");
-    expect(box.value).toBe("/hub:worker claude opus high ");
+    expect(box.value).toBe("");
     expect(screen.queryByRole("listbox")).toBeNull();
+    expect(tag()).toHaveTextContent("Claude CodeOpushigh");
     expect(posts(api)).toHaveLength(0);
+  });
+
+  /** 打完整命令，最后一级 Enter 选中。 */
+  const pickHigh = async (user: ReturnType<typeof userEvent.setup>, box: HTMLTextAreaElement) => {
+    await user.type(box, "/hub:worker claude opus hi");
+    await waitFor(() => expect(labels()).toEqual(["high"]));
+    await user.keyboard("{Enter}");
+  };
+  const tag = () => screen.getByRole("button", { name: /^Worker model/ });
+  const queryTag = () => screen.queryByRole("button", { name: /^Worker model/ });
+
+  it("标签：在待发文件那一排最前面，Bot 图标 + 各项 gap-2 不用 “·”，× 读屏名字 Remove；Default 的项不显示", async () => {
+    const { box, user } = await boot();
+    await user.type(box, "/hub:worker claude ");
+    await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(labels()).toEqual(["Default", "low", "high"]));
+    await user.keyboard("{Enter}");
+    expect(box.value).toBe("");
+    const chip = tag();
+    expect(chip).toHaveAccessibleName("Worker model: Claude Code");
+    expect(chip.textContent).toBe("Claude Code");
+    expect(chip).toHaveClass("gap-2");
+    expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
+    const li = chip.closest("li")!;
+    expect(li).toHaveClass("rounded-full", "bg-muted", "py-1", "pr-1", "pl-3", "text-minor");
+    expect(li.parentElement).toHaveAccessibleName("Files to send");
+    expect(li.parentElement!.firstElementChild).toBe(li);
+    expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("touch-target", "size-6");
+    expect(li.textContent).not.toContain("·");
+    expect(box).toHaveFocus();
+  });
+
+  it("选完时原有文字留着、命令拿掉；点 × 去掉标签", async () => {
+    const { box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录");
+    expect(box.value).toBe("修一下登录");
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(queryTag()).toBeNull();
+    expect(box.value).toBe("修一下登录");
+  });
+
+  it("点标签 = 在开头插入 /hub:worker 重新选，选完替换旧的；原有文字不被当成参数，选完原样留着", async () => {
+    const { box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录");
+    await user.click(tag());
+    expect(box).toHaveFocus();
+    expect(box.value.startsWith("/hub:worker ")).toBe(true);
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
+    await user.keyboard("{Enter}{Enter}"); // Default 模型、Default 档位
+    expect(box.value).toBe("修一下登录");
+    expect(screen.getAllByRole("button", { name: /^Worker model/ })).toHaveLength(1);
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code");
+  });
+
+  it("点标签重选到一半或按 Esc 后再点标签：清掉半截参数、重开厂商列表，选完原有文字和光标位置保留", async () => {
+    const { box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录");
+    box.setSelectionRange(2, 2);
+    await user.click(tag());
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await user.keyboard("{Enter}"); // 选到模型级：/hub:worker claude \n修一下登录
+    await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
+    await user.keyboard("{Enter}"); // 选到档位级：/hub:worker claude default \n修一下登录
+    await waitFor(() => expect(labels()).toEqual(["Default", "low", "high"]));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    // 再点标签：清掉 claude default，重新打开厂商列表
+    await user.click(tag());
+    expect(box.value).toBe("/hub:worker \n修一下登录");
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    await user.keyboard("{Enter}{Enter}{Enter}");
+    expect(box.value).toBe("修一下登录");
+    expect(box.selectionStart).toBe(2);
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code");
+  });
+
+  it("再打一次 /hub:worker 也是替换，一条消息最多一个标签", async () => {
+    const { box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "/hub:worker claude opus lo");
+    await waitFor(() => expect(labels()).toEqual(["low"]));
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("button", { name: /^Worker model/ })).toHaveLength(1);
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus low");
+  });
+
+  it("标签跟着草稿走：切到别的对话没有，切回来还在", async () => {
+    const { box, user } = await boot("#/c/1");
+    await pickHigh(user, box);
+    act(() => {
+      window.location.hash = "#/c/2";
+    });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("placeholder", "Message 小王…"));
+    expect(queryTag()).toBeNull();
+    act(() => {
+      window.location.hash = "#/c/1";
+    });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute("placeholder", "Message 小林…"));
+    expect(tag()).toHaveAccessibleName("Worker model: Claude Code Opus high");
+  });
+
+  it("发送：请求体带 workerPick（Default 是 null），发出去后标签清掉；气泡上方是同样的只读标签", async () => {
+    const { api, box, user } = await boot();
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录{Enter}");
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]!.body).toMatchObject({ text: "修一下登录", workerPick: { vendor: "claude", model: "opus", effort: "high" } });
+    expect(queryTag()).toBeNull();
+    const sent = await screen.findByRole("group", { name: "Worker model" });
+    expect(sent).toHaveTextContent("Claude CodeOpushigh");
+    expect(within(sent).queryByRole("button")).toBeNull();
+
+    // 下一条不带
+    await user.type(box, "再来一条{Enter}");
+    await waitFor(() => expect(posts(api)).toHaveLength(2));
+    expect(posts(api)[1]!.body).not.toHaveProperty("workerPick");
+  });
+
+  it("只选厂商：model、effort 都是 null", async () => {
+    const { api, box, user } = await boot();
+    await user.type(box, "/hub:worker claude default default");
+    await waitFor(() => expect(labels()).toEqual(["Default"]));
+    await user.keyboard("{Enter}");
+    await user.type(box, "做吧{Enter}");
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]!.body).toMatchObject({ workerPick: { vendor: "claude", model: null, effort: null } });
+  });
+
+  it("没发出去：点感叹号重发，带同一个 workerPick 和 clientId", async () => {
+    const { api, box, user } = await boot();
+    api.postMessage = () => ({ status: 500, body: { error: "boom" } });
+    await pickHigh(user, box);
+    await user.type(box, "修一下登录{Enter}");
+    const retry = await screen.findByRole("button", { name: "没发出去，点击重发" });
+    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
+    api.postMessage = () => ({ status: 200, body: { messageId: 9 } });
+    await user.click(retry);
+    await waitFor(() => expect(posts(api)).toHaveLength(2));
+    const [first, second] = posts(api).map((c) => c.body as shared.PostMessageRequest);
+    expect(second!.workerPick).toEqual({ vendor: "claude", model: "opus", effort: "high" });
+    expect(second!.clientId).toBe(first!.clientId);
+  });
+
+  it("请求超时（TimeoutError）后重发：不丢 workerPick 和 clientId", async () => {
+    const { api, box, user } = await boot();
+    const baseFetch = api.fetch;
+    let failTimeout = true;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (failTimeout && String(input).endsWith("/messages") && init?.method === "POST") {
+        return Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      }
+      return baseFetch(input, init);
+    });
+    await pickHigh(user, box);
+    await user.type(box, "超时测试{Enter}");
+    const retry = await screen.findByRole("button", { name: "没发出去，点击重发" });
+    expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
+    failTimeout = false;
+    await user.click(retry);
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]!.body).toMatchObject({ text: "超时测试", workerPick: { vendor: "claude", model: "opus", effort: "high" } });
+  });
+
+  it("发送被拦（/ 开头、400）：文字留着，标签也留着", async () => {
+    const { api, box, user } = await boot();
+    api.postMessage = () => ({ status: 400, body: { error: "不行", code: "invalid" } });
+    await pickHigh(user, box);
+    await user.type(box, "/compact{Escape}{Enter}");
+    await screen.findByRole("alert");
+    expect(posts(api)[0]!.body).toMatchObject({ workerPick: { vendor: "claude", model: "opus", effort: "high" } });
+    expect(box.value).toBe("/compact");
+    expect(tag()).toBeInTheDocument();
+  });
+
+  it("选标签、去掉标签不重画消息列表（标签 store 和文字、消息分开）", async () => {
+    const { box, user } = await boot("", [makeUserMessage({ id: 1, text: "旧消息" }), makeMessage({ id: 2, text: "**加粗回复内容**" })]);
+    await screen.findAllByText("加粗回复内容");
+    const attachmentsSpy = vi.spyOn(shared, "attachmentsOf");
+    const displayTextSpy = vi.spyOn(messagesModule, "displayText");
+    await pickHigh(user, box);
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(attachmentsSpy).not.toHaveBeenCalled();
+    expect(displayTextSpy).not.toHaveBeenCalled();
+  });
+
+  it("服务端的用户消息带 meta.workerPick：气泡上方只读标签（Default 的项不显示）；没带的没有", async () => {
+    await boot("", [
+      makeUserMessage({ id: 1, text: "派人做", meta: { workerPick: { vendor: "claude", model: null, effort: "high" } } }),
+      makeUserMessage({ id: 2, text: "普通的" }),
+    ]);
+    const chips = await screen.findAllByRole("group", { name: "Worker model" });
+    expect(chips).toHaveLength(1);
+    expect(chips[0]!.textContent).toBe("Claude Codehigh");
+    expect(chips[0]).toHaveClass("rounded-full", "bg-muted", "text-minor", "gap-2", "mb-1.5");
+    const bubble = screen.getByText("派人做");
+    expect(chips[0]!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("Backspace 删到上一级就回上一级的列表", async () => {

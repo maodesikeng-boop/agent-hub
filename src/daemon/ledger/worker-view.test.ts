@@ -454,10 +454,21 @@ describe("PR、分支", () => {
     expect(show(w, lin.sessionId, { pr: { unavailable: "gh 超时" } }).text).toContain("PR 查不了（gh 超时）");
   });
 
-  it("worktree 的 Worker 写分支和 worktree 路径", () => {
+  it("worktree 的 Worker 写分支和 worktree 路径；已收工且 worktree 目录被清理后标（已自动清理）", () => {
     const w = startWorker("claude", { noWorktree: false });
+    db.run("UPDATE workers SET base_commit = 'abc1234' WHERE id = ?", w);
     const worker = ledger.hubCall(lin.sessionId, "worker.show", { workerId: w }).data.worker;
+    mkdirSync(worker.worktreePath!, { recursive: true });
     expect(show(w).text).toContain(`分支 ${worker.branch}，worktree ${worker.worktreePath}`);
+    expect(show(w).text).not.toContain("（已自动清理）");
+
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w });
+    expect(show(w).text).not.toContain("（已自动清理）");
+    expect(ledger.workerPrTarget(lin.sessionId, w)).toEqual({ cwd: worker.worktreePath, branch: worker.branch });
+
+    rmSync(worker.worktreePath!, { recursive: true, force: true });
+    expect(show(w).text).toContain(`分支 ${worker.branch}，worktree ${worker.worktreePath}（已自动清理）`);
+    expect(ledger.workerPrTarget(lin.sessionId, w)).toEqual({ cwd: main, branch: worker.branch });
   });
 
   it("workerPrTarget：自己派的、已开工的 worktree Worker 才给；主文件夹里干的、别人的、没开工的都是 null", () => {

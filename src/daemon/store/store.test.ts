@@ -134,6 +134,7 @@ describe("打开存储和迁移", () => {
       ).toContain("USING INDEX messages_worker");
       expect(planOf("SELECT id FROM agent_sessions WHERE worker_id = 1 AND status != 'ended'")).toContain("USING INDEX agent_sessions_worker");
       expect(planOf("SELECT id FROM workers WHERE project_id = 1 LIMIT 1")).toContain("workers_project");
+      expect(planOf("SELECT id, kind, meta, created_at FROM messages WHERE kind = 'worker' ORDER BY id")).toContain("USING INDEX messages_worker_lines");
 
       db.exec("PRAGMA user_version = 8");
       expect(() => migrate(db)).not.toThrow();
