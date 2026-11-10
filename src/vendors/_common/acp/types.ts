@@ -152,7 +152,7 @@ export interface AcpPermissionsConfig {
   allowOptionKinds?: readonly PermissionOptionKind[];
   /** 拒绝时优先选用的 option.kind 顺序（默认 ["reject_once", "reject_always"]）。 */
   rejectOptionKinds?: readonly PermissionOptionKind[];
-  /** 只读 Worker 下直接拒绝的 ToolKind 列表（始终拒绝 edit/delete/move/execute 和非读取类 kind，此处只能追加拒绝）。 */
+  /** 只读 Worker 下额外拒绝的 ToolKind 列表（始终拒绝 edit/delete/move 及非白名单未知 kind，默认放行 read/search/think/fetch 与受外层 OS 沙箱包裹的内置 execute；此处只能追加拒绝）。 */
   writeToolKinds?: readonly ToolKind[];
   /** 只读 Worker 下额外视为写操作的工具名集合（不区分大小写精确匹配）。 */
   writeToolNames?: readonly string[];

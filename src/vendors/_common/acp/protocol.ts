@@ -2,7 +2,7 @@
 // - 会话更新事件分类（已知标准 sessionUpdate vs 厂商私有扩展，session/load 重放历史过滤）；
 // - 系统提示词块拼装与用户消息长度校验（MAX_MESSAGE_BYTES）；
 // - 模型与思考程度 SessionConfigOption 查找与值映射；
-// - session/request_permission 权限裁决（普通会话自动放行，只读 Worker 拒绝写类工具与未标只读的 MCP 连接器工具）；
+// - session/request_permission 权限裁决（普通会话自动放行，只读 Worker 放行只读工具与受外层 OS 沙箱包裹的内置命令执行，拒绝写类工具、未知 kind 与未标只读的 MCP 连接器工具）；
 // - available_commands_update 命令列表清洗与上限截断（MAX_COMMANDS）；
 // - 工具名与输入提取、用量统计聚合、错误分类与残留进程识别。
 import { readFileSync } from "node:fs";
@@ -88,6 +88,13 @@ const DEFAULT_EFFORT_OPTION_IDS: readonly string[] = ["reasoning_effort", "thoug
 const DEFAULT_ALLOW_KINDS: readonly PermissionOptionKind[] = ["allow_always", "allow_once"];
 const DEFAULT_REJECT_KINDS: readonly PermissionOptionKind[] = ["reject_once", "reject_always"];
 const DEFAULT_WRITE_TOOL_KINDS: readonly ToolKind[] = ["edit", "delete", "move"];
+const READONLY_ALLOWED_TOOL_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>([
+  "read",
+  "search",
+  "think",
+  "fetch",
+  "execute",
+]);
 const DEFAULT_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "write",
   "edit",
@@ -314,21 +321,28 @@ export function extractDefaultMcpTool(request: RequestPermissionRequest): {
     parseAnnotations(callMeta?.annotations) ??
     parseAnnotations(reqMeta?.annotations);
 
+  const fallbackTool =
+    typeof request.toolCall.name === "string" && request.toolCall.name.trim() !== ""
+      ? request.toolCall.name.trim()
+      : typeof request.toolCall.title === "string" && request.toolCall.title.trim() !== ""
+        ? request.toolCall.title.trim()
+        : null;
+
   if (mcpMeta) {
     const server =
-      typeof mcpMeta.server === "string"
-        ? mcpMeta.server
-        : typeof mcpMeta.serverName === "string"
-          ? mcpMeta.serverName
-          : typeof mcpMeta.mcpServer === "string"
-            ? mcpMeta.mcpServer
+      typeof mcpMeta.server === "string" && mcpMeta.server.trim() !== ""
+        ? mcpMeta.server.trim()
+        : typeof mcpMeta.serverName === "string" && mcpMeta.serverName.trim() !== ""
+          ? mcpMeta.serverName.trim()
+          : typeof mcpMeta.mcpServer === "string" && mcpMeta.mcpServer.trim() !== ""
+            ? mcpMeta.mcpServer.trim()
             : null;
     const tool =
-      typeof mcpMeta.tool === "string"
-        ? mcpMeta.tool
-        : typeof mcpMeta.toolName === "string"
-          ? mcpMeta.toolName
-          : null;
+      typeof mcpMeta.tool === "string" && mcpMeta.tool.trim() !== ""
+        ? mcpMeta.tool.trim()
+        : typeof mcpMeta.toolName === "string" && mcpMeta.toolName.trim() !== ""
+          ? mcpMeta.toolName.trim()
+          : fallbackTool;
     if (server && tool) {
       return { server, tool, annotations };
     }
@@ -350,6 +364,25 @@ export function extractDefaultMcpTool(request: RequestPermissionRequest): {
     }
   }
   return null;
+}
+
+/** 识别携带残缺/扁平 MCP 身份痕迹但无法拆出合法 server/tool 的工具请求（只读模式下按 fail-closed 拒绝）。 */
+function hasUnresolvedMcpIdentity(request: RequestPermissionRequest): boolean {
+  const callMeta = asRecord(request.toolCall._meta);
+  const reqMeta = asRecord(request._meta);
+  if (
+    callMeta?.mcp !== undefined ||
+    reqMeta?.mcp !== undefined ||
+    callMeta?.mcpServer !== undefined ||
+    reqMeta?.mcpServer !== undefined
+  ) {
+    return true;
+  }
+  for (const candidate of [request.toolCall.name, request.toolCall.title]) {
+    if (typeof candidate !== "string") continue;
+    if (/^mcp(?:_|[:/])/iu.test(candidate.trim())) return true;
+  }
+  return false;
 }
 
 function isWriteToolCall(
@@ -378,9 +411,9 @@ function isWriteToolCall(
  * - 正在关闭或信号已中止：返回 { outcome: "cancelled" }；
  * - 普通会话（readonlyPolicy === null）：优先选 allow_always -> allow_once；
  * - 只读 Worker（readonlyPolicy !== null）：
- *   1. MCP 连接器工具按 connectorToolAllowed 裁决（未标 readOnlyHint: true 的一律拒绝）；
- *   2. 写/改/删/移类工具一律拒绝；
- *   3. 只读读取、搜索放行，其余未知操作默认拒绝。
+ *   1. MCP 连接器工具须明确标 readOnlyHint: true 且未标 destructiveHint: true，并经 connectorToolAllowed 裁决；
+ *   2. 写/改/删/移类工具一律拒绝，不可被 MCP 元数据或自定义配置覆盖；
+ *   3. 纯内置的只读读取/搜索/思考/拉取（read/search/think/fetch）与受外层只读 OS 沙箱约束的命令执行（execute）放行，其余未知 kind 默认拒绝。
  */
 export async function decideAcpPermission(
   context: AcpPermissionDecisionContext,
@@ -397,16 +430,30 @@ export async function decideAcpPermission(
 
   let allow = true;
   if (context.readonlyPolicy !== null) {
-    const mcp = cfg?.extractMcpTool?.(context.request) ?? extractDefaultMcpTool(context.request);
+    const defaultMcp = extractDefaultMcpTool(context.request);
+    const mcp = cfg?.extractMcpTool?.(context.request) ?? defaultMcp;
     if (mcp !== null) {
-      allow = mcp.annotations?.readOnlyHint === true && mcp.annotations.destructiveHint !== true &&
+      const defaultBlocksReadonly =
+        defaultMcp?.annotations !== null &&
+        defaultMcp?.annotations !== undefined &&
+        (defaultMcp.annotations.readOnlyHint === false || defaultMcp.annotations.destructiveHint === true);
+      allow =
+        !defaultBlocksReadonly &&
+        mcp.annotations?.readOnlyHint === true &&
+        mcp.annotations.destructiveHint !== true &&
         connectorToolAllowed(context.readonlyPolicy, mcp.server, mcp.tool, mcp.annotations);
+    } else if (hasUnresolvedMcpIdentity(context.request)) {
+      allow = false;
     } else {
       const kind = context.request.toolCall.kind;
-      allow = (kind === "read" || kind === "search") && !isWriteToolCall(context.request, cfg);
+      allow =
+        kind !== undefined &&
+        kind !== null &&
+        READONLY_ALLOWED_TOOL_KINDS.has(kind) &&
+        !isWriteToolCall(context.request, cfg);
     }
     // 明确的写操作不得被 MCP 元数据或厂商钩子覆盖。
-    if (isWriteToolCall(context.request, cfg) || context.request.toolCall.kind === "execute") allow = false;
+    if (isWriteToolCall(context.request, cfg)) allow = false;
   }
 
   if (allow && cfg?.decide) {

@@ -722,7 +722,7 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     ]);
   });
 
-  it("只读 Worker：request_permission 放行只读与 readOnlyHint MCP、拒绝写类工具与未标只读 MCP，且校验外层只读 OS 沙箱参数与不可用拒启", async () => {
+  it("只读 Worker：request_permission 放行只读/沙箱受限命令与 readOnlyHint MCP、拒绝写类工具与未标只读 MCP，且校验外层只读 OS 沙箱参数与不可用拒启", async () => {
     const canNestOsSandbox =
       process.platform === "darwin"
         ? (() => {
@@ -821,6 +821,16 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
               },
             },
             {
+              toolCallId: "ro-mcp-exec-unmarked",
+              title: "mcp__runner__exec",
+              name: "mcp__runner__exec",
+              kind: "execute",
+              requestPermission: {
+                kind: "execute",
+                name: "mcp__runner__exec",
+              },
+            },
+            {
               toolCallId: "ro-exec-probe",
               title: "Run shell probe",
               name: "bash",
@@ -856,7 +866,8 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(outcomes["ro-mcp-readonly"]).toEqual({ outcome: "selected", optionId: "allow-always" });
     expect(outcomes["ro-mcp-unmarked"]).toEqual({ outcome: "selected", optionId: "reject-once" });
     expect(outcomes["ro-mcp-destructive"]).toEqual({ outcome: "selected", optionId: "reject-once" });
-    expect(outcomes["ro-exec-probe"]).toEqual({ outcome: "selected", optionId: "reject-once" });
+    expect(outcomes["ro-mcp-exec-unmarked"]).toEqual({ outcome: "selected", optionId: "reject-once" });
+    expect(outcomes["ro-exec-probe"]).toEqual({ outcome: "selected", optionId: "allow-always" });
 
     if (canNestOsSandbox) {
       const probeLog = h.logs().find((e) => e.event === "probe_write");
@@ -1031,7 +1042,7 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     expect(parsed).toHaveLength(MAX_COMMANDS);
   });
 
-  it.each(["edit", "delete", "move", "execute", "other", undefined] as const)("只读 %s 默认拒绝，配置不能越过边界", async (kind) => {
+  it.each(["edit", "delete", "move", "switch_mode", "other", null, undefined] as const)("只读 %s 默认拒绝，配置不能越过边界", async (kind) => {
     const policy = buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy" });
     const result = await decideAcpPermission({
       request: {
@@ -1041,6 +1052,155 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
       readonlyPolicy: policy, closing: false, signal: new AbortController().signal,
     }, { writeToolKinds: [], rejectOptionKinds: ["allow_once"], decide: () => ({ outcome: "selected", optionId: "allow" }) });
     expect(result).toEqual({ outcome: "cancelled" });
+  });
+
+  it.each(["read", "search", "think", "fetch", "execute"] as const)(
+    "只读内置 %s 工具默认放行，但命中写工具名或追加 writeToolKinds 时拒绝",
+    async (kind) => {
+      const policy = buildReadonlyPolicy({ homeDir: homedir(), stateDir: "/tmp/acp-policy" });
+      const options = [
+        { optionId: "allow-always", name: "Always Allow", kind: "allow_always" as const },
+        { optionId: "reject-once", name: "Reject Once", kind: "reject_once" as const },
+      ];
+      const allowed = await decideAcpPermission({
+        request: {
+          sessionId: "s",
+          toolCall: { toolCallId: "t-ok", title: "Run builtin tool", name: "builtin_tool", kind },
+          options,
+        },
+        readonlyPolicy: policy,
+        closing: false,
+        signal: new AbortController().signal,
+      });
+      expect(allowed).toEqual({ outcome: "selected", optionId: "allow-always" });
+
+      const deniedByWriteName = await decideAcpPermission({
+        request: {
+          sessionId: "s",
+          toolCall: { toolCallId: "t-write-name", title: "Write File", name: "write_file", kind },
+          options,
+        },
+        readonlyPolicy: policy,
+        closing: false,
+        signal: new AbortController().signal,
+      });
+      expect(deniedByWriteName).toEqual({ outcome: "selected", optionId: "reject-once" });
+
+      const deniedByExtraKind = await decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: { toolCallId: "t-extra-kind", title: "Run builtin tool", name: "builtin_tool", kind },
+            options,
+          },
+          readonlyPolicy: policy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        { writeToolKinds: [kind] },
+      );
+      expect(deniedByExtraKind).toEqual({ outcome: "selected", optionId: "reject-once" });
+    },
+  );
+
+  it("伪装成 kind: 'execute' 但属于未标只读的 MCP 工具仍被拒绝", async () => {
+    const policy = buildReadonlyPolicy({
+      homeDir: homedir(),
+      stateDir: "/tmp/acp-policy",
+      connectors: { extraAllow: ["runner/*"] },
+    });
+    const options = [
+      { optionId: "allow-always", name: "Always Allow", kind: "allow_always" as const },
+      { optionId: "reject-once", name: "Reject Once", kind: "reject_once" as const },
+    ];
+    const bypassAttemptCfg = {
+      decide: () => ({ outcome: "selected" as const, optionId: "allow-always" }),
+      extractMcpTool: () => null,
+    };
+
+    // 1. 命名前缀 mcp__<server>__<tool> 伪装成 kind: "execute"
+    await expect(
+      decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: { toolCallId: "t1", title: "Run command", name: "mcp__runner__exec", kind: "execute" },
+            options,
+          },
+          readonlyPolicy: policy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        bypassAttemptCfg,
+      ),
+    ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
+
+    // 2. 普通工具名 bash + kind: "execute"，但通过 _meta 声明 MCP 身份且未标 readOnlyHint: true
+    await expect(
+      decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: {
+              toolCallId: "t2",
+              title: "Run shell",
+              name: "bash",
+              kind: "execute",
+              _meta: { mcp: { server: "runner", tool: "exec", annotations: { readOnlyHint: false } } },
+            },
+            options,
+          },
+          readonlyPolicy: policy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        bypassAttemptCfg,
+      ),
+    ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
+
+    // 3. _meta 仅给 mcpServer（未重复给 tool 字段）或残缺 MCP 前缀 mcp_<flat>，伪装成 kind: "execute"
+    await expect(
+      decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: {
+              toolCallId: "t3",
+              title: "Run shell",
+              name: "bash",
+              kind: "execute",
+              _meta: { mcpServer: "runner" },
+            },
+            options,
+          },
+          readonlyPolicy: policy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        bypassAttemptCfg,
+      ),
+    ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
+
+    await expect(
+      decideAcpPermission(
+        {
+          request: {
+            sessionId: "s",
+            toolCall: {
+              toolCallId: "t4",
+              title: "mcp_runner_exec",
+              name: "mcp_runner_exec",
+              kind: "execute",
+            },
+            options,
+          },
+          readonlyPolicy: policy,
+          closing: false,
+          signal: new AbortController().signal,
+        },
+        bypassAttemptCfg,
+      ),
+    ).resolves.toEqual({ outcome: "selected", optionId: "reject-once" });
   });
 
   it("MCP 手动白名单也不能放行缺少 readOnlyHint 的请求", async () => {
