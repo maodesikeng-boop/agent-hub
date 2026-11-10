@@ -37,6 +37,9 @@ pub const PROVISION_STATE_FILENAME: &str = "wsl-provision-state.json";
 /// 本地应用数据目录下存放发行版 ext4.vhdx 的子目录名。
 pub const DISTRO_INSTALL_SUBDIR: &str = "distro";
 
+/// `wsl --import` 在安装目录里生成的发行版磁盘文件名（`wsl --unregister` 会连它一起删除）。
+pub const DISTRO_VHDX_FILENAME: &str = "ext4.vhdx";
+
 /// 本地应用数据目录下缓存已校验 rootfs 镜像的子目录名。
 pub const ROOTFS_CACHE_SUBDIR: &str = "cache";
 

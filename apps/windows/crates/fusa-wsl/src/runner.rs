@@ -32,6 +32,8 @@ impl CommandRunner for StdCommandRunner {
     fn run(&self, cmd: &WslCommand, stdin: Option<&[u8]>) -> Result<CommandOutput, std::io::Error> {
         let mut command = Command::new(&cmd.program);
         command.args(&cmd.args);
+        // WSLENV 决定哪些 Windows 环境变量会带进发行版；去掉它，宿主环境里的任何变量（含 FUSA_* 测试覆盖项）都进不了 Fusa。
+        command.env_remove("WSLENV");
         for (k, v) in &cmd.envs {
             command.env(k, v);
         }
@@ -83,6 +85,10 @@ impl RootfsDownloader for SystemCurlDownloader {
             .arg("--silent")
             .arg("--show-error")
             .arg("--location")
+            .arg("--proto")
+            .arg("=https")
+            .arg("--proto-redir")
+            .arg("=https")
             .arg("--output")
             .arg(dest_file)
             .arg(url)

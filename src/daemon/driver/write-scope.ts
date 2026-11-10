@@ -86,23 +86,34 @@ export function bwrapProbeArgs(uid: number = process.getuid?.() ?? 0): string[] 
 
 /** 只缓存 true，不缓存 false：管理员跑完 sudo scripts/linux-sandbox-setup.sh 后无需重启守护进程，下次起 Worker 即刻生效。 */
 let linuxSandboxCachedTrue = false;
+/** 注入的探测函数各自缓存 true，与真实探测的模块级缓存互不串（真机已探测成功不会让注入 false 的调用也返回 true）。 */
+let customProbeCachedTrue = new WeakSet<() => boolean>();
+
+function runProbe(probe: () => boolean): boolean {
+  try {
+    return probe();
+  } catch {
+    return false;
+  }
+}
+
+function realBwrapProbe(): boolean {
+  execFileSync(BWRAP, bwrapProbeArgs(), {
+    stdio: "ignore",
+    timeout: BWRAP_PROBE_TIMEOUT_MS,
+  });
+  return true;
+}
 
 function probeLinuxBwrap(customProbe?: () => boolean): boolean {
-  if (linuxSandboxCachedTrue) return true;
-  let ok = false;
-  try {
-    if (customProbe) {
-      ok = customProbe();
-    } else {
-      execFileSync(BWRAP, bwrapProbeArgs(), {
-        stdio: "ignore",
-        timeout: BWRAP_PROBE_TIMEOUT_MS,
-      });
-      ok = true;
-    }
-  } catch {
-    ok = false;
+  if (customProbe) {
+    if (customProbeCachedTrue.has(customProbe)) return true;
+    const ok = runProbe(customProbe);
+    if (ok) customProbeCachedTrue.add(customProbe);
+    return ok;
   }
+  if (linuxSandboxCachedTrue) return true;
+  const ok = runProbe(realBwrapProbe);
   if (ok) linuxSandboxCachedTrue = true;
   return ok;
 }
@@ -110,6 +121,7 @@ function probeLinuxBwrap(customProbe?: () => boolean): boolean {
 /** 重置 OS 沙箱可用性缓存（仅供单测用）。 */
 export function resetOsSandboxCacheForTest(): void {
   linuxSandboxCachedTrue = false;
+  customProbeCachedTrue = new WeakSet();
 }
 
 function realpathOrSelf(path: string): string {
@@ -319,7 +331,8 @@ export function parseWslDrvfsMounts(mountInfo: string): string[] {
   return mounts;
 }
 
-function appendWslIsolationArgs(args: string[], options?: OsSandboxWrapOptions): void {
+/** 追加 WSL 遮蔽参数，返回被 tmpfs 遮蔽的目录（供后续 --bind 之后补遮嵌套在放行目录里的挂载）。 */
+function appendWslIsolationArgs(args: string[], options?: OsSandboxWrapOptions): string[] {
   const real = options?.realpath ?? realpathOrSelf;
   const exists = options?.exists ?? existsSync;
   const rawMountInfo = options?.mountInfo ?? (options?.exists ? "" : readLinuxMountInfo());
@@ -351,6 +364,20 @@ function appendWslIsolationArgs(args: string[], options?: OsSandboxWrapOptions):
     );
     if (filtered.length !== segments.length) {
       args.push("--setenv", "PATH", filtered.join(":"));
+    }
+  }
+  return [...seenMasked];
+}
+
+/**
+ * bwrap 的 --bind / --ro-bind 递归带上源目录下的子挂载，会把前面 tmpfs 遮住的、嵌套在放行目录里的 WSL 通道或 drvfs 重新露出来。
+ * 所以在所有放行之后，对落在某个放行目录（严格子路径）里的遮蔽目录再遮一次；放行目录本身在遮蔽目录之下（如 /mnt/c/proj）时不受影响。
+ */
+function remaskNestedWslDirs(args: string[], masked: readonly string[], boundDirs: Iterable<string>): void {
+  const bound = [...boundDirs];
+  for (const dir of masked) {
+    if (bound.some((b) => dir.startsWith(b === "/" ? "/" : `${b}/`) && dir !== b)) {
+      args.push("--perms", "0700", "--tmpfs", dir);
     }
   }
 }
@@ -388,11 +415,13 @@ export function bwrapArgs(
     `/run/user/${uid}`,
   ];
 
-  appendWslIsolationArgs(args, options);
+  const masked = appendWslIsolationArgs(args, options);
 
   const dataDir = real(scope.dataDir);
+  const bound: string[] = [];
   if (exists(dataDir)) {
     args.push("--ro-bind", dataDir, dataDir);
+    bound.push(dataDir);
   }
 
   const seenWritable = new Set<string>();
@@ -402,6 +431,7 @@ export function bwrapArgs(
     seenWritable.add(target);
     args.push("--bind", target, target);
   }
+  remaskNestedWslDirs(args, masked, [...bound, ...seenWritable]);
 
   args.push("--", base.command, ...ownSandboxOffArgs, ...base.args);
   return args;
@@ -441,7 +471,7 @@ export function readonlyBwrapArgs(
     `/run/user/${uid}`,
   ];
 
-  appendWslIsolationArgs(args, options);
+  const masked = appendWslIsolationArgs(args, options);
 
   const seenBind = new Set<string>();
   for (const dir of [input.tmpDir, ...input.writableDirs]) {
@@ -450,6 +480,7 @@ export function readonlyBwrapArgs(
     seenBind.add(target);
     args.push("--bind", target, target);
   }
+  remaskNestedWslDirs(args, masked, seenBind);
 
   for (const file of expand(input.writableFileGlobs ?? [])) {
     const target = real(file);

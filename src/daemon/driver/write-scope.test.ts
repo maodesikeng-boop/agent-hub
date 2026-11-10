@@ -46,6 +46,17 @@ const canRunSandboxExec =
       return false;
     }
   })();
+// 文件加载期直接跑一次真 bwrap 探测，不走 osSandboxAvailable()：否则会把模块级缓存提前置成 true，污染后面注入 probe 的用例
+const canRunBwrap =
+  process.platform === "linux" &&
+  (() => {
+    try {
+      execFileSync(BWRAP, bwrapProbeArgs(), { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
 
 describe("WRITE_SCOPE_ENFORCERS", () => {
   it("名单里的每家都有", () => {
@@ -123,6 +134,35 @@ describe("osSandboxAvailable（探测与单向缓存）", () => {
     expect(osSandboxAvailable("linux", { probe })).toBe(true);
     expect(osSandboxAvailable("linux", { probe })).toBe(true);
     expect(probes).toBe(3); // true 命中模块级缓存，后续 0 开销
+  });
+
+  it("注入的 probe 不读别的探测留下的 true：先跑过返回 true 的 probe，再换返回 false 的 probe 仍按它返回 false", () => {
+    let yesCalls = 0;
+    const yes = () => {
+      yesCalls++;
+      return true;
+    };
+    expect(osSandboxAvailable("linux", { probe: yes })).toBe(true);
+    expect(osSandboxAvailable("linux", yes)).toBe(true);
+    expect(yesCalls).toBe(1); // 同一个 probe 的 true 照样缓存
+
+    let noCalls = 0;
+    const no = () => {
+      noCalls++;
+      return false;
+    };
+    expect(osSandboxAvailable("linux", { probe: no })).toBe(false);
+    expect(osSandboxAvailable("linux", { probe: no })).toBe(false);
+    expect(noCalls).toBe(2);
+    expect(osSandboxAvailable("linux", { probe: () => { throw new Error("boom"); } })).toBe(false);
+  });
+
+  it.runIf(canRunBwrap)("真机无参探测仍命中模块级缓存，且不影响随后注入 false 的 probe", () => {
+    expect(osSandboxAvailable("linux")).toBe(true);
+    const started = performance.now();
+    for (let i = 0; i < 1000; i++) osSandboxAvailable("linux");
+    expect(performance.now() - started).toBeLessThan(50); // 1000 次全命中缓存，不再起 bwrap 子进程
+    expect(osSandboxAvailable("linux", { probe: () => false })).toBe(false);
   });
 });
 
@@ -540,6 +580,53 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
     expect(plainLinuxArgs).not.toContain("--unsetenv");
     expect(plainLinuxArgs).not.toContain("--setenv");
   });
+
+  it("WSL2 加固：放行目录里嵌套的 drvfs 在 --bind 之后再遮一次（递归绑定不会把它重新露出来）；放行目录本身在遮蔽目录之下时照常放行", () => {
+    const mountInfo = [
+      "36 28 0:31 / /mnt/c rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\\",
+      "40 28 0:33 / /home/fusa/.agent-hub/worktrees/1/2/win rw,noatime - 9p drvfs rw,aname=drvfs;path=D:\\",
+      "41 28 0:34 / /tmp/ro-1/win rw,noatime - 9p drvfs rw,aname=drvfs;path=E:\\",
+    ].join("\n");
+    const existing = new Set([
+      "/mnt/c",
+      "/mnt/c/proj",
+      "/home/fusa/.agent-hub",
+      "/home/fusa/.agent-hub/worktrees/1/2",
+      "/home/fusa/.agent-hub/worktrees/1/2/win",
+      "/tmp/ro-1",
+      "/tmp/ro-1/win",
+    ]);
+    const opts = { uid: 1000, exists: (p: string) => existing.has(p), realpath: (p: string) => p, mountInfo, env: {} };
+
+    const args = bwrapArgs(
+      base,
+      { dataDir: "/home/fusa/.agent-hub", writableDirs: ["/home/fusa/.agent-hub/worktrees/1/2", "/mnt/c/proj"] },
+      opts,
+    );
+    expect(args.slice(args.indexOf("/run/user/1000") + 1, args.indexOf("--"))).toEqual([
+      "--perms", "0700", "--tmpfs", "/mnt/c",
+      "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub/worktrees/1/2/win",
+      "--perms", "0700", "--tmpfs", "/tmp/ro-1/win",
+      "--ro-bind", "/home/fusa/.agent-hub", "/home/fusa/.agent-hub",
+      "--bind", "/home/fusa/.agent-hub/worktrees/1/2", "/home/fusa/.agent-hub/worktrees/1/2",
+      "--bind", "/mnt/c/proj", "/mnt/c/proj",
+      // 只补遮嵌套在放行目录里的那个；/mnt/c 是放行目录 /mnt/c/proj 的父目录，不补（否则把放行的项目也盖掉）
+      "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub/worktrees/1/2/win",
+    ]);
+
+    const roArgs = readonlyBwrapArgs(
+      base,
+      { tmpDir: "/tmp/ro-1", writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [] },
+      { ...opts, expandGlobs: () => [] },
+    );
+    expect(roArgs.slice(roArgs.indexOf("/run/user/1000") + 1, roArgs.indexOf("--"))).toEqual([
+      "--perms", "0700", "--tmpfs", "/mnt/c",
+      "--perms", "0700", "--tmpfs", "/home/fusa/.agent-hub/worktrees/1/2/win",
+      "--perms", "0700", "--tmpfs", "/tmp/ro-1/win",
+      "--bind", "/tmp/ro-1", "/tmp/ro-1",
+      "--perms", "0700", "--tmpfs", "/tmp/ro-1/win",
+    ]);
+  });
 });
 
 describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () => {
@@ -646,7 +733,7 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
 });
 
 // 真 bwrap（Ubuntu CI）：验证 scripts/wsl-provision-guest.sh --self-test 在真实 bubblewrap 下拦截 state 写入并放行工作目录
-describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真 bwrap：wsl-provision-guest.sh --self-test 门禁", () => {
+describe.runIf(canRunBwrap)("真 bwrap：wsl-provision-guest.sh --self-test 门禁", () => {
   it("在真实 Linux bubblewrap 下通过隔离自检（模拟无免密 sudo）", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-wsl-guest-live-")));
     try {

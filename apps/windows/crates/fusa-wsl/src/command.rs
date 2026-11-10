@@ -89,6 +89,16 @@ fn is_shell_binary(program: &str) -> bool {
     matches!(base, "sh" | "bash" | "dash" | "zsh" | "env")
 }
 
+/// shell 的“执行字符串”开关：`-c` 以及合写的短选项簇（`-lc`、`-ec`、`-xc` 等）。
+fn is_shell_eval_flag(arg: &str) -> bool {
+    match arg.strip_prefix('-') {
+        Some(flags) if !flags.starts_with('-') => {
+            !flags.is_empty() && flags.chars().all(|c| c.is_ascii_alphabetic()) && flags.contains('c')
+        }
+        _ => false,
+    }
+}
+
 /// `wsl.exe --version`
 pub fn build_version_cmd() -> Result<WslCommand, CommandBuildError> {
     WslCommand::base_wsl(vec![OsString::from("--version")])
@@ -169,10 +179,9 @@ where
     }
 
     if is_shell_binary(program_abs_path)
-        && collected_args.iter().any(|a| {
-            let s = a.to_string_lossy();
-            s == "-c" || s == "-lc" || s == "-ic"
-        })
+        && collected_args
+            .iter()
+            .any(|a| is_shell_eval_flag(&a.to_string_lossy()))
     {
         return Err(CommandBuildError::ShellEvalForbidden);
     }

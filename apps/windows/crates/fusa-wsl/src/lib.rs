@@ -13,7 +13,7 @@ pub use command::{
     build_terminate_distro_cmd, build_version_cmd, build_write_guest_script_cmd, WslCommand,
 };
 pub use constants::{
-    DISTRO_INSTALL_SUBDIR, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
+    DISTRO_INSTALL_SUBDIR, DISTRO_VHDX_FILENAME, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
     FUSA_NODE_WSL_PATH, FUSA_PNPM_WSL_PATH, FUSA_PROJECTS_WSL_DIR, FUSA_RELEASES_WSL_DIR,
     FUSA_ROOT_USER, FUSA_UI_TOKEN_WSL_PATH, GUEST_SCRIPT_WSL_DIR, GUEST_SCRIPT_WSL_PATH,
     PINNED_UBUNTU_2404_ROOTFS, PinnedRootfsImage, PROVISION_STATE_FILENAME, ROOTFS_CACHE_SUBDIR,
@@ -167,6 +167,12 @@ mod tests {
         })
     }
 
+    /// 模拟 `wsl --import` 在本应用安装目录里生成的 ext4.vhdx（测试桩的 --import 不落盘）。
+    fn simulate_imported_vhdx(cfg: &ProvisionConfig) {
+        fs::create_dir_all(cfg.distro_install_dir()).unwrap();
+        fs::write(cfg.distro_vhdx_path(), b"fusa-vhdx").unwrap();
+    }
+
     fn sample_ok_self_test_json() -> Vec<u8> {
         r#"{"ok":true,"worker_sandbox_ready":true,"error_code":null,"message":"WSL2 隔离与 bubblewrap 沙箱自检通过","checks":{"non_root":true,"no_passwordless_sudo":true,"interop_disabled":true,"windows_path_clean":true,"bwrap_probe":true,"bwrap_write_guard":true},"failures":[]}"#
             .as_bytes()
@@ -277,6 +283,20 @@ mod tests {
             build_exec_cmd("Fusa", "fusa", "/usr/bin/bash", ["-lc", "id"]),
             Err(CommandBuildError::ShellEvalForbidden)
         );
+        // 合写短选项簇同样拦住（-ec、-xc、-euc），env 转跳到 sh -c 也拦
+        for flags in ["-ec", "-xc", "-euc", "-ce"] {
+            assert_eq!(
+                build_exec_cmd("Fusa", "fusa", "/bin/bash", [flags, "id"]),
+                Err(CommandBuildError::ShellEvalForbidden),
+                "{flags}"
+            );
+        }
+        assert_eq!(
+            build_exec_cmd("Fusa", "fusa", "/usr/bin/env", ["sh", "-c", "id"]),
+            Err(CommandBuildError::ShellEvalForbidden)
+        );
+        // 普通脚本参数（如 --self-test、--phase）不受影响
+        assert!(build_exec_cmd("Fusa", "fusa", "/bin/bash", ["/usr/local/libexec/fusa/x.sh", "--self-test"]).is_ok());
         // 严禁非绝对路径、非法用户名与危险 WSL 标志
         assert!(matches!(
             build_exec_cmd("Fusa", "fusa", "node", ["-v"]),
@@ -490,6 +510,7 @@ mod tests {
         let st_after_fail = p1.load_state().unwrap();
         assert!(st_after_fail.imported_by_fusa);
         assert_eq!(st_after_fail.stage, ProvisionStage::InitRoot);
+        simulate_imported_vhdx(&cfg);
 
         // 第 2 轮：断点续跑！列表中已有 Fusa -> 识别为本应用导入（不报冲突、不重跑 --import、不重新下载），
         // 但在 --self-test 阶段检测到 interop 未关 -> 拒绝进入 Ready！
@@ -646,6 +667,7 @@ mod tests {
         ready_state.self_test_passed = true;
         ready_state.stage = ProvisionStage::Ready;
         ready_state.save_atomic(tmp2.path()).unwrap();
+        simulate_imported_vhdx(&cfg2);
 
         let r_wsl1 = ScriptedRunner::new(vec![
             ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)),
@@ -679,5 +701,104 @@ mod tests {
         let rolled_back = p_regressed.load_state().unwrap();
         assert_eq!(rolled_back.stage, ProvisionStage::InitUserAndSelfTest);
         assert!(!rolled_back.self_test_passed);
+    }
+
+    #[test]
+    fn residual_state_marker_without_our_vhdx_never_touches_user_owned_same_name_distro() {
+        // 之前装过 Fusa（状态标记 imported_by_fusa=true 且已 Ready），后来用户 `wsl --unregister` 掉（vhdx 随之删除），
+        // 又自己建了个同名 Fusa：只剩半截状态标记，必须报冲突，不跑任何会改写或终止它的命令。
+        for stage in [
+            ProvisionStage::InitRoot,
+            ProvisionStage::RestartDistro,
+            ProvisionStage::InitUserAndSelfTest,
+            ProvisionStage::Ready,
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let cfg = ProvisionConfig::new(tmp.path());
+            let mut residual = ProvisionState::new("Fusa");
+            residual.imported_by_fusa = true;
+            residual.self_test_passed = stage == ProvisionStage::Ready;
+            residual.stage = stage;
+            residual.save_atomic(tmp.path()).unwrap();
+            fs::create_dir_all(cfg.distro_install_dir()).unwrap(); // 目录还在，但没有 ext4.vhdx
+
+            let runner = ScriptedRunner::new(vec![
+                ok_out(encode_utf16le("WSL バージョン: 2.3.26.0\r\n", false)),
+                ok_out(encode_utf16le("既定のバージョン: 2\r\n", false)),
+                ok_out(encode_utf16le(
+                    "  名前      状態      バージョン\r\n* Fusa      実行中    2\r\n",
+                    false,
+                )),
+            ]);
+            let p = Provisioner::new(cfg, runner, FakeDownloader::ok(Vec::new()));
+            assert!(
+                matches!(
+                    p.provision_until_ready().unwrap_err(),
+                    ProvisionError::DistroNameConflict { ref distro_name } if distro_name == "Fusa"
+                ),
+                "{stage:?}"
+            );
+            // 只有 3 条只读探测，没有 tee / --phase root / --terminate / --self-test
+            assert_eq!(p.runner().calls().len(), 3, "{stage:?}");
+            assert_eq!(p.downloader().call_count(), 0);
+            // 状态标记原样保留（不被改写成别的阶段）
+            assert_eq!(p.load_state().unwrap(), residual);
+        }
+    }
+
+    #[test]
+    fn list_parser_never_panics_on_truncated_odd_utf16_crlf_lf_and_japanese_output() {
+        let ja_list = "  名前            状態            バージョン\r\n* Ubuntu          実行中          2\r\n  Fusa            停止            2\r\n";
+        let full = encode_utf16le(ja_list, false);
+        let entries = parse_wsl_list_verbose(&full);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].state, WslDistroState::Running);
+        assert!(entries[0].is_default);
+        assert_eq!(entries[1].name, "Fusa");
+        assert_eq!(entries[1].state, WslDistroState::Stopped);
+
+        // 任意位置截断（含奇数字节、切在多字节字符中间）与只用 LF 换行都不 panic
+        for cut in 0..=full.len() {
+            let _ = parse_wsl_list_verbose(&full[..cut]);
+            let _ = decode_wsl_output(&full[..cut]);
+        }
+        let utf8 = ja_list.replace("\r\n", "\n");
+        for cut in 0..=utf8.len() {
+            let _ = parse_wsl_list_verbose(&utf8.as_bytes()[..cut]);
+        }
+        assert_eq!(parse_wsl_list_verbose(utf8.as_bytes()), entries);
+        // 只有 * 号、只有一列、全是空白等畸形行直接跳过
+        assert!(parse_wsl_list_verbose(&encode_utf16le("*\r\n  2\r\n Fusa\r\n   \r\n* 2\n", true)).is_empty());
+    }
+
+    #[test]
+    fn stale_partial_download_is_replaced_not_accumulated() {
+        let tmp = TempDir::new().unwrap();
+        let payload = b"rootfs-after-crash".to_vec();
+        let mut cfg = ProvisionConfig::new(tmp.path());
+        cfg.rootfs = PinnedRootfsImage {
+            version: "24.04.5",
+            filename: "ubuntu-part.wsl",
+            url: PINNED_UBUNTU_2404_ROOTFS.url,
+            sha256: Box::leak(sha256_hex_bytes(&payload).into_boxed_str()),
+            license: PINNED_UBUNTU_2404_ROOTFS.license,
+        };
+        fs::create_dir_all(cfg.rootfs_cache_dir()).unwrap();
+        fs::write(cfg.rootfs_cache_dir().join("ubuntu-part.wsl.part"), b"half-downloaded").unwrap();
+
+        let runner = ScriptedRunner::new(vec![
+            ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)),
+            ok_out(encode_utf16le("默认版本: 2\r\n", false)),
+            ok_out(encode_utf16le("没有已安装的分发版\r\n", false)),
+            err_out(1, b"import failed".to_vec()),
+        ]);
+        let p = Provisioner::new(cfg.clone(), runner, FakeDownloader::ok(payload.clone()));
+        assert!(p.provision_until_ready().is_err());
+        let names: Vec<String> = fs::read_dir(cfg.rootfs_cache_dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["ubuntu-part.wsl".to_string()]);
+        assert_eq!(fs::read(cfg.cached_rootfs_path()).unwrap(), payload);
     }
 }

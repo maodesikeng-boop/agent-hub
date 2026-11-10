@@ -4,7 +4,7 @@
 #
 # 子命令：
 #   --phase root               以 root 初始化 /etc/wsl.conf、普通用户 fusa（禁免密 sudo）、apt 依赖与 AppArmor bwrap 规则
-#   --phase user               以普通用户 fusa 安装锁定且经官方 SHA256 校验的 Node 24、锁定版 pnpm 及固定目录结构
+#   --phase user               以普通用户 fusa 安装锁定且经 SHA256 校验的 Node 24、pnpm 官方包及固定目录结构
 #   --self-test                运行 interop 关闭与 bubblewrap 拒写/放行隔离门禁，向 stdout 输出单行结构化 JSON
 #   --vendors-json [--app-dir] 按 src/vendors 注册表（scripts/print-vendors.ts）动态输出各厂商安装与登录引导 JSON
 #   --print-constants          输出脚本锁定的运行时版本与校验值常量 JSON
@@ -15,6 +15,8 @@ set -euo pipefail
 DEFAULT_NODE_VERSION="24.22.2"
 DEFAULT_NODE_LINUX_X64_SHA256="48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75"
 DEFAULT_PNPM_VERSION="10.34.5"
+# registry.npmjs.org/pnpm/-/pnpm-10.34.5.tgz 的 SHA256（该包 dist.integrity 的 sha512 已核对一致；pnpm 无任何依赖，装它不再联网拉别的包）
+DEFAULT_PNPM_TARBALL_SHA256="ccb5c479cab1b00621325bfe7d4c9a8a8031e7a525d7249e275ecbec81b08db2"
 
 FUSA_USER="${FUSA_WSL_USER:-fusa}"
 FUSA_HOME="${FUSA_WSL_HOME:-/home/${FUSA_USER}}"
@@ -31,6 +33,8 @@ NODE_VERSION="${FUSA_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_LINUX_X64_SHA256="${FUSA_NODE_SHA256:-${DEFAULT_NODE_LINUX_X64_SHA256}}"
 NODE_DIST_BASE_URL="${FUSA_NODE_DIST_BASE_URL:-https://nodejs.org/dist/v${NODE_VERSION}}"
 PNPM_VERSION="${FUSA_PNPM_VERSION:-${DEFAULT_PNPM_VERSION}}"
+PNPM_TARBALL_SHA256="${FUSA_PNPM_SHA256:-${DEFAULT_PNPM_TARBALL_SHA256}}"
+PNPM_REGISTRY_BASE_URL="${FUSA_PNPM_REGISTRY_BASE_URL:-https://registry.npmjs.org/pnpm/-}"
 
 FUSA_SHARE_DIR="${FUSA_HOME}/.local/share/fusa"
 NODE_INSTALL_DIR="${FUSA_SHARE_DIR}/node"
@@ -52,6 +56,18 @@ json_escape() {
   s="${s//$'\r'/\\r}"
   s="${s//$'\t'/\\t}"
   printf '%s' "$s"
+}
+
+# 下载到 dest 并校验 SHA256，下载或校验失败都删掉 dest 并退出。
+download_verified() {
+  local url="$1" expected="$2" dest="$3" actual
+  curl -fsSL -o "$dest" "$url" || { rm -f "$dest"; die "下载失败：${url}"; }
+  expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')
+  actual=$(compute_sha256 "$dest")
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$dest"
+    die "SHA256 校验失败：${url}（期望 ${expected}，实际 ${actual}）"
+  fi
 }
 
 compute_sha256() {
@@ -263,8 +279,18 @@ phase_user() {
   else
     log "安装 pnpm@${PNPM_VERSION}"
     mkdir -p "$PNPM_PREFIX_DIR"
-    "${NODE_INSTALL_DIR}/bin/npm" install --global --prefix "$PNPM_PREFIX_DIR" "pnpm@${PNPM_VERSION}" \
-      --no-fund --no-audit --loglevel=error
+    # 先下载官方 tarball 校验锁定的 SHA256，再让 npm 从本地文件安装（不按版本号去 registry 解析）
+    local pnpm_tmp pnpm_tgz
+    pnpm_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fusa-pnpm-dl.XXXXXX")
+    pnpm_tgz="${pnpm_tmp}/pnpm-${PNPM_VERSION}.tgz"
+    ( download_verified "${PNPM_REGISTRY_BASE_URL}/pnpm-${PNPM_VERSION}.tgz" "$PNPM_TARBALL_SHA256" "$pnpm_tgz" ) \
+      || { rm -rf "$pnpm_tmp"; die "pnpm 官方包下载或校验未通过"; }
+    if ! "${NODE_INSTALL_DIR}/bin/npm" install --global --prefix "$PNPM_PREFIX_DIR" "$pnpm_tgz" \
+      --no-fund --no-audit --loglevel=error; then
+      rm -rf "$pnpm_tmp"
+      die "安装 pnpm 失败"
+    fi
+    rm -rf "$pnpm_tmp"
     ln -sfn "${PNPM_PREFIX_DIR}/bin/pnpm" "${LOCAL_BIN_DIR}/pnpm"
     have_pnpm=$("${LOCAL_BIN_DIR}/pnpm" -v 2>/dev/null || true)
     [ "$have_pnpm" = "$PNPM_VERSION" ] || die "安装后的 pnpm 版本异常（期望 ${PNPM_VERSION}，实际 ${have_pnpm}）"
@@ -514,11 +540,12 @@ print_vendors_json() {
 }
 
 print_constants() {
-  printf '{"distro_user":"%s","node_version":"%s","node_linux_x64_sha256":"%s","pnpm_version":"%s"}\n' \
+  printf '{"distro_user":"%s","node_version":"%s","node_linux_x64_sha256":"%s","pnpm_version":"%s","pnpm_tarball_sha256":"%s"}\n' \
     "$(json_escape "$FUSA_USER")" \
     "$(json_escape "$NODE_VERSION")" \
     "$(json_escape "$NODE_LINUX_X64_SHA256")" \
-    "$(json_escape "$PNPM_VERSION")"
+    "$(json_escape "$PNPM_VERSION")" \
+    "$(json_escape "$PNPM_TARBALL_SHA256")"
 }
 
 # ═══════════════════════ 参数分发 ═══════════════════════

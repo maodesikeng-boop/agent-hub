@@ -233,13 +233,14 @@ fn split_first_token(s: &str) -> Option<(&str, &str)> {
 }
 
 fn classify_distro_state(raw: &str) -> WslDistroState {
-    if raw.eq_ignore_ascii_case("running") || raw == "正在运行" || raw == "執行中" {
+    if raw.eq_ignore_ascii_case("running") || raw == "正在运行" || raw == "執行中" || raw == "実行中" {
         WslDistroState::Running
-    } else if raw.eq_ignore_ascii_case("stopped") || raw == "已停止" {
+    } else if raw.eq_ignore_ascii_case("stopped") || raw == "已停止" || raw == "停止" {
         WslDistroState::Stopped
     } else if raw.eq_ignore_ascii_case("installing")
         || raw == "正在安装"
         || raw == "正在安裝"
+        || raw == "インストール中"
     {
         WslDistroState::Installing
     } else {

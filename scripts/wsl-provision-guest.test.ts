@@ -105,11 +105,13 @@ pkg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --prefix) prefix="$2"; shift 2 ;;
-    pnpm@*) pkg="$1"; shift ;;
+    *.tgz) pkg="$1"; shift ;;
     *) shift ;;
   esac
 done
-ver="\${pkg#pnpm@}"
+[ -f "$pkg" ] || { echo "npm: 只接受已校验的本地 tgz：$pkg" >&2; exit 1; }
+ver="$(basename "$pkg" .tgz)"
+ver="\${ver#pnpm-}"
 mkdir -p "$prefix/bin"
 cat > "$prefix/bin/pnpm" <<EOF
 #!/usr/bin/env bash
@@ -188,6 +190,7 @@ describe("wsl-provision-guest.sh 静态契约与插件化守卫", () => {
       node_version: string;
       node_linux_x64_sha256: string;
       pnpm_version: string;
+      pnpm_tarball_sha256: string;
     };
 
     const minNode = pkg.engines.node.replace(/^[>=^\s]+/, "");
@@ -196,6 +199,7 @@ describe("wsl-provision-guest.sh 静态契约与插件化守卫", () => {
     expect(compareSemverGe(constants.node_version, minNode)).toBe(true);
     expect(constants.node_linux_x64_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(constants.pnpm_version).toBe(expectedPnpm);
+    expect(constants.pnpm_tarball_sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("wsl-provision-guest.sh 与 Rust 源码绝不硬编码任何厂商编号或 CLI 命令名", () => {
@@ -374,6 +378,9 @@ describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与
 
     const nodeVersion = "24.22.2";
     const { sha256 } = createFakeNodeTarXz(distDir, nodeVersion, npmLog);
+    const pnpmTgz = join(distDir, "pnpm-10.34.5.tgz");
+    writeFileSync(pnpmTgz, "fake-pnpm-tarball");
+    const pnpmSha = createHash("sha256").update(readFileSync(pnpmTgz)).digest("hex");
     const baseEnv = {
       FUSA_EFFECTIVE_UID: "1000",
       FUSA_WSL_USER: "fusa",
@@ -382,6 +389,8 @@ describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与
       FUSA_NODE_DIST_BASE_URL: `file://${distDir}`,
       FUSA_NODE_ARCH_OVERRIDE: "x86_64",
       FUSA_PNPM_VERSION: "10.34.5",
+      FUSA_PNPM_REGISTRY_BASE_URL: `file://${distDir}`,
+      FUSA_PNPM_SHA256: pnpmSha,
     };
 
     // 1) SHA256 不匹配时必须拒绝安装且不留残余目录
@@ -391,6 +400,17 @@ describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与
     });
     expect(badSha.status).not.toBe(0);
     expect(existsSync(join(home, ".local", "share", "fusa", "node", "bin", "node"))).toBe(false);
+
+    // 1b) pnpm 官方包 SHA256 不匹配时拒绝安装（npm 根本不会被调用），也不留下 pnpm
+    const badPnpm = runGuest(["--phase", "user"], {
+      ...baseEnv,
+      FUSA_NODE_SHA256: sha256,
+      FUSA_PNPM_SHA256: "f".repeat(64),
+    });
+    expect(badPnpm.status).not.toBe(0);
+    expect(badPnpm.stderr).toContain("SHA256 校验失败");
+    expect(existsSync(join(home, ".local", "share", "fusa", "pnpm", "bin", "pnpm"))).toBe(false);
+    expect(existsSync(npmLog) ? readFileSync(npmLog, "utf8") : "").toBe("");
 
     // 2) SHA256 匹配时正常解压安装 Node 与 pnpm@10.34.5，并建好目录结构
     const okRun = runGuest(["--phase", "user"], {
@@ -404,7 +424,7 @@ describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与
       `v${nodeVersion}`,
     );
     expect(execFileSync(join(home, ".local", "bin", "pnpm"), ["-v"], { encoding: "utf8" }).trim()).toBe("10.34.5");
-    expect(readFileSync(npmLog, "utf8")).toContain("pnpm@10.34.5");
+    expect(readFileSync(npmLog, "utf8")).toContain("pnpm-10.34.5.tgz");
 
     // 3) 再次运行应完全跳过下载与 npm install（即使把 dist 源删掉也能幂等通过！）
     rmSync(distDir, { recursive: true, force: true });

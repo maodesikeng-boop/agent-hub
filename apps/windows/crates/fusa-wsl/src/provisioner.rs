@@ -8,7 +8,7 @@ use crate::command::{
     build_write_guest_script_cmd, WslCommand,
 };
 use crate::constants::{
-    DISTRO_INSTALL_SUBDIR, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
+    DISTRO_INSTALL_SUBDIR, DISTRO_VHDX_FILENAME, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
     PINNED_UBUNTU_2404_ROOTFS, PinnedRootfsImage, ROOTFS_CACHE_SUBDIR,
 };
 use crate::error::{ProvisionError, SelfTestReport};
@@ -67,6 +67,11 @@ impl ProvisionConfig {
 
     pub fn distro_install_dir(&self) -> PathBuf {
         self.app_data_dir.join(DISTRO_INSTALL_SUBDIR)
+    }
+
+    /// 本应用导入的发行版磁盘文件路径（判断同名实例是不是本应用的依据之一）。
+    pub fn distro_vhdx_path(&self) -> PathBuf {
+        self.distro_install_dir().join(DISTRO_VHDX_FILENAME)
     }
 
     pub fn rootfs_cache_dir(&self) -> PathBuf {
@@ -277,8 +282,10 @@ where
             .find(|d| d.name.eq_ignore_ascii_case(&self.config.distro_name));
 
         if let Some(found) = existing_distro {
-            // 发现同名 Fusa 发行版，但无本应用导入标记：立即报冲突错误，严禁删除或接管！
-            if !state.imported_by_fusa {
+            // 同名实例要同时满足两条才认作本应用的：状态标记登记过导入，且本应用安装目录里确有 `wsl --import` 生成的 ext4.vhdx。
+            // 用户 `wsl --unregister` 掉我们的实例会连 vhdx 一起删，之后再自建同名 Fusa 时只剩半截状态标记：
+            // 这时必须报冲突停止，不跑 root 初始化、不改它的 /etc/wsl.conf、不 --terminate 它。
+            if !state.imported_by_fusa || !self.config.distro_vhdx_path().is_file() {
                 return Err(ProvisionError::DistroNameConflict {
                     distro_name: found.name.clone(),
                 });
@@ -371,8 +378,9 @@ where
         };
 
         if !reuse_existing {
-            let part_path =
-                cache_dir.join(format!("{}.part.{}", self.config.rootfs.filename, std::process::id()));
+            // 固定临时文件名：上次下载中途崩溃留下的几百 MB 半截文件在这里先删掉，不会按进程号越积越多
+            let part_path = cache_dir.join(format!("{}.part", self.config.rootfs.filename));
+            let _ = fs::remove_file(&part_path);
             if let Err(err) = self.downloader.download(self.config.rootfs.url, &part_path) {
                 let _ = fs::remove_file(&part_path);
                 state.last_error = Some(err.to_string());
@@ -387,10 +395,13 @@ where
                 return Err(err);
             }
 
-            fs::rename(&part_path, &target_path).map_err(|source| ProvisionError::Io {
-                path: target_path.clone(),
-                source,
-            })?;
+            if let Err(source) = fs::rename(&part_path, &target_path) {
+                let _ = fs::remove_file(&part_path);
+                return Err(ProvisionError::Io {
+                    path: target_path.clone(),
+                    source,
+                });
+            }
         }
 
         state.rootfs_version = Some(self.config.rootfs.version.to_string());
