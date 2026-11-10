@@ -2,7 +2,8 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
-// 浮层（docs/ui-standard.md 第 11 条）：rounded-2xl、p-4、宽 280px，离窗口边至少 12px。
+// 浮层（docs/ui-standard.md 第 11 条）：rounded-2xl、p-4、宽 280px，离窗口边至少 12px；
+// 最高不超过 Radix 量好的可用高度（--radix-popover-content-available-height，已扣掉 collisionPadding），超出在里面滚，不会顶出窗口外。
 export const Popover = PopoverPrimitive.Root;
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 
@@ -13,7 +14,7 @@ export function PopoverContent({ className, sideOffset = 8, collisionPadding = 1
         data-slot="popover-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className={cn("z-50 w-70 rounded-2xl border border-border bg-background p-4 outline-none", className)}
+        className={cn("z-50 w-70 max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain rounded-2xl border border-border bg-background p-4 outline-none", className)}
         {...props}
       />
     </PopoverPrimitive.Portal>

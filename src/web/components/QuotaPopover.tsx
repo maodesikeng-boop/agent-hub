@@ -10,12 +10,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
 const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 
+/** 用量条的颜色（docs/ui-standard.md 第 11 条）：正常中性灰、偏高（快用完）琥珀色、用满前景色实心；用满不用红色，不像报错。 */
+const USAGE_BAR_COLORS = { normal: "bg-foreground/40", high: "bg-caution", full: "bg-foreground" } as const;
+
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
+  const level = exhausted ? "full" : window.warning ? "high" : "normal";
   return (
-    <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-3 text-body">
+    <div className="grid gap-1">
+      <div className="flex items-baseline justify-between gap-4 text-body">
         <span>{window.short}</span>
-        <span className={cn("tabular-nums", exhausted ? "text-danger" : window.warning && "text-warn-foreground")}>{window.percent}%</span>
+        <span className="tabular-nums">{window.percent}%</span>
       </div>
       <div
         role="progressbar"
@@ -23,16 +27,24 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={window.percent}
-        className="h-1.5 overflow-hidden rounded-full bg-muted"
+        className="h-1.5 overflow-hidden rounded-full bg-sidebar-active"
       >
-        <div
-          className={cn("h-full rounded-full", exhausted ? "bg-danger" : window.warning ? "bg-warn-foreground" : "bg-foreground/60")}
-          style={{ width: `${window.percent}%` }}
-        />
+        <div className={cn("h-full rounded-full", USAGE_BAR_COLORS[level])} style={{ width: `${window.percent}%` }} />
       </div>
-      {window.resetsAt !== null && <span className="text-minor text-muted-foreground tabular-nums">Resets {formatQuotaReset(window.resetsAt)}</span>}
+      {window.resetsAt !== null && <span className="text-xs text-muted-foreground tabular-nums">Resets {formatQuotaReset(window.resetsAt)}</span>}
     </div>
   );
+}
+
+/** 同一家厂商的相邻块并成一组：厂商名做组标题，按需查的那几块（Gemini、Claude and GPT）各带一行小标题。 */
+function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVendor[] }[] {
+  const sections: { name: string; blocks: QuotaVendor[] }[] = [];
+  for (const block of blocks) {
+    const last = sections[sections.length - 1];
+    if (last?.name === block.name) last.blocks.push(block);
+    else sections.push({ name: block.name, blocks: [block] });
+  }
+  return sections;
 }
 
 /** 16px 的小圆环：已用的部分画成弧，颜色跟着文字走（currentColor）。 */
@@ -95,13 +107,20 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" aria-label="Usage">
-        <div className="grid gap-5">
-          {blocks.map((vendor) => (
-            <section key={vendor.id} className="grid gap-4" aria-label={vendor.name}>
-              <h3 className="text-minor font-medium text-muted-foreground">{vendor.name}</h3>
-              {vendor.windows.map((w) => (
-                <WindowRow key={w.key} window={w} exhausted={vendor.exhausted || w.percent >= 100} />
-              ))}
+        <div className="grid gap-6">
+          {groupByVendor(blocks).map((section) => (
+            <section key={section.name} className="grid gap-2" aria-label={section.name}>
+              <h3 className="text-minor font-medium text-muted-foreground">{section.name}</h3>
+              <div className="grid gap-4">
+                {section.blocks.map((vendor) => (
+                  <div key={vendor.id} role={vendor.group ? "group" : undefined} aria-label={vendor.group} className="grid gap-3">
+                    {vendor.group && <h4 className="text-xs font-medium text-muted-foreground">{vendor.group}</h4>}
+                    {vendor.windows.map((w) => (
+                      <WindowRow key={w.key} window={w} exhausted={vendor.exhausted || w.percent >= 100} />
+                    ))}
+                  </div>
+                ))}
+              </div>
             </section>
           ))}
           {loading && fetched.length === 0 && <p className="text-xs text-muted-foreground">Loading…</p>}
