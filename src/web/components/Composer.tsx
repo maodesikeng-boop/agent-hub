@@ -265,7 +265,7 @@ export function Composer({
             value={value}
             aria-autocomplete={source ? "list" : undefined}
             aria-controls={suggest.menu ? menuId : undefined}
-            aria-activedescendant={suggest.menu && suggest.menu.items.length > 0 ? optionId(menuId, suggest.menu.activeIndex) : undefined}
+            aria-activedescendant={suggest.menu && suggest.menu.items.length > 0 && suggest.menu.activeIndex >= 0 ? optionId(menuId, suggest.menu.activeIndex) : undefined}
             onChange={(e) => {
               setCursor(e.target.selectionStart);
               onChange(e.target.value);

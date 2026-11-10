@@ -66,6 +66,7 @@
 
 **工程工具**
 - `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push）：类型。
+- `oxc-parser`：把源码解析成语法树，`src/web/web-guard.test.ts` 用它按调用节点找定时器数字字面量（TS 7 是原生版，没有 `createSourceFile` 的 JS 接口；它原本只是 knip 的传递依赖）。
 
 **使用规则**
 - 要新功能，先查这一节有没有；没有再找行业成熟库；实在没有才自己写，并在 PR 里说明为什么。
