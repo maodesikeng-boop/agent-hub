@@ -26,7 +26,7 @@ import { createSessionStore } from "../store/index.ts";
 import type { Db, SqlValue } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { StopEvent } from "./context.ts";
-import { HANDOVER_EMPTY_REASON, HANDOVER_NOT_WRITTEN_TEXT } from "./handover.ts";
+import { HANDOVER_EMPTY_REASON, HANDOVER_NOT_WRITTEN_TEXT, HANDOVER_STALE_HINT } from "./handover.ts";
 import { OMITTED_MARK, generationMark } from "./handover-recent.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
@@ -432,7 +432,15 @@ describe("复制好了、写完了（handoverForked / handoverWritten）", () =>
     const preamble = ledger.sessionPreamble(g2!.id)!;
     expect(preamble).toBe(row.preamble);
     expect(preamble).toMatch(/^【系统】这是新会话/);
-    for (const part of ["系统自动给你换了这个新会话", "约 3 万字你和用户的原话", "交接写于切点", "不用回复“已接上”", TRANSCRIPT, "## 交接\n\n交接：暗号是 蓝鲸", "用户：早先的问题\n\n你：早先的回答"])
+    for (const part of [
+      "系统自动给你换了这个新会话",
+      "约 3 万字你和用户的原话",
+      "交接写于切点",
+      "不用回复“已接上”",
+      TRANSCRIPT,
+      `## 交接\n\n${HANDOVER_STALE_HINT}\n\n交接：暗号是 蓝鲸`,
+      "用户：早先的问题\n\n你：早先的回答",
+    ])
       expect(preamble).toContain(part);
     expect(preamble).not.toContain("## 交接之后到的 Worker 汇报");
     // 之后用户发的给新会话
@@ -465,7 +473,7 @@ describe("复制好了、写完了（handoverForked / handoverWritten）", () =>
       expect(sendsOf(workerLine).map((a) => a.params)).toEqual([{ sessionId: g2, messageId: workerLine, source: "system" }]);
       expect(ledger.waitsForHandover(during)).toBe(false);
       // 驱动层把两条拼成一行写进去，开始处理后开场说明就不再给
-      expect(ledger.sessionPreamble(g2)).toContain("## 交接\n\n交接正文");
+      expect(ledger.sessionPreamble(g2)).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n交接正文`);
       turn(g2, [during, workerLine], ["好的"]);
       expect(ledger.sessionPreamble(g2)).toBeNull();
     },
@@ -562,7 +570,7 @@ describe("开场说明：只给到新会话读到为止", () => {
     const { handoverId: _, ...meta } = line.meta as Record<string, unknown>;
     db.run("UPDATE messages SET meta = ? WHERE id = ?", JSON.stringify(meta), line.id);
     const preamble = ledger.sessionPreamble(g2)!;
-    expect(preamble).toContain("## 交接\n\n老交接");
+    expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n老交接`);
   });
 });
 
@@ -691,7 +699,7 @@ describe("兜底：复制不了，本会话写交接", () => {
     expect(rows()[0]).toMatchObject({ status: "switched", method: "in_session", to_session_id: g2 });
     expect(messages().filter((m) => m.sender === "agent" && m.id > request).every(isHandoverTraffic)).toBe(true);
     const preamble = ledger.sessionPreamble(g2)!;
-    expect(preamble).toContain("## 交接\n\n先看一下\n\n交接：暗号是 蓝鲸");
+    expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n先看一下\n\n交接：暗号是 蓝鲸`);
     expect(preamble.split("## 最近的原话")[1]).not.toContain("暗号是 蓝鲸");
     expect(actionsFor(g2, "session.start")).toHaveLength(1);
   });
@@ -1081,7 +1089,7 @@ describe("给已有项目经理换厂商", () => {
     expect(next).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", rateLimit: null });
 
     const preamble = ledger.sessionPreamble(g3)!;
-    expect(preamble).toContain("## 交接\n\n上一份交接：已完成阶段一");
+    expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n上一份交接：已完成阶段一`);
     const recent = preamble.split("## 最近的原话")[1]!;
     expect(recent).toContain("用户：刚发出去撞上额度用完的这句话");
     expect(recent).toContain("用户：长对话");
@@ -1185,6 +1193,48 @@ describe("给已有项目经理换厂商", () => {
     ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 0 });
     const g3 = sessions()[2]!.id;
     expect(createSessionStore(db).get(g3)).toMatchObject({ vendor: "claude", model: "opus", effort: "high" });
-    expect(ledger.sessionPreamble(g3)).toContain("## 交接\n\n刚好写好的现成交接");
+    expect(ledger.sessionPreamble(g3)).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n刚好写好的现成交接`);
+  });
+
+  describe("交接提示：摘要可能过时，以最新对话和实际状态为准", () => {
+    it("自动换会话：新会话收到的开场说明在交接开头带提示，且保留交接正文与最近原话", () => {
+      const q = post("原话问题");
+      turn(firstSession, [q], ["原话回答"]);
+      const { g2 } = renewNow("自动写的交接正文");
+      const preamble = ledger.sessionPreamble(g2)!;
+      expect(preamble).toContain(HANDOVER_STALE_HINT);
+      expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n自动写的交接正文`);
+      expect(preamble).toContain("用户：原话问题\n\n你：原话回答");
+    });
+
+    it("手动重开（renewSession）：新会话收到的开场说明在交接开头带提示，且保留交接正文与最近原话", () => {
+      const q = post("手动重开前的问题");
+      turn(firstSession, [q], ["手动重开前的回答"]);
+      ledger.renewSession(pmId);
+      const job = ledger.claimHandover()!;
+      forkAndWrite(job, "手动写的交接正文");
+      const g2 = sessions()[1]!.id;
+      const preamble = ledger.sessionPreamble(g2)!;
+      expect(preamble).toContain(HANDOVER_STALE_HINT);
+      expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n手动写的交接正文`);
+      expect(preamble).toContain("用户：手动重开前的问题\n\n你：手动重开前的回答");
+    });
+
+    it("切换厂商：新会话复用先前保存的交接时开头带提示，且保留先前交接正文与最新原话", () => {
+      const q1 = post("早期对话");
+      turn(firstSession, [q1], ["早期回答"]);
+      renewNow("此前保存的交接正文");
+      const g2 = sessions()[1]!.id;
+      const q2 = post("换厂商前的最新对话");
+      turn(g2, [q2], ["换厂商前的最新回答"]);
+
+      // 切换厂商到 codex
+      ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
+      const g3 = sessions()[2]!.id;
+      const preamble = ledger.sessionPreamble(g3)!;
+      expect(preamble).toContain(HANDOVER_STALE_HINT);
+      expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n此前保存的交接正文`);
+      expect(preamble).toContain("用户：换厂商前的最新对话\n\n你：换厂商前的最新回答");
+    });
   });
 });
