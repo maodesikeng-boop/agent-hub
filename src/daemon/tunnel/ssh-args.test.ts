@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TUNNEL_HOST_KEY_ALIAS, buildSshArgs, classifySshLine, knownHostsLine } from "./ssh-args.ts";
 
 const CONFIG = {
-  host: "18.179.111.112",
+  host: "203.0.113.10",
   sshPort: 22,
   user: "agenthub-tunnel",
   listenPort: 4401,
@@ -62,7 +62,7 @@ describe("buildSshArgs", () => {
         "4401:/Users/u/.agent-hub/run/peer.sock",
         "-L",
         "/Users/u/.agent-hub/run/tunnel/hub.sock:127.0.0.1:4319",
-        "agenthub-tunnel@18.179.111.112",
+        "agenthub-tunnel@203.0.113.10",
       ]
     `);
   });
@@ -95,7 +95,7 @@ describe("classifySshLine：看 ssh 的 stderr", () => {
     expect(classifySshLine("debug1: remote forward success for: listen 4401, connect /Users/u/.agent-hub/run/peer.sock:-2")).toBe("connected");
   });
   it("钥匙不认、主机公钥不对：不自动重试的两种", () => {
-    expect(classifySshLine("agenthub-tunnel@18.179.111.112: Permission denied (publickey).")).toBe("auth_failed");
+    expect(classifySshLine("agenthub-tunnel@203.0.113.10: Permission denied (publickey).")).toBe("auth_failed");
     expect(classifySshLine("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @")).toBe("hostkey_mismatch");
     expect(classifySshLine("Host key verification failed.")).toBe("hostkey_mismatch");
     expect(classifySshLine("No ED25519 host key is known for agent-hub-hub and you have requested strict checking.")).toBe("hostkey_mismatch");
@@ -103,6 +103,6 @@ describe("classifySshLine：看 ssh 的 stderr", () => {
   it("debug 行里的字样不算；别的错误（东京旧连接占着端口、网络）正常退避", () => {
     expect(classifySshLine("debug1: Permission denied hint")).toBeNull();
     expect(classifySshLine("Error: remote port forwarding failed for listen port 4401")).toBeNull();
-    expect(classifySshLine("ssh: connect to host 18.179.111.112 port 22: Connection refused")).toBeNull();
+    expect(classifySshLine("ssh: connect to host 203.0.113.10 port 22: Connection refused")).toBeNull();
   });
 });
