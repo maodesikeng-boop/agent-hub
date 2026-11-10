@@ -2,6 +2,13 @@
 
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
+/**
+ * 初始快照（/api/state）里项目经理对话、在跑的 Worker 对话带最近几条；更早的往上翻再拉（/messages?before=）。
+ * 往前带到最近一条要算的消息为止（没回答的提问、没处理完的、最近一条非安静的，见 shared/snapshot.ts），最多 MESSAGE_PAGE_SIZE 条。
+ */
+export const SNAPSHOT_RECENT_MESSAGES = 20;
+/** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
+export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
 
 /** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
@@ -349,6 +356,10 @@ export const HUB_CLI_STDIN_IDLE_MS = 60_000;
 export const EXECUTOR_STOP_GRACE_MS = 3_000;
 /** 关机：整个关机过程（执行器、claude、界面服务、agent 接口、关库）的总上限；超了记一条日志，以非 0 退出码退出。 */
 export const SHUTDOWN_TOTAL_MS = 30_000;
+/** 运行中未捕获异常：先试着正常关机（停 Worker / 项目经理的子进程、关库）最多等多久，到点直接退出码 1 退出。比 SHUTDOWN_TOTAL_MS 短，状态已经不可信，别拖。 */
+export const FATAL_SHUTDOWN_MS = 15_000;
+/** state/logs/daemon.log 超过这个大小就改名成 daemon.log.1（覆盖旧的）再新写，磁盘上最多两份。崩溃循环（systemd 每 5 秒拉起一次）也撑不大。 */
+export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
 /** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
 export const AGENT_API_CLOSE_MS = 3_000;
 
@@ -555,6 +566,31 @@ export const PM_ARCHIVE_RETENTION_DAYS = 7;
 export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** 每小时巡检一次到期归档 PM。 */
 export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+// ---- 已收工 Worker 的对话保留期（migrations/0020_conversation_purges.sql、daemon/ledger/worker-retention.ts、daemon/db-retention.ts）----
+/** Worker 收工（workers.updated_at：收工时写，之后不再改）满这么多天，清掉它自己对话里的消息和步骤日志等；基本记录和项目经理对话里的汇报留着。 */
+export const WORKER_RETENTION_DAYS = 30;
+export const WORKER_RETENTION_MS = WORKER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** 守护进程多久巡检一次（启动时先巡一次）。 */
+export const WORKER_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
+/** 一批（一个事务、一次写锁）最多删多少行（消息、步骤日志等各表加起来）：删得少，锁库的时间就短。 */
+export const WORKER_PURGE_BATCH_ROWS = 500;
+/** 一批最多看几个候选 Worker（预算花完就停，多取没用；取少了下一批还会取）。 */
+export const WORKER_PURGE_CANDIDATES_PER_BATCH = 20;
+/** 一轮巡检最多删多少行：超了留给下一轮（批与批之间让出事件循环，别的请求照常进来）。按一个月 3 万条消息、5 万步日志算，一小时 5000 行一天能清 12 万行。 */
+export const WORKER_PURGE_ROUND_MAX_ROWS = 5_000;
+/** 增量回收数据库空间（PRAGMA incremental_vacuum）：每次最多回收多少页（4 KB 一页，1000 页约 4 MB）、一轮最多回收多少页。 */
+export const DB_INCREMENTAL_VACUUM_PAGES = 1_000;
+export const DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES = 25_000;
+
+// ---- Worker worktree 自动清理（daemon/worktree-cleanup.ts、daemon/ledger/workers.ts）----
+/** 已收工且无未提交改动的 Worker worktree 保留多少天（PR 已合并的不等，直接清；分支保留）。 */
+export const WORKTREE_RETENTION_DAYS = 3;
+export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
+export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+/** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
+export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
 // ---- 输入框 /hub:worker 选择列表（web/worker-pick.ts）----
 /** 同一份模型名单下按（级别、已选、筛选词）缓存的列表最多留几份；超了整份清掉重算（名单一换，旧的整份随 WeakMap 回收）。 */

@@ -7,7 +7,7 @@ import { askOf, isHandoverTraffic, isSilentTriggerMessage, systemEventOf, type C
 /** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
 export const WAITING_SETTLE_MS = 3_000;
 
-/** 守护进程那份状态里每个对话留多少条最近的消息（/api/state 给 100 条，多留一些）。 */
+/** 守护进程那份状态里每个对话留多少条最近的消息（快照最多给 MESSAGE_PAGE_SIZE 条，见 shared/snapshot.ts，多留一些）。 */
 const MIRROR_MESSAGES_PER_CONVERSATION = 200;
 
 /** 算提醒要的状态。网页的 HubState 直接就是它；守护进程用 reminderStateFrom + applyReminderChange 维护一份。 */
@@ -25,6 +25,11 @@ export type LastSeen = Record<ConversationId, number | undefined>;
 
 /** 还没处理完的消息状态：排队中、已送达、处理中。 */
 const IN_FLIGHT = new Set(["queued", "delivered", "processing"]);
+
+/** 消息还没处理完（排队中、已送达、处理中）。 */
+export function isInFlight(message: Pick<Message, "status">): boolean {
+  return message.status !== null && IN_FLIGHT.has(message.status);
+}
 
 /**
  * 换新会话的那几条（写交接的来往、换代那条分隔线）及静默唤醒项目经理的内部触发消息（worker.max_time_exceeded）：
@@ -86,7 +91,7 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
       if (isPmArchived(state, conversation.pmId)) return false;
       const last = messages.findLast((m) => !isQuietMessage(m));
       if (!last || last.sender === "user" || last.createdAt <= (lastSeen[conversation.id] ?? 0)) return false;
-      if (messages.some((m) => m.status !== null && IN_FLIGHT.has(m.status) && !isHandoverTraffic(m))) return false;
+      if (messages.some((m) => isInFlight(m) && !isHandoverTraffic(m))) return false;
       if (pendingIn(state, conversation.id).some((p) => p.phase === "sending")) return false;
       if ((visibleSessionOf(state, conversation.id)?.activity ?? "idle") !== "idle") return false;
       return conversation.pmId === null || runningWorkerCount(state, conversation.pmId) === 0;
@@ -97,13 +102,16 @@ export function waitingConversations(state: ReminderState, lastSeen: LastSeen): 
 const unansweredAsksCache = new WeakMap<readonly Message[], Message[]>();
 const NO_MESSAGES: Message[] = [];
 
+/** 还在等用户确定的 hub ask（守护进程还没标成已回答）。 */
+export function isUnansweredAsk(message: Pick<Message, "sender" | "meta">): boolean {
+  const meta = askOf(message);
+  return meta !== null && meta.answered !== true;
+}
+
 function unansweredAsksIn(messages: readonly Message[]): Message[] {
   let cached = unansweredAsksCache.get(messages);
   if (cached !== undefined) return cached;
-  const found = messages.filter((m) => {
-    const meta = askOf(m);
-    return meta !== null && meta.answered !== true;
-  });
+  const found = messages.filter(isUnansweredAsk);
   cached = found.length === 0 ? NO_MESSAGES : found;
   unansweredAsksCache.set(messages, cached);
   return cached;
@@ -143,7 +151,7 @@ export function allPendingAsks(state: ReminderState): { conversationId: Conversa
  * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
  */
 export function renewingIn(messages: Message[]): boolean {
-  return messages.some((m) => systemEventOf(m)?.event === "handover.requested" && m.status !== null && IN_FLIGHT.has(m.status));
+  return messages.some((m) => systemEventOf(m)?.event === "handover.requested" && isInFlight(m));
 }
 
 /**

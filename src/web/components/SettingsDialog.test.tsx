@@ -10,7 +10,7 @@ import { SettingsDialog } from "./SettingsDialog.tsx";
 
 const ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
-const LONG_HOSTNAME = "yuxinzhangmacbookpro2024.tail1a2b3c.ts.net";
+const LONG_HOSTNAME = "dev-macbook-pro.tail1a2b3c.ts.net";
 
 const sessions: BrowserSessionInfo[] = [
   { id: "android", userAgent: ANDROID, createdAt: 0, lastSeenAt: Date.now(), current: false, status: "pending_approval", viaPublic: true },

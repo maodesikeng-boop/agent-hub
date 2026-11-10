@@ -18,6 +18,7 @@ import type {
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { WorkerLineSummary } from "./snapshot.ts";
 import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
@@ -154,10 +155,15 @@ export const API_PATHS = {
 
 export interface ConversationSnapshot {
   conversation: Conversation;
-  /** 最近 100 条，按编号从小到大。 */
+  /**
+   * 按编号从小到大、连着的一段（见 shared/snapshot.ts）：项目经理对话、在跑的 Worker 对话是最近 SNAPSHOT_RECENT_MESSAGES 条，
+   * 往前带到要算的消息，最多 MESSAGE_PAGE_SIZE 条；已收工的 Worker 对话是空的，点开再拉。
+   */
   messages: Message[];
   /** 比 messages 里最早一条更早的还有没有。 */
   hasMore: boolean;
+  /** Worker 对话：项目经理对话里指向它的那几行的摘要；还没有那一行、不是 Worker 对话不带。 */
+  workerLine?: WorkerLineSummary;
 }
 
 /**
@@ -366,7 +372,7 @@ export interface PickFolderResponse {
 // ---- WebSocket：服务端 → 网页 ----
 
 /**
- * 同一个事务里推出的几条变化按这个顺序：pm.* → project.* → conversation.created → session.created → folders.updated →
+ * 同一个事务里推出的几条变化按这个顺序：pm.* → project.* → conversation.created → conversation.purged → session.created → folders.updated →
  * message.* → session.status → health.updated → schedule.*。所以网页收到某个对话的 message.created 时，那个对话一定已经有了。
  */
 export const CHANGE_TYPES = [
@@ -380,6 +386,7 @@ export const CHANGE_TYPES = [
   "project.created",
   "folders.updated",
   "conversation.created",
+  "conversation.purged",
   "session.created",
   "schedule.updated",
   "schedule.removed",
@@ -402,6 +409,8 @@ export interface ChangeDataMap {
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };
   /** 新对话（新项目经理的那个对话；M3 起还有派活时 Worker 的对话），消息是空的。 */
   "conversation.created": { conversation: Conversation };
+  /** 已收工的 Worker 满保留期，对话里的消息和步骤日志清掉了：网页把这个对话的消息清空、显示“已按保留期清理”。 */
+  "conversation.purged": { conversationId: ConversationId; purgedAt: number };
   /** 新会话（建项目经理时；M3 起还有派活时 Worker 的会话）。 */
   "session.created": { session: SessionState };
   /** 定时任务建了、暂停、恢复、跑过一次（M6），整行换成这一份。 */

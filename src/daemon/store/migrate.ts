@@ -61,17 +61,27 @@ function backupStamp(ms: number): string {
 }
 
 /** 库文件的路径；内存库、临时库是 null。 */
-function mainDbFile(db: Db): string | null {
+export function mainDbFile(db: Db): string | null {
   const file = db.all<{ name: string; file: string }>("PRAGMA database_list").find((d) => d.name === "main")?.file;
   return file ? file : null;
 }
 
-function backup(db: Db, from: number, now: () => number): string | undefined {
+/** 备份成 <库文件>.bak-<版本>-<UTC 时间>（VACUUM INTO，完整的库文件），只留最近 MAX_DB_BACKUPS 份；内存库、临时库没有文件，不备份。 */
+export function backupDatabase(db: Db, from: number, now: () => number): string | undefined {
   const file = mainDbFile(db);
   if (file === null) return undefined;
   let target = `${file}.bak-${from}-${backupStamp(now())}`;
   for (let n = 2; existsSync(target); n++) target = `${file}.bak-${from}-${backupStamp(now())}-${n}`;
-  db.run("VACUUM INTO ?", target);
+  try {
+    db.run("VACUUM INTO ?", target);
+  } catch (error) {
+    try {
+      rmSync(target, { force: true });
+    } catch {
+      // 清理半截备份失败不影响报错
+    }
+    throw error;
+  }
   pruneBackups(file, target);
   return target;
 }
@@ -127,7 +137,7 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
     throw new Error(`database user_version ${from} is newer than the latest migration ${latest}`);
   }
   const pending = migrations.filter((m) => m.version > from);
-  const backupFile = from > 0 && pending.length > 0 ? backup(db, from, options.now ?? Date.now) : undefined;
+  const backupFile = from > 0 && pending.length > 0 ? backupDatabase(db, from, options.now ?? Date.now) : undefined;
   const applied: number[] = [];
   for (const { version, file } of pending) {
     const sql = readFileSync(join(dir, file), "utf8");

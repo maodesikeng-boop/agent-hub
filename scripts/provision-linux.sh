@@ -3,7 +3,7 @@
 #
 # 在本机（Mac）上跑，一条命令搞定：
 #   scripts/provision-linux.sh [-i 私钥] [--ref git引用] [--port 端口] 用户@主机
-# 例：scripts/provision-linux.sh -i ~/.ssh/lightsail-tokyo.pem ubuntu@18.179.111.112
+# 例：scripts/provision-linux.sh -i ~/.ssh/id_ed25519 ubuntu@203.0.113.10
 #
 # 它做的事（对应 docs/linux.md）：
 #   1. apt 装 git / 构建依赖 / bubblewrap / rsync 等；加 4GB swap；从 nodejs.org 装 Node ≥ package.json 的 engines；装 pnpm

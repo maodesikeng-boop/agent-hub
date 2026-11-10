@@ -8,6 +8,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     private let supervisor: DaemonSupervisor
     private let onStatusUpdate: (Int, Int, Int) -> Void
     private var didAttemptTokenAuth = false
+    private(set) var isShowingErrorPage = false
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
     init(supervisor: DaemonSupervisor, onStatusUpdate: @escaping (Int, Int, Int) -> Void) {
@@ -130,6 +131,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
 
     /// 免手输登录：先检查 httpCookieStore 是否已有 agent_hub_ui_4317 Cookie；有则直接加载 /，没有则读 state/ui-token 跳 /auth?token=。
     func loadHub() {
+        isShowingErrorPage = false
         let cookieName = supervisor.cookieName
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
             guard let self = self else { return }
@@ -160,6 +162,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     }
 
     func showStartupError(_ message: String) {
+        isShowingErrorPage = true
         let escaped = message
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")

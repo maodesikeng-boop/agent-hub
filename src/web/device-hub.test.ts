@@ -119,4 +119,49 @@ describe("DevicesStore（zustand store 驱动）", () => {
     unsub();
     store.dispose();
   });
+
+  it("网址里带了设备编号：这台的快照和设备清单一起拉，不等清单回来；清单里有它就接着用，没有就关掉", async () => {
+    const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
+    const OTHER = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    const mac = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, url: null };
+    const tokyo = { id: TOKYO, name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" };
+    installFakeWebSocket();
+    const paths: string[] = [];
+    let releaseList: (devices: unknown[]) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(String(input), "http://127.0.0.1:1").pathname;
+        paths.push(path);
+        if (path === "/api/devices") return new Promise<Response>((resolve) => (releaseList = (devices) => resolve(Response.json({ devices }))));
+        if (path.endsWith("/api/state")) return Response.json(makeSnapshot());
+        return Response.json({ error: "not found" }, { status: 404 });
+      }),
+    );
+
+    const store = new DevicesStore(undefined, TOKYO);
+    store.start();
+    await vi.waitFor(() => expect(paths).toContain(`/d/${TOKYO}/api/state`));
+    expect(paths).toContain("/api/devices");
+    // 清单还没回来：界面里还只有本机
+    expect(store.getSnapshot().listed).toBe(false);
+    expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE]);
+
+    releaseList([mac, tokyo]);
+    await vi.waitFor(() => expect(store.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, TOKYO]));
+    expect(store.getSnapshot().devices[1]!.state.phase).toBe("ready");
+    expect(paths.filter((p) => p === `/d/${TOKYO}/api/state`)).toHaveLength(1);
+    store.dispose();
+
+    // 网址里的设备不在清单里（已经移除了）：清单回来就关掉，不留在表里
+    paths.length = 0;
+    const gone = new DevicesStore(undefined, OTHER);
+    gone.start();
+    await vi.waitFor(() => expect(paths).toContain(`/d/${OTHER}/api/state`));
+    releaseList([mac, tokyo]);
+    await vi.waitFor(() => expect(gone.getSnapshot().listed).toBe(true));
+    expect(gone.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, TOKYO]);
+    expect(gone.hub(OTHER).key).toBe(LOCAL_DEVICE);
+    gone.dispose();
+  });
 });

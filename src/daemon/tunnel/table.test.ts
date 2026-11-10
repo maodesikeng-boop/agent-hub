@@ -75,7 +75,7 @@ describe("文件", () => {
     const table = {
       ...upsertSlot(emptyTunnelTable(), "mac", "SHA256:a").table,
       hub: {
-        host: "18.179.111.112",
+        host: "203.0.113.10",
         sshPort: 22,
         user: "agenthub-tunnel",
         hostKey: `ssh-ed25519 ${KEY_A}`,

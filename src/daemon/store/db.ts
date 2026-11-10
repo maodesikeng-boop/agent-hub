@@ -27,10 +27,13 @@ export interface Db {
   close(): void;
 }
 
-/** 打开数据库：WAL、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。maxStatements 测试可以改小。 */
+/** 打开数据库：WAL、增量回收（新库）、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。maxStatements 测试可以改小。 */
 export function openDatabase(file: string, options: { maxStatements?: number } = {}): Db {
   const maxStatements = options.maxStatements ?? MAX_CACHED_STATEMENTS;
   const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: DB_BUSY_TIMEOUT_MS });
+  // 新库一开始就是增量回收模式（删掉的页进空闲列表，由 maintenance.ts 的 reclaimFreePages 分批还给文件系统）。
+  // 已经有表的老库这句不起作用，要靠 maintenance.ts 的 ensureIncrementalVacuum 重建一次；必须在建任何表（含改成 WAL）之前设。
+  raw.exec("PRAGMA auto_vacuum = INCREMENTAL");
   raw.exec("PRAGMA journal_mode = WAL");
   // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
   raw.exec("PRAGMA synchronous = NORMAL");

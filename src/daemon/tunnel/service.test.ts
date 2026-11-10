@@ -14,7 +14,7 @@ import { bindSlotDevice, loadTunnelTable, saveTunnelTable } from "./table.ts";
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 const PUB_MAC = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhsK3UFdyXPDkN0GMsDdzcuMdUKAxB7m9PiRJEBVSqU agent-hub";
 const CODE = {
-  host: "18.179.111.112",
+  host: "203.0.113.10",
   sshPort: 22,
   user: "agenthub-tunnel",
   hostKey: HOST_KEY,

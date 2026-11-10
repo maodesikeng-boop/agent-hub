@@ -12,7 +12,7 @@ import { createTunnelSupervisor, killStaleSsh, type TunnelSupervisor } from "./s
 
 const FAKE_SSH = fileURLToPath(new URL("./test-fake-ssh.mjs", import.meta.url));
 const CONNECTED = "debug1: remote forward success for: listen 4401, connect /tmp/peer.sock:-2";
-const REFUSED = "ssh: connect to host 18.179.111.112 port 22: Connection refused";
+const REFUSED = "ssh: connect to host 203.0.113.10 port 22: Connection refused";
 
 type Step = { stderr?: string[]; exit?: number; hang?: boolean; ignoreTerm?: boolean };
 
