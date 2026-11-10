@@ -10,7 +10,6 @@ import {
   checkModel,
   truncateChars,
   vendorFailureOf,
-  vendorSpec,
   type CatalogModel,
   type ModelCatalog,
   type VendorAvailability,
@@ -31,8 +30,13 @@ import { CURSOR_PROBE_MAX_STDOUT_BYTES } from "./limits.ts";
 // 剥离 ANSI 控制序列与零宽字符（实测 cursor-agent models 部分行尾带 \u200b）。
 const ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -/]*[@-~]/gu;
 const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF]/gu;
-const TRAILING_MARKER_RE = /\s*\((current|default)\)\s*$/iu;
-const VARIANT_SUFFIX_RE = /-(?:fast|thinking|extra-high|xhigh|high|medium|low|max|minimal|none|1m)$/iu;
+const TRAILING_MARKER_RE = /\s*\((?:current|default)(?:,\s*(?:current|default))*\)\s*$/iu;
+const VARIANT_SUFFIX_RE = /-(?:fast|thinking|extra-high|xhigh|high|medium|low|max|minimal|none)$/iu;
+const LABEL_VARIANT_RE = /\s+(?:fast|thinking|extra high|xhigh|high|medium|low|max|minimal|none)$/iu;
+const LEGACY_CLAUDE_RE = /^claude-(\d+)(?:\.(\d+))?-(opus|sonnet|haiku|fable)$/u;
+
+/** Fusa 未选模型时用的 Cursor 自动路由（ACP 里是 default[]）。 */
+export const CURSOR_AUTO_MODEL = "auto";
 
 export interface CursorCatalogRaw {
   modelsText: string | null;
@@ -51,172 +55,57 @@ function cleanLine(raw: string): string {
   return raw.replace(ANSI_ESCAPE_RE, "").replace(ZERO_WIDTH_RE, "").trim();
 }
 
-/** 归一化模型家族键，用于在超过 MAX_CATALOG_MODELS 时先按家族轮询挑出代表项。 */
-export function cursorModelFamilyKey(modelId: string): string {
-  let base = modelId.trim().toLowerCase().replace(/^cursor-/u, "");
-  for (let i = 0; i < 4; i++) {
-    const next = base.replace(VARIANT_SUFFIX_RE, "");
-    if (next === base || next === "") break;
-    base = next;
-  }
-  return base;
-}
-
-function tierPriority(modelId: string): number {
-  const lower = modelId.toLowerCase();
-  if (lower.endsWith("-high") && !lower.includes("-thinking-")) return 0;
-  if (!VARIANT_SUFFIX_RE.test(lower)) return 1;
-  if (lower.endsWith("-medium")) return 2;
-  if (lower.endsWith("-high-fast")) return 3;
-  if (lower.endsWith("-thinking-high")) return 4;
-  if (lower.endsWith("-xhigh") || lower.endsWith("-extra-high")) return 5;
-  if (lower.endsWith("-fast")) return 6;
-  return 7;
-}
-
-function cursorProviderBucket(familyKey: string): string {
-  if (/^o\d\b/u.test(familyKey)) return "gpt";
-  const head = familyKey.split(/[-._]/u, 1)[0] ?? familyKey;
-  return head || familyKey;
+function stripTrailing(text: string, re: RegExp): string {
+  let out = text;
+  for (let next = out.replace(re, ""); next !== out && next !== ""; next = out.replace(re, "")) out = next;
+  return out;
 }
 
 /**
- * 在候选模型数超过 MAX_CATALOG_MODELS 时，优先保住：
- * 1. spec.models.bundled 中的精选代表项（按原出现顺序）；
- * 2. 按上游厂商桶（composer / claude / gpt / gemini / grok / deepseek / kimi 等）轮询，为每个模型家族挑出优先级最高的一项，
- *    避免单一厂商几十个历史版本与思考档位挤占全部 50 个名额；
- * 3. 剩余名额按 CLI 原始顺序补齐至 MAX_CATALOG_MODELS。
+ * CLI 模型 ID 归到 ACP 模型项的家族名（ACP options[].name）：去 `cursor-` 前缀与档位/Fast 后缀，
+ * 旧式 claude-4.6-sonnet 改成 ACP 的 claude-sonnet-4-6（claude-opus-5-5-high -> claude-opus-5-5）。
  */
-function selectRepresentativeModels(all: readonly CatalogModel[]): CatalogModel[] {
-  if (all.length <= MAX_CATALOG_MODELS) return [...all];
-
-  const picked = new Map<string, CatalogModel>();
-  const bundledIds = new Set(vendorSpec("cursor").models.bundled.map((m) => m.id));
-
-  for (const m of all) {
-    if (bundledIds.has(m.id) && picked.size < MAX_CATALOG_MODELS) {
-      picked.set(m.id, m);
-    }
-  }
-
-  const byFamily = new Map<string, CatalogModel[]>();
-  for (const m of all) {
-    const fam = cursorModelFamilyKey(m.id);
-    let list = byFamily.get(fam);
-    if (!list) {
-      list = [];
-      byFamily.set(fam, list);
-    }
-    list.push(m);
-  }
-
-  const providerQueues = new Map<string, CatalogModel[]>();
-  for (const [fam, list] of byFamily.entries()) {
-    if (list.some((m) => picked.has(m.id))) continue;
-    const best = [...list].sort((a, b) => tierPriority(a.id) - tierPriority(b.id))[0];
-    if (!best) continue;
-    const bucket = cursorProviderBucket(fam);
-    let queue = providerQueues.get(bucket);
-    if (!queue) {
-      queue = [];
-      providerQueues.set(bucket, queue);
-    }
-    queue.push(best);
-  }
-
-  const queues = [...providerQueues.values()];
-  let cursor = 0;
-  let progressed = true;
-  while (picked.size < MAX_CATALOG_MODELS && progressed) {
-    progressed = false;
-    for (const q of queues) {
-      if (picked.size >= MAX_CATALOG_MODELS) break;
-      if (cursor < q.length) {
-        const candidate = q[cursor]!;
-        picked.set(candidate.id, candidate);
-        progressed = true;
-      }
-    }
-    cursor += 1;
-  }
-
-  for (const m of all) {
-    if (picked.size >= MAX_CATALOG_MODELS) break;
-    if (!picked.has(m.id)) picked.set(m.id, m);
-  }
-
-  // 按 picked 插入顺序输出（精选代表与各厂商家族主力靠前，其余按 CLI 顺序补齐）
-  return [...picked.values()].slice(0, MAX_CATALOG_MODELS);
+export function cursorModelFamily(modelId: string): string {
+  const base = stripTrailing(modelId.trim().toLowerCase().replace(/^cursor-/u, ""), VARIANT_SUFFIX_RE);
+  const legacy = LEGACY_CLAUDE_RE.exec(base);
+  if (!legacy) return base;
+  const [, major, minor, family] = legacy;
+  return minor ? `claude-${family}-${major}-${minor}` : `claude-${family}-${major}`;
 }
 
-/** 解析 `cursor-agent models` 的纯文本输出；认不出或无合法模型时返回 null。 */
+/**
+ * 解析 `cursor-agent models` 的纯文本输出；认不出或无合法模型时返回 null。
+ * CLI 把档位和 Fast 展开成约 275 个 ID，但 ACP 只能选每个家族的一个预设（options[] 约 47 项，实测
+ * session/set_config_option 拒收其余组合），所以按家族归并成一项一个，ID 用家族名；打包名单里的家族排前面。
+ */
 export function parseCursorModelsText(text: string): ModelCatalog | null {
-  const lines = text.split(/\r?\n/u);
-  const parsed: CatalogModel[] = [];
-  const seen = new Set<string>();
-
-  let currentDefault: { id: string; label: string } | null = null;
-  let fallbackDefault: { id: string; label: string } | null = null;
-
-  for (const rawLine of lines) {
+  const families = new Map<string, CatalogModel>();
+  for (const rawLine of text.split(/\r?\n/u)) {
     const line = cleanLine(rawLine);
-    if (line === "" || /^available models\b/iu.test(line) || /^tip:/iu.test(line) || /^loading\b/iu.test(line)) {
-      continue;
-    }
     const sep = line.indexOf(" - ");
     if (sep <= 0) continue;
-
-    const id = line.slice(0, sep).trim();
-    if (id === "" || /\s/u.test(id) || seen.has(id)) continue;
-    if (checkModel("cursor", id) !== null) continue;
-
-    let rawLabel = line.slice(sep + 3).replace(/\s+/gu, " ").trim();
-    let marker: "current" | "default" | null = null;
-    for (;;) {
-      const m = TRAILING_MARKER_RE.exec(rawLabel);
-      if (!m) break;
-      const kind = m[1]!.toLowerCase();
-      if (kind === "current") marker = "current";
-      else if (marker === null) marker = "default";
-      rawLabel = rawLabel.slice(0, m.index).trim();
-    }
-    if (rawLabel === "") continue;
-
-    const label = truncateChars(rawLabel, MAX_CATALOG_LABEL_CHARS);
-    seen.add(id);
-
-    if (marker === "current" && currentDefault === null) {
-      currentDefault = { id, label };
-    } else if (marker === "default" && fallbackDefault === null) {
-      fallbackDefault = { id, label };
-    }
-
-    // "auto" 对应 Cursor 的默认自动路由，已在下拉首项显示为“Auto（默认）”，不再重复塞进候选列表。
-    if (id.toLowerCase() === "auto") {
-      if (fallbackDefault === null) fallbackDefault = { id, label };
-      continue;
-    }
-
-    parsed.push({
-      id,
-      label,
-      description: null,
-      efforts: [],
-    });
+    const rawId = line.slice(0, sep).trim();
+    if (/\s/u.test(rawId) || rawId.toLowerCase() === CURSOR_AUTO_MODEL) continue;
+    const id = cursorModelFamily(rawId);
+    if (families.has(id) || checkModel("cursor", id) !== null) continue;
+    const label = stripTrailing(line.slice(sep + 3).replace(/\s+/gu, " ").replace(TRAILING_MARKER_RE, "").trim(), LABEL_VARIANT_RE);
+    if (label === "") continue;
+    families.set(id, { id, label: truncateChars(label, MAX_CATALOG_LABEL_CHARS), description: null, efforts: [] });
   }
+  if (families.size === 0) return null;
 
-  const chosenDefault = currentDefault ?? fallbackDefault;
-  if (parsed.length === 0) return null;
-
-  const models = selectRepresentativeModels(parsed);
   const base = bundledModelCatalog("cursor");
+  const bundledFirst = [
+    ...base.models.flatMap((m) => families.get(m.id) ?? []),
+    ...[...families.values()].filter((m) => !base.models.some((b) => b.id === m.id)),
+  ];
   return {
     ...base,
     source: "vendor",
-    models,
+    models: bundledFirst.slice(0, MAX_CATALOG_MODELS),
     defaultEfforts: [],
-    defaultModel: chosenDefault?.label ?? null,
-    defaultModelId: chosenDefault?.id ?? null,
+    defaultModel: "Auto",
+    defaultModelId: CURSOR_AUTO_MODEL,
   };
 }
 

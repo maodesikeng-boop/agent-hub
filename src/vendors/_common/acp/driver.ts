@@ -4,7 +4,7 @@
 // - 完整对话生命周期：首轮系统提示词块注入、多轮复用、排队合并、session/cancel 正规打断（超时升级 SIGINT -> SIGKILL）、流式文本聚合、思考状态、工具调用生命周期、available_commands_update 命令同步、上下文与 token 用量更新、空闲关闭与残留清理；
 // - 内存与上限安全：流式拼接按 MAX_MESSAGE_BYTES 分段冲刷，单轮工具表按 SESSION_STEPS_KEEP 封顶并在轮末与退出时清空，命令缓存按 MAX_COMMANDS 封顶，进程退出关闭连接释放全部挂起请求，零后台轮询定时器。
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -500,6 +500,11 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     input: ReadonlySandboxInput;
     cleanupTmp: () => void;
   } {
+    const homeDir = realpathOrSelf(homedir());
+    const realCwd = realpathOrSelf(row.cwd);
+    // 厂商声明的是运行时必须可写的目录：首次启动时可能还没有，而它们的父目录在沙箱里只读，先建好再放行。
+    const vendorDirs = this.#config.readonlySandbox?.writableDirs?.(homeDir, realCwd) ?? [];
+    for (const d of vendorDirs) mkdirSync(d, { recursive: true });
     const rawTmp = mkdtempSync(join(tmpdir(), "agent-hub-acp-ro-"));
     const tmpDir = realpathOrSelf(rawTmp);
     let cleaned = false;
@@ -513,20 +518,13 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       }
     };
 
-    const homeDir = realpathOrSelf(homedir());
-    const realCwd = realpathOrSelf(row.cwd);
     const defaultCaches = [
       join(homeDir, ".cache"),
       join(homeDir, "Library", "Caches"),
       join(homeDir, ".npm"),
     ];
-    const extraDirs = this.#config.readonlySandbox?.writableDirs?.(homeDir, realCwd) ?? [];
     const writableDirs = [
-      ...new Set(
-        [...defaultCaches, ...extraDirs]
-          .filter((d) => existsSync(d))
-          .map(realpathOrSelf),
-      ),
+      ...new Set([...defaultCaches.filter((d) => existsSync(d)), ...vendorDirs].map(realpathOrSelf)),
     ];
     const writableFileGlobs = [
       ...(this.#config.readonlySandbox?.writableFileGlobs?.(homeDir, realCwd) ?? []),

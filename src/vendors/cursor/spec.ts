@@ -4,7 +4,7 @@ import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
 /**
- * Cursor 将思考档位与 Fast 变体直接编码在模型 ID 中（如 claude-opus-5-5-high、grok-4.7-high-fast），
+ * Cursor 的 ACP 会话只能选模型家族，思考程度和 Fast 由 Cursor 按家族预设（实测 set_config_option 拒收其余组合），
  * 仅保留单档以同时满足契约 S4（efforts 非空）与前端 efforts.length <= 1 自动隐藏思考程度选择器。
  */
 const EFFORTS: readonly string[] = ["medium"];
@@ -56,20 +56,19 @@ export default defineVendor({
     ],
   },
   models: {
-    // 基于本机 `cursor-agent models` 精选的各主流模型家族代表项；未命中实时探测时兜底。
+    // 各主流家族（ID 即 ACP 模型项的 name）；实时名单按家族归并后这几家排前面，探测不到时兜底。
     bundled: [
       { id: "composer-2.5", label: "Composer 2.5" },
-      { id: "composer-2.5-fast", label: "Composer 2.5 Fast" },
-      { id: "claude-opus-5-5-high", label: "Claude Opus 5.5 1M High" },
-      { id: "claude-sonnet-5-5-high", label: "Claude Sonnet 5.5 High" },
-      { id: "gpt-5.6-sol-high", label: "GPT-5.6 Sol 1M High" },
-      { id: "gpt-5.3-codex-high", label: "Codex 5.3 High" },
-      { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon High" },
-      { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
-      { id: "grok-4.7-high-fast", label: "Grok 4.7 High Fast" },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+      { id: "gpt-5.3-codex", label: "Codex 5.3" },
+      { id: "gemini-4-carbon", label: "Gemini 4 Carbon" },
+      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash" },
+      { id: "grok-4.7", label: "Grok 4.7" },
     ],
     customModel: true,
-    customModelExample: "claude-opus-5-5-high",
+    customModelExample: "claude-opus-5-5",
     efforts: EFFORTS,
     shortName: shortCursorModelName,
   },
@@ -143,7 +142,6 @@ export default defineVendor({
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",
-    explicitDefaultModel: true,
     // 包进外层 OS 沙箱时必须关闭 cursor-agent 自带沙箱（--sandbox disabled），避免嵌套 sandbox_apply 报 exit 71。
     ownSandboxOffArgs: ["--sandbox", "disabled"],
   },

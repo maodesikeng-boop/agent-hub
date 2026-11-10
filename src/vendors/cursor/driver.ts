@@ -1,18 +1,15 @@
 // Cursor 常驻 ACP 会话驱动：薄封装通用 createAcpDriver（严禁重复实现 JSON-RPC / ACP 通信层）。
 // 仅配置 Cursor 专属参数：
-// - 启动参数：`--trust --approve-mcps [--model <id>] acp`（沙箱包裹时由底座自动前置 ownSandboxOffArgs `--sandbox disabled`）；
+// - 启动参数：`--trust --approve-mcps acp`（沙箱包裹时由底座自动前置 ownSandboxOffArgs `--sandbox disabled`）；
+//   不带 `--model`：实测 ACP 会话不认它（session/new 的 currentValue 照旧取 ~/.cursor/acp-config.json），还会改写用户的 ~/.cursor/cli-config.json；
 // - 免 authenticate 直连 `session/new`（省去 6～8s 认证往返）；
 // - `session/load` 续接并吞掉重放历史，兼容 Cursor `-32602` `data.message` 形式的会话不存在错误；
-// - 模型 `configOptions` 安全映射（CLI 模型 ID -> 候选集合法参数化条目）与 `explicitDefaultModel` 默认模型；
+// - 模型只经 `session/set_config_option` 选（家族名 -> options[] 里的预设值，未选模型用 Auto），每次新建/续接都显式设；
 // - 拦截 `cursor/ask_question`、`cursor/create_plan` 等私有阻塞请求立即返回双层 `{ outcome: { outcome: ... } }`，防常驻进程挂死；
 // - 只读 Worker OS 沙箱补充 `~/.cursor` 下必需可写的临时会话/缓存目录。
 import { basename, join } from "node:path";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
-import {
-  vendorFailureOf,
-  type AgentSessionRow,
-  type Driver,
-} from "../../shared/index.ts";
+import { vendorFailureOf, type Driver, type DriverOptions } from "../../shared/index.ts";
 import {
   createAcpDriver,
   defaultClassifyAcpTurnError,
@@ -25,7 +22,8 @@ import {
   type AcpExtensionRequestContext,
   type AcpTrackedToolCall,
 } from "../_common/acp/index.ts";
-import type { VendorDriverDeps } from "../daemon-types.ts";
+import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { CURSOR_AUTO_MODEL, cursorModelFamily } from "./catalog.ts";
 import { cursorComposerBase, ensureCursorCompactCommand } from "./composer.ts";
 import cursorSpec from "./spec.ts";
 import {
@@ -34,7 +32,7 @@ import {
   CURSOR_START_TIMEOUT_MS,
 } from "./limits.ts";
 
-const MODEL_VARIANT_SUFFIX_RE = /-(?:fast|thinking|extra-high|xhigh|high|medium|low|max|minimal|none|1m)$/iu;
+const LAUNCH_ARGS = ["--trust", "--approve-mcps", "acp"] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -42,74 +40,23 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** 将 CLI 模型名归一化为 ACP configOptions 的基础模型键（如 claude-opus-5-5-high -> claude-opus-5-5，claude-4.6-sonnet -> claude-sonnet-4-6）。 */
-export function normalizeCursorBaseModel(raw: string): string {
-  let base = raw
-    .trim()
-    .replace(/\[.*\]$/u, "")
-    .toLowerCase()
-    .replace(/^cursor-/u, "");
-
-  for (let i = 0; i < 4; i++) {
-    const next = base.replace(MODEL_VARIANT_SUFFIX_RE, "");
-    if (next === base || next === "") break;
-    base = next;
-  }
-
-  // 兼容 CLI 的 claude-4.6-sonnet / claude-4-sonnet 与 ACP 的 claude-sonnet-4-6 / claude-sonnet-4 命名差异
-  const legacyClaude = /^claude-(\d+)(?:\.(\d+))?-(opus|sonnet|haiku|fable)$/iu.exec(base);
-  if (legacyClaude) {
-    const major = legacyClaude[1]!;
-    const minor = legacyClaude[2];
-    const family = legacyClaude[3]!.toLowerCase();
-    return minor ? `claude-${family}-${major}-${minor}` : `claude-${family}-${major}`;
-  }
-
-  return base;
-}
-
 /**
- * 将会话请求的模型名解析为 ACP `model` 配置项可接受的候选 `value`：
- * - 实测 `cursor-agent acp` 的 `session/set_config_option` 仅接受 `options[].value` 中精确存在的字符串；
- * - 若候选集非空且未命中任何条目（如用户自定义新模型），返回 null 交由 CLI `--model` 生效，避免 `-32602` 导致握手失败。
+ * 把会话的模型名解析成 ACP `model` 配置项的 `value`：精确 value -> 忽略大小写 -> auto/default -> 家族名（options[].name）。
+ * 实测 set_config_option 只收 options[].value 里原样存在的字符串，档位变体（claude-opus-5-5-high）只能落到该家族的预设值。
+ * 认不出的原样返回：交给 set_config_option 报 `Invalid model value`，不静默跑在别的会话留下的全局模型上。
  */
-export function resolveCursorModelValue(
-  requestedModel: string,
-  option: SessionConfigOption | null,
-): string | null {
+export function resolveCursorModelValue(requestedModel: string, option: SessionConfigOption | null): string | null {
   const trimmed = requestedModel.trim();
-  if (trimmed === "") return null;
-  if (!option || option.type !== "select") return null;
-
+  if (trimmed === "" || option?.type !== "select") return null;
   const choices = flattenConfigSelectOptions(option);
-  if (choices.length === 0) return null;
-
-  const exact = choices.find((c) => c.value === trimmed);
-  if (exact) return exact.value;
-
   const lower = trimmed.toLowerCase();
-  const ciValue = choices.find((c) => c.value.toLowerCase() === lower);
-  if (ciValue) return ciValue.value;
-
-  if (lower === "auto" || lower === "default" || lower === "default[]") {
-    const autoHit =
-      choices.find((c) => c.value === "default[]") ??
-      choices.find((c) => c.value.toLowerCase() === "auto") ??
-      choices.find((c) => c.name.trim().toLowerCase() === "auto") ??
-      choices.find((c) => c.value.toLowerCase().startsWith("default["));
-    return autoHit?.value ?? null;
+  const byValue = choices.find((c) => c.value === trimmed) ?? choices.find((c) => c.value.toLowerCase() === lower);
+  if (byValue) return byValue.value;
+  if (lower === CURSOR_AUTO_MODEL || lower === "default") {
+    return choices.find((c) => c.value === "default[]")?.value ?? trimmed;
   }
-
-  const ciName = choices.find((c) => c.name.trim().toLowerCase() === lower);
-  if (ciName) return ciName.value;
-
-  const targetBase = normalizeCursorBaseModel(trimmed);
-  const byFamily = choices.find((c) => {
-    const choiceName = c.name.trim().toLowerCase();
-    const choiceHead = c.value.split("[", 1)[0]!.trim().toLowerCase();
-    return choiceName === targetBase || choiceHead === targetBase || normalizeCursorBaseModel(choiceHead) === targetBase;
-  });
-  return byFamily?.value ?? null;
+  const family = cursorModelFamily(trimmed);
+  return choices.find((c) => cursorModelFamily(c.name) === family)?.value ?? trimmed;
 }
 
 /** 提取 Cursor JSON-RPC 错误详情（含嵌套在 `error.data.message` 中的信息）。 */
@@ -220,105 +167,77 @@ export const extractCursorToolUse: NonNullable<AcpDriverConfig["extractToolUse"]
   return base;
 };
 
-export interface CursorDriverOptions extends VendorDriverDeps {
+export interface CursorDriverOptions extends DriverOptions {
+  composer?: VendorComposerBase;
   readonlySpawn?: AcpDriverOptions["readonlySpawn"];
 }
 
-export function buildCursorAcpConfig(getDefaultModel: () => string | null): AcpDriverConfig {
-  return {
-    vendor: "cursor",
-    launchArgs: ({ row }) => {
-      const explicitModel = row.model && row.model.trim() !== "" ? row.model.trim() : getDefaultModel();
-      return explicitModel
-        ? ["--trust", "--approve-mcps", "--model", explicitModel, "acp"]
-        : ["--trust", "--approve-mcps", "acp"];
-    },
-    // 实测已登录状态下无需调耗时 6～8s 的 authenticate，可直接调 session/new。
-    authenticate: {
-      enabled: false,
-    },
-    continuation: {
-      mode: "load",
-      swallowReplayOnLoad: true,
-      fallbackToNewOnFailure: true,
-    },
-    configOptions: {
-      resolveModelValue: (requested, option) => resolveCursorModelValue(requested, option),
-      // Cursor 思考程度已编码在模型 ID 中，不单独发思考档位 set_config_option；未选模型时默认映射 Auto（default[]）。
-      combineModelAndEffort: ({ model, options }) => {
-        const target =
-          model && model.trim() !== "" ? model.trim() : (getDefaultModel() ?? "auto");
-        const update = resolveModelConfigUpdate(target, options, {
-          resolveModelValue: (req, opt) => resolveCursorModelValue(req, opt),
-        });
-        return update ? [update] : [];
-      },
-    },
-    extensions: {
-      onBlockingRequest: handleCursorBlockingRequest,
-      onNotification: ({ method }) => {
-        // cursor/update_todos、cursor/task、cursor/generate_image 等单向扩展通知安全忽略，不累积内存状态。
-        void method;
-      },
-    },
-    extractToolUse: extractCursorToolUse,
-    readonlySandbox: {
-      writableDirs: (homeDir) => [
-        join(homeDir, ".cursor", "acp-sessions"),
-        join(homeDir, ".cursor", "chats"),
-        join(homeDir, ".cursor", "projects"),
-        join(homeDir, ".cursor", "ai-tracking"),
-        join(homeDir, ".cursor", "logs"),
-      ],
-      writableFileGlobs: (homeDir) => [join(homeDir, ".cursor", "statsig-cache.json")],
-    },
-    timeouts: {
-      startTimeoutMs: CURSOR_START_TIMEOUT_MS,
-      shutdownGraceMs: CURSOR_SHUTDOWN_GRACE_MS,
-      interruptGraceMs: CURSOR_INTERRUPT_GRACE_MS,
-    },
-    errors: {
-      isSessionNotFoundError: isCursorSessionNotFoundError,
-      classifyTurnError: classifyCursorTurnError,
-    },
-    staleProcess: {
-      matchesCommand: (psArgs, _row, executablePath) => {
-        const exeBase = basename(executablePath);
-        const hasBinary =
-          psArgs.includes(executablePath) ||
-          (exeBase !== "" && psArgs.includes(exeBase)) ||
-          psArgs.includes("cursor-agent");
-        return hasBinary && /(?:^|\s)acp(?:\s|$)/u.test(psArgs);
-      },
-    },
-  };
+/**
+ * ps 里那一行是不是 Fusa 起的 cursor-agent ACP 进程：要有 cursor-agent（或配置的可执行文件），带 --trust 和 --approve-mcps，
+ * 且最后一个参数是 acp。启动脚本 `exec -a "$0" node index.js …` 保留了调用路径和参数顺序；Linux 包一层 bwrap 时末尾也还是 acp。
+ * 用户自己在终端或 IDE 跑的 `cursor-agent acp` 不带这两个标志，旧 PID 被它复用时不误杀。
+ */
+export function isFusaCursorAcpCommand(psArgs: string, executablePath: string): boolean {
+  const tokens = psArgs.trim().split(/\s+/u);
+  const exeBase = basename(executablePath);
+  const hasBinary = tokens.some((t) => t === executablePath || basename(t) === exeBase || basename(t) === cursorSpec.cli.command);
+  return hasBinary && tokens.at(-1) === "acp" && tokens.includes("--trust") && tokens.includes("--approve-mcps");
 }
 
-export function createCursorDriver(deps: CursorDriverOptions): Driver {
-  const { defaultModel, prepareLaunch: rawPrepareLaunch, composer, ...rest } = deps;
-  let lastDefaultModel: string | null = null;
+const cursorAcpConfig: AcpDriverConfig = {
+  vendor: "cursor",
+  launchArgs: LAUNCH_ARGS,
+  // 实测已登录状态下无需调耗时 6～8s 的 authenticate，可直接调 session/new。
+  authenticate: {
+    enabled: false,
+  },
+  continuation: {
+    mode: "load",
+    swallowReplayOnLoad: true,
+    fallbackToNewOnFailure: true,
+  },
+  configOptions: {
+    // ACP 新会话的初始模型是全局 ~/.cursor/acp-config.json 里上一次 set 的值（任何会话都会改它），所以没选模型也显式设 Auto。
+    combineModelAndEffort: ({ model, options }) => {
+      const update = resolveModelConfigUpdate(model?.trim() || CURSOR_AUTO_MODEL, options, {
+        resolveModelValue: resolveCursorModelValue,
+      });
+      return update ? [update] : [];
+    },
+  },
+  extensions: {
+    onBlockingRequest: handleCursorBlockingRequest,
+    // cursor/update_todos、cursor/task、cursor/generate_image 等单向扩展通知安全忽略，不累积内存状态。
+    onNotification: () => {},
+  },
+  extractToolUse: extractCursorToolUse,
+  readonlySandbox: {
+    // cursor-agent 启动就往 projects/ 写，~/.cursor 本身只读时缺了它直接退出（实测），底座会先建好这些目录。
+    writableDirs: (homeDir) => [
+      join(homeDir, ".cursor", "acp-sessions"),
+      join(homeDir, ".cursor", "chats"),
+      join(homeDir, ".cursor", "projects"),
+      join(homeDir, ".cursor", "ai-tracking"),
+      join(homeDir, ".cursor", "logs"),
+    ],
+    writableFileGlobs: (homeDir) => [join(homeDir, ".cursor", "statsig-cache.json")],
+  },
+  timeouts: {
+    startTimeoutMs: CURSOR_START_TIMEOUT_MS,
+    shutdownGraceMs: CURSOR_SHUTDOWN_GRACE_MS,
+    interruptGraceMs: CURSOR_INTERRUPT_GRACE_MS,
+  },
+  errors: {
+    isSessionNotFoundError: isCursorSessionNotFoundError,
+    classifyTurnError: classifyCursorTurnError,
+  },
+  staleProcess: {
+    matchesCommand: (psArgs, _row, executablePath) => isFusaCursorAcpCommand(psArgs, executablePath),
+  },
+};
 
-  const prepareLaunch = defaultModel
-    ? async (row: AgentSessionRow) => {
-        const [files, resolvedDefault] = await Promise.all([
-          rawPrepareLaunch(row),
-          row.model === null ? defaultModel().catch(() => null) : Promise.resolve(null),
-        ]);
-        if (row.model === null) {
-          lastDefaultModel =
-            typeof resolvedDefault === "string" && resolvedDefault.trim() !== ""
-              ? resolvedDefault.trim()
-              : null;
-        }
-        return files;
-      }
-    : rawPrepareLaunch;
-
-  const acpDriver = createAcpDriver(buildCursorAcpConfig(() => lastDefaultModel), {
-    ...rest,
-    prepareLaunch,
-    composer: composer ?? cursorComposerBase,
-  });
+export function createCursorDriver({ composer, ...rest }: CursorDriverOptions): Driver {
+  const acpDriver = createAcpDriver(cursorAcpConfig, { ...rest, composer: composer ?? cursorComposerBase });
 
   const origOnEvent = acpDriver.onEvent.bind(acpDriver);
   const origQueryCommands = acpDriver.queryCommands.bind(acpDriver);

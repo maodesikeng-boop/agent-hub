@@ -216,7 +216,7 @@ export interface AcpExtensionsConfig {
 
 /** 只读 Worker 外层 OS 沙箱附加可写目录配置。 */
 export interface AcpReadonlySandboxConfig {
-  /** 除通用缓存目录外，该厂商运行时必须可写的目录（如日志、临时锁目录，不含敏感凭据）。 */
+  /** 除通用缓存目录外，该厂商运行时必须可写的目录（如日志、临时锁目录，不含敏感凭据）；还没有的启动前先建好。 */
   writableDirs?: (homeDir: string, cwd: string) => readonly string[];
   /** 该厂商运行时必须可写的单层文件通配。 */
   writableFileGlobs?: (homeDir: string, cwd: string) => readonly string[];

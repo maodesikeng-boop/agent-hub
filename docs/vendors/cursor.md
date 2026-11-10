@@ -13,15 +13,15 @@
 
 实测以下三种参数位置组合在 `cursor-agent` 中均合法（退出码 `0`）：
 
-1. 全部置于 `acp` 子命令之前：`cursor-agent --sandbox disabled --trust --approve-mcps [--model <id>] acp`
+1. 全部置于 `acp` 子命令之前：`cursor-agent --sandbox disabled --trust --approve-mcps acp`
 2. 全部置于 `acp` 子命令之后：`cursor-agent acp --sandbox disabled --trust --approve-mcps`
 3. 根参数在前、子命令参数在后：`cursor-agent --sandbox disabled acp --trust --approve-mcps`
 
 `src/daemon/driver/write-scope.ts` 与 `AcpSessionDriver` 会把 `spec.capabilities.ownSandboxOffArgs` 拼在 `launchArgs` 前面：
 - `ownSandboxOffArgs`: `["--sandbox", "disabled"]`
-- `launchArgs`: `["--trust", "--approve-mcps", ...("--model", model), "acp"]`
+- `launchArgs`: `["--trust", "--approve-mcps", "acp"]`（不带 `--model`，见 4.3）
 
-拼接结果为 `cursor-agent --sandbox disabled --trust --approve-mcps [--model <id>] acp`，语法合法，且关闭了 `cursor-agent` 自带沙箱，避免在外层 macOS Seatbelt 或 Linux `bwrap` 沙箱内再次调用 `sandbox_apply` 触发 `Operation not permitted`（exit 71）。
+拼接结果为 `cursor-agent --sandbox disabled --trust --approve-mcps acp`，语法合法，且关闭了 `cursor-agent` 自带沙箱，避免在外层 macOS Seatbelt 或 Linux `bwrap` 沙箱内再次调用 `sandbox_apply` 触发 `Operation not permitted`（exit 71）。
 
 ## 3. ACP 握手与免 `authenticate` 直连（第 9 节 #2）
 
@@ -61,25 +61,37 @@
 1. **`cursor-agent models` 输出**（耗时约 `4.0s`）：
    - 纯文本列表，首行 `Available models`，末行 `Tip: use --model <id> ...`，中间共约 **275 项** `<id> - <label>`；
    - 第一项为 `auto - Auto (default)`；其余将思考程度与 Fast 变体展开为独立 CLI 模型 ID（如 `composer-2.5`、`claude-opus-5-5-high`、`gpt-5.6-sol-high`、`gpt-5.3-codex-high`、`gemini-4-carbon-high`、`grok-4.7-high-fast`）；
-   - **输出清洗注意**：部分标签含连续双空格及末尾零宽字符 `\u200b`（如 `grok-4.7-high-fast - Grok 4.7  High Fast\u200b\u200b`），`catalog.ts` 解析时必须剥离 ANSI 控制序列与零宽字符 `[\u200B-\u200D\uFEFF]`、折叠多余空白，并在截断到 `MAX_CATALOG_MODELS = 50` 前优先保留各主流模型家族的代表档位。
+   - **输出清洗注意**：部分标签含连续双空格及末尾零宽字符 `\u200b`（如 `grok-4.7-high-fast - Grok 4.7  High Fast\u200b\u200b`），`catalog.ts` 解析时剥离 ANSI 控制序列与零宽字符 `[\u200B-\u200D\uFEFF]`、折叠多余空白。
 2. **ACP `configOptions` 模型项**：
-   - `session/new` 返回 `id: "model"`（`category: "model"`, `type: "select"`），`options` 共 **47 项**基础模型参数化模板值，例如：
+   - `session/new` 返回 `id: "model"`（`category: "model"`, `type: "select"`），`options` 共 **47 项**，每个模型家族只有**一个**预设值（`name` 是家族名），例如：
      - `default[]`（`name: "Auto"`）
      - `composer-2.5[fast=true]`（`name: "composer-2.5"`）
      - `claude-opus-5-5[context=300k,effort=medium,fast=false]`（`name: "claude-opus-5-5"`）
      - `claude-sonnet-5-5[context=300k,reasoning_effort=high]`（`name: "claude-sonnet-5-5"`）
      - `gpt-5.6-sol[context=272k,reasoning=medium,fast=false]`（`name: "gpt-5.6-sol"`）
-     - `gpt-5.3-codex[reasoning=medium,fast=false]`（`name: "gpt-5.3-codex"`）
      - `gemini-4-carbon[reasoning_effort=medium]`（`name: "gemini-4-carbon"`）
      - `grok-4.7[context=256k,reasoning_effort=high,fast=true]`（`name: "grok-4.7"`）
-   - **严格校验行为**：`session/set_config_option` 仅接受 `options[].value` 中**精确存在**的字符串；直接传裸 CLI 模型名（如 `"composer-2.5"`、`"claude-opus-5-5-high"`、`"auto"`）或不在候选集内的括号组合会立即报错：
+   - 同一结果里还有非标准的 `models: { currentModelId, availableModels }`，内容与上面 47 项相同。
+   - **严格校验行为**：`session/set_config_option` 与 `session/set_model` 都只接受 `options[].value` 中**精确存在**的字符串；裸 CLI 模型名（`claude-opus-5-5-high`）和不在候选集里的参数组合（实测 `claude-opus-5-5[context=300k,effort=high,fast=false]`、`composer-2.5[fast=false]`）都报：
      ```json
      { "code": -32602, "message": "Invalid params", "data": { "message": "Invalid model value: ..." } }
      ```
-   - **CLI `--model` 与 ACP 协同策略**：
-     - 启动参数传入 `--model <cliId>`（如 `--model claude-opus-5-5-high`）在 `acp` 子命令下原生生效，服务端同步将初始 `currentValue` 定位到对应家族项；
-     - 未传 `--model` 时，Cursor 默认沿用 `~/.cursor/cli-config.json` 中上次选中的模型（本机实测为 `grok-4.7[...]`），因此必须设 `explicitDefaultModel: true`，未选模型时默认使用 `auto`（映射 ACP `default[]`）；
-     - `resolveModelValue` 将 CLI 模型 ID 安全映射到 `options` 候选集内已有的合法 `value`（精确匹配 `value` → `"auto"`/`"default"` 映射 `default[]` → 去 `cursor-` 前缀与档位后缀匹配候选 `name` / 基名）；当 `currentValue` 已一致时跳过 `set_config_option`（保留 CLI `--model` 的精确档位），当候选集非空但无匹配项（如用户手填新自定义模型）时返回 `null` 交由 CLI `--model` 生效，避免 `-32602` 中断握手。
+
+### 4.3 `--model` 在 ACP 下不生效，模型只能经 `set_config_option` 选（2026-11-11 复测，`2026.10.22-27dcf5f`）
+
+在空目录分别以 `--model claude-opus-5-5-high`、`--model composer-2.5`、`--model gpt-5.6-sol-high`、`--model auto`、不带 `--model` 启动 `cursor-agent acp` 后发 `session/new`：
+
+- **`currentValue` 与 `--model` 无关**：五次都等于 `~/.cursor/acp-config.json` 的 `selectedModelVariantId`（当时为 `default[]`）。先 `set_config_option` 成 `claude-opus-5-5[...]` 后，它写进 `acp-config.json`，下一次 `--model gpt-5.6-sol-high` 的 `session/new` 回的也是 `claude-opus-5-5[...]`。即 ACP 新会话的初始模型是**全局**的“上一次任何会话 set 过的值”。
+- **`--model` 有副作用**：每次都改写用户自己的 `~/.cursor/cli-config.json`（`model`、`selectedModel`、`modelSelectionHistory`，`--model composer-2.5` 还把 `modelParameters.composer-2.5` 从 `fast=false` 改成 `fast=true`），污染用户在终端里用 `cursor-agent` 的默认模型。
+- **`session/load`**：没有对话轮次的空会话 `session/load` 一律回 `-32602 Session "…" not found`（不论带不带 `--model`）；有轮次的会话要发 `session/prompt` 才能造出来，零额度下没测，驱动续接后照样显式设模型，不依赖 load 回来的 `currentValue`。
+- **思考档位不可选**：每个家族在 ACP 里只有一个预设值，`claude-opus-5-5-high` 这种档位/Fast 变体通过 ACP 选不到。
+
+据此 Fusa 的做法：
+
+- 启动参数不带 `--model`。
+- 模型名单（`catalog.ts`）把 `cursor-agent models` 的约 275 个 ID 按家族归并成一项一个（本机 42 个，`cursorModelFamily`：去 `cursor-` 前缀和档位/Fast 后缀，旧式 `claude-4.6-sonnet` 改成 ACP 的 `claude-sonnet-4-6`），ID 就是 ACP 的 `name`；名单默认模型固定 `auto`，`spec.ts` 不开 `explicitDefaultModel`。
+- 每次新建或续接后都按 `row.model`（没选就是 `auto`）显式 `set_config_option`：精确 `value` → 忽略大小写 → `auto`/`default` 映射 `default[]` → 家族名匹配 `name`；`currentValue` 已经是目标值才跳过。旧行里存的档位 ID 落到家族预设值。
+- 认不出的模型名原样交给 `set_config_option`，让 Cursor 报 `Invalid model value`，不静默跑在别的会话留下的全局模型上。
 
 ## 5. `session/load` 续接、错误结构与命令补全（第 9 节 #3、#4）
 
@@ -118,4 +130,6 @@
   - `~/.cursor/` 下包含 `cli-config.json`、`agent-cli-state.json`（列入 `catalogWatchPaths`）、`mcp.json`（`0600`）、`acp-sessions/<sessionId>/meta.json`、`chats/`、`projects/`、`ai-tracking/`、`statsig-cache.json`；会话记录不透明，设 `transcriptPortable: false`。
 - **只读 Worker 沙箱**：
   - `capabilities.readonly: "os_sandbox"`；
-  - `readonlySandbox` 仅放行 `~/.cursor` 下运行时必需可写的会话/缓存子目录（`acp-sessions`、`chats`、`projects`、`ai-tracking`、`logs`）及 `~/.cursor/statsig-cache.json`，工作目录、`cli-config.json`、`mcp.json`、`hooks.json` 保持严格只读。
+  - `readonlySandbox` 仅放行 `~/.cursor` 下运行时必需可写的会话/缓存子目录（`acp-sessions`、`chats`、`projects`、`ai-tracking`、`logs`）及 `~/.cursor/statsig-cache.json`，工作目录、`cli-config.json`、`mcp.json`、`hooks.json`、`auth.json` 保持严格只读；
+  - 实测（隔离 `HOME`、`~/.cursor` 设成只读）：`cursor-agent acp` 一启动就要建 `~/.cursor/projects/<工作目录>`，`projects/` 不存在时进程在回 `initialize` 前就退出；`projects/` 先建好就能正常启动（`statsig-cache.json` 写不了不影响）。所以底座在起进程前把这些目录建好再放行（新登录的机器第一次就开只读 Worker 也不会挂）；
+  - 重启清残留进程只认 Fusa 自己起的命令行（`isFusaCursorAcpCommand`：有 `cursor-agent`、带 `--trust` 和 `--approve-mcps`、最后一个参数是 `acp`），用户自己在终端或 IDE 跑的 `cursor-agent acp` 复用旧 PID 时不误杀。

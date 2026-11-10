@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,9 +24,10 @@ import type { AcpDriverOptions } from "../_common/acp/index.ts";
 import {
   createCursorCatalogSource,
   cursorCatalogProbe,
+  cursorModelFamily,
   parseCursorModelsText,
   parseStatusAvailability,
-  queryCursorCatalog,
+  type CursorCatalogRaw,
 } from "./catalog.ts";
 import { createCursorComposer, cursorComposerBase, parseCursorCommands } from "./composer.ts";
 import cursorDaemon from "./daemon.ts";
@@ -35,7 +37,7 @@ import {
   extractCursorErrorDetail,
   extractCursorToolUse,
   isCursorSessionNotFoundError,
-  normalizeCursorBaseModel,
+  isFusaCursorAcpCommand,
   resolveCursorModelValue,
 } from "./driver.ts";
 import { CURSOR_PROBE_MAX_STDOUT_BYTES } from "./limits.ts";
@@ -45,38 +47,44 @@ import cursorSpec from "./spec.ts";
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_ACP_AGENT = join(THIS_DIR, "..", "_common", "acp", "fixtures", "fake-acp-agent.ts");
 
+/**
+ * 本机 cursor-agent 2026.10.22 session/new 回的模型项（47 项里摘几项，每个家族只有一个预设值）。
+ * currentValue 取自全局 ~/.cursor/acp-config.json，是别的会话上次 set 的，这里模拟成 grok-4.7。
+ */
 const REAL_CURSOR_ACP_MODEL_OPTION: SessionConfigOption = {
   id: "model",
   name: "Model",
   category: "model",
   type: "select",
-  currentValue: "grok-4.7[effort=medium,fast=false]",
+  currentValue: "grok-4.7[context=256k,reasoning_effort=high,fast=true]",
   options: [
-    { value: "default[]", name: "Auto", description: "Balanced quality and speed, recommended for most tasks" },
-    { value: "composer-2.5[fast=false]", name: "composer-2.5" },
+    { value: "default[]", name: "Auto" },
+    { value: "grok-4.7[context=256k,reasoning_effort=high,fast=true]", name: "grok-4.7" },
     { value: "composer-2.5[fast=true]", name: "composer-2.5" },
     { value: "claude-opus-5-5[context=300k,effort=medium,fast=false]", name: "claude-opus-5-5" },
-    { value: "claude-sonnet-5-5[context=200k,thinking=true]", name: "claude-sonnet-5-5" },
-    { value: "claude-sonnet-4-6[context=200k,thinking=true]", name: "claude-sonnet-4-6" },
-    { value: "gpt-5.6-sol[context=272k,effort=medium,fast=false]", name: "gpt-5.6-sol" },
-    { value: "grok-4.7[effort=medium,fast=false]", name: "grok-4.7" },
+    { value: "claude-sonnet-5-5[context=300k,reasoning_effort=high]", name: "claude-sonnet-5-5" },
+    { value: "claude-sonnet-4-6[thinking=true,context=200k,effort=medium]", name: "claude-sonnet-4-6" },
+    { value: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "gpt-5.6-sol" },
   ],
 };
+const OPUS_PRESET = "claude-opus-5-5[context=300k,effort=medium,fast=false]";
 
-/** 模拟本机 `cursor-agent models` 的真实输出（含零宽字符 \u200b、双空格与 (default)/(current) 标记）。 */
+/** 本机 `cursor-agent models` 的真实输出片段（含零宽字符 \u200b、双空格、(current, default) 标记与旧式 claude-4.6-sonnet 命名）。 */
 const REAL_CURSOR_MODELS_TEXT = [
   "\x1b[2K\x1b[GLoading models…",
   "Available models",
   "",
-  "auto - Auto  (default)",
+  "auto - Auto (current, default)",
+  "gpt-5.6-sol-high - GPT-5.6 Sol 1M High",
+  "gpt-5.6-sol-high-fast - GPT-5.6 Sol 1M High Fast",
+  "grok-4.7-low - Grok 4.7  Low",
+  "grok-4.7-high-fast - Grok 4.7  High Fast\u200b\u200b",
   "composer-2.5 - Composer 2.5",
   "composer-2.5-fast - Composer 2.5 Fast",
+  "claude-opus-5-5-low - Claude Opus 5.5 1M Low",
   "claude-opus-5-5-high - Claude Opus 5.5 1M High",
-  "claude-sonnet-5-5-high - Claude Sonnet 5.5 High",
-  "gpt-5.6-sol-high - GPT-5.6 Sol 1M High",
-  "gemini-4-carbon-high - Gemini 4 Carbon High",
-  "grok-4.7 - Grok 4.7\u200b  (current)",
-  "grok-4.7-high-fast - Grok 4.7 High Fast\u200b",
+  "claude-4.6-sonnet-medium-thinking - Claude Sonnet 4.6 1M Thinking",
+  "cursor-grok-4.5-high - Grok 4.5 High",
   "",
   "Tip: use --model <id> (or /model in interactive mode) to switch.",
 ].join("\n");
@@ -88,16 +96,16 @@ function writeNodeScript(path: string, body: string): string {
 }
 
 describe("cursor spec 与 paths 声明边界", () => {
-  it("思考档位只留单档（前端自动隐藏思考选择器），开启 explicitDefaultModel 与 ownSandboxOffArgs", () => {
+  it("思考档位只留单档（前端自动隐藏思考选择器），带 ownSandboxOffArgs", () => {
     expect(cursorSpec.id).toBe("cursor");
     expect(cursorSpec.label).toBe("Cursor");
     expect(cursorSpec.models.efforts).toHaveLength(1);
     expect(cursorSpec.models.customModel).toBe(true);
     expect(cursorSpec.models.flags).toBeUndefined();
+    // 不开 explicitDefaultModel：没选模型时驱动自己显式设 Auto，不用名单里的默认
     expect(cursorSpec.capabilities).toEqual({
       backgroundWake: false,
       readonly: "os_sandbox",
-      explicitDefaultModel: true,
       ownSandboxOffArgs: ["--sandbox", "disabled"],
     });
     expect(cursorSpec.models.shortName?.("auto")).toBe("Auto");
@@ -175,59 +183,42 @@ describe("cursor catalog：模型列表解析、登录态、50 上限与进程�
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("清洗 ANSI 与零宽字符，提取 current / auto 默认模型，每个模型 efforts 为空数组", () => {
+  it("按 ACP 能选的家族归并：档位和 Fast 变体并成一项，ID 是家族名，默认固定 Auto，清洗 ANSI 与零宽字符", () => {
     const catalog = parseCursorModelsText(REAL_CURSOR_MODELS_TEXT);
     expect(catalog).not.toBeNull();
     expect(catalog!.source).toBe("vendor");
-    // 存在 (current) 项时优先取当前选中项；仅存在 auto (default) 时回退到 Auto
-    expect(catalog!.defaultModel).toBe("Grok 4.7");
-    expect(catalog!.defaultModelId).toBe("grok-4.7");
+    expect(catalog!.defaultModel).toBe("Auto");
+    expect(catalog!.defaultModelId).toBe("auto");
     expect(catalog!.defaultEfforts).toEqual([]);
-    expect(catalog!.models.some((m) => m.id === "auto")).toBe(false);
-    const grok = catalog!.models.find((m) => m.id === "grok-4.7");
-    expect(grok).toEqual({
-      id: "grok-4.7",
-      label: "Grok 4.7",
-      description: null,
-      efforts: [],
-    });
-    expect(grok!.label).not.toContain("\u200b");
-
-    const autoOnly = parseCursorModelsText("Available models\n\nauto - Auto  (default)\ncomposer-2.5 - Composer 2.5\n");
-    expect(autoOnly?.defaultModel).toBe("Auto");
-    expect(autoOnly?.defaultModelId).toBe("auto");
+    // 打包名单里的家族排前面，其余按 CLI 顺序；auto 不进候选
+    expect(catalog!.models.map((m) => [m.id, m.label])).toEqual([
+      ["composer-2.5", "Composer 2.5"],
+      ["claude-opus-5-5", "Claude Opus 5.5 1M"],
+      ["gpt-5.6-sol", "GPT-5.6 Sol 1M"],
+      ["grok-4.7", "Grok 4.7"],
+      ["claude-sonnet-4-6", "Claude Sonnet 4.6 1M"],
+      ["grok-4.5", "Grok 4.5"],
+    ]);
+    expect(catalog!.models.every((m) => m.efforts?.length === 0 && m.description === null)).toBe(true);
   });
 
-  it("超过 50 个模型时严格截断至 MAX_CATALOG_MODELS，且各主流模型家族均有代表入选", () => {
-    const lines = ["Available models", "", "auto - Auto  (default)"];
-    // 故意先塞 60 个 claude 变体，再放 composer / gpt / gemini / grok / deepseek / kimi，验证代表家族优选不会让单一家族占满 50 个名额
-    for (let i = 1; i <= 60; i++) {
-      lines.push(`claude-variant-${i} - Claude Variant ${i}`);
-    }
-    lines.push(
-      "composer-2.5 - Composer 2.5",
-      "composer-2.5-fast - Composer 2.5 Fast",
-      "gpt-5.6-sol-high - GPT-5.6 Sol 1M High",
-      "gemini-4-carbon-high - Gemini 4 Carbon High",
-      "grok-4.7-high-fast - Grok 4.7 High Fast",
-      "deepseek-r2 - DeepSeek R2",
-      "kimi-k2.5 - Kimi K2.5",
-    );
+  it("家族名与 ACP options[].name 对得上（含 cursor- 前缀与旧式 claude-4.6-sonnet 命名）", () => {
+    expect(cursorModelFamily("claude-opus-5-5-high")).toBe("claude-opus-5-5");
+    expect(cursorModelFamily("claude-4.6-sonnet-medium-thinking")).toBe("claude-sonnet-4-6");
+    expect(cursorModelFamily("claude-4-sonnet")).toBe("claude-sonnet-4");
+    expect(cursorModelFamily("cursor-grok-4.7-high-fast")).toBe("grok-4.7");
+    expect(cursorModelFamily("gpt-5.6-sol-none-fast")).toBe("gpt-5.6-sol");
+    expect(cursorModelFamily("composer-2.5")).toBe("composer-2.5");
+  });
+
+  it("家族超过 50 个时截断到 MAX_CATALOG_MODELS，打包名单里的家族保住", () => {
+    const lines = ["Available models", "", "auto - Auto (default)"];
+    for (let i = 1; i <= 60; i++) lines.push(`vendor-model-${i}-high - Vendor Model ${i} High`);
+    lines.push("composer-2.5-fast - Composer 2.5 Fast", "grok-4.7-high-fast - Grok 4.7 High Fast");
     const catalog = parseCursorModelsText(lines.join("\n"));
-    expect(catalog).not.toBeNull();
     expect(catalog!.models).toHaveLength(MAX_CATALOG_MODELS);
-    const ids = new Set(catalog!.models.map((m) => m.id));
-    for (const mustHave of [
-      "composer-2.5",
-      "composer-2.5-fast",
-      "gpt-5.6-sol-high",
-      "gemini-4-carbon-high",
-      "grok-4.7-high-fast",
-      "deepseek-r2",
-      "kimi-k2.5",
-    ]) {
-      expect(ids.has(mustHave), mustHave).toBe(true);
-    }
+    expect(catalog!.models.slice(0, 2).map((m) => m.id)).toEqual(["composer-2.5", "grok-4.7"]);
+    expect(catalog!.models[2]?.id).toBe("vendor-model-1");
   });
 
   it("登录状态解析（兼容 isAuthenticated 与 authenticated）与空结果保护：空输出返回 null 不长期缓存", () => {
@@ -258,7 +249,7 @@ describe("cursor catalog：模型列表解析、登录态、50 上限与进程�
     ).toBe("signed_out");
   });
 
-  it("queryCursorCatalog / createCursorCatalogSource：超时或中止时清理整个子进程组，超大输出封顶不爆内存", async () => {
+  it("createCursorCatalogSource：超时或中止时清理整个子进程组，超大输出封顶不爆内存", async () => {
     const childPidFile = join(dir, "sleeper.pid");
     const hangBin = writeNodeScript(
       join(dir, "cursor-hang"),
@@ -277,7 +268,12 @@ if (argv[0] === "models") {
 `,
     );
 
-    await expect(queryCursorCatalog({ cursorPath: hangBin, cwd: dir, timeoutMs: 1_500 })).rejects.toThrow(/timed out/);
+    const query = (path: string, timeoutMs?: number) =>
+      createCursorCatalogSource({ path, cwd: dir, installed: () => true, ...(timeoutMs ? { timeoutMs } : {}) }).query(
+        new AbortController().signal,
+      ) as Promise<CursorCatalogRaw>;
+    // 超时留够余量：并行跑满时 node 起假 models 进程、写 pid 文件可能就要 1 秒多
+    await expect(query(hangBin, 4_000)).rejects.toThrow(/timed out/);
     const sleeperPid = Number(readFileSync(childPidFile, "utf8").trim());
     expect(Number.isInteger(sleeperPid) && sleeperPid > 0).toBe(true);
     expect(await waitForExit(sleeperPid, 5_000)).toBe(true);
@@ -297,7 +293,7 @@ if (argv[0] === "models") {
 process.stdout.write(JSON.stringify({ isAuthenticated: true }) + "\\n");
 `,
     );
-    const floodRaw = await queryCursorCatalog({ cursorPath: floodBin, cwd: dir });
+    const floodRaw = await query(floodBin);
     expect(floodRaw.modelsText).not.toBeNull();
     expect(Buffer.byteLength(floodRaw.modelsText!, "utf8")).toBeLessThanOrEqual(CURSOR_PROBE_MAX_STDOUT_BYTES);
     const source = createCursorCatalogSource({ path: floodBin, cwd: dir, installed: () => true });
@@ -353,6 +349,26 @@ describe("cursor composer：本地命令扫描、阻塞拦截与 /compact 兜底
     expect(parsed.some((c) => c.name === "compact")).toBe(true);
   });
 
+  it("SKILL.md 是 FIFO 或超大文件时不卡住、不整个读进内存：FIFO 没有说明，超大文件只看开头", async () => {
+    const home = join(dir, "home");
+    const cwd = join(dir, "repo");
+    mkdirSync(join(cwd, ".cursor", "skills", "pipe-skill"), { recursive: true });
+    mkdirSync(join(cwd, ".cursor", "skills", "big-skill"), { recursive: true });
+    execFileSync("mkfifo", [join(cwd, ".cursor", "skills", "pipe-skill", "SKILL.md")]);
+    writeFileSync(join(cwd, ".cursor", "skills", "big-skill", "SKILL.md"), `---\ndescription: 大文件\n---\n${"x".repeat(8 * 1024 * 1024)}`);
+
+    const composer = createCursorComposer({ executablePath: "cursor-agent", env: { HOME: home } });
+    const cmds = await composer.queryCommands({ cwd, addDirs: [] }, new AbortController().signal);
+    // readdir 顺序随文件系统而定（Linux ext4 按哈希），按名字比
+    expect(new Map(cmds.map((c) => [c.name, c.description]))).toEqual(
+      new Map([
+        ["big-skill", "大文件"],
+        ["pipe-skill", ""],
+        ["compact", "压缩当前对话上下文"],
+      ]),
+    );
+  });
+
   it("拦截交互式斜杠命令，放行 /compact", () => {
     expect(cursorComposerBase.isCompactCommand("/compact")).toBe(true);
     expect(cursorComposerBase.blockReason("/compact", null)).toBeNull();
@@ -387,7 +403,6 @@ describe("cursor driver：ACP 常驻会话、阻塞扩展拦截、session/load �
     script?: FakeAcpScript;
     executablePath?: string;
     row?: Partial<AgentSessionRow>;
-    defaultModel?: () => Promise<string | null>;
     readonlyWorker?: boolean;
     readonlySpawn?: AcpDriverOptions["readonlySpawn"];
   } = {}) {
@@ -480,7 +495,6 @@ child.on("exit", (code, sig) => {
       executablePath: wrapperPath,
       prepareLaunch,
       log: () => {},
-      ...(options.defaultModel ? { defaultModel: options.defaultModel } : {}),
       ...(options.readonlySpawn ? { readonlySpawn: options.readonlySpawn } : {}),
     });
     activeDrivers.push(driver);
@@ -512,26 +526,44 @@ child.on("exit", (code, sig) => {
     return { driver, store, events, logs, waitForTurnEnd, cwd, homeDir, logFile, stateDir };
   }
 
-  it("模型映射纯函数：精确命中、auto -> default[]、CLI 档位变体归并、未知自定义模型返回 null 交由 CLI --model 处理", () => {
-    expect(normalizeCursorBaseModel("claude-opus-5-5-high")).toBe("claude-opus-5-5");
-    expect(normalizeCursorBaseModel("claude-4.6-sonnet-medium-thinking")).toBe("claude-sonnet-4-6");
-    expect(normalizeCursorBaseModel("cursor-grok-4.7-high-fast")).toBe("grok-4.7");
-
+  it("模型映射：精确 value、auto -> default[]、档位变体与旧式命名落到家族预设，认不出的原样交给 set_config_option 报错", () => {
     expect(resolveCursorModelValue("auto", REAL_CURSOR_ACP_MODEL_OPTION)).toBe("default[]");
     expect(resolveCursorModelValue("default", REAL_CURSOR_ACP_MODEL_OPTION)).toBe("default[]");
-    expect(resolveCursorModelValue("claude-opus-5-5-high", REAL_CURSOR_ACP_MODEL_OPTION)).toBe(
-      "claude-opus-5-5[context=300k,effort=medium,fast=false]",
-    );
+    expect(resolveCursorModelValue(OPUS_PRESET, REAL_CURSOR_ACP_MODEL_OPTION)).toBe(OPUS_PRESET);
+    expect(resolveCursorModelValue("claude-opus-5-5", REAL_CURSOR_ACP_MODEL_OPTION)).toBe(OPUS_PRESET);
+    expect(resolveCursorModelValue("claude-opus-5-5-high", REAL_CURSOR_ACP_MODEL_OPTION)).toBe(OPUS_PRESET);
+    expect(resolveCursorModelValue("composer-2.5-fast", REAL_CURSOR_ACP_MODEL_OPTION)).toBe("composer-2.5[fast=true]");
     expect(resolveCursorModelValue("claude-4.6-sonnet-medium-thinking", REAL_CURSOR_ACP_MODEL_OPTION)).toBe(
-      "claude-sonnet-4-6[context=200k,thinking=true]",
+      "claude-sonnet-4-6[thinking=true,context=200k,effort=medium]",
     );
-    expect(resolveCursorModelValue("brand-new-custom-model-2027", REAL_CURSOR_ACP_MODEL_OPTION)).toBeNull();
+    expect(resolveCursorModelValue("brand-new-custom-model-2027", REAL_CURSOR_ACP_MODEL_OPTION)).toBe(
+      "brand-new-custom-model-2027",
+    );
+    expect(resolveCursorModelValue("claude-opus-5-5", null)).toBeNull();
+  });
+
+  it("isFusaCursorAcpCommand：只认 Fusa 起的 cursor-agent --trust --approve-mcps … acp，不误杀用户自己跑的 cursor-agent acp", () => {
+    const exe = "/Users/u/.local/bin/cursor-agent";
+    const node = "/Users/u/.local/share/cursor-agent/versions/2026.10.22-27dcf5f";
+    // 启动脚本 exec -a "$0" node index.js …：ps 里是调用路径 + node 参数 + index.js + 原参数
+    expect(isFusaCursorAcpCommand(`${exe} --use-system-ca ${node}/index.js --trust --approve-mcps acp`, exe)).toBe(true);
+    expect(
+      isFusaCursorAcpCommand(`${exe} --use-system-ca ${node}/index.js --sandbox disabled --trust --approve-mcps acp`, exe),
+    ).toBe(true);
+    expect(
+      isFusaCursorAcpCommand(`bwrap --ro-bind / / --bind /tmp/x /tmp/x -- ${exe} --sandbox disabled --trust --approve-mcps acp`, exe),
+    ).toBe(true);
+    // 用户在终端或 IDE 里跑的
+    expect(isFusaCursorAcpCommand(`${exe} --use-system-ca ${node}/index.js acp`, exe)).toBe(false);
+    expect(isFusaCursorAcpCommand(`${exe} --use-system-ca ${node}/index.js --trust acp`, exe)).toBe(false);
+    expect(isFusaCursorAcpCommand(`${exe} --trust --approve-mcps acp --resume`, exe)).toBe(false);
+    // 别的程序碰巧带了这些词
+    expect(isFusaCursorAcpCommand("/usr/bin/node my-acp-cursor-agent-tool.js --trust --approve-mcps acp", exe)).toBe(false);
   });
 
   it("免 authenticate 直连 session/new；拦截 cursor/ask_question 与 cursor/create_plan 返回双层 outcome 不挂起；忽略扩展通知", async () => {
     const h = setupHarness({
       row: { model: null },
-      defaultModel: async () => "auto",
       script: {
         turns: [
           {
@@ -575,12 +607,12 @@ child.on("exit", (code, sig) => {
     expect(ended.interrupted).toBe(false);
 
     const logEntries = h.logs();
-    // 确认未调 authenticate，直接进 session/new，且命令行带上 --trust --approve-mcps --model auto acp
+    // 确认未调 authenticate，直接进 session/new；命令行不带 --model（ACP 不认，还会改写用户的 cli-config.json）
     expect(logEntries.some((e) => e.event === "authenticate")).toBe(false);
     const spawnLog = logEntries.find((e) => e.event === "spawn");
-    expect(spawnLog?.argv).toEqual(["--trust", "--approve-mcps", "--model", "auto", "acp"]);
+    expect(spawnLog?.argv).toEqual(["--trust", "--approve-mcps", "acp"]);
 
-    // 默认模型 auto -> default[] 通过 session/set_config_option 显式覆盖 cli-config.json 粘性模型
+    // 没选模型：初始值是别的会话留在 acp-config.json 的 grok-4.7，显式设回 Auto（default[]）
     const cfgCalls = logEntries.filter((e) => e.event === "session/set_config_option");
     expect(cfgCalls).toEqual([
       expect.objectContaining({ configId: "model", value: "default[]" }),
@@ -688,6 +720,12 @@ child.on("exit", (code, sig) => {
     // 续接轮不重复注入 <system_instructions>
     const promptLog = h.logs().find((e) => e.event === "session/prompt");
     expect(promptLog?.blocks).toEqual(["继续第二轮"]);
+
+    // 续接后同样显式设模型：旧行存的档位 ID 落到家族预设（ACP 只有这一个可选值），不靠命令行 --model
+    expect(h.logs().find((e) => e.event === "spawn")?.argv).toEqual(["--trust", "--approve-mcps", "acp"]);
+    expect(h.logs().filter((e) => e.event === "session/set_config_option")).toEqual([
+      expect.objectContaining({ configId: "model", value: OPUS_PRESET }),
+    ]);
   });
 
   it("session/load 遇到 Cursor 特有的 -32602 data.message 会话不存在报错时自动回退 session/new", async () => {
@@ -759,11 +797,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return { ...base, osSandboxed: true };
     };
 
+    // 刚登录的新环境：~/.cursor 里只有配置文件，运行时子目录都还没有
     const prevHome = process.env.HOME;
     const isolatedHome = join(dir, "ro-home");
-    for (const sub of ["acp-sessions", "chats", "projects", "ai-tracking", "logs"]) {
-      mkdirSync(join(isolatedHome, ".cursor", sub), { recursive: true });
-    }
+    const runtimeDirs = ["acp-sessions", "chats", "projects", "ai-tracking", "logs"].map((sub) => join(isolatedHome, ".cursor", sub));
+    mkdirSync(join(isolatedHome, ".cursor"), { recursive: true });
+    writeFileSync(join(isolatedHome, ".cursor", "cli-config.json"), "{}", "utf8");
     process.env.HOME = isolatedHome;
 
     try {
@@ -798,27 +837,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const ended = await h.waitForTurnEnd(1);
       expect(ended.ok).toBe(true);
 
-      // 验证 ownSandboxOffArgs（--sandbox disabled）排在 --trust --approve-mcps --model ... acp 之前
+      // 验证 ownSandboxOffArgs（--sandbox disabled）排在 --trust --approve-mcps acp 之前
       expect(capturedBase).not.toBeNull();
-      expect(capturedBase!.args).toEqual([
-        "--sandbox",
-        "disabled",
-        "--trust",
-        "--approve-mcps",
-        "--model",
-        "claude-opus-5-5-high",
-        "acp",
-      ]);
+      expect(capturedBase!.args).toEqual(["--sandbox", "disabled", "--trust", "--approve-mcps", "acp"]);
+      // ~/.cursor 在沙箱里只读，cursor-agent 启动就要写 projects/：起进程前先建好并放行，配置文件不放行
       expect(capturedInput).not.toBeNull();
-      expect(capturedInput!.writableDirs).toEqual(
-        expect.arrayContaining([
-          join(isolatedHome, ".cursor", "acp-sessions"),
-          join(isolatedHome, ".cursor", "chats"),
-          join(isolatedHome, ".cursor", "projects"),
-          join(isolatedHome, ".cursor", "ai-tracking"),
-          join(isolatedHome, ".cursor", "logs"),
-        ]),
-      );
+      expect(capturedInput!.writableDirs).toEqual(expect.arrayContaining(runtimeDirs));
+      expect(runtimeDirs.every((d) => existsSync(d))).toBe(true);
+      expect(capturedInput!.writableDirs).not.toContain(join(isolatedHome, ".cursor"));
       expect(capturedInput!.writableFileGlobs).toContain(join(isolatedHome, ".cursor", "statsig-cache.json"));
 
       const perms = h.logs().filter((e) => e.event === "permission_outcome");

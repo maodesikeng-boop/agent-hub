@@ -2,7 +2,7 @@
 // - 会话运行中：对接 ACP `available_commands_update` 实时命令列表，并始终兜底内置 `/compact`；
 // - 会话未运行：轻量扫描项目与用户目录的 `.cursor/commands/*.md`、`.cursor/skills/*/SKILL.md`、`.agents/skills/*/SKILL.md` 并合并 `/compact`，
 //   避免为空闲补全拉起耗时约 8s 的重型 ACP 进程。
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 import {
@@ -75,37 +75,42 @@ export function parseCursorCommands(raw: unknown): ComposerCommand[] | null {
   return ensureCursorCompactCommand(parsed);
 }
 
-/** 从 Markdown / SKILL.md 头部提取简短说明与 disable-model-invocation 标记。 */
-function readMarkdownMeta(filePath: string): { description: string; disabled: boolean } {
-  let content = "";
-  try {
-    content = readFileSync(filePath, "utf8").slice(0, 4096);
-  } catch {
-    return { description: "", disabled: false };
-  }
+/** 只读文件开头这么多字节找说明（大文件不整个读进内存）。 */
+const MARKDOWN_HEAD_BYTES = 4096;
 
+function readHead(filePath: string): string {
+  let fd: number | null = null;
+  try {
+    // SKILL.md 可能是 FIFO 之类的特殊文件：非阻塞打开，不是普通文件就不读，免得卡住守护进程
+    fd = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) return "";
+    const buf = Buffer.alloc(MARKDOWN_HEAD_BYTES);
+    return buf.subarray(0, readSync(fd, buf, 0, buf.length, 0)).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+/** Markdown / SKILL.md 的简短说明：frontmatter 的 description，没有就取正文第一行。 */
+function readMarkdownDescription(filePath: string): string {
+  const content = readHead(filePath);
   let body = content;
   let description = "";
-  let disabled = false;
-
   if (content.startsWith("---\n") || content.startsWith("---\r\n")) {
     const endIdx = content.indexOf("\n---", 3);
     if (endIdx > 0) {
-      const frontmatter = content.slice(4, endIdx);
       body = content.slice(endIdx + 4);
-      for (const rawLine of frontmatter.split(/\r?\n/u)) {
-        const line = rawLine.trim();
-        if (/^disable-model-invocation\s*:\s*true\b/iu.test(line)) {
-          disabled = true;
-        }
-        const descMatch = /^description\s*:\s*(.+)$/iu.exec(line);
-        if (descMatch && description === "") {
+      for (const rawLine of content.slice(4, endIdx).split(/\r?\n/u)) {
+        const descMatch = /^description\s*:\s*(.+)$/iu.exec(rawLine.trim());
+        if (descMatch) {
           description = descMatch[1]!.trim().replace(/^["']|["']$/gu, "");
+          break;
         }
       }
     }
   }
-
   if (description === "") {
     for (const rawLine of body.split(/\r?\n/u)) {
       const line = rawLine.trim().replace(/^#+\s*/u, "");
@@ -115,11 +120,7 @@ function readMarkdownMeta(filePath: string): { description: string; disabled: bo
       }
     }
   }
-
-  return {
-    description: truncateChars(description, MAX_COMMAND_DESCRIPTION_CHARS),
-    disabled,
-  };
+  return truncateChars(description, MAX_COMMAND_DESCRIPTION_CHARS);
 }
 
 function scanCommandsDir(dir: string, out: ComposerCommand[], seen: Set<string>): void {
@@ -137,9 +138,8 @@ function scanCommandsDir(dir: string, out: ComposerCommand[], seen: Set<string>)
     if (rawName === "" || /\s|\//u.test(rawName)) continue;
     const key = rawName.toLowerCase();
     if (seen.has(key)) continue;
-    const meta = readMarkdownMeta(join(dir, entry.name));
     seen.add(key);
-    out.push({ name: rawName, description: meta.description });
+    out.push({ name: rawName, description: readMarkdownDescription(join(dir, entry.name)) });
   }
 }
 
@@ -160,9 +160,8 @@ function scanSkillsDir(dir: string, out: ComposerCommand[], seen: Set<string>): 
     if (seen.has(key)) continue;
     const skillFile = join(dir, entry.name, "SKILL.md");
     if (!existsSync(skillFile)) continue;
-    const meta = readMarkdownMeta(skillFile);
     seen.add(key);
-    out.push({ name: rawName, description: meta.description });
+    out.push({ name: rawName, description: readMarkdownDescription(skillFile) });
   }
 }
 
