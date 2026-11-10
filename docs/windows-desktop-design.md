@@ -1,6 +1,6 @@
 # Windows 桌面版与 README 定位方案
 
-状态：待用户拍板。本轮只提交方案，不改代码和 README。核对基线为 `4e18b20`，官方资料查阅于 2026-11-10。预计阅读 12–15 分钟。
+状态：已拍板（2026-11-11）。路线定为 A（WSL2 独立发行版 + Tauri 2 外壳，Mac 保留 Swift 外壳）；首发先做最小可用版（第 1～3 步），README 现已独立先行切换为桌面应用定位（Windows 段待真机验收通过后补入）。核对基线为 `4e18b20`，官方资料查阅于 2026-11-10。预计阅读 12–15 分钟。
 
 ## 1. 推荐先做 WSL2 后台 + Tauri 桌面壳
 
@@ -12,7 +12,7 @@ Windows 用户双击 Fusa，在独立应用窗口里使用现有界面。外壳�
 
 | 路线 | 可复用部分 | 新工作和主要风险 | 判断 |
 | --- | --- | --- | --- |
-| A：Windows 壳，WSL2 后台 | Node 后台、Linux bwrap、Unix socket、Linux CLI、git worktree | WSL 安装、登录、Windows 与 Linux 边界、冷启动、真机验证 | 首发推荐，约 15–24 人日，详见第 8 节 |
+| A：Windows 壳，WSL2 后台 | Node 后台、Linux bwrap、Unix socket、Linux CLI、git worktree | WSL 安装、登录、Windows 与 Linux 边界、冷启动、真机验证 | 已选定；首发 MVP 约 10–15 人日（全量约 15–24 人日），详见第 8 节 |
 | B：后台原生 Windows | 网页、账本、HTTP 协议、厂商协议的大部分 | 通用 OS 沙箱、Job Object、命名管道、脚本与路径移植 | 暂缓，后台额外约 27–45 人日，再加外壳和发行工作 |
 
 以上都是设计估算，按一名熟悉项目的工程师计算，不是实测工期，不含等用户验收和签名账号开通的时间。
@@ -179,39 +179,57 @@ GitHub 官方说明 hosted runner 的嵌套虚拟化不受正式支持，因此�
 1. 同意安装 WSL、启用虚拟化或按提示进 BIOS、必要时重启。双击 Fusa 完成发行版准备，确认可直接进应用窗口。
 2. 对自己要用的各家 CLI 在指定 Linux 用户下登录，处理浏览器授权和钥匙环。无需把凭据发给项目经理。
 3. 在 WSL 内导入测试仓库，派一个 Worker，验证允许写工作目录、拒写数据目录，不能从 Worker 调用 Windows 程序绕过限制。
-4. 测试停止、手动重启、后台故意崩溃五次、托盘隐藏、彻底退出、再次打开、睡眠唤醒、登录自启、更新及卸载保留数据；用系统工具核对 Linux 子孙进程已退出。
+4. 测试停止、手动重启、后台故意崩溃五次、托盘隐藏、彻底退出、再次打开、睡眠唤醒与卸载保留数据（登录自启与自动更新在第 5 步完成后补测）；用系统工具核对 Linux 子孙进程已退出。
 5. 在常用 VPN 下检查转发，试中文路径、文件上传下载、长消息和手机原有入口。手机依然经既有 HTTPS 设备入口，不把 Windows 的 localhost 直接当手机地址。
 
 首次发布至少要有这一份真机记录。没有 Windows 机器时，方案与编译可以完成，不能宣称 Windows 版可交付。
 
-## 8. 分六步实现，各步单独合并验证
+## 8. 实施分步：首发最小可用版（MVP）与后续增强
+
+按用户拍板结论，实施拆为**首发最小可用版（MVP，第 1～3 步）**与**后续增强（第 4～5 步）**两期，README 调整独立先行；各步单独提 PR 合并验证。
+
+### 8.1 首发最小可用版（MVP：第 1～3 步，约 10–15 人日）
+
+首发只交付第 1～3 步。**在 Windows 11 真机完整跑通 MVP 并通过验收后，再推进第 4～5 步后续增强。** 第 1 步是技术门槛：若 WSL 中厂商认证与沙箱隔离不能同时满足，立即回报具体阻碍重新评估，不能让第 3 步桌面窗口掩盖后台不可用。
 
 | 步骤 | 独立 PR 范围和规模 | 验证结束点 | 用户操作 |
 | --- | --- | --- | --- |
-| 1 | WSL 可行性与准备器，4–6 人日。镜像导入、普通用户、Node/pnpm、依赖、bwrap、interop、插件安装与登录引导 | Mac 测准备器解析；Ubuntu 测安装幂等；Windows 真机跑后台和沙箱、逐家认证。关键隔离或认证失败先解决再继续承诺支持 | 安装 WSL、重启、授权登录；提供真机执行结果 |
-| 2 | 共用监管约定与 Mac 对齐，2–3 人日。轻量身份探测、版本、停止预算、契约文件、故障场景 | Mac 回归：复用、重启、崩溃、外部进程不接管；后台单独启动性能不回退 | 无 |
-| 3 | Tauri Windows 壳与 WSL 监管，4–6 人日。窗口、Cookie、托盘、日志、Linux 实例起停与清理 | Windows 编译；假 WSL 故障测试；真机双击启动、崩溃恢复、退出无残留 | 真机试装、退出与睡眠唤醒 |
-| 4 | 文件操作与项目入口，2–3 人日。Linux 目录选择、仓库导入、上传下载、资源管理器桥接 | Windows 真机用中文名项目完成一轮，明确 Windows 与 Linux 路径归属 | 选一个测试项目、验证文件操作 |
-| 5 | 安装、更新、签名、自启与发布专项，2–4 人日。后台版本包、回滚、受控 Windows CI | 安装升级卸载、更新失败恢复；打包产物验证；基准指标记录 | 所有者配置签名账号和密钥；用户试升级及登录自启 |
-| 6 | README 中英文与发布说明，1–2 人日。按下节草稿替换定位、安装及平台要求，纠正过时 Linux 说明 | 安装链接可用，命令逐条核对，真机验收记录齐全后与 Windows 正式版同一发布批次 | 确认桌面版整体体验达标 |
+| 1 | WSL2 专用发行版准备器与隔离验证，4–6 人日。镜像导入、普通用户 `fusa`、Node/pnpm 与系统依赖、`bwrap` 沙箱与 `wsl.conf` interop 隔离、厂商插件安装与登录引导 | Mac 测准备器解析；Ubuntu 测安装幂等；Windows 真机跑后台和沙箱、逐家认证。关键隔离或认证失败先解决再继续承诺支持 | 安装 WSL、重启、授权登录；提供真机执行结果 |
+| 2 | `apps/desktop/contract.json` 共用监管契约与修复 Mac 壳缺陷，2–3 人日。轻量身份与版本探测接口、故障场景数据；修复 Mac 壳两处缺陷（端口上任意 HTTP 响应误认作自己的后台；停止时约 3s 即强杀改为统一的 40s 预算） | Mac 回归：复用、重启、崩溃退避、外部进程不接管；后台单独启动性能不回退 | 无 |
+| 3 | Tauri 2 Windows 桌面窗口与 WSL 实例起停监管，4–6 人日。窗口、Cookie 兑换、托盘、引导与后台日志、WSL 实例起停与进程树清理（MVP 阶段在 WSL 内直接准备项目目录，内测包明确标注未签名） | Windows 编译；假 WSL 故障测试；Windows 11 真机双击启动、跑通会话与 Worker 沙箱、崩溃恢复、彻底退出无残留 | 真机试装、退出与睡眠唤醒验收 |
 
-合计约 15–24 人日。各 PR 可独立审查和合并，未完成的 Windows 功能保持内测，不先在 README 宣称已发布。第 1 步是技术门槛，若 WSL 中认证和隔离不能同时满足，就回报具体阻碍重新评估，不能让第 3 步漂亮窗口掩盖后台不可用。
+### 8.2 MVP 之后再做（后续增强：第 4～5 步，约 4–7 人日）
+
+| 步骤 | 独立 PR 范围和规模 | 验证结束点 | 用户操作 |
+| --- | --- | --- | --- |
+| 4 | 进阶目录选择器与仓库导入桥接优化，2–3 人日。应用内 Linux 目录选择器、Windows 本地仓库导入到 Linux 流程、文件上传下载与资源管理器 `\\wsl$` 桥接优化 | Windows 真机用中文名项目完成一轮，明确 Windows 与 Linux 路径归属 | 选一个测试项目、验证导入与文件操作 |
+| 5 | 自动更新、代码签名、开机自启与发布流水线，2–4 人日。Tauri `updater`、Authenticode 代码签名、开机登录自启（`autostart`）、后台版本包回滚与受控 Windows CI 发布流水线 | 安装升级卸载、更新失败恢复；打包签名产物验证；基准性能指标记录 | 所有者配置签名账号和密钥；用户试升级及登录自启 |
+
+### 8.3 README 与文档节奏（分两阶段，约 1–2 人日）
+
+- **第一阶段（现在先行）**：不等 Windows 完成，**先行把中英文 `README.md` 改为桌面应用为主**（Mac 打开 `Fusa.app`，Linux 服务器跑后台，手机继续用网页或添加到主屏幕的 PWA，**暂不写尚未交付的 Windows 安装包**），同时纠正过时的平台与 Linux 说明。
+- **第二阶段（MVP 真机验收通过后）**：等第 1～3 步 MVP 通过 Windows 11 真机验收、安装包可用后，再在 `README.md` 补上 Windows 安装段落。
+
+全量合计仍约 15–24 人日。未通过真机验收的 Windows 功能保持内测，不在 README 提前宣称已发布。
 
 ## 9. README 开头与安装草稿
 
-以下文字在实现及发行产物可用后才采用。下载链接指向实际 Releases，不先写不存在的安装包；Mac 当前是从源码构建的壳，不把可选下载表述成已有自包含发行版。
+上线节奏：**Mac、Linux 服务器与手机部分先行上线**（先行版不写尚未交付的 Windows 句段）；**Windows 段落待 MVP 在 Windows 11 真机跑通验收后合入**。下载链接指向实际 Releases，不先写不存在的安装包；Mac 当前是从源码构建的壳，不把可选下载表述成已有自包含发行版。
 
 ### 中文开头
 
 > # Fusa
-> Fusa 是管理多个 AI 助手的桌面应用。你把项目交给项目经理，由它拆分任务、安排 Worker，并在一个窗口里查看进度、参与讨论和确认结果。
 >
-> Mac 打开 Fusa.app，Windows 安装 Fusa。需要常开的后台时，也可以部署到 Linux 服务器。手机用浏览器访问，或添加到主屏幕，继续查看和回复同一批对话。
+> **通过一个会话管理整个项目。**
+>
+> Fusa 是面向个人开发者的桌面应用：每个项目你只跟项目经理（PM）在一个会话里沟通目标和拍板，由它拆分任务、调度多个代码助手（Worker，界面里叫 Pieces）在各自的 git worktree 里并行干活、审代码跑测试、合 PR；每个角色都可以任选不同厂商的官方命令行助手，使用你自己的账号运行。
+>
+> Mac 打开 `Fusa.app`，Windows 安装 Fusa（Windows 半句待真机跑通后合入）。需要常开的后台时，也可以部署到 Linux 服务器。手机用浏览器访问，或添加到主屏幕，继续查看和回复同一批对话。
 
 ### 中文“安装”结构
 
 - **Mac 桌面应用**：正式下载包可用时列下载入口和依赖说明；从源码使用下列命令，生成并安装 Fusa.app，再双击打开。现有壳仍需要本机 Node、已构建网页和源码目录，不能移动源码后声称应用独立运行。
-- **Windows 桌面应用**：下载 Windows 安装包，安装后双击 Fusa。首次按引导安装 Linux 运行环境，可能需要管理员授权和重启；在引导里安装并登录要用的助手。项目保存在应用的 Linux 环境里，附导入项目的说明链接。
+- **Windows 桌面应用**（待真机跑通后合入）：下载 Windows 安装包，安装后双击 Fusa。首次按引导安装 Linux 运行环境，可能需要管理员授权和重启；在引导里安装并登录要用的助手。项目保存在应用的 Linux 环境里，附项目目录与导入说明。
 - **Linux 服务器**：链接 `docs/linux.md`，说明安装依赖、启动后台和安全连接。将原来的 clone、build、start 教程移到这里及开发文档。
 - **手机访问**：在已登录的电脑里生成手机登录入口，扫码并批准。手机用网页，也可添加到主屏幕；链接已有公网入口和通知配置。
 
@@ -228,14 +246,17 @@ bash scripts/build-mac-app.sh --install
 ### English opening
 
 > # Fusa
-> Fusa is a desktop app for managing multiple AI assistants. Give a project to a project manager, let it split the work and assign Workers, and use one window to follow progress, discuss changes, and approve results.
 >
-> Open Fusa.app on Mac or install Fusa on Windows. You can also run the backend on a Linux server. On your phone, use the web app or add it to your home screen to read and reply to the same conversations.
+> **Manage an entire project through a single conversation.**
+>
+> Fusa is a desktop app for individual developers: for each project, you talk to a single Project Manager (PM) in one conversation to set goals and make decisions, while the PM breaks down the work, dispatches multiple coding assistants (Workers, called Pieces in the UI) to work in parallel in isolated git worktrees, reviews diffs and tests, and merges PRs—with each role running your choice of official CLI agent under your own account.
+>
+> Open `Fusa.app` on Mac, or install Fusa on Windows *(Windows clause added after on-device MVP verification)*. When you need an always-on backend, run it on a Linux server. On your phone, use the web app or add it to your home screen to read and reply to the same conversations.
 
 ### English “Install” structure
 
 - **Mac desktop app**: Link the download when a release is available and state its requirements. For a source build, use the commands above to build and install Fusa.app, then open it. The current shell requires local Node, built web assets, and the source directory.
-- **Windows desktop app**: Download the Windows installer, install Fusa, and open it. Follow the first-run setup to install the Linux runtime and sign in to the assistants you use. Setup may need administrator approval and a restart. Projects live in the app's Linux environment; link the project import guide.
+- **Windows desktop app** *(added after on-device MVP verification)*: Download the Windows installer, install Fusa, and open it. Follow the first-run setup to install the Linux runtime and sign in to the assistants you use. Setup may need administrator approval and a restart. Projects live in the app's Linux environment, with instructions for preparing or importing repositories.
 - **Linux server**: Link the backend setup and secure connection guide. Keep the clone, build, and service commands here or in the development guide.
 - **Phone**: Create a phone sign-in link on an already signed-in computer, scan it, and approve access. Use the web app or add it to the home screen. Link the existing remote access and notification guide.
 
