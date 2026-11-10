@@ -58,7 +58,7 @@ apps/macos/
    - `CFBundleIconFile`：`AppIcon`
    - `LSMinimumSystemVersion`：`13.0`
    - `NSHighResolutionCapable`：`true`
-   - `AgentHubRepoDir`：编译时写死当前仓库根目录绝对路径（如 `/Users/yuxin.zhangnewsbreak.com/agent-hub`），供 `.app` 移到 `/Applications` 后仍能准确找到 `src/daemon/main.ts`。
+   - `AgentHubRepoDir`：编译时写死当前仓库根目录绝对路径（如 `/Users/alice/agent-hub`），供 `.app` 移到 `/Applications` 后仍能准确找到 `src/daemon/main.ts`。
 5. **本机免费签名与一键安装**：
    - 执行 `codesign --force --deep -s - "build/Agent Hub.app"` 完成本机 ad-hoc 免费签名（避免 macOS Gatekeeper 弹窗拦截和每次重启丢系统权限）；
    - 传入 `--install`（或默认安装）时，用 `ditto "build/Agent Hub.app" "/Applications/Agent Hub.app"` 安装到系统应用程序目录。
