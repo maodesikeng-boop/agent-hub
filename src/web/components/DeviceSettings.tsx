@@ -132,7 +132,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
         icon={<PlatformIcon platform={info.platform} />}
         error={error}
         detail={
-          <span className="flex items-center gap-3">
+          <span className="flex flex-wrap items-center gap-x-3">
             <span className="flex items-center gap-2">
               <StatusDot status={device.status} />
               <span>{platformLabel(info.platform)}</span>
@@ -451,7 +451,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               autoComplete="off"
               spellCheck={false}
               placeholder="e.g. tokyo.tailnet.ts.net"
-              className="w-60 font-mono"
+              className="w-60 min-w-0 font-mono"
               onChange={(e) => setHostname(e.target.value)}
             />
             <Button

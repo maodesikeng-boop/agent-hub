@@ -218,7 +218,7 @@ export function BrowserSessionsSettings({ onSignedOut = reloadPage }: { onSigned
             const confirming = session.current && confirmingSelf;
             const KindIcon = KIND_ICONS[userAgentKind(session.userAgent)];
             const detail = (
-              <span className="inline-flex items-center gap-3">
+              <span className="flex flex-wrap items-center gap-x-3">
                 {session.current && <span>This browser</span>}
                 {pending && <span>Pending approval</span>}
                 {session.viaPublic && <span>Via public access</span>}

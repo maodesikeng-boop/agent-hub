@@ -139,7 +139,7 @@ export function AgentRows({
           )
         }
       </SettingsRow>
-      <SettingsRow label="Model" error={errors.model}>
+      <SettingsRow label="Model" wide error={errors.model}>
         {(id) => (
           <Select
             id={id}
