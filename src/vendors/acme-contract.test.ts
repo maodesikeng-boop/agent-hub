@@ -42,7 +42,7 @@ describe("名单加一项 acme，公共代码就认得它", () => {
     for (const table of [VENDOR_SPECS, VENDOR_HOME_PATHS, VENDOR_FAILURE_SIGNS, VENDOR_FALLBACK_PATHS]) {
       expect(Object.keys(table)).toEqual([...AGENT_VENDORS]);
     }
-    expect(ALL_EFFORTS).toContain("high");
+    expect(ALL_EFFORTS).toContain("turbo");
   });
 
   it("旧的平铺形状从分组字段推出来，没写的可选字段走默认", () => {
@@ -65,8 +65,8 @@ describe("名单加一项 acme，公共代码就认得它", () => {
   });
 
   it("通用函数：校验、启动参数、名单、显示名、兜底路径、盯的文件", () => {
-    expect(checkAgentSetting({ vendor: "acme", model: "acme-x", effort: "high" })).toBeNull();
-    expect(checkAgentSetting({ vendor: "acme", model: null, effort: "max" })).toBe("思考程度只能是 low、high");
+    expect(checkAgentSetting({ vendor: "acme", model: "acme-x", effort: "turbo" })).toBeNull();
+    expect(checkAgentSetting({ vendor: "acme", model: null, effort: "max" })).toBe("思考程度只能是 low、high、turbo");
     expect(agentLaunchArgs({ vendor: acme, model: "acme-ultra-9", effort: "low" })).toEqual(["--model", "acme-ultra-9", "--reasoning", "low"]);
     expect(bundledModelCatalog(acme)).toMatchObject({ vendor: "acme", label: "Acme Rocket", customModelExample: "如 acme-ultra-9" });
     expect(vendorLabel("acme")).toBe("Acme Rocket");

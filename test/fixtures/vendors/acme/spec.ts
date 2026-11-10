@@ -1,5 +1,6 @@
 // 测试专用的假厂商 acme（docs/vendor-plugin-design.md 5.3 节、第 9 节拍板点 7 选 B）：不在生产名单里，
 // 只在 src/vendors/acme-contract.test.ts 里加进名单，证明“新文件夹 + 名单一项”就够公共代码认它。只填必需字段，可选的都不写、走兜底。
+import { PRODUCT_NAME } from "../../../../src/shared/names.ts";
 import { defineVendor } from "../../../../src/vendors/types.ts";
 
 export default defineVendor({
@@ -23,13 +24,13 @@ export default defineVendor({
     ],
     customModel: true,
     customModelExample: "如 acme-ultra-9",
-    efforts: ["low", "high"],
+    efforts: ["low", "high", "turbo"],
     flags: { model: "--model", effort: "--reasoning" },
   },
   composer: {
     commandPrefix: "/",
     compactCommand: "compact",
-    blockedCommands: { clear: "会话由 agent-hub 管，这里不能用这个命令" },
+    blockedCommands: { clear: `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令` },
   },
   prompt: {
     subagentTools: ["acme_spawn"],

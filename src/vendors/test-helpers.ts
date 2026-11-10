@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { VENDOR_FAILURE_SIGNS, VENDOR_HOME_PATHS, agentLaunchArgs, checkModel, vendorFailureOf, type AgentVendor } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
@@ -21,14 +22,41 @@ interface ImportRef {
   typeOnly: boolean;
 }
 
-/** file（相对仓库根目录）里写的 import / export … from。 */
+type AstNode = { type: string; [key: string]: unknown };
+const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
+
+/** file（相对仓库根目录）里写的静态 import / export … from 与动态 import(...)。用 oxc-parser 解析 AST，不受注释、字符串或跨行接口干扰。 */
 export function importsOf(file: string): ImportRef[] {
   const text = readFileSync(join(ROOT, file), "utf8");
-  return [...text.matchAll(/^\s*(?:import|export)\b(\s+type\b)?[^;]*?\bfrom\s*["']([^"']+)["']|^\s*import\s*["']([^"']+)["']/gm)].map((m) => {
-    const spec = (m[2] ?? m[3])!;
-    const path = spec.startsWith(".") ? relative(ROOT, resolve(ROOT, dirname(file), spec)) : null;
-    return { from: file, spec, path, typeOnly: m[1] !== undefined };
-  });
+  const { program, errors } = parseSync(file, text);
+  if (errors.length > 0) throw new Error(`${file} 解析失败：${errors[0]!.message}`);
+  const out: ImportRef[] = [];
+  const push = (spec: string, typeOnly: boolean) => {
+    const path = spec.startsWith(".") ? relative(ROOT, resolve(ROOT, dirname(file), spec)).split("\\").join("/") : null;
+    out.push({ from: file, spec, path, typeOnly });
+  };
+  const visitDynamic = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visitDynamic);
+    if (!isAstNode(node)) return;
+    if (node.type === "ImportExpression" && isAstNode(node.source) && typeof node.source.value === "string") {
+      push(node.source.value, false);
+    }
+    for (const value of Object.values(node)) visitDynamic(value);
+  };
+  for (const stmt of program.body) {
+    if (stmt.type === "ImportDeclaration") {
+      const typeOnly = stmt.importKind === "type" || (stmt.specifiers.length > 0 && stmt.specifiers.every((s) => s.type === "ImportSpecifier" && s.importKind === "type"));
+      push(stmt.source.value, typeOnly);
+    } else if (stmt.type === "ExportNamedDeclaration" && stmt.source !== null) {
+      const typeOnly = stmt.exportKind === "type" || (stmt.specifiers.length > 0 && stmt.specifiers.every((s) => s.exportKind === "type"));
+      push(stmt.source.value, typeOnly);
+    } else if (stmt.type === "ExportAllDeclaration") {
+      push(stmt.source.value, stmt.exportKind === "type");
+    } else {
+      visitDynamic(stmt);
+    }
+  }
+  return out;
 }
 
 /** file 和它运行时经相对路径引到的所有文件里的运行时 import（跳过 import type）。 */
@@ -44,10 +72,17 @@ export function browserUnsafeImports(file: string): ImportRef[] {
   return runtimeImportsDeep(file).filter((i) => i.spec.startsWith("node:") || i.path?.startsWith("src/daemon/"));
 }
 
-/** 别家厂商文件夹：src/vendors/<别家>/ 下的文件。 */
-function otherVendorDirImports(file: string): ImportRef[] {
+/** 别家厂商文件夹：src/vendors/<别家>/ 下的文件（含直接 import type 与运行时传递引到的）。 */
+export function otherVendorDirImports(file: string): ImportRef[] {
   const ownDir = dirname(file);
-  return importsOf(file).filter((i) => i.path !== null && /^src\/vendors\/[^/]+\//.test(i.path) && !i.path.startsWith(`${ownDir}/`));
+  const seen = new Set<string>();
+  return [...importsOf(file), ...runtimeImportsDeep(file)].filter((i) => {
+    if (i.path === null || !/^src\/vendors\/[^/]+\//.test(i.path) || i.path.startsWith(`${ownDir}/`)) return false;
+    const key = `${i.from}->${i.path}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** 一家的样例报错：找不到程序、服务繁忙。 */
@@ -66,8 +101,11 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
       expect(new Set(commands).size).toBe(commands.length);
     });
 
-    it("S7 rawHint 不会把别家的样例报错认成自己的", () => {
+    it("S7 rawHint 认得出自家样例报错，且不会把别家的样例报错认成自己的", () => {
       for (const spec of list) {
+        if (spec.failure.rawHint) {
+          for (const raw of sampleErrors(spec)) expect(spec.failure.rawHint.test(raw), `${spec.id} 漏认 ${raw}`).toBe(true);
+        }
         for (const other of list.filter((o) => o.id !== spec.id)) {
           for (const raw of sampleErrors(other)) expect(spec.failure.rawHint?.test(raw) ?? false, `${spec.id} 认了 ${raw}`).toBe(false);
         }

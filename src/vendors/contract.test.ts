@@ -16,7 +16,7 @@ import { FORKERS } from "../daemon/handover/forkers.ts";
 import { DAEMON_VENDORS } from "../daemon/vendors/index.ts";
 import { AGENT_VENDORS, VENDOR_AVAILABILITIES, VENDOR_HOME_PATHS, VENDOR_SPECS } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
-import { ROOT, browserUnsafeImports, describeSpecContract, importsOf } from "./test-helpers.ts";
+import { ROOT, browserUnsafeImports, describeSpecContract, importsOf, otherVendorDirImports } from "./test-helpers.ts";
 
 const GARBAGE: readonly unknown[] = [null, undefined, "垃圾", 42, {}, [], { models: "x" }];
 const specFileOf = (id: string) => `src/vendors/${id}/spec.ts`;
@@ -52,6 +52,12 @@ describe("厂商名单", () => {
     expect(browserUnsafeImports("src/vendors/registry.ts")).toEqual([]);
     expect(browserUnsafeImports("src/vendors/types.ts")).toEqual([]);
     expect(browserUnsafeImports("src/shared/vendors.ts")).toEqual([]);
+    // 反向确认检查器不是空跑：守护进程路径文件引了 node:* 与各家文件夹，必须被抓出
+    expect(browserUnsafeImports("src/shared/paths.ts").length).toBeGreaterThan(0);
+    expect(browserUnsafeImports("src/vendors/agy/paths.ts").length).toBeGreaterThan(0);
+    expect(otherVendorDirImports("src/shared/paths.ts").map((i) => i.path)).toEqual(
+      expect.arrayContaining(["src/vendors/agy/paths.ts", "src/vendors/codex/paths.ts"]),
+    );
   });
 
   it.todo("S1 每个 id 有 src/vendors/<id>/daemon.ts，默认导出带 createDriver（P3）");

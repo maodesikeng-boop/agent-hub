@@ -51,8 +51,8 @@ const businessDaemonAndHubTs = [
     !path.startsWith("src/daemon/handover/"),
 );
 
-/** 厂商文件夹（src/vendors/<id>/）以外的源码：厂商专属的路径字面量只许写在各家文件夹里。 */
-const srcOutsideVendorDirsTs = listFiles("src", isTs).filter((path) => !isExcludedTestOrFake(path) && !path.startsWith("src/vendors/"));
+/** agy 文件夹（src/vendors/agy/）以外的源码：agy 专属的路径字面量只许写在它自己的文件夹里。 */
+const srcOutsideAgyVendorDirTs = listFiles("src", isTs).filter((path) => !isExcludedTestOrFake(path) && !path.startsWith("src/vendors/agy/"));
 
 const promptTs = ["src/daemon/prompt.ts"];
 
@@ -109,7 +109,7 @@ const RULES: Rule[] = [
   },
   {
     name: "AGY 数据目录字面量只许在 agy 的文件夹里",
-    files: srcOutsideVendorDirsTs,
+    files: srcOutsideAgyVendorDirTs,
     pattern: AGY_DATA_DIR_PATTERN,
     expected: 0,
   },
@@ -143,11 +143,13 @@ describe("厂商声明表统一：扫描守卫规则", () => {
     expect(businessDaemonAndHubTs).toContain("src/daemon/launch.ts");
     expect(businessDaemonAndHubTs).toContain("src/daemon/ledger/workers.ts");
     expect(businessDaemonAndHubTs).toContain("src/hub/cli.ts");
-    expect(srcOutsideVendorDirsTs.length).toBeGreaterThan(40);
-    expect(srcOutsideVendorDirsTs).toContain("src/daemon/driver/readonly-agy.ts");
-    expect(srcOutsideVendorDirsTs).toContain("src/daemon/handover/agy.ts");
-    expect(srcOutsideVendorDirsTs).toContain("src/shared/paths.ts");
-    expect(srcOutsideVendorDirsTs).toContain("src/shared/vendors.ts");
+    expect(srcOutsideAgyVendorDirTs.length).toBeGreaterThan(40);
+    expect(srcOutsideAgyVendorDirTs).toContain("src/daemon/driver/readonly-agy.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/daemon/handover/agy.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/shared/paths.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/shared/vendors.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/vendors/claude/spec.ts");
+    expect(srcOutsideAgyVendorDirTs).toContain("src/vendors/codex/spec.ts");
   });
 
   it("规则正则能准确识别违例写法", () => {
