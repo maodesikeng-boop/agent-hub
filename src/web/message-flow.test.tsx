@@ -461,3 +461,20 @@ describe("Worker 回复末尾的汇报块", () => {
     expect(writeText).toHaveBeenCalledWith(raw);
   });
 });
+
+describe("送达与执行失败分开显示", () => {
+  it("服务端确认送达后执行失败：没有红色未发送标记，仍能重试并查看错误", async () => {
+    const onRetryMessage = vi.fn();
+    const { container } = list([makeUserMessage({ id: 1, status: "failed", meta: { deliveryConfirmed: true }, failureReason: "error: http2: server sent GOAWAY" })], { actions: actions({ onRetryMessage }) });
+    expect(container.querySelector("[data-unsent]")).toBeNull();
+    const retry = screen.getByRole("button", { name: "处理失败，重试" });
+    expect(retry.title).toContain("GOAWAY");
+    await userEvent.click(retry);
+    expect(onRetryMessage).toHaveBeenCalledWith(1);
+  });
+  it("服务端未送达而失败，仍显示红色发送失败标记", () => {
+    const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: "spawn_failed: rejected" })]);
+    expect(container.querySelector("[data-unsent]")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+  });
+});

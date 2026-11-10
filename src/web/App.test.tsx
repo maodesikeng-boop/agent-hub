@@ -287,6 +287,22 @@ describe("Send", () => {
     expect(bubbles()).toHaveLength(3);
   });
 
+  it("WebSocket 已确认接收，随后 HTTP 回执失败也不能恢复红色发送失败标记", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    const gate = deferred<{ status: number; body: unknown }>();
+    api.postMessage = () => gate.promise;
+    await user.type(box(), "已接收的消息{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    const clientId = (api.callsTo("POST", /messages$/)[0]?.body as { clientId: string }).clientId;
+    push(ws, messageChange(11, "message.created", makeUserMessage({ id: 3, text: "已接收的消息", status: "queued", dedupeKey: `client:1:${clientId}` })));
+    gate.resolve({ status: 500, body: { error: "response lost" } });
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument();
+    expect(api.callsTo("POST", /messages$/)).toHaveLength(1);
+    expect(bubbles()).toHaveLength(3);
+  });
+
   it("发送失败（500）：标“发送失败”有“重试”；重试用同一个 clientId，成功后恢复“Queued”", async () => {
     const user = userEvent.setup();
     await boot();
