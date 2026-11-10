@@ -1,7 +1,8 @@
 // 初始快照（/api/state，账本的 snapshot）里带哪些消息、给哪些摘要。本机直连和经别的设备转发（/d/<设备>/api/state）
 // 拿的都是账本这一份；网页（web/selectors.ts）和守护进程的推送（reminders.ts）按同一套规则用它。
-// - 项目经理对话：最近 SNAPSHOT_RECENT_MESSAGES 条，往前带到最近一条要算的消息（snapshotWindowStart）；
-// - Worker 对话：不带消息（任务说明还在排队的除外，isQueuedWorkerTask），点开时按 hasMore 拉最新一页；
+// - 项目经理对话、在跑的 Worker 对话：最近 SNAPSHOT_RECENT_MESSAGES 条，往前带到最近一条要算的消息（snapshotWindowStart）；
+//   在跑的 Worker 只有几个（不随历史变多），点进去不用再等一次拉取；
+// - 已收工的 Worker 对话：不带消息，点开时按 hasMore 拉最新一页；
 // - Worker 的状态色、已收工、最近一行：项目经理对话里那几行可能早就不在最近几条里了，账本把每个 Worker 最近一行的摘要
 //   （workerLineSummaries）挂在它自己的对话上，网页再拿实时来的新行盖掉旧的。
 import { workerEventOf, type ConversationId, type Message, type MessageId, type WorkerMessageMeta } from "./domain.ts";
@@ -38,19 +39,11 @@ export function workerLineSummaries(
   return out;
 }
 
-/**
- * Worker 对话的第一条是项目经理的任务说明、还在排队（worktree 还没建好，还没发给 Worker）：网页据此显示“准备中”，
- * 快照里这样的 Worker 对话照常带消息（只有这一条），之后任务说明送达的变化才接得上。
- */
-export function isQueuedWorkerTask(first: Pick<Message, "sender" | "status"> | undefined): boolean {
-  return first?.sender === "pm" && first.status === "queued";
-}
-
 /** 提醒、状态要看的消息：没回答的提问、没处理完的（含交接请求）。 */
 const mustKeep = (m: Message) => isUnansweredAsk(m) || isInFlight(m);
 
 /**
- * 项目经理对话在快照里从第几条开始带（messages 是最近一页，从旧到新）：最近 SNAPSHOT_RECENT_MESSAGES 条，
+ * 项目经理对话、在跑的 Worker 对话在快照里从第几条开始带（messages 是最近一页，从旧到新）：最近 SNAPSHOT_RECENT_MESSAGES 条，
  * 往前带到最早一条没回答的提问、没处理完的消息，以及最近一条非安静的消息（左栏预览、排序、“等你”看它）。
  * 带的是连着的一段，往上翻页（before = 最早一条的编号）接得上。
  */

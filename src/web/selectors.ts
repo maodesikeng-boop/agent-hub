@@ -24,7 +24,6 @@ import {
   systemEventOf,
   systemNoticeText,
   workerEventOf,
-  isQueuedWorkerTask,
   isWorkerEndLine,
   type AgentVendor,
   type ConversationId,
@@ -509,7 +508,7 @@ function phaseOf(
   const view = state.conversations[workerConversationId];
   // 第一条是任务说明（翻页翻掉了说明早就发过了）
   const task = view?.hasMore === false ? view.messages[0] : undefined;
-  return isQueuedWorkerTask(task) ? "preparing" : "open";
+  return task?.sender === "pm" && task.status === "queued" ? "preparing" : "open";
 }
 
 export function workerPhaseOf(state: HubState, workerConversationId: ConversationId): WorkerPhase {

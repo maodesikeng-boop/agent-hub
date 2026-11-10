@@ -1,10 +1,9 @@
-// 首屏瘦身（Worker #316）：初始快照不带 Worker 对话的消息、项目经理对话只带最近几条以后，右栏分组、状态色、已收工、
+// 首屏瘦身（Worker #316）：初始快照不带收工的 Worker 对话的消息、项目经理对话和在跑的 Worker 只带最近几条以后，右栏分组、状态色、已收工、
 // “准备中”、左栏预览和排序、“等你”“等你确定”、额度算出来要和拿着全部消息时一模一样。
 // slim() 按账本的口径（shared/snapshot.ts 的几条规则）把全量快照裁成初始快照；账本那边按同样的规则出快照见
 // daemon/ledger/snapshot-slim.test.ts。
 import { describe, expect, it } from "vitest";
 import {
-  isQueuedWorkerTask,
   MESSAGE_PAGE_SIZE,
   snapshotWindowStart,
   SNAPSHOT_RECENT_MESSAGES,
@@ -46,25 +45,25 @@ const PM_CONV = 1;
 const WORKERS = [30, 31, 32, 33, 34, 35] as const;
 const NOW = 1_000_000;
 
-/** 账本的口径：项目经理对话裁到 snapshotWindowStart，Worker 对话不带消息（任务说明在排队的除外），挂上最近一行的摘要。 */
+/**
+ * 账本的口径：已收工的 Worker 对话（workers.status / 会话 ended）不带消息、挂最近一行的摘要；项目经理对话、在跑的 Worker 对话
+ * 裁到 snapshotWindowStart。
+ */
 function slim(full: StateSnapshot): StateSnapshot {
   const lines = workerLineSummaries(
     full.conversations.filter((c) => c.conversation.kind !== "worker").flatMap((c) => c.messages).toSorted((a, b) => a.id - b.id),
   );
+  const ended = (id: number) =>
+    full.sessions.some((s) => s.conversationId === id && s.status === "ended") || (lines.get(id)?.endedAt ?? null) !== null;
   const conversations = full.conversations.map((c): ConversationSnapshot => {
-    if (c.conversation.kind === "worker") {
-      const workerLine = lines.get(c.conversation.id);
-      const keep = isQueuedWorkerTask(c.messages[0]) ? c.messages.slice(-MESSAGE_PAGE_SIZE) : [];
-      return {
-        conversation: c.conversation,
-        messages: keep,
-        hasMore: keep.length < c.messages.length,
-        ...(workerLine !== undefined ? { workerLine } : {}),
-      };
+    const workerLine = c.conversation.kind === "worker" ? lines.get(c.conversation.id) : undefined;
+    const summary = workerLine !== undefined ? { workerLine } : {};
+    if (c.conversation.kind === "worker" && ended(c.conversation.id)) {
+      return { conversation: c.conversation, messages: [], hasMore: c.messages.length > 0, ...summary };
     }
     const page = c.messages.slice(-MESSAGE_PAGE_SIZE);
     const start = snapshotWindowStart(page);
-    return { conversation: c.conversation, messages: page.slice(start), hasMore: c.messages.length > page.length - start };
+    return { conversation: c.conversation, messages: page.slice(start), hasMore: c.messages.length > page.length - start, ...summary };
   });
   return { ...full, conversations };
 }
@@ -154,15 +153,15 @@ describe("首屏瘦身：初始快照少带消息，界面算出来的一样", (
     expect(d.quota[0]?.exhausted).toBe(true);
   });
 
-  it("初始快照：Worker 对话不带消息（排队的任务说明除外），项目经理对话少带，算出来的和全量一样", () => {
+  it("初始快照：收工的 Worker 对话不带消息，项目经理对话、在跑的 Worker 只带最近几条，算出来的和全量一样", () => {
     const full = fullSnapshot();
     const small = slim(full);
     const pm = small.conversations.find((c) => c.conversation.id === PM_CONV)!;
     expect(pm.messages.length).toBeLessThan(full.conversations[0]!.messages.length);
     expect(pm.hasMore).toBe(true);
-    for (const c of small.conversations.filter((x) => x.conversation.kind === "worker")) {
-      expect(c.messages.length).toBe(c.conversation.id === 34 ? 1 : 0);
-    }
+    const sizes = Object.fromEntries(small.conversations.filter((x) => x.conversation.kind === "worker").map((c) => [c.conversation.id, c.messages.length]));
+    // 30、33 收工了；在跑的带最近 20 条（31 条里），34 只有排队的任务说明
+    expect(sizes).toEqual({ 30: 0, 31: SNAPSHOT_RECENT_MESSAGES, 32: SNAPSHOT_RECENT_MESSAGES, 33: 0, 34: 1, 35: SNAPSHOT_RECENT_MESSAGES });
     expect(derived(load(small))).toEqual(derived(load(full)));
   });
 

@@ -18,7 +18,7 @@ import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
 import type { ConversationId, MessageKind, Pm, PmId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
-import { isQueuedWorkerTask, snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
+import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
@@ -32,7 +32,7 @@ import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerProjects } from "./projects.ts";
-import { parseMessageMeta, toConversation, toHealth, toMessage, toPm, toProject, toProjectFolder } from "./rows.ts";
+import { parseMessageMeta, toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
@@ -174,8 +174,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): LedgerSnapshot {
-      // 初始快照瘦身（shared/snapshot.ts）：Worker 对话不带消息、只挂最近一行的摘要（点开再按 hasMore 拉），
-      // 项目经理对话带最近几条、往前带到要算的消息为止。几百个 Worker 也不会撑大首屏。
+      // 初始快照瘦身（shared/snapshot.ts）：已收工的 Worker 对话不带消息、只挂最近一行的摘要（点开再按 hasMore 拉），
+      // 项目经理对话和在跑的 Worker 对话带最近几条、往前带到要算的消息为止。几百个历史 Worker 也不会撑大首屏。
       const ended = new Set(
         db
           .all<{ id: number }>(
@@ -198,17 +198,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         .all<ConversationDbRow>("SELECT * FROM conversations WHERE kind != 'project_group' ORDER BY id")
         .map((row) => {
           const conversation = toConversation(row);
-          if (row.kind === "worker") {
-            const workerLine = workerLines.get(row.id);
-            const summary = workerLine !== undefined ? { workerLine } : {};
-            const first = db.get<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? ORDER BY id LIMIT 1", row.id);
-            // 任务说明还在排队（还没开工）：带上，网页靠它显示“准备中”、接得上之后送达的变化
-            if (!ended.has(row.id) && first !== undefined && isQueuedWorkerTask(toMessage(first))) return { conversation, ...recentPage(row.id), ...summary };
-            return { conversation, messages: [], hasMore: first !== undefined, ...summary };
+          const workerLine = row.kind === "worker" ? workerLines.get(row.id) : undefined;
+          const summary = workerLine !== undefined ? { workerLine } : {};
+          if (ended.has(row.id)) {
+            const hasMore = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id) !== undefined;
+            return { conversation, messages: [], hasMore, ...summary };
           }
           const { messages, hasMore } = recentPage(row.id);
           const start = snapshotWindowStart(messages);
-          return { conversation, messages: messages.slice(start), hasMore: hasMore || start > 0 };
+          return { conversation, messages: messages.slice(start), hasMore: hasMore || start > 0, ...summary };
         });
       return {
         seq: log.seq,

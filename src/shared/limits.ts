@@ -3,7 +3,7 @@
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
 /**
- * 初始快照（/api/state）里项目经理对话带最近几条；更早的点开往上翻再拉（/messages?before=）。
+ * 初始快照（/api/state）里项目经理对话、在跑的 Worker 对话带最近几条；更早的往上翻再拉（/messages?before=）。
  * 往前带到最近一条要算的消息为止（没回答的提问、没处理完的、最近一条非安静的，见 shared/snapshot.ts），最多 MESSAGE_PAGE_SIZE 条。
  */
 export const SNAPSHOT_RECENT_MESSAGES = 20;

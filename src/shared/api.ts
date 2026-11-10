@@ -156,8 +156,8 @@ export const API_PATHS = {
 export interface ConversationSnapshot {
   conversation: Conversation;
   /**
-   * 按编号从小到大、连着的一段（见 shared/snapshot.ts）：项目经理对话是最近 SNAPSHOT_RECENT_MESSAGES 条，往前带到要算的消息，
-   * 最多 MESSAGE_PAGE_SIZE 条；Worker 对话是空的（任务说明还在排队的除外），点开再拉。
+   * 按编号从小到大、连着的一段（见 shared/snapshot.ts）：项目经理对话、在跑的 Worker 对话是最近 SNAPSHOT_RECENT_MESSAGES 条，
+   * 往前带到要算的消息，最多 MESSAGE_PAGE_SIZE 条；已收工的 Worker 对话是空的，点开再拉。
    */
   messages: Message[];
   /** 比 messages 里最早一条更早的还有没有。 */
