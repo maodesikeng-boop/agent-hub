@@ -10,7 +10,7 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
-  PRODUCT_NAME,
+  PRODUCT_ID,
   VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   SETUP_TIMEOUT_MS,
@@ -169,10 +169,10 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(emptyPrompt).not.toContain("# 性格设定");
   });
 
-  it("名字、产品名、命令名都是动态的：项目经理的名字、PRODUCT_NAME、hub 命令名", () => {
+  it("名字、产品标识、命令名都是动态的：项目经理的名字、PRODUCT_ID、hub 命令名", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
     expect(prompt).toContain("你是用户的项目经理“小林”");
-    expect(prompt).toContain(`运行在 ${PRODUCT_NAME}（用户的本地 Agent 工作台）里`);
+    expect(prompt).toContain(`运行在 ${PRODUCT_ID}（用户的本地 Agent 工作台）里`);
     expect(prompt).not.toContain("Agent Hub");
     expect(buildLaunchPrompt(projectContext({ pm: { id: 1, name: "阿虎", mode: "manage_only", persona: "x" } }), dir)).toContain("“阿虎”");
   });

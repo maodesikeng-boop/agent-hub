@@ -1,7 +1,7 @@
 // “等你”提醒（m4-plan）：对话停稳了就在左栏、标签页标题和浏览器通知里提醒用户。判断在网页里算，守护进程不管。
 // “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PRODUCT_NAME } from "../shared/names.ts";
+import { PRODUCT_ID, PRODUCT_NAME } from "../shared/names.ts";
 import { WAITING_SETTLE_MS, notificationTag, type ConversationId } from "../shared/index.ts";
 import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
 import { NEEDS_YOU, YOUR_TURN } from "./format.ts";
@@ -14,10 +14,10 @@ import type { HubState } from "./state.ts";
 export { WAITING_SETTLE_MS };
 
 /** 用户上次看每个对话的时间存在这个 localStorage 键里。 */
-export const LAST_SEEN_KEY = `${PRODUCT_NAME}:lastSeen`;
+export const LAST_SEEN_KEY = `${PRODUCT_ID}:lastSeen`;
 
 /** 用户有没有开通知，存在这个 localStorage 键里（"1" 开，"0" 关）；没有值或值不认识就看浏览器的授权。 */
-export const NOTIFY_ENABLED_KEY = `${PRODUCT_NAME}:notifyEnabled`;
+export const NOTIFY_ENABLED_KEY = `${PRODUCT_ID}:notifyEnabled`;
 
 /** install：iPhone / iPad 的 Safari 里，要先“添加到主屏幕”、从主屏打开才能开通知（联机 P4）。 */
 export type NotifyPermission = NotificationPermission | "unsupported" | "install";

@@ -49,12 +49,12 @@ final class StatusBarController: NSObject {
 
     private func setupStatusItem() {
         if let button = statusItem.button {
-            if let image = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: "Agent Hub") {
+            if let image = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: "Piece") {
                 image.isTemplate = true
                 button.image = image
                 button.imagePosition = .imageLeading
             } else {
-                button.title = "Hub"
+                button.title = "Piece"
             }
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         }
@@ -74,7 +74,7 @@ final class StatusBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "彻底退出 Agent Hub", action: #selector(handleQuitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "彻底退出 Piece", action: #selector(handleQuitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 

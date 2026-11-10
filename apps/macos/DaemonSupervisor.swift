@@ -410,7 +410,7 @@ final class DaemonSupervisor {
             return .failure(NSError(
                 domain: "AgentHub.DaemonSupervisor",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "找不到 Agent Hub 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"]
+                userInfo: [NSLocalizedDescriptionKey: "找不到 Piece 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"]
             ))
         }
 

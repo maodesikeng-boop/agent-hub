@@ -224,7 +224,7 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
     for (const badHost of ["evil.example.com", "other.tail1234.ts.net", `${PUBLIC_HOST}:8443`, localHost, ""]) {
       const res = await sendViaSocket(publicSock, "GET", API_PATHS.auth, { headers: { host: badHost } });
       expect(res.status, badHost).toBe(403);
-      expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 agent hub" });
+      expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Piece" });
     }
 
     // Host 匹配（含大写与 :443）→ 放行落地页
@@ -705,7 +705,7 @@ describe("公网入口 public.sock 与 4 道安全防线", () => {
         headers: { host: "localhost", "x-forwarded-host": badForwarded },
       });
       expect(badRes.status, String(badForwarded)).toBe(403);
-      expect(badRes.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 agent hub" });
+      expect(badRes.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Piece" });
     }
 
     // 1. GET /auth（Host: localhost + X-Forwarded-Host: tokyo.tailnet.ts.net）→ 200

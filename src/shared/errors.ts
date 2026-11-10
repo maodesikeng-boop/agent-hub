@@ -3,6 +3,7 @@
 // 暂时不从 index.ts 导出：api.ts 里还有旧的 ApiErrorBody / ApiErrorCode（B 块改完界面服务后删掉，再接进 index.ts），要用先 import 这个文件。
 
 import { MAX_WORKER_MAX_TIME_MS, MIN_WORKER_MAX_TIME_MS } from "./limits.ts";
+import { PRODUCT_NAME } from "./names.ts";
 import { vendorFailureOf, type AgentVendor, type FailureKind } from "./vendors.ts";
 
 /** Worker `--max-time` / `maxTimeMs` 在 CLI 与 API 边界的中文人话报错。 */
@@ -20,8 +21,8 @@ export const API_ERRORS = {
   forbidden: { status: 403, text: "没有权限做这件事" },
   conflict: { status: 409, text: "状态变了，这一步做不了", hint: "刷新页面再试" },
   unauthorized: { status: 401, text: "登录过期了", hint: "重新登录" }, // 网页不显示它：任何 401 直接切到登录界面
-  forbidden_host: { status: 403, text: "这个网址不能打开 agent hub", hint: "换成本机 agent hub 的网址打开" },
-  forbidden_origin: { status: 403, text: "请求来源不对，已拦下", hint: "直接在 agent hub 页面里操作" },
+  forbidden_host: { status: 403, text: `这个网址不能打开 ${PRODUCT_NAME}`, hint: `换成本机 ${PRODUCT_NAME} 的网址打开` },
+  forbidden_origin: { status: 403, text: "请求来源不对，已拦下", hint: `直接在 ${PRODUCT_NAME} 页面里操作` },
   forbidden_identity: { status: 403, text: "这台设备的主人不是你", hint: "换成这台设备主人的账号" },
   forbidden_peer: { status: 403, text: "别的设备不能调这个接口" },
   session_pending_approval: { status: 403, text: "等待已登录设备批准登录", hint: "在已登录的设备上点「允许」" },

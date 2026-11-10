@@ -26,7 +26,7 @@ if [[ "$BUILD_WEB" -eq 1 ]]; then
   pnpm build
 fi
 
-APP_NAME="Agent Hub.app"
+APP_NAME="Piece.app"
 BUILD_DIR="$REPO_DIR/build"
 APP_DIR="$BUILD_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -35,7 +35,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 TMP_BUILD_DIR="$BUILD_DIR/.tmp"
 
-rm -rf "$APP_DIR" "$ICONSET_DIR" "$TMP_BUILD_DIR"
+rm -rf "$APP_DIR" "$BUILD_DIR/Agent Hub.app" "$ICONSET_DIR" "$TMP_BUILD_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR" "$TMP_BUILD_DIR"
 export TMPDIR="$TMP_BUILD_DIR"
 
@@ -83,9 +83,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Agent Hub</string>
+  <string>Piece</string>
   <key>CFBundleDisplayName</key>
-  <string>Agent Hub</string>
+  <string>Piece</string>
   <key>CFBundleIdentifier</key>
   <string>com.agenthub.desktop</string>
   <key>CFBundleVersion</key>
@@ -116,6 +116,9 @@ rm -rf "$TMP_BUILD_DIR"
 if [[ "$INSTALL" -eq 1 ]]; then
   /usr/bin/ditto "$APP_DIR" "/Applications/$APP_NAME"
   echo "Installed to /Applications/$APP_NAME"
+  if [[ -d "/Applications/Agent Hub.app" ]]; then
+    echo "提示：检测到旧版 /Applications/Agent Hub.app，可手动删除。"
+  fi
 else
   echo "Built $APP_DIR"
 fi
