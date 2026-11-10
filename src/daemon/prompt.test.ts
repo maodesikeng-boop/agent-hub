@@ -279,6 +279,28 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(PM_WORKER_PROMPT).toContain("只读调研加 `--readonly`");
   });
 
+  it("用户指定的 Worker 厂商、模型、思考程度：“用别家的模型”后面一句，所有厂商的项目经理都有；怎么对待它写清楚；这句话里不写死厂商名、模型名", () => {
+    for (const vendor of AGENT_VENDORS) {
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", vendor, persona: "x" } }), dir);
+      const line = prompt.split("\n").find((l) => l.startsWith("- **用户指定 Worker 用的模型**"));
+      expect(line, vendor).toBeDefined();
+      expect(line).toContain("【用户指定：");
+      for (const flag of ["--vendor", "--model", "--effort"]) expect(line).toContain(flag);
+      expect(line).toContain("这一条消息");
+      expect(line).toContain("派不派、派几个、怎么拆仍由你定");
+      expect(line).toContain("以话为准");
+      for (const v of AGENT_VENDORS) {
+        expect(line).not.toContain(v);
+        expect(line).not.toContain(VENDOR_SPECS[v].label);
+        for (const m of VENDOR_SPECS[v].models) expect(line).not.toContain(m.id);
+      }
+      // 紧跟在“用别家的模型”那条后面
+      const lines = prompt.split("\n");
+      expect(lines[lines.indexOf(line!) - 1]).toContain("**用别家的模型**");
+    }
+    expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("【用户指定：");
+  });
+
   it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 claude/agy/codex", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);

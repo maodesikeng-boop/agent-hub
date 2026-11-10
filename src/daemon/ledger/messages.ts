@@ -21,6 +21,7 @@ import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
+const WORKER_PICK_ONLY_PM_MESSAGE = "指定 Worker 用的厂商、模型只能用在项目经理的对话里";
 
 /** agent 压缩了上下文之后对话里那一行（domain.ts 的 context.compacted）。 */
 export const CONTEXT_COMPACTED_TEXT = "已压缩上下文";
@@ -69,6 +70,7 @@ export function createLedgerMessages(
   /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
     db.get("SELECT 1 AS x FROM conversations WHERE id = ? AND kind != 'project_group'", id) !== undefined;
+  const isPmConversation = (id: ConversationId) => db.get("SELECT 1 AS x FROM conversations WHERE id = ? AND kind = 'pm'", id) !== undefined;
 
   const getMessage = (id: MessageId): Message | null => {
     const row = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", id);
@@ -321,6 +323,8 @@ export function createLedgerMessages(
       const dedupeKey = userMessageDedupeKey(input.conversationId, input.clientId);
       const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
       if (existing !== undefined) return { messageId: existing.id };
+      // workerPick 是“这条消息里派的 Worker 用什么”，只有项目经理会派 Worker：别的对话带了不存
+      if (input.workerPick !== undefined && !isPmConversation(input.conversationId)) throw fail("invalid", WORKER_PICK_ONLY_PM_MESSAGE);
       assertUserCanPost(input.conversationId);
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
@@ -328,8 +332,11 @@ export function createLedgerMessages(
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      // 有附件才写 meta（UserMessageMeta）；没有附件的用户消息 meta 还是 null，和老消息一样
-      const meta: UserMessageMeta | null = input.attachments?.length ? { attachments: input.attachments } : null;
+      // 有附件、有 workerPick 才写 meta（UserMessageMeta）；两样都没有的用户消息 meta 还是 null，和老消息一样
+      const meta: UserMessageMeta | null =
+        input.attachments?.length || input.workerPick !== undefined
+          ? { ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}) }
+          : null;
       // Worker 对话里用户的话带上 Worker 编号（写给 Worker 时据此加标签，见 shared/worker.ts 的 deliveryText）
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
