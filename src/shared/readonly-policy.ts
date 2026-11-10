@@ -5,7 +5,7 @@
 // 纯字符串处理、不用 node 模块；路径一律传已经 realpath 过的（macOS 上 /var 是 /private/var，沙箱和 agy 的规则按真实路径比）。
 
 import { CREDENTIAL_HOME_PATHS } from "./secret-paths.ts";
-import { AGENT_VENDORS, VENDOR_HOME_PATHS } from "./vendors.ts";
+import { VENDOR_LIST } from "../vendors/registry.ts";
 
 /** 连接器工具的声明（MCP 规范的 annotations，服务器自报）。没有 annotations 当没标记。 */
 export interface ConnectorToolAnnotations {
@@ -27,13 +27,13 @@ export interface ReadonlyPolicy {
 
 /**
  * 默认禁读的目录和文件，相对用户主目录（设计第 5 节，用户 11-07 定的：够用，不够再加）：
- * 凭据清单（secret-paths.ts，和分享禁用共用）+ 各家厂商的令牌文件（vendors.ts 的 VENDOR_HOME_PATHS.readonlySecrets）。
+ * 凭据清单（secret-paths.ts，和分享禁用共用）+ 各家厂商的令牌文件（spec 的 home.readonlySecrets）。
  * 不禁 state/hub.sqlite 和日志：排查要读，这是统一只读的初衷（READONLY_SECRET_STATE_FILES 的注释写了数据库里查过的结果）；
  * 也不禁厂商目录里的会话记录（所以厂商只列令牌文件，不列整个目录）。
  */
 export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
   ...CREDENTIAL_HOME_PATHS,
-  ...AGENT_VENDORS.flatMap((vendor) => VENDOR_HOME_PATHS[vendor].readonlySecrets),
+  ...VENDOR_LIST.flatMap((spec) => spec.home.readonlySecrets),
 ];
 
 /**

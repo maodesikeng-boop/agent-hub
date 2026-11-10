@@ -6,8 +6,8 @@ import {
   CLAUDE_READONLY_PERMISSION_MODE,
   claudeReadonlyPermissions,
   claudeReadonlySandbox,
-} from "./claude-readonly-settings.ts";
-import { buildReadonlyPolicy, type ReadonlyPolicy } from "./readonly-policy.ts";
+} from "./readonly-settings.ts";
+import { buildReadonlyPolicy, type ReadonlyPolicy } from "../../shared/readonly-policy.ts";
 
 const policy = (connectors?: Partial<ReadonlyPolicy["connectors"]>): ReadonlyPolicy =>
   buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });

@@ -9,10 +9,10 @@ import {
   buildSessionSettings,
   sessionEnv,
   stateDirDenyRule,
-} from "./policy.ts";
-import { claudeReadonlyPermissions, claudeReadonlySandbox } from "./claude-readonly-settings.ts";
-import { HUB_COMMAND } from "./names.ts";
-import { buildReadonlyPolicy } from "./readonly-policy.ts";
+} from "./settings.ts";
+import { claudeReadonlyPermissions, claudeReadonlySandbox } from "./readonly-settings.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
+import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
 
 /** 放行 hub 的那条规则（命令名来自 names.ts）。 */
 const allowHub = `Bash(${HUB_COMMAND}:*)`;
@@ -62,7 +62,7 @@ describe("buildSessionSettings：Worker", () => {
   });
 });
 
-describe("buildSessionSettings：只读（claude 用自带沙箱，翻译见 claude-readonly-settings.ts）", () => {
+describe("buildSessionSettings：只读（claude 用自带沙箱，翻译见 readonly-settings.ts）", () => {
   const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: base.stateDir });
   const readonly = { policy, denyWrite: ["/w/cwd", "/w/main"] };
   const ro = (extra: Partial<Parameters<typeof buildSessionSettings>[0]> = {}) => buildSessionSettings({ role: "worker", readonly, ...base, ...extra });

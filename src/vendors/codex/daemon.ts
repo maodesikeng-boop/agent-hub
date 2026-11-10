@@ -12,4 +12,6 @@ export default defineVendorDaemon({
   catalog: { probe: codexCatalogProbe, source: createCodexCatalogSource },
   forkers: CODEX_FORKERS,
   transcriptPath: codexTranscriptPath,
+  // codex 起会话时没法不存记录：只有那一个 rollout 文件
+  sessionFiles: (ref, roots) => [codexTranscriptPath(ref, roots)].filter((file) => file !== null),
 });

@@ -284,8 +284,8 @@ describe("数据目录", () => {
   });
 
   it("claude 的路径用 AGENT_HUB_CLAUDE 改，默认找 PATH 里的 claude", () => {
-    expect(resolveHubPaths({}, "/home/u").claudePath).toBe("claude");
-    expect(resolveHubPaths({ AGENT_HUB_CLAUDE: "/tmp/fake" }, "/home/u").claudePath).toBe("/tmp/fake");
+    expect(resolveHubPaths({}, "/home/u").vendorPaths.claude).toBe("claude");
+    expect(resolveHubPaths({ AGENT_HUB_CLAUDE: "/tmp/fake" }, "/home/u").vendorPaths.claude).toBe("/tmp/fake");
   });
 });
 

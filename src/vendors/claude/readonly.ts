@@ -1,5 +1,5 @@
 // 只读 Worker 的 claude 驱动部分（docs/readonly-worker-design.md 第 2.3、3 节）。
-// 设置文件是 default 模式、放行了内置的读/命令/上网、拒绝了编辑工具（shared/claude-readonly-settings.ts）；剩下“要批准”的工具，
+// 设置文件是 default 模式、放行了内置的读/命令/上网、拒绝了编辑工具（readonly-settings.ts）；剩下“要批准”的工具，
 // claude 带着 --permission-prompt-tool stdio 发 can_use_tool 控制请求给我们，这里回话：
 // - 连接器工具（mcp__<服务器>__<工具>）：按 mcp_status 里的 annotations 和策略判断（connectorToolAllowed，三家共用的那一处）；
 // - 别的（Agent、Task、Skill……）：一律拒，带中文原因，模型拿到错误继续。

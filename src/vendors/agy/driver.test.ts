@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  AGY_DENIED_CONTINUE_MAX,
   DriverError,
   EMPTY_TOKEN_USAGE,
   RELAUNCH_NOTE,
@@ -21,6 +20,7 @@ import {
   type SessionStore,
   type WriteScope,
 } from "../../shared/index.ts";
+import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./driver.ts";
 import { describeStep } from "../../shared/step-labels.ts";
 import { toolFinished, toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";

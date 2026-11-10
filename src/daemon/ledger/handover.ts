@@ -36,7 +36,7 @@ import {
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
-import { handoverTokenThresholdOf, vendorLabel, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
+import { handoverTokenThresholdOf, isAgentVendor, vendorLabel, vendorSpec, type AgentSetting, type AgentVendor } from "../../shared/vendors.ts";
 import { workerLineText } from "../../shared/worker.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -86,9 +86,10 @@ function handoverRequestText(options: {
     ? `【系统】这是从你的会话复制出来的一份，只用来写交接：${why}用户看不到这里；这里没有 hub 凭证，不要调用工具，直接把交接写成这一轮的回复。`
     : `【系统】${why}这一轮请写一份交接，直接写成这一轮的回复。`;
   const only = options.forked ? "这一轮只写交接：不调用工具、不回复用户、不派活。" : "这一轮只写交接：不回复用户、不派活、不做别的事。";
+  const onlyTools = options.fromVendor !== undefined && isAgentVendor(options.fromVendor) ? vendorSpec(options.fromVendor).prompt.vendorOnlyTools : undefined;
   const vendorNote =
     options.toVendor != null && options.fromVendor !== undefined && options.toVendor !== options.fromVendor
-      ? `\n新会话换成 ${vendorLabel(options.toVendor)}（${options.toVendor}），别写只有 ${vendorLabel(options.fromVendor)}（${options.fromVendor}）才有的工具用法（比如 claude 的后台任务、codex 的 apply_patch），写成要做的事和现在的状态。`
+      ? `\n新会话换成 ${vendorLabel(options.toVendor)}（${options.toVendor}），别写只有 ${vendorLabel(options.fromVendor)}（${options.fromVendor}）才有的工具用法${onlyTools === undefined ? "" : `（比如 ${onlyTools}）`}，写成要做的事和现在的状态。`
       : "";
   return `${opening}
 
@@ -138,9 +139,10 @@ function sessionPreambleText(options: {
   const reasonLine = switchedVendor
     ? `用户把你的厂商从 ${vendorLabel(options.fromVendor!)}（${options.fromVendor}）换成了 ${vendorLabel(options.toVendor!)}（${options.toVendor}），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。`
     : `${why}，上一个会话写完交接后换成了你；用户那边还是同一个对话，不用跟用户提换会话的事。`;
+  // 原始记录别家读不了的（spec 的 handover.transcriptPortable，如 agy 的 sqlite 库）：换到别家时不给路径
   const transcript =
-    switchedVendor && options.fromVendor === "agy" && options.toVendor !== "agy"
-      ? "上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话"
+    switchedVendor && isAgentVendor(options.fromVendor!) && vendorSpec(options.fromVendor!).handover?.transcriptPortable === false
+      ? `上一个会话的原始记录：格式是 ${options.fromVendor} 的，读不了，只看交接和原话`
       : transcriptLine(options.transcriptPath);
   const handoverText =
     options.handover.trim() === ""

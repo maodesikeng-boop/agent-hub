@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
   buildReadonlyPolicy,
-  buildSessionSettings,
   workerWriteScope,
   RELAUNCH_NOTE,
   type AgentSessionPatch,
@@ -547,17 +546,9 @@ function makeCodexHarness(
       const promptFile = join(launchDir, "prompt.md");
       writeFileSync(promptFile, `你是 ${session.role}。`);
       const readonly = readonlyMap.get(session.id) ?? false;
-      const settingsFile = join(launchDir, "settings.json");
-      const settings = buildSessionSettings({
-        role: session.role === "worker" ? "worker" : "pm",
-        hubSock: join(dir, "run", "hub.sock"),
-        stateDir,
-        osSandboxed: false,
-      });
-      writeFileSync(settingsFile, JSON.stringify(settings));
+      // codex 不要设置文件（daemon.ts 没写 launchFiles，launch.ts 不生成）
       const files: LaunchFiles = {
         promptFile,
-        settingsFile,
         env: {
           HUB_TOKEN: `tok-${session.id}`,
           HUB_SOCK: join(dir, "run", "hub.sock"),

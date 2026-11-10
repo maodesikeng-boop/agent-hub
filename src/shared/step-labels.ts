@@ -1,8 +1,8 @@
 // agent 在做什么的状态词：全部在这里，别处不另写（网页和 hub worker show / log 共用，所以放 shared，web/step-labels.ts 原样转出）。照 Claude Code、t3code 的习惯用英文（docs/ui-standard.md 第 17 条）。
 // 消息流里显示成一行“Running command…”，省略号的动效由 AgentStatus 加，这里的文字不带省略号；跑完是“Worked for 23s”。
-//
-// 注意：TOOL_TEXT 按 claude 的工具名（Bash、Read…）对应文案、describeMcpTool 认 claude 的 mcp__ 前缀，这是写死了厂商的。
-// 以后由驱动层把工具名翻成通用动作（跑命令、读文件、改文件、搜文件、搜网页、调用连接器…），这里只按通用动作出文案。
+// 工具的文案、分类只按通用动作（ToolAction）出；各家工具名到动作的翻译在各自 spec 的 tools.actions（docs/vendor-plugin-design.md 的 A16）。
+import { VENDOR_LIST } from "../vendors/registry.ts";
+import type { ToolAction } from "../vendors/types.ts";
 import type { AgentStep, AgentStepInput } from "./domain.ts";
 
 export const STEP_TEXT = {
@@ -33,106 +33,63 @@ const onFile = (verb: string) => (input: AgentStepInput) => {
   return name === null ? `${verb} file` : `${verb} ${name}`;
 };
 
-/** 工具名（claude / agy / codex 原样的 tool_use.name）→ 文案；mcp__ 开头的和没列出来的见 describeTool。 */
-const TOOL_TEXT: Readonly<Record<string, (input: AgentStepInput) => string>> = {
-  // claude
-  Bash: () => "Running command",
-  bash: () => "Running command",
-  Read: onFile("Reading"),
-  Edit: onFile("Editing"),
-  MultiEdit: onFile("Editing"),
-  NotebookEdit: onFile("Editing"),
-  Write: onFile("Writing"),
-  Skill: (input) => (input.skill ? `Loading skill ${input.skill}` : "Loading skill"),
-  Grep: () => "Searching files",
-  Glob: () => "Searching files",
-  WebSearch: () => "Searching the web",
-  WebFetch: () => "Reading web page",
-  Agent: () => "Running subagent",
-  Task: () => "Running subagent",
-  TodoWrite: () => "Updating todos",
-  ToolSearch: () => "Finding tools",
-  // agy
-  run_command: () => "Running command",
-  read_file: onFile("Reading"),
-  view_file: onFile("Reading"),
-  view_file_outline: onFile("Reading"),
-  view_code_item: onFile("Reading"),
-  write_to_file: onFile("Writing"),
-  write_file: onFile("Writing"),
-  edit_file: onFile("Editing"),
-  replace_file_content: onFile("Editing"),
-  multi_replace_file_content: onFile("Editing"),
-  grep_search: () => "Searching files",
-  find_by_name: () => "Searching files",
-  list_dir: () => "Searching files",
-  search_web: () => "Searching the web",
-  read_url_content: () => "Reading web page",
-  invoke_subagent: () => "Running subagent",
-  // codex
-  commandExecution: () => "Running command",
-  exec_command: () => "Running command",
-  fileChange: onFile("Editing"),
-  apply_patch: onFile("Editing"),
-  webSearch: () => "Searching the web",
+/** 通用动作 → 文案。 */
+const ACTION_TEXT: Readonly<Record<ToolAction, (input: AgentStepInput) => string>> = {
+  command: () => "Running command",
+  read: onFile("Reading"),
+  edit: onFile("Editing"),
+  write: onFile("Writing"),
+  search: () => "Searching files",
   web_search: () => "Searching the web",
-  mcpToolCall: () => "Calling tool",
+  web_fetch: () => "Reading web page",
+  skill: (input) => (input.skill ? `Loading skill ${input.skill}` : "Loading skill"),
+  subagent: () => "Running subagent",
+  todo: () => "Updating todos",
+  tool_search: () => "Finding tools",
+  connector: () => "Calling tool",
 };
+
+/** 各家的工具名 → 通用动作，合成一张（同名的在各家是同一个动作，契约测试查）。 */
+const TOOL_ACTIONS: Readonly<Record<string, ToolAction>> = Object.assign({}, ...VENDOR_LIST.map((spec) => spec.tools?.actions ?? {}));
+
+/** 工具名对应的通用动作；没列的是 undefined。 */
+function toolAction(name: string): ToolAction | undefined {
+  return Object.hasOwn(TOOL_ACTIONS, name) ? TOOL_ACTIONS[name] : undefined;
+}
 
 /** 动作类别：跟厂商无关，hub worker log --stats 按它计数。 */
 export type ToolCategory = "read" | "search" | "command" | "edit" | "web" | "other";
 export const TOOL_CATEGORIES: readonly ToolCategory[] = ["read", "search", "command", "edit", "web", "other"];
 
-/** 工具名 → 类别，和 TOOL_TEXT 同一批名字（以后加厂商，工具名两边都补）；不在这里的见 toolCategory。 */
-const TOOL_CATEGORY: Readonly<Record<string, ToolCategory>> = {
-  // claude
-  Bash: "command",
-  bash: "command",
-  Read: "read",
-  Edit: "edit",
-  MultiEdit: "edit",
-  NotebookEdit: "edit",
-  Write: "edit",
-  Grep: "search",
-  Glob: "search",
-  WebSearch: "web",
-  WebFetch: "web",
-  // agy
-  run_command: "command",
-  read_file: "read",
-  view_file: "read",
-  view_file_outline: "read",
-  view_code_item: "read",
-  write_to_file: "edit",
-  write_file: "edit",
-  edit_file: "edit",
-  replace_file_content: "edit",
-  multi_replace_file_content: "edit",
-  grep_search: "search",
-  find_by_name: "search",
-  list_dir: "search",
-  search_web: "web",
-  read_url_content: "web",
-  // codex
-  commandExecution: "command",
-  exec_command: "command",
-  fileChange: "edit",
-  apply_patch: "edit",
-  webSearch: "web",
+/** 通用动作 → 类别：技能、子代理、待办、找工具、连接器这些认得但不属于前五类的算“其它”。 */
+const ACTION_CATEGORY: Readonly<Record<ToolAction, ToolCategory>> = {
+  command: "command",
+  read: "read",
+  edit: "edit",
+  write: "edit",
+  search: "search",
   web_search: "web",
+  web_fetch: "web",
+  skill: "other",
+  subagent: "other",
+  todo: "other",
+  tool_search: "other",
+  connector: "other",
 };
 
-/** 工具名属于哪一类；null：认不出（统计里按原工具名单独计数）。技能、子代理、待办、连接器这些认得但不属于前五类的算“其它”。 */
+/** MCP 工具的通用写法 mcp__<连接器>__<工具>（MCP 客户端的惯例，不是哪一家的）。 */
+const MCP_PREFIX = "mcp__";
+
+/** 工具名属于哪一类；null：认不出（统计里按原工具名单独计数）。连接器工具算“其它”。 */
 export function toolCategory(name: string): ToolCategory | null {
-  const known = TOOL_CATEGORY[name];
-  if (known !== undefined) return known;
-  if (name.startsWith("mcp__") || Object.hasOwn(TOOL_TEXT, name)) return "other";
-  return null;
+  const action = toolAction(name);
+  if (action !== undefined) return ACTION_CATEGORY[action];
+  return name.startsWith(MCP_PREFIX) ? "other" : null;
 }
 
 /** `mcp__<连接器>__<工具>`：显示“Calling 连接器 工具”，名字照抄。 */
 function describeMcpTool(name: string): string {
-  const rest = name.slice("mcp__".length);
+  const rest = name.slice(MCP_PREFIX.length);
   if (rest === "") return STEP_TEXT.working;
   const separator = rest.indexOf("__");
   if (separator <= 0) return `Calling ${rest}`;
@@ -143,9 +100,9 @@ function describeMcpTool(name: string): string {
 
 function describeTool(name: string, input: AgentStepInput): string {
   if (name === "") return STEP_TEXT.working;
-  const known = TOOL_TEXT[name];
-  if (known) return known(input);
-  if (name.startsWith("mcp__")) return describeMcpTool(name);
+  const action = toolAction(name);
+  if (action !== undefined) return ACTION_TEXT[action](input);
+  if (name.startsWith(MCP_PREFIX)) return describeMcpTool(name);
   return `Using ${name}`;
 }
 

@@ -2,7 +2,7 @@
 // 做法：default 模式 + 驱动用 --permission-prompt-tool stdio 接 can_use_tool（src/vendors/claude/readonly.ts 按 annotations 判断连接器工具）；
 // 内置的读、搜、命令、上网放行，编辑工具拒绝；写不了的硬保证靠 claude 自带沙箱（writeGuard native，进程不再包外层沙箱，macOS 沙箱不能嵌套）。
 // 可调的东西都在这个文件：放行哪些内置工具、沙箱开哪些开关。纯字符串处理。
-import type { ReadonlyPolicy } from "./readonly-policy.ts";
+import type { ReadonlyPolicy } from "../../shared/readonly-policy.ts";
 
 /** 不是 dontAsk（要批准的一律拒，连读 /tmp 都不行）也不是 plan（Bash 写文件不拦）：要批准的发 can_use_tool 给驱动。 */
 export const CLAUDE_READONLY_PERMISSION_MODE = "default";
@@ -11,7 +11,7 @@ export const CLAUDE_READONLY_ALLOW_TOOLS = ["Read", "Glob", "Grep", "Bash", "Web
 /** 拒绝的内置工具：三个编辑工具。 */
 export const CLAUDE_READONLY_DENY_TOOLS = ["Edit", "Write", "NotebookEdit"] as const;
 
-/** 权限规则里的绝对路径：// 开头，路径里的 \ [ ] * ? 前面加 \ 转义（跟 policy.ts 的 stateDirDenyRule 一样）。 */
+/** 权限规则里的绝对路径：// 开头，路径里的 \ [ ] * ? 前面加 \ 转义（跟 settings.ts 的 stateDirDenyRule 一样）。 */
 function absoluteRulePath(path: string): string {
   return `/${path.replace(/\/+$/, "").replace(/[\\[\]*?]/g, "\\$&")}`;
 }
@@ -26,7 +26,7 @@ function connectorDenyRule(rule: string): string | null {
 }
 
 /**
- * 权限规则：放行内置读/命令/上网（hub 命令的放行规则由 policy.ts 的 buildSessionSettings 加，两种角色都有）；拒绝编辑工具、读密钥（路径和通配，claude 还会拿它查 Bash 命令行里写明的路径）、手动排除的连接器。
+ * 权限规则：放行内置读/命令/上网（hub 命令的放行规则由 settings.ts 的 buildSessionSettings 加，两种角色都有）；拒绝编辑工具、读密钥（路径和通配，claude 还会拿它查 Bash 命令行里写明的路径）、手动排除的连接器。
  * 手动补充的连接器不写进放行规则：驱动在 can_use_tool 里判断时查 extraAllow（连接器的判断只有一处）。每次返回新数组。
  */
 export function claudeReadonlyPermissions(policy: ReadonlyPolicy): { allow: string[]; deny: string[] } {

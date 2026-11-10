@@ -301,6 +301,29 @@ describe("审查后补的（PR #47）", () => {
     });
   });
 
+  it("A13 别家的凭据也不传（各家 spec 的 cli.credentialEnv 的并集，按大写比较）：codex 的 OPENAI_API_KEY、CODEX_API_KEY、CODEX_ACCESS_TOKEN，agy 的 GEMINI_API_KEY", () => {
+    const base = {
+      OPENAI_API_KEY: "x",
+      codex_api_key: "x",
+      CODEX_ACCESS_TOKEN: "x",
+      GEMINI_API_KEY: "x",
+      CODEX_HOME: "keep",
+      OPENAI_BASE_URL: "keep",
+      GOOGLE_GEMINI_BASE_URL: "keep",
+      PATH: "/bin",
+    };
+    const before = { ...base };
+    expect(buildSetupEnv(base, { rootPath: "/r", worktreePath: "/w" })).toEqual({
+      CODEX_HOME: "keep",
+      OPENAI_BASE_URL: "keep",
+      GOOGLE_GEMINI_BASE_URL: "keep",
+      PATH: "/bin",
+      [ENV_SETUP_ROOT_PATH]: "/r",
+      [ENV_SETUP_WORKTREE_PATH]: "/w",
+    });
+    expect(base).toEqual(before);
+  });
+
   it("R3 输出尾部：去掉 ANSI 序列和控制字符，\\r 只留最后一段（进度条），CRLF 照常是换行", async () => {
     const outcome = await run(
       "printf '\\033[31mred\\033[0m line\\r\\n'; printf 'progress 10%%\\rprogress 100%%\\n'; printf 'bell\\007 \\033]0;title\\007ok\\n'; printf 'tab\\there\\n'",

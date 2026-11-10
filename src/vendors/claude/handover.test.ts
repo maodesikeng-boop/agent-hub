@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LaunchFiles } from "../../shared/driver.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
-import { buildForkSettings } from "../../shared/policy.ts";
+import { buildForkSettings } from "./settings.ts";
 import { createClaudeForker, claudeProjectDirName, CLAUDE_FORKERS } from "./handover.ts";
 import { ForkUnsupportedError, type ForkSource } from "../../daemon/handover/forker.ts";
 import { FORKERS } from "../../daemon/handover/forkers.ts";

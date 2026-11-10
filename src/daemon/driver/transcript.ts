@@ -7,6 +7,12 @@ import type { TranscriptRef, TranscriptRoots } from "./transcript-files.ts";
 
 export type { TranscriptRef, TranscriptRoots } from "./transcript-files.ts";
 
+/** 这个会话在厂商目录里留下的文件和目录（daemon.ts 的 sessionFiles）：冒烟测试收尾按它删。不认识的、没写的厂商是 []。 */
+export function vendorSessionFiles(ref: TranscriptRef, roots: TranscriptRoots = {}): string[] {
+  if (!isAgentVendor(ref.vendor)) return [];
+  return VENDOR_DAEMONS[ref.vendor].sessionFiles?.(ref, roots) ?? [];
+}
+
 /** 按厂商分发；不认识的厂商、没写找法的厂商返回 null。 */
 export function vendorTranscriptPath(ref: TranscriptRef, roots: TranscriptRoots = {}): string | null {
   if (!isAgentVendor(ref.vendor)) return null;

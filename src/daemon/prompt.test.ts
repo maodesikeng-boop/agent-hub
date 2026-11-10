@@ -11,7 +11,8 @@ import {
   PM_MODES,
   PM_MODE_LABELS,
   PRODUCT_ID,
-  VENDOR_SPECS,
+  VENDOR_LIST,
+  vendorSpec,
   WORKER_BRANCH_PREFIX,
   SETUP_TIMEOUT_MS,
   USER_TO_WORKER_TAG,
@@ -20,7 +21,6 @@ import {
   workerReportHeader,
   type AgentVendor,
   type SetupOutcome,
-  type VendorSpec,
 } from "../shared/index.ts";
 import { HUB_COMMAND_SPECS, HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
@@ -53,6 +53,18 @@ import { card, noProjectContext, projectContext, workerContext } from "./test-he
 /** 命令名（names.ts）：改名只改那一处，这里的断言跟着变。 */
 const hub = HUB_COMMAND;
 
+/** 临时把一家改成“能把长命令放后台叫醒自己”（只改内存里的 spec，返回恢复函数）：验证提示词只看能力位、不看厂商名。 */
+function canWakeFromBackground(vendor: AgentVendor, tool: string): () => void {
+  const spec = vendorSpec(vendor);
+  const { capabilities, prompt } = spec;
+  spec.capabilities = { ...capabilities, backgroundWake: true };
+  spec.prompt = { ...prompt, backgroundCommandTool: tool };
+  return () => {
+    spec.capabilities = capabilities;
+    spec.prompt = prompt;
+  };
+}
+
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "agent-hub-prompt-"));
@@ -60,17 +72,28 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("提示词", () => {
-  it("“先读 AGENTS.md”只在 AGENTS.md、CLAUDE.md 都有，而且 CLAUDE.md 没写 @AGENTS.md 时加", () => {
-    expect(needsAgentsNote(dir)).toBe(false); // 空目录
+  it("“先读 AGENTS.md”只在 AGENTS.md 和这家的说明文件（CLAUDE.md）都有，而且说明文件没写 @AGENTS.md 时加", () => {
+    expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(false); // 空目录
     writeFileSync(join(dir, "AGENTS.md"), "# 规矩");
-    expect(needsAgentsNote(dir)).toBe(false); // 只有 AGENTS.md：Claude 自己会读
+    expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(false); // 只有 AGENTS.md：Claude 自己会读
     writeFileSync(join(dir, "CLAUDE.md"), "# 说明");
-    expect(needsAgentsNote(dir)).toBe(true);
+    expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(true);
+    expect(needsAgentsNote(dir, undefined)).toBe(false); // 没有会遮住 AGENTS.md 的说明文件的厂商：自己读 AGENTS.md
     writeFileSync(join(dir, "CLAUDE.md"), "@AGENTS.md\n");
-    expect(needsAgentsNote(dir)).toBe(false);
+    expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(false);
     rmSync(join(dir, "AGENTS.md"));
     writeFileSync(join(dir, "CLAUDE.md"), "# 只有 CLAUDE.md");
-    expect(needsAgentsNote(dir)).toBe(false);
+    expect(needsAgentsNote(dir, "CLAUDE.md")).toBe(false);
+  });
+
+  it("按这家的 prompt.instructionFile 判断（A14）：两个文件都有时各家项目经理、Worker 保留迁移前的提醒", () => {
+    writeFileSync(join(dir, "AGENTS.md"), "# 规矩");
+    writeFileSync(join(dir, "CLAUDE.md"), "# 说明");
+    for (const vendor of AGENT_VENDORS) {
+      const base = projectContext();
+      expect(buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
+      expect(buildWorkerPrompt({ ...workerContext(), vendor }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
+    }
   });
 });
 
@@ -291,8 +314,8 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       expect(line).toContain("以话为准");
       for (const v of AGENT_VENDORS) {
         expect(line).not.toContain(v);
-        expect(line).not.toContain(VENDOR_SPECS[v].label);
-        for (const m of VENDOR_SPECS[v].models) expect(line).not.toContain(m.id);
+        expect(line).not.toContain(vendorSpec(v).label);
+        for (const m of vendorSpec(v).models.bundled) expect(line).not.toContain(m.id);
       }
       // 紧跟在“用别家的模型”那条后面
       const lines = prompt.split("\n");
@@ -301,40 +324,27 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("【用户指定：");
   });
 
-  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从 VENDOR_SPECS 拼（加一家假厂商，提示词跟着变）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 claude/agy/codex", () => {
+  it("用别家的模型：两种模式下都有；厂商名、显示名、代表模型都从名单拼（加一家假厂商提示词跟着变，见 src/vendors/acme-contract.test.ts）；写明用 hub worker start --vendor --model 派 Worker，不要直接跑 claude/agy/codex", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "x" } }), dir);
       expect(prompt).toContain("**用别家的模型**");
-      for (const [vendor, spec] of Object.entries(VENDOR_SPECS)) {
-        expect(prompt).toContain(`\`${vendor}\`（${spec.label}`);
-        expect(prompt).toContain(`\`${spec.models[0]!.id}\``);
+      for (const spec of VENDOR_LIST) {
+        expect(prompt).toContain(`\`${spec.id}\`（${spec.label}`);
+        expect(prompt).toContain(`\`${spec.models.bundled[0]!.id}\``);
       }
       expect(prompt).toContain(`${hub} worker start --vendor <厂商> --model <模型>`);
       expect(prompt).toContain("不写 `--vendor`");
       for (const cli of ["`claude`", "`agy`", "`codex`"]) expect(prompt).toContain(cli);
       expect(prompt).not.toContain("`gemini`");
     }
-    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = {
-      ...VENDOR_SPECS.claude,
-      label: "Acme Rocket",
-      models: [{ id: "acme-ultra-9", label: "Acme Ultra 9" }],
-    };
-    try {
-      const prompt = buildLaunchPrompt(projectContext(), dir);
-      expect(prompt).toContain("`acme`（Acme Rocket");
-      expect(prompt).toContain("`acme-ultra-9`");
-    } finally {
-      delete specs.acme;
-    }
     expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("用别家的模型");
   });
 
-  it("长命令按厂商能力（VENDOR_SPECS.backgroundCommands）分开写：两种模式、三家厂商都有对应那一条，不写死厂商名；Worker 不加", () => {
+  it("长命令按厂商能力（spec 的 capabilities.backgroundWake）分开写：两种模式、三家厂商都有对应那一条，不写死厂商名；Worker 不加", () => {
     for (const mode of PM_MODES) {
       for (const vendor of AGENT_VENDORS) {
         const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "x" } }), dir);
-        if (VENDOR_SPECS[vendor].backgroundCommands) {
+        if (vendorSpec(vendor).capabilities.backgroundWake) {
           expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
           expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
           expect(prompt).toContain(buildPmModePrompt(mode, true));
@@ -362,16 +372,15 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       expect(PM_BACKGROUND_COMMAND_NOTE).toContain(word);
     }
     expect(PM_DELEGATE_LONG_COMMAND_NOTE).toContain("要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话");
-    // 由 VENDOR_SPECS 的 backgroundCommands 与 backgroundCommandTool 能力字段决定，不写死厂商名或工具名
-    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true, backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`" };
+    // 由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定，不写死厂商名或工具名：临时把 agy 改成能放后台
+    const restore = canWakeFromBackground("agy", "`run_command` 的 `WaitMsBeforeAsync`");
     try {
-      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", vendor: "acme" as AgentVendor, persona: "x" } }), dir);
+      const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode: "manage_only", vendor: "agy", persona: "x" } }), dir);
       expect(prompt).toContain("用后台运行（如 `run_command` 的 `WaitMsBeforeAsync`）");
       expect(prompt).not.toContain("run_in_background");
       expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
     } finally {
-      delete specs.acme;
+      restore();
     }
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
     expect(workerPrompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
@@ -382,7 +391,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     for (const vendor of AGENT_VENDORS) {
       const prompt = buildWorkerPrompt({ ...workerContext(), vendor }, dir);
       const rules = prompt.slice(prompt.indexOf("# 你的规矩"));
-      if (VENDOR_SPECS[vendor].backgroundCommands) {
+      if (vendorSpec(vendor).capabilities.backgroundWake) {
         expect(rules).toContain(WORKER_BACKGROUND_COMMAND_NOTE);
         expect(prompt).not.toContain(WORKER_BLOCKING_WAIT_NOTE);
       } else {
@@ -396,7 +405,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     }
     // 没给厂商（老数据）按默认那家
     expect(buildWorkerPrompt(workerContext(), dir)).toContain(
-      VENDOR_SPECS[DEFAULT_AGENT_VENDOR].backgroundCommands ? WORKER_BACKGROUND_COMMAND_NOTE : WORKER_BLOCKING_WAIT_NOTE,
+      vendorSpec(DEFAULT_AGENT_VENDOR).capabilities.backgroundWake ? WORKER_BACKGROUND_COMMAND_NOTE : WORKER_BLOCKING_WAIT_NOTE,
     );
     for (const word of ["**长命令放后台**", "等 CI", "`run_in_background`", "这一轮先结束", "命令跑完会叫醒你", "不会交给项目经理", "不要 sleep"]) {
       expect(WORKER_BACKGROUND_COMMAND_NOTE).toContain(word);
@@ -404,14 +413,13 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     for (const word of ["一条会一直等到结束的命令", "`gh pr checks <PR 号> --watch`", "不要 sleep", "跑完不会叫醒你"]) {
       expect(WORKER_BLOCKING_WAIT_NOTE).toContain(word);
     }
-    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    specs.acme = { ...VENDOR_SPECS.agy, label: "Acme", backgroundCommands: true, backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`" };
+    const restore = canWakeFromBackground("agy", "`run_command` 的 `WaitMsBeforeAsync`");
     try {
-      const acmePrompt = buildWorkerPrompt({ ...workerContext(), vendor: "acme" as AgentVendor }, dir);
-      expect(acmePrompt).toContain("用后台运行（如 `run_command` 的 `WaitMsBeforeAsync`）");
-      expect(acmePrompt).not.toContain("run_in_background");
+      const agyPrompt = buildWorkerPrompt({ ...workerContext(), vendor: "agy" }, dir);
+      expect(agyPrompt).toContain("用后台运行（如 `run_command` 的 `WaitMsBeforeAsync`）");
+      expect(agyPrompt).not.toContain("run_in_background");
     } finally {
-      delete specs.acme;
+      restore();
     }
   });
 });
@@ -789,10 +797,10 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
 
   it("用户改的模式：完整的“怎么干活”一节（按厂商能不能放后台）", () => {
     expect(personaUpdateNote(update({ mode: { mode: "hands_on", bySelf: false } }))).toBe(
-      `【系统】你的模式刚更新了，以下面这份为准：\n\n${buildPmModePrompt("hands_on", VENDOR_SPECS.claude.backgroundCommands)}`,
+      `【系统】你的模式刚更新了，以下面这份为准：\n\n${buildPmModePrompt("hands_on", vendorSpec("claude").capabilities.backgroundWake)}`,
     );
     const agy = personaUpdateNote(update({ vendor: "agy", mode: { mode: "manage_only", bySelf: false } }))!;
-    expect(agy).toContain(buildPmModePrompt("manage_only", VENDOR_SPECS.agy.backgroundCommands));
+    expect(agy).toContain(buildPmModePrompt("manage_only", vendorSpec("agy").capabilities.backgroundWake));
   });
 
   it("两样都是用户改的：一段说明，模式在前、性格设定在后（同提示词里的顺序）", () => {

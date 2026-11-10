@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS, MAX_COMMAND_DESCRIPTION_CHARS, VENDOR_SPECS, type ComposerCommand } from "../../shared/index.ts";
+import { AGENT_VENDORS, MAX_COMMAND_DESCRIPTION_CHARS, type ComposerCommand } from "../../shared/index.ts";
+import claudeSpec from "./spec.ts";
 import { queryClaudeInitialize } from "./catalog.ts";
 import { FAKE_CLAUDE } from "../../daemon/driver/test-helpers.ts";
 import { claudeComposerBase, createClaudeComposer, parseClaudeCommands } from "./composer.ts";
@@ -101,7 +102,7 @@ describe("隐藏和拦截（方案第 5 节 8、9）", () => {
   });
 
   it("每个隐藏命令都有原因（纯数据在 shared/vendors.ts）", () => {
-    for (const [name, reason] of Object.entries(VENDOR_SPECS.claude.composer.blockedCommands)) {
+    for (const [name, reason] of Object.entries(claudeSpec.composer.blockedCommands)) {
       expect(name).toBe(name.toLowerCase());
       expect(reason.length, name).toBeGreaterThan(0);
     }

@@ -5,19 +5,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
+import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
+import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import {
   API_PATHS,
   uiCookieName,
-  ENV_AGY,
-  ENV_CLAUDE,
-  ENV_CODEX,
+  DEFAULT_AGENT_VENDOR,
   ENV_HOME,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_PORT,
   ENV_TAILSCALE,
   HUB_COMMAND,
-  WORKER_ENV,
+  VENDOR_LIST,
   WS_HEARTBEAT_TEXT,
   type Change,
   type CreatePmRequest,
@@ -109,8 +109,8 @@ export interface E2eEnv {
   fakeDir: string;
   /** 换剧本：下一次假 claude 起进程时生效。 */
   setScript(script: FakeScript): void;
-  /** main：换守护进程入口（默认 MAIN）。 */
-  start(options?: { claudePath?: string; env?: Record<string, string>; main?: string }): Promise<RunningDaemon>;
+  /** vendorPath：默认厂商（名单第一家）的可执行文件，默认假 claude；别家一律指到不存在的路径。main：换守护进程入口（默认 MAIN）。 */
+  start(options?: { vendorPath?: string; env?: Record<string, string>; main?: string }): Promise<RunningDaemon>;
   /** 起一个预期马上退出的守护进程（比如第二个），返回退出码和输出。 */
   runToExit(): Promise<{ code: number | null; stdout: string; stderr: string }>;
   log(): FakeLogEntry[];
@@ -140,14 +140,13 @@ export function makeEnv(): E2eEnv {
   writeFileSync(scriptFile, "{}");
   const running = new Set<ChildProcess>();
 
-  // 在 Worker 的会话里跑测试时，Worker 才有的环境变量（WORKER_ENV）会传下去，假 claude 就把项目经理也当成 Worker：去掉
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !(key in WORKER_ENV)));
-  const baseEnv = (claudePath: string, extra: Record<string, string> = {}) => ({
+  // 在 agent 的会话里（比如 Worker）跑测试时，那家的父会话变量（含 Worker 才有的）会传下去，假 claude 就把项目经理也当成 Worker：去掉
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !PARENT_SESSION_ENV.includes(key) && !(key in WORKER_ENV)));
+  // 各家可执行文件按名单来：默认厂商用给的（假 claude），别家指到不存在的路径，免得起了这台机器上真装着的
+  const baseEnv = (vendorPath: string, extra: Record<string, string> = {}) => ({
     ...inherited,
     [ENV_HOME]: home,
-    [ENV_CLAUDE]: claudePath,
-    [ENV_AGY]: join(fakeDir, "no-agy"),
-    [ENV_CODEX]: join(fakeDir, "no-codex"),
+    ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, id === DEFAULT_AGENT_VENDOR ? vendorPath : join(fakeDir, `no-${id}`)])),
     [ENV_PORT]: "0",
     // 不去问这台机器真的 Tailscale：没有这个命令 = 没装，只认本机
     [ENV_TAILSCALE]: join(fakeDir, "no-tailscale"),
@@ -157,8 +156,8 @@ export function makeEnv(): E2eEnv {
     ...extra,
   });
 
-  const spawnDaemon = (claudePath: string, extra?: Record<string, string>, main = MAIN) => {
-    const child = spawn(process.execPath, [main], { env: baseEnv(claudePath, extra), stdio: ["ignore", "pipe", "pipe"] });
+  const spawnDaemon = (vendorPath: string, extra?: Record<string, string>, main = MAIN) => {
+    const child = spawn(process.execPath, [main], { env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
     running.add(child);
     let out = "";
     let err = "";
@@ -187,7 +186,7 @@ export function makeEnv(): E2eEnv {
     fakeDir,
     setScript: (script) => writeFileSync(scriptFile, JSON.stringify(script)),
     async start(options = {}) {
-      const d = spawnDaemon(options.claudePath ?? FAKE_CLAUDE, options.env, options.main);
+      const d = spawnDaemon(options.vendorPath ?? FAKE_CLAUDE, options.env, options.main);
       const match = await Promise.race([
         waitUntil("login url", () => LOGIN_URL.exec(d.out()) ?? undefined, 15_000),
         d.exited.then(({ code }) => {
@@ -386,7 +385,7 @@ export function agentTexts(state: StateSnapshot, conversationId: number): string
 }
 
 /** unix socket 路径有长度上限（macOS 103 字节）：系统临时目录太长时（macOS 的 $TMPDIR 经常很长）改用 /tmp。 */
-function shortTmp(): string {
+export function shortTmp(): string {
   const base = tmpdir();
   return base.length <= 40 || !existsSync("/tmp") ? base : "/tmp";
 }
