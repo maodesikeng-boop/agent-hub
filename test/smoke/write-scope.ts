@@ -20,6 +20,7 @@ import {
   AGENT_VENDORS,
   EMPTY_TOKEN_USAGE,
   ENV_HUB_SOCK,
+  bundledModelCatalog,
   vendorSpec,
   workerWriteScope,
   type AgentSessionRow,
@@ -44,8 +45,11 @@ const DEEPSEEK = process.env.AGENT_HUB_DEEPSEEK || resolveExecutable("dsh", proc
 const DEEPSEEK_MODEL = process.env.AGENT_HUB_DEEPSEEK_MODEL || "deepseek-flash";
 const TURN_TIMEOUT_MS = 600_000;
 
-const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL, pi: PI_MODEL, deepseek: DEEPSEEK_MODEL };
-const EXECUTABLES: Record<Exclude<AgentVendor, "claude">, string> = { agy: AGY, codex: CODEX, pi: PI, deepseek: DEEPSEEK };
+const CURSOR = process.env.AGENT_HUB_CURSOR || join(homedir(), ".local", "bin", "cursor-agent");
+const CURSOR_MODEL = process.env.AGENT_HUB_CURSOR_MODEL || "composer-2.5";
+
+const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL, pi: PI_MODEL, deepseek: DEEPSEEK_MODEL, cursor: CURSOR_MODEL };
+const EXECUTABLES: Record<Exclude<AgentVendor, "claude">, string> = { agy: AGY, codex: CODEX, pi: PI, deepseek: DEEPSEEK, cursor: CURSOR };
 
 function task(dataDir: string, cwd: string, names: { edit: string; mkdir: string; echo: string }): string {
   return [

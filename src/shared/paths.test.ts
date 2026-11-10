@@ -75,7 +75,12 @@ describe("paths：可执行文件与数据目录解析", () => {
       },
       userHome: "/Users/u",
     });
-    expect(fromEnv.vendorPaths).toEqual({ ...defaultVendorPaths, agy: "/env/agy", codex: "/Users/u/env/codex" });
+    expect(fromEnv.vendorPaths).toEqual({
+      ...defaultVendorPaths,
+      claude: "claude",
+      agy: "/env/agy",
+      codex: "/Users/u/env/codex",
+    });
   });
 
   it("辅助路径函数与 socket 长度检查", () => {

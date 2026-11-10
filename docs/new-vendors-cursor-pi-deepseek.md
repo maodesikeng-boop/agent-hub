@@ -72,7 +72,7 @@
 - 为什么选 ACP 不选 print 模式：现有三家驱动全是“一个会话一个常驻进程、往标准输入写”（`BaseSessionDriver`），ACP 正好是这个形状；print 模式每轮起一个进程，要么改底座，要么每轮多付一次启动+登录。ACP 还多两样：能现场回权限请求（只读 Worker 的 MCP 判断可以像 claude 一样现场做），`session/cancel` 是正规打断。
 - 风险：`acp` 在官方参数表里写的是“advanced, hidden command”，但有专门文档页和更新日志（2026.09 起持续在加功能），可以用。
 - 模型和思考程度：ACP 会话的 `configOptions` 里有 `model`（实测 46 项，值形如 `grok-4.7[context=256k,reasoning_effort=high,fast=true]`）和 `mode`（agent/plan/ask）；用 `session/set_config_option` 设。下拉里思考程度怎么拆见第 5 节。
-- 默认模型：不传时用用户在 Cursor 里上次选的（本机是 Grok 4.7），所以我们要显式传（`explicitDefaultModel: true`）。
+- 默认模型：ACP 新会话的初始模型是全局 `~/.cursor/acp-config.json` 里上一次任何会话设的值，`--model` 在 ACP 下不生效还会改写 `~/.cursor/cli-config.json`，所以不传 `--model`，没选模型时驱动显式设 Auto（`default[]`）。思考档位 ACP 选不到，名单按家族归并（详见 `docs/vendors/cursor.md` 4.3）。
 - 本机 `cursor-agent` 有两个名字：`agent` 和 `cursor-agent`。`cli.command` 用 `cursor-agent`：`agent` 这个词在我们代码里到处都是，守卫测试按 `cli.command` 生成正则会误报。
 
 **Pi**
@@ -131,7 +131,7 @@
 |---|---|---|
 | **新增通用 ACP 驱动** `src/vendors/_common/acp/`（设计文档的 P6）：继承 `BaseSessionDriver`，翻译 ACP ↔ 我们的事件；用官方 TypeScript SDK `@agentclientprotocol/sdk`（npm 现版本 2.5.0）收发消息，不自己手写协议层。每家只传一个小配置：启动参数、怎么回权限请求、厂商扩展消息（Cursor 的 `cursor/ask_question` 要回“拒绝”，不然卡住）、模型和思考程度怎么设 | Cursor 和 DeepSeek 都是 ACP，各写一份重复 | 新目录，现有三家不引它。名字里没有厂商名，守卫测试照查 |
 | **`models.flags` 改成可选** | ACP 的两家模型和思考程度用协议设（`session/set_config_option`），没有命令行参数可填。`agentLaunchArgs` 没有 `flags` 时返回 `[]`，由驱动自己读 `session.model`/`session.effort`（现在各家驱动本来就是自己读这两个字段再调 `agentLaunchArgs`） | 三家都写了 `flags`，行为不变；P1 快照原样过 |
-| **Cursor 的思考程度** 不加新字段：用“每个模型名就是完整选择”的写法，`efforts` 只写一项（契约 S4 要求非空），网页 `efforts.length <= 1` 时本来就不显示思考程度（`web/worker-pick.ts:81`、`AgentRows.tsx:195`）；驱动发现只有一档时不传思考参数 | Cursor 模型名的后缀不规整（`-high-fast`、`-thinking-high`），套 agy 的 `effortInModelId` 拆不干净 | 不改公共代码 |
+| **Cursor 的思考程度** 不加新字段：ACP 每个模型家族只有一个预设（实测选不到档位），名单按家族一项一个，`efforts` 只写一项（契约 S4 要求非空），网页 `efforts.length <= 1` 时本来就不显示思考程度（`web/worker-pick.ts:81`、`AgentRows.tsx:195`）；驱动发现只有一档时不传思考参数 | Cursor 模型名的后缀不规整（`-high-fast`、`-thinking-high`），套 agy 的 `effortInModelId` 拆不干净 | 不改公共代码 |
 | **Pi**：不用改接口 | RPC 常驻，和 codex app-server 一个形状 | — |
 
 **要注意的两点**（不改接口，但实现时要做对）：

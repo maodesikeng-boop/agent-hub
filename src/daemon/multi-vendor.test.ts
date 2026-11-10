@@ -392,7 +392,90 @@ rl.on("line", (line) => {
 `,
     );
 
-    return { claudePath, agyPath, codexPath, deepseekPath };
+    const cursorPath = writeExecutable(
+      join(binDir, "fake-cursor"),
+      `
+const { createInterface } = require("node:readline");
+const { randomUUID } = require("node:crypto");
+
+const argv = process.argv.slice(2);
+if (argv[0] === "models") {
+  process.stdout.write("Available models\\n\\nauto - Auto (current, default)\\ncomposer-2.5 - Composer 2.5\\ncomposer-2.5-fast - Composer 2.5 Fast\\nclaude-opus-5-5-high - Claude Opus 5.5 1M High\\n");
+  process.exit(0);
+}
+if (argv[0] === "status") {
+  process.stdout.write(JSON.stringify({ authenticated: true, email: "cursor@example.com" }) + "\\n");
+  process.exit(0);
+}
+
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+let sessionId = "";
+let isWorker = false;
+const rl = createInterface({ input: process.stdin });
+
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    out({ jsonrpc: "2.0", id: req.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+    return;
+  }
+  if (req.method === "session/new") {
+    sessionId = "cursor-sess-" + randomUUID();
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        sessionId,
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "default[]",
+            options: [
+              { value: "default[]", name: "Auto" },
+              { value: "composer-2.5[fast=true]", name: "composer-2.5" },
+            ],
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "session/load" || req.method === "session/set_config_option" || req.method === "session/set_mode") {
+    if (req.params?.sessionId) sessionId = req.params.sessionId;
+    out({ jsonrpc: "2.0", id: req.id, result: {} });
+    return;
+  }
+  if (req.method === "session/prompt") {
+    const blocks = Array.isArray(req.params?.prompt) ? req.params.prompt.map((b) => b.text || "") : [];
+    const joined = blocks.join("\\n");
+    if (joined.includes(${JSON.stringify(WORKER_PROMPT_MARK)})) isWorker = true;
+    const lastLine = joined.split("\\n").filter(Boolean).pop() || "";
+    const reply = isWorker
+      ? ["Cursor Worker 已完成", "${REPORT_START}", "状态: 做完了", "摘要: Cursor Worker 顺利完成", "提交: 无", "测试: 无", "问题: 无", "${REPORT_END}"].join("\\n")
+      : "Cursor PM 收到：" + lastLine;
+    out({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId,
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } },
+      },
+    });
+    out({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { stopReason: "end_turn", usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 } },
+    });
+  }
+});
+`,
+    );
+
+    return { claudePath, agyPath, codexPath, deepseekPath, cursorPath };
   }
 
   async function bootMultiVendorDaemon() {
@@ -401,7 +484,7 @@ rl.on("line", (line) => {
     const userHome = join(dir, "user-home");
     const hubHome = join(dir, "hub-home");
     mkdirSync(userHome, { recursive: true });
-    const { claudePath, agyPath, codexPath, deepseekPath } = createFakeVendors(binDir, projectDir);
+    const { claudePath, agyPath, codexPath, deepseekPath, cursorPath } = createFakeVendors(binDir, projectDir);
 
     const cleanEnv: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(process.env)) {
@@ -416,6 +499,7 @@ rl.on("line", (line) => {
     cleanEnv[vendorSpec("agy").cli.envVar] = agyPath;
     cleanEnv[vendorSpec("codex").cli.envVar] = codexPath;
     cleanEnv[vendorSpec("deepseek").cli.envVar] = deepseekPath;
+    cleanEnv[vendorSpec("cursor").cli.envVar] = cursorPath;
 
     daemon = await startDaemon({ userHome, env: cleanEnv });
     const tokenMatch = /token=([A-Za-z0-9_-]+)/.exec(daemon.url);
@@ -450,9 +534,15 @@ rl.on("line", (line) => {
     const deepseekCat = body.catalogs.find((c) => c.vendor === "deepseek");
     expect(deepseekCat?.source).toBe("bundled");
     expect(deepseekCat?.models.map((m) => m.id)).toEqual(["deepseek-v4-pro", "deepseek-flash"]);
+
+    // cursor 名单按家族归并：composer-2.5 与 composer-2.5-fast 并成一项，默认固定 Auto
+    const cursorCat = body.catalogs.find((c) => c.vendor === "cursor");
+    expect(cursorCat?.source).toBe("vendor");
+    expect(cursorCat?.models.map((m) => m.id)).toEqual(["composer-2.5", "claude-opus-5-5"]);
+    expect(cursorCat?.defaultModel).toBe("Auto");
   });
 
-  it("可创建 vendor 为 agy、codex、deepseek 的 PM，发消息路由到对应驱动层并收到回复", async () => {
+  it("可创建 vendor 为 agy、codex、deepseek、cursor 的 PM，发消息路由到对应驱动层并收到回复", async () => {
     const { client } = await bootMultiVendorDaemon();
 
     const agyPm = await client.createPm({
@@ -490,6 +580,18 @@ rl.on("line", (line) => {
     const deepseekMsgId = await client.post(deepseekPm.conversationId, "你好小深");
     await waitForStatus(client, deepseekMsgId, "replied");
     expect(agentTexts(await client.state(), deepseekPm.conversationId)).toEqual(["DeepSeek PM 收到：你好小深"]);
+
+    const cursorPm = await client.createPm({
+      name: "小游PM",
+      mode: "hands_on",
+      vendor: "cursor",
+      defaultModel: "composer-2.5",
+      effort: null,
+      persona: "你是小游。",
+    });
+    const cursorMsgId = await client.post(cursorPm.conversationId, "你好小游");
+    await waitForStatus(client, cursorMsgId, "replied");
+    expect(agentTexts(await client.state(), cursorPm.conversationId)).toEqual(["Cursor PM 收到：你好小游"]);
   });
 
   it.skipIf(!canNestOsSandbox)("claude PM 可通过 hub worker start --vendor agy / codex 跨厂商派 Worker 并收到汇报", async () => {
