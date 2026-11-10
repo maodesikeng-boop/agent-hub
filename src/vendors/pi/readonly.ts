@@ -18,10 +18,10 @@ export const READONLY_PI_NEEDS_SANDBOX_MESSAGE = WORKER_NEEDS_OS_SANDBOX_MESSAGE
 export const PI_READONLY_CLI_ARGS: readonly string[] = ["--exclude-tools", "edit,write", "--no-mcp"];
 
 /** Pi 运行时需写入的子目录，相对配置目录（默认 ~/.pi/agent 或 PI_CODING_AGENT_DIR）。不放 settings.json、auth.json、extensions。 */
-export const PI_RUNTIME_DIRS: readonly string[] = ["sessions", "logs"];
+const PI_RUNTIME_DIRS: readonly string[] = ["sessions", "logs"];
 
 /** 通用缓存目录，相对用户主目录。 */
-export const PI_READONLY_CACHE_DIRS: readonly string[] = [".cache", "Library/Caches", ".npm"];
+const PI_READONLY_CACHE_DIRS: readonly string[] = [".cache", "Library/Caches", ".npm"];
 
 /** Pi 自身启动认证必需读取的配置文件（相对配置目录）：仅从 Pi 自身外层沙箱禁读列表中豁免只读，仍严禁写入。 */
 const PI_SELF_READABLE_CONFIG_FILES: readonly string[] = ["auth.json", "models.json"];
@@ -38,7 +38,7 @@ function realpathOrSelf(path: string): string {
   }
 }
 
-export function resolvePiConfigDir(homeDir: string, env?: Readonly<Record<string, string | undefined>>): string {
+function resolvePiConfigDir(homeDir: string, env?: Readonly<Record<string, string | undefined>>): string {
   const override = env?.PI_CODING_AGENT_DIR;
   if (typeof override === "string" && override.trim() !== "") return trimSlash(override.trim());
   return join(trimSlash(homeDir), ".pi", "agent");

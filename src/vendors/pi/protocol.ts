@@ -11,7 +11,6 @@ import {
   type AgentSessionRow,
   type ApiRetryInfo,
   type LaunchFiles,
-  type TokenUsage,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
 import { PI_NO_PROJECT_TRUST_ARGS, buildPiSkillArgs } from "./composer.ts";
@@ -301,8 +300,6 @@ export function subtractPiTokenCounts(total: PiRawTokenCounts, baseline: PiRawTo
     output: Math.max(0, total.output - baseline.output),
   };
 }
-
-export const ZERO_PI_TOKENS: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 };
 
 /** 用 ps 检查 pid 是否为残留的 pi RPC 进程（命令行含 pi 且含 `--mode rpc` 或会话 ID），是则返回其进程组号 pgid。 */
 export async function piOfSession(pid: number, vendorSessionId: string): Promise<number | null> {

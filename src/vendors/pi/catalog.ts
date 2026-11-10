@@ -267,7 +267,7 @@ export function parsePiModels(raw: unknown): ModelCatalog | null {
   };
 }
 
-export interface PiCatalogQueryOptions {
+interface PiCatalogQueryOptions {
   piPath: string;
   cwd: string;
   timeoutMs?: number;
@@ -276,7 +276,7 @@ export interface PiCatalogQueryOptions {
 }
 
 /** 运行 `pi --offline --list-models` 并返回标准输出文本。 */
-export function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: string }> {
+function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: string }> {
   const { piPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));

@@ -335,22 +335,3 @@ export function createCursorCatalogSource(
     },
   };
 }
-
-export interface QueryCursorCatalogOptions {
-  cursorPath: string;
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}
-
-export async function queryCursorCatalog(options: QueryCursorCatalogOptions): Promise<CursorCatalogRaw> {
-  const source = createCursorCatalogSource({
-    path: options.cursorPath,
-    cwd: options.cwd,
-    env: options.env,
-    timeoutMs: options.timeoutMs,
-    installed: () => true,
-  });
-  return (await source.query(options.signal ?? new AbortController().signal)) as CursorCatalogRaw;
-}

@@ -23,7 +23,7 @@ import { createSpecComposerBase } from "../_common/composer.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS } from "./limits.ts";
 
 /** Pi 网页端暴露的内置斜杠命令（其余 TUI 专属命令已在 spec.ts 的 blockedCommands 拦截）。 */
-export const PI_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
+const PI_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
 
@@ -93,7 +93,7 @@ export function parsePiCommands(raw: unknown): ComposerCommand[] | null {
   return out;
 }
 
-export interface PiCommandsQueryOptions {
+interface PiCommandsQueryOptions {
   piPath: string;
   cwd: string;
   addDirs?: readonly string[];
@@ -103,7 +103,7 @@ export interface PiCommandsQueryOptions {
 }
 
 /** 短暂启动 `pi --mode rpc --no-session --offline --no-mcp --no-approve` 发送 `get_commands`，严格按 `\n` 切分 JSONL。 */
-export function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
+function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
   const { piPath, cwd, addDirs = [], timeoutMs = COMMANDS_QUERY_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));

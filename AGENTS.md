@@ -28,7 +28,7 @@
 
 
 ## 我们用的组件
-只列 `package.json` 的直接依赖，"用在哪"都用 grep 核过。
+只列 `package.json` 与 `apps/windows/Cargo.toml` 的直接依赖（macOS 用系统框架），"用在哪"都用 grep 核过。
 
 **后端（`src/daemon`）**
 - `fastify`：HTTP 服务（`agent-api/server.ts`、`ui-server/server.ts`、`peers/proxy.ts`）。
@@ -61,6 +61,11 @@
 - `ModeRows.tsx` 直接用 `@radix-ui/react-radio-group`，没有单独的 `radio-group.tsx`。
 - 没装：`Sheet`、`Select`、`Textarea`、`Tooltip`、`DropdownMenu`、`ScrollArea`、`Toast/Sonner` 等。`Dialog` 已装。
 - 要新增一个：先 `pnpm dlx shadcn@latest view <名字>` 看官方源码（不需要 `components.json`），再手工放进 `src/web/ui/<名字>.tsx`：import 改成相对路径（`../lib/utils.ts`），新依赖（如 `vaul`）用 `pnpm add`，样式按 `docs/ui-standard.md` 改。
+
+**桌面外壳（`apps/desktop`、`apps/macos`、`apps/windows`）**
+- 共用监管约定：`apps/desktop/contract.json`（`apps/macos/DaemonSupervisor.swift`、`apps/windows/crates/fusa-supervisor/src/contract.rs`、`apps/windows/crates/fusa-desktop/src/lib.rs`）。
+- macOS（`apps/macos/`）：原生 Swift，系统框架 `AppKit`、`WebKit`、`UserNotifications`（`scripts/build-mac-app.sh` 调用 `swiftc` 编译为 `Fusa.app`）。
+- Windows（`apps/windows/`，Rust workspace）：`tauri` + `tauri-build`（Tauri 2 桌面窗口、WebView 与托盘，`crates/fusa-desktop/`）、`ureq`（守护进程 HTTP 探活，`crates/fusa-supervisor/src/probe.rs`）、`winreg`（读取 WSL 注册表安装路径，`crates/fusa-wsl/src/registry.rs`）、`sha2`（SHA-256 校验，`crates/fusa-wsl/src/runner.rs`）、`serde` + `serde_json`（配置与状态序列化，`fusa-wsl` / `fusa-supervisor` / `fusa-desktop`）、`thiserror`（`fusa-wsl` / `fusa-supervisor`）+ `url`（`fusa-desktop`）；Rust 测试用 `tempfile`。
 
 **测试**
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
