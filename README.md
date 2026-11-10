@@ -1,18 +1,18 @@
-# Piece
+# Fusa
 
 **English** | [中文](#中文)
 
 **Manage an entire project through a single conversation.**
 
-Piece is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
+Fusa is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
 
-![Piece home screen](docs/screenshots/readme-home.png)
+![Fusa home screen](docs/screenshots/readme-home.png)
 
 ### Why a single conversation per project?
 
 When you run multiple coding agents in parallel, the bottleneck quickly shifts from writing code to **managing agent sessions**: creating git worktrees, picking models, copying background context between threads, watching terminals to see who stalled, and reviewing diffs across half a dozen tabs.
 
-Piece is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
+Fusa is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
 
 It is built for **one person across multiple devices** (your Mac, a Linux server, your phone)—not a multi-user shared server.
 
@@ -21,23 +21,23 @@ It is built for **one person across multiple devices** (your Mac, a Linux server
 ### 1. A UI built around the PM conversation
 
 - **One project, one main chat:** The left sidebar only lists Project Managers—one per project—so Worker sessions never clutter your conversation list.
-- **Process collapsed by default, conclusions up front:** The PM's intermediate tool calls and dispatch events within a turn fold into a single `Worked for Xs ›` line, and when a Piece finishes a round, only a status dot and a short summary bubble (up to 120 characters) appear in the main chat.
-- **Drill down only when you want to:** Active Pieces, questions waiting for your decision (`Needs You`), and a collapsed-by-default `Completed` list sit in the right rail (or bottom drawer on mobile); click any summary bubble or Piece row to open its full session.
+- **Process collapsed by default, conclusions up front:** The PM's intermediate tool calls and dispatch events within a turn fold into a single `Worked for Xs ›` line, and when a Worker finishes a round, only a status dot and a short summary bubble (up to 120 characters) appear in the main chat.
+- **Drill down only when you want to:** Active `Pieces`, questions waiting for your decision (`Needs You`), and a collapsed-by-default `Completed` list sit in the right rail (or bottom drawer on mobile); click any summary bubble or row in `Pieces` to open that Worker's full session.
 
 See [docs/prototype-design.md](docs/prototype-design.md) for details.
 
 ### 2. Seamless context compaction
 
-- **Automatic background handover at 200,000 tokens:** When a PM session's context reaches 200,000 tokens, Piece forks the session in the background to write a ~2,000-character structured handover while you continue chatting with the PM without interruption.
+- **Automatic background handover at 200,000 tokens:** When a PM session's context reaches 200,000 tokens, Fusa forks the session in the background to write a ~2,000-character structured handover while you continue chatting with the PM without interruption.
 - **Zero-interruption session switch:** Between turns, the PM switches to a fresh underlying session preloaded with its persona memory, the structured handover, up to 30,000 characters of recent verbatim dialogue before the fork point (plus all messages after it), and a directory of recent Worker reports. You stay in the exact same conversation in the UI, and switching a PM's vendor on its profile page uses the same handover transition.
 
 See [docs/background-handover-design.md](docs/background-handover-design.md) for details.
 
-### 3. Convenient sub-agent (Worker / Piece) management
+### 3. Convenient sub-agent (Worker) management
 
 - **Isolated git worktrees with automatic cleanup:** The PM dispatches each Worker (`hub worker start`) into its own git worktree and branch with optional automatic project setup, and finished worktrees are automatically cleaned up once their branch merges into `main` or 3 days after completion.
 - **Per-worker vendor, model, effort, and read-only mode:** Each Worker can independently use a different vendor, model, thinking effort, and per-turn time reminder (default 30 minutes, alerting the PM without killing the Worker), or run in a read-only sandbox for code review and investigation.
-- **Talk to a Worker directly or pick who gets dispatched:** You can click any Piece to message that Worker directly (the PM automatically receives a copy so context never diverges), or type `/hub:worker` in the PM input box to specify which vendor, model, and effort to use for Workers dispatched from that message.
+- **Talk to a Worker directly or pick who gets dispatched:** You can click any item in `Pieces` to message that Worker directly (the PM automatically receives a copy so context never diverges), or type `/hub:worker` in the PM input box to specify which vendor, model, and effort to use for Workers dispatched from that message.
 
 See [docs/readonly-worker-design.md](docs/readonly-worker-design.md) for details.
 
@@ -90,8 +90,8 @@ AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
 ## macOS app
 
 ```bash
-pnpm app:mac                              # builds build/Piece.app
-bash scripts/build-mac-app.sh --install   # builds and copies to /Applications/Piece.app
+pnpm app:mac                              # builds build/Fusa.app
+bash scripts/build-mac-app.sh --install   # builds and copies to /Applications/Fusa.app
 ```
 
 The macOS app (`apps/macos/`) is a lightweight native WebKit shell that supervises the local daemon. Building requires Xcode Command Line Tools (`swiftc`) and built web assets (`pnpm build`, or pass `--build-web` to `scripts/build-mac-app.sh`).
@@ -132,12 +132,12 @@ All environment variables are optional.
 
 ## Vendor terms & account risks
 
-Piece does not call model provider APIs directly. Instead, it launches each vendor's **official command-line agent** on your machine, under **your own account**, in non-interactive/headless mode, and drives it automatically. Whether using an external orchestrator to drive the official CLI is permitted under your subscription or terms of service is for you to review and decide; this project does not grant permission or guarantee that your account will remain in good standing.
+Fusa does not call model provider APIs directly. Instead, it launches each vendor's **official command-line agent** on your machine, under **your own account**, in non-interactive/headless mode, and drives it automatically. Whether using an external orchestrator to drive the official CLI is permitted under your subscription or terms of service is for you to review and decide; this project does not grant permission or guarantee that your account will remain in good standing.
 
 - **Google Antigravity:** Section 6 of the [Google Antigravity Additional Terms](https://antigravity.google/terms/) states:
   > "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts."
 
-  Google has not explicitly clarified whether driving the official `agy` CLI in headless mode from a local tool like Piece falls under this prohibition. Treat it as a **risk of account suspension or termination** and decide for yourself.
+  Google has not explicitly clarified whether driving the official `agy` CLI in headless mode from a local tool like Fusa falls under this prohibition. Treat it as a **risk of account suspension or termination** and decide for yourself.
 - **Claude Code:** Review and comply with Anthropic's terms and compliance docs: <https://code.claude.com/docs/en/legal-and-compliance>.
 - **Codex:** Review and comply with OpenAI's terms of use: <https://openai.com/policies/row-terms-of-use/>.
 
@@ -147,7 +147,7 @@ Vendor terms change over time; always check the latest official documents yourse
 
 Workers edit files and execute shell commands on your machine with your OS user's permissions. Understand the actual boundaries before running agents on important repositories or machines:
 
-- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Piece data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`); `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. This is enforced by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS; `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup—see [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files, run arbitrary commands, and access the network just like any program you run.
+- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Fusa data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`); `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. This is enforced by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS; `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup—see [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files, run arbitrary commands, and access the network just like any program you run.
 - **Read-only workers (`src/shared/readonly-policy.ts`):** Read-only workers can read files and run commands, and can only call read-only MCP connector tools (`readOnlyHint: true`). Sensitive paths are blocked from reading (`state/ui-token`, vendor credential files, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, etc., plus globs like `**/.env`, `**/.env.*`, `**/*.pem`, `**/*.key`, `**/id_rsa*`, `**/id_ed25519*`), and writes are blocked everywhere except a per-session private temporary directory (and required runtime/cache directories). Claude Code and Codex use their native read-only sandboxes; Antigravity is wrapped in the outer read-only OS sandbox. See [docs/readonly-worker-design.md](docs/readonly-worker-design.md).
 - **Project managers are not sandboxed.**
 - Do not expose the local daemon port (`4317`) to untrusted networks. To report a security vulnerability privately, see [SECURITY.md](SECURITY.md).
@@ -165,17 +165,17 @@ Workers edit files and execute shell commands on your machine with your OS user'
 
 # 中文
 
-[English](#piece) | **中文**
+[English](#fusa) | **中文**
 
 **通过一个会话管理整个项目。**
 
-Piece 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
+Fusa 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
 
 ### 为什么要“一个会话管住整个项目”？
 
 同时用多个编程 Agent 并行干活时，瓶颈很快就会从“写代码”变成**“管会话”**：建 git worktree、选模型、在不同会话之间来回贴背景、盯一堆终端看谁卡住了、在十几个标签页里挨个审 diff。
 
-Piece 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
+Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
 它是为**一个人、多台设备**（你自己的 Mac、Linux 服务器、手机）设计的自用工具，不是多人共用的服务端。
 
@@ -184,8 +184,8 @@ Piece 从最早开始开发时就是按**“一个会话管住整个项目”**�
 ### 1. 围绕“和项目经理聊天”设计的界面
 
 - **一个项目只有一条主线对话**：左侧栏只列项目经理（一个项目对应一个项目经理），Worker 的会话不会混进左侧对话列表。
-- **过程默认收起，主对话只看结论和状态**：项目经理每轮的中间工具调用和派活事件默认折成一行 `Worked for Xs ›`；Piece 每做完一轮，主对话里只出现一个带状态圆点的简短汇报气泡（最多 120 字）。
-- **需要时再点开看过程**：正在干活的 `Pieces`、等你拍板的问题（`Needs You`）和默认收起的 `Completed` 放在右侧栏（手机端为底部抽屉），想看具体步骤或插话时再点开对应 Piece。
+- **过程默认收起，主对话只看结论和状态**：项目经理每轮的中间工具调用和派活事件默认折成一行 `Worked for Xs ›`；Worker 每做完一轮，主对话里只出现一个带状态圆点的简短汇报气泡（最多 120 字）。
+- **需要时再点开看过程**：正在干活的 `Pieces`、等你拍板的问题（`Needs You`）和默认收起的 `Completed` 放在右侧栏（手机端为底部抽屉），想看具体步骤或插话时再点开对应 Worker。
 
 详见 [docs/prototype-design.md](docs/prototype-design.md)。
 
@@ -196,11 +196,11 @@ Piece 从最早开始开发时就是按**“一个会话管住整个项目”**�
 
 详见 [docs/background-handover-design.md](docs/background-handover-design.md)。
 
-### 3. 方便的子 Agent（Worker / Piece）管理
+### 3. 方便的子 Agent（Worker）管理
 
 - **独立 git worktree 与自动清理**：项目经理通过 `hub worker start` 把每个 Worker 派到独立的 git worktree 和分支里干活（可配置建好 worktree 后自动跑准备脚本），分支合并进 `main` 或收工满 3 天后自动清理 worktree 目录。
 - **按任务选厂商、模型、思考程度与只读模式**：每个 Worker 可独立选择厂商、模型、思考程度、单轮超时提醒（默认 30 分钟，到点提醒项目经理而不强杀 Worker），或开启只读沙箱用于代码审查与问题排查。
-- **随时直接对 Worker 说话或指定派谁**：你可以点开任意 Piece 直接给该 Worker 发消息（项目经理会同步收到副本，两边不脱节），也可以在项目经理输入框里用 `/hub:worker` 指定这条消息派出的 Worker 用哪家厂商、模型和思考程度。
+- **随时直接对 Worker 说话或指定派谁**：你可以从 `Pieces` 点开任意 Worker 直接给它发消息（项目经理会同步收到副本，两边不脱节），也可以在项目经理输入框里用 `/hub:worker` 指定这条消息派出的 Worker 用哪家厂商、模型和思考程度。
 
 详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)。
 
@@ -253,8 +253,8 @@ AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
 ## Mac 应用
 
 ```bash
-pnpm app:mac                              # 在 build/Piece.app 生成应用
-bash scripts/build-mac-app.sh --install   # 同上，并复制到 /Applications/Piece.app
+pnpm app:mac                              # 在 build/Fusa.app 生成应用
+bash scripts/build-mac-app.sh --install   # 同上，并复制到 /Applications/Fusa.app
 ```
 
 Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳，需要 Xcode 命令行工具（`swiftc`）以及构建好的前端网页（先跑 `pnpm build`，或加 `--build-web` 参数）。
@@ -295,7 +295,7 @@ Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳
 
 ## 厂商条款风险（使用前必读）
 
-Piece 本身不直接请求任何模型 API，而是在你的电脑上、使用**你自己的账号**，以无头（非交互）模式调用各厂商的**官方命令行工具**并自动驱动它。这种用法是否符合你所用订阅套餐及各厂商的服务条款，需要你自行查阅并判断；本项目不替任何厂商下“允许”的结论，也不保证你的账号不会受到影响。
+Fusa 本身不直接请求任何模型 API，而是在你的电脑上、使用**你自己的账号**，以无头（非交互）模式调用各厂商的**官方命令行工具**并自动驱动它。这种用法是否符合你所用订阅套餐及各厂商的服务条款，需要你自行查阅并判断；本项目不替任何厂商下“允许”的结论，也不保证你的账号不会受到影响。
 
 - **Google Antigravity**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条写明：
   > "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts."
