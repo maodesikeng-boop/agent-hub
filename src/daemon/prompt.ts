@@ -9,6 +9,7 @@
 //   性格设定、模式改了（不重启）的说明在这个文件的 personaUpdateNote，驱动层经 launch.ts 的 createPersonaNoter 拿；
 // - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
 //   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
+//   workerPickNote（WORKER_PICK_NOTE_START）：用户在输入框指定这条消息里派的 Worker 用什么，交给项目经理时加在原文前面的参数句子（提示词里“用户指定 Worker 用的模型”那条说怎么对待它）；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
 // - ledger/messages.ts 的 insertSystemMessage：系统消息（只给人看），具体文字在调用它的 persona.ts、projects.ts 里；
 // - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答；
@@ -33,6 +34,7 @@ import {
   VENDOR_SPECS,
   WORKER_BRANCH_PREFIX,
   WORKER_LOG_DEFAULT_STEPS,
+  WORKER_PICK_NOTE_START,
   WORKER_REPORT_FORMAT,
   WORKER_SEND_MAX_TOKENS,
 } from "../shared/index.ts";
@@ -160,6 +162,7 @@ function buildPmWorkerPrompt(specs: Readonly<Record<string, VendorPromptSpec>> =
 
 - **严禁使用厂商自带的 subagent**：在 ${PRODUCT_NAME} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
 - **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}（可用 \`${HUB} models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
+- **用户指定 Worker 用的模型**：用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
 - **按任务难度设最大时间（\`--max-time\`）**：派活（\`${HUB} worker start\`）或追问（\`${HUB} worker send\`）时可传 \`--max-time <时长>\`（如 \`15m\`、\`30m\`、\`1h\`，注意是**本轮最大容忍时间上限**而非平均预期时间，不传默认兜底 \`30m\`）。当 Worker 当前一轮超过该最大时间仍未结束时，系统会自动给你发一条静默唤醒消息（不打断 Worker），请你用 \`${HUB} worker show <编号>\` 和 \`${HUB} worker log <编号> --last 15\` 检查它是在正常收尾还是卡死；若仍在正常推进还需时间，可用 \`${HUB} worker max-time <编号> <时长>\` 单独续期。

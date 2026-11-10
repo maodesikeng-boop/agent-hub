@@ -98,6 +98,9 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 会话 / 开新会话 / 定时任务 / 文件夹 | Session / New session / Schedules / Folders |
 | 额度 / 5 小时 / 7 天 / 30 天 / 重置 | Usage / 5h / 7d / 30d / Resets |
 | 取消 / 保存 / 创建 / 重试 / 加载中 | Cancel / Save / Create / Retry / Loading… |
+| 默认（模型、思考程度没指定） / 去掉 | Default / Remove |
+| 没有匹配的命令 / 文件 / 厂商 / 模型 / 思考程度（输入框弹出列表） | No matching commands / files / providers / models / effort |
+| 派 Worker 用的厂商、模型（`/hub:worker` 的标签，读屏名字） | Worker model |
 
 ## 4. 颜色
 
@@ -144,7 +147,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-60`）。
 
-**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）；要带字的（额度）用 `size="sm"`，同样没有底色。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
+**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
 
 ## 7. 聚焦态
 
@@ -233,6 +236,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 ## 11. 浮层（Popover）
 
 `PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
+
+- **高度受可用空间限制**：`PopoverContent` 自带 `max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain`（Radix 量好的“窗口剩下的高度”，已扣掉离边 12px 的 `collisionPadding`），窗口矮了内容在浮层里滚，不顶出窗口、标题不被切；不自己用 JS 量窗口高度。`m3.test.tsx` 守着这几个类名。
+- **额度浮层**（左下角额度按钮点开，`QuotaPopover`）：
+  - 结构：一家厂商一组，厂商名做组标题（13.5px、500、灰，组标题和内容之间 8px）；组与组之间 24px（`gap-6`）。按需查的厂商（Antigravity）分模型族（Gemini、Claude and GPT）：族名是组内一行小标题（12px `text-xs`、500、灰），各族之间 16px，族名和它的窗口之间 12px。**不用“·”拼厂商和模型族**（读屏：厂商是 `region`，模型族是 `group`）。
+  - 一个窗口一行：左边窗口名（15px，`5h` / `7d`），右边已用百分比（15px，`tabular-nums`，不上色）；下面一条 6px 高的用量条（`h-1.5 rounded-full`，轨道 `bg-sidebar-active`）；条下面“Resets 17:11”（12px 灰，`tabular-nums`；不是今天的写“Resets 11/16 13:13”）。行内各层间隔 4px，窗口与窗口之间 12px。没有额外的底色块、胶囊、卡片，浮层本身就是容器。
+  - **用量条颜色**（只用 `styles.css` 现有变量，不另写色值；`QuotaPopover.tsx` 的 `USAGE_BAR_COLORS` 一处）：正常 `bg-foreground/40`（中性灰）；偏高（≥ 80%，或 Claude 自己报 allowed_warning）`bg-caution`（琥珀）；用满（100% 或厂商报 rejected）`bg-foreground`（前景色实心）。**用满不用红色**，不像报错；百分比文字三档都是前景色。左下角的额度图标按钮与设置齿轮保持同色同风格的单色线性图标，不随用量变色，用量只在弹层里看。
 
 ## 12. 右栏（Needs You、Pieces）
 
@@ -323,7 +332,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 因为左栏 `72px` 常驻在窗口最左侧（正好覆盖 `--macos-traffic-lights-width: 72px`），去掉 `styles.css` 中 `@media (max-width: 1100px)` 下给 `.chat-main` 额外加的 `--macos-traffic-lights-width` 偏移以及 `PmProfile.tsx` / `App.tsx` 顶栏的多余窄屏左内边距。右栏照样推开对话（第 12 条）。
 - **左栏的行**：选中、悬停是这个项目经理的水果果冻底（第 4 条），头像 44px，第一行名字 + 右边的标注（两侧 `items-center justify-between gap-2`，左侧标题区 `min-w-0 flex-1 overflow-hidden` 绝不溢出遮挡右侧标注），第二行消息预览；没有消息的行第二行留空但占一样的高度，每行一样高。右边的标注只放一个，优先级：“等你确定”圆点（8px `size-2 rounded-full bg-status-active`，无文字，`aria-label` / `title` 为“等你确定”） > “等你”圆点（同样 8px 绿点，无文字，`aria-label` / `title` 为“等你”） > 时间。项目经理在忙不另加标记，照旧显示时间。
 - **已归档项目经理**：左栏每个设备组内（或单设备列表底部）将已归档项目经理收进默认折叠的“已归档”分组（样式同设备组头，右侧标数量；搜索中或当前选中已归档对话时自动展开），行右侧标剩余删除天数（`Deletes in 7d`，`tabular-nums`，不标“等你”或“等你确定”）。聊天页底部输入框换成归档状态条（`rounded-2xl bg-sidebar px-4 py-3`：左侧“已归档”与剩余天数用 `gap-3` 分开，右侧 `outline` `sm`“恢复”按钮，进行中显示 `Restoring…`）。资料页在会话组提供“归档…”及二次确认弹窗（`max-w-110`）；已归档时顶部第一组显示归档状态与“恢复”按钮，隐藏会话组。
-- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `8px`、底部 `20px` 渐隐：`mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)`）与底部内边距 `pb-3`，使列表滚动经过底部栏和顶部搜索栏时柔和过渡、不硬切头像，滚到底部时最后一项完整显示在渐变区上方。额度按钮：一个 16px 的小圆环（已用的部分画成弧，平时前景色 60%，快用完 `text-warn-foreground`、用完 `text-danger`）+“5h 37%”这样的窗口名和百分比（`tabular-nums`），用完写“额度用完”；点开浮层看每个厂商、每个窗口的明细（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude 和 GPT）各一块，标题“厂商名 · 组名”；没装或查失败就没有这几块。
+- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `8px`、底部 `20px` 渐隐：`mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)`）与底部内边距 `pb-3`，使列表滚动经过底部栏和顶部搜索栏时柔和过渡、不硬切头像，滚到底部时最后一项完整显示在渐变区上方。额度按钮：与右侧设置齿轮保持统一风格的 `icon-sm` 单色线性图标按钮（`CircleGauge`，16px，平时 `text-muted-foreground`，悬停 `hover:text-foreground` 与浅底 `hover:bg-accent`），不随用量填充或变色，与设置齿轮同色同风格；无障碍名称与悬停提示保留完整状态（如“5h usage 37%”“Usage limit reached”），用量只在点开的浮层里显示（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude and GPT）各一块，同在“Antigravity”这个厂商标题下，组名是小标题（第 11 条）；没装或查失败就没有这几块。
 - **每个对话有自己的网址**：`#/c/<对话编号>`（项目经理的对话）、`#/w/<对话编号>`（Worker 的对话）、`#/pm/<项目经理编号>`（资料页）。点左栏、点 Worker、打开资料页都会改网址（能前进后退）；刷新后回到原来那个，找不到才回到第一个。
 - **焦点**：打开或切换对话时，用鼠标的设备（`pointer: fine`）把焦点放进输入框（输入框不可用时不放）；触屏（手机、iPad）不放，不弹键盘。
 - **多台设备（联机，`docs/multi-device-design.md` 第 4 节）**：只有一台时左栏、网址、弹窗和没有联机时一模一样。两台以上：
@@ -368,15 +377,27 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 聊天输入框里打 “/”（整条消息开头）或 “@”（开头或空白后）时弹出的列表（`ComposerMenu`，`src/web/components/ComposerMenu.tsx`；触发规则在 `src/web/composer-trigger.ts`，状态在 `src/web/composer-suggest.ts`）：
 
 - **位置**：输入框正上方，和输入框同宽，在布局里占位（把对话往上顶），不浮在对话正文上面，不盖住任何内容；和输入框之间 8px（`mb-2`）。
-- **外框**：`rounded-2xl border border-border bg-background p-1.5`，不加阴影。最多 8 行（`max-h-[calc(8*2.25rem)]`），更多的纵向滚动。
+- **外框**：`rounded-2xl border border-border bg-background p-1.5`，不加阴影。最多 8 行（`max-h-[calc(8*2.25rem)]`，触屏 `pointer-coarse:max-h-[calc(8*2.75rem)]`），更多的纵向滚动。
 - **行**：`h-9 rounded-xl px-3`，一行 36px，行里各项之间 `gap-3`；高亮只有一行（键盘和鼠标共用），`bg-sidebar-active`，不用主色。
+  - 触屏（`pointer: coarse`）下行本身 `pointer-coarse:min-h-11`（44px，第 19 条“一行挨一行的列表”），不用 `touch-target` 撑开。
+  - 不能选的行（没登录的厂商）：名字也用 `text-muted-foreground`（和右边的状态词一样灰，不用 `opacity` 再压一层，免得字看不清）、`cursor-default`，`aria-disabled`；鼠标经过不高亮，↑↓ 跳过它，点了、Enter 都不选（Enter 也不发送）。
   - 命令：名字（15px、500，带 `/`）加一句说明（13.5px 灰），说明超长 `truncate`。
   - 文件：`FileText` 图标（`size-4`，灰）、文件名（15px、500）、父目录（13.5px 灰，`truncate`）；多个根目录时不显示根。
+  - agent-hub 自己的命令（`HUB_COMPOSER_COMMANDS`，现在只有 `/hub:worker`）：和命令同样子，排在厂商命令前面（筛选时同一档也在前面）；只在项目经理对话里有，厂商命令拉不到时照样出现。
   - 各项之间用间距隔开，不用 “·”“-”“/” 拼接。
-- **没有匹配**：一行 13.5px 灰字，“没有匹配的命令”“没有匹配的文件”，也是 `h-9 px-3`。
+- **没有匹配**：一行 13.5px 灰字，`No matching commands`、`No matching files`（多级参数各级见下），也是 `h-9 px-3`。
 - **加载中、拿不到列表**：不显示任何东西（不放转圈、不报错），输入框照常能发。
-- **键盘**：↑↓ 循环选；Enter 或 Tab 确定（列表里有行时 Enter 不发送；没有匹配时 Enter 照常发送）；Esc 关闭，文字不动；输入法选字时的按键不算。鼠标按下时 `preventDefault`，焦点不离开输入框。
+- **键盘**：↑↓ 循环选；Enter 或 Tab 确定（列表里有行时 Enter 不发送；没有匹配时 Enter 照常发送）；Esc 关闭，文字不动；输入法选字时的按键不算。
+- **不抢焦点**：行上 `onPointerDown` 和 `onMouseDown` 都 `preventDefault`，焦点不离开输入框，手机上点选时软键盘不收起；选中靠 `onClick`。
 - **选中后**：把触发的那一段换成后台给的文字（命令 `/名字`、文件 `insert` 字段，网页不自己拼 `@`），后面带一个空格，光标停在空格后；纯文本，不做小标签。
+  - 例外：`/hub:worker` 最后一级选完，整段 `/hub:worker …` 从文字里拿掉，换成输入框里的一个小标签（放在待发文件那一排最前面，样式照文件标签：`rounded-full bg-muted py-1 pr-1 pl-3 text-minor`，左边 `Bot` 图标 `size-4` 灰，然后厂商名、模型名、思考程度，`gap-2` 隔开、不用 “·”，`Default` 的项不显示；最右 `×` 读屏名字 `Remove`；点标签本身 = 在开头插入 `/hub:worker ` 重选，一条消息最多一个）。标签是 PR3 做的；PR2 期间最后一级选完先把完整的 `/hub:worker <厂商> <模型> <思考程度> ` 留在文字里。
+- **多级参数补全**（`/hub:worker`，以后别的命令带参数也照这个）：像命令行补全，一条命令后面一级一级换列表，都是同一个弹出列表、同样的行：
+  - 选中命令 → 文字变成 `/hub:worker `，列表换成厂商；选厂商 → 插入厂商 id，列表换成这家的模型；选模型 → 列表换成这个模型支持的思考程度。每级插入的是 id（不是显示名），后面带空格。
+  - 厂商：名字（`Claude Code`）；没装的不列；没登录的列出来、不能选，右边灰字 `Not signed in`。模型：第一行 `Default`（右边灰字写实际用的模型，`defaultModelText`），其后是显示名，右边厂商给的说明。思考程度：第一行 `Default`，其后是档位原样（和资料页 Effort 下拉一样）；这个模型只有一档或没有档位就没有这一级。
+  - 每一级都能接着打字筛（和命令同一个规则：开头命中 > 包含 > 说明里有）；Backspace 删到上一级就回到上一级的列表（光标所在的词就是正在选的那一级）。
+  - 没有匹配：`No matching providers`、`No matching models`、`No matching effort`。
+  - 不加标题、面包屑、提示小字：已选的路径就在输入框文字里。加载中不转圈：清单还没拉到时用打包的名单，拉到后换上。
+  - 最后一级选完才收列表（见上面“例外”）；Esc 关列表、文字不动；手打完整的 `/hub:worker codex gpt-5.5 high` 时最后一级照样弹，Enter 选中即完成。
 - **文件搜索**：接着打字等 120ms 没再打才发请求，旧请求作废，后发先回时旧结果不显示。
 - **发送被拦**：后台给的原因显示在输入框上方（和上传失败同一处，`text-danger`），用户原文留在输入框里。
 
@@ -392,7 +413,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **输入框字号不小于 16px**：iOS 对小于 16px 的输入框聚焦时会自动放大页面。标准正文是 15px，所以只在 `(pointer: coarse)`（触屏）下，所有 `input`、`textarea`、`select`（聊天输入框、`Input`、`Textarea`、`Select`）一律 16px，写成 `styles.css` 里一条规则，组件里不各写各的。电脑上仍是 15px。
 - **点击区域不小于 44px**：触屏下，每个能点的东西可点范围至少 44 × 44px（Apple HIG）；视觉大小不变（图标按钮仍是 36 / 32px）。
   - 按钮（`Button`，含图标按钮）、输入框里待发文件的“去掉”、“Worked for ›”这类文字按钮带 `touch-target` 类：`(pointer: coarse)` 下用 `::after` 把可点范围撑到 44px，不改版面。
-  - 一行挨一行的列表（右栏的行）不能用撑开的办法（相邻的会盖住彼此）：触屏下行本身 `min-h-11`（44px）。左栏的行本来就高过 44px。
+  - 一行挨一行的列表（右栏的行、输入框弹出列表的行）不能用撑开的办法（相邻的会盖住彼此）：触屏下行本身 `min-h-11`（44px）。左栏的行本来就高过 44px。
   - 电脑（`pointer: fine`）上不变。
 - **不靠悬停**：触屏没有悬停。任何操作（复制、重试、展开）平时就看得见、点得到，不做“悬停才出现”的按钮；悬停只用来换底色这种锦上添花的反馈（Tailwind 的 `hover:` 只在真能悬停的设备上生效）。
 - **不出横向滚动条**：390px 宽下页面不能比屏幕宽（长标题、路径、代码块在自己里面截断或横向滚动，第 15 条）。

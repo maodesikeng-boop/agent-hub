@@ -60,6 +60,8 @@ export const MAX_REASON_CHARS = 500;
 export const MAX_PATH_BYTES = 4096;
 /** 模型名最多几个字符。 */
 export const MAX_MODEL_CHARS = 100;
+/** 输入框指定派 Worker 的思考程度（PostMessageRequest.workerPick.effort）最多几个字符；档位名都是短词（xhigh、max……）。 */
+export const MAX_WORKER_PICK_EFFORT_CHARS = 40;
 /** hub ask 选项数量下限、上限及单个选项的最大字符数（按 Unicode 字符算）。 */
 export const ASK_MIN_OPTIONS = 2;
 export const ASK_MAX_OPTIONS = 10;
@@ -530,3 +532,7 @@ export const PM_ARCHIVE_RETENTION_DAYS = 7;
 export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** 每小时巡检一次到期归档 PM。 */
 export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+// ---- 输入框 /hub:worker 选择列表（web/worker-pick.ts）----
+/** 同一份模型名单下按（级别、已选、筛选词）缓存的列表最多留几份；超了整份清掉重算（名单一换，旧的整份随 WeakMap 回收）。 */
+export const WORKER_PICK_CACHE_MAX = 64;

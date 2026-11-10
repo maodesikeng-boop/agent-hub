@@ -3,6 +3,7 @@
 // 前后端都用这一个文件认附件、拼正文；接口地址在 api.ts 的 API_PATHS.uploads / upload。
 import { API_PATHS } from "./api.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_UPLOAD_BYTES } from "./limits.ts";
+import type { WorkerPick } from "./worker.ts";
 
 /** 一个上传好的文件。服务端从磁盘上的文件重新算出来，不信客户端报的（见 daemon/uploads.ts 的 resolveUpload）。 */
 export interface Attachment {
@@ -16,9 +17,13 @@ export interface Attachment {
   mime: string;
 }
 
-/** 用户消息的 meta：有附件时是 { attachments }；没有附件的用户消息 meta 还是 null（老消息就是这样）。 */
+/**
+ * 用户消息的 meta：有附件时有 attachments，输入框指定了派 Worker 的厂商、模型、思考程度时有 workerPick（shared/worker.ts）；
+ * 两样都没有的用户消息 meta 还是 null（老消息就是这样）。
+ */
 export interface UserMessageMeta {
-  attachments: Attachment[];
+  attachments?: Attachment[];
+  workerPick?: WorkerPick;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {

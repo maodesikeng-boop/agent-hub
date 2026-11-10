@@ -1,7 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ComposerSource, FILE_SEARCH_DEBOUNCE_MS, useComposerSuggest } from "./composer-suggest.ts";
-import { detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { HUB_COMPOSER_COMMANDS } from "../shared/index.ts";
+import { detectComposerTrigger, insertSelection, rankCommands, rankMatches, splitPath, WORKER_COMMAND } from "./composer-trigger.ts";
 import { queryClient } from "./query-client.ts";
 
 afterEach(() => {
@@ -37,6 +38,73 @@ describe("detectComposerTrigger：/ 命令", () => {
 
   it("光标在开头（/ 前面）不触发", () => {
     expect(detectComposerTrigger("/co", 0)).toBeNull();
+  });
+});
+
+describe("detectComposerTrigger：/hub:worker 的参数（一级一级选厂商、模型、思考程度）", () => {
+  const head = "/hub:worker ";
+  const at = (text: string) => detectComposerTrigger(text, text.length);
+
+  it("命令名从 shared 的 HUB_COMPOSER_COMMANDS 来", () => {
+    expect(WORKER_COMMAND).toBe("hub:worker");
+    expect(HUB_COMPOSER_COMMANDS.map((c) => c.name)).toContain(WORKER_COMMAND);
+  });
+
+  it("命令名后面打了空格：第 0 级（厂商），已选的为空，query 是正在打的词", () => {
+    expect(at(head)).toEqual({ kind: "worker", args: [], query: "", start: 12, end: 12 });
+    expect(at(`${head}co`)).toEqual({ kind: "worker", args: [], query: "co", start: 12, end: 14 });
+  });
+
+  it("第几级 = 前面已选了几个；第 1 级是模型，第 2 级是思考程度", () => {
+    expect(at(`${head}codex `)).toEqual({ kind: "worker", args: ["codex"], query: "", start: 18, end: 18 });
+    expect(at(`${head}codex gpt`)).toEqual({ kind: "worker", args: ["codex"], query: "gpt", start: 18, end: 21 });
+    expect(at(`${head}codex gpt-5.5 hi`)).toEqual({ kind: "worker", args: ["codex", "gpt-5.5"], query: "hi", start: 26, end: 28 });
+  });
+
+  it("三级都选完（后面带空格）就不再弹", () => {
+    expect(at(`${head}codex gpt-5.5 high `)).toBeNull();
+    expect(at(`${head}codex gpt-5.5 high 帮我修个 bug`)).toBeNull();
+  });
+
+  it("光标在半个词里：替换范围到这个词的末尾", () => {
+    const text = `${head}codex gpt-5.5`;
+    expect(detectComposerTrigger(text, 21)).toEqual({ kind: "worker", args: ["codex"], query: "gpt", start: 18, end: 25 });
+  });
+
+  it("Backspace 删到上一级：回到上一级的列表，删掉的那个词变成筛选词", () => {
+    expect(at(`${head}codex`)).toEqual({ kind: "worker", args: [], query: "codex", start: 12, end: 17 });
+    // 再删到命令名本身：回到命令列表
+    expect(at("/hub:worker")).toEqual({ kind: "command", query: "hub:worker", start: 0, end: 11 });
+  });
+
+  it("正文里的 /hub:worker 不触发（只认整条消息开头），换行后也不算参数", () => {
+    expect(at(`hi ${head}co`)).toBeNull();
+    expect(at(`第一行\n${head}co`)).toBeNull();
+    expect(at(`${head}codex\n正文`)).toBeNull();
+  });
+
+  it("两个空格连着（中间空了一级）不当参数", () => {
+    expect(at(`${head} codex`)).toBeNull();
+    expect(at(`${head}codex  gpt`)).toBeNull();
+  });
+
+  it("名字只是开头像（/hub:workers）不算", () => {
+    expect(at("/hub:workers co")).toBeNull();
+  });
+});
+
+describe("rankMatches", () => {
+  const rows = [
+    { id: "claude", label: "Claude Code", detail: "" },
+    { id: "codex", label: "Codex", detail: "" },
+    { id: "agy", label: "Antigravity", detail: "Not signed in" },
+  ];
+  it("几个名字（id、显示名）里任一开头命中排前，其次包含，最后说明里有", () => {
+    const names = (r: (typeof rows)[number]) => [r.id, r.label];
+    expect(rankMatches(rows, "c", names, (r) => r.detail).map((r) => r.id)).toEqual(["claude", "codex"]);
+    expect(rankMatches(rows, "anti", names, (r) => r.detail).map((r) => r.id)).toEqual(["agy"]);
+    expect(rankMatches(rows, "signed", names, (r) => r.detail).map((r) => r.id)).toEqual(["agy"]);
+    expect(rankMatches(rows, "", names, (r) => r.detail)).toBe(rows);
   });
 });
 

@@ -130,6 +130,18 @@ describe("postUserMessage", () => {
     expect(ledger.snapshot().conversations.find((c) => c.conversation.id === conversationId)!.messages.at(-1)!.meta).toEqual({ attachments: [attachment] });
   });
 
+  it("带 workerPick（项目经理对话）：meta.workerPick 记着，text 还是原文；和附件一起时两个都在 meta 里", () => {
+    const workerPick = { vendor: "codex" as const, model: "gpt-5.5", effort: "high" };
+    const { messageId } = ledger.postUserMessage({ conversationId, clientId: "p1", text: "拆三个并行做", workerPick });
+    const message = ledger.getMessage(messageId)!;
+    expect(message.text).toBe("拆三个并行做");
+    expect(message.meta).toEqual({ workerPick });
+    expect(changes.at(-1)).toMatchObject({ type: "message.created", data: { message: { meta: { workerPick } } } });
+    const attachment = { id: "0123456789abcdef", name: "a.txt", path: "/data/uploads/0123456789abcdef/a.txt", size: 1, mime: "application/octet-stream" };
+    const both = ledger.postUserMessage({ conversationId, clientId: "p2", text: "看", workerPick, attachments: [attachment] });
+    expect(ledger.getMessage(both.messageId)!.meta).toEqual({ attachments: [attachment], workerPick });
+  });
+
   it("只有文件没有文字：text 是空串，照样入队", () => {
     const attachment = { id: "0123456789abcdef", name: "a.txt", path: "/data/uploads/0123456789abcdef/a.txt", size: 1, mime: "application/octet-stream" };
     const { messageId } = ledger.postUserMessage({ conversationId, clientId: "f2", text: "", attachments: [attachment] });

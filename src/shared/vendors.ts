@@ -258,7 +258,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
     modelFlag: "--model",
     effortFlag: "--effort",
     flags: { model: "--model", effort: "--effort" },
-    // agy 的事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（分“Gemini”“Claude 和 GPT”两组）：
+    // agy 的事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（分“Gemini”“Claude and GPT”两组）：
     // 只在用户打开额度面板时问一次、结果缓存（FETCHED_QUOTA_FRESH_MS），不在后台轮询
     quota: {
       name: "Antigravity",
@@ -267,7 +267,7 @@ export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = {
         args: ["-p", "/usage"],
         groups: [
           { key: "gemini", name: "Gemini", match: "Gemini Models" },
-          { key: "claude_gpt", name: "Claude 和 GPT", match: "Claude and GPT models" },
+          { key: "claude_gpt", name: "Claude and GPT", match: "Claude and GPT models" },
         ],
         windows: { "Five Hour Limit Remaining": "five_hour", "Weekly Limit Remaining": "seven_day" },
       },

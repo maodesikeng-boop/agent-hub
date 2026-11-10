@@ -5,6 +5,8 @@ import { truncateChars } from "./domain.ts";
 import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
+import { isAgentVendor } from "./vendors.ts";
+import type { AgentVendor } from "./vendors.ts";
 
 export const REPORT_START = "=== 汇报 ===";
 export const REPORT_END = "=== 汇报结束 ===";
@@ -135,15 +137,53 @@ export function userToWorkerHeader(workerId: WorkerId, title: string): string {
 export const USER_TO_WORKER_TAG = "【用户直接对你说】";
 
 /**
+ * 用户在输入框用 /hub:worker 指定的“这条消息里派的 Worker 用什么”（PostMessageRequest.workerPick，存在消息的 meta.workerPick）。
+ * model、effort 是 null 表示 Default（项目经理自己定）。
+ */
+export interface WorkerPick {
+  vendor: AgentVendor;
+  model: string | null;
+  effort: string | null;
+}
+
+/** 给用户指定的参数句子起头的字（prompt.ts 的提示词里也提到它）。 */
+export const WORKER_PICK_NOTE_START = "【用户指定：";
+
+/**
+ * 交给项目经理的参数句子：写成 hub worker start 的参数，项目经理照抄；Default（null）的项不写。
+ * “【用户指定：这条消息里派的 Worker 用 --vendor codex --model gpt-5.5 --effort high】”。
+ */
+export function workerPickNote(pick: WorkerPick): string {
+  const flags = [`--vendor ${pick.vendor}`, ...(pick.model === null ? [] : [`--model ${pick.model}`]), ...(pick.effort === null ? [] : [`--effort ${pick.effort}`])];
+  return `${WORKER_PICK_NOTE_START}这条消息里派的 Worker 用 ${flags.join(" ")}】`;
+}
+
+/** 一条消息的 workerPick。没有这个字段的消息、meta 是 null、形状不对：当作没有（null），不抛错（和 attachmentsOf 一样宽松）。 */
+export function workerPickOf(message: { meta: Record<string, unknown> | null }): WorkerPick | null {
+  const raw = message.meta?.workerPick;
+  if (typeof raw !== "object" || raw === null) return null;
+  const { vendor, model, effort } = raw as Record<string, unknown>;
+  if (!isAgentVendor(vendor) || (model !== null && typeof model !== "string") || (effort !== null && typeof effort !== "string")) return null;
+  return { vendor, model, effort };
+}
+
+/**
  * 一条消息写给 agent 的内容（session.send 的处理函数用，交给 DriverSendInput 的 text、prefixes）：
  * - text：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf），原文以 / 开头的照样以 / 开头；
- * - prefixes：Worker 对话里用户说的（sender user、带 workerId）带 USER_TO_WORKER_TAG，驱动层把它放在原文前面单独一块
- *   （原文单独放最后一块，/ 命令才会被展开，见 docs/composer-commands.md 的 T4）；别的没有标签。
+ * - prefixes：驱动层把它们放在原文前面、各自单独一块（原文单独放最后一块，/ 命令才会被展开，见 docs/composer-commands.md 的 T4）：
+ *   Worker 对话里用户说的（sender user、带 workerId）带 USER_TO_WORKER_TAG；
+ *   用户消息带 workerPick（项目经理对话）再加 workerPickNote；别的没有标签。
  * 库里存的是原文，网页照原文显示。
  */
 export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
   const text = agentTextOf(message);
-  return { prefixes: message.workerId !== null && message.sender === "user" ? [USER_TO_WORKER_TAG] : [], text };
+  const prefixes: string[] = [];
+  if (message.sender === "user") {
+    if (message.workerId !== null) prefixes.push(USER_TO_WORKER_TAG);
+    const pick = workerPickOf(message);
+    if (pick !== null) prefixes.push(workerPickNote(pick));
+  }
+  return { prefixes, text };
 }
 
 const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {

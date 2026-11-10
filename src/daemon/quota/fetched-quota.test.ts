@@ -27,7 +27,7 @@ describe("parseFetchedQuota", () => {
         },
         {
           id: "claude_gpt",
-          name: "Claude 和 GPT",
+          name: "Claude and GPT",
           windows: {
             seven_day: { utilization: 0.6, resetsAt: Date.parse("2026-11-13T03:14:53Z") / 1000, status: "allowed" },
             five_hour: { utilization: 0.25, resetsAt: Date.parse("2026-11-07T18:23:21Z") / 1000, status: "allowed" },

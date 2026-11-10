@@ -172,6 +172,8 @@ export interface QuotaWindowUsage {
 export interface QuotaVendor {
   id: string;
   name: string;
+  /** 厂商下的模型族（按需查的 agy 分 Gemini、Claude and GPT 两组）；整家厂商一块的不写。 */
+  group?: string;
   /** 有数据的窗口，按厂商 quota.windows 里的顺序。 */
   windows: QuotaWindowUsage[];
   /** 额度用完了（isQuotaExhausted，取最近一次事件的那个会话）。 */
@@ -369,7 +371,7 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
 
 /**
  * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，shared/vendors.ts 的 quota.fetched）→ 浮层里的块：
- * 每一组一块（“厂商名 · 组名”），窗口按 QUOTA_WINDOWS 的顺序；认不出的组跳过。
+ * 每一组一块（name 是厂商名，group 是组名），窗口按 QUOTA_WINDOWS 的顺序；认不出的组跳过。
  */
 export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
@@ -377,12 +379,13 @@ export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()):
     const quota = VENDOR_SPECS[id].quota;
     if (quota?.fetched === undefined) continue;
     for (const group of res.groups) {
-      if (!quota.fetched.groups.some((g) => g.key === group.id)) continue;
+      const spec = quota.fetched.groups.find((g) => g.key === group.id);
+      if (spec === undefined) continue;
       const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
         const window = group.windows[key];
         return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
       });
-      if (windows.length > 0) blocks.push({ id: group.id, name: `${quota.name} · ${group.name}`, windows, exhausted: windows.some((w) => w.percent >= 100) });
+      if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: spec.name, windows, exhausted: windows.some((w) => w.percent >= 100) });
     }
   }
   return blocks;
