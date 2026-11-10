@@ -18,6 +18,9 @@ import { Client, agentTexts, messagesOf, waitForStatus, waitUntil } from "../../
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 
+/** 只有 Worker 的提示词里有的一句（daemon/prompt.ts 的 buildWorkerPrompt）：假 agy、codex 靠它认出自己是 Worker。 */
+const WORKER_PROMPT_MARK = "# 你的任务";
+
 function shortTmp(): string {
   const base = tmpdir();
   return base.length <= 40 || !existsSync("/tmp") ? base : "/tmp";
@@ -161,7 +164,8 @@ if (argv.includes("/skills")) {
 
 const convIdx = argv.indexOf("--conversation");
 const convId = convIdx !== -1 ? argv[convIdx + 1] : "agy-conv-" + randomUUID();
-const isWorker = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1";
+// 是不是 Worker 看提示词（agy 的提示词在首条消息最前面）：P4 起 Worker 专用的环境变量只有 claude 的 Worker 才设（A15）
+let isWorker = false;
 let inited = false;
 
 const rl = createInterface({ input: process.stdin });
@@ -176,6 +180,7 @@ rl.on("line", (line) => {
   out({ event: "step_update", step_update: { step_index: 0, step_type: "user_input", state: "DONE" } });
   const blocks = Array.isArray(msg.message?.content) ? msg.message.content.map((c) => c.text || "") : [];
   const lastText = blocks[blocks.length - 1] || "";
+  if (blocks.join("\\n").includes(${JSON.stringify(WORKER_PROMPT_MARK)})) isWorker = true;
   const reply = isWorker
     ? "Agy Worker 执行完毕\\n\\n${REPORT_START}\\n状态: 做完了\\n摘要: Agy Worker 顺利完成\\n提交: 无\\n测试: 通过\\n问题: 无\\n${REPORT_END}"
     : "Agy PM 收到：" + lastText;
@@ -210,7 +215,8 @@ const { createInterface } = require("node:readline");
 const { randomUUID } = require("node:crypto");
 
 const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
-const isWorker = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1";
+// 是不是 Worker 看 thread/start 的 developerInstructions（提示词）：P4 起 Worker 专用的环境变量只有 claude 的 Worker 才设（A15）
+let isWorker = false;
 let threadId = "thr-codex-" + randomUUID();
 
 const rl = createInterface({ input: process.stdin });
@@ -249,6 +255,7 @@ rl.on("line", (line) => {
   }
   if (req.method === "thread/start" || req.method === "thread/resume") {
     if (req.params?.threadId) threadId = req.params.threadId;
+    if ((req.params?.developerInstructions || "").includes(${JSON.stringify(WORKER_PROMPT_MARK)})) isWorker = true;
     out({ jsonrpc: "2.0", id: req.id, result: { thread: { id: threadId }, model: "gpt-5.4" } });
     out({ jsonrpc: "2.0", method: "thread/started", params: { thread: { id: threadId } } });
     return;
