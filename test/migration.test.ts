@@ -1158,7 +1158,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
     expect(db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_steps'")).toEqual({ n: 1 });
     expect(
       db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name NOT LIKE 'sqlite_%' ORDER BY name"),
-    ).toEqual([{ name: "messages_conversation" }, { name: "messages_session" }, { name: "messages_worker" }]);
+    ).toEqual([{ name: "messages_conversation" }, { name: "messages_session" }, { name: "messages_worker" }, { name: "messages_worker_lines" }]);
     expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'messages'")).toEqual({ seq });
     expect(db.get("SELECT count(*) AS n FROM sqlite_sequence WHERE name = 'messages_new'")).toEqual({ n: 0 });
 
