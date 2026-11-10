@@ -42,7 +42,7 @@ describe("带设备的网址", () => {
 it("push 标记 hub，replace 清除标记并支持列表", () => {
   const { result } = renderHook(useRoute);
   act(() => result.current.navigate({ view: "conversation", id: 1 }));
-  expect(history.state).toEqual({ hub: true });
+  expect(history.state).toEqual({ hub: true, previous: "" });
   act(() => result.current.replace(null));
   expect(history.state).toBeNull();
   expect(location.hash).toBe("");

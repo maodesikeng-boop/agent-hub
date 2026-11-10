@@ -402,7 +402,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - `useMediaQuery.ts` 的 `MOBILE_SHELL_QUERY` 是唯一分流条件：主指针 `coarse`，且窗口短边小于 600px；横屏同样使用手机外壳。鼠标窗口缩到 390px 仍用电脑外壳。
 - 首页网址为空，是整屏 `Sidebar layout="page"`，不自动选对话、不标选中底色。进入聊天时用 React 19 `Activity hidden` 保留列表 DOM、搜索和滚动位置。
-- 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 44px 返回箭头（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
+- 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 36px 返回箭头（触屏热区至少 44px）（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
 - Pieces 使用 `ui/drawer.tsx` 底部抽屉，共用 `RailGroups` 三组内容；没有 Piece 和提问时隐藏开关。新提问只亮点，不自动弹出；点行先关抽屉再导航，提问复用消息 focus。
-- 应用内 push 写 `history.state = { hub: true }`；replace 不写标记。返回时有标记用 `history.back()`，直达页面 replace 到上级（聊天到列表、Piece/资料到所属聊天）。无效路由 replace 到列表。
+- 层级：列表 → 聊天 → Piece/资料。进下一层 push，`history.state = { hub: true, previous: <上一页网址> }`；同层切换（Piece 切 Piece、聊天里跳到别的聊天）replace 当前条目并保留原 state；其余 replace 不写标记。顶栏返回只在 `previous` 正好是上级时 `history.back()`，否则 replace 到上级（聊天到列表、Piece/资料到所属聊天），直达、同层切换后都不循环。抽屉里点提问等同返回所属聊天。无效路由在目标设备快照就绪后 replace 到列表；刚新建、WebSocket 还没同步到的对话不算无效。路由、设备变化或抽屉内容消失时关闭抽屉。
 - 设置、新建弹窗和软键盘适配留到后续 PR5，本轮沿用已有组件。

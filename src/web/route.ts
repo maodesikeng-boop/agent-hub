@@ -57,7 +57,7 @@ export function useRoute() {
       window.removeEventListener("hashchange", sync);
     };
   }, []);
-  const go = useCallback((next: Route | null, replace: boolean) => {
+  const go = useCallback((next: Route | null, replace: boolean, sibling = false) => {
     const apply = () => setRoute((prev) => (sameRoute(prev, next) ? prev : next));
     // 用户点出来的切换对话（左栏点项目经理、点开 Piece、从 Piece 返回）：顶栏的头像和标题过渡一下；
     // 资料页没有这两样，刚打开时补默认对话（replace）也不播
@@ -65,10 +65,10 @@ export function useRoute() {
     else withViewTransition(apply);
     if (window.location.hash === (next === null ? "" : routeHash(next))) return;
     const url = `${window.location.pathname}${window.location.search}${next === null ? "" : routeHash(next)}`;
-    if (replace) window.history.replaceState(null, "", url);
-    else window.history.pushState({ hub: true }, "", url);
+    if (replace) window.history.replaceState(sibling ? window.history.state : null, "", url);
+    else window.history.pushState({ hub: true, previous: window.location.hash }, "", url);
   }, []);
-  const navigate = useCallback((next: Route) => go(next, false), [go]);
+  const navigate = useCallback((next: Route, sibling = false) => go(next, sibling, sibling), [go]);
   const replace = useCallback((next: Route | null) => go(next, true), [go]);
   return { route, navigate, replace };
 }

@@ -1,10 +1,9 @@
 import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
-import { MobileChat } from "./mobile/MobileChat.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { Conversation } from "./components/Conversation.tsx";
@@ -28,6 +27,9 @@ export function App() {
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { replace, qc, fleet, route, local, routedDevice, current, hub, state, content } = useShellModel({ autoSelect: !mobile });
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [route, current.key, content?.railHasContent, mobile]);
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return (
@@ -105,7 +107,7 @@ export function App() {
   const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
   const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
-  const leading = mobile ? <Button variant="ghost" size="icon" className="size-11 shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
+  const leading = mobile ? <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
   const rail = railOpen ? (
     <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} avatarKey={avatarKey} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
   ) : null;
@@ -152,10 +154,9 @@ export function App() {
         }}
       />
   );
-  const ChatMain = mobile ? MobileChat : "main";
   const chat = (
       <AccentScope colorKey={active?.avatarKey ?? null}>
-      <ChatMain className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
+      <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
         {deviceWaiting ? (
           <>
             <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
@@ -230,7 +231,7 @@ export function App() {
             <div className="flex flex-1 items-center justify-center text-muted-foreground">No conversations yet</div>
           </>
         )}
-      </ChatMain>
+      </main>
       {!mobile && !compact && rail}
       {mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} asks={railAsks} workers={railWorkers} openWorkerId={openWorker} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />}
       </AccentScope>
@@ -242,7 +243,7 @@ export function App() {
     <div className="relative flex h-full">
       {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；强调色 --primary 只在下面的 AccentScope 里 */}
       <FruitTint colorKey={active?.avatarKey ?? null}>
-      {mobile ? <MobileShell list={route === null} sidebar={sidebar}>{chat}</MobileShell> : <>{sidebar}{chat}</>}
+      <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
       <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
       </FruitTint>
     </div>

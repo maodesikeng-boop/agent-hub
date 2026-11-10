@@ -2,6 +2,19 @@
 
 2026-11-10，本机 Chromium，production build，隔离 HTTP/WebSocket 假实例 `127.0.0.1:4398`。未连接用户 4317、东京或现有模拟器。原始数字见 [measurements.json](./measurements.json)。
 
+## #305 审查修复（Worker #307 改，#309 核对后提交）
+
+2026-11-10，基于 head `06c1d176c26e1878e690f531ae8ba55fbea82229`。下方原始 2213ms 记录只来自约 16KB 假快照，不代表真实账户弱网首屏或 PWA 网络成本。
+
+- 先失败：新建 HTTP 成功早于 WS 时 URL 被清空；远端清单/目标快照未到时远端 URL 被本机 ready 状态清空；同 PM 切 Piece 后顶栏返回盲目 `history.back()`。把 `shell-model.ts` 换回旧版，这 3 条新测试都失败。
+- 路由校验：等入口 shell 和目标设备快照都 ready 才判无效；HTTP 新建成功只记一个待同步槽（React state），所属条目同步或离开该网址即释放，无超时、轮询、集合增长。真实无效编号在目标快照到达后仍 replace 到列表。
+- 历史：push 记 `previous`（前一页网址）；顶栏返回只在 `previous` 等于上级时 `history.back()`，否则 replace 到上级。手机同层（PM↔PM、Piece↔Piece）切换 replace 当前条目并保留 state；抽屉提问回 PM 走同一返回逻辑。
+- 抽屉随路由、设备、内容可用性和手机模式变化关闭。删 `MobileChat`，电脑也经过 `MobileShell`（`display: contents`），断点切换后输入框仍是同一 DOM 节点。返回按钮 `size="icon"`（标准档 36px，默认 Large 档 39.375px），`touch-target` 热区 44px；leading 注释已更新。
+- 本机 `pnpm typecheck`、11 个相关测试文件 234 条、`pnpm build`、`git diff --check` 通过（mobile-shell、mobile/back、shell、route、App、sidebar-layout、right-rail、composer-wiring、selectors-cache、ui-standard、devices）。
+- production 页面在隔离假 HTTP/WS `127.0.0.1:4409` 用 390×844 触屏验证：列表→PM→Piece→同 PM 切 Piece（history.length 不变）→返回→PM→返回→列表；PM→Piece→抽屉点提问→回 PM 并高亮该消息→浏览器后退→列表；抽屉开着浏览器后退→进无 Piece 的 PM，无抽屉、无开关→返回列表；直达 `#/w/301`→返回 `#/c/70`→返回列表。全程页面异常 0、导航新增 `/api/state` 请求 0，没有循环。截图 [309-drawer](./309-drawer.png)、[309-piece](./309-piece.png)、[309-ask-pm](./309-ask-pm.png)、[309-empty-pm](./309-empty-pm.png) 已逐张查看。
+- 效率：未新增全量请求、定时器、轮询、订阅或无界集合；只多一个新建待同步槽和每条历史一个前页字符串。300 Worker/约 3 万消息的 selectors-cache 守卫通过，未改 Messages/selectors。
+- 限制：真机、PWA 系统返回手势、真实远端网络及软键盘未验证；键盘与整屏设置留 PR5。
+
 ## 行为与截图
 
 390×844、hasTouch/isMobile，实际 `matchMedia('(pointer: coarse)').matches === true`。安全区模拟为顶部 59px、底部 34px。列表 11 行；输入框底边距 42px = 34 + 8，未聚焦，页面宽 390px。返回后列表是同一 DOM 节点，scrollTop 保持 120px；列表→聊天→Piece→资料→返回期间新增 `/api/state` 请求 0。
