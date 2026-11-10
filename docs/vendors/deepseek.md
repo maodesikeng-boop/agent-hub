@@ -67,7 +67,7 @@
    ```json
    { "code": -32602, "message": "Invalid params: additionalDirectories is not supported" }
    ```
-   因此 `src/vendors/deepseek/driver.ts` 在传给通用 `createAcpDriver` 的会话视图中将 `addDirs` 置空（避免发送 `additionalDirectories`），同时在 Linux 只读沙箱启动前保留对原始 `row.addDirs` 的 `scanSecretGlobs` 扫描；多目录访问权限由 `danger-full-access`（PM 无外层限制 / Worker 由 `writeScope` 放行可读）自然覆盖。
+   `initialize` 回的 `sessionCapabilities` 里也没有 `additionalDirectories`。通用 ACP 驱动（`src/vendors/_common/acp/driver.ts`）只在 agent 声明了 `sessionCapabilities.additionalDirectories` 时才带这个字段，所以 dsh 收不到；Linux 只读沙箱照常按 `row.addDirs` 扫敏感文件。多目录访问由 `danger-full-access`（项目经理无外层限制 / Worker 由 `writeScope` 放行可读）覆盖。
 2. **跨进程续接 `session/resume`**：
    - `session/resume` 直接原地恢复磁盘会话状态并返回 `{ configOptions }`，**不会重放历史消息事件**。
    - 当会话 ID 在磁盘不存在时，`dsh-acp` 返回 `-32602`：`Invalid params: session is not resumable: <sessionId>`。`driver.ts` 在 `errors.isSessionNotFoundError` 中额外匹配 `session is not resumable`，配合 `continuation: { mode: "resume", fallbackToNewOnFailure: true }` 自动回退 `session/new`。
@@ -99,21 +99,31 @@
 ## 4. `$DSH_HOME` 目录结构、凭据隔离与只读沙箱
 
 - **主目录解析（`@deepseek-ai/dsh-home-paths`）**：优先读环境变量 `$DSH_HOME`，未设置时默认 `~/.dsh`（已在 `spec.home.configHome` 声明 `{ rel: ".dsh", env: "DSH_HOME" }`）。
-- **凭据存储（`@deepseek-ai/dsh-credentials-local` & `dsh-app-boot`）**：
+- **凭据存储（`@deepseek-ai/dsh-credentials-local` & `dsh-app-boot`）**，优先级从高到低：
   1. `$DSH_HOME/.credentials.yaml`（权限强制 `0600`，存 `refs` API Key 与 `records` 网页登录令牌 grant）；
   2. 进程继承环境变量（`DEEPSEEK_API_KEY`）；
-  3. `<cwd>/.env` 与 `$DSH_HOME/.env`（fallback）。
+  3. `<进程 cwd>/.env`（项目层，`dsh-app-boot` 的 `loadLayeredEnv`）；
+  4. `$DSH_HOME/.env`。
+- **工作区 `.env` 与工作区配置（核对 `dsh@0.2.2-rc.1` 源码）**：
+  - dsh 以 Worker 的工作目录为进程 cwd 启动，会读 `<cwd>/.env`。`dsh-app-boot` 的 `BOOTSTRAP_NAMES` / `BOOTSTRAP_PREFIXES` 禁止项目 `.env` 设 `DEEPSEEK_BASE_URL`、`DEEPSEEK_SEARCH_BASE_URL`、`DSH_*`、`HTTP(S)_PROXY`、`NODE_OPTIONS`、`SSL_CERT_*`、`GIT_SSH*` 等，出现即启动失败，所以恶意仓库改不了请求发往的地址，偷不走 key。
+  - 项目 `.env` 能设 `DEEPSEEK_API_KEY`，且排在 `$DSH_HOME/.env` 前面（dsh 的设计是信任启动它的项目）：key 只写在 `$DSH_HOME/.env` 时，仓库里的 `.env` 能换成别的 key。要防这一点，把 key 存进 `.credentials.yaml`（`dsh` 交互登录或网页的 Models 页）或导出到守护进程的环境变量，这两处都排在项目 `.env` 前面。
+  - 只读 Worker 的外层沙箱禁读 `**/.env`，工作区 `.env` 读不到（dsh 只打一行警告）。
+  - 工作区里 dsh 还会自动读 `AGENTS.md`、`CLAUDE.md`、`.dsh/skills`、`.agents/skills`（只是提示词）；不读工作区级的 `cordis.patch.yml`、MCP 配置或钩子。MCP 服务器只来自 ACP `session/new` 的 `mcpServers`（驱动传 `[]`）。
 - **敏感路径与 worktree `setup` 环境变量剥离**：
   - `spec.home.readonlySecrets`: `[".dsh/.credentials.yaml", ".dsh/.env"]`（阻止其他厂商的只读 Worker 读取 DeepSeek 凭据）。
   - `spec.home.catalogWatchPaths`: `[".dsh/.credentials.yaml", ".dsh/.env", ".dsh/cordis.patch.yml"]`（监听本地凭据与配置指纹，支持 `DSH_HOME` 重定向；`daemon.ts` 不设 `catalog` 以避免创建持久空会话）。
-  - `paths.ts` `credentialEnv`: `names: ["DEEPSEEK_API_KEY"]`，`prefixes: ["DEEPSEEK_", "DSH_API_"]`（仅剥离 DeepSeek 专属凭据，保留 `GH_TOKEN`、`GITHUB_TOKEN`、`AWS_SECRET_ACCESS_KEY`、`OPENAI_BASE_URL` 等通用开发变量）。
+  - `paths.ts` `credentialEnv`: `names: ["DEEPSEEK_API_KEY"]`。dsh 只从这个变量取密钥（各处 `apiKeyEnv` 的默认值）；`DEEPSEEK_BASE_URL` 这类非密钥配置和 `GH_TOKEN`、`AWS_*`、`OPENAI_BASE_URL` 一样照常传给准备命令（`setup.test.ts` 的 A13）。
   - `paths.ts` `parentSessionEnv`: `["DSH_SHELL", "DSH_SESSION_ID", "DSH_PROFILE", "DSH_PROFILE_DIR"]`（来自 `@deepseek-ai/dsh-shell-env`，保留 `DSH_HOME` 不剥离）。
 - **会话持久化格式（`@deepseek-ai/dsh-session-persistence-jsonl`）**：
-  - 路径位于 `$DSH_HOME/sessions/<encoded-cwd>/<timestamp>_<uuid>.v4.jsonl.zstd`，采用 Zstandard 二进制压缩帧存储，非跨厂商可直接读取的明文 JSONL；因此不设 `transcript.ts`，`spec.handover.transcriptPortable` 设为 `false`，跨厂商换会话自动走 Fusa 账本摘要降级。
-- **只读 Worker（`readonly: "os_sandbox"`）适配**：
-  - 启动 `dsh --profile acp` 时会在 `$DSH_HOME` 下写入运行时非敏感子目录：`profiles`（每次启动重写 `profiles/acp/cordis.yml`）、`sessions`、`storages`、`cache`、`spill`、`jobs`、`attachments`、`llm-deepseek` 及匿名统计 ID `.anonymous-user-id`。
-  - `readonlySandbox` 放行上述子目录与 `.anonymous-user-id` 可写，但**不放行 `$DSH_HOME` 根目录可写**（防止篡改 `.credentials.yaml` / `.env` / `cordis.patch.yml`）。
-  - 注意 `@deepseek-ai/dsh-credentials-local` 在启动期 `loadInitial()` 会 `stat` 并读取 `$DSH_HOME/.credentials.yaml`：若存在但被沙箱禁读（macOS `EPERM` 或 Linux `/dev/null` `0666` 遮盖），`assertOwnerOnly` 会直接抛错终止进程。因此同 `agy` 放行自身 Keychain 读取一样，`deepseek` 的外层只读沙箱对自身 `.dsh/.credentials.yaml` 与 `.dsh/.env` 保留只读（禁写），内置写工具（`write`、`edit`、`apply_patch` 等）与非 `readOnlyHint: true` 的 MCP 工具由外层只读 OS 沙箱 + ACP `decideAcpPermission` 双重拦截。
+  - 路径位于 `$DSH_HOME/sessions/<encoded-cwd>/<uuid>/session.v4.jsonl.zstd`，采用 Zstandard 二进制压缩帧存储，非跨厂商可直接读取的明文 JSONL；因此不设 `transcript.ts`，`spec.handover.transcriptPortable` 设为 `false`，跨厂商换会话自动走 Fusa 账本摘要降级。
+- **只读 Worker（`readonly: "os_sandbox"`）**：
+  - `$DSH_HOME/profiles/acp/` 不能给只读 Worker 写：`cordis.patch.yml` 是这个 profile 的用户补丁层，允许 `!!js` 表达式，`node_modules` 是插件，项目经理和普通 Worker 下次起 dsh 都会加载执行。`$DSH_HOME/storages/` 也不能写：dsh 的定时任务（`dsh-schedule`）、工作区记录存在这里，别的 profile（桌面版、网页版）会读来执行。
+  - 实测（真实 dsh + 临时 `DSH_HOME`）：profile 已初始化时，一次启动加一轮对话在共享 `$DSH_HOME` 下只写 `profiles/acp/cordis.yml`（每次启动先重写成空列表再加载）、`.anonymous-user-id`；会话记录、KV 存储、附件的位置都能用 `--patch` 改（`session-persistence-jsonl.root`、`storage-json.root`、`attachment-local.dshHome`）；`jobs`、`spill` 在 `TMPDIR` 下。
+  - 所以只读 Worker：多加一个 `--patch <启动目录>/dsh-readonly.patch.json`，把这三样改到会话私有的 `<启动目录>/dsh-readonly-state/`（在启动目录不在 `TMPDIR`，恢复会话要用）；共享 `$DSH_HOME` 下只放行 `llm-deepseek/`（图片上传索引）目录和 `profiles/acp/cordis.yml`、`.anonymous-user-id` 两个文件可写，根目录、`profiles/`、`storages/`、`sessions/` 都不可写。
+  - profile 还没初始化时只读沙箱里建不了，驱动先在沙箱外跑一次 `dsh --profile acp --dump-config`（只建 profile、打印配置就退出，不起会话、cwd 是启动目录、不读工作区 `.env`）。
+  - 自身凭据：`dsh-credentials-local` 启动时读 `$DSH_HOME/.credentials.yaml`，禁读会报 `EPERM` 终止；key 只写在 `$DSH_HOME/.env` 时也得读得到。`readonlySandbox.readableFiles` 把这两个文件从禁读路径里去掉，seatbelt 在 `**/.env` 禁读规则之后加一条 `allow file-read*`（bwrap 不遮成 `/dev/null`）；它们不在任何可写规则里，写不了。工作区和别处的 `.env`、别家凭据照常禁读。代价同 agy 放行自身 Keychain、pi 放行 `auth.json`：只读 Worker 的 shell 能读到 DeepSeek 自己的 key。
+  - 内置写工具（`write`、`edit`、`apply_patch` 等）与非 `readOnlyHint: true` 的 MCP 工具由外层只读 OS 沙箱 + ACP `decideAcpPermission` 双重拦截。
+- **残留进程清理**：`matchesDeepSeekStaleProcess` 只认命令行里带本会话启动目录 `/launch/<会话号>/` 的 `dsh --profile acp`，用户自己在终端开的 `dsh` 不会被当成残留进程杀掉。
 
 ---
 

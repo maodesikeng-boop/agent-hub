@@ -496,7 +496,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     throw new DriverError("spawn_failed", detail);
   }
 
-  #buildReadonlySandboxInput(row: AgentSessionRow, policy: ReadonlyPolicy): {
+  #buildReadonlySandboxInput(launch: AcpLaunchContext, policy: ReadonlyPolicy): {
     input: ReadonlySandboxInput;
     cleanupTmp: () => void;
   } {
@@ -513,6 +513,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       }
     };
 
+    const { row } = launch;
     const homeDir = realpathOrSelf(homedir());
     const realCwd = realpathOrSelf(row.cwd);
     const defaultCaches = [
@@ -520,7 +521,8 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       join(homeDir, "Library", "Caches"),
       join(homeDir, ".npm"),
     ];
-    const extraDirs = this.#config.readonlySandbox?.writableDirs?.(homeDir, realCwd) ?? [];
+    const sandboxCfg = this.#config.readonlySandbox;
+    const extraDirs = sandboxCfg?.writableDirs?.(homeDir, realCwd, launch) ?? [];
     const writableDirs = [
       ...new Set(
         [...defaultCaches, ...extraDirs]
@@ -529,10 +531,11 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       ),
     ];
     const writableFileGlobs = [
-      ...(this.#config.readonlySandbox?.writableFileGlobs?.(homeDir, realCwd) ?? []),
+      ...(sandboxCfg?.writableFileGlobs?.(homeDir, realCwd, launch) ?? []),
     ];
+    const readableFiles = [...new Set((sandboxCfg?.readableFiles?.(homeDir) ?? []).map(realpathOrSelf))];
 
-    const secretPaths =
+    const allSecretPaths =
       process.platform === "linux"
         ? [
             ...new Set([
@@ -541,6 +544,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
             ]),
           ]
         : policy.secretPaths.map(realpathOrSelf);
+    const secretPaths = allSecretPaths.filter((p) => !readableFiles.includes(p));
 
     return {
       input: {
@@ -550,6 +554,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         writableFileRegexes: [],
         secretPaths,
         secretGlobs: [...policy.secretGlobs],
+        ...(readableFiles.length > 0 ? { readableFiles } : {}),
       },
       cleanupTmp,
     };
@@ -574,7 +579,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     const extraEnv: Record<string, string> = { ...files.env };
 
     if (files.readonly) {
-      const { input, cleanupTmp } = this.#buildReadonlySandboxInput(row, files.readonly);
+      const { input, cleanupTmp } = this.#buildReadonlySandboxInput(launchCtx, files.readonly);
       cleanupReadonlyTmp = cleanupTmp;
       const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
       const wrapped = this.#readonlySpawn(
@@ -785,7 +790,11 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           : mcpServersCfg
             ? [...mcpServersCfg]
             : [];
-      const additionalDirectories = row.addDirs.length > 0 ? [...row.addDirs] : undefined;
+      // 只有 agent 声明支持才带（ACP sessionCapabilities.additionalDirectories），不支持的会回 -32602
+      const additionalDirectories =
+        row.addDirs.length > 0 && init.agentCapabilities?.sessionCapabilities?.additionalDirectories
+          ? [...row.addDirs]
+          : undefined;
 
       const injection = this.#config.session?.systemPromptInjection ?? "first_turn_new_session";
       const supportsNativeSystemPrompt = Boolean(

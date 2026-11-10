@@ -41,6 +41,7 @@ import {
   buildDeepSeekPatchSettings,
   classifyDeepSeekTurnError,
   createDeepSeekDriver,
+  ensureDeepSeekProfile,
   isDeepSeekSessionNotFoundError,
   matchesDeepSeekStaleProcess,
   parseDeepSeekModelSpec,
@@ -127,7 +128,9 @@ function makeDeepSeekHarness(options: {
   const logDir = join(dir, "logs");
   const stateDir = join(dir, "state");
   mkdirSync(cwd, { recursive: true });
-  mkdirSync(dshHome, { recursive: true });
+  // profile 已初始化：只读启动不再去跑 dsh --dump-config（ensureDeepSeekProfile 单独测）
+  mkdirSync(join(dshHome, "profiles", "acp"), { recursive: true });
+  writeFileSync(join(dshHome, "profiles", "acp", "package.json"), "{}\n");
   mkdirSync(logDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
 
@@ -400,18 +403,14 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
     expect(linuxPaths).toContain("/home/linuxbrew/.linuxbrew/bin/dsh");
   });
 
-  it("buildSetupEnv 仅剥离 DeepSeek 专属凭据与 dsh 子 shell 会话变量，严格保留 GH_TOKEN / AWS / OPENAI_BASE_URL / DSH_HOME", () => {
-    expect(credentialEnv).toEqual({
-      names: ["DEEPSEEK_API_KEY"],
-      prefixes: ["DEEPSEEK_", "DSH_API_"],
-    });
+  it("buildSetupEnv 只剥离 DEEPSEEK_API_KEY 与 dsh 子 shell 会话变量，DEEPSEEK_BASE_URL、GH_TOKEN、AWS、OPENAI_BASE_URL、DSH_HOME 照常保留", () => {
+    expect(credentialEnv).toEqual({ names: ["DEEPSEEK_API_KEY"] });
     expect(parentSessionEnv).toEqual(["DSH_SHELL", "DSH_SESSION_ID", "DSH_PROFILE", "DSH_PROFILE_DIR"]);
 
     const baseEnv = {
       DEEPSEEK_API_KEY: "sk-secret",
       deepseek_api_key: "sk-lower",
-      DEEPSEEK_BASE_URL: "https://secret-proxy.example",
-      DSH_API_TOKEN: "tok-secret",
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
       DSH_SHELL: "1",
       DSH_SESSION_ID: "sess-parent",
       DSH_PROFILE: "acp",
@@ -426,6 +425,7 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
     };
     const out = buildSetupEnv(baseEnv, { rootPath: "/repo", worktreePath: "/repo-wt" });
     expect(out).toEqual({
+      DEEPSEEK_BASE_URL: "https://api.deepseek.com",
       DSH_HOME: "/Users/dev/.dsh-custom",
       GH_TOKEN: "ghp_keep",
       GITHUB_TOKEN: "ghs_keep",
@@ -761,19 +761,31 @@ rl.on("line", (line) => {
 
     expect(h.readonlySpawns).toHaveLength(1);
     const spawned = h.readonlySpawns[0]!;
-    // 内部仍传 --profile acp --patch <settings.json>（danger-full-access），避免嵌套沙箱冲突
-    expect(spawned.args.slice(0, 3)).toEqual(["--profile", "acp", "--patch"]);
+    const dshHome = realpathSync(h.dshHome);
+    const launchDir = h.launchDirOf(row.id);
+    const stateDir = join(launchDir, "dsh-readonly-state");
+    const readonlyPatchPath = join(launchDir, "dsh-readonly.patch.json");
+    // 内部仍传 --profile acp --patch <settings.json>（danger-full-access），再加把会话记录、KV 存储改到会话私有目录的 patch
+    expect(spawned.args).toEqual(["--profile", "acp", "--patch", join(launchDir, "settings.json"), "--patch", readonlyPatchPath]);
+    expect(JSON.parse(readFileSync(readonlyPatchPath, "utf8"))).toEqual([
+      { id: "session-persistence-jsonl", config: { root: join(stateDir, "sessions") } },
+      { id: "storage-json", config: { root: join(stateDir, "storages") } },
+      { id: "attachment-local", config: { dshHome: stateDir } },
+    ]);
 
-    // .dsh 运行时非敏感子目录全部加入可写目录，但 .dsh 根目录绝不可写（防止篡改 .credentials.yaml / cordis.patch.yml）
-    for (const sub of DEEPSEEK_READONLY_RUNTIME_SUBDIRS) {
-      expect(spawned.input.writableDirs).toContain(realpathSync(join(h.dshHome, sub)));
-    }
-    expect(spawned.input.writableDirs).not.toContain(realpathSync(h.dshHome));
-    expect(spawned.input.writableFileGlobs).toContain(join(realpathSync(h.dshHome), ".anonymous-user-id"));
+    // 共享 $DSH_HOME 只有图片上传索引目录可写；profiles（cordis.patch.yml 可写 !!js）、storages、sessions、jobs 和根目录都不可写
+    expect(DEEPSEEK_READONLY_RUNTIME_SUBDIRS).toEqual(["llm-deepseek"]);
+    const dshWritable = spawned.input.writableDirs.filter((d) => d === dshHome || d.startsWith(`${dshHome}/`));
+    expect(dshWritable).toEqual([join(dshHome, "llm-deepseek")]);
+    expect(spawned.input.writableDirs).toContain(stateDir);
+    expect(spawned.input.writableFileGlobs).toEqual([join(dshHome, "profiles", "acp", "cordis.yml"), join(dshHome, ".anonymous-user-id")]);
 
-    // 自身的 .credentials.yaml 从只读禁读列表移除（保留只读、禁写，防 dsh-credentials-local 启动期 EPERM/0666 报错），别家敏感文件仍在禁读列表
+    // 自身的 .credentials.yaml、.env 放行读（盖过 **/.env 通配，仍不可写），别家敏感文件仍禁读
+    expect(spawned.input.readableFiles).toEqual([realpathSync(ownCredFile), realpathSync(ownEnvFile)]);
     expect(spawned.input.secretPaths).not.toContain(realpathSync(ownCredFile));
+    expect(spawned.input.secretPaths).not.toContain(realpathSync(ownEnvFile));
     expect(spawned.input.secretPaths).toContain(otherVendorSecret);
+    expect(spawned.input.secretGlobs).toContain("**/.env");
 
     // 核对 ACP request_permission 裁决结果
     const outcomes = Object.fromEntries(
@@ -794,6 +806,27 @@ rl.on("line", (line) => {
     expect(DEEPSEEK_WRITE_TOOL_NAMES).toEqual(
       expect.arrayContaining(["write", "edit", "apply_patch", "todo_write", "create_goal", "pwsh"]),
     );
+  });
+
+  it("ensureDeepSeekProfile：profile 没初始化时在沙箱外跑一次 dsh --profile acp --dump-config，已初始化不再跑", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-hub-dsh-init-")));
+    try {
+      const dshHome = join(dir, "dsh-home");
+      const calls = join(dir, "calls.log");
+      const fakeDsh = join(dir, "dsh");
+      writeFileSync(
+        fakeDsh,
+        `#!/bin/sh\necho "$PWD $*" >> ${calls}\nmkdir -p "$DSH_HOME/profiles/acp" && echo '{}' > "$DSH_HOME/profiles/acp/package.json"\n`,
+      );
+      chmodSync(fakeDsh, 0o755);
+      const env = { ...process.env, DSH_HOME: dshHome };
+      ensureDeepSeekProfile(fakeDsh, dshHome, env, dir);
+      ensureDeepSeekProfile(fakeDsh, dshHome, env, dir);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([`${dir} --profile acp --dump-config`]);
+      expect(existsSync(join(dshHome, "profiles", "acp", "package.json"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("认证缺失/失效、HTTP 402 余额不足与 429 限流错误精准归类到 DeepSeek", async () => {
@@ -892,7 +925,7 @@ rl.on("line", (line) => {
     expect(await waitForExit(orphanPid, 2_000)).toBe(true);
     expect(isAlive(orphanPid)).toBe(false);
 
-    // 孤儿进程命令行识别：仅匹配 `--profile acp` 且同会话（或无 launch/<id> 冲突）的 dsh 进程
+    // 孤儿进程命令行识别：只认 `--profile acp` 且命令行里有本会话启动目录 launch/<id>/ 的 dsh 进程
     expect(
       matchesDeepSeekStaleProcess(
         `/usr/local/bin/dsh --profile acp --patch /tmp/x/launch/${crashRow.id}/settings.json`,
@@ -908,5 +941,8 @@ rl.on("line", (line) => {
       ),
     ).toBe(false);
     expect(matchesDeepSeekStaleProcess("/usr/local/bin/dsh", crashRow, "/usr/local/bin/dsh")).toBe(false);
+    // 用户自己在终端开的 dsh --profile acp（没有本会话的启动目录）不能当残留进程杀
+    expect(matchesDeepSeekStaleProcess("/usr/local/bin/dsh --profile acp", crashRow, "/usr/local/bin/dsh")).toBe(false);
+    expect(matchesDeepSeekStaleProcess("node /opt/homebrew/bin/dsh --profile acp --patch ./mine.yml", crashRow, "/opt/homebrew/bin/dsh")).toBe(false);
   });
 });

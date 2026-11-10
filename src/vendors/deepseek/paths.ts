@@ -50,10 +50,7 @@ export const parentSessionEnv: VendorPathsModule["parentSessionEnv"] = [
   "DSH_PROFILE_DIR",
 ];
 
-/**
- * 仅剥离 DeepSeek 专属凭据，绝不触碰 GH_TOKEN / GITHUB_TOKEN / AWS_SECRET_ACCESS_KEY / OPENAI_BASE_URL 等通用变量。
- */
+/** dsh 只从 DEEPSEEK_API_KEY 取密钥（apiKeyEnv 默认值）；DEEPSEEK_BASE_URL 这类非密钥配置照常传给准备命令。 */
 export const credentialEnv: VendorPathsModule["credentialEnv"] = {
   names: ["DEEPSEEK_API_KEY"],
-  prefixes: ["DEEPSEEK_", "DSH_API_"],
 };

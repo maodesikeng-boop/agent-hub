@@ -316,6 +316,13 @@ describe("readonlySeatbeltProfile", () => {
     ]);
   });
 
+  it("readableFiles：这家自己的凭据文件在所有禁读规则之后放行读（盖过 **/.env），写仍按前面的规则禁止", () => {
+    const lines = readonlySeatbeltProfile({ ...roInput, readableFiles: ["/Users/u/.dsh/.env"] }).split("\n");
+    expect(lines.at(-1)).toBe('(allow file-read* (literal "/Users/u/.dsh/.env"))');
+    expect(lines.indexOf('(deny file-read* (regex #"/\\.env$"))')).toBeLessThan(lines.length - 1);
+    expect(lines.filter((l) => l.startsWith("(allow file-write*")).some((l) => l.includes(".dsh"))).toBe(false);
+  });
+
   it("密钥通配转正则：开头的 **/ 去掉，* 不跨目录，点要转义", () => {
     expect(secretGlobRegex("**/.env")).toBe("/\\.env$");
     expect(secretGlobRegex("**/*.pem")).toBe("/[^/]*\\.pem$");
@@ -437,6 +444,10 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
         "--x",
         "y",
       ]);
+      // readableFiles 里的文件不遮成 /dev/null（自身凭据要读得到），也不 --bind（写不了）
+      const withReadable = readonlyBwrapArgs(base, { ...input, readableFiles: [secretFile] }, { uid: 1002 });
+      expect(withReadable).not.toContain(secretFile);
+      expect(withReadable).toContain(secretSubdir);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

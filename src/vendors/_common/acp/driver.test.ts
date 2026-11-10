@@ -437,6 +437,19 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(h.logs().some((e) => e.event === "session/close")).toBe(true);
   });
 
+  it("additionalDirectories 只在 agent 声明 sessionCapabilities.additionalDirectories 时随 session/new 带上", async () => {
+    for (const capable of [true, false]) {
+      const h = track(makeAcpHarness({ script: { additionalDirectoriesCapability: capable, turns: [{ textChunks: ["ok"] }] } }));
+      const extra = join(h.dir, "extra");
+      mkdirSync(extra);
+      const row = h.addSession({ addDirs: [extra] });
+      await h.driver.send(row.id, { messageIds: [12 as never], source: "user", text: "hi" });
+      await h.waitFor("turn.ended");
+      const params = h.logs().find((e) => e.event === "session/new")?.params as Record<string, unknown>;
+      expect(params.additionalDirectories).toEqual(capable ? [extra] : undefined);
+    }
+  });
+
   it("queued_turn：一轮忙时收到的多条用户消息进入待发队列（去重幂等），本轮结束后自动合并发送", async () => {
     const h = track(
       makeAcpHarness({

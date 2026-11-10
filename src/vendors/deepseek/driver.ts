@@ -1,14 +1,10 @@
 // DeepSeek Harness（`dsh --profile acp`）会话驱动：基于通用 ACP 驱动底座（src/vendors/_common/acp/）的薄封装。
 // 核实细节与出处见 docs/vendors/deepseek.md。
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import {
-  scanSecretGlobs,
-  wrapInReadonlyOsSandbox,
-  type ReadonlySandboxInput,
-} from "../../daemon/driver/write-scope.ts";
-import type { AgentSessionRow, Driver, SessionId, SessionStore } from "../../shared/index.ts";
+import type { AgentSessionRow, Driver, LaunchFiles } from "../../shared/index.ts";
+import { DEEPSEEK_PROFILE_INIT_TIMEOUT_MS } from "../../shared/limits.ts";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import {
   createAcpDriver,
@@ -40,17 +36,25 @@ export const DEEPSEEK_SANDBOX_PATCH_ENTRIES: readonly DeepSeekCordisPatchEntry[]
 /** dsh 默认官方 API 路由名（@deepseek-ai/dsh-acp 默认 provider）。 */
 export const DEEPSEEK_DEFAULT_PROVIDER = "deepseek-official";
 
-/** 只读 Worker 下 dsh --profile acp 运行时需可写的非敏感子目录（相对 $DSH_HOME，不含根目录与凭据文件）。 */
-export const DEEPSEEK_READONLY_RUNTIME_SUBDIRS: readonly string[] = [
-  "profiles",
-  "sessions",
-  "storages",
-  "cache",
-  "spill",
-  "jobs",
-  "attachments",
-  "llm-deepseek",
-];
+/** 驱动起的 dsh profile（$DSH_HOME/profiles/acp）。 */
+const DEEPSEEK_PROFILE = "acp";
+
+/**
+ * 只读 Worker 在共享 $DSH_HOME 下能写的子目录：只有图片上传索引（llm-deepseek/files-v3.json，纯数据）。
+ * profiles/（cordis.patch.yml 可写 !!js、node_modules 是插件）和 storages/（别的 profile 的定时任务存在这）不放，
+ * 不然只读 Worker 改了它们，下次项目经理或普通 Worker 起 dsh 时就会执行；会话记录和 KV 存储改到会话私有目录（readonlyStatePatch）。
+ * jobs、spill 在 TMPDIR 下（会话私有临时目录），不用放。
+ */
+export const DEEPSEEK_READONLY_RUNTIME_SUBDIRS: readonly string[] = ["llm-deepseek"];
+
+/** 只读 Worker 在共享 $DSH_HOME 下能写的单个文件：dsh 每次启动都把 profile 的根配置重写成空列表；匿名用户 ID。 */
+export const DEEPSEEK_READONLY_RUNTIME_FILES: readonly string[] = [`profiles/${DEEPSEEK_PROFILE}/cordis.yml`, ".anonymous-user-id"];
+
+/** dsh 启动要读的自身凭据（相对 $DSH_HOME，dsh-credentials-local、dsh-app-boot 的 loadLayeredEnv）：只读 Worker 放行读，仍不可写。 */
+export const DEEPSEEK_SELF_CREDENTIAL_FILES: readonly string[] = [".credentials.yaml", ".env"];
+
+/** 只读 Worker 的会话私有状态目录（会话的启动目录下，恢复会话要用，所以不放 TMPDIR）。 */
+const READONLY_STATE_DIR = "dsh-readonly-state";
 
 /** 只读 Worker 下额外拒绝的 dsh 内置写/变更类工具名。 */
 export const DEEPSEEK_WRITE_TOOL_NAMES: readonly string[] = [
@@ -229,26 +233,18 @@ export function isDeepSeekSessionNotFoundError(error: unknown): boolean {
   return /\bsession is not resumable\b/i.test(msg);
 }
 
-function realpathOrSelf(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
-function trimSlash(path: string): string {
-  return path.replace(/\/+$/, "");
+function launchDirOf(files: LaunchFiles): string {
+  return dirname(files.settingsFile ?? files.promptFile);
 }
 
 function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
-  const launchDir = dirname(ctx.files.settingsFile ?? ctx.files.promptFile);
+  const launchDir = launchDirOf(ctx.files);
   let sandboxPatchPath = ctx.files.settingsFile;
   if (!sandboxPatchPath) {
     sandboxPatchPath = join(launchDir, "dsh-sandbox.patch.json");
     writeFileSync(sandboxPatchPath, buildDeepSeekPatchSettings(), "utf8");
   }
-  const args = ["--profile", "acp", "--patch", sandboxPatchPath];
+  const args = ["--profile", DEEPSEEK_PROFILE, "--patch", sandboxPatchPath];
   const rawModel = ctx.row.model?.trim() ?? "";
   if (rawModel !== "") {
     const { provider, model } = parseDeepSeekModelSpec(rawModel);
@@ -263,30 +259,28 @@ function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
 }
 
 /**
- * 适配 dsh-acp 对 `additionalDirectories` 返回 -32602 的限制：
- * 对 ACP 会话层屏蔽 addDirs（以 WeakMap 按原对象缓存，保证引用稳定、零内存泄漏）。
+ * 只读 Worker 的会话记录、KV 存储、附件改写到会话私有目录（dsh-base 里这几行的 root / dshHome 配置），
+ * 不碰共享 $DSH_HOME 下别的会话和别的 profile 的数据。
  */
-function wrapStoreWithoutAddDirs(store: SessionStore): SessionStore {
-  const strippedCache = new WeakMap<AgentSessionRow, AgentSessionRow>();
-  const strip = (row: AgentSessionRow | null): AgentSessionRow | null => {
-    if (row === null || row.addDirs.length === 0) return row;
-    const hit = strippedCache.get(row);
-    if (hit) return hit;
-    const next: AgentSessionRow = { ...row, addDirs: [] };
-    strippedCache.set(row, next);
-    return next;
-  };
-  return {
-    get(id: SessionId) {
-      return strip(store.get(id));
-    },
-    update(id, patch) {
-      return strip(store.update(id, patch))!;
-    },
-    listWithProcess() {
-      return store.listWithProcess().map((row) => strip(row)!);
-    },
-  };
+export function readonlyStatePatch(stateDir: string): readonly DeepSeekCordisPatchEntry[] {
+  return [
+    { id: "session-persistence-jsonl", config: { root: join(stateDir, "sessions") } },
+    { id: "storage-json", config: { root: join(stateDir, "storages") } },
+    { id: "attachment-local", config: { dshHome: stateDir } },
+  ];
+}
+
+/**
+ * 只读沙箱里 profile 目录不可写，第一次起不了 dsh 自己的初始化（写 package.json 等）：
+ * 先在沙箱外跑 `dsh --profile acp --dump-config`（只建 profile、打印配置就退出，不起会话、不读工作区 .env）。
+ */
+export function ensureDeepSeekProfile(executablePath: string, dshHome: string, env: NodeJS.ProcessEnv, cwd: string): void {
+  if (existsSync(join(dshHome, "profiles", DEEPSEEK_PROFILE, "package.json"))) return;
+  try {
+    execFileSync(executablePath, ["--profile", DEEPSEEK_PROFILE, "--dump-config"], { cwd, env, stdio: "ignore", timeout: DEEPSEEK_PROFILE_INIT_TIMEOUT_MS });
+  } catch {
+    // 初始化失败照常起，dsh 在沙箱里自己报错
+  }
 }
 
 export function matchesDeepSeekStaleProcess(
@@ -301,67 +295,39 @@ export function matchesDeepSeekStaleProcess(
     /\bdsh\b/.test(psArgs);
   if (!hasBinary) return false;
   if (!/(?:^|\s)--profile\s+acp(?:\s|$)/.test(psArgs)) return false;
-  const launchMatch = /\/launch\/(\d+)\//.exec(psArgs);
-  if (launchMatch && launchMatch[1] !== String(row.id)) return false;
-  return true;
+  // 只认这个会话的启动目录（--patch <launchDir>/<id>/settings.json），用户自己在终端开的 dsh 不能杀
+  return /\/launch\/(\d+)\//.exec(psArgs)?.[1] === String(row.id);
 }
 
 export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
-  const originalStore = options.store;
-  const baseReadonlySpawn = options.readonlySpawn ?? wrapInReadonlyOsSandbox;
-
-  const ensureDshRuntimeDirs = (homeDir: string): readonly string[] => {
-    const dshHome = resolveDeepSeekHome(homeDir, options.env ?? process.env);
-    const dirs: string[] = [];
-    for (const sub of DEEPSEEK_READONLY_RUNTIME_SUBDIRS) {
-      const target = join(dshHome, sub);
-      if (!existsSync(target)) {
-        try {
-          mkdirSync(target, { recursive: true, mode: 0o700 });
-        } catch {
-          // 宿主目录只读或无权限时忽略，由外层 existsSync 过滤
-        }
-      }
-      dirs.push(target);
+  const env = { ...process.env, ...options.env };
+  // 沙箱按真实路径比对（/tmp → /private/tmp），白名单要用 realpath 过的 $DSH_HOME
+  const dshHomeOf = (homeDir: string) => {
+    const dshHome = resolveDeepSeekHome(homeDir, env);
+    try {
+      return realpathSync(dshHome);
+    } catch {
+      return dshHome;
     }
-    return dirs;
   };
 
-  const wrappedReadonlySpawn: NonNullable<AcpDriverOptions["readonlySpawn"]> = (base, input) => {
-    const homeDir = realpathOrSelf(homedir());
-    const dshHome = realpathOrSelf(resolveDeepSeekHome(homeDir, options.env ?? process.env));
-    // dsh-credentials-local 启动期会 stat + readFile 自身的 .credentials.yaml（禁读会抛 EPERM / mode 0666 终止启动），
-    // 同 agy 放开自身 Keychain 读取一样，对 deepseek 自身只读沙箱放开读、写仍由外层只读沙箱完全禁止。
-    const ownCredentialsYaml = trimSlash(realpathOrSelf(join(dshHome, ".credentials.yaml")));
-    let secretPaths = input.secretPaths.filter((p) => trimSlash(p) !== ownCredentialsYaml);
-
-    if (process.platform === "linux") {
-      // 补扫被 wrapStoreWithoutAddDirs 隐去的原始 addDirs 下的敏感文件通配
-      const extraDirs = new Set<string>();
-      for (const arg of base.args) {
-        const m = /\/launch\/(\d+)\//.exec(arg);
-        if (m) {
-          const orig = originalStore.get(Number(m[1]) as SessionId);
-          for (const d of orig?.addDirs ?? []) extraDirs.add(realpathOrSelf(d));
-        }
-      }
-      if (extraDirs.size > 0) {
-        secretPaths = [
-          ...new Set([...secretPaths, ...scanSecretGlobs([...extraDirs], input.secretGlobs)]),
-        ];
-      }
+  const launchArgs = (ctx: AcpLaunchContext): string[] => {
+    const args = buildDeepSeekLaunchArgs(ctx);
+    if (ctx.files.readonly) {
+      const launchDir = launchDirOf(ctx.files);
+      ensureDeepSeekProfile(ctx.executablePath, resolveDeepSeekHome(undefined, env), env, launchDir);
+      const stateDir = join(launchDir, READONLY_STATE_DIR);
+      mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      const patchPath = join(launchDir, "dsh-readonly.patch.json");
+      writeFileSync(patchPath, `${JSON.stringify(readonlyStatePatch(stateDir), null, 2)}\n`, "utf8");
+      args.push("--patch", patchPath);
     }
-
-    const adjustedInput: ReadonlySandboxInput = {
-      ...input,
-      secretPaths,
-    };
-    return baseReadonlySpawn(base, adjustedInput);
+    return args;
   };
 
   const config: AcpDriverConfig = {
     vendor: "deepseek",
-    launchArgs: buildDeepSeekLaunchArgs,
+    launchArgs,
     authenticate: { enabled: false },
     continuation: {
       mode: "resume",
@@ -382,11 +348,14 @@ export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
       writeToolNames: DEEPSEEK_WRITE_TOOL_NAMES,
     },
     readonlySandbox: {
-      writableDirs: (homeDir) => ensureDshRuntimeDirs(homeDir),
-      writableFileGlobs: (homeDir) => {
-        const dshHome = realpathOrSelf(resolveDeepSeekHome(homeDir, options.env ?? process.env));
-        return [join(dshHome, ".anonymous-user-id")];
+      writableDirs: (homeDir, _cwd, launch) => {
+        const dshHome = dshHomeOf(homeDir);
+        const dirs = DEEPSEEK_READONLY_RUNTIME_SUBDIRS.map((sub) => join(dshHome, sub));
+        for (const dir of dirs) mkdirSync(dir, { recursive: true, mode: 0o700 });
+        return [...dirs, join(launchDirOf(launch.files), READONLY_STATE_DIR)];
       },
+      writableFileGlobs: (homeDir) => DEEPSEEK_READONLY_RUNTIME_FILES.map((f) => join(dshHomeOf(homeDir), f)),
+      readableFiles: (homeDir) => DEEPSEEK_SELF_CREDENTIAL_FILES.map((f) => join(dshHomeOf(homeDir), f)),
     },
     errors: {
       classifyTurnError: classifyDeepSeekTurnError,
@@ -397,9 +366,5 @@ export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
     },
   };
 
-  return createAcpDriver(config, {
-    ...options,
-    store: wrapStoreWithoutAddDirs(originalStore),
-    readonlySpawn: wrappedReadonlySpawn,
-  });
+  return createAcpDriver(config, options);
 }
