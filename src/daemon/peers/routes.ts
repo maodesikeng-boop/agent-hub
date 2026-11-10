@@ -16,7 +16,7 @@ export interface PeerRoutesOptions {
   /** 浏览器经入口连别的设备的 WebSocket：记到它的会话下，退出登录时一起关。 */
   trackSocket: (req: FastifyRequest, socket: WebSocket) => void;
   /** 转发的可调项：fetch、WebSocket 心跳间隔（测试里换）。 */
-  proxy?: Pick<ProxyContext, "fetch" | "pingMs">;
+  proxy?: Pick<ProxyContext, "fetch" | "pingMs" | "heartbeatMs">;
   /** 设备列表或名字变化后通知（如给已连的 WebSocket 推 resync）。 */
   onChange?: () => void;
 }

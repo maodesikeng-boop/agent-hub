@@ -571,10 +571,13 @@ describe("左下角的额度", () => {
 
     it("重置后新的 rate_limit_event 一到（新 resetsAt）：马上显示新窗口的值", async () => {
       clock(RESET - 600);
-      const ws = await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
+      await boot(withQuota(rl(0.99, RESET, "allowed_warning")));
       advance(601);
       expect(badge()).toHaveAccessibleName("5h usage 0%");
-      push(ws, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: rl(0.03, NEXT_RESET), lastEventAt: 9 })));
+      // 假时钟一下走了 10 分钟、期间没有心跳：网页早判旧连接死了（connection.ts），在退避重连；网络一好马上连上，变化从新的那条来
+      act(() => window.dispatchEvent(new Event("online")));
+      act(() => FakeWebSocket.last.open());
+      push(FakeWebSocket.last, sessionChange(11, makeSession({ conversationId: 1, pmId: 1, rateLimit: rl(0.03, NEXT_RESET), lastEventAt: 9 })));
       expect(badge()).toHaveAccessibleName("5h usage 3%");
     });
 

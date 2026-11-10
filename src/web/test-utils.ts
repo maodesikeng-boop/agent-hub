@@ -358,7 +358,18 @@ export class FakeApi {
   quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
-  fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  /** 跟真的 fetch 一样：init.signal 断了（超时、取消）就以它的 reason 失败，哪怕回应还没好。 */
+  fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const signal = init?.signal;
+    if (!signal) return this.respond(input, init);
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise<Response>((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      this.respond(input, init).then(resolve, reject);
+    });
+  });
+
+  private async respond(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = new URL(String(input), "http://127.0.0.1:1");
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
@@ -418,7 +429,7 @@ export class FakeApi {
     // 文件接口的 HEAD（卡片探测文件是否已被清理）：假后端里文件都在
     if (method === "HEAD" && /^\/api\/(uploads|sent-files)\//.test(url.pathname)) return new Response(null, { status: 200 });
     return jsonResponse({ status: 404, body: { error: "not found" } });
-  });
+  }
 
   constructor(snapshot: StateSnapshot) {
     this.state = () => ({ status: 200, body: snapshot });
@@ -431,6 +442,24 @@ export class FakeApi {
   callsTo(method: string, pathPattern: RegExp): RecordedCall[] {
     return this.calls.filter((c) => c.method === method && pathPattern.test(c.path));
   }
+}
+
+/**
+ * 请求超时（client.ts 用 AbortSignal.timeout）：jsdom 的 AbortSignal.timeout 不受假时钟控制，换成用全局 setTimeout 的（假时钟下跟着走），
+ * fire() 让还在等的当场超时（真时钟的界面测试用，不用真等 15 秒）。delays 记下每个请求要的超时。
+ */
+export function stubRequestTimeouts(): { delays: number[]; fire(): void } {
+  const pending: AbortController[] = [];
+  const delays: number[] = [];
+  const timeout = (controller: AbortController) => controller.abort(new DOMException("signal timed out", "TimeoutError"));
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+    const controller = new AbortController();
+    pending.push(controller);
+    delays.push(ms);
+    setTimeout(() => timeout(controller), ms);
+    return controller.signal;
+  });
+  return { delays, fire: () => pending.splice(0).forEach(timeout) };
 }
 
 // ---- 假 WebSocket ----

@@ -6,7 +6,7 @@
 // /hub:worker 后面一级一级选厂商、模型、思考程度，行由 worker-pick.ts 从模型名单（models.tsx，和资料页同一份缓存）算。
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { API_PATHS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
+import { API_PATHS, SLOW_API_REQUEST_TIMEOUT_MS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
 import { detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
 import { useModelCatalogs } from "./models.tsx";
@@ -36,8 +36,9 @@ function sourceKeyOf(source: ComposerSource | undefined): number {
   return id;
 }
 
+/** 接着打字会取消上一个（signal）；连接静默断了也不一直挂着（后台问命令最多要 COMMANDS_QUERY_TIMEOUT_MS，用长的那档超时）。 */
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
-  const res = await fetch(url, { credentials: "same-origin", signal });
+  const res = await fetch(url, { credentials: "same-origin", signal: AbortSignal.any([signal, AbortSignal.timeout(SLOW_API_REQUEST_TIMEOUT_MS)]) });
   if (!res.ok) throw new Error(`请求失败（${res.status}）`);
   return (await res.json()) as T;
 }

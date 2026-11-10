@@ -19,6 +19,7 @@ import {
   type Pm,
   type StateSnapshot,
 } from "../../src/shared/index.ts";
+import { keepAlive } from "../../src/daemon/ws-keepalive.ts";
 
 const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
@@ -131,6 +132,8 @@ function routes(prefix: string, state: StateSnapshot, platform: string, isTokyo:
     if (req.url.split("?")[0] === ws && offline()) await reply.code(502).send(offlineReply);
   });
   app.get(ws, { websocket: true }, (socket) => {
+    // 跟真的一样发心跳：不然网页 WS_STALE_MS 收不到消息就当断了重连
+    keepAlive(socket);
     if (isTokyo) {
       tokyoSockets.add(socket);
       socket.on("close", () => tokyoSockets.delete(socket));

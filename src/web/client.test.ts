@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchState, onUnauthorized, postMessage, postUpload } from "./client.ts";
+import { API_REQUEST_TIMEOUT_MS, SLOW_API_REQUEST_TIMEOUT_MS, WS_CHECK_SILENCE_MS } from "../shared/index.ts";
+import { ApiError, createClient, fetchState, onUnauthorized, postMessage, postUpload } from "./client.ts";
+import { openChangeStream } from "./connection.ts";
 import { errorText } from "./format.ts";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeSnapshot, stubRequestTimeouts } from "./test-utils.ts";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function stubFetch(res: Response) {
   vi.stubGlobal("fetch", vi.fn(async () => res));
@@ -119,5 +126,59 @@ describe("上传文件", () => {
     const err = await caught(postUpload(new File(["x"], "a"), "a"));
     expect(err.status).toBe(0);
     expect(errorText(err).text).toBe("连不上守护进程");
+  });
+});
+
+describe("请求超时（连接静默断了，请求挂在死连接上）", () => {
+  /** 资料页的性格设定一直不回。 */
+  function hangingApi(): FakeApi {
+    const api = new FakeApi(makeSnapshot());
+    api.getPersona = () => new Promise(() => {});
+    api.install();
+    return api;
+  }
+
+  it("普通请求：API_REQUEST_TIMEOUT_MS 没回就报“请求超时”（status 0），不一直挂着", async () => {
+    vi.useFakeTimers();
+    stubRequestTimeouts();
+    hangingApi();
+    const pending = caught(createClient(null).fetchPersona(1));
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
+    const err = await pending;
+    expect(err.status).toBe(0);
+    expect(err.code).toBe("timeout");
+    expect(errorText(err).text).toBe("请求超时");
+  });
+
+  it("超时顺便查一次实时连接：超过一次心跳加余量没消息就马上重连，不等判死", async () => {
+    vi.useFakeTimers();
+    stubRequestTimeouts();
+    hangingApi();
+    installFakeWebSocket();
+    const close = openChangeStream({ url: (s) => `ws://x/api/ws?since=${s}`, getSince: () => 0, onMessage: () => {}, onStatus: () => {} });
+    FakeWebSocket.last.open();
+    await vi.advanceTimersByTimeAsync(WS_CHECK_SILENCE_MS - API_REQUEST_TIMEOUT_MS + 1);
+    const pending = caught(createClient(null).fetchPersona(1));
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
+    await pending;
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    close();
+  });
+
+  it("快照、额度、模型名单用长一点的超时；上传、选文件夹、下载文件不设超时", async () => {
+    const timeouts = stubRequestTimeouts();
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const client = createClient(null);
+    await client.fetchPersona(1);
+    expect(timeouts.delays).toEqual([API_REQUEST_TIMEOUT_MS]);
+    await client.fetchState();
+    await client.fetchQuota().catch(() => {});
+    await client.fetchModels().catch(() => {});
+    expect(timeouts.delays.slice(1)).toEqual([SLOW_API_REQUEST_TIMEOUT_MS, SLOW_API_REQUEST_TIMEOUT_MS, SLOW_API_REQUEST_TIMEOUT_MS]);
+    await client.postUpload(new File(["x"], "a.txt"), "a.txt");
+    await client.postPickFolder({});
+    expect(timeouts.delays).toHaveLength(4);
+    for (const [, init] of api.fetch.mock.calls.slice(-2)) expect(init?.signal).toBeUndefined();
   });
 });
