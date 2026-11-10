@@ -1,0 +1,36 @@
+# 全仓文本文件统一保持 LF 换行，杜绝 Windows core.autocrlf=true 将 WSL/Linux 脚本与源码转为 CRLF
+* text=auto eol=lf
+
+# 关键脚本、SQL 迁移、配置与源码显式锁定 LF
+*.sh text eol=lf
+*.sql text eol=lf
+*.rs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+# 二进制图标、图片与归档产物禁止行尾转换
+*.png binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.wasm binary
+*.gz binary
+*.zip binary
+*.exe binary
+*.dll binary

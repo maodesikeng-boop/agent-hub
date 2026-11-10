@@ -413,7 +413,9 @@ setInterval(() => {}, 1000);
     const srcPkg = join(work, "pkg-src");
     const releasesDir = join(work, "releases");
     mkdirSync(join(srcPkg, "src", "daemon"), { recursive: true });
+    mkdirSync(join(srcPkg, "migrations"), { recursive: true });
     writeFileSync(join(srcPkg, "src", "daemon", "main.ts"), "// daemon entry\n", "utf8");
+    writeFileSync(join(srcPkg, "migrations", "0001_init.sql"), "CREATE TABLE init_guard (id INTEGER PRIMARY KEY);\n", "utf8");
 
     const tarPath = join(work, "bundle.tar.gz");
     execFileSync("tar", ["-czf", tarPath, "-C", srcPkg, "."]);
@@ -429,6 +431,7 @@ setInterval(() => {}, 1000);
     expect(firstJson.deployed).toBe(true);
     expect(firstJson.reused).toBe(false);
     expect(existsSync(join(releasesDir, "current", "src", "daemon", "main.ts"))).toBe(true);
+    expect(existsSync(join(releasesDir, "current", "migrations", "0001_init.sql"))).toBe(true);
 
     // 同一版本再次调用直接幂等复用，无需再次读 stdin
     const second = runCtl(["deploy-release", "--version", "0.1.0", "--releases-dir", releasesDir, "--skip-install"], {
@@ -442,6 +445,84 @@ setInterval(() => {}, 1000);
       FUSA_WSL_HOME: work,
     });
     expect(traversal.status).not.toBe(0);
+  });
+
+  it("deploy-release：缺少非空 migrations 目录时失败报错且不更新 current 软链接", () => {
+    const work = makeTempDir("fusa-ctl-deploy-missing-migrations-");
+    const releasesDir = join(work, "releases");
+
+    // 1) 全新部署缺少 migrations：失败且不创建 current 软链接
+    const noMigrationsPkg = join(work, "pkg-no-migrations");
+    mkdirSync(join(noMigrationsPkg, "src", "daemon"), { recursive: true });
+    writeFileSync(join(noMigrationsPkg, "src", "daemon", "main.ts"), "// daemon entry\n", "utf8");
+    const noMigrationsTar = join(work, "no-migrations.tar.gz");
+    execFileSync("tar", ["-czf", noMigrationsTar, "-C", noMigrationsPkg, "."]);
+
+    const freshFail = runCtl(
+      ["deploy-release", "--version", "0.1.0", "--releases-dir", releasesDir, "--skip-install"],
+      { FUSA_WSL_HOME: work },
+      readFileSync(noMigrationsTar),
+    );
+    expect(freshFail.status).not.toBe(0);
+    expect(freshFail.stderr.toString("utf8")).toContain("migrations");
+    expect(existsSync(join(releasesDir, "0.1.0"))).toBe(false);
+    expect(existsSync(join(releasesDir, "current"))).toBe(false);
+
+    // 2) 先部署合法 0.1.0，再传入缺少或空 migrations 的 0.2.0：必须报错且 current 保持指向 0.1.0
+    const validPkg = join(work, "pkg-valid");
+    mkdirSync(join(validPkg, "src", "daemon"), { recursive: true });
+    mkdirSync(join(validPkg, "migrations"), { recursive: true });
+    writeFileSync(join(validPkg, "src", "daemon", "main.ts"), "// v0.1.0\n", "utf8");
+    writeFileSync(join(validPkg, "migrations", "0001_init.sql"), "SELECT 1;\n", "utf8");
+    const validTar = join(work, "valid.tar.gz");
+    execFileSync("tar", ["-czf", validTar, "-C", validPkg, "."]);
+
+    const okDeploy = runCtl(
+      ["deploy-release", "--version", "0.1.0", "--releases-dir", releasesDir, "--skip-install"],
+      { FUSA_WSL_HOME: work },
+      readFileSync(validTar),
+    );
+    expect(okDeploy.status).toBe(0);
+    const v010Real = realpathSync(join(releasesDir, "0.1.0"));
+    expect(realpathSync(join(releasesDir, "current"))).toBe(v010Real);
+
+    const upgradeMissing = runCtl(
+      ["deploy-release", "--version", "0.2.0", "--releases-dir", releasesDir, "--skip-install"],
+      { FUSA_WSL_HOME: work },
+      readFileSync(noMigrationsTar),
+    );
+    expect(upgradeMissing.status).not.toBe(0);
+    expect(upgradeMissing.stderr.toString("utf8")).toContain("migrations");
+    expect(existsSync(join(releasesDir, "0.2.0"))).toBe(false);
+    expect(realpathSync(join(releasesDir, "current"))).toBe(v010Real);
+
+    // 3) 空 migrations 目录同样拦截，且残缺版本目录不允许被幂等复用跳过校验
+    const emptyMigrationsPkg = join(work, "pkg-empty-migrations");
+    mkdirSync(join(emptyMigrationsPkg, "src", "daemon"), { recursive: true });
+    mkdirSync(join(emptyMigrationsPkg, "migrations"), { recursive: true });
+    writeFileSync(join(emptyMigrationsPkg, "src", "daemon", "main.ts"), "// v0.2.1\n", "utf8");
+    const emptyMigrationsTar = join(work, "empty-migrations.tar.gz");
+    execFileSync("tar", ["-czf", emptyMigrationsTar, "-C", emptyMigrationsPkg, "."]);
+
+    const upgradeEmpty = runCtl(
+      ["deploy-release", "--version", "0.2.1", "--releases-dir", releasesDir, "--skip-install"],
+      { FUSA_WSL_HOME: work },
+      readFileSync(emptyMigrationsTar),
+    );
+    expect(upgradeEmpty.status).not.toBe(0);
+    expect(upgradeEmpty.stderr.toString("utf8")).toContain("migrations");
+    expect(realpathSync(join(releasesDir, "current"))).toBe(v010Real);
+
+    // 人工模拟一个缺 migrations 的残缺已存在目录 0.3.0，验证不会误触发 reused:true
+    mkdirSync(join(releasesDir, "0.3.0", "src", "daemon"), { recursive: true });
+    writeFileSync(join(releasesDir, "0.3.0", "src", "daemon", "main.ts"), "// incomplete\n", "utf8");
+    const incompleteReuse = runCtl(
+      ["deploy-release", "--version", "0.3.0", "--releases-dir", releasesDir, "--skip-install"],
+      { FUSA_WSL_HOME: work },
+      readFileSync(noMigrationsTar),
+    );
+    expect(incompleteReuse.status).not.toBe(0);
+    expect(realpathSync(join(releasesDir, "current"))).toBe(v010Real);
   });
 });
 

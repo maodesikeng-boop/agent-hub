@@ -30,8 +30,8 @@ pub use parser::{
     WslDistroState, WslVersionInfo,
 };
 pub use provisioner::{
-    install_daemon_ctl_script, validate_local_app_data_dir, ProvisionConfig, Provisioner,
-    WslHostStatus,
+    install_daemon_ctl_script, normalize_lf_script, validate_local_app_data_dir, ProvisionConfig,
+    Provisioner, WslHostStatus,
 };
 pub use registry::{
     normalize_windows_path_key, windows_base_paths_match, DistroRegistryInspector, RegistryLookup,
@@ -184,6 +184,37 @@ mod tests {
         fs::write(cfg.distro_vhdx_path(), b"fusa-vhdx").unwrap();
     }
 
+    struct FakeRegistry(RegistryLookup);
+
+    impl DistroRegistryInspector for FakeRegistry {
+        fn lookup_distro_base_path(
+            &self,
+            _distro_name: &str,
+        ) -> Result<RegistryLookup, std::io::Error> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// 单元测试专用构造辅助：显式注入匹配当前临时目录 `distro_install_dir` 的假 `DistroRegistryInspector`，
+    /// 使所有假 `CommandRunner` 单测在真实 Windows 机器上完全确定性，不耦合宿主真实 `HKCU\...\Lxss` 注册表。
+    fn test_provisioner<R, D>(
+        cfg: ProvisionConfig,
+        runner: R,
+        downloader: D,
+    ) -> Provisioner<R, D, FakeRegistry>
+    where
+        R: CommandRunner,
+        D: RootfsDownloader,
+    {
+        let base_path = cfg.distro_install_dir();
+        Provisioner::with_registry_inspector(
+            cfg,
+            runner,
+            downloader,
+            FakeRegistry(RegistryLookup::Found { base_path }),
+        )
+    }
+
     fn sample_ok_self_test_json() -> Vec<u8> {
         r#"{"ok":true,"worker_sandbox_ready":true,"error_code":null,"message":"WSL2 隔离与 bubblewrap 沙箱自检通过","checks":{"non_root":true,"no_passwordless_sudo":true,"interop_disabled":true,"windows_path_clean":true,"bwrap_probe":true,"bwrap_write_guard":true},"failures":[]}"#
             .as_bytes()
@@ -193,6 +224,11 @@ mod tests {
     #[test]
     fn embedded_guest_script_is_present_and_valid_shebang() {
         assert!(EMBEDDED_GUEST_SCRIPT.starts_with("#!/usr/bin/env bash\n"));
+        assert!(!EMBEDDED_GUEST_SCRIPT.contains("\r\n"));
+        assert_eq!(
+            normalize_lf_script("#!/usr/bin/env bash\r\nset -euo pipefail\r\n"),
+            "#!/usr/bin/env bash\nset -euo pipefail\n"
+        );
         assert_eq!(PINNED_UBUNTU_2404_ROOTFS.version, "24.04.5");
         assert_eq!(PINNED_UBUNTU_2404_ROOTFS.sha256.len(), 64);
     }
@@ -358,7 +394,7 @@ mod tests {
             ok_out(encode_utf16le(zh_list_with_user_fusa, false)),   // --list --verbose
         ]);
         let downloader = FakeDownloader::ok(b"unused".to_vec());
-        let provisioner = Provisioner::new(cfg, runner, downloader);
+        let provisioner = test_provisioner(cfg, runner, downloader);
 
         let err = provisioner.provision_until_ready().unwrap_err();
         assert!(matches!(
@@ -395,7 +431,7 @@ mod tests {
             ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)), // 重启前 --version 虽有但 --status 失败
             err_out(-1, encode_utf16le("需要重启", false)),
         ]);
-        let p1 = Provisioner::new(cfg.clone(), runner_before_reboot, FakeDownloader::ok(fake_rootfs.clone()));
+        let p1 = test_provisioner(cfg.clone(), runner_before_reboot, FakeDownloader::ok(fake_rootfs.clone()));
 
         assert!(matches!(
             p1.provision_until_ready().unwrap_err(),
@@ -431,7 +467,7 @@ mod tests {
             ok_out(Vec::new()), // wsl-provision-guest.sh --phase user
             ok_out(sample_ok_self_test_json()), // wsl-provision-guest.sh --self-test
         ]);
-        let p2 = Provisioner::new(cfg, runner_after_reboot, FakeDownloader::ok(fake_rootfs));
+        let p2 = test_provisioner(cfg, runner_after_reboot, FakeDownloader::ok(fake_rootfs));
         let (final_state, report) = p2.provision_until_ready().unwrap();
 
         assert_eq!(final_state.stage, ProvisionStage::Ready);
@@ -470,7 +506,7 @@ mod tests {
             )),
         ]);
         let corrupted = FakeDownloader::ok(b"corrupted-archive-data".to_vec());
-        let provisioner = Provisioner::new(cfg.clone(), runner, corrupted);
+        let provisioner = test_provisioner(cfg.clone(), runner, corrupted);
 
         let err = provisioner.provision_until_ready().unwrap_err();
         assert!(matches!(err, ProvisionError::ChecksumMismatch { .. }));
@@ -504,7 +540,7 @@ mod tests {
             ok_out(Vec::new()), // chmod
             err_out(100, b"apt-get network timeout".to_vec()), // --phase root 失败
         ]);
-        let p1 = Provisioner::new(
+        let p1 = test_provisioner(
             cfg.clone(),
             runner_fail_init_root,
             FakeDownloader::ok(fake_rootfs.clone()),
@@ -548,7 +584,7 @@ mod tests {
                 stderr: Vec::new(),
             }),
         ]);
-        let p2 = Provisioner::new(
+        let p2 = test_provisioner(
             cfg.clone(),
             runner_fail_gate,
             FakeDownloader::ok(fake_rootfs.clone()),
@@ -580,7 +616,7 @@ mod tests {
             ok_out(Vec::new()),                 // --phase user
             ok_out(sample_ok_self_test_json()), // --self-test 通过
         ]);
-        let p3 = Provisioner::new(cfg, runner_pass, FakeDownloader::ok(fake_rootfs));
+        let p3 = test_provisioner(cfg, runner_pass, FakeDownloader::ok(fake_rootfs));
         let (st_ready, _) = p3.provision_until_ready().unwrap();
         assert_eq!(st_ready.stage, ProvisionStage::Ready);
         assert!(st_ready.self_test_passed);
@@ -593,7 +629,7 @@ mod tests {
         let json_payload = br#"[{"id":"alpha","command":"alpha-cli","install_command":"curl -fsSL https://example.com/install.sh | bash","login_command":"alpha-cli auth","installed":true,"binary_path":"/home/fusa/.local/bin/alpha-cli"},{"id":"beta","command":"beta-cli","install_command":"","login_command":"beta-cli login --device","installed":false,"binary_path":null}]"#.to_vec();
 
         let runner = ScriptedRunner::new(vec![ok_out(json_payload)]);
-        let provisioner = Provisioner::new(cfg, runner, FakeDownloader::ok(Vec::new()));
+        let provisioner = test_provisioner(cfg, runner, FakeDownloader::ok(Vec::new()));
         let guides = provisioner
             .query_vendor_guides("/home/fusa/.local/share/fusa/releases/current")
             .unwrap();
@@ -646,7 +682,7 @@ mod tests {
             ok_out(Vec::new()), // --phase user
             ok_out(sample_ok_self_test_json()),
         ]);
-        let provisioner = Provisioner::new(cfg, runner, FakeDownloader::ok(valid_bytes));
+        let provisioner = test_provisioner(cfg, runner, FakeDownloader::ok(valid_bytes));
         let (state, _) = provisioner.provision_until_ready().unwrap();
         assert_eq!(state.stage, ProvisionStage::Ready);
         assert_eq!(provisioner.downloader().call_count(), 0);
@@ -664,7 +700,7 @@ mod tests {
             ok_out(encode_utf16le("默认版本: 2\r\n", false)),
             ok_out(encode_utf16le("没有已安装的分发版\r\n", false)),
         ]);
-        let p1 = Provisioner::new(cfg1, r1, FakeDownloader::ok(Vec::new()));
+        let p1 = test_provisioner(cfg1, r1, FakeDownloader::ok(Vec::new()));
         assert!(matches!(
             p1.provision_until_ready().unwrap_err(),
             ProvisionError::ExistingDistroDataFound { .. }
@@ -685,7 +721,7 @@ mod tests {
             ok_out(encode_utf16le("默认版本: 2\r\n", false)),
             ok_out(encode_utf16le("  Fusa    Stopped    1\r\n", false)),
         ]);
-        let p_wsl1 = Provisioner::new(cfg2.clone(), r_wsl1, FakeDownloader::ok(Vec::new()));
+        let p_wsl1 = test_provisioner(cfg2.clone(), r_wsl1, FakeDownloader::ok(Vec::new()));
         assert!(matches!(
             p_wsl1.provision_until_ready().unwrap_err(),
             ProvisionError::UnsupportedWslVersion { version: 1, .. }
@@ -704,7 +740,7 @@ mod tests {
                 stderr: Vec::new(),
             }),
         ]);
-        let p_regressed = Provisioner::new(cfg2, r_regressed, FakeDownloader::ok(Vec::new()));
+        let p_regressed = test_provisioner(cfg2, r_regressed, FakeDownloader::ok(Vec::new()));
         assert!(matches!(
             p_regressed.provision_until_ready().unwrap_err(),
             ProvisionError::SelfTestFailed { ref code, .. } if code == "bwrap_unavailable"
@@ -741,7 +777,7 @@ mod tests {
                     false,
                 )),
             ]);
-            let p = Provisioner::new(cfg, runner, FakeDownloader::ok(Vec::new()));
+            let p = test_provisioner(cfg, runner, FakeDownloader::ok(Vec::new()));
             assert!(
                 matches!(
                     p.provision_until_ready().unwrap_err(),
@@ -803,7 +839,7 @@ mod tests {
             ok_out(encode_utf16le("没有已安装的分发版\r\n", false)),
             err_out(1, b"import failed".to_vec()),
         ]);
-        let p = Provisioner::new(cfg.clone(), runner, FakeDownloader::ok(payload.clone()));
+        let p = test_provisioner(cfg.clone(), runner, FakeDownloader::ok(payload.clone()));
         assert!(p.provision_until_ready().is_err());
         let names: Vec<String> = fs::read_dir(cfg.rootfs_cache_dir())
             .unwrap()
@@ -811,17 +847,6 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["ubuntu-part.wsl".to_string()]);
         assert_eq!(fs::read(cfg.cached_rootfs_path()).unwrap(), payload);
-    }
-
-    struct FakeRegistry(RegistryLookup);
-
-    impl DistroRegistryInspector for FakeRegistry {
-        fn lookup_distro_base_path(
-            &self,
-            _distro_name: &str,
-        ) -> Result<RegistryLookup, std::io::Error> {
-            Ok(self.0.clone())
-        }
     }
 
     #[test]
@@ -909,8 +934,69 @@ mod tests {
     }
 
     #[test]
+    fn provision_rejects_listed_distro_when_lxss_registry_entry_is_not_found() {
+        // 模拟 Windows 真机场景：`wsl --list --verbose` 列出了同名实例 Fusa，且本地也有状态标记与 ext4.vhdx，
+        // 但 HKCU\...\Lxss 注册表中找不到同名项（RegistryLookup::NotFound）：
+        // 必须立即以 DistroBasePathMismatch 短路拒绝，绝不向该实例写入脚本、终止它或覆盖状态标记。
+        for stage in [ProvisionStage::InitRoot, ProvisionStage::Ready] {
+            let tmp = TempDir::new().unwrap();
+            let cfg = ProvisionConfig::new(tmp.path());
+
+            // 守卫生产构造器签名：Provisioner::new 保持默认绑定真实的 SystemRegistryInspector
+            let prod_ctor: Provisioner<_, _, SystemRegistryInspector> = Provisioner::new(
+                cfg.clone(),
+                ScriptedRunner::new(Vec::new()),
+                FakeDownloader::ok(Vec::new()),
+            );
+            assert_eq!(prod_ctor.config().distro_name, "Fusa");
+
+            let mut saved = ProvisionState::new("Fusa");
+            saved.imported_by_fusa = true;
+            saved.self_test_passed = stage == ProvisionStage::Ready;
+            saved.stage = stage;
+            saved.save_atomic(tmp.path()).unwrap();
+            simulate_imported_vhdx(&cfg);
+
+            let runner = ScriptedRunner::new(vec![
+                ok_out(encode_utf16le("WSL 版本: 2.3.26.0\r\n", false)),
+                ok_out(encode_utf16le("默认版本: 2\r\n", false)),
+                ok_out(encode_utf16le("  Fusa    Stopped    2\r\n", false)),
+            ]);
+            let p = Provisioner::with_registry_inspector(
+                cfg.clone(),
+                runner,
+                FakeDownloader::ok(Vec::new()),
+                FakeRegistry(RegistryLookup::NotFound),
+            );
+
+            let err = p.provision_until_ready().unwrap_err();
+            match err {
+                ProvisionError::DistroBasePathMismatch {
+                    distro_name,
+                    expected,
+                    actual,
+                } => {
+                    assert_eq!(distro_name, "Fusa");
+                    assert_eq!(expected, cfg.distro_install_dir());
+                    assert!(actual.contains("Lxss"));
+                }
+                other => panic!("预期返回 DistroBasePathMismatch，实际得到: {other:?}"),
+            }
+
+            assert!(matches!(
+                p.verify_distro_ownership().unwrap_err(),
+                ProvisionError::DistroBasePathMismatch { .. }
+            ));
+            assert_eq!(p.runner().calls().len(), 3, "{stage:?}");
+            assert_eq!(p.downloader().call_count(), 0);
+            assert_eq!(p.load_state().unwrap(), saved);
+        }
+    }
+
+    #[test]
     fn daemon_ctl_and_interactive_login_commands_use_array_args_without_shell_eval() {
         assert!(EMBEDDED_DAEMON_CTL_SCRIPT.starts_with("#!/usr/bin/env bash\n"));
+        assert!(!EMBEDDED_DAEMON_CTL_SCRIPT.contains("\r\n"));
 
         let ctl = build_run_daemon_ctl_cmd("Fusa", "fusa", ["probe", "--port", "4317"]).unwrap();
         assert_eq!(
