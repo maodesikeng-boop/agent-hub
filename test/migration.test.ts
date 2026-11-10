@@ -1338,19 +1338,24 @@ describe("0015_browser_sessions：从 0014 的库升级", () => {
 
 // ---- 0020_conversation_purges ----
 
-describe("0020_conversation_purges：从旧库升级", () => {
-  it("只加一张空的 conversation_purges 表，老数据一个字不变；对话删掉时自动级联删；再跑一遍也行", () => {
+describe("0020_conversation_purges：从 0018 / 0019 的旧库升级", () => {
+  it("从 0018 的旧库按顺序连跑 0019 + 0020，或从 0019 升到 0020：老数据一个字不变，messages_worker_lines 索引和空的 conversation_purges 表都建好；对话删掉时自动级联删；再跑一遍也行", () => {
     const db = m3Db();
-    migrate(db, migrationsUpTo(19));
-    const prevVersion = userVersion(db);
+    migrate(db, migrationsUpTo(18));
+    expect(userVersion(db)).toBe(18);
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: prevVersion, to: LATEST_VERSION });
-    expect(LATEST_VERSION).toBeGreaterThanOrEqual(20);
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 18, to: LATEST_VERSION, applied: [19, 20] });
+    expect(LATEST_VERSION).toBe(20);
     for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(
+      db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_worker_lines'"),
+    ).toEqual({ n: 1 });
     expect(db.all("SELECT * FROM conversation_purges")).toEqual([]);
-    db.exec(`PRAGMA user_version = ${prevVersion}`);
-    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    db.exec("PRAGMA user_version = 18");
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 18, to: 20, applied: [19, 20] });
+    db.exec("PRAGMA user_version = 19");
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 19, to: 20, applied: [20] });
 
     // 外键与 ON DELETE CASCADE：不存在的对话被拒，删掉对话时自动跟着清
     expect(() => db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (99999, 100)")).toThrow(/FOREIGN KEY/);
