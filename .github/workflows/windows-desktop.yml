@@ -35,6 +35,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            for (const dir of ["scripts", "migrations"]) {
+              for (const name of fs.readdirSync(dir)) {
+                if (name.endsWith(".test.ts")) continue;
+                const p = path.join(dir, name);
+                if (fs.statSync(p).isFile() && fs.readFileSync(p).includes(0x0d)) {
+                  throw new Error(`CRLF detected in ${p}`);
+                }
+              }
+            }
+          '
           tar \
             --exclude='*.test.ts' \
             --exclude='*.test.tsx' \
@@ -43,9 +56,12 @@ jobs:
             pnpm-lock.yaml \
             tsconfig.json \
             apps/desktop/contract.json \
+            migrations \
             scripts \
             src \
             dist
+          tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz | grep -q '^migrations/.*\.sql$'
+          tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz | grep -q '^src/daemon/main\.ts$'
 
       - name: Install Rust stable (MSVC)
         uses: dtolnay/rust-toolchain@stable

@@ -53,6 +53,22 @@ validate_port() {
   [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ] || die "非法的端口号：${p}"
 }
 
+has_non_empty_dir() {
+  local dir="$1"
+  [ -d "$dir" ] || return 1
+  local entries=("$dir"/* "$dir"/.*)
+  local item base
+  for item in "${entries[@]}"; do
+    [ -e "$item" ] || [ -L "$item" ] || continue
+    base="${item##*/}"
+    if [ "$base" = "." ] || [ "$base" = ".." ]; then
+      continue
+    fi
+    return 0
+  done
+  return 1
+}
+
 lease_file_path() {
   local hub_home="$1" run_id="$2"
   printf '%s/run/wsl-owned-%s.json' "$hub_home" "$run_id"
@@ -420,7 +436,9 @@ cmd_deploy_release() {
 
   local target_dir="${releases_dir}/${version_id}"
   local current_link="${releases_dir}/current"
-  if [ -f "${target_dir}/src/daemon/main.ts" ] && { [ "$skip_install" = "1" ] || [ -d "${target_dir}/node_modules" ]; }; then
+  if [ -f "${target_dir}/src/daemon/main.ts" ] \
+    && has_non_empty_dir "${target_dir}/migrations" \
+    && { [ "$skip_install" = "1" ] || [ -d "${target_dir}/node_modules" ]; }; then
     ln -sfn "$target_dir" "$current_link"
     printf '{"deployed":true,"reused":true,"path":"%s"}\n' "$(json_escape "$current_link")"
     return 0
@@ -439,6 +457,11 @@ cmd_deploy_release() {
   if [ ! -f "${staging}/src/daemon/main.ts" ]; then
     rm -rf "$staging"
     die "发布包缺少 src/daemon/main.ts"
+  fi
+
+  if ! has_non_empty_dir "${staging}/migrations"; then
+    rm -rf "$staging"
+    die "发布包缺少非空的 migrations 目录"
   fi
 
   if [ "$skip_install" != "1" ]; then

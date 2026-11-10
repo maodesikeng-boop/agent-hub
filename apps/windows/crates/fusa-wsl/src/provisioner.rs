@@ -65,7 +65,7 @@ impl ProvisionConfig {
             distro_name: FUSA_DISTRO_NAME.to_string(),
             linux_user: FUSA_LINUX_USER.to_string(),
             rootfs: PINNED_UBUNTU_2404_ROOTFS,
-            guest_script: EMBEDDED_GUEST_SCRIPT.to_string(),
+            guest_script: normalize_lf_script(EMBEDDED_GUEST_SCRIPT),
         }
     }
 
@@ -525,7 +525,7 @@ where
 
     fn step_init_root(&self, state: &mut ProvisionState) -> Result<(), ProvisionError> {
         // 统一转为 LF 换行再通过 stdin 写入 Linux 路径，避免 CRLF 破坏 bash shebang 且不依赖 /mnt/c
-        let lf_script = self.config.guest_script.replace("\r\n", "\n");
+        let lf_script = normalize_lf_script(&self.config.guest_script);
 
         let mkdir_cmd = build_prepare_guest_script_dir_cmd(&self.config.distro_name)?;
         self.run_checked_stage(&mkdir_cmd, None, ProvisionStage::InitRoot, state)?;
@@ -663,13 +663,23 @@ where
     }
 }
 
+/// 将内嵌或外部传入的 Linux 脚本换行符统一归一化为 LF（`\r\n` -> `\n`），
+/// 作为 `.gitattributes` 之外的运行期双保险，防止 CRLF 损坏 WSL 内的 bash shebang。
+pub fn normalize_lf_script(script: &str) -> String {
+    if script.contains("\r\n") {
+        script.replace("\r\n", "\n")
+    } else {
+        script.to_string()
+    }
+}
+
 /// 将受控后台起停与探活脚本幂等安装到专用发行版 `/usr/local/libexec/fusa/wsl-daemon-ctl.sh`（root 0755，LF 换行）。
 pub fn install_daemon_ctl_script<R: CommandRunner>(
     runner: &R,
     distro_name: &str,
     script_content: &str,
 ) -> Result<(), ProvisionError> {
-    let lf_script = script_content.replace("\r\n", "\n");
+    let lf_script = normalize_lf_script(script_content);
     let steps: [(WslCommand, Option<&[u8]>); 3] = [
         (build_prepare_guest_script_dir_cmd(distro_name)?, None),
         (
