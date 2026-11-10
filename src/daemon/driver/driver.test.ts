@@ -1107,11 +1107,19 @@ describe("其他输入输出", () => {
 });
 
 describe("清理残留进程", () => {
-  const strayClaude = (t: Harness, sessionId: string) =>
-    spawn(FAKE_CLAUDE, ["-p", "--session-id", sessionId], {
+  // 用例失败（cleanupStale 没清掉它）时假 claude 不能留在机器上
+  const strays: ChildProcess[] = [];
+  afterEach(() => {
+    for (const stray of strays.splice(0)) stray.kill("SIGKILL");
+  });
+  const strayClaude = (t: Harness, sessionId: string) => {
+    const stray = spawn(FAKE_CLAUDE, ["-p", "--session-id", sessionId], {
       env: { ...process.env, FAKE_CLAUDE_LOG: join(t.dir, "fake-claude.log"), FAKE_CLAUDE_SCRIPT: join(t.dir, "script.json"), FAKE_CLAUDE_STATE: t.dir },
       stdio: ["pipe", "ignore", "ignore"],
     });
+    strays.push(stray);
+    return stray;
+  };
   const gone = async (child: ChildProcess) => {
     for (let i = 0; i < 100 && child.exitCode === null && child.signalCode === null; i++) await realSleep(50);
     return child.exitCode !== null || child.signalCode !== null;

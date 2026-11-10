@@ -468,12 +468,12 @@ interface AgyTestHarness {
   cleanup(): Promise<void>;
 }
 
-let activeHarness: AgyTestHarness | undefined;
+/** 本用例建过的所有 harness（一个用例里可以建好几个，afterEach 要全清：只清最后一个的话前面的假进程会留在机器上）。 */
+const harnesses: AgyTestHarness[] = [];
 let nextSessionId = 1;
 
 afterEach(async () => {
-  await activeHarness?.cleanup();
-  activeHarness = undefined;
+  for (const h of harnesses.splice(0)) await h.cleanup();
 });
 
 function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyDriverOptions> } = {}): AgyTestHarness {
@@ -605,7 +605,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     return row;
   };
 
-  activeHarness = {
+  const harness: AgyTestHarness = {
     dir,
     stateDir,
     store,
@@ -623,7 +623,8 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       rmSync(dir, { recursive: true, force: true });
     },
   };
-  return activeHarness;
+  harnesses.push(harness);
+  return harness;
 }
 
 const user = (id: number, text: string, prefixes?: string[]) => ({
@@ -1102,7 +1103,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
       expect(t.log().find((e) => e.kind === "probe"), role).toMatchObject(scoped ? { ok: false, errno: "EPERM" } : { ok: true });
       expect(existsSync(probe), role).toBe(!scoped);
       await t.cleanup();
-      activeHarness = undefined;
+      harnesses.splice(harnesses.indexOf(t), 1);
     }
   });
 
@@ -1161,7 +1162,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
       expect(ended.error?.message, name).toContain("只读的连接器工具");
       expect(t.log().filter((e) => e.kind === "signal").length, name).toBeGreaterThan(0);
       await t.cleanup();
-      activeHarness = undefined;
+      harnesses.splice(harnesses.indexOf(t), 1);
     }
   });
 
@@ -1411,17 +1412,25 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
       status: "running",
     });
 
-    await t.driver.cleanupStale();
-    await realSleep(50);
-
-    expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
-    let alive = true;
     try {
-      process.kill(stalePid, 0);
-    } catch {
-      alive = false;
+      await t.driver.cleanupStale();
+      await realSleep(50);
+
+      expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
+      let alive = true;
+      try {
+        process.kill(stalePid, 0);
+      } catch {
+        alive = false;
+      }
+      expect(alive).toBe(false);
+    } finally {
+      try {
+        process.kill(-stalePid, "SIGKILL");
+      } catch {
+        // 已退出
+      }
     }
-    expect(alive).toBe(false);
   });
 
   it("result.response 兜底补发与忙时队列合并、恢复/重发说明顺序", async () => {
@@ -1659,7 +1668,6 @@ describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
 describe("找不到 agy 程序", () => {
   it("send 抛可重试的 DriverError(agy_not_found)，不是 claude_not_found", async () => {
     const t = makeAgyHarness({ driver: { agyPath: "/nonexistent/agy" } });
-    activeHarness = t;
     const s = t.addSession();
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DriverError);

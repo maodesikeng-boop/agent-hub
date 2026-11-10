@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
 
-/** ps 卡住时不能一直等：超时直接 SIGKILL 掉 ps，当它跑不了。 */
+/** ps 卡住时不能一直等：超时直接 SIGKILL 掉 ps，当它跑不了。LC_ALL=C 让 lstart= 不随终端/launchd/systemd 的语言环境变。 */
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 
 /**
@@ -15,7 +15,7 @@ const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
 export function runPs(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     try {
-      execFile("ps", args, PS_OPTIONS, (error, stdout) => resolve(error ? null : stdout));
+      execFile("ps", args, { ...PS_OPTIONS, env: { ...process.env, LC_ALL: "C" } }, (error, stdout) => resolve(error ? null : stdout));
     } catch {
       resolve(null);
     }
