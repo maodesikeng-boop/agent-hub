@@ -442,7 +442,7 @@ describe("左下角的额度", () => {
     const reply = {
       groups: [
         { id: "gemini", name: "Gemini", windows: { five_hour: win(0.25), seven_day: win(0.5, { resetsAt: 1_793_646_000 }) } },
-        { id: "claude_gpt", name: "Claude 和 GPT", windows: { five_hour: win(0.9) } },
+        { id: "claude_gpt", name: "Claude and GPT", windows: { five_hour: win(0.9) } },
       ],
     };
     const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
@@ -453,10 +453,10 @@ describe("左下角的额度", () => {
       api.quota = () => ({ status: 200, body: reply });
       expect(ask()).toBe(0);
       await user.click(badge());
-      const gemini = await screen.findByRole("region", { name: "Antigravity · Gemini" });
+      const gemini = await screen.findByRole("group", { name: "Gemini" });
       expect(within(gemini).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "25");
       expect(within(gemini).getByRole("progressbar", { name: "7d usage" })).toHaveAttribute("aria-valuenow", "50");
-      expect(within(screen.getByRole("region", { name: "Antigravity · Claude 和 GPT" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "90");
+      expect(within(screen.getByRole("group", { name: "Claude and GPT" })).getByRole("progressbar", { name: "5h usage" })).toHaveAttribute("aria-valuenow", "90");
       expect(ask()).toBe(1);
       expect(badge()).toHaveAccessibleName("5h usage 37%");
       expect(badge().textContent).toBe("");
@@ -472,7 +472,7 @@ describe("左下角的额度", () => {
       await user.click(badge());
       expect(await screen.findByText("Loading…")).toHaveClass("text-xs", "text-muted-foreground");
       gate.resolve({ status: 200, body: reply });
-      expect(await screen.findByRole("region", { name: "Antigravity · Gemini" })).toBeInTheDocument();
+      expect(await screen.findByRole("group", { name: "Gemini" })).toBeInTheDocument();
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
 
@@ -486,7 +486,7 @@ describe("左下角的额度", () => {
         },
       });
       await user.click(badge());
-      await screen.findByRole("region", { name: "Antigravity · Gemini" });
+      await screen.findByRole("group", { name: "Gemini" });
       expect(badge()).toHaveAccessibleName("Usage limit reached");
       expect(badge().textContent).toBe("");
       expect(badge()).toHaveClass("text-danger");
@@ -620,6 +620,25 @@ describe("左下角的额度", () => {
     expect(within(group).getByText(`Resets ${formatQuotaReset(1_793_619_600)}`)).toBeInTheDocument();
     expect(within(group).getByText(`Resets ${formatQuotaReset(1_793_646_000)}`)).toBeInTheDocument();
     expect(within(group).getAllByRole("progressbar")).toHaveLength(2);
+  });
+
+  it("小窗口高度受可用空间限制、里面能滚：窗口矮时顶部的厂商标题不会被切掉", async () => {
+    const user = userEvent.setup();
+    await boot(withQuota(quota(0.37, 0.59)));
+    await user.click(badge());
+    // jsdom 量不了版面：锁住用了 Radix 的 available-height 变量和 overflow 设置（collisionPadding 12px 已在变量里扣掉）
+    const panel = screen.getByRole("dialog", { name: "Usage" });
+    expect(panel).toHaveClass("max-h-(--radix-popover-content-available-height)", "overflow-y-auto");
+  });
+
+  it("用量条颜色：正常中性灰、偏高琥珀（caution）、用满前景色实心，都不用红色；百分比文字不上色", async () => {
+    const user = userEvent.setup();
+    await boot(withQuota(limit({ five_hour: win(0.37), seven_day: win(0.85, { resetsAt: 1_793_646_000 }) })));
+    await user.click(badge());
+    const fill = (name: string) => screen.getByRole("progressbar", { name }).firstElementChild!.className;
+    expect(fill("5h usage")).toContain("bg-foreground/40");
+    expect(fill("7d usage")).toContain("bg-caution");
+    expect(screen.getByText("85%")).not.toHaveClass("text-danger", "text-warn-foreground");
   });
 
   it("只有一个窗口有数据：标识显示它，小窗口里只有一行", async () => {
@@ -1167,7 +1186,7 @@ describe("selectors", () => {
     expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
   });
 
-  it("fetchedQuotaUsage：服务端回的每一组是一块（厂商名 · 组名），窗口按 5 小时、7 天；已过重置时间的算 0%", () => {
+  it("fetchedQuotaUsage：服务端回的每一组是一块（name 是厂商名，group 是组名，不拼“·”），窗口按 5 小时、7 天；已过重置时间的算 0%", () => {
     const res: QuotaResponse = {
       groups: [
         { id: "gemini", name: "Gemini", windows: { seven_day: { utilization: 0.1, resetsAt: 9_000, status: "allowed" }, five_hour: { utilization: 0.85, resetsAt: 5_000, status: "allowed" } } },
@@ -1177,7 +1196,8 @@ describe("selectors", () => {
     expect(fetchedQuotaUsage(res, 0)).toEqual([
       {
         id: "gemini",
-        name: "Antigravity · Gemini",
+        name: "Antigravity",
+        group: "Gemini",
         exhausted: false,
         windows: [
           { key: "five_hour", short: "5h", percent: 85, resetsAt: 5_000, warning: true },
