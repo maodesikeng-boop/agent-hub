@@ -162,6 +162,9 @@ importers:
       knip:
         specifier: ^6.44.2
         version: 6.44.2
+      oxc-parser:
+        specifier: ^0.156.0
+        version: 0.156.0
       tailwindcss:
         specifier: ^4.3.4
         version: 4.3.4
