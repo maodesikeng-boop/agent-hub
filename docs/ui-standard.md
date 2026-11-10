@@ -235,8 +235,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-line bg-surface-chat`（第 4 条的外壳底色），左右 20px（`px-5`），内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
 - **太窄放不下时（720px 以下）**：右栏不再并排，改成顶栏下面的一块（`border-b`，最高 `40dvh`，里面滚动），把消息往下推；不自动展开，点顶栏的开关才出来。不盖住消息和输入框。
 - **展开和收起**：只在有要关心的事时自动出来：有没收工的 Piece（在干活、等验收）或有“等你确定”。**只有收工的 Piece、或什么都没有时，整栏不渲染、不占位置**，对话照常居中；只有收工的时候开关还在，点开关手动打开看“已收工”（这次打开期间一直开着，不记成“收起”），再点收起。有了新的没收工的 Piece 或新的提问，再自动出来。开关是当前项目经理对应水果切出的 Worker 果瓣头像（`Avatar` `colorKey={avatarKey}` `size={26}` `neutral`，整个右栏只有这一颗果瓣，第 6 条的 ghost 图标按钮，有 Piece 或提问就显示，收工的也算），跟着右栏走：并排的右栏展开时，**和第一组的标题在同一行、靠右**（不单独占一行，右栏顶上不留空；第一组 `py-3` 加上 36px 高的开关，标题和对话顶栏的头像、标题大致在一条线上；图标离右边 12px，和收起时在顶栏的位置一样，点的时候不跳）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
-- **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**三组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；“等你确定”标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 果瓣箭头。标题下面直接是行，不留空。
-- **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**小果瓣箭头**（`RightRail.tsx` 的 `WedgeArrow`，三组共用）：当前项目经理那一瓣的现有素材（`Avatar neutral`，14px，和右上角开关同一张图，不加新图），素材里果瓣尖朝左下，**展开转 -45° 朝下、收起转 -135° 朝右**，转向 200ms（`motion-reduce` 时直接换）。
+- **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**三组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；“等你确定”标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 普通箭头。标题下面直接是行，不留空。
+- **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**普通细线箭头**（`ChevronRight` 14px，`text-muted-foreground`，三组共用）：**展开转 90° 朝下、收起朝右**，转向 200ms（`motion-reduce` 时直接换）。
   - 收起后只剩标题这一行，不写个数。
   - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：已收工的会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`），点开才渲染，没有收起的高度动画。
   - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
@@ -268,7 +268,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 加载：`Loader2` 转圈 + 短句（“加载中”），居中；按钮里转圈放在字前面。
 - **在忙的流光**（消息流底部的 Working… / Thinking… / Reading App.tsx… 等 `AgentStatus`、右栏正在跑的 Piece 的名字）：加 `styles.css` 的 `.status-shimmer`，照 Claude desktop 的 “Thinking” 流光：一道变淡的光（字色 35%，比字色浅，深色字上看得出）从左往右扫过字，2.2s `ease-in-out` 循环。只用字本身的颜色（`currentColor`，右栏名字是前景色、消息流是灰），不引入别的颜色；省略号是静态的“...”，不再一个点一个点闪。等额度这类不在忙的状态不加。`prefers-reduced-motion: reduce` 时不动、显示原色字。时长、光带只在 `.status-shimmer` 一处改。
 - **动效规矩**：动效只在状态变化时触发一次，不超过 400ms，不循环（上面的流光是唯一例外），`prefers-reduced-motion: reduce` 时全部关掉。时长只在 `styles.css` 的 `--motion-*` 改。现有的只有这几处：
-  - 换项目经理时外壳底色、分割线淡变 300ms（`--motion-tint`，第 4 条）；右栏组的收起展开 150ms、果瓣箭头转向 200ms（第 12 条）。
+  - 换项目经理时外壳底色、分割线淡变 300ms（`--motion-tint`，第 4 条）；右栏组的收起展开 150ms、普通箭头转向 200ms（第 12 条）。
   - **新来的消息**淡入并上移 4px，120ms（`--motion-enter`，`.message-enter`）：只对对话打开之后新出现在末尾的消息播（`useMessageEnter.ts`：每次提交只比对末尾 12 项的身份，和历史多长无关；播完摘掉类）；打开时的历史、加载更早的、待发消息被确认换成真消息、重新渲染都不播。
   - **切换对话**（左栏点项目经理、点开 Piece、从 Piece 返回）用浏览器原生 View Transitions（`view-transition.ts`，在 `route.ts` 的 `navigate` 里调）：只有顶栏的头像和标题起 `view-transition-name`（`.vt-chat-avatar` / `.vt-chat-title`，`:root` 设成 `none`），消息列表不截快照、直接换；200ms（`--motion-switch`）。浏览器不支持、打开资料页、刚打开时补默认对话都直接换，没有动画。
 - 不能点：`disabled:opacity-50`（主按钮换中性灰，见第 4 条）。

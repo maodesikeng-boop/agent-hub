@@ -71,26 +71,8 @@ function useCollapsedGroups() {
 }
 
 /**
- * 组标题后面的收起箭头（docs/ui-standard.md 第 12 条）：一枚小果瓣（14px 圆角扇形，果肉是强调色掺白、弧边是强调色），展开时尖朝下、收起时朝右。
- * 没用现有的 wedge 素材：14px 下青椒、奇异果这类带空心、带籽的果瓣看不出朝向。转向 200ms，减弱动态效果时直接换。
- */
-function WedgeArrow({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 14 14"
-      data-wedge-arrow
-      aria-hidden="true"
-      className={cn("size-3.5 shrink-0 text-primary transition-transform duration-200 ease-out motion-reduce:transition-none", !expanded && "-rotate-90")}
-    >
-      <path d="M7 12.5 L2.1 4.1 A5.6 5.6 0 0 1 11.9 4.1 Z" fill="color-mix(in srgb, currentColor 55%, #ffffff)" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-      <path d="M2.1 4.1 A5.6 5.6 0 0 1 11.9 4.1" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/**
  * 组标题（Needs You、Pieces、Completed 三组一模一样）：12px 灰字，整行是一个按钮（aria-expanded），点一下收起或展开这一组，
- * 标题后面是果瓣箭头（WedgeArrow）。不带个数。和整栏的开关（RightRailToggle）是两回事。
+ * 标题后面是普通箭头（ChevronRight）。不带个数。和整栏的开关（RightRailToggle）是两回事。
  * trailing：同一行右边放的东西（并排的右栏里第一组放整栏的开关，这样顶上不多占一行）。
  */
 function GroupTitle({
@@ -121,7 +103,13 @@ function GroupTitle({
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
         {children}
-        <WedgeArrow expanded={!collapsed} />
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+            !collapsed && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
       </button>
     </h2>
   );
