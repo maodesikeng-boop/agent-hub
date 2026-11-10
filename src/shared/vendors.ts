@@ -15,10 +15,14 @@ type IdsOf<L extends readonly unknown[]> = { readonly [K in keyof L]: L[K] exten
 export const AGENT_VENDORS = VENDOR_LIST.map((spec) => spec.id) as unknown as IdsOf<typeof VENDOR_LIST>;
 export const DEFAULT_AGENT_VENDOR: AgentVendor = VENDOR_LIST[0].id;
 
+type SpecOf<V extends AgentVendor> = Extract<(typeof VENDOR_LIST)[number], { id: V }>;
+
 /** 按编号查名单里的声明。 */
 const SPECS = Object.fromEntries(VENDOR_LIST.map((spec) => [spec.id, spec])) as Readonly<Record<AgentVendor, VendorSpec<AgentVendor>>>;
 
 /** 按编号查厂商声明（src/vendors/<id>/spec.ts）。 */
+export function vendorSpec<V extends AgentVendor>(vendor: V): SpecOf<V>;
+export function vendorSpec(vendor: AgentVendor): VendorSpec<AgentVendor>;
 export function vendorSpec(vendor: AgentVendor): VendorSpec<AgentVendor> {
   return SPECS[vendor];
 }
@@ -163,11 +167,13 @@ export function checkAgentSetting(
  * 一个 --model（gemini-4-argon + high → gemini-4-argon-high），不再另传 --effort；只有思考程度才传 --effort。
  */
 export function agentLaunchArgs(setting: AgentSetting): string[] {
-  const { effortInModelId, flags } = SPECS[setting.vendor].models;
+  const models = (SPECS[setting.vendor] as VendorSpec | undefined)?.models;
+  const flags = models?.flags;
+  if (!flags) return [];
   const args: string[] = [];
   const hasModel = setting.model !== null && setting.model !== "";
   const hasEffort = setting.effort !== null && setting.effort !== "";
-  if (effortInModelId && hasModel) {
+  if (models.effortInModelId && hasModel) {
     const { model, effort } = splitModelEffort(setting.vendor, setting.model, hasEffort ? setting.effort : null);
     args.push(flags.model, effort === null ? model! : `${model}-${effort}`);
     return args;

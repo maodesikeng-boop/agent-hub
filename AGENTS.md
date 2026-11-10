@@ -38,6 +38,7 @@
 - `zod`：校验输入（`ledger/hub-commands.ts`、`peers/service.ts`）。
 - `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`）。
 - `web-push`：手机推送（`push/sender.ts`、`push/vapid.ts`）。
+- `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库。
 

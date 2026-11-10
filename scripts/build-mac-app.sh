@@ -45,6 +45,13 @@ if [[ ! -f "$SOURCE_ICON" ]]; then
   exit 1
 fi
 
+CONTRACT_JSON="$REPO_DIR/apps/desktop/contract.json"
+if [[ ! -f "$CONTRACT_JSON" ]]; then
+  echo "Missing desktop contract: $CONTRACT_JSON" >&2
+  exit 1
+fi
+cp "$CONTRACT_JSON" "$RESOURCES_DIR/contract.json"
+
 for size in 16 32 128 256 512; do
   /usr/bin/sips -z "$size" "$size" "$SOURCE_ICON" --out "$ICONSET_DIR/icon_${size}x${size}.png" >/dev/null
   double=$((size * 2))

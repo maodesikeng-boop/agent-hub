@@ -41,6 +41,7 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^2.5.0",
     "@fastify/compress": "^9.3.0",
     "@fastify/static": "^10.1.8",
     "@fastify/websocket": "^11.3.6",

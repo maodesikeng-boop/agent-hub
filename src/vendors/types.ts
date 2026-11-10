@@ -109,8 +109,8 @@ export interface VendorSpec<Id extends string = string> {
      * 启动时再拼回完整 ID 传给 flags.model，不再传 flags.effort（agy 对两个都传且对不上会报错）。
      */
     effortInModelId?: boolean;
-    /** 模型、思考程度的命令行参数名。 */
-    flags: { model: string; effort: string };
+    /** 模型、思考程度的命令行参数名（ACP 等通过会话协议传模型与档位的厂商不写）。 */
+    flags?: { model: string; effort: string };
     /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
     shortName?: (model: string) => string | null;
   };
@@ -157,6 +157,10 @@ export interface VendorSpec<Id extends string = string> {
 }
 
 /** 写 spec.ts 用：只做类型检查并把编号推成字面量类型（AgentVendor 从名单推出来）。 */
+export function defineVendor<const Id extends string>(
+  spec: VendorSpec<Id> & { models: { flags: { model: string; effort: string } } },
+): VendorSpec<Id> & { models: { flags: { model: string; effort: string } } };
+export function defineVendor<const Id extends string>(spec: VendorSpec<Id>): VendorSpec<Id>;
 export function defineVendor<const Id extends string>(spec: VendorSpec<Id>): VendorSpec<Id> {
   return spec;
 }

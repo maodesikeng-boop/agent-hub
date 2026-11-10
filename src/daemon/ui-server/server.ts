@@ -3,7 +3,7 @@
 // Linux 上 serve 转发到另听的 0600 Unix socket（startUiServer 的 serveSocket）。
 // 设备入口（docs/hub-tunnel-design.md 第 4 节）：ssh 隧道只接到另听的这一个（startUiServer 的 peerEntry），只认设备令牌。
 // 几种入口各认什么、查什么，见 Entry 和 createUiServer 里的 entryRules。
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
@@ -262,6 +262,16 @@ interface RequestContext {
   identity: Identity;
 }
 
+/** 桌面外壳监管契约标识（与 apps/desktop/contract.json 锁死一致，由 auth-status.test.ts 校验）。 */
+export const DESKTOP_PRODUCT = "fusa" as const;
+export const DESKTOP_PROTOCOL_VERSION = 1 as const;
+
+export interface DesktopAuthStatusResponse extends AuthStatusResponse {
+  product: typeof DESKTOP_PRODUCT;
+  protocolVersion: typeof DESKTOP_PROTOCOL_VERSION;
+  instanceId: string;
+}
+
 const pathOf = (req: FastifyRequest) => req.url.split("?", 1)[0] ?? "";
 /** 设备令牌能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
 const inDeviceScope = (path: string) => path.startsWith("/api/") && !ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -498,6 +508,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
           throw new FileActionsUnavailable();
         });
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
+  // 进程内唯一实例标识：供桌面外壳探活核验所有权与实例退出，纯内存常量，零查询零 I/O。
+  const instanceId = randomUUID();
   // 主钥匙：登录用；“全部退出”会换掉它
   let expectedToken = digest(opts.token);
   let ownedDb: Db | undefined;
@@ -948,10 +960,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(204).send();
     });
 
-    routes.get(API_PATHS.authStatus, async (req): Promise<AuthStatusResponse> => {
+    routes.get(API_PATHS.authStatus, async (req): Promise<DesktopAuthStatusResponse> => {
       const identity = contextOf(req)?.identity;
-      if (identity?.kind !== "cookie") return { status: "unauthenticated" };
-      return { status: identity.status };
+      const status = identity?.kind === "cookie" ? identity.status : "unauthenticated";
+      return {
+        status,
+        product: DESKTOP_PRODUCT,
+        protocolVersion: DESKTOP_PROTOCOL_VERSION,
+        instanceId,
+      };
     });
 
     routes.get(API_PATHS.browserSessions, async (req): Promise<BrowserSessionsResponse> => {

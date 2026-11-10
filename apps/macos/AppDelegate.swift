@@ -33,12 +33,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         )
 
+        supervisor.onOwnershipChange = { [weak self] ownership in
+            self?.statusBarController.updateOwnership(ownership)
+        }
+
+        supervisor.onConflictChange = { [weak self] reason in
+            self?.statusBarController.updateConflict(reason)
+        }
+
         supervisor.onStateChange = { [weak self] state, lastCrash in
             guard let self = self else { return }
             self.statusBarController.updateDaemonState(state, lastCrash: lastCrash)
             switch state {
             case .running:
-                if self.windowController.isShowingErrorPage {
+                if self.windowController.isShowingErrorPage && self.supervisor.currentConflictReason == nil {
                     self.windowController.reload()
                 }
             case .restarting:
@@ -59,6 +67,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             windowController.showWindow()
         }
         return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard supervisor.currentOwnership.isOwned || supervisor.currentPid != nil else {
+            supervisor.stopIfOwned()
+            return .terminateNow
+        }
+        supervisor.stopOwned {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -116,7 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func handleReloadMenu() {
-        windowController.reload()
+        if windowController.isShowingErrorPage {
+            startAndLoad()
+        } else {
+            windowController.reload()
+        }
     }
 
     private func setupMainMenu() {
