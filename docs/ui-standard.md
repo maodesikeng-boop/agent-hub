@@ -233,10 +233,10 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**三组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；“等你确定”标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 果瓣箭头。标题下面直接是行，不留空。
 - **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**小果瓣箭头**（`RightRail.tsx` 的 `WedgeArrow`，三组共用）：当前项目经理那一瓣的现有素材（`Avatar neutral`，14px，和右上角开关同一张图，不加新图），素材里果瓣尖朝左下，**展开转 -45° 朝下、收起转 -135° 朝右**，转向 200ms（`motion-reduce` 时直接换）。
   - 收起后只剩标题这一行，不写个数。
-  - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。
+  - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：已收工的会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`），点开才渲染，没有收起的高度动画。
   - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
 - **行**：
-  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，14px，前景色，400，超长 `truncate`），右边一个向右的小箭头；点一下在这一行下面展开全文（13px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
+  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`），右边一个向右的小箭头；点一下在这一行下面展开全文（13.5px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
   - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
   - Piece 行：**只有一行**，左侧不放机器人图标，**只有标题**（15px 前景色，`truncate`），**右边不写状态词**（Working…、Thinking…、Idle 都不写）。**正在跑的 Piece（干活、准备中、等后台命令，`RightRail.tsx` 的 `isBusy`）标题字本身带流光** `.status-shimmer`（第 14 条，同一套，不另造），只挂在这几行上；空闲、停止中、收工的标题静态。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。
   - **标题去掉机械前缀**：列表里显示的标题去掉开头的分类前缀（“界面：”“修复：”“功能：”……，`format.ts` 的 `cleanPieceTitle`，前缀表只在那一处），直接露出任务名；读屏名字（`aria-label`）和悬停提示保留完整标题。
