@@ -2140,18 +2140,30 @@ describe("Worker 还有后台命令时这一轮不算汇报（等后台命令跑
     expect(ledger.snapshot().sessions.find((s) => s.sessionId === lin.sessionId)?.activity).toBe("idle");
   });
 
-  it("初始快照瘦身：未收工的 Worker 对话带初始消息；已收工的 Worker 对话 messages 为空且 hasMore 为 true，按需通过 messagesBefore 拉取", () => {
-    runTurn(worker, [taskMessage(worker).id], report("做完了", "搞定"));
-    const openSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
-    expect(openSnap.messages.length).toBeGreaterThan(0);
+  it("初始快照瘦身：在跑的 Worker 带最近几条，收工的不带消息；都挂项目经理对话里最近一行的摘要；点开按 messagesBefore 拉", () => {
+    const snapOf = () => ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
+    // 刚派出：任务说明在排队（网页靠它显示“准备中”），摘要是“已派出”那一行
+    expect(taskMessage(worker).status).toBe("queued");
+    const queued = snapOf();
+    expect(queued.messages.map((m) => m.id)).toEqual([taskMessage(worker).id]);
+    expect(queued.workerLine).toMatchObject({ line: { event: "started" }, endedAt: null });
 
+    runTurn(worker, [taskMessage(worker).id], report("做完了", "搞定"));
+    const open = snapOf();
+    expect(open.messages.map((m) => m.id)).toEqual(messagesIn(worker.workerConversationId).map((m) => m.id));
+    expect(open.hasMore).toBe(false);
+    const reportLine = workerLines().at(-1)!;
+    expect(open.workerLine).toEqual({ messageId: reportLine.id, at: reportLine.createdAt, line: workerEventOf(reportLine), endedAt: null });
+
+    now += 1_000;
     hub(lin.sessionId, "worker.end", { workerId: worker.id });
-    const endedSnap = ledger.snapshot().conversations.find((c) => c.conversation.id === worker.workerConversationId)!;
-    expect(endedSnap.messages).toEqual([]);
-    expect(endedSnap.hasMore).toBe(true);
+    const ended = snapOf();
+    expect(ended.messages).toEqual([]);
+    expect(ended.hasMore).toBe(true);
+    expect(ended.workerLine).toMatchObject({ line: { event: "ended" }, endedAt: now });
 
     const onDemand = ledger.messagesBefore(worker.workerConversationId, Number.MAX_SAFE_INTEGER);
-    expect(onDemand.messages.map((m) => m.id)).toEqual(openSnap.messages.map((m) => m.id));
+    expect(onDemand.messages.map((m) => m.id)).toEqual(open.messages.map((m) => m.id));
     expect(onDemand.hasMore).toBe(false);
   });
 });

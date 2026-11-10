@@ -1,8 +1,10 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
 // 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
+  isWorkerEndLine,
   serverInfoFor,
   userMessageDedupeKey,
+  workerEventOf,
   type Attachment,
   type Change,
   type ConversationId,
@@ -56,6 +58,8 @@ export interface ConversationView {
   /** 按编号从小到大。 */
   messages: Message[];
   hasMore: boolean;
+  /** Worker 对话：快照时刻项目经理对话里指向它的最近一行（selectors.ts 再拿项目经理对话里实时来的新行比）。 */
+  workerLine?: ConversationSnapshot["workerLine"];
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
@@ -156,6 +160,24 @@ function dropRetryIfSettled(retry: HubState["retry"], message: Message): HubStat
   return rest;
 }
 
+/** 实时来的项目经理 Worker 行同步更新对应 Worker 对话的 workerLine 摘要，防止项目经理对话超出 MAX_LIVE_MESSAGES 截断后退回旧摘要。 */
+function advanceWorkerLine(
+  conversations: Record<ConversationId, ConversationView>,
+  message: Message,
+): Record<ConversationId, ConversationView> {
+  const line = workerEventOf(message);
+  if (line === null) return conversations;
+  const target = conversations[line.workerConversationId];
+  if (!target) return conversations;
+  const prev = target.workerLine;
+  const endedAt = isWorkerEndLine(line) ? Math.max(prev?.endedAt ?? 0, message.createdAt) : (prev?.endedAt ?? null);
+  const workerLine =
+    prev === undefined || message.id >= prev.messageId
+      ? { messageId: message.id, at: message.createdAt, line, endedAt }
+      : { ...prev, endedAt };
+  return { ...conversations, [line.workerConversationId]: { ...target, workerLine } };
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -178,18 +200,27 @@ export function applyChange(state: HubState, change: Change): HubState {
           retry: dropRetryIfSettled(state.retry, message),
         };
       }
+      // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
+      if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
+        const conversations = advanceWorkerLine(state.conversations, message);
+        return { ...next, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+      }
       const updated = upsertMessage(view.messages, message);
       const trim =
         !state.olderLoaded?.[message.conversationId] &&
         state.older[message.conversationId] !== "loading" &&
         updated.length > MAX_LIVE_MESSAGES;
       const messages = trim ? updated.slice(-MAX_LIVE_MESSAGES) : updated;
-      return {
-        ...next,
-        conversations: {
+      const conversations = advanceWorkerLine(
+        {
           ...state.conversations,
           [message.conversationId]: { ...view, messages, hasMore: view.hasMore || trim },
         },
+        message,
+      );
+      return {
+        ...next,
+        conversations,
         pending: dropConfirmed(state.pending, [message]),
         retry: dropRetryIfSettled(state.retry, message),
       };
@@ -281,9 +312,10 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     // 断线前还在跑、断线期间收工的，旧消息可能缺最终回复，换成快照的空列表 + hasMore，让 MessageList 重新拉最新一页。
     const keepLoaded =
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
+    const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
     conversations[c.conversation.id] = keepLoaded
-      ? { ...prev, conversation: c.conversation }
-      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
+      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine }
+      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);
