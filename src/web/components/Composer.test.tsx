@@ -193,12 +193,11 @@ describe("Composer 布局", () => {
     }
   });
 
-  it("获得焦点时外沿呈现很淡的强调色光晕（Tailwind 类，不用内联 <style>），边框颜色与粗细不变，文字框自身无 focus ring", () => {
+  it("聚焦态写在 styles.css 的 .composer-frame（边框微染水果色 + 柔和阴影，不套圈）：外框不带 ring / 实心描边类，边框粗细不变，文字框自身无 focus ring，不用内联 <style>", () => {
     const { container } = setup();
     const frame = container.firstElementChild as HTMLElement;
-    expect(frame).toHaveClass("border", "border-border");
-    expect(frame.className).not.toMatch(/border-primary/);
-    expect(frame.className).toContain("focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent)");
+    expect(frame).toHaveClass("composer-frame", "border", "border-border");
+    expect(frame.className).not.toMatch(/border-primary|border-2|ring|focus-within:|0_0_0_3px/);
     expect(screen.getByRole("textbox", { name: "Message" }).className).not.toMatch(/ring/);
     expect(container.querySelector("style")).toBeNull();
   });

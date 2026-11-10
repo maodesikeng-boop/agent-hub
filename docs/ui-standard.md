@@ -150,7 +150,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - 统一中性，**不用主色，不加彩色光圈**。`--ring` 是中性灰（`#a1a1aa`），`ring-ring` 就是它。
 - 普通文字输入（`Input`、`Textarea`、`Select` 的带边框样式）：**聚焦时样子不变**——边框颜色、粗细、阴影都不变，靠光标闪表示（照 Claude desktop、t3code）；组件里不写任何 `focus` 样式。
-- **聊天输入框聚焦态**：外沿出现很淡的强调色光晕（Tailwind `focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_14%,transparent),0_2px_10px_rgba(0,0,0,0.05)]`，不写内联样式块），不加粗边框、不改边框颜色（保持 1px `border-border`），强调色取当前会话的项目经理 CSS 变量 `--primary`。
+- **聊天输入框聚焦态**：像“亮起来”，不套圈（照 Claude desktop、Linear 的输入框：边框加深一点、阴影变柔变深，没有 focus ring）。样式只在 `styles.css` 的 `.composer-frame` 一处（`Composer.tsx` 的外框挂这个类，不写内联样式块、不写 `focus-within:` 的 Tailwind 类）：
+  - **平时**：1px `border-border`，阴影 `0 2px 10px rgba(0,0,0,0.05)`。
+  - **聚焦（`:focus-within`）**：边框仍是 1px（只换颜色，框不跳），颜色是中性灰加深一档再掺 20% 强调色——`color-mix(in srgb, var(--primary) 20%, color-mix(in srgb, var(--foreground) 16%, var(--border)))`；阴影换成两层：贴边的细影 `0 1px 2px rgba(0,0,0,0.04)` + 大半径柔影 `0 8px 26px -6px`，柔影颜色是强调色压暗一半、14% 不透明度（`color-mix(in srgb, color-mix(in srgb, var(--primary) 50%, #000) 14%, transparent)`）。强调色只取当前会话的 `--primary`，不另加颜色。
+  - **不做的**：不带模糊的实心圈（`0 0 0 Npx`）、四周发光、加粗边框、纯强调色的边框（红色系会像报错的红边，也发粉）。
+  - **看得出来**：8 种水果聚焦时边框对白底的对比度都在 2.0～2.2:1（平时 1.18:1），深色、浅色水果一样明显；加上阴影变深和光标，键盘聚焦不只靠色差。
+  - **过渡**：`border-color`、`box-shadow` 180ms `ease-out`（`--motion-focus`），`prefers-reduced-motion: reduce` 时直接切换。只动这两个属性，不触发排版。
 - **聊天输入框的单行 / 多行**：空或只有一行字时，回形针、文字区、发送键（或停止键）在**同一行**，垂直居中，整条高 48px（标准档；36px 按钮 + 上下 5px + 1px 边框，随界面大小缩放）；文字超过一行（有换行符或自动换行）或有待发文件时，文字区占满上一行，回形针（左）和发送键（右）落到文字区**下面一行**（文件小条在最上面）。两种布局是同一个网格里的同一个文字区节点（只换网格位置），切换时不重建、光标和焦点不丢；高度判断在 `Composer.tsx` 调高度的 `useLayoutEffect` 里做（只读一次 `scrollHeight`，布尔值变了才重渲染），多行退回单行时用 canvas 量文字宽度、放得进回形针和发送键中间才退回（`composer-layout.ts`），避免来回切。
 - **聊天输入框发送键**：没有内容时是中性灰、不可点（`disabled`）；输入文字或添加待发文件后变为当前项目经理的强调色（水果色）且可点；在“从空变有内容”的那一下做一次 150ms 的轻微放大回弹（`composer-send-bounce`，`@keyframes` 在 `styles.css`），打字过程中不重复播；系统开启 `prefers-reduced-motion: reduce` 时不播放。
 - 按钮、列表项、单选行、开关这类点的东西：键盘聚焦时显示 `focus-visible:ring-2 focus-visible:ring-ring/50`（单选行在框里，用 `ring-inset`）。只在键盘聚焦（`focus-visible`）时出现，鼠标点不出圈。
