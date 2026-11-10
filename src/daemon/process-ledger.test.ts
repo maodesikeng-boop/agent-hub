@@ -157,13 +157,62 @@ describe("子进程记账", () => {
     expect(await createProcessLedger({ file, startTimeOf }).reapStale()).toEqual([]);
   });
 
-  it("启动回收：不杀自己、不杀这次已经记下的", async () => {
-    writeFileSync(file, JSON.stringify({ version: 1, entries: [{ pid: process.pid, startTime: "x", purpose: "me", ownsGroup: false }] }));
+  it("启动回收：不杀自己、不杀这次已经记下的（哪怕 startTimeOf 还没返回）", async () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          { pid: process.pid, startTime: "x", purpose: "me", ownsGroup: false },
+          { pid: 7001, startTime: "T7001", purpose: "old", ownsGroup: false },
+        ],
+      }),
+    );
     startTimes.set(process.pid, "x");
-    expect(await createProcessLedger({ file, startTimeOf }).reapStale()).toEqual([]);
+    startTimes.set(7001, "T7001");
+    let resolveStart!: (v: string | null) => void;
+    const killed: number[] = [];
+    const ledger = createProcessLedger({
+      file,
+      startTimeOf: (pid) => (pid === 7001 ? new Promise<string | null>((r) => (resolveStart = r)) : startTimeOf(pid)),
+      kill: async (pid) => {
+        killed.push(pid);
+      },
+    });
+    const current = fakeChild(7001);
+    ledger.track(current.child, "agent:claude"); // startTimeOf 还没返回，但 liveChildren 已经记住了
+    expect(await ledger.reapStale()).toEqual([]);
+    expect(killed).toEqual([]);
+    resolveStart("T7001");
+    await ledger.settled();
   });
 
-  it("trackChild：没装记账什么都不做，装了就记；撤销只撤自己那份", async () => {
+  it("同一个进程号被新子进程复用：旧子进程迟到的 exit 或 startTimeOf 不会误删或覆盖新子进程的记录", async () => {
+    let resolveOld!: (v: string | null) => void;
+    const ledger = createProcessLedger({
+      file,
+      startTimeOf: (pid) => {
+        if (pid === 8001 && !startTimes.has(8001)) return new Promise<string | null>((r) => (resolveOld = r));
+        return startTimeOf(pid);
+      },
+    });
+    const oldChild = fakeChild(8001);
+    ledger.track(oldChild.child, "probe:old");
+    // 紧接着新子进程复用了 8001
+    startTimes.set(8001, "T-new");
+    const newChild = fakeChild(8001);
+    ledger.track(newChild.child, "agent:new", { detached: true });
+    await Promise.resolve();
+    // 旧子进程的 startTimeOf 迟到返回，接着旧子进程触发 exit：都不能碰新子进程的记录
+    resolveOld("T-old");
+    await ledger.settled();
+    oldChild.exit();
+    expect(readLedgerFile(file)).toEqual([{ pid: 8001, startTime: "T-new", purpose: "agent:new", ownsGroup: true }]);
+    newChild.exit();
+    expect(readLedgerFile(file)).toEqual([]);
+  });
+
+  it("trackChild：没装记账什么都不做，装了就记；撤销只撤自己那份，栈顶撤了退回上一份", async () => {
     const quiet = fakeChild(6001);
     startTimes.set(6001, "T");
     trackChild(quiet.child, "x"); // 没装：不报错
@@ -173,12 +222,23 @@ describe("子进程记账", () => {
     await ledger.settled();
     expect(ledger.size).toBe(1);
     const other = createProcessLedger({ file: join(dir, "other.json"), startTimeOf });
-    installProcessLedger(other);
+    const uninstallOther = installProcessLedger(other);
     uninstall(); // 已经被换掉了：不能把别人的撤了
     trackChild(fakeChild(6001).child, "agent:agy");
     await other.settled();
     expect(other.size).toBe(1);
     expect(existsSync(file)).toBe(true);
     expect(JSON.parse(readFileSync(file, "utf8")).entries).toHaveLength(1);
+    // 再装回第一份、然后装第三份并撤掉第三份：自动退回第一份
+    const uninstallAgain = installProcessLedger(ledger);
+    const third = createProcessLedger({ file: join(dir, "third.json"), startTimeOf });
+    const uninstallThird = installProcessLedger(third);
+    uninstallThird();
+    startTimes.set(6002, "T2");
+    trackChild(fakeChild(6002).child, "agent:codex");
+    await ledger.settled();
+    expect(ledger.size).toBe(2);
+    uninstallAgain();
+    uninstallOther();
   });
 });

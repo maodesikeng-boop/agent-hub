@@ -4,12 +4,12 @@
 // - 进程号还在、而且启动时间和记下的一致（还是同一个进程）才杀，进程号被别的进程复用了（启动时间对不上）就不碰；
 // - 只回收自己记过的，不按名字、目录去找别人的进程。
 // 文件最多 PROCESS_LEDGER_MAX_ENTRIES 条（超了丢最老的），退出的随时划掉，启动回收后只剩当前这次记的。
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { PROCESS_LEDGER_MAX_ENTRIES, PROCESS_LEDGER_PURPOSE_MAX_CHARS } from "../shared/limits.ts";
+import { KILL_WAIT_MS, PROCESS_LEDGER_MAX_ENTRIES, PROCESS_LEDGER_PURPOSE_MAX_CHARS } from "../shared/limits.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
-import { forceKillTree, isAlive, runPs, signalPid } from "./driver/process.ts";
+import { forceKillTree, runPs, signalPid, waitForExit } from "./driver/process.ts";
 
 export interface LedgerEntry {
   pid: number;
@@ -75,27 +75,41 @@ export function readLedgerFile(file: string): LedgerEntry[] {
   }
 }
 
-function groupAlive(pid: number): boolean {
+/** 能给这个目标（正数是进程，负数是进程组）发信号才算还活着；EPERM 说明进程号已经被其他用户的进程复用了，一定不是我们的子进程。 */
+function canSignal(pid: number): boolean {
   try {
-    process.kill(-pid, 0);
+    process.kill(pid, 0);
     return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+  } catch {
+    return false;
   }
 }
 
+function groupAlive(pid: number): boolean {
+  return canSignal(-pid);
+}
+
+async function defaultKill(pid: number, ownsGroup: boolean): Promise<void> {
+  await forceKillTree(pid, ownsGroup);
+  await waitForExit(pid, KILL_WAIT_MS);
+}
+
+type TrackedChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
+
 export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedger {
-  const { file, log = () => {}, startTimeOf = defaultStartTimeOf, kill = forceKillTree } = options;
-  const entries = new Map<number, LedgerEntry>();
+  const { file, log = () => {}, startTimeOf = defaultStartTimeOf, kill = defaultKill } = options;
+  const entries = new Map<number, { child: TrackedChild; entry: LedgerEntry }>();
+  const liveChildren = new Map<number, TrackedChild>();
   const pending = new Set<Promise<void>>();
 
   const persist = () => {
     const tmp = `${file}.${process.pid}.tmp`;
     try {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-      writeFileSync(tmp, JSON.stringify({ version: 1, entries: [...entries.values()] }), { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ version: 1, entries: [...entries.values()].map((v) => v.entry) }), { mode: 0o600 });
       renameSync(tmp, file); // 原子换：读的人不会看到写了一半的文件
     } catch (error) {
+      rmSync(tmp, { force: true });
       log(`${LOG_PREFIX} 子进程记录写不进 ${file}：${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -108,16 +122,24 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
     },
     track(child, purpose, trackOptions = {}) {
       const pid = child.pid;
-      if (pid === undefined || pid <= 1) return;
+      if (pid === undefined || pid <= 1 || exited(child)) return;
       const ownsGroup = trackOptions.detached === true;
+      liveChildren.set(pid, child);
       child.once("exit", () => {
-        if (entries.delete(pid)) persist();
+        if (liveChildren.get(pid) === child) liveChildren.delete(pid);
+        if (entries.get(pid)?.child === child) {
+          entries.delete(pid);
+          persist();
+        }
       });
       const lookup = startTimeOf(pid)
         .then((startTime) => {
-          if (startTime === null || exited(child)) return;
+          if (startTime === null || exited(child) || liveChildren.get(pid) !== child) return;
           entries.delete(pid); // 同一个进程号再记：放到最后
-          entries.set(pid, { pid, startTime, purpose: purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS), ownsGroup });
+          entries.set(pid, {
+            child,
+            entry: { pid, startTime, purpose: purpose.slice(0, PROCESS_LEDGER_PURPOSE_MAX_CHARS), ownsGroup },
+          });
           while (entries.size > PROCESS_LEDGER_MAX_ENTRIES) entries.delete(entries.keys().next().value as number);
           persist();
         })
@@ -128,7 +150,7 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
     async reapStale() {
       const reaped: ReapedEntry[] = [];
       for (const entry of readLedgerFile(file)) {
-        if (entry.pid === process.pid || entries.has(entry.pid)) continue;
+        if (entry.pid === process.pid || entries.has(entry.pid) || liveChildren.has(entry.pid)) continue;
         const reason = await judge(entry);
         if (reason === null) continue;
         if (reason === "same_process") await kill(entry.pid, entry.ownsGroup);
@@ -146,7 +168,7 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
 
   /** 这条记录现在要不要杀：null 不杀（进程没了，或者进程号已经是别的进程）。 */
   async function judge(entry: LedgerEntry): Promise<ReapReason | null> {
-    if (isAlive(entry.pid)) {
+    if (canSignal(entry.pid)) {
       // 启动时间一致才是同一个进程；读不到（ps 跑不了）宁可不杀
       return (await startTimeOf(entry.pid)) === entry.startTime ? "same_process" : null;
     }
@@ -155,17 +177,20 @@ export function createProcessLedger(options: ProcessLedgerOptions): ProcessLedge
   }
 }
 
-let active: ProcessLedger | null = null;
+const installed: ProcessLedger[] = [];
 
-/** 让 trackChild 往这份记账里记；返回撤销函数（只撤自己装的那份）。 */
+/** 让 trackChild 往这份记账里记；返回撤销函数（只撤自己装的那份，栈顶退回上一份）。 */
 export function installProcessLedger(ledger: ProcessLedger): () => void {
-  active = ledger;
+  const existing = installed.indexOf(ledger);
+  if (existing !== -1) installed.splice(existing, 1);
+  installed.push(ledger);
   return () => {
-    if (active === ledger) active = null;
+    const idx = installed.lastIndexOf(ledger);
+    if (idx !== -1) installed.splice(idx, 1);
   };
 }
 
 /** 各个 spawn 的地方在 spawn 之后调：守护进程装了记账就记，没装（测试、工具脚本）什么都不做。 */
 export function trackChild(child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">, purpose: string, options?: TrackOptions): void {
-  active?.track(child, purpose, options);
+  installed.at(-1)?.track(child, purpose, options);
 }

@@ -12,7 +12,7 @@ import type { TokenUsage } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { agyCliDataDir, agyDataPaths } from "../../shared/paths.ts";
 import { AGY_PLAN_PERMISSION_ARGS, AGY_PRINT_ARGS, AGY_STREAM_ARGS, buildAgyUserLine, buildChildEnv, detectAgyArgsConflict, parseAgyUsage } from "../driver/agy-protocol.ts";
-import { forceKill, killFreshGroup } from "../driver/process.ts";
+import { forceKill, killFreshGroup, termGroupAfterExit } from "../driver/process.ts";
 import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
@@ -211,12 +211,18 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS)));
       child.stdin.on("error", () => {}); // 进程提前退了，写不进去：看退出码和输出
-      const onAbort = () => void forceKill(child).catch(() => killFreshGroup(child)); // ps 起不来时只按进程组杀
+      const onAbort = () => {
+        killFreshGroup(child);
+        void forceKill(child);
+      };
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
           child.once("error", reject);
-          child.once("close", (code, sig) => resolve({ code, signal: sig }));
+          child.once("close", (code, sig) => {
+            termGroupAfterExit(child);
+            resolve({ code, signal: sig });
+          });
           child.stdin.end(buildAgyUserLine(prompt) + "\n");
         });
         signal.throwIfAborted();

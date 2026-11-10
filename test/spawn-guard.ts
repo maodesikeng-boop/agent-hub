@@ -12,6 +12,8 @@ interface Tracked {
   command: string;
   /** detached 起的进程是自己进程组的组长，组里的后代也算它的。 */
   detached: boolean;
+  /** 进程已退出且当时它的进程组已清空（锁住，免得后面进程号被并行 worker 复用后误判或误杀）。 */
+  groupCleared: boolean;
   /** 起它的时候正在跑的用例（模块顶层、beforeAll 里起的是 undefined），报残留时用来找出处。 */
   test: string | undefined;
 }
@@ -28,7 +30,14 @@ function store(): Tracked[] {
 function remember(child: ChildProcess, args: unknown[]): void {
   const options = args.find((a) => typeof a === "object" && a !== null && !Array.isArray(a) && !(a instanceof Function)) as { detached?: unknown } | undefined;
   const command = [args[0], ...(Array.isArray(args[1]) ? args[1] : [])].map(String).join(" ").slice(0, 200);
-  store().push({ child, command, detached: options?.detached === true, test: expect.getState().currentTestName });
+  const detached = options?.detached === true;
+  const tracked: Tracked = { child, command, detached, groupCleared: !detached, test: expect.getState().currentTestName };
+  if (detached) {
+    child.once("exit", () => {
+      if (child.pid === undefined || !groupAlive(child.pid)) tracked.groupCleared = true;
+    });
+  }
+  store().push(tracked);
 }
 
 /** 把 child_process 的 spawn / fork / execFile 换成会记账的版本（只换一次）。 */
@@ -54,15 +63,22 @@ function groupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0);
     return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+  } catch {
+    // 测试自己起的子进程都是同一个用户的，不会 EPERM；EPERM 说明这个进程组号已经被别的用户的进程复用了
+    return false;
   }
 }
 
-function isLeaked({ child, detached }: Tracked): boolean {
+function isLeaked(tracked: Tracked): boolean {
+  const { child } = tracked;
   if (child.pid === undefined) return false; // 没起来（ENOENT 之类）
   if (child.exitCode === null && child.signalCode === null) return true;
-  return detached && groupAlive(child.pid);
+  if (tracked.groupCleared) return false;
+  if (!groupAlive(child.pid)) {
+    tracked.groupCleared = true;
+    return false;
+  }
+  return true;
 }
 
 /** 本 worker 里记下的、现在还没退干净的子进程。 */
@@ -101,8 +117,12 @@ export async function waitForNoLeaks(ms: number): Promise<Tracked[]> {
 install();
 
 afterAll(async () => {
-  const leaked = await waitForNoLeaks(TEST_CHILD_EXIT_WAIT_MS);
-  if (leaked.length === 0) return;
-  killLeaked(leaked);
-  throw new Error(`测试结束时还有 ${leaked.length} 个子进程没退出（已强制结束）：${leaked.map((t) => `${t.child.pid} ${t.command}（起于：${t.test ?? "用例之外"}）`).join("；")}`);
+  try {
+    const leaked = await waitForNoLeaks(TEST_CHILD_EXIT_WAIT_MS);
+    if (leaked.length === 0) return;
+    killLeaked(leaked);
+    throw new Error(`测试结束时还有 ${leaked.length} 个子进程没退出（已强制结束）：${leaked.map((t) => `${t.child.pid} ${t.command}（起于：${t.test ?? "用例之外"}）`).join("；")}`);
+  } finally {
+    store().length = 0;
+  }
 });

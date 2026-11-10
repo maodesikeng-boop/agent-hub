@@ -1412,17 +1412,25 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
       status: "running",
     });
 
-    await t.driver.cleanupStale();
-    await realSleep(50);
-
-    expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
-    let alive = true;
     try {
-      process.kill(stalePid, 0);
-    } catch {
-      alive = false;
+      await t.driver.cleanupStale();
+      await realSleep(50);
+
+      expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
+      let alive = true;
+      try {
+        process.kill(stalePid, 0);
+      } catch {
+        alive = false;
+      }
+      expect(alive).toBe(false);
+    } finally {
+      try {
+        process.kill(-stalePid, "SIGKILL");
+      } catch {
+        // 已退出
+      }
     }
-    expect(alive).toBe(false);
   });
 
   it("result.response 兜底补发与忙时队列合并、恢复/重发说明顺序", async () => {

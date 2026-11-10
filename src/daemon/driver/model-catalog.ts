@@ -705,8 +705,8 @@ export interface ModelCatalogs {
   ensureUsable(vendor: AgentVendor): Promise<VendorAvailability>;
   /** 真跑的结果（会话起来了、认证失败、找不到程序）直接更新状态，不用等缓存过期。 */
   report(vendor: AgentVendor, availability: VendorAvailability): void;
-  /** 关机：取消在问的那次，之后不再问。 */
-  close(): void;
+  /** 关机：取消在问的那次并等它收尾（最多 KILL_WAIT_MS），之后不再问。 */
+  close(): Promise<void>;
 }
 
 interface VendorCatalogSlot {
@@ -873,9 +873,20 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       slot.availability = availability;
       slot.failedAt = isSelectable(availability) ? null : now();
     },
-    close() {
+    async close() {
       closed = true;
       controller.abort();
+      const pending = [...slots.values()].map((s) => s.inflight).filter((p): p is Promise<void> => p !== null);
+      if (pending.length === 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(pending),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, KILL_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }

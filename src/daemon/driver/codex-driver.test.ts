@@ -1434,9 +1434,13 @@ describe("CodexDriver 跨轮 item.id 防撞车与残留进程清理", () => {
       expect(t.store.get(s.id)!.status).toBe("idle");
     } finally {
       try {
-        process.kill(stalePid, "SIGKILL");
+        process.kill(-stalePid, "SIGKILL");
       } catch {
-        // 已退出
+        try {
+          process.kill(stalePid, "SIGKILL");
+        } catch {
+          // 已退出
+        }
       }
     }
   });

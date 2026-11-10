@@ -12,6 +12,7 @@ import {
   readCodexLaunchConfig,
   serializeJsonRpcLine,
 } from "../driver/codex-protocol.ts";
+import { signalPid, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
 import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "./forker.ts";
@@ -87,9 +88,13 @@ class CodexRpc {
     const done = new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
     this.#child.stdin?.end();
     this.#child.kill("SIGTERM");
-    const timer = setTimeout(() => this.#child.kill("SIGKILL"), CLOSE_GRACE_MS);
+    const timer = setTimeout(() => {
+      if (this.#child.pid !== undefined && this.#child.pid > 1) signalPid(-this.#child.pid, "SIGKILL");
+      this.#child.kill("SIGKILL");
+    }, CLOSE_GRACE_MS);
     await done;
     clearTimeout(timer);
+    termGroupAfterExit(this.#child);
   }
 
   #write(payload: Json): void {

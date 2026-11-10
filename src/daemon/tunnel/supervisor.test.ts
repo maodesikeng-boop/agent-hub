@@ -300,16 +300,20 @@ describe("停止", () => {
     // 留下的：命令行里有标记（钥匙文件路径）的才杀
     const orphan = spawn(process.execPath, [FAKE_SSH, plan], { stdio: "ignore" });
     const stranger = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
-    await spawned(2);
-    writeFileSync(pidFile, String(stranger.pid));
-    await killStaleSsh(pidFile, plan);
-    expect(alive(stranger.pid!)).toBe(true);
-    writeFileSync(pidFile, String(orphan.pid));
-    await killStaleSsh(pidFile, plan);
-    await new Promise((r) => orphan.once("exit", r));
-    expect(alive(orphan.pid!)).toBe(false);
-    expect(existsSync(pidFile)).toBe(false);
-    stranger.kill("SIGKILL");
+    try {
+      await spawned(2);
+      writeFileSync(pidFile, String(stranger.pid));
+      await killStaleSsh(pidFile, plan);
+      expect(alive(stranger.pid!)).toBe(true);
+      writeFileSync(pidFile, String(orphan.pid));
+      await killStaleSsh(pidFile, plan);
+      await new Promise((r) => orphan.once("exit", r));
+      expect(alive(orphan.pid!)).toBe(false);
+      expect(existsSync(pidFile)).toBe(false);
+    } finally {
+      orphan.kill("SIGKILL");
+      stranger.kill("SIGKILL");
+    }
     // 文件不在、进程早没了：什么都不做
     await killStaleSsh(pidFile, plan);
   });

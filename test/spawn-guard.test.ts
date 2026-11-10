@@ -35,4 +35,14 @@ describe("spawn-guard", () => {
     await new Promise((resolve) => child.once("error", resolve));
     expect(leakedChildren().filter((t) => t.child === child)).toEqual([]);
   });
+
+  it("detached 子进程及其进程组已退干净后锁住 groupCleared，之后进程号被复用也不会误判为残留", async () => {
+    const child = spawn(process.execPath, ["-e", "0"], { stdio: "ignore", detached: true });
+    await new Promise((resolve) => child.once("exit", resolve));
+    const tracked = trackedChildren().find((t) => t.child === child);
+    expect(tracked?.groupCleared).toBe(true);
+    // 就算之后这个 pid 变成了别的活着的新进程组（例如把 pid 指向当前进程组），已锁住 groupCleared 的记录也不会再当成残留
+    Object.defineProperty(child, "pid", { value: process.pid });
+    expect(leakedChildren().filter((t) => t.child === child)).toEqual([]);
+  });
 });
