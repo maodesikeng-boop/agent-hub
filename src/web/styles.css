@@ -193,6 +193,20 @@ code {
     -webkit-text-fill-color: currentColor;
   }
 }
+/* 聊天输入框发送键从“空”变“有内容”时放大回弹一次（Composer.tsx 在那一下加上这个类，之后不循环）；系统设了“减少动态效果”就不播 */
+.composer-send-bounce {
+  animation: composer-send-bounce 150ms ease-out;
+}
+@keyframes composer-send-bounce {
+  50% {
+    transform: scale(1.12);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-send-bounce {
+    animation: none;
+  }
+}
 .messages,
 .chat-column {
   --chat-max: 46rem;
