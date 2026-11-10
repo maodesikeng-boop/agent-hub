@@ -18,6 +18,7 @@ import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
+import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
 
@@ -338,7 +339,11 @@ export class DevicesStore {
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
 
-  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor) {
+  /**
+   * routed：网址里写的别的设备（打开网页时）。不等设备清单回来就开它的连接、拉它的快照，和清单同时拉；
+   * 清单回来里面没有它（编号不对、已经移除）就关掉（setDevices）。清单回来之前界面里不出现它（没有设备信息）。
+   */
+  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey) {
     this.clientFor = clientFor;
     this.hubs.set(
       LOCAL_DEVICE,
@@ -346,6 +351,7 @@ export class DevicesStore {
         if (this.running) void this.refresh();
       }),
     );
+    if (routed !== undefined && routed !== LOCAL_DEVICE) this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed));
     this.store = createStore<DevicesSnapshot>(() => this.build());
   }
 
@@ -443,7 +449,7 @@ function defaultClientFor(key: DeviceKey): HubClient {
 
 /** 网页的全部设备：快照（每台的状态）+ 按设备取操作的 hub(key) + 刷新设备清单。 */
 export function useDevices() {
-  const [store] = useState(() => new DevicesStore());
+  const [store] = useState(() => new DevicesStore(defaultClientFor, parseRoute(window.location.hash)?.device));
   useEffect(() => {
     store.start();
     return () => store.dispose();
