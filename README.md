@@ -4,7 +4,7 @@
 
 **Manage an entire project through a single conversation.**
 
-Fusa is a self-hosted web app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You tell the PM what you want; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
+Fusa is a desktop-first personal multi-agent coding app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You align on goals and make decisions with the PM in one conversation; the PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees in parallel, reviews their diffs and test results, and merges their PRs. Every role—PM or Worker—can independently run a different vendor's official command-line agent (`claude`, `agy`, or `codex`) under your own account.
 
 ![Fusa home screen](docs/screenshots/readme-home.png)
 
@@ -14,7 +14,7 @@ When you run multiple coding agents in parallel, the bottleneck quickly shifts f
 
 Fusa is designed from the ground up so **one conversation manages the whole project**—the shape it has had since day one. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
 
-It is built for **one person across multiple devices** (your Mac, a Linux server, your phone)—not a multi-user shared server.
+It is built for **one person across multiple devices**—double-click `Fusa.app` on your Mac to open the desktop window directly (no manual browser URLs or tokens), run an always-on daemon on a Linux server when needed, and check in or reply from your phone via browser or home-screen PWA—not a multi-user shared server.
 
 ## How it works
 
@@ -46,16 +46,16 @@ See [docs/readonly-worker-design.md](docs/readonly-worker-design.md) for details
 - **Offload heavy work and match model to difficulty:** Multi-file searches, log investigation, and code changes are delegated to short-lived Workers—using lighter models and lower thinking effort for routine tasks—so bulky tool outputs never bloat the PM's context. Once a Worker's context exceeds 200,000 tokens or needs major rework, the PM closes it and starts a fresh Worker instead of paying to re-read a huge context every turn.
 - **Structured reports and layered on-demand inspection:** Workers return a concise structured summary at the end of each turn; when the PM needs more detail, it queries step statistics or the last 20 steps on demand rather than reading raw session transcripts.
 - **~97% prompt cache reuse and tool-stripped handovers:** Background handover forks keep the identical model, system prompt, and tool definitions to hit ~97% of the parent session's prompt cache, while new sessions strip out historical tool outputs and full Worker logs.
-- **Message batching, slim initial load, and idle process reaping:** Consecutive messages sent while an agent is busy are delivered mid-turn or batched into a single turn; initial page load fetches only the 20 most recent messages per active conversation and 0 messages for finished Workers; and agent processes idle for 10 minutes are automatically closed and resumed on demand.
+- **Message batching, slim initial load, and idle process reaping:** Consecutive messages sent while an agent is busy are delivered mid-turn or batched into a single turn; initial load fetches only the 20 most recent messages per active conversation and 0 messages for finished Workers; and agent processes idle for 10 minutes are automatically closed and resumed on demand.
 
 See [docs/mid-turn-messages.md](docs/mid-turn-messages.md) for details.
 
 ## Other features
 
 - **Currently supported agent CLIs:** Claude Code (`claude`), Antigravity (`agy`), and Codex (`codex`) (list defined in [`src/shared/vendors.ts`](src/shared/vendors.ts) as `AGENT_VENDORS`).
-- **Rich web UI:** works on desktop and mobile, installable as a PWA with optional Web Push notifications, Markdown rendering, syntax highlighting, Mermaid and Vega-Lite charts, and file uploads.
-- **Quota tracking:** displays usage quota windows for the supported vendors.
-- **Optional macOS desktop shell & multi-device view:** manage agents across your Mac and Linux machines from a single web page (see below).
+- **Native macOS desktop app (`Fusa.app`):** opens in a dedicated desktop window, automatically starts and supervises the local daemon, authenticates locally without manual URLs or tokens, shows live worker/question counts in the menu bar and Dock badge, and delivers native macOS notifications.
+- **Rich conversation UI & mobile PWA:** Markdown rendering, syntax highlighting, Mermaid and Vega-Lite charts, and file uploads/previews; accessible on your phone via browser or installed via **Add to Home Screen** (PWA) with optional Web Push lock-screen notifications.
+- **Multi-device view & quota tracking:** view and operate agents across your Mac and Linux server in one window, and track usage quota windows and reset times for the supported vendors.
 
 ## Requirements
 
@@ -64,43 +64,51 @@ See [docs/mid-turn-messages.md](docs/mid-turn-messages.md) for details.
   - Claude Code: `claude auth login`
   - Antigravity: `agy`
   - Codex: `codex login`
-- macOS or Linux (Ubuntu; see [docs/linux.md](docs/linux.md)). Windows is not covered.
+- **macOS 13+** with Xcode Command Line Tools (`swiftc`) to build `Fusa.app`, or a **Linux** server (Ubuntu; see [docs/linux.md](docs/linux.md)).
 
 ## Install and run
 
-```bash
+### 1. macOS desktop app (`Fusa.app`, primary entry)
+
+Build from source and install `/Applications/Fusa.app`:
+
+```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
 cd agent-hub
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
+bash scripts/build-mac-app.sh --install
+```
+
+*(To build `build/Fusa.app` without copying to `/Applications`, run `pnpm app:mac`.)*
+
+Once installed, open **`Fusa.app`** directly from `/Applications` or Spotlight—no need to open a browser or paste a login URL. `Fusa.app` (`apps/macos/`) automatically launches and supervises the local daemon (`node src/daemon/main.ts`), authenticates using your local token, and creates a default Project Manager on first start.
+
+**Source-build notes (compile on your own machine):** There is no standalone prebuilt installer download yet. `scripts/build-mac-app.sh` embeds your repository's absolute path (`AgentHubRepoDir`) and your Node.js executable path (`AgentHubNodePath`) into `Contents/Info.plist` and signs the bundle ad-hoc (`codesign -s -`), so running `Fusa.app` still depends on your local Node installation, built assets (`dist/web`), and source directory. **If you move the repository or change your Node path, re-run the build script** (or override them at runtime via `AGENT_HUB_REPO_DIR` and `AGENT_HUB_NODE`). Do not distribute the compiled `.app` bundle.
+
+### 2. Linux server (always-on daemon & multi-device hub)
+
+When you want a 24/7 background daemon or a central relay connecting multiple machines, deploy the daemon on a Linux (Ubuntu) server as a `systemd` user service. For full setup instructions—including one-time `bubblewrap` Worker sandbox configuration (`sudo scripts/linux-sandbox-setup.sh`), SSH tunnels, and optional public access—see [docs/linux.md](docs/linux.md).
+
+### 3. Mobile access (browser & PWA)
+
+To check progress and reply to the same conversations from your phone: on an already signed-in computer, open **Settings → Security & Access → Sign in on phone** (`Show QR code`), scan the one-time QR code (or open the one-time sign-in link) on your phone, and click **Allow** under **Signed-in browsers** on the computer. You can use Fusa directly in your mobile browser or tap **Add to Home Screen** to install it as a full-screen PWA (with optional Web Push notifications).
+
+### 4. Running the daemon directly from the terminal (optional)
+
+For local development or running without the desktop shell, you can start the daemon directly:
+
+```sh
 pnpm start
 ```
 
-- `pnpm build` builds the frontend web assets into `dist/web`.
-- `pnpm start` runs `prestart` (`vite build`) and starts the daemon (`node src/daemon/main.ts`).
-- On startup, the daemon prints a login link such as `http://127.0.0.1:4317/auth?token=…`. Open it once in your browser to set a session cookie. The link contains your local master token—do not share it. The first start automatically creates a default project manager.
-- Stop the daemon with `Ctrl+C`.
-
-To use a custom port or data directory:
-
-```bash
-AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
-```
-
-## macOS app
-
-```bash
-pnpm app:mac                              # builds build/Fusa.app
-bash scripts/build-mac-app.sh --install   # builds and copies to /Applications/Fusa.app
-```
-
-The macOS app (`apps/macos/`) is a lightweight native WebKit shell that supervises the local daemon. Building requires Xcode Command Line Tools (`swiftc`) and built web assets (`pnpm build`, or pass `--build-web` to `scripts/build-mac-app.sh`).
-
-**You must compile the app yourself for your own machine:** `scripts/build-mac-app.sh` writes your repository's absolute path (`AgentHubRepoDir`) and your Node.js binary path (`AgentHubNodePath`) directly into `Contents/Info.plist`, and signs the bundle ad-hoc (`codesign -s -`). **If you move the repository or change your Node installation path, you must recompile** (or override them at runtime via `AGENT_HUB_REPO_DIR` and `AGENT_HUB_NODE`). Do not distribute the compiled `.app` bundle.
+- `pnpm start` runs `prestart` (`vite build` into `dist/web`) and starts `node src/daemon/main.ts` (stop with `Ctrl+C`).
+- On startup, the terminal prints a local login link (`http://127.0.0.1:4317/auth?token=…`) containing your local master token—do not share it.
+- Custom port or data directory: `AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start`.
 
 ## Multiple devices
 
-Each machine runs its own daemon, and a single web page can view and operate all of them. Devices connect through a central Linux server over SSH tunnels (or optionally Tailscale); a phone can reach the central server over HTTPS (for example via Tailscale Funnel) and sign in by scanning a one-time QR code and approving the new browser session on an already signed-in device.
+Each machine runs its own daemon, and you can view and operate all of them from one Fusa window (or from an approved phone session). Devices connect through a central Linux server over SSH tunnels (or optionally Tailscale); a phone can reach the central server over HTTPS (for example via Tailscale Funnel) and sign in via one-time QR code approval on an already signed-in device.
 
 Multi-device and public access are completely optional: by default the daemon listens only on `127.0.0.1`, and nothing is exposed externally unless you explicitly configure SSH tunnels, run `tailscale serve`, or enable the public entry in settings. For architecture and setup details, see:
 - [docs/multi-device-design.md](docs/multi-device-design.md)
@@ -114,7 +122,7 @@ All environment variables are optional.
 | Variable | Default | Description |
 |---|---|---|
 | `AGENT_HUB_HOME` | `~/.agent-hub` | Data directory (SQLite database, tokens, worktrees, uploads, logs). Keep the path short: Unix sockets inside `run/` must fit within 103 bytes (`MAX_UNIX_SOCKET_PATH_BYTES`). |
-| `AGENT_HUB_PORT` | `4317` | Web UI port (listens on `127.0.0.1` only). Set to `0` to let the OS pick a free port. |
+| `AGENT_HUB_PORT` | `4317` | Local UI server port (listens on `127.0.0.1` only). Set to `0` to let the OS pick a free port. |
 | `AGENT_HUB_CLAUDE` | `claude` | Command name or path to the Claude Code CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
 | `AGENT_HUB_AGY` | `agy` | Command name or path to the Antigravity CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
 | `AGENT_HUB_CODEX` | `codex` | Command name or path to the Codex CLI (`~/` is expanded; searched in `PATH`, `ChatGPT.app` on macOS, and standard fallback directories). |
@@ -169,7 +177,7 @@ Workers edit files and execute shell commands on your machine with your OS user'
 
 **通过一个会话管理整个项目。**
 
-Fusa 是一个自托管的个人多 Agent 协作网页应用，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你把需求告诉项目经理，拆任务、派 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行干活、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
+Fusa 是一个以桌面应用为主的个人多 Agent 协作工具，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你在一个对话里和项目经理对齐目标、拍板决策；拆任务、调度多个 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行写代码、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选不同厂商的官方命令行 Agent（`claude`、`agy` 或 `codex`），使用你自己的账号。
 
 ### 为什么要“一个会话管住整个项目”？
 
@@ -177,7 +185,7 @@ Fusa 是一个自托管的个人多 Agent 协作网页应用，核心设计只�
 
 Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
-它是为**一个人、多台设备**（你自己的 Mac、Linux 服务器、手机）设计的自用工具，不是多人共用的服务端。
+它是为**一个人、多台设备**设计的自用工具：在 Mac 上双击打开 `Fusa.app` 桌面窗口即可使用（不用自己开浏览器输地址或粘令牌），需要常驻后台时可部署在 Linux 服务器上，出门在手机上用浏览器或“添加到主屏幕”（PWA）查看和回复同一批对话——不是多人共用的服务端。
 
 ## 怎么做到的
 
@@ -192,7 +200,7 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
 ### 2. 无感的上下文压缩
 
 - **满 200,000 Token 后台自动写交接**：当项目经理会话的上下文达到 200,000 Token 时，系统会在后台复制当前会话生成约 2,000 字的结构化交接文档，你这边继续聊天完全不卡顿。
-- **轮次间隙无缝切换新会话**：在两轮对话之间，系统自动切到新会话，并带入性格记忆、结构化交接文档、切点前最多 30,000 字的对话原文（加切点后的全部对话）以及近期 Worker 汇报目录。你在网页上始终留在同一个对话里；在资料页中途切换项目经理的厂商也复用同一套交接机制。
+- **轮次间隙无缝切换新会话**：在两轮对话之间，系统自动切到新会话，并带入性格记忆、结构化交接文档、切点前最多 30,000 字的对话原文（加切点后的全部对话）以及近期 Worker 汇报目录。你在界面里始终留在同一个对话中；在资料页中途切换项目经理的厂商也复用同一套交接机制。
 
 详见 [docs/background-handover-design.md](docs/background-handover-design.md)。
 
@@ -209,16 +217,16 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
 - **重活外包给 Worker，按难度选模型与档位**：读大文件、查日志、改多处代码都交给短命的 Worker（简单活选轻量模型和低档思考），大段工具输出不进项目经理的上下文；Worker 上下文超过 200,000 Token 或需多轮返工时直接收工换新，避免背着大上下文反复计费。
 - **结构化汇报与分层按需查看**：Worker 每轮只向项目经理交回简短的结构化汇报；项目经理需要深究时再按需查看步数统计或最近 20 步摘要，不用读整份原始记录。
 - **后台交接复用约 97% 缓存，新会话剔除工具噪音**：后台复制会话写交接时保持模型、系统提示词和工具列表不变，约 97% 输入直接命中原会话缓存；切到新会话时自动剔除历史工具输出和完整 Worker 汇报。
-- **忙时连发合并、首屏按需加载与空闲进程回收**：Agent 忙时你连发的消息会轮中送达或合并成一轮处理；打开网页首屏每个活跃会话只带最近 20 条消息、已收工的 Worker 带 0 条消息（点开再拉）；空闲满 10 分钟的 Agent 进程自动关闭回收，有新消息时按需恢复。
+- **忙时连发合并、首屏按需加载与空闲进程回收**：Agent 忙时你连发的消息会轮中送达或合并成一轮处理；首屏加载每个活跃会话只带最近 20 条消息、已收工的 Worker 带 0 条消息（点开再拉）；空闲满 10 分钟的 Agent 进程自动关闭回收，有新消息时按需恢复。
 
 详见 [docs/mid-turn-messages.md](docs/mid-turn-messages.md)。
 
 ## 其他特性
 
 - **目前支持的 Agent 命令行**（名单以 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `AGENT_VENDORS` 为准）：Claude Code（`claude`）、Antigravity（`agy`）、Codex（`codex`）。
-- **网页界面**：适配桌面与手机（可安装为手机主屏幕 PWA，支持可选的 Web Push 锁屏通知），支持 Markdown、代码高亮、Mermaid 与 Vega-Lite 图表、文件上传与预览。
-- **额度面板**：显示各支持厂商的用量窗口剩余比例与重置时间。
-- **可选的 macOS 原生应用外壳与多设备联机**：一个网页同时查看和操作多台设备（见下）。
+- **macOS 桌面应用（`Fusa.app`）**：双击打开独立应用窗口，自动拉起并监管本机后台守护进程、免手输地址自动登录，支持菜单栏运行状态摘要、Dock 角标与 macOS 原生通知。
+- **富文本对话界面与手机 PWA**：支持 Markdown、代码高亮、Mermaid 与 Vega-Lite 图表、文件上传与预览；手机端可用浏览器访问或通过“添加到主屏幕”作为 PWA 使用（支持可选的 Web Push 锁屏通知）。
+- **多设备联机与额度面板**：在一个窗口里同时查看和操作 Mac 与 Linux 服务器上的会话，并显示各支持厂商的用量窗口剩余比例与重置时间。
 
 ## 环境要求
 
@@ -227,43 +235,51 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
   - Claude Code：`claude auth login`
   - Antigravity：`agy`
   - Codex：`codex login`
-- macOS 或 Linux（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。不包含 Windows 支持。
+- **macOS 13+**（编译 `Fusa.app` 需安装 Xcode 命令行工具 `swiftc`）或 **Linux** 服务器（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。
 
 ## 安装和启动
 
-```bash
+### 1. Mac 桌面应用（`Fusa.app`，主入口）
+
+从源码构建并安装 `/Applications/Fusa.app`：
+
+```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
 cd agent-hub
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
+bash scripts/build-mac-app.sh --install
+```
+
+（若只想在 `build/Fusa.app` 生成应用包而不复制到 `/Applications`，可执行 `pnpm app:mac`。）
+
+装好后直接打开 **`Fusa.app`** 即可使用，无需自己打开浏览器输入地址或粘贴令牌。`Fusa.app`（`apps/macos/`）会自动拉起并监管本机后台守护进程（`node src/daemon/main.ts`），读取本机令牌自动完成登录，首次启动会自动创建默认项目经理。
+
+**源码构建说明（仅限本机编译自用）：** 当前尚未发布独立打包的下载安装包，需在本机从源码构建。`scripts/build-mac-app.sh` 编译时会把当前仓库的绝对路径（`AgentHubRepoDir`）和本机 Node 可执行文件路径（`AgentHubNodePath`）写入 `Contents/Info.plist`，并仅做本机临时签名（`codesign -s -`），运行时仍依赖本机 Node、构建产物（`dist/web`）与源码目录。**挪动仓库目录或更换 Node 路径后，请重新运行上述构建脚本**（或在运行时通过环境变量 `AGENT_HUB_REPO_DIR`、`AGENT_HUB_NODE` 覆盖）。请勿直接分发编译好的 `.app`。
+
+### 2. Linux 服务器（常驻后台与多设备中心）
+
+需要 24 小时常开后台，或将一台服务器作为多设备联机中心时，可在 Linux（Ubuntu）服务器上以 `systemd` 用户服务部署守护进程。完整的依赖安装、`bubblewrap` Worker 沙箱一次性配置（`sudo scripts/linux-sandbox-setup.sh`）、SSH 隧道及公网入口说明见 [docs/linux.md](docs/linux.md)。
+
+### 3. 手机访问（浏览器与主屏幕 PWA）
+
+需要在手机上查看进度和回复同一批对话时：在已登录的电脑端打开 **Settings → Security & Access → Sign in on phone**（点击 `Show QR code` 生成一次性二维码/登录链接），用手机扫码并在电脑端的 **Signed-in browsers** 列表中点击 **Allow** 批准后，即可通过手机浏览器或系统**“添加到主屏幕”**（PWA，支持可选的 Web Push 锁屏通知）随时查看和回复。
+
+### 4. 直接在终端运行守护进程（可选）
+
+本地开发调试或不通过桌面应用启动时，也可直接在终端运行守护进程：
+
+```sh
 pnpm start
 ```
 
-- `pnpm build` 构建前端网页到 `dist/web`。
-- `pnpm start`（含 `prestart` 自动构建网页）启动守护进程（`node src/daemon/main.ts`）。
-- 启动后终端会打印形如 `http://127.0.0.1:4317/auth?token=…` 的登录链接。在浏览器中打开一次即可种下登录 Cookie。链接里包含本机主令牌，请勿分享给他人。首次启动会自动创建一个默认项目经理。
-- 按 `Ctrl+C` 停止守护进程。
+- `pnpm start`（含 `prestart` 自动构建网页到 `dist/web`）启动守护进程 `node src/daemon/main.ts`，按 `Ctrl+C` 停止。
+- 启动后终端会打印本机登录链接（`http://127.0.0.1:4317/auth?token=…`，含本机主令牌，请勿分享给他人）。
+- 如需更换端口或数据目录：`AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start`。
 
-如需更换端口或数据目录：
+## 多设备联机
 
-```bash
-AGENT_HUB_PORT=4400 AGENT_HUB_HOME=~/my-hub pnpm start
-```
-
-## Mac 应用
-
-```bash
-pnpm app:mac                              # 在 build/Fusa.app 生成应用
-bash scripts/build-mac-app.sh --install   # 同上，并复制到 /Applications/Fusa.app
-```
-
-Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳，需要 Xcode 命令行工具（`swiftc`）以及构建好的前端网页（先跑 `pnpm build`，或加 `--build-web` 参数）。
-
-**只能自己本机编译、自己用：** `scripts/build-mac-app.sh` 编译时会把当前仓库的绝对路径（`AgentHubRepoDir`）和本机 Node 路径（`AgentHubNodePath`）写进应用包内的 `Contents/Info.plist`，且仅做本机临时签名（`codesign -s -`）。**挪动仓库目录或更换 Node 路径后，必须重新编译**（或者在运行时通过环境变量 `AGENT_HUB_REPO_DIR`、`AGENT_HUB_NODE` 覆盖）。请勿分发编译好的 `.app`。
-
-## 多设备简介
-
-每台设备各跑一个守护进程，在一个网页里即可查看并操作所有设备。各设备可通过中心服务器建立 SSH 隧道连接（也可选用 Tailscale）；手机可通过公网 HTTPS（如 Tailscale Funnel）访问中心服务器，由已登录设备生成一次性二维码、手机扫码后在已登录设备上点击“允许”完成登录批准。
+每台设备各跑一个守护进程，在电脑端 `Fusa.app` 窗口（或已批准登录的手机端）里即可同时查看并操作所有设备。各设备可通过中心 Linux 服务器建立 SSH 隧道连接（也可选用 Tailscale）；手机可通过公网 HTTPS（如 Tailscale Funnel）访问中心服务器，由已登录设备生成一次性二维码并在电脑端点击批准后完成登录。
 
 多设备与公网入口均为可选功能：默认守护进程只监听本机 `127.0.0.1`，除非你主动配置隧道、执行 `tailscale serve` 或在设置中开启公网入口，否则不会对外暴露任何端口。详细设计见：
 - [docs/multi-device-design.md](docs/multi-device-design.md)
@@ -277,7 +293,7 @@ Mac 应用（`apps/macos/`）是包在守护进程外的一层轻量原生外壳
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
 | `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（数据库、令牌、worktrees、上传文件、日志）。macOS/Linux 上 Unix socket 路径上限为 103 字节（`MAX_UNIX_SOCKET_PATH_BYTES`），请保持路径简短。 |
-| `AGENT_HUB_PORT` | `4317` | 网页服务端口，只监听 `127.0.0.1`。设为 `0` 时由系统分配空闲端口。 |
+| `AGENT_HUB_PORT` | `4317` | 本机界面服务端口，只监听 `127.0.0.1`。设为 `0` 时由系统分配空闲端口。 |
 | `AGENT_HUB_CLAUDE` | `claude` | Claude Code CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
 | `AGENT_HUB_AGY` | `agy` | Antigravity CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
 | `AGENT_HUB_CODEX` | `codex` | Codex CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH`、macOS 上的 `ChatGPT.app` 及常见安装路径）。 |
