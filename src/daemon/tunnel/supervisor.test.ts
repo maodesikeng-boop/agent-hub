@@ -1,6 +1,6 @@
 // ssh 监督（docs/hub-tunnel-design.md 第 6 节，实现块 C）：用假 ssh（test-fake-ssh.mjs，按剧本退出码 / stderr 退出）测
 // 状态分类、退避、提前重连、停止时杀子进程。定时器和时钟由测试注入：退避等多久看登记的定时器，不真的等。
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -297,7 +297,15 @@ describe("停止", () => {
     await s.stop();
     expect(existsSync(pidFile)).toBe(false);
 
-    // 留下的：命令行里有标记（钥匙文件路径）的才杀
+    // 留下的：命令行里有标记（钥匙文件路径）的才杀；沙箱里 ps 被禁时宁可不杀也不超时泄漏
+    const canRunPs = (() => {
+      try {
+        execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
     const orphan = spawn(process.execPath, [FAKE_SSH, plan], { stdio: "ignore" });
     const stranger = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
     try {
@@ -307,8 +315,12 @@ describe("停止", () => {
       expect(alive(stranger.pid!)).toBe(true);
       writeFileSync(pidFile, String(orphan.pid));
       await killStaleSsh(pidFile, plan);
-      await new Promise((r) => orphan.once("exit", r));
-      expect(alive(orphan.pid!)).toBe(false);
+      if (canRunPs) {
+        await new Promise((r) => orphan.once("exit", r));
+        expect(alive(orphan.pid!)).toBe(false);
+      } else {
+        expect(alive(orphan.pid!)).toBe(true);
+      }
       expect(existsSync(pidFile)).toBe(false);
     } finally {
       orphan.kill("SIGKILL");
