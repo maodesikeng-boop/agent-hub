@@ -115,6 +115,12 @@ ${only}`;
 }
 
 /**
+ * 新会话收到的交接开头提醒：交接是此前保存的摘要，可能滞后，以最新对话和实际状态为准。
+ */
+export const HANDOVER_STALE_HINT =
+  "下面的交接是此前保存的摘要，可能稍有滞后；如与后面的最新对话冲突，以最新对话为准，任务进度请核对 Worker 实际状态。";
+
+/**
  * 新会话第一条消息前面的开场说明（换代时定稿，驱动层拼在那条消息最前面，见 DriverOptions.sessionPreamble）：
  * 说明 + 交接 + 原话（handover-recent.ts 拼好的）+ 交接之后到的 Worker 汇报目录（每条一行，不带全文）。
  */
@@ -136,11 +142,15 @@ function sessionPreambleText(options: {
     switchedVendor && options.fromVendor === "agy" && options.toVendor !== "agy"
       ? "上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话"
       : transcriptLine(options.transcriptPath);
+  const handoverText =
+    options.handover.trim() === ""
+      ? "（上一个会话没有写交接）"
+      : `${HANDOVER_STALE_HINT}\n\n${options.handover}`;
   const parts = [
     `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${reasonLine}
 下面是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
 不用回复“已接上”：读完直接处理这段说明后面的那条消息。`,
-    `## 交接\n\n${options.handover.trim() === "" ? "（上一个会话没有写交接）" : options.handover}`,
+    `## 交接\n\n${handoverText}`,
     `## 最近的原话\n\n${options.recent === "" ? "（没有）" : options.recent}`,
   ];
   if (options.reports.length > 0) parts.push(`## 交接之后到的 Worker 汇报（交接里没有，只列目录）\n\n${options.reports.join("\n")}`);
