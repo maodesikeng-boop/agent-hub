@@ -11,7 +11,7 @@ import {
 
 const KEY_BODY = "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 const CODE: ConnectionCode = {
-  host: "18.179.111.112",
+  host: "203.0.113.10",
   sshPort: 22,
   user: "agenthub-tunnel",
   hostKey: `ssh-ed25519 ${KEY_BODY}`,
