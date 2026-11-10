@@ -2,19 +2,23 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use crate::command::{
-    build_chmod_guest_script_cmd, build_exec_cmd, build_import_distro_cmd,
-    build_install_wsl_no_distro_cmd, build_list_verbose_cmd, build_prepare_guest_script_dir_cmd,
-    build_run_guest_script_cmd, build_status_cmd, build_terminate_distro_cmd, build_version_cmd,
+    build_chmod_daemon_ctl_cmd, build_chmod_guest_script_cmd, build_exec_cmd,
+    build_import_distro_cmd, build_install_wsl_no_distro_cmd, build_list_verbose_cmd,
+    build_prepare_guest_script_dir_cmd, build_run_guest_script_cmd, build_status_cmd,
+    build_terminate_distro_cmd, build_version_cmd, build_write_daemon_ctl_cmd,
     build_write_guest_script_cmd, WslCommand,
 };
 use crate::constants::{
     DISTRO_INSTALL_SUBDIR, DISTRO_VHDX_FILENAME, EMBEDDED_GUEST_SCRIPT, FUSA_DISTRO_NAME, FUSA_LINUX_USER,
-    PINNED_UBUNTU_2404_ROOTFS, PinnedRootfsImage, ROOTFS_CACHE_SUBDIR,
+    LXSS_REGISTRY_SUBKEY, PINNED_UBUNTU_2404_ROOTFS, PinnedRootfsImage, ROOTFS_CACHE_SUBDIR,
 };
 use crate::error::{ProvisionError, SelfTestReport};
 use crate::parser::{
     decode_wsl_output, parse_self_test_report, parse_vendor_guides_json, parse_wsl_list_verbose,
     parse_wsl_version_output, VendorGuideEntry, WslDistroEntry, WslVersionInfo,
+};
+use crate::registry::{
+    windows_base_paths_match, DistroRegistryInspector, RegistryLookup, SystemRegistryInspector,
 };
 use crate::runner::{
     verify_file_sha256, CommandOutput, CommandRunner, RootfsDownloader, StdCommandRunner,
@@ -61,7 +65,7 @@ impl ProvisionConfig {
             distro_name: FUSA_DISTRO_NAME.to_string(),
             linux_user: FUSA_LINUX_USER.to_string(),
             rootfs: PINNED_UBUNTU_2404_ROOTFS,
-            guest_script: EMBEDDED_GUEST_SCRIPT.to_string(),
+            guest_script: normalize_lf_script(EMBEDDED_GUEST_SCRIPT),
         }
     }
 
@@ -112,23 +116,29 @@ pub fn validate_local_app_data_dir(path: &Path) -> Result<(), ProvisionError> {
 }
 
 /// WSL2 专用发行版准备与隔离验证编排器。
-pub struct Provisioner<R = StdCommandRunner, D = SystemCurlDownloader> {
+pub struct Provisioner<
+    R = StdCommandRunner,
+    D = SystemCurlDownloader,
+    G = SystemRegistryInspector,
+> {
     config: ProvisionConfig,
     runner: R,
     downloader: D,
+    registry: G,
 }
 
-impl Provisioner<StdCommandRunner, SystemCurlDownloader> {
+impl Provisioner<StdCommandRunner, SystemCurlDownloader, SystemRegistryInspector> {
     pub fn with_defaults(config: ProvisionConfig) -> Self {
         Self {
             config,
             runner: StdCommandRunner,
             downloader: SystemCurlDownloader,
+            registry: SystemRegistryInspector,
         }
     }
 }
 
-impl<R, D> Provisioner<R, D>
+impl<R, D> Provisioner<R, D, SystemRegistryInspector>
 where
     R: CommandRunner,
     D: RootfsDownloader,
@@ -138,6 +148,28 @@ where
             config,
             runner,
             downloader,
+            registry: SystemRegistryInspector,
+        }
+    }
+}
+
+impl<R, D, G> Provisioner<R, D, G>
+where
+    R: CommandRunner,
+    D: RootfsDownloader,
+    G: DistroRegistryInspector,
+{
+    pub fn with_registry_inspector(
+        config: ProvisionConfig,
+        runner: R,
+        downloader: D,
+        registry: G,
+    ) -> Self {
+        Self {
+            config,
+            runner,
+            downloader,
+            registry,
         }
     }
 
@@ -153,9 +185,56 @@ where
         &self.downloader
     }
 
+    pub fn registry(&self) -> &G {
+        &self.registry
+    }
+
     pub fn load_state(&self) -> Result<ProvisionState, ProvisionError> {
         validate_local_app_data_dir(&self.config.app_data_dir)?;
         ProvisionState::load_or_default(&self.config.app_data_dir, &self.config.distro_name)
+    }
+
+    /// 核对 Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss` 下的 `BasePath` 是否指向本应用专属目录。
+    pub fn verify_registry_base_path(&self, distro_name: &str) -> Result<(), ProvisionError> {
+        let lookup = self
+            .registry
+            .lookup_distro_base_path(distro_name)
+            .map_err(|source| ProvisionError::Io {
+                path: PathBuf::from(LXSS_REGISTRY_SUBKEY),
+                source,
+            })?;
+        let expected = self.config.distro_install_dir();
+        match lookup {
+            RegistryLookup::UnsupportedPlatform => Ok(()),
+            RegistryLookup::NotFound => Err(ProvisionError::DistroBasePathMismatch {
+                distro_name: distro_name.to_string(),
+                expected,
+                actual: "<HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss 未找到同名项>"
+                    .to_string(),
+            }),
+            RegistryLookup::Found { base_path } => {
+                if windows_base_paths_match(&expected, &base_path) {
+                    Ok(())
+                } else {
+                    Err(ProvisionError::DistroBasePathMismatch {
+                        distro_name: distro_name.to_string(),
+                        expected,
+                        actual: base_path.display().to_string(),
+                    })
+                }
+            }
+        }
+    }
+
+    /// 供运行期监管器（`fusa-supervisor`）在每次起停或读取敏感文件前复核三重归属（状态标记 + `ext4.vhdx` + `Lxss` 注册表 `BasePath`）。
+    pub fn verify_distro_ownership(&self) -> Result<(), ProvisionError> {
+        let state = self.load_state()?;
+        if !state.imported_by_fusa || !self.config.distro_vhdx_path().is_file() {
+            return Err(ProvisionError::DistroNameConflict {
+                distro_name: self.config.distro_name.clone(),
+            });
+        }
+        self.verify_registry_base_path(&self.config.distro_name)
     }
 
     fn run_wsl(
@@ -290,6 +369,7 @@ where
                     distro_name: found.name.clone(),
                 });
             }
+            self.verify_registry_base_path(&found.name)?;
             if found.wsl_version != 2 {
                 return Err(ProvisionError::UnsupportedWslVersion {
                     distro_name: found.name.clone(),
@@ -445,7 +525,7 @@ where
 
     fn step_init_root(&self, state: &mut ProvisionState) -> Result<(), ProvisionError> {
         // 统一转为 LF 换行再通过 stdin 写入 Linux 路径，避免 CRLF 破坏 bash shebang 且不依赖 /mnt/c
-        let lf_script = self.config.guest_script.replace("\r\n", "\n");
+        let lf_script = normalize_lf_script(&self.config.guest_script);
 
         let mkdir_cmd = build_prepare_guest_script_dir_cmd(&self.config.distro_name)?;
         self.run_checked_stage(&mkdir_cmd, None, ProvisionStage::InitRoot, state)?;
@@ -581,6 +661,49 @@ where
         }
         parse_vendor_guides_json(&out.stdout)
     }
+}
+
+/// 将内嵌或外部传入的 Linux 脚本换行符统一归一化为 LF（`\r\n` -> `\n`），
+/// 作为 `.gitattributes` 之外的运行期双保险，防止 CRLF 损坏 WSL 内的 bash shebang。
+pub fn normalize_lf_script(script: &str) -> String {
+    if script.contains("\r\n") {
+        script.replace("\r\n", "\n")
+    } else {
+        script.to_string()
+    }
+}
+
+/// 将受控后台起停与探活脚本幂等安装到专用发行版 `/usr/local/libexec/fusa/wsl-daemon-ctl.sh`（root 0755，LF 换行）。
+pub fn install_daemon_ctl_script<R: CommandRunner>(
+    runner: &R,
+    distro_name: &str,
+    script_content: &str,
+) -> Result<(), ProvisionError> {
+    let lf_script = normalize_lf_script(script_content);
+    let steps: [(WslCommand, Option<&[u8]>); 3] = [
+        (build_prepare_guest_script_dir_cmd(distro_name)?, None),
+        (
+            build_write_daemon_ctl_cmd(distro_name)?,
+            Some(lf_script.as_bytes()),
+        ),
+        (build_chmod_daemon_ctl_cmd(distro_name)?, None),
+    ];
+    for (cmd, stdin) in steps {
+        let out = runner
+            .run(&cmd, stdin)
+            .map_err(|source| ProvisionError::SpawnFailed {
+                program: cmd.program.to_string_lossy().into_owned(),
+                source,
+            })?;
+        if out.exit_code != 0 {
+            return Err(ProvisionError::CommandFailed {
+                stage: "install_daemon_ctl_script",
+                exit_code: out.exit_code,
+                stderr: non_empty_error_text(&out),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn directory_has_files(dir: &Path) -> Result<bool, ProvisionError> {

@@ -5,9 +5,10 @@ import agy from "./agy/spec.ts";
 import claude from "./claude/spec.ts";
 import codex from "./codex/spec.ts";
 import cursor from "./cursor/spec.ts";
+import pi from "./pi/spec.ts";
 
 /** 顺序 = 下拉、额度面板里的顺序；第一个是默认厂商。 */
-export const VENDOR_LIST = [claude, agy, codex, cursor] as const;
+export const VENDOR_LIST = [claude, agy, codex, pi, cursor] as const;
 
 /** 厂商编号（agent_sessions.vendor、pms.vendor 存的就是它）。 */
 export type AgentVendor = (typeof VENDOR_LIST)[number]["id"];

@@ -429,7 +429,7 @@ rl.on("line", (line) => {
     return { client, projectDir };
   }
 
-  it("GET /api/models 按 AGENT_VENDORS 返回全部注册厂商的模型目录", async () => {
+  it("GET /api/models 按 AGENT_VENDORS 顺序返回各家厂商的模型目录", async () => {
     const { client } = await bootMultiVendorDaemon();
     const res = await client.get(API_PATHS.models);
     expect(res.status).toBe(200);

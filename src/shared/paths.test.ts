@@ -59,13 +59,14 @@ describe("paths：可执行文件与数据目录解析", () => {
         AGENT_HUB_CODEX: "/env/codex",
       },
       userHome: "/Users/u",
-      vendorPaths: { claude: "~/local/claude", agy: "~/local/agy", codex: "~/local/codex" },
+      vendorPaths: { ...defaultVendorPaths(), claude: "~/local/claude", agy: "~/local/agy", codex: "~/local/codex", pi: "~/local/pi" },
     });
     expect(paths.vendorPaths).toEqual({
       ...defaultVendorPaths(),
       claude: "/Users/u/local/claude",
       agy: "/Users/u/local/agy",
       codex: "/Users/u/local/codex",
+      pi: "/Users/u/local/pi",
     });
 
     const fromEnv = resolvePaths({
@@ -188,6 +189,7 @@ describe("paths：可执行文件与数据目录解析", () => {
       mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
       writeFileSync(localAgy, "");
       writeFileSync(join(pathDir, "codex"), "");
+      writeFileSync(join(pathDir, "pi"), "");
       const resolved = resolveVendorExecutables(
         { vendorPaths: { ...defaultVendorPaths(), claude: "/explicit/claude" } },
         pathDir,

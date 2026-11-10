@@ -906,6 +906,421 @@ exports[`迁移前快照：agentLaunchArgs > cursor：模型 × 思考程度各�
 }
 `;
 
+exports[`迁移前快照：agentLaunchArgs > pi：模型 × 思考程度各组合 1`] = `
+{
+  """ × """: [],
+  """ × high": [
+    "--thinking",
+    "high",
+  ],
+  """ × low": [
+    "--thinking",
+    "low",
+  ],
+  """ × max": [
+    "--thinking",
+    "max",
+  ],
+  """ × medium": [
+    "--thinking",
+    "medium",
+  ],
+  """ × minimal": [
+    "--thinking",
+    "minimal",
+  ],
+  """ × null": [],
+  """ × off": [
+    "--thinking",
+    "off",
+  ],
+  """ × xhigh": [
+    "--thinking",
+    "xhigh",
+  ],
+  "anthropic/claude-opus-5-5 × """: [
+    "--model",
+    "anthropic/claude-opus-5-5",
+  ],
+  "anthropic/claude-opus-5-5 × high": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "high",
+  ],
+  "anthropic/claude-opus-5-5 × low": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "low",
+  ],
+  "anthropic/claude-opus-5-5 × max": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "max",
+  ],
+  "anthropic/claude-opus-5-5 × medium": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "medium",
+  ],
+  "anthropic/claude-opus-5-5 × minimal": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "minimal",
+  ],
+  "anthropic/claude-opus-5-5 × null": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+  ],
+  "anthropic/claude-opus-5-5 × off": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "off",
+  ],
+  "anthropic/claude-opus-5-5 × xhigh": [
+    "--model",
+    "anthropic/claude-opus-5-5",
+    "--thinking",
+    "xhigh",
+  ],
+  "anthropic/claude-sonnet-5-5 × """: [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+  ],
+  "anthropic/claude-sonnet-5-5 × high": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "high",
+  ],
+  "anthropic/claude-sonnet-5-5 × low": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "low",
+  ],
+  "anthropic/claude-sonnet-5-5 × max": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "max",
+  ],
+  "anthropic/claude-sonnet-5-5 × medium": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "medium",
+  ],
+  "anthropic/claude-sonnet-5-5 × minimal": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "minimal",
+  ],
+  "anthropic/claude-sonnet-5-5 × null": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+  ],
+  "anthropic/claude-sonnet-5-5 × off": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "off",
+  ],
+  "anthropic/claude-sonnet-5-5 × xhigh": [
+    "--model",
+    "anthropic/claude-sonnet-5-5",
+    "--thinking",
+    "xhigh",
+  ],
+  "custom-model-1 × """: [
+    "--model",
+    "custom-model-1",
+  ],
+  "custom-model-1 × high": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "high",
+  ],
+  "custom-model-1 × low": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "low",
+  ],
+  "custom-model-1 × max": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "max",
+  ],
+  "custom-model-1 × medium": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "medium",
+  ],
+  "custom-model-1 × minimal": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "minimal",
+  ],
+  "custom-model-1 × null": [
+    "--model",
+    "custom-model-1",
+  ],
+  "custom-model-1 × off": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "off",
+  ],
+  "custom-model-1 × xhigh": [
+    "--model",
+    "custom-model-1",
+    "--thinking",
+    "xhigh",
+  ],
+  "deepseek/deepseek-flash × """: [
+    "--model",
+    "deepseek/deepseek-flash",
+  ],
+  "deepseek/deepseek-flash × high": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "high",
+  ],
+  "deepseek/deepseek-flash × low": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "low",
+  ],
+  "deepseek/deepseek-flash × max": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "max",
+  ],
+  "deepseek/deepseek-flash × medium": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "medium",
+  ],
+  "deepseek/deepseek-flash × minimal": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "minimal",
+  ],
+  "deepseek/deepseek-flash × null": [
+    "--model",
+    "deepseek/deepseek-flash",
+  ],
+  "deepseek/deepseek-flash × off": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "off",
+  ],
+  "deepseek/deepseek-flash × xhigh": [
+    "--model",
+    "deepseek/deepseek-flash",
+    "--thinking",
+    "xhigh",
+  ],
+  "deepseek/deepseek-v4-pro × """: [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+  ],
+  "deepseek/deepseek-v4-pro × high": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "high",
+  ],
+  "deepseek/deepseek-v4-pro × low": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "low",
+  ],
+  "deepseek/deepseek-v4-pro × max": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "max",
+  ],
+  "deepseek/deepseek-v4-pro × medium": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "medium",
+  ],
+  "deepseek/deepseek-v4-pro × minimal": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "minimal",
+  ],
+  "deepseek/deepseek-v4-pro × null": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+  ],
+  "deepseek/deepseek-v4-pro × off": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "off",
+  ],
+  "deepseek/deepseek-v4-pro × xhigh": [
+    "--model",
+    "deepseek/deepseek-v4-pro",
+    "--thinking",
+    "xhigh",
+  ],
+  "google/gemini-3.1-pro-preview × """: [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+  ],
+  "google/gemini-3.1-pro-preview × high": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "high",
+  ],
+  "google/gemini-3.1-pro-preview × low": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "low",
+  ],
+  "google/gemini-3.1-pro-preview × max": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "max",
+  ],
+  "google/gemini-3.1-pro-preview × medium": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "medium",
+  ],
+  "google/gemini-3.1-pro-preview × minimal": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "minimal",
+  ],
+  "google/gemini-3.1-pro-preview × null": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+  ],
+  "google/gemini-3.1-pro-preview × off": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "off",
+  ],
+  "google/gemini-3.1-pro-preview × xhigh": [
+    "--model",
+    "google/gemini-3.1-pro-preview",
+    "--thinking",
+    "xhigh",
+  ],
+  "null × """: [],
+  "null × high": [
+    "--thinking",
+    "high",
+  ],
+  "null × low": [
+    "--thinking",
+    "low",
+  ],
+  "null × max": [
+    "--thinking",
+    "max",
+  ],
+  "null × medium": [
+    "--thinking",
+    "medium",
+  ],
+  "null × minimal": [
+    "--thinking",
+    "minimal",
+  ],
+  "null × null": [],
+  "null × off": [
+    "--thinking",
+    "off",
+  ],
+  "null × xhigh": [
+    "--thinking",
+    "xhigh",
+  ],
+  "openai/gpt-5.4 × """: [
+    "--model",
+    "openai/gpt-5.4",
+  ],
+  "openai/gpt-5.4 × high": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "high",
+  ],
+  "openai/gpt-5.4 × low": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "low",
+  ],
+  "openai/gpt-5.4 × max": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "max",
+  ],
+  "openai/gpt-5.4 × medium": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "medium",
+  ],
+  "openai/gpt-5.4 × minimal": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "minimal",
+  ],
+  "openai/gpt-5.4 × null": [
+    "--model",
+    "openai/gpt-5.4",
+  ],
+  "openai/gpt-5.4 × off": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "off",
+  ],
+  "openai/gpt-5.4 × xhigh": [
+    "--model",
+    "openai/gpt-5.4",
+    "--thinking",
+    "xhigh",
+  ],
+}
+`;
+
 exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
 {
   "agy": {
@@ -1036,6 +1451,38 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
     ],
   },
+  "pi": {
+    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
+    "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+    "serviceName": "Pi",
+    "signs": [
+      {
+        "kind": "missing",
+        "pattern": /\\^pi_not_found\\\\b/,
+      },
+      {
+        "kind": "start",
+        "pattern": /\\^\\(spawn_failed\\|start_timeout\\)\\\\b/,
+      },
+      {
+        "kind": "quota",
+        "pattern": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
+      },
+      {
+        "kind": "busy",
+        "pattern": /\\\\b529\\\\b\\|overloaded\\|api_error\\|\\\\b5\\\\d\\\\d\\\\b\\|internal server error\\|service unavailable/i,
+      },
+      {
+        "kind": "auth",
+        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+      },
+      {
+        "kind": "context",
+        "pattern": /context_length_exceeded\\|context window\\|prompt is too long/i,
+      },
+    ],
+  },
 }
 `;
 
@@ -1085,6 +1532,26 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/cursor-agent",
       "/usr/local/bin/cursor-agent",
       "/home/linuxbrew/.linuxbrew/bin/cursor-agent",
+    ],
+  },
+  "pi": {
+    "darwin": [
+      "<HOME>/.local/bin/pi",
+      "<HOME>/.pi/bin/pi",
+      "<HOME>/.local/share/mise/shims/pi",
+      "<HOME>/.npm-global/bin/pi",
+      "/opt/homebrew/bin/pi",
+      "/usr/local/bin/pi",
+    ],
+    "linux": [
+      "<HOME>/.local/bin/pi",
+      "<HOME>/.npm-global/bin/pi",
+      "/usr/local/bin/pi",
+      "/home/linuxbrew/.linuxbrew/bin/pi",
+      "<HOME>/.local/bin/pi",
+      "<HOME>/.pi/bin/pi",
+      "<HOME>/.local/share/mise/shims/pi",
+      "<HOME>/.npm-global/bin/pi",
     ],
   },
 }
@@ -1153,6 +1620,21 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     "readonlySecrets": [
       ".cursor/auth.json",
       ".config/cursor/auth.json",
+    ],
+  },
+  "pi": {
+    "catalogWatchPaths": [
+      ".pi/agent/auth.json",
+      ".pi/agent/models.json",
+      ".pi/agent/settings.json",
+      ".pi/agent/models-store.json",
+    ],
+    "dirs": [
+      ".pi/agent",
+    ],
+    "readonlySecrets": [
+      ".pi/agent/auth.json",
+      ".pi/agent/models.json",
     ],
   },
 }
@@ -1621,12 +2103,145 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 1`] = `
       "Task",
     ],
   },
+  "pi": {
+    "backgroundCommandTool": "后台命令",
+    "backgroundCommands": false,
+    "cliCommand": "pi",
+    "composer": {
+      "blockedCommands": {
+        "bug": "这是终端专用的命令，网页里不能用",
+        "changelog": "这是终端专用的命令，网页里不能用",
+        "clear": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "clone": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "copy": "这是终端专用的命令，网页里不能用",
+        "exit": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "export": "这是终端专用的命令，网页里不能用",
+        "fork": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "hotkeys": "这是终端专用的命令，网页里不能用",
+        "import": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "login": "账号相关的命令这里不能用，请在终端里打开 pi 用 /login 登录",
+        "logout": "账号相关的命令这里不能用，请在终端里打开 pi 用 /login 登录",
+        "mcp": "设置和权限由 Fusa 管，这里不能用这个命令",
+        "model": "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）",
+        "name": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "new": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "quit": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "reload": "设置和权限由 Fusa 管，这里不能用这个命令",
+        "resume": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "scoped-models": "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）",
+        "settings": "设置和权限由 Fusa 管，这里不能用这个命令",
+        "share": "这是终端专用的命令，网页里不能用",
+        "thinking": "换模型、思考程度请在资料页改（Worker 的由项目经理派活时定）",
+        "tree": "会话由 Fusa 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮",
+        "trust": "设置和权限由 Fusa 管，这里不能用这个命令",
+      },
+      "commandPrefix": "/",
+      "compactCommand": "compact",
+    },
+    "customModel": true,
+    "customModelExample": "如 deepseek/deepseek-v4-pro",
+    "effortFlag": "--thinking",
+    "efforts": [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ],
+    "envVar": "AGENT_HUB_PI",
+    "explicitDefaultModel": false,
+    "flags": {
+      "effort": "--thinking",
+      "model": "--model",
+    },
+    "handoverTokenThreshold": 200000,
+    "label": "Pi",
+    "loginCommand": "pi",
+    "modelFlag": "--model",
+    "models": [
+      {
+        "efforts": [
+          "off",
+          "high",
+          "max",
+        ],
+        "id": "deepseek/deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+      },
+      {
+        "efforts": [
+          "off",
+          "low",
+          "high",
+          "max",
+        ],
+        "id": "deepseek/deepseek-flash",
+        "label": "DeepSeek V4.1 Flash",
+      },
+      {
+        "efforts": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+        ],
+        "id": "anthropic/claude-sonnet-5-5",
+        "label": "Claude Sonnet 5.5",
+      },
+      {
+        "efforts": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+        ],
+        "id": "anthropic/claude-opus-5-5",
+        "label": "Claude Opus 5.5",
+      },
+      {
+        "efforts": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+        ],
+        "id": "openai/gpt-5.4",
+        "label": "GPT-5.4",
+      },
+      {
+        "efforts": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+        ],
+        "id": "google/gemini-3.1-pro-preview",
+        "label": "Gemini 3.1 Pro",
+      },
+    ],
+    "readonlyMode": "os_sandbox",
+    "shortModelName": [Function],
+    "subagentTools": [],
+  },
 }
 `;
 
 exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果（函数本身只能存名字，按样例存输出） 1`] = `
 {
   "agy": {
+    "anthropic/claude-opus-5-5": null,
+    "anthropic/claude-sonnet-5-5": null,
     "claude-3-5-sonnet-latest": null,
     "claude-opus-4-1-20250805": "Claude Opus 4.1",
     "claude-opus-5-5": "Claude Opus 5.5",
@@ -1636,11 +2251,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "claude-sonnet-5-5[1m]": "Claude Sonnet 5.5 1M",
     "composer-2.5": null,
     "composer-2.5-fast": null,
+    "deepseek/deepseek-flash": null,
+    "deepseek/deepseek-v4-pro": null,
     "fable": null,
     "gemini-3.8-flash": "Gemini 3.8 Flash",
     "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
     "gemini-4-argon": "Gemini 4 Argon",
     "gemini-4-carbon-high": "Gemini 4 Carbon High",
+    "google/gemini-3.1-pro-preview": null,
     "gpt-5.3-codex-high": null,
     "gpt-5.6-luna": null,
     "gpt-5.6-sol": null,
@@ -1655,11 +2273,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "gpt-oss-120b": "GPT-OSS 120B",
     "grok-4.7-high-fast": null,
     "haiku": null,
+    "openai/gpt-5.4": null,
     "opus": null,
     "sonnet": null,
     "unknown-model": null,
   },
   "claude": {
+    "anthropic/claude-opus-5-5": null,
+    "anthropic/claude-sonnet-5-5": null,
     "claude-3-5-sonnet-latest": "Sonnet 3.5",
     "claude-opus-4-1-20250805": "Opus 4.1",
     "claude-opus-5-5": "Opus 5.5",
@@ -1669,11 +2290,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "claude-sonnet-5-5[1m]": "Sonnet 5.5 1M",
     "composer-2.5": null,
     "composer-2.5-fast": null,
+    "deepseek/deepseek-flash": null,
+    "deepseek/deepseek-v4-pro": null,
     "fable": null,
     "gemini-3.8-flash": null,
     "gemini-3.8-flash-high": null,
     "gemini-4-argon": null,
     "gemini-4-carbon-high": null,
+    "google/gemini-3.1-pro-preview": null,
     "gpt-5.3-codex-high": null,
     "gpt-5.6-luna": null,
     "gpt-5.6-sol": null,
@@ -1688,11 +2312,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "gpt-oss-120b": null,
     "grok-4.7-high-fast": null,
     "haiku": null,
+    "openai/gpt-5.4": null,
     "opus": null,
     "sonnet": null,
     "unknown-model": null,
   },
   "codex": {
+    "anthropic/claude-opus-5-5": null,
+    "anthropic/claude-sonnet-5-5": null,
     "claude-3-5-sonnet-latest": null,
     "claude-opus-4-1-20250805": null,
     "claude-opus-5-5": null,
@@ -1702,11 +2329,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "claude-sonnet-5-5[1m]": null,
     "composer-2.5": null,
     "composer-2.5-fast": null,
+    "deepseek/deepseek-flash": null,
+    "deepseek/deepseek-v4-pro": null,
     "fable": null,
     "gemini-3.8-flash": null,
     "gemini-3.8-flash-high": null,
     "gemini-4-argon": null,
     "gemini-4-carbon-high": null,
+    "google/gemini-3.1-pro-preview": null,
     "gpt-5.3-codex-high": "GPT-5.3 Codex High",
     "gpt-5.6-luna": "GPT-5.6 Luna",
     "gpt-5.6-sol": "GPT-5.6 Sol",
@@ -1721,11 +2351,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "gpt-oss-120b": null,
     "grok-4.7-high-fast": null,
     "haiku": null,
+    "openai/gpt-5.4": null,
     "opus": null,
     "sonnet": null,
     "unknown-model": null,
   },
   "cursor": {
+    "anthropic/claude-opus-5-5": null,
+    "anthropic/claude-sonnet-5-5": null,
     "claude-3-5-sonnet-latest": null,
     "claude-opus-4-1-20250805": null,
     "claude-opus-5-5": null,
@@ -1735,11 +2368,14 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "claude-sonnet-5-5[1m]": null,
     "composer-2.5": "Composer 2.5",
     "composer-2.5-fast": "Composer 2.5 Fast",
+    "deepseek/deepseek-flash": null,
+    "deepseek/deepseek-v4-pro": null,
     "fable": null,
     "gemini-3.8-flash": null,
     "gemini-3.8-flash-high": null,
     "gemini-4-argon": null,
     "gemini-4-carbon-high": null,
+    "google/gemini-3.1-pro-preview": null,
     "gpt-5.3-codex-high": null,
     "gpt-5.6-luna": null,
     "gpt-5.6-sol": null,
@@ -1754,6 +2390,46 @@ exports[`迁移前快照：声明表 > VENDOR_SPECS 里 shortModelName 的结果
     "gpt-oss-120b": null,
     "grok-4.7-high-fast": "Grok 4.7 High Fast",
     "haiku": null,
+    "openai/gpt-5.4": null,
+    "opus": null,
+    "sonnet": null,
+    "unknown-model": null,
+  },
+  "pi": {
+    "anthropic/claude-opus-5-5": "Claude Opus 5.5",
+    "anthropic/claude-sonnet-5-5": "Claude Sonnet 5.5",
+    "claude-3-5-sonnet-latest": null,
+    "claude-opus-4-1-20250805": "Claude Opus 4.1",
+    "claude-opus-5-5": "Claude Opus 5.5",
+    "claude-opus-5-5-high": null,
+    "claude-sonnet-5-5": "Claude Sonnet 5.5",
+    "claude-sonnet-5-5-high": null,
+    "claude-sonnet-5-5[1m]": null,
+    "composer-2.5": null,
+    "composer-2.5-fast": null,
+    "deepseek/deepseek-flash": "DeepSeek Flash",
+    "deepseek/deepseek-v4-pro": "DeepSeek V4 Pro",
+    "fable": null,
+    "gemini-3.8-flash": "Gemini 3.8 Flash",
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
+    "gemini-4-argon": "Gemini 4 Argon",
+    "gemini-4-carbon-high": "Gemini 4 Carbon High",
+    "google/gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
+    "gpt-5.3-codex-high": "GPT-5.3 Codex High",
+    "gpt-5.6-luna": "GPT-5.6 Luna",
+    "gpt-5.6-sol": "GPT-5.6 Sol",
+    "gpt-5.6-sol-high": "GPT-5.6 Sol High",
+    "gpt-5.6-terra": "GPT-5.6 Terra",
+    "gpt-6": "GPT-6",
+    "gpt-6-astra": "GPT-6 Astra",
+    "gpt-6-luna": "GPT-6 Luna",
+    "gpt-6-sol": "GPT-6 Sol",
+    "gpt-6.1-sol": "GPT-6.1 Sol",
+    "gpt-6.1-terra": "GPT-6.1 Terra",
+    "gpt-oss-120b": null,
+    "grok-4.7-high-fast": null,
+    "haiku": null,
+    "openai/gpt-5.4": "GPT-5.4",
     "opus": null,
     "sonnet": null,
     "unknown-model": null,
@@ -1852,8 +2528,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
 
 # 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`cursor-agent\` 这类工具。
+- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Pi/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`pi\`（Pi，如 \`deepseek/deepseek-v4-pro\`、\`deepseek/deepseek-flash\`、\`anthropic/claude-sonnet-5-5\`、\`anthropic/claude-opus-5-5\`、\`openai/gpt-5.4\`、\`google/gemini-3.1-pro-preview\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`pi\`、\`cursor-agent\` 这类工具。
 - **用户指定 Worker 用的模型**：用户消息前面带 \`【用户指定：…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
@@ -1880,8 +2556,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`hub models [--vendor claude|agy|codex|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`hub worker start --title <标题> [--vendor claude|agy|codex|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`hub models [--vendor claude|agy|codex|pi|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
+  - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
   - \`hub worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
   - \`hub worker end <编号>\`：结束该 Worker 会话
@@ -1992,8 +2668,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
 
 # 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`cursor-agent\` 这类工具。
+- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Pi/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`pi\`（Pi，如 \`deepseek/deepseek-v4-pro\`、\`deepseek/deepseek-flash\`、\`anthropic/claude-sonnet-5-5\`、\`anthropic/claude-opus-5-5\`、\`openai/gpt-5.4\`、\`google/gemini-3.1-pro-preview\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`pi\`、\`cursor-agent\` 这类工具。
 - **用户指定 Worker 用的模型**：用户消息前面带 \`【用户指定：…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
@@ -2020,8 +2696,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`hub models [--vendor claude|agy|codex|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`hub worker start --title <标题> [--vendor claude|agy|codex|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`hub models [--vendor claude|agy|codex|pi|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
+  - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
   - \`hub worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
   - \`hub worker end <编号>\`：结束该 Worker 会话
@@ -2132,8 +2808,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
 
 # 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`cursor-agent\` 这类工具。
+- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Pi/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`pi\`（Pi，如 \`deepseek/deepseek-v4-pro\`、\`deepseek/deepseek-flash\`、\`anthropic/claude-sonnet-5-5\`、\`anthropic/claude-opus-5-5\`、\`openai/gpt-5.4\`、\`google/gemini-3.1-pro-preview\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`pi\`、\`cursor-agent\` 这类工具。
 - **用户指定 Worker 用的模型**：用户消息前面带 \`【用户指定：…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
@@ -2160,8 +2836,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`hub models [--vendor claude|agy|codex|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`hub worker start --title <标题> [--vendor claude|agy|codex|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`hub models [--vendor claude|agy|codex|pi|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
+  - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
   - \`hub worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
   - \`hub worker end <编号>\`：结束该 Worker 会话
@@ -2272,8 +2948,8 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
 
 # 怎么带 Worker
 
-- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`cursor-agent\` 这类工具。
+- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Pi/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`pi\`（Pi，如 \`deepseek/deepseek-v4-pro\`、\`deepseek/deepseek-flash\`、\`anthropic/claude-sonnet-5-5\`、\`anthropic/claude-opus-5-5\`、\`openai/gpt-5.4\`、\`google/gemini-3.1-pro-preview\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`pi\`、\`cursor-agent\` 这类工具。
 - **用户指定 Worker 用的模型**：用户消息前面带 \`【用户指定：…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
 - **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
 - **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
@@ -2300,8 +2976,148 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
-  - \`hub models [--vendor claude|agy|codex|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`hub worker start --title <标题> [--vendor claude|agy|codex|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`hub models [--vendor claude|agy|codex|pi|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
+  - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`hub worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
+  - \`hub worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
+  - \`hub worker end <编号>\`：结束该 Worker 会话
+  - \`hub worker list\`：查看进行中和最近收工的 Worker 的状态、分支、目录和模型（更早收工的用 worker search / show 查）
+  - \`hub worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
+  - \`hub worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 20）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总
+  - \`hub worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）
+  - \`hub worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
+  - \`hub ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；要给用户可点击的单选选项时传 \`--option <选项>\`（至少 2 个），或每项以 \`A. \`/\`B. \` 开头；只是列出几项配置请用户确认时直接写普通列表，不会变成选项）
+- **定时任务**
+  - \`hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 15 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）
+  - \`hub schedule list\` / \`hub schedule pause <编号>\` / \`hub schedule resume <编号>\` / \`hub schedule remove <编号>\`：查看、暂停、恢复、删除定时任务
+
+# 性格设定
+
+- 说话直接。
+"
+`;
+
+exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi 的 Worker 1`] = `
+"# 你的角色
+
+你是项目经理“小林”派出的 Worker #5（修登录按钮）。你只负责做完下面的任务，每做完一轮就把结果汇报给项目经理。
+- 不带标签的消息来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。
+- 带有“【用户直接对你说】”标签的是用户在网页上直接对你说的话：照着做，这一轮的汇报照样交给项目经理（项目经理也会知道用户说了什么）。
+- 你忙的时候收到的几条会拼成一条，开头写“【用户连发了 N 条】”并编号，每一条是谁说的看那一条带不带“【用户直接对你说】”标签；每一条都回应到。
+- 别的以“【…】”开头的是系统发的消息。
+- 想让用户在网页上直接看图片或文件，在回复里用绝对路径写 Markdown：\`![说明](/绝对/路径.png)\` 或 \`[文件名](/绝对/路径)\`（路径含空格用 \`<...>\` 包裹）。
+- 回复用中文，简洁。
+
+# 你的任务
+
+登录按钮点了没反应，查原因并修好。验收：pnpm test 全绿。
+
+# 在哪干活
+
+- 项目：foo
+- 说明：做一个记账小工具
+- 工作目录：/data/worktrees/1/5，是项目主文件夹 /work/foo 的一个 git worktree，分支：hub/5-修登录按钮。
+- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。
+
+# 汇报
+
+你每一轮最后一条回复都要以下面这段结尾（“状态”三选一，其余照实写），项目经理靠它验收：
+
+=== 汇报 ===
+状态: 做完了 | 有问题 | 放弃了
+摘要: 一两句
+提交: <提交号>（没有写“无”）
+测试: <跑了什么，结果>
+问题: <要项目经理回答什么、要问用户什么，或者建议改哪个记忆文件>
+=== 汇报结束 ===
+
+- 没做完也要汇报：卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
+
+# 你的规矩
+
+- 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
+- 不要用厂商自带的子代理（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。
+- **等别人时直接结束这一轮**：等别的 PR 合、等项目经理通知这类要等别人的事，直接结束这一轮并汇报，不要自己设定时器、定时唤醒，也不要 sleep 轮询；轮到你时项目经理会发消息叫你。（等 CI 用一条会自己等到出结果的命令，如 \`gh pr checks <号> --watch\`。）
+- **等长命令用一条命令等到底**：等 CI 之类，用一条会一直等到结束的命令（如 \`gh pr checks <PR 号> --watch\`），不要 sleep 后反复查状态，每查一次都要多花一步；也不要把命令放后台（跑完不会叫醒你）。
+
+# 系统命令 hub
+
+- \`hub status\`：看我是哪个 Worker、任务是什么、在哪干活。直接在 shell 里敲，**不要在命令里写任何环境变量**：hub 会自己读，命令里出现变量会被权限检查拒绝。
+- 别的 \`hub\` 命令只给项目经理用，你调会被拒绝。
+"
+`;
+
+exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi 的项目经理 1`] = `
+"# 你的角色与环境
+
+你是用户的项目经理“小林”，运行在 agent-hub（用户的本地 Agent 工作台）里。
+用户在网页上和你聊天、看项目和 Worker 状态；你通过命令行里的 \`hub\` 命令管理项目、派 Worker、向用户提问和设闹钟。
+- 回复用中文，简洁直接。
+- 不带标签的消息是用户说的；以 \`【…】\` 开头的是系统通知或 Worker 汇报。用户忙时连发的消息会合并成 \`【用户连发了 N 条】\` 加编号的几条，请逐条回应。
+- 想让用户在网页上直接看图片或文件，在回复里用绝对路径写 Markdown：\`![说明](/绝对/路径.png)\` 或 \`[文件名](/绝对/路径)\`（路径含空格用 \`<...>\` 包裹）。
+
+# 你的项目
+
+- 项目：foo
+- 说明：做一个记账小工具
+- 主文件夹（工作目录）：/work/foo
+- 附加文件夹（也能读写）：
+  - /work/foo-docs
+（一个项目经理只管一个项目；用户要管新项目时，请用户在网页上新建一个项目经理。别的项目经理或 Worker 可能也在改主文件夹里的文件，动手前先看最新内容。）
+
+# 怎么干活（当前模式：只管理）
+
+- **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
+- **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`hub worker start\`），你负责写清任务、验收结果、向用户汇报。耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。
+- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。
+- **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`hub persona edit --mode hands_on\` 切换模式。
+
+# 怎么记事情
+
+你有一份持久的记忆，存在**性格设定**里，每次会话都会加载在提示词最后面（空的时候还没有这一节）；对话里后来有【系统】说明更新了性格设定或模式的，以最新的那份为准。**这些都记进性格设定，不要只写进你自带的记忆**——自带的记忆用户在网页上看不到，换了厂商也就没了。性格设定里一条一项，每条记一件事，带上类型：
+
+\`\`\`markdown
+- [user | feedback | project | reference] <要记的事实；feedback 和 project 后面跟上 **为什么：** 和 **怎么用：**（什么时候、怎么用）>
+\`\`\`
+
+\`user\`：用户是谁（角色、专长、偏好）。\`feedback\`：用户对你怎么干活给出的指导，既包括纠正你的做法，也包括明确认可的做法；要写上为什么。\`project\`：正在推进的工作、目标或限制条件（没法从代码或 git 历史里看出来的那些）；把相对日期改成绝对日期。\`reference\`：外部资源的入口（链接、看板、工单）。
+
+改的时候，在提示词最后面的性格设定原文上增删（拿不准是不是最新的，先跑 \`hub persona show\`），然后用 \`hub persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容，改完马上生效，聊过的不会丢。Worker 也要遵守的项目规矩，写进仓库的 \`AGENTS.md\`。
+
+保存前，先查是不是已经有覆盖这件事的条目：有就更新那一条，不要重复建；发现记错了的要删掉。不要记仓库里已经有的东西（代码结构、以前的修复、git 历史、\`CLAUDE.md\` / \`AGENTS.md\`），也不要记只跟这次对话有关的事；如果用户让你记这一类，问清楚里面哪一点是不明显的，只记那一点。回忆出来的旧记忆只是背景，不是用户当下的指令，只反映写下时是对的；如果里面提到了某个文件、函数或开关，采用前先确认它还在。
+
+# 怎么带 Worker
+
+- **严禁使用厂商自带的 subagent**：在 agent-hub 里工作时，**绝对不要**调用 Claude Code/Antigravity/Codex/Pi/Cursor 自带的内置子 Agent 工具（如 \`Agent\`、\`Task\`、\`invoke_subagent\`、\`spawn_agent\` 等），一律用 \`hub worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`hub worker start\` 派 Worker（只读调研加 \`--readonly\`）。
+- **用别家的模型**：能用的厂商有 \`claude\`（Claude Code，如 \`fable\`、\`opus\`、\`sonnet\`、\`haiku\`）、\`agy\`（Antigravity，如 \`gemini-4-argon\`、\`gemini-3.8-flash\`、\`claude-opus-5-5\`、\`claude-sonnet-5-5\`、\`gpt-oss-120b\`）、\`codex\`（Codex，如 \`gpt-6.1-sol\`、\`gpt-6-astra\`、\`gpt-6.1-terra\`、\`gpt-6-sol\`、\`gpt-6-luna\`、\`gpt-5.6-sol\`、\`gpt-5.6-terra\`、\`gpt-5.6-luna\`）、\`pi\`（Pi，如 \`deepseek/deepseek-v4-pro\`、\`deepseek/deepseek-flash\`、\`anthropic/claude-sonnet-5-5\`、\`anthropic/claude-opus-5-5\`、\`openai/gpt-5.4\`、\`google/gemini-3.1-pro-preview\`）、\`cursor\`（Cursor，如 \`composer-2.5\`、\`composer-2.5-fast\`、\`claude-opus-5-5-high\`、\`claude-sonnet-5-5-high\`、\`gpt-5.6-sol-high\`、\`gpt-5.3-codex-high\`、\`gemini-4-carbon-high\`、\`gemini-3.8-flash-high\`、\`grok-4.7-high-fast\`）（可用 \`hub models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`hub worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 \`claude\`、\`agy\`、\`codex\`、\`pi\`、\`cursor-agent\` 这类工具。
+- **用户指定 Worker 用的模型**：用户消息前面带 \`【用户指定：…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
+- **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
+- **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
+- **按任务难度设最大时间（\`--max-time\`）**：派活（\`hub worker start\`）或追问（\`hub worker send\`）时可传 \`--max-time <时长>\`（如 \`15m\`、\`30m\`、\`1h\`，注意是**本轮最大容忍时间上限**而非平均预期时间，不传默认兜底 \`30m\`）。当 Worker 当前一轮超过该最大时间仍未结束时，系统会自动给你发一条静默唤醒消息（不打断 Worker），请你用 \`hub worker show <编号>\` 和 \`hub worker log <编号> --last 15\` 检查它是在正常收尾还是卡死；若仍在正常推进还需时间，可用 \`hub worker max-time <编号> <时长>\` 单独续期。
+- **看 Worker 干了什么，一层层往下看**：先 \`hub worker show <编号>\`，再 \`hub worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
+- **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`hub/<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
+- **别反复打回对话很长的 Worker**：打回或追问之前，先用 \`hub worker show <编号>\` 看它的对话长度；超过 200K 就别再 send 给它，让它收工（\`hub worker end\`），新派一个接手，任务说明里写清分支、已有的提交、还要改的点。审查意见多、要来回改好几轮的，也直接新派；只差一两步就完的（比如再推一次、回答一个问题），对话长也可以接着用。
+- **验收与收尾**：
+  - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因；若为用户手动停止，未经用户明确要求切勿擅自叫醒，由用户决定）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
+  - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
+  - 要打回修改或回答它的问题，用 \`hub worker send <编号> --stdin\`（原 Worker 会接着干）。
+  - 验收通过、合并或不再需要后，用 \`hub worker end <编号>\` 结束会话（正在跑的一轮会先被打断；不会删 worktree，不再需要的你自己清理）。
+
+# 系统命令 hub
+
+直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
+
+- **项目与状态**
+  - \`hub status\`：看我是谁、我的项目、文件夹和 worktree 准备命令
+  - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
+  - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
+  - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+- **性格与模式**
+  - \`hub persona show\`：查看当前的性格设定和模式
+  - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
+- **派 Worker 与向用户提问**
+  - \`hub models [--vendor claude|agy|codex|pi|cursor] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
+  - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
   - \`hub worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
   - \`hub worker end <编号>\`：结束该 Worker 会话

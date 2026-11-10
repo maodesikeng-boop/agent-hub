@@ -11,8 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
-import { AGENT_VENDORS } from "../../shared/vendors.ts";
-import type { ModelCatalog, VendorAvailability } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
@@ -301,7 +300,7 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
     // codex 不支持未知的 effort
     expectLedgerError(() => start({ vendor: "codex", effort: "extreme" }), "invalid", /思考程度只能是 low、medium、high、xhigh、max、ultra/);
     // 非法厂商
-    expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", /厂商只能是 claude、agy、codex/);
+    expectLedgerError(() => start({ vendor: "unknown" as never }), "invalid", new RegExp(`厂商只能是 ${AGENT_VENDORS.join("、")}`));
   });
 
   it("--vendor 选的厂商这台设备没装、没登录：报清楚是哪台、怎么登录，不派；能用、认不出的照派", () => {
@@ -2217,12 +2216,13 @@ describe("查看各厂商可用的模型（hub models）", () => {
     ];
 
     const all = ledger.hubCall(lin.sessionId, "models", {}, { modelCatalogs: customCatalogs });
-    const restVendors = AGENT_VENDORS.filter((v) => !["claude", "agy", "codex"].includes(v)).map((v) => [v, "unknown", null, null]);
-    expect(all.data.vendors.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
+    // 名单里的每一家都列出（按名单顺序，以后接入新厂商不用改这里）；给了名单的三家用给的
+    expect(all.data.vendors.map((v) => v.vendor)).toEqual([...AGENT_VENDORS]);
+    const given = all.data.vendors.filter((v) => customCatalogs.some((c) => c.vendor === v.vendor));
+    expect(given.map((v) => [v.vendor, v.availability, v.defaultModel, v.defaultEffort])).toEqual([
       ["claude", "available", "Opus 5.6 (1M context)", "xhigh"],
       ["agy", "signed_out", "gemini-4-argon", null],
       ["codex", "not_installed", "gpt-5.4", null],
-      ...restVendors,
     ]);
     expect(all.data.vendors[0]?.models).toEqual([
       { id: "opus[1m]", label: "Opus 5.6 (1M context)", efforts: ["low", "medium", "high", "xhigh", "max"] },

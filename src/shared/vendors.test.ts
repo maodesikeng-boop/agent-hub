@@ -29,9 +29,9 @@ import { VENDOR_LIST } from "../vendors/registry.ts";
 import { AUTO_RENEW_CONTEXT_TOKENS, HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 describe("厂商清单", () => {
-  it("AGENT_VENDORS 与注册表一致（含 claude、agy、codex、cursor），默认 claude", () => {
+  it("按 registry 导出厂商清单（含 claude、agy、codex、pi、cursor），默认 claude", () => {
     expect(AGENT_VENDORS).toEqual(VENDOR_LIST.map((s) => s.id));
-    expect(AGENT_VENDORS).toEqual(expect.arrayContaining(["claude", "agy", "codex", "cursor"]));
+    expect(AGENT_VENDORS).toEqual(expect.arrayContaining(["claude", "agy", "codex", "pi", "cursor"]));
     expect(DEFAULT_AGENT_VENDOR).toBe("claude");
 
     const claude = vendorSpec("claude");

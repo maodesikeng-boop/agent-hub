@@ -39,6 +39,8 @@ const CODEX = process.env.AGENT_HUB_CODEX || "/Applications/ChatGPT.app/Contents
 const CODEX_MODEL = process.env.AGENT_HUB_CODEX_MODEL || "gpt-5.6-luna";
 const AGY = process.env.AGENT_HUB_AGY || join(homedir(), ".local", "bin", "agy");
 const AGY_MODEL = process.env.AGENT_HUB_AGY_MODEL || "gemini-3.8-flash";
+const PI = process.env.AGENT_HUB_PI || "pi";
+const PI_MODEL = process.env.AGENT_HUB_PI_MODEL || "deepseek/deepseek-flash";
 const CURSOR = process.env.AGENT_HUB_CURSOR || join(homedir(), ".local", "bin", "cursor-agent");
 const CURSOR_MODEL = process.env.AGENT_HUB_CURSOR_MODEL || "composer-2.5-fast";
 const TURN_TIMEOUT_MS = 600_000;
@@ -48,6 +50,7 @@ const MODELS: Record<AgentVendor, string> = {
   claude: MODEL,
   agy: AGY_MODEL,
   codex: CODEX_MODEL,
+  pi: PI_MODEL,
   cursor: CURSOR_MODEL,
 };
 
@@ -103,7 +106,7 @@ function rig(vendor: AgentVendor, hub: TestHub, osSandboxed = osSandboxAvailable
     addDirs: [],
     generation: 1,
     model: MODELS[vendor],
-    effort: vendor === "agy" ? "low" : null,
+    effort: vendor === "agy" || vendor === "pi" ? "low" : null,
     pid: null,
     status: "idle",
     hasCompletedTurn: false,
@@ -124,6 +127,7 @@ function rig(vendor: AgentVendor, hub: TestHub, osSandboxed = osSandboxAvailable
   const execOverrides: Partial<Record<AgentVendor, string>> = {
     codex: CODEX,
     agy: AGY,
+    pi: PI,
     cursor: CURSOR,
   };
   const driver: Driver =
@@ -265,6 +269,42 @@ const S32_CASES: S32Case[] = [
         check: () => {
           expect(existsSync(join(r.cwd, "shell-ok.txt")), "工作目录里 shell 没写出 shell-ok.txt（claude 自带的沙箱没关掉？）");
           return "shell 在工作目录里照常写出 shell-ok.txt";
+        },
+      };
+    },
+  },
+  {
+    vendor: "pi",
+    name: "S32pi",
+    title: "Pi Worker：OS 沙箱里跑 shell 不报 exit 71，写不进 state/，worktree 里 git commit 照常",
+    prepare: (r, dataDir, suffix) => {
+      const stateDir = join(dataDir, "state");
+      const main = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-scope-pi-main-")));
+      const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+      git(main, "init", "-q");
+      writeFileSync(join(main, "README.md"), "x\n");
+      git(main, "add", "README.md");
+      git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+      const wt = join(r.cwd, "wt");
+      git(main, "worktree", "add", "-q", "-b", `scope-pi-${suffix}`, wt);
+      const probes = [join(stateDir, `scope-pi-${suffix}.txt`)];
+      const text = [
+        "这是权限测试。按顺序做下面 2 件事，每件只试一次：被拒绝或报错就照实记下报错原文，不要换别的办法绕过。",
+        `1. 用 bash 工具运行：touch ${probes[0]}`,
+        `2. 用 bash 工具运行：cd ${wt} && echo ok > pi-ok.txt && git add pi-ok.txt && git -c user.name=t -c user.email=t@t commit -qm pi-scope-test && git log --oneline -1`,
+        "最后逐条汇报结果。",
+      ].join("\n");
+      return {
+        text,
+        probes,
+        check: () => {
+          const log = git(wt, "log", "--oneline", "-1");
+          expect(log.includes("pi-scope-test"), `worktree 里没提交上：${log.trim()}`);
+          return `git commit：${log.trim()}`;
+        },
+        cleanup: () => {
+          rmSync(wt, { recursive: true, force: true });
+          rmSync(main, { recursive: true, force: true });
         },
       };
     },

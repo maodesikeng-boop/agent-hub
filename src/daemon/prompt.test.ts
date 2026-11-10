@@ -90,9 +90,10 @@ describe("提示词", () => {
     writeFileSync(join(dir, "AGENTS.md"), "# 规矩");
     writeFileSync(join(dir, "CLAUDE.md"), "# 说明");
     for (const vendor of AGENT_VENDORS) {
+      const expected = Boolean(vendorSpec(vendor).prompt.instructionFile);
       const base = projectContext();
-      expect(buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
-      expect(buildWorkerPrompt({ ...workerContext(), vendor }, dir).includes(AGENTS_NOTE), vendor).toBe(true);
+      expect(buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, dir).includes(AGENTS_NOTE), vendor).toBe(expected);
+      expect(buildWorkerPrompt({ ...workerContext(), vendor }, dir).includes(AGENTS_NOTE), vendor).toBe(expected);
     }
   });
 });
@@ -823,10 +824,10 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
   });
 
   it("这台设备上没装、没登录的厂商不进“能用的厂商”和 --vendor 列表；认不出的照列", () => {
-    const onlyClaudeAvailable = Object.fromEntries(
-      AGENT_VENDORS.map((v) => [v, v === "claude" ? "available" : v === "agy" ? "signed_out" : "not_installed"]),
+    const onlyClaude = Object.fromEntries(
+      AGENT_VENDORS.map((v, i) => [v, v === "claude" ? "available" : i % 2 === 1 ? "signed_out" : "not_installed"]),
     );
-    const ctx = projectContext({ vendorAvailability: onlyClaudeAvailable });
+    const ctx = projectContext({ vendorAvailability: onlyClaude });
     const prompt = buildLaunchPrompt(ctx, dir);
     expect(prompt).toContain("能用的厂商有 `claude`");
     expect(prompt).not.toContain("`agy`（");
