@@ -26,7 +26,7 @@ if [[ "$BUILD_WEB" -eq 1 ]]; then
   pnpm build
 fi
 
-APP_NAME="Piece.app"
+APP_NAME="Fusa.app"
 BUILD_DIR="$REPO_DIR/build"
 APP_DIR="$BUILD_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -83,9 +83,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Piece</string>
+  <string>Fusa</string>
   <key>CFBundleDisplayName</key>
-  <string>Piece</string>
+  <string>Fusa</string>
   <key>CFBundleIdentifier</key>
   <string>com.agenthub.desktop</string>
   <key>CFBundleVersion</key>

@@ -598,8 +598,8 @@ describe("经界面服务的浏览器登录", () => {
       expect(res.headers["cache-control"]).toBe("no-store");
       expect(res.headers["set-cookie"]).toBeUndefined();
       expect(res.body).toContain('<meta name="referrer" content="no-referrer">');
-      expect(res.body).toContain("<title>登录 Piece</title>");
-      expect(res.body).toContain("连不上 Piece，请检查网络后重新扫码。");
+      expect(res.body).toContain("<title>登录 Fusa</title>");
+      expect(res.body).toContain("连不上 Fusa，请检查网络后重新扫码。");
       expect(res.body).toContain("location.hash");
       expect(res.body).toContain('referrerPolicy: "no-referrer"');
       expect(res.body).toContain('method: "POST"');

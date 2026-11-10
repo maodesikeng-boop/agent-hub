@@ -9,7 +9,7 @@ export const HUB_COMMAND = "hub";
 export const PRODUCT_ID = "agent-hub";
 
 /** 产品显示名：给人看的界面标题、PWA 名字、登录页等用。 */
-export const PRODUCT_NAME = "Piece";
+export const PRODUCT_NAME = "Fusa";
 
 /** 日志、报错开头的“agent-hub:”。 */
 export const LOG_PREFIX = `${PRODUCT_ID}:`;

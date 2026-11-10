@@ -246,7 +246,7 @@ describe("防 DNS 重绑定", () => {
   ])("Host %j：403", async (host) => {
     const res = await call("GET", "/api/state", { host });
     expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Piece" });
+    expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Fusa" });
   });
 
   it("没 cookie 又是错 Host：先 403（Host 在认证前查）", async () => {

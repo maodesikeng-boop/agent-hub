@@ -84,7 +84,7 @@ describe("serve 转发到 127.0.0.1 端口（macOS）", () => {
     async (host) => {
       const res = await call("GET", API_PATHS.state, { ...VIA_SERVE, host });
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Piece" });
+      expect(res.json()).toEqual({ code: "forbidden_host", error: "这个网址不能打开 Fusa" });
     },
   );
 
