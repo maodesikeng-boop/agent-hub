@@ -226,19 +226,20 @@ const MAIN_TARGET_REFS = [
 ] as const;
 
 /**
- * 本地判断 Worker 的分支 `refs/heads/<branch>` 是否已合并进主分支（`origin/main` 或 `main`）：
+ * 本地判断 Worker 的分支 `refs/heads/<branch>` 是否已合并进主分支（`origin/main`、`main`，或 master）：
  * - 账本 `workers` 表不持久化 PR 状态，且定期清理不能每轮调 GitHub API，因此用本地 git plumbing 判断；
- * - 选 `git for-each-ref` + `git merge-base --is-ancestor` 而非 `git branch --merged`：
- *   1. `merge-base --is-ancestor` 直接以退出码（0 = 是祖先，1 = 否）表达布尔结果，不依赖文本格式（`git branch --merged` 会带 `* `/`+ ` 前缀并枚举全部分支）；
- *   2. 刚从主分支开出但未产生任何新提交的分支（`branchCommit === baseCommit`）天然是 `main` 的祖先，不能误判为“PR 已合并”，必须先比对 `baseCommit`；
- *   3. 用一次 `for-each-ref` 同时取出分支与各候选主分支（`origin/main`、本地 `main` 等）的 SHA 并去重，最小化子进程调用次数。
+ *   squash / rebase 合并判不出来（返回 false），交给“收工满 N 天”兜底。宁可判“没合并”，不能把没合并的判成合并。
+ * - 用一次 `for-each-ref` 取出分支与各候选主分支的 SHA，再用 `merge-base --is-ancestor` 的退出码（0 是、1 否）判断；
+ * - 没有 baseCommit（worktree 没登记起点）、分支没有新提交（`branchCommit === baseCommit`）一律 false：
+ *   刚开出来的分支天然是 main 的祖先，不能当成“PR 已合并”。
  */
 export async function isBranchMergedToMain(
   repoFolder: string,
   branch: string,
-  baseCommit: string | null = null,
+  baseCommit: string | null,
   options: GitOptions = {},
 ): Promise<boolean> {
+  if (baseCommit === null) return false;
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const branchRef = `refs/heads/${branch}`;
   const refsRun = await runGit(
@@ -260,19 +261,56 @@ export async function isBranchMergedToMain(
     if (ref === branchRef) branchCommit = sha;
     else targetCommits.add(sha);
   }
-  if (branchCommit === null || targetCommits.size === 0) return false;
-  if (baseCommit !== null && branchCommit === baseCommit) return false;
+  if (branchCommit === null || branchCommit === baseCommit) return false;
 
   for (const targetCommit of targetCommits) {
-    if (branchCommit === targetCommit) {
-      if (baseCommit !== null) return true;
-      continue;
-    }
+    if (branchCommit === targetCommit) return true;
     const ancRun = await runGit(repoFolder, ["merge-base", "--is-ancestor", branchCommit, targetCommit], timeoutMs);
     if (ancRun.code === 0) return true;
     if (ancRun.code !== 1) throw failed("git merge-base --is-ancestor", ancRun);
   }
   return false;
+}
+
+export type WorktreeRemovalProbe =
+  | { kind: "ok"; isRepoWithCommit: boolean; clean: boolean; onBranch: boolean }
+  | { kind: "failed"; error: string };
+
+/**
+ * 自动清理删 worktree 之前探一次（一个 `git status --porcelain=v2 --branch` 子进程）：
+ * - clean：没有已跟踪文件的改动、暂存、未跟踪文件、子模块改动。显式 `--untracked-files=normal`：
+ *   仓库配了 `status.showUntrackedFiles=no` 时默认的 status 看不到未跟踪文件，而 `git worktree remove` 也照删不误（实测）。
+ * - onBranch：HEAD 指在某个分支上。detached HEAD（含 rebase、bisect 进行到一半）上的新提交不在任何分支里，
+ *   `git worktree remove` 不拦，删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以不在分支上的不删。
+ * - 不是 git 仓库（目录还在但 .git 没了）返回 isRepoWithCommit: false，不算失败。
+ * 被 .gitignore 忽略的文件（node_modules、.env、截图）不算改动，`git worktree remove` 会连目录一起删掉。
+ */
+export async function probeWorktreeForRemoval(worktreePath: string, options: GitOptions = {}): Promise<WorktreeRemovalProbe> {
+  const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
+  try {
+    const run = await runGit(
+      worktreePath,
+      [...GIT_READONLY_ARGS, "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignore-submodules=none"],
+      timeoutMs,
+      { ...GIT_READONLY_ENV, LC_ALL: "C" },
+    );
+    if (run.code === 128 && /not a git repository/i.test(run.stderr)) {
+      return { kind: "ok", isRepoWithCommit: false, clean: false, onBranch: false };
+    }
+    if (run.code !== 0) throw failed("git status", run);
+    let hasCommit = true;
+    let onBranch = false;
+    let clean = true;
+    for (const line of run.stdout.split("\n")) {
+      if (line === "") continue;
+      if (line === "# branch.oid (initial)") hasCommit = false;
+      else if (line.startsWith("# branch.head ")) onBranch = line !== "# branch.head (detached)";
+      else if (!line.startsWith("# ")) clean = false;
+    }
+    return { kind: "ok", isRepoWithCommit: hasCommit, clean, onBranch };
+  } catch (error) {
+    return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** 删掉指定的 worktree（不加 --force，有未提交改动或锁着时 git 会拒绝报错；分支保留）。 */

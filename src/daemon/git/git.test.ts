@@ -328,6 +328,14 @@ describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
     git(wt, "add", "-A");
     git(wt, "commit", "-q", "-m", "add feat");
     expect(await isBranchMergedToMain(repo, "hub/1-feat", baseCommit)).toBe(false);
+
+    // 没登记起点（baseCommit 为 null）：分支一条新提交都没有、main 往前走了也是 main 的祖先，不能判成已合并
+    const wt0 = join(root, "wt", "0");
+    await addWorktree({ repoFolder: repo, worktreePath: wt0, branch: "hub/0-nobase" });
+    writeFileSync(join(repo, "main-moved.txt"), "1\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main moved");
+    expect(await isBranchMergedToMain(repo, "hub/0-nobase", null)).toBe(false);
   });
 
   it("分支通过 merge commit 或 fast-forward 合进本地 main 或 origin/main 后返回 true", async () => {

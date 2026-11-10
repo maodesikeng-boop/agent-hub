@@ -8,6 +8,7 @@ export {
   isBranchMergedToMain,
   isRepoWithCommit,
   probeWorkspace,
+  probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
   removeWorktree,

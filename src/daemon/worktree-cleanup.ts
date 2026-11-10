@@ -1,10 +1,12 @@
 // Worker 的 git worktree 自动清理：
 // 满足任一条件就自动删 worktree（分支 hub/<id>-<slug> 保留）：
 // 1. 这个 Worker 的分支已合并进主分支（origin/main、main 等）；
-// 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天），且 worktree 里没有未提交改动（含未跟踪文件）。
-// 任何情况下：还在跑（未收工）的不删；有未提交改动的不删（PR 已合并也不删，留给人看）；不用 worktree 的跳过；
-// 路径不在 worktreesDir 下的绝不删。每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个，用 git worktree remove（不带 --force），
-// 失败只记日志下轮再试，删完跑 git worktree prune。
+// 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天）。
+// 任何情况下：还在跑（未收工）的不删；有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
+// HEAD 不在分支上（detached、rebase 到一半）的不删；不用 worktree 的跳过；路径不在 worktreesDir 下的绝不删。
+// 被 .gitignore 忽略的文件（node_modules、.env、截图等）不算改动，随目录一起删。
+// 每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个：先判条件（不到期才查合并，git 引用很便宜），满足了才跑 git status；
+// 用 git worktree remove（不带 --force），失败只记日志下轮再试，删完跑 git worktree prune。
 import { lstatSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { WorkerId } from "../shared/domain.ts";
@@ -16,7 +18,7 @@ import {
 } from "../shared/index.ts";
 import {
   isBranchMergedToMain,
-  probeWorkspace,
+  probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
   removeWorktree,
@@ -57,7 +59,7 @@ function isStrictlyInside(parentDir: string, targetPath: string): boolean {
  * 已手动删掉的目录（ENOENT）或不在 worktreesDir 下的路径都返回 false。
  */
 export function isUnderWorktreesDir(worktreePath: string, worktreesDir: string): boolean {
-  if (!isStrictlyInside(resolve(worktreesDir), resolve(worktreePath))) return false;
+  if (!isAbsolute(worktreePath) || !isStrictlyInside(resolve(worktreesDir), resolve(worktreePath))) return false;
   try {
     const stat = lstatSync(worktreePath);
     if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
@@ -120,26 +122,26 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       if (stopped) break;
       if (!isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
 
-      // 1. 先查 worktree 里有没有未提交改动（含未跟踪文件）：有改动的一律不删（即使 PR 已合并也留给人看）
-      const probe = await probeWorkspace(candidate.worktreePath, git);
-      if (probe.kind !== "ok") {
-        log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
-        continue;
-      }
-      if (!probe.isRepoWithCommit || probe.hasUncommittedChanges) continue;
-
-      // 2. 满足“收工满 3 天”或“分支已合并进主分支”任一条件才删
+      // 1. 满足“收工满 3 天”或“分支已合并进主分支”任一条件才往下走（不满足的不跑 git status）
       const expired = now() - candidate.endedAt >= retentionMs;
-      let merged = false;
       if (!expired) {
+        let merged: boolean;
         try {
           merged = await isBranchMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
         } catch (error) {
           log(`${LOG_PREFIX} 清理 worktree：检查分支合并状态失败（worker #${candidate.workerId}）：${error instanceof Error ? error.message : String(error)}`);
           continue;
         }
+        if (!merged) continue;
       }
-      if (!expired && !merged) continue;
+
+      // 2. 有未提交改动（含未跟踪文件）、HEAD 不在分支上的一律不删（即使 PR 已合并也留给人看）
+      const probe = await probeWorktreeForRemoval(candidate.worktreePath, git);
+      if (probe.kind !== "ok") {
+        log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
+        continue;
+      }
+      if (!probe.isRepoWithCommit || !probe.clean || !probe.onBranch) continue;
 
       // 3. 动手删之前再核一次路径和 Worker 状态，确保未重新跑起来
       if (stopped || !isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
