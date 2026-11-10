@@ -68,7 +68,7 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     expect(classOf(line)).toContain("flex-wrap"); // 放不下时按钮换到下一行，不出界
     const left = line.firstElementChild as HTMLElement;
     expect(classOf(left)).toEqual(expect.arrayContaining(["min-w-32", "flex-1"]));
-    expect(classOf(within(row).getByText("Android Chrome"))).toContain("truncate");
+    expect(classOf(within(row).getByText("Android Chrome"))).toContain("line-clamp-2");
     expect(classOf(within(row).getByText("Pending approval").parentElement!)).toContain("flex-wrap");
   });
 
