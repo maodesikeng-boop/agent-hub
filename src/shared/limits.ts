@@ -356,6 +356,10 @@ export const HUB_CLI_STDIN_IDLE_MS = 60_000;
 export const EXECUTOR_STOP_GRACE_MS = 3_000;
 /** 关机：整个关机过程（执行器、claude、界面服务、agent 接口、关库）的总上限；超了记一条日志，以非 0 退出码退出。 */
 export const SHUTDOWN_TOTAL_MS = 30_000;
+/** 运行中未捕获异常：先试着正常关机（停 Worker / 项目经理的子进程、关库）最多等多久，到点直接退出码 1 退出。比 SHUTDOWN_TOTAL_MS 短，状态已经不可信，别拖。 */
+export const FATAL_SHUTDOWN_MS = 15_000;
+/** state/logs/daemon.log 超过这个大小就改名成 daemon.log.1（覆盖旧的）再新写，磁盘上最多两份。崩溃循环（systemd 每 5 秒拉起一次）也撑不大。 */
+export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
 /** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
 export const AGENT_API_CLOSE_MS = 3_000;
 
