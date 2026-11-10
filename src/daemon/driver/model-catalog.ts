@@ -34,7 +34,7 @@ import {
 } from "../../shared/index.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { trackChild } from "../process-ledger.ts";
-import { forceKill, killFreshGroup } from "./process.ts";
+import { forceKill, killFreshGroup, termGroupAfterExit } from "./process.ts";
 import { INITIALIZE_QUERY_ARGS, buildChildEnv, buildInitializeLine } from "./protocol.ts";
 
 /** claude 回应里“默认”那一项的 value：不进名单，它支持的思考程度给“默认”用。 */
@@ -362,6 +362,7 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
+      termGroupAfterExit(child);
       // 留一点时间把标准输出最后几行读完再判“没回就退出”
       setTimeout(() => finish(new Error(`claude 没回 initialize 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
@@ -414,6 +415,7 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
       detached: true,
     });
     trackChild(child, "probe:agy", { detached: true });
+    child.once("exit", () => termGroupAfterExit(child));
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -540,6 +542,7 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
+      termGroupAfterExit(child);
       setTimeout(() => finish(new Error(`codex 没回 ${label} 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
     createInterface({ input: child.stdout }).on("line", (line) => {
@@ -622,6 +625,7 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
       detached: true,
     });
     trackChild(child, "probe:claude-auth-status", { detached: true });
+    child.once("exit", () => termGroupAfterExit(child));
     child.stdin.on("error", () => {});
     child.stdin.end();
     child.stderr.resume();
