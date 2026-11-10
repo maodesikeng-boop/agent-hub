@@ -258,6 +258,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 收工的 Piece 在 Completed 组里，标题和另两组一样（不带数字），默认收着，点开才列出（行同上，`opacity-60`，全部列出）。没有收工的就没有这一组。只有收工的、手动打开右栏时只有这一组，整栏的开关放在它那一行。
   - 所有字都用英文（Needs You、Pieces、Completed、Show more，第 3 条措辞）。
 
+手机外壳的右栏改用底部 Pieces 抽屉（`ui/drawer.tsx`），内容共用 `RailGroups`，不会自动弹出；上面的顶栏下布局仅用于电脑外壳窄窗。
+
 ## 13. 字体、数字、列表行
 
 - **字体栈只在 `styles.css` 的 `--font-ui` / `--font-code` 定义**，组件里不写 `font-family`，用 `font-sans` / `font-mono`。
@@ -379,12 +381,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 19. 手机和小屏（触屏）
 
-手机装到主屏当 App 用（`display: standalone`，全屏、有刘海和底部横条）。小屏的断点还是第 12、16 条那两档（1100px 以下左栏抽屉，720px 以下右栏到顶栏下面）；这一条补**触屏**的几条硬规则，数字只在 `src/web/styles.css` 和 `src/web/index.html` 一处。
+手机装到主屏当 App 用（`display: standalone`，全屏、有刘海和底部横条）。小屏的断点还是第 12、16 条那两档（电脑外壳 1100px 以下左栏为头像窄栏，720px 以下右栏到顶栏下面）；这一条补**触屏**的几条硬规则，数字只在 `src/web/styles.css` 和 `src/web/index.html` 一处。
 
 - **视口**：`<meta name="viewport">` 带 `viewport-fit=cover`（内容铺到刘海和横条底下）和 `interactive-widget=resizes-content`（键盘弹起时网页变矮，输入框贴在键盘上面，消息不被盖住）。整页高度用 `100dvh`（`#root`），不用 `100vh`（手机上它包含收起来的地址栏，底部会被挤出屏幕）。`html, body, #root` 设为 `overflow: hidden; overscroll-behavior: none;` 锁定应用外壳不随手势整页晃动；各内部纵向滚动区（消息区、左栏、右栏、资料页、弹窗）统一带 `overflow-x: hidden` 与 `overscroll-behavior-y: contain`，防止手指纵向滑动时左右晃动或滚动穿透。
 - **安全区**：`:root` 里 `--safe-top` / `--safe-bottom` 取 `env(safe-area-inset-top / bottom, 0px)`，不在组件里直接写 `env()`。
   - 主区 `.chat-main` 上下各垫一份：顶栏（对话、Worker、资料页）从刘海下面开始，输入框在横条上面。
-  - 左栏抽屉（`fixed inset-y-0`）上下同样垫：顶上搜索行、底下“我”那一行都不压在刘海和横条上。
+  - 左栏（常驻窄栏或手机整屏列表）上下同样垫：顶上搜索行、底下“我”那一行都不压在刘海和横条上。
   - 底色继续是页面和左栏自己的底色，刘海和横条那一片不留白条。电脑上两个变量都是 0，什么都不变。
 - **输入框字号不小于 16px**：iOS 对小于 16px 的输入框聚焦时会自动放大页面。标准正文是 15px，所以只在 `(pointer: coarse)`（触屏）下，所有 `input`、`textarea`、`select`（聊天输入框、`Input`、`Textarea`、`Select`）一律 16px，写成 `styles.css` 里一条规则，组件里不各写各的。电脑上仍是 15px。
 - **点击区域不小于 44px**：触屏下，每个能点的东西可点范围至少 44 × 44px（Apple HIG）；视觉大小不变（图标按钮仍是 36 / 32px）。
@@ -393,4 +395,14 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 电脑（`pointer: fine`）上不变。
 - **不靠悬停**：触屏没有悬停。任何操作（复制、重试、展开）平时就看得见、点得到，不做“悬停才出现”的按钮；悬停只用来换底色这种锦上添花的反馈（Tailwind 的 `hover:` 只在真能悬停的设备上生效）。
 - **不出横向滚动条**：390px 宽下页面不能比屏幕宽（长标题、路径、代码块在自己里面截断或横向滚动，第 15 条）。
-- **验收截图**：手机宽度 390px（iPhone）下聊天页、左栏抽屉、输入框，放 `docs/screenshots/mobile/`；顶栏和输入框要能看出安全区的留白（浏览器里模拟时给 `--safe-top` / `--safe-bottom` 一个值）。
+- **验收截图**：手机宽度 390px（iPhone）下列表页、聊天页、Pieces 抽屉，放 `docs/screenshots/mobile/`；顶栏和输入框要能看出安全区的留白（浏览器里模拟时给 `--safe-top` / `--safe-bottom` 一个值）。
+
+
+## 20. 手机外壳
+
+- `useMediaQuery.ts` 的 `MOBILE_SHELL_QUERY` 是唯一分流条件：主指针 `coarse`，且窗口短边小于 600px；横屏同样使用手机外壳。鼠标窗口缩到 390px 仍用电脑外壳。
+- 首页网址为空，是整屏 `Sidebar layout="page"`，不自动选对话、不标选中底色。进入聊天时用 React 19 `Activity hidden` 保留列表 DOM、搜索和滚动位置。
+- 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 44px 返回箭头（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
+- Pieces 使用 `ui/drawer.tsx` 底部抽屉，共用 `RailGroups` 三组内容；没有 Piece 和提问时隐藏开关。新提问只亮点，不自动弹出；点行先关抽屉再导航，提问复用消息 focus。
+- 应用内 push 写 `history.state = { hub: true }`；replace 不写标记。返回时有标记用 `history.back()`，直达页面 replace 到上级（聊天到列表、Piece/资料到所属聊天）。无效路由 replace 到列表。
+- 设置、新建弹窗和软键盘适配留到后续 PR5，本轮沿用已有组件。

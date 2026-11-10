@@ -1,6 +1,7 @@
+import { act, renderHook } from "@testing-library/react";
 // 联机 P3：网址带设备（docs/multi-device-design.md 第 4.1 节）。老网址（不带 #/d/）是入口本机。
 import { describe, expect, it } from "vitest";
-import { parseRoute, routeHash, type Route } from "./route.ts";
+import { parseRoute, routeHash, useRoute, type Route } from "./route.ts";
 
 const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
@@ -36,4 +37,13 @@ describe("带设备的网址", () => {
       expect(parseRoute(bad)).toBeNull();
     }
   });
+});
+
+it("push 标记 hub，replace 清除标记并支持列表", () => {
+  const { result } = renderHook(useRoute);
+  act(() => result.current.navigate({ view: "conversation", id: 1 }));
+  expect(history.state).toEqual({ hub: true });
+  act(() => result.current.replace(null));
+  expect(history.state).toBeNull();
+  expect(location.hash).toBe("");
 });

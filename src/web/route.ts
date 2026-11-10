@@ -57,18 +57,18 @@ export function useRoute() {
       window.removeEventListener("hashchange", sync);
     };
   }, []);
-  const go = useCallback((next: Route, replace: boolean) => {
+  const go = useCallback((next: Route | null, replace: boolean) => {
     const apply = () => setRoute((prev) => (sameRoute(prev, next) ? prev : next));
     // 用户点出来的切换对话（左栏点项目经理、点开 Piece、从 Piece 返回）：顶栏的头像和标题过渡一下；
     // 资料页没有这两样，刚打开时补默认对话（replace）也不播
-    if (replace || next.view === "profile") apply();
+    if (replace || next?.view === "profile") apply();
     else withViewTransition(apply);
-    if (window.location.hash === routeHash(next)) return;
-    const url = `${window.location.pathname}${window.location.search}${routeHash(next)}`;
+    if (window.location.hash === (next === null ? "" : routeHash(next))) return;
+    const url = `${window.location.pathname}${window.location.search}${next === null ? "" : routeHash(next)}`;
     if (replace) window.history.replaceState(null, "", url);
-    else window.history.pushState(null, "", url);
+    else window.history.pushState({ hub: true }, "", url);
   }, []);
   const navigate = useCallback((next: Route) => go(next, false), [go]);
-  const replace = useCallback((next: Route) => go(next, true), [go]);
+  const replace = useCallback((next: Route | null) => go(next, true), [go]);
   return { route, navigate, replace };
 }

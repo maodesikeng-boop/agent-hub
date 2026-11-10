@@ -60,6 +60,7 @@ export function Conversation({
   older,
   draft,
   staging,
+  mobile = false,
   leading,
   toolbar,
   top,
@@ -84,6 +85,7 @@ export function Conversation({
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
   leading?: React.ReactNode;
+  mobile?: boolean;
   /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
   /** 太窄时放在顶栏下面的右栏。 */
@@ -165,9 +167,9 @@ export function Conversation({
           <ArchivedBanner key={entry.pm.id} pmId={entry.pm.id} archivedAt={entry.pm.archivedAt} />
         ) : (
           <DraftComposer
-            autoFocus
+            autoFocus={!mobile}
             draft={draft}
-            placeholder={`Message ${entry.name}…`}
+            placeholder={mobile ? "Message…" : `Message ${entry.name}…`}
             staging={staging}
             stop={stop}
             link={link}

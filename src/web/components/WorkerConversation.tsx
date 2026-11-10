@@ -32,6 +32,7 @@ export function WorkerConversation({
   older,
   draft,
   staging,
+  mobile = false,
   leading,
   toolbar,
   top,
@@ -61,6 +62,7 @@ export function WorkerConversation({
   staging: StagedFiles;
   /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
   leading?: React.ReactNode;
+  mobile?: boolean;
   /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
   /** 太窄时放在顶栏下面的右栏。 */
@@ -93,14 +95,16 @@ export function WorkerConversation({
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
-        <Button variant="ghost" size="icon" aria-label={`Back to ${pm.name}`} onClick={onBack}>
-          <ArrowLeft aria-hidden="true" />
-        </Button>
+        {!mobile && (
+          <Button variant="ghost" size="icon" aria-label={`Back to ${pm.name}`} onClick={onBack}>
+            <ArrowLeft aria-hidden="true" />
+          </Button>
+        )}
         <Avatar colorKey={identity.avatarKey} size={34} neutral className="vt-chat-avatar" />
         <h1 className="vt-chat-title min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
-        {readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
+        {!mobile && readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
         <span className="flex-1" />
-        {meta && <PieceMeta worker={meta} />}
+        {!mobile && meta && <PieceMeta worker={meta} />}
         {toolbar}
       </header>
       {top}
@@ -126,9 +130,9 @@ export function WorkerConversation({
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
             {phase !== "ended" && (
               <DraftComposer
-                autoFocus
+                autoFocus={!mobile}
                 draft={draft}
-                placeholder={phase === "preparing" ? `${title} is setting up…` : `Message ${title}…`}
+                placeholder={mobile ? "Message…" : phase === "preparing" ? `${title} is setting up…` : `Message ${title}…`}
                 disabled={phase === "preparing"}
                 stop={stop}
                 link={link}

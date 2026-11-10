@@ -644,3 +644,5 @@ code {
     font-size: max(16px, var(--text-body));
   }
 }
+
+[data-shell="mobile"] .composer-dock { padding-bottom: 8px; }

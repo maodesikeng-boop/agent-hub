@@ -90,7 +90,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
           ? entries.find((e) => e.pm !== null && e.pm.id === workerView?.conversation.pmId)
           : entries.find((e) => e.pm?.id === route.pmId);
   const firstUnarchived = entries.find((e) => e.pm?.archivedAt == null) ?? entries[0];
-  const active = routedEntry ?? firstUnarchived ?? null;
+  const active = routedEntry ?? (autoSelect ? firstUnarchived : null) ?? null;
   const select = useCallback(
     (ref: ConversationRef) => {
       navigate({ view: "conversation", id: ref.id, ...routeDeviceOf(ref.device) });
@@ -148,8 +148,17 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const localFirst = (localEntries.find((e) => e.pm?.archivedAt == null) ?? localEntries[0])?.id ?? null;
   useEffect(() => {
-    if (unknownDevice && localFirst !== null) replace({ view: "conversation", id: localFirst });
-  }, [unknownDevice, localFirst, replace]);
+    if (unknownDevice) {
+      if (!autoSelect) replace(null);
+      else if (localFirst !== null) replace({ view: "conversation", id: localFirst });
+    }
+  }, [unknownDevice, localFirst, replace, autoSelect]);
+
+  const invalidMobileRoute = !autoSelect && state.phase === "ready" && route !== null &&
+    (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
+  useEffect(() => {
+    if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);
+  }, [invalidMobileRoute, autoSelect, route, replace]);
 
   const here = useMemo(() => routeDeviceOf(current.key), [current.key]);
   const keyOf = useCallback((id: ConversationId) => conversationKey(current.key, id), [current.key]);
@@ -218,7 +227,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const shellReady =
     local.state.phase === "ready" &&
     !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
-  const shared = { qc, fleet, route, local, routedDevice, current, hub, state };
+  const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
 
   const view = active ? state.conversations[active.id] : undefined;

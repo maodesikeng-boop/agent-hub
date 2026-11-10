@@ -1,0 +1,594 @@
+{
+  "browser": {
+    "errors": [],
+    "shots": [
+      "01-list",
+      "02-chat",
+      "03-drawer",
+      "04-piece",
+      "05-profile",
+      "06-settings",
+      "07-landscape-list",
+      "08-other-fruit-chat",
+      "09-other-fruit-list"
+    ],
+    "cold": [
+      {
+        "ms": 2213.2851250000003,
+        "failed": 0,
+        "resources": [
+          {
+            "name": "/assets/index-DxBJ157O.js",
+            "transfer": 265723,
+            "encoded": 265423
+          },
+          {
+            "name": "/assets/rolldown-runtime-COiEfhsA.js",
+            "transfer": 927,
+            "encoded": 627
+          },
+          {
+            "name": "/assets/index-C-IpUZyZ.css",
+            "transfer": 10662,
+            "encoded": 10362
+          },
+          {
+            "name": "/api/state",
+            "transfer": 16353,
+            "encoded": 16053
+          },
+          {
+            "name": "/api/devices",
+            "transfer": 314,
+            "encoded": 14
+          },
+          {
+            "name": "/assets/bell_pepper-DFSWtyUI.webp",
+            "transfer": 0,
+            "encoded": 21628
+          },
+          {
+            "name": "/assets/strawberry-E7Nt960u.webp",
+            "transfer": 0,
+            "encoded": 21816
+          },
+          {
+            "name": "/assets/grapefruit-CspEonop.webp",
+            "transfer": 0,
+            "encoded": 21758
+          },
+          {
+            "name": "/assets/kiwi-TRoQMJb9.webp",
+            "transfer": 0,
+            "encoded": 17910
+          },
+          {
+            "name": "/assets/orange-nmrU5Z5B.webp",
+            "transfer": 0,
+            "encoded": 20036
+          },
+          {
+            "name": "/assets/lemon-DjxjxKx7.webp",
+            "transfer": 0,
+            "encoded": 19132
+          },
+          {
+            "name": "/assets/lime-BiQmo0gH.webp",
+            "transfer": 0,
+            "encoded": 18872
+          }
+        ]
+      },
+      {
+        "ms": 2232.315625000001,
+        "failed": 0,
+        "resources": [
+          {
+            "name": "/assets/index-DxBJ157O.js",
+            "transfer": 265723,
+            "encoded": 265423
+          },
+          {
+            "name": "/assets/rolldown-runtime-COiEfhsA.js",
+            "transfer": 927,
+            "encoded": 627
+          },
+          {
+            "name": "/assets/index-C-IpUZyZ.css",
+            "transfer": 10662,
+            "encoded": 10362
+          },
+          {
+            "name": "/api/state",
+            "transfer": 16353,
+            "encoded": 16053
+          },
+          {
+            "name": "/api/devices",
+            "transfer": 314,
+            "encoded": 14
+          },
+          {
+            "name": "/assets/bell_pepper-DFSWtyUI.webp",
+            "transfer": 0,
+            "encoded": 21628
+          },
+          {
+            "name": "/assets/strawberry-E7Nt960u.webp",
+            "transfer": 0,
+            "encoded": 21816
+          },
+          {
+            "name": "/assets/grapefruit-CspEonop.webp",
+            "transfer": 0,
+            "encoded": 21758
+          },
+          {
+            "name": "/assets/kiwi-TRoQMJb9.webp",
+            "transfer": 0,
+            "encoded": 17910
+          },
+          {
+            "name": "/assets/orange-nmrU5Z5B.webp",
+            "transfer": 0,
+            "encoded": 20036
+          },
+          {
+            "name": "/assets/lime-BiQmo0gH.webp",
+            "transfer": 0,
+            "encoded": 18872
+          },
+          {
+            "name": "/assets/lemon-DjxjxKx7.webp",
+            "transfer": 0,
+            "encoded": 19132
+          }
+        ]
+      },
+      {
+        "ms": 2210.658541999999,
+        "failed": 0,
+        "resources": [
+          {
+            "name": "/assets/index-DxBJ157O.js",
+            "transfer": 265723,
+            "encoded": 265423
+          },
+          {
+            "name": "/assets/rolldown-runtime-COiEfhsA.js",
+            "transfer": 927,
+            "encoded": 627
+          },
+          {
+            "name": "/assets/index-C-IpUZyZ.css",
+            "transfer": 10662,
+            "encoded": 10362
+          },
+          {
+            "name": "/api/state",
+            "transfer": 16353,
+            "encoded": 16053
+          },
+          {
+            "name": "/api/devices",
+            "transfer": 314,
+            "encoded": 14
+          },
+          {
+            "name": "/assets/bell_pepper-DFSWtyUI.webp",
+            "transfer": 0,
+            "encoded": 21628
+          },
+          {
+            "name": "/assets/strawberry-E7Nt960u.webp",
+            "transfer": 0,
+            "encoded": 21816
+          },
+          {
+            "name": "/assets/grapefruit-CspEonop.webp",
+            "transfer": 0,
+            "encoded": 21758
+          },
+          {
+            "name": "/assets/kiwi-TRoQMJb9.webp",
+            "transfer": 0,
+            "encoded": 17910
+          },
+          {
+            "name": "/assets/lemon-DjxjxKx7.webp",
+            "transfer": 0,
+            "encoded": 19132
+          },
+          {
+            "name": "/assets/orange-nmrU5Z5B.webp",
+            "transfer": 0,
+            "encoded": 20036
+          },
+          {
+            "name": "/assets/lime-BiQmo0gH.webp",
+            "transfer": 0,
+            "encoded": 18872
+          }
+        ]
+      },
+      {
+        "ms": 2235.859541,
+        "failed": 0,
+        "resources": [
+          {
+            "name": "/assets/index-DxBJ157O.js",
+            "transfer": 265723,
+            "encoded": 265423
+          },
+          {
+            "name": "/assets/rolldown-runtime-COiEfhsA.js",
+            "transfer": 927,
+            "encoded": 627
+          },
+          {
+            "name": "/assets/index-C-IpUZyZ.css",
+            "transfer": 10662,
+            "encoded": 10362
+          },
+          {
+            "name": "/api/state",
+            "transfer": 16353,
+            "encoded": 16053
+          },
+          {
+            "name": "/api/devices",
+            "transfer": 314,
+            "encoded": 14
+          },
+          {
+            "name": "/assets/bell_pepper-DFSWtyUI.webp",
+            "transfer": 0,
+            "encoded": 21628
+          },
+          {
+            "name": "/assets/strawberry-E7Nt960u.webp",
+            "transfer": 0,
+            "encoded": 21816
+          },
+          {
+            "name": "/assets/grapefruit-CspEonop.webp",
+            "transfer": 0,
+            "encoded": 21758
+          },
+          {
+            "name": "/assets/orange-nmrU5Z5B.webp",
+            "transfer": 0,
+            "encoded": 20036
+          },
+          {
+            "name": "/assets/kiwi-TRoQMJb9.webp",
+            "transfer": 0,
+            "encoded": 17910
+          },
+          {
+            "name": "/assets/lime-BiQmo0gH.webp",
+            "transfer": 0,
+            "encoded": 18872
+          },
+          {
+            "name": "/assets/lemon-DjxjxKx7.webp",
+            "transfer": 0,
+            "encoded": 19132
+          }
+        ]
+      },
+      {
+        "ms": 2193.765625000002,
+        "failed": 0,
+        "resources": [
+          {
+            "name": "/assets/index-DxBJ157O.js",
+            "transfer": 265723,
+            "encoded": 265423
+          },
+          {
+            "name": "/assets/rolldown-runtime-COiEfhsA.js",
+            "transfer": 927,
+            "encoded": 627
+          },
+          {
+            "name": "/assets/index-C-IpUZyZ.css",
+            "transfer": 10662,
+            "encoded": 10362
+          },
+          {
+            "name": "/api/state",
+            "transfer": 16353,
+            "encoded": 16053
+          },
+          {
+            "name": "/api/devices",
+            "transfer": 314,
+            "encoded": 14
+          },
+          {
+            "name": "/assets/bell_pepper-DFSWtyUI.webp",
+            "transfer": 0,
+            "encoded": 21628
+          },
+          {
+            "name": "/assets/strawberry-E7Nt960u.webp",
+            "transfer": 0,
+            "encoded": 21816
+          },
+          {
+            "name": "/assets/grapefruit-CspEonop.webp",
+            "transfer": 0,
+            "encoded": 21758
+          },
+          {
+            "name": "/assets/kiwi-TRoQMJb9.webp",
+            "transfer": 0,
+            "encoded": 17910
+          },
+          {
+            "name": "/assets/orange-nmrU5Z5B.webp",
+            "transfer": 0,
+            "encoded": 20036
+          },
+          {
+            "name": "/assets/lime-BiQmo0gH.webp",
+            "transfer": 0,
+            "encoded": 18872
+          },
+          {
+            "name": "/assets/lemon-DjxjxKx7.webp",
+            "transfer": 0,
+            "encoded": 19132
+          }
+        ]
+      }
+    ],
+    "coarse": true,
+    "listRows": 11,
+    "composer": {
+      "bottomGap": 42,
+      "focused": false,
+      "width": 390
+    },
+    "drawerButtons": [
+      "界面：外壳文案全英文 + 右栏 Pieces 单行去密麻 + 水果果冻浅底选中态",
+      "修复：输入框文件上传提示样式"
+    ],
+    "returned": {
+      "sameNode": true,
+      "scroll": 120
+    },
+    "stateRequestsNavigation": 0,
+    "listButtons": [
+      "New project manager",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "Usage",
+      "Settings"
+    ]
+  },
+  "extra": {
+    "first": [
+      {
+        "name": "index-DxBJ157O.js",
+        "transfer": 265723,
+        "encoded": 265423
+      },
+      {
+        "name": "index-C-IpUZyZ.css",
+        "transfer": 10662,
+        "encoded": 10362
+      },
+      {
+        "name": "rolldown-runtime-COiEfhsA.js",
+        "transfer": 927,
+        "encoded": 627
+      },
+      {
+        "name": "state",
+        "transfer": 16353,
+        "encoded": 16053
+      },
+      {
+        "name": "devices",
+        "transfer": 314,
+        "encoded": 14
+      },
+      {
+        "name": "bell_pepper-DFSWtyUI.webp",
+        "transfer": 21956,
+        "encoded": 21656
+      },
+      {
+        "name": "strawberry-E7Nt960u.webp",
+        "transfer": 22144,
+        "encoded": 21844
+      },
+      {
+        "name": "grapefruit-CspEonop.webp",
+        "transfer": 22086,
+        "encoded": 21786
+      },
+      {
+        "name": "kiwi-TRoQMJb9.webp",
+        "transfer": 18238,
+        "encoded": 17938
+      },
+      {
+        "name": "lemon-DjxjxKx7.webp",
+        "transfer": 19460,
+        "encoded": 19160
+      },
+      {
+        "name": "orange-nmrU5Z5B.webp",
+        "transfer": 20364,
+        "encoded": 20064
+      },
+      {
+        "name": "lime-BiQmo0gH.webp",
+        "transfer": 19200,
+        "encoded": 18900
+      }
+    ],
+    "again": [
+      {
+        "name": "index-DxBJ157O.js",
+        "transfer": 0,
+        "encoded": 265423
+      },
+      {
+        "name": "rolldown-runtime-COiEfhsA.js",
+        "transfer": 0,
+        "encoded": 627
+      },
+      {
+        "name": "index-C-IpUZyZ.css",
+        "transfer": 0,
+        "encoded": 10362
+      },
+      {
+        "name": "state",
+        "transfer": 16353,
+        "encoded": 16053
+      },
+      {
+        "name": "devices",
+        "transfer": 314,
+        "encoded": 14
+      },
+      {
+        "name": "bell_pepper-DFSWtyUI.webp",
+        "transfer": 0,
+        "encoded": 21656
+      },
+      {
+        "name": "strawberry-E7Nt960u.webp",
+        "transfer": 0,
+        "encoded": 21844
+      },
+      {
+        "name": "grapefruit-CspEonop.webp",
+        "transfer": 0,
+        "encoded": 21786
+      },
+      {
+        "name": "kiwi-TRoQMJb9.webp",
+        "transfer": 0,
+        "encoded": 17938
+      },
+      {
+        "name": "orange-nmrU5Z5B.webp",
+        "transfer": 0,
+        "encoded": 20064
+      },
+      {
+        "name": "lime-BiQmo0gH.webp",
+        "transfer": 0,
+        "encoded": 18900
+      },
+      {
+        "name": "lemon-DjxjxKx7.webp",
+        "transfer": 0,
+        "encoded": 19160
+      }
+    ],
+    "landscape": {
+      "gap": 8,
+      "coarse": true
+    },
+    "times": [
+      {
+        "ms": 6.300000011920929,
+        "rows": 10,
+        "expanded": "true"
+      },
+      {
+        "ms": 10.300000011920929,
+        "rows": 10,
+        "expanded": "true"
+      },
+      {
+        "ms": 5.4000000059604645,
+        "rows": 10,
+        "expanded": "true"
+      },
+      {
+        "ms": 14,
+        "rows": 10,
+        "expanded": "true"
+      },
+      {
+        "ms": 5.9000000059604645,
+        "rows": 10,
+        "expanded": "true"
+      }
+    ],
+    "errors": []
+  },
+  "desktopAppRenders": {
+    "main": [
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ]
+    ],
+    "pr4": [
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ],
+      [
+        5,
+        5,
+        5
+      ]
+    ]
+  }
+}
