@@ -27,6 +27,53 @@
     这是整体工作流程，你需要在rule a的规矩下完成，不同的功能，代码分别完成，整体分工你来规划，总效率达到最高
 
 
+## 我们用的组件
+只列 `package.json` 的直接依赖，"用在哪"都用 grep 核过。
+
+**后端（`src/daemon`）**
+- `fastify`：HTTP 服务（`agent-api/server.ts`、`ui-server/server.ts`、`peers/proxy.ts`）。
+- `@fastify/websocket` + `ws`：WebSocket 服务端与客户端（`ui-server/server.ts`、`peers/routes.ts`、`peers/proxy.ts`）。
+- `@fastify/static`：托管打包后的网页（`ui-server/server.ts`）。
+- `@fastify/compress`：大响应压缩（`ui-server/server.ts`、`peers/proxy.ts`）。
+- `zod`：校验输入（`ledger/hub-commands.ts`、`peers/service.ts`）。
+- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`）。
+- `web-push`：手机推送（`push/sender.ts`、`push/vapid.ts`）。
+- `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
+- 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库。
+
+**前端（`src/web`）**
+- `react` / `react-dom`：界面。`vite` + `@vitejs/plugin-react`：构建（`vite.config.ts`）。
+- `zustand`：前端状态（`components/Composer.tsx`、`device-hub.ts`）。
+- `@tanstack/react-query`：按需拉取、缓存（`App.tsx`、`components/BrowserSessions.tsx`、`components/PmProfile.tsx`）。
+- `tailwindcss` + `@tailwindcss/vite`：样式（`styles.css`）。
+- `lucide-react`：图标（`App.tsx`、`components/Attachments.tsx`）。
+- `clsx` + `tailwind-merge`：合并 class，包成 `cn()`（`lib/utils.ts`）。`class-variance-authority`：按钮变体（`ui/button.tsx`）。
+- `qrcode-generator`：二维码（`components/QrCode.tsx`）。
+- 消息渲染：`react-markdown`、`remark-gfm`、`remark-breaks`、`remark-cjk-friendly`、`remark-cjk-friendly-gfm-strikethrough`（`components/Markdown.tsx`）。
+- 代码高亮：`shiki`（`highlight.ts`）。
+- 图表：`mermaid`、`vega`、`vega-lite`、`vega-embed`、`vega-interpreter`（`charts/`）；`dompurify` 清洗 mermaid 输出（`charts/mermaid-theme.ts`）。
+
+**UI 组件（`src/web/ui/`）**
+- 底层是 Radix（`@radix-ui/react-*`），样式照 shadcn/ui 的写法，但**仓库里没有 `components.json`，也没有 `@/` 别名**，所以 `shadcn add` 不能直接用（会要求先建 `components.json`）。
+- 已有：`button`（slot + cva）、`input`、`dialog`（Radix Dialog）、`popover`、`tabs`、`collapsible`、`avatar`、`switch`、`segmented`（Radix RadioGroup）。
+- `ModeRows.tsx` 直接用 `@radix-ui/react-radio-group`，没有单独的 `radio-group.tsx`。
+- 没装：`Drawer`（`vaul` 没装）、`Sheet`、`Select`、`Textarea`、`Tooltip`、`DropdownMenu`、`ScrollArea`、`Toast/Sonner` 等。`Dialog` 已装。
+- 要新增一个：先 `pnpm dlx shadcn@latest view <名字>` 看官方源码（不需要 `components.json`），再手工放进 `src/web/ui/<名字>.tsx`：import 改成相对路径（`../lib/utils.ts`），新依赖（如 `vaul`）用 `pnpm add`，样式按 `docs/ui-standard.md` 改。
+
+**测试**
+- `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
+
+**工程工具**
+- `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查（见下面“没看到使用”）。`@types/*`（node、react、react-dom、ws、web-push）：类型。
+
+**没看到使用**（只是报告，删不删用户定）
+- `knip`：没有 npm 脚本、CI、配置引用它。
+
+**使用规则**
+- 要新功能，先查这一节有没有；没有再找行业成熟库；实在没有才自己写，并在 PR 里说明为什么。
+- 新装或删掉依赖，同一个 PR 里更新这一节。
+- 界面样式、尺寸仍以 `docs/ui-standard.md` 为准，这一节只管"用什么库"。
+
 ## pstack 技能（只本项目）
 
 - 原版 pstack（backnotprop/pstack，MIT）@ `f104aa8`（2026-11-07 取的 main）的 `skills/` 原样放在 `.agents/skills/`，许可证在 `.agents/skills/PSTACK-LICENSE`。
