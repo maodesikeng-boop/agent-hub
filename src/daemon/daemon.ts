@@ -46,6 +46,7 @@ import {
   workerSetupLogPath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
+import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
 import {
@@ -167,6 +168,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     agentApi?: RunningAgentApi;
     db?: Db;
     lock?: DirLock;
+    uninstallProcessLedger?: () => void;
     stopFileCleanup?: () => void;
     sleepInhibitor?: SleepInhibitor;
     unsubscribe: Unsubscribe[];
@@ -219,12 +221,21 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // claude 都退出了、事件都交给账本了，再取消订阅、关库
     for (const off of parts.unsubscribe.splice(0)) off();
     if (db) await step("数据库", () => db.close());
+    parts.uninstallProcessLedger?.();
     if (lock) await step("目录锁", () => lock.release());
   };
 
   try {
     // 1. 目录锁
     parts.lock = acquireLock(paths.lockFile);
+    // 1b. 子进程记账：先回收上次崩溃留下的子进程（只杀记过、且进程号上还是同一个进程的），再开始记这次的
+    const processLedger = createProcessLedger({ file: paths.childProcessesFile, log });
+    try {
+      await processLedger.reapStale();
+    } catch (error) {
+      log(`${LOG_PREFIX} 回收上次残留的子进程出错：${error instanceof Error ? error.message : String(error)}`);
+    }
+    parts.uninstallProcessLedger = installProcessLedger(processLedger);
     // 2. 开库并迁移
     const { db } = openStore(paths);
     parts.db = db;

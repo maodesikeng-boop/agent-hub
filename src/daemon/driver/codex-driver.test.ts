@@ -503,12 +503,12 @@ interface CodexTestHarness {
   cleanup(): Promise<void>;
 }
 
-let activeHarness: CodexTestHarness | undefined;
+/** 本用例建过的所有 harness（一个用例里可以建好几个，afterEach 要全清：只清最后一个的话前面的假进程会留在机器上）。 */
+const harnesses: CodexTestHarness[] = [];
 let nextSessionId = 1;
 
 afterEach(async () => {
-  await activeHarness?.cleanup();
-  activeHarness = undefined;
+  for (const h of harnesses.splice(0)) await h.cleanup();
 });
 
 function makeCodexHarness(
@@ -641,7 +641,7 @@ function makeCodexHarness(
     return row;
   };
 
-  activeHarness = {
+  const harness: CodexTestHarness = {
     dir,
     stateDir,
     store,
@@ -658,7 +658,8 @@ function makeCodexHarness(
       rmSync(dir, { recursive: true, force: true });
     },
   };
-  return activeHarness;
+  harnesses.push(harness);
+  return harness;
 }
 
 const user = (id: number, text: string, extra: Partial<{ prefixes: string[]; resend: boolean; recovery: boolean }> = {}) => ({
@@ -1887,7 +1888,6 @@ describe("CodexDriver 换代后的开场说明（session-preamble.ts）", () => 
 describe("找不到 codex 程序", () => {
   it("send 抛可重试的 DriverError(codex_not_found)，不是 claude_not_found", async () => {
     const t = makeCodexHarness({ driver: { codexPath: "/nonexistent/codex" } });
-    activeHarness = t;
     const s = t.addSession();
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe("codex_not_found");

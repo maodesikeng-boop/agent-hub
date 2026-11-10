@@ -62,6 +62,7 @@ import {
   waitForExit,
 } from "./process.ts";
 import { buildChildEnv, mergeUserTexts } from "./protocol.ts";
+import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
@@ -991,6 +992,7 @@ export abstract class BaseSessionDriver<
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
+    trackChild(child, `agent:${this.vendor}`, { detached: true });
     try {
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);

@@ -13,6 +13,7 @@ import {
   serializeJsonRpcLine,
 } from "../driver/codex-protocol.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
+import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "./forker.ts";
 import type { ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
@@ -164,7 +165,11 @@ function addUsage(total: TokenUsage, last: Json): TokenUsage {
 export function createCodexForker(options: CodexForkerOptions = {}): SessionForker {
   const spawnProcess =
     options.spawnProcess ??
-    ((command, args, opts) => spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true }));
+    ((command, args, opts) => {
+      const child = spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true });
+      trackChild(child, "handover:codex", { detached: true });
+      return child;
+    });
   /** forkId → 复制那份所在的 app-server 进程（ephemeral 的 thread 只活在里面）。 */
   const servers = new Map<string, CodexRpc>();
 

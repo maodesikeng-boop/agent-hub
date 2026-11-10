@@ -444,6 +444,17 @@ export const HEALTH_FAILURE_THRESHOLD = 3;
  * 个别用例要更久的（重启、重试）在用例上单独写。
  */
 export const TEST_TIMEOUT_MS = 20_000;
+/**
+ * 测试收尾时（每个测试文件的 afterAll，test/spawn-guard.ts）等本文件起的子进程退出最多多久；超了算残留，测试失败。
+ * 正常没有残留时第一次检查就过，不会慢；只有收尾时刚发出 SIGKILL 的进程要等它真的没了。
+ */
+export const TEST_CHILD_EXIT_WAIT_MS = 5_000;
+
+// ---- 守护进程起的子进程记账（daemon/process-ledger.ts）----
+/** state/child-processes.json 里最多记多少个还活着的子进程；超了丢最老的（它们早已不在了才会堆到这个数）。 */
+export const PROCESS_LEDGER_MAX_ENTRIES = 200;
+/** 记录里的用途（purpose）最多留多少字符。 */
+export const PROCESS_LEDGER_PURPOSE_MAX_CHARS = 64;
 
 // ---- 新建项目经理时选主文件夹（守护进程替网页弹 macOS 原生的“选择文件夹”，见 daemon/pick-folder.ts）----
 

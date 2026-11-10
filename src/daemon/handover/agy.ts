@@ -13,6 +13,7 @@ import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { agyCliDataDir, agyDataPaths } from "../../shared/paths.ts";
 import { AGY_PLAN_PERMISSION_ARGS, AGY_PRINT_ARGS, AGY_STREAM_ARGS, buildAgyUserLine, buildChildEnv, detectAgyArgsConflict, parseAgyUsage } from "../driver/agy-protocol.ts";
 import { forceKill, killFreshGroup } from "../driver/process.ts";
+import { trackChild } from "../process-ledger.ts";
 import { ForkUnsupportedError } from "./forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "./forker.ts";
 
@@ -204,6 +205,7 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       delete env[ENV_HUB_TOKEN];
       delete env[ENV_HUB_SOCK];
       const child = spawn(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+      trackChild(child, "handover:agy", { detached: true });
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));

@@ -13,6 +13,7 @@ import { LRUCache } from "lru-cache";
 import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS, type ConnectorToolAnnotations, type ReadonlyPolicy } from "../../shared/index.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../../shared/paths.ts";
 import { buildChildEnv } from "./protocol.ts";
+import { trackChild } from "../process-ledger.ts";
 import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly-agy.ts";
 import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "./write-scope.ts";
 
@@ -114,6 +115,7 @@ function listViaStdio(name: string, spec: McpServerSpec, timeoutMs: number, laun
       stdio: ["pipe", "pipe", "ignore"],
       detached: true,
     });
+    trackChild(child, "probe:agy-mcp", { detached: true });
     const tools: McpListedTool[] = [];
     let done = false;
     let nextId = 1;
