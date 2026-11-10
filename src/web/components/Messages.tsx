@@ -753,11 +753,11 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
   );
 }
 
-/** 空对话：中间是 agent 的头像、名字和“还没有消息”。 */
+/** 空对话：中间是 agent 的头像（120px，素材本身 256px，不糊）、名字和“还没有消息”。 */
 export function EmptyConversation({ identity }: { identity?: AgentIdentity }) {
   return (
     <div className="m-auto flex flex-col items-center gap-3 py-10 text-center" data-empty>
-      {identity && <Avatar colorKey={identity.avatarKey} size={48} neutral={identity.neutral} />}
+      {identity && <Avatar colorKey={identity.avatarKey} size={120} neutral={identity.neutral} />}
       <div className="flex flex-col items-center gap-0.5">
         {identity && <div className="text-title font-semibold">{identity.name}</div>}
         <div className={SECONDARY}>No messages yet</div>

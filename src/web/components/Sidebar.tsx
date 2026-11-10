@@ -73,7 +73,7 @@ function EntryButton({
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-            <span className={cn("truncate text-body font-medium", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
+            <span className={cn("truncate text-body font-semibold", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
             {device && (
               <span data-testid="entry-device" title={device} className="min-w-0 truncate text-xs text-muted-foreground">
                 {device}
@@ -122,7 +122,7 @@ function NarrowEntryButton({
             aria-label={NEEDS_YOU}
             title={NEEDS_YOU}
             data-testid="asking-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar"
           />
         ) : waiting ? (
           <span
@@ -130,7 +130,7 @@ function NarrowEntryButton({
             aria-label={YOUR_TURN}
             title={YOUR_TURN}
             data-testid="waiting-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-sidebar"
+            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar"
           />
         ) : null}
       </span>
@@ -154,7 +154,7 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
       <button
         type="button"
         aria-expanded={open}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-minor font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={onToggle}
       >
         <span className="truncate">{group.name}</span>
@@ -251,7 +251,7 @@ export function Sidebar({
             <button
               type="button"
               aria-expanded={showArchived}
-              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-minor font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
               onClick={() =>
                 setArchivedOpen((prev) => {
                   const next = new Set(prev);
@@ -280,8 +280,8 @@ export function Sidebar({
       id="sidebar"
       aria-label="Sidebar"
       className={cn(
-        "flex shrink-0 flex-col bg-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
-        narrow ? "w-18 border-r border-border" : "w-75",
+        "tint-fade flex shrink-0 flex-col bg-surface-sidebar pt-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] pb-[var(--safe-bottom)]",
+        narrow ? "w-18 border-r border-line" : "w-75",
       )}
     >
       {narrow ? (
@@ -341,7 +341,7 @@ export function Sidebar({
               <>
                 {reminded.length > 0 && (
                   <section aria-label={NEEDS_YOU} className="mb-2">
-                    <h2 className="flex h-8 items-center px-3 text-minor font-medium text-muted-foreground">{NEEDS_YOU}</h2>
+                    <h2 className="flex h-8 items-center px-3 text-xs font-medium text-muted-foreground">{NEEDS_YOU}</h2>
                     <div className="mt-1 space-y-1">
                       {/* 离线、没连上过的设备的条目和它组里一样变灰 */}
                       {reminded.map(({ group, entry }) => (

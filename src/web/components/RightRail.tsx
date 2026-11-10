@@ -1,4 +1,4 @@
-import { ChevronRight, MessageCircleQuestionMark, Play } from "lucide-react";
+import { ChevronRight, MessageCircleQuestionMark } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_AGENT_VENDOR, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
@@ -7,34 +7,26 @@ import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import type { WorkerEntry } from "../selectors.ts";
-import { STEP_TEXT } from "../step-labels.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-/** 会话 activity → 状态词（英文，复用 step-labels.ts，docs/ui-standard.md 第 12 条）。以后有新的 activity 只在这里加一行。 */
-const ACTIVITY_TEXT: Readonly<Record<string, string>> = {
-  working: `${STEP_TEXT.working}…`,
-  stopping: `${STEP_TEXT.stopping}…`,
-  preparing: `${STEP_TEXT.preparing}…`,
-  background: `${STEP_TEXT.background}…`,
-  idle: "Idle",
-};
-/** 这几种算“在忙”（状态词和小圆点用主色，列表排在前面）：干活中、准备中（在跑项目的准备命令）、在等后台命令跑完；不认识的 activity 也当在忙。 */
+/**
+ * 这几种算“在忙”（docs/ui-standard.md 第 12 条：行里不写状态词，在忙的标题字带流光，排在前面）：干活中、准备中（在跑项目的准备命令）、
+ * 在等后台命令跑完；不认识的 activity 也当在忙。以后有新的 activity 只在这两处加。
+ */
 const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing", "background"]);
-const UNKNOWN_ACTIVITY_TEXT = `${STEP_TEXT.working}…`;
+const IDLE_ACTIVITIES: ReadonlySet<string> = new Set(["stopping", "idle"]);
 /** 每组默认只列几条，多了出一行 Show more（照 Claude desktop 的右栏）。 */
 export const RIGHT_RAIL_VISIBLE_ROWS = 3;
 
-/** 没收工的 Piece 的状态词；收工的在 Completed 组里，不写状态词。 */
-const statusText = (worker: WorkerEntry) => ACTIVITY_TEXT[worker.activity] ?? UNKNOWN_ACTIVITY_TEXT;
-const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !(worker.activity in ACTIVITY_TEXT));
+const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !IDLE_ACTIVITIES.has(worker.activity));
 
 const RIGHT_RAIL_ID = "right-rail";
 
 /**
- * 右栏的字号（第 12 条）：组标题 / 状态词 13px，行的名字、Show more、“Completed N ›” 14px。图标 16px 线条（stroke 1.5）。
+ * 右栏的字号和左栏、对话区同一套（第 3 条的 4 档）：组标题（Needs You、Pieces、Completed）12px 灰，行的名字 15px，Show more 13.5px。图标 16px 线条（stroke 1.5）。
  * 行：左右 10px 内边距、同样多的负外边距，所以悬停底色比字宽一圈，字和组标题、分隔线对齐在同一条线上；一行单行 36px，留出呼吸感。
  */
 const ROW_BASE = "flex w-[calc(100%+1.25rem)] pointer-coarse:min-h-11 cursor-pointer -mx-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
@@ -79,15 +71,32 @@ function useCollapsedGroups() {
 }
 
 /**
- * 组标题：整行是一个按钮（aria-expanded），点一下收起或展开这一组，标题后面一个小三角（展开朝下、收起朝右，照 Claude 右栏的 “Context ▸”）。
- * 收起时标题后面带这一组的个数（12px），还有几条没处理看得出来。和整栏的开关（RightRailToggle）是两回事。
+ * 组标题后面的收起箭头（docs/ui-standard.md 第 12 条）：一枚小果瓣（14px 圆角扇形，果肉是强调色掺白、弧边是强调色），展开时尖朝下、收起时朝右。
+ * 没用现有的 wedge 素材：14px 下青椒、奇异果这类带空心、带籽的果瓣看不出朝向。转向 200ms，减弱动态效果时直接换。
+ */
+function WedgeArrow({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 14 14"
+      data-wedge-arrow
+      aria-hidden="true"
+      className={cn("size-3.5 shrink-0 text-primary transition-transform duration-200 ease-out motion-reduce:transition-none", !expanded && "-rotate-90")}
+    >
+      <path d="M7 12.5 L2.1 4.1 A5.6 5.6 0 0 1 11.9 4.1 Z" fill="color-mix(in srgb, currentColor 55%, #ffffff)" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M2.1 4.1 A5.6 5.6 0 0 1 11.9 4.1" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
+ * 组标题（Needs You、Pieces、Completed 三组一模一样）：12px 灰字，整行是一个按钮（aria-expanded），点一下收起或展开这一组，
+ * 标题后面是果瓣箭头（WedgeArrow）。不带个数。和整栏的开关（RightRailToggle）是两回事。
  * trailing：同一行右边放的东西（并排的右栏里第一组放整栏的开关，这样顶上不多占一行）。
  */
 function GroupTitle({
   id,
   bodyId,
   children,
-  count,
   collapsed,
   onToggle,
   dot = false,
@@ -96,14 +105,13 @@ function GroupTitle({
   id: string;
   bodyId: string;
   children: React.ReactNode;
-  count: number;
   collapsed: boolean;
   onToggle: () => void;
   dot?: boolean;
   trailing?: React.ReactNode;
 }) {
   const title = (
-    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-small font-normal text-foreground", trailing && "min-w-0 flex-1")}>
+    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-xs font-medium text-muted-foreground", trailing && "min-w-0 flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
@@ -113,8 +121,7 @@ function GroupTitle({
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
         {children}
-        {collapsed && <span className="text-xs font-normal text-muted-foreground tabular-nums">{count}</span>}
-        <Play className={cn("size-2.5 shrink-0 fill-current text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")} aria-hidden="true" />
+        <WedgeArrow expanded={!collapsed} />
       </button>
     </h2>
   );
@@ -144,10 +151,10 @@ function GroupBody({ id, collapsed, children }: { id: string; collapsed: boolean
   );
 }
 
-/** “Show more / Show less”，“Completed N ›” 同一类：灰色小字、没有底色，悬停变前景色。 */
+/** “Show more / Show less”：灰色小字、没有底色，悬停变前景色。 */
 function MoreToggle({ expanded, onClick, children, ...rest }: { expanded: boolean; onClick: () => void; children: React.ReactNode } & React.AriaAttributes) {
   return (
-    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-label text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
+    <button type="button" aria-expanded={expanded} className={cn(ROW, "h-8 pointer-coarse:h-11 items-center text-minor text-muted-foreground hover:bg-sidebar-hover hover:text-foreground")} onClick={onClick} {...rest}>
       {children}
     </button>
   );
@@ -169,11 +176,11 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
     <li>
       <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : ITEM_HOVER)} onClick={onToggle}>
         <MessageCircleQuestionMark className={cn(ROW_ICON, "mt-0.5")} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-label leading-5">{summary}</span>
+        <span className="min-w-0 flex-1 truncate text-body leading-5">{summary}</span>
         <ChevronRight className={cn(ROW_ICON, "mt-0.5 size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
       </button>
       {open && (
-        <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-small">
+        <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
           <div className="pl-7">
             <Markdown text={ask.text} messageId={ask.id} />
           </div>
@@ -216,8 +223,9 @@ export function PieceMeta({ worker }: { worker: WorkerEntry }) {
 }
 
 /**
- * 一个 Piece 一行（docs/ui-standard.md 第 12 条）：只有一行，标题（去掉“界面：”这类分类前缀）+ 右边英文状态词；收工的行不写状态词（组名已经是 Completed）。
- * 模型、思考程度、现在的对话长度不常驻显示，放进整行的悬停提示（title，第一行是完整标题），点进 Piece 的对话顶栏也能看到（PieceMeta）。收工的淡一些。
+ * 一个 Piece 一行（docs/ui-standard.md 第 12 条）：只有一行标题（去掉“界面：”这类分类前缀），不写状态词；在忙的标题字带流光（.status-shimmer，
+ * 只挂在在忙的行上），其余静态，收工的淡一些。模型、思考程度、现在的对话长度不常驻显示，放进整行的悬停提示（title，第一行是完整标题），
+ * 点进 Piece 的对话顶栏也能看到（PieceMeta）。
  */
 function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: boolean; onOpen: () => void }) {
   const meta = usePieceMeta(worker);
@@ -228,12 +236,11 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
       aria-current={active ? "true" : undefined}
       aria-label={worker.title}
       title={hint}
-      className={cn(ROW, "items-baseline justify-between", active ? ITEM_SELECTED : ITEM_HOVER)}
+      className={cn(ROW, "items-baseline", active ? ITEM_SELECTED : ITEM_HOVER)}
       onClick={onOpen}
     >
       {/* 收工的只把字调淡，选中的果冻底照样是完整的颜色 */}
-      <span className={cn("min-w-0 truncate text-label leading-5", worker.ended && "opacity-60")}>{cleanPieceTitle(worker.title)}</span>
-      {!worker.ended && <span className={cn("shrink-0 text-small", isBusy(worker) ? "status-shimmer text-primary" : "text-muted-foreground")}>{statusText(worker)}</span>}
+      <span className={cn("min-w-0 truncate text-body leading-5", worker.ended && "opacity-60", isBusy(worker) && "status-shimmer")}>{cleanPieceTitle(worker.title)}</span>
     </button>
   );
 }
@@ -289,15 +296,20 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
   );
 }
 
-/** 收工的 Piece 收成一行“Completed N ›”（和 Show more 同一类），点开才展开（默认收着）；正开着的是收工的 Piece 时自动展开，当前那行看得见。行里不再写 Ended。 */
-function EndedWorkers({
+/**
+ * 收工的 Piece 单独一组 Completed（标题和 Needs You、Pieces 一样），默认收着（不记住）；正开着的是收工的 Piece 时自动展开，当前那行看得见。
+ * 行里不写 Ended、不写状态词，标题字淡一些。
+ */
+function CompletedGroup({
   workers,
   openWorkerId,
   onOpenWorker,
+  trailing,
 }: {
   workers: WorkerEntry[];
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
+  trailing?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const activeEnded = workers.some((w) => w.conversationId === openWorkerId);
@@ -305,12 +317,11 @@ function EndedWorkers({
     if (activeEnded) setOpen(true);
   }, [activeEnded, openWorkerId]);
   return (
-    <>
-      <MoreToggle expanded={open} onClick={() => setOpen((v) => !v)}>
-        Completed <span className="-ml-2 text-xs tabular-nums">{workers.length}</span>
-        <ChevronRight className={cn("-ml-1.5 size-3.5 shrink-0 self-center transition-transform", open && "rotate-90")} aria-hidden="true" />
-      </MoreToggle>
-      {open && (
+    <section aria-labelledby="rail-completed" className="tint-fade py-3">
+      <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
+        Completed
+      </GroupTitle>
+      <GroupBody id="rail-completed-body" collapsed={!open}>
         <ul>
           {workers.map((worker) => (
             <li key={worker.conversationId}>
@@ -318,14 +329,14 @@ function EndedWorkers({
             </li>
           ))}
         </ul>
-      )}
-    </>
+      </GroupBody>
+    </section>
   );
 }
 
 /**
- * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：只有两组，Needs You（这个项目经理还没回答的 hub ask）和 Pieces
- * （它派的：在忙的排前面，最多列 3 条，多了 Show more；收工的收成最下面一行）。组之间一条细分隔线。layout：side 是和对话并排的一栏
+ * 对话右边的右栏（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：三组，Needs You（这个项目经理还没回答的 hub ask）、Pieces
+ * （它派的、没收工的：在忙的排前面，最多列 3 条，多了 Show more）和 Completed（收工的，默认收着）。组之间一条细分隔线。layout：side 是和对话并排的一栏
  * （推开对话），右栏开关（toggle）放在第一组标题的同一行右边，内容从最顶上开始；top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
 export function RightRail({
@@ -372,12 +383,19 @@ export function RightRail({
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="Side panel"
-      className={cn("flex shrink-0 flex-col bg-background", side ? "w-80 border-l border-border" : "max-h-[40dvh] border-b border-border")}
+      className={cn("tint-fade flex shrink-0 flex-col bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
     >
-      <div className={cn("min-h-0 flex-1 divide-y divide-border overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
+      <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", side ? "pb-4" : "py-1")}>
         {asks.length > 0 && (
-          <section aria-labelledby="rail-asks" className="py-3">
-            <GroupTitle id="rail-asks" bodyId="rail-asks-body" count={asks.length} collapsed={groups.collapsed.asks === true} onToggle={() => groups.toggle("asks")} dot trailing={side ? toggle : undefined}>
+          <section aria-labelledby="rail-asks" className="tint-fade py-3">
+            <GroupTitle
+              id="rail-asks"
+              bodyId="rail-asks-body"
+              collapsed={groups.collapsed.asks === true}
+              onToggle={() => groups.toggle("asks")}
+              dot
+              trailing={side ? toggle : undefined}
+            >
               {NEEDS_YOU}
             </GroupTitle>
             <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
@@ -390,12 +408,11 @@ export function RightRail({
             </GroupBody>
           </section>
         )}
-        {workers.length > 0 && (
-          <section aria-labelledby="rail-workers" className="py-3">
+        {live.length > 0 && (
+          <section aria-labelledby="rail-workers" className="tint-fade py-3">
             <GroupTitle
               id="rail-workers"
               bodyId="rail-workers-body"
-              count={live.length}
               collapsed={groups.collapsed.workers === true}
               onToggle={() => groups.toggle("workers")}
               trailing={side && asks.length === 0 ? toggle : undefined}
@@ -411,9 +428,16 @@ export function RightRail({
                 ))}
               </ul>
               <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-              {ended.length > 0 && <EndedWorkers workers={ended} openWorkerId={openWorkerId} onOpenWorker={onOpenWorker} />}
             </GroupBody>
           </section>
+        )}
+        {ended.length > 0 && (
+          <CompletedGroup
+            workers={ended}
+            openWorkerId={openWorkerId}
+            onOpenWorker={onOpenWorker}
+            trailing={side && asks.length === 0 && live.length === 0 ? toggle : undefined}
+          />
         )}
       </div>
     </aside>

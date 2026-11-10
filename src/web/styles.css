@@ -16,8 +16,14 @@
   --color-accent: var(--accent);
   --color-border: var(--border);
   --color-ring: var(--ring);
-  --color-bubble-me: var(--primary);
-  --color-bubble-me-foreground: var(--primary-foreground);
+  /* 用户气泡（docs/ui-standard.md 第 4 条）：当前强调色掺白的浅果冻底 + 前景色字，强调色本身只留给发送键和小圆点 */
+  --color-bubble-me: color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff);
+  --color-bubble-me-foreground: var(--foreground);
+  /* 外壳底色掺一点当前项目经理的水果色（第 4 条“外壳底色”）：--fruit 由 lib/accent-scope.tsx 的 FruitTint 设在整个外壳上（左栏也在里面），
+     没有当前项目经理时没设，退回原来的中性色。浓度只在 :root 的 --mix-* 改 */
+  --color-surface-chat: color-mix(in srgb, var(--fruit, var(--background)) var(--mix-chat), var(--background));
+  --color-surface-sidebar: color-mix(in srgb, var(--fruit, var(--sidebar)) var(--mix-sidebar), var(--sidebar));
+  --color-line: color-mix(in srgb, var(--fruit, var(--border)) var(--mix-line), var(--border));
   --color-bubble-agent: var(--bubble-agent);
   --color-warn: var(--warn);
   --color-warn-foreground: var(--warn-foreground);
@@ -34,15 +40,16 @@
   --font-mono: var(--font-code);
 }
 
-/* 字号档位（docs/ui-standard.md 第 3 条）：组件里写 text-title、text-body 这些，不写 text-[15px]。单位 rem，跟着根字号（界面大小）一起缩放；
-   注释里的 px 是“标准”档（根字号 16px）下的值。text-xs（12px）用 Tailwind 自带的 */
+/* 字号档位（docs/ui-standard.md 第 3 条）：界面只有 4 档 text-xs 12 / text-minor 13.5 / text-body 15 / text-title 17，左栏、对话区、右栏同一套；
+   组件里写 text-title、text-body 这些，不写 text-[15px]。单位 rem，跟着根字号（界面大小）一起缩放；注释里的 px 是“标准”档（根字号 16px）下的值。
+   text-xs（12px）用 Tailwind 自带的。text-display 只给资料页头部的名字一处 */
 @theme {
-  --text-display: 1.375rem; /* 22px 资料页头部的名字 */
+  --text-display: 1.375rem; /* 22px 资料页头部的名字（唯一的例外） */
   --text-title: 1.0625rem; /* 17px 弹窗标题、对话顶栏的名字 */
-  --text-body: 0.9375rem; /* 15px 正文、行的名字、控件里的字 */
-  --text-label: 0.875rem; /* 14px 右栏行的名字、Show more */
-  --text-minor: 0.84375rem; /* 13.5px 组标题、次要文字 */
-  --text-small: 0.8125rem; /* 13px 右栏组标题和状态词、小号按钮 */
+  --text-body: 0.9375rem; /* 15px 正文、行的名字（左栏、右栏）、控件里的字 */
+  --text-minor: 0.84375rem; /* 13.5px 次要文字、按钮里的字、状态词 */
+  /* 旧名，等于 text-minor：只剩输入框（Composer.tsx，另一个任务在改）还在用，那边换成 text-minor 后删掉 */
+  --text-small: 0.84375rem;
 }
 
 /* 界面大小（设置 → 通用 → 界面大小，ui-scale.ts）：只改根字号，字号（rem）、头像（Avatar 用 rem）、间距和控件（Tailwind 的 --spacing 是 rem）一起按比例缩放。
@@ -92,6 +99,12 @@ html[data-ui-scale="xl"] {
   --status-active: var(--success);
   /* 黄色的状态色（Worker 汇报“有问题”的色点）：--warn 是提示条的浅底，圆点要深一点 */
   --caution: #dba10b;
+  /* 水果色的掺入比例（docs/ui-standard.md 第 4 条）：只在这里调。外壳底色上限 5%、分割线上限 10%，再多就发黄发粉；
+     用户气泡的浅果冻底配前景色字，对比度 ≥ 4.5:1（lib/palette.test.ts 按这里的数逐色校验） */
+  --mix-chat: 2.5%; /* 对话区（main）和右栏的底 */
+  --mix-sidebar: 3%; /* 左栏的底 */
+  --mix-line: 8%; /* 三栏之间、右栏组之间的分割线 */
+  --mix-bubble-me: 12%; /* 用户气泡 */
   /* Markdown 链接固定蓝色（取 palette.ts 中“蓝”的 accent，对白底对比度 ≥ 4.5:1） */
   --link: #2563eb;
   --radius-btn: 9999px;
@@ -191,6 +204,59 @@ code {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
+  }
+}
+/* 动效（docs/ui-standard.md 第 14 条）：只在状态变化时播一次、不超过 400ms、不循环，减弱动态效果时全关。时长只在这里改 */
+:root {
+  --motion-tint: 300ms; /* 换项目经理时外壳底色、分割线淡变 */
+  --motion-enter: 120ms; /* 新消息淡入上移 */
+  --motion-switch: 200ms; /* 切换对话时头像、标题的 View Transition */
+}
+/* 外壳底色跟着项目经理换：只给左栏、对话区、右栏这几个容器的底色和边框加过渡，不写 * { transition } */
+.tint-fade {
+  transition:
+    background-color var(--motion-tint) ease,
+    border-color var(--motion-tint) ease;
+}
+/* 对话打开之后新来的消息（useMessageEnter.ts 只给新出现在末尾的那几条加这个类，播完就摘掉）：淡入并上移 4px */
+.message-enter {
+  animation: message-enter var(--motion-enter) ease-out;
+}
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+/* 切换对话（view-transition.ts）：只有顶栏的头像和标题有 view-transition-name，整页（含消息列表）不截快照，直接换 */
+:root {
+  view-transition-name: none;
+}
+.vt-chat-avatar {
+  view-transition-name: chat-avatar;
+}
+.vt-chat-title {
+  view-transition-name: chat-title;
+}
+::view-transition-group(chat-avatar),
+::view-transition-group(chat-title),
+::view-transition-old(chat-avatar),
+::view-transition-old(chat-title),
+::view-transition-new(chat-avatar),
+::view-transition-new(chat-title) {
+  animation-duration: var(--motion-switch);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tint-fade {
+    transition: none;
+  }
+  .message-enter {
+    animation: none;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 .messages,
@@ -493,7 +559,7 @@ code {
   width: max-content;
   min-width: 100%;
   font-family: var(--font-code);
-  font-size: var(--text-small);
+  font-size: var(--text-minor);
   line-height: 1.6;
 }
 .code-view pre {

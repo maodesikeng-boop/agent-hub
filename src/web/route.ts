@@ -4,6 +4,7 @@
 // 设备编号是 shared/api.ts 的 DeviceId（isDeviceId 校验）。不带 #/d/ 的老网址当成入口本机，继续能用。
 import { useCallback, useEffect, useState } from "react";
 import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
+import { withViewTransition } from "./view-transition.ts";
 
 /** 哪台设备上的页面：不写（undefined）是入口本机。 */
 export type Route = (
@@ -57,7 +58,11 @@ export function useRoute() {
     };
   }, []);
   const go = useCallback((next: Route, replace: boolean) => {
-    setRoute((prev) => (sameRoute(prev, next) ? prev : next));
+    const apply = () => setRoute((prev) => (sameRoute(prev, next) ? prev : next));
+    // 用户点出来的切换对话（左栏点项目经理、点开 Piece、从 Piece 返回）：顶栏的头像和标题过渡一下；
+    // 资料页没有这两样，刚打开时补默认对话（replace）也不播
+    if (replace || next.view === "profile") apply();
+    else withViewTransition(apply);
     if (window.location.hash === routeHash(next)) return;
     const url = `${window.location.pathname}${window.location.search}${routeHash(next)}`;
     if (replace) window.history.replaceState(null, "", url);

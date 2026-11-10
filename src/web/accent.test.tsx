@@ -46,12 +46,28 @@ describe("强调色跟着项目经理", () => {
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(PALETTE[2]!.accent));
   });
 
-  it(":root 的 --primary 是中性色（前景黑），不是粉色；气泡跟 --primary 走", () => {
+  it(":root 的 --primary 是中性色（前景黑），不是粉色；用户气泡是强调色掺白的浅果冻底 + 前景色字（不是实心强调色）", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).not.toMatch(/d6336c/i);
     expect(css).toMatch(/--primary: #18181b;/);
-    expect(css).toMatch(/--color-bubble-me: var\(--primary\);/);
-    expect(css).toMatch(/--color-bubble-me-foreground: var\(--primary-foreground\);/);
+    expect(css).toMatch(/--color-bubble-me: color-mix\(in srgb, var\(--primary\) var\(--mix-bubble-me\), #ffffff\);/);
+    expect(css).toMatch(/--color-bubble-me-foreground: var\(--foreground\);/);
+  });
+
+  it("外壳底色（对话区、左栏、分割线）掺当前项目经理的水果色：FruitTint 设 --fruit，切换时跟着换", async () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(css).toMatch(/--color-surface-chat: color-mix\(in srgb, var\(--fruit, var\(--background\)\) var\(--mix-chat\), var\(--background\)\);/);
+    expect(css).toMatch(/--color-surface-sidebar: color-mix\(in srgb, var\(--fruit, var\(--sidebar\)\) var\(--mix-sidebar\), var\(--sidebar\)\);/);
+    expect(css).toMatch(/--color-line: color-mix\(in srgb, var\(--fruit, var\(--border\)\) var\(--mix-line\), var\(--border\)\);/);
+    // 不写 * { transition }：只有带 tint-fade 的几个容器淡变
+    expect(css).not.toMatch(/(^|[},])\s*\*\s*\{[^}]*transition/m);
+    const { FruitTint } = await import("./lib/accent-scope.tsx");
+    const { container, rerender } = render(<FruitTint colorKey={1}><span /></FruitTint>);
+    const scope = container.firstElementChild as HTMLElement;
+    expect(scope.style.getPropertyValue("--fruit")).toBe(PALETTE[1]!.accent);
+    expect(scope.style.getPropertyValue("--primary")).toBe("");
+    rerender(<FruitTint colorKey={null}><span /></FruitTint>);
+    expect(scope.style.getPropertyValue("--fruit")).toBe("");
   });
 
   it("不属于任何项目经理的地方（左栏、加载页）不写主色", () => {
