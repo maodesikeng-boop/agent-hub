@@ -18,6 +18,7 @@ import type {
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { WorkerLineSummary } from "./snapshot.ts";
 import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
@@ -153,10 +154,15 @@ export const API_PATHS = {
 
 export interface ConversationSnapshot {
   conversation: Conversation;
-  /** 最近 100 条，按编号从小到大。 */
+  /**
+   * 按编号从小到大、连着的一段（见 shared/snapshot.ts）：项目经理对话是最近 SNAPSHOT_RECENT_MESSAGES 条，往前带到要算的消息，
+   * 最多 MESSAGE_PAGE_SIZE 条；Worker 对话是空的（任务说明还在排队的除外），点开再拉。
+   */
   messages: Message[];
   /** 比 messages 里最早一条更早的还有没有。 */
   hasMore: boolean;
+  /** Worker 对话：项目经理对话里指向它的那几行的摘要；还没有那一行、不是 Worker 对话不带。 */
+  workerLine?: WorkerLineSummary;
 }
 
 /**

@@ -6,6 +6,7 @@ import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
+import { SNAPSHOT_RECENT_MESSAGES } from "../../shared/limits.ts";
 import type { ConversationId, MessageId, MessageStatus, SessionId } from "../../shared/domain.ts";
 import { enqueueAction, getAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -848,6 +849,32 @@ describe("snapshot 和翻页", () => {
     const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);
     expect(page.messages.map((m) => m.text)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
     expect(page.hasMore).toBe(false);
+  });
+
+  it("项目经理对话只带最近 SNAPSHOT_RECENT_MESSAGES 条（处理完了、没有没回答的提问），更早的翻页拉，接得上", () => {
+    const id = post();
+    ev({ type: "message.delivered", messageIds: [id], at: 2 });
+    ev({ type: "message.processing", messageIds: [id], at: 2 });
+    for (let i = 0; i < 30; i++) ev({ type: "agent.text", at: 3, uuid: `u${i}`, text: `第 ${i} 段` });
+    ev({ type: "turn.ended", ok: true, interrupted: false, messageIds: [id], durationMs: 5, at: 4 });
+    const conv = ledger.snapshot().conversations[0]!;
+    expect(conv.messages).toHaveLength(SNAPSHOT_RECENT_MESSAGES);
+    expect(conv.messages.at(-1)?.text).toBe("第 29 段");
+    expect(conv.hasMore).toBe(true);
+    const page = ledger.messagesBefore(conversationId, conv.messages[0]!.id);
+    expect([...page.messages, ...conv.messages].map((m) => m.text)).toEqual(["你好", ...Array.from({ length: 30 }, (_, i) => `第 ${i} 段`)]);
+    expect(page.hasMore).toBe(false);
+  });
+
+  it("更早的消息还没处理完（排队、处理中）：往前带到它，“等你”、停止键看得到", () => {
+    const id = post();
+    ev({ type: "message.delivered", messageIds: [id], at: 2 });
+    ev({ type: "message.processing", messageIds: [id], at: 2 });
+    for (let i = 0; i < 30; i++) ev({ type: "agent.text", at: 3, uuid: `u${i}`, text: `第 ${i} 段` });
+    const conv = ledger.snapshot().conversations[0]!;
+    expect(conv.messages[0]?.id).toBe(id);
+    expect(conv.messages).toHaveLength(31);
+    expect(conv.hasMore).toBe(false);
   });
 
   it("消息不满 100 条时 hasMore 是 false；不存在的对话翻页抛 ConversationNotFoundError（同 postUserMessage）", () => {

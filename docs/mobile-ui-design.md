@@ -35,7 +35,7 @@
 - 路由：`src/web/route.ts` 用的是 hash + `history.pushState` / `replaceState`，监听 `popstate` 和 `hashchange`，**浏览器返回键、iOS 边缘右滑本来就能走**；`navigate` 里用 View Transitions，`popstate` 这条路不起动画。
 - `Conversation`、`WorkerConversation` 已经有 `leading` 这个口子（顶栏最左边），现在没人传——手机的返回键可以直接放进去。
 - `index.html` 已经有 `viewport-fit=cover, interactive-widget=resizes-content`；`styles.css` 已经有 `--safe-top` / `--safe-bottom`、`#root { height: 100dvh }`、触屏下输入框 16px、`.touch-target` 撑到 44px。这几条手机外壳直接用。
-- 初始数据：`/api/state`（`ledger.ts` 的 `snapshot()`）**带了每个项目经理对话和每个没收工 Piece 对话的最近 100 条消息**（`MESSAGE_PAGE_SIZE`），只有收工的 Piece 不带消息、点开才拉。所以“历史消息点开才拉”只对收工的 Piece 成立；左栏的预览就是从这些消息里算的（`selectors.ts` 的 `listConversations`）。
+- 初始数据：`/api/state`（`ledger.ts` 的 `snapshot()`，规则在 `shared/snapshot.ts`）：项目经理对话带最近 `SNAPSHOT_RECENT_MESSAGES`（20）条，往前带到没回答的提问、没处理完的、最近一条非安静的消息为止（最多 100 条）；Piece 对话都不带消息（任务说明还在排队的除外），点开才拉，状态色、已收工、最近一行靠快照里每个 Piece 的 `workerLine` 摘要（Worker #316）。左栏的预览从项目经理对话带着的这几条算（`selectors.ts` 的 `listConversations`）。
 - 打包：首屏 JS `index-*.js` 814KB，压缩后 255KB；CSS 压缩后 10KB（本次 `vite build` 量的）。Service Worker 只缓存外壳（`sw-rules.ts`），第二次打开 JS/CSS 走本地缓存，接口不缓存。
 - `Sidebar` 的 `drawerOpen` / `onCloseDrawer` 两个参数已经没用了（以前左栏抽屉留下的）；`ui-standard.md` 第 19 条还写着“1100px 以下左栏抽屉”，也是旧的。
 
@@ -217,7 +217,7 @@ export const MOBILE_SHELL_QUERY = "(pointer: coarse) and (max-width: 599px), (po
 | `/api/state` | 约 260KB（项目经理给的数，用户本机） | 每次都拉（接口不缓存） |
 | WebSocket | 之后的增量 | — |
 
-- `/api/state` 里大头是每个项目经理对话和每个在跑 Piece 的最近 100 条消息。列表页其实只要名字和最后一条预览，但这些消息拉下来以后，点进任何一个对话都是**秒开、不再请求**。两头取舍，第一版保持现状。
+- `/api/state` 里大头原来是每个项目经理对话和每个在跑 Piece 的最近 100 条消息；Worker #316 改成项目经理对话最近 20 条、Piece 对话不带（见上面“初始数据”），点开 Piece 多一次拉取（`MessageList` 自动拉最新一页）。
 - 什么时候才加接口：PR 4 用 Chrome 开发者工具 “Slow 4G” + CPU 4 倍降速量“第一次打开到列表出来”的时间。**超过 2.5 秒**才做第二步：`/api/state?preview=1`（每个对话只带最后一条可见消息和 `hasMore`），点进对话再按现有的 `/api/conversations/:id/messages` 拉一页。这一步要改状态合并（`state.ts`），单独一个方案，不在这次里。
 - 别的设备（联机）的快照是各自另拉的，手机上和电脑一样，不变。
 

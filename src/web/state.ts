@@ -53,6 +53,8 @@ export interface ConversationView {
   /** 按编号从小到大。 */
   messages: Message[];
   hasMore: boolean;
+  /** Worker 对话：快照时刻项目经理对话里指向它的最近一行（selectors.ts 再拿项目经理对话里实时来的新行比）。 */
+  workerLine?: ConversationSnapshot["workerLine"];
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
@@ -175,6 +177,10 @@ export function applyChange(state: HubState, change: Change): HubState {
           retry: dropRetryIfSettled(state.retry, message),
         };
       }
+      // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
+      if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
+        return { ...next, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+      }
       const updated = upsertMessage(view.messages, message);
       const trim =
         !state.olderLoaded?.[message.conversationId] &&
@@ -278,9 +284,10 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     // 断线前还在跑、断线期间收工的，旧消息可能缺最终回复，换成快照的空列表 + hasMore，让 MessageList 重新拉最新一页。
     const keepLoaded =
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
+    const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
     conversations[c.conversation.id] = keepLoaded
-      ? { ...prev, conversation: c.conversation }
-      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore };
+      ? { conversation: c.conversation, messages: prev.messages, hasMore: prev.hasMore, ...workerLine }
+      : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
   const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);

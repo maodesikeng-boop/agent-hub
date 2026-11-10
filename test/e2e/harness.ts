@@ -22,6 +22,7 @@ import {
   type CreatePmRequest,
   type CreatePmResponse,
   type Message,
+  type MessagesPage,
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
@@ -276,10 +277,31 @@ export class Client {
     return fetch(this.base + path, { headers: this.headers() });
   }
 
-  async state(): Promise<StateSnapshot> {
+  /** GET /api/state 原样（初始快照只带每个对话最近一段，见 shared/snapshot.ts）。 */
+  async snapshot(): Promise<StateSnapshot> {
     const res = await this.get(API_PATHS.state);
     if (res.status !== 200) throw new Error(`GET /api/state: ${res.status}`);
     return (await res.json()) as StateSnapshot;
+  }
+
+  /** 初始快照 + 每个对话更早的消息（像网页往上翻页一样按 before 拉齐）：测试要看对话里的全部消息。 */
+  async state(): Promise<StateSnapshot> {
+    const snapshot = await this.snapshot();
+    const conversations = await Promise.all(
+      snapshot.conversations.map(async (c) => {
+        let messages = c.messages;
+        let hasMore = c.hasMore;
+        while (hasMore) {
+          const res = await this.get(`${API_PATHS.messages(c.conversation.id)}?before=${messages[0]?.id ?? Number.MAX_SAFE_INTEGER}`);
+          if (res.status !== 200) throw new Error(`GET messages: ${res.status}`);
+          const page = (await res.json()) as MessagesPage;
+          messages = [...page.messages, ...messages];
+          hasMore = page.hasMore;
+        }
+        return { ...c, messages, hasMore: false };
+      }),
+    );
+    return { ...snapshot, conversations };
   }
 
   async post(conversationId: number, text: string, clientId = crypto.randomUUID()): Promise<number> {

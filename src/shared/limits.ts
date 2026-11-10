@@ -2,6 +2,13 @@
 
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
+/**
+ * 初始快照（/api/state）里项目经理对话带最近几条；更早的点开往上翻再拉（/messages?before=）。
+ * 往前带到最近一条要算的消息为止（没回答的提问、没处理完的、最近一条非安静的，见 shared/snapshot.ts），最多 MESSAGE_PAGE_SIZE 条。
+ */
+export const SNAPSHOT_RECENT_MESSAGES = 20;
+/** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
+export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
 
 /** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
