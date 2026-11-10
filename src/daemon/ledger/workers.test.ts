@@ -1595,6 +1595,14 @@ describe("用户直接对 Worker 说（网页上的 Worker 页面）", () => {
     expect(changes.map((c) => c.type)).toEqual(["message.updated", "message.created", "session.status"]);
   });
 
+  it("Worker 的对话里带 workerPick：invalid（它只对项目经理对话有意义），不存消息、不入队、没有变化", () => {
+    expect(() =>
+      ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "wp", text: "hi", workerPick: { vendor: "claude", model: null, effort: null } }),
+    ).toThrow(expect.objectContaining({ code: "invalid" }));
+    expect(enqueued).toEqual([]);
+    expect(changes).toEqual([]);
+  });
+
   it("带附件：交给项目经理的全文里有附件的完整路径，那一行的摘要还是用户写的字", () => {
     const attachment = { id: "u1", name: "图.png", path: "/data/uploads/u1/图.png", size: 10, mime: "image/png" };
     const id = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "f", text: "看这张图", attachments: [attachment] }).messageId;

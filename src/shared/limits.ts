@@ -53,6 +53,8 @@ export const MAX_REASON_CHARS = 500;
 export const MAX_PATH_BYTES = 4096;
 /** 模型名最多几个字符。 */
 export const MAX_MODEL_CHARS = 100;
+/** 输入框指定派 Worker 的思考程度（PostMessageRequest.workerPick.effort）最多几个字符；档位名都是短词（xhigh、max……）。 */
+export const MAX_WORKER_PICK_EFFORT_CHARS = 40;
 /** hub ask 选项数量下限、上限及单个选项的最大字符数（按 Unicode 字符算）。 */
 export const ASK_MIN_OPTIONS = 2;
 export const ASK_MAX_OPTIONS = 10;

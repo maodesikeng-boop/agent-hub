@@ -22,6 +22,7 @@ import type { TunnelStatus } from "./tunnel.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
+import type { WorkerPick } from "./worker.ts";
 
 export const API_PATHS = {
   /**
@@ -203,6 +204,12 @@ export interface PostMessageRequest {
   clientId: string;
   text: string;
   attachmentIds?: string[];
+  /**
+   * 只在项目经理对话里有意义（别的对话带了 → 400 invalid）：用户在输入框用 /hub:worker 指定，回应这一条消息时派的 Worker 用这家厂商、模型、思考程度
+   * （model、effort 是 null 表示 Default，项目经理自己定）。服务端校验形状（shared/worker-pick-schema.ts 的 workerPickSchema），
+   * 不查这台设备现在能不能用；存进消息的 meta.workerPick，交给项目经理时原文前面加一块参数句子（workerPickNote）。
+   */
+  workerPick?: WorkerPick;
 }
 
 export interface PostMessageResponse {

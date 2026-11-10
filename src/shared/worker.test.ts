@@ -8,12 +8,17 @@ import {
   WORKER_REPORT_STATUS_LABELS,
   deliveryParts,
   parseWorkerReport,
+  workerPickNote,
+  workerPickOf,
   userToWorkerHeader,
   workerBranchName,
   workerLineText,
   workerReportHeader,
 } from "./worker.ts";
 import { agentTextOf } from "./attachments.ts";
+import { HUB_COMPOSER_COMMANDS } from "./api.ts";
+import { workerPickSchema } from "./worker-pick-schema.ts";
+import { AGENT_VENDORS, VENDOR_SPECS } from "./vendors.ts";
 import { WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
 
@@ -195,5 +200,68 @@ describe("workerBranchName", () => {
   it("短名太长截断；整个是符号就只有编号", () => {
     expect(workerBranchName(5, "x".repeat(200))).toBe(`${WORKER_BRANCH_PREFIX}5-${"x".repeat(30)}`);
     expect(workerBranchName(6, "!!! ...")).toBe(`${WORKER_BRANCH_PREFIX}6`);
+  });
+});
+
+describe("输入框指定派 Worker 的厂商、模型、思考程度（workerPick）", () => {
+  const user = { workerId: null, sender: "user" as const, text: "把 A 拆成三块并行做" };
+  const vendor = AGENT_VENDORS[0]!;
+  const model = VENDOR_SPECS[vendor].models[0]!.id;
+
+  it("参数句子：三项都选了就写 --vendor --model --effort；Default（null）的项不写；只选厂商只出 --vendor", () => {
+    expect(workerPickNote({ vendor, model, effort: "high" })).toBe(`【用户指定：这条消息里派的 Worker 用 --vendor ${vendor} --model ${model} --effort high】`);
+    expect(workerPickNote({ vendor, model, effort: null })).toBe(`【用户指定：这条消息里派的 Worker 用 --vendor ${vendor} --model ${model}】`);
+    expect(workerPickNote({ vendor, model: null, effort: "low" })).toBe(`【用户指定：这条消息里派的 Worker 用 --vendor ${vendor} --effort low】`);
+    expect(workerPickNote({ vendor, model: null, effort: null })).toBe(`【用户指定：这条消息里派的 Worker 用 --vendor ${vendor}】`);
+  });
+
+  it("deliveryParts：有 pick 时 prefixes 多一块，原文仍是最后一块（以 / 开头照样原样）", () => {
+    const pick = { vendor, model, effort: "high" };
+    const note = workerPickNote(pick);
+    expect(deliveryParts({ ...user, meta: { workerPick: pick } })).toEqual({ prefixes: [note], text: user.text });
+    expect(deliveryParts({ ...user, text: "/review 这个 PR", meta: { workerPick: pick } })).toEqual({ prefixes: [note], text: "/review 这个 PR" });
+    // 和附件一起：原文 + 附件路径在 text 里，pick 另放
+    const both = { ...user, meta: { workerPick: pick, attachments: [ATTACHMENT] } };
+    expect(deliveryParts(both)).toEqual({ prefixes: [note], text: agentTextOf(both) });
+    expect(agentTextOf(both)).toContain(ATTACHMENT.path);
+  });
+
+  it("没有 pick、meta 是 null、pick 形状不对（老消息、被改过的库）：和以前一样，prefixes 为空", () => {
+    expect(deliveryParts({ ...user, meta: null })).toEqual({ prefixes: [], text: user.text });
+    expect(deliveryParts({ ...user, meta: { attachments: [] } })).toEqual({ prefixes: [], text: user.text });
+    expect(deliveryParts({ ...user, meta: { workerPick: { vendor: "nope", model: null, effort: null } } }).prefixes).toEqual([]);
+    expect(deliveryParts({ ...user, meta: { workerPick: "codex" } }).prefixes).toEqual([]);
+    expect(workerPickOf({ meta: { workerPick: { vendor, model: 3, effort: null } } })).toBeNull();
+  });
+
+  it("不是用户发的消息不带 pick 块；不会盖掉 Worker 对话里的标签", () => {
+    const pick = { vendor, model: null, effort: null };
+    expect(deliveryParts({ workerId: null, sender: "pm", text: "x", meta: { workerPick: pick } }).prefixes).toEqual([]);
+    expect(deliveryParts({ workerId: 3, sender: "user", text: "x", meta: { workerPick: pick } }).prefixes).toEqual(["【用户直接对你说】", workerPickNote(pick)]);
+  });
+
+  it("zod 校验：厂商在 AGENT_VENDORS 里、模型过 checkModel、档位是短字符串；多余的字段、缺字段都不行", () => {
+    expect(workerPickSchema.safeParse({ vendor, model, effort: "high" }).success).toBe(true);
+    expect(workerPickSchema.safeParse({ vendor, model: null, effort: null }).success).toBe(true);
+    for (const bad of [
+      { vendor: "nope", model: null, effort: null },
+      { vendor, model: "bad model", effort: null },
+      { vendor, model: "x".repeat(101), effort: null },
+      { vendor, model: null, effort: "" },
+      { vendor, model: null, effort: "x".repeat(41) },
+      { vendor, model: null, effort: "high】 --vendor evil" },
+      { vendor, model: null },
+      { model: null, effort: null },
+      { vendor, model: null, effort: null, extra: 1 },
+      { vendor, model: 1, effort: null },
+      "codex",
+      null,
+    ]) {
+      expect(workerPickSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("HUB_COMPOSER_COMMANDS：hub:worker 的名字和说明放在 shared", () => {
+    expect(HUB_COMPOSER_COMMANDS).toEqual([{ name: "hub:worker", description: "Pick provider, model and effort for Workers" }]);
   });
 });

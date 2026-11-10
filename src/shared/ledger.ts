@@ -29,6 +29,7 @@ import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrPro
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor, ModelCatalog, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
+import type { WorkerPick } from "./worker.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -90,6 +91,8 @@ export interface PostUserMessageInput {
   text: string;
   /** 已经验过、磁盘上确实有的附件（界面服务查的）；写进消息的 meta（UserMessageMeta），发给 agent 时拼进正文（agentTextOf）。 */
   attachments?: Attachment[];
+  /** 输入框指定的派 Worker 的厂商、模型、思考程度（形状界面服务已校验）；写进 meta.workerPick。只能用在项目经理的对话里，别的对话 → LedgerRequestError("invalid")。 */
+  workerPick?: WorkerPick;
 }
 
 export interface PostUserMessageResult {
