@@ -2,12 +2,16 @@
 // 触发规则在 composer-trigger.ts（纯函数），列表的样子在 components/ComposerMenu.tsx，这里不认识具体厂商：
 // 命令列表和要插入的文字都由后台给（GET /api/conversations/:id/commands 和 files?q=）。
 // 拿不到列表（后台问不到、请求失败）一律不弹、不报错，输入框照常能发。
+// 例外是 agent-hub 自己的命令（HUB_COMPOSER_COMMANDS，只在项目经理对话里由 source 带进来）：排在最前面，厂商命令拉不到也出现；
+// /hub:worker 后面一级一级选厂商、模型、思考程度，行由 worker-pick.ts 从模型名单（models.tsx，和资料页同一份缓存）算。
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { API_PATHS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
-import { type ComposerTrigger, detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { useModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
+import { type WorkerPickLevel, workerPickRows } from "./worker-pick.ts";
 
 /** 接着打字，等这么久没再打才去后台搜文件。 */
 export const FILE_SEARCH_DEBOUNCE_MS = 120;
@@ -16,6 +20,8 @@ export const FILE_SEARCH_DEBOUNCE_MS = 120;
 export interface ComposerSource {
   commands: (signal: AbortSignal) => Promise<ComposerCommand[]>;
   files: (query: string, signal: AbortSignal) => Promise<FilesResponse>;
+  /** agent-hub 自己的命令（项目经理对话给 HUB_COMPOSER_COMMANDS，别的对话不给）。 */
+  hubCommands?: readonly ComposerCommand[];
 }
 
 let nextSourceId = 1;
@@ -36,11 +42,16 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** url：这个对话所在设备的地址（client.ts 的 HubClient.url），默认入口本机。 */
-export function conversationSource(conversationId: number, url: (path: string) => string = (path) => path): ComposerSource {
+/** url：这个对话所在设备的地址（client.ts 的 HubClient.url），默认入口本机。hubCommands：只有项目经理对话给。 */
+export function conversationSource(
+  conversationId: number,
+  url: (path: string) => string = (path) => path,
+  hubCommands?: readonly ComposerCommand[],
+): ComposerSource {
   return {
     commands: async (signal) => (await getJson<CommandsResponse>(url(API_PATHS.commands(conversationId)), signal)).commands,
     files: (query, signal) => getJson<FilesResponse>(url(API_PATHS.files(conversationId, query)), signal),
+    hubCommands,
   };
 }
 
@@ -53,15 +64,20 @@ export interface MenuItem {
   detail: string;
   /** 选中后插进输入框的文字。 */
   insert: string;
+  /** 列出来但不能选（没登录的厂商）。 */
+  disabled?: boolean;
 }
 
+/** 列表是哪种：命令、文件，或 /hub:worker 的某一级。 */
+export type MenuKind = "command" | "file" | WorkerPickLevel;
+
 export interface MenuState {
-  kind: ComposerTrigger["kind"];
+  kind: MenuKind;
   items: MenuItem[];
   activeIndex: number;
 }
 
-const commandItems = (commands: ComposerCommand[]): MenuItem[] =>
+const commandItems = (commands: readonly ComposerCommand[]): MenuItem[] =>
   commands.map((c) => ({ id: `command:${c.name}`, label: `/${c.name}`, detail: c.description, insert: `/${c.name}` }));
 
 const fileItems = (entries: FileEntry[]): MenuItem[] =>
@@ -70,8 +86,10 @@ const fileItems = (entries: FileEntry[]): MenuItem[] =>
     return { id: `file:${e.root}:${e.path}`, label: name, detail: dir, insert: e.insert };
   });
 
+const NO_COMMANDS: readonly ComposerCommand[] = [];
+
 export interface ComposerSuggest {
-  /** 列表要显示就有值，不显示是 null。 */
+  /** 列表要显示就有值，不显示是 null。activeIndex 是 -1：一行都不能选。 */
   menu: MenuState | null;
   /** 键盘事件：处理了（选、翻、关）返回 true，调用者就不再处理（比如 Enter 不发送）。 */
   handleKey: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean;
@@ -110,6 +128,10 @@ export function useComposerSuggest({
 
   // 命令列表：每次在开头打 / 都重新问一次（列表会变），拿到之前沿用上一份；问不到就当没有
   const commandOpen = trigger?.kind === "command" && source !== undefined;
+  const hubCommands = source?.hubCommands ?? NO_COMMANDS;
+  const hasHub = hubCommands.length > 0;
+  // 模型名单：项目经理对话里打开 “/” 列表时才要（staleTime 内不重拉），之后选厂商、打字筛都在本地算
+  const catalogs = useModelCatalogs(hasHub && (trigger?.kind === "command" || trigger?.kind === "worker"));
   const { data: commands = null } = useQuery(
     {
       queryKey: ["composer-commands", srcKey] as const,
@@ -166,29 +188,53 @@ export function useComposerSuggest({
     };
   }, [fileQuery, source, srcKey, filesKey, qc]);
 
+  // hub 命令在前，厂商命令里同名的去掉；厂商命令还没拿到、拿不到时只有 hub 命令
+  const vendorCommands = commands !== null && commands.source === source ? commands.list : null;
+  const allCommands = useMemo((): readonly ComposerCommand[] => {
+    if (!hasHub) return vendorCommands ?? [];
+    if (vendorCommands === null) return hubCommands;
+    const names = new Set(hubCommands.map((c) => c.name));
+    return [...hubCommands, ...vendorCommands.filter((c) => !names.has(c.name))];
+  }, [hasHub, hubCommands, vendorCommands]);
+
   // 列表内容；null 就是不弹
-  const content = useMemo((): { kind: ComposerTrigger["kind"]; items: MenuItem[] } | null => {
+  const content = useMemo((): { kind: MenuKind; items: MenuItem[] } | null => {
     if (trigger === null || source === undefined) return null;
     if (trigger.kind === "command") {
-      if (commands === null || commands.source !== source || commands.list.length === 0) return null;
-      return { kind: "command", items: commandItems(rankCommands(commands.list, trigger.query)) };
+      if (allCommands.length === 0) return null;
+      return { kind: "command", items: commandItems(rankCommands(allCommands, trigger.query)) };
+    }
+    if (trigger.kind === "worker") {
+      if (!hasHub) return null;
+      const rows = workerPickRows(catalogs, trigger.args, trigger.query);
+      return rows === null ? null : { kind: rows.level, items: rows.items };
     }
     if (files === null || files.source !== source) return null;
     // 新一轮搜索还没回来：留着上一份结果；上一份是空的就先不显示“没有匹配”
     if (files.entries.length === 0 && files.query !== trigger.query) return null;
     return { kind: "file", items: fileItems(files.entries) };
-  }, [trigger, source, commands, files]);
+  }, [trigger, source, allCommands, hasHub, catalogs, files]);
 
-  // 高亮第几行：筛选条件一变就回到第一行
-  const menuKey = trigger === null ? "" : `${trigger.kind}:${trigger.query}`;
+  // 高亮第几行：筛选条件一变就回到第一行能选的；不能选的行（没登录的厂商）高亮跳过
+  const menuKey = trigger === null ? "" : `${trigger.kind}:${trigger.start}:${trigger.query}`;
   const [picked, setPicked] = useState({ key: "", index: 0 });
-  const count = content?.items.length ?? 0;
-  const activeIndex = count === 0 ? 0 : Math.min(picked.key === menuKey ? picked.index : 0, count - 1);
+  const items = content?.items ?? [];
+  const count = items.length;
+  const enabledFrom = (from: number, step: 1 | -1): number => {
+    for (let i = 0; i < count; i++) {
+      const index = (((from + step * i) % count) + count) % count;
+      if (!items[index]!.disabled) return index;
+    }
+    return -1;
+  };
+  const activeIndex = count === 0 ? 0 : enabledFrom(picked.key === menuKey ? Math.min(picked.index, count - 1) : 0, 1);
 
-  const highlight = (index: number) => setPicked({ key: menuKey, index });
+  const highlight = (index: number) => {
+    if (!items[index]?.disabled) setPicked({ key: menuKey, index });
+  };
 
   const select = (item: MenuItem) => {
-    if (trigger === null) return;
+    if (trigger === null || item.disabled) return;
     const next = insertSelection(value, trigger, item.insert);
     onReplace(next.text, next.cursor);
   };
@@ -203,11 +249,12 @@ export function useComposerSuggest({
     }
     if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || count === 0) return false;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      highlight((activeIndex + (e.key === "ArrowDown" ? 1 : count - 1)) % count);
+      if (activeIndex >= 0) highlight(enabledFrom(activeIndex + (e.key === "ArrowDown" ? 1 : -1), e.key === "ArrowDown" ? 1 : -1));
       return true;
     }
     if (e.key === "Enter" || e.key === "Tab") {
-      select(content.items[activeIndex]!);
+      // 一行都不能选（只剩没登录的厂商）：也吞掉，不把半截命令发出去
+      if (activeIndex >= 0) select(items[activeIndex]!);
       return true;
     }
     return false;

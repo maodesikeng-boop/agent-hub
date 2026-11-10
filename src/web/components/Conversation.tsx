@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { ConversationId, MessageId, PmId } from "../../shared/index.ts";
+import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -108,7 +108,9 @@ export function Conversation({
   const id = view.conversation.id;
   const stop = useStop(session, () => onStop(id));
   const client = useClient();
-  const source = useMemo(() => conversationSource(id, client.url), [id, client]);
+  // agent-hub 自己的命令（/hub:worker）只在项目经理对话里有
+  const isPm = view.conversation.kind === "pm";
+  const source = useMemo(() => conversationSource(id, client.url, isPm ? HUB_COMPOSER_COMMANDS : undefined), [id, client, isPm]);
   const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
   const archived = entry.pm?.archivedAt != null;
   const messageActions = useMemo<MessageActions>(

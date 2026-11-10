@@ -422,3 +422,112 @@ describe("Composer 聚焦和 Enter（按主指针）", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 });
+
+describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.location.hash = "";
+  });
+
+  const catalogs: shared.ModelCatalog[] = [
+    {
+      ...shared.bundledModelCatalog("claude"),
+      label: "Claude Code",
+      availability: "available",
+      models: [{ id: "opus", label: "Opus", description: "Most capable", efforts: ["low", "high"] }],
+      defaultModel: "Opus",
+      defaultEfforts: ["low", "high"],
+      efforts: ["low", "high"],
+    },
+    { ...shared.bundledModelCatalog("agy"), label: "Antigravity", availability: "signed_out" },
+    { ...shared.bundledModelCatalog("codex"), label: "Codex", availability: "not_installed" },
+  ];
+
+  const boot = async (hash = "") => {
+    stubPointer("fine");
+    window.location.hash = hash;
+    const api = new FakeApi(
+      makeSnapshot({
+        pms: [makePm({ id: 1, name: "小林" })],
+        conversations: [
+          makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } }),
+          makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, title: "写文档" }) }),
+        ],
+        sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1 }), makeSession({ sessionId: 2, conversationId: 31 })],
+      }),
+    );
+    // 厂商命令接口在假后台里没有（404）：hub 命令照样出现
+    api.models = () => ({ status: 200, body: { catalogs } });
+    api.install();
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    const box = (await screen.findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
+    return { api, box, user: userEvent.setup() };
+  };
+  const labels = () => screen.queryAllByRole("option").map((o) => o.firstElementChild?.textContent);
+  const posts = (api: FakeApi) => api.callsTo("POST", /\/messages$/);
+
+  it("Enter、Tab 一级一级选（不发送），没登录的厂商灰掉写 Not signed in，没装的不列；最后完整命令留在文字里", async () => {
+    const { api, box, user } = await boot();
+    await user.type(box, "/hub");
+    expect(await screen.findByRole("option", { name: /\/hub:worker/ })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(box.value).toBe("/hub:worker ");
+    await waitFor(() => expect(labels()).toEqual(["Claude Code", "Antigravity"]));
+    expect(screen.getByRole("listbox", { name: "Providers" })).toBeInTheDocument();
+    const signedOut = screen.getByRole("option", { name: /Antigravity/ });
+    expect(signedOut).toHaveAttribute("aria-disabled", "true");
+    expect(signedOut).toHaveTextContent("Not signed in");
+
+    await user.keyboard("{Tab}");
+    expect(box.value).toBe("/hub:worker claude ");
+    expect(labels()).toEqual(["Default", "Opus"]);
+    expect(screen.getByRole("option", { name: /Default/ })).toHaveTextContent("Opus (default)");
+
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(box.value).toBe("/hub:worker claude opus ");
+    expect(labels()).toEqual(["Default", "low", "high"]);
+    await user.type(box, "hi");
+    expect(labels()).toEqual(["high"]);
+    await user.keyboard("{Enter}");
+    expect(box.value).toBe("/hub:worker claude opus high ");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it("Backspace 删到上一级就回上一级的列表", async () => {
+    const { box, user } = await boot();
+    await user.type(box, "/hub:worker claude ");
+    await waitFor(() => expect(labels()).toEqual(["Default", "Opus"]));
+    await user.keyboard("{Backspace}");
+    expect(labels()).toEqual(["Claude Code"]);
+  });
+
+  it("Esc 关列表，文字不动；不发送", async () => {
+    const { api, box, user } = await boot();
+    await user.type(box, "/hub:worker cl");
+    await waitFor(() => expect(labels()).toEqual(["Claude Code"]));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(box.value).toBe("/hub:worker cl");
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it("点不能选的厂商：不选、焦点留在输入框", async () => {
+    const { box, user } = await boot();
+    await user.type(box, "/hub:worker ");
+    const signedOut = await screen.findByRole("option", { name: /Antigravity/ });
+    await user.click(signedOut);
+    expect(box.value).toBe("/hub:worker ");
+    expect(box).toHaveFocus();
+  });
+
+  it("Worker 对话里没有 /hub:worker", async () => {
+    const { box, user } = await boot("#/w/31");
+    await user.type(box, "/hub:worker ");
+    await act(async () => {});
+    expect(screen.queryByRole("option", { name: /hub:worker|Claude Code/ })).toBeNull();
+  });
+});

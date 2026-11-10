@@ -80,9 +80,12 @@ export function ModelCatalogProvider({ children }: { children: ReactNode; now?: 
 
 const BUNDLED: readonly ModelCatalog[] = AGENT_VENDORS.map((v) => bundledModelCatalog(v));
 
-/** 所有厂商的名单（厂商下拉的选项）。拉到之前、拉到的是空的用打包的。没有 Provider（单独渲染组件时）就只用打包的。 */
-function useModelCatalogs(): readonly ModelCatalog[] {
-  const enabled = useContext(CatalogEnabledContext);
+/**
+ * 所有厂商的名单（厂商下拉的选项）。拉到之前、拉到的是空的用打包的。没有 Provider（单独渲染组件时）就只用缓存里有的或打包的。
+ * active 为 false 时不发请求、只读缓存（输入框只在打开 “/” 列表时才要名单，平时打字不拉）。同一份数据返回同一个数组。
+ */
+export function useModelCatalogs(active = true): readonly ModelCatalog[] {
+  const enabled = useContext(CatalogEnabledContext) && active;
   const client = useClient();
   const qc = useHubQueryClient();
   const key = catalogKey(client);

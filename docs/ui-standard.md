@@ -98,6 +98,9 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 会话 / 开新会话 / 定时任务 / 文件夹 | Session / New session / Schedules / Folders |
 | 额度 / 5 小时 / 7 天 / 30 天 / 重置 | Usage / 5h / 7d / 30d / Resets |
 | 取消 / 保存 / 创建 / 重试 / 加载中 | Cancel / Save / Create / Retry / Loading… |
+| 默认（模型、思考程度没指定） / 去掉 | Default / Remove |
+| 没有匹配的命令 / 文件 / 厂商 / 模型 / 思考程度（输入框弹出列表） | No matching commands / files / providers / models / effort |
+| 派 Worker 用的厂商、模型（`/hub:worker` 的标签，读屏名字） | Worker model |
 
 ## 4. 颜色
 
@@ -374,15 +377,27 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 聊天输入框里打 “/”（整条消息开头）或 “@”（开头或空白后）时弹出的列表（`ComposerMenu`，`src/web/components/ComposerMenu.tsx`；触发规则在 `src/web/composer-trigger.ts`，状态在 `src/web/composer-suggest.ts`）：
 
 - **位置**：输入框正上方，和输入框同宽，在布局里占位（把对话往上顶），不浮在对话正文上面，不盖住任何内容；和输入框之间 8px（`mb-2`）。
-- **外框**：`rounded-2xl border border-border bg-background p-1.5`，不加阴影。最多 8 行（`max-h-[calc(8*2.25rem)]`），更多的纵向滚动。
+- **外框**：`rounded-2xl border border-border bg-background p-1.5`，不加阴影。最多 8 行（`max-h-[calc(8*2.25rem)]`，触屏 `pointer-coarse:max-h-[calc(8*2.75rem)]`），更多的纵向滚动。
 - **行**：`h-9 rounded-xl px-3`，一行 36px，行里各项之间 `gap-3`；高亮只有一行（键盘和鼠标共用），`bg-sidebar-active`，不用主色。
+  - 触屏（`pointer: coarse`）下行本身 `pointer-coarse:min-h-11`（44px，第 19 条“一行挨一行的列表”），不用 `touch-target` 撑开。
+  - 不能选的行（没登录的厂商）：名字也用 `text-muted-foreground`（和右边的状态词一样灰，不用 `opacity` 再压一层，免得字看不清）、`cursor-default`，`aria-disabled`；鼠标经过不高亮，↑↓ 跳过它，点了、Enter 都不选（Enter 也不发送）。
   - 命令：名字（15px、500，带 `/`）加一句说明（13.5px 灰），说明超长 `truncate`。
   - 文件：`FileText` 图标（`size-4`，灰）、文件名（15px、500）、父目录（13.5px 灰，`truncate`）；多个根目录时不显示根。
+  - agent-hub 自己的命令（`HUB_COMPOSER_COMMANDS`，现在只有 `/hub:worker`）：和命令同样子，排在厂商命令前面（筛选时同一档也在前面）；只在项目经理对话里有，厂商命令拉不到时照样出现。
   - 各项之间用间距隔开，不用 “·”“-”“/” 拼接。
-- **没有匹配**：一行 13.5px 灰字，“没有匹配的命令”“没有匹配的文件”，也是 `h-9 px-3`。
+- **没有匹配**：一行 13.5px 灰字，`No matching commands`、`No matching files`（多级参数各级见下），也是 `h-9 px-3`。
 - **加载中、拿不到列表**：不显示任何东西（不放转圈、不报错），输入框照常能发。
-- **键盘**：↑↓ 循环选；Enter 或 Tab 确定（列表里有行时 Enter 不发送；没有匹配时 Enter 照常发送）；Esc 关闭，文字不动；输入法选字时的按键不算。鼠标按下时 `preventDefault`，焦点不离开输入框。
+- **键盘**：↑↓ 循环选；Enter 或 Tab 确定（列表里有行时 Enter 不发送；没有匹配时 Enter 照常发送）；Esc 关闭，文字不动；输入法选字时的按键不算。
+- **不抢焦点**：行上 `onPointerDown` 和 `onMouseDown` 都 `preventDefault`，焦点不离开输入框，手机上点选时软键盘不收起；选中靠 `onClick`。
 - **选中后**：把触发的那一段换成后台给的文字（命令 `/名字`、文件 `insert` 字段，网页不自己拼 `@`），后面带一个空格，光标停在空格后；纯文本，不做小标签。
+  - 例外：`/hub:worker` 最后一级选完，整段 `/hub:worker …` 从文字里拿掉，换成输入框里的一个小标签（放在待发文件那一排最前面，样式照文件标签：`rounded-full bg-muted py-1 pr-1 pl-3 text-minor`，左边 `Bot` 图标 `size-4` 灰，然后厂商名、模型名、思考程度，`gap-2` 隔开、不用 “·”，`Default` 的项不显示；最右 `×` 读屏名字 `Remove`；点标签本身 = 在开头插入 `/hub:worker ` 重选，一条消息最多一个）。标签是 PR3 做的；PR2 期间最后一级选完先把完整的 `/hub:worker <厂商> <模型> <思考程度> ` 留在文字里。
+- **多级参数补全**（`/hub:worker`，以后别的命令带参数也照这个）：像命令行补全，一条命令后面一级一级换列表，都是同一个弹出列表、同样的行：
+  - 选中命令 → 文字变成 `/hub:worker `，列表换成厂商；选厂商 → 插入厂商 id，列表换成这家的模型；选模型 → 列表换成这个模型支持的思考程度。每级插入的是 id（不是显示名），后面带空格。
+  - 厂商：名字（`Claude Code`）；没装的不列；没登录的列出来、不能选，右边灰字 `Not signed in`。模型：第一行 `Default`（右边灰字写实际用的模型，`defaultModelText`），其后是显示名，右边厂商给的说明。思考程度：第一行 `Default`，其后是档位原样（和资料页 Effort 下拉一样）；这个模型只有一档或没有档位就没有这一级。
+  - 每一级都能接着打字筛（和命令同一个规则：开头命中 > 包含 > 说明里有）；Backspace 删到上一级就回到上一级的列表（光标所在的词就是正在选的那一级）。
+  - 没有匹配：`No matching providers`、`No matching models`、`No matching effort`。
+  - 不加标题、面包屑、提示小字：已选的路径就在输入框文字里。加载中不转圈：清单还没拉到时用打包的名单，拉到后换上。
+  - 最后一级选完才收列表（见上面“例外”）；Esc 关列表、文字不动；手打完整的 `/hub:worker codex gpt-5.5 high` 时最后一级照样弹，Enter 选中即完成。
 - **文件搜索**：接着打字等 120ms 没再打才发请求，旧请求作废，后发先回时旧结果不显示。
 - **发送被拦**：后台给的原因显示在输入框上方（和上传失败同一处，`text-danger`），用户原文留在输入框里。
 
@@ -398,7 +413,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **输入框字号不小于 16px**：iOS 对小于 16px 的输入框聚焦时会自动放大页面。标准正文是 15px，所以只在 `(pointer: coarse)`（触屏）下，所有 `input`、`textarea`、`select`（聊天输入框、`Input`、`Textarea`、`Select`）一律 16px，写成 `styles.css` 里一条规则，组件里不各写各的。电脑上仍是 15px。
 - **点击区域不小于 44px**：触屏下，每个能点的东西可点范围至少 44 × 44px（Apple HIG）；视觉大小不变（图标按钮仍是 36 / 32px）。
   - 按钮（`Button`，含图标按钮）、输入框里待发文件的“去掉”、“Worked for ›”这类文字按钮带 `touch-target` 类：`(pointer: coarse)` 下用 `::after` 把可点范围撑到 44px，不改版面。
-  - 一行挨一行的列表（右栏的行）不能用撑开的办法（相邻的会盖住彼此）：触屏下行本身 `min-h-11`（44px）。左栏的行本来就高过 44px。
+  - 一行挨一行的列表（右栏的行、输入框弹出列表的行）不能用撑开的办法（相邻的会盖住彼此）：触屏下行本身 `min-h-11`（44px）。左栏的行本来就高过 44px。
   - 电脑（`pointer: fine`）上不变。
 - **不靠悬停**：触屏没有悬停。任何操作（复制、重试、展开）平时就看得见、点得到，不做“悬停才出现”的按钮；悬停只用来换底色这种锦上添花的反馈（Tailwind 的 `hover:` 只在真能悬停的设备上生效）。
 - **不出横向滚动条**：390px 宽下页面不能比屏幕宽（长标题、路径、代码块在自己里面截断或横向滚动，第 15 条）。

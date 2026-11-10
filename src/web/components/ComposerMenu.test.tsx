@@ -148,9 +148,18 @@ describe("输入框 / 命令列表", () => {
     await screen.findByRole("listbox");
     const row = options()[1]!;
     expect(fireEvent.mouseDown(row)).toBe(false); // preventDefault 了
+    expect(fireEvent.pointerDown(row)).toBe(false); // 触屏：点选时焦点不离开，软键盘不收
     await user.click(row);
     expect(box().value).toBe("/compact ");
     expect(box()).toHaveFocus();
+  });
+
+  it("触屏下每行至少 44px（行本身 min-h-11，不用撑开的点击区），列表最高 8 行跟着变", async () => {
+    render(<Harness src={source()} />);
+    await user.type(box(), "/");
+    const list = await screen.findByRole("listbox");
+    expect(list).toHaveClass("max-h-[calc(8*2.25rem)]", "pointer-coarse:max-h-[calc(8*2.75rem)]");
+    for (const row of options()) expect(row).toHaveClass("h-9", "pointer-coarse:min-h-11");
   });
 
   it("鼠标移到某一行，那一行高亮", async () => {

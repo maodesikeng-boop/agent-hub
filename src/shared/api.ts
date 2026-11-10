@@ -299,6 +299,14 @@ export interface ComposerCommand {
   builtin?: true;
 }
 
+/**
+ * agent-hub 自己的输入框命令（不是厂商的）：网页把它们加在“/”列表最前面，只在项目经理对话里出现，不进 daemon/commands-catalog。
+ * 名字用 hub: 前缀（和厂商插件的 插件:名字 同一个约定），不带开头的 /。
+ */
+export const HUB_COMPOSER_COMMANDS: readonly ComposerCommand[] = [
+  { name: "hub:worker", description: "Pick provider, model and effort for Workers" },
+];
+
 /** GET /api/conversations/:id/commands。 */
 export interface CommandsResponse {
   commands: ComposerCommand[];
