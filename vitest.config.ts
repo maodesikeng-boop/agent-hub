@@ -12,7 +12,15 @@ export default defineConfig({
           ...timeouts,
           environment: "node",
           setupFiles: ["test/clean-env.ts", "test/spawn-guard.ts"],
-          include: ["src/shared/**/*.test.ts", "src/vendors/**/*.test.ts", "src/daemon/**/*.test.ts", "src/hub/**/*.test.ts", "src/tunnel/**/*.test.ts", "test/**/*.test.ts"],
+          include: [
+            "src/shared/**/*.test.ts",
+            "src/vendors/**/*.test.ts",
+            "src/daemon/**/*.test.ts",
+            "src/hub/**/*.test.ts",
+            "src/tunnel/**/*.test.ts",
+            "scripts/**/*.test.ts",
+            "test/**/*.test.ts",
+          ],
         },
       },
       {

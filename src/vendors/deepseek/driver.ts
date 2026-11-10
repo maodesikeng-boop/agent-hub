@@ -48,10 +48,10 @@ const DEEPSEEK_PROFILE = "acp";
 export const DEEPSEEK_READONLY_RUNTIME_SUBDIRS: readonly string[] = ["llm-deepseek"];
 
 /** 只读 Worker 在共享 $DSH_HOME 下能写的单个文件：dsh 每次启动都把 profile 的根配置重写成空列表；匿名用户 ID。 */
-export const DEEPSEEK_READONLY_RUNTIME_FILES: readonly string[] = [`profiles/${DEEPSEEK_PROFILE}/cordis.yml`, ".anonymous-user-id"];
+const DEEPSEEK_READONLY_RUNTIME_FILES: readonly string[] = [`profiles/${DEEPSEEK_PROFILE}/cordis.yml`, ".anonymous-user-id"];
 
 /** dsh 启动要读的自身凭据（相对 $DSH_HOME，dsh-credentials-local、dsh-app-boot 的 loadLayeredEnv）：只读 Worker 放行读，仍不可写。 */
-export const DEEPSEEK_SELF_CREDENTIAL_FILES: readonly string[] = [".credentials.yaml", ".env"];
+const DEEPSEEK_SELF_CREDENTIAL_FILES: readonly string[] = [".credentials.yaml", ".env"];
 
 /** 只读 Worker 的会话私有状态目录（会话的启动目录下，恢复会话要用，所以不放 TMPDIR）。 */
 const READONLY_STATE_DIR = "dsh-readonly-state";
@@ -262,7 +262,7 @@ function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
  * 只读 Worker 的会话记录、KV 存储、附件改写到会话私有目录（dsh-base 里这几行的 root / dshHome 配置），
  * 不碰共享 $DSH_HOME 下别的会话和别的 profile 的数据。
  */
-export function readonlyStatePatch(stateDir: string): readonly DeepSeekCordisPatchEntry[] {
+function readonlyStatePatch(stateDir: string): readonly DeepSeekCordisPatchEntry[] {
   return [
     { id: "session-persistence-jsonl", config: { root: join(stateDir, "sessions") } },
     { id: "storage-json", config: { root: join(stateDir, "storages") } },

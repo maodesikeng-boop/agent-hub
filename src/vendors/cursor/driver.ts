@@ -120,7 +120,7 @@ export function classifyCursorTurnError(error: unknown): { subtype: string; mess
  * - `cursor/create_plan`：拒绝交互式计划审批卡片，防止后台无人值守子进程永久挂死；
  * - 其余 `cursor/*` 扩展请求统一返回 `cancelled`；非 `cursor/*` 返回 `undefined` 交由底座回 `-32601`。
  */
-export function handleCursorBlockingRequest(ctx: AcpExtensionRequestContext): unknown {
+function handleCursorBlockingRequest(ctx: AcpExtensionRequestContext): unknown {
   if (ctx.method === "cursor/ask_question") {
     return { outcome: { outcome: "cancelled" } };
   }

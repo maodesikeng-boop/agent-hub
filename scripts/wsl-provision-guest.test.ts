@@ -1,13 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +50,27 @@ function writeExecutable(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, { mode: 0o755 });
   chmodSync(path, 0o755);
+}
+
+function resolveHostCommand(name: string): string {
+  const dirs = ["/usr/bin", "/bin", ...(process.env.PATH ?? "").split(":").filter(Boolean)];
+  for (const dir of dirs) {
+    const candidate = join(dir, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // 继续查找下一个候选目录
+    }
+  }
+  throw new Error(`找不到基础系统命令 ${name}`);
+}
+
+function populateIsolatedSysBin(sysBin: string, commands: readonly string[]): void {
+  mkdirSync(sysBin, { recursive: true });
+  for (const cmd of commands) {
+    symlinkSync(resolveHostCommand(cmd), join(sysBin, cmd));
+  }
 }
 
 function runGuest(args: string[], extraEnv: Record<string, string> = {}): RunResult {
@@ -586,18 +611,28 @@ describe("wsl-provision-guest.sh --vendors-json（复用注册表动态输出厂
     const root = makeTempDir("fusa-vendors-");
     const home = join(root, "home", "fusa");
     const localBin = join(home, ".local", "bin");
+    const sysBin = join(root, "sys-bin");
+    const hostNodeBinDir = join(root, "host-node-bin");
     mkdirSync(localBin, { recursive: true });
+    mkdirSync(hostNodeBinDir, { recursive: true });
+    populateIsolatedSysBin(sysBin, ["env", "bash", "dirname", "id"]);
 
-    // 动态取注册表第一家厂商创建假 CLI，不在测试或脚本中硬编码具体厂商名
+    // 动态取注册表第一家厂商创建受控假 CLI，不在测试或脚本中硬编码具体厂商名
     const firstVendor = VENDOR_LIST[0]!;
     const fakeCliPath = join(localBin, firstVendor.cli.command);
     writeExecutable(fakeCliPath, "#!/usr/bin/env bash\necho 1.0.0\n");
 
+    // 在宿主 node 同目录下放置第二家厂商的假 CLI，验证受控 PATH 与宿主机全局安装的 CLI 完全绝缘
+    const hostNodeBin = join(hostNodeBinDir, "node");
+    writeExecutable(hostNodeBin, `#!/usr/bin/env bash\nexec "${process.execPath}" "$@"\n`);
+    const secondVendor = VENDOR_LIST[1]!;
+    writeExecutable(join(hostNodeBinDir, secondVendor.cli.command), "#!/usr/bin/env bash\necho 9.9.9\n");
+
     const res = runGuest(["--vendors-json", "--app-dir", REPO_ROOT], {
-      PATH: `${localBin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: `${localBin}:${sysBin}`,
       HOME: home,
       FUSA_WSL_HOME: home,
-      FUSA_NODE_BIN_OVERRIDE: process.execPath,
+      FUSA_NODE_BIN_OVERRIDE: hostNodeBin,
     });
     expect(res.status, res.stderr).toBe(0);
 

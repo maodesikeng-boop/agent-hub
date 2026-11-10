@@ -3,7 +3,7 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export interface FakePiToolCall {
+interface FakePiToolCall {
   id: string;
   name: string;
   arguments?: Record<string, unknown>;
@@ -11,7 +11,7 @@ export interface FakePiToolCall {
   isError?: boolean;
 }
 
-export interface FakePiTurnScript {
+interface FakePiTurnScript {
   /** 若设为 "handled"，prompt 回执直接标 handled 且不跑模型轮次。 */
   disposition?: "started" | "handled";
   /** 若为 true，prompt 直接回 success: false。 */
@@ -92,7 +92,7 @@ export interface FakePiLogEntry {
   signal?: string;
 }
 
-export const FAKE_PI_SOURCE = String.raw`
+const FAKE_PI_SOURCE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
