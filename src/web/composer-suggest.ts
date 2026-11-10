@@ -6,12 +6,12 @@
 // /hub:worker 后面一级一级选厂商、模型、思考程度，行由 worker-pick.ts 从模型名单（models.tsx，和资料页同一份缓存）算。
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { API_PATHS, SLOW_API_REQUEST_TIMEOUT_MS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse } from "../shared/index.ts";
+import { API_PATHS, SLOW_API_REQUEST_TIMEOUT_MS, type CommandsResponse, type ComposerCommand, type FileEntry, type FilesResponse, type WorkerPick } from "../shared/index.ts";
 import type { KeyboardEvent } from "react";
-import { detectComposerTrigger, insertSelection, rankCommands, splitPath } from "./composer-trigger.ts";
+import { detectComposerTrigger, insertSelection, rankCommands, removeLeadingCommand, splitPath } from "./composer-trigger.ts";
 import { useModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
-import { type WorkerPickLevel, workerPickRows } from "./worker-pick.ts";
+import { type WorkerPickLevel, workerPickFromArgs, workerPickRows } from "./worker-pick.ts";
 
 /** 接着打字，等这么久没再打才去后台搜文件。 */
 export const FILE_SEARCH_DEBOUNCE_MS = 120;
@@ -96,11 +96,14 @@ export interface ComposerSuggest {
   handleKey: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   select: (item: MenuItem) => void;
   highlight: (index: number) => void;
+  /** Esc 关过列表后主动重开（如点标签重选）。 */
+  reopen: () => void;
 }
 
 /**
  * value / cursor：输入框现在的文字和光标；onReplace：选中后要把文字换成什么、光标放哪。
- * enabled 为 false（输入框不可用、发送中）时不弹。
+ * onPick：/hub:worker 最后一级选完（或下一级不存在）时调，给选好的 WorkerPick 和拿掉整段命令后的文字（输入框把它变成标签）；
+ * 不给就把完整命令留在文字里。enabled 为 false（输入框不可用、发送中）时不弹。
  */
 export function useComposerSuggest({
   source,
@@ -108,12 +111,14 @@ export function useComposerSuggest({
   cursor,
   enabled,
   onReplace,
+  onPick,
 }: {
   source: ComposerSource | undefined;
   value: string;
   cursor: number;
   enabled: boolean;
   onReplace: (text: string, cursor: number) => void;
+  onPick?: ((pick: WorkerPick, text: string) => void) | undefined;
 }): ComposerSuggest {
   const qc = useHubQueryClient();
   const srcKey = sourceKeyOf(source);
@@ -236,6 +241,14 @@ export function useComposerSuggest({
 
   const select = (item: MenuItem) => {
     if (trigger === null || item.disabled) return;
+    if (trigger.kind === "worker" && onPick) {
+      const args = [...trigger.args, item.insert];
+      const pick = workerPickFromArgs(args);
+      if (pick !== null && workerPickRows(catalogs, args, "") === null) {
+        onPick(pick, removeLeadingCommand(value, trigger.end));
+        return;
+      }
+    }
     const next = insertSelection(value, trigger, item.insert);
     onReplace(next.text, next.cursor);
   };
@@ -261,5 +274,5 @@ export function useComposerSuggest({
     return false;
   };
 
-  return { menu: content === null ? null : { ...content, activeIndex }, handleKey, select, highlight };
+  return { menu: content === null ? null : { ...content, activeIndex }, handleKey, select, highlight, reopen: () => setDismissed(null) };
 }

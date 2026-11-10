@@ -3,7 +3,17 @@
 // 每台各跑各的 seq、resync、重连：一台断了只补那一台，不拖累别的。
 import { useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
-import { ATTACHMENTS_MISSING_MESSAGE, type Attachment, type Change, type ConversationId, type DeviceInfo, type MessageId, userMessageDedupeKey } from "../shared/index.ts";
+import {
+  ATTACHMENTS_MISSING_MESSAGE,
+  type Attachment,
+  type Change,
+  type ConversationId,
+  type DeviceInfo,
+  type MessageId,
+  type PostMessageRequest,
+  type WorkerPick,
+  userMessageDedupeKey,
+} from "../shared/index.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
@@ -13,6 +23,11 @@ import { initialState, oldestMessageId, referencesUnknownConversation, reducer, 
 
 /** resync 拉快照失败后隔多久再试。 */
 const RESYNC_RETRY_MS = 3_000;
+
+/** 发消息的请求体：没有附件、没选 workerPick 的不带这两个字段。 */
+function messageBody(clientId: string, text: string, attachmentIds: string[], workerPick: WorkerPick | null): PostMessageRequest {
+  return { clientId, text, ...(attachmentIds.length > 0 && { attachmentIds }), ...(workerPick !== null && { workerPick }) };
+}
 
 type Action = Parameters<typeof reducer>[1];
 
@@ -198,9 +213,9 @@ export class DeviceHub {
     close?.();
   }
 
-  private async submit(conversationId: ConversationId, clientId: string, text: string, attachmentIds: string[]): Promise<void> {
+  private async submit(conversationId: ConversationId, clientId: string, text: string, attachmentIds: string[], workerPick: WorkerPick | null): Promise<void> {
     try {
-      await this.client.postMessage(conversationId, { clientId, text, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) });
+      await this.client.postMessage(conversationId, messageBody(clientId, text, attachmentIds, workerPick));
     } catch (err) {
       // 400：服务端拒绝了这条消息（同一个 clientId 重发还是会被拦，重试永远不会成功）：带的文件找不到了要重新添加，
       // 别的原因（比如手打了不能用的命令）把服务端的 error 原样显示
@@ -219,26 +234,27 @@ export class DeviceHub {
   }
 
   /** 消息先显示出来（排队中），再发给服务端。 */
-  private post(conversationId: ConversationId, text: string, attachments: Attachment[]): void {
+  private post(conversationId: ConversationId, text: string, attachments: Attachment[], workerPick: WorkerPick | null): void {
     const clientId = newClientId();
     this.dispatch({
       type: "pendingAdd",
-      pending: { clientId, conversationId, text, attachments, phase: "sending", createdAt: Date.now() },
+      pending: { clientId, conversationId, text, attachments, ...(workerPick !== null && { workerPick }), phase: "sending", createdAt: Date.now() },
     });
-    void this.submit(conversationId, clientId, text, attachments.map((a) => a.id));
+    void this.submit(conversationId, clientId, text, attachments.map((a) => a.id), workerPick);
   }
 
-  send = (conversationId: ConversationId, text: string): void => this.post(conversationId, text, []);
+  /** workerPick：输入框 /hub:worker 选的（只有项目经理对话会有），没选是 null。下面几个发送的方法一样。 */
+  send = (conversationId: ConversationId, text: string, workerPick: WorkerPick | null = null): void => this.post(conversationId, text, [], workerPick);
 
   /**
    * 先发、等接口回应再显示（以 / 开头的消息：手打的命令可能被拦）：被拦（400，ErrorNotice 带着原因）reject，什么都没留下，
    * 输入框那边显示原因、原文不动；发出去了就显示成排队中；网络、服务出错和普通消息一样变成可重试的待发消息。
    */
-  sendChecked = async (conversationId: ConversationId, text: string): Promise<void> => {
+  sendChecked = async (conversationId: ConversationId, text: string, workerPick: WorkerPick | null = null): Promise<void> => {
     const clientId = newClientId();
-    const pending = { clientId, conversationId, text, attachments: [], createdAt: Date.now() };
+    const pending = { clientId, conversationId, text, attachments: [], ...(workerPick !== null && { workerPick }), createdAt: Date.now() };
     try {
-      await this.client.postMessage(conversationId, { clientId, text });
+      await this.client.postMessage(conversationId, messageBody(clientId, text, [], workerPick));
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) throw new ErrorNotice(errorText(err));
       if (this.alive) this.dispatch({ type: "pendingAdd", pending: { ...pending, phase: "failed" } });
@@ -254,17 +270,17 @@ export class DeviceHub {
    * 带文件发：先把文件都传上去（传到这台设备），都传好了才发消息；传失败 reject（Error.message 是中文），这时什么消息都没发出去。
    * 传的时候不显示临时消息（输入框那边显示“发送中”）。
    */
-  sendWithFiles = async (conversationId: ConversationId, text: string, files: File[]): Promise<void> => {
+  sendWithFiles = async (conversationId: ConversationId, text: string, files: File[], workerPick: WorkerPick | null = null): Promise<void> => {
     const attachments = await uploadFiles(files, this.client);
-    if (this.alive) this.post(conversationId, text, attachments);
+    if (this.alive) this.post(conversationId, text, attachments, workerPick);
   };
 
-  /** 重发：同一个 clientId、同样的附件，服务端按 clientId 去重。 */
+  /** 重发：同一个 clientId、同样的附件和 workerPick，服务端按 clientId 去重。 */
   retrySend = (clientId: string): void => {
     const pending = this.state.pending.find((p) => p.clientId === clientId);
     if (!pending) return;
     this.dispatch({ type: "pendingPhase", clientId, phase: "sending" });
-    void this.submit(pending.conversationId, clientId, pending.text, pending.attachments.map((a) => a.id));
+    void this.submit(pending.conversationId, clientId, pending.text, pending.attachments.map((a) => a.id), pending.workerPick ?? null);
   };
 
   /** 服务端标了失败的用户消息：请求重试。排进队之后的变化从 WebSocket 来（message.updated），这里只管请求本身。 */
