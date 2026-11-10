@@ -90,6 +90,9 @@ interface Proc extends BaseProc<AgyStartupOutcome> {
   fallbackScope: WriteScope | null;
 }
 
+/** agy 工具 step_update 的终态（含 CortexStepStatus CANCELED 单 L 与 CANCELLED 双 L 拼写）。 */
+const AGY_TERMINAL_TOOL_STATES = new Set(["DONE", "FAILED", "CANCELLED", "CANCELED", "ERROR"]);
+
 interface TrackedToolStep {
   task_id: string;
   description: string;
@@ -109,9 +112,11 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   stepTexts: Map<string, string>;
   /** 当前轮已经发出过 ACTIVE 事件的工具 step_id。 */
   seenToolSteps: Set<string>;
+  /** 当前轮已经发出过 agent.tool_result 的工具 step_id（防止重复终态事件二次发射）。 */
+  completedToolSteps: Set<string>;
   /** agy 通过 background_tasks_changed 等事件显式上报的后台任务（task_id → 任务项）。 */
   reportedTasks: Map<string, { task_id: string; description: string }>;
-  /** 正在运行、尚未收到 DONE 的工具步骤（用于跟踪跨轮/后台命令并与 reportedTasks 取并集同步到 background）。 */
+  /** 正在运行、尚未收到终态的工具步骤（用于跟踪跨轮/后台命令并与 reportedTasks 取并集同步到 background）。 */
   activeToolSteps: Map<string, TrackedToolStep>;
   /** 当前轮已经发出过 thinking 事件的 step_id。 */
   seenThinkingSteps: Set<string>;
@@ -163,6 +168,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       vendorSessionId: "",
       stepTexts: new Map(),
       seenToolSteps: new Set(),
+      completedToolSteps: new Set(),
       reportedTasks: new Map(),
       activeToolSteps: new Map(),
       seenThinkingSteps: new Set(),
@@ -326,6 +332,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.deniedContinues = 0;
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
     st.lastLiveUsage = null;
@@ -728,18 +735,14 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         }
       }
 
-      if (
-        su.state === "DONE" ||
-        su.state === "FAILED" ||
-        su.state === "CANCELLED" ||
-        su.state === "ERROR"
-      ) {
+      if (typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state)) {
         const removed = st.activeToolSteps.get(stepId);
         st.activeToolSteps.delete(stepId);
         if (removed?.promoted) {
           this.#syncBackgroundTasks(st, proc);
         }
-        if (su.state === "DONE") {
+        if (!st.completedToolSteps.has(stepId)) {
+          st.completedToolSteps.add(stepId);
           this.emit(st.id, {
             type: "agent.tool_result",
             toolUseIds: [toolUseId],
@@ -860,6 +863,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.stopRequested = false;
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
 
@@ -911,6 +915,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#settleUsage(st, res, obj);
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
     proc.child.stdin.write(line + "\n");
@@ -988,6 +993,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.policyViolation = null;
       st.stepTexts.clear();
       st.seenToolSteps.clear();
+      st.completedToolSteps.clear();
       st.seenThinkingSteps.clear();
       st.hasTextSinceLastTool = false;
 

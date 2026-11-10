@@ -22,6 +22,9 @@ import {
   type WriteScope,
 } from "../../shared/index.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./agy-driver.ts";
+import { describeStep } from "../../shared/step-labels.ts";
+import { toolFinished, toolStarted, working, type LiveSession } from "../ledger/sessions.ts";
+import { stepOfTool } from "../ledger/tool-summary.ts";
 import type { AgyConnectorCatalog } from "./readonly-agy.ts";
 import { makePersonaFixture, type PersonaFixture } from "./persona-fixture.ts";
 import { fakePreambleLedger, PREAMBLE } from "./preamble-fixture.ts";
@@ -103,7 +106,10 @@ interface FakeAgyTurn {
         background?: boolean;
         omitDone?: boolean;
         doneAfterResultMs?: number;
+        endState?: "DONE" | "FAILED" | "CANCELLED" | "CANCELED" | "ERROR";
+        duplicateEndStates?: Array<"DONE" | "FAILED" | "CANCELLED" | "CANCELED" | "ERROR">;
       }
+    | { type: "rawStepUpdate"; stepUpdate: Record<string, unknown> }
     | { type: "backgroundTasks"; tasks: Array<string | Record<string, unknown>> | "malformed" }
     | { type: "sleep"; ms: number }
     | { type: "waitFile"; path: string }
@@ -282,8 +288,17 @@ async function runTurn(userObj) {
         conversation_id: conversationId,
         ...(step.tasks === "malformed" ? {} : { tasks: step.tasks.map(entry) }),
       });
+    } else if (step.type === "rawStepUpdate") {
+      emit({
+        event: "step_update",
+        step_update: {
+          conversation_id: conversationId,
+          ...step.stepUpdate,
+        },
+      });
     } else if (step.type === "tool") {
       const sid = step.stepId ?? stepCounter++;
+      const endState = step.endState || "DONE";
       emit({
         event: "step_update",
         step_update: {
@@ -308,7 +323,7 @@ async function runTurn(userObj) {
               conversation_id: conversationId,
               step_index: sid,
               step_type: "tool",
-              state: "DONE",
+              state: endState,
               tool_name: step.name,
               tool_info: { parameters: step.parameters ?? {} },
             },
@@ -321,11 +336,24 @@ async function runTurn(userObj) {
             conversation_id: conversationId,
             step_index: sid,
             step_type: "tool",
-            state: "DONE",
+            state: endState,
             tool_name: step.name,
             tool_info: { parameters: step.parameters ?? {} },
           },
         });
+        for (const dupState of step.duplicateEndStates || []) {
+          emit({
+            event: "step_update",
+            step_update: {
+              conversation_id: conversationId,
+              step_index: sid,
+              step_type: "tool",
+              state: dupState,
+              tool_name: step.name,
+              tool_info: { parameters: step.parameters ?? {} },
+            },
+          });
+        }
       }
     }
   }
@@ -1925,5 +1953,232 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
     await t.driver.send(s.id, user(3, "z"));
     await t.waitFor("turn.ended", undefined, 3);
     expect(t.stdinBlocks().at(-1)).toContain(backgroundTasksKilledNote("hold_max", ["sleep 30"]));
+  });
+});
+
+describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
+  /** 按 messages.ts applyEvent 同款规则把驱动事件喂给 LiveSession，记录每一步之后的 step 与 openTools。 */
+  function replayLiveSteps(events: DriverEvent[]) {
+    const live: LiveSession = {
+      activity: "idle",
+      currentTool: null,
+      apiRetry: null,
+      step: null,
+      openTools: [],
+    };
+    const trace: Array<{ eventType: DriverEvent["type"]; label: string; openToolIds: string[] }> = [];
+    for (const ev of events) {
+      if (ev.type === "message.processing" || ev.type === "turn.started" || ev.type === "agent.thinking") {
+        working(null)(live);
+      } else if (ev.type === "agent.tool") {
+        toolStarted(ev.name, ev.toolUseId, stepOfTool(ev.name, ev.input))(live);
+      } else if (ev.type === "agent.tool_result") {
+        toolFinished(eventToolIds(ev))(live);
+      } else if (ev.type === "agent.text") {
+        working(null, { type: "text" })(live);
+      } else {
+        continue;
+      }
+      trace.push({
+        eventType: ev.type,
+        label: describeStep(live.step),
+        openToolIds: (live.openTools ?? []).map((t) => t.toolUseId),
+      });
+    }
+    return { live, trace };
+  }
+
+  function eventToolIds(ev: Extract<DriverEvent, { type: "agent.tool_result" }>): string[] {
+    return ev.toolUseIds;
+  }
+
+  it("失败工具 A → 成功工具 B → B 结束回到 Thinking（不回显残留的 Reading SKILL.md）", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              {
+                type: "tool",
+                stepId: 3,
+                name: "read_file",
+                parameters: { Path: "frontend-rules/SKILL.md" },
+                endState: "ERROR",
+              },
+              {
+                type: "tool",
+                stepId: 4,
+                name: "run_command",
+                parameters: { CommandLine: "pnpm test" },
+                endState: "DONE",
+              },
+              { type: "text", stepId: 5, deltas: ["排查完毕"] },
+            ],
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession({ role: "worker", workerId: 308 });
+    await t.driver.send(s.id, user(1, "开始排查"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([["tool-1-3"], ["tool-1-4"]]);
+
+    const { trace } = replayLiveSteps(t.events.map((e) => e.event));
+    expect(trace).toEqual([
+      { eventType: "message.processing", label: "Thinking", openToolIds: [] },
+      { eventType: "agent.tool", label: "Reading SKILL.md", openToolIds: ["tool-1-3"] },
+      { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
+      { eventType: "agent.tool", label: "Running command", openToolIds: ["tool-1-4"] },
+      { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
+      { eventType: "agent.text", label: "Writing", openToolIds: [] },
+    ]);
+  });
+
+  it("各失败/取消终态（ERROR / FAILED / CANCELLED / CANCELED）与正常 DONE 均发送 agent.tool_result 并清理后台任务", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "tool", stepId: 2, name: "read_file", parameters: { Path: "a.ts" }, endState: "ERROR" },
+              { type: "tool", stepId: 3, name: "read_file", parameters: { Path: "b.ts" }, endState: "FAILED" },
+              { type: "tool", stepId: 4, name: "read_file", parameters: { Path: "c.ts" }, endState: "CANCELLED" },
+              {
+                type: "tool",
+                stepId: 5,
+                name: "run_command",
+                parameters: { CommandLine: "pnpm dev", IsDaemon: true },
+                endState: "CANCELED",
+              },
+              { type: "tool", stepId: 6, name: "read_file", parameters: { Path: "d.ts" }, endState: "DONE" },
+              { type: "text", stepId: 7, deltas: ["全部闭合"] },
+            ],
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession({ role: "worker", workerId: 308 });
+    await t.driver.send(s.id, user(1, "测试所有终态"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([
+      ["tool-1-2"],
+      ["tool-1-3"],
+      ["tool-1-4"],
+      ["tool-1-5"],
+      ["tool-1-6"],
+    ]);
+    // step 5 显式后台命令在 CANCELED 时也已从 activeToolSteps 移除并同步清零
+    expect(t.of("background.changed").map((e) => e.count)).toEqual([1, 0]);
+    const { live } = replayLiveSteps(t.events.map((e) => e.event));
+    expect(live.openTools).toEqual([]);
+  });
+
+  it("并行工具乱序完成与重复终态事件：按完成顺序闭合且同一 step_index 重复终态只发一次 agent.tool_result", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              // 并行启动工具 A(step 2) 和工具 B(step 3)
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "ACTIVE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-a.ts" } },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 3,
+                  step_type: "tool",
+                  state: "ACTIVE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-b.ts" } },
+                },
+              },
+              // B 先完成（DONE），此时 A 仍在跑，step 应回退到 A
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 3,
+                  step_type: "tool",
+                  state: "DONE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-b.ts" } },
+                },
+              },
+              // B 重复发一次 DONE：应幂等忽略
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 3,
+                  step_type: "tool",
+                  state: "DONE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-b.ts" } },
+                },
+              },
+              // A 后失败（ERROR），且紧接着又收到重复 ERROR 与 DONE：只发一次 tool-1-2 的 tool_result，回到 Thinking
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "ERROR",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-a.ts" } },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "ERROR",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-a.ts" } },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "DONE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "parallel-a.ts" } },
+                },
+              },
+              { type: "text", stepId: 4, deltas: ["并行工具已全部结束"] },
+            ],
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession({ role: "worker", workerId: 308 });
+    await t.driver.send(s.id, user(1, "并行乱序与重复终态"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool").map((e) => e.toolUseId)).toEqual(["tool-1-2", "tool-1-3"]);
+    expect(t.of("agent.tool_result").map((e) => e.toolUseIds)).toEqual([["tool-1-3"], ["tool-1-2"]]);
+
+    const { trace } = replayLiveSteps(t.events.map((e) => e.event));
+    expect(trace).toEqual([
+      { eventType: "message.processing", label: "Thinking", openToolIds: [] },
+      { eventType: "agent.tool", label: "Reading parallel-a.ts", openToolIds: ["tool-1-2"] },
+      { eventType: "agent.tool", label: "Reading parallel-b.ts", openToolIds: ["tool-1-2", "tool-1-3"] },
+      { eventType: "agent.tool_result", label: "Reading parallel-a.ts", openToolIds: ["tool-1-2"] },
+      { eventType: "agent.tool_result", label: "Thinking", openToolIds: [] },
+      { eventType: "agent.text", label: "Writing", openToolIds: [] },
+    ]);
   });
 });
