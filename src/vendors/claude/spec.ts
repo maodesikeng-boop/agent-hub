@@ -1,5 +1,4 @@
 // claude（Claude Code）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-import { ENV_CLAUDE } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
@@ -15,7 +14,7 @@ export default defineVendor({
   label: "Claude Code",
   cli: {
     command: "claude",
-    envVar: ENV_CLAUDE,
+    envVar: "AGENT_HUB_CLAUDE",
     loginCommand: "claude auth login",
   },
   // 2026-11-08 核对：~/.claude.json 存账号和 MCP 登录信息，~/.claude/.credentials.json 是 claude 的令牌（macOS 上在钥匙串时没有这个文件）
@@ -79,10 +78,33 @@ export default defineVendor({
   prompt: {
     subagentTools: ["Agent", "Task"],
     backgroundCommandTool: "Bash 工具的 `run_in_background`",
+    // 两个都有时 claude 只读 CLAUDE.md（M0 实测）
+    instructionFile: "CLAUDE.md",
+    vendorOnlyTools: "claude 的后台任务",
   },
   failure: {
     serviceName: "Claude",
     rawHint: /^claude_not_found\b|\bclaude\b|anthropic/i,
+  },
+  tools: {
+    actions: {
+      Bash: "command",
+      bash: "command",
+      Read: "read",
+      Edit: "edit",
+      MultiEdit: "edit",
+      NotebookEdit: "edit",
+      Write: "write",
+      Skill: "skill",
+      Grep: "search",
+      Glob: "search",
+      WebSearch: "web_search",
+      WebFetch: "web_fetch",
+      Agent: "subagent",
+      Task: "subagent",
+      TodoWrite: "todo",
+      ToolSearch: "tool_search",
+    },
   },
   capabilities: {
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）

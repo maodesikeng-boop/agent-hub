@@ -5,19 +5,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   API_PATHS,
-  ENV_AGY,
-  ENV_CLAUDE,
-  ENV_CODEX,
   ENV_HOME,
   ENV_PORT,
   HUB_COMMAND,
   REPORT_END,
   REPORT_START,
-  WORKER_ENV,
+  vendorSpec,
   workerEventOf,
   type ModelsResponse,
 } from "../shared/index.ts";
 import { Client, agentTexts, messagesOf, waitForStatus, waitUntil } from "../../test/e2e/harness.ts";
+import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 
 function shortTmp(): string {
@@ -303,13 +301,13 @@ rl.on("line", (line) => {
 
     const cleanEnv: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(process.env)) {
-      if (!(k in WORKER_ENV)) cleanEnv[k] = v;
+      if (!PARENT_SESSION_ENV.includes(k)) cleanEnv[k] = v;
     }
     cleanEnv[ENV_HOME] = hubHome;
     cleanEnv[ENV_PORT] = "0";
-    cleanEnv[ENV_CLAUDE] = claudePath;
-    cleanEnv[ENV_AGY] = agyPath;
-    cleanEnv[ENV_CODEX] = codexPath;
+    cleanEnv[vendorSpec("claude").cli.envVar] = claudePath;
+    cleanEnv[vendorSpec("agy").cli.envVar] = agyPath;
+    cleanEnv[vendorSpec("codex").cli.envVar] = codexPath;
 
     daemon = await startDaemon({ userHome, env: cleanEnv });
     const tokenMatch = /token=([A-Za-z0-9_-]+)/.exec(daemon.url);

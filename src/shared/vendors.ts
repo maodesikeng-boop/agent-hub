@@ -1,13 +1,13 @@
 // 厂商的通用函数（校验、启动参数、模型名单、出错特征……）：网页（下拉）和后台（校验、启动参数）都从这里读。
 // 每家的数据在 src/vendors/<厂商>/spec.ts，名单在 src/vendors/registry.ts；这里只读名单，不写任何一家（docs/vendor-plugin-design.md）。
-// AGENT_VENDORS、VENDOR_SPECS、VENDOR_HOME_PATHS、VENDOR_FAILURE_SIGNS 是从名单推出来的旧形状，导出名不变、调用方不动。
+// 按编号查一家用 vendorSpec(vendor)，要逐家用 VENDOR_LIST（顺序同 AGENT_VENDORS）。
 // “默认”一律是 null，表示不传对应的参数，用厂商自己的默认。agent_sessions.vendor、pms.vendor 存的就是厂商编号。
 import { VENDOR_LIST, type AgentVendor } from "../vendors/registry.ts";
-import type { ComposerSpec, FailureKind, VendorSpec as VendorDefinition } from "../vendors/types.ts";
+import type { FailureKind, VendorSpec } from "../vendors/types.ts";
 import { HANDOVER_TOKEN_THRESHOLD, MAX_MODEL_CHARS } from "./limits.ts";
 
 export type { AgentVendor } from "../vendors/registry.ts";
-export type { FailureKind, FetchedQuotaSpec } from "../vendors/types.ts";
+export type { FailureKind, FetchedQuotaSpec, VendorSpec } from "../vendors/types.ts";
 
 type IdsOf<L extends readonly unknown[]> = { readonly [K in keyof L]: L[K] extends { id: infer Id } ? Id : never };
 
@@ -16,10 +16,10 @@ export const AGENT_VENDORS = VENDOR_LIST.map((spec) => spec.id) as unknown as Id
 export const DEFAULT_AGENT_VENDOR: AgentVendor = VENDOR_LIST[0].id;
 
 /** 按编号查名单里的声明。 */
-const SPECS = Object.fromEntries(VENDOR_LIST.map((spec) => [spec.id, spec])) as Readonly<Record<AgentVendor, VendorDefinition<AgentVendor>>>;
+const SPECS = Object.fromEntries(VENDOR_LIST.map((spec) => [spec.id, spec])) as Readonly<Record<AgentVendor, VendorSpec<AgentVendor>>>;
 
 /** 按编号查厂商声明（src/vendors/<id>/spec.ts）。 */
-export function vendorSpec(vendor: AgentVendor): VendorDefinition<AgentVendor> {
+export function vendorSpec(vendor: AgentVendor): VendorSpec<AgentVendor> {
   return SPECS[vendor];
 }
 
@@ -40,94 +40,6 @@ export function windowKeyByMinutes(mins: number | null | undefined): QuotaWindow
   const hit = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).find((key) => QUOTA_WINDOWS[key].durationMins === mins);
   return hit ?? null;
 }
-
-/**
- * 旧的平铺形状（VENDOR_SPECS 的值）：从 src/vendors/<id>/spec.ts 的分组字段派生，只为调用方不动。新代码读 vendorSpec(vendor)。
- * 每个字段注明来自 spec 的哪里；含义见 src/vendors/types.ts。
- */
-export interface VendorSpec {
-  /** label */
-  label: string;
-  /** cli.loginCommand */
-  loginCommand: string;
-  /** models.bundled */
-  models: VendorDefinition["models"]["bundled"];
-  /** models.customModel */
-  customModel: boolean;
-  /** models.customModelExample */
-  customModelExample: string;
-  /** models.efforts */
-  efforts: readonly string[];
-  /** models.effortInModelId */
-  effortInModelId?: boolean;
-  /** models.flags.model */
-  modelFlag: string;
-  /** models.flags.effort */
-  effortFlag: string;
-  /** models.flags */
-  flags: { model: string; effort: string };
-  /** quota */
-  quota?: VendorDefinition["quota"];
-  /** models.shortName */
-  shortModelName?: (model: string) => string | null;
-  /** capabilities.backgroundWake */
-  backgroundCommands: boolean;
-  /** cli.command */
-  cliCommand: string;
-  /** cli.envVar */
-  envVar: string;
-  /** prompt.subagentTools */
-  subagentTools: readonly string[];
-  /** prompt.backgroundCommandTool */
-  backgroundCommandTool: string;
-  /** capabilities.readonly */
-  readonlyMode: VendorDefinition["capabilities"]["readonly"];
-  /** capabilities.explicitDefaultModel（不写 = false） */
-  explicitDefaultModel?: boolean;
-  /** handover.tokenThreshold（不写 = HANDOVER_TOKEN_THRESHOLD） */
-  handoverTokenThreshold: number;
-  /** composer */
-  composer: ComposerSpec;
-}
-
-function flatSpec(spec: VendorDefinition): VendorSpec {
-  const { cli, models, capabilities } = spec;
-  return {
-    label: spec.label,
-    loginCommand: cli.loginCommand,
-    models: models.bundled,
-    customModel: models.customModel,
-    customModelExample: models.customModelExample,
-    efforts: models.efforts,
-    ...(models.effortInModelId === undefined ? {} : { effortInModelId: models.effortInModelId }),
-    modelFlag: models.flags.model,
-    effortFlag: models.flags.effort,
-    flags: models.flags,
-    ...(spec.quota === undefined ? {} : { quota: spec.quota }),
-    ...(models.shortName === undefined ? {} : { shortModelName: models.shortName }),
-    backgroundCommands: capabilities.backgroundWake,
-    cliCommand: cli.command,
-    envVar: cli.envVar,
-    subagentTools: spec.prompt.subagentTools,
-    backgroundCommandTool: spec.prompt.backgroundCommandTool,
-    readonlyMode: capabilities.readonly,
-    explicitDefaultModel: capabilities.explicitDefaultModel ?? false,
-    handoverTokenThreshold: spec.handover?.tokenThreshold ?? HANDOVER_TOKEN_THRESHOLD,
-    composer: spec.composer,
-  };
-}
-
-/** 每家的声明（旧的平铺形状），以 AGENT_VENDORS 为键。 */
-export const VENDOR_SPECS: Readonly<Record<AgentVendor, VendorSpec>> = Object.fromEntries(
-  VENDOR_LIST.map((spec) => [spec.id, flatSpec(spec)]),
-) as Record<AgentVendor, VendorSpec>;
-
-/** 各家厂商的凭据和配置目录（相对用户主目录），以 AGENT_VENDORS 为键；字段含义见 src/vendors/types.ts 的 VendorSpec.home。 */
-export const VENDOR_HOME_PATHS: Readonly<
-  Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[]; catalogWatchPaths: readonly string[] }>
-> = Object.fromEntries(
-  VENDOR_LIST.map(({ id, home }) => [id, { dirs: home.dirs, readonlySecrets: home.readonlySecrets, catalogWatchPaths: home.catalogWatchPaths }]),
-) as Record<AgentVendor, { dirs: readonly string[]; readonlySecrets: readonly string[]; catalogWatchPaths: readonly string[] }>;
 
 /** 一个 agent 用哪家、哪个模型、多大思考程度。model、effort 是 null = 默认（不传参数）。 */
 export interface AgentSetting {
@@ -205,7 +117,7 @@ export function splitModelEffort(
   catalog?: ModelCatalog | null,
 ): { model: string | null; effort: string | null } {
   // 网页的厂商来自名单，名单里可能有这里没有的厂商（测试里的假厂商），所以 spec 可能是 undefined
-  const spec = (SPECS[vendor] as VendorDefinition | undefined)?.models;
+  const spec = (SPECS[vendor] as VendorSpec | undefined)?.models;
   if (!spec?.effortInModelId || model === null) return { model, effort };
   const efforts = catalog ? allowedEffortsOf(vendor, catalog) : spec.efforts;
   const split = splitEffortSuffix(model, efforts);
@@ -269,10 +181,10 @@ export function agentLaunchArgs(setting: AgentSetting): string[] {
 export const CUSTOM_MODEL = "-custom";
 
 // ---- 模型名单 ----
-// 下拉里列哪些模型：优先用厂商自己报的（claude 的 initialize 控制请求，见 daemon/driver/model-catalog.ts），
-// 拿不到时用这里打包的（VENDOR_SPECS 的 models）。网页从 GET /api/models 拿，后台的校验、启动参数不看名单。
+// 下拉里列哪些模型：优先用厂商自己报的（各家的 catalog.ts，见 daemon/driver/model-catalog.ts），
+// 拿不到时用打包的（spec 的 models.bundled）。网页从 GET /api/models 拿，后台的校验、启动参数不看名单。
 
-/** 名单里的一个模型。id 原样传给 modelFlag；efforts 是它支持的思考程度，null = 没说，用厂商的通用档位。 */
+/** 名单里的一个模型。id 原样传给 models.flags.model；efforts 是它支持的思考程度，null = 没说，用厂商的通用档位。 */
 export interface CatalogModel {
   id: string;
   label: string;
@@ -281,12 +193,12 @@ export interface CatalogModel {
 }
 
 /**
- * 一家厂商的名单：网页的厂商、模型、思考程度下拉只看它（GET /api/models 每家一份），不直接读 VENDOR_SPECS，
- * 所以厂商名、通用思考程度、能不能自定义也跟着名单走（取自 VENDOR_SPECS）。
+ * 一家厂商的名单：网页的厂商、模型、思考程度下拉只看它（GET /api/models 每家一份），不直接读 spec，
+ * 所以厂商名、通用思考程度、能不能自定义也跟着名单走（取自 spec）。
  */
 export interface ModelCatalog {
   vendor: AgentVendor;
-  /** 界面上的厂商名（VENDOR_SPECS 的 label）。 */
+  /** 界面上的厂商名（spec 的 label）。 */
   label: string;
   /** vendor：厂商自己报的；bundled：打包在程序里的（厂商没装、超时、报错时）。 */
   source: "vendor" | "bundled";
@@ -302,7 +214,7 @@ export interface ModelCatalog {
   defaultModel: string | null;
   /** 同上的模型 ID（codex 启动时显式传它：不传的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了）。厂商没说是 null。 */
   defaultModelId: string | null;
-  /** 这家的通用思考程度（VENDOR_SPECS 的 efforts）。 */
+  /** 这家的通用思考程度（spec 的 models.efforts）。 */
   efforts: readonly string[];
   /** 能不能填完整模型名，能的话输入框里的示例；不能是 null。 */
   customModelExample: string | null;
@@ -383,8 +295,7 @@ export function vendorLabel(vendor: string): string {
 
 /** 项目经理自动换新会话的上下文 token 阈值：认识的厂商返回声明表里的，否则默认 HANDOVER_TOKEN_THRESHOLD。 */
 export function handoverTokenThresholdOf(vendor: string): number {
-  const spec = (VENDOR_SPECS as Readonly<Record<string, VendorSpec | undefined>>)[vendor];
-  return spec?.handoverTokenThreshold ?? HANDOVER_TOKEN_THRESHOLD;
+  return (isAgentVendor(vendor) ? SPECS[vendor].handover?.tokenThreshold : undefined) ?? HANDOVER_TOKEN_THRESHOLD;
 }
 
 // ---- 这台设备上能不能用（docs/vendor-availability-design.md）----
@@ -454,7 +365,7 @@ const COMMON_CONTEXT_PATTERN = /context_length_exceeded|context window|prompt is
 const COMMON_BUSY_PATTERN = /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i;
 
 /** 出错特征：通用的几条，加上找不到这家程序的错误码（<编号>_not_found）。 */
-function failureSignsOf(spec: VendorDefinition): VendorFailureSigns {
+function failureSignsOf(spec: VendorSpec): VendorFailureSigns {
   return {
     serviceName: spec.failure.serviceName,
     auth: COMMON_AUTH_PATTERN,

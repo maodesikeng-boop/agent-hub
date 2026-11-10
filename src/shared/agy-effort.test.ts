@@ -2,7 +2,7 @@
 // 实测依据见 docs/model-catalog.md「agy 的模型和思考程度」。
 import { describe, expect, it } from "vitest";
 import {
-  VENDOR_SPECS,
+  vendorSpec,
   agentLaunchArgs,
   bundledModelCatalog,
   checkAgentSetting,
@@ -65,7 +65,7 @@ describe("agy 的启动参数：拼回完整 ID，不同时传 --effort", () => 
 
 describe("agy 的取值校验", () => {
   it("思考程度只有 low、medium、high（实测 xhigh、max 被 agy 拒绝）", () => {
-    expect(VENDOR_SPECS.agy.efforts).toEqual(["low", "medium", "high"]);
+    expect(vendorSpec("agy").models.efforts).toEqual(["low", "medium", "high"]);
     expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "high" })).toBeNull();
     expect(checkAgentSetting({ vendor: "agy", model: "gemini-4-argon", effort: "xhigh" })).toBe("思考程度只能是 low、medium、high");
   });

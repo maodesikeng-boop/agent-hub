@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledModelCatalog } from "../shared/index.ts";
-import type { Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
+import type { AgentVendor, Message, QuotaResponse, RateLimitInfo, RateLimitWindow, SessionState, StateSnapshot, WsServerMessage } from "../shared/index.ts";
 import { COMPACT_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import { formatContext, formatCount, formatQuotaReset, formatTokens } from "./format.ts";
 import { App } from "./App.tsx";
@@ -460,8 +460,8 @@ describe("左下角的额度", () => {
       withWorker({ sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1, rateLimit: quota(0.37, 0.59), lastEventAt: 5 }), agySession()] });
     const reply = {
       groups: [
-        { id: "gemini", name: "Gemini", windows: { five_hour: win(0.25), seven_day: win(0.5, { resetsAt: 1_793_646_000 }) } },
-        { id: "claude_gpt", name: "Claude and GPT", windows: { five_hour: win(0.9) } },
+        { vendor: "agy", id: "gemini", windows: { five_hour: win(0.25), seven_day: win(0.5, { resetsAt: 1_793_646_000 }) } },
+        { vendor: "agy", id: "claude_gpt", windows: { five_hour: win(0.9) } },
       ],
     };
     const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
@@ -501,7 +501,7 @@ describe("左下角的额度", () => {
       api.quota = () => ({
         status: 200,
         body: {
-          groups: [{ id: "gemini", name: "Gemini", windows: { five_hour: win(1) } }],
+          groups: [{ vendor: "agy", id: "gemini", windows: { five_hour: win(1) } }],
         },
       });
       await user.click(badge());
@@ -1216,11 +1216,14 @@ describe("selectors", () => {
     expect(quotaUsage(loaded(withWorker()), 0)).toEqual([]);
   });
 
-  it("fetchedQuotaUsage：服务端回的每一组是一块（name 是厂商名，group 是组名，不拼“·”），窗口按 5 小时、7 天；已过重置时间的算 0%", () => {
+  it("fetchedQuotaUsage：服务端回的每一组是一块（name 是厂商名，group 是组名，都按 vendor + 组 id 从 spec 取，不拼“·”），窗口按 5 小时、7 天；已过重置时间的算 0%；认不出的组、厂商跳过", () => {
     const res: QuotaResponse = {
       groups: [
-        { id: "gemini", name: "Gemini", windows: { seven_day: { utilization: 0.1, resetsAt: 9_000, status: "allowed" }, five_hour: { utilization: 0.85, resetsAt: 5_000, status: "allowed" } } },
-        { id: "不认识的组", name: "x", windows: { five_hour: { utilization: 0.5, resetsAt: 9_000, status: "allowed" } } },
+        { vendor: "agy", id: "gemini", windows: { seven_day: { utilization: 0.1, resetsAt: 9_000, status: "allowed" }, five_hour: { utilization: 0.85, resetsAt: 5_000, status: "allowed" } } },
+        { vendor: "agy", id: "不认识的组", windows: { five_hour: { utilization: 0.5, resetsAt: 9_000, status: "allowed" } } },
+        // 同一个组 id 但这家没有按需查的额度（不是 agy 的组）：不当成 agy 的
+        { vendor: "codex", id: "gemini", windows: { five_hour: { utilization: 0.5, resetsAt: 9_000, status: "allowed" } } },
+        { vendor: "不认识的厂商" as AgentVendor, id: "gemini", windows: { five_hour: { utilization: 0.5, resetsAt: 9_000, status: "allowed" } } },
       ],
     };
     expect(fetchedQuotaUsage(res, 0)).toEqual([

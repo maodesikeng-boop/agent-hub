@@ -6,7 +6,6 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AGY_DENIED_CONTINUE_MAX,
    DriverError,
   EMPTY_TOKEN_USAGE,
   STDERR_TAIL_CHARS,
@@ -24,6 +23,7 @@ import {
   type TokenUsage,
   type WriteScope,
 } from "../../shared/index.ts";
+import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { agyComposerBase } from "./composer.ts";
 import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./connectors.ts";

@@ -6,13 +6,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
-  CODEX_OPTIONAL_RPC_GRACE_MS,
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
   MODEL_CATALOG_TIMEOUT_MS,
-  VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
   mergeCatalogEfforts,
@@ -21,6 +19,8 @@ import {
   type ModelCatalog,
   type VendorAvailability,
 } from "../../shared/index.ts";
+import { CODEX_OPTIONAL_RPC_GRACE_MS } from "./limits.ts";
+import spec from "./spec.ts";
 import { vendorConfigHome } from "../../shared/paths.ts";
 import {
   STDERR_TAIL_CHARS,
@@ -113,7 +113,7 @@ export function parseCodexModels(raw: unknown): ModelCatalog | null {
     if (models.length === MAX_CATALOG_MODELS) break;
   }
   if (models.length === 0) return null;
-  const efforts = mergeCatalogEfforts(VENDOR_SPECS.codex.efforts, models, defaultEfforts);
+  const efforts = mergeCatalogEfforts(spec.models.efforts, models, defaultEfforts);
   return { ...bundledModelCatalog("codex"), source: "vendor", efforts, models, defaultEfforts, defaultModel, defaultModelId };
 }
 

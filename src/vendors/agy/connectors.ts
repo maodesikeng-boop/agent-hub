@@ -11,12 +11,10 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
 import {
-  AGY_CONNECTOR_CACHE_MS,
-  AGY_CONNECTOR_LIST_TIMEOUT_MS,
-  AGY_CONNECTOR_RETRY_MS,
   type ConnectorToolAnnotations,
   type ReadonlyPolicy,
 } from "../../shared/index.ts";
+import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS } from "./limits.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "./paths.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";

@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NAME_RULE, VENDOR_SPECS, bundledModelCatalog, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
+import { MODEL_NAME_RULE, bundledModelCatalog, vendorSpec, serverInfoFor, type AgentVendor, type ModelCatalog, type StateSnapshot, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { MODEL_CATALOG_REVALIDATE_MS } from "./models.tsx";
 import {
@@ -1009,7 +1009,7 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     await user.selectOptions(combo(page, "Model"), "Custom");
     const name = within(agent).getByRole("textbox", { name: "Model name" });
     expect(name).toHaveFocus();
-    expect(name).toHaveAttribute("placeholder", VENDOR_SPECS.claude.customModelExample);
+    expect(name).toHaveAttribute("placeholder", vendorSpec("claude").models.customModelExample);
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
     expect(within(agent).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     await user.type(name, "-p");

@@ -5,8 +5,8 @@ import {
   MAX_COMMANDS,
   MAX_COMMAND_DESCRIPTION_CHARS,
   MAX_COMMAND_HINT_CHARS,
-  VENDOR_SPECS,
   truncateChars,
+  vendorSpec,
   type AgentVendor,
   type ComposerCommand,
 } from "../../shared/index.ts";
@@ -20,9 +20,9 @@ function isUserOwned(name: string, known: readonly ComposerCommand[] | null): bo
   return same.length > 0 && same.every((c) => c.builtin !== true);
 }
 
-/** 按 VENDOR_SPECS[vendor].composer 生成不需要起进程的基础实现（各家在它上面改 parseCommands、mention、buildUserContent）。 */
+/** 按 vendorSpec(vendor).composer 生成不需要起进程的基础实现（各家在它上面改 parseCommands、mention、buildUserContent）。 */
 export function createSpecComposerBase(vendor: AgentVendor): VendorComposerBase {
-  const spec = VENDOR_SPECS[vendor].composer;
+  const spec = vendorSpec(vendor).composer;
   const commandNameOf = (text: string): string | null => {
     if (!text.startsWith(spec.commandPrefix)) return null;
     const name = text.slice(spec.commandPrefix.length).split(/\s/u, 1)[0] ?? "";
@@ -76,6 +76,6 @@ export function parseComposerCommands(raw: unknown): ComposerCommand[] | null {
 /** daemon.ts 没写 composer 的厂商：不起进程，命令列表只有压缩命令（手打的命令照样发给 agent，隐藏名单里的照样拦）。 */
 export function createSpecComposer(vendor: AgentVendor): VendorComposer {
   const base = createSpecComposerBase(vendor);
-  const compact: ComposerCommand = { name: VENDOR_SPECS[vendor].composer.compactCommand, description: "压缩当前对话上下文", builtin: true };
+  const compact: ComposerCommand = { name: vendorSpec(vendor).composer.compactCommand, description: "压缩当前对话上下文", builtin: true };
   return { ...base, queryCommands: async () => [compact] };
 }

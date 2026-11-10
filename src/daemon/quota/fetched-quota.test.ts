@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, VENDOR_SPECS, type QuotaResponse } from "../../shared/index.ts";
-import { createFetchedQuota, parseFetchedQuota, queryFetchedQuota } from "./fetched-quota.ts";
+import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, vendorSpec, type QuotaResponse } from "../../shared/index.ts";
+import { createFetchedQuota, mergeFetchedQuotas, parseFetchedQuota, queryFetchedQuota } from "./fetched-quota.ts";
 
-const spec = VENDOR_SPECS.agy.quota!.fetched!;
+const spec = vendorSpec("agy").quota!.fetched!;
 
 /** 本机 `agy -p "/usage"` 的实际输出（2026-11-07）。 */
 const REAL = [
@@ -14,20 +14,20 @@ const REAL = [
 ].join("\n");
 
 describe("parseFetchedQuota", () => {
-  it("两组各两个窗口：剩余 → 已用（0 到 1），重置时间 → Unix 秒", () => {
-    expect(parseFetchedQuota(REAL, spec)).toEqual({
+  it("两组各两个窗口：剩余 → 已用（0 到 1），重置时间 → Unix 秒；每组带厂商编号，不带组名（网页从 spec 取）", () => {
+    expect(parseFetchedQuota(REAL, spec, "agy")).toEqual({
       groups: [
         {
+          vendor: "agy",
           id: "gemini",
-          name: "Gemini",
           windows: {
             seven_day: { utilization: 0, resetsAt: Date.parse("2026-11-14T09:11:26Z") / 1000, status: "allowed" },
             five_hour: { utilization: 0, resetsAt: Date.parse("2026-11-07T14:11:26Z") / 1000, status: "allowed" },
           },
         },
         {
+          vendor: "agy",
           id: "claude_gpt",
-          name: "Claude and GPT",
           windows: {
             seven_day: { utilization: 0.6, resetsAt: Date.parse("2026-11-13T03:14:53Z") / 1000, status: "allowed" },
             five_hour: { utilization: 0.25, resetsAt: Date.parse("2026-11-07T18:23:21Z") / 1000, status: "allowed" },
@@ -39,18 +39,18 @@ describe("parseFetchedQuota", () => {
 
   it("不认识的组、窗口、坏行跳过；一个窗口都没有的组不返回；整段不认识是空", () => {
     const text = ["Other\tWeekly Limit Remaining\t10%\t2026-11-14T09:11:26Z", "Gemini Models\tMonthly\t10%\tx", "Gemini Models\tFive Hour Limit Remaining\tabc\tx", "垃圾"].join("\n");
-    expect(parseFetchedQuota(text, spec)).toEqual({ groups: [] });
-    expect(parseFetchedQuota("", spec)).toEqual({ groups: [] });
+    expect(parseFetchedQuota(text, spec, "agy")).toEqual({ groups: [] });
+    expect(parseFetchedQuota("", spec, "agy")).toEqual({ groups: [] });
   });
 
   it("重置时间读不出来也留着窗口（resetsAt 0）；百分比夹在 0 到 100", () => {
     const text = "Gemini Models\tFive Hour Limit Remaining\t120%\tsoon";
-    expect(parseFetchedQuota(text, spec).groups[0]!.windows.five_hour).toEqual({ utilization: 0, resetsAt: 0, status: "allowed" });
+    expect(parseFetchedQuota(text, spec, "agy").groups[0]!.windows.five_hour).toEqual({ utilization: 0, resetsAt: 0, status: "allowed" });
   });
 });
 
 describe("createFetchedQuota（缓存）", () => {
-  const sample: QuotaResponse = { groups: [{ id: "gemini", name: "Gemini", windows: {} }] };
+  const sample: QuotaResponse = { groups: [{ vendor: "agy", id: "gemini", windows: {} }] };
 
   function setup(results: Array<QuotaResponse | Error>) {
     let time = 1_000;
@@ -114,6 +114,26 @@ describe("createFetchedQuota（缓存）", () => {
 
 describe("queryFetchedQuota", () => {
   it("程序不存在：报错（上面当失败处理）", async () => {
-    await expect(queryFetchedQuota({ path: "/nonexistent/agy", spec, cwd: "/tmp" })).rejects.toThrow();
+    await expect(queryFetchedQuota({ vendor: "agy", path: "/nonexistent/agy", spec, cwd: "/tmp" })).rejects.toThrow();
+  });
+});
+
+describe("mergeFetchedQuotas（几家合成一个响应）", () => {
+  const groupOf = (vendor: "agy" | "codex", id: string): QuotaResponse["groups"][number] => ({ vendor, id, windows: {} });
+
+  it("几家都问、各自缓存：按给的顺序拼起来，一次 get 每家只问一次；一家失败只少它那几块", async () => {
+    const calls = { agy: 0, codex: 0 };
+    const agy = createFetchedQuota({ query: async () => (calls.agy++, { groups: [groupOf("agy", "gemini"), groupOf("agy", "claude_gpt")] }) });
+    const codex = createFetchedQuota({ query: async () => (calls.codex++, Promise.reject(new Error("没装"))) });
+    const merged = mergeFetchedQuotas([agy, codex]);
+    expect(await merged.get()).toEqual({ groups: [groupOf("agy", "gemini"), groupOf("agy", "claude_gpt")] });
+    expect(calls).toEqual({ agy: 1, codex: 1 });
+    // 有数据的那家在缓存里，再要不再问
+    await merged.get();
+    expect(calls.agy).toBe(1);
+  });
+
+  it("没有要按需查的厂商：回空", async () => {
+    expect(await mergeFetchedQuotas([]).get()).toEqual({ groups: [] });
   });
 });

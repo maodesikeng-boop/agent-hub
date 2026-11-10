@@ -8,13 +8,13 @@ import {
   MAX_COMMANDS,
   MAX_COMMAND_DESCRIPTION_CHARS,
   MAX_COMMAND_HINT_CHARS,
-  VENDOR_SPECS,
   truncateChars,
   type ComposerCommand,
 } from "../../shared/index.ts";
 import { userContent } from "../../daemon/driver/protocol.ts";
 import type { CommandsTarget, VendorComposer, VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { createSpecComposerBase } from "../_common/composer.ts";
+import codexSpec from "./spec.ts";
 import { queryCodexSkills, type CodexModelQueryOptions } from "./catalog.ts";
 
 /** codex 常用内置可用斜杠命令（非隐藏命令）。 */
@@ -98,7 +98,7 @@ export function parseCodexCommands(raw: unknown): ComposerCommand[] | null {
  * 把开头的 `/<skill>` 改写为 Codex 的 `$<skill>` 触发语法。
  */
 export function rewriteCodexSkillCommand(text: string): string {
-  const spec = VENDOR_SPECS.codex.composer;
+  const spec = codexSpec.composer;
   if (!text.startsWith(spec.commandPrefix)) return text;
   const rest = text.slice(spec.commandPrefix.length);
   const name = rest.split(/\s/u, 1)[0] ?? "";

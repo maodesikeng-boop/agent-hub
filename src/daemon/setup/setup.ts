@@ -20,21 +20,21 @@ import {
 import { forceKillTree, streamClosed, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
 import { trackChild } from "../process-ledger.ts";
+import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 
-// ---- 不传给准备命令的环境变量（名单只在这里）----
-// 只去模型和 hub 的凭据：hub 的令牌和 socket（HUB_*）、守护进程的配置（AGENT_HUB_*）、Claude / Anthropic / Bedrock / Foundry 的
-// 密钥和令牌。GH、AWS、NPM 这类别的令牌照常传（装私有依赖可能要用）。名字按大写比较。
-// 对照 https://code.claude.com/docs/en/env-vars（2026-11 核过）：ANTHROPIC_API_KEY、ANTHROPIC_AUTH_TOKEN、ANTHROPIC_AWS_API_KEY、
-// ANTHROPIC_FOUNDRY_API_KEY、ANTHROPIC_FOUNDRY_AUTH_TOKEN、AWS_BEARER_TOKEN_BEDROCK、CLAUDE_CODE_OAUTH_TOKEN、
-// CLAUDE_CODE_OAUTH_REFRESH_TOKEN、CLAUDE_CODE_CLIENT_CERT / _KEY / _KEY_PASSPHRASE（mTLS）、MCP_CLIENT_SECRET。
-const SETUP_ENV_DENY_PREFIXES = ["HUB_", "AGENT_HUB_", "ANTHROPIC_", "CLAUDE_CODE_OAUTH_", "AWS_BEARER_TOKEN_"];
-const SETUP_ENV_DENY_NAMES = ["CLAUDE_CODE_CLIENT_CERT", "CLAUDE_CODE_CLIENT_KEY", "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE", "MCP_CLIENT_SECRET"];
-/** Claude Code 自己的各种令牌（会话、消息通道……），以后新加的也拦住。 */
-const SETUP_ENV_DENY_PATTERN = /^CLAUDE_CODE_.*_TOKEN$/;
+// ---- 不传给准备命令的环境变量 ----
+// 只去模型和 hub 的凭据：hub 的令牌和 socket（HUB_*）、守护进程的配置（AGENT_HUB_*），加上各家厂商的凭据（各家 paths.ts 的 credentialEnv
+// 的并集，准备命令跑的是仓库里的脚本，哪家的 API 密钥都不给）。GH、AWS、NPM 这类别的令牌照常传（装私有依赖可能要用）。名字按大写比较。
+const CREDENTIAL_ENV = Object.values(VENDOR_PATHS).flatMap((paths) => paths.credentialEnv ?? []);
+const SETUP_ENV_DENY_PREFIXES = ["HUB_", "AGENT_HUB_", ...CREDENTIAL_ENV.flatMap((c) => c.prefixes ?? [])];
+const SETUP_ENV_DENY_NAMES = CREDENTIAL_ENV.flatMap((c) => c.names ?? []);
+const SETUP_ENV_DENY_PATTERNS = CREDENTIAL_ENV.flatMap((c) => c.pattern ?? []);
 
 function deniedSetupEnv(name: string): boolean {
   const upper = name.toUpperCase();
-  return SETUP_ENV_DENY_NAMES.includes(upper) || SETUP_ENV_DENY_PREFIXES.some((p) => upper.startsWith(p)) || SETUP_ENV_DENY_PATTERN.test(upper);
+  return (
+    SETUP_ENV_DENY_NAMES.includes(upper) || SETUP_ENV_DENY_PREFIXES.some((p) => upper.startsWith(p)) || SETUP_ENV_DENY_PATTERNS.some((p) => p.test(upper))
+  );
 }
 
 /** 用哪个 shell 跑：用户的 $SHELL（-c，不是登录 shell），没有就 /bin/sh。 */

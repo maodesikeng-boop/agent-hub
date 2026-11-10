@@ -1,4 +1,5 @@
-// codex 只给守护进程用的路径（docs/vendor-plugin-design.md 的 B5：原来在 spec.ts 里，网页也打包；P3 挪到这里）。
+// codex 只给守护进程和脚本用的纯数据（不进网页包，见 daemon-types.ts 的 VendorPathsModule）：PATH 里找不到时去哪找（B5，P3 从 spec.ts 挪来）、
+// 凭据变量（A13）、Linux 上的安装和登录命令（D6）。
 // 配置根目录（CODEX_HOME）按 spec 的 home.configHome 通用地算（shared/paths.ts 的 vendorConfigHome）。
 import type { VendorPathsModule } from "../daemon-types.ts";
 
@@ -11,3 +12,8 @@ export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, pl
   if (platform === "darwin") return [join("/Applications", CHATGPT_APP_CODEX), join(userHome, "Applications", CHATGPT_APP_CODEX), plugin];
   return [...linuxInstallDirs.map((dir) => join(dir, "codex")), plugin];
 };
+
+export const headlessLoginCommand: VendorPathsModule["headlessLoginCommand"] = "codex login --device-auth";
+export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
+// developers.openai.com/codex/environment-variables（2026-11 核过）：CODEX_API_KEY、CODEX_ACCESS_TOKEN；OPENAI_API_KEY 是默认 openai 提供方的 env_key
+export const credentialEnv: VendorPathsModule["credentialEnv"] = { names: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_API_KEY"] };

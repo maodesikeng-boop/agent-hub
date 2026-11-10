@@ -8,18 +8,18 @@ export {
   type LastSeen,
 } from "../shared/reminders.ts";
 import {
-  AGENT_VENDORS,
+  VENDOR_LIST,
   askOf,
   DEFAULT_AGENT_VENDOR,
   QUOTA_WINDOWS,
   VENDOR_FAILURE_SIGNS,
-  VENDOR_SPECS,
   EMPTY_TOKEN_USAGE,
   attachmentsOf,
   exhaustRateLimitInfo,
   isHandoverTraffic,
   isSilentTriggerMessage,
   isAgentVendor,
+  vendorSpec,
   isQuotaExhausted,
   systemEventOf,
   systemNoticeText,
@@ -150,11 +150,8 @@ export function isWaitingForQuota(session: SessionState | null, now: number = Da
 /** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
 const QUOTA_WARNING_PERCENT = 80;
 
-/** 有额度数据的厂商（shared/vendors.ts 的 VendorSpec.quota）；加厂商只在那里写。 */
-const QUOTA_VENDORS = AGENT_VENDORS.flatMap((id) => {
-  const quota = VENDOR_SPECS[id].quota;
-  return quota === undefined ? [] : [{ id, ...quota }];
-});
+/** 有额度数据的厂商（各家 spec 的 quota）；加厂商只在那里写。 */
+const QUOTA_VENDORS = VENDOR_LIST.flatMap(({ id, quota }) => (quota === undefined ? [] : [{ id, ...quota }]));
 
 export interface QuotaWindowUsage {
   key: string;
@@ -369,23 +366,20 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
 }
 
 /**
- * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，shared/vendors.ts 的 quota.fetched）→ 浮层里的块：
- * 每一组一块（name 是厂商名，group 是组名），窗口按 QUOTA_WINDOWS 的顺序；认不出的组跳过。
+ * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，各家 spec 的 quota.fetched；几家合在一个响应里，每组带 vendor）→ 浮层里的块：
+ * 每一组一块（name 是厂商名，group 是组名，都按 vendor + 组的 id 从 spec 取），窗口按 QUOTA_WINDOWS 的顺序；认不出的厂商、组跳过。
  */
 export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
-  for (const id of AGENT_VENDORS) {
-    const quota = VENDOR_SPECS[id].quota;
-    if (quota?.fetched === undefined) continue;
-    for (const group of res.groups) {
-      const spec = quota.fetched.groups.find((g) => g.key === group.id);
-      if (spec === undefined) continue;
-      const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
-        const window = group.windows[key];
-        return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
-      });
-      if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: spec.name, windows, exhausted: windows.some((w) => w.percent >= 100) });
-    }
+  for (const group of res.groups) {
+    const quota = isAgentVendor(group.vendor) ? vendorSpec(group.vendor).quota : undefined;
+    const spec = quota?.fetched?.groups.find((g) => g.key === group.id);
+    if (quota === undefined || spec === undefined) continue;
+    const windows = (Object.keys(QUOTA_WINDOWS) as QuotaWindowKey[]).flatMap((key) => {
+      const window = group.windows[key];
+      return window === undefined || !Number.isFinite(window.utilization) ? [] : [windowUsage(key, window, now, undefined)];
+    });
+    if (windows.length > 0) blocks.push({ id: group.id, name: quota.name, group: spec.name, windows, exhausted: windows.some((w) => w.percent >= 100) });
   }
   return blocks;
 }
@@ -394,7 +388,7 @@ export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()):
 export function hasFetchedQuotaSession(state: HubState): boolean {
   return state.sessions.some((s) => {
     const vendor = s.vendor ?? DEFAULT_AGENT_VENDOR;
-    return isAgentVendor(vendor) && VENDOR_SPECS[vendor].quota?.fetched !== undefined;
+    return isAgentVendor(vendor) && vendorSpec(vendor).quota?.fetched !== undefined;
   });
 }
 

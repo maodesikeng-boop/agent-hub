@@ -1,4 +1,4 @@
-// 各块共用的数字和名字，定在这里免得各写各的。
+// 各块共用的数字和名字，定在这里免得各写各的。只有一家厂商用的可调数在那家文件夹的 limits.ts（src/vendors/<厂商>/limits.ts）。
 
 /** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
@@ -248,20 +248,10 @@ export const USAGE_PUSH_MS = 1_000;
 export const STDIO_DRAIN_MS = 300;
 /** 驱动层：发了 SIGKILL 之后最多再等多久。 */
 export const KILL_WAIT_MS = 2_000;
-/** agy 驱动：一轮因为“被拒”（result 里 denied_actions 非空）又没回复就结束时，最多自动补几轮（防死循环）；用户发了新消息重新数。 */
-export const AGY_DENIED_CONTINUE_MAX = 3;
-/** agy 只读 Worker：启动前问每个 MCP 服务器要工具清单（拿 readOnlyHint）最多等多久，超时这个服务器整个当不可用（拒）。 */
-export const AGY_CONNECTOR_LIST_TIMEOUT_MS = 10_000;
-/** agy 只读 Worker：各 MCP 服务器的工具清单缓存多久（配置变了马上失效）。 */
-export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
-/** agy 只读 Worker：有服务器没问到工具清单（超时、报错，那个服务器整个拒）时，清单只记这么久，偶发失败不会拒 10 分钟。 */
-export const AGY_CONNECTOR_RETRY_MS = 60_000;
 /** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
 export const PS_TIMEOUT_MS = 2_000;
 /** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
 export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
-/** codex app-server 里可有可无的那条（模型名单那次顺带问的 account/read）：必需的都回了以后最多再等多久，老版本不回就不等。 */
-export const CODEX_OPTIONAL_RPC_GRACE_MS = 1_000;
 /** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
 export const MAX_CATALOG_MODELS = 50;
 export const MAX_CATALOG_LABEL_CHARS = 80;
@@ -407,11 +397,8 @@ export const PUBLIC_AUTH_LOCKOUT_MS = 15 * 60_000;
 /** 公网 /auth 按 IP 限流桶数量上限（防公网扫描撑大内存）。 */
 export const MAX_PUBLIC_AUTH_IP_BUCKETS = 1_000;
 
-/** 环境变量。 */
+/** 环境变量（各家可执行文件的 AGENT_HUB_<大写编号> 在各自 spec 的 cli.envVar）。 */
 export const ENV_HOME = "AGENT_HUB_HOME";
-export const ENV_CLAUDE = "AGENT_HUB_CLAUDE";
-export const ENV_AGY = "AGENT_HUB_AGY";
-export const ENV_CODEX = "AGENT_HUB_CODEX";
 /** 界面服务的端口，默认 DEFAULT_UI_PORT；0 表示由系统分配（测试用）。 */
 export const ENV_PORT = "AGENT_HUB_PORT";
 /** 第一次启动自动建项目经理时用的默认模型（如 claude-haiku-5-5，冒烟测试用）；不设就用 claude 自己的默认。 */

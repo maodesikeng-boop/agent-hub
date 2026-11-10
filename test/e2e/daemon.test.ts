@@ -302,7 +302,7 @@ describe("W5 组装 + 端到端", () => {
 
   it("找不到 claude：守护进程不崩，界面实时看到“找不到 claude”，重试用完消息标失败", { timeout: 40_000 }, async () => {
     env = makeEnv();
-    const { daemon, client, state, conversationId } = await boot({ claudePath: join(env.dir, "no-such-claude") });
+    const { daemon, client, state, conversationId } = await boot({ vendorPath: join(env.dir, "no-such-claude") });
     const ws = await client.ws(state.seq);
     const id = await client.post(conversationId, "你好");
     const health = await waitUntil("health.updated over ws", () =>

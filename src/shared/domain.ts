@@ -95,6 +95,8 @@ export const WORKER_MESSAGE_KIND = "worker" satisfies MessageKind;
 
 const AGENT_ROLES = ["assistant", "pm", "worker"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
+/** 能起会话的两种角色（daemon/launch.ts 按它生成启动文件）。 */
+export type SessionRole = Extract<AgentRole, "pm" | "worker">;
 
 /** 空闲 / 运行中 / 已结束 / 坏了。 */
 const SESSION_STATUSES = ["idle", "running", "ended", "broken"] as const;

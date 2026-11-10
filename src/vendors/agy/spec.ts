@@ -1,6 +1,5 @@
 // agy（Antigravity）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
 // 要拼绝对路径的（数据目录下的会话库、MCP 配置文件）和只给守护进程用的路径（PATH 里找不到时去哪找）在同目录的 paths.ts。
-import { ENV_AGY } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
@@ -22,7 +21,7 @@ export default defineVendor({
   label: "Antigravity",
   cli: {
     command: "agy",
-    envVar: ENV_AGY,
+    envVar: "AGENT_HUB_AGY",
     loginCommand: "agy",
   },
   // 数据在 ~/.gemini（antigravity、antigravity-cli；macOS 上登录令牌在钥匙串 Library/Keychains，Linux 在钥匙环），
@@ -88,12 +87,35 @@ export default defineVendor({
   prompt: {
     subagentTools: ["invoke_subagent"],
     backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`",
+    vendorOnlyTools: "agy 的 `WaitMsBeforeAsync`",
   },
   failure: {
     serviceName: "Antigravity",
     rawHint: /^agy_not_found\b|\bagy\b|antigravity/i,
     // agy 跑 claude、gpt 的模型，报错里常带别家的模型名：先认 agy
     rawHintPriority: 2,
+  },
+  // 会话记录是 sqlite 库（conversations/<id>.db），别家读不了
+  handover: { transcriptPortable: false },
+  tools: {
+    actions: {
+      run_command: "command",
+      read_file: "read",
+      view_file: "read",
+      view_file_outline: "read",
+      view_code_item: "read",
+      write_to_file: "write",
+      write_file: "write",
+      edit_file: "edit",
+      replace_file_content: "edit",
+      multi_replace_file_content: "edit",
+      grep_search: "search",
+      find_by_name: "search",
+      list_dir: "search",
+      search_web: "web_search",
+      read_url_content: "web_fetch",
+      invoke_subagent: "subagent",
+    },
   },
   capabilities: {
     // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）

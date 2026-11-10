@@ -2,6 +2,8 @@
 // claude 自己的协议在 src/vendors/claude/protocol.ts。
 import { createHash } from "node:crypto";
 import type { TokenUsage } from "../../shared/index.ts";
+import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
+import { VENDOR_LIST } from "../../vendors/registry.ts";
 
 /**
  * 一条用户消息的 content（claude、codex 的 composer 的 buildUserContent 就是它，驱动层经厂商接口调）：我们加的字每项一个 text 块在前，用户原文单独放最后一块。
@@ -56,25 +58,11 @@ export function assistantContext(obj: Record<string, unknown>): number | null {
 }
 
 /**
- * 守护进程自己可能是在某个 Claude 会话里起的（开发时）。这些变量会让子 claude 以为自己是子会话，
- * 照 experiments/m0/claude_clean.sh 去掉。
+ * 守护进程自己可能是在某个 agent 的会话里起的（开发时）。那家给子进程设的“父会话”变量会让子 agent 以为自己是嵌套的子会话，
+ * 起任何厂商的子进程前都去掉：各家 paths.ts 的 parentSessionEnv 的并集，加上不属于哪一家厂商的宿主（t3code）设的。
  */
-// P4（A12）改成各家 spec 的 cli.parentSessionEnv 的并集
-const PARENT_SESSION_ENV = [
-  "CLAUDECODE",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_SESSION_ID",
-  "CLAUDE_CODE_CHILD_SESSION",
-  "CLAUDE_CODE_SESSION_ATTENDED",
-  "CLAUDE_PID",
-  "CLAUDE_CODE_MESSAGING_SOCKET",
-  "CLAUDE_CODE_MESSAGING_TOKEN",
-  "CLAUDE_AGENT_SDK_VERSION",
-  "CLAUDE_CODE_EXECPATH",
-  "CLAUDE_EFFORT",
-  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-  "T3CODE_THREAD_ID",
-  "T3CODE_CLI_PATH",
+export const PARENT_SESSION_ENV: readonly string[] = [
+  ...new Set([...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].parentSessionEnv ?? []), "T3CODE_THREAD_ID", "T3CODE_CLI_PATH"]),
 ];
 
 export function buildChildEnv(

@@ -8,13 +8,13 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDaemon } from "../../src/daemon/daemon.ts";
+import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import {
   AGENT_VENDORS,
   API_PATHS,
   ENV_HOME,
   ENV_PORT,
-  WORKER_ENV,
   isHandoverTraffic,
   systemEventOf,
   type AgentVendor,
@@ -43,7 +43,7 @@ let keepDir = false;
 console.log(`auto-renew smoke：临时数据目录 ${dir}，厂商 ${vendors.join("、")}`);
 
 const env: Record<string, string | undefined> = {};
-for (const [k, v] of Object.entries(process.env)) if (!(k in WORKER_ENV)) env[k] = v;
+for (const [k, v] of Object.entries(process.env)) if (!PARENT_SESSION_ENV.includes(k)) env[k] = v;
 env[ENV_HOME] = home;
 env[ENV_PORT] = "0";
 env.AGENT_HUB_AGY ??= join(homedir(), ".local/bin/agy");

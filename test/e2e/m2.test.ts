@@ -576,7 +576,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
   it("重试：找不到 claude 导致消息失败；修好路径重启后点重试，排队中 → 已送达 → 已回复，不多出消息", { timeout: 60_000 }, async () => {
     env = makeEnv();
     env.setScript({ defaultTurn: quick("这次好了") });
-    const first = await boot({ claudePath: join(env.dir, "no-such-claude") });
+    const first = await boot({ vendorPath: join(env.dir, "no-such-claude") });
     const id = await first.client.post(first.privateId, "你好");
     const failed = await waitForStatus(first.client, id, "failed", 40_000);
     expect(failed.failureReason).toMatch(/^claude_not_found/);

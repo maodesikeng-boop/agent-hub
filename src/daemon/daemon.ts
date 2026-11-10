@@ -23,7 +23,7 @@ import {
   HANDOVER_STOP_GRACE_MS,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
-  VENDOR_SPECS,
+  VENDOR_LIST,
   AUTO_RENEW_TICK_MS,
   checkModel,
   type ActionExecutor,
@@ -32,6 +32,7 @@ import {
   AGENT_VENDORS,
   isAgentVendor,
   vendorFailureOf,
+  vendorSpec,
   type AgentVendor,
 } from "../shared/index.ts";
 import type { HubPaths } from "../shared/paths.ts";
@@ -67,7 +68,7 @@ import {
   type ModelCatalogs,
 } from "./driver/index.ts";
 import { addWorktree } from "./git/index.ts";
-import { createFetchedQuota, queryFetchedQuota } from "./quota/fetched-quota.ts";
+import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
 import {
@@ -359,7 +360,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
             {
               executablePath: executables[vendor].path,
               ...launch,
-              ...(VENDOR_SPECS[vendor].explicitDefaultModel
+              ...(vendorSpec(vendor).capabilities.explicitDefaultModel
                 ? {
                     // 没选模型时用名单里厂商报的默认（名单有缓存，不是每次起会话都问；只问这一家，docs/vendor-plugin-design.md 1.7 第 1 条）
                     defaultModel: async () => (await models.list({ vendor })).find((c) => c.vendor === vendor)?.defaultModelId ?? null,
@@ -492,15 +493,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
-    // 额度：事件流里没有额度的厂商只能另起进程问，网页打开额度面板时才问（缓存 5 分钟）
-    const fetchedQuotaVendor = AGENT_VENDORS.find((v) => VENDOR_SPECS[v].quota?.fetched !== undefined);
-    const fetchedQuotaSpec = fetchedQuotaVendor !== undefined ? VENDOR_SPECS[fetchedQuotaVendor].quota?.fetched : undefined;
-    const quota = createFetchedQuota({
-      query:
-        fetchedQuotaVendor !== undefined && fetchedQuotaSpec !== undefined
-          ? () => queryFetchedQuota({ path: executables[fetchedQuotaVendor].path, spec: fetchedQuotaSpec, cwd: options.userHome })
-          : undefined,
-    });
+    // 额度：事件流里没有额度的厂商只能另起进程问，网页打开额度面板时才问（每家各自缓存 5 分钟），几家合在一个响应里
+    const quota = mergeFetchedQuotas(
+      VENDOR_LIST.flatMap(({ id, quota: spec }) => {
+        const fetched = spec?.fetched;
+        if (fetched === undefined) return [];
+        return [createFetchedQuota({ query: () => queryFetchedQuota({ vendor: id, path: executables[id].path, spec: fetched, cwd: options.userHome }) })];
+      }),
+    );
     // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
     const rotateToken = () => {
       const next = rotateUiToken(paths.uiTokenFile);

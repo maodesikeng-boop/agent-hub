@@ -18,7 +18,7 @@ import {
 import { agentTextOf } from "./attachments.ts";
 import { HUB_COMPOSER_COMMANDS } from "./api.ts";
 import { workerPickSchema } from "./worker-pick-schema.ts";
-import { AGENT_VENDORS, VENDOR_SPECS } from "./vendors.ts";
+import { AGENT_VENDORS, vendorSpec } from "./vendors.ts";
 import { WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
 
@@ -206,7 +206,7 @@ describe("workerBranchName", () => {
 describe("输入框指定派 Worker 的厂商、模型、思考程度（workerPick）", () => {
   const user = { workerId: null, sender: "user" as const, text: "把 A 拆成三块并行做" };
   const vendor = AGENT_VENDORS[0]!;
-  const model = VENDOR_SPECS[vendor].models[0]!.id;
+  const model = vendorSpec(vendor).models.bundled[0]!.id;
 
   it("参数句子：三项都选了就写 --vendor --model --effort；Default（null）的项不写；只选厂商只出 --vendor", () => {
     expect(workerPickNote({ vendor, model, effort: "high" })).toBe(`【用户指定：这条消息里派的 Worker 用 --vendor ${vendor} --model ${model} --effort high】`);

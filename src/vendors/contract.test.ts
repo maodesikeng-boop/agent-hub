@@ -14,7 +14,8 @@ import { vendorTranscriptPath } from "../daemon/driver/transcript.ts";
 import { FORKERS } from "../daemon/handover/forkers.ts";
 import { DAEMON_VENDORS } from "../daemon/vendors/index.ts";
 import { VENDOR_DAEMONS } from "./daemon-registry.ts";
-import { AGENT_VENDORS, VENDOR_AVAILABILITIES, VENDOR_HOME_PATHS, VENDOR_SPECS } from "../shared/vendors.ts";
+import { VENDOR_PATHS } from "./paths-registry.ts";
+import { AGENT_VENDORS, VENDOR_AVAILABILITIES, vendorSpec } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
 import { ROOT, browserUnsafeImports, describeSpecContract, importsOf, otherVendorDirImports, runtimeImportsDeep } from "./test-helpers.ts";
 
@@ -45,7 +46,7 @@ describe("厂商名单", () => {
 
   it("各登记表的键和名单一致", () => {
     expect([...AGENT_VENDORS]).toEqual(VENDOR_LIST.map((s) => s.id));
-    for (const table of [VENDOR_SPECS, VENDOR_HOME_PATHS, VENDOR_DAEMONS, DAEMON_VENDORS, FORKERS]) {
+    for (const table of [VENDOR_DAEMONS, DAEMON_VENDORS, FORKERS]) {
       expect(Object.keys(table).sort()).toEqual([...AGENT_VENDORS].sort());
     }
   });
@@ -92,13 +93,19 @@ describe("厂商名单", () => {
 describeSpecContract(specFileOf);
 
 describe.each(AGENT_VENDORS)("厂商契约（守护进程侧）：%s", (id) => {
-  const spec = VENDOR_SPECS[id];
+  const spec = vendorSpec(id);
   const daemon = DAEMON_VENDORS[id];
 
   it("S1 推出来的登记表有 createDriver、输入框；输入框是这家的", () => {
     expect(typeof daemon.createDriver).toBe("function");
     expect(typeof daemon.createComposer).toBe("function");
     expect(daemon.base.vendor).toBe(id);
+  });
+
+  it("S12 paths.ts 的父会话变量、凭据变量都是大写的环境变量名（准备命令按大写比较）；凭据不把守护进程自己的配置（AGENT_HUB_*）当成这家的", () => {
+    const { parentSessionEnv = [], credentialEnv = {} } = VENDOR_PATHS[id];
+    for (const name of [...parentSessionEnv, ...(credentialEnv.names ?? []), ...(credentialEnv.prefixes ?? [])]) expect(name, name).toMatch(/^[A-Z][A-Z0-9_]*$/);
+    for (const name of credentialEnv.names ?? []) expect(name.startsWith("AGENT_HUB_"), name).toBe(false);
   });
 
   it("S6 压缩命令不会被拦、认得出是压缩", () => {

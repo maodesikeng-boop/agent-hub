@@ -10,7 +10,6 @@ import {
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
   MODEL_CATALOG_TIMEOUT_MS,
-  VENDOR_SPECS,
   bundledModelCatalog,
   checkModel,
   mergeCatalogEfforts,
@@ -19,6 +18,7 @@ import {
   type ModelCatalog,
   type VendorAvailability,
 } from "../../shared/index.ts";
+import spec from "./spec.ts";
 import {
   STDERR_TAIL_CHARS,
   effortsOf,
@@ -78,7 +78,7 @@ export function parseInitializeModels(raw: unknown): ModelCatalog | null {
   if (models.length === 0) return null;
   if (defaultEfforts === null && defaultResolved !== null) defaultEfforts = effortsOfResolved.get(defaultResolved) ?? null;
   const defaultModel = defaultResolved === null ? null : (labelOfResolved.get(defaultResolved) ?? truncateChars(defaultResolved, MAX_CATALOG_LABEL_CHARS));
-  const efforts = mergeCatalogEfforts(VENDOR_SPECS.claude.efforts, models, defaultEfforts);
+  const efforts = mergeCatalogEfforts(spec.models.efforts, models, defaultEfforts);
   return { ...bundledModelCatalog("claude"), source: "vendor", efforts, models, defaultEfforts, defaultModel };
 }
 

@@ -1,4 +1,4 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/vendors/*/{daemon,paths}.ts"]
+  "entry": ["{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "src/vendors/*/{daemon,paths}.ts", "scripts/*.ts"]
 }

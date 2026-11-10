@@ -30,24 +30,27 @@ vi.mock("./load.ts", async (importOriginal) => {
 // 清掉模块缓存，下面用到的模块都在 mock 之后重新加载
 vi.resetModules();
 const { describeSpecContract } = await import("./test-helpers.ts");
-const { VENDOR_FALLBACK_PATHS, vendorCatalogWatchFiles } = await import("../shared/paths.ts");
+const { VENDOR_FALLBACK_PATHS, resolveHubPaths, vendorCatalogWatchFiles } = await import("../shared/paths.ts");
 const {
   AGENT_VENDORS,
   ALL_EFFORTS,
   VENDOR_FAILURE_SIGNS,
-  VENDOR_HOME_PATHS,
-  VENDOR_SPECS,
   agentLaunchArgs,
   bundledModelCatalog,
   checkAgentSetting,
+  handoverTokenThresholdOf,
   isAgentVendor,
   modelShortLabel,
   vendorLabel,
+  vendorSpec,
 } = await import("../shared/vendors.ts");
+const { describeStep, toolCategory } = await import("../shared/step-labels.ts");
+const { buildLaunchPrompt, buildWorkerPrompt } = await import("../daemon/prompt.ts");
+const { projectContext, workerContext } = await import("../daemon/test-helpers.ts");
 
 const { DAEMON_VENDORS, VENDOR_CATALOG_PROBES, composerBaseOf, createVendorCatalogSources, createVendorDrivers } = await import("../daemon/vendors/index.ts");
 const { FORKERS } = await import("../daemon/handover/forkers.ts");
-const { vendorTranscriptPath } = await import("../daemon/driver/transcript.ts");
+const { vendorSessionFiles, vendorTranscriptPath } = await import("../daemon/driver/transcript.ts");
 const { WRITE_SCOPE_ENFORCERS } = await import("../daemon/driver/write-scope.ts");
 const { VENDOR_DAEMONS } = await import("./daemon-registry.ts");
 const { default: acmeDaemon } = await import("../../test/fixtures/vendors/acme/daemon.ts");
@@ -60,30 +63,35 @@ describe("名单加一项 acme，公共代码就认得它", () => {
   it("编号、派生的各张表都有它，排在名单最后", () => {
     expect(AGENT_VENDORS.at(-1)).toBe("acme");
     expect(isAgentVendor("acme")).toBe(true);
-    for (const table of [VENDOR_SPECS, VENDOR_HOME_PATHS, VENDOR_FAILURE_SIGNS, VENDOR_FALLBACK_PATHS]) {
+    for (const table of [VENDOR_FAILURE_SIGNS, VENDOR_FALLBACK_PATHS, resolveHubPaths({}, "/home/u").vendorPaths]) {
       expect(Object.keys(table)).toEqual([...AGENT_VENDORS]);
     }
     expect(ALL_EFFORTS).toContain("turbo");
   });
 
-  it("旧的平铺形状从分组字段推出来，没写的可选字段走默认", () => {
-    expect(VENDOR_SPECS[acme]).toMatchObject({
-      label: "Acme Rocket",
-      cliCommand: "acme",
-      envVar: "AGENT_HUB_ACME",
-      loginCommand: "acme login",
-      modelFlag: "--model",
-      effortFlag: "--reasoning",
-      backgroundCommands: false,
-      readonlyMode: "os_sandbox",
-      explicitDefaultModel: false,
-      handoverTokenThreshold: 200_000,
-      subagentTools: ["acme_spawn"],
-    });
-    expect(VENDOR_SPECS[acme]).not.toHaveProperty("quota");
-    expect(VENDOR_SPECS[acme]).not.toHaveProperty("shortModelName");
+  it("公共代码按 spec 读，没写的可选字段走默认", () => {
+    expect(vendorSpec(acme).label).toBe("Acme Rocket");
+    expect(handoverTokenThresholdOf("acme")).toBe(200_000);
     expect(VENDOR_FAILURE_SIGNS[acme].serviceName).toBe("Acme");
+    // 可执行文件：spec 的 cli.envVar 给路径，没给找 PATH 里的 cli.command（HubPaths.vendorPaths，A4）
+    expect(resolveHubPaths({}, "/home/u").vendorPaths[acme]).toBe("acme");
+    expect(resolveHubPaths({ AGENT_HUB_ACME: "~/bin/acme" }, "/home/u").vendorPaths[acme]).toBe("/home/u/bin/acme");
   });
+
+  it("提示词：能用的厂商列表里有它（编号、显示名、代表模型）；没写 instructionFile 不加“先读 AGENTS.md”", () => {
+    const prompt = buildLaunchPrompt(projectContext(), "/nonexistent/acme-contract");
+    expect(prompt).toContain("`acme`（Acme Rocket，如 `acme-ultra-9`、`acme-mini-2`）");
+    expect(prompt).toContain("`acme_spawn`");
+    // 不能放后台叫醒自己（backgroundWake: false）的 Worker：一条命令等到底
+    expect(buildWorkerPrompt({ ...workerContext(), vendor: acme }, "/nonexistent/acme-contract")).toContain("等长命令用一条命令等到底");
+  });
+
+  it("没写 tools：它的工具显示“Using <名>”、统计里认不出（按原名计）；mcp__ 开头的照样按连接器认", () => {
+    expect(describeStep({ type: "tool_use", name: "acme_shell", input: {} })).toBe("Using acme_shell");
+    expect(toolCategory("acme_shell")).toBeNull();
+    expect(describeStep({ type: "tool_use", name: "mcp__jira__search", input: {} })).toBe("Calling jira search");
+  });
+
 
   it("通用函数：校验、启动参数、名单、显示名、兜底路径、盯的文件", () => {
     expect(checkAgentSetting({ vendor: "acme", model: "acme-x", effort: "turbo" })).toBeNull();
@@ -127,9 +135,14 @@ describe("守护进程侧：acme 只写 createDriver，推出来的登记表都�
     expect(VENDOR_CATALOG_PROBES[acme].availabilityOf({})).toBe("unknown");
   });
 
-  it("没写 forkers、transcriptPath：复制会话的办法是空的（本会话写交接），原始记录找不到", () => {
+  it("没写 forkers、transcriptPath、sessionFiles：复制会话的办法是空的（本会话写交接），原始记录找不到，冒烟收尾不删", () => {
     expect(FORKERS[acme]).toEqual([]);
     expect(vendorTranscriptPath({ vendor: "acme", vendorSessionId: "s-1", cwd: "/tmp" })).toBeNull();
+    expect(vendorSessionFiles({ vendor: "acme", vendorSessionId: "s-1", cwd: "/tmp" })).toEqual([]);
+  });
+
+  it("没写 launchFiles：不生成设置文件、不多设环境变量（A15）", () => {
+    expect(acmeDaemon.launchFiles).toBeUndefined();
   });
 
   it("可写范围一律走外层 OS 沙箱；没写 ownSandboxOffArgs 就不加参数", () => {

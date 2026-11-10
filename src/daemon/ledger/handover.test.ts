@@ -20,7 +20,7 @@ import {
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
 } from "../../shared/limits.ts";
-import { VENDOR_SPECS, type VendorSpec } from "../../shared/vendors.ts";
+import { vendorSpec } from "../../shared/vendors.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db, SqlValue } from "../store/index.ts";
@@ -256,10 +256,10 @@ describe("进队列：这一轮结束时用量到门槛", () => {
     expect(rows()).toHaveLength(1);
   });
 
-  it("按会话厂商的 handoverTokenThreshold 判断自动换会话（turn.ended、启动重建 queue 与 runAutoRenew）", () => {
-    const specs = VENDOR_SPECS as Record<string, VendorSpec>;
-    const originalAgy = specs.agy!;
-    specs.agy = { ...originalAgy, handoverTokenThreshold: 80_000 };
+  it("按会话厂商的 handover.tokenThreshold 判断自动换会话（turn.ended、启动重建 queue 与 runAutoRenew）", () => {
+    const agy = vendorSpec("agy");
+    const originalHandover = agy.handover;
+    agy.handover = { ...originalHandover, tokenThreshold: 80_000 };
     try {
       const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon" });
       const agyConv = agyPm.conversation.id;
@@ -283,7 +283,7 @@ describe("进队列：这一轮结束时用量到门槛", () => {
       expect(rows(conversationId)).toHaveLength(0);
       expect(rows(agyConv)).toMatchObject([{ status: "queued", auto: 1, from_session_id: agySession }]);
     } finally {
-      specs.agy = originalAgy;
+      agy.handover = originalHandover;
     }
   });
 

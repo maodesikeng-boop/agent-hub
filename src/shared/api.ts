@@ -59,7 +59,7 @@ export const API_PATHS = {
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
   /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回；?refresh=unusable 只重问这台设备上不能用的那几家。 */
   models: "/api/models",
-  /** GET → QuotaResponse：事件流里没有额度的厂商（agy）的额度；服务端缓存 FETCHED_QUOTA_FRESH_MS，没装、查失败的没有那一块。 */
+  /** GET → QuotaResponse：事件流里没有额度的厂商的额度，按家合并；服务端每家缓存 FETCHED_QUOTA_FRESH_MS，没装、查失败的没有那几块。 */
   quota: "/api/quota",
   /**
    * POST（PickFolderRequest → PickFolderResponse）：守护进程在这台 Mac 上弹原生的“选择文件夹”，等用户选完才回。
@@ -299,9 +299,12 @@ export interface ModelsResponse {
   catalogs: ModelCatalog[];
 }
 
-/** GET /api/quota：一组一块（厂商分组），窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。 */
+/**
+ * GET /api/quota：要按需查额度的几家合在一个响应里，一组一块（按名单顺序）。vendor + id 对上 spec 的 quota.fetched.groups[].key，
+ * 组名、厂商名网页从 spec 取，不随响应发。窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。
+ */
 export interface QuotaResponse {
-  groups: Array<{ id: string; name: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
+  groups: Array<{ vendor: AgentVendor; id: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
 }
 
 /** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给；builtin：厂商自带的命令（用户自己的命令、skill 不带这个字段）。 */
