@@ -13,12 +13,15 @@ import {
   SECRET_SCAN_MAX_ENTRIES,
   SECRET_SCAN_MAX_MATCHES,
   SECRET_SCAN_MAX_MS,
-   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
+  WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   WRITE_SCOPE_ENFORCERS,
+  WSL_ISOLATED_DIRS,
+  WSL_SANITIZED_ENV_VARS,
   bwrapArgs,
   bwrapProbeArgs,
   expandWritableFileGlobs,
   osSandboxAvailable,
+  parseWslDrvfsMounts,
   readonlyBwrapArgs,
   readonlySeatbeltProfile,
   resetOsSandboxCacheForTest,
@@ -398,6 +401,145 @@ describe("bwrapArgs 与 readonlyBwrapArgs（Linux bubblewrap 参数纯函数）"
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("WSL2 加固：遮蔽已存在的 /run/WSL、/mnt/wsl、/mnt/wslg 与 drvfs Windows 盘，清理 WSL_INTEROP/WSLENV 及 PATH 中的 Windows 盘路径；常规 Linux ext4 /mnt/data 不误伤", () => {
+    expect(WSL_ISOLATED_DIRS).toEqual(["/run/WSL", "/mnt/wsl", "/mnt/wslg"]);
+    expect(WSL_SANITIZED_ENV_VARS).toEqual(["WSL_INTEROP", "WSLENV"]);
+
+    const mountInfo = [
+      "28 1 8:16 / / rw,relatime - ext4 /dev/sdb rw,discard,errors=remount-ro,data=ordered",
+      "29 28 0:25 / /mnt/wsl rw,relatime - tmpfs none rw",
+      "30 28 8:32 / /mnt/data rw,relatime - ext4 /dev/sdc rw",
+      "36 28 0:31 / /mnt/c rw,noatime - 9p drvfs rw,dirsync,aname=drvfs;path=C:\\;uid=1000;gid=1000;symlinkroot=/mnt/",
+      "37 28 0:32 / /mnt/My\\040Drive rw,noatime - drvfs D:\\ rw",
+    ].join("\n");
+
+    expect(parseWslDrvfsMounts(mountInfo)).toEqual(["/mnt/c", "/mnt/My Drive"]);
+
+    const existing = new Set([
+      "/run/WSL",
+      "/mnt/wsl",
+      "/mnt/data",
+      "/mnt/c",
+      "/mnt/My Drive",
+      "/home/fusa/.agent-hub",
+      "/home/fusa/.agent-hub/worktrees/1/2",
+    ]);
+
+    const wslEnv: NodeJS.ProcessEnv = {
+      WSL_INTEROP: "/run/WSL/12_interop",
+      WSLENV: "USERPROFILE/up",
+      PATH: "/home/fusa/.local/bin:/usr/bin:/mnt/c/Windows/System32:/mnt/My Drive/bin:/bin",
+    };
+
+    const normalArgs = bwrapArgs(
+      base,
+      {
+        dataDir: "/home/fusa/.agent-hub",
+        writableDirs: ["/home/fusa/.agent-hub/worktrees/1/2"],
+      },
+      {
+        uid: 1000,
+        exists: (p) => existing.has(p),
+        realpath: (p) => p,
+        mountInfo,
+        env: wslEnv,
+      },
+    );
+
+    expect(normalArgs).toEqual([
+      "--unshare-user",
+      "--disable-userns",
+      "--unshare-pid",
+      "--bind",
+      "/",
+      "/",
+      "--proc",
+      "/proc",
+      "--dev-bind",
+      "/dev",
+      "/dev",
+      "--perms",
+      "0700",
+      "--tmpfs",
+      "/run/user/1000",
+      "--perms",
+      "0700",
+      "--tmpfs",
+      "/run/WSL",
+      "--perms",
+      "0700",
+      "--tmpfs",
+      "/mnt/wsl",
+      "--perms",
+      "0700",
+      "--tmpfs",
+      "/mnt/c",
+      "--perms",
+      "0700",
+      "--tmpfs",
+      "/mnt/My Drive",
+      "--unsetenv",
+      "WSL_INTEROP",
+      "--unsetenv",
+      "WSLENV",
+      "--setenv",
+      "PATH",
+      "/home/fusa/.local/bin:/usr/bin:/bin",
+      "--ro-bind",
+      "/home/fusa/.agent-hub",
+      "/home/fusa/.agent-hub",
+      "--bind",
+      "/home/fusa/.agent-hub/worktrees/1/2",
+      "/home/fusa/.agent-hub/worktrees/1/2",
+      "--",
+      "/bin/agent",
+      "--x",
+      "y",
+    ]);
+
+    // 只读沙箱同样遮蔽 WSL 通道与 drvfs 挂载
+    const roArgs = readonlyBwrapArgs(
+      base,
+      {
+        tmpDir: "/tmp/ro-1",
+        writableDirs: [],
+        writableFileRegexes: [],
+        secretPaths: [],
+        secretGlobs: [],
+      },
+      {
+        uid: 1000,
+        exists: (p) => existing.has(p) || p === "/tmp/ro-1",
+        realpath: (p) => p,
+        expandGlobs: () => [],
+        mountInfo,
+        env: wslEnv,
+      },
+    );
+    expect(roArgs).toContain("/run/WSL");
+    expect(roArgs).toContain("/mnt/c");
+    expect(roArgs).not.toContain("/mnt/data");
+    expect(roArgs).toContain("WSL_INTEROP");
+
+    // 常规 Linux（仅有 ext4 /mnt/data，无 WSL 目录与环境变量）：不产生任何额外参数
+    const linuxOnlyMountInfo = "30 28 8:32 / /mnt/data rw,relatime - ext4 /dev/sdc rw\n";
+    expect(parseWslDrvfsMounts(linuxOnlyMountInfo)).toEqual([]);
+    const plainLinuxArgs = bwrapArgs(
+      base,
+      { dataDir: "/home/fusa/.agent-hub", writableDirs: [] },
+      {
+        uid: 1000,
+        exists: (p) => p === "/mnt/data" || p === "/home/fusa/.agent-hub",
+        realpath: (p) => p,
+        mountInfo: linuxOnlyMountInfo,
+        env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      },
+    );
+    expect(plainLinuxArgs).not.toContain("/mnt/data");
+    expect(plainLinuxArgs).not.toContain("--unsetenv");
+    expect(plainLinuxArgs).not.toContain("--setenv");
+  });
 });
 
 describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () => {
@@ -500,5 +642,32 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
     expect(existsSync(join(root, "outside.txt"))).toBe(false);
     expect(existsSync(join(tmp, "p"))).toBe(true);
     expect(existsSync(join(runtime, "p"))).toBe(true);
+  });
+});
+
+// 真 bwrap（Ubuntu CI）：验证 scripts/wsl-provision-guest.sh --self-test 在真实 bubblewrap 下拦截 state 写入并放行工作目录
+describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真 bwrap：wsl-provision-guest.sh --self-test 门禁", () => {
+  it("在真实 Linux bubblewrap 下通过隔离自检（模拟无免密 sudo）", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-wsl-guest-live-")));
+    try {
+      const home = join(root, "home", "fusa");
+      const fakeSudo = join(root, "deny-sudo");
+      mkdirSync(home, { recursive: true });
+      writeFileSync(fakeSudo, "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
+      const guestScript = new URL("../../../scripts/wsl-provision-guest.sh", import.meta.url).pathname;
+      const out = execFileSync("bash", [guestScript, "--self-test"], {
+        env: {
+          ...process.env,
+          HOME: home,
+          FUSA_WSL_HOME: home,
+          FUSA_SUDO_BIN: fakeSudo,
+        },
+        encoding: "utf8",
+      });
+      const report = JSON.parse(out) as { ok: boolean; worker_sandbox_ready: boolean; error_code: string | null };
+      expect(report).toMatchObject({ ok: true, worker_sandbox_ready: true, error_code: null });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
