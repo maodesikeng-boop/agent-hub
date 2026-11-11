@@ -1,0 +1,656 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EMPTY_TOKEN_USAGE,
+  type DecideTaskNodeRequest,
+  type Message,
+  type TaskGraph,
+  type TaskGraphsPage,
+  type TaskNode,
+} from "../shared/index.ts";
+import * as RightRailMod from "./components/RightRail.tsx";
+import { RightRail } from "./components/RightRail.tsx";
+import { SliceWheelIcon } from "./components/SliceWheelIcon.tsx";
+import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
+import { PALETTE } from "./lib/palette.ts";
+import { resetQueryClient } from "./query-client.ts";
+import { activeGraphsOf, pendingAsks, pendingDecisionsOf, unboundWorkersOf, workersOf, type WorkerEntry } from "./selectors.ts";
+import { applyChange, initialState, type HubState } from "./state.ts";
+import {
+  makeConvSnapshot,
+  makeMessage,
+  makePm,
+  makeProject,
+  makeSession,
+  makeWorkerConversation,
+  makeWorkerLine,
+  sessionChange,
+} from "./test-utils.ts";
+
+function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
+  return {
+    kind: "piece",
+    status: "pending",
+    sortOrder: 0,
+    activeWorkerId: null,
+    workerIds: [],
+    artifact: null,
+    gateQuestion: null,
+    gateOptions: [],
+    gateSummaryMd: null,
+    gateRecommended: null,
+    gateAskMessageId: null,
+    decision: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    ...over,
+  };
+}
+
+function makeGraph(over: Partial<TaskGraph> & Pick<TaskGraph, "id" | "title">): TaskGraph {
+  return {
+    projectId: 1,
+    pmId: 1,
+    conversationId: 1,
+    status: "active",
+    originMsgId: null,
+    nodes: [],
+    edges: [],
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    completedAt: null,
+    ...over,
+  };
+}
+
+function makeWorker(conversationId: number, over: Partial<WorkerEntry> = {}): WorkerEntry {
+  return {
+    conversationId,
+    workerId: conversationId - 20,
+    title: `Piece ${conversationId}`,
+    activity: "working",
+    ended: false,
+    usage: EMPTY_TOKEN_USAGE,
+    tone: "neutral",
+    ...over,
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  resetQueryClient();
+});
+
+afterEach(() => {
+  cleanup();
+  resetQueryClient();
+  vi.restoreAllMocks();
+});
+
+describe("SliceWheelIcon：小水果切面进度轮", () => {
+  it("按总阶段数切瓣，跟随项目经理水果配色并用 rem 缩放；相邻同层并行瓣果心相连", () => {
+    const graph = makeGraph({
+      id: 1,
+      title: "多阶段改造",
+      nodes: [
+        makeNode({ key: "s1", title: "调研", status: "done", sortOrder: 0 }),
+        makeNode({ key: "s2", title: "前端", status: "running", sortOrder: 1 }),
+        makeNode({ key: "s3", title: "接口", status: "running", sortOrder: 2 }),
+        makeNode({ key: "s4", title: "拍板", kind: "gate", status: "waiting_user", sortOrder: 3 }),
+        makeNode({ key: "s5", title: "回归", status: "pending", sortOrder: 4 }),
+      ],
+      edges: [
+        { fromKey: "s1", toKey: "s2" },
+        { fromKey: "s1", toKey: "s3" },
+        { fromKey: "s2", toKey: "s4" },
+        { fromKey: "s3", toKey: "s4" },
+        { fromKey: "s4", toKey: "s5" },
+      ],
+    });
+
+    const { container } = render(<SliceWheelIcon graph={graph} colorKey={1} size={20} />);
+    const root = container.querySelector("[data-slot='slice-wheel']") as HTMLElement;
+    expect(root).toBeInTheDocument();
+    expect(root.style.width).toBe("1.25rem");
+    expect(root.style.height).toBe("1.25rem");
+    expect(root.style.getPropertyValue("--peel")).toBe(PALETTE[1]!.blob);
+
+    const petals = root.querySelectorAll("[data-petal-status]");
+    expect(petals).toHaveLength(5);
+    expect([...petals].map((el) => el.getAttribute("data-petal-status"))).toEqual([
+      "done",
+      "running",
+      "running",
+      "waiting_user",
+      "pending",
+    ]);
+    // 同层并行阶段 s2 与 s3 之间只切半刀（果心相连）
+    expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
+  });
+});
+
+describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀门禁", () => {
+  it("连续已完成上游层默认卷成 N done，下游长链路默认折成 N next；点击各自展开，并行阶段分出 parA/parB 双股轨道", async () => {
+    const user = userEvent.setup();
+    const onOpenWorker = vi.fn();
+    const graph = makeGraph({
+      id: 2,
+      title: "右栏任务流重做",
+      nodes: [
+        makeNode({ key: "n1", title: "梳理边界", status: "done", sortOrder: 0, workerIds: [10] }),
+        makeNode({ key: "n2", title: "数据层", status: "done", sortOrder: 1, workerIds: [11] }),
+        makeNode({ key: "n3", title: "前端卡片", status: "running", sortOrder: 2, activeWorkerId: 12, workerIds: [12] }),
+        makeNode({ key: "n4", title: "连线布局", status: "running", sortOrder: 3, activeWorkerId: 13, workerIds: [13] }),
+        makeNode({ key: "n5", title: "交叉审查", status: "pending", sortOrder: 4 }),
+        makeNode({ key: "n6", title: "合并收尾", status: "pending", sortOrder: 5 }),
+      ],
+      edges: [
+        { fromKey: "n1", toKey: "n2" },
+        { fromKey: "n2", toKey: "n3" },
+        { fromKey: "n2", toKey: "n4" },
+        { fromKey: "n3", toKey: "n5" },
+        { fromKey: "n4", toKey: "n5" },
+        { fromKey: "n5", toKey: "n6" },
+      ],
+    });
+    const workers = [
+      makeWorker(30, { workerId: 10, ended: true, activity: "idle" }),
+      makeWorker(31, { workerId: 11, ended: true, activity: "idle" }),
+      makeWorker(32, { workerId: 12 }),
+      makeWorker(33, { workerId: 13 }),
+    ];
+
+    render(
+      <RightRail
+        asks={[]}
+        workers={workers}
+        activeGraphs={[graph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={1}
+        onOpenAsk={() => {}}
+        onOpenWorker={onOpenWorker}
+      />,
+    );
+
+    const graphGroup = screen.getByRole("region", { name: /^Task Graph$/ });
+    expect(within(graphGroup).getByText("右栏任务流重做")).toBeInTheDocument();
+
+    // 默认折叠为 2 done 与 2 next，中间露出正在并行的两股轨道
+    const doneCoil = within(graphGroup).getByRole("button", { name: /2 done/ });
+    const nextFold = within(graphGroup).getByRole("button", { name: /2 next/ });
+    expect(doneCoil.querySelector("[data-peel-gutter='coil']")).toBeInTheDocument();
+    expect(nextFold).toBeInTheDocument();
+    expect(within(graphGroup).queryByText("梳理边界")).toBeNull();
+    expect(within(graphGroup).queryByText("交叉审查")).toBeNull();
+
+    // 并行阶段无重框，带 parA / parB 分合轨与 .status-shimmer 流光，点击打开对应 Piece 对话
+    expect(graphGroup.querySelector("[data-peel-gutter='parA']")).toBeInTheDocument();
+    expect(graphGroup.querySelector("[data-peel-gutter='parB']")).toBeInTheDocument();
+    expect(within(graphGroup).getByText("前端卡片")).toHaveClass("status-shimmer");
+    await user.click(within(graphGroup).getByRole("button", { name: /前端卡片/ }));
+    expect(onOpenWorker).toHaveBeenCalledWith(32);
+
+    // 点击 2 done 展开全部已完成步骤
+    await user.click(doneCoil);
+    expect(within(graphGroup).getByText("梳理边界")).toBeInTheDocument();
+    expect(within(graphGroup).getByText("数据层")).toBeInTheDocument();
+
+    // 点击 2 next 展开全部下游未解锁步骤
+    await user.click(nextFold);
+    expect(within(graphGroup).getByText("交叉审查")).toBeInTheDocument();
+    expect(within(graphGroup).getByText("合并收尾")).toBeInTheDocument();
+  });
+
+  it("waiting_user 门禁卡住微缩水果刀（useId 唯一渐变）并挂出果冻拍板卡：支持一键点选、选项+备注、纯备注提交，拍板后刀收起并显示所选简称", async () => {
+    const user = userEvent.setup();
+    const calls: { url: string; body: DecideTaskNodeRequest }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = JSON.parse(String(init?.body ?? "{}")) as DecideTaskNodeRequest;
+      calls.push({ url, body });
+      return jsonResponse({ graph: makeGraph({ id: 5, title: "ok" }), messageId: 100 });
+    });
+
+    const buildGateGraph = (id: number, updatedAt: number, decidedChoice: string | null = null): TaskGraph =>
+      makeGraph({
+        id,
+        updatedAt,
+        title: `同步任务 ${id}`,
+        nodes: [
+          makeNode({ key: "survey", title: "调研差异", status: "done", sortOrder: 0, workerIds: [10] }),
+          makeNode({
+            key: "gate-sync",
+            title: "确认同步范围",
+            kind: "gate",
+            status: decidedChoice === null ? "waiting_user" : "done",
+            sortOrder: 1,
+            gateQuestion: "冲突的两个配置项如何处理？",
+            gateSummaryMd: "其中 4 项完全一致，2 项存在参数差异。",
+            gateOptions: ["全量同步并先备份", "仅同步无冲突项"],
+            gateRecommended: "全量同步并先备份",
+            gateAskMessageId: 77,
+            decision:
+              decidedChoice === null
+                ? null
+                : { choice: decidedChoice, note: null, decidedBy: "user", decidedAt: 9_000 },
+          }),
+          makeNode({ key: "impl", title: "执行同步", status: decidedChoice === null ? "pending" : "running", sortOrder: 2 }),
+        ],
+        edges: [
+          { fromKey: "survey", toKey: "gate-sync" },
+          { fromKey: "gate-sync", toKey: "impl" },
+        ],
+      });
+
+    // 同屏渲染两个 waiting_user 任务以验证微缩水果刀渐变 ID 唯一不冲突
+    const { rerender } = render(
+      <RightRail
+        asks={[]}
+        workers={[]}
+        activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={1}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+
+    const knives = document.querySelectorAll("[data-slot='knife-avatar']");
+    expect(knives.length).toBeGreaterThanOrEqual(2);
+    const gradIds = new Set(
+      [...knives].map((el) => el.querySelector("linearGradient")?.getAttribute("id")).filter(Boolean),
+    );
+    expect(gradIds.size).toBe(knives.length);
+
+    // 1) 一键点选推荐项
+    const cards = screen.getAllByTestId("peel-gate-card");
+    const firstCard = cards[0]!;
+    expect(firstCard).toHaveClass("rounded-2xl", "border-primary", "bg-jelly");
+    await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");
+    expect(calls[0]!.body).toMatchObject({ choice: "全量同步并先备份" });
+    expect(typeof calls[0]!.body.clientId).toBe("string");
+
+    // 2) 点选 + 补充备注
+    const secondCard = cards[1]!;
+    await user.click(within(secondCard).getByRole("button", { name: "Add note" }));
+    const noteInput = within(secondCard).getByPlaceholderText("Add a note, or type a custom reply…");
+    await user.type(noteInput, "备份放到 .bak 目录");
+    await user.click(within(secondCard).getByRole("button", { name: /仅同步无冲突项/ }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]!.url).toBe("/api/task-graphs/6/nodes/gate-sync/decide");
+    expect(calls[1]!.body).toMatchObject({ choice: "仅同步无冲突项", note: "备份放到 .bak 目录" });
+
+    // 3) 自定义备注直接提交（choice: null）
+    await user.clear(noteInput);
+    await user.type(noteInput, "今天先不改生产目录");
+    await user.click(within(secondCard).getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]!.body).toMatchObject({ choice: null, note: "今天先不改生产目录" });
+
+    // 拍板通过后：水果刀收起，门禁节点收合为紧凑单行并在右侧展示所选简称
+    rerender(
+      <RightRail
+        asks={[]}
+        workers={[]}
+        activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={1}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
+    expect(document.querySelector("[data-slot='knife-avatar']")).toBeNull();
+    expect(screen.getByText("确认同步范围")).toBeInTheDocument();
+    expect(screen.getByText("全量同步并先备份")).toBeInTheDocument();
+  });
+
+  it("多任务排序与手风琴：紧急任务（waiting_user / attention）排最前自动展开，后台任务收成带切面轮的单行标题，点击手风琴切换", async () => {
+    const user = userEvent.setup();
+    const bgGraph = makeGraph({
+      id: 10,
+      title: "后台签名流水线",
+      updatedAt: 9_000,
+      nodes: [
+        makeNode({ key: "a", title: "生成证书", status: "done", sortOrder: 0 }),
+        makeNode({ key: "b", title: "签名校验", status: "running", sortOrder: 1 }),
+      ],
+      edges: [{ fromKey: "a", toKey: "b" }],
+    });
+    const urgentGraph = makeGraph({
+      id: 11,
+      title: "紧急权限确认",
+      updatedAt: 3_000,
+      nodes: [
+        makeNode({
+          key: "g",
+          title: "确认权限模型",
+          kind: "gate",
+          status: "waiting_user",
+          gateOptions: ["RBAC", "ABAC"],
+        }),
+      ],
+    });
+
+    render(
+      <RightRail
+        asks={[]}
+        workers={[]}
+        activeGraphs={[bgGraph, urgentGraph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={2}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+
+    const headers = screen.getAllByTestId("peel-graph-toggle");
+    expect(headers.map((h) => h.textContent)).toEqual(["紧急权限确认", "后台签名流水线"]);
+    expect(headers[0]).toHaveAttribute("aria-expanded", "true");
+    expect(headers[1]).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("确认权限模型")).toBeInTheDocument();
+    expect(screen.queryByText("签名校验")).toBeNull();
+
+    // 点击后台任务标题：手风琴展开后台任务，收起前一个任务
+    await user.click(headers[1]!);
+    expect(headers[1]).toHaveAttribute("aria-expanded", "true");
+    expect(headers[0]).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("签名校验")).toBeInTheDocument();
+  });
+
+  it("同源去重与兼容：门禁 ask 不进 Needs You，绑图 Worker 不进 Pieces，独立 ask 与独立 Worker 照旧渲染", () => {
+    const gateAsk: Message = makeMessage({
+      id: 101,
+      text: "确认门禁问题",
+      meta: { needsUser: true, options: ["A", "B"], gateRef: { graphId: 20, nodeKey: "gate-1" } },
+    });
+    const freeAsk: Message = makeMessage({
+      id: 102,
+      text: "独立小问题",
+      meta: { needsUser: true },
+    });
+    const boundWorker = makeWorker(31, { workerId: 11, title: "图内节点活" });
+    const unboundWorker = makeWorker(32, { workerId: 12, title: "独立零散活" });
+
+    const activeGraph = makeGraph({
+      id: 20,
+      title: "主线任务",
+      nodes: [
+        makeNode({ key: "step-1", title: "编码步骤", status: "running", activeWorkerId: 11, workerIds: [11] }),
+        makeNode({
+          key: "gate-1",
+          title: "确认门禁",
+          kind: "gate",
+          status: "waiting_user",
+          gateOptions: ["A", "B"],
+          gateAskMessageId: 101,
+        }),
+      ],
+      edges: [{ fromKey: "step-1", toKey: "gate-1" }],
+    });
+
+    render(
+      <RightRail
+        asks={[gateAsk, freeAsk]}
+        workers={[boundWorker, unboundWorker]}
+        activeGraphs={[activeGraph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={0}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+
+    const asksRegion = screen.getByRole("region", { name: /^Needs You$/ });
+    expect(within(asksRegion).getByText("独立小问题")).toBeInTheDocument();
+    expect(within(asksRegion).queryByText("确认门禁问题")).toBeNull();
+
+    const piecesRegion = screen.getByRole("region", { name: /^Pieces$/ });
+    expect(within(piecesRegion).getByText("独立零散活")).toBeInTheDocument();
+    expect(within(piecesRegion).queryByText("图内节点活")).toBeNull();
+  });
+
+  it("Completed 展开时经 @tanstack/react-query 游标拉取历史任务图，点开历史图或右上角 Zoom 打开横向全览弹窗 TaskGraphDialog", async () => {
+    const user = userEvent.setup();
+    const onOpenWorker = vi.fn();
+    const fetchUrls: string[] = [];
+
+    const hist1 = makeGraph({
+      id: 50,
+      title: "历史五步改版",
+      status: "completed",
+      completedAt: 20_000,
+      nodes: [
+        makeNode({ key: "h1", title: "数据库迁移", status: "done", sortOrder: 0, workerIds: [91] }),
+        makeNode({
+          key: "h2",
+          title: "上线前门禁",
+          kind: "gate",
+          status: "done",
+          sortOrder: 1,
+          decision: { choice: "立即灰度", note: null, decidedBy: "user", decidedAt: 19_000 },
+        }),
+      ],
+      edges: [{ fromKey: "h1", toKey: "h2" }],
+    });
+    const hist2 = makeGraph({
+      id: 40,
+      title: "更早的架构清理",
+      status: "completed",
+      completedAt: 15_000,
+      nodes: [makeNode({ key: "c1", title: "删除死代码", status: "done", sortOrder: 0 })],
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      fetchUrls.push(url);
+      const page: TaskGraphsPage = url.includes("before=50")
+        ? { graphs: [hist2], hasMore: false }
+        : { graphs: [hist1], hasMore: true };
+      return jsonResponse(page);
+    });
+
+    const liveGraph = makeGraph({
+      id: 60,
+      title: "正在进行的任务",
+      nodes: [
+        makeNode({ key: "l1", title: "第一步", status: "done", sortOrder: 0, workerIds: [81] }),
+        makeNode({ key: "l2", title: "第二步", status: "running", sortOrder: 1, activeWorkerId: 82, workerIds: [82] }),
+      ],
+      edges: [{ fromKey: "l1", toKey: "l2" }],
+    });
+
+    render(
+      <RightRail
+        asks={[]}
+        workers={[
+          makeWorker(101, { workerId: 81, ended: true, activity: "idle" }),
+          makeWorker(102, { workerId: 82 }),
+          makeWorker(103, { workerId: 91, ended: true, activity: "idle", title: "历史图内部活" }),
+          makeWorker(104, { workerId: 99, ended: true, activity: "idle", title: "独立已收工活" }),
+        ]}
+        activeGraphs={[liveGraph]}
+        completedGraphCount={2}
+        projectId={1}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={3}
+        onOpenAsk={() => {}}
+        onOpenWorker={onOpenWorker}
+      />,
+    );
+
+    // Completed 折叠时不发任何请求
+    expect(fetchUrls).toHaveLength(0);
+
+    // 点击活跃任务头右上角 Zoom 打开横向 LR 全览弹窗
+    await user.click(screen.getByRole("button", { name: "Zoom" }));
+    const liveDialog = screen.getByRole("dialog", { name: "正在进行的任务" });
+    expect(liveDialog.querySelector("[data-rankdir='LR']")).toBeInTheDocument();
+    await user.click(within(liveDialog).getByRole("button", { name: /#82/ }));
+    expect(onOpenWorker).toHaveBeenCalledWith(102);
+
+    // 展开 Completed：触发首屏 GET /api/projects/1/task-graphs?status=history
+    const completedRegion = screen.getByRole("region", { name: /^Completed$/ });
+    await user.click(within(completedRegion).getByRole("heading").querySelector("button")!);
+    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history"));
+    expect(await within(completedRegion).findByText("历史五步改版")).toBeInTheDocument();
+    expect(within(completedRegion).getByText("独立已收工活")).toBeInTheDocument();
+    // 已归属 hist1 的 Worker #91 不重复列出
+    expect(within(completedRegion).queryByText("历史图内部活")).toBeNull();
+
+    // 点击 Load more 游标翻下一页
+    await user.click(within(completedRegion).getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history&before=50"));
+    expect(await within(completedRegion).findByText("更早的架构清理")).toBeInTheDocument();
+
+    // 点击历史任务图行：打开全览弹窗回看完整拓扑与历史拍板
+    await user.click(within(completedRegion).getByRole("button", { name: /历史五步改版/ }));
+    const histDialog = screen.getByRole("dialog", { name: "历史五步改版" });
+    expect(within(histDialog).getByText("立即灰度")).toBeInTheDocument();
+  });
+
+  beforeAll(() => {
+    Element.prototype.setPointerCapture ??= () => {};
+    Element.prototype.releasePointerCapture ??= () => {};
+  });
+
+  it("PiecesDrawer 透传新可选 props 时正常渲染果皮轨并在点击 Piece 时自动收起抽屉", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const onOpenWorker = vi.fn();
+    const graph = makeGraph({
+      id: 70,
+      title: "移动端抽屉任务",
+      nodes: [makeNode({ key: "m1", title: "抽屉步骤", status: "running", activeWorkerId: 15, workerIds: [15] })],
+    });
+
+    render(
+      <PiecesDrawer
+        open
+        onOpenChange={onOpenChange}
+        asks={[]}
+        workers={[makeWorker(35, { workerId: 15 })]}
+        activeGraphs={[graph]}
+        openWorkerId={null}
+        avatarKey={0}
+        onOpenAsk={() => {}}
+        onOpenWorker={onOpenWorker}
+      />,
+    );
+
+    expect(await screen.findByText("移动端抽屉任务")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /抽屉步骤/ }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenWorker).toHaveBeenCalledWith(35);
+  });
+
+  it("流式打字爆炸半径守卫：挂载 activeGraphs 后连续 8 帧 streamingText 更新，RightRail 重渲染次数严格为 0", () => {
+    const g1 = makeGraph({
+      id: 80,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: "果皮轨流式守卫",
+      nodes: [
+        makeNode({ key: "n1", title: "调研", status: "done", sortOrder: 0, workerIds: [3] }),
+        makeNode({
+          key: "n2",
+          title: "确认范围",
+          kind: "gate",
+          status: "waiting_user",
+          sortOrder: 1,
+          gateOptions: ["继续", "暂停"],
+          gateRecommended: "继续",
+        }),
+      ],
+      edges: [{ fromKey: "n1", toKey: "n2" }],
+    });
+
+    let state: HubState = {
+      ...initialState,
+      phase: "ready",
+      seq: 10,
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 1, pmId: 1, conversationId: 1 })],
+      conversations: {
+        1: makeConvSnapshot(
+          [
+            makeWorkerLine({ id: 3, conversationId: 1, line: { workerId: 3, workerConversationId: 30, title: "调研", event: "ended" } }),
+            makeWorkerLine({ id: 4, conversationId: 1, line: { workerId: 4, workerConversationId: 31, title: "零散修复", event: "started" } }),
+          ],
+          { conversation: { id: 1, pmId: 1, title: "小林" } },
+        ),
+        30: makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 30, pmId: 1, title: "调研" }) }),
+        31: makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 31, pmId: 1, title: "零散修复" }) }),
+      },
+      sessions: [
+        makeSession({ sessionId: 10, conversationId: 1, pmId: 1, status: "running", activity: "working", step: { type: "text" } }),
+        makeSession({ sessionId: 310, conversationId: 31, status: "running", activity: "working" }),
+      ],
+      activeTaskGraphs: [g1],
+    };
+
+    const noop = () => {};
+    type MemoTarget = { type: (...args: unknown[]) => unknown };
+    const rightRailSpy = vi.spyOn(RightRailMod.RightRail as unknown as MemoTarget, "type");
+
+    const renderWith = (s: HubState) => (
+      <RightRail
+        asks={pendingAsks(s, 1)}
+        workers={workersOf(s, 1)}
+        activeGraphs={activeGraphsOf(s, 1)}
+        projectId={1}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={1}
+        onOpenAsk={noop}
+        onOpenWorker={noop}
+      />
+    );
+
+    const { rerender } = render(renderWith(state));
+    const decisions0 = pendingDecisionsOf(state, 1);
+    const unbound0 = unboundWorkersOf(state, 1);
+    rightRailSpy.mockClear();
+
+    for (let i = 1; i <= 8; i++) {
+      state = applyChange(
+        state,
+        sessionChange(
+          20 + i,
+          makeSession({
+            sessionId: 10,
+            conversationId: 1,
+            pmId: 1,
+            status: "running",
+            activity: "working",
+            step: { type: "text" },
+            streamingText: "流式增量".repeat(i),
+          }),
+        ),
+      );
+      expect(pendingDecisionsOf(state, 1)).toBe(decisions0);
+      expect(unboundWorkersOf(state, 1)).toBe(unbound0);
+      rerender(renderWith(state));
+    }
+
+    expect(rightRailSpy).toHaveBeenCalledTimes(0);
+    rightRailSpy.mockRestore();
+  });
+});
