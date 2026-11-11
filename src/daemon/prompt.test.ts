@@ -24,6 +24,7 @@ import {
 } from "../shared/index.ts";
 import { HUB_COMMAND_SPECS, HUB_USAGE } from "../hub/cli.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
+import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../shared/hub.ts";
 import { ENV_SETUP_ROOT_PATH, ENV_SETUP_WORKTREE_PATH, WORKER_LOG_DEFAULT_STEPS, WORKER_SEND_MAX_TOKENS } from "../shared/limits.ts";
 import { mergeUserTexts } from "./driver/protocol.ts";
 import {
@@ -878,6 +879,12 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
         expect(modePrompt).toContain(`${hub} graph create`);
         expect(modePrompt).toContain("--node <key>");
         expect(modePrompt).toMatch(/单步简单查询.*不.*建.*1\s*节点假图/);
+        // 先亮骨架图再深读；一张图只装一件事（独立小活不绑图、互不相干的多步任务各自建图）
+        expect(modePrompt).toMatch(/先亮骨架图再深读.*粗粒度.*骨架图.*再去读长文档/);
+        expect(modePrompt).toMatch(/一张图只装一件事.*单步小活直接派普通 Worker.*各自建独立的图/);
+        // graph create / patch 旁直接给出一行 JSON 字段契约
+        expect(fullPrompt).toContain(TASK_GRAPH_CREATE_JSON_HINT);
+        expect(fullPrompt).toContain(TASK_GRAPH_PATCH_JSON_HINT);
 
         // 2. 需用户拍板的分水岭必须挂 gate 并 hub graph ask（简单单问用 hub ask），严禁只在回复正文口头问
         expect(modePrompt).toContain("`gate`");

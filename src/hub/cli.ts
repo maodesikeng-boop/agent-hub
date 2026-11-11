@@ -7,7 +7,16 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, SELF_RELOAD_AGENT_PATH, hubPath, type HubCommand } from "../shared/hub.ts";
+import {
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
+  HUB_EXIT,
+  SELF_RELOAD_AGENT_PATH,
+  TASK_GRAPH_CREATE_JSON_HINT,
+  TASK_GRAPH_PATCH_JSON_HINT,
+  hubPath,
+  type HubCommand,
+} from "../shared/hub.ts";
 import {
   HUB_CLI_STDIN_IDLE_MS,
   HUB_CLI_TIMEOUT_MS,
@@ -248,7 +257,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "create",
     cli: "graph create",
-    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（DAG）`,
+    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（DAG）
+                                                          JSON：${TASK_GRAPH_CREATE_JSON_HINT}`,
   },
   {
     command: "graph.show",
@@ -278,7 +288,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "patch",
     cli: "graph patch",
-    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边`,
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边
+                                                          JSON：${TASK_GRAPH_PATCH_JSON_HINT}`,
   },
   {
     command: "graph.done",
