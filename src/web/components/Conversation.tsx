@@ -97,7 +97,7 @@ export function Conversation({
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
-  onRewind?: (conversationId: ConversationId, stopping: boolean) => { text: string; workerPick: WorkerPick | null } | null;
+  onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
   /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
@@ -115,7 +115,7 @@ export function Conversation({
   const stop = useStop(session, () => onStop(id), hasQueuedUser);
   const handleRewind = useCallback(
     (stopping: boolean): boolean => {
-      const res = onRewind?.(id, stopping) ?? null;
+      const res = onRewind?.(id, stopping, draft.store.getState()) ?? null;
       if (res === null) return false;
       draft.restore(res.text, res.workerPick);
       return true;

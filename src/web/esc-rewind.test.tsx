@@ -4,8 +4,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VENDOR_LIST, type StateSnapshot, type WorkerPick, type WsServerMessage } from "../shared/index.ts";
+import { MAX_MESSAGE_BYTES, VENDOR_LIST, type StateSnapshot, type WorkerPick, type WsServerMessage } from "../shared/index.ts";
 import { App } from "./App.tsx";
+import { Popover, PopoverContent } from "./ui/popover.tsx";
+import { Drawer, DrawerContent, DrawerTitle } from "./ui/drawer.tsx";
 import {
   FakeApi,
   FakeWebSocket,
@@ -123,6 +125,21 @@ describe("按键冲突优先级守卫（不误触）", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(api.callsTo("POST", /\/conversations\/1\/stop$/)).toHaveLength(1));
     expect(box().value).toBe("/hub");
+  });
+
+  it.each(["popover", "drawer"])("真实 %s 内输入框按 Esc 不得暂停底层对话", async (kind) => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, sessionChange(11, makeSession({ activity: "working" })));
+    const overlay = render(kind === "popover"
+      ? <Popover defaultOpen><PopoverContent><input aria-label="Overlay input" /></PopoverContent></Popover>
+      : <Drawer defaultOpen><DrawerContent><DrawerTitle>Pieces</DrawerTitle><input aria-label="Overlay input" /></DrawerContent></Drawer>);
+    try {
+      act(() => screen.getByRole("textbox", { name: "Overlay input" }).focus());
+      await user.keyboard("{Escape}");
+      expect(api.callsTo("POST", /\/stop$/)).toHaveLength(0);
+      expect(api.callsTo("POST", /\/rewind$/)).toHaveLength(0);
+    } finally { overlay.unmount(); }
   });
 
   it("输入法正在选字（isComposing / keyCode 229）、长按连发（repeat）或带修饰键时忽略 Esc", async () => {
@@ -253,12 +270,15 @@ describe("第二次 Esc 回退内容到输入框", () => {
     expect(box().value).toBe("慢网刚发出的话");
     expect(within(log()).queryByText("慢网刚发出的话")).not.toBeInTheDocument();
 
+    expect(api.callsTo("POST", /\/rewind$/)).toHaveLength(0);
+
     // 之后慢网的 POST /messages 才返回，并且 WS 推来尚未带 rewound 的 message.created：自动补发 rewind，气泡绝不闪现
     const clientId = (api.callsTo("POST", /\/conversations\/1\/messages$/)[0]!.body as { clientId: string }).clientId;
     await act(async () => {
       resolvePost({ status: 200, body: { messageId: 99 } });
     });
-    await waitFor(() => expect(api.callsTo("POST", /\/conversations\/1\/rewind$/)).toHaveLength(2));
+    await waitFor(() => expect(api.callsTo("POST", /\/conversations\/1\/rewind$/)).toHaveLength(1));
+    expect(api.callsTo("POST", /\/conversations\/1\/stop$/)).toHaveLength(2);
     push(ws, messageChange(11, "message.created", makeUserMessage({ id: 99, text: "慢网刚发出的话", status: "cancelled", dedupeKey: `client:1:${clientId}`, createdAt: 7_000 })));
     expect(within(log()).queryByText("慢网刚发出的话")).not.toBeInTheDocument();
   });
@@ -328,6 +348,44 @@ describe("第二次 Esc 回退内容到输入框", () => {
     expect(box().value).toBe("按这份改");
     expect(within(log()).queryByText("按这份改")).not.toBeInTheDocument();
     expect(within(log()).getByText("设计稿.pdf")).toBeInTheDocument();
+  });
+});
+
+describe("交叉审查回归", () => {
+  it("stop 请求尚未完成时双按 Esc，rewind 必须等待 stop 被服务端接受", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, messageChange(11, "message.created", makeUserMessage({ id: 3, text: "慢停止", status: "processing" })));
+    push(ws, sessionChange(12, makeSession({ activity: "working" })));
+    let accept!: () => void;
+    api.stop = () => new Promise((resolve) => { accept = () => resolve({ status: 202 }); });
+    await user.keyboard("{Escape}{Escape}");
+    expect(box().value).toBe("慢停止");
+    expect(api.callsTo("POST", /\/rewind$/)).toHaveLength(0);
+    await act(async () => accept());
+    await waitFor(() => expect(api.callsTo("POST", /\/rewind$/)).toHaveLength(1));
+  });
+
+  it("待发消息回退后第三次 Esc 不得掏出更早的 stopped 消息", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, messageChange(11, "message.created", makeUserMessage({ id: 3, text: "更早停掉的话", status: "stopped" })));
+    api.postMessage = () => new Promise(() => {});
+    await user.type(box(), "新请求{Enter}");
+    await user.keyboard("{Escape}{Escape}{Escape}");
+    expect(box().value).toBe("新请求");
+    expect(within(log()).getByText("更早停掉的话")).toBeInTheDocument();
+  });
+
+  it("拼接草稿超字节上限时保留草稿与原消息，不提前隐藏气泡", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    push(ws, messageChange(11, "message.created", makeUserMessage({ id: 3, text: "待恢复", status: "stopped" })));
+    fireEvent.change(box(), { target: { value: "x".repeat(MAX_MESSAGE_BYTES) } });
+    await user.keyboard("{Escape}");
+    expect(box().value).toBe("x".repeat(MAX_MESSAGE_BYTES));
+    expect(within(log()).getByText("待恢复")).toBeInTheDocument();
+    expect(api.callsTo("POST", /\/rewind$/)).toHaveLength(0);
   });
 });
 

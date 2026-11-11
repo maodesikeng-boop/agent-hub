@@ -428,7 +428,7 @@ export function createLedgerMessages(
 
   /**
    * 二次 Esc 回退当前对话最后一轮被中断、已取消或正在停止中的用户消息：
-   * 按 (conversation_id, id) 索引倒序只取最近 REWIND_SCAN_LIMIT 条非 agent 消息（单轮几百步工具调用也是 O(1) 定位），
+   * 按非 agent 消息的 (conversation_id, id) 部分索引倒序取最近 REWIND_SCAN_LIMIT 条，跳过整轮工具日志，
    * 写入 meta.rewound = true 并推送 message.updated；已经回退过或没有符合条件的返回 null（幂等）。
    */
   const rewindLastUserMessage = (conversationId: ConversationId): Message | null => {

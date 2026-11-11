@@ -89,6 +89,9 @@ describe("ledger.rewindLastUserMessage", () => {
     // 快照重新读取仍然保持 rewound 标记
     const snapMsg = ledger.snapshot().conversations.find((c) => c.conversation.id === lin.conversationId)?.messages.find((m) => m.id === id);
     expect(snapMsg && isRewoundMessage(snapMsg)).toBe(true);
+    db.close();
+    open();
+    expect(isRewoundMessage(ledger.getMessage(id)!)).toBe(true);
   });
 
   it("正在停止（stopping）期间消息尚在 processing 时紧接着回退立即生效，后续驱动层上报 interrupted 不会抹掉 rewound", () => {
@@ -154,7 +157,7 @@ describe("ledger.rewindLastUserMessage", () => {
       "EXPLAIN QUERY PLAN SELECT * FROM messages WHERE conversation_id = ? AND sender != 'agent' ORDER BY id DESC LIMIT 20",
       lin.conversationId,
     );
-    expect(plan.map((p) => p.detail).join(" ")).toMatch(/USING INDEX messages_conversation/);
+    expect(plan.map((p) => p.detail).join(" ")).toMatch(/USING INDEX messages_conversation_non_agent/);
 
     const rewound = ledger.rewindLastUserMessage(lin.conversationId);
     expect(rewound?.id).toBe(id);
@@ -229,6 +232,10 @@ describe("POST /api/conversations/:id/rewind", () => {
       expect(again.statusCode).toBe(200);
       expect(again.json()).toEqual({ message: null });
 
+      for (const id of ["abc", "1.5", "0", "9007199254740992"]) {
+        const bad = await app.inject({ method: "POST", url: `/api/conversations/${id}/rewind`, headers });
+        expect(bad.statusCode).toBe(400);
+      }
       const missing = await app.inject({ method: "POST", url: API_PATHS.rewind(999), headers });
       expect(missing.statusCode).toBe(404);
     } finally {
