@@ -2194,4 +2194,74 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
       { eventType: "agent.text", label: "Writing", openToolIds: [] },
     ]);
   });
+
+  it("流式工具早捕获：GENERATING/PENDING 早期帧先发 agent.tool_preview，进入 ACTIVE 及重复 ACTIVE 刷新参数只发一次正式 agent.tool", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "GENERATING",
+                  tool_name: "read_file",
+                  tool_info: { parameters: {} },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "ACTIVE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "early-agy.ts" } },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "ACTIVE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "early-agy.ts", StartLine: 1 } },
+                },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 2,
+                  step_type: "tool",
+                  state: "DONE",
+                  tool_name: "read_file",
+                  tool_info: { parameters: { Path: "early-agy.ts" } },
+                },
+              },
+              { type: "text", stepId: 3, deltas: ["完成"] },
+            ],
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession({ role: "worker", workerId: 309 });
+    await t.driver.send(s.id, user(1, "流式早捕获"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool_preview").map((e) => ({ toolUseId: e.toolUseId, name: e.name, input: e.input }))).toEqual([
+      { toolUseId: "tool-1-2", name: "read_file", input: {} },
+    ]);
+    // 正式入库事件绝不因早期 GENERATING 或多次 ACTIVE 重复发射
+    expect(t.of("agent.tool")).toHaveLength(1);
+    expect(t.of("agent.tool")[0]).toMatchObject({
+      toolUseId: "tool-1-2",
+      name: "read_file",
+      input: { Path: "early-agy.ts" },
+    });
+    expect(t.of("agent.tool_result")).toHaveLength(1);
+  });
 });

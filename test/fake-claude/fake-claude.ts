@@ -41,8 +41,8 @@ export type FakeStep =
   | { text: string; deltas?: string[]; noUuid?: boolean; usage?: Record<string, number>; messageId?: string; parentToolUseId?: string }
   /** 一个 thinking 块（真实日志里 thinking 单独一个事件，内容常是空的）。 */
   | { thinking: true }
-  /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）。 */
-  | { tool: { name: string; input: unknown; result?: string; durationMs?: number } }
+  /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）；inputDeltas：开启 --include-partial-messages 时在完整 assistant 前先发 tool_use content_block_start 与 input_json_delta。 */
+  | { tool: { name: string; input: unknown; result?: string; durationMs?: number; inputDeltas?: string[]; parentToolUseId?: string } }
   | { rateLimit: Record<string, unknown> }
   | { raw: string }
   | { sleepMs: number }
@@ -540,7 +540,33 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
       assistant([{ type: "thinking", thinking: "", signature: "sig" }]);
     } else if ("tool" in step) {
       const id = `toolu_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
-      assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }]);
+      const parent = step.tool.parentToolUseId ?? null;
+      if (step.tool.inputDeltas && argv.includes("--include-partial-messages")) {
+        emit({
+          type: "stream_event",
+          event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: step.tool.name, input: {} } },
+          parent_tool_use_id: parent,
+          session_id: sessionId,
+          uuid: randomUUID(),
+        });
+        for (const partialJson of step.tool.inputDeltas) {
+          emit({
+            type: "stream_event",
+            event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: partialJson } },
+            parent_tool_use_id: parent,
+            session_id: sessionId,
+            uuid: randomUUID(),
+          });
+        }
+        emit({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 1 },
+          parent_tool_use_id: parent,
+          session_id: sessionId,
+          uuid: randomUUID(),
+        });
+      }
+      assistant([{ type: "tool_use", id, name: step.tool.name, input: step.tool.input }], true, { parentToolUseId: step.tool.parentToolUseId });
       if (step.tool.durationMs) {
         inTool = true;
         await sleep(step.tool.durationMs);
@@ -550,7 +576,7 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
       emit({
         type: "user",
         message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content: step.tool.result ?? "" }] },
-        parent_tool_use_id: null,
+        parent_tool_use_id: parent,
         session_id: sessionId,
         uuid: randomUUID(),
       });

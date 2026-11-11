@@ -347,6 +347,20 @@ export function isCodexToolItemType(type: unknown): type is CodexToolItemType {
   return typeof type === "string" && (CODEX_TOOL_ITEM_TYPES as readonly string[]).includes(type);
 }
 
+const APPLY_PATCH_FILE_RE = /^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\r?$/m;
+
+/**
+ * 从流式 apply_patch 输出（item/fileChange/outputDelta 累积前缀）中提取首个已换行的完整文件路径：
+ * 仅扫描最后一个 \n 之前的完整行，避免流式切片把半截路径提前发出。
+ */
+export function extractApplyPatchFilePath(patchText: string): string | null {
+  const lastNewline = patchText.lastIndexOf("\n");
+  if (lastNewline < 0) return null;
+  const match = APPLY_PATCH_FILE_RE.exec(patchText.slice(0, lastNewline));
+  const raw = match?.[1]?.trim();
+  return raw ? raw : null;
+}
+
 /** 从 fileChange item 或审批参数中提取所有涉及的文件路径（含改名的目标）。 */
 export function extractFileChangePaths(source: Record<string, unknown>): string[] {
   const paths: string[] = [];

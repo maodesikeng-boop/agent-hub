@@ -40,6 +40,7 @@ import {
 } from "../../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../../daemon/driver/persona-note.ts";
 import { signalChild } from "../../../daemon/driver/process.ts";
+import { pickToolStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   scanSecretGlobs,
@@ -1326,9 +1327,20 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         at,
       });
     } else {
+      const prevSig = toolStepSignature(tracked.name, tracked.input);
       tracked.name = name;
       tracked.input = input;
       if (toolCall.kind !== undefined) tracked.kind = toolCall.kind;
+      const isTerminal = toolCall.status === "completed" || toolCall.status === "failed";
+      if (!tracked.resultEmitted && !isTerminal && toolStepSignature(name, input) !== prevSig) {
+        this.emit(st.id, {
+          type: "agent.tool_preview",
+          toolUseId: toolCallId,
+          name,
+          input: pickToolStepInput(input),
+          at,
+        });
+      }
     }
 
     if (

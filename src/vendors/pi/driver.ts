@@ -43,7 +43,7 @@ import {
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
-import { lineUuid } from "../../daemon/driver/protocol.ts";
+import { StreamingToolPreviewTracker, lineUuid } from "../../daemon/driver/protocol.ts";
 import {
   scanSecretGlobs,
   spawnInWriteScope,
@@ -142,6 +142,8 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   emittedThinkingKeys: Set<string>;
   /** 当前轮已发出过 `agent.tool` 的 toolCallId。 */
   emittedToolIds: Set<string>;
+  /** 当前轮流式 `toolcall_start` / `toolcall_delta` 参数跟踪器（有界，闭合与轮末清空）。 */
+  toolPreviews: StreamingToolPreviewTracker;
   /** 当前轮已发出过 `agent.tool_result` 的 toolCallId。 */
   completedToolIds: Set<string>;
   /** 当前轮内是否已发出过 `context.compacted`（防止手动 `/compact` 在事件与回执重复记）。 */
@@ -193,6 +195,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       emittedTextKeys: new Set(),
       emittedThinkingKeys: new Set(),
       emittedToolIds: new Set(),
+      toolPreviews: new StreamingToolPreviewTracker(),
       completedToolIds: new Set(),
       compactedInTurn: false,
       turnTokenTotals: { ...ZERO_RAW_COUNTS },
@@ -403,6 +406,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.emittedTextKeys.clear();
     st.emittedThinkingKeys.clear();
     st.emittedToolIds.clear();
+    st.toolPreviews.clear();
     st.completedToolIds.clear();
     st.compactedInTurn = false;
     st.turnTokenTotals = { ...ZERO_RAW_COUNTS };
@@ -855,9 +859,52 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
       case "toolcall_start": {
         this.#flushBufferedTexts(st, at);
+        const block = extractPiPartialToolBlock(ev, contentIdx);
+        const toolUseId =
+          typeof ev.id === "string" && ev.id !== ""
+            ? ev.id
+            : typeof block?.id === "string" && block.id !== ""
+              ? block.id
+              : undefined;
+        const name =
+          typeof ev.toolName === "string" && ev.toolName !== ""
+            ? ev.toolName
+            : typeof ev.name === "string" && ev.name !== ""
+              ? ev.name
+              : typeof block?.name === "string" && block.name !== ""
+                ? block.name
+                : "";
+        const preview = st.toolPreviews.start(blockKey, {
+          toolUseId,
+          name,
+          initialInput: block?.arguments,
+          at,
+        });
+        if (preview) this.emit(st.id, preview);
+        return;
+      }
+      case "toolcall_delta": {
+        const block = extractPiPartialToolBlock(ev, contentIdx);
+        if (block) {
+          const objPreview = st.toolPreviews.updateObject(
+            blockKey,
+            {
+              toolUseId: typeof block.id === "string" && block.id !== "" ? block.id : undefined,
+              name: typeof block.name === "string" && block.name !== "" ? block.name : undefined,
+              input: block.arguments,
+            },
+            at,
+          );
+          if (objPreview) this.emit(st.id, objPreview);
+        }
+        if (typeof ev.delta === "string" && ev.delta !== "") {
+          const jsonPreview = st.toolPreviews.appendJsonDelta(blockKey, ev.delta, at);
+          if (jsonPreview) this.emit(st.id, jsonPreview);
+        }
         return;
       }
       case "toolcall_end": {
+        st.toolPreviews.end(blockKey);
         this.#flushBufferedTexts(st, at);
         const tc =
           typeof ev.toolCall === "object" && ev.toolCall !== null ? (ev.toolCall as Record<string, unknown>) : null;
@@ -880,6 +927,8 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const message =
       typeof obj.message === "object" && obj.message !== null ? (obj.message as Record<string, unknown>) : null;
     if (!message || message.role !== "assistant") return;
+
+    st.toolPreviews.clear();
 
     const msgSeq = st.assistantMsgSeq || 1;
     const blocks = extractPiAssistantBlocks(message);
@@ -1187,6 +1236,20 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
 export function createPiDriver(options: PiDriverOptions): PiDriver {
   return new PiDriver(options);
+}
+
+function extractPiPartialToolBlock(
+  ev: Record<string, unknown>,
+  contentIdx: number,
+): Record<string, unknown> | null {
+  const partial =
+    typeof ev.partial === "object" && ev.partial !== null ? (ev.partial as Record<string, unknown>) : null;
+  const content = Array.isArray(partial?.content) ? partial.content : null;
+  const raw = content?.[contentIdx];
+  if (typeof raw === "object" && raw !== null && (raw as Record<string, unknown>).type === "toolCall") {
+    return raw as Record<string, unknown>;
+  }
+  return null;
 }
 
 function procSessionPrefix(st: SessionState): string {

@@ -110,4 +110,47 @@ describe("thinking、工具调用、工具结果", () => {
     expect(subDeltas.map((e) => e.delta)).toEqual(["", "子任务", "输出"]);
     expect(h.of("agent.text").map((e) => e.text)).toEqual(["子任务输出", "我先查一下代码。"]);
   });
+
+  it("开启 --include-partial-messages：流式 tool_use 与 input_json_delta 提前发出 agent.tool_preview，完整 assistant 仍只发一次 agent.tool", async () => {
+    h = makeHarness({
+      script: {
+        defaultTurn: {
+          steps: [
+            {
+              tool: {
+                name: "Read",
+                input: { file_path: "/repo/src/main.ts", limit: 50 },
+                inputDeltas: ['{"file_path": "/repo/src/', 'main.ts", "limit": ', "50}"],
+                result: "ok",
+              },
+            },
+            {
+              tool: {
+                name: "Bash",
+                input: { command: "ls" },
+                inputDeltas: ['{"command": "ls"}'],
+                parentToolUseId: "toolu_parent",
+                result: "ok",
+              },
+            },
+            { text: "完成" },
+          ],
+        },
+      },
+    });
+    const s = h.addSession();
+    await h.driver.send(s.id, user(1, "查文件"));
+    await h.waitFor("turn.ended");
+
+    const mainPreviews = h.of("agent.tool_preview").filter((e) => e.parentToolUseId === undefined);
+    expect(mainPreviews.map((e) => ({ name: e.name, input: e.input }))).toEqual([
+      { name: "Read", input: {} },
+      { name: "Read", input: { file_path: "/repo/src/main.ts" } },
+    ]);
+    const subPreviews = h.of("agent.tool_preview").filter((e) => e.parentToolUseId === "toolu_parent");
+    expect(subPreviews).toHaveLength(1);
+    expect(subPreviews[0]).toMatchObject({ name: "Bash", parentToolUseId: "toolu_parent" });
+    // 正式入库事件仍各只有一条
+    expect(h.of("agent.tool")).toHaveLength(2);
+  });
 });

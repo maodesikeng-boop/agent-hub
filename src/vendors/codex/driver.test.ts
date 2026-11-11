@@ -58,6 +58,7 @@ export interface FakeCodexTurnScript {
     command?: string;
     cwd?: string;
     changes?: Array<{ path: string; kind?: { type: string; move_path?: string | null } }>;
+    outputDeltas?: string[];
     query?: string;
     server?: string;
     tool?: string;
@@ -238,6 +239,13 @@ function runTurn(turnId, threadId, turnScript, input) {
         method: "item/started",
         params: { threadId, turnId, item: { ...tool, status: "inProgress" } },
       });
+      for (const delta of tool.outputDeltas || []) {
+        send({
+          jsonrpc: "2.0",
+          method: \`item/\${tool.type}/outputDelta\`,
+          params: { threadId, turnId, itemId: tool.id, delta },
+        });
+      }
       if (!turnScript.toolsCompleteAfterRequests) completeTool(tool);
     }
   };
@@ -1892,5 +1900,39 @@ describe("找不到 codex 程序", () => {
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe("codex_not_found");
     expect((err as { retryable?: boolean }).retryable).toBe(true);
+  });
+});
+
+describe("CodexDriver 流式补丁文件路径早捕获", () => {
+  it("fileChange 的 item/started 尚无路径时，item/fileChange/outputDelta 流式补丁头提前发出 agent.tool_preview 且不重复发 agent.tool", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            tools: [
+              {
+                id: "fc-stream-1",
+                type: "fileChange",
+                changes: [],
+                outputDeltas: ["*** Begin Patch\n*** Update File: ", "src/codex-early.ts\n@@\n+const x = 1;\n"],
+              },
+            ],
+            messageDeltas: ["改好了"],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "改文件"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool")).toHaveLength(1);
+    expect(t.of("agent.tool_preview")).toEqual([
+      expect.objectContaining({
+        toolUseId: "fc-stream-1",
+        name: "fileChange",
+        input: { file_path: "src/codex-early.ts" },
+      }),
+    ]);
   });
 });

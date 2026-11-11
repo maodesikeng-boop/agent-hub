@@ -6,7 +6,7 @@ import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
-import { SNAPSHOT_RECENT_MESSAGES } from "../../shared/limits.ts";
+import { MIN_TOOL_STEP_VISIBLE_MS, SNAPSHOT_RECENT_MESSAGES } from "../../shared/limits.ts";
 import type { ConversationId, MessageId, MessageStatus, SessionId } from "../../shared/domain.ts";
 import { enqueueAction, getAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
@@ -41,6 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  ledger.close();
   db.close();
   rmSync(home, { recursive: true, force: true });
 });
@@ -388,12 +389,13 @@ describe("applyDriverEvent", () => {
       expect(last().step).toEqual({ type: "tool_use", name: "mcp__slack__search_messages", input: {} });
     });
 
-    it("工具结果回来：切回在思考；一轮结束清掉", () => {
+    it("工具结果回来：满最短驻留后切回在思考；一轮结束清掉", () => {
       const id = post();
       setSession({ status: "running" });
       ev({ type: "message.processing", at: 1, messageIds: [id] });
       ev(tool("a", "Read", { file_path: "/x/y.ts" }));
       expect(last().step).toEqual({ type: "tool_use", name: "Read", input: { file_path: "/x/y.ts" } });
+      now += MIN_TOOL_STEP_VISIBLE_MS;
       ev(result("a"));
       expect(last().step).toEqual({ type: "thinking" });
       ev({ type: "turn.ended", at: 5, ok: true, interrupted: false, messageIds: [id], durationMs: 1 });
@@ -408,6 +410,7 @@ describe("applyDriverEvent", () => {
       ev(tool("b", "Read", { file_path: "/r.ts" }));
       ev(result("b"));
       expect(last().step).toEqual({ type: "tool_use", name: "Bash", input: {} });
+      now += MIN_TOOL_STEP_VISIBLE_MS;
       ev(result("a"));
       expect(last().step).toEqual({ type: "thinking" });
     });
@@ -419,6 +422,7 @@ describe("applyDriverEvent", () => {
       ev(tool("a", "Bash"));
       ev(result("zzz"));
       expect(last().step).toEqual({ type: "tool_use", name: "Bash", input: {} });
+      now += MIN_TOOL_STEP_VISIBLE_MS;
       ev(result("a"));
       ev(result("a"));
       expect(last().step).toEqual({ type: "thinking" });
@@ -437,6 +441,7 @@ describe("applyDriverEvent", () => {
       expect(last().step).toEqual({ type: "tool_use", name: "Agent", input: {} });
       expect(sessionStates().slice(before).every((s) => s.step?.type === "tool_use" && s.step.name === "Agent")).toBe(true);
       expect(count("messages")).toBeGreaterThanOrEqual(3);
+      now += MIN_TOOL_STEP_VISIBLE_MS;
       ev(result("agent1"));
       expect(last().step).toEqual({ type: "thinking" });
     });

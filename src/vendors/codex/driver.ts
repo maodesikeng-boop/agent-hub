@@ -5,6 +5,8 @@
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
+  MAX_STREAMING_TOOL_BLOCKS,
+  MAX_STREAMING_TOOL_JSON_CHARS,
   type AgentSessionPatch,
   type AgentSessionRow,
   type DriverEvent,
@@ -51,6 +53,7 @@ import {
   decideFileChangeApproval,
   decideMcpElicitation,
   exhaustCodexRateLimitOnTurnError,
+  extractApplyPatchFilePath,
   extractFileChangePaths,
   isCodexToolItemType,
   parseCodexRateLimits,
@@ -100,6 +103,8 @@ interface Proc extends BaseProc<StartupOutcome> {
    * 不带路径（app-server generate-ts 的 FileChangeRequestApprovalParams），审批时按它判断；item/completed 时删掉。
    */
   fileChangePaths: Map<string, string[]>;
+  /** item/started 尚无路径的 fileChange 条目的有界补丁头缓冲（提取出首个路径或条目/轮次结束即删除）。 */
+  fileChangePatchBuffers: Map<string, string>;
   threadId: string | null;
   pendingRpcs: Map<number | string, RpcPhase>;
   /** 在等回执的 turn/steer：请求编号 → 那一行、原来的待发项和交回结果（#settleSteer）。进程退出时都按没收下处理。 */
@@ -344,6 +349,8 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.agentMessageBuffers.clear();
     st.emittedMessageIds.clear();
     st.emittedThinkingIds.clear();
+    proc.fileChangePaths.clear();
+    proc.fileChangePatchBuffers.clear();
     st.lastTurnResultUsage = null;
 
     const reqId = ++this.requestSeq;
@@ -468,6 +475,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       writeScope: files.writeScope ?? null,
       osSandboxed: launch.osSandboxed,
       fileChangePaths: new Map(),
+      fileChangePatchBuffers: new Map(),
       threadId: resume ? row.vendorSessionId : null,
       pendingRpcs: new Map(),
       steers: new Map(),
@@ -800,13 +808,45 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
 
+      case "item/fileChange/outputDelta": {
+        const itemId = typeof params.itemId === "string" && params.itemId !== "" ? params.itemId : null;
+        const delta = typeof params.delta === "string" ? params.delta : "";
+        if (!itemId || delta === "") return;
+        const knownPaths = proc.fileChangePaths.get(itemId);
+        if (!knownPaths || knownPaths.length > 0) return;
+        if (!proc.fileChangePatchBuffers.has(itemId) && proc.fileChangePatchBuffers.size >= MAX_STREAMING_TOOL_BLOCKS) {
+          const oldest = proc.fileChangePatchBuffers.keys().next().value;
+          if (oldest !== undefined) proc.fileChangePatchBuffers.delete(oldest);
+        }
+        const prev = proc.fileChangePatchBuffers.get(itemId) ?? "";
+        if (prev.length >= MAX_STREAMING_TOOL_JSON_CHARS) return;
+        const next = (prev + delta).slice(0, MAX_STREAMING_TOOL_JSON_CHARS);
+        proc.fileChangePatchBuffers.set(itemId, next);
+        const firstPath = extractApplyPatchFilePath(next);
+        if (firstPath !== null) {
+          proc.fileChangePaths.set(itemId, [firstPath]);
+          proc.fileChangePatchBuffers.delete(itemId);
+          this.emit(st.id, {
+            type: "agent.tool_preview",
+            toolUseId: itemId,
+            name: "fileChange",
+            input: { file_path: firstPath },
+            at,
+          });
+        }
+        return;
+      }
+
       case "item/completed": {
         const item =
           typeof params.item === "object" && params.item !== null
             ? (params.item as Record<string, unknown>)
             : null;
         if (!item) return;
-        if (item.type === "fileChange" && typeof item.id === "string") proc.fileChangePaths.delete(item.id);
+        if (item.type === "fileChange" && typeof item.id === "string") {
+          proc.fileChangePaths.delete(item.id);
+          proc.fileChangePatchBuffers.delete(item.id);
+        }
         if (item.type === "agentMessage") {
           const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
           const buffered = st.agentMessageBuffers.get(itemId) ?? "";
@@ -888,6 +928,8 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.agentMessageBuffers.clear();
     st.emittedMessageIds.clear();
     st.emittedThinkingIds.clear();
+    proc.fileChangePaths.clear();
+    proc.fileChangePatchBuffers.clear();
 
     // 这一轮结算：开这一轮的那条 + steer 进来、读到了的。steer 了没读到的：codex 不会再处理，停止的标已取消、否则收回重发；
     // steer 回执还没到的留着，回执到了退回待发队列（见 turn_steer）
@@ -1028,6 +1070,8 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.agentMessageBuffers.clear();
       st.emittedMessageIds.clear();
       st.emittedThinkingIds.clear();
+      proc.fileChangePaths.clear();
+      proc.fileChangePatchBuffers.clear();
       const steers = [...proc.steers.values()];
       proc.steers.clear();
       for (const steer of steers) this.#settleSteer(st, steer, false);

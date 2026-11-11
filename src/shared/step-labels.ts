@@ -19,6 +19,17 @@ export const STEP_TEXT = {
   rateLimited: "Usage limit reached",
 } as const;
 
+/** tool_use 的 input 里“在做什么”状态文案要用的字段名（文件路径与 skill 名）。 */
+export const STEP_INPUT_KEYS = [
+  "skill",
+  "file_path",
+  "notebook_path",
+  "AbsolutePath",
+  "TargetFile",
+  "Path",
+  "path",
+] as const;
+
 const fileName = (path: string | undefined): string | null => {
   if (path === undefined) return null;
   const name = path.split(/[\\/]/).findLast((part) => part !== "");
