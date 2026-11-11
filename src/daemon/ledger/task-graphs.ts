@@ -1649,7 +1649,7 @@ export function createLedgerTaskGraphs(
   /**
    * Worker 收工（hub worker end 或归档收工）：
    * - 仅当 !incomplete 且最近一轮汇报状态为“做完了”时，置为 done 并自动解锁下游；
-   * - 传了 --incomplete（如 100K 上下文换人接力）或未汇报“做完了”即收工时，置为 attention 且清空 active_worker_id，等待接力 Worker 重绑。
+   * - 传了 --incomplete（如对话超过 WORKER_SEND_MAX_TOKENS 的 200K 上限换人接力）或未汇报“做完了”即收工时，置为 attention 且清空 active_worker_id，等待接力 Worker 重绑。
    */
   const onWorkerEndedIn = (
     p: Pending,
