@@ -75,8 +75,11 @@
 ### 3.3 系统提示词与仓库指令文件
 
 - `@deepseek-ai/dsh-system-prompt`（`lib/index.js:160-184, 235-244`）会对 `personaPrefix` / `personaSuffix` 做严格的 `{{variable}}` 模板插值校验，遇到未知双花括号（例如代码片段或 Markdown 示例中的 `{{foo}}`）会直接抛致命错误终止启动。
-- 因此**不通过 `--patch` 的 `system-prompt.config.personaSuffix` 注入 Fusa 动态提示词**，而是统一使用 `createAcpDriver` 的 `systemPromptInjection: "first_turn_new_session"`（新会话首轮前置 `<system_instructions>` XML 块，后续 `persona` 变更注入增量说明）。
-- `@deepseek-ai/dsh-agent-instructions` 原生自动发现工作区与全局的 `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md` 及 `.agents/skills`。
+- 2026-11-11 起（docs/system-prompt-channels.md 第 3 节）：**通过 `--patch` 的 `system-prompt.config.personaSuffix` 注入 Fusa 提示词**（spec 的 `capabilities.systemPrompt: "resident"`）。
+  它进 system 消息，dsh 压缩只换掉历史、不动它（拼进首条消息的旧做法压缩后会丢）；`{{` 在两个 `{` 之间插零宽空格避开模板插值；
+  `--patch` 整行替换 config，默认的 `personaPrefix` 照抄（`DEEPSEEK_DEFAULT_PERSONA_PREFIX`）。性格设定改了仍按版本号在下一条消息前加说明。
+- `@deepseek-ai/dsh-agent-instructions` 原生自动发现工作区与全局的 `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md` 及 `.agents/skills`；
+  它们是普通 user 消息（会被压缩），所以不拿来放 Fusa 提示词。
 
 ### 3.4 模型与思考程度（`configOptions`）
 

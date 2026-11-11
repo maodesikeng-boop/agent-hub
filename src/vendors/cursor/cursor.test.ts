@@ -107,6 +107,8 @@ describe("cursor spec 与 paths 声明边界", () => {
       backgroundWake: false,
       readonly: "os_sandbox",
       ownSandboxOffArgs: ["--sandbox", "disabled"],
+      // ACP 下没有常驻入口（只读工作目录里的规则），拼进首条消息、压缩后重新拼
+      systemPrompt: "first_message",
     });
     expect(cursorSpec.models.shortName?.("auto")).toBe("Auto");
     expect(cursorSpec.models.shortName?.("default[]")).toBe("Auto");

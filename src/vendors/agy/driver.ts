@@ -38,8 +38,8 @@ import {
   detectAgyArgsConflict,
   finishAgyUsage,
   observeAgyUsage,
-  readSystemInstructions,
 } from "./protocol.ts";
+import { writeAgyPromptRules } from "./rules.ts";
 import {
   BaseSessionDriver,
   NO_NOTES,
@@ -82,9 +82,6 @@ interface Batch extends BaseBatch {
 type AgyStartupOutcome = StartupOutcome<ReturnType<typeof detectAgyArgsConflict>>;
 
 interface Proc extends BaseProc<AgyStartupOutcome> {
-  /** 新进程第一条消息前面带的系统指令（agy 没有系统提示词参数），里面的性格设定是 personaRevision 那一版。 */
-  systemPrompt: string | null;
-  promptSent: boolean;
   /** 只读 Worker 的统一定义和这次启动时问到的连接器清单（兜底检查 checkAgyConnectorCall 用）；不是只读 null。 */
   readonly: { policy: ReadonlyPolicy; catalog: AgyConnectorCatalog } | null;
   /** 只读 Worker 的会话私有临时目录（进程退出时删）；不是只读 null。 */
@@ -302,16 +299,14 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     };
   }
 
-  /** 为指定进程构造要写入 stdin 的 NDJSON 行（若为该进程第一条消息，则在 prefixes 最前面注入系统提示词）。 */
-  #buildLineForProc(proc: Proc, batch: Batch): string {
+  /** 为指定进程构造要写入 stdin 的 NDJSON 行。产品提示词不拼进消息：起进程时写成规则目录走 agy 的系统提示词（rules.ts）。 */
+  #buildLineForProc(batch: Batch): string {
     if (batch.rawLine !== undefined) return batch.rawLine;
-    const includePrompt = !proc.promptSent && proc.systemPrompt !== null;
-    const prefixes = includePrompt ? [proc.systemPrompt!, ...batch.prefixes] : batch.prefixes;
-    return buildAgyUserLine(batch.text, prefixes, this.composer.buildUserContent);
+    return buildAgyUserLine(batch.text, batch.prefixes, this.composer.buildUserContent);
   }
 
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
-    const line = this.#buildLineForProc(proc, batch);
+    const line = this.#buildLineForProc(batch);
     const problem = checkAgyUserLine(line);
     if (problem) {
       this.invalidInput(st, problem, batch.messageIds);
@@ -320,7 +315,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
     this.clearTimer(st, "idleTimer");
     this.#resetTurnState(st, batch);
-    proc.promptSent = true;
     await new Promise<void>((resolve) => {
       proc.child.stdin.write(line + "\n", (err) => {
         if (!err) this.markDelivered(st, batch);
@@ -367,8 +361,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           }
           this.clearTimer(st, "idleTimer");
           st.inFlight = [batch];
-          const line = this.#buildLineForProc(proc, batch);
-          proc.promptSent = true;
+          const line = this.#buildLineForProc(batch);
           proc.child.stdin.write(line + "\n");
           this.armStartTimer(st, proc);
           const outcome = await proc.ready;
@@ -423,7 +416,8 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
-    const systemPrompt = readSystemInstructions(files.promptFile);
+    // 产品提示词写成规则目录、--add-dir 进 agy 的系统提示词（<user_rules>），压缩后还在；每次起进程按最新的 prompt.md 重写
+    const promptRulesDir = writeAgyPromptRules(files.promptFile);
 
     const readonlyPolicy: ReadonlyPolicy | undefined =
       files.readonly === undefined
@@ -444,6 +438,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       effectiveFiles,
       resume,
       readonlyPolicy === undefined || catalog === null ? undefined : agyConnectorRules(readonlyPolicy, catalog),
+      promptRulesDir,
     );
     let tmpDir: string | null = null;
     let launch: ScopedSpawn;
@@ -479,8 +474,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const { baseProc, resolveExited } = this.createBaseProc<AgyStartupOutcome>(child, resume, row, files);
     const proc: Proc = {
       ...baseProc,
-      systemPrompt,
-      promptSent: false,
       readonly: readonlyPolicy === undefined || catalog === null ? null : { policy: readonlyPolicy, catalog },
       tmpDir,
       fallbackScope: readonlyPolicy === undefined && !launch.osSandboxed ? (files.writeScope ?? null) : null,
