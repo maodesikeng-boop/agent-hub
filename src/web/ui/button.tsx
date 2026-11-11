@@ -12,6 +12,7 @@ export const buttonVariants = cva(
       variant: {
         // 主按钮：一屏最多一个；不能点时换成中性灰，不显示半透明的主色；悬停变深一点（brightness，对比度只升不降）
         default: "bg-primary text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground disabled:opacity-100",
+        destructive: "bg-danger text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground disabled:opacity-100",
         outline: "border border-border bg-background hover:bg-accent",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "text-muted-foreground hover:bg-accent hover:text-foreground",

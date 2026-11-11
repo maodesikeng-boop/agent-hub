@@ -26,6 +26,24 @@ export function applyUiScale(scale: UiScale): void {
   document.documentElement.dataset.uiScale = scale;
 }
 
+const listeners = new Set<() => void>();
+
+/** 订阅界面大小变化（含同页切换与其他标签页 storage 事件）。 */
+export function subscribeUiScale(listener: () => void): () => void {
+  listeners.add(listener);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === null || e.key === UI_SCALE_KEY) {
+      applyUiScale(readUiScale());
+      listener();
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 /** 换档：马上生效并记住（存不下也照样生效）。 */
 export function saveUiScale(scale: UiScale): void {
   applyUiScale(scale);
@@ -34,4 +52,5 @@ export function saveUiScale(scale: UiScale): void {
   } catch {
     // 隐私模式等存不了：这次照样生效
   }
+  for (const listener of listeners) listener();
 }

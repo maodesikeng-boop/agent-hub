@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAgentVendor, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
+import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { useHubQueryClient } from "./query-client.ts";
@@ -286,6 +287,37 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const openNewPm = useCallback(() => setCreating(true), []);
   const refreshFleet = useCallback(() => void fleet.refresh(), [fleet.refresh]);
+  const deviceSettingsRef = useRef<DeviceSettings | null>(null);
+  const deviceSettings = useMemo<DeviceSettings | null>(() => {
+    if (!fleet.managed) {
+      deviceSettingsRef.current = null;
+      return null;
+    }
+    const next: DeviceSettings = {
+      devices: fleet.devices,
+      ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
+      ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
+      ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
+      onChanged: refreshFleet,
+    };
+    const prev = deviceSettingsRef.current;
+    if (
+      prev !== null &&
+      prev.tunnel === next.tunnel &&
+      prev.publicEntry === next.publicEntry &&
+      prev.repoDir === next.repoDir &&
+      prev.onChanged === next.onChanged &&
+      prev.devices.length === next.devices.length &&
+      next.devices.every((d, i) => {
+        const o = prev.devices[i]!;
+        return d.key === o.key && d.info === o.info && d.status === o.status && (d.status !== "offline" || d.lastOnlineAt === o.lastOnlineAt);
+      })
+    ) {
+      return prev;
+    }
+    deviceSettingsRef.current = next;
+    return next;
+  }, [fleet.managed, fleet.devices, local.state.tunnel, local.state.publicEntry, local.state.server.repoDir, refreshFleet]);
   const created = useCallback(
     (device: string, conversationId: ConversationId) => {
       setCreating(false);
@@ -416,6 +448,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       compact,
       created,
       creating,
+      deviceSettings,
       drafts,
       focus,
       groups,

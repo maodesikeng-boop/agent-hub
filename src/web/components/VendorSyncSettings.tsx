@@ -1,43 +1,12 @@
 // 全局设置 → 通用 → 跨厂商连接器、MCP 与技能并集同步入口及预览确认弹窗（docs/ui-standard.md 第 10 条）。
-// 完全由接口返回的数据驱动渲染，零硬编码单家厂商分支、零符号拼接（不用 · / | / /）。
-import { useMutation } from "@tanstack/react-query";
+// 完全由接口返回的数据驱动渲染，零硬编码单家厂商分支、零符号拼接（不用 · / | / /）；状态与请求由 settings-model.ts 统一管理。
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
-import type {
-  VendorSyncApplyResponse,
-  VendorSyncItemVendorStatus,
-  VendorSyncPreviewResponse,
-  VendorSyncVendorBadge,
-} from "../../shared/index.ts";
-import { useClient } from "../device-scope.tsx";
-import { errorText, type ErrorLike } from "../format.ts";
-import { useHubQueryClient } from "../query-client.ts";
+import type { VendorSyncVendorBadge } from "../../shared/index.ts";
+import { VENDOR_STATUS_LABELS, useVendorSyncSetting } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-
-const VENDOR_STATUS_LABELS: Readonly<Record<VendorSyncItemVendorStatus, string>> = {
-  present: "Synced",
-  will_add: "Add",
-  kept: "Kept existing",
-  mcp_remote: "mcp-remote",
-  native: "Native",
-  symlink: "Linked",
-  will_link: "Link",
-  conflict: "Private preserved",
-};
-
-function formatApplySummary(result: VendorSyncApplyResponse): string {
-  const parts: string[] = [];
-  if (result.syncedMcpCount > 0) parts.push(`${result.syncedMcpCount} MCP synced`);
-  if (result.removedMcpCount > 0) parts.push(`${result.removedMcpCount} MCP removed`);
-  if (result.linkedSkillCount > 0) parts.push(`${result.linkedSkillCount} skills linked`);
-  if (result.unlinkedSkillCount > 0) parts.push(`${result.unlinkedSkillCount} skills unlinked`);
-  if (result.preservedPrivateSkillCount > 0) parts.push(`${result.preservedPrivateSkillCount} private skills kept`);
-  if (parts.length === 0) return "All providers are already up to date";
-  return parts.join(", ");
-}
 
 function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) {
   if (badges.length === 0) return null;
@@ -57,110 +26,39 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
 }
 
 export function VendorSyncSettings() {
-  const qc = useHubQueryClient();
-  const client = useClient();
-  const [preview, setPreview] = useState<VendorSyncPreviewResponse | null>(null);
-  const [checkedMcp, setCheckedMcp] = useState<ReadonlySet<string>>(() => new Set());
-  const [checkedSkills, setCheckedSkills] = useState<ReadonlySet<string>>(() => new Set());
-  const [lastSummary, setLastSummary] = useState<string | null>(null);
-
-  const scanMutation = useMutation(
-    {
-      mutationFn: () => client.fetchVendorSyncPreview(),
-      onSuccess: (data) => {
-        setCheckedMcp(new Set(data.mcpServers.map((item) => item.key)));
-        setCheckedSkills(new Set(data.skills.map((item) => item.key)));
-        applyMutation.reset();
-        setPreview(data);
-      },
-    },
-    qc,
-  );
-
-  const applyMutation = useMutation(
-    {
-      mutationFn: () => {
-        if (!preview) throw new Error("No preview loaded");
-        const selectedMcpKeys: string[] = [];
-        const removeMcpKeys: string[] = [];
-        for (const item of preview.mcpServers) {
-          if (checkedMcp.has(item.key)) {
-            selectedMcpKeys.push(item.key);
-          } else {
-            removeMcpKeys.push(item.key);
-          }
-        }
-        const selectedSkillKeys: string[] = [];
-        const removeSkillKeys: string[] = [];
-        for (const item of preview.skills) {
-          if (checkedSkills.has(item.key)) {
-            selectedSkillKeys.push(item.key);
-          } else {
-            removeSkillKeys.push(item.key);
-          }
-        }
-        return client.postVendorSyncApply({
-          selectedMcpKeys,
-          removeMcpKeys,
-          selectedSkillKeys,
-          removeSkillKeys,
-        });
-      },
-      onSuccess: (result) => {
-        setLastSummary(formatApplySummary(result));
-        setPreview(null);
-      },
-    },
-    qc,
-  );
-
-  const scanError: ErrorLike | null = scanMutation.error ? errorText(scanMutation.error) : null;
-  const applyError: ErrorLike | null = applyMutation.error ? errorText(applyMutation.error) : null;
-
-  const toggleMcp = (key: string, nextChecked: boolean) => {
-    setCheckedMcp((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  };
-
-  const toggleSkill = (key: string, nextChecked: boolean) => {
-    setCheckedSkills((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  };
-
-  const hasSyncableItems = preview !== null && (preview.mcpServers.length > 0 || preview.skills.length > 0);
-  const isEmptyPreview =
-    preview !== null &&
-    preview.mcpServers.length === 0 &&
-    preview.skills.length === 0 &&
-    preview.nonSyncable.length === 0;
+  const {
+    preview,
+    checkedMcp,
+    checkedSkills,
+    summary,
+    scanning,
+    applying,
+    scanError,
+    applyError,
+    hasSyncableItems,
+    isEmptyPreview,
+    previewVendorSync,
+    applyVendorSync,
+    toggleMcp,
+    toggleSkill,
+    closePreview,
+  } = useVendorSyncSetting();
 
   return (
     <>
       <SettingsGroup title="Integrations">
-        <SettingsRow
-          label="Vendor sync"
-          detail={lastSummary ?? "Merge MCP servers and skills across installed providers"}
-          error={scanError}
-        >
+        <SettingsRow label="Vendor sync" detail={summary} error={scanError}>
           {(id) => (
             <Button
               id={id}
               variant="outline"
               size="sm"
-              aria-label={scanMutation.isPending ? "Scanning…" : "Scan…"}
-              disabled={scanMutation.isPending}
-              onClick={() => scanMutation.mutate()}
+              aria-label={scanning ? "Scanning…" : "Scan…"}
+              disabled={scanning}
+              onClick={previewVendorSync}
             >
-              {scanMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {scanMutation.isPending ? "Scanning…" : "Scan…"}
+              {scanning && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {scanning ? "Scanning…" : "Scan…"}
             </Button>
           )}
         </SettingsRow>
@@ -169,7 +67,7 @@ export function VendorSyncSettings() {
       <Dialog
         open={preview !== null}
         onOpenChange={(open) => {
-          if (!open && !applyMutation.isPending) setPreview(null);
+          if (!open) closePreview();
         }}
       >
         <DialogContent title="Sync preview">
@@ -213,7 +111,7 @@ export function VendorSyncSettings() {
                           id={id}
                           aria-label={item.name}
                           checked={isChecked}
-                          disabled={applyMutation.isPending}
+                          disabled={applying}
                           onCheckedChange={(on) => toggleMcp(item.key, on)}
                         />
                       )}
@@ -246,7 +144,7 @@ export function VendorSyncSettings() {
                           id={id}
                           aria-label={item.name}
                           checked={isChecked}
-                          disabled={applyMutation.isPending}
+                          disabled={applying}
                           onCheckedChange={(on) => toggleSkill(item.key, on)}
                         />
                       )}
@@ -284,20 +182,11 @@ export function VendorSyncSettings() {
           )}
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={applyMutation.isPending}
-              onClick={() => setPreview(null)}
-            >
+            <Button type="button" variant="ghost" disabled={applying} onClick={closePreview}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              disabled={applyMutation.isPending || !hasSyncableItems}
-              onClick={() => applyMutation.mutate()}
-            >
-              {applyMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+            <Button type="button" disabled={applying || !hasSyncableItems} onClick={applyVendorSync}>
+              {applying && <Loader2 className="animate-spin" aria-hidden="true" />}
               Sync
             </Button>
           </DialogFooter>
