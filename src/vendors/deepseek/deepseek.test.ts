@@ -956,6 +956,62 @@ rl.on("line", (line) => {
     expect(matchesDeepSeekStaleProcess("/usr/local/bin/dsh --profile acp", crashRow, "/usr/local/bin/dsh")).toBe(false);
     expect(matchesDeepSeekStaleProcess("node /opt/homebrew/bin/dsh --profile acp --patch ./mine.yml", crashRow, "/opt/homebrew/bin/dsh")).toBe(false);
   });
+
+  it("ACP session/new 动态注入 $DSH_HOME/mcp.json 中的 MCP 服务，只读 Worker 强制置空 mcpServers", async () => {
+    const h = track(
+      makeDeepSeekHarness({
+        script: {
+          resumeCapability: false,
+          turns: [{ textChunks: ["normal ok"] }, { textChunks: ["readonly ok"] }],
+        },
+      }),
+    );
+    writeFileSync(
+      join(h.dshHome, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          filesystem: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            env: { TOKEN: "sk-secret" },
+          },
+          remote_http: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+            headers: { Authorization: "Bearer tok-123" },
+          },
+        },
+      }),
+      { mode: 0o600 },
+    );
+
+    const normalRow = h.addSession();
+    await h.driver.send(normalRow.id, { messageIds: [40 as never], source: "user", text: "普通会话" });
+    await h.waitFor("turn.ended");
+
+    h.setReadonly(buildReadonlyPolicy({ homeDir: homedir(), stateDir: join(h.dir, "ro-mcp-state") }));
+    const roRow = h.addSession();
+    await h.driver.send(roRow.id, { messageIds: [41 as never], source: "user", text: "只读会话" });
+    await h.waitFor("turn.ended", undefined, 2);
+
+    const sessionNewLogs = h.logs().filter((e) => e.event === "session/new");
+    expect(sessionNewLogs).toHaveLength(2);
+    expect((sessionNewLogs[0]!.params as { mcpServers?: unknown }).mcpServers).toEqual([
+      {
+        name: "filesystem",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+        env: [{ name: "TOKEN", value: "sk-secret" }],
+      },
+      {
+        type: "http",
+        name: "remote_http",
+        url: "https://mcp.example.com/mcp",
+        headers: [{ name: "Authorization", value: "Bearer tok-123" }],
+      },
+    ]);
+    expect((sessionNewLogs[1]!.params as { mcpServers?: unknown }).mcpServers).toEqual([]);
+  });
 });
 
 describe("deepseek 零子进程本地凭据与模型目录探测（catalog.ts + daemon.ts）", () => {

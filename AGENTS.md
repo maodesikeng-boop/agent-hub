@@ -39,8 +39,10 @@
 - `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`）。
 - `web-push`：手机推送（`push/sender.ts`、`push/vapid.ts`）。
 - `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
+- `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。
+- `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
-- 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库。
+- 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。
 
 **前端（`src/web`）**
 - `react` / `react-dom`：界面。`vite` + `@vitejs/plugin-react`：构建（`vite.config.ts`）。
