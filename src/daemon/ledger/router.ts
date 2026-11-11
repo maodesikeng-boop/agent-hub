@@ -6,6 +6,7 @@ import type {
   ResolveRouterItemRequest,
   ResolveRouterItemResponse,
   RouterCommandsPage,
+  RouterItemsKind,
   RouterItemsPage,
   UpdateRouterSettingsRequest,
 } from "../../shared/api.ts";
@@ -30,7 +31,9 @@ import {
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_ARCHIVED_PAGE_SIZE,
   ROUTER_AUDIT_LOG_MAX_ROWS,
+  ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMANDS_RETENTION_MAX,
+  ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_CONTEXT_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_ITEM_RETENTION_MS,
@@ -48,6 +51,8 @@ import {
   ROUTER_REPORT_LINKS_MAX,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+  ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+  ROUTER_STREAM_PAGE_MAX_BYTES,
   ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
@@ -133,6 +138,38 @@ const sliceChars = (s: string, max: number): string => {
   const chars = [...s];
   return chars.length <= max ? s : `${chars.slice(0, Math.max(0, max - 1)).join("")}…`;
 };
+
+/** 分页响应外壳（{"items":[…],"nextCursor":"<createdAt>:<id>","hasMore":true}）预留的字节，单页字节上限里扣掉。 */
+const PAGE_ENVELOPE_BYTES = 128;
+
+/**
+ * 从新到旧累加每条的 JSON 字节，加上下一条会超过 maxBytes 就停；至少留 1 条（单条本身有各自字段的上限）。
+ * 快照近窗和历史分页共用（docs/router-workbench-v2-design.md 第 5.2 节）。
+ */
+function takeWithinBytes<T>(items: readonly T[], maxBytes: number): T[] {
+  let used = 2; // "[]"
+  for (let i = 0; i < items.length; i++) {
+    const bytes = Buffer.byteLength(JSON.stringify(items[i])) + (i > 0 ? 1 : 0);
+    if (i > 0 && used + bytes > maxBytes) return items.slice(0, i);
+    used += bytes;
+  }
+  return items.slice();
+}
+
+/**
+ * 一页历史：rows 是按 created_at DESC, id DESC 多取 1 条的结果。条数和 ROUTER_STREAM_PAGE_MAX_BYTES 哪个先到按哪个截，
+ * 提前截了也算还有更多，游标指向最后一条已给出的记录。
+ */
+function pageOf<T extends { createdAt: number; id: number }>(
+  rows: readonly T[],
+  take: number,
+): { kept: T[]; nextCursor: string | null; hasMore: boolean } {
+  const page = rows.slice(0, take);
+  const kept = takeWithinBytes(page, ROUTER_STREAM_PAGE_MAX_BYTES - PAGE_ENVELOPE_BYTES);
+  const hasMore = rows.length > take || kept.length < page.length;
+  const last = kept[kept.length - 1];
+  return { kept, nextCursor: hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null, hasMore };
+}
 
 const routerAskSchema = z.object({
   question: z.string(),
@@ -718,15 +755,22 @@ export function createLedgerRouter(
       return settings;
     });
 
-  /** GET /api/router/items：按 <createdAt>:<id>（或兼容纯 <id>）游标倒序分页读取已归档/已决历史事项。 */
-  const listItems = (beforeCursor?: string, limit?: number): RouterItemsPage => {
+  /**
+   * GET /api/router/items：按 <createdAt>:<id>（或兼容纯 <id>）游标倒序分页。
+   * 不带 kind：已拍板、已归档的历史（旧口径）；kind=report：不分状态只回简报（v2 时间流翻简报历史）。
+   * 单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。
+   */
+  const listItems = (beforeCursor?: string, limit?: number, kind?: RouterItemsKind): RouterItemsPage => {
+    if (kind !== undefined && kind !== "report") throw fail("invalid", "kind 只能是 report");
+    // 固定的两段 SQL 条件，不拼任何外部输入
+    const scope = kind === "report" ? "kind = 'report'" : "status IN ('resolved', 'superseded', 'archived')";
     const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
     let rows: RouterItemDbRow[];
     const trimmed = beforeCursor?.trim() ?? "";
     if (trimmed === "") {
       rows = db.all<RouterItemDbRow>(
         `SELECT * FROM router_items
-          WHERE status IN ('resolved', 'superseded', 'archived')
+          WHERE ${scope}
           ORDER BY created_at DESC, id DESC
           LIMIT ?`,
         take + 1,
@@ -741,7 +785,7 @@ export function createLedgerRouter(
         pivot !== undefined
           ? db.all<RouterItemDbRow>(
               `SELECT * FROM router_items
-                WHERE status IN ('resolved', 'superseded', 'archived')
+                WHERE ${scope}
                   AND (created_at < ? OR (created_at = ? AND id < ?))
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?`,
@@ -752,7 +796,7 @@ export function createLedgerRouter(
             )
           : db.all<RouterItemDbRow>(
               `SELECT * FROM router_items
-                WHERE status IN ('resolved', 'superseded', 'archived') AND id < ?
+                WHERE ${scope} AND id < ?
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?`,
               cursorId,
@@ -765,7 +809,7 @@ export function createLedgerRouter(
       const cursorId = Number(match[2]);
       rows = db.all<RouterItemDbRow>(
         `SELECT * FROM router_items
-          WHERE status IN ('resolved', 'superseded', 'archived')
+          WHERE ${scope}
             AND (created_at < ? OR (created_at = ? AND id < ?))
           ORDER BY created_at DESC, id DESC
           LIMIT ?`,
@@ -775,11 +819,8 @@ export function createLedgerRouter(
         take + 1,
       );
     }
-    const hasMore = rows.length > take;
-    const items = rows.slice(0, take).map(toRouterItem);
-    const last = items[items.length - 1];
-    const nextCursor = hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null;
-    return { items, nextCursor, hasMore };
+    const { kept, nextCursor, hasMore } = pageOf(rows.map(toRouterItem), take);
+    return { items: kept, nextCursor, hasMore };
   };
 
   const getSettings = (): RouterSettings => {
@@ -793,15 +834,32 @@ export function createLedgerRouter(
     };
   };
 
-  /** 供 ledger.snapshot() 内嵌的首屏轻量切片（严格走部分索引与常量截断）。 */
+  /**
+   * 供 ledger.snapshot() 内嵌的首屏轻量切片（docs/router-workbench-v2-design.md 第 3.2 节第 6 项），每类各有条数和字节上限：
+   * - 待拍板项：全部 pending，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX；条件原样写出部分索引 router_items_active 的 WHERE，SQLite 才肯用它；
+   * - 简报：不分已读未读取最近 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条，再按 ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 从新到旧截；
+   * - 指令：最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条，再按 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES 从新到旧截。
+   * 简报再多也挤不掉待拍板项；读过的简报留在近窗里。
+   */
   const snapshotSlice = (): RouterSlice => {
     const settings = getSettings();
-    const activeRows = db.all<RouterItemDbRow>(
+    const pendingRows = db.all<RouterItemDbRow>(
       `SELECT * FROM router_items
-        WHERE status IN ('pending', 'unread')
+        WHERE status IN ('pending', 'unread') AND status = 'pending'
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
       ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+    );
+    const briefingRows = db.all<RouterItemDbRow>(
+      `SELECT * FROM router_items
+        WHERE kind = 'report'
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
+      ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+    );
+    const briefings = takeWithinBytes(briefingRows.map(toRouterItem), ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES);
+    const items = [...pendingRows.map(toRouterItem), ...briefings].sort(
+      (a, b) => b.createdAt - a.createdAt || b.id - a.id,
     );
     const noteRows = db.all<RouterPmNoteDbRow>(
       `SELECT n.* FROM router_pm_notes n
@@ -817,9 +875,9 @@ export function createLedgerRouter(
     );
     return {
       settings,
-      items: activeRows.map(toRouterItem),
+      items,
       notes: noteRows.map((n) => ({ pmId: n.pm_id, text: n.text, updatedAt: n.updated_at })),
-      commands: commandRows.map(toRouterCommand),
+      commands: takeWithinBytes(commandRows.map(toRouterCommand), ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES),
     };
   };
 
@@ -1156,7 +1214,7 @@ export function createLedgerRouter(
     return row === undefined ? null : toRouterCommand(row);
   };
 
-  /** GET /api/router/commands：按 <createdAt>:<id>（或纯 <id>）游标倒序分页读取历史指令。 */
+  /** GET /api/router/commands：按 <createdAt>:<id>（或纯 <id>）游标倒序分页读取历史指令，单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。 */
   const listCommands = (beforeCursor?: string, limit?: number): RouterCommandsPage => {
     const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
     let rows: RouterCommandDbRow[];
@@ -1210,11 +1268,8 @@ export function createLedgerRouter(
         take + 1,
       );
     }
-    const hasMore = rows.length > take;
-    const commands = rows.slice(0, take).map(toRouterCommand);
-    const last = commands[commands.length - 1];
-    const nextCursor = hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null;
-    return { commands, nextCursor, hasMore };
+    const { kept, nextCursor, hasMore } = pageOf(rows.map(toRouterCommand), take);
+    return { commands: kept, nextCursor, hasMore };
   };
 
   /** 为轨道 B 单轮只读规划创建隔离的临时 assistant 会话（不向网页推 session.created）。 */

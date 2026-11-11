@@ -373,9 +373,9 @@ export class FakeLedger {
     return this.routerDigestValue;
   }
 
-  listRouterItems(beforeCursor?: string, limit?: number): RouterItemsPage {
+  listRouterItems(beforeCursor?: string, limit?: number, kind?: "report"): RouterItemsPage {
     this.check();
-    this.routerCalls.push({ call: "listItems", args: [beforeCursor, limit] });
+    this.routerCalls.push({ call: "listItems", args: kind === undefined ? [beforeCursor, limit] : [beforeCursor, limit, kind] });
     return this.routerItemsPageValue;
   }
 
@@ -547,7 +547,7 @@ export class FakeLedger {
         this.scheduleCalls.push({ call: "remove", args: [id] });
       },
       getRouterDigest: () => this.getRouterDigest(),
-      listRouterItems: (c, l) => this.listRouterItems(c, l),
+      listRouterItems: (c, l, k) => this.listRouterItems(c, l, k),
       resolveRouterItem: (id, i) => this.resolveRouterItem(id, i),
       archiveAllRouterReports: () => this.archiveAllRouterReports(),
       updateRouterSettings: (i) => this.updateRouterSettings(i),

@@ -9,12 +9,13 @@ import {
   ROUTER_AGENT_TIMEOUT_MS,
   ROUTER_CLOSE_GRACE_MS,
   ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_MAX_CONCURRENT_TRACK_B,
   ROUTER_MAX_DISPATCH_TARGETS,
   ROUTER_PEER_DISPATCH_TIMEOUT_MS,
+  ROUTER_REPLY_MAX_CHARS,
   ROUTER_SESSION_CLEANUP_GRACE_MS,
   ROUTER_TRACK_B_QUEUE_MAX,
-  truncateChars,
   turnFailureReason,
   type AgentVendor,
   type Driver,
@@ -23,19 +24,19 @@ import {
   type PostRouterCommandRequest,
   type RouterAgentDispatchInput,
   type RouterAgentPlan,
+  type RouterCommandAttachment,
   type RouterCommandDispatchedTarget,
   type RouterCommandId,
   type RouterCommandRecord,
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
+import { describeFailure } from "../../shared/errors.ts";
 import { within } from "../driver/base-driver.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
 import { resolveRouterModel } from "./model-resolver.ts";
 import {
-  ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_RECENT_RECEIPTS_CONTEXT,
-  ROUTER_REPLY_NOTE_MAX_CHARS,
   formatFleetDigestForPrompt,
   type PromptDeviceDigest,
   type PromptReceiptAction,
@@ -82,6 +83,8 @@ export interface RouterDispatcherOptions {
     "selfDeviceId" | "getPort" | "listPorts" | "listAllDigests"
   >;
   models: { list(options?: { vendor?: AgentVendor }): Promise<ModelCatalog[]> };
+  /** 按上传编号取附件的显示信息（守护进程从磁盘解析，见 uploads.ts 的 resolveUpload）；编号无效返回 null。 */
+  resolveAttachment: (id: string) => RouterCommandAttachment | null;
   stateDir: string;
   launchDir: string;
   agentTimeoutMs?: number;
@@ -458,14 +461,54 @@ function buildRecentReceipts(records: readonly RouterCommandRecord[]): PromptRec
   return out;
 }
 
-function cleanReplyNote(chunks: readonly string[]): string {
-  const joined = chunks.join("\n").trim();
-  if (joined === "") return "";
-  return truncateChars(joined, ROUTER_REPLY_NOTE_MAX_CHARS);
+/**
+ * 多段主 agent 文字用空行拼成一段 Markdown（单个换行会被 Markdown 并成一段）。
+ * 超过 ROUTER_REPLY_MAX_CHARS 才截，截了标 replyTruncated，不悄悄拼省略号。
+ */
+function cleanReply(chunks: readonly string[]): Pick<RouterAgentPlan, "reply" | "replyTruncated"> {
+  const joined = chunks
+    .map((c) => c.trim())
+    .filter((c) => c !== "")
+    .join("\n\n");
+  const chars = [...joined];
+  if (chars.length <= ROUTER_REPLY_MAX_CHARS) return { reply: joined };
+  return { reply: chars.slice(0, ROUTER_REPLY_MAX_CHARS).join(""), replyTruncated: true };
+}
+
+/** 一条指令在每次写 plan 时都要带着的字段：附件编号与显示信息、显式目标（plan 是整列替换的）。 */
+type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target">;
+
+function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
+  return {
+    ...(plan?.attachmentIds !== undefined && plan.attachmentIds.length > 0 ? { attachmentIds: plan.attachmentIds } : {}),
+    ...(plan?.attachments !== undefined && plan.attachments.length > 0 ? { attachments: plan.attachments } : {}),
+    ...(plan?.target !== undefined ? { target: plan.target } : {}),
+  };
+}
+
+/** 写进指令的错误：error 永远是人话；非预期异常的原文另放 errorRaw（只进悬停提示）。 */
+interface CommandFailure {
+  error: string;
+  errorRaw?: string;
+}
+
+/** 原始错误文本 → 人话（各家厂商的错误特征在 src/shared/vendors.ts），原文留在 errorRaw。 */
+function describeRaw(raw: string, vendor?: AgentVendor): CommandFailure {
+  return { error: describeFailure(raw, vendor !== undefined ? { vendor } : {}).text, errorRaw: raw };
+}
+
+/** 账本和目标端口的错误本来就是人话，照旧；其余非预期异常经 describeFailure 转人话。 */
+function failureOf(err: unknown, vendor?: AgentVendor): CommandFailure {
+  if (err instanceof LedgerRequestError || err instanceof RouterTargetError) return { error: err.message };
+  return describeRaw(err instanceof Error ? err.message : String(err), vendor);
+}
+
+function errorRawOf(failure: CommandFailure): Pick<RouterAgentPlan, "errorRaw"> {
+  return failure.errorRaw !== undefined ? { errorRaw: failure.errorRaw } : {};
 }
 
 export function createRouterDispatcher(options: RouterDispatcherOptions): RouterDispatcher {
-  const { ledger, driver, tokens, sandboxGuard, targetRegistry, models, stateDir, launchDir } =
+  const { ledger, driver, tokens, sandboxGuard, targetRegistry, models, resolveAttachment, stateDir, launchDir } =
     options;
   const agentTimeoutMs = options.agentTimeoutMs ?? ROUTER_AGENT_TIMEOUT_MS;
   const maxConcurrentTrackB = options.maxConcurrentTrackB ?? ROUTER_MAX_CONCURRENT_TRACK_B;
@@ -503,13 +546,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
   const resolvePortByDeviceSpec = (deviceSpec: string): RouterTargetPort => {
     const trimmed = deviceSpec.trim();
-    if (trimmed === "" || trimmed.toLowerCase() === "self" || trimmed === "本机") {
+    const lower = trimmed.toLowerCase();
+    if (trimmed === "" || lower === "self" || lower === "local" || trimmed === "本机") {
       const local = targetRegistry.getPort(targetRegistry.selfDeviceId()) ?? targetRegistry.getPort("self");
       if (local) return local;
     }
     const direct = targetRegistry.getPort(trimmed);
     if (direct) return direct;
-    const lower = trimmed.toLowerCase();
     const byName = targetRegistry
       .listPorts()
       .find(
@@ -543,6 +586,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     projectId?: number;
     bodyText: string;
     attachmentIds: string[];
+    planBase: PlanBase;
     startedAt: number;
   }): Promise<RouterCommandRecord> => {
     const op: RouterTargetOp = {
@@ -558,7 +602,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     try {
       const res = await params.port.executeOp(op);
       const dispatchedItem = toDispatchedTarget(params.port, res, true)!;
-      const receipt = formatOpReceiptText(params.port, res);
       return ledger.updateRouterCommand(params.commandId, {
         model: null,
         effort: null,
@@ -566,12 +609,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         dispatched: [dispatchedItem],
         error: null,
         durationMs: Math.max(0, Date.now() - params.startedAt),
+        // 轨道 A 成功不拼回执文案：去向全在 dispatched 的结构化字段里
         plan: {
           intent: "dispatch",
-          reply: receipt,
+          reply: "",
           actions: [],
           track: "A",
-          ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+          ...params.planBase,
         },
         auditAction: "router.command.track_a",
         auditActor: "user",
@@ -582,24 +626,25 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const failure = failureOf(err);
       return ledger.updateRouterCommand(params.commandId, {
         model: null,
         effort: null,
         status: "failed",
-        error: message,
+        error: failure.error,
         durationMs: Math.max(0, Date.now() - params.startedAt),
         plan: {
           intent: "dispatch",
-          reply: message,
+          reply: "",
           actions: [],
           track: "A",
-          ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+          ...params.planBase,
+          ...errorRawOf(failure),
           retryOps: [{ deviceId: params.port.deviceId, op }],
         },
         auditAction: "router.command.track_a_failed",
         auditActor: "user",
-        auditDetail: { deviceId: params.port.deviceId, error: message },
+        auditDetail: { deviceId: params.port.deviceId, error: failure.errorRaw ?? failure.error },
       });
     }
   };
@@ -609,6 +654,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     clientId: string;
     rawText: string;
     attachmentIds: string[];
+    planBase: PlanBase;
     preloadedFleet?: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>;
     startedAt: number;
   }): Promise<RouterCommandRecord> => {
@@ -617,21 +663,22 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       releaseSlot = await acquireTrackBSlot();
     } catch (err) {
       // 排队满或正在关闭：指令行已经建了，标失败（可重试），不能一直挂在 planning
-      const message = err instanceof Error ? err.message : String(err);
+      const failure = failureOf(err);
       return ledger.updateRouterCommand(params.commandId, {
         status: "failed",
-        error: message,
+        error: failure.error,
         durationMs: Math.max(0, Date.now() - params.startedAt),
         plan: {
           intent: "answer",
-          reply: message,
+          reply: "",
           actions: [],
           track: "B",
-          ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+          ...params.planBase,
+          ...errorRawOf(failure),
         },
         auditAction: "router.command.track_b_rejected",
         auditActor: "system",
-        auditDetail: { error: message },
+        auditDetail: { error: failure.errorRaw ?? failure.error },
       });
     }
     try {
@@ -649,10 +696,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs: Math.max(0, Date.now() - params.startedAt),
           plan: {
             intent: "answer",
-            reply: resolved.message,
-            actions: [{ type: "answer", markdown: resolved.message }],
+            reply: "",
+            actions: [],
             track: "B",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
           },
           auditAction: "router.command.model_unavailable",
           auditActor: "system",
@@ -731,7 +778,8 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       let turnEnded = false;
       let timer: NodeJS.Timeout | undefined;
 
-      type TurnDone = { ok: boolean; error?: string };
+      /** error 是人话；非预期的原始错误另放 errorRaw。 */
+      type TurnDone = { ok: boolean } & Partial<CommandFailure>;
       let settleTurn!: (outcome: TurnDone) => void;
       const turnPromise = new Promise<TurnDone>((resolve) => {
         settleTurn = resolve;
@@ -762,7 +810,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           turnEnded = true;
           settleTurn({
             ok: event.ok && !event.interrupted,
-            ...(event.error ? { error: turnFailureReason(event.error) } : {}),
+            ...(event.error ? describeRaw(turnFailureReason(event.error), resolved.vendor) : {}),
           });
         } else if (event.type === "session.exited" && !event.hadResult) {
           settleTurn({
@@ -770,10 +818,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             error: `总助规划进程提前退出（${event.reason}）`,
           });
         } else if (event.type === "driver.error" && event.code === "invalid_input") {
-          settleTurn({
-            ok: false,
-            error: event.message,
-          });
+          settleTurn({ ok: false, ...describeRaw(event.message, resolved.vendor) });
         }
       });
 
@@ -800,7 +845,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             settleTurn({ ok: false, error: `总助指令未能写入会话（${sendRes.kind}）` });
           }
         })().catch((err: unknown) => {
-          settleTurn({ ok: false, error: err instanceof Error ? err.message : String(err) });
+          settleTurn({ ok: false, ...failureOf(err, resolved.vendor) });
         });
         turnOutcome = await turnPromise;
       } finally {
@@ -831,7 +876,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
 
       const durationMs = Math.max(0, Date.now() - params.startedAt);
-      const replyNote = cleanReplyNote(agentTexts);
+      const replyPart = cleanReply(agentTexts);
 
       if (timedOut) {
         const timeoutMsg =
@@ -844,10 +889,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs,
           plan: {
             intent: state.dispatched.length > 0 ? "dispatch" : "answer",
-            reply: replyNote || timeoutMsg,
+            ...replyPart,
             actions: [],
             track: "B",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
             ...(state.failedOps.length > 0
               ? { retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })) }
               : {}),
@@ -867,10 +912,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs,
           plan: {
             intent: "dispatch",
-            reply: replyNote || errText,
+            ...replyPart,
             actions: [],
             track: "B",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
             retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })),
           },
           auditAction: "router.command.partial_failed",
@@ -890,10 +935,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs,
           plan: {
             intent: "dispatch",
-            reply: replyNote,
+            ...replyPart,
             actions: [],
             track: "B",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
           },
           auditAction: "router.command.dispatched",
           auditActor: "router_agent",
@@ -914,18 +959,19 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs,
           plan: {
             intent: "answer",
-            reply: replyNote || errMsg,
+            ...replyPart,
             actions: [],
             track: "B",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
+            ...(turnOutcome.errorRaw !== undefined ? { errorRaw: turnOutcome.errorRaw } : {}),
           },
           auditAction: "router.command.failed",
           auditActor: "router_agent",
-          auditDetail: { error: errMsg },
+          auditDetail: { error: turnOutcome.errorRaw ?? errMsg },
         });
       }
 
-      const finalAnswer = replyNote || "当前指令未触发分派操作，请补充目标项目或设备信息。";
+      const finalAnswer = replyPart.reply || "当前指令未触发分派操作，请补充目标项目或设备信息。";
       return ledger.updateRouterCommand(params.commandId, {
         status: "answered",
         error: null,
@@ -933,9 +979,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         plan: {
           intent: "answer",
           reply: finalAnswer,
+          ...(replyPart.replyTruncated ? { replyTruncated: true } : {}),
           actions: [{ type: "answer", markdown: finalAnswer }],
           track: "B",
-          ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+          ...params.planBase,
         },
         auditAction: "router.command.answered",
         auditActor: "router_agent",
@@ -959,29 +1006,32 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     clientId: string;
     text: string;
     attachmentIds: string[];
-    explicitTarget?: PostRouterCommandRequest["target"];
+    /** 显式目标在 planBase.target 里（首发和整条重跑同一个来源）。 */
+    planBase: PlanBase;
   }): Promise<RouterCommandRecord> => {
     const startedAt = Date.now();
+    const explicitTarget = params.planBase.target;
 
     // 1. 显式 target：轨道 A 零模型直通
-    if (params.explicitTarget !== undefined) {
+    if (explicitTarget !== undefined) {
       let port: RouterTargetPort;
       try {
-        port = resolvePortByDeviceSpec(params.explicitTarget.deviceId ?? "self");
+        port = resolvePortByDeviceSpec(explicitTarget.deviceId ?? "self");
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const failure = failureOf(err);
         return ledger.updateRouterCommand(params.commandId, {
           model: null,
           effort: null,
           status: "failed",
-          error: msg,
+          error: failure.error,
           durationMs: Math.max(0, Date.now() - startedAt),
           plan: {
             intent: "dispatch",
-            reply: msg,
+            reply: "",
             actions: [],
             track: "A",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
+            ...errorRawOf(failure),
           },
         });
       }
@@ -989,10 +1039,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         commandId: params.commandId,
         clientId: params.clientId,
         port,
-        pmId: params.explicitTarget.pmId,
-        projectId: params.explicitTarget.projectId,
+        pmId: explicitTarget.pmId,
+        projectId: explicitTarget.projectId,
         bodyText: params.text,
         attachmentIds: params.attachmentIds,
+        planBase: params.planBase,
         startedAt,
       });
     }
@@ -1010,6 +1061,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           pmId: atRes.pm.pmId,
           bodyText: atRes.bodyText,
           attachmentIds: params.attachmentIds,
+          planBase: params.planBase,
           startedAt,
         });
       }
@@ -1022,10 +1074,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs: Math.max(0, Date.now() - startedAt),
           plan: {
             intent: "ambiguous",
-            reply: atRes.message,
+            reply: "",
             actions: [],
             track: "A",
-            ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+            ...params.planBase,
           },
           auditAction: "router.command.track_a_rejected",
           auditActor: "user",
@@ -1040,6 +1092,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       clientId: params.clientId,
       rawText: params.text,
       attachmentIds: params.attachmentIds,
+      planBase: params.planBase,
       preloadedFleet,
       startedAt,
     });
@@ -1062,6 +1115,24 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         throw new LedgerRequestError("invalid", `指令长度不能超过 ${ROUTER_COMMAND_MAX_CHARS} 字`);
       }
 
+      const attachments = attachmentIds
+        .map((id) => resolveAttachment(id))
+        .filter((a): a is RouterCommandAttachment => a !== null);
+      const target = input.target;
+      const planBase: PlanBase = {
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+        ...(target !== undefined
+          ? {
+              target: {
+                ...(target.deviceId !== undefined ? { deviceId: target.deviceId } : {}),
+                ...(target.pmId !== undefined ? { pmId: target.pmId } : {}),
+                ...(target.projectId !== undefined ? { projectId: target.projectId } : {}),
+              },
+            }
+          : {}),
+      };
+
       const initialVendor = ledger.getRouterSettings().vendor ?? DEFAULT_AGENT_VENDOR;
       const { command, deduplicated } = ledger.createRouterCommand({
         clientId,
@@ -1070,10 +1141,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         model: null,
         effort: null,
         status: "planning",
-        plan:
-          attachmentIds.length > 0
-            ? { intent: "dispatch", reply: "", actions: [], attachmentIds }
-            : null,
+        plan: Object.keys(planBase).length > 0 ? { intent: "dispatch", reply: "", actions: [], ...planBase } : null,
         auditAction: "router.command.submit",
         auditActor: "user",
       });
@@ -1085,7 +1153,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         clientId,
         text: rawText,
         attachmentIds,
-        explicitTarget: input.target,
+        planBase,
       }));
     },
 
@@ -1099,6 +1167,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
 
       const attachmentIds = existing.plan?.attachmentIds ?? [];
+      const planBase = planBaseOf(existing.plan);
       const retryOps = existing.plan?.retryOps ?? [];
 
       // 若上次已有明确失败的目标操作列表（含部分成功场景），仅补跑失败项，绝不重复投递已成功项
@@ -1106,7 +1175,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         const startedAt = Date.now();
         ledger.updateRouterCommand(commandId, { status: "planning", error: null });
         const succeeded: RouterCommandDispatchedTarget[] = [...(existing.dispatched ?? [])];
-        const stillFailed: Array<{ deviceId: string; op: RouterTargetOp; error: string }> = [];
+        const stillFailed: Array<{ deviceId: string; op: RouterTargetOp } & CommandFailure> = [];
 
         for (const item of retryOps) {
           const op = item.op as RouterTargetOp;
@@ -1116,11 +1185,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             const target = toDispatchedTarget(port, res);
             if (target !== null) succeeded.push(target);
           } catch (err) {
-            stillFailed.push({
-              deviceId: item.deviceId,
-              op,
-              error: err instanceof Error ? err.message : String(err),
-            });
+            stillFailed.push({ deviceId: item.deviceId, op, ...failureOf(err) });
           }
         }
 
@@ -1134,9 +1199,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             plan: {
               intent: "dispatch",
               reply: existing.plan?.reply ?? "",
+              ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
               actions: [],
               track: existing.plan?.track ?? "B",
-              ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+              ...planBase,
             },
             auditAction: "router.command.retry_succeeded",
             auditActor: "user",
@@ -1144,6 +1210,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         }
 
         const errMsg = stillFailed.map((f) => f.error).join("；");
+        const raws = stillFailed.flatMap((f) => (f.errorRaw !== undefined ? [f.errorRaw] : []));
         return ledger.updateRouterCommand(commandId, {
           status: "failed",
           dispatched: succeeded.length > 0 ? succeeded : null,
@@ -1151,10 +1218,12 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           durationMs,
           plan: {
             intent: "dispatch",
-            reply: errMsg,
+            reply: existing.plan?.reply ?? "",
+            ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
             actions: [],
             track: existing.plan?.track ?? "B",
-            ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+            ...planBase,
+            ...(raws.length > 0 ? { errorRaw: raws.join("\n") } : {}),
             retryOps: stillFailed.map((f) => ({ deviceId: f.deviceId, op: f.op })),
           },
           auditAction: "router.command.retry_failed",
@@ -1172,11 +1241,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       // 否则（例如设备之前离线尚未拿到名片、模型曾未登录或规划曾超时）重新执行完整管线
       ledger.updateRouterCommand(commandId, { status: "planning", error: null });
+      // 带回显式目标：直转失败的重试仍走轨道 A，不改走模型
       return track(runCommandPipeline({
         commandId,
         clientId: existing.clientId,
         text: existing.inputText,
         attachmentIds,
+        planBase,
       }));
     },
 

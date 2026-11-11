@@ -514,7 +514,7 @@ const postRouterCommandBodySchema = z
     attachmentIds: z.array(z.string().min(1).max(100)).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
     target: z
       .object({
-        deviceId: z.string().min(1).max(200),
+        deviceId: z.string().max(200).optional(),
         pmId: z.number().int().positive().optional(),
         projectId: z.number().int().positive().optional(),
       })
@@ -1460,7 +1460,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.routerItems, async (req): Promise<RouterItemsPage> => {
-      const query = req.query as { cursor?: unknown; before?: unknown; limit?: unknown };
+      const query = req.query as { cursor?: unknown; before?: unknown; limit?: unknown; kind?: unknown };
       const cursor =
         typeof query.cursor === "string" && query.cursor.trim() !== ""
           ? query.cursor
@@ -1468,7 +1468,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             ? query.before
             : undefined;
       const limit = parseOptionalPositiveInt(query.limit, "limit");
-      return ledger.listRouterItems(cursor, limit);
+      // kind=report：不分状态只回简报（v2 时间流翻历史）；不带 kind 照旧
+      if (query.kind === undefined) return ledger.listRouterItems(cursor, limit);
+      if (query.kind !== "report") throw new LedgerRequestError("invalid", "kind 只能是 report");
+      return ledger.listRouterItems(cursor, limit, query.kind);
     });
 
     routes.post("/api/router/items/:id/resolve", async (req): Promise<ResolveRouterItemResponse> => {

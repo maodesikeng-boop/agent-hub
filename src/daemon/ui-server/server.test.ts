@@ -19,6 +19,9 @@ import {
   MAX_CONCURRENT_UPLOADS,
   MAX_REASON_CHARS,
   MAX_UPLOAD_BYTES,
+  ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_REPLY_MAX_CHARS,
+  ROUTER_STREAM_PAGE_MAX_BYTES,
   UI_COOKIE_NAME,
   WS_HEARTBEAT_TEXT,
   uiCookieName,
@@ -30,6 +33,7 @@ import {
   type QuotaResponse,
   type WsServerMessage,
 } from "../../shared/index.ts";
+import { createLedger } from "../ledger/index.ts";
 import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { Db } from "../store/index.ts";
@@ -1971,6 +1975,75 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     ]);
   });
 
+  it("GET /api/router/items?kind=report 把 kind 转给账本；不认识的 kind 拒掉", async () => {
+    const res = await call("GET", "/api/router/items?kind=report&cursor=100:5&limit=30");
+    expect(res.statusCode).toBe(200);
+    expect(ledger.routerCalls).toEqual([{ call: "listItems", args: ["100:5", 30, "report"] }]);
+    const bad = await call("GET", "/api/router/items?kind=decision");
+    expect(bad.statusCode).toBe(400);
+    expect(ledger.routerCalls).toHaveLength(1);
+  });
+
+  it("GET /api/router/commands 一页 30 条满长回复：未压缩不超过 ROUTER_STREAM_PAGE_MAX_BYTES，提前截页且游标接得上，走 gzip", async () => {
+    const ledgerRoot = mkdtempSync(join(tmpdir(), "hub-router-page-"));
+    const realDb = openTestDb();
+    const real = createLedger(realDb, { pmHomeRoot: join(ledgerRoot, "pm-home"), dataHome: ledgerRoot });
+    for (let i = 0; i < 30; i++) {
+      const { command } = real.createRouterCommand({
+        clientId: `long-${i}`,
+        inputText: "问".repeat(ROUTER_COMMAND_MAX_CHARS),
+        vendor: "claude",
+        status: "planning",
+      });
+      real.updateRouterCommand(command.id, {
+        status: "answered",
+        plan: { intent: "answer", reply: `${i}`.padEnd(ROUTER_REPLY_MAX_CHARS, "答"), actions: [], track: "B" },
+      });
+    }
+    const realApp = createUiServer({ ledger: real, token: TOKEN, staticDir, uploadsDir, sentFilesDir, port: PORT, db });
+    await realApp.ready();
+    try {
+      const headers = { host: HOST, cookie: COOKIE };
+      const plain = await realApp.inject({ method: "GET", url: "/api/router/commands?limit=30", headers });
+      expect(plain.statusCode).toBe(200);
+      const page = plain.json() as { commands: Array<{ id: number; createdAt: number }>; nextCursor: string | null; hasMore: boolean };
+      expect(plain.rawPayload.length).toBeLessThanOrEqual(ROUTER_STREAM_PAGE_MAX_BYTES);
+      expect(page.commands.length).toBeGreaterThanOrEqual(1);
+      expect(page.commands.length).toBeLessThan(30);
+      expect(page.hasMore).toBe(true);
+      const last = page.commands.at(-1)!;
+      expect(page.nextCursor).toBe(`${last.createdAt}:${last.id}`);
+
+      const gz = await realApp.inject({
+        method: "GET",
+        url: "/api/router/commands?limit=30",
+        headers: { ...headers, "accept-encoding": "gzip" },
+      });
+      expect(gz.headers["content-encoding"]).toBe("gzip");
+      expect(JSON.parse(gunzipSync(gz.rawPayload).toString("utf8"))).toEqual(page);
+      console.log(
+        `[router-page-bench] commands=${page.commands.length}/30 raw=${plain.rawPayload.length}B gzip=${gz.rawPayload.length}B`,
+      );
+
+      // 接着翻：不丢不重
+      const ids = page.commands.map((c) => c.id);
+      let cursor = page.nextCursor;
+      while (cursor !== null) {
+        const next = await realApp.inject({ method: "GET", url: `/api/router/commands?limit=30&cursor=${cursor}`, headers });
+        expect(next.rawPayload.length).toBeLessThanOrEqual(ROUTER_STREAM_PAGE_MAX_BYTES);
+        const body = next.json() as typeof page;
+        ids.push(...body.commands.map((c) => c.id));
+        cursor = body.nextCursor;
+      }
+      expect(ids).toEqual(Array.from({ length: 30 }, (_, i) => 30 - i));
+    } finally {
+      await realApp.close();
+      real.close();
+      realDb.close();
+      rmSync(ledgerRoot, { recursive: true, force: true });
+    }
+  });
+
   it("POST /api/router/items/:id/resolve、archive-all、PUT /api/router/settings 校验并转发", async () => {
     const res1 = await call("POST", "/api/router/items/12/resolve", {
       origin: ORIGIN,
@@ -2199,7 +2272,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
         "content-type": "application/json",
       };
 
-      // 1. Browser POST /api/router/commands -> 200
+      // 1. Browser POST /api/router/commands -> 200（含不带 deviceId 的本机显式 target）
       const postRes = await customApp.inject({
         method: "POST",
         url: "/api/router/commands",
@@ -2209,6 +2282,15 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(postRes.statusCode).toBe(200);
       expect(postRes.json()).toEqual({ command: fakeCommand });
       expect(submitted).toEqual([{ clientId: "cmd-42", text: "@self/agent-hub 检查状态" }]);
+
+      const postLocalTargetRes = await customApp.inject({
+        method: "POST",
+        url: "/api/router/commands",
+        headers: browserHeaders,
+        payload: { clientId: "cmd-43", text: "直转本机", target: { pmId: 1 } },
+      });
+      expect(postLocalTargetRes.statusCode).toBe(200);
+      expect(submitted).toContainEqual({ clientId: "cmd-43", text: "直转本机", target: { pmId: 1 } });
 
       // 2. Browser GET /api/router/commands?cursor=200:10&limit=15 -> 200
       const getCmdsRes = await customApp.inject({
