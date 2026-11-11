@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { SessionState } from "../../shared/index.ts";
 import { formatResetTime } from "../format.ts";
 import { isWaitingForQuota } from "../selectors.ts";
@@ -7,6 +8,12 @@ import { RetryNotice } from "./RetryNotice.tsx";
 /** agent 在忙，或在等额度：消息流里要显示状态。 */
 export function hasAgentStatus(session: SessionState | null): boolean {
   return (session?.activity ?? "idle") !== "idle" || isWaitingForQuota(session);
+}
+
+/** 仅当状态行真正依赖的字段变化时才重建 React 节点，流式文字增量（streamingText）等无关字段更新时保持同一引用。 */
+export function useAgentStatusNode(session: SessionState | null): React.ReactNode {
+  const statusKey = session === null ? "" : JSON.stringify([session.activity, session.step, session.apiRetry, session.rateLimit]);
+  return useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [statusKey]);
 }
 
 /** 省略号（装饰，读屏不读）。动效只靠整句的流光（styles.css 的 .status-shimmer），点本身不另外动。 */

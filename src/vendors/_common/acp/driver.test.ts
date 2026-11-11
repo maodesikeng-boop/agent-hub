@@ -362,7 +362,8 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(h.of("agent.tool_result")).toHaveLength(1);
     expect(h.of("agent.tool_result")[0]!.toolUseIds).toEqual(["tc-read-1"]);
 
-    // 增量文本合并为单条 agent.text
+    // 增量文本实时发出 agent.text_delta，合并后仍为单条 agent.text
+    expect(h.of("agent.text_delta").map((e) => e.delta)).toEqual(["你好，", "世界！"]);
     const texts = h.of("agent.text");
     expect(texts).toHaveLength(1);
     expect(texts[0]!.text).toBe("你好，世界！");
@@ -655,7 +656,8 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
 
     expect(hLoad.of("session.started")[0]!.resumed).toBe(true);
     expect(hLoad.logs().some((e) => e.event === "session/load" && e.sessionId === "saved-load-1")).toBe(true);
-    // 历史重放被完整吞掉，只有本轮的新回复！
+    // 历史重放被完整吞掉（包括流式增量），只有本轮的新回复！
+    expect(hLoad.of("agent.text_delta").map((e) => e.delta)).toEqual(["恢复后的新回复"]);
     expect(hLoad.of("agent.text").map((e) => e.text)).toEqual(["恢复后的新回复"]);
     expect(hLoad.of("agent.tool")).toHaveLength(0);
     expect(hLoad.of("agent.thinking")).toHaveLength(0);

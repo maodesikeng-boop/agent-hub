@@ -305,6 +305,7 @@ export const TurnView = memo(
     turn,
     identity,
     status,
+    streamingText,
     actions,
     highlightId,
     revertedChanges,
@@ -312,11 +313,13 @@ export const TurnView = memo(
     turn: Pick<Turn, "work" | "parts" | "startedAt" | "endedAt">;
     identity: AgentIdentity;
     status?: React.ReactNode;
+    streamingText?: string | null;
     actions: MessageActions;
     highlightId?: MessageId | null;
     revertedChanges?: ReadonlySet<PersonaChangeId>;
   }) {
-    const running = status != null;
+    const liveText = streamingText ? displayText(streamingText) : "";
+    const running = status != null || liveText !== "";
     const texts = turn.parts.filter((m) => m.sender === "agent");
     const lastText = texts.at(-1);
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
@@ -332,7 +335,14 @@ export const TurnView = memo(
               <SystemNotice key={m.id} message={m} actions={actions} revertedChanges={reverted} inTurn />
             ),
           )}
-          {running && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
+          {liveText !== "" && (
+            <article className="flex w-full min-w-0 flex-col items-start gap-1.5" data-side="left" data-streaming="true">
+              <div className="w-full min-w-0 text-body leading-relaxed">
+                <Markdown text={liveText} />
+              </div>
+            </article>
+          )}
+          {running && status != null && <WorkLine label={status} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
           {!running && lastText && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
               <CopyButton text={texts.map((m) => m.text).join("\n\n")} />
@@ -350,6 +360,7 @@ export const TurnView = memo(
     sameList(prev.turn.parts, next.turn.parts) &&
     sameIdentity(prev.identity, next.identity) &&
     prev.status === next.status &&
+    prev.streamingText === next.streamingText &&
     prev.actions === next.actions &&
     prev.highlightId === next.highlightId &&
     prev.revertedChanges === next.revertedChanges,

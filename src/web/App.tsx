@@ -3,7 +3,7 @@ import { MobileShell } from "./mobile/MobileShell.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { Conversation } from "./components/Conversation.tsx";
@@ -30,6 +30,27 @@ export function App() {
   useEffect(() => {
     setDrawerOpen(false);
   }, [route, current.key, content?.railHasContent, mobile]);
+  const notices = useMemo(
+    () =>
+      content === null ? null : (
+        <Notices health={content.health} reconnecting={content.reconnecting} offline={content.offline} listFailed={fleet.listFailed} />
+      ),
+    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed],
+  );
+  const railAttention = (content?.railAsks.length ?? 0) > 0;
+  const railToggle = useMemo(
+    () =>
+      content === null ? null : (
+        <RightRailToggle
+          visible={content.railHasContent}
+          open={content.railOpen}
+          attention={railAttention}
+          avatarKey={content.avatarKey}
+          onToggle={content.toggleRail}
+        />
+      ),
+    [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.avatarKey, content?.toggleRail],
+  );
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return (
@@ -78,6 +99,7 @@ export function App() {
     newPmDevices,
     offline,
     openAsk,
+    openNewPm,
     openProfile,
     openWorker,
     openWorkerConversation,
@@ -89,11 +111,12 @@ export function App() {
     railOpen,
     railWorkers,
     reconnecting,
+    refreshFleet,
     reminders,
     select,
     send,
     setCreating,
-    sidebarActive,
+    sidebarActiveRef,
     staging,
     toggleRail,
     view,
@@ -101,9 +124,7 @@ export function App() {
     workerPmEntry,
     workerView,
   } = content;
-  const notices = <Notices health={health} reconnecting={reconnecting} offline={offline} listFailed={fleet.listFailed} />;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
-  const railToggle = <RightRailToggle visible={railHasContent} open={railOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={toggleRail} />;
   const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
   const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
@@ -130,7 +151,7 @@ export function App() {
   const sidebar = (
       <Sidebar
         groups={groups}
-        active={sidebarActive === null ? null : { device: current.key, id: sidebarActive }}
+        active={sidebarActiveRef}
         waiting={reminders.waiting}
         asking={reminders.asking}
         notify={reminders.notify}
@@ -141,7 +162,7 @@ export function App() {
                 ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
                 ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
                 ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
-                onChanged: () => void fleet.refresh(),
+                onChanged: refreshFleet,
               }
             : null
         }
@@ -149,9 +170,7 @@ export function App() {
         quotaFetchable={quotaFetchable}
         layout={mobile ? "page" : narrow ? "rail" : "wide"}
         onSelect={select}
-        onNewPm={() => {
-          setCreating(true);
-        }}
+        onNewPm={openNewPm}
       />
   );
   const chat = (

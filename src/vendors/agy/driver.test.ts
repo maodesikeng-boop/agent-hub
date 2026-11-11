@@ -834,12 +834,17 @@ describe("1. 首次启动与完整流式回合", () => {
       "session.started",
       "message.delivered",
       "message.processing",
+      "agent.text_delta",
+      "agent.text_delta",
       "agent.text",
       "agent.tool",
       "agent.tool_result",
+      "agent.text_delta",
+      "agent.text_delta",
       "agent.text",
       "turn.ended",
     ]);
+    expect(t.of("agent.text_delta").map((e) => e.delta)).toEqual(["正在为您", "检查文件…", "检查完毕，", "一切正常！"]);
 
     const texts = t.of("agent.text");
     expect(texts).toHaveLength(2);

@@ -291,7 +291,10 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     if (granted) await subscribePush();
   }, []);
 
-  const notify: NotifySettings = { permission, enabled: notifyEnabled, setEnabled };
+  const notify = useMemo<NotifySettings>(
+    () => ({ permission, enabled: notifyEnabled, setEnabled }),
+    [permission, notifyEnabled, setEnabled],
+  );
   return { waiting, asking, notify };
 }
 

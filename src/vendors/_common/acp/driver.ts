@@ -1258,11 +1258,16 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         this.#flushTextBuffer(st, proc, at);
         continue;
       }
-      proc.textBuffer += bytes.subarray(offset, end).toString("utf8");
+      const chunk = bytes.subarray(offset, end).toString("utf8");
+      proc.textBuffer += chunk;
       proc.textBufferBytes += end - offset;
       if (messageId !== null) proc.textMessageId = messageId;
       offset = end;
-      if (proc.textBufferBytes >= MAX_MESSAGE_BYTES) this.#flushTextBuffer(st, proc, at);
+      if (proc.textBufferBytes >= MAX_MESSAGE_BYTES) {
+        this.#flushTextBuffer(st, proc, at);
+      } else {
+        this.emit(st.id, { type: "agent.text_delta", delta: chunk, at });
+      }
     }
   }
 

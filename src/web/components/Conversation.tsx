@@ -15,7 +15,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
 import { useStop } from "../useStop.ts";
-import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
+import { useAgentStatusNode } from "./AgentStatus.tsx";
 
 function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
   const client = useClient();
@@ -138,7 +138,7 @@ export function Conversation({
   const agentOf = useCallback(() => agent, [agent]);
   const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => onSend(id, text, files), [onSend, id]);
-  const statusNode = useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [session]);
+  const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
@@ -177,6 +177,7 @@ export function Conversation({
           onFocusDone={onFocusDone}
           status={statusNode}
           statusAgent={agent}
+          streamingText={session?.streamingText ?? null}
         />
       </div>
       <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto">

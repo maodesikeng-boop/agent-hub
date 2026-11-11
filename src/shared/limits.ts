@@ -43,6 +43,10 @@ export const WORKER_STALL_HINT_MS = 5 * 60_000;
 export const WORKER_PR_PROBE_TIMEOUT_MS = 5_000;
 /** 一条用户消息最多 100 KB（按 UTF-8 字节算）。 */
 export const MAX_MESSAGE_BYTES = 100 * 1024;
+/** 流式增量文字推给网页的节流间隔（毫秒）：首块立即推，后续在窗口内合并成一次 session.status，不写 SQLite。 */
+export const STREAMING_TEXT_THROTTLE_MS = 70;
+/** 单段内存流式预览最多保留多少个 Unicode 字符（超长输出只截内存预览前缀，段结束 agent.text 落库仍是完整正文；防撑大内存与弱网帧）。 */
+export const MAX_STREAMING_TEXT_CHARS = 16_000;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 

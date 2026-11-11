@@ -259,6 +259,10 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(h.of("agent.tool")).toHaveLength(1);
     expect(h.of("agent.tool")[0]?.name).toBe("read");
     expect(h.of("agent.tool_result")[0]?.toolUseIds).toEqual(["call-read-1"]);
+    expect(h.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
+      { delta: "第一行\u2028段落内分隔符不断行", reset: true },
+      { delta: "，完成。", reset: undefined },
+    ]);
     expect(h.of("agent.text")).toHaveLength(1);
     expect(h.of("agent.text")[0]?.text).toBe("第一行\u2028段落内分隔符不断行，完成。");
 

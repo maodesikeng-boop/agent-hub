@@ -13,7 +13,7 @@ import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
-import { AgentStatus, hasAgentStatus } from "./AgentStatus.tsx";
+import { useAgentStatusNode } from "./AgentStatus.tsx";
 import { PieceMeta } from "./RightRail.tsx";
 
 /**
@@ -106,7 +106,7 @@ export function WorkerConversation({
     if (id !== undefined) onLoadOlder(id);
   }, [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => (id === undefined ? undefined : onSend(id, text, files)), [onSend, id]);
-  const statusNode = useMemo(() => (hasAgentStatus(session) ? <AgentStatus session={session} /> : null), [session]);
+  const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
       <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
@@ -146,6 +146,7 @@ export function WorkerConversation({
                 actions={actions}
                 status={statusNode}
                 statusAgent={identity}
+                streamingText={session?.streamingText ?? null}
               />
             </div>
           )}

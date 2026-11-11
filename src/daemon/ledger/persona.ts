@@ -669,7 +669,7 @@ export function createLedgerPersona(
         db.run(`DELETE FROM projects WHERE pm_id = ? OR conversation_id IN ${inList(conversationIds)}`, pmId);
         if (sessionIds.length > 0) {
           db.run(`DELETE FROM agent_sessions WHERE id IN ${inList(sessionIds)}`);
-          for (const sid of sessionIds) ctx.pushed.delete(sid);
+          for (const sid of sessionIds) sessions.forgetSession(sid);
         }
         if (conversationIds.length > 0) {
           db.run(`DELETE FROM conversations WHERE id IN ${inList(conversationIds)}`);

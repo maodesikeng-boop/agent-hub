@@ -37,8 +37,8 @@ import { createInterface } from "node:readline";
 
 /** 一轮里的一步。 */
 export type FakeStep =
-  /** usage、messageId：这条 assistant 消息带的 message.usage 和 message.id（同一个 id 发几次，像真 claude 分几个事件推同一条消息）；parentToolUseId：子 agent 的消息。 */
-  | { text: string; noUuid?: boolean; usage?: Record<string, number>; messageId?: string; parentToolUseId?: string }
+  /** usage、messageId：这条 assistant 消息带的 message.usage 和 message.id（同一个 id 发几次，像真 claude 分几个事件推同一条消息）；parentToolUseId：子 agent 的消息；deltas：开启 --include-partial-messages 时在完整 assistant 前先发 stream_event 增量。 */
+  | { text: string; deltas?: string[]; noUuid?: boolean; usage?: Record<string, number>; messageId?: string; parentToolUseId?: string }
   /** 一个 thinking 块（真实日志里 thinking 单独一个事件，内容常是空的）。 */
   | { thinking: true }
   /** durationMs：工具跑多久（这期间被打断，打断标记是 “for tool use” 那种）。 */
@@ -509,6 +509,32 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
       while (!existsSync(step.waitFile) && !aborted()) await sleep(20);
     } else if ("text" in step) {
       lastText = step.text;
+      if (step.deltas && argv.includes("--include-partial-messages")) {
+        const parent = step.parentToolUseId ?? null;
+        emit({
+          type: "stream_event",
+          event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          parent_tool_use_id: parent,
+          session_id: sessionId,
+          uuid: randomUUID(),
+        });
+        for (const delta of step.deltas) {
+          emit({
+            type: "stream_event",
+            event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: delta } },
+            parent_tool_use_id: parent,
+            session_id: sessionId,
+            uuid: randomUUID(),
+          });
+        }
+        emit({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+          parent_tool_use_id: parent,
+          session_id: sessionId,
+          uuid: randomUUID(),
+        });
+      }
       assistant([{ type: "text", text: step.text }], !step.noUuid, step);
     } else if ("thinking" in step) {
       assistant([{ type: "thinking", thinking: "", signature: "sig" }]);

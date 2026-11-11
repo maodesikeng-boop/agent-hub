@@ -305,6 +305,8 @@ const quotaUsageCache = new WeakMap<
   HubState["conversations"],
   WeakMap<HubState["sessions"], { json: string; value: QuotaVendor[] }>
 >();
+/** 上一次算出的额度数组（仅保留最新 1 份）：sessions 因流式文字等无关字段换引用时，额度结果相同直接复用同一引用。 */
+let lastQuotaUsage: { json: string; value: QuotaVendor[] } | null = null;
 
 /**
  * m3-plan 2.7：每个会话每一轮都有额度事件（Claude 的 rate_limit_event、codex 的 account/rateLimits/updated）。
@@ -362,8 +364,10 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   }
   const prev = bySessions.get(state.sessions);
   if (prev !== undefined && prev.json === json) return prev.value;
-  bySessions.set(state.sessions, { json, value: vendors });
-  return vendors;
+  const value = lastQuotaUsage !== null && lastQuotaUsage.json === json ? lastQuotaUsage.value : vendors;
+  lastQuotaUsage = { json, value };
+  bySessions.set(state.sessions, lastQuotaUsage);
+  return value;
 }
 
 /** 旧后台的组不带 vendor：按组 id 找声明了它的那家，只认唯一归属的（以后两家同名组时不串额度）。 */
@@ -399,18 +403,31 @@ export function hasFetchedQuotaSession(state: HubState): boolean {
   });
 }
 
+const quotaResetTimesCache = new WeakMap<HubState["sessions"], number[]>();
+const NO_RESET_TIMES: number[] = [];
+let lastQuotaResetTimes: number[] = NO_RESET_TIMES;
+
 /**
  * 所有会话额度里的重置时间点（毫秒，去重、从早到晚）：窗口的 resetsAt 和整体的 resetsAt。
- * 页面到了这些时间点要重新渲染一次，已重置的窗口才会变成 0%。
+ * 页面到了这些时间点要重新渲染一次，已重置的窗口才会变成 0%。输入结果相同时复用同一数组引用。
  */
 export function quotaResetTimes(state: HubState): number[] {
+  const hit = quotaResetTimesCache.get(state.sessions);
+  if (hit !== undefined) return hit;
   const times = new Set<number>();
   for (const { rateLimit } of state.sessions) {
     if (rateLimit === null) continue;
     for (const w of Object.values(rateLimit.windows)) if (Number.isFinite(w.resetsAt) && w.resetsAt > 0) times.add(w.resetsAt * 1000);
     if (rateLimit.resetsAt !== null && Number.isFinite(rateLimit.resetsAt) && rateLimit.resetsAt > 0) times.add(rateLimit.resetsAt * 1000);
   }
-  return [...times].sort((a, b) => a - b);
+  const sorted = times.size === 0 ? NO_RESET_TIMES : [...times].sort((a, b) => a - b);
+  const value =
+    sorted.length === lastQuotaResetTimes.length && sorted.every((t, i) => t === lastQuotaResetTimes[i])
+      ? lastQuotaResetTimes
+      : sorted;
+  lastQuotaResetTimes = value;
+  quotaResetTimesCache.set(state.sessions, value);
+  return value;
 }
 
 /**
@@ -536,10 +553,31 @@ export interface WorkerEntry {
 
 /** workersOf 的结果：conversations → sessions → 项目经理编号。两份都没变才命中，换了的那份连同结果一起被回收。 */
 const workersCache = new WeakMap<HubState["conversations"], WeakMap<HubState["sessions"], Map<PmId, WorkerEntry[]>>>();
+/** 按项目经理缓存上一次的 Worker 列表（上限 MAX_CACHED_PM_WORKERS 个 PM），sessions 因流式文字更新而换引用时若 Worker 数据没变直接复用同一数组引用。 */
+const MAX_CACHED_PM_WORKERS = 64;
+const lastWorkersByPm = new Map<PmId, WorkerEntry[]>();
+
+function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
+  return (
+    a.conversationId === b.conversationId &&
+    a.title === b.title &&
+    a.activity === b.activity &&
+    a.ended === b.ended &&
+    a.vendor === b.vendor &&
+    a.model === b.model &&
+    a.effort === b.effort &&
+    a.tone === b.tone &&
+    a.usage.input === b.usage.input &&
+    a.usage.output === b.usage.output &&
+    a.usage.cacheRead === b.usage.cacheRead &&
+    a.usage.cacheWrite === b.usage.cacheWrite &&
+    a.usage.context === b.usage.context
+  );
+}
 
 /**
  * 这个项目经理派的 Worker：进行中的在前，收工的在后；进行中的按派出的顺序（对话编号），收工的最近收工的在前（没有收工那一行的按对话编号倒序，排在有的后面）。
- * conversations、sessions 都没变时返回上次那个数组。
+ * conversations、sessions 都没变，或 Worker 字段完全没变（如仅流式文字变化）时返回上次那个数组引用。
  */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   let bySessions = workersCache.get(state.conversations);
@@ -554,7 +592,18 @@ export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   }
   let entries = byPm.get(pmId);
   if (entries === undefined) {
-    entries = computeWorkers(state, pmId);
+    const computed = computeWorkers(state, pmId);
+    const prev = lastWorkersByPm.get(pmId);
+    if (prev !== undefined && prev.length === computed.length && computed.every((w, i) => sameWorkerEntry(w, prev[i]!))) {
+      entries = prev;
+    } else {
+      entries = computed;
+      if (!lastWorkersByPm.has(pmId) && lastWorkersByPm.size >= MAX_CACHED_PM_WORKERS) {
+        const oldest = lastWorkersByPm.keys().next().value;
+        if (oldest !== undefined) lastWorkersByPm.delete(oldest);
+      }
+      lastWorkersByPm.set(pmId, entries);
+    }
     byPm.set(pmId, entries);
   }
   return entries;

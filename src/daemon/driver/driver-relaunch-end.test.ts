@@ -230,8 +230,8 @@ describe("两轮之间重启", () => {
     expect(pids(t)).toHaveLength(3);
     expect(first).not.toContain("--model");
     expect(first).not.toContain("--effort");
-    expect(second!.slice(7, 13)).toEqual(["--resume", s.vendorSessionId, "--model", "haiku", "--effort", "low"]);
-    expect(third!.slice(7, 9)).toEqual(["--resume", s.vendorSessionId]);
+    expect(second!.slice(second!.indexOf("--resume"), second!.indexOf("--resume") + 6)).toEqual(["--resume", s.vendorSessionId, "--model", "haiku", "--effort", "low"]);
+    expect(third!.slice(third!.indexOf("--resume"), third!.indexOf("--resume") + 2)).toEqual(["--resume", s.vendorSessionId]);
     expect(third).not.toContain("--model");
     expect(third).not.toContain("--effort");
     expect(t.stdinTexts()).toEqual(["一", `${RELAUNCH_NOTE}\n\n二`, `${RELAUNCH_NOTE}\n\n三`]);

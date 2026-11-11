@@ -14,6 +14,7 @@ import type {
   SessionState,
   WorkerId,
 } from "../../shared/domain.ts";
+import { MAX_STREAMING_TEXT_CHARS, STREAMING_TEXT_THROTTLE_MS } from "../../shared/limits.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -35,6 +36,10 @@ export interface LiveSession {
    * 进程起来、退出时清掉。hub worker show 用，不推给网页。
    */
   backgroundTasks?: number;
+  /** 当前正在流式生成的单段回复文字（上限 MAX_STREAMING_TEXT_CHARS 个码点）；段完成入库或换步/结束时清掉。 */
+  streamingText?: string;
+  /** streamingText 当前的 Unicode 码点数，避免每次 delta 重复展开整段字符串计数。 */
+  streamingChars?: number;
 }
 
 const THINKING: AgentStep = { type: "thinking" };
@@ -62,19 +67,48 @@ export const toolFinished = (toolUseIds: string[]) => (l: LiveSession) => {
   working(l.currentTool, l.openTools.at(-1)?.step ?? THINKING)(l);
 };
 
+export const clearStreaming = (l: LiveSession) => {
+  l.streamingText = undefined;
+  l.streamingChars = undefined;
+};
+
 export const idle = (l: LiveSession) => {
   l.activity = "idle";
   l.currentTool = null;
   l.apiRetry = null;
   l.step = null;
   l.openTools = [];
+  clearStreaming(l);
 };
 
 export type LedgerSessions = ReturnType<typeof createLedgerSessions>;
 
 export function createLedgerSessions(ctx: LedgerContext) {
-  const { db, now, write, enqueue, pushed } = ctx;
+  const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
+  const streamThrottles = new Map<SessionId, { lastFlushedAt: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+  const cancelStreamTimer = (sessionId: SessionId) => {
+    const entry = streamThrottles.get(sessionId);
+    if (entry !== undefined) {
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      streamThrottles.delete(sessionId);
+    }
+  };
+
+  const forgetSession = (sessionId: SessionId) => {
+    cancelStreamTimer(sessionId);
+    live.delete(sessionId);
+    pushed.delete(sessionId);
+  };
+
+  const clearAllStreaming = () => {
+    for (const entry of streamThrottles.values()) {
+      if (entry.timer !== null) clearTimeout(entry.timer);
+    }
+    streamThrottles.clear();
+    for (const l of live.values()) clearStreaming(l);
+  };
 
   /** 对话当前这一代的会话。 */
   const currentSession = (conversationId: ConversationId): AgentSessionRow | null => {
@@ -105,6 +139,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
       effort: row.effort,
       step: l.step ?? null,
       lastEventAt: row.lastEventAt,
+      ...(l.streamingText ? { streamingText: l.streamingText } : {}),
     };
   };
 
@@ -115,14 +150,112 @@ export function createLedgerSessions(ctx: LedgerContext) {
   const updateLive = (p: Pending, sessionId: SessionId, mutate: (l: LiveSession) => void) => {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
-    const next = { ...liveOf(sessionId) };
+    const prev = liveOf(sessionId);
+    const next = { ...prev };
     mutate(next);
+    if (next.streamingText === undefined) cancelStreamTimer(sessionId);
     live.set(sessionId, next);
     const after = sessionState(row);
     const key = JSON.stringify({ ...after, lastEventAt: null });
     if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
     p.pushed.set(sessionId, key);
     p.changes.push({ type: "session.status", data: { session: after } });
+  };
+
+  /**
+   * 收到厂商流式文字增量（agent.text_delta）：只改内存态 LiveSession 并做节流广播，绝不写 SQLite。
+   * - 首块（或距上次广播已满 STREAMING_TEXT_THROTTLE_MS）0ms 延迟立即推出去；
+   * - 节流窗口内的后续增量合并在内存里，窗口到点补发一次；
+   * - 单段内存预览最多保留前 MAX_STREAMING_TEXT_CHARS 个码点，超出部分只等最终 agent.text 一次性入库。
+   */
+  const applyStreamingDelta = (session: AgentSessionRow, delta: string, reset?: boolean) => {
+    if (delta === "" && !reset) return;
+    const sessionId = session.id;
+    if (
+      session.conversationId === null ||
+      (session.role === "pm" &&
+        db.get(
+          `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
+             AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
+          sessionId,
+        ) !== undefined)
+    ) {
+      return;
+    }
+
+    const prev = liveOf(sessionId);
+    if (prev.activity === "stopping") return;
+    const base = reset ? "" : (prev.streamingText ?? "");
+    const baseChars = reset || prev.streamingText === undefined ? 0 : (prev.streamingChars ?? [...base].length);
+    if (!reset && baseChars >= MAX_STREAMING_TEXT_CHARS) return;
+
+    let combined = base;
+    let nextChars = baseChars;
+    if (delta !== "" && baseChars < MAX_STREAMING_TEXT_CHARS) {
+      const room = MAX_STREAMING_TEXT_CHARS - baseChars;
+      if (delta.length <= room) {
+        combined = base + delta;
+        nextChars = baseChars + [...delta].length;
+      } else {
+        const deltaChars = [...delta];
+        const slice = deltaChars.length <= room ? delta : deltaChars.slice(0, room).join("");
+        combined = base + slice;
+        nextChars = baseChars + Math.min(deltaChars.length, room);
+      }
+    }
+
+    const next: LiveSession = { ...prev };
+    if (combined === "") {
+      clearStreaming(next);
+    } else {
+      working(null, { type: "text" })(next);
+      next.streamingText = combined;
+      next.streamingChars = nextChars;
+    }
+    live.set(sessionId, next);
+
+    const flushNow = () => {
+      const row = getAgentSession(db, sessionId);
+      if (row === null) return;
+      const after = sessionState(row);
+      const key = JSON.stringify({ ...after, lastEventAt: null });
+      if (pushed.get(sessionId) === key) return;
+      pushed.set(sessionId, key);
+      emitChange({ type: "session.status", data: { session: after } });
+    };
+
+    const currentNow = now();
+    let entry = streamThrottles.get(sessionId);
+    if (entry === undefined) {
+      if (streamThrottles.size > 64) {
+        for (const [id, item] of streamThrottles) {
+          if (item.timer === null && currentNow - item.lastFlushedAt >= STREAMING_TEXT_THROTTLE_MS) {
+            streamThrottles.delete(id);
+          }
+        }
+      }
+      streamThrottles.set(sessionId, { lastFlushedAt: currentNow, timer: null });
+      flushNow();
+      return;
+    }
+
+    const elapsed = currentNow - entry.lastFlushedAt;
+    if (entry.timer === null && elapsed >= STREAMING_TEXT_THROTTLE_MS) {
+      entry.lastFlushedAt = currentNow;
+      flushNow();
+      return;
+    }
+
+    if (entry.timer === null) {
+      const delay = Math.max(1, STREAMING_TEXT_THROTTLE_MS - Math.max(0, elapsed));
+      entry.timer = setTimeout(() => {
+        const latest = streamThrottles.get(sessionId);
+        if (latest === undefined) return;
+        latest.timer = null;
+        latest.lastFlushedAt = now();
+        flushNow();
+      }, delay);
+    }
   };
 
   /** 项目经理的会话：pmId 是它；Worker 的会话（M3）：role worker、workerId 是它的记录，pmId 是 null。 */
@@ -209,5 +342,17 @@ export function createLedgerSessions(ctx: LedgerContext) {
     });
   };
 
-  return { currentSession, liveOf, sessionState, updateLive, insertSession, refreshSessionState, recoverAfterRestart };
+  return {
+    currentSession,
+    liveOf,
+    sessionState,
+    updateLive,
+    applyStreamingDelta,
+    cancelStreamTimer,
+    clearAllStreaming,
+    forgetSession,
+    insertSession,
+    refreshSessionState,
+    recoverAfterRestart,
+  };
 }

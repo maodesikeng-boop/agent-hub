@@ -83,4 +83,31 @@ describe("thinking、工具调用、工具结果", () => {
     expect(h.of("agent.tool_result")[0]).toMatchObject({ toolUseIds: ["toolu_sub"], parentToolUseId: "toolu_agent" });
     expect(h.of("agent.text")[0]).not.toHaveProperty("parentToolUseId");
   });
+
+  it("开启 --include-partial-messages：stream_event 的 text_delta 实时发出 agent.text_delta，子任务带 parentToolUseId，最后仍有一条完整 agent.text", async () => {
+    h = makeHarness({
+      script: {
+        defaultTurn: {
+          steps: [
+            { text: "子任务输出", deltas: ["子任务", "输出"], parentToolUseId: "toolu_subagent" },
+            { text: "我先查一下代码。", deltas: ["我先", "查一下", "代码。"] },
+          ],
+        },
+      },
+    });
+    const s = h.addSession();
+    await h.driver.send(s.id, user(1, "hi"));
+    await h.waitFor("turn.ended");
+    expect(h.argvs()[0]).toContain("--include-partial-messages");
+    const mainDeltas = h.of("agent.text_delta").filter((e) => e.parentToolUseId === undefined);
+    expect(mainDeltas.map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
+      { delta: "", reset: true },
+      { delta: "我先", reset: undefined },
+      { delta: "查一下", reset: undefined },
+      { delta: "代码。", reset: undefined },
+    ]);
+    const subDeltas = h.of("agent.text_delta").filter((e) => e.parentToolUseId === "toolu_subagent");
+    expect(subDeltas.map((e) => e.delta)).toEqual(["", "子任务", "输出"]);
+    expect(h.of("agent.text").map((e) => e.text)).toEqual(["子任务输出", "我先查一下代码。"]);
+  });
 });

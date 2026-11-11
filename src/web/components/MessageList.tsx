@@ -33,6 +33,7 @@ export const MessageList = memo(function MessageList({
   onFocusDone,
   status,
   statusAgent,
+  streamingText,
 }: {
   messages: Message[];
   pending: PendingMessage[];
@@ -54,6 +55,8 @@ export const MessageList = memo(function MessageList({
   status?: React.ReactNode;
   /** agent 是谁：状态那一轮、空对话用。 */
   statusAgent?: AgentIdentity;
+  /** 当前正在流式生成的单段回复文字；段完成入库时置空。 */
+  streamingText?: string | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -66,7 +69,7 @@ export const MessageList = memo(function MessageList({
 
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
-  const busy = status != null;
+  const busy = status != null || Boolean(streamingText);
   // 只看显示出来的：写交接的来往、静默唤醒触发消息、已无附件回退的用户消息（不显示）进来不算新消息
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
@@ -177,13 +180,16 @@ export const MessageList = memo(function MessageList({
           {items.map((item, index) => {
             if (item.kind === "turn") {
               const first = item.work[0] ?? item.parts[0]!;
-              const turnStatus = rideOnTurn && index === items.length - 1 ? status : undefined;
+              const isLastTurn = rideOnTurn && index === items.length - 1;
+              const turnStatus = isLastTurn ? status : undefined;
+              const turnStreaming = isLastTurn ? streamingText : undefined;
               return (
                 <TurnView
                   key={item.key}
                   turn={item}
                   identity={agentOf(first)}
                   status={turnStatus}
+                  streamingText={turnStreaming}
                   actions={actions}
                   highlightId={highlightId}
                   revertedChanges={revertedChanges}
@@ -209,7 +215,7 @@ export const MessageList = memo(function MessageList({
           {pending.map((p) => (
             <PendingBubble key={p.clientId} pending={p} onRetry={onRetry} />
           ))}
-          {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} actions={actions} />}
+          {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />}
         </div>
       </div>
       {/* 往上翻了：“回到底部”浮在输入框上方一点、消息列水平正中（照 t3code 的 Scroll to end）；消息区高度不变，文字照常滚动。回到底部就收起，贴底接着贴 */}

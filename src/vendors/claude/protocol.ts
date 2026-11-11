@@ -3,6 +3,7 @@
 import { MAX_API_RETRY_ERROR_CHARS, agentLaunchArgs, truncateChars } from "../../shared/index.ts";
 import type {
   AgentSessionRow,
+  AgentTextDeltaEvent,
   AgentTextEvent,
   AgentThinkingEvent,
   AgentVendor,
@@ -165,6 +166,31 @@ export function parseAssistant(
 }
 
 /**
+ * --include-partial-messages 开启时的 stream_event：把正文块的 content_block_start / text_delta 转成 agent.text_delta。
+ * 思考、工具输入和完整 assistant 仍照旧走 parseAssistant，不在这里重复发。
+ */
+export function parseStreamEvent(obj: Record<string, unknown>, at: number): AgentTextDeltaEvent | null {
+  const event = obj.event as
+    | {
+        type?: unknown;
+        content_block?: { type?: unknown; text?: unknown };
+        delta?: { type?: unknown; text?: unknown };
+      }
+    | undefined;
+  if (!event || typeof event !== "object") return null;
+  if (event.type === "content_block_start" && event.content_block?.type === "text") {
+    const initial = typeof event.content_block.text === "string" ? event.content_block.text : "";
+    return { type: "agent.text_delta", delta: initial, reset: true, at, ...subtaskOf(obj) };
+  }
+  if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+    const text = typeof event.delta.text === "string" ? event.delta.text : "";
+    if (text === "") return null;
+    return { type: "agent.text_delta", delta: text, at, ...subtaskOf(obj) };
+  }
+  return null;
+}
+
+/**
  * user 事件里的 tool_result 块 → agent.tool_result（工具结果回来了）；回显（isReplay）、普通文字、没有 tool_use_id 的不算，返回 null。
  */
 export function parseToolResults(obj: Record<string, unknown>, at: number): AgentToolResultEvent | null {
@@ -253,6 +279,7 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
     "--output-format",
     "stream-json",
     "--verbose",
+    "--include-partial-messages",
     "--replay-user-messages",
     resume ? "--resume" : "--session-id",
     session.vendorSessionId,

@@ -190,6 +190,15 @@ function advanceWorkerLine(
   return { ...conversations, [line.workerConversationId]: { ...target, workerLine } };
 }
 
+function clearConversationStreaming(sessions: SessionState[], conversationId: ConversationId): SessionState[] {
+  if (!sessions.some((s) => s.conversationId === conversationId && s.streamingText !== undefined)) return sessions;
+  return sessions.map((s) => {
+    if (s.conversationId !== conversationId || s.streamingText === undefined) return s;
+    const { streamingText: _, ...clean } = s;
+    return clean;
+  });
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
@@ -202,8 +211,19 @@ export function applyChange(state: HubState, change: Change): HubState {
       const nextBase = wasRewoundPending
         ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) }
         : next;
+      const sessions =
+        change.type === "message.created" &&
+        message.sender === "agent" &&
+        message.sessionId !== null &&
+        state.sessions.some((s) => s.sessionId === message.sessionId && s.streamingText !== undefined)
+          ? state.sessions.map((s) => {
+              if (s.sessionId !== message.sessionId || s.streamingText === undefined) return s;
+              const { streamingText: _, ...clean } = s;
+              return clean;
+            })
+          : state.sessions;
       const view = state.conversations[message.conversationId];
-      if (!view) return nextBase; // 不认识的对话，device-hub.ts 会重新拉快照
+      if (!view) return { ...nextBase, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
       // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
       if (
         view.conversation.kind === "worker" &&
@@ -213,6 +233,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       ) {
         return {
           ...nextBase,
+          sessions,
           pending: dropConfirmed(state.pending, [message]),
           retry: dropRetryIfSettled(state.retry, message),
         };
@@ -220,7 +241,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
         const conversations = advanceWorkerLine(state.conversations, message);
-        return { ...nextBase, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+        return { ...nextBase, sessions, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
       }
       const updated = upsertMessage(view.messages, message);
       const trim =
@@ -237,6 +258,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       );
       return {
         ...nextBase,
+        sessions,
         conversations,
         pending: dropConfirmed(state.pending, [message]),
         retry: dropRetryIfSettled(state.retry, message),
@@ -441,7 +463,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
               const { workerPick: _pick, ...rest } = p;
               return { ...rest, text: "" };
             });
-      return { ...state, pending, rewoundKeys: keys };
+      return { ...state, pending, rewoundKeys: keys, sessions: clearConversationStreaming(state.sessions, target.conversationId) };
     }
     case "messageRewind": {
       const view = state.conversations[action.conversationId];
@@ -451,6 +473,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       const messages = view.messages.with(idx, withRewoundMeta(view.messages[idx]!));
       return {
         ...state,
+        sessions: clearConversationStreaming(state.sessions, action.conversationId),
         conversations: { ...state.conversations, [action.conversationId]: { ...view, messages } },
       };
     }
