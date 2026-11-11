@@ -1548,3 +1548,34 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0023 关联记录删除安全", () => {
+  it.each(["workers", "messages", "agent_sessions"])("删除 %s 后引用正确置空或级联，外键检查通过", (table) => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    db.run("INSERT INTO messages (id, conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (900, 1, 'agent', 'text', 'ask', 'fk-ask', 0, 0)");
+    db.run("INSERT INTO router_items (pm_id, project_id, conversation_id, session_id, kind, status, ask_message_id, created_at, updated_at) VALUES (1, 2, 1, 10, 'decision', 'pending', 900, 0, 0)");
+    db.run("INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at) VALUES (1, 'note', 10, 0)");
+    db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (1, 'router_resolve', 1, 900, 0)");
+    db.run("INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, status, origin_msg_id, created_at, updated_at) VALUES (900, 2, 1, 1, 'graph', 'active', 900, 0, 0)");
+    db.run("INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, active_worker_id, gate_ask_message_id, created_at, updated_at) VALUES (900, 'n', 'node', 'piece', 'running', 1, 900, 0, 0)");
+    db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (900, 'n', 'next')");
+    const targetIds: Record<string, number> = { workers: 1, messages: 900, agent_sessions: 10 };
+    expect(() => db.run(`DELETE FROM ${table} WHERE id = ?`, targetIds[table]!)).not.toThrow();
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    if (table === "workers") {
+      expect(db.get("SELECT active_worker_id FROM task_graph_nodes WHERE graph_id = 900")).toEqual({ active_worker_id: null });
+      expect(db.all("SELECT * FROM router_worker_origins")).toEqual([]);
+    }
+    if (table === "messages") {
+      expect(db.get("SELECT gate_ask_message_id FROM task_graph_nodes WHERE graph_id = 900")).toEqual({ gate_ask_message_id: null });
+      expect(db.get("SELECT ask_message_id FROM router_items")).toEqual({ ask_message_id: null });
+      expect(db.get("SELECT origin_msg_id FROM task_graphs WHERE id = 900")).toEqual({ origin_msg_id: null });
+      expect(db.all("SELECT * FROM router_worker_origins")).toEqual([]);
+    }
+    if (table === "agent_sessions") {
+      expect(db.get("SELECT session_id FROM router_items")).toEqual({ session_id: null });
+      expect(db.get("SELECT session_id FROM router_pm_notes")).toEqual({ session_id: null });
+    }
+  });
+});

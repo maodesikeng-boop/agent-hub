@@ -492,6 +492,16 @@ describe("agent api over inject", () => {
     });
   });
 
+  it.each(HUB_COMMANDS.filter((command) => command.startsWith("router.") || command.startsWith("graph.")))(
+    "Worker 调用 %s 返回 403 forbidden",
+    async (command) => {
+      ledger.sessionRoles.set(22, "worker");
+      const res = await call(command, VALID_ARGS[command], tokenB);
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ ok: false, code: "forbidden", message: expect.any(String) });
+    },
+  );
+
   describe("request body", () => {
     const expectInvalid = async (res: Awaited<ReturnType<typeof call>>) => {
       expect(res.statusCode).toBe(400);

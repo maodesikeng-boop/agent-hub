@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf, EMPTY_TOKEN_USAGE, type ConversationId, type PmId, type ProjectId, type SessionId } from "../../shared/domain.ts";
-import { MAX_ACTIVE_GRAPHS_PER_PROJECT } from "../../shared/limits.ts";
+import { MAX_ACTIVE_GRAPHS_PER_PROJECT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
@@ -217,6 +217,57 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       workerIds: [w1.id, w2.id],
     });
     expect(shown.nodes.find((n) => n.key === "step-2")?.status).toBe("ready");
+  });
+
+  it("归档满七天清理 PM、项目与对话时，Router 与图关联记录全部安全清除", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "待清理", nodes: [
+        { key: "a", title: "实现" }, { key: "g", title: "拍板", kind: "gate" },
+      ] }),
+    }).data.graph;
+    const worker = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "实现", task: "实现 a", noWorktree: true, node: "a",
+    }).data.worker;
+    ledger.hubCall(lin.sessionId, "graph.ask", { graphId: graph.id, nodeKey: "g", question: "是否继续？", options: ["是", "否"] });
+    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "继续吗？", options: ["是", "否"] }).data;
+    ledger.hubCall(lin.sessionId, "router.note", { text: "等待" });
+    db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (?, 'router_resolve', ?, ?, ?)", worker.id, ask.item.id, ask.messageId, now);
+    ledger.archivePm(lin.pmId);
+    expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([lin.pmId]);
+    for (const table of ["router_items", "router_pm_notes", "router_worker_origins", "task_graphs", "task_graph_nodes", "task_graph_edges"]) {
+      expect(db.all(`SELECT * FROM ${table}`)).toEqual([]);
+    }
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("上一轮做完后被打回，新一轮未汇报就收工不能复用旧完成报告", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "接续修复", nodes: [
+        { key: "a", title: "实现" }, { key: "b", title: "验收", deps: ["a"] },
+      ] }),
+    }).data.graph;
+    const worker = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "实现", task: "实现 a", noWorktree: true, node: "a",
+    }).data.worker;
+    finishWorkerTurn(worker.id, "做完了");
+    ledger.hubCall(lin.sessionId, "worker.send", { workerId: worker.id, text: "还有漏项，继续修复" });
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: worker.id });
+    const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(shown.nodes.find((n) => n.key === "a")?.status).toBe("attention");
+    expect(shown.nodes.find((n) => n.key === "b")?.status).toBe("pending");
+  });
+
+  it("已拍板门禁在图取消后重放旧 clientId 必须拒绝且不发消息", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "旧卡", nodes: [
+        { key: "g", title: "拍板", kind: "gate" }, { key: "a", title: "实现", deps: ["g"] },
+      ] }),
+    }).data.graph;
+    ledger.decideTaskNode(graph.id, "g", { clientId: "old", note: "同意" });
+    ledger.cancelTaskGraph(graph.id, {});
+    changes = [];
+    expect(() => ledger.decideTaskNode(graph.id, "g", { clientId: "old", note: "同意" })).toThrow(/cancelled/);
+    expect(changes).toEqual([]);
   });
 
   it("门禁同源流转与防闲聊误冲：插队闲聊绝不冲掉 gate，POST decide 单事务解锁下游、标 AskMeta.answered、唤醒 PM 且幂等", () => {

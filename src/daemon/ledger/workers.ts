@@ -659,8 +659,8 @@ export function createLedgerWorkers(
     enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     stopQueued(p, ended);
     insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
-    const latestOutcome = db.get<{ event: string | null; status: string | null; summary: string | null }>(
-      `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
+    const latestOutcome = db.get<{ id: number; event: string | null; status: string | null; summary: string | null }>(
+      `SELECT id, CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
               CASE WHEN json_valid(meta) THEN json_extract(meta, '$.status') END AS status,
               CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
          FROM messages
@@ -670,8 +670,13 @@ export function createLedgerWorkers(
       ended.pm_conversation_id,
       ended.id,
     );
+    // 被打回或收到新用户消息后，上一轮的完成报告不再证明当前任务已完成。
+    const latestInputId = db.get<{ id: number | null }>(
+      "SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user')",
+      ended.worker_conversation_id,
+    )?.id ?? 0;
     options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
-      hadLatestDoneReport: latestOutcome?.event === "report" && latestOutcome?.status === "done",
+      hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
       incomplete: args.incomplete === true,
       summary: latestOutcome?.summary ?? null,
       branch: ended.branch,

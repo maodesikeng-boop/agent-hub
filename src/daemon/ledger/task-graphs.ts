@@ -1404,6 +1404,10 @@ export function createLedgerTaskGraphs(
       if (node === undefined) throw fail("not_found", `任务图 #${graphId} 中没有节点「${nodeKey}」`);
       if (node.kind !== "gate") throw fail("invalid", `节点「${nodeKey}」不是门禁（gate）节点`);
 
+      if (graphRow.status === "cancelled") {
+        throw fail("conflict", `任务图 #${graphId} 已结束（cancelled）`);
+      }
+
       if (node.status === "done") {
         const existingDec = parseJsonOr<TaskDecision | null>(node.decision_json, null);
         if (existingDec?.clientId === clientId) {
