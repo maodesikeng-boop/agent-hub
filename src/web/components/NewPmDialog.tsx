@@ -16,12 +16,14 @@ import type { HubClient } from "../client.ts";
 import { DeviceScope, useClient } from "../device-scope.tsx";
 import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { errorText, nameError, errorLine, errorTitle, type ErrorLike } from "../format.ts";
+import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../ui/dialog.tsx";
 import { Input, Select, Textarea } from "../ui/input.tsx";
+import { useIsMobile } from "../useMediaQuery.ts";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
@@ -36,7 +38,7 @@ export interface NewPmDevice {
 }
 
 /** deviceRow：两台以上设备时最上面一行“设备”；表单的接口、模型名单、能不能“选择…”都按外面 DeviceScope 的那台。 */
-function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: (conversationId: ConversationId) => void }) {
+function NewPmForm({ mobile, deviceRow, onCreated }: { mobile: boolean; deviceRow: ReactNode; onCreated: (conversationId: ConversationId) => void }) {
   const client = useClient();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
@@ -101,25 +103,35 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
 
   // 标题和“创建”固定，只有中间（DialogBody）滚：展开“更多设置”后“创建”还在视野里
   return (
-    <DialogForm onSubmit={(e) => void submit(e)}>
-      <DialogBody>
+    <DialogForm className={mobile ? "gap-0" : undefined} onSubmit={(e) => void submit(e)}>
+      <DialogBody className={mobile ? "mx-0 my-0 px-4 py-4" : undefined}>
         <SettingsGroup>
           {deviceRow}
-          <SettingsRow label="Name" error={nameProblem}>
+          <SettingsRow label="Name" stacked={mobile} error={nameProblem}>
             {(id) => (
-              <Input id={id} value={name} autoFocus autoComplete="off" className="w-60" aria-invalid={nameProblem !== null} onChange={(e) => setName(e.target.value)} />
+              <Input
+                id={id}
+                value={name}
+                autoFocus={!mobile}
+                autoComplete="off"
+                className={mobile ? "min-w-0 flex-1" : "w-60"}
+                aria-invalid={nameProblem !== null}
+                onChange={(e) => setName(e.target.value)}
+              />
             )}
           </SettingsRow>
-          <SettingsRow label="Main folder" error={pickError}>
+          <SettingsRow label="Main folder" stacked={mobile} error={pickError}>
             {(id) => (
               <>
                 <Input
                   id={id}
                   value={folder}
                   autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
                   placeholder="Optional"
-                  className="w-60 min-w-0"
+                  className={mobile ? "min-w-0 flex-1" : "w-60 min-w-0"}
                   onChange={(e) => setFolder(e.target.value)}
                 />
                 {canPick && (
@@ -136,13 +148,13 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
           <ModeRows label="Mode" value={mode} onChange={setMode} disabled={busy} />
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
-          <CollapsibleTrigger className="group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             More settings
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3 grid gap-6">
             <SettingsGroup label="Model">
-              <AgentRows value={agent} onChange={setAgent} disabled={busy} />
+              <AgentRows value={agent} onChange={setAgent} disabled={busy} stacked={mobile} />
             </SettingsGroup>
             <SettingsGroup title="Persona">
               <Textarea
@@ -163,12 +175,12 @@ function NewPmForm({ deviceRow, onCreated }: { deviceRow: ReactNode; onCreated: 
         </Collapsible>
       </DialogBody>
       {error && (
-        <p role="alert" title={errorTitle(error)} className="px-4 text-minor text-danger [overflow-wrap:anywhere]">
+        <p role="alert" title={errorTitle(error)} className={cn("px-4 text-minor text-danger [overflow-wrap:anywhere]", mobile && "pb-2")}>
           {errorLine(error)}
         </p>
       )}
-      <DialogFooter>
-        <Button type="submit" disabled={!canSubmit}>
+      <DialogFooter className={mobile ? "border-t border-border bg-surface-sidebar px-4 py-3" : undefined}>
+        <Button type="submit" disabled={!canSubmit} className={mobile ? "h-11 w-full" : undefined}>
           {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
           {busy ? "Creating…" : "Create"}
         </Button>
@@ -191,20 +203,27 @@ export function NewPmDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
 }) {
+  const mobile = useIsMobile();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="New project manager">
-        <DevicePicker devices={devices} defaultDevice={defaultDevice} onCreated={onCreated} />
+      <DialogContent
+        title="New project manager"
+        fullScreen={mobile}
+        onOpenAutoFocus={mobile ? (e) => e.preventDefault() : undefined}
+      >
+        <DevicePicker mobile={mobile} devices={devices} defaultDevice={defaultDevice} onCreated={onCreated} />
       </DialogContent>
     </Dialog>
   );
 }
 
 function DevicePicker({
+  mobile,
   devices,
   defaultDevice,
   onCreated,
 }: {
+  mobile: boolean;
   devices: readonly NewPmDevice[];
   defaultDevice: DeviceKey;
   onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
@@ -227,7 +246,7 @@ function DevicePicker({
     ) : null;
   return (
     <DeviceScope client={device.client} server={device.server}>
-      <NewPmForm deviceRow={deviceRow} onCreated={(conversationId) => onCreated(device.key, conversationId)} />
+      <NewPmForm mobile={mobile} deviceRow={deviceRow} onCreated={(conversationId) => onCreated(device.key, conversationId)} />
     </DeviceScope>
   );
 }

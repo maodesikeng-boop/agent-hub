@@ -112,6 +112,9 @@ html[data-ui-scale="xl"] {
   /* 安全区（docs/ui-standard.md 第 19 条）：主屏 App 全屏时刘海和底部横条的高度；电脑上是 0。组件里不直接写 env()，用这两个变量 */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* 软键盘遮挡高度（mobile/keyboard.ts 监听 visualViewport 写入）：与底部横条取最大值，软键盘弹起时不重复叠加 34px 安全区 */
+  --kb-inset: 0px;
+  --bottom-inset: max(var(--safe-bottom), var(--kb-inset));
   /* Mac 原生桌面应用（docs/ui-standard.md 第 16 条）：窗口左上角红黄绿交通灯按钮的安全避让宽高，浏览器里是 0 */
   --macos-traffic-lights-width: 0px;
   --macos-traffic-lights-height: 0px;
@@ -619,6 +622,11 @@ code {
   select {
     font-size: max(16px, var(--text-body));
   }
+}
+
+[data-shell="mobile"] .chat-main,
+[data-slot="drawer-content"] {
+  padding-bottom: max(var(--safe-bottom), var(--kb-inset));
 }
 
 [data-shell="mobile"] .composer-dock { padding-bottom: 8px; }

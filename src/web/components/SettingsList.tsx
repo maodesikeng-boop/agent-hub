@@ -99,6 +99,7 @@ export function SettingsRow({
   icon,
   error,
   wide,
+  stacked,
   children,
 }: {
   label: string;
@@ -106,12 +107,13 @@ export function SettingsRow({
   icon?: ReactNode;
   error?: ErrorLike | null;
   wide?: boolean;
+  stacked?: boolean;
   children: (id: string) => ReactNode;
 }) {
   const id = useId();
   return (
-    <div data-slot="settings-row" className={cn("px-4", detail ? "py-3" : "py-2")}>
-      <div className={cn("flex min-h-9 items-center justify-between gap-x-4 gap-y-2", !wide && "flex-wrap")}>
+    <div data-slot="settings-row" className={cn("px-4", detail || stacked ? "py-3" : "py-2")}>
+      <div className={cn("flex min-h-9 justify-between gap-x-4 gap-y-2", stacked ? "flex-col items-stretch" : cn("items-center", !wide && "flex-wrap"))}>
         <div className={cn("flex items-center gap-3", wide ? "min-w-0 shrink-0" : "min-w-32 flex-1")}>
           {icon && <span className="flex shrink-0 text-muted-foreground [&_svg]:size-4 [&_svg]:stroke-[1.5]">{icon}</span>}
           <div className="min-w-0 flex-1 break-words">
@@ -121,7 +123,7 @@ export function SettingsRow({
             {detail && <div className="text-minor leading-snug text-muted-foreground">{detail}</div>}
           </div>
         </div>
-        <div className={cn("flex max-w-full items-center justify-end gap-2", wide ? "min-w-0" : "ml-auto shrink-0")}>{children(id)}</div>
+        <div className={cn("flex max-w-full items-center gap-2", stacked ? "w-full" : cn("justify-end", wide ? "min-w-0" : "ml-auto shrink-0"))}>{children(id)}</div>
       </div>
       {error && <RowError error={error} />}
     </div>
