@@ -392,6 +392,7 @@ describe("M2：系统消息", () => {
       "session.renewed",
       "handover.failed",
       "context.compacted",
+      "driver.warning",
       "worker.max_time_exceeded",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();

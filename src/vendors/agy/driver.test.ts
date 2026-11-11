@@ -36,7 +36,6 @@ import {
   WRITE_SCOPE_VIOLATION_MESSAGE,
   checkWorkerToolViolation,
   detectAgyArgsConflict,
-  formatSystemInstructions,
   parseAgyUsage,
 } from "./protocol.ts";
 
@@ -464,6 +463,10 @@ interface AgyTestHarness {
   log(): FakeAgyLogEntry[];
   argvs(): string[][];
   stdinBlocks(): string[][];
+  /** 这个会话启动目录下的产品提示词规则目录（--add-dir 的那个）。 */
+  rulesDir(sessionId: SessionId): string;
+  /** 规则文件按文件名顺序去掉 frontmatter 拼起来（agy 系统提示词 <user_rules> 里会看到的提示词）；没有规则目录返回 null。 */
+  rulesText(sessionId: SessionId): string | null;
   addSession(patch?: Partial<AgentSessionRow>): AgentSessionRow;
   cleanup(): Promise<void>;
 }
@@ -574,6 +577,17 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
       return obj.event === "user" && obj.message ? [obj.message.content.map((c) => c.text)] : [];
     });
 
+  const rulesDir = (sessionId: SessionId) => join(stateDir, "launch", String(sessionId), "agy-rules");
+  const rulesText = (sessionId: SessionId): string | null => {
+    const files = join(rulesDir(sessionId), ".agents", "rules");
+    if (!existsSync(files)) return null;
+    return readdirSync(files)
+      .filter((name) => /^fusa-\d{2}\.md$/.test(name))
+      .sort()
+      .map((name) => readFileSync(join(files, name), "utf8").replace(/^---\ntrigger: always_on\n---\n/, ""))
+      .join("");
+  };
+
   const addSession = (patch: Partial<AgentSessionRow> = {}): AgentSessionRow => {
     const id = nextSessionId++;
     const cwd = join(dir, "workspace", String(id));
@@ -617,6 +631,8 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
     log,
     argvs: () => log().flatMap((e) => (e.kind === "argv" && e.argv ? [e.argv] : [])),
     stdinBlocks,
+    rulesDir,
+    rulesText,
     addSession,
     cleanup: async () => {
       await driver.shutdown();
@@ -686,13 +702,19 @@ describe("agy-protocol 纯函数", () => {
       expect(argsResumePlan[argsResumePlan.indexOf("--mode") + 1]).toBe("plan");
       expect(argsResumePlan).not.toContain("--dangerously-skip-permissions");
       expect(argsResumePlan.slice(-2)).toEqual(["--print", ""]);
+
+      // 产品提示词的规则目录排在会话自己的附加目录后面，也是 --add-dir
+      const argsRules = buildAgyArgs(session, filesAuto, false, undefined, "/launch/1/agy-rules");
+      const addDirs = argsRules.flatMap((a, i) => (a === "--add-dir" ? [argsRules[i + 1]] : []));
+      expect(addDirs).toEqual(["/extra/dir1", "/extra/dir2", "/launch/1/agy-rules"]);
+      expect(argsRules.slice(-2)).toEqual(["--print", ""]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("buildAgyUserLine 与 checkAgyUserLine：构造 event=user 的 NDJSON 行并转义行分隔符", () => {
-    const line = buildAgyUserLine("你好\u2028世界\u2029", [formatSystemInstructions("系统提示")]);
+    const line = buildAgyUserLine("你好\u2028世界\u2029", ["前缀"]);
     expect(line).not.toContain("\u2028");
     expect(line).not.toContain("\u2029");
     expect(checkAgyUserLine(line)).toBeNull();
@@ -701,7 +723,7 @@ describe("agy-protocol 纯函数", () => {
       event: "user",
       message: {
         content: [
-          { type: "text", text: "<system_instructions>\n系统提示\n</system_instructions>" },
+          { type: "text", text: "前缀" },
           { type: "text", text: "你好\u2028世界\u2029" },
         ],
       },
@@ -810,6 +832,8 @@ describe("1. 首次启动与完整流式回合", () => {
     expect(argv![argv!.indexOf("--model") + 1]).toBe("gemini-4-argon-high");
     expect(argv).not.toContain("--effort");
     expect(argv![argv!.indexOf("--add-dir") + 1]).toBe("/tmp/extra-dir");
+    // 产品提示词的规则目录排在会话自己的附加目录后面
+    expect(argv![argv!.lastIndexOf("--add-dir") + 1]).toBe(t.rulesDir(s.id));
 
     // 2. 检查 init 更新了 vendorSessionId
     const updatedRow = t.store.get(s.id)!;
@@ -822,11 +846,10 @@ describe("1. 首次启动与完整流式回合", () => {
       vendorSessionId: "agy-assigned-uuid-999",
     });
 
-    // 3. 检查第一条消息最前面附带了 promptFile 内容
+    // 3. promptFile 内容写进规则目录（进 agy 系统提示词的 <user_rules>，压缩不裁），不再拼进第一条消息
     const blocks = t.stdinBlocks();
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]![0]).toBe("<system_instructions>\n你是 Antigravity 驱动测试里的 Agent。\n</system_instructions>");
-    expect(blocks[0]![1]).toBe("请帮我检查 README");
+    expect(blocks).toEqual([["请帮我检查 README"]]);
+    expect(t.rulesText(s.id)).toBe("你是 Antigravity 驱动测试里的 Agent。");
 
     // 4. 检查流式事件顺序与去重 uuid
     const eventTypes = t.events.map((e) => e.event.type);
@@ -956,21 +979,22 @@ describe("2. 长连接复用与会话恢复（--conversation）", () => {
     await t.driver.send(s.id, user(2, "第二轮消息"));
     await t.waitFor("turn.ended", undefined, 2);
     expect(t.argvs()).toHaveLength(1);
-    // 第二轮复用同一进程时不重复注入 <system_instructions>
+    // 提示词在规则目录里，哪一轮都不拼进消息
+    expect(t.stdinBlocks()[0]).toEqual(["第一轮消息"]);
     expect(t.stdinBlocks()[1]).toEqual(["第二轮消息"]);
 
     // 等待空闲退出
     await t.waitFor("session.exited", undefined, 1);
     expect(t.of("session.exited")[0]).toMatchObject({ reason: "idle" });
 
-    // 第三轮：空闲退出后自动用 --conversation agy-conv-persist-42 恢复，且新进程首条重新注入系统提示词
+    // 第三轮：空闲退出后自动用 --conversation agy-conv-persist-42 恢复，新进程照样 --add-dir 规则目录
     await t.driver.send(s.id, user(3, "第三轮消息"));
     await t.waitFor("turn.ended", undefined, 3);
     expect(t.argvs()).toHaveLength(2);
     const secondArgv = t.argvs()[1]!;
     expect(secondArgv[secondArgv.indexOf("--conversation") + 1]).toBe("agy-conv-persist-42");
-    expect(t.stdinBlocks()[2]![0]).toContain("<system_instructions>");
-    expect(t.stdinBlocks()[2]![1]).toBe("第三轮消息");
+    expect(secondArgv[secondArgv.lastIndexOf("--add-dir") + 1]).toBe(t.rulesDir(s.id));
+    expect(t.stdinBlocks()[2]).toEqual(["第三轮消息"]);
 
     // 第四轮：修改 fingerprint 触发两轮之间重启，带 RELAUNCH_NOTE 且用 --conversation 恢复
     t.launch.fingerprint = "fp-updated-2";
@@ -979,11 +1003,7 @@ describe("2. 长连接复用与会话恢复（--conversation）", () => {
     expect(t.argvs()).toHaveLength(3);
     const thirdArgv = t.argvs()[2]!;
     expect(thirdArgv[thirdArgv.indexOf("--conversation") + 1]).toBe("agy-conv-persist-42");
-    expect(t.stdinBlocks()[3]).toEqual([
-      "<system_instructions>\n你是 Antigravity 驱动测试里的 Agent。\n</system_instructions>",
-      RELAUNCH_NOTE,
-      "第四轮消息",
-    ]);
+    expect(t.stdinBlocks()[3]).toEqual([RELAUNCH_NOTE, "第四轮消息"]);
   });
 
   it("--conversation 启动报 not found 时自动回退为不带 --conversation 重新启动一次", async () => {
@@ -1472,10 +1492,9 @@ describe("5. queryCommands、isRunning、end、shutdown 与 cleanupStale", () =>
     const texts = t.of("agent.text").map((e) => e.text);
     expect(texts).toEqual(["仅在 result 里的兜底回复", "合并回复"]);
 
-    // 校验第一轮前缀顺序：系统提示词 → RESTART_RECOVERY_NOTE → RESEND_NOTE → 原文
+    // 校验第一轮前缀顺序：RESTART_RECOVERY_NOTE → RESEND_NOTE → 原文（提示词在规则目录，不在消息里）
     const blocks = t.stdinBlocks();
     expect(blocks[0]).toEqual([
-      "<system_instructions>\n你是 Antigravity 驱动测试里的 Agent。\n</system_instructions>",
       RESTART_RECOVERY_NOTE,
       RESEND_NOTE,
       "首条恢复重发",
@@ -1548,7 +1567,6 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     f?.cleanup();
     f = undefined;
   });
-  const SYS = (prompt: string) => `<system_instructions>\n${prompt}\n</system_instructions>`;
   function personaHarness(script: FakeAgyScript = {}, driver: Partial<AgyDriverOptions> = {}): AgyTestHarness {
     f = makePersonaFixture();
     const t = makeAgyHarness({ script, driver: { personaNote: f.personaNote, ...driver } });
@@ -1570,7 +1588,8 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     await turn(t, s.id, 3, "三", 3);
     expect(t.argvs()).toHaveLength(1);
     const blocks = t.stdinBlocks();
-    expect(blocks[0]).toEqual([SYS("旧提示词"), "一"]);
+    expect(blocks[0]).toEqual(["一"]);
+    expect(t.rulesText(s.id)).toBe("旧提示词");
     expect(blocks[1]).toHaveLength(2);
     expect(blocks[1]![0]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：/);
     expect(blocks[1]![0]).toContain("以后回复都用列表。");
@@ -1589,7 +1608,7 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     expect(t.stdinBlocks()[1]![0]).not.toContain("第一版");
   });
 
-  it("改模型还是重启（--conversation）；新进程首条带最新的系统指令，同时改的性格设定不再带说明", async () => {
+  it("改模型还是重启（--conversation）；新进程的规则目录是最新的系统指令，同时改的性格设定不再带说明", async () => {
     const t = personaHarness({ assignedConversationId: "agy-conv-p" });
     const s = t.addSession();
     await turn(t, s.id, 1, "一", 1);
@@ -1599,10 +1618,11 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     await turn(t, s.id, 2, "二", 2);
     expect(t.argvs()).toHaveLength(2);
     expect(t.argvs()[1]).toContain("--conversation");
-    expect(t.stdinBlocks()[1]).toEqual([SYS("新提示词"), RELAUNCH_NOTE, "二"]);
+    expect(t.stdinBlocks()[1]).toEqual([RELAUNCH_NOTE, "二"]);
+    expect(t.rulesText(s.id)).toBe("新提示词");
   });
 
-  it("闲置关闭后再起来：新进程首条带最新的系统指令，不带说明", async () => {
+  it("闲置关闭后再起来：新进程的规则目录是最新的系统指令，不带说明", async () => {
     const t = personaHarness({ assignedConversationId: "agy-conv-p" }, { idleCloseMs: 50 });
     const s = t.addSession();
     await turn(t, s.id, 1, "一", 1);
@@ -1611,7 +1631,8 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
     t.launch.prompt = "新提示词";
     await turn(t, s.id, 2, "二", 2);
     expect(t.argvs()).toHaveLength(2);
-    expect(t.stdinBlocks()[1]).toEqual([SYS("新提示词"), "二"]);
+    expect(t.stdinBlocks()[1]).toEqual(["二"]);
+    expect(t.rulesText(s.id)).toBe("新提示词");
   });
 
   it("撤销：带撤销后的内容，不重启", async () => {
@@ -1653,9 +1674,7 @@ describe("AgyDriver 性格设定、模式改了不重启（下一条前面加说
 });
 
 describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
-  const SYS = (prompt: string) => `<system_instructions>\n${prompt}\n</system_instructions>`;
-
-  it("第一条写进去的前面带一次（在系统指令后面），之后不带；带着它的那一行处理中带 preamble 标记", async () => {
+  it("第一条写进去的前面带一次，之后不带；带着它的那一行处理中带 preamble 标记", async () => {
     const ledger = fakePreambleLedger();
     const t = makeAgyHarness({ driver: { sessionPreamble: ledger.sessionPreamble } });
     t.launch.prompt = "提示词";
@@ -1665,7 +1684,8 @@ describe("AgyDriver 换代后的开场说明（session-preamble.ts）", () => {
     await t.waitFor("turn.ended");
     await t.driver.send(s.id, { messageIds: [2], source: "system", text: "汇报" });
     await t.waitFor("turn.ended", undefined, 2);
-    expect(t.stdinBlocks()).toEqual([[SYS("提示词"), PREAMBLE, "接着说"], ["汇报"]]);
+    expect(t.stdinBlocks()).toEqual([[PREAMBLE, "接着说"], ["汇报"]]);
+    expect(t.rulesText(s.id)).toBe("提示词");
     expect(t.of("message.processing").map((e) => e.preamble ?? false)).toEqual([true, false]);
   });
 });
@@ -2302,4 +2322,20 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     expect(describeStep({ type: "tool_use", name: "call_mcp_tool", input: previews[1] as Record<string, string> })).toBe("Calling Linear: list issues");
     expect(t.of("agent.tool")).toHaveLength(1);
   });
+});
+
+it("启动与续接都检查最新项目规则预算，超限发可见告警但继续会话", async () => {
+  const t = makeAgyHarness();
+  const s = t.addSession();
+  writeFileSync(join(s.cwd, "AGENTS.md"), "x".repeat(24_001));
+  await t.driver.send(s.id, user(1, "first"));
+  await t.waitFor("turn.ended");
+  expect(t.of("driver.warning")).toHaveLength(1);
+  expect(t.of("driver.warning")[0]!.message).toContain("1 个文件超过");
+  t.launch.fingerprint = "updated";
+  writeFileSync(join(s.cwd, "AGENTS.md"), "small");
+  await t.driver.send(s.id, user(2, "resume"));
+  await t.waitFor("turn.ended", undefined, 2);
+  expect(t.argvs()).toHaveLength(2);
+  expect(t.of("driver.warning")).toHaveLength(1);
 });

@@ -372,6 +372,7 @@ interface DriverErrorEvent extends DriverEventBase {
 }
 
 export type DriverEvent =
+  | (DriverEventBase & { type: "driver.warning"; uuid: string; message: string })
   | SessionStartedEvent
   | MessageDeliveredEvent
   | MessageProcessingEvent

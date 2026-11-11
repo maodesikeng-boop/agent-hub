@@ -21,6 +21,7 @@ import {
   agentLaunchArgs,
   buildReadonlyPolicy,
   notFoundCode,
+  vendorSpec,
   type AgentSessionRow,
   type DriverEvent,
   type LaunchFiles,
@@ -109,6 +110,8 @@ function makeAcpHarness(options: {
       writableDirs: () => [logDir],
     },
     ...options.config,
+    // TEST_VENDOR（名单第一家）走常驻通道，底座默认不拼；底座的拼接逻辑按“拼进首条消息”测，这里显式写（测按声明推的用例传 undefined）
+    session: { systemPromptInjection: "first_turn_new_session", ...options.config?.session },
   };
 
   const driver = createAcpDriver(config, {
@@ -278,6 +281,7 @@ describe("VendorSpec models.flags 可选适配", () => {
       capabilities: {
         backgroundWake: false,
         readonly: "os_sandbox",
+        systemPrompt: "first_message",
       },
     });
     expect(acpLikeSpec.models.flags).toBeUndefined();
@@ -289,6 +293,124 @@ describe("VendorSpec models.flags 可选适配", () => {
         effort: "high",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("ACP 驱动底座：产品提示词的通道（spec 的 capabilities.systemPrompt）与压缩后重新拼", () => {
+  const promptsOf = (h: AcpTestHarness) => h.logs().filter((e) => e.event === "session/prompt").map((e) => e.blocks);
+  const compacted = { sessionUpdate: "compaction_update", payload: { compactionId: "c1", status: "completed" } };
+
+  it("没写 systemPromptInjection 时按厂商声明：resident 的不拼进消息，first_message 的拼进新会话第一条", async () => {
+    const resident = track(
+      makeAcpHarness({ systemPrompt: "常驻的提示词", config: { session: { systemPromptInjection: undefined } } }),
+    );
+    expect(vendorSpec(TEST_VENDOR).capabilities.systemPrompt).toBe("resident");
+    const r = resident.addSession();
+    await resident.driver.send(r.id, { messageIds: [1 as never], source: "user", text: "你好" });
+    await resident.waitFor("turn.ended");
+    expect(promptsOf(resident)).toEqual([["你好"]]);
+
+    const firstMessageVendor = AGENT_VENDORS.find((v) => vendorSpec(v).capabilities.systemPrompt === "first_message")!;
+    const fm = track(
+      makeAcpHarness({
+        systemPrompt: "拼进首条的提示词",
+        config: { vendor: firstMessageVendor, session: { systemPromptInjection: undefined } },
+      }),
+    );
+    const f = fm.addSession({ vendor: firstMessageVendor });
+    await fm.driver.send(f.id, { messageIds: [2 as never], source: "user", text: "你好" });
+    await fm.waitFor("turn.ended");
+    expect(promptsOf(fm)).toEqual([["<system_instructions>\n拼进首条的提示词\n</system_instructions>", "你好"]]);
+
+    // 拼进消息的才在 initialize 声明 session.compaction（ACP 规定声明了 agent 才发 compaction_update），常驻的不声明
+    const capsOf = (h: AcpTestHarness) =>
+      (h.logs().find((e) => e.event === "initialize")?.params as { clientCapabilities?: { session?: unknown } }).clientCapabilities;
+    expect(capsOf(fm)?.session).toEqual({ compaction: {} });
+    expect(capsOf(resident)?.session).toBeUndefined();
+  });
+
+  it("收到 compaction_update completed：发 context.compacted，下一条消息最前面重新拼一次（读 prompt.md 现在的内容），再下一条不拼", async () => {
+    const h = track(
+      makeAcpHarness({
+        systemPrompt: "第一版提示词",
+        script: {
+          turns: [
+            { textChunks: ["一"] },
+            { customUpdates: [compacted], textChunks: ["二"] },
+            { textChunks: ["三"] },
+            { textChunks: ["四"] },
+          ],
+        },
+      }),
+    );
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [1 as never], source: "user", text: "第一句" });
+    await h.waitFor("turn.ended", () => true, 1);
+    await h.driver.send(row.id, { messageIds: [2 as never], source: "user", text: "第二句" });
+    await h.waitFor("turn.ended", () => true, 2);
+    expect(h.of("context.compacted")).toHaveLength(1);
+    writeFileSync(h.promptFile, "第二版提示词", "utf8");
+    await h.driver.send(row.id, { messageIds: [3 as never], source: "user", text: "第三句" });
+    await h.waitFor("turn.ended", () => true, 3);
+    await h.driver.send(row.id, { messageIds: [4 as never], source: "user", text: "第四句" });
+    await h.waitFor("turn.ended", () => true, 4);
+    expect(promptsOf(h)).toEqual([
+      ["<system_instructions>\n第一版提示词\n</system_instructions>", "第一句"],
+      ["第二句"],
+      ["<system_instructions>\n第二版提示词\n</system_instructions>", "第三句"],
+      ["第四句"],
+    ]);
+  });
+
+  it("压缩完进程闲置关了：下一条起新进程恢复会话（恢复不拼首轮提示词），照样在最前面补上", async () => {
+    const h = track(
+      makeAcpHarness({
+        systemPrompt: "提示词",
+        driverOptions: { idleCloseMs: 120 },
+        script: { closeCapability: true, turns: [{ customUpdates: [compacted], textChunks: ["一"] }, { textChunks: ["二"] }] },
+      }),
+    );
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [1 as never], source: "user", text: "第一句" });
+    await h.waitFor("turn.ended", () => true, 1);
+    await h.waitFor("session.exited");
+    await h.driver.send(row.id, { messageIds: [2 as never], source: "user", text: "第二句" });
+    await h.waitFor("turn.ended", () => true, 2);
+    expect(h.logs().some((e) => e.event === "session/load")).toBe(true);
+    expect(promptsOf(h)).toEqual([
+      ["<system_instructions>\n提示词\n</system_instructions>", "第一句"],
+      ["<system_instructions>\n提示词\n</system_instructions>", "第二句"],
+    ]);
+  });
+
+  it("同一轮里压缩两次只重新拼一次；走常驻通道的（never）压缩后也不拼", async () => {
+    const h = track(
+      makeAcpHarness({
+        systemPrompt: "提示词",
+        script: { turns: [{ textChunks: ["一"] }, { customUpdates: [compacted, compacted], textChunks: ["二"] }, { textChunks: ["三"] }] },
+      }),
+    );
+    const row = h.addSession();
+    for (const [i, text] of ["第一句", "第二句", "第三句"].entries()) {
+      await h.driver.send(row.id, { messageIds: [(i + 1) as never], source: "user", text });
+      await h.waitFor("turn.ended", () => true, i + 1);
+    }
+    expect(promptsOf(h)[2]).toEqual(["<system_instructions>\n提示词\n</system_instructions>", "第三句"]);
+
+    const never = track(
+      makeAcpHarness({
+        systemPrompt: "常驻",
+        config: { session: { systemPromptInjection: "never" } },
+        script: { turns: [{ customUpdates: [compacted], textChunks: ["一"] }, { textChunks: ["二"] }] },
+      }),
+    );
+    const n = never.addSession();
+    await never.driver.send(n.id, { messageIds: [1 as never], source: "user", text: "第一句" });
+    await never.waitFor("turn.ended", () => true, 1);
+    await never.driver.send(n.id, { messageIds: [2 as never], source: "user", text: "第二句" });
+    await never.waitFor("turn.ended", () => true, 2);
+    expect(never.of("context.compacted")).toHaveLength(1);
+    expect(promptsOf(never)).toEqual([["第一句"], ["第二句"]]);
   });
 });
 

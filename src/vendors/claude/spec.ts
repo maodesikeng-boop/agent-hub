@@ -111,5 +111,7 @@ export default defineVendor({
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
     backgroundWake: true,
     readonly: "settings",
+    // --append-system-prompt-file <prompt.md>（protocol.ts）：进 claude 的系统提示词，压缩不裁
+    systemPrompt: "resident",
   },
 });

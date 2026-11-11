@@ -148,3 +148,14 @@ describe("composerTarget", () => {
     expect(() => ledger.composerTarget(9999)).toThrow(ConversationNotFoundError);
   });
 });
+
+it("driver.warning 通过系统消息可见、重放去重，不登记发给 agent 的动作", () => {
+  const before = actionCount();
+  const warning = { type: "driver.warning", uuid: "budget-1", message: "agy 规则预算告警", at: 1 } as const;
+  ledger.applyDriverEvent(sessionId, warning);
+  ledger.applyDriverEvent(sessionId, warning);
+  const messages = ledger.snapshot().conversations.find((c) => c.conversation.id === conversationId)!.messages;
+  expect(messages.filter((m) => m.text.includes("规则预算告警"))).toHaveLength(1);
+  expect(systemNoticeText(messages.find((m) => m.text.includes("规则预算告警"))!)).toBe("agy 规则预算告警");
+  expect(actionCount()).toBe(before);
+});

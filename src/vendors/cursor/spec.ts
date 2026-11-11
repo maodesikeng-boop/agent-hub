@@ -145,5 +145,8 @@ export default defineVendor({
     readonly: "os_sandbox",
     // 包进外层 OS 沙箱时必须关闭 cursor-agent 自带沙箱（--sandbox disabled），避免嵌套 sandbox_apply 报 exit 71。
     ownSandboxOffArgs: ["--sandbox", "disabled"],
+    // cursor-agent 的 ACP 没有 systemPrompt 能力，只读会话工作目录里的规则（--add-dir、--plugin-dir 在 ACP 下都不读，
+    // 2026-11-11 实测）；规则文件又不能写进用户的项目目录，所以只能拼进首条消息，收到压缩信号后重新拼
+    systemPrompt: "first_message",
   },
 });

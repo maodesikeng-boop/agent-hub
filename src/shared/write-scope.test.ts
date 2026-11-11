@@ -33,6 +33,7 @@ describe("scopeAllowsWrite", () => {
       dataDir,
       `${dataDir}/shots/a.png`,
       `${dataDir}/state/hub.sqlite`,
+      `${dataDir}/state/launch/session-1/agy-rules/.agents/rules/fusa-01.md`,
       `${dataDir}/state/personas/pm-1.md`,
       `${dataDir}/state/pm-memory`,
       `${dataDir}/state/pm-memory/1`,

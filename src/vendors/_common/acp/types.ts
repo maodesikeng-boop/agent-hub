@@ -89,10 +89,11 @@ export interface AcpContinuationConfig {
 /** 系统提示词与会话初始参数配置。 */
 export interface AcpSessionSetupConfig {
   /**
-   * 系统提示词注入方式：
-   * - "first_turn_new_session"（默认）：仅新建会话（含恢复失败回退新建）首轮消息最前面注入 <system_instructions>；
+   * 系统提示词注入方式。不写按厂商声明（spec 的 capabilities.systemPrompt）：resident → "never"，first_message → "first_turn_new_session"。
+   * - "first_turn_new_session"：仅新建会话（含恢复失败回退新建）首轮消息最前面注入 <system_instructions>；
    * - "every_process_first_turn"：每次新起进程的首轮消息都重新注入系统提示词；
    * - "never"：不注入（由厂商自行通过配置文件或其他机制读取）。
+   * 前两种在收到压缩信号（compaction_update completed）后，下一条消息前再注入一次（被压缩裁掉了）。
    */
   systemPromptInjection?: "first_turn_new_session" | "every_process_first_turn" | "never";
   /** 若服务端在 sessionCapabilities.systemPrompt 声明了原生支持，是否优先走原生 systemPrompt 字段。默认 false（统一走首轮块更稳）。 */
