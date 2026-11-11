@@ -63,7 +63,7 @@ export interface SqliteLedger extends Ledger {
   getRouterCommand: LedgerRouter["getCommand"];
   listRouterCommands: LedgerRouter["listCommands"];
   createRouterAssistantSession: LedgerRouter["createAssistantSession"];
-  deleteRouterAssistantSession: LedgerRouter["deleteAssistantSession"];
+  endRouterAssistantSession: LedgerRouter["endAssistantSession"];
   recordRouterWorkerOrigin: LedgerRouter["recordWorkerOrigin"];
   resolveRouterLocalPmOrProject: LedgerRouter["resolveLocalPmOrProject"];
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
@@ -420,7 +420,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     getRouterCommand: router.getCommand,
     listRouterCommands: router.listCommands,
     createRouterAssistantSession: router.createAssistantSession,
-    deleteRouterAssistantSession: router.deleteAssistantSession,
+    endRouterAssistantSession: router.endAssistantSession,
     recordRouterWorkerOrigin: router.recordWorkerOrigin,
     resolveRouterLocalPmOrProject: router.resolveLocalPmOrProject,
     resolveRouterLocalWorker: router.resolveLocalWorker,

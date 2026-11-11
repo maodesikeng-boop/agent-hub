@@ -1242,11 +1242,31 @@ export function createLedgerRouter(
       return getAgentSession(db, id)!;
     });
 
-  /** 轨道 B 单轮结束（finally）立即清除临时 assistant 会话记录。 */
-  const deleteAssistantSession = (sessionId: SessionId): void => {
+  /**
+   * 修剪已结束的临时 assistant 会话行，但永远不删全表 id 最大的那一行。
+   * agent_sessions.id 是不带 AUTOINCREMENT 的 INTEGER PRIMARY KEY：删掉最大行，下一次 INSERT（下一条总助指令、
+   * 新建的项目经理或 Worker）就复用这个号，撞上驱动层与令牌表里这个号“已结束 / 已撤销”的内存标记，start 直接抛 session_ended。
+   * 留着最大行保证 id 只增不退；已结束的 assistant 行任何时刻最多 1 行，跑多久都不膨胀。
+   * session_persona_seen 以外键引用会话行，一起删（router_items / router_pm_notes 是 ON DELETE SET NULL）。
+   */
+  const pruneEndedAssistantSessions = (): void => {
+    const prunable =
+      "SELECT id FROM agent_sessions WHERE role = 'assistant' AND status = 'ended' AND id < (SELECT MAX(id) FROM agent_sessions)";
+    db.run(`DELETE FROM session_persona_seen WHERE session_id IN (${prunable})`);
+    db.run(`DELETE FROM agent_sessions WHERE id IN (${prunable})`);
+  };
+
+  /** 轨道 B 单轮结束（finally）：把临时 assistant 会话标为已结束、清掉它的内存态，再修剪更早的已结束 assistant 行（不删最大行，见上）。 */
+  const endAssistantSession = (sessionId: SessionId): void => {
     write(() => {
-      db.run("DELETE FROM agent_sessions WHERE id = ? AND role = 'assistant'", sessionId);
+      db.run(
+        "UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE id = ? AND role = 'assistant'",
+        now(),
+        sessionId,
+      );
+      pruneEndedAssistantSessions();
     });
+    sessions.forgetSession(sessionId);
   };
 
   /** 记录由 Router 直接触发或派发的 Worker 因果链（router_worker_origins）。 */
@@ -1408,10 +1428,14 @@ export function createLedgerRouter(
     });
   };
 
-  /** 重启恢复：清理上次崩溃残留的临时 assistant 会话，并将卡在 planning 的指令标为 failed。 */
+  /** 重启恢复：上次崩溃残留的临时 assistant 会话全部标为已结束再修剪（不删最大行，id 不回退），并将卡在 planning 的指令标为 failed。 */
   const recoverAfterRestart = (): void => {
     write((p) => {
-      db.run("DELETE FROM agent_sessions WHERE role = 'assistant'");
+      db.run(
+        "UPDATE agent_sessions SET status = 'ended', updated_at = ? WHERE role = 'assistant' AND status != 'ended'",
+        now(),
+      );
+      pruneEndedAssistantSessions();
       const stuck = db.all<RouterCommandDbRow>("SELECT * FROM router_commands WHERE status = 'planning'");
       if (stuck.length > 0) {
         const t = now();
@@ -1446,7 +1470,7 @@ export function createLedgerRouter(
     getCommand,
     listCommands,
     createAssistantSession,
-    deleteAssistantSession,
+    endAssistantSession,
     recordWorkerOrigin,
     resolveLocalPmOrProject,
     resolveLocalWorker,

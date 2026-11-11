@@ -10,6 +10,7 @@ import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { Db } from "../store/db.ts";
 import {
+  DriverError,
   bundledModelCatalog,
   vendorSpec,
   type Driver,
@@ -39,6 +40,12 @@ class FakeRouterDriver implements Driver {
   readonly interrupted: SessionId[] = [];
   readonly ended: SessionId[] = [];
   private readonly listeners = new Set<DriverEventListener>();
+  /** 还原真实 BaseDriver 的不变量：end 过的会话号同步标上，之后 start / send 一律抛 session_ended（号被复用就会撞上）。 */
+  private readonly endedIds = new Set<SessionId>();
+
+  private assertNotEnded(sessionId: SessionId): void {
+    if (this.endedIds.has(sessionId)) throw new DriverError("session_ended", `session ${sessionId} has been ended`);
+  }
 
   /** 自定义本轮行为：收到 send 后可调 dispatcher.handleAgentDispatch 或发事件。 */
   onTurn:
@@ -54,10 +61,12 @@ class FakeRouterDriver implements Driver {
   }
 
   async start(sessionId: SessionId): Promise<void> {
+    this.assertNotEnded(sessionId);
     this.started.push(sessionId);
   }
 
   async send(sessionId: SessionId, input: DriverSendInput): Promise<DriverSendResult> {
+    this.assertNotEnded(sessionId);
     this.sent.push({ sessionId, input });
     queueMicrotask(async () => {
       if (this.onTurn) {
@@ -91,6 +100,7 @@ class FakeRouterDriver implements Driver {
   }
 
   async end(sessionId: SessionId): Promise<void> {
+    this.endedIds.add(sessionId);
     this.ended.push(sessionId);
   }
 
@@ -107,6 +117,12 @@ class FakeRouterDriver implements Driver {
 }
 
 const CLAUDE_ROUTER_PRESET = vendorSpec("claude").models.routerDefault;
+
+/** 轨道 B 收尾后：没有还活着的 assistant 会话行，已结束的最多留 1 行（全表最大 id 那行，保证 id 不回退）。 */
+function expectAssistantRowsSettled(db: Db): void {
+  expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant' AND status != 'ended'")).toHaveLength(0);
+  expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'").length).toBeLessThanOrEqual(1);
+}
 
 const AVAILABLE_CLAUDE_CATALOG: ModelCatalog = {
   ...bundledModelCatalog("claude"),
@@ -479,8 +495,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     expect(workerMsgs[0]?.text).toContain(userRaw);
 
     // Temporary assistant session was completely cleaned up from DB and sandboxGuard!
-    const leftoverAssistants = db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'");
-    expect(leftoverAssistants).toHaveLength(0);
+    expectAssistantRowsSettled(db);
     expect(driver.ended).toHaveLength(1);
     expect(sandboxGuard.commandOf(driver.started[0]!)).toBeNull();
 
@@ -564,7 +579,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     expect(timeoutCmd.status).toBe("failed");
     expect(timeoutCmd.error).toContain("超时");
     expect(driver.interrupted.length).toBeGreaterThanOrEqual(1);
-    expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'")).toHaveLength(0);
+    expectAssistantRowsSettled(db);
   });
 
   it("handles ambiguous @同名项目 across devices and partial-failure retry without duplicating succeeded targets", async () => {
@@ -690,7 +705,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
         // 并发槽只有 1 个：上一条没释放的话这条会一直排队
         const next = await d.submitCommand({ clientId: "cid-after-hung", text: "下一条" });
         expect(next.status).toBe("answered");
-        expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'")).toHaveLength(0);
+        expectAssistantRowsSettled(db);
       } finally {
         await d.close();
       }
@@ -752,11 +767,56 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       const cmd = await pending;
       expect(cmd.status).toBe("failed");
       expect(cmd.error).toContain("关闭");
-      expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'")).toHaveLength(0);
+      expectAssistantRowsSettled(db);
 
       const after = await d.submitCommand({ clientId: "cid-after-close", text: "关了以后发的" });
       expect(after.status).toBe("failed");
       expect(ledger.getRouterCommand(after.id)?.status).toBe("failed");
+    });
+  });
+
+  describe("临时 assistant 会话号只增不退（不复用驱动层已 end 过的号）", () => {
+    it("连续 3 条轨道 B 指令：每条分配的会话号严格递增，全部成功，库里 assistant 行不超过 1 行", async () => {
+      const results: RouterCommandRecord[] = [];
+      for (let i = 0; i < 3; i++) {
+        results.push(await dispatcher.submitCommand({ clientId: `cid-seq-${i}`, text: `第 ${i} 条规划` }));
+        expectAssistantRowsSettled(db);
+      }
+      expect(results.map((r) => r.status)).toEqual(["answered", "answered", "answered"]);
+      expect(driver.started).toHaveLength(3);
+      for (let i = 1; i < driver.started.length; i++) {
+        expect(driver.started[i]!).toBeGreaterThan(driver.started[i - 1]!);
+      }
+    });
+
+    it("一条轨道 B 指令后紧接着新建项目经理：拿到的号严格大于刚结束的 assistant 号，能正常起会话，下一条指令也成功", async () => {
+      const first = await dispatcher.submitCommand({ clientId: "cid-before-pm", text: "先规划一条" });
+      expect(first.status).toBe("answered");
+      const assistantId = driver.ended.at(-1)!;
+
+      const pm = ledger.createPm({ name: "后建的PM", mode: "manage_only", vendor: "claude", persona: "测试" });
+      expect(pm.sessionId).toBeGreaterThan(assistantId);
+      await expect(driver.start(pm.sessionId)).resolves.toBeUndefined();
+
+      const second = await dispatcher.submitCommand({ clientId: "cid-after-pm", text: "再规划一条" });
+      expect(second.status).toBe("answered");
+      expect(driver.started.at(-1)!).toBeGreaterThan(pm.sessionId);
+      expectAssistantRowsSettled(db);
+    });
+
+    it("重启恢复后：新建会话的号依然严格递增，不撞驱动层已 end 过的号", async () => {
+      await dispatcher.submitCommand({ clientId: "cid-pre-restart-1", text: "重启前 1" });
+      await dispatcher.submitCommand({ clientId: "cid-pre-restart-2", text: "重启前 2" });
+      const maxEnded = Math.max(...driver.ended);
+
+      ledger.recoverAfterRestart();
+      expectAssistantRowsSettled(db);
+
+      const after = await dispatcher.submitCommand({ clientId: "cid-post-restart", text: "重启后" });
+      expect(after.status).toBe("answered");
+      expect(driver.started.at(-1)!).toBeGreaterThan(maxEnded);
+      const pm = ledger.createPm({ name: "重启后PM", mode: "manage_only", vendor: "claude", persona: "测试" });
+      expect(pm.sessionId).toBeGreaterThan(driver.started.at(-1)!);
     });
   });
 });
