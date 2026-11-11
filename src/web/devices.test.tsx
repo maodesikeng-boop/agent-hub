@@ -222,7 +222,7 @@ describe("Offline", () => {
     expect(within(groupHeader("Mac")).queryByText("Offline")).toBeNull();
   });
 
-  it("离线设备在 Router 工作台 Needs You 汇总里的卡片变灰标 Offline，在线的不变", async () => {
+  it("离线设备在 Router 工作台 Needs You 托盘里变灰标 Offline（展开的卡和收起的单行都是），在线的不变", async () => {
     const decision = (id: number, question: string): RouterDecisionItem => ({
       id,
       kind: "decision",
@@ -243,16 +243,31 @@ describe("Offline", () => {
     const fleet = new Fleet(localSnap, remoteSnap);
     await boot(fleet);
     const needsSection = await screen.findByRole("region", { name: "Needs You" });
-    await waitFor(() => expect(within(needsSection).getAllByRole("article")).toHaveLength(2));
+    // 托盘：第一张完整展开成卡（article），其余收成一行（button）
+    await waitFor(() => expect(within(needsSection).getAllByRole("article")).toHaveLength(1));
+    expect(within(needsSection).getByText("东京要确定")).toBeInTheDocument();
+    expect(within(needsSection).getByText("本机要确定")).toBeInTheDocument();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     fleet.offline = true;
     act(() => lastSocket("tokyo").drop());
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 1_000));
-    const tokyoCard = within(needsSection).getByText("东京要确定").closest("article")!;
-    const localCard = within(needsSection).getByText("本机要确定").closest("article")!;
-    expect(tokyoCard).toHaveClass("opacity-60");
-    expect(within(tokyoCard).getByText("Offline")).toBeInTheDocument();
-    expect(localCard).not.toHaveClass("opacity-60");
+    const entryOf = (question: string) => within(needsSection).getByText(question).closest<HTMLElement>("article, button")!;
+    const expectStates = () => {
+      expect(entryOf("东京要确定")).toHaveClass("opacity-60");
+      expect(within(entryOf("东京要确定")).getByText("Offline")).toBeInTheDocument();
+      expect(entryOf("本机要确定")).not.toHaveClass("opacity-60");
+      expect(within(entryOf("本机要确定")).queryByText("Offline")).toBeNull();
+    };
+    // 一张是展开的卡、一张是收起的行：两种形态都要对
+    expect(new Set([entryOf("东京要确定").tagName, entryOf("本机要确定").tagName])).toEqual(new Set(["ARTICLE", "BUTTON"]));
+    expectStates();
+    // 点收起的那一行换它展开：形态互换，离线状态跟着
+    const rowQuestion = entryOf("东京要确定").tagName === "BUTTON" ? "东京要确定" : "本机要确定";
+    const cardQuestion = rowQuestion === "东京要确定" ? "本机要确定" : "东京要确定";
+    act(() => entryOf(rowQuestion).click());
+    expect(entryOf(rowQuestion).tagName).toBe("ARTICLE");
+    expect(entryOf(cardQuestion).tagName).toBe("BUTTON");
+    expectStates();
   });
 
   it("从没连上过：组头写离线，进去是“还没连上这台设备”", async () => {
