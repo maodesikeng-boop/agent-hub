@@ -53,7 +53,7 @@ import {
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
-import { pickToolStepInput, toolStepSignature } from "../../daemon/driver/protocol.ts";
+import { pickStepInput, toolStepSignature } from "../../daemon/driver/protocol.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
   READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
@@ -739,7 +739,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
             type: "agent.tool_preview",
             toolUseId,
             name: toolName,
-            input: pickToolStepInput(parameters),
+            input: pickStepInput(parameters),
             at,
           });
         }

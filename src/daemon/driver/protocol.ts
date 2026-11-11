@@ -2,13 +2,17 @@
 // claude 自己的协议在 src/vendors/claude/protocol.ts。
 import { createHash } from "node:crypto";
 import {
+  MAX_STEP_ARG_CHARS,
   MAX_STREAMING_TOOL_BLOCKS,
   MAX_STREAMING_TOOL_JSON_CHARS,
   type AgentStepInput,
   type AgentToolPreviewEvent,
   type TokenUsage,
 } from "../../shared/index.ts";
-import { STEP_INPUT_KEYS } from "../../shared/step-labels.ts";
+import { STEP_INPUT_KEYS, pickStepInput } from "../../shared/step-labels.ts";
+
+/** 驱动发 agent.tool_preview 时挑状态参数用（和账本 stepOfTool 同一份规则）。 */
+export { pickStepInput };
 import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 import { VENDOR_LIST } from "../../vendors/registry.ts";
 
@@ -81,26 +85,9 @@ export function buildChildEnv(
   return { ...env, ...extra };
 }
 
-const MAX_PREVIEW_ARG_CHARS = 300;
-
-/** 从任意对象中提取状态文案所需的路径 / skill 字段（与 stepOfTool 一致，只留非空字符串）。 */
-export function pickToolStepInput(input: unknown): AgentStepInput {
-  const out: AgentStepInput = {};
-  if (input !== null && typeof input === "object" && !Array.isArray(input)) {
-    const rec = input as Record<string, unknown>;
-    for (const key of STEP_INPUT_KEYS) {
-      const v = rec[key];
-      if (typeof v === "string" && v.trim() !== "") {
-        out[key] = [...v].slice(0, MAX_PREVIEW_ARG_CHARS).join("");
-      }
-    }
-  }
-  return out;
-}
-
 /** 计算工具步骤的去重签名（工具名 + STEP_INPUT_KEYS 字段值），签名未变时不重复发预览事件。 */
 export function toolStepSignature(name: string, input: unknown): string {
-  const kept = pickToolStepInput(input);
+  const kept = pickStepInput(input);
   return `${name}\u0000${STEP_INPUT_KEYS.map((k) => kept[k] ?? "").join("\u0000")}`;
 }
 
@@ -177,7 +164,7 @@ export function extractStreamingToolStepInput(partialJson: string): AgentStepInp
       if (valTok === null) break;
       i = valTok.nextIdx;
       if (wantValue && valTok.value.trim() !== "") {
-        out[keyTok.value as keyof AgentStepInput] = [...valTok.value].slice(0, MAX_PREVIEW_ARG_CHARS).join("");
+        out[keyTok.value as keyof AgentStepInput] = [...valTok.value].slice(0, MAX_STEP_ARG_CHARS).join("");
       }
     } else if (vCh === 0x7b /* { */ || vCh === 0x5b /* [ */) {
       let depth = 1;
@@ -243,7 +230,7 @@ export class StreamingToolPreviewTracker {
       const oldest = this.#blocks.keys().next().value;
       if (oldest !== undefined) this.#blocks.delete(oldest);
     }
-    const keptInput = pickToolStepInput(opts.initialInput);
+    const keptInput = pickStepInput(opts.initialInput);
     const lastSig = toolStepSignature(opts.name, keptInput);
     this.#blocks.set(key, {
       toolUseId: opts.toolUseId,
@@ -288,7 +275,7 @@ export class StreamingToolPreviewTracker {
     }
     if (patch.toolUseId) b.toolUseId = patch.toolUseId;
     if (patch.name) b.name = patch.name;
-    const merged: AgentStepInput = { ...b.keptInput, ...pickToolStepInput(patch.input) };
+    const merged: AgentStepInput = { ...b.keptInput, ...pickStepInput(patch.input) };
     const sig = toolStepSignature(b.name, merged);
     if (sig === b.lastSig) return null;
     b.keptInput = merged;

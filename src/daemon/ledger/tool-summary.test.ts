@@ -23,6 +23,19 @@ describe("stepOfTool：tool_use 变成“在做什么”", () => {
     }
   });
 
+  it("连接器调用：只留服务名、动作名（codex server / tool、agy ServerName / ToolName），参数正文不推", () => {
+    expect(stepOfTool("call_mcp_tool", { ServerName: "linear", ToolName: "list_issues", Arguments: { query: "secret" } })).toEqual({
+      type: "tool_use",
+      name: "call_mcp_tool",
+      input: { ServerName: "linear", ToolName: "list_issues" },
+    });
+    expect(stepOfTool("mcpToolCall", { server: "github", tool: "get_issue", arguments: { body: "x" } })).toEqual({
+      type: "tool_use",
+      name: "mcpToolCall",
+      input: { server: "github", tool: "get_issue" },
+    });
+  });
+
   it("太长的参数截断", () => {
     const step = stepOfTool("Read", { file_path: `/${"a".repeat(1000)}` });
     expect(step.type === "tool_use" && step.input.file_path).toHaveLength(300);

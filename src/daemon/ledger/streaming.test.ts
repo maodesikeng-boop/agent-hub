@@ -235,6 +235,7 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
   it("6 家厂商早期工具预览零 SQLite 写入（Reading file → Reading foo.ts），正式 agent.tool 只入库一次且不重复插行", () => {
     for (const vendor of AGENT_VENDORS) {
       db.run("UPDATE agent_sessions SET vendor = ?, status = 'running' WHERE id = ?", vendor, sessionId);
+      ev({ type: "turn.started", at: (now += 1) });
       const msgBefore = count("messages");
       const stepsBefore = count("session_steps");
       changes.length = 0;
@@ -306,6 +307,31 @@ describe("ledger 流式工具早捕获（agent.tool_preview）与快工具防闪
     ev({ type: "agent.tool_preview", name: "Read", input: { file_path: "/a.ts" }, at: ++now });
     expect(statusChanges()).toHaveLength(0);
     expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.activity).toBe("stopping");
+  });
+
+  it("空闲（轮已结束、进程已退）时迟到的 agent.tool_preview 不把会话救活成在干活，也不推状态", () => {
+    ev({ type: "turn.started", at: (now += 1) });
+    ev({ type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 5, at: (now += 1) });
+    changes.length = 0;
+    ev({ type: "agent.tool_preview", toolUseId: "late", name: "Read", input: { file_path: "/late.ts" }, at: (now += 1) });
+    expect(statusChanges()).toHaveLength(0);
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)).toMatchObject({ activity: "idle", step: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("驻留期间来的 api_retry 不被到点回退冲掉", () => {
+    ev({ type: "agent.tool", uuid: "retry-1", toolUseId: "tu-retry", name: "Read", input: { file_path: "/r.ts" }, at: now });
+    now += 2;
+    ev({ type: "agent.tool_result", toolUseIds: ["tu-retry"], at: now });
+    expect(vi.getTimerCount()).toBe(1);
+    const info = { attempt: 1, maxRetries: 10, retryAt: null, errorStatus: 529, error: "overloaded" };
+    ev({ type: "api_retry", info, at: (now += 1) });
+    now += MIN_TOOL_STEP_VISIBLE_MS;
+    vi.advanceTimersByTime(MIN_TOOL_STEP_VISIBLE_MS);
+    expect(vi.getTimerCount()).toBe(0);
+    const live = ledger.snapshot().sessions.find((s) => s.sessionId === sessionId);
+    expect(live?.step).toEqual({ type: "thinking" });
+    expect(live?.apiRetry).toMatchObject({ attempt: 1 });
   });
 
   it("快工具防闪没：耗时 < 450ms 的本地工具在 toolFinished 后保留工具文案满 MIN_TOOL_STEP_VISIBLE_MS 再回退 Thinking（含期间收到 agent.thinking）", () => {

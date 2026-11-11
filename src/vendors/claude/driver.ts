@@ -82,7 +82,7 @@ interface Proc extends BaseProc<ClaudeStartupOutcome> {
   readonlyGate: ClaudeReadonlyGate | null;
   /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
-  /** 当前流式消息中尚未闭合的 tool_use JSON 参数跟踪器（有界，assistant / result / 退出时清空）。 */
+  /** 主 agent 当前流式消息中尚未闭合的 tool_use JSON 参数跟踪器（有界，content_block_stop / message_stop / result / 退出时清空）。 */
   toolPreviews: StreamingToolPreviewTracker;
 }
 
@@ -432,7 +432,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
       case "assistant": {
-        proc.toolPreviews.clear();
+        // 不在这里清 toolPreviews：claude 每个内容块完成就出一条 assistant，可能夹在下一个工具块的流式参数中间（并行工具），
+        // 也可能是子任务的；跟踪器靠 content_block_stop / message_stop / result / 进程退出收尾，另有块数上限
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(obj, row.usage) : null;
         if (live) this.pushUsage(st, live);

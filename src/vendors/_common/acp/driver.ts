@@ -40,7 +40,7 @@ import {
 } from "../../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../../daemon/driver/persona-note.ts";
 import { signalChild } from "../../../daemon/driver/process.ts";
-import { pickToolStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
+import { pickStepInput, toolStepSignature } from "../../../daemon/driver/protocol.ts";
 import {
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   scanSecretGlobs,
@@ -1337,7 +1337,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           type: "agent.tool_preview",
           toolUseId: toolCallId,
           name,
-          input: pickToolStepInput(input),
+          input: pickStepInput(input),
           at,
         });
       }

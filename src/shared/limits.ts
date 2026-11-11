@@ -57,6 +57,8 @@ export const MIN_TOOL_STEP_VISIBLE_MS = 450;
 export const MAX_STREAMING_TOOL_JSON_CHARS = 8_192;
 /** 单会话同时缓存的流式工具调用增量块上限（防异常流未发结束帧时无界增长）。 */
 export const MAX_STREAMING_TOOL_BLOCKS = 32;
+/** 推给网页的“在做什么”状态参数（文件路径、skill 名、连接器名等，见 step-labels.ts 的 STEP_INPUT_KEYS）每个最多这么多个 Unicode 字符。 */
+export const MAX_STEP_ARG_CHARS = 300;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 

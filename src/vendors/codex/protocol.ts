@@ -50,6 +50,7 @@ const CODEX_TOOL_ITEM_TYPES = [
   "fileChange",
   "mcpToolCall",
   "webSearch",
+  "collabAgentToolCall",
   "collabToolCall",
 ] as const;
 
@@ -347,20 +348,6 @@ export function isCodexToolItemType(type: unknown): type is CodexToolItemType {
   return typeof type === "string" && (CODEX_TOOL_ITEM_TYPES as readonly string[]).includes(type);
 }
 
-const APPLY_PATCH_FILE_RE = /^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\r?$/m;
-
-/**
- * 从流式 apply_patch 输出（item/fileChange/outputDelta 累积前缀）中提取首个已换行的完整文件路径：
- * 仅扫描最后一个 \n 之前的完整行，避免流式切片把半截路径提前发出。
- */
-export function extractApplyPatchFilePath(patchText: string): string | null {
-  const lastNewline = patchText.lastIndexOf("\n");
-  if (lastNewline < 0) return null;
-  const match = APPLY_PATCH_FILE_RE.exec(patchText.slice(0, lastNewline));
-  const raw = match?.[1]?.trim();
-  return raw ? raw : null;
-}
-
 /** 从 fileChange item 或审批参数中提取所有涉及的文件路径（含改名的目标）。 */
 export function extractFileChangePaths(source: Record<string, unknown>): string[] {
   const paths: string[] = [];
@@ -413,12 +400,19 @@ function buildCodexToolInput(item: Record<string, unknown>): Record<string, unkn
       return {
         query: typeof item.query === "string" ? item.query : "",
       };
-    case "mcpToolCall":
+    case "mcpToolCall": {
+      // ChatGPT 应用连接器（appContext）带人读的应用名、动作名，状态行用它（“Calling Linear: list issues”），没有再用 MCP 的 server / tool
+      const app = typeof item.appContext === "object" && item.appContext !== null ? (item.appContext as Record<string, unknown>) : null;
+      const nonEmpty = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+      const server = nonEmpty(app?.appName) ?? nonEmpty(item.server);
+      const tool = nonEmpty(app?.actionName) ?? nonEmpty(item.tool);
       return {
-        ...(typeof item.server === "string" ? { server: item.server } : {}),
-        ...(typeof item.tool === "string" ? { tool: item.tool } : {}),
+        ...(server !== null ? { server } : {}),
+        ...(tool !== null ? { tool } : {}),
         ...(typeof item.arguments === "object" && item.arguments !== null ? { arguments: item.arguments } : {}),
       };
+    }
+    case "collabAgentToolCall":
     case "collabToolCall":
       return {
         ...(typeof item.tool === "string" ? { tool: item.tool } : {}),

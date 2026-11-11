@@ -2264,4 +2264,42 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     });
     expect(t.of("agent.tool_result")).toHaveLength(1);
   });
+
+  it("连接器 call_mcp_tool：GENERATING 早期帧拿到 ServerName / ToolName 就发 agent.tool_preview，状态行能写出服务和动作", async () => {
+    const t = makeAgyHarness({
+      script: {
+        turns: [
+          {
+            steps: [
+              { type: "rawStepUpdate", stepUpdate: { step_index: 4, step_type: "tool", state: "GENERATING", tool_name: "call_mcp_tool", tool_info: { parameters: {} } } },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: { step_index: 4, step_type: "tool", state: "GENERATING", tool_name: "call_mcp_tool", tool_info: { parameters: { ServerName: "linear", ToolName: "list_issues" } } },
+              },
+              {
+                type: "rawStepUpdate",
+                stepUpdate: {
+                  step_index: 4,
+                  step_type: "tool",
+                  state: "ACTIVE",
+                  tool_name: "call_mcp_tool",
+                  tool_info: { parameters: { ServerName: "linear", ToolName: "list_issues", Arguments: { query: "secret" } } },
+                },
+              },
+              { type: "rawStepUpdate", stepUpdate: { step_index: 4, step_type: "tool", state: "DONE", tool_name: "call_mcp_tool", tool_info: { parameters: {} } } },
+              { type: "text", stepId: 5, deltas: ["好了"] },
+            ],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "查 issue"));
+    await t.waitFor("turn.ended");
+
+    const previews = t.of("agent.tool_preview").map((e) => e.input);
+    expect(previews).toEqual([{}, { ServerName: "linear", ToolName: "list_issues" }]);
+    expect(describeStep({ type: "tool_use", name: "call_mcp_tool", input: previews[1] as Record<string, string> })).toBe("Calling Linear: list issues");
+    expect(t.of("agent.tool")).toHaveLength(1);
+  });
 });

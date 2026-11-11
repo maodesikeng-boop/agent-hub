@@ -243,7 +243,9 @@ export function createLedgerSessions(ctx: LedgerContext) {
     if (preview.name === "" || isHiddenStreamingSession(session)) return;
     const sessionId = session.id;
     const prev = liveOf(sessionId);
-    if (prev.activity === "stopping" || prev.activity === "preparing") return;
+    // 只升级正在跑的这一轮：停止中、准备中不盖；空闲（轮已结束、进程已退）时迟到的预览不能把会话“救活”成在干活（它不入库，
+    // 后面也不会再有 turn.ended 把它收回去）。正式的 agent.tool 之前一定先有 message.processing / turn.started 把状态置成 working
+    if (prev.activity !== "working") return;
 
     cancelStreamTimer(sessionId);
     cancelToolHoldTimer(sessionId);
@@ -314,7 +316,8 @@ export function createLedgerSessions(ctx: LedgerContext) {
           }
           const row = safeGetSession(sessionId);
           if (row === null) return;
-          live.set(sessionId, { ...cur, apiRetry: null, step: THINKING, toolStepAt: undefined });
+          // 只是驻留到点，不是新事件：apiRetry 等别的状态原样留着（驻留期间来的 api_retry 不被冲掉）
+          live.set(sessionId, { ...cur, step: THINKING, toolStepAt: undefined });
           flushSessionStatusNow(sessionId, row);
         }, delay),
       );

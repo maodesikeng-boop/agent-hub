@@ -16,7 +16,7 @@ import type {
   RateLimitWindow,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
-import { StreamingToolPreviewTracker, lineUuid, pickToolStepInput, userContent } from "../../daemon/driver/protocol.ts";
+import { StreamingToolPreviewTracker, lineUuid, pickStepInput, userContent } from "../../daemon/driver/protocol.ts";
 
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
@@ -187,8 +187,11 @@ export function parseStreamEvent(
     | undefined;
   if (!event || typeof event !== "object") return null;
   const subtask = subtaskOf(obj);
+  // 子任务（parent_tool_use_id）的流和主 agent 的流可以交错（后台子 agent），块序号各自从 0 数：子任务的工具预览账本本来就不显示，
+  // 这里不碰跟踪器，免得它的 message_start 清掉、同序号的块盖掉主 agent 正在拼的工具参数
+  const mainTracker = subtask.parentToolUseId === undefined ? toolTracker : undefined;
   if (event.type === "message_start" || event.type === "message_stop") {
-    toolTracker?.clear();
+    mainTracker?.clear();
     return null;
   }
   if (event.type === "content_block_start") {
@@ -197,6 +200,7 @@ export function parseStreamEvent(
       return { type: "agent.text_delta", delta: initial, reset: true, at, ...subtask };
     }
     if (event.content_block?.type === "tool_use") {
+      if (subtask.parentToolUseId !== undefined) return null;
       const name = typeof event.content_block.name === "string" ? event.content_block.name : "";
       if (name === "") return null;
       const toolUseId =
@@ -204,22 +208,13 @@ export function parseStreamEvent(
           ? event.content_block.id
           : undefined;
       const index = typeof event.index === "number" ? event.index : 0;
-      if (toolTracker) {
-        return toolTracker.start(index, {
-          toolUseId,
-          name,
-          initialInput: event.content_block.input,
-          parentToolUseId: subtask.parentToolUseId,
-          at,
-        });
-      }
+      if (mainTracker) return mainTracker.start(index, { toolUseId, name, initialInput: event.content_block.input, at });
       return {
         type: "agent.tool_preview",
         ...(toolUseId ? { toolUseId } : {}),
         name,
-        input: pickToolStepInput(event.content_block.input),
+        input: pickStepInput(event.content_block.input),
         at,
-        ...subtask,
       };
     }
     return null;
@@ -231,15 +226,15 @@ export function parseStreamEvent(
       return { type: "agent.text_delta", delta: text, at, ...subtask };
     }
     if (event.delta?.type === "input_json_delta") {
-      if (!toolTracker) return null;
+      if (!mainTracker) return null;
       const partial = typeof event.delta.partial_json === "string" ? event.delta.partial_json : "";
       const index = typeof event.index === "number" ? event.index : 0;
-      return toolTracker.appendJsonDelta(index, partial, at);
+      return mainTracker.appendJsonDelta(index, partial, at);
     }
     return null;
   }
   if (event.type === "content_block_stop") {
-    if (toolTracker && typeof event.index === "number") toolTracker.end(event.index);
+    if (mainTracker && typeof event.index === "number") mainTracker.end(event.index);
     return null;
   }
   return null;

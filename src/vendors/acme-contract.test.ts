@@ -87,9 +87,9 @@ describe("名单加一项 acme，公共代码就认得它", () => {
   });
 
   it("没写 tools：它的工具显示“Using <名>”、统计里认不出（按原名计）；mcp__ 开头的照样按连接器认", () => {
-    expect(describeStep({ type: "tool_use", name: "acme_shell", input: {} })).toBe("Using acme_shell");
+    expect(describeStep({ type: "tool_use", name: "acme_shell", input: {} })).toBe("Using acme shell");
     expect(toolCategory("acme_shell")).toBeNull();
-    expect(describeStep({ type: "tool_use", name: "mcp__jira__search", input: {} })).toBe("Calling jira search");
+    expect(describeStep({ type: "tool_use", name: "mcp__jira__search", input: {} })).toBe("Calling Jira: search");
   });
 
 

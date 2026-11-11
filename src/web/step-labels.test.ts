@@ -62,17 +62,72 @@ describe("describeStep：状态词（英文）", () => {
     expect(describeStep(tool("Edit", { file_path: "/" }))).toBe("Editing file");
   });
 
-  it("MCP 工具：Calling 连接器 工具", () => {
-    expect(describeStep(tool("mcp__slack__search"))).toBe("Calling slack search");
-    expect(describeStep(tool("mcp__chrome-devtools__take_screenshot"))).toBe("Calling chrome-devtools take_screenshot");
+  it("MCP 工具：Calling 服务: 动作（服务名去内部前缀、品牌大小写，动作名拆成小写词）", () => {
+    expect(describeStep(tool("mcp__slack__search"))).toBe("Calling Slack: search");
+    expect(describeStep(tool("mcp__chrome-devtools__take_screenshot"))).toBe("Calling Chrome DevTools: take screenshot");
+    expect(describeStep(tool("mcp__shadcn__view_items_in_registries"))).toBe("Calling Shadcn: view items in registries");
+    // claude.ai 连接器：去掉 claude_ai_
+    expect(describeStep(tool("mcp__claude_ai_Linear__list_issues"))).toBe("Calling Linear: list issues");
+    expect(describeStep(tool("mcp__claude_ai_Google_Drive__search"))).toBe("Calling Google Drive: search");
+    expect(describeStep(tool("mcp__claude_ai_Atlassian_Rovo__searchJiraIssuesUsingJql"))).toBe("Calling Atlassian Rovo: search jira issues using JQL");
+    // 插件带的：去掉 plugin_<插件名>_
+    expect(describeStep(tool("mcp__plugin_github_github__get_issue"))).toBe("Calling GitHub: get issue");
+    expect(describeStep(tool("mcp__plugin_parallel_parallel-search__web_search"))).toBe("Calling Parallel Search: web search");
+    expect(describeStep(tool("mcp__plugin_pdf-viewer_pdf__display_pdf"))).toBe("Calling PDF: display PDF");
+    // 缩写原样
+    expect(describeStep(tool("mcp__rea__getURLPath"))).toBe("Calling Rea: get URL path");
     expect(describeStep(tool("mcp__"))).toBe("Working");
-    expect(describeStep(tool("mcp__slack"))).toBe("Calling slack");
-    expect(describeStep(tool("mcp__slack__"))).toBe("Calling slack");
+    expect(describeStep(tool("mcp__slack"))).toBe("Calling Slack");
+    expect(describeStep(tool("mcp__slack__"))).toBe("Calling Slack");
   });
 
-  it("没列出来的工具：Using 工具名；工具名是空的：Working", () => {
+  it("不带 mcp__ 前缀的连接器调用：按参数里的服务名、动作名（codex mcpToolCall、agy call_mcp_tool），拿不到才 Calling tool", () => {
+    expect(describeStep(tool("mcpToolCall", { server: "linear", tool: "list_issues" }))).toBe("Calling Linear: list issues");
+    expect(describeStep(tool("mcpToolCall", { server: "Google Drive", tool: "search" }))).toBe("Calling Google Drive: search");
+    expect(describeStep(tool("mcpToolCall", { server: "github" }))).toBe("Calling GitHub");
+    expect(describeStep(tool("mcpToolCall", { tool: "listIssues" }))).toBe("Calling list issues");
+    expect(describeStep(tool("mcpToolCall"))).toBe("Calling tool");
+    expect(describeStep(tool("call_mcp_tool", { ServerName: "notion", ToolName: "notion-search" }))).toBe("Calling Notion: notion search");
+    expect(describeStep(tool("call_mcp_tool"))).toBe("Calling tool");
+    // agy 直接露出的扁平名 mcp_<服务>_<工具>：拆不开服务名，整段拆成词
+    expect(describeStep(tool("mcp_linear_list_issues"))).toBe("Calling linear list issues");
+  });
+
+  it("连接器资源：Reading 服务 resources", () => {
+    expect(describeStep(tool("list_resources", { ServerName: "linear" }))).toBe("Reading Linear resources");
+    expect(describeStep(tool("read_resource", { ServerName: "claude_ai_Google_Drive" }))).toBe("Reading Google Drive resources");
+    expect(describeStep(tool("read_mcp_resource", { server: "github" }))).toBe("Reading GitHub resources");
+    expect(describeStep(tool("list_mcp_resources"))).toBe("Reading resources");
+  });
+
+  it("技能：读 …/skills/<名字>/SKILL.md 就是加载技能（正反斜杠都认），Skill 的命名空间前缀去掉", () => {
+    expect(describeStep(tool("Read", { file_path: "/repo/.agents/skills/setup-pstack/SKILL.md" }))).toBe("Loading skill setup-pstack");
+    expect(describeStep(tool("read_file", { Path: "C:\\Users\\a\\.codex\\skills\\frontend-rules\\SKILL.md" }))).toBe("Loading skill frontend-rules");
+    expect(describeStep(tool("view_file", { AbsolutePath: "/Users/a/.gemini/skills/pdf/skill.md" }))).toBe("Loading skill pdf");
+    expect(describeStep(tool("read", { path: "skills/brainstorm/SKILL.md" }))).toBe("Loading skill brainstorm");
+    // 不是技能目录里的 SKILL.md、改 SKILL.md：照常
+    expect(describeStep(tool("Read", { file_path: "/repo/docs/SKILL.md" }))).toBe("Reading SKILL.md");
+    expect(describeStep(tool("Read", { file_path: "/repo/skills/a/b/SKILL.md" }))).toBe("Reading SKILL.md");
+    expect(describeStep(tool("Edit", { file_path: "/repo/.agents/skills/setup-pstack/SKILL.md" }))).toBe("Editing SKILL.md");
+    expect(describeStep(tool("Skill", { skill: "superpowers:brainstorming" }))).toBe("Loading skill brainstorming");
+    expect(describeStep(tool("Skill", { skill: "a:b:c" }))).toBe("Loading skill c");
+    expect(describeStep(tool("Skill", { skill: "plugin:" }))).toBe("Loading skill plugin");
+    expect(describeStep(tool("Skill", { skill: ":" }))).toBe("Loading skill");
+  });
+
+  it("没列出来的工具：Using 工具名（蛇形、连字符、小写开头驼峰拆成词，大写开头照抄）；工具名是空的：Working", () => {
     expect(describeStep(tool("Monitor"))).toBe("Using Monitor");
+    expect(describeStep(tool("TaskOutput"))).toBe("Using TaskOutput");
+    expect(describeStep(tool("generate_image"))).toBe("Using generate image");
+    expect(describeStep(tool("browser-open"))).toBe("Using browser open");
+    expect(describeStep(tool("dynamicToolCall"))).toBe("Using dynamic tool call");
+    expect(describeStep(tool("__"))).toBe("Using __");
     expect(describeStep(tool(""))).toBe("Working");
+  });
+
+  it("codex 子 agent 协作条目：Running subagent", () => {
+    expect(describeStep(tool("collabAgentToolCall", { tool: "spawnAgent" }))).toBe("Running subagent");
+    expect(describeStep(tool("collabToolCall"))).toBe("Running subagent");
   });
 
   it("没有 step（老服务端、刚开始）、脏的 step：Working", () => {

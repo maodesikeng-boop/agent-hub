@@ -147,9 +147,8 @@ describe("thinking、工具调用、工具结果", () => {
       { name: "Read", input: {} },
       { name: "Read", input: { file_path: "/repo/src/main.ts" } },
     ]);
-    const subPreviews = h.of("agent.tool_preview").filter((e) => e.parentToolUseId === "toolu_parent");
-    expect(subPreviews).toHaveLength(1);
-    expect(subPreviews[0]).toMatchObject({ name: "Bash", parentToolUseId: "toolu_parent" });
+    // 子任务的工具块不进主 agent 的跟踪器、不发预览（账本也不显示子任务的预览）
+    expect(h.of("agent.tool_preview").filter((e) => e.parentToolUseId !== undefined)).toEqual([]);
     // 正式入库事件仍各只有一条
     expect(h.of("agent.tool")).toHaveLength(2);
   });

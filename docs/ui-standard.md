@@ -387,6 +387,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **一轮回复一个头像**：用户（或项目经理、Worker 汇报、到点的定时任务）说一句之后，agent 接下来的所有东西算一轮，只在开头出一次“头像 26px + 名字（13.5px、500、灰）”。头像旁不放状态、不加“·”。
   - 一轮里的工具调用、派出 / 收工 Worker、建删定时任务这些操作合成**一行**，放在名字下面：`Worked for 23s ›`（13.5px 灰，悬停变前景色，无底色、无胶囊），点开才列出每一步（12px，等宽字体，命令原样）。用时 = 这一轮最后一条的时间 − 这一轮开始的时间（触发它的那句话、和上一轮最后一条里晚的那个），都用已有的时间戳。不到 10 秒带一位小数（8.3s），之后 23s、1m 5s、1h 2m。没有操作的轮不出这一行。
   - 正在跑：这一行挪到这一轮最下面，写英文状态（`Thinking…`、`Running command…`、`Reading a.ts…`，文案见 `step-labels.ts`），省略号有淡入淡出；有操作时同样能点开看明细。跑完回到名字下面，变成 `Worked for …`。
+    - **工具状态词的写法**（照 Codex：一行、英文、只把机器名换成人读的词，不翻译、不加解释，不用“·”拼接）：
+      - 连接器（MCP）：`Calling 服务: 动作`，如 `Calling Linear: list issues`、`Calling Google Drive: search`、`Calling GitHub: get issue`。服务名去掉内部前缀（`claude_ai_`、`plugin_<插件名>_`），按词首字母大写、常见品牌照官方写法（`GitHub`、`DevTools`、`PDF`）；动作名的下划线、连字符、驼峰拆成小写词，缩写原样（`URL`、`JQL`）。名字来自工具名 `mcp__服务__动作`，或参数里的服务名、动作名（codex `mcpToolCall` 的 `server` / `tool`，有应用连接器的 `appContext` 时用它的应用名、动作名；agy `call_mcp_tool` 的 `ServerName` / `ToolName`）；只有服务名写 `Calling Linear`，都拿不到写 `Calling tool`。列、读连接器资源：`Reading Linear resources`。
+      - 技能：`Loading skill 名字`。`Skill` 工具的命名空间前缀去掉（`superpowers:brainstorming` → `brainstorming`）；读 `…/skills/<名字>/SKILL.md`（正反斜杠都认）也算加载这个技能，不写 `Reading SKILL.md`。技能名本身照抄（用户打 `/名字` 用的就是它）。
+      - 没归类的工具：`Using 工具名`；蛇形、连字符、小写开头驼峰的机器名拆成词（`generate_image` → `Using generate image`），大写开头的照抄（`Using Monitor`）。
+      - 只推名字和路径（`STEP_INPUT_KEYS`），命令、搜索词、参数正文不推，所以 `ToolSearch` 只写 `Finding tools`、搜网页只写 `Searching the web`。
+      - 模型还在流式生成工具参数时就先显示（`agent.tool_preview`，只改内存不入库），拼出路径、服务名再原地升级；工具几毫秒就回结果时文案至少停 450ms（`MIN_TOOL_STEP_VISIBLE_MS`）再回 `Thinking…`，期间来了文字、新工具、这一轮结束或停止就立刻换掉。
   - 这一轮的文字按顺序排在下面（`hub ask` 问你的那条不另挂“等你确定”标签，右栏列着，点过去高亮这一条）；跑完后最下面一行是复制按钮（图标按钮 `icon-sm`，复制这一轮所有文字的 Markdown 原文，点了换成勾）和结束时间（12px 灰，`tabular-nums`）。
   - **流式生成中的文字**：agent 正在输出某段文字（`session.streamingText` 非空）时，在同一轮（共用这轮唯一的头像 + 名字；本轮尚无已入库消息时直接展开该轮）已入库内容下方、底部状态行上方，按第 15 条正文 Markdown 实时显示这段正在生成的文字（未闭合代码块防抖上色、未闭合图表保持代码块）；该段完成入库时原子清掉流式文本并原位替换成正式消息，不出现“流式预览 + 正式消息”双份重影，也不重复播放 `.message-enter` 淡入动画。
   - **`hub ask` 选项卡片**：当 `hub ask` 带选项（显式传 `--option` 或正文末尾紧接 2～10 行、每行都以顺序字母 `A. `/`B. ` 开头的选项；普通 `- xxx` 列表不算，按普通 Markdown 显示）时，在对话流中渲染为圆角边框卡片（`rounded-2xl border border-border bg-background p-4`），顶部为问题标题（15px、`font-medium`），下方为 A/B/C/D 选项行（左 `size-6 rounded-xl border border-border bg-sidebar` 字母徽标 + 右 15px 文字（行内 Markdown 渲染），整行 `rounded-xl`，悬停 `hover:bg-sidebar-hover`）；未回答时点击任一选项行直接将该选项作为用户消息发出，已回答后变只读并高亮所选项（`bg-sidebar-active`）。
