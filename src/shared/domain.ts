@@ -1029,6 +1029,16 @@ export interface PmMemoryFilesList {
 }
 
 /**
+ * MEMORY.md 按“行”计数（自动加载的 200 行上限用）：末尾单个换行不算多出一行空行，
+ * 免得恰好 200 行、按惯例以换行结尾的文件被误判超限。空串是 0 行。
+ */
+export function pmMemoryLineCount(text: string): number {
+  if (text === "") return 0;
+  const n = text.split("\n").length;
+  return text.endsWith("\n") ? n - 1 : n;
+}
+
+/**
  * 校验项目经理按需参考子文件名（仅放行扁平 `<topic>.md`，拦截路径穿越、点文件、非小写 `.md` 与主索引 `MEMORY.md`）。
  * 合法返回 null，不合法返回可直接展示的原因文案。
  */

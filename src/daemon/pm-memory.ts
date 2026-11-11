@@ -1,9 +1,13 @@
 import { randomBytes } from "node:crypto";
 import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
+  opendirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -14,6 +18,7 @@ import {
 import { basename, join } from "node:path";
 import {
   LedgerRequestError,
+  MAX_PERSONA_BYTES,
   PM_MEMORY_INDEX_FILE,
   PM_MEMORY_MAX_BYTES,
   PM_MEMORY_MAX_DIR_SCAN,
@@ -22,6 +27,7 @@ import {
   PM_MEMORY_MAX_SUBFILE_BYTES,
   PM_MEMORY_MAX_TOTAL_BYTES,
   checkPmMemoryFileName,
+  pmMemoryLineCount,
   utf8Bytes,
   type PmId,
   type PmMemoryFileDetail,
@@ -49,14 +55,15 @@ function codePointUtf8Bytes(cp: number): number {
 export function truncatePmMemoryForPrompt(raw: string): { text: string; truncated: boolean } {
   if (raw === "" || raw === PM_MEMORY_TRUNCATION_HINT) return { text: raw, truncated: false };
   const lines = raw.split("\n");
+  const lineCount = pmMemoryLineCount(raw);
   if (
     raw.endsWith(`\n${PM_MEMORY_TRUNCATION_HINT}`) &&
-    lines.length <= PM_MEMORY_MAX_LINES + 1 &&
+    lineCount <= PM_MEMORY_MAX_LINES + 1 &&
     utf8Bytes(raw) <= PM_MEMORY_MAX_BYTES
   ) {
     return { text: raw, truncated: false };
   }
-  const overLines = lines.length > PM_MEMORY_MAX_LINES;
+  const overLines = lineCount > PM_MEMORY_MAX_LINES;
   if (!overLines && utf8Bytes(raw) <= PM_MEMORY_MAX_BYTES) {
     return { text: raw, truncated: false };
   }
@@ -142,6 +149,24 @@ function assertValidSubfileName(name: string): void {
   }
 }
 
+/**
+ * 以 O_NOFOLLOW 打开并按 fd 读取普通文件：lstat 之后到读之间就算被换成软链也不会跟过去（ELOOP），
+ * 大小按 fstat 判断，超过 maxBytes 不读内容、返回 oversize。
+ */
+function readRegularFileNoFollow(target: string, maxBytes: number): { text: string; mtimeMs: number } | { oversize: true } {
+  const fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
+    if (st.size > maxBytes) return { oversize: true };
+    const text = readFileSync(fd, "utf8");
+    if (utf8Bytes(text) > maxBytes) return { oversize: true };
+    return { text, mtimeMs: st.mtimeMs };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function atomicWriteRegularFile(realDir: string, fileName: string, content: string): void {
   const target = join(realDir, fileName);
   try {
@@ -177,8 +202,11 @@ function atomicWriteRegularFile(realDir: string, fileName: string, content: stri
   }
 }
 
-/** 读取顶层 `MEMORY.md`；不存在或为软链时返回 null（软链不跟读）。 */
-export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): string | null {
+/** readPmMemoryIndex 的结果：正文，或超过 MAX_PERSONA_BYTES（没读内容，交给 quarantinePmMemoryIndex 挪走保全）。 */
+export type PmMemoryIndexRead = { text: string } | { oversize: true };
+
+/** 读取顶层 `MEMORY.md`；不存在或为软链时返回 null（软链不跟读）。超过 MAX_PERSONA_BYTES 不读内容，返回 oversize。 */
+export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): PmMemoryIndexRead | null {
   let realDir: string | null;
   try {
     realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
@@ -191,7 +219,37 @@ export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): string | nul
     const st = lstatSync(target);
     if (st.isSymbolicLink() || !st.isFile()) return null;
     if (realpathSync.native(target) !== target) return null;
-    return readFileSync(target, "utf8");
+    const read = readRegularFileNoFollow(target, MAX_PERSONA_BYTES);
+    return "oversize" in read ? read : { text: read.text };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把超过 MAX_PERSONA_BYTES、进不了数据库的 `MEMORY.md` 原样改名成同目录的 `MEMORY-overflow-<at>.md` 子文件保全
+ * （资料页 Memory files 里能看到、能删），之后调用方再按数据库重写 `MEMORY.md`。返回新文件名；挪不动返回 null（调用方不得覆盖原文件）。
+ */
+export function quarantinePmMemoryIndex(pmMemoryDir: string, pmId: PmId, at: number): string | null {
+  try {
+    const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
+    if (realDir === null) return null;
+    const source = join(realDir, PM_MEMORY_INDEX_FILE);
+    const st = lstatSync(source);
+    if (st.isSymbolicLink() || !st.isFile()) return null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const name = attempt === 0 ? `MEMORY-overflow-${at}.md` : `MEMORY-overflow-${at}-${randomBytes(3).toString("hex")}.md`;
+      const target = join(realDir, name);
+      try {
+        lstatSync(target);
+        continue; // 同名已存在，换一个，绝不覆盖
+      } catch (err) {
+        if (!isMissingError(err)) throw err;
+      }
+      renameSync(source, target);
+      return name;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -209,30 +267,34 @@ export function writePmMemoryIndex(pmMemoryDir: string, pmId: PmId, content: str
 }
 
 function scanSubfilesInRealDir(realDir: string): PmMemoryFilesList {
-  const entries = readdirSync(realDir, { withFileTypes: true });
   const files: PmMemoryFileSummary[] = [];
-  let scanned = 0;
-  for (const entry of entries) {
-    if (scanned >= PM_MEMORY_MAX_DIR_SCAN) break;
-    scanned++;
-    if (checkPmMemoryFileName(entry.name) !== null) continue;
-    const full = join(realDir, entry.name);
-    try {
-      const st = lstatSync(full);
-      if (st.isSymbolicLink() || !st.isFile()) continue;
-      if (realpathSync.native(full) !== full) continue;
-      files.push({
-        name: entry.name,
-        bytes: st.size,
-        updatedAt: Math.trunc(st.mtimeMs),
-      });
-    } catch {
-      // 并发删除或无权限读的项跳过
+  // opendir 逐项读，最多看 PM_MEMORY_MAX_DIR_SCAN 项就停：readdirSync 会先把整个目录读进内存，起不到上限的作用
+  const dir = opendirSync(realDir);
+  try {
+    for (let scanned = 0; scanned < PM_MEMORY_MAX_DIR_SCAN; scanned++) {
+      const entry = dir.readSync();
+      if (entry === null) break;
+      collectSubfile(realDir, entry.name, files);
     }
+  } finally {
+    dir.closeSync();
   }
   files.sort((a, b) => a.name.localeCompare(b.name));
   const totalBytes = files.reduce((sum, f) => sum + f.bytes, 0);
   return { files, totalBytes };
+}
+
+function collectSubfile(realDir: string, name: string, files: PmMemoryFileSummary[]): void {
+  if (checkPmMemoryFileName(name) !== null) return;
+  const full = join(realDir, name);
+  try {
+    const st = lstatSync(full);
+    if (st.isSymbolicLink() || !st.isFile()) return;
+    if (realpathSync.native(full) !== full) return;
+    files.push({ name, bytes: st.size, updatedAt: Math.trunc(st.mtimeMs) });
+  } catch {
+    // 并发删除或无权限读的项跳过
+  }
 }
 
 /** 列出指定项目经理的扁平 `<topic>.md` 子文件（不含 `MEMORY.md`、隐藏文件与软链）。 */
@@ -251,6 +313,7 @@ export function readPmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string):
   }
   const target = join(realDir, name);
   let mtimeMs = 0;
+  let content = "";
   try {
     const st = lstatSync(target);
     if (st.isSymbolicLink() || !st.isFile()) {
@@ -259,16 +322,20 @@ export function readPmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string):
     if (realpathSync.native(target) !== target) {
       throw new LedgerRequestError("invalid", "Memory file escaped PM memory directory");
     }
-    if (st.size > PM_MEMORY_MAX_TOTAL_BYTES) {
+    const read = readRegularFileNoFollow(target, PM_MEMORY_MAX_TOTAL_BYTES);
+    if ("oversize" in read) {
       throw new LedgerRequestError("invalid", "Memory file exceeds maximum readable size");
     }
-    mtimeMs = Math.trunc(st.mtimeMs);
+    content = read.text;
+    mtimeMs = Math.trunc(read.mtimeMs);
   } catch (err) {
     if (err instanceof LedgerRequestError) throw err;
     if (isMissingError(err)) throw new LedgerRequestError("not_found", `Memory file not found: ${name}`);
+    if ((err as NodeJS.ErrnoException)?.code === "ELOOP") {
+      throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
+    }
     throw err;
   }
-  const content = readFileSync(target, "utf8");
   return {
     name,
     content,

@@ -8,11 +8,13 @@ import {
   PM_ARCHIVE_RETENTION_MS,
   PM_MEMORY_INDEX_FILE,
   PM_MEMORY_MAX_BYTES,
+  PM_MEMORY_MAX_DIR_SCAN,
   PM_MEMORY_MAX_LINES,
   PM_MEMORY_MAX_SUBFILES,
   PM_MEMORY_MAX_SUBFILE_BYTES,
   PM_MEMORY_MAX_TOTAL_BYTES,
   checkPmMemoryFileName,
+  pmMemoryLineCount,
   utf8Bytes,
 } from "../shared/index.ts";
 import { pmMemoryDirPath, pmMemoryIndexPath, resolveHubPaths } from "../shared/paths.ts";
@@ -76,6 +78,20 @@ describe("truncatePmMemoryForPrompt：200 行与 25 KB 双上限安全截断", (
 
     const exact25k = "x".repeat(PM_MEMORY_MAX_BYTES);
     expect(truncatePmMemoryForPrompt(exact25k)).toEqual({ text: exact25k, truncated: false });
+  });
+
+  it("末尾单个换行不算多一行：恰好 200 行并以换行结尾不截断、不附提示，201 行才截断", () => {
+    expect(pmMemoryLineCount("")).toBe(0);
+    expect(pmMemoryLineCount("a")).toBe(1);
+    expect(pmMemoryLineCount("a\n")).toBe(1);
+    expect(pmMemoryLineCount("a\n\n")).toBe(2);
+    const exact200Nl = Array.from({ length: PM_MEMORY_MAX_LINES }, (_, i) => `line-${i + 1}`).join("\n") + "\n";
+    expect(truncatePmMemoryForPrompt(exact200Nl)).toEqual({ text: exact200Nl, truncated: false });
+    const over201Nl = Array.from({ length: PM_MEMORY_MAX_LINES + 1 }, (_, i) => `line-${i + 1}`).join("\n") + "\n";
+    const res = truncatePmMemoryForPrompt(over201Nl);
+    expect(res.truncated).toBe(true);
+    expect(res.text).not.toContain("line-201");
+    expect(res.text.endsWith(`\n${PM_MEMORY_TRUNCATION_HINT}`)).toBe(true);
   });
 
   it("超过 200 行时截断到前 200 行，并在末尾附单行拆分提示", () => {
@@ -169,6 +185,15 @@ describe("pm-memory 子文件管理：配额、路径穿越与符号链接逃逸
     symlinkSync(outsideDir, pmMemoryDirPath(pmMemoryDir, 2));
     expect(() => listPmMemoryFiles(pmMemoryDir, 2)).toThrow(LedgerRequestError);
     expect(() => writePmMemoryFile(pmMemoryDir, 2, "note.md", "x")).toThrow(LedgerRequestError);
+  });
+
+  it("目录里被塞进超过扫描上限的杂项时，列表最多看 PM_MEMORY_MAX_DIR_SCAN 项、不报错", () => {
+    const pmDir = pmMemoryDirPath(pmMemoryDir, 3);
+    mkdirSync(pmDir, { recursive: true });
+    for (let i = 0; i < PM_MEMORY_MAX_DIR_SCAN + 20; i++) writeFileSync(join(pmDir, `n-${i}.md`), "x");
+    const listed = listPmMemoryFiles(pmMemoryDir, 3);
+    expect(listed.files.length).toBe(PM_MEMORY_MAX_DIR_SCAN);
+    expect(listed.totalBytes).toBe(PM_MEMORY_MAX_DIR_SCAN);
   });
 
   it("配额上限：单文件 <= 64 KB、最多 50 个子文件、总计 <= 1 MB", () => {
@@ -274,6 +299,28 @@ describe("平滑兼容迁移、双向同步、撤销与 HTTP 接口", () => {
     const reverted = ledger.revertPersonaChange(afterDiskEdit.revertableChangeId!);
     expect(reverted.persona.text).toBe("PM 通过 hub 改的索引");
     expect(readFileSync(indexFile, "utf8")).toBe("PM 通过 hub 改的索引");
+  });
+
+  it("PM 手写的 MEMORY.md 超过 MAX_PERSONA_BYTES：原文挪成 MEMORY-overflow-<时间>.md 子文件保全，再按数据库重写，不丢内容", () => {
+    const { pm, sessionId } = ledger.createPm({ name: "超大索引", mode: "manage_only", persona: "数据库里的索引" });
+    const indexFile = pmMemoryIndexPath(pmMemoryDir, pm.id);
+    const big = "规则\n".repeat(Math.ceil((MAX_PERSONA_BYTES + 1) / utf8Bytes("规则\n")));
+    expect(utf8Bytes(big)).toBeGreaterThan(MAX_PERSONA_BYTES);
+    writeFileSync(indexFile, big);
+
+    const ctx = ledger.getLaunchContext(sessionId);
+    expect(ctx.pm.persona).toBe("数据库里的索引");
+    expect(readFileSync(indexFile, "utf8")).toBe("数据库里的索引");
+    const kept = `MEMORY-overflow-${now}.md`;
+    expect(readFileSync(join(pmMemoryDirPath(pmMemoryDir, pm.id), kept), "utf8")).toBe(big);
+    expect(ledger.listPmMemoryFiles(pm.id).files.map((f) => f.name)).toEqual([kept]);
+    // 再来一次（同一时刻又被写超）：换名保全，绝不覆盖上一份
+    writeFileSync(indexFile, `${big}第二份`);
+    ledger.getPersona(pm.id);
+    const names = ledger.listPmMemoryFiles(pm.id).files.map((f) => f.name);
+    expect(names).toHaveLength(2);
+    expect(readFileSync(join(pmMemoryDirPath(pmMemoryDir, pm.id), kept), "utf8")).toBe(big);
+    expect(readFileSync(indexFile, "utf8")).toBe("数据库里的索引");
   });
 
   it("getLaunchContext 与 createPersonaNoter 对超 200 行 / 25 KB 的 MEMORY.md 自动截断并附拆分提示，完整原文仍无损保留", () => {

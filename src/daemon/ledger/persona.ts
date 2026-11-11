@@ -52,6 +52,7 @@ import { LOG_PREFIX } from "../../shared/names.ts";
 import {
   deletePmMemoryFile as deleteMemorySubfile,
   listPmMemoryFiles as listMemorySubfiles,
+  quarantinePmMemoryIndex,
   readPmMemoryFile as readMemorySubfile,
   readPmMemoryIndex,
   writePmMemoryFile as writeMemorySubfile,
@@ -397,14 +398,28 @@ export function createLedgerPersona(
     const pm = pmRow(pmId);
     if (pm === null) return null;
     const dbText = pm.persona ?? "";
-    const diskText = readPmMemoryIndex(pmMemoryDir, pmId);
-    if (diskText === null) {
+    const disk = readPmMemoryIndex(pmMemoryDir, pmId);
+    if (disk === null) {
       if (dbText !== "") {
         persistPmMemoryIndex(pmId, dbText);
         return "rewritten";
       }
       return null;
     }
+    if ("oversize" in disk) {
+      // 进不了数据库（MAX_PERSONA_BYTES）。自己写的不会超，一定是 PM 或用户手改的：先原样挪成子文件保全，再按数据库重写；
+      // 挪不动就保持原状（提示词照用数据库里的），绝不直接覆盖掉别人写的内容
+      if (isPmArchived(pmId)) return null;
+      const kept = quarantinePmMemoryIndex(pmMemoryDir, pmId, now());
+      if (kept === null) {
+        console.error(`${LOG_PREFIX} MEMORY.md 超过 ${MAX_PERSONA_BYTES} 字节且挪不走，暂按数据库加载、不覆盖：pm ${pmId}`);
+        return null;
+      }
+      console.error(`${LOG_PREFIX} MEMORY.md 超过 ${MAX_PERSONA_BYTES} 字节，原文已挪到 ${kept}，按数据库重写：pm ${pmId}`);
+      persistPmMemoryIndex(pmId, dbText);
+      return "rewritten";
+    }
+    const diskText = disk.text;
     const hash = contentHash(diskText);
     if (diskText === dbText) {
       knownMemoryIndexHash.set(pmId, hash);
@@ -416,11 +431,6 @@ export function createLedgerPersona(
       return "rewritten";
     }
     if (isPmArchived(pmId)) return null;
-    if (utf8Bytes(diskText) > MAX_PERSONA_BYTES) {
-      console.error(`${LOG_PREFIX} MEMORY.md 超过 ${MAX_PERSONA_BYTES} 字节，按数据库重写：pm ${pmId}`);
-      persistPmMemoryIndex(pmId, dbText);
-      return "rewritten";
-    }
     knownMemoryIndexHash.set(pmId, hash);
     if (activePending !== undefined) {
       editPersonaIn(activePending, pm, { text: diskText, mode: pm.mode as PmMode, agent: effectiveAgent(pm), reason: null }, { actor: "file" });

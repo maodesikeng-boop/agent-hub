@@ -12,6 +12,7 @@ import {
   isAgentVendor,
   modelLabel,
   splitModelEffort,
+  pmMemoryLineCount,
   utf8Bytes,
   vendorLabel,
   type AgentSetting,
@@ -274,7 +275,7 @@ function PmEditor({
     : undefined;
   const saveText = () => textMutation.mutate();
   const revert = (changeId: number) => revertMutation.mutate(changeId);
-  const personaLines = text === "" ? 0 : text.split("\n").length;
+  const personaLines = pmMemoryLineCount(text);
   const personaBytes = utf8Bytes(text);
   const personaOverAutoLoad = personaLines > PM_MEMORY_MAX_LINES || personaBytes > PM_MEMORY_MAX_BYTES;
   const personaNearAutoLoad =
