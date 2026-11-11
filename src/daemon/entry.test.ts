@@ -10,7 +10,7 @@ import { DAEMON_LOG_MAX_BYTES, ENV_HOME, ENV_PORT, LOG_PREFIX } from "../shared/
 import { PARENT_SESSION_ENV } from "./driver/protocol.ts";
 import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
-import { reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
+import { DESKTOP_CONTRACT, reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
 
 const NO_TAILNET = { current: () => null, refresh: async () => null };
 
@@ -191,6 +191,61 @@ describe("守护进程启动失败：终端上的输出", () => {
     expect(log).toContain("second-during-shutdown");
     expect(result.stderr.match(/先正常关机再退出/g)).toHaveLength(1);
   });
+
+  it("热重启全链路：有外壳监管时经 POST /api/self-reload 登记，全库空闲静默后正常关机、以 reloadExitCode 退出；没有监管回 409", async () => {
+    const run = async (name: string, supervised: boolean) => {
+      const subHome = home(name);
+      const env: Record<string, string | undefined> = { ...process.env, AGENT_HUB_HOME: subHome, AGENT_HUB_PORT: "0" };
+      delete env[DESKTOP_CONTRACT.supervisedEnv];
+      delete env.INVOCATION_ID;
+      if (supervised) env[DESKTOP_CONTRACT.supervisedEnv] = "test";
+      const script = `
+        import { runDaemonProcess } from "./src/daemon/entry.ts";
+        await runDaemonProcess({ userHome: ${JSON.stringify(userHome)}, tailnet: { current: () => null, refresh: async () => null } });
+        // 守护进程的子进程（agent）拿不到监管标识
+        console.log("child-env:" + (process.env[${JSON.stringify(DESKTOP_CONTRACT.supervisedEnv)}] ?? "none"));
+      `;
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+      const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+      const url = await new Promise<URL>((resolve, reject) => {
+        child.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString("utf8");
+          const match = /(http:\/\/127\.0\.0\.1:\d+\/auth\?token=[A-Za-z0-9_-]+)/.exec(stdout);
+          if (match) resolve(new URL(match[1]!));
+        });
+        void exited.then(() => reject(new Error(`daemon exited early: ${stderr}`)));
+      });
+      const origin = url.origin;
+      const auth = await fetch(`${origin}/auth`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify({ token: url.searchParams.get("token") }),
+      });
+      const cookie = (auth.headers.get("set-cookie") ?? "").split(";")[0]!;
+      const res = await fetch(`${origin}/api/self-reload`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin, cookie },
+        body: "{}",
+      });
+      return { child, exited, res, stdout: () => stdout, stderr: () => stderr };
+    };
+
+    const unsupervised = await run("sub-no-supervisor", false);
+    expect(unsupervised.res.status).toBe(409);
+    unsupervised.child.kill("SIGTERM");
+    expect(await unsupervised.exited).toBe(0);
+
+    const supervised = await run("sub-supervised", true);
+    expect(supervised.res.status).toBe(200);
+    expect(((await supervised.res.json()) as { text: string }).text).toContain("已登记空闲排空热重启");
+    expect(await supervised.exited).toBe(DESKTOP_CONTRACT.reloadExitCode);
+    expect(supervised.stdout()).toContain("child-env:none");
+    expect(supervised.stderr()).toContain("全库空闲，开始热重启");
+    expect(supervised.stderr()).toContain("交给外壳热重启");
+  }, 30_000);
 
   it("daemon.log 超过上限：改名成 .1 再写，磁盘上最多两份", () => {
     const paths = resolveHubPaths({ [ENV_HOME]: join(dir, "rotate") }, userHome);

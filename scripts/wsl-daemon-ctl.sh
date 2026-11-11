@@ -311,6 +311,8 @@ cmd_run() {
   node_bin_dir=$(dirname "$node_bin")
   export AGENT_HUB_HOME="$hub_home"
   export AGENT_HUB_PORT="$port"
+  # 有外壳监管（apps/desktop/contract.json 的 supervisedEnv）：守护进程据此才接受 hub self-reload，退出码 reloadExitCode 由外壳立即拉起
+  export AGENT_HUB_SUPERVISED="fusa-windows"
   export PATH="${node_bin_dir}:${FUSA_SHARE_DIR}/pnpm/bin:${FUSA_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
   unset WSL_INTEROP WSLENV
 

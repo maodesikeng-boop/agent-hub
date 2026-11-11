@@ -2735,6 +2735,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
@@ -2889,6 +2890,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
@@ -3043,6 +3045,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
@@ -3197,6 +3200,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
@@ -3351,6 +3355,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > deep
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
@@ -3505,6 +3510,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi �
   - \`hub project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`hub project attach <文件夹路径>\` / \`hub project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`hub project setup --stdin\` / \`hub project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$AGENT_HUB_ROOT_PATH\`、\`$AGENT_HUB_WORKTREE_PATH\`，勿写密钥）
+  - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`hub persona show\`：查看当前的性格设定和模式
   - \`hub persona edit [--mode manage_only|hands_on] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）

@@ -392,7 +392,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     };
     const res = await call("GET", "/api/state");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
+    expect(res.json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR }, bootId: expect.any(String) });
     expect(res.headers["cache-control"]).toBe("no-store");
   });
 
@@ -409,7 +409,7 @@ describe("GET /api/state 和 /messages?before=", () => {
     const body = (await call("GET", "/api/state")).json();
     expect(body.projects).toEqual([project]);
     expect(body.folders).toHaveLength(2);
-    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
+    expect(body).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR }, bootId: expect.any(String) });
   });
 
   it("?before= 把对话编号和消息编号原样交给账本，返回它给的页", async () => {
@@ -567,7 +567,7 @@ describe("Worker 的对话（M3，kind worker）：界面服务不另设接口�
       ...ledger.snapshotValue,
       conversations: [{ conversation: workerConversation, messages: [{ ...makeMessage(6, 30), sender: "pm", workerId: 3 }, line], hasMore: false }],
     };
-    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR } });
+    expect((await call("GET", "/api/state")).json()).toEqual({ ...ledger.snapshotValue, seq: ledger.currentSeq, server: { ...serverInfoFor(process.platform), repoDir: ROOT_DIR }, bootId: expect.any(String) });
   });
 
   it("按会话翻页、点停止：和项目经理的对话一样", async () => {
@@ -2143,6 +2143,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       port: PORT,
       db,
       routerDispatcher: {
+        busy: () => false,
         submitCommand: async (input) => {
           submitted.push(input);
           return fakeCommand;

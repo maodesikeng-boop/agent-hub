@@ -772,3 +772,21 @@ export const MAX_VENDOR_SYNC_KEY_CHARS = 512;
 export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
 /** 单个厂商 MCP 配置文件或 `SKILL.md` 读取字节上限（防异常超大文件撑爆内存）。 */
 export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;
+
+// ---- 空闲排空热重启（daemon/self-reload.ts、web/auto-reload.ts）----
+/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲。 */
+export const SELF_RELOAD_QUIET_MS = 1_500;
+/** 等空闲期间兜底重查的间隔：有些忙碌状态（总助在途管线收尾、后台写交接）结束时账本不一定推变化。只在登记了热重启时才跑。 */
+export const SELF_RELOAD_RECHECK_MS = 5_000;
+/** `hub self-reload --build` 的 pnpm build 最多跑多久（10 分钟），超时整组进程结束、取消本次重启。 */
+export const SELF_RELOAD_BUILD_TIMEOUT_MS = 10 * 60_000;
+/** 回给 hub / 接口的构建失败摘要最多多少字。 */
+export const SELF_RELOAD_FAILURE_MAX_CHARS = 2_000;
+/** 网页：发现本机守护进程换了一次启动（bootId 变了）但现在不方便刷新（有弹窗、在流式输出、在上传、在输入法组词）时，隔多久再看一次。 */
+export const AUTO_RELOAD_RECHECK_MS = 1_000;
+/** 网页：刷新前存进 sessionStorage 的未发送草稿最多几条（按最近改动的留）。 */
+export const AUTO_RELOAD_MAX_DRAFTS = 50;
+/** 网页：存进 sessionStorage 的草稿合计最多多少 UTF-8 字节（单条最长 MAX_MESSAGE_BYTES，远低于 sessionStorage 的 5 MB）。 */
+export const AUTO_RELOAD_MAX_DRAFT_BYTES = 1024 * 1024;
+/** 网页：存进 sessionStorage 的草稿多久没被认领就当过期丢掉（1 天）。 */
+export const AUTO_RELOAD_DRAFT_TTL_MS = 24 * 60 * 60_000;

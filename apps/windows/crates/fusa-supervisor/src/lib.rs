@@ -161,6 +161,8 @@ mod tests {
         );
         assert_eq!(embedded.crash_window_ms, 60_000);
         assert_eq!(embedded.max_crashes_in_window, 5);
+        assert_eq!(embedded.reload_exit_code, 75);
+        assert_eq!(embedded.supervised_env, "AGENT_HUB_SUPERVISED");
         assert_eq!(embedded.log_relative_path, "state/logs/desktop-daemon.log");
         assert_eq!(embedded.log_max_bytes, 2_097_152);
         assert_eq!(embedded.log_rotated_files, 1);

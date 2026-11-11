@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, SELF_RELOAD_AGENT_PATH, hubPath, type HubCommand } from "../shared/hub.ts";
 import {
   HUB_CLI_STDIN_IDLE_MS,
   HUB_CLI_TIMEOUT_MS,
@@ -312,9 +312,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
   },
 ];
 
+/** 守护进程级命令（不进账本的 hubCall，单独一条路由）。 */
+const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              等全库空闲后热重启守护进程（立即返回；--build 先构建网页，失败就取消）`;
+
 /** hub 用法，给人看（hub help、未知顶层命令或环境变量缺失时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
+${SELF_RELOAD_USAGE}
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -342,6 +346,7 @@ export function commandUsageFor(argv: readonly string[]): string {
   const group = argv[0];
   if (group === undefined) return HUB_USAGE;
   if (group === "dispatch") return `用法：\n${DISPATCH_USAGE}\n`;
+  if (group === "self-reload") return `用法：\n${SELF_RELOAD_USAGE}\n`;
   const groupSpecs = HUB_COMMAND_SPECS.filter((s) => s.group === group);
   if (groupSpecs.length === 0) return HUB_USAGE;
   const action = argv[1];
@@ -422,12 +427,13 @@ type Options = {
   project?: string;
   verbatim?: boolean;
   "pm-name"?: string;
+  build?: boolean;
   help?: boolean;
 };
 
 /** 解析好的一条命令：body 里的 text 字段留到读完标准输入再填。 */
 interface Parsed {
-  command: HubCommand | "router.dispatch";
+  command: HubCommand | "router.dispatch" | "self.reload";
   body: Record<string, unknown>;
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
@@ -540,6 +546,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         project: { type: "string" },
         verbatim: { type: "boolean" },
         "pm-name": { type: "string" },
+        build: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -555,6 +562,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], "status");
     expectPositionals(parsed.positionals.slice(1), 0, "status");
     return { command: "status", body: {}, textSource: null };
+  }
+  if (group === "self-reload") {
+    allowOnly(values, ["build"], "self-reload");
+    expectPositionals(parsed.positionals.slice(1), 0, "self-reload");
+    return { command: "self.reload", body: values.build === true ? { build: true } : {}, textSource: null };
   }
   if (group === "models") {
     allowOnly(values, ["vendor", "refresh"], "models");
@@ -1255,7 +1267,11 @@ export async function runHub(io: HubIo): Promise<number> {
   }
 
   const routePath =
-    parsed.command === "router.dispatch" ? ROUTER_DISPATCH_AGENT_PATH : hubPath(parsed.command);
+    parsed.command === "router.dispatch"
+      ? ROUTER_DISPATCH_AGENT_PATH
+      : parsed.command === "self.reload"
+        ? SELF_RELOAD_AGENT_PATH
+        : hubPath(parsed.command);
   const outcome = await post(socketPath, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
   if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
   if (outcome.kind === "unreachable") {

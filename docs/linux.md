@@ -80,6 +80,10 @@ loginctl enable-linger "$USER"   # 没登录也开机自启、退出 SSH 后不�
 journalctl --user -u agent-hub -f
 ```
 
+热重启（项目经理 `hub self-reload [--build]`、网页 `POST /api/self-reload`）：守护进程看到 systemd 设的 `INVOCATION_ID` 就知道退出后有人拉起；
+等全库空闲后正常关机，以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
+`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Fusa 应用拉起的（终端里 `pnpm start`）不接受热重启。
+
 - `Environment=`、`Restart=`、`TimeoutStopSec=`：<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>、<https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html>。
 - `loginctl enable-linger`（让用户管理器开机就起、退出登录后不结束）：<https://www.freedesktop.org/software/systemd/man/latest/loginctl.html>。
 - 想改端口、数据目录：在 `[Service]` 里加 `Environment=AGENT_HUB_PORT=4317`、`Environment=AGENT_HUB_HOME=%h/.agent-hub`（数据目录里的 `run/hub.sock` 路径有长度上限，别设太深）。

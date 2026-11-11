@@ -98,6 +98,10 @@ import {
   type ServerInfo,
   type SkipTaskNodeResponse,
   type StateSnapshot,
+  type SelfReloadRequestBody,
+  type SelfReloadResponse,
+  type SelfReloadStatus,
+  SELF_RELOAD_UNSUPPORTED_MESSAGE,
   type TaskGraphsPage,
   type TunnelStatus,
   type TunnelStatusResponse,
@@ -222,6 +226,11 @@ export interface UiServerOptions {
   routerDispatcher?: RouterDispatcher;
   /** 本机 Router 目标端口（供远端对等设备经 /api/router/target-ops 执行操作）。 */
   routerLocalPort?: RouterTargetPort;
+  /** 空闲排空热重启（daemon/self-reload.ts）：POST/GET /api/self-reload。不给 = 守护进程没有外壳监管，POST 回 409。 */
+  selfReload?: {
+    request(input: { build: boolean; by: string }): SelfReloadResponse;
+    status(): SelfReloadStatus;
+  };
 }
 
 /** 仓库根目录（供本机向导拼 node <repoDir>/src/tunnel/main.ts join 命令）。 */
@@ -1204,6 +1213,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return { status: opts.tunnel.status() } satisfies TunnelStatusResponse;
     });
 
+    const selfReloadBodySchema = z.object({ build: z.boolean().optional() }).strict();
+    routes.post(API_PATHS.selfReload, async (req): Promise<SelfReloadResponse> => {
+      const body: SelfReloadRequestBody = parseWithSchema(selfReloadBodySchema, req.body ?? {});
+      if (!opts.selfReload) throw new LedgerRequestError("conflict", SELF_RELOAD_UNSUPPORTED_MESSAGE);
+      return opts.selfReload.request({ build: body.build === true, by: "网页" });
+    });
+
+    routes.get(API_PATHS.selfReload, async (): Promise<SelfReloadStatus> =>
+      opts.selfReload?.status() ?? { state: "idle", build: false, requestedAt: null, busy: [], lastFailure: null },
+    );
+
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
       const snap = ledger.snapshot();
       const router =
@@ -1216,6 +1236,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         server: serverInfoForClient(serverInfo, clientAddress(req)),
         ...(opts.tunnel ? { tunnel: opts.tunnel.status() } : {}),
         ...(publicEntryConfigured ? { publicEntry: currentPublicEntryStatus() } : {}),
+        bootId: instanceId,
       };
     });
 

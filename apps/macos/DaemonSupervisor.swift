@@ -16,6 +16,10 @@ struct DesktopContract: Codable, Equatable {
     let crashBackoffMs: [Int]
     let crashWindowMs: Int
     let maxCrashesInWindow: Int
+    /// 守护进程空闲排空后请求热重启时用的退出码（`hub self-reload`）：立即拉起新进程，不算崩溃、不进退避和熔断计数。
+    let reloadExitCode: Int
+    /// 外壳拉起守护进程时设的环境变量名：守护进程据此知道退出后有人拉起，才接受热重启请求。
+    let supervisedEnv: String
     let logRelativePath: String
     let logMaxBytes: Int
     let logRotatedFiles: Int
@@ -222,6 +226,7 @@ final class DaemonSupervisor {
     private var intentionalStopPids: Set<Int32> = []
     private var isShuttingDown = false
     private var recentCrashTimestamps: [Date] = []
+    private var recentReloadTimestamps: [Date] = []
     private var lastCrashRecord: DaemonCrashRecord?
     private var state: DaemonSupervisorState = .running
     private var pendingRestartWorkItem: DispatchWorkItem?
@@ -491,6 +496,7 @@ final class DaemonSupervisor {
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         recentCrashTimestamps.removeAll()
+        recentReloadTimestamps.removeAll()
         let proc = spawnedProcess
         let expectedInstanceId = ownedInstanceId
         guard let ownedProc = proc else {
@@ -939,6 +945,7 @@ final class DaemonSupervisor {
         var env = ProcessInfo.processInfo.environment
         env["AGENT_HUB_HOME"] = homeDir
         env["AGENT_HUB_PORT"] = String(port)
+        env[contract.supervisedEnv] = "fusa-macos"
         let nodeBinDir = (nodePath as NSString).deletingLastPathComponent
         let home = NSHomeDirectory()
         let extraPaths = [
@@ -1130,6 +1137,36 @@ final class DaemonSupervisor {
         let wasIntentional = intentionalStopPids.remove(pid) != nil || isShuttingDown
         if wasIntentional {
             lock.unlock()
+            return
+        }
+
+        // 正常热重启立即拉起；窗口内反复请求则走已有退避与熔断，避免退出码 75 绕过保护。
+        recentReloadTimestamps = recentReloadTimestamps.filter {
+            now.timeIntervalSince($0) <= contract.crashWindowSeconds
+        }
+        let reloadRequested = process.terminationReason == .exit && Int(process.terminationStatus) == contract.reloadExitCode
+        let reloadAllowed = recentReloadTimestamps.count < contract.maxCrashesInWindow
+        if reloadRequested && reloadAllowed {
+            recentReloadTimestamps.append(now)
+            pendingRestartWorkItem?.cancel()
+            pendingRestartWorkItem = nil
+            let generation = UUID()
+            restartGeneration = generation
+            let currentOwn = ownership
+            lock.unlock()
+            let isoTime = ISO8601DateFormatter().string(from: now)
+            appendToLogFile("\(isoTime) [agent-hub] 后台服务（pid \(pid)）空闲排空后请求热重启，立即拉起新进程。\n")
+            notifyOwnershipChange(currentOwn)
+            DispatchQueue.global().async { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock()
+                if self.isShuttingDown || self.isRestarting || self.restartGeneration != generation {
+                    self.lock.unlock()
+                    return
+                }
+                self.lock.unlock()
+                self.ensureRunning { _ in }
+            }
             return
         }
 
