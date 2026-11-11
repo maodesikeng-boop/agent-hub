@@ -106,7 +106,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 指令分派中（Router 回执流光状态词） | Dispatching… |
 | 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… |
 | 任务流图 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Waiting on you / Ready / Blocked / Needs attention / Skipped |
-| 补充说明 / 跳过此步 / 取消任务图 / 同层折叠并行数 | Add note / Skip step / Cancel graph / +N parallel |
+| 补充说明 / 跳过此步 / 取消任务图 / 已完成卷 / 待解锁卷 / 加载更多 / 放大查看 / 同层折叠并行数 | Add note / Skip step / Cancel graph / N done / N next / Load more / Zoom / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
 | MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
 
@@ -260,48 +260,51 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 对话右边的一栏（`RightRail`，`src/web/components/RightRail.tsx`），**照 Claude desktop 的右栏**：组标题加单行的列表或紧凑任务流图，一组一组用细线隔开，不加外框、不加阴影，**不密密麻麻**：列表每行只有一行字，行与行留出呼吸感。界面展示文案统一使用 `Piece` / `Pieces`，组名是 “Needs You”“Task Graph”“Pieces”“Completed”。
 
 - **四段式兼容结构**（没有内容的组不显示，单步零散任务照旧不建图）：
-  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；任务图内的 `gate` 门禁直接内联在下方 `Task Graph` 中，不重复渲染第二遍）；
-  2. `Task Graph`（活跃任务流图，`status === 'active'`）；
-  3. `Pieces`（未绑定任何活跃任务图节点的独立进行中 Piece；已绑入图节点的 Piece 不在列表重复列出）；
-  4. `Completed`（在下，默认折叠，合并收纳历史已完成/已取消任务图与独立已收工 Piece）。
+  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；带 `gateRef` 或已绑入任务图的 `gate` 门禁直接内联在下方 `Task Graph` 果皮轨中，绝不双卡重复渲染）；
+  2. `Task Graph`（活跃多阶段任务流图，`status === 'active'`，采用果皮轨 + 任务级小切面进度轮）；
+  3. `Pieces`（未绑定任何活跃任务图节点的独立进行中 Piece；已绑入活跃任务图节点的 Piece 不在列表重复列出）；
+  4. `Completed`（在下，默认折叠，按需游标拉取历史已完成/已取消任务图，并与独立已收工 Piece 合并收纳）。
 - **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-line bg-surface-chat`（第 4 条的外壳底色），左右 20px（`px-5`），内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
 - **太窄放不下时（720px 以下）**：右栏不再并排，改成顶栏下面的一块（`border-b`，最高 `40dvh`，里面滚动），把消息往下推；不自动展开，点顶栏的开关才出来。不盖住消息和输入框。
-- **展开和收起**：只在有要关心的事时自动出来：有没收工的 Piece（在干活、等验收）或有“等你确定”。**只有收工的 Piece、或什么都没有时，整栏不渲染、不占位置**，对话照常居中；只有收工的时候开关还在，点开关手动打开看“已收工”（这次打开期间一直开着，不记成“收起”），再点收起。有了新的没收工的 Piece 或新的提问，再自动出来。开关是当前项目经理对应水果切出的 Worker 果瓣头像（`Avatar` `colorKey={avatarKey}` `size={26}` `neutral`，整个右栏只有这一颗果瓣，第 6 条的 ghost 图标按钮，有 Piece 或提问就显示，收工的也算），跟着右栏走：并排的右栏展开时，**和第一组的标题在同一行、靠右**（不单独占一行，右栏顶上不留空；第一组 `py-3` 加上 36px 高的开关，标题和对话顶栏的头像、标题大致在一条线上；图标离右边 12px，和收起时在顶栏的位置一样，点的时候不跳）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
-- **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**三组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；“等你确定”标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 普通箭头。标题下面直接是行，不留空。
-- **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**普通细线箭头**（`ChevronRight` 14px，`text-muted-foreground`，三组共用）：**展开转 90° 朝下、收起朝右**，转向 200ms（`motion-reduce` 时直接换）。
+- **展开和收起**：只在有要关心的事时自动出来：有活跃任务图、有没收工的 Piece（在干活、等验收）或有“等你确定”。**只有收工的 Piece / 已完结任务图、或什么都没有时，整栏不渲染、不占位置**，对话照常居中；只有历史完成项时开关还在，点开关手动打开看“Completed”（这次打开期间一直开着，不记成“收起”），再点收起。有了新的活跃任务图、新的没收工 Piece 或新的提问，再自动出来。开关是当前项目经理对应水果切出的 Worker 果瓣头像（`Avatar` `colorKey={avatarKey}` `size={26}` `neutral`，第 6 条的 ghost 图标按钮，右栏有内容就显示，收工的也算），跟着右栏走：并排的右栏展开时，**和第一个可见组的标题在同一行、靠右**（不单独占一行，右栏顶上不留空；第一组 `py-3` 加上 36px 高的开关，标题和对话顶栏的头像、标题大致在一条线上；图标离右边 12px，和收起时在顶栏的位置一样，点的时候不跳）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问或待拍板门禁，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
+- **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**各组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；`Needs You`（及含 `waiting_user` 门禁的 `Task Graph`）标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 普通箭头。标题下面直接是行，不留空。
+- **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**普通细线箭头**（`ChevronRight` 14px，`text-muted-foreground`，各组共用）：**展开转 90° 朝下、收起朝右**，转向 200ms（`motion-reduce` 时直接换）。
   - 收起后只剩标题这一行，不写个数。
-  - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：已收工的会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`），点开才渲染，没有收起的高度动画。
-  - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
+  - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：历史完成项会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`、不触发历史任务图请求），点开才渲染并按需拉取，没有收起的高度动画。
+  - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, graphs?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
 - **行**：
   - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`），右边一个向右的小箭头；点一下在这一行下面展开全文（13.5px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。用户在这个项目经理的对话里发出任何一条消息就算都回答了，守护进程标上（`meta.answered`），这一组、左栏的“等你确定”标签和标签页标题里的数字一起消失。没有“知道了”按钮。
-  - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
+  - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px，触屏下 `pointer-coarse:min-h-11`；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
   - Piece 行：**只有一行**，左侧不放机器人图标，**只有标题**（15px 前景色，`truncate`），**右边不写状态词**（Working…、Thinking…、Idle 都不写）。**正在跑的 Piece（干活、准备中、等后台命令，`RightRail.tsx` 的 `isBusy`）标题字本身带流光** `.status-shimmer`（第 14 条，同一套，不另造），只挂在这几行上；空闲、停止中、收工的标题静态。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。
   - **标题去掉机械前缀**：列表里显示的标题去掉开头的分类前缀（“界面：”“修复：”“功能：”……，`format.ts` 的 `cleanPieceTitle`，前缀表只在那一处），直接露出任务名；读屏名字（`aria-label`）和悬停提示保留完整标题。
-  - 收工的行标题字 `opacity-60`（只淡字，选中时果冻底不跟着淡），**右边不写 Ended**（整组就叫 Completed，每行再写一遍是噪音），只有标题。点一行打开它的对话。
+  - 收工的行标题字 `opacity-60`（只淡字，选中时果冻底不跟着淡），**右边不写 Ended**（整组就叫 Completed，每行再写一遍是噪音），只有标题。点一行打开它的对话；历史任务图行左侧配一枚小切面整果图标（`SliceWheelIcon`），点击打开放大全览弹窗回看完整拓扑。
 - **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
   - Pieces：没收工的最多列 3 条，**在忙的排前面**（其余按派出的顺序）；多了，下面一行灰色的 **Show more**（13.5px、`text-muted-foreground`，没有底色和胶囊，悬停变前景色、`bg-sidebar-hover`），点开展开全部，同一处变成 Show less。正开着的 Piece 在被收起的那几条里时自动展开。
   - “等你确定”：同样最多 3 条，多了 Show more。
-  - 收工的 Piece 在 Completed 组里，标题和另两组一样（不带数字），默认收着，点开才列出（行同上，`opacity-60`，全部列出）。没有收工的就没有这一组。只有收工的、手动打开右栏时只有这一组，整栏的开关放在它那一行。
-  - 所有字都用英文（Needs You、Pieces、Completed、Show more，第 3 条措辞）。
+  - Completed：标题和另几组一样（不带数字），默认收着；点开时通过 `@tanstack/react-query` 按需游标拉取 `GET /api/projects/:id/task-graphs?status=history`（每页 `GRAPH_HISTORY_PAGE_SIZE`，有下一页时底部显示 `Load more`，最多翻 `MAX_COMPLETED_GRAPH_PAGES` 页，两数都在 `src/shared/limits.ts`），并与未归属这些历史图的独立已收工 Piece 一起列出（`opacity-60`）。没有完成项就没有这一组；只有完成项、手动打开右栏时只有这一组，整栏的开关放在它那一行。
+  - 所有外壳字都用英文（Needs You、Task Graph、Pieces、Completed、Show more、Load more，第 3 条措辞）。
 
 手机外壳的右栏改用底部 Pieces 抽屉（`ui/drawer.tsx`），内容共用 `RailGroups`，不会自动弹出；上面的顶栏下布局仅用于电脑外壳窄窗。
 
-### 12.1 任务流图（Task Graph）卡片与连线规范
+### 12.1 任务流图（Task Graph）：果皮轨、小切面进度轮与门禁水果刀规范
 
-多阶段任务在右栏 `Task Graph` 分组与大图弹窗中渲染有向无环图（DAG），统一采用 **`@dagrejs/dagre` 自动分层坐标（`src/web/task-graph-layout.ts`）+ 标准受控 React 卡片 + 单张底层 `<svg aria-hidden="true">` 有向连线**：无点阵/网格底纹、无悬浮缩放工具条、无拖拽连接桩（Handle）、不拦截原生滚轮纵向滚动。
+右栏 `Task Graph` 摒弃笨重的全框节点卡片堆叠，采用 **纵向果皮轨（Peel Track，`src/web/components/PeelTrack.tsx`）为主体 + 任务级小切面进度轮图标（`src/web/components/SliceWheelIcon.tsx`）+ 全屏横向拓扑弹窗（`src/web/components/TaskGraphDialog.tsx`）** 的双层视图，确保 `280px` 右栏净宽内呼吸通透、零横向滚动条：
 
-- **双视口自适应方向与折叠规则**：
-  - **右栏紧凑态（`RightRail` `w-80`，扣左右 `px-5` 净宽 `280px`，及手机抽屉 / `< 720px` 顶栏下块）——纵向分层 `rankdir: "TB"`**：单节点层卡片占满内容净宽；同层 `k = 2` 个并行节点并排渲染双列紧凑卡（标题最多两行 `line-clamp-2`）；同层 `k >= 3` 个并行节点自动折叠为“2 张可见卡片 + `+N parallel` 汇总触发器”（点击一键打开大图弹窗），确保 `280px` 净宽内零横向滚动条、零卡片重叠碰撞。
-  - **大图弹窗态（点击图头右上角 `Maximize2`，`Button variant="ghost" size="icon-sm"`）——横向流水线 `rankdir: "LR"`**：复用第 15 条图表放大窗规格（`Dialog` `w-[min(96vw,1400px)] h-[90dvh]`，`overflow-auto` 原生双向滚动），完整展开全部并行节点、绑定 Piece 编号、模型信息与拍板记录。
-  - **随界面大小缩放**：节点卡片宽高按 `rem` 定义并在 JS 布局计算时乘当前 `<html>` 根字号换算为像素传给 Dagre，布局结果按拓扑与尺寸档位指纹经 `lru-cache`（容量 64）缓存，普通状态流转与流式日志 O(1) 命中同一引用。
-- **节点卡片状态与圆角规范**（只用第 2、3、4 条的圆角、字号与颜色变量）：
-  - **普通 `piece / step` 节点**：`rounded-xl border border-line bg-background px-3 py-2.5`，可点击态 `hover:bg-jelly-hover transition-colors`；正在运行（`running`）的节点标题挂 `.status-shimmer` 流光，状态词 `Working`；待启动标 `Ready`；异常待处理（`attention`）配 `bg-caution` 或 `bg-danger` 圆点与 `Needs attention`；已完成（`done`）配 `text-success` 勾选图标并轻度弱化；已跳过标 `Skipped`。
-  - **激活态门禁节点 `gate`（`Waiting on you`）果冻卡**：在右栏流图内直接内联撑开（Dagre 按实际高度推开下游层），样式为 `rounded-2xl border border-primary bg-jelly px-3.5 py-3`，左上角配 `size-2 rounded-full bg-status-active` 圆点与 `text-xs font-medium text-primary` 的状态词 `Waiting on you`；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`，其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`，点 `Add note` 可附补充说明，触屏热区均满足 `pointer-coarse:min-h-11`。
-  - **被阻断的未解锁下游节点（`pending`）**：`rounded-xl border border-dashed border-line bg-transparent px-3 py-2 opacity-65`，状态词 `Blocked`，直观呈现被上游门禁或前置步骤挡住的待解锁态。
-  - **禁符号拼接**：卡片头部左侧放中文节点标题（`text-minor`）、右侧放 `#编号` 或英文状态词（`text-xs`），用 `flex items-center justify-between gap-2` 对齐，严禁用 `·`、`|`、`/` 拼接。
-- **SVG 有向连线规范**：
-  - 线条粗细固定 `1.5px`，采用平滑三次贝塞尔曲线连接上下游锚点，终点配 `3px` 轻量小折角箭头（不用厚重实心大三角）；
-  - **实虚分明**：上游节点已 `done` 的已走通连线用实线（深中性描边 `var(--muted-foreground)`）；上游节点未 `done` 的受阻连线用 `stroke: var(--line)` 加 `stroke-dasharray="4 3"` 细虚线。
+- **任务级小切面进度轮（`SliceWheelIcon`）与多任务手风琴**：
+  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣——已完成（`done`）果肉饱满，进行中（`running` / `ready`）外圈柔淡、果心向生长，等你拍板（`waiting_user`）强调色微凸，需关注（`attention`）琥珀色，未解锁（`pending`）留淡轮廓；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。
+  - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）。
+  - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，含 `waiting_user` 或 `attention` 节点的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
+- **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
+  - 普通阶段节点去掉外框，每行左侧固定 `2.5rem`（标准档 `40px`）纵向果皮轨道槽 `<svg aria-hidden="true">`，右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。
+  - **轨道实虚与并行分合**：已走通阶段画实心果皮圆点与圆头果皮实线（`var(--peel)`）；进行中阶段画果肉浅晕圆环；需处理阶段画琥珀色圆点（`var(--color-caution)`）；同层并行阶段从主轨自然弧线分出并行副轨再合回主轨；未解锁阶段画空心圆与细虚线（`stroke-dasharray="2 4"`）。
+  - **已完成 / 未轮到折叠卷**：连续已完成的上游节点数 `>= 2` 且后面仍有未完阶段时，默认卷成一行螺旋果皮小卷 `N done`（点击展开全部已完成步骤；若用户正打开其中某个 Piece 对话则自动展开）；尾部连续 `>= 2` 层的未解锁 `pending` 链路默认折成一行 `N next`（点击展开全部下游步骤）。
+- **水果刀门禁焦点（`waiting_user` 的 `gate` 节点）**：
+  - 处于 `waiting_user` 的门禁节点在左侧轨道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方延伸受阻虚线直通底部，直观表达后续步骤被刀卡住。
+  - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
+  - 拍板通过（`done`）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
+- **放大全览弹窗（`TaskGraphDialog`）**：
+  - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，`overflow-auto` 原生双向滚动）。
+  - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线），上层渲染完整阶段卡片、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
 
 ## 13. 字体、数字、列表行
 

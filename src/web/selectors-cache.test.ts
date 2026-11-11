@@ -1,9 +1,29 @@
 // 网页 selector 的缓存守卫：按“跑了一个月”的规模（300 个 Worker、3 万条消息）算，重算要快，输入没变要返回同一个引用，
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
-import { MAX_REWOUND_PENDING_KEYS, workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
+import {
+  MAX_REWOUND_PENDING_KEYS,
+  workerEventOf,
+  workerLineSummaries,
+  type Message,
+  type PersonaChangeId,
+  type RouterItem,
+  type SessionState,
+  type TaskGraph,
+  type TaskNode,
+} from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
-import { groupMessages, listConversations, previewText, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
+import {
+  activeGraphsOf,
+  groupMessages,
+  listConversations,
+  pendingDecisionsOf,
+  previewText,
+  quotaResetTimes,
+  quotaUsage,
+  unboundWorkersOf,
+  workersOf,
+} from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { changeOf, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
@@ -223,5 +243,191 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const nextEntries = listConversations(rewound);
     expect(previewText(nextEntries[0]!)).not.toBe("刚暂停的话");
     expect(listConversations(rewound)).toBe(nextEntries);
+  });
+
+  it("activeGraphsOf、unboundWorkersOf、pendingDecisionsOf：1 个月规模下中位数 < 2 ms，流式打字与无关更新严格 === 引用稳定，变更即时失效", () => {
+    const makeNode = (over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode => ({
+      kind: "piece",
+      status: "pending",
+      sortOrder: 0,
+      activeWorkerId: null,
+      workerIds: [],
+      artifact: null,
+      gateQuestion: null,
+      gateOptions: [],
+      gateSummaryMd: null,
+      gateRecommended: null,
+      gateAskMessageId: null,
+      decision: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      ...over,
+    });
+    const makeGraph = (over: Partial<TaskGraph> & Pick<TaskGraph, "id" | "title">): TaskGraph => ({
+      projectId: 1,
+      pmId: 1,
+      conversationId: PM_CONVERSATION,
+      status: "active",
+      originMsgId: null,
+      nodes: [],
+      edges: [],
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      completedAt: null,
+      ...over,
+    });
+
+    const gateAskMsg = makeMessage({
+      id: 8_888_001,
+      conversationId: PM_CONVERSATION,
+      text: "确认同步范围",
+      meta: { needsUser: true, options: ["全量同步", "仅不冲突项"], gateRef: { graphId: 10, nodeKey: "gate-scope" } },
+    });
+    const routerDuplicateGate: RouterItem = {
+      id: 501,
+      kind: "decision",
+      status: "pending",
+      pmId: 1,
+      projectId: 1,
+      conversationId: PM_CONVERSATION,
+      question: "确认同步范围",
+      context: "",
+      options: ["全量同步", "仅不冲突项"],
+      askMessageId: gateAskMsg.id,
+      resolution: null,
+      createdAt: 2_000,
+      updatedAt: 2_000,
+    };
+    const routerIndependent: RouterItem = {
+      ...routerDuplicateGate,
+      id: 502,
+      question: "日志级别默认用 info 可以吗？",
+      options: ["可以", "改成 warn"],
+      askMessageId: null,
+      createdAt: 3_000,
+      updatedAt: 3_000,
+    };
+
+    const g1 = makeGraph({
+      id: 10,
+      title: "全厂商同步",
+      updatedAt: 5_000,
+      nodes: [
+        makeNode({ key: "survey", title: "调研差异", status: "done", sortOrder: 0, workerIds: [295] }),
+        makeNode({
+          key: "gate-scope",
+          title: "确认同步范围",
+          kind: "gate",
+          status: "waiting_user",
+          sortOrder: 1,
+          gateQuestion: "冲突项怎么处理？",
+          gateOptions: ["全量同步", "仅不冲突项"],
+          gateRecommended: "全量同步",
+          gateAskMessageId: gateAskMsg.id,
+        }),
+        makeNode({ key: "impl", title: "落地同步器", status: "pending", sortOrder: 2 }),
+      ],
+      edges: [
+        { fromKey: "survey", toKey: "gate-scope" },
+        { fromKey: "gate-scope", toKey: "impl" },
+      ],
+    });
+    const g2 = makeGraph({
+      id: 11,
+      title: "后台流水线",
+      updatedAt: 9_000,
+      nodes: [makeNode({ key: "step-a", title: "并行改造", status: "running", activeWorkerId: 296, workerIds: [296] })],
+    });
+
+    let state = monthState();
+    state = {
+      ...state,
+      projects: [...state.projects, makeProject({ id: 2, pmId: 2, conversationId: 2 })],
+      conversations: {
+        ...state.conversations,
+        [PM_CONVERSATION]: {
+          ...state.conversations[PM_CONVERSATION]!,
+          messages: [...state.conversations[PM_CONVERSATION]!.messages, gateAskMsg],
+        },
+      },
+      router: { ...state.router, items: [routerDuplicateGate, routerIndependent] },
+      activeTaskGraphs: [g2, g1],
+    };
+
+    // waiting_user 任务排在后台运行中任务前面
+    const graphs0 = activeGraphsOf(state, 1);
+    expect(graphs0.map((g) => g.id)).toEqual([10, 11]);
+    expect(activeGraphsOf(state, 1)).toBe(graphs0);
+    expect(activeGraphsOf(state, null)).toBe(activeGraphsOf(state, null));
+
+    // 已绑定到活跃图节点的 Worker #295、#296 从 unboundWorkersOf 剔除
+    const unbound0 = unboundWorkersOf(state, 1);
+    expect(unbound0).toHaveLength(WORKERS - 2);
+    expect(unbound0.some((w) => w.conversationId === workerConversationOf(295) || w.conversationId === workerConversationOf(296))).toBe(false);
+    expect(unboundWorkersOf(state, 1)).toBe(unbound0);
+
+    // pendingDecisionsOf 自动去重同源门禁与 router_item，且保持 === 引用稳定
+    const decisions0 = pendingDecisionsOf(state, PM_CONVERSATION);
+    expect(decisions0).toHaveLength(2);
+    expect(decisions0.map((d) => d.source.kind).sort()).toEqual(["gate", "router_item"]);
+    expect(pendingDecisionsOf(state, PM_CONVERSATION)).toBe(decisions0);
+
+    // 1 个月规模快照 + 流式增量更新：耗时中位数 < 2 ms，且引用严格 === 不变
+    const pmSession = makeSession({
+      sessionId: 99_999,
+      conversationId: PM_CONVERSATION,
+      pmId: 1,
+      status: "running",
+      activity: "working",
+      step: { type: "text" },
+      streamingText: "流式第 1 块",
+    });
+    state = applyChange(state, sessionChange(state.seq + 1, pmSession));
+    expect(activeGraphsOf(state, 1)).toBe(graphs0);
+    expect(unboundWorkersOf(state, 1)).toBe(unbound0);
+    expect(pendingDecisionsOf(state, PM_CONVERSATION)).toBe(decisions0);
+
+    let seq = state.seq;
+    const cachedMedian = medianMs(21, () => {
+      state = applyChange(state, sessionChange(++seq, { ...pmSession, streamingText: `流式第 ${seq} 块` }));
+      expect(activeGraphsOf(state, 1)).toBe(graphs0);
+      expect(unboundWorkersOf(state, 1)).toBe(unbound0);
+      expect(pendingDecisionsOf(state, PM_CONVERSATION)).toBe(decisions0);
+    });
+    console.log(`[task-graph selectors · 1-month snapshot + streaming] median=${cachedMedian.toFixed(3)}ms`);
+    expect(cachedMedian).toBeLessThan(2);
+
+    // 别的项目的任务图更新不击穿项目 1 的缓存引用
+    const otherGraph = makeGraph({ id: 99, projectId: 2, pmId: 2, conversationId: 2, title: "别的项目" });
+    const withOther = applyChange(state, changeOf(++seq, "task_graph.created", { graph: otherGraph }));
+    expect(activeGraphsOf(withOther, 1)).toBe(graphs0);
+    expect(unboundWorkersOf(withOther, 1)).toBe(unbound0);
+    expect(pendingDecisionsOf(withOther, PM_CONVERSATION)).toBe(decisions0);
+
+    // 项目 1 的门禁拍板完成：activeGraphsOf 与 pendingDecisionsOf 立即失效更新，随后再次稳定
+    const decidedG1: TaskGraph = {
+      ...g1,
+      updatedAt: 12_000,
+      nodes: g1.nodes.map((n) =>
+        n.key === "gate-scope"
+          ? { ...n, status: "done", decision: { choice: "全量同步", note: null, decidedBy: "user", decidedAt: 12_000 } }
+          : n.key === "impl"
+            ? { ...n, status: "running", activeWorkerId: 297, workerIds: [297] }
+            : n,
+      ),
+    };
+    const afterDecide = applyChange(withOther, changeOf(++seq, "task_graph.updated", { graph: decidedG1 }));
+    const graphs1 = activeGraphsOf(afterDecide, 1);
+    expect(graphs1).not.toBe(graphs0);
+    expect(activeGraphsOf(afterDecide, 1)).toBe(graphs1);
+
+    const unbound1 = unboundWorkersOf(afterDecide, 1);
+    expect(unbound1).toHaveLength(WORKERS - 3);
+    expect(unboundWorkersOf(afterDecide, 1)).toBe(unbound1);
+
+    const decisions1 = pendingDecisionsOf(afterDecide, PM_CONVERSATION);
+    expect(decisions1).toHaveLength(1);
+    expect(decisions1[0]!.source.kind).toBe("router_item");
+    expect(pendingDecisionsOf(afterDecide, PM_CONVERSATION)).toBe(decisions1);
   });
 });
