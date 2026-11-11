@@ -58,6 +58,7 @@ import {
   type RetryMessageResponse,
   type RewindMessageResponse,
   type RouterCommandId,
+  type RouterCommandsPage,
   type RouterItemId,
   type RouterItemsPage,
   type SetPublicEntryRequest,
@@ -256,13 +257,21 @@ export function createClient(device: DeviceId | null) {
       return postJson<FileActionResponse>(at(path));
     },
     fetchRouterDigest: () => request<DeviceRouterDigest>(at(API_PATHS.routerDigest)),
-    fetchRouterItems: (options: { cursor?: string | null; limit?: number } = {}) => {
+    fetchRouterItems: (options: { cursor?: string | null; limit?: number; kind?: "decision" | "report" } = {}) => {
       // 查询参数用对象键名拼，不写字符串字面量（参数名 cursor 与厂商编号同名，会被 vendor-guard 当成点名厂商）。
       const query: Record<string, string> = {};
       if (options.cursor) query.cursor = options.cursor;
       if (options.limit !== undefined) query.limit = String(options.limit);
+      if (options.kind) query.kind = options.kind;
       const qs = new URLSearchParams(query).toString();
       return request<RouterItemsPage>(at(qs ? `${API_PATHS.routerItems}?${qs}` : API_PATHS.routerItems));
+    },
+    fetchRouterCommands: (options: { cursor?: string | null; limit?: number } = {}) => {
+      const query: Record<string, string> = {};
+      if (options.cursor) query.cursor = options.cursor;
+      if (options.limit !== undefined) query.limit = String(options.limit);
+      const qs = new URLSearchParams(query).toString();
+      return request<RouterCommandsPage>(at(qs ? `${API_PATHS.routerCommands}?${qs}` : API_PATHS.routerCommands));
     },
     postResolveRouterItem: (id: RouterItemId, body: ResolveRouterItemRequest) =>
       postJson<ResolveRouterItemResponse>(at(API_PATHS.routerItemResolve(id)), body),

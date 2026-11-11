@@ -101,10 +101,11 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 默认（模型、思考程度没指定） / 去掉 | Default / Remove |
 | 没有匹配的命令 / 文件 / 厂商 / 模型 / 思考程度（输入框弹出列表） | No matching commands / files / providers / models / effort |
 | 派 Worker 用的厂商、模型（`/hub:worker` 的标签，读屏名字） | Worker model |
-| 总助工作台 / 待决区 / 汇报区 / 近期指令 | Router / Needs You / Updates / Recent |
-| 全部归档汇报 / 已全清 / 推荐项 / 阅毕归档 / 忽略 | Archive all / All clear / Recommended / Done / Dismiss |
-| 指令分派中（Router 回执流光状态词） | Dispatching… |
-| 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… |
+| 总助工作台 / 待决区 | Router / Needs You |
+| 已全清 / 推荐项 | All clear / Recommended |
+| 总助处理中 | Working… |
+| 新简报分隔线 / 回复被截断 / 去向行状态词（已启动、已暂停、已结束、已创建） | New / Reply truncated / Started / Paused / Ended / Created |
+| 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… / Tell Router… |
 | 任务流图 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Waiting on you / Ready / Blocked / Needs attention / Skipped |
 | 补充说明 / 跳过此步 / 取消任务图 / 已完成卷 / 待解锁卷 / 加载更多 / 放大查看 / 同层折叠并行数 | Add note / Skip step / Cancel graph / N done / N next / Load more / Zoom / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
@@ -116,8 +117,8 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
   - **来源**：`src/web/lib/palette.ts` 的 `PALETTE`（8 种水果配色）一处，项目经理的完整水果横切面头像（`slice`）、Worker 的自然果瓣头像（`wedge`）、水果主色（`blob`）和强调色（`accent` + 文字色 `accentForeground`）共用这一份，按项目经理的编号（头像的 `colorKey`）轮着取。别处不写颜色值。
   - **谁在里面**：项目经理的对话、它的 Worker 的对话、它的资料页、右栏，外面包一层 `AccentScope`（`lib/accent-scope.tsx`，`display: contents`），在这层上设好 `--primary` 和 `--primary-foreground`，里面的组件照常写 `bg-primary text-primary-foreground`，不自己算颜色。会话里打开的弹窗（如资料页的“开新会话？”）也渲染进这层，颜色跟着。**左栏、Router 工作台（`#/router`）、设置弹窗、新建项目经理弹窗、加载页不在里面**，`:root` 里的 `--primary` 是中性的前景色 `#18181b`，所以不用单独处理。
   - **用在哪（实心强调色只用在这几处）**：主按钮（一屏最多一个：创建、保存、发送、停止；以及激活态任务图门禁节点 `gate` 的推荐主选项按钮；悬停用 `hover:brightness-90` 变深，不用透明度，对比度只升不降）、选中态（单选行的勾、开关打开）、右栏“等你确定”组标题前的小圆点和收起时右栏开关上的圆点、拖文件进输入框时的虚线框。对话里就是**发送键和小圆点**。
-  - **用户自己的气泡是浅果冻底**（`bg-bubble-me text-bubble-me-foreground`）：底色是当前强调色掺白 `color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff)`（12%），字是前景色（深色），不是白字压实心强调色；8 种水果的气泡底配前景色字对比度都 ≥ 4.5:1（`lib/palette.test.ts` 按 `--mix-bubble-me` 逐色校验）。气泡的形状、圆角、内边距不变（第 17 条）。
-  - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、Router 汇报卡的 `Done` 这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框——仅三处例外：拖文件进输入框时的虚线框、右栏激活态 `gate`（`Waiting on you`）门禁卡片的 `border-primary`（第 12.1 条），以及聊天输入框外框 `.composer-frame` 聚焦态（`:focus-within` 阴影光晕掺当前会话 `--primary` 水果色，边框自身颜色与粗细仍保持中性 `border-border` 不变，见第 7 条；在 `#/router` 下 `--primary` 为中性碳黑，自然退回冷灰光晕）。
+  - **用户自己的气泡是浅果冻底**（`bg-bubble-me text-bubble-me-foreground`）：底色是当前强调色掺白 `color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff)`（12%），字是前景色（深色），不是白字压实心强调色；8 种水果的气泡底配前景色字对比度都 ≥ 4.5:1（`lib/palette.test.ts` 按 `--mix-bubble-me` 逐色校验）。`#/router` 下用户气泡照常用 `bg-bubble-me`，因为 `--primary` 是碳黑，气泡是浅中性灰，不单独写颜色。气泡的形状、圆角、内边距不变（第 17 条）。
+  - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、总助失败回合的 `Retry` 这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框——仅三处例外：拖文件进输入框时的虚线框、右栏激活态 `gate`（`Waiting on you`）门禁卡片的 `border-primary`（第 12.1 条），以及聊天输入框外框 `.composer-frame` 聚焦态（`:focus-within` 阴影光晕掺当前会话 `--primary` 水果色，边框自身颜色与粗细仍保持中性 `border-border` 不变，见第 7 条；在 `#/router` 下 `--primary` 为中性碳黑，自然退回冷灰光晕）。
   - **左栏的标注使用清爽的绿色提醒**：“等你确定”与“等你”均统一为绿色（`bg-status-active` / `text-status-active`）。在 72px 窄栏收紧态下，头像右下角用绿色小圆点（`size-2 rounded-full bg-status-active ring-2 ring-sidebar`）；在展开态左栏下，“等你确定”和“等你”都只是一颗绿色小圆点（`size-2 shrink-0 rounded-full bg-status-active`），**不写“等你”两个字**，名字只放在圆点的 `aria-label` / `title` 上给读屏和悬停用，干净克制，不用原来的深色胶囊样式。
   - **对比度**：强调色同时当“白字的底色”和“白底上的文字色”，所以每种颜色对白色的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。水果主色 `blob` 是明亮的原色（不放文字），`accent` 是与水果同色系深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
 - **水果果冻底（列表项的选中、悬停）**：左栏的项目经理行（宽栏的行和 72px 窄栏的头像方块）、右栏的行（Piece、Needs You 的提问、任务流图节点卡片），选中是 `bg-jelly`、悬停是 `hover:bg-jelly-hover`——水果强调色掺透明的极淡底（选中 10%、悬停 5%，`color-mix(in srgb, <accent> 10%, transparent)`），和头像、右上角果瓣同一色系，清透不抢字。
@@ -130,7 +131,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 - **水果三元视觉与 Router 水果刀中性色规则**：
   - **项目经理（PM，`Avatar.tsx`）**：完整水果横切面（`PALETTE.slice`），配彩色果冻行底 `--jelly` 与会话彩色 `--fruit` / `--primary`。
   - **Worker（Piece，`Avatar.tsx`）**：从所属项目经理那片水果上顺着果络剥下的一瓣（`PALETTE.wedge`，`neutral` 为 `true`，`colorKey` 传所属项目经理的 `avatarKey`）。
-  - **Router（`<KnifeAvatar>`，`KnifeAvatar.tsx`）**：切开与调度所有水果的 45° 水果刀矢量图标，**不设 `--fruit`、不设彩色 `--jelly`**。打开 `#/router` 时，`FruitTint` 与 `AccentScope` 均传 `null`：外壳平滑退回纯白工作台 `--background`（`#ffffff`）与中性冷灰侧栏 `--sidebar`（`#f6f6f7`），`--primary` 保持碳黑刀锋色 `#18181b`（白字 `#ffffff`）；左栏置顶 Router 行选中态固定用 `bg-sidebar-active`、悬停态固定用 `hover:bg-sidebar-hover`；而在纯白中性的 Router 工作台内，每张卡片左上角展示来源 PM 的 `24px` 彩色水果切片头像以一眼识别所属项目。
+  - **Router（`<KnifeAvatar>`，`KnifeAvatar.tsx`）**：切开与调度所有水果的 45° 水果刀矢量图标，**不设 `--fruit`、不设彩色 `--jelly`**。打开 `#/router` 时，`FruitTint` 与 `AccentScope` 均传 `null`：外壳平滑退回纯白工作台 `--background`（`#ffffff`）与中性冷灰侧栏 `--sidebar`（`#f6f6f7`），`--primary` 保持碳黑刀锋色 `#18181b`（白字 `#ffffff`）；左栏置顶 Router 行选中态固定用 `bg-sidebar-active`、悬停态固定用 `hover:bg-sidebar-hover`；而在纯白中性的 Router 工作台内，托盘里的待拍板卡和时间流里的简报，开头展示来源项目经理的彩色水果切片头像以一眼识别所属项目。
 - 其余一律中性色：
   - 页面底色 `bg-background`（白，外壳的对话区和右栏是上面的 `bg-surface-chat`）；左栏 `bg-surface-sidebar`，设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`（左栏的项目经理行、右栏的列表项除外，用上面的果冻底）。
   - 分隔线分两种：**外壳**（三栏之间、右栏组之间、窄屏头像栏右边、左栏置顶 Router 入口下方）用 1px `border-line` / `divide-line`（中性边框掺 8% 水果色，跟着项目经理变；Router 下无 `--fruit` 自然退回中性 `--border`）；**白底的框和弹窗**（分组框、弹窗、popover、卡片、输入框，框里行与行之间）仍用 1px `border-border` / `divide-border`（纯中性色，不掺水果色）。
@@ -390,7 +391,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 17. 消息流（对话里的消息列表）
 
-组件在 `src/web/components/MessageList.tsx`、`Messages.tsx`，分组在 `selectors.ts` 的 `groupMessages`，状态词在 `step-labels.ts`，出错的说法在 `src/shared/errors.ts`。思路是**把过程藏起来**：默认只显示结论和状态，过程点开才看。
+组件在 `src/web/components/MessageList.tsx`、`Messages.tsx`，分组在 `selectors.ts` 的 `groupMessages`，状态词在 `step-labels.ts`，出错的说法在 `src/shared/errors.ts`。Router 的时间流复用这一条的气泡、头像行、贴底、没发出去的标记。思路是**把过程藏起来**：默认只显示结论和状态，过程点开才看。
 
 - **字号只有三档**：正文 15px；名字、“Worked for”这一行、可点开的系统行 13.5px；时间、消息状态、很淡的系统行、操作明细 12px（`text-xs`）。不用 12.5px、13px。
 - **一轮回复一个头像**：用户（或项目经理、Worker 汇报、到点的定时任务）说一句之后，agent 接下来的所有东西算一轮，只在开头出一次“头像 26px + 名字（13.5px、500、灰）”。头像旁不放状态、不加“·”。
@@ -486,20 +487,16 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 层级：列表 → 聊天 → Piece/资料。进下一层 push，`history.state = { hub: true, previous: <上一页网址> }`；同层切换（Piece 切 Piece、聊天里跳到别的聊天）replace 当前条目并保留原 state；其余 replace 不写标记。顶栏返回只在 `previous` 正好是上级时 `history.back()`，否则 replace 到上级（聊天到列表、Piece/资料到所属聊天），直达、同层切换后都不循环。抽屉里点提问等同返回所属聊天。无效路由在目标设备快照就绪后 replace 到列表；刚新建、WebSocket 还没同步到的对话不算无效。路由、设备变化或抽屉内容消失时关闭抽屉。
 - 设置、新建弹窗和软键盘适配留到后续 PR5，本轮沿用已有组件。
 
-## 21. Router 非对话式工作台与三合一选项卡片
+## 21. Router 工作台：待拍板托盘和时间流
 
-`#/router` 是跨设备收口拍板与极速调度的**非对话式行动工作台**（方案见 `docs/router-design.md` 第 4 节），绝不是从上往下堆聊天气泡的对话窗口。
+`#/router` 由三部分组成：顶栏下面的 `Needs You` 托盘、中间的时间流、底部的输入框。方案见 `docs/router-workbench-v2-design.md`。
 
 - **水果刀矢量头像（`<KnifeAvatar>`，`src/web/components/KnifeAvatar.tsx`）**：
   - `viewBox="0 0 44 44"`，45° 斜置削皮水果刀，尺寸同 `Avatar.tsx` 换算为 `${size / 16}rem` 跟随第 0 条四档界面大小缩放，`aria-hidden="true"`、`data-slot="knife-avatar"`。
   - **唯一渐变 ID 铁律**：SVG `<defs>` 内的 `<linearGradient>` ID 必须用 `React.useId()` 生成实例级唯一 ID，严禁写死静态 `id="knife-blade"`（防止左栏置顶刀与顶栏刀同屏渲染后卸载其一时导致另一处 `url(#...)` 失效变黑）。
   - **配色与 WCAG 1.4.11 图形对比度**：刀身拉丝钢线性渐变（`#f4f4f6` → `#d4d4d8`）配白色刃口高光 `#ffffff`；刀背与外轮廓用 `1.5px` 深钢灰 `#3f3f46`（对白底 `#ffffff` 与侧栏 `#f6f6f7` 对比度均 ≥ 3:1，实测 > 9:1）；金属护手 `#71717a`；碳黑刀柄 `#18181b` 嵌双银色铆钉 `#d4d4d8`。
-- **工作台三层结构与分区顺序**：
-  - 主区复用 `.chat-main` 容器与 `.chat-column` 居中列宽体系（第 8 条），顶栏高 `h-16`（左放 `<KnifeAvatar size={28} />` + `Router` 标题 `text-title font-semibold`，右放未决计数）；**严禁使用聊天气泡（`.bubble-*`）与消息回合流**。
-  - 滚动内容区固定按四段纵向排布（空分区不显示）：`Needs You`（待决选项卡片）→ `Recent`（最近最多 5 条紧凑单行发令回执：`rounded-xl bg-sidebar px-3 py-2 text-minor`，分派中左侧显示 `.status-shimmer` 流光词 `Dispatching…`，成功显示 `text-success` 勾选与目标摘要，失败显示 `text-danger` 图标、人话错误及 `Retry` / `Dismiss` 纯文字按钮）→ `Updates`（阶段汇报卡，右上角纯文字按钮 `Done`、组头右侧 `Archive all`，底部一行紧凑排布证据链接）→ `Archived`（默认收起，展开按需游标分页）。
-  - **空状态**：当 `Needs You`、`Recent`、`Updates` 全空时，主区居中展示半透明 `<KnifeAvatar size={36} className="opacity-40" />` 与英文 `All clear`（`text-minor text-muted-foreground`）。
-  - **来源行禁拼接符**：每张卡片头部左起 `24px` 来源 PM 彩色水果切片头像、PM 名、项目名、设备名、右侧时间，一律用 `gap-2` 与字重/颜色层级区分，不用 `·`、`|`、`/`。
-- **内嵌单行补充框的三合一待决选项卡片（`RouterDecisionCard`）**：
+- **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`，下边 1px `border-border`，最高 `50dvh`，超出在里面滚。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
+- **待拍板卡（`RouterDecisionCard`）**：
   - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`；预设选项行用 `rounded-xl border border-border px-3 py-2`（左放 `A` / `B` 键帽徽标，推荐项右侧标 `Recommended`）。
   - **常驻单行补充框（零二级展开按钮、零悬停隐藏操作）**：卡片底部直接内嵌单行 `<Input>`（`h-9 rounded-xl`，占位 `Add a note, or type a custom reply…`）+ 右侧同高 `Button size="icon"`（`size-9`，`ArrowUp` 图标，空输入时 `disabled` 中性灰），触屏热区均 ≥ 44px。
   - **三合一拍板路径**：
@@ -507,4 +504,13 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
     2. **点选 + 附备注**：先在补充框输入文字再点任一选项按钮，同时提交所选选项与补充说明；
     3. **纯文字自定义决定**：不点预设选项，直接在补充框输入决定后按 `Enter` 或点右侧发送按钮提交。
   - **离线态**：卡片所属远端设备离线时整卡 `opacity-60`、右上角标 `Offline`（`text-xs text-muted-foreground`），选项与发送按钮禁用，重连后自动恢复。
-- **底部常驻单行发令框**：直接复用 `<DraftComposer>`（`.composer-frame`），占位 `Tell Router, or type @ to pick a project…`；输入 `@` 弹出跨设备项目/PM 候选列表（第 18 条）走零模型直通转发，直接输入自然语言走单轮极快模型分派。
+- **时间流**：从上到下按时间排，贴底，滚动规则照第 17 条“贴底”。里面只有两种条目，都没有边框、底色和关闭键。
+  - 指令回合：用户说的话是靠右的气泡（第 17 条的用户气泡）。总助的结果靠左，开头一次水果刀头像 26px 和 `Router`（13.5px、500、灰），下面依次是去向行、Markdown 正文（第 15 条，全文不截断）、结尾一行复制键和时间（12px 灰，`tabular-nums`）。
+  - 去向行：一个投递成功的目标一行。目标头像 20px、名字 15px、500，项目名和设备名 12px 灰，`gap-3`，最右 `ChevronRight`；启动、暂停、结束、新建时箭头前有 12px 灰的状态词。整行可点，尺寸和果冻底照第 12 条的行。不用“·”“|”“/”。
+  - 简报：开头来源项目经理的水果头像 26px 和名字（13.5px、500、灰），项目名、设备名 12px 灰。正文 Markdown。链接是正文下面一行普通行内链接，`gap-3`，不用胶囊。结尾是时间。同一个项目经理连着几条只有第一条带头像。
+  - 执行中：水果刀头像下面一行 `Working…`，`.status-shimmer`。
+  - 没发出去：气泡左边红色感叹号，点了重发（第 17 条）。
+  - 处理失败：结果位置一行，14px `CircleAlert`（`text-danger`）、人话原因（13.5px 灰，原文放 `title`）、文字按钮 `Retry`。没有 `Dismiss`。
+  - 未读分隔线：打开时有没看过的简报，在最早一条上面画 `New`（12px 灰）加 1px 细线，写法同第 17 条“换新会话”的分隔线。
+- **空状态**：没有待拍板项也没有任何条目时，居中 `<KnifeAvatar size={36} className="opacity-40" />` 和 `All clear`（`text-minor text-muted-foreground`）。
+- **输入框**：复用 `<DraftComposer>`，占位 `Tell Router, or type @ to pick a project…`，手机外壳是 `Tell Router…`。向上叠盖 26px，写法同对话页。

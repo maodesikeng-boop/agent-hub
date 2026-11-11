@@ -188,6 +188,8 @@ export function App() {
             leading={leading}
             notices={notices}
             view={routerView}
+            devices={fleet.devices}
+            selfId={fleet.selfId}
             draft={drafts.of(ROUTER_DRAFT_KEY)}
             staging={staging.of(ROUTER_DRAFT_KEY)}
             clientForDevice={clientForDevice}

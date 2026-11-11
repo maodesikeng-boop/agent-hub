@@ -634,11 +634,13 @@ export const ROUTER_PM_BRIEF_MAX_CHARS = 120;
 export const ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX = 50;
 /** StateSnapshot 里最近 Router 指令上限。 */
 export const ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX = 10;
-/** Router 工作台 Recent 区最多同时展示多少条紧凑发令回执。 */
-export const ROUTER_VISIBLE_RECEIPTS_MAX = 5;
-/** 历史回执分页每页条数与前端内存缓存最多保留页数。 */
-export const ROUTER_ARCHIVED_PAGE_SIZE = 30;
-export const ROUTER_ARCHIVED_MAX_PAGES = 10;
+/** Router 时间流：网页内存里每台设备的近窗最多留多少条指令、多少条简报；超了保留最新的，历史的起点跟着前移。 */
+export const ROUTER_STREAM_LIVE_MAX = 200;
+/** Router 时间流历史每页条数，和每个来源最多往回翻几页（到了就不再出 Load earlier）。 */
+export const ROUTER_STREAM_PAGE_SIZE = 30;
+export const ROUTER_STREAM_MAX_PAGES = 10;
+/** 兼容别名：src/daemon/ledger/router.ts 还按旧名引用，后端契约 PR 合入后随它一起删。 */
+export const ROUTER_ARCHIVED_PAGE_SIZE = ROUTER_STREAM_PAGE_SIZE;
 /** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
 export const ROUTER_PERSONA_SUMMARY_LINES = 4;
 export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;
