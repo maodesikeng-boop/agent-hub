@@ -9,7 +9,8 @@ import { reclaimFreePages } from "./store/index.ts";
 import type { Db } from "./store/index.ts";
 
 export interface RetentionDeps {
-  ledger: Pick<SqliteLedger, "purgeExpiredWorkerConversations">;
+  ledger: Pick<SqliteLedger, "purgeExpiredWorkerConversations"> &
+    Partial<Pick<SqliteLedger, "purgeExpiredRouterAndGraphRecords">>;
   db: Db;
   log: (line: string) => void;
   now?: () => number;
@@ -49,6 +50,22 @@ export async function runRetentionRound(deps: RetentionDeps): Promise<RetentionR
       round.workers += batch.purged.length;
       if (!batch.more) break;
       await yieldToLoop();
+    }
+    if (ledger.purgeExpiredRouterAndGraphRecords !== undefined) {
+      while (round.rows < WORKER_PURGE_ROUND_MAX_ROWS && !stopped()) {
+        const started = performance.now();
+        const batch = ledger.purgeExpiredRouterAndGraphRecords(
+          now(),
+          Math.min(WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_ROUND_MAX_ROWS - round.rows),
+        );
+        if (batch.rows > 0) {
+          round.batchMs.push(performance.now() - started);
+          round.batches++;
+          round.rows += batch.rows;
+        }
+        if (!batch.more) break;
+        await yieldToLoop();
+      }
     }
     if (!stopped()) round.pages = (await reclaimFreePages(db, { yieldToLoop, isStopped: stopped })).pages;
   } catch (error) {

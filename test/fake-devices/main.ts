@@ -12,6 +12,7 @@ import {
   API_PATHS,
   DEVICE_PROXY_PREFIX,
   bundledModelCatalog,
+  emptyRouterSlice,
   serverInfoFor,
   type ConversationSnapshot,
   type DeviceInfo,
@@ -77,6 +78,8 @@ function snapshot(platform: string, pms: Pm[], conversations: ConversationSnapsh
     })),
     health: [],
     schedules: [],
+    router: emptyRouterSlice(),
+    activeTaskGraphs: [],
     server: serverInfoFor(platform),
   };
 }

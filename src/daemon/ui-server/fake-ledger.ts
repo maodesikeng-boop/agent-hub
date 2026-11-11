@@ -2,15 +2,23 @@
 import {
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
+  defaultRouterSettings,
+  emptyRouterSlice,
   findRewindableMessage,
   MESSAGE_PAGE_SIZE,
   userMessageDedupeKey,
+  type ArchiveAllReportsResponse,
+  type CancelTaskGraphRequest,
+  type CancelTaskGraphResponse,
   type Change,
   type ChangeDataMap,
   type ChangesSince,
   type ConversationId,
   type CreatePmInput,
   type CreatePmResult,
+  type DecideTaskNodeRequest,
+  type DecideTaskNodeResponse,
+  type DeviceRouterDigest,
   type EditPersonaInput,
   type EditPersonaResult,
   type Ledger,
@@ -25,10 +33,23 @@ import {
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
+  type ProjectId,
+  type ResolveRouterItemRequest,
+  type ResolveRouterItemResponse,
+  type RouterItemId,
+  type RouterItemsPage,
+  type RouterSettings,
   type ScheduleRecord,
   type SessionId,
+  type SkipTaskNodeRequest,
+  type SkipTaskNodeResponse,
   type LedgerSnapshot,
+  type TaskGraph,
+  type TaskGraphId,
+  type TaskGraphsPage,
+  type TaskNodeKey,
   type Unsubscribe,
+  type UpdateRouterSettingsRequest,
 } from "../../shared/index.ts";
 
 function makeSchedule(over: Partial<ScheduleRecord>): ScheduleRecord {
@@ -122,12 +143,28 @@ export class FakeLedger {
   readonly retried: MessageId[] = [];
   /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
   readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
+  readonly routerCalls: Array<{ call: string; args: unknown[] }> = [];
+  readonly taskGraphCalls: Array<{ call: string; args: unknown[] }> = [];
   readonly renewed: PmId[] = [];
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
-  snapshotValue: LedgerSnapshot = { seq: 0, pms: [], projects: [], folders: [], conversations: [], sessions: [], health: [], schedules: [] };
+  snapshotValue: LedgerSnapshot = {
+    seq: 0,
+    pms: [],
+    projects: [],
+    folders: [],
+    conversations: [],
+    sessions: [],
+    health: [],
+    schedules: [],
+    router: emptyRouterSlice(),
+    activeTaskGraphs: [],
+  };
+  routerDigestValue: DeviceRouterDigest = { generatedAt: 1, pms: [] };
+  routerItemsPageValue: RouterItemsPage = { items: [], nextCursor: null, hasMore: false };
+  taskGraphsPageValue: TaskGraphsPage = { graphs: [], hasMore: false };
   /** getMessage 能取到的消息（测试自己放）。 */
   readonly storedMessages = new Map<MessageId, Message>();
   /** sentFileAllows 的判断，默认都允许。 */
@@ -330,6 +367,117 @@ export class FakeLedger {
     };
   }
 
+  getRouterDigest(): DeviceRouterDigest {
+    this.check();
+    this.routerCalls.push({ call: "digest", args: [] });
+    return this.routerDigestValue;
+  }
+
+  listRouterItems(beforeCursor?: string, limit?: number): RouterItemsPage {
+    this.check();
+    this.routerCalls.push({ call: "listItems", args: [beforeCursor, limit] });
+    return this.routerItemsPageValue;
+  }
+
+  resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse {
+    this.check();
+    this.routerCalls.push({ call: "resolveItem", args: [itemId, input] });
+    if ("action" in input) {
+      return {
+        item: {
+          id: itemId,
+          kind: "report",
+          status: "archived",
+          pmId: 1,
+          projectId: null,
+          conversationId: 1,
+          summary: "已归档",
+          links: [],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      };
+    }
+    return {
+      item: {
+        id: itemId,
+        kind: "decision",
+        status: "resolved",
+        pmId: 1,
+        projectId: null,
+        conversationId: 1,
+        question: "q",
+        context: "",
+        options: ["A", "B"],
+        askMessageId: null,
+        resolution: {
+          chosenIndex: input.optionIndex,
+          chosenOption: input.optionIndex === null ? null : "A",
+          note: input.note ?? "",
+          actor: "router",
+          resolvedAt: 2,
+          clientId: input.clientId,
+        },
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      messageId: 99,
+    };
+  }
+
+  archiveAllRouterReports(): ArchiveAllReportsResponse {
+    this.check();
+    this.routerCalls.push({ call: "archiveAllReports", args: [] });
+    return { archivedIds: [1], updatedAt: 2 };
+  }
+
+  updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings {
+    this.check();
+    this.routerCalls.push({ call: "updateSettings", args: [input] });
+    return { ...defaultRouterSettings(), ...input, updatedAt: 2 };
+  }
+
+  listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
+    this.check();
+    this.taskGraphCalls.push({ call: "listHistory", args: [projectId, beforeId, limit] });
+    return this.taskGraphsPageValue;
+  }
+
+  private makeTaskGraph(graphId: TaskGraphId, status: TaskGraph["status"] = "active"): TaskGraph {
+    return {
+      id: graphId,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: `g-${graphId}`,
+      status,
+      originMsgId: null,
+      nodes: [],
+      edges: [],
+      createdAt: 1,
+      updatedAt: 2,
+      completedAt: status === "active" ? null : 2,
+    };
+  }
+
+  decideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: DecideTaskNodeRequest): DecideTaskNodeResponse {
+    this.check();
+    this.taskGraphCalls.push({ call: "decideNode", args: [graphId, nodeKey, input] });
+    return { graph: this.makeTaskGraph(graphId), messageId: 101 };
+  }
+
+  skipTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse {
+    this.check();
+    this.taskGraphCalls.push({ call: "skipNode", args: [graphId, nodeKey, input] });
+    return { graph: this.makeTaskGraph(graphId), messageId: 102 };
+  }
+
+  cancelTaskGraph(graphId: TaskGraphId, input: CancelTaskGraphRequest): CancelTaskGraphResponse {
+    this.check();
+    this.taskGraphCalls.push({ call: "cancelGraph", args: [graphId, nodeKeyOrReason(input)] });
+    return { graph: this.makeTaskGraph(graphId, "cancelled"), messageId: 103 };
+  }
+
   /** 转成完整的 Ledger 类型传给 createUiServer；界面服务不该碰的方法调了就抛错。 */
   asLedger(): Ledger {
     const unused = (name: string) => () => {
@@ -388,6 +536,15 @@ export class FakeLedger {
         this.check();
         this.scheduleCalls.push({ call: "remove", args: [id] });
       },
+      getRouterDigest: () => this.getRouterDigest(),
+      listRouterItems: (c, l) => this.listRouterItems(c, l),
+      resolveRouterItem: (id, i) => this.resolveRouterItem(id, i),
+      archiveAllRouterReports: () => this.archiveAllRouterReports(),
+      updateRouterSettings: (i) => this.updateRouterSettings(i),
+      listProjectTaskGraphs: (p, b, l) => this.listProjectTaskGraphs(p, b, l),
+      decideTaskNode: (g, k, i) => this.decideTaskNode(g, k, i),
+      skipTaskNode: (g, k, i) => this.skipTaskNode(g, k, i),
+      cancelTaskGraph: (g, i) => this.cancelTaskGraph(g, i),
       hubCall: unused("hubCall"),
       sessionRole: unused("sessionRole"),
       workerStartFolder: unused("workerStartFolder"),
@@ -402,4 +559,8 @@ export class FakeLedger {
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }
+}
+
+function nodeKeyOrReason(input: CancelTaskGraphRequest): CancelTaskGraphRequest {
+  return input;
 }

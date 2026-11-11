@@ -617,3 +617,100 @@ describe("归档项目经理状态与提醒（pm.removed、formatArchiveRemainin
     expect(r1.conversations[1]).toBeUndefined();
   });
 });
+
+describe("Router 与 TaskGraph 增量状态演进", () => {
+  it("router.* 与 task_graph.* 增删改收起及 pm.removed 级联清理", () => {
+    let s = loaded();
+    s = applyChange(
+      s,
+      changeOf(11, "router.item.created", {
+        item: {
+          id: 1,
+          kind: "decision",
+          status: "pending",
+          pmId: 1,
+          projectId: null,
+          conversationId: 1,
+          question: "选哪个？",
+          context: "",
+          options: ["A", "B"],
+          askMessageId: null,
+          resolution: null,
+          createdAt: 100,
+          updatedAt: 100,
+        },
+      }),
+    );
+    s = applyChange(
+      s,
+      changeOf(12, "router.item.created", {
+        item: {
+          id: 2,
+          kind: "report",
+          status: "unread",
+          pmId: 1,
+          projectId: null,
+          conversationId: 1,
+          summary: "里程碑一已完成",
+          links: [],
+          createdAt: 101,
+          updatedAt: 101,
+        },
+      }),
+    );
+    expect(s.router.items.map((x) => x.id)).toEqual([2, 1]);
+
+    // 已决拍板卡从活跃切片移除
+    s = applyChange(
+      s,
+      changeOf(13, "router.item.updated", {
+        item: {
+          id: 1,
+          kind: "decision",
+          status: "resolved",
+          pmId: 1,
+          projectId: null,
+          conversationId: 1,
+          question: "选哪个？",
+          context: "",
+          options: ["A", "B"],
+          askMessageId: null,
+          resolution: { chosenIndex: 0, chosenOption: "A", note: "", actor: "router", resolvedAt: 105 },
+          createdAt: 100,
+          updatedAt: 105,
+        },
+      }),
+    );
+    expect(s.router.items.map((x) => x.id)).toEqual([2]);
+
+    // 一键归档未读汇报
+    s = applyChange(s, changeOf(14, "router.reports.archived_all", { archivedIds: [2], updatedAt: 106 }));
+    expect(s.router.items).toEqual([]);
+
+    // 备忘增改与清空
+    s = applyChange(s, changeOf(15, "router.note.updated", { pmId: 1, note: { pmId: 1, text: "正在合 PR", updatedAt: 110 } }));
+    expect(s.router.notes).toEqual([{ pmId: 1, text: "正在合 PR", updatedAt: 110 }]);
+    s = applyChange(s, changeOf(16, "router.note.updated", { pmId: 1, note: null }));
+    expect(s.router.notes).toEqual([]);
+
+    // 任务图创建（active）与完结移出（completed）
+    const baseGraph = {
+      id: 9,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: "部署流水线",
+      status: "active" as const,
+      originMsgId: null,
+      nodes: [],
+      edges: [],
+      createdAt: 100,
+      updatedAt: 100,
+      completedAt: null,
+    };
+    s = applyChange(s, changeOf(17, "task_graph.created", { graph: baseGraph }));
+    expect(s.activeTaskGraphs.map((g) => g.id)).toEqual([9]);
+    s = applyChange(s, changeOf(18, "task_graph.updated", { graph: { ...baseGraph, status: "completed", completedAt: 120 } }));
+    expect(s.activeTaskGraphs).toEqual([]);
+  });
+});

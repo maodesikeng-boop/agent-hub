@@ -18,7 +18,9 @@ import { summarizeArgs, truncateField } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
+import type { LedgerRouter } from "./router.ts";
 import type { LedgerSchedules } from "./schedules.ts";
+import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
 
@@ -112,6 +114,8 @@ export function createLedgerHubCommands(
   messages: LedgerMessages,
   schedules: LedgerSchedules,
   workerView: ReturnType<typeof createLedgerWorkerView>,
+  router: LedgerRouter,
+  taskGraphs: LedgerTaskGraphs,
 ) {
   const { db, now, write } = ctx;
   const { pmRow, pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
@@ -130,8 +134,9 @@ export function createLedgerHubCommands(
         const row = activeProjectOf(pm.id);
         const project = row === null ? null : projectCard(row);
         const setupCommand = row?.setup_command ?? null;
+        const { summaries, textBlock } = taskGraphs.pmStatusGraphs(pm.id);
         return {
-          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}`,
+          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}`,
           data: {
             role: "pm",
             pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -139,6 +144,7 @@ export function createLedgerHubCommands(
             conversationId: caller.conversationId ?? -1,
             project,
             setupCommand,
+            ...(summaries.length > 0 ? { activeTaskGraphs: summaries } : {}),
           },
         };
       }
@@ -229,6 +235,30 @@ export function createLedgerHubCommands(
         return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
       case "schedule.remove":
         return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
+      case "router.ask":
+        return router.askIn(p, caller, args as HubArgs<"router.ask">);
+      case "router.report":
+        return router.reportIn(p, caller, args as HubArgs<"router.report">);
+      case "router.note":
+        return router.noteIn(p, caller, args as HubArgs<"router.note">);
+      case "graph.create":
+        return taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">);
+      case "graph.show":
+        return taskGraphs.show(caller, args as HubArgs<"graph.show">);
+      case "graph.list":
+        return taskGraphs.list(caller, args as HubArgs<"graph.list">);
+      case "graph.ask":
+        return taskGraphs.askIn(p, caller, args as HubArgs<"graph.ask">);
+      case "graph.patch":
+        return taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">);
+      case "graph.done":
+        return taskGraphs.doneIn(p, caller, args as HubArgs<"graph.done">);
+      case "graph.decide":
+        return taskGraphs.decideIn(p, caller, args as HubArgs<"graph.decide">);
+      case "graph.skip":
+        return taskGraphs.skipIn(p, caller, args as HubArgs<"graph.skip">);
+      case "graph.cancel":
+        return taskGraphs.cancelIn(p, caller, args as HubArgs<"graph.cancel">);
     }
   };
 

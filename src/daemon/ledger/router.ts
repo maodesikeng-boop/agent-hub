@@ -1,0 +1,1044 @@
+// Router（总助）账本模块：独立待决拍板卡、里程碑汇报、PM 近况备忘、配置、审计环与 Fleet Digest 缓存。
+import { z } from "zod";
+import type {
+  ArchiveAllReportsResponse,
+  ResolveRouterItemRequest,
+  ResolveRouterItemResponse,
+  RouterItemsPage,
+  UpdateRouterSettingsRequest,
+} from "../../shared/api.ts";
+import { userMessageDedupeKey, validateAskOptions } from "../../shared/domain.ts";
+import type {
+  AgentSessionRow,
+  ConversationId,
+  Message,
+  MessageId,
+  PmId,
+  PmMode,
+  ProjectId,
+  RouterItemId,
+} from "../../shared/domain.ts";
+import type { HubArgs, HubResult } from "../../shared/hub.ts";
+import {
+  MAX_DECISION_NOTE_CHARS,
+  ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+  ROUTER_ARCHIVED_PAGE_SIZE,
+  ROUTER_AUDIT_LOG_MAX_ROWS,
+  ROUTER_COMMANDS_RETENTION_MAX,
+  ROUTER_CONTEXT_MAX_CHARS,
+  ROUTER_FLEET_DIGEST_MAX_BYTES,
+  ROUTER_ITEM_RETENTION_MS,
+  ROUTER_NOTE_MAX_CHARS,
+  ROUTER_OPTION_MAX_CHARS,
+  ROUTER_OPTION_MAX_COUNT,
+  ROUTER_OPTION_MIN_COUNT,
+  ROUTER_PENDING_DECISIONS_PER_PM_MAX,
+  ROUTER_PERSONA_SUMMARY_LINES,
+  ROUTER_PERSONA_SUMMARY_MAX_CHARS,
+  ROUTER_PM_ACTIVE_WORKERS_MAX,
+  ROUTER_PM_BRIEF_MAX_CHARS,
+  ROUTER_QUESTION_MAX_CHARS,
+  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  ROUTER_REPORT_LINKS_MAX,
+  ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
+  ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+} from "../../shared/limits.ts";
+import { defaultRouterSettings } from "../../shared/router.ts";
+import type {
+  DeviceRouterDigest,
+  PmDigestActiveWorker,
+  PmDigestEntry,
+  RouterAgentPlan,
+  RouterCommandDispatchedTarget,
+  RouterCommandRecord,
+  RouterCommandStatus,
+  RouterDecisionStatus,
+  RouterItem,
+  RouterPmNote,
+  RouterReportLink,
+  RouterReportStatus,
+  RouterResolution,
+  RouterSettings,
+  RouterSlice,
+} from "../../shared/router.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
+import type { AgentVendor } from "../../shared/vendors.ts";
+import { fail } from "./context.ts";
+import type { LedgerContext, Pending } from "./context.ts";
+import type { LedgerMessages } from "./messages.ts";
+import type { LedgerPersona } from "./persona.ts";
+import type { LedgerProjects } from "./projects.ts";
+import type { PmDbRow } from "./rows.ts";
+import type { LedgerSessions } from "./sessions.ts";
+
+interface RouterItemDbRow {
+  id: number;
+  pm_id: number;
+  project_id: number | null;
+  conversation_id: number;
+  session_id: number | null;
+  kind: "decision" | "report";
+  status: string;
+  question: string | null;
+  context: string | null;
+  options_json: string | null;
+  summary: string | null;
+  links_json: string | null;
+  resolution_json: string | null;
+  ask_message_id: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface RouterCommandDbRow {
+  id: number;
+  client_id: string;
+  input_text: string;
+  vendor: string;
+  model: string | null;
+  effort: string | null;
+  status: string;
+  plan_json: string | null;
+  dispatched_json: string | null;
+  error: string | null;
+  duration_ms: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface RouterPmNoteDbRow {
+  pm_id: number;
+  text: string;
+  session_id: number | null;
+  updated_at: number;
+}
+
+interface RouterSettingsDbRow {
+  id: number;
+  vendor: string | null;
+  model: string | null;
+  effort: string | null;
+  updated_at: number;
+}
+
+const charLen = (s: string): number => [...s].length;
+const sliceChars = (s: string, max: number): string => {
+  const chars = [...s];
+  return chars.length <= max ? s : `${chars.slice(0, Math.max(0, max - 1)).join("")}…`;
+};
+
+const routerAskSchema = z.object({
+  question: z.string(),
+  options: z.array(z.string()),
+  context: z.string().optional(),
+  replaceItemId: z.number().int().positive().optional(),
+});
+
+const routerReportSchema = z.object({
+  summary: z.string(),
+  links: z
+    .array(
+      z.object({
+        label: z.string(),
+        target: z.string(),
+      }),
+    )
+    .optional(),
+});
+
+const routerNoteSchema = z.object({
+  text: z.string().optional(),
+  clear: z.boolean().optional(),
+});
+
+function parseJsonOr<T>(raw: string | null, fallback: T): T {
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function toRouterItem(row: RouterItemDbRow): RouterItem {
+  if (row.kind === "decision") {
+    return {
+      id: row.id,
+      kind: "decision",
+      status: row.status as RouterDecisionStatus,
+      pmId: row.pm_id,
+      projectId: row.project_id,
+      conversationId: row.conversation_id,
+      question: row.question ?? "",
+      context: row.context ?? "",
+      options: parseJsonOr<string[]>(row.options_json, []),
+      askMessageId: row.ask_message_id,
+      resolution: parseJsonOr<RouterResolution | null>(row.resolution_json, null),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+  return {
+    id: row.id,
+    kind: "report",
+    status: row.status as RouterReportStatus,
+    pmId: row.pm_id,
+    projectId: row.project_id,
+    conversationId: row.conversation_id,
+    summary: row.summary ?? "",
+    links: parseJsonOr<RouterReportLink[]>(row.links_json, []),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toRouterCommand(row: RouterCommandDbRow): RouterCommandRecord {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    inputText: row.input_text,
+    vendor: row.vendor as AgentVendor,
+    model: row.model,
+    effort: row.effort,
+    status: row.status as RouterCommandStatus,
+    plan: parseJsonOr<RouterAgentPlan | null>(row.plan_json, null),
+    dispatched: parseJsonOr<RouterCommandDispatchedTarget[] | null>(row.dispatched_json, null),
+    error: row.error,
+    durationMs: row.duration_ms,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function summarizePersona(persona: string | null): string {
+  if (persona === null || persona.trim() === "") return "";
+  const lines = persona
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== "")
+    .slice(0, ROUTER_PERSONA_SUMMARY_LINES);
+  return sliceChars(lines.join(" / "), ROUTER_PERSONA_SUMMARY_MAX_CHARS);
+}
+
+export type LedgerRouter = ReturnType<typeof createLedgerRouter>;
+
+export function createLedgerRouter(
+  ctx: LedgerContext,
+  sessions: LedgerSessions,
+  messages: LedgerMessages,
+  persona: LedgerPersona,
+  projects: LedgerProjects,
+) {
+  const { db, now, write } = ctx;
+  const { assertPmNotArchived, privateConversation } = persona;
+  const { activeProjectOf, projectCard } = projects;
+
+  let digestCache: { generation: number; digest: DeviceRouterDigest } | null = null;
+
+  const appendAuditIn = (
+    actor: "pm" | "user" | "router_agent" | "system",
+    action: string,
+    pmId: PmId | null,
+    refId: number | null,
+    detail?: Record<string, unknown>,
+  ) => {
+    db.run(
+      `INSERT INTO router_audit_log (actor, action, pm_id, ref_id, detail_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      actor,
+      action,
+      pmId,
+      refId,
+      detail === undefined ? null : JSON.stringify(detail),
+      now(),
+    );
+    db.run(
+      `DELETE FROM router_audit_log
+        WHERE id <= COALESCE(
+          (SELECT id FROM router_audit_log ORDER BY id DESC LIMIT 1 OFFSET ?),
+          0
+        )`,
+      ROUTER_AUDIT_LOG_MAX_ROWS,
+    );
+  };
+
+  const getItemRow = (id: RouterItemId): RouterItemDbRow | undefined =>
+    db.get<RouterItemDbRow>("SELECT * FROM router_items WHERE id = ?", id);
+
+  const pendingDecisionCountOf = (pmId: PmId): number =>
+    db.get<{ n: number }>(
+      "SELECT count(*) AS n FROM router_items WHERE pm_id = ? AND kind = 'decision' AND status = 'pending'",
+      pmId,
+    )!.n;
+
+  const resolveWakeupDedupeKey = (conversationId: ConversationId, itemId: RouterItemId, clientId: string): string =>
+    userMessageDedupeKey(conversationId, `router-resolve:${itemId}:${clientId}`);
+
+  /** hub router ask：写对话 AskMeta 消息并创建 pending 决策卡。 */
+  const askIn = (
+    p: Pending,
+    caller: AgentSessionRow & { pmId: PmId },
+    rawArgs: HubArgs<"router.ask">,
+  ): HubResult<"router.ask"> => {
+    assertPmNotArchived(caller.pmId);
+    const parsed = routerAskSchema.safeParse(rawArgs);
+    if (!parsed.success) throw fail("invalid", "hub router ask 参数格式不正确");
+
+    const question = parsed.data.question.trim();
+    if (question === "") throw fail("invalid", "问题不能是空的");
+    if (charLen(question) > ROUTER_QUESTION_MAX_CHARS) {
+      throw fail("invalid", `问题最多 ${ROUTER_QUESTION_MAX_CHARS} 字（当前 ${charLen(question)} 字）`);
+    }
+
+    const context = (parsed.data.context ?? "").trim();
+    if (charLen(context) > ROUTER_CONTEXT_MAX_CHARS) {
+      throw fail("invalid", `背景说明最多 ${ROUTER_CONTEXT_MAX_CHARS} 字（当前 ${charLen(context)} 字）`);
+    }
+
+    if (
+      parsed.data.options.length < ROUTER_OPTION_MIN_COUNT ||
+      parsed.data.options.length > ROUTER_OPTION_MAX_COUNT
+    ) {
+      throw fail(
+        "invalid",
+        `选项数量需在 ${ROUTER_OPTION_MIN_COUNT} 到 ${ROUTER_OPTION_MAX_COUNT} 个之间`,
+      );
+    }
+    const checkedOptions = validateAskOptions(parsed.data.options);
+    if (!checkedOptions.ok) throw fail("invalid", checkedOptions.error);
+    const options = checkedOptions.options;
+    for (const opt of options) {
+      if (charLen(opt) > ROUTER_OPTION_MAX_CHARS) {
+        throw fail("invalid", `单个选项最多 ${ROUTER_OPTION_MAX_CHARS} 字`);
+      }
+    }
+
+    const conversationId = caller.conversationId ?? privateConversation(caller.pmId)?.id ?? null;
+    if (conversationId === null) throw fail("invalid", "项目经理缺少绑定对话");
+    const project = activeProjectOf(caller.pmId);
+    const projectId: ProjectId | null = project?.id ?? null;
+    const t = now();
+
+    if (parsed.data.replaceItemId !== undefined) {
+      const target = getItemRow(parsed.data.replaceItemId);
+      if (target === undefined || target.pm_id !== caller.pmId || target.kind !== "decision") {
+        throw fail("not_found", `没有可替换的拍板卡 #${parsed.data.replaceItemId}`);
+      }
+      if (target.status === "pending") {
+        db.run(
+          "UPDATE router_items SET status = 'superseded', updated_at = ? WHERE id = ?",
+          t,
+          target.id,
+        );
+        if (target.ask_message_id !== null) {
+          messages.markAskAnsweredIn(p, target.ask_message_id);
+        }
+        p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(target.id)!) } });
+      }
+    }
+
+    const currentPending = pendingDecisionCountOf(caller.pmId);
+    if (currentPending >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) {
+      throw fail(
+        "conflict",
+        `你当前已有 ${ROUTER_PENDING_DECISIONS_PER_PM_MAX} 张未决拍板卡，请等用户拍板，或用 --replace <旧卡编号> 替换旧卡`,
+      );
+    }
+
+    const chatText = context === "" ? question : `${question}\n\n${context}`;
+    const askMessage = messages.insertAskMessage(
+      p,
+      { ...caller, conversationId },
+      chatText,
+      options,
+      { skipRouterBridge: true },
+    );
+
+    const row = db.get<RouterItemDbRow>(
+      `INSERT INTO router_items (
+         pm_id, project_id, conversation_id, session_id, kind, status,
+         question, context, options_json, ask_message_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'decision', 'pending', ?, ?, ?, ?, ?, ?) RETURNING *`,
+      caller.pmId,
+      projectId,
+      conversationId,
+      caller.id,
+      question,
+      context,
+      JSON.stringify(options),
+      askMessage.id,
+      t,
+      t,
+    )!;
+    const item = toRouterItem(row);
+    p.changes.push({ type: "router.item.created", data: { item } });
+    appendAuditIn("pm", "router.ask", caller.pmId, row.id, {
+      question,
+      replaceItemId: parsed.data.replaceItemId ?? null,
+    });
+
+    return {
+      text: `已提交拍板卡 #${row.id} 并同步写入对话。等用户拍板后再推进依赖该决定的步骤。`,
+      data: { item, messageId: askMessage.id },
+    };
+  };
+
+  /** 旧 hub ask 的自动同事务桥接：无 gateRef 的普通提问同步进入 router_items。 */
+  const bridgeAskIn = (
+    p: Pending,
+    session: AgentSessionRow,
+    message: Message,
+    askOptions?: string[],
+  ): void => {
+    if (session.role !== "pm" || session.pmId === null || session.conversationId === null) return;
+    if (pendingDecisionCountOf(session.pmId) >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) return;
+    const raw = message.text.trim();
+    if (raw === "") return;
+    const rawChars = [...raw];
+    const question = rawChars.length <= ROUTER_QUESTION_MAX_CHARS ? raw : sliceChars(raw, ROUTER_QUESTION_MAX_CHARS);
+    const context =
+      rawChars.length <= ROUTER_QUESTION_MAX_CHARS
+        ? ""
+        : sliceChars(rawChars.slice(ROUTER_QUESTION_MAX_CHARS - 1).join("").trim(), ROUTER_CONTEXT_MAX_CHARS);
+    const normalizedOpts = (askOptions ?? [])
+      .slice(0, ROUTER_OPTION_MAX_COUNT)
+      .map((o) => sliceChars(o.trim(), ROUTER_OPTION_MAX_CHARS))
+      .filter((o) => o !== "");
+    const project = activeProjectOf(session.pmId);
+    const t = now();
+    const row = db.get<RouterItemDbRow>(
+      `INSERT INTO router_items (
+         pm_id, project_id, conversation_id, session_id, kind, status,
+         question, context, options_json, ask_message_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'decision', 'pending', ?, ?, ?, ?, ?, ?) RETURNING *`,
+      session.pmId,
+      project?.id ?? null,
+      session.conversationId,
+      session.id,
+      question,
+      context,
+      JSON.stringify(normalizedOpts),
+      message.id,
+      t,
+      t,
+    )!;
+    p.changes.push({ type: "router.item.created", data: { item: toRouterItem(row) } });
+  };
+
+  /** 用户在对话里回消息回答了普通提问：同步将关联 pending router_items 标为 resolved (actor = conversation)。 */
+  const onConversationAnsweredAskIn = (p: Pending, askMessageId: MessageId, userText: string): void => {
+    const rows = db.all<RouterItemDbRow>(
+      "SELECT * FROM router_items WHERE ask_message_id = ? AND kind = 'decision' AND status = 'pending'",
+      askMessageId,
+    );
+    if (rows.length === 0) return;
+    const t = now();
+    const note = sliceChars(userText.trim(), MAX_DECISION_NOTE_CHARS);
+    for (const row of rows) {
+      const options = parseJsonOr<string[]>(row.options_json, []);
+      const matchedIdx = options.findIndex((o) => o === userText.trim());
+      const resolution: RouterResolution = {
+        chosenIndex: matchedIdx >= 0 ? matchedIdx : null,
+        chosenOption: matchedIdx >= 0 ? options[matchedIdx]! : null,
+        note,
+        actor: "conversation",
+        resolvedAt: t,
+      };
+      db.run(
+        "UPDATE router_items SET status = 'resolved', resolution_json = ?, updated_at = ? WHERE id = ?",
+        JSON.stringify(resolution),
+        t,
+        row.id,
+      );
+      p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(row.id)!) } });
+    }
+  };
+
+  /** hub router report：向 Router 投递里程碑汇报。 */
+  const reportIn = (
+    p: Pending,
+    caller: AgentSessionRow & { pmId: PmId },
+    rawArgs: HubArgs<"router.report">,
+  ): HubResult<"router.report"> => {
+    assertPmNotArchived(caller.pmId);
+    const parsed = routerReportSchema.safeParse(rawArgs);
+    if (!parsed.success) throw fail("invalid", "hub router report 参数格式不正确");
+
+    const summary = parsed.data.summary.trim();
+    if (summary === "") throw fail("invalid", "汇报摘要不能是空的");
+    if (charLen(summary) > ROUTER_CONTEXT_MAX_CHARS) {
+      throw fail("invalid", `汇报摘要最多 ${ROUTER_CONTEXT_MAX_CHARS} 字（当前 ${charLen(summary)} 字）`);
+    }
+
+    const rawLinks = parsed.data.links ?? [];
+    if (rawLinks.length > ROUTER_REPORT_LINKS_MAX) {
+      throw fail("invalid", `汇报最多附带 ${ROUTER_REPORT_LINKS_MAX} 个链接`);
+    }
+    const links: RouterReportLink[] = rawLinks.map((lnk) => {
+      const label = lnk.label.trim();
+      const target = lnk.target.trim();
+      if (label === "" || target === "") throw fail("invalid", "链接的标题和地址都不能是空的");
+      if (charLen(label) > ROUTER_REPORT_LINK_LABEL_MAX_CHARS) {
+        throw fail("invalid", `链接标题最多 ${ROUTER_REPORT_LINK_LABEL_MAX_CHARS} 字`);
+      }
+      if (charLen(target) > ROUTER_REPORT_LINK_TARGET_MAX_CHARS) {
+        throw fail("invalid", `链接地址最多 ${ROUTER_REPORT_LINK_TARGET_MAX_CHARS} 字`);
+      }
+      return { label, target };
+    });
+
+    const conversationId = caller.conversationId ?? privateConversation(caller.pmId)?.id ?? null;
+    if (conversationId === null) throw fail("invalid", "项目经理缺少绑定对话");
+    const project = activeProjectOf(caller.pmId);
+    const t = now();
+
+    const row = db.get<RouterItemDbRow>(
+      `INSERT INTO router_items (
+         pm_id, project_id, conversation_id, session_id, kind, status,
+         summary, links_json, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'report', 'unread', ?, ?, ?, ?) RETURNING *`,
+      caller.pmId,
+      project?.id ?? null,
+      conversationId,
+      caller.id,
+      summary,
+      JSON.stringify(links),
+      t,
+      t,
+    )!;
+    const item = toRouterItem(row);
+    p.changes.push({ type: "router.item.created", data: { item } });
+    appendAuditIn("pm", "router.report", caller.pmId, row.id);
+
+    return {
+      text: `已向总助投递里程碑汇报 #${row.id}。`,
+      data: { item },
+    };
+  };
+
+  /** hub router note：更新或清空该 PM 的一句话项目近况备忘。 */
+  const noteIn = (
+    p: Pending,
+    caller: AgentSessionRow & { pmId: PmId },
+    rawArgs: HubArgs<"router.note">,
+  ): HubResult<"router.note"> => {
+    assertPmNotArchived(caller.pmId);
+    const parsed = routerNoteSchema.safeParse(rawArgs);
+    if (!parsed.success) throw fail("invalid", "hub router note 参数格式不正确");
+
+    const t = now();
+    if (parsed.data.clear === true) {
+      db.run("DELETE FROM router_pm_notes WHERE pm_id = ?", caller.pmId);
+      p.changes.push({ type: "router.note.updated", data: { pmId: caller.pmId, note: null } });
+      appendAuditIn("pm", "router.note.clear", caller.pmId, null);
+      return { text: "已清空你在总助那里的项目近况备忘。", data: { note: null } };
+    }
+
+    const text = (parsed.data.text ?? "").trim();
+    if (text === "") throw fail("invalid", "备忘内容不能是空的（要清空请传 --clear）");
+    if (charLen(text) > ROUTER_NOTE_MAX_CHARS) {
+      throw fail("invalid", `项目近况备忘最多 ${ROUTER_NOTE_MAX_CHARS} 字（当前 ${charLen(text)} 字）`);
+    }
+
+    db.run(
+      `INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(pm_id) DO UPDATE SET
+         text = excluded.text,
+         session_id = excluded.session_id,
+         updated_at = excluded.updated_at`,
+      caller.pmId,
+      text,
+      caller.id,
+      t,
+    );
+    const note: RouterPmNote = { pmId: caller.pmId, text, updatedAt: t };
+    p.changes.push({ type: "router.note.updated", data: { pmId: caller.pmId, note } });
+    appendAuditIn("pm", "router.note", caller.pmId, null);
+    return { text: "已更新你在总助那里的项目近况备忘。", data: { note } };
+  };
+
+  /** POST /api/router/items/:id/resolve：拍板决策卡或归档单条汇报。 */
+  const resolveItem = (itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse =>
+    write((p) => {
+      const row = getItemRow(itemId);
+      if (row === undefined) throw fail("not_found", `没有编号 ${itemId} 的总助事项`);
+
+      if ("action" in input) {
+        if (input.action !== "archive") throw fail("invalid", "不支持的操作");
+        if (row.kind !== "report") throw fail("invalid", "只有里程碑汇报可以归档");
+        if (row.status === "archived") return { item: toRouterItem(row) };
+        const t = now();
+        db.run("UPDATE router_items SET status = 'archived', updated_at = ? WHERE id = ?", t, row.id);
+        const updated = toRouterItem(getItemRow(row.id)!);
+        p.changes.push({ type: "router.item.updated", data: { item: updated } });
+        appendAuditIn("user", "router.report.archive", row.pm_id, row.id);
+        return { item: updated };
+      }
+
+      if (row.kind !== "decision") throw fail("invalid", "只有待决拍板卡可以拍板");
+      const clientId = input.clientId.trim();
+      if (clientId === "") throw fail("invalid", "缺少 clientId");
+
+      if (row.status === "resolved") {
+        const existingRes = parseJsonOr<RouterResolution | null>(row.resolution_json, null);
+        if (existingRes?.clientId === clientId) {
+          const dedupeKey = resolveWakeupDedupeKey(row.conversation_id, row.id, clientId);
+          const existingMsg = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
+          return {
+            item: toRouterItem(row),
+            ...(existingMsg !== undefined ? { messageId: existingMsg.id } : {}),
+          };
+        }
+        throw fail("conflict", "这张拍板卡已经被处理过了");
+      }
+      if (row.status === "superseded") {
+        throw fail("conflict", "这张拍板卡已被项目经理的新提问替换");
+      }
+
+      assertPmNotArchived(row.pm_id);
+      const options = parseJsonOr<string[]>(row.options_json, []);
+      let chosenIndex: number | null = null;
+      let chosenOption: string | null = null;
+      if (input.optionIndex !== null && input.optionIndex !== undefined) {
+        if (!Number.isInteger(input.optionIndex) || input.optionIndex < 0 || input.optionIndex >= options.length) {
+          throw fail("invalid", "选中的选项序号不在有效范围内");
+        }
+        chosenIndex = input.optionIndex;
+        chosenOption = options[chosenIndex]!;
+      }
+
+      const note = (input.note ?? "").trim();
+      if (charLen(note) > MAX_DECISION_NOTE_CHARS) {
+        throw fail("invalid", `补充说明最多 ${MAX_DECISION_NOTE_CHARS} 字`);
+      }
+      if (chosenOption === null && note === "") {
+        throw fail("invalid", "请至少选择一个选项或填写补充说明");
+      }
+
+      const t = now();
+      const resolution: RouterResolution = {
+        chosenIndex,
+        chosenOption,
+        note,
+        actor: "router",
+        resolvedAt: t,
+        clientId,
+      };
+      db.run(
+        "UPDATE router_items SET status = 'resolved', resolution_json = ?, updated_at = ? WHERE id = ?",
+        JSON.stringify(resolution),
+        t,
+        row.id,
+      );
+
+      if (row.ask_message_id !== null) {
+        messages.markAskAnsweredIn(p, row.ask_message_id, chosenOption ?? undefined);
+      }
+
+      const wakeLines = [`【Router 拍板】关于「${row.question ?? ""}」`];
+      if (chosenOption !== null) wakeLines.push(`定案：${chosenOption}`);
+      if (note !== "") wakeLines.push(`补充说明：${note}`);
+      const wakeMsg = messages.enqueueWakeupUserMessageIn(p, {
+        conversationId: row.conversation_id,
+        dedupeKey: resolveWakeupDedupeKey(row.conversation_id, row.id, clientId),
+        text: wakeLines.join("\n"),
+      });
+
+      const updated = toRouterItem(getItemRow(row.id)!);
+      p.changes.push({ type: "router.item.updated", data: { item: updated } });
+      appendAuditIn("user", "router.decision.resolve", row.pm_id, row.id, { chosenIndex, clientId });
+      return { item: updated, messageId: wakeMsg.id };
+    });
+
+  /** POST /api/router/reports/archive-all：一键将全部未读里程碑汇报归档。 */
+  const archiveAllReports = (): ArchiveAllReportsResponse =>
+    write((p) => {
+      const ids = db
+        .all<{ id: number }>("SELECT id FROM router_items WHERE kind = 'report' AND status = 'unread' ORDER BY id")
+        .map((r) => r.id);
+      const t = now();
+      if (ids.length > 0) {
+        db.run("UPDATE router_items SET status = 'archived', updated_at = ? WHERE kind = 'report' AND status = 'unread'", t);
+        p.changes.push({ type: "router.reports.archived_all", data: { archivedIds: ids, updatedAt: t } });
+        appendAuditIn("user", "router.reports.archive_all", null, null, { count: ids.length });
+      }
+      return { archivedIds: ids, updatedAt: t };
+    });
+
+  /** PUT /api/router/settings：更新总助选用的厂商、模型、思考程度。 */
+  const updateSettings = (input: UpdateRouterSettingsRequest): RouterSettings =>
+    write((p) => {
+      let vendor: AgentVendor | null = null;
+      if (input.vendor !== null && input.vendor !== undefined) {
+        if (!isAgentVendor(input.vendor)) {
+          throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+        }
+        vendor = input.vendor;
+      }
+      const model = vendor === null ? null : typeof input.model === "string" ? input.model.trim() || null : null;
+      const effort = vendor === null ? null : typeof input.effort === "string" ? input.effort.trim() || null : null;
+      if (vendor !== null) {
+        const catalog = ctx.modelCatalog(vendor);
+        const bad = checkModel(vendor, model) ?? checkEffort(vendor, effort, catalog);
+        if (bad !== null) throw fail("invalid", bad);
+      }
+      const t = now();
+      db.run(
+        `INSERT INTO router_settings (id, vendor, model, effort, updated_at)
+         VALUES (1, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           vendor = excluded.vendor,
+           model = excluded.model,
+           effort = excluded.effort,
+           updated_at = excluded.updated_at`,
+        vendor,
+        model,
+        effort,
+        t,
+      );
+      const settings: RouterSettings = { vendor, model, effort, updatedAt: t };
+      p.changes.push({ type: "router.settings.updated", data: { settings } });
+      appendAuditIn("user", "router.settings.update", null, null, { vendor, model, effort });
+      return settings;
+    });
+
+  /** GET /api/router/items：按 <createdAt>:<id>（或兼容纯 <id>）游标倒序分页读取已归档/已决历史事项。 */
+  const listItems = (beforeCursor?: string, limit?: number): RouterItemsPage => {
+    const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
+    let rows: RouterItemDbRow[];
+    const trimmed = beforeCursor?.trim() ?? "";
+    if (trimmed === "") {
+      rows = db.all<RouterItemDbRow>(
+        `SELECT * FROM router_items
+          WHERE status IN ('resolved', 'superseded', 'archived')
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+        take + 1,
+      );
+    } else if (/^\d+$/.test(trimmed)) {
+      const cursorId = Number(trimmed);
+      if (!Number.isSafeInteger(cursorId) || cursorId <= 0) {
+        throw fail("invalid", "分页游标格式不正确");
+      }
+      const pivot = db.get<{ created_at: number }>("SELECT created_at FROM router_items WHERE id = ?", cursorId);
+      rows =
+        pivot !== undefined
+          ? db.all<RouterItemDbRow>(
+              `SELECT * FROM router_items
+                WHERE status IN ('resolved', 'superseded', 'archived')
+                  AND (created_at < ? OR (created_at = ? AND id < ?))
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?`,
+              pivot.created_at,
+              pivot.created_at,
+              cursorId,
+              take + 1,
+            )
+          : db.all<RouterItemDbRow>(
+              `SELECT * FROM router_items
+                WHERE status IN ('resolved', 'superseded', 'archived') AND id < ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?`,
+              cursorId,
+              take + 1,
+            );
+    } else {
+      const match = /^(\d+):(\d+)$/.exec(trimmed);
+      if (match === null) throw fail("invalid", "分页游标格式不正确（期望 <createdAt>:<id>）");
+      const cursorCreatedAt = Number(match[1]);
+      const cursorId = Number(match[2]);
+      rows = db.all<RouterItemDbRow>(
+        `SELECT * FROM router_items
+          WHERE status IN ('resolved', 'superseded', 'archived')
+            AND (created_at < ? OR (created_at = ? AND id < ?))
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorId,
+        take + 1,
+      );
+    }
+    const hasMore = rows.length > take;
+    const items = rows.slice(0, take).map(toRouterItem);
+    const last = items[items.length - 1];
+    const nextCursor = hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null;
+    return { items, nextCursor, hasMore };
+  };
+
+  const getSettings = (): RouterSettings => {
+    const row = db.get<RouterSettingsDbRow>("SELECT * FROM router_settings WHERE id = 1");
+    if (row === undefined) return defaultRouterSettings();
+    return {
+      vendor: row.vendor !== null && isAgentVendor(row.vendor) ? row.vendor : null,
+      model: row.model,
+      effort: row.effort,
+      updatedAt: row.updated_at,
+    };
+  };
+
+  /** 供 ledger.snapshot() 内嵌的首屏轻量切片（严格走部分索引与常量截断）。 */
+  const snapshotSlice = (): RouterSlice => {
+    const settings = getSettings();
+    const activeRows = db.all<RouterItemDbRow>(
+      `SELECT * FROM router_items
+        WHERE status IN ('pending', 'unread')
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
+      ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+    );
+    const noteRows = db.all<RouterPmNoteDbRow>(
+      `SELECT n.* FROM router_pm_notes n
+        LEFT JOIN pm_archives a ON a.pm_id = n.pm_id
+        WHERE a.pm_id IS NULL
+        ORDER BY n.pm_id`,
+    );
+    const commandRows = db.all<RouterCommandDbRow>(
+      `SELECT * FROM router_commands
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
+      ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+    );
+    return {
+      settings,
+      items: activeRows.map(toRouterItem),
+      notes: noteRows.map((n) => ({ pmId: n.pm_id, text: n.text, updatedAt: n.updated_at })),
+      commands: commandRows.map(toRouterCommand),
+    };
+  };
+
+  /** GET /api/router/digest：带写代数内存缓存与 24 KB 体积守卫的本机 PM 团队结构化摘要。 */
+  const getDigest = (): DeviceRouterDigest => {
+    const gen = ctx.writeGeneration();
+    if (digestCache !== null && digestCache.generation === gen) {
+      return digestCache.digest;
+    }
+
+    const activePms = db.all<PmDbRow>(
+      `SELECT p.* FROM pms p
+        LEFT JOIN pm_archives a ON a.pm_id = p.id
+        WHERE a.pm_id IS NULL
+        ORDER BY p.id`,
+    );
+    const notesByPm = new Map<number, RouterPmNoteDbRow>(
+      db.all<RouterPmNoteDbRow>("SELECT * FROM router_pm_notes").map((r) => [r.pm_id, r]),
+    );
+    const pendingItemsByPm = new Map<number, number>(
+      db
+        .all<{ pm_id: number; n: number }>(
+          "SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id",
+        )
+        .map((r) => [r.pm_id, r.n]),
+    );
+    const waitingGatesByPm = new Map<number, number>(
+      db
+        .all<{ pm_id: number; n: number }>(
+          `SELECT g.pm_id AS pm_id, count(*) AS n
+             FROM task_graph_nodes n
+             JOIN task_graphs g ON g.id = n.graph_id
+            WHERE g.status = 'active' AND n.kind = 'gate' AND n.status = 'waiting_user'
+            GROUP BY g.pm_id`,
+        )
+        .map((r) => [r.pm_id, r.n]),
+    );
+
+    const entries: PmDigestEntry[] = activePms.map((pm) => {
+      const projRow = activeProjectOf(pm.id);
+      const card = projRow === null ? null : projectCard(projRow);
+      const conv = privateConversation(pm.id);
+      const pmSess = conv === null ? null : sessions.currentSession(conv.id);
+      const activity = pmSess === null ? "idle" : sessions.liveOf(pmSess.id).activity;
+
+      const openWorkers = db.all<{
+        id: number;
+        title: string;
+        worker_conversation_id: number;
+      }>("SELECT id, title, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
+
+      const activeWorkers: PmDigestActiveWorker[] = openWorkers
+        .slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX)
+        .map((w) => {
+          const ws = sessions.currentSession(w.worker_conversation_id);
+          const wAct = ws === null ? "idle" : sessions.liveOf(ws.id).activity;
+          const lastLine =
+            conv === null
+              ? undefined
+              : db.get<{ summary: string | null }>(
+                  `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
+                     FROM messages
+                    WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+                    ORDER BY id DESC LIMIT 1`,
+                  conv.id,
+                  w.id,
+                );
+          return {
+            id: w.id,
+            title: w.title,
+            activity: wAct,
+            lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
+          };
+        });
+
+      const latestReport = db.get<{ summary: string; created_at: number }>(
+        `SELECT summary, created_at FROM router_items
+          WHERE pm_id = ? AND kind = 'report'
+          ORDER BY created_at DESC, id DESC LIMIT 1`,
+        pm.id,
+      );
+      const latestMsg =
+        conv === null
+          ? undefined
+          : db.get<{ text: string; created_at: number }>(
+              `SELECT text, created_at FROM messages
+                WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'
+                ORDER BY id DESC LIMIT 1`,
+              conv.id,
+            );
+
+      const briefSource = latestReport?.summary ?? latestMsg?.text ?? null;
+      const recentBrief =
+        briefSource !== null && briefSource.trim() !== ""
+          ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS)
+          : null;
+
+      const noteRow = notesByPm.get(pm.id);
+      const timestamps = [
+        pmSess?.lastEventAt ?? 0,
+        latestMsg?.created_at ?? 0,
+        latestReport?.created_at ?? 0,
+        noteRow?.updated_at ?? 0,
+      ].filter((x) => x > 0);
+      const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
+
+      return {
+        pmId: pm.id,
+        name: pm.name,
+        mode: pm.mode as PmMode,
+        vendor: pm.vendor as AgentVendor,
+        model: pm.default_model,
+        activity,
+        project:
+          projRow === null || card === null
+            ? null
+            : {
+                id: projRow.id,
+                name: card.name,
+                description: projRow.description,
+                mainFolder: card.mainFolder,
+                otherFolders: card.otherFolders,
+              },
+        personaSummary: summarizePersona(pm.persona),
+        pmNote: noteRow?.text ?? null,
+        activeWorkers,
+        activeWorkerTotal: openWorkers.length,
+        pendingDecisionCount: (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0),
+        recentBrief,
+        lastActiveAt,
+      };
+    });
+
+    const digest: DeviceRouterDigest = {
+      generatedAt: now(),
+      pms: entries,
+    };
+
+    // 严守单份 Digest 24 KB 体积上限：如超出则按优先级逐级裁剪次要文本字段
+    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
+      for (const e of digest.pms) e.activeWorkers = e.activeWorkers.slice(0, 2);
+    }
+    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
+      for (const e of digest.pms) {
+        e.recentBrief = null;
+        e.personaSummary = sliceChars(e.personaSummary, 60);
+      }
+    }
+    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
+      for (const e of digest.pms) {
+        e.pmNote = e.pmNote === null ? null : sliceChars(e.pmNote, 80);
+        e.activeWorkers = [];
+      }
+    }
+
+    digestCache = { generation: gen, digest };
+    return digest;
+  };
+
+  /** 定期清理：在单事务预算内清理过期已归档 router_items、超限/过期 router_commands 与超出环形上限的 router_audit_log。 */
+  const purgeExpiredBatch = (nowMs: number, maxRows: number): number => {
+    if (maxRows <= 0) return 0;
+    return write(() => {
+      let deleted = 0;
+      const itemCutoff = nowMs - ROUTER_ITEM_RETENTION_MS;
+
+      const itemsRem = maxRows - deleted;
+      if (itemsRem > 0) {
+        deleted += db.run(
+          `DELETE FROM router_items
+            WHERE id IN (
+              SELECT id FROM router_items
+               WHERE status IN ('resolved', 'superseded', 'archived') AND updated_at <= ?
+               LIMIT ?
+            )`,
+          itemCutoff,
+          itemsRem,
+        ).changes;
+      }
+
+      const cmdsRem = maxRows - deleted;
+      if (cmdsRem > 0) {
+        const thresholdRow = db.get<{ id: number }>(
+          "SELECT id FROM router_commands ORDER BY id DESC LIMIT 1 OFFSET ?",
+          ROUTER_COMMANDS_RETENTION_MAX,
+        );
+        const maxKeepId = thresholdRow?.id ?? 0;
+        deleted += db.run(
+          `DELETE FROM router_commands
+            WHERE id IN (
+              SELECT id FROM router_commands
+               WHERE status IN ('dispatched', 'answered', 'failed', 'cancelled')
+                 AND (updated_at <= ? OR id <= ?)
+               LIMIT ?
+            )`,
+          itemCutoff,
+          maxKeepId,
+          cmdsRem,
+        ).changes;
+      }
+
+      const auditRem = maxRows - deleted;
+      if (auditRem > 0) {
+        deleted += db.run(
+          `DELETE FROM router_audit_log
+            WHERE id IN (
+              SELECT id FROM router_audit_log
+               WHERE id <= COALESCE(
+                 (SELECT id FROM router_audit_log ORDER BY id DESC LIMIT 1 OFFSET ?),
+                 0
+               )
+               LIMIT ?
+            )`,
+          ROUTER_AUDIT_LOG_MAX_ROWS,
+          auditRem,
+        ).changes;
+      }
+
+      return deleted;
+    });
+  };
+
+  return {
+    askIn,
+    bridgeAskIn,
+    onConversationAnsweredAskIn,
+    reportIn,
+    noteIn,
+    resolveItem,
+    archiveAllReports,
+    updateSettings,
+    listItems,
+    snapshotSlice,
+    getDigest,
+    purgeExpiredBatch,
+  };
+}

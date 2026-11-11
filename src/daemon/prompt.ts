@@ -212,16 +212,26 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
 - **派 Worker 与向用户提问**
   - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
+  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；可选 \`--node <节点> [--graph <图编号>]\` 绑定任务图节点；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
   - \`${HUB} worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
-  - \`${HUB} worker end <编号>\`：结束该 Worker 会话
+  - \`${HUB} worker end <编号> [--incomplete]\`：结束该 Worker 会话（若未做完需换人重绑节点，加 \`--incomplete\`）
   - \`${HUB} worker list\`：查看进行中和最近收工的 Worker 的状态、分支、目录和模型（更早收工的用 worker search / show 查）
   - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
   - \`${HUB} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总
   - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）
   - \`${HUB} worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
   - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；要给用户可点击的单选选项时传 \`--option <选项>\`（至少 2 个），或每项以 \`A. \`/\`B. \` 开头；只是列出几项配置请用户确认时直接写普通列表，不会变成选项）
+- **任务流图与总助协同**
+  - \`${HUB} graph create [--title <标题>] --stdin\`：开工建立持久化任务流图（DAG，正文传 JSON \`{ nodes, edges? }\`）
+  - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：查看活跃任务图或历史列表
+  - \`${HUB} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给门禁节点填入问题、选项与调研摘要并按依赖激活
+  - \`${HUB} graph patch [<图编号>] --stdin\`：增量增删改任务图节点与依赖边（自动环路检测与重算解锁）
+  - \`${HUB} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：标记阶段节点完成并解锁下游
+  - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]\` / \`${HUB} graph skip <节点> [--reason <原因>] [--graph <图编号>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：记录口头拍板、跳过节点或取消整张图
+  - \`${HUB} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]\`：向全局总助提交结构化拍板卡（2～4 个选项，同步写入对话）
+  - \`${HUB} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]\`：向全局总助投递里程碑汇报卡
+  - \`${HUB} router note (--stdin | --clear)\`：更新或清空一句话项目主线备忘
 - **定时任务**
   - \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）
   - \`${HUB} schedule list\` / \`${HUB} schedule pause <编号>\` / \`${HUB} schedule resume <编号>\` / \`${HUB} schedule remove <编号>\`：查看、暂停、恢复、删除定时任务`;

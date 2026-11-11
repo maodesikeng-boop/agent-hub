@@ -1247,5 +1247,32 @@ describe("给已有项目经理换厂商", () => {
       expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n此前保存的交接正文`);
       expect(preamble).toContain("用户：换厂商前的最新对话\n\n你：换厂商前的最新回答");
     });
+
+    it("活跃任务图实时注入：换新会话后 sessionPreamble 实时附带账本中未完结任务图及最新节点状态", () => {
+      db.run(
+        "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('graph-proj', ?, ?, ?, ?)",
+        pmId,
+        conversationId,
+        now,
+        now,
+      );
+      const created = ledger.hubCall(firstSession, "graph.create", {
+        title: "多阶段改造",
+        specJson: JSON.stringify({
+          nodes: [
+            { key: "n1", title: "调研" },
+            { key: "g1", title: "方案拍板", kind: "gate", deps: ["n1"], question: "定哪个方案？", options: ["方案甲", "方案乙"] },
+          ],
+        }),
+      });
+      const { g2 } = renewNow("交接摘要：正在跑多阶段改造");
+      // 换代后、新会话首条消息读取开场前，n1 刚完成推进到 g1 等用户拍板：sessionPreamble 拿到实时状态而非过时快照
+      ledger.hubCall(g2, "graph.done", { graphId: created.data.graph.id, nodeKey: "n1", summary: "调研完毕" });
+      const preamble = ledger.sessionPreamble(g2)!;
+      expect(preamble).toContain("## 未完结的任务图（账本实时状态）");
+      expect(preamble).toContain("多阶段改造");
+      expect(preamble).toContain("n1");
+      expect(preamble).toContain("g1");
+    });
   });
 });

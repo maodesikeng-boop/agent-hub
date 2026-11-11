@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -1389,19 +1389,162 @@ describe("0021_message_delivery_receipt：从 0020 的旧库升级", () => {
 // ---- 0022_rewind_index ----
 
 describe("0022_rewind_index：从 0021 的旧库升级", () => {
-  it("只跑 0022；最新版本就是 0022；建好 messages_conversation_non_agent 部分索引；老数据一个字不变；再跑一遍也行", () => {
+  it("只跑 0022；建好 messages_conversation_non_agent 部分索引；老数据一个字不变；再跑一遍也行", () => {
     const db = m3Db();
     migrate(db, migrationsUpTo(21));
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 21, to: LATEST_VERSION, applied: [22] });
-    expect(LATEST_VERSION).toBe(22);
+    expect(migrate(db, migrationsUpTo(22))).toMatchObject({ from: 21, to: 22, applied: [22] });
     for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
     expect(
       db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_conversation_non_agent'"),
     ).toEqual({ n: 1 });
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     db.exec("PRAGMA user_version = 21");
+    expect(() => migrate(db, migrationsUpTo(22))).not.toThrow();
+  });
+});
+
+// ---- 0023_router_and_task_graphs ----
+
+describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑", () => {
+  it("最新版本为 23；零 ALTER TABLE、全部 STRICT + IF NOT EXISTS；建齐 6 张 Router 表与 3 张任务图表及部分索引", () => {
+    const rawSql = readFileSync(join(migrationsDir, "0023_router_and_task_graphs.sql"), "utf8");
+    const sql = rawSql.replace(/--[^\n]*/g, "");
+    expect(sql).not.toMatch(/\bALTER\s+TABLE\b/i);
+    for (const stmt of sql.match(/CREATE\s+TABLE\b/gi) ?? []) expect(stmt).toBeDefined();
+    expect((sql.match(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/gi) ?? []).length).toBe(9);
+    expect((sql.match(/\bSTRICT\s*;/gi) ?? []).length).toBe(9);
+    for (const raw of sql.match(/CREATE\s+INDEX\b[^\n]*/gi) ?? []) {
+      expect(raw).toMatch(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\b/i);
+    }
+
+    const db = m3Db();
+    migrate(db, migrationsUpTo(22));
+    const beforeTables = tableNames(db);
+    const dump = Object.fromEntries(beforeTables.map((name) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 22, to: LATEST_VERSION, applied: [23] });
+    expect(LATEST_VERSION).toBe(23);
+    for (const name of beforeTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+
+    const expectedNewTables = [
+      "router_audit_log",
+      "router_commands",
+      "router_items",
+      "router_pm_notes",
+      "router_settings",
+      "router_worker_origins",
+      "task_graph_edges",
+      "task_graph_nodes",
+      "task_graphs",
+    ];
+    for (const t of expectedNewTables) expect(tableNames(db)).toContain(t);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("重置 PRAGMA user_version = 8 重跑 migrate() 完全幂等且已有 Router / 任务图数据零丢失", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    db.run(
+      `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, question, context, options_json, created_at, updated_at)
+       VALUES (1, 2, 1, 'decision', 'pending', '选 A 还是 B？', '背景', '["A","B"]', 100, 100)`,
+    );
+    db.run("INSERT INTO router_settings (id, vendor, model, effort, updated_at) VALUES (1, 'claude', 'claude-sonnet-4-6', 'medium', 100)");
+    const graphId = Number(
+      db.run(
+        `INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at)
+         VALUES (2, 1, 1, '导出 CSV', 'active', 100, 100)`,
+      ).lastInsertRowid,
+    );
+    db.run(
+      `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, sort_order, created_at, updated_at)
+       VALUES (?, 'schema', '建表', 'piece', 'ready', 0, 100, 100)`,
+      graphId,
+    );
+
+    db.exec("PRAGMA user_version = 8");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(userVersion(db)).toBe(23);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM router_items")!.n).toBe(1);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graphs")!.n).toBe(1);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes")!.n).toBe(1);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("STRICT 与 CHECK / 外键级联约束生效，核心查询命中部分索引", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+
+    // router_settings 单例约束 id = 1
+    expect(() => db.run("INSERT INTO router_settings (id, updated_at) VALUES (2, 10)")).toThrow(/CHECK/);
+    // router_items kind 与 status 组合约束
+    expect(() =>
+      db.run(
+        `INSERT INTO router_items (pm_id, conversation_id, kind, status, created_at, updated_at)
+         VALUES (1, 1, 'decision', 'unread', 10, 10)`,
+      ),
+    ).toThrow(/CHECK/);
+    expect(() =>
+      db.run(
+        `INSERT INTO router_items (pm_id, conversation_id, kind, status, created_at, updated_at)
+         VALUES (1, 1, 'report', 'pending', 10, 10)`,
+      ),
+    ).toThrow(/CHECK/);
+
+    // task_graph_edges 禁止自环，且删图级联删除节点与边
+    const gid = Number(
+      db.run(
+        `INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at)
+         VALUES (2, 1, 1, '测试图', 'active', 10, 10)`,
+      ).lastInsertRowid,
+    );
+    db.run(
+      `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, created_at, updated_at)
+       VALUES (?, 'n1', '节点1', 'piece', 'ready', 10, 10), (?, 'n2', '节点2', 'gate', 'waiting_user', 10, 10)`,
+      gid,
+      gid,
+    );
+    expect(() => db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (?, 'n1', 'n1')", gid)).toThrow(/CHECK/);
+    db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (?, 'n1', 'n2')", gid);
+
+    // EXPLAIN QUERY PLAN 验证部分索引命中
+    const planActiveItems = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE status IN ('pending', 'unread') ORDER BY created_at DESC, id DESC LIMIT 50",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(planActiveItems).toContain("router_items_active");
+
+    const planPmPending = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT count(*) FROM router_items WHERE pm_id = 1 AND kind = 'decision' AND status = 'pending'",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(planPmPending).toContain("router_items_pm_pending");
+
+    const planActiveGraphs = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM task_graphs WHERE project_id = 2 AND status = 'active' ORDER BY updated_at DESC",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(planActiveGraphs).toContain("idx_task_graphs_active");
+
+    const planHistoryGraphs = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM task_graphs WHERE project_id = 2 AND status != 'active' AND id < 999 ORDER BY id DESC LIMIT 20",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(planHistoryGraphs).toContain("idx_task_graphs_project_history");
+
+    // 删图级联清理节点与边
+    db.run("DELETE FROM task_graphs WHERE id = ?", gid);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes WHERE graph_id = ?", gid)!.n).toBe(0);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_edges WHERE graph_id = ?", gid)!.n).toBe(0);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

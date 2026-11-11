@@ -360,6 +360,216 @@ describe("hub cli", () => {
         expect(r.stdout).toContain(usage);
       }
     });
+
+    it("worker start --node [--graph] and worker end --incomplete pass task-graph binding flags", async () => {
+      expect(
+        (await hub(["worker", "start", "--title", "实现 CLI", "--node", "impl-cli", "--graph", "7", "--stdin"], {
+          stdin: stdinOf("做 CLI"),
+        })).code,
+      ).toBe(0);
+      expect((await hub(["worker", "end", "3", "--incomplete"])).code).toBe(0);
+      expect(ledger.calls).toEqual([
+        { sessionId: 42, command: "worker.start", args: { title: "实现 CLI", node: "impl-cli", graphId: 7, task: "做 CLI" } },
+        { sessionId: 42, command: "worker.end", args: { workerId: 3, incomplete: true } },
+      ]);
+      ledger.calls.length = 0;
+      const badGraph = await hub(["worker", "start", "--title", "修 X", "--node", "n1", "--graph", "abc", "--stdin"], {
+        stdin: stdinOf("x"),
+      });
+      expect(badGraph.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
+
+  describe("hub router & hub graph", () => {
+    it("router ask / report / note parse structured options, links and stdin", async () => {
+      expect(
+        (
+          await hub(
+            [
+              "router",
+              "ask",
+              "--question",
+              "用独立表还是复用？",
+              "--option",
+              "独立表（推荐）",
+              "--option",
+              "复用旧表",
+              "--replace",
+              "5",
+              "--stdin",
+            ],
+            { stdin: stdinOf("独立表幂等迁移更干净\n") },
+          )
+        ).code,
+      ).toBe(0);
+
+      expect(
+        (
+          await hub([
+            "router",
+            "report",
+            "--summary",
+            "PR #398 已合入",
+            "--pr",
+            "https://github.com/o/r/pull/398",
+            "--worker",
+            "395",
+            "--file",
+            "docs/router-design.md",
+            "--link",
+            "面板=http://localhost:5173",
+          ])
+        ).code,
+      ).toBe(0);
+
+      expect((await hub(["router", "note", "--text", "正在拆第 1 波 PR"])).code).toBe(0);
+      expect((await hub(["router", "note", "--clear"])).code).toBe(0);
+
+      expect(ledger.calls).toEqual([
+        {
+          sessionId: 42,
+          command: "router.ask",
+          args: {
+            question: "用独立表还是复用？",
+            options: ["独立表（推荐）", "复用旧表"],
+            replaceItemId: 5,
+            context: "独立表幂等迁移更干净",
+          },
+        },
+        {
+          sessionId: 42,
+          command: "router.report",
+          args: {
+            summary: "PR #398 已合入",
+            links: [
+              { label: "PR #398", target: "https://github.com/o/r/pull/398" },
+              { label: "Worker #395", target: "worker:395" },
+              { label: "router-design.md", target: "docs/router-design.md" },
+              { label: "面板", target: "http://localhost:5173" },
+            ],
+          },
+        },
+        { sessionId: 42, command: "router.note", args: { text: "正在拆第 1 波 PR" } },
+        { sessionId: 42, command: "router.note", args: { clear: true } },
+      ]);
+    });
+
+    it("router ask --recommended <1..4> promotes the chosen option to index 0", async () => {
+      expect(
+        (
+          await hub([
+            "router",
+            "ask",
+            "--question",
+            "选哪个？",
+            "--option",
+            "方案 A",
+            "--option",
+            "方案 B",
+            "--recommended",
+            "2",
+          ])
+        ).code,
+      ).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({
+        question: "选哪个？",
+        options: ["方案 B", "方案 A"],
+      });
+    });
+
+    it("graph create / show / list / ask / patch / done / decide / skip / cancel parse cleanly", async () => {
+      const spec = JSON.stringify({ nodes: [{ key: "n1", title: "第一步" }] });
+      expect((await hub(["graph", "create", "--title", "主线流图", "--stdin"], { stdin: stdinOf(`${spec}\n`) })).code).toBe(0);
+      expect((await hub(["graph", "show"])).code).toBe(0);
+      expect((await hub(["graph", "show", "9"])).code).toBe(0);
+      expect((await hub(["graph", "list", "--all"])).code).toBe(0);
+      expect((await hub(["graph", "list", "--status", "completed"])).code).toBe(0);
+      expect(
+        (
+          await hub(
+            ["graph", "ask", "confirm-mcp", "--graph", "9", "--option", "全量同步", "--option", "仅无冲突", "--stdin"],
+            { stdin: stdinOf("调研发现 2 项端口不同\n") },
+          )
+        ).code,
+      ).toBe(0);
+      expect((await hub(["graph", "patch", "9", "--stdin"], { stdin: stdinOf('{"skipNodes":["n1"]}\n') })).code).toBe(0);
+      expect(
+        (
+          await hub([
+            "graph",
+            "done",
+            "n1",
+            "--graph",
+            "9",
+            "--pr",
+            "https://github.com/o/r/pull/1",
+            "--commit",
+            "abc1234",
+            "--branch",
+            "hub/1-n1",
+            "--summary",
+            "已完成",
+          ])
+        ).code,
+      ).toBe(0);
+      expect((await hub(["graph", "decide", "confirm-mcp", "--choice", "全量同步", "--note", "先备份", "--graph", "9"])).code).toBe(0);
+      expect((await hub(["graph", "skip", "n1", "--reason", "不需要了", "--graph", "9"])).code).toBe(0);
+      expect((await hub(["graph", "cancel", "9", "--reason", "改方案"])).code).toBe(0);
+
+      expect(ledger.calls.map((c) => ({ command: c.command, args: c.args }))).toEqual([
+        { command: "graph.create", args: { title: "主线流图", specJson: spec } },
+        { command: "graph.show", args: {} },
+        { command: "graph.show", args: { graphId: 9 } },
+        { command: "graph.list", args: { all: true } },
+        { command: "graph.list", args: { status: "completed" } },
+        {
+          command: "graph.ask",
+          args: {
+            nodeKey: "confirm-mcp",
+            graphId: 9,
+            options: ["全量同步", "仅无冲突"],
+            question: "调研发现 2 项端口不同",
+          },
+        },
+        { command: "graph.patch", args: { graphId: 9, specJson: '{"skipNodes":["n1"]}' } },
+        {
+          command: "graph.done",
+          args: {
+            nodeKey: "n1",
+            graphId: 9,
+            prUrl: "https://github.com/o/r/pull/1",
+            commit: "abc1234",
+            branch: "hub/1-n1",
+            summary: "已完成",
+          },
+        },
+        { command: "graph.decide", args: { nodeKey: "confirm-mcp", graphId: 9, choice: "全量同步", note: "先备份" } },
+        { command: "graph.skip", args: { nodeKey: "n1", graphId: 9, reason: "不需要了" } },
+        { command: "graph.cancel", args: { graphId: 9, reason: "改方案" } },
+      ]);
+    });
+
+    it.each([
+      [["router"]],
+      [["router", "ask", "--option", "A", "--option", "B"]],
+      [["router", "ask", "--question", "问", "--option", "只有一个"]],
+      [["router", "ask", "--question", "问", "--option", "1", "--option", "2", "--option", "3", "--option", "4", "--option", "5"]],
+      [["router", "report"]],
+      [["router", "report", "--summary", "好", "--link", "没有等号"]],
+      [["router", "note"]],
+      [["router", "note", "--clear", "--text", "冲突"]],
+      [["graph"]],
+      [["graph", "create", "--title", "缺stdin"]],
+      [["graph", "ask", "confirm-mcp"]],
+      [["graph", "patch"]],
+      [["graph", "decide", "confirm-mcp"]],
+      [["graph", "list", "--status", "bogus"]],
+    ])("usage error: hub %j", async (argv) => {
+      const r = await hub([...argv], { stdin: stdinOf("x") });
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
   });
 
   describe("hub models", () => {

@@ -13,6 +13,10 @@ import type { SqliteLedger } from "./index.ts";
 const WORKERS = 300;
 const MESSAGES_PER_WORKER = 95;
 const PM_MESSAGES = 1_000;
+const COMPLETED_GRAPHS = 100;
+const ACTIVE_GRAPHS = 5;
+const ARCHIVED_ROUTER_ITEMS = 1_500;
+const ACTIVE_ROUTER_ITEMS = 15;
 
 let root: string;
 let db: Db;
@@ -66,6 +70,90 @@ function seedMonth(): { pmConversation: number } {
       message(conversation.id, w, "system", "worker", longText, line, `worker:${w}:${event}`);
     }
   }
+  // 注入 1 个月规模的 100 张已完结任务图 + 5 张活跃任务图
+  for (let g = 1; g <= COMPLETED_GRAPHS + ACTIVE_GRAPHS; g++) {
+    const isActive = g > COMPLETED_GRAPHS;
+    const gid = Number(
+      db.run(
+        `INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        projectId,
+        pm.id,
+        conversation.id,
+        `任务图 #${g}：完整端到端特性实现`,
+        isActive ? "active" : "completed",
+        at,
+        at,
+        isActive ? null : at,
+      ).lastInsertRowid,
+    );
+    for (let n = 1; n <= 8; n++) {
+      db.run(
+        `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, sort_order, created_at, updated_at)
+         VALUES (?, ?, ?, 'piece', ?, ?, ?, ?)`,
+        gid,
+        `node-${n}`,
+        `模块节点 ${n}`,
+        isActive ? (n === 1 ? "ready" : "pending") : "done",
+        n,
+        at,
+        at,
+      );
+      if (n > 1) {
+        db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (?, ?, ?)", gid, `node-${n - 1}`, `node-${n}`);
+      }
+    }
+    at++;
+  }
+  // 注入 1,500 张已归档/已决 Router 卡 + 15 张活跃卡 + 500 条历史指令 + 500 条审计环记录
+  for (let r = 1; r <= ARCHIVED_ROUTER_ITEMS; r++) {
+    const isDecision = r % 2 === 0;
+    db.run(
+      `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, question, context, options_json, summary, links_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      pm.id,
+      projectId,
+      conversation.id,
+      isDecision ? "decision" : "report",
+      isDecision ? "resolved" : "archived",
+      isDecision ? `历史拍板问题 #${r}` : null,
+      isDecision ? "历史背景说明" : null,
+      isDecision ? '["方案 A","方案 B"]' : null,
+      isDecision ? null : `历史汇报摘要 #${r}`,
+      isDecision ? null : "[]",
+      at,
+      at++,
+    );
+  }
+  for (let r = 1; r <= ACTIVE_ROUTER_ITEMS; r++) {
+    db.run(
+      `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, links_json, created_at, updated_at)
+       VALUES (?, ?, ?, 'report', 'unread', ?, '[]', ?, ?)`,
+      pm.id,
+      projectId,
+      conversation.id,
+      `未读里程碑汇报 #${r}`,
+      at,
+      at++,
+    );
+  }
+  for (let c = 1; c <= 500; c++) {
+    db.run(
+      `INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at)
+       VALUES (?, ?, 'claude', 'dispatched', ?, ?)`,
+      `cmd-${c}`,
+      `历史跨项目指令 #${c}`,
+      at,
+      at++,
+    );
+    db.run(
+      `INSERT INTO router_audit_log (actor, action, pm_id, ref_id, created_at)
+       VALUES ('pm', 'router.report', ?, ?, ?)`,
+      pm.id,
+      c,
+      at++,
+    );
+  }
   db.exec("COMMIT");
   return { pmConversation: conversation.id };
 }
@@ -79,6 +167,20 @@ describe("初始快照的上限（一个月的量）", () => {
       .map((r) => r.detail)
       .join(" | ");
     expect(plan).toContain("USING INDEX messages_worker_lines");
+    const routerPlan = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE status IN ('pending', 'unread') ORDER BY created_at DESC, id DESC LIMIT 50",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(routerPlan).toContain("router_items_active");
+    const graphPlan = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM task_graphs WHERE project_id = 1 AND status = 'active' ORDER BY updated_at DESC",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(graphPlan).toContain("idx_task_graphs_active");
     const t = performance.now();
     const snap = ledger.snapshot();
     const ms = performance.now() - t;
@@ -86,6 +188,9 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(workers).toHaveLength(WORKERS);
     expect(workers.every((c) => c.messages.length === 0 && c.hasMore && c.workerLine?.line.event === "ended" && c.workerLine.endedAt !== null)).toBe(true);
     expect(snap.conversations.find((c) => c.conversation.id === pmConversation)!.messages).toHaveLength(SNAPSHOT_RECENT_MESSAGES);
+    expect(snap.activeTaskGraphs).toHaveLength(ACTIVE_GRAPHS);
+    expect(snap.router.items).toHaveLength(ACTIVE_ROUTER_ITEMS);
+    expect(snap.router.commands).toHaveLength(10);
     const bytes = Buffer.byteLength(JSON.stringify(snap));
     expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
     // CI 的机器慢，给足余量；本机约几十毫秒

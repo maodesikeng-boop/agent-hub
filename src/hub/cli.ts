@@ -2,10 +2,10 @@
 // 经 Unix socket 请求守护进程的 agent 接口，把结果打印出来，按 HUB_EXIT 退出。
 // 只引 shared 里不依赖 node:path 以外东西的几个文件，启动快。
 import { request, type ClientRequest } from "node:http";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
-import { PM_MODES, validateAskOptions, type PmMode } from "../shared/domain.ts";
+import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_EXIT, hubPath, type HubCommand } from "../shared/hub.ts";
 import {
@@ -13,12 +13,14 @@ import {
   HUB_CLI_TIMEOUT_MS,
   HUB_MAX_BODY_BYTES,
   MIN_SCHEDULE_EVERY_MINUTES,
+  ROUTER_OPTION_MAX_COUNT,
   SETUP_TIMEOUT_MS,
   WORKER_LOG_DEFAULT_STEPS,
   WORKER_LOG_MAX_STEPS,
   WORKER_SEARCH_DEFAULT_LIMIT,
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
+import type { RouterReportLink } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
@@ -119,8 +121,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "start",
     cli: "worker start",
-    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin
-                                                          派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m）`,
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
+                                                          派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m；--node 绑定任务图节点）`,
   },
   {
     command: "worker.send",
@@ -141,7 +143,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "end",
     cli: "worker end",
-    usage: `  ${hub} worker end <编号>                                    收工：结束这个 Worker 的会话`,
+    usage: `  ${hub} worker end <编号> [--incomplete]                     收工：结束这个 Worker 的会话（--incomplete 标记节点未完成待接手）`,
   },
   {
     command: "worker.list",
@@ -218,6 +220,96 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "schedule remove",
     usage: `  ${hub} schedule remove <编号>                                删除`,
   },
+  {
+    command: "router.ask",
+    group: "router",
+    action: "ask",
+    cli: "router ask",
+    usage: `  ${hub} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]
+                                                          向全局总助提交结构化拍板卡（2～4 个选项，同步写入对话）`,
+  },
+  {
+    command: "router.report",
+    group: "router",
+    action: "report",
+    cli: "router report",
+    usage: `  ${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]
+                                                          向全局总助投递里程碑汇报卡（不打断对话流）`,
+  },
+  {
+    command: "router.note",
+    group: "router",
+    action: "note",
+    cli: "router note",
+    usage: `  ${hub} router note (--text <备忘> | --stdin | --clear)        更新或清除当前项目经理的一句话主线备忘`,
+  },
+  {
+    command: "graph.create",
+    group: "graph",
+    action: "create",
+    cli: "graph create",
+    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（DAG）`,
+  },
+  {
+    command: "graph.show",
+    group: "graph",
+    action: "show",
+    cli: "graph show",
+    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图`,
+  },
+  {
+    command: "graph.list",
+    group: "graph",
+    action: "list",
+    cli: "graph list",
+    usage: `  ${hub} graph list [--all | --status active|completed|cancelled]
+                                                          列出当前项目的任务图`,
+  },
+  {
+    command: "graph.ask",
+    group: "graph",
+    action: "ask",
+    cli: "graph ask",
+    usage: `  ${hub} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]
+                                                          给门禁节点填入问题、选项与调研摘要并按依赖激活`,
+  },
+  {
+    command: "graph.patch",
+    group: "graph",
+    action: "patch",
+    cli: "graph patch",
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边`,
+  },
+  {
+    command: "graph.done",
+    group: "graph",
+    action: "done",
+    cli: "graph done",
+    usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
+                                                          标记阶段节点完成并解锁下游`,
+  },
+  {
+    command: "graph.decide",
+    group: "graph",
+    action: "decide",
+    cli: "graph decide",
+    usage: `  ${hub} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]
+                                                          记录用户在对话中的口头拍板并解锁门禁下游`,
+  },
+  {
+    command: "graph.skip",
+    group: "graph",
+    action: "skip",
+    cli: "graph skip",
+    usage: `  ${hub} graph skip <节点> [--reason <原因>] [--graph <图编号>]  跳过任务图节点并重算下游`,
+  },
+  {
+    command: "graph.cancel",
+    group: "graph",
+    action: "cancel",
+    cli: "graph cancel",
+    usage: `  ${hub} graph cancel [<图编号>] [--reason <原因>]             取消未完结的任务图`,
+  },
 ];
 
 /** hub 用法，给人看（hub help、未知顶层命令或环境变量缺失时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
@@ -289,6 +381,24 @@ type Options = {
   "max-time"?: string;
   readonly?: boolean;
   "no-worktree"?: boolean;
+  node?: string;
+  graph?: string;
+  incomplete?: boolean;
+  question?: string;
+  context?: string;
+  replace?: string;
+  summary?: string;
+  pr?: string;
+  worker?: string;
+  file?: string;
+  link?: string[];
+  all?: boolean;
+  status?: string;
+  recommended?: string;
+  commit?: string;
+  branch?: string;
+  choice?: string;
+  note?: string;
   clear?: boolean;
   daily?: string;
   every?: string;
@@ -308,7 +418,9 @@ interface Parsed {
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "text" | "task" | "command" | "prompt";
+  textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "specJson" | "summaryMd" | "question";
+  /** 若同时给了行内首句与 --stdin，拼在 stdin 前面。 */
+  textPrefix?: string;
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
@@ -382,6 +494,24 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         "max-time": { type: "string" },
         readonly: { type: "boolean" },
         "no-worktree": { type: "boolean" },
+        node: { type: "string" },
+        graph: { type: "string" },
+        incomplete: { type: "boolean" },
+        question: { type: "string" },
+        context: { type: "string" },
+        replace: { type: "string" },
+        summary: { type: "string" },
+        pr: { type: "string" },
+        worker: { type: "string" },
+        file: { type: "string" },
+        link: { type: "string", multiple: true },
+        all: { type: "boolean" },
+        status: { type: "string" },
+        recommended: { type: "string" },
+        commit: { type: "string" },
+        branch: { type: "string" },
+        choice: { type: "string" },
+        note: { type: "string" },
         clear: { type: "boolean" },
         daily: { type: "string" },
         every: { type: "string" },
@@ -461,7 +591,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "persona.edit", body, textSource, textField: "text" };
   }
   if (group === "worker" && action === "start") {
-    allowOnly(values, ["title", "vendor", "model", "effort", "max-time", "readonly", "no-worktree", "stdin"], "worker start");
+    allowOnly(
+      values,
+      ["title", "vendor", "model", "effort", "max-time", "readonly", "no-worktree", "node", "graph", "stdin"],
+      "worker start",
+    );
     expectPositionals(rest, 0, "worker start");
     if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
@@ -470,6 +604,9 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
       throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
     }
+    if (values.graph !== undefined && values.node === undefined) {
+      throw new UsageError(`${hub} worker start 传 --graph 时要同时传 --node <节点>`);
+    }
     const body: Record<string, unknown> = { title: values.title };
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
@@ -477,6 +614,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values["max-time"] !== undefined) body.maxTimeMs = maxTimeMsOf(values["max-time"]);
     if (values.readonly === true) body.readonly = true;
     if (values["no-worktree"] === true) body.noWorktree = true;
+    if (values.node !== undefined) {
+      if (values.node.trim() === "") throw new UsageError("--node 不能是空的");
+      body.node = values.node.trim();
+    }
+    if (values.graph !== undefined) body.graphId = idOf(values.graph, "worker start", "任务图");
     const textSource = requireStdin(values, "worker start");
     return { command: "worker.start", body, textSource, textField: "task" };
   }
@@ -496,9 +638,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.max-time", body: { workerId, maxTimeMs }, textSource: null };
   }
   if (group === "worker" && action === "end") {
-    allowOnly(values, [], "worker end");
+    allowOnly(values, ["incomplete"], "worker end");
     expectPositionals(rest, 1, "worker end");
-    return { command: "worker.end", body: { workerId: workerIdOf(rest[0], "worker end") }, textSource: null };
+    const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker end") };
+    if (values.incomplete === true) body.incomplete = true;
+    return { command: "worker.end", body, textSource: null };
   }
   if (group === "ask") {
     allowOnly(values, ["option", "stdin"], "ask");
@@ -589,6 +733,225 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     allowOnly(values, [], `schedule ${action}`);
     expectPositionals(rest, 1, `schedule ${action}`);
     return { command: `schedule.${action}`, body: { scheduleId: idOf(rest[0], `schedule ${action}`, "定时任务") }, textSource: null };
+  }
+  if (group === "router" && action === "ask") {
+    allowOnly(values, ["question", "option", "recommended", "replace", "context", "stdin"], "router ask");
+    expectPositionals(rest, 0, "router ask");
+    if (values.question === undefined || values.question.trim() === "") {
+      throw new UsageError(`${hub} router ask 要 --question <问题>`);
+    }
+    if (values.option === undefined) {
+      throw new UsageError(`${hub} router ask 要 --option <选项>（2 到 ${ROUTER_OPTION_MAX_COUNT} 个）`);
+    }
+    const checked = validateAskOptions(values.option);
+    if (!checked.ok) throw new UsageError(checked.error);
+    if (checked.options.length > ROUTER_OPTION_MAX_COUNT) {
+      throw new UsageError(`选项最多 ${ROUTER_OPTION_MAX_COUNT} 个`);
+    }
+    const options = [...checked.options];
+    if (values.recommended !== undefined) {
+      const rec = values.recommended.trim();
+      let idx = -1;
+      if (/^[1-9][0-9]*$/.test(rec)) {
+        const oneBased = Number(rec);
+        if (oneBased >= 1 && oneBased <= options.length) idx = oneBased - 1;
+      } else {
+        idx = options.indexOf(rec);
+      }
+      if (idx < 0) throw new UsageError(`--recommended 要写 1 到 ${options.length} 或某个选项原文`);
+      if (idx > 0) {
+        const [picked] = options.splice(idx, 1);
+        options.unshift(picked!);
+      }
+    }
+    if (values.stdin === true && values.context !== undefined) {
+      throw new UsageError("--stdin 和 --context 只能用一个");
+    }
+    const body: Record<string, unknown> = { question: values.question.trim(), options };
+    if (values.replace !== undefined) body.replaceItemId = idOf(values.replace, "router ask", "卡片");
+    const textSource =
+      values.stdin === true
+        ? ({ kind: "stdin" } as const)
+        : values.context !== undefined
+          ? ({ kind: "inline", value: values.context } as const)
+          : null;
+    return { command: "router.ask", body, textSource, textField: "context" };
+  }
+  if (group === "router" && action === "report") {
+    allowOnly(values, ["summary", "pr", "worker", "file", "link", "stdin"], "router report");
+    expectPositionals(rest, 0, "router report");
+    if (values.summary === undefined && values.stdin !== true) {
+      throw new UsageError(`${hub} router report 要 --summary <摘要> 或 --stdin`);
+    }
+    if (values.summary !== undefined && values.summary.trim() === "") {
+      throw new UsageError("--summary 不能是空的");
+    }
+    const links: RouterReportLink[] = [];
+    if (values.pr !== undefined) {
+      const prUrl = values.pr.trim();
+      if (prUrl === "") throw new UsageError("--pr 不能是空的");
+      const prNum = /\/pull\/([1-9][0-9]*)(?:$|[/?#])/.exec(prUrl)?.[1];
+      links.push({ label: prNum !== undefined ? `PR #${prNum}` : "PR", target: prUrl });
+    }
+    if (values.worker !== undefined) {
+      const wid = workerIdOf(values.worker, "router report");
+      links.push({ label: `Worker #${wid}`, target: `worker:${wid}` });
+    }
+    if (values.file !== undefined) {
+      const fp = values.file.trim();
+      if (fp === "") throw new UsageError("--file 不能是空的");
+      links.push({ label: basename(fp) || fp, target: fp });
+    }
+    if (values.link !== undefined) {
+      for (const rawLink of values.link) {
+        const eq = rawLink.indexOf("=");
+        if (eq <= 0 || eq === rawLink.length - 1) throw new UsageError("--link 要写成 标签=地址");
+        const label = rawLink.slice(0, eq).trim();
+        const target = rawLink.slice(eq + 1).trim();
+        if (label === "" || target === "") throw new UsageError("--link 要写成 标签=地址");
+        links.push({ label, target });
+      }
+    }
+    const body: Record<string, unknown> = {};
+    if (links.length > 0) body.links = links;
+    if (values.stdin === true) {
+      return {
+        command: "router.report",
+        body,
+        textSource: { kind: "stdin" },
+        textField: "summary",
+        ...(values.summary !== undefined ? { textPrefix: values.summary.trim() } : {}),
+      };
+    }
+    body.summary = values.summary!.trim();
+    return { command: "router.report", body, textSource: null };
+  }
+  if (group === "router" && action === "note") {
+    allowOnly(values, ["text", "stdin", "clear"], "router note");
+    expectPositionals(rest, 0, "router note");
+    if (values.clear === true) {
+      if (values.stdin === true || values.text !== undefined) {
+        throw new UsageError("--clear 不能和 --stdin 或 --text 一起用");
+      }
+      return { command: "router.note", body: { clear: true }, textSource: null };
+    }
+    const textSource = textSourceOf(values);
+    if (textSource === null) throw new UsageError(`${hub} router note 要 --text <备忘>、--stdin 或 --clear`);
+    return { command: "router.note", body: {}, textSource, textField: "text" };
+  }
+  if (group === "graph" && action === "create") {
+    allowOnly(values, ["title", "stdin"], "graph create");
+    expectPositionals(rest, 0, "graph create");
+    const body: Record<string, unknown> = {};
+    if (values.title !== undefined) body.title = values.title;
+    return { command: "graph.create", body, textSource: requireStdin(values, "graph create"), textField: "specJson" };
+  }
+  if (group === "graph" && action === "show") {
+    allowOnly(values, [], "graph show");
+    if (rest.length > 1) throw new UsageError(`${hub} graph show 的参数个数不对`);
+    const body: Record<string, unknown> = {};
+    if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph show", "任务图");
+    return { command: "graph.show", body, textSource: null };
+  }
+  if (group === "graph" && action === "list") {
+    allowOnly(values, ["all", "status"], "graph list");
+    expectPositionals(rest, 0, "graph list");
+    if (values.all === true && values.status !== undefined) {
+      throw new UsageError("--all 和 --status 只能用一个");
+    }
+    const body: Record<string, unknown> = {};
+    if (values.all === true) body.all = true;
+    if (values.status !== undefined) {
+      if (!(TASK_GRAPH_STATUSES as readonly string[]).includes(values.status)) {
+        throw new UsageError(`--status 只能是 ${TASK_GRAPH_STATUSES.join("、")}`);
+      }
+      body.status = values.status;
+    }
+    return { command: "graph.list", body, textSource: null };
+  }
+  if (group === "graph" && action === "ask") {
+    allowOnly(values, ["graph", "question", "option", "recommended", "stdin"], "graph ask");
+    expectPositionals(rest, 1, "graph ask");
+    const nodeKey = (rest[0] ?? "").trim();
+    if (nodeKey === "") throw new UsageError("节点名称不能是空的");
+    const body: Record<string, unknown> = { nodeKey };
+    if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph ask", "任务图");
+    if (values.option !== undefined) {
+      const checked = validateAskOptions(values.option);
+      if (!checked.ok) throw new UsageError(checked.error);
+      body.options = checked.options;
+    }
+    if (values.recommended !== undefined) body.recommended = values.recommended;
+    if (values.question !== undefined) {
+      if (values.question.trim() === "") throw new UsageError("--question 不能是空的");
+      body.question = values.question.trim();
+      return {
+        command: "graph.ask",
+        body,
+        textSource: values.stdin === true ? { kind: "stdin" } : null,
+        textField: "summaryMd",
+      };
+    }
+    return { command: "graph.ask", body, textSource: requireStdin(values, "graph ask"), textField: "question" };
+  }
+  if (group === "graph" && action === "patch") {
+    allowOnly(values, ["stdin"], "graph patch");
+    if (rest.length > 1) throw new UsageError(`${hub} graph patch 的参数个数不对`);
+    const body: Record<string, unknown> = {};
+    if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph patch", "任务图");
+    return { command: "graph.patch", body, textSource: requireStdin(values, "graph patch"), textField: "specJson" };
+  }
+  if (group === "graph" && action === "done") {
+    allowOnly(values, ["graph", "pr", "commit", "branch", "summary", "stdin"], "graph done");
+    expectPositionals(rest, 1, "graph done");
+    if (values.stdin === true && values.summary !== undefined) {
+      throw new UsageError("--stdin 和 --summary 只能用一个");
+    }
+    const nodeKey = (rest[0] ?? "").trim();
+    if (nodeKey === "") throw new UsageError("节点名称不能是空的");
+    const body: Record<string, unknown> = { nodeKey };
+    if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph done", "任务图");
+    if (values.pr !== undefined) body.prUrl = values.pr;
+    if (values.commit !== undefined) body.commit = values.commit;
+    if (values.branch !== undefined) body.branch = values.branch;
+    const textSource =
+      values.stdin === true
+        ? ({ kind: "stdin" } as const)
+        : values.summary !== undefined
+          ? ({ kind: "inline", value: values.summary } as const)
+          : null;
+    return { command: "graph.done", body, textSource, textField: "summary" };
+  }
+  if (group === "graph" && action === "decide") {
+    allowOnly(values, ["graph", "choice", "note"], "graph decide");
+    expectPositionals(rest, 1, "graph decide");
+    if (values.choice === undefined || values.choice.trim() === "") {
+      throw new UsageError(`${hub} graph decide 要 --choice <选项>`);
+    }
+    const nodeKey = (rest[0] ?? "").trim();
+    if (nodeKey === "") throw new UsageError("节点名称不能是空的");
+    const body: Record<string, unknown> = { nodeKey, choice: values.choice.trim() };
+    if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph decide", "任务图");
+    if (values.note !== undefined) body.note = values.note;
+    return { command: "graph.decide", body, textSource: null };
+  }
+  if (group === "graph" && action === "skip") {
+    allowOnly(values, ["graph", "reason"], "graph skip");
+    expectPositionals(rest, 1, "graph skip");
+    const nodeKey = (rest[0] ?? "").trim();
+    if (nodeKey === "") throw new UsageError("节点名称不能是空的");
+    const body: Record<string, unknown> = { nodeKey };
+    if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph skip", "任务图");
+    if (values.reason !== undefined) body.reason = values.reason;
+    return { command: "graph.skip", body, textSource: null };
+  }
+  if (group === "graph" && action === "cancel") {
+    allowOnly(values, ["reason"], "graph cancel");
+    if (rest.length > 1) throw new UsageError(`${hub} graph cancel 的参数个数不对`);
+    const body: Record<string, unknown> = {};
+    if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph cancel", "任务图");
+    if (values.reason !== undefined) body.reason = values.reason;
+    return { command: "graph.cancel", body, textSource: null };
   }
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }
@@ -737,8 +1100,10 @@ export async function runHub(io: HubIo): Promise<number> {
       if (err instanceof UsageError) return usage(err.message);
       throw err;
     }
-    if (text.trim() === "") return usage(parsed.textSource.kind === "stdin" ? "标准输入读到的正文是空的" : "--text 的正文是空的");
-    body[parsed.textField] = text;
+    if (text.trim() === "") {
+      return usage(parsed.textSource.kind === "stdin" ? "标准输入读到的正文是空的" : `--${parsed.textField} 的正文是空的`);
+    }
+    body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
   }
 
   const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);

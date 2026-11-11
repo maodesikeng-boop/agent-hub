@@ -13,6 +13,7 @@ import {
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
   MAX_DESCRIPTION_CHARS,
+  MAX_GRAPH_SPEC_BYTES,
   MAX_NAME_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
@@ -62,6 +63,18 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "schedule.pause": { scheduleId: 3 },
   "schedule.resume": { scheduleId: 3 },
   "schedule.remove": { scheduleId: 3 },
+  "router.ask": { question: "选哪个方案？", options: ["方案 A", "方案 B"], context: "背景说明", replaceItemId: 2 },
+  "router.report": { summary: "里程碑已完成", links: [{ label: "PR #1", target: "https://github.com/o/r/pull/1" }] },
+  "router.note": { text: "正在验收第 1 波" },
+  "graph.create": { title: "任务流图", specJson: '{"nodes":[{"key":"n1","title":"第一步"}]}' },
+  "graph.show": { graphId: 1 },
+  "graph.list": { all: true },
+  "graph.ask": { nodeKey: "gate-1", graphId: 1, question: "确认方案？", options: ["A", "B"], recommended: "A", summaryMd: "调研结论" },
+  "graph.patch": { graphId: 1, specJson: '{"skipNodes":["n1"]}' },
+  "graph.done": { nodeKey: "n1", graphId: 1, prUrl: "https://github.com/o/r/pull/1", commit: "abc1234", branch: "hub/1-n1", summary: "通过" },
+  "graph.decide": { nodeKey: "gate-1", graphId: 1, choice: "A", note: "同意" },
+  "graph.skip": { nodeKey: "n1", graphId: 1, reason: "不再需要" },
+  "graph.cancel": { graphId: 1, reason: "取消任务图" },
 };
 
 describe("agent api over inject", () => {
@@ -652,6 +665,18 @@ describe("agent api over inject", () => {
 
     it("multi-line free text (persona text) may still contain newlines and tabs", async () => {
       expect((await call("persona.edit", { text: "第一行\n\t第二行\r\n" })).statusCode).toBe(200);
+    });
+
+    it("hub router & hub graph：缺少必填字段或超出 specJson 字节上限 → invalid", async () => {
+      await expectInvalid(await call("router.ask", { question: "问" }));
+      await expectInvalid(await call("router.report", {}));
+      await expectInvalid(await call("router.note", {}));
+      await expectInvalid(await call("graph.create", { title: "无正文" }));
+      await expectInvalid(await call("graph.create", { specJson: "图".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
+      await expectInvalid(await call("graph.patch", { specJson: "补".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
+      await expectInvalid(await call("graph.decide", { nodeKey: "n1" }));
+      expect((await call("worker.start", { title: "绑定节点", task: "x", node: "impl-a", graphId: 2 })).statusCode).toBe(200);
+      expect((await call("worker.end", { workerId: 3, incomplete: true })).statusCode).toBe(200);
     });
 
     it("a malformed URL without a token → 400 invalid in HubResponse shape", async () => {

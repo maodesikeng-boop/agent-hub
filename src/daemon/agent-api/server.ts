@@ -9,8 +9,14 @@ import {
   HUB_REQUEST_TIMEOUT_MS,
   HUB_TIMEOUT_CHECK_MS,
   LedgerRequestError,
+  MAX_DECISION_CHOICE_CHARS,
+  MAX_DECISION_NOTE_CHARS,
   MAX_DESCRIPTION_CHARS,
+  MAX_GRAPH_SPEC_BYTES,
+  MAX_GRAPH_TITLE_CHARS,
   MAX_NAME_CHARS,
+  MAX_NODE_ARTIFACT_SUMMARY_CHARS,
+  MAX_NODE_KEY_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_SETUP_COMMAND_BYTES,
@@ -18,6 +24,8 @@ import {
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
   PM_MODES,
+  ROUTER_PM_BRIEF_MAX_CHARS,
+  TASK_GRAPH_STATUSES,
   hubCommandAllowed,
   hubPath,
   type HubCommand,
@@ -136,6 +144,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
       noWorktree: { type: "boolean" },
+      node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
     },
   },
   "worker.send": {
@@ -150,7 +160,12 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["workerId", "maxTimeMs"],
     properties: { workerId: workerIdField, maxTimeMs: { type: "integer" } },
   },
-  "worker.end": { type: "object", additionalProperties: false, required: ["workerId"], properties: { workerId: workerIdField } },
+  "worker.end": {
+    type: "object",
+    additionalProperties: false,
+    required: ["workerId"],
+    properties: { workerId: workerIdField, incomplete: { type: "boolean" } },
+  },
   "worker.list": noArgs,
   "worker.show": {
     type: "object",
@@ -202,6 +217,132 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "schedule.pause": scheduleIdOnly,
   "schedule.resume": scheduleIdOnly,
   "schedule.remove": scheduleIdOnly,
+  "router.ask": {
+    type: "object",
+    additionalProperties: false,
+    required: ["question", "options"],
+    properties: {
+      question: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+      options: { type: "array", items: { type: "string" } },
+      context: { type: "string", maxLength: MAX_TASK_BYTES },
+      replaceItemId: workerIdField,
+    },
+  },
+  "router.report": {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary"],
+    properties: {
+      summary: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+      links: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["label", "target"],
+          properties: {
+            label: { type: "string", minLength: 1 },
+            target: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+  },
+  "router.note": {
+    type: "object",
+    additionalProperties: false,
+    anyOf: [{ required: ["text"] }, { required: ["clear"] }],
+    properties: {
+      text: { type: "string", minLength: 1, maxLength: ROUTER_PM_BRIEF_MAX_CHARS * 4 },
+      clear: { type: "boolean" },
+    },
+  },
+  "graph.create": {
+    type: "object",
+    additionalProperties: false,
+    required: ["specJson"],
+    properties: {
+      title: { type: "string", maxLength: MAX_GRAPH_TITLE_CHARS * 2 },
+      specJson: { type: "string", minLength: 1, maxLength: MAX_GRAPH_SPEC_BYTES },
+    },
+  },
+  "graph.show": {
+    type: "object",
+    additionalProperties: false,
+    properties: { graphId: workerIdField },
+  },
+  "graph.list": {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      all: { type: "boolean" },
+      status: { type: "string", enum: [...TASK_GRAPH_STATUSES] },
+    },
+  },
+  "graph.ask": {
+    type: "object",
+    additionalProperties: false,
+    required: ["nodeKey", "question"],
+    properties: {
+      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
+      question: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+      options: { type: "array", items: { type: "string" } },
+      recommended: { type: "string" },
+      summaryMd: { type: "string", maxLength: MAX_TASK_BYTES },
+    },
+  },
+  "graph.patch": {
+    type: "object",
+    additionalProperties: false,
+    required: ["specJson"],
+    properties: {
+      graphId: workerIdField,
+      specJson: { type: "string", minLength: 1, maxLength: MAX_GRAPH_SPEC_BYTES },
+    },
+  },
+  "graph.done": {
+    type: "object",
+    additionalProperties: false,
+    required: ["nodeKey"],
+    properties: {
+      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
+      prUrl: { type: "string" },
+      commit: { type: "string" },
+      branch: { type: "string" },
+      summary: { type: "string", maxLength: MAX_NODE_ARTIFACT_SUMMARY_CHARS * 4 },
+    },
+  },
+  "graph.decide": {
+    type: "object",
+    additionalProperties: false,
+    required: ["nodeKey", "choice"],
+    properties: {
+      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
+      choice: { type: "string", minLength: 1, maxLength: MAX_DECISION_CHOICE_CHARS * 2 },
+      note: { type: "string", maxLength: MAX_DECISION_NOTE_CHARS * 2 },
+    },
+  },
+  "graph.skip": {
+    type: "object",
+    additionalProperties: false,
+    required: ["nodeKey"],
+    properties: {
+      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
+      reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
+    },
+  },
+  "graph.cancel": {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      graphId: workerIdField,
+      reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
+    },
+  },
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -226,6 +367,8 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "worker.send": { text: MAX_TASK_BYTES },
   ask: { text: MAX_TASK_BYTES },
   "schedule.add": { prompt: MAX_TASK_BYTES },
+  "graph.create": { specJson: MAX_GRAPH_SPEC_BYTES },
+  "graph.patch": { specJson: MAX_GRAPH_SPEC_BYTES },
 };
 
 class HubError extends Error {
