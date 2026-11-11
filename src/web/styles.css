@@ -208,7 +208,6 @@ code {
 :root {
   --motion-tint: 300ms; /* 换项目经理时外壳底色、分割线淡变 */
   --motion-enter: 120ms; /* 新消息淡入上移 */
-  --motion-switch: 200ms; /* 切换对话时头像、标题的 View Transition */
   --motion-focus: 180ms; /* 聊天输入框聚焦、失焦时边框和阴影的过渡 */
 }
 /* 外壳底色跟着项目经理换：只给左栏、对话区、右栏这几个容器的底色和边框加过渡，不写 * { transition } */
@@ -227,35 +226,12 @@ code {
     transform: translateY(4px);
   }
 }
-/* 切换对话（view-transition.ts）：只有顶栏的头像和标题有 view-transition-name，整页（含消息列表）不截快照，直接换 */
-:root {
-  view-transition-name: none;
-}
-.vt-chat-avatar {
-  view-transition-name: chat-avatar;
-}
-.vt-chat-title {
-  view-transition-name: chat-title;
-}
-::view-transition-group(chat-avatar),
-::view-transition-group(chat-title),
-::view-transition-old(chat-avatar),
-::view-transition-old(chat-title),
-::view-transition-new(chat-avatar),
-::view-transition-new(chat-title) {
-  animation-duration: var(--motion-switch);
-}
 @media (prefers-reduced-motion: reduce) {
   .tint-fade {
     transition: none;
   }
   .message-enter {
     animation: none;
-  }
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
   }
 }
 /* 聊天输入框外框的阴影和聚焦态（Composer.tsx 的 FRAME_CLASS，docs/ui-standard.md 第 7 条）：平时一层轻阴影；聚焦只多出一团光晕，边框不变。

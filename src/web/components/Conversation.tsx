@@ -150,14 +150,13 @@ export function Conversation({
             className="touch-target cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
-            <Avatar colorKey={entry.avatarKey} size={34} className="vt-chat-avatar" />
+            <Avatar colorKey={entry.avatarKey} size={34} />
           </button>
         ) : (
-          <Avatar colorKey={entry.avatarKey} size={34} className="vt-chat-avatar" />
+          <Avatar colorKey={entry.avatarKey} size={34} />
         )}
         <div className="min-w-0 flex-1">
-          {/* 头像和名字有 view-transition-name（styles.css 的 .vt-chat-*）：切换对话时只有这两样过渡，消息列表直接换 */}
-          <h1 className="vt-chat-title w-fit max-w-full truncate text-title leading-snug font-semibold">{entry.name}</h1>
+          <h1 className="w-fit max-w-full truncate text-title leading-snug font-semibold">{entry.name}</h1>
         </div>
         {toolbar}
       </header>
