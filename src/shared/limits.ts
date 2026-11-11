@@ -688,3 +688,21 @@ export const HUB_GRAPH_LIST_LIMIT = 20;
 /** 已完结/已取消任务图保留天数。 */
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+// ---- 全厂商同步（daemon/vendor-sync/、web/components/VendorSyncSettings.tsx）----
+/** `<dataDir>/backups/sync/` 轮转保留的备份快照目录上限，超了自动删最老的防无限堆积。 */
+export const MAX_VENDOR_SYNC_BACKUPS = 20;
+/** 单次扫描与预览返回的 MCP 服务条目上限。 */
+export const MAX_VENDOR_SYNC_MCP_ITEMS = 200;
+/** 单次扫描与预览返回的 Skill 条目上限。 */
+export const MAX_VENDOR_SYNC_SKILL_ITEMS = 500;
+/** 单次扫描返回的不可跨厂同步云端连接器说明上限。 */
+export const MAX_VENDOR_SYNC_CLOUD_ITEMS = 200;
+/** 扫描项目级 `.agents/skills` 时最多取多少个活跃项目文件夹。 */
+export const MAX_VENDOR_SYNC_PROJECT_FOLDERS = 50;
+/** 同步请求里单个 MCP / Skill 键名的最大字符数。 */
+export const MAX_VENDOR_SYNC_KEY_CHARS = 512;
+/** 预览里脱敏命令或 URL 展示字符串的最大字符数。 */
+export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
+/** 单个厂商 MCP 配置文件或 `SKILL.md` 读取字节上限（防异常超大文件撑爆内存）。 */
+export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;

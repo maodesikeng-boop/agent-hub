@@ -83,6 +83,8 @@ export interface HubPaths {
    * 原文件之后被删、被改，网页照样显示发出时的样子。
    */
   sentFilesDir: string;
+  /** backups/sync/：跨厂商同步落盘前的轮转备份目录（最多保留 MAX_VENDOR_SYNC_BACKUPS 份）。 */
+  syncBackupsDir: string;
   /** 各家可执行文件：spec 的 cli.envVar（AGENT_HUB_<大写编号>）给的路径，默认 cli.command（PATH 里找）。~ 开头的展开成用户主目录。 */
   vendorPaths: Record<AgentVendor, string>;
 }
@@ -132,6 +134,7 @@ export function resolveHubPaths(
     worktreesDir: join(home, "worktrees"),
     uploadsDir: join(home, "uploads"),
     sentFilesDir: join(home, "sent-files"),
+    syncBackupsDir: join(home, "backups", "sync"),
     vendorPaths: Object.fromEntries(
       VENDOR_LIST.map(({ id, cli }) => [id, expandHome(input.vendorPaths?.[id] || env[cli.envVar] || cli.command, userHome)]),
     ) as Record<AgentVendor, string>,

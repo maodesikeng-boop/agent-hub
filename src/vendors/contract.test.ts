@@ -138,5 +138,16 @@ describe.each(AGENT_VENDORS)("厂商契约（守护进程侧）：%s", (id) => {
     }
   });
 
+  it("S11 全厂商同步适配器：每家都提供 sync，空主目录下只读扫描不抛且不建文件", () => {
+    const sync = VENDOR_DAEMONS[id].sync;
+    expect(sync).toBeDefined();
+    const emptyHome = `/nonexistent/agent-hub-sync-contract-${id}`;
+    const result = sync!.scanMcp({ userHome: emptyHome, env: {} });
+    expect(result.servers).toEqual({});
+    expect(result.nonSyncable).toEqual([]);
+    const globalTarget = sync!.skillTarget({ userHome: emptyHome, env: {} }, { kind: "global" });
+    expect(["native", "symlink"]).toContain(globalTarget.mode);
+  });
+
   it.todo("S10 readonly 为 os_sandbox 的厂商在没有 OS 沙箱时派只读被拒（现在对所有 Worker 一律要求 OS 沙箱，P4 再按家）");
 });

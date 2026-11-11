@@ -23,6 +23,7 @@ export * from "./sent-files.ts";
 export * from "./snapshot.ts";
 export * from "./store.ts";
 export * from "./tunnel.ts";
+export * from "./vendor-sync.ts";
 export * from "./worker.ts";
 export * from "../vendors/registry.ts";
 export * from "./vendors.ts";
