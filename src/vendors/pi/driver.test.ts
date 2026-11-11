@@ -560,4 +560,39 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
       h.driver.send(row.id, { messageIds: [80], source: "user", text: "你好" }),
     ).rejects.toSatisfy((err: unknown) => err instanceof DriverError && err.code === "pi_not_found");
   });
+
+  it("toolcall_start / toolcall_delta 流式早捕获：提前发出工具名与路径 agent.tool_preview，最终 agent.tool 只发一次", async () => {
+    const h = makePiHarness({
+      script: {
+        turns: [
+          {
+            tools: [
+              {
+                id: "call-edit-1",
+                name: "edit",
+                partialShape: true,
+                argDeltas: ['{"path": "/repo/src/', 'app.ts", "oldText": ', '"a", "newText": "b"}'],
+                arguments: { path: "/repo/src/app.ts", oldText: "a", newText: "b" },
+              },
+            ],
+            textDeltas: ["改好了"],
+          },
+        ],
+      },
+    });
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [81], source: "user", text: "修改 app.ts" });
+    await h.waitFor("turn.ended");
+
+    expect(h.of("agent.tool_preview").map((e) => ({ toolUseId: e.toolUseId, name: e.name, input: e.input }))).toEqual([
+      { toolUseId: "call-edit-1", name: "edit", input: {} },
+      { toolUseId: "call-edit-1", name: "edit", input: { path: "/repo/src/app.ts" } },
+    ]);
+    expect(h.of("agent.tool")).toHaveLength(1);
+    expect(h.of("agent.tool")[0]).toMatchObject({
+      toolUseId: "call-edit-1",
+      name: "edit",
+      input: { path: "/repo/src/app.ts", oldText: "a", newText: "b" },
+    });
+  });
 });

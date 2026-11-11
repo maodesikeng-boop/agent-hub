@@ -24,7 +24,10 @@ import {
   sessionChange,
 } from "./test-utils.ts";
 
-async function boot(snapshot: StateSnapshot = three()) {
+async function boot(snapshot: StateSnapshot = three(), { keepEmptyHash = false }: { keepEmptyHash?: boolean } = {}) {
+  if (!keepEmptyHash && (window.location.hash === "" || window.location.hash === "#")) {
+    window.history.replaceState(null, "", "/#/c/1");
+  }
   new FakeApi(snapshot).install();
   installFakeWebSocket();
   render(<App />);
@@ -66,18 +69,20 @@ afterEach(() => {
 
 describe("URL", () => {
   it("routeHash / parseRoute 来回一致；认不出来的是 null", () => {
-    for (const route of [{ view: "conversation", id: 12 }, { view: "worker", id: 30 }, { view: "profile", pmId: 3 }] as const) {
+    for (const route of [{ view: "router" }, { view: "conversation", id: 12 }, { view: "worker", id: 30 }, { view: "profile", pmId: 3 }] as const) {
       expect(parseRoute(routeHash(route))).toEqual(route);
     }
+    expect(routeHash({ view: "router" })).toBe("#/router");
     expect(routeHash({ view: "conversation", id: 12 })).toBe("#/c/12");
     for (const bad of ["", "#", "#/c/", "#/c/0", "#/c/-1", "#/c/1.5", "#/x/1", "#/c/1/2", "#/c/99999999999999999999"]) expect(parseRoute(bad)).toBeNull();
   });
 
-  it("第一次打开（没写网址）：显示第一个对话，网址改成它，不多记一条历史", async () => {
+  it("第一次打开（没写网址）：电脑外壳默认落到 #/router，不多记一条历史", async () => {
+    window.history.replaceState(null, "", "/");
     const length = window.history.length;
-    await boot();
-    expect(title()).toBe("小林");
-    await waitFor(() => expect(window.location.hash).toBe("#/c/1"));
+    await boot(three(), { keepEmptyHash: true });
+    expect(title()).toBe("Router");
+    await waitFor(() => expect(window.location.hash).toBe("#/router"));
     expect(window.history.length).toBe(length);
   });
 

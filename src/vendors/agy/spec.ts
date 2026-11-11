@@ -118,6 +118,10 @@ export default defineVendor({
       search_web: "web_search",
       read_url_content: "web_fetch",
       invoke_subagent: "subagent",
+      // 连接器（MCP）：参数带 ServerName / ToolName（docs/readonly-worker-design.md），状态写“Calling Linear: list issues”
+      call_mcp_tool: "connector",
+      list_resources: "connector_resource",
+      read_resource: "connector_resource",
     },
   },
   capabilities: {

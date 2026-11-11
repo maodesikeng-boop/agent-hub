@@ -17,7 +17,7 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
-import { clearStreaming, idle, toolFinished, toolStarted, working } from "./sessions.ts";
+import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
@@ -322,23 +322,27 @@ export function createLedgerMessages(
         });
         return;
       case "agent.thinking":
-        // 子任务里的事件不改主 agent 的状态
+        // 子任务里的事件不改主 agent 的状态；快工具防闪没驻留窗口内（< MIN_TOOL_STEP_VISIBLE_MS）不提前把工具文案刷回 Thinking
         if (event.parentToolUseId === undefined) {
-          updateLive(p, sessionId, (l) => {
-            clearStreaming(l);
-            working(liveOf(sessionId).currentTool, { type: "thinking" })(l);
-          });
+          if (sessions.hasToolHold(sessionId)) {
+            updateLive(p, sessionId, (l) => {
+              clearStreaming(l);
+            });
+          } else {
+            updateLive(p, sessionId, (l) => {
+              clearStreaming(l);
+              working(liveOf(sessionId).currentTool, { type: "thinking" })(l);
+            });
+          }
         }
         return;
       case "agent.text_delta":
+      case "agent.tool_preview":
         // 实际走 ledger.applyDriverEvent 的纯内存快路径；这里保 switch 穷尽
         return;
       case "agent.tool_result":
         if (event.parentToolUseId === undefined) {
-          updateLive(p, sessionId, (l) => {
-            clearStreaming(l);
-            toolFinished(event.toolUseIds)(l);
-          });
+          sessions.finishTools(p, sessionId, event.toolUseIds);
         }
         return;
       case "agent.text": {

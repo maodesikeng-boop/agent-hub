@@ -754,17 +754,6 @@ export interface PostRouterCommandTarget {
   projectId?: ProjectId;
 }
 
-export interface PostRouterCommandRequest {
-  clientId: string;
-  text: string;
-  attachmentIds?: string[];
-  target?: PostRouterCommandTarget;
-}
-
-export interface PostRouterCommandResponse {
-  command: RouterCommandRecord;
-}
-
 export interface DecideRouterItemRequest {
   clientId: string;
   optionIndex?: number | null;
@@ -801,6 +790,18 @@ export interface UpdateRouterSettingsRequest {
 
 export interface UpdateRouterSettingsResponse {
   settings: RouterSettings;
+}
+
+export interface PostRouterCommandRequest {
+  clientId: string;
+  text: string;
+  attachmentIds?: string[];
+  /** 显式目标：轨道 A 零模型直通（不给走 @ 解析或轨道 B）。 */
+  target?: PostRouterCommandTarget;
+}
+
+export interface PostRouterCommandResponse {
+  command: RouterCommandRecord;
 }
 
 export interface TaskGraphsPage {

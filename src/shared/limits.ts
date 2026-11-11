@@ -47,6 +47,18 @@ export const MAX_MESSAGE_BYTES = 100 * 1024;
 export const STREAMING_TEXT_THROTTLE_MS = 70;
 /** 单段内存流式预览最多保留多少个 Unicode 字符（超长输出只截内存预览前缀，段结束 agent.text 落库仍是完整正文；防撑大内存与弱网帧）。 */
 export const MAX_STREAMING_TEXT_CHARS = 16_000;
+/**
+ * 本地快工具（如 Read / Grep / Glob，SSD 上 2～5ms 即返回结果）在内存态 LiveSession.step 的最短可读驻留毫秒数：
+ * openTools 清空准备回退到 Thinking 时，若距最近一次工具步骤显示尚不足该时长，先保留工具文案并设单会话唯一 setTimeout 到点回退；
+ * 期间一旦来新工具、流式/完整文字、回合结束/停止或会话退出/关库立即打断清零。
+ */
+export const MIN_TOOL_STEP_VISIBLE_MS = 450;
+/** 流式工具调用参数增量 JSON（如 Claude input_json_delta、Pi toolcall_delta）单块内存缓冲上限（UTF-16 码元）。 */
+export const MAX_STREAMING_TOOL_JSON_CHARS = 8_192;
+/** 单会话同时缓存的流式工具调用增量块上限（防异常流未发结束帧时无界增长）。 */
+export const MAX_STREAMING_TOOL_BLOCKS = 32;
+/** 推给网页的“在做什么”状态参数（文件路径、skill 名、连接器名等，见 step-labels.ts 的 STEP_INPUT_KEYS）每个最多这么多个 Unicode 字符。 */
+export const MAX_STEP_ARG_CHARS = 300;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 
@@ -622,8 +634,11 @@ export const ROUTER_PM_BRIEF_MAX_CHARS = 120;
 export const ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX = 50;
 /** StateSnapshot 里最近 Router 指令上限。 */
 export const ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX = 10;
-/** 历史回执分页每页条数。 */
+/** Router 工作台 Recent 区最多同时展示多少条紧凑发令回执。 */
+export const ROUTER_VISIBLE_RECEIPTS_MAX = 5;
+/** 历史回执分页每页条数与前端内存缓存最多保留页数。 */
 export const ROUTER_ARCHIVED_PAGE_SIZE = 30;
+export const ROUTER_ARCHIVED_MAX_PAGES = 10;
 /** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
 export const ROUTER_PERSONA_SUMMARY_LINES = 4;
 export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;
@@ -710,6 +725,10 @@ export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;
+/** 右栏 Completed 历史任务图最多翻的页数（× GRAPH_HISTORY_PAGE_SIZE = 前端内存最多 300 张）；到顶不再显示 Load more。 */
+export const MAX_COMPLETED_GRAPH_PAGES = 15;
+/** 网页任务图选择器跨快照复用引用的兜底 Map 上限（按项目 / 按设备+对话 FIFO 淘汰）。 */
+export const TASK_GRAPH_SELECTOR_CACHE_MAX = 64;
 /** 已完结/已取消任务图保留天数。 */
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;

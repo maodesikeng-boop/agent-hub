@@ -6,9 +6,15 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
+  type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type Attachment,
   type BrowserSessionsResponse,
+  type DecideTaskNodeRequest,
+  type DecideTaskNodeResponse,
+  type DeviceRouterDigest,
+  type CancelTaskGraphRequest,
+  type CancelTaskGraphResponse,
   type LoginLinkResponse,
   type ConversationId,
   type CreatePmRequest,
@@ -33,23 +39,38 @@ import {
   type PickFolderRequest,
   type PickFolderResponse,
   type PostMessageRequest,
+  type PostRouterCommandRequest,
+  type PostRouterCommandResponse,
   type PersonaChangeId,
   type PersonaResponse,
   type PmId,
   type PmMemoryFileResponse,
   type PmMemoryFilesResponse,
   type PostMessageResponse,
+  type ProjectId,
   type PublicEntryStatus,
   type PutPmMemoryFileRequest,
   type PutPmMemoryFileResponse,
   type QuotaResponse,
   type RenewSessionResponse,
+  type ResolveRouterItemRequest,
+  type ResolveRouterItemResponse,
   type RetryMessageResponse,
   type RewindMessageResponse,
+  type RouterCommandId,
+  type RouterItemId,
+  type RouterItemsPage,
   type SetPublicEntryRequest,
+  type SkipTaskNodeRequest,
+  type SkipTaskNodeResponse,
   type StateSnapshot,
+  type TaskGraphId,
+  type TaskGraphsPage,
+  type TaskNodeKey,
   type TunnelConnectRequest,
   type TunnelStatusResponse,
+  type UpdateRouterSettingsRequest,
+  type UpdateRouterSettingsResponse,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
   type VendorSyncPreviewResponse,
@@ -232,6 +253,36 @@ export function createClient(device: DeviceId | null) {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
       return postJson<FileActionResponse>(at(path));
     },
+    fetchRouterDigest: () => request<DeviceRouterDigest>(at(API_PATHS.routerDigest)),
+    fetchRouterItems: (options: { cursor?: string | null; limit?: number } = {}) => {
+      // 查询参数用对象键名拼，不写字符串字面量（参数名 cursor 与厂商编号同名，会被 vendor-guard 当成点名厂商）。
+      const query: Record<string, string> = {};
+      if (options.cursor) query.cursor = options.cursor;
+      if (options.limit !== undefined) query.limit = String(options.limit);
+      const qs = new URLSearchParams(query).toString();
+      return request<RouterItemsPage>(at(qs ? `${API_PATHS.routerItems}?${qs}` : API_PATHS.routerItems));
+    },
+    postResolveRouterItem: (id: RouterItemId, body: ResolveRouterItemRequest) =>
+      postJson<ResolveRouterItemResponse>(at(API_PATHS.routerItemResolve(id)), body),
+    postArchiveAllRouterReports: () => postJson<ArchiveAllReportsResponse>(at(API_PATHS.routerReportsArchiveAll), {}),
+    putRouterSettings: (body: UpdateRouterSettingsRequest) =>
+      putJson<UpdateRouterSettingsResponse>(at(API_PATHS.routerSettings), body),
+    postRouterCommand: (body: PostRouterCommandRequest) =>
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    postRetryRouterCommand: (id: RouterCommandId) =>
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number } = {}) => {
+      const params = new URLSearchParams({ status: "history" });
+      if (options.before !== undefined) params.set("before", String(options.before));
+      if (options.limit !== undefined) params.set("limit", String(options.limit));
+      return request<TaskGraphsPage>(`${at(API_PATHS.projectTaskGraphs(projectId))}?${params.toString()}`);
+    },
+    postTaskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
+      postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),
+    postTaskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: SkipTaskNodeRequest = {}) =>
+      postJson<SkipTaskNodeResponse>(at(API_PATHS.taskGraphSkip(graphId, nodeKey)), body),
+    postTaskGraphCancel: (graphId: TaskGraphId, body: CancelTaskGraphRequest = {}) =>
+      postJson<CancelTaskGraphResponse>(at(API_PATHS.taskGraphCancel(graphId)), body),
     /** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */
     changeStreamUrl: (since: number) => {
       const scheme = location.protocol === "https:" ? "wss" : "ws";

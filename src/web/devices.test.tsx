@@ -4,7 +4,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "../shared/names.ts";
-import { bundledModelCatalog, type DeviceInfo, type Message, type StateSnapshot } from "../shared/index.ts";
+import { bundledModelCatalog, emptyRouterSlice, type DeviceInfo, type Message, type RouterDecisionItem, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { OFFLINE_AFTER_MS, deviceStatus } from "./devices.ts";
 import {
@@ -101,13 +101,13 @@ afterEach(() => {
 });
 
 describe("只有一台", () => {
-  it("守护进程还没有联机（GET /api/devices 404）：和现在一样，没有设备分组", async () => {
+  it("守护进程还没有联机（GET /api/devices 404）：和现在一样，没有设备分组，桌面默认落到 #/router", async () => {
     const fleet = new Fleet(onePm("小林"), onePm("阿青"), null);
     await boot(fleet);
     expect(await within(nav()).findByRole("button", { name: /小林/ })).toBeInTheDocument();
     expect(within(nav()).getAllByRole("button")).toHaveLength(1);
     expect(screen.queryByText("Mac")).toBeNull();
-    expect(window.location.hash).toBe("#/c/1");
+    expect(window.location.hash).toBe("#/router");
   });
 
   it("清单里只有本机：也不分组，设置里有“电脑”分类", async () => {
@@ -144,6 +144,10 @@ describe("两台", () => {
     expect(await within(nav()).findByRole("button", { name: /阿青/ })).toBeInTheDocument();
     expect(groupHeader("Mac")).toBeInTheDocument();
     expect(groupHeader("东京")).toBeInTheDocument();
+    expect(title()).toBe("Router");
+
+    await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
+    expect(window.location.hash).toBe("#/c/1");
     expect(title()).toBe("小林");
 
     await userEvent.click(within(nav()).getByRole("button", { name: /阿青/ }));
@@ -218,21 +222,37 @@ describe("Offline", () => {
     expect(within(groupHeader("Mac")).queryByText("Offline")).toBeNull();
   });
 
-  it("离线设备在顶部“等你确定”汇总里的条目也变灰，在线的不变", async () => {
-    const ask = makeMessage({ id: 5, conversationId: 1, text: "要确定", meta: { needsUser: true }, dedupeKey: "ask:1:5" });
-    const fleet = new Fleet(onePm("小林", [ask]), onePm("阿青", [ask]));
+  it("离线设备在 Router 工作台 Needs You 汇总里的卡片变灰标 Offline，在线的不变", async () => {
+    const decision = (id: number, question: string): RouterDecisionItem => ({
+      id,
+      kind: "decision",
+      status: "pending",
+      pmId: 1,
+      projectId: null,
+      conversationId: 1,
+      question,
+      context: "",
+      options: ["方案 A", "方案 B"],
+      askMessageId: null,
+      resolution: null,
+      createdAt: 30_000,
+      updatedAt: 30_000,
+    });
+    const localSnap: StateSnapshot = { ...onePm("小林"), router: { ...emptyRouterSlice(), items: [decision(1, "本机要确定")] } };
+    const remoteSnap: StateSnapshot = { ...onePm("阿青"), router: { ...emptyRouterSlice(), items: [decision(2, "东京要确定")] } };
+    const fleet = new Fleet(localSnap, remoteSnap);
     await boot(fleet);
-    const summary = await within(nav()).findByRole("region", { name: "Needs You" });
-    await waitFor(() => expect(within(summary).getAllByRole("button")).toHaveLength(2));
+    const needsSection = await screen.findByRole("region", { name: "Needs You" });
+    await waitFor(() => expect(within(needsSection).getAllByRole("article")).toHaveLength(2));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     fleet.offline = true;
     act(() => lastSocket("tokyo").drop());
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 1_000));
-    const dim = (name: RegExp) => within(summary).getByRole("button", { name }).closest("[data-readonly]");
-    expect(dim(/阿青/)).toHaveAttribute("data-readonly", "true");
-    expect(dim(/阿青/)).toHaveClass("opacity-60");
-    expect(dim(/小林/)).toHaveAttribute("data-readonly", "false");
-    expect(dim(/小林/)).not.toHaveClass("opacity-60");
+    const tokyoCard = within(needsSection).getByText("东京要确定").closest("article")!;
+    const localCard = within(needsSection).getByText("本机要确定").closest("article")!;
+    expect(tokyoCard).toHaveClass("opacity-60");
+    expect(within(tokyoCard).getByText("Offline")).toBeInTheDocument();
+    expect(localCard).not.toHaveClass("opacity-60");
   });
 
   it("从没连上过：组头写离线，进去是“还没连上这台设备”", async () => {
@@ -259,29 +279,45 @@ describe("Offline", () => {
 
 describe("跨设备的等你确定", () => {
   const ask = (id: number, text: string) => makeMessage({ id, conversationId: 1, text, meta: { needsUser: true }, dedupeKey: `ask:1:${id}` });
+  const decision = (id: number, question: string, askMessageId: number): RouterDecisionItem => ({
+    id,
+    kind: "decision",
+    status: "pending",
+    pmId: 1,
+    projectId: null,
+    conversationId: 1,
+    question,
+    context: "",
+    options: ["A", "B"],
+    askMessageId,
+    resolution: null,
+    createdAt: 30_000,
+    updatedAt: 30_000,
+  });
 
-  it("左栏最上面汇总所有设备的“等你确定”，每项带设备名；标题的数字是合计；点进去到那台", async () => {
+  it("置顶 Router 入口与工作台统一承接跨设备“等你确定”（左栏列表不再重复挂 Needs You 分组）；标题的数字是合计；点卡片头部跳到那台", async () => {
     installFakeNotification("granted");
-    const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青", [ask(5, "东京要确定")]));
+    const localSnap: StateSnapshot = {
+      ...onePm("小林", [ask(5, "本机要确定")]),
+      router: { ...emptyRouterSlice(), items: [decision(1, "本机要确定", 5)] },
+    };
+    const remoteSnap: StateSnapshot = {
+      ...onePm("阿青", [ask(5, "东京要确定")]),
+      router: { ...emptyRouterSlice(), items: [decision(2, "东京要确定", 5)] },
+    };
+    const fleet = new Fleet(localSnap, remoteSnap);
     await boot(fleet);
-    const summary = await within(nav()).findByRole("region", { name: "Needs You" });
-    await waitFor(() => expect(within(summary).getAllByRole("button")).toHaveLength(2));
-    // 名字旁边标出是哪台设备（组里的同名条目不标）；主名字保底 shrink-0 max-w-[70%]，设备名 min-w-0 truncate 防挤压遮挡
-    const summaryDevices = within(summary).getAllByTestId("entry-device");
-    expect(summaryDevices.map((e) => e.textContent)).toEqual(["Mac", "东京"]);
-    for (const devEl of summaryDevices) {
-      expect(devEl).toHaveClass("min-w-0", "truncate");
-      expect(devEl).not.toHaveClass("shrink-0");
-      expect(devEl.parentElement).toHaveClass("min-w-0", "flex-1", "overflow-hidden");
-      expect(devEl.previousElementSibling).toHaveClass("truncate", "max-w-[70%]", "shrink-0");
-    }
-    expect(within(nav()).getAllByTestId("entry-device")).toHaveLength(2);
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+    const routerRow = await within(sidebar).findByRole("button", { name: /Router/ });
+    await waitFor(() => expect(within(routerRow).getByText("2")).toBeInTheDocument());
+    expect(within(nav()).queryByRole("region", { name: "Needs You" })).toBeNull();
     expect(document.title).toBe(`(2) ${PRODUCT_NAME}`);
-    await userEvent.click(within(summary).getByRole("button", { name: /阿青/ }));
+    const needsSection = await screen.findByRole("region", { name: "Needs You" });
+    await userEvent.click(within(needsSection).getByRole("button", { name: /阿青/ }));
     expect(window.location.hash).toBe(`#/d/${TOKYO}/c/1`);
   });
 
-  it("只有一台时没有汇总", async () => {
+  it("只有一台时左栏列表同样没有独立 Needs You 分组，对话行自身绿点照常显示", async () => {
     const fleet = new Fleet(onePm("小林", [ask(5, "本机要确定")]), onePm("阿青"), [mac]);
     await boot(fleet);
     await within(nav()).findByLabelText("Needs You");

@@ -16,12 +16,14 @@ import { type WorkerPickLevel, workerPickFromArgs, workerPickRows } from "./work
 /** 接着打字，等这么久没再打才去后台搜文件。 */
 export const FILE_SEARCH_DEBOUNCE_MS = 120;
 
-/** 列表数据从哪来。按对话取：conversationSource(id)。 */
+/** 列表数据从哪来。按对话取：conversationSource(id)；Router 工作台用 routerTargetSource(targets)。 */
 export interface ComposerSource {
   commands: (signal: AbortSignal) => Promise<ComposerCommand[]>;
   files: (query: string, signal: AbortSignal) => Promise<FilesResponse>;
   /** agent-hub 自己的命令（项目经理对话给 HUB_COMPOSER_COMMANDS，别的对话不给）。 */
   hubCommands?: readonly ComposerCommand[];
+  /** Router 工作台的 `@` 跨设备项目/PM 同步补全数据源；提供时 `@` 不查单对话文件而走目标筛选。 */
+  targets?: (query: string) => MenuItem[];
 }
 
 let nextSourceId = 1;
@@ -56,21 +58,25 @@ export function conversationSource(
   };
 }
 
-/** 列表里的一行（命令和文件统一成这个样子，界面不用分开处理）。 */
+/** 列表里的一行（命令、文件与跨设备目标统一成这个样子，界面不用分开处理）。 */
 export interface MenuItem {
   id: string;
-  /** 命令是 /名字，文件是文件名。 */
+  /** 命令是 /名字，文件是文件名，目标是项目名或 PM 名。 */
   label: string;
-  /** 命令的说明，文件的父目录；没有就是空串。 */
+  /** 命令的说明，文件的父目录，目标的 PM / 设备补充信息；没有就是空串。 */
   detail: string;
   /** 选中后插进输入框的文字。 */
   insert: string;
-  /** 列出来但不能选（没登录的厂商）。 */
+  /** 列出来但不能选（没登录的厂商、离线设备的目标）。 */
   disabled?: boolean;
+  /** 目标行的水果切片头像色键。 */
+  avatarKey?: number;
+  /** 目标行的唯一键（选中后由 Router 挂成目标胶囊，不插纯文本）。 */
+  targetKey?: string;
 }
 
-/** 列表是哪种：命令、文件，或 /hub:worker 的某一级。 */
-export type MenuKind = "command" | "file" | WorkerPickLevel;
+/** 列表是哪种：命令、文件、跨设备目标，或 /hub:worker 的某一级。 */
+export type MenuKind = "command" | "file" | "target" | WorkerPickLevel;
 
 export interface MenuState {
   kind: MenuKind;
@@ -114,6 +120,7 @@ export function useComposerSuggest({
   enabled,
   onReplace,
   onPick,
+  onSelectTarget,
 }: {
   source: ComposerSource | undefined;
   value: string;
@@ -121,6 +128,7 @@ export function useComposerSuggest({
   enabled: boolean;
   onReplace: (text: string, cursor: number) => void;
   onPick?: ((pick: WorkerPick, text: string) => void) | undefined;
+  onSelectTarget?: ((targetKey: string, text: string, cursor: number) => void) | undefined;
 }): ComposerSuggest {
   const qc = useHubQueryClient();
   const srcKey = sourceKeyOf(source);
@@ -168,7 +176,7 @@ export function useComposerSuggest({
     },
     qc,
   );
-  const fileQuery = trigger?.kind === "file" ? trigger.query : null;
+  const fileQuery = trigger?.kind === "file" && source?.targets === undefined ? trigger.query : null;
   useEffect(() => {
     if (fileQuery === null || source === undefined) {
       qc.setQueryData(filesKey, null);
@@ -217,6 +225,9 @@ export function useComposerSuggest({
       const rows = workerPickRows(catalogs, trigger.args, trigger.query);
       return rows === null ? null : { kind: rows.level, items: rows.items };
     }
+    if (source.targets !== undefined) {
+      return { kind: "target", items: source.targets(trigger.query) };
+    }
     if (files === null || files.source !== source) return null;
     // 新一轮搜索还没回来：留着上一份结果；上一份是空的就先不显示“没有匹配”
     if (files.entries.length === 0 && files.query !== trigger.query) return null;
@@ -243,6 +254,13 @@ export function useComposerSuggest({
 
   const select = (item: MenuItem) => {
     if (trigger === null || item.disabled) return;
+    if (trigger.kind === "file" && item.targetKey !== undefined && onSelectTarget) {
+      const before = value.slice(0, trigger.start);
+      const after = value.slice(trigger.end);
+      const trimmedAfter = before === "" ? after.replace(/^ /, "") : after;
+      onSelectTarget(item.targetKey, before + trimmedAfter, before.length);
+      return;
+    }
     if (trigger.kind === "worker" && onPick) {
       const args = [...trigger.args, item.insert];
       const pick = workerPickFromArgs(args);

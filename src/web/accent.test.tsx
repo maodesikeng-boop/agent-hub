@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import type { StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { PALETTE } from "./lib/palette.ts";
-import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSession, makeSnapshot } from "./test-utils.ts";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSession, makeSnapshot, openFirstConversation } from "./test-utils.ts";
 
 async function boot(snapshot: StateSnapshot) {
+  window.history.replaceState(null, "", "/");
+  openFirstConversation(snapshot);
   new FakeApi(snapshot).install();
   installFakeWebSocket();
   render(<App />);

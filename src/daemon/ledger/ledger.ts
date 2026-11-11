@@ -298,6 +298,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
         return;
       }
+      if (event.type === "agent.tool_preview") {
+        if (event.parentToolUseId !== undefined) return;
+        const session = getAgentSession(db, sessionId);
+        if (session !== null) sessions.applyToolPreview(session, event);
+        return;
+      }
       const session = getAgentSession(db, sessionId);
       if (session === null || session.role === "assistant") return;
       write((p) => {

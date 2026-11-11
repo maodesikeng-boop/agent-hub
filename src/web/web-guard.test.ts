@@ -1,4 +1,4 @@
-// 网页扫描守卫：防止 src/web 非测试代码里回潮“直接写定时器数字字面量”或“写死单家厂商名”。
+// 网页扫描守卫：防止 src/web 非测试代码里回潮“直接写定时器数字字面量”“写死单家厂商名”或“用标准外的圆角档”。
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseSync } from "oxc-parser";
@@ -116,6 +116,18 @@ describe("web-guard：src/web 代码守卫", () => {
         if (vendorPattern.test(line) || quotedVendorIdPattern.test(line)) {
           hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
         }
+      });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("圆角只用 docs/ui-standard.md 第 2 条的档位：不写 rounded-lg / rounded-md / rounded-sm", () => {
+    const hits: string[] = [];
+    const bannedRadius = /(?:^|[\s"'`:])rounded-(?:lg|md|sm)\b/;
+    for (const file of files) {
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        if (bannedRadius.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
       });
     }
     expect(hits).toEqual([]);

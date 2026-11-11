@@ -15,9 +15,12 @@ import {
   ReminderTracker,
   WAITING_SETTLE_MS,
   applyReminderChange,
+  askingConversations,
   pendingAsks,
   reminderPayload,
   reminderStateFrom,
+  routerReminderSummary,
+  unreadRouterReports,
   waitingConversations,
   type ReminderState,
 } from "./reminders.ts";
@@ -189,5 +192,176 @@ describe("reminderPayload：推送只带标题，不带正文", () => {
 
   it("找不到对话：不推", () => {
     expect(reminderPayload(state, { kind: "waiting", conversationId: 99 }, { id: DEVICE, name: "东京", self: true })).toBeNull();
+  });
+});
+
+describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () => {
+  it("汇总跨设备待决项与未读汇报，不重复计入已有 hub ask 的对话，归档 PM 自动排除，副标题优先级严格为待决问题 > 未读摘要 > All clear", () => {
+    const localSnap = snapshot({
+      pm1: [ask({ id: 5 })],
+    });
+    localSnap.router = {
+      ...localSnap.router,
+      items: [
+        {
+          id: 11,
+          kind: "decision",
+          status: "pending",
+          pmId: 1,
+          projectId: null,
+          conversationId: 1,
+          question: "本地要先升级 schema 吗？",
+          context: "迁移前确认",
+          options: ["现在升", "等下周"],
+          askMessageId: 5,
+          resolution: null,
+          createdAt: T0 - 1_000,
+          updatedAt: T0 - 1_000,
+        },
+        {
+          id: 12,
+          kind: "report",
+          status: "unread",
+          pmId: 2,
+          projectId: null,
+          conversationId: 2,
+          summary: "老马完成了第 1 波接口验收",
+          links: [],
+          createdAt: T0 - 500,
+          updatedAt: T0 - 500,
+        },
+      ],
+    };
+
+    const remoteSnap = makeSnapshot({
+      pms: [makePm({ id: 3, name: "阿青" }), makePm({ id: 4, name: "已归档", archivedAt: T0 - 10_000 })],
+      conversations: [
+        makeConvSnapshot([], { conversation: { id: 3, pmId: 3, title: "阿青" } }),
+        makeConvSnapshot([], { conversation: { id: 4, pmId: 4, title: "已归档" } }),
+      ],
+      activeTaskGraphs: [
+        {
+          id: 9,
+          projectId: 1,
+          pmId: 3,
+          conversationId: 3,
+          title: "远端发版",
+          status: "active",
+          originMsgId: null,
+          nodes: [
+            {
+              key: "gate-1",
+              title: "切流确认",
+              kind: "gate",
+              status: "waiting_user",
+              sortOrder: 0,
+              activeWorkerId: null,
+              workerIds: [],
+              gateQuestion: "远端切 50% 流量？",
+              gateOptions: ["切 50%", "先 10%"],
+              gateSummaryMd: "监控全绿",
+              gateRecommended: "先 10%",
+              gateAskMessageId: null,
+              decision: null,
+              artifact: null,
+              createdAt: T0,
+              updatedAt: T0,
+            },
+          ],
+          edges: [],
+          createdAt: T0,
+          updatedAt: T0,
+          completedAt: null,
+        },
+      ],
+      router: {
+        settings: localSnap.router.settings,
+        notes: [],
+        commands: [],
+        items: [
+          {
+            id: 21,
+            kind: "decision",
+            status: "pending",
+            pmId: 4,
+            projectId: null,
+            conversationId: 4,
+            question: "归档 PM 的旧问题不应计入",
+            context: "",
+            options: ["A", "B"],
+            askMessageId: null,
+            resolution: null,
+            createdAt: T0 + 100,
+            updatedAt: T0 + 100,
+          },
+        ],
+      },
+    });
+
+    const localState = reminderStateFrom(localSnap);
+    const remoteState = reminderStateFrom(remoteSnap);
+
+    // 对话 1 同时有 ask#5 与绑着 ask#5 的 decision#11，只算一次对话 1；对话 3 有无 ask 消息的 gate-1，也算在等你确定里
+    expect([...askingConversations(localState)]).toEqual([1]);
+    expect([...askingConversations(remoteState)]).toEqual([3]);
+    expect(unreadRouterReports(localState).map((r) => r.id)).toEqual([12]);
+
+    const both = routerReminderSummary([
+      { deviceId: "local", state: localState },
+      { deviceId: DEVICE, state: remoteState },
+    ]);
+    expect(both.pendingCount).toBe(2);
+    expect(both.unreadReportCount).toBe(1);
+    expect(both.subtitle).toBe("远端切 50% 流量？");
+
+    // 拍板完所有待决项后，副标题降级到最新未读汇报摘要；再全部归档后回到 All clear
+    const afterResolveLocal = applyReminderChange(
+      localState,
+      change({
+        type: "router.item.updated",
+        data: {
+          item: {
+            ...(localSnap.router.items[0] as Extract<(typeof localSnap.router.items)[number], { kind: "decision" }>),
+            status: "resolved",
+          },
+        },
+      }),
+    );
+    const afterResolveRemote = applyReminderChange(
+      remoteState,
+      change({
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            ...remoteSnap.activeTaskGraphs[0]!,
+            nodes: [{ ...remoteSnap.activeTaskGraphs[0]!.nodes[0]!, status: "done" }],
+          },
+        },
+      }),
+    );
+    const onlyReport = routerReminderSummary([
+      { deviceId: "local", state: afterResolveLocal },
+      { deviceId: DEVICE, state: afterResolveRemote },
+    ]);
+    expect(onlyReport).toEqual({
+      pendingCount: 0,
+      unreadReportCount: 1,
+      subtitle: "老马完成了第 1 波接口验收",
+    });
+
+    const archivedAll = applyReminderChange(
+      afterResolveLocal,
+      change({ type: "router.reports.archived_all", data: { archivedIds: [12], updatedAt: T0 + 200 } }),
+    );
+    expect(
+      routerReminderSummary([
+        { deviceId: "local", state: archivedAll },
+        { deviceId: DEVICE, state: afterResolveRemote },
+      ]),
+    ).toEqual({
+      pendingCount: 0,
+      unreadReportCount: 0,
+      subtitle: "All clear",
+    });
   });
 });

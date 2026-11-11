@@ -19,7 +19,7 @@ import {
   parseToolResults,
   parseRateLimit,
 } from "./protocol.ts";
-import { buildChildEnv, lineUuid, mergeUserTexts } from "../../daemon/driver/protocol.ts";
+import { StreamingToolPreviewTracker, buildChildEnv, lineUuid, mergeUserTexts } from "../../daemon/driver/protocol.ts";
 
 describe("写进标准输入的一行", () => {
   it("固定结构：type=user、role=user、一段 text", () => {
@@ -408,12 +408,134 @@ describe("一轮中途写入（docs/mid-turn-messages.md 第 2、5 节）", () =
 });
 
 
-describe("Claude 流式正文过滤", () => {
-  it("只接收 text_delta，忽略思考、工具输入与签名", () => {
-    for (const type of ["thinking_delta", "input_json_delta", "signature_delta"]) {
+describe("Claude 流式正文与工具早捕获", () => {
+  it("正文只接收 text_delta（忽略思考与签名）；tool_use 起点与 input_json_delta 早捕获工具名与文件路径", () => {
+    for (const type of ["thinking_delta", "signature_delta"]) {
       expect(parseStreamEvent({ event: { type: "content_block_delta", delta: { type, text: "隐藏内容" } } }, 1)).toBeNull();
     }
-    expect(parseStreamEvent({ event: { type: "content_block_start", content_block: { type: "tool_use" } } }, 1)).toBeNull();
-    expect(parseStreamEvent({ event: { type: "content_block_delta", delta: { type: "text_delta", text: "正文" } } }, 1)).toEqual({ type: "agent.text_delta", delta: "正文", at: 1 });
+    expect(parseStreamEvent({ event: { type: "content_block_delta", delta: { type: "text_delta", text: "正文" } } }, 1)).toEqual({
+      type: "agent.text_delta",
+      delta: "正文",
+      at: 1,
+    });
+    expect(
+      parseStreamEvent(
+        {
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_r1", name: "Read", input: {} },
+          },
+        },
+        2,
+      ),
+    ).toEqual({
+      type: "agent.tool_preview",
+      toolUseId: "toolu_r1",
+      name: "Read",
+      input: {},
+      at: 2,
+    });
+  });
+
+  it("配合流式跟踪器：input_json_delta 拼出完整 file_path / skill 字符串即刻升级预览，后续无关字段不刷屏，stop 后清块", async () => {
+    const { StreamingToolPreviewTracker } = await import("../../daemon/driver/protocol.ts");
+    const tracker = new StreamingToolPreviewTracker();
+
+    const startEv = parseStreamEvent(
+      {
+        event: {
+          type: "content_block_start",
+          index: 2,
+          content_block: { type: "tool_use", id: "toolu_edit1", name: "Edit", input: {} },
+        },
+        parent_tool_use_id: null,
+      },
+      10,
+      tracker,
+    );
+    expect(startEv).toEqual({
+      type: "agent.tool_preview",
+      toolUseId: "toolu_edit1",
+      name: "Edit",
+      input: {},
+      at: 10,
+    });
+
+    // 半截 JSON（引号未闭合）：暂不发新预览
+    expect(
+      parseStreamEvent(
+        { event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"file_path": "/src/foo' } } },
+        11,
+        tracker,
+      ),
+    ).toBeNull();
+
+    // 引号闭合（含转义字符）：立即发出带 file_path 的预览
+    const pathEv = parseStreamEvent(
+      {
+        event: {
+          type: "content_block_delta",
+          index: 2,
+          delta: { type: "input_json_delta", partial_json: '\\"bar.ts", "old_string": "long' },
+        },
+      },
+      12,
+      tracker,
+    );
+    expect(pathEv).toEqual({
+      type: "agent.tool_preview",
+      toolUseId: "toolu_edit1",
+      name: "Edit",
+      input: { file_path: '/src/foo"bar.ts' },
+      at: 12,
+    });
+
+    // 后续继续流式拼 old_string / new_string：step 未变，不重复刷屏
+    expect(
+      parseStreamEvent(
+        { event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: ' body text", "new_string": "x"}' } } },
+        13,
+        tracker,
+      ),
+    ).toBeNull();
+
+    // content_block_stop 清掉该块缓存
+    expect(parseStreamEvent({ event: { type: "content_block_stop", index: 2 } }, 14, tracker)).toBeNull();
+    expect(tracker.size).toBe(0);
+  });
+
+  it("子任务（后台子 agent）的流和主 agent 交错：子任务的工具块、message_start / stop 都不碰主 agent 的跟踪器", () => {
+    const tracker = new StreamingToolPreviewTracker();
+    const sub = { parent_tool_use_id: "toolu_parent" };
+    expect(
+      parseStreamEvent(
+        { event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_main", name: "Read", input: {} } } },
+        1,
+        tracker,
+      ),
+    ).toMatchObject({ type: "agent.tool_preview", toolUseId: "toolu_main", name: "Read" });
+
+    // 子任务同序号的工具块、新消息：不发预览（账本也不显示子任务的），也不盖掉 / 清掉主 agent 的块
+    expect(
+      parseStreamEvent(
+        { event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_sub", name: "Bash", input: {} } }, ...sub },
+        2,
+        tracker,
+      ),
+    ).toBeNull();
+    expect(parseStreamEvent({ event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"command":"ls"}' } }, ...sub }, 3, tracker)).toBeNull();
+    expect(parseStreamEvent({ event: { type: "message_start" }, ...sub }, 4, tracker)).toBeNull();
+    expect(parseStreamEvent({ event: { type: "content_block_stop", index: 1 }, ...sub }, 5, tracker)).toBeNull();
+    expect(tracker.size).toBe(1);
+
+    // 主 agent 接着拼参数：路径照样升级到自己的块上
+    expect(
+      parseStreamEvent(
+        { event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"file_path":"/a/main.ts"}' } } },
+        6,
+        tracker,
+      ),
+    ).toEqual({ type: "agent.tool_preview", toolUseId: "toolu_main", name: "Read", input: { file_path: "/a/main.ts" }, at: 6 });
   });
 });

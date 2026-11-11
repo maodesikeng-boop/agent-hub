@@ -21,6 +21,7 @@ import {
   makeWorkerConversation,
   makeWorkerLine,
   messageChange,
+  openFirstConversation,
   sessionChange,
   setForeground,
 } from "./test-utils.ts";
@@ -30,6 +31,7 @@ let scrolled: Element[];
 let unmountApp: () => void;
 
 async function boot(snapshot: StateSnapshot) {
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();

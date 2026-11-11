@@ -20,6 +20,7 @@ import {
   makeUserMessage,
   makeWorkerConversation,
   messageChange,
+  openFirstConversation,
   sessionChange,
   setForeground,
 } from "./test-utils.ts";
@@ -28,6 +29,7 @@ let unmountApp: () => void;
 
 /** 起网页：假接口 + 假 WebSocket，等首屏出来、WebSocket 接上。 */
 async function boot(snapshot: StateSnapshot) {
+  openFirstConversation(snapshot);
   new FakeApi(snapshot).install();
   installFakeWebSocket();
   unmountApp = render(<App />).unmount;

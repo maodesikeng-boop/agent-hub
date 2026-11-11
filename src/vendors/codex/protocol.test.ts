@@ -5,6 +5,7 @@ import {
   decideMcpElicitation,
   exhaustCodexRateLimitOnTurnError,
   parseCodexRateLimits,
+  parseCodexToolStarted,
   readCodexLaunchConfig,
 } from "./protocol.ts";
 
@@ -186,5 +187,35 @@ describe("decideMcpElicitation：mcpServer/elicitation/request 回 {action}", ()
     expect(decideMcpElicitation({}, { readonly: true, policy: p })).toEqual({ action: "decline" });
     expect(decideMcpElicitation({ serverName: "s", _meta: { codex_approval_kind: "other", tool_title: "t" } }, { readonly: true, policy: p })).toEqual({ action: "decline" });
     expect(decideMcpElicitation(ask("s", "t"), { readonly: false, policy: null })).toEqual({ action: "decline" });
+  });
+});
+
+describe("parseCodexToolStarted：连接器与子 agent 条目", () => {
+  it("mcpToolCall：有 appContext（ChatGPT 应用连接器）用应用名、动作名，没有用 server / tool", () => {
+    const withApp = parseCodexToolStarted(
+      {
+        type: "mcpToolCall",
+        id: "m1",
+        server: "codex_apps",
+        tool: "linear_list_issues",
+        arguments: { q: 1 },
+        appContext: { connectorId: "c", linkId: null, resourceUri: null, appName: "Linear", actionName: "list_issues" },
+      },
+      1,
+    );
+    expect(withApp?.input).toEqual({ server: "Linear", tool: "list_issues", arguments: { q: 1 } });
+    const plain = parseCodexToolStarted({ type: "mcpToolCall", id: "m2", server: "github", tool: "get_issue", appContext: null }, 2);
+    expect(plain?.input).toEqual({ server: "github", tool: "get_issue" });
+    const blankApp = parseCodexToolStarted({ type: "mcpToolCall", id: "m3", server: "github", tool: "x", appContext: { appName: " ", actionName: "" } }, 3);
+    expect(blankApp?.input).toEqual({ server: "github", tool: "x" });
+  });
+
+  it("collabAgentToolCall（现在的名字）和 collabToolCall（老名字）都当工具条目", () => {
+    expect(parseCodexToolStarted({ type: "collabAgentToolCall", id: "c1", tool: "spawnAgent", prompt: "查一下" }, 1)).toMatchObject({
+      type: "agent.tool",
+      name: "collabAgentToolCall",
+      input: { tool: "spawnAgent", prompt: "查一下" },
+    });
+    expect(parseCodexToolStarted({ type: "collabToolCall", id: "c2" }, 1)).toMatchObject({ name: "collabToolCall" });
   });
 });

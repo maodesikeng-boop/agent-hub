@@ -10,6 +10,7 @@ import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { RightRail, RightRailToggle } from "./components/RightRail.tsx";
+import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -19,7 +20,7 @@ import { LOCAL_DEVICE, routeDeviceOf } from "./devices.ts";
 import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerPhaseOf } from "./selectors.ts";
 import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
-import { useShellModel } from "./shell-model.ts";
+import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 
 const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
 
@@ -81,10 +82,10 @@ export function App() {
   if (content === null) return null;
   const {
     active,
-    activeId,
     actions,
     avatarKey,
     clearFocus,
+    clientForDevice,
     compact,
     created,
     creating,
@@ -92,13 +93,13 @@ export function App() {
     focus,
     groups,
     handleLoadOlder,
-    health,
     keyOf,
     link,
     narrow,
     newPmDevices,
-    offline,
     openAsk,
+    openDeviceConversation,
+    openDeviceWorker,
     openNewPm,
     openProfile,
     openWorker,
@@ -110,15 +111,16 @@ export function App() {
     railHasContent,
     railOpen,
     railWorkers,
-    reconnecting,
     refreshFleet,
     reminders,
+    routerActive,
+    routerView,
     select,
     send,
     setCreating,
     sidebarActiveRef,
+    sidebarRouter,
     staging,
-    toggleRail,
     view,
     workerLine,
     workerPmEntry,
@@ -129,14 +131,14 @@ export function App() {
   const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
   const leading = mobile ? <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
-  const rail = railOpen ? (
+  const rail = !routerActive && railOpen ? (
     <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} avatarKey={avatarKey} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
   ) : null;
   const top = !mobile && compact ? rail : null;
 
   // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
   const deviceWaiting =
-    state.phase === "ready" ? null : current.status === "connecting" ? (
+    routerActive || state.phase === "ready" ? null : current.status === "connecting" ? (
       <div className={FULLPAGE}>
         <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
         <p>Loading…</p>
@@ -149,34 +151,47 @@ export function App() {
     );
 
   const sidebar = (
-      <Sidebar
-        groups={groups}
-        active={sidebarActiveRef}
-        waiting={reminders.waiting}
-        asking={reminders.asking}
-        notify={reminders.notify}
-        devices={
-          fleet.managed
-            ? {
-                devices: fleet.devices,
-                ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
-                ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
-                ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
-                onChanged: refreshFleet,
-              }
-            : null
-        }
-        quota={quotaUsage(state)}
-        quotaFetchable={quotaFetchable}
-        layout={mobile ? "page" : narrow ? "rail" : "wide"}
-        onSelect={select}
-        onNewPm={openNewPm}
-      />
+    <Sidebar
+      groups={groups}
+      active={sidebarActiveRef}
+      router={sidebarRouter}
+      waiting={reminders.waiting}
+      asking={reminders.asking}
+      notify={reminders.notify}
+      devices={
+        fleet.managed
+          ? {
+              devices: fleet.devices,
+              ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
+              ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
+              ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
+              onChanged: refreshFleet,
+            }
+          : null
+      }
+      quota={quotaUsage(state)}
+      quotaFetchable={quotaFetchable}
+      layout={mobile ? "page" : narrow ? "rail" : "wide"}
+      onSelect={select}
+      onNewPm={openNewPm}
+    />
   );
+  const tintKey = routerActive ? null : (active?.avatarKey ?? null);
   const chat = (
-      <AccentScope colorKey={active?.avatarKey ?? null}>
+    <AccentScope colorKey={tintKey}>
       <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
-        {deviceWaiting ? (
+        {routerActive ? (
+          <RouterWorkbench
+            leading={leading}
+            notices={notices}
+            view={routerView}
+            draft={drafts.of(ROUTER_DRAFT_KEY)}
+            staging={staging.of(ROUTER_DRAFT_KEY)}
+            clientForDevice={clientForDevice}
+            onOpenConversation={openDeviceConversation}
+            onOpenWorker={openDeviceWorker}
+          />
+        ) : deviceWaiting ? (
           <>
             <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
             {deviceWaiting}
@@ -254,22 +269,22 @@ export function App() {
         )}
       </main>
       {!mobile && !compact && rail}
-      {mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} asks={railAsks} workers={railWorkers} openWorkerId={openWorker} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />}
-      </AccentScope>
+      {!routerActive && mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} asks={railAsks} workers={railWorkers} openWorkerId={openWorker} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />}
+    </AccentScope>
   );
   return (
     <QueryClientProvider client={qc}>
-    <DeviceScope client={hub.client} server={state.server}>
-    <ModelCatalogProvider>
-    <div className="relative flex h-full">
-      {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；强调色 --primary 只在下面的 AccentScope 里 */}
-      <FruitTint colorKey={active?.avatarKey ?? null}>
-      <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
-      <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
-      </FruitTint>
-    </div>
-    </ModelCatalogProvider>
-    </DeviceScope>
+      <DeviceScope client={hub.client} server={state.server}>
+        <ModelCatalogProvider>
+          <div className="relative flex h-full">
+            {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；Router 下传 null 保持纯白与碳黑中性调 */}
+            <FruitTint colorKey={tintKey}>
+              <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
+              <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
+            </FruitTint>
+          </div>
+        </ModelCatalogProvider>
+      </DeviceScope>
     </QueryClientProvider>
   );
 }

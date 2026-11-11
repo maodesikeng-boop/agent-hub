@@ -2,10 +2,12 @@ import { FileText } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import type { MenuItem, MenuKind, MenuState } from "../composer-suggest.ts";
 import { cn } from "../lib/utils.ts";
+import { Avatar } from "./Avatar.tsx";
 
 const KIND_TEXT: Readonly<Record<MenuKind, { label: string; empty: string }>> = {
   command: { label: "Commands", empty: "No matching commands" },
   file: { label: "Files", empty: "No matching files" },
+  target: { label: "Projects", empty: "No matching projects" },
   vendor: { label: "Providers", empty: "No matching providers" },
   model: { label: "Models", empty: "No matching models" },
   effort: { label: "Effort", empty: "No matching effort" },
@@ -62,6 +64,7 @@ export function ComposerMenu({
               onClick={() => onSelect(item)}
             >
               {menu.kind === "file" && <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              {menu.kind === "target" && item.avatarKey !== undefined && <Avatar colorKey={item.avatarKey} size={20} />}
               <span className={cn("min-w-0 truncate font-medium", menu.kind === "file" ? "shrink-0 max-w-[60%]" : "max-w-[45%] shrink-0", item.disabled && "text-muted-foreground")}>{item.label}</span>
               {item.detail !== "" && <span className="min-w-0 flex-1 truncate text-minor text-muted-foreground">{item.detail}</span>}
             </li>
