@@ -38,7 +38,7 @@ export function App() {
       ),
     [content?.health, content?.reconnecting, content?.offline, fleet.listFailed],
   );
-  const railAttention = (content?.railAsks.length ?? 0) > 0;
+  const railAttention = content?.railAttention ?? false;
   const railToggle = useMemo(
     () =>
       content === null ? null : (
@@ -108,8 +108,10 @@ export function App() {
     profileEntry,
     quotaFetchable,
     railAsks,
+    railGraphs,
     railHasContent,
     railOpen,
+    railProjectId,
     railWorkers,
     refreshFleet,
     reminders,
@@ -127,12 +129,23 @@ export function App() {
     workerView,
   } = content;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
-  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAsks.length > 0} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
+  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
   const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
   const leading = mobile ? <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
   const rail = !routerActive && railOpen ? (
-    <RightRail asks={railAsks} workers={railWorkers} openWorkerId={openWorker} layout={compact ? "top" : "side"} toggle={railToggle} avatarKey={avatarKey} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />
+    <RightRail
+      asks={railAsks}
+      workers={railWorkers}
+      activeGraphs={railGraphs}
+      projectId={railProjectId}
+      openWorkerId={openWorker}
+      layout={compact ? "top" : "side"}
+      toggle={railToggle}
+      avatarKey={avatarKey}
+      onOpenAsk={openAsk}
+      onOpenWorker={openWorkerConversation}
+    />
   ) : null;
   const top = !mobile && compact ? rail : null;
 
@@ -269,7 +282,20 @@ export function App() {
         )}
       </main>
       {!mobile && !compact && rail}
-      {!routerActive && mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} asks={railAsks} workers={railWorkers} openWorkerId={openWorker} onOpenAsk={openAsk} onOpenWorker={openWorkerConversation} />}
+      {!routerActive && mobile && (
+        <PiecesDrawer
+          open={drawerOpen}
+          onOpenChange={setDrawerOpen}
+          asks={railAsks}
+          workers={railWorkers}
+          activeGraphs={railGraphs}
+          projectId={railProjectId}
+          avatarKey={avatarKey}
+          openWorkerId={openWorker}
+          onOpenAsk={openAsk}
+          onOpenWorker={openWorkerConversation}
+        />
+      )}
     </AccentScope>
   );
   return (

@@ -5,6 +5,7 @@ import { useDevices } from "./device-hub.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { useHubQueryClient } from "./query-client.ts";
 import {
+  activeGraphsOf,
   failingHealth,
   fleetRouterView,
   hasFetchedQuotaSession,
@@ -273,6 +274,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const railPm = active?.pm?.id ?? null;
   const railWorkers = useMemo(() => (railPm === null ? EMPTY_WORKERS : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
+  // 右栏的果皮轨：当前项目经理那个项目的活跃任务图（activeGraphsOf 按 state.activeTaskGraphs 的 WeakMap 缓存，流式帧里引用不变）
+  const railProjectId = active?.project?.id ?? null;
+  const railGraphs = useMemo(() => activeGraphsOf(state, railProjectId), [state.activeTaskGraphs, railProjectId]);
+  const railGraphNeedsYou = useMemo(() => railGraphs.some((g) => g.nodes.some((n) => n.status === "waiting_user")), [railGraphs]);
   // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link: rawLink } = deviceNotices(current);
   const link = useMemo(
@@ -291,9 +296,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
   // 右栏列的是当前打开的项目经理（Worker 的对话也算它）的“等你确定”和 Worker
-  const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0);
-  // 有要关心的事才自动出来：有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
-  const railNeedsYou = !profile && (railAsks.length > 0 || railWorkers.some((w) => !w.ended));
+  const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0 || railGraphs.length > 0);
+  // 有要关心的事才自动出来：有活跃任务图、有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
+  const railNeedsYou = !profile && (railAsks.length > 0 || railGraphs.length > 0 || railWorkers.some((w) => !w.ended));
+  // 开关上的小圆点：有没回答的提问或待拍板的门禁（docs/ui-standard.md 第 12 条）
+  const railAttention = !profile && (railAsks.length > 0 || railGraphNeedsYou);
   const railPeeking = railPeek !== null && railPeek === railPm;
   const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed && (railNeedsYou || railPeeking));
   const toggleRail = useCallback(() => {
@@ -430,8 +437,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       profileEntry,
       quotaFetchable,
       railAsks,
+      railAttention,
+      railGraphs,
       railHasContent,
       railOpen,
+      railProjectId,
       railWorkers,
       reconnecting,
       refreshFleet,

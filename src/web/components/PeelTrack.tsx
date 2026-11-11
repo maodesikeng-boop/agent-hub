@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Maximize2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { ConversationId, DeviceId, TaskGraph, TaskGraphId, TaskNode, WorkerId } from "../../shared/index.ts";
-import { createClient, type HubClient } from "../client.ts";
+import type { ConversationId, TaskGraph, TaskGraphId, TaskNode, WorkerId } from "../../shared/index.ts";
+import type { HubClient } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -175,14 +175,6 @@ function makeClientId(): string {
     return crypto.randomUUID();
   }
   return `gate-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-export function useResolvedClient(deviceId?: DeviceId | null): HubClient {
-  const scopeClient = useClient();
-  return useMemo(
-    () => (deviceId !== undefined ? createClient(deviceId) : scopeClient),
-    [deviceId, scopeClient],
-  );
 }
 
 /**
@@ -607,7 +599,6 @@ export const PeelTrackList = memo(function PeelTrackList({
   workers,
   openWorkerId,
   colorKey = 0,
-  deviceId,
   onOpenWorker,
   onZoomGraph,
 }: {
@@ -615,11 +606,11 @@ export const PeelTrackList = memo(function PeelTrackList({
   workers: readonly WorkerEntry[];
   openWorkerId: ConversationId | null;
   colorKey?: number;
-  deviceId?: DeviceId | null;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
 }) {
-  const client = useResolvedClient(deviceId);
+  // 拍板走当前区域那台设备的接口（device-scope.tsx）：App 用 DeviceScope 包着当前设备的 hub.client，跨设备看远端项目经理时就是那台的
+  const client = useClient();
   const sorted = useMemo(() => sortActiveGraphs(graphs), [graphs]);
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);

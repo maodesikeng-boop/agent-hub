@@ -1,19 +1,20 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { askOf, DEFAULT_AGENT_VENDOR, GRAPH_HISTORY_PAGE_SIZE, MAX_COMPLETED_GRAPH_PAGES, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
-import type { ConversationId, DeviceId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import { useHubQueryClient } from "../query-client.ts";
+import { useClient } from "../device-scope.tsx";
 import { boundWorkerIdsOf, isWorkerBound, type WorkerEntry } from "../selectors.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { PeelTrackList, useResolvedClient } from "./PeelTrack.tsx";
+import { PeelTrackList } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
 import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
 
@@ -300,7 +301,6 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
 function CompletedGroup({
   workers,
   projectId,
-  deviceId,
   completedGraphCount,
   activeGraphIdsKey,
   avatarKey = 0,
@@ -311,7 +311,6 @@ function CompletedGroup({
 }: {
   workers: WorkerEntry[];
   projectId?: ProjectId | null;
-  deviceId?: DeviceId | null;
   completedGraphCount?: number;
   activeGraphIdsKey: string;
   avatarKey?: number;
@@ -327,7 +326,7 @@ function CompletedGroup({
   }, [activeEnded, openWorkerId]);
 
   const qc = useHubQueryClient();
-  const client = useResolvedClient(deviceId);
+  const client = useClient();
   const canQueryHistory = projectId !== undefined && projectId !== null;
 
   const historyQuery = useInfiniteQuery(
@@ -423,6 +422,7 @@ function CompletedGroup({
  * 右栏的四段兼容结构（docs/ui-standard.md 第 12 条）：Needs You（未绑图的独立 hub ask）、Task Graph（活跃任务流果皮轨）、
  * Pieces（未绑图的进行中 Piece，在忙排前面，最多列 3 条）和 Completed（历史任务图 + 收工 Piece，默认收着）。
  * 右栏（RightRail）和手机的底部抽屉（PiecesDrawer）共用这一段；新 props 全可选，不传时 100% 兼容旧调用点。
+ * 拍板、跳过、取消、历史拉取都用 DeviceScope 给的当前设备接口（useClient），App 用当前设备的 hub.client 包着，跨设备不另建 client。
  */
 export function RailGroups({
   asks,
@@ -430,7 +430,6 @@ export function RailGroups({
   activeGraphs,
   completedGraphCount,
   projectId,
-  deviceId,
   avatarKey = 0,
   openWorkerId,
   toggle,
@@ -443,7 +442,6 @@ export function RailGroups({
   activeGraphs?: readonly TaskGraph[];
   completedGraphCount?: number;
   projectId?: ProjectId | null;
-  deviceId?: DeviceId | null;
   avatarKey?: number;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
@@ -455,6 +453,8 @@ export function RailGroups({
 }) {
   const [openAsks, setOpenAsks] = useState<ReadonlySet<MessageId>>(new Set());
   const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
+  // 稳定引用：PeelTrackList 是 memo 的，RailGroups 因别的原因重画时它不跟着重画
+  const zoomGraph = useCallback((g: TaskGraph) => setZoomedState({ id: g.id, fallback: g }), []);
 
   const toggleAsk = (id: MessageId) => {
     const opening = !openAsks.has(id);
@@ -557,9 +557,8 @@ export function RailGroups({
                 workers={workers}
                 openWorkerId={openWorkerId}
                 colorKey={avatarKey}
-                deviceId={deviceId}
                 onOpenWorker={onOpenWorker}
-                onZoomGraph={(g) => setZoomedState({ id: g.id, fallback: g })}
+                onZoomGraph={zoomGraph}
               />
             </GroupBody>
           </section>
@@ -591,13 +590,12 @@ export function RailGroups({
           <CompletedGroup
             workers={ended}
             projectId={projectId}
-            deviceId={deviceId}
             completedGraphCount={completedGraphCount}
             activeGraphIdsKey={(activeGraphs ?? []).map((g) => g.id).join(",")}
             avatarKey={avatarKey}
             openWorkerId={openWorkerId}
             onOpenWorker={onOpenWorker}
-            onZoomGraph={(g) => setZoomedState({ id: g.id, fallback: g })}
+            onZoomGraph={zoomGraph}
             trailing={!hasAsks && !hasGraphs && !hasLive ? toggle : undefined}
           />
         )}
@@ -611,7 +609,6 @@ export function RailGroups({
           }}
           workers={workers}
           colorKey={avatarKey}
-          deviceId={deviceId}
           onOpenWorker={onOpenWorker}
         />
       )}
@@ -629,7 +626,6 @@ export const RightRail = memo(function RightRail({
   activeGraphs,
   completedGraphCount,
   projectId,
-  deviceId,
   openWorkerId,
   layout,
   toggle,
@@ -642,7 +638,6 @@ export const RightRail = memo(function RightRail({
   activeGraphs?: readonly TaskGraph[];
   completedGraphCount?: number;
   projectId?: ProjectId | null;
-  deviceId?: DeviceId | null;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
   layout: "side" | "top";
@@ -667,7 +662,6 @@ export const RightRail = memo(function RightRail({
         activeGraphs={activeGraphs}
         completedGraphCount={completedGraphCount}
         projectId={projectId}
-        deviceId={deviceId}
         avatarKey={avatarKey}
         openWorkerId={openWorkerId}
         toggle={side ? toggle : undefined}
