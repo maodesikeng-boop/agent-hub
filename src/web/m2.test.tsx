@@ -850,16 +850,27 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
         id: view.changes.length + 1,
         textBefore: view.text,
         textAfter: view.text,
+        vendorBefore: view.vendor,
+        vendorAfter: body.vendor ?? view.vendor,
         modelBefore: view.model,
         modelAfter: body.model === undefined ? view.model : body.model,
         effortBefore: view.effort,
         effortAfter: body.effort === undefined ? view.effort : body.effort,
       });
-      view = { ...view, model: change.modelAfter, effort: change.effortAfter, changes: [change, ...view.changes], revertableChangeId: change.id };
+      view = {
+        ...view,
+        vendor: change.vendorAfter,
+        model: change.modelAfter,
+        effort: change.effortAfter,
+        changes: [change, ...view.changes],
+        revertableChangeId: change.id,
+      };
       return { status: 200, body: { changed: true, persona: view } };
     };
   };
   const combo = (page: HTMLElement, name: string) => within(groupIn(page, "Model")).getByRole("combobox", { name });
+  const modelSave = (page: HTMLElement) => within(groupIn(page, "Model")).queryByRole("button", { name: "Save" });
+  const modelCancel = (page: HTMLElement) => within(groupIn(page, "Model")).queryByRole("button", { name: "Cancel" });
 
   it("拉不到名单（接口 404）：用打包的名单，不报错；别名显示名字", async () => {
     const user = userEvent.setup();
@@ -902,7 +913,100 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
   });
 
-  it("改了马上存：选模型发 PUT 只带 model，再选思考程度发只带 effort；修改记录用名单里的名字", async () => {
+  it("依次修改 Provider → Model → Effort 期间不发请求；点击 Save 发出 1 次合并请求，提交期间禁用三个下拉与按钮且防双击", async () => {
+    const user = userEvent.setup();
+    await boot();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "low" });
+    api.getPersona = () => ({ status: 200, body: view });
+    api.putPersona = async (_id, body) => {
+      await gate;
+      view = {
+        ...view,
+        vendor: body.vendor ?? view.vendor,
+        model: body.model === undefined ? view.model : body.model,
+        effort: body.effort === undefined ? view.effort : body.effort,
+      };
+      return { status: 200, body: { changed: true, persona: view } };
+    };
+
+    const page = await open(user);
+    expect(modelSave(page)).not.toBeInTheDocument();
+    expect(modelCancel(page)).not.toBeInTheDocument();
+
+    await user.selectOptions(combo(page, "Provider"), "Codex");
+    expect(combo(page, "Provider")).toHaveDisplayValue("Codex");
+    expect(combo(page, "Model")).toHaveDisplayValue("Default");
+    expect(combo(page, "Effort")).toHaveDisplayValue("Default");
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    await user.selectOptions(combo(page, "Model"), "GPT-6-Luna");
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    await user.selectOptions(combo(page, "Effort"), "high");
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    const save = modelSave(page)!;
+    const cancel = modelCancel(page)!;
+    expect(save).toBeEnabled();
+    expect(cancel).toBeEnabled();
+
+    act(() => {
+      save.click();
+      save.click();
+    });
+    expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(1);
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({
+      vendor: "codex",
+      model: "gpt-6-luna",
+      effort: "high",
+    });
+    expect(combo(page, "Provider")).toBeDisabled();
+    expect(combo(page, "Model")).toBeDisabled();
+    expect(combo(page, "Effort")).toBeDisabled();
+    expect(save).toBeDisabled();
+    expect(cancel).toBeDisabled();
+
+    release();
+    await waitFor(() => expect(modelSave(page)).not.toBeInTheDocument());
+    expect(modelCancel(page)).not.toBeInTheDocument();
+    expect(combo(page, "Provider")).toHaveDisplayValue("Codex");
+    expect(combo(page, "Model")).toHaveDisplayValue("GPT-6-Luna");
+    expect(combo(page, "Effort")).toHaveDisplayValue("high");
+    expect(combo(page, "Provider")).toBeEnabled();
+    expect(combo(page, "Model")).toBeEnabled();
+    expect(combo(page, "Effort")).toBeEnabled();
+  });
+
+  it("修改后点 Cancel：三个下拉恢复原值且请求次数为 0；手动改回原值同样收起按钮", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve({ vendor: "claude", model: "haiku", effort: "low" });
+    const page = await open(user);
+
+    await user.selectOptions(combo(page, "Provider"), "Codex");
+    await user.selectOptions(combo(page, "Model"), "GPT-6-Luna");
+    await user.selectOptions(combo(page, "Effort"), "high");
+    expect(modelCancel(page)).toBeEnabled();
+    expect(modelSave(page)).toBeEnabled();
+
+    await user.click(modelCancel(page)!);
+    expect(combo(page, "Provider")).toHaveDisplayValue("Claude Code");
+    expect(combo(page, "Model")).toHaveDisplayValue("Haiku");
+    expect(combo(page, "Effort")).toHaveDisplayValue("low");
+    expect(modelSave(page)).not.toBeInTheDocument();
+    expect(modelCancel(page)).not.toBeInTheDocument();
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    await user.selectOptions(combo(page, "Effort"), "max");
+    expect(modelSave(page)).toBeInTheDocument();
+    await user.selectOptions(combo(page, "Effort"), "low");
+    expect(modelSave(page)).not.toBeInTheDocument();
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+  });
+
+  it("选模型和思考程度后点 Save：合并成 1 条修改记录，用名单里的名字", async () => {
     const user = userEvent.setup();
     await boot();
     serveCatalog();
@@ -910,21 +1014,23 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     await waitFor(() => expect(optionsOf(combo(page, "Model"))).toContain("Fable 5.1"));
     await user.selectOptions(combo(page, "Model"), "Fable 5.1");
-    await waitFor(() => expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(1));
-    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: "fable" });
     await user.selectOptions(combo(page, "Effort"), "low");
-    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
-    expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ effort: "low" });
+    expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(0);
+
+    await user.click(modelSave(page)!);
+    await waitFor(() => expect(api.callsTo("PUT", /^\/api\/pms\/1\/persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "claude", model: "fable", effort: "low" });
+
     await openChanges(page);
     const log = await within(page).findByRole("list", { name: "History" });
-    await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(2));
-    expect(within(log).getAllByRole("listitem")[1]).toHaveTextContent("You set model to Fable 5.1");
+    await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(log).getAllByRole("listitem")[0]).toHaveTextContent("You set model to Fable 5.1, set effort to low");
     expect(combo(page, "Model")).toHaveDisplayValue("Fable 5.1");
     expect(combo(page, "Effort")).toHaveDisplayValue("low");
-    expect(within(page).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(modelSave(page)).not.toBeInTheDocument();
   });
 
-  it("换的模型不支持原来的思考程度：一起改回默认（一个 PUT）", async () => {
+  it("换的模型不支持原来的思考程度：草稿联动回到默认，点 Save 一起提交；改回默认 PUT 带 null", async () => {
     const user = userEvent.setup();
     await boot();
     serveCatalog();
@@ -932,80 +1038,74 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const page = await open(user);
     await waitFor(() => expect(optionsOf(combo(page, "Model"))).toContain("Opus 4.6"));
     await user.selectOptions(combo(page, "Model"), "Opus 4.6");
-    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
-    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: "claude-opus-4-6", effort: null });
     expect(combo(page, "Effort")).toHaveDisplayValue("Default");
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    await user.click(modelSave(page)!);
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "claude", model: "claude-opus-4-6", effort: null });
+
+    await user.selectOptions(combo(page, "Model"), "Default");
+    await user.click(modelSave(page)!);
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
+    expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ vendor: "claude", model: null, effort: null });
   });
 
-  it("改回默认：PUT 带 null", async () => {
+  it("保存失败（400 或断网）：保留当前草稿并在分组下显示可读错误，再次点 Save 可成功重试；点 Cancel 清错并恢复原值", async () => {
     const user = userEvent.setup();
     await boot();
     serve({ model: "haiku", effort: "low" });
-    const page = await open(user);
-    await user.selectOptions(combo(page, "Model"), "Default");
-    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
-    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: null });
-    await user.selectOptions(combo(page, "Effort"), "Default");
-    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
-    expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ effort: null });
-  });
-
-  it("存失败：退回原来的值，在那一行下面显示原因；别的组不显示", async () => {
-    const user = userEvent.setup();
-    await boot();
-    serve({ model: "haiku" });
     api.putPersona = () => ({ status: 400, body: { error: "思考程度只能是 low、medium、high、xhigh、max", code: "invalid" } });
     const page = await open(user);
+
+    await user.selectOptions(combo(page, "Model"), "Opus");
     await user.selectOptions(combo(page, "Effort"), "max");
+    await user.click(modelSave(page)!);
+
     const alert = await within(groupIn(page, "Model")).findByRole("alert");
     expect(alert).toHaveTextContent("思考程度只能是 low、medium、high、xhigh、max");
-    expect(combo(page, "Effort")).toHaveDisplayValue("Default");
-    expect(combo(page, "Model")).toHaveDisplayValue("Haiku");
-    // 错误在思考程度那一行
-    expect(combo(page, "Effort").closest(".px-4")).toContainElement(alert);
     expect(within(groupIn(page, "Persona")).queryByRole("alert")).not.toBeInTheDocument();
-    // 再改一次：错误清掉
-    api.putPersona = (_id, body) => ({ status: 200, body: { changed: true, persona: makePersonaView({ pmId: 1, model: "haiku", effort: body.effort ?? null }) } });
-    await user.selectOptions(combo(page, "Effort"), "low");
-    await waitFor(() => expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument());
-    expect(combo(page, "Effort")).toHaveDisplayValue("low");
-  });
+    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
+    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(modelSave(page)).toBeEnabled();
 
-  it("网络断了：退回原来的值，那一行提示", async () => {
-    const user = userEvent.setup();
-    await boot();
-    const page = await open(user);
     api.fetch.mockImplementationOnce(async () => {
       throw new TypeError("Failed to fetch");
     });
-    await user.selectOptions(combo(page, "Model"), "Opus");
+    await user.click(modelSave(page)!);
     expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
-    expect(combo(page, "Model")).toHaveDisplayValue("Default");
-  });
-
-  it("连着改两次、第一次还在路上：两次都发，最后显示后一次的值", async () => {
-    const user = userEvent.setup();
-    await boot();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    let model: string | null = null;
-    api.putPersona = async (_id, body) => {
-      if (body.model === "opus") await gate;
-      if (body.model !== undefined) model = body.model;
-      return { status: 200, body: { changed: true, persona: makePersonaView({ pmId: 1, model }) } };
-    };
-    const page = await open(user);
-    await user.selectOptions(combo(page, "Model"), "Opus");
-    // 乐观：没等服务端就显示新值，下拉不变灰
     expect(combo(page, "Model")).toHaveDisplayValue("Opus");
-    expect(combo(page, "Model")).toBeEnabled();
-    await user.selectOptions(combo(page, "Model"), "Sonnet");
-    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
-    release();
-    await waitFor(() => expect(combo(page, "Model")).toHaveDisplayValue("Sonnet"));
+    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+
+    api.putPersona = (_id, body) => ({
+      status: 200,
+      body: {
+        changed: true,
+        persona: makePersonaView({
+          pmId: 1,
+          vendor: body.vendor ?? "claude",
+          model: body.model ?? null,
+          effort: body.effort ?? null,
+        }),
+      },
+    });
+    await user.click(modelSave(page)!);
+    await waitFor(() => expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument());
+    expect(modelSave(page)).not.toBeInTheDocument();
+    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
+    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+
+    api.putPersona = () => ({ status: 500, body: { error: "boom" } });
+    await user.selectOptions(combo(page, "Effort"), "low");
+    await user.click(modelSave(page)!);
+    expect(await within(groupIn(page, "Model")).findByRole("alert")).toBeInTheDocument();
+    await user.click(modelCancel(page)!);
+    expect(within(groupIn(page, "Model")).queryByRole("alert")).not.toBeInTheDocument();
+    expect(combo(page, "Effort")).toHaveDisplayValue("max");
+    expect(modelSave(page)).not.toBeInTheDocument();
   });
 
-  it("Custom: 选了之后多一行模型名（光标在里面），不发请求；字符不对有提示、没有保存；填对了出现小的“保存”，点了或回车 PUT 带完整模型名", async () => {
+  it("Custom: 选了之后多一行模型名（光标在里面），不发请求；没填或字符不对时 Save 禁用；填对后点 Save 或回车提交完整模型名", async () => {
     const user = userEvent.setup();
     await boot();
     serve();
@@ -1016,28 +1116,34 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(name).toHaveFocus();
     expect(name).toHaveAttribute("placeholder", vendorSpec("claude").models.customModelExample);
     expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
-    expect(within(agent).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(modelSave(page)).toBeDisabled();
+    expect(modelCancel(page)).toBeEnabled();
+
     await user.type(name, "-p");
     expect(within(agent).getByText(MODEL_NAME_RULE)).toBeInTheDocument();
     expect(name).toHaveAttribute("aria-invalid", "true");
-    expect(within(agent).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(modelSave(page)).toBeDisabled();
+
     await user.clear(name);
     await user.paste("claude-sonnet-5-5[1m]");
     expect(within(agent).queryByText(MODEL_NAME_RULE)).not.toBeInTheDocument();
-    await user.click(within(agent).getByRole("button", { name: "Save" }));
+    expect(modelSave(page)).toBeEnabled();
+    await user.click(modelSave(page)!);
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
-    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ model: "claude-sonnet-5-5[1m]" });
-    // 存好了：下拉显示“自定义：模型名”，输入框收起
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "claude", model: "claude-sonnet-5-5[1m]", effort: null });
+    // 存好了：下拉显示“自定义：模型名”，输入框与按钮收起
     await waitFor(() => expect(combo(page, "Model")).toHaveDisplayValue("Custom: claude-sonnet-5-5[1m]"));
     expect(within(agent).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
+    expect(modelSave(page)).not.toBeInTheDocument();
+
     // 回车也能存
     await user.selectOptions(combo(page, "Model"), "Custom");
     await user.type(within(agent).getByRole("textbox", { name: "Model name" }), "claude-opus-5-5{Enter}");
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(2));
-    expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ model: "claude-opus-5-5" });
+    expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ vendor: "claude", model: "claude-opus-5-5", effort: null });
   });
 
-  it("换厂商：显示“正在换到 Codex…”，厂商下拉与“开新会话”按钮禁用；收到 pm.updated 后恢复", async () => {
+  it("换厂商：点 Save 后显示“Switching to Codex…”，厂商下拉与“开新会话”按钮禁用；收到 pm.updated 后自动同步恢复", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     let view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });
@@ -1057,6 +1163,10 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     const agent = groupIn(page, "Model");
     const sessionGroup = groupIn(page, "Session");
     await user.selectOptions(combo(page, "Provider"), "Codex");
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+    expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument();
+
+    await user.click(modelSave(page)!);
     await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
     expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({ vendor: "codex", model: null, effort: null });
     expect(await within(agent).findByText("Switching to Codex…")).toBeInTheDocument();
@@ -1069,8 +1179,45 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林", vendor: "claude" }) }));
     await waitFor(() => expect(within(agent).queryByText("Switching to Codex…")).not.toBeInTheDocument());
     expect(combo(page, "Provider")).toHaveDisplayValue("Claude Code");
+    expect(combo(page, "Model")).toHaveDisplayValue("Opus");
+    expect(combo(page, "Effort")).toHaveDisplayValue("high");
     expect(combo(page, "Provider")).toBeEnabled();
     expect(within(sessionGroup).getByRole("button", { name: "Start…" })).toBeEnabled();
+  });
+
+  it("状态同步边界：同 PM 在 !dirty 时自动同步外部更新、dirty 时保留草稿；切换查看不同 PM 时无条件重置草稿与错误", async () => {
+    const user = userEvent.setup();
+    const ws = await boot();
+    let pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: null, effort: null });
+    const pm2View = makePersonaView({ pmId: 2, vendor: "codex", model: "gpt-6-luna", effort: "high" });
+    api.getPersona = (pmId) => ({ status: 200, body: pmId === 2 ? pm2View : pm1View });
+    api.putPersona = () => ({ status: 500, body: { error: "boom" } });
+
+    const page1 = await open(user);
+    pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "haiku", effort: "low" });
+    push(ws, changeOf(11, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
+    await waitFor(() => expect(combo(page1, "Model")).toHaveDisplayValue("Haiku"));
+    expect(combo(page1, "Effort")).toHaveDisplayValue("low");
+
+    await user.selectOptions(combo(page1, "Model"), "Opus");
+    pm1View = makePersonaView({ pmId: 1, vendor: "claude", model: "sonnet", effort: "max", text: "外部改的" });
+    push(ws, changeOf(12, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
+    await waitFor(() => expect(within(page1).getByRole("textbox", { name: "Persona" })).toHaveValue("外部改的"));
+    expect(combo(page1, "Model")).toHaveDisplayValue("Opus");
+    expect(modelSave(page1)).toBeEnabled();
+
+    await user.click(modelSave(page1)!);
+    expect(await within(groupIn(page1, "Model")).findByRole("alert")).toBeInTheDocument();
+
+    await user.click(inNav(/阿周/));
+    await user.click(screen.getByRole("button", { name: "View 阿周's profile" }));
+    const page2 = screen.getByRole("region", { name: "阿周's profile" });
+    await within(page2).findByRole("textbox", { name: "Persona" });
+    expect(combo(page2, "Provider")).toHaveDisplayValue("Codex");
+    expect(combo(page2, "Model")).toHaveDisplayValue("GPT-6-Luna");
+    expect(combo(page2, "Effort")).toHaveDisplayValue("high");
+    expect(within(groupIn(page2, "Model")).queryByRole("alert")).not.toBeInTheDocument();
+    expect(modelSave(page2)).not.toBeInTheDocument();
   });
 });
 

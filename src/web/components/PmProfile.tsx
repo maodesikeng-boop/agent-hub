@@ -3,7 +3,6 @@ import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils.ts";
 import {
-  CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   MAX_PERSONA_BYTES,
   PM_MEMORY_MAX_BYTES,
@@ -147,29 +146,19 @@ function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
   return a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 }
 
-/** 只带改了的几项。 */
-function agentPatch(next: AgentSetting, saved: AgentSetting): EditPersonaRequest {
-  return {
-    ...(next.vendor !== saved.vendor ? { vendor: next.vendor } : {}),
-    ...(next.model !== saved.model ? { model: next.model } : {}),
-    ...(next.effort !== saved.effort ? { effort: next.effort } : {}),
-  };
-}
-
 /**
- * 一项“改了马上存”的设置：先显示改后的值（乐观），存成功换成服务端回的；失败退回服务端的值，错误给调用方显示在那一行。
+ * 一项“改了马上存”的设置（如 Mode）：先显示改后的值（乐观），存成功换成服务端回的；失败退回服务端的值并提示错误。
  * 连着改几次时，只有最后一次的结果决定显示什么（前面的回来了也照样更新服务端的值）。
  */
-function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
+function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
   const client = useClient();
   const [draft, setDraft] = useState<T | null>(null);
-  const [error, setError] = useState<{ key: K; info: ErrorInfo } | null>(null);
+  const [error, setError] = useState<ErrorInfo | null>(null);
   const seq = useRef(0);
-  const save = (next: T, key: K, body: EditPersonaRequest | null) => {
+  const save = (next: T, body: EditPersonaRequest) => {
     setDraft(next);
     setError(null);
     const mine = ++seq.current;
-    if (body === null) return; // 还不能存（比如自定义模型名还没填好）：只显示
     if (Object.keys(body).length === 0) {
       setDraft(null);
       return;
@@ -183,7 +172,7 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
       (err: unknown) => {
         if (!aliveRef.current || mine !== seq.current) return;
         setDraft(null);
-        setError({ key, info: errorText(err) });
+        setError(errorText(err));
       },
     );
   };
@@ -195,7 +184,7 @@ function useInstantSave<T, K extends string>(pmId: number, onUpdate: (p: Persona
   return { draft, error, save, reset };
 }
 
-/** 模型、工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后（默认收起）。项目名只在头部，这里不再列。 */
+/** 模型选完点保存统一提交；工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后（默认收起）。项目名只在头部，这里不再列。 */
 function PmEditor({
   pm,
   folders,
@@ -219,24 +208,80 @@ function PmEditor({
   }, []);
   // 老数据里 agy 的模型可能是带档位的完整 ID：按 模型 + 思考程度 拆开再比，没改的不重复存
   const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
-  const agentSave = useInstantSave<AgentDraft, AgentRowKey>(pm.id, onUpdate, aliveRef);
-  const modeSave = useInstantSave<PmMode, "mode">(pm.id, onUpdate, aliveRef);
-  const agent = agentSave.draft ?? draftOf(saved);
-  const mode = modeSave.draft ?? persona.mode;
+  const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
+  const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
+  const [agentError, setAgentError] = useState<ErrorInfo | null>(null);
+  const [agentSaving, setAgentSaving] = useState(false);
+  const agentSavingRef = useRef(false);
+  const agentSeq = useRef(0);
+  const [draftText, setDraftText] = useState<string | null>(null);
+
+  if (trackedPmId !== persona.pmId) {
+    setTrackedPmId(persona.pmId);
+    setEditedAgent(null);
+    setAgentError(null);
+    setAgentSaving(false);
+    setDraftText(null);
+  }
+
+  const draft: AgentDraft = editedAgent ?? draftOf(saved);
+  const agentResult = settingOf(draft);
+  const dirty = !agentResult.ok || !sameSetting(agentResult.setting, saved);
+  if (!agentSaving && editedAgent !== null && !dirty) {
+    setEditedAgent(null);
+    setAgentError(null);
+  }
+  const canSaveAgent = dirty && agentResult.ok && !agentSaving;
 
   const changeAgent = (next: AgentDraft, row: AgentRowKey) => {
-    const result = settingOf(next);
-    agentSave.save(next, row, next.modelChoice === CUSTOM_MODEL || !result.ok ? null : agentPatch(result.setting, saved));
+    const updated = row === "vendor" ? draftOf({ vendor: next.vendor, model: null, effort: null }) : next;
+    const result = settingOf(updated);
+    setAgentError(null);
+    setEditedAgent(result.ok && sameSetting(result.setting, saved) ? null : updated);
   };
-  const agentResult = settingOf(agent);
-  const customDirty = agent.modelChoice === CUSTOM_MODEL && agentResult.ok && !sameSetting(agentResult.setting, saved);
-  const saveCustom = () => {
-    if (customDirty && agentResult.ok) agentSave.save({ ...agent, modelChoice: agentResult.setting.model ?? "", customModel: "" }, "model", agentPatch(agentResult.setting, saved));
+
+  const cancelAgent = () => {
+    setEditedAgent(null);
+    setAgentError(null);
   };
+
+  const resetAgent = () => {
+    agentSeq.current++;
+    agentSavingRef.current = false;
+    setAgentSaving(false);
+    setEditedAgent(null);
+    setAgentError(null);
+  };
+
+  const saveAgent = async () => {
+    if (agentSavingRef.current || !canSaveAgent || !agentResult.ok) return;
+    agentSavingRef.current = true;
+    setAgentSaving(true);
+    setAgentError(null);
+    const mine = ++agentSeq.current;
+    const { vendor, model, effort } = agentResult.setting;
+    try {
+      const res = await client.putPersona(pm.id, { vendor, model, effort });
+      if (!aliveRef.current || mine !== agentSeq.current) return;
+      onUpdate(res.persona);
+      setEditedAgent(null);
+      setAgentError(null);
+    } catch (err) {
+      if (!aliveRef.current || mine !== agentSeq.current) return;
+      setAgentError(errorText(err));
+    } finally {
+      if (aliveRef.current && mine === agentSeq.current) {
+        agentSavingRef.current = false;
+        setAgentSaving(false);
+      }
+    }
+  };
+
+  const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
+  const mode = modeSave.draft ?? persona.mode;
 
   // 性格设定：null = 没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
   const qc = useHubQueryClient();
-  const [draftText, setDraftText] = useState<string | null>(null);
   const text = draftText ?? persona.text;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
   const textDirty = text !== persona.text;
@@ -258,7 +303,7 @@ function PmEditor({
       onSuccess: (next) => {
         if (!aliveRef.current) return;
         // 撤销的结果回来后，本地没提交的输入已经没意义了
-        agentSave.reset();
+        resetAgent();
         modeSave.reset();
         setDraftText(null);
         onUpdate(next);
@@ -288,25 +333,32 @@ function PmEditor({
       {/* 头部下面第一组，头部就是它的标题，不另写组名 */}
       <SettingsGroup label="Model">
         <AgentRows
-          value={agent}
+          value={draft}
           onChange={changeAgent}
+          disabled={agentSaving}
           switchingToVendor={persona.switchingToVendor}
-          errors={agentSave.error ? { [agentSave.error.key]: agentSave.error.info } : {}}
-          onCustomSubmit={saveCustom}
-          customAction={
-            customDirty && (
-              <Button onClick={saveCustom}>
+          onCustomSubmit={() => void saveAgent()}
+        />
+        {dirty && (
+          <div className="px-4 py-3">
+            {agentError && <RowError error={agentError} />}
+            <div className={agentError ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
+              <Button type="button" variant="ghost" disabled={agentSaving} onClick={cancelAgent}>
+                Cancel
+              </Button>
+              <Button type="button" disabled={!canSaveAgent} onClick={() => void saveAgent()}>
+                {agentSaving && <Loader2 className="animate-spin" aria-hidden="true" />}
                 Save
               </Button>
-            )
-          }
-        />
+            </div>
+          </div>
+        )}
       </SettingsGroup>
       <SettingsGroup title="Mode">
-        <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, "mode", m === persona.mode ? {} : { mode: m })} />
+        <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
         {modeSave.error && (
           <div className="px-4 py-2.5">
-            <RowError error={modeSave.error.info} />
+            <RowError error={modeSave.error} />
           </div>
         )}
       </SettingsGroup>
@@ -378,7 +430,7 @@ function PmEditor({
                 key={change.id}
                 change={change}
                 revertable={change.id === persona.revertableChangeId}
-                busy={busy !== null}
+                busy={busy !== null || agentSaving}
                 onRevert={() => revert(change.id)}
               />
             ))}
@@ -559,7 +611,7 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PmEditor pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && <PmEditor key={pm.id} pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
           {load.phase === "ready" && pm.archivedAt == null && (
             <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} onArchived={onBack} />
           )}
