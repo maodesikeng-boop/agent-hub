@@ -260,6 +260,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
     //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
     mkdirSync(paths.worktreesDir, { recursive: true });
+    mkdirSync(paths.pmMemoryDir, { recursive: true, mode: 0o700 });
     // uploadsDir 也是：用户在聊天框上传的文件，agent 拿到的是这个真实路径下的绝对路径（权限规则按真实路径匹配）
     mkdirSync(paths.uploadsDir, { recursive: true, mode: 0o700 });
     const uploadsDir = realpathSync.native(paths.uploadsDir);
@@ -271,6 +272,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dataDir = realpathSync.native(paths.home);
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
+    const pmMemoryDir = realpathSync.native(paths.pmMemoryDir);
     // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
     // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
     // 账本写系统消息时用它缓存着的显示名
@@ -296,6 +298,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
+      pmMemoryDir,
       dataHome: paths.home,
       worktreesDir,
       launchDir: paths.launchDir,
@@ -352,7 +355,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
     // 换代后的新会话：开场说明 + 交接 + 最近原话拼在第一条写给它的消息前面（ledger/handover.ts）
-    const launch = { store: sessions, log, prepareLaunch, personaNote, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
+    const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
       drivers: createVendorDrivers(
@@ -486,7 +489,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
     // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
     // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
-    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths, log });
+    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths, pmMemoryDir, log });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
 

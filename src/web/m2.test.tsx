@@ -620,7 +620,7 @@ describe("资料页", () => {
     await boot();
     const page = await pmChat(user);
     await within(page).findByRole("textbox", { name: "Persona" });
-    const groups = ["Model", "Mode", "Folders", "Schedules", "Persona", "History", "Session"];
+    const groups = ["Model", "Mode", "Folders", "Schedules", "Persona", "Memory files", "History", "Session"];
     expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
     expect(within(groupIn(page, "Model")).queryByRole("heading")).not.toBeInTheDocument();
     for (const title of groups.slice(1)) expect(within(groupIn(page, title)).getByRole("heading", { name: new RegExp(`^${title}`) })).toBeInTheDocument();

@@ -18,10 +18,12 @@ import type {
   PersonaChange,
   PersonaView,
   Pm,
+  PmMemoryFilesList,
   PostMessageRequest,
   PostRouterCommandRequest,
   Project,
   ProjectFolder,
+  PutPmMemoryFileRequest,
   ResolveRouterItemRequest,
   RouterItemsPage,
   SessionState,
@@ -315,6 +317,22 @@ export class FakeApi {
     status: 200,
     body: { changed: true, persona: makePersonaView() },
   });
+  getPmMemoryFiles: (pmId: number) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { files: [], totalBytes: 0 } satisfies PmMemoryFilesList,
+  });
+  getPmMemoryFile: (pmId: number, name: string) => Reply | Promise<Reply> = (_pmId, name) => ({
+    status: 200,
+    body: { name, content: "", bytes: 0, updatedAt: 1_000 },
+  });
+  putPmMemoryFile: (pmId: number, name: string, body: PutPmMemoryFileRequest) => Reply | Promise<Reply> = (_pmId, name, body) => {
+    const bytes = new TextEncoder().encode(body.content).length;
+    return {
+      status: 200,
+      body: { file: { name, content: body.content, bytes, updatedAt: 1_000 }, totalBytes: bytes },
+    };
+  };
+  deletePmMemoryFile: (pmId: number, name: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   addSchedule: (pmId: number, body: AddScheduleRequest) => Reply | Promise<Reply> = (pmId, body) => ({
     status: 201,
     body: makeSchedule({ id: 50, pmId, name: body.name, prompt: body.prompt }),
@@ -540,6 +558,16 @@ export class FakeApi {
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
     const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
+    const memFiles = /^\/api\/pms\/(\d+)\/memory-files$/.exec(url.pathname);
+    if (memFiles && method === "GET") return jsonResponse(await this.getPmMemoryFiles(Number(memFiles[1])));
+    const memFile = /^\/api\/pms\/(\d+)\/memory-files\/(.+)$/.exec(url.pathname);
+    if (memFile) {
+      const pmId = Number(memFile[1]);
+      const name = decodeURIComponent(memFile[2]!);
+      if (method === "GET") return jsonResponse(await this.getPmMemoryFile(pmId, name));
+      if (method === "PUT") return jsonResponse(await this.putPmMemoryFile(pmId, name, body));
+      if (method === "DELETE") return jsonResponse(await this.deletePmMemoryFile(pmId, name));
+    }
     const addSched = /^\/api\/pms\/(\d+)\/schedules$/.exec(url.pathname);
     if (addSched && method === "POST") return jsonResponse(await this.addSchedule(Number(addSched[1]), body));
     const sched = /^\/api\/schedules\/(\d+)$/.exec(url.pathname);

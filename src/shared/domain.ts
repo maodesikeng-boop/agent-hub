@@ -1,7 +1,15 @@
 // 前后端、各块共用的数据形状。字段名和 migrations/ 里的列一一对应（驼峰 ↔ 下划线），例外在字段注释里写明。
 // 不用 enum（erasableSyntaxOnly）：取值用 `as const` 数组，类型从数组推出来。
 
-import { ASK_MAX_OPTION_CHARS, ASK_MAX_OPTIONS, ASK_MIN_OPTIONS, MAX_NAME_CHARS, MAX_WORKER_TITLE_CHARS } from "./limits.ts";
+import {
+  ASK_MAX_OPTION_CHARS,
+  ASK_MAX_OPTIONS,
+  ASK_MIN_OPTIONS,
+  MAX_NAME_CHARS,
+  MAX_PM_MEMORY_FILE_NAME_CHARS,
+  MAX_WORKER_TITLE_CHARS,
+  PM_MEMORY_INDEX_FILE,
+} from "./limits.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -1001,4 +1009,53 @@ export interface TaskGraph {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+}
+
+// ---- 项目经理专属记忆目录子文件（state/pm-memory/<pmId>/<topic>.md）----
+
+export interface PmMemoryFileSummary {
+  name: string;
+  bytes: number;
+  updatedAt: number;
+}
+
+export interface PmMemoryFileDetail extends PmMemoryFileSummary {
+  content: string;
+}
+
+export interface PmMemoryFilesList {
+  files: PmMemoryFileSummary[];
+  totalBytes: number;
+}
+
+/**
+ * MEMORY.md 按“行”计数（自动加载的 200 行上限用）：末尾单个换行不算多出一行空行，
+ * 免得恰好 200 行、按惯例以换行结尾的文件被误判超限。空串是 0 行。
+ */
+export function pmMemoryLineCount(text: string): number {
+  if (text === "") return 0;
+  const n = text.split("\n").length;
+  return text.endsWith("\n") ? n - 1 : n;
+}
+
+/**
+ * 校验项目经理按需参考子文件名（仅放行扁平 `<topic>.md`，拦截路径穿越、点文件、非小写 `.md` 与主索引 `MEMORY.md`）。
+ * 合法返回 null，不合法返回可直接展示的原因文案。
+ */
+export function checkPmMemoryFileName(raw: string): string | null {
+  if (raw.trim() === "") return "Enter a file name ending in .md";
+  if (raw !== raw.trim()) return "File name can't start or end with spaces";
+  if ([...raw].length > MAX_PM_MEMORY_FILE_NAME_CHARS) {
+    return `File name must be ${MAX_PM_MEMORY_FILE_NAME_CHARS} characters or fewer`;
+  }
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\:]/.test(raw)) {
+    return "Use a flat file name without slashes or control characters";
+  }
+  if (raw.includes("..")) return "File name can't contain ..";
+  if (raw.startsWith(".")) return "File name can't start with a dot";
+  if (!raw.endsWith(".md") || raw.length <= 3) return "File name must end in .md";
+  if (raw.toLowerCase() === PM_MEMORY_INDEX_FILE.toLowerCase()) {
+    return `${PM_MEMORY_INDEX_FILE} is managed in Persona above`;
+  }
+  return null;
 }

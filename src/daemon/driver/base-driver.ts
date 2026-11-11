@@ -46,6 +46,7 @@ import {
 } from "../../shared/index.ts";
 import type { VendorComposerBase } from "../vendors/types.ts";
 import { BackgroundTasks, idleDelayMs } from "./background-tasks.ts";
+import { withPmMemoryAddDir } from "./pm-memory-dirs.ts";
 import { personaSeenFromRow, takePersonaNote, type PersonaNoteTaken } from "./persona-note.ts";
 import {
   forceKill,
@@ -1195,7 +1196,7 @@ export abstract class BaseSessionDriver<
       throw new DriverError("internal_error", `reading agent session ${st.id} failed: ${errorMessage(error)}`);
     }
     if (!row) throw new DriverError("internal_error", `no agent session ${st.id}`);
-    return row;
+    return withPmMemoryAddDir(row, this.opts.pmMemoryDir);
   }
 
   /** 处理输出时用：出错不往上冒，记一条 internal_error，返回 null。 */
