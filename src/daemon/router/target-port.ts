@@ -14,9 +14,19 @@ import {
   ConversationNotFoundError,
   DEFAULT_PM_MODE,
   LedgerRequestError,
+  AGENT_VENDORS,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_MODEL_CHARS,
+  MAX_PATH_BYTES,
   MAX_PEERS,
+  MAX_TASK_BYTES,
+  PM_MODES,
   PEER_DEVICE_HEADER,
+  ROUTER_ATTACHMENT_ID_MAX_CHARS,
+  ROUTER_OP_CLIENT_ID_MAX_CHARS,
+  ROUTER_OP_DEDUPE_MAX,
+  ROUTER_OP_DEDUPE_TTL_MS,
+  ROUTER_OP_NAME_MAX_CHARS,
   ROUTER_PEER_DIGEST_TIMEOUT_MS,
   ROUTER_PEER_DIGEST_TTL_MS,
   ROUTER_PEER_DISPATCH_TIMEOUT_MS,
@@ -63,58 +73,74 @@ export class RouterTargetError extends Error {
   }
 }
 
+// 跨设备 /api/router/target-ops 的载荷来自配对设备，按严格模式逐字段限长（未知字段直接拒），不靠下游再兜。
+const opClientIdSchema = z.string().min(1).max(ROUTER_OP_CLIENT_ID_MAX_CHARS);
+const opIdSchema = z.number().int().positive();
+const opBytesSchema = (maxBytes: number, what: string) =>
+  z.string().refine((v) => Buffer.byteLength(v, "utf8") <= maxBytes, `${what} 不能超过 ${maxBytes} 字节`);
+const opCharsSchema = (maxChars: number, what: string) =>
+  z.string().refine((v) => [...v].length <= maxChars, `${what} 不能超过 ${maxChars} 字`);
+const opTextSchema = opBytesSchema(MAX_TASK_BYTES, "正文");
+const opAttachmentIdsSchema = z
+  .array(z.string().min(1).max(ROUTER_ATTACHMENT_ID_MAX_CHARS))
+  .max(MAX_ATTACHMENTS_PER_MESSAGE)
+  .optional();
+const opNameSchema = opCharsSchema(ROUTER_OP_NAME_MAX_CHARS, "名称").optional();
+const opModelSchema = z.string().min(1).max(MAX_MODEL_CHARS).optional();
+
 export const routerTargetOpSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("pm.forward"),
-    clientId: z.string().min(1).max(200),
-    pmId: z.number().int().positive().optional(),
-    projectId: z.number().int().positive().optional(),
-    text: z.string(),
-    attachmentIds: z.array(z.string()).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
-    sourceCommandId: z.number().int().positive().optional(),
-  }),
-  z.object({
-    kind: z.literal("worker.start"),
-    clientId: z.string().min(1).max(200),
-    projectId: z.number().int().positive(),
-    title: z.string().min(1).max(200),
-    task: z.string(),
-    attachmentIds: z.array(z.string()).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
-    vendor: z.string().optional(),
-    model: z.string().optional(),
-    effort: z.string().optional(),
-    readonly: z.boolean().optional(),
-    noWorktree: z.boolean().optional(),
-    sourceCommandId: z.number().int().positive().optional(),
-  }),
-  z.object({
-    kind: z.literal("worker.send"),
-    clientId: z.string().min(1).max(200),
-    workerId: z.number().int().positive(),
-    text: z.string(),
-    attachmentIds: z.array(z.string()).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
-  }),
-  z.object({
-    kind: z.literal("worker.stop"),
-    workerId: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("worker.end"),
-    workerId: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("worker.list"),
-    projectId: z.number().int().positive().optional(),
-  }),
-  z.object({
-    kind: z.literal("project.create"),
-    clientId: z.string().min(1).max(200),
-    folder: z.string().min(1),
-    name: z.string().optional(),
-    pmName: z.string().optional(),
-    vendor: z.string().optional(),
-    mode: z.enum(["manage_only", "hands_on"]).optional(),
-  }),
+  z
+    .object({
+      kind: z.literal("pm.forward"),
+      clientId: opClientIdSchema,
+      pmId: opIdSchema.optional(),
+      projectId: opIdSchema.optional(),
+      text: opTextSchema,
+      attachmentIds: opAttachmentIdsSchema,
+      sourceCommandId: opIdSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("worker.start"),
+      clientId: opClientIdSchema,
+      projectId: opIdSchema,
+      title: z.string().min(1).max(ROUTER_OP_NAME_MAX_CHARS),
+      task: opTextSchema,
+      attachmentIds: opAttachmentIdsSchema,
+      vendor: z.enum(AGENT_VENDORS).optional(),
+      model: opModelSchema,
+      effort: opModelSchema,
+      readonly: z.boolean().optional(),
+      noWorktree: z.boolean().optional(),
+      sourceCommandId: opIdSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("worker.send"),
+      clientId: opClientIdSchema,
+      workerId: opIdSchema,
+      text: opTextSchema,
+      attachmentIds: opAttachmentIdsSchema,
+    })
+    .strict(),
+  z.object({ kind: z.literal("worker.stop"), workerId: opIdSchema }).strict(),
+  z.object({ kind: z.literal("worker.end"), workerId: opIdSchema }).strict(),
+  z.object({ kind: z.literal("worker.list"), projectId: opIdSchema.optional() }).strict(),
+  z
+    .object({
+      kind: z.literal("project.create"),
+      clientId: opClientIdSchema,
+      folder: opBytesSchema(MAX_PATH_BYTES, "folder")
+        .refine((v) => v.trim() !== "", "folder 不能是空的")
+        .refine((v) => !v.includes("\0"), "folder 不能含 NUL 字符"),
+      name: opNameSchema,
+      pmName: opNameSchema,
+      vendor: z.enum(AGENT_VENDORS).optional(),
+      mode: z.enum(PM_MODES).optional(),
+    })
+    .strict(),
 ]);
 
 export type RouterTargetOp = z.infer<typeof routerTargetOpSchema>;
@@ -242,8 +268,25 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
   const resolveDeviceName =
     typeof options.deviceName === "function" ? options.deviceName : () => options.deviceName as string;
   const probeWorkspace = options.probeWorkspace ?? defaultProbeWorkspace;
-  // 本机 project.create 与 worker.start 按 clientId 短暂幂等记忆（上限 256 条）
-  const opDedupe = new LRUCache<string, RouterTargetOpResult>({ max: 256, ttl: 10 * 60_000 });
+  // 本机 project.create / worker.start / worker.send 的幂等记忆：键 = clientId + 操作指纹（不含每次重传都会变的附件编号），
+  // 同一 clientId 换了目标不会误命中旧结果；成功结果按 TTL 记，在途请求共用同一个 Promise（跨设备超时重试、模型并发重复调用都只执行一次）。
+  const opDedupe = new LRUCache<string, RouterTargetOpResult>({ max: ROUTER_OP_DEDUPE_MAX, ttl: ROUTER_OP_DEDUPE_TTL_MS });
+  const opInflight = new Map<string, Promise<RouterTargetOpResult>>();
+  const dedupeOnce = (key: string, run: () => Promise<RouterTargetOpResult>): Promise<RouterTargetOpResult> => {
+    const cached = opDedupe.get(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const pending = opInflight.get(key);
+    if (pending !== undefined) return pending;
+    // 失败不记（下次重试照常执行），成功才进 TTL 记忆；在途表只在请求进行中有条目，跟并发请求数同量级
+    const p = run()
+      .then((res) => {
+        opDedupe.set(key, res);
+        return res;
+      })
+      .finally(() => opInflight.delete(key));
+    opInflight.set(key, p);
+    return p;
+  };
 
   return {
     get deviceId() {
@@ -294,99 +337,95 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
           }
 
           case "worker.start": {
-            const dedupeKey = `ws:${op.clientId}`;
-            const cached = opDedupe.get(dedupeKey);
-            if (cached !== undefined) return cached;
+            const dedupeKey = JSON.stringify(["worker.start", op.clientId, op.projectId, op.title]);
+            return await dedupeOnce(dedupeKey, async () => {
+              const target = ledger.resolveRouterLocalPmOrProject({ projectId: op.projectId });
+              if (target.projectId === null || target.mainFolder === null) {
+                throw new RouterTargetError("not_found", `项目 #${op.projectId} 不存在或未绑定主文件夹`);
+              }
+              const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
+              const fullTask =
+                attachments.length > 0
+                  ? agentTextOf({ text: op.task, meta: { attachments } })
+                  : op.task;
 
-            const target = ledger.resolveRouterLocalPmOrProject({ projectId: op.projectId });
-            if (target.projectId === null || target.mainFolder === null) {
-              throw new RouterTargetError("not_found", `项目 #${op.projectId} 不存在或未绑定主文件夹`);
-            }
-            const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
-            const fullTask =
-              attachments.length > 0
-                ? agentTextOf({ text: op.task, meta: { attachments } })
-                : op.task;
+              const hubCtx: HubCallContext = {};
+              if (!op.noWorktree) {
+                hubCtx.workspace = await probeWorkspace(target.mainFolder);
+              }
+              if (op.vendor !== undefined && options.vendorUsable) {
+                const vendor = op.vendor as AgentVendor;
+                hubCtx.vendorStatus = {
+                  vendor,
+                  availability: await options.vendorUsable(vendor),
+                  device: resolveDeviceName(),
+                };
+              }
 
-            const hubCtx: HubCallContext = {};
-            if (!op.noWorktree) {
-              hubCtx.workspace = await probeWorkspace(target.mainFolder);
-            }
-            if (op.vendor !== undefined && options.vendorUsable) {
-              const vendor = op.vendor as AgentVendor;
-              hubCtx.vendorStatus = {
-                vendor,
-                availability: await options.vendorUsable(vendor),
-                device: resolveDeviceName(),
+              const started = ledger.hubCall(
+                target.sessionId,
+                "worker.start",
+                {
+                  title: op.title,
+                  task: fullTask,
+                  ...(op.vendor !== undefined ? { vendor: op.vendor as AgentVendor } : {}),
+                  ...(op.model !== undefined ? { model: op.model } : {}),
+                  ...(op.effort !== undefined ? { effort: op.effort } : {}),
+                  ...(op.readonly !== undefined ? { readonly: op.readonly } : {}),
+                  ...(op.noWorktree !== undefined ? { noWorktree: op.noWorktree } : {}),
+                },
+                hubCtx,
+              ).data.worker;
+
+              let pmMessageId: MessageId = 0;
+              if (op.sourceCommandId !== undefined) {
+                pmMessageId =
+                  ledger.recordRouterWorkerOrigin({
+                    workerId: started.id,
+                    sourceKind: "router_command",
+                    sourceId: op.sourceCommandId,
+                  }) ?? 0;
+              }
+
+              const res: RouterTargetOpResult = {
+                kind: "worker.start",
+                pmId: target.pmId,
+                pmName: target.pmName,
+                projectId: target.projectId,
+                projectName: target.projectName ?? `#${target.projectId}`,
+                workerId: started.id,
+                workerConversationId: started.workerConversationId,
+                title: started.title,
+                readonly: started.readonly,
+                pmMessageId,
               };
-            }
-
-            const started = ledger.hubCall(
-              target.sessionId,
-              "worker.start",
-              {
-                title: op.title,
-                task: fullTask,
-                ...(op.vendor !== undefined ? { vendor: op.vendor as AgentVendor } : {}),
-                ...(op.model !== undefined ? { model: op.model } : {}),
-                ...(op.effort !== undefined ? { effort: op.effort } : {}),
-                ...(op.readonly !== undefined ? { readonly: op.readonly } : {}),
-                ...(op.noWorktree !== undefined ? { noWorktree: op.noWorktree } : {}),
-              },
-              hubCtx,
-            ).data.worker;
-
-            let pmMessageId: MessageId = 0;
-            if (op.sourceCommandId !== undefined) {
-              pmMessageId =
-                ledger.recordRouterWorkerOrigin({
-                  workerId: started.id,
-                  sourceKind: "router_command",
-                  sourceId: op.sourceCommandId,
-                }) ?? 0;
-            }
-
-            const res: RouterTargetOpResult = {
-              kind: "worker.start",
-              pmId: target.pmId,
-              pmName: target.pmName,
-              projectId: target.projectId,
-              projectName: target.projectName ?? `#${target.projectId}`,
-              workerId: started.id,
-              workerConversationId: started.workerConversationId,
-              title: started.title,
-              readonly: started.readonly,
-              pmMessageId,
-            };
-            opDedupe.set(dedupeKey, res);
-            return res;
+              return res;
+            });
           }
 
           case "worker.send": {
-            const dedupeKey = `wsend:${op.clientId}`;
-            const cached = opDedupe.get(dedupeKey);
-            if (cached !== undefined) return cached;
-
-            const w = ledger.resolveRouterLocalWorker(op.workerId);
-            const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
-            const fullText =
-              attachments.length > 0
-                ? agentTextOf({ text: op.text, meta: { attachments } })
-                : op.text;
-            const sent = ledger.hubCall(w.pmSessionId, "worker.send", {
-              workerId: w.workerId,
-              text: fullText,
-            }).data;
-            const res: RouterTargetOpResult = {
-              kind: "worker.send",
-              pmId: w.pmId,
-              workerId: w.workerId,
-              workerConversationId: w.workerConversationId,
-              title: w.title,
-              messageId: sent.messageId,
-            };
-            opDedupe.set(dedupeKey, res);
-            return res;
+            const dedupeKey = JSON.stringify(["worker.send", op.clientId, op.workerId]);
+            return await dedupeOnce(dedupeKey, async () => {
+              const w = ledger.resolveRouterLocalWorker(op.workerId);
+              const attachments = resolveAttachmentsOrThrow(uploadsDir, op.attachmentIds);
+              const fullText =
+                attachments.length > 0
+                  ? agentTextOf({ text: op.text, meta: { attachments } })
+                  : op.text;
+              const sent = ledger.hubCall(w.pmSessionId, "worker.send", {
+                workerId: w.workerId,
+                text: fullText,
+              }).data;
+              const res: RouterTargetOpResult = {
+                kind: "worker.send",
+                pmId: w.pmId,
+                workerId: w.workerId,
+                workerConversationId: w.workerConversationId,
+                title: w.title,
+                messageId: sent.messageId,
+              };
+              return res;
+            });
           }
 
           case "worker.stop": {
@@ -421,22 +460,20 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
           }
 
           case "project.create": {
-            const dedupeKey = `proj:${op.clientId}`;
-            const cached = opDedupe.get(dedupeKey);
-            if (cached !== undefined) return cached;
-
-            const resolvedFolder =
-              op.folder === "~"
-                ? homedir()
-                : op.folder.startsWith("~/")
-                  ? resolve(homedir(), op.folder.slice(2))
-                  : op.folder;
-            const pmName = op.pmName?.trim() || (op.name?.trim() ? `${op.name.trim()}负责人` : "项目经理");
-            const created = ledger.createPm({
-              name: pmName,
-              mode: op.mode ?? DEFAULT_PM_MODE,
-              ...(op.vendor !== undefined ? { vendor: op.vendor as AgentVendor } : {}),
-              persona: "",
+            const dedupeKey = JSON.stringify(["project.create", op.clientId, op.folder, op.name ?? null]);
+            return await dedupeOnce(dedupeKey, async () => {
+              const resolvedFolder =
+                op.folder === "~"
+                  ? homedir()
+                  : op.folder.startsWith("~/")
+                    ? resolve(homedir(), op.folder.slice(2))
+                    : op.folder;
+              const pmName = op.pmName?.trim() || (op.name?.trim() ? `${op.name.trim()}负责人` : "项目经理");
+              const created = ledger.createPm({
+                name: pmName,
+                mode: op.mode ?? DEFAULT_PM_MODE,
+                ...(op.vendor !== undefined ? { vendor: op.vendor as AgentVendor } : {}),
+                persona: "",
             });
             let proj;
             try {
@@ -460,8 +497,8 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               projectName: proj.name,
               conversationId: created.conversation.id,
             };
-            opDedupe.set(dedupeKey, res);
             return res;
+            });
           }
         }
       } catch (err) {

@@ -48,6 +48,7 @@ import {
   ROUTER_REPORT_LINKS_MAX,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+  ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
 import type {
@@ -1373,8 +1374,9 @@ export function createLedgerRouter(
           }>(
             `SELECT id, project_id, title, status, readonly, worker_conversation_id
                FROM workers WHERE project_id = ?
-               ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, id DESC LIMIT 30`,
+               ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, id DESC LIMIT ?`,
             projectId,
+            ROUTER_WORKER_LIST_MAX,
           )
         : db.all<{
             id: number;
@@ -1388,7 +1390,8 @@ export function createLedgerRouter(
                FROM workers w
                LEFT JOIN pm_archives a ON a.pm_id = w.pm_id
               WHERE a.pm_id IS NULL
-              ORDER BY CASE WHEN w.status = 'open' THEN 0 ELSE 1 END, w.id DESC LIMIT 30`,
+              ORDER BY CASE WHEN w.status = 'open' THEN 0 ELSE 1 END, w.id DESC LIMIT ?`,
+            ROUTER_WORKER_LIST_MAX,
           );
     return rows.map((w) => {
       const ws = sessions.currentSession(w.worker_conversation_id);

@@ -642,4 +642,121 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     expect(remoteOps).toHaveLength(1);
     expect(remoteOps[0]).toMatchObject({ kind: "pm.forward", pmId: 20, text: "发给远端的部分" });
   });
+
+  describe("回收与幂等（审查 PR #275 补的回归）", () => {
+    const makeDispatcher = (overrides: Partial<Parameters<typeof createRouterDispatcher>[0]> = {}) =>
+      createRouterDispatcher({
+        ledger,
+        driver,
+        tokens,
+        sandboxGuard,
+        targetRegistry: {
+          selfDeviceId: () => "dev-local",
+          getPort: (id: string) => (id === "self" || id === "dev-local" ? localPort : null),
+          listPorts: () => [localPort],
+          listAllDigests: async () => [{ port: localPort, result: await localPort.getDigest() }],
+        },
+        models: { list: async () => catalogs },
+        stateDir,
+        launchDir,
+        agentTimeoutMs: 100,
+        sessionCleanupGraceMs: 50,
+        ...overrides,
+      });
+
+    it("厂商进程卡死（start / end 都不返回）时超时照样结束本轮、按时释放并发槽，下一条指令不被卡住", async () => {
+      const hung = new Set<SessionId>();
+      driver.start = async (sessionId) => {
+        driver.started.push(sessionId);
+        if (driver.started.length === 1) {
+          hung.add(sessionId);
+          await new Promise<void>(() => {});
+        }
+      };
+      const origEnd = driver.end.bind(driver);
+      driver.end = async (sessionId) => {
+        if (hung.has(sessionId)) await new Promise<void>(() => {});
+        return origEnd(sessionId);
+      };
+      const d = makeDispatcher({ maxConcurrentTrackB: 1 });
+      try {
+        const t0 = Date.now();
+        const stuck = await d.submitCommand({ clientId: "cid-hung", text: "这条会卡死" });
+        expect(stuck.status).toBe("failed");
+        expect(stuck.error).toContain("超时");
+        expect(Date.now() - t0).toBeLessThan(2_000);
+        expect(driver.interrupted).toContain([...hung][0]);
+
+        // 并发槽只有 1 个：上一条没释放的话这条会一直排队
+        const next = await d.submitCommand({ clientId: "cid-after-hung", text: "下一条" });
+        expect(next.status).toBe("answered");
+        expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'")).toHaveLength(0);
+      } finally {
+        await d.close();
+      }
+    });
+
+    it("规划超时前已投出一部分：整条重跑会重复投递，retry 直接拒绝", async () => {
+      driver.onTurn = async ({ sessionId }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        await dispatcher.handleAgentDispatch(sessionId, commandId, {
+          op: "pm",
+          device: "self",
+          pmId: pm1Id,
+          verbatim: true,
+        });
+        // 之后一直不结束本轮 → 超时
+      };
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-partial-timeout", text: "投一半就超时" });
+      expect(cmd.status).toBe("failed");
+      expect(cmd.dispatched).toHaveLength(1);
+      expect(cmd.plan?.retryOps ?? []).toHaveLength(0);
+
+      const userMsgs = () =>
+        ledger.messagesBefore(pm1ConvId, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user");
+      expect(userMsgs()).toHaveLength(1);
+      await expect(dispatcher.retryCommand(cmd.id)).rejects.toThrow(/重复投递/);
+      expect(userMsgs()).toHaveLength(1);
+      expect(ledger.getRouterCommand(cmd.id)?.status).toBe("failed");
+    });
+
+    it("模型并发调用 hub dispatch 也不能突破 ROUTER_MAX_DISPATCH_TARGETS", async () => {
+      let results: PromiseSettledResult<unknown>[] = [];
+      driver.onTurn = async ({ sessionId, input, emit }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        results = await Promise.allSettled(
+          Array.from({ length: 12 }, (_, i) =>
+            dispatcher.handleAgentDispatch(sessionId, commandId, {
+              op: "pm",
+              device: "self",
+              pmId: pm1Id,
+              text: `并发子任务 ${i}`,
+            }),
+          ),
+        );
+        emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+      };
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-concurrent-cap", text: "并发拆很多条" });
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(8);
+      expect(cmd.dispatched).toHaveLength(8);
+    });
+
+    it("close() 打断在途规划、等它收尾再返回；关闭后新指令直接标失败，不挂在 planning", async () => {
+      const d = makeDispatcher({ agentTimeoutMs: 60_000 });
+      driver.onTurn = async () => {
+        // 不结束本轮，等 close
+      };
+      const pending = d.submitCommand({ clientId: "cid-close-mid", text: "关闭时还在规划" });
+      await new Promise((r) => setTimeout(r, 20));
+      await d.close();
+      const cmd = await pending;
+      expect(cmd.status).toBe("failed");
+      expect(cmd.error).toContain("关闭");
+      expect(db.all("SELECT id FROM agent_sessions WHERE role = 'assistant'")).toHaveLength(0);
+
+      const after = await d.submitCommand({ clientId: "cid-after-close", text: "关了以后发的" });
+      expect(after.status).toBe("failed");
+      expect(ledger.getRouterCommand(after.id)?.status).toBe("failed");
+    });
+  });
 });

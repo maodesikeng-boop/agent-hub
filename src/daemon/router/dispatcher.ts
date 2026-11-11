@@ -7,9 +7,13 @@ import {
   LedgerRequestError,
   MAX_ATTACHMENTS_PER_MESSAGE,
   ROUTER_AGENT_TIMEOUT_MS,
+  ROUTER_CLOSE_GRACE_MS,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_MAX_CONCURRENT_TRACK_B,
   ROUTER_MAX_DISPATCH_TARGETS,
+  ROUTER_PEER_DISPATCH_TIMEOUT_MS,
+  ROUTER_SESSION_CLEANUP_GRACE_MS,
+  ROUTER_TRACK_B_QUEUE_MAX,
   truncateChars,
   turnFailureReason,
   type AgentVendor,
@@ -25,6 +29,7 @@ import {
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
+import { within } from "../driver/base-driver.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
 import { resolveRouterModel } from "./model-resolver.ts";
 import {
@@ -50,8 +55,6 @@ import {
   type RouterTargetRegistry,
 } from "./target-port.ts";
 
-const MAX_TRACK_B_QUEUE = 16;
-
 interface ActiveTrackBState {
   readonly commandId: RouterCommandId;
   readonly sessionId: SessionId;
@@ -60,7 +63,13 @@ interface ActiveTrackBState {
   readonly attachmentIds: string[];
   readonly dispatched: RouterCommandDispatchedTarget[];
   readonly failedOps: Array<{ deviceId: string; op: RouterTargetOp; error: string }>;
+  /** 进行中的 hub dispatch 调用（收尾时限时等它们落定，晚到的成功/失败不丢）。 */
+  readonly inflight: Set<Promise<unknown>>;
+  /** 进行中的写操作数：与已成功的合计不超过 ROUTER_MAX_DISPATCH_TARGETS（模型并发调用也卡得住）。 */
+  pendingMutations: number;
   seq: number;
+  /** 立即结束本轮（守护进程关闭时用）。 */
+  abort(reason: string): void;
 }
 
 export interface RouterDispatcherOptions {
@@ -77,6 +86,8 @@ export interface RouterDispatcherOptions {
   launchDir: string;
   agentTimeoutMs?: number;
   maxConcurrentTrackB?: number;
+  /** 测试用：回收临时会话最多等多久（默认 ROUTER_SESSION_CLEANUP_GRACE_MS）。 */
+  sessionCleanupGraceMs?: number;
   log?: (line: string) => void;
 }
 
@@ -456,8 +467,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     options;
   const agentTimeoutMs = options.agentTimeoutMs ?? ROUTER_AGENT_TIMEOUT_MS;
   const maxConcurrentTrackB = options.maxConcurrentTrackB ?? ROUTER_MAX_CONCURRENT_TRACK_B;
+  const sessionCleanupGraceMs = options.sessionCleanupGraceMs ?? ROUTER_SESSION_CLEANUP_GRACE_MS;
 
   const activeStates = new Map<RouterCommandId, ActiveTrackBState>();
+  /** 在途的指令管线（close 时限时等它们收尾，不留悬空 Promise）。 */
+  const runningPipelines = new Set<Promise<unknown>>();
   let runningTrackB = 0;
   const trackBWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
   let closed = false;
@@ -467,7 +481,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     if (runningTrackB < maxConcurrentTrackB) {
       runningTrackB++;
     } else {
-      if (trackBWaiters.length >= MAX_TRACK_B_QUEUE) {
+      if (trackBWaiters.length >= ROUTER_TRACK_B_QUEUE_MAX) {
         throw new LedgerRequestError("conflict", "当前总助并发规划指令过多，请稍后再试或用 @设备名/项目名 直通发令");
       }
       await new Promise<void>((resolve, reject) => {
@@ -596,7 +610,28 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     preloadedFleet?: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>;
     startedAt: number;
   }): Promise<RouterCommandRecord> => {
-    const releaseSlot = await acquireTrackBSlot();
+    let releaseSlot: () => void;
+    try {
+      releaseSlot = await acquireTrackBSlot();
+    } catch (err) {
+      // 排队满或正在关闭：指令行已经建了，标失败（可重试），不能一直挂在 planning
+      const message = err instanceof Error ? err.message : String(err);
+      return ledger.updateRouterCommand(params.commandId, {
+        status: "failed",
+        error: message,
+        durationMs: Math.max(0, Date.now() - params.startedAt),
+        plan: {
+          intent: "answer",
+          reply: message,
+          actions: [],
+          track: "B",
+          ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
+        },
+        auditAction: "router.command.track_b_rejected",
+        auditActor: "system",
+        auditDetail: { error: message },
+      });
+    }
     try {
       const [fleet, catalogs] = await Promise.all([
         params.preloadedFleet ? Promise.resolve(params.preloadedFleet) : targetRegistry.listAllDigests(),
@@ -689,22 +724,9 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         cwd: routerHomeDir,
       });
 
-      const state: ActiveTrackBState = {
-        commandId: params.commandId,
-        sessionId: assistantSession.id,
-        clientId: params.clientId,
-        rawText: params.rawText,
-        attachmentIds: params.attachmentIds,
-        dispatched: [],
-        failedOps: [],
-        seq: 0,
-      };
-
-      activeStates.set(params.commandId, state);
-      sandboxGuard.bind(assistantSession.id, params.commandId);
-
       const agentTexts: string[] = [];
       let timedOut = false;
+      let turnEnded = false;
       let timer: NodeJS.Timeout | undefined;
 
       type TurnDone = { ok: boolean; error?: string };
@@ -713,11 +735,29 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         settleTurn = resolve;
       });
 
+      const state: ActiveTrackBState = {
+        commandId: params.commandId,
+        sessionId: assistantSession.id,
+        clientId: params.clientId,
+        rawText: params.rawText,
+        attachmentIds: params.attachmentIds,
+        dispatched: [],
+        failedOps: [],
+        inflight: new Set(),
+        pendingMutations: 0,
+        seq: 0,
+        abort: (reason) => settleTurn({ ok: false, error: reason }),
+      };
+
+      activeStates.set(params.commandId, state);
+      sandboxGuard.bind(assistantSession.id, params.commandId);
+
       const unsub = driver.onEvent((evSessionId, event) => {
         if (evSessionId !== assistantSession.id) return;
         if (event.type === "agent.text" && !event.parentToolUseId) {
           agentTexts.push(event.text);
         } else if (event.type === "turn.ended") {
+          turnEnded = true;
           settleTurn({
             ok: event.ok && !event.interrupted,
             ...(event.error ? { error: turnFailureReason(event.error) } : {}),
@@ -737,7 +777,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       timer = setTimeout(() => {
         timedOut = true;
-        void driver.interrupt(assistantSession.id).catch(() => {});
         settleTurn({
           ok: false,
           error: `总助单轮规划超时（超过 ${Math.max(1, Math.round(agentTimeoutMs / 1000))} 秒），请重试或用 @设备名/项目名 直通发令`,
@@ -747,28 +786,40 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       let turnOutcome: TurnDone;
       try {
-        await driver.start(assistantSession.id);
-        const sendRes = await driver.send(assistantSession.id, {
-          messageIds: [1],
-          source: "user",
-          text: turnText,
+        // start/send 跟超时计时器赛跑：厂商进程起不来或写不进去卡住时，超时照样结束本轮，不挂住并发槽
+        void (async () => {
+          await driver.start(assistantSession.id);
+          const sendRes = await driver.send(assistantSession.id, {
+            messageIds: [1],
+            source: "user",
+            text: turnText,
+          });
+          if (sendRes.kind === "rejected" || sendRes.kind === "cancelled") {
+            settleTurn({ ok: false, error: `总助指令未能写入会话（${sendRes.kind}）` });
+          }
+        })().catch((err: unknown) => {
+          settleTurn({ ok: false, error: err instanceof Error ? err.message : String(err) });
         });
-        if (sendRes.kind === "rejected" || sendRes.kind === "cancelled") {
-          settleTurn({ ok: false, error: `总助指令未能写入会话（${sendRes.kind}）` });
-        }
         turnOutcome = await turnPromise;
-      } catch (err) {
-        turnOutcome = {
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        };
       } finally {
         clearTimeout(timer);
         unsub();
-        activeStates.delete(params.commandId);
-        sandboxGuard.unbind(assistantSession.id);
-        await driver.end(assistantSession.id).catch(() => {});
+        // 先撤令牌和绑定：之后到达的 hub dispatch 一律拒绝
         tokens.revoke(assistantSession.id);
+        sandboxGuard.unbind(assistantSession.id);
+        activeStates.delete(params.commandId);
+        // 本轮没正常结束（超时、关闭、出错）先打断再结束；driver.end 遇到还在跑的一轮会等它回完，限时等，厂商进程卡住也按时释放并发槽
+        const stopSession = (async () => {
+          if (!turnEnded) await driver.interrupt(assistantSession.id).catch(() => {});
+          await driver.end(assistantSession.id).catch(() => {});
+        })();
+        if ((await within(stopSession, sessionCleanupGraceMs)) === "timeout") {
+          options.log?.(`总助规划会话 ${assistantSession.id} 结束超时，放弃等待`);
+        }
+        // 已发出的 hub dispatch 限时等落定（各自也有跨设备超时），晚到的成功/失败照样记进回执与重试列表
+        if (state.inflight.size > 0) {
+          await within(Promise.allSettled([...state.inflight]), ROUTER_PEER_DISPATCH_TIMEOUT_MS);
+        }
         cleanupRouterLaunchDir(launchDir, assistantSession.id);
         try {
           ledger.deleteRouterAssistantSession(assistantSession.id);
@@ -891,6 +942,14 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     } finally {
       releaseSlot();
     }
+  };
+
+  /** 跟踪在途管线：close 时限时等它们收尾。 */
+  const track = <T>(p: Promise<T>): Promise<T> => {
+    runningPipelines.add(p);
+    const done = () => runningPipelines.delete(p);
+    p.then(done, done);
+    return p;
   };
 
   const runCommandPipeline = async (params: {
@@ -1019,13 +1078,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       if (deduplicated) return command;
 
-      return runCommandPipeline({
+      return track(runCommandPipeline({
         commandId: command.id,
         clientId,
         text: rawText,
         attachmentIds,
         explicitTarget: input.target,
-      });
+      }));
     },
 
     async retryCommand(commandId: RouterCommandId): Promise<RouterCommandRecord> {
@@ -1101,14 +1160,22 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         });
       }
 
+      // 已有目标投递成功、又没有明确的失败操作（如规划超时、重启中断时已投出一部分）：整条重跑会让模型再投一遍，拒绝
+      if ((existing.dispatched ?? []).some((d) => d.ok)) {
+        throw new LedgerRequestError(
+          "conflict",
+          "这条指令已有目标投递成功，整条重跑会重复投递；还有没交代到的请重新发一条",
+        );
+      }
+
       // 否则（例如设备之前离线尚未拿到名片、模型曾未登录或规划曾超时）重新执行完整管线
       ledger.updateRouterCommand(commandId, { status: "planning", error: null });
-      return runCommandPipeline({
+      return track(runCommandPipeline({
         commandId,
         clientId: existing.clientId,
         text: existing.inputText,
         attachmentIds,
-      });
+      }));
     },
 
     async handleAgentDispatch(
@@ -1122,7 +1189,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
 
       const isMutating = payload.op !== "worker-list";
-      if (isMutating && state.dispatched.length >= ROUTER_MAX_DISPATCH_TARGETS) {
+      if (isMutating && state.dispatched.length + state.pendingMutations >= ROUTER_MAX_DISPATCH_TARGETS) {
         throw new LedgerRequestError(
           "conflict",
           `单条指令最多分派 ${ROUTER_MAX_DISPATCH_TARGETS} 个目标`,
@@ -1212,39 +1279,14 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
           break;
       }
 
+      if (isMutating) state.pendingMutations++;
+      const run = executeAgentOp(state, commandId, port, targetOp, usedVerbatim, isMutating);
+      state.inflight.add(run);
       try {
-        const res = await port.executeOp(targetOp);
-        const targetRecord = toDispatchedTarget(port, res, usedVerbatim);
-        if (targetRecord !== null) {
-          state.dispatched.push(targetRecord);
-          ledger.updateRouterCommand(commandId, {
-            dispatched: [...state.dispatched],
-            auditAction: `router.dispatch.${targetOp.kind}`,
-            auditActor: "router_agent",
-            auditDetail: {
-              deviceId: port.deviceId,
-              op: targetOp.kind,
-              verbatim: usedVerbatim ?? false,
-            },
-          });
-        }
-        return {
-          text: formatOpReceiptText(port, res),
-          data: res,
-        };
-      } catch (err) {
-        if (
-          isMutating &&
-          err instanceof RouterTargetError &&
-          (err.code === "device_offline" || err.code === "device_timeout")
-        ) {
-          state.failedOps.push({
-            deviceId: port.deviceId,
-            op: targetOp,
-            error: err.message,
-          });
-        }
-        return mapTargetErrorToLedger(err);
+        return await run;
+      } finally {
+        state.inflight.delete(run);
+        if (isMutating) state.pendingMutations--;
       }
     },
 
@@ -1253,9 +1295,55 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       for (const waiter of trackBWaiters.splice(0)) {
         waiter.reject(new LedgerRequestError("conflict", "总助分派引擎已关闭"));
       }
-      for (const st of activeStates.values()) {
-        void driver.interrupt(st.sessionId).catch(() => {});
+      for (const st of activeStates.values()) st.abort("守护进程正在关闭，总助规划中断，可点击重试");
+      // 在途管线各自会打断并结束临时会话、写好指令状态；限时等，不留悬空 Promise 和计时器
+      if (runningPipelines.size > 0) {
+        await within(Promise.allSettled([...runningPipelines]), ROUTER_CLOSE_GRACE_MS);
       }
     },
   };
+
+  async function executeAgentOp(
+    state: ActiveTrackBState,
+    commandId: RouterCommandId,
+    port: RouterTargetPort,
+    targetOp: RouterTargetOp,
+    usedVerbatim: boolean | undefined,
+    isMutating: boolean,
+  ): Promise<{ text: string; data: unknown }> {
+    try {
+      const res = await port.executeOp(targetOp);
+      const targetRecord = toDispatchedTarget(port, res, usedVerbatim);
+      if (targetRecord !== null) {
+        state.dispatched.push(targetRecord);
+        ledger.updateRouterCommand(commandId, {
+          dispatched: [...state.dispatched],
+          auditAction: `router.dispatch.${targetOp.kind}`,
+          auditActor: "router_agent",
+          auditDetail: {
+            deviceId: port.deviceId,
+            op: targetOp.kind,
+            verbatim: usedVerbatim ?? false,
+          },
+        });
+      }
+      return {
+        text: formatOpReceiptText(port, res),
+        data: res,
+      };
+    } catch (err) {
+      if (
+        isMutating &&
+        err instanceof RouterTargetError &&
+        (err.code === "device_offline" || err.code === "device_timeout")
+      ) {
+        state.failedOps.push({
+          deviceId: port.deviceId,
+          op: targetOp,
+          error: err.message,
+        });
+      }
+      return mapTargetErrorToLedger(err);
+    }
+  }
 }

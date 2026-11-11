@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DeviceInfo } from "../../shared/index.ts";
-import { PEER_DEVICE_HEADER, ROUTER_PEER_DIGEST_TTL_MS, ROUTER_PEER_OFFLINE_BACKOFF_MS } from "../../shared/index.ts";
+import {
+  MAX_PATH_BYTES,
+  MAX_TASK_BYTES,
+  PEER_DEVICE_HEADER,
+  ROUTER_ATTACHMENT_ID_MAX_CHARS,
+  ROUTER_OP_CLIENT_ID_MAX_CHARS,
+  ROUTER_PEER_DIGEST_TTL_MS,
+  ROUTER_PEER_OFFLINE_BACKOFF_MS,
+} from "../../shared/index.ts";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import type { ProxyTarget } from "../peers/proxy.ts";
@@ -159,6 +167,70 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       pmName: "阿凯",
       projectName: "网关服务",
     });
+  });
+
+  it("LocalTargetPort 幂等：同一 clientId 的并发 worker.start 只起一个 Worker；同 clientId 换了目标不误命中旧结果", async () => {
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    let probes = 0;
+    const localPort = createLocalTargetPort({
+      deviceId: "00000000-0000-4000-8000-000000000001",
+      deviceName: "MacBook",
+      ledger,
+      uploadsDir,
+      probeWorkspace: async () => {
+        probes++;
+        await probeGate;
+        return { kind: "ok", isRepoWithCommit: false, hasUncommittedChanges: false };
+      },
+    });
+    const op = {
+      kind: "worker.start" as const,
+      clientId: "dup-ws",
+      projectId: alphaProjectId,
+      title: "并发重复调用",
+      task: "只应启动一次",
+    };
+    // 第一次还卡在 probeWorkspace（异步间隙）时第二次到达：网络重试 / 模型重复调用
+    const first = localPort.executeOp(op);
+    const second = localPort.executeOp({ ...op });
+    releaseProbe();
+    const [a, b] = await Promise.all([first, second]);
+    expect(probes).toBe(1);
+    expect(a.kind === "worker.start" && b.kind === "worker.start" && a.workerId === b.workerId).toBe(true);
+    expect(db.all("SELECT id FROM workers WHERE title = ?", "并发重复调用")).toHaveLength(1);
+
+    // 同一 clientId 但标题不同：是另一个操作，不能拿旧结果冒充
+    const other = await localPort.executeOp({ ...op, title: "另一件事" });
+    expect(other.kind === "worker.start" && a.kind === "worker.start" && other.workerId !== a.workerId).toBe(true);
+
+    // 失败不记忆：项目不存在报错后，修正参数重试照常执行
+    await expect(localPort.executeOp({ ...op, clientId: "dup-ws-missing", projectId: 99_999 })).rejects.toBeInstanceOf(RouterTargetError);
+  });
+
+  it("target-ops 载荷严格校验：未知字段、超长正文、超长附件编号、非法厂商一律拒", async () => {
+    const localPort = createLocalTargetPort({
+      deviceId: "00000000-0000-4000-8000-000000000001",
+      deviceName: "MacBook",
+      ledger,
+      uploadsDir,
+    });
+    const base = { kind: "pm.forward" as const, clientId: "v-1", pmId: linPmId, text: "hi" };
+    const bad: unknown[] = [
+      { ...base, extra: "x" },
+      { ...base, text: "字".repeat(MAX_TASK_BYTES) },
+      { ...base, attachmentIds: ["a".repeat(ROUTER_ATTACHMENT_ID_MAX_CHARS + 1)] },
+      { ...base, clientId: "c".repeat(ROUTER_OP_CLIENT_ID_MAX_CHARS + 1) },
+      { kind: "worker.start", clientId: "v-2", projectId: alphaProjectId, title: "t", task: "x", vendor: "not-a-vendor" },
+      { kind: "project.create", clientId: "v-3", folder: "/tmp/a\0b" },
+      { kind: "project.create", clientId: "v-4", folder: `/${"p".repeat(MAX_PATH_BYTES)}` },
+    ];
+    for (const op of bad) {
+      await expect(localPort.executeOp(op as never)).rejects.toMatchObject({ code: "invalid" });
+    }
+    expect(db.all("SELECT id FROM messages WHERE sender = 'user'")).toHaveLength(0);
   });
 
   it("PeerTargetPort 遵守缓存 4 条军规：Digest 10s 缓存与移除即刻失效、离线 5s 短暂退避、跨机流式上传附件后原样投递、超时/离线返回结构化中文错误", async () => {
