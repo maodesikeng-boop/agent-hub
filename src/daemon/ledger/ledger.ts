@@ -89,6 +89,8 @@ export interface LedgerOptions {
    * 正文照样以数据库为准。守护进程一定要给。
    */
   personasDir?: string;
+  /** state/pm-memory/（HubPaths.pmMemoryDir）：项目经理专属记忆目录根（MEMORY.md + 扁平 `<topic>.md` 子文件）。 */
+  pmMemoryDir?: string;
   /** 数据目录（HubPaths.home），默认 resolveFolder 用它拒绝数据目录里的文件夹。默认 pmHomeRoot 的上一级（同 HubPaths 的布局）。 */
   dataHome?: string;
   /**
@@ -131,6 +133,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const files: LedgerFiles = {
     pmHomeRoot: options.pmHomeRoot,
     personasDir: options.personasDir,
+    pmMemoryDir: options.pmMemoryDir ?? (options.dataHome !== undefined ? join(options.dataHome, "state", "pm-memory") : undefined),
+    pmMemoryFallbackDir: join(options.pmHomeRoot, ".pm-memory"),
     worktreesDir: options.worktreesDir ?? join(dataHome, "worktrees"),
     launchDir: options.launchDir,
     setupLogsDir: options.setupLogsDir,
@@ -350,7 +354,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => reportHealthIn(p, module, error));
     },
 
-    getPersona: persona.getPersona,
+    getPersona: (pmId) => persona.getPersona(pmId),
+    listPmMemoryFiles: persona.listPmMemoryFiles,
+    getPmMemoryFile: persona.getPmMemoryFile,
+    putPmMemoryFile: persona.putPmMemoryFile,
+    deletePmMemoryFile: persona.deletePmMemoryFile,
 
     editPersona: persona.editPersona,
 

@@ -32,6 +32,8 @@ import type {
   PersonaChangeId,
   Pm,
   PmId,
+  PmMemoryFileDetail,
+  PmMemoryFilesList,
   PmMode,
   Project,
   ProjectId,
@@ -386,6 +388,11 @@ export interface Ledger extends LedgerHandoverWork {
   // ---- 界面服务用（M2）----
   /** 项目经理不存在 → not_found。 */
   getPersona(pmId: PmId): PersonaView;
+  /** 项目经理专属记忆目录 `<topic>.md` 子文件增删改查。 */
+  listPmMemoryFiles(pmId: PmId): PmMemoryFilesList;
+  getPmMemoryFile(pmId: PmId, name: string): PmMemoryFileDetail;
+  putPmMemoryFile(pmId: PmId, name: string, content: string): { file: PmMemoryFileDetail; totalBytes: number };
+  deletePmMemoryFile(pmId: PmId, name: string): void;
   /**
    * 见 EditPersonaResult。actor 是会话时只能改这个会话所属的项目经理，否则 forbidden。
    * 错误：项目经理不存在 → not_found；text、mode 都没给、太长 → invalid。

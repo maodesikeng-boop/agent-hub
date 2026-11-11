@@ -4,6 +4,7 @@
 import { defineVendorDaemon } from "../daemon-types.ts";
 import { createDeepSeekCatalogSource, deepseekCatalogProbe } from "./catalog.ts";
 import { buildDeepSeekPatchSettings, createDeepSeekDriver } from "./driver.ts";
+import { deepseekSyncAdapter } from "./sync.ts";
 
 export default defineVendorDaemon({
   createDriver: (deps) => createDeepSeekDriver(deps),
@@ -12,4 +13,5 @@ export default defineVendorDaemon({
     source: (options) => createDeepSeekCatalogSource(options),
   },
   launchFiles: () => ({ settings: buildDeepSeekPatchSettings() }),
+  sync: deepseekSyncAdapter,
 });

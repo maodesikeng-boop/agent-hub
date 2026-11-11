@@ -245,9 +245,15 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(git(dir, "log", "--format=%s", worker!.branch!)).toBe("hi\nhello\ninit");
     expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("# demo\n");
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("# demo\nhi\n");
-    // 项目经理的会话带上了 worktrees/<项目编号>/（真实路径）
+    // 项目经理的会话带上了 worktrees/<项目编号>/ 与专属记忆目录 state/pm-memory/<pmId>（真实路径），Worker 绝不带 pm-memory
     const pmProc = procsOf(sessionOf(s2, pm.conversationId).sessionId).at(-1)!;
-    expect(pmProc.argv.flatMap((a, i) => (pmProc.argv[i - 1] === "--add-dir" ? [a] : []))).toEqual([real(join(env.home, "worktrees", String(pm.projectId)))]);
+    expect(pmProc.argv.flatMap((a, i) => (pmProc.argv[i - 1] === "--add-dir" ? [a] : []))).toEqual([
+      real(join(env.home, "worktrees", String(pm.projectId))),
+      real(join(env.home, "state", "pm-memory", String(pm.pmId))),
+    ]);
+    for (const wp of workerProcs) {
+      expect(wp.argv.flatMap((a, i) => (wp.argv[i - 1] === "--add-dir" ? [a] : [])).some((d) => d.includes("pm-memory"))).toBe(false);
+    }
 
     // 收工：Worker 会话 ended、令牌 401、会话里一行“已收工”
     const workerPid = workerProcs.at(-1)!.pid;

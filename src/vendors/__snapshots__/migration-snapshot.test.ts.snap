@@ -1716,6 +1716,7 @@ exports[`迁移前快照：声明表 > VENDOR_HOME_PATHS 1`] = `
     "readonlySecrets": [
       ".dsh/.credentials.yaml",
       ".dsh/.env",
+      ".dsh/mcp.json",
     ],
   },
   "pi": {

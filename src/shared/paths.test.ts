@@ -6,7 +6,7 @@ import { ENV_HOME } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 import { AGENT_VENDORS, vendorSpec, type AgentVendor } from "./vendors.ts";
 import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "../vendors/agy/spec.ts";
-import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, VENDOR_FALLBACK_PATHS, linuxInstallDirs, personaFilePath, projectWorktreesDir, findExecutable, resolveExecutable, resolveHubPaths, resolvePaths, resolveVendorExecutables, vendorCatalogFingerprint, vendorCatalogWatchFiles, vendorConfigHome, workerSetupLogPath, workerWorktreePath } from "./paths.ts";
+import { MAX_UNIX_SOCKET_PATH_BYTES, assertSocketPathFits, VENDOR_FALLBACK_PATHS, linuxInstallDirs, personaFilePath, pmMemoryDirPath, pmMemoryIndexPath, projectWorktreesDir, findExecutable, resolveExecutable, resolveHubPaths, resolvePaths, resolveVendorExecutables, vendorCatalogFingerprint, vendorCatalogWatchFiles, vendorConfigHome, workerSetupLogPath, workerWorktreePath } from "./paths.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "../vendors/agy/paths.ts";
 
 // 原样转给真的 node:fs，只为数一数指纹算的时候碰了几次磁盘（existsSync / statSync）
@@ -85,6 +85,8 @@ describe("paths：可执行文件与数据目录解析", () => {
 
   it("辅助路径函数与 socket 长度检查", () => {
     expect(personaFilePath("/s/personas", 3)).toBe("/s/personas/pm-3.md");
+    expect(pmMemoryDirPath("/s/pm-memory", 3)).toBe("/s/pm-memory/3");
+    expect(pmMemoryIndexPath("/s/pm-memory", 3)).toBe("/s/pm-memory/3/MEMORY.md");
     expect(projectWorktreesDir("/w", 2)).toBe("/w/2");
     expect(workerWorktreePath("/w", 2, 7)).toBe("/w/2/7");
     expect(workerSetupLogPath("/l", 7)).toBe("/l/worker-7.log");

@@ -27,6 +27,9 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
+  MAX_VENDOR_SYNC_KEY_CHARS,
+  MAX_VENDOR_SYNC_MCP_ITEMS,
+  MAX_VENDOR_SYNC_SKILL_ITEMS,
   ATTACHMENTS_MISSING_MESSAGE,
   ATTACHMENTS_TOO_MANY_MESSAGE,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -78,10 +81,13 @@ import {
   type QuotaResponse,
   type PersonaResponse,
   type PickFolderResponse,
+  type PmMemoryFileResponse,
+  type PmMemoryFilesResponse,
   type PmMode,
   type PostMessageResponse,
   type PostRouterCommandResponse,
   type PushKeyResponse,
+  type PutPmMemoryFileResponse,
   type RenewSessionResponse,
   type ResolveRouterItemRequest,
   type ResolveRouterItemResponse,
@@ -96,12 +102,16 @@ import {
   type TunnelStatus,
   type TunnelStatusResponse,
   type UpdateRouterSettingsResponse,
+  type VendorSyncApplyRequest,
+  type VendorSyncApplyResponse,
+  type VendorSyncPreviewResponse,
   type WorkerPick,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
+import type { VendorSyncService } from "../vendor-sync/index.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import {
   FILE_ACTIONS_UNAVAILABLE_MESSAGE,
@@ -164,6 +174,8 @@ export interface UiServerOptions {
    * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
    */
   composer?: ComposerService;
+  /** 全厂商连接器 / MCP / Skill 并集同步服务（daemon/vendor-sync/）。不给则 preview 回空列表、apply 回 501。 */
+  vendorSync?: VendorSyncService;
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
   folderPicker?: FolderPicker;
   /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")（不是 macOS 回 501）；测试里换成假的，不真的打开。 */
@@ -461,6 +473,7 @@ const addScheduleBodySchema = z
   })
   .strict();
 const setScheduleEnabledBodySchema = z.object({ enabled: z.boolean() }).strict();
+const putPmMemoryFileBodySchema = z.object({ content: z.string() }).strict();
 const pickFolderBodySchema = z.object({ startDir: boundedBytesSchema(MAX_PATH_BYTES, "startDir").optional() }).strict();
 const pushUnsubscribeBodySchema = z.object({ endpoint: z.string() });
 
@@ -526,6 +539,20 @@ const skipTaskNodeBodySchema = z
 const cancelTaskGraphBodySchema = z
   .object({
     reason: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "reason").optional(),
+  })
+  .strict();
+
+const syncItemKeySchema = boundedCharsSchema(MAX_VENDOR_SYNC_KEY_CHARS, "key").refine(
+  (s) => s.trim() !== "" && !s.includes("\u0000"),
+  "key must not be empty",
+);
+
+const vendorSyncApplyBodySchema = z
+  .object({
+    selectedMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS),
+    removeMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS),
+    selectedSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
+    removeSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
   })
   .strict();
 
@@ -1201,6 +1228,25 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.get(API_PATHS.quota, async (): Promise<QuotaResponse> => (opts.quota ? await opts.quota.get() : { groups: [] }));
 
+    routes.get(API_PATHS.vendorSyncPreview, async (): Promise<VendorSyncPreviewResponse> => {
+      if (!opts.vendorSync) {
+        return {
+          scannedAt: (opts.now ?? Date.now)(),
+          mcpServers: [],
+          skills: [],
+          nonSyncable: [],
+          truncated: false,
+        };
+      }
+      return opts.vendorSync.preview();
+    });
+
+    routes.post(API_PATHS.vendorSyncApply, async (req): Promise<VendorSyncApplyResponse> => {
+      if (!opts.vendorSync) throw new HttpError(501, "vendor sync unavailable");
+      const raw = parseWithSchema(vendorSyncApplyBodySchema, req.body) satisfies VendorSyncApplyRequest;
+      return opts.vendorSync.apply(raw);
+    });
+
     // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表
     routes.get("/api/conversations/:id/commands", async (req): Promise<CommandsResponse> => {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
@@ -1315,6 +1361,28 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {
       const result = ledger.revertPersonaChange(parseId((req.params as { id?: unknown }).id, "persona change id"));
       return { changed: result.change !== null, persona: result.persona };
+    });
+
+    // 项目经理记忆目录子文件（<topic>.md）：文件名用通配，让含编码斜杠的非法路径走账本 400 校验而不是落成 404
+    routes.get("/api/pms/:id/memory-files", async (req): Promise<PmMemoryFilesResponse> => {
+      return ledger.listPmMemoryFiles(parseId((req.params as { id?: unknown }).id, "pm id"));
+    });
+
+    routes.get("/api/pms/:id/memory-files/*", async (req): Promise<PmMemoryFileResponse> => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      return ledger.getPmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "");
+    });
+
+    routes.put("/api/pms/:id/memory-files/*", async (req): Promise<PutPmMemoryFileResponse> => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      const raw = parseWithSchema(putPmMemoryFileBodySchema, req.body);
+      return ledger.putPmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "", raw.content);
+    });
+
+    routes.delete("/api/pms/:id/memory-files/*", async (req, reply) => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      ledger.deletePmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "");
+      return reply.code(204).send();
     });
 
     // 定时任务卡片：校验和写库都在账本里（同 hub schedule），这里只认请求体的形状

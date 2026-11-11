@@ -2,6 +2,7 @@
 import type { PmMode, SessionId } from "../../shared/domain.ts";
 import type { LaunchContext } from "../../shared/ledger.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
+import { truncatePmMemoryForPrompt } from "../pm-memory.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { fail } from "./context.ts";
@@ -10,7 +11,7 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerWorkers } from "./workers.ts";
 
 export function createLedgerLaunchContext(db: Db, persona: LedgerPersona, projects: LedgerProjects, workers: LedgerWorkers) {
-  const { pmRow, pmSession, personaRevision } = persona;
+  const { pmRow, pmSession, personaRevision, reconcilePmMemoryIndex } = persona;
   const { activeProjectOf, projectCard } = projects;
 
   const getLaunchContext = (sessionId: SessionId): LaunchContext => {
@@ -19,13 +20,22 @@ export function createLedgerLaunchContext(db: Db, persona: LedgerPersona, projec
     if (worker !== null) return worker;
     const session = pmSession(sessionId);
     if (session === null || session.conversationId === null) throw fail("not_found", `会话 ${sessionId} 不存在，或不是项目经理、Worker 的会话`);
+    reconcilePmMemoryIndex(session.pmId);
     const pm = pmRow(session.pmId)!;
     const project = activeProjectOf(pm.id);
+    const truncatedPersona = truncatePmMemoryForPrompt(pm.persona ?? "").text;
     return {
       sessionId,
       role: session.role,
       conversationId: session.conversationId,
-      pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, vendor: pm.vendor as AgentVendor, persona: pm.persona ?? "", personaRevision: personaRevision(pm.id) },
+      pm: {
+        id: pm.id,
+        name: pm.name,
+        mode: pm.mode as PmMode,
+        vendor: pm.vendor as AgentVendor,
+        persona: truncatedPersona,
+        personaRevision: personaRevision(pm.id),
+      },
       project: project === null ? null : projectCard(project),
       worker: null,
     };

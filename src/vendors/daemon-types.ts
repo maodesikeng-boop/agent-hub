@@ -43,6 +43,74 @@ export interface VendorDaemon {
   sessionFiles?(ref: TranscriptRef, roots: TranscriptRoots): string[];
   /** 可选：每次启动前要生成的这家专属的东西（claude 的 --settings 文件、Worker 多设的环境变量）。缺了不生成（docs/vendor-plugin-design.md 的 A15）。 */
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
+  /** 可选：全厂商 MCP、云端连接器与 Skill 扫描及局部补丁适配器（daemon/vendor-sync/）。 */
+  sync?: VendorSyncAdapter;
+}
+
+export interface VendorSyncContext {
+  userHome: string;
+  env: Readonly<Record<string, string | undefined>>;
+}
+
+export type CanonicalMcpServer =
+  | {
+      transport: "stdio";
+      command: string;
+      args: readonly string[];
+      env: Readonly<Record<string, string>>;
+      /** 当该 stdio 条目是从 `npx -y mcp-remote <sseUrl>` 识别出的桥接命令时记录原始 SSE URL，防二次包裹并支持幂等对账。 */
+      bridgedSseUrl?: string;
+    }
+  | {
+      transport: "http";
+      url: string;
+      headers: Readonly<Record<string, string>>;
+      bearerTokenEnvVar?: string;
+    }
+  | {
+      transport: "sse";
+      url: string;
+      headers: Readonly<Record<string, string>>;
+    };
+
+export interface ScannedCloudConnector {
+  name: string;
+  kind: "cloud_connector" | "oauth_mcp";
+  reason: string;
+}
+
+export interface VendorMcpScanResult {
+  configPath: string;
+  servers: Record<string, CanonicalMcpServer>;
+  nonSyncable: ScannedCloudConnector[];
+}
+
+export interface VendorMcpPatchPlan {
+  configPath: string;
+  /** 局部补丁后的完整文本（保留注释、排版、无关字段和登录态）；无需改动时返回 null。 */
+  nextContent: string | null;
+  mode?: number;
+}
+
+export type VendorSkillTarget =
+  | { mode: "native" }
+  | { mode: "symlink"; targetDir: string };
+
+export interface VendorSyncAdapter {
+  /** 是否原生支持旧版 `/sse` 远程 MCP；为 false 时同步引擎自动包一层 `npx -y mcp-remote <url>` 转 stdio。 */
+  readonly supportsSseMcp: boolean;
+  /** 只读扫描该厂商全局配置中的可移植 MCP 与不可跨厂同步的私有云端/OAuth 连接器。 */
+  scanMcp(ctx: VendorSyncContext): VendorMcpScanResult;
+  /** 计算局部补丁文本（不直接写盘，由同步引擎统一备份后原子替换，失败回滚）。 */
+  planMcpPatch(
+    ctx: VendorSyncContext,
+    input: {
+      upsert: Readonly<Record<string, CanonicalMcpServer>>;
+      removeNames: ReadonlySet<string>;
+    },
+  ): VendorMcpPatchPlan;
+  /** 全局（`~/.agents/skills`）或项目（`<projectDir>/.agents/skills`）下的技能同步策略。 */
+  skillTarget(ctx: VendorSyncContext, scope: { kind: "global" } | { kind: "project"; projectDir: string }): VendorSkillTarget;
 }
 
 /** 生成启动文件时守护进程给的（daemon/launch.ts）。 */

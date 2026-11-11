@@ -8,6 +8,8 @@ import type {
   PersonaChangeId,
   Pm,
   PmId,
+  PmMemoryFileDetail,
+  PmMemoryFilesList,
   PmMode,
   Project,
   ProjectFolder,
@@ -53,6 +55,10 @@ export const API_PATHS = {
   pms: "/api/pms",
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
+  /** GET → PmMemoryFilesList：项目经理专属记忆目录 `<topic>.md` 子文件列表与合计字节数。 */
+  pmMemoryFiles: (pmId: PmId) => `/api/pms/${pmId}/memory-files`,
+  /** GET → PmMemoryFileDetail；PUT（PutPmMemoryFileRequest）→ PutPmMemoryFileResponse；DELETE → 204。 */
+  pmMemoryFile: (pmId: PmId, name: string) => `/api/pms/${pmId}/memory-files/${encodeURIComponent(name)}`,
   /** POST，没有请求体 → EditPersonaResponse。 */
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
   /** POST，没有请求体 → 202 RenewSessionResponse：开新会话（后台写交接，写好后换代，见 ledger/handover.ts）。 */
@@ -184,6 +190,12 @@ export const API_PATHS = {
   logoutAll: "/api/sessions/logout-all",
   /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
   loginLinks: "/api/login-links",
+
+  // ---- 全厂商连接器 / MCP / Skill 同步 ----
+  /** GET → VendorSyncPreviewResponse：只读扫描各厂商连接器、MCP 与 Skill，返回密钥脱敏后的预览。 */
+  vendorSyncPreview: "/api/vendor-sync/preview",
+  /** POST（VendorSyncApplyRequest → VendorSyncApplyResponse）：先轮转备份再原子替换落盘与逐项软链。 */
+  vendorSyncApply: "/api/vendor-sync/apply",
 } as const;
 
 export interface ConversationSnapshot {
@@ -313,6 +325,23 @@ export interface EditPersonaRequest {
 export interface EditPersonaResponse {
   changed: boolean;
   persona: PersonaView;
+}
+
+/** GET /api/pms/:id/memory-files 的响应。 */
+export type PmMemoryFilesResponse = PmMemoryFilesList;
+
+/** GET /api/pms/:id/memory-files/:name 的响应。 */
+export type PmMemoryFileResponse = PmMemoryFileDetail;
+
+/** PUT /api/pms/:id/memory-files/:name 的请求体。 */
+export interface PutPmMemoryFileRequest {
+  content: string;
+}
+
+/** PUT /api/pms/:id/memory-files/:name 的响应。 */
+export interface PutPmMemoryFileResponse {
+  file: PmMemoryFileDetail;
+  totalBytes: number;
 }
 
 /** POST /api/pms/:id/schedules：daily（"HH:MM"）和 everyMinutes 二选一。 */

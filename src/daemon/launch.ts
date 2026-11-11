@@ -15,6 +15,7 @@ import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaU
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
+import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
 import { prepareRouterSandboxLaunch } from "./router/sandbox.ts";
@@ -86,7 +87,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       });
     }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
-    const ctx = { ...getLaunchContext(session.id), vendorAvailability: options.vendorAvailability?.() };
+    const rawCtx = getLaunchContext(session.id);
+    const ctx: LaunchContext = {
+      ...rawCtx,
+      ...(rawCtx.role === "pm" ? { pm: { ...rawCtx.pm, persona: truncatePmMemoryForPrompt(rawCtx.pm.persona).text } } : {}),
+      vendorAvailability: options.vendorAvailability?.(),
+    };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const prompt = buildLaunchPrompt(ctx, session.cwd);
@@ -147,6 +153,16 @@ export function createPersonaNoter(
   return (sessionId, sinceRevision) => {
     const update = personaUpdate(sessionId, sinceRevision);
     if (update === null || update.revision === sinceRevision) return null;
-    return { revision: update.revision, note: personaUpdateNote(update) };
+    const truncatedUpdate: PersonaUpdate =
+      update.persona === null
+        ? update
+        : {
+            ...update,
+            persona: {
+              ...update.persona,
+              text: truncatePmMemoryForPrompt(update.persona.text).text,
+            },
+          };
+    return { revision: update.revision, note: personaUpdateNote(truncatedUpdate) };
   };
 }

@@ -695,3 +695,43 @@ export const HUB_GRAPH_LIST_LIMIT = 20;
 /** 已完结/已取消任务图保留天数。 */
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+// ---- 项目经理专属记忆目录（state/pm-memory/<pmId>/，见 src/daemon/pm-memory.ts）----
+/** 顶层主索引文件名（自动拼入项目经理系统提示词，与数据库 pms.persona 双向同步）。 */
+export const PM_MEMORY_INDEX_FILE = "MEMORY.md";
+/** 拼入系统提示词时 MEMORY.md 最多保留多少行；超出部分安全截断并附一行拆分提示（磁盘与资料页完整保留）。 */
+export const PM_MEMORY_MAX_LINES = 200;
+/** 拼入系统提示词时 MEMORY.md 最多占多少 UTF-8 字节（25 KB，含超限时附上的拆分提示）。 */
+export const PM_MEMORY_MAX_BYTES = 25 * 1024;
+/** 单个项目经理最多建多少个扁平 `<topic>.md` 按需参考子文件。 */
+export const PM_MEMORY_MAX_SUBFILES = 50;
+/** 单个 `<topic>.md` 子文件最多多少 UTF-8 字节（64 KB）。 */
+export const PM_MEMORY_MAX_SUBFILE_BYTES = 64 * 1024;
+/** 单个项目经理全部 `<topic>.md` 子文件合计最多多少 UTF-8 字节（1 MB）。 */
+export const PM_MEMORY_MAX_TOTAL_BYTES = 1024 * 1024;
+/** 资料页柔和提示水位比例（达到上限 80% 起才柔和提示，平时不挂配额数字）。 */
+export const PM_MEMORY_SOFT_WARN_RATIO = 0.8;
+/** `<topic>.md` 子文件名（含 `.md`）最多几个 Unicode 字符。 */
+export const MAX_PM_MEMORY_FILE_NAME_CHARS = 80;
+/** 扫描单个 PM 记忆目录时最多检查多少个目录项（防外部塞入海量无关文件卡住主线程）。 */
+export const PM_MEMORY_MAX_DIR_SCAN = 256;
+/** 账本内存里记住已同步过的 MEMORY.md 内容哈希的 LRU 上限（按跑了一个月数百个 PM 留足余量）。 */
+export const PM_MEMORY_HASH_CACHE_MAX = 512;
+
+// ---- 全厂商同步（daemon/vendor-sync/、web/components/VendorSyncSettings.tsx）----
+/** `<dataDir>/backups/sync/` 轮转保留的备份快照目录上限，超了自动删最老的防无限堆积。 */
+export const MAX_VENDOR_SYNC_BACKUPS = 20;
+/** 单次扫描与预览返回的 MCP 服务条目上限。 */
+export const MAX_VENDOR_SYNC_MCP_ITEMS = 200;
+/** 单次扫描与预览返回的 Skill 条目上限。 */
+export const MAX_VENDOR_SYNC_SKILL_ITEMS = 500;
+/** 单次扫描返回的不可跨厂同步云端连接器说明上限。 */
+export const MAX_VENDOR_SYNC_CLOUD_ITEMS = 200;
+/** 扫描项目级 `.agents/skills` 时最多取多少个活跃项目文件夹。 */
+export const MAX_VENDOR_SYNC_PROJECT_FOLDERS = 50;
+/** 同步请求里单个 MCP / Skill 键名的最大字符数。 */
+export const MAX_VENDOR_SYNC_KEY_CHARS = 512;
+/** 预览里脱敏命令或 URL 展示字符串的最大字符数。 */
+export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
+/** 单个厂商 MCP 配置文件或 `SKILL.md` 读取字节上限（防异常超大文件撑爆内存）。 */
+export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;

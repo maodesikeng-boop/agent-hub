@@ -17,13 +17,17 @@ import type {
   PersonaChange,
   PersonaView,
   Pm,
+  PmMemoryFilesList,
   PostMessageRequest,
   Project,
   ProjectFolder,
+  PutPmMemoryFileRequest,
   SessionState,
   SetPublicEntryRequest,
   StateSnapshot,
   SystemMessageMeta,
+  VendorSyncApplyRequest,
+  VendorSyncPreviewResponse,
   WorkerMessageMeta,
   WsServerMessage,
 } from "../shared/index.ts";
@@ -308,6 +312,22 @@ export class FakeApi {
     status: 200,
     body: { changed: true, persona: makePersonaView() },
   });
+  getPmMemoryFiles: (pmId: number) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { files: [], totalBytes: 0 } satisfies PmMemoryFilesList,
+  });
+  getPmMemoryFile: (pmId: number, name: string) => Reply | Promise<Reply> = (_pmId, name) => ({
+    status: 200,
+    body: { name, content: "", bytes: 0, updatedAt: 1_000 },
+  });
+  putPmMemoryFile: (pmId: number, name: string, body: PutPmMemoryFileRequest) => Reply | Promise<Reply> = (_pmId, name, body) => {
+    const bytes = new TextEncoder().encode(body.content).length;
+    return {
+      status: 200,
+      body: { file: { name, content: body.content, bytes, updatedAt: 1_000 }, totalBytes: bytes },
+    };
+  };
+  deletePmMemoryFile: (pmId: number, name: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   addSchedule: (pmId: number, body: AddScheduleRequest) => Reply | Promise<Reply> = (pmId, body) => ({
     status: 201,
     body: makeSchedule({ id: 50, pmId, name: body.name, prompt: body.prompt }),
@@ -361,6 +381,24 @@ export class FakeApi {
   quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
+  /** GET /api/vendor-sync/preview。 */
+  vendorSyncPreview: () => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { scannedAt: Date.now(), mcpServers: [], skills: [], nonSyncable: [], truncated: false } satisfies VendorSyncPreviewResponse,
+  });
+  /** POST /api/vendor-sync/apply。 */
+  vendorSyncApply: (body: VendorSyncApplyRequest) => Reply | Promise<Reply> = (body) => ({
+    status: 200,
+    body: {
+      backupId: "20261111-120000-abcd",
+      syncedMcpCount: body.selectedMcpKeys.length,
+      removedMcpCount: body.removeMcpKeys.length,
+      linkedSkillCount: body.selectedSkillKeys.length,
+      unlinkedSkillCount: body.removeSkillKeys.length,
+      preservedPrivateSkillCount: 0,
+      updatedFiles: 1,
+    },
+  });
   /** 跟真的 fetch 一样：init.signal 断了（超时、取消）就以它的 reason 失败，哪怕回应还没好。 */
   fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const signal = init?.signal;
@@ -410,6 +448,8 @@ export class FakeApi {
     const browserSession = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (browserSession && method === "DELETE") return jsonResponse(await this.deleteBrowserSession(decodeURIComponent(browserSession[1]!)));
     if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
+    if (method === "GET" && url.pathname === API_PATHS.vendorSyncPreview) return jsonResponse(await this.vendorSyncPreview());
+    if (method === "POST" && url.pathname === API_PATHS.vendorSyncApply) return jsonResponse(await this.vendorSyncApply(body));
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
@@ -417,6 +457,16 @@ export class FakeApi {
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
     const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
+    const memFiles = /^\/api\/pms\/(\d+)\/memory-files$/.exec(url.pathname);
+    if (memFiles && method === "GET") return jsonResponse(await this.getPmMemoryFiles(Number(memFiles[1])));
+    const memFile = /^\/api\/pms\/(\d+)\/memory-files\/(.+)$/.exec(url.pathname);
+    if (memFile) {
+      const pmId = Number(memFile[1]);
+      const name = decodeURIComponent(memFile[2]!);
+      if (method === "GET") return jsonResponse(await this.getPmMemoryFile(pmId, name));
+      if (method === "PUT") return jsonResponse(await this.putPmMemoryFile(pmId, name, body));
+      if (method === "DELETE") return jsonResponse(await this.deletePmMemoryFile(pmId, name));
+    }
     const addSched = /^\/api\/pms\/(\d+)\/schedules$/.exec(url.pathname);
     if (addSched && method === "POST") return jsonResponse(await this.addSchedule(Number(addSched[1]), body));
     const sched = /^\/api\/schedules\/(\d+)$/.exec(url.pathname);

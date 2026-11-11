@@ -2,8 +2,20 @@
 // 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { LRUCache } from "lru-cache";
 import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, utf8Bytes } from "../../shared/domain.ts";
-import type { AgentSessionRow, ConversationId, PersonaChange, PersonaChangeId, Pm, PmId, PmMode, SessionId } from "../../shared/domain.ts";
+import type {
+  AgentSessionRow,
+  ConversationId,
+  PersonaChange,
+  PersonaChangeId,
+  Pm,
+  PmId,
+  PmMemoryFileDetail,
+  PmMemoryFilesList,
+  PmMode,
+  SessionId,
+} from "../../shared/domain.ts";
 import type {
   CreatePmInput,
   CreatePmResult,
@@ -14,7 +26,14 @@ import type {
   PersonaView,
   SyncPersonaFilesResult,
 } from "../../shared/ledger.ts";
-import { MAX_NAME_CHARS, MAX_PERSONA_BYTES, MAX_REASON_CHARS, PERSONA_CHANGES_LIMIT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
+import {
+  MAX_NAME_CHARS,
+  MAX_PERSONA_BYTES,
+  MAX_REASON_CHARS,
+  PERSONA_CHANGES_LIMIT,
+  PM_ARCHIVE_RETENTION_MS,
+  PM_MEMORY_HASH_CACHE_MAX,
+} from "../../shared/limits.ts";
 import {
   AGENT_VENDORS,
   DEFAULT_AGENT_VENDOR,
@@ -28,8 +47,17 @@ import {
   vendorLabel,
 } from "../../shared/vendors.ts";
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
-import { personaFilePath } from "../../shared/paths.ts";
+import { personaFilePath, pmMemoryDirPath } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import {
+  deletePmMemoryFile as deleteMemorySubfile,
+  listPmMemoryFiles as listMemorySubfiles,
+  quarantinePmMemoryIndex,
+  readPmMemoryFile as readMemorySubfile,
+  readPmMemoryIndex,
+  writePmMemoryFile as writeMemorySubfile,
+  writePmMemoryIndex,
+} from "../pm-memory.ts";
 import { getAgentSession } from "../store/index.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
@@ -126,7 +154,16 @@ export function createLedgerPersona(
   const { db, now, write } = ctx;
   const { insertSession } = sessions;
   const { insertSystemMessage } = messages;
-  const { pmHomeRoot, personasDir, writeFile } = files;
+  const { pmHomeRoot, personasDir, pmMemoryDir, pmMemoryFallbackDir, writeFile } = files;
+  const subfilesRoot = pmMemoryDir ?? pmMemoryFallbackDir;
+  const knownMemoryIndexHash = new LRUCache<PmId, string>({ max: PM_MEMORY_HASH_CACHE_MAX });
+
+  const persistPmMemoryIndex = (pmId: PmId, text: string): boolean => {
+    if (pmMemoryDir === undefined) return false;
+    const ok = writePmMemoryIndex(pmMemoryDir, pmId, text);
+    if (ok) knownMemoryIndexHash.set(pmId, contentHash(text));
+    return ok;
+  };
 
   const pmRow = (id: PmId): PmDbRow | null =>
     db.get<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.id = ?", id) ?? null;
@@ -193,7 +230,9 @@ export function createLedgerPersona(
     return mode;
   };
 
-  const getPersona = (pmId: PmId): PersonaView => {
+  const getPersona = (pmId: PmId, activePending?: Pending): PersonaView => {
+    requirePm(pmId);
+    reconcilePmMemoryIndex(pmId, activePending);
     const pm = requirePm(pmId);
     const active = switchingHandover(pmId);
     const agent = active !== null ? { vendor: active.to_vendor as AgentVendor, model: active.to_model, effort: active.to_effort } : agentOf(pm);
@@ -237,6 +276,7 @@ export function createLedgerPersona(
   const personaUpdate = (sessionId: SessionId, sinceRevision: number): PersonaUpdate | null => {
     const session = pmSession(sessionId);
     if (session === null) return null;
+    reconcilePmMemoryIndex(session.pmId);
     const pm = requirePm(session.pmId);
     const vendor = pm.vendor as AgentVendor;
     const after = db.all<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE pm_id = ? AND id > ? ORDER BY id", pm.id, sinceRevision);
@@ -341,14 +381,79 @@ export function createLedgerPersona(
       insertSystemMessage(p, conversationId, { event: "persona.changed", pmId: pm.id, personaChangeId: change.id, revertOf }, text);
       if (switchingVendor) hooks.switchVendorIn?.(p, conversationId, next.agent);
     }
-    p.after.push(() => persistPersonaFile(pm.id, next.text));
+    p.after.push(() => {
+      persistPersonaFile(pm.id, next.text);
+      persistPmMemoryIndex(pm.id, next.text);
+    });
     return change;
   };
 
+  /**
+   * 平滑兼容迁移与双向同步 `<pmMemoryDir>/<pmId>/MEMORY.md`：
+   * - `MEMORY.md` 不存在且库里现有性格设定非空时自动无损写入 `MEMORY.md`；
+   * - `MEMORY.md` 在磁盘上被 PM（经 `addDirs` 工具）或用户手改过时，记入 `actor: "file"` 历史并同步更新库与 `personas/pm-<id>.md`，支持资料页 Undo。
+   */
+  function reconcilePmMemoryIndex(pmId: PmId, activePending?: Pending): "recorded" | "rewritten" | null {
+    if (pmMemoryDir === undefined) return null;
+    const pm = pmRow(pmId);
+    if (pm === null) return null;
+    const dbText = pm.persona ?? "";
+    const disk = readPmMemoryIndex(pmMemoryDir, pmId);
+    if (disk === null) {
+      if (dbText !== "") {
+        persistPmMemoryIndex(pmId, dbText);
+        return "rewritten";
+      }
+      return null;
+    }
+    if ("oversize" in disk) {
+      // 进不了数据库（MAX_PERSONA_BYTES）。自己写的不会超，一定是 PM 或用户手改的：先原样挪成子文件保全，再按数据库重写；
+      // 挪不动就保持原状（提示词照用数据库里的），绝不直接覆盖掉别人写的内容
+      if (isPmArchived(pmId)) return null;
+      const kept = quarantinePmMemoryIndex(pmMemoryDir, pmId, now());
+      if (kept === null) {
+        console.error(`${LOG_PREFIX} MEMORY.md 超过 ${MAX_PERSONA_BYTES} 字节且挪不走，暂按数据库加载、不覆盖：pm ${pmId}`);
+        return null;
+      }
+      console.error(`${LOG_PREFIX} MEMORY.md 超过 ${MAX_PERSONA_BYTES} 字节，原文已挪到 ${kept}，按数据库重写：pm ${pmId}`);
+      persistPmMemoryIndex(pmId, dbText);
+      return "rewritten";
+    }
+    const diskText = disk.text;
+    const hash = contentHash(diskText);
+    if (diskText === dbText) {
+      knownMemoryIndexHash.set(pmId, hash);
+      return null;
+    }
+    const lastKnown = knownMemoryIndexHash.get(pmId);
+    if (hash === lastKnown || (pm.persona_file_hash !== null && hash === pm.persona_file_hash)) {
+      persistPmMemoryIndex(pmId, dbText);
+      return "rewritten";
+    }
+    if (isPmArchived(pmId)) return null;
+    knownMemoryIndexHash.set(pmId, hash);
+    if (activePending !== undefined) {
+      editPersonaIn(activePending, pm, { text: diskText, mode: pm.mode as PmMode, agent: effectiveAgent(pm), reason: null }, { actor: "file" });
+      return "recorded";
+    }
+    if (!db.inTransaction) {
+      write((txPending) => {
+        const fresh = pmRow(pmId);
+        if (fresh !== null) {
+          editPersonaIn(txPending, fresh, { text: diskText, mode: fresh.mode as PmMode, agent: effectiveAgent(fresh), reason: null }, { actor: "file" });
+        }
+      });
+      return "recorded";
+    }
+    return null;
+  }
+
   /** 校验并改性格设定（editPersona、hub persona.edit），在调用方的事务里。 */
   const editPersonaChecked = (p: Pending, pmId: PmId, input: EditPersonaInput, editor: PersonaEditor): PersonaChange | null => {
-    const pm = requirePm(pmId);
+    requirePm(pmId);
     assertPmNotArchived(pmId);
+    reconcilePmMemoryIndex(pmId, p);
+    const pm = requirePm(pmId);
     const touchesAgent = input.vendor !== undefined || input.model !== undefined || input.effort !== undefined;
     if (input.text === undefined && input.mode === undefined && !touchesAgent) {
       throw fail("invalid", "新的性格设定正文、模式、厂商、模型、思考程度至少给一个");
@@ -387,10 +492,12 @@ export function createLedgerPersona(
     if (pm.persona === null) {
       if (content !== null) {
         db.run("UPDATE pms SET persona = ?, persona_file = ?, persona_file_hash = ? WHERE id = ?", content, file, contentHash(content), pm.id);
+        if (content !== "") persistPmMemoryIndex(pm.id, content);
         return null;
       }
       db.run("UPDATE pms SET persona = ? WHERE id = ?", "", pm.id);
       persistPersonaFile(pm.id, "");
+      persistPmMemoryIndex(pm.id, "");
       return "rewritten";
     }
     // 2. 文件不在或读不了
@@ -412,6 +519,7 @@ export function createLedgerPersona(
     }
     if (pm.persona_file_hash === null) {
       persistPersonaFile(pm.id, pm.persona);
+      persistPmMemoryIndex(pm.id, pm.persona);
       return "rewritten";
     }
     if (utf8Bytes(content) > MAX_PERSONA_BYTES) {
@@ -464,7 +572,10 @@ export function createLedgerPersona(
     const conversation = toConversation(conversationRow);
     p.changes.push({ type: "conversation.created", data: { conversation } });
     const session = insertSession(p, { conversationId: conversation.id, pmId, cwd, addDirs: [], generation: 1, ...agent });
-    p.after.push(() => persistPersonaFile(pmId, input.persona));
+    p.after.push(() => {
+      persistPersonaFile(pmId, input.persona);
+      if (input.persona !== "") persistPmMemoryIndex(pmId, input.persona);
+    });
     return { pm, conversation, sessionId: session.id };
   };
 
@@ -472,6 +583,7 @@ export function createLedgerPersona(
     const row = db.get<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE id = ?", changeId);
     if (row === undefined) throw fail("not_found", `没有编号 ${changeId} 的修改记录`);
     assertPmNotArchived(row.pm_id);
+    reconcilePmMemoryIndex(row.pm_id);
     const change = write((p) => {
       const latest = db.get<{ id: number }>("SELECT id FROM persona_changes WHERE pm_id = ? ORDER BY id DESC LIMIT 1", row.pm_id)!;
       if (latest.id !== row.id) throw fail("conflict", "只能撤销最近一次修改");
@@ -498,6 +610,10 @@ export function createLedgerPersona(
       const outcome = syncPersonaFile(pm);
       if (outcome === "recorded") result.recordedPmIds.push(pm.id);
       else if (outcome === "rewritten") result.rewrittenPmIds.push(pm.id);
+      if (outcome !== "recorded") {
+        const memOutcome = reconcilePmMemoryIndex(pm.id);
+        if (memOutcome === "recorded") result.recordedPmIds.push(pm.id);
+      }
     }
     return result;
   };
@@ -679,9 +795,11 @@ export function createLedgerPersona(
         p.changes.push({ type: "pm.removed", data: { pmId } });
 
         p.after.push(() => {
+          knownMemoryIndexHash.delete(pmId);
           if (personasDir !== undefined) {
             rmSync(personaFilePath(personasDir, pmId), { recursive: true, force: true });
           }
+          rmSync(pmMemoryDirPath(subfilesRoot, pmId), { recursive: true, force: true });
           rmSync(join(pmHomeRoot, String(pmId)), { recursive: true, force: true });
           for (const projectId of projectIds) {
             rmSync(join(files.worktreesDir, String(projectId)), { recursive: true, force: true });
@@ -702,6 +820,28 @@ export function createLedgerPersona(
     });
   };
 
+  const listPmMemoryFiles = (pmId: PmId): PmMemoryFilesList => {
+    requirePm(pmId);
+    return listMemorySubfiles(subfilesRoot, pmId);
+  };
+
+  const getPmMemoryFile = (pmId: PmId, name: string): PmMemoryFileDetail => {
+    requirePm(pmId);
+    return readMemorySubfile(subfilesRoot, pmId, name);
+  };
+
+  const putPmMemoryFile = (pmId: PmId, name: string, content: string): { file: PmMemoryFileDetail; totalBytes: number } => {
+    requirePm(pmId);
+    assertPmNotArchived(pmId);
+    return writeMemorySubfile(subfilesRoot, pmId, name, content);
+  };
+
+  const deletePmMemoryFile = (pmId: PmId, name: string): void => {
+    requirePm(pmId);
+    assertPmNotArchived(pmId);
+    deleteMemorySubfile(subfilesRoot, pmId, name);
+  };
+
   return {
     pmRow,
     requirePm,
@@ -712,6 +852,11 @@ export function createLedgerPersona(
     privateConversation,
     validName,
     getPersona,
+    reconcilePmMemoryIndex,
+    listPmMemoryFiles,
+    getPmMemoryFile,
+    putPmMemoryFile,
+    deletePmMemoryFile,
     personaRevision,
     personaUpdate,
     editPersonaChecked,
