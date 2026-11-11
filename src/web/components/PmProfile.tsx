@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils.ts";
 import {
+  CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   MAX_PERSONA_BYTES,
   PM_MEMORY_MAX_BYTES,
@@ -226,18 +227,20 @@ function PmEditor({
 
   const draft: AgentDraft = editedAgent ?? draftOf(saved);
   const agentResult = settingOf(draft);
-  const dirty = !agentResult.ok || !sameSetting(agentResult.setting, saved);
-  if (!agentSaving && editedAgent !== null && !dirty) {
+  const agentChanged = !agentResult.ok || !sameSetting(agentResult.setting, saved);
+  if (!agentSaving && editedAgent !== null && editedAgent.modelChoice !== CUSTOM_MODEL && !agentChanged) {
     setEditedAgent(null);
     setAgentError(null);
   }
-  const canSaveAgent = dirty && agentResult.ok && !agentSaving;
+  const canSaveAgent = agentChanged && agentResult.ok && !agentSaving;
 
   const changeAgent = (next: AgentDraft, row: AgentRowKey) => {
     const updated = row === "vendor" ? draftOf({ vendor: next.vendor, model: null, effort: null }) : next;
     const result = settingOf(updated);
     setAgentError(null);
-    setEditedAgent(result.ok && sameSetting(result.setting, saved) ? null : updated);
+    setEditedAgent(
+      updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated,
+    );
   };
 
   const cancelAgent = () => {
@@ -339,7 +342,7 @@ function PmEditor({
           switchingToVendor={persona.switchingToVendor}
           onCustomSubmit={() => void saveAgent()}
         />
-        {dirty && (
+        {editedAgent !== null && (
           <div className="px-4 py-3">
             {agentError && <RowError error={agentError} />}
             <div className={agentError ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>

@@ -1143,6 +1143,43 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(api.callsTo("PUT", /persona$/)[1]?.body).toEqual({ vendor: "claude", model: "claude-opus-5-5", effort: null });
   });
 
+  it("Custom: 已存 opus 时切 Custom 逐字符输入 opus-preview，途经 opus 输入框不卸载不断焦、Cancel 可点且 Save 禁用，输完可成功提交", async () => {
+    const user = userEvent.setup();
+    await boot();
+    serve({ vendor: "claude", model: "opus", effort: "low" });
+    const page = await open(user);
+    const agent = groupIn(page, "Model");
+
+    await user.selectOptions(combo(page, "Model"), "Custom");
+    const name = within(agent).getByRole("textbox", { name: "Model name" });
+    expect(name).toHaveFocus();
+
+    await user.keyboard("opus");
+    expect(within(agent).getByRole("textbox", { name: "Model name" })).toBe(name);
+    expect(name).toHaveValue("opus");
+    expect(name).toHaveFocus();
+    expect(modelCancel(page)).toBeEnabled();
+    expect(modelSave(page)).toBeDisabled();
+    expect(api.callsTo("PUT", /persona$/)).toHaveLength(0);
+
+    await user.keyboard("-preview");
+    expect(name).toHaveValue("opus-preview");
+    expect(name).toHaveFocus();
+    expect(modelSave(page)).toBeEnabled();
+
+    await user.click(modelSave(page)!);
+    await waitFor(() => expect(api.callsTo("PUT", /persona$/)).toHaveLength(1));
+    expect(api.callsTo("PUT", /persona$/)[0]?.body).toEqual({
+      vendor: "claude",
+      model: "opus-preview",
+      effort: "low",
+    });
+    await waitFor(() => expect(combo(page, "Model")).toHaveDisplayValue("Custom: opus-preview"));
+    expect(within(agent).queryByRole("textbox", { name: "Model name" })).not.toBeInTheDocument();
+    expect(modelSave(page)).not.toBeInTheDocument();
+    expect(modelCancel(page)).not.toBeInTheDocument();
+  });
+
   it("换厂商：点 Save 后显示“Switching to Codex…”，厂商下拉与“开新会话”按钮禁用；收到 pm.updated 后自动同步恢复", async () => {
     const user = userEvent.setup();
     const ws = await boot();
