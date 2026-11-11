@@ -6,8 +6,9 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-   DriverError,
+  DriverError,
   EMPTY_TOKEN_USAGE,
+  MAX_STREAMING_TOOL_BLOCKS,
   STDERR_TAIL_CHARS,
   type AgentSessionPatch,
   type AgentSessionRow,
@@ -52,6 +53,7 @@ import {
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
+import { pickStepInput, toolStepSignature } from "../../daemon/driver/protocol.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
   READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
@@ -113,6 +115,8 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   stepTexts: Map<string, string>;
   /** 当前轮已经发出过 ACTIVE 事件的工具 step_id。 */
   seenToolSteps: Set<string>;
+  /** 当前轮尚未闭合的工具 step_id → 最近一次 step 签名（用于早期 GENERATING/PENDING 预览与 ACTIVE 参数补齐去重，终态与轮末清理）。 */
+  previewedToolSteps: Map<string, string>;
   /** 当前轮已经发出过 agent.tool_result 的工具 step_id（防止重复终态事件二次发射）。 */
   completedToolSteps: Set<string>;
   /** agy 通过 background_tasks_changed 等事件显式上报的后台任务（task_id → 任务项）。 */
@@ -168,6 +172,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       vendorSessionId: "",
       stepTexts: new Map(),
       seenToolSteps: new Set(),
+      previewedToolSteps: new Map(),
       completedToolSteps: new Set(),
       reportedTasks: new Map(),
       activeToolSteps: new Map(),
@@ -332,6 +337,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.deniedContinues = 0;
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.previewedToolSteps.clear();
     st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
@@ -701,10 +707,20 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
               : "";
       const parameters = toolInfo?.parameters ?? su.parameters ?? null;
       const toolUseId = `tool-${turnNo}-${stepId}`;
+      const isTerminal = typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state);
+      const isFormalState = su.state === "ACTIVE" || isTerminal || su.state === undefined;
 
-      if (su.state === "ACTIVE" || !st.seenToolSteps.has(stepId)) {
+      const setBoundedPreviewSig = (sig: string) => {
+        if (!st.previewedToolSteps.has(stepId) && st.previewedToolSteps.size >= MAX_STREAMING_TOOL_BLOCKS) {
+          const oldest = st.previewedToolSteps.keys().next().value;
+          if (oldest !== undefined) st.previewedToolSteps.delete(oldest);
+        }
+        st.previewedToolSteps.set(stepId, sig);
+      };
+
+      if (!st.seenToolSteps.has(stepId) && isFormalState) {
         st.seenToolSteps.add(stepId);
-        const row = this.row(st);
+        setBoundedPreviewSig(toolStepSignature(toolName, parameters));
         const convId = this.#conversationIdOf(st);
 
         this.emit(st.id, {
@@ -715,7 +731,22 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           input: parameters,
           at,
         });
+      } else if (!isTerminal && toolName !== "") {
+        const sig = toolStepSignature(toolName, parameters);
+        if (st.previewedToolSteps.get(stepId) !== sig) {
+          setBoundedPreviewSig(sig);
+          this.emit(st.id, {
+            type: "agent.tool_preview",
+            toolUseId,
+            name: toolName,
+            input: pickStepInput(parameters),
+            at,
+          });
+        }
+      }
 
+      if (!isTerminal || !st.completedToolSteps.has(stepId)) {
+        const row = this.row(st);
         if (row?.role === "worker") {
           const violation =
             checkWorkerToolViolation({ toolName, parameters, fallbackScope: proc.fallbackScope, cwd: row.cwd }) ??
@@ -728,21 +759,22 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
             return;
           }
         }
+      }
 
-        if (su.state === "ACTIVE") {
-          const promoted = isExplicitBackgroundToolStep(su, toolName, parameters);
-          st.activeToolSteps.set(stepId, {
-            task_id: stepId,
-            description: extractToolDescription(toolName, parameters),
-            promoted,
-          });
-          if (promoted) {
-            this.#syncBackgroundTasks(st, proc);
-          }
+      if (su.state === "ACTIVE") {
+        const promoted = isExplicitBackgroundToolStep(su, toolName, parameters);
+        st.activeToolSteps.set(stepId, {
+          task_id: stepId,
+          description: extractToolDescription(toolName, parameters),
+          promoted,
+        });
+        if (promoted) {
+          this.#syncBackgroundTasks(st, proc);
         }
       }
 
-      if (typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state)) {
+      if (isTerminal) {
+        st.previewedToolSteps.delete(stepId);
         const removed = st.activeToolSteps.get(stepId);
         st.activeToolSteps.delete(stepId);
         if (removed?.promoted) {
@@ -870,6 +902,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.stopRequested = false;
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.previewedToolSteps.clear();
     st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
@@ -922,6 +955,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#settleUsage(st, res, obj);
     st.stepTexts.clear();
     st.seenToolSteps.clear();
+    st.previewedToolSteps.clear();
     st.completedToolSteps.clear();
     st.seenThinkingSteps.clear();
     st.hasTextSinceLastTool = false;
@@ -1000,6 +1034,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.policyViolation = null;
       st.stepTexts.clear();
       st.seenToolSteps.clear();
+      st.previewedToolSteps.clear();
       st.completedToolSteps.clear();
       st.seenThinkingSteps.clear();
       st.hasTextSinceLastTool = false;

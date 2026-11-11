@@ -24,6 +24,7 @@ import {
   type UsageUpdate,
 } from "@agentclientprotocol/sdk/unstable";
 import { runPs } from "../../../daemon/driver/process.ts";
+import { extractStreamingToolStepInput } from "../../../daemon/driver/protocol.ts";
 import {
   MAX_MESSAGE_BYTES,
   connectorToolAllowed,
@@ -507,6 +508,13 @@ export function defaultExtractAcpToolUse(
 
   const firstPath = toolCall.locations?.[0]?.path;
   let input: unknown = toolCall.rawInput !== undefined ? toolCall.rawInput : previous?.input;
+  if (typeof input === "string") {
+    const parsedStepInput = extractStreamingToolStepInput(input);
+    const prevObj = asRecord(previous?.input);
+    if (Object.keys(parsedStepInput).length > 0 || prevObj) {
+      input = { ...(prevObj ?? {}), ...parsedStepInput };
+    }
+  }
   if (typeof firstPath === "string" && firstPath !== "") {
     const obj = asRecord(input);
     if (obj) {

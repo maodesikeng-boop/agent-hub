@@ -54,10 +54,12 @@ export interface FakeCodexTurnScript {
   /** 工具调用列表。 */
   tools?: Array<{
     id: string;
-    type: "commandExecution" | "fileChange" | "webSearch" | "mcpToolCall" | "collabToolCall";
+    type: "commandExecution" | "fileChange" | "webSearch" | "mcpToolCall" | "collabToolCall" | "collabAgentToolCall";
     command?: string;
     cwd?: string;
     changes?: Array<{ path: string; kind?: { type: string; move_path?: string | null } }>;
+    /** item/fileChange/patchUpdated：模型还在生成补丁时推的结构化 changes（每项一次通知）。 */
+    patchUpdates?: Array<Array<{ path: string; kind?: { type: string }; diff?: string }>>;
     query?: string;
     server?: string;
     tool?: string;
@@ -238,6 +240,13 @@ function runTurn(turnId, threadId, turnScript, input) {
         method: "item/started",
         params: { threadId, turnId, item: { ...tool, status: "inProgress" } },
       });
+      for (const changes of tool.patchUpdates || []) {
+        send({
+          jsonrpc: "2.0",
+          method: "item/fileChange/patchUpdated",
+          params: { threadId, turnId, itemId: tool.id, changes },
+        });
+      }
       if (!turnScript.toolsCompleteAfterRequests) completeTool(tool);
     }
   };
@@ -1181,6 +1190,46 @@ describe("CodexDriver 反向 RPC 审批拦截（Worker 的可写范围与只读�
     ]);
   });
 
+  it("流式 patchUpdated 给的路径只刷新状态行，不当审批依据：item/started 没带路径的改文件审批照样 decline", async () => {
+    const t = makeCodexHarness();
+    const worker = t.addSession({ role: "worker", workerId: 6 });
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            tools: [
+              {
+                id: "fc-stream",
+                type: "fileChange",
+                changes: [],
+                // 第一个在范围内，后面还有范围外的：只拿流式中途的第一个路径放行就越权了
+                patchUpdates: [
+                  [{ path: join(worker.cwd, "ok.txt"), kind: { type: "add" } }],
+                  [
+                    { path: join(worker.cwd, "ok.txt"), kind: { type: "add" } },
+                    { path: join(t.stateDir, "hub.sqlite"), kind: { type: "update" } },
+                  ],
+                ],
+              },
+            ],
+            toolsCompleteAfterRequests: true,
+            serverRequests: [{ id: 971, method: "item/fileChange/requestApproval", params: { itemId: "fc-stream" } }],
+            messageDeltas: ["done"],
+          },
+        ],
+      } satisfies FakeCodexScript),
+    );
+    await t.driver.send(worker.id, user(1, "干活"));
+    await t.waitFor("turn.ended");
+    const decisions = t
+      .rpcIn()
+      .filter((r) => r.id !== undefined && r.method === undefined)
+      .map((r) => ({ id: r.id, result: r.result }));
+    expect(decisions).toEqual([{ id: 971, result: { decision: "decline" } }]);
+    expect(t.of("agent.tool_preview")).toEqual([expect.objectContaining({ toolUseId: "fc-stream", input: { file_path: join(worker.cwd, "ok.txt") } })]);
+  });
+
   it("改名的目标（kind.move_path，*** Move to:）也判断；grantRoot 在范围外就拒；条目结束后记下的路径删掉", async () => {
     const t = makeCodexHarness();
     const worker = t.addSession({ role: "worker", workerId: 5 });
@@ -1892,5 +1941,70 @@ describe("找不到 codex 程序", () => {
     const err = await t.driver.send(s.id, user(1, "hi")).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe("codex_not_found");
     expect((err as { retryable?: boolean }).retryable).toBe(true);
+  });
+});
+
+describe("CodexDriver 流式补丁文件路径早捕获", () => {
+  it("fileChange 的 item/started 尚无路径时，item/fileChange/patchUpdated 的第一个路径提前发 agent.tool_preview；同一路径不重复发，不重复发 agent.tool", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            tools: [
+              {
+                id: "fc-stream-1",
+                type: "fileChange",
+                changes: [],
+                patchUpdates: [
+                  [{ path: "src/codex-early.ts", kind: { type: "update" }, diff: "@@" }],
+                  [{ path: "src/codex-early.ts", kind: { type: "update" }, diff: "@@\n+const x = 1;" }],
+                  [
+                    { path: "src/codex-early.ts", kind: { type: "update" }, diff: "@@\n+const x = 1;" },
+                    { path: "src/other.ts", kind: { type: "add" }, diff: "+y" },
+                  ],
+                ],
+              },
+            ],
+            messageDeltas: ["改好了"],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "改文件"));
+    await t.waitFor("turn.ended");
+
+    expect(t.of("agent.tool")).toHaveLength(1);
+    expect(t.of("agent.tool_preview")).toEqual([
+      expect.objectContaining({
+        toolUseId: "fc-stream-1",
+        name: "fileChange",
+        input: { file_path: "src/codex-early.ts" },
+      }),
+    ]);
+  });
+
+  it("item/started 已带路径时 patchUpdated 给同一路径不再发预览", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            tools: [
+              {
+                id: "fc-known",
+                type: "fileChange",
+                changes: [{ path: "src/known.ts", kind: { type: "update" } }],
+                patchUpdates: [[{ path: "src/known.ts", kind: { type: "update" }, diff: "@@" }]],
+              },
+            ],
+            messageDeltas: ["好"],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "改"));
+    await t.waitFor("turn.ended");
+    expect(t.of("agent.tool_preview")).toEqual([]);
   });
 });

@@ -35,7 +35,7 @@ export type FailureKind = "busy" | "quota" | "network" | "missing" | "start" | "
 /**
  * 工具的通用动作（docs/vendor-plugin-design.md 的 A16）：状态文案、hub worker log --stats 的分类只认这些（shared/step-labels.ts），
  * 不认厂商的工具名。各家在 spec 的 tools.actions 里把自己的工具名翻成它。
- * read、edit、write 的文案带文件名（Reading a.ts）；web_search、web_fetch 都算“上网”类；connector：调用连接器（MCP）工具。
+ * read、edit、write 的文案带文件名（Reading a.ts）；web_search、web_fetch 都算“上网”类；connector：调用连接器（MCP）工具；connector_resource：列 / 读连接器（MCP）的资源。
  */
 export type ToolAction =
   | "command"
@@ -49,7 +49,8 @@ export type ToolAction =
   | "subagent"
   | "todo"
   | "tool_search"
-  | "connector";
+  | "connector"
+  | "connector_resource";
 
 /** 该厂商跑 Router 轨道 B 单轮极速分派时的默认快模型预设（docs/router-design.md 6.1 节）。 */
 export interface RouterModelPreset {

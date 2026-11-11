@@ -86,6 +86,12 @@ export default defineVendor({
       webSearch: "web_search",
       web_search: "web_search",
       mcpToolCall: "connector",
+      list_mcp_resources: "connector_resource",
+      list_mcp_resource_templates: "connector_resource",
+      read_mcp_resource: "connector_resource",
+      // 多 agent 协作（spawn / send / wait 子 agent）：app-server 的 item.type，老版本叫 collabToolCall
+      collabAgentToolCall: "subagent",
+      collabToolCall: "subagent",
     },
   },
   capabilities: {

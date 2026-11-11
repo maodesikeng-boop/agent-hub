@@ -8,6 +8,7 @@ import type {
   AgentThinkingEvent,
   AgentVendor,
   AgentToolEvent,
+  AgentToolPreviewEvent,
   AgentToolResultEvent,
   ApiRetryInfo,
   LaunchFiles,
@@ -15,7 +16,7 @@ import type {
   RateLimitWindow,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
-import { lineUuid, userContent } from "../../daemon/driver/protocol.ts";
+import { StreamingToolPreviewTracker, lineUuid, pickStepInput, userContent } from "../../daemon/driver/protocol.ts";
 
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
@@ -166,26 +167,75 @@ export function parseAssistant(
 }
 
 /**
- * --include-partial-messages 开启时的 stream_event：把正文块的 content_block_start / text_delta 转成 agent.text_delta。
- * 思考、工具输入和完整 assistant 仍照旧走 parseAssistant，不在这里重复发。
+ * --include-partial-messages 开启时的 stream_event：
+ * - 正文块的 content_block_start / text_delta → agent.text_delta；
+ * - 工具块的 content_block_start(type === "tool_use") / input_json_delta → 纯内存轻量 agent.tool_preview（仅在工具起点和提取到路径/skill 时各发一次）。
+ * 思考和完整入库的 agent.tool / agent.text 仍照旧走 parseAssistant，不重复入库。
  */
-export function parseStreamEvent(obj: Record<string, unknown>, at: number): AgentTextDeltaEvent | null {
+export function parseStreamEvent(
+  obj: Record<string, unknown>,
+  at: number,
+  toolTracker?: StreamingToolPreviewTracker,
+): AgentTextDeltaEvent | AgentToolPreviewEvent | null {
   const event = obj.event as
     | {
         type?: unknown;
-        content_block?: { type?: unknown; text?: unknown };
-        delta?: { type?: unknown; text?: unknown };
+        index?: unknown;
+        content_block?: { type?: unknown; text?: unknown; id?: unknown; name?: unknown; input?: unknown };
+        delta?: { type?: unknown; text?: unknown; partial_json?: unknown };
       }
     | undefined;
   if (!event || typeof event !== "object") return null;
-  if (event.type === "content_block_start" && event.content_block?.type === "text") {
-    const initial = typeof event.content_block.text === "string" ? event.content_block.text : "";
-    return { type: "agent.text_delta", delta: initial, reset: true, at, ...subtaskOf(obj) };
+  const subtask = subtaskOf(obj);
+  // 子任务（parent_tool_use_id）的流和主 agent 的流可以交错（后台子 agent），块序号各自从 0 数：子任务的工具预览账本本来就不显示，
+  // 这里不碰跟踪器，免得它的 message_start 清掉、同序号的块盖掉主 agent 正在拼的工具参数
+  const mainTracker = subtask.parentToolUseId === undefined ? toolTracker : undefined;
+  if (event.type === "message_start" || event.type === "message_stop") {
+    mainTracker?.clear();
+    return null;
   }
-  if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-    const text = typeof event.delta.text === "string" ? event.delta.text : "";
-    if (text === "") return null;
-    return { type: "agent.text_delta", delta: text, at, ...subtaskOf(obj) };
+  if (event.type === "content_block_start") {
+    if (event.content_block?.type === "text") {
+      const initial = typeof event.content_block.text === "string" ? event.content_block.text : "";
+      return { type: "agent.text_delta", delta: initial, reset: true, at, ...subtask };
+    }
+    if (event.content_block?.type === "tool_use") {
+      if (subtask.parentToolUseId !== undefined) return null;
+      const name = typeof event.content_block.name === "string" ? event.content_block.name : "";
+      if (name === "") return null;
+      const toolUseId =
+        typeof event.content_block.id === "string" && event.content_block.id !== ""
+          ? event.content_block.id
+          : undefined;
+      const index = typeof event.index === "number" ? event.index : 0;
+      if (mainTracker) return mainTracker.start(index, { toolUseId, name, initialInput: event.content_block.input, at });
+      return {
+        type: "agent.tool_preview",
+        ...(toolUseId ? { toolUseId } : {}),
+        name,
+        input: pickStepInput(event.content_block.input),
+        at,
+      };
+    }
+    return null;
+  }
+  if (event.type === "content_block_delta") {
+    if (event.delta?.type === "text_delta") {
+      const text = typeof event.delta.text === "string" ? event.delta.text : "";
+      if (text === "") return null;
+      return { type: "agent.text_delta", delta: text, at, ...subtask };
+    }
+    if (event.delta?.type === "input_json_delta") {
+      if (!mainTracker) return null;
+      const partial = typeof event.delta.partial_json === "string" ? event.delta.partial_json : "";
+      const index = typeof event.index === "number" ? event.index : 0;
+      return mainTracker.appendJsonDelta(index, partial, at);
+    }
+    return null;
+  }
+  if (event.type === "content_block_stop") {
+    if (mainTracker && typeof event.index === "number") mainTracker.end(event.index);
+    return null;
   }
   return null;
 }

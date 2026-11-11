@@ -759,9 +759,15 @@ export type AgentStep =
   | { type: "text" }
   | { type: "tool_use"; name: string; input: AgentStepInput };
 
-/** tool_use 的 input 里状态要用的字段（Skill 的 skill、读写文件的路径等），别的不带。 */
+/** tool_use 的 input 里状态要用的字段（Skill 的 skill、读写文件的路径、连接器的服务名与动作名等），别的不带。 */
 export interface AgentStepInput {
   skill?: string;
+  /** 连接器（MCP）服务名：codex mcpToolCall 的 server、agy call_mcp_tool / list_resources 的 ServerName。 */
+  server?: string;
+  ServerName?: string;
+  /** 连接器（MCP）动作名：codex mcpToolCall 的 tool、agy call_mcp_tool 的 ToolName。 */
+  tool?: string;
+  ToolName?: string;
   file_path?: string;
   notebook_path?: string;
   AbsolutePath?: string;
