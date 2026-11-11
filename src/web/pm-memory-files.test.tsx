@@ -19,6 +19,7 @@ import {
   makePm,
   makeSession,
   makeSnapshot,
+  openFirstConversation,
 } from "./test-utils.ts";
 
 function singlePmSnapshot(): StateSnapshot {
@@ -30,8 +31,10 @@ function singlePmSnapshot(): StateSnapshot {
   });
 }
 
-async function openProfile(api: FakeApi) {
+async function openProfile(api: FakeApi, snapshot: StateSnapshot) {
   const user = userEvent.setup();
+  // 电脑外壳空 hash 默认落地 #/router（docs/ui-standard.md 第 21 条），资料页按钮在对话顶栏，先打开第一个对话
+  openFirstConversation(snapshot);
   api.install();
   installFakeWebSocket();
   render(<App />);
@@ -45,7 +48,8 @@ async function openProfile(api: FakeApi) {
 
 describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
   it("默认收起且不提前请求接口；平时不挂配额数字，严禁用 · 中点拼接；展开后按需查看、编辑、新建、删除子文件", async () => {
-    const api = new FakeApi(singlePmSnapshot());
+    const snapshot = singlePmSnapshot();
+    const api = new FakeApi(snapshot);
     const store = new Map<string, PmMemoryFileDetail>([
       [
         "architecture.md",
@@ -81,7 +85,7 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
       return { status: 204 };
     };
 
-    const { user, page } = await openProfile(api);
+    const { user, page } = await openProfile(api, snapshot);
 
     // 1. 位于 Persona 下方、History 上方，默认收起，且未展开前绝不拉取 /memory-files
     const personaGroup = within(page).getByRole("region", { name: "Persona" });
@@ -145,7 +149,8 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
   });
 
   it("接近或达到上限时柔和提示：Persona 超过/接近 200 行提示拆分，子文件接近/满 50 个柔和提示并禁用 New", async () => {
-    const api = new FakeApi(singlePmSnapshot());
+    const snapshot = singlePmSnapshot();
+    const api = new FakeApi(snapshot);
     const nearLimitPersona = Array.from({ length: PM_MEMORY_MAX_LINES + 5 }, (_, i) => `rule ${i + 1}`).join("\n");
     api.getPersona = (pmId) => ({ status: 200, body: makePersonaView({ pmId, text: nearLimitPersona }) });
     const fiftyFiles: PmMemoryFileSummary[] = Array.from({ length: PM_MEMORY_MAX_SUBFILES }, (_, i) => ({
@@ -155,7 +160,7 @@ describe("PmProfile 记忆子文件折叠管理（Memory files）", () => {
     }));
     api.getPmMemoryFiles = () => ({ status: 200, body: { files: fiftyFiles, totalBytes: fiftyFiles.length * 128 } });
 
-    const { user, page } = await openProfile(api);
+    const { user, page } = await openProfile(api, snapshot);
     const personaGroup = within(page).getByRole("region", { name: "Persona" });
     expect(personaGroup.textContent).toMatch(/200 lines/i);
 

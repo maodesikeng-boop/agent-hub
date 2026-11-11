@@ -1,11 +1,15 @@
 // 从 HubState 算出界面要用的东西。提醒规则（等你、等你确定）在 shared/reminders.ts，和守护进程的推送共用，这里转出去。
 export {
+  askingConversations,
   pendingAsks,
+  routerReminderSummary,
   runningWorkerCount,
   sessionOf,
+  unreadRouterReports,
   visibleSessionOf,
   waitingConversations,
   type LastSeen,
+  type RouterReminderSummary,
 } from "../shared/reminders.ts";
 import {
   VENDOR_LIST,
@@ -23,6 +27,7 @@ import {
   isAgentVendor,
   vendorSpec,
   isQuotaExhausted,
+  pendingDecisionsOf as devicePendingDecisionsOf,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -32,6 +37,7 @@ import {
   type HealthEntry,
   type Message,
   type MessageId,
+  type PendingDecision,
   type TokenUsage,
   type Pm,
   type PmId,
@@ -41,6 +47,8 @@ import {
   type QuotaWindowKey,
   type RateLimitInfo,
   type RateLimitWindow,
+  type RouterCommandRecord,
+  type RouterReportItem,
   type ProjectFolder,
   type SessionId,
   type SessionState,
@@ -48,12 +56,15 @@ import {
   type WorkerId,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
-import { computeGateImpact, type PendingDecision } from "../shared/decisions.ts";
+import { computeGateImpact } from "../shared/decisions.ts";
 import {
   isQuietMessage,
   renewingIn,
+  routerReminderSummary,
   runningWorkerCount,
   sessionOf,
+  unreadRouterReports,
+  type RouterReminderSummary,
 } from "../shared/reminders.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
@@ -818,6 +829,266 @@ export function groupMessages(all: Message[]): RenderItem[] {
   }
   close();
   return items;
+}
+
+// ---- Router（总助）跨设备同源聚合视图（WeakMap 引用缓存） ----
+
+export interface DeviceRouterView {
+  decisions: PendingDecision[];
+  reports: RouterReportItem[];
+}
+
+const deviceRouterViewCache = new WeakMap<
+  readonly PendingDecision[],
+  WeakMap<readonly RouterReportItem[], DeviceRouterView>
+>();
+
+/** 单台设备的 Router 活跃视图（待决项 + 未读汇报），输入切片未变时返回同一对象引用（===）。 */
+export function deviceRouterView(state: HubState, deviceId = "local"): DeviceRouterView {
+  const decisions = devicePendingDecisionsOf(state, deviceId);
+  const reports = unreadRouterReports(state);
+  let byReports = deviceRouterViewCache.get(decisions);
+  if (!byReports) {
+    byReports = new WeakMap();
+    deviceRouterViewCache.set(decisions, byReports);
+  }
+  let cached = byReports.get(reports);
+  if (!cached) {
+    cached = { decisions, reports };
+    byReports.set(reports, cached);
+  }
+  return cached;
+}
+
+export interface FleetRouterDeviceInput {
+  id: string;
+  /** devices.ts 的 DeviceKey：本机传 ""（缺省按 self ? "" : id）。 */
+  key?: string;
+  name: string;
+  self: boolean;
+  online: boolean;
+  state: HubState;
+}
+
+export interface FleetDecisionEntry {
+  decision: PendingDecision;
+  deviceKey: string;
+  deviceId: string;
+  deviceName: string;
+  self: boolean;
+  online: boolean;
+  avatarKey: number;
+}
+
+export interface FleetReportEntry {
+  key: string;
+  report: RouterReportItem;
+  deviceKey: string;
+  deviceId: string;
+  deviceName: string;
+  self: boolean;
+  online: boolean;
+  pmName: string;
+  projectName: string | null;
+  avatarKey: number;
+}
+
+export interface RouterTargetCandidate {
+  key: string;
+  deviceKey: string;
+  deviceId: string;
+  deviceName: string;
+  self: boolean;
+  online: boolean;
+  pmId: PmId;
+  pmName: string;
+  projectId: ProjectId | null;
+  projectName: string | null;
+  conversationId: ConversationId;
+  avatarKey: number;
+  label: string;
+}
+
+export interface FleetRouterView {
+  decisions: FleetDecisionEntry[];
+  reports: FleetReportEntry[];
+  commands: RouterCommandRecord[];
+  targets: RouterTargetCandidate[];
+  summary: RouterReminderSummary;
+  multiDevice: boolean;
+}
+
+const EMPTY_ROUTER_COMMANDS: RouterCommandRecord[] = [];
+/** 还没就绪的设备共用同一份空视图：每次给新的 [] 会让下面的指纹比较永远不等，整个舰队视图次次重算。 */
+const EMPTY_DEVICE_ROUTER_VIEW: DeviceRouterView = { decisions: [], reports: [] };
+const pmConversationSigCache = new WeakMap<HubState["conversations"], string>();
+
+function pmConversationSignature(conversations: HubState["conversations"]): string {
+  const hit = pmConversationSigCache.get(conversations);
+  if (hit !== undefined) return hit;
+  const parts: string[] = [];
+  for (const { conversation } of Object.values(conversations)) {
+    if (conversation.kind === "worker") continue;
+    parts.push(`${conversation.id}:${conversation.pmId ?? ""}:${conversation.projectId ?? ""}`);
+  }
+  parts.sort();
+  const sig = parts.join("|");
+  pmConversationSigCache.set(conversations, sig);
+  return sig;
+}
+
+interface FleetDeviceFingerprint {
+  id: string;
+  key: string;
+  name: string;
+  self: boolean;
+  online: boolean;
+  phase: HubState["phase"];
+  decisions: readonly PendingDecision[];
+  reports: readonly RouterReportItem[];
+  commands: readonly RouterCommandRecord[];
+  pms: readonly Pm[];
+  projects: readonly Project[];
+  pmConvSig: string;
+}
+
+let lastFleetMemo: { deps: FleetDeviceFingerprint[]; value: FleetRouterView } | null = null;
+
+/**
+ * 汇总全舰队（本机 + 全部已配对远端设备）的待决拍板、未读汇报、本机最近发令回执与 `@` 目标候选。
+ * 流式文字推送与 Worker 历史消息滚动均不会击穿缓存，输入等价时返回完全相同的 `FleetRouterView` 引用（===）。
+ */
+export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): FleetRouterView {
+  const deps: FleetDeviceFingerprint[] = devices.map((d) => {
+    const logicalId = d.self ? "local" : d.id;
+    const view = d.state.phase === "ready" ? deviceRouterView(d.state, logicalId) : EMPTY_DEVICE_ROUTER_VIEW;
+    return {
+      id: d.id,
+      key: d.key ?? (d.self ? "" : d.id),
+      name: d.name,
+      self: d.self,
+      online: d.online,
+      phase: d.state.phase,
+      decisions: view.decisions,
+      reports: view.reports,
+      commands: d.self ? d.state.router.commands : EMPTY_ROUTER_COMMANDS,
+      pms: d.state.pms,
+      projects: d.state.projects,
+      pmConvSig: pmConversationSignature(d.state.conversations),
+    };
+  });
+
+  if (
+    lastFleetMemo !== null &&
+    lastFleetMemo.deps.length === deps.length &&
+    deps.every((cur, idx) => {
+      const prev = lastFleetMemo!.deps[idx]!;
+      return (
+        prev.id === cur.id &&
+        prev.key === cur.key &&
+        prev.name === cur.name &&
+        prev.self === cur.self &&
+        prev.online === cur.online &&
+        prev.phase === cur.phase &&
+        prev.decisions === cur.decisions &&
+        prev.reports === cur.reports &&
+        prev.commands === cur.commands &&
+        prev.pms === cur.pms &&
+        prev.projects === cur.projects &&
+        prev.pmConvSig === cur.pmConvSig
+      );
+    })
+  ) {
+    return lastFleetMemo.value;
+  }
+
+  const decisions: FleetDecisionEntry[] = [];
+  const reports: FleetReportEntry[] = [];
+  const targets: RouterTargetCandidate[] = [];
+  let commands: RouterCommandRecord[] = EMPTY_ROUTER_COMMANDS;
+
+  for (let i = 0; i < devices.length; i++) {
+    const d = devices[i]!;
+    const fp = deps[i]!;
+    if (d.self) commands = [...fp.commands];
+    if (d.state.phase !== "ready") continue;
+
+    const pmById = new Map<PmId, Pm>();
+    for (const pm of d.state.pms) pmById.set(pm.id, pm);
+    const projectById = new Map<ProjectId, Project>();
+    for (const proj of d.state.projects) projectById.set(proj.id, proj);
+
+    for (const dec of fp.decisions) {
+      decisions.push({
+        decision: dec,
+        deviceKey: fp.key,
+        deviceId: d.self ? "local" : d.id,
+        deviceName: d.name,
+        self: d.self,
+        online: d.online,
+        avatarKey: dec.pmId,
+      });
+    }
+
+    for (const rep of fp.reports) {
+      const pm = pmById.get(rep.pmId);
+      const proj = rep.projectId === null ? undefined : projectById.get(rep.projectId);
+      reports.push({
+        key: `report:${d.self ? "local" : d.id}:${rep.id}`,
+        report: rep,
+        deviceKey: fp.key,
+        deviceId: d.self ? "local" : d.id,
+        deviceName: d.name,
+        self: d.self,
+        online: d.online,
+        pmName: pm?.name ?? `#${rep.pmId}`,
+        projectName: proj?.name ?? null,
+        avatarKey: rep.pmId,
+      });
+    }
+
+    for (const { conversation } of Object.values(d.state.conversations)) {
+      if (conversation.kind === "worker" || conversation.pmId === null) continue;
+      const pm = pmById.get(conversation.pmId);
+      if (!pm || pm.archivedAt != null) continue;
+      const proj = d.state.projects.find((p) => p.conversationId === conversation.id) ?? null;
+      targets.push({
+        key: `${fp.key || "local"}:${conversation.id}`,
+        deviceKey: fp.key,
+        deviceId: d.self ? "local" : d.id,
+        deviceName: d.name,
+        self: d.self,
+        online: d.online,
+        pmId: pm.id,
+        pmName: pm.name,
+        projectId: proj?.id ?? null,
+        projectName: proj?.name ?? null,
+        conversationId: conversation.id,
+        avatarKey: pm.id,
+        label: proj?.name ?? pm.name,
+      });
+    }
+  }
+
+  decisions.sort((a, b) => b.decision.createdAt - a.decision.createdAt || a.decision.key.localeCompare(b.decision.key));
+  reports.sort((a, b) => b.report.createdAt - a.report.createdAt || b.report.id - a.report.id);
+
+  const summary = routerReminderSummary(
+    devices
+      .filter((d) => d.state.phase === "ready")
+      .map((d) => ({ deviceId: d.self ? "local" : d.id, state: d.state })),
+  );
+
+  const value: FleetRouterView = {
+    decisions,
+    reports,
+    commands,
+    targets,
+    summary,
+    multiDevice: devices.length > 1,
+  };
+  lastFleetMemo = { deps, value };
+  return value;
 }
 
 // ---- 任务流图（Task Graph）与同源拍板（PendingDecision）选择器 ----

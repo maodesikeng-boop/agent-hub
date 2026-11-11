@@ -1,12 +1,15 @@
 // 同源待决拍板投影（PendingDecision）：统一汇聚活跃任务图中的 waiting_user 门禁节点与 Router 独立待决项，
-// 不造割裂双轨；按输入快照对象做 WeakMap 引用缓存，保证前端 selector 输入未变时返回同一引用。
+// 不造割裂双轨；按底层数据切片引用做多级 WeakMap 缓存，保证 StateSnapshot 与 HubState（含流式更新）均能返回同一数组引用。
 
-import type { StateSnapshot } from "./api.ts";
 import {
   askOf,
+  type Conversation,
   type ConversationId,
+  type Message,
   type MessageId,
+  type Pm,
   type PmId,
+  type Project,
   type ProjectId,
   type RouterItemId,
   type TaskGraph,
@@ -14,6 +17,8 @@ import {
   type TaskNode,
   type TaskNodeKey,
 } from "./domain.ts";
+import type { ConversationSnapshot } from "./api.ts";
+import type { RouterItem, RouterSlice } from "./router.ts";
 
 export type PendingDecisionSource =
   | {
@@ -49,10 +54,21 @@ export interface PendingDecision {
   source: PendingDecisionSource;
 }
 
-export type DecisionSnapshotInput = Pick<
-  StateSnapshot,
-  "pms" | "projects" | "conversations" | "router" | "activeTaskGraphs"
->;
+export type DecisionConversationsInput =
+  | readonly (ConversationSnapshot | { conversation?: Conversation; messages: readonly Message[] })[]
+  | Readonly<Record<ConversationId, { conversation: Conversation; messages: readonly Message[] }>>;
+
+export interface DecisionSnapshotInput {
+  pms: readonly Pm[];
+  projects?: readonly Project[];
+  conversations: DecisionConversationsInput;
+  router?: Pick<RouterSlice, "items">;
+  activeTaskGraphs?: readonly TaskGraph[];
+}
+
+const EMPTY_ROUTER_ITEMS: readonly RouterItem[] = [];
+const EMPTY_TASK_GRAPHS: readonly TaskGraph[] = [];
+const EMPTY_PROJECTS: readonly Project[] = [];
 
 /** 计算一个门禁节点当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
 export function computeGateImpact(
@@ -96,49 +112,97 @@ export function computeGateImpact(
   return { blockedNodeCount, nextNodeTitles };
 }
 
-const decisionsCache = new WeakMap<DecisionSnapshotInput, Map<string, PendingDecision[]>>();
+function messagesOfConversation(
+  conversations: DecisionConversationsInput,
+  conversationId: ConversationId,
+): readonly Message[] {
+  if (Array.isArray(conversations)) {
+    const found = conversations.find((c) => c.conversation?.id === conversationId);
+    if (found) return found.messages;
+    // 兼容未传 conversation 字段的单测简化数组：退回扫一遍
+    const fallback: Message[] = [];
+    for (const c of conversations) {
+      if (c.conversation === undefined) fallback.push(...c.messages);
+    }
+    return fallback;
+  }
+  const record = conversations as Readonly<Record<ConversationId, { conversation: Conversation; messages: readonly Message[] }>>;
+  return record[conversationId]?.messages ?? [];
+}
+
+type CacheByProjects = WeakMap<readonly Project[], Map<string, { askMessagesSig: string; list: PendingDecision[] }>>;
+type CacheByPms = WeakMap<readonly Pm[], CacheByProjects>;
+type CacheByGraphs = WeakMap<readonly TaskGraph[], CacheByPms>;
+const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
 
 /**
  * 从单机快照纯投影出当前全部待用户拍板项（门禁节点 + 无 gateRef 的独立 Router 待决项）。
- * 同一份 snapshot 引用与 deviceId 重复调用时返回完全相同的数组引用（===）。
+ * 归档 PM 的项自动跳过；同一份底层数据引用与 deviceId 重复调用时返回完全相同的数组引用（===），且不扫 3 万条 Worker 历史消息。
  */
 export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
-  let byDevice = decisionsCache.get(snapshot);
-  if (byDevice !== undefined) {
-    const cached = byDevice.get(deviceId);
-    if (cached !== undefined) return cached;
-  } else {
-    byDevice = new Map();
-    decisionsCache.set(snapshot, byDevice);
-  }
+  const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
+  const graphs = snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS;
+  const pms = snapshot.pms;
+  const projects = snapshot.projects ?? EMPTY_PROJECTS;
 
-  const pmNameById = new Map<PmId, string>();
-  for (const pm of snapshot.pms) pmNameById.set(pm.id, pm.name);
-
-  const projectNameById = new Map<ProjectId, string>();
-  for (const proj of snapshot.projects) projectNameById.set(proj.id, proj.name);
-
-  // 汇总所有带 gateRef 的消息 ID 与所有任务图门禁绑定的消息 ID，防止任何情况下出现同源双卡
-  const gateMessageIds = new Set<MessageId>();
-  for (const conv of snapshot.conversations) {
-    for (const msg of conv.messages) {
-      if (askOf(msg)?.gateRef !== undefined) gateMessageIds.add(msg.id);
+  // 只在存在带 askMessageId 的 pending router_item 时才针对目标 PM 对话检查是否有 gateRef，避免遍历全量对话
+  let askMessagesSig = "";
+  for (const item of routerItems) {
+    if (item.kind === "decision" && item.status === "pending" && item.askMessageId !== null) {
+      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const targetMsg = msgs.find((m) => m.id === item.askMessageId);
+      const hasGateRef = targetMsg !== undefined && askOf(targetMsg)?.gateRef !== undefined ? "1" : "0";
+      askMessagesSig += `${item.id}:${hasGateRef};`;
     }
   }
 
+  let byGraphs = decisionsCache.get(routerItems);
+  if (!byGraphs) {
+    byGraphs = new WeakMap();
+    decisionsCache.set(routerItems, byGraphs);
+  }
+  let byPms = byGraphs.get(graphs);
+  if (!byPms) {
+    byPms = new WeakMap();
+    byGraphs.set(graphs, byPms);
+  }
+  let byProjects = byPms.get(pms);
+  if (!byProjects) {
+    byProjects = new WeakMap();
+    byPms.set(pms, byProjects);
+  }
+  let byDevice = byProjects.get(projects);
+  if (!byDevice) {
+    byDevice = new Map();
+    byProjects.set(projects, byDevice);
+  }
+  const cached = byDevice.get(deviceId);
+  if (cached !== undefined && cached.askMessagesSig === askMessagesSig) {
+    return cached.list;
+  }
+
+  const pmById = new Map<PmId, Pm>();
+  for (const pm of pms) pmById.set(pm.id, pm);
+
+  const projectNameById = new Map<ProjectId, string>();
+  for (const proj of projects) projectNameById.set(proj.id, proj.name);
+
+  const gateMessageIds = new Set<MessageId>();
   const result: PendingDecision[] = [];
 
-  for (const graph of snapshot.activeTaskGraphs) {
+  for (const graph of graphs) {
     if (graph.status !== "active") continue;
+    const pm = pmById.get(graph.pmId);
+    const archived = pm?.archivedAt != null;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) gateMessageIds.add(node.gateAskMessageId);
-      if (node.kind !== "gate" || node.status !== "waiting_user") continue;
+      if (archived || node.kind !== "gate" || node.status !== "waiting_user") continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
       result.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,
         deviceId,
         pmId: graph.pmId,
-        pmName: pmNameById.get(graph.pmId) ?? `#${graph.pmId}`,
+        pmName: pm?.name ?? `#${graph.pmId}`,
         projectId: graph.projectId,
         projectName: projectNameById.get(graph.projectId) ?? null,
         conversationId: graph.conversationId,
@@ -162,14 +226,21 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     }
   }
 
-  for (const item of snapshot.router.items) {
+  for (const item of routerItems) {
     if (item.kind !== "decision" || item.status !== "pending") continue;
-    if (item.askMessageId !== null && gateMessageIds.has(item.askMessageId)) continue;
+    const pm = pmById.get(item.pmId);
+    if (pm?.archivedAt != null) continue;
+    if (item.askMessageId !== null) {
+      if (gateMessageIds.has(item.askMessageId)) continue;
+      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const targetMsg = msgs.find((m) => m.id === item.askMessageId);
+      if (targetMsg !== undefined && askOf(targetMsg)?.gateRef !== undefined) continue;
+    }
     result.push({
       key: `item:${deviceId}:${item.id}`,
       deviceId,
       pmId: item.pmId,
-      pmName: pmNameById.get(item.pmId) ?? `#${item.pmId}`,
+      pmName: pm?.name ?? `#${item.pmId}`,
       projectId: item.projectId,
       projectName: item.projectId === null ? null : (projectNameById.get(item.projectId) ?? null),
       conversationId: item.conversationId,
@@ -187,6 +258,6 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
   }
 
   result.sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key));
-  byDevice.set(deviceId, result);
+  byDevice.set(deviceId, { askMessagesSig, list: result });
   return result;
 }

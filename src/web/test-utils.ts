@@ -1,6 +1,6 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, emptyRouterSlice, serverInfoFor } from "../shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, emptyRouterSlice, isQuietMessage, serverInfoFor } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   Attachment,
@@ -9,6 +9,7 @@ import type {
   Conversation,
   ConversationSnapshot,
   CreatePmRequest,
+  DecideTaskNodeRequest,
   PickFolderRequest,
   EditPersonaRequest,
   HealthEntry,
@@ -19,13 +20,17 @@ import type {
   Pm,
   PmMemoryFilesList,
   PostMessageRequest,
+  PostRouterCommandRequest,
   Project,
   ProjectFolder,
   PutPmMemoryFileRequest,
+  ResolveRouterItemRequest,
+  RouterItemsPage,
   SessionState,
   SetPublicEntryRequest,
   StateSnapshot,
   SystemMessageMeta,
+  UpdateRouterSettingsRequest,
   VendorSyncApplyRequest,
   VendorSyncPreviewResponse,
   WorkerMessageMeta,
@@ -381,6 +386,102 @@ export class FakeApi {
   quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
+  /** GET /api/router/digest。 */
+  routerDigest: () => Reply | Promise<Reply> = () => ({ status: 200, body: { generatedAt: Date.now(), pms: [] } });
+  /** GET /api/router/items。 */
+  routerItems: (query: URLSearchParams) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { items: [], nextCursor: null, hasMore: false } satisfies RouterItemsPage,
+  });
+  /** POST /api/router/items/:id/resolve。 */
+  resolveRouterItem: (id: number, body: ResolveRouterItemRequest) => Reply | Promise<Reply> = (id) => ({
+    status: 200,
+    body: {
+      item: {
+        id,
+        kind: "report",
+        status: "archived",
+        pmId: 1,
+        projectId: null,
+        conversationId: 1,
+        summary: "",
+        links: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      },
+    },
+  });
+  /** POST /api/router/reports/archive-all。 */
+  archiveAllRouterReports: () => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { archivedIds: [], updatedAt: Date.now() },
+  });
+  /** PUT /api/router/settings。 */
+  putRouterSettings: (body: UpdateRouterSettingsRequest) => Reply | Promise<Reply> = (body) => ({
+    status: 200,
+    body: { settings: { vendor: body.vendor, model: body.model, effort: body.effort, updatedAt: Date.now() } },
+  });
+  /** POST /api/task-graphs/:id/nodes/:nodeKey/decide。 */
+  decideTaskNode: (graphId: number, nodeKey: string, body: DecideTaskNodeRequest) => Reply | Promise<Reply> = (graphId) => ({
+    status: 200,
+    body: {
+      graph: {
+        id: graphId,
+        projectId: 1,
+        pmId: 1,
+        conversationId: 1,
+        title: "任务图",
+        status: "active",
+        nodes: [],
+        edges: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      },
+      messageId: 777,
+    },
+  });
+  /** POST /api/router/commands。 */
+  postRouterCommand: (body: PostRouterCommandRequest) => Reply | Promise<Reply> = (body) => ({
+    status: 200,
+    body: {
+      command: {
+        id: 800,
+        clientId: body.clientId,
+        inputText: body.text,
+        vendor: DEFAULT_AGENT_VENDOR,
+        model: null,
+        effort: null,
+        status: "planning",
+        plan: null,
+        dispatched: null,
+        error: null,
+        durationMs: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    },
+  });
+  /** POST /api/router/commands/:id/retry。 */
+  retryRouterCommand: (id: number) => Reply | Promise<Reply> = (id) => ({
+    status: 200,
+    body: {
+      command: {
+        id,
+        clientId: `retry-${id}`,
+        inputText: "重试指令",
+        vendor: DEFAULT_AGENT_VENDOR,
+        model: null,
+        effort: null,
+        status: "planning",
+        plan: null,
+        dispatched: null,
+        error: null,
+        durationMs: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    },
+  });
   /** GET /api/vendor-sync/preview。 */
   vendorSyncPreview: () => Reply | Promise<Reply> = () => ({
     status: 200,
@@ -480,6 +581,19 @@ export class FakeApi {
     if (unarchive && method === "POST") return jsonResponse(await this.unarchivePm(Number(unarchive[1])));
     const retry = /^\/api\/messages\/(\d+)\/retry$/.exec(url.pathname);
     if (retry && method === "POST") return jsonResponse(await this.retryMessage(Number(retry[1])));
+    if (method === "GET" && url.pathname === API_PATHS.routerDigest) return jsonResponse(await this.routerDigest());
+    if (method === "GET" && url.pathname === API_PATHS.routerItems) return jsonResponse(await this.routerItems(url.searchParams));
+    if (method === "POST" && url.pathname === API_PATHS.routerReportsArchiveAll) return jsonResponse(await this.archiveAllRouterReports());
+    if (method === "PUT" && url.pathname === API_PATHS.routerSettings) return jsonResponse(await this.putRouterSettings(body));
+    if (method === "POST" && url.pathname === API_PATHS.routerCommands) return jsonResponse(await this.postRouterCommand(body));
+    const resolveItem = /^\/api\/router\/items\/(\d+)\/resolve$/.exec(url.pathname);
+    if (resolveItem && method === "POST") return jsonResponse(await this.resolveRouterItem(Number(resolveItem[1]), body));
+    const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);
+    if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1])));
+    const decideNode = /^\/api\/task-graphs\/(\d+)\/nodes\/([^/]+)\/decide$/.exec(url.pathname);
+    if (decideNode && method === "POST") {
+      return jsonResponse(await this.decideTaskNode(Number(decideNode[1]), decodeURIComponent(decideNode[2]!), body));
+    }
     // 文件接口的 HEAD（卡片探测文件是否已被清理）：假后端里文件都在
     if (method === "HEAD" && /^\/api\/(uploads|sent-files)\//.test(url.pathname)) return new Response(null, { status: 200 });
     return jsonResponse({ status: 404, body: { error: "not found" } });
@@ -688,4 +802,18 @@ export function fakeDropData(things: (File | FakeEntry)[]): { files: FileList; i
     webkitGetAsEntry: () => (t instanceof File ? fakeFileEntry(t) : t),
   }));
   return { files: things.map(asFile) as unknown as FileList, items: items as unknown as DataTransferItemList, types: ["Files"] };
+}
+
+/** 若当前网址是空锚点（否则不动显式路由），切到快照里排第一的未归档 PM 对话（无对话时给 `#/c/1` 以落到“暂无对话”占位）。供专测对话页的旧套件复用。 */
+export function openFirstConversation(snapshot: StateSnapshot): void {
+  if (window.location.hash !== "" && window.location.hash !== "#") return;
+  const archived = new Set(snapshot.pms.filter((p) => p.archivedAt != null).map((p) => p.id));
+  const pmConvs = snapshot.conversations.filter((c) => c.conversation.kind !== "worker");
+  const pool = pmConvs.filter((c) => c.conversation.pmId === null || !archived.has(c.conversation.pmId));
+  const list = (pool.length > 0 ? pool : pmConvs).toSorted((a, b) => {
+    const ta = a.messages.findLast((m) => !isQuietMessage(m))?.createdAt ?? a.conversation.createdAt;
+    const tb = b.messages.findLast((m) => !isQuietMessage(m))?.createdAt ?? b.conversation.createdAt;
+    return tb - ta || a.conversation.id - b.conversation.id;
+  });
+  window.history.replaceState(null, "", `/#/c/${list[0]?.conversation.id ?? 1}`);
 }

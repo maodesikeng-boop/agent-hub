@@ -23,6 +23,7 @@ import {
   makeWorkerConversation,
   makeWorkerLine,
   messageChange,
+  openFirstConversation,
   sessionChange,
 } from "./test-utils.ts";
 
@@ -32,6 +33,7 @@ let unmountApp: (() => void) | undefined;
 async function boot(snapshot: StateSnapshot = defaultSnapshot()) {
   unmountApp?.();
   window.location.hash = "";
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();

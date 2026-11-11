@@ -23,6 +23,13 @@ describe("带设备的网址", () => {
     expect(routeHash({ view: "worker", id: 7 })).toBe("#/w/7");
   });
 
+  it("全局水果刀工作台网址 #/router 来回一致，且不挂在单台设备路径下", () => {
+    expect(routeHash({ view: "router" })).toBe("#/router");
+    expect(parseRoute("#/router")).toEqual({ view: "router" });
+    expect(parseRoute(`#/d/${TOKYO}/router`)).toBeNull();
+    expect(parseRoute("#/router/extra")).toBeNull();
+  });
+
   it("设备编号不合法、少了后半截的都认不出来", () => {
     for (const bad of [
       "#/d/../c/1",

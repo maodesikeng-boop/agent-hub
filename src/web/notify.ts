@@ -2,12 +2,12 @@
 // “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_ID, PRODUCT_NAME } from "../shared/names.ts";
-import { WAITING_SETTLE_MS, notificationTag, type ConversationId } from "../shared/index.ts";
+import { WAITING_SETTLE_MS, notificationTag, pendingDecisionsOf, type ConversationId } from "../shared/index.ts";
 import { LOCAL_DEVICE, conversationKey, type DeviceKey } from "./devices.ts";
 import { NEEDS_YOU, YOUR_TURN } from "./format.ts";
 import { stripMarkdown } from "./plainText.ts";
 import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
-import { listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
+import { askingConversations, listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
 import type { HubState } from "./state.ts";
 
 // 规则（等你、等你确定、停稳 3 秒、tag）在 shared/reminders.ts，和守护进程的推送共用
@@ -226,27 +226,52 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     // candidates 的内容变了才重新算；它的引用每次状态变化都是新的（useMemo 跟着 devices 变）
   }, [readyKey, candidatesKey, announce]);
 
-  // 有提问的对话：一直算到处理；新来的提问马上弹通知（每台第一次加载好时本来就有的不弹）
+  // 有提问或同源待决拍板（PendingDecision）的对话：一直算到处理；同一对话同时带 hub ask 与绑定待决项时按对话去重、通知不双弹
   const asks = useMemo(
     () =>
-      ready.flatMap((d) =>
-        Object.keys(d.state.conversations).flatMap((key) =>
-          pendingAsks(d.state, Number(key)).map((message) => ({ device: d.key, conversationId: Number(key), message })),
-        ),
-      ),
+      ready.flatMap((d) => {
+        const msgItems = Object.keys(d.state.conversations).flatMap((key) =>
+          pendingAsks(d.state, Number(key)).map((message) => ({
+            uid: `ask:${d.key}:${message.id}`,
+            device: d.key,
+            conversationId: Number(key),
+            text: message.text,
+          })),
+        );
+        const decisionItems = pendingDecisionsOf(d.state, d.key === LOCAL_DEVICE ? "local" : d.key)
+          .filter(
+            (dec) =>
+              dec.askMessageId === null &&
+              !d.state.pending.some((p) => p.conversationId === dec.conversationId && p.phase !== "failed"),
+          )
+          .map((dec) => ({
+            uid: `dec:${dec.key}`,
+            device: d.key,
+            conversationId: dec.conversationId,
+            text: dec.question,
+          }));
+        return [...msgItems, ...decisionItems];
+      }),
     [devices],
   );
-  const askingKey = asks.map((a) => conversationKey(a.device, a.conversationId)).join(",");
+  const askingKey = useMemo(
+    () =>
+      ready
+        .flatMap((d) =>
+          [...askingConversations(d.state, d.key === LOCAL_DEVICE ? "local" : d.key)].map((id) => conversationKey(d.key, id)),
+        )
+        .join(","),
+    [devices],
+  );
   const asking = useMemo<ReadonlySet<string>>(() => new Set(askingKey === "" ? [] : askingKey.split(",")), [askingKey]);
   const knownAsks = useRef(new Set<string>());
   const asksOpened = useRef(new Set<DeviceKey>());
   useEffect(() => {
     const fresh = new Set(asks.map((a) => a.device).filter((device) => !asksOpened.current.has(device)));
-    for (const { device, conversationId, message } of asks) {
-      const key = `${device}:${message.id}`;
-      if (knownAsks.current.has(key)) continue;
-      knownAsks.current.add(key);
-      if (!fresh.has(device)) announce({ device, id: conversationId }, message.text);
+    for (const { uid, device, conversationId, text } of asks) {
+      if (knownAsks.current.has(uid)) continue;
+      knownAsks.current.add(uid);
+      if (!fresh.has(device)) announce({ device, id: conversationId }, text);
     }
     for (const device of JSON.parse(readyKey) as DeviceKey[]) asksOpened.current.add(device);
   }, [readyKey, asks, announce]);

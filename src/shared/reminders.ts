@@ -1,10 +1,28 @@
 // 提醒规则（m4-plan、M5；联机 P4 从 web/selectors.ts、web/notify.ts 搬来，docs/multi-device-design.md 第 6.2 节）：
-// “等你”（对话停稳 3 秒）、“等你确定”（hub ask 一来就提醒）、通知的 tag。网页（标签页标题、左栏、浏览器通知）和
-// 守护进程（Web Push）用同一份，规则只改这里。
+// “等你”（对话停稳 3 秒）、“等你确定”（hub ask 与同源 PendingDecision）、未读 Router 里程碑汇报与通知的 tag。
+// 网页（标签页标题、左栏置顶水果刀入口、浏览器通知）和守护进程（Web Push）共用同一份规则。
 import { DEVICE_PROXY_PREFIX, type Change, type DeviceId, type LedgerSnapshot, type PushPayload } from "./api.ts";
 import { attachmentsOf } from "./attachments.ts";
-import { askOf, isHandoverTraffic, isSilentTriggerMessage, systemEventOf, type Conversation, type ConversationId, type Message, type MessageId, type Pm, type PmId, type SessionId, type SessionState } from "./domain.ts";
+import { pendingDecisionsOf, type PendingDecision } from "./decisions.ts";
+import {
+  askOf,
+  isHandoverTraffic,
+  isSilentTriggerMessage,
+  systemEventOf,
+  type Conversation,
+  type ConversationId,
+  type Message,
+  type MessageId,
+  type Pm,
+  type PmId,
+  type Project,
+  type SessionId,
+  type SessionState,
+  type TaskGraph,
+} from "./domain.ts";
+import { ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX, ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX } from "./limits.ts";
 import { isRewoundMessage } from "./rewind.ts";
+import { emptyRouterSlice, type RouterItem, type RouterReportItem, type RouterSlice } from "./router.ts";
 
 /** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
 export const WAITING_SETTLE_MS = 3_000;
@@ -16,8 +34,11 @@ const MIRROR_MESSAGES_PER_CONVERSATION = 200;
 export interface ReminderState {
   seq: number;
   pms: Pm[];
+  projects?: Project[];
   conversations: Record<ConversationId, { conversation: Conversation; messages: Message[] }>;
   sessions: SessionState[];
+  router?: RouterSlice;
+  activeTaskGraphs?: TaskGraph[];
   /** 网页自己先显示出来、服务端还没回真消息的用户消息（web/state.ts 的 PendingMessage）；守护进程没有，是空的。 */
   pending: readonly { conversationId: ConversationId; phase: "sending" | "failed" }[];
 }
@@ -149,6 +170,97 @@ export function allPendingAsks(state: ReminderState): { conversationId: Conversa
   return out;
 }
 
+const unreadReportsCache = new WeakMap<readonly RouterItem[], WeakMap<readonly Pm[], RouterReportItem[]>>();
+const NO_REPORTS: RouterReportItem[] = [];
+
+/** 当前单机状态里所有未归档 PM 的未读里程碑汇报（按 createdAt 从新到旧）。 */
+export function unreadRouterReports(state: Pick<ReminderState, "pms" | "router">): RouterReportItem[] {
+  const items = state.router?.items;
+  if (!items || items.length === 0) return NO_REPORTS;
+  let byPms = unreadReportsCache.get(items);
+  if (!byPms) {
+    byPms = new WeakMap();
+    unreadReportsCache.set(items, byPms);
+  }
+  const cached = byPms.get(state.pms);
+  if (cached !== undefined) return cached;
+
+  const archivedPms = new Set<PmId>();
+  for (const pm of state.pms) {
+    if (pm.archivedAt != null) archivedPms.add(pm.id);
+  }
+  const found = items
+    .filter((item): item is RouterReportItem => item.kind === "report" && item.status === "unread" && !archivedPms.has(item.pmId))
+    .toSorted((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+  const res = found.length === 0 ? NO_REPORTS : found;
+  byPms.set(state.pms, res);
+  return res;
+}
+
+/**
+ * 所有处于“等你确定”的对话编号集合：合并传统未答 `hub ask` 与同源 `PendingDecision`（门禁 / 独立 Router 待决项），
+ * 同一个对话同时存在绑定的 `ask` 消息与 `PendingDecision` 时自动按对话去重，不重复计数。
+ */
+export function askingConversations(state: ReminderState, deviceId = "local"): Set<ConversationId> {
+  const set = new Set<ConversationId>();
+  for (const { conversationId } of allPendingAsks(state)) {
+    set.add(conversationId);
+  }
+  for (const decision of pendingDecisionsOf(state, deviceId)) {
+    if (pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) continue;
+    set.add(decision.conversationId);
+  }
+  return set;
+}
+
+export interface RouterReminderSummary {
+  pendingCount: number;
+  unreadReportCount: number;
+  /** 左栏 Router 入口行副标题：第 1 条待决拍板问题 > 最新未读汇报摘要 > "All clear"。 */
+  subtitle: string;
+}
+
+/**
+ * 汇总跨设备 `PendingDecision` 与未读 Router 里程碑汇报，供左栏置顶水果刀入口（圆点、数字与副标题）使用。
+ */
+export function routerReminderSummary(
+  devices: readonly { deviceId: string; state: ReminderState }[],
+): RouterReminderSummary {
+  let pendingCount = 0;
+  let unreadReportCount = 0;
+  let topDecision: PendingDecision | null = null;
+  let topReport: RouterReportItem | null = null;
+
+  for (const { deviceId, state } of devices) {
+    const decisions = pendingDecisionsOf(state, deviceId);
+    pendingCount += decisions.length;
+    const firstDec = decisions[0];
+    if (
+      firstDec !== undefined &&
+      (topDecision === null ||
+        firstDec.createdAt > topDecision.createdAt ||
+        (firstDec.createdAt === topDecision.createdAt && firstDec.key.localeCompare(topDecision.key) < 0))
+    ) {
+      topDecision = firstDec;
+    }
+
+    const reports = unreadRouterReports(state);
+    unreadReportCount += reports.length;
+    const firstRep = reports[0];
+    if (
+      firstRep !== undefined &&
+      (topReport === null ||
+        firstRep.createdAt > topReport.createdAt ||
+        (firstRep.createdAt === topReport.createdAt && firstRep.id > topReport.id))
+    ) {
+      topReport = firstRep;
+    }
+  }
+
+  const subtitle = topDecision?.question ?? topReport?.summary ?? "All clear";
+  return { pendingCount, unreadReportCount, subtitle };
+}
+
 /**
  * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果（排队、已送达、处理中）。
  * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
@@ -247,10 +359,14 @@ export class ReminderTracker<K> {
 // ---- 守护进程那份状态 ----
 
 /** 从快照（/api/state 或账本的 snapshot）起一份。提醒规则不看 Worker 自己对话里的消息，不留它们省内存。 */
-export function reminderStateFrom(snapshot: Pick<LedgerSnapshot, "seq" | "pms" | "conversations" | "sessions">): ReminderState {
+export function reminderStateFrom(
+  snapshot: Pick<LedgerSnapshot, "seq" | "pms" | "conversations" | "sessions"> &
+    Partial<Pick<LedgerSnapshot, "projects" | "router" | "activeTaskGraphs">>,
+): ReminderState {
   return {
     seq: snapshot.seq,
     pms: snapshot.pms,
+    projects: snapshot.projects ?? [],
     conversations: Object.fromEntries(
       snapshot.conversations.map(({ conversation, messages }) => [
         conversation.id,
@@ -258,6 +374,8 @@ export function reminderStateFrom(snapshot: Pick<LedgerSnapshot, "seq" | "pms" |
       ]),
     ),
     sessions: snapshot.sessions.map(({ streamingText: _, ...s }) => s),
+    router: snapshot.router ?? emptyRouterSlice(),
+    activeTaskGraphs: snapshot.activeTaskGraphs ?? [],
     pending: [],
   };
 }
@@ -284,6 +402,9 @@ function upsertRecent(messages: Message[], message: Message): Message[] {
 export function applyReminderChange(state: ReminderState, change: Change): ReminderState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
+  const curRouter = state.router ?? emptyRouterSlice();
+  const curGraphs = state.activeTaskGraphs ?? [];
+  const curProjects = state.projects ?? [];
   switch (change.type) {
     case "message.created":
     case "message.updated": {
@@ -319,12 +440,72 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
       const conversations = Object.fromEntries(
         Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
       );
-      return { ...next, pms: state.pms.filter((p) => p.id !== pmId), conversations };
+      const routerItems = curRouter.items.filter((i) => i.pmId !== pmId);
+      const routerNotes = curRouter.notes.filter((n) => n.pmId !== pmId);
+      const router =
+        routerItems.length === curRouter.items.length && routerNotes.length === curRouter.notes.length
+          ? curRouter
+          : { ...curRouter, items: routerItems, notes: routerNotes };
+      const activeTaskGraphs = curGraphs.filter((g) => g.pmId !== pmId);
+      return {
+        ...next,
+        pms: state.pms.filter((p) => p.id !== pmId),
+        projects: curProjects.filter((p) => p.pmId !== pmId),
+        conversations,
+        router,
+        activeTaskGraphs: activeTaskGraphs.length === curGraphs.length ? curGraphs : activeTaskGraphs,
+      };
     }
+    case "project.created":
+      return { ...next, projects: upsertBy(curProjects, change.data.project, (a, b) => a.id === b.id) };
     case "conversation.created": {
       const { conversation } = change.data;
       if (state.conversations[conversation.id]) return next;
       return { ...next, conversations: { ...state.conversations, [conversation.id]: { conversation, messages: [] } } };
+    }
+    case "router.settings.updated":
+      return { ...next, router: { ...curRouter, settings: change.data.settings } };
+    case "router.item.created":
+    case "router.item.updated": {
+      const { item } = change.data;
+      const isActive = item.status === "pending" || item.status === "unread";
+      const existingIndex = curRouter.items.findIndex((x) => x.id === item.id);
+      if (!isActive) {
+        if (existingIndex === -1) return next;
+        return { ...next, router: { ...curRouter, items: curRouter.items.filter((x) => x.id !== item.id) } };
+      }
+      const items =
+        existingIndex === -1
+          ? [item, ...curRouter.items].slice(0, ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX)
+          : curRouter.items.with(existingIndex, item);
+      return { ...next, router: { ...curRouter, items } };
+    }
+    case "router.reports.archived_all": {
+      const archived = new Set(change.data.archivedIds);
+      const items = curRouter.items.filter((x) => !archived.has(x.id));
+      return items.length === curRouter.items.length ? next : { ...next, router: { ...curRouter, items } };
+    }
+    case "router.command.created":
+    case "router.command.updated": {
+      const { command } = change.data;
+      const existingIndex = curRouter.commands.findIndex((c) => c.id === command.id);
+      const commands =
+        existingIndex === -1
+          ? [command, ...curRouter.commands].slice(0, ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX)
+          : curRouter.commands.with(existingIndex, command);
+      return { ...next, router: { ...curRouter, commands } };
+    }
+    case "task_graph.created":
+    case "task_graph.updated": {
+      const { graph } = change.data;
+      const existingIndex = curGraphs.findIndex((g) => g.id === graph.id);
+      if (graph.status !== "active") {
+        if (existingIndex === -1) return next;
+        return { ...next, activeTaskGraphs: curGraphs.filter((g) => g.id !== graph.id) };
+      }
+      const activeTaskGraphs =
+        existingIndex === -1 ? [graph, ...curGraphs] : curGraphs.with(existingIndex, graph);
+      return { ...next, activeTaskGraphs };
     }
     default:
       return next;
