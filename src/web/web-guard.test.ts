@@ -106,13 +106,14 @@ describe("web-guard：src/web 代码守卫", () => {
     expect(findNumericTimerCalls("a.ts", bad).map((h) => h.line)).toEqual([2, 3, 4, 5]);
   });
 
-  it("非测试、非注释代码里不写死单家厂商名（claude / codex / agy / antigravity / gemini）", () => {
+  it("非测试、非注释代码里不写死单家厂商名（含全部已接入厂商字面量）", () => {
     const hits: string[] = [];
-    const vendorPattern = /\b(claude|codex|agy|antigravity|gemini)\b/i;
+    const vendorPattern = /\b(claude|codex|agy|antigravity|gemini|deepseek|dsh)\b/i;
+    const quotedVendorIdPattern = /["'`](claude|agy|codex|pi|deepseek|cursor)["'`]/;
     for (const file of files) {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
-        if (vendorPattern.test(line)) {
+        if (vendorPattern.test(line) || quotedVendorIdPattern.test(line)) {
           hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
         }
       });

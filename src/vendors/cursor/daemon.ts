@@ -6,6 +6,7 @@ import { defineVendorDaemon } from "../daemon-types.ts";
 import { createCursorCatalogSource, cursorCatalogProbe } from "./catalog.ts";
 import { createCursorComposer, cursorComposerBase } from "./composer.ts";
 import { createCursorDriver } from "./driver.ts";
+import { cursorSyncAdapter } from "./sync.ts";
 
 export function cursorSessionFiles(ref: TranscriptRef, roots: TranscriptRoots): string[] {
   if (!safeId(ref.vendorSessionId)) return [];
@@ -24,4 +25,5 @@ export default defineVendorDaemon({
     source: (options) => createCursorCatalogSource(options),
   },
   sessionFiles: cursorSessionFiles,
+  sync: cursorSyncAdapter,
 });

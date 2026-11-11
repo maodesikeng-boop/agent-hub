@@ -24,6 +24,8 @@ import type {
   SetPublicEntryRequest,
   StateSnapshot,
   SystemMessageMeta,
+  VendorSyncApplyRequest,
+  VendorSyncPreviewResponse,
   WorkerMessageMeta,
   WsServerMessage,
 } from "../shared/index.ts";
@@ -361,6 +363,24 @@ export class FakeApi {
   quota: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** POST /api/pick-folder。默认：用户选了 /Users/me/picked。 */
   pickFolder: (body: PickFolderRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { path: "/Users/me/picked" } });
+  /** GET /api/vendor-sync/preview。 */
+  vendorSyncPreview: () => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { scannedAt: Date.now(), mcpServers: [], skills: [], nonSyncable: [], truncated: false } satisfies VendorSyncPreviewResponse,
+  });
+  /** POST /api/vendor-sync/apply。 */
+  vendorSyncApply: (body: VendorSyncApplyRequest) => Reply | Promise<Reply> = (body) => ({
+    status: 200,
+    body: {
+      backupId: "20261111-120000-abcd",
+      syncedMcpCount: body.selectedMcpKeys.length,
+      removedMcpCount: body.removeMcpKeys.length,
+      linkedSkillCount: body.selectedSkillKeys.length,
+      unlinkedSkillCount: body.removeSkillKeys.length,
+      preservedPrivateSkillCount: 0,
+      updatedFiles: 1,
+    },
+  });
   /** 跟真的 fetch 一样：init.signal 断了（超时、取消）就以它的 reason 失败，哪怕回应还没好。 */
   fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const signal = init?.signal;
@@ -410,6 +430,8 @@ export class FakeApi {
     const browserSession = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (browserSession && method === "DELETE") return jsonResponse(await this.deleteBrowserSession(decodeURIComponent(browserSession[1]!)));
     if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
+    if (method === "GET" && url.pathname === API_PATHS.vendorSyncPreview) return jsonResponse(await this.vendorSyncPreview());
+    if (method === "POST" && url.pathname === API_PATHS.vendorSyncApply) return jsonResponse(await this.vendorSyncApply(body));
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);

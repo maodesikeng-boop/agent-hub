@@ -4,6 +4,7 @@ import { codexCatalogProbe, createCodexCatalogSource } from "./catalog.ts";
 import { codexComposerBase, createCodexComposer } from "./composer.ts";
 import { createCodexDriver } from "./driver.ts";
 import { CODEX_FORKERS } from "./handover.ts";
+import { codexSyncAdapter } from "./sync.ts";
 import { codexTranscriptPath } from "./transcript.ts";
 
 export default defineVendorDaemon({
@@ -14,4 +15,5 @@ export default defineVendorDaemon({
   transcriptPath: codexTranscriptPath,
   // codex 起会话时没法不存记录：只有那一个 rollout 文件
   sessionFiles: (ref, roots) => [codexTranscriptPath(ref, roots)].filter((file) => file !== null),
+  sync: codexSyncAdapter,
 });

@@ -27,6 +27,9 @@ import {
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
+  MAX_VENDOR_SYNC_KEY_CHARS,
+  MAX_VENDOR_SYNC_MCP_ITEMS,
+  MAX_VENDOR_SYNC_SKILL_ITEMS,
   ATTACHMENTS_MISSING_MESSAGE,
   ATTACHMENTS_TOO_MANY_MESSAGE,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -93,12 +96,16 @@ import {
   type TunnelStatus,
   type TunnelStatusResponse,
   type UpdateRouterSettingsResponse,
+  type VendorSyncApplyRequest,
+  type VendorSyncApplyResponse,
+  type VendorSyncPreviewResponse,
   type WorkerPick,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
+import type { VendorSyncService } from "../vendor-sync/index.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import {
   FILE_ACTIONS_UNAVAILABLE_MESSAGE,
@@ -155,6 +162,8 @@ export interface UiServerOptions {
    * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
    */
   composer?: ComposerService;
+  /** 全厂商连接器 / MCP / Skill 并集同步服务（daemon/vendor-sync/）。不给则 preview 回空列表、apply 回 501。 */
+  vendorSync?: VendorSyncService;
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
   folderPicker?: FolderPicker;
   /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")（不是 macOS 回 501）；测试里换成假的，不真的打开。 */
@@ -487,6 +496,20 @@ const skipTaskNodeBodySchema = z
 const cancelTaskGraphBodySchema = z
   .object({
     reason: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "reason").optional(),
+  })
+  .strict();
+
+const syncItemKeySchema = boundedCharsSchema(MAX_VENDOR_SYNC_KEY_CHARS, "key").refine(
+  (s) => s.trim() !== "" && !s.includes("\u0000"),
+  "key must not be empty",
+);
+
+const vendorSyncApplyBodySchema = z
+  .object({
+    selectedMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS),
+    removeMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS),
+    selectedSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
+    removeSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
   })
   .strict();
 
@@ -1150,6 +1173,25 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.quota, async (): Promise<QuotaResponse> => (opts.quota ? await opts.quota.get() : { groups: [] }));
+
+    routes.get(API_PATHS.vendorSyncPreview, async (): Promise<VendorSyncPreviewResponse> => {
+      if (!opts.vendorSync) {
+        return {
+          scannedAt: (opts.now ?? Date.now)(),
+          mcpServers: [],
+          skills: [],
+          nonSyncable: [],
+          truncated: false,
+        };
+      }
+      return opts.vendorSync.preview();
+    });
+
+    routes.post(API_PATHS.vendorSyncApply, async (req): Promise<VendorSyncApplyResponse> => {
+      if (!opts.vendorSync) throw new HttpError(501, "vendor sync unavailable");
+      const raw = parseWithSchema(vendorSyncApplyBodySchema, req.body) satisfies VendorSyncApplyRequest;
+      return opts.vendorSync.apply(raw);
+    });
 
     // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表
     routes.get("/api/conversations/:id/commands", async (req): Promise<CommandsResponse> => {
