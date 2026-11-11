@@ -687,7 +687,7 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
       {failed && delivered && (
         <button
           type="button"
-          className="touch-target text-minor text-muted-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
+          className="touch-target text-minor text-muted-foreground rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
           title={[failure?.text, failure?.raw].filter(Boolean).join("\n")}
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}

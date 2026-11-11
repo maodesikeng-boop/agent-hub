@@ -909,6 +909,8 @@ export interface FleetRouterView {
 }
 
 const EMPTY_ROUTER_COMMANDS: RouterCommandRecord[] = [];
+/** 还没就绪的设备共用同一份空视图：每次给新的 [] 会让下面的指纹比较永远不等，整个舰队视图次次重算。 */
+const EMPTY_DEVICE_ROUTER_VIEW: DeviceRouterView = { decisions: [], reports: [] };
 const pmConversationSigCache = new WeakMap<HubState["conversations"], string>();
 
 function pmConversationSignature(conversations: HubState["conversations"]): string {
@@ -949,7 +951,7 @@ let lastFleetMemo: { deps: FleetDeviceFingerprint[]; value: FleetRouterView } | 
 export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): FleetRouterView {
   const deps: FleetDeviceFingerprint[] = devices.map((d) => {
     const logicalId = d.self ? "local" : d.id;
-    const view = d.state.phase === "ready" ? deviceRouterView(d.state, logicalId) : { decisions: [], reports: [] };
+    const view = d.state.phase === "ready" ? deviceRouterView(d.state, logicalId) : EMPTY_DEVICE_ROUTER_VIEW;
     return {
       id: d.id,
       key: d.key ?? (d.self ? "" : d.id),

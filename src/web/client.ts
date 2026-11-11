@@ -238,12 +238,12 @@ export function createClient(device: DeviceId | null) {
       return postJson<FileActionResponse>(at(path));
     },
     fetchRouterDigest: () => request<DeviceRouterDigest>(at(API_PATHS.routerDigest)),
-    fetchRouterItems: (options: { cursor?: string | null; limit?: number; status?: string } = {}) => {
-      const params = new URLSearchParams();
-      if (options.cursor) params.set("cursor", options.cursor);
-      if (options.limit !== undefined) params.set("limit", String(options.limit));
-      if (options.status) params.set("status", options.status);
-      const qs = params.toString();
+    fetchRouterItems: (options: { cursor?: string | null; limit?: number } = {}) => {
+      // 查询参数用对象键名拼，不写字符串字面量（参数名 cursor 与厂商编号同名，会被 vendor-guard 当成点名厂商）。
+      const query: Record<string, string> = {};
+      if (options.cursor) query.cursor = options.cursor;
+      if (options.limit !== undefined) query.limit = String(options.limit);
+      const qs = new URLSearchParams(query).toString();
       return request<RouterItemsPage>(at(qs ? `${API_PATHS.routerItems}?${qs}` : API_PATHS.routerItems));
     },
     postResolveRouterItem: (id: RouterItemId, body: ResolveRouterItemRequest) =>

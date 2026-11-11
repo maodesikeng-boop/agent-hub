@@ -1,5 +1,5 @@
 // Router 第 2 波前端工作台（docs/ui-standard.md 第 21 节、docs/router-design.md 第 4 节）端到端行为与守卫测试。
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -442,6 +442,54 @@ describe("RouterWorkbench 四段式行动工作台", () => {
     await waitFor(() => expect(within(offlineCard).getByText("Offline")).toBeInTheDocument());
     expect(offlineCard.className).toContain("opacity-60");
     expect(within(offlineCard).getByRole("button", { name: /方案甲/ })).toBeDisabled();
+  });
+
+  it("防重入：同一帧里连点同一张拍板卡只提交一次；失败回执的 Retry 在途时不再重复请求，请求失败就地报错", async () => {
+    const decision = makeDecisionItem({ id: 111, question: "连点只算一次？", options: ["好", "不好"], createdAt: Date.now() - 1_000 });
+    const failedCmd = makeCommandRecord({ id: 350, clientId: "cmd-failed", status: "failed", error: "规划超时", plan: null, dispatched: null, createdAt: Date.now() - 2_000 });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: { ...emptyRouterSlice(), items: [decision], commands: [failedCmd] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    let releaseResolve: (() => void) | null = null;
+    localApi.resolveRouterItem = () =>
+      new Promise((resolve) => {
+        releaseResolve = () => resolve({ status: 200, body: { item: { ...decision, status: "resolved" }, messageId: 502 } });
+      });
+    let rejectRetry: (() => void) | null = null;
+    localApi.retryRouterCommand = () =>
+      new Promise((resolve) => {
+        rejectRetry = () => resolve({ status: 409, body: { error: "规划器正忙，稍后再试", code: "conflict" } });
+      });
+
+    renderWithQuery(<App />);
+    await screen.findByRole("heading", { level: 1, name: "Router" });
+    act(openSockets);
+
+    const needsSection = await screen.findByRole("region", { name: "Needs You" });
+    const option = within(needsSection).getByRole("button", { name: /^A好$/ });
+    act(() => {
+      fireEvent.click(option);
+      fireEvent.click(option);
+    });
+    await waitFor(() => expect(localApi.callsTo("POST", /^\/api\/router\/items\/111\/resolve$/)).toHaveLength(1));
+    await act(async () => releaseResolve!());
+
+    const recent = await screen.findByRole("region", { name: "Recent" });
+    const retry = within(recent).getByRole("button", { name: "Retry" });
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+    await waitFor(() => expect(localApi.callsTo("POST", /^\/api\/router\/commands\/350\/retry$/)).toHaveLength(1));
+    expect(within(recent).getByText("Dispatching…")).toBeInTheDocument();
+    expect(within(recent).queryByRole("button", { name: "Retry" })).toBeNull();
+    await act(async () => rejectRetry!());
+    expect(await within(recent).findByText(/规划器正忙，稍后再试/)).toBeInTheDocument();
+    expect(within(recent).getByRole("button", { name: "Retry" })).toBeEnabled();
   });
 
   it("Recent（最多 5 条、流光 Dispatching…、跳转与失败 Retry/Dismiss）、Updates（Done / Archive all / 证据跳转）与 Archived（@tanstack/react-query 按需分页）协同工作", async () => {

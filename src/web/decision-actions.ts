@@ -10,6 +10,7 @@ import type {
   TaskGraphId,
   TaskNodeKey,
 } from "../shared/index.ts";
+import { newClientId } from "./format.ts";
 
 const RECOMMENDED_PREFIX = /^(?:\(\s*(?:recommended|推荐)\s*\)|（\s*推荐\s*）)\s*/i;
 
@@ -22,13 +23,6 @@ export interface DecisionSubmissionInput {
   optionIndex: number | null;
   note: string;
   clientId?: string;
-}
-
-function makeClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `dec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** 剥离选项开头的 `(Recommended)` / `（推荐）` 标记，配合卡片右侧统一的 Recommended 标签展示。 */
@@ -62,7 +56,7 @@ export async function submitDecision(
   if (optionIndex !== null && (optionIndex < 0 || optionIndex >= decision.options.length)) {
     throw new Error("所选方案无效");
   }
-  const clientId = input.clientId ?? makeClientId();
+  const clientId = input.clientId ?? newClientId();
 
   if (decision.source.kind === "router_item") {
     await client.postResolveRouterItem(decision.source.itemId, {

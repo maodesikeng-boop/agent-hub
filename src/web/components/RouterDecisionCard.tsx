@@ -51,7 +51,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
           type="button"
-          className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-lg text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-full text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() => onOpenConversation(entry.deviceKey, decision.conversationId)}
         >
           <Avatar colorKey={entry.avatarKey} size={24} />
@@ -89,7 +89,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
                 className="flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-xl border border-border bg-background px-3 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
                 onClick={() => onSubmit(entry, idx, note)}
               >
-                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-sidebar text-xs font-medium text-muted-foreground">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-sidebar text-xs font-medium text-muted-foreground">
                   {letter}
                 </span>
                 <span className="min-w-0 flex-1">{label}</span>

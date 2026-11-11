@@ -16,7 +16,7 @@ import {
 import { localClient, type HubClient } from "../client.ts";
 import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
-import { errorLine, errorText, formatTime, type ErrorLike } from "../format.ts";
+import { errorLine, errorText, formatTime, newClientId, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import type {
@@ -36,13 +36,6 @@ import { RowError } from "./SettingsList.tsx";
 
 const CHIP_REMOVE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
-
-function makeClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `rt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 interface ReceiptTargetLink {
   key: string;
@@ -102,7 +95,7 @@ function ReportLinkItem({
 }) {
   const parsed = parseLinkRoute(link.target);
   const pillClass =
-    "touch-target inline-flex cursor-pointer items-center gap-1 rounded-lg bg-sidebar px-2.5 py-1 text-xs font-medium text-foreground transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50";
+    "touch-target inline-flex cursor-pointer items-center gap-1 rounded-full bg-sidebar px-2.5 py-1 text-xs font-medium text-foreground transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50";
   if (parsed.kind === "external") {
     return (
       <a href={parsed.url} target="_blank" rel="noreferrer" className={pillClass}>
@@ -256,9 +249,13 @@ export function RouterWorkbench({
     });
   }, []);
 
+  // 同一张卡在途时再点（双击、回车与点击同一帧）直接忽略：乐观隐藏要等重画才生效，这里用 ref 同步上锁
+  const inflightDecisions = useRef(new Set<string>());
   const handleDecisionSubmit = useCallback(
     async (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => {
       const key = entry.decision.key;
+      if (inflightDecisions.current.has(key)) return;
+      inflightDecisions.current.add(key);
       setHiddenDecisionKeys((prev) => new Set(prev).add(key));
       setDecisionErrors((prev) => {
         if (prev[key] === undefined) return prev;
@@ -280,9 +277,16 @@ export function RouterWorkbench({
           return next;
         });
         setDecisionErrors((prev) => ({ ...prev, [key]: errorText(err) }));
+      } finally {
+        inflightDecisions.current.delete(key);
       }
     },
     [clientForDevice, qc],
+  );
+  // 传给 memo 的拍板卡：引用稳定，不让每张卡随工作台每次重画都重画
+  const submitDecisionCard = useCallback(
+    (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => void handleDecisionSubmit(entry, optionIndex, note),
+    [handleDecisionSubmit],
   );
 
   const handleArchiveReport = useCallback(
@@ -336,13 +340,37 @@ export function RouterWorkbench({
     return map;
   }, [view.targets]);
 
+  // 服务端回执的重试：在途时按钮换成 Dispatching…（防重复提交）；请求本身失败（断网、超时）就地显示错误，
+  // 不等服务端推送。两者都按 view.commands 裁剪，最多 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条。
+  const [retryingCommands, setRetryingCommands] = useState<ReadonlySet<RouterCommandId>>(new Set());
+  const [commandRetryErrors, setCommandRetryErrors] = useState<Readonly<Record<RouterCommandId, ErrorLike>>>({});
+  const retryingCommandsRef = useRef(new Set<RouterCommandId>());
   const retryServerCommand = useCallback(async (commandId: RouterCommandId) => {
+    if (retryingCommandsRef.current.has(commandId)) return;
+    retryingCommandsRef.current.add(commandId);
+    setRetryingCommands(new Set(retryingCommandsRef.current));
+    setCommandRetryErrors((prev) => {
+      if (prev[commandId] === undefined) return prev;
+      const { [commandId]: _removed, ...rest } = prev;
+      return rest;
+    });
     try {
       await localClient.postRetryRouterCommand(commandId);
-    } catch {
-      // 服务端会把失败状态同步回 router.commands
+    } catch (err) {
+      setCommandRetryErrors((prev) => ({ ...prev, [commandId]: errorText(err) }));
+    } finally {
+      retryingCommandsRef.current.delete(commandId);
+      setRetryingCommands(new Set(retryingCommandsRef.current));
     }
   }, []);
+  useEffect(() => {
+    const ids = new Set(view.commands.map((c) => c.id));
+    setCommandRetryErrors((prev) => {
+      const keys = Object.keys(prev).map(Number);
+      if (keys.every((k) => ids.has(k))) return prev;
+      return Object.fromEntries(Object.entries(prev).filter(([k]) => ids.has(Number(k))));
+    });
+  }, [view.commands]);
 
   const retryLocalReceipt = useCallback(
     async (receipt: LocalReceipt) => {
@@ -426,16 +454,18 @@ export function RouterWorkbench({
           }
         }
         const summaryText = cmd.plan?.reply ?? cmd.inputText;
+        const retrying = retryingCommands.has(cmd.id);
+        const failed = cmd.status === "failed" && !retrying;
         return {
           key,
           clientId: cmd.clientId,
           createdAt: cmd.createdAt,
           inputText: cmd.inputText,
-          status: cmd.status === "planning" ? "planning" : cmd.status === "failed" ? "failed" : "done",
+          status: cmd.status === "planning" || retrying ? "planning" : failed ? "failed" : "done",
           summaryText,
-          error: cmd.status === "failed" ? (cmd.error ?? "指令派发失败") : null,
+          error: failed ? (commandRetryErrors[cmd.id] ?? cmd.error ?? "指令派发失败") : null,
           targets,
-          onRetry: cmd.status === "failed" ? () => void retryServerCommand(cmd.id) : null,
+          onRetry: failed ? () => void retryServerCommand(cmd.id) : null,
         };
       });
 
@@ -459,7 +489,7 @@ export function RouterWorkbench({
       .filter((r) => !dismissedReceipts.has(r.key))
       .toSorted((a, b) => b.createdAt - a.createdAt)
       .slice(0, ROUTER_VISIBLE_RECEIPTS_MAX);
-  }, [view.commands, localReceipts, dismissedReceipts, targetByDeviceAndPm, retryServerCommand, retryLocalReceipt]);
+  }, [view.commands, localReceipts, dismissedReceipts, targetByDeviceAndPm, retryingCommands, commandRetryErrors, retryServerCommand, retryLocalReceipt]);
 
   const visibleDecisions = useMemo(
     () => view.decisions.filter((d) => !hiddenDecisionKeys.has(d.decision.key)),
@@ -528,7 +558,7 @@ export function RouterWorkbench({
 
   const handleComposerSend = useCallback(
     async (text: string, files: File[]) => {
-      const clientId = makeClientId();
+      const clientId = newClientId();
       const createdAt = Date.now();
       const target = selectedTarget;
 
@@ -685,7 +715,7 @@ export function RouterWorkbench({
                     note={decisionNotes[entry.decision.key] ?? ""}
                     error={decisionErrors[entry.decision.key] ?? null}
                     onNoteChange={handleNoteChange}
-                    onSubmit={(e, idx, note) => void handleDecisionSubmit(e, idx, note)}
+                    onSubmit={submitDecisionCard}
                     onOpenConversation={onOpenConversation}
                   />
                 ))}
@@ -717,7 +747,7 @@ export function RouterWorkbench({
                           {receipt.onRetry && (
                             <button
                               type="button"
-                              className="touch-target cursor-pointer rounded-lg px-2 py-0.5 text-xs font-medium text-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+                              className="touch-target cursor-pointer rounded-full px-2 py-0.5 text-xs font-medium text-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
                               onClick={receipt.onRetry}
                             >
                               Retry
@@ -725,7 +755,7 @@ export function RouterWorkbench({
                           )}
                           <button
                             type="button"
-                            className="touch-target cursor-pointer rounded-lg px-2 py-0.5 text-xs text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                            className="touch-target cursor-pointer rounded-full px-2 py-0.5 text-xs text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                             onClick={() => setDismissedReceipts((prev) => new Set(prev).add(receipt.key))}
                           >
                             Dismiss
@@ -739,7 +769,7 @@ export function RouterWorkbench({
                           <button
                             key={target.key}
                             type="button"
-                            className="touch-target inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+                            className="touch-target inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
                             onClick={() => onOpenConversation(target.deviceKey, target.conversationId)}
                           >
                             <Avatar colorKey={target.avatarKey} size={20} />
@@ -769,7 +799,7 @@ export function RouterWorkbench({
                 <h2 className="text-minor font-medium text-muted-foreground">Updates</h2>
                 <button
                   type="button"
-                  className="touch-target cursor-pointer rounded-lg px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  className="touch-target cursor-pointer rounded-full px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                   onClick={() => void handleArchiveAll()}
                 >
                   Archive all
@@ -795,7 +825,7 @@ export function RouterWorkbench({
                       <div className="flex flex-wrap items-center gap-2 text-minor">
                         <button
                           type="button"
-                          className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-lg text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+                          className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-full text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
                           onClick={() => onOpenConversation(entry.deviceKey, entry.report.conversationId)}
                         >
                           <Avatar colorKey={entry.avatarKey} size={24} />
@@ -814,7 +844,7 @@ export function RouterWorkbench({
                         <button
                           type="button"
                           disabled={!entry.online}
-                          className="touch-target ml-auto cursor-pointer rounded-lg px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
+                          className="touch-target ml-auto cursor-pointer rounded-full px-2 py-0.5 text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
                           onClick={() => void handleArchiveReport(entry)}
                         >
                           Done

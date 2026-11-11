@@ -347,7 +347,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     }),
     [routerActive, routerView.summary.pendingCount, routerView.summary.unreadReportCount, routerView.summary.subtitle, selectRouter],
   );
-  const clientForDevice = useCallback((deviceKey: string) => fleet.hub(deviceKey).client, [fleet]);
+  const fleetHub = fleet.hub;
+  const clientForDevice = useCallback((deviceKey: string) => fleetHub(deviceKey).client, [fleetHub]);
   const openDeviceWorker = useCallback(
     (deviceKey: string, id: ConversationId) => {
       navigate({ view: "worker", id, ...routeDeviceOf(deviceKey) });

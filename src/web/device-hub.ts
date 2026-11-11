@@ -1,7 +1,7 @@
 // 把接口、WebSocket 和 state.ts 接起来，一台设备一个 DeviceHub：先拉快照，再按 seq 接着收变化；收到 resync 重新拉。
 // DevicesStore 管设备清单（GET /api/devices）和每台的 DeviceHub（Map，键见 devices.ts）；useDevices 是给 React 用的那一层。
 // 每台各跑各的 seq、resync、重连：一台断了只补那一台，不拖累别的。
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
@@ -528,5 +528,7 @@ export function useDevices() {
     return () => store.dispose();
   }, [store]);
   const snapshot = useStore(store.store);
-  return { ...snapshot, hub: (key: DeviceKey) => store.hub(key), refresh: store.refresh };
+  // hub 引用稳定：下游 useCallback（如 Router 工作台的 clientForDevice）不会因每次重画都换新函数而击穿 memo
+  const hub = useCallback((key: DeviceKey) => store.hub(key), [store]);
+  return { ...snapshot, hub, refresh: store.refresh };
 }
