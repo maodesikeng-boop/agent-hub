@@ -1,12 +1,11 @@
-// 网址（docs/ui-standard.md 第 16 条）：每个对话、资料页都有自己的网址，刷新后回到原来那个，能前进后退。
-// 用 # 后面的部分（守护进程只认 / 这一个页面，不用改服务端）：#/c/<对话编号>、#/w/<Worker 对话编号>、#/pm/<项目经理编号>。
+// 网址（docs/ui-standard.md 第 16、21 条）：每个对话、资料页与水果刀 Router 工作台都有自己的网址，刷新后回到原来那个，能前进后退。
+// 用 # 后面的部分（守护进程只认 / 这一个页面，不用改服务端）：#/router、#/c/<对话编号>、#/w/<Worker 对话编号>、#/pm/<项目经理编号>。
 // 联机（docs/multi-device-design.md 第 4.1 节，P3 实现）：别的设备前面加 #/d/<设备编号>，如 #/d/<设备>/c/<对话>；
-// 设备编号是 shared/api.ts 的 DeviceId（isDeviceId 校验）。不带 #/d/ 的老网址当成入口本机，继续能用。
+// #/router 是全局总助视图，永远不带设备前缀。
 import { useCallback, useEffect, useState } from "react";
 import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../shared/index.ts";
 
-/** 哪台设备上的页面：不写（undefined）是入口本机。 */
-export type Route = (
+export type ScopedRoute = (
   /** 项目经理的对话。 */
   | { view: "conversation"; id: ConversationId }
   /** Worker 的对话。 */
@@ -15,15 +14,20 @@ export type Route = (
   | { view: "profile"; pmId: PmId }
 ) & { device?: DeviceId };
 
-const PREFIX: Record<Route["view"], string> = { conversation: "c", worker: "w", profile: "pm" };
+/** 当前网址对应的页面：#/router 为全局总助工作台（device 永为 undefined），其余不写 device 时为入口本机。 */
+export type Route = { view: "router"; device?: undefined } | ScopedRoute;
+
+const PREFIX: Record<ScopedRoute["view"], string> = { conversation: "c", worker: "w", profile: "pm" };
 
 export function routeHash(route: Route): string {
+  if (route.view === "router") return "#/router";
   const device = route.device === undefined ? "" : `/d/${route.device}`;
   return `#${device}/${PREFIX[route.view]}/${route.view === "profile" ? route.pmId : route.id}`;
 }
 
 /** 认不出来（空的、编号不是正整数、设备编号不合法、别的路径）是 null。 */
 export function parseRoute(hash: string): Route | null {
+  if (hash === "#/router") return { view: "router" };
   const match = /^#(?:\/d\/([^/]+))?\/(c|w|pm)\/([1-9]\d*)$/.exec(hash);
   if (!match) return null;
   const device = match[1];
@@ -39,7 +43,7 @@ export function parseRoute(hash: string): Route | null {
 const sameRoute = (a: Route | null, b: Route | null) => (a === null || b === null ? a === b : routeHash(a) === routeHash(b));
 
 /**
- * 当前网址对应的页面。navigate 记一条历史（能后退）；replace 不记（刚打开时补上默认的对话、编号找不到时改回来）。
+ * 当前网址对应的页面。navigate 记一条历史（能后退）；replace 不记（刚打开时补上默认的页面、编号找不到时改回来）。
  * 用户改网址、前进后退时跟着变。
  */
 export function useRoute() {

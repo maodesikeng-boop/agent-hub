@@ -622,8 +622,11 @@ export const ROUTER_PM_BRIEF_MAX_CHARS = 120;
 export const ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX = 50;
 /** StateSnapshot 里最近 Router 指令上限。 */
 export const ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX = 10;
-/** 历史回执分页每页条数。 */
+/** Router 工作台 Recent 区最多同时展示多少条紧凑发令回执。 */
+export const ROUTER_VISIBLE_RECEIPTS_MAX = 5;
+/** 历史回执分页每页条数与前端内存缓存最多保留页数。 */
 export const ROUTER_ARCHIVED_PAGE_SIZE = 30;
+export const ROUTER_ARCHIVED_MAX_PAGES = 10;
 /** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
 export const ROUTER_PERSONA_SUMMARY_LINES = 4;
 export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;

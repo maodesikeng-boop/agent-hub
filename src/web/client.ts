@@ -6,9 +6,13 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
+  type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type Attachment,
   type BrowserSessionsResponse,
+  type DecideTaskNodeRequest,
+  type DecideTaskNodeResponse,
+  type DeviceRouterDigest,
   type LoginLinkResponse,
   type ConversationId,
   type CreatePmRequest,
@@ -33,6 +37,8 @@ import {
   type PickFolderRequest,
   type PickFolderResponse,
   type PostMessageRequest,
+  type PostRouterCommandRequest,
+  type PostRouterCommandResponse,
   type PersonaChangeId,
   type PersonaResponse,
   type PmId,
@@ -40,12 +46,21 @@ import {
   type PublicEntryStatus,
   type QuotaResponse,
   type RenewSessionResponse,
+  type ResolveRouterItemRequest,
+  type ResolveRouterItemResponse,
   type RetryMessageResponse,
   type RewindMessageResponse,
+  type RouterCommandId,
+  type RouterItemId,
+  type RouterItemsPage,
   type SetPublicEntryRequest,
   type StateSnapshot,
+  type TaskGraphId,
+  type TaskNodeKey,
   type TunnelConnectRequest,
   type TunnelStatusResponse,
+  type UpdateRouterSettingsRequest,
+  type UpdateRouterSettingsResponse,
 } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
 import { checkConnections } from "./connection.ts";
@@ -217,6 +232,26 @@ export function createClient(device: DeviceId | null) {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
       return postJson<FileActionResponse>(at(path));
     },
+    fetchRouterDigest: () => request<DeviceRouterDigest>(at(API_PATHS.routerDigest)),
+    fetchRouterItems: (options: { cursor?: string | null; limit?: number; status?: string } = {}) => {
+      const params = new URLSearchParams();
+      if (options.cursor) params.set("cursor", options.cursor);
+      if (options.limit !== undefined) params.set("limit", String(options.limit));
+      if (options.status) params.set("status", options.status);
+      const qs = params.toString();
+      return request<RouterItemsPage>(at(qs ? `${API_PATHS.routerItems}?${qs}` : API_PATHS.routerItems));
+    },
+    postResolveRouterItem: (id: RouterItemId, body: ResolveRouterItemRequest) =>
+      postJson<ResolveRouterItemResponse>(at(API_PATHS.routerItemResolve(id)), body),
+    postArchiveAllRouterReports: () => postJson<ArchiveAllReportsResponse>(at(API_PATHS.routerReportsArchiveAll), {}),
+    putRouterSettings: (body: UpdateRouterSettingsRequest) =>
+      putJson<UpdateRouterSettingsResponse>(at(API_PATHS.routerSettings), body),
+    postDecideTaskNode: (graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest) =>
+      postJson<DecideTaskNodeResponse>(at(API_PATHS.taskGraphDecide(graphId, nodeKey)), body),
+    postRouterCommand: (body: PostRouterCommandRequest) =>
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    postRetryRouterCommand: (id: RouterCommandId) =>
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}, SLOW_API_REQUEST_TIMEOUT_MS),
     /** 变化推送的地址：和页面同源，since 是已经收到的最后一个 seq。 */
     changeStreamUrl: (since: number) => {
       const scheme = location.protocol === "https:" ? "wss" : "ws";

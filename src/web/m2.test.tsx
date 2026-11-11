@@ -22,6 +22,7 @@ import {
   makeSystemMessage,
   makeUserMessage,
   messageChange,
+  openFirstConversation,
   sessionChange,
   stubRequestTimeouts,
 } from "./test-utils.ts";
@@ -29,6 +30,7 @@ import {
 let api: FakeApi;
 
 async function boot(snapshot: StateSnapshot = twoPms()) {
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();

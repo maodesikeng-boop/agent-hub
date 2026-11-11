@@ -18,6 +18,7 @@ import {
   makeToolMessage,
   makeUserMessage,
   messageChange,
+  openFirstConversation,
   sessionChange,
 } from "./test-utils.ts";
 
@@ -26,6 +27,7 @@ let unmountApp: () => void;
 
 /** 起网页：假接口 + 假 WebSocket，等首屏出来、WebSocket 接上。 */
 async function boot(snapshot: StateSnapshot = defaultSnapshot()) {
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();
@@ -83,10 +85,11 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-afterEach(() => {
+  afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("首屏", () => {
@@ -128,7 +131,7 @@ describe("首屏", () => {
     render(<App />);
     expect(screen.getByText("Loading…")).toBeInTheDocument();
     gate.resolve();
-    await screen.findByRole("log", { name: "Messages" });
+    await screen.findByRole("heading", { level: 1, name: "Router" });
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
@@ -148,7 +151,7 @@ describe("首屏", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
     api.state = () => ({ status: 200, body: defaultSnapshot() });
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByRole("log", { name: "Messages" });
+    await screen.findByRole("heading", { level: 1, name: "Router" });
     expect(screen.queryByText("连不上守护进程")).not.toBeInTheDocument();
   });
 

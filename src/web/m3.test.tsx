@@ -24,12 +24,14 @@ import {
   makeWorkerConversation,
   makeWorkerLine,
   messageChange,
+  openFirstConversation,
   sessionChange,
 } from "./test-utils.ts";
 
 let api: FakeApi;
 
 async function boot(snapshot: StateSnapshot = withWorker()) {
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();
@@ -940,7 +942,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     });
 
     it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），就写它，不写“默认”", async () => {
-      const fake = new FakeApi(withAgent({ vendor: "claude", model: null, effort: null, usage }));
+      const snap = withAgent({ vendor: "claude", model: null, effort: null, usage });
+      openFirstConversation(snap);
+      const fake = new FakeApi(snap);
       fake.models = () => ({ status: 200, body: { catalogs: [{ ...bundledModelCatalog("claude"), source: "vendor", defaultModel: "Opus 5.5" }] } });
       fake.install();
       installFakeWebSocket();

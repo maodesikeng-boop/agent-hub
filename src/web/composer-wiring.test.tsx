@@ -16,12 +16,15 @@ import {
   makeUserMessage,
   makeWorkerConversation,
   messageChange,
+  openFirstConversation,
 } from "./test-utils.ts";
 
 let api: FakeApi;
 
 async function boot() {
-  api = new FakeApi(makeSnapshot());
+  const snap = makeSnapshot();
+  openFirstConversation(snap);
+  api = new FakeApi(snap);
   api.install();
   installFakeWebSocket();
   render(<App />);

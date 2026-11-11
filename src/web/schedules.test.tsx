@@ -14,13 +14,16 @@ import {
   makeSchedule,
   makeSnapshot,
   makeSystemMessage,
+  openFirstConversation,
 } from "./test-utils.ts";
 
 let api: FakeApi;
 let ws: FakeWebSocket;
 
 async function openProfile(schedules = [makeSchedule()]) {
-  api = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], schedules }));
+  const snap = makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], schedules });
+  openFirstConversation(snap);
+  api = new FakeApi(snap);
   api.install();
   installFakeWebSocket();
   render(<App />);
@@ -229,7 +232,9 @@ describe("对话里的到点消息", () => {
       text: `【${scheduleRunTitle("晨报", scheduledAt, scheduledAt, false)}】\n\n整理昨天的进展\n再看看报错`,
       event: { event: "schedule.run", scheduleId: 1, name: "晨报", scheduledAt, catchUp: false },
     });
-    api = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], conversations: [makeConvSnapshot([message])] }));
+    const snap = makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], conversations: [makeConvSnapshot([message])] });
+    openFirstConversation(snap);
+    api = new FakeApi(snap);
     api.install();
     installFakeWebSocket();
     render(<App />);

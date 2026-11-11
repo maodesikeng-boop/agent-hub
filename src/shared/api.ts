@@ -13,6 +13,7 @@ import type {
   ProjectFolder,
   ProjectId,
   RateLimitWindow,
+  RouterCommandId,
   RouterItemId,
   SessionState,
   TaskGraph,
@@ -110,6 +111,8 @@ export const API_PATHS = {
   routerItemResolve: (id: RouterItemId) => `/api/router/items/${id}/resolve`,
   routerReportsArchiveAll: "/api/router/reports/archive-all",
   routerSettings: "/api/router/settings",
+  routerCommands: "/api/router/commands",
+  routerCommandRetry: (id: RouterCommandId) => `/api/router/commands/${id}/retry`,
   projectTaskGraphs: (projectId: ProjectId) => `/api/projects/${projectId}/task-graphs`,
   taskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
     `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/decide`,
@@ -735,6 +738,16 @@ export interface UpdateRouterSettingsRequest {
 
 export interface UpdateRouterSettingsResponse {
   settings: RouterSettings;
+}
+
+export interface PostRouterCommandRequest {
+  clientId: string;
+  text: string;
+  attachmentIds?: string[];
+}
+
+export interface PostRouterCommandResponse {
+  command: RouterCommandRecord;
 }
 
 export interface TaskGraphsPage {

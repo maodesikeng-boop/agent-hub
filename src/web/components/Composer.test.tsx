@@ -289,6 +289,7 @@ describe("Composer 布局", () => {
     const api = new FakeApi(snap);
     api.install();
     installFakeWebSocket();
+    window.location.hash = "#/c/1";
     const { unmount } = render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     act(() => FakeWebSocket.last.open());
@@ -324,6 +325,7 @@ describe("Composer 布局", () => {
     workedForSpy.mockRestore();
     parseSpy.mockRestore();
     unmount();
+    window.location.hash = "";
     vi.unstubAllGlobals();
   });
 });
@@ -443,7 +445,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     { ...shared.bundledModelCatalog("codex"), label: "Codex", availability: "not_installed" },
   ];
 
-  const boot = async (hash = "", messages: shared.Message[] = []) => {
+  const boot = async (hash = "#/c/1", messages: shared.Message[] = []) => {
     stubPointer("fine");
     window.location.hash = hash;
     const api = new FakeApi(
@@ -682,7 +684,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
   });
 
   it("选标签、去掉标签不重画消息列表（标签 store 和文字、消息分开）", async () => {
-    const { box, user } = await boot("", [makeUserMessage({ id: 1, text: "旧消息" }), makeMessage({ id: 2, text: "**加粗回复内容**" })]);
+    const { box, user } = await boot("#/c/1", [makeUserMessage({ id: 1, text: "旧消息" }), makeMessage({ id: 2, text: "**加粗回复内容**" })]);
     await screen.findAllByText("加粗回复内容");
     const attachmentsSpy = vi.spyOn(shared, "attachmentsOf");
     const displayTextSpy = vi.spyOn(messagesModule, "displayText");
@@ -693,7 +695,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
   });
 
   it("服务端的用户消息带 meta.workerPick：气泡上方只读标签（Default 的项不显示）；没带的没有", async () => {
-    await boot("", [
+    await boot("#/c/1", [
       makeUserMessage({ id: 1, text: "派人做", meta: { workerPick: { vendor: "claude", model: null, effort: "high" } } }),
       makeUserMessage({ id: 2, text: "普通的" }),
     ]);

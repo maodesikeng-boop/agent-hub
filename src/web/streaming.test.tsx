@@ -25,10 +25,12 @@ import {
   makeWorkerConversation,
   makeWorkerLine,
   messageChange,
+  openFirstConversation,
   sessionChange,
 } from "./test-utils.ts";
 
 async function bootApp(snapshot: StateSnapshot) {
+  openFirstConversation(snapshot);
   const api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();

@@ -143,6 +143,8 @@ export function Composer({
   staging,
   workerPick = null,
   onWorkerPick,
+  leadingChip = null,
+  onSelectTarget,
   stop: stopProp,
   onRewind,
   focusRev = 0,
@@ -160,6 +162,10 @@ export function Composer({
   workerPick?: WorkerPick | null;
   /** 选完、重选、点 × 时调；不给就不变标签，完整命令留在文字里。 */
   onWorkerPick?: (pick: WorkerPick | null) => void;
+  /** 输入框上方待发列表最前面的自定义目标胶囊（如 Router 选中的跨设备项目/PM）。 */
+  leadingChip?: React.ReactNode;
+  /** Router 工作台选中 `@` 目标时的回调：收到 targetKey 与剥除 `@...` 后的剩余文字与光标位置。 */
+  onSelectTarget?: (targetKey: string, text: string) => void;
   /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
@@ -201,7 +207,8 @@ export function Composer({
 
   // 单行 / 多行布局：文字超过一行（换行符或自动换行）、或有待发文件时是多行；由下面调高度的 useLayoutEffect 量出来，只在布尔值变化时才多渲染一次
   const [wrapped, setWrapped] = useState(false);
-  const multiline = wrapped || files.length > 0 || workerPick !== null;
+  const hasLeadingChip = leadingChip !== null && leadingChip !== undefined && leadingChip !== false;
+  const multiline = wrapped || files.length > 0 || workerPick !== null || hasLeadingChip;
   const layoutWas = useRef(multiline);
   const settledValue = useRef<string | null>(null);
   const attachRef = useRef<HTMLButtonElement>(null);
@@ -230,6 +237,14 @@ export function Composer({
         const at = Math.min(repickCaret.current ?? 0, rest.length);
         repickCaret.current = null;
         onWorkerPick(pick);
+        pendingCursor.current = at;
+        setCursor(at);
+        onChange(rest);
+      }),
+    onSelectTarget:
+      onSelectTarget &&
+      ((targetKey, rest, at) => {
+        onSelectTarget(targetKey, rest);
         pendingCursor.current = at;
         setCursor(at);
         onChange(rest);
@@ -351,8 +366,9 @@ export function Composer({
     <>
       {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
-        {(files.length > 0 || workerPick !== null) && (
+        {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
           <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
+            {leadingChip}
             {workerPick !== null && onWorkerPick && (
               <WorkerPickChip
                 pick={workerPick}

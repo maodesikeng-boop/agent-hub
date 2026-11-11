@@ -15,6 +15,7 @@ import {
   makeSnapshot,
   makeUserMessage,
   messageChange,
+  openFirstConversation,
   type Reply,
 } from "./test-utils.ts";
 import { ATTACHMENTS_MISSING_MESSAGE } from "../shared/index.ts";
@@ -22,6 +23,7 @@ import { ATTACHMENTS_MISSING_MESSAGE } from "../shared/index.ts";
 let api: FakeApi;
 
 async function boot(snapshot: StateSnapshot = defaultSnapshot()) {
+  openFirstConversation(snapshot);
   api = new FakeApi(snapshot);
   api.install();
   installFakeWebSocket();

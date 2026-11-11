@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_REWOUND_PENDING_KEYS, workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
-import { groupMessages, listConversations, previewText, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
+import { deviceRouterView, fleetRouterView, groupMessages, listConversations, previewText, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { changeOf, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
@@ -223,5 +223,102 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const nextEntries = listConversations(rewound);
     expect(previewText(nextEntries[0]!)).not.toBe("刚暂停的话");
     expect(listConversations(rewound)).toBe(nextEntries);
+  });
+
+  it("Router 跨设备视图（deviceRouterView / fleetRouterView）：300 Worker、3 万条消息下流式 session.status 与无关消息更新均保持 === 引用稳定且中位数 < 2 ms，router/task_graph/pm 变化立即失效", () => {
+    const localBase = monthState();
+    const localWithRouter: HubState = {
+      ...localBase,
+      router: {
+        ...localBase.router,
+        items: [
+          {
+            id: 1,
+            kind: "decision",
+            status: "pending",
+            pmId: 1,
+            projectId: 1,
+            conversationId: PM_CONVERSATION,
+            question: "本地拍板项",
+            context: "上下文",
+            options: ["A", "B"],
+            askMessageId: null,
+            resolution: null,
+            createdAt: 10_000,
+            updatedAt: 10_000,
+          },
+          {
+            id: 2,
+            kind: "report",
+            status: "unread",
+            pmId: 1,
+            projectId: 1,
+            conversationId: PM_CONVERSATION,
+            summary: "本地阶段汇报",
+            links: [],
+            createdAt: 9_000,
+            updatedAt: 9_000,
+          },
+        ],
+      },
+    };
+    const remoteState: HubState = {
+      ...initialState,
+      phase: "ready",
+      seq: 5,
+      pms: [makePm({ id: 2, name: "远端 PM" })],
+      projects: [makeProject({ id: 2, pmId: 2, conversationId: 2 })],
+      conversations: {
+        2: { conversation: makeConversation({ id: 2, pmId: 2, projectId: 2, title: "远端 PM" }), messages: [], hasMore: false },
+      },
+    };
+
+    const makeDevices = (local: HubState) => [
+      { id: "local-id", name: "Mac", self: true, online: true, state: local },
+      { id: "tokyo-id", name: "Tokyo", self: false, online: true, state: remoteState },
+    ];
+
+    const firstDeviceView = deviceRouterView(localWithRouter, "local");
+    expect(deviceRouterView(localWithRouter, "local")).toBe(firstDeviceView);
+
+    const firstFleet = fleetRouterView(makeDevices(localWithRouter));
+    expect(fleetRouterView(makeDevices(localWithRouter))).toBe(firstFleet);
+    expect(firstFleet.decisions).toHaveLength(1);
+    expect(firstFleet.reports).toHaveLength(1);
+
+    // 流式增量文字更新与 Worker 消息到达都不换 deviceRouterView / fleetRouterView 引用
+    const pmSession = makeSession({
+      sessionId: 88_888,
+      conversationId: PM_CONVERSATION,
+      pmId: 1,
+      status: "running",
+      activity: "working",
+      step: { type: "text" },
+      streamingText: "片段一",
+    });
+    let ticking = applyChange(localWithRouter, sessionChange(localWithRouter.seq + 1, pmSession));
+    expect(deviceRouterView(ticking, "local")).toBe(firstDeviceView);
+    expect(fleetRouterView(makeDevices(ticking))).toBe(firstFleet);
+
+    let seq = ticking.seq;
+    expect(
+      medianMs(21, () => {
+        ticking = applyChange(ticking, sessionChange(++seq, { ...pmSession, streamingText: `片段 ${seq}` }));
+        fleetRouterView(makeDevices(ticking));
+      }),
+    ).toBeLessThan(2);
+    expect(fleetRouterView(makeDevices(ticking))).toBe(firstFleet);
+
+    // router.item.updated 后立即失效并算出新视图，再重复调用保持新引用稳定
+    const resolved = applyChange(
+      ticking,
+      changeOf(++seq, "router.item.updated", {
+        item: { ...(localWithRouter.router.items[0] as Extract<(typeof localWithRouter.router.items)[number], { kind: "decision" }>), status: "resolved" },
+      }),
+    );
+    const afterResolve = fleetRouterView(makeDevices(resolved));
+    expect(afterResolve).not.toBe(firstFleet);
+    expect(afterResolve.decisions).toHaveLength(0);
+    expect(fleetRouterView(makeDevices(resolved))).toBe(afterResolve);
   });
 });
