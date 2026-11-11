@@ -687,6 +687,20 @@ export const ROUTER_ITEM_RETENTION_MS = ROUTER_ITEM_RETENTION_DAYS * 24 * 60 * 6
 export const ROUTER_COMMANDS_RETENTION_MAX = 500;
 /** router_audit_log 环形表保留行数上限。 */
 export const ROUTER_AUDIT_LOG_MAX_ROWS = 500;
+/** 总助单条回复入库字数上限（docs/router-workbench-v2-design.md 第 5.2 节）：超了才截并标 plan.replyTruncated。 */
+export const ROUTER_REPLY_MAX_CHARS = 6_000;
+export const MAX_ROUTER_REPLY_BYTES = 4 * ROUTER_REPLY_MAX_CHARS;
+/**
+ * StateSnapshot 里最近指令、简报的字节上限：各自从新到旧累加，超了就停，至少带 1 条。
+ * 设计稿估的是 64 KB / 48 KB；实测一个月数据集里总助以外的部分已有约 303 KB（snapshot-size.test.ts），
+ * 两者合计只能留 56 KB 才守得住 SNAPSHOT_MONTH_MAX_BYTES，近窗之外的走历史分页。
+ */
+export const ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES = 32 * 1024;
+/** StateSnapshot 里最近简报条数（不分已读未读）。 */
+export const ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX = 30;
+export const ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES = 24 * 1024;
+/** 指令、简报历史单页响应字节上限：超了提前截页，游标指向最后一条已给出的。 */
+export const ROUTER_STREAM_PAGE_MAX_BYTES = 256 * 1024;
 
 // ---- 持久化任务图（Task DAG）上限（docs/task-graph-design.md §2.3 + 审定宽松水位）----
 /** 单项目同时处于 active 的任务图安全水位。 */

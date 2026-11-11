@@ -86,6 +86,7 @@ import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
+import { resolveUpload } from "./uploads.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { StartupError } from "./startup-error.ts";
@@ -665,6 +666,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sandboxGuard,
       targetRegistry: routerTargetRegistry,
       models,
+      // 指令的附件显示信息按上传编号从磁盘解析（和发消息时同一个口径），写进 plan.attachments
+      resolveAttachment: (id) => {
+        const att = resolveUpload(uploadsDir, id);
+        return att === null ? null : { id: att.id, name: att.name, mime: att.mime, size: att.size };
+      },
       stateDir,
       launchDir: paths.launchDir,
       log,

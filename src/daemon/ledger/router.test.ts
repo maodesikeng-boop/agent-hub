@@ -7,8 +7,19 @@ import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf, type ConversationId, type PmId, type SessionId } from "../../shared/domain.ts";
 import {
   ROUTER_AUDIT_LOG_MAX_ROWS,
+  ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
+  ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
+  ROUTER_CONTEXT_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
+  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  ROUTER_REPLY_MAX_CHARS,
+  ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
+  ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+  ROUTER_REPORT_LINKS_MAX,
+  ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+  ROUTER_STREAM_PAGE_MAX_BYTES,
 } from "../../shared/limits.ts";
 import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
@@ -259,16 +270,19 @@ describe("hub router ask / report / note 与同源桥接", () => {
 
     expect(ledger.snapshot().router.items.filter((x) => x.kind === "report")).toHaveLength(3);
 
-    // 单条归档 r1
+    // 单条归档 r1：读过的简报仍留在快照近窗里（v2 时间流），只是状态变了
     const single = ledger.resolveRouterItem(r1.id, { action: "archive" });
     expect(single.item.status).toBe("archived");
-    expect(ledger.snapshot().router.items.filter((x) => x.kind === "report")).toHaveLength(2);
+    const unreadOf = () =>
+      ledger.snapshot().router.items.filter((x) => x.kind === "report" && x.status === "unread");
+    expect(unreadOf()).toHaveLength(2);
+    expect(ledger.snapshot().router.items.filter((x) => x.kind === "report")).toHaveLength(3);
 
     // 全部已读 r2、r3
     changes = [];
     const batch = ledger.archiveAllRouterReports();
     expect(batch.archivedIds.sort((a, b) => a - b)).toEqual([r2.id, r3.id].sort((a, b) => a - b));
-    expect(ledger.snapshot().router.items.filter((x) => x.kind === "report")).toHaveLength(0);
+    expect(unreadOf()).toHaveLength(0);
     expect(changes.some((c) => c.type === "router.reports.archived_all")).toBe(true);
 
     // 游标分页读取已归档历史（每页 2 条）
@@ -516,5 +530,164 @@ describe("临时 assistant 会话收尾：agent_sessions.id 只增不退、不�
     ledger.recoverAfterRestart();
     expect(assistantRows()).toEqual([]);
     expect(newAssistant().id).toBeGreaterThan(pm.sessionId);
+  });
+});
+
+/** 满长的一条简报：400 字正文 + 4 个标题、地址都写满的链接。 */
+function fullReport(pm: { sessionId: SessionId }, i: number) {
+  return ledger.hubCall(pm.sessionId, "router.report", {
+    summary: `${i}`.padEnd(ROUTER_CONTEXT_MAX_CHARS, "报"),
+    links: Array.from({ length: ROUTER_REPORT_LINKS_MAX }, (_, k) => ({
+      label: `${i}-${k}`.padEnd(ROUTER_REPORT_LINK_LABEL_MAX_CHARS, "链"),
+      target: `https://example.com/${i}/${k}/`.padEnd(ROUTER_REPORT_LINK_TARGET_MAX_CHARS, "a"),
+    })),
+  }).data.item;
+}
+
+/** 满长的一条指令：4,000 字原话 + 6,000 字回复。 */
+function fullCommand(i: number) {
+  const { command } = ledger.createRouterCommand({
+    clientId: `full-${i}`,
+    inputText: "问".repeat(ROUTER_COMMAND_MAX_CHARS),
+    vendor: "claude",
+    status: "planning",
+  });
+  return ledger.updateRouterCommand(command.id, {
+    status: "answered",
+    plan: { intent: "answer", reply: "答".repeat(ROUTER_REPLY_MAX_CHARS), actions: [], track: "B" },
+  });
+}
+
+const jsonBytes = (v: unknown): number => Buffer.byteLength(JSON.stringify(v));
+
+describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 节第 6、7 项）", () => {
+  it("60 条未读简报 + 5 张待拍板项：5 张待拍板项全在快照里，简报只带最近 30 条", () => {
+    const decisions = [];
+    for (let i = 0; i < 5; i++) {
+      now += 1;
+      decisions.push(
+        ledger.hubCall(lin.sessionId, "router.ask", { question: `拍板 ${i}`, options: ["甲", "乙"] }).data.item,
+      );
+    }
+    const reports = [];
+    for (let i = 0; i < 60; i++) {
+      now += 1;
+      reports.push(ledger.hubCall(zhou.sessionId, "router.report", { summary: `简报 ${i}` }).data.item);
+    }
+    const items = ledger.snapshot().router.items;
+    expect(items.filter((x) => x.kind === "decision").map((x) => x.id).sort((a, b) => a - b)).toEqual(
+      decisions.map((d) => d.id),
+    );
+    const briefings = items.filter((x) => x.kind === "report");
+    expect(briefings).toHaveLength(ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX);
+    expect(briefings.map((x) => x.id)).toEqual(reports.slice(-30).reverse().map((r) => r.id));
+    // 合并后仍按 createdAt DESC, id DESC
+    const keys = items.map((x) => [x.createdAt, x.id] as const);
+    expect(keys).toEqual([...keys].sort((a, b) => b[0] - a[0] || b[1] - a[1]));
+  });
+
+  it("读过（archived）的简报仍在快照近窗里；已拍板的不在", () => {
+    const r1 = ledger.hubCall(lin.sessionId, "router.report", { summary: "PR 已合并" }).data.item;
+    now += 1;
+    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "要不要发版？", options: ["要", "不要"] }).data.item;
+    ledger.archiveAllRouterReports();
+    ledger.resolveRouterItem(ask.id, { clientId: "c-1", optionIndex: 0 });
+    const items = ledger.snapshot().router.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: r1.id, kind: "report", status: "archived" });
+  });
+
+  it("快照里的简报有字节上限：满链接简报从新到旧累加不超过 ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES，至少 1 条", () => {
+    for (let i = 0; i < 40; i++) {
+      now += 1;
+      fullReport(lin, i);
+    }
+    const briefings = ledger.snapshot().router.items.filter((x) => x.kind === "report");
+    expect(briefings.length).toBeGreaterThanOrEqual(1);
+    expect(briefings.length).toBeLessThan(ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX);
+    expect(briefings.reduce((n, b) => n + jsonBytes(b), 0)).toBeLessThanOrEqual(ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES);
+    // 留下的是最新的那一段
+    const newest = ledger.listRouterItems(undefined, 1, "report").items[0]!;
+    expect(briefings[0]!.id).toBe(newest.id);
+  });
+
+  it("快照里的指令有字节上限：满长回复从新到旧累加不超过 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES，至少 1 条", () => {
+    const made = [];
+    for (let i = 0; i < ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX; i++) {
+      now += 1;
+      made.push(fullCommand(i));
+    }
+    const commands = ledger.snapshot().router.commands;
+    expect(commands.length).toBeGreaterThanOrEqual(1);
+    expect(commands.length).toBeLessThan(ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX);
+    expect(commands.reduce((n, c) => n + jsonBytes(c), 0)).toBeLessThanOrEqual(ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES);
+    expect(commands.map((c) => c.id)).toEqual(made.reverse().slice(0, commands.length).map((c) => c.id));
+  });
+
+  it("listRouterItems 带 kind=report：任意状态的简报，不含拍板项，能按游标翻页；不带时行为不变", () => {
+    const r1 = ledger.hubCall(lin.sessionId, "router.report", { summary: "一" }).data.item;
+    now += 1;
+    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "选哪个？", options: ["甲", "乙"] }).data.item;
+    now += 1;
+    const r2 = ledger.hubCall(zhou.sessionId, "router.report", { summary: "二" }).data.item;
+    ledger.resolveRouterItem(r2.id, { action: "archive" });
+    now += 1;
+    const r3 = ledger.hubCall(lin.sessionId, "router.report", { summary: "三" }).data.item;
+    ledger.resolveRouterItem(ask.id, { clientId: "c-2", optionIndex: 1 });
+
+    const page1 = ledger.listRouterItems(undefined, 2, "report");
+    expect(page1.items.map((i) => [i.id, i.status])).toEqual([
+      [r3.id, "unread"],
+      [r2.id, "archived"],
+    ]);
+    expect(page1.hasMore).toBe(true);
+    expect(page1.nextCursor).toBe(`${page1.items[1]!.createdAt}:${r2.id}`);
+    const page2 = ledger.listRouterItems(page1.nextCursor!, 2, "report");
+    expect(page2.items.map((i) => i.id)).toEqual([r1.id]);
+    expect(page2.hasMore).toBe(false);
+    expect(page2.nextCursor).toBeNull();
+
+    // 不带 kind：照旧只回已拍板 / 已归档的（含拍板项），不含未读简报
+    expect(ledger.listRouterItems(undefined, 10).items.map((i) => i.id)).toEqual([ask.id, r2.id].sort((a, b) => b - a));
+  });
+
+  it("简报历史单页有字节上限：超了提前截页，游标指向最后一条已给出的，接着翻不丢不重", () => {
+    const all = [];
+    for (let i = 0; i < 100; i++) {
+      now += 1;
+      all.push(fullReport(i % 2 === 0 ? lin : zhou, i));
+    }
+    const page1 = ledger.listRouterItems(undefined, 100, "report");
+    expect(page1.items.length).toBeGreaterThanOrEqual(1);
+    expect(page1.items.length).toBeLessThan(100);
+    expect(jsonBytes(page1)).toBeLessThanOrEqual(ROUTER_STREAM_PAGE_MAX_BYTES);
+    expect(page1.hasMore).toBe(true);
+    const last = page1.items.at(-1)!;
+    expect(page1.nextCursor).toBe(`${last.createdAt}:${last.id}`);
+
+    const seen = [...page1.items];
+    let cursor = page1.nextCursor;
+    while (cursor !== null) {
+      const page = ledger.listRouterItems(cursor, 100, "report");
+      expect(jsonBytes(page)).toBeLessThanOrEqual(ROUTER_STREAM_PAGE_MAX_BYTES);
+      seen.push(...page.items);
+      cursor = page.nextCursor;
+    }
+    expect(seen.map((i) => i.id)).toEqual(all.reverse().map((r) => r.id));
+  });
+
+  it("指令历史单页有字节上限：满长回复超了提前截页，游标指向最后一条已给出的", () => {
+    for (let i = 0; i < 30; i++) {
+      now += 1;
+      fullCommand(i);
+    }
+    const page1 = ledger.listRouterCommands(undefined, 30);
+    expect(page1.commands.length).toBeLessThan(30);
+    expect(jsonBytes(page1)).toBeLessThanOrEqual(ROUTER_STREAM_PAGE_MAX_BYTES);
+    expect(page1.hasMore).toBe(true);
+    const last = page1.commands.at(-1)!;
+    expect(page1.nextCursor).toBe(`${last.createdAt}:${last.id}`);
+    const page2 = ledger.listRouterCommands(page1.nextCursor!, 30);
+    expect(page2.commands[0]!.id).toBe(last.id - 1);
   });
 });

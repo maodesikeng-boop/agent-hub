@@ -24,6 +24,7 @@ import type {
 } from "./domain.ts";
 import type {
   DeviceRouterDigest,
+  PostRouterCommandTarget,
   RouterCommandRecord,
   RouterItem,
   RouterPmNote,
@@ -758,11 +759,16 @@ export interface RouterCommandsPage {
   hasMore: boolean;
 }
 
-export interface PostRouterCommandTarget {
-  deviceId?: string;
-  pmId?: PmId;
-  projectId?: ProjectId;
+/** 定义在 router.ts（和 RouterAgentPlan.target 同一个形状），这里原样转出，老的导入路径不用改。 */
+export type { PostRouterCommandTarget } from "./router.ts";
+
+/** GET /api/router/items 的查询参数。不带 kind：已拍板、已归档的历史（旧口径）；kind=report：不分状态只回简报。 */
+export interface RouterItemsQuery {
+  cursor?: string;
+  limit?: number;
+  kind?: RouterItemsKind;
 }
+export type RouterItemsKind = "report";
 
 export interface DecideRouterItemRequest {
   clientId: string;

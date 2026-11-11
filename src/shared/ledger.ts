@@ -638,7 +638,8 @@ export interface Ledger extends LedgerHandoverWork {
   reportHealth(module: HealthModule, error: string | null): void;
   // ---- Router（总助）与持久化任务图接口 ----
   getRouterDigest(): DeviceRouterDigest;
-  listRouterItems(beforeCursor?: string, limit?: number): RouterItemsPage;
+  /** kind=report：不分状态只回简报；不带：已拍板、已归档的历史。单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。 */
+  listRouterItems(beforeCursor?: string, limit?: number, kind?: import("./api.ts").RouterItemsKind): RouterItemsPage;
   resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
