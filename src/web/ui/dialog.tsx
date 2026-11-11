@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import type * as React from "react";
 import { useAccentContainer } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
+import { Button } from "./button.tsx";
 
 // 弹窗（docs/ui-standard.md 第 10 条）：rounded-2xl、p-6、内容之间 gap-6；标题 17px 半粗在左上，关闭按钮右上；
 // 底部按钮放 DialogFooter（靠右，主按钮在最右）。宽度三档：简单设置 max-w-110，表单默认 520px，双栏的全局设置 780px（SettingsDialog）。
@@ -15,11 +16,13 @@ export function DialogContent({
   children,
   title,
   titleClassName,
+  fullScreen = false,
   ...props
 }: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "title"> & {
   title: string;
   /** 标题另放（设置弹窗的标题是右栏里当前分类的名字）时传 "sr-only"：读屏仍用它当弹窗名字。 */
   titleClassName?: string;
+  fullScreen?: boolean;
 }) {
   const container = useAccentContainer();
   return (
@@ -29,19 +32,37 @@ export function DialogContent({
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-2xl border border-border bg-background p-6 outline-none",
+          fullScreen
+            ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-surface-sidebar pt-[var(--safe-top)] pb-[max(var(--safe-bottom),var(--kb-inset))] outline-none"
+            : "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100%-48px)] w-[calc(100%-48px)] max-w-130 -translate-x-1/2 -translate-y-1/2 flex-col gap-6 overflow-hidden rounded-2xl border border-border bg-background p-6 outline-none",
           className,
         )}
         {...props}
       >
-        <DialogPrimitive.Title className={cn("shrink-0 text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
-        {children}
-        <DialogPrimitive.Close
-          aria-label="Close"
-          className="absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <X className="size-4" aria-hidden="true" />
-        </DialogPrimitive.Close>
+        {fullScreen ? (
+          <>
+            <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+              <DialogPrimitive.Title className={cn("min-w-0 truncate text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
+              <DialogPrimitive.Close asChild>
+                <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label="Close">
+                  <X aria-hidden="true" />
+                </Button>
+              </DialogPrimitive.Close>
+            </header>
+            {children}
+          </>
+        ) : (
+          <>
+            <DialogPrimitive.Title className={cn("shrink-0 text-title font-semibold", titleClassName)}>{title}</DialogPrimitive.Title>
+            {children}
+            <DialogPrimitive.Close
+              aria-label="Close"
+              className="absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <X className="size-4" aria-hidden="true" />
+            </DialogPrimitive.Close>
+          </>
+        )}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );
