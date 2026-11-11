@@ -305,6 +305,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **放大全览弹窗（`TaskGraphDialog`）**：
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，`overflow-auto` 原生双向滚动）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线），上层渲染完整阶段卡片、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
+  - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右主按钮 `Cancel graph`，点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
+  - **跨设备**：果皮轨、全览弹窗、拍板卡、`Completed` 历史拉取一律用 `DeviceScope`（`src/web/device-scope.tsx` 的 `useClient()`）给的当前设备接口，不自己按设备编号另建 client；看远端项目经理时请求走那台的 `/d/<设备>/...`。
 
 ## 13. 字体、数字、列表行
 

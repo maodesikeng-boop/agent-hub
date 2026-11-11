@@ -9,6 +9,8 @@ import type {
   Conversation,
   ConversationSnapshot,
   CreatePmRequest,
+  CancelTaskGraphRequest,
+  CancelTaskGraphResponse,
   DecideTaskNodeRequest,
   PickFolderRequest,
   EditPersonaRequest,
@@ -421,6 +423,27 @@ export class FakeApi {
     status: 200,
     body: { settings: { vendor: body.vendor, model: body.model, effort: body.effort, updatedAt: Date.now() } },
   });
+  /** POST /api/task-graphs/:id/cancel。默认：回一张已取消的空图。 */
+  cancelTaskGraph: (graphId: number, body: CancelTaskGraphRequest) => Reply | Promise<Reply> = (graphId) => ({
+    status: 200,
+    body: {
+      graph: {
+        id: graphId,
+        projectId: 1,
+        pmId: 1,
+        conversationId: 1,
+        title: "任务图",
+        status: "cancelled",
+        originMsgId: null,
+        nodes: [],
+        edges: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        completedAt: 1_000,
+      },
+      messageId: 778,
+    } satisfies CancelTaskGraphResponse,
+  });
   /** POST /api/task-graphs/:id/nodes/:nodeKey/decide。 */
   decideTaskNode: (graphId: number, nodeKey: string, body: DecideTaskNodeRequest) => Reply | Promise<Reply> = (graphId) => ({
     status: 200,
@@ -590,6 +613,8 @@ export class FakeApi {
     if (resolveItem && method === "POST") return jsonResponse(await this.resolveRouterItem(Number(resolveItem[1]), body));
     const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);
     if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1])));
+    const cancelGraph = /^\/api\/task-graphs\/(\d+)\/cancel$/.exec(url.pathname);
+    if (cancelGraph && method === "POST") return jsonResponse(await this.cancelTaskGraph(Number(cancelGraph[1]), body));
     const decideNode = /^\/api\/task-graphs\/(\d+)\/nodes\/([^/]+)\/decide$/.exec(url.pathname);
     if (decideNode && method === "POST") {
       return jsonResponse(await this.decideTaskNode(Number(decideNode[1]), decodeURIComponent(decideNode[2]!), body));

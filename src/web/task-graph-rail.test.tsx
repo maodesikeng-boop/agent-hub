@@ -819,6 +819,15 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel graph" }));
     await waitFor(() => expect(urls).toHaveLength(1));
     expect(urls[0]).toBe("/api/task-graphs/90/nodes/a/skip");
+
+    // Cancel graph 只弹出二次确认、不发请求（第 12.1 条）；确认按钮同一帧连点也只发一次
+    const confirm = await screen.findByRole("dialog", { name: "Cancel this task graph?" });
+    expect(urls).toHaveLength(1);
+    const confirmButton = within(confirm).getByRole("button", { name: "Cancel graph" });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(urls[1]).toBe("/api/task-graphs/90/cancel");
   });
 
   it(`Completed 历史任务图翻到 ${MAX_COMPLETED_GRAPH_PAGES} 页即停：不再显示 Load more，也不会把最新的第一页挤掉`, async () => {

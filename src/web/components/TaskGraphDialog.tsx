@@ -1,16 +1,17 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
 import { memo, useMemo, useRef, useState } from "react";
-import type { ConversationId, DeviceId, TaskGraph, TaskNode } from "../../shared/index.ts";
+import type { ConversationId, TaskGraph, TaskNode } from "../../shared/index.ts";
+import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
+import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
-import { GateDecisionCard, resolveBoundWorker, useResolvedClient } from "./PeelTrack.tsx";
+import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 function readRootFontSizePx(): number {
@@ -50,7 +51,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   onOpenChange,
   workers,
   colorKey = 0,
-  deviceId,
   onOpenWorker,
 }: {
   graph: TaskGraph | null;
@@ -58,13 +58,15 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   onOpenChange: (open: boolean) => void;
   workers: readonly WorkerEntry[];
   colorKey?: number;
-  deviceId?: DeviceId | null;
   onOpenWorker: (id: ConversationId) => void;
 }) {
-  const client = useResolvedClient(deviceId);
+  // 当前区域那台设备的接口（device-scope.tsx）：跨设备看远端项目经理时，跳过、取消、拍板都发给那台
+  const client = useClient();
   const qc = useHubQueryClient();
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
+  /** Cancel graph 的二次确认弹窗（docs/ui-standard.md 第 12.1 条）：点了先确认，确认了才发请求。 */
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
   // 同步防重入（Skip step / Cancel graph）：isPending 要等下一次渲染才变，连点会各发一次请求
@@ -122,9 +124,13 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       onMutate: () => setActionError(null),
       onSuccess: () => {
         void qc.invalidateQueries({ queryKey: ["project-task-graphs"] });
+        setConfirmingCancel(false);
         onOpenChange(false);
       },
-      onError: (err) => setActionError(errorText(err)),
+      onError: (err) => {
+        setConfirmingCancel(false);
+        setActionError(errorText(err));
+      },
       onSettled: releaseLock,
     },
     qc,
@@ -158,13 +164,34 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               variant="ghost"
               size="sm"
               disabled={cancelMutation.isPending || skipMutation.isPending}
-              onClick={() => runExclusive(() => cancelMutation.mutate())}
+              onClick={() => setConfirmingCancel(true)}
               className="text-muted-foreground hover:text-danger"
             >
-              {cancelMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
               Cancel graph
             </Button>
           )}
+          <Dialog
+            open={confirmingCancel}
+            onOpenChange={(next) => {
+              // 请求中不让 Esc、点遮罩把确认弹窗关掉（结果回来再关）
+              if (!cancelMutation.isPending) setConfirmingCancel(next);
+            }}
+          >
+            <DialogContent title="Cancel this task graph?" className="max-w-110">
+              <p>Unfinished steps in “{graph.title}” won't run. The project manager is told to wrap up any Pieces still working. This can't be undone.</p>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline" disabled={cancelMutation.isPending}>
+                    Keep going
+                  </Button>
+                </DialogClose>
+                <Button disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
+                  {cancelMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  Cancel graph
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
         {actionError !== null && (
           <p role="alert" title={errorTitle(actionError)} className="shrink-0 text-minor text-danger">
