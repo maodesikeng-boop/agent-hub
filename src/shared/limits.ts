@@ -47,6 +47,18 @@ export const MAX_MESSAGE_BYTES = 100 * 1024;
 export const STREAMING_TEXT_THROTTLE_MS = 70;
 /** 单段内存流式预览最多保留多少个 Unicode 字符（超长输出只截内存预览前缀，段结束 agent.text 落库仍是完整正文；防撑大内存与弱网帧）。 */
 export const MAX_STREAMING_TEXT_CHARS = 16_000;
+/**
+ * 本地快工具（如 Read / Grep / Glob，SSD 上 2～5ms 即返回结果）在内存态 LiveSession.step 的最短可读驻留毫秒数：
+ * openTools 清空准备回退到 Thinking 时，若距最近一次工具步骤显示尚不足该时长，先保留工具文案并设单会话唯一 setTimeout 到点回退；
+ * 期间一旦来新工具、流式/完整文字、回合结束/停止或会话退出/关库立即打断清零。
+ */
+export const MIN_TOOL_STEP_VISIBLE_MS = 450;
+/** 流式工具调用参数增量 JSON（如 Claude input_json_delta、Pi toolcall_delta）单块内存缓冲上限（UTF-16 码元）。 */
+export const MAX_STREAMING_TOOL_JSON_CHARS = 8_192;
+/** 单会话同时缓存的流式工具调用增量块上限（防异常流未发结束帧时无界增长）。 */
+export const MAX_STREAMING_TOOL_BLOCKS = 32;
+/** 推给网页的“在做什么”状态参数（文件路径、skill 名、连接器名等，见 step-labels.ts 的 STEP_INPUT_KEYS）每个最多这么多个 Unicode 字符。 */
+export const MAX_STEP_ARG_CHARS = 300;
 /** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 

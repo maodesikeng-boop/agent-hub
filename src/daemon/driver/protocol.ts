@@ -1,7 +1,18 @@
 // 几家厂商驱动共用的协议小函数（docs/vendor-plugin-design.md 的 A12：原来和 claude 的 stream-json 协议放在一个文件，P3 拆开）。
 // claude 自己的协议在 src/vendors/claude/protocol.ts。
 import { createHash } from "node:crypto";
-import type { TokenUsage } from "../../shared/index.ts";
+import {
+  MAX_STEP_ARG_CHARS,
+  MAX_STREAMING_TOOL_BLOCKS,
+  MAX_STREAMING_TOOL_JSON_CHARS,
+  type AgentStepInput,
+  type AgentToolPreviewEvent,
+  type TokenUsage,
+} from "../../shared/index.ts";
+import { STEP_INPUT_KEYS, pickStepInput } from "../../shared/step-labels.ts";
+
+/** 驱动发 agent.tool_preview 时挑状态参数用（和账本 stepOfTool 同一份规则）。 */
+export { pickStepInput };
 import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 import { VENDOR_LIST } from "../../vendors/registry.ts";
 
@@ -72,4 +83,222 @@ export function buildChildEnv(
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined && !PARENT_SESSION_ENV.includes(k)) env[k] = v;
   return { ...env, ...extra };
+}
+
+/** 计算工具步骤的去重签名（工具名 + STEP_INPUT_KEYS 字段值），签名未变时不重复发预览事件。 */
+export function toolStepSignature(name: string, input: unknown): string {
+  const kept = pickStepInput(input);
+  return `${name}\u0000${STEP_INPUT_KEYS.map((k) => kept[k] ?? "").join("\u0000")}`;
+}
+
+function readCompleteJsonString(
+  src: string,
+  quoteIdx: number,
+  decode = true,
+): { value: string; nextIdx: number } | null {
+  let i = quoteIdx + 1;
+  while (i < src.length) {
+    const ch = src.charCodeAt(i);
+    if (ch === 0x5c /* \ */) {
+      if (i + 1 >= src.length) return null;
+      if (src.charCodeAt(i + 1) === 0x75 /* u */) {
+        if (i + 5 >= src.length) return null;
+        i += 6;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === 0x22 /* " */) {
+      if (!decode) return { value: "", nextIdx: i + 1 };
+      try {
+        return { value: JSON.parse(src.slice(quoteIdx, i + 1)) as string, nextIdx: i + 1 };
+      } catch {
+        return null;
+      }
+    }
+    i += 1;
+  }
+  return null;
+}
+
+function skipWs(src: string, idx: number): number {
+  let i = idx;
+  while (i < src.length) {
+    const c = src.charCodeAt(i);
+    if (c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) i += 1;
+    else break;
+  }
+  return i;
+}
+
+/**
+ * 从流式半截 JSON 对象前缀中提取所有已闭合的顶层 STEP_INPUT_KEYS 字符串字段：
+ * 引号尚未闭合的半截字符串不提取，JSON 转义序列（\"、\\、\uXXXX 等）经标准 JSON.parse 精确还原。
+ */
+export function extractStreamingToolStepInput(partialJson: string): AgentStepInput {
+  const out: AgentStepInput = {};
+  let i = skipWs(partialJson, 0);
+  if (i >= partialJson.length || partialJson.charCodeAt(i) !== 0x7b /* { */) return out;
+  i += 1;
+
+  while (i < partialJson.length) {
+    i = skipWs(partialJson, i);
+    if (i < partialJson.length && partialJson.charCodeAt(i) === 0x2c /* , */) {
+      i = skipWs(partialJson, i + 1);
+    }
+    if (i >= partialJson.length || partialJson.charCodeAt(i) === 0x7d /* } */) break;
+    if (partialJson.charCodeAt(i) !== 0x22 /* " */) break;
+
+    const keyTok = readCompleteJsonString(partialJson, i);
+    if (keyTok === null) break;
+    i = skipWs(partialJson, keyTok.nextIdx);
+    if (i >= partialJson.length || partialJson.charCodeAt(i) !== 0x3a /* : */) break;
+    i = skipWs(partialJson, i + 1);
+    if (i >= partialJson.length) break;
+
+    const vCh = partialJson.charCodeAt(i);
+    if (vCh === 0x22 /* " */) {
+      const wantValue = (STEP_INPUT_KEYS as readonly string[]).includes(keyTok.value);
+      const valTok = readCompleteJsonString(partialJson, i, wantValue);
+      if (valTok === null) break;
+      i = valTok.nextIdx;
+      if (wantValue && valTok.value.trim() !== "") {
+        out[keyTok.value as keyof AgentStepInput] = [...valTok.value].slice(0, MAX_STEP_ARG_CHARS).join("");
+      }
+    } else if (vCh === 0x7b /* { */ || vCh === 0x5b /* [ */) {
+      let depth = 1;
+      i += 1;
+      while (i < partialJson.length && depth > 0) {
+        const c = partialJson.charCodeAt(i);
+        if (c === 0x22 /* " */) {
+          const nestedStr = readCompleteJsonString(partialJson, i, false);
+          if (nestedStr === null) return out;
+          i = nestedStr.nextIdx;
+          continue;
+        }
+        if (c === 0x7b || c === 0x5b) depth += 1;
+        else if (c === 0x7d || c === 0x5d) depth -= 1;
+        i += 1;
+      }
+      if (depth > 0) break;
+    } else {
+      while (i < partialJson.length) {
+        const c = partialJson.charCodeAt(i);
+        if (c === 0x2c || c === 0x7d || c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d) break;
+        i += 1;
+      }
+    }
+  }
+  return out;
+}
+
+interface StreamingToolBlockState {
+  toolUseId?: string;
+  name: string;
+  parentToolUseId?: string;
+  jsonBuf: string;
+  capped: boolean;
+  keptInput: AgentStepInput;
+  lastSig: string;
+}
+
+/**
+ * 单会话有界的流式工具调用参数跟踪器（Claude stream_event 与 Pi toolcall_start/delta 共用）：
+ * - 单块 JSON 缓冲上限 MAX_STREAMING_TOOL_JSON_CHARS（8 KB），块数上限 MAX_STREAMING_TOOL_BLOCKS（32）；
+ * - 工具起点立即发一次预览，之后仅在提取到新的路径 / skill 字段（step 签名变化）时再发一次预览，后续大段正文参数零刷屏。
+ */
+export class StreamingToolPreviewTracker {
+  readonly #blocks = new Map<string | number, StreamingToolBlockState>();
+
+  get size(): number {
+    return this.#blocks.size;
+  }
+
+  start(
+    key: string | number,
+    opts: {
+      toolUseId?: string;
+      name: string;
+      initialInput?: unknown;
+      parentToolUseId?: string;
+      at: number;
+    },
+  ): AgentToolPreviewEvent | null {
+    if (opts.name === "") return null;
+    if (!this.#blocks.has(key) && this.#blocks.size >= MAX_STREAMING_TOOL_BLOCKS) {
+      const oldest = this.#blocks.keys().next().value;
+      if (oldest !== undefined) this.#blocks.delete(oldest);
+    }
+    const keptInput = pickStepInput(opts.initialInput);
+    const lastSig = toolStepSignature(opts.name, keptInput);
+    this.#blocks.set(key, {
+      toolUseId: opts.toolUseId,
+      name: opts.name,
+      parentToolUseId: opts.parentToolUseId,
+      jsonBuf: "",
+      capped: false,
+      keptInput,
+      lastSig,
+    });
+    return this.#toEvent(this.#blocks.get(key)!, opts.at);
+  }
+
+  appendJsonDelta(key: string | number, partialJson: string, at: number): AgentToolPreviewEvent | null {
+    const b = this.#blocks.get(key);
+    if (!b || partialJson === "" || b.capped) return null;
+    const room = MAX_STREAMING_TOOL_JSON_CHARS - b.jsonBuf.length;
+    if (partialJson.length >= room) {
+      b.jsonBuf += partialJson.slice(0, Math.max(0, room));
+      b.capped = true;
+    } else {
+      b.jsonBuf += partialJson;
+    }
+    const extracted = extractStreamingToolStepInput(b.jsonBuf);
+    const merged: AgentStepInput = { ...b.keptInput, ...extracted };
+    const sig = toolStepSignature(b.name, merged);
+    if (sig === b.lastSig) return null;
+    b.keptInput = merged;
+    b.lastSig = sig;
+    return this.#toEvent(b, at);
+  }
+
+  updateObject(
+    key: string | number,
+    patch: { toolUseId?: string; name?: string; input?: unknown },
+    at: number,
+  ): AgentToolPreviewEvent | null {
+    let b = this.#blocks.get(key);
+    if (!b) {
+      if (!patch.name) return null;
+      return this.start(key, { toolUseId: patch.toolUseId, name: patch.name, initialInput: patch.input, at });
+    }
+    if (patch.toolUseId) b.toolUseId = patch.toolUseId;
+    if (patch.name) b.name = patch.name;
+    const merged: AgentStepInput = { ...b.keptInput, ...pickStepInput(patch.input) };
+    const sig = toolStepSignature(b.name, merged);
+    if (sig === b.lastSig) return null;
+    b.keptInput = merged;
+    b.lastSig = sig;
+    return this.#toEvent(b, at);
+  }
+
+  end(key: string | number): void {
+    this.#blocks.delete(key);
+  }
+
+  clear(): void {
+    this.#blocks.clear();
+  }
+
+  #toEvent(b: StreamingToolBlockState, at: number): AgentToolPreviewEvent {
+    return {
+      type: "agent.tool_preview",
+      ...(b.toolUseId !== undefined && b.toolUseId !== "" ? { toolUseId: b.toolUseId } : {}),
+      name: b.name,
+      input: { ...b.keptInput },
+      ...(b.parentToolUseId !== undefined ? { parentToolUseId: b.parentToolUseId } : {}),
+      at,
+    };
+  }
 }

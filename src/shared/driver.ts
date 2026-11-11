@@ -235,6 +235,18 @@ export interface AgentToolEvent extends DriverEventBase, SubtaskField {
 }
 
 /**
+ * 厂商流式工具调用早捕获预览（如 Claude content_block_start tool_use + input_json_delta、Pi toolcall_start + toolcall_delta、
+ * ACP tool_call_update 补齐路径、Agy 早期工具帧、Codex 增量补丁路径）：
+ * 只改内存态 LiveSession.step，零 SQLite 写入、不插 messages / session_steps；正式入库仍由完整确定时的 agent.tool 一次性完成。
+ */
+export interface AgentToolPreviewEvent extends DriverEventBase, SubtaskField {
+  type: "agent.tool_preview";
+  toolUseId?: string;
+  name: string;
+  input?: unknown;
+}
+
+/**
  * 一轮结束（result）。messageIds：这一轮处理的用户消息。ok 的 turn.ended 之前一定先出过这些消息的
  * message.processing（delivered → replied 不是合法的状态变化，账本会忽略）。账本这样标：
  * - interrupted（这一轮里出现过 `[Request interrupted by user]`）→ stopped；
@@ -370,6 +382,7 @@ export type DriverEvent =
   | AgentTextDeltaEvent
   | AgentThinkingEvent
   | AgentToolEvent
+  | AgentToolPreviewEvent
   | AgentToolResultEvent
   | TurnEndedEvent
   | RateLimitEvent

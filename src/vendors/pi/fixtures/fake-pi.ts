@@ -7,6 +7,10 @@ interface FakePiToolCall {
   id: string;
   name: string;
   arguments?: Record<string, unknown>;
+  /** 可选：模拟 toolcall_delta 流式增量 JSON 分片。 */
+  argDeltas?: string[];
+  /** 可选：模拟真实 pi-ai 在 toolcall_start / toolcall_delta 里通过 partial.content[contentIndex] 暴露工具名与半解析参数。 */
+  partialShape?: boolean;
   output?: string;
   isError?: boolean;
 }
@@ -300,7 +304,25 @@ async function executeTurn(promptText, turnScript) {
   const tools = turnScript.tools || [];
   for (const t of tools) {
     const args = t.arguments || {};
-    send({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex, id: t.id, toolName: t.name } });
+    if (t.partialShape) {
+      const partialBlocks = [...contentBlocks, { type: "toolCall", id: t.id, name: t.name, arguments: {} }];
+      send({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "toolcall_start",
+          contentIndex,
+          partial: { role: "assistant", content: partialBlocks },
+        },
+      });
+    } else {
+      send({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex, id: t.id, toolName: t.name } });
+    }
+    for (const d of t.argDeltas || []) {
+      send({
+        type: "message_update",
+        assistantMessageEvent: { type: "toolcall_delta", contentIndex, delta: d },
+      });
+    }
     send({
       type: "message_update",
       assistantMessageEvent: {

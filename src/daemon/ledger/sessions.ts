@@ -14,10 +14,15 @@ import type {
   SessionState,
   WorkerId,
 } from "../../shared/domain.ts";
-import { MAX_STREAMING_TEXT_CHARS, STREAMING_TEXT_THROTTLE_MS } from "../../shared/limits.ts";
+import {
+  MAX_STREAMING_TEXT_CHARS,
+  MIN_TOOL_STEP_VISIBLE_MS,
+  STREAMING_TEXT_THROTTLE_MS,
+} from "../../shared/limits.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
+import { stepOfTool } from "./tool-summary.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
 /** 只在内存里的会话状态（守护进程重启后从头开始）。status 不在这里，只从 agent_sessions 那一行读。 */
@@ -40,9 +45,19 @@ export interface LiveSession {
   streamingText?: string;
   /** streamingText 当前的 Unicode 码点数，避免每次 delta 重复展开整段字符串计数。 */
   streamingChars?: number;
+  /** 最近一次当前工具 step 开始显示的时刻（毫秒），用于快工具不足 MIN_TOOL_STEP_VISIBLE_MS 时防闪没驻留；不推给网页。 */
+  toolStepAt?: number;
 }
 
 const THINKING: AgentStep = { type: "thinking" };
+
+function sameToolStep(a: AgentStep | null | undefined, b: AgentStep | null | undefined): boolean {
+  if (a?.type !== "tool_use" || b?.type !== "tool_use" || a.name !== b.name) return false;
+  const ak = Object.keys(a.input);
+  const bk = Object.keys(b.input);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => a.input[k as keyof typeof a.input] === b.input[k as keyof typeof b.input]);
+}
 
 /**
  * 正在停、准备中（Worker 在跑准备命令，还没开工）不被盖掉。step 不传就保持原样（还没有就是“在思考”：一轮刚开始，
@@ -78,6 +93,7 @@ export const idle = (l: LiveSession) => {
   l.apiRetry = null;
   l.step = null;
   l.openTools = [];
+  l.toolStepAt = undefined;
   clearStreaming(l);
 };
 
@@ -87,6 +103,15 @@ export function createLedgerSessions(ctx: LedgerContext) {
   const { db, now, write, emitChange, enqueue, pushed } = ctx;
   const live = new Map<SessionId, LiveSession>();
   const streamThrottles = new Map<SessionId, { lastFlushedAt: number; timer: ReturnType<typeof setTimeout> | null }>();
+  const toolHoldTimers = new Map<SessionId, ReturnType<typeof setTimeout>>();
+
+  const safeGetSession = (sessionId: SessionId): AgentSessionRow | null => {
+    try {
+      return getAgentSession(db, sessionId);
+    } catch {
+      return null;
+    }
+  };
 
   const cancelStreamTimer = (sessionId: SessionId) => {
     const entry = streamThrottles.get(sessionId);
@@ -96,8 +121,19 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
   };
 
+  const cancelToolHoldTimer = (sessionId: SessionId) => {
+    const timer = toolHoldTimers.get(sessionId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      toolHoldTimers.delete(sessionId);
+    }
+  };
+
+  const hasToolHold = (sessionId: SessionId): boolean => toolHoldTimers.has(sessionId);
+
   const forgetSession = (sessionId: SessionId) => {
     cancelStreamTimer(sessionId);
+    cancelToolHoldTimer(sessionId);
     live.delete(sessionId);
     pushed.delete(sessionId);
   };
@@ -107,7 +143,12 @@ export function createLedgerSessions(ctx: LedgerContext) {
       if (entry.timer !== null) clearTimeout(entry.timer);
     }
     streamThrottles.clear();
-    for (const l of live.values()) clearStreaming(l);
+    for (const timer of toolHoldTimers.values()) clearTimeout(timer);
+    toolHoldTimers.clear();
+    for (const l of live.values()) {
+      clearStreaming(l);
+      l.toolStepAt = undefined;
+    }
   };
 
   /** 对话当前这一代的会话。 */
@@ -151,15 +192,143 @@ export function createLedgerSessions(ctx: LedgerContext) {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
     const prev = liveOf(sessionId);
+    const hadHold = toolHoldTimers.has(sessionId);
     const next = { ...prev };
     mutate(next);
     if (next.streamingText === undefined) cancelStreamTimer(sessionId);
+    if (next.activity !== "working" || next.step?.type !== "tool_use") {
+      cancelToolHoldTimer(sessionId);
+      next.toolStepAt = undefined;
+    } else if ((next.openTools?.length ?? 0) > 0) {
+      cancelToolHoldTimer(sessionId);
+      if (hadHold || !sameToolStep(prev.step, next.step) || next.toolStepAt === undefined) {
+        next.toolStepAt = now();
+      }
+    }
     live.set(sessionId, next);
     const after = sessionState(row);
     const key = JSON.stringify({ ...after, lastEventAt: null });
     if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
     p.pushed.set(sessionId, key);
     p.changes.push({ type: "session.status", data: { session: after } });
+  };
+
+  const isHiddenStreamingSession = (session: AgentSessionRow): boolean =>
+    session.conversationId === null ||
+    (session.role === "pm" &&
+      db.get(
+        `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
+           AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
+        session.id,
+      ) !== undefined);
+
+  const flushSessionStatusNow = (sessionId: SessionId, knownRow?: AgentSessionRow) => {
+    const row = knownRow ?? safeGetSession(sessionId);
+    if (row === null) return;
+    const after = sessionState(row);
+    const key = JSON.stringify({ ...after, lastEventAt: null });
+    if (pushed.get(sessionId) === key) return;
+    pushed.set(sessionId, key);
+    emitChange({ type: "session.status", data: { session: after } });
+  };
+
+  /**
+   * 收到厂商流式工具早捕获预览（agent.tool_preview）：只改内存态 LiveSession.step 并立即推 session.status，
+   * 零 SQLite 写入、绝不插 messages 或 session_steps；若对应已打开的 openTools 条目（如 ACP tool_call_update 补齐路径），同步升级其 step。
+   */
+  const applyToolPreview = (
+    session: AgentSessionRow,
+    preview: { toolUseId?: string; name: string; input?: unknown },
+  ) => {
+    if (preview.name === "" || isHiddenStreamingSession(session)) return;
+    const sessionId = session.id;
+    const prev = liveOf(sessionId);
+    // 只升级正在跑的这一轮：停止中、准备中不盖；空闲（轮已结束、进程已退）时迟到的预览不能把会话“救活”成在干活（它不入库，
+    // 后面也不会再有 turn.ended 把它收回去）。正式的 agent.tool 之前一定先有 message.processing / turn.started 把状态置成 working
+    if (prev.activity !== "working") return;
+
+    cancelStreamTimer(sessionId);
+    cancelToolHoldTimer(sessionId);
+
+    const step = stepOfTool(preview.name, preview.input);
+    const next: LiveSession = { ...prev };
+    clearStreaming(next);
+
+    if (preview.toolUseId !== undefined && next.openTools?.some((t) => t.toolUseId === preview.toolUseId)) {
+      next.openTools = next.openTools.map((t) => (t.toolUseId === preview.toolUseId ? { ...t, step } : t));
+      const latest = next.openTools.at(-1)!;
+      working(latest.step.type === "tool_use" ? latest.step.name : preview.name, latest.step)(next);
+    } else {
+      working(preview.name, step)(next);
+    }
+
+    if (!sameToolStep(prev.step, next.step) || next.toolStepAt === undefined) {
+      next.toolStepAt = now();
+    }
+    live.set(sessionId, next);
+    flushSessionStatusNow(sessionId, session);
+  };
+
+  /**
+   * 工具结果返回（agent.tool_result）：
+   * - 仍有未闭合并行工具时切到剩余最后一个；
+   * - openTools 清空准备回退到 Thinking 时，若距最近一次工具 step 显示尚不足 MIN_TOOL_STEP_VISIBLE_MS，
+   *   保留当前工具文案并设单会话唯一 setTimeout 到点回退 Thinking。
+   */
+  const finishTools = (p: Pending, sessionId: SessionId, toolUseIds: string[]) => {
+    const prev = liveOf(sessionId);
+    const remaining = (prev.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
+    if (remaining.length > 0) {
+      updateLive(p, sessionId, (l) => {
+        clearStreaming(l);
+        l.openTools = remaining;
+        working(l.currentTool, remaining.at(-1)!.step)(l);
+      });
+      return;
+    }
+
+    const currentNow = now();
+    const shownAt = prev.toolStepAt;
+    const elapsed = shownAt === undefined ? MIN_TOOL_STEP_VISIBLE_MS : currentNow - shownAt;
+    if (prev.activity === "working" && prev.step?.type === "tool_use" && elapsed < MIN_TOOL_STEP_VISIBLE_MS) {
+      const heldStep = prev.step;
+      updateLive(p, sessionId, (l) => {
+        clearStreaming(l);
+        l.openTools = [];
+        working(l.currentTool, heldStep)(l);
+        l.toolStepAt = shownAt;
+      });
+      cancelToolHoldTimer(sessionId);
+      const delay = Math.max(1, MIN_TOOL_STEP_VISIBLE_MS - Math.max(0, elapsed));
+      toolHoldTimers.set(
+        sessionId,
+        setTimeout(() => {
+          toolHoldTimers.delete(sessionId);
+          const cur = live.get(sessionId);
+          if (
+            cur === undefined ||
+            cur.activity !== "working" ||
+            (cur.openTools?.length ?? 0) > 0 ||
+            cur.streamingText !== undefined ||
+            cur.step?.type !== "tool_use"
+          ) {
+            return;
+          }
+          const row = safeGetSession(sessionId);
+          if (row === null) return;
+          // 只是驻留到点，不是新事件：apiRetry 等别的状态原样留着（驻留期间来的 api_retry 不被冲掉）
+          live.set(sessionId, { ...cur, step: THINKING, toolStepAt: undefined });
+          flushSessionStatusNow(sessionId, row);
+        }, delay),
+      );
+      return;
+    }
+
+    updateLive(p, sessionId, (l) => {
+      clearStreaming(l);
+      l.openTools = [];
+      working(l.currentTool, THINKING)(l);
+    });
   };
 
   /**
@@ -171,15 +340,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
   const applyStreamingDelta = (session: AgentSessionRow, delta: string, reset?: boolean) => {
     if (delta === "" && !reset) return;
     const sessionId = session.id;
-    if (
-      session.conversationId === null ||
-      (session.role === "pm" &&
-        db.get(
-          `SELECT 1 AS x FROM messages WHERE session_id = ? AND sender = 'system' AND kind = 'text'
-             AND json_extract(meta, '$.event') = 'handover.requested' AND json_extract(meta, '$.writing') = 1 LIMIT 1`,
-          sessionId,
-        ) !== undefined)
-    ) {
+    if (isHiddenStreamingSession(session)) {
       return;
     }
 
@@ -208,21 +369,15 @@ export function createLedgerSessions(ctx: LedgerContext) {
     if (combined === "") {
       clearStreaming(next);
     } else {
+      cancelToolHoldTimer(sessionId);
+      next.toolStepAt = undefined;
       working(null, { type: "text" })(next);
       next.streamingText = combined;
       next.streamingChars = nextChars;
     }
     live.set(sessionId, next);
 
-    const flushNow = () => {
-      const row = getAgentSession(db, sessionId);
-      if (row === null) return;
-      const after = sessionState(row);
-      const key = JSON.stringify({ ...after, lastEventAt: null });
-      if (pushed.get(sessionId) === key) return;
-      pushed.set(sessionId, key);
-      emitChange({ type: "session.status", data: { session: after } });
-    };
+    const flushNow = () => flushSessionStatusNow(sessionId);
 
     const currentNow = now();
     let entry = streamThrottles.get(sessionId);
@@ -348,7 +503,11 @@ export function createLedgerSessions(ctx: LedgerContext) {
     sessionState,
     updateLive,
     applyStreamingDelta,
+    applyToolPreview,
+    finishTools,
+    hasToolHold,
     cancelStreamTimer,
+    cancelToolHoldTimer,
     clearAllStreaming,
     forgetSession,
     insertSession,

@@ -1307,4 +1307,72 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     });
     expect(cancelledDecision).toEqual({ outcome: "cancelled" });
   });
+
+  it("流式工具更新（deepseek/cursor 共用 ACP）：初始 tool_call 空参后收到 tool_call_update 补齐路径，发出 agent.tool_preview 且不重复发 agent.tool", async () => {
+    const h = track(
+      makeAcpHarness({
+        script: {
+          turns: [
+            {
+              customUpdates: [
+                {
+                  sessionUpdate: "tool_call",
+                  payload: {
+                    toolCallId: "tc-stream-1",
+                    title: "Read",
+                    name: "read_file",
+                    kind: "read",
+                    status: "pending",
+                    rawInput: {},
+                  },
+                },
+                {
+                  sessionUpdate: "tool_call_update",
+                  payload: {
+                    toolCallId: "tc-stream-1",
+                    status: "in_progress",
+                    locations: [{ path: "/repo/src/late-path.ts" }],
+                  },
+                },
+                {
+                  sessionUpdate: "tool_call_update",
+                  payload: {
+                    toolCallId: "tc-stream-1",
+                    status: "in_progress",
+                    locations: [{ path: "/repo/src/late-path.ts" }],
+                  },
+                },
+                {
+                  sessionUpdate: "tool_call_update",
+                  payload: {
+                    toolCallId: "tc-stream-1",
+                    status: "completed",
+                  },
+                },
+              ],
+              textChunks: ["读取完成"],
+            },
+          ],
+        },
+      }),
+    );
+
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [401 as never], source: "user", text: "读文件" });
+    await h.waitFor("turn.ended");
+
+    expect(h.of("agent.tool")).toHaveLength(1);
+    expect(h.of("agent.tool")[0]).toMatchObject({
+      toolUseId: "tc-stream-1",
+      name: "read_file",
+      input: {},
+    });
+    expect(h.of("agent.tool_preview")).toHaveLength(1);
+    expect(h.of("agent.tool_preview")[0]).toMatchObject({
+      toolUseId: "tc-stream-1",
+      name: "read_file",
+      input: { path: "/repo/src/late-path.ts" },
+    });
+    expect(h.of("agent.tool_result")).toHaveLength(1);
+  });
 });
