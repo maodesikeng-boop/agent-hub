@@ -430,8 +430,9 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
 
     const procs = procsOf(zhou.sessionId);
     expect(procs).toHaveLength(2);
-    expect(addDirsOf(procs[0]!.argv)).toEqual([]);
-    expect(addDirsOf(procs[1]!.argv)).toEqual([real(extra)]);
+    const zhouMemoryDir = real(join(env.home, "state", "pm-memory", String(zhou.pmId)));
+    expect(addDirsOf(procs[0]!.argv)).toEqual([zhouMemoryDir]);
+    expect(addDirsOf(procs[1]!.argv)).toEqual([real(extra), zhouMemoryDir]);
     expect(procs[1]!.argv).toContain("--resume");
     expect(procs[1]!.cwd).toBe(real(foo));
     expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RELAUNCH_NOTE}\n\n看看里面有什么`]);
@@ -473,7 +474,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     const proc = lastProcOf(zhou.sessionId);
     expect(argValue(proc.argv, "--resume")).toBe(vendor);
     expect(proc.cwd).toBe(real(foo));
-    expect(addDirsOf(proc.argv)).toEqual([real(extra)]);
+    expect(addDirsOf(proc.argv)).toEqual([real(extra), real(join(env.home, "state", "pm-memory", String(zhou.pmId)))]);
     const status = await env.runHub(proc.pid, ["status"]);
     expect(status.code).toBe(0);
     expect(status.stdout).toContain(real(extra));
