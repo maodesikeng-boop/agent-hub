@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { useCallback, useMemo } from "react";
-import { WORKER_RETENTION_DAYS, type ConversationId, type Message, type SessionState } from "../../shared/index.ts";
+import { WORKER_RETENTION_DAYS, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
@@ -41,6 +41,7 @@ export function WorkerConversation({
   onSend,
   onRetry,
   onStop,
+  onRewind,
   onLoadOlder,
   actions,
   link = null,
@@ -72,13 +73,28 @@ export function WorkerConversation({
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
+  onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
   /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
   link?: ComposerLink | null;
 }) {
   const id = view?.conversation.id;
-  const stop = useStop(session, id === undefined ? null : () => onStop(id));
+  const hasQueuedUser = useMemo(
+    () => pending.some((p) => p.phase === "sending") || (view?.messages.some((m) => m.sender === "user" && m.status === "queued") ?? false),
+    [pending, view?.messages],
+  );
+  const stop = useStop(session, id === undefined ? null : () => onStop(id), hasQueuedUser);
+  const handleRewind = useCallback(
+    (stopping: boolean): boolean => {
+      if (id === undefined) return false;
+      const res = onRewind?.(id, stopping, draft.store.getState()) ?? null;
+      if (res === null) return false;
+      draft.restore(res.text, res.workerPick);
+      return true;
+    },
+    [onRewind, id, draft],
+  );
   const client = useClient();
   const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
@@ -141,6 +157,7 @@ export function WorkerConversation({
                 placeholder={mobile ? "Message…" : phase === "preparing" ? `${title} is setting up…` : `Message ${title}…`}
                 disabled={phase === "preparing"}
                 stop={stop}
+                onRewind={onRewind ? handleRewind : undefined}
                 link={link}
                 source={source}
                 staging={staging}

@@ -75,6 +75,7 @@ import {
   type PushKeyResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
+  type RewindMessageResponse,
   type ServerInfo,
   type StateSnapshot,
   type TunnelStatus,
@@ -1167,6 +1168,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/conversations/:id/stop", async (req, reply) => {
       ledger.requestStop(parseId((req.params as { id?: unknown }).id, "conversation id"));
       return reply.code(202).send();
+    });
+
+    routes.post("/api/conversations/:id/rewind", async (req): Promise<RewindMessageResponse> => {
+      const id = parseId((req.params as { id?: unknown }).id, "conversation id");
+      return { message: ledger.rewindLastUserMessage(id) };
     });
 
     routes.post(API_PATHS.pms, async (req, reply) => {

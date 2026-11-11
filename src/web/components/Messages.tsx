@@ -21,6 +21,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import {
   attachmentsOf,
   extractAskCard,
+  isRewoundMessage,
   REPORT_END,
   REPORT_START,
   sentFilesOf,
@@ -635,6 +636,7 @@ export const MessageBubble = memo(
 function UserBubble({ message, actions }: { message: Message; actions: MessageActions }) {
   const attachments = attachmentsOf(message);
   const workerPick = workerPickOf(message);
+  const rewound = isRewoundMessage(message);
   const failed = message.status === "failed";
   const delivered = message.meta?.deliveryConfirmed === true;
   const failure = failed && message.failureReason ? describeFailure(message.failureReason, { vendor: actions.vendorOf?.(message.conversationId) }) : null;
@@ -648,9 +650,9 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
           ) : null
         }
       >
-        {workerPick !== null && <WorkerPickTag pick={workerPick} className={PICK_TAG} />}
-        {/* 只发文件没写字的消息没有文字气泡 */}
-        {(message.text !== "" || attachments.length === 0) && (
+        {workerPick !== null && !rewound && <WorkerPickTag pick={workerPick} className={PICK_TAG} />}
+        {/* 只发文件没写字、或文字已按二次 Esc 回退的消息没有文字气泡 */}
+        {!rewound && (message.text !== "" || attachments.length === 0) && (
           <div
             data-bubble
             className={cn(
@@ -663,7 +665,13 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
             {message.text}
           </div>
         )}
-        <AttachmentList attachments={attachments} />
+        {rewound ? (
+          <div className="opacity-60">
+            <AttachmentList attachments={attachments} />
+          </div>
+        ) : (
+          <AttachmentList attachments={attachments} />
+        )}
       </SentBody>
       {failed && delivered && (
         <button

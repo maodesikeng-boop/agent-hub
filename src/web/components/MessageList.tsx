@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { isHandoverTraffic, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
+import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
@@ -67,8 +67,8 @@ export const MessageList = memo(function MessageList({
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null;
-  // 只看显示出来的：写交接的来往、静默唤醒触发消息（不显示）进来不算新消息
-  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m))?.id ?? 0}:${pending.length}:${busy}`;
+  // 只看显示出来的：写交接的来往、静默唤醒触发消息、已无附件回退的用户消息（不显示）进来不算新消息
+  const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
   const scrollToBottom = () => {
@@ -146,7 +146,7 @@ export const MessageList = memo(function MessageList({
   const lastItem = items.at(-1);
   const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
   const typing = busy && !rideOnTurn && statusAgent !== undefined;
-  const empty = messages.length === 0 && pending.length === 0 && !busy && !hasMore;
+  const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore;
 
   // 对话打开之后新来的消息淡入一次（docs/ui-standard.md 第 14 条）：只看末尾几项，和历史有多长无关
   const enterItemAt = (index: number): EnterItem => {

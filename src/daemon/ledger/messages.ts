@@ -10,7 +10,8 @@ import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
-import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
+import { MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
+import { findRewindableMessage } from "../../shared/rewind.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
@@ -425,6 +426,34 @@ export function createLedgerMessages(
     });
   };
 
+  /**
+   * 二次 Esc 回退当前对话最后一轮被中断、已取消或正在停止中的用户消息：
+   * 按非 agent 消息的 (conversation_id, id) 部分索引倒序取最近 REWIND_SCAN_LIMIT 条，跳过整轮工具日志，
+   * 写入 meta.rewound = true 并推送 message.updated；已经回退过或没有符合条件的返回 null（幂等）。
+   */
+  const rewindLastUserMessage = (conversationId: ConversationId): Message | null => {
+    return write((p) => {
+      if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
+      assertUserCanPost(conversationId);
+      const session = currentSession(conversationId);
+      const stopping = session !== null && liveOf(session.id).activity === "stopping";
+      const rows = db.all<MessageDbRow>(
+        "SELECT * FROM messages WHERE conversation_id = ? AND sender != 'agent' ORDER BY id DESC LIMIT ?",
+        conversationId,
+        REWIND_SCAN_LIMIT,
+      );
+      const target = findRewindableMessage([...rows].reverse().map(toMessage), { stopping });
+      if (target === null) return null;
+      if (session !== null && (target.status === "queued" || target.status === "delivered" || target.status === "processing")) {
+        stopIn(p, { ...session, conversationId });
+      }
+      db.run("UPDATE messages SET meta = json_set(COALESCE(meta, '{}'), '$.rewound', json('true')), updated_at = ? WHERE id = ?", now(), target.id);
+      const updated = getMessage(target.id)!;
+      p.changes.push({ type: "message.updated", data: { message: updated } });
+      return updated;
+    });
+  };
+
   const messagesBefore = (conversationId: ConversationId, before: MessageId): MessagesPage => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return page(
@@ -483,6 +512,7 @@ export function createLedgerMessages(
     postUserMessage,
     composerTarget,
     requestStop,
+    rewindLastUserMessage,
     stopIn,
     messagesBefore,
     actionFailedIn,

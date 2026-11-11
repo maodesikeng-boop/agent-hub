@@ -311,6 +311,10 @@ export interface DraftSlot {
   setPick: (pick: WorkerPick | null) => void;
   /** 发送成功后清理：标签还是发出去的那一个才清掉，中途换过的不动。 */
   clearPickIfMatch: (sent: WorkerPick | null) => void;
+  /** 每次二次 Esc 回退递增一次，通知输入框聚焦并把光标挪到末尾。 */
+  focusRev: StoreApi<number>;
+  /** 二次 Esc 回退：恢复文字与 workerPick（已有新草稿时换行拼接不静默覆盖），并聚焦光标到末尾。 */
+  restore: (text: string, workerPick: WorkerPick | null) => void;
 }
 
 export function useDraftStore<K extends string | number>() {
@@ -324,6 +328,7 @@ export function useDraftStore<K extends string | number>() {
     }
     const store = createStore<string>(() => "");
     const pick = createStore<WorkerPick | null>(() => null);
+    const focusRev = createStore<number>(() => 0);
     let subs = 0;
     const gc = () => {
       if (subs === 0 && store.getState() === "" && pick.getState() === null) {
@@ -343,6 +348,7 @@ export function useDraftStore<K extends string | number>() {
       };
     store.subscribe = trackSub(store.subscribe);
     pick.subscribe = trackSub(pick.subscribe);
+    focusRev.subscribe = trackSub(focusRev.subscribe);
     const set = (value: string) => {
       if (store.getState() !== value) store.setState(value, true);
       if (value !== "") slotsRef.current.set(key, entry);
@@ -366,6 +372,15 @@ export function useDraftStore<K extends string | number>() {
       setPick,
       clearPickIfMatch: (sent) => {
         if (sent !== null && pick.getState() === sent) setPick(null);
+      },
+      focusRev,
+      restore: (text, workerPick) => {
+        if (text !== "") {
+          const current = store.getState();
+          set(current.trim() === "" || current === text ? text : `${text}\n${current}`);
+        }
+        if (workerPick !== null && pick.getState() === null) setPick(workerPick);
+        focusRev.setState(focusRev.getState() + 1, true);
       },
     };
     const entry = { slot, gc };

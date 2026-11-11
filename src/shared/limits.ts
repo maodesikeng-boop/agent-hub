@@ -581,6 +581,10 @@ export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 /** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
-// ---- 输入框 /hub:worker 选择列表（web/worker-pick.ts）----
+// ---- 输入框 /hub:worker 选择列表与二次 Esc 回退 ----
 /** 同一份模型名单下按（级别、已选、筛选词）缓存的列表最多留几份；超了整份清掉重算（名单一换，旧的整份随 WeakMap 回收）。 */
 export const WORKER_PICK_CACHE_MAX = 64;
+/** 账本二次 Esc 回退按索引倒序最多查看最近多少条非 agent 消息（O(1) 截断，哪怕对话有几万条历史也不全表扫）。 */
+export const REWIND_SCAN_LIMIT = 20;
+/** 网页乐观回退发送路上的待发消息时，记住其去重键以防随后到达的 message.created 闪出气泡；最多留几条，满了丢最早的。 */
+export const MAX_REWOUND_PENDING_KEYS = 32;
