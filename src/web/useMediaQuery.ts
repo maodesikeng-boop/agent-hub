@@ -23,3 +23,7 @@ export function useMediaQuery(query: string): boolean {
 
 /** 触屏且短边小于 600px，包含手机横屏。 */
 export const MOBILE_SHELL_QUERY = "(pointer: coarse) and (max-width: 599px), (pointer: coarse) and (max-height: 599px)";
+
+export function useIsMobile(): boolean {
+  return useMediaQuery(MOBILE_SHELL_QUERY);
+}

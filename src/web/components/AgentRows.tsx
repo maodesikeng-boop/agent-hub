@@ -74,6 +74,7 @@ export function AgentRows({
   value,
   onChange,
   disabled,
+  stacked,
   switchingToVendor,
   errors = {},
   customAction,
@@ -82,6 +83,7 @@ export function AgentRows({
   value: AgentDraft;
   onChange: (draft: AgentDraft, row: AgentRowKey) => void;
   disabled?: boolean;
+  stacked?: boolean;
   switchingToVendor?: AgentVendor | null;
   errors?: Partial<Record<AgentRowKey, ErrorLike | null>>;
   customAction?: ReactNode;
@@ -165,7 +167,7 @@ export function AgentRows({
         )}
       </SettingsRow>
       {choice === CUSTOM_MODEL && (
-        <SettingsRow label="Model name" error={customError}>
+        <SettingsRow label="Model name" stacked={stacked} error={customError}>
           {(id) => (
             <>
               <Input
@@ -174,10 +176,12 @@ export function AgentRows({
                 value={value.customModel}
                 disabled={disabled}
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
                 spellCheck={false}
                 placeholder={catalog.customModelExample ?? undefined}
                 aria-invalid={customError !== null}
-                className="w-60"
+                className={stacked ? "min-w-0 flex-1" : "w-60"}
                 onChange={(e) => onChange(withModel({ ...value, customModel: e.target.value }, CUSTOM_MODEL, catalog), "model")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing && onCustomSubmit) {
