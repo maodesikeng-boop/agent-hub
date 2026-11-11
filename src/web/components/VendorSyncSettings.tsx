@@ -20,7 +20,7 @@ import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsL
 const VENDOR_STATUS_LABELS: Readonly<Record<VendorSyncItemVendorStatus, string>> = {
   present: "Synced",
   will_add: "Add",
-  will_update: "Update",
+  kept: "Kept existing",
   mcp_remote: "mcp-remote",
   native: "Native",
   symlink: "Linked",
@@ -172,7 +172,7 @@ export function VendorSyncSettings() {
           if (!open && !applyMutation.isPending) setPreview(null);
         }}
       >
-        <DialogContent title="Sync preview" className="max-w-160">
+        <DialogContent title="Sync preview">
           <DialogBody className="grid-cols-1">
             {isEmptyPreview && (
               <p className="text-minor text-muted-foreground">No MCP servers, skills, or cloud connectors found</p>

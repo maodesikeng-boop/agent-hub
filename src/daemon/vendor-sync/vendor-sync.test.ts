@@ -304,8 +304,9 @@ args = ["mcp-server-git"]
     expect(serializedPreview).not.toContain(rawApiKey);
     expect(serializedPreview).not.toContain("ghp_verySecretTokenValue999");
     expect(serializedPreview).not.toContain(rawUrlToken);
-    // 非敏感参数仍可见便于辨识
-    expect(serializedPreview).toContain("region=us");
+    // 查询参数只留参数名便于辨识，值一律打码（按名字猜敏感会漏 `?key=<hex>` 这类）
+    expect(serializedPreview).toContain("region=••••");
+    expect(serializedPreview).not.toContain("region=us");
     expect(serializedPreview).toContain("OPENAI_API_KEY");
 
     // 第一次全部同步后，验证磁盘写入的是未打码的真实密钥
@@ -686,5 +687,219 @@ enabled = true
       await app.close();
       db.close();
     }
+  });
+});
+
+describe("vendor-sync 审查补测（PR #271）：只增补不覆盖、彻底脱敏、受管软链边界、原子写与备份轮转", () => {
+  let rootDir: string;
+  let userHome: string;
+  let backupsDir: string;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), "agent-hub-vendor-sync-review-"));
+    userHome = join(rootDir, "home");
+    backupsDir = join(rootDir, "data", "backups", "sync");
+    mkdirSync(userHome, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  const service = (extra: Partial<Parameters<typeof createVendorSyncService>[0]> = {}) =>
+    createVendorSyncService({ userHome, env: {}, backupsDir, listProjectFolders: () => [], ...extra });
+
+  it("并集只增补：各家已有同名配置（内容不同、带本家独有字段、被禁用）一律原样保留，只给缺的厂商补", () => {
+    const claudeRaw = `{
+  "mcpServers": {
+    "github": { "command": "npx", "args": ["-y", "gh-mcp"], "cwd": "/work", "timeout": 30000 }
+  }
+}
+`;
+    writeFileSync(join(userHome, ".claude.json"), claudeRaw, "utf8");
+    mkdirSync(join(userHome, ".cursor"), { recursive: true });
+    const cursorRaw = `{
+  "mcpServers": {
+    "github": { "command": "docker", "args": ["run", "ghcr.io/github/github-mcp-server"], "env": { "GITHUB_TOKEN": "cursor-own-token" } }
+  }
+}
+`;
+    writeFileSync(join(userHome, ".cursor", "mcp.json"), cursorRaw, "utf8");
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    const codexRaw = `[mcp_servers.github]
+command = "uvx"
+args = ["codex-own-github"]
+enabled = false
+startup_timeout_sec = 20
+`;
+    writeFileSync(join(userHome, ".codex", "config.toml"), codexRaw, "utf8");
+
+    const svc = service();
+    const preview = svc.preview();
+    const github = preview.mcpServers.find((m) => m.name === "github")!;
+    expect(github.vendors.find((v) => v.vendor === "claude")?.status).toBe("present");
+    expect(github.vendors.find((v) => v.vendor === "cursor")?.status).toBe("kept");
+    expect(github.vendors.find((v) => v.vendor === "agy")?.status).toBe("will_add");
+
+    svc.apply({ selectedMcpKeys: ["github"], removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [] });
+
+    // 已有同名配置的三家一个字节都不动（claude 自己的 cwd/timeout 也不被“规范化”丢掉）
+    expect(readFileSync(join(userHome, ".claude.json"), "utf8")).toBe(claudeRaw);
+    expect(readFileSync(join(userHome, ".cursor", "mcp.json"), "utf8")).toBe(cursorRaw);
+    expect(readFileSync(join(userHome, ".codex", "config.toml"), "utf8")).toBe(codexRaw);
+    // 缺的厂商补上
+    const agy = parseJsonc(readFileSync(join(userHome, ".gemini", "config", "mcp_config.json"), "utf8")) as { mcpServers: Record<string, unknown> };
+    expect(agy.mcpServers.github).toEqual({ command: "npx", args: ["-y", "gh-mcp"] });
+  });
+
+  it("预览彻底脱敏：env/Header 值、任意协议 URL 的用户名密码、查询参数值、路径令牌、敏感开关后的值、裸长令牌都不出现", () => {
+    const secrets = {
+      dbPass: "pgP4ssw0rdValue",
+      envDb: "envDbSecretPw77",
+      plainKey: "plainkeyvalue1234abcd",
+      pathToken: "zpk9f8e7d6c5b4a3210zz",
+      queryKey: "deadbeefcafebabe00",
+      accessToken: "acc_tok_value_123",
+      bare: "Q1w2E3r4T5y6U7i8O9p0zz",
+      header: "custom-header-secret-1",
+    };
+    writeFileSync(
+      join(userHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          pg: {
+            command: "npx",
+            args: [
+              "-y",
+              "@modelcontextprotocol/server-postgres",
+              `postgresql://admin:${secrets.dbPass}@db.internal:5432/app`,
+              "--access-token",
+              secrets.accessToken,
+              secrets.bare,
+            ],
+            env: { DATABASE_URL: `postgres://u:${secrets.envDb}@h/db`, SERVICE_KEY: secrets.plainKey, NODE_ENV: "production" },
+          },
+          zap: {
+            type: "http",
+            url: `https://mcp.zapier.example/api/mcp/s/${secrets.pathToken}/mcp?key=${secrets.queryKey}`,
+            headers: { "X-Custom": secrets.header },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const json = JSON.stringify(service().preview());
+    for (const value of Object.values(secrets)) expect(json).not.toContain(value);
+    // 辨识用的结构还在
+    expect(json).toContain("@modelcontextprotocol/server-postgres");
+    expect(json).toContain("db.internal:5432");
+    expect(json).toContain("https://mcp.zapier.example/api/mcp/s/••••/mcp?key=••••");
+    expect(json).toContain("DATABASE_URL=••••");
+    expect(json).toContain("X-Custom=••••");
+  });
+
+  it("TOML 解析报错不带出错行原文（守护进程日志会记未知错误），只给文件与行列号", () => {
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    writeFileSync(join(userHome, ".codex", "config.toml"), `[mcp_servers.x]\ntoken = "sk-toml-leak-secret-999" oops\n`, "utf8");
+    let message = "";
+    try {
+      service().preview();
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("config.toml");
+    expect(message).toMatch(/第 2 行/);
+    expect(message).not.toContain("sk-toml-leak-secret-999");
+  });
+
+  it("移除只认这次扫描里真有的键：伪造的 MCP 名字、伪造的 project:<任意目录> 技能键都不动磁盘", () => {
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    const codexRaw = `[mcp_servers.legacy]\ncommand = "old"\nenabled = false\n`;
+    writeFileSync(join(userHome, ".codex", "config.toml"), codexRaw, "utf8");
+
+    const victim = join(rootDir, "victim");
+    mkdirSync(join(victim, ".agents", "skills", "s1"), { recursive: true });
+    writeFileSync(join(victim, ".agents", "skills", "s1", "SKILL.md"), "x", "utf8");
+    mkdirSync(join(victim, ".claude", "skills"), { recursive: true });
+    symlinkSync("../../.agents/skills/s1", join(victim, ".claude", "skills", "s1"));
+
+    const res = service().apply({
+      selectedMcpKeys: [],
+      removeMcpKeys: ["legacy"],
+      selectedSkillKeys: [],
+      removeSkillKeys: [`project:${victim}:s1`],
+    });
+    expect(res.removedMcpCount).toBe(0);
+    expect(res.unlinkedSkillCount).toBe(0);
+    expect(readFileSync(join(userHome, ".codex", "config.toml"), "utf8")).toBe(codexRaw);
+    expect(lstatSync(join(victim, ".claude", "skills", "s1")).isSymbolicLink()).toBe(true);
+  });
+
+  it("用户自己指向别的 .agents/skills 的私有软链不算受管：同步同名全局技能时保留，取消勾选时也不删", () => {
+    const globalCanonical = join(userHome, ".agents", "skills");
+    mkdirSync(join(globalCanonical, "foo"), { recursive: true });
+    writeFileSync(join(globalCanonical, "foo", "SKILL.md"), "global", "utf8");
+    const otherRepo = join(rootDir, "other-repo");
+    mkdirSync(join(otherRepo, ".agents", "skills", "foo"), { recursive: true });
+    writeFileSync(join(otherRepo, ".agents", "skills", "foo", "SKILL.md"), "mine", "utf8");
+    const claudeSkills = join(userHome, ".claude", "skills");
+    mkdirSync(claudeSkills, { recursive: true });
+    const privateTarget = join(otherRepo, ".agents", "skills", "foo");
+    symlinkSync(privateTarget, join(claudeSkills, "foo"));
+
+    const svc = service();
+    const preview = svc.preview();
+    const foo = preview.skills.find((s) => s.key === "global:foo")!;
+    expect(foo.vendors.find((v) => v.vendor === "claude")?.status).toBe("conflict");
+
+    const linkRes = svc.apply({ selectedMcpKeys: [], removeMcpKeys: [], selectedSkillKeys: ["global:foo"], removeSkillKeys: [] });
+    expect(linkRes.preservedPrivateSkillCount).toBe(1);
+    expect(readlinkSync(join(claudeSkills, "foo"))).toBe(privateTarget);
+
+    const unlinkRes = svc.apply({ selectedMcpKeys: [], removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: ["global:foo"] });
+    expect(readlinkSync(join(claudeSkills, "foo"))).toBe(privateTarget);
+    // agy、pi 的受管软链照常移除
+    expect(unlinkRes.unlinkedSkillCount).toBe(2);
+    expect(existsSync(join(userHome, ".gemini", "config", "skills", "foo"))).toBe(false);
+  });
+
+  it("原子写：配置文件是指向 dotfiles 的软链时替换真实文件、软链保留、原权限不变；不留临时文件", () => {
+    const dotfiles = join(rootDir, "dotfiles");
+    mkdirSync(dotfiles, { recursive: true });
+    const realClaude = join(dotfiles, "claude.json");
+    writeFileSync(realClaude, `{ "mcpServers": { "a": { "command": "echo" } } }\n`, { encoding: "utf8", mode: 0o644 });
+    symlinkSync(realClaude, join(userHome, ".claude.json"));
+    mkdirSync(join(userHome, ".cursor"), { recursive: true });
+    writeFileSync(join(userHome, ".cursor", "mcp.json"), `{ "mcpServers": { "b": { "command": "echo" } } }\n`, "utf8");
+
+    service().apply({ selectedMcpKeys: ["a", "b"], removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [] });
+
+    expect(lstatSync(join(userHome, ".claude.json")).isSymbolicLink()).toBe(true);
+    const parsed = parseJsonc(readFileSync(realClaude, "utf8")) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(parsed.mcpServers).sort()).toEqual(["a", "b"]);
+    expect(lstatSync(realClaude).mode & 0o777).toBe(0o644);
+    // 新建的配置文件默认 0600
+    expect(lstatSync(join(userHome, ".pi", "agent", "mcp.json")).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dotfiles)).toEqual(["claude.json"]);
+    expect(readdirSync(join(userHome, ".cursor"))).toEqual(["mcp.json"]);
+  });
+
+  it("备份轮转不删本次快照：时钟回拨（本次名字排最前）时也保留，失败回滚还有原文可恢复", () => {
+    writeFileSync(join(userHome, ".claude.json"), `{ "mcpServers": { "a": { "command": "echo" } } }\n`, "utf8");
+    mkdirSync(backupsDir, { recursive: true });
+    for (let i = 0; i < MAX_VENDOR_SYNC_BACKUPS + 3; i++) {
+      mkdirSync(join(backupsDir, `29991231-0000${String(i).padStart(2, "0")}-future`), { recursive: true });
+    }
+    const res = service({ now: () => Date.UTC(2026, 0, 1) }).apply({
+      selectedMcpKeys: ["a"],
+      removeMcpKeys: [],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+    });
+    const entries = readdirSync(backupsDir);
+    expect(entries).toContain(res.backupId);
+    expect(entries.length).toBe(MAX_VENDOR_SYNC_BACKUPS);
+    expect(existsSync(join(backupsDir, res.backupId!, "manifest.json"))).toBe(true);
   });
 });

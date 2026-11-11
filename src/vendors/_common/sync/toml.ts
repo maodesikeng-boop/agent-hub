@@ -2,7 +2,20 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { parse, patch } from "@decimalturn/toml-patch";
 import { MAX_VENDOR_SYNC_CONFIG_BYTES } from "../../../shared/index.ts";
-import { deepEqualJson, isPlainObject } from "./jsonc.ts";
+import { isPlainObject } from "./jsonc.ts";
+
+/**
+ * 解析 TOML；出错时只保留行列号重新抛出。库的原始报错会把出错那一行原文（常是 `token = "..."`）拼进消息，
+ * 而 ui-server 会把未知错误原样写进守护进程日志，所以绝不能把原消息往外传。
+ */
+function parseTomlSafely(raw: string, filePath: string): unknown {
+  try {
+    return parse(raw, { integersAsBigInt: false });
+  } catch (err) {
+    const pos = /\((\d+),\s*(\d+)\)/.exec(err instanceof Error ? err.message : "");
+    throw new Error(`解析 TOML 失败（${filePath}${pos ? `，第 ${pos[1]} 行第 ${pos[2]} 列` : ""}）`);
+  }
+}
 
 export interface TomlDocumentSnapshot {
   exists: boolean;
@@ -22,7 +35,7 @@ export function readTomlObjectFile(filePath: string): TomlDocumentSnapshot {
   if (raw.trim() === "") {
     return { exists: true, raw, data: {} };
   }
-  const parsed: unknown = parse(raw, { integersAsBigInt: false });
+  const parsed = parseTomlSafely(raw, filePath);
   if (!isPlainObject(parsed)) {
     throw new Error(`TOML 顶层必须是表对象：${filePath}`);
   }
@@ -31,7 +44,7 @@ export function readTomlObjectFile(filePath: string): TomlDocumentSnapshot {
 
 /**
  * 使用 `@decimalturn/toml-patch` 局部更新 `[mcp_servers.<name>]`：
- * - 未发生语义变化的条目原样保留，不重排已有表或丢失 `#` 注释；
+ * - `upsert` 只增补缺失的条目，已有同名条目原样保留；不重排已有表或丢失 `#` 注释；
  * - 若文件不存在且本次无新增项，或补丁后无变化，返回 `null`。
  */
 export function patchTomlMapEntries(input: {
@@ -46,7 +59,7 @@ export function patchTomlMapEntries(input: {
     return null;
   }
 
-  const rootClone: Record<string, unknown> = doc.raw.trim() === "" ? {} : (parse(doc.raw, { integersAsBigInt: false }) as Record<string, unknown>);
+  const rootClone: Record<string, unknown> = doc.raw.trim() === "" ? {} : (parseTomlSafely(doc.raw, "config.toml") as Record<string, unknown>);
   const existingTable = isPlainObject(rootClone[tableKey]) ? { ...(rootClone[tableKey] as Record<string, unknown>) } : {};
 
   let mutated = false;
@@ -60,11 +73,9 @@ export function patchTomlMapEntries(input: {
   }
 
   for (const name of upsertNames) {
-    const desired = upsert[name]!;
-    if (Object.prototype.hasOwnProperty.call(existingTable, name) && deepEqualJson(existingTable[name], desired)) {
-      continue;
-    }
-    existingTable[name] = desired;
+    // 并集只增补：同名表已存在（含 `enabled = false`、带 `startup_timeout_sec` 等本家字段）一律原样保留，绝不覆盖
+    if (Object.prototype.hasOwnProperty.call(existingTable, name)) continue;
+    existingTable[name] = upsert[name]!;
     mutated = true;
   }
 

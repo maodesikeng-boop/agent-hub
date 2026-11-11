@@ -1,6 +1,6 @@
 // 基准 `.agents/skills` 目录扫描与目标厂商技能目录逐项软链对账（绝不整目录替换，绝不覆盖用户私有技能）。
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { MAX_VENDOR_SYNC_SKILL_ITEMS } from "../../../shared/index.ts";
 
 /** 安全的 `realpath`：目标存在时返回真实路径，悬空软链或不存在时回退 `resolve`。 */
@@ -68,18 +68,23 @@ export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSk
   }
 }
 
-/** 判断软链目标是否属于 `.agents/skills/` 体系（仅受管软链允许更新或移除）。 */
+function isInsideDir(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * 判断软链是否是指向 **这一个** 基准 `canonicalSkillsDir` 里某项的受管软链（只有它允许更新或移除）。
+ * 按路径包含关系判断（字面解析、真实路径各比一次，悬空软链也认得），不按字符串里有没有 `.agents/skills/`：
+ * 用户自己指向别的项目 `.agents/skills/x` 的私有软链不能被当成受管的覆盖或删掉。
+ */
 export function isManagedAgentsSkillSymlink(linkPath: string, canonicalSkillsDir: string): boolean {
   try {
     const st = lstatSync(linkPath);
     if (!st.isSymbolicLink()) return false;
-    const rawTarget = readlinkSync(linkPath);
-    const resolvedTarget = resolve(dirname(linkPath), rawTarget);
-    const realCanonical = safeRealpath(canonicalSkillsDir);
-    const realResolved = safeRealpath(resolvedTarget);
-    if (realResolved === realCanonical || realResolved.startsWith(`${realCanonical}/`)) return true;
-    const normalizedRaw = rawTarget.replace(/\\/g, "/");
-    return normalizedRaw.includes(".agents/skills/");
+    const resolvedTarget = resolve(dirname(linkPath), readlinkSync(linkPath));
+    if (isInsideDir(resolvedTarget, resolve(canonicalSkillsDir))) return true;
+    return isInsideDir(safeRealpath(resolvedTarget), safeRealpath(canonicalSkillsDir));
   } catch {
     return false;
   }

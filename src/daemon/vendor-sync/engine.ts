@@ -163,32 +163,6 @@ function collectCanonicalSkills(
   return { skills, truncated };
 }
 
-function parseRemovedSkillKey(
-  rawKey: string,
-  userHome: string,
-): { scope: "global" | "project"; projectDir?: string; canonicalDir: string; name: string } | null {
-  if (rawKey.startsWith("global:")) {
-    const name = rawKey.slice("global:".length).trim();
-    if (!name || name.includes("/") || name.includes("\\")) return null;
-    return { scope: "global", canonicalDir: join(userHome, ".agents", "skills"), name };
-  }
-  if (rawKey.startsWith("project:")) {
-    const rest = rawKey.slice("project:".length);
-    const lastColon = rest.lastIndexOf(":");
-    if (lastColon <= 0) return null;
-    const projectDir = rest.slice(0, lastColon).trim();
-    const name = rest.slice(lastColon + 1).trim();
-    if (!projectDir || !name || name.includes("/") || name.includes("\\")) return null;
-    return {
-      scope: "project",
-      projectDir,
-      canonicalDir: join(projectDir, ".agents", "skills"),
-      name,
-    };
-  }
-  return null;
-}
-
 export function createVendorSyncService(options: VendorSyncServiceOptions): VendorSyncService {
   const ctx: VendorSyncContext = {
     userHome: options.userHome,
@@ -267,19 +241,24 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
         const badges: VendorSyncVendorBadge[] = [];
 
         for (const { vendor, label, adapter } of vendors) {
-          const existing = scans.get(vendor)?.servers[name];
+          const scan = scans.get(vendor);
+          const existing = scan?.servers[name];
+          const occupiedByPrivate = scan?.nonSyncable.some((item) => item.name === name) ?? false;
           const needsBridge = canonical.transport === "sse" && !adapter.supportsSseMcp;
           if (needsBridge) usesMcpRemoteBridge = true;
 
+          // 并集只增补：这家已有同名配置（内容不同、或是本家私有 OAuth 项）一律保留原样，不覆盖
           let status: VendorSyncItemVendorStatus;
-          if (isVendorMcpUpToDate(existing, canonical, adapter.supportsSseMcp)) {
-            status = needsBridge ? "mcp_remote" : "present";
-          } else if (needsBridge) {
-            status = "mcp_remote";
-          } else if (existing) {
-            status = "will_update";
+          if (existing) {
+            status = isVendorMcpUpToDate(existing, canonical, adapter.supportsSseMcp)
+              ? needsBridge
+                ? "mcp_remote"
+                : "present"
+              : "kept";
+          } else if (occupiedByPrivate) {
+            status = "kept";
           } else {
-            status = "will_add";
+            status = needsBridge ? "mcp_remote" : "will_add";
           }
           badges.push({ vendor, label, status });
         }
@@ -338,7 +317,8 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       const { vendors, scans, unionMcpMap, skills } = scanAll();
 
       const selectedMcpSet = new Set(request.selectedMcpKeys);
-      const removeMcpSet = new Set(request.removeMcpKeys.filter((k) => !selectedMcpSet.has(k)));
+      // 只认这次扫描里真有的键：请求里伪造的名字不能借“移除”删掉各家别的配置
+      const removeMcpSet = new Set(request.removeMcpKeys.filter((k) => !selectedMcpSet.has(k) && unionMcpMap.has(k)));
 
       const upsertMcp: Record<string, CanonicalMcpServer> = {};
       for (const key of selectedMcpSet) {
@@ -403,7 +383,8 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       }
 
       for (const key of removeSkillSet) {
-        const loc = skillByKey.get(key) ?? parseRemovedSkillKey(key, ctx.userHome);
+        // 只认这次扫描里真有的技能键：请求里伪造的 `project:<任意目录>:<名字>` 不能借“移除”去动别处的软链
+        const loc = skillByKey.get(key);
         if (!loc) continue;
         for (const { adapter } of vendors) {
           const scopeArg =

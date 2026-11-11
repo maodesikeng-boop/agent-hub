@@ -61,7 +61,8 @@ export function readJsoncObjectFile(filePath: string): JsoncDocument {
 
 /**
  * 局部补丁顶层 `<serversKey>`（默认 `"mcpServers"`）下的单个服务键：
- * - 值相等的已有键跳过不动（连条目内部注释和键顺序都原样保留）；
+ * - `upsert` 只增补缺失的键：已有同名键一律跳过不动（连条目内部注释、键顺序、本家独有字段都原样保留）；
+ * - `removeNames` 是用户在预览里主动取消勾选的键，才会删除；
  * - 顶层其他字段（如账号登录态、个人偏好）与所有行/块注释完整保留；
  * - 若最终无需任何改动（或文件原本不存在且本次无新增项），返回 `null`。
  */
@@ -97,11 +98,9 @@ export function patchJsoncMapEntries(input: {
   }
 
   for (const name of upsertNames) {
-    const desired = upsert[name]!;
-    if (Object.prototype.hasOwnProperty.call(existingMap, name) && deepEqualJson(existingMap[name], desired)) {
-      continue;
-    }
-    const edits = modify(current, [mapKey, name], desired, { formattingOptions });
+    // 并集只增补：同名键已存在（不论内容是否相同、是否被禁用、是否带本家独有字段）一律原样保留，绝不覆盖
+    if (Object.prototype.hasOwnProperty.call(existingMap, name)) continue;
+    const edits = modify(current, [mapKey, name], upsert[name]!, { formattingOptions });
     if (edits.length > 0) {
       current = applyEdits(current, edits);
       mutated = true;

@@ -41,6 +41,7 @@
 - `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
 - `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。
 - `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
+- `write-file-atomic`（npm 官方）：同目录临时文件 + fsync + rename 原子替换用户配置，目标是软链时替换真实文件、沿用原权限属主（`daemon/vendor-sync/backup.ts`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。
 
@@ -74,7 +75,7 @@
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
 
 **工程工具**
-- `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push）：类型。
+- `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push、write-file-atomic）：类型。
 - `oxc-parser`：把源码解析成语法树，`src/web/web-guard.test.ts` 用它按调用节点找定时器数字字面量（TS 7 是原生版，没有 `createSourceFile` 的 JS 接口；它原本只是 knip 的传递依赖）。
 
 **使用规则**

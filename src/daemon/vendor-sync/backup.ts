@@ -1,5 +1,6 @@
 // 跨厂商同步的轮转备份（`<dataDir>/backups/sync/`，受 `MAX_VENDOR_SYNC_BACKUPS` 上限保护）与事务级原子替换/回滚。
 import { randomBytes } from "node:crypto";
+import writeFileAtomic from "write-file-atomic";
 import {
   chmodSync,
   copyFileSync,
@@ -9,7 +10,6 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
-  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -53,41 +53,27 @@ function formatBackupTimestamp(nowMs: number): string {
   );
 }
 
-/** 原子写文件：同目录写 `.sync-tmp.<pid>.<hex>` + `chmod` + `rename`，不打断并发读取的进程。 */
+/**
+ * 原子写文件：用 npm 官方的 `write-file-atomic`（同目录临时文件 → fsync → rename）。
+ * 目标是软链时（如 `~/.claude.json` 链到 dotfiles 仓库）它先 realpath，替换真实文件而不是把软链换成普通文件；
+ * 已有文件沿用原权限与属主，新文件用 `mode`（默认 0600，配置里有密钥）。
+ */
 export function writeFileAtomicDefault(targetPath: string, content: string, mode?: number): void {
-  const dir = dirname(targetPath);
-  mkdirSync(dir, { recursive: true });
-  let effectiveMode = mode ?? 0o600;
-  try {
-    if (existsSync(targetPath)) {
-      effectiveMode = statSync(targetPath).mode & 0o777;
-    }
-  } catch {
-    // 读取原权限失败按默认 mode
-  }
-  const tmpPath = `${targetPath}.sync-tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  try {
-    writeFileSync(tmpPath, content, { encoding: "utf8", mode: effectiveMode });
-    chmodSync(tmpPath, effectiveMode);
-    renameSync(tmpPath, targetPath);
-  } catch (err) {
-    try {
-      rmSync(tmpPath, { force: true });
-    } catch {
-      // 忽略清理临时文件失败
-    }
-    throw err;
-  }
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const exists = existsSync(targetPath);
+  writeFileAtomic.sync(targetPath, content, { encoding: "utf8", fsync: true, ...(exists ? {} : { mode: mode ?? 0o600 }) });
 }
 
 /** 淘汰超出 `MAX_VENDOR_SYNC_BACKUPS` 的最老快照目录，防磁盘无限堆积。 */
-export function pruneOldSyncBackups(backupsDir: string, maxBackups: number = MAX_VENDOR_SYNC_BACKUPS): void {
+export function pruneOldSyncBackups(backupsDir: string, maxBackups: number = MAX_VENDOR_SYNC_BACKUPS, keepId?: string): void {
   if (!existsSync(backupsDir)) return;
   const dirs = readdirSync(backupsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && entry.name !== keepId)
     .map((entry) => entry.name)
     .sort();
-  while (dirs.length > maxBackups) {
+  // 本次快照（keepId）不参与淘汰：时钟回拨时它的名字可能排在最前，删了它失败回滚就没有原文可恢复
+  const budget = keepId === undefined ? maxBackups : maxBackups - 1;
+  while (dirs.length > Math.max(0, budget)) {
     const oldest = dirs.shift()!;
     rmSync(join(backupsDir, oldest), { recursive: true, force: true });
   }
@@ -144,7 +130,7 @@ function createBackupSnapshot(
     { encoding: "utf8", mode: 0o600 },
   );
 
-  pruneOldSyncBackups(backupsDir, MAX_VENDOR_SYNC_BACKUPS);
+  pruneOldSyncBackups(backupsDir, MAX_VENDOR_SYNC_BACKUPS, backupId);
   return { backupId, entries };
 }
 

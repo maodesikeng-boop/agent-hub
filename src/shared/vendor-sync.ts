@@ -7,7 +7,8 @@ export type McpTransportKind = "stdio" | "http" | "sse";
 export type VendorSyncItemVendorStatus =
   | "present"
   | "will_add"
-  | "will_update"
+  /** 这家已有同名配置但内容不同（或是本家私有 OAuth 项）：并集只增补，原样保留不覆盖。 */
+  | "kept"
   | "mcp_remote"
   | "native"
   | "symlink"

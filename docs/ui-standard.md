@@ -108,7 +108,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 任务流图 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Waiting on you / Ready / Blocked / Needs attention / Skipped |
 | 补充说明 / 跳过此步 / 取消任务图 / 同层折叠并行数 | Add note / Skip step / Cancel graph / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
-| MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed |
+| MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
 
 ## 4. 颜色
 
