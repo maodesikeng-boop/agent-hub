@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAgentVendor, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
+import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
@@ -21,8 +22,8 @@ import {
 } from "./selectors.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
-import { mobileBack } from "./mobile/back.ts";
-import { useRoute } from "./route.ts";
+import { mobileBack, settingsParent } from "./mobile/back.ts";
+import { routeHash, useRoute, type SettingsSection } from "./route.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
@@ -61,6 +62,13 @@ const saveRailClosed = (closed: boolean) => {
   }
 };
 
+function desktopSectionOf(section: SettingsSection | undefined, managed: boolean): SettingsDialogSection | undefined {
+  if (section === undefined) return undefined;
+  if (section === "scale" || section === "notifications" || section === "vendor-sync") return "general";
+  if (section === "computers") return managed ? "computers" : "general";
+  return "security";
+}
+
 export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
@@ -81,6 +89,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
+  const [desktopSettings, setDesktopSettings] = useState<{ open: boolean; section?: SettingsDialogSection }>({ open: false });
+  const onSettingsOpenChange = useCallback((open: boolean) => setDesktopSettings({ open }), []);
   /** 用户手动收起了右栏（记住）。 */
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
@@ -101,10 +111,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const routedWorker = route?.view === "worker" && state.conversations[route.id]?.conversation.kind !== "pm" ? route.id : null;
   const openWorker = routedWorker;
   const workerView = openWorker === null ? undefined : state.conversations[openWorker];
-  const routerActive = route?.view === "router" || (autoSelect && route === null);
-  // 网址指的项目经理对话：直接是对话；Worker 的对话归派它的项目经理；资料页是那个项目经理的对话；Router 视图不选中单个对话
+  const routerActive = route?.view === "router" || (autoSelect && (route === null || route.view === "settings"));
+  // 网址指的项目经理对话：直接是对话；Worker 的对话归派它的项目经理；资料页是那个项目经理的对话；Router 与设置视图不选中单个对话
   const routedEntry =
-    route === null || route.view === "router"
+    route === null || route.view === "router" || route.view === "settings"
       ? undefined
       : route.view === "conversation"
         ? entries.find((e) => e.id === route.id)
@@ -160,10 +170,27 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
 
   const shellReady = local.state.phase === "ready" &&
     !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
-  // 电脑外壳空 hash 默认落地水果刀工作台 #/router（replaceState 不留多余历史）；写了具体对话但暂时找不到的仍走上面的 firstUnarchived 兜底
+  // 电脑外壳空 hash 默认落地水果刀工作台 #/router（replaceState 不留多余历史）；从手机 #/settings* 切回桌面外壳时自动承接打开桌面双栏 SettingsDialog
   useEffect(() => {
-    if (autoSelect && shellReady && route === null) replace({ view: "router" });
-  }, [autoSelect, shellReady, route, replace]);
+    if (!autoSelect || !shellReady) return;
+    if (route === null) {
+      replace({ view: "router" });
+      return;
+    }
+    if (route.view === "settings") {
+      const section = desktopSectionOf(route.section, fleet.managed);
+      setDesktopSettings(section === undefined ? { open: true } : { open: true, section });
+      replace({ view: "router" });
+    }
+  }, [autoSelect, shellReady, route, fleet.managed, replace]);
+  // 手机设置：不认识的子页归一为 #/settings；确定未开联机（fleet.listed && !fleet.managed）时直达电脑/公网入口退回一级设置（拉清单期间等待）
+  useEffect(() => {
+    if (autoSelect || route?.view !== "settings") return;
+    const unmanagedSection = fleet.listed && !fleet.managed && (route.section === "computers" || route.section === "public-access");
+    if (unmanagedSection || window.location.hash !== routeHash(route)) {
+      replace({ view: "settings" });
+    }
+  }, [autoSelect, fleet.listed, fleet.managed, route, replace]);
   // 网址写的设备清单里没有（编号不对、已经移除了）：回到入口本机
   const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
   const localEntries = useMemo(
@@ -206,7 +233,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     });
   }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
   const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
-    route.view !== "router" &&
+    route.view !== "router" && route.view !== "settings" &&
     (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
   useEffect(() => {
     if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);
@@ -286,6 +313,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [rawLink?.readOnly, rawLink?.waiting],
   );
   const openNewPm = useCallback(() => setCreating(true), []);
+  const openSettings = useCallback(() => navigate({ view: "settings" }), [navigate]);
+  const openSettingsSection = useCallback((section: SettingsSection) => navigate({ view: "settings", section }), [navigate]);
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const settingsBack = useCallback(() => {
+    const currentRoute = routeRef.current;
+    if (currentRoute?.view === "settings") mobileBack(settingsParent(currentRoute), replace);
+  }, [replace]);
   const refreshFleet = useCallback(() => void fleet.refresh(), [fleet.refresh]);
   const deviceSettingsRef = useRef<DeviceSettings | null>(null);
   const deviceSettings = useMemo<DeviceSettings | null>(() => {
@@ -448,6 +483,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       compact,
       created,
       creating,
+      desktopSettingsOpen: desktopSettings.open,
+      desktopSettingsSection: desktopSettings.section,
       deviceSettings,
       drafts,
       focus,
@@ -459,11 +496,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       narrow,
       newPmDevices,
       offline,
+      onSettingsOpenChange,
       openAsk,
       openDeviceConversation,
       openDeviceWorker,
       openNewPm,
       openProfile,
+      openSettings,
+      openSettingsSection,
       openWorker,
       openWorkerConversation,
       profile,
@@ -484,6 +524,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       select,
       send,
       setCreating,
+      settingsBack,
       sidebarActive,
       sidebarActiveRef,
       sidebarRouter,
