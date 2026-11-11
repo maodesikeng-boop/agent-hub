@@ -436,7 +436,85 @@ describe("hub router ask / report / note 与同源桥接", () => {
 
     now += 500;
     ledger.recoverAfterRestart();
-    expect(ledger.sessionRole(tempSess.id)).toBeNull();
+    // 残留会话是全表最大 id：只标为已结束、不删（删了下一个会话会复用这个号）
+    expect(assistantRows()).toEqual([{ id: tempSess.id, status: "ended" }]);
+    expect(ledger.snapshot().sessions.some((s) => s.sessionId === tempSess.id)).toBe(false);
     expect(ledger.getRouterCommand(stuckCmd.id)?.status).toBe("failed");
+  });
+});
+
+function assistantRows(): Array<{ id: number; status: string }> {
+  return db.all<{ id: number; status: string }>(
+    "SELECT id, status FROM agent_sessions WHERE role = 'assistant' ORDER BY id",
+  );
+}
+
+function maxSessionId(): number {
+  return db.get<{ m: number }>("SELECT MAX(id) AS m FROM agent_sessions")!.m;
+}
+
+function newAssistant() {
+  return ledger.createRouterAssistantSession({
+    vendor: "claude",
+    model: "claude-haiku-4-5",
+    effort: "low",
+    cwd: join(root, ".agent-hub", "state", "router-home"),
+  });
+}
+
+describe("临时 assistant 会话收尾：agent_sessions.id 只增不退、不膨胀", () => {
+  it("连续多轮结束：每轮新号严格递增，已结束的 assistant 行始终最多 1 行（就是全表最大那行）", () => {
+    const ids: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const s = newAssistant();
+      ids.push(s.id);
+      now += 10;
+      ledger.endRouterAssistantSession(s.id);
+      expect(assistantRows()).toEqual([{ id: s.id, status: "ended" }]);
+      expect(maxSessionId()).toBe(s.id);
+    }
+    for (let i = 1; i < ids.length; i++) expect(ids[i]!).toBeGreaterThan(ids[i - 1]!);
+  });
+
+  it("轨道 B 结束后紧接着新建项目经理：拿到的号严格大于刚结束的 assistant 号；下一轮收尾把更早的那行修剪掉", () => {
+    const a = newAssistant();
+    ledger.endRouterAssistantSession(a.id);
+    const pm = ledger.createPm({ name: "新来的", mode: "manage_only", persona: "测试" });
+    expect(pm.sessionId).toBeGreaterThan(a.id);
+
+    // 并发两轮：先结束的那轮不是最大行，当场删；后结束的留着
+    const b = newAssistant();
+    const c = newAssistant();
+    expect(b.id).toBeGreaterThan(pm.sessionId);
+    expect(c.id).toBeGreaterThan(b.id);
+    ledger.endRouterAssistantSession(b.id);
+    expect(assistantRows()).toEqual([{ id: c.id, status: "idle" }]);
+    ledger.endRouterAssistantSession(c.id);
+    expect(assistantRows()).toEqual([{ id: c.id, status: "ended" }]);
+    expect(newAssistant().id).toBeGreaterThan(c.id);
+  });
+
+  it("重启恢复：残留的 assistant 行标已结束、只留最大那行，重启后新建会话的号依然严格递增", () => {
+    const leftover1 = newAssistant();
+    const leftover2 = newAssistant();
+    const maxBefore = maxSessionId();
+    expect(maxBefore).toBe(leftover2.id);
+
+    ledger.close();
+    db.close();
+    db = openDatabase(dbFile);
+    migrate(db);
+    ledger = createLedger(db, options());
+    ledger.recoverAfterRestart();
+
+    expect(assistantRows()).toEqual([{ id: leftover2.id, status: "ended" }]);
+    expect(leftover1.id).toBeLessThan(leftover2.id);
+    const pm = ledger.createPm({ name: "重启后", mode: "manage_only", persona: "测试" });
+    expect(pm.sessionId).toBeGreaterThan(maxBefore);
+
+    // 再重启一次：最大行已是项目经理会话，残留的那行 assistant 被修剪掉
+    ledger.recoverAfterRestart();
+    expect(assistantRows()).toEqual([]);
+    expect(newAssistant().id).toBeGreaterThan(pm.sessionId);
   });
 });

@@ -822,7 +822,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         }
         cleanupRouterLaunchDir(launchDir, assistantSession.id);
         try {
-          ledger.deleteRouterAssistantSession(assistantSession.id);
+          ledger.endRouterAssistantSession(assistantSession.id);
         } catch {
           // ignore if DB already closed during shutdown
         }
