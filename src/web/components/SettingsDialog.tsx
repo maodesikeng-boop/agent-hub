@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { ComputersSection, PublicEntrySection, type DeviceSettings } from "./DeviceSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
 
 export type { DeviceSettings };
 
@@ -87,6 +88,7 @@ export function SettingsDialog({
             )}
           </SettingsRow>
         </SettingsGroup>
+        <VendorSyncSettings />
       </>
     ),
     computers: devices && <ComputersSection {...devices} />,
