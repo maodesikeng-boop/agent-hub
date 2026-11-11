@@ -34,6 +34,10 @@ describe("scopeAllowsWrite", () => {
       `${dataDir}/shots/a.png`,
       `${dataDir}/state/hub.sqlite`,
       `${dataDir}/state/personas/pm-1.md`,
+      `${dataDir}/state/pm-memory`,
+      `${dataDir}/state/pm-memory/1`,
+      `${dataDir}/state/pm-memory/1/MEMORY.md`,
+      `${dataDir}/state/pm-memory/1/architecture.md`,
       `${dataDir}/run/bin/hub`,
       `${dataDir}/uploads/1/a.txt`,
       `${dataDir}/worktrees/1/3/src/a.ts`,
@@ -107,6 +111,32 @@ describe("commandMayWriteOutsideScope", () => {
     ]) {
       expect(commandMayWriteOutsideScope(c, scope, cwd, home), c).toBe(true);
     }
+  });
+
+  it("项目经理专属记忆目录隔离：普通 Worker（含 worktree 与主文件夹）绝不能写 state/pm-memory", () => {
+    const mainWorkerCwd = "/Users/u/code/app";
+    const mainScope = workerWriteScope({ role: "worker", dataDir, cwd: mainWorkerCwd })!;
+    for (const target of [
+      `${dataDir}/state/pm-memory/1/MEMORY.md`,
+      `${dataDir}/state/pm-memory/1/topic.md`,
+      "~/.agent-hub/state/pm-memory/1/topic.md",
+      "../../../state/pm-memory/1/MEMORY.md",
+    ]) {
+      expect(scopeAllowsWrite(scope, target, cwd, home), `worktree:${target}`).toBe(false);
+    }
+    expect(scopeAllowsWrite(mainScope, `${dataDir}/state/pm-memory/1/MEMORY.md`, mainWorkerCwd, home)).toBe(false);
+    expect(scopeAllowsWrite(mainScope, `${dataDir}/state/pm-memory/1/topic.md`, mainWorkerCwd, home)).toBe(false);
+
+    for (const cmd of [
+      `echo hacked > ${dataDir}/state/pm-memory/1/MEMORY.md`,
+      `cp secret.md ${dataDir}/state/pm-memory/1/topic.md`,
+      "tee ~/.agent-hub/state/pm-memory/1/MEMORY.md",
+    ]) {
+      expect(commandMayWriteOutsideScope(cmd, scope, cwd, home), `worktree cmd:${cmd}`).toBe(true);
+      expect(commandMayWriteOutsideScope(cmd, mainScope, mainWorkerCwd, home), `main cmd:${cmd}`).toBe(true);
+    }
+    expect(commandMayWriteOutsideScope("rm -rf ../../../state/pm-memory/1", scope, cwd, home)).toBe(true);
+    expect(commandMayWriteOutsideScope("rm -rf ../../.agent-hub/state/pm-memory/1", mainScope, mainWorkerCwd, home)).toBe(true);
   });
 
   it("拆段、跟踪 cd 后，正常的写法不误拦", () => {

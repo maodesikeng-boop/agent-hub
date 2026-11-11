@@ -77,9 +77,12 @@ import {
   type QuotaResponse,
   type PersonaResponse,
   type PickFolderResponse,
+  type PmMemoryFileResponse,
+  type PmMemoryFilesResponse,
   type PmMode,
   type PostMessageResponse,
   type PushKeyResponse,
+  type PutPmMemoryFileResponse,
   type RenewSessionResponse,
   type ResolveRouterItemRequest,
   type ResolveRouterItemResponse,
@@ -448,6 +451,7 @@ const addScheduleBodySchema = z
   })
   .strict();
 const setScheduleEnabledBodySchema = z.object({ enabled: z.boolean() }).strict();
+const putPmMemoryFileBodySchema = z.object({ content: z.string() }).strict();
 const pickFolderBodySchema = z.object({ startDir: boundedBytesSchema(MAX_PATH_BYTES, "startDir").optional() }).strict();
 const pushUnsubscribeBodySchema = z.object({ endpoint: z.string() });
 
@@ -1265,6 +1269,28 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {
       const result = ledger.revertPersonaChange(parseId((req.params as { id?: unknown }).id, "persona change id"));
       return { changed: result.change !== null, persona: result.persona };
+    });
+
+    // 项目经理记忆目录子文件（<topic>.md）：文件名用通配，让含编码斜杠的非法路径走账本 400 校验而不是落成 404
+    routes.get("/api/pms/:id/memory-files", async (req): Promise<PmMemoryFilesResponse> => {
+      return ledger.listPmMemoryFiles(parseId((req.params as { id?: unknown }).id, "pm id"));
+    });
+
+    routes.get("/api/pms/:id/memory-files/*", async (req): Promise<PmMemoryFileResponse> => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      return ledger.getPmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "");
+    });
+
+    routes.put("/api/pms/:id/memory-files/*", async (req): Promise<PutPmMemoryFileResponse> => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      const raw = parseWithSchema(putPmMemoryFileBodySchema, req.body);
+      return ledger.putPmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "", raw.content);
+    });
+
+    routes.delete("/api/pms/:id/memory-files/*", async (req, reply) => {
+      const { id, "*": name } = req.params as { id?: unknown; "*"?: unknown };
+      ledger.deletePmMemoryFile(parseId(id, "pm id"), typeof name === "string" ? name : "");
+      return reply.code(204).send();
     });
 
     // 定时任务卡片：校验和写库都在账本里（同 hub schedule），这里只认请求体的形状

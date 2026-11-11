@@ -1,7 +1,7 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
 import { existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { ENV_HOME } from "./limits.ts";
+import { ENV_HOME, PM_MEMORY_INDEX_FILE } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 // 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）
 import { VENDOR_PATHS } from "../vendors/paths-registry.ts";
@@ -50,6 +50,8 @@ export interface HubPaths {
   pmHomeDir: string;
   /** state/personas/：性格设定的副本 pm-<编号>.md（见 personaFilePath）。 */
   personasDir: string;
+  /** state/pm-memory/：每个项目经理独占的记忆目录 <pmId>/（含 MEMORY.md 与扁平 <topic>.md 子文件）。 */
+  pmMemoryDir: string;
   /** run/：只有守护进程在跑时才有内容，权限 0700（设计第 6.1 节）。 */
   runDir: string;
   /**
@@ -123,6 +125,7 @@ export function resolveHubPaths(
     setupLogsDir: join(logsDir, "setup"),
     pmHomeDir: join(home, "pm-home"),
     personasDir: join(stateDir, "personas"),
+    pmMemoryDir: join(stateDir, "pm-memory"),
     runDir: join(home, "run"),
     hubSock: join(home, "run", "hub.sock"),
     uiSock: join(home, "run", "ui.sock"),
@@ -308,6 +311,16 @@ export function vendorCatalogFingerprint(
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {
   return join(personasDir, `pm-${pmId}.md`);
+}
+
+/** 项目经理独占的记忆目录（state/pm-memory/<pmId>）。 */
+export function pmMemoryDirPath(pmMemoryDir: string, pmId: number): string {
+  return join(pmMemoryDir, String(pmId));
+}
+
+/** 项目经理独占记忆目录下的主索引文件（state/pm-memory/<pmId>/MEMORY.md）。 */
+export function pmMemoryIndexPath(pmMemoryDir: string, pmId: number): string {
+  return join(pmMemoryDirPath(pmMemoryDir, pmId), PM_MEMORY_INDEX_FILE);
 }
 
 /** 一个项目的 Worker worktree 都在这一层：项目经理的 addDirs 加它。 */
