@@ -13,7 +13,7 @@ import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
-import { SettingsDialog, type DeviceSettings } from "./SettingsDialog.tsx";
+import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from "./SettingsDialog.tsx";
 
 /** 行的果冻底（docs/ui-standard.md 第 4 条）：选中、悬停是这个项目经理水果色的极淡底，颜色经 --jelly 交给 styles.css 的 bg-jelly。 */
 const jellyOf = (avatarKey: number) => ({ "--jelly": paletteOf(avatarKey).accent }) as React.CSSProperties;
@@ -287,6 +287,10 @@ export const Sidebar = memo(
     quota,
     quotaFetchable = false,
     layout: propLayout,
+    settingsOpen: propSettingsOpen,
+    defaultSettingsSection,
+    onSettingsOpenChange,
+    onOpenSettings,
     onSelect,
     onNewPm,
   }: {
@@ -305,6 +309,12 @@ export const Sidebar = memo(
     quotaFetchable?: boolean;
     /** 外壳指定的布局。 */
     layout?: SidebarLayout;
+    /** 桌面设置弹窗开关（跨断点从手机设置页拉宽切回桌面时受控打开）。 */
+    settingsOpen?: boolean;
+    defaultSettingsSection?: SettingsDialogSection;
+    onSettingsOpenChange?: (open: boolean) => void;
+    /** 手机整屏列表（layout === "page"）点设置齿轮跳到 #/settings，不挂 SettingsDialog。 */
+    onOpenSettings?: () => void;
     onSelect: (ref: ConversationRef) => void;
     onNewPm: () => void;
   }) {
@@ -315,7 +325,13 @@ export const Sidebar = memo(
     const active = layout === "page" ? null : propActive;
     const routerActive = layout === "page" ? false : Boolean(router?.active);
     const [query, setQuery] = useState("");
-    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [internalSettingsOpen, setInternalSettingsOpen] = useState(false);
+    const dialogOpen = propSettingsOpen ?? internalSettingsOpen;
+    const setDialogOpen = onSettingsOpenChange ?? setInternalSettingsOpen;
+    const handleOpenSettings = () => {
+      if (layout === "page" && onOpenSettings) onOpenSettings();
+      else setDialogOpen(true);
+    };
     const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
     const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
     const grouped = groups.length > 1;
@@ -416,7 +432,7 @@ export const Sidebar = memo(
                 <Plus aria-hidden="true" />
               </Button>
               <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-              <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
+              <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={handleOpenSettings}>
                 <Settings aria-hidden="true" />
               </Button>
             </div>
@@ -469,13 +485,21 @@ export const Sidebar = memo(
             </nav>
             <div className="flex items-center gap-1 px-3 py-3">
               <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-              <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
+              <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="Settings" onClick={handleOpenSettings}>
                 <Settings aria-hidden="true" />
               </Button>
             </div>
           </>
         )}
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} devices={devices} />
+        {layout !== "page" && (
+          <SettingsDialog
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+            {...(defaultSettingsSection !== undefined ? { defaultSection: defaultSettingsSection } : {})}
+            notify={notify}
+            devices={devices}
+          />
+        )}
       </aside>
     );
   },
@@ -490,6 +514,10 @@ export const Sidebar = memo(
     prev.quota === next.quota &&
     prev.quotaFetchable === next.quotaFetchable &&
     prev.layout === next.layout &&
+    prev.settingsOpen === next.settingsOpen &&
+    prev.defaultSettingsSection === next.defaultSettingsSection &&
+    prev.onSettingsOpenChange === next.onSettingsOpenChange &&
+    prev.onOpenSettings === next.onOpenSettings &&
     prev.onSelect === next.onSelect &&
     prev.onNewPm === next.onNewPm,
 );
