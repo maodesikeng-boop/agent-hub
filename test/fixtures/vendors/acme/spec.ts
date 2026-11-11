@@ -24,6 +24,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 acme-ultra-9",
     efforts: ["low", "high", "turbo"],
+    routerDefault: { model: "acme-mini-2", effort: "low" },
     flags: { model: "--model", effort: "--reasoning" },
   },
   composer: {

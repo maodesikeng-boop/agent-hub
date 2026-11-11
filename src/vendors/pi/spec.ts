@@ -87,6 +87,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 deepseek/deepseek-v4-pro",
     efforts: EFFORTS,
+    routerDefault: { model: "deepseek/deepseek-flash", effort: "off" },
     flags: { model: "--model", effort: "--thinking" },
     shortName: formatPiShortModel,
   },
