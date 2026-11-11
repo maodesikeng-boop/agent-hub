@@ -406,7 +406,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         router: {
           ...state.router,
           items: capped.items,
-          ...(capped.reportsTrimmed && !state.router.briefingsHasMore ? { briefingsHasMore: true } : {}),
+          briefingsHasMore: state.router.briefingsHasMore || capped.reportsTrimmed,
         },
       };
     }
@@ -450,7 +450,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         router: {
           ...state.router,
           commands,
-          ...(trimmed && !state.router.commandsHasMore ? { commandsHasMore: true } : {}),
+          commandsHasMore: state.router.commandsHasMore || trimmed,
         },
       };
     }
@@ -507,7 +507,10 @@ function endedBefore(state: HubState, conversationId: ConversationId): boolean {
   return sessions.length > 0 && sessions.every((s) => s.status === "ended");
 }
 
-/** 兼容还没升级的旧版远端守护进程（快照里没有 commandsHasMore / briefingsHasMore）：已有字段时零分配原样返回。 */
+/**
+ * 兼容还没升级的旧版远端守护进程（快照里没有 commandsHasMore / briefingsHasMore）：已有字段时零分配原样返回。
+ * 缺字段时近窗里有就当还有更早的：最多多点一次 Load earlier（翻回空页就收），换时间序不被插队。
+ */
 function normalizeRouterSlice(router: RouterSlice): RouterSlice {
   const raw = router as Partial<Pick<RouterSlice, "commandsHasMore" | "briefingsHasMore">> & RouterSlice;
   if (typeof raw.commandsHasMore === "boolean" && typeof raw.briefingsHasMore === "boolean") {

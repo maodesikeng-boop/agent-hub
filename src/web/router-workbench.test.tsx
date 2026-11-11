@@ -20,6 +20,14 @@ import {
 } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { OFFLINE_AFTER_MS } from "./devices.ts";
+import {
+  briefingEntryOfReport,
+  mergeRouterStream,
+  routerStreamPosOf,
+  turnEntryOfCommand,
+  type RouterStreamEntry,
+  type RouterStreamSource,
+} from "./router-stream.ts";
 import { resetQueryClient } from "./query-client.ts";
 import { MOBILE_SHELL_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import {
@@ -1434,5 +1442,132 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(await within(timeline()).findByText("改过的回答")).toBeInTheDocument();
     expect(renders.markdown.slice(markdownBefore)).toEqual(["改过的回答"]);
     expect(renders.stream - streamBefore).toBe(1);
+  });
+});
+
+describe("mergeRouterStream：多来源分别截断、连续翻页不插队", () => {
+  /** 一个来源：服务端按 created_at DESC, id DESC 排好的全部原始记录，近窗取前 window 条，之后每页 page 条。 */
+  interface SimSource {
+    rows: Array<{ createdAt: number; id: number; cancelled: boolean }>;
+    toEntry: (row: { createdAt: number; id: number; cancelled: boolean }) => RouterStreamEntry | null;
+    kind: "turn" | "briefing";
+    deviceKey: string;
+    loaded: number;
+  }
+
+  function rng(seed: number) {
+    let x = seed >>> 0 || 1;
+    return (n: number) => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      return (x >>> 0) % n;
+    };
+  }
+
+  function sourceOf(sim: SimSource): RouterStreamSource {
+    const loaded = sim.rows.slice(0, sim.loaded);
+    const entries: RouterStreamEntry[] = [];
+    for (const row of loaded) {
+      const e = sim.toEntry(row);
+      if (e !== null) entries.push(e);
+    }
+    const hasMore = sim.loaded < sim.rows.length;
+    const oldest = loaded.at(-1);
+    return {
+      entries,
+      hasMore,
+      loadedDownTo:
+        hasMore && oldest !== undefined ? { createdAt: oldest.createdAt, kind: sim.kind, deviceKey: sim.deviceKey, id: oldest.id } : null,
+    };
+  }
+
+  it("同一毫秒挤满指令和多台设备的简报（id 跨位数、含已取消指令）：每页更早记录只接在顶部，整体按时间→类别→设备→id 排序，翻到底按钮消失", () => {
+    const pms = new Map();
+    const projects = new Map();
+    for (let seed = 1; seed <= 300; seed++) {
+      const r = rng(seed);
+      const page = 1 + r(4);
+      const sims: SimSource[] = [];
+      const makeRows = (n: number, withCancelled: boolean) => {
+        // 时间只取 0..4 毫秒，逼出大量同一毫秒；id 从 1 起到两位数，旧比较按字符串会把 10 排在 9 前面
+        const rows = Array.from({ length: n }, (_, i) => ({ createdAt: 0, id: i + 1, cancelled: withCancelled && r(5) === 0 }));
+        let t = 0;
+        for (const row of rows) {
+          t += r(3) === 0 ? 1 : 0;
+          row.createdAt = Math.min(t, 4);
+        }
+        return rows.sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+      };
+      const cmdRows = makeRows(r(16), true);
+      sims.push({
+        rows: cmdRows,
+        kind: "turn",
+        deviceKey: "",
+        // 近窗：0 条（该类为空）、部分（被条数或字节截断）、全部（没截断）都会抽到
+        loaded: r(cmdRows.length + 1),
+        toEntry: (row) =>
+          row.cancelled
+            ? null
+            : turnEntryOfCommand(
+                makeCommandRecord({ id: row.id, clientId: `c-${seed}-${row.id}`, createdAt: row.createdAt, status: "answered" }),
+                undefined,
+                false,
+              ),
+      });
+      for (const deviceKey of ["", "peer-b"]) {
+        const rows = makeRows(r(16), false);
+        sims.push({
+          rows,
+          kind: "briefing",
+          deviceKey,
+          loaded: r(rows.length + 1),
+          toEntry: (row) =>
+            briefingEntryOfReport(makeReportItem({ id: row.id, createdAt: row.createdAt }), {
+              deviceKey,
+              deviceName: deviceKey || "local",
+              self: deviceKey === "",
+              pmById: pms,
+              projectById: projects,
+              live: false,
+            }),
+        });
+      }
+      // 近窗为 0 条却还有更多的情况服务端不会给（快照至少留 1 条），这里也不造
+      for (const sim of sims) if (sim.loaded === 0) sim.loaded = sim.rows.length === 0 ? 0 : Math.min(1, sim.rows.length);
+
+      const keysOf = (entries: RouterStreamEntry[]) => entries.map((e) => e.key);
+      let prev = mergeRouterStream(sims.map(sourceOf));
+      for (let click = 0; prev.hasMore; click++) {
+        expect(click).toBeLessThan(40);
+        for (const sim of sims) if (sim.loaded < sim.rows.length) sim.loaded = Math.min(sim.rows.length, sim.loaded + page);
+        const next = mergeRouterStream(sims.map(sourceOf));
+        // 已显示的记录原样留在尾部，新翻出来的只拼在顶部
+        expect(keysOf(next.entries).slice(next.entries.length - prev.entries.length)).toEqual(keysOf(prev.entries));
+        prev = next;
+      }
+      // 翻到底：全部未取消记录都在，且按 时间 → 指令在前 → 设备 → 数字 id 排好
+      const all: RouterStreamEntry[] = [];
+      for (const sim of sims) {
+        for (const row of sim.rows) {
+          const e = sim.toEntry(row);
+          if (e !== null) all.push(e);
+        }
+      }
+      const order = (e: RouterStreamEntry) => routerStreamPosOf(e);
+      all.sort((a, b) => {
+        const pa = order(a);
+        const pb = order(b);
+        return (
+          pa.createdAt - pb.createdAt ||
+          (pa.kind === pb.kind ? 0 : pa.kind === "turn" ? -1 : 1) ||
+          (pa.deviceKey === pb.deviceKey ? 0 : pa.deviceKey < pb.deviceKey ? -1 : 1) ||
+          pa.id - pb.id
+        );
+      });
+      expect(prev.hasMore).toBe(false);
+      expect(prev.watermark).toBeNull();
+      expect(prev.entries.map((e) => routerStreamPosOf(e))).toEqual(all.map((e) => routerStreamPosOf(e)));
+    }
   });
 });

@@ -69,7 +69,7 @@ export interface RouterDeviceBriefings {
   online: boolean;
   briefings: readonly RouterBriefingEntry[];
   oldestCursor: string | null;
-  oldestReportAt: number | null;
+  oldestReport: RouterReportItem | null;
   hasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -78,11 +78,11 @@ export interface RouterDeviceBriefings {
 export interface DeviceRouterStreamSlice {
   commands: readonly RouterCommandRecord[];
   oldestCommandCursor: string | null;
-  oldestCommandAt: number | null;
+  oldestCommand: RouterCommandRecord | null;
   commandsHasMore: boolean;
   reports: readonly RouterReportItem[];
   oldestReportCursor: string | null;
-  oldestReportAt: number | null;
+  oldestReport: RouterReportItem | null;
   briefingsHasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -99,22 +99,27 @@ export interface RouterStreamDeviceInput {
 export interface FleetRouterStream {
   turns: readonly RouterTurnEntry[];
   oldestCommandCursor: string | null;
-  oldestCommandAt: number | null;
+  oldestCommand: RouterCommandRecord | null;
   commandsHasMore: boolean;
   devices: readonly RouterDeviceBriefings[];
   multiDevice: boolean;
 }
 
-export interface RouterStreamItemBase {
-  createdAt: number;
-  key: string;
-  kind?: string;
+/**
+ * 时间流全序里的一个位置：createdAt → 类别（同一毫秒指令在前）→ 设备 → 记录 id。
+ * 同一来源内与服务端分页游标（created_at DESC, id DESC）同序，所以同一毫秒的记录也能按水位线严格切开。
+ */
+export interface RouterStreamPos {
+  readonly createdAt: number;
+  readonly kind: RouterStreamEntry["kind"];
+  readonly deviceKey: string;
+  readonly id: number;
 }
 
-export interface RouterStreamSource<out T extends RouterStreamItemBase = RouterStreamEntry> {
-  readonly entries: readonly T[];
-  /** 这个来源当前已覆盖到的最早毫秒时间戳；已翻到头或无需拦水位时是 null。 */
-  readonly loadedDownTo: number | null;
+export interface RouterStreamSource {
+  readonly entries: readonly RouterStreamEntry[];
+  /** 还有更早记录时，这个来源已加载到的最早一条原始记录（含被滤掉的已取消指令等）的位置；翻到头时是 null。 */
+  readonly loadedDownTo: RouterStreamPos | null;
   readonly hasMore: boolean;
 }
 
@@ -267,14 +272,14 @@ export function briefingEntryOfReport(
 interface CommandsSlice {
   commands: readonly RouterCommandRecord[];
   oldestCommandCursor: string | null;
-  oldestCommandAt: number | null;
+  oldestCommand: RouterCommandRecord | null;
   commandsHasMore: boolean;
 }
 
 interface ReportsSlice {
   reports: readonly RouterReportItem[];
   oldestReportCursor: string | null;
-  oldestReportAt: number | null;
+  oldestReport: RouterReportItem | null;
   briefingsHasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -289,7 +294,7 @@ const deviceStreamCache = new WeakMap<CommandsSlice, WeakMap<ReportsSlice, Devic
 
 function commandsSliceOf(router: HubState["router"]): CommandsSlice {
   const rawCommands = router.commands;
-  const commandsHasMore = Boolean(router.commandsHasMore);
+  const commandsHasMore = router.commandsHasMore;
   const hit = commandsSliceCache.get(rawCommands);
   if (hit !== undefined) {
     if (hit.commandsHasMore === commandsHasMore) return hit;
@@ -313,7 +318,7 @@ function commandsSliceOf(router: HubState["router"]): CommandsSlice {
   const slice: CommandsSlice = {
     commands,
     oldestCommandCursor: oldestCmd ? `${oldestCmd.createdAt}:${oldestCmd.id}` : null,
-    oldestCommandAt: oldestCmd ? oldestCmd.createdAt : null,
+    oldestCommand: oldestCmd,
     commandsHasMore,
   };
   commandsSliceCache.set(rawCommands, slice);
@@ -321,7 +326,7 @@ function commandsSliceOf(router: HubState["router"]): CommandsSlice {
 }
 
 function reportsSliceOf(state: HubState): ReportsSlice {
-  const briefingsHasMore = Boolean(state.router.briefingsHasMore);
+  const briefingsHasMore = state.router.briefingsHasMore;
   let byPms = reportsSliceCache.get(state.router.items);
   if (byPms === undefined) {
     byPms = new WeakMap();
@@ -364,7 +369,7 @@ function reportsSliceOf(state: HubState): ReportsSlice {
   const slice: ReportsSlice = {
     reports,
     oldestReportCursor: oldestRep ? `${oldestRep.createdAt}:${oldestRep.id}` : null,
-    oldestReportAt: oldestRep ? oldestRep.createdAt : null,
+    oldestReport: oldestRep,
     briefingsHasMore,
     pmById,
     projectById,
@@ -388,11 +393,11 @@ export function routerStreamOf(state: HubState): DeviceRouterStreamSlice {
   const slice: DeviceRouterStreamSlice = {
     commands: cSlice.commands,
     oldestCommandCursor: cSlice.oldestCommandCursor,
-    oldestCommandAt: cSlice.oldestCommandAt,
+    oldestCommand: cSlice.oldestCommand,
     commandsHasMore: cSlice.commandsHasMore,
     reports: rSlice.reports,
     oldestReportCursor: rSlice.oldestReportCursor,
-    oldestReportAt: rSlice.oldestReportAt,
+    oldestReport: rSlice.oldestReport,
     briefingsHasMore: rSlice.briefingsHasMore,
     pmById: rSlice.pmById,
     projectById: rSlice.projectById,
@@ -465,7 +470,7 @@ let lastFleetStreamMemo: {
   multiDevice: boolean;
   localCommands: readonly RouterCommandRecord[] | null;
   oldestCommandCursor: string | null;
-  oldestCommandAt: number | null;
+  oldestCommand: RouterCommandRecord | null;
   commandsHasMore: boolean;
   readyDeps: ReadyDeviceStreamDep[];
   deviceByKey: Map<string, RouterDeviceBriefings>;
@@ -484,7 +489,7 @@ export function fleetRouterStream(
   const multiDevice = devices.length > 1;
   let localCommands: readonly RouterCommandRecord[] | null = null;
   let oldestCommandCursor: string | null = null;
-  let oldestCommandAt: number | null = null;
+  let oldestCommand: RouterCommandRecord | null = null;
   let commandsHasMore = false;
   const readyDeps: ReadyDeviceStreamDep[] = [];
 
@@ -495,7 +500,7 @@ export function fleetRouterStream(
     if (d.self) {
       localCommands = slice.commands;
       oldestCommandCursor = slice.oldestCommandCursor;
-      oldestCommandAt = slice.oldestCommandAt;
+      oldestCommand = slice.oldestCommand;
       commandsHasMore = slice.commandsHasMore;
     }
     readyDeps.push({
@@ -513,7 +518,7 @@ export function fleetRouterStream(
     lastFleetStreamMemo.multiDevice === multiDevice &&
     lastFleetStreamMemo.localCommands === localCommands &&
     lastFleetStreamMemo.oldestCommandCursor === oldestCommandCursor &&
-    lastFleetStreamMemo.oldestCommandAt === oldestCommandAt &&
+    lastFleetStreamMemo.oldestCommand === oldestCommand &&
     lastFleetStreamMemo.commandsHasMore === commandsHasMore &&
     lastFleetStreamMemo.readyDeps.length === readyDeps.length &&
     readyDeps.every((cur, idx) => {
@@ -547,7 +552,7 @@ export function fleetRouterStream(
       prev.online === dep.online &&
       prev.briefings === briefings &&
       prev.oldestCursor === dep.slice.oldestReportCursor &&
-      prev.oldestReportAt === dep.slice.oldestReportAt &&
+      prev.oldestReport === dep.slice.oldestReport &&
       prev.hasMore === dep.slice.briefingsHasMore &&
       prev.pmById === dep.slice.pmById &&
       prev.projectById === dep.slice.projectById
@@ -559,7 +564,7 @@ export function fleetRouterStream(
             online: dep.online,
             briefings,
             oldestCursor: dep.slice.oldestReportCursor,
-            oldestReportAt: dep.slice.oldestReportAt,
+            oldestReport: dep.slice.oldestReport,
             hasMore: dep.slice.briefingsHasMore,
             pmById: dep.slice.pmById,
             projectById: dep.slice.projectById,
@@ -581,17 +586,17 @@ export function fleetRouterStream(
     prevValue.turns === turns &&
     prevValue.devices === devicesOut &&
     prevValue.oldestCommandCursor === oldestCommandCursor &&
-    prevValue.oldestCommandAt === oldestCommandAt &&
+    prevValue.oldestCommand === oldestCommand &&
     prevValue.commandsHasMore === commandsHasMore &&
     prevValue.multiDevice === multiDevice
       ? prevValue
-      : { turns, oldestCommandCursor, oldestCommandAt, commandsHasMore, devices: devicesOut, multiDevice };
+      : { turns, oldestCommandCursor, oldestCommand, commandsHasMore, devices: devicesOut, multiDevice };
   lastFleetStreamMemo = {
     selfKey,
     multiDevice,
     localCommands,
     oldestCommandCursor,
-    oldestCommandAt,
+    oldestCommand,
     commandsHasMore,
     readyDeps,
     deviceByKey,
@@ -600,40 +605,50 @@ export function fleetRouterStream(
   return value;
 }
 
+/** 还没落库的乐观回合没有记录 id，同一毫秒里排在已落库记录之后。 */
+const UNSAVED_ID = Number.MAX_SAFE_INTEGER;
+
+/** 条目在时间流全序里的位置（见 RouterStreamPos）。 */
+export function routerStreamPosOf(entry: RouterStreamEntry): RouterStreamPos {
+  return entry.kind === "turn"
+    ? { createdAt: entry.createdAt, kind: "turn", deviceKey: "", id: entry.command?.id ?? UNSAVED_ID }
+    : { createdAt: entry.createdAt, kind: "briefing", deviceKey: entry.deviceKey, id: entry.report.id };
+}
+
+function comparePos(a: RouterStreamPos, b: RouterStreamPos): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+  if (a.kind !== b.kind) return a.kind === "turn" ? -1 : 1;
+  if (a.deviceKey !== b.deviceKey) return a.deviceKey < b.deviceKey ? -1 : 1;
+  return a.id - b.id;
+}
+
 /**
- * 按各来源已覆盖到的最早时间水位线（watermark = max(loadedDownTo)）合并时间流：
- * 尚未翻完的来源挡在水位线之前，保证往回翻页时更老的内容永远只接在列表顶部，不往已看过的记录中间插队。
+ * 按各来源已加载到的最早位置取水位线（watermark = max(loadedDownTo)）合并时间流：
+ * 只放出不早于水位线的条目，尚未翻完的来源以后翻出来的记录一定排在水位线之前，
+ * 所以往回翻页时更老的内容永远只接在列表顶部，不往已看过的记录中间插队（同一毫秒也一样）。
  */
-export function mergeRouterStream<S extends RouterStreamSource<RouterStreamItemBase>>(
-  sources: readonly S[],
-): { entries: Array<S["entries"][number]>; hasMore: boolean; watermark: number | null } {
-  let watermark: number | null = null;
+export function mergeRouterStream(sources: readonly RouterStreamSource[]): {
+  entries: RouterStreamEntry[];
+  hasMore: boolean;
+  watermark: RouterStreamPos | null;
+} {
+  let watermark: RouterStreamPos | null = null;
   let hasMore = false;
-  for (let i = 0; i < sources.length; i++) {
-    const s = sources[i]!;
+  for (const s of sources) {
     if (s.hasMore) hasMore = true;
-    if (s.loadedDownTo !== null && (watermark === null || s.loadedDownTo > watermark)) {
+    if (s.loadedDownTo !== null && (watermark === null || comparePos(s.loadedDownTo, watermark) > 0)) {
       watermark = s.loadedDownTo;
     }
   }
 
-  type Entry = S["entries"][number];
-  const entries: Entry[] = [];
-  for (let i = 0; i < sources.length; i++) {
-    const list = sources[i]!.entries;
-    for (let j = 0; j < list.length; j++) {
-      const item = list[j] as Entry;
-      if (watermark === null || item.createdAt >= watermark) {
-        entries.push(item);
-      }
+  const ranked: Array<{ entry: RouterStreamEntry; pos: RouterStreamPos }> = [];
+  for (const s of sources) {
+    for (const entry of s.entries) {
+      const pos = routerStreamPosOf(entry);
+      if (watermark === null || comparePos(pos, watermark) >= 0) ranked.push({ entry, pos });
     }
   }
+  ranked.sort((a, b) => comparePos(a.pos, b.pos) || (a.entry.key < b.entry.key ? -1 : a.entry.key > b.entry.key ? 1 : 0));
 
-  entries.sort((a, b) => {
-    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
-    if (a.kind !== b.kind) return a.kind === "turn" ? -1 : 1;
-    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
-  });
-
-  return { entries, hasMore, watermark };
+  return { entries: ranked.map((r) => r.entry), hasMore, watermark };
 }

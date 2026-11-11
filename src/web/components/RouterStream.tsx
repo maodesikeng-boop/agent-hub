@@ -42,7 +42,7 @@ import {
   type FleetRouterStream,
   type RouterBriefingEntry,
   type RouterDeviceBriefings,
-  type RouterStreamEntry,
+  type RouterStreamPos,
   type RouterStreamSource,
   type RouterTurnDestination,
   type RouterTurnEntry,
@@ -758,11 +758,12 @@ export const RouterStream = memo(function RouterStream({
     }
     const olderTurns: RouterTurnEntry[] = [];
     const cmdPages = commandsQuery.data?.pages ?? [];
-    let oldestFetchedCmdAt: number | null = null;
+    // 翻出来的页都比近窗更早；最早一条原始记录（含已取消的）就是这个来源的分页位置
+    let oldestCmd: { createdAt: number; id: number } | null = stream.oldestCommand;
     for (const page of cmdPages) {
       for (const cmd of page.commands) {
-        if (oldestFetchedCmdAt === null || cmd.createdAt < oldestFetchedCmdAt) {
-          oldestFetchedCmdAt = cmd.createdAt;
+        if (oldestCmd === null || cmd.createdAt < oldestCmd.createdAt || (cmd.createdAt === oldestCmd.createdAt && cmd.id < oldestCmd.id)) {
+          oldestCmd = cmd;
         }
         if (cmd.status === "cancelled" || liveCmdIds.has(cmd.id)) continue;
         liveCmdIds.add(cmd.id);
@@ -770,7 +771,6 @@ export const RouterStream = memo(function RouterStream({
         olderTurns.push(turnEntryOfCommand(cmd, selfId, false));
       }
     }
-    olderTurns.sort((a, b) => a.createdAt - b.createdAt || (a.command?.id ?? 0) - (b.command?.id ?? 0));
 
     const activePending = pendingTurns.filter((p) => !liveClientIds.has(p.clientId));
     const persistedTurns = olderTurns.length > 0 ? [...olderTurns, ...stream.turns] : stream.turns;
@@ -783,13 +783,10 @@ export const RouterStream = memo(function RouterStream({
     const cmdHasMore = cmdNeverFetched
       ? stream.commandsHasMore
       : commandsQuery.isError || (Boolean(commandsQuery.hasNextPage) && cmdPages.length < ROUTER_STREAM_MAX_PAGES);
-    const cmdOldestLoadedAt =
-      oldestFetchedCmdAt !== null && (stream.oldestCommandAt === null || oldestFetchedCmdAt < stream.oldestCommandAt)
-        ? oldestFetchedCmdAt
-        : stream.oldestCommandAt;
-    const cmdLoadedDownTo = cmdHasMore ? cmdOldestLoadedAt : null;
+    const cmdLoadedDownTo: RouterStreamPos | null =
+      cmdHasMore && oldestCmd !== null ? { createdAt: oldestCmd.createdAt, kind: "turn", deviceKey: "", id: oldestCmd.id } : null;
 
-    const sources: RouterStreamSource<RouterStreamEntry>[] = [
+    const sources: RouterStreamSource[] = [
       { entries: allTurns, loadedDownTo: cmdLoadedDownTo, hasMore: cmdHasMore },
     ];
     const nextTargets: Array<
@@ -812,11 +809,11 @@ export const RouterStream = memo(function RouterStream({
 
       const olderBriefings: RouterBriefingEntry[] = [];
       const repPages = snap?.data?.pages ?? [];
-      let oldestFetchedRepAt: number | null = null;
+      let oldestRep: { createdAt: number; id: number } | null = dev.oldestReport;
       for (const page of repPages) {
         for (const item of page.items) {
-          if (oldestFetchedRepAt === null || item.createdAt < oldestFetchedRepAt) {
-            oldestFetchedRepAt = item.createdAt;
+          if (oldestRep === null || item.createdAt < oldestRep.createdAt || (item.createdAt === oldestRep.createdAt && item.id < oldestRep.id)) {
+            oldestRep = item;
           }
           // 旧版守护进程不认识 kind=report，网页再按 kind === "report" 滤一次
           if (item.kind !== "report" || liveRepIds.has(item.id)) continue;
@@ -832,7 +829,6 @@ export const RouterStream = memo(function RouterStream({
           if (entry !== null) olderBriefings.push(entry);
         }
       }
-      olderBriefings.sort((a, b) => a.createdAt - b.createdAt || a.report.id - b.report.id);
 
       const allBriefings = olderBriefings.length > 0 ? [...olderBriefings, ...dev.briefings] : dev.briefings;
       const repNeverFetched = snap === undefined || (snap.data === undefined && !snap.isError);
@@ -841,11 +837,10 @@ export const RouterStream = memo(function RouterStream({
         (repNeverFetched
           ? dev.hasMore
           : Boolean(snap?.isError) || (Boolean(snap?.hasNextPage) && repPages.length < ROUTER_STREAM_MAX_PAGES));
-      const repOldestLoadedAt =
-        oldestFetchedRepAt !== null && (dev.oldestReportAt === null || oldestFetchedRepAt < dev.oldestReportAt)
-          ? oldestFetchedRepAt
-          : dev.oldestReportAt;
-      const repLoadedDownTo = repHasMore ? repOldestLoadedAt : null;
+      const repLoadedDownTo: RouterStreamPos | null =
+        repHasMore && oldestRep !== null
+          ? { createdAt: oldestRep.createdAt, kind: "briefing", deviceKey: dev.key, id: oldestRep.id }
+          : null;
 
       sources.push({ entries: allBriefings, loadedDownTo: repLoadedDownTo, hasMore: repHasMore });
       if (repHasMore) {
