@@ -280,7 +280,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
   - Pieces：没收工的最多列 3 条，**在忙的排前面**（其余按派出的顺序）；多了，下面一行灰色的 **Show more**（13.5px、`text-muted-foreground`，没有底色和胶囊，悬停变前景色、`bg-sidebar-hover`），点开展开全部，同一处变成 Show less。正开着的 Piece 在被收起的那几条里时自动展开。
   - “等你确定”：同样最多 3 条，多了 Show more。
-  - Completed：标题和另几组一样（不带数字），默认收着；点开时通过 `@tanstack/react-query` 按需游标拉取 `GET /api/projects/:id/task-graphs?status=history`（有下一页时底部显示 `Load more`），并与未归属这些历史图的独立已收工 Piece 一起列出（`opacity-60`）。没有完成项就没有这一组；只有完成项、手动打开右栏时只有这一组，整栏的开关放在它那一行。
+  - Completed：标题和另几组一样（不带数字），默认收着；点开时通过 `@tanstack/react-query` 按需游标拉取 `GET /api/projects/:id/task-graphs?status=history`（每页 `GRAPH_HISTORY_PAGE_SIZE`，有下一页时底部显示 `Load more`，最多翻 `MAX_COMPLETED_GRAPH_PAGES` 页，两数都在 `src/shared/limits.ts`），并与未归属这些历史图的独立已收工 Piece 一起列出（`opacity-60`）。没有完成项就没有这一组；只有完成项、手动打开右栏时只有这一组，整栏的开关放在它那一行。
   - 所有外壳字都用英文（Needs You、Task Graph、Pieces、Completed、Show more、Load more，第 3 条措辞）。
 
 手机外壳的右栏改用底部 Pieces 抽屉（`ui/drawer.tsx`），内容共用 `RailGroups`，不会自动弹出；上面的顶栏下布局仅用于电脑外壳窄窗。

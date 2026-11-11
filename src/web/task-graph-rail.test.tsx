@@ -3,6 +3,7 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EMPTY_TOKEN_USAGE,
+  MAX_COMPLETED_GRAPH_PAGES,
   type DecideTaskNodeRequest,
   type Message,
   type TaskGraph,
@@ -12,6 +13,7 @@ import {
 import * as RightRailMod from "./components/RightRail.tsx";
 import { RightRail } from "./components/RightRail.tsx";
 import { SliceWheelIcon } from "./components/SliceWheelIcon.tsx";
+import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { PALETTE } from "./lib/palette.ts";
 import { resetQueryClient } from "./query-client.ts";
@@ -508,7 +510,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     // 展开 Completed：触发首屏 GET /api/projects/1/task-graphs?status=history
     const completedRegion = screen.getByRole("region", { name: /^Completed$/ });
     await user.click(within(completedRegion).getByRole("heading").querySelector("button")!);
-    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history"));
+    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history&limit=20"));
     expect(await within(completedRegion).findByText("历史五步改版")).toBeInTheDocument();
     expect(within(completedRegion).getByText("独立已收工活")).toBeInTheDocument();
     // 已归属 hist1 的 Worker #91 不重复列出
@@ -516,7 +518,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
 
     // 点击 Load more 游标翻下一页
     await user.click(within(completedRegion).getByRole("button", { name: "Load more" }));
-    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history&before=50"));
+    await waitFor(() => expect(fetchUrls).toContain("/api/projects/1/task-graphs?status=history&before=50&limit=20"));
     expect(await within(completedRegion).findByText("更早的架构清理")).toBeInTheDocument();
 
     // 点击历史任务图行：打开全览弹窗回看完整拓扑与历史拍板
@@ -652,5 +654,205 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
 
     expect(rightRailSpy).toHaveBeenCalledTimes(0);
     rightRailSpy.mockRestore();
+  });
+});
+
+describe("审查回归（PR #274）：几何边界、编号不混用、防重入与历史翻页上限", () => {
+  const VALID_D = /^[MLAZ0-9 .\-]+$/;
+
+  it.each([
+    ["0 个阶段", 0, false],
+    ["1 个阶段", 1, false],
+    ["奇数 7 个阶段链路", 7, false],
+    ["超大 32 个阶段链路", 32, false],
+    ["全并行同层 5 个阶段", 5, true],
+    ["全并行同层 32 个阶段", 32, true],
+  ])("SliceWheelIcon：%s 时所有 path d 合法、无 NaN/Infinity", (_name, count, parallel) => {
+    const nodes = Array.from({ length: count }, (_, i) =>
+      makeNode({ key: `n${i}`, title: `阶段 ${i}`, status: i % 3 === 0 ? "done" : i % 3 === 1 ? "running" : "pending", sortOrder: i }),
+    );
+    const edges = parallel ? [] : nodes.slice(1).map((n, i) => ({ fromKey: nodes[i]!.key, toKey: n.key }));
+    const { container } = render(<SliceWheelIcon graph={{ nodes, edges }} size={20} />);
+    const root = container.querySelector("[data-slot='slice-wheel']") as HTMLElement;
+    expect(root.style.width).toBe("1.25rem");
+    expect(root.querySelectorAll("[data-petal-status]")).toHaveLength(count);
+    for (const el of root.querySelectorAll("path, circle")) {
+      const d = el.getAttribute("d");
+      if (d !== null) {
+        expect(d).not.toMatch(/NaN|Infinity/);
+        expect(d).toMatch(VALID_D);
+      }
+      expect(el.outerHTML).not.toMatch(/NaN|Infinity/);
+    }
+    if (parallel && count > 1) {
+      // 全并行同层：每一刀（含首尾相接那一刀）都只切半刀，果心相连
+      expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(count);
+    }
+  });
+
+  it("Worker 拿不到 workerId 时绝不拿 conversationId 顶替：撞号的零散 Worker 照旧留在 Pieces，图内节点也不会误链到它", () => {
+    // 图内节点绑的是 Worker #12；另一个零散 Worker 的对话编号恰好也是 12，但没有 workerId
+    const stray = makeWorker(12, { workerId: undefined, title: "撞号零散活" });
+    const graph = makeGraph({
+      id: 70,
+      title: "撞号检测",
+      nodes: [makeNode({ key: "s1", title: "图内步骤", status: "running", activeWorkerId: 12, workerIds: [12] })],
+    });
+    render(
+      <RightRail
+        asks={[]}
+        workers={[stray]}
+        activeGraphs={[graph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={0}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    const piecesRegion = screen.getByRole("region", { name: /^Pieces$/ });
+    expect(within(piecesRegion).getByText("撞号零散活")).toBeInTheDocument();
+    const graphRegion = screen.getByRole("region", { name: /^Task Graph$/ });
+    expect(within(graphRegion).queryByRole("button", { name: "图内步骤" })).toBeNull();
+    expect(within(graphRegion).getByText("#12")).toBeInTheDocument();
+  });
+
+  it("unboundWorkersOf：没有汇报行（拿不到 workerId）的 Worker 不因对话编号撞上图内 Worker 编号而被误吞", () => {
+    const graph = makeGraph({
+      id: 71,
+      title: "撞号检测",
+      nodes: [makeNode({ key: "s1", title: "图内步骤", status: "running", activeWorkerId: 40, workerIds: [40] })],
+    });
+    const state: HubState = {
+      ...initialState,
+      phase: "ready",
+      seq: 10,
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 1, pmId: 1, conversationId: 1 })],
+      conversations: {
+        1: makeConvSnapshot(
+          [makeWorkerLine({ id: 5, conversationId: 1, line: { workerId: 40, workerConversationId: 41, title: "图内活", event: "started" } })],
+          { conversation: { id: 1, pmId: 1, title: "小林" } },
+        ),
+        40: makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 40, pmId: 1, title: "刚派出的零散活" }) }),
+        41: makeConvSnapshot([], { conversation: makeWorkerConversation({ id: 41, pmId: 1, title: "图内活" }) }),
+      },
+      activeTaskGraphs: [graph],
+    };
+    const titles = unboundWorkersOf(state, 1).map((w) => w.title);
+    expect(titles).toContain("刚派出的零散活");
+    expect(titles).not.toContain("图内活");
+  });
+
+  it("门禁拍板同步防重入：同一帧连点只发一次；失败显示错误，重试沿用同一个 clientId", async () => {
+    const calls: DecideTaskNodeRequest[] = [];
+    let fail = true;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body ?? "{}")) as DecideTaskNodeRequest);
+      if (fail) return jsonResponse({ error: "守护进程忙", code: "internal" }, 500);
+      return jsonResponse({ graph: makeGraph({ id: 80, title: "ok" }), messageId: 1 });
+    });
+    const graph = makeGraph({
+      id: 80,
+      title: "防重入",
+      nodes: [
+        makeNode({
+          key: "g",
+          title: "确认",
+          kind: "gate",
+          status: "waiting_user",
+          gateOptions: ["甲", "乙"],
+          gateRecommended: "甲",
+        }),
+      ],
+    });
+    render(
+      <RightRail
+        asks={[]}
+        workers={[]}
+        activeGraphs={[graph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={0}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    const card = screen.getByTestId("peel-gate-card");
+    const rec = within(card).getByRole("button", { name: /甲/ });
+    fireEvent.click(rec);
+    fireEvent.click(rec);
+    fireEvent.click(within(card).getByRole("button", { name: /乙/ }));
+    expect(await within(card).findByRole("alert")).toBeInTheDocument();
+    expect(calls).toHaveLength(1);
+
+    fail = false;
+    await waitFor(() => expect(within(card).getByRole("button", { name: /甲/ })).toBeEnabled());
+    fireEvent.click(within(card).getByRole("button", { name: /甲/ }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]!.clientId).toBe(calls[0]!.clientId);
+    await waitFor(() => expect(within(card).queryByRole("alert")).toBeNull());
+  });
+
+  it("全览弹窗 Skip step / Cancel graph 同步防重入：同一帧连点只发一次", async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      urls.push(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+      return jsonResponse({ graph: makeGraph({ id: 90, title: "ok" }) });
+    });
+    const graph = makeGraph({
+      id: 90,
+      title: "跳过检测",
+      nodes: [
+        makeNode({ key: "a", title: "第一步", status: "ready", sortOrder: 0 }),
+        makeNode({ key: "b", title: "第二步", status: "pending", sortOrder: 1 }),
+      ],
+      edges: [{ fromKey: "a", toKey: "b" }],
+    });
+    render(
+      <TaskGraphDialog graph={graph} open onOpenChange={() => {}} workers={[]} onOpenWorker={() => {}} />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "跳过检测" });
+    const [skipA, skipB] = within(dialog).getAllByRole("button", { name: "Skip step" });
+    fireEvent.click(skipA!);
+    fireEvent.click(skipB!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel graph" }));
+    await waitFor(() => expect(urls).toHaveLength(1));
+    expect(urls[0]).toBe("/api/task-graphs/90/nodes/a/skip");
+  });
+
+  it(`Completed 历史任务图翻到 ${MAX_COMPLETED_GRAPH_PAGES} 页即停：不再显示 Load more，也不会把最新的第一页挤掉`, async () => {
+    const user = userEvent.setup();
+    let nextId = 10_000;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const id = nextId--;
+      const page: TaskGraphsPage = {
+        graphs: [makeGraph({ id, title: `历史图 ${id}`, status: "completed", completedAt: id })],
+        hasMore: true,
+      };
+      return jsonResponse(page);
+    });
+    render(
+      <RightRail
+        asks={[]}
+        workers={[]}
+        completedGraphCount={999}
+        projectId={1}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={0}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    const completedRegion = screen.getByRole("region", { name: /^Completed$/ });
+    await user.click(within(completedRegion).getByRole("heading").querySelector("button")!);
+    expect(await within(completedRegion).findByText("历史图 10000")).toBeInTheDocument();
+    for (let page = 2; page <= MAX_COMPLETED_GRAPH_PAGES; page++) {
+      await user.click(await within(completedRegion).findByRole("button", { name: "Load more" }));
+      expect(await within(completedRegion).findByText(`历史图 ${10_001 - page}`)).toBeInTheDocument();
+    }
+    expect(within(completedRegion).queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(within(completedRegion).getByText("历史图 10000")).toBeInTheDocument();
   });
 });

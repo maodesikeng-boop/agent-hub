@@ -1,11 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
-import { memo, useMemo, useState } from "react";
-import type { ConversationId, DeviceId, TaskGraph, TaskNode, WorkerId } from "../../shared/index.ts";
+import { memo, useMemo, useRef, useState } from "react";
+import type { ConversationId, DeviceId, TaskGraph, TaskNode } from "../../shared/index.ts";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import type { WorkerEntry } from "../selectors.ts";
+import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
@@ -66,11 +66,12 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
 
-  const workerByKey = useMemo(() => {
-    const map = new Map<WorkerId, WorkerEntry>();
-    for (const w of workers) map.set(w.workerId ?? w.conversationId, w);
-    return map;
-  }, [workers]);
+  const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
+  // 同步防重入（Skip step / Cancel graph）：isPending 要等下一次渲染才变，连点会各发一次请求
+  const inFlightRef = useRef(false);
+  const releaseLock = () => {
+    inFlightRef.current = false;
+  };
 
   const nodeByKey = useMemo(() => {
     const map = new Map<string, TaskNode>();
@@ -107,6 +108,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       },
       onMutate: () => setActionError(null),
       onError: (err) => setActionError(errorText(err)),
+      onSettled: releaseLock,
     },
     qc,
   );
@@ -123,9 +125,16 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
         onOpenChange(false);
       },
       onError: (err) => setActionError(errorText(err)),
+      onSettled: releaseLock,
     },
     qc,
   );
+
+  const runExclusive = (run: () => void) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    run();
+  };
 
   if (graph === null || layout === null) return null;
 
@@ -148,8 +157,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               type="button"
               variant="ghost"
               size="sm"
-              disabled={cancelMutation.isPending}
-              onClick={() => cancelMutation.mutate()}
+              disabled={cancelMutation.isPending || skipMutation.isPending}
+              onClick={() => runExclusive(() => cancelMutation.mutate())}
               className="text-muted-foreground hover:text-danger"
             >
               {cancelMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
@@ -299,8 +308,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     <div className="flex justify-end">
                       <button
                         type="button"
-                        disabled={skipMutation.isPending}
-                        onClick={() => skipMutation.mutate(node.key)}
+                        disabled={skipMutation.isPending || cancelMutation.isPending}
+                        onClick={() => runExclusive(() => skipMutation.mutate(node.key))}
                         className="pointer-coarse:min-h-11 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                       >
                         Skip step

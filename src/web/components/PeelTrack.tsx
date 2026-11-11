@@ -7,7 +7,7 @@ import { useClient } from "../device-scope.tsx";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { sortActiveGraphs, taskGraphPriority, type WorkerEntry } from "../selectors.ts";
+import { sortActiveGraphs, taskGraphPriority, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
@@ -207,7 +207,10 @@ export function GateDecisionCard({
   const [noteOpen, setNoteOpen] = useState(!hasOptions);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
+  // 同一次拍板（含失败后重试）沿用同一个 clientId，服务端按它严格幂等；成功后才换新的
   const clientIdRef = useRef<string | null>(null);
+  // 同步防重入：useMutation 的 isPending 要等下一次渲染才变，连点两下会在它变之前各发一次请求
+  const inFlightRef = useRef(false);
 
   const decideMutation = useMutation(
     {
@@ -227,15 +230,18 @@ export function GateDecisionCard({
       onError: (error) => {
         setErr(errorText(error));
       },
+      onSettled: () => {
+        inFlightRef.current = false;
+      },
     },
     qc,
   );
 
   const submit = (choice: string | null, rawNote: string) => {
-    if (decideMutation.isPending) return;
+    if (inFlightRef.current) return;
     const trimmed = rawNote.trim();
     if (choice === null && trimmed === "") return;
-    clientIdRef.current = makeClientId();
+    inFlightRef.current = true;
     decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
   };
 
@@ -616,13 +622,7 @@ export const PeelTrackList = memo(function PeelTrackList({
   const client = useResolvedClient(deviceId);
   const sorted = useMemo(() => sortActiveGraphs(graphs), [graphs]);
 
-  const workerByKey = useMemo(() => {
-    const map = new Map<WorkerId, WorkerEntry>();
-    for (const w of workers) {
-      map.set(w.workerId ?? w.conversationId, w);
-    }
-    return map;
-  }, [workers]);
+  const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
 
   const computeInitialOpen = (list: readonly TaskGraph[]): ReadonlySet<TaskGraphId> => {
     const urgent = list.filter((g) => taskGraphPriority(g) < 2).map((g) => g.id);

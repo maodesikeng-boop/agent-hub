@@ -14,6 +14,7 @@ import {
   QUOTA_WINDOWS,
   VENDOR_FAILURE_SIGNS,
   EMPTY_TOKEN_USAGE,
+  TASK_GRAPH_SELECTOR_CACHE_MAX,
   attachmentsOf,
   exhaustRateLimitInfo,
   isHandoverTraffic,
@@ -825,8 +826,6 @@ const NO_TASK_GRAPHS: TaskGraph[] = [];
 const NO_WORKERS: WorkerEntry[] = [];
 const NO_DECISIONS: PendingDecision[] = [];
 const NO_CONV_MESSAGES: readonly Message[] = [];
-const MAX_CACHED_PROJECTS = 64;
-const MAX_CACHED_DECISION_KEYS = 64;
 
 function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number): void {
   if (!map.has(key) && map.size >= maxSize) {
@@ -883,18 +882,35 @@ export function activeGraphsOf(state: HubState, projectId: ProjectId | null): Ta
   const prev = lastActiveGraphsByProject.get(projectId);
   const resolved =
     prev !== undefined && prev.length === sorted.length && sorted.every((g, i) => g === prev[i]) ? prev : sorted;
-  if (resolved !== prev) setBoundedMap(lastActiveGraphsByProject, projectId, resolved, MAX_CACHED_PROJECTS);
+  if (resolved !== prev) setBoundedMap(lastActiveGraphsByProject, projectId, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
   byProject.set(projectId, resolved);
   return resolved;
 }
 
-const boundWorkerIdsCache = new WeakMap<readonly TaskGraph[], ReadonlySet<number>>();
+const boundWorkerIdsCache = new WeakMap<readonly TaskGraph[], ReadonlySet<WorkerId>>();
+
+/**
+ * Worker 是否绑在给定的 Worker 编号集合里。只认 WorkerEntry.workerId（Worker 记录编号）：
+ * 拿不到编号的不算绑定，绝不拿 conversationId 顶替（两套编号各自自增，会撞号误吞零散 Worker）。
+ */
+export function isWorkerBound(worker: WorkerEntry, boundIds: ReadonlySet<WorkerId>): boolean {
+  return worker.workerId !== undefined && boundIds.has(worker.workerId);
+}
+
+/** 按 Worker 记录编号索引 Worker（任务图节点按 workerId 找对应对话）；没有编号的不进索引。 */
+export function workersByWorkerId(workers: readonly WorkerEntry[]): ReadonlyMap<WorkerId, WorkerEntry> {
+  const map = new Map<WorkerId, WorkerEntry>();
+  for (const w of workers) {
+    if (w.workerId !== undefined) map.set(w.workerId, w);
+  }
+  return map;
+}
 
 /** 汇总一组任务图全部节点已绑定的 Worker 编号集合（含 activeWorkerId 与历史 workerIds）。 */
-export function boundWorkerIdsOf(graphs: readonly TaskGraph[]): ReadonlySet<number> {
+export function boundWorkerIdsOf(graphs: readonly TaskGraph[]): ReadonlySet<WorkerId> {
   const hit = boundWorkerIdsCache.get(graphs);
   if (hit !== undefined) return hit;
-  const ids = new Set<number>();
+  const ids = new Set<WorkerId>();
   for (const graph of graphs) {
     for (const node of graph.nodes) {
       if (node.activeWorkerId !== null) ids.add(node.activeWorkerId);
@@ -933,7 +949,7 @@ export function unboundWorkersOf(state: HubState, projectId: ProjectId | null): 
     byGraphs.set(graphs, allWorkers);
     return allWorkers;
   }
-  const filtered = allWorkers.filter((w) => !boundIds.has(w.workerId ?? w.conversationId));
+  const filtered = allWorkers.filter((w) => !isWorkerBound(w, boundIds));
   if (filtered.length === 0) {
     byGraphs.set(graphs, NO_WORKERS);
     return NO_WORKERS;
@@ -941,7 +957,7 @@ export function unboundWorkersOf(state: HubState, projectId: ProjectId | null): 
   const prev = lastUnboundByProject.get(projectId);
   const resolved =
     prev !== undefined && prev.length === filtered.length && filtered.every((w, i) => w === prev[i]) ? prev : filtered;
-  if (resolved !== prev) setBoundedMap(lastUnboundByProject, projectId, resolved, MAX_CACHED_PROJECTS);
+  if (resolved !== prev) setBoundedMap(lastUnboundByProject, projectId, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
   byGraphs.set(graphs, resolved);
   return resolved;
 }
@@ -1119,7 +1135,7 @@ export function pendingDecisionsOf(
     prev !== undefined && prev.length === result.length && result.every((d, i) => samePendingDecision(d, prev[i]!))
       ? prev
       : result;
-  if (resolved !== prev) setBoundedMap(lastDecisionsByScope, scopeKey, resolved, MAX_CACHED_DECISION_KEYS);
+  if (resolved !== prev) setBoundedMap(lastDecisionsByScope, scopeKey, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
   byScope.set(scopeKey, { messages: convMessages, pms: state.pms, projects: state.projects, list: resolved });
   return resolved;
 }

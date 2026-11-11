@@ -1,14 +1,14 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
-import { askOf, DEFAULT_AGENT_VENDOR, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
+import { askOf, DEFAULT_AGENT_VENDOR, GRAPH_HISTORY_PAGE_SIZE, MAX_COMPLETED_GRAPH_PAGES, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, DeviceId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import { useHubQueryClient } from "../query-client.ts";
-import { boundWorkerIdsOf, type WorkerEntry } from "../selectors.ts";
+import { boundWorkerIdsOf, isWorkerBound, type WorkerEntry } from "../selectors.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -297,8 +297,6 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
  * 收工的 Piece 与历史任务图单独一组 Completed（标题和另几组一样），默认收着（不记住）；正开着的是收工的 Piece 时自动展开，当前那行看得见。
  * 展开且提供了 projectId 时，通过 @tanstack/react-query 按需游标拉取 GET /api/projects/:id/task-graphs?status=history。
  */
-const MAX_COMPLETED_GRAPH_PAGES = 15;
-
 function CompletedGroup({
   workers,
   projectId,
@@ -338,10 +336,12 @@ function CompletedGroup({
       queryFn: ({ pageParam }) =>
         client.fetchProjectTaskGraphs(
           projectId!,
-          pageParam !== undefined ? { before: pageParam } : {},
+          pageParam !== undefined ? { before: pageParam, limit: GRAPH_HISTORY_PAGE_SIZE } : { limit: GRAPH_HISTORY_PAGE_SIZE },
         ),
       initialPageParam: undefined as TaskGraphId | undefined,
-      getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.graphs.at(-1)?.id : undefined),
+      // 翻到 MAX_COMPLETED_GRAPH_PAGES 页就停（不再显示 Load more），而不是让 maxPages 把最新的第一页挤掉
+      getNextPageParam: (lastPage, allPages) =>
+        lastPage.hasMore && allPages.length < MAX_COMPLETED_GRAPH_PAGES ? lastPage.graphs.at(-1)?.id : undefined,
       maxPages: MAX_COMPLETED_GRAPH_PAGES,
       enabled: open && canQueryHistory,
     },
@@ -358,7 +358,7 @@ function CompletedGroup({
       histBoundIds.size === 0
         ? workers
         : workers.filter(
-            (w) => w.conversationId === openWorkerId || !histBoundIds.has(w.workerId ?? w.conversationId),
+            (w) => w.conversationId === openWorkerId || !isWorkerBound(w, histBoundIds),
           ),
     [workers, histBoundIds, openWorkerId],
   );
@@ -487,7 +487,7 @@ export function RailGroups({
     () =>
       activeBoundIds === null || activeBoundIds.size === 0
         ? workers
-        : workers.filter((w) => !activeBoundIds.has(w.workerId ?? w.conversationId)),
+        : workers.filter((w) => !isWorkerBound(w, activeBoundIds)),
     [workers, activeBoundIds],
   );
 
