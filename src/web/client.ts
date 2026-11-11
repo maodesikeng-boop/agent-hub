@@ -41,6 +41,7 @@ import {
   type QuotaResponse,
   type RenewSessionResponse,
   type RetryMessageResponse,
+  type RewindMessageResponse,
   type SetPublicEntryRequest,
   type StateSnapshot,
   type TunnelConnectRequest,
@@ -189,6 +190,7 @@ export function createClient(device: DeviceId | null) {
       }
     },
     postStop: (conversationId: ConversationId) => postJson<void>(at(API_PATHS.stop(conversationId))),
+    postRewind: (conversationId: ConversationId) => postJson<RewindMessageResponse>(at(API_PATHS.rewind(conversationId))),
     postCreatePm: (body: CreatePmRequest) => postJson<CreatePmResponse>(at(API_PATHS.pms), body),
     /** 让守护进程弹出原生的“选择文件夹”。等用户选完才回（不限时，服务端自己最多等 PICK_FOLDER_TIMEOUT_MS）；取消（或超时）是 path null。 */
     postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body, null),

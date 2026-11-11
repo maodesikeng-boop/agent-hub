@@ -98,6 +98,8 @@ export interface ComposerSuggest {
   highlight: (index: number) => void;
   /** Esc 关过列表后主动重开（如点标签重选）。 */
   reopen: () => void;
+  /** 主动关掉当前打开的补全菜单（窗口级 Esc 兜底调用）。 */
+  dismiss: () => void;
 }
 
 /**
@@ -274,5 +276,14 @@ export function useComposerSuggest({
     return false;
   };
 
-  return { menu: content === null ? null : { ...content, activeIndex }, handleKey, select, highlight, reopen: () => setDismissed(null) };
+  return {
+    menu: content === null ? null : { ...content, activeIndex },
+    handleKey,
+    select,
+    highlight,
+    reopen: () => setDismissed(null),
+    dismiss: () => {
+      if (detectedKey !== null) setDismissed(detectedKey);
+    },
+  };
 }

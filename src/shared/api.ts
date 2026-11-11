@@ -34,6 +34,8 @@ export const API_PATHS = {
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
+  /** POST，没有请求体 → 200 RewindMessageResponse：把最后一条已停止/已取消或正在停止的用户消息标记回退。 */
+  rewind: (conversationId: ConversationId) => `/api/conversations/${conversationId}/rewind`,
   /** POST：新建项目经理（CreatePmRequest → 201 CreatePmResponse）。没有单独建项目的入口：建项目经理时选主文件夹，或者在会话里说。 */
   pms: "/api/pms",
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
@@ -360,6 +362,11 @@ export interface ArchivePmResponse {
 /** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */
 export interface RetryMessageResponse {
   messageId: MessageId;
+}
+
+/** POST /api/conversations/:id/rewind → 200。返回本次标记回退的用户消息；没有可回退的（或已回退过）是 null。 */
+export interface RewindMessageResponse {
+  message: Message | null;
 }
 
 /** POST /api/pick-folder 的请求体：对话框从哪个文件夹开始（输入框里已有的路径）；没给、不存在或不是文件夹就从家目录开始。 */

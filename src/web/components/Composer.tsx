@@ -1,5 +1,5 @@
 import { ArrowUp, CircleAlert, FileText, Info, Paperclip, Square, X } from "lucide-react";
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
@@ -22,6 +22,30 @@ const MAX_HEIGHT_PX = 180;
 const POINTER_FINE = "(pointer: fine)";
 const POINTER_COARSE = "(pointer: coarse)";
 const pointerMatches = (query: string, fallback: boolean) => (typeof window.matchMedia === "function" ? window.matchMedia(query).matches : fallback);
+
+const OPEN_OVERLAY_SELECTOR = [
+  '[data-slot="dialog-content"]:not([data-state="closed"])',
+  '[data-slot="popover-content"]:not([data-state="closed"])',
+  '[data-slot="drawer-content"]:not([data-state="closed"])',
+  '[role="dialog"]:not([data-state="closed"])',
+  '[role="alertdialog"]:not([data-state="closed"])',
+].join(", ");
+
+function hasOpenOverlay(): boolean {
+  return document.querySelector(OPEN_OVERLAY_SELECTOR) !== null;
+}
+
+function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaElement | null): boolean {
+  if (!(target instanceof HTMLElement) || target === ownTextarea) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const type = (target as HTMLInputElement).type;
+    return type !== "button" && type !== "checkbox" && type !== "radio" && type !== "file" && type !== "submit" && type !== "reset";
+  }
+  return false;
+}
 
 /** 聊天输入框外框：1px 中性灰边框；平时的轻阴影和聚焦态（只多一团强调色的模糊光晕，边框不变，不套圈）都在 styles.css 的 .composer-frame（docs/ui-standard.md 第 7 条） */
 const FRAME_CLASS = "composer-frame rounded-[26px] border border-border bg-background";
@@ -120,6 +144,8 @@ export function Composer({
   workerPick = null,
   onWorkerPick,
   stop: stopProp,
+  onRewind,
+  focusRev = 0,
   source,
   onChange,
   onSend,
@@ -137,6 +163,10 @@ export function Composer({
   /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
+  /** 二次 Esc 回退：把刚暂停或取消的最后一条用户消息恢复到草稿槽，成功返回 true。 */
+  onRewind?: (stopping: boolean) => boolean;
+  /** 递增一次表示刚回退恢复了草稿，需要聚焦输入框并把光标放到末尾。 */
+  focusRev?: number;
   /** 对话所在的设备连不上（联机，devices.ts）：离线时整个输入框不可用、占位写原因；重连中能打字，发送等连上。 */
   link?: ComposerLink | null;
   /** 输入 “/” 命令、“@” 文件时弹出的列表从哪来（见 composer-suggest.ts）；不给就不弹。 */
@@ -230,8 +260,37 @@ export function Composer({
     // 只在出现时放一次；对话切换时整个页面换了一个（key），会重新放
   }, []);
 
+  // 对话级 Esc 快捷键（docs/ui-standard.md 第 18 条）：按第一次 Esc 暂停，再按一次 Esc 把刚中断或取消的用户消息回退到输入框。
+  const handleGlobalKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (disabled) return;
+    if (e.key !== "Escape" || e.defaultPrevented || e.repeat) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.target instanceof Node && !document.contains(e.target)) return;
+    if (hasOpenOverlay() || isOtherEditable(e.target, ref.current)) return;
+    if (suggest.menu !== null) {
+      e.preventDefault();
+      suggest.dismiss();
+      return;
+    }
+    const canStop = stop?.canStop ?? (stop !== undefined && stop.busy && !stop.stopping);
+    if (canStop) {
+      e.preventDefault();
+      stop!.onStop();
+      return;
+    }
+    if (onRewind?.(stop?.stopping ?? false)) {
+      e.preventDefault();
+    }
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
   // 输入框跟着内容长高，到上限后出滚动条；顺便判断单行 / 多行布局
   const prevValue = useRef<string | null>(null);
+  const prevFocusRev = useRef(focusRev);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -247,7 +306,17 @@ export function Composer({
     const contentHeight = el.scrollHeight;
     const nextHeight = `${Math.min(contentHeight, MAX_HEIGHT_PX)}px`;
     if (el.style.height !== nextHeight) el.style.height = nextHeight;
-    if (pendingCursor.current !== null) {
+    if (focusRev !== prevFocusRev.current) {
+      prevFocusRev.current = focusRev;
+      if (!disabled) {
+        el.focus({ preventScroll: true });
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+        el.scrollTop = el.scrollHeight;
+        pendingCursor.current = null;
+        setCursor(end);
+      }
+    } else if (pendingCursor.current !== null) {
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
@@ -266,7 +335,7 @@ export function Composer({
       nextWrapped = value.includes("\n") || settledValue.current === value || !fitsBetweenButtons(el, value, [attachRef.current, actionsRef.current]);
     }
     setWrapped(nextWrapped);
-  }, [value, multiline]);
+  }, [value, multiline, focusRev, disabled]);
 
   const submit = () => {
     if (!canSend) return;
@@ -394,8 +463,9 @@ export function Composer({
 export const DraftComposer = memo(function DraftComposer({
   draft,
   ...rest
-}: Omit<ComponentProps<typeof Composer>, "value" | "onChange"> & { draft: DraftSlot }) {
+}: Omit<ComponentProps<typeof Composer>, "value" | "onChange" | "focusRev"> & { draft: DraftSlot }) {
   const value = useStore(draft.store);
   const workerPick = useStore(draft.pick);
-  return <Composer value={value} onChange={draft.set} workerPick={workerPick} onWorkerPick={draft.setPick} {...rest} />;
+  const focusRev = useStore(draft.focusRev);
+  return <Composer value={value} onChange={draft.set} workerPick={workerPick} onWorkerPick={draft.setPick} focusRev={focusRev} {...rest} />;
 });

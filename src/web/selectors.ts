@@ -17,6 +17,7 @@ import {
   attachmentsOf,
   exhaustRateLimitInfo,
   isHandoverTraffic,
+  isRewoundMessage,
   isSilentTriggerMessage,
   isAgentVendor,
   vendorSpec,
@@ -131,10 +132,10 @@ export function previewText(entry: ConversationEntry): string {
   if (!last) return "";
   const cached = previewTextCache.get(last);
   if (cached !== undefined) return cached;
-  // 只发了文件没写字的用户消息：写文件名
+  // 只发了文件没写字（或文字已回退）的用户消息：写文件名
   const files = attachmentsOf(last);
   let result: string;
-  if (last.text.trim() === "" && files.length > 0) result = `[File] ${files.map((f) => f.name).join(", ")}`;
+  if ((last.text.trim() === "" || isRewoundMessage(last)) && files.length > 0) result = `[File] ${files.map((f) => f.name).join(", ")}`;
   // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
   else if (last.sender === "system") result = systemNoticeText(last);
   else result = last.sender === "agent" ? stripMarkdown(last.text) : last.text;
@@ -666,7 +667,7 @@ const INPUT_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.run"]);
 const WORK_SYSTEM_EVENTS: ReadonlySet<string> = new Set(["schedule.created", "schedule.removed"]);
 
 function flowRole(message: Message): FlowRole {
-  if (isSilentTriggerMessage(message)) return "silent_input";
+  if (isSilentTriggerMessage(message) || (isRewoundMessage(message) && attachmentsOf(message).length === 0)) return "silent_input";
   const line = workerEventOf(message);
   if (line) return INPUT_WORKER_EVENTS.has(line.event) ? "input" : "work";
   if (message.sender === "user" || message.sender === "pm") return "input";

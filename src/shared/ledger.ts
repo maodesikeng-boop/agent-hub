@@ -346,6 +346,12 @@ export interface Ledger extends LedgerHandoverWork {
    */
   requestStop(conversationId: ConversationId): void;
   /**
+   * 二次 Esc 回退当前对话最后一轮被中断（stopped）、已取消（cancelled）或正在停止中的用户消息：
+   * 写入 meta.rewound = true 并推 message.updated，返回更新后的消息；没有符合条件的或已回退过返回 null（幂等）。
+   * 对话不存在抛 ConversationNotFoundError；已收工的 Worker 对话抛 conflict。
+   */
+  rewindLastUserMessage(conversationId: ConversationId): Message | null;
+  /**
    * 网页看得到的东西：不含老的项目群（对话、它们的会话）和归档的项目（见 CONVERSATION_KINDS）。
    * 含 Worker 的对话（kind worker）和会话：网页左栏不显示，点项目经理对话里那一行打开。
    */

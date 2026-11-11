@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  findRewindableMessage,
   type Attachment,
   type Change,
   type ConversationId,
@@ -13,6 +14,7 @@ import {
   type PostMessageRequest,
   type WorkerPick,
   userMessageDedupeKey,
+  workerPickOf,
 } from "../shared/index.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
@@ -42,6 +44,8 @@ export class DeviceHub {
   private buffer: Change[] | null = null;
   private streamStatus: ConnectionStatus = "connecting";
   private readonly olderInFlight = new Set<ConversationId>();
+  /** POST /messages 还在路上的记录：若用户在请求返回前就按了 Esc 停止或二次 Esc 回退，等入库返回后再补一次 stop / rewind。 */
+  private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,6 +119,7 @@ export class DeviceHub {
 
   dispose(): void {
     this.alive = false;
+    this.inFlightPosts.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
     clearTimeout(this.timer);
@@ -215,15 +220,21 @@ export class DeviceHub {
   }
 
   private async submit(conversationId: ConversationId, clientId: string, text: string, attachmentIds: string[], workerPick: WorkerPick | null): Promise<void> {
+    const flight = { conversationId, after: "none" as "none" | "stop" | "rewind" };
+    this.inFlightPosts.set(clientId, flight);
     try {
       await this.client.postMessage(conversationId, messageBody(clientId, text, attachmentIds, workerPick));
+      if (this.alive) {
+        if (flight.after === "rewind") void this.client.postRewind(conversationId).catch(() => {});
+        else if (flight.after === "stop") void this.client.postStop(conversationId).catch(() => {});
+      }
     } catch (err) {
       // 400：服务端拒绝了这条消息（同一个 clientId 重发还是会被拦，重试永远不会成功）：带的文件找不到了要重新添加，
       // 别的原因（比如手打了不能用的命令）把服务端的 error 原样显示
       const rejected = err instanceof ApiError && err.status === 400;
       const reason = errorText(err);
       const missing = rejected && reason.text === ATTACHMENTS_MISSING_MESSAGE;
-      if (this.alive) {
+      if (this.alive && flight.after !== "rewind") {
         this.dispatch({
           type: "pendingPhase",
           clientId,
@@ -231,6 +242,8 @@ export class DeviceHub {
           ...(missing ? { failure: "attachments_missing" as const } : rejected ? { failure: "rejected" as const, reason } : {}),
         });
       }
+    } finally {
+      this.inFlightPosts.delete(clientId);
     }
   }
 
@@ -294,7 +307,35 @@ export class DeviceHub {
     }
   };
 
-  stop = (conversationId: ConversationId): Promise<void> => this.client.postStop(conversationId);
+  stop = (conversationId: ConversationId): Promise<void> => {
+    for (const flight of this.inFlightPosts.values()) {
+      if (flight.conversationId === conversationId && flight.after === "none") flight.after = "stop";
+    }
+    return this.client.postStop(conversationId);
+  };
+
+  /**
+   * 二次 Esc 回退当前对话最后一轮被中断、已取消或正在停止中的用户消息：
+   * 返回要恢复进输入框的 { text, workerPick }；没有符合条件的消息（幂等、已完成、失败或已被后续消息越过）返回 null。
+   */
+  rewind = (conversationId: ConversationId, stopping: boolean): { text: string; workerPick: WorkerPick | null } | null => {
+    const pending = this.state.pending.findLast((p) => p.conversationId === conversationId);
+    if (pending !== undefined) {
+      if (!stopping || pending.phase !== "sending" || (pending.text === "" && pending.workerPick === undefined)) return null;
+      const flight = this.inFlightPosts.get(pending.clientId);
+      if (flight) flight.after = "rewind";
+      this.dispatch({ type: "pendingRewind", clientId: pending.clientId });
+      void this.client.postRewind(conversationId).catch(() => {});
+      return { text: pending.text, workerPick: pending.workerPick ?? null };
+    }
+    const view = this.state.conversations[conversationId];
+    if (!view) return null;
+    const target = findRewindableMessage(view.messages, { stopping });
+    if (target === null) return null;
+    this.dispatch({ type: "messageRewind", conversationId, messageId: target.id });
+    void this.client.postRewind(conversationId).catch(() => {});
+    return { text: target.text, workerPick: workerPickOf(target) };
+  };
 
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];
