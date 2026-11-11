@@ -1,16 +1,13 @@
 import { ChevronDown } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";
 import type { OlderState, PendingMessage } from "../state.ts";
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
+import { useStickToBottom } from "../useStickToBottom.ts";
 import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-/** 离底部不到这么多像素算“在底部”，内容变高、新消息来了跟着滚。 */
-const STICK_DISTANCE_PX = 80;
-/** 滚到离顶部这么近就加载更早的消息。 */
-const LOAD_OLDER_DISTANCE_PX = 40;
 /** 跳到某条消息后，高亮这么久。 */
 const HIGHLIGHT_MS = 2_000;
 
@@ -58,14 +55,7 @@ export const MessageList = memo(function MessageList({
   /** 当前正在流式生成的单段回复文字；段完成入库时置空。 */
   streamingText?: string | null;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const [highlightId, setHighlightId] = useState<MessageId | null>(null);
-  const stick = useRef(true);
-  const [away, setAway] = useState(false);
-  /** 触发“加载更早”时的内容高度，加载完据此保持原来的位置。 */
-  const anchorHeight = useRef<number | null>(null);
-  const prevPendingCount = useRef(pending.length);
 
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
@@ -74,42 +64,13 @@ export const MessageList = memo(function MessageList({
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
-  const scrollToBottom = () => {
-    const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    stick.current = true;
-    setAway(false);
-  };
-
-  // 打开对话、来了新消息：在底部就跟着滚；自己刚发的一定滚。
-  useLayoutEffect(() => {
-    const own = pending.length > prevPendingCount.current;
-    prevPendingCount.current = pending.length;
-    if (stick.current || own) scrollToBottom();
-    else setAway(true);
-  }, [lastKey]);
-
-  // 内容变高（图片加载完、展开明细、文字长出来）、滚动区变矮（输入框长高）：原本在底部就继续贴底，翻上去了不动。
-  useEffect(() => {
-    const el = ref.current;
-    const content = contentRef.current;
-    if (!el || !content) return;
-    const observer = new ResizeObserver(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
-    });
-    observer.observe(content);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // 更早的消息接到前面后，保持用户正在看的那一条不动。
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && anchorHeight.current !== null) {
-      el.scrollTop += el.scrollHeight - anchorHeight.current;
-      anchorHeight.current = null;
-    }
-  }, [firstId]);
+  const { ref, contentRef, away, scrollToBottom, loadOlder, onScroll } = useStickToBottom({
+    lastKey,
+    ownCount: pending.length,
+    headKey: firstId,
+    canLoadOlder: hasMore,
+    onLoadOlder,
+  });
 
   // 点了“等你确定”里的某个问题：滚到那条消息，高亮一会儿。跳一次就用掉（通知 App 清掉），重新挂载时不会再跳
   useEffect(() => {
@@ -117,17 +78,12 @@ export const MessageList = memo(function MessageList({
     ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center" });
     setHighlightId(focus.id);
     onFocusDone?.();
-  }, [focus, onFocusDone]);
+  }, [focus, onFocusDone, ref]);
   useEffect(() => {
     if (highlightId === null) return;
     const timer = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
     return () => clearTimeout(timer);
   }, [highlightId]);
-
-  const loadOlder = () => {
-    anchorHeight.current = ref.current?.scrollHeight ?? null;
-    onLoadOlder();
-  };
 
   // 初始快照只带 hasMore、没带消息的历史对话（如已收工的 Worker）：点开时自动拉取最新一页。
   useEffect(() => {
@@ -135,15 +91,6 @@ export const MessageList = memo(function MessageList({
       onLoadOlder();
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
-
-  const onScroll = () => {
-    const el = ref.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_DISTANCE_PX;
-    stick.current = nearBottom;
-    setAway(!nearBottom);
-    if (hasMore && el.scrollTop < LOAD_OLDER_DISTANCE_PX) loadOlder();
-  };
 
   /** 状态挂在最后一轮回复上；最后一项不是 agent 的回复（用户消息、Worker 的汇报、系统行、待发的）就在底部单独出一轮。 */
   const lastItem = items.at(-1);

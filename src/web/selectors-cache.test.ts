@@ -2,17 +2,20 @@
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_AGENT_VENDOR,
   MAX_REWOUND_PENDING_KEYS,
   workerEventOf,
   workerLineSummaries,
   type Message,
   type PersonaChangeId,
+  type RouterCommandRecord,
   type RouterItem,
   type SessionState,
   type TaskGraph,
   type TaskNode,
 } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
+import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
 import {
   activeGraphsOf,
   deviceRouterView,
@@ -306,7 +309,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const firstFleet = fleetRouterView(makeDevices(localWithRouter));
     expect(fleetRouterView(makeDevices(localWithRouter))).toBe(firstFleet);
     expect(firstFleet.decisions).toHaveLength(1);
-    expect(firstFleet.reports).toHaveLength(1);
+    expect(firstFleet.summary.unreadReportCount).toBe(1);
 
     // 流式增量文字更新与 Worker 消息到达都不换 deviceRouterView / fleetRouterView 引用
     const pmSession = makeSession({
@@ -347,6 +350,121 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const withLoading = (local: HubState) => [...makeDevices(local), { id: "osaka-id", name: "Osaka", self: false, online: false, state: initialState }];
     const loadingFleet = fleetRouterView(withLoading(resolved));
     expect(fleetRouterView(withLoading(resolved))).toBe(loadingFleet);
+  });
+
+  it("Router 时间流（routerStreamOf / fleetRouterStream）：300 Worker、3 万条消息下连续 100 次流式更新返回同一个引用且中位数 < 2 ms；只变一条指令时别的条目对象不换", () => {
+    const SELF_ID = "00000000-0000-4000-8000-000000000001";
+    const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
+    const command = (id: number, over: Partial<RouterCommandRecord> = {}): RouterCommandRecord => ({
+      id,
+      clientId: `c-${id}`,
+      inputText: `指令 ${id}`,
+      vendor: DEFAULT_AGENT_VENDOR,
+      model: null,
+      effort: null,
+      status: "dispatched",
+      plan: { intent: "dispatch", reply: "", actions: [], track: "A" },
+      dispatched: [{ deviceId: SELF_ID, deviceName: "Mac", pmId: 1, pmName: "项目经理", projectId: 1, projectName: "agent-hub", conversationId: PM_CONVERSATION, messageId: id, ok: true, op: "pm.forward" }],
+      error: null,
+      durationMs: 300,
+      createdAt: 50_000 + id,
+      updatedAt: 50_000 + id,
+      ...over,
+    });
+    const report = (id: number, pmId: number, conversationId: number, createdAt: number): RouterItem => ({
+      id,
+      kind: "report",
+      status: id % 2 === 0 ? "unread" : "archived",
+      pmId,
+      projectId: pmId,
+      conversationId,
+      summary: `里程碑 ${id}`,
+      links: [],
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const localBase = monthState();
+    const local: HubState = {
+      ...localBase,
+      router: {
+        ...localBase.router,
+        // 近窗是从新到旧的：200 条指令、200 条简报（ROUTER_STREAM_LIVE_MAX）
+        commands: Array.from({ length: 200 }, (_, i) => command(200 - i)),
+        items: Array.from({ length: 200 }, (_, i) => report(200 - i, 1, PM_CONVERSATION, 40_000 + (200 - i))),
+      },
+    };
+    const remote: HubState = {
+      ...initialState,
+      phase: "ready",
+      seq: 5,
+      pms: [makePm({ id: 2, name: "远端 PM" })],
+      projects: [makeProject({ id: 2, pmId: 2, conversationId: 2, name: "tokyo-svc" })],
+      conversations: { 2: { conversation: makeConversation({ id: 2, pmId: 2, projectId: 2, title: "远端 PM" }), messages: [], hasMore: false } },
+      router: { ...initialState.router, items: Array.from({ length: 200 }, (_, i) => report(200 - i, 2, 2, 45_000 + (200 - i))) },
+    };
+    const devices = (l: HubState): RouterStreamDeviceInput[] => [
+      { key: "", name: "Mac", self: true, online: true, state: l },
+      { key: TOKYO_ID, name: "Tokyo", self: false, online: true, state: remote },
+      // 还没连上的设备不许击穿缓存
+      { key: "osaka-id", name: "Osaka", self: false, online: false, state: initialState },
+    ];
+
+    const firstDevice = routerStreamOf(local);
+    expect(routerStreamOf(local)).toBe(firstDevice);
+    const first = fleetRouterStream(devices(local), SELF_ID);
+    expect(fleetRouterStream(devices(local), SELF_ID)).toBe(first);
+    expect(first.turns).toHaveLength(200);
+    expect(first.devices.map((d) => d.briefings.length)).toEqual([200, 200]);
+    // 从旧到新；本机真实设备编号换成网页的设备键（""），去向行才点得进去
+    expect(first.turns[0]!.createdAt).toBeLessThan(first.turns.at(-1)!.createdAt);
+    expect(first.turns[0]!.destinations[0]).toMatchObject({ deviceKey: "", conversationId: PM_CONVERSATION, worker: false, name: "项目经理" });
+
+    // 100 次流式更新（那台设备的 sessions 在变，router、pms、projects 四个引用都没变）
+    const pmSession = makeSession({ sessionId: 88_889, conversationId: PM_CONVERSATION, pmId: 1, status: "running", activity: "working", step: { type: "text" }, streamingText: "片段" });
+    let ticking = applyChange(local, sessionChange(local.seq + 1, pmSession));
+    let seq = ticking.seq;
+    const samples: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      ticking = applyChange(ticking, sessionChange(++seq, { ...pmSession, streamingText: `片段 ${seq}` }));
+      const t = performance.now();
+      const got = fleetRouterStream(devices(ticking), SELF_ID);
+      samples.push(performance.now() - t);
+      expect(got).toBe(first);
+    }
+    expect(samples.sort((a, b) => a - b)[50]!).toBeLessThan(2);
+    expect(routerStreamOf(ticking)).toBe(firstDevice);
+
+    // 合并（3 个来源、600 条）也在同一条线以内
+    const sources = [
+      { entries: first.turns, loadedDownTo: null, hasMore: false },
+      ...first.devices.map((d) => ({ entries: d.briefings, loadedDownTo: null, hasMore: false })),
+    ];
+    expect(medianMs(21, () => void mergeRouterStream(sources))).toBeLessThan(2);
+    expect(mergeRouterStream(sources).entries).toHaveLength(600);
+
+    // 一条指令从 planning 变成 answered：只有那一个回合的条目对象换了，别的回合、所有简报都还是原来的对象
+    const changed = applyChange(ticking, changeOf(++seq, "router.command.updated", { command: command(100, { status: "answered", updatedAt: 99_999 }) }));
+    const after = fleetRouterStream(devices(changed), SELF_ID);
+    expect(after).not.toBe(first);
+    expect(fleetRouterStream(devices(changed), SELF_ID)).toBe(after);
+    const changedTurns = after.turns.filter((t, i) => t !== first.turns[i]);
+    expect(changedTurns.map((t) => t.command?.id)).toEqual([100]);
+    expect(after.devices[0]!.briefings).toBe(first.devices[0]!.briefings);
+    expect(after.devices[1]).toBe(first.devices[1]);
+    // 只变指令：设备数组本身也沿用（下游“标已读”、简报分页按它做依赖，不该跟着重跑）
+    expect(after.devices).toBe(first.devices);
+
+    // 来一条简报：回合列表还是原来的那个数组，另一台设备的简报也不动
+    const briefed = applyChange(changed, changeOf(++seq, "router.item.created", { item: report(900, 1, PM_CONVERSATION, 99_000) }));
+    const afterBrief = fleetRouterStream(devices(briefed), SELF_ID);
+    expect(afterBrief.turns).toBe(after.turns);
+    expect(afterBrief.devices[1]).toBe(after.devices[1]);
+    expect(afterBrief.devices[0]!.briefings.at(-1)!.report.id).toBe(900);
+    expect(afterBrief.devices[0]!.briefings[5]).toBe(after.devices[0]!.briefings[6]);
+
+    // 项目经理改名：那台设备的简报跟着变（缓存按 pms 失效）
+    const renamed = applyChange(briefed, changeOf(++seq, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
+    expect(fleetRouterStream(devices(renamed), SELF_ID).devices[0]!.briefings.at(-1)!.pmName).toBe("小林");
   });
 
   it("activeGraphsOf、unboundWorkersOf、pendingDecisionsOf：1 个月规模下中位数 < 2 ms，流式打字与无关更新严格 === 引用稳定，变更即时失效", () => {

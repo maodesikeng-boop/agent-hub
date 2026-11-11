@@ -76,21 +76,47 @@ export interface MessageActions {
   onAnswerAsk?: (text: string) => void;
 }
 
-const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
+export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
 /** 名字、Worked for、可点开的系统行：13.5px 灰。 */
-const SECONDARY = "text-minor text-muted-foreground";
+export const SECONDARY = "text-minor text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
-const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
+export const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-/** 头像（24px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。 */
-function AgentHead({ identity, dot }: { identity: AgentIdentity; dot?: Exclude<WorkerTone, "neutral"> }) {
+/** 头像（26px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。Router 时间流可换自定义头像、点击跳去会话或附带项目与设备信息。 */
+export function AgentHead({
+  identity,
+  dot,
+  avatar,
+  onClick,
+  trailing,
+}: {
+  identity: AgentIdentity;
+  dot?: Exclude<WorkerTone, "neutral">;
+  avatar?: React.ReactNode;
+  onClick?: () => void;
+  trailing?: React.ReactNode;
+}) {
+  const icon = (
+    <span className="relative flex shrink-0">
+      {avatar ?? <Avatar colorKey={identity.avatarKey} size={26} neutral={identity.neutral} />}
+      {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
+    </span>
+  );
+  const name = <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>;
   return (
     <div className="mb-1.5 flex min-w-0 items-center gap-2" data-slot="agent-head">
-      <span className="relative flex shrink-0">
-        <Avatar colorKey={identity.avatarKey} size={26} neutral={identity.neutral} />
-        {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
-      </span>
-      <div className={cn("min-w-0 truncate font-medium", SECONDARY)}>{identity.name}</div>
+      {onClick ? (
+        <button type="button" className={cn("inline-flex min-w-0 items-center gap-2", TEXT_BUTTON)} onClick={onClick}>
+          {icon}
+          {name}
+        </button>
+      ) : (
+        <>
+          {icon}
+          {name}
+        </>
+      )}
+      {trailing}
     </div>
   );
 }
@@ -242,7 +268,7 @@ function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work:
 }
 
 /** 复制按钮：点了换成勾，过一会儿变回来。 */
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -706,7 +732,7 @@ const PICK_TAG = "mb-1.5 w-fit";
  * 用户消息的气泡 + 附件；没发出去时左边一个红色感叹号（照微信），垂直居中。
  * 排队、已停止、已取消这些都不写字（docs/ui-standard.md 第 17 条），只有“没发出去”这一种标记。
  */
-function SentBody({ unsent, children }: { unsent: React.ReactNode; children: React.ReactNode }) {
+export function SentBody({ unsent, children }: { unsent: React.ReactNode; children: React.ReactNode }) {
   if (!unsent) return children;
   return (
     <div className="flex w-full items-center justify-end gap-2">
@@ -724,7 +750,7 @@ const UNSENT_LABEL = "没发出去";
  * 没发出去的红色感叹号（照微信）：能重发的是按钮，点了重发；重发也没用的（被拦、文件没了）只是标记。
  * 原因（“网络断了，稍后重试”“文件已不在，请重新添加”）不另起一行，放在 title 和读屏名字里；原始错误放 title 第二行。
  */
-function UnsentMark({
+export function UnsentMark({
   reason,
   raw,
   onRetry,

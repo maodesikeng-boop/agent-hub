@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { parseServerMessage, reconnectDelay } from "./connection.ts";
 import { formatArchiveRemaining, formatTime } from "./format.ts";
-import { CHANGE_TYPES, PM_ARCHIVE_RETENTION_MS, applyReminderChange, pendingAsks, reminderStateFrom, waitingConversations, type ScheduleRecord } from "../shared/index.ts";
+import {
+  CHANGE_TYPES,
+  DEFAULT_AGENT_VENDOR,
+  PM_ARCHIVE_RETENTION_MS,
+  ROUTER_STREAM_LIVE_MAX,
+  applyReminderChange,
+  pendingAsks,
+  reminderStateFrom,
+  waitingConversations,
+  type RouterCommandRecord,
+  type RouterDecisionItem,
+  type RouterReportItem,
+  type ScheduleRecord,
+} from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
 import { MAX_LIVE_MESSAGES, applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
 import {
@@ -683,14 +696,18 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     );
     expect(s.router.items.map((x) => x.id)).toEqual([2]);
 
-    // 一键归档未读汇报
+    // 标已读（看到即已读）：简报留在近窗里，只把状态改成 archived，时间流照常能读
     s = applyChange(s, changeOf(14, "router.reports.archived_all", { archivedIds: [2], updatedAt: 106 }));
-    expect(s.router.items).toEqual([]);
+    expect(s.router.items).toEqual([expect.objectContaining({ id: 2, kind: "report", status: "archived", updatedAt: 106 })]);
+    const afterArchive = s.router.items;
+    // 同一批再来一次（幂等）：引用不变
+    s = applyChange(s, changeOf(15, "router.reports.archived_all", { archivedIds: [2], updatedAt: 107 }));
+    expect(s.router.items).toBe(afterArchive);
 
     // 备忘增改与清空
-    s = applyChange(s, changeOf(15, "router.note.updated", { pmId: 1, note: { pmId: 1, text: "正在合 PR", updatedAt: 110 } }));
+    s = applyChange(s, changeOf(16, "router.note.updated", { pmId: 1, note: { pmId: 1, text: "正在合 PR", updatedAt: 110 } }));
     expect(s.router.notes).toEqual([{ pmId: 1, text: "正在合 PR", updatedAt: 110 }]);
-    s = applyChange(s, changeOf(16, "router.note.updated", { pmId: 1, note: null }));
+    s = applyChange(s, changeOf(17, "router.note.updated", { pmId: 1, note: null }));
     expect(s.router.notes).toEqual([]);
 
     // 任务图创建（active）与完结移出（completed）
@@ -708,9 +725,90 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
       updatedAt: 100,
       completedAt: null,
     };
-    s = applyChange(s, changeOf(17, "task_graph.created", { graph: baseGraph }));
+    s = applyChange(s, changeOf(18, "task_graph.created", { graph: baseGraph }));
     expect(s.activeTaskGraphs.map((g) => g.id)).toEqual([9]);
-    s = applyChange(s, changeOf(18, "task_graph.updated", { graph: { ...baseGraph, status: "completed", completedAt: 120 } }));
+    s = applyChange(s, changeOf(19, "task_graph.updated", { graph: { ...baseGraph, status: "completed", completedAt: 120 } }));
     expect(s.activeTaskGraphs).toEqual([]);
+  });
+
+  it("时间流近窗永远是连续的最新一段：created 插到前面并按 ROUTER_STREAM_LIVE_MAX 裁剪，updated 只更新近窗里已有的记录", () => {
+    const report = (id: number, over: Partial<RouterReportItem> = {}): RouterReportItem => ({
+      id,
+      kind: "report",
+      status: "unread",
+      pmId: 1,
+      projectId: null,
+      conversationId: 1,
+      summary: `简报 ${id}`,
+      links: [],
+      createdAt: 1_000 + id,
+      updatedAt: 1_000 + id,
+      ...over,
+    });
+    const decision = (id: number): RouterDecisionItem => ({
+      id,
+      kind: "decision",
+      status: "pending",
+      pmId: 1,
+      projectId: null,
+      conversationId: 1,
+      question: `问题 ${id}`,
+      context: "",
+      options: [],
+      askMessageId: null,
+      resolution: null,
+      createdAt: 500 + id,
+      updatedAt: 500 + id,
+    });
+    const command = (id: number, over: Partial<RouterCommandRecord> = {}): RouterCommandRecord => ({
+      id,
+      clientId: `c-${id}`,
+      inputText: `指令 ${id}`,
+      vendor: DEFAULT_AGENT_VENDOR,
+      model: null,
+      effort: null,
+      status: "planning",
+      plan: null,
+      dispatched: null,
+      error: null,
+      durationMs: null,
+      createdAt: 2_000 + id,
+      updatedAt: 2_000 + id,
+      ...over,
+    });
+    let seq = 20;
+    let s = loaded();
+    s = applyChange(s, changeOf(++seq, "router.item.created", { item: decision(1) }));
+
+    // 简报：已读的更新留在原位；近窗外的更新不加进来（否则近窗中间出空洞，历史的边界也会错）
+    s = applyChange(s, changeOf(++seq, "router.item.created", { item: report(2) }));
+    s = applyChange(s, changeOf(++seq, "router.item.updated", { item: report(2, { status: "archived", updatedAt: 9_000 }) }));
+    expect(s.router.items.map((x) => [x.id, x.status])).toEqual([
+      [2, "archived"],
+      [1, "pending"],
+    ]);
+    const before = s.router.items;
+    s = applyChange(s, changeOf(++seq, "router.item.updated", { item: report(999, { status: "archived" }) }));
+    expect(s.router.items).toBe(before);
+
+    // 简报再多也只留最新的 ROUTER_STREAM_LIVE_MAX 条，而且挤不掉待拍板项
+    for (let id = 3; id < 3 + ROUTER_STREAM_LIVE_MAX + 5; id++) s = applyChange(s, changeOf(++seq, "router.item.created", { item: report(id) }));
+    const reports = s.router.items.filter((x) => x.kind === "report");
+    expect(reports).toHaveLength(ROUTER_STREAM_LIVE_MAX);
+    expect(reports[0]!.id).toBe(3 + ROUTER_STREAM_LIVE_MAX + 4);
+    expect(reports.at(-1)!.id).toBe(8);
+    expect(s.router.items.filter((x) => x.kind === "decision").map((x) => x.id)).toEqual([1]);
+
+    // 指令：created 插前并裁剪；updated 原位替换；近窗外的 updated 忽略
+    for (let id = 1; id <= ROUTER_STREAM_LIVE_MAX + 3; id++) s = applyChange(s, changeOf(++seq, "router.command.created", { command: command(id) }));
+    expect(s.router.commands).toHaveLength(ROUTER_STREAM_LIVE_MAX);
+    expect(s.router.commands[0]!.id).toBe(ROUTER_STREAM_LIVE_MAX + 3);
+    expect(s.router.commands.at(-1)!.id).toBe(4);
+    s = applyChange(s, changeOf(++seq, "router.command.updated", { command: command(10, { status: "answered" }) }));
+    expect(s.router.commands.find((c) => c.id === 10)!.status).toBe("answered");
+    expect(s.router.commands).toHaveLength(ROUTER_STREAM_LIVE_MAX);
+    const commandsBefore = s.router.commands;
+    s = applyChange(s, changeOf(++seq, "router.command.updated", { command: command(2, { status: "failed" }) }));
+    expect(s.router.commands).toBe(commandsBefore);
   });
 });

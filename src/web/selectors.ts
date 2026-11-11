@@ -47,8 +47,6 @@ import {
   type QuotaWindowKey,
   type RateLimitInfo,
   type RateLimitWindow,
-  type RouterCommandRecord,
-  type RouterReportItem,
   type ProjectFolder,
   type SessionId,
   type SessionState,
@@ -63,7 +61,6 @@ import {
   routerReminderSummary,
   runningWorkerCount,
   sessionOf,
-  unreadRouterReports,
   type RouterReminderSummary,
 } from "../shared/reminders.ts";
 import { stripMarkdown } from "./plainText.ts";
@@ -835,27 +832,17 @@ export function groupMessages(all: Message[]): RenderItem[] {
 
 export interface DeviceRouterView {
   decisions: PendingDecision[];
-  reports: RouterReportItem[];
 }
 
-const deviceRouterViewCache = new WeakMap<
-  readonly PendingDecision[],
-  WeakMap<readonly RouterReportItem[], DeviceRouterView>
->();
+const deviceRouterViewCache = new WeakMap<readonly PendingDecision[], DeviceRouterView>();
 
-/** 单台设备的 Router 活跃视图（待决项 + 未读汇报），输入切片未变时返回同一对象引用（===）。 */
+/** 单台设备的 Router 活跃视图（待拍板项），输入切片未变时返回同一对象引用（===）。简报和指令走 router-stream.ts 的时间流。 */
 export function deviceRouterView(state: HubState, deviceId = "local"): DeviceRouterView {
   const decisions = devicePendingDecisionsOf(state, deviceId);
-  const reports = unreadRouterReports(state);
-  let byReports = deviceRouterViewCache.get(decisions);
-  if (!byReports) {
-    byReports = new WeakMap();
-    deviceRouterViewCache.set(decisions, byReports);
-  }
-  let cached = byReports.get(reports);
+  let cached = deviceRouterViewCache.get(decisions);
   if (!cached) {
-    cached = { decisions, reports };
-    byReports.set(reports, cached);
+    cached = { decisions };
+    deviceRouterViewCache.set(decisions, cached);
   }
   return cached;
 }
@@ -880,19 +867,6 @@ export interface FleetDecisionEntry {
   avatarKey: number;
 }
 
-export interface FleetReportEntry {
-  key: string;
-  report: RouterReportItem;
-  deviceKey: string;
-  deviceId: string;
-  deviceName: string;
-  self: boolean;
-  online: boolean;
-  pmName: string;
-  projectName: string | null;
-  avatarKey: number;
-}
-
 export interface RouterTargetCandidate {
   key: string;
   deviceKey: string;
@@ -911,16 +885,13 @@ export interface RouterTargetCandidate {
 
 export interface FleetRouterView {
   decisions: FleetDecisionEntry[];
-  reports: FleetReportEntry[];
-  commands: RouterCommandRecord[];
   targets: RouterTargetCandidate[];
   summary: RouterReminderSummary;
   multiDevice: boolean;
 }
 
-const EMPTY_ROUTER_COMMANDS: RouterCommandRecord[] = [];
 /** 还没就绪的设备共用同一份空视图：每次给新的 [] 会让下面的指纹比较永远不等，整个舰队视图次次重算。 */
-const EMPTY_DEVICE_ROUTER_VIEW: DeviceRouterView = { decisions: [], reports: [] };
+const EMPTY_DEVICE_ROUTER_VIEW: DeviceRouterView = { decisions: [] };
 const pmConversationSigCache = new WeakMap<HubState["conversations"], string>();
 
 function pmConversationSignature(conversations: HubState["conversations"]): string {
@@ -945,8 +916,8 @@ interface FleetDeviceFingerprint {
   online: boolean;
   phase: HubState["phase"];
   decisions: readonly PendingDecision[];
-  reports: readonly RouterReportItem[];
-  commands: readonly RouterCommandRecord[];
+  /** 左栏摘要要数未读简报，router.items 变了才重算。 */
+  items: HubState["router"]["items"];
   pms: readonly Pm[];
   projects: readonly Project[];
   pmConvSig: string;
@@ -970,8 +941,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
       online: d.online,
       phase: d.state.phase,
       decisions: view.decisions,
-      reports: view.reports,
-      commands: d.self ? d.state.router.commands : EMPTY_ROUTER_COMMANDS,
+      items: d.state.router.items,
       pms: d.state.pms,
       projects: d.state.projects,
       pmConvSig: pmConversationSignature(d.state.conversations),
@@ -991,8 +961,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         prev.online === cur.online &&
         prev.phase === cur.phase &&
         prev.decisions === cur.decisions &&
-        prev.reports === cur.reports &&
-        prev.commands === cur.commands &&
+        prev.items === cur.items &&
         prev.pms === cur.pms &&
         prev.projects === cur.projects &&
         prev.pmConvSig === cur.pmConvSig
@@ -1003,21 +972,15 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
   }
 
   const decisions: FleetDecisionEntry[] = [];
-  const reports: FleetReportEntry[] = [];
   const targets: RouterTargetCandidate[] = [];
-  let commands: RouterCommandRecord[] = EMPTY_ROUTER_COMMANDS;
 
   for (let i = 0; i < devices.length; i++) {
     const d = devices[i]!;
     const fp = deps[i]!;
-    if (d.self) commands = [...fp.commands];
     if (d.state.phase !== "ready") continue;
 
     const pmById = new Map<PmId, Pm>();
     for (const pm of d.state.pms) pmById.set(pm.id, pm);
-    const projectById = new Map<ProjectId, Project>();
-    for (const proj of d.state.projects) projectById.set(proj.id, proj);
-
     for (const dec of fp.decisions) {
       decisions.push({
         decision: dec,
@@ -1027,23 +990,6 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         self: d.self,
         online: d.online,
         avatarKey: dec.pmId,
-      });
-    }
-
-    for (const rep of fp.reports) {
-      const pm = pmById.get(rep.pmId);
-      const proj = rep.projectId === null ? undefined : projectById.get(rep.projectId);
-      reports.push({
-        key: `report:${d.self ? "local" : d.id}:${rep.id}`,
-        report: rep,
-        deviceKey: fp.key,
-        deviceId: d.self ? "local" : d.id,
-        deviceName: d.name,
-        self: d.self,
-        online: d.online,
-        pmName: pm?.name ?? `#${rep.pmId}`,
-        projectName: proj?.name ?? null,
-        avatarKey: rep.pmId,
       });
     }
 
@@ -1071,7 +1017,6 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
   }
 
   decisions.sort((a, b) => b.decision.createdAt - a.decision.createdAt || a.decision.key.localeCompare(b.decision.key));
-  reports.sort((a, b) => b.report.createdAt - a.report.createdAt || b.report.id - a.report.id);
 
   const summary = routerReminderSummary(
     devices
@@ -1081,8 +1026,6 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
 
   const value: FleetRouterView = {
     decisions,
-    reports,
-    commands,
     targets,
     summary,
     multiDevice: devices.length > 1,

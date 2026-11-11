@@ -3,7 +3,7 @@
 import {
   MAX_REWOUND_PENDING_KEYS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
-  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  ROUTER_STREAM_LIVE_MAX,
   emptyRouterSlice,
   isRewoundMessage,
   isWorkerEndLine,
@@ -22,6 +22,7 @@ import {
   type Project,
   type ProjectFolder,
   type PublicEntryStatus,
+  type RouterItem,
   type RouterSlice,
   type ScheduleRecord,
   type ServerInfo,
@@ -174,6 +175,24 @@ function dropConfirmed(pending: PendingMessage[], messages: Message[]): PendingM
 function upsertBy<T>(list: T[], item: T, same: (a: T, b: T) => boolean): T[] {
   const index = list.findIndex((x) => same(x, item));
   return index === -1 ? [...list, item] : list.with(index, item);
+}
+
+/** 分开按类型裁剪近窗：待拍板最多留 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 条，简报最多留 ROUTER_STREAM_LIVE_MAX 条，简报再多也不挤掉待拍板。 */
+function capRouterItems(items: RouterItem[]): RouterItem[] {
+  let decisions = 0;
+  let reports = 0;
+  let needsTrim = false;
+  for (const x of items) {
+    if (x.kind === "decision") {
+      if (++decisions > ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX) needsTrim = true;
+    } else if (++reports > ROUTER_STREAM_LIVE_MAX) {
+      needsTrim = true;
+    }
+  }
+  if (!needsTrim) return items;
+  decisions = 0;
+  reports = 0;
+  return items.filter((x) => (x.kind === "decision" ? ++decisions <= ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX : ++reports <= ROUTER_STREAM_LIVE_MAX));
 }
 
 /** 消息不再是失败了（重试成功排进队了），就不用再记它的重试状态。 */
@@ -352,25 +371,39 @@ export function applyChange(state: HubState, change: Change): HubState {
     case "router.item.created":
     case "router.item.updated": {
       const { item } = change.data;
-      const isActive = item.status === "pending" || item.status === "unread";
       const existingIndex = state.router.items.findIndex((x) => x.id === item.id);
-      if (!isActive) {
+      if (item.kind === "decision") {
+        if (item.status !== "pending") {
+          if (existingIndex === -1) return next;
+          return {
+            ...next,
+            router: { ...state.router, items: state.router.items.filter((x) => x.id !== item.id) },
+          };
+        }
+        const items =
+          existingIndex === -1 ? capRouterItems([item, ...state.router.items]) : state.router.items.with(existingIndex, item);
+        return { ...next, router: { ...state.router, items } };
+      }
+      // 简报（unread / archived）都在时间流近窗里：created 插到最前并按上限裁剪；updated 只改近窗里已有的记录，不把老记录塞回近窗挖出空洞。
+      if (change.type === "router.item.updated") {
         if (existingIndex === -1) return next;
-        return {
-          ...next,
-          router: { ...state.router, items: state.router.items.filter((x) => x.id !== item.id) },
-        };
+        return { ...next, router: { ...state.router, items: state.router.items.with(existingIndex, item) } };
       }
       const items =
-        existingIndex === -1
-          ? [item, ...state.router.items].slice(0, ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX)
-          : state.router.items.with(existingIndex, item);
+        existingIndex === -1 ? capRouterItems([item, ...state.router.items]) : state.router.items.with(existingIndex, item);
       return { ...next, router: { ...state.router, items } };
     }
     case "router.reports.archived_all": {
       const archived = new Set(change.data.archivedIds);
-      const items = state.router.items.filter((x) => !archived.has(x.id));
-      return items.length === state.router.items.length ? next : { ...next, router: { ...state.router, items } };
+      let changed = false;
+      const items = state.router.items.map((x) => {
+        if (x.kind === "report" && archived.has(x.id) && x.status !== "archived") {
+          changed = true;
+          return { ...x, status: "archived" as const, updatedAt: change.data.updatedAt };
+        }
+        return x;
+      });
+      return changed ? { ...next, router: { ...state.router, items } } : next;
     }
     case "router.note.updated": {
       const { pmId, note } = change.data;
@@ -386,15 +419,20 @@ export function applyChange(state: HubState, change: Change): HubState {
         },
       };
     }
-    case "router.command.created":
-    case "router.command.updated": {
+    case "router.command.created": {
       const { command } = change.data;
       const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
       const commands =
         existingIndex === -1
-          ? [command, ...state.router.commands].slice(0, ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX)
+          ? [command, ...state.router.commands].slice(0, ROUTER_STREAM_LIVE_MAX)
           : state.router.commands.with(existingIndex, command);
       return { ...next, router: { ...state.router, commands } };
+    }
+    case "router.command.updated": {
+      const { command } = change.data;
+      const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
+      if (existingIndex === -1) return next;
+      return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
     }
     case "task_graph.created":
     case "task_graph.updated": {
