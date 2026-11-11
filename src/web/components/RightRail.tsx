@@ -1,16 +1,21 @@
-import { ChevronRight, MessageCircleQuestionMark } from "lucide-react";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
-import { DEFAULT_AGENT_VENDOR, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
-import { cleanPieceTitle, DEFAULT_CHOICE, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
+import { askOf, DEFAULT_AGENT_VENDOR, GRAPH_HISTORY_PAGE_SIZE, MAX_COMPLETED_GRAPH_PAGES, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
+import type { ConversationId, DeviceId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
+import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
-import type { WorkerEntry } from "../selectors.ts";
+import { useHubQueryClient } from "../query-client.ts";
+import { boundWorkerIdsOf, isWorkerBound, type WorkerEntry } from "../selectors.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { PeelTrackList, useResolvedClient } from "./PeelTrack.tsx";
+import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
 
 /**
  * 这几种算“在忙”（docs/ui-standard.md 第 12 条：行里不写状态词，在忙的标题字带流光，排在前面）：干活中、准备中（在跑项目的准备命令）、
@@ -39,15 +44,19 @@ const ICON_STROKE = 1.5;
 /** 空闲 Worker 的小圆点颜色：跟着最近一次汇报（worker-status.ts 的 tone），和汇报气泡头像上的色点一样；没汇报是灰。 */
 const TONE_DOT: Record<WorkerTone, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger", neutral: "bg-muted-foreground/50" };
 
-/** 每组的收起状态记在这个 localStorage 键里：{ asks?: true, workers?: true }，没写的是展开。 */
+/** 每组的收起状态记在这个 localStorage 键里：{ asks?: true, graphs?: true, workers?: true }，没写的是展开。 */
 export const RIGHT_RAIL_COLLAPSED_KEY = "agent-hub.rightRail.collapsed";
-type GroupKey = "asks" | "workers";
+type GroupKey = "asks" | "graphs" | "workers";
 const readCollapsed = (): Partial<Record<GroupKey, true>> => {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) ?? "{}");
     if (parsed === null || typeof parsed !== "object") return {};
     const value = parsed as Record<string, unknown>;
-    return { ...(value.asks === true && { asks: true as const }), ...(value.workers === true && { workers: true as const }) };
+    return {
+      ...(value.asks === true && { asks: true as const }),
+      ...(value.graphs === true && { graphs: true as const }),
+      ...(value.workers === true && { workers: true as const }),
+    };
   } catch {
     return {};
   }
@@ -285,18 +294,30 @@ function ShowMore({ limited, expanded, onToggle }: { limited: boolean; expanded:
 }
 
 /**
- * 收工的 Piece 单独一组 Completed（标题和 Needs You、Pieces 一样），默认收着（不记住）；正开着的是收工的 Piece 时自动展开，当前那行看得见。
- * 行里不写 Ended、不写状态词，标题字淡一些。
+ * 收工的 Piece 与历史任务图单独一组 Completed（标题和另几组一样），默认收着（不记住）；正开着的是收工的 Piece 时自动展开，当前那行看得见。
+ * 展开且提供了 projectId 时，通过 @tanstack/react-query 按需游标拉取 GET /api/projects/:id/task-graphs?status=history。
  */
 function CompletedGroup({
   workers,
+  projectId,
+  deviceId,
+  completedGraphCount,
+  activeGraphIdsKey,
+  avatarKey = 0,
   openWorkerId,
   onOpenWorker,
+  onZoomGraph,
   trailing,
 }: {
   workers: WorkerEntry[];
+  projectId?: ProjectId | null;
+  deviceId?: DeviceId | null;
+  completedGraphCount?: number;
+  activeGraphIdsKey: string;
+  avatarKey?: number;
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
+  onZoomGraph: (graph: TaskGraph) => void;
   trailing?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -304,21 +325,94 @@ function CompletedGroup({
   useEffect(() => {
     if (activeEnded) setOpen(true);
   }, [activeEnded, openWorkerId]);
+
+  const qc = useHubQueryClient();
+  const client = useResolvedClient(deviceId);
+  const canQueryHistory = projectId !== undefined && projectId !== null;
+
+  const historyQuery = useInfiniteQuery(
+    {
+      queryKey: ["project-task-graphs", client.device, projectId ?? null, completedGraphCount ?? null, activeGraphIdsKey] as const,
+      queryFn: ({ pageParam }) =>
+        client.fetchProjectTaskGraphs(
+          projectId!,
+          pageParam !== undefined ? { before: pageParam, limit: GRAPH_HISTORY_PAGE_SIZE } : { limit: GRAPH_HISTORY_PAGE_SIZE },
+        ),
+      initialPageParam: undefined as TaskGraphId | undefined,
+      // 翻到 MAX_COMPLETED_GRAPH_PAGES 页就停（不再显示 Load more），而不是让 maxPages 把最新的第一页挤掉
+      getNextPageParam: (lastPage, allPages) =>
+        lastPage.hasMore && allPages.length < MAX_COMPLETED_GRAPH_PAGES ? lastPage.graphs.at(-1)?.id : undefined,
+      maxPages: MAX_COMPLETED_GRAPH_PAGES,
+      enabled: open && canQueryHistory,
+    },
+    qc,
+  );
+
+  const completedGraphs = useMemo(
+    () => historyQuery.data?.pages.flatMap((page) => page.graphs) ?? [],
+    [historyQuery.data],
+  );
+  const histBoundIds = useMemo(() => boundWorkerIdsOf(completedGraphs), [completedGraphs]);
+  const shownWorkers = useMemo(
+    () =>
+      histBoundIds.size === 0
+        ? workers
+        : workers.filter(
+            (w) => w.conversationId === openWorkerId || !isWorkerBound(w, histBoundIds),
+          ),
+    [workers, histBoundIds, openWorkerId],
+  );
+
   return (
     <section aria-labelledby="rail-completed" className="tint-fade py-3">
       <GroupTitle id="rail-completed" bodyId="rail-completed-body" collapsed={!open} onToggle={() => setOpen((v) => !v)} trailing={trailing}>
         Completed
       </GroupTitle>
-      {/* 已收工的会越来越多：收着时不挂载行（不跑每行的 usePieceMeta），点开才渲染 */}
+      {/* 已收工的会越来越多：收着时不挂载行（不跑每行的 usePieceMeta、不发历史请求），点开才渲染 */}
       {open && (
         <GroupBody id="rail-completed-body" collapsed={false}>
+          {historyQuery.isLoading && completedGraphs.length === 0 && shownWorkers.length === 0 && (
+            <div className="flex items-center gap-2 py-2 text-minor text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <span>Loading…</span>
+            </div>
+          )}
           <ul>
-            {workers.map((worker) => (
+            {completedGraphs.map((graph) => (
+              <li key={`graph-${graph.id}`}>
+                <button
+                  type="button"
+                  aria-label={graph.title}
+                  title={graph.title}
+                  onClick={() => onZoomGraph(graph)}
+                  className={cn(ROW, "items-center", ITEM_HOVER)}
+                >
+                  <SliceWheelIcon graph={graph} colorKey={avatarKey} size={18} />
+                  <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-60">{graph.title}</span>
+                </button>
+              </li>
+            ))}
+            {shownWorkers.map((worker) => (
               <li key={worker.conversationId}>
                 <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
               </li>
             ))}
           </ul>
+          {historyQuery.error !== null && (
+            <p role="alert" className="py-1 text-xs text-danger">
+              {errorText(historyQuery.error).text}
+            </p>
+          )}
+          {historyQuery.hasNextPage && (
+            <MoreToggle
+              expanded={false}
+              onClick={() => {
+                if (!historyQuery.isFetchingNextPage) void historyQuery.fetchNextPage();
+              }}
+            >
+              {historyQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+            </MoreToggle>
+          )}
         </GroupBody>
       )}
     </section>
@@ -326,14 +420,18 @@ function CompletedGroup({
 }
 
 /**
- * 右栏的三组（docs/ui-standard.md 第 12 条，照 Claude desktop 的右栏）：Needs You（这个项目经理还没回答的 hub ask）、Pieces
- * （它派的、没收工的：在忙的排前面，最多列 3 条，多了 Show more）和 Completed（收工的，默认收着）。组之间一条细分隔线，内容多了自己滚。
- * 右栏（RightRail）和手机的底部抽屉共用这一段，外壳只管外框；className 加在滚动容器上（右栏用它定上下留白）。
- * toggle：放在第一个显示的组标题同一行右边的右栏开关（RightRailToggle），只有并排的右栏给。
+ * 右栏的四段兼容结构（docs/ui-standard.md 第 12 条）：Needs You（未绑图的独立 hub ask）、Task Graph（活跃任务流果皮轨）、
+ * Pieces（未绑图的进行中 Piece，在忙排前面，最多列 3 条）和 Completed（历史任务图 + 收工 Piece，默认收着）。
+ * 右栏（RightRail）和手机的底部抽屉（PiecesDrawer）共用这一段；新 props 全可选，不传时 100% 兼容旧调用点。
  */
 export function RailGroups({
   asks,
   workers,
+  activeGraphs,
+  completedGraphCount,
+  projectId,
+  deviceId,
+  avatarKey = 0,
   openWorkerId,
   toggle,
   className,
@@ -342,6 +440,11 @@ export function RailGroups({
 }: {
   asks: Message[];
   workers: WorkerEntry[];
+  activeGraphs?: readonly TaskGraph[];
+  completedGraphCount?: number;
+  projectId?: ProjectId | null;
+  deviceId?: DeviceId | null;
+  avatarKey?: number;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
   toggle?: React.ReactNode;
@@ -351,6 +454,8 @@ export function RailGroups({
   onOpenWorker: (conversationId: ConversationId) => void;
 }) {
   const [openAsks, setOpenAsks] = useState<ReadonlySet<MessageId>>(new Set());
+  const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
+
   const toggleAsk = (id: MessageId) => {
     const opening = !openAsks.has(id);
     setOpenAsks((prev) => {
@@ -361,67 +466,156 @@ export function RailGroups({
     });
     if (opening) onOpenAsk(id);
   };
-  const live = useMemo(() => workers.filter((w) => !w.ended).toSorted((a, b) => Number(isBusy(b)) - Number(isBusy(a))), [workers]);
-  const ended = workers.filter((w) => w.ended);
-  const shownAsks = useLimited(asks, (ask) => openAsks.has(ask.id));
+
+  // 同源去重：带 gateRef 或已绑定到活跃任务图门禁的提问直接内联在果皮轨中，不在 Needs You 重复渲染
+  const visibleAsks = useMemo(() => {
+    const gateMsgIds = new Set<MessageId>();
+    for (const graph of activeGraphs ?? []) {
+      for (const node of graph.nodes) {
+        if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+      }
+    }
+    return asks.filter((ask) => askOf(ask)?.gateRef === undefined && !gateMsgIds.has(ask.id));
+  }, [asks, activeGraphs]);
+
+  // 同源去重：已绑入活跃任务图节点的 Worker 不在独立 Pieces / Completed 中重复展示
+  const activeBoundIds = useMemo(
+    () => (activeGraphs && activeGraphs.length > 0 ? boundWorkerIdsOf(activeGraphs) : null),
+    [activeGraphs],
+  );
+  const unboundWorkers = useMemo(
+    () =>
+      activeBoundIds === null || activeBoundIds.size === 0
+        ? workers
+        : workers.filter((w) => !isWorkerBound(w, activeBoundIds)),
+    [workers, activeBoundIds],
+  );
+
+  const live = useMemo(
+    () => unboundWorkers.filter((w) => !w.ended).toSorted((a, b) => Number(isBusy(b)) - Number(isBusy(a))),
+    [unboundWorkers],
+  );
+  const ended = useMemo(() => unboundWorkers.filter((w) => w.ended), [unboundWorkers]);
+  const shownAsks = useLimited(visibleAsks, (ask) => openAsks.has(ask.id));
   const shownLive = useLimited(live, (w) => w.conversationId === openWorkerId);
   const groups = useCollapsedGroups();
+
+  const hasAsks = visibleAsks.length > 0;
+  const hasGraphs = (activeGraphs?.length ?? 0) > 0;
+  const hasLive = live.length > 0;
+  const hasCompleted = ended.length > 0 || (completedGraphCount ?? 0) > 0;
+  const graphNeedsYou = useMemo(
+    () => activeGraphs?.some((g) => g.nodes.some((n) => n.status === "waiting_user")) ?? false,
+    [activeGraphs],
+  );
+
+  const zoomedGraph = useMemo(() => {
+    if (zoomedState === null) return null;
+    return activeGraphs?.find((g) => g.id === zoomedState.id) ?? zoomedState.fallback;
+  }, [zoomedState, activeGraphs]);
+
   return (
-    <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
-      {asks.length > 0 && (
-        <section aria-labelledby="rail-asks" className="tint-fade py-3">
-          <GroupTitle
-            id="rail-asks"
-            bodyId="rail-asks-body"
-            collapsed={groups.collapsed.asks === true}
-            onToggle={() => groups.toggle("asks")}
-            dot
-            trailing={toggle}
-          >
-            {NEEDS_YOU}
-          </GroupTitle>
-          <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
-            <ul>
-              {shownAsks.shown.map((ask) => (
-                <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
-              ))}
-            </ul>
-            <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
-          </GroupBody>
-        </section>
-      )}
-      {live.length > 0 && (
-        <section aria-labelledby="rail-workers" className="tint-fade py-3">
-          <GroupTitle
-            id="rail-workers"
-            bodyId="rail-workers-body"
-            collapsed={groups.collapsed.workers === true}
-            onToggle={() => groups.toggle("workers")}
-            trailing={asks.length === 0 ? toggle : undefined}
-          >
-            Pieces
-          </GroupTitle>
-          <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
-            <ul>
-              {shownLive.shown.map((worker) => (
-                <li key={worker.conversationId}>
-                  <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
-                </li>
-              ))}
-            </ul>
-            <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
-          </GroupBody>
-        </section>
-      )}
-      {ended.length > 0 && (
-        <CompletedGroup
-          workers={ended}
-          openWorkerId={openWorkerId}
+    <>
+      <div className={cn("min-h-0 flex-1 divide-y divide-line overflow-x-hidden overflow-y-auto overscroll-y-contain px-5", className)}>
+        {hasAsks && (
+          <section aria-labelledby="rail-asks" className="tint-fade py-3">
+            <GroupTitle
+              id="rail-asks"
+              bodyId="rail-asks-body"
+              collapsed={groups.collapsed.asks === true}
+              onToggle={() => groups.toggle("asks")}
+              dot
+              trailing={toggle}
+            >
+              {NEEDS_YOU}
+            </GroupTitle>
+            <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
+              <ul>
+                {shownAsks.shown.map((ask) => (
+                  <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
+                ))}
+              </ul>
+              <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
+            </GroupBody>
+          </section>
+        )}
+        {hasGraphs && activeGraphs !== undefined && (
+          <section aria-labelledby="rail-graphs" className="tint-fade py-3">
+            <GroupTitle
+              id="rail-graphs"
+              bodyId="rail-graphs-body"
+              collapsed={groups.collapsed.graphs === true}
+              onToggle={() => groups.toggle("graphs")}
+              dot={graphNeedsYou}
+              trailing={!hasAsks ? toggle : undefined}
+            >
+              Task Graph
+            </GroupTitle>
+            <GroupBody id="rail-graphs-body" collapsed={groups.collapsed.graphs === true}>
+              <PeelTrackList
+                graphs={activeGraphs}
+                workers={workers}
+                openWorkerId={openWorkerId}
+                colorKey={avatarKey}
+                deviceId={deviceId}
+                onOpenWorker={onOpenWorker}
+                onZoomGraph={(g) => setZoomedState({ id: g.id, fallback: g })}
+              />
+            </GroupBody>
+          </section>
+        )}
+        {hasLive && (
+          <section aria-labelledby="rail-workers" className="tint-fade py-3">
+            <GroupTitle
+              id="rail-workers"
+              bodyId="rail-workers-body"
+              collapsed={groups.collapsed.workers === true}
+              onToggle={() => groups.toggle("workers")}
+              trailing={!hasAsks && !hasGraphs ? toggle : undefined}
+            >
+              Pieces
+            </GroupTitle>
+            <GroupBody id="rail-workers-body" collapsed={groups.collapsed.workers === true}>
+              <ul>
+                {shownLive.shown.map((worker) => (
+                  <li key={worker.conversationId}>
+                    <WorkerRow worker={worker} active={worker.conversationId === openWorkerId} onOpen={() => onOpenWorker(worker.conversationId)} />
+                  </li>
+                ))}
+              </ul>
+              <ShowMore limited={shownLive.limited} expanded={shownLive.expanded} onToggle={shownLive.toggle} />
+            </GroupBody>
+          </section>
+        )}
+        {hasCompleted && (
+          <CompletedGroup
+            workers={ended}
+            projectId={projectId}
+            deviceId={deviceId}
+            completedGraphCount={completedGraphCount}
+            activeGraphIdsKey={(activeGraphs ?? []).map((g) => g.id).join(",")}
+            avatarKey={avatarKey}
+            openWorkerId={openWorkerId}
+            onOpenWorker={onOpenWorker}
+            onZoomGraph={(g) => setZoomedState({ id: g.id, fallback: g })}
+            trailing={!hasAsks && !hasGraphs && !hasLive ? toggle : undefined}
+          />
+        )}
+      </div>
+      {zoomedGraph !== null && (
+        <TaskGraphDialog
+          graph={zoomedGraph}
+          open
+          onOpenChange={(open) => {
+            if (!open) setZoomedState(null);
+          }}
+          workers={workers}
+          colorKey={avatarKey}
+          deviceId={deviceId}
           onOpenWorker={onOpenWorker}
-          trailing={asks.length === 0 && live.length === 0 ? toggle : undefined}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -432,6 +626,10 @@ export function RailGroups({
 export const RightRail = memo(function RightRail({
   asks,
   workers,
+  activeGraphs,
+  completedGraphCount,
+  projectId,
+  deviceId,
   openWorkerId,
   layout,
   toggle,
@@ -441,12 +639,16 @@ export const RightRail = memo(function RightRail({
 }: {
   asks: Message[];
   workers: WorkerEntry[];
+  activeGraphs?: readonly TaskGraph[];
+  completedGraphCount?: number;
+  projectId?: ProjectId | null;
+  deviceId?: DeviceId | null;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
   layout: "side" | "top";
   /** side：放在右栏顶部的开关（RightRailToggle）。 */
   toggle?: React.ReactNode;
-  /** 所属项目经理的水果颜色编号，用于显示 Worker 自然果瓣头像。 */
+  /** 所属项目经理的水果颜色编号，用于显示切面轮、果皮轨与开关果瓣。 */
   avatarKey?: number;
   /** 点开一个提问：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
@@ -462,6 +664,11 @@ export const RightRail = memo(function RightRail({
       <RailGroups
         asks={asks}
         workers={workers}
+        activeGraphs={activeGraphs}
+        completedGraphCount={completedGraphCount}
+        projectId={projectId}
+        deviceId={deviceId}
+        avatarKey={avatarKey}
         openWorkerId={openWorkerId}
         toggle={side ? toggle : undefined}
         className={side ? "pb-4" : "py-1"}

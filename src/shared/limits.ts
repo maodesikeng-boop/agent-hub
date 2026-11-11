@@ -685,6 +685,10 @@ export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;
+/** 右栏 Completed 历史任务图最多翻的页数（× GRAPH_HISTORY_PAGE_SIZE = 前端内存最多 300 张）；到顶不再显示 Load more。 */
+export const MAX_COMPLETED_GRAPH_PAGES = 15;
+/** 网页任务图选择器跨快照复用引用的兜底 Map 上限（按项目 / 按设备+对话 FIFO 淘汰）。 */
+export const TASK_GRAPH_SELECTOR_CACHE_MAX = 64;
 /** 已完结/已取消任务图保留天数。 */
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
