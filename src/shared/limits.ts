@@ -637,6 +637,16 @@ export const ROUTER_AGENT_TIMEOUT_MS = 25_000;
 export const ROUTER_COMMAND_MAX_CHARS = 4_000;
 /** 单条指令最多同时派发的目标 PM 数。 */
 export const ROUTER_MAX_DISPATCH_TARGETS = 8;
+/** 远端设备 Digest 成功缓存 TTL（毫秒）。 */
+export const ROUTER_PEER_DIGEST_TTL_MS = 10_000;
+/** 并发采集远端设备 Digest 单台超时（毫秒），确保单台卡顿不拖慢分派。 */
+export const ROUTER_PEER_DIGEST_TIMEOUT_MS = 1_500;
+/** 远端设备离线/失败短暂退避时长（毫秒，遵守缓存军规：失败不当正常结果长缓存）。 */
+export const ROUTER_PEER_OFFLINE_BACKOFF_MS = 5_000;
+/** 远端设备跨机投递消息或操作超时（毫秒）。 */
+export const ROUTER_PEER_DISPATCH_TIMEOUT_MS = 15_000;
+/** 轨道 B 同时运行的只读规划会话数上限（防止瞬间连点拉起过多进程）。 */
+export const ROUTER_MAX_CONCURRENT_TRACK_B = 2;
 /** 已决拍板与已读汇报保留天数。 */
 export const ROUTER_ITEM_RETENTION_DAYS = 30;
 export const ROUTER_ITEM_RETENTION_MS = ROUTER_ITEM_RETENTION_DAYS * 24 * 60 * 60 * 1000;

@@ -17,6 +17,7 @@ import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
+import { prepareRouterSandboxLaunch } from "./router/sandbox.ts";
 
 export interface LaunchPreparerOptions {
   launchDir: string;
@@ -70,6 +71,20 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
   const basePath = options.basePath ?? process.env.PATH ?? "";
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
+    if (session.role === "assistant") {
+      return prepareRouterSandboxLaunch(session, {
+        launchDir,
+        dataDir,
+        stateDir,
+        homeDir,
+        osSandboxed: options.osSandboxed,
+        tokens,
+        hubSock,
+        hubBinDir,
+        basePath,
+        vendorAvailability: options.vendorAvailability?.(),
+      });
+    }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const ctx = { ...getLaunchContext(session.id), vendorAvailability: options.vendorAvailability?.() };
     const role = sessionRole(ctx);

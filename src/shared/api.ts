@@ -13,6 +13,7 @@ import type {
   ProjectFolder,
   ProjectId,
   RateLimitWindow,
+  RouterCommandId,
   RouterItemId,
   SessionState,
   TaskGraph,
@@ -108,8 +109,13 @@ export const API_PATHS = {
   routerDigest: "/api/router/digest",
   routerItems: "/api/router/items",
   routerItemResolve: (id: RouterItemId) => `/api/router/items/${id}/resolve`,
+  routerItemDecide: (id: RouterItemId) => `/api/router/items/${id}/decide`,
+  routerItemArchive: (id: RouterItemId) => `/api/router/items/${id}/archive`,
   routerReportsArchiveAll: "/api/router/reports/archive-all",
   routerSettings: "/api/router/settings",
+  routerCommands: "/api/router/commands",
+  routerCommandRetry: (id: RouterCommandId) => `/api/router/commands/${id}/retry`,
+  routerTargetOps: "/api/router/target-ops",
   projectTaskGraphs: (projectId: ProjectId) => `/api/projects/${projectId}/task-graphs`,
   taskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
     `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/decide`,
@@ -707,10 +713,41 @@ export interface RouterItemsPage {
   hasMore: boolean;
 }
 
+export interface RouterCommandsPage {
+  commands: RouterCommandRecord[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface PostRouterCommandTarget {
+  deviceId?: string;
+  pmId?: PmId;
+  projectId?: ProjectId;
+}
+
+export interface PostRouterCommandRequest {
+  clientId: string;
+  text: string;
+  attachmentIds?: string[];
+  target?: PostRouterCommandTarget;
+}
+
+export interface PostRouterCommandResponse {
+  command: RouterCommandRecord;
+}
+
+export interface DecideRouterItemRequest {
+  clientId: string;
+  optionIndex?: number | null;
+  choice?: string | null;
+  note?: string;
+}
+
 export type ResolveRouterItemRequest =
   | {
       clientId: string;
-      optionIndex: number | null;
+      optionIndex?: number | null;
+      choice?: string | null;
       note?: string;
     }
   | {

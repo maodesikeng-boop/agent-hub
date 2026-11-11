@@ -35,6 +35,7 @@ import { createLedgerProjects } from "./projects.ts";
 import { parseMessageMeta, toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerRouter } from "./router.ts";
+import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
@@ -56,6 +57,17 @@ export interface SqliteLedger extends Ledger {
   purgeExpiredRouterAndGraphRecords(nowMs?: number, maxRows?: number): { rows: number; more: boolean };
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
+  getRouterSettings: LedgerRouter["getSettings"];
+  createRouterCommand: LedgerRouter["createCommand"];
+  updateRouterCommand: LedgerRouter["updateCommand"];
+  getRouterCommand: LedgerRouter["getCommand"];
+  listRouterCommands: LedgerRouter["listCommands"];
+  createRouterAssistantSession: LedgerRouter["createAssistantSession"];
+  deleteRouterAssistantSession: LedgerRouter["deleteAssistantSession"];
+  recordRouterWorkerOrigin: LedgerRouter["recordWorkerOrigin"];
+  resolveRouterLocalPmOrProject: LedgerRouter["resolveLocalPmOrProject"];
+  resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
+  listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
   close(): void;
 }
 
@@ -257,7 +269,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         sessions: db
           .all<AgentSessionDbRow>(
             `SELECT s.* FROM agent_sessions s LEFT JOIN conversations c ON c.id = s.conversation_id
-             WHERE c.kind IS NULL OR c.kind != 'project_group' ORDER BY s.id`,
+             WHERE s.role != 'assistant' AND (c.kind IS NULL OR c.kind != 'project_group') ORDER BY s.id`,
           )
           .map((r) => sessionState(toAgentSessionRow(r))),
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
@@ -279,11 +291,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (event.type === "agent.text_delta") {
         if (event.parentToolUseId !== undefined) return;
         const session = getAgentSession(db, sessionId);
-        if (session !== null) sessions.applyStreamingDelta(session, event.delta, event.reset);
+        if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
         return;
       }
       const session = getAgentSession(db, sessionId);
-      if (session === null) return;
+      if (session === null || session.role === "assistant") return;
       write((p) => {
         messages.applyEvent(p, session, event);
         steps.afterDriverEvent(session, event);
@@ -300,6 +312,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
       handover.recoverAfterRestart();
+      router.recoverAfterRestart();
       return recovered;
     },
 
@@ -383,10 +396,21 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,
     isWorkerCleanable: workers.isWorkerCleanable,
     getRouterDigest: router.getDigest,
+    getRouterSettings: router.getSettings,
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
     archiveAllRouterReports: router.archiveAllReports,
     updateRouterSettings: router.updateSettings,
+    createRouterCommand: router.createCommand,
+    updateRouterCommand: router.updateCommand,
+    getRouterCommand: router.getCommand,
+    listRouterCommands: router.listCommands,
+    createRouterAssistantSession: router.createAssistantSession,
+    deleteRouterAssistantSession: router.deleteAssistantSession,
+    recordRouterWorkerOrigin: router.recordWorkerOrigin,
+    resolveRouterLocalPmOrProject: router.resolveLocalPmOrProject,
+    resolveRouterLocalWorker: router.resolveLocalWorker,
+    listRouterLocalWorkers: router.listLocalWorkers,
     listProjectTaskGraphs: taskGraphs.listProjectHistory,
     decideTaskNode: taskGraphs.decideNode,
     skipTaskNode: taskGraphs.skipNode,

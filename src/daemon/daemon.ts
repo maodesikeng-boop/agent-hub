@@ -21,6 +21,7 @@ import {
   ENV_TAILNET_OWNER,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
+  LedgerRequestError,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   VENDOR_LIST,
@@ -89,6 +90,15 @@ import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type Runni
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
+import {
+  createLocalTargetPort,
+  createRouterDispatcher,
+  createRouterSandboxGuard,
+  createRouterTargetRegistry,
+  type RouterDispatcher,
+  type RouterSandboxGuard,
+  type RouterTargetRegistry,
+} from "./router/index.ts";
 import { createTunnelService, startTunnelAdmin, type RunningTunnelAdmin, type TunnelService } from "./tunnel/index.ts";
 import {
   createSleepInhibitor,
@@ -165,6 +175,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     driver?: Driver;
     models?: ModelCatalogs;
     commands?: CommandCatalogs;
+    routerDispatcher?: RouterDispatcher;
+    routerTargetRegistry?: RouterTargetRegistry;
+    sandboxGuard?: RouterSandboxGuard;
     ui?: RunningUiServer;
     peers?: Peers;
     tunnel?: TunnelService;
@@ -201,6 +214,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.stopFileCleanup?.();
     parts.stopWorkerRetention?.();
     if (setup) await step("准备命令", () => setup.shutdown());
+    if (parts.routerDispatcher) await step("总助分派引擎", () => parts.routerDispatcher!.close());
     if (executor) {
       await step("执行器", async () => {
         const stopped = executor.stop();
@@ -218,6 +232,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (tunnelAdmin) await step("隧道管理 socket", () => tunnelAdmin.close());
     if (tunnel) await step("隧道", () => tunnel.close());
     // 先停设备之间在途的请求，再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
+    parts.routerTargetRegistry?.close();
     peers?.close();
     if (ui) await step("界面服务", () => ui.close());
     if (agentApi) {
@@ -225,6 +240,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         if (!(await within(agentApi.close(), AGENT_API_CLOSE_MS))) throw new Error(`${AGENT_API_CLOSE_MS / 1000} 秒没关完，不再等`);
       });
     }
+    parts.sandboxGuard?.clear();
     // claude 都退出了、事件都交给账本了，再取消订阅、关库
     for (const off of parts.unsubscribe.splice(0)) off();
     if (db) await step("数据库", () => db.close());
@@ -322,6 +338,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const tokens = createSessionTokens();
     // 联机：设备身份（hub worker start 报“这台设备没装 codex”时写设备名）
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
+    const sandboxGuard = createRouterSandboxGuard();
+    parts.sandboxGuard = sandboxGuard;
     const agentApi = await startAgentApi({
       ledger,
       tokens,
@@ -331,6 +349,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       models,
       vendorUsable: (vendor) => models.ensureUsable(vendor),
       deviceName: () => device.name,
+      sandboxGuard,
+      onRouterDispatch: async (sessionId, commandId, payload) => {
+        if (!parts.routerDispatcher) throw new LedgerRequestError("conflict", "总助分派引擎尚未就绪");
+        return parts.routerDispatcher.handleAgentDispatch(sessionId, commandId, payload);
+      },
     });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
@@ -577,6 +600,31 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       service: tunnel,
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
+    const routerLocalPort = createLocalTargetPort({
+      deviceId: device.id,
+      deviceName: () => device.name,
+      ledger,
+      uploadsDir,
+      vendorUsable: (vendor) => models.ensureUsable(vendor),
+    });
+    const routerTargetRegistry = createRouterTargetRegistry({
+      localPort: routerLocalPort,
+      peers,
+      uploadsDir,
+    });
+    parts.routerTargetRegistry = routerTargetRegistry;
+    const routerDispatcher = createRouterDispatcher({
+      ledger,
+      driver,
+      tokens,
+      sandboxGuard,
+      targetRegistry: routerTargetRegistry,
+      models,
+      stateDir,
+      launchDir: paths.launchDir,
+      log,
+    });
+    parts.routerDispatcher = routerDispatcher;
     parts.ui = await startUiServer({
       ledger,
       token,
@@ -594,6 +642,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       push,
       peers,
       tunnel,
+      routerDispatcher,
+      routerLocalPort,
       publicSock: paths.publicSock,
       publicEntryFile: paths.publicEntryFile,
       peerEntry: {

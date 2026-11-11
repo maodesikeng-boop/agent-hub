@@ -82,6 +82,13 @@ export const PM_DELEGATE_LONG_COMMAND_NOTE =
 export const PM_OPENING_FEEDBACK_NOTE =
   "- **先回应再动手**：需要调工具、查代码或派活等多步处理时，开头先用一句简短的话告诉用户正在做什么，再继续思考和调工具；一步就能直接回答的直接答，不加套话。";
 
+/** 事先建任务图、门禁拍板与抗意外恢复（对全部厂商与两种模式统一生效，零厂商硬编码）。 */
+export const PM_TASK_GRAPH_WORKFLOW_NOTE = [
+  `- **多步或并行先建任务图**：包含两步及以上阶段或需要并行派多个 Worker 的任务，开工先调 \`${HUB} graph create\` 规划节点与依赖，派 Worker 时传 \`--node <key>\`；单步简单查询或直接回答的小事不要强行建 1 节点假图。`,
+  `- **拍板分水岭必挂门禁（禁口头问）**：需用户拍板确认方案、选路线或批风险的分水岭，必须在任务图里挂 \`gate\` 节点并调 \`${HUB} graph ask\` 激活（无图的简单单问调 \`${HUB} ask\`），**严禁只在回复正文口头问**一句就停等。`,
+  `- **抗意外恢复与增量改图**：审查/CI 返工、增删步骤或拆细节点时用 \`${HUB} graph patch\` 增量改图；Worker 报错、超额度或超过上下文上限（${WORKER_SEND_MAX_TOKENS / 1_000}K）时，先用 \`${HUB} worker end <编号> --incomplete\` 结束旧会话，再新派 Worker 重绑同一 \`--node <key>\` 接手。`,
+].join("\n");
+
 /** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。 */
 export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
   const commandNote =
@@ -99,6 +106,7 @@ export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: Agen
 ${PM_OPENING_FEEDBACK_NOTE}
 - **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
 - **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。
+${PM_TASK_GRAPH_WORKFLOW_NOTE}
 ${commandNote}
 - **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`;
   }
@@ -107,6 +115,7 @@ ${commandNote}
 ${PM_OPENING_FEEDBACK_NOTE}
 - **能直接做就直接做**：不复杂的事自己动手，做完告诉用户做了什么、改了哪些文件。
 - **活大了再派 Worker**：活大、能拆开同时做，或者想和主文件夹隔开的，派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
+${PM_TASK_GRAPH_WORKFLOW_NOTE}
 ${commandNote}
 - **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
 - **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`;
@@ -184,7 +193,7 @@ function buildPmWorkerPrompt(specs: readonly VendorSpec[] = VENDOR_LIST): string
   - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因；若为用户手动停止，未经用户明确要求切勿擅自叫醒，由用户决定）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
   - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
   - 要打回修改或回答它的问题，用 \`${HUB} worker send <编号> --stdin\`（原 Worker 会接着干）。
-  - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（正在跑的一轮会先被打断；不会删 worktree，不再需要的你自己清理）。`;
+  - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（正在跑的一轮会先被打断；不会删 worktree，不再需要的你自己清理）；若绑定任务图节点的 Worker 报错、超额度或未做完需换人接手，用 \`${HUB} worker end <编号> --incomplete\` 结束旧会话，再新派 Worker 重绑同一 \`--node <key>\`。`;
 }
 
 export const PM_WORKER_PROMPT = buildPmWorkerPrompt();
