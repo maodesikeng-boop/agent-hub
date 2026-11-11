@@ -116,8 +116,8 @@ export function WorkerConversation({
             <ArrowLeft aria-hidden="true" />
           </Button>
         )}
-        <Avatar colorKey={identity.avatarKey} size={34} neutral className="vt-chat-avatar" />
-        <h1 className="vt-chat-title min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
+        <Avatar colorKey={identity.avatarKey} size={34} neutral />
+        <h1 className="min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
         {!mobile && readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
         <span className="flex-1" />
         {!mobile && meta && <PieceMeta worker={meta} />}

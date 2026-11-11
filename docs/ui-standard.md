@@ -318,7 +318,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **动效规矩**：动效只在状态变化时触发一次，不超过 400ms，不循环（上面的流光是唯一例外），`prefers-reduced-motion: reduce` 时全部关掉。时长只在 `styles.css` 的 `--motion-*` 改。现有的只有这几处：
   - 换项目经理时外壳底色、分割线淡变 300ms（`--motion-tint`，第 4 条）；右栏组的收起展开 150ms、普通箭头转向 200ms（第 12 条）。
   - **新来的消息**淡入并上移 4px，120ms（`--motion-enter`，`.message-enter`）：只对对话打开之后新出现在末尾的消息播（`useMessageEnter.ts`：每次提交只比对末尾 12 项的身份，和历史多长无关；播完摘掉类）；打开时的历史、加载更早的、待发消息被确认换成真消息、重新渲染都不播。
-  - **切换对话**（左栏点项目经理、点开 Piece、从 Piece 返回）用浏览器原生 View Transitions（`view-transition.ts`，在 `route.ts` 的 `navigate` 里调）：只有顶栏的头像和标题起 `view-transition-name`（`.vt-chat-avatar` / `.vt-chat-title`，`:root` 设成 `none`），消息列表不截快照、直接换；200ms（`--motion-switch`）。浏览器不支持、打开资料页、刚打开时补默认对话都直接换，没有动画。
+  - **切换对话**（左栏点项目经理、点开 Piece、从 Piece 返回）：直接切换，零过渡动画（不用 View Transitions 头像与标题动画）。
 - 不能点：`disabled:opacity-50`（主按钮换中性灰，见第 4 条）。
 - 文案：不加解释性的灰色小字、副标题、操作提示（见 frontend-rules）；只留内容、控件、状态和能帮用户改正的错误。
 
