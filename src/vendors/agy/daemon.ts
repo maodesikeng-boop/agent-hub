@@ -4,6 +4,7 @@ import { agyCatalogProbe, createAgyCatalogSource } from "./catalog.ts";
 import { agyComposerBase, createAgyComposer } from "./composer.ts";
 import { createAgyDriver } from "./driver.ts";
 import { AGY_FORKERS } from "./handover.ts";
+import { agySyncAdapter } from "./sync.ts";
 import { agySessionFiles, agyTranscriptPath } from "./transcript.ts";
 
 export default defineVendorDaemon({
@@ -13,4 +14,5 @@ export default defineVendorDaemon({
   forkers: AGY_FORKERS,
   transcriptPath: agyTranscriptPath,
   sessionFiles: agySessionFiles,
+  sync: agySyncAdapter,
 });

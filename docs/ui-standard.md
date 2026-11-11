@@ -107,6 +107,8 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… |
 | 任务流图 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Waiting on you / Ready / Blocked / Needs attention / Skipped |
 | 补充说明 / 跳过此步 / 取消任务图 / 同层折叠并行数 | Add note / Skip step / Cancel graph / +N parallel |
+| 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
+| MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
 
 ## 4. 颜色
 
@@ -227,7 +229,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - `rounded-2xl border border-border bg-background p-6`，遮罩 `bg-black/30`。
 - 宽度三档：默认 520px（新建项目经理）；二次确认等窄弹窗 `className="max-w-110"`；全局设置是双栏的 780px（见下面）。
 - **全局设置（`SettingsDialog`，照 Grok Bot / Claude desktop 的双栏设置页）**：`max-w-195`，高度固定 `h-[min(35rem,calc(100%-3rem))]`（切分类时弹窗不跳），弹窗自己 `p-0 gap-0`，标题“设置”只给读屏（`titleClassName="sr-only"`）。
-  - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：通知）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，有就默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。
+  - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：外观、通知、跨厂商同步）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，有就默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。跨厂商同步行点 `Scan…` 打开独立的 `Sync preview` 确认弹窗（`DialogBody` 纵向滚动展示脱敏后的 `MCP servers`、`Skills` 与只读说明的 `Cloud connectors`，每项用 `Switch` 控制并集同步或取消勾选移除，厂商标签由接口数据驱动并用间距隔开、不用 `·` 拼接，底部固定 `Cancel` 与 `Sync`）。
   - 右栏：`p-6`，自己纵向滚动；最上面是分类名（17px、600，和下面的组隔 24px），下面若干分组（第 9 条），组之间 24px。关闭按钮照常在右上角。
   - 窄屏（640px 以下）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
   - 分类名固定在右栏顶上（右边 `pr-14` 让出关闭按钮），只有下面的分组滚动。

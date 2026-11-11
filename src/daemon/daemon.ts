@@ -21,6 +21,7 @@ import {
   ENV_TAILNET_OWNER,
   EXECUTOR_STOP_GRACE_MS,
   HANDOVER_STOP_GRACE_MS,
+  MAX_VENDOR_SYNC_PROJECT_FOLDERS,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   VENDOR_LIST,
@@ -52,6 +53,7 @@ import { createActionExecutor } from "./actions/index.ts";
 import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
+import { createVendorSyncService } from "./vendor-sync/index.ts";
 import {
   DAEMON_VENDORS,
   createVendorCatalogSources,
@@ -496,6 +498,21 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
     const composer = createComposerService({ ledger, commands, files: createWorkspaceFiles() });
+    const vendorSync = createVendorSyncService({
+      userHome: options.userHome,
+      env,
+      backupsDir: paths.syncBackupsDir,
+      listProjectFolders: () =>
+        db
+          .all<{ path: string; project_name: string }>(
+            `SELECT f.path AS path, p.name AS project_name
+             FROM project_folders f JOIN projects p ON p.id = f.project_id
+             WHERE f.removed_at IS NULL AND p.status = 'active'
+             ORDER BY f.id ASC LIMIT ?`,
+            MAX_VENDOR_SYNC_PROJECT_FOLDERS,
+          )
+          .map((row) => ({ path: row.path, projectName: row.project_name })),
+    });
     // 额度：事件流里没有额度的厂商只能另起进程问，网页打开额度面板时才问（每家各自缓存 5 分钟），几家合在一个响应里
     const quota = mergeFetchedQuotas(
       VENDOR_LIST.flatMap(({ id, quota: spec }) => {
@@ -590,6 +607,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       models,
       quota,
       composer,
+      vendorSync,
       db,
       rotateToken,
       tailnet,

@@ -50,6 +50,9 @@ import {
   type StateSnapshot,
   type TunnelConnectRequest,
   type TunnelStatusResponse,
+  type VendorSyncApplyRequest,
+  type VendorSyncApplyResponse,
+  type VendorSyncPreviewResponse,
 } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
 import { checkConnections } from "./connection.ts";
@@ -219,6 +222,8 @@ export function createClient(device: DeviceId | null) {
       request<ModelsResponse>(at(options.refresh ? `${API_PATHS.models}?refresh=${options.refresh}` : API_PATHS.models), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     /** 事件流里没有额度的厂商（agy）的额度；服务端缓存，没有那一块时 groups 是空的。服务端可能要现问（最多 FETCHED_QUOTA_TIMEOUT_MS）。 */
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchVendorSyncPreview: () => request<VendorSyncPreviewResponse>(at(API_PATHS.vendorSyncPreview), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    postVendorSyncApply: (body: VendorSyncApplyRequest) => postJson<VendorSyncApplyResponse>(at(API_PATHS.vendorSyncApply), body, SLOW_API_REQUEST_TIMEOUT_MS),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
@@ -240,7 +245,7 @@ export type HubClient = ReturnType<typeof createClient>;
 /** 入口本机。设备清单、配对这些入口自己的接口也只走它。 */
 export const localClient: HubClient = createClient(null);
 
-export const { fetchState, postMessage, postUpload } = localClient;
+export const { fetchState, postMessage, postUpload, fetchVendorSyncPreview, postVendorSyncApply } = localClient;
 
 // ---- 入口自己的：设备清单（不转发） ----
 

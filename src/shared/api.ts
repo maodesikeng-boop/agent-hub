@@ -184,6 +184,12 @@ export const API_PATHS = {
   logoutAll: "/api/sessions/logout-all",
   /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
   loginLinks: "/api/login-links",
+
+  // ---- 全厂商连接器 / MCP / Skill 同步 ----
+  /** GET → VendorSyncPreviewResponse：只读扫描各厂商连接器、MCP 与 Skill，返回密钥脱敏后的预览。 */
+  vendorSyncPreview: "/api/vendor-sync/preview",
+  /** POST（VendorSyncApplyRequest → VendorSyncApplyResponse）：先轮转备份再原子替换落盘与逐项软链。 */
+  vendorSyncApply: "/api/vendor-sync/apply",
 } as const;
 
 export interface ConversationSnapshot {

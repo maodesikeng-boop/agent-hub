@@ -16,6 +16,7 @@ import {
   type AcpLaunchContext,
 } from "../_common/acp/index.ts";
 import { resolveDeepSeekHome } from "./paths.ts";
+import { loadDeepSeekAcpMcpServers } from "./sync.ts";
 
 /** Cordis loader overlay patch 单项。 */
 export interface DeepSeekCordisPatchEntry {
@@ -335,6 +336,7 @@ export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
     },
     session: {
       systemPromptInjection: "first_turn_new_session",
+      mcpServers: (ctx) => (ctx.files.readonly ? [] : loadDeepSeekAcpMcpServers(resolveDeepSeekHome(undefined, env))),
     },
     configOptions: {
       modelOptionIds: ["model"],

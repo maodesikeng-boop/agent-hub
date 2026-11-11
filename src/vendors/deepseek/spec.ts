@@ -48,7 +48,7 @@ export default defineVendor({
   // catalog.ts 走零子进程本地凭据探测（绝不拉起 dsh 新建持久空会话），catalogWatchPaths 盯本地凭据与配置变更。
   home: {
     dirs: [DEEPSEEK_HOME_REL],
-    readonlySecrets: [`${DEEPSEEK_HOME_REL}/.credentials.yaml`, `${DEEPSEEK_HOME_REL}/.env`],
+    readonlySecrets: [`${DEEPSEEK_HOME_REL}/.credentials.yaml`, `${DEEPSEEK_HOME_REL}/.env`, `${DEEPSEEK_HOME_REL}/mcp.json`],
     catalogWatchPaths: [
       `${DEEPSEEK_HOME_REL}/.credentials.yaml`,
       `${DEEPSEEK_HOME_REL}/.env`,
