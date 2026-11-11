@@ -19,8 +19,11 @@ import {
   REFRESH_UNUSABLE,
   ConversationNotFoundError,
   LedgerRequestError,
+  MAX_DECISION_CHOICE_CHARS,
+  MAX_DECISION_NOTE_CHARS,
   MAX_MESSAGE_BYTES,
   MAX_MODEL_CHARS,
+  MAX_NODE_KEY_CHARS,
   MAX_PATH_BYTES,
   MAX_PERSONA_BYTES,
   MAX_REASON_CHARS,
@@ -49,10 +52,14 @@ import {
   ENTRY_ONLY_API_PREFIXES,
   PEER_DEVICE_HEADER,
   utf8Bytes,
+  type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type AuthStatusResponse,
   type BrowserSessionStatus,
   type BrowserSessionsResponse,
+  type CancelTaskGraphResponse,
+  type DecideTaskNodeResponse,
+  type DeviceRouterDigest,
   type LoginLinkResponse,
   type CommandsResponse,
   type FilesResponse,
@@ -74,12 +81,18 @@ import {
   type PostMessageResponse,
   type PushKeyResponse,
   type RenewSessionResponse,
+  type ResolveRouterItemRequest,
+  type ResolveRouterItemResponse,
   type RetryMessageResponse,
   type RewindMessageResponse,
+  type RouterItemsPage,
   type ServerInfo,
+  type SkipTaskNodeResponse,
   type StateSnapshot,
+  type TaskGraphsPage,
   type TunnelStatus,
   type TunnelStatusResponse,
+  type UpdateRouterSettingsResponse,
   type WorkerPick,
   type WsServerMessage,
 } from "../../shared/index.ts";
@@ -437,6 +450,57 @@ const addScheduleBodySchema = z
 const setScheduleEnabledBodySchema = z.object({ enabled: z.boolean() }).strict();
 const pickFolderBodySchema = z.object({ startDir: boundedBytesSchema(MAX_PATH_BYTES, "startDir").optional() }).strict();
 const pushUnsubscribeBodySchema = z.object({ endpoint: z.string() });
+
+const resolveRouterItemBodySchema = z.union([
+  z.object({ action: z.literal("archive") }).strict(),
+  z
+    .object({
+      clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+      optionIndex: z.number().int().nonnegative().nullable(),
+      note: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "note").optional(),
+    })
+    .strict(),
+]);
+
+const updateRouterSettingsBodySchema = z
+  .object({
+    vendor: vendorSchema.nullable(),
+    model: optionalSettingSchema("model"),
+    effort: optionalSettingSchema("effort"),
+  })
+  .strict();
+
+const decideTaskNodeBodySchema = z
+  .object({
+    clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+    choice: boundedCharsSchema(MAX_DECISION_CHOICE_CHARS, "choice").nullable().optional(),
+    note: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "note").nullable().optional(),
+  })
+  .strict();
+
+const skipTaskNodeBodySchema = z
+  .object({
+    reason: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "reason").optional(),
+  })
+  .strict();
+
+const cancelTaskGraphBodySchema = z
+  .object({
+    reason: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "reason").optional(),
+  })
+  .strict();
+
+function parseOptionalPositiveInt(raw: unknown, what: string): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  return parseId(raw, what);
+}
+
+function parseNodeKeyParam(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim() === "" || [...raw].length > MAX_NODE_KEY_CHARS) {
+    throw new HttpError(400, "invalid nodeKey");
+  }
+  return raw;
+}
 
 /** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带、认不出、无效是 null（发整个文件），超出文件是 "unsatisfiable"。 */
 function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
@@ -1063,12 +1127,20 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return { status: opts.tunnel.status() } satisfies TunnelStatusResponse;
     });
 
-    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => ({
-      ...ledger.snapshot(),
-      server: serverInfoForClient(serverInfo, clientAddress(req)),
-      ...(opts.tunnel ? { tunnel: opts.tunnel.status() } : {}),
-      ...(publicEntryConfigured ? { publicEntry: currentPublicEntryStatus() } : {}),
-    }));
+    routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
+      const snap = ledger.snapshot();
+      const router =
+        peerOf(req) !== undefined && snap.router.commands.length > 0
+          ? { ...snap.router, commands: [] }
+          : snap.router;
+      return {
+        ...snap,
+        router,
+        server: serverInfoForClient(serverInfo, clientAddress(req)),
+        ...(opts.tunnel ? { tunnel: opts.tunnel.status() } : {}),
+        ...(publicEntryConfigured ? { publicEntry: currentPublicEntryStatus() } : {}),
+      };
+    });
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
       // ?refresh=1 全部重问；?refresh=unusable 只重问这台设备上没登录（没装）的那几家（网页打开厂商下拉时在后台发）
@@ -1243,6 +1315,91 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(202).send({ messageId: result.messageId } satisfies RetryMessageResponse);
     });
 
+    // ---- Router（总助）与持久化任务图轨道 A 接口 ----
+    routes.get(API_PATHS.routerDigest, async (): Promise<DeviceRouterDigest> => {
+      return ledger.getRouterDigest();
+    });
+
+    routes.get(API_PATHS.routerItems, async (req): Promise<RouterItemsPage> => {
+      const query = req.query as { cursor?: unknown; before?: unknown; limit?: unknown };
+      const cursor =
+        typeof query.cursor === "string" && query.cursor.trim() !== ""
+          ? query.cursor
+          : typeof query.before === "string" && query.before.trim() !== ""
+            ? query.before
+            : undefined;
+      const limit = parseOptionalPositiveInt(query.limit, "limit");
+      return ledger.listRouterItems(cursor, limit);
+    });
+
+    routes.post("/api/router/items/:id/resolve", async (req): Promise<ResolveRouterItemResponse> => {
+      const itemId = parseId((req.params as { id?: unknown }).id, "router item id");
+      const raw = parseWithSchema(resolveRouterItemBodySchema, req.body);
+      const body: ResolveRouterItemRequest =
+        "action" in raw
+          ? { action: "archive" }
+          : {
+              clientId: raw.clientId,
+              optionIndex: raw.optionIndex,
+              ...(raw.note !== undefined ? { note: raw.note } : {}),
+            };
+      return ledger.resolveRouterItem(itemId, body);
+    });
+
+    routes.post(API_PATHS.routerReportsArchiveAll, async (req): Promise<ArchiveAllReportsResponse> => {
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return ledger.archiveAllRouterReports();
+    });
+
+    routes.put(API_PATHS.routerSettings, async (req): Promise<UpdateRouterSettingsResponse> => {
+      const raw = parseWithSchema(updateRouterSettingsBodySchema, req.body);
+      return {
+        settings: ledger.updateRouterSettings({
+          vendor: raw.vendor,
+          model: raw.model,
+          effort: raw.effort,
+        }),
+      };
+    });
+
+    routes.get("/api/projects/:id/task-graphs", async (req): Promise<TaskGraphsPage> => {
+      const projectId = parseId((req.params as { id?: unknown }).id, "project id");
+      const query = req.query as { before?: unknown; limit?: unknown };
+      const beforeId = parseOptionalPositiveInt(query.before, "before");
+      const limit = parseOptionalPositiveInt(query.limit, "limit");
+      return ledger.listProjectTaskGraphs(projectId, beforeId, limit);
+    });
+
+    routes.post("/api/task-graphs/:graphId/nodes/:nodeKey/decide", async (req): Promise<DecideTaskNodeResponse> => {
+      const params = req.params as { graphId?: unknown; nodeKey?: unknown };
+      const graphId = parseId(params.graphId, "graphId");
+      const nodeKey = parseNodeKeyParam(params.nodeKey);
+      const raw = parseWithSchema(decideTaskNodeBodySchema, req.body);
+      return ledger.decideTaskNode(graphId, nodeKey, {
+        clientId: raw.clientId,
+        ...(raw.choice !== undefined ? { choice: raw.choice } : {}),
+        ...(raw.note !== undefined ? { note: raw.note } : {}),
+      });
+    });
+
+    routes.post("/api/task-graphs/:graphId/nodes/:nodeKey/skip", async (req): Promise<SkipTaskNodeResponse> => {
+      const params = req.params as { graphId?: unknown; nodeKey?: unknown };
+      const graphId = parseId(params.graphId, "graphId");
+      const nodeKey = parseNodeKeyParam(params.nodeKey);
+      const raw = parseWithSchema(skipTaskNodeBodySchema, req.body ?? {});
+      return ledger.skipTaskNode(graphId, nodeKey, {
+        ...(raw.reason !== undefined ? { reason: raw.reason } : {}),
+      });
+    });
+
+    routes.post("/api/task-graphs/:graphId/cancel", async (req): Promise<CancelTaskGraphResponse> => {
+      const graphId = parseId((req.params as { graphId?: unknown }).graphId, "graphId");
+      const raw = parseWithSchema(cancelTaskGraphBodySchema, req.body ?? {});
+      return ledger.cancelTaskGraph(graphId, {
+        ...(raw.reason !== undefined ? { reason: raw.reason } : {}),
+      });
+    });
+
     // 推送订阅（联机 P4）：只在开了推送的服务上有
     const push = opts.push;
     if (push !== undefined) {
@@ -1265,7 +1422,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
       const sinceValues = new URL(req.url, "http://localhost").searchParams.getAll("since");
       const since = sinceValues.length === 1 ? sinceValues[0] : sinceValues.length === 0 ? undefined : null;
+      const isPeerSocket = peerOf(req) !== undefined;
       const send = (message: WsServerMessage) => {
+        if (isPeerSocket && (message.type === "router.command.created" || message.type === "router.command.updated")) return;
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
       };
       wsSenders.add(send);

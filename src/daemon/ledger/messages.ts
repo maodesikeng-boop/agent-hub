@@ -5,7 +5,7 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentSessionRow, AskMeta, ConversationId, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import type { AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -55,6 +55,10 @@ export interface LedgerMessagesOptions {
   assertUserCanPost?: (conversationId: ConversationId) => void;
   /** 用户发出一条消息之后（同一个事务里）：项目经理正在本会话写交接的，要停掉那一轮（ledger/handover.ts 的 userPostedIn，ledger.ts 接上）。 */
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
+  /** 旧 hub ask 产生一条无 gateRef 的独立提问时，在同事务里桥接生成 router_items 待决卡。 */
+  onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
+  /** 用户在对话里发消息把一条无 gateRef 的 hub ask 标为已答时，同步收起关联的 router_items 待决卡。 */
+  onConversationAnsweredAsk?: (p: Pending, askMessageId: MessageId, userText: string) => void;
 }
 
 export function createLedgerMessages(
@@ -65,6 +69,8 @@ export function createLedgerMessages(
 ) {
   const assertUserCanPost = options.assertUserCanPost ?? (() => {});
   const afterUserPost = options.afterUserPost ?? (() => {});
+  const onIndependentAskCreated = options.onIndependentAskCreated ?? (() => {});
+  const onConversationAnsweredAsk = options.onConversationAnsweredAsk ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
@@ -144,10 +150,20 @@ export function createLedgerMessages(
     if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
-  /** hub ask：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
-  const insertAskMessage = (p: Pending, session: AgentSessionRow, text: string, options?: string[]): Message => {
+  /** hub ask / hub router ask / hub graph ask：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
+  const insertAskMessage = (
+    p: Pending,
+    session: AgentSessionRow,
+    text: string,
+    askOptions?: string[],
+    extra?: { gateRef?: GateRef; skipRouterBridge?: boolean },
+  ): Message => {
     const t = now();
-    const meta: AskMeta = options && options.length > 0 ? { needsUser: true, options } : { needsUser: true };
+    const meta: AskMeta = {
+      needsUser: true,
+      ...(askOptions && askOptions.length > 0 ? { options: askOptions } : {}),
+      ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
+    };
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
        VALUES (?, ?, 'agent', 'text', ?, ?, ?, ?, ?) RETURNING *`,
@@ -161,19 +177,75 @@ export function createLedgerMessages(
     )!;
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined) {
+      onIndependentAskCreated(p, session, message, askOptions);
+    }
+    return message;
+  };
+
+  /** 在同一个事务里将指定 AskMeta 消息标为已答（可选记录选中的选项文本），推送 message.updated。 */
+  const markAskAnsweredIn = (p: Pending, messageId: MessageId, chosenOption?: string): void => {
+    const message = getMessage(messageId);
+    if (message === null || message.meta === null || typeof message.meta !== "object") return;
+    const current = message.meta as unknown as Record<string, unknown>;
+    if (current.needsUser !== true) return;
+    if (current.answered === true && (chosenOption === undefined || current.chosenOption === chosenOption)) return;
+    const nextMeta = {
+      ...current,
+      answered: true,
+      ...(chosenOption !== undefined ? { chosenOption } : {}),
+    };
+    db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify(nextMeta), now(), messageId);
+    p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
+  };
+
+  /**
+   * 在同一个事务里向 PM 对话插入一条结构化拍板唤醒消息（sender = 'user'，排队送给当前会话），
+   * 不触发 answerAsks（避免误消同对话内其他未决提问），按 dedupeKey 严格幂等。
+   */
+  const enqueueWakeupUserMessageIn = (
+    p: Pending,
+    input: { conversationId: ConversationId; dedupeKey: string; text: string },
+  ): Message => {
+    const existing = db.get<MessageDbRow>("SELECT * FROM messages WHERE dedupe_key = ?", input.dedupeKey);
+    if (existing !== undefined) return toMessage(existing);
+    if (!conversationExists(input.conversationId)) throw new ConversationNotFoundError(input.conversationId);
+    assertUserCanPost(input.conversationId);
+    const session = currentSession(input.conversationId);
+    if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
+    const t = now();
+    const row = db.get<MessageDbRow>(
+      `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'user', 'text', ?, NULL, ?, 'queued', ?, ?) RETURNING *`,
+      input.conversationId,
+      session.id,
+      session.workerId,
+      input.text,
+      input.dedupeKey,
+      t,
+      t,
+    )!;
+    const message = toMessage(row);
+    enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
+    p.changes.push({ type: "message.created", data: { message } });
+    afterUserPost(p, input.conversationId);
     return message;
   };
 
   /**
-   * 用户在这个对话里发了一条消息：之前没回答的 hub ask 都标成已回答（meta.answered），推 message.updated。
+   * 用户在这个对话里发了一条消息：之前没回答的独立 hub ask 都标成已回答（meta.answered），推 message.updated。
+   * 带 gateRef 的任务图门禁绝不因插队闲聊被自动消除（只能经门禁拍板或跳过闭环）。
    * 只有用户自己发的消息走到这里；agent、Worker 汇报、系统消息不算回答。
    */
-  const answerAsks = (p: Pending, conversationId: ConversationId, before: MessageId) => {
+  const answerAsks = (p: Pending, conversationId: ConversationId, before: MessageId, userText: string) => {
     const rows = db.all<MessageDbRow>(
       // meta 不是合法 JSON 的行跳过（CASE 保证先判断 json_valid），不让一行脏数据挡住用户发消息
       `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'agent' AND id < ?
          AND CASE WHEN json_valid(meta)
-           THEN json_extract(meta, '$.needsUser') = 1 AND json_extract(meta, '$.answered') IS NULL AND json_extract(meta, '$.dismissed') IS NULL
+           THEN json_extract(meta, '$.needsUser') = 1
+             AND json_extract(meta, '$.answered') IS NULL
+             AND json_extract(meta, '$.dismissed') IS NULL
+             AND json_extract(meta, '$.gateRef') IS NULL
            ELSE 0 END`,
       conversationId,
       before,
@@ -182,6 +254,7 @@ export function createLedgerMessages(
       const message = toMessage(row);
       db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...message.meta, answered: true }), now(), message.id);
       p.changes.push({ type: "message.updated", data: { message: getMessage(message.id)! } });
+      onConversationAnsweredAsk(p, message.id, userText);
     }
   };
 
@@ -393,7 +466,7 @@ export function createLedgerMessages(
       )!;
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
       p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
-      answerAsks(p, input.conversationId, row.id);
+      answerAsks(p, input.conversationId, row.id, input.text);
       afterUserPost(p, input.conversationId);
       return { messageId: row.id };
     });
@@ -540,6 +613,8 @@ export function createLedgerMessages(
     applyEvent,
     insertSystemMessage,
     insertAskMessage,
+    markAskAnsweredIn,
+    enqueueWakeupUserMessageIn,
     postUserMessage,
     composerTarget,
     requestStop,

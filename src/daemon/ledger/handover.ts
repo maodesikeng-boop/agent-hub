@@ -60,6 +60,8 @@ export interface HandoverOptions {
   log?: (line: string) => void;
   /** 有交接可以领了（shared/handover.ts 的 claimHandover）：守护进程接到跑腿的 wake。默认什么都不做。 */
   onHandoverClaimable?: () => void;
+  /** 新会话首次启动时实时读取该 PM 未完结的任务图摘要（账本实时状态，不走静态快照防过期）。 */
+  liveActiveGraphsSection?: (pmId: PmId) => string | null;
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
@@ -958,20 +960,29 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     if (row === undefined || row.status !== null) return null;
     const meta = metaOf(row);
     if (meta.seen === true) return null;
-    if (meta.handoverId !== undefined) return db.get<{ preamble: string | null }>("SELECT preamble FROM handovers WHERE id = ?", meta.handoverId)?.preamble ?? null;
-    // #113 换代、新会话还没读到就升级了：按现在的办法现拼一份
-    const old = meta.fromSessionId === undefined ? null : getAgentSession(db, meta.fromSessionId);
-    const upTo = meta.turnStartId ?? row.id;
-    const { picked } = pickRecent(recentRows(session.conversationId, upTo), upTo, HANDOVER_RECENT_CHARS);
-    return sessionPreambleText({
-      auto: meta.auto === true,
-      handover: row.text,
-      recent: recentText(picked),
-      reports: [],
-      transcriptPath: old === null ? null : transcriptOf(old),
-      fromVendor: old?.vendor,
-      toVendor: session.vendor,
-    });
+    let base: string | null;
+    if (meta.handoverId !== undefined) {
+      base = db.get<{ preamble: string | null }>("SELECT preamble FROM handovers WHERE id = ?", meta.handoverId)?.preamble ?? null;
+    } else {
+      // #113 换代、新会话还没读到就升级了：按现在的办法现拼一份
+      const old = meta.fromSessionId === undefined ? null : getAgentSession(db, meta.fromSessionId);
+      const upTo = meta.turnStartId ?? row.id;
+      const { picked } = pickRecent(recentRows(session.conversationId, upTo), upTo, HANDOVER_RECENT_CHARS);
+      base = sessionPreambleText({
+        auto: meta.auto === true,
+        handover: row.text,
+        recent: recentText(picked),
+        reports: [],
+        transcriptPath: old === null ? null : transcriptOf(old),
+        fromVendor: old?.vendor,
+        toVendor: session.vendor,
+      });
+    }
+    if (base === null) return null;
+    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
+    return liveGraphs === null || liveGraphs === ""
+      ? base
+      : `${base}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;
   };
 
   /**

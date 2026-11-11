@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
 import type { ConversationId, MessageKind, Pm, PmId, WorkerId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
-import { MESSAGE_PAGE_SIZE } from "../../shared/limits.ts";
+import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
@@ -34,10 +34,12 @@ import { createLedgerPersona } from "./persona.ts";
 import { createLedgerProjects } from "./projects.ts";
 import { parseMessageMeta, toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
+import { createLedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerSteps } from "./steps.ts";
+import { createLedgerTaskGraphs } from "./task-graphs.ts";
 import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
@@ -50,6 +52,8 @@ export interface SqliteLedger extends Ledger {
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
   /** 已收工满保留期的 Worker：清一批它们对话里的大块数据（worker-retention.ts）。一个事务、最多 maxRows 行。 */
   purgeExpiredWorkerConversations(nowMs?: number, maxRows?: number): WorkerPurgeBatch;
+  /** 过期已决/已归档 Router 事项、指令、审计环与已完成任务图的分批清理。 */
+  purgeExpiredRouterAndGraphRecords(nowMs?: number, maxRows?: number): { rows: number; more: boolean };
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
   close(): void;
@@ -140,6 +144,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       assertWorkerOpenForUser(db, id);
     },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
+    onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
+    onConversationAnsweredAsk: (p, askMessageId, userText) => router.onConversationAnsweredAskIn(p, askMessageId, userText),
   });
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
@@ -150,8 +156,19 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     pauseSchedulesIn: (p, pmId) => schedules.pauseAllForPmIn(p, pmId),
   });
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
-  const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, { worktreesDir: files.worktreesDir });
-  const handover = createLedgerHandover(ctx, sessions, messages, persona, { findTranscript: options.findTranscript, autoRenew: options.autoRenew, log: options.log, onHandoverClaimable: options.onHandoverClaimable });
+  const router = createLedgerRouter(ctx, sessions, messages, persona, projects);
+  const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects);
+  const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
+    worktreesDir: files.worktreesDir,
+    taskGraphs,
+  });
+  const handover = createLedgerHandover(ctx, sessions, messages, persona, {
+    findTranscript: options.findTranscript,
+    autoRenew: options.autoRenew,
+    log: options.log,
+    onHandoverClaimable: options.onHandoverClaimable,
+    liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
+  });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const steps = createLedgerSteps(ctx);
   const workerRetention = createLedgerWorkerRetention(ctx, files);
@@ -163,7 +180,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
@@ -245,6 +262,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
           .map((r) => sessionState(toAgentSessionRow(r))),
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
         schedules: schedules.all(),
+        router: router.snapshotSlice(),
+        activeTaskGraphs: taskGraphs.activeSnapshotGraphs(),
       };
     },
 
@@ -289,6 +308,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     unarchivePm: persona.unarchivePm,
     purgeExpiredArchivedPms: persona.purgeExpiredArchivedPms,
     purgeExpiredWorkerConversations: workerRetention.purgeBatch,
+    purgeExpiredRouterAndGraphRecords(nowMs = ctx.now(), maxRows = WORKER_PURGE_BATCH_ROWS) {
+      let rows = 0;
+      rows += router.purgeExpiredBatch(nowMs, maxRows - rows);
+      if (rows < maxRows) {
+        rows += taskGraphs.purgeExpiredBatch(nowMs, maxRows - rows);
+      }
+      return { rows, more: rows >= maxRows };
+    },
 
     getMessage: messages.getMessage,
     sentFileAllows(sessionId, realPath) {
@@ -355,6 +382,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     syncPersonaFiles: persona.syncPersonaFiles,
     listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,
     isWorkerCleanable: workers.isWorkerCleanable,
+    getRouterDigest: router.getDigest,
+    listRouterItems: router.listItems,
+    resolveRouterItem: router.resolveItem,
+    archiveAllRouterReports: router.archiveAllReports,
+    updateRouterSettings: router.updateSettings,
+    listProjectTaskGraphs: taskGraphs.listProjectHistory,
+    decideTaskNode: taskGraphs.decideNode,
+    skipTaskNode: taskGraphs.skipNode,
+    cancelTaskGraph: taskGraphs.cancelGraph,
     close(): void {
       workers.clearAllMaxTime();
       sessions.clearAllStreaming();

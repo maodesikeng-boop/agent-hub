@@ -13,8 +13,20 @@ import type {
   ProjectFolder,
   ProjectId,
   RateLimitWindow,
+  RouterItemId,
   SessionState,
+  TaskGraph,
+  TaskGraphId,
+  TaskNodeKey,
 } from "./domain.ts";
+import type {
+  DeviceRouterDigest,
+  RouterCommandRecord,
+  RouterItem,
+  RouterPmNote,
+  RouterSettings,
+  RouterSlice,
+} from "./router.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -91,6 +103,19 @@ export const API_PATHS = {
   files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
   /** WebSocket，?since=<seq>。服务端 → 网页是 WsServerMessage；网页 → 服务端是 WsClientMessage（联机 P4 起）。 */
   ws: "/api/ws",
+
+  // ---- Router（总助）与持久化任务图（Task DAG）----
+  routerDigest: "/api/router/digest",
+  routerItems: "/api/router/items",
+  routerItemResolve: (id: RouterItemId) => `/api/router/items/${id}/resolve`,
+  routerReportsArchiveAll: "/api/router/reports/archive-all",
+  routerSettings: "/api/router/settings",
+  projectTaskGraphs: (projectId: ProjectId) => `/api/projects/${projectId}/task-graphs`,
+  taskGraphDecide: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
+    `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/decide`,
+  taskGraphSkip: (graphId: TaskGraphId, nodeKey: TaskNodeKey) =>
+    `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/skip`,
+  taskGraphCancel: (graphId: TaskGraphId) => `/api/task-graphs/${graphId}/cancel`,
 
   // ---- 联机（docs/multi-device-design.md）：浏览器 → 入口 ----
   // 别的设备的接口都是 devicePath(id, 上面的路径)，入口原样转发（HTTP 和 WebSocket）；对方连不上 → 502 code device_offline，
@@ -186,6 +211,10 @@ export interface StateSnapshot {
   health: HealthEntry[];
   /** 所有项目经理的定时任务（M6），按编号从小到大；ScheduleRecord.pmId 认是谁的。 */
   schedules: ScheduleRecord[];
+  /** Router（总助）切片：配置、活跃待决/未读汇报、PM 备忘与本机最近指令。 */
+  router: RouterSlice;
+  /** 所有进行中项目的活跃任务图（status = 'active'）。 */
+  activeTaskGraphs: TaskGraph[];
   /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
   server: ServerInfo;
   /** 连入方 ssh 隧道的状态（daemon/tunnel/，界面服务补上的）：没配隧道不带，没连过中心是 null。内部值，网页怎么说由块 E 定。 */
@@ -400,6 +429,15 @@ export const CHANGE_TYPES = [
   "session.created",
   "schedule.updated",
   "schedule.removed",
+  "router.settings.updated",
+  "router.item.created",
+  "router.item.updated",
+  "router.reports.archived_all",
+  "router.note.updated",
+  "router.command.created",
+  "router.command.updated",
+  "task_graph.created",
+  "task_graph.updated",
 ] as const;
 export type ChangeType = (typeof CHANGE_TYPES)[number];
 
@@ -426,6 +464,15 @@ export interface ChangeDataMap {
   /** 定时任务建了、暂停、恢复、跑过一次（M6），整行换成这一份。 */
   "schedule.updated": { schedule: ScheduleRecord };
   "schedule.removed": { scheduleId: ScheduleId };
+  "router.settings.updated": { settings: RouterSettings };
+  "router.item.created": { item: RouterItem };
+  "router.item.updated": { item: RouterItem };
+  "router.reports.archived_all": { archivedIds: RouterItemId[]; updatedAt: number };
+  "router.note.updated": { pmId: PmId; note: RouterPmNote | null };
+  "router.command.created": { command: RouterCommandRecord };
+  "router.command.updated": { command: RouterCommandRecord };
+  "task_graph.created": { graph: TaskGraph };
+  "task_graph.updated": { graph: TaskGraph };
 }
 
 /** 服务端推的一条变化：{ seq, type, data }。 */
@@ -650,4 +697,76 @@ export interface BrowserSessionsResponse {
 export interface LoginLinkResponse {
   url: string;
   expiresAt: number;
+}
+
+// ---- Router（总助）与持久化任务图接口形状 ----
+
+export interface RouterItemsPage {
+  items: RouterItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export type ResolveRouterItemRequest =
+  | {
+      clientId: string;
+      optionIndex: number | null;
+      note?: string;
+    }
+  | {
+      action: "archive";
+    };
+
+export interface ResolveRouterItemResponse {
+  item: RouterItem;
+  messageId?: MessageId;
+}
+
+export interface ArchiveAllReportsResponse {
+  archivedIds: RouterItemId[];
+  updatedAt: number;
+}
+
+export interface UpdateRouterSettingsRequest {
+  vendor: AgentVendor | null;
+  model: string | null;
+  effort: string | null;
+}
+
+export interface UpdateRouterSettingsResponse {
+  settings: RouterSettings;
+}
+
+export interface TaskGraphsPage {
+  graphs: TaskGraph[];
+  hasMore: boolean;
+}
+
+export interface DecideTaskNodeRequest {
+  clientId: string;
+  choice?: string | null;
+  note?: string | null;
+}
+
+export interface DecideTaskNodeResponse {
+  graph: TaskGraph;
+  messageId: MessageId | null;
+}
+
+export interface SkipTaskNodeRequest {
+  reason?: string;
+}
+
+export interface SkipTaskNodeResponse {
+  graph: TaskGraph;
+  messageId: MessageId | null;
+}
+
+export interface CancelTaskGraphRequest {
+  reason?: string;
+}
+
+export interface CancelTaskGraphResponse {
+  graph: TaskGraph;
+  messageId: MessageId | null;
 }

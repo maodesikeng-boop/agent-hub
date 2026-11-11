@@ -378,6 +378,7 @@ describe("检查 Origin（浏览器认为 localhost 不同端口是同一个站�
 describe("GET /api/state 和 /messages?before=", () => {
   it("/api/state 返回账本的快照", async () => {
     ledger.snapshotValue = {
+      ...ledger.snapshotValue,
       seq: 0,
       pms: [
         { id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 },
@@ -1947,5 +1948,167 @@ describe("HTTP gzip 压缩", () => {
     expect(ranged.statusCode).toBe(206);
     expect(ranged.headers["content-encoding"]).toBeUndefined();
     expect(ranged.rawPayload).toEqual(Buffer.from(body, "utf8").subarray(0, 4));
+  });
+});
+
+describe("Router 与 TaskGraph 轨道 A 接口", () => {
+  it("GET /api/router/digest 与 GET /api/router/items（兼容 cursor 与 before）转发给账本", async () => {
+    const dig = await call("GET", "/api/router/digest");
+    expect(dig.statusCode).toBe(200);
+    expect(dig.json()).toEqual({ generatedAt: 1, pms: [] });
+
+    const page1 = await call("GET", "/api/router/items?cursor=100:5&limit=20");
+    expect(page1.statusCode).toBe(200);
+    expect(page1.json()).toEqual({ items: [], nextCursor: null, hasMore: false });
+
+    const page2 = await call("GET", "/api/router/items?before=5&limit=10");
+    expect(page2.statusCode).toBe(200);
+
+    expect(ledger.routerCalls).toEqual([
+      { call: "digest", args: [] },
+      { call: "listItems", args: ["100:5", 20] },
+      { call: "listItems", args: ["5", 10] },
+    ]);
+  });
+
+  it("POST /api/router/items/:id/resolve、archive-all、PUT /api/router/settings 校验并转发", async () => {
+    const res1 = await call("POST", "/api/router/items/12/resolve", {
+      origin: ORIGIN,
+      body: { clientId: "cid-1", optionIndex: 0, note: "照做" },
+    });
+    expect(res1.statusCode).toBe(200);
+    expect(res1.json()).toMatchObject({ item: { id: 12, status: "resolved" }, messageId: 99 });
+
+    const res2 = await call("POST", "/api/router/items/13/resolve", {
+      origin: ORIGIN,
+      body: { action: "archive" },
+    });
+    expect(res2.statusCode).toBe(200);
+    expect(res2.json()).toMatchObject({ item: { id: 13, status: "archived" } });
+
+    const badResolve = await call("POST", "/api/router/items/12/resolve", {
+      origin: ORIGIN,
+      body: { clientId: "", optionIndex: 0 },
+    });
+    expect(badResolve.statusCode).toBe(400);
+
+    const archAll = await call("POST", "/api/router/reports/archive-all", { origin: ORIGIN, body: {} });
+    expect(archAll.statusCode).toBe(200);
+    expect(archAll.json()).toEqual({ archivedIds: [1], updatedAt: 2 });
+
+    const settingsRes = await call("PUT", "/api/router/settings", {
+      origin: ORIGIN,
+      body: { vendor: "claude", model: "claude-sonnet-4-6", effort: "low" },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+    expect(settingsRes.json()).toMatchObject({
+      settings: { vendor: "claude", model: "claude-sonnet-4-6", effort: "low" },
+    });
+  });
+
+  it("TaskGraph 历史分页、decide、skip、cancel 校验并转发", async () => {
+    const hist = await call("GET", "/api/projects/3/task-graphs?before=9&limit=15");
+    expect(hist.statusCode).toBe(200);
+    expect(hist.json()).toEqual({ graphs: [], hasMore: false });
+
+    const dec = await call("POST", "/api/task-graphs/7/nodes/gate.1/decide", {
+      origin: ORIGIN,
+      body: { clientId: "c-gate-1", choice: "方案 A", note: "加缓存" },
+    });
+    expect(dec.statusCode).toBe(200);
+    expect(dec.json()).toMatchObject({ graph: { id: 7, status: "active" }, messageId: 101 });
+
+    const sk = await call("POST", "/api/task-graphs/7/nodes/step_2/skip", {
+      origin: ORIGIN,
+      body: { reason: "暂缓" },
+    });
+    expect(sk.statusCode).toBe(200);
+    expect(sk.json()).toMatchObject({ graph: { id: 7 }, messageId: 102 });
+
+    const can = await call("POST", "/api/task-graphs/7/cancel", {
+      origin: ORIGIN,
+      body: { reason: "重拆" },
+    });
+    expect(can.statusCode).toBe(200);
+    expect(can.json()).toMatchObject({ graph: { id: 7, status: "cancelled" }, messageId: 103 });
+
+    expect(ledger.taskGraphCalls).toEqual([
+      { call: "listHistory", args: [3, 9, 15] },
+      { call: "decideNode", args: [7, "gate.1", { clientId: "c-gate-1", choice: "方案 A", note: "加缓存" }] },
+      { call: "skipNode", args: [7, "step_2", { reason: "暂缓" }] },
+      { call: "cancelGraph", args: [7, { reason: "重拆" }] },
+    ]);
+  });
+
+  it("GET /api/state：本机浏览器保留 router.commands，经设备令牌访问时自动剥离为空数组", async () => {
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      router: {
+        ...ledger.snapshotValue.router,
+        commands: [
+          {
+            id: 1,
+            clientId: "cmd-1",
+            inputText: "看看进度",
+            vendor: "claude",
+            model: null,
+            effort: null,
+            status: "answered",
+            plan: null,
+            dispatched: null,
+            error: null,
+            durationMs: 120,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        ],
+      },
+    };
+
+    const localRes = await call("GET", "/api/state");
+    expect(localRes.statusCode).toBe(200);
+    expect(localRes.json().router.commands).toHaveLength(1);
+
+    const peerId = "11111111-2222-3333-4444-555555555555";
+    const peerApp = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      peers: {
+        authenticate: (deviceHeader: unknown, authHeader: unknown) =>
+          deviceHeader === peerId && authHeader === "Bearer peer-secret"
+            ? {
+                id: peerId,
+                name: "LinuxBox",
+                platform: "linux",
+                url: "https://linux.tail.ts.net",
+                state: "paired",
+                inboundHash: "h",
+                outboundToken: "t",
+                createdAt: 1,
+              }
+            : null,
+      } as never,
+    });
+    await peerApp.ready();
+    try {
+      const peerRes = await peerApp.inject({
+        method: "GET",
+        url: "/api/state",
+        headers: {
+          host: HOST,
+          authorization: "Bearer peer-secret",
+          "x-agent-hub-device": peerId,
+        },
+      });
+      expect(peerRes.statusCode).toBe(200);
+      expect(peerRes.json().router.commands).toEqual([]);
+    } finally {
+      await peerApp.close();
+    }
   });
 });

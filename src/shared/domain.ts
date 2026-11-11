@@ -16,6 +16,10 @@ export type ProjectId = number;
 type ProjectFolderId = number;
 export type PersonaChangeId = number;
 export type WorkerId = number;
+export type RouterItemId = number;
+export type RouterCommandId = number;
+export type TaskGraphId = number;
+export type TaskNodeKey = string;
 
 export type Unsubscribe = () => void;
 
@@ -428,13 +432,23 @@ export type SystemMessageMeta =
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
   | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number };
 
+export interface GateRef {
+  graphId: TaskGraphId;
+  nodeKey: TaskNodeKey;
+}
+
 /**
- * `hub ask` 发的那条项目经理消息的 meta（M5）：needsUser 是“等你确定”的标记；answered 是用户回答了——用户在这个项目经理的对话里
- * 发出一条消息时，守护进程在同一个事务里把之前没回答的都标上（ledger/messages.ts 的 postUserMessage），存在库里，刷新、重启、
- * 几个标签页都一致。老版本点“知道了”留下的 dismissed 读出来也当 answered（迁移 0009 已把老数据改成 answered）。
- * options 是可选的选项列表（`hub ask --option ...` 传入），用于在网页渲染可点击的 A/B/C/D 选项卡片。
+ * `hub ask` / `hub router ask` / 任务图门禁发的那条项目经理消息的 meta（M5 + Router/TaskGraph）：
+ * needsUser 是“等你确定”的标记；answered 是用户回答了——普通提问在对话里收到用户消息或 Router 拍板时标上；
+ * 带 gateRef 的门禁消息在用户对话闲聊时不会被误标已回答，须经门禁 decide 解锁才标上。
  */
-export type AskMeta = { needsUser: true; answered?: true; options?: string[] };
+export type AskMeta = {
+  needsUser: true;
+  answered?: true;
+  options?: string[];
+  gateRef?: GateRef;
+  chosenOption?: string;
+};
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
 export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null {
@@ -445,10 +459,21 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
       ? rawOptions
       : undefined;
   const answered = message.meta.answered === true || message.meta.dismissed === true;
+  const rawGateRef = message.meta.gateRef as Record<string, unknown> | null | undefined;
+  const gateRef =
+    rawGateRef !== null &&
+    typeof rawGateRef === "object" &&
+    typeof rawGateRef.graphId === "number" &&
+    typeof rawGateRef.nodeKey === "string"
+      ? { graphId: rawGateRef.graphId, nodeKey: rawGateRef.nodeKey }
+      : undefined;
+  const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
     ...(options !== undefined ? { options } : {}),
+    ...(gateRef !== undefined ? { gateRef } : {}),
+    ...(chosenOption !== undefined ? { chosenOption } : {}),
   };
 }
 
@@ -903,4 +928,77 @@ export interface HealthEntry {
   /** 最近一次的错误，界面直接显示；驱动层的错误以错误码开头（如“claude_not_found: …”）。成功一次就清空。 */
   lastError: string | null;
   updatedAt: number;
+}
+
+// ---- 持久化任务图（Task DAG，docs/task-graph-design.md §3.1）----
+
+export const TASK_GRAPH_STATUSES = ["active", "completed", "cancelled"] as const;
+export type TaskGraphStatus = (typeof TASK_GRAPH_STATUSES)[number];
+
+export const TASK_NODE_KINDS = ["piece", "gate"] as const;
+export type TaskNodeKind = (typeof TASK_NODE_KINDS)[number];
+
+export const TASK_NODE_STATUSES = [
+  "pending",
+  "ready",
+  "running",
+  "waiting_user",
+  "attention",
+  "done",
+  "skipped",
+] as const;
+export type TaskNodeStatus = (typeof TASK_NODE_STATUSES)[number];
+
+export interface TaskArtifact {
+  prUrl?: string;
+  commit?: string;
+  branch?: string;
+  summary?: string;
+}
+
+export interface TaskDecision {
+  choice: string | null;
+  note: string | null;
+  decidedBy: "user" | "pm";
+  decidedAt: number;
+  clientId?: string;
+}
+
+export interface TaskEdge {
+  fromKey: TaskNodeKey;
+  toKey: TaskNodeKey;
+}
+
+export interface TaskNode {
+  key: TaskNodeKey;
+  title: string;
+  kind: TaskNodeKind;
+  status: TaskNodeStatus;
+  sortOrder: number;
+  activeWorkerId: WorkerId | null;
+  workerIds: WorkerId[];
+  artifact: TaskArtifact | null;
+  gateQuestion: string | null;
+  gateOptions: string[];
+  gateSummaryMd: string | null;
+  gateRecommended: string | null;
+  gateAskMessageId: MessageId | null;
+  decision: TaskDecision | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TaskGraph {
+  id: TaskGraphId;
+  projectId: ProjectId;
+  pmId: PmId;
+  conversationId: ConversationId;
+  title: string;
+  status: TaskGraphStatus;
+  originMsgId: MessageId | null;
+  nodes: TaskNode[];
+  edges: TaskEdge[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
 }

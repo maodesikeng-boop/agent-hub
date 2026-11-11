@@ -63,6 +63,7 @@ import { toConversation, toMessage, toWorkerRecord } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from "./rows.ts";
 import { idle } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import type { WorkerBindTarget } from "./task-graphs.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
 const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
@@ -179,13 +180,25 @@ export interface EndedWorktreeCandidate {
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 
+export interface LedgerWorkersTaskGraphHooks {
+  prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
+  bindWorkerStartedIn: (p: Pending, target: WorkerBindTarget, workerId: WorkerId) => void;
+  onWorkerAttentionIn: (p: Pending, workerId: WorkerId, opts: { clearActiveWorker: boolean }) => void;
+  onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
+  onWorkerEndedIn: (
+    p: Pending,
+    workerId: WorkerId,
+    opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null },
+  ) => void;
+}
+
 export function createLedgerWorkers(
   ctx: LedgerContext,
   sessions: LedgerSessions,
   messages: LedgerMessages,
   persona: LedgerPersona,
   projects: LedgerProjects,
-  options: { worktreesDir: string },
+  options: { worktreesDir: string; taskGraphs?: LedgerWorkersTaskGraphHooks },
 ) {
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, liveOf, updateLive } = sessions;
@@ -496,6 +509,10 @@ export function createLedgerWorkers(
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     const card = projectCard(project);
+    const bindTarget =
+      args.node !== undefined && args.node.trim() !== ""
+        ? options.taskGraphs?.prepareWorkerBind(caller.pmId, args.node, args.graphId)
+        : undefined;
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
     if (args.noWorktree !== true) {
       const workspaceProbe = context.workspace;
@@ -562,6 +579,9 @@ export function createLedgerWorkers(
     });
     insertPmMessage(p, worker, session, task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
+    if (bindTarget !== undefined) {
+      options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, id);
+    }
     if (workspace === "worktree") {
       enqueue(p, { type: "worktree.create", params: { workerId: id } });
       // 项目经理的会话带上 worktrees/<项目编号>/，验收时能看 Worker 的改动（下一条消息前自动重启生效）
@@ -594,6 +614,7 @@ export function createLedgerWorkers(
     if (blocked !== null) throw fail("invalid", blocked);
     const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
+    options.taskGraphs?.onWorkerResumedIn(p, worker.id);
     // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等
     const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
     startMaxTime(worker, maxTimeMs);
@@ -638,6 +659,28 @@ export function createLedgerWorkers(
     enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     stopQueued(p, ended);
     insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
+    const latestOutcome = db.get<{ id: number; event: string | null; status: string | null; summary: string | null }>(
+      `SELECT id, CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
+              CASE WHEN json_valid(meta) THEN json_extract(meta, '$.status') END AS status,
+              CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
+         FROM messages
+        WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+          AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') IN ('report', 'turn_failed') ELSE 0 END
+        ORDER BY id DESC LIMIT 1`,
+      ended.pm_conversation_id,
+      ended.id,
+    );
+    // 被打回或收到新用户消息后，上一轮的完成报告不再证明当前任务已完成。
+    const latestInputId = db.get<{ id: number | null }>(
+      "SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user')",
+      ended.worker_conversation_id,
+    )?.id ?? 0;
+    options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
+      hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
+      incomplete: args.incomplete === true,
+      summary: latestOutcome?.summary ?? null,
+      branch: ended.branch,
+    });
     const cleanup =
       ended.workspace === "worktree"
         ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留）。`
@@ -667,6 +710,7 @@ export function createLedgerWorkers(
       enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
       updateLive(p, session.id, idle);
       insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
+      options.taskGraphs?.onWorkerEndedIn(p, ended.id, { hadLatestDoneReport: false, incomplete: true });
     }
   };
 
@@ -736,6 +780,7 @@ export function createLedgerWorkers(
       lines.push(`这一轮里有用户直接对它说的话：「${message.text}」。${retry}`);
     }
     insertLine(p, worker, { event: "turn_failed", status: null, summary: reason, turnMessageId, deliver: lines.join("\n") });
+    options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: false });
   };
 
   /**
@@ -798,6 +843,9 @@ export function createLedgerWorkers(
       turnMessageId,
       deliver: note === null ? body : `${note}\n\n${body}`,
     });
+    if (parsed.kind === "ok" && (parsed.report.status === "problem" || parsed.report.status === "gave_up")) {
+      options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: false });
+    }
   };
 
   /**
@@ -1040,6 +1088,7 @@ export function createLedgerWorkers(
       }
       const deliver = `建 worktree 失败，这个 Worker 没能开工，已经收工：${error}。要的话修好问题后重新派一个。`;
       insertLine(p, workerRow(worker.id)!, { event: "worktree_failed", status: null, summary: error, turnMessageId: null, deliver });
+      options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: true });
       const task = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
       if (task !== undefined) transition(p, task.id, "failed", error);
       return;

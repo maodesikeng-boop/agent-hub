@@ -1,4 +1,5 @@
 // 测试用的数据构造（不碰 DOM，node 和 jsdom 两边的测试都能用）。网页测试另有 web/test-utils.ts（带假 fetch、假 WebSocket）。
+import { emptyRouterSlice } from "./router.ts";
 import { serverInfoFor } from "./server-info.ts";
 import type { ConversationSnapshot, StateSnapshot } from "./api.ts";
 import type { Conversation, Message, Pm, SessionState } from "./domain.ts";
@@ -48,5 +49,18 @@ export function makeConvSnapshot(messages: Message[], over: { conversation?: Par
 }
 
 export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
-  return { seq: 10, pms: [makePm()], projects: [], folders: [], conversations: [makeConvSnapshot([])], sessions: [], health: [], schedules: [], server: serverInfoFor("darwin"), ...over };
+  return {
+    seq: 10,
+    pms: [makePm()],
+    projects: [],
+    folders: [],
+    conversations: [makeConvSnapshot([])],
+    sessions: [],
+    health: [],
+    schedules: [],
+    router: emptyRouterSlice(),
+    activeTaskGraphs: [],
+    server: serverInfoFor("darwin"),
+    ...over,
+  };
 }

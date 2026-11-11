@@ -45,6 +45,13 @@ import {
   systemMessageDedupeKey,
   retryDelayMs,
   userMessageDedupeKey,
+  MAX_ACTIVE_GRAPHS_PER_PROJECT,
+  MAX_GRAPH_EDGES,
+  MAX_GRAPH_NODES,
+  ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+  ROUTER_PENDING_DECISIONS_PER_PM_MAX,
+  emptyRouterSlice,
+  pendingDecisionsOf,
 } from "./index.ts";
 import type {
   Driver,
@@ -465,6 +472,15 @@ describe("M2：界面接口", () => {
       "session.created",
       "schedule.updated",
       "schedule.removed",
+      "router.settings.updated",
+      "router.item.created",
+      "router.item.updated",
+      "router.reports.archived_all",
+      "router.note.updated",
+      "router.command.created",
+      "router.command.updated",
+      "task_graph.created",
+      "task_graph.updated",
     ]);
   });
 
@@ -499,6 +515,18 @@ describe("M2：agent 接口", () => {
       "schedule.pause",
       "schedule.resume",
       "schedule.remove",
+      "router.ask",
+      "router.report",
+      "router.note",
+      "graph.create",
+      "graph.show",
+      "graph.list",
+      "graph.ask",
+      "graph.patch",
+      "graph.done",
+      "graph.decide",
+      "graph.skip",
+      "graph.cancel",
     ]);
     expect(hubPath("project.create")).toBe("/v1/project.create");
     expect(ENV_HUB_TOKEN).toBe("HUB_TOKEN");
@@ -780,6 +808,18 @@ describe("M3：hub 命令按角色放行", () => {
       "schedule.pause": ["pm"],
       "schedule.resume": ["pm"],
       "schedule.remove": ["pm"],
+      "router.ask": ["pm"],
+      "router.report": ["pm"],
+      "router.note": ["pm"],
+      "graph.create": ["pm"],
+      "graph.show": ["pm"],
+      "graph.list": ["pm"],
+      "graph.ask": ["pm"],
+      "graph.patch": ["pm"],
+      "graph.done": ["pm"],
+      "graph.decide": ["pm"],
+      "graph.skip": ["pm"],
+      "graph.cancel": ["pm"],
     });
     expect(hubCommandAllowed("worker", "status")).toBe(true);
     expect(hubCommandAllowed("worker", "persona.edit")).toBe(false);
@@ -928,6 +968,202 @@ describe("hub ask 选项卡片（askOf、validateAskOptions、extractAskCard）"
       question: "问题",
       options: ["一", "二"],
       answered: false,
+    });
+  });
+
+  it("askOf：保留 gateRef 与 chosenOption", () => {
+    expect(
+      askOf({
+        sender: "agent",
+        meta: {
+          needsUser: true,
+          options: ["数组", "游标分页"],
+          gateRef: { graphId: 7, nodeKey: "gate-api" },
+          chosenOption: "游标分页",
+          answered: true,
+        },
+      }),
+    ).toEqual({
+      needsUser: true,
+      answered: true,
+      options: ["数组", "游标分页"],
+      gateRef: { graphId: 7, nodeKey: "gate-api" },
+      chosenOption: "游标分页",
+    });
+  });
+});
+
+describe("Router 与任务图同源待决模型（decisions.ts & limits.ts）", () => {
+  it("宽松安全水位常量符合审定值（不设低阈值卡脖子）", () => {
+    expect(ROUTER_PENDING_DECISIONS_PER_PM_MAX).toBe(30);
+    expect(MAX_ACTIVE_GRAPHS_PER_PROJECT).toBe(20);
+    expect(ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX).toBe(50);
+    expect(MAX_GRAPH_NODES).toBe(32);
+    expect(MAX_GRAPH_EDGES).toBe(64);
+  });
+
+  it("pendingDecisionsOf：汇聚 waiting_user 门禁与无 gateRef 的独立待决项，自动去重，且 WeakMap 保持引用稳定", () => {
+    const snap: Parameters<typeof pendingDecisionsOf>[0] = {
+      pms: [{ id: 1, name: "小林", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 }],
+      projects: [{ id: 2, name: "导出模块", description: null, status: "active", pmId: 1, conversationId: 1, createdAt: 1, updatedAt: 1 }],
+      conversations: [
+        {
+          conversation: { id: 1, kind: "pm", pmId: 1, projectId: null, title: "小林", createdAt: 1 },
+          messages: [
+            {
+              id: 50,
+              conversationId: 1,
+              sessionId: 1,
+              workerId: null,
+              sender: "agent",
+              kind: "text",
+              text: "接口怎么定？",
+              meta: { needsUser: true, gateRef: { graphId: 10, nodeKey: "gate-api" } },
+              collapsed: false,
+              dedupeKey: "k1",
+              status: null,
+              failureReason: null,
+              createdAt: 100,
+              updatedAt: 100,
+            },
+          ],
+          hasMore: false,
+        },
+      ],
+      router: {
+        ...emptyRouterSlice(),
+        items: [
+          {
+            id: 1,
+            kind: "decision",
+            status: "pending",
+            pmId: 1,
+            projectId: 2,
+            conversationId: 1,
+            question: "要不要顺便升 Node 24？",
+            context: "CI 镜像已支持",
+            options: ["升", "先不升"],
+            askMessageId: 51,
+            resolution: null,
+            createdAt: 200,
+            updatedAt: 200,
+          },
+          // 若意外存在指向同一门禁消息 50 的 router_item，自动去重不重复产出
+          {
+            id: 2,
+            kind: "decision",
+            status: "pending",
+            pmId: 1,
+            projectId: 2,
+            conversationId: 1,
+            question: "重复项",
+            context: "",
+            options: ["A", "B"],
+            askMessageId: 50,
+            resolution: null,
+            createdAt: 150,
+            updatedAt: 150,
+          },
+        ],
+      },
+      activeTaskGraphs: [
+        {
+          id: 10,
+          projectId: 2,
+          pmId: 1,
+          conversationId: 1,
+          title: "导出 CSV",
+          status: "active",
+          originMsgId: null,
+          createdAt: 100,
+          updatedAt: 100,
+          completedAt: null,
+          nodes: [
+            {
+              key: "gate-api",
+              title: "确认接口契约",
+              kind: "gate",
+              status: "waiting_user",
+              sortOrder: 0,
+              activeWorkerId: null,
+              workerIds: [],
+              artifact: null,
+              gateQuestion: "接口返回数组还是游标分页？",
+              gateOptions: ["数组", "游标分页"],
+              gateSummaryMd: "数据量预计 5 万行",
+              gateRecommended: "游标分页",
+              gateAskMessageId: 50,
+              decision: null,
+              createdAt: 120,
+              updatedAt: 120,
+            },
+            {
+              key: "impl-api",
+              title: "实现后端接口",
+              kind: "piece",
+              status: "pending",
+              sortOrder: 1,
+              activeWorkerId: null,
+              workerIds: [],
+              artifact: null,
+              gateQuestion: null,
+              gateOptions: [],
+              gateSummaryMd: null,
+              gateRecommended: null,
+              gateAskMessageId: null,
+              decision: null,
+              createdAt: 100,
+              updatedAt: 100,
+            },
+            {
+              key: "e2e",
+              title: "联调测试",
+              kind: "piece",
+              status: "pending",
+              sortOrder: 2,
+              activeWorkerId: null,
+              workerIds: [],
+              artifact: null,
+              gateQuestion: null,
+              gateOptions: [],
+              gateSummaryMd: null,
+              gateRecommended: null,
+              gateAskMessageId: null,
+              decision: null,
+              createdAt: 100,
+              updatedAt: 100,
+            },
+          ],
+          edges: [
+            { fromKey: "gate-api", toKey: "impl-api" },
+            { fromKey: "impl-api", toKey: "e2e" },
+          ],
+        },
+      ],
+    };
+
+    const first = pendingDecisionsOf(snap, "mac");
+    const second = pendingDecisionsOf(snap, "mac");
+    expect(second).toBe(first);
+    expect(first).toHaveLength(2);
+    expect(first[0]).toMatchObject({
+      key: "item:mac:1",
+      question: "要不要顺便升 Node 24？",
+      source: { kind: "router_item", itemId: 1 },
+    });
+    expect(first[1]).toMatchObject({
+      key: "gate:mac:10:gate-api",
+      question: "接口返回数组还是游标分页？",
+      context: "数据量预计 5 万行",
+      options: ["数组", "游标分页"],
+      source: {
+        kind: "gate",
+        graphId: 10,
+        nodeKey: "gate-api",
+        blockedNodeCount: 2,
+        nextNodeTitles: ["实现后端接口"],
+        recommended: "游标分页",
+      },
     });
   });
 });

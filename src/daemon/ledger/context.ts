@@ -42,10 +42,19 @@ const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "folders.updated": 4,
   "message.created": 5,
   "message.updated": 5,
-  "session.status": 6,
-  "health.updated": 7,
-  "schedule.updated": 8,
-  "schedule.removed": 8,
+  "task_graph.created": 6,
+  "task_graph.updated": 6,
+  "router.settings.updated": 6,
+  "router.item.created": 6,
+  "router.item.updated": 6,
+  "router.reports.archived_all": 6,
+  "router.note.updated": 6,
+  "router.command.created": 6,
+  "router.command.updated": 6,
+  "session.status": 7,
+  "health.updated": 8,
+  "schedule.updated": 9,
+  "schedule.removed": 9,
 };
 
 export const fail = (code: LedgerErrorCode, message: string) => new LedgerRequestError(code, message);
@@ -79,6 +88,8 @@ export interface LedgerContext {
   commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
   /** 这台机器有没有 OS 沙箱（driver/write-scope.ts 的 osSandboxAvailable）：没有的机器上派只读 agy 直接报错（hub worker start --readonly）。 */
   osSandboxed(): boolean;
+  /** 单调递增的账本写事务代数（供 DeviceRouterDigest 等只读衍生快照精确失效缓存）。 */
+  writeGeneration(): number;
 }
 
 /** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
@@ -113,6 +124,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   const actionListeners = new Set<(action: AnyActionRow) => void>();
   const stopListeners = new Set<(event: StopEvent) => void>();
   const pushed = new Map<SessionId, string>();
+  let generation = 0;
 
   const notify = <T>(listeners: Set<(value: T) => void>, value: T) => {
     for (const listener of [...listeners]) {
@@ -136,6 +148,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
     const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
     const result = db.transaction(() => fn(pending));
+    generation++;
     for (const after of pending.after) {
       try {
         after();
@@ -190,5 +203,24 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   };
   const commandBlockReason = (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string) =>
     composerBaseOf(session.vendor)?.blockReason(text, options.knownCommands?.(session) ?? null) ?? null;
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, emitChange, enqueue, reportHealthIn, modelCatalog, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
+  return {
+    db,
+    now,
+    log,
+    changeListeners,
+    actionListeners,
+    stopListeners,
+    pushed,
+    subscribe,
+    write,
+    emitChange,
+    enqueue,
+    reportHealthIn,
+    modelCatalog,
+    modelLabel: label,
+    modelShortLabel: shortLabel,
+    commandBlockReason,
+    osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()),
+    writeGeneration: () => generation,
+  };
 }

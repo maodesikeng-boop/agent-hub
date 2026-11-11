@@ -2,6 +2,9 @@
 // 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
   MAX_REWOUND_PENDING_KEYS,
+  ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  emptyRouterSlice,
   isRewoundMessage,
   isWorkerEndLine,
   serverInfoFor,
@@ -19,10 +22,12 @@ import {
   type Project,
   type ProjectFolder,
   type PublicEntryStatus,
+  type RouterSlice,
   type ScheduleRecord,
   type ServerInfo,
   type SessionState,
   type StateSnapshot,
+  type TaskGraph,
   type TunnelStatus,
   type WorkerPick,
 } from "../shared/index.ts";
@@ -84,6 +89,10 @@ export interface HubState {
   health: HealthEntry[];
   /** 所有项目经理的定时任务（ScheduleRecord.pmId 认是谁的）；资料页的定时任务卡片用。 */
   schedules: ScheduleRecord[];
+  /** Router（总助）切片：活跃待决卡、未读汇报、PM 备忘、配置与本机最近指令。 */
+  router: RouterSlice;
+  /** 所有进行中项目的活跃任务图（status = 'active'）。 */
+  activeTaskGraphs: TaskGraph[];
   /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
   /** 连入方 ssh 隧道状态（来自 /api/state 的 tunnel）。 */
@@ -115,6 +124,8 @@ export const initialState: HubState = {
   sessions: [],
   health: [],
   schedules: [],
+  router: emptyRouterSlice(),
+  activeTaskGraphs: [],
   server: serverInfoFor("darwin"),
   pending: [],
   older: {},
@@ -288,6 +299,13 @@ export function applyChange(state: HubState, change: Change): HubState {
       const conversations = Object.fromEntries(
         Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
       );
+      const routerItems = state.router.items.filter((i) => i.pmId !== pmId);
+      const routerNotes = state.router.notes.filter((n) => n.pmId !== pmId);
+      const router =
+        routerItems.length === state.router.items.length && routerNotes.length === state.router.notes.length
+          ? state.router
+          : { ...state.router, items: routerItems, notes: routerNotes };
+      const activeTaskGraphs = state.activeTaskGraphs.filter((g) => g.pmId !== pmId);
       return {
         ...next,
         pms: state.pms.filter((p) => p.id !== pmId),
@@ -295,6 +313,8 @@ export function applyChange(state: HubState, change: Change): HubState {
         folders: state.folders.filter((f) => !removedProjectIds.has(f.projectId)),
         conversations,
         schedules: state.schedules.filter((s) => s.pmId !== pmId),
+        router,
+        activeTaskGraphs: activeTaskGraphs.length === state.activeTaskGraphs.length ? state.activeTaskGraphs : activeTaskGraphs,
       };
     }
     case "project.created":
@@ -327,6 +347,72 @@ export function applyChange(state: HubState, change: Change): HubState {
     }
     case "session.created":
       return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
+    case "router.settings.updated":
+      return { ...next, router: { ...state.router, settings: change.data.settings } };
+    case "router.item.created":
+    case "router.item.updated": {
+      const { item } = change.data;
+      const isActive = item.status === "pending" || item.status === "unread";
+      const existingIndex = state.router.items.findIndex((x) => x.id === item.id);
+      if (!isActive) {
+        if (existingIndex === -1) return next;
+        return {
+          ...next,
+          router: { ...state.router, items: state.router.items.filter((x) => x.id !== item.id) },
+        };
+      }
+      const items =
+        existingIndex === -1
+          ? [item, ...state.router.items].slice(0, ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX)
+          : state.router.items.with(existingIndex, item);
+      return { ...next, router: { ...state.router, items } };
+    }
+    case "router.reports.archived_all": {
+      const archived = new Set(change.data.archivedIds);
+      const items = state.router.items.filter((x) => !archived.has(x.id));
+      return items.length === state.router.items.length ? next : { ...next, router: { ...state.router, items } };
+    }
+    case "router.note.updated": {
+      const { pmId, note } = change.data;
+      if (note === null) {
+        const notes = state.router.notes.filter((n) => n.pmId !== pmId);
+        return notes.length === state.router.notes.length ? next : { ...next, router: { ...state.router, notes } };
+      }
+      return {
+        ...next,
+        router: {
+          ...state.router,
+          notes: upsertBy(state.router.notes, note, (a, b) => a.pmId === b.pmId),
+        },
+      };
+    }
+    case "router.command.created":
+    case "router.command.updated": {
+      const { command } = change.data;
+      const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
+      const commands =
+        existingIndex === -1
+          ? [command, ...state.router.commands].slice(0, ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX)
+          : state.router.commands.with(existingIndex, command);
+      return { ...next, router: { ...state.router, commands } };
+    }
+    case "task_graph.created":
+    case "task_graph.updated": {
+      const { graph } = change.data;
+      const existingIndex = state.activeTaskGraphs.findIndex((g) => g.id === graph.id);
+      if (graph.status !== "active") {
+        if (existingIndex === -1) return next;
+        return {
+          ...next,
+          activeTaskGraphs: state.activeTaskGraphs.filter((g) => g.id !== graph.id),
+        };
+      }
+      const activeTaskGraphs =
+        existingIndex === -1
+          ? [graph, ...state.activeTaskGraphs]
+          : state.activeTaskGraphs.with(existingIndex, graph);
+      return { ...next, activeTaskGraphs };
+    }
   }
 }
 
@@ -383,6 +469,8 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     sessions: snapshot.sessions,
     health: snapshot.health,
     schedules: snapshot.schedules,
+    router: snapshot.router,
+    activeTaskGraphs: snapshot.activeTaskGraphs,
     server: snapshot.server,
     ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
     ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),

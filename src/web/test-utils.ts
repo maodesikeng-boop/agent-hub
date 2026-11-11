@@ -1,6 +1,6 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, serverInfoFor } from "../shared/index.ts";
+import { API_PATHS, DEFAULT_AGENT_VENDOR, emptyRouterSlice, serverInfoFor } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   Attachment,
@@ -251,6 +251,8 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
     sessions: [],
     health: [],
     schedules: [],
+    router: emptyRouterSlice(),
+    activeTaskGraphs: [],
     server: serverInfoFor("darwin"),
     ...over,
   };

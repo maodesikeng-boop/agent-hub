@@ -592,3 +592,96 @@ export const WORKER_PICK_CACHE_MAX = 64;
 export const REWIND_SCAN_LIMIT = 20;
 /** 网页乐观回退发送路上的待发消息时，记住其去重键以防随后到达的 message.created 闪出气泡；最多留几条，满了丢最早的。 */
 export const MAX_REWOUND_PENDING_KEYS = 32;
+
+// ---- Router（总助）上限（docs/router-design.md §3.2 + 审定宽松水位）----
+/** 单个 PM 同时挂起的独立待决项安全水位（只防内存溢出，不拦正常并行工作）。 */
+export const ROUTER_PENDING_DECISIONS_PER_PM_MAX = 30;
+/** 拍板卡问题字数上限。 */
+export const ROUTER_QUESTION_MAX_CHARS = 160;
+export const MAX_ROUTER_QUESTION_BYTES = 4 * ROUTER_QUESTION_MAX_CHARS;
+/** 拍板卡背景说明与里程碑汇报摘要字数上限。 */
+export const ROUTER_CONTEXT_MAX_CHARS = 400;
+export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
+/** 拍板卡选项数量下限与上限。 */
+export const ROUTER_OPTION_MIN_COUNT = 2;
+export const ROUTER_OPTION_MAX_COUNT = 4;
+/** 单个选项字数上限。 */
+export const ROUTER_OPTION_MAX_CHARS = 120;
+export const MAX_ROUTER_OPTION_BYTES = 4 * ROUTER_OPTION_MAX_CHARS;
+/** PM 给 Router 留的一句话备忘字数上限。 */
+export const ROUTER_NOTE_MAX_CHARS = 500;
+export const MAX_ROUTER_NOTE_BYTES = 4 * ROUTER_NOTE_MAX_CHARS;
+/** 汇报附带链接上限及单条标签/目标长度上限。 */
+export const ROUTER_REPORT_LINKS_MAX = 4;
+export const ROUTER_REPORT_LINK_LABEL_MAX_CHARS = 80;
+export const ROUTER_REPORT_LINK_TARGET_MAX_CHARS = 500;
+export const MAX_ROUTER_REPORT_LINK_BYTES = 4 * (ROUTER_REPORT_LINK_LABEL_MAX_CHARS + ROUTER_REPORT_LINK_TARGET_MAX_CHARS + 4);
+/** PM 卡片最新动态摘要字数上限。 */
+export const ROUTER_PM_BRIEF_MAX_CHARS = 120;
+/** StateSnapshot 里活跃 Router 项（pending + unread）上限。 */
+export const ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX = 50;
+/** StateSnapshot 里最近 Router 指令上限。 */
+export const ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX = 10;
+/** 历史回执分页每页条数。 */
+export const ROUTER_ARCHIVED_PAGE_SIZE = 30;
+/** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
+export const ROUTER_PERSONA_SUMMARY_LINES = 4;
+export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;
+/** Digest 中单个 PM 附带的在跑 Worker 上限（超出只计总数）。 */
+export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
+/** 单份 Fleet Digest JSON 字节上限（24 KB）。 */
+export const ROUTER_FLEET_DIGEST_MAX_BYTES = 24_576;
+/** Router Agent 单次只读规划超时（毫秒）。 */
+export const ROUTER_AGENT_TIMEOUT_MS = 25_000;
+/** 用户单条 Router 指令字数上限。 */
+export const ROUTER_COMMAND_MAX_CHARS = 4_000;
+/** 单条指令最多同时派发的目标 PM 数。 */
+export const ROUTER_MAX_DISPATCH_TARGETS = 8;
+/** 已决拍板与已读汇报保留天数。 */
+export const ROUTER_ITEM_RETENTION_DAYS = 30;
+export const ROUTER_ITEM_RETENTION_MS = ROUTER_ITEM_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** router_commands 保留的最近条数上限。 */
+export const ROUTER_COMMANDS_RETENTION_MAX = 500;
+/** router_audit_log 环形表保留行数上限。 */
+export const ROUTER_AUDIT_LOG_MAX_ROWS = 500;
+
+// ---- 持久化任务图（Task DAG）上限（docs/task-graph-design.md §2.3 + 审定宽松水位）----
+/** 单项目同时处于 active 的任务图安全水位。 */
+export const MAX_ACTIVE_GRAPHS_PER_PROJECT = 20;
+/** 单张任务图节点数上限。 */
+export const MAX_GRAPH_NODES = 32;
+/** 单张任务图有向边数上限。 */
+export const MAX_GRAPH_EDGES = 64;
+/** 任务图标题字数上限。 */
+export const MAX_GRAPH_TITLE_CHARS = 120;
+export const MAX_GRAPH_TITLE_BYTES = 4 * MAX_GRAPH_TITLE_CHARS;
+/** 节点标题字数上限。 */
+export const MAX_NODE_TITLE_CHARS = 80;
+/** 节点 key 长度上限与合法字符格式。 */
+export const MAX_NODE_KEY_CHARS = 48;
+export const MAX_NODE_KEY_BYTES = 4 * MAX_NODE_KEY_CHARS;
+/** 门禁问题字数上限。 */
+export const MAX_GATE_QUESTION_CHARS = 300;
+export const MAX_GATE_QUESTION_BYTES = 4 * MAX_GATE_QUESTION_CHARS;
+/** 门禁选项个数上限。 */
+export const MAX_GATE_OPTIONS = 6;
+/** 门禁调研/背景 Markdown 摘要字数上限。 */
+export const MAX_GATE_SUMMARY_CHARS = 2_000;
+export const MAX_GATE_SUMMARY_BYTES = 4 * MAX_GATE_SUMMARY_CHARS;
+/** 门禁/拍板定案选项字数上限。 */
+export const MAX_DECISION_CHOICE_CHARS = 200;
+export const MAX_DECISION_CHOICE_BYTES = 4 * MAX_DECISION_CHOICE_CHARS;
+/** 门禁/拍板自由补充说明字数上限。 */
+export const MAX_DECISION_NOTE_CHARS = 2_000;
+export const MAX_DECISION_NOTE_BYTES = 4 * MAX_DECISION_NOTE_CHARS;
+/** hub graph create / patch 输入 JSON 最大字节数（64 KB 充裕容纳 32 节点 + 摘要）。 */
+export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
+/** 节点完成产物摘要字数上限。 */
+export const MAX_NODE_ARTIFACT_SUMMARY_CHARS = 500;
+export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
+/** 历史任务图分页大小与 CLI 列表默认条数。 */
+export const GRAPH_HISTORY_PAGE_SIZE = 20;
+export const HUB_GRAPH_LIST_LIMIT = 20;
+/** 已完结/已取消任务图保留天数。 */
+export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
+export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;

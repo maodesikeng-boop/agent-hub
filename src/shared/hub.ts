@@ -15,10 +15,17 @@ import type {
   Project,
   ProjectFolder,
   ProjectId,
+  RouterItemId,
   SessionId,
+  TaskGraph,
+  TaskGraphId,
+  TaskGraphStatus,
+  TaskNodeKind,
+  TaskNodeKey,
   WorkerRecord,
   WorkerId,
 } from "./domain.ts";
+import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { AgentVendor, VendorAvailability } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
@@ -79,6 +86,18 @@ export const HUB_COMMANDS = [
   "schedule.pause",
   "schedule.resume",
   "schedule.remove",
+  "router.ask",
+  "router.report",
+  "router.note",
+  "graph.create",
+  "graph.show",
+  "graph.list",
+  "graph.ask",
+  "graph.patch",
+  "graph.done",
+  "graph.decide",
+  "graph.skip",
+  "graph.cancel",
 ] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
@@ -109,6 +128,18 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "schedule.pause": ["pm"],
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
+  "router.ask": ["pm"],
+  "router.report": ["pm"],
+  "router.note": ["pm"],
+  "graph.create": ["pm"],
+  "graph.show": ["pm"],
+  "graph.list": ["pm"],
+  "graph.ask": ["pm"],
+  "graph.patch": ["pm"],
+  "graph.done": ["pm"],
+  "graph.decide": ["pm"],
+  "graph.skip": ["pm"],
+  "graph.cancel": ["pm"],
 };
 
 export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean {
@@ -152,13 +183,17 @@ export interface HubArgsMap {
     maxTimeMs?: number;
     readonly?: boolean;
     noWorktree?: boolean;
+    /** 绑定的任务图节点 key（可选）。 */
+    node?: TaskNodeKey;
+    /** 绑定的任务图编号（多张活跃图时显式指定）。 */
+    graphId?: TaskGraphId;
   };
   /** `hub worker send <编号> [--max-time <时长>] --stdin`：打回或回答问题，发给同一个 Worker 会话。text 不超过 MAX_TASK_BYTES。 */
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   /** `hub worker max-time <编号> <时长>`：单独延时或更新正在运行的 Worker 本轮最大时间（从现在重新计时）。 */
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
-  /** `hub worker end <编号>`：结束 Worker 会话（登记 session.end），Worker 标 ended。worktree 由项目经理自己删。 */
-  "worker.end": { workerId: WorkerId };
+  /** `hub worker end <编号> [--incomplete]`：结束 Worker 会话（登记 session.end），Worker 标 ended；incomplete 为 true 时绑定节点置为 attention 供接力重绑。 */
+  "worker.end": { workerId: WorkerId; incomplete?: boolean };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
   /**
@@ -201,6 +236,120 @@ export interface HubArgsMap {
   "schedule.pause": { scheduleId: ScheduleId };
   "schedule.resume": { scheduleId: ScheduleId };
   "schedule.remove": { scheduleId: ScheduleId };
+  /** `hub router ask`：提交结构化待拍板卡并同步写入对话 AskMeta 消息。 */
+  "router.ask": {
+    question: string;
+    options: string[];
+    context?: string;
+    replaceItemId?: RouterItemId;
+  };
+  /** `hub router report`：提交里程碑完成汇报卡（不打扰对话流）。 */
+  "router.report": {
+    summary: string;
+    links?: RouterReportLink[];
+  };
+  /** `hub router note`：更新或清空该 PM 的一句话项目近况备忘。 */
+  "router.note": {
+    text?: string;
+    clear?: boolean;
+  };
+  /** `hub graph create`：从 JSON 规格创建持久化任务流图（DAG）。 */
+  "graph.create": {
+    title?: string;
+    specJson: string;
+  };
+  /** `hub graph show [<graphId>]`：查看当前活跃图或指定图详情。 */
+  "graph.show": {
+    graphId?: TaskGraphId;
+  };
+  /** `hub graph list [--all | --status active|completed|cancelled]`：列出项目任务图。 */
+  "graph.list": {
+    all?: boolean;
+    status?: TaskGraphStatus;
+  };
+  /** `hub graph ask <nodeKey>`：填入或更新门禁节点问题、选项与调研摘要，上游就绪时自动激活为 waiting_user。 */
+  "graph.ask": {
+    nodeKey: TaskNodeKey;
+    graphId?: TaskGraphId;
+    question: string;
+    options?: string[];
+    recommended?: string;
+    summaryMd?: string;
+  };
+  /** `hub graph patch [<graphId>] --stdin`：增量增删改节点与依赖边（含环路检测与运行态保护）。 */
+  "graph.patch": {
+    graphId?: TaskGraphId;
+    specJson: string;
+  };
+  /** `hub graph done <nodeKey>`：标记 piece 节点完成并记录产物摘要，解锁下游。 */
+  "graph.done": {
+    nodeKey: TaskNodeKey;
+    graphId?: TaskGraphId;
+    prUrl?: string;
+    commit?: string;
+    branch?: string;
+    summary?: string;
+  };
+  /** `hub graph decide <nodeKey>`：PM 代填用户在对话中口头拍板的门禁结论并解锁下游。 */
+  "graph.decide": {
+    nodeKey: TaskNodeKey;
+    graphId?: TaskGraphId;
+    choice: string;
+    note?: string;
+  };
+  /** `hub graph skip <nodeKey>`：跳过节点并在下游全跳过时级联跳过。 */
+  "graph.skip": {
+    nodeKey: TaskNodeKey;
+    graphId?: TaskGraphId;
+    reason?: string;
+  };
+  /** `hub graph cancel [<graphId>]`：取消整张任务图。 */
+  "graph.cancel": {
+    graphId?: TaskGraphId;
+    reason?: string;
+  };
+}
+
+export interface CreateTaskGraphNodeInput {
+  key: TaskNodeKey;
+  title: string;
+  kind?: TaskNodeKind;
+  deps?: TaskNodeKey[];
+  question?: string;
+  options?: string[];
+  summaryMd?: string;
+  recommended?: string;
+}
+
+export interface CreateTaskGraphEdgeInput {
+  from: TaskNodeKey;
+  to: TaskNodeKey;
+}
+
+export interface CreateTaskGraphSpecInput {
+  title?: string;
+  originMsgId?: MessageId;
+  nodes: CreateTaskGraphNodeInput[];
+  edges?: CreateTaskGraphEdgeInput[];
+}
+
+export interface PatchTaskGraphNodeInput {
+  key: TaskNodeKey;
+  title?: string;
+  deps?: TaskNodeKey[];
+  question?: string;
+  options?: string[];
+  summaryMd?: string;
+  recommended?: string;
+}
+
+export interface PatchTaskGraphSpecInput {
+  title?: string;
+  addNodes?: CreateTaskGraphNodeInput[];
+  updateNodes?: PatchTaskGraphNodeInput[];
+  removeNodes?: TaskNodeKey[];
+  addEdges?: CreateTaskGraphEdgeInput[];
+  removeEdges?: CreateTaskGraphEdgeInput[];
 }
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
@@ -216,6 +365,18 @@ export interface ProjectCard {
   otherFolders: string[];
 }
 
+/** hub status 返回给项目经理的活跃任务图计数摘要。 */
+export interface PmActiveGraphSummary {
+  id: TaskGraphId;
+  title: string;
+  totalNodes: number;
+  doneCount: number;
+  runningCount: number;
+  readyCount: number;
+  waitingUserCount: number;
+  attentionCount: number;
+}
+
 /** 项目经理调 hub status。 */
 interface PmHubStatus {
   role: "pm";
@@ -227,6 +388,8 @@ interface PmHubStatus {
   project: ProjectCard | null;
   /** 项目的 worktree 准备命令（hub project setup）；没有项目、没配是 null。 */
   setupCommand: string | null;
+  /** 当前项目的活跃任务图计数摘要（如有）。 */
+  activeTaskGraphs?: PmActiveGraphSummary[];
 }
 
 /** Worker 调 hub status（M3）：我是哪个 Worker、任务是什么、在哪干活。 */
@@ -327,6 +490,18 @@ interface HubDataMap {
   "schedule.resume": { schedule: ScheduleRecord };
   /** 删之前的样子。 */
   "schedule.remove": { schedule: ScheduleRecord };
+  "router.ask": { item: RouterItem; messageId: MessageId };
+  "router.report": { item: RouterItem };
+  "router.note": { note: RouterPmNote | null };
+  "graph.create": { graph: TaskGraph };
+  "graph.show": { graph: TaskGraph };
+  "graph.list": { graphs: TaskGraph[] };
+  "graph.ask": { graph: TaskGraph; messageId: MessageId | null };
+  "graph.patch": { graph: TaskGraph };
+  "graph.done": { graph: TaskGraph };
+  "graph.decide": { graph: TaskGraph };
+  "graph.skip": { graph: TaskGraph };
+  "graph.cancel": { graph: TaskGraph };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

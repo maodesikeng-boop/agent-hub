@@ -2,6 +2,7 @@
 export * from "./actions.ts";
 export * from "./api.ts";
 export * from "./attachments.ts";
+export * from "./decisions.ts";
 export * from "./domain.ts";
 export * from "./driver.ts";
 export * from "./handover.ts";
@@ -10,6 +11,7 @@ export * from "./ledger.ts";
 export * from "./limits.ts";
 export * from "./names.ts";
 export * from "./peer-transport.ts";
+export * from "./router.ts";
 export * from "./schedule.ts";
 export * from "./secret-paths.ts";
 export * from "./server-info.ts";

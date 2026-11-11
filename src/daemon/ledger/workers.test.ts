@@ -820,7 +820,10 @@ describe("向用户提问（hub ask）", () => {
     });
     expect(askOf(message)).toEqual({ needsUser: true });
     expect(enqueued).toEqual([]);
-    expect(changes).toMatchObject([{ type: "message.created", data: { message: { id: message.id } } }]);
+    expect(changes).toMatchObject([
+      { type: "message.created", data: { message: { id: message.id } } },
+      { type: "router.item.created", data: { item: { kind: "decision", status: "pending", askMessageId: message.id } } },
+    ]);
     expect(count("hub_calls", "command = 'ask' AND ok = 1")).toBe(1);
   });
 

@@ -1,7 +1,23 @@
 // 账本（W1 实现）对界面服务、agent 接口、执行器、驱动层和组装代码开放的接口。
 // 数据库是同步接口，账本方法也都是同步的；调用方想 await 也行。
 // 这里只从 hub.ts 引类型（hub.ts 从这里引常量），没有运行时的循环引用。
-import type { Change, LedgerSnapshot, MessagesPage } from "./api.ts";
+import type {
+  ArchiveAllReportsResponse,
+  CancelTaskGraphRequest,
+  CancelTaskGraphResponse,
+  Change,
+  DecideTaskNodeRequest,
+  DecideTaskNodeResponse,
+  LedgerSnapshot,
+  MessagesPage,
+  ResolveRouterItemRequest,
+  ResolveRouterItemResponse,
+  RouterItemsPage,
+  SkipTaskNodeRequest,
+  SkipTaskNodeResponse,
+  TaskGraphsPage,
+  UpdateRouterSettingsRequest,
+} from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { DriverEvent } from "./driver.ts";
 import type { AnyActionRow } from "./actions.ts";
@@ -18,12 +34,17 @@ import type {
   PmId,
   PmMode,
   Project,
+  ProjectId,
+  RouterItemId,
   SessionId,
+  TaskGraphId,
+  TaskNodeKey,
   WorkerRecord,
   WorkerId,
   WorkerStatus,
   Unsubscribe,
 } from "./domain.ts";
+import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -608,6 +629,16 @@ export interface Ledger extends LedgerHandoverWork {
    * 执行器改动作状态写库失败时记 "store"。
    */
   reportHealth(module: HealthModule, error: string | null): void;
+  // ---- Router（总助）与持久化任务图接口 ----
+  getRouterDigest(): DeviceRouterDigest;
+  listRouterItems(beforeCursor?: string, limit?: number): RouterItemsPage;
+  resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
+  archiveAllRouterReports(): ArchiveAllReportsResponse;
+  updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
+  listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage;
+  decideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: DecideTaskNodeRequest): DecideTaskNodeResponse;
+  skipTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse;
+  cancelTaskGraph(graphId: TaskGraphId, input: CancelTaskGraphRequest): CancelTaskGraphResponse;
   /** 关机或测试结束时清理账本内部计时器（如 Worker 本轮最大时间计时器）。 */
   close?(): void;
 }
