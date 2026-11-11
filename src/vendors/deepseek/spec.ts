@@ -65,6 +65,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 deepseek-v4-pro",
     efforts: EFFORTS,
+    routerDefault: { model: "deepseek-flash", effort: "off" },
     shortName: (rawModel) => {
       const bare = unwrapTupleModel(rawModel);
       const withoutProvider = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;

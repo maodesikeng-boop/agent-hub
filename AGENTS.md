@@ -53,6 +53,7 @@
 - 消息渲染：`react-markdown`、`remark-gfm`、`remark-breaks`、`remark-cjk-friendly`、`remark-cjk-friendly-gfm-strikethrough`（`components/Markdown.tsx`）。
 - 代码高亮：`shiki`（`highlight.ts`）。
 - 图表：`mermaid`、`vega`、`vega-lite`、`vega-embed`、`vega-interpreter`（`charts/`）；`dompurify` 清洗 mermaid 输出（`charts/mermaid-theme.ts`）。
+- 拓扑布局：`@dagrejs/dagre`：任务流图自动分层布局（`task-graph-layout.ts`）。
 
 **UI 组件（`src/web/ui/`）**
 - 底层是 Radix（`@radix-ui/react-*`），样式照 shadcn/ui 的写法，但**仓库里没有 `components.json`，也没有 `@/` 别名**，所以 `shadcn add` 不能直接用（会要求先建 `components.json`）。

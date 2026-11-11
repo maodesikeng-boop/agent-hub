@@ -33,6 +33,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: ["low", "medium", "high", "xhigh", "max"],
+    routerDefault: { model: "haiku", effort: "low" },
     flags: { model: "--model", effort: "--effort" },
     // claude-sonnet-5-5、claude-opus-4-1-20250805、claude-sonnet-5-5[1m]、claude-3-5-sonnet-latest → Sonnet 5.5、Opus 4.1、Sonnet 5.5 1M、Sonnet 3.5
     shortName: (model) => {

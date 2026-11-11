@@ -70,6 +70,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "claude-opus-5-5",
     efforts: EFFORTS,
+    routerDefault: { model: "gemini-3.8-flash", effort: "medium" },
     shortName: shortCursorModelName,
   },
   composer: {
