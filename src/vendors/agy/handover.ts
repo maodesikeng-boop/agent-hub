@@ -23,6 +23,7 @@ import {
 import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
+import { existingAgyPromptRules } from "./rules.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
 /** agy 的数据目录（对话库、brain、摘要库都在里面）；和 driver/transcript.ts 找对话库用的是同一个位置。 */
@@ -152,10 +153,15 @@ function usageOf(raw: unknown): TokenUsage {
   return { ...u, context: u.input + u.cacheRead + u.cacheWrite };
 }
 
-/** 复制那份的启动参数：续跑新编号；只读模式（不开写文件、跑命令的权限）；模型、思考程度、附加目录照原会话。 */
+/**
+ * 复制那份的启动参数：续跑新编号；只读模式（不开写文件、跑命令的权限）；模型、思考程度、附加目录照原会话。
+ * 产品提示词的规则目录也照原会话 --add-dir（rules.ts，用原会话起进程时写好的那份）：提示词在 agy 的系统提示词里，不在复制过来的对话记录里。
+ */
 function buildForkArgs(src: ForkSource, forkId: string): string[] {
   const args = [...AGY_STREAM_ARGS, "--conversation", forkId, ...AGY_PLAN_PERMISSION_ARGS, ...agentLaunchArgs({ vendor: "agy", model: src.model, effort: src.effort })];
   for (const dir of src.addDirs) args.push("--add-dir", dir);
+  const promptRulesDir = src.launch.promptFile.trim() === "" ? null : existingAgyPromptRules(src.launch.promptFile);
+  if (promptRulesDir) args.push("--add-dir", promptRulesDir);
   args.push(...AGY_PRINT_ARGS);
   return args;
 }

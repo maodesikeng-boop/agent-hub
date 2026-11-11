@@ -1,6 +1,7 @@
 import { MOBILE_SHELL_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { MobileShell } from "./mobile/MobileShell.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
+import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -89,6 +90,8 @@ export function App() {
     compact,
     created,
     creating,
+    desktopSettingsOpen,
+    desktopSettingsSection,
     deviceSettings,
     drafts,
     focus,
@@ -98,11 +101,14 @@ export function App() {
     link,
     narrow,
     newPmDevices,
+    onSettingsOpenChange,
     openAsk,
     openDeviceConversation,
     openDeviceWorker,
     openNewPm,
     openProfile,
+    openSettings,
+    openSettingsSection,
     openWorker,
     openWorkerConversation,
     profile,
@@ -120,6 +126,7 @@ export function App() {
     select,
     send,
     setCreating,
+    settingsBack,
     sidebarActiveRef,
     sidebarRouter,
     staging,
@@ -175,118 +182,135 @@ export function App() {
       quota={quotaUsage(state)}
       quotaFetchable={quotaFetchable}
       layout={mobile ? "page" : narrow ? "rail" : "wide"}
+      settingsOpen={desktopSettingsOpen}
+      {...(desktopSettingsSection !== undefined ? { defaultSettingsSection: desktopSettingsSection } : {})}
+      onSettingsOpenChange={onSettingsOpenChange}
+      onOpenSettings={openSettings}
       onSelect={select}
       onNewPm={openNewPm}
     />
   );
-  const tintKey = routerActive ? null : (active?.avatarKey ?? null);
+  const settingsRoute = mobile && route?.view === "settings" ? route : null;
+  const tintKey = routerActive || settingsRoute !== null ? null : (active?.avatarKey ?? null);
   const chat = (
     <AccentScope colorKey={tintKey}>
-      <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
-        {routerActive ? (
-          <RouterWorkbench
-            leading={leading}
-            notices={notices}
-            view={routerView}
-            devices={fleet.devices}
-            selfId={fleet.selfId}
-            draft={drafts.of(ROUTER_DRAFT_KEY)}
-            staging={staging.of(ROUTER_DRAFT_KEY)}
-            clientForDevice={clientForDevice}
-            onOpenConversation={openDeviceConversation}
-            onOpenWorker={openDeviceWorker}
-          />
-        ) : deviceWaiting ? (
-          <>
-            <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
-            {deviceWaiting}
-          </>
-        ) : profile ? (
-          <PmProfile
-            key={keyOf(profile.id)}
-            pm={profile}
-            project={profileEntry?.project ?? null}
-            folders={profileEntry?.folders ?? []}
-            schedules={state.schedules.filter((x) => x.pmId === profile.id)}
-            rev={state.personaRev[profile.id] ?? 0}
-            renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-            onBack={mobile ? back : () => profileEntry && select({ device: current.key, id: profileEntry.id })}
-          />
-        ) : openWorker !== null ? (
-          <WorkerConversation
-            mobile={mobile}
-            leading={leading}
-            key={keyOf(openWorker)}
-            title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
-            readonly={workerLine?.readonly ?? false}
-            phase={workerPhaseOf(state, openWorker)}
-            pm={{ name: workerPmEntry?.name ?? "Project manager", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
-            meta={railWorkers.find((w) => w.conversationId === openWorker)}
-            view={workerView}
-            pending={pendingOf(state, openWorker)}
-            session={sessionOf(state, openWorker)}
-            older={state.older[openWorker]}
-            draft={drafts.of(keyOf(openWorker))}
-            staging={staging.of(keyOf(openWorker))}
-            toolbar={toolbar}
-            top={top}
-            notices={notices}
-            onBack={() => workerPmEntry && select({ device: current.key, id: workerPmEntry.id })}
-            onSend={send}
-            onRetry={hub.retrySend}
-            onStop={hub.stop}
-            onRewind={hub.rewind}
-            onLoadOlder={handleLoadOlder}
-            actions={actions}
-            link={link}
-          />
-        ) : active && view ? (
-          <Conversation
-            mobile={mobile}
-            leading={leading}
-            key={keyOf(active.id)}
-            entry={active}
-            view={view}
-            pending={pendingOf(state, active.id)}
-            session={visibleSessionOf(state, active.id)}
-            older={state.older[active.id]}
-            draft={drafts.of(keyOf(active.id))}
-            staging={staging.of(keyOf(active.id))}
-            toolbar={toolbar}
-            top={top}
-            notices={notices}
-            onSend={send}
-            onRetry={hub.retrySend}
-            onStop={hub.stop}
-            onRewind={hub.rewind}
-            onLoadOlder={handleLoadOlder}
-            actions={actions}
-            focus={focus}
-            onFocusDone={clearFocus}
-            onOpenProfile={openProfile}
-            link={link}
-          />
-        ) : (
-          <>
-            {notices}
-            <div className="flex flex-1 items-center justify-center text-muted-foreground">No conversations yet</div>
-          </>
-        )}
-      </main>
-      {!mobile && !compact && rail}
-      {!routerActive && mobile && (
-        <PiecesDrawer
-          open={drawerOpen}
-          onOpenChange={setDrawerOpen}
-          asks={railAsks}
-          workers={railWorkers}
-          activeGraphs={railGraphs}
-          projectId={railProjectId}
-          avatarKey={avatarKey}
-          openWorkerId={openWorker}
-          onOpenAsk={openAsk}
-          onOpenWorker={openWorkerConversation}
+      {settingsRoute !== null ? (
+        <MobileSettings
+          section={settingsRoute.section}
+          notify={reminders.notify}
+          devices={deviceSettings}
+          onOpen={openSettingsSection}
+          onBack={settingsBack}
         />
+      ) : (
+        <>
+          <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
+            {routerActive ? (
+              <RouterWorkbench
+                leading={leading}
+                notices={notices}
+                view={routerView}
+                devices={fleet.devices}
+                selfId={fleet.selfId}
+                draft={drafts.of(ROUTER_DRAFT_KEY)}
+                staging={staging.of(ROUTER_DRAFT_KEY)}
+                clientForDevice={clientForDevice}
+                onOpenConversation={openDeviceConversation}
+                onOpenWorker={openDeviceWorker}
+              />
+            ) : deviceWaiting ? (
+              <>
+                <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
+                {deviceWaiting}
+              </>
+            ) : profile ? (
+              <PmProfile
+                key={keyOf(profile.id)}
+                pm={profile}
+                project={profileEntry?.project ?? null}
+                folders={profileEntry?.folders ?? []}
+                schedules={state.schedules.filter((x) => x.pmId === profile.id)}
+                rev={state.personaRev[profile.id] ?? 0}
+                renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
+                onBack={mobile ? back : () => profileEntry && select({ device: current.key, id: profileEntry.id })}
+              />
+            ) : openWorker !== null ? (
+              <WorkerConversation
+                mobile={mobile}
+                leading={leading}
+                key={keyOf(openWorker)}
+                title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
+                readonly={workerLine?.readonly ?? false}
+                phase={workerPhaseOf(state, openWorker)}
+                pm={{ name: workerPmEntry?.name ?? "Project manager", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
+                meta={railWorkers.find((w) => w.conversationId === openWorker)}
+                view={workerView}
+                pending={pendingOf(state, openWorker)}
+                session={sessionOf(state, openWorker)}
+                older={state.older[openWorker]}
+                draft={drafts.of(keyOf(openWorker))}
+                staging={staging.of(keyOf(openWorker))}
+                toolbar={toolbar}
+                top={top}
+                notices={notices}
+                onBack={() => workerPmEntry && select({ device: current.key, id: workerPmEntry.id })}
+                onSend={send}
+                onRetry={hub.retrySend}
+                onStop={hub.stop}
+                onRewind={hub.rewind}
+                onLoadOlder={handleLoadOlder}
+                actions={actions}
+                link={link}
+              />
+            ) : active && view ? (
+              <Conversation
+                mobile={mobile}
+                leading={leading}
+                key={keyOf(active.id)}
+                entry={active}
+                view={view}
+                pending={pendingOf(state, active.id)}
+                session={visibleSessionOf(state, active.id)}
+                older={state.older[active.id]}
+                draft={drafts.of(keyOf(active.id))}
+                staging={staging.of(keyOf(active.id))}
+                toolbar={toolbar}
+                top={top}
+                notices={notices}
+                onSend={send}
+                onRetry={hub.retrySend}
+                onStop={hub.stop}
+                onRewind={hub.rewind}
+                onLoadOlder={handleLoadOlder}
+                actions={actions}
+                focus={focus}
+                onFocusDone={clearFocus}
+                onOpenProfile={openProfile}
+                link={link}
+              />
+            ) : (
+              <>
+                {notices}
+                <div className="flex flex-1 items-center justify-center text-muted-foreground">No conversations yet</div>
+              </>
+            )}
+          </main>
+          {!mobile && !compact && rail}
+          {!routerActive && mobile && (
+            <PiecesDrawer
+              open={drawerOpen}
+              onOpenChange={setDrawerOpen}
+              asks={railAsks}
+              workers={railWorkers}
+              activeGraphs={railGraphs}
+              projectId={railProjectId}
+              avatarKey={avatarKey}
+              openWorkerId={openWorker}
+              onOpenAsk={openAsk}
+              onOpenWorker={openWorkerConversation}
+            />
+          )}
+        </>
       )}
     </AccentScope>
   );

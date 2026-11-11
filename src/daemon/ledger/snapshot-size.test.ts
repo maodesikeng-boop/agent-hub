@@ -4,7 +4,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SNAPSHOT_MONTH_MAX_BYTES, SNAPSHOT_RECENT_MESSAGES } from "../../shared/limits.ts";
+import {
+  ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
+  ROUTER_COMMAND_MAX_CHARS,
+  ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
+  ROUTER_CONTEXT_MAX_CHARS,
+  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  ROUTER_REPLY_MAX_CHARS,
+  ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
+  ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+  ROUTER_REPORT_LINKS_MAX,
+  ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+  SNAPSHOT_MONTH_MAX_BYTES,
+  SNAPSHOT_RECENT_MESSAGES,
+} from "../../shared/limits.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createLedger } from "./index.ts";
@@ -17,6 +30,8 @@ const COMPLETED_GRAPHS = 100;
 const ACTIVE_GRAPHS = 5;
 const ARCHIVED_ROUTER_ITEMS = 1_500;
 const ACTIVE_ROUTER_ITEMS = 15;
+const FULL_BRIEFINGS = 500;
+const BENCH_ROUNDS = 7;
 
 let root: string;
 let db: Db;
@@ -34,8 +49,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** 一个项目经理派过 300 个 Worker（都收工了），每个 Worker 对话 95 条、汇报 3 行，项目经理对话 1000 条：约 3 万条。 */
-function seedMonth(): { pmConversation: number } {
+/**
+ * 一个项目经理派过 300 个 Worker（都收工了），每个 Worker 对话 95 条、汇报 3 行，项目经理对话 1000 条：约 3 万条。
+ * full：总助按上限写满（docs/router-workbench-v2-design.md 第 5.5 节）——最近 10 条指令 4,000 字原话 + 6,000 字回复，
+ * 另加 500 条带满 4 个链接的满长简报（最新 60 条未读）和 15 张待拍板项。
+ */
+function seedMonth(options: { full?: boolean } = {}): { pmConversation: number } {
   const { pm, conversation } = ledger.createPm({ name: "小林", mode: "manage_only", persona: "" });
   const longText = "汇报全文，".repeat(200);
   db.exec("BEGIN");
@@ -137,12 +156,39 @@ function seedMonth(): { pmConversation: number } {
       at++,
     );
   }
+  if (options.full) {
+    const fullLinks = (r: number) =>
+      JSON.stringify(
+        Array.from({ length: ROUTER_REPORT_LINKS_MAX }, (_, k) => ({
+          label: `${r}-${k}`.padEnd(ROUTER_REPORT_LINK_LABEL_MAX_CHARS, "链"),
+          target: `https://example.com/${r}/${k}/`.padEnd(ROUTER_REPORT_LINK_TARGET_MAX_CHARS, "a"),
+        })),
+      );
+    for (let r = 1; r <= ACTIVE_ROUTER_ITEMS; r++) {
+      db.run(
+        `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, question, context, options_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'decision', 'pending', ?, ?, '["方案 A","方案 B"]', ?, ?)`,
+        pm.id, projectId, conversation.id, `待拍板问题 #${r}`, "背景".repeat(100), at, at++,
+      );
+    }
+    for (let r = 1; r <= FULL_BRIEFINGS; r++) {
+      db.run(
+        `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, links_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'report', ?, ?, ?, ?, ?)`,
+        pm.id, projectId, conversation.id, r > FULL_BRIEFINGS - 60 ? "unread" : "archived",
+        `${r}`.padEnd(ROUTER_CONTEXT_MAX_CHARS, "报"), fullLinks(r), at, at++,
+      );
+    }
+  }
   for (let c = 1; c <= 500; c++) {
+    const full = options.full === true && c > 500 - ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX;
     db.run(
-      `INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at)
-       VALUES (?, ?, 'claude', 'dispatched', ?, ?)`,
+      `INSERT INTO router_commands (client_id, input_text, vendor, status, plan_json, created_at, updated_at)
+       VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
       `cmd-${c}`,
-      `历史跨项目指令 #${c}`,
+      full ? "问".repeat(ROUTER_COMMAND_MAX_CHARS) : `历史跨项目指令 #${c}`,
+      full ? "answered" : "dispatched",
+      full ? JSON.stringify({ intent: "answer", reply: "答".repeat(ROUTER_REPLY_MAX_CHARS), actions: [], track: "B" }) : null,
       at,
       at++,
     );
@@ -169,11 +215,18 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(plan).toContain("USING INDEX messages_worker_lines");
     const routerPlan = db
       .all<{ detail: string }>(
-        "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE status IN ('pending', 'unread') ORDER BY created_at DESC, id DESC LIMIT 50",
+        "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE status IN ('pending', 'unread') AND status = 'pending' ORDER BY created_at DESC, id DESC LIMIT 50",
       )
       .map((r) => r.detail)
       .join(" | ");
     expect(routerPlan).toContain("router_items_active");
+    const briefingsPlan = db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE kind = 'report' ORDER BY created_at DESC, id DESC LIMIT 30",
+      )
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(briefingsPlan).toContain("router_items_cursor");
     const graphPlan = db
       .all<{ detail: string }>(
         "EXPLAIN QUERY PLAN SELECT * FROM task_graphs WHERE project_id = 1 AND status = 'active' ORDER BY updated_at DESC",
@@ -189,11 +242,43 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(workers.every((c) => c.messages.length === 0 && c.hasMore && c.workerLine?.line.event === "ended" && c.workerLine.endedAt !== null)).toBe(true);
     expect(snap.conversations.find((c) => c.conversation.id === pmConversation)!.messages).toHaveLength(SNAPSHOT_RECENT_MESSAGES);
     expect(snap.activeTaskGraphs).toHaveLength(ACTIVE_GRAPHS);
-    expect(snap.router.items).toHaveLength(ACTIVE_ROUTER_ITEMS);
+    // 没有待拍板项；简报不分已读未读取最近 30 条（15 条未读 + 15 条最近读过的）
+    expect(snap.router.items).toHaveLength(ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX);
+    expect(snap.router.items.filter((x) => x.kind === "report" && x.status === "unread")).toHaveLength(ACTIVE_ROUTER_ITEMS);
     expect(snap.router.commands).toHaveLength(10);
     const bytes = Buffer.byteLength(JSON.stringify(snap));
     expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
     // CI 的机器慢，给足余量；本机约几十毫秒
     expect(ms).toBeLessThan(1_000);
+  });
+
+  it("总助写满上限（满长回复指令 + 满链接简报 + 15 张待拍板项）：整份仍不超过上限，指令和简报各守字节上限", () => {
+    seedMonth({ full: true });
+    // 7 轮 ledger.snapshot() 的中位数与范围（PR 正文的改前改后对比用），先量再断言
+    const times: number[] = [];
+    for (let i = 0; i < BENCH_ROUNDS; i++) {
+      const t = performance.now();
+      ledger.snapshot();
+      times.push(performance.now() - t);
+    }
+    times.sort((a, b) => a - b);
+    const snap = ledger.snapshot();
+    const bytes = Buffer.byteLength(JSON.stringify(snap));
+    const routerBytes = Buffer.byteLength(JSON.stringify(snap.router));
+    const commandBytes = snap.router.commands.reduce((n, c) => n + Buffer.byteLength(JSON.stringify(c)), 0);
+    const briefings = snap.router.items.filter((x) => x.kind === "report");
+    const briefingBytes = briefings.reduce((n, b) => n + Buffer.byteLength(JSON.stringify(b)), 0);
+    console.log(
+      `[snapshot-bench] bytes=${bytes} router=${routerBytes} commands=${snap.router.commands.length}/${commandBytes}B ` +
+        `briefings=${briefings.length}/${briefingBytes}B median=${times[3]!.toFixed(2)}ms range=${times[0]!.toFixed(2)}-${times.at(-1)!.toFixed(2)}ms`,
+    );
+    // 待拍板项在简报前面插入，简报再多也挤不掉它们
+    expect(snap.router.items.filter((x) => x.kind === "decision")).toHaveLength(ACTIVE_ROUTER_ITEMS);
+    expect(commandBytes).toBeLessThanOrEqual(ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES);
+    expect(briefingBytes).toBeLessThanOrEqual(ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES);
+    expect(snap.router.commands.length).toBeGreaterThanOrEqual(1);
+    expect(briefings.length).toBeGreaterThanOrEqual(1);
+    expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
+    expect(times[3]!).toBeLessThan(1_000);
   });
 });

@@ -128,6 +128,9 @@ export default defineVendor({
     // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
     backgroundWake: false,
     readonly: "os_sandbox",
+    // agy 没有系统提示词参数，但会把 --add-dir 目录里 .agents/rules/*.md（trigger: always_on）放进系统提示词的 <user_rules> 区，
+    // 压缩后还在（2026-11-11 agy 1.5.5 实测）：驱动层把 prompt.md 切块写进启动目录的规则目录再 --add-dir（rules.ts）
+    systemPrompt: "resident",
     // 包进 OS 沙箱时关掉自带的终端沙箱（不能嵌套）
     ownSandboxOffArgs: ["--settings", JSON.stringify({ enableTerminalSandbox: false })],
   },

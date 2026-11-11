@@ -43,5 +43,6 @@ export default defineVendor({
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",
+    systemPrompt: "first_message",
   },
 });

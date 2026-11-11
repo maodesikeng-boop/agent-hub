@@ -1,7 +1,7 @@
 // DeepSeek Harness（`dsh --profile acp`）会话驱动：基于通用 ACP 驱动底座（src/vendors/_common/acp/）的薄封装。
 // 核实细节与出处见 docs/vendors/deepseek.md。
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentSessionRow, Driver, LaunchFiles } from "../../shared/index.ts";
 import { DEEPSEEK_PROFILE_INIT_TIMEOUT_MS } from "../../shared/limits.ts";
@@ -74,6 +74,37 @@ export const DEEPSEEK_WRITE_TOOL_NAMES: readonly string[] = [
   "terminal_send",
   "pwsh",
 ];
+
+/**
+ * dsh-acp-app 给 system-prompt 行的默认 personaPrefix（`dsh --profile acp --dump-config`，@deepseek-ai/dsh@0.2.2-rc.1，
+ * 版本钉死见 paths.ts 的 installCommand）。--patch 改一行时整个 config 被替换（dsh-app-boot 的 applyPatches 不合并），
+ * 只写 personaSuffix 会把它丢掉，所以照抄一份。升级 dsh 时用 --dump-config 核对。
+ */
+export const DEEPSEEK_DEFAULT_PERSONA_PREFIX = "You are a coding agent powered by the {{model}} model.";
+
+/**
+ * dsh 的提示词模板没有转义写法：personaSuffix 里每个 `{{…}}` 都当变量查，不认识就整个启动失败（dsh-system-prompt 的 interpolate）。
+ * 产品提示词里的 `{{`（代码示例、性格设定里用户写的）在两个 `{` 之间插一个零宽空格，dsh 不再当变量。注意：这会改变代码示例的字节，不是无损转义（见 docs/system-prompt-channels.md）。
+ */
+export function escapeDshPromptTemplate(text: string): string {
+  return text.replace(/\{(?=\{)/g, "{\u200b");
+}
+
+/**
+ * 产品提示词的常驻通道（spec 的 capabilities.systemPrompt 是 "resident"，docs/system-prompt-channels.md 第 3 节）：
+ * system-prompt 行的 personaSuffix 进 dsh 的 system 消息（会话第 0 个节点），dsh 压缩只换掉历史，不动它。
+ * 提示词空白返回 null（不加这个补丁，保持 dsh 默认）。
+ */
+export function buildDeepSeekSystemPromptPatch(prompt: string): readonly DeepSeekCordisPatchEntry[] | null {
+  const text = prompt.trim();
+  if (text === "") return null;
+  return [
+    {
+      id: "system-prompt",
+      config: { personaPrefix: DEEPSEEK_DEFAULT_PERSONA_PREFIX, personaSuffix: escapeDshPromptTemplate(text) },
+    },
+  ];
+}
 
 /** 生成供 daemon.ts launchFiles 写入 settings.json 的 Cordis patch JSON。 */
 export function buildDeepSeekPatchSettings(): string {
@@ -238,6 +269,14 @@ function launchDirOf(files: LaunchFiles): string {
   return dirname(files.settingsFile ?? files.promptFile);
 }
 
+function readPromptFile(promptFile: string): string {
+  try {
+    return readFileSync(promptFile, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
   const launchDir = launchDirOf(ctx.files);
   let sandboxPatchPath = ctx.files.settingsFile;
@@ -246,6 +285,14 @@ function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
     writeFileSync(sandboxPatchPath, buildDeepSeekPatchSettings(), "utf8");
   }
   const args = ["--profile", DEEPSEEK_PROFILE, "--patch", sandboxPatchPath];
+  const promptPatch = buildDeepSeekSystemPromptPatch(readPromptFile(ctx.files.promptFile));
+  const promptPatchPath = join(launchDir, "dsh-system-prompt.patch.json");
+  if (promptPatch !== null) {
+    writeFileSync(promptPatchPath, `${JSON.stringify(promptPatch, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    args.push("--patch", promptPatchPath);
+  } else {
+    rmSync(promptPatchPath, { force: true });
+  }
   const rawModel = ctx.row.model?.trim() ?? "";
   if (rawModel !== "") {
     const { provider, model } = parseDeepSeekModelSpec(rawModel);
@@ -333,9 +380,10 @@ export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
     continuation: {
       mode: "resume",
       fallbackToNewOnFailure: true,
+      // 提示词（含性格设定）在每次起进程的 --patch 里，恢复会话也是新进程读的新补丁
+      rebakesPersonaOnResume: true,
     },
     session: {
-      systemPromptInjection: "first_turn_new_session",
       mcpServers: (ctx) => (ctx.files.readonly ? [] : loadDeepSeekAcpMcpServers(resolveDeepSeekHome(undefined, env))),
     },
     configOptions: {

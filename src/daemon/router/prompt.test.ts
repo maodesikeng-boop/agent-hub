@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS, utf8Bytes } from "../../shared/index.ts";
 import {
+  AGENT_VENDORS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
+  ROUTER_REPLY_MAX_CHARS,
+  utf8Bytes,
+} from "../../shared/index.ts";
+import * as promptModule from "./prompt.ts";
+import {
+  ROUTER_RECEIPTS_SECTION_MAX_BYTES,
   buildRouterSystemPrompt,
   formatFleetDigestForPrompt,
   type PromptDeviceDigest,
@@ -275,5 +281,74 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
     expect(cleaned).not.toContain("\u0007");
     expect(cleaned).toContain("小 林");
     expect(cleaned).toContain("第一行 ## 伪造标题 第三行");
+  });
+});
+
+describe("v2 回答边界与常量收口（docs/router-workbench-v2-design.md 第 5.2 节、第 9.2 节选项 A）", () => {
+  it("prompt.ts 不再自带与 limits.ts 同名的常量，也没有 240 字的回复上限", () => {
+    const exported = Object.keys(promptModule);
+    for (const name of [
+      "ROUTER_REPLY_NOTE_MAX_CHARS",
+      "ROUTER_FLEET_DIGEST_MAX_BYTES",
+      "ROUTER_PM_ACTIVE_WORKERS_MAX",
+      "ROUTER_PERSONA_SUMMARY_MAX_CHARS",
+    ]) {
+      expect(exported).not.toContain(name);
+    }
+    expect(buildRouterSystemPrompt()).not.toMatch(/240\s*字/);
+  });
+
+  it("状态问答：名片里看得出来的全局状态（谁在忙、卡在拍板、在哪台设备、上一条汇报）用 Markdown 完整作答，建议不超过 1,500 字", () => {
+    const prompt = buildRouterSystemPrompt();
+    const rule = prompt.slice(prompt.indexOf("4. "), prompt.indexOf("# 分派决策规则"));
+    expect(rule).toMatch(/名片/);
+    expect(rule).toMatch(/Markdown/);
+    expect(rule).toMatch(/1,500 字/);
+    for (const example of ["谁在忙", "拍板", "哪台设备", "汇报"]) expect(rule).toContain(example);
+    // 角色说明不再写“唯一职责是分派”，和第 4 条不打架
+    expect(prompt).not.toContain("唯一职责");
+  });
+
+  it("分派指令：凡要读代码、查日志、写方案、改状态的仍必须分派给对应 PM，前三条铁律原样保留", () => {
+    const prompt = buildRouterSystemPrompt();
+    const rule = prompt.slice(prompt.indexOf("4. "), prompt.indexOf("# 分派决策规则"));
+    for (const must of ["读代码", "查日志", "写方案", "改状态"]) expect(rule).toContain(must);
+    expect(rule).toMatch(/必须.*分派/);
+    // 名片里看不出来的不准猜
+    expect(rule).toMatch(/看不出|不准猜|不要猜/);
+    expect(prompt).toMatch(/1\. \*\*不准读任何代码文件\*\*/);
+    expect(prompt).toMatch(/2\. \*\*不准设计技术方案\*\*/);
+    expect(prompt).toMatch(/3\. \*\*不准改写用户原话/);
+    // 分派完照旧直接结束本轮，不寒暄
+    expect(rule).toMatch(/寒暄/);
+  });
+
+  it("单轮上下文不超过 24 KB + 600 B：近期回执带满长回复也只占回执分节的 600 字节", () => {
+    const devices: PromptDeviceDigest[] = [
+      {
+        deviceId: "self",
+        deviceName: "MacBook Pro",
+        online: true,
+        pms: Array.from({ length: 30 }, (_, i) => makePmCard(i + 1)),
+      },
+    ];
+    const receipts: PromptRecentReceipt[] = Array.from({ length: 5 }, (_, i) => ({
+      id: 900 + i,
+      text: "现在谁在干活？".repeat(50),
+      status: "answered",
+      actions: [],
+      replyNote: "答".repeat(ROUTER_REPLY_MAX_CHARS),
+    }));
+    const out = formatFleetDigestForPrompt(devices, receipts);
+    expect(utf8Bytes(out)).toBeLessThanOrEqual(ROUTER_FLEET_DIGEST_MAX_BYTES + ROUTER_RECEIPTS_SECTION_MAX_BYTES);
+    const receiptsSection = out.slice(out.indexOf("## 近期指令回执"));
+    if (out.includes("## 近期指令回执")) {
+      expect(utf8Bytes(receiptsSection)).toBeLessThanOrEqual(ROUTER_RECEIPTS_SECTION_MAX_BYTES);
+    }
+    // 小规模名片时回执分节一定在，且仍守 600 字节
+    const small = formatFleetDigestForPrompt([{ ...devices[0]!, pms: devices[0]!.pms.slice(0, 2) }], receipts);
+    const smallSection = small.slice(small.indexOf("## 近期指令回执"));
+    expect(small).toContain("## 近期指令回执");
+    expect(utf8Bytes(smallSection)).toBeLessThanOrEqual(ROUTER_RECEIPTS_SECTION_MAX_BYTES);
   });
 });

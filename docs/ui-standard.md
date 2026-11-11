@@ -110,6 +110,10 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 补充说明 / 跳过此步 / 取消任务图 / 已完成卷 / 待解锁卷 / 加载更多 / 放大查看 / 同层折叠并行数 | Add note / Skip step / Cancel graph / N done / N next / Load more / Zoom / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
 | MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
+| 在其他设备上登录 | Sign in on another device |
+| 创建登录链接 / 复制链接 / 复制邀请码 / 复制网址 / 分享… | Create sign-in link / Copy link / Copy code / Copy URL / Share… |
+| 移除电脑… / 退出此浏览器 / 退出所有浏览器… | Remove computer… / Sign out this browser / Sign out all browsers… |
+| 待批准 / 需留意 | Pending / Attention |
 
 ## 4. 颜色
 
@@ -159,6 +163,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-60`）。
 
+- **危险主操作按钮**：`Button variant="destructive"`（`bg-danger text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground`），专用于确认弹窗与底部确认抽屉中的不可逆危险主操作（移除设备、退出会话、退出所有浏览器），一屏最多一个。
+- **触屏输入防纠错与全宽排布**：URL、域名、邀请码、连接码等非自然语言输入框一律声明 `autoCapitalize="none" autoCorrect="off" spellCheck={false}`（网址类再加 `inputMode="url"`），防止 iOS 软键盘自动首字母大写与拼写替换；手机设置子页与底部抽屉里的输入框和主操作按钮一律全宽 `h-11 w-full`，不写死 `w-60`。
+
 **工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
 
 ## 7. 聚焦态
@@ -203,7 +210,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 输入框是白底带边框（`Input` 自带）。
 - 下拉：改了马上存的设置行用 `Select variant="plain"`：没有边框和底色，字是前景色，右边一个上下箭头（`ChevronsUpDown`，灰），悬停、聚焦 `bg-sidebar-hover`，像 macOS 系统设置的弹出菜单。表单里和输入框并排的（定时任务的“每天 / 每隔”）用默认的带边框样式，和输入框一致。
 - 分段选择（`ui/segmented.tsx`，Radix RadioGroup）：只有几个短选项、不用说明的多选一（界面大小），放在行右边。白底 1px `border-border` 的胶囊（`h-9 rounded-full p-0.5`），每段 `px-3`、13px、500、灰字，选中的那段 `bg-sidebar-active` + 前景色字，不用强调色；方向键切换。
-- 多选一：一行一个选项，名字 + 一句说明；右边一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点，悬停 `bg-sidebar-hover`。
+- **多选一勾选列表（`ChoiceRows`，`ModeRows` 为其薄包装）**：有说明的行用 `py-3`，无说明的短选项行（手机端 `Interface scale`）用 `min-h-12 px-4 py-2.5`；右边统一一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点、点了即存，悬停与按下 `bg-sidebar-hover`。
+- **钻取导航行（`SettingsNavRow`）**：用于手机一级设置主页与组内动作入口；位于 `GROUP_BOX` 内，整行 `<button type="button">`，`min-h-12 px-4 py-3`（标准档 48px、默认大档 52.5px），左侧可选 16px 线条图标 + `gap-3` + 15px 标题，右侧单一状态摘要（`text-minor text-muted-foreground tabular-nums`，严禁用 `·`、`|`、`/` 拼接）+ 16px `ChevronRight`，触屏按下态 `active:bg-sidebar-hover`；独立危险入口行（`Sign out all browsers…`）用 `text-danger`，不带右箭头。
 - 厂商、模型、思考程度（`AgentRows`）的选项全从模型名单拿（`useModelCatalogs`，名单的厂商名、通用思考程度、能不能自定义来自 `src/shared/vendors.ts`，模型来自厂商自己报的 `model-catalog`），页面里不写死厂商、模型名。
   - 只有一家厂商：厂商一行只显示厂商名（只读值），不放下拉。两家以上才是下拉。
   - 这台设备上的状态（`docs/vendor-availability-design.md`）：没装的不列；没登录的照列，原生 `option` 设 `disabled`（系统灰掉），文字是“厂商名 (英文状态词)”，如 `Codex (Not signed in)`、`Claude Code (Not installed)`（原生选项不能分样式，括号是唯一能用的写法）。现在选着的那家总在，哪怕没装（换了设备也不悄悄换掉），这时“创建”是灰的，不加说明文字。打开下拉不等任何请求，没登录的那几家在后台重问，回来了再更新。截图见 `docs/screenshots/vendor-availability/`。
@@ -229,7 +237,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - `rounded-2xl border border-border bg-background p-6`，遮罩 `bg-black/30`。
 - 宽度三档：默认 520px（新建项目经理）；二次确认等窄弹窗 `className="max-w-110"`；全局设置是双栏的 780px（见下面）。
-- **全局设置（`SettingsDialog`，照 Grok Bot / Claude desktop 的双栏设置页）**：`max-w-195`，高度固定 `h-[min(35rem,calc(100%-3rem))]`（切分类时弹窗不跳），弹窗自己 `p-0 gap-0`，标题“设置”只给读屏（`titleClassName="sr-only"`）。
+- **全局设置按外壳分流**（双端共用 `src/web/settings-model.ts`）：电脑外壳用双栏弹窗 `SettingsDialog`（照 Grok Bot / Claude desktop 的双栏设置页）；手机外壳不挂弹窗，走第 20 条整屏钻取路由页。`SettingsDialog` 宽 `max-w-195`，高度固定 `h-[min(35rem,calc(100%-3rem))]`（切分类时弹窗不跳），弹窗自己 `p-0 gap-0`，标题“设置”只给读屏（`titleClassName="sr-only"`）。
   - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：外观、通知、跨厂商同步）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，有就默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。跨厂商同步行点 `Scan…` 打开独立的 `Sync preview` 确认弹窗（`DialogBody` 纵向滚动展示脱敏后的 `MCP servers`、`Skills` 与只读说明的 `Cloud connectors`，每项用 `Switch` 控制并集同步或取消勾选移除，厂商标签由接口数据驱动并用间距隔开、不用 `·` 拼接，底部固定 `Cancel` 与 `Sync`）。
   - 右栏：`p-6`，自己纵向滚动；最上面是分类名（17px、600，和下面的组隔 24px），下面若干分组（第 9 条），组之间 24px。关闭按钮照常在右上角。
   - 窄屏（640px 以下）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
@@ -240,11 +248,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。
 - 不写副标题和解释性的灰字；需要的说明放在行下面的小字里。
 
-**抽屉**（手机外壳里 Pieces 用，`DrawerContent`，`src/web/ui/drawer.tsx`，底层 `vaul`，只有 bottom 方向）：
+**抽屉**（手机外壳里 Pieces、以及手机设置里的危险操作确认与短表单向导共用，`DrawerContent`，`src/web/ui/drawer.tsx`，底层 `vaul`，只有 bottom 方向）：
 
-- 遮罩 `bg-black/30`（和弹窗一样）；内容 `rounded-t-2xl border-t border-line bg-surface-chat`，最高 `max-h-[85dvh]`，里面滚，底部垫 `pb-[var(--safe-bottom)]`。
+- 遮罩 `bg-black/30`（和弹窗一样）；内容 `rounded-t-2xl border-t border-line bg-surface-chat`，最高 `max-h-[85dvh]`，里面滚，底部垫 `max(var(--safe-bottom), var(--kb-inset))`。
 - 顶上拖动条 36×4（`h-1 w-9 rounded-full bg-border`），上下各 8px，纯装饰（`aria-hidden`）。
 - 读屏标题放 `DrawerTitle`，界面不要标题时 `className="sr-only"`。进出动画用 `vaul` 自带的，不另加动画类名。
+- 手机设置里的**危险操作二次确认**（标题 + 一句后果说明 + 全宽 `h-11` `destructive` 确认按钮 + 全宽 `outline` `Cancel`）与**短表单向导**（改名、连到中心、邀请电脑、添加电脑；内部输入框全宽铺开，不写死 `w-60`）统一走底部抽屉。
 
 ## 11. 浮层（Popover）
 
@@ -485,7 +494,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 36px 返回箭头（触屏热区至少 44px）（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
 - Pieces 使用 `ui/drawer.tsx` 底部抽屉，共用 `RailGroups` 三组内容；没有 Piece 和提问时隐藏开关。新提问只亮点，不自动弹出；点行先关抽屉再导航，提问复用消息 focus。
 - 层级：列表 → 聊天 → Piece/资料。进下一层 push，`history.state = { hub: true, previous: <上一页网址> }`；同层切换（Piece 切 Piece、聊天里跳到别的聊天）replace 当前条目并保留原 state；其余 replace 不写标记。顶栏返回只在 `previous` 正好是上级时 `history.back()`，否则 replace 到上级（聊天到列表、Piece/资料到所属聊天），直达、同层切换后都不循环。抽屉里点提问等同返回所属聊天。无效路由在目标设备快照就绪后 replace 到列表；刚新建、WebSocket 还没同步到的对话不算无效。路由、设备变化或抽屉内容消失时关闭抽屉。
-- 设置、新建弹窗和软键盘适配留到后续 PR5，本轮沿用已有组件。
+- 全局设置采用整屏二级路由钻取（`src/web/mobile/settings/`）：列表 `#/` → 一级设置 `#/settings` → 二级子页 `#/settings/<section>`（`scale`、`notifications`、`vendor-sync`、`computers`、`sign-in`、`browsers`、`public-access`），返回统一走 `mobileBack`，不调 `withViewTransition`；在 `#/settings*` 下拉宽切回电脑外壳时自动打开对应分类的 `SettingsDialog` 并将网址替换回首页。
+- 手机设置页画布底色为 `bg-surface-sidebar`，内容左右边距 `px-4`（16px），组间距 `gap-6`（24px）；打开一级主页零额外 HTTP 请求，进入子页时一级主页用 `<Activity mode="hidden">` 保留滚动位置；离开 `#/settings/sign-in` 立即停止会话轮询与倒计时。
 
 ## 21. Router 工作台：待拍板托盘和时间流
 

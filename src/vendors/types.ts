@@ -90,6 +90,15 @@ interface VendorCapabilities {
   backgroundWake: boolean;
   /** 只读 Worker 怎么落实：settings=写进厂商设置文件的原生沙箱；driver=驱动层原生参数；os_sandbox=依赖外层 OS 沙箱。 */
   readonly: "settings" | "driver" | "os_sandbox";
+  /**
+   * 产品提示词（launch/<会话>/prompt.md：角色、hub 命令表、性格设定）交给 agent 的通道，决定厂商内部压缩对话后它还在不在
+   * （各家实测见 docs/system-prompt-channels.md）：
+   * - "resident"：进厂商常驻的系统提示词区（命令行参数、协议的开发者指令字段、厂商从附加目录读的规则区），压缩不会裁掉。
+   *   这家的驱动层负责把 prompt.md 放进去，公共代码不再往消息里拼；
+   * - "first_message"：厂商没有常驻入口，拼进新会话第 0 条用户消息。压缩会把它裁掉，所以驱动层收到压缩信号
+   *   （ACP 的 compaction_update，即 context.compacted）后，在下一条消息最前面再拼一次完整提示词。
+   */
+  systemPrompt: "resident" | "first_message";
   /** 未选模型时把名单里的默认模型（ModelCatalog.defaultModelId）显式传给驱动。不写 = false。 */
   explicitDefaultModel?: boolean;
   /**

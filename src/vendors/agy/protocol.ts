@@ -1,5 +1,4 @@
 // Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly.ts）、残留进程识别。
-import { existsSync, readFileSync } from "node:fs";
 import {
   agentLaunchArgs,
   commandMayWriteOutsideScope,
@@ -59,10 +58,16 @@ export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写
  * - 恢复已有会话时传 --conversation <session.vendorSessionId>，首次启动不传
  * - 权限模式：只读传 --mode plan 加 --settings（permissions 规则，连接器的规则 connectors 由驱动先问清单生成），默认传 --mode auto --dangerously-skip-permissions
  * - 模型与思考程度：agentLaunchArgs({ vendor: "agy", model, effort })
- * - 附加目录：每个 addDirs 传 --add-dir <dir>
+ * - 附加目录：每个 addDirs 传 --add-dir <dir>；产品提示词的规则目录（rules.ts 的 writeAgyPromptRules）也传 --add-dir，放最后
  * - 末尾固定传 --print ""
  */
-export function buildAgyArgs(session: AgentSessionRow, files: LaunchFiles, resume: boolean, connectors?: AgyConnectorRules): string[] {
+export function buildAgyArgs(
+  session: AgentSessionRow,
+  files: LaunchFiles,
+  resume: boolean,
+  connectors?: AgyConnectorRules,
+  promptRulesDir?: string | null,
+): string[] {
   const args: string[] = [...AGY_STREAM_ARGS];
   if (resume && session.vendorSessionId.trim() !== "") {
     args.push("--conversation", session.vendorSessionId);
@@ -74,24 +79,9 @@ export function buildAgyArgs(session: AgentSessionRow, files: LaunchFiles, resum
   }
   args.push(...agentLaunchArgs({ vendor: "agy", model: session.model, effort: session.effort }));
   for (const dir of session.addDirs) args.push("--add-dir", dir);
+  if (promptRulesDir) args.push("--add-dir", promptRulesDir);
   args.push(...AGY_PRINT_ARGS);
   return args;
-}
-
-/** 将 promptFile 内容包装成系统指令块，在新起的 agy 进程首条消息中放在 prefixes 最前面发送。 */
-export function formatSystemInstructions(prompt: string): string {
-  return `<system_instructions>\n${prompt.trim()}\n</system_instructions>`;
-}
-
-/** 读取 promptFile 并返回包装后的系统指令块；文件不存在或内容为空白时返回 null。 */
-export function readSystemInstructions(promptFile: string | undefined): string | null {
-  if (!promptFile || !existsSync(promptFile)) return null;
-  try {
-    const raw = readFileSync(promptFile, "utf8").trim();
-    return raw === "" ? null : formatSystemInstructions(raw);
-  } catch {
-    return null;
-  }
 }
 
 function escapeLineSeparators(json: string): string {

@@ -45,14 +45,17 @@ import {
 } from "./catalog.ts";
 import deepseekDaemon from "./daemon.ts";
 import {
+  DEEPSEEK_DEFAULT_PERSONA_PREFIX,
   DEEPSEEK_DEFAULT_PROVIDER,
   DEEPSEEK_READONLY_RUNTIME_SUBDIRS,
   DEEPSEEK_SANDBOX_PATCH_ENTRIES,
   DEEPSEEK_WRITE_TOOL_NAMES,
   buildDeepSeekPatchSettings,
+  buildDeepSeekSystemPromptPatch,
   classifyDeepSeekTurnError,
   createDeepSeekDriver,
   ensureDeepSeekProfile,
+  escapeDshPromptTemplate,
   isDeepSeekSessionNotFoundError,
   matchesDeepSeekStaleProcess,
   parseDeepSeekModelSpec,
@@ -342,6 +345,8 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
     expect(deepseekSpec.capabilities).toEqual({
       backgroundWake: false,
       readonly: "os_sandbox",
+      // 提示词走 --patch 的 system-prompt.personaSuffix（system 消息，压缩不裁）
+      systemPrompt: "resident",
     });
     expect(deepseekSpec.models.flags).toBeUndefined();
     expect(agentLaunchArgs({ vendor: "deepseek", model: "deepseek-v4-pro", effort: "max" })).toEqual([]);
@@ -475,6 +480,7 @@ describe("deepseek 驱动（driver.ts + daemon.ts）：--patch 启动配置、�
     const launchDir = h.launchDirOf(row.id);
     const settingsPath = join(launchDir, "settings.json");
     const modelPatchPath = join(launchDir, "dsh-model.patch.json");
+    const promptPatchPath = join(launchDir, "dsh-system-prompt.patch.json");
     expect(existsSync(settingsPath)).toBe(true);
     expect(existsSync(modelPatchPath)).toBe(true);
 
@@ -489,7 +495,11 @@ describe("deepseek 驱动（driver.ts + daemon.ts）：--patch 启动配置、�
 
     // 3. 核对 dsh 真实启动参数顺序
     const spawnLog = h.logs().find((e) => e.event === "spawn");
-    expect(spawnLog?.argv).toEqual(["--profile", "acp", "--patch", settingsPath, "--patch", modelPatchPath]);
+    expect(spawnLog?.argv).toEqual(["--profile", "acp", "--patch", settingsPath, "--patch", promptPatchPath, "--patch", modelPatchPath]);
+    // 产品提示词进 system-prompt 行的 personaSuffix（整行 config 被替换，默认的 personaPrefix 照抄）
+    expect(JSON.parse(readFileSync(promptPatchPath, "utf8"))).toEqual([
+      { id: "system-prompt", config: { personaPrefix: DEEPSEEK_DEFAULT_PERSONA_PREFIX, personaSuffix: "请严格遵守项目经理指令。" } },
+    ]);
 
     // 4. 核对未调用 authenticate，且 session/new 未携带会导致 -32602 的 additionalDirectories
     expect(h.logs().some((e) => e.event === "authenticate")).toBe(false);
@@ -504,16 +514,15 @@ describe("deepseek 驱动（driver.ts + daemon.ts）：--patch 启动配置、�
       { configId: "reasoning_effort", value: "max" },
     ]);
 
-    // 6. 首轮注入 <system_instructions>，同进程第二轮不重复注入
+    // 6. 提示词在补丁里，消息里不再拼 <system_instructions>；也不声明 session.compaction（不用重新拼）
     await h.driver.send(row.id, { messageIds: [2 as never], source: "user", text: "继续第二轮" });
     await h.waitFor("turn.ended", () => true, 2);
     const prompts = h.logs().filter((e) => e.event === "session/prompt");
     expect(prompts).toHaveLength(2);
-    expect(prompts[0]!.blocks).toEqual([
-      "<system_instructions>\n请严格遵守项目经理指令。\n</system_instructions>",
-      "你好 dsh",
-    ]);
+    expect(prompts[0]!.blocks).toEqual(["你好 dsh"]);
     expect(prompts[1]!.blocks).toEqual(["继续第二轮"]);
+    const initLog = h.logs().find((e) => e.event === "initialize");
+    expect((initLog?.params as { clientCapabilities?: { session?: unknown } }).clientCapabilities?.session).toBeUndefined();
   });
 
   it("跨进程 session/resume 续接不重放历史；遇到 dsh-acp 的 -32602 'session is not resumable' 时自动回退 session/new", async () => {
@@ -629,7 +638,19 @@ rl.on("line", (line) => {
 
     expect(hFallback.of("session.started")[0]!.resumed).toBe(false);
     expect(hFallback.store.get(staleRow.id)!.vendorSessionId).toBe("fresh-dsh-session-99");
-    expect(hFallback.of("agent.text")[0]!.text).toContain("<system_instructions>\n回退补发的系统提示\n</system_instructions>");
+    // 提示词在 --patch 里（新进程读新补丁），回退新建也不往消息里拼
+    expect(hFallback.of("agent.text")[0]!.text).not.toContain("<system_instructions>");
+  });
+
+  it("产品提示词补丁：空白不加；{{ 插零宽空格（dsh 模板没有转义写法，未知变量会让启动失败），{{{ 每对都断开，单个 { 和 }} 不动", () => {
+    expect(buildDeepSeekSystemPromptPatch("  \n ")).toBeNull();
+    expect(escapeDshPromptTemplate("a {{name}} b")).toBe("a {\u200b{name}} b");
+    expect(escapeDshPromptTemplate("{{{x}}}")).toBe("{\u200b{\u200b{x}}}");
+    expect(escapeDshPromptTemplate("{ x } }}")).toBe("{ x } }}");
+    expect(escapeDshPromptTemplate("{{{x}}}")).not.toContain("{{");
+    expect(buildDeepSeekSystemPromptPatch("\n角色 {{persona}}\n")).toEqual([
+      { id: "system-prompt", config: { personaPrefix: DEEPSEEK_DEFAULT_PERSONA_PREFIX, personaSuffix: "角色 {\u200b{persona}}" } },
+    ]);
   });
 
   it("模型与思考程度纯函数解析：兼容二元组、provider/model、裸模型名及名单外自定义模型", () => {
@@ -777,7 +798,16 @@ rl.on("line", (line) => {
     const stateDir = join(launchDir, "dsh-readonly-state");
     const readonlyPatchPath = join(launchDir, "dsh-readonly.patch.json");
     // 内部仍传 --profile acp --patch <settings.json>（danger-full-access），再加把会话记录、KV 存储改到会话私有目录的 patch
-    expect(spawned.args).toEqual(["--profile", "acp", "--patch", join(launchDir, "settings.json"), "--patch", readonlyPatchPath]);
+    expect(spawned.args).toEqual([
+      "--profile",
+      "acp",
+      "--patch",
+      join(launchDir, "settings.json"),
+      "--patch",
+      join(launchDir, "dsh-system-prompt.patch.json"),
+      "--patch",
+      readonlyPatchPath,
+    ]);
     expect(JSON.parse(readFileSync(readonlyPatchPath, "utf8"))).toEqual([
       { id: "session-persistence-jsonl", config: { root: join(stateDir, "sessions") } },
       { id: "storage-json", config: { root: join(stateDir, "storages") } },

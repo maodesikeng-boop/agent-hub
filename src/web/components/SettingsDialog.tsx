@@ -23,10 +23,10 @@ function UiScaleRow() {
   );
 }
 
-type SectionId = "general" | "computers" | "security";
+export type SettingsDialogSection = "general" | "computers" | "security";
 
 /** 左栏的分类（照 Grok Bot 设置页）：顺序就是左栏从上到下；“电脑”只在守护进程支持联机时有。 */
-const SECTIONS: readonly { id: SectionId; label: string; icon: LucideIcon }[] = [
+const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "computers", label: "Computers", icon: Monitor },
   { id: "security", label: "Security & Access", icon: Shield },
@@ -41,14 +41,17 @@ export function SettingsDialog({
   onOpenChange,
   notify,
   devices = null,
+  defaultSection,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   notify: NotifySettings;
   /** 守护进程支持联机时才有“电脑”分类和“公网入口”。 */
   devices?: DeviceSettings | null;
+  /** 从手机设置子页拉宽切回桌面外壳时，落到对应的桌面分类。 */
+  defaultSection?: SettingsDialogSection;
 }) {
-  const content: Record<SectionId, ReactNode> = {
+  const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
       <>
         <SettingsGroup title="Appearance">
@@ -80,10 +83,16 @@ export function SettingsDialog({
     ),
   };
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
+  const initialSection: SettingsDialogSection =
+    defaultSection !== undefined && (defaultSection !== "computers" || devices !== null)
+      ? defaultSection
+      : devices !== null
+        ? "computers"
+        : "general";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Settings" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
-        <Tabs defaultValue={devices !== null ? "computers" : "general"} orientation="vertical" className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <Tabs defaultValue={initialSection} orientation="vertical" className="flex min-h-0 flex-1 flex-col sm:flex-row">
           {/* 窄屏：一排横着的分类（只有字，放得下三个），右边让出关闭按钮的位置 */}
           <TabsList
             aria-label="Settings categories"

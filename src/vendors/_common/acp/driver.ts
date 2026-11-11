@@ -13,6 +13,7 @@ import {
   client,
   methods,
   type AnyMessage,
+  type ClientCapabilities,
   type ClientConnection,
   type InitializeResponse,
   type McpServer,
@@ -135,6 +136,11 @@ interface AcpProc extends BaseProc<StartupOutcome> {
   configOptions: SessionConfigOption[];
   swallowingReplay: boolean;
   pendingSystemPromptBlock: string | null;
+  /**
+   * 这个进程的产品提示词是拼进消息的（不是原生 systemPrompt 字段、也不是 "never"）时的 prompt.md 路径：收到压缩信号后照它重新拼
+   * （#reinjectAfterCompaction）。走常驻通道的是 null。
+   */
+  reinjectPromptFile: string | null;
   baseUsage: TokenUsage;
   latestContextUsed: number | null;
   turnSeq: number;
@@ -152,6 +158,11 @@ interface AcpSessionState extends BaseSessionState<AcpProc, AcpBatch> {
   hasConversation: boolean;
   cancelSent: boolean;
   cachedCommands: ComposerCommand[] | null;
+  /**
+   * 收到压缩信号、下一条消息前要重新拼产品提示词（发的时候才读 prompt.md，拿最新的性格设定）。记在会话上不记在进程上：
+   * 压缩完进程闲置关了，下一条消息起新进程恢复会话（恢复不拼首轮提示词）也照样补上。
+   */
+  reinjectPending: boolean;
 }
 
 export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSessionState> {
@@ -176,12 +187,54 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     this.#readonlySpawn = readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
   }
 
+  /**
+   * 产品提示词怎么交（docs/system-prompt-channels.md）：config 写了照 config；没写按厂商声明（spec 的 capabilities.systemPrompt）：
+   * "resident" 的厂商驱动层自己放进常驻通道（启动参数、补丁文件），这里不拼；"first_message" 的拼进新会话第一条消息。
+   */
+  #systemPromptInjection(): NonNullable<NonNullable<AcpDriverConfig["session"]>["systemPromptInjection"]> {
+    const configured = this.#config.session?.systemPromptInjection;
+    if (configured !== undefined) return configured;
+    return vendorSpec(this.vendor).capabilities.systemPrompt === "resident" ? "never" : "first_turn_new_session";
+  }
+
+  /**
+   * initialize 的 clientCapabilities：config 给的，产品提示词拼在消息里的再声明 session.compaction（ACP 规定 agent 只在客户端声明了
+   * 才发 compaction_update；不声明就收不到压缩信号，没法重新拼）。
+   */
+  #clientCapabilities(): ClientCapabilities {
+    const base = this.#config.clientCapabilities ?? {};
+    if (this.#systemPromptInjection() === "never") return base;
+    return { ...base, session: { ...base.session, compaction: base.session?.compaction ?? {} } };
+  }
+
+  /**
+   * 厂商压缩了上下文（ACP 的 compaction_update completed）：拼在第一条消息里的产品提示词跟着被裁掉了，记下来，
+   * 下一条消息最前面重新拼一次完整的（#takeReinjectBlock）。走常驻通道的进程（reinjectPromptFile 是 null）不用；同一轮压缩几次也只拼一次。
+   */
+  #reinjectAfterCompaction(st: AcpSessionState, proc: AcpProc): void {
+    if (proc.reinjectPromptFile === null || st.reinjectPending) return;
+    st.reinjectPending = true;
+    this.logSession(st.id, "厂商压缩了上下文，下一条消息前重新拼产品提示词");
+  }
+
+  /** 要重新拼时读 prompt.md 现在的内容（性格设定改过的话是新的）；读不到记日志、这次不拼。 */
+  #takeReinjectBlock(st: AcpSessionState, proc: AcpProc): string | null {
+    if (!st.reinjectPending || proc.reinjectPromptFile === null) return null;
+    try {
+      return readAcpSystemPrompt(proc.reinjectPromptFile, this.#config.session?.formatSystemPrompt);
+    } catch (error) {
+      this.logSession(st.id, `要重新拼产品提示词，但读不到提示词文件：${errorMessage(error)}`);
+      return null;
+    }
+  }
+
   protected createSessionState(id: SessionId): AcpSessionState {
     return {
       ...createBaseSessionState(id),
       hasConversation: false,
       cancelSent: false,
       cachedCommands: null,
+      reinjectPending: false,
     };
   }
 
@@ -351,7 +404,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         source: "user",
       };
     }
-    const injection = this.#config.session?.systemPromptInjection ?? "first_turn_new_session";
+    const injection = this.#systemPromptInjection();
     const activeProc = st.proc && !st.proc.closing ? st.proc : null;
     const willRebakeOnSpawn =
       activeProc === null &&
@@ -450,8 +503,9 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     this.#resetTurnBuffers(st, proc);
 
-    const systemBlock = proc.pendingSystemPromptBlock;
+    const systemBlock = proc.pendingSystemPromptBlock ?? this.#takeReinjectBlock(st, proc);
     proc.pendingSystemPromptBlock = null;
+    st.reinjectPending = false;
     const promptBlocks = buildAcpPromptBlocks(batch.userBlocks, systemBlock);
 
     const startedAt = Date.now();
@@ -716,6 +770,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       configOptions: [],
       swallowingReplay: false,
       pendingSystemPromptBlock: null,
+      reinjectPromptFile: null,
       baseUsage: { ...(row.usage ?? ZERO_USAGE) },
       latestContextUsed: null,
       turnSeq: 0,
@@ -763,7 +818,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       const init = await proc.acpConn.agent.request(methods.agent.initialize, {
         protocolVersion: PROTOCOL_VERSION,
         clientInfo,
-        clientCapabilities: this.#config.clientCapabilities ?? {},
+        clientCapabilities: this.#clientCapabilities(),
       });
       proc.initResponse = init;
 
@@ -797,7 +852,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           ? [...row.addDirs]
           : undefined;
 
-      const injection = this.#config.session?.systemPromptInjection ?? "first_turn_new_session";
+      const injection = this.#systemPromptInjection();
       const supportsNativeSystemPrompt = Boolean(
         this.#config.session?.preferNativeSystemPrompt &&
           init.agentCapabilities?.sessionCapabilities?.systemPrompt,
@@ -905,6 +960,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       proc.configOptions = configOptions;
       st.hasConversation = true;
 
+      if (!supportsNativeSystemPrompt && injection !== "never") proc.reinjectPromptFile = files.promptFile;
       if (
         !supportsNativeSystemPrompt &&
         (injection === "every_process_first_turn" ||
@@ -1426,6 +1482,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       }
       case "compaction_update": {
         if ("status" in update && update.status === "completed") {
+          this.#reinjectAfterCompaction(st, proc);
           this.#flushTextBuffer(st, proc, at);
           this.emit(st.id, {
             type: "context.compacted",

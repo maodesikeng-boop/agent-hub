@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { saveUpload } from "../uploads.ts";
+import { resolveUpload, saveUpload } from "../uploads.ts";
 import {
   createSessionTokens,
 } from "../agent-api/tokens.ts";
@@ -19,6 +19,8 @@ import {
   type DriverSendInput,
   type DriverSendResult,
   type ModelCatalog,
+  ROUTER_REPLY_MAX_CHARS,
+  type RouterCommandAttachment,
   type RouterCommandRecord,
   type SessionId,
 } from "../../shared/index.ts";
@@ -116,6 +118,20 @@ class FakeRouterDriver implements Driver {
   }
 }
 
+/** 与 daemon.ts 注入的解析器同一口径：按上传编号从磁盘取显示信息，不信客户端报的。 */
+function attachmentMetaOf(uploadsDir: string, id: string): RouterCommandAttachment | null {
+  const a = resolveUpload(uploadsDir, id);
+  return a === null ? null : { id: a.id, name: a.name, mime: a.mime, size: a.size };
+}
+
+/** 发一段主 agent 文字再正常结束本轮。 */
+function answerTurn(...texts: string[]) {
+  return async ({ input, emit }: { input: DriverSendInput; emit: (event: DriverEvent) => void }) => {
+    texts.forEach((text, i) => emit({ type: "agent.text", uuid: `u-${i}`, text, at: Date.now() }));
+    emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+  };
+}
+
 const CLAUDE_ROUTER_PRESET = vendorSpec("claude").models.routerDefault;
 
 /** 轨道 B 收尾后：没有还活着的 assistant 会话行，已结束的最多留 1 行（全表最大 id 那行，保证 id 不回退）。 */
@@ -150,6 +166,8 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
   let remoteOps: RouterTargetOp[];
   let remoteOnline: boolean;
   let remotePort: RouterTargetPort;
+  /** 远端设备是否在注册表里（false 时显式目标找不到设备，用来测整条重跑）。 */
+  let remoteRegistered: boolean;
   let dispatcher: RouterDispatcher;
   let catalogs: ModelCatalog[];
   let pm1Id: number;
@@ -208,6 +226,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
 
     remoteOps = [];
     remoteOnline = true;
+    remoteRegistered = true;
     remotePort = {
       deviceId: "dev-linux",
       deviceName: "LinuxBox",
@@ -275,11 +294,11 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       selfDeviceId: () => "dev-local",
       getPort(deviceId: string): RouterTargetPort | null {
         if (deviceId === "self" || deviceId === "dev-local") return localPort;
-        if (deviceId === "dev-linux") return remotePort;
+        if (deviceId === "dev-linux" && remoteRegistered) return remotePort;
         return null;
       },
       listPorts(): RouterTargetPort[] {
-        return [localPort, remotePort];
+        return remoteRegistered ? [localPort, remotePort] : [localPort];
       },
       async listAllDigests() {
         const [d1, d2] = await Promise.all([localPort.getDigest(), remotePort.getDigest()]);
@@ -297,6 +316,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       sandboxGuard,
       targetRegistry: customRegistry,
       models: { list: async () => catalogs },
+      resolveAttachment: (id) => attachmentMetaOf(uploadsDir, id),
       stateDir,
       launchDir,
       agentTimeoutMs: 500,
@@ -338,6 +358,11 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       op: "pm.forward",
       verbatim: true,
     });
+    // 轨道 A 成功不拼回执文案：去向全在 dispatched 的结构化字段里
+    expect(cmd1.plan?.reply).toBe("");
+    expect(cmd1.plan?.track).toBe("A");
+    expect(cmd1.plan?.target).toEqual({ deviceId: "self", pmId: pm1Id });
+    expect(cmd1.plan?.attachments).toEqual([{ id: attId, name: "crash.png", mime: "image/png", size: 7 }]);
     expect(changes).toContain("router.command.created:planning");
     expect(changes).toContain("router.command.updated:dispatched");
 
@@ -672,6 +697,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
           listAllDigests: async () => [{ port: localPort, result: await localPort.getDigest() }],
         },
         models: { list: async () => catalogs },
+        resolveAttachment: (id: string) => attachmentMetaOf(uploadsDir, id),
         stateDir,
         launchDir,
         agentTimeoutMs: 100,
@@ -817,6 +843,103 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(driver.started.at(-1)!).toBeGreaterThan(maxEnded);
       const pm = ledger.createPm({ name: "重启后PM", mode: "manage_only", vendor: "claude", persona: "测试" });
       expect(pm.sessionId).toBeGreaterThan(driver.started.at(-1)!);
+    });
+  });
+  describe("v2 后端契约（docs/router-workbench-v2-design.md 第 3.2 节）", () => {
+    it("2,000 字回复原样入库，多段文字之间是空行，不截断也不标 replyTruncated", async () => {
+      const long = "长".repeat(2_000);
+      driver.onTurn = answerTurn("**本机**状态如下：", long);
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-reply-long", text: "现在谁在干活？" });
+      expect(cmd.status).toBe("answered");
+      expect(cmd.plan?.reply).toBe(`**本机**状态如下：\n\n${long}`);
+      expect(cmd.plan?.replyTruncated).toBeUndefined();
+    });
+
+    it("超过 ROUTER_REPLY_MAX_CHARS 才截，截了标 replyTruncated，不悄悄拼省略号", async () => {
+      driver.onTurn = answerTurn("答".repeat(ROUTER_REPLY_MAX_CHARS + 500));
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-reply-over", text: "说个很长的" });
+      expect([...cmd.plan!.reply]).toHaveLength(ROUTER_REPLY_MAX_CHARS);
+      expect(cmd.plan!.reply.endsWith("…")).toBe(false);
+      expect(cmd.plan?.replyTruncated).toBe(true);
+    });
+
+    it("显式 target 落进 plan.target；整条重跑带回目标，仍走轨道 A（0 次模型调用）", async () => {
+      remoteRegistered = false;
+      const failed = await dispatcher.submitCommand({
+        clientId: "cid-target-retry",
+        text: "重启训练队列",
+        target: { deviceId: "dev-linux", pmId: 20 },
+      });
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toContain("找不到目标设备");
+      expect(failed.plan?.target).toEqual({ deviceId: "dev-linux", pmId: 20 });
+      expect(failed.plan?.retryOps ?? []).toHaveLength(0);
+
+      remoteRegistered = true;
+      const retried = await dispatcher.retryCommand(failed.id);
+      expect(driver.started).toHaveLength(0);
+      expect(retried.status).toBe("dispatched");
+      expect(retried.plan?.track).toBe("A");
+      expect(retried.plan?.target).toEqual({ deviceId: "dev-linux", pmId: 20 });
+      expect(retried.plan?.reply).toBe("");
+      expect(remoteOps).toEqual([expect.objectContaining({ kind: "pm.forward", pmId: 20, text: "重启训练队列" })]);
+
+      // 网页 @ 候选里本机的 deviceId 可能是 "local"、"" 或省略：都走本机轨道 A
+      for (const [i, deviceId] of ["local", "", undefined].entries()) {
+        const localCmd = await dispatcher.submitCommand({
+          clientId: `cid-local-target-${i}`,
+          text: `本机直转 ${i}`,
+          target: { ...(deviceId !== undefined ? { deviceId } : {}), pmId: pm1Id },
+        });
+        expect(localCmd.status).toBe("dispatched");
+        expect(localCmd.plan?.track).toBe("A");
+        expect(localCmd.dispatched?.[0]).toMatchObject({ deviceId: "dev-local", pmId: pm1Id, ok: true });
+      }
+    });
+
+    it("带附件的指令：plan.attachments 有编号、文件名、类型、大小，轨道 B 收尾和重试后都还在", async () => {
+      const att = await saveUpload(uploadsDir, "spec.md", Buffer.from("# Design"));
+      const expected = [{ id: att.id, name: "spec.md", mime: att.mime, size: 8 }];
+      driver.onTurn = async ({ emit, input }) => {
+        emit({ type: "turn.ended", ok: false, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now(), error: { subtype: "error_during_execution", message: "boom" } });
+      };
+      const failed = await dispatcher.submitCommand({ clientId: "cid-att-meta", text: "看看这个文件", attachmentIds: [att.id] });
+      expect(failed.status).toBe("failed");
+      expect(failed.plan?.attachments).toEqual(expected);
+      expect(failed.plan?.attachmentIds).toEqual([att.id]);
+
+      driver.onTurn = answerTurn("文件收到了");
+      const retried = await dispatcher.retryCommand(failed.id);
+      expect(retried.status).toBe("answered");
+      expect(retried.plan?.attachments).toEqual(expected);
+    });
+
+    it("非预期异常：error 是人话，原文进 plan.errorRaw；已是人话的目标错误照旧，不带 errorRaw", async () => {
+      driver.start = async () => {
+        throw new DriverError("session_ended", "session 512 has been ended");
+      };
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-raw-error", text: "现在谁在干活？" });
+      expect(cmd.status).toBe("failed");
+      expect(cmd.plan?.errorRaw).toBe("session_ended: session 512 has been ended");
+      expect(cmd.error).not.toMatch(/session|ended/);
+      expect(cmd.error).toMatch(/[\u4e00-\u9fff]/);
+      expect(cmd.plan?.reply).not.toContain("session 512");
+
+      remoteOnline = false;
+      const offline = await dispatcher.submitCommand({ clientId: "cid-human-error", text: "@LinuxBox/gpu-worker 跑基准" });
+      expect(offline.status).toBe("failed");
+      expect(offline.error).toContain("离线");
+      expect(offline.plan?.errorRaw).toBeUndefined();
+    });
+
+    it("轨道 B 的厂商失败原文进 errorRaw，error 是人话", async () => {
+      driver.onTurn = async ({ emit, input }) => {
+        emit({ type: "turn.ended", ok: false, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now(), error: { subtype: "error_during_execution", message: "TypeError: Cannot read properties of undefined" } });
+      };
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-vendor-raw", text: "现在谁在干活？" });
+      expect(cmd.status).toBe("failed");
+      expect(cmd.plan?.errorRaw).toBe("error_during_execution: TypeError: Cannot read properties of undefined");
+      expect(cmd.error).not.toContain("TypeError");
     });
   });
 });

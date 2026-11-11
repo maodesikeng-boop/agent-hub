@@ -95,13 +95,41 @@ export type RouterAction =
       markdown: string;
     };
 
+/** POST /api/router/commands 的显式目标：轨道 A 零模型直通（不走 @ 解析或轨道 B）。 */
+export interface PostRouterCommandTarget {
+  deviceId?: string;
+  pmId?: PmId;
+  projectId?: ProjectId;
+}
+
+/** 指令附件的显示信息（创建指令时守护进程按上传编号从磁盘解析，不信客户端报的）。 */
+export interface RouterCommandAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+/**
+ * 存在 router_commands.plan_json 里（docs/router-workbench-v2-design.md 第 3.2 节）。
+ * attachments / target / replyTruncated / errorRaw 都是可选的，老数据不带也合法。
+ */
 export interface RouterAgentPlan {
   intent: "dispatch" | "answer" | "ambiguous";
+  /** 总助回复全文（最多 ROUTER_REPLY_MAX_CHARS 字）；轨道 A 成功时为空串，去向看 dispatched。 */
   reply: string;
   actions: RouterAction[];
   track?: "A" | "B";
   attachmentIds?: string[];
   retryOps?: Array<{ deviceId: string; op: unknown }>;
+  /** 附件的显示信息，创建指令时由守护进程按上传编号解析。 */
+  attachments?: RouterCommandAttachment[];
+  /** 请求里的显式目标，整条重跑时带回去（仍走轨道 A）。 */
+  target?: PostRouterCommandTarget;
+  /** 回复超过 ROUTER_REPLY_MAX_CHARS 被截时为 true。 */
+  replyTruncated?: true;
+  /** 非预期异常的原始错误文本（error 里是人话），只进悬停提示。 */
+  errorRaw?: string;
 }
 
 export type RouterDispatchedOpKind =
@@ -160,10 +188,13 @@ export interface RouterCommandRecord {
 
 export interface RouterSlice {
   settings: RouterSettings;
-  /** 当前活跃项（pending + unread），按 createdAt DESC, id DESC，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX。 */
+  /**
+   * 待拍板项（pending，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX）加最近的简报（不分已读未读，
+   * 上限 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条、ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 字节），合并后按 createdAt DESC, id DESC。
+   */
   items: RouterItem[];
   notes: RouterPmNote[];
-  /** 本机最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条；经 deviceToken 跨机访问时为空数组。 */
+  /** 本机最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（另守 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES）；经 deviceToken 跨机访问时为空数组。 */
   commands: RouterCommandRecord[];
 }
 

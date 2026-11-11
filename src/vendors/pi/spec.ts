@@ -131,5 +131,7 @@ export default defineVendor({
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",
+    // --append-system-prompt <prompt.md>（protocol.ts）：进 pi 的系统提示词，压缩不裁
+    systemPrompt: "resident",
   },
 });

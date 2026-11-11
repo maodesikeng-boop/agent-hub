@@ -7,6 +7,9 @@ import {
   PM_MODES,
   PRODUCT_ID,
   PRODUCT_NAME,
+  ROUTER_FLEET_DIGEST_MAX_BYTES,
+  ROUTER_PERSONA_SUMMARY_MAX_CHARS,
+  ROUTER_PM_ACTIVE_WORKERS_MAX,
   VENDOR_LIST,
   isSelectable,
   truncateChars,
@@ -16,20 +19,15 @@ import {
   type VendorAvailabilityMap,
 } from "../../shared/index.ts";
 
-/** 跨设备总名片快照硬上限：24 KB（24_576 UTF-8 字节）。 */
-export const ROUTER_FLEET_DIGEST_MAX_BYTES = 24_576;
+// 跨设备总名片 24 KB、名片里活跃 Piece 条数、职责摘要字数这几个上限在 src/shared/limits.ts，这里不另存一份。
 /** 单张完整 PM 名片硬上限：1 KB（1_024 UTF-8 字节）。 */
 export const ROUTER_PM_CARD_MAX_BYTES = 1_024;
 /** 注入上下文的最近指令回执条数上限。 */
 export const ROUTER_RECENT_RECEIPTS_CONTEXT = 5;
 /** 最近指令回执分节最大字节预算。 */
 export const ROUTER_RECEIPTS_SECTION_MAX_BYTES = 600;
-/** 单张完整名片内列出的活跃 Piece 标题条数上限。 */
-export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
-/** PM 职责摘要最大字符数。 */
-export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;
-/** 轨道 B 回复说明最大字符数。 */
-export const ROUTER_REPLY_NOTE_MAX_CHARS = 240;
+/** 状态问答建议的回答篇幅（docs/router-workbench-v2-design.md 第 9.2 节选项 A）；入库上限另见 ROUTER_REPLY_MAX_CHARS。 */
+const ROUTER_ANSWER_SUGGESTED_MAX_CHARS = "1,500";
 
 export interface RouterSystemPromptOptions {
   readonly vendorAvailability?: VendorAvailabilityMap;
@@ -142,14 +140,17 @@ export function buildRouterSystemPrompt(options: RouterSystemPromptOptions = {})
   return `# 你的角色
 
 你是 ${PRODUCT_NAME}（${PRODUCT_ID}）的总调度员 Router（水果刀），运行在无历史单轮极速分派模式（轨道 B）下。
-当前工作目录是隔离空目录，且处于只读沙箱中。你的唯一职责是根据下方跨设备名片摘要，调用 \`${HUB} dispatch ...\` 把用户指令瞬间投递给目标设备的项目经理（PM）或项目 Piece（Worker）。
+当前工作目录是隔离空目录，且处于只读沙箱中。你的职责是根据下方跨设备名片摘要，调用 \`${HUB} dispatch ...\` 把用户指令瞬间投递给目标设备的项目经理（PM）或项目 Piece（Worker）；名片里直接看得出来的全局状态问题可以当场回答（见第 4 条）。
 
 # 四不准硬规矩（必须严守）
 
 1. **不准读任何代码文件**：严禁读取、搜索或列举任何业务代码库、配置文件或目录；凡涉及看代码、查日志、改文件的任务一律派给目标 PM 或启动 Piece。${subagentBan}
 2. **不准设计技术方案**：严禁替项目经理分析架构、编写技术方案或自行回答业务实现问题；你只负责判断发给谁、调哪条 \`${HUB} dispatch\` 命令。
 3. **不准改写用户原话（单目标一律 \`--verbatim\` 原文零拷贝）**：只要用户当前指令针对**单一目标**（转交单个 PM、新启动单个 Piece、追发单个 Piece），**必须一律传 \`--verbatim\`**，由守护进程从内存字节级原样搬运用户原文与全部附件，严禁用 \`--stdin\` 重写、概括或缩减用户原话！只有当用户一句话里明确包含发往**多个不同目标**的独立事项时，才分别调用命令并用 \`--stdin <<'EOF'\` 按原意拆分投递。
-4. **不准寒暄废话**：严禁输出“好的”“收到”“马上处理”等套话。执行完 \`${HUB} dispatch ...\` 后直接结束本轮；若因信息不足或设备离线无法分派，仅用一句不超过 ${ROUTER_REPLY_NOTE_MAX_CHARS} 字的简洁中文直接说明原因。
+4. **不准寒暄废话，名片内可答**：严禁输出“好的”“收到”“马上处理”等套话。
+   - **该分派的必须分派**：凡需要读代码、查日志、写方案、改状态（启动、暂停、结束、追发、新建）的请求，必须调 \`${HUB} dispatch ...\` 分派给对应 PM 或 Piece，分派完直接结束本轮，不另写说明。
+   - **名片里看得出来的可以直接答**：只看下方跨设备名片摘要和近期指令回执就能回答的全局状态问题（谁在忙、哪个项目卡在拍板、某项目在哪台设备、某个 PM 上一条汇报说了什么），不分派，直接用结构清晰的 Markdown（按设备或项目分组的小标题、列表、加粗）完整作答，建议不超过 ${ROUTER_ANSWER_SUGGESTED_MAX_CHARS} 字。名片里看不出来的不准猜，按上一条分派给对应 PM 去查。
+   - 因信息不足或设备离线无法分派时，用一两句简洁中文直接说明原因。
 
 # 分派决策规则
 

@@ -415,6 +415,12 @@ export function createLedgerMessages(
         for (const id of event.messageIds ?? []) transition(p, id, "failed", event.message);
         reportHealthIn(p, "driver", event.message);
         return;
+      case "driver.warning":
+        if (session.conversationId !== null) {
+          const meta: SystemMessageMeta = { event: "driver.warning", sessionId, uuid: event.uuid };
+          if (db.get("SELECT 1 FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(session.conversationId, meta)) === undefined) insertSystemMessage(p, session.conversationId, meta, event.message);
+        }
+        return;
       case "context.compacted":
         // 用户发的 /compact（或自动压缩）：对话里记一行，只给人看；这一轮照常由 turn.ended 收尾
         if (session.conversationId !== null) {

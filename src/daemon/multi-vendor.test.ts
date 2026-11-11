@@ -179,8 +179,14 @@ if (argv.includes("/skills")) {
 
 const convIdx = argv.indexOf("--conversation");
 const convId = convIdx !== -1 ? argv[convIdx + 1] : "agy-conv-" + randomUUID();
-// 是不是 Worker 看提示词（agy 的提示词在首条消息最前面）：P4 起 Worker 专用的环境变量只有 claude 的 Worker 才设（A15）
-let isWorker = false;
+// 是不是 Worker 看 --add-dir 里的常驻规则：P4 起 Worker 专用的环境变量只有 claude 的 Worker 才设（A15）
+const { readFileSync, readdirSync, existsSync } = require("node:fs");
+const { join } = require("node:path");
+let isWorker = argv.some((arg, i) => {
+  if (arg !== "--add-dir") return false;
+  const dir = join(argv[i + 1], ".agents", "rules");
+  return existsSync(dir) && readdirSync(dir).some((name) => readFileSync(join(dir, name), "utf8").includes(${JSON.stringify(WORKER_PROMPT_MARK)}));
+});
 let inited = false;
 
 const rl = createInterface({ input: process.stdin });

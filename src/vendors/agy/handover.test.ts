@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { checkAgyUserLine } from "./protocol.ts";
+import { writeAgyPromptRules } from "./rules.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import type { ForkSource } from "../../daemon/handover/forker.ts";
 import { FORKERS } from "../../daemon/handover/forkers.ts";
@@ -230,6 +231,24 @@ describe("write：--conversation <新编号> 续跑一轮", () => {
   };
   const fakeHandle = { forkId: "99999999-8888-4777-8666-555555555555", extra: { root } };
 
+  it("原会话起进程时写好了产品提示词规则目录：复制那份照样 --add-dir 它（不重写，跟原会话的系统提示词一样）", async () => {
+    feed(result());
+    const launchDir = mkdtempSync(join(tmpdir(), "agy-fork-launch-"));
+    try {
+      const promptFile = join(launchDir, "prompt.md");
+      writeFileSync(promptFile, "原会话的提示词");
+      const workspace = writeAgyPromptRules(promptFile)!;
+      writeFileSync(promptFile, "改过的提示词");
+      const src = source({ launch: { promptFile, env: { REC: rec, PATH: process.env.PATH ?? "" }, fingerprint: "fp" } });
+      await forker().write(src, fakeHandle, "请写交接", signal());
+      const args = readFileSync(join(rec, "args"), "utf8").slice(0, -1).split("\n");
+      expect(args[args.lastIndexOf("--add-dir") + 1]).toBe(workspace);
+      expect(readFileSync(join(workspace, ".agents", "rules", "fusa-01.md"), "utf8")).toContain("原会话的提示词");
+    } finally {
+      rmSync(launchDir, { recursive: true, force: true });
+    }
+  });
+
   it("参数：--conversation 新编号、stream-json、只读模式、模型思考程度、附加目录、末尾 --print \"\"；一行合格的用户消息；不带 HUB_*；工作目录照原会话", async () => {
     feed(result());
     const src = source({
@@ -250,6 +269,8 @@ describe("write：--conversation <新编号> 续跑一轮", () => {
     expect(args.join(" ")).toContain("--add-dir /code/bar");
     expect(args.slice(-2)).toEqual(["--print", ""]);
     expect(args).not.toContain(SRC_ID);
+    // 原会话还没写过规则目录（/p.md 不在）：不加
+    expect(args.filter((a) => a.endsWith("agy-rules"))).toEqual([]);
 
     const line = readFileSync(join(rec, "stdin"), "utf8");
     expect(line.endsWith("\n")).toBe(true);

@@ -99,5 +99,7 @@ export default defineVendor({
     backgroundWake: false,
     readonly: "driver",
     explicitDefaultModel: true,
+    // app-server 协议的 developerInstructions（protocol.ts）：开发者指令，压缩不裁
+    systemPrompt: "resident",
   },
 });
