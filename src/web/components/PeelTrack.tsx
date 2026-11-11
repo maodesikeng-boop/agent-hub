@@ -12,7 +12,7 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { computeGraphLayers, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { computeGraphComponents, computeGraphLayers, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parMid" | "parB" | "coil" | "gate";
 type LineStyle = "solid" | "dash" | "none";
@@ -446,22 +446,93 @@ function PeelStageRow({
   );
 }
 
-function PeelTrackBody({
-  graph,
-  colorKey,
-  workerByKey,
-  openWorkerId,
-  client,
-  onOpenWorker,
-}: {
-  graph: TaskGraph;
-  colorKey: number;
+const walked = (done: boolean): LineStyle => (done ? "solid" : "dash");
+
+/** 同一段轨道同时承载几股流（上游分下来的、往下游合流的）：都没有就不画，有一股未走通就画虚线。 */
+function carry(...flows: LineStyle[]): LineStyle {
+  const live = flows.filter((f) => f !== "none");
+  if (live.length === 0) return "none";
+  return live.every((f) => f === "solid") ? "solid" : "dash";
+}
+
+interface RowPlan {
+  node: TaskNode;
+  gutterKind: GutterKind;
+  inn: LineStyle;
+  out: LineStyle;
+  thru: LineStyle;
+  hasBelow: boolean;
+}
+
+/**
+ * 把连通子图里的一层排成果皮轨行：第一个阶段在主轨，其余在右侧并行副轨。
+ * - feed：上一层分下来的流（子图首层没有上游，为 none——多起点合流层不画分叉弧线，右轨上方也没有进入线）；
+ * - merge：本层往下一层合流的流（子图末层为 none）；只有真正有下游（出度 > 0）的阶段才把自己那一股接进主轨，
+ *   右轨每一段只在它确实承载上游分流或上方兄弟的合流时才画，保证逐行首尾相接、无断头悬空线。
+ */
+function planLayerRows(
+  layer: readonly TaskNode[],
+  feed: LineStyle,
+  merge: LineStyle,
+  hasLayerBelow: boolean,
+  outDegree: ReadonlyMap<string, number>,
+): RowPlan[] {
+  const flows = (node: TaskNode): LineStyle => ((outDegree.get(node.key) ?? 0) > 0 ? merge : "none");
+  const head = layer[0]!;
+  if (layer.length === 1) {
+    return [{ node: head, gutterKind: "station", inn: feed, out: flows(head), thru: feed, hasBelow: hasLayerBelow }];
+  }
+  const thru = flows(head);
+  const rows: RowPlan[] = [{ node: head, gutterKind: "parA", inn: feed, out: thru, thru: feed, hasBelow: true }];
+  // 右轨上已经汇入的合流（第 1..i 个并行阶段里有任一往下走，右轨就得一路接到最后一行弯回主轨）
+  let parMerge: LineStyle = "none";
+  for (let i = 1; i < layer.length; i++) {
+    const node = layer[i]!;
+    const isLast = i === layer.length - 1;
+    const inn = carry(feed, parMerge);
+    parMerge = carry(parMerge, flows(node));
+    rows.push({
+      node,
+      gutterKind: isLast ? "parB" : "parMid",
+      inn,
+      // 中间行的右轨下半段还要把上游分流继续送给下面的兄弟；最后一行只剩弯回主轨的合流
+      out: isLast ? parMerge : carry(feed, parMerge),
+      thru,
+      hasBelow: hasLayerBelow || !isLast,
+    });
+  }
+  return rows;
+}
+
+interface TrackComponent {
+  key: string;
+  layers: TaskNode[][];
+  outDegree: ReadonlyMap<string, number>;
+}
+
+function computeTrackComponents(graph: Pick<TaskGraph, "nodes" | "edges">): TrackComponent[] {
+  return computeGraphComponents(graph).map((component) => {
+    const layers = computeGraphLayers(component);
+    const outDegree = new Map<string, number>();
+    for (const edge of component.edges) {
+      if (edge.fromKey !== edge.toKey) outDegree.set(edge.fromKey, (outDegree.get(edge.fromKey) ?? 0) + 1);
+    }
+    return { key: layers[0]![0]!.key, layers, outDegree };
+  });
+}
+
+interface PeelRowContext {
+  graphId: TaskGraphId;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
   client: HubClient;
   onOpenWorker: (id: ConversationId) => void;
-}) {
-  const layers = useMemo(() => computeGraphLayers(graph), [graph]);
+}
+
+/** 一个连通子图的果皮轨：已完成卷与 N next 折叠只在本子图内生效，首尾不与别的子图相连。 */
+function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx: PeelRowContext }) {
+  const { layers, outDegree } = component;
+  const { openWorkerId, workerByKey } = ctx;
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [nextExpanded, setNextExpanded] = useState(false);
 
@@ -503,10 +574,17 @@ function PeelTrackBody({
   const foldNext = suffixLayerCount >= 2 && suffixNodeCount >= 2 && !nextExpanded;
   const visibleEnd = foldNext ? suffixStart : layers.length;
 
-  const shownLayers = layers.slice(visibleStart, visibleEnd);
+  const rows = layers.slice(visibleStart, visibleEnd).flatMap((layer, idx) => {
+    const layerIdx = visibleStart + idx;
+    const hasLayerBelow = layerIdx < layers.length - 1;
+    // 子图首层没有上游（入度 0 的起点），上方不画进入线；折叠卷之后的首个可见层由果皮卷接上
+    const feed: LineStyle = layerIdx === 0 ? "none" : walked(isLayerCompleted(layers[layerIdx - 1]!));
+    const merge: LineStyle = hasLayerBelow ? walked(isLayerCompleted(layer)) : "none";
+    return planLayerRows(layer, feed, merge, hasLayerBelow, outDegree);
+  });
 
   return (
-    <div style={fruitTrackVars(colorKey)} className="pt-0.5 pb-1">
+    <div data-peel-component={component.key}>
       {foldDone && (
         <button
           type="button"
@@ -517,58 +595,22 @@ function PeelTrackBody({
           <span>{prefixDoneCount} done</span>
         </button>
       )}
-      {shownLayers.map((layer, idx) => {
-        const globalIdx = visibleStart + idx;
-        const prevCompleted = globalIdx === 0 ? false : isLayerCompleted(layers[globalIdx - 1]!);
-        const currCompleted = isLayerCompleted(layer);
-        const hasBelow = globalIdx < layers.length - 1;
-        const inn: LineStyle = globalIdx === 0 && !foldDone ? "none" : prevCompleted ? "solid" : "dash";
-        const out: LineStyle = !hasBelow ? "none" : currCompleted ? "solid" : "dash";
-
-        if (layer.length === 1) {
-          const node = layer[0]!;
-          return (
-            <PeelStageRow
-              key={node.key}
-              graphId={graph.id}
-              node={node}
-              gutterKind="station"
-              inn={inn}
-              out={out}
-              thru={inn}
-              hasBelow={hasBelow}
-              workerByKey={workerByKey}
-              openWorkerId={openWorkerId}
-              client={client}
-              onOpenWorker={onOpenWorker}
-            />
-          );
-        }
-
-        return layer.map((node, pIdx) => {
-          const isFirst = pIdx === 0;
-          const isLast = pIdx === layer.length - 1;
-          const gutterKind: GutterKind = isFirst ? "parA" : isLast ? "parB" : "parMid";
-          const nodeDone = node.status === "done" || node.status === "skipped";
-          const branchOut: LineStyle = nodeDone && currCompleted ? "solid" : "dash";
-          return (
-            <PeelStageRow
-              key={node.key}
-              graphId={graph.id}
-              node={node}
-              gutterKind={gutterKind}
-              inn={inn}
-              out={isFirst ? (hasBelow ? out : "dash") : branchOut}
-              thru={hasBelow ? out : "none"}
-              hasBelow={hasBelow || !isLast}
-              workerByKey={workerByKey}
-              openWorkerId={openWorkerId}
-              client={client}
-              onOpenWorker={onOpenWorker}
-            />
-          );
-        });
-      })}
+      {rows.map((row) => (
+        <PeelStageRow
+          key={row.node.key}
+          graphId={ctx.graphId}
+          node={row.node}
+          gutterKind={row.gutterKind}
+          inn={row.inn}
+          out={row.out}
+          thru={row.thru}
+          hasBelow={row.hasBelow}
+          workerByKey={workerByKey}
+          openWorkerId={openWorkerId}
+          client={ctx.client}
+          onOpenWorker={ctx.onOpenWorker}
+        />
+      ))}
       {foldNext && (
         <button
           type="button"
@@ -584,6 +626,37 @@ function PeelTrackBody({
           <span>{suffixNodeCount} next</span>
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * 一张任务图的果皮轨主体：先按弱连通分量拆成互不相连的子图（与放大全览弹窗的真实依赖一致），
+ * 每个子图内部再按拓扑层排布；子图之间留一点呼吸间距，绝不画跨子图的竖向连线。
+ */
+function PeelTrackBody({
+  graph,
+  colorKey,
+  workerByKey,
+  openWorkerId,
+  client,
+  onOpenWorker,
+}: {
+  graph: TaskGraph;
+  colorKey: number;
+  workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
+  openWorkerId: ConversationId | null;
+  client: HubClient;
+  onOpenWorker: (id: ConversationId) => void;
+}) {
+  const components = useMemo(() => computeTrackComponents(graph), [graph]);
+  const ctx: PeelRowContext = { graphId: graph.id, workerByKey, openWorkerId, client, onOpenWorker };
+
+  return (
+    <div style={fruitTrackVars(colorKey)} className="space-y-1.5 pt-0.5 pb-1">
+      {components.map((component) => (
+        <PeelComponentTrack key={component.key} component={component} ctx={ctx} />
+      ))}
     </div>
   );
 }

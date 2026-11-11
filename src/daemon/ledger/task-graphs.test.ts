@@ -6,6 +6,7 @@ import type { Change } from "../../shared/api.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf, EMPTY_TOKEN_USAGE, type ConversationId, type PmId, type ProjectId, type SessionId } from "../../shared/domain.ts";
 import { MAX_ACTIVE_GRAPHS_PER_PROJECT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
+import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../../shared/hub.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
@@ -122,6 +123,23 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ]);
     expect(ledger.snapshot().activeTaskGraphs).toHaveLength(1);
     expect(changes.some((c) => c.type === "task_graph.created")).toBe(true);
+  });
+
+  it("提示词与 hub --help 里的 graph create / patch 一行 JSON 示例照抄就能跑通（字段名与真实校验一致）", () => {
+    const created = ledger.hubCall(lin.sessionId, "graph.create", { specJson: TASK_GRAPH_CREATE_JSON_HINT }).data.graph;
+    expect(created.nodes.map((n) => [n.key, n.kind, n.status])).toEqual([
+      ["plan", "piece", "ready"],
+      ["ok", "gate", "pending"],
+    ]);
+    // 先补上示例里要删的节点和边，再原样套用 patch 示例
+    ledger.hubCall(lin.sessionId, "graph.patch", {
+      graphId: created.id,
+      specJson: JSON.stringify({ addNodes: [{ key: "old", title: "旧步骤" }, { key: "a", title: "A" }, { key: "b", title: "B", deps: ["a"] }] }),
+    });
+    const patched = ledger.hubCall(lin.sessionId, "graph.patch", { graphId: created.id, specJson: TASK_GRAPH_PATCH_JSON_HINT }).data.graph;
+    expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["a", "b", "ok", "plan", "qa"]);
+    expect(patched.edges).toContainEqual({ fromKey: "plan", toKey: "qa" });
+    expect(patched.edges).not.toContainEqual({ fromKey: "a", toKey: "b" });
   });
 
   it("单项目允许最多 20 张活跃图（不卡 5 张低阈值），第 21 张报 conflict", () => {

@@ -661,17 +661,24 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
   const VALID_D = /^[MLAZ0-9 .\-]+$/;
 
   it.each([
-    ["0 个阶段", 0, false],
-    ["1 个阶段", 1, false],
-    ["奇数 7 个阶段链路", 7, false],
-    ["超大 32 个阶段链路", 32, false],
-    ["全并行同层 5 个阶段", 5, true],
-    ["全并行同层 32 个阶段", 32, true],
-  ])("SliceWheelIcon：%s 时所有 path d 合法、无 NaN/Infinity", (_name, count, parallel) => {
+    ["0 个阶段", 0, "chain", 0],
+    ["1 个阶段", 1, "chain", 0],
+    ["奇数 7 个阶段链路", 7, "chain", 0],
+    ["超大 32 个阶段链路", 32, "chain", 0],
+    ["互不相连 5 个独立阶段", 5, "isolated", 0],
+    ["互不相连 32 个独立阶段", 32, "isolated", 0],
+    ["一分为 4 股并行", 5, "fork", 3],
+    ["一分为 31 股并行", 32, "fork", 30],
+  ] as const)("SliceWheelIcon：%s 时所有 path d 合法、无 NaN/Infinity", (_name, count, shape, joinedCuts) => {
     const nodes = Array.from({ length: count }, (_, i) =>
       makeNode({ key: `n${i}`, title: `阶段 ${i}`, status: i % 3 === 0 ? "done" : i % 3 === 1 ? "running" : "pending", sortOrder: i }),
     );
-    const edges = parallel ? [] : nodes.slice(1).map((n, i) => ({ fromKey: nodes[i]!.key, toKey: n.key }));
+    const edges =
+      shape === "chain"
+        ? nodes.slice(1).map((n, i) => ({ fromKey: nodes[i]!.key, toKey: n.key }))
+        : shape === "fork"
+          ? nodes.slice(1).map((n) => ({ fromKey: nodes[0]!.key, toKey: n.key }))
+          : [];
     const { container } = render(<SliceWheelIcon graph={{ nodes, edges }} size={20} />);
     const root = container.querySelector("[data-slot='slice-wheel']") as HTMLElement;
     expect(root.style.width).toBe("1.25rem");
@@ -684,10 +691,8 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
       }
       expect(el.outerHTML).not.toMatch(/NaN|Infinity/);
     }
-    if (parallel && count > 1) {
-      // 全并行同层：每一刀（含首尾相接那一刀）都只切半刀，果心相连
-      expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(count);
-    }
+    // 只有同一连通子图同一并行层的相邻瓣才半刀相连；互不相连的独立阶段刀口切到底
+    expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(joinedCuts);
   });
 
   it("Worker 拿不到 workerId 时绝不拿 conversationId 顶替：撞号的零散 Worker 照旧留在 Pieces，图内节点也不会误链到它", () => {
@@ -863,5 +868,169 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
     }
     expect(within(completedRegion).queryByRole("button", { name: "Load more" })).toBeNull();
     expect(within(completedRegion).getByText("历史图 10000")).toBeInTheDocument();
+  });
+});
+
+describe("果皮轨按真实连通关系排布：独立子图不假连、多起点合流无断头线", () => {
+  const GUTTER_H = 32;
+  const GUTTER_CY = 16;
+
+  /** 解析果皮轨槽里每段轨道两端的坐标（M…V… 直线或 M…C… 弧线）。 */
+  function pathEnds(d: string): Array<[number, number]> {
+    const nums = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const start: [number, number] = [nums[0]!, nums[1]!];
+    if (/^M[\d. -]+V[\d.]+$/.test(d)) return [start, [nums[0]!, nums[2]!]];
+    return [start, [nums.at(-2)!, nums.at(-1)!]];
+  }
+
+  /** 一行轨道槽的上口、下口（线段触到行顶 / 行底的 x）与悬空端点（既不在行边也不在圆点上）。 */
+  function gutterPorts(svg: Element) {
+    const kind = svg.getAttribute("data-peel-gutter")!;
+    if (kind === "coil") return { kind, top: [] as number[], bottom: [11], loose: [] as string[] };
+    const dots = [...svg.querySelectorAll("circle")].map((c) => Number(c.getAttribute("cx")));
+    const top = new Set<number>();
+    const bottom = new Set<number>();
+    const loose: string[] = [];
+    for (const p of svg.querySelectorAll("path")) {
+      for (const [x, y] of pathEnds(p.getAttribute("d")!)) {
+        if (y === 0) top.add(x);
+        else if (y === GUTTER_H) bottom.add(x);
+        else if (!(y === GUTTER_CY && dots.includes(x))) loose.push(`${x},${y}`);
+      }
+    }
+    return { kind, top: [...top].toSorted(), bottom: [...bottom].toSorted(), loose };
+  }
+
+  /** 子图内上下相邻两行的轨道口逐一对上，首行无进入线、末行无伸出线，任何线段都不悬空。 */
+  function expectClosedTrack(component: Element) {
+    const rows = [...component.querySelectorAll("svg[data-peel-gutter]")].map(gutterPorts);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]!.top).toEqual([]);
+    expect(rows.at(-1)!.bottom).toEqual([]);
+    rows.forEach((row, i) => {
+      expect(row.loose, `第 ${i + 1} 行（${row.kind}）有悬空线段`).toEqual([]);
+      if (i > 0) expect(row.top, `第 ${i} 行与第 ${i + 1} 行的轨道没接上`).toEqual(rows[i - 1]!.bottom);
+    });
+    return rows;
+  }
+
+  function renderRail(graph: TaskGraph, workers: WorkerEntry[] = []) {
+    render(
+      <RightRail
+        asks={[]}
+        workers={workers}
+        activeGraphs={[graph]}
+        openWorkerId={null}
+        layout="side"
+        avatarKey={1}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    return screen.getByRole("region", { name: /^Task Graph$/ });
+  }
+
+  it("一张图含 3 个互不相连的子图（独立单步 + 三步含门禁链 + 双起点合流）：分组排布，子图之间不画任何假连线", async () => {
+    const user = userEvent.setup();
+    const graph = makeGraph({
+      id: 430,
+      title: "模型统一保存、总助面板与手机设置",
+      nodes: [
+        makeNode({ key: "p430", title: "资料页模型选择统一保存", status: "running", sortOrder: 0, activeWorkerId: 430, workerIds: [430] }),
+        makeNode({ key: "p431", title: "Fable 5.2 重规划总助面板", status: "running", sortOrder: 1, activeWorkerId: 431, workerIds: [431] }),
+        makeNode({ key: "p432", title: "手机软键盘避让与新建弹窗适配", status: "running", sortOrder: 2, activeWorkerId: 432, workerIds: [432] }),
+        makeNode({ key: "p433", title: "抽离共用设置模型层与原语", status: "running", sortOrder: 3, activeWorkerId: 433, workerIds: [433] }),
+        makeNode({ key: "ok", title: "确认总助面板重设计方案", kind: "gate", status: "pending", sortOrder: 4 }),
+        makeNode({ key: "mobile", title: "手机二级钻取设置页与验收", status: "pending", sortOrder: 5 }),
+        makeNode({ key: "impl", title: "实现新版总助工作台", status: "pending", sortOrder: 6 }),
+      ],
+      edges: [
+        { fromKey: "p431", toKey: "ok" },
+        { fromKey: "ok", toKey: "impl" },
+        { fromKey: "p432", toKey: "mobile" },
+        { fromKey: "p433", toKey: "mobile" },
+      ],
+    });
+    const workers = [430, 431, 432, 433].map((id) => makeWorker(id + 100, { workerId: id }));
+    const graphGroup = renderRail(graph, workers);
+
+    // 三步链尾部两层未解锁照旧折成 2 next，且只折本子图的
+    await user.click(within(graphGroup).getByRole("button", { name: /2 next/ }));
+
+    const components = [...graphGroup.querySelectorAll("[data-peel-component]")];
+    expect(components.map((c) => c.textContent)).toEqual([
+      expect.stringMatching(/^资料页模型选择统一保存#430$/),
+      expect.stringMatching(/^Fable 5\.2 重规划总助面板#431确认总助面板重设计方案实现新版总助工作台$/),
+      expect.stringMatching(/^手机软键盘避让与新建弹窗适配#432抽离共用设置模型层与原语#433手机二级钻取设置页与验收$/),
+    ]);
+
+    const kinds = components.map((c) => expectClosedTrack(c).map((r) => r.kind));
+    expect(kinds).toEqual([["station"], ["station", "station", "station"], ["parA", "parB", "station"]]);
+    // 独立单步只有一颗圆点，上下都不连线
+    expect(components[0]!.querySelectorAll("path")).toHaveLength(0);
+
+    // 切面轮：只有双起点合流那一层的两瓣果心相连，其余刀口切到底
+    const wheel = graphGroup.querySelector("[data-slot='slice-wheel']")!;
+    expect(wheel.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
+  });
+
+  it.each([2, 3])("首层 %i 个无上游并行起点合流到同一下游：右轨逐行接上、无断头悬空线", (roots) => {
+    const nodes = [
+      ...Array.from({ length: roots }, (_, i) =>
+        makeNode({ key: `r${i}`, title: `起点 ${i}`, status: "running", sortOrder: i }),
+      ),
+      makeNode({ key: "join", title: "合流验收", status: "pending", sortOrder: roots }),
+    ];
+    const edges = nodes.slice(0, roots).map((n) => ({ fromKey: n.key, toKey: "join" }));
+    const graphGroup = renderRail(makeGraph({ id: 500 + roots, title: "多起点合流", nodes, edges }));
+
+    const components = graphGroup.querySelectorAll("[data-peel-component]");
+    expect(components).toHaveLength(1);
+    const rows = expectClosedTrack(components[0]!);
+    expect(rows.map((r) => r.kind)).toEqual(
+      roots === 2 ? ["parA", "parB", "station"] : ["parA", "parMid", "parB", "station"],
+    );
+    // 没有共同上游：首行不画分叉弧线，第二个起点的右轨上方也没有进入线
+    expect(rows[0]!.top).toEqual([]);
+    expect(rows[1]!.top).toEqual([11]);
+    // 每个起点都合流进主轨，最后一行从右轨弯回主轨接上下游
+    expect(rows[roots - 1]!.bottom).toEqual([11]);
+  });
+
+  it.each([
+    [
+      "标准分叉合流菱形",
+      [["a", "b"], ["a", "c"], ["b", "d"], ["c", "d"]],
+      ["station", "parA", "parB", "station"],
+      true,
+    ],
+    ["分叉后两股都收尾（无下游）", [["a", "b"], ["a", "c"]], ["station", "parA", "parB"], false],
+    ["分叉后右股收尾、左股接下游", [["a", "b"], ["a", "c"], ["b", "d"]], ["station", "parA", "parB", "station"], false],
+    ["分叉后左股收尾、右股接下游", [["a", "b"], ["a", "c"], ["c", "d"]], ["station", "parA", "parB", "station"], true],
+    [
+      "一分三股再合流",
+      [["a", "b"], ["a", "c"], ["a", "e"], ["b", "d"], ["c", "d"], ["e", "d"]],
+      ["station", "parA", "parMid", "parB", "station"],
+      true,
+    ],
+  ] as const)("单连通子图：%s 照常分轨，轨道逐行接上不悬空", (_name, pairs, expectedKinds, parLaneMerges) => {
+    const keys = [...new Set(pairs.flat())].toSorted();
+    const nodes = keys.map((key, i) =>
+      makeNode({ key, title: `阶段 ${key}`, status: key === "a" ? "done" : key === "d" ? "pending" : "running", sortOrder: i }),
+    );
+    const edges = pairs.map(([fromKey, toKey]) => ({ fromKey, toKey }));
+    const graphGroup = renderRail(makeGraph({ id: 600, title: "单连通", nodes, edges }));
+
+    const components = graphGroup.querySelectorAll("[data-peel-component]");
+    expect(components).toHaveLength(1);
+    const rows = expectClosedTrack(components[0]!);
+    expect(rows.map((r) => r.kind)).toEqual(expectedKinds);
+    // 有共同上游：首个并行行从主轨顶部弧线分出右轨
+    const parA = components[0]!.querySelector("[data-peel-gutter='parA']")!;
+    expect([...parA.querySelectorAll("path")].some((p) => p.getAttribute("d")!.startsWith("M11 0C"))).toBe(true);
+    // 右轨上的阶段都收尾（出度 0）时，不画弯回主轨的假合流弧线
+    const parB = components[0]!.querySelector("[data-peel-gutter='parB']")!;
+    const parBMerges = [...parB.querySelectorAll("path")].some((p) => p.getAttribute("d")!.startsWith("M29 16C"));
+    expect(parBMerges).toBe(parLaneMerges);
   });
 });

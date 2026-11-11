@@ -32,6 +32,8 @@ import {
   PM_MODE_LABELS,
   PRODUCT_ID,
   SETUP_TIMEOUT_MS,
+  TASK_GRAPH_CREATE_JSON_HINT,
+  TASK_GRAPH_PATCH_JSON_HINT,
   USER_TO_WORKER_TAG,
   VENDOR_LIST,
   WORKER_BRANCH_PREFIX,
@@ -85,6 +87,8 @@ export const PM_OPENING_FEEDBACK_NOTE =
 /** 事先建任务图、门禁拍板与抗意外恢复（对全部厂商与两种模式统一生效，零厂商硬编码）。 */
 export const PM_TASK_GRAPH_WORKFLOW_NOTE = [
   `- **多步或并行先建任务图**：包含两步及以上阶段或需要并行派多个 Worker 的任务，开工先调 \`${HUB} graph create\` 规划节点与依赖，派 Worker 时传 \`--node <key>\`；单步简单查询或直接回答的小事不要强行建 1 节点假图。`,
+  `- **先亮骨架图再深读**：接到多步或并行任务，第一件事就用粗粒度节点把骨架图建出来，让界面立刻亮起果皮轨，再去读长文档、写任务单；细节有变用 \`${HUB} graph patch\` 增量调整。`,
+  `- **一张图只装一件事**：互不依赖的独立事项不要硬塞进同一张大杂烩图——单步小活直接派普通 Worker（不绑图），多条互不相干的多步任务各自建独立的图。`,
   `- **拍板分水岭必挂门禁（禁口头问）**：需用户拍板确认方案、选路线或批风险的分水岭，必须在任务图里挂 \`gate\` 节点并调 \`${HUB} graph ask\` 激活（无图的简单单问调 \`${HUB} ask\`），**严禁只在回复正文口头问**一句就停等。`,
   `- **抗意外恢复与增量改图**：审查/CI 返工、增删步骤或拆细节点时用 \`${HUB} graph patch\` 增量改图；Worker 报错、超额度或超过上下文上限（${WORKER_SEND_MAX_TOKENS / 1_000}K）时，先用 \`${HUB} worker end <编号> --incomplete\` 结束旧会话，再新派 Worker 重绑同一 \`--node <key>\` 接手。`,
 ].join("\n");
@@ -233,10 +237,10 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
   - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；要给用户可点击的单选选项时传 \`--option <选项>\`（至少 2 个），或每项以 \`A. \`/\`B. \` 开头；只是列出几项配置请用户确认时直接写普通列表，不会变成选项）
 - **任务流图与总助协同**
-  - \`${HUB} graph create [--title <标题>] --stdin\`：开工建立持久化任务流图（DAG，正文传 JSON \`{ nodes, edges? }\`）
+  - \`${HUB} graph create [--title <标题>] --stdin\`：开工建立持久化任务流图（DAG），正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（kind 为 piece 或 gate，deps 写前置节点 key）
   - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：查看活跃任务图或历史列表
   - \`${HUB} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给门禁节点填入问题、选项与调研摘要并按依赖激活
-  - \`${HUB} graph patch [<图编号>] --stdin\`：增量增删改任务图节点与依赖边（自动环路检测与重算解锁）
+  - \`${HUB} graph patch [<图编号>] --stdin\`：增量增删改任务图节点与依赖边（自动环路检测与重算解锁），正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`
   - \`${HUB} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：标记阶段节点完成并解锁下游
   - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]\` / \`${HUB} graph skip <节点> [--reason <原因>] [--graph <图编号>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：记录口头拍板、跳过节点或取消整张图
   - \`${HUB} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]\`：向全局总助提交结构化拍板卡（2～4 个选项，同步写入对话）

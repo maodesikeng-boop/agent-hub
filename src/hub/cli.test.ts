@@ -6,7 +6,18 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AGENT_VENDORS, ALL_EFFORTS, ENV_HUB_SOCK, ENV_HUB_TOKEN, HUB_COMMAND, HUB_EXIT, LedgerRequestError, type SessionTokens } from "../shared/index.ts";
+import {
+  AGENT_VENDORS,
+  ALL_EFFORTS,
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
+  HUB_COMMAND,
+  HUB_EXIT,
+  LedgerRequestError,
+  TASK_GRAPH_CREATE_JSON_HINT,
+  TASK_GRAPH_PATCH_JSON_HINT,
+  type SessionTokens,
+} from "../shared/index.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { HUB_USAGE, runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
@@ -476,6 +487,15 @@ describe("hub cli", () => {
         question: "选哪个？",
         options: ["方案 B", "方案 A"],
       });
+    });
+
+    it("graph create / patch 的 usage 直接附一行 JSON 字段示例", async () => {
+      const r = await hub(["--help"]);
+      expect(r.stdout).toContain(`JSON：${TASK_GRAPH_CREATE_JSON_HINT}`);
+      expect(r.stdout).toContain(`JSON：${TASK_GRAPH_PATCH_JSON_HINT}`);
+      for (const field of ["addNodes", "updateNodes", "removeNodes", "addEdges", "removeEdges"]) {
+        expect(TASK_GRAPH_PATCH_JSON_HINT).toContain(`"${field}"`);
+      }
     });
 
     it("graph create / show / list / ask / patch / done / decide / skip / cancel parse cleanly", async () => {

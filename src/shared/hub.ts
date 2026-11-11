@@ -360,6 +360,14 @@ export interface PatchTaskGraphSpecInput {
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
 
+/** `hub graph create` 正文 JSON 一行字段示例（提示词与 `hub --help` 共用；顶层 title 可改用 --title 传，kind 缺省为 piece，gate 可再带 question / options / recommended / summaryMd）。 */
+export const TASK_GRAPH_CREATE_JSON_HINT =
+  '{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}';
+
+/** `hub graph patch` 正文 JSON 一行字段示例（五个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖）。 */
+export const TASK_GRAPH_PATCH_JSON_HINT =
+  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
+
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 
 /** 项目名片：提示词、hub status 里用。 */
