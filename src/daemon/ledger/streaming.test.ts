@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { ConversationId, SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import { MAX_STREAMING_TEXT_CHARS, STREAMING_TEXT_THROTTLE_MS } from "../../shared/limits.ts";
+import { MAX_STREAMING_TEXT_CHARS, PM_ARCHIVE_RETENTION_MS, STREAMING_TEXT_THROTTLE_MS } from "../../shared/limits.ts";
 import { applyReminderChange, reminderStateFrom } from "../../shared/reminders.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -132,6 +132,32 @@ describe("ledger 流式文字（agent.text_delta）", () => {
     ledger.close();
     vi.advanceTimersByTime(STREAMING_TEXT_THROTTLE_MS * 2);
     expect(changes.length).toBe(beforeClose);
+  });
+
+  it("停止后迟到的流式帧不能恢复预览或覆盖 stopping", () => {
+    ev({ type: "agent.text_delta", delta: "正在输出", at: now });
+    ledger.requestStop(conversationId);
+    ev({ type: "agent.text_delta", delta: "停止后迟到", at: ++now });
+    vi.advanceTimersByTime(STREAMING_TEXT_THROTTLE_MS * 2);
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)).toMatchObject({ activity: "stopping" });
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.streamingText).toBeUndefined();
+  });
+
+  it("彻底删除会话立即取消待发流式定时器", () => {
+    const pmId = ledger.snapshot().pms[0]!.id;
+    ledger.archivePm(pmId);
+    // 模拟归档时进程尚未退出的迟到输出。
+    ev({ type: "agent.text_delta", delta: "首块", at: now });
+    ev({ type: "agent.text_delta", delta: "尾块", at: ++now });
+    expect(vi.getTimerCount()).toBe(1);
+    ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("预览上限不劈开 emoji 代理对", () => {
+    ev({ type: "agent.text_delta", delta: "中".repeat(MAX_STREAMING_TEXT_CHARS - 1) + "😀尾", at: now });
+    const text = ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.streamingText;
+    expect(text).toBe("中".repeat(MAX_STREAMING_TEXT_CHARS - 1) + "😀");
   });
 
   it("上限：单段流式文本超过 MAX_STREAMING_TEXT_CHARS 时截断内存预览前缀，最终 agent.text 仍完整入库", () => {

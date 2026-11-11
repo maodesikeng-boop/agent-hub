@@ -96,6 +96,12 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
   };
 
+  const forgetSession = (sessionId: SessionId) => {
+    cancelStreamTimer(sessionId);
+    live.delete(sessionId);
+    pushed.delete(sessionId);
+  };
+
   const clearAllStreaming = () => {
     for (const entry of streamThrottles.values()) {
       if (entry.timer !== null) clearTimeout(entry.timer);
@@ -178,6 +184,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
 
     const prev = liveOf(sessionId);
+    if (prev.activity === "stopping") return;
     const base = reset ? "" : (prev.streamingText ?? "");
     const baseChars = reset || prev.streamingText === undefined ? 0 : (prev.streamingChars ?? [...base].length);
     if (!reset && baseChars >= MAX_STREAMING_TEXT_CHARS) return;
@@ -343,6 +350,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     applyStreamingDelta,
     cancelStreamTimer,
     clearAllStreaming,
+    forgetSession,
     insertSession,
     refreshSessionState,
     recoverAfterRestart,

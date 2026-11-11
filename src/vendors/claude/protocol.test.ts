@@ -13,6 +13,7 @@ import {
   isInterruptMarker,
   parseApiRetry,
   parseAssistant,
+  parseStreamEvent,
   parseCapabilities,
   parseLifecycle,
   parseToolResults,
@@ -403,5 +404,16 @@ describe("一轮中途写入（docs/mid-turn-messages.md 第 2、5 节）", () =
     expect(interruptCancelled({ still_queued: [], cancelled: ["u2", 7] })).toEqual(["u2"]);
     expect(interruptCancelled({ still_queued: [] })).toEqual([]);
     expect(interruptCancelled(undefined)).toEqual([]);
+  });
+});
+
+
+describe("Claude 流式正文过滤", () => {
+  it("只接收 text_delta，忽略思考、工具输入与签名", () => {
+    for (const type of ["thinking_delta", "input_json_delta", "signature_delta"]) {
+      expect(parseStreamEvent({ event: { type: "content_block_delta", delta: { type, text: "隐藏内容" } } }, 1)).toBeNull();
+    }
+    expect(parseStreamEvent({ event: { type: "content_block_start", content_block: { type: "tool_use" } } }, 1)).toBeNull();
+    expect(parseStreamEvent({ event: { type: "content_block_delta", delta: { type: "text_delta", text: "正文" } } }, 1)).toEqual({ type: "agent.text_delta", delta: "正文", at: 1 });
   });
 });
