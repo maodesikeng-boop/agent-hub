@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
-import { groupMessages, listConversations, quotaUsage, workersOf } from "./selectors.ts";
+import { groupMessages, listConversations, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { changeOf, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
@@ -173,5 +173,29 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const c = [...b, revert(4, 101)];
     expect(revertedChangeIds(c)).not.toBe(revertedChangeIds(a));
     expect([...revertedChangeIds(c)].sort()).toEqual([100, 101]);
+  });
+
+  it("流式增量文字更新（session.status 只改 streamingText）：workersOf、listConversations、quotaUsage、quotaResetTimes 全部保持同一个引用", () => {
+    let state = monthState();
+    const pmSession = makeSession({
+      sessionId: 99_999,
+      conversationId: PM_CONVERSATION,
+      pmId: 1,
+      status: "running",
+      activity: "working",
+      step: { type: "text" },
+      streamingText: "第一块",
+    });
+    state = applyChange(state, sessionChange(state.seq + 1, pmSession));
+    const workersBefore = workersOf(state, 1);
+    const entriesBefore = listConversations(state);
+    const quotaBefore = quotaUsage(state, 0);
+    const resetsBefore = quotaResetTimes(state);
+
+    const next = applyChange(state, sessionChange(state.seq + 1, { ...pmSession, streamingText: "第一块第二块第三块" }));
+    expect(workersOf(next, 1)).toBe(workersBefore);
+    expect(listConversations(next)).toBe(entriesBefore);
+    expect(quotaUsage(next, 0)).toBe(quotaBefore);
+    expect(quotaResetTimes(next)).toBe(resetsBefore);
   });
 });

@@ -835,7 +835,14 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       case "text_delta": {
         const delta = typeof ev.delta === "string" ? ev.delta : "";
         if (delta !== "") {
+          const isNewBlock = !st.textBuffers.has(blockKey);
           st.textBuffers.set(blockKey, (st.textBuffers.get(blockKey) ?? "") + delta);
+          this.emit(st.id, {
+            type: "agent.text_delta",
+            delta,
+            ...(isNewBlock ? { reset: true } : {}),
+            at,
+          });
         }
         return;
       }

@@ -203,6 +203,16 @@ export interface AgentTextEvent extends DriverEventBase, SubtaskField {
   text: string;
 }
 
+/**
+ * assistant 正在流式输出的增量文字（各家 CLI 的增量块统一转成它；账本只放内存态并节流广播，绝不写 SQLite）。
+ * reset 为 true 时表示新一段开始（替换当前流式缓冲而不是追加）；这段完成时驱动照常发 agent.text 一次入库。
+ */
+export interface AgentTextDeltaEvent extends DriverEventBase, SubtaskField {
+  type: "agent.text_delta";
+  delta: string;
+  reset?: boolean;
+}
+
 /** assistant 的一个 thinking 块（内容不带，只告诉账本“在思考”）。 */
 export interface AgentThinkingEvent extends DriverEventBase, SubtaskField {
   type: "agent.thinking";
@@ -357,6 +367,7 @@ export type DriverEvent =
   | MessageRequeuedEvent
   | TurnStartedEvent
   | AgentTextEvent
+  | AgentTextDeltaEvent
   | AgentThinkingEvent
   | AgentToolEvent
   | AgentToolResultEvent

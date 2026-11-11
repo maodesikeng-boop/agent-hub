@@ -888,6 +888,8 @@ export interface SessionState {
   effort?: string | null;
   /** 在做什么（思考、写回复、哪个工具）；没有（空闲，或老服务端没带这个字段）就是 null / undefined，网页只显示“在处理”。 */
   step?: AgentStep | null;
+  /** 当前正在流式生成、尚未落库的这一段文字（内存态，上限 MAX_STREAMING_TEXT_CHARS）；不在流式生成文字时不传或为 null。 */
+  streamingText?: string | null;
   lastEventAt: number | null;
 }
 

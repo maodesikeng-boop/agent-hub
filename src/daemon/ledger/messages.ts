@@ -16,7 +16,7 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
-import { idle, toolFinished, toolStarted, working } from "./sessions.ts";
+import { clearStreaming, idle, toolFinished, toolStarted, working } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
@@ -215,8 +215,9 @@ export function createLedgerMessages(
         // 状态（running）由驱动层写进那一行；这里只清掉上一次没等到退出的“正在停”
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
-          // 后台任务跟着进程走，新进程不带着旧的
+          // 后台任务和残留流式预览跟着进程走，新进程不带着旧的
           l.backgroundTasks = undefined;
+          clearStreaming(l);
         });
         return;
       case "message.cancelled":
@@ -241,14 +242,30 @@ export function createLedgerMessages(
       }
       case "turn.started":
         // claude 自己开了一轮（后台任务完成等）：和写进去的消息开始处理一样显示在处理
-        updateLive(p, sessionId, working(null));
+        updateLive(p, sessionId, (l) => {
+          clearStreaming(l);
+          working(null)(l);
+        });
         return;
       case "agent.thinking":
         // 子任务里的事件不改主 agent 的状态
-        if (event.parentToolUseId === undefined) updateLive(p, sessionId, working(liveOf(sessionId).currentTool, { type: "thinking" }));
+        if (event.parentToolUseId === undefined) {
+          updateLive(p, sessionId, (l) => {
+            clearStreaming(l);
+            working(liveOf(sessionId).currentTool, { type: "thinking" })(l);
+          });
+        }
+        return;
+      case "agent.text_delta":
+        // 实际走 ledger.applyDriverEvent 的纯内存快路径；这里保 switch 穷尽
         return;
       case "agent.tool_result":
-        if (event.parentToolUseId === undefined) updateLive(p, sessionId, toolFinished(event.toolUseIds));
+        if (event.parentToolUseId === undefined) {
+          updateLive(p, sessionId, (l) => {
+            clearStreaming(l);
+            toolFinished(event.toolUseIds)(l);
+          });
+        }
         return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
@@ -256,7 +273,10 @@ export function createLedgerMessages(
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
-        updateLive(p, sessionId, working(null, event.parentToolUseId === undefined ? { type: "text" } : undefined));
+        updateLive(p, sessionId, (l) => {
+          if (event.parentToolUseId === undefined) clearStreaming(l);
+          working(null, event.parentToolUseId === undefined ? { type: "text" } : undefined)(l);
+        });
         return;
       }
       case "agent.tool":
@@ -266,11 +286,14 @@ export function createLedgerMessages(
           meta: { toolUseId: event.toolUseId, name: event.name, input: event.input },
           dedupeKey: agentMessageDedupeKey(sessionId, event.uuid, event.toolUseId),
         });
-        updateLive(
-          p,
-          sessionId,
-          event.parentToolUseId === undefined ? toolStarted(event.name, event.toolUseId, stepOfTool(event.name, event.input)) : working(event.name),
-        );
+        updateLive(p, sessionId, (l) => {
+          if (event.parentToolUseId === undefined) {
+            clearStreaming(l);
+            toolStarted(event.name, event.toolUseId, stepOfTool(event.name, event.input))(l);
+          } else {
+            working(event.name)(l);
+          }
+        });
         return;
       case "turn.ended": {
         const reason = event.error === undefined ? "turn_failed" : turnFailureReason(event.error);
@@ -321,6 +344,11 @@ export function createLedgerMessages(
           if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(session.conversationId, meta)) === undefined) {
             insertSystemMessage(p, session.conversationId, meta, CONTEXT_COMPACTED_TEXT);
           }
+        }
+        if (liveOf(sessionId).streamingText !== undefined) {
+          updateLive(p, sessionId, clearStreaming);
+        } else {
+          sessions.cancelStreamTimer(sessionId);
         }
         return;
       case "commands.changed":
@@ -410,7 +438,10 @@ export function createLedgerMessages(
     if (working) {
       updateLive(p, session.id, (l) => {
         l.activity = "stopping";
+        clearStreaming(l);
       });
+    } else {
+      sessions.cancelStreamTimer(session.id);
     }
     p.stops.push({ conversationId: session.conversationId, sessionId: session.id });
     return true;

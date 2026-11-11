@@ -1,5 +1,5 @@
 import { ChevronRight, MessageCircleQuestionMark } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { DEFAULT_AGENT_VENDOR, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
@@ -234,7 +234,7 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
 }
 
 /** 右栏开关：ghost 图标按钮，右栏展开时在右栏第一组标题的同一行右边，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
-export function RightRailToggle({
+export const RightRailToggle = memo(function RightRailToggle({
   visible,
   open,
   attention,
@@ -262,7 +262,7 @@ export function RightRailToggle({
       {!open && attention && <span className="absolute top-2 right-2 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
     </Button>
   );
-}
+});
 
 /** 一组最多列 RIGHT_RAIL_VISIBLE_ROWS 条，多了出 Show more；mustShow 的那一项在被收起的里面时自动展开，保证看得见。 */
 function useLimited<T>(items: readonly T[], mustShow: (item: T) => boolean) {
@@ -429,7 +429,7 @@ export function RailGroups({
  * 对话右边的右栏（docs/ui-standard.md 第 12 条）：外壳（aside）里放 RailGroups。layout：side 是和对话并排的一栏
  * （推开对话），右栏开关（toggle）放在第一组标题的同一行右边，内容从最顶上开始；top 是太窄时顶栏下面的一块，开关留在顶栏。
  */
-export function RightRail({
+export const RightRail = memo(function RightRail({
   asks,
   workers,
   openWorkerId,
@@ -470,4 +470,4 @@ export function RightRail({
       />
     </aside>
   );
-}
+});

@@ -641,10 +641,15 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       if (inFlight) this.markProcessing(st, inFlight, at);
       this.#flushStepTexts(st, at, stepId);
 
+      let appendedDelta = "";
+      let reset = false;
       if (typeof su.text_delta === "string" && su.text_delta !== "") {
         st.stepTexts.set(stepId, (st.stepTexts.get(stepId) ?? "") + su.text_delta);
+        appendedDelta = su.text_delta;
       } else if (typeof su.text === "string" && su.text !== "" && !st.stepTexts.has(stepId)) {
         st.stepTexts.set(stepId, su.text);
+        appendedDelta = su.text;
+        reset = true;
       }
 
       if (typeof su.usage === "object" && su.usage !== null) {
@@ -658,6 +663,8 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
       if (su.state === "DONE") {
         this.#flushStepTexts(st, at);
+      } else if (appendedDelta !== "") {
+        this.emit(st.id, { type: "agent.text_delta", delta: appendedDelta, ...(reset ? { reset: true } : {}), at });
       }
       return;
     }

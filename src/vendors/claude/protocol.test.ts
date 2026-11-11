@@ -311,6 +311,7 @@ describe("启动参数", () => {
       "--output-format",
       "stream-json",
       "--verbose",
+      "--include-partial-messages",
       "--replay-user-messages",
       "--session-id",
       row.vendorSessionId,
@@ -334,16 +335,16 @@ describe("启动参数", () => {
   });
   it("恢复用 --resume，有模型带 --model", () => {
     const args = buildClaudeArgs({ ...row, model: "sonnet", addDirs: [] }, { promptFile: "/p", env: {}, fingerprint: "" }, true);
-    expect(args.slice(7, 11)).toEqual(["--resume", row.vendorSessionId, "--model", "sonnet"]);
+    expect(args.slice(8, 12)).toEqual(["--resume", row.vendorSessionId, "--model", "sonnet"]);
     expect(args).not.toContain("--settings");
     expect(args).not.toContain("--add-dir");
     expect(args).not.toContain("--effort");
   });
   it("有思考程度带 --effort，紧跟在 --model 后面；默认（null）的都不带", () => {
     const args = buildClaudeArgs({ ...row, model: "haiku", effort: "low" }, files, true);
-    expect(args.slice(7, 13)).toEqual(["--resume", row.vendorSessionId, "--model", "haiku", "--effort", "low"]);
+    expect(args.slice(8, 14)).toEqual(["--resume", row.vendorSessionId, "--model", "haiku", "--effort", "low"]);
     const effortOnly = buildClaudeArgs({ ...row, effort: "max" }, files, true);
-    expect(effortOnly.slice(9, 11)).toEqual(["--effort", "max"]);
+    expect(effortOnly.slice(10, 12)).toEqual(["--effort", "max"]);
     expect(effortOnly).not.toContain("--model");
     const neither = buildClaudeArgs(row, files, true);
     expect(neither).not.toContain("--model");

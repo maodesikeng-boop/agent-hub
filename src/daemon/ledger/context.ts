@@ -62,6 +62,8 @@ export interface LedgerContext {
   subscribe<T>(listeners: Set<T>, listener: T): () => void;
   /** 在一个事务里做 fn，提交后按顺序发变化、动作登记、停止请求。 */
   write<T>(fn: (p: Pending) => T): T;
+  /** 纯内存变化（如流式增量文字节流广播）：不进数据库事务，直接分配 seq 并通知监听器。 */
+  emitChange(input: ChangeInput): void;
   enqueue(p: Pending, action: NewAction): void;
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
   /** 现在缓存着的模型名单（ModelCatalogs.current），还没问到是 null。 */
@@ -149,6 +151,10 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     return result;
   };
 
+  const emitChange = (input: ChangeInput) => {
+    notify(changeListeners, log.append(input));
+  };
+
   const enqueue = (p: Pending, action: NewAction) => {
     const { row, enqueued } = enqueueAction(db, action, now());
     if (enqueued) p.actions.push(row);
@@ -184,5 +190,5 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   };
   const commandBlockReason = (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string) =>
     composerBaseOf(session.vendor)?.blockReason(text, options.knownCommands?.(session) ?? null) ?? null;
-  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, enqueue, reportHealthIn, modelCatalog, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
+  return { db, now, log, changeListeners, actionListeners, stopListeners, pushed, subscribe, write, emitChange, enqueue, reportHealthIn, modelCatalog, modelLabel: label, modelShortLabel: shortLabel, commandBlockReason, osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()) };
 }

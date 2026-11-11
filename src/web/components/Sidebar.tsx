@@ -1,5 +1,5 @@
 import { ChevronRight, Plus, Search, Settings } from "lucide-react";
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
@@ -176,36 +176,48 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
  * layout 三档：wide 是 300px 宽栏，rail 是 72px 垂直头像窄栏（窄屏 1100px 以下，docs/ui-standard.md 第 16 条），page 是手机的整屏列表页（宽栏的内容、铺满、不显示选中）。
  * 没传 layout 时按窗口宽度在 wide 和 rail 里选。
  */
-export function Sidebar({
-  groups,
-  active: propActive,
-  waiting,
-  asking,
-  notify,
-  devices = null,
-  quota,
-  quotaFetchable = false,
-  layout: propLayout,
-  onSelect,
-  onNewPm,
-}: {
-  groups: SidebarGroup[];
-  active: ConversationRef | null;
-  /** 在“等你”的对话（devices.ts 的 conversationKey）。 */
-  waiting: ReadonlySet<string>;
-  /** 有“等你确定”的提问没回答的对话（同上）。 */
-  asking: ReadonlySet<string>;
-  notify: NotifySettings;
-  /** 设置里的“设备”一组；null（守护进程还没有联机）不显示。 */
-  devices?: DeviceSettings | null;
-  quota: QuotaVendor[];
-  /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
-  quotaFetchable?: boolean;
-  /** 外壳指定的布局。 */
-  layout?: SidebarLayout;
-  onSelect: (ref: ConversationRef) => void;
-  onNewPm: () => void;
-}) {
+function sameDeviceSettings(a: DeviceSettings | null | undefined, b: DeviceSettings | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.tunnel !== b.tunnel || a.publicEntry !== b.publicEntry || a.repoDir !== b.repoDir || a.onChanged !== b.onChanged) return false;
+  if (a.devices.length !== b.devices.length) return false;
+  return a.devices.every((d, i) => {
+    const o = b.devices[i]!;
+    return d.key === o.key && d.info === o.info && d.status === o.status && (d.status !== "offline" || d.lastOnlineAt === o.lastOnlineAt);
+  });
+}
+
+export const Sidebar = memo(
+  function Sidebar({
+    groups,
+    active: propActive,
+    waiting,
+    asking,
+    notify,
+    devices = null,
+    quota,
+    quotaFetchable = false,
+    layout: propLayout,
+    onSelect,
+    onNewPm,
+  }: {
+    groups: SidebarGroup[];
+    active: ConversationRef | null;
+    /** 在“等你”的对话（devices.ts 的 conversationKey）。 */
+    waiting: ReadonlySet<string>;
+    /** 有“等你确定”的提问没回答的对话（同上）。 */
+    asking: ReadonlySet<string>;
+    notify: NotifySettings;
+    /** 设置里的“设备”一组；null（守护进程还没有联机）不显示。 */
+    devices?: DeviceSettings | null;
+    quota: QuotaVendor[];
+    /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
+    quotaFetchable?: boolean;
+    /** 外壳指定的布局。 */
+    layout?: SidebarLayout;
+    onSelect: (ref: ConversationRef) => void;
+    onNewPm: () => void;
+  }) {
   const queryNarrow = useMediaQuery(NARROW_QUERY);
   const layout: SidebarLayout = propLayout ?? (queryNarrow ? "rail" : "wide");
   const narrow = layout === "rail";
@@ -385,4 +397,17 @@ export function Sidebar({
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} notify={notify} devices={devices} />
     </aside>
   );
-}
+  },
+  (prev, next) =>
+    prev.groups === next.groups &&
+    prev.active === next.active &&
+    prev.waiting === next.waiting &&
+    prev.asking === next.asking &&
+    prev.notify === next.notify &&
+    sameDeviceSettings(prev.devices, next.devices) &&
+    prev.quota === next.quota &&
+    prev.quotaFetchable === next.quotaFetchable &&
+    prev.layout === next.layout &&
+    prev.onSelect === next.onSelect &&
+    prev.onNewPm === next.onNewPm,
+);

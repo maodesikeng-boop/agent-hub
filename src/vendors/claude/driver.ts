@@ -51,6 +51,7 @@ import {
   parseCapabilities,
   parseLifecycle,
   parseRateLimit,
+  parseStreamEvent,
   parseToolResults,
 } from "./protocol.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
@@ -419,6 +420,11 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           if (result) this.emit(st.id, result);
         }
         return;
+      case "stream_event": {
+        const delta = parseStreamEvent(obj, at);
+        if (delta) this.emit(st.id, delta);
+        return;
+      }
       case "assistant": {
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(obj, row.usage) : null;

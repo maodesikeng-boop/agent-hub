@@ -78,6 +78,10 @@ export const PM_BACKGROUND_COMMAND_NOTE = buildPmBackgroundCommandNote();
 export const PM_DELEGATE_LONG_COMMAND_NOTE =
   "- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。";
 
+/** 需要调工具或多步处理时先给一句简短反馈（不写死特定厂商或工具名；一步直答不加套话）。 */
+export const PM_OPENING_FEEDBACK_NOTE =
+  "- **先回应再动手**：需要调工具、查代码或派活等多步处理时，开头先用一句简短的话告诉用户正在做什么，再继续思考和调工具；一步就能直接回答的直接答，不加套话。";
+
 /** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。 */
 export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
   const commandNote =
@@ -92,6 +96,7 @@ export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: Agen
   if (mode === "manage_only") {
     return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
 
+${PM_OPENING_FEEDBACK_NOTE}
 - **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
 - **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。
 ${commandNote}
@@ -99,6 +104,7 @@ ${commandNote}
   }
   return `# 怎么干活（当前模式：${PM_MODE_LABELS.hands_on}）
 
+${PM_OPENING_FEEDBACK_NOTE}
 - **能直接做就直接做**：不复杂的事自己动手，做完告诉用户做了什么、改了哪些文件。
 - **活大了再派 Worker**：活大、能拆开同时做，或者想和主文件夹隔开的，派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
 ${commandNote}

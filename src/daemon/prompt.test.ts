@@ -852,4 +852,18 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     expect(buildFingerprintPrompt({ ...ctx, project: { ...ctx.project!, mainFolder: "/work/other" } }, dir)).not.toBe(base);
     expect(buildFingerprintPrompt(workerContext(), dir)).toBe(buildWorkerPrompt(workerContext(), dir));
   });
+
+  it("开场状态反馈指引：manage_only 与 hands_on 都要求多步处理前先简短回应正在做什么，一步直答不凑套话，且不写死厂商名", () => {
+    for (const mode of PM_MODES) {
+      for (const vendor of AGENT_VENDORS) {
+        const modePrompt = buildPmModePrompt(mode, vendor);
+        expect(modePrompt).toContain("先回应再动手");
+        expect(modePrompt).toMatch(/先用一句简短的话告诉用户正在做什么/);
+        expect(modePrompt).toMatch(/一步就能直接回答.*不加套话/);
+        for (const id of AGENT_VENDORS) {
+          expect(modePrompt.toLowerCase()).not.toContain(id);
+        }
+      }
+    }
+  });
 });

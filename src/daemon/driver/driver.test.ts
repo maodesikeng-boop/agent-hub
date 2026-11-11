@@ -1,5 +1,5 @@
 // 驱动层 + 假 claude：m1-plan 第 4 节“W2 驱动层 + 假 claude”测试表，每条一个 describe。
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1107,6 +1107,15 @@ describe("其他输入输出", () => {
 });
 
 describe("清理残留进程", () => {
+  const canRunPs = (() => {
+    try {
+      execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
   // 用例失败（cleanupStale 没清掉它）时假 claude 不能留在机器上
   const strays: ChildProcess[] = [];
   afterEach(() => {
@@ -1128,7 +1137,7 @@ describe("清理残留进程", () => {
     for (let i = 0; i < 100 && t.argvs().length === 0; i++) await realSleep(50);
   };
 
-  it("命令行是 claude 且带着会话 ID：SIGINT 结束，那一行 pid 置空、状态空闲", async () => {
+  it.runIf(canRunPs)("命令行是 claude 且带着会话 ID：SIGINT 结束，那一行 pid 置空、状态空闲", async () => {
     const t = harness();
     const s = t.addSession({ status: "running" });
     const stray = strayClaude(t, s.vendorSessionId);
@@ -1140,7 +1149,7 @@ describe("清理残留进程", () => {
     expect(t.store.get(s.id)).toMatchObject({ pid: null, status: "idle" });
   });
 
-  it("不理 SIGINT：等一会儿再 SIGKILL", async () => {
+  it.runIf(canRunPs)("不理 SIGINT：等一会儿再 SIGKILL", async () => {
     const t = harness({ driver: { interruptGraceMs: 300 }, script: { ignoreSigint: true } });
     const s = t.addSession({ status: "running" });
     const stray = strayClaude(t, s.vendorSessionId);

@@ -163,7 +163,7 @@ export function visibleSessionOf(state: Pick<ReminderState, "sessions" | "conver
   const messages = state.conversations[conversationId]?.messages ?? [];
   if (session === null || !inHandoverTurn(messages, session.sessionId)) return session;
   const waiting = messages.some((m) => m.status === "queued" && !isHandoverTraffic(m)) || pendingIn(state, conversationId).some((p) => p.phase === "sending");
-  const quiet = { currentTool: null, apiRetry: null };
+  const quiet = { currentTool: null, apiRetry: null, streamingText: undefined };
   return waiting ? { ...session, ...quiet, activity: "working", step: { type: "thinking" } } : { ...session, ...quiet, activity: "idle", step: null };
 }
 
@@ -254,7 +254,7 @@ export function reminderStateFrom(snapshot: Pick<LedgerSnapshot, "seq" | "pms" |
         { conversation, messages: conversation.kind === "worker" ? [] : messages },
       ]),
     ),
-    sessions: snapshot.sessions,
+    sessions: snapshot.sessions.map(({ streamingText: _, ...s }) => s),
     pending: [],
   };
 }
@@ -290,8 +290,24 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
       return { ...next, conversations: { ...state.conversations, [message.conversationId]: { ...view, messages: upsertRecent(view.messages, message) } } };
     }
     case "session.status":
-    case "session.created":
-      return { ...next, sessions: upsertBy(state.sessions, change.data.session, (a, b) => a.sessionId === b.sessionId) };
+    case "session.created": {
+      const { streamingText: _, ...incoming } = change.data.session;
+      const index = state.sessions.findIndex((x) => x.sessionId === incoming.sessionId);
+      if (index !== -1) {
+        const prev = state.sessions[index]!;
+        if (
+          prev.conversationId === incoming.conversationId &&
+          prev.pmId === incoming.pmId &&
+          prev.generation === incoming.generation &&
+          prev.status === incoming.status &&
+          prev.activity === incoming.activity
+        ) {
+          return next;
+        }
+        return { ...next, sessions: state.sessions.with(index, incoming) };
+      }
+      return { ...next, sessions: [...state.sessions, incoming] };
+    }
     case "pm.created":
     case "pm.updated":
       return { ...next, pms: upsertBy(state.pms, change.data.pm, (a, b) => a.id === b.id) };

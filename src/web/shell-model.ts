@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isAgentVendor, type ConversationId, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
+import { isAgentVendor, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import type { SidebarGroup } from "./components/Sidebar.tsx";
 import { useDevices } from "./device-hub.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, routeDeviceOf } from "./devices.ts";
 import { useHubQueryClient } from "./query-client.ts";
-import { failingHealth, listConversations, pendingAsks, quotaResetTimes, hasFetchedQuotaSession, sessionOf, workerLineOf, workersOf } from "./selectors.ts";
+import { failingHealth, listConversations, pendingAsks, quotaResetTimes, hasFetchedQuotaSession, sessionOf, workerLineOf, workersOf, type ConversationEntry, type WorkerEntry } from "./selectors.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack } from "./mobile/back.ts";
@@ -13,6 +13,9 @@ import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
 
 const DRAG_INTERACTIVE_SELECTOR = 'button, a, input, textarea, select, [role="button"], [data-no-drag]';
+const EMPTY_ENTRIES: ConversationEntry[] = [];
+const EMPTY_WORKERS: WorkerEntry[] = [];
+const EMPTY_ASKS: Message[] = [];
 
 declare global {
   interface Window {
@@ -253,35 +256,32 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const quotaFetchable = useMemo(() => hasFetchedQuotaSession(state), [state.sessions]);
   const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
   const railPm = active?.pm?.id ?? null;
-  const railWorkers = useMemo(() => (railPm === null ? [] : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
-  const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : []), [state.conversations, state.pms, state.pending, active?.id]);
+  const railWorkers = useMemo(() => (railPm === null ? EMPTY_WORKERS : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
+  const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
   // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link: rawLink } = deviceNotices(current);
   const link = useMemo(
     () => (rawLink === null ? null : { readOnly: rawLink.readOnly, waiting: rawLink.waiting }),
     [rawLink?.readOnly, rawLink?.waiting],
   );
-
-  // 保留 App 原来的提前返回边界：入口尚未就绪时不遍历列表。
-  const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
-  if (!shellReady) return { ...shared, content: null };
-
-  const view = active ? state.conversations[active.id] : undefined;
-  const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
+  const openNewPm = useCallback(() => setCreating(true), []);
+  const refreshFleet = useCallback(() => void fleet.refresh(), [fleet.refresh]);
+  const created = useCallback(
+    (device: string, conversationId: ConversationId) => {
+      setCreating(false);
+      setPendingCreated({ device, id: conversationId });
+      select({ device, id: conversationId });
+    },
+    [select],
+  );
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  const created = (device: string, conversationId: ConversationId) => {
-    setCreating(false);
-    setPendingCreated({ device, id: conversationId });
-    select({ device, id: conversationId });
-  };
-  const workerPmEntry = active;
   // 右栏列的是当前打开的项目经理（Worker 的对话也算它）的“等你确定”和 Worker
   const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0);
   // 有要关心的事才自动出来：有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
   const railNeedsYou = !profile && (railAsks.length > 0 || railWorkers.some((w) => !w.ended));
   const railPeeking = railPeek !== null && railPeek === railPm;
   const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed && (railNeedsYou || railPeeking));
-  const toggleRail = () => {
+  const toggleRail = useCallback(() => {
     if (compact) {
       setCompactRailOpen((v) => !v);
       return;
@@ -291,25 +291,58 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     saveRailClosed(closed);
     // 手动打开、而又没有要关心的事：记下来，右栏才不会马上又收回去（只在这个项目经理、这次打开期间）
     setRailPeek(closed || railNeedsYou ? null : railPm);
-  };
-  const openAsk = (messageId: MessageId) => {
-    if (active && openWorker !== null) {
-      const parent = { view: "conversation", id: active.id, ...here } as const;
-      if (autoSelect) navigate(parent);
-      else mobileBack(parent, replace);
-    }
-    setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
-  };
-  const avatarKey = active?.avatarKey ?? 0;
+  }, [compact, railOpen, railNeedsYou, railPm]);
+  const openAsk = useCallback(
+    (messageId: MessageId) => {
+      if (active && openWorker !== null) {
+        const parent = { view: "conversation", id: active.id, ...here } as const;
+        if (autoSelect) navigate(parent);
+        else mobileBack(parent, replace);
+      }
+      setFocus((f) => ({ id: messageId, n: (f?.n ?? 0) + 1 }));
+    },
+    [active, openWorker, here, autoSelect, navigate, replace],
+  );
   const sidebarActive = profileEntry?.id ?? activeId;
-  const groups: SidebarGroup[] = fleet.devices.map((d) => ({
+  const sidebarActiveRef = useMemo(
+    () => (sidebarActive === null ? null : { device: current.key, id: sidebarActive }),
+    [current.key, sidebarActive],
+  );
+  const groupsRef = useRef<SidebarGroup[]>([]);
+
+  // 保留 App 原来的提前返回边界：入口尚未就绪时不遍历列表。
+  const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
+  if (!shellReady) return { ...shared, content: null };
+
+  const view = active ? state.conversations[active.id] : undefined;
+  const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
+  const workerPmEntry = active;
+  const avatarKey = active?.avatarKey ?? 0;
+  const nextGroups: SidebarGroup[] = fleet.devices.map((d) => ({
     key: d.key,
     name: d.info.name,
     platform: d.info.platform,
     status: d.status,
     lastOnlineAt: d.lastOnlineAt,
-    entries: d.state.phase === "ready" ? (d.key === current.key ? entries : listConversations(d.state)) : [],
+    entries: d.state.phase === "ready" ? (d.key === current.key ? entries : listConversations(d.state)) : EMPTY_ENTRIES,
   }));
+  const prevGroups = groupsRef.current;
+  const groups =
+    prevGroups.length === nextGroups.length &&
+    nextGroups.every((g, i) => {
+      const p = prevGroups[i]!;
+      return (
+        p.key === g.key &&
+        p.name === g.name &&
+        p.platform === g.platform &&
+        p.status === g.status &&
+        (g.status !== "offline" || p.lastOnlineAt === g.lastOnlineAt) &&
+        p.entries === g.entries
+      );
+    })
+      ? prevGroups
+      : nextGroups;
+  groupsRef.current = groups;
   const newPmDevices = fleet.devices.map((d) => ({ key: d.key, name: d.info.name, status: d.status, client: fleet.hub(d.key).client, server: d.state.server }));
   return {
     ...shared,
@@ -333,6 +366,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       newPmDevices,
       offline,
       openAsk,
+      openNewPm,
       openProfile,
       openWorker,
       openWorkerConversation,
@@ -344,11 +378,13 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railOpen,
       railWorkers,
       reconnecting,
+      refreshFleet,
       reminders,
       select,
       send,
       setCreating,
       sidebarActive,
+      sidebarActiveRef,
       staging,
       toggleRail,
       view,

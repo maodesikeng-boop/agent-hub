@@ -185,8 +185,19 @@ export function applyChange(state: HubState, change: Change): HubState {
     case "message.created":
     case "message.updated": {
       const { message } = change.data;
+      const sessions =
+        change.type === "message.created" &&
+        message.sender === "agent" &&
+        message.sessionId !== null &&
+        state.sessions.some((s) => s.sessionId === message.sessionId && s.streamingText !== undefined)
+          ? state.sessions.map((s) => {
+              if (s.sessionId !== message.sessionId || s.streamingText === undefined) return s;
+              const { streamingText: _, ...clean } = s;
+              return clean;
+            })
+          : state.sessions;
       const view = state.conversations[message.conversationId];
-      if (!view) return next; // 不认识的对话，device-hub.ts 会重新拉快照
+      if (!view) return { ...next, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
       // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
       if (
         view.conversation.kind === "worker" &&
@@ -196,6 +207,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       ) {
         return {
           ...next,
+          sessions,
           pending: dropConfirmed(state.pending, [message]),
           retry: dropRetryIfSettled(state.retry, message),
         };
@@ -203,7 +215,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
         const conversations = advanceWorkerLine(state.conversations, message);
-        return { ...next, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+        return { ...next, sessions, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
       }
       const updated = upsertMessage(view.messages, message);
       const trim =
@@ -220,6 +232,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       );
       return {
         ...next,
+        sessions,
         conversations,
         pending: dropConfirmed(state.pending, [message]),
         retry: dropRetryIfSettled(state.retry, message),

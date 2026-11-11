@@ -792,7 +792,12 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
     const toolResults = t.of("agent.tool_result");
     expect(toolResults.map((r) => r.toolUseIds)).toEqual([["call-cmd-1"], ["call-file-1"], ["call-web-1"]]);
 
-    // 6. agentMessage delta 累加，只在 item/completed 发出完整的一条 agent.text
+    // 6. agentMessage delta 实时发出 agent.text_delta，并在 item/completed 发出完整的一条 agent.text
+    expect(t.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
+      { delta: "你好，", reset: true },
+      { delta: "我是 ", reset: undefined },
+      { delta: "Codex！", reset: undefined },
+    ]);
     const texts = t.of("agent.text");
     expect(texts).toHaveLength(1);
     expect(texts[0]).toMatchObject({

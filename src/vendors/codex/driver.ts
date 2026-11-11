@@ -788,7 +788,14 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const delta = typeof params.delta === "string" ? params.delta : "";
         if (delta !== "") {
           const prev = st.agentMessageBuffers.get(itemId) ?? "";
+          const isFirstChunk = prev === "";
           st.agentMessageBuffers.set(itemId, prev + delta);
+          this.emit(st.id, {
+            type: "agent.text_delta",
+            delta,
+            ...(isFirstChunk ? { reset: true } : {}),
+            at,
+          });
         }
         return;
       }

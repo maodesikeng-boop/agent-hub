@@ -252,6 +252,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
     // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
     applyDriverEvent(sessionId, event) {
+      if (event.type === "agent.text_delta") {
+        if (event.parentToolUseId !== undefined) return;
+        const session = getAgentSession(db, sessionId);
+        if (session !== null) sessions.applyStreamingDelta(session, event.delta, event.reset);
+        return;
+      }
       const session = getAgentSession(db, sessionId);
       if (session === null) return;
       write((p) => {
@@ -346,6 +352,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     isWorkerCleanable: workers.isWorkerCleanable,
     close(): void {
       workers.clearAllMaxTime();
+      sessions.clearAllStreaming();
     },
   };
 }
