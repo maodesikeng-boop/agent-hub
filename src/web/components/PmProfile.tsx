@@ -6,9 +6,13 @@ import {
   CUSTOM_MODEL,
   DEFAULT_AGENT_VENDOR,
   MAX_PERSONA_BYTES,
+  PM_MEMORY_MAX_BYTES,
+  PM_MEMORY_MAX_LINES,
+  PM_MEMORY_SOFT_WARN_RATIO,
   isAgentVendor,
   modelLabel,
   splitModelEffort,
+  pmMemoryLineCount,
   utf8Bytes,
   vendorLabel,
   type AgentSetting,
@@ -34,6 +38,7 @@ import { useModelCatalog } from "../models.tsx";
 import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
+import { PmMemoryFilesGroup } from "./PmMemoryFilesGroup.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
 import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
@@ -270,6 +275,13 @@ function PmEditor({
     : undefined;
   const saveText = () => textMutation.mutate();
   const revert = (changeId: number) => revertMutation.mutate(changeId);
+  const personaLines = pmMemoryLineCount(text);
+  const personaBytes = utf8Bytes(text);
+  const personaOverAutoLoad = personaLines > PM_MEMORY_MAX_LINES || personaBytes > PM_MEMORY_MAX_BYTES;
+  const personaNearAutoLoad =
+    !personaOverAutoLoad &&
+    (personaLines >= Math.ceil(PM_MEMORY_MAX_LINES * PM_MEMORY_SOFT_WARN_RATIO) ||
+      personaBytes >= Math.ceil(PM_MEMORY_MAX_BYTES * PM_MEMORY_SOFT_WARN_RATIO));
 
   return (
     <>
@@ -336,12 +348,20 @@ function PmEditor({
           value={text}
           onChange={(e) => setDraftText(e.target.value)}
         />
+        {(personaOverAutoLoad || personaNearAutoLoad) && !tooLong && (
+          <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
+            {personaOverAutoLoad
+              ? `Only the first ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) load automatically. Move detailed notes into Memory files below`
+              : `Approaching the ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) auto-load limit. Move detailed notes into Memory files below`}
+          </p>
+        )}
         {(tooLong || textError) && (
           <div className="px-4 py-2.5">
             {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
           </div>
         )}
       </SettingsGroup>
+      <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={pm.archivedAt != null} />
       {/* 修改记录会越攒越多：默认收起，标题行带条数，点开才列出来 */}
       <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
         {revertError && (

@@ -96,6 +96,10 @@ export interface LedgerContext {
 export interface LedgerFiles {
   pmHomeRoot: string;
   personasDir: string | undefined;
+  /** state/pm-memory/：每个项目经理独占的记忆目录根（未配置时仅在子文件接口使用回退目录）。 */
+  pmMemoryDir?: string;
+  /** 子文件接口在旧测试未传 dataHome / pmMemoryDir 时的回退目录。 */
+  pmMemoryFallbackDir: string;
   /** worktrees/ 的根目录（LedgerOptions.worktreesDir 补上默认值）。 */
   worktreesDir: string;
   launchDir?: string;

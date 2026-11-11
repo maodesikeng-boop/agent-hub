@@ -536,6 +536,8 @@ export interface DriverOptions {
   sessionPreamble?: (sessionId: SessionId) => string | null;
   /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
   env?: Record<string, string>;
+  /** state/pm-memory 根目录：项目经理会话在驱动底座统一挂载专属 `<pmMemoryDir>/<pmId>` 到可读写 addDirs。 */
+  pmMemoryDir?: string;
   /** 记日志（不进 health 的事，比如 claude 出了 conversation_reset）。默认写标准错误。 */
   log?: (line: string) => void;
   /** 以下都有默认值，见 limits.ts；测试可以改小。 */

@@ -10,6 +10,7 @@ import { isAgentVendor, type AgentVendor } from "../../shared/vendors.ts";
 import { ForkUnsupportedError, findForker, forkSourceOf } from "./forker.ts";
 import type { ForkerRegistry, SessionForker } from "./forker.ts";
 import { FORKERS } from "./forkers.ts";
+import { withPmMemoryAddDir } from "../driver/pm-memory-dirs.ts";
 
 export interface HandoverRunnerOptions {
   ledger: LedgerHandoverWork;
@@ -26,6 +27,8 @@ export interface HandoverRunnerOptions {
   timeoutMs?: number;
   /** 没人叫醒时多久自己领一次兜底，默认 AUTO_RENEW_TICK_MS。 */
   tickMs?: number;
+  /** 项目经理专属记忆目录根（同驱动层的 pmMemoryDir）。 */
+  pmMemoryDir?: string;
 }
 
 export interface HandoverRunner {
@@ -143,8 +146,9 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
     const { signal } = run.controller;
     let copy: { forker: SessionForker; handle: ForkHandle } | null = null;
     try {
-      const { vendor } = job.session;
-      const src = forkSourceOf(job.session, await abortable(prepareLaunch(job.session), signal), isAgentVendor(vendor) ? executablePaths[vendor] : "");
+      const sessionWithMemory = withPmMemoryAddDir(job.session, options.pmMemoryDir);
+      const { vendor } = sessionWithMemory;
+      const src = forkSourceOf(sessionWithMemory, await abortable(prepareLaunch(sessionWithMemory), signal), isAgentVendor(vendor) ? executablePaths[vendor] : "");
       const forked = await forkFirst(registry[src.vendor], src, signal);
       if ("unsupported" in forked) {
         await attempt(`报 #${handoverId} 不支持`, () => ledger.handoverFailed(handoverId, { kind: "unsupported", detail: forked.unsupported }));

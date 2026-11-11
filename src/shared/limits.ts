@@ -686,6 +686,28 @@ export const HUB_GRAPH_LIST_LIMIT = 20;
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
+// ---- 项目经理专属记忆目录（state/pm-memory/<pmId>/，见 src/daemon/pm-memory.ts）----
+/** 顶层主索引文件名（自动拼入项目经理系统提示词，与数据库 pms.persona 双向同步）。 */
+export const PM_MEMORY_INDEX_FILE = "MEMORY.md";
+/** 拼入系统提示词时 MEMORY.md 最多保留多少行；超出部分安全截断并附一行拆分提示（磁盘与资料页完整保留）。 */
+export const PM_MEMORY_MAX_LINES = 200;
+/** 拼入系统提示词时 MEMORY.md 最多占多少 UTF-8 字节（25 KB，含超限时附上的拆分提示）。 */
+export const PM_MEMORY_MAX_BYTES = 25 * 1024;
+/** 单个项目经理最多建多少个扁平 `<topic>.md` 按需参考子文件。 */
+export const PM_MEMORY_MAX_SUBFILES = 50;
+/** 单个 `<topic>.md` 子文件最多多少 UTF-8 字节（64 KB）。 */
+export const PM_MEMORY_MAX_SUBFILE_BYTES = 64 * 1024;
+/** 单个项目经理全部 `<topic>.md` 子文件合计最多多少 UTF-8 字节（1 MB）。 */
+export const PM_MEMORY_MAX_TOTAL_BYTES = 1024 * 1024;
+/** 资料页柔和提示水位比例（达到上限 80% 起才柔和提示，平时不挂配额数字）。 */
+export const PM_MEMORY_SOFT_WARN_RATIO = 0.8;
+/** `<topic>.md` 子文件名（含 `.md`）最多几个 Unicode 字符。 */
+export const MAX_PM_MEMORY_FILE_NAME_CHARS = 80;
+/** 扫描单个 PM 记忆目录时最多检查多少个目录项（防外部塞入海量无关文件卡住主线程）。 */
+export const PM_MEMORY_MAX_DIR_SCAN = 256;
+/** 账本内存里记住已同步过的 MEMORY.md 内容哈希的 LRU 上限（按跑了一个月数百个 PM 留足余量）。 */
+export const PM_MEMORY_HASH_CACHE_MAX = 512;
+
 // ---- 全厂商同步（daemon/vendor-sync/、web/components/VendorSyncSettings.tsx）----
 /** `<dataDir>/backups/sync/` 轮转保留的备份快照目录上限，超了自动删最老的防无限堆积。 */
 export const MAX_VENDOR_SYNC_BACKUPS = 20;
