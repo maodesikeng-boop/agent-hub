@@ -866,4 +866,44 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
       }
     }
   });
+
+  it("事先建图、门禁拍板与抗意外恢复规矩：6 家厂商与两种模式统一生效，零厂商硬编码，Worker 提示词不混入", () => {
+    const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
+    for (const mode of PM_MODES) {
+      for (const vendor of AGENT_VENDORS) {
+        const fullPrompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "x" } }), dir);
+        const modePrompt = buildPmModePrompt(mode, vendor);
+
+        // 1. 多步或多 Worker 先 hub graph create 规划节点，派 Worker 传 --node <key>；单步简单查询不强行建 1 节点假图
+        expect(modePrompt).toContain(`${hub} graph create`);
+        expect(modePrompt).toContain("--node <key>");
+        expect(modePrompt).toMatch(/单步简单查询.*不.*建.*1\s*节点假图/);
+
+        // 2. 需用户拍板的分水岭必须挂 gate 并 hub graph ask（简单单问用 hub ask），严禁只在回复正文口头问
+        expect(modePrompt).toContain("`gate`");
+        expect(modePrompt).toContain(`${hub} graph ask`);
+        expect(modePrompt).toContain(`${hub} ask`);
+        expect(modePrompt).toMatch(/严禁只在回复正文.*口头问/);
+
+        // 3. 抗意外恢复：审查/CI 返工或拆细用 hub graph patch；Worker 报错/超额度/超上下文用 hub worker end <编号> --incomplete 后重绑同一 --node <key>
+        expect(modePrompt).toContain(`${hub} graph patch`);
+        expect(modePrompt).toContain(`${hub} worker end <编号> --incomplete`);
+        expect(modePrompt).toContain(limitK);
+        expect(modePrompt).toMatch(/重绑同一.*--node <key>/);
+
+        expect(fullPrompt).toContain(modePrompt);
+        expect(fullPrompt).toContain(`${hub} worker end <编号> --incomplete`);
+
+        // 零厂商硬编码（含模式提示词与 Worker 协作新增行）
+        for (const id of AGENT_VENDORS) {
+          expect(modePrompt.toLowerCase()).not.toContain(id);
+          expect(modePrompt).not.toContain(vendorSpec(id).label);
+        }
+      }
+    }
+
+    const workerPrompt = buildWorkerPrompt(workerContext(), dir);
+    expect(workerPrompt).not.toContain(`${hub} graph create`);
+    expect(workerPrompt).not.toContain(`${hub} graph patch`);
+  });
 });

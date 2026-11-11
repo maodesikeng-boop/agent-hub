@@ -652,6 +652,34 @@ export const ROUTER_AGENT_TIMEOUT_MS = 25_000;
 export const ROUTER_COMMAND_MAX_CHARS = 4_000;
 /** 单条指令最多同时派发的目标 PM 数。 */
 export const ROUTER_MAX_DISPATCH_TARGETS = 8;
+/** 远端设备 Digest 成功缓存 TTL（毫秒）。 */
+export const ROUTER_PEER_DIGEST_TTL_MS = 10_000;
+/** 并发采集远端设备 Digest 单台超时（毫秒），确保单台卡顿不拖慢分派。 */
+export const ROUTER_PEER_DIGEST_TIMEOUT_MS = 1_500;
+/** 远端设备离线/失败短暂退避时长（毫秒，遵守缓存军规：失败不当正常结果长缓存）。 */
+export const ROUTER_PEER_OFFLINE_BACKOFF_MS = 5_000;
+/** 远端设备跨机投递消息或操作超时（毫秒）。 */
+export const ROUTER_PEER_DISPATCH_TIMEOUT_MS = 15_000;
+/** 轨道 B 同时运行的只读规划会话数上限（防止瞬间连点拉起过多进程）。 */
+export const ROUTER_MAX_CONCURRENT_TRACK_B = 2;
+/** 轨道 B 并发槽满时最多排队等待的指令数（超了直接拒，提示改用 @设备名/项目名 直通）。 */
+export const ROUTER_TRACK_B_QUEUE_MAX = 16;
+/** 轨道 B 单轮结束后回收临时会话（interrupt + end）最多等多久；厂商进程卡住也按时释放并发槽，不让调度队列永久卡死。 */
+export const ROUTER_SESSION_CLEANUP_GRACE_MS = 5_000;
+/** 守护进程关闭时最多等在途轨道 B 规划收尾多久。 */
+export const ROUTER_CLOSE_GRACE_MS = 8_000;
+/** 本机目标端口按 clientId + 操作指纹的幂等记忆条数上限（project.create / worker.start / worker.send）。 */
+export const ROUTER_OP_DEDUPE_MAX = 256;
+/** 本机目标端口幂等记忆保留时长（毫秒）：覆盖跨设备超时后重试的窗口。 */
+export const ROUTER_OP_DEDUPE_TTL_MS = 10 * 60_000;
+/** hub dispatch worker-list 单次最多返回的 Piece 条数（给 agent 的命令输出上限）。 */
+export const ROUTER_WORKER_LIST_MAX = 30;
+/** 跨设备 target-ops 的操作 clientId 最长字符数（界面 clientId 200 字 + 轨道后缀 :a0 / :bN）。 */
+export const ROUTER_OP_CLIENT_ID_MAX_CHARS = 256;
+/** 跨设备 target-ops 的标题、项目名、PM 名最长字符数（下游账本还会按自己的规则再校验）。 */
+export const ROUTER_OP_NAME_MAX_CHARS = 200;
+/** 跨设备 target-ops 单个附件编号最长字符数。 */
+export const ROUTER_ATTACHMENT_ID_MAX_CHARS = 100;
 /** 已决拍板与已读汇报保留天数。 */
 export const ROUTER_ITEM_RETENTION_DAYS = 30;
 export const ROUTER_ITEM_RETENTION_MS = ROUTER_ITEM_RETENTION_DAYS * 24 * 60 * 60 * 1000;

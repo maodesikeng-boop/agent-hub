@@ -326,4 +326,117 @@ describe("hub router ask / report / note 与同源桥接", () => {
     expect(d3).not.toBe(d1);
     expect(d3.pms.map((p) => p.pmId)).toEqual([lin.pmId]);
   });
+
+  it("router_commands 创建幂等、状态更新、审计落库与游标分页查询，且按 choice 字符串拍板生效", () => {
+    const first = ledger.createRouterCommand({
+      clientId: "cmd-1",
+      inputText: "@后端核心 帮我看一下慢查询",
+      vendor: "claude",
+      model: null,
+      effort: null,
+      status: "planning",
+      auditAction: "router.command.submit",
+      auditActor: "user",
+    });
+    expect(first.deduplicated).toBe(false);
+    expect(first.command.status).toBe("planning");
+    expect(changes.map((c) => c.type)).toEqual(["router.command.created"]);
+
+    // 相同 clientId 幂等返回已有记录，不重复推事件
+    changes = [];
+    const dup = ledger.createRouterCommand({
+      clientId: "cmd-1",
+      inputText: "@后端核心 帮我看一下慢查询",
+      vendor: "claude",
+      model: null,
+      effort: null,
+      status: "planning",
+    });
+    expect(dup.deduplicated).toBe(true);
+    expect(dup.command.id).toBe(first.command.id);
+    expect(changes).toEqual([]);
+
+    now += 25;
+    const updated = ledger.updateRouterCommand(first.command.id, {
+      status: "dispatched",
+      dispatched: [{ deviceId: "self", pmId: lin.pmId, messageId: 1, ok: true, op: "pm.forward", verbatim: true }],
+      durationMs: 25,
+      auditAction: "router.command.dispatched",
+      auditActor: "router_agent",
+    });
+    expect(updated.status).toBe("dispatched");
+    expect(updated.durationMs).toBe(25);
+    expect(changes.map((c) => c.type)).toEqual(["router.command.updated"]);
+
+    now += 100;
+    const c2 = ledger.createRouterCommand({
+      clientId: "cmd-2",
+      inputText: "移动端打包进度",
+      vendor: "agy",
+      model: "gemini-3.1-flash-lite-preview",
+      effort: "low",
+      status: "answered",
+      plan: { intent: "answer", reply: "移动端当前空闲", actions: [{ type: "answer", markdown: "移动端当前空闲" }] },
+      durationMs: 420,
+    }).command;
+    now += 100;
+    const c3 = ledger.createRouterCommand({
+      clientId: "cmd-3",
+      inputText: "测试失败记录",
+      vendor: "claude",
+      model: "claude-haiku-4-5",
+      effort: "low",
+      status: "failed",
+      error: "设备离线",
+      durationMs: 80,
+    }).command;
+
+    const p1 = ledger.listRouterCommands(undefined, 2);
+    expect(p1.commands.map((c) => c.id)).toEqual([c3.id, c2.id]);
+    expect(p1.hasMore).toBe(true);
+    expect(p1.nextCursor).toBeTypeOf("string");
+
+    const p2 = ledger.listRouterCommands(p1.nextCursor!, 2);
+    expect(p2.commands.map((c) => c.id)).toEqual([first.command.id]);
+    expect(p2.hasMore).toBe(false);
+    expect(p2.nextCursor).toBeNull();
+
+    // /api/router/items/:id/decide 风格：支持按 choice 文本匹配选项
+    const { item } = ledger.hubCall(lin.sessionId, "router.ask", {
+      question: "日志采样率设多少？",
+      options: ["10%", "100%"],
+    }).data;
+    const decided = ledger.resolveRouterItem(item.id, {
+      clientId: "decide-choice-1",
+      choice: "100%",
+      note: "灰度期全量采",
+    });
+    expect(decided.item).toMatchObject({
+      status: "resolved",
+      resolution: { chosenIndex: 1, chosenOption: "100%", note: "灰度期全量采" },
+    });
+  });
+
+  it("临时 assistant 会话隔离于 snapshot.sessions，且重启恢复自动清理残留会话与卡在 planning 的指令", () => {
+    const tempSess = ledger.createRouterAssistantSession({
+      vendor: "claude",
+      model: "claude-haiku-4-5",
+      effort: "low",
+      cwd: join(root, ".agent-hub", "state", "router-home"),
+    });
+    expect(ledger.sessionRole(tempSess.id)).toBe("assistant");
+    expect(ledger.snapshot().sessions.some((s) => s.sessionId === tempSess.id)).toBe(false);
+
+    const stuckCmd = ledger.createRouterCommand({
+      clientId: "cmd-stuck",
+      inputText: "未完成的规划",
+      vendor: "claude",
+      status: "planning",
+    }).command;
+
+    now += 500;
+    ledger.recoverAfterRestart();
+    expect(ledger.sessionRole(tempSess.id)).toBeNull();
+    expect(ledger.getRouterCommand(stuckCmd.id)?.status).toBe("failed");
+  });
 });

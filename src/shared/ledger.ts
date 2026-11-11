@@ -642,6 +642,8 @@ export interface Ledger extends LedgerHandoverWork {
   resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
+  listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;
+  getRouterCommand?(id: import("./domain.ts").RouterCommandId): import("./router.ts").RouterCommandRecord | null;
   listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage;
   decideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: DecideTaskNodeRequest): DecideTaskNodeResponse;
   skipTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, input: SkipTaskNodeRequest): SkipTaskNodeResponse;

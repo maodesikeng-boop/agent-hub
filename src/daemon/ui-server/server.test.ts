@@ -2111,4 +2111,172 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       await peerApp.close();
     }
   });
+
+  it("Router 第 2 波接口：/api/router/commands（发令、游标分页、重试，禁远端令牌）、/items/:id/decide 与 archive、/target-ops", async () => {
+    const submitted: unknown[] = [];
+    const retried: number[] = [];
+    const targetOps: unknown[] = [];
+    const peerId = "11111111-2222-3333-4444-555555555555";
+
+    const fakeCommand = {
+      id: 42,
+      clientId: "cmd-42",
+      inputText: "@self/agent-hub 检查状态",
+      vendor: "claude" as const,
+      model: null,
+      effort: null,
+      status: "dispatched" as const,
+      plan: null,
+      dispatched: [{ deviceId: "self", pmId: 1, messageId: 8, ok: true }],
+      error: null,
+      durationMs: 5,
+      createdAt: 100,
+      updatedAt: 105,
+    };
+
+    const customApp = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      routerDispatcher: {
+        submitCommand: async (input) => {
+          submitted.push(input);
+          return fakeCommand;
+        },
+        retryCommand: async (id) => {
+          retried.push(id);
+          return { ...fakeCommand, id };
+        },
+        handleAgentDispatch: async () => ({ text: "ok", data: {} }),
+        close: async () => {},
+      },
+      routerLocalPort: {
+        deviceId: "dev-self",
+        deviceName: "MacStudio",
+        isLocal: true,
+        getDigest: async () => ({ online: true, digest: ledger.getRouterDigest() }),
+        executeOp: async (op) => {
+          targetOps.push(op);
+          return {
+            kind: "pm.forward",
+            pmId: 1,
+            pmName: "总控PM",
+            projectId: 1,
+            projectName: "agent-hub",
+            conversationId: 1,
+            messageId: 77,
+          };
+        },
+      },
+      peers: {
+        authenticate: (deviceHeader: unknown, authHeader: unknown) =>
+          deviceHeader === peerId && authHeader === "Bearer peer-secret"
+            ? {
+                id: peerId,
+                name: "LinuxBox",
+                platform: "linux",
+                url: "https://linux.tail.ts.net",
+                state: "paired",
+                inboundHash: "h",
+                outboundToken: "t",
+                createdAt: 1,
+              }
+            : null,
+      } as never,
+    });
+    await customApp.ready();
+    try {
+      const browserHeaders = { host: HOST, cookie: COOKIE, origin: ORIGIN, "content-type": "application/json" };
+      const peerHeaders = {
+        host: HOST,
+        authorization: "Bearer peer-secret",
+        "x-agent-hub-device": peerId,
+        "content-type": "application/json",
+      };
+
+      // 1. Browser POST /api/router/commands -> 200
+      const postRes = await customApp.inject({
+        method: "POST",
+        url: "/api/router/commands",
+        headers: browserHeaders,
+        payload: { clientId: "cmd-42", text: "@self/agent-hub 检查状态" },
+      });
+      expect(postRes.statusCode).toBe(200);
+      expect(postRes.json()).toEqual({ command: fakeCommand });
+      expect(submitted).toEqual([{ clientId: "cmd-42", text: "@self/agent-hub 检查状态" }]);
+
+      // 2. Browser GET /api/router/commands?cursor=200:10&limit=15 -> 200
+      const getCmdsRes = await customApp.inject({
+        method: "GET",
+        url: "/api/router/commands?cursor=200:10&limit=15",
+        headers: { host: HOST, cookie: COOKIE },
+      });
+      expect(getCmdsRes.statusCode).toBe(200);
+      expect(ledger.routerCalls).toContainEqual({ call: "listCommands", args: ["200:10", 15] });
+
+      // 3. Browser POST /api/router/commands/42/retry -> 200
+      const retryRes = await customApp.inject({
+        method: "POST",
+        url: "/api/router/commands/42/retry",
+        headers: browserHeaders,
+        payload: {},
+      });
+      expect(retryRes.statusCode).toBe(200);
+      expect(retried).toEqual([42]);
+
+      // 4. Peer deviceToken is strictly forbidden on /api/router/commands & retry
+      for (const reqSpec of [
+        { method: "GET" as const, url: "/api/router/commands" },
+        { method: "POST" as const, url: "/api/router/commands", payload: { clientId: "p1", text: "hi" } },
+        { method: "POST" as const, url: "/api/router/commands/42/retry", payload: {} },
+      ]) {
+        const pRes = await customApp.inject({
+          method: reqSpec.method,
+          url: reqSpec.url,
+          headers: peerHeaders,
+          ...(reqSpec.payload ? { payload: reqSpec.payload } : {}),
+        });
+        expect(pRes.statusCode).toBe(403);
+      }
+
+      // 5. POST /api/router/items/:id/decide (with choice or optionIndex) & /archive work for both browser and peer!
+      const decideBrowser = await customApp.inject({
+        method: "POST",
+        url: "/api/router/items/5/decide",
+        headers: browserHeaders,
+        payload: { clientId: "dec-1", choice: "A", note: "按推荐" },
+      });
+      expect(decideBrowser.statusCode).toBe(200);
+
+      const archivePeer = await customApp.inject({
+        method: "POST",
+        url: "/api/router/items/6/archive",
+        headers: peerHeaders,
+        payload: {},
+      });
+      expect(archivePeer.statusCode).toBe(200);
+
+      // 6. POST /api/router/target-ops works for peer deviceToken (PeerTargetPort tunnel execution)
+      const targetOpRes = await customApp.inject({
+        method: "POST",
+        url: "/api/router/target-ops",
+        headers: peerHeaders,
+        payload: {
+          kind: "pm.forward",
+          clientId: "fwd-1",
+          pmId: 1,
+          text: "远端原样投递",
+        },
+      });
+      expect(targetOpRes.statusCode).toBe(200);
+      expect(targetOpRes.json().result).toMatchObject({ kind: "pm.forward", pmId: 1, messageId: 77 });
+      expect(targetOps).toHaveLength(1);
+    } finally {
+      await customApp.close();
+    }
+  });
 });

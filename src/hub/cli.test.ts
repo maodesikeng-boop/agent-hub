@@ -1148,4 +1148,153 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(statSync(shim).mode & 0o777).toBe(0o700);
     });
   });
+
+  describe("hub dispatch (Router Track B dedicated CLI)", () => {
+    it("routes all 7 dispatch subcommands to /v1/router.dispatch without touching stdin on --verbatim", async () => {
+      const dispatches: Array<{ sessionId: number; commandId: number; payload: unknown }> = [];
+      const { createRouterSandboxGuard } = await import("../daemon/router/sandbox.ts");
+      const sandboxGuard = createRouterSandboxGuard();
+      const runDir2 = join(dir, "run-r");
+      const routerApi = await startAgentApi({
+        ledger,
+        tokens,
+        runDir: runDir2,
+        hubSock: join(runDir2, "hub.sock"),
+        sandboxGuard,
+        onRouterDispatch: async (sessionId, commandId, payload) => {
+          dispatches.push({ sessionId, commandId, payload });
+          return { text: `已投递 ${payload.op}`, data: { op: payload.op } };
+        },
+      });
+      try {
+        const assistantSessionId = 901;
+        ledger.sessionRoles.set(assistantSessionId, "assistant");
+        sandboxGuard.bind(assistantSessionId, 77);
+        const routerToken = tokens.issue(assistantSessionId);
+        const routerEnv = { [ENV_HUB_TOKEN]: routerToken, [ENV_HUB_SOCK]: routerApi.socketPath, HOME: home };
+
+        // 1. pm --verbatim (TrapStdin verifies stdin is NOT touched!)
+        const r1 = await hub(["dispatch", "pm", "--device", "self", "--pm", "2", "--verbatim"], { env: routerEnv });
+        expect(r1.code).toBe(HUB_EXIT.ok);
+        expect(r1.stdout).toBe("已投递 pm\n");
+
+        // 2. pm --stdin (multi-target split)
+        const r2 = await hub(["dispatch", "pm", "--device", "dev-2", "--pm", "3", "--stdin"], {
+          env: routerEnv,
+          stdin: stdinOf("拆分后的第二项任务\n"),
+        });
+        expect(r2.code).toBe(HUB_EXIT.ok);
+
+        // 3. worker-start --readonly --verbatim
+        const r3 = await hub(
+          [
+            "dispatch",
+            "worker-start",
+            "--device",
+            "self",
+            "--project",
+            "5",
+            "--title",
+            "排查泄漏",
+            "--vendor",
+            "claude",
+            "--effort",
+            "low",
+            "--readonly",
+            "--verbatim",
+          ],
+          { env: routerEnv },
+        );
+        expect(r3.code).toBe(HUB_EXIT.ok);
+
+        // 4. worker-stop
+        const r4 = await hub(["dispatch", "worker-stop", "--device", "self", "--worker", "9"], { env: routerEnv });
+        expect(r4.code).toBe(HUB_EXIT.ok);
+
+        // 5. worker-send --verbatim
+        const r5 = await hub(["dispatch", "worker-send", "--device", "dev-2", "--worker", "11", "--verbatim"], { env: routerEnv });
+        expect(r5.code).toBe(HUB_EXIT.ok);
+
+        // 6. worker-end
+        const r6 = await hub(["dispatch", "worker-end", "--device", "self", "--worker", "9"], { env: routerEnv });
+        expect(r6.code).toBe(HUB_EXIT.ok);
+
+        // 7. worker-list
+        const r7 = await hub(["dispatch", "worker-list", "--device", "self", "--project", "5"], { env: routerEnv });
+        expect(r7.code).toBe(HUB_EXIT.ok);
+
+        // 8. project-create (remote preserves ~/..., self expands local path)
+        const r8 = await hub(
+          [
+            "dispatch",
+            "project-create",
+            "--device",
+            "dev-2",
+            "--folder",
+            "~/demo-app",
+            "--name",
+            "Demo",
+            "--pm-name",
+            "小张",
+            "--vendor",
+            "claude",
+            "--mode",
+            "hands_on",
+          ],
+          { env: routerEnv },
+        );
+        expect(r8.code).toBe(HUB_EXIT.ok);
+
+        expect(dispatches).toEqual([
+          { sessionId: 901, commandId: 77, payload: { op: "pm", device: "self", pmId: 2, verbatim: true } },
+          { sessionId: 901, commandId: 77, payload: { op: "pm", device: "dev-2", pmId: 3, text: "拆分后的第二项任务" } },
+          {
+            sessionId: 901,
+            commandId: 77,
+            payload: {
+              op: "worker-start",
+              device: "self",
+              projectId: 5,
+              title: "排查泄漏",
+              vendor: "claude",
+              effort: "low",
+              readonly: true,
+              verbatim: true,
+            },
+          },
+          { sessionId: 901, commandId: 77, payload: { op: "worker-stop", device: "self", workerId: 9 } },
+          { sessionId: 901, commandId: 77, payload: { op: "worker-send", device: "dev-2", workerId: 11, verbatim: true } },
+          { sessionId: 901, commandId: 77, payload: { op: "worker-end", device: "self", workerId: 9 } },
+          { sessionId: 901, commandId: 77, payload: { op: "worker-list", device: "self", projectId: 5 } },
+          {
+            sessionId: 901,
+            commandId: 77,
+            payload: {
+              op: "project-create",
+              device: "dev-2",
+              folder: "~/demo-app",
+              name: "Demo",
+              pmName: "小张",
+              vendor: "claude",
+              mode: "hands_on",
+            },
+          },
+        ]);
+      } finally {
+        await routerApi.close();
+      }
+    });
+
+    it("rejects --verbatim combined with --stdin or missing both on text-bearing dispatch subcommands", async () => {
+      const both = await hub(["dispatch", "pm", "--device", "self", "--pm", "2", "--verbatim", "--stdin"], {
+        stdin: stdinOf("x"),
+      });
+      expect(both.code).toBe(HUB_EXIT.usage);
+      expect(both.stderr).toContain("--verbatim 和 --stdin 只能用一个");
+
+      const neither = await hub(["dispatch", "pm", "--device", "self", "--pm", "2"]);
+      expect(neither.code).toBe(HUB_EXIT.usage);
+      expect(neither.stderr).toContain("--verbatim 或 --stdin");
+    });
+  });
 });

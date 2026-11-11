@@ -20,7 +20,7 @@ import {
   WORKER_SEARCH_DEFAULT_LIMIT,
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
-import type { RouterReportLink } from "../shared/router.ts";
+import { ROUTER_DISPATCH_AGENT_PATH, type RouterReportLink } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
@@ -329,10 +329,19 @@ ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 令牌和 socket 路径由 ${hub} 自己从环境变量 ${ENV_HUB_TOKEN}、${ENV_HUB_SOCK} 读，命令里不要写变量。
 `;
 
+const DISPATCH_USAGE = `  ${hub} dispatch pm --device <self|deviceId> --pm <pmId> [--verbatim | --stdin]
+  ${hub} dispatch worker-start --device <self|deviceId> --project <projectId> --title <标题> [--vendor <${AGENT_VENDORS.join("|")}>] [--model <模型>] [--effort <${ALL_EFFORTS.join("|")}>] [--readonly] [--no-worktree] [--verbatim | --stdin]
+  ${hub} dispatch worker-stop --device <self|deviceId> --worker <workerId>
+  ${hub} dispatch worker-send --device <self|deviceId> --worker <workerId> [--verbatim | --stdin]
+  ${hub} dispatch worker-end --device <self|deviceId> --worker <workerId>
+  ${hub} dispatch worker-list --device <self|deviceId> [--project <projectId>]
+  ${hub} dispatch project-create --device <self|deviceId> --folder <路径> [--name <项目名>] [--pm-name <PM名>] [--vendor <${AGENT_VENDORS.join("|")}>] [--mode ${PM_MODES.join("|")}]`;
+
 /** 当第一个词已认出命令组（或进一步认出子命令）时，只输出对应那几行用法 + help 提示；否则输出完整 HUB_USAGE。 */
 export function commandUsageFor(argv: readonly string[]): string {
   const group = argv[0];
   if (group === undefined) return HUB_USAGE;
+  if (group === "dispatch") return `用法：\n${DISPATCH_USAGE}\n`;
   const groupSpecs = HUB_COMMAND_SPECS.filter((s) => s.group === group);
   if (groupSpecs.length === 0) return HUB_USAGE;
   const action = argv[1];
@@ -408,12 +417,17 @@ type Options = {
   task?: boolean;
   report?: boolean;
   option?: string[];
+  device?: string;
+  pm?: string;
+  project?: string;
+  verbatim?: boolean;
+  "pm-name"?: string;
   help?: boolean;
 };
 
 /** 解析好的一条命令：body 里的 text 字段留到读完标准输入再填。 */
 interface Parsed {
-  command: HubCommand;
+  command: HubCommand | "router.dispatch";
   body: Record<string, unknown>;
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
@@ -521,6 +535,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         task: { type: "boolean" },
         report: { type: "boolean" },
         option: { type: "string", multiple: true },
+        device: { type: "string" },
+        pm: { type: "string" },
+        project: { type: "string" },
+        verbatim: { type: "boolean" },
+        "pm-name": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -953,6 +972,135 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.reason !== undefined) body.reason = values.reason;
     return { command: "graph.cancel", body, textSource: null };
   }
+  if (group === "dispatch") {
+    const requireDevice = (what: string): string => {
+      const dev = values.device?.trim() ?? "";
+      if (dev === "") throw new UsageError(`${hub} ${what} 要 --device <self|deviceId>`);
+      return dev;
+    };
+    const requireVerbatimOrStdin = (what: string): boolean => {
+      if (values.verbatim === true && values.stdin === true) {
+        throw new UsageError("--verbatim 和 --stdin 只能用一个");
+      }
+      if (values.verbatim !== true && values.stdin !== true) {
+        throw new UsageError(`${hub} ${what} 要 --verbatim 或 --stdin`);
+      }
+      return values.verbatim === true;
+    };
+    if (action === "pm") {
+      allowOnly(values, ["device", "pm", "project", "verbatim", "stdin"], "dispatch pm");
+      expectPositionals(rest, 0, "dispatch pm");
+      const device = requireDevice("dispatch pm");
+      if (values.pm === undefined && values.project === undefined) {
+        throw new UsageError(`${hub} dispatch pm 要 --pm <pmId>（或 --project <projectId>）`);
+      }
+      const verbatim = requireVerbatimOrStdin("dispatch pm");
+      const body: Record<string, unknown> = { op: "pm", device };
+      if (values.pm !== undefined) body.pmId = idOf(values.pm, "dispatch pm", "项目经理");
+      if (values.project !== undefined) body.projectId = idOf(values.project, "dispatch pm", "项目");
+      if (verbatim) {
+        body.verbatim = true;
+        return { command: "router.dispatch", body, textSource: null };
+      }
+      return { command: "router.dispatch", body, textSource: { kind: "stdin" }, textField: "text" };
+    }
+    if (action === "worker-start") {
+      allowOnly(
+        values,
+        ["device", "project", "title", "vendor", "model", "effort", "readonly", "no-worktree", "verbatim", "stdin"],
+        "dispatch worker-start",
+      );
+      expectPositionals(rest, 0, "dispatch worker-start");
+      const device = requireDevice("dispatch worker-start");
+      if (values.project === undefined) throw new UsageError(`${hub} dispatch worker-start 要 --project <projectId>`);
+      const projectId = idOf(values.project, "dispatch worker-start", "项目");
+      const title = values.title?.trim() ?? "";
+      if (title === "") throw new UsageError(`${hub} dispatch worker-start 要 --title <标题>`);
+      if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
+        throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+      }
+      if (values.effort !== undefined && !ALL_EFFORTS.includes(values.effort)) {
+        throw new UsageError(`--effort 只能是 ${ALL_EFFORTS.join("、")}`);
+      }
+      const verbatim = requireVerbatimOrStdin("dispatch worker-start");
+      const body: Record<string, unknown> = { op: "worker-start", device, projectId, title };
+      if (values.vendor !== undefined) body.vendor = values.vendor;
+      if (values.model !== undefined) body.model = values.model;
+      if (values.effort !== undefined) body.effort = values.effort;
+      if (values.readonly === true) body.readonly = true;
+      if (values["no-worktree"] === true) body.noWorktree = true;
+      if (verbatim) {
+        body.verbatim = true;
+        return { command: "router.dispatch", body, textSource: null };
+      }
+      return { command: "router.dispatch", body, textSource: { kind: "stdin" }, textField: "task" };
+    }
+    if (action === "worker-stop") {
+      allowOnly(values, ["device", "worker"], "dispatch worker-stop");
+      expectPositionals(rest, 0, "dispatch worker-stop");
+      const device = requireDevice("dispatch worker-stop");
+      const workerId = workerIdOf(values.worker, "dispatch worker-stop");
+      return { command: "router.dispatch", body: { op: "worker-stop", device, workerId }, textSource: null };
+    }
+    if (action === "worker-send") {
+      allowOnly(values, ["device", "worker", "verbatim", "stdin"], "dispatch worker-send");
+      expectPositionals(rest, 0, "dispatch worker-send");
+      const device = requireDevice("dispatch worker-send");
+      const workerId = workerIdOf(values.worker, "dispatch worker-send");
+      const verbatim = requireVerbatimOrStdin("dispatch worker-send");
+      const body: Record<string, unknown> = { op: "worker-send", device, workerId };
+      if (verbatim) {
+        body.verbatim = true;
+        return { command: "router.dispatch", body, textSource: null };
+      }
+      return { command: "router.dispatch", body, textSource: { kind: "stdin" }, textField: "text" };
+    }
+    if (action === "worker-end") {
+      allowOnly(values, ["device", "worker"], "dispatch worker-end");
+      expectPositionals(rest, 0, "dispatch worker-end");
+      const device = requireDevice("dispatch worker-end");
+      const workerId = workerIdOf(values.worker, "dispatch worker-end");
+      return { command: "router.dispatch", body: { op: "worker-end", device, workerId }, textSource: null };
+    }
+    if (action === "worker-list") {
+      allowOnly(values, ["device", "project"], "dispatch worker-list");
+      expectPositionals(rest, 0, "dispatch worker-list");
+      const device = requireDevice("dispatch worker-list");
+      const body: Record<string, unknown> = { op: "worker-list", device };
+      if (values.project !== undefined) body.projectId = idOf(values.project, "dispatch worker-list", "项目");
+      return { command: "router.dispatch", body, textSource: null };
+    }
+    if (action === "project-create") {
+      allowOnly(values, ["device", "folder", "name", "pm-name", "vendor", "mode"], "dispatch project-create");
+      expectPositionals(rest, 0, "dispatch project-create");
+      const device = requireDevice("dispatch project-create");
+      if (values.folder === undefined || values.folder.trim() === "") {
+        throw new UsageError(`${hub} dispatch project-create 要 --folder <路径>`);
+      }
+      if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
+        throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
+      }
+      if (values.mode !== undefined && !(PM_MODES as readonly string[]).includes(values.mode)) {
+        throw new UsageError(`--mode 只能是 ${PM_MODES.join(" 或 ")}`);
+      }
+      const rawFolder = values.folder.trim();
+      let folder: string;
+      if (device === "self") {
+        folder = expandPath(rawFolder, env, cwd);
+      } else {
+        if (!rawFolder.startsWith("/") && rawFolder !== "~" && !rawFolder.startsWith("~/")) {
+          throw new UsageError("远端设备 --folder 要写绝对路径或 ~/...");
+        }
+        folder = rawFolder;
+      }
+      const body: Record<string, unknown> = { op: "project-create", device, folder };
+      if (values.name !== undefined) body.name = values.name;
+      if (values["pm-name"] !== undefined) body.pmName = values["pm-name"];
+      if (values.vendor !== undefined) body.vendor = values.vendor;
+      if (values.mode !== undefined) body.mode = values.mode;
+      return { command: "router.dispatch", body, textSource: null };
+    }
+  }
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }
 
@@ -1106,7 +1254,9 @@ export async function runHub(io: HubIo): Promise<number> {
     body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
   }
 
-  const outcome = await post(socketPath, hubPath(parsed.command), token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
+  const routePath =
+    parsed.command === "router.dispatch" ? ROUTER_DISPATCH_AGENT_PATH : hubPath(parsed.command);
+  const outcome = await post(socketPath, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
   if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
   if (outcome.kind === "unreachable") {
     io.stderr.write(`${UNREACHABLE_MESSAGE}\n`);

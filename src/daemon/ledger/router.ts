@@ -1,9 +1,11 @@
 // Router（总助）账本模块：独立待决拍板卡、里程碑汇报、PM 近况备忘、配置、审计环与 Fleet Digest 缓存。
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
   ArchiveAllReportsResponse,
   ResolveRouterItemRequest,
   ResolveRouterItemResponse,
+  RouterCommandsPage,
   RouterItemsPage,
   UpdateRouterSettingsRequest,
 } from "../../shared/api.ts";
@@ -16,8 +18,12 @@ import type {
   PmId,
   PmMode,
   ProjectId,
+  RouterCommandId,
   RouterItemId,
+  SessionId,
+  WorkerId,
 } from "../../shared/domain.ts";
+import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import {
   MAX_DECISION_NOTE_CHARS,
@@ -42,6 +48,7 @@ import {
   ROUTER_REPORT_LINKS_MAX,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
+  ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
 import type {
@@ -61,7 +68,7 @@ import type {
   RouterSettings,
   RouterSlice,
 } from "../../shared/router.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -606,6 +613,14 @@ export function createLedgerRouter(
         }
         chosenIndex = input.optionIndex;
         chosenOption = options[chosenIndex]!;
+      } else if (typeof input.choice === "string" && input.choice.trim() !== "") {
+        const trimmedChoice = input.choice.trim();
+        const idx = options.findIndex((o) => o === trimmedChoice);
+        if (idx < 0) {
+          throw fail("invalid", "选中的选项不在候选列表中");
+        }
+        chosenIndex = idx;
+        chosenOption = options[idx]!;
       }
 
       const note = (input.note ?? "").trim();
@@ -853,8 +868,9 @@ export function createLedgerRouter(
       const openWorkers = db.all<{
         id: number;
         title: string;
+        readonly: number;
         worker_conversation_id: number;
-      }>("SELECT id, title, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
+      }>("SELECT id, title, readonly, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
 
       const activeWorkers: PmDigestActiveWorker[] = openWorkers
         .slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX)
@@ -876,6 +892,7 @@ export function createLedgerRouter(
             id: w.id,
             title: w.title,
             activity: wAct,
+            readonly: w.readonly === 1,
             lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
           };
         });
@@ -917,6 +934,7 @@ export function createLedgerRouter(
         mode: pm.mode as PmMode,
         vendor: pm.vendor as AgentVendor,
         model: pm.default_model,
+        ...(conv !== null ? { conversationId: conv.id } : {}),
         activity,
         project:
           projRow === null || card === null
@@ -1027,6 +1045,391 @@ export function createLedgerRouter(
     });
   };
 
+  /** 创建一条 router_commands（clientId 重复时幂等返回已有记录）。 */
+  const createCommand = (input: {
+    clientId: string;
+    inputText: string;
+    vendor: AgentVendor;
+    model?: string | null;
+    effort?: string | null;
+    status: RouterCommandStatus;
+    plan?: RouterAgentPlan | null;
+    dispatched?: RouterCommandDispatchedTarget[] | null;
+    error?: string | null;
+    durationMs?: number | null;
+    auditAction?: string;
+    auditActor?: "pm" | "user" | "router_agent" | "system";
+    auditDetail?: Record<string, unknown>;
+  }): { command: RouterCommandRecord; deduplicated: boolean } =>
+    write((p) => {
+      const clientId = input.clientId.trim();
+      if (clientId === "") throw fail("invalid", "缺少 clientId");
+      const existing = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE client_id = ?", clientId);
+      if (existing !== undefined) {
+        return { command: toRouterCommand(existing), deduplicated: true };
+      }
+      const t = now();
+      const row = db.get<RouterCommandDbRow>(
+        `INSERT INTO router_commands (
+           client_id, input_text, vendor, model, effort, status,
+           plan_json, dispatched_json, error, duration_ms, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        clientId,
+        input.inputText,
+        input.vendor,
+        input.model ?? null,
+        input.effort ?? null,
+        input.status,
+        input.plan == null ? null : JSON.stringify(input.plan),
+        input.dispatched == null ? null : JSON.stringify(input.dispatched),
+        input.error ?? null,
+        input.durationMs ?? null,
+        t,
+        t,
+      )!;
+      const command = toRouterCommand(row);
+      p.changes.push({ type: "router.command.created", data: { command } });
+      if (input.auditAction !== undefined) {
+        appendAuditIn(input.auditActor ?? "user", input.auditAction, null, row.id, input.auditDetail);
+      }
+      return { command, deduplicated: false };
+    });
+
+  /** 更新已有 router_commands 并推送 router.command.updated。 */
+  const updateCommand = (
+    id: RouterCommandId,
+    patch: {
+      vendor?: AgentVendor;
+      model?: string | null;
+      effort?: string | null;
+      status?: RouterCommandStatus;
+      plan?: RouterAgentPlan | null;
+      dispatched?: RouterCommandDispatchedTarget[] | null;
+      error?: string | null;
+      durationMs?: number | null;
+      auditAction?: string;
+      auditActor?: "pm" | "user" | "router_agent" | "system";
+      auditDetail?: Record<string, unknown>;
+    },
+  ): RouterCommandRecord =>
+    write((p) => {
+      const existing = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE id = ?", id);
+      if (existing === undefined) throw fail("not_found", `没有编号 ${id} 的总助指令`);
+      const t = now();
+      const row = db.get<RouterCommandDbRow>(
+        `UPDATE router_commands SET
+           vendor = ?,
+           model = ?,
+           effort = ?,
+           status = ?,
+           plan_json = ?,
+           dispatched_json = ?,
+           error = ?,
+           duration_ms = ?,
+           updated_at = ?
+         WHERE id = ? RETURNING *`,
+        patch.vendor ?? existing.vendor,
+        patch.model !== undefined ? patch.model : existing.model,
+        patch.effort !== undefined ? patch.effort : existing.effort,
+        patch.status ?? existing.status,
+        patch.plan !== undefined ? (patch.plan === null ? null : JSON.stringify(patch.plan)) : existing.plan_json,
+        patch.dispatched !== undefined
+          ? patch.dispatched === null
+            ? null
+            : JSON.stringify(patch.dispatched)
+          : existing.dispatched_json,
+        patch.error !== undefined ? patch.error : existing.error,
+        patch.durationMs !== undefined ? patch.durationMs : existing.duration_ms,
+        t,
+        id,
+      )!;
+      const command = toRouterCommand(row);
+      p.changes.push({ type: "router.command.updated", data: { command } });
+      if (patch.auditAction !== undefined) {
+        appendAuditIn(patch.auditActor ?? "router_agent", patch.auditAction, null, row.id, patch.auditDetail);
+      }
+      return command;
+    });
+
+  const getCommand = (id: RouterCommandId): RouterCommandRecord | null => {
+    const row = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE id = ?", id);
+    return row === undefined ? null : toRouterCommand(row);
+  };
+
+  /** GET /api/router/commands：按 <createdAt>:<id>（或纯 <id>）游标倒序分页读取历史指令。 */
+  const listCommands = (beforeCursor?: string, limit?: number): RouterCommandsPage => {
+    const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
+    let rows: RouterCommandDbRow[];
+    const trimmed = beforeCursor?.trim() ?? "";
+    if (trimmed === "") {
+      rows = db.all<RouterCommandDbRow>(
+        `SELECT * FROM router_commands
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+        take + 1,
+      );
+    } else if (/^\d+$/.test(trimmed)) {
+      const cursorId = Number(trimmed);
+      if (!Number.isSafeInteger(cursorId) || cursorId <= 0) {
+        throw fail("invalid", "分页游标格式不正确");
+      }
+      const pivot = db.get<{ created_at: number }>("SELECT created_at FROM router_commands WHERE id = ?", cursorId);
+      rows =
+        pivot !== undefined
+          ? db.all<RouterCommandDbRow>(
+              `SELECT * FROM router_commands
+                WHERE created_at < ? OR (created_at = ? AND id < ?)
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?`,
+              pivot.created_at,
+              pivot.created_at,
+              cursorId,
+              take + 1,
+            )
+          : db.all<RouterCommandDbRow>(
+              `SELECT * FROM router_commands
+                WHERE id < ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?`,
+              cursorId,
+              take + 1,
+            );
+    } else {
+      const match = /^(\d+):(\d+)$/.exec(trimmed);
+      if (match === null) throw fail("invalid", "分页游标格式不正确（期望 <createdAt>:<id>）");
+      const cursorCreatedAt = Number(match[1]);
+      const cursorId = Number(match[2]);
+      rows = db.all<RouterCommandDbRow>(
+        `SELECT * FROM router_commands
+          WHERE created_at < ? OR (created_at = ? AND id < ?)
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorId,
+        take + 1,
+      );
+    }
+    const hasMore = rows.length > take;
+    const commands = rows.slice(0, take).map(toRouterCommand);
+    const last = commands[commands.length - 1];
+    const nextCursor = hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null;
+    return { commands, nextCursor, hasMore };
+  };
+
+  /** 为轨道 B 单轮只读规划创建隔离的临时 assistant 会话（不向网页推 session.created）。 */
+  const createAssistantSession = (input: {
+    vendor: AgentVendor;
+    model: string | null;
+    effort: string | null;
+    cwd: string;
+  }): AgentSessionRow =>
+    write(() => {
+      const t = now();
+      const id = db.run(
+        `INSERT INTO agent_sessions (
+           role, conversation_id, pm_id, worker_id, vendor, vendor_session_id,
+           cwd, add_dirs, generation, model, effort, created_at, updated_at
+         ) VALUES ('assistant', NULL, NULL, NULL, ?, ?, ?, '[]', 1, ?, ?, ?, ?)`,
+        input.vendor,
+        randomUUID(),
+        input.cwd,
+        input.model,
+        input.effort,
+        t,
+        t,
+      ).lastInsertRowid;
+      return getAgentSession(db, id)!;
+    });
+
+  /** 轨道 B 单轮结束（finally）立即清除临时 assistant 会话记录。 */
+  const deleteAssistantSession = (sessionId: SessionId): void => {
+    write(() => {
+      db.run("DELETE FROM agent_sessions WHERE id = ? AND role = 'assistant'", sessionId);
+    });
+  };
+
+  /** 记录由 Router 直接触发或派发的 Worker 因果链（router_worker_origins）。 */
+  const recordWorkerOrigin = (input: {
+    workerId: WorkerId;
+    sourceKind: "router_command" | "router_resolve";
+    sourceId: number;
+    pmMessageId?: MessageId;
+  }): MessageId | null =>
+    write(() => {
+      const msgId =
+        input.pmMessageId ??
+        db.get<{ id: number }>("SELECT id FROM messages WHERE worker_id = ? ORDER BY id ASC LIMIT 1", input.workerId)?.id ??
+        null;
+      if (msgId === null) return null;
+      db.run(
+        `INSERT OR IGNORE INTO router_worker_origins (
+           worker_id, source_kind, source_id, pm_message_id, created_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+        input.workerId,
+        input.sourceKind,
+        input.sourceId,
+        msgId,
+        now(),
+      );
+      return msgId;
+    });
+
+  /** O(1) 索引查询本机 PM / 项目 / Worker 目标（不拉全量 snapshot）。 */
+  const resolveLocalPmOrProject = (query: { pmId?: PmId; projectId?: ProjectId }): {
+    pmId: PmId;
+    pmName: string;
+    vendor: AgentVendor;
+    conversationId: ConversationId;
+    sessionId: SessionId;
+    projectId: ProjectId | null;
+    projectName: string | null;
+    mainFolder: string | null;
+  } => {
+    let pmId: PmId | undefined = query.pmId;
+    if (pmId === undefined && query.projectId !== undefined) {
+      const proj = db.get<{ id: number; pm_id: number; status: string }>(
+        "SELECT id, pm_id, status FROM projects WHERE id = ?",
+        query.projectId,
+      );
+      if (proj === undefined || proj.status !== "active") {
+        throw fail("not_found", `没有进行中的项目 #${query.projectId}`);
+      }
+      pmId = proj.pm_id;
+    }
+    if (pmId === undefined) throw fail("invalid", "请指定目标项目经理或项目");
+    const pm = db.get<PmDbRow>("SELECT * FROM pms WHERE id = ?", pmId);
+    if (pm === undefined) throw fail("not_found", `没有编号 ${pmId} 的项目经理`);
+    assertPmNotArchived(pm.id);
+    const conv = privateConversation(pm.id);
+    if (conv === null) throw fail("invalid", `项目经理「${pm.name}」缺少对话`);
+    const sess = sessions.currentSession(conv.id);
+    if (sess === null) throw fail("invalid", `项目经理「${pm.name}」缺少会话`);
+    const projRow = activeProjectOf(pm.id);
+    if (query.projectId !== undefined && projRow?.id !== query.projectId) {
+      throw fail("not_found", `项目 #${query.projectId} 不属于项目经理「${pm.name}」`);
+    }
+    const card = projRow === null ? null : projectCard(projRow);
+    return {
+      pmId: pm.id,
+      pmName: pm.name,
+      vendor: pm.vendor as AgentVendor,
+      conversationId: conv.id,
+      sessionId: sess.id,
+      projectId: projRow?.id ?? null,
+      projectName: card?.name ?? null,
+      mainFolder: card?.mainFolder ?? null,
+    };
+  };
+
+  const resolveLocalWorker = (workerId: WorkerId): {
+    workerId: WorkerId;
+    pmId: PmId;
+    pmSessionId: SessionId;
+    projectId: ProjectId;
+    workerConversationId: ConversationId;
+    title: string;
+    status: string;
+    readonly: boolean;
+  } => {
+    const w = db.get<{
+      id: number;
+      pm_id: number;
+      project_id: number;
+      worker_conversation_id: number;
+      title: string;
+      status: string;
+      readonly: number;
+    }>(
+      "SELECT id, pm_id, project_id, worker_conversation_id, title, status, readonly FROM workers WHERE id = ?",
+      workerId,
+    );
+    if (w === undefined) throw fail("not_found", `没有编号 ${workerId} 的 Piece（Worker）`);
+    assertPmNotArchived(w.pm_id);
+    const conv = privateConversation(w.pm_id);
+    const sess = conv === null ? null : sessions.currentSession(conv.id);
+    if (sess === null) throw fail("invalid", `Worker #${workerId} 所属项目经理缺少会话`);
+    return {
+      workerId: w.id,
+      pmId: w.pm_id,
+      pmSessionId: sess.id,
+      projectId: w.project_id,
+      workerConversationId: w.worker_conversation_id,
+      title: w.title,
+      status: w.status,
+      readonly: w.readonly === 1,
+    };
+  };
+
+  const listLocalWorkers = (projectId?: ProjectId) => {
+    const rows =
+      projectId !== undefined
+        ? db.all<{
+            id: number;
+            project_id: number;
+            title: string;
+            status: string;
+            readonly: number;
+            worker_conversation_id: number;
+          }>(
+            `SELECT id, project_id, title, status, readonly, worker_conversation_id
+               FROM workers WHERE project_id = ?
+               ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, id DESC LIMIT ?`,
+            projectId,
+            ROUTER_WORKER_LIST_MAX,
+          )
+        : db.all<{
+            id: number;
+            project_id: number;
+            title: string;
+            status: string;
+            readonly: number;
+            worker_conversation_id: number;
+          }>(
+            `SELECT w.id, w.project_id, w.title, w.status, w.readonly, w.worker_conversation_id
+               FROM workers w
+               LEFT JOIN pm_archives a ON a.pm_id = w.pm_id
+              WHERE a.pm_id IS NULL
+              ORDER BY CASE WHEN w.status = 'open' THEN 0 ELSE 1 END, w.id DESC LIMIT ?`,
+            ROUTER_WORKER_LIST_MAX,
+          );
+    return rows.map((w) => {
+      const ws = sessions.currentSession(w.worker_conversation_id);
+      return {
+        id: w.id,
+        projectId: w.project_id,
+        title: w.title,
+        status: w.status,
+        activity: ws === null ? "idle" : sessions.liveOf(ws.id).activity,
+        readonly: w.readonly === 1,
+        vendor: ws?.vendor ?? DEFAULT_AGENT_VENDOR,
+        model: ws?.model ?? null,
+      };
+    });
+  };
+
+  /** 重启恢复：清理上次崩溃残留的临时 assistant 会话，并将卡在 planning 的指令标为 failed。 */
+  const recoverAfterRestart = (): void => {
+    write((p) => {
+      db.run("DELETE FROM agent_sessions WHERE role = 'assistant'");
+      const stuck = db.all<RouterCommandDbRow>("SELECT * FROM router_commands WHERE status = 'planning'");
+      if (stuck.length > 0) {
+        const t = now();
+        db.run(
+          "UPDATE router_commands SET status = 'failed', error = ?, updated_at = ? WHERE status = 'planning'",
+          "守护进程重启，规划中断，可点击重试",
+          t,
+        );
+        for (const old of stuck) {
+          const updated = db.get<RouterCommandDbRow>("SELECT * FROM router_commands WHERE id = ?", old.id);
+          if (updated !== undefined) {
+            p.changes.push({ type: "router.command.updated", data: { command: toRouterCommand(updated) } });
+          }
+        }
+      }
+    });
+  };
+
   return {
     askIn,
     bridgeAskIn,
@@ -1036,7 +1439,19 @@ export function createLedgerRouter(
     resolveItem,
     archiveAllReports,
     updateSettings,
+    getSettings,
     listItems,
+    createCommand,
+    updateCommand,
+    getCommand,
+    listCommands,
+    createAssistantSession,
+    deleteAssistantSession,
+    recordWorkerOrigin,
+    resolveLocalPmOrProject,
+    resolveLocalWorker,
+    listLocalWorkers,
+    recoverAfterRestart,
     snapshotSlice,
     getDigest,
     purgeExpiredBatch,

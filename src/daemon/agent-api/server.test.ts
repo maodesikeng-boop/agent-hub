@@ -924,4 +924,79 @@ describe("startAgentApi on a unix socket", () => {
     running = null;
     expect(existsSync(socketPath)).toBe(false);
   });
+
+  it("enforces bidirectional RouterSandboxGuard between regular HUB_COMMANDS and /v1/router.dispatch", async () => {
+    const { createRouterSandboxGuard } = await import("../router/sandbox.ts");
+    const sandboxGuard = createRouterSandboxGuard();
+    const received: Array<{ sessionId: number; commandId: number; payload: unknown }> = [];
+    const app = createAgentApi({
+      ledger,
+      tokens,
+      sandboxGuard,
+      onRouterDispatch: async (sessionId, commandId, payload) => {
+        received.push({ sessionId, commandId, payload });
+        return { text: "已分派", data: { ok: 1 } };
+      },
+    });
+    await app.ready();
+    try {
+      const pmToken = tokens.issue(101);
+      const workerToken = tokens.issue(102);
+      const assistantToken = tokens.issue(103);
+      ledger.sessionRoles.set(101, "pm");
+      ledger.sessionRoles.set(102, "worker");
+      ledger.sessionRoles.set(103, "assistant");
+      sandboxGuard.bind(103, 55);
+
+      // 1. assistant calling regular commands is strictly forbidden (never hits ledger.hubCall)
+      for (const cmd of ["status", "worker.start", "persona.edit"] as const) {
+        const res = await app.inject({
+          method: "POST",
+          url: hubPath(cmd),
+          headers: { authorization: `Bearer ${assistantToken}` },
+          payload: VALID_ARGS[cmd] as object,
+        });
+        expect(res.statusCode).toBe(403);
+        expect(res.json().code).toBe("forbidden");
+      }
+      expect(ledger.calls).toHaveLength(0);
+
+      // 2. pm & worker calling /v1/router.dispatch are strictly forbidden
+      for (const badToken of [pmToken, workerToken]) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/v1/router.dispatch",
+          headers: { authorization: `Bearer ${badToken}` },
+          payload: { op: "pm", device: "self", pmId: 1, verbatim: true },
+        });
+        expect(res.statusCode).toBe(403);
+        expect(res.json().code).toBe("forbidden");
+      }
+
+      // 3. bound assistant calling /v1/router.dispatch succeeds
+      const okRes = await app.inject({
+        method: "POST",
+        url: "/v1/router.dispatch",
+        headers: { authorization: `Bearer ${assistantToken}` },
+        payload: { op: "pm", device: "self", pmId: 1, verbatim: true },
+      });
+      expect(okRes.statusCode).toBe(200);
+      expect(okRes.json()).toEqual({ ok: true, text: "已分派", data: { ok: 1 } });
+      expect(received).toEqual([
+        { sessionId: 103, commandId: 55, payload: { op: "pm", device: "self", pmId: 1, verbatim: true } },
+      ]);
+
+      // 4. after unbind, assistant calling /v1/router.dispatch is forbidden
+      sandboxGuard.unbind(103);
+      const expiredRes = await app.inject({
+        method: "POST",
+        url: "/v1/router.dispatch",
+        headers: { authorization: `Bearer ${assistantToken}` },
+        payload: { op: "pm", device: "self", pmId: 1, verbatim: true },
+      });
+      expect(expiredRes.statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
 });

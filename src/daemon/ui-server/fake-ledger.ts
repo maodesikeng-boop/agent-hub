@@ -411,8 +411,8 @@ export class FakeLedger {
         options: ["A", "B"],
         askMessageId: null,
         resolution: {
-          chosenIndex: input.optionIndex,
-          chosenOption: input.optionIndex === null ? null : "A",
+          chosenIndex: input.optionIndex ?? null,
+          chosenOption: (input.optionIndex ?? null) === null ? (input.choice ?? null) : "A",
           note: input.note ?? "",
           actor: "router",
           resolvedAt: 2,
@@ -435,6 +435,12 @@ export class FakeLedger {
     this.check();
     this.routerCalls.push({ call: "updateSettings", args: [input] });
     return { ...defaultRouterSettings(), ...input, updatedAt: 2 };
+  }
+
+  listRouterCommands(beforeCursor?: string, limit?: number): import("../../shared/index.ts").RouterCommandsPage {
+    this.check();
+    this.routerCalls.push({ call: "listCommands", args: [beforeCursor, limit] });
+    return { commands: [], nextCursor: null, hasMore: false };
   }
 
   listProjectTaskGraphs(projectId: ProjectId, beforeId?: TaskGraphId, limit?: number): TaskGraphsPage {
@@ -545,6 +551,7 @@ export class FakeLedger {
       resolveRouterItem: (id, i) => this.resolveRouterItem(id, i),
       archiveAllRouterReports: () => this.archiveAllRouterReports(),
       updateRouterSettings: (i) => this.updateRouterSettings(i),
+      listRouterCommands: (c, l) => this.listRouterCommands(c, l),
       listProjectTaskGraphs: (p, b, l) => this.listProjectTaskGraphs(p, b, l),
       decideTaskNode: (g, k, i) => this.decideTaskNode(g, k, i),
       skipTaskNode: (g, k, i) => this.skipTaskNode(g, k, i),

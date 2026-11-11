@@ -24,6 +24,7 @@ import {
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
   PM_MODES,
+  ROUTER_DISPATCH_AGENT_PATH,
   ROUTER_PM_BRIEF_MAX_CHARS,
   TASK_GRAPH_STATUSES,
   hubCommandAllowed,
@@ -32,12 +33,15 @@ import {
   type HubErrorCode,
   type HubResponse,
   type Ledger,
+  type RouterAgentDispatchInput,
+  type RouterCommandId,
   type SessionId,
   type SessionTokens,
 } from "../../shared/index.ts";
 import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
+import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
@@ -74,6 +78,14 @@ export interface AgentApiOptions {
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
   /** 这台设备的名字（不能用时报错里写）。 */
   deviceName?: () => string;
+  /** Router 轨道 B 沙箱与活跃指令绑定守卫。 */
+  sandboxGuard?: RouterSandboxGuard;
+  /** Router 轨道 B 调用 `hub dispatch` 时的异步分派回调。 */
+  onRouterDispatch?: (
+    sessionId: SessionId,
+    commandId: RouterCommandId,
+    payload: RouterAgentDispatchInput,
+  ) => Promise<{ text: string; data: unknown }>;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -576,6 +588,12 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     app.post(hubPath(command), { schema: { body: BODY_SCHEMAS[command] } }, async (req, reply) => {
       const auth = authOf.get(req);
       if (auth === undefined) throw new Error("agent-api: request reached a route without a session");
+      const role = ledger.sessionRole(auth.sessionId);
+      if (opts.sandboxGuard) {
+        opts.sandboxGuard.assertRegularHubAllowed(role);
+      } else if (role === "assistant") {
+        throw new LedgerRequestError("forbidden", "总助只读调度会话严禁调用普通 hub 命令，只能调用 hub dispatch");
+      }
       const body = req.body as Record<string, unknown>;
       checkFields(command, body);
       const context = await prepare(auth.sessionId, command, body);
@@ -587,6 +605,77 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       return send(reply, { ok: true, text: result.text, data: result.data });
     });
   }
+
+  const routerDispatchSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["op", "device"],
+    properties: {
+      op: {
+        type: "string",
+        enum: ["pm", "worker-start", "worker-stop", "worker-send", "worker-end", "worker-list", "project-create"],
+      },
+      device: { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS * 2 },
+      pmId: workerIdField,
+      projectId: workerIdField,
+      workerId: workerIdField,
+      title: { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS * 2 },
+      vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
+      readonly: { type: "boolean" },
+      noWorktree: { type: "boolean" },
+      verbatim: { type: "boolean" },
+      text: taskField,
+      task: taskField,
+      folder: pathField,
+      name: nameField,
+      pmName: nameField,
+      mode: { type: "string", enum: [...PM_MODES] },
+    },
+  };
+
+  app.post(ROUTER_DISPATCH_AGENT_PATH, { schema: { body: routerDispatchSchema } }, async (req, reply) => {
+    const auth = authOf.get(req);
+    if (auth === undefined) throw new Error("agent-api: request reached router.dispatch without a session");
+    const role = ledger.sessionRole(auth.sessionId);
+    if (role !== "assistant") {
+      throw new LedgerRequestError("forbidden", "只有总助调度会话可以调用 hub dispatch");
+    }
+    if (!opts.sandboxGuard || !opts.onRouterDispatch) {
+      throw new LedgerRequestError("forbidden", "当前服务未启用总助调度通道");
+    }
+    const commandId = opts.sandboxGuard.assertCanDispatch(auth.sessionId, role);
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.text === "string" && Buffer.byteLength(body.text, "utf8") > MAX_TASK_BYTES) {
+      throw new HubError("invalid", `参数不对：text 不能超过 ${MAX_TASK_BYTES} 字节`);
+    }
+    if (typeof body.task === "string" && Buffer.byteLength(body.task, "utf8") > MAX_TASK_BYTES) {
+      throw new HubError("invalid", `参数不对：task 不能超过 ${MAX_TASK_BYTES} 字节`);
+    }
+    if (typeof body.folder === "string") {
+      if (Buffer.byteLength(body.folder, "utf8") > MAX_PATH_BYTES) {
+        throw new HubError("invalid", `参数不对：folder 不能超过 ${MAX_PATH_BYTES} 字节`);
+      }
+      if (body.folder.includes("\0")) {
+        throw new HubError("invalid", "参数不对：folder 不能含 NUL 字符");
+      }
+    }
+    for (const field of ["title", "name", "pmName", "device"] as const) {
+      const v = body[field];
+      if (typeof v === "string" && CONTROL_CHARS.test(v)) {
+        throw new HubError("invalid", `参数不对：${field} 不能含 NUL 或控制字符`);
+      }
+    }
+    if (tokens.resolve(auth.token) !== auth.sessionId) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
+    const result = await opts.onRouterDispatch(
+      auth.sessionId,
+      commandId,
+      body as unknown as RouterAgentDispatchInput,
+    );
+    reportHealth(null);
+    return reply.code(200).send({ ok: true, text: result.text, data: result.data });
+  });
 
   return app;
 }

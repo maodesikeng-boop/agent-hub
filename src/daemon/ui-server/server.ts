@@ -37,6 +37,7 @@ import {
   MAX_UPLOAD_BYTES,
   PM_MODES,
   PUBLIC_SESSION_MAX_AGE_MS,
+  ROUTER_COMMAND_MAX_CHARS,
   SESSION_MAX_AGE_MS,
   uiCookieName,
   UPLOAD_BUSY_MESSAGE,
@@ -84,6 +85,7 @@ import {
   type PmMemoryFilesResponse,
   type PmMode,
   type PostMessageResponse,
+  type PostRouterCommandResponse,
   type PushKeyResponse,
   type PutPmMemoryFileResponse,
   type RenewSessionResponse,
@@ -91,6 +93,7 @@ import {
   type ResolveRouterItemResponse,
   type RetryMessageResponse,
   type RewindMessageResponse,
+  type RouterCommandsPage,
   type RouterItemsPage,
   type ServerInfo,
   type SkipTaskNodeResponse,
@@ -134,6 +137,12 @@ import { funnelCommandFor, loadPublicEntryConfig, normalizePublicHostname, saveP
 import { createPublicAuthRateLimiter, extractPublicClientIp } from "./public-rate-limit.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
 import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
+import {
+  RouterTargetError,
+  routerTargetOpSchema,
+  type RouterDispatcher,
+  type RouterTargetPort,
+} from "../router/index.ts";
 
 export interface UiServerOptions {
   ledger: Ledger;
@@ -209,6 +218,10 @@ export interface UiServerOptions {
   publicEntryFile?: string;
   /** 初始公网入口配置（测试用）。 */
   publicEntry?: PublicEntryConfig;
+  /** Router 跨设备分派引擎（处理本机 /api/router/commands 发令与重试）。 */
+  routerDispatcher?: RouterDispatcher;
+  /** 本机 Router 目标端口（供远端对等设备经 /api/router/target-ops 执行操作）。 */
+  routerLocalPort?: RouterTargetPort;
 }
 
 /** 仓库根目录（供本机向导拼 node <repoDir>/src/tunnel/main.ts join 命令）。 */
@@ -469,11 +482,37 @@ const resolveRouterItemBodySchema = z.union([
   z
     .object({
       clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
-      optionIndex: z.number().int().nonnegative().nullable(),
+      optionIndex: z.number().int().nonnegative().nullable().optional(),
+      choice: boundedCharsSchema(MAX_DECISION_CHOICE_CHARS, "choice").nullable().optional(),
       note: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "note").optional(),
     })
     .strict(),
 ]);
+
+const decideRouterItemBodySchema = z
+  .object({
+    clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+    optionIndex: z.number().int().nonnegative().nullable().optional(),
+    choice: boundedCharsSchema(MAX_DECISION_CHOICE_CHARS, "choice").nullable().optional(),
+    note: boundedCharsSchema(MAX_DECISION_NOTE_CHARS, "note").optional(),
+  })
+  .strict();
+
+const postRouterCommandBodySchema = z
+  .object({
+    clientId: z.string().min(1).max(MAX_CLIENT_ID_LENGTH),
+    text: boundedCharsSchema(ROUTER_COMMAND_MAX_CHARS, "text"),
+    attachmentIds: z.array(z.string().min(1).max(100)).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
+    target: z
+      .object({
+        deviceId: z.string().min(1).max(200),
+        pmId: z.number().int().positive().optional(),
+        projectId: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 const updateRouterSettingsBodySchema = z
   .object({
@@ -920,12 +959,23 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | UploadError | PickFolderError | TunnelInputError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ConversationNotFoundError) return fail(reply, "not_found");
     if (err instanceof UploadError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof LedgerRequestError) return fail(reply, err.code, reason);
+    if (err instanceof RouterTargetError) {
+      const apiCode =
+        err.code === "not_found" || err.code === "device_not_found"
+          ? "not_found"
+          : err.code === "forbidden"
+            ? "forbidden"
+            : err.code === "invalid"
+              ? "invalid"
+              : "conflict";
+      return fail(reply, apiCode, reason);
+    }
     if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
     // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
@@ -1408,10 +1458,67 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
           ? { action: "archive" }
           : {
               clientId: raw.clientId,
-              optionIndex: raw.optionIndex,
+              optionIndex: raw.optionIndex ?? null,
+              ...(raw.choice !== undefined && raw.choice !== null ? { choice: raw.choice } : {}),
               ...(raw.note !== undefined ? { note: raw.note } : {}),
             };
       return ledger.resolveRouterItem(itemId, body);
+    });
+
+    routes.post("/api/router/items/:id/decide", async (req): Promise<ResolveRouterItemResponse> => {
+      const itemId = parseId((req.params as { id?: unknown }).id, "router item id");
+      const raw = parseWithSchema(decideRouterItemBodySchema, req.body);
+      return ledger.resolveRouterItem(itemId, {
+        clientId: raw.clientId,
+        optionIndex: raw.optionIndex ?? null,
+        ...(raw.choice !== undefined && raw.choice !== null ? { choice: raw.choice } : {}),
+        ...(raw.note !== undefined ? { note: raw.note } : {}),
+      });
+    });
+
+    routes.post("/api/router/items/:id/archive", async (req): Promise<ResolveRouterItemResponse> => {
+      const itemId = parseId((req.params as { id?: unknown }).id, "router item id");
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return ledger.resolveRouterItem(itemId, { action: "archive" });
+    });
+
+    routes.get(API_PATHS.routerCommands, async (req, reply): Promise<RouterCommandsPage> => {
+      if (peerOf(req) !== undefined) return fail(reply, "forbidden_peer") as never;
+      const query = req.query as { cursor?: unknown; before?: unknown; limit?: unknown };
+      const cursor =
+        typeof query.cursor === "string" && query.cursor.trim() !== ""
+          ? query.cursor
+          : typeof query.before === "string" && query.before.trim() !== ""
+            ? query.before
+            : undefined;
+      const limit = parseOptionalPositiveInt(query.limit, "limit");
+      return ledger.listRouterCommands
+        ? ledger.listRouterCommands(cursor, limit)
+        : { commands: [], nextCursor: null, hasMore: false };
+    });
+
+    routes.post(API_PATHS.routerCommands, async (req, reply): Promise<PostRouterCommandResponse> => {
+      if (peerOf(req) !== undefined) return fail(reply, "forbidden_peer") as never;
+      if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
+      const raw = parseWithSchema(postRouterCommandBodySchema, req.body);
+      const command = await opts.routerDispatcher.submitCommand(raw);
+      return { command };
+    });
+
+    routes.post("/api/router/commands/:id/retry", async (req, reply): Promise<PostRouterCommandResponse> => {
+      if (peerOf(req) !== undefined) return fail(reply, "forbidden_peer") as never;
+      if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
+      const commandId = parseId((req.params as { id?: unknown }).id, "router command id");
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      const command = await opts.routerDispatcher.retryCommand(commandId);
+      return { command };
+    });
+
+    routes.post(API_PATHS.routerTargetOps, async (req, reply) => {
+      if (!opts.routerLocalPort) return fail(reply, "unavailable", "当前服务未启用总助目标端口");
+      const op = parseWithSchema(routerTargetOpSchema, req.body);
+      const result = await opts.routerLocalPort.executeOp(op);
+      return { result };
     });
 
     routes.post(API_PATHS.routerReportsArchiveAll, async (req): Promise<ArchiveAllReportsResponse> => {

@@ -99,7 +99,19 @@ export interface RouterAgentPlan {
   intent: "dispatch" | "answer" | "ambiguous";
   reply: string;
   actions: RouterAction[];
+  track?: "A" | "B";
+  attachmentIds?: string[];
+  retryOps?: Array<{ deviceId: string; op: unknown }>;
 }
+
+export type RouterDispatchedOpKind =
+  | "pm.forward"
+  | "worker.start"
+  | "worker.send"
+  | "worker.stop"
+  | "worker.end"
+  | "worker.list"
+  | "project.create";
 
 export interface RouterCommandDispatchedTarget {
   deviceId: string;
@@ -107,6 +119,17 @@ export interface RouterCommandDispatchedTarget {
   messageId: MessageId;
   ok: boolean;
   error?: string;
+  op?: RouterDispatchedOpKind;
+  deviceName?: string;
+  pmName?: string;
+  projectId?: ProjectId | null;
+  projectName?: string | null;
+  conversationId?: ConversationId;
+  workerId?: WorkerId;
+  workerConversationId?: ConversationId;
+  title?: string;
+  readonly?: boolean;
+  verbatim?: boolean;
 }
 
 export const ROUTER_COMMAND_STATUSES = [
@@ -149,6 +172,7 @@ export interface PmDigestActiveWorker {
   title: string;
   activity: SessionActivity;
   lastSummary: string | null;
+  readonly?: boolean;
 }
 
 export interface PmDigestEntry {
@@ -157,6 +181,7 @@ export interface PmDigestEntry {
   mode: PmMode;
   vendor: AgentVendor;
   model: string | null;
+  conversationId?: ConversationId;
   activity: SessionActivity;
   project: {
     id: ProjectId;
@@ -191,3 +216,61 @@ export function emptyRouterSlice(): RouterSlice {
     commands: [],
   };
 }
+
+/** 轨道 B 只读调度会话调用的专用 agent-api 路径（不在普通 PM/Worker 的 HUB_COMMANDS 中公开）。 */
+export const ROUTER_DISPATCH_AGENT_PATH = "/v1/router.dispatch";
+
+export type RouterAgentDispatchInput =
+  | {
+      op: "pm";
+      device: string;
+      pmId?: PmId;
+      projectId?: ProjectId;
+      verbatim?: boolean;
+      text?: string;
+    }
+  | {
+      op: "worker-start";
+      device: string;
+      projectId: ProjectId;
+      title: string;
+      vendor?: AgentVendor;
+      model?: string;
+      effort?: string;
+      readonly?: boolean;
+      noWorktree?: boolean;
+      verbatim?: boolean;
+      task?: string;
+    }
+  | {
+      op: "worker-stop";
+      device: string;
+      workerId: WorkerId;
+    }
+  | {
+      op: "worker-send";
+      device: string;
+      workerId: WorkerId;
+      verbatim?: boolean;
+      text?: string;
+    }
+  | {
+      op: "worker-end";
+      device: string;
+      workerId: WorkerId;
+    }
+  | {
+      op: "worker-list";
+      device: string;
+      projectId?: ProjectId;
+    }
+  | {
+      op: "project-create";
+      device: string;
+      folder: string;
+      name?: string;
+      pmName?: string;
+      vendor?: AgentVendor;
+      mode?: PmMode;
+    };
+
