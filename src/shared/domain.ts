@@ -369,6 +369,7 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.scheduleId}:${meta.scheduledAt}`;
       case "schedule.failed":
         return meta.messageId;
+      case "driver.warning":
       case "context.compacted":
         return `${meta.sessionId}:${meta.uuid}`;
       case "worker.max_time_exceeded":
@@ -395,6 +396,7 @@ export const SYSTEM_EVENTS = [
   "session.renewed",
   "handover.failed",
   "context.compacted",
+  "driver.warning",
   "worker.max_time_exceeded",
 ] as const;
 
@@ -426,6 +428,7 @@ export const SYSTEM_EVENTS = [
  * H、R 的 meta 里账本还会记几个内部字段（requestedAt、settled、seen 等，见 handover.ts），网页不用。
  */
 export type SystemMessageMeta =
+  | { event: "driver.warning"; sessionId: SessionId; uuid: string }
   | { event: "project.created"; projectId: ProjectId }
   | { event: "folder.attached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }
   | { event: "folder.detached"; projectId: ProjectId; folderId: ProjectFolderId; path: string }

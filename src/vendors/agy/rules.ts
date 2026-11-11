@@ -3,10 +3,10 @@
 // 放进系统提示词的 <user_rules> 区，agy 内部压缩对话（/compact、自动压缩）只换掉历史、这一区每个请求都重新带上（2026-11-11 实测）。
 // 所以每次起进程前把 prompt.md 切块写进启动目录（守护进程自己的 ~/.agent-hub/state/launch/<会话>/）下的规则目录，再 --add-dir 它：
 // 不写用户的项目目录和 worktree，git status 不多东西；只读 Worker 的沙箱哪里都能读（密钥除外），也读得到。
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import writeFileAtomic from "write-file-atomic";
-import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX } from "./limits.ts";
+import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTES, AGY_RULE_SINGLE_BUDGET_BYTES } from "./limits.ts";
 
 /** 启动目录下放规则的工作区目录名（--add-dir 它）。 */
 export const AGY_RULES_WORKSPACE_DIR = "agy-rules";
@@ -88,4 +88,33 @@ export function existingAgyPromptRules(promptFile: string): string | null {
   const rulesDir = join(workspace, RULES_SUBDIR);
   if (!existsSync(rulesDir)) return null;
   return readdirSync(rulesDir).some((name) => RULE_FILE_RE.test(name)) ? workspace : null;
+}
+
+/** 每次启动重新扫描，不缓存；真实路径去重，避免全局规则软链重复计数。 */
+export function agyRuleBudgetWarning(home: string, workspaces: readonly string[]): string | null {
+  const seen = new Set<string>();
+  let total = 0;
+  let oversized = 0;
+  const inspect = (file: string, needsTrigger: boolean) => {
+    if (!existsSync(file)) return;
+    const real = realpathSync(file);
+    if (seen.has(real)) return;
+    const text = readFileSync(real, "utf8");
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1] ?? "";
+    if (needsTrigger && !/^trigger:\s*["']?always_on["']?\s*(?:#.*)?$/m.test(frontmatter)) return;
+    seen.add(real);
+    const size = Buffer.byteLength(text, "utf8");
+    total += size;
+    if (size > AGY_RULE_SINGLE_BUDGET_BYTES) oversized++;
+  };
+  const root = (dir: string, rulesDir: string, needsTrigger: boolean) => {
+    for (const name of ["AGENTS.md", "GEMINI.md"]) inspect(join(dir, name), false);
+    if (existsSync(rulesDir)) for (const entry of readdirSync(rulesDir, { withFileTypes: true })) {
+      if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md")) inspect(join(rulesDir, entry.name), needsTrigger);
+    }
+  };
+  for (const dir of [join(home, ".gemini"), join(home, ".gemini", "config")]) root(dir, join(dir, "rules"), false);
+  for (const dir of new Set(workspaces)) root(dir, join(dir, RULES_SUBDIR), true);
+  if (total <= AGY_RULE_TOTAL_BUDGET_BYTES && oversized === 0) return null;
+  return `agy 规则预算告警：规则共 ${total} 字节（预算约 ${AGY_RULE_TOTAL_BUDGET_BYTES}），${oversized} 个文件超过单文件 ${AGY_RULE_SINGLE_BUDGET_BYTES} 字节。自动压缩后项目规则或产品提示词可能缺失；未自动裁剪或调整顺序。`;
 }

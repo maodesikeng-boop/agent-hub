@@ -20,3 +20,7 @@ export const AGY_CONNECTOR_LIST_TIMEOUT_MS = 10_000;
 export const AGY_CONNECTOR_CACHE_MS = 10 * 60_000;
 /** agy 只读 Worker：有服务器没问到工具清单（超时、报错，那个服务器整个拒）时，清单只记这么久，偶发失败不会拒 10 分钟。 */
 export const AGY_CONNECTOR_RETRY_MS = 60_000;
+
+/** agy 1.5.5 规则区实测预算，超过时只告警。 */
+export const AGY_RULE_TOTAL_BUDGET_BYTES = 60_000;
+export const AGY_RULE_SINGLE_BUDGET_BYTES = 24_000;

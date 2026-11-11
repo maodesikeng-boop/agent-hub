@@ -1,10 +1,10 @@
 // agy 产品提示词规则目录（rules.ts）：切块、写文件、旧块清理。
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX } from "./limits.ts";
-import { AGY_RULES_WORKSPACE_DIR, splitPromptForRules, writeAgyPromptRules } from "./rules.ts";
+import { agyRuleBudgetWarning, AGY_RULES_WORKSPACE_DIR, splitPromptForRules, writeAgyPromptRules } from "./rules.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -90,5 +90,33 @@ describe("writeAgyPromptRules", () => {
     const bodies = files.map((f) => readFileSync(join(workspace, ".agents", "rules", f), "utf8").replace(/^---\ntrigger: always_on\n---\n/, ""));
     for (const b of bodies) expect(bytes(b)).toBeLessThanOrEqual(AGY_RULE_FILE_MAX_BYTES);
     expect(bodies.join("")).toBe(prompt);
+  });
+});
+
+describe("agyRuleBudgetWarning", () => {
+  it("合计产品、项目和全局规则，按 UTF-8 字节检查；每次读新内容", () => {
+    const d = launchDir();
+    const project = join(d, "project");
+    mkdirSync(project);
+    mkdirSync(join(d, ".gemini", "config", "rules"), { recursive: true });
+    writeFileSync(join(d, ".gemini", "config", "rules", "global.md"), "g".repeat(20_000));
+    writeFileSync(join(project, "AGENTS.md"), "汉".repeat(7_000));
+    const prompt = join(d, "prompt.md");
+    writeFileSync(prompt, "p".repeat(20_000));
+    const rules = writeAgyPromptRules(prompt)!;
+    expect(agyRuleBudgetWarning(d, [project, rules])).toContain("61027 字节");
+    writeFileSync(join(project, "AGENTS.md"), "small");
+    expect(agyRuleBudgetWarning(d, [project, rules])).toBeNull();
+  });
+  it("单文件超限也告警，软链和重复工作区不重复计数，非 always_on 不计", () => {
+    const d = launchDir();
+    writeFileSync(join(d, "AGENTS.md"), "x".repeat(24_001));
+    symlinkSync(join(d, "AGENTS.md"), join(d, "GEMINI.md"));
+    mkdirSync(join(d, ".agents", "rules"), { recursive: true });
+    writeFileSync(join(d, ".agents", "rules", "manual.md"), "---\ntrigger: manual\n---\n" + "x".repeat(70_000));
+    expect(agyRuleBudgetWarning(join(d, "home"), [d, d])).toContain("24001 字节");
+    expect(agyRuleBudgetWarning(join(d, "home"), [d])).toContain("1 个文件超过");
+    writeFileSync(join(d, "AGENTS.md"), "x".repeat(24_000));
+    expect(agyRuleBudgetWarning(join(d, "home"), [d])).toBeNull();
   });
 });

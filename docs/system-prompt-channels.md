@@ -42,6 +42,8 @@ prompt.md（`daemon/launch.ts` 每次启动前写：角色说明、hub 命令表
 
 做法（`src/vendors/agy/rules.ts`）：每次起进程把 prompt.md 按字节切块（每块 ≤ 20,000 字节、在换行处断），原子写到
 `<启动目录>/agy-rules/.agents/rules/fusa-01.md…`，最多 3 块（`limits.ts`），`--add-dir <启动目录>/agy-rules` 放在会话自己的附加目录后面。
+启动或续接时重新统计产品规则、工作区的 `AGENTS.md` / `GEMINI.md` / always_on 规则，以及 `~/.gemini` 和 `~/.gemini/config` 下的全局规则，按真实路径去重。
+总量超过约 60,000 字节或单文件超过 24,000 字节时，在当前会话显示系统告警；阈值集中在 agy 的 `limits.ts`，不自动裁剪或调整顺序。
 后台写交接复制的那份引用原会话写好的目录（不重写，前缀和原会话一样）。消息里不再拼提示词；以前每次新起进程都重发一遍 44KB，现在不发了。
 
 ## 3. deepseek（dsh）：`--patch` 的 `personaSuffix`
@@ -53,7 +55,7 @@ prompt.md（`daemon/launch.ts` 每次启动前写：角色说明、hub 命令表
 - `system-prompt` 行的 `personaPrefix` / `personaSuffix` 进 system 消息（会话第 0 个节点）；`dsh-compaction` 只换掉历史（“compaction shrinks derived history, never the system prompt”）。
   用假 DeepSeek 接口（Anthropic Messages 格式）录下真实请求：调低自动压缩阈值触发压缩后，`system` 字段里探针每次都在，第 0 条消息里的对照短语消失。
 - `--patch` 改一行时整行 config 被替换（`dsh-app-boot` 的 `applyPatches` 不合并），所以默认的 `personaPrefix` 要照抄。
-- dsh 模板没有转义写法：`{{…}}` 一律当变量，不认识就启动失败。prompt.md 里的 `{{` 在两个 `{` 之间插零宽空格。
+- dsh 模板没有转义写法：`{{…}}` 一律当变量，不认识就启动失败。prompt.md 里的 `{{` 在两个 `{` 之间插零宽空格。该转换也会影响代码示例，不能把含该字符的示例逐字复制到代码里；这不是无损转义。已核对 dsh 0.2.2-rc.1 的 `interpolate`：只有 `{{…}}` 语法，没有其他模板分隔符，personaSuffix 配置没有关闭插值的选项。
 
 做法（`src/vendors/deepseek/driver.ts`）：起进程时写 `<启动目录>/dsh-system-prompt.patch.json`，`--patch` 排在沙箱补丁后面。
 提示词随新进程读新补丁，所以 `rebakesPersonaOnResume: true`。
@@ -70,7 +72,7 @@ prompt.md（`daemon/launch.ts` 每次启动前写：角色说明、hub 命令表
 - cursor 服务端压缩前会让 CLI 执行 `preCompact` 钩子（带 auto/manual、上下文用量），但钩子只能配在 `~/.cursor/hooks.json`（用户全局）或项目的 `.cursor/hooks.json`。
 
 做法：声明 `first_message`，ACP 底座首轮拼、声明 `session.compaction`、收到 `compaction_update` 重拼。**已知缺口**：cursor 现在不发压缩信号，
-它的服务端自动压缩触发不了重拼；cursor 以后按 ACP 标准发 `compaction_update` 就自动生效。要现在就补，只能在用户全局 hooks.json 里加 `preCompact` 钩子（待定）。
+自动压缩后产品提示词仍会丢。保留信号重拼兜底，cursor 以后按 ACP 标准发 `compaction_update` 时生效；Fusa 不修改用户全局 `~/.cursor/hooks.json`。
 
 ## 5. 重放
 
@@ -90,3 +92,9 @@ python3 -I $E/inspect-dsh.py /tmp/p/mock.log
 # cursor：真实 cursor 驱动起 cursor-agent acp，首条带探针
 node $E/cursor-first-message.ts /tmp/p/launch/9444 /tmp/p/cur-cwd
 ```
+
+## 6. 生命周期与权限审查
+
+规则和补丁与同目录的 prompt.md 一起保留：重启原地更新，Worker 保留期清理和 PM 删除清理整个会话启动目录；Router 每轮清理启动目录。会话 ID 隔离，后台交接只读主会话规则，不重写它。
+性格设定在进程内变更走现有 personaNote，下一次起进程重新生成规则。每会话最多三个规则文件和一个补丁，没有跨会话内存缓存。
+规则目录权限为 0700，文件 0600。普通 Worker 的 writeScope 不因 `--add-dir` 扩大，只读策略也不增加可写路径；项目经理无 OS 写范围限制，同一用户身份仍能修改这些文件，目录权限不能阻止它。

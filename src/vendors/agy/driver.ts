@@ -39,7 +39,7 @@ import {
   finishAgyUsage,
   observeAgyUsage,
 } from "./protocol.ts";
-import { writeAgyPromptRules } from "./rules.ts";
+import { agyRuleBudgetWarning, writeAgyPromptRules } from "./rules.ts";
 import {
   BaseSessionDriver,
   NO_NOTES,
@@ -418,6 +418,13 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
     // 产品提示词写成规则目录、--add-dir 进 agy 的系统提示词（<user_rules>），压缩后还在；每次起进程按最新的 prompt.md 重写
     const promptRulesDir = writeAgyPromptRules(files.promptFile);
+    let warning: string | null;
+    try {
+      warning = agyRuleBudgetWarning(this.#homeDir ?? homedir(), [row.cwd, ...row.addDirs, ...(promptRulesDir === null ? [] : [promptRulesDir])]);
+    } catch (error) {
+      warning = `agy 规则预算检查失败：${errorMessage(error)}。无法确认规则是否会被截断。`;
+    }
+    if (warning !== null) this.emit(st.id, { type: "driver.warning", uuid: crypto.randomUUID(), message: warning, at: Date.now() });
 
     const readonlyPolicy: ReadonlyPolicy | undefined =
       files.readonly === undefined

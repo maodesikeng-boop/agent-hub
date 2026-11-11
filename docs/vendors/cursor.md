@@ -114,7 +114,7 @@
   - 2026-11-11 发 `session/prompt` 实测：ACP 层不发 `usage_update`、`compaction_update`，`PromptResponse` 只有 `stopReason`；经 ACP 发 `/compact` 不是真压缩（模型自己回一段总结，第 0 条消息还在）。
 - **产品提示词**（docs/system-prompt-channels.md 第 4 节）：没有常驻入口（只读会话工作目录里的规则，`--add-dir`、`--plugin-dir` 在 ACP 下不读），
   spec 声明 `capabilities.systemPrompt: "first_message"`：拼进新会话第一条消息，initialize 声明 `session.compaction`，收到 `compaction_update` 后重拼。
-  cursor 现在不发压缩信号，它的服务端自动压缩还触发不了重拼（已知缺口）。
+  cursor 现在不发压缩信号，自动压缩后产品提示词仍会丢（已知限制）；保留信号重拼兜底，不修改用户全局 `~/.cursor/hooks.json`。
 
 ## 6. 私有扩展方法、登录状态与只读沙箱目录（第 9 节 #5）
 

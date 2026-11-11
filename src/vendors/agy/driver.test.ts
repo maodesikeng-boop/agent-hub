@@ -2323,3 +2323,19 @@ describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
     expect(t.of("agent.tool")).toHaveLength(1);
   });
 });
+
+it("启动与续接都检查最新项目规则预算，超限发可见告警但继续会话", async () => {
+  const t = makeAgyHarness();
+  const s = t.addSession();
+  writeFileSync(join(s.cwd, "AGENTS.md"), "x".repeat(24_001));
+  await t.driver.send(s.id, user(1, "first"));
+  await t.waitFor("turn.ended");
+  expect(t.of("driver.warning")).toHaveLength(1);
+  expect(t.of("driver.warning")[0]!.message).toContain("1 个文件超过");
+  t.launch.fingerprint = "updated";
+  writeFileSync(join(s.cwd, "AGENTS.md"), "small");
+  await t.driver.send(s.id, user(2, "resume"));
+  await t.waitFor("turn.ended", undefined, 2);
+  expect(t.argvs()).toHaveLength(2);
+  expect(t.of("driver.warning")).toHaveLength(1);
+});

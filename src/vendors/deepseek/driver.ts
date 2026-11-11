@@ -84,7 +84,7 @@ export const DEEPSEEK_DEFAULT_PERSONA_PREFIX = "You are a coding agent powered b
 
 /**
  * dsh 的提示词模板没有转义写法：personaSuffix 里每个 `{{…}}` 都当变量查，不认识就整个启动失败（dsh-system-prompt 的 interpolate）。
- * 产品提示词里的 `{{`（代码示例、性格设定里用户写的）在两个 `{` 之间插一个零宽空格，模型读起来一样，dsh 不再当变量。
+ * 产品提示词里的 `{{`（代码示例、性格设定里用户写的）在两个 `{` 之间插一个零宽空格，dsh 不再当变量。注意：这会改变代码示例的字节，不是无损转义（见 docs/system-prompt-channels.md）。
  */
 export function escapeDshPromptTemplate(text: string): string {
   return text.replace(/\{(?=\{)/g, "{\u200b");
